@@ -697,6 +697,14 @@ pub(crate) fn install_continue_trace_hooks() {
             blockres_phase2_hook as *mut c_void,
             &BLOCKRES_PHASE2_ORIG,
         );
+        // NOTE: do NOT detour MountEblArchive (0x1efc00) for a mount census -- me3 already hooks the
+        // mount_ebl path (asset override), so a second detour collides and corrupts control flow ->
+        // boot crash (RIP-outside-.text stack overflow, DLL ec09cb30 2026-07-17). Use the read-only
+        // CAPSTATE-SUBSYS globals (repo gate / CSEblFileManager) below, or a sw-breakpoint, instead.
+        // NOTE: do NOT detour the map-load orchestrator 0x82dbf0 to observe it -- it is a load-critical,
+        // step-dispatched in-game fn and a forwarding detour STALLS the first autoload at "Preparing Save"
+        // (DLL 99a12f98, 2026-07-17). Observe it via a sw-breakpoint on MountEblArchive 0x1efc00 (deep
+        // stack shows the 0x82dc1c orchestrator caller chain + the archive descriptor) instead.
     }
 
     match unsafe { MH_ApplyQueued() } {
@@ -1107,10 +1115,15 @@ pub(crate) unsafe extern "system" fn worldres_blockres_getter_hook(
         // Missing semaphore: the parent-cap REFCOUNT (+0x58) and flag state at the pristine stall. One
         // shot when the resident-null condition holds (status 4, data null, phase 2). This measures the
         // teardown refcount leak so the eviction/teardown fix can release EXACTLY the leaked ref(s).
+        // DEFECT-1 FIX (run8 latch bug): gate on IN_WORLD_REACHED==YES so the one-shot fires only on the
+        // SECOND load (load 2). Without it, load 1 briefly passes through the identical (phase 2, status 4,
+        // data 0) transient during boot before the data attaches, latching the dump on the healthy load-1
+        // state and never capturing the real second-load stall. See bd step3-run8-repo-gate-refuted-*.
         if found == 1
             && d35 == 2
             && fc8_88 == FILECAP_STATUS_LOADED
             && fc8_90 == 0
+            && IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES
             && WORLDRES_CAPSTATE_DUMPED.swap(1, Ordering::SeqCst) == 0
         {
             for (tag, cap) in [("fc8(+0x40)", fc8), ("fc9(+0x48)", fc9)] {
@@ -1126,14 +1139,85 @@ pub(crate) unsafe extern "system" fn worldres_blockres_getter_hook(
                 let job78 = unsafe { safe_read_usize(cap + 0x78) }.unwrap_or(0);
                 let pend80 = unsafe { safe_read_usize(cap + 0x80) }.unwrap_or(0);
                 let data90 = unsafe { safe_read_usize(cap + 0x90) }.unwrap_or(0);
+                let name = read_fd4filecap_name(cap);
                 append_autoload_debug(format_args!(
-                    "CAPSTATE-DUMP {tag} cap=0x{cap:x}: refcount+0x58={rc58} +0x5c={r5c} status+0x88={s88} qflags+0x89=0x{f89:x} +0x8a=0x{f8a:x} +0x8c=0x{w8c:x} readjob+0x78=0x{job78:x} pending+0x80=0x{pend80:x} data+0x90=0x{data90:x} -- refcount is the leak-count semaphore (1 => single release evicts)"
+                    "CAPSTATE-DUMP {tag} cap=0x{cap:x} name='{name}': refcount+0x58={rc58} +0x5c={r5c} status+0x88={s88} qflags+0x89=0x{f89:x} +0x8a=0x{f8a:x} +0x8c=0x{w8c:x} readjob+0x78=0x{job78:x} pending+0x80=0x{pend80:x} data+0x90=0x{data90:x} -- refcount is the leak-count semaphore (1 => single release evicts); name is the map file whose read yields empty on load 2"
                 ));
             }
+            // Which mechanism starves the load-2 read? (RE step3-run7-re-result-*): read the
+            // resource-repository gate byte *0x14485cbec (0 => repo fast-path OFF, NameLookup returns
+            // null and AddDefaultFileLoadProcess skips the repo attach) and the FD4 subsystem singletons
+            // (repo *0x14485d0e8, CSEblFileManager *0x143d5b078 + lazy *0x143d5b088, CSFile *0x143d5b0f8).
+            // A gate==0 at the stall points at repository-path loss; gate==1 with a live EBL manager
+            // points at an EBL unmount (0x1401efc00 reads empty). Read-only globals via game_rva.
+            let g = |rva: u32| game_rva(rva).ok();
+            let repo_gate = g(0x0485cbec)
+                .and_then(|a| unsafe { safe_read_u8(a) })
+                .map(|v| v as i32)
+                .unwrap_or(-1);
+            let repo_singleton = g(0x0485d0e8).and_then(|a| unsafe { safe_read_usize(a) }).unwrap_or(0);
+            let ebl_mgr = g(0x03d5b078).and_then(|a| unsafe { safe_read_usize(a) }).unwrap_or(0);
+            let ebl_mgr_lazy = g(0x03d5b088).and_then(|a| unsafe { safe_read_usize(a) }).unwrap_or(0);
+            let csfile = g(0x03d5b0f8).and_then(|a| unsafe { safe_read_usize(a) }).unwrap_or(0);
+            append_autoload_debug(format_args!(
+                "CAPSTATE-SUBSYS: repo_gate(*0x14485cbec)={repo_gate} repo_singleton=0x{repo_singleton:x} csebl_mgr=0x{ebl_mgr:x} csebl_lazy=0x{ebl_mgr_lazy:x} csfile=0x{csfile:x} -- gate==0 => repo-path loss; gate==1 + live mgr => EBL unmount (read yields empty)"
+            ));
+            run_ebl_mount_census("getter");
         }
     }
     ret
 }
+
+static EBL_CENSUS_DONE: AtomicUsize = AtomicUsize::new(0);
+
+/// EBL-MOUNT-CENSUS (RE 2026-07-17): one-shot read-only walk of the mounted-archive registry
+/// `R = *(EBL_REGISTRY_GLOBAL_RVA)` container B `[R+0x90 .. R+0x98)` stride 0x40 (per entry: archive name =
+/// MSVC wstring @ `+0x08`, `Archive*` @ `+0x30`). Lock-free bounded read (the world is parked at the stall,
+/// so the registry is stable), every pointer validated. Emits the `EBL-MOUNT-CENSUS DONE` measurement
+/// semaphore (the monitor tears down 1s after it). If the m28 (area 0x1c) player-map archive is ABSENT
+/// here but present on load 1, the mount-skip is the stall root; the m28 archive name is captured for the
+/// re-mount driver. Callable from ANY reliable stall path (the getter is silent some loads) -- e.g. the
+/// SWITCH-ORACLE mms_step=3 tick -- so the measurement fires whenever WORLD RES WAIT is reached.
+pub(crate) fn run_ebl_mount_census(src: &str) {
+    if EBL_CENSUS_DONE.swap(1, Ordering::SeqCst) != 0 {
+        return;
+    }
+    let Some(reg) = game_rva(EBL_REGISTRY_GLOBAL_RVA)
+        .ok()
+        .and_then(|a| unsafe { safe_read_usize(a) })
+        .filter(|&v| v > 0x10000)
+    else {
+        append_autoload_debug(format_args!(
+            "EBL-MOUNT-CENSUS DONE: registry null (src={src}) -- could not census"
+        ));
+        return;
+    };
+    let first = unsafe { safe_read_usize(reg + 0x90) }.unwrap_or(0);
+    let last = unsafe { safe_read_usize(reg + 0x98) }.unwrap_or(0);
+    let count = if last > first && first > 0x10000 && (last - first) % 0x40 == 0 {
+        (last - first) / 0x40
+    } else {
+        0
+    };
+    append_autoload_debug(format_args!(
+        "EBL-MOUNT-CENSUS (src={src}): registry=0x{reg:x} entries={count} first=0x{first:x} last=0x{last:x} -- mounted archive names (m28 = area 0x1c player-map):"
+    ));
+    let mut m28_hits = 0u32;
+    for i in 0..count.min(256) {
+        let entry = first + i * 0x40;
+        let name = read_msvc_wstring_ascii(entry + 0x8);
+        let archive = unsafe { safe_read_usize(entry + 0x30) }.unwrap_or(0);
+        if name.contains("m28") || name.contains("28_") {
+            m28_hits += 1;
+        }
+        append_autoload_debug(format_args!("  EBL-ARCH[{i}]: name='{name}' archive=0x{archive:x}"));
+    }
+    append_autoload_debug(format_args!(
+        "EBL-MOUNT-CENSUS DONE: m28_hits={m28_hits} of {count} entries (src={src}) -- 0 => m28 archive NOT mounted on load 2 (mount-skip root)"
+    ));
+}
+
+
 
 // ENV-GATE RATIONALE: ER_EFFECTS_STEP3_INIT_FIX is an explicit diagnostic gate for the init-point
 // world-res rebuild while it is being runtime-validated; the INSTRUMENTATION logs unconditionally on a
@@ -1147,6 +1231,91 @@ fn step3_init_rebuild_call_enabled() -> bool {
         .unwrap_or_else(|| PathBuf::from("."))
         .join("er-effects-step3-init-fix.txt")
         .exists()
+}
+
+/// FD4FileCap resource-name (`std::wstring`, MSVC SSO) offsets. RE (deobf `eldenring-deobf.bin`):
+/// RequestDCX 0x142658a80 (called by AddDefaultFileLoadProcess 0x142658c60 at 0x142658d57 with
+/// rcx = the cap saved in r14) does `lea 0x18(%rcx),%rdx; cmpq $0x8,0x18(%rdx); jb .; mov (%rdx),%rdx`
+/// -- i.e. the resource path is an MSVC `std::basic_string<wchar_t>` embedded at cap+0x18: `_Bx` (inline
+/// buffer / heap ptr) at +0x18, `_Mysize` (length in wchars) at +0x28, `_Myres` (capacity) at +0x30.
+/// Heap when capacity >= 8, inline buffer otherwise. Read as UTF-16 low byte to respect the no-lossy lint.
+const FD4FILECAP_NAME_WSTRING_OFFSET: usize = 0x18;
+const FD4FILECAP_NAME_SIZE_OFFSET: usize = 0x28;
+const FD4FILECAP_NAME_CAPACITY_OFFSET: usize = 0x30;
+/// MSVC wstring SSO capacity threshold: capacity >= this uses the heap pointer, else the inline buffer.
+const MSVC_WSTRING_SSO_HEAP_THRESHOLD: usize = 8;
+
+/// Best-effort read of a FD4FileCap's stored resource path (`std::wstring` at cap+0x18). Returns the
+/// printable ASCII low byte of each wchar (non-printable -> '?'), so we can see EXACTLY which map file's
+/// read returns empty on load 2. Never uses `from_utf8_lossy`; builds the String from validated bytes.
+fn read_fd4filecap_name(cap: usize) -> String {
+    if cap <= 0x10000 {
+        return String::new();
+    }
+    let size = unsafe { safe_read_usize(cap + FD4FILECAP_NAME_SIZE_OFFSET) }.unwrap_or(0);
+    let cap_field = unsafe { safe_read_usize(cap + FD4FILECAP_NAME_CAPACITY_OFFSET) }.unwrap_or(0);
+    if size == 0 || size > 260 {
+        return String::new();
+    }
+    let data = if cap_field >= MSVC_WSTRING_SSO_HEAP_THRESHOLD {
+        unsafe { safe_read_usize(cap + FD4FILECAP_NAME_WSTRING_OFFSET) }.unwrap_or(0)
+    } else {
+        cap + FD4FILECAP_NAME_WSTRING_OFFSET
+    };
+    if data <= 0x10000 {
+        return String::new();
+    }
+    let mut s = String::new();
+    for i in 0..size.min(200) {
+        let unit = unsafe { safe_read_u16(data + i * 2) }.unwrap_or(0);
+        if unit == 0 {
+            break;
+        }
+        let low = (unit & 0xff) as u8;
+        s.push(if (0x20..0x7f).contains(&low) && unit < 0x100 {
+            low as char
+        } else {
+            '?'
+        });
+    }
+    s
+}
+
+/// Read a generic MSVC `std::wstring` at `obj` as printable ASCII (low byte of each wchar). Layout:
+/// data ptr/inline-buf at `obj+0x00`, `_Mysize` at `obj+0x10`, `_Myres`(cap) at `obj+0x18`; heap when
+/// cap >= 8 else inline. Used to read the EBL registry entry's archive-name wstring (`entry+0x08`). Lint
+/// -safe: built from validated printable bytes only (non-printable -> '?').
+fn read_msvc_wstring_ascii(obj: usize) -> String {
+    if obj <= 0x10000 {
+        return String::new();
+    }
+    let size = unsafe { safe_read_usize(obj + 0x10) }.unwrap_or(0);
+    let cap = unsafe { safe_read_usize(obj + 0x18) }.unwrap_or(0);
+    if size == 0 || size > 260 {
+        return String::new();
+    }
+    let data = if cap >= MSVC_WSTRING_SSO_HEAP_THRESHOLD {
+        unsafe { safe_read_usize(obj) }.unwrap_or(0)
+    } else {
+        obj
+    };
+    if data <= 0x10000 {
+        return String::new();
+    }
+    let mut s = String::new();
+    for i in 0..size.min(200) {
+        let unit = unsafe { safe_read_u16(data + i * 2) }.unwrap_or(0);
+        if unit == 0 {
+            break;
+        }
+        let low = (unit & 0xff) as u8;
+        s.push(if (0x20..0x7f).contains(&low) && unit < 0x100 {
+            low as char
+        } else {
+            '?'
+        });
+    }
+    s
 }
 
 /// Read the loadlist virtual-path (DLString wchar, ASCII low byte) at `InGameStep+0x210/0x220` so the

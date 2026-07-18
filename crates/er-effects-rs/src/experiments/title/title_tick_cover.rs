@@ -1317,6 +1317,14 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                 movemapstep_step_name(mms_step),
                 SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
             ));
+            // PROBE (reliable): fire the EBL mount census the moment WORLD RES WAIT (mms_step 3) is reached
+            // on a SECOND load, from this always-ticking oracle (the WORLDRES-GETTER is silent some loads).
+            // One-shot; emits the `EBL-MOUNT-CENSUS DONE` measurement semaphore -> the monitor tears down 1s
+            // after that exact line. m28 ABSENT in the registry => mount step skipped; m28 present but the
+            // block cap +0x90 still null => bind step skipped -- discriminates WHERE the warm-reload guard is.
+            if mms_step == 3 && IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES {
+                crate::experiments::trace::run_ebl_mount_census("oracle-mms3");
+            }
         }
         // RESTORE bc4 AFTER THE FUNCTOR (save-disabled switch completion, 2026-07-16). We forced bc4=READY(3)
         // at the return-title REQUEST purely to fire the final functor without a quit-save. bc4=3 has done its

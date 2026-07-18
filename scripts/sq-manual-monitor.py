@@ -87,12 +87,16 @@ def main():
 
     t0 = time.time()
     offset = START_OFFSET
-    phase_hwm = -1          # high-water of the 0x1c block load phase for the CURRENT load
+    phase_hwm = -1          # high-water of the 0x1c block load phase (from WORLDRES-GETTER, if it fires)
+    mms_hwm = -1            # high-water of mms_step (from SWITCH-ORACLE -- the RELIABLE stall semaphore)
     stable_max = 0
-    armed = False           # a 0x1c WORLD RES WAIT is actively being waited on
+    armed = False           # a world load (load 2) is actively being waited on
+    census_seen = False     # the DLL emitted its EBL-MOUNT-CENSUS measurement -> tear down 1s after
+    census_at = None
     last_progress = time.time()
     last_report = ""
     verdict = None
+    ready_mms = 20          # mms_step reaches ~20 when world-res completes ("3/20")
 
     while True:
         now = time.time()
@@ -112,21 +116,26 @@ def main():
                 chunk = f.read()
             offset = sz
             for line in chunk.decode("utf-8", "replace").splitlines():
-                # WORLDRES-GETTER 0x1c: authoritative per-block phase/status/data for the 0x1c load.
+                # PROBE MEASUREMENT semaphore: the DLL captured its census -> the probe has its data.
+                if "EBL-MOUNT-CENSUS DONE" in line:
+                    census_seen = True
+                    if census_at is None:
+                        census_at = now
+                    last_report = line.split("dll:", 1)[-1].strip()[:180]
+                # WORLDRES-GETTER 0x1c: per-block phase (supplementary; may be silent some loads).
                 if "WORLDRES-GETTER" in line and "0x1c" in line:
                     mp = re.search(r"\+0x35\(phase\)=(-?\d+)", line)
                     if mp:
                         ph = int(mp.group(1))
-                        # New load starts when phase drops well below the high-water -> reset + re-arm.
                         if phase_hwm >= 0 and ph < phase_hwm - 3:
                             phase_hwm = -1
-                            armed = False
                         if ph > phase_hwm:
                             phase_hwm = ph
                             last_progress = now
                         armed = True
                         last_report = line.split("dll:", 1)[-1].strip()[:150]
-                # SWITCH-ORACLE carries stable_frames (world entered + held).
+                # SWITCH-ORACLE: the RELIABLE per-frame world-load semaphore. mms_step is WORLD RES WAIT's
+                # own "3/20" counter; arm + track progress off it so a silent getter cannot mask the stall.
                 if "SWITCH-ORACLE" in line or "LAST ORACLE" in line:
                     st = re.search(r"stable_frames=(\d+)", line)
                     if st:
@@ -134,14 +143,30 @@ def main():
                         if v > stable_max:
                             stable_max = v
                             last_progress = now
+                    ms = re.search(r"mms_step=(-?\d+)", line)
+                    if ms:
+                        m = int(ms.group(1))
+                        if m >= 2:                       # a world load is in progress (2..~20)
+                            if m > mms_hwm:
+                                mms_hwm = m
+                                last_progress = now
+                            armed = True
+                            last_report = line.split("dll:", 1)[-1].strip()[:180]
+                        elif m < 0 and mms_hwm >= 2:     # load ended/reset -> re-arm for a fresh cycle
+                            mms_hwm = -1
         if stable_max >= LOADED_STABLE_FRAMES:
             verdict = f"WORLD READY (LOADED_STABLE stable_frames={stable_max}) -- second load reached world readiness"
             break
-        if (armed and stable_max == 0 and 0 <= phase_hwm < READY_PHASE
-                and now - last_progress >= STALL_SECONDS):
-            verdict = (f"WORLD RES WAIT STALL (teardown semaphore): 0x1c block phase stuck at "
-                       f"{phase_hwm} (< {READY_PHASE}), stable=0, no progress for {STALL_SECONDS}s "
-                       f"-- last: {last_report}")
+        # Primary teardown: the probe captured its measurement -> done, tear down 1s later.
+        if census_seen and census_at is not None and now - census_at >= STALL_SECONDS:
+            verdict = f"CENSUS CAPTURED (probe measurement semaphore) -- {last_report}"
+            break
+        # Fallback teardown: a world-load stall with no progress -- keyed on mms_step OR getter phase, so a
+        # silent getter cannot soft-lock the run.
+        incomplete = (0 <= phase_hwm < READY_PHASE) or (2 <= mms_hwm < ready_mms)
+        if armed and stable_max == 0 and incomplete and now - last_progress >= STALL_SECONDS:
+            verdict = (f"WORLD RES WAIT STALL (teardown semaphore): mms_hwm={mms_hwm}/{ready_mms} "
+                       f"phase_hwm={phase_hwm}, stable=0, no progress for {STALL_SECONDS}s -- last: {last_report}")
             break
         wait_for_change(POLL)
 
@@ -149,7 +174,9 @@ def main():
     print(f"elapsed_s: {round(time.time() - t0, 1)} phase_hwm={phase_hwm} stable_max={stable_max}",
           flush=True)
     # Tear down on a real terminal semaphore; leave the game alone if the user already closed it.
-    if verdict and verdict.startswith(("WORLD RES WAIT STALL", "WORLD READY", "CAP")):
+    if verdict and verdict.startswith(
+        ("WORLD RES WAIT STALL", "WORLD READY", "CAP", "CENSUS CAPTURED")
+    ):
         if game_alive():
             kill("eldenring.exe")
             kill("me3.exe")

@@ -297,6 +297,31 @@ pub(crate) const CSFILE_QUEUE_ARRAY_E0_OFFSET: usize = 0xe0;
 pub(crate) const FILECAP_QUEUEFLAGS_89_OFFSET: usize = 0x89;
 /// FD4 file-cap ENQUEUE primitive (deobf VA 0x14269d7b0): `fn(rcx=queue, rdx=cap)`.
 pub(crate) const CSFILE_ENQUEUE_RVA: u32 = 0x0269d7b0;
+/// Mounted-EBL-archive REGISTRY global (deobf VA 0x1448464a8): `R = *(this)`, lazy-created by 0x141f49f60,
+/// resolver 0x141f48b40. This is the container a mount census walks (NOT the CSEblFileManager object at
+/// 0x143d5b078). Container B (the keyed registry) at `R+0x90`(first)/`R+0x98`(last), stride 0x40; per entry
+/// the archive name is an MSVC wstring at `entry+0x08` and the `Archive*` is at `entry+0x30`; lock at
+/// `R+0xB8`. Walk it to see whether the m28 (area 0x1c) player-map archive is mounted on the load-2 stall.
+/// RE: bd step3 CSEblFileManager mount-table subagent 2026-07-17.
+pub(crate) const EBL_REGISTRY_GLOBAL_RVA: u32 = 0x084864a8;
+/// In-game player-map MOUNT ORCHESTRATOR (deobf 0x14082dbf0): a thin wrapper that calls 0x14082faf0
+/// (which builds + dispatches the player-map EBL mount -- the `0x82dc1c` step). It is dispatched as an
+/// in-game STEP (caller 0x14082eb7e is a step-thunk); on the warm System->Quit->Load reload the step is
+/// skipped, so the destination map's archive is not re-mounted and the block read yields empty (+0x90
+/// null) -> WORLD RES WAIT stall. `fn(rcx=stepContext, rdx, ...)`. NOT hooked by me3 (in-game fn, not the
+/// file/EBL/mount path), so a read-only forwarding hook is safe. Hooked to capture its context args on
+/// load 1 (fires + works) vs load 2 (skipped?) -- both the bug-fix driver interface and the own-load
+/// primitive (drive the essential map mount menu-free for any save).
+pub(crate) const MAP_LOAD_ORCHESTRATOR_RVA: u32 = 0x0082dbf0;
+/// MountEblArchive (deobf entry VA 0x1401efc00, prologue `40 55 56 57 41 56 41 57`): mounts an EBL/BHD
+/// archive so its packed block files can be read. `fn(rcx=CSEblFileManager, rdx, r8, r9)` -- all three of
+/// rdx/r8/r9 are null-checked; rdx and r8 point at (largely static, ~0x1429cf6xx) archive descriptors,
+/// so their pointer identity distinguishes archives. Golden trace (bd
+/// golden-mount-trace-fires-during-native-load-2026-06-22) proved it fires during a native map load.
+/// PROBE ONLY: hooked to log which archives mount on the first autoload vs the System->Quit->Load reload,
+/// to confirm/refute whether the destination map's archive is unmounted on quit and NOT re-mounted on the
+/// warm reload (the run7 empty-EBL-read hypothesis; content child +0x90 stays null though status->4).
+pub(crate) const MOUNT_EBL_ARCHIVE_RVA: u32 = 0x001efc00;
 // World BLOCK constructor (deobf/runtime 0x0062ec00): the ONLY writer of block+0x40 (load-state slice
 // count) and block+0x48 (slice base), sourced from STACK args (0x68/0x70(%rsp)). NOT hooked -- a
 // register-only forwarding hook loses those stack args and corrupts every block (runtime AV 2026-07-17).
