@@ -232,7 +232,13 @@ def export_key(
 def build_export_geometry(obj) -> tuple[list[dict], list[list[int]], str]:
     mesh = obj.data
     reference_mesh = find_uv_reference_mesh(obj)
-    uv_source = "editable" if uv_layer_data(mesh) is not None else "raw-reference" if reference_mesh else "fallback-zero"
+    uv_source = (
+        "editable"
+        if uv_layer_data(mesh) is not None
+        else "raw-reference"
+        if reference_mesh
+        else "fallback-zero"
+    )
     export_vertices: list[dict] = []
     export_lookup: dict[tuple[int, int, int, int, int, int], int] = {}
     export_triangles: list[list[int]] = []
@@ -247,7 +253,9 @@ def build_export_geometry(obj) -> tuple[list[dict], list[list[int]], str]:
             uv = uv_for_loop(mesh, loop_index, reference_mesh)
             key = export_key(source_index, uv, normal)
             export_index = export_lookup.get(key)
-            if export_index is None:  # pi-lens-ignore: python-thread-global-write — local cache check, no threading
+            if (
+                export_index is None
+            ):  # pi-lens-ignore: python-thread-global-write — local cache check, no threading
                 export_index = len(export_vertices)
                 export_lookup[key] = export_index
                 export_vertices.append(  # pi-lens-ignore: python-thread-global-write — local export list append, no threading
@@ -259,8 +267,14 @@ def build_export_geometry(obj) -> tuple[list[dict], list[list[int]], str]:
                     }
                 )
             triangle.append(export_index)
-        export_triangles.append(triangle)  # pi-lens-ignore: python-thread-global-write — local triangle list append, no threading
-    return export_vertices, export_triangles, uv_source  # pi-lens-ignore: python-thread-global-write — local tuple return, no threading
+        export_triangles.append(
+            triangle
+        )  # pi-lens-ignore: python-thread-global-write — local triangle list append, no threading
+    return (
+        export_vertices,
+        export_triangles,
+        uv_source,
+    )  # pi-lens-ignore: python-thread-global-write — local tuple return, no threading
 
 
 def write_obj(
@@ -361,7 +375,9 @@ def main() -> None:
         "weights": str(weights_path),
     }
     summary_path.write_text(  # pi-lens-ignore: python-path-traversal — output dir supplied by build script under target/
-        json.dumps(summary, indent=2),  # pi-lens-ignore: python-path-traversal — data string for fixed summary_path write
+        json.dumps(
+            summary, indent=2
+        ),  # pi-lens-ignore: python-path-traversal — data string for fixed summary_path write
         encoding="utf-8",  # pi-lens-ignore: python-path-traversal — data string for fixed summary_path write
     )
     out(f"wrote {obj_path}")
