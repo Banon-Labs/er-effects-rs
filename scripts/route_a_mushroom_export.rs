@@ -155,11 +155,43 @@ struct ExportedMesh {
     triangles: Vec<[u32; 3]>,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct RouteAParams {
+    vertical_stretch: f32,
+    arm_x_swell: f32,
+    arm_y_swell: f32,
+    arm_z_swell: f32,
+    arm_shoulder_outward_offset: f32,
+    arm_upper_outward_offset: f32,
+    arm_forearm_outward_offset: f32,
+    arm_hand_outward_offset: f32,
+    arm_upper_to_shoulder_abs_x: f32,
+    arm_forearm_to_upper_abs_x: f32,
+}
+
+impl Default for RouteAParams {
+    fn default() -> Self {
+        Self {
+            vertical_stretch: ROUTE_A_VERTICAL_STRETCH,
+            arm_x_swell: ROUTE_A_ARM_X_SWELL,
+            arm_y_swell: ROUTE_A_ARM_Y_SWELL,
+            arm_z_swell: ROUTE_A_ARM_Z_SWELL,
+            arm_shoulder_outward_offset: ROUTE_A_ARM_SHOULDER_OUTWARD_OFFSET,
+            arm_upper_outward_offset: ROUTE_A_ARM_UPPER_OUTWARD_OFFSET,
+            arm_forearm_outward_offset: ROUTE_A_ARM_FOREARM_OUTWARD_OFFSET,
+            arm_hand_outward_offset: ROUTE_A_ARM_HAND_OUTWARD_OFFSET,
+            arm_upper_to_shoulder_abs_x: 0.42,
+            arm_forearm_to_upper_abs_x: 0.52,
+        }
+    }
+}
+
 struct Config {
     source_flver: PathBuf,
     texture_dir: PathBuf,
     output_dir: PathBuf,
     scale: f32,
+    params: RouteAParams,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -175,10 +207,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bone_map_path = config.output_dir.join("c2280_to_er_bone_map.tsv");
     let summary_path = config.output_dir.join("summary.txt");
 
-    write_obj(&obj_path, &mtl_path, &exported, config.scale)?;
+    write_obj(&obj_path, &mtl_path, &exported, config.scale, config.params)?;
     write_mtl(&mtl_path, &config.output_dir, &config.texture_dir)?;
     write_bones(&bones_path, &exported.bones)?;
-    write_weights(&weights_path, &exported)?;
+    write_weights(&weights_path, &exported, config.params)?;
     write_bone_map(&bone_map_path, &exported.bones)?;
     write_summary(&summary_path, &config, &exported)?;
 
@@ -193,7 +225,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         exported.vertices.len(),
         exported.triangles.len(),
         exported.header.bbox_max.y - exported.header.bbox_min.y,
-        (exported.header.bbox_max.y - exported.header.bbox_min.y) * config.scale
+        (exported.header.bbox_max.y - exported.header.bbox_min.y)
+            * config.scale
+            * config.params.vertical_stretch
     );
 
     Ok(())
@@ -204,6 +238,7 @@ fn parse_args() -> Result<Config, Box<dyn std::error::Error>> {
     let mut texture_dir = PathBuf::from(DEFAULT_TEXTURE_DIR);
     let mut output_dir = PathBuf::from(DEFAULT_OUTPUT_DIR);
     let mut scale = DEFAULT_SCALE;
+    let mut params = RouteAParams::default();
 
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -212,6 +247,30 @@ fn parse_args() -> Result<Config, Box<dyn std::error::Error>> {
             "--texture-dir" => texture_dir = PathBuf::from(required_value(&arg, args.next())?),
             "--output-dir" => output_dir = PathBuf::from(required_value(&arg, args.next())?),
             "--scale" => scale = required_value(&arg, args.next())?.parse()?,
+            "--vertical-stretch" => {
+                params.vertical_stretch = required_value(&arg, args.next())?.parse()?;
+            }
+            "--arm-x-swell" => params.arm_x_swell = required_value(&arg, args.next())?.parse()?,
+            "--arm-y-swell" => params.arm_y_swell = required_value(&arg, args.next())?.parse()?,
+            "--arm-z-swell" => params.arm_z_swell = required_value(&arg, args.next())?.parse()?,
+            "--arm-shoulder-out" => {
+                params.arm_shoulder_outward_offset = required_value(&arg, args.next())?.parse()?;
+            }
+            "--arm-upper-out" => {
+                params.arm_upper_outward_offset = required_value(&arg, args.next())?.parse()?;
+            }
+            "--arm-forearm-out" => {
+                params.arm_forearm_outward_offset = required_value(&arg, args.next())?.parse()?;
+            }
+            "--arm-hand-out" => {
+                params.arm_hand_outward_offset = required_value(&arg, args.next())?.parse()?;
+            }
+            "--arm-upper-to-shoulder-abs-x" => {
+                params.arm_upper_to_shoulder_abs_x = required_value(&arg, args.next())?.parse()?;
+            }
+            "--arm-forearm-to-upper-abs-x" => {
+                params.arm_forearm_to_upper_abs_x = required_value(&arg, args.next())?.parse()?;
+            }
             "--help" | "-h" => {
                 print_help();
                 std::process::exit(0);
@@ -225,6 +284,7 @@ fn parse_args() -> Result<Config, Box<dyn std::error::Error>> {
         texture_dir,
         output_dir,
         scale,
+        params,
     })
 }
 
@@ -238,6 +298,18 @@ fn print_help() {
     println!("  --texture-dir <path>   default: {DEFAULT_TEXTURE_DIR}");
     println!("  --output-dir <path>    default: {DEFAULT_OUTPUT_DIR}");
     println!("  --scale <float>        default: {DEFAULT_SCALE}");
+    println!("  --vertical-stretch <float>          default: {ROUTE_A_VERTICAL_STRETCH}");
+    println!("  --arm-x-swell <float>               default: {ROUTE_A_ARM_X_SWELL}");
+    println!("  --arm-y-swell <float>               default: {ROUTE_A_ARM_Y_SWELL}");
+    println!("  --arm-z-swell <float>               default: {ROUTE_A_ARM_Z_SWELL}");
+    println!(
+        "  --arm-shoulder-out <float>          default: {ROUTE_A_ARM_SHOULDER_OUTWARD_OFFSET}"
+    );
+    println!("  --arm-upper-out <float>             default: {ROUTE_A_ARM_UPPER_OUTWARD_OFFSET}");
+    println!("  --arm-forearm-out <float>           default: {ROUTE_A_ARM_FOREARM_OUTWARD_OFFSET}");
+    println!("  --arm-hand-out <float>              default: {ROUTE_A_ARM_HAND_OUTWARD_OFFSET}");
+    println!("  --arm-upper-to-shoulder-abs-x <float> default: 0.42");
+    println!("  --arm-forearm-to-upper-abs-x <float> default: 0.52");
 }
 
 fn parse_first_lod0_mesh(bytes: &[u8]) -> Result<ExportedMesh, Box<dyn std::error::Error>> {
@@ -578,7 +650,13 @@ fn triangulate(triangle_strip: bool, indices: &[u32]) -> Vec<[u32; 3]> {
     triangles
 }
 
-fn write_obj(path: &Path, mtl_path: &Path, mesh: &ExportedMesh, scale: f32) -> io::Result<()> {
+fn write_obj(
+    path: &Path,
+    mtl_path: &Path,
+    mesh: &ExportedMesh,
+    scale: f32,
+    params: RouteAParams,
+) -> io::Result<()> {
     let mut file = File::create(path)?;
     let mtl_name = mtl_path
         .file_name()
@@ -589,19 +667,24 @@ fn write_obj(path: &Path, mtl_path: &Path, mesh: &ExportedMesh, scale: f32) -> i
         "# Route A c2280 mushroom export; generated by scripts/route_a_mushroom_export.rs"
     )?;
     writeln!(file, "# scale={scale}")?;
-    writeln!(file, "# vertical_stretch={ROUTE_A_VERTICAL_STRETCH}")?;
+    writeln!(file, "# vertical_stretch={}", params.vertical_stretch)?;
     writeln!(
         file,
-        "# arm_swell_xyz={ROUTE_A_ARM_X_SWELL},{ROUTE_A_ARM_Y_SWELL},{ROUTE_A_ARM_Z_SWELL}"
+        "# arm_swell_xyz={},{},{}",
+        params.arm_x_swell, params.arm_y_swell, params.arm_z_swell
     )?;
     writeln!(
         file,
-        "# arm_outward_offsets={ROUTE_A_ARM_SHOULDER_OUTWARD_OFFSET},{ROUTE_A_ARM_UPPER_OUTWARD_OFFSET},{ROUTE_A_ARM_FOREARM_OUTWARD_OFFSET},{ROUTE_A_ARM_HAND_OUTWARD_OFFSET}"
+        "# arm_outward_offsets={},{},{},{}",
+        params.arm_shoulder_outward_offset,
+        params.arm_upper_outward_offset,
+        params.arm_forearm_outward_offset,
+        params.arm_hand_outward_offset
     )?;
     writeln!(file, "mtllib {mtl_name}")?;
     writeln!(file, "o c2280_route_a_scaled")?;
     for vertex in &mesh.vertices {
-        let position = route_a_output_position(mesh, vertex, scale);
+        let position = route_a_output_position(mesh, vertex, scale, params);
         writeln!(
             file,
             "v {:.9} {:.9} {:.9}",
@@ -631,11 +714,16 @@ fn write_obj(path: &Path, mtl_path: &Path, mesh: &ExportedMesh, scale: f32) -> i
     Ok(())
 }
 
-fn route_a_output_position(mesh: &ExportedMesh, vertex: &Vertex, scale: f32) -> Vec3 {
+fn route_a_output_position(
+    mesh: &ExportedMesh,
+    vertex: &Vertex,
+    scale: f32,
+    params: RouteAParams,
+) -> Vec3 {
     let mut position = vertex.position;
-    position.y *= ROUTE_A_VERTICAL_STRETCH;
+    position.y *= params.vertical_stretch;
 
-    let target = dominant_er_target_for_vertex(mesh, vertex);
+    let target = dominant_er_target_for_vertex(mesh, vertex, params);
     if is_arm_target(target) {
         let side =
             arm_side_for_target(target)
@@ -645,10 +733,10 @@ fn route_a_output_position(mesh: &ExportedMesh, vertex: &Vertex, scale: f32) -> 
             y: 0.78,
             z: 0.0,
         };
-        position.x = center.x + (position.x - center.x) * ROUTE_A_ARM_X_SWELL;
-        position.y = center.y + (position.y - center.y) * ROUTE_A_ARM_Y_SWELL;
-        position.z = center.z + (position.z - center.z) * ROUTE_A_ARM_Z_SWELL;
-        position.x += side * arm_outward_offset_for_target(target);
+        position.x = center.x + (position.x - center.x) * params.arm_x_swell;
+        position.y = center.y + (position.y - center.y) * params.arm_y_swell;
+        position.z = center.z + (position.z - center.z) * params.arm_z_swell;
+        position.x += side * arm_outward_offset_for_target(target, params);
     }
 
     Vec3 {
@@ -658,7 +746,11 @@ fn route_a_output_position(mesh: &ExportedMesh, vertex: &Vertex, scale: f32) -> 
     }
 }
 
-fn dominant_er_target_for_vertex(mesh: &ExportedMesh, vertex: &Vertex) -> &'static str {
+fn dominant_er_target_for_vertex(
+    mesh: &ExportedMesh,
+    vertex: &Vertex,
+    params: RouteAParams,
+) -> &'static str {
     let mut best_target = "Spine2";
     let mut best_weight = 0.0;
     for slot in 0..4 {
@@ -679,7 +771,7 @@ fn dominant_er_target_for_vertex(mesh: &ExportedMesh, vertex: &Vertex) -> &'stat
         if base_target.starts_with('<') {
             continue;
         }
-        best_target = er_target_for_vertex(base_target, vertex, &mesh.header);
+        best_target = er_target_for_vertex(base_target, vertex, &mesh.header, params);
         best_weight = weight;
     }
     best_target
@@ -695,12 +787,12 @@ fn arm_side_for_target(target: &str) -> Option<f32> {
     }
 }
 
-fn arm_outward_offset_for_target(target: &str) -> f32 {
+fn arm_outward_offset_for_target(target: &str, params: RouteAParams) -> f32 {
     match target {
-        "L_Shoulder" | "R_Shoulder" => ROUTE_A_ARM_SHOULDER_OUTWARD_OFFSET,
-        "L_UpperArm" | "R_UpperArm" => ROUTE_A_ARM_UPPER_OUTWARD_OFFSET,
-        "L_Forearm" | "R_Forearm" => ROUTE_A_ARM_FOREARM_OUTWARD_OFFSET,
-        "L_Hand" | "R_Hand" => ROUTE_A_ARM_HAND_OUTWARD_OFFSET,
+        "L_Shoulder" | "R_Shoulder" => params.arm_shoulder_outward_offset,
+        "L_UpperArm" | "R_UpperArm" => params.arm_upper_outward_offset,
+        "L_Forearm" | "R_Forearm" => params.arm_forearm_outward_offset,
+        "L_Hand" | "R_Hand" => params.arm_hand_outward_offset,
         _ => 0.0,
     }
 }
@@ -764,7 +856,7 @@ fn write_bones(path: &Path, bones: &[Bone]) -> io::Result<()> {
     Ok(())
 }
 
-fn write_weights(path: &Path, mesh: &ExportedMesh) -> io::Result<()> {
+fn write_weights(path: &Path, mesh: &ExportedMesh, params: RouteAParams) -> io::Result<()> {
     let mut file = File::create(path)?;
     writeln!(file, "vertex\tslot\tsource_mesh_bone_slot\tsource_global_bone_index\tsource_bone\ter_target_bone\tweight")?;
     for (vertex_index, vertex) in mesh.vertices.iter().enumerate() {
@@ -786,7 +878,12 @@ fn write_weights(path: &Path, mesh: &ExportedMesh) -> io::Result<()> {
             let bone_name_display = bone_name.map(BoneName::display).unwrap_or("<missing>");
             let target_bone = bone_name
                 .map(|name| {
-                    er_target_for_vertex(er_target_for_source_bone(name), vertex, &mesh.header)
+                    er_target_for_vertex(
+                        er_target_for_source_bone(name),
+                        vertex,
+                        &mesh.header,
+                        params,
+                    )
                 })
                 .unwrap_or("<missing>");
             writeln!(
@@ -822,29 +919,33 @@ fn write_summary(path: &Path, config: &Config, mesh: &ExportedMesh) -> io::Resul
     writeln!(file, "source_flver={}", config.source_flver.display())?;
     writeln!(file, "texture_dir={}", config.texture_dir.display())?;
     writeln!(file, "scale={:.9}", config.scale)?;
-    writeln!(file, "vertical_stretch={:.9}", ROUTE_A_VERTICAL_STRETCH)?;
-    writeln!(file, "arm_swell_x={:.9}", ROUTE_A_ARM_X_SWELL)?;
-    writeln!(file, "arm_swell_y={:.9}", ROUTE_A_ARM_Y_SWELL)?;
-    writeln!(file, "arm_swell_z={:.9}", ROUTE_A_ARM_Z_SWELL)?;
+    writeln!(
+        file,
+        "vertical_stretch={:.9}",
+        config.params.vertical_stretch
+    )?;
+    writeln!(file, "arm_swell_x={:.9}", config.params.arm_x_swell)?;
+    writeln!(file, "arm_swell_y={:.9}", config.params.arm_y_swell)?;
+    writeln!(file, "arm_swell_z={:.9}", config.params.arm_z_swell)?;
     writeln!(
         file,
         "arm_shoulder_outward_offset={:.9}",
-        ROUTE_A_ARM_SHOULDER_OUTWARD_OFFSET
+        config.params.arm_shoulder_outward_offset
     )?;
     writeln!(
         file,
         "arm_upper_outward_offset={:.9}",
-        ROUTE_A_ARM_UPPER_OUTWARD_OFFSET
+        config.params.arm_upper_outward_offset
     )?;
     writeln!(
         file,
         "arm_forearm_outward_offset={:.9}",
-        ROUTE_A_ARM_FOREARM_OUTWARD_OFFSET
+        config.params.arm_forearm_outward_offset
     )?;
     writeln!(
         file,
         "arm_hand_outward_offset={:.9}",
-        ROUTE_A_ARM_HAND_OUTWARD_OFFSET
+        config.params.arm_hand_outward_offset
     )?;
     writeln!(file, "flver_version=0x{:X}", mesh.header.version)?;
     writeln!(file, "data_offset=0x{:X}", mesh.header.data_offset)?;
@@ -862,7 +963,9 @@ fn write_summary(path: &Path, config: &Config, mesh: &ExportedMesh) -> io::Resul
     writeln!(
         file,
         "scaled_height={:.9}",
-        (mesh.header.bbox_max.y - mesh.header.bbox_min.y) * config.scale * ROUTE_A_VERTICAL_STRETCH
+        (mesh.header.bbox_max.y - mesh.header.bbox_min.y)
+            * config.scale
+            * config.params.vertical_stretch
     )?;
     writeln!(file, "bones={}", mesh.bones.len())?;
     writeln!(file, "mesh_material_index={}", mesh.mesh.material_index)?;
@@ -905,6 +1008,7 @@ fn er_target_for_vertex(
     base_target: &'static str,
     vertex: &Vertex,
     header: &Header,
+    params: RouteAParams,
 ) -> &'static str {
     let height = header.bbox_max.y - header.bbox_min.y;
     let normalized_y = if height.abs() > f32::EPSILON {
@@ -913,10 +1017,10 @@ fn er_target_for_vertex(
         0.5
     };
     match base_target {
-        "L_UpperArm" if vertex.position.x < 0.42 => "L_Shoulder",
-        "L_Forearm" if vertex.position.x < 0.52 => "L_UpperArm",
-        "R_UpperArm" if vertex.position.x > -0.42 => "R_Shoulder",
-        "R_Forearm" if vertex.position.x > -0.52 => "R_UpperArm",
+        "L_UpperArm" if vertex.position.x < params.arm_upper_to_shoulder_abs_x => "L_Shoulder",
+        "L_Forearm" if vertex.position.x < params.arm_forearm_to_upper_abs_x => "L_UpperArm",
+        "R_UpperArm" if vertex.position.x > -params.arm_upper_to_shoulder_abs_x => "R_Shoulder",
+        "R_Forearm" if vertex.position.x > -params.arm_forearm_to_upper_abs_x => "R_UpperArm",
         "L_Thigh" if normalized_y < 0.10 => "L_Foot",
         "L_Thigh" if normalized_y < 0.24 => "L_Calf",
         "R_Thigh" if normalized_y < 0.10 => "R_Foot",
