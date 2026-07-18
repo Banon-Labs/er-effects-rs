@@ -100,8 +100,11 @@ run_witchy_pack() {
 	write_witchy_cmd "$cmd_path" "$input_path"
 	timeout 30s cmd.exe /c "$(wslpath -w "$cmd_path")" >"$out_path" 2>&1 || code=$?
 	case "$code" in
-		0|82) ;;
-		*) echo "WitchyBND pack failed for $tag with exit $code; see $out_path" >&2; exit "$code" ;;
+	0 | 82) ;;
+	*)
+		echo "WitchyBND pack failed for $tag with exit $code; see $out_path" >&2
+		exit "$code"
+		;;
 	esac
 	if [[ "$code" == 82 ]]; then
 		echo "accepted WitchyBND exit=82 after output phase" >>"$out_path"
@@ -203,12 +206,122 @@ rustc scripts/route_a_mushroom_stage_textures.rs -O -o target/route_a_mushroom_s
 
 variant_params() {
 	case "$1" in
-		edge-stub) printf '%s' "" ;;
-		more-out) printf '%s' "--arm-shoulder-out 0.45 --arm-upper-out 0.36 --arm-forearm-out 0.16 --arm-forearm-to-upper-abs-x 0.50" ;;
-		less-contorted) printf '%s' "--arm-x-swell 1.08 --arm-z-swell 1.35 --arm-shoulder-out 0.42 --arm-upper-out 0.34 --arm-forearm-out 0.12 --arm-upper-to-shoulder-abs-x 0.46 --arm-forearm-to-upper-abs-x 0.50" ;;
-		*) echo "unknown arm sweep variant: $1" >&2; exit 2 ;;
+	edge-stub) printf '%s' "" ;;
+	more-out) printf '%s' "--arm-shoulder-out 0.45 --arm-upper-out 0.36 --arm-forearm-out 0.16 --arm-forearm-to-upper-abs-x 0.50" ;;
+	less-contorted) printf '%s' "--arm-x-swell 1.08 --arm-z-swell 1.35 --arm-shoulder-out 0.42 --arm-upper-out 0.34 --arm-forearm-out 0.12 --arm-upper-to-shoulder-abs-x 0.46 --arm-forearm-to-upper-abs-x 0.50" ;;
+	*)
+		echo "unknown arm sweep variant: $1" >&2
+		exit 2
+		;;
 	esac
 }
+
+print_usage() {
+	cat <<'EOF'
+route_a_mushroom_build_arm_sweep.sh
+
+Preset sweep:
+  bash scripts/route_a_mushroom_build_arm_sweep.sh
+  bash scripts/route_a_mushroom_build_arm_sweep.sh less-contorted more-out
+
+Single configurable variant:
+  bash scripts/route_a_mushroom_build_arm_sweep.sh --label my-test [slider args] [--launch]
+
+Useful slider args forwarded to route_a_mushroom_export:
+  --arm-x-swell <float>                 width/sideways scaling for arm vertices
+  --arm-y-swell <float>                 vertical scaling around the arm center
+  --arm-z-swell <float>                 front/back volume for arm vertices
+  --arm-shoulder-out <float>            outward shoulder offset
+  --arm-upper-out <float>               outward upper-arm offset
+  --arm-forearm-out <float>             outward forearm offset
+  --arm-upper-to-shoulder-abs-x <float> inner upper-arm threshold remapped to shoulder
+  --arm-forearm-to-upper-abs-x <float>  inner forearm threshold remapped to upper arm
+  --vertical-stretch <float>            mushroom height stretch
+
+Example build-only custom profile:
+  bash scripts/route_a_mushroom_build_arm_sweep.sh --label trial --arm-x-swell 1.04 --arm-z-swell 1.25 --arm-shoulder-out 0.44 --arm-upper-out 0.34 --arm-forearm-out 0.12 --arm-upper-to-shoulder-abs-x 0.48 --arm-forearm-to-upper-abs-x 0.52
+
+Example build and launch custom profile:
+  bash scripts/route_a_mushroom_build_arm_sweep.sh --label trial --launch --arm-x-swell 1.04 --arm-z-swell 1.25 --arm-shoulder-out 0.44 --arm-upper-out 0.34 --arm-forearm-out 0.12 --arm-upper-to-shoulder-abs-x 0.48 --arm-forearm-to-upper-abs-x 0.52
+EOF
+}
+
+remove_variant_from_index() {
+	local variant="$1"
+	if [[ -e "$sweep_root/variant-index.tsv" ]]; then
+		python3 - "$sweep_root/variant-index.tsv" "$variant" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+variant = sys.argv[2]
+lines = path.read_text(encoding="utf-8").splitlines()
+path.write_text("\n".join(line for line in lines if not line.startswith(f"{variant}\t")) + "\n", encoding="utf-8")
+PY
+	fi
+}
+
+print_launch_command() {
+	local profile_path="$1"
+	local profile_win
+	profile_win="$(wslpath -w "$profile_path")"
+	printf '\nlaunch command:\n'
+	printf 'cd %q && %q launch -g eldenring --online false -p %q\n' \
+		"$repo_root" \
+		"/mnt/c/Users/choza/AppData/Local/garyttierney/me3/bin/me3.exe" \
+		"$profile_win"
+}
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+	print_usage
+	exit 0
+fi
+
+if [[ "${1:-}" == "--label" ]]; then
+	if [[ "$#" -lt 2 ]]; then
+		echo "--label requires a variant label" >&2
+		exit 2
+	fi
+	label="$2"
+	shift 2
+	if [[ ! "$label" =~ ^[A-Za-z0-9._-]+$ ]]; then
+		echo "label must contain only letters, numbers, dots, underscores, or hyphens: $label" >&2
+		exit 2
+	fi
+	launch_after=false
+	exporter_args=()
+	while [[ "$#" -gt 0 ]]; do
+		case "$1" in
+		--launch)
+			launch_after=true
+			shift
+			;;
+		--)
+			shift
+			exporter_args+=("$@")
+			break
+			;;
+		*)
+			exporter_args+=("$1")
+			shift
+			;;
+		esac
+	done
+	mkdir -p "$sweep_root"
+	if [[ ! -e "$sweep_root/variant-index.tsv" ]]; then
+		printf 'label\tprofile\tparams\n' >"$sweep_root/variant-index.tsv"
+	fi
+	remove_variant_from_index "$label"
+	params_text="${exporter_args[*]}"
+	build_variant "$label" "$params_text"
+	profile_path="$sweep_root/$label/mushroom-arm-${label}.me3"
+	printf 'built configurable arm variant:\n'
+	tail -n 1 "$sweep_root/variant-index.tsv"
+	print_launch_command "$profile_path"
+	if [[ "$launch_after" == true ]]; then
+		"/mnt/c/Users/choza/AppData/Local/garyttierney/me3/bin/me3.exe" launch -g eldenring --online false -p "$(wslpath -w "$profile_path")"
+	fi
+	exit 0
+fi
 
 if [[ "$#" -eq 0 ]]; then
 	rm -rf "$sweep_root"
@@ -224,16 +337,7 @@ else
 fi
 
 for variant in "${selected_variants[@]}"; do
-	if [[ -e "$sweep_root/variant-index.tsv" ]]; then
-		python3 - "$sweep_root/variant-index.tsv" "$variant" <<'PY'
-from pathlib import Path
-import sys
-path = Path(sys.argv[1])
-variant = sys.argv[2]
-lines = path.read_text(encoding="utf-8").splitlines()
-path.write_text("\n".join(line for line in lines if not line.startswith(f"{variant}\t")) + "\n", encoding="utf-8")
-PY
-	fi
+	remove_variant_from_index "$variant"
 	build_variant "$variant" "$(variant_params "$variant")"
 done
 
