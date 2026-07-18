@@ -1827,21 +1827,27 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                 }
                 return true;
             }
-            if OWN_STEPPER_MENU_OPENED
-                .compare_exchange(
-                    OWN_STEPPER_MENU_OPENED_NO,
-                    OWN_STEPPER_CALL_INC,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                )
-                .is_ok()
-            {
+            if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
                 append_autoload_debug(format_args!(
-                    "product-core-autoload: PRESS BUTTON component ready; armed native title accept byte for in-update open-menu/drain (dialog=0x{:x} press_start_proxy=0x{:x}) -- TitleTopDialog::open_menu writes latch and does not require Loop/TextFadeout state; no game-task open_menu self-fire",
+                    "product-core-autoload: PRESS BUTTON component ready; armed/retried native title accept byte for in-update open-menu/drain (dialog=0x{:x} press_start_proxy=0x{:x}) -- waiting for native a40/menu-open latch before declaring menu opened",
                     ready.title_dialog, ready.press_start_proxy
                 ));
             }
             return true;
+        }
+        if OWN_STEPPER_MENU_OPENED
+            .compare_exchange(
+                OWN_STEPPER_MENU_OPENED_NO,
+                OWN_STEPPER_CALL_INC,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+        {
+            append_autoload_debug(format_args!(
+                "product-core-autoload: native title menu-open latch observed (a40={}) after accept-byte arm; Continue rows may now be driven",
+                ready.menu_opened_latch
+            ));
         }
         // After menu-open (a40==1): commit the load. DEFAULT = the PROVEN native Continue char-load
         // (the unchanged block below). The default-OFF ProfileSelect load flow instead fires the

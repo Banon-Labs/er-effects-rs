@@ -4,8 +4,8 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
-        Arc, Mutex, Once, OnceLock,
         atomic::{AtomicU64, AtomicUsize, Ordering},
+        Arc, Mutex, Once, OnceLock,
     },
     time::{Duration, Instant},
 };
@@ -13,7 +13,7 @@ use std::{
 use std::os::windows::ffi::OsStrExt as _;
 
 use crate::input_blocker::{InputBlocker, InputFlags};
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MhHook, MH_STATUS};
 use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
@@ -22,11 +22,12 @@ use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoad
 use er_tpf::{DdsHeaderMode, DdsImage, Tpf};
 use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
 use windows::{
+    core::{BOOL, PCSTR},
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
         System::{
             LibraryLoader::{GetModuleHandleA, GetProcAddress},
-            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
+            Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION},
             SystemServices::DLL_PROCESS_ATTACH,
             Threading::GetCurrentProcessId,
         },
@@ -35,7 +36,6 @@ use windows::{
             WM_KEYDOWN, WM_KEYUP,
         },
     },
-    core::{BOOL, PCSTR},
 };
 
 #[allow(unused_imports)]
@@ -59,7 +59,8 @@ pub(crate) fn arm_product_autoload_from_request(request: &SaveLoader) {
     // `own_stepper_enabled()` on `missing_save_selection_pending()`, which re-enables the frame the
     // pick clears the latch. The loading bar advances normally and sticks at the save-check (the
     // ShowProgressJob CONTINUE-loop) with the overlay picker on top; the pick resumes it.
-    if !autoload_disabled() && !save_override_telemetry_only() && !native_profile_capture_enabled() {
+    if !autoload_disabled() && !save_override_telemetry_only() && !native_profile_capture_enabled()
+    {
         PRODUCT_AUTOLOAD_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     }
 
@@ -489,9 +490,7 @@ pub(crate) unsafe fn maybe_set_title_accept_byte(base: usize) {
         TITLE_ACCEPT_BYTE_GATE_FIRED.store(true, Ordering::SeqCst); // genuinely open in Loop -> nothing to do
         return;
     }
-    if TITLE_ACCEPT_BYTE_GATE_FIRED.swap(true, Ordering::SeqCst) {
-        return;
-    }
+    let first_arm = !TITLE_ACCEPT_BYTE_GATE_FIRED.swap(true, Ordering::SeqCst);
     let press_start_proxy = dialog + TITLE_PRESS_START_SCENE_PROXY_B78_OFFSET;
     let press_start_vt = unsafe { safe_read_usize(press_start_proxy) }.unwrap_or(0);
     let press_start_context = if press_start_vt == base + SCENE_OBJ_PROXY_VTABLE_RVA {
@@ -516,10 +515,12 @@ pub(crate) unsafe fn maybe_set_title_accept_byte(base: usize) {
     unsafe {
         *((base + TITLE_GLOBAL_ACCEPT_BYTE_RVA) as *mut u8) = TITLE_PROCEED_GATE_SET_VALUE;
     }
-    append_autoload_debug(format_args!(
-        "title-accept-byte: set [0x{:x}]=1 on settled TitleTopDialog (Loop, a40==0) -- zero-input NATURAL menu-open (registrar runs in native update frame -> Continue/Load/NewGame rows build + drain)",
-        base + TITLE_GLOBAL_ACCEPT_BYTE_RVA
-    ));
+    if first_arm {
+        append_autoload_debug(format_args!(
+            "title-accept-byte: set [0x{:x}]=1 on settled TitleTopDialog (Loop, a40==0) -- zero-input NATURAL menu-open (registrar runs in native update frame -> Continue/Load/NewGame rows build + drain); will retry until native a40/menu-open latch flips",
+            base + TITLE_GLOBAL_ACCEPT_BYTE_RVA
+        ));
+    }
 }
 /// Connection-state OFFLINE lever (zero-input, save-safe) -- the milestone-3 fix. The title's
 /// network/session event handlers (`CSLuaEventScriptImitation::On{LanCutError,DisconnectGameServer,
