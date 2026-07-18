@@ -1902,12 +1902,11 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             && gm != null
             && slot >= OWN_STEPPER_SLOT_ZERO
         {
-            unsafe { *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) = slot };
             let requested_slot = unsafe { safe_read_i32(gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) }
                 .unwrap_or(OWN_STEPPER_SLOT_NONE);
             if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
                 append_autoload_debug(format_args!(
-                    "system-quit-quickload: set requested save-slot load index before Continue selected_slot={slot} gm_b78={requested_slot}"
+                    "system-quit-quickload: leaving requested save-slot load index untouched before Continue selected_slot={slot} gm_b78={requested_slot} -- SetState5 handoff owns reload; phase-4 task must not re-arm b78"
                 ));
             }
         }
