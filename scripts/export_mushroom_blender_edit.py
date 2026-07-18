@@ -182,10 +182,37 @@ def ensure_triangles(mesh) -> None:
         )  # pi-lens-ignore: python-thread-global-write — exception construction, no threading
 
 
-def uv_for_loop(mesh, loop_index: int) -> tuple[float, float]:
-    if not mesh.uv_layers:
+def uv_layer_data(mesh):
+    if not mesh.uv_layers or mesh.uv_layers.active is None:
+        return None
+    layer_data = mesh.uv_layers.active.data
+    return layer_data if len(layer_data) > 0 else None
+
+
+def find_uv_reference_mesh(obj):
+    source_mesh = obj.data
+    source_loop_count = len(source_mesh.loops)
+    for candidate in bpy.context.scene.objects:
+        if candidate == obj or candidate.type != "MESH":
+            continue
+        if candidate.name != "c2280" and "raw c2280 reference" not in " ".join(
+            collection.name for collection in candidate.users_collection
+        ):
+            continue
+        if len(candidate.data.loops) != source_loop_count:
+            continue
+        if uv_layer_data(candidate.data) is not None:
+            return candidate.data
+    return None
+
+
+def uv_for_loop(mesh, loop_index: int, reference_mesh=None) -> tuple[float, float]:
+    layer_data = uv_layer_data(mesh)
+    if layer_data is None and reference_mesh is not None:
+        layer_data = uv_layer_data(reference_mesh)
+    if layer_data is None or loop_index >= len(layer_data):
         return (0.0, 0.0)
-    uv = mesh.uv_layers.active.data[loop_index].uv
+    uv = layer_data[loop_index].uv
     return (float(uv.x), 1.0 - float(uv.y))
 
 
@@ -202,8 +229,10 @@ def export_key(
     )
 
 
-def build_export_geometry(obj) -> tuple[list[dict], list[list[int]]]:
+def build_export_geometry(obj) -> tuple[list[dict], list[list[int]], str]:
     mesh = obj.data
+    reference_mesh = find_uv_reference_mesh(obj)
+    uv_source = "editable" if uv_layer_data(mesh) is not None else "raw-reference" if reference_mesh else "fallback-zero"
     export_vertices: list[dict] = []
     export_lookup: dict[tuple[int, int, int, int, int, int], int] = {}
     export_triangles: list[list[int]] = []
@@ -215,13 +244,13 @@ def build_export_geometry(obj) -> tuple[list[dict], list[list[int]]]:
             vertex = mesh.vertices[source_index]
             position = blender_to_flver(obj.matrix_world @ vertex.co)
             normal = transformed_normal(obj, mesh.loops[loop_index].normal)
-            uv = uv_for_loop(mesh, loop_index)
+            uv = uv_for_loop(mesh, loop_index, reference_mesh)
             key = export_key(source_index, uv, normal)
             export_index = export_lookup.get(key)
-            if export_index is None:
+            if export_index is None:  # pi-lens-ignore: python-thread-global-write — local cache check, no threading
                 export_index = len(export_vertices)
                 export_lookup[key] = export_index
-                export_vertices.append(
+                export_vertices.append(  # pi-lens-ignore: python-thread-global-write — local export list append, no threading
                     {
                         "source_index": source_index,
                         "position": position,
@@ -230,8 +259,8 @@ def build_export_geometry(obj) -> tuple[list[dict], list[list[int]]]:
                     }
                 )
             triangle.append(export_index)
-        export_triangles.append(triangle)
-    return export_vertices, export_triangles
+        export_triangles.append(triangle)  # pi-lens-ignore: python-thread-global-write — local triangle list append, no threading
+    return export_vertices, export_triangles, uv_source  # pi-lens-ignore: python-thread-global-write — local tuple return, no threading
 
 
 def write_obj(
@@ -311,7 +340,7 @@ def main() -> None:
         raise TypeError(f"{obj.name} is {obj.type}, expected MESH")
     mesh = obj.data
     ensure_triangles(mesh)
-    export_vertices, export_triangles = build_export_geometry(obj)
+    export_vertices, export_triangles, uv_source = build_export_geometry(obj)
     positions = [export_vertex["position"] for export_vertex in export_vertices]
     obj_path = output_dir / "blender_edit_c2280.obj"
     weights_path = output_dir / "blender_edit_c2280_weights.tsv"
@@ -326,12 +355,13 @@ def main() -> None:
         "polygon_count": len(mesh.polygons),
         "bbox": bbox_for(positions),
         "weight_target_counts": weight_counts,
+        "uv_source": uv_source,
         "uv_v_flipped_for_flver": True,
         "obj": str(obj_path),
         "weights": str(weights_path),
     }
     summary_path.write_text(  # pi-lens-ignore: python-path-traversal — output dir supplied by build script under target/
-        json.dumps(summary, indent=2),
+        json.dumps(summary, indent=2),  # pi-lens-ignore: python-path-traversal — data string for fixed summary_path write
         encoding="utf-8",  # pi-lens-ignore: python-path-traversal — data string for fixed summary_path write
     )
     out(f"wrote {obj_path}")
