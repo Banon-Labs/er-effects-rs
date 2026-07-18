@@ -187,5 +187,11 @@ else:
     print(f'read-only invariant OK: {len(before)} source saves unchanged')
 "
 echo "monitor exit=$RC ; report -> $ARTIFACT_DIR/proof-report.md"
+# TEARDOWN BEFORE REAPING: the monitor has returned (PASS, stall, or deadline), so the run is over.
+# Kill the game + me3 NOW; otherwise `wait "$LAUNCH_PID"` blocks forever on a still-live game (me3 only
+# exits when the game does) and the cleanup trap -- which fires on script EXIT -- never runs, orphaning
+# the game long past the deadline (observed 2026-07-18: a boot run ran to ~297s vs a 175s deadline).
+taskkill.exe /F /IM eldenring.exe >/dev/null 2>&1
+taskkill.exe /F /IM me3.exe >/dev/null 2>&1
 wait "$LAUNCH_PID" 2>/dev/null
 exit $RC
