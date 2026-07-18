@@ -182,30 +182,60 @@ def ensure_triangles(mesh) -> None:
         )  # pi-lens-ignore: python-thread-global-write — exception construction, no threading
 
 
-def vertex_uvs(mesh) -> list[tuple[float, float]]:
-    uvs = [(0.0, 0.0) for _ in mesh.vertices]
+def uv_for_loop(mesh, loop_index: int) -> tuple[float, float]:
     if not mesh.uv_layers:
-        return uvs
-    layer = mesh.uv_layers.active.data
-    seen = set()
+        return (0.0, 0.0)
+    uv = mesh.uv_layers.active.data[loop_index].uv
+    return (float(uv.x), 1.0 - float(uv.y))
+
+
+def export_key(
+    source_index: int, uv: tuple[float, float], normal: tuple[float, float, float]
+) -> tuple[int, int, int, int, int, int]:
+    return (
+        source_index,
+        round(uv[0] * 1_000_000),
+        round(uv[1] * 1_000_000),
+        round(normal[0] * 1_000_000),
+        round(normal[1] * 1_000_000),
+        round(normal[2] * 1_000_000),
+    )
+
+
+def build_export_geometry(obj) -> tuple[list[dict], list[list[int]]]:
+    mesh = obj.data
+    export_vertices: list[dict] = []
+    export_lookup: dict[tuple[int, int, int, int, int, int], int] = {}
+    export_triangles: list[list[int]] = []
     for polygon in mesh.polygons:
-        for vertex_index, loop_index in zip(
+        triangle: list[int] = []
+        for source_index, loop_index in zip(
             polygon.vertices, polygon.loop_indices, strict=True
-        ):  # pi-lens-ignore: python-thread-global-write — local UV scan, no threading
-            if vertex_index in seen:
-                continue
-            uv = layer[loop_index].uv
-            uvs[vertex_index] = (float(uv.x), float(uv.y))
-            seen.add(vertex_index)
-    return uvs
+        ):
+            vertex = mesh.vertices[source_index]
+            position = blender_to_flver(obj.matrix_world @ vertex.co)
+            normal = transformed_normal(obj, mesh.loops[loop_index].normal)
+            uv = uv_for_loop(mesh, loop_index)
+            key = export_key(source_index, uv, normal)
+            export_index = export_lookup.get(key)
+            if export_index is None:
+                export_index = len(export_vertices)
+                export_lookup[key] = export_index
+                export_vertices.append(
+                    {
+                        "source_index": source_index,
+                        "position": position,
+                        "normal": normal,
+                        "uv": uv,
+                    }
+                )
+            triangle.append(export_index)
+        export_triangles.append(triangle)
+    return export_vertices, export_triangles
 
 
 def write_obj(
-    path: Path,
-    obj,
-    positions: list[tuple[float, float, float]],
-    normals: list[tuple[float, float, float]],
-    uvs: list[tuple[float, float]],
+    path: Path, export_vertices: list[dict], export_triangles: list[list[int]]
 ) -> None:
     with path.open("w", encoding="utf-8") as file:
         file.write(
@@ -214,22 +244,24 @@ def write_obj(
         file.write(
             "o blender_edit_c2280\n"
         )  # pi-lens-ignore: python-thread-global-write — sequential file write, no threading
-        for position in positions:  # pi-lens-ignore: python-thread-global-write — sequential export loop, no threading
+        for export_vertex in export_vertices:  # pi-lens-ignore: python-thread-global-write — sequential export loop, no threading
+            position = export_vertex["position"]
             file.write(f"v {position[0]:.9f} {position[1]:.9f} {position[2]:.9f}\n")
-        for uv in uvs:
+        for export_vertex in export_vertices:
+            uv = export_vertex["uv"]
             file.write(f"vt {uv[0]:.9f} {uv[1]:.9f}\n")
-        for normal in normals:
+        for export_vertex in export_vertices:
+            normal = export_vertex["normal"]
             file.write(f"vn {normal[0]:.9f} {normal[1]:.9f} {normal[2]:.9f}\n")
-        for polygon in obj.data.polygons:
-            indices = [vertex_index + 1 for vertex_index in polygon.vertices]
+        for triangle in export_triangles:
+            indices = [export_index + 1 for export_index in triangle]
             file.write(
                 "f " + " ".join(f"{index}/{index}/{index}" for index in indices) + "\n"
             )
 
 
-def write_weights(
-    path: Path, obj, positions: list[tuple[float, float, float]]
-) -> dict[str, int]:
+def write_weights(path: Path, obj, export_vertices: list[dict]) -> dict[str, int]:
+    positions = [export_vertex["position"] for export_vertex in export_vertices]
     bbox_min_y = min(position[1] for position in positions)
     bbox_max_y = max(position[1] for position in positions)
     counts: dict[str, int] = {}
@@ -237,10 +269,11 @@ def write_weights(
         file.write(
             "vertex\tsource_x\tsource_y\tsource_z\tsource_bone\ter_target_bone\tweight\n"
         )
-        for vertex in obj.data.vertices:
-            position = positions[vertex.index]
+        for export_index, export_vertex in enumerate(export_vertices):
+            position = export_vertex["position"]
+            source_vertex = obj.data.vertices[export_vertex["source_index"]]
             accum: dict[str, float] = {}
-            for group_ref in vertex.groups:
+            for group_ref in source_vertex.groups:
                 group_name = obj.vertex_groups[group_ref.group].name
                 target = er_target_for_source_group(
                     group_name, position, bbox_min_y, bbox_max_y
@@ -253,7 +286,7 @@ def write_weights(
             for target, weight in sorted(accum.items(), key=lambda item: item[0]):
                 counts[target] = counts.get(target, 0) + 1
                 file.write(
-                    f"{vertex.index}\t{position[0]:.9f}\t{position[1]:.9f}\t{position[2]:.9f}\t<blender>\t{target}\t{weight:.9f}\n"
+                    f"{export_index}\t{position[0]:.9f}\t{position[1]:.9f}\t{position[2]:.9f}\t<blender>\t{target}\t{weight:.9f}\n"
                 )
     return counts
 
@@ -278,34 +311,34 @@ def main() -> None:
         raise TypeError(f"{obj.name} is {obj.type}, expected MESH")
     mesh = obj.data
     ensure_triangles(mesh)
-    positions = [
-        blender_to_flver(obj.matrix_world @ vertex.co) for vertex in mesh.vertices
-    ]
-    normals = [transformed_normal(obj, vertex.normal) for vertex in mesh.vertices]
-    uvs = vertex_uvs(mesh)
+    export_vertices, export_triangles = build_export_geometry(obj)
+    positions = [export_vertex["position"] for export_vertex in export_vertices]
     obj_path = output_dir / "blender_edit_c2280.obj"
     weights_path = output_dir / "blender_edit_c2280_weights.tsv"
     summary_path = output_dir / "blender_edit_c2280_summary.json"
-    write_obj(obj_path, obj, positions, normals, uvs)
-    weight_counts = write_weights(weights_path, obj, positions)
+    write_obj(obj_path, export_vertices, export_triangles)
+    weight_counts = write_weights(weights_path, obj, export_vertices)
     summary = {
         "blend_file": bpy.data.filepath,
         "object": obj.name,
-        "vertex_count": len(mesh.vertices),
+        "source_vertex_count": len(mesh.vertices),
+        "export_vertex_count": len(export_vertices),
         "polygon_count": len(mesh.polygons),
         "bbox": bbox_for(positions),
         "weight_target_counts": weight_counts,
+        "uv_v_flipped_for_flver": True,
         "obj": str(obj_path),
         "weights": str(weights_path),
     }
-    summary_path.write_text(
-        json.dumps(summary, indent=2), encoding="utf-8"
-    )  # pi-lens-ignore: python-path-traversal — output dir supplied by build script under target/
+    summary_path.write_text(  # pi-lens-ignore: python-path-traversal — output dir supplied by build script under target/
+        json.dumps(summary, indent=2),
+        encoding="utf-8",  # pi-lens-ignore: python-path-traversal — data string for fixed summary_path write
+    )
     out(f"wrote {obj_path}")
     out(f"wrote {weights_path}")
     out(f"wrote {summary_path}")
     out(
-        f"vertices={summary['vertex_count']} polygons={summary['polygon_count']} bbox_dims={summary['bbox']['dims']}"
+        f"source_vertices={summary['source_vertex_count']} export_vertices={summary['export_vertex_count']} polygons={summary['polygon_count']} bbox_dims={summary['bbox']['dims']}"
     )
     bpy.ops.wm.quit_blender()
 
