@@ -26,6 +26,10 @@ const ROUTE_A_VERTICAL_STRETCH: f32 = 1.14;
 const ROUTE_A_ARM_X_SWELL: f32 = 1.22;
 const ROUTE_A_ARM_Y_SWELL: f32 = 1.08;
 const ROUTE_A_ARM_Z_SWELL: f32 = 1.65;
+const ROUTE_A_ARM_SHOULDER_OUTWARD_OFFSET: f32 = 0.33;
+const ROUTE_A_ARM_UPPER_OUTWARD_OFFSET: f32 = 0.27;
+const ROUTE_A_ARM_FOREARM_OUTWARD_OFFSET: f32 = 0.10;
+const ROUTE_A_ARM_HAND_OUTWARD_OFFSET: f32 = 0.02;
 const HEADER_SIZE: usize = 0x80;
 const DUMMY_SIZE: usize = 0x40;
 const MATERIAL_SIZE: usize = 0x20;
@@ -590,6 +594,10 @@ fn write_obj(path: &Path, mtl_path: &Path, mesh: &ExportedMesh, scale: f32) -> i
         file,
         "# arm_swell_xyz={ROUTE_A_ARM_X_SWELL},{ROUTE_A_ARM_Y_SWELL},{ROUTE_A_ARM_Z_SWELL}"
     )?;
+    writeln!(
+        file,
+        "# arm_outward_offsets={ROUTE_A_ARM_SHOULDER_OUTWARD_OFFSET},{ROUTE_A_ARM_UPPER_OUTWARD_OFFSET},{ROUTE_A_ARM_FOREARM_OUTWARD_OFFSET},{ROUTE_A_ARM_HAND_OUTWARD_OFFSET}"
+    )?;
     writeln!(file, "mtllib {mtl_name}")?;
     writeln!(file, "o c2280_route_a_scaled")?;
     for vertex in &mesh.vertices {
@@ -629,7 +637,9 @@ fn route_a_output_position(mesh: &ExportedMesh, vertex: &Vertex, scale: f32) -> 
 
     let target = dominant_er_target_for_vertex(mesh, vertex);
     if is_arm_target(target) {
-        let side = if position.x >= 0.0 { 1.0 } else { -1.0 };
+        let side =
+            arm_side_for_target(target)
+                .unwrap_or_else(|| if position.x >= 0.0 { 1.0 } else { -1.0 });
         let center = Vec3 {
             x: side * 0.52,
             y: 0.78,
@@ -638,6 +648,7 @@ fn route_a_output_position(mesh: &ExportedMesh, vertex: &Vertex, scale: f32) -> 
         position.x = center.x + (position.x - center.x) * ROUTE_A_ARM_X_SWELL;
         position.y = center.y + (position.y - center.y) * ROUTE_A_ARM_Y_SWELL;
         position.z = center.z + (position.z - center.z) * ROUTE_A_ARM_Z_SWELL;
+        position.x += side * arm_outward_offset_for_target(target);
     }
 
     Vec3 {
@@ -672,6 +683,26 @@ fn dominant_er_target_for_vertex(mesh: &ExportedMesh, vertex: &Vertex) -> &'stat
         best_weight = weight;
     }
     best_target
+}
+
+fn arm_side_for_target(target: &str) -> Option<f32> {
+    if target.starts_with("L_") {
+        Some(1.0)
+    } else if target.starts_with("R_") {
+        Some(-1.0)
+    } else {
+        None
+    }
+}
+
+fn arm_outward_offset_for_target(target: &str) -> f32 {
+    match target {
+        "L_Shoulder" | "R_Shoulder" => ROUTE_A_ARM_SHOULDER_OUTWARD_OFFSET,
+        "L_UpperArm" | "R_UpperArm" => ROUTE_A_ARM_UPPER_OUTWARD_OFFSET,
+        "L_Forearm" | "R_Forearm" => ROUTE_A_ARM_FOREARM_OUTWARD_OFFSET,
+        "L_Hand" | "R_Hand" => ROUTE_A_ARM_HAND_OUTWARD_OFFSET,
+        _ => 0.0,
+    }
 }
 
 fn is_arm_target(target: &str) -> bool {
@@ -795,6 +826,26 @@ fn write_summary(path: &Path, config: &Config, mesh: &ExportedMesh) -> io::Resul
     writeln!(file, "arm_swell_x={:.9}", ROUTE_A_ARM_X_SWELL)?;
     writeln!(file, "arm_swell_y={:.9}", ROUTE_A_ARM_Y_SWELL)?;
     writeln!(file, "arm_swell_z={:.9}", ROUTE_A_ARM_Z_SWELL)?;
+    writeln!(
+        file,
+        "arm_shoulder_outward_offset={:.9}",
+        ROUTE_A_ARM_SHOULDER_OUTWARD_OFFSET
+    )?;
+    writeln!(
+        file,
+        "arm_upper_outward_offset={:.9}",
+        ROUTE_A_ARM_UPPER_OUTWARD_OFFSET
+    )?;
+    writeln!(
+        file,
+        "arm_forearm_outward_offset={:.9}",
+        ROUTE_A_ARM_FOREARM_OUTWARD_OFFSET
+    )?;
+    writeln!(
+        file,
+        "arm_hand_outward_offset={:.9}",
+        ROUTE_A_ARM_HAND_OUTWARD_OFFSET
+    )?;
     writeln!(file, "flver_version=0x{:X}", mesh.header.version)?;
     writeln!(file, "data_offset=0x{:X}", mesh.header.data_offset)?;
     writeln!(file, "data_length=0x{:X}", mesh.header.data_length)?;
