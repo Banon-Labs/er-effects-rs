@@ -14,6 +14,8 @@ cd "$repo_root"
 sweep_root="target/mushroom-route-a-offline/arm-sweep"
 witchy="/mnt/d/Witchy BND/WitchyBND.exe"
 
+bd_high_fallback="target/mushroom-route-a-offline/prototype/mod/parts/bd_m_1010.partsbnd.dcx"
+bd_low_fallback="target/mushroom-route-a-offline/prototype/mod/parts/bd_m_1010_l.partsbnd.dcx"
 fc_high_src="target/mushroom-route-a-offline/er-naked-parts/fc_m_0000-partsbnd-dcx"
 fc_low_src="target/mushroom-route-a-offline/er-naked-parts/fc_m_0000_l-partsbnd-dcx"
 facegen_src="target/mushroom-route-a-offline/er-facegen/facegen-fgbnd-dcx"
@@ -53,7 +55,7 @@ write_me3_profile() {
 	local mod_dir="$variant_dir/mod"
 	local profile_path="$variant_dir/mushroom-arm-${label}.me3"
 	local package_path
-	package_path="$(wslpath -w "$mod_dir")"
+	package_path="$(wslpath -w "$(realpath -m "$mod_dir")")"
 	mkdir -p "$mod_dir/parts" "$mod_dir/facegen"
 	cat >"$profile_path" <<EOF
 profileVersion = "v1"
@@ -184,6 +186,8 @@ build_variant() {
 	run_witchy_pack "$variant_dir" fg-a-0000-m "$fg_face_dst"
 
 	write_me3_profile "$variant_dir" "$label"
+	cp -f "$bd_high_fallback" "$variant_dir/mod/parts/bd_m_1010.partsbnd.dcx"
+	cp -f "$bd_low_fallback" "$variant_dir/mod/parts/bd_m_1010_l.partsbnd.dcx"
 	cp -f "$variant_dir/fc_m_0000.partsbnd.dcx" "$variant_dir/mod/parts/fc_m_0000.partsbnd.dcx"
 	cp -f "$variant_dir/fc_m_0000_l.partsbnd.dcx" "$variant_dir/mod/parts/fc_m_0000_l.partsbnd.dcx"
 	cp -f "$variant_dir/fg_a_0000_m.partsbnd.dcx" "$variant_dir/mod/parts/fg_a_0000_m.partsbnd.dcx"
@@ -193,6 +197,8 @@ build_variant() {
 }
 
 require_path "$witchy"
+require_path "$bd_high_fallback"
+require_path "$bd_low_fallback"
 require_path "$fc_high_src/FC_M_0000.flver"
 require_path "$fc_low_src/FC_M_0000_L.flver"
 require_path "$facegen_src/face.flver"
@@ -263,7 +269,7 @@ PY
 print_launch_command() {
 	local profile_path="$1"
 	local profile_win
-	profile_win="$(wslpath -w "$profile_path")"
+	profile_win="$(wslpath -w "$(realpath -m "$profile_path")")"
 	printf '\nlaunch command:\n'
 	printf 'cd %q && %q launch -g eldenring --online false -p %q\n' \
 		"$repo_root" \
@@ -318,7 +324,7 @@ if [[ "${1:-}" == "--label" ]]; then
 	tail -n 1 "$sweep_root/variant-index.tsv"
 	print_launch_command "$profile_path"
 	if [[ "$launch_after" == true ]]; then
-		"/mnt/c/Users/choza/AppData/Local/garyttierney/me3/bin/me3.exe" launch -g eldenring --online false -p "$(wslpath -w "$profile_path")"
+		"/mnt/c/Users/choza/AppData/Local/garyttierney/me3/bin/me3.exe" launch -g eldenring --online false -p "$(wslpath -w "$(realpath -m "$profile_path")")"
 	fi
 	exit 0
 fi
