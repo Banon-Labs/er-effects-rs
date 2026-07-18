@@ -46,7 +46,10 @@ fi
   "GAME_DIR not resolved. Set GAME_DIR=<linux path to the '.../ELDEN RING/Game' dir containing eldenring.exe>. \
 On this box the game reports its win path as C:\\SteamLibrary\\steamapps\\common\\ELDEN RING\\Game -- its Linux/Proton mapping is machine-specific."
 
-pgrep -x steam >/dev/null 2>&1 || fail "Steam is not running. Start Steam (interactive login) first; the offline eldenring.exe launch reuses its environment."
+# shellcheck source=scripts/steam-running.sh
+# shellcheck disable=SC1091
+source "$REPO_ROOT/scripts/steam-running.sh"  # WSL-aware: Windows steam.exe via tasklist.exe, not pgrep
+steam_running || fail "Steam is not running. Start Steam (interactive login) first; the offline eldenring.exe launch reuses its environment."
 [[ -f "$BUILT_DLL" ]] || fail "DLL not built: $BUILT_DLL (run: cargo xwin build --release --target x86_64-pc-windows-msvc)"
 [[ -f "$BOOT_FILE" ]] || fail "boot save not found: $BOOT_FILE"
 

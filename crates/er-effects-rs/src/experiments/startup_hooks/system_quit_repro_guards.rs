@@ -1135,6 +1135,9 @@ unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, source: &str) {
     // fresh deserialize of THIS switch's picked slot before it streams (the hook itself is installed
     // unconditionally at attach; see install_system_quit_continue_confirm_hook).
     SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(0, Ordering::SeqCst);
+    // Re-arm the menu-free clean-title switch reload one-shot so every switch (not just the first) can
+    // drive its own picked-slot feed-deserialize -> continue_confirm (own_load_switch_reload_fire).
+    SYSTEM_QUIT_SWITCH_MENU_FREE_RELOAD_FIRED.store(0, Ordering::SeqCst);
     // Re-arm the return-title one-shots so EVERY switch (not just the first) tears the world down.
     // Both are consumed by the first switch and never reset otherwise, so a second switch in the same
     // session would skip the native return-title REQUEST (`== 0` gate, sets saveRequested+bc4=1) and

@@ -1770,6 +1770,42 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         unsafe { product_continue_autoload_tick(owner, module_base, gm, slot, tick, &guard_ready) };
         return true;
     }
+    // MENU-FREE SWITCH RELOAD (2026-07-18, RE workflow + bd live-switch-teardown-fixed-now-menu-open-stall).
+    // The genuine System->Quit->Load-Profile switch tears the old world down cleanly (ending-request
+    // recovery), but the warm-rebuilt TitleTopDialog never reaches Loop (press-start SceneObjProxy at
+    // dialog+0xb78 unbound post-return-title), so product_core_autoload_ready below returns None forever
+    // and the native accept-byte/open-menu path deadlocks; native_fullread_tick also stands down for a
+    // switch and its direct-file call sites are inactive on the default save. Drive the picked slot
+    // through the menu-free native-ownership commit (same final SetState5 as the boot load, fed from our
+    // own disk bytes). Fires ONLY for a genuine in-world switch at a clean title, NEVER the boot autoload
+    // or the spurious boot self-reload -- four independent discriminators, any one of which excludes boot:
+    //   * QUICKLOAD_PHASE >= RETURN_TITLE_REQUESTED  -- a switch is in progress (boot=IDLE)
+    //   * ARM_PLAYER_WAS_ABSENT == 0                 -- GENUINE switch (armed in-world), not the spurious
+    //                                                   boot self-reload (armed while player absent -> 1)
+    //   * player ABSENT now                          -- old world torn down (clean title): makes the
+    //                                                   gaitem reset safe, never deser into a live world
+    //   * picked slot in 0..TITLE_PROFILE_SLOT_COUNT -- a real profile slot (boot=usize::MAX)
+    //   * FRESH_DESER_DONE == 0                      -- not already committed this switch
+    let picked = SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst);
+    if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+        >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+        && SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT.load(Ordering::SeqCst) == 0
+        && picked < TITLE_PROFILE_SLOT_COUNT
+        && gm != null
+        && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 0
+        && unsafe { PlayerIns::local_player_mut() }.is_err()
+        && unsafe {
+            crate::experiments::own_load::own_load_switch_reload_fire(
+                module_base,
+                gm,
+                owner,
+                picked as i32,
+                tick,
+            )
+        }
+    {
+        return true;
+    }
     let Some(ready) = (unsafe { product_core_autoload_ready(owner, module_base, gm, slot) }) else {
         let committed = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }
             .unwrap_or(TITLE_STATE_OWNER_GONE);

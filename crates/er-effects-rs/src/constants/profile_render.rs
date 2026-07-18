@@ -233,6 +233,14 @@ pub(crate) static SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE: AtomicUsize = A
 /// Count of successful fresh picked-slot deserializes driven by the confirm hook (product proof
 /// expects exactly 1 per switch).
 pub(crate) static SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// One-shot guard for the MENU-FREE clean-title switch reload (own_load_switch_reload_fire, 2026-07-18).
+/// The warm-rebuilt TitleTopDialog never reaches Loop post-return-title (press-start SceneObjProxy at
+/// dialog+0xb78 unbound), so the title accept-byte/open-menu path deadlocks. For a genuine in-world
+/// switch we instead drive the picked slot through the boot load's own native commit (feed-deserialize
+/// -> continue_confirm -> SetState5). 0 = not yet attempted this switch; compare_exchange(0,1) claims
+/// the single attempt so a flickering-owner / partial-feed frame never re-runs the leak-prone feed.
+/// Reset per switch in system_quit_arm_quickload_autoload.
+pub(crate) static SYSTEM_QUIT_SWITCH_MENU_FREE_RELOAD_FIRED: AtomicUsize = AtomicUsize::new(0);
 /// Count of confirms BLOCKED fail-closed because the fresh deserialize could not be proven (no save
 /// bytes / parse failed / fingerprint not real). Streaming stale state would load the wrong
 /// character and the post-load autosave would then write it back to the picked slot.

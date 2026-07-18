@@ -35,9 +35,19 @@ def main() -> int:
     worldres_stall = 0
     crashes: list[str] = []
     lines = 0
+    ending_recovery = 0
+    teardown_terminal = False
+    last_wait_reason = None
 
     for l in p.open(encoding="utf-8", errors="replace"):
         lines += 1
+        if "ENDING-REQUEST RECOVERY" in l and "SET menuData+0x5d=1" in l:
+            ending_recovery += 1
+        if "mms_step=-1" in l or "child left step 18" in l:
+            teardown_terminal = True
+        m = re.search(r"(waiting (?:for|to)[^-\n]{0,80})", l)
+        if m:
+            last_wait_reason = m.group(1).strip()
         if "DISARMED" in l:
             disarms += 1
         m = re.search(r"(switch #\d+/\d+ [^\n]*?(?:load )?CONFIRMED)", l)
@@ -68,6 +78,8 @@ def main() -> int:
     print(f"SWITCH-ORACLE class histogram:             {dict(classes)}")
     print(f"MoveMapStep-state histogram (top):         {dict(mms_hist.most_common(8))}")
     print(f"world-res-wait / step-3 null-block stalls: {worldres_stall}")
+    print(f"ending-request recovery fired (SET 0x5d):  {ending_recovery}  teardown reached terminal: {teardown_terminal}")
+    print(f"last 'waiting for' reason:                 {last_wait_reason or '(none)'}")
     print(f"crash/assert markers:                      {crashes[-5:] or '(none)'}")
     print(f"last SWITCH-ORACLE line:")
     print(f"  {last_switch_oracle or '(none)'}")
@@ -82,10 +94,14 @@ def main() -> int:
         print("VERDICT: a load reached LOADED_STABLE (switch likely completed).")
     elif dropped:
         print("VERDICT: world DROPPED (reload bounced) -- switch did not hold.")
-    elif "18:" in stuck or "3:" in stuck:
-        print(f"VERDICT: STALL near MoveMapStep {stuck} (the known reload lock).")
+    elif teardown_terminal and last_wait_reason:
+        print(f"VERDICT: teardown COMPLETED (child reached -1) but the clean-title reload STALLED at: '{last_wait_reason}'.")
+    elif "18:" in stuck and not teardown_terminal:
+        print("VERDICT: STALL at MoveMapStep 18 -- teardown never completed (ending-request lock).")
+    elif "3:" in stuck:
+        print("VERDICT: STALL near MoveMapStep 3 (WorldResWait).")
     else:
-        print(f"VERDICT: inconclusive; most-common MoveMapStep state = {stuck}.")
+        print(f"VERDICT: inconclusive; most-common MoveMapStep state = {stuck}; last wait = {last_wait_reason}.")
     return 0
 
 

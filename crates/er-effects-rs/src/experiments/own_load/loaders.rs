@@ -139,6 +139,77 @@ pub(crate) unsafe fn own_load_feed_deserialize(base: usize, gm: usize, want_slot
     ok
 }
 
+/// MENU-FREE clean-title reload of the PICKED slot for a genuine System->Quit->Load-Profile switch.
+/// The warm-rebuilt TitleTopDialog never reaches Loop post-return-title (press-start SceneObjProxy at
+/// dialog+0xb78 unbound), so the title accept-byte/open-menu path deadlocks; native_fullread_tick also
+/// stands down for a switch. Drive the picked slot through the same native-ownership commit the boot
+/// autoload uses, exactly like the (now-dead) native-fullread DESER switch_feed_case
+/// (slot_resolution.rs:275-296): reset the gaitem singleton -> feed the picked slot's on-disk bytes
+/// through the native parser (real c30 + PGD) -> latch FRESH_DESER_DONE -> native continue_confirm
+/// (intercepted by system_quit_continue_confirm_hook -> SetState5 streams the world + performs the
+/// switch cleanup). ONE-SHOT per switch (SYSTEM_QUIT_SWITCH_MENU_FREE_RELOAD_FIRED). Returns true only
+/// when it fired continue_confirm; false = "not yet / could not" (nothing consumed unless the one-shot
+/// was legitimately claimed) and the caller keeps waiting. Caller MUST have proven the old world is
+/// torn down (player absent) so the gaitem reset + deserialize never touch a live world.
+/// See bd live-switch-teardown-fixed-now-menu-open-stall-2026-07-18 + the RE workflow.
+pub(crate) unsafe fn own_load_switch_reload_fire(
+    base: usize,
+    gm: usize,
+    owner: usize,
+    picked: i32,
+    n: u64,
+) -> bool {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    // (a) Validate the title owner FIRST -- it flickers during the warm rebuild. No state consumed:
+    // a bad-owner frame returns false and the caller retries next frame. Must be a live owner with the
+    // new-game flag clear (continue_confirm's LOAD branch; nonzero = NewGame path / mid-rebuild).
+    if owner == null {
+        return false;
+    }
+    let new_game_flag = match unsafe { safe_read_usize(owner + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) }
+    {
+        Some(v) => v as u8,
+        None => return false,
+    };
+    if new_game_flag != FULLREAD_OWNER_NEW_GAME_OK {
+        return false;
+    }
+    // (b) Claim the per-switch one-shot ONLY after the owner is good, so a flickering frame never burns
+    // it. Bounds the feed to a single attempt (leak-free fail-closed) independent of FRESH_DESER_DONE.
+    if SYSTEM_QUIT_SWITCH_MENU_FREE_RELOAD_FIRED
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return false;
+    }
+    // (c) Defuse the CSGaitemImp free-queue exhaustion AV (live 0x67141a): char#1's leaked gaitem
+    // entries still populate the gaitem singleton at the clean title (the lightweight return-title
+    // chain skips the native inventory teardown). Safe now because the old world is torn down.
+    let _ = unsafe { own_load_reset_gaitem_singleton(base) };
+    // (d) Feed the picked slot's on-disk bytes through the native parser -> GameMan+0xc30 becomes the
+    // picked character's REAL map + a real PGD fingerprint. No FD4 IO SUBMIT/DRAIN, no b80==3 needed.
+    if !unsafe { own_load_feed_deserialize(base, gm, picked) } {
+        append_autoload_debug(format_args!(
+            "own-load-switch-reload: feed-deserialize of picked slot {picked} FAILED -- NOT firing continue_confirm; switch fails closed (one-shot claimed, no re-attempt)"
+        ));
+        return false;
+    }
+    // (e) Latch native_slot_proven BEFORE firing: the continue_confirm hook reads FRESH_DESER_DONE==1
+    // to take the forward->SetState5 path (not the no-proof forward) and to prevent any double-feed.
+    SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(1, Ordering::SeqCst);
+    // (f) Re-read the freshly-mounted c30 + fingerprint and fire the GUARDED native continue_confirm
+    // (own_load_continue_fire re-guards c30_real && fp_real && owner+0x284==0 internally -- the only
+    // save-writing SetState5 is behind that hard guard).
+    let c30 = unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }.unwrap_or(GAME_MAN_C30_UNSET);
+    let c30_real = c30 != GAME_MAN_C30_UNSET && c30 != 0 && c30 != FULLREAD_C30_M10_DEFAULT;
+    let (fp_real, fp_level, _nl) = unsafe { char_fingerprint(base) };
+    append_autoload_debug(format_args!(
+        "own-load-switch-reload: picked slot {picked} mounted (c30=0x{c30:x} c30_real={c30_real} fp_real={fp_real} level={fp_level}); firing native continue_confirm owner=0x{owner:x} (hook forwards -> SetState5 streams + performs switch cleanup) presses=0 (#{n})"
+    ));
+    unsafe { own_load_continue_fire(base, owner, c30, c30_real, fp_real, fp_level, n) };
+    true
+}
+
 /// SAVE-SAFE verify-only OWN-LOAD buffer-feed drive (one-shot, phased). Reads the .sl2 from disk,
 /// slices slot `want_slot`'s plaintext body, installs+arms the gated 0x67b100 hook, calls the native
 /// parser 0x67b290(slot) in-process so it parses OUR body, then reads back GameMan+0xc30 + the

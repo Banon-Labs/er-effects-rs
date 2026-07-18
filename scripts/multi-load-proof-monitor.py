@@ -143,6 +143,38 @@ def log_has_crash(log_path: Path, start_offset: int = 0) -> str | None:
     return None
 
 
+def stall_diagnosis(log_path: Path, start_offset: int = 0) -> str:
+    """On a STALL, name WHERE the reload got stuck from the DLL debug log: the last MoveMapStep
+    state (mms_step=N(NAME)) and the last 'waiting for ...' reason. Makes the report self-diagnosing
+    (e.g. 'mms_step=18 MOVE MAP' = teardown lock vs 'waiting for native a40/menu-open' = title stall)."""
+    if not log_path.exists():
+        return "no debug log"
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(start_offset, size - 2_097_152))
+            tail = f.read().decode("utf-8", "replace")
+    except OSError:
+        return "debug log unreadable"
+    import re as _re
+    last_mms = None
+    last_wait = None
+    for line in tail.splitlines():
+        m = _re.search(r"mms_step=(\d+\([A-Za-z_ ]+\))", line)
+        if m:
+            last_mms = m.group(1)
+        m = _re.search(r"(waiting (?:for|to)[^-\n]{0,80})", line)
+        if m:
+            last_wait = m.group(1).strip()
+    bits = []
+    if last_mms:
+        bits.append(f"last MoveMapStep={last_mms}")
+    if last_wait:
+        bits.append(f"last reason='{last_wait}'")
+    return "; ".join(bits) or "no stall markers found"
+
+
 def process_alive() -> bool:
     # eldenring.exe present == the run is still live. WSL-AWARE: on a WSL2 + Windows-Steam box the
     # game is a WINDOWS process (tasklist.exe), so a Linux `pgrep -x eldenring.exe` false-negatives
@@ -232,7 +264,9 @@ def monitor(artifact_dir: Path, targets: list[dict], per_load_deadline: float,
                     continue
         # stall check
         if not replay and now - last_progress > per_load_deadline:
-            results.append(snapshot_result(idx, "STALL", None, now - last_progress))
+            r = snapshot_result(idx, "STALL", None, now - last_progress)
+            r["diagnosis"] = stall_diagnosis(log, debug_log_offset)
+            results.append(r)
             break
         if replay:
             # one pass over the final telemetry only
@@ -284,6 +318,9 @@ def render_report(summary: dict) -> str:
             f"{mark(c.get('controllable_ok'))} | {mark(c.get('stable'))} | {r['seconds_since_prev']} | {r['verdict']} |"
         )
     lines.append("")
+    for r in summary["results"]:
+        if r.get("diagnosis"):
+            lines.append(f"> STALL diagnosis (load {r['index']} {r['role']}): {r['diagnosis']}")
     if crash:
         lines.append(f"> CRASH/STALL evidence: `{crash}`")
     lines.append("")
