@@ -17,6 +17,7 @@ The installer copies the bundled `mod` folder to a stable per-user install
 folder, then writes a ModEngine2/ME3 profile pointing at that installed package.
 It has no third-party Python dependencies.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -62,12 +63,18 @@ def fail(message: str) -> None:
 def resolve_existing_dir(path: Path, description: str) -> Path:
     resolved = path.expanduser().resolve()
     if not resolved.is_dir():  # pi-lens-ignore: python-thread-global-write — local path validation, no threading
-        fail(f"{description} is not a directory: {resolved}")  # pi-lens-ignore: python-thread-global-write — local error construction, no threading
+        fail(
+            f"{description} is not a directory: {resolved}"
+        )  # pi-lens-ignore: python-thread-global-write — local error construction, no threading
     return resolved
 
 
 def validate_mod_dir(path: Path) -> list[str]:
-    missing = [str(relative) for relative in REQUIRED_PAYLOAD_FILES if not (path / relative).is_file()]
+    missing = [
+        str(relative)
+        for relative in REQUIRED_PAYLOAD_FILES
+        if not (path / relative).is_file()
+    ]
     return missing
 
 
@@ -78,7 +85,9 @@ def discover_source_mod(bundle_root: Path) -> Path:
             return path.resolve()  # pi-lens-ignore: python-thread-global-write — local path result, no threading
     if not validate_mod_dir(bundle_root):
         return bundle_root.resolve()  # pi-lens-ignore: python-thread-global-write — local path result, no threading
-    expected = "\n".join(f"  - {candidate}" for candidate in DISCOVERY_CANDIDATES)  # pi-lens-ignore: python-thread-global-write — local message construction, no threading
+    expected = "\n".join(
+        f"  - {candidate}" for candidate in DISCOVERY_CANDIDATES
+    )  # pi-lens-ignore: python-thread-global-write — local message construction, no threading
     fail(
         "could not find bundled mushroom mod payload under any expected path:\n"
         f"{expected}\n"
@@ -106,7 +115,9 @@ def powershell_single_quoted(value: str) -> str:
 def maybe_windows_path(path: Path) -> str:
     resolved = path.expanduser().resolve()
     if os.name == "nt":
-        return str(resolved)  # pi-lens-ignore: python-thread-global-write — local path string return, no threading
+        return str(
+            resolved
+        )  # pi-lens-ignore: python-thread-global-write — local path string return, no threading
     wslpath = shutil.which("wslpath")
     if wslpath:  # pi-lens-ignore: python-thread-global-write — local tool discovery branch, no threading
         result = subprocess.run(
@@ -136,8 +147,12 @@ def write_profile(profile_path: Path, package_path_for_me3: str) -> None:
             "",
         )
     )
-    profile_path.parent.mkdir(parents=True, exist_ok=True)  # pi-lens-ignore: python-thread-global-write — intended installer write path
-    profile_path.write_text(content, encoding="utf-8")  # pi-lens-ignore: python-path-traversal — installer writes user-selected profile path
+    profile_path.parent.mkdir(
+        parents=True, exist_ok=True
+    )  # pi-lens-ignore: python-thread-global-write — intended installer write path
+    profile_path.write_text(
+        content, encoding="utf-8"
+    )  # pi-lens-ignore: python-path-traversal — installer writes user-selected profile path
 
 
 def locate_default_me3() -> Path | None:
@@ -152,7 +167,9 @@ def locate_default_me3() -> Path | None:
     return None
 
 
-def write_launcher(script_path: Path, profile_path_for_me3: str, me3_path: Path | None) -> None:
+def write_launcher(
+    script_path: Path, profile_path_for_me3: str, me3_path: Path | None
+) -> None:
     if me3_path is None:
         me3_expr = "Join-Path $env:LOCALAPPDATA 'garyttierney\\me3\\bin\\me3.exe'"
         me3_line = f"$me3 = {me3_expr}"
@@ -163,14 +180,16 @@ def write_launcher(script_path: Path, profile_path_for_me3: str, me3_path: Path 
             "$ErrorActionPreference = 'Stop'",
             me3_line,
             "if (-not (Test-Path -LiteralPath $me3)) {",
-            "  throw \"Could not find me3.exe. Pass --me3 to install_mushroom_man.py or edit this launcher.\"",
+            '  throw "Could not find me3.exe. Pass --me3 to install_mushroom_man.py or edit this launcher."',
             "}",
             f"$profile = {powershell_single_quoted(profile_path_for_me3)}",
             "& $me3 launch -g eldenring --online false -p $profile",
             "",
         )
     )
-    script_path.write_text(content, encoding="utf-8")  # pi-lens-ignore: python-path-traversal — installer writes user-selected launcher path
+    script_path.write_text(
+        content, encoding="utf-8"
+    )  # pi-lens-ignore: python-path-traversal — installer writes user-selected launcher path
 
 
 def guarded_remove_tree(path: Path, install_root: Path) -> None:
@@ -184,7 +203,9 @@ def copy_payload(source_mod: Path, install_root: Path, force: bool) -> Path:
     destination_mod = install_root / "mod"
     if destination_mod.exists():
         if not force:
-            fail(f"install payload already exists: {destination_mod}; rerun with --force to replace it")
+            fail(
+                f"install payload already exists: {destination_mod}; rerun with --force to replace it"
+            )
         guarded_remove_tree(destination_mod, install_root)
     install_root.mkdir(parents=True, exist_ok=True)
     shutil.copytree(source_mod, destination_mod)
@@ -193,24 +214,54 @@ def copy_payload(source_mod: Path, install_root: Path, force: bool) -> Path:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--bundle-root", type=Path, default=Path(__file__).resolve().parent)
-    parser.add_argument("--source-mod", type=Path, help="explicit bundled mod folder to install")
+    parser.add_argument(
+        "--bundle-root", type=Path, default=Path(__file__).resolve().parent
+    )
+    parser.add_argument(
+        "--source-mod", type=Path, help="explicit bundled mod folder to install"
+    )
     parser.add_argument("--install-root", type=Path, default=default_install_root())
-    parser.add_argument("--profile", type=Path, help="profile output path; defaults to <install-root>/mushroom-man.me3")
+    parser.add_argument(
+        "--profile",
+        type=Path,
+        help="profile output path; defaults to <install-root>/mushroom-man.me3",
+    )
     parser.add_argument("--profile-name", default=PROFILE_NAME)
-    parser.add_argument("--no-copy", action="store_true", help="write a profile pointing directly at --source-mod")
-    parser.add_argument("--force", action="store_true", help="replace an existing installed mod folder")
-    parser.add_argument("--no-launcher", action="store_true", help="do not write launch_mushroom_man.ps1")
-    parser.add_argument("--me3", type=Path, help="explicit path to me3.exe for the generated launcher/--launch")
-    parser.add_argument("--launch", action="store_true", help="launch ME3 after writing the profile")
-    parser.add_argument("--json", action="store_true", help="write machine-readable JSON summary")
+    parser.add_argument(
+        "--no-copy",
+        action="store_true",
+        help="write a profile pointing directly at --source-mod",
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="replace an existing installed mod folder"
+    )
+    parser.add_argument(
+        "--no-launcher",
+        action="store_true",
+        help="do not write launch_mushroom_man.ps1",
+    )
+    parser.add_argument(
+        "--me3",
+        type=Path,
+        help="explicit path to me3.exe for the generated launcher/--launch",
+    )
+    parser.add_argument(
+        "--launch", action="store_true", help="launch ME3 after writing the profile"
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="write machine-readable JSON summary"
+    )
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
     bundle_root = resolve_existing_dir(args.bundle_root, "bundle root")
-    source_mod = resolve_existing_dir(args.source_mod, "source mod") if args.source_mod else discover_source_mod(bundle_root)
+    source_mod = (
+        resolve_existing_dir(args.source_mod, "source mod")
+        if args.source_mod
+        else discover_source_mod(bundle_root)
+    )
     missing = validate_mod_dir(source_mod)
     if missing:
         fail(f"source mod is missing required files: {', '.join(missing)}")
@@ -222,7 +273,11 @@ def main() -> int:
     else:
         installed_mod = copy_payload(source_mod, install_root, args.force)
 
-    profile_path = args.profile.expanduser().resolve() if args.profile else install_root / f"{args.profile_name}.me3"
+    profile_path = (
+        args.profile.expanduser().resolve()
+        if args.profile
+        else install_root / f"{args.profile_name}.me3"
+    )
     package_path_for_me3 = maybe_windows_path(installed_mod)
     profile_path_for_me3 = maybe_windows_path(profile_path)
     write_profile(profile_path, package_path_for_me3)
@@ -264,7 +319,16 @@ def main() -> int:
         if me3_path is None:
             fail("--launch requested, but me3.exe was not found; pass --me3 <path>")
         subprocess.run(
-            [str(me3_path), "launch", "-g", DEFAULT_GAME, "--online", "false", "-p", profile_path_for_me3],
+            [
+                str(me3_path),
+                "launch",
+                "-g",
+                DEFAULT_GAME,
+                "--online",
+                "false",
+                "-p",
+                profile_path_for_me3,
+            ],
             check=True,
         )
     return 0
