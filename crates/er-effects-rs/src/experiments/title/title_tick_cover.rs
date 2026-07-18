@@ -1473,14 +1473,53 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         // -> SetState 6->2 -> our autoload re-drives -> loop = the soft-lock). Holding b78=-1 once committed
         // keeps the loaded world up. Inert before the feed (latch still 0 -> b78=slot fires the initial load
         // exactly as before) and reset for the next genuine pick, so switch 1's initial load is unchanged.
-        let _switch_committed =
+        let switch_stable_proven =
             SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 1;
-        // Runtime ac9ed1db proved `b78=slot` is not the missing MoveMap pump: it leaves
-        // GameMan+0xb78 resident through the SetState5 stream and re-enters the 0x67141a
-        // redundant-load crash. The clean-title Continue/SetState5 path is the owner now; this
-        // phase-4 maintenance loop may only keep the native requested-slot arm DISARMED until the
-        // continue_confirm hook marks the handoff committed and makes the whole block dormant.
-        let b78_val = OWN_STEPPER_SLOT_NONE;
+        let phase_for_b78 = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+        let continue_forwarded =
+            SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) != 0;
+        let b80_load_in_progress =
+            unsafe { safe_read_u8(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }
+                .map(|b| b as i32)
+                .unwrap_or(-1);
+        let (post_b78_ig_d8, post_b78_mms_step) = if owner != TITLE_OWNER_SCAN_START_ADDRESS {
+            let ig = unsafe { safe_read_usize(owner + 0x2e8) }.filter(|&v| v > 0x10000);
+            let ig_d8 = ig
+                .and_then(|ig| unsafe { safe_read_i32(ig + 0xd8) })
+                .unwrap_or(-1);
+            let mms_step = ig
+                .and_then(|ig| unsafe { safe_read_usize(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) })
+                .filter(|&v| v > 0x10000)
+                .and_then(|mms| unsafe { safe_read_i32(mms + INGAMESTEP_STEP_STATE_OFFSET) })
+                .unwrap_or(-1);
+            (ig_d8, mms_step)
+        } else {
+            (-1, -1)
+        };
+        const GAME_MAN_RETURN_TITLE_JOB_PREDICATE_DONE_LOCAL: usize = 3;
+        let pulse_b78_for_movemap18 = !switch_stable_proven
+            && phase_for_b78 >= SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
+            && continue_forwarded
+            && world_up
+            && return_title_job_predicate_bc4 == GAME_MAN_RETURN_TITLE_JOB_PREDICATE_DONE_LOCAL
+            && b80_load_in_progress == 0
+            && post_b78_ig_d8 == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING
+            && post_b78_mms_step == MOVEMAPSTEP_STEP_MOVEMAP_INDEX;
+        // Runtime ac9ed1db proved `b78=slot` from clean title through SetState5 re-enters
+        // the 0x67141a redundant-load crash. Runtime f23401b9 then proved the opposite
+        // extreme (`b78=-1` forever) starves FUN_140afb970's bVar5 pump gate at the exact
+        // post-Continue bc4=3 / MoveMapStep=18 state. Therefore only pulse b78 at that
+        // already-loaded-but-not-controllable stall signature, and clear it everywhere else.
+        let b78_val = if pulse_b78_for_movemap18 {
+            if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: pulsing GameMan+0xb78={slot} for post-Continue MoveMap18 pump gate (phase={phase_for_b78} bc4={return_title_job_predicate_bc4} ig_d8={post_b78_ig_d8} mms_step={post_b78_mms_step} b80={b80_load_in_progress}) -- narrow bVar5 unblock; clear outside this state"
+                ));
+            }
+            slot
+        } else {
+            OWN_STEPPER_SLOT_NONE
+        };
         unsafe { *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) = b78_val };
         // CLEAR THE QUIT-SAVE REQUEST FLAGS DURING TEARDOWN (2026-07-16, Ghidra + runtime proven root).
         // The old world's MoveMapStep leaves its resident STEP_MoveMap(18) step only when the "ending
