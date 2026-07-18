@@ -259,6 +259,18 @@ pub(crate) static SYSTEM_QUIT_INWORLD_ARMED_STABLE_TICKS: AtomicUsize = AtomicUs
 /// arm->teardown window, so it never disarms a legitimate user switch.
 pub(crate) const SYSTEM_QUIT_INWORLD_ARMED_DISARM_TICKS: usize = 300;
 pub(crate) static SYSTEM_QUIT_INWORLD_ARMED_DISARM_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// SPURIOUS-vs-GENUINE arm discriminator (2026-07-18, bd repeatable-multi-save-consolidated-plan).
+/// Records whether the LOCAL PLAYER WAS ABSENT at the moment a return-title reload was armed
+/// (`system_quit_arm_quickload_autoload`). The two arm scenarios differ causally by exactly this:
+///   * SPURIOUS boot self-reload -- the boot autoload navigates the ProfileSelect LOAD flow from the
+///     title/menu (player ABSENT) and queues a pointless post-load return-title of the character it is
+///     about to load. `armed_while_absent = 1`.
+///   * GENUINE in-world switch -- the user (or the harness) is already in-world (player PRESENT) and
+///     initiates System->Quit->Load-Profile to a different character. `armed_while_absent = 0`.
+/// The time-based disarm below is only correct for the SPURIOUS case; gating it on this flag stops it
+/// from cancelling a genuine switch whose old world lingers past the threshold (the switch-regression
+/// in bd angre-4loads-goal-met-but-switch-regression-2026-07-18). 1 = armed while player absent.
+pub(crate) static SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT: AtomicUsize =
     AtomicUsize::new(0);

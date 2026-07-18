@@ -24,15 +24,45 @@ fn sq_repro_confirm_count() -> usize {
 }
 
 /// The ProfileSelect slot the current switch loads (clamped to the target table).
+///
+/// Runtime override so the multi-load proof harness can drive an explicit sequence of DISTINCT
+/// within-file characters without a recompile: a game-dir CONTROL FILE
+/// `er-effects-sq-target-slots.txt` = comma/space-separated slot indices (e.g. "0,2,3"). Switch i
+/// loads the i-th entry (clamped to the last). Absent/unparseable -> the compile-time
+/// SQ_REPRO_TARGET_SLOTS table. Control file, not an env gate (env gates are frozen).
 fn sq_repro_target_slot() -> i32 {
     let i = SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst);
+    let path = game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-sq-target-slots.txt");
+    if let Ok(contents) = std::fs::read_to_string(&path) {
+        let slots: Vec<i32> = contents
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .filter_map(|t| t.trim().parse::<i32>().ok())
+            .collect();
+        if !slots.is_empty() {
+            return slots[i.min(slots.len() - 1)];
+        }
+    }
     SQ_REPRO_TARGET_SLOTS[i.min(SQ_REPRO_TARGET_SLOTS.len() - 1)]
 }
 
 /// How many back-to-back switches to drive in the legacy ProfileSelect harness path. The active Save
 /// Game row validation path below is always-on and no longer reads an env selector.
 fn sq_repro_target_switches() -> usize {
-    SQ_REPRO_TARGET_SWITCHES.clamp(0, SQ_REPRO_TARGET_SLOTS.len())
+    // Runtime override so the multi-load proof harness can drive N back-to-back switches without a
+    // recompile (diagnostic/harness knob only; the shipped default stays SQ_REPRO_TARGET_SWITCHES=1).
+    // Uses a game-dir CONTROL FILE (`er-effects-sq-target-switches.txt` = a decimal count), the same
+    // sanctioned runtime-marker pattern as the other sq-repro modes -- NOT a new ER_EFFECTS_* env gate
+    // (env gates are frozen by .auto/env_gate_comment_policy.rego). Absent/unparseable -> the const.
+    let runtime = game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-sq-target-switches.txt");
+    std::fs::read_to_string(&runtime)
+        .ok()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .unwrap_or(SQ_REPRO_TARGET_SWITCHES)
+        .clamp(0, SQ_REPRO_TARGET_SLOTS.len())
 }
 
 fn sq_repro_option_tab_row_fingerprint(option_window: usize, tab: usize) -> Option<(usize, usize)> {
@@ -1118,6 +1148,13 @@ unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, source: &str) {
     // SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT.store(0, Ordering::SeqCst);
     // SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.store(selected_slot as usize, Ordering::SeqCst);
+    // SPURIOUS-vs-GENUINE arm discriminator (2026-07-18). Record whether the local player is ABSENT at
+    // the instant of the arm. A spurious boot self-reload arms from the title/menu (player absent) while a
+    // genuine in-world switch arms with the player present. The in-world time-based disarm keys on this so
+    // it only cancels the spurious boot self-reload, never a real switch. See profile_render.rs
+    // SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT and bd repeatable-multi-save-consolidated-plan-2026-07-18.
+    let arm_player_absent = unsafe { PlayerIns::local_player_mut() }.is_err();
+    SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT.store(usize::from(arm_player_absent), Ordering::SeqCst);
     // PORTRAIT RETARGET (user 2026-07-03): the user just confirmed a NEW character for load, so the
     // loading-screen portrait should render THAT character, not the one still resident (ac0). Make it
     // before-break: retarget the spare/render to the selected slot (portrait_target_slot now returns

@@ -251,31 +251,38 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // choices), optionally clean stale title-dialog render resources, then run the
                 // one-shot correctness dump.
                 IN_WORLD_REACHED.store(IN_WORLD_REACHED_YES, Ordering::SeqCst);
-                // SPURIOUS RETURN-TITLE ARM DISARM (2026-07-18, bd angre-reload-full-causal-chain-and-fix).
+                // SPURIOUS RETURN-TITLE ARM DISARM (2026-07-18, bd angre-reload-full-causal-chain-and-fix,
+                // refined by repeatable-multi-save-consolidated-plan-2026-07-18).
                 // Root cause of the angrE repeated-load crash: the boot autoload navigates the ProfileSelect
                 // LOAD flow, which trips `system_quit_arm_quickload_autoload` and arms a post-load return-title
                 // reload (QUICKLOAD_PHASE = RETURN_TITLE_REQUESTED) of the character we JUST loaded. Load #1 then
                 // completes and is stable in-world, but because the phase stays armed the in-world branch below
                 // keeps driving product_core_autoload_tick until the return-title chain submits, tears down the
                 // good load, and the reload sticks at MoveMapStep 18 and crashes (game assert AV 0x1eb9999).
-                // A GENUINE user-initiated return-title tears the world down within ~1-2s (the player vanishes,
-                // so this counter never climbs); a SPURIOUS arm leaves the player continuously present. Once
-                // presence has been sustained past the threshold while still armed, the arm is spurious: latch
-                // the load DONE by resetting the phase to IDLE, which gates OFF both this destructive branch and
-                // the return-title chain submit (both require phase != IDLE). Reset the counter whenever nothing
-                // is armed so only *continuous* armed presence counts.
-                // Suppress the boot autoload's post-load return-title reload of the character it just
-                // loaded. It fires ~47-70s into the stable world (queue-ready gated) and, left armed, tears
-                // the good load down and crashes at MoveMapStep 18. A genuine user switch tears the world
-                // down within ~1-2s (player vanishes, this counter never reaches the threshold). NOTE: this
-                // time-based gate ALSO suppresses genuine cross-slot switches whose old world lingers past
-                // the threshold -- a known limitation. A slot-aware gate was tried but SELECTED_SLOT (a
-                // ProfileSelect profile_id) and GameMan.save_slot are different index spaces so they never
-                // matched; a correct same-character discriminator (or fixing the MoveMapStep-18 reload lock
-                // so switches complete without disarming) is the follow-up. See bd
-                // angre-4loads-goal-met-but-switch-regression-2026-07-18.
+                // DISCRIMINATOR: the earlier pure time-based gate (disarm after N continuous armed in-world
+                // frames) also cancelled GENUINE cross-slot/cross-file switches whose old world lingers past
+                // the threshold (the switch-regression). The correct, index-space-free discriminator is the
+                // player-presence AT ARM TIME: the spurious boot self-reload arms from the title/menu (player
+                // ABSENT); a genuine switch arms in-world (player PRESENT). So the time-based disarm now fires
+                // only when SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT==1 -- it kills the spurious boot self-reload
+                // (latching load #1 DONE via phase IDLE, which gates OFF both this destructive branch and the
+                // return-title chain submit) and never touches a real switch. Reset the counter whenever
+                // nothing is armed so only *continuous* armed presence counts. The completed-switch success
+                // latch (recognising a genuine switch's NEW stable world so the DLL stops re-driving) is
+                // handled separately by the in-world stable-load proof, not by this disarm.
+                // SLOT-AWARE-BY-CAUSE discriminator (2026-07-18, supersedes the pure time-based gate).
+                // Only the SPURIOUS boot self-reload is disarmed: it is armed while the player is ABSENT
+                // (the boot autoload's own ProfileSelect navigation queuing a post-load reload of the very
+                // character it is loading). A GENUINE in-world switch arms with the player PRESENT and must
+                // be left to run its return-title teardown+reload -- disarming it by elapsed time is the
+                // switch-regression (bd angre-4loads-goal-met-but-switch-regression-2026-07-18), where the
+                // old world lingers past the threshold and the switch gets cancelled ("world resolves and
+                // I'm still on the old character"). Gating on SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT keeps load #1
+                // stable (kills the spurious arm) without touching real switches. See
+                // bd repeatable-multi-save-consolidated-plan-2026-07-18.
                 if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
                     >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+                    && SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT.load(Ordering::SeqCst) == 1
                 {
                     let armed = SYSTEM_QUIT_INWORLD_ARMED_STABLE_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
                     if armed == SYSTEM_QUIT_INWORLD_ARMED_DISARM_TICKS {
@@ -283,7 +290,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                             .store(SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE, Ordering::SeqCst);
                         SYSTEM_QUIT_INWORLD_ARMED_DISARM_COUNT.fetch_add(1, Ordering::SeqCst);
                         append_autoload_debug(format_args!(
-                            "system-quit-quickload: return-title arm DISARMED after {armed} continuous in-world frames -> phase IDLE; destructive reload suppressed"
+                            "system-quit-quickload: SPURIOUS boot self-reload arm (armed while player absent) DISARMED after {armed} continuous in-world frames -> phase IDLE; destructive reload suppressed (genuine in-world switches are NOT disarmed)"
                         ));
                     }
                 } else {

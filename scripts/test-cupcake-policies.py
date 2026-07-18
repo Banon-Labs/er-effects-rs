@@ -223,18 +223,50 @@ def main() -> int:
             False,
             "blocked this Elden Ring launch command",
         ),
+        # Manual pgrep is HARD-BLOCKED with no escape hatch (block_manual_pgrep).
+        # On this WSL2 + Windows-Steam box pgrep FALSE-NEGATIVES: Steam and the
+        # game/EAC processes run as Windows processes visible only via
+        # tasklist.exe, so `pgrep -x steam` reports "down" while it is up. Use
+        # scripts/steam-running.sh for Steam / a WSL-aware check otherwise.
+        # See bd steam-detection-wsl-false-negative-2026-07-18.
         PolicyCase(
-            "allow-pgrep-start-protected-detection",
+            "deny-manual-pgrep-steam",
+            "pgrep -x steam",
+            False,
+            "manual pgrep is blocked",
+        ),
+        PolicyCase(
+            "deny-manual-pgrep-start-protected-detection",
             "pgrep -x start_protected_game.exe",
-            True,
+            False,
+            "manual pgrep is blocked",
         ),
         PolicyCase(
-            "allow-runtime-preflight-pgrep-start-protected-detection",
+            "deny-manual-pgrep-piped",
+            "true | pgrep steam",
+            False,
+            "manual pgrep is blocked",
+        ),
+        PolicyCase(
+            "deny-manual-pgrep-command-substitution",
+            "echo $(pgrep -c steam)",
+            False,
+            "manual pgrep is blocked",
+        ),
+        PolicyCase(
+            "deny-manual-pgrep-bash-c-quoted",
+            "bash -c 'pgrep -x steam >/dev/null && echo up'",
+            False,
+            "manual pgrep is blocked",
+        ),
+        PolicyCase(
+            "deny-runtime-preflight-pgrep-game-processes",
             "if pgrep -x eldenring.exe >/dev/null || pgrep -x start_protected_game.exe >/dev/null; then echo 'already running'; exit 2; fi",
-            True,
+            False,
+            "manual pgrep is blocked",
         ),
         PolicyCase(
-            "allow-python-subprocess-pgrep-assignment-start-protected-detection",
+            "deny-python-subprocess-pgrep-quoted-arg",
             "python3 - <<'PY'\n"
             "import subprocess, os\n"
             "names=['eldenring.exe','start_protected_game.exe']\n"
@@ -242,6 +274,22 @@ def main() -> int:
             "    p=subprocess.run(['pgrep','-x',name], text=True, capture_output=True)\n"
             "    print(name, p.returncode)\n"
             "PY",
+            False,
+            "manual pgrep is blocked",
+        ),
+        # The sanctioned WSL-aware Steam helper carries no pgrep command token in
+        # the agent Bash string, so it is allowed (its internal pgrep lives inside
+        # the script file, which is never an intercepted agent Bash command).
+        PolicyCase(
+            "allow-steam-running-helper",
+            "bash scripts/steam-running.sh",
+            True,
+        ),
+        # Word-boundary: a filename/word merely CONTAINING "pgrep" is not a pgrep
+        # command token and must not be denied.
+        PolicyCase(
+            "allow-mypgreptool-word-not-pgrep",
+            "./mypgreptool --version",
             True,
         ),
         PolicyCase(
