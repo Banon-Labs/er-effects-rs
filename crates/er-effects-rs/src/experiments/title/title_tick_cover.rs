@@ -1497,23 +1497,27 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             (-1, -1)
         };
         const GAME_MAN_RETURN_TITLE_JOB_PREDICATE_DONE_LOCAL: usize = 3;
-        let pulse_b78_for_movemap18 = !switch_stable_proven
+        const MOVEMAPSTEP_STEP_HORSE_WAIT_INDEX_LOCAL: i32 = 17;
+        let pulse_b78_for_late_movemap_pump = !switch_stable_proven
             && phase_for_b78 >= SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
             && continue_forwarded
             && world_up
             && return_title_job_predicate_bc4 == GAME_MAN_RETURN_TITLE_JOB_PREDICATE_DONE_LOCAL
             && b80_load_in_progress == 0
             && post_b78_ig_d8 == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING
-            && post_b78_mms_step == MOVEMAPSTEP_STEP_MOVEMAP_INDEX;
+            && (MOVEMAPSTEP_STEP_HORSE_WAIT_INDEX_LOCAL..=MOVEMAPSTEP_STEP_MOVEMAP_INDEX)
+                .contains(&post_b78_mms_step);
         // Runtime ac9ed1db proved `b78=slot` from clean title through SetState5 re-enters
         // the 0x67141a redundant-load crash. Runtime f23401b9 then proved the opposite
         // extreme (`b78=-1` forever) starves FUN_140afb970's bVar5 pump gate at the exact
-        // post-Continue bc4=3 / MoveMapStep=18 state. Therefore only pulse b78 at that
-        // already-loaded-but-not-controllable stall signature, and clear it everywhere else.
-        let b78_val = if pulse_b78_for_movemap18 {
+        // post-Continue bc4=3 / MoveMapStep=18 state. Runtime 4bc34091 showed the same
+        // starvation begins one native substep earlier at mms_step=17(HORSE WAIT), immediately
+        // before the visible 18/20 lock and 0x67141a. Therefore only pulse b78 in that late
+        // already-loaded-but-not-controllable pump window, and clear it everywhere else.
+        let b78_val = if pulse_b78_for_late_movemap_pump {
             if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
                 append_autoload_debug(format_args!(
-                    "system-quit-quickload: pulsing GameMan+0xb78={slot} for post-Continue MoveMap18 pump gate (phase={phase_for_b78} bc4={return_title_job_predicate_bc4} ig_d8={post_b78_ig_d8} mms_step={post_b78_mms_step} b80={b80_load_in_progress}) -- narrow bVar5 unblock; clear outside this state"
+                    "system-quit-quickload: pulsing GameMan+0xb78={slot} for post-Continue late MoveMap pump gate (phase={phase_for_b78} bc4={return_title_job_predicate_bc4} ig_d8={post_b78_ig_d8} mms_step={post_b78_mms_step} b80={b80_load_in_progress}) -- narrow bVar5 unblock; clear outside this state"
                 ));
             }
             slot
