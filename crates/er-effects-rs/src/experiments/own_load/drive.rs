@@ -369,11 +369,17 @@ pub(crate) fn install_wbr_update_hook() -> bool {
 static REQUEST_MOVE_MAP_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 /// One-shot install guard.
 static REQUEST_MOVE_MAP_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-/// ARM latch: our load trigger sets this true right before it drives SetState5/PlayGame, so the fixup
-/// only ever touches a load WE initiated -- normal gameplay map transitions (valid param_2) are never
-/// affected. The hook consumes the arm on the first armed RequestMoveMap call (one-shot per load).
-static REQUEST_MOVE_MAP_FIXUP_ARMED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+/// ARM countdown: our load trigger sets this to `REQUEST_MOVE_MAP_ARM_WINDOW` right before it drives
+/// SetState5/PlayGame. Each RequestMoveMap call while armed decrements it; the fixup fires on the FIRST
+/// call whose target BlockId is actually invalid (disarming immediately), and a valid intervening call
+/// merely decrements without consuming the arm. This is a WINDOW, not a one-shot: the earlier
+/// disarm-on-first-call consumed the arm on a benign valid call (title/early RequestMoveMap) and missed
+/// the actual load's stale `-1` call a few calls later, leaving WorldResWait stuck (bug found runtime
+/// 2026-07-18, run boot-fix-validate-155035: calls=2 fixups=0, boot stuck at mms 3 for 66s).
+static REQUEST_MOVE_MAP_ARM_COUNTDOWN: AtomicUsize = AtomicUsize::new(0);
+/// How many RequestMoveMap calls after a load trigger stay eligible for the fixup. Generous enough to
+/// skip benign intervening calls but bounded so the arm never leaks into unrelated later transitions.
+const REQUEST_MOVE_MAP_ARM_WINDOW: usize = 8;
 /// Total RequestMoveMap calls seen (telemetry oracle_request_move_map_hook_calls).
 pub(crate) static REQUEST_MOVE_MAP_HOOK_CALLS: AtomicU64 = AtomicU64::new(0);
 /// Times we substituted a valid c30 BlockId into an invalid `*param_2`
@@ -388,7 +394,7 @@ pub(crate) static REQUEST_MOVE_MAP_LAST_C30: AtomicU64 = AtomicU64::new(0);
 /// upcoming STEP_PlayGame -> RequestMoveMap gets a valid target BlockId even if the confirm handler
 /// captured a stale one.
 pub(crate) fn arm_request_move_map_fixup() {
-    REQUEST_MOVE_MAP_FIXUP_ARMED.store(true, Ordering::SeqCst);
+    REQUEST_MOVE_MAP_ARM_COUNTDOWN.store(REQUEST_MOVE_MAP_ARM_WINDOW, Ordering::SeqCst);
 }
 
 /// `__fastcall InGameStep::RequestMoveMap(rcx=InGameStep*, rdx=BlockId* param_2, r8d, r9)` fix detour.
@@ -401,9 +407,8 @@ pub(crate) unsafe extern "system" fn request_move_map_fix_hook(
     arg4: usize,
 ) -> usize {
     REQUEST_MOVE_MAP_HOOK_CALLS.fetch_add(1, Ordering::SeqCst);
-    if REQUEST_MOVE_MAP_FIXUP_ARMED.swap(false, Ordering::SeqCst)
-        && param2 != TITLE_OWNER_SCAN_START_ADDRESS
-    {
+    let armed = REQUEST_MOVE_MAP_ARM_COUNTDOWN.load(Ordering::SeqCst);
+    if armed > 0 && param2 != TITLE_OWNER_SCAN_START_ADDRESS {
         if let Some(before) = unsafe { safe_read_i32(param2) } {
             let before_u = before as u32;
             let before_area = (before_u >> 24) & 0xff;
@@ -421,18 +426,25 @@ pub(crate) unsafe extern "system" fn request_move_map_fix_hook(
                 && c30 != 0
                 && c30_area < REQUEST_MOVE_MAP_NONDEBUG_AREA_CEIL;
             if invalid && c30_valid {
+                // The actual load's stale/-1 target -- fix it and disarm (done for this load).
                 unsafe {
                     *(param2 as *mut i32) = c30;
                 }
+                REQUEST_MOVE_MAP_ARM_COUNTDOWN.store(0, Ordering::SeqCst);
                 REQUEST_MOVE_MAP_FIXUPS.fetch_add(1, Ordering::SeqCst);
                 REQUEST_MOVE_MAP_LAST_BEFORE.store(u64::from(before_u), Ordering::SeqCst);
                 REQUEST_MOVE_MAP_LAST_C30.store(u64::from(c30_u), Ordering::SeqCst);
                 append_autoload_debug(format_args!(
-                    "request-move-map-fix: FIXED *param_2 0x{before_u:x}(area=0x{before_area:x} invalid) -> c30 0x{c30_u:x}(area=0x{c30_area:x}) ingame=0x{ingame:x} -- FormatV will now build the loadlist path"
+                    "request-move-map-fix: FIXED *param_2 0x{before_u:x}(area=0x{before_area:x} invalid) -> c30 0x{c30_u:x}(area=0x{c30_area:x}) ingame=0x{ingame:x} armed_left={armed} -- FormatV will now build the loadlist path"
                 ));
             } else {
+                // Benign intervening call (valid BlockId, or c30 not yet mounted): DO NOT consume the
+                // arm -- just decrement the window so the real stale load call a few calls later is
+                // still caught. (The earlier one-shot consumed the arm here and missed the load call.)
+                REQUEST_MOVE_MAP_ARM_COUNTDOWN.store(armed - 1, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
-                    "request-move-map-fix: armed call NO-OP param_2=0x{before_u:x}(area=0x{before_area:x} invalid={invalid}) c30=0x{c30_u:x}(valid={c30_valid}) ingame=0x{ingame:x} -- passthrough"
+                    "request-move-map-fix: armed passthrough param_2=0x{before_u:x}(area=0x{before_area:x} invalid={invalid}) c30=0x{c30_u:x}(valid={c30_valid}) ingame=0x{ingame:x} armed_left={} -- window decremented, arm kept",
+                    armed - 1
                 ));
             }
         }

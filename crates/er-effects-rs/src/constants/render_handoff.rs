@@ -117,6 +117,34 @@ pub(crate) const CSMENUMAN_NOWLOADING_JOB_798_OFFSET: usize = 0x798;
 /// `CSMenuMan+0x730` -- `loadingScreenData.field_0x10` (drives per-frame cover-job recreation).
 #[allow(dead_code)]
 pub(crate) const CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET: usize = 0x730;
-// NOT YET PINNED (need a further RE round; documented so the next agent fills them):
-//   - GLOBAL_CSRemo singleton RVA ([base+RVA] -> CSRemo*), and CSRemo+8 subobject / +0x1a byte.
-//   - MoveMapStep.testNetStep field offset (the EzChildStep wrapper within MoveMapStep).
+// ---- STEP_Finish sub-gate reads (pinned 2026-07-18, bd render-handoff-freeze-second-gate-pins) ----
+// STEP_Finish reaches terminal (requestedState=-1, letting STEP_MoveMap_Update set requestCode 1->2)
+// only when: warmup (+0xb0) >= 2 AND testNetStep child finished AND the CSRemo-idle gate passes.
+/// `MoveMapStep.testNetStep` EzChildStep WRAPPER offset. Its inner stepper ptr is at wrapper+0x8
+/// (== MoveMapStep+0x110): stepper == 0 -> finished/skipped; != 0 -> still running (offline-hang suspect).
+#[allow(dead_code)]
+pub(crate) const MOVEMAPSTEP_TESTNETSTEP_WRAPPER_108_OFFSET: usize = 0x108;
+#[allow(dead_code)]
+pub(crate) const MOVEMAPSTEP_TESTNETSTEP_STEPPER_110_OFFSET: usize = 0x110;
+/// `EzChildStepBase::RequestFinish` (dump 0x140eb5590) -- save-safe lever to force testNetStep to finish
+/// (sets child+0xb4). Fire on the wrapper at MoveMapStep+0x108 if the stepper is hung offline.
+#[allow(dead_code)]
+pub(crate) const EZ_CHILDSTEP_REQUEST_FINISH_PINNED_RVA: usize = 0xeb5570;
+/// `FUN_140eb54e0` EzChildStep reset (corrected deobf; nulls stepper + clears finish latch +0x10).
+#[allow(dead_code)]
+pub(crate) const EZ_CHILDSTEP_RESET_PINNED_RVA: usize = 0xeb54c0;
+/// `GLOBAL_CSRemo` singleton: `[base + 0x3d6ea58]` -> CSRemoImp*. (Region-consistent with the
+/// NowLoading/FakeLoading globals; flagged estimate but in-range.)
+#[allow(dead_code)]
+pub(crate) const GLOBAL_CSREMO_RVA: usize = 0x3d6ea58;
+/// CSRemoImp+0x8 -> CSRemoMan* (`remoMan`). remoMan == null == CSRemo-init gap (gate BUSY).
+#[allow(dead_code)]
+pub(crate) const CSREMO_REMOMAN_08_OFFSET: usize = 0x08;
+/// CSRemoMan+0xd0 (qword) -- pending-remo/request signal (the `[0x1a]` index x8 in the decomp). != 0
+/// == a remo/cutscene is pending (idle gate fails). Read-only "remo pending" instrumentation signal.
+#[allow(dead_code)]
+pub(crate) const CSREMOMAN_PENDING_D0_OFFSET: usize = 0xd0;
+/// `TitleStep+0x2e8` -> InGameStep* (the session step). Used to resolve MoveMapStep in-world via a
+/// cached title/session owner (see game_man_snapshot.rs). (Named TITLE_STEP_IN_GAME_STEP_2E8 elsewhere.)
+#[allow(dead_code)]
+pub(crate) const TITLESTEP_INGAMESTEP_2E8_RE_OFFSET: usize = 0x2e8;

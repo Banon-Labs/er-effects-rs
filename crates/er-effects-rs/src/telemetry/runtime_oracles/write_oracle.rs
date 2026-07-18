@@ -7,6 +7,64 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
     write_title_menu_flow_oracles(body);
     write_game_module_oracles(body);
     write_player_presence_oracle(body);
+    write_stepfinish_gate_oracle(body);
+}
+
+/// STEP_Finish sub-gate diagnostic (bd render-handoff-freeze-second-gate-pins-2026-07-18). The
+/// render handoff needs requestCode (InGameStep+0xd8) to advance 1->2, which happens only when
+/// MoveMapStep::STEP_Finish reaches terminal. STEP_Finish is gated on: warmup (+0xb0) >= 2, the
+/// testNetStep child finished (MoveMapStep+0x110 stepper == 0), and the CSRemo-idle gate
+/// (CSRemo[+8]remoMan[+0xd0] pending == 0, remoMan != null). Reading all three here (read-only)
+/// deterministically identifies which sub-gate holds STEP_Finish -- to disambiguate the static
+/// STEP_Finish-gate hypothesis from the runtime return-title-bounce observation (requestCode was seen
+/// briefly reaching 2 then reverting while the return-title request pulsed). MoveMapStep is resolved
+/// via the cached session owner -> InGameStep+0x2e8 -> +0xe8 (same path as gm-snap).
+fn write_stepfinish_gate_oracle(body: &mut String) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let rd = |p: usize| -> Option<usize> { unsafe { crate::experiments::safe_read_usize(p) } };
+    let rdi = |p: usize| -> i64 {
+        unsafe { crate::experiments::safe_read_usize(p) }
+            .map_or(-1, |v| i64::from(v as u32 as i32))
+    };
+    let mut owner = TITLE_OWNER_PTR.load(Ordering::SeqCst);
+    if owner == null {
+        owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
+    }
+    let ingame = if owner != null {
+        rd(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET).filter(|v| *v != null)
+    } else {
+        None
+    };
+    let request_code = ingame.map_or(-1, |ig| rdi(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET));
+    let mms = ingame.and_then(|ig| rd(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET).filter(|v| *v != null));
+    let (warmup, testnet_stepper, mms_state) = match mms {
+        Some(m) => (
+            rdi(m + MOVEMAPSTEP_FINISH_WARMUP_B0_OFFSET),
+            rd(m + MOVEMAPSTEP_TESTNETSTEP_STEPPER_110_OFFSET).unwrap_or(0),
+            rdi(m + MOVEMAPSTEP_STATE_48_RE_OFFSET),
+        ),
+        None => (-1, usize::MAX, -1),
+    };
+    // CSRemo-idle gate inputs (read-only, no vtable call): remoMan present + pending qword.
+    let (csremo, remoman, remo_pending) = if let Ok(base) = crate::experiments::game_module_base() {
+        let csremo = rd(base + GLOBAL_CSREMO_RVA).filter(|v| *v != null).unwrap_or(0);
+        let remoman = if csremo != 0 {
+            rd(csremo + CSREMO_REMOMAN_08_OFFSET).filter(|v| *v != null).unwrap_or(0)
+        } else {
+            0
+        };
+        let pending = if remoman != 0 { rd(remoman + CSREMOMAN_PENDING_D0_OFFSET).unwrap_or(0) } else { 0 };
+        (csremo, remoman, pending)
+    } else {
+        (0, 0, 0)
+    };
+    body.push_str(&format!(
+        "  \"oracle_stepfinish_request_code\": {request_code},\n  \"oracle_stepfinish_warmup\": {warmup},\n  \"oracle_stepfinish_testnet_stepper_present\": {},\n  \"oracle_stepfinish_mms_state\": {mms_state},\n  \"oracle_csremo_present\": {},\n  \"oracle_csremo_remoman_present\": {},\n  \"oracle_csremo_remo_pending\": {},\n",
+        (testnet_stepper != 0 && testnet_stepper != usize::MAX),
+        csremo != 0,
+        remoman != 0,
+        remo_pending != 0
+    ));
 }
 
 fn format_optional_oracle_ptr(value: usize) -> String {
