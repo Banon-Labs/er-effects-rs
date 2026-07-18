@@ -20,6 +20,10 @@ When the user explicitly says to continue until a game run is required, do not s
 
 When a user-visible asset/runtime test shows no change, do not answer with a "most likely" cause or ask for another blind run. First determine exactly what was wrong from offline evidence whenever possible: verify the profile/package paths, map the in-game mechanism to the exact regulation rows/part IDs/asset filenames, and only then build the next package or ask for a runtime retest. If a previous run was not instrumented or configured to capture enough evidence, treat that as a validation failure and fix the evidence path before retrying.
 
+## Asset Deformation Feedback Before More Slider Tuning
+
+When user feedback shows that offline slider changes are not producing the intended deformation, stop continuing blind slider iterations. Establish a direct authoring/feedback surface first: load the ER donor/player body and the imported source model together in a 3D tool, compare literal model bounds/proportions, inspect weights/bone ownership, and make the next edit from that evidence. Prefer Blender plus a Souls/FLVER-capable importer/exporter or another direct FLVER authoring tool over more runtime-only guesswork. Do not propose skeleton or weapon-socket edits as the next step until the model-scale/fit comparison has been made or proven unavailable.
+
 ## Non-Interactive Shell Commands
 
 **ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
