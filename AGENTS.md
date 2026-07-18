@@ -16,6 +16,10 @@ bd dolt push          # Push beads data to remote
 
 When the user explicitly says to continue until a game run is required, do not stop at a plan-only checkpoint. Continue all available non-runtime work first: unpack/localize assets, inspect binders, run static/Ghidra/tooling probes, validate exports/imports offline, and update Beads as evidence accumulates. Treat archive extraction/unpacking of installed game files as offline asset work, not as a game run; do it before claiming the next step requires running a game. Report back only when the next material step truly requires launching/running a game, needs subjective user choice, or hits a concrete capability blocker.
 
+## Runtime Failure Attribution Before Retest
+
+When a user-visible asset/runtime test shows no change, do not answer with a "most likely" cause or ask for another blind run. First determine exactly what was wrong from offline evidence whenever possible: verify the profile/package paths, map the in-game mechanism to the exact regulation rows/part IDs/asset filenames, and only then build the next package or ask for a runtime retest. If a previous run was not instrumented or configured to capture enough evidence, treat that as a validation failure and fix the evidence path before retrying.
+
 ## Non-Interactive Shell Commands
 
 **ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
