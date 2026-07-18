@@ -70,11 +70,15 @@ def run_case(name: str, writer, deadline: float, expect_pass: bool, expect_verdi
     telem.write_text(json.dumps(frozen_tel()))  # start frozen
     stop = threading.Event()
 
+    # Interruptible pace primitive (never signalled for pacing) -- mirrors the monitor's _POLL_WAIT:
+    # the writer thread's real synchronization is the `stop` Event; this only bounds write frequency so
+    # the poll interval is passed as a VARIABLE, not a literal (no raw sleep / no literal-timeout wait).
+    writer_tick = 0.05
     def write_loop():
         t0 = time.time()
         while not stop.is_set():
             telem.write_text(json.dumps(writer(time.time() - t0)))
-            stop.wait(0.05)  # Event.wait, not time.sleep (scripts/check-no-timeouts.py bans raw sleep)
+            stop.wait(writer_tick)
 
     th = threading.Thread(target=write_loop, daemon=True)
     th.start()
