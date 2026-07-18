@@ -264,26 +264,18 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // the load DONE by resetting the phase to IDLE, which gates OFF both this destructive branch and
                 // the return-title chain submit (both require phase != IDLE). Reset the counter whenever nothing
                 // is armed so only *continuous* armed presence counts.
-                // SLOT-AWARE: only a pointless SELF-reload is disarmed -- the arm's target slot equals the
-                // save slot already loaded and stable in THIS world (the boot autoload re-queuing the
-                // character it just loaded). A genuine switch targets a DIFFERENT slot, so `self_reload` is
-                // false, the counter never climbs, and the native return-title proceeds untouched (this is
-                // why disarming purely on time regressed all cross-slot loads). Reset the counter whenever
-                // the arm is absent or targets a different slot.
-                let armed_slot = SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst);
-                let gm_slot_ptr = game_man_ptr_or_null();
-                let loaded_slot = if gm_slot_ptr != NULL_MODULE_BASE {
-                    unsafe { safe_read_i32(gm_slot_ptr + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) }
-                        .unwrap_or(-1)
-                } else {
-                    -1
-                };
-                let self_reload = armed_slot != usize::MAX
-                    && loaded_slot >= 0
-                    && armed_slot == loaded_slot as usize;
-                if self_reload
-                    && SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
-                        >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+                // Suppress the boot autoload's post-load return-title reload of the character it just
+                // loaded. It fires ~47-70s into the stable world (queue-ready gated) and, left armed, tears
+                // the good load down and crashes at MoveMapStep 18. A genuine user switch tears the world
+                // down within ~1-2s (player vanishes, this counter never reaches the threshold). NOTE: this
+                // time-based gate ALSO suppresses genuine cross-slot switches whose old world lingers past
+                // the threshold -- a known limitation. A slot-aware gate was tried but SELECTED_SLOT (a
+                // ProfileSelect profile_id) and GameMan.save_slot are different index spaces so they never
+                // matched; a correct same-character discriminator (or fixing the MoveMapStep-18 reload lock
+                // so switches complete without disarming) is the follow-up. See bd
+                // angre-4loads-goal-met-but-switch-regression-2026-07-18.
+                if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+                    >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
                 {
                     let armed = SYSTEM_QUIT_INWORLD_ARMED_STABLE_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
                     if armed == SYSTEM_QUIT_INWORLD_ARMED_DISARM_TICKS {
@@ -291,7 +283,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                             .store(SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE, Ordering::SeqCst);
                         SYSTEM_QUIT_INWORLD_ARMED_DISARM_COUNT.fetch_add(1, Ordering::SeqCst);
                         append_autoload_debug(format_args!(
-                            "system-quit-quickload: SPURIOUS SELF-reload return-title arm DISARMED after {armed} frames (armed_slot={armed_slot} == loaded_slot={loaded_slot}, player present + stable) -> phase IDLE; same-character self-reload suppressed, cross-slot switches unaffected"
+                            "system-quit-quickload: return-title arm DISARMED after {armed} continuous in-world frames -> phase IDLE; destructive reload suppressed"
                         ));
                     }
                 } else {
