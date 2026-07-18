@@ -126,7 +126,23 @@ json.dump(targets, open(out,"w"), indent=1)
 print(f"wrote {out}: {len(targets)} targets")
 PY
 
-# --- 5. record debug-log start offset (shared append-log), launch via Windows me3.exe, monitor GAME_DIR ---
+# --- 5. read-only invariant (acceptance SS5): snapshot every source save's mtime+size BEFORE the run,
+#        so we can ASSERT after that no source file was written (loads are read-only; the only write
+#        path is the in-game Save button, which upserts to APPDATA, never the supplied file). ---
+SRC_SNAP="$ARTIFACT_DIR/source-mtimes-before.json"
+python3 -c "
+import json, os
+targets=json.load(open('$TARGETS_JSON'))
+snap={}
+for t in targets:
+    p=t['file']
+    try: st=os.stat(p); snap[p]=[st.st_mtime, st.st_size]
+    except OSError: pass
+json.dump(snap, open('$SRC_SNAP','w'))
+print(f'read-only baseline: {len(snap)} source saves snapshotted')
+"
+
+# --- 6. record debug-log start offset (shared append-log), launch via Windows me3.exe, monitor GAME_DIR ---
 OFFSET="$(stat -c%s "$GAME_DIR/er-effects-autoload-debug.log" 2>/dev/null || echo 0)"
 echo "launching ER via Windows me3.exe (offline) ..."
 "$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" > "$ARTIFACT_DIR/me3-launch.log" 2>&1 &
@@ -152,6 +168,24 @@ off=$OFFSET
 with open('$GAME_DIR/er-effects-autoload-debug.log','rb') as f: f.seek(off); d=f.read()
 open('$ARTIFACT_DIR/my-run-debug.log','wb').write(d)
 " 2>/dev/null
+# --- read-only invariant assertion (acceptance SS5): every source save's mtime+size must be unchanged ---
+python3 -c "
+import json, os
+before=json.load(open('$SRC_SNAP'))
+changed=[]
+for p,(mt,sz) in before.items():
+    try:
+        st=os.stat(p)
+        if st.st_mtime!=mt or st.st_size!=sz: changed.append(p)
+    except OSError: changed.append(p+' (vanished)')
+rep=open('$ARTIFACT_DIR/proof-report.md','a')
+if changed:
+    rep.write('\n> READ-ONLY INVARIANT VIOLATED -- source save(s) written during the run: '+', '.join(changed)+'\n')
+    print('READ-ONLY VIOLATION:', changed)
+else:
+    rep.write(f'\n> Read-only invariant OK: all {len(before)} source saves unchanged (mtime+size) across the run.\n')
+    print(f'read-only invariant OK: {len(before)} source saves unchanged')
+"
 echo "monitor exit=$RC ; report -> $ARTIFACT_DIR/proof-report.md"
 wait "$LAUNCH_PID" 2>/dev/null
 exit $RC
