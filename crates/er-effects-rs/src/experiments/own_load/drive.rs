@@ -358,6 +358,21 @@ pub(crate) fn install_wbr_update_hook() -> bool {
 /// path the engine uses -- so we never hardcode the user-data/steamid prefix. Inside that directory
 /// we pick the save file by extension (`.sl2`/`.co2`) rather than assuming an exact filename, so the
 /// probe works for vanilla and Seamless without a hardcoded name (bd dont-hardcode-savefile-tied).
+/// Optional per-switch cross-file save-source override for the programmatic (file,slot) switch. Reads a
+/// game-dir control file (`er-effects-switch-save-file.txt`) whose contents are a single save path the
+/// game can open (a Windows path, e.g. `A:\...\150-Banon\ER0000.sl2`). None when absent/empty. The
+/// harness writes the target FILE here before writing the slot; own_load_read_sl2_bytes reads it FIRST.
+fn switch_save_file_override() -> Option<String> {
+    let path = game_directory_path()?.join("er-effects-switch-save-file.txt");
+    let contents = std::fs::read_to_string(path).ok()?;
+    let trimmed = contents.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
+}
+
 pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
     const REQ_DIR_SANE_MAX_CU: usize = 320;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -389,6 +404,42 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
     // configured-direct branch below -- because in direct mode the CreateFileW redirect does not cover the
     // native builder's `read_dir` enumeration (see the native-builder note below), so relying on the dir
     // walk to observe the just-committed bytes is timing/redirect fragile.
+    // RUNTIME CROSS-FILE OVERRIDE (programmatic (file,slot) switch, 2026-07-18). The harness sets the
+    // target save FILE for THIS switch via a game-dir control file (er-effects-switch-save-file.txt = a
+    // Windows path the game can open, e.g. A:\...\150-Banon\ER0000.sl2). Read it FIRST so a programmatic
+    // cross-file switch loads an ARBITRARY vanilla file READ-ONLY, in-memory (the source is only read;
+    // the caller slices the picked slot exactly like the boot TOML save_file path). Absent/empty -> fall
+    // through to the existing committed-foreign / configured precedence (within-file switches leave it
+    // unset). Same std::fs read the redirect enforcer + configured-direct branch already use.
+    if let Some(override_path) = switch_save_file_override() {
+        match std::fs::read(&override_path) {
+            Ok(mut bytes)
+                if bytes.len() as u64 >= crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES =>
+            {
+                normalize_save_bytes_to_active_steam_id(base, &mut bytes, "own-load-switch-file-override");
+                append_autoload_debug(format_args!(
+                    "own-load: read SWITCH FILE OVERRIDE \"{}\" ({} bytes) for slicing (programmatic cross-file (file,slot) switch overrides configured save_file for this load)",
+                    override_path,
+                    bytes.len()
+                ));
+                return Some(bytes);
+            }
+            Ok(bytes) => {
+                append_autoload_debug(format_args!(
+                    "own-load: switch file override \"{}\" too small ({} bytes < {}) -- falling back to committed/configured",
+                    override_path,
+                    bytes.len(),
+                    crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES
+                ));
+            }
+            Err(e) => {
+                append_autoload_debug(format_args!(
+                    "own-load: switch file override \"{}\" read failed ({e}) -- falling back to committed/configured",
+                    override_path
+                ));
+            }
+        }
+    }
     if let Some(committed_path) = system_quit_committed_foreign_save_path() {
         match std::fs::read(&committed_path) {
             Ok(mut bytes)

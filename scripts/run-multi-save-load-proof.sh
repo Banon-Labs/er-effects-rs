@@ -85,7 +85,8 @@ echo "staged boot TOML (save_file=$(win_path "$BOOT_FILE") slot=$BOOT_SLOT)"
 # zero simulated input). Start from a clean slate so no stale request fires. The legacy simulated-input
 # autopilot markers are only armed when DRIVE_MODE=autopilot.
 SWITCH_SLOT_FILE="$GAME_DIR/er-effects-switch-slot.txt"
-rm -f "$SWITCH_SLOT_FILE" 2>/dev/null
+SWITCH_FILE_OVERRIDE="$GAME_DIR/er-effects-switch-save-file.txt"  # cross-file: target save FILE per switch
+rm -f "$SWITCH_SLOT_FILE" "$SWITCH_FILE_OVERRIDE" 2>/dev/null
 if [[ "${DRIVE_MODE:-programmatic}" == "autopilot" ]]; then
   printf '1\n' > "$GAME_DIR/er-effects-system-quit-repro.txt"
   printf '1\n' > "$GAME_DIR/er-effects-system-quit-load-switch.txt"
@@ -101,21 +102,28 @@ cleanup() {
   taskkill.exe /F /IM me3.exe >/dev/null 2>&1
   rm -f "$GAME_DIR/er-effects-system-quit-repro.txt" "$GAME_DIR/er-effects-system-quit-load-switch.txt" \
         "$GAME_DIR/er-effects-sq-target-switches.txt" "$GAME_DIR/er-effects-sq-target-slots.txt" \
-        "$SWITCH_SLOT_FILE" 2>/dev/null
+        "$SWITCH_SLOT_FILE" "$SWITCH_FILE_OVERRIDE" 2>/dev/null
   [[ -f "$ARTIFACT_DIR/er-effects.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-effects.toml.bak" "$GAME_DIR/er-effects.toml"
 }
 trap cleanup EXIT
 
-# --- 4. targets.json for the monitor (boot char first, then the DISTINCT within-file switch sequence) ---
+# --- 4. targets.json for the monitor: boot char first, then the reload sequence. Within-file uses
+#        TARGET_SLOTS on the boot file; CROSS-FILE uses SWITCH_TARGETS="file1:slot1,file2:slot2,..." ---
 TARGETS_JSON="$ARTIFACT_DIR/targets.json"
-python3 - "$BOOT_FILE" "$BOOT_SLOT" "$TARGET_SLOTS" "$TARGETS_JSON" <<'PY'
+python3 - "$BOOT_FILE" "$BOOT_SLOT" "$TARGET_SLOTS" "${SWITCH_TARGETS:-}" "$TARGETS_JSON" <<'PY'
 import json, sys
-boot_file, boot_slot, target_slots, out = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
-slots=[int(x) for x in target_slots.replace(',',' ').split()]
+boot_file, boot_slot, target_slots, switch_targets, out = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5]
 targets=[{"file": boot_file, "slot": boot_slot}]              # index 0 = initial TOML auto-load
-targets += [{"file": boot_file, "slot": s} for s in slots]    # the cross-character reloads
+if switch_targets.strip():
+    # CROSS-FILE: "file1:slot1,file2:slot2" -- each reload names its own save file + slot.
+    for pair in switch_targets.split(","):
+        f, s = pair.rsplit(":", 1)
+        targets.append({"file": f.strip(), "slot": int(s)})
+else:
+    slots=[int(x) for x in target_slots.replace(',',' ').split()]
+    targets += [{"file": boot_file, "slot": s} for s in slots]  # within-file cross-character reloads
 json.dump(targets, open(out,"w"), indent=1)
-print(f"wrote {out}: {len(targets)} targets (boot slot {boot_slot} -> switches {slots})")
+print(f"wrote {out}: {len(targets)} targets")
 PY
 
 # --- 5. record debug-log start offset (shared append-log), launch via Windows me3.exe, monitor GAME_DIR ---
@@ -126,7 +134,7 @@ LAUNCH_PID=$!
 
 echo "monitoring loads (RAM-oracle verify + report) ..."
 DRIVE_ARGS=()
-[[ "${DRIVE_MODE:-programmatic}" != "autopilot" ]] && DRIVE_ARGS=(--drive-slot-file "$SWITCH_SLOT_FILE")
+[[ "${DRIVE_MODE:-programmatic}" != "autopilot" ]] && DRIVE_ARGS=(--drive-slot-file "$SWITCH_SLOT_FILE" --drive-file-override "$SWITCH_FILE_OVERRIDE")
 python3 "$REPO_ROOT/scripts/multi-load-proof-monitor.py" \
   --artifact-dir "$GAME_DIR" \
   --targets "$TARGETS_JSON" \

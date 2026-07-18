@@ -40,6 +40,13 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+
+
+def _winpath(p: str) -> str:
+    """/mnt/<d>/rest -> <D>:\\rest (the Windows path the game opens); pass-through otherwise."""
+    if p.startswith('/mnt/') and len(p) > 6 and p[6] == '/':
+        return p[5].upper() + ':\\' + p[7:].replace('/', '\\')
+    return p
 # Interruptible poll wait (never set) -- the sanctioned no-bare-sleep pace primitive used by the
 # sibling watchers; the loop's real synchronization is the telemetry-file/process-state readiness
 # checks above, this only bounds poll frequency. (scripts/check-no-timeouts.py bans raw time.sleep.)
@@ -206,7 +213,8 @@ def load_ok(res: dict) -> bool:
 
 def monitor(artifact_dir: Path, targets: list[dict], per_load_deadline: float,
             overall_deadline: float, poll: float, replay: bool, liveness_check: bool = True,
-            debug_log_offset: int = 0, drive_slot_file: Path | None = None) -> dict:
+            debug_log_offset: int = 0, drive_slot_file: Path | None = None,
+            drive_file_override: Path | None = None) -> dict:
     telem = artifact_dir / "er-effects-telemetry.json"
     log = artifact_dir / "er-effects-autoload-debug.log"
     expected = [
@@ -259,6 +267,10 @@ def monitor(artifact_dir: Path, targets: list[dict], per_load_deadline: float,
                     # is the boot autoload (TOML), so we only drive reloads (idx>=1).
                     if drive_slot_file is not None and idx < len(expected):
                         try:
+                            # cross-file: set the source FILE override first, then the slot (which
+                            # triggers the arm); the DLL reads the file override at reload time.
+                            if drive_file_override is not None:
+                                drive_file_override.write_text(_winpath(str(expected[idx]["file"])) + "\n")
                             drive_slot_file.write_text(f"{int(expected[idx]['slot'])}\n")
                         except OSError:
                             pass
@@ -349,12 +361,14 @@ def main() -> int:
     ap.add_argument("--no-liveness-check", action="store_true", help="do not treat a missing eldenring.exe as a crash (offline loop testing)")
     ap.add_argument("--debug-log-offset", type=int, default=0, help="only scan the debug log for crash markers past this byte offset (shared append-log)")
     ap.add_argument("--drive-slot-file", type=Path, default=None, help="programmatic drive: after each verified load, write the next target slot here (the DLL control file) to trigger the reload")
+    ap.add_argument("--drive-file-override", type=Path, default=None, help="cross-file drive: write the next target save FILE (as a Windows path) here before the slot")
     args = ap.parse_args()
 
     targets = json.loads(args.targets.read_text())
     summary = monitor(args.artifact_dir, targets, args.per_load_deadline,
                       args.overall_deadline, args.poll, args.replay, liveness_check=not args.no_liveness_check,
-                      debug_log_offset=args.debug_log_offset, drive_slot_file=args.drive_slot_file)
+                      debug_log_offset=args.debug_log_offset, drive_slot_file=args.drive_slot_file,
+                      drive_file_override=args.drive_file_override)
     report = render_report(summary)
     if args.report:
         args.report.write_text(report)
