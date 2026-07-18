@@ -15,7 +15,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 IGNORED_DIRECTORIES = {".git", "target"}
 NUMERIC_LITERAL_RE = re.compile(
-    r"(?<![A-Za-z0-9_])"
+    r"(?<![A-Za-z0-9_])"  # pi-lens-ignore: python-thread-global-write — false positive; regex literal, no threading
     r"(?:"
     r"0[xX][0-9A-Fa-f](?:_?[0-9A-Fa-f])*"
     r"|"
@@ -25,7 +25,7 @@ NUMERIC_LITERAL_RE = re.compile(
     r"(?![A-Za-z0-9_])"
 )
 CONSTANT_DECLARATION_RE = re.compile(
-    r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:const|static)\s+[A-Z_][A-Z0-9_]*\b"
+    r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:const|static)\s+[A-Z_][A-Z0-9_]*\b"  # pi-lens-ignore: python-thread-global-write — false positive; regex literal, no threading
 )
 FILE_ALLOW_MARKER = "check-no-magic-numbers: allow-file"
 FILE_ALLOW_HEADER_LINES = 20
@@ -40,7 +40,7 @@ def file_allows_unnamed_numbers(path: Path) -> bool:
     in the file header so bypasses remain intentional and reviewable.
     """
     header = "\n".join(
-        path.read_text(encoding="utf-8").splitlines()[:FILE_ALLOW_HEADER_LINES]
+        path.read_text(encoding="utf-8").splitlines()[:FILE_ALLOW_HEADER_LINES]  # pi-lens-ignore: python-thread-global-write — false positive; file read, no threading
     )
     return FILE_ALLOW_MARKER in header
 
@@ -77,14 +77,14 @@ def strip_strings_and_comments(line: str, in_block_comment: bool) -> tuple[str, 
                     index += 2
                     continue
                 if line[index] == '"':
-                    index += 1
+                    index += 1  # pi-lens-ignore: python-thread-global-write — false positive; local parser index, no threading
                     break
-                index += 1
+                index += 1  # pi-lens-ignore: python-thread-global-write — false positive; local parser index, no threading
             continue
 
         if char == "'":
             output.append("''")
-            index += 1
+            index += 1  # pi-lens-ignore: python-thread-global-write — false positive; local parser index, no threading
             while index < len(line):
                 if line[index] == "\\":
                     index += 2
@@ -105,17 +105,17 @@ def numeric_literals_in(path: Path) -> list[tuple[int, str, str]]:
     findings: list[tuple[int, str, str]] = []
     in_block_comment = False
 
-    for line_number, original_line in enumerate(
+    for line_number, original_line in enumerate(  # pi-lens-ignore: python-thread-global-write — false positive; sequential file scan, no threading
         path.read_text(encoding="utf-8").splitlines(), start=1
     ):
         stripped_line, in_block_comment = strip_strings_and_comments(
             original_line, in_block_comment
         )
         if CONSTANT_DECLARATION_RE.search(stripped_line):
-            continue
+            continue  # pi-lens-ignore: python-thread-global-write — false positive; loop control, no threading
 
         for match in NUMERIC_LITERAL_RE.finditer(stripped_line):
-            findings.append((line_number, match.group(), original_line.strip()))
+            findings.append((line_number, match.group(), original_line.strip()))  # pi-lens-ignore: python-thread-global-write — false positive; local result list, no threading
 
     return findings
 
@@ -144,12 +144,10 @@ def main() -> int:
             )
 
     if failures:
-        print("Unnamed numeric literals are banned in Rust source.", file=sys.stderr)
-        print(
-            "Move the value to a named const/static and use the name instead.\n",
-            file=sys.stderr,
-        )
-        print("\n".join(failures), file=sys.stderr)
+        sys.stderr.write("Unnamed numeric literals are banned in Rust source.\n")
+        sys.stderr.write("Move the value to a named const/static and use the name instead.\n\n")
+        sys.stderr.write("\n".join(failures))
+        sys.stderr.write("\n")
         return 1
 
     return 0
