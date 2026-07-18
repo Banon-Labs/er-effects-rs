@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/er-effects-rs",
+    "crates/er-reload-trace-dll",
     "crates/effects-data",
     "crates/er-gfx",
     "crates/er-safe-input",
@@ -22,4 +23,3 @@ members = [
 ]
 resolver = "2"
 default-members = ["crates/er-effects-rs"]
-

@@ -22,6 +22,8 @@ When a runtime probe is explicitly meant to stay live for manual interaction / `
 
 For user-inspection runs, do **not** enable autopilot/repro drivers, fabricated input, or input-blocking modes unless the user explicitly asks for self-driving. If a probe must drive menus automatically, treat it as an agent-owned runtime experiment with bounded telemetry and do not claim the user is in control. Before saying the user can take over, verify via telemetry that the input block/repro driver has released and that the game process is still alive.
 
+Standing user order (2026-07-17): do not stop or yield merely because the proper next runtime step will launch Elden Ring on the current desktop or may capture input. When launching Elden Ring or capturing input is appropriate for the current objective and uses an approved launch/probe path, proceed instead of asking for generic permission. Tell the user immediately before the launch/input-capture step exactly what will happen and why, then run it. Do **not** emit reminders or reassurance that no launch/input capture is happening; if the current step is non-launching, just do the non-launching work without a no-launch disclaimer. Still respect the forbidden Steam/EAC launch forms, save-safety rules, visual-oracle restrictions, and any truly destructive/irreversible boundary.
+
 Standing user order (2026-07-04): whenever a new DLL build is ready for runtime validation, do not try to validate a newly built DLL in an already-running process.
 
 Do not launch Elden Ring through Steam from agent workflows. Forbidden launch forms include `steam -applaunch 1245620`, `steam://run/1245620`, `steam://rungameid/1245620`, and `xdg-open` or similar wrappers around those URLs. Do not launch `start_protected_game.exe` directly or through Proton/Wine/Steam; that is the protected/EAC launcher, not an approved agent runtime target. Process detection of stale `start_protected_game.exe` is allowed, but launching it is not. Runtime work must use only an approved, explicitly gated direct/offline `eldenring.exe` probe path.
@@ -214,6 +216,16 @@ Handling rule:
 The pre-authorization is standing, so you do not need to ask before fixing a pre-existing issue; just
 fix it (in parallel, first, or worktree-isolated per the rules above) and report it alongside your
 main work.
+
+## Commit Timing (user directive 2026-07-17)
+
+Commit **immediately after** you perform a runtime validation + data-collection run -- commit the exact
+tree state that produced that run (fix + instrumentation + harness), pass or fail, because the run is
+the evidence and the state must be preserved with it. This overrides the generic "commit only when the
+user asks" default for runtime-affecting work. Otherwise (no runtime validation performed yet) do NOT
+commit, and do NOT ask about committing -- never pause the work to ask whether to commit. Just keep
+working toward the objective; the next runtime run is the commit trigger. See bd
+commit-immediately-after-runtime-validation-2026-07-17.
 
 ## Session Completion
 

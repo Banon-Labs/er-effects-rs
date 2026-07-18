@@ -1,0 +1,368 @@
+#![allow(non_snake_case)]
+
+use std::{
+    ffi::c_void,
+    fmt,
+    fs::{File, OpenOptions},
+    io::Write,
+    ptr::null_mut,
+    sync::atomic::{AtomicU64, AtomicUsize, Ordering},
+    sync::{Mutex, OnceLock},
+};
+
+const DLL_PROCESS_ATTACH: u32 = 1;
+const DLL_MAIN_SUCCESS: i32 = 1;
+const CURRENT_PROCESS_PSEUDO_HANDLE: isize = -1;
+const LOG_PATH: &str = "er-reload-trace.log";
+
+const MH_OK: i32 = 0;
+const MH_ERROR_ALREADY_INITIALIZED: i32 = 1;
+const MH_ERROR_ENABLED: i32 = 5;
+
+const GAME_MAN_SINGLETON_RVA: usize = 0x3d69918;
+const GAME_DATA_MAN_GLOBAL_RVA: usize = 0x3d5df38;
+const MOUNTED_ARCHIVE_REGISTRY_RVA: usize = 0x448464a8;
+
+const GAME_MAN_REQUESTED_SLOT_B78_OFFSET: usize = 0xb78;
+const GAME_MAN_LOAD_PHASE_B80_OFFSET: usize = 0xb80;
+const GAME_MAN_SAVE_SLOT_AC0_OFFSET: usize = 0xac0;
+const GAME_MAN_CURRENT_MAP_C30_OFFSET: usize = 0xc30;
+const GAME_MAN_RESIDENT_DEVICE_DF0_OFFSET: usize = 0xdf0;
+const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize = 0x08;
+
+const HOOK_ORIGINAL_UNSET: usize = 0;
+
+type TraceHookFn = unsafe extern "system" fn(usize, usize, usize, usize) -> usize;
+
+static LOG_FILE: OnceLock<Option<Mutex<File>>> = OnceLock::new();
+static EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
+
+static ORIG_TITLE_CONFIRM: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_REQUEST_LOAD_SLOT: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_REQUEST_PROFILE_READ: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_B80_POLL: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_SLOT_DESER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_DISPATCHER2: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_DOSAVE_STUFF: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_MAP_REQUEST_DO: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_MAP_WORK: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+
+struct HookSpec {
+    name: &'static str,
+    rva: usize,
+    detour: TraceHookFn,
+    original: &'static AtomicUsize,
+}
+
+unsafe extern "system" {
+    fn MH_Initialize() -> i32;
+    fn MH_CreateHook(target: *mut c_void, detour: *mut c_void, original: *mut *mut c_void) -> i32;
+    fn MH_EnableHook(target: *mut c_void) -> i32;
+}
+
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetModuleHandleA(name: *const u8) -> *mut c_void;
+    fn GetTickCount64() -> u64;
+    fn ReadProcessMemory(
+        process: isize,
+        base: *const c_void,
+        buffer: *mut c_void,
+        size: usize,
+        read: *mut usize,
+    ) -> i32;
+}
+
+fn open_log_file() -> Option<Mutex<File>> {
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(LOG_PATH)
+        .ok()
+        .map(Mutex::new)
+}
+
+fn reset_log_file() {
+    let _ = File::create(LOG_PATH);
+}
+
+fn log_line(args: fmt::Arguments<'_>) {
+    let Some(lock) = LOG_FILE.get_or_init(open_log_file) else {
+        return;
+    };
+    let Ok(mut file) = lock.lock() else {
+        return;
+    };
+    let tick = unsafe { GetTickCount64() };
+    let seq = EVENT_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+    let _ = writeln!(file, "[{seq:06} +{tick}ms] {args}");
+}
+
+fn game_base() -> Option<usize> {
+    let base = unsafe { GetModuleHandleA(std::ptr::null()) } as usize;
+    (base != 0).then_some(base)
+}
+
+unsafe fn read_usize(addr: usize) -> Option<usize> {
+    let mut value = 0usize;
+    let mut read = 0usize;
+    let ok = unsafe {
+        ReadProcessMemory(
+            CURRENT_PROCESS_PSEUDO_HANDLE,
+            addr as *const c_void,
+            &mut value as *mut usize as *mut c_void,
+            std::mem::size_of::<usize>(),
+            &mut read,
+        )
+    };
+    (ok != 0 && read == std::mem::size_of::<usize>()).then_some(value)
+}
+
+unsafe fn read_i32(addr: usize) -> Option<i32> {
+    let mut value = 0i32;
+    let mut read = 0usize;
+    let ok = unsafe {
+        ReadProcessMemory(
+            CURRENT_PROCESS_PSEUDO_HANDLE,
+            addr as *const c_void,
+            &mut value as *mut i32 as *mut c_void,
+            std::mem::size_of::<i32>(),
+            &mut read,
+        )
+    };
+    (ok != 0 && read == std::mem::size_of::<i32>()).then_some(value)
+}
+
+fn snapshot() -> String {
+    let Some(base) = game_base() else {
+        return "base=<unresolved>".to_owned();
+    };
+    let gm = unsafe { read_usize(base + GAME_MAN_SINGLETON_RVA) }.unwrap_or(0);
+    let gdm = unsafe { read_usize(base + GAME_DATA_MAN_GLOBAL_RVA) }.unwrap_or(0);
+    let mounted = unsafe { read_usize(base + MOUNTED_ARCHIVE_REGISTRY_RVA) }.unwrap_or(0);
+
+    let b78 = unsafe { read_i32(gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) };
+    let b80 = unsafe { read_i32(gm + GAME_MAN_LOAD_PHASE_B80_OFFSET) };
+    let ac0 = unsafe { read_i32(gm + GAME_MAN_SAVE_SLOT_AC0_OFFSET) };
+    let c30 = unsafe { read_i32(gm + GAME_MAN_CURRENT_MAP_C30_OFFSET) };
+    let df0 = unsafe { read_usize(gm + GAME_MAN_RESIDENT_DEVICE_DF0_OFFSET) }.unwrap_or(0);
+    let pgd = unsafe { read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }.unwrap_or(0);
+
+    format!(
+        "base=0x{base:x} gm=0x{gm:x} b78={} b80={} ac0={} c30={} df0=0x{df0:x} gdm=0x{gdm:x} pgd=0x{pgd:x} mounted_registry=0x{mounted:x}",
+        fmt_i32(b78),
+        fmt_i32(b80),
+        fmt_i32(ac0),
+        fmt_c30(c30),
+    )
+}
+
+fn fmt_i32(value: Option<i32>) -> String {
+    value.map_or_else(|| "<unreadable>".to_owned(), |value| value.to_string())
+}
+
+fn fmt_c30(value: Option<i32>) -> String {
+    value.map_or_else(|| "<unreadable>".to_owned(), |value| format!("0x{value:x}"))
+}
+
+unsafe fn call_original(
+    original: &'static AtomicUsize,
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let original = original.load(Ordering::SeqCst);
+    if original == HOOK_ORIGINAL_UNSET {
+        return 0;
+    }
+    let original: TraceHookFn = unsafe { std::mem::transmute(original) };
+    unsafe { original(a, b, c, d) }
+}
+
+unsafe fn trace_hook(
+    name: &'static str,
+    original: &'static AtomicUsize,
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    log_line(format_args!(
+        "{name} ENTER rcx=0x{a:x} rdx=0x{b:x} r8=0x{c:x} r9=0x{d:x} {}",
+        snapshot()
+    ));
+    let ret = unsafe { call_original(original, a, b, c, d) };
+    log_line(format_args!(
+        "{name} LEAVE ret=0x{ret:x} rcx=0x{a:x} rdx=0x{b:x} r8=0x{c:x} r9=0x{d:x} {}",
+        snapshot()
+    ));
+    ret
+}
+
+macro_rules! define_trace_hook {
+    ($fn_name:ident, $original:ident, $label:literal) => {
+        unsafe extern "system" fn $fn_name(a: usize, b: usize, c: usize, d: usize) -> usize {
+            unsafe { trace_hook($label, &$original, a, b, c, d) }
+        }
+    };
+}
+
+define_trace_hook!(
+    hook_title_confirm,
+    ORIG_TITLE_CONFIRM,
+    "title_confirm_b0e180"
+);
+define_trace_hook!(
+    hook_request_load_slot,
+    ORIG_REQUEST_LOAD_SLOT,
+    "request_load_slot_67b200"
+);
+define_trace_hook!(
+    hook_request_profile_read,
+    ORIG_REQUEST_PROFILE_READ,
+    "request_profile_read_67b1a0"
+);
+define_trace_hook!(hook_b80_poll, ORIG_B80_POLL, "b80_poll_679180");
+define_trace_hook!(hook_slot_deser, ORIG_SLOT_DESER, "slot_deser_67b290");
+define_trace_hook!(
+    hook_dispatcher2,
+    ORIG_DISPATCHER2,
+    "movemap_dispatcher2_afb880"
+);
+define_trace_hook!(
+    hook_dosave_stuff,
+    ORIG_DOSAVE_STUFF,
+    "movemap_do_save_stuff_afbad0"
+);
+define_trace_hook!(
+    hook_map_request_do,
+    ORIG_MAP_REQUEST_DO,
+    "map_request_do_836f30"
+);
+define_trace_hook!(hook_map_work, ORIG_MAP_WORK, "map_work_82faf0");
+
+static HOOKS: &[HookSpec] = &[
+    HookSpec {
+        name: "title_confirm_b0e180",
+        rva: 0xb0e180,
+        detour: hook_title_confirm,
+        original: &ORIG_TITLE_CONFIRM,
+    },
+    HookSpec {
+        name: "request_load_slot_67b200",
+        rva: 0x67b200,
+        detour: hook_request_load_slot,
+        original: &ORIG_REQUEST_LOAD_SLOT,
+    },
+    HookSpec {
+        name: "request_profile_read_67b1a0",
+        rva: 0x67b1a0,
+        detour: hook_request_profile_read,
+        original: &ORIG_REQUEST_PROFILE_READ,
+    },
+    HookSpec {
+        name: "b80_poll_679180",
+        rva: 0x679180,
+        detour: hook_b80_poll,
+        original: &ORIG_B80_POLL,
+    },
+    HookSpec {
+        name: "slot_deser_67b290",
+        rva: 0x67b290,
+        detour: hook_slot_deser,
+        original: &ORIG_SLOT_DESER,
+    },
+    HookSpec {
+        name: "movemap_dispatcher2_afb880",
+        rva: 0xafb880,
+        detour: hook_dispatcher2,
+        original: &ORIG_DISPATCHER2,
+    },
+    HookSpec {
+        name: "movemap_do_save_stuff_afbad0",
+        rva: 0xafbad0,
+        detour: hook_dosave_stuff,
+        original: &ORIG_DOSAVE_STUFF,
+    },
+    HookSpec {
+        name: "map_request_do_836f30",
+        rva: 0x836f30,
+        detour: hook_map_request_do,
+        original: &ORIG_MAP_REQUEST_DO,
+    },
+    HookSpec {
+        name: "map_work_82faf0",
+        rva: 0x82faf0,
+        detour: hook_map_work,
+        original: &ORIG_MAP_WORK,
+    },
+];
+
+fn install_hooks() {
+    reset_log_file();
+    log_line(format_args!(
+        "er-reload-trace-dll attach: trampoline/log-only build; no input, save redirect, autoload, game task, or game-state writes"
+    ));
+    let Some(base) = game_base() else {
+        log_line(format_args!("install abort: game module base unresolved"));
+        return;
+    };
+    let init_status = unsafe { MH_Initialize() };
+    if init_status != MH_OK && init_status != MH_ERROR_ALREADY_INITIALIZED {
+        log_line(format_args!(
+            "MinHook initialize failed status={init_status}"
+        ));
+        return;
+    }
+    for spec in HOOKS {
+        install_one(base, spec);
+    }
+    log_line(format_args!("install complete {}", snapshot()));
+}
+
+fn install_one(base: usize, spec: &HookSpec) {
+    let target = base + spec.rva;
+    let mut trampoline: *mut c_void = null_mut();
+    let create_status = unsafe {
+        MH_CreateHook(
+            target as *mut c_void,
+            spec.detour as *mut c_void,
+            &mut trampoline,
+        )
+    };
+    if create_status != MH_OK {
+        log_line(format_args!(
+            "hook {} rva=0x{:x} target=0x{target:x} create failed status={create_status}",
+            spec.name, spec.rva
+        ));
+        return;
+    }
+    spec.original.store(trampoline as usize, Ordering::SeqCst);
+    let enable_status = unsafe { MH_EnableHook(target as *mut c_void) };
+    if enable_status != MH_OK && enable_status != MH_ERROR_ENABLED {
+        log_line(format_args!(
+            "hook {} rva=0x{:x} target=0x{target:x} enable failed status={enable_status}",
+            spec.name, spec.rva
+        ));
+        return;
+    }
+    log_line(format_args!(
+        "hook {} rva=0x{:x} target=0x{target:x} trampoline=0x{:x} installed",
+        spec.name, spec.rva, trampoline as usize
+    ));
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn DllMain(
+    _module: *mut c_void,
+    reason: u32,
+    _reserved: *mut c_void,
+) -> i32 {
+    if reason == DLL_PROCESS_ATTACH {
+        let _ = std::thread::Builder::new()
+            .name("er-reload-trace-install".to_owned())
+            .spawn(install_hooks);
+    }
+    DLL_MAIN_SUCCESS
+}

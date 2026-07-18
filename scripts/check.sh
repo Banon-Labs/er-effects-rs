@@ -20,7 +20,11 @@ python3 "$repo_root/scripts/check-native-continue-static.py"
 python3 "$repo_root/scripts/check-menu-constructor-static.py"
 python3 "$repo_root/scripts/check-env-gate-comments.py"
 python3 "$repo_root/scripts/test-env-gate-comments.py"
-command -v cupcake >/dev/null 2>&1 || { echo "missing required command: cupcake" >&2; exit 127; }
+python3 "$repo_root/scripts/check-reload-trace-dll-policy.py" --audit
+command -v cupcake >/dev/null 2>&1 || {
+	echo "missing required command: cupcake" >&2
+	exit 127
+}
 cupcake validate --log-level error
 python3 "$repo_root/scripts/test-cupcake-policies.py"
 python3 "$repo_root/scripts/test-authority-agreement-signal.py"
@@ -39,7 +43,7 @@ shellcheck "$repo_root/scripts/run-me3-product-smoke.sh"
 # a plain cargo check only if cargo-xwin is unavailable (which needs an MSVC toolchain on
 # PATH and will otherwise fail at the C-dependency link step).
 if command -v cargo-xwin >/dev/null 2>&1; then
-  cargo xwin check --manifest-path "$repo_root/Cargo.toml" --target x86_64-pc-windows-msvc
+	cargo xwin check --manifest-path "$repo_root/Cargo.toml" --target x86_64-pc-windows-msvc
 else
-  cargo check --manifest-path "$repo_root/Cargo.toml" --target x86_64-pc-windows-msvc
+	cargo check --manifest-path "$repo_root/Cargo.toml" --target x86_64-pc-windows-msvc
 fi

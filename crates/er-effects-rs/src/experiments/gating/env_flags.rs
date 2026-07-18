@@ -4,8 +4,8 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
-        Arc, Mutex, Once, OnceLock,
         atomic::{AtomicU64, AtomicUsize, Ordering},
+        Arc, Mutex, Once, OnceLock,
     },
     time::{Duration, Instant},
 };
@@ -13,7 +13,7 @@ use std::{
 use std::os::windows::ffi::OsStrExt as _;
 
 use crate::input_blocker::{InputBlocker, InputFlags};
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MhHook, MH_STATUS};
 use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
@@ -21,11 +21,12 @@ use eldenring::{
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
 use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
 use windows::{
+    core::{BOOL, PCSTR},
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
         System::{
             LibraryLoader::{GetModuleHandleA, GetProcAddress},
-            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
+            Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION},
             SystemServices::DLL_PROCESS_ATTACH,
             Threading::GetCurrentProcessId,
         },
@@ -34,7 +35,6 @@ use windows::{
             WM_KEYDOWN, WM_KEYUP,
         },
     },
-    core::{BOOL, PCSTR},
 };
 
 #[allow(unused_imports)]
