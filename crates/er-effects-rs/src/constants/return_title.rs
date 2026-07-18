@@ -297,6 +297,25 @@ pub(crate) const CSFILE_QUEUE_ARRAY_E0_OFFSET: usize = 0xe0;
 pub(crate) const FILECAP_QUEUEFLAGS_89_OFFSET: usize = 0x89;
 /// FD4 file-cap ENQUEUE primitive (deobf VA 0x14269d7b0): `fn(rcx=queue, rdx=cap)`.
 pub(crate) const CSFILE_ENQUEUE_RVA: u32 = 0x0269d7b0;
+/// Warm-reload map-mount GUARD state root (deobf VA 0x143d5df38). The map-mount MenuJob (chain
+/// 0x140836f30 -> ... -> 0x14082dbf0 -> 0x14082faf0) is enqueued only when the change-detector 0x14082d5b0
+/// sees the load-phase state DIFFER from a self-updating cached descriptor. On the warm System->Quit->Load
+/// the cached descriptor already equals the controller (System->Quit resets neither) -> "unchanged" ->
+/// mount SKIPPED -> the block FD4FileCap gets +0x88=4 but +0x90 stays NULL -> WORLD RES WAIT stall.
+/// singleton = *(root + 0x60); the job's cached descriptor is at singleton + 0x1200.
+pub(crate) const MOUNT_GUARD_STATE_ROOT_RVA: u32 = 0x03d5df38;
+/// The change-detector itself (deobf 0x14082d5b0, `fn(rcx=controller, rdx=descriptor) -> al`): al=1 CHANGED
+/// (mount runs + descriptor re-synced), al=0 UNCHANGED (mount skipped). Instrumented read-only to identify
+/// which gate instance is the m28 map-mount (al flips 1 on load1 -> 0 on load2). A clean leaf compare fn.
+pub(crate) const MOUNT_GUARD_DETECTOR_RVA: u32 = 0x0082d5b0;
+pub(crate) const MOUNT_GUARD_SINGLETON_OFFSET: usize = 0x60;
+pub(crate) const MOUNT_GUARD_DESCRIPTOR_OFFSET: usize = 0x1200;
+/// Descriptor mirror: +0x08 = cached u64 id, +0x04 = cached state bits (bits 0,3,4,5,6 mirror the
+/// controller at +0x120/+0x128/+0x130..0x133). Writing id=0 and clearing those bits forces the detector
+/// to return "changed" ONCE (it then re-syncs the descriptor), enqueuing exactly one map mount+bind.
+pub(crate) const MOUNT_GUARD_DESC_ID_OFFSET: usize = 0x08;
+pub(crate) const MOUNT_GUARD_DESC_BITS_OFFSET: usize = 0x04;
+pub(crate) const MOUNT_GUARD_DESC_BITS_CLEAR_MASK: u32 = 0x79;
 /// Mounted-EBL-archive REGISTRY global (deobf VA 0x1448464a8): `R = *(this)`, lazy-created by 0x141f49f60,
 /// resolver 0x141f48b40. This is the container a mount census walks (NOT the CSEblFileManager object at
 /// 0x143d5b078). Container B (the keyed registry) at `R+0x90`(first)/`R+0x98`(last), stride 0x40; per entry

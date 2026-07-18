@@ -1295,6 +1295,14 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         let peak = SWITCH_ORACLE_MAX_STABLE_FRAMES.load(Ordering::SeqCst);
         let n = SWITCH_ORACLE_TICK.fetch_add(1, Ordering::SeqCst) + 1;
         let dropped = !stable && peak >= 30;
+        // FIX: on the second load (in_world), flip the map-mount guard each tick (cooldown-bounded, self-
+        // limiting once the map mounts) so the game re-enqueues the skipped map mount+bind and the block
+        // cap +0x90 is repopulated -> world reaches readiness. Runs every tick (before the periodic emit).
+        crate::experiments::trace::map_mount_guard_flip_tick(
+            IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES,
+            mms_step,
+            sf as i64,
+        );
         if n <= 10 || n % 30 == 0 || matches!(sf, 1 | 60 | 300 | 600) || dropped || mms_step_changed {
             let cls = if peak >= 300 {
                 "LOADED_STABLE"
@@ -1322,7 +1330,12 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             // One-shot; emits the `EBL-MOUNT-CENSUS DONE` measurement semaphore -> the monitor tears down 1s
             // after that exact line. m28 ABSENT in the registry => mount step skipped; m28 present but the
             // block cap +0x90 still null => bind step skipped -- discriminates WHERE the warm-reload guard is.
-            if mms_step == 3 && IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES {
+            // Census is the MEASUREMENT mode (fix disabled via the marker); when the guard-flip FIX is
+            // active it is off, so its DONE line does not trigger a premature census-teardown.
+            if mms_step == 3
+                && IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES
+                && !crate::experiments::trace::blockres_stalecap_fix_enabled()
+            {
                 crate::experiments::trace::run_ebl_mount_census("oracle-mms3");
             }
         }

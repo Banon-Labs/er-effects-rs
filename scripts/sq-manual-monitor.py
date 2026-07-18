@@ -31,7 +31,10 @@ LOG = os.path.join(GAMEDIR, "er-effects-autoload-debug.log")
 START_OFFSET = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 CAP_SECONDS = int(sys.argv[2]) if len(sys.argv) > 2 else 600
 POLL = 1.0
-STALL_SECONDS = 1.0            # no world-load phase progress this long (armed) => THE stall (tear down fast)
+# no world-load phase progress this long (armed) => THE stall. Default 1s (measurement: tear down fast);
+# pass a larger value (argv[3], e.g. 10) for a FIX run so the fix's bounded flips + async mount can play
+# out before a genuine-stall teardown, while WORLD READY (stable>=300) still wins instantly if it works.
+STALL_SECONDS = float(sys.argv[3]) if len(sys.argv) > 3 else 1.0
 LOADED_STABLE_FRAMES = 300     # world entered and held
 READY_PHASE = 10               # loadstate +0x35 == 0x0a
 

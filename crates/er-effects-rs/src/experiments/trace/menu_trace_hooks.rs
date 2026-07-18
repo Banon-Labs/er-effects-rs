@@ -701,6 +701,16 @@ pub(crate) fn install_continue_trace_hooks() {
         // mount_ebl path (asset override), so a second detour collides and corrupts control flow ->
         // boot crash (RIP-outside-.text stack overflow, DLL ec09cb30 2026-07-17). Use the read-only
         // CAPSTATE-SUBSYS globals (repo gate / CSEblFileManager) below, or a sw-breakpoint, instead.
+        // INSTRUMENT: the map-mount change-detector 0x14082d5b0 (clean leaf compare fn). Read-only
+        // forwarding hook to see each gate's controller/descriptor/al on load1 vs load2 and identify the
+        // m28 map-mount gate (al 1->0). This is also where the precise fix will force the m28 result.
+        create_continue_trace_hook(
+            &mut hooks,
+            "mount_guard_detector_82d5b0",
+            MOUNT_GUARD_DETECTOR_RVA,
+            mount_guard_detector_hook as *mut c_void,
+            &MOUNT_GUARD_DETECTOR_ORIG,
+        );
         // NOTE: do NOT detour the map-load orchestrator 0x82dbf0 to observe it -- it is a load-critical,
         // step-dispatched in-game fn and a forwarding detour STALLS the first autoload at "Preparing Save"
         // (DLL 99a12f98, 2026-07-17). Observe it via a sw-breakpoint on MountEblArchive 0x1efc00 (deep
@@ -919,7 +929,7 @@ const BLOCKRES_STALECAP_MAX_RETRIES: usize = 32;
 // the raw pristine stall can still be observed (for the refcount CAPSTATE-DUMP measurement). No env var
 // is read here on purpose (env-gate policy prefers no per-lever env knob). The scoping guard
 // (IN_WORLD_REACHED==YES + exact stuck condition) means the first autoload and normal play are untouched.
-fn blockres_stalecap_fix_enabled() -> bool {
+pub(crate) fn blockres_stalecap_fix_enabled() -> bool {
     !game_directory_path()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("er-effects-blockres-stalecap-fix-DISABLE.txt")
@@ -1162,7 +1172,11 @@ pub(crate) unsafe extern "system" fn worldres_blockres_getter_hook(
             append_autoload_debug(format_args!(
                 "CAPSTATE-SUBSYS: repo_gate(*0x14485cbec)={repo_gate} repo_singleton=0x{repo_singleton:x} csebl_mgr=0x{ebl_mgr:x} csebl_lazy=0x{ebl_mgr_lazy:x} csfile=0x{csfile:x} -- gate==0 => repo-path loss; gate==1 + live mgr => EBL unmount (read yields empty)"
             ));
-            run_ebl_mount_census("getter");
+            // Census only in MEASUREMENT mode (fix disabled via marker); off when the guard-flip fix is
+            // active so its DONE line does not trigger a premature census-teardown of a fix/instrument run.
+            if !blockres_stalecap_fix_enabled() {
+                run_ebl_mount_census("getter");
+            }
         }
     }
     ret
@@ -1215,6 +1229,124 @@ pub(crate) fn run_ebl_mount_census(src: &str) {
     append_autoload_debug(format_args!(
         "EBL-MOUNT-CENSUS DONE: m28_hits={m28_hits} of {count} entries (src={src}) -- 0 => m28 archive NOT mounted on load 2 (mount-skip root)"
     ));
+}
+
+pub(crate) static MOUNT_GUARD_DETECTOR_ORIG: AtomicUsize = AtomicUsize::new(0);
+static MOUNT_GUARD_DET_LOGS_L1: AtomicUsize = AtomicUsize::new(0);
+static MOUNT_GUARD_DET_LOGS_L2: AtomicUsize = AtomicUsize::new(0);
+
+/// Read-only instrument of the map-mount change-detector 0x14082d5b0 (rcx=controller, rdx=descriptor -> al
+/// in rax; al=1 CHANGED->mount runs, al=0 UNCHANGED->mount skipped). Logs controller id/bits (+0x120 id,
+/// +0x128/+0x130/+0x131/+0x132/+0x133 bits) + descriptor id/bits (+0x08 id, +0x04 bits) + al, tagged by
+/// load phase, so the m28 gate is the one whose al is 1 on load1 (in_world=false) and 0 on load2
+/// (in_world=true). Separate bounded counters per phase guarantee load-2 coverage. Forwards unchanged.
+pub(crate) unsafe extern "system" fn mount_guard_detector_hook(
+    controller: usize,
+    descriptor: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let ret = unsafe { mms_call_original(&MOUNT_GUARD_DETECTOR_ORIG, controller, descriptor, c, d) };
+    let in_world = IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
+    let n = if in_world {
+        MOUNT_GUARD_DET_LOGS_L2.fetch_add(1, Ordering::SeqCst) + 1
+    } else {
+        MOUNT_GUARD_DET_LOGS_L1.fetch_add(1, Ordering::SeqCst) + 1
+    };
+    let cap = if in_world { 300 } else { 60 };
+    if n <= cap && controller > 0x10000 && descriptor > 0x10000 {
+        let cid = unsafe { safe_read_usize(controller + 0x120) }.unwrap_or(0);
+        let c128 = unsafe { safe_read_u8(controller + 0x128) }.map(|v| v as i32).unwrap_or(-1);
+        let c130 = unsafe { safe_read_u8(controller + 0x130) }.map(|v| v as i32).unwrap_or(-1);
+        let c132 = unsafe { safe_read_u8(controller + 0x132) }.map(|v| v as i32).unwrap_or(-1);
+        let did = unsafe { safe_read_usize(descriptor + 0x08) }.unwrap_or(0);
+        let d04 = unsafe { safe_read_i32(descriptor + 0x04) }.unwrap_or(-1) as u32;
+        append_autoload_debug(format_args!(
+            "MOUNT-GUARD-DET[{}] #{n}: ctrl=0x{controller:x} c_id=0x{cid:x} c128={c128} c130={c130} c132={c132} desc=0x{descriptor:x} d_id=0x{did:x} d04=0x{d04:x} al={} in_world={in_world}",
+            if in_world { "L2" } else { "L1" },
+            ret & 0xff
+        ));
+    }
+    ret
+}
+
+pub(crate) static MOUNT_GUARD_FLIP_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static MOUNT_GUARD_FLIP_LAST_TICK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static MOUNT_GUARD_TICK: AtomicUsize = AtomicUsize::new(0);
+
+/// True when the EBL mounted-archive registry `R = *(EBL_REGISTRY_GLOBAL_RVA)` is null/unreadable, i.e. no
+/// map archive is mounted yet (the mount step has not run). Used to gate the guard-flip: keep flipping
+/// only until the map mounts (R becomes non-null), so the fix self-limits.
+pub(crate) fn ebl_registry_is_null() -> bool {
+    game_rva(EBL_REGISTRY_GLOBAL_RVA)
+        .ok()
+        .and_then(|a| unsafe { safe_read_usize(a) })
+        .filter(|&v| v > 0x10000)
+        .is_none()
+}
+
+/// FIX (RE 2026-07-17): clobber the map-mount guard's cached descriptor so the change-detector 0x14082d5b0
+/// sees "changed" on its next check and enqueues the map-mount MenuJob (mount + bind) on the warm reload,
+/// repopulating the block cap's +0x90. `desc = *(*(MOUNT_GUARD_STATE_ROOT_RVA)+0x60)+0x1200`; write id
+/// (+0x08)=0 and clear bits (+0x04 &= ~0x79). One clobber -> exactly one extra mount (the detector
+/// re-syncs the descriptor on the changed path). Every pointer validated; returns (written, old_id,
+/// old_bits) for the log. No detour of the load-critical orchestrator 0x82dbf0.
+pub(crate) fn force_map_mount_guard_flip() -> (bool, u64, u32) {
+    let Ok(root_addr) = game_rva(MOUNT_GUARD_STATE_ROOT_RVA) else {
+        return (false, 0, 0);
+    };
+    let Some(root) = (unsafe { safe_read_usize(root_addr) }).filter(|&v| v > 0x10000) else {
+        return (false, 0, 0);
+    };
+    let Some(singleton) =
+        (unsafe { safe_read_usize(root + MOUNT_GUARD_SINGLETON_OFFSET) }).filter(|&v| v > 0x10000)
+    else {
+        return (false, 0, 0);
+    };
+    let desc = singleton + MOUNT_GUARD_DESCRIPTOR_OFFSET;
+    let old_id = unsafe { safe_read_usize(desc + MOUNT_GUARD_DESC_ID_OFFSET) }.unwrap_or(0) as u64;
+    let old_bits =
+        unsafe { safe_read_i32(desc + MOUNT_GUARD_DESC_BITS_OFFSET) }.unwrap_or(0) as u32;
+    unsafe {
+        *((desc + MOUNT_GUARD_DESC_ID_OFFSET) as *mut u64) = 0;
+        *((desc + MOUNT_GUARD_DESC_BITS_OFFSET) as *mut u32) =
+            old_bits & !MOUNT_GUARD_DESC_BITS_CLEAR_MASK;
+    }
+    (true, old_id, old_bits)
+}
+
+/// Per-tick driver for the map-mount guard-flip fix, called from the recurring autoload oracle. On a
+/// SECOND load (`in_world`) that is loading (`mms_step >= 0`) but not yet stable (`sf == 0`) and whose map
+/// is not mounted (registry null), flip the guard on an oracle-tick cooldown (so the detector's re-sync
+/// yields at most a mount every ~cooldown ticks), bounded, self-limiting once the map mounts (R non-null).
+pub(crate) fn map_mount_guard_flip_tick(in_world: bool, mms_step: i32, sf: i64) {
+    const COOLDOWN_TICKS: usize = 20;
+    const MAX_FLIPS: usize = 60;
+    let tick = MOUNT_GUARD_TICK.fetch_add(1, Ordering::SeqCst) + 1;
+    if !blockres_stalecap_fix_enabled()
+        || !in_world
+        || mms_step < 0
+        || sf != 0
+        || !ebl_registry_is_null()
+    {
+        return;
+    }
+    let cnt = MOUNT_GUARD_FLIP_COUNT.load(Ordering::SeqCst);
+    if cnt >= MAX_FLIPS {
+        return;
+    }
+    let last = MOUNT_GUARD_FLIP_LAST_TICK.load(Ordering::SeqCst);
+    if cnt != 0 && tick.saturating_sub(last) < COOLDOWN_TICKS {
+        return;
+    }
+    let (ok, old_id, old_bits) = force_map_mount_guard_flip();
+    if ok {
+        let n = MOUNT_GUARD_FLIP_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        MOUNT_GUARD_FLIP_LAST_TICK.store(tick, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "MAP-MOUNT-GUARD-FLIP #{n}: mms_step={mms_step} clobbered guard descriptor (old_id=0x{old_id:x} old_bits=0x{old_bits:x} -> id=0,bits&=~0x79) to force map mount+bind enqueue on the warm reload"
+        ));
+    }
 }
 
 
