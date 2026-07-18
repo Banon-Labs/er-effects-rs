@@ -1552,9 +1552,12 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                     }
                 }
                 let n = SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-                SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(1, Ordering::SeqCst);
+                SYSTEM_QUIT_QUICKLOAD_PHASE.store(
+                    SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF,
+                    Ordering::SeqCst,
+                );
                 append_autoload_debug(format_args!(
-                    "system-quit-quickload: continue_confirm FORWARD #{n} -- native requested-slot proof did not fire for slot={slot}; disarmed GameMan+0xb78 and treating SetState5 handoff as the commit edge (runtime evidence: b78=slot re-enters 0x67141a, b78=-1 reaches MoveMap)"
+                    "system-quit-quickload: continue_confirm FORWARD #{n} -- native requested-slot proof did not fire for slot={slot}; disarmed GameMan+0xb78 and holding phase at AUTOLOAD_HANDOFF until stable-world proof fires (runtime evidence: setting DONE/IDLE here lets the next switch overlap unfinished MoveMap)"
                 ));
             }
             {
@@ -1572,8 +1575,10 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                 // makes the in-world load guards inert (they gate on [CONFIRMED, AUTOLOAD_HANDOFF)), so
                 // the native world stream is unobstructed, and leaves the session clean for the next
                 // switch (also the durable fix for the post-switch hygiene issue er-effects-rs-qwj).
-                SYSTEM_QUIT_QUICKLOAD_PHASE
-                    .store(SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE, Ordering::SeqCst);
+                SYSTEM_QUIT_QUICKLOAD_PHASE.store(
+                    SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF,
+                    Ordering::SeqCst,
+                );
                 // CLEAR the stale in-world load arm. product-core armed GameMan+0xb78 = slot MANY
                 // times before this confirm (title.rs, phase 3-4). Phase -> IDLE stops FURTHER arming
                 // but leaves b78 = slot RESIDENT; once our SetState5 world comes up, the in-world
@@ -1661,7 +1666,7 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                 SYSTEM_QUIT_INGAME_TOP_WINDOW.store(0, Ordering::SeqCst);
                 SYSTEM_QUIT_OPTION_SETTING_WINDOW.store(0, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
-                    "system-quit-quickload: native Continue handoff commit OK #{n} slot={slot} -- forwarding continue_confirm so SetState5 streams; phase -> IDLE + cleared GameMan+0xb78=-1 + cleared return-title rebuild flags (menuData+0x5d, DAT, save_requested, warp_requested) + RESET return-title one-shots (request/submit/final-functor) so the NEXT switch starts boot-fresh (er-effects-rs-qwj repeatable switching)"
+                    "system-quit-quickload: native Continue handoff commit OK #{n} slot={slot} -- forwarding continue_confirm so SetState5 streams; phase stays AUTOLOAD_HANDOFF until stable-world proof + cleared GameMan+0xb78=-1 + cleared return-title rebuild flags (menuData+0x5d, DAT, save_requested, warp_requested) + RESET return-title one-shots (request/submit/final-functor); stable proof will arm the NEXT switch"
                 ));
             }
         }

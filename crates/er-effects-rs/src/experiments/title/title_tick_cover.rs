@@ -1926,12 +1926,24 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         // exactly like the boot autoload. Boot has no System-Quit phase, and at a fresh title there is
         // no local player, so this passes immediately there. See bd
         // system-quit-return-title-scaleform-race-2026-07-01.
-        if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
+        let current_switch_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+        if current_switch_phase != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
             && unsafe { PlayerIns::local_player_mut() }.is_ok()
         {
             if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
                 append_autoload_debug(format_args!(
                     "product-core-autoload: SWITCH holding native Continue driving until old world torn down -- local player still present slot={slot} tick={tick}"
+                ));
+            }
+            return true;
+        }
+        if current_switch_phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
+            && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) != 0
+            && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 0
+        {
+            if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
+                append_autoload_debug(format_args!(
+                    "product-core-autoload: SWITCH post-Continue handoff waiting for stable-world proof -- phase={current_switch_phase} slot={slot}; not driving another Continue"
                 ));
             }
             return true;
