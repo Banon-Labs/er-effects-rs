@@ -218,7 +218,105 @@ def main() -> int:
         "expected IDLEHOLD on the prior (interrupted) turn",
     )
 
-    print("idle-hold signal tests passed (9 cases)")
+    # ---- VERBOSEPAUSE (tightened rule 2026-07-17) -------------------------------------------------
+
+    # A long, multi-topic status dump used to end a paused turn (no substantive work, headings +
+    # bullets + numbered list + >450 chars, not blocked on the user).
+    long_pause_message = (
+        "The build subagent is still compiling; here is where things stand while it runs.\n\n"
+        "Progress so far:\n"
+        "- Resolved the SpEffect call list against SpEffectParam and confirmed all 42 rows.\n"
+        "- Rewrote the title-cover oracle to read loadstate the way the game does.\n"
+        "- Verified the +0x35 field stalls below 0x0a in the stale dump.\n\n"
+        "Next steps once the build lands:\n"
+        "1. Re-run the direct offline probe with the freshly built DLL.\n"
+        "2. Capture the loading-screen-portrait moment and pixel-diff the input extremes.\n"
+        "3. Update the semaphore-progress teardown if the switch is still non-deterministic.\n\n"
+        "I expect the compile to finish shortly and will pick this back up then."
+    )
+
+    # (10) Pure pause + LONG message, not blocked on the user -> VERBOSEPAUSE.
+    expect(
+        "verbose-pure-pause-long",
+        [user("Kick off the build."), assistant_text(long_pause_message)],
+        lambda o: o.startswith("VERBOSEPAUSE:"),
+        "expected VERBOSEPAUSE for a pure pause whose message is long/multi-topic",
+    )
+
+    # (11) Pure pause + SHORT, precise blocked note (no idle phrase) -> clean.
+    expect(
+        "verbose-pure-pause-short",
+        [
+            user("Kick off the build."),
+            assistant_text(
+                "Blocked on the release build finishing; nothing non-overlapping remains, "
+                "so I'll resume the moment it returns."
+            ),
+        ],
+        lambda o: o == "",
+        "expected empty for a short, precise blocked-pause note",
+    )
+
+    # (12) LONG message but the turn also does substantive Edit work -> clean (may report results).
+    expect(
+        "verbose-long-with-edit",
+        [
+            user("Kick off the build."),
+            assistant_text(long_pause_message),
+            tool_result(),
+            assistant_edit(),
+        ],
+        lambda o: o == "",
+        "expected empty when a long message accompanies substantive Edit work",
+    )
+
+    # (12b) LONG message but the turn also launches a subagent -> clean.
+    expect(
+        "verbose-long-with-agent",
+        [
+            user("Kick off the build."),
+            assistant_text(long_pause_message),
+            tool_result(),
+            assistant_agent(),
+        ],
+        lambda o: o == "",
+        "expected empty when a long message accompanies an Agent launch",
+    )
+
+    # (13) LONG message that is genuinely BLOCKED ON THE USER -> exempt -> clean.
+    expect(
+        "verbose-long-blocked-on-user",
+        [
+            user("Let's validate the autoload."),
+            assistant_text(
+                "I've reached the point where only a live run can settle this, and that run needs "
+                "your hands on the launcher.\n\n"
+                "Here is exactly what I need you to do:\n"
+                "- Start Steam and log in.\n"
+                "- Run ~/Elden/launch.sh with the quicksave profile and the default APPDATA save.\n"
+                "- Tell me what the loading-screen portrait shows when PRESS ANY BUTTON appears.\n\n"
+                "I cannot proceed without that observation because the semaphore only asserts on a "
+                "real character load, so I am blocked on you until you can run it."
+            ),
+        ],
+        lambda o: o == "",
+        "expected empty for a long message that is genuinely blocked on the user",
+    )
+
+    # (14) LONG message but only a status-peek Bash (tail) -> still a pure pause -> VERBOSEPAUSE.
+    expect(
+        "verbose-long-with-status-peek",
+        [
+            user("Kick off the build."),
+            assistant_text(long_pause_message),
+            tool_result(),
+            assistant_bash("tail -n 40 target/build.log"),
+        ],
+        lambda o: o.startswith("VERBOSEPAUSE:"),
+        "expected VERBOSEPAUSE when a long pause turn's only Bash is a status peek",
+    )
+
+    print("idle-hold signal tests passed (15 cases)")
     return 0
 
 

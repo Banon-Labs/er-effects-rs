@@ -47,6 +47,34 @@ test_reason_mentions_nonoverlapping_and_justification if {
 	contains(d.reason, "would normally have done")
 }
 
+# A VERBOSEPAUSE tag halts under the distinct verbose-pause rule.
+test_halt_on_verbosepause_signal if {
+	halts := guard.halt with input as stop_event("VERBOSEPAUSE:612")
+	"ER-EFFECTS-NO-VERBOSE-PAUSE" in rule_ids(halts)
+}
+
+# A VERBOSEPAUSE tag must NOT also trip the idle-hold halt (the bare-fallback excludes it).
+test_verbosepause_does_not_also_idlehold if {
+	halts := guard.halt with input as stop_event("VERBOSEPAUSE:612")
+	not "ER-EFFECTS-NO-IDLE-HOLD" in rule_ids(halts)
+}
+
+# The verbose-pause reason demands a short blocked-note and forbids status/plans, and echoes the count.
+test_verbose_reason_mentions_short_and_terse if {
+	halts := guard.halt with input as stop_event("VERBOSEPAUSE:612")
+	some d in halts
+	d.rule_id == "ER-EFFECTS-NO-VERBOSE-PAUSE"
+	contains(d.reason, "short")
+	contains(d.reason, "blocked")
+	contains(d.reason, "612")
+}
+
+# A VERBOSEPAUSE object-shaped signal ({output: ...}) halts too.
+test_halt_on_verbosepause_object_signal if {
+	halts := guard.halt with input as stop_event_object_signal("VERBOSEPAUSE:900")
+	"ER-EFFECTS-NO-VERBOSE-PAUSE" in rule_ids(halts)
+}
+
 # No idle hold -> no halt (empty signal).
 test_no_halt_on_clean_turn if {
 	halts := guard.halt with input as stop_event("")

@@ -25,6 +25,12 @@ has_standing_reminder(ctxs) if {
 	startswith(c, "NEVER IDLE-HOLD:")
 }
 
+has_verbose_interlock(ctxs) if {
+	some c in ctxs
+	startswith(c, "INTERLOCK TRIPPED:")
+	contains(c, "long message")
+}
+
 # The standing reminder is injected on every UserPromptSubmit, even with a clean prior turn.
 test_standing_reminder_always_present if {
 	ctxs := guard.add_context with input as ups_event("")
@@ -56,6 +62,34 @@ test_interlock_on_object_signal if {
 		"signals": {"last_assistant_idle_hold": {"output": "IDLEHOLD:holding for", "exit_code": 0}},
 	}
 	has_interlock(ctxs)
+}
+
+# A VERBOSEPAUSE tag trips the distinct verbose-pause interlock backstop.
+test_verbose_interlock_on_verbosepause_signal if {
+	ctxs := guard.add_context with input as ups_event("VERBOSEPAUSE:612")
+	has_verbose_interlock(ctxs)
+}
+
+# The standing reminder still rides alongside a VERBOSEPAUSE interlock.
+test_standing_reminder_with_verbosepause if {
+	ctxs := guard.add_context with input as ups_event("VERBOSEPAUSE:612")
+	has_standing_reminder(ctxs)
+}
+
+# A VERBOSEPAUSE tag must NOT trip the idle-hold interlock text (no phrase fallback).
+test_verbosepause_not_idlehold_interlock if {
+	ctxs := guard.add_context with input as ups_event("VERBOSEPAUSE:612")
+	every c in ctxs {
+		not contains(c, "unjustified hold/idle")
+	}
+}
+
+# The standing reminder now carries the terse-when-blocked tightening.
+test_standing_reminder_mentions_terse_when_blocked if {
+	ctxs := guard.add_context with input as ups_event("")
+	some c in ctxs
+	startswith(c, "NEVER IDLE-HOLD:")
+	contains(c, "SHORT")
 }
 
 # Whitespace-only signal is treated as clean -> no interlock.

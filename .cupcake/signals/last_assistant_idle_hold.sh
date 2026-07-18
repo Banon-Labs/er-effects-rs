@@ -26,6 +26,16 @@
 # ("waiting for user confirmation", "holding for the user to drive", "I'll wait for you") is NOT
 # idling -- the agent genuinely cannot proceed -- so those are excluded from the phrase hit.
 #
+# TIGHTENED RULE (persistent user directive 2026-07-17): a blocked-pause message must be TERSE. When a
+# turn ends as a PURE PAUSE (no substantive tool_use) that is NOT blocked on the user, and its message
+# is LONG / multi-topic (>450 chars, OR >3 sentences, OR any heading/bullet/numbered line, OR more than
+# one paragraph), the signal emits  VERBOSEPAUSE:<n-chars>  instead of IDLEHOLD. This closes the gap
+# where the idle-hold rule accepted a long "justified" hold: a genuinely blocked pause must be ONLY a
+# short, precise statement of what it is blocked on -- no status summaries, findings recaps, plans, or
+# next-step narration. VERBOSEPAUSE takes precedence over IDLEHOLD and fires even when justification
+# prose is present (that verbose justified hold is exactly what the new rule bans). A turn that did
+# substantive work, or one genuinely blocked on the USER, is exempt.
+#
 # WHY A WHOLE-TURN SCAN + BOTH EVENTS: mirrors last_assistant_authority_agreement -- an early-message
 # slip must not be masked by a later clean block (whole-turn scan), and an INTERRUPTED turn fires no
 # Stop event, so the same signal is routed into the UserPromptSubmit interlock which always runs.
@@ -182,7 +192,72 @@ def find_idle_phrase(text):
     return None
 
 
+# --- VERBOSEPAUSE (tightened rule, user directive 2026-07-17) -------------------------------------
+# When a turn ends as a PURE PAUSE (no substantive tool_use) whose final message is LONG / multi-topic,
+# the blocked-pause message is too verbose: a genuinely blocked pause must be ONLY a short, precise
+# statement of what it is blocked on -- no status summaries, findings recaps, plans, or next-step
+# narration. This TIGHTENS the idle-hold rule, which previously accepted a long "justified" hold as
+# fine; a verbose justified hold is now a violation. A wait genuinely blocked on the USER (awaiting
+# their answer/drive) is exempt, as is any turn that did substantive work. Emitted as VERBOSEPAUSE:<n>
+# (n = char count of the message). VERBOSEPAUSE takes precedence over IDLEHOLD (its "be terse"
+# guidance is the more specific correction, and it must fire even when a justification paragraph is
+# present -- that is exactly the long "justified" hold the new rule bans).
+
+# Phrases that mean the turn is legitimately BLOCKED ON THE USER (awaiting their answer/drive). Kept
+# specific so an incidental "you"/"your" in ordinary prose does not over-exempt a verbose pause.
+USER_WAIT_RE = re.compile(
+    r"\bwait(?:ing)?\s+for\s+(?:the\s+)?(?:user|you)\b"
+    r"|\bblocked\s+on\s+(?:the\s+)?(?:user|you)\b"
+    r"|\b(?:awaiting|await)\s+(?:the\s+)?(?:user'?s?|your)\b"
+    r"|\bneed\s+(?:the\s+)?(?:user|you)\s+to\b"
+    r"|\b(?:for|until)\s+you\s+to\b"
+    r"|\bi'?ll\s+wait\s+for\s+you\b"
+    r"|\bover\s+to\s+you\b"
+    r"|\bhand(?:ing)?\s+(?:it\s+|this\s+)?(?:back\s+|off\s+)?to\s+you\b",
+    re.IGNORECASE,
+)
+
+
+def blocked_on_user(text):
+    return bool(USER_WAIT_RE.search(text))
+
+
+# Long / multi-topic heuristic: a blocked-pause note should be one or two short sentences. Flag when the
+# message is >450 chars, OR has >3 sentences, OR contains any heading/bullet/numbered line, OR spans
+# more than one paragraph (blank-line separated). Returns the char count when long, else None.
+HEADING_BULLET_RE = re.compile(r"(?m)^\s*(?:#{1,6}\s|[-*+]\s|\d+[.)]\s)")
+PARAGRAPH_BREAK_RE = re.compile(r"\n\s*\n")
+
+
+def verbose_char_count(text):
+    t = text.strip()
+    n = len(t)
+    if n == 0:
+        return None
+    if n > 450:
+        return n
+    if PARAGRAPH_BREAK_RE.search(t):
+        return n
+    if HEADING_BULLET_RE.search(t):
+        return n
+    sentences = [s for s in re.split(r"[.!?]+(?:\s|$)", t) if s.strip()]
+    if len(sentences) > 3:
+        return n
+    return None
+
+
 phrase = find_idle_phrase(scrubbed)
-if phrase and not turn_has_work and not JUSTIFY_RE.search(scrubbed):
+
+# A pure-pause turn (no substantive tool_use) that is NOT blocked on the user and whose message is long
+# -> VERBOSEPAUSE. Measured on the raw last-turn text (not the quote-scrubbed copy) so length is not
+# undercounted; user-block is checked on the scrubbed copy so a merely-quoted "wait for you" does not
+# exempt.
+verbose_n = None
+if not turn_has_work and not blocked_on_user(scrubbed):
+    verbose_n = verbose_char_count(last_turn)
+
+if verbose_n is not None:
+    sys.stdout.write("VERBOSEPAUSE:" + str(verbose_n))
+elif phrase and not turn_has_work and not JUSTIFY_RE.search(scrubbed):
     sys.stdout.write("IDLEHOLD:" + phrase)
 PY
