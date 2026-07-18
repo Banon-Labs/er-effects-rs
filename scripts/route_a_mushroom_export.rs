@@ -30,6 +30,7 @@ const ROUTE_A_ARM_SHOULDER_OUTWARD_OFFSET: f32 = 0.33;
 const ROUTE_A_ARM_UPPER_OUTWARD_OFFSET: f32 = 0.27;
 const ROUTE_A_ARM_FOREARM_OUTWARD_OFFSET: f32 = 0.10;
 const ROUTE_A_ARM_HAND_OUTWARD_OFFSET: f32 = 0.02;
+const ROUTE_A_ARM_FOREARM_TO_HAND_ABS_X: f32 = 0.99;
 const ROUTE_A_TORSO_X_SCALE: f32 = 1.0;
 const ROUTE_A_TORSO_Z_SCALE: f32 = 1.0;
 const ROUTE_A_CAP_X_SCALE: f32 = 1.0;
@@ -173,6 +174,7 @@ struct RouteAParams {
     arm_hand_outward_offset: f32,
     arm_upper_to_shoulder_abs_x: f32,
     arm_forearm_to_upper_abs_x: f32,
+    arm_forearm_to_hand_abs_x: f32,
     torso_x_scale: f32,
     torso_z_scale: f32,
     cap_x_scale: f32,
@@ -194,6 +196,7 @@ impl Default for RouteAParams {
             arm_hand_outward_offset: ROUTE_A_ARM_HAND_OUTWARD_OFFSET,
             arm_upper_to_shoulder_abs_x: 0.42,
             arm_forearm_to_upper_abs_x: 0.52,
+            arm_forearm_to_hand_abs_x: ROUTE_A_ARM_FOREARM_TO_HAND_ABS_X,
             torso_x_scale: ROUTE_A_TORSO_X_SCALE,
             torso_z_scale: ROUTE_A_TORSO_Z_SCALE,
             cap_x_scale: ROUTE_A_CAP_X_SCALE,
@@ -289,6 +292,9 @@ fn parse_args() -> Result<Config, Box<dyn std::error::Error>> {
             "--arm-forearm-to-upper-abs-x" => {
                 params.arm_forearm_to_upper_abs_x = required_value(&arg, args.next())?.parse()?;
             }
+            "--arm-forearm-to-hand-abs-x" => {
+                params.arm_forearm_to_hand_abs_x = required_value(&arg, args.next())?.parse()?;
+            }
             "--torso-x-scale" => {
                 params.torso_x_scale = required_value(&arg, args.next())?.parse()?;
             }
@@ -342,6 +348,7 @@ fn print_help() {
     println!("  --arm-hand-out <float>              default: {ROUTE_A_ARM_HAND_OUTWARD_OFFSET}");
     println!("  --arm-upper-to-shoulder-abs-x <float> default: 0.42");
     println!("  --arm-forearm-to-upper-abs-x <float> default: 0.52");
+    println!("  --arm-forearm-to-hand-abs-x <float>  default: {ROUTE_A_ARM_FOREARM_TO_HAND_ABS_X}");
     println!("  --torso-x-scale <float>            default: {ROUTE_A_TORSO_X_SCALE}");
     println!("  --torso-z-scale <float>            default: {ROUTE_A_TORSO_Z_SCALE}");
     println!("  --cap-x-scale <float>              default: {ROUTE_A_CAP_X_SCALE}");
@@ -721,6 +728,11 @@ fn write_obj(
     )?;
     writeln!(
         file,
+        "# arm_forearm_to_hand_abs_x={}",
+        params.arm_forearm_to_hand_abs_x
+    )?;
+    writeln!(
+        file,
         "# torso_scales={},{} cap_scales={},{} torso_start_norm_y={} cap_start_norm_y={}",
         params.torso_x_scale,
         params.torso_z_scale,
@@ -1015,6 +1027,11 @@ fn write_summary(path: &Path, config: &Config, mesh: &ExportedMesh) -> io::Resul
         "arm_hand_outward_offset={:.9}",
         config.params.arm_hand_outward_offset
     )?;
+    writeln!(
+        file,
+        "arm_forearm_to_hand_abs_x={:.9}",
+        config.params.arm_forearm_to_hand_abs_x
+    )?;
     writeln!(file, "torso_x_scale={:.9}", config.params.torso_x_scale)?;
     writeln!(file, "torso_z_scale={:.9}", config.params.torso_z_scale)?;
     writeln!(file, "cap_x_scale={:.9}", config.params.cap_x_scale)?;
@@ -1100,8 +1117,10 @@ fn er_target_for_vertex(
     };
     match base_target {
         "L_UpperArm" if vertex.position.x < params.arm_upper_to_shoulder_abs_x => "L_Shoulder",
+        "L_Forearm" if vertex.position.x >= params.arm_forearm_to_hand_abs_x => "L_Hand",
         "L_Forearm" if vertex.position.x < params.arm_forearm_to_upper_abs_x => "L_UpperArm",
         "R_UpperArm" if vertex.position.x > -params.arm_upper_to_shoulder_abs_x => "R_Shoulder",
+        "R_Forearm" if vertex.position.x <= -params.arm_forearm_to_hand_abs_x => "R_Hand",
         "R_Forearm" if vertex.position.x > -params.arm_forearm_to_upper_abs_x => "R_UpperArm",
         "L_Thigh" if normalized_y < 0.10 => "L_Foot",
         "L_Thigh" if normalized_y < 0.24 => "L_Calf",
@@ -1114,8 +1133,8 @@ fn er_target_for_vertex(
 fn bone_map_note(source: &BoneName) -> &'static str {
     match source.as_str() {
         "LLeg1" | "RLeg1" => "single source leg bone; first proof maps to ER thigh and may need calf/foot paint after preview",
-        "LArmPalm" | "RArmPalm" => "stub-arm mode: palm collapsed to forearm to avoid human hand-on-hip idle pose",
-        s if s.contains("Digit") => "stub-arm mode: digits collapsed to forearm to avoid human hand-on-hip idle pose",
+        "LArmPalm" | "RArmPalm" => "palm starts from forearm target; --arm-forearm-to-hand-abs-x can hand-anchor distal vertices for weapon grip alignment",
+        s if s.contains("Digit") => "digits start from forearm target; --arm-forearm-to-hand-abs-x can hand-anchor distal vertices for weapon grip alignment",
         "Spine3" | "Neck" | "Head" => "upper body/cap support",
         _ => "direct or coarse first-proof mapping",
     }

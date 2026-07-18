@@ -211,6 +211,7 @@ Useful slider args forwarded to route_a_mushroom_export:
   --arm-forearm-out <float>             outward forearm offset
   --arm-upper-to-shoulder-abs-x <float> inner upper-arm threshold remapped to shoulder
   --arm-forearm-to-upper-abs-x <float>  inner forearm threshold remapped to upper arm
+  --arm-forearm-to-hand-abs-x <float>   outer forearm threshold remapped to hand/weapon grip
   --vertical-stretch <float>            mushroom height stretch
   --torso-x-scale <float>               shrink/widen non-arm torso/body band
   --torso-z-scale <float>               flatten/deepen non-arm torso/body band
@@ -220,10 +221,10 @@ Useful slider args forwarded to route_a_mushroom_export:
   --cap-start-norm-y <float>            normalized height where cap scaling starts
 
 Example build-only custom profile:
-  bash scripts/route_a_mushroom_build_arm_sweep.sh --label trial --arm-x-swell 1.04 --arm-z-swell 1.25 --arm-shoulder-out 0.44 --arm-upper-out 0.34 --arm-forearm-out 0.12 --arm-upper-to-shoulder-abs-x 0.48 --arm-forearm-to-upper-abs-x 0.52 --torso-x-scale 0.88 --cap-x-scale 0.92
+  bash scripts/route_a_mushroom_build_arm_sweep.sh --label trial --arm-x-swell 1.04 --arm-z-swell 1.25 --arm-shoulder-out 0.44 --arm-upper-out 0.34 --arm-forearm-out 0.12 --arm-upper-to-shoulder-abs-x 0.48 --arm-forearm-to-upper-abs-x 0.52 --arm-forearm-to-hand-abs-x 0.48 --torso-x-scale 0.88 --cap-x-scale 0.92
 
 Example build and launch custom profile:
-  bash scripts/route_a_mushroom_build_arm_sweep.sh --label trial --launch --arm-x-swell 1.04 --arm-z-swell 1.25 --arm-shoulder-out 0.44 --arm-upper-out 0.34 --arm-forearm-out 0.12 --arm-upper-to-shoulder-abs-x 0.48 --arm-forearm-to-upper-abs-x 0.52 --torso-x-scale 0.88 --cap-x-scale 0.92
+  bash scripts/route_a_mushroom_build_arm_sweep.sh --label trial --launch --arm-x-swell 1.04 --arm-z-swell 1.25 --arm-shoulder-out 0.44 --arm-upper-out 0.34 --arm-forearm-out 0.12 --arm-upper-to-shoulder-abs-x 0.48 --arm-forearm-to-upper-abs-x 0.52 --arm-forearm-to-hand-abs-x 0.48 --torso-x-scale 0.88 --cap-x-scale 0.92
 EOF
 }
 
