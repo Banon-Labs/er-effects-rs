@@ -5,6 +5,7 @@ Run with Blender's Python, not system Python. This script uses the installed
 Soulstruct Blender add-on to import FLVERs, then writes a comparison .blend and
 metrics JSON under target/mushroom-route-a-offline/blender-compare/.
 """
+
 from __future__ import annotations
 
 import json
@@ -82,19 +83,34 @@ def log(message: str) -> None:
     sys.stdout.write(message + "\n")
     sys.stdout.flush()
     with LOG_PATH.open("a", encoding="utf-8") as log_file:
-        log_file.write(message + "\n")  # pi-lens-ignore: python-thread-global-write — false positive; sequential log write, no threading
+        log_file.write(
+            message + "\n"
+        )  # pi-lens-ignore: python-thread-global-write — false positive; sequential log write, no threading
 
 
 def require_path(path: Path) -> None:
     if not path.exists():
-        raise FileNotFoundError(path)  # pi-lens-ignore: python-thread-global-write — false positive; exception construction, no threading
+        raise FileNotFoundError(
+            path
+        )  # pi-lens-ignore: python-thread-global-write — false positive; exception construction, no threading
 
 
 def prepare_dirs() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    LOG_PATH.write_text("", encoding="utf-8")  # pi-lens-ignore: python-thread-global-write — false positive; fixed output path, no threading
-    PROJECT_ROOT.mkdir(parents=True, exist_ok=True)  # pi-lens-ignore: python-thread-global-write — false positive; fixed output path, no threading
-    for directory_name in ("parts", "chr", "map", "obj", "asset", "material"):  # pi-lens-ignore: python-thread-global-write — false positive; sequential setup loop, no threading
+    LOG_PATH.write_text(
+        "", encoding="utf-8"
+    )  # pi-lens-ignore: python-thread-global-write — false positive; fixed output path, no threading
+    PROJECT_ROOT.mkdir(
+        parents=True, exist_ok=True
+    )  # pi-lens-ignore: python-thread-global-write — false positive; fixed output path, no threading
+    for directory_name in (
+        "parts",
+        "chr",
+        "map",
+        "obj",
+        "asset",
+        "material",
+    ):  # pi-lens-ignore: python-thread-global-write — false positive; sequential setup loop, no threading
         (PROJECT_ROOT / directory_name).mkdir(exist_ok=True)
 
 
@@ -105,7 +121,9 @@ def enable_soulstruct() -> None:
         save_result = bpy.ops.wm.save_userpref()
         log(f"save_userpref={save_result}")
     except Exception as ex:  # noqa: BLE001 - Blender may refuse in factory/background mode.  # pi-lens-ignore: bare-except — Blender operators can throw broad runtime exceptions.
-        log(f"save_userpref_warning={ex}")  # pi-lens-ignore: python-thread-global-write — false positive; sequential log write, no threading
+        log(
+            f"save_userpref_warning={ex}"
+        )  # pi-lens-ignore: python-thread-global-write — false positive; sequential log write, no threading
 
 
 def configure_soulstruct_game(game_enum: str) -> None:
@@ -125,7 +143,9 @@ def configure_soulstruct_game(game_enum: str) -> None:
             try:
                 import_settings[property_name] = False
             except Exception as ex:  # noqa: BLE001 - Blender RNA properties can reject assignment.  # pi-lens-ignore: bare-except — Blender RNA assignment can throw broad runtime exceptions.
-                log(f"import_setting_warning {property_name}={ex}")  # pi-lens-ignore: python-thread-global-write — false positive; sequential log write, no threading
+                log(
+                    f"import_setting_warning {property_name}={ex}"
+                )  # pi-lens-ignore: python-thread-global-write — false positive; sequential log write, no threading
 
 
 def clear_scene() -> None:
@@ -167,16 +187,22 @@ def import_flver(path: Path, game_enum: str, collection_name: str, color):
     collection = make_collection(collection_name)
     before = {obj.name for obj in bpy.context.scene.objects}
     try:
-        result = bpy.ops.import_scene.flver(directory=str(path.parent) + "\\", files=[{"name": path.name}])
+        result = bpy.ops.import_scene.flver(
+            directory=str(path.parent) + "\\", files=[{"name": path.name}]
+        )
         log(f"import_flver {path.name} result={result}")
     except RuntimeError as ex:
-        if "view3d.view_selected" not in str(ex):  # pi-lens-ignore: bare-except — RuntimeError is intentionally filtered to one Blender background-mode warning.
+        if (
+            "view3d.view_selected" not in str(ex)
+        ):  # pi-lens-ignore: bare-except — RuntimeError is intentionally filtered to one Blender background-mode warning.
             raise
         log(f"import_flver {path.name} background_view_warning={ex}")
     objects = [obj for obj in bpy.context.scene.objects if obj.name not in before]
     move_to_collection(objects, collection)
     color_mesh_objects(objects, color)
-    log(f"import_flver {path.name} objects={len(objects)} meshes={sum(obj.type == 'MESH' for obj in objects)}")
+    log(
+        f"import_flver {path.name} objects={len(objects)} meshes={sum(obj.type == 'MESH' for obj in objects)}"
+    )
     return objects
 
 
@@ -235,14 +261,25 @@ def add_bbox(name: str, metrics: dict, color) -> None:
         (mins[0], maxs[1], maxs[2]),
     ]
     edges = [
-        (0, 1), (1, 2), (2, 3), (3, 0),
-        (4, 5), (5, 6), (6, 7), (7, 4),
-        (0, 4), (1, 5), (2, 6), (3, 7),
+        (0, 1),
+        (1, 2),
+        (2, 3),
+        (3, 0),
+        (4, 5),
+        (5, 6),
+        (6, 7),
+        (7, 4),
+        (0, 4),
+        (1, 5),
+        (2, 6),
+        (3, 7),
     ]
     mesh = bpy.data.meshes.new(name + " mesh")
     mesh.from_pydata(verts, edges, [])
     mesh.update()  # pi-lens-ignore: python-thread-global-write — false positive; Blender mesh update on single thread
-    obj = bpy.data.objects.new(name, mesh)  # pi-lens-ignore: python-thread-global-write — false positive; Blender object creation on single thread
+    obj = bpy.data.objects.new(
+        name, mesh
+    )  # pi-lens-ignore: python-thread-global-write — false positive; Blender object creation on single thread
     collection = bpy.data.collections[BBOX_COLLECTION]
     collection.objects.link(obj)
     obj.display_type = "WIRE"
@@ -285,8 +322,12 @@ def main() -> None:
     clear_scene()
     make_collection(BBOX_COLLECTION)
 
-    player_objects = import_flver(PLAYER_FLVER, "ELDEN_RING", PLAYER_COLLECTION, COLOR_PLAYER)
-    raw_objects = import_flver(RAW_MUSHROOM_FLVER, "DARK_SOULS_DSR", RAW_COLLECTION, COLOR_RAW)
+    player_objects = import_flver(
+        PLAYER_FLVER, "ELDEN_RING", PLAYER_COLLECTION, COLOR_PLAYER
+    )
+    raw_objects = import_flver(
+        RAW_MUSHROOM_FLVER, "DARK_SOULS_DSR", RAW_COLLECTION, COLOR_RAW
+    )
     route_a_objects = import_obj(route_a_obj, ROUTE_A_COLLECTION, COLOR_ROUTE_A)
 
     metrics = {
@@ -303,12 +344,22 @@ def main() -> None:
     route_a_height = metrics["route_a_current"]["dims"][2]
     raw_height = metrics["raw_c2280"]["dims"][2]
     metrics["ratios"] = {
-        "raw_height_over_player_height": raw_height / player_height if player_height else None,
-        "route_a_height_over_player_height": route_a_height / player_height if player_height else None,
+        "raw_height_over_player_height": raw_height / player_height
+        if player_height
+        else None,
+        "route_a_height_over_player_height": route_a_height / player_height
+        if player_height
+        else None,
     }
 
-    add_bbox("player FC_M_0000 bounds", metrics["player_fc_m_0000"], COLOR_PLAYER_BOUNDS)
-    add_bbox("current Route A mushroom bounds", metrics["route_a_current"], COLOR_MUSHROOM_BOUNDS)
+    add_bbox(
+        "player FC_M_0000 bounds", metrics["player_fc_m_0000"], COLOR_PLAYER_BOUNDS
+    )
+    add_bbox(
+        "current Route A mushroom bounds",
+        metrics["route_a_current"],
+        COLOR_MUSHROOM_BOUNDS,
+    )
     label = (
         "Mushroom/player comparison scene\n"
         "Blue: ER FC_M_0000 player reference\n"
