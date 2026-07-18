@@ -1375,17 +1375,28 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         // frozen -- i.e. the child's step handler is not ticking at all, a task-starvation freeze, NOT a bc4
         // gate. So this only keeps bc4 from interfering; the real freeze is handled elsewhere. Deterministic
         // (keyed on the functor one-shot), fires effectively once. Game-thread; `gm` non-null per outer guard.
-        if bc4v == GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY
-            && SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT.load(Ordering::SeqCst) > 0
-        {
+        let post_continue_stable_pending_for_bc4 = SYSTEM_QUIT_QUICKLOAD_PHASE
+            .load(Ordering::SeqCst)
+            >= SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
+            && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) != 0
+            && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 0;
+        let bc4_ready_done = bc4v == GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY
+            && (SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT.load(Ordering::SeqCst) > 0
+                || post_continue_stable_pending_for_bc4);
+        if bc4_ready_done {
             unsafe {
                 *((gm + GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET) as *mut i32) = 0;
             }
             return_title_job_predicate_bc4 = 0;
             let n = SYSTEM_QUIT_LOAD3_FINALIZE_CLEAR_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
             if n <= 5 || n % 60 == 0 {
+                let source = if post_continue_stable_pending_for_bc4 {
+                    "post-Continue stable wait"
+                } else {
+                    "final functor fired"
+                };
                 append_autoload_debug(format_args!(
-                    "system-quit-quickload: restored bc4->0 after final functor fired #{n} (bc4=READY had done its one job: firing the functor; cleared so it does not gate the incoming world's STEP_MoveMap)"
+                    "system-quit-quickload: restored bc4->0 after {source} #{n} (bc4=READY had done its return-title job; cleared so it does not gate the incoming world's STEP_MoveMap)"
                 ));
             }
         }
@@ -1473,58 +1484,10 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         // -> SetState 6->2 -> our autoload re-drives -> loop = the soft-lock). Holding b78=-1 once committed
         // keeps the loaded world up. Inert before the feed (latch still 0 -> b78=slot fires the initial load
         // exactly as before) and reset for the next genuine pick, so switch 1's initial load is unchanged.
-        let switch_stable_proven =
-            SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 1;
-        let phase_for_b78 = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
-        let continue_forwarded =
-            SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) != 0;
-        let b80_load_in_progress =
-            unsafe { safe_read_u8(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }
-                .map(|b| b as i32)
-                .unwrap_or(-1);
-        let (post_b78_ig_d8, post_b78_mms_step) = if owner != TITLE_OWNER_SCAN_START_ADDRESS {
-            let ig = unsafe { safe_read_usize(owner + 0x2e8) }.filter(|&v| v > 0x10000);
-            let ig_d8 = ig
-                .and_then(|ig| unsafe { safe_read_i32(ig + 0xd8) })
-                .unwrap_or(-1);
-            let mms_step = ig
-                .and_then(|ig| unsafe { safe_read_usize(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) })
-                .filter(|&v| v > 0x10000)
-                .and_then(|mms| unsafe { safe_read_i32(mms + INGAMESTEP_STEP_STATE_OFFSET) })
-                .unwrap_or(-1);
-            (ig_d8, mms_step)
-        } else {
-            (-1, -1)
-        };
-        const GAME_MAN_RETURN_TITLE_JOB_PREDICATE_DONE_LOCAL: usize = 3;
-        const MOVEMAPSTEP_STEP_HORSE_WAIT_INDEX_LOCAL: i32 = 17;
-        let pulse_b78_for_late_movemap_pump = !switch_stable_proven
-            && phase_for_b78 >= SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
-            && continue_forwarded
-            && world_up
-            && return_title_job_predicate_bc4 == GAME_MAN_RETURN_TITLE_JOB_PREDICATE_DONE_LOCAL
-            && b80_load_in_progress == 0
-            && post_b78_ig_d8 == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING
-            && (MOVEMAPSTEP_STEP_HORSE_WAIT_INDEX_LOCAL..=MOVEMAPSTEP_STEP_MOVEMAP_INDEX)
-                .contains(&post_b78_mms_step);
-        // Runtime ac9ed1db proved `b78=slot` from clean title through SetState5 re-enters
-        // the 0x67141a redundant-load crash. Runtime f23401b9 then proved the opposite
-        // extreme (`b78=-1` forever) starves FUN_140afb970's bVar5 pump gate at the exact
-        // post-Continue bc4=3 / MoveMapStep=18 state. Runtime 4bc34091 showed the same
-        // starvation begins one native substep earlier at mms_step=17(HORSE WAIT), immediately
-        // before the visible 18/20 lock and 0x67141a. Therefore only pulse b78 in that late
-        // already-loaded-but-not-controllable pump window, and clear it everywhere else.
-        let b78_val = if pulse_b78_for_late_movemap_pump {
-            if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
-                append_autoload_debug(format_args!(
-                    "system-quit-quickload: pulsing GameMan+0xb78={slot} for post-Continue late MoveMap pump gate (phase={phase_for_b78} bc4={return_title_job_predicate_bc4} ig_d8={post_b78_ig_d8} mms_step={post_b78_mms_step} b80={b80_load_in_progress}) -- narrow bVar5 unblock; clear outside this state"
-                ));
-            }
-            slot
-        } else {
-            OWN_STEPPER_SLOT_NONE
-        };
-        unsafe { *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) = b78_val };
+        // Runtime 6d7fdd89 proved any post-Continue write to GameMan+0xb78 is still the
+        // native requested-slot load branch (`FUN_14067b2f0`) and re-enters the 0x67141a
+        // crash path. Keep it disarmed here; do not use b78 as a progress mechanism.
+        unsafe { *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) = OWN_STEPPER_SLOT_NONE };
         // CLEAR THE QUIT-SAVE REQUEST FLAGS DURING TEARDOWN (2026-07-16, Ghidra + runtime proven root).
         // The old world's MoveMapStep leaves its resident STEP_MoveMap(18) step only when the "ending
         // request" sub-machine (MoveMapStep.field25_0x12a, in FUN_140afa7c0, ticked by the MoveMap update
@@ -1561,7 +1524,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             let requested_slot = unsafe { safe_read_i32(gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) }
                 .unwrap_or(OWN_STEPPER_SLOT_NONE);
             append_autoload_debug(format_args!(
-                "system-quit-quickload: requested save-slot load index world_up={world_up} wrote gm_b78={b78_val} (read_back={requested_slot}) selected_slot={slot} phase={} bc4=0x{return_title_job_predicate_bc4:x}",
+                "system-quit-quickload: requested save-slot load index world_up={world_up} kept gm_b78=-1 (read_back={requested_slot}) selected_slot={slot} phase={} bc4=0x{return_title_job_predicate_bc4:x}",
                 SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
             ));
             // save-gate diag DURING the stall (bc4=1): the quit-save orchestrator FUN_140afb970 (RE 1.16.1)
