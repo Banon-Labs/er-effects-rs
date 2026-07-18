@@ -12,6 +12,14 @@
 /// (compile-time accuracy guarantee, replacing the hand-decoded hex constants).
 pub(crate) const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize =
     core::mem::offset_of!(GameDataMan, main_player_game_data);
+/// `GameDataMan::play_time` (u32, in-game play time in milliseconds, maxed at 999:59:59.999).
+/// WORLD-LIVE LIVENESS signal for the render gate: the game advances this clock only while the
+/// world simulation is actually stepping; it is PAUSED during loads/menus/frozen-world states.
+/// So a rising `oracle_play_time_ms` across a dwell window proves the world is live (not a
+/// render-frozen "present but nothing moving" reload). Bound to the typed layout so it tracks
+/// fromsoftware-rs and fails the build on struct drift.
+pub(crate) const GAME_DATA_MAN_PLAY_TIME_A0_OFFSET: usize =
+    core::mem::offset_of!(GameDataMan, play_time);
 pub(crate) const PGD_CURRENT_HP_10_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, current_hp);
 pub(crate) const PGD_CURRENT_MAX_HP_14_OFFSET: usize =

@@ -1,6 +1,11 @@
 # Goal: Repeatable Multi-Save Character Loading (Acceptance Criteria)
 
-**Status:** open. **Authored:** 2026-07-18 from a live goal-refinement Q&A with the user.
+**Status:** **OPEN — reopened 2026-07-18.** An earlier "vanilla core PROVEN" claim was a **false
+pass**: the harness verified logical load (identity+stats+gear+present) but not that the character
+actually *rendered and the world resumed*, so it passed a reload that was frozen and invisible in a
+live product run. §4 has been tightened with a hard render gate + a stable-before-next sequencing
+gate; the goal is not met until a run passes the revised gate. **Authored:** 2026-07-18 from a live
+goal-refinement Q&A with the user; **revised** 2026-07-18 after the live product-route freeze.
 **Invoke a fresh session with:** `/goal complete the acceptance criteria of ./docs/goals/repeatable-multi-save-load-acceptance.md`
 
 > Read the linked `bd` memories FIRST (see [Context to load](#context-to-load-read-first)).
@@ -64,16 +69,48 @@ A **single bounded autonomous run** that a fresh session can launch and that:
    - **Identity** — loaded character name matches the selected `(file, slot)`.
    - **Stats** — a few RAM-read stats (e.g. level/rune-level/attributes) match that save.
    - **Gear spot-check** — an equipment/inventory item expected from that save is present.
-   - **Controllable in-world** — player available/controllable, world ready.
-5. Observes **zero crashes and zero stalls** across all loads (the teardown+startup path must work
-   **generically**, not just for one character).
-6. **Logs per-load timings** (do **not** gate pass/fail on speed this round).
-7. Emits a **short human-readable report**: files × characters covered, per-load timings, and any
-   cataloged bad/invalid saves.
-8. Exit 0 == **PROVEN**. Timings and the report are the morning-review artifact.
+   - **Stable & playable in-world — the HARD RENDER GATE (added 2026-07-18 after a live product run
+     exposed a render-frozen reload that the old "controllable" wording passed).** "Present" is not
+     enough: the character must be *rendering* and the world *running*. ALL of these RAM fields must
+     hold, and hold **continuously for a dwell window of ≥ 5 s** — a single-frame blip does not count:
+       - `oracle_player_render_ready == true`, which the DLL derives as chr-model-instance present
+         **AND** `chr_ins.load_state.draw_group_enabled()` **AND** `chr_flags1c4.is_render_group_enabled()`
+         **AND** `chr_flags1c5.enable_render()`. This is the **exact** combination that was `false` in
+         the 2026-07-18 freeze.
+       - `oracle_chr_draw_group_enabled == true` — kept explicit; it was *the* failing field
+         (present + controllable-by-model, yet draw group off ⇒ invisible).
+       - Loading screen actually **dismissed**: `oracle_fake_loading_any_visible == false` (in the
+         freeze the cover stayed `true`). **Correction (2026-07-18, evidence-based):** the earlier
+         wording also required `oracle_now_loading` cleared, but that field is
+         `CSNowLoadingHelperImp::load_done` — a load-*complete* latch that **lingers `true` into normal
+         gameplay** and was observed as **both 0 and 1** across render-frozen snapshots (some freezes
+         had `now_loading == 0`). Gating on `now_loading == 0` therefore both false-fails good loads
+         and false-passes a `now_loading == 0` freeze, so it is **not** part of the gate;
+         `oracle_fake_loading_any_visible == false` is the authoritative cover-dismissed signal and
+         `now_loading` is logged for diagnostics only.
+       - **World is live, not frozen** — a per-frame liveness signal advances across the dwell window
+         while render-ready holds (e.g. character model draw hits climbing, or havok position /
+         animation time progressing). The user's "in-world but nothing is moving" must **FAIL** here.
+5. Observes **zero crashes and zero stalls** across all loads — where a **stall explicitly INCLUDES
+   the "logically loaded but render-frozen" state**: character present / controllable-by-model but
+   `player_render_ready == false`, draw group disabled, or the loading cover never lifts. The
+   teardown+startup path must work **generically**, not just for one character.
+6. **Sequencing gate — prove each load STABLE before the next load is triggered.** The run is a
+   strict chain: trigger load *N* → wait until load *N* passes the full §4.4 stable-&-playable dwell
+   (or hits its per-load deadline) → **only then** trigger load *N+1*. A load that reaches "present"
+   but never passes the dwell within its deadline is a **FAIL/stall** for that character; the run
+   stops and reports failure — it does **not** advance to the next character. The final character in
+   the chain must also pass the dwell. No load may be counted on a one-frame or unheld signal.
+7. **Logs per-load timings** (do **not** gate pass/fail on speed this round), including time-to-stable
+   (present → dwell-passed) per load, so a slow-but-eventually-stable load is distinguishable from a
+   never-stabilizes stall.
+8. Emits a **short human-readable report**: files × characters covered, per-load timings +
+   time-to-stable, and any cataloged bad/invalid saves.
+9. Exit 0 == **PROVEN**. Timings and the report are the morning-review artifact.
 
-Success is generic repeatability: **if we cannot load multiple characters in a row, the goal is
-not met**, regardless of how well any single load works.
+Success is generic **stable** repeatability: **if we cannot load multiple characters in a row and
+prove each one rendered-and-playable before moving on, the goal is not met**, regardless of how well
+any single logical load works. A load that is "present" but frozen is a FAIL, not a pass.
 
 ## 5. Invariants the harness must assert & verify (not build)
 
@@ -125,11 +162,22 @@ not met**, regardless of how well any single load works.
 
 ## 9. Known central blocker to solve
 
-Repeated loads currently **crash or stall at MoveMapStep 18** during the world teardown+reload
-(game assertion → AV `rva=0x1eb9999`). Load #1 is fine; the *reload* path is the unsolved core.
-Prior narrow fixes (disarming the return-title) either regress switching or don't fire. The real
-fix is making the native teardown+load of a new character complete reliably (own the native load
-path). See the `bd` chain below.
+Two failure modes, both on the *reload* path (load #1 / boot autoload is fine):
+
+1. **MoveMapStep 18 crash/stall** during world teardown+reload (game assertion → AV `rva=0x1eb9999`).
+   Prior narrow fixes (disarming the return-title) either regress switching or don't fire.
+2. **Render-handoff freeze (found 2026-07-18, live product route).** The reload can complete
+   *logically* — old world torn down, slot re-deserialized, `WORLDRES` runs to completion, MoveMap
+   finishes, DLL logs "stable in-world" — yet the game's **end-of-load render handoff never fires**:
+   `oracle_player_render_ready == false`, `chr_ins.load_state.draw_group_enabled() == false`,
+   `oracle_now_loading` stuck, loading cover never lifts. Character is present but invisible and the
+   world is frozen. The character draw group is a *game* field; the synthetic `own_load_switch_reload_fire`
+   → `SetState5` reload path skips whatever step the game normally uses to re-enable it and mark the
+   player render-ready. RE where the game enables `chr_ins.load_state.draw_group` at load-complete
+   and drive/allow that step on the reload.
+
+The real fix is making the native teardown+load of a new character complete reliably **and hand off
+to a live, rendered, moving world** — own the native load path end to end. See the `bd` chain below.
 
 ## 10. Context to load (read first)
 
@@ -157,7 +205,9 @@ path). See the `bd` chain below.
 ## 11. One-line definition of done
 
 > A single autonomous, bounded, non-cyclic run loads ≥3 valid vanilla save files' characters
-> (per-character and cross-file) after the initial auto-load — each verified by RAM as the right
-> character (identity+stats+gear) and controllable — with zero crashes/stalls, read-only sources,
-> timings logged, and a short human-readable pass/fail report. Seamless the same, timeboxed after
-> vanilla.
+> (per-character and cross-file) after the initial auto-load. For each, in strict sequence, it
+> proves via RAM the right character (identity+stats+gear) **AND that the character is
+> render-ready + drawing + the world live (`player_render_ready` held ≥5 s, loading cover gone),
+> before triggering the next load** — with zero crashes and zero stalls (a present-but-frozen load
+> counts as a stall/FAIL), read-only sources, timings + time-to-stable logged, and a short
+> human-readable pass/fail report. Seamless the same, timeboxed after vanilla.

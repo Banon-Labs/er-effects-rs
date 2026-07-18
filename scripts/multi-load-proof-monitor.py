@@ -124,6 +124,62 @@ def controllable(tel: dict) -> bool:
     return bool(player and ctrl)
 
 
+# ---- HARD RENDER GATE (docs/goals/repeatable-multi-save-load-acceptance.md §4.4, revised 2026-07-18) ----
+# The 2026-07-18 render-freeze false-pass proved "present + controllable-by-model" is NOT enough: the
+# character can be present yet invisible (draw group off) in a frozen world. These gate on the DLL's
+# render-readiness oracles + a WORLD-LIVE liveness clock, held continuously for a dwell window.
+DWELL_SECONDS = 5.0            # §4.4: render-ready must hold CONTINUOUSLY this long (no one-frame blips)
+LIVENESS_MIN_PLAY_MS = 250     # over a >=5s dwell a live world advances play_time ~5000ms; 250 is a safe floor
+HAVOK_EPS = 1e-3               # fallback liveness (no play_time): world-position movement threshold
+
+
+def render_ready(tel: dict) -> bool:
+    """The HARD render gate: the character is actually rendering and the loading cover is dismissed.
+    - oracle_player_render_ready == true (DLL ANDs: chr-model+ctrl present, draw_group_enabled,
+      is_render_group_enabled, enable_render) -- the exact combination that was FALSE in the freeze.
+    - oracle_chr_draw_group_enabled == true -- kept explicit; it was THE failing field.
+    - oracle_fake_loading_any_visible == false -- the loading cover is actually gone.
+    NOTE (evidence-based deviation from §4.4's literal 'oracle_now_loading cleared'): oracle_now_loading
+    is CSNowLoadingHelperImp::load_done, a load-COMPLETE latch that reads TRUE and LINGERS into normal
+    gameplay (per the DLL RE comment in write_game_module_oracles.rs), and across captured frozen
+    snapshots it was observed as BOTH 0 and 1 -- so it does NOT discriminate frozen vs live and
+    requiring ==0 would false-fail good loads (or false-pass a now_loading==0 freeze). The real
+    cover-dismissed signal is oracle_fake_loading_any_visible==false, which was TRUE in every frozen
+    snapshot. now_loading is reported for diagnostics only, never gated on."""
+    return (
+        tel.get("oracle_player_render_ready") is True
+        and tel.get("oracle_chr_draw_group_enabled") is True
+        and tel.get("oracle_fake_loading_any_visible") is False
+    )
+
+
+def liveness_of(tel: dict) -> dict:
+    """A snapshot of world-liveness signals for dwell comparison. Primary = play_time_ms (the game's
+    own in-game play clock, which advances ONLY while the world sim steps and is paused during
+    loads/menus/frozen states). Secondary (fallback if play_time is unavailable) = world position."""
+    pt = tel.get("oracle_play_time_ms")
+    pos = tel.get("oracle_havok_pos")
+    return {
+        "play_ms": pt if isinstance(pt, (int, float)) and pt >= 0 else None,
+        "pos": tuple(pos) if isinstance(pos, (list, tuple)) and len(pos) == 3 else None,
+    }
+
+
+def liveness_advanced(a: dict, b: dict) -> bool:
+    """True iff the world genuinely advanced between two liveness samples. If play_time is available at
+    both ends it is AUTHORITATIVE (a frozen world's play clock does not tick, so havok jitter cannot
+    rescue it -- matching §4.4's 'nothing moving must FAIL'). Only when play_time is absent do we fall
+    back to world-position movement."""
+    pa, pb = a.get("play_ms"), b.get("play_ms")
+    if pa is not None and pb is not None:
+        return (pb - pa) >= LIVENESS_MIN_PLAY_MS
+    qa, qb = a.get("pos"), b.get("pos")
+    if qa is not None and qb is not None:
+        d2 = sum((x - y) ** 2 for x, y in zip(qa, qb))
+        return d2 > (HAVOK_EPS ** 2)
+    return False
+
+
 def log_has_crash(log_path: Path, start_offset: int = 0) -> str | None:
     if not log_path.exists():
         return None
@@ -195,6 +251,24 @@ def process_alive() -> bool:
     ) == 0
 
 
+def world_present(tel: dict) -> bool:
+    """A real character is resident in a loaded world -- WITHOUT the now_loading==0 requirement that
+    ORACLE.stable_world_loaded imposes. Deliberately excludes oracle_now_loading: it is an unreliable
+    load-DONE latch (lingers true in gameplay; observed both 0 and 1 in frozen snapshots), so keying
+    presence on it both false-fails good loads and false-passes now_loading==0 freezes (the actual
+    2026-07-18 blind spot). The HARD RENDER GATE (render_ready + cover-dismissed), held for the dwell,
+    is what proves the world is finished, rendered, and live -- not now_loading."""
+    player = tel.get("oracle_player_present") is True or tel.get("player_available") is True
+    loaded = (
+        tel.get("oracle_block_id_valid") is True
+        or isinstance(tel.get("oracle_havok_pos"), list)
+        or ORACLE._as_int(tel.get("oracle_saved_map_c30"), -1) not in (-1, 0)
+    )
+    real = (not ORACLE._name_empty_like(tel.get("oracle_char_name"))
+            and ORACLE._as_int(tel.get("oracle_char_level"), 0) > 0)
+    return bool(player and loaded and real)
+
+
 def evaluate_load(exp: dict, tel: dict) -> dict:
     observed = ORACLE.observed_identity(tel)
     return {
@@ -202,13 +276,24 @@ def evaluate_load(exp: dict, tel: dict) -> dict:
         "stats_ok": stats_match(exp, tel),
         "gear_ok": gear_match(exp, tel),
         "controllable_ok": controllable(tel),
-        "stable": ORACLE.stable_world_loaded(tel),
+        "render_ready_ok": render_ready(tel),
+        "world_present": world_present(tel),
+        "stable": ORACLE.stable_world_loaded(tel),  # reported for diagnostics (now_loading-gated)
         "observed": observed,
     }
 
 
+def identity_ok_full(res: dict) -> bool:
+    """The right character is loaded (identity+stats+gear+a real loaded world). Uses world_present
+    (NOT the now_loading-gated `stable`) so the render gate/dwell -- not the unreliable now_loading
+    latch -- decides finished-and-rendered."""
+    return all(res[k] for k in ("identity_ok", "stats_ok", "gear_ok", "world_present"))
+
+
 def load_ok(res: dict) -> bool:
-    return all(res[k] for k in ("identity_ok", "stats_ok", "gear_ok", "controllable_ok", "stable"))
+    """A single-frame snapshot passes ALL gates (used by --replay; the live path additionally
+    enforces the >=5s render-ready dwell + world-live liveness in the monitor loop)."""
+    return identity_ok_full(res) and res.get("render_ready_ok") is True
 
 
 def monitor(artifact_dir: Path, targets: list[dict], per_load_deadline: float,
@@ -227,11 +312,16 @@ def monitor(artifact_dir: Path, targets: list[dict], per_load_deadline: float,
     last_progress = start
     last_verified_identity = None
     crash = None
+    # Per-load dwell state (§4.4 hard render gate + §4.6 sequencing gate). Reset whenever the current
+    # load fails the render gate (a blip restarts the continuous dwell) or a new load index begins.
+    dwell_start_t: float | None = None       # when render-ready+identity first held continuously
+    dwell_start_liveness: dict | None = None # world-liveness sample at dwell start
+    present_since: float | None = None       # when the right identity first became present (for time-to-stable)
 
-    def snapshot_result(i, verdict, res, tel_time):
+    def snapshot_result(i, verdict, res, tel_time, extra=None):
         exp = expected[i]
         e = exp["expected"]
-        return {
+        r = {
             "index": i,
             "role": "initial-autoload" if i == 0 else f"reload-{i}",
             "file": os.path.basename(os.path.dirname(exp["file"])) + "/" + os.path.basename(exp["file"]),
@@ -239,10 +329,25 @@ def monitor(artifact_dir: Path, targets: list[dict], per_load_deadline: float,
             "expected_name": e.get("name"),
             "expected_level": e.get("level"),
             "verdict": verdict,
-            "checks": {k: res.get(k) for k in ("identity_ok", "stats_ok", "gear_ok", "controllable_ok", "stable")} if res else None,
+            "checks": {k: res.get(k) for k in ("identity_ok", "stats_ok", "gear_ok", "controllable_ok", "render_ready_ok", "stable")} if res else None,
             "observed": res.get("observed") if res else None,
             "seconds_since_prev": round(tel_time, 1),
         }
+        if extra:
+            r.update(extra)
+        return r
+
+    def drive_next(next_idx: int):
+        # PROGRAMMATIC DRIVE (§6): trigger the next reload by writing its (file,)slot to the DLL
+        # control files. targets[0] is the boot autoload (TOML), so we only drive reloads (idx>=1).
+        if drive_slot_file is None or next_idx >= len(expected):
+            return
+        try:
+            if drive_file_override is not None:
+                drive_file_override.write_text(_winpath(str(expected[next_idx]["file"])) + "\n")
+            drive_slot_file.write_text(f"{int(expected[next_idx]['slot'])}\n")
+        except OSError:
+            pass
 
     while idx < len(expected):
         now = time.time()
@@ -255,37 +360,60 @@ def monitor(artifact_dir: Path, targets: list[dict], per_load_deadline: float,
         if tel is not None:
             res = evaluate_load(expected[idx]["expected"], tel)
             obs_name = res["observed"].get("name")
-            # A distinct, stable, finished-loading world with the EXPECTED identity == this load done.
-            if res["stable"] and obs_name and obs_name != last_verified_identity:
-                if load_ok(res):
-                    results.append(snapshot_result(idx, "PASS", res, now - last_progress))
-                    last_verified_identity = obs_name
-                    last_progress = now
-                    idx += 1
-                    # PROGRAMMATIC DRIVE: trigger the next reload by writing its slot to the DLL
-                    # control file (the DLL polls it in-world and arms a menu-free switch). targets[0]
-                    # is the boot autoload (TOML), so we only drive reloads (idx>=1).
-                    if drive_slot_file is not None and idx < len(expected):
-                        try:
-                            # cross-file: set the source FILE override first, then the slot (which
-                            # triggers the arm); the DLL reads the file override at reload time.
-                            if drive_file_override is not None:
-                                drive_file_override.write_text(_winpath(str(expected[idx]["file"])) + "\n")
-                            drive_slot_file.write_text(f"{int(expected[idx]['slot'])}\n")
-                        except OSError:
-                            pass
-                    continue
-                # stable but WRONG identity/stats/gear against the expected target for this step
-                elif res["identity_ok"] is False and obs_name != (results[-1]["observed"]["name"] if results else None):
-                    # a different-but-unexpected character stabilized -> mismatch for this step
+            id_match = identity_ok_full(res) and obs_name and obs_name != last_verified_identity
+            # ---- §4.6 SEQUENCING GATE: the right character must be render-ready AND hold that,
+            # world-live, for a >=5s dwell BEFORE we count the load and trigger the next one. ----
+            if id_match and res["render_ready_ok"]:
+                if present_since is None:
+                    present_since = now
+                cur_live = liveness_of(tel)
+                if dwell_start_t is None:
+                    # render gate first satisfied -> begin the continuous dwell
+                    dwell_start_t = now
+                    dwell_start_liveness = cur_live
+                else:
+                    held = (now - dwell_start_t) >= DWELL_SECONDS
+                    live = liveness_advanced(dwell_start_liveness or {}, cur_live)
+                    if held and live:
+                        tts = round(now - present_since, 1) if present_since else None
+                        results.append(snapshot_result(
+                            idx, "PASS", res, now - last_progress,
+                            {"time_to_stable_s": tts, "dwell_s": round(now - dwell_start_t, 1),
+                             "play_ms": cur_live.get("play_ms")}))
+                        last_verified_identity = obs_name
+                        last_progress = now
+                        dwell_start_t = None
+                        dwell_start_liveness = None
+                        present_since = None
+                        idx += 1
+                        drive_next(idx)
+                        continue
+            else:
+                # Render gate NOT satisfied for the target this frame.
+                if id_match and present_since is None:
+                    present_since = now  # right char is present (logically) but not yet render-ready
+                # A blip during dwell (render-ready dropped, or identity changed) breaks continuity:
+                # restart the dwell; the per-load deadline keeps ticking (a never-stabilizing load stalls).
+                dwell_start_t = None
+                dwell_start_liveness = None
+                # a real loaded world with the WRONG identity for this step -> mismatch
+                if res["world_present"] and obs_name and res["identity_ok"] is False \
+                        and obs_name != (results[-1]["observed"]["name"] if results else None):
                     results.append(snapshot_result(idx, "FAIL-MISMATCH", res, now - last_progress))
                     last_progress = now
                     idx += 1
+                    present_since = None
                     continue
-        # stall check
+        # stall check -- INCLUDES the logically-loaded-but-render-frozen state (§4.5): if the right
+        # character became present but never passed the render-ready dwell within the deadline, that is
+        # a STALL/FAIL and the run stops (does NOT advance to the next load, §4.6).
         if not replay and now - last_progress > per_load_deadline:
-            r = snapshot_result(idx, "STALL", None, now - last_progress)
+            frozen = present_since is not None
+            r = snapshot_result(idx, "STALL-RENDER-FROZEN" if frozen else "STALL", None, now - last_progress)
             r["diagnosis"] = stall_diagnosis(log, debug_log_offset)
+            if frozen:
+                r["diagnosis"] = ("present but never render-ready/world-live for the >=5s dwell "
+                                  "(render-handoff freeze); " + r["diagnosis"])
             results.append(r)
             break
         if replay:
@@ -324,18 +452,20 @@ def render_report(summary: dict) -> str:
                  f"crash/stall: {crash or 'none'}; files covered: {len(files)}")
     lines.append(f"Artifact dir: `{summary['artifact_dir']}`  (elapsed {summary['elapsed_s']}s)")
     lines.append("")
-    lines.append("| # | role | file | slot | expect | observed | id | stats | gear | ctrl | stable | Δt(s) | verdict |")
-    lines.append("|---|------|------|------|--------|----------|----|-------|------|------|--------|-------|---------|")
+    lines.append("| # | role | file | slot | expect | observed | id | stats | gear | render | stable | Δt(s) | t2stable(s) | verdict |")
+    lines.append("|---|------|------|------|--------|----------|----|-------|------|--------|--------|-------|-------------|---------|")
     for r in summary["results"]:
         c = r["checks"] or {}
         obs = (r["observed"] or {}).get("name")
         def mark(v):
             return "ok" if v is True else ("--" if v is None else "X")
+        tts = r.get("time_to_stable_s")
         lines.append(
             f"| {r['index']} | {r['role']} | {r['file']} | {r['slot']} | "
             f"{r['expected_name']}/L{r['expected_level']} | {obs} | "
             f"{mark(c.get('identity_ok'))} | {mark(c.get('stats_ok'))} | {mark(c.get('gear_ok'))} | "
-            f"{mark(c.get('controllable_ok'))} | {mark(c.get('stable'))} | {r['seconds_since_prev']} | {r['verdict']} |"
+            f"{mark(c.get('render_ready_ok'))} | {mark(c.get('stable'))} | {r['seconds_since_prev']} | "
+            f"{'--' if tts is None else tts} | {r['verdict']} |"
         )
     lines.append("")
     for r in summary["results"]:
@@ -344,8 +474,11 @@ def render_report(summary: dict) -> str:
     if crash:
         lines.append(f"> CRASH/STALL evidence: `{crash}`")
     lines.append("")
-    lines.append("Load-success oracle = RAM telemetry only (identity+stats+gear+controllable). "
-                 "Timings are Δt between consecutive verified loads (not gated on speed this round).")
+    lines.append("Load-success oracle = RAM telemetry only. PASS requires the HARD RENDER GATE "
+                 "(player_render_ready + chr_draw_group_enabled + loading cover dismissed) held "
+                 f">= {DWELL_SECONDS:.0f}s with the world-live play clock advancing, verified BEFORE the "
+                 "next load is triggered (§4.4/§4.6). 'render'=render gate; t2stable=present->dwell-passed. "
+                 "A present-but-frozen load is a STALL-RENDER-FROZEN FAIL, not a pass.")
     return "\n".join(lines)
 
 
