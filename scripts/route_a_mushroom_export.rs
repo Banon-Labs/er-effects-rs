@@ -889,11 +889,11 @@ fn er_target_for_source_bone(source: &BoneName) -> &'static str {
         "LArm1" => "L_UpperArm",
         "LArm2" => "L_Forearm",
         "LArmPalm" | "LArmDigit11" | "LArmDigit12" | "LArmDigit21" | "LArmDigit22"
-        | "LArmDigit31" | "LArmDigit32" => "L_Hand",
+        | "LArmDigit31" | "LArmDigit32" => "L_Forearm",
         "RArm1" => "R_UpperArm",
         "RArm2" => "R_Forearm",
         "RArmPalm" | "RArmDigit11" | "RArmDigit12" | "RArmDigit21" | "RArmDigit22"
-        | "RArmDigit31" | "RArmDigit32" => "R_Hand",
+        | "RArmDigit31" | "RArmDigit32" => "R_Forearm",
         "LLeg1" => "L_Thigh",
         "RLeg1" => "R_Thigh",
         "c2280" | "Model_Dmy" | "sfx_dummy" | "固定dmy" | "master" => "<unused>",
@@ -913,12 +913,10 @@ fn er_target_for_vertex(
         0.5
     };
     match base_target {
-        "L_UpperArm" if vertex.position.x < 0.36 => "L_Shoulder",
-        "L_Forearm" if vertex.position.x < 0.46 => "L_UpperArm",
-        "L_Hand" if vertex.position.x < 0.56 => "L_Forearm",
-        "R_UpperArm" if vertex.position.x > -0.36 => "R_Shoulder",
-        "R_Forearm" if vertex.position.x > -0.46 => "R_UpperArm",
-        "R_Hand" if vertex.position.x > -0.56 => "R_Forearm",
+        "L_UpperArm" if vertex.position.x < 0.42 => "L_Shoulder",
+        "L_Forearm" if vertex.position.x < 0.52 => "L_UpperArm",
+        "R_UpperArm" if vertex.position.x > -0.42 => "R_Shoulder",
+        "R_Forearm" if vertex.position.x > -0.52 => "R_UpperArm",
         "L_Thigh" if normalized_y < 0.10 => "L_Foot",
         "L_Thigh" if normalized_y < 0.24 => "L_Calf",
         "R_Thigh" if normalized_y < 0.10 => "R_Foot",
@@ -930,8 +928,8 @@ fn er_target_for_vertex(
 fn bone_map_note(source: &BoneName) -> &'static str {
     match source.as_str() {
         "LLeg1" | "RLeg1" => "single source leg bone; first proof maps to ER thigh and may need calf/foot paint after preview",
-        "LArmPalm" | "RArmPalm" => "hand collapse for first proof",
-        s if s.contains("Digit") => "finger digits collapsed to hand for first proof",
+        "LArmPalm" | "RArmPalm" => "stub-arm mode: palm collapsed to forearm to avoid human hand-on-hip idle pose",
+        s if s.contains("Digit") => "stub-arm mode: digits collapsed to forearm to avoid human hand-on-hip idle pose",
         "Spine3" | "Neck" | "Head" => "upper body/cap support",
         _ => "direct or coarse first-proof mapping",
     }
