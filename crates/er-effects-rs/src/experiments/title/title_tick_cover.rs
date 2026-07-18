@@ -1627,8 +1627,22 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             ));
         }
     }
+    let post_continue_stable_pending = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+        >= SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
+        && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) != 0
+        && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 0;
+    if post_continue_stable_pending
+        && SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.load(Ordering::SeqCst) > 0
+        && return_title_job_predicate_bc4 == GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY
+        && tick % OWN_STEPPER_LOG_INTERVAL == null as u64
+    {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: suppressing return-title final-functor retry during post-Continue stable wait (bc4=0x{return_title_job_predicate_bc4:x}); SetState5/MoveMap owns the stream now"
+        ));
+    }
     if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
         >= SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN
+        && !post_continue_stable_pending
         && SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.load(Ordering::SeqCst) > 0
         && return_title_job_predicate_bc4 == GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY
         && SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT
