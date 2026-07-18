@@ -1531,6 +1531,14 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
     c: usize,
     d: usize,
 ) -> usize {
+    // RENDER-HANDOFF FIX ARM (bd er-effects-rs-um9g): this Continue/Load confirm is the common trigger
+    // for BOTH the boot autoload and the in-world reload; it captures GameMan+0xc30 into the TitleStep,
+    // then forwards to SetState5 -> STEP_PlayGame -> InGameStep::RequestMoveMap. On our redirect load the
+    // captured BlockId can be stale/-1, which makes RequestMoveMap skip building the world-res loadlist
+    // path and stall at WorldResWait. Arm the RequestMoveMap fixup here so the upcoming RequestMoveMap
+    // substitutes the freshly-deserialized saved-map BlockId (armed-only + invalid-param2-only, so it is
+    // a no-op for a load whose BlockId is already valid).
+    crate::experiments::own_load::arm_request_move_map_fixup();
     // Continue-trace compat: this unconditional hook replaced the trace-set `cap_continue_confirm`
     // hook on the same address (two MinHooks on one target fail -- the install_c30_writer_hook
     // precedent), so reproduce its logging + confirm latch exactly when tracing is on.

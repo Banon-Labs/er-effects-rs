@@ -51,6 +51,21 @@ pub(crate) const SAVE_DATA_SUBSYSTEM_GATE_RVA: usize = 0x3d68078;
 pub(crate) const INGAMESTEP_TARGET_COORD_100_OFFSET: usize = 0x100;
 pub(crate) const INGAMESTEP_RESMGR_250_OFFSET: usize = 0x250;
 pub(crate) const REQUEST_SUBMIT_RVA: usize = 0xaed820;
+/// `InGameStep::RequestMoveMap` (deobf 0x140aebdc0). Builds the world-res loadlist virtual path via
+/// `DlFixedString::FormatV` -- but ONLY when its `param_2` target BlockId (`*rdx`) is valid
+/// (`!= -1` AND `IsNonDebugArea(area) == area < 0x59`). On our in-memory redirect load the caller
+/// captured a stale/`-1` BlockId (GameMan+0xc30 was set too late), so FormatV is skipped, the loadlist
+/// path stays empty, `STEP_MoveMap_LoadlistInit` builds nothing, `ProcessMsbLoadLists` is a no-op, the
+/// dest `WorldBlockRes` is never created, and `STEP_WorldResWait` (mms_step 3) stalls forever -> the
+/// render-handoff freeze. We hook this and, when armed by our own load trigger and `*param_2` is
+/// invalid, substitute the freshly-deserialized saved-map BlockId from GameMan+0xc30 so the game's own
+/// FormatV -> LoadlistInit -> ProcessMsbLoadLists -> world-stream -> STEP_Finish chain runs natively and
+/// re-enables draw_group + dismisses the loading cover on its own. Root cause RE: bd
+/// render-handoff-freeze-worldreswait-loadlist-root-2026-07-18.
+pub(crate) const REQUEST_MOVE_MAP_RVA: usize = 0xaebdc0;
+/// Area-id ceiling of `IsNonDebugArea` (deobf 0x140720210 == `areaId < 0x59`). A BlockId whose area
+/// byte `((blockid >> 24) & 0xff)` is >= this is a debug area for which RequestMoveMap skips FormatV.
+pub(crate) const REQUEST_MOVE_MAP_NONDEBUG_AREA_CEIL: u32 = 0x59;
 pub(crate) const STREAMING_ENABLE_RVA: usize = 0x66e2e4;
 /// Direct poke of the streaming-enable flag [resmgr+0xb7c1]=1 (the virtual enabler
 /// 0x14066e2e4 crashes -- wrong receiver). The virtual also builds session singletons

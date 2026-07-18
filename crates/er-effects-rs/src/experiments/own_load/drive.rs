@@ -353,6 +353,156 @@ pub(crate) fn install_wbr_update_hook() -> bool {
     }
 }
 
+// ===== RequestMoveMap BlockId fix (render-handoff freeze root fix, bd er-effects-rs-um9g) ==========
+//
+// ROOT (RE render-handoff-freeze-worldreswait-loadlist-root-2026-07-18): our in-memory redirect load
+// reaches STEP_PlayGame with a stale/`-1` target BlockId (GameMan+0xc30 was set too late for the
+// Continue-confirm capture into TitleStep.field10_0xbc), so `InGameStep::RequestMoveMap` skips its
+// `FormatV` that builds the world-res loadlist virtual path -> the dest WorldBlockRes is never created
+// -> STEP_WorldResWait (mms_step 3) stalls forever -> the world never resumes, draw_group never
+// re-enables, the loading cover never lifts (present-but-frozen). FIX (native-ownership, no field
+// poking): hook RequestMoveMap and, when ARMED by our own load trigger, if its target BlockId `*param_2`
+// is invalid, substitute the freshly-deserialized saved-map BlockId from GameMan+0xc30 (a valid BlockId
+// as-is; same encoding, area byte = c30>>24). The game's own FormatV -> LoadlistInit ->
+// ProcessMsbLoadLists -> world-stream -> STEP_Finish chain then runs natively and re-enables render.
+/// Trampoline to the original `InGameStep::RequestMoveMap` (set on hook install).
+static REQUEST_MOVE_MAP_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+/// One-shot install guard.
+static REQUEST_MOVE_MAP_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// ARM latch: our load trigger sets this true right before it drives SetState5/PlayGame, so the fixup
+/// only ever touches a load WE initiated -- normal gameplay map transitions (valid param_2) are never
+/// affected. The hook consumes the arm on the first armed RequestMoveMap call (one-shot per load).
+static REQUEST_MOVE_MAP_FIXUP_ARMED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// Total RequestMoveMap calls seen (telemetry oracle_request_move_map_hook_calls).
+pub(crate) static REQUEST_MOVE_MAP_HOOK_CALLS: AtomicU64 = AtomicU64::new(0);
+/// Times we substituted a valid c30 BlockId into an invalid `*param_2`
+/// (telemetry oracle_request_move_map_hook_fixups). >=1 == the fix fired.
+pub(crate) static REQUEST_MOVE_MAP_FIXUPS: AtomicU64 = AtomicU64::new(0);
+/// Last (param_2-before, c30-substituted) pair, for telemetry/diagnosis.
+pub(crate) static REQUEST_MOVE_MAP_LAST_BEFORE: AtomicU64 = AtomicU64::new(0);
+pub(crate) static REQUEST_MOVE_MAP_LAST_C30: AtomicU64 = AtomicU64::new(0);
+
+/// Arm the RequestMoveMap BlockId fixup for the next load. Call this at a load trigger (own-load
+/// continue / boot autoload SetState5) AFTER the saved map is deserialized into GameMan+0xc30, so the
+/// upcoming STEP_PlayGame -> RequestMoveMap gets a valid target BlockId even if the confirm handler
+/// captured a stale one.
+pub(crate) fn arm_request_move_map_fixup() {
+    REQUEST_MOVE_MAP_FIXUP_ARMED.store(true, Ordering::SeqCst);
+}
+
+/// `__fastcall InGameStep::RequestMoveMap(rcx=InGameStep*, rdx=BlockId* param_2, r8d, r9)` fix detour.
+/// When armed, corrects an invalid target BlockId so FormatV builds the loadlist path. `param_2` points
+/// to a writable caller-stack int in every caller (RE-verified), so `*param_2` is safe to write.
+pub(crate) unsafe extern "system" fn request_move_map_fix_hook(
+    ingame: usize,
+    param2: usize,
+    arg3: usize,
+    arg4: usize,
+) -> usize {
+    REQUEST_MOVE_MAP_HOOK_CALLS.fetch_add(1, Ordering::SeqCst);
+    if REQUEST_MOVE_MAP_FIXUP_ARMED.swap(false, Ordering::SeqCst)
+        && param2 != TITLE_OWNER_SCAN_START_ADDRESS
+    {
+        if let Some(before) = unsafe { safe_read_i32(param2) } {
+            let before_u = before as u32;
+            let before_area = (before_u >> 24) & 0xff;
+            let invalid =
+                before_u == u32::MAX || before_area >= REQUEST_MOVE_MAP_NONDEBUG_AREA_CEIL;
+            let gm = game_man_ptr_or_null();
+            let c30 = if gm != TITLE_OWNER_SCAN_START_ADDRESS {
+                unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }.unwrap_or(-1)
+            } else {
+                -1
+            };
+            let c30_u = c30 as u32;
+            let c30_area = (c30_u >> 24) & 0xff;
+            let c30_valid = c30_u != u32::MAX
+                && c30 != 0
+                && c30_area < REQUEST_MOVE_MAP_NONDEBUG_AREA_CEIL;
+            if invalid && c30_valid {
+                unsafe {
+                    *(param2 as *mut i32) = c30;
+                }
+                REQUEST_MOVE_MAP_FIXUPS.fetch_add(1, Ordering::SeqCst);
+                REQUEST_MOVE_MAP_LAST_BEFORE.store(u64::from(before_u), Ordering::SeqCst);
+                REQUEST_MOVE_MAP_LAST_C30.store(u64::from(c30_u), Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "request-move-map-fix: FIXED *param_2 0x{before_u:x}(area=0x{before_area:x} invalid) -> c30 0x{c30_u:x}(area=0x{c30_area:x}) ingame=0x{ingame:x} -- FormatV will now build the loadlist path"
+                ));
+            } else {
+                append_autoload_debug(format_args!(
+                    "request-move-map-fix: armed call NO-OP param_2=0x{before_u:x}(area=0x{before_area:x} invalid={invalid}) c30=0x{c30_u:x}(valid={c30_valid}) ingame=0x{ingame:x} -- passthrough"
+                ));
+            }
+        }
+    }
+    let orig = REQUEST_MOVE_MAP_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        return TITLE_OWNER_SCAN_START_ADDRESS;
+    }
+    let orig: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    unsafe { orig(ingame, param2, arg3, arg4) }
+}
+
+/// Install the RequestMoveMap BlockId fix detour (MhHook + MH_Initialize + queue_enable +
+/// MH_ApplyQueued), mirroring `install_wbr_update_hook`. Idempotent. Passthrough unless ARMED by our
+/// own load trigger, so installing it unconditionally (product default) never affects normal play.
+pub(crate) fn install_request_move_map_fix_hook() -> bool {
+    if REQUEST_MOVE_MAP_HOOK_INSTALLED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC {
+        return true;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "request-move-map-fix: MH_Initialize failed: {status:?}"
+            ));
+            return false;
+        }
+    }
+    let Ok(addr) = game_rva(REQUEST_MOVE_MAP_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "request-move-map-fix: failed to resolve 0x{REQUEST_MOVE_MAP_RVA:x} rva"
+        ));
+        return false;
+    };
+    match unsafe { MhHook::new(addr as *mut c_void, request_move_map_fix_hook as *mut c_void) } {
+        Ok(hook) => {
+            REQUEST_MOVE_MAP_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "request-move-map-fix: queue_enable failed: {status:?}"
+                ));
+                return false;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    REQUEST_MOVE_MAP_HOOK_INSTALLED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "request-move-map-fix: hooked 0x{addr:x} (armed-only BlockId fixup; passthrough otherwise)"
+                    ));
+                    true
+                }
+                status => {
+                    append_autoload_debug(format_args!(
+                        "request-move-map-fix: MH_ApplyQueued failed: {status:?}"
+                    ));
+                    false
+                }
+            }
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!(
+                "request-move-map-fix: MhHook::new failed: {status:?}"
+            ));
+            false
+        }
+    }
+}
+
 /// Locate the on-disk save file (`.../EldenRing/<steamid>/ER0000.sl2` or `.co2`) and read its bytes.
 /// The directory is built by the NATIVE builder 0x140e0e680 (`SAVE_DIR_BUILDER_RVA`) -- the same
 /// path the engine uses -- so we never hardcode the user-data/steamid prefix. Inside that directory

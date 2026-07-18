@@ -281,6 +281,12 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     {
         install_wbr_update_hook();
     }
+    // PRODUCT DEFAULT (no env gate): install the RequestMoveMap BlockId fix detour once. It is a pure
+    // passthrough unless ARMED by our own load trigger, so it never affects normal gameplay map
+    // transitions; when armed it substitutes a valid saved-map BlockId so the game builds the world-res
+    // loadlist path and the load completes + renders instead of stalling at WorldResWait (bd
+    // er-effects-rs-um9g / render-handoff-freeze-worldreswait-loadlist-root-2026-07-18).
+    install_request_move_map_fix_hook();
     if (own_load_enabled() && OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst))
         || golden_observe_enabled()
     {
