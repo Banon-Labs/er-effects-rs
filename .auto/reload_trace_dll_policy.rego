@@ -10,7 +10,7 @@ default allow := false
 # code, or directly write game memory. The companion checker builds the input facts by
 # scanning crates/er-reload-trace-dll.
 
-minimum_hook_count := 6
+minimum_hook_count := 32
 
 allow if {
 	input.crate_path == "crates/er-reload-trace-dll"

@@ -37,6 +37,23 @@ type TraceHookFn = unsafe extern "system" fn(usize, usize, usize, usize) -> usiz
 static LOG_FILE: OnceLock<Option<Mutex<File>>> = OnceLock::new();
 static EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
 
+static ORIG_MENU_CONTINUE_WRAPPER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_MENU_NEW_OR_LOAD_WRAPPER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_MENU_OTHER_LOAD_WRAPPER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_NATIVE_SUBMIT: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_RESULT_EVENT_HANDLER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_RESULT_ACTION_BUILDER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_RESULT_EVENT_WRAPPER_BUILDER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_TASK_ENQUEUE: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_SET_SAVE_SLOT: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_SAVE_REQUEST_PROFILE: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_REQUEST_SAVE: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_CURRENT_SLOT_LOAD: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_CONTINUE_LOAD: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_COMBINED_LOAD: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_MAP_LOAD: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_SAVE_LOAD_STATE_INIT: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_B80_PREVIEW: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static ORIG_TITLE_CONFIRM: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static ORIG_REQUEST_LOAD_SLOT: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static ORIG_REQUEST_PROFILE_READ: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
@@ -46,6 +63,17 @@ static ORIG_DISPATCHER2: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static ORIG_DOSAVE_STUFF: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static ORIG_MAP_REQUEST_DO: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static ORIG_MAP_WORK: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_CAP_SETSTATE: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_CAP_LOAD_ACTIVATE: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_CAP_LOAD_ACTIVATE2: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_CAP_BUILDER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_CAP_SELECTOR_TICK: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_CAP_MENU_DESER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_CAP_DIALOG_FACTORY: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_MENU_WINDOW_JOB_CTOR: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_MENU_WINDOW_JOB_NATIVE_CTOR_B: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_MENU_WINDOW_JOB_IDLE_CTOR: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_TITLE_NATIVE_READY: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 
 struct HookSpec {
     name: &'static str,
@@ -209,6 +237,75 @@ macro_rules! define_trace_hook {
 }
 
 define_trace_hook!(
+    hook_menu_continue_wrapper,
+    ORIG_MENU_CONTINUE_WRAPPER,
+    "menu_continue_wrapper_82bac0"
+);
+define_trace_hook!(
+    hook_menu_new_or_load_wrapper,
+    ORIG_MENU_NEW_OR_LOAD_WRAPPER,
+    "menu_new_or_load_wrapper_82ba80"
+);
+define_trace_hook!(
+    hook_menu_other_load_wrapper,
+    ORIG_MENU_OTHER_LOAD_WRAPPER,
+    "menu_other_load_wrapper_82bb00"
+);
+define_trace_hook!(
+    hook_native_submit,
+    ORIG_NATIVE_SUBMIT,
+    "native_submit_7ac890"
+);
+define_trace_hook!(
+    hook_result_event_handler,
+    ORIG_RESULT_EVENT_HANDLER,
+    "result_event_handler_746e80"
+);
+define_trace_hook!(
+    hook_result_action_builder,
+    ORIG_RESULT_ACTION_BUILDER,
+    "result_action_builder_746a00"
+);
+define_trace_hook!(
+    hook_result_event_wrapper_builder,
+    ORIG_RESULT_EVENT_WRAPPER_BUILDER,
+    "result_event_wrapper_builder_744a60"
+);
+define_trace_hook!(hook_task_enqueue, ORIG_TASK_ENQUEUE, "task_enqueue_7a7b60");
+define_trace_hook!(
+    hook_set_save_slot,
+    ORIG_SET_SAVE_SLOT,
+    "set_save_slot_67a810"
+);
+define_trace_hook!(
+    hook_save_request_profile,
+    ORIG_SAVE_REQUEST_PROFILE,
+    "save_request_profile_67a420"
+);
+define_trace_hook!(hook_request_save, ORIG_REQUEST_SAVE, "request_save_67a520");
+define_trace_hook!(
+    hook_current_slot_load,
+    ORIG_CURRENT_SLOT_LOAD,
+    "current_slot_load_67b570"
+);
+define_trace_hook!(
+    hook_continue_load,
+    ORIG_CONTINUE_LOAD,
+    "continue_load_67b750"
+);
+define_trace_hook!(
+    hook_combined_load,
+    ORIG_COMBINED_LOAD,
+    "combined_load_67b940"
+);
+define_trace_hook!(hook_map_load, ORIG_MAP_LOAD, "map_load_67bc10");
+define_trace_hook!(
+    hook_save_load_state_init,
+    ORIG_SAVE_LOAD_STATE_INIT,
+    "save_load_state_init_67b030"
+);
+define_trace_hook!(hook_b80_preview, ORIG_B80_PREVIEW, "b80_preview_67b4e0");
+define_trace_hook!(
     hook_title_confirm,
     ORIG_TITLE_CONFIRM,
     "title_confirm_b0e180"
@@ -241,8 +338,157 @@ define_trace_hook!(
     "map_request_do_836f30"
 );
 define_trace_hook!(hook_map_work, ORIG_MAP_WORK, "map_work_82faf0");
+define_trace_hook!(hook_cap_setstate, ORIG_CAP_SETSTATE, "cap_setstate_b0d960");
+define_trace_hook!(
+    hook_cap_load_activate,
+    ORIG_CAP_LOAD_ACTIVATE,
+    "cap_load_activate_9a4670"
+);
+define_trace_hook!(
+    hook_cap_load_activate2,
+    ORIG_CAP_LOAD_ACTIVATE2,
+    "cap_load_activate2_9ac760"
+);
+define_trace_hook!(hook_cap_builder, ORIG_CAP_BUILDER, "cap_builder_826510");
+define_trace_hook!(
+    hook_cap_selector_tick,
+    ORIG_CAP_SELECTOR_TICK,
+    "cap_selector_tick_826d50"
+);
+define_trace_hook!(
+    hook_cap_menu_deser,
+    ORIG_CAP_MENU_DESER,
+    "cap_menu_deser_82c240"
+);
+define_trace_hook!(
+    hook_cap_dialog_factory,
+    ORIG_CAP_DIALOG_FACTORY,
+    "cap_dialog_factory_81ead0"
+);
+define_trace_hook!(
+    hook_menu_window_job_ctor,
+    ORIG_MENU_WINDOW_JOB_CTOR,
+    "menu_window_job_ctor_7ac8c0"
+);
+define_trace_hook!(
+    hook_menu_window_job_native_ctor_b,
+    ORIG_MENU_WINDOW_JOB_NATIVE_CTOR_B,
+    "menu_window_job_native_ctor_b_7acb00"
+);
+define_trace_hook!(
+    hook_menu_window_job_idle_ctor,
+    ORIG_MENU_WINDOW_JOB_IDLE_CTOR,
+    "menu_window_job_idle_ctor_7acf80"
+);
+define_trace_hook!(
+    hook_title_native_ready,
+    ORIG_TITLE_NATIVE_READY,
+    "title_native_ready_733150"
+);
 
 static HOOKS: &[HookSpec] = &[
+    HookSpec {
+        name: "menu_continue_wrapper_82bac0",
+        rva: 0x82bac0,
+        detour: hook_menu_continue_wrapper,
+        original: &ORIG_MENU_CONTINUE_WRAPPER,
+    },
+    HookSpec {
+        name: "menu_new_or_load_wrapper_82ba80",
+        rva: 0x82ba80,
+        detour: hook_menu_new_or_load_wrapper,
+        original: &ORIG_MENU_NEW_OR_LOAD_WRAPPER,
+    },
+    HookSpec {
+        name: "menu_other_load_wrapper_82bb00",
+        rva: 0x82bb00,
+        detour: hook_menu_other_load_wrapper,
+        original: &ORIG_MENU_OTHER_LOAD_WRAPPER,
+    },
+    HookSpec {
+        name: "native_submit_7ac890",
+        rva: 0x7ac890,
+        detour: hook_native_submit,
+        original: &ORIG_NATIVE_SUBMIT,
+    },
+    HookSpec {
+        name: "result_event_handler_746e80",
+        rva: 0x746e80,
+        detour: hook_result_event_handler,
+        original: &ORIG_RESULT_EVENT_HANDLER,
+    },
+    HookSpec {
+        name: "result_action_builder_746a00",
+        rva: 0x746a00,
+        detour: hook_result_action_builder,
+        original: &ORIG_RESULT_ACTION_BUILDER,
+    },
+    HookSpec {
+        name: "result_event_wrapper_builder_744a60",
+        rva: 0x744a60,
+        detour: hook_result_event_wrapper_builder,
+        original: &ORIG_RESULT_EVENT_WRAPPER_BUILDER,
+    },
+    HookSpec {
+        name: "task_enqueue_7a7b60",
+        rva: 0x7a7b60,
+        detour: hook_task_enqueue,
+        original: &ORIG_TASK_ENQUEUE,
+    },
+    HookSpec {
+        name: "set_save_slot_67a810",
+        rva: 0x67a810,
+        detour: hook_set_save_slot,
+        original: &ORIG_SET_SAVE_SLOT,
+    },
+    HookSpec {
+        name: "save_request_profile_67a420",
+        rva: 0x67a420,
+        detour: hook_save_request_profile,
+        original: &ORIG_SAVE_REQUEST_PROFILE,
+    },
+    HookSpec {
+        name: "request_save_67a520",
+        rva: 0x67a520,
+        detour: hook_request_save,
+        original: &ORIG_REQUEST_SAVE,
+    },
+    HookSpec {
+        name: "current_slot_load_67b570",
+        rva: 0x67b570,
+        detour: hook_current_slot_load,
+        original: &ORIG_CURRENT_SLOT_LOAD,
+    },
+    HookSpec {
+        name: "continue_load_67b750",
+        rva: 0x67b750,
+        detour: hook_continue_load,
+        original: &ORIG_CONTINUE_LOAD,
+    },
+    HookSpec {
+        name: "combined_load_67b940",
+        rva: 0x67b940,
+        detour: hook_combined_load,
+        original: &ORIG_COMBINED_LOAD,
+    },
+    HookSpec {
+        name: "map_load_67bc10",
+        rva: 0x67bc10,
+        detour: hook_map_load,
+        original: &ORIG_MAP_LOAD,
+    },
+    HookSpec {
+        name: "save_load_state_init_67b030",
+        rva: 0x67b030,
+        detour: hook_save_load_state_init,
+        original: &ORIG_SAVE_LOAD_STATE_INIT,
+    },
+    HookSpec {
+        name: "b80_preview_67b4e0",
+        rva: 0x67b4e0,
+        detour: hook_b80_preview,
+        original: &ORIG_B80_PREVIEW,
+    },
     HookSpec {
         name: "title_confirm_b0e180",
         rva: 0xb0e180,
@@ -296,6 +542,72 @@ static HOOKS: &[HookSpec] = &[
         rva: 0x82faf0,
         detour: hook_map_work,
         original: &ORIG_MAP_WORK,
+    },
+    HookSpec {
+        name: "cap_setstate_b0d960",
+        rva: 0xb0d960,
+        detour: hook_cap_setstate,
+        original: &ORIG_CAP_SETSTATE,
+    },
+    HookSpec {
+        name: "cap_load_activate_9a4670",
+        rva: 0x9a4670,
+        detour: hook_cap_load_activate,
+        original: &ORIG_CAP_LOAD_ACTIVATE,
+    },
+    HookSpec {
+        name: "cap_load_activate2_9ac760",
+        rva: 0x9ac760,
+        detour: hook_cap_load_activate2,
+        original: &ORIG_CAP_LOAD_ACTIVATE2,
+    },
+    HookSpec {
+        name: "cap_builder_826510",
+        rva: 0x826510,
+        detour: hook_cap_builder,
+        original: &ORIG_CAP_BUILDER,
+    },
+    HookSpec {
+        name: "cap_selector_tick_826d50",
+        rva: 0x826d50,
+        detour: hook_cap_selector_tick,
+        original: &ORIG_CAP_SELECTOR_TICK,
+    },
+    HookSpec {
+        name: "cap_menu_deser_82c240",
+        rva: 0x82c240,
+        detour: hook_cap_menu_deser,
+        original: &ORIG_CAP_MENU_DESER,
+    },
+    HookSpec {
+        name: "cap_dialog_factory_81ead0",
+        rva: 0x81ead0,
+        detour: hook_cap_dialog_factory,
+        original: &ORIG_CAP_DIALOG_FACTORY,
+    },
+    HookSpec {
+        name: "menu_window_job_ctor_7ac8c0",
+        rva: 0x7ac8c0,
+        detour: hook_menu_window_job_ctor,
+        original: &ORIG_MENU_WINDOW_JOB_CTOR,
+    },
+    HookSpec {
+        name: "menu_window_job_native_ctor_b_7acb00",
+        rva: 0x7acb00,
+        detour: hook_menu_window_job_native_ctor_b,
+        original: &ORIG_MENU_WINDOW_JOB_NATIVE_CTOR_B,
+    },
+    HookSpec {
+        name: "menu_window_job_idle_ctor_7acf80",
+        rva: 0x7acf80,
+        detour: hook_menu_window_job_idle_ctor,
+        original: &ORIG_MENU_WINDOW_JOB_IDLE_CTOR,
+    },
+    HookSpec {
+        name: "title_native_ready_733150",
+        rva: 0x733150,
+        detour: hook_title_native_ready,
+        original: &ORIG_TITLE_NATIVE_READY,
     },
 ];
 

@@ -18,6 +18,23 @@ FIELD_RE = re.compile(
     r"\b(?P<key>base|gm|df0|gdm|pgd|mounted_registry)=0x(?P<hex>[0-9a-fA-F]+)|\b(?P<ikey>b78|b80|ac0)=(?P<int>-?\d+|<unreadable>)|\bc30=(?P<c30>0x[0-9a-fA-F]+|<unreadable>)"
 )
 IMPORTANT_LABELS = (
+    "menu_continue_wrapper_82bac0",
+    "menu_new_or_load_wrapper_82ba80",
+    "menu_other_load_wrapper_82bb00",
+    "native_submit_7ac890",
+    "result_event_handler_746e80",
+    "result_action_builder_746a00",
+    "result_event_wrapper_builder_744a60",
+    "task_enqueue_7a7b60",
+    "set_save_slot_67a810",
+    "save_request_profile_67a420",
+    "request_save_67a520",
+    "current_slot_load_67b570",
+    "continue_load_67b750",
+    "combined_load_67b940",
+    "map_load_67bc10",
+    "save_load_state_init_67b030",
+    "b80_preview_67b4e0",
     "title_confirm_b0e180",
     "request_load_slot_67b200",
     "request_profile_read_67b1a0",
@@ -27,6 +44,17 @@ IMPORTANT_LABELS = (
     "movemap_do_save_stuff_afbad0",
     "map_request_do_836f30",
     "map_work_82faf0",
+    "cap_setstate_b0d960",
+    "cap_load_activate_9a4670",
+    "cap_load_activate2_9ac760",
+    "cap_builder_826510",
+    "cap_selector_tick_826d50",
+    "cap_menu_deser_82c240",
+    "cap_dialog_factory_81ead0",
+    "menu_window_job_ctor_7ac8c0",
+    "menu_window_job_native_ctor_b_7acb00",
+    "menu_window_job_idle_ctor_7acf80",
+    "title_native_ready_733150",
 )
 
 
