@@ -206,7 +206,7 @@ def load_ok(res: dict) -> bool:
 
 def monitor(artifact_dir: Path, targets: list[dict], per_load_deadline: float,
             overall_deadline: float, poll: float, replay: bool, liveness_check: bool = True,
-            debug_log_offset: int = 0) -> dict:
+            debug_log_offset: int = 0, drive_slot_file: Path | None = None) -> dict:
     telem = artifact_dir / "er-effects-telemetry.json"
     log = artifact_dir / "er-effects-autoload-debug.log"
     expected = [
@@ -254,6 +254,14 @@ def monitor(artifact_dir: Path, targets: list[dict], per_load_deadline: float,
                     last_verified_identity = obs_name
                     last_progress = now
                     idx += 1
+                    # PROGRAMMATIC DRIVE: trigger the next reload by writing its slot to the DLL
+                    # control file (the DLL polls it in-world and arms a menu-free switch). targets[0]
+                    # is the boot autoload (TOML), so we only drive reloads (idx>=1).
+                    if drive_slot_file is not None and idx < len(expected):
+                        try:
+                            drive_slot_file.write_text(f"{int(expected[idx]['slot'])}\n")
+                        except OSError:
+                            pass
                     continue
                 # stable but WRONG identity/stats/gear against the expected target for this step
                 elif res["identity_ok"] is False and obs_name != (results[-1]["observed"]["name"] if results else None):
@@ -340,12 +348,13 @@ def main() -> int:
     ap.add_argument("--replay", action="store_true", help="single pass over the finished run's final telemetry")
     ap.add_argument("--no-liveness-check", action="store_true", help="do not treat a missing eldenring.exe as a crash (offline loop testing)")
     ap.add_argument("--debug-log-offset", type=int, default=0, help="only scan the debug log for crash markers past this byte offset (shared append-log)")
+    ap.add_argument("--drive-slot-file", type=Path, default=None, help="programmatic drive: after each verified load, write the next target slot here (the DLL control file) to trigger the reload")
     args = ap.parse_args()
 
     targets = json.loads(args.targets.read_text())
     summary = monitor(args.artifact_dir, targets, args.per_load_deadline,
                       args.overall_deadline, args.poll, args.replay, liveness_check=not args.no_liveness_check,
-                      debug_log_offset=args.debug_log_offset)
+                      debug_log_offset=args.debug_log_offset, drive_slot_file=args.drive_slot_file)
     report = render_report(summary)
     if args.report:
         args.report.write_text(report)

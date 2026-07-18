@@ -251,6 +251,14 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // choices), optionally clean stale title-dialog render resources, then run the
                 // one-shot correctness dump.
                 IN_WORLD_REACHED.store(IN_WORLD_REACHED_YES, Ordering::SeqCst);
+                // PROGRAMMATIC SWITCH TRIGGER (2026-07-18): poll the harness switch-slot control file and,
+                // when a new (in-world, resident) request appears with no switch in flight, arm a menu-free
+                // switch (menuData+0x5d=1 teardown -> own_load_switch_reload_fire). Replaces the brittle
+                // simulated-input autopilot for repeatable multi-character loading. Self-gates (phase IDLE +
+                // world resident @ step 18 + mtime change), so an every-frame call is cheap and safe.
+                if let Ok(base) = game_module_base() {
+                    unsafe { poll_switch_slot_control_file(base) };
+                }
                 // SPURIOUS RETURN-TITLE ARM DISARM (2026-07-18, bd angre-reload-full-causal-chain-and-fix,
                 // refined by repeatable-multi-save-consolidated-plan-2026-07-18).
                 // Root cause of the angrE repeated-load crash: the boot autoload navigates the ProfileSelect

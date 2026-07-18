@@ -80,17 +80,28 @@ echo "staged DLL -> $DLL_GAMEDIR ; profile -> $PROFILE"
 echo "staged boot TOML (save_file=$(win_path "$BOOT_FILE") slot=$BOOT_SLOT)"
 
 # --- 3. autopilot + switch-count + target-slots control files in GAME_DIR ---
-printf '1\n' > "$GAME_DIR/er-effects-system-quit-repro.txt"
-printf '1\n' > "$GAME_DIR/er-effects-system-quit-load-switch.txt"
-printf '%s\n' "$SWITCHES" > "$GAME_DIR/er-effects-sq-target-switches.txt"
-printf '%s\n' "$TARGET_SLOTS" > "$GAME_DIR/er-effects-sq-target-slots.txt"
-echo "armed autopilot markers in GAME_DIR (repro + load-switch; switches=$SWITCHES; target-slots=[$TARGET_SLOTS])"
+# PROGRAMMATIC mode (default): the monitor drives each reload by writing the next slot to the DLL
+# control file er-effects-switch-slot.txt (the DLL polls it in-world and arms a menu-free switch --
+# zero simulated input). Start from a clean slate so no stale request fires. The legacy simulated-input
+# autopilot markers are only armed when DRIVE_MODE=autopilot.
+SWITCH_SLOT_FILE="$GAME_DIR/er-effects-switch-slot.txt"
+rm -f "$SWITCH_SLOT_FILE" 2>/dev/null
+if [[ "${DRIVE_MODE:-programmatic}" == "autopilot" ]]; then
+  printf '1\n' > "$GAME_DIR/er-effects-system-quit-repro.txt"
+  printf '1\n' > "$GAME_DIR/er-effects-system-quit-load-switch.txt"
+  printf '%s\n' "$SWITCHES" > "$GAME_DIR/er-effects-sq-target-switches.txt"
+  printf '%s\n' "$TARGET_SLOTS" > "$GAME_DIR/er-effects-sq-target-slots.txt"
+  echo "armed AUTOPILOT markers (switches=$SWITCHES; target-slots=[$TARGET_SLOTS])"
+else
+  echo "PROGRAMMATIC drive: monitor will write reload slots to $SWITCH_SLOT_FILE (target-slots=[$TARGET_SLOTS])"
+fi
 # shellcheck disable=SC2317  # body runs via `trap cleanup EXIT`, not inline
 cleanup() {
   taskkill.exe /F /IM eldenring.exe >/dev/null 2>&1
   taskkill.exe /F /IM me3.exe >/dev/null 2>&1
   rm -f "$GAME_DIR/er-effects-system-quit-repro.txt" "$GAME_DIR/er-effects-system-quit-load-switch.txt" \
-        "$GAME_DIR/er-effects-sq-target-switches.txt" "$GAME_DIR/er-effects-sq-target-slots.txt" 2>/dev/null
+        "$GAME_DIR/er-effects-sq-target-switches.txt" "$GAME_DIR/er-effects-sq-target-slots.txt" \
+        "$SWITCH_SLOT_FILE" 2>/dev/null
   [[ -f "$ARTIFACT_DIR/er-effects.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-effects.toml.bak" "$GAME_DIR/er-effects.toml"
 }
 trap cleanup EXIT
@@ -114,11 +125,14 @@ echo "launching ER via Windows me3.exe (offline) ..."
 LAUNCH_PID=$!
 
 echo "monitoring loads (RAM-oracle verify + report) ..."
+DRIVE_ARGS=()
+[[ "${DRIVE_MODE:-programmatic}" != "autopilot" ]] && DRIVE_ARGS=(--drive-slot-file "$SWITCH_SLOT_FILE")
 python3 "$REPO_ROOT/scripts/multi-load-proof-monitor.py" \
   --artifact-dir "$GAME_DIR" \
   --targets "$TARGETS_JSON" \
   --report "$ARTIFACT_DIR/proof-report.md" \
   --debug-log-offset "$OFFSET" \
+  "${DRIVE_ARGS[@]}" \
   --per-load-deadline "${PER_LOAD_DEADLINE:-120}" \
   --overall-deadline "${OVERALL_DEADLINE:-300}"
 RC=$?

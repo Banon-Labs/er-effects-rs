@@ -252,6 +252,20 @@ pub(crate) static SYSTEM_QUIT_MENU_FREE_STABLE_TICKS: AtomicUsize = AtomicUsize:
 /// task rate). Long enough that a transient mid-stream player flicker does not latch prematurely, short
 /// enough to disarm well before the return-title chain's queue-ready re-submit window (~tens of seconds).
 pub(crate) const SYSTEM_QUIT_MENU_FREE_STABLE_TICKS_THRESHOLD: usize = 60;
+/// PROGRAMMATIC PER-SLOT SWITCH TRIGGER (2026-07-18, RE workflow wf_b4dae22c). Replaces the brittle
+/// simulated-input autopilot: the harness writes a target slot to a game-dir control file, the DLL
+/// (in-world, world resident @ MoveMapStep 18) arms the menu-free switch by writing menuData+0x5d=1
+/// (the game-polled teardown flag -- no menu-pump/Scaleform op) then phase=RETURN_TITLE_REQUESTED;
+/// the existing ending-recovery -> own_load_switch_reload_fire -> completion-latch chain does the rest.
+/// Counters (surfaced in telemetry) prove each switch with zero simulated input.
+pub(crate) static SWITCH_TRIGGER_ARM_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SWITCH_TRIGGER_TEARDOWN_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SWITCH_TRIGGER_LAST_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static SWITCH_TRIGGER_DEFERRED_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Last-seen mtime (unix secs) of the switch-slot control file; a change == a new harness request.
+pub(crate) static SWITCH_SLOT_CONTROL_MTIME: AtomicUsize = AtomicUsize::new(0);
+/// 0 until the first poll records the baseline mtime, so a stale control file at boot never arms.
+pub(crate) static SWITCH_SLOT_CONTROL_PRIMED: AtomicUsize = AtomicUsize::new(0);
 /// Count of confirms BLOCKED fail-closed because the fresh deserialize could not be proven (no save
 /// bytes / parse failed / fingerprint not real). Streaming stale state would load the wrong
 /// character and the post-load autosave would then write it back to the picked slot.
