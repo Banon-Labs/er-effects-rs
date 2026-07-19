@@ -1747,6 +1747,7 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                             unsafe {
                                 *((menu_data + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET)
                                     as *mut u8) = 0;
+                                *((menu_data + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) as *mut u8) = 0;
                             }
                         }
                     }
@@ -1795,7 +1796,7 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                 SYSTEM_QUIT_INGAME_TOP_WINDOW.store(0, Ordering::SeqCst);
                 SYSTEM_QUIT_OPTION_SETTING_WINDOW.store(0, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
-                    "system-quit-quickload: native Continue handoff commit OK #{n} slot={slot} -- forwarding continue_confirm so SetState5 streams; phase stays AUTOLOAD_HANDOFF until stable-world proof + cleared GameMan+0xb78=-1 + cleared return-title rebuild flags (menuData+0x5d, DAT, save_requested) + native-owned warp_requested finalize/autoclear + RESET return-title one-shots for the NEXT switch only (return-title gates exclude AUTOLOAD_HANDOFF)"
+                    "system-quit-quickload: native Continue handoff commit OK #{n} slot={slot} -- forwarding continue_confirm so SetState5 streams; phase stays AUTOLOAD_HANDOFF until stable-world proof + cleared GameMan+0xb78=-1 + cleared return-title rebuild flags (menuData+0x5d/0x5e, DAT, save_requested) + native-owned warp_requested finalize/autoclear + RESET return-title one-shots for the NEXT switch only (return-title gates exclude AUTOLOAD_HANDOFF)"
                 ));
             }
         }
