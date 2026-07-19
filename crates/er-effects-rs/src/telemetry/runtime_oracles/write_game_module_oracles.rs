@@ -1737,7 +1737,11 @@ fn write_game_module_oracles(body: &mut String) {
         push_json_usize(
             body,
             "oracle_overlay_draw_fps_x1000",
-            fps_x1000(overlay_draw_hits, overlay_draw_first_ms, overlay_draw_last_ms),
+            fps_x1000(
+                overlay_draw_hits,
+                overlay_draw_first_ms,
+                overlay_draw_last_ms,
+            ),
         );
         push_json_usize(
             body,
@@ -1752,7 +1756,11 @@ fn write_game_module_oracles(body: &mut String) {
         push_json_usize(
             body,
             "oracle_overlay_reupload_fps_x1000",
-            fps_x1000(overlay_reuploads, overlay_reupload_first_ms, overlay_reupload_last_ms),
+            fps_x1000(
+                overlay_reuploads,
+                overlay_reupload_first_ms,
+                overlay_reupload_last_ms,
+            ),
         );
         push_json_usize(
             body,
@@ -2316,7 +2324,11 @@ fn write_game_module_oracles(body: &mut String) {
         {
             let n = PORTRAIT_RB_COUNT.load(Ordering::SeqCst).max(1);
             let mn = PORTRAIT_RB_MASK_COUNT.load(Ordering::SeqCst).max(1);
-            push_json_usize(body, "oracle_portrait_rb_count", PORTRAIT_RB_COUNT.load(Ordering::SeqCst));
+            push_json_usize(
+                body,
+                "oracle_portrait_rb_count",
+                PORTRAIT_RB_COUNT.load(Ordering::SeqCst),
+            );
             push_json_usize(
                 body,
                 "oracle_portrait_rb_wait_avg_us",
@@ -2634,23 +2646,41 @@ fn write_game_module_oracles(body: &mut String) {
         );
         push_json_usize(
             body,
-            "oracle_loading_bar_enabled",
-            LOADING_SCREEN_BAR_ENABLED.load(Ordering::SeqCst),
+            "oracle_loading_screen_last_this",
+            LOADING_SCREEN_LAST_THIS.load(Ordering::SeqCst),
         );
+        push_json_usize(
+            body,
+            "oracle_loading_screen_last_data",
+            LOADING_SCREEN_LAST_DATA.load(Ordering::SeqCst),
+        );
+        let loading_bar_enabled = LOADING_SCREEN_BAR_ENABLED.load(Ordering::SeqCst);
+        let loading_bar_current_frame = LOADING_SCREEN_BAR_CURRENT_FRAME.load(Ordering::SeqCst);
+        let loading_bar_max_frame = LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst);
+        let loading_bar_progress_permille =
+            LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst);
+        let loading_bar_current_terminal = usize::from(
+            loading_bar_enabled != 0
+                && ((loading_bar_max_frame != 0
+                    && loading_bar_current_frame >= loading_bar_max_frame)
+                    || loading_bar_progress_permille >= 998),
+        );
+        push_json_usize(body, "oracle_loading_bar_enabled", loading_bar_enabled);
         push_json_usize(
             body,
             "oracle_loading_bar_current_frame",
-            LOADING_SCREEN_BAR_CURRENT_FRAME.load(Ordering::SeqCst),
+            loading_bar_current_frame,
         );
-        push_json_usize(
-            body,
-            "oracle_loading_bar_max_frame",
-            LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst),
-        );
+        push_json_usize(body, "oracle_loading_bar_max_frame", loading_bar_max_frame);
         push_json_usize(
             body,
             "oracle_loading_bar_progress_permille",
-            LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst),
+            loading_bar_progress_permille,
+        );
+        push_json_usize(
+            body,
+            "oracle_loading_bar_current_terminal",
+            loading_bar_current_terminal,
         );
         push_json_usize(
             body,

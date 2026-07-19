@@ -93,9 +93,12 @@ def snap(t: dict) -> dict:
         "oracle_fake_loading_field_c",
         "oracle_fake_loading_field_10",
         "oracle_loading_bar_enabled",
+        "oracle_loading_screen_last_this",
+        "oracle_loading_screen_last_data",
         "oracle_loading_bar_current_frame",
         "oracle_loading_bar_max_frame",
         "oracle_loading_bar_progress_permille",
+        "oracle_loading_bar_current_terminal",
         "oracle_loading_bar_final_hits",
         "oracle_loading_bar_update_hits",
         "oracle_loading_screen_close_sent",
@@ -198,6 +201,8 @@ def main() -> int:
     loading_stall_signature: tuple | None = None
     loading_stall_source: str | None = None
     loading_stall_seconds = 0.0
+    last_bar_epoch: tuple[int, int] | None = None
+    last_terminal_bar_fields: tuple | None = None
 
     while True:
         now = time.monotonic()
@@ -242,38 +247,56 @@ def main() -> int:
             bar_progress_available = bar_enabled and (
                 bar_current_frame >= 0 or bar_progress_permille >= 0
             )
+            current_epoch = (as_int(deser, 0), as_int(activate, 0))
+            handoff_progress_fields = (
+                ("close_sent", as_int(s.get("oracle_loading_screen_close_sent"), 0)),
+                ("request_code", request_code),
+                ("mms_state", mms_state),
+                (
+                    "finalize12a",
+                    as_int(s.get("oracle_stepfinish_finalize_substate_12a")),
+                ),
+                ("load_in_progress_b80", as_int(s.get("oracle_load_in_progress_b80"))),
+                ("now_loading", as_int(s.get("oracle_now_loading"))),
+                ("fake_cover", int(fake_cover)),
+                ("fake_field_c", as_int(s.get("oracle_fake_loading_field_c"))),
+                ("fake_field_10", as_int(s.get("oracle_fake_loading_field_10"))),
+                ("player_present", int(present)),
+                ("can_move", int(can_move)),
+                ("moved_frames", as_int(s.get("oracle_move_probe_moved_frames"), 0)),
+            )
             if bar_progress_available:
                 loading_active = True
-                loading_progress_signature = (
-                    "loading_bar_plus_semaphores",
-                    ("deser", as_int(deser, 0)),
-                    ("activate", as_int(activate, 0)),
+                bar_terminal = as_int(s.get("oracle_loading_bar_current_terminal"), 0)
+                live_bar_fields = (
+                    ("deser", current_epoch[0]),
+                    ("activate", current_epoch[1]),
                     ("bar_frame", bar_current_frame),
                     ("bar_progress_permille", bar_progress_permille),
+                    ("bar_this", as_int(s.get("oracle_loading_screen_last_this"))),
+                    ("bar_data", as_int(s.get("oracle_loading_screen_last_data"))),
                     ("bar_max_frame", bar_max_frame),
-                    (
-                        "bar_terminal",
-                        int(
-                            (bar_max_frame > 0 and bar_current_frame >= bar_max_frame)
-                            or bar_progress_permille >= 998
-                            or as_int(s.get("oracle_loading_bar_final_hits"), 0) > 0
-                        ),
-                    ),
-                    ("close_sent", as_int(s.get("oracle_loading_screen_close_sent"), 0)),
-                    ("request_code", request_code),
-                    ("mms_state", mms_state),
-                    (
-                        "finalize12a",
-                        as_int(s.get("oracle_stepfinish_finalize_substate_12a")),
-                    ),
-                    ("load_in_progress_b80", as_int(s.get("oracle_load_in_progress_b80"))),
-                    ("now_loading", as_int(s.get("oracle_now_loading"))),
-                    ("fake_cover", int(fake_cover)),
-                    ("fake_field_c", as_int(s.get("oracle_fake_loading_field_c"))),
-                    ("fake_field_10", as_int(s.get("oracle_fake_loading_field_10"))),
-                    ("player_present", int(present)),
-                    ("can_move", int(can_move)),
-                    ("moved_frames", as_int(s.get("oracle_move_probe_moved_frames"), 0)),
+                    ("bar_terminal_current", bar_terminal),
+                )
+                if bar_terminal:
+                    last_bar_epoch = current_epoch
+                    last_terminal_bar_fields = live_bar_fields
+                else:
+                    last_bar_epoch = None
+                    last_terminal_bar_fields = None
+                loading_progress_signature = (
+                    "loading_bar_plus_semaphores",
+                    *live_bar_fields,
+                    *handoff_progress_fields,
+                )
+            elif (
+                last_bar_epoch == current_epoch and last_terminal_bar_fields is not None
+            ):
+                loading_active = True
+                loading_progress_signature = (
+                    "loading_bar_terminal_plus_semaphores",
+                    *last_terminal_bar_fields,
+                    *handoff_progress_fields,
                 )
             else:
                 loading_active = bool(fake_cover or s.get("oracle_now_loading")) and (
