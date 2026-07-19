@@ -1714,19 +1714,11 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                     SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF,
                     Ordering::SeqCst,
                 );
-                // CLEAR the stale in-world load arm. product-core armed GameMan+0xb78 = slot MANY
-                // times before this confirm (title.rs, phase 3-4). Phase -> IDLE stops FURTHER arming
-                // but leaves b78 = slot RESIDENT; once our SetState5 world comes up, the in-world
-                // MoveMapStep loader reads that stale b78 and fires a REDUNDANT second load of the same
-                // slot -> a second CSGaitemImp::Deserialize with the free-queue already populated by
-                // our load -> the 0x67141a exhaustion crash (observed +41705ms). With phase IDLE the
-                // in-world guards are inert, so clear b78 to -1 (native "no requested slot") ourselves.
-                if gm != TITLE_OWNER_SCAN_START_ADDRESS {
-                    unsafe {
-                        *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) =
-                            OWN_STEPPER_SLOT_NONE;
-                    }
-                }
+                // Keep GameMan+0xb78 armed through SetState5/MoveMap finalize. Runtime evidence from
+                // samechar-3x-phaseearly shows clearing b78 to -1 before the warp finalize leaves the
+                // loaded target without a valid requested-slot/warp target and TitleStep falls back to
+                // title. A later post-resident proof point must clear it, but not before the world stream
+                // has survived.
                 // CLEAR the return-title "rebuild the title" request flags the final functor set for this
                 // switch's teardown (restored 2026-07-16 after the DEFER experiment failed: the stuck load
                 // has menuData+0x5d==0 to BEGIN with -- the functor never set it, incomplete teardown -- so
@@ -1796,7 +1788,7 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                 SYSTEM_QUIT_INGAME_TOP_WINDOW.store(0, Ordering::SeqCst);
                 SYSTEM_QUIT_OPTION_SETTING_WINDOW.store(0, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
-                    "system-quit-quickload: native Continue handoff commit OK #{n} slot={slot} -- forwarding continue_confirm so SetState5 streams; phase stays AUTOLOAD_HANDOFF until stable-world proof + cleared GameMan+0xb78=-1 + cleared return-title rebuild flags (menuData+0x5d/0x5e, DAT, save_requested) + native-owned warp_requested finalize/autoclear + RESET return-title one-shots for the NEXT switch only (return-title gates exclude AUTOLOAD_HANDOFF)"
+                    "system-quit-quickload: native Continue handoff commit OK #{n} slot={slot} -- forwarding continue_confirm so SetState5 streams; phase stays AUTOLOAD_HANDOFF until stable-world proof + keep GameMan+0xb78 armed through native finalize + cleared return-title rebuild flags (menuData+0x5d/0x5e, DAT, save_requested) + native-owned warp_requested finalize/autoclear + RESET return-title one-shots for the NEXT switch only (return-title gates exclude AUTOLOAD_HANDOFF)"
                 ));
             }
         }
