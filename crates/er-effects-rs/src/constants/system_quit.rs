@@ -53,6 +53,20 @@ pub(crate) static MOVE_PROBE_ACTIVE: std::sync::atomic::AtomicBool =
 /// Left-thumbstick Y to inject while MOVE_PROBE_ACTIVE (i16 range; +full = forward). Stored as i32.
 pub(crate) static MOVE_PROBE_STICK_LY: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(0);
+/// Latched true once a load sustained >=MOVE_PROBE_REQUIRED_FRAMES consecutive frames of havok-position
+/// motion under the injected stick (input-causes-movement PROVEN). Cleared when a new load epoch begins.
+pub(crate) static CAN_MOVE_CONFIRMED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// Current consecutive-moved-frame count of the in-flight move probe (for the oracle/report).
+pub(crate) static MOVE_PROBE_MOVED_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// The load epoch (fresh_deser_count) the current probe is bound to, so it resets per load.
+pub(crate) static MOVE_PROBE_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Forward stick deflection the probe injects (near full), the per-FRAME horizontal displacement (world
+/// units) that counts as "moving" (a static/frozen char repeats its position exactly, delta ~0; a walk
+/// clears this easily), and the sustained consecutive-frame count that PROVES movement (user: 60/load).
+pub(crate) const MOVE_PROBE_STICK_FORWARD: i32 = 30000;
+pub(crate) const MOVE_PROBE_PER_FRAME_THRESHOLD: f32 = 0.01;
+pub(crate) const MOVE_PROBE_REQUIRED_FRAMES: usize = 60;
 /// DInput keyboard scancode DIK_DOWN (down-arrow) -- the menu "move down" keyboard input. The
 /// menu is keyboard-navigated under Proton with no controller (XInput is not polled), so the
 /// schedule drives this via InputBlocker::set_injected_key (stamped into the blocked keyboard

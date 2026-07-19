@@ -251,6 +251,19 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // choices), optionally clean stale title-dialog render resources, then run the
                 // one-shot correctness dump.
                 IN_WORLD_REACHED.store(IN_WORLD_REACHED_YES, Ordering::SeqCst);
+                // CAN-MOVE PROBE (2026-07-18, user-directed): once a load is render-ready, inject a
+                // forward stick and prove the character actually MOVES for >=60 consecutive frames.
+                // render-ready = "can be seen"; this = "input moves it". Frozen loads never accumulate.
+                // Game-thread only, so driving input here is safe.
+                {
+                    let model_present = player.chr_ins.chr_model_ins.as_ptr() as usize != 0;
+                    let render_ready = model_present
+                        && player.chr_ins.load_state.draw_group_enabled()
+                        && player.chr_ins.chr_flags1c4.is_render_group_enabled()
+                        && player.chr_ins.chr_flags1c5.enable_render();
+                    let p = player.chr_ins.modules.physics.position;
+                    crate::experiments::can_move_probe::tick(render_ready, (p.0, p.1, p.2));
+                }
                 // PROGRAMMATIC SWITCH TRIGGER (2026-07-18): poll the harness switch-slot control file and,
                 // when a new (in-world, resident) request appears with no switch in flight, arm a menu-free
                 // switch (menuData+0x5d=1 teardown -> own_load_switch_reload_fire). Replaces the brittle

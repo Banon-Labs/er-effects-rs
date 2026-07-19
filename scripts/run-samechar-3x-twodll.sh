@@ -16,8 +16,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CORPUS_ROOT="${ER_SAVE_CORPUS_ROOT:-/mnt/a/Code Projects/Elden Ring Save Manager/data/save-files}"
 BOOT_FILE="${BOOT_FILE:-$CORPUS_ROOT/100-Lilbro/ER0000.sl2}"   # angrE L100
 BOOT_SLOT="${BOOT_SLOT:-0}"
-TARGET_SLOTS="${TARGET_SLOTS:-0,0}"                            # same-slot (angrE) twice
-SWITCHES="${SWITCHES:-2}"                                      # 2 reloads after autoload = 3 loads total
+TARGET_SLOTS="${TARGET_SLOTS:-0,0,0}"                          # same-slot (angrE) x3
+SWITCHES="${SWITCHES:-3}"                                      # 3 reloads after autoload = 4 loads total
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/samechar-3x-$(date +%Y%m%d-%H%M%S)}"
 PRODUCT_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll"
 TRACE_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_reload_trace_dll.dll"

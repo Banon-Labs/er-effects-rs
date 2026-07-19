@@ -254,4 +254,12 @@ fn write_player_presence_oracle(body: &mut String) {
     } else {
         body.push_str("  \"oracle_player_present\": false,\n");
     }
+    // CAN-MOVE proof (2026-07-18): input-causes-movement gate. can_move latches once a load sustains
+    // >=60 consecutive frames of injected-forward havok motion; moved_frames is the live consecutive
+    // count. These are load-scoped atomics driven by the game-thread can_move_probe.
+    body.push_str(&format!(
+        "  \"oracle_can_move\": {},\n  \"oracle_move_probe_moved_frames\": {},\n",
+        crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst),
+        crate::constants::MOVE_PROBE_MOVED_FRAMES.load(Ordering::SeqCst)
+    ));
 }

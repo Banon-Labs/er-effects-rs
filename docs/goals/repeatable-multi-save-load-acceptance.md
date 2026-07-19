@@ -112,22 +112,34 @@ Success is generic **stable** repeatability: **if we cannot load multiple charac
 prove each one rendered-and-playable before moving on, the goal is not met**, regardless of how well
 any single logical load works. A load that is "present" but frozen is a FAIL, not a pass.
 
-## 4a. CURRENT PRIMARY MILESTONE — same character loaded 3× in a row (added 2026-07-18)
+## 4a. CURRENT PRIMARY MILESTONE — same character loaded 4× in a row (updated 2026-07-18)
 
 The §4 gate above varies the `(file, slot)` across ≥3 saves. That is the end state, but it is **not**
 the case the user actually reproduces by hand, and the doc had no test for it. The **current primary
-milestone** — the one to pass first — is the **same character (angrE), loaded three times in a row,
-including the boot autoload**:
+milestone** — the one to pass first — is the **same character (angrE), loaded FOUR times in a row,
+including the boot autoload** (raised from 3 to 4 on 2026-07-18 after the user reproduced a 4th load):
 
 - **Load 1 = boot autoload** of angrE (TOML `save_file`+`slot`). Known-good: renders + is playable.
-- **Load 2 = reload of the SAME angrE slot** via the real in-game menu path (System→Quit→Load), driven
-  by **XInput** (the sq-repro autopilot fabricating the gamepad sequence — this is the "input driver").
-  Empirically this **freezes deterministically**: character present but **not render-ready and cannot
-  move**, though the in-game menu can still be opened (game shell alive). This frozen state is the bug
-  to capture, not to pass over.
-- **Load 3 = reload of the SAME angrE slot again**, driven the same way. Empirically it **recovers**:
-  character renders and is movable. (Mechanism hypothesis: a stale element from load 1 breaks the
-  load-2 finalize; load 2's teardown clears it so load 3 finalizes.)
+- **Loads 2–4 = reloads of the SAME angrE slot**, each driven the way the **user drives it** — the real
+  in-game menu path (System→Quit→Load), driven by **XInput** (the input driver).
+- **Observed parity (user, 2026-07-18):** the freeze **alternates** — load1 good, load2 frozen, load3
+  good, load4 frozen — a reload *from a rendered state* freezes; a reload *from a frozen state* recovers.
+  So freezes are **expected intermediate states**, not failures, as long as the sequence keeps advancing.
+- **MOVEMENT must be PROVEN, not just render-ready (added 2026-07-18).** Movement was never proven on
+  any load yet. A load counts as **proven-playable** only when, on top of `oracle_player_render_ready`,
+  the **can-move** gate passes: while a movement stick is injected, the character actually moves —
+  `oracle_havok_pos` displaces beyond a noise threshold — and it does so across **≥ 60 consecutive
+  frames of injected movement per load** (a sustained walk, not a one-frame twitch). The **4th** load is
+  the required target for this proof, but the gate applies to any load claimed as good.
+  `oracle_play_time_ms` advancing is necessary but **not** sufficient — it ticks during the freeze. A
+  load that is present + render-ready but does not move ≥60 frames under injected input is **not**
+  proven playable.
+- **Note (2026-07-18 automated finding):** the sq-repro autopilot re-routes the confirm through the
+  DLL's SetState5 quickload arm, which skips the native render handoff — so **every** automated load
+  froze (draw_group never enabled, request_code stuck at 1) with **no** parity recovery, unlike the
+  user's manual native-menu loads. Driving "like the user" therefore means the reload must go through
+  the **native menu Continue path** (or the SetState5 path must be fixed to perform the same
+  draw_group / request_code 1→2 handoff). See `bd run2-latchfix-works-freeze-is-drawgroup-not-enabled-2026-07-18`.
 
 **Acceptance for this milestone:**
 1. Runs autonomously with **two DLLs loaded via me3** — the product DLL (being tuned) plus the log-only

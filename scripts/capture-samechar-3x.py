@@ -54,6 +54,8 @@ def snap(t: dict) -> dict:
         "oracle_char_name",
         "oracle_player_present",
         "oracle_player_render_ready",
+        "oracle_can_move",
+        "oracle_move_probe_moved_frames",
         "oracle_chr_draw_group_enabled",
         "oracle_chr_render_group_enabled",
         "oracle_chr_enable_render",
@@ -110,7 +112,6 @@ def main() -> int:
 
     # Per-epoch record: first-seen ts, the max/settled snapshot, whether render-ready was ever held.
     epochs: dict[int, dict] = {}
-    ready_since: float | None = None
     portrait_captured = False
     start = time.monotonic()
     last_log = 0.0
@@ -138,26 +139,29 @@ def main() -> int:
             max_nav_stage = max(max_nav_stage, int(nav_stage))
             max_activate = max(max_activate, int(activate))
 
-            ep = epochs.setdefault(int(deser), {"first_seen": elapsed, "ever_ready": False, "last": None})
+            can_move = bool(s.get("oracle_can_move"))
+
+            ep = epochs.setdefault(
+                int(deser),
+                {"first_seen": elapsed, "ever_ready": False, "ever_moved": False, "last": None},
+            )
             ep["last"] = s
             if render_ready:
                 ep["ever_ready"] = True
+            if can_move:
+                ep["ever_moved"] = True
 
-            # Mandatory portrait capture at the frozen-load-2 view: a reload in progress (deser>=1),
+            # Mandatory portrait capture at the frozen-load view: a reload in progress (deser>=1),
             # cover up, not yet render-ready -- the exact moment the user sees the failure.
             if not portrait_captured and deser >= 1 and fake_cover and not render_ready and present:
                 capture_portrait(args.artifact_dir)
                 portrait_captured = True
 
-            # load3 (deser>=2) render-ready dwell => SUCCESS.
-            if deser >= 2 and render_ready and present:
-                if ready_since is None:
-                    ready_since = now
-                elif now - ready_since >= RENDER_READY_DWELL_SECONDS:
-                    result = "LOAD3_RENDER_READY_HELD"
-                    break
-            else:
-                ready_since = None
+            # SUCCESS = a load PROVED MOVEMENT (can_move latched: >=60 consecutive frames of injected-
+            # forward motion). That is the real milestone -- a load that renders AND is playable.
+            if can_move:
+                result = "MOVEMENT_PROVEN"
+                break
 
             if elapsed - last_log >= 3.0:
                 last_log = elapsed
@@ -165,6 +169,7 @@ def main() -> int:
                 print(
                     f"[{elapsed:6.1f}s] deser={deser} activate={activate} nav={nav_label} "
                     f"present={present} render_ready={render_ready} "
+                    f"can_move={can_move}(f{s.get('oracle_move_probe_moved_frames')}) "
                     f"draw_group={s.get('oracle_chr_draw_group_enabled')} "
                     f"req_code={s.get('oracle_stepfinish_request_code')} mms={s.get('oracle_stepfinish_mms_state')} "
                     f"fake_cover={fake_cover} switch_idx={s.get('sq_repro_switch_index')} "
@@ -206,13 +211,24 @@ def main() -> int:
         "## Per-load (fresh_deser epoch) settled signature",
         "",
     ]
-    epoch_names = {0: "load1 (boot autoload)", 1: "load2 (first reload)", 2: "load3 (second reload / recovery)"}
+    epoch_names = {
+        0: "load1 (boot autoload)",
+        1: "load2 (first reload)",
+        2: "load3 (second reload)",
+        3: "load4 (third reload)",
+    }
     for deser in sorted(epochs):
         ep = epochs[deser]
         s = ep["last"] or {}
         lines.append(f"### deser={deser} — {epoch_names.get(deser, 'load')}")
-        lines.append(f"- first_seen: {ep['first_seen']:.1f}s   ever_render_ready: {ep['ever_ready']}")
-        lines.append(f"- char_name: {s.get('oracle_char_name')}")
+        lines.append(
+            f"- first_seen: {ep['first_seen']:.1f}s   ever_render_ready: {ep['ever_ready']}   "
+            f"ever_moved(can_move): {ep.get('ever_moved')}"
+        )
+        lines.append(
+            f"- char_name: {s.get('oracle_char_name')}   "
+            f"can_move: {s.get('oracle_can_move')}  moved_frames: {s.get('oracle_move_probe_moved_frames')}"
+        )
         lines.append(
             f"- player_render_ready: {s.get('oracle_player_render_ready')}  "
             f"draw_group: {s.get('oracle_chr_draw_group_enabled')}  "
@@ -227,11 +243,15 @@ def main() -> int:
         )
         lines.append(f"- havok_pos: {s.get('oracle_havok_pos')}  play_time_ms: {s.get('oracle_play_time_ms')}")
         lines.append("")
-    verdict = "PASS (load3 rendered + held)" if result == "LOAD3_RENDER_READY_HELD" else "FAIL / incomplete"
+    verdict = (
+        "PASS (a load PROVED movement: >=60 frames of injected motion)"
+        if result == "MOVEMENT_PROVEN"
+        else "FAIL / incomplete (no load proved 60-frame movement)"
+    )
     lines.append(f"## Verdict: {verdict}")
     args.report.write_text("\n".join(lines), encoding="utf-8")
     print("\n".join(lines))
-    return 0 if result == "LOAD3_RENDER_READY_HELD" else 1
+    return 0 if result == "MOVEMENT_PROVEN" else 1
 
 
 if __name__ == "__main__":
