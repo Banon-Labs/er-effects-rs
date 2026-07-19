@@ -62,6 +62,7 @@ fn poll_autoload_handoff_parent_state_guard() {
     if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
         != SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
         || SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) != 1
+        || SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) == 0
     {
         return;
     }
