@@ -1271,10 +1271,10 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         // SAME-SESSION RELOAD HANDOFF FIX CANDIDATE (2026-07-19): after native MoveMap reaches FINISH
         // for a reload, InGameStep::STEP_RequestWait(2) keeps the session alive only while
         // CSMenuMan+0x798 remains non-null. Ghidra shows +0x798 is recreated from
-        // loadingScreenData.field_0x10 (CSMenuMan+0x730). Runtime failure showed field_0x10 dropping to 0
-        // immediately after mms=20/-1, then +0x798 draining, requestCode 2->0, and TitleStep returning to
-        // title. During autoload handoff, keep this native loading-screen job gate armed until the current
-        // reload epoch proves movement; do not use it on boot or after movement proof.
+        // loadingScreenData.field_0x10 (CSMenuMan+0x730). Runtime then showed field_0x11 stayed asserted
+        // while the job drained, so field_0x10 alone was not enough: keep the native loading-screen job gate
+        // armed and suppress the close/result request until the current reload epoch proves movement.
+        // Do not use it on boot or after movement proof.
         let reload_epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
         let movement_proven_for_reload = crate::constants::CAN_MOVE_CONFIRMED
             .load(Ordering::SeqCst)
@@ -1288,10 +1288,14 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             && matches!(ig_d8, 1 | 2)
         {
             if let Some(menu) = menu_man {
-                let old =
+                let old10 =
                     unsafe { safe_read_u8(menu + CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET) }
                         .unwrap_or(0);
-                if old == 0 {
+                let old11 = unsafe {
+                    safe_read_u8(menu + CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET + 1)
+                }
+                .unwrap_or(0);
+                if old10 == 0 {
                     unsafe {
                         *((menu + CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET) as *mut u8) = 1;
                     }
@@ -1300,6 +1304,18 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                     if n <= 8 || n.is_power_of_two() {
                         append_autoload_debug(format_args!(
                             "AUTOLOAD-HANDOFF LS10 REARM #{n}: epoch={reload_epoch} ig_d8={ig_d8} mms_step={mms_step} menu_job=0x{menu_job:x}; keeping CSMenuMan+0x798 alive until movement proof"
+                        ));
+                    }
+                }
+                if old11 != 0 {
+                    unsafe {
+                        *((menu + CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET + 1) as *mut u8) = 0;
+                    }
+                    let n =
+                        SYSTEM_QUIT_QUICKLOAD_LS11_CLEAR_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+                    if n <= 8 || n.is_power_of_two() {
+                        append_autoload_debug(format_args!(
+                            "AUTOLOAD-HANDOFF LS11 CLEAR #{n}: epoch={reload_epoch} ig_d8={ig_d8} mms_step={mms_step} menu_job=0x{menu_job:x}; suppressing loading close until movement proof"
                         ));
                     }
                 }
