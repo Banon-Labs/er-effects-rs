@@ -29,45 +29,48 @@ bitflags = "2"
 # Pure-Rust decoder used directly so the hand-rolled single-step/prologue logic in lib.rs
 # can decode instead of hard-coding byte lengths. Lean feature set: decoder only, no
 # formatters/encoder.
-iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder"] }
+iced-x86 = { version = "1.21", default-features = false, features = [
+  "std",
+  "decoder",
+] }
 # Boot profiler, Win32 process/window helpers, and MinHook target resolution.
 windows = { version = "0.62", features = [
-    "Win32_Foundation",
-    "Win32_System_Threading",
-    "Win32_System_WindowsProgramming",
-    "Win32_System_Kernel",
-    "Win32_System_Diagnostics_ToolHelp",
-    "Win32_System_Diagnostics_Debug",
-    "Win32_System_SystemInformation",
-    "Win32_Devices_HumanInterfaceDevice",
-    "Win32_System_Com",
-    "Win32_System_LibraryLoader",
-    "Win32_System_Memory",
-    "Win32_System_SystemServices",
-    # Read HKCU\Software\Valve\Steam\SteamPath so the boot-background feature can find the Windows Steam
-    # userdata (screenshots) -- the install dir is not an ancestor of a game in a separate library.
-    "Win32_System_Registry",
-    # Hidden dummy window for the D3D12 Present-overlay swapchain: CreateSwapChainForComposition is
-    # "Not implemented" under vkd3d/Wine, so we need a real HWND via CreateSwapChainForHwnd, which pulls
-    # in WNDCLASSW's GDI handle types.
-    "Win32_Graphics_Gdi",
-    "Win32_Graphics_Imaging",
-    "Win32_UI_WindowsAndMessaging",
-    # SendInput/KEYBDINPUT + AttachThreadInput/SetFocus for the self-driving System->Quit repro
-    # harness: native ER reads keyboard via RawInput (not DInput, ignores posted WM_KEYDOWN), so the
-    # autopilot forces the window foreground and injects real OS keystrokes (diagnostic path only).
-    "Win32_UI_Input_KeyboardAndMouse",
-    # Common file-open dialog lets System -> Quit -> Load Save Profiles pick a replacement SL2.
-    "Win32_UI_Controls_Dialogs",
-    # CreateEventW (fence-completion event for the D3D12 readback wait) is gated behind Win32_Security.
-    "Win32_Security",
-    # D3D12 readback of the live profile-portrait offscreen render target, so the now-loading
-    # forge can display the real rendered character head instead of the placeholder checker.
-    "Win32_Graphics_Direct3D12",
-    "Win32_Graphics_Direct3D_Fxc",
-    "Win32_Graphics_Dxgi",
-    "Win32_Graphics_Dxgi_Common",
-    "Win32_Graphics_Direct3D",
+  "Win32_Foundation",
+  "Win32_System_Threading",
+  "Win32_System_WindowsProgramming",
+  "Win32_System_Kernel",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_SystemInformation",
+  "Win32_Devices_HumanInterfaceDevice",
+  "Win32_System_Com",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Memory",
+  "Win32_System_SystemServices",
+  # Read HKCU\Software\Valve\Steam\SteamPath so the boot-background feature can find the Windows Steam
+  # userdata (screenshots) -- the install dir is not an ancestor of a game in a separate library.
+  "Win32_System_Registry",
+  # Hidden dummy window for the D3D12 Present-overlay swapchain: CreateSwapChainForComposition is
+  # "Not implemented" under vkd3d/Wine, so we need a real HWND via CreateSwapChainForHwnd, which pulls
+  # in WNDCLASSW's GDI handle types.
+  "Win32_Graphics_Gdi",
+  "Win32_Graphics_Imaging",
+  "Win32_UI_WindowsAndMessaging",
+  # SendInput/KEYBDINPUT + AttachThreadInput/SetFocus for the self-driving System->Quit repro
+  # harness: native ER reads keyboard via RawInput (not DInput, ignores posted WM_KEYDOWN), so the
+  # autopilot forces the window foreground and injects real OS keystrokes (diagnostic path only).
+  "Win32_UI_Input_KeyboardAndMouse",
+  # Common file-open dialog lets System -> Quit -> Load Save Profiles pick a replacement SL2.
+  "Win32_UI_Controls_Dialogs",
+  # CreateEventW (fence-completion event for the D3D12 readback wait) is gated behind Win32_Security.
+  "Win32_Security",
+  # D3D12 readback of the live profile-portrait offscreen render target, so the now-loading
+  # forge can display the real rendered character head instead of the placeholder checker.
+  "Win32_Graphics_Direct3D12",
+  "Win32_Graphics_Direct3D_Fxc",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_Graphics_Direct3D",
 ] }
 
 [build-dependencies]
