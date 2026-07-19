@@ -16,6 +16,7 @@ Load epochs are keyed by system_quit_continue_confirm_fresh_deser_count: 0 = loa
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import subprocess
 import sys
@@ -26,8 +27,12 @@ from pathlib import Path
 RENDER_READY_DWELL_SECONDS = 5.0  # goal SS4 hard render gate dwell
 POLL_SECONDS = 1.0
 TARGET_FINAL_EPOCH = 3  # 4 loads total = fresh_deser 0..3
-FINAL_LOAD_DWELL_SECONDS = 14.0  # after the 4th load appears, give the 60-frame move-probe time to run
-BOOT_TIMEOUT_SECONDS = 110.0  # if no in-world player by here, the boot failed -> tear down, don't idle
+FINAL_LOAD_DWELL_SECONDS = (
+    14.0  # after the 4th load appears, give the 60-frame move-probe time to run
+)
+BOOT_TIMEOUT_SECONDS = (
+    110.0  # if no in-world player by here, the boot failed -> tear down, don't idle
+)
 
 # Interruptible poll wait (never set) -- the sanctioned no-bare-sleep pace primitive (see
 # scripts/multi-load-proof-monitor.py); real synchronization is the telemetry-file readiness checks.
@@ -54,6 +59,19 @@ def read_telemetry(path: Path) -> dict | None:
         return json.loads(path.read_text(encoding="utf-8", errors="replace"))
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def as_int(value: object, default: int = -1) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, (float, str, bytes, bytearray)):
+        try:
+            return int(value)
+        except (OverflowError, ValueError):
+            return default
+    return default
 
 
 def snap(t: dict) -> dict:
@@ -99,32 +117,50 @@ def capture_portrait(artifact_dir: Path) -> None:
             timeout=25,
         )
     except Exception as exc:  # noqa: BLE001 -- capture is best-effort; fail closed to a note
-        note.write_text(f"loading-screen-portrait capture failed: {exc}\n", encoding="utf-8")
+        note.write_text(
+            f"loading-screen-portrait capture failed: {exc}\n", encoding="utf-8"
+        )
 
 
 def teardown() -> None:
     for image in ("eldenring.exe", "me3.exe"):
-        try:
+        with contextlib.suppress(subprocess.TimeoutExpired):
             subprocess.run(
                 ["taskkill.exe", "/F", "/IM", image],
                 capture_output=True,
                 text=True,
                 timeout=15,
             )
-        except subprocess.TimeoutExpired:
-            pass
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--game-dir", type=Path, required=True, help="dir with er-effects-telemetry.json + logs")
+    ap.add_argument(
+        "--game-dir",
+        type=Path,
+        required=True,
+        help="dir with er-effects-telemetry.json + logs",
+    )
     ap.add_argument("--artifact-dir", type=Path, required=True)
-    ap.add_argument("--max-seconds", type=float, required=True, help="runtime cap (.auto/runtime_timeout_cap_seconds)")
+    ap.add_argument(
+        "--max-seconds",
+        type=float,
+        required=True,
+        help="runtime cap (.auto/runtime_timeout_cap_seconds)",
+    )
     ap.add_argument("--report", type=Path, required=True)
     ap.add_argument(
         "--require-reload-move",
         action="store_true",
         help="success requires a RELOAD (deser>=1) to prove movement, not just load1 (the full-sequence goal)",
+    )
+    ap.add_argument(
+        "--require-reload-settled",
+        action="store_true",
+        help=(
+            "success requires a RELOAD (deser>=1) to prove movement AND finish native MoveMap "
+            "handoff (requestCode==2, MoveMapStep absent); catches load2 moving under stale mms18"
+        ),
     )
     args = ap.parse_args()
 
@@ -138,8 +174,12 @@ def main() -> int:
     start = time.monotonic()
     last_log = 0.0
     result = "TIMEOUT_NO_LOAD3"
-    max_nav_stage = 0  # highest sq_repro_state reached = how far the driver ever drove the menu
-    max_activate = 0  # profile-load confirm activations = number of reload ATTEMPTS started
+    max_nav_stage = (
+        0  # highest sq_repro_state reached = how far the driver ever drove the menu
+    )
+    max_activate = (
+        0  # profile-load confirm activations = number of reload ATTEMPTS started
+    )
 
     while True:
         now = time.monotonic()
@@ -167,7 +207,12 @@ def main() -> int:
 
             ep = epochs.setdefault(
                 int(deser),
-                {"first_seen": elapsed, "ever_ready": False, "ever_moved": False, "last": None},
+                {
+                    "first_seen": elapsed,
+                    "ever_ready": False,
+                    "ever_moved": False,
+                    "last": None,
+                },
             )
             ep["last"] = s
             if render_ready:
@@ -177,15 +222,34 @@ def main() -> int:
 
             # Mandatory portrait capture at the frozen-load view: a reload in progress (deser>=1),
             # cover up, not yet render-ready -- the exact moment the user sees the failure.
-            if not portrait_captured and deser >= 1 and fake_cover and not render_ready and present:
+            if (
+                not portrait_captured
+                and deser >= 1
+                and fake_cover
+                and not render_ready
+                and present
+            ):
                 capture_portrait(args.artifact_dir)
                 portrait_captured = True
 
             # Success = a load proves movement (can_move latched: >=60 consecutive frames of injected
             # motion). For the full sequence (--require-reload-move) it must be a RELOAD (deser>=1) --
             # the user's "third time they can move" -- so load1 moving does NOT end the run; the driver
-            # keeps going through the reloads. For load1-only it's any load.
-            if can_move and (not args.require_reload_move or deser >= 1):
+            # keeps going through the reloads. Stricter --require-reload-settled also requires the native
+            # MoveMap handoff to finish (requestCode==2 and no live MoveMapStep), because load2 can now
+            # prove movement while the loading/render handoff is still stuck at requestCode=1/mms18.
+            reload_epoch = as_int(deser) >= 1
+            reload_move = can_move and reload_epoch
+            reload_settled = (
+                reload_move
+                and as_int(s.get("oracle_stepfinish_request_code")) == 2
+                and as_int(s.get("oracle_stepfinish_mms_state")) == -1
+            )
+            if args.require_reload_settled:
+                if reload_settled:
+                    result = "RELOAD_SETTLED"
+                    break
+            elif can_move and (not args.require_reload_move or reload_epoch):
                 result = "MOVEMENT_PROVEN"
                 break
             # TEARDOWN ON UNEXPECTED FAILURE (user 2026-07-18): if the boot never reaches an in-world
@@ -210,13 +274,15 @@ def main() -> int:
         _POLL_WAIT.wait(POLL_SECONDS)
 
     # Snapshot artifacts before teardown clears live state.
-    for name in ("er-effects-telemetry.json", "er-effects-autoload-debug.log", "er-reload-trace.log"):
+    for name in (
+        "er-effects-telemetry.json",
+        "er-effects-autoload-debug.log",
+        "er-reload-trace.log",
+    ):
         src = args.game_dir / name
         if src.exists():
-            try:
+            with contextlib.suppress(OSError):
                 (args.artifact_dir / name).write_bytes(src.read_bytes())
-            except OSError:
-                pass
 
     teardown()
 
@@ -236,8 +302,8 @@ def main() -> int:
         f"- reload ATTEMPTS started (profile_load_activate_count): **{max_activate}**",
         f"- reload COMPLETIONS committed (max fresh_deser epoch): **{completions}**",
         f"- furthest menu-nav stage the driver reached (max sq_repro_state): **{max_nav_label}** ({max_nav_stage})",
-        f"  - reaching CONFIRM(5) = a load was attempted; stalling below it (e.g. TO_PROFILE(3)) = the",
-        f"    driver never drove the menu far enough to START the next load.",
+        "  - reaching CONFIRM(5) = a load was attempted; stalling below it (e.g. TO_PROFILE(3)) = the",
+        "    driver never drove the menu far enough to START the next load.",
         "",
         "## Per-load (fresh_deser epoch) settled signature",
         "",
@@ -272,17 +338,23 @@ def main() -> int:
             f"now_loading: {s.get('oracle_now_loading')}  "
             f"fake_cover: {s.get('oracle_fake_loading_any_visible')}"
         )
-        lines.append(f"- havok_pos: {s.get('oracle_havok_pos')}  play_time_ms: {s.get('oracle_play_time_ms')}")
+        lines.append(
+            f"- havok_pos: {s.get('oracle_havok_pos')}  play_time_ms: {s.get('oracle_play_time_ms')}"
+        )
         lines.append("")
-    verdict = (
-        "PASS (a load PROVED movement: >=60 frames of injected motion)"
-        if result == "MOVEMENT_PROVEN"
-        else "FAIL / incomplete (no load proved 60-frame movement)"
-    )
+    success_results = {"MOVEMENT_PROVEN", "RELOAD_SETTLED"}
+    if result == "RELOAD_SETTLED":
+        verdict = "PASS (a reload PROVED movement and native MoveMap settled: requestCode==2, mms=-1)"
+    elif result == "MOVEMENT_PROVEN":
+        verdict = "PASS (a load PROVED movement: >=60 frames of injected motion)"
+    else:
+        verdict = (
+            "FAIL / incomplete (required movement/settled reload proof was not reached)"
+        )
     lines.append(f"## Verdict: {verdict}")
     args.report.write_text("\n".join(lines), encoding="utf-8")
     print("\n".join(lines))
-    return 0 if result == "MOVEMENT_PROVEN" else 1
+    return 0 if result in success_results else 1
 
 
 if __name__ == "__main__":

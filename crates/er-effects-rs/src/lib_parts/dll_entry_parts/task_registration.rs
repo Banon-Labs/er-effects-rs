@@ -1,4 +1,3 @@
-
 pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
     std::thread::spawn(move || {
         write_bootstrap_event(
@@ -325,19 +324,51 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 }
                 // MENU-FREE RELOAD COMPLETION LATCH (2026-07-18, repeatability fix, bd
                 // repeatability-menu-free-phase-reset-fix-2026-07-18). own_load_switch_reload_fire committed
-                // the picked slot (FRESH_DESER_DONE=1) and its native SetState5 streamed the new character to
-                // this in-world state, but the switch phase is still armed. Left armed, the return-title chain
-                // re-submits (title_tick_cover.rs) and bounces the freshly-loaded world back to title, blocking
-                // the NEXT switch (switch #1 loads, then bounces -> switch #2 never arms). The in-world sf==30
-                // stable-proof cannot reset it (needs a title owner, absent in-world; and its FRESH_DESER_DONE
-                // cmpxch already lost to our =1). So latch the switch DONE from an in-world signal: sustained
-                // player presence with FRESH_DESER_DONE==1 -> phase IDLE + clear the GameMan save/warp request
-                // flags, so the chain cannot re-submit and the loaded world persists. The autopilot's next
-                // switch re-arms (resetting FRESH_DESER_DONE + SWITCH_MENU_FREE_RELOAD_FIRED) and
-                // own_load_switch_reload_fire fires again for the new slot.
+                // the picked slot (FRESH_DESER_DONE=1) and its native SetState5 began streaming the new
+                // character, but the switch phase is still armed. Left armed after the load is genuinely
+                // playable, the return-title branch can keep re-driving state that belongs to the next switch.
+                // However FRESH_DESER_DONE is only a deserialize/SetState5 handoff proof, NOT a playable-world
+                // proof: the load-2 bug reproduced because this latch declared phase IDLE from player-present
+                // frames while the incoming MoveMap was still at 16/18, allowing the next reload to start before
+                // the second load could prove movement or finish its native requestCode/mms handoff. In
+                // autonomous proof mode, require BOTH per-epoch CAN-MOVE and native MoveMap-settled
+                // (requestCode==2 and no live MoveMapStep) before phase IDLE; normal user sessions do not
+                // create the proof marker, so they keep the non-input player-present latch and are not forced
+                // to walk the character.
+                let movement_proof_required = crate::telemetry::game_directory_path()
+                    .map(|d| d.join("er-effects-prove-movement.txt").exists())
+                    .unwrap_or(false);
+                let current_epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+                let movement_proven_for_epoch = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
+                    && MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == current_epoch;
+                let native_load_settled = if movement_proof_required {
+                    let owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
+                    let ingame = if owner != TITLE_OWNER_SCAN_START_ADDRESS && owner > 0x10000 {
+                        unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) }
+                            .filter(|ig| *ig != TITLE_OWNER_SCAN_START_ADDRESS && *ig > 0x10000)
+                    } else {
+                        None
+                    };
+                    let request_code = ingame
+                        .and_then(|ig| unsafe { safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) })
+                        .unwrap_or(-1);
+                    let mms_live = ingame
+                        .and_then(|ig| unsafe { safe_read_usize(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) })
+                        .filter(|mms| *mms != TITLE_OWNER_SCAN_START_ADDRESS && *mms > 0x10000)
+                        .and_then(|mms| unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET) })
+                        .unwrap_or(-1);
+                    request_code == INGAMESTEP_REQUEST_CODE_STABLE_IN_WORLD && mms_live == -1
+                } else {
+                    true
+                };
+                let menu_free_reload_ready = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE
+                    .load(Ordering::SeqCst)
+                    == 1
+                    && (!movement_proof_required
+                        || (movement_proven_for_epoch && native_load_settled));
                 if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
                     >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
-                    && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 1
+                    && menu_free_reload_ready
                 {
                     let stable =
                         SYSTEM_QUIT_MENU_FREE_STABLE_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
@@ -349,7 +380,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                             er_save_loader::GameManSaveAccess::set_warp_requested(gm_typed, false);
                         }
                         append_autoload_debug(format_args!(
-                            "menu-free reload COMPLETION: picked char stable in-world {stable} frames (FRESH_DESER_DONE=1) -> phase IDLE, cleared save_requested/warp_requested; return-title chain disarmed so the loaded world persists for the next switch"
+                            "menu-free reload COMPLETION: picked char stable in-world {stable} frames (FRESH_DESER_DONE=1 movement_required={movement_proof_required} movement_proven={movement_proven_for_epoch} native_load_settled={native_load_settled}) -> phase IDLE, cleared save_requested/warp_requested; return-title chain disarmed so the loaded world persists for the next switch"
                         ));
                     }
                 } else {

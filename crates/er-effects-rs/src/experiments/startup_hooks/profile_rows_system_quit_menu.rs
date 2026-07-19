@@ -664,10 +664,9 @@ unsafe fn system_quit_reapply_optionsetting_pane_visibility(
         return;
     }
     let composite = option_window + OPTIONSETTING_COMPOSITE_OFFSET;
-    let current = unsafe {
-        safe_read_usize(composite + OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET)
-    }
-    .unwrap_or(0);
+    let current =
+        unsafe { safe_read_usize(composite + OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET) }
+            .unwrap_or(0);
     if current < HEAP_LO {
         return;
     }
@@ -747,7 +746,8 @@ unsafe fn system_quit_reapply_optionsetting_pane_visibility(
     }
     let mut refreshed = false;
     if let Ok(refresh_addr) = game_rva(OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA) {
-        let select_tab: unsafe extern "system" fn(usize, i32) = unsafe { std::mem::transmute(refresh_addr) };
+        let select_tab: unsafe extern "system" fn(usize, i32) =
+            unsafe { std::mem::transmute(refresh_addr) };
         // Native tab-select copies old current pane state into the new pane before refreshing. Because
         // we pre-set current=selected above, the copy is selected->selected (safe), but the helper still
         // runs the internal Scaleform/row refresh that manual SetVisible did not reproduce. It indexes
@@ -884,7 +884,8 @@ unsafe fn system_quit_log_save_gates(base: usize, source: &str) {
     let (save_state, bc4) = if gm >= HEAP_LO {
         (
             unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }.unwrap_or(-1),
-            unsafe { safe_read_i32(gm + GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET) }.unwrap_or(-1),
+            unsafe { safe_read_i32(gm + GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET) }
+                .unwrap_or(-1),
         )
     } else {
         (-1, -1)
@@ -1071,7 +1072,8 @@ unsafe fn system_quit_restore_real_system_windows(base: usize, source: &str) {
         false
     };
     let restored_option = if option != 0 && option != top {
-        let restored = unsafe { system_quit_menu_window_set_visible_and_flags(base, option, true, source) };
+        let restored =
+            unsafe { system_quit_menu_window_set_visible_and_flags(base, option, true, source) };
         unsafe {
             system_quit_reapply_optionsetting_pane_visibility(
                 base,
@@ -1191,7 +1193,13 @@ unsafe fn resolve_optionsetting_pane(
     // The binder fully constructs the out proxy before reading it; a zeroed 0x80-byte buffer mirrors
     // the native uninitialized stack slot. Names carry no '%', safe as the binder's printf format.
     let mut out_buf = [0u8; SCENE_OBJ_PROXY_STACK_BYTES];
-    let out = unsafe { assign(root_proxy, out_buf.as_mut_ptr() as usize, name.as_ptr() as usize) };
+    let out = unsafe {
+        assign(
+            root_proxy,
+            out_buf.as_mut_ptr() as usize,
+            name.as_ptr() as usize,
+        )
+    };
     if out == 0 || out == null {
         return OptionSettingPaneSample {
             resolved: false,
@@ -1219,7 +1227,8 @@ unsafe fn resolve_optionsetting_pane(
 /// objectInterface instance itself). `safe_read` of `*objectInterface` fails closed if unmapped.
 unsafe fn read_scaleform_pane_visible(base: usize, cs_value: usize) -> (bool, bool, i32) {
     let object_interface =
-        unsafe { safe_read_usize(cs_value + CSSCALEFORMVALUE_OBJECT_INTERFACE_OFFSET) }.unwrap_or(0);
+        unsafe { safe_read_usize(cs_value + CSSCALEFORMVALUE_OBJECT_INTERFACE_OFFSET) }
+            .unwrap_or(0);
     let datatype =
         unsafe { safe_read_i32(cs_value + CSSCALEFORMVALUE_DATATYPE_OFFSET) }.unwrap_or(0);
     let value_handle =
@@ -1231,7 +1240,8 @@ unsafe fn read_scaleform_pane_visible(base: usize, cs_value: usize) -> (bool, bo
     }
     let vfptr = unsafe { safe_read_usize(object_interface) }.unwrap_or(0);
     let getfn = if vfptr != 0 {
-        unsafe { safe_read_usize(vfptr + CSSCALEFORMVALUE_GET_DISPLAY_INFO_VTABLE_SLOT) }.unwrap_or(0)
+        unsafe { safe_read_usize(vfptr + CSSCALEFORMVALUE_GET_DISPLAY_INFO_VTABLE_SLOT) }
+            .unwrap_or(0)
     } else {
         0
     };
@@ -1302,7 +1312,11 @@ fn hash_wide_label_ptr(label_ptr: usize) -> usize {
     hash
 }
 
-unsafe fn sample_optionsetting_active_row_table(current_dialog: usize, current_tab: usize, actively_shown: bool) {
+unsafe fn sample_optionsetting_active_row_table(
+    current_dialog: usize,
+    current_tab: usize,
+    actively_shown: bool,
+) {
     const HEAP_LO: usize = 0x10000;
     const MAX_ROWS: usize = 16;
     static OPTIONSETTING_ROW_LAST_LOG_KEY: AtomicUsize = AtomicUsize::new(usize::MAX);
@@ -1326,12 +1340,11 @@ unsafe fn sample_optionsetting_active_row_table(current_dialog: usize, current_t
     let mut label_hash = 0xcbf2_9ce4_8422_2325usize;
     for row_idx in 0..count {
         let row = aligned_properties + EDIT_PROPERTY_SIZE.saturating_mul(row_idx);
-        let controller = unsafe { safe_read_usize(row + EDIT_PROPERTY_CONTROLLER_OFFSET) }.unwrap_or(0);
+        let controller =
+            unsafe { safe_read_usize(row + EDIT_PROPERTY_CONTROLLER_OFFSET) }.unwrap_or(0);
         let action = if controller != 0 {
             unsafe {
-                safe_read_usize(
-                    controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET,
-                )
+                safe_read_usize(controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET)
             }
             .unwrap_or(0)
         } else {
@@ -1406,7 +1419,15 @@ unsafe fn sample_optionsetting_pane_visibility(base: usize, option_window: usize
     let root_proxy = option_window + OPTION_SETTING_ROOT_PROXY_OFFSET;
 
     // The pane CONTAINER: its resolved-but-not-visible state IS the direct blank-pane signature.
-    let wl = unsafe { resolve_optionsetting_pane(base, assign, dtor, root_proxy, OPTIONSETTING_WINDOWLIST_NAME) };
+    let wl = unsafe {
+        resolve_optionsetting_pane(
+            base,
+            assign,
+            dtor,
+            root_proxy,
+            OPTIONSETTING_WINDOWLIST_NAME,
+        )
+    };
 
     // Each option pane -> per-pane resolved/visible bitmasks (bit index = pane order).
     let mut resolved_mask: usize = 0;
@@ -1464,7 +1485,9 @@ unsafe fn sample_optionsetting_pane_visibility(base: usize, option_window: usize
 
     // Which tab is the user on: SettingTabControl (window+0x1870) -> tab view (+0x10) -> index (+0xd4).
     let tab_view = unsafe {
-        safe_read_usize(option_window + OPTIONSETTING_TAB_CONTROL_OFFSET + OPTIONSETTING_TAB_VIEW_OFFSET)
+        safe_read_usize(
+            option_window + OPTIONSETTING_TAB_CONTROL_OFFSET + OPTIONSETTING_TAB_VIEW_OFFSET,
+        )
     }
     .unwrap_or(0);
     let current_tab = if tab_view >= OPTIONSETTING_WINDOW_MIN_PTR {
@@ -1485,7 +1508,8 @@ unsafe fn sample_optionsetting_pane_visibility(base: usize, option_window: usize
     // OLD (mislabeled) signature -- kept only as a secondary diagnostic; it is a constant, not the bug.
     let named_blank = wl.visible && visible_mask == 0;
     // REAL blank: a healthy pane was seen earlier, and now the actively-shown current pane is hidden.
-    let real_blank = ever_visible && actively_shown && current_dialog != 0 && cur_is_display && !cur_visible;
+    let real_blank =
+        ever_visible && actively_shown && current_dialog != 0 && cur_is_display && !cur_visible;
 
     // FIX: when the currently-selected tab's real pane is blank, run the native tab-select refresh for
     // THAT current tab, not just SetVisible. Manual SetVisible was disproven: it increments the fix

@@ -1293,9 +1293,18 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         // CheckReturnToTitle (return_title.rs:1-7). This is distinct from bc4 (the 1st teardown flag): the
         // suppressed quit-save that would pump bc4->3 and set 0x5d never runs, so we supply the
         // ending-request input directly. Gate on the EXACT stuck signature + a sustained streak so a
-        // healthy load (leaves 18 in a few frames) never trips it; ENDING_REQUEST_SET_COUNT is the semaphore.
+        // healthy load (leaves 18 in a few frames) never trips it. The recovery is old-world TEARDOWN-only:
+        // after Continue/SetState5 hands off to the incoming world (`AUTOLOAD_HANDOFF`), the same mms18
+        // shape can describe the NEW load's finish gate. Replaying rt5d there reopens the return-title path
+        // instead of proving the new world settled, so exclude the whole handoff phase. ENDING_REQUEST_SET_COUNT
+        // is the semaphore.
         if let Some(md) = menudata {
-            let stuck_mms18 = player_present
+            let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+            let old_world_teardown_phase = quickload_phase
+                >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+                && quickload_phase < SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF;
+            let stuck_mms18 = old_world_teardown_phase
+                && player_present
                 && ig_d8 == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING
                 && mms_step == MOVEMAPSTEP_STEP_MOVEMAP_INDEX
                 && md_5e == 0
@@ -2182,8 +2191,10 @@ unsafe fn switch_slot_arm_programmatic(base: usize, slot: i32) {
     ENDING_REQUEST_SET.store(1, Ordering::SeqCst); // enable the existing clear-on-leave-18 latch
     SWITCH_TRIGGER_TEARDOWN_COUNT.fetch_add(1, Ordering::SeqCst);
     // Phase LAST, only after the teardown flag is set, so the fire gate can never see a half-arm.
-    SYSTEM_QUIT_QUICKLOAD_PHASE
-        .store(SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED, Ordering::SeqCst);
+    SYSTEM_QUIT_QUICKLOAD_PHASE.store(
+        SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED,
+        Ordering::SeqCst,
+    );
     SWITCH_TRIGGER_LAST_SLOT.store(slot as usize, Ordering::SeqCst);
     let n = SWITCH_TRIGGER_ARM_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
     append_autoload_debug(format_args!(
