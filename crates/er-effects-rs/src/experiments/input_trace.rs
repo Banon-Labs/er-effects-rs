@@ -90,6 +90,20 @@ static TRACE_SEM_SEQ: AtomicUsize = AtomicUsize::new(0);
 static TRACE_LAST_HB_MS: AtomicU64 = AtomicU64::new(0);
 const TRACE_HB_INTERVAL_MS: u64 = 2000;
 
+/// WORLD-CLOCK-LIVE semaphore (user-directed 2026-07-19): GameDataMan::play_time (ms) advances only
+/// while the world simulation steps. Tracking how far it has risen BEYOND the value first seen this
+/// load epoch proves the world is genuinely ticking -- a distinct, earlier readiness stage than
+/// `can_move` (which needs control) and than "loading complete". Per load epoch (fresh_deser) the
+/// baseline resets, so `play_time_advanced_ms` is the clock's rise within THIS load; emitting it in the
+/// sem trace lets loadcmp-diff show exactly which checkpoint each load first has a live clock -- so the
+/// reload can be compared to where it occurs in the boot's chain.
+static PLAY_TIME_TRACE_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
+static PLAY_TIME_TRACE_FIRST: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(-1);
+/// Rise (ms) past the epoch baseline at which the clock counts as genuinely live (>= 1s, matching the
+/// loading-screen playtime stat the user observed incrementing one second at a time).
+const PLAY_TIME_LIVE_THRESHOLD_MS: i64 = 1000;
+
 /// Stick deflection past which a stick counts as a synthesized nav "press" (menu nav semantics;
 /// half of full scale, well past the XInput deadzone). Triggers likewise at half pull.
 const TRACE_STICK_NAV_THRESHOLD: i32 = 16384;
@@ -305,6 +319,12 @@ struct TraceSem {
     stable_frames: usize,
     msgbox_builds: usize,
     msgbox_dialog: bool,
+    /// Raw GameDataMan::play_time (ms); -1 if unreadable.
+    play_time_ms: i64,
+    /// play_time rise past this load epoch's first-seen value; -1 until a baseline exists.
+    play_time_advanced_ms: i64,
+    /// The world clock has advanced >= PLAY_TIME_LIVE_THRESHOLD_MS this epoch (world genuinely live).
+    play_time_live: bool,
 }
 
 fn input_trace_semaphores() -> TraceSem {
@@ -458,6 +478,38 @@ fn input_trace_semaphores() -> TraceSem {
         };
     let mms_raw = SWITCH_ORACLE_MMS_STEP.load(Ordering::SeqCst);
     let msgbox_raw = MSGBOX_TOTAL_BUILDS.load(Ordering::SeqCst);
+    // WORLD-CLOCK-LIVE: GameDataMan::play_time (ms). Reset the per-epoch baseline when the load epoch
+    // changes, then measure the rise past it. Only baseline on a real (>=0) reading so a paused/-1 read
+    // never fixes a bogus origin.
+    let gdm_for_pt = game_data_man_ptr_or_null();
+    let play_time_ms: i64 = if gdm_for_pt == null {
+        -1
+    } else {
+        unsafe { safe_read_usize(gdm_for_pt + crate::GAME_DATA_MAN_PLAY_TIME_A0_OFFSET) }
+            .map_or(-1, |v| i64::from((v & 0xffff_ffff) as u32))
+    };
+    let pt_epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+    if PLAY_TIME_TRACE_EPOCH.swap(pt_epoch, Ordering::SeqCst) != pt_epoch {
+        PLAY_TIME_TRACE_FIRST.store(-1, Ordering::SeqCst);
+    }
+    // Baseline only on a LOADED-character playtime (> 0). A pre-load frame reads play_time == 0
+    // (no character resident yet); baselining there makes the delta explode to the whole save's
+    // playtime once the character loads (observed on boot). Requiring > 0 latches the baseline at the
+    // character's real loaded playtime, so advanced_ms is the clock's rise within THIS load.
+    if play_time_ms > 0
+        && PLAY_TIME_TRACE_FIRST
+            .compare_exchange(-1, play_time_ms, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    {
+        // baseline latched this frame
+    }
+    let pt_first = PLAY_TIME_TRACE_FIRST.load(Ordering::SeqCst);
+    let play_time_advanced_ms: i64 = if play_time_ms >= 0 && pt_first >= 0 {
+        play_time_ms - pt_first
+    } else {
+        -1
+    };
+    let play_time_live = play_time_advanced_ms >= PLAY_TIME_LIVE_THRESHOLD_MS;
     TraceSem {
         focused: game_input_accept_now(),
         menu_top: SYSTEM_QUIT_INGAME_TOP_WINDOW.load(Ordering::SeqCst) != null,
@@ -520,6 +572,9 @@ fn input_trace_semaphores() -> TraceSem {
             msgbox_raw
         },
         msgbox_dialog: MSGBOX_LAST_DIALOG.load(Ordering::SeqCst) != null,
+        play_time_ms,
+        play_time_advanced_ms,
+        play_time_live,
     }
 }
 
@@ -580,6 +635,9 @@ impl TraceSem {
         mix(self.mms_b7c1 as u32 as u64);
         mix(self.msgbox_builds as u64);
         mix(self.msgbox_dialog as u64);
+        // Only the LIVE transition keys a row (not the per-frame raw ms), so "world clock went live"
+        // shows up as one checkpoint in the load1-vs-load2 diff, not a row every tick.
+        mix(self.play_time_live as u64);
         // Key must never collide with the "none yet" sentinel 0.
         h | 1
     }
@@ -598,7 +656,8 @@ impl TraceSem {
              \"can_move\":{},\"move_epoch\":{},\"bar_frame\":{},\"bar_max_frame\":{},\"bar_progress_permille\":{},\
              \"mms_step\":{},\"mms_name\":\"{}\",\"mms_next\":{},\"mms_done50\":{},\
              \"mms_gate_lo\":{},\"mms_gate_hi\":{},\"mms_hold270\":{},\"mms_cd100\":{},\"mms_req248\":{},\"mms_b7c1\":{},\
-             \"mms_blocks\":{},\"stable_frames\":{},\"msgbox_builds\":{},\"msgbox_dialog\":{}",
+             \"mms_blocks\":{},\"stable_frames\":{},\"msgbox_builds\":{},\"msgbox_dialog\":{},\
+             \"play_time_ms\":{},\"play_time_advanced_ms\":{},\"play_time_live\":{}",
             self.focused,
             self.menu_top,
             self.menu_opt,
@@ -649,6 +708,9 @@ impl TraceSem {
             self.stable_frames,
             self.msgbox_builds,
             self.msgbox_dialog,
+            self.play_time_ms,
+            self.play_time_advanced_ms,
+            self.play_time_live,
         )
     }
 }

@@ -205,6 +205,8 @@ def _checkpoint_names(row: dict) -> list[str]:
         names.append("main_player:present")
     if row.get("player"):
         names.append("player:present")
+    if row.get("play_time_live"):
+        names.append("world_clock:live")  # play_time advanced >=1s past this load's baseline
     if row.get("can_move"):
         names.append("movement:can_move")
     return names
