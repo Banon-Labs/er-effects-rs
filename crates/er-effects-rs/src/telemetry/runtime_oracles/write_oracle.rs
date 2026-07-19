@@ -23,8 +23,7 @@ fn write_stepfinish_gate_oracle(body: &mut String) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let rd = |p: usize| -> Option<usize> { unsafe { crate::experiments::safe_read_usize(p) } };
     let rdi = |p: usize| -> i64 {
-        unsafe { crate::experiments::safe_read_usize(p) }
-            .map_or(-1, |v| i64::from(v as u32 as i32))
+        unsafe { crate::experiments::safe_read_usize(p) }.map_or(-1, |v| i64::from(v as u32 as i32))
     };
     let mut owner = TITLE_OWNER_PTR.load(Ordering::SeqCst);
     if owner == null {
@@ -36,27 +35,38 @@ fn write_stepfinish_gate_oracle(body: &mut String) {
         None
     };
     let request_code = ingame.map_or(-1, |ig| rdi(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET));
-    let mms = ingame.and_then(|ig| rd(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET).filter(|v| *v != null));
+    let mms =
+        ingame.and_then(|ig| rd(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET).filter(|v| *v != null));
     const MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET: usize = 0x12a;
     let (warmup, testnet_stepper, mms_state, finalize_substate_12a) = match mms {
         Some(m) => (
             rdi(m + MOVEMAPSTEP_FINISH_WARMUP_B0_OFFSET),
             rd(m + MOVEMAPSTEP_TESTNETSTEP_STEPPER_110_OFFSET).unwrap_or(0),
             rdi(m + MOVEMAPSTEP_STATE_48_RE_OFFSET),
-            unsafe { crate::experiments::safe_read_u8(m + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET) }
-                .map_or(-1, i64::from),
+            unsafe {
+                crate::experiments::safe_read_u8(m + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET)
+            }
+            .map_or(-1, i64::from),
         ),
         None => (-1, usize::MAX, -1, -1),
     };
     // CSRemo-idle gate inputs (read-only, no vtable call): remoMan present + pending qword.
     let (csremo, remoman, remo_pending) = if let Ok(base) = crate::experiments::game_module_base() {
-        let csremo = rd(base + GLOBAL_CSREMO_RVA).filter(|v| *v != null).unwrap_or(0);
+        let csremo = rd(base + GLOBAL_CSREMO_RVA)
+            .filter(|v| *v != null)
+            .unwrap_or(0);
         let remoman = if csremo != 0 {
-            rd(csremo + CSREMO_REMOMAN_08_OFFSET).filter(|v| *v != null).unwrap_or(0)
+            rd(csremo + CSREMO_REMOMAN_08_OFFSET)
+                .filter(|v| *v != null)
+                .unwrap_or(0)
         } else {
             0
         };
-        let pending = if remoman != 0 { rd(remoman + CSREMOMAN_PENDING_D0_OFFSET).unwrap_or(0) } else { 0 };
+        let pending = if remoman != 0 {
+            rd(remoman + CSREMOMAN_PENDING_D0_OFFSET).unwrap_or(0)
+        } else {
+            0
+        };
         (csremo, remoman, pending)
     } else {
         (0, 0, 0)
@@ -263,9 +273,11 @@ fn write_player_presence_oracle(body: &mut String) {
     // deserialize commits, mid-loading) CAN_MOVE_CONFIRMED is still latched from the PRIOR load until the
     // probe's next in-world tick resets it, so gate on MOVE_PROBE_EPOCH == current fresh_deser to avoid
     // misattributing the prior load's movement to the new one (the false-pass fix).
-    let cur_deser = crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+    let cur_deser =
+        crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
     let probe_epoch = crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst);
-    let can_move = crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst) && probe_epoch == cur_deser;
+    let can_move =
+        crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst) && probe_epoch == cur_deser;
     body.push_str(&format!(
         "  \"oracle_can_move\": {},\n  \"oracle_move_probe_moved_frames\": {},\n",
         can_move,

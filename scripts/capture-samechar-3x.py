@@ -33,6 +33,7 @@ FINAL_LOAD_DWELL_SECONDS = (
 BOOT_TIMEOUT_SECONDS = (
     110.0  # if no in-world player by here, the boot failed -> tear down, don't idle
 )
+LOADING_PROGRESS_STALL_SECONDS = 10.0
 
 # Interruptible poll wait (never set) -- the sanctioned no-bare-sleep pace primitive (see
 # scripts/multi-load-proof-monitor.py); real synchronization is the telemetry-file readiness checks.
@@ -89,6 +90,12 @@ def snap(t: dict) -> dict:
         "oracle_play_time_ms",
         "oracle_now_loading",
         "oracle_fake_loading_any_visible",
+        "oracle_fake_loading_field_c",
+        "oracle_fake_loading_field_10",
+        "oracle_loading_bar_enabled",
+        "oracle_loading_bar_current_frame",
+        "oracle_loading_bar_max_frame",
+        "oracle_loading_bar_progress_permille",
         "oracle_stepfinish_request_code",
         "oracle_stepfinish_mms_state",
         "oracle_stepfinish_finalize_substate_12a",
@@ -181,6 +188,11 @@ def main() -> int:
     max_activate = (
         0  # profile-load confirm activations = number of reload ATTEMPTS started
     )
+    last_loading_progress_signature: tuple | None = None
+    last_loading_progress_at: float | None = None
+    loading_stall_signature: tuple | None = None
+    loading_stall_source: str | None = None
+    loading_stall_seconds = 0.0
 
     while True:
         now = time.monotonic()
@@ -205,6 +217,68 @@ def main() -> int:
             can_move = bool(s.get("oracle_can_move"))
             if present and first_present_at is None:
                 first_present_at = now
+
+            # User-directed teardown guard (2026-07-19): if the loading bar stops making observable
+            # progress for >10s, preserve artifacts and fail immediately instead of consuming the full
+            # runtime cap. Primary signal is the explicit RAM loading-bar progress oracle
+            # (`oracle_loading_bar_current_frame` / `oracle_loading_bar_progress_permille`), not a
+            # screenshot or broad cover-visible proxy. The coarse native-load signature is used only as
+            # a fallback when the loading-bar oracle is unavailable.
+            request_code = as_int(s.get("oracle_stepfinish_request_code"))
+            mms_state = as_int(s.get("oracle_stepfinish_mms_state"))
+            bar_enabled = as_int(s.get("oracle_loading_bar_enabled"), 0) > 0
+            bar_current_frame = as_int(s.get("oracle_loading_bar_current_frame"))
+            bar_progress_permille = as_int(s.get("oracle_loading_bar_progress_permille"))
+            bar_max_frame = as_int(s.get("oracle_loading_bar_max_frame"))
+            bar_progress_available = bar_enabled and (
+                bar_current_frame >= 0 or bar_progress_permille >= 0
+            )
+            if bar_progress_available:
+                loading_active = True
+                loading_progress_signature = (
+                    "loading_bar",
+                    as_int(deser, 0),
+                    as_int(activate, 0),
+                    bar_current_frame,
+                    bar_progress_permille,
+                    bar_max_frame,
+                )
+            else:
+                loading_active = bool(fake_cover or s.get("oracle_now_loading")) and (
+                    as_int(activate, 0) > 0
+                    or as_int(deser, 0) >= 1
+                    or request_code >= 0
+                    or mms_state >= 0
+                )
+                loading_progress_signature = (
+                    "native_load_fallback",
+                    as_int(deser, 0),
+                    as_int(activate, 0),
+                    as_int(nav_stage, 0),
+                    request_code,
+                    mms_state,
+                    as_int(s.get("oracle_stepfinish_finalize_substate_12a")),
+                    as_int(s.get("oracle_now_loading")),
+                    int(fake_cover),
+                    as_int(s.get("oracle_fake_loading_field_c")),
+                    as_int(s.get("oracle_fake_loading_field_10")),
+                )
+            loading_progress_source = str(loading_progress_signature[0])
+            if loading_active:
+                if loading_progress_signature != last_loading_progress_signature:
+                    last_loading_progress_signature = loading_progress_signature
+                    last_loading_progress_at = now
+                elif last_loading_progress_at is not None:
+                    loading_stall_seconds = now - last_loading_progress_at
+                    if loading_stall_seconds > LOADING_PROGRESS_STALL_SECONDS:
+                        loading_stall_signature = loading_progress_signature
+                        loading_stall_source = loading_progress_source
+                        result = "LOADING_PROGRESS_STALLED_10S"
+                        break
+            else:
+                last_loading_progress_signature = None
+                last_loading_progress_at = None
+                loading_stall_seconds = 0.0
 
             ep = epochs.setdefault(
                 int(deser),
@@ -300,16 +374,30 @@ def main() -> int:
         f"elapsed: {time.monotonic() - start:.1f}s (cap {args.max_seconds}s)",
         f"portrait_captured: {portrait_captured}",
         "",
-        "## Driver progress (attempt vs complete)",
-        f"- reload ATTEMPTS started (profile_load_activate_count): **{max_activate}**",
-        f"- reload COMPLETIONS committed (max fresh_deser epoch): **{completions}**",
-        f"- furthest menu-nav stage the driver reached (max sq_repro_state): **{max_nav_label}** ({max_nav_stage})",
-        "  - reaching CONFIRM(5) = a load was attempted; stalling below it (e.g. TO_PROFILE(3)) = the",
-        "    driver never drove the menu far enough to START the next load.",
-        "",
-        "## Per-load (fresh_deser epoch) settled signature",
-        "",
     ]
+    if loading_stall_signature is not None:
+        lines.extend(
+            [
+                "## Loading progress stall guard",
+                f"- source: {loading_stall_source}",
+                f"- stalled_for_seconds: {loading_stall_seconds:.1f}",
+                f"- stale_progress_signature: {loading_stall_signature}",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Driver progress (attempt vs complete)",
+            f"- reload ATTEMPTS started (profile_load_activate_count): **{max_activate}**",
+            f"- reload COMPLETIONS committed (max fresh_deser epoch): **{completions}**",
+            f"- furthest menu-nav stage the driver reached (max sq_repro_state): **{max_nav_label}** ({max_nav_stage})",
+            "  - reaching CONFIRM(5) = a load was attempted; stalling below it (e.g. TO_PROFILE(3)) = the",
+            "    driver never drove the menu far enough to START the next load.",
+            "",
+            "## Per-load (fresh_deser epoch) settled signature",
+            "",
+        ]
+    )
     epoch_names = {
         0: "load1 (boot autoload)",
         1: "load2 (first reload)",

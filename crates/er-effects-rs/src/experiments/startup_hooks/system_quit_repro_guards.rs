@@ -1092,7 +1092,10 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             // recovery), exactly as the user re-loads by hand from the still-openable menu. If movement DID
             // register for this epoch but native settlement is still pending, do not start the next switch;
             // keep waiting for the mms18/end5e advancer or the global cap so the harness exposes that bug.
-            if committed && !movement_proven_for_deser && waited >= SQ_REPRO_FREEZE_RECOVERY_DEADLINE {
+            if committed
+                && !movement_proven_for_deser
+                && waited >= SQ_REPRO_FREEZE_RECOVERY_DEADLINE
+            {
                 let next = switch_index + 1;
                 SQ_REPRO_SWITCH_INDEX.store(next, Ordering::SeqCst);
                 sq_repro_begin_switch();
