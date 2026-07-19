@@ -462,7 +462,8 @@ pub(crate) unsafe extern "system" fn xinput_get_state_hook(user_index: u32, stat
                 XINPUT_GAMEPAD_SIZE,
             );
             *(state.add(XINPUT_PACKET_OFFSET) as *mut u32) = pkt;
-            *(state.add(XINPUT_GAMEPAD_OFFSET + XINPUT_THUMB_LY_OFFSET_IN_GAMEPAD) as *mut i16) = ly;
+            *(state.add(XINPUT_GAMEPAD_OFFSET + XINPUT_THUMB_LY_OFFSET_IN_GAMEPAD) as *mut i16) =
+                ly;
         }
         return XINPUT_SUCCESS;
     }

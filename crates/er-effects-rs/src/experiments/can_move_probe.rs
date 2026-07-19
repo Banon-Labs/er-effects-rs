@@ -28,10 +28,32 @@ fn lock_prev() -> std::sync::MutexGuard<'static, Option<(f32, f32, f32)>> {
     PREV_POS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Drive one frame of the can-move probe. `render_ready` is the exact oracle combination
-/// (chr-model present AND draw-group AND render-group AND enable-render); `pos` is the local
-/// player's havok position this frame.
-pub(crate) fn tick(render_ready: bool, pos: (f32, f32, f32)) {
+/// Drive one frame of the can-move probe. Called every frame the local player is present (in-world);
+/// `pos` is the player's havok position this frame. It does NOT gate on `render_ready`/`draw_group`:
+/// live telemetry proved those read FALSE even for a visibly-rendered, user-controllable load (the
+/// only field that distinguished playable from frozen was havok MOVEMENT), so movement itself is the
+/// oracle. It injects a forward stick and counts consecutive frames of real displacement; a frozen
+/// character (static position) never accumulates, a controllable one clears 60 frames and latches.
+pub(crate) fn tick(pos: (f32, f32, f32)) {
+    // PROOF-ONLY: the probe drives real forward input, so it must NOT fire in a normal user session
+    // (it would fight the player). It runs only when the autonomous movement-proof harness stages the
+    // control file `er-effects-prove-movement.txt` next to the game exe. Cached after the first read
+    // (0=unknown, 1=on, 2=off); the harness writes the file before launch so it is present in-world.
+    static PROOF_GATE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+    let gate = PROOF_GATE.load(Ordering::Relaxed);
+    let enabled = if gate == 0 {
+        let on = crate::telemetry::game_directory_path()
+            .map(|d| d.join("er-effects-prove-movement.txt").exists())
+            .unwrap_or(false);
+        PROOF_GATE.store(if on { 1 } else { 2 }, Ordering::Relaxed);
+        on
+    } else {
+        gate == 1
+    };
+    if !enabled {
+        return;
+    }
+
     let epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
     // New load epoch -> reset the probe (each load must re-prove movement on its own).
     if MOVE_PROBE_EPOCH.swap(epoch, Ordering::SeqCst) != epoch {
@@ -42,24 +64,16 @@ pub(crate) fn tick(render_ready: bool, pos: (f32, f32, f32)) {
         *lock_prev() = None;
     }
 
-    // Already proven for this load -> stop injecting; let the user/world be.
+    // Already proven for this load -> stop injecting.
     if CAN_MOVE_CONFIRMED.load(Ordering::SeqCst) {
         MOVE_PROBE_ACTIVE.store(false, Ordering::SeqCst);
         MOVE_PROBE_STICK_LY.store(0, Ordering::SeqCst);
         return;
     }
 
-    // Not render-ready -> cannot be moving; hold the probe idle and reset the consecutive counter
-    // (a frozen load must never accumulate movement frames).
-    if !render_ready {
-        MOVE_PROBE_ACTIVE.store(false, Ordering::SeqCst);
-        MOVE_PROBE_STICK_LY.store(0, Ordering::SeqCst);
-        MOVE_PROBE_MOVED_FRAMES.store(0, Ordering::SeqCst);
-        *lock_prev() = None;
-        return;
-    }
-
-    // Render-ready: inject a forward stick and measure this frame's horizontal displacement.
+    // In-world: inject a forward stick and measure this frame's horizontal displacement. During a load
+    // screen / menu / frozen state the character does not move under the stick, so the consecutive
+    // counter simply never accumulates -- no false positive, no dependence on the broken render oracle.
     MOVE_PROBE_STICK_LY.store(MOVE_PROBE_STICK_FORWARD, Ordering::SeqCst);
     MOVE_PROBE_ACTIVE.store(true, Ordering::SeqCst);
     let mut prev = lock_prev();

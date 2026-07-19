@@ -71,11 +71,20 @@ PROFILE="$ARTIFACT_DIR/samechar-3x.me3"
 { echo "# staged by run-samechar-3x-twodll.sh"; echo "save_file = '$(win_path "$BOOT_FILE")'"; echo "slot = $BOOT_SLOT"; } > "$GAME_DIR/er-effects.toml"
 
 # --- arm sq-repro XInput autopilot for SWITCHES same-slot reloads ---
-printf '1\n' > "$GAME_DIR/er-effects-system-quit-repro.txt"
-printf '1\n' > "$GAME_DIR/er-effects-system-quit-load-switch.txt"
-printf '%s\n' "$SWITCHES" > "$GAME_DIR/er-effects-sq-target-switches.txt"
-printf '%s\n' "$TARGET_SLOTS" > "$GAME_DIR/er-effects-sq-target-slots.txt"
-rm -f "$GAME_DIR/er-effects-switch-slot.txt" 2>/dev/null
+# NO_SQREPRO=1 => pure AUTOLOAD-ONLY diagnostic (no sq-repro arming, no input-block, no driving):
+# observes whether the boot autoload alone reaches render_ready, isolating "sq-repro arming breaks
+# load1" from "the staged autoload itself freezes". Remove any stale sq-repro markers either way.
+rm -f "$GAME_DIR/er-effects-system-quit-repro.txt" "$GAME_DIR/er-effects-system-quit-load-switch.txt" \
+      "$GAME_DIR/er-effects-sq-target-switches.txt" "$GAME_DIR/er-effects-sq-target-slots.txt" \
+      "$GAME_DIR/er-effects-switch-slot.txt" 2>/dev/null
+if [[ "${NO_SQREPRO:-0}" != "1" ]]; then
+  printf '1\n' > "$GAME_DIR/er-effects-system-quit-repro.txt"
+  printf '1\n' > "$GAME_DIR/er-effects-system-quit-load-switch.txt"
+  printf '%s\n' "$SWITCHES" > "$GAME_DIR/er-effects-sq-target-switches.txt"
+  printf '%s\n' "$TARGET_SLOTS" > "$GAME_DIR/er-effects-sq-target-slots.txt"
+else
+  echo "NO_SQREPRO=1: autoload-only diagnostic (no driving) -- watching if load1 renders"
+fi
 
 # --- CLEAN SLATE: recreate every log/telemetry text file so no PRIOR run pollutes this one. The
 #     product DLL also self-truncates its debug log on first write per process; this sweep additionally
@@ -83,12 +92,22 @@ rm -f "$GAME_DIR/er-effects-switch-slot.txt" 2>/dev/null
 #     (*.txt) and the boot TOML are intentionally NOT touched. ---
 rm -f "$GAME_DIR"/er-effects-*.log "$GAME_DIR"/er-reload-trace.log "$GAME_DIR"/er-effects-telemetry.json 2>/dev/null
 
+# --- movement-proof gate: authorize the in-DLL can-move probe to inject a forward stick in-world and
+#     prove input moves the character (havok delta) -- the only reliable good-vs-frozen signal. Proof-
+#     only (absent in normal user sessions so it never fights the player). Skip in NO_SQREPRO+user-watch.
+if [[ "${PROVE_MOVEMENT:-1}" == "1" ]]; then
+  printf '1\n' > "$GAME_DIR/er-effects-prove-movement.txt"
+else
+  rm -f "$GAME_DIR/er-effects-prove-movement.txt" 2>/dev/null
+fi
+
 # shellcheck disable=SC2317
 cleanup() {
   taskkill.exe /F /IM eldenring.exe >/dev/null 2>&1
   taskkill.exe /F /IM me3.exe >/dev/null 2>&1
   rm -f "$GAME_DIR/er-effects-system-quit-repro.txt" "$GAME_DIR/er-effects-system-quit-load-switch.txt" \
-        "$GAME_DIR/er-effects-sq-target-switches.txt" "$GAME_DIR/er-effects-sq-target-slots.txt" 2>/dev/null
+        "$GAME_DIR/er-effects-sq-target-switches.txt" "$GAME_DIR/er-effects-sq-target-slots.txt" \
+        "$GAME_DIR/er-effects-prove-movement.txt" 2>/dev/null
   [[ -f "$ARTIFACT_DIR/er-effects.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-effects.toml.bak" "$GAME_DIR/er-effects.toml"
 }
 trap cleanup EXIT

@@ -64,8 +64,8 @@ pub(crate) use present_overlay::*;
 mod native_overlay;
 pub(crate) use native_overlay::*;
 
-mod input_block;
 pub(crate) mod can_move_probe;
+mod input_block;
 pub(crate) use input_block::*;
 
 mod input_trace;
