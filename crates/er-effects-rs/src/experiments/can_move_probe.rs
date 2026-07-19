@@ -56,6 +56,67 @@ unsafe extern "system" fn pad_poll_hook(this: usize, a: usize, b: usize, c: usiz
     ret
 }
 
+/// `Game.Debug::IsEnableControlOnDisactiveWindow` (deobf `0x140e53220`, RE `AUTONOMOUS-FOCUS-FIX-...`):
+/// returns false in retail. Its result is cached to `CSPadStep+0xba` every frame; when the ER window
+/// is UNFOCUSED and that byte is 0, `CSPadStep::STEP_Update` runs the pad-manager on the "inactive"
+/// path that latches a flag which makes the locomotion consumer DISCARD our injected stick (menus still
+/// work via the separate DLUID+0x88d gate, but gameplay movement does not). Forcing this to return 1
+/// makes the unfocused path byte-identical to the focused one, so the injected pad stick reaches
+/// locomotion WITHOUT the window being active -- the missing half of an autonomous, focus-free proof.
+const IS_ENABLE_CONTROL_ON_DISACTIVE_RVA: u32 = 0xe53220;
+
+unsafe extern "system" fn is_enable_control_on_disactive_hook(
+    _a: usize,
+    _b: usize,
+    _c: usize,
+    _d: usize,
+) -> usize {
+    1
+}
+
+/// Install the "enable control on inactive window" override once (proof runs only). We never call the
+/// original (it just returns a debug bool), so no trampoline is retained.
+fn install_focus_override_hook() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        match unsafe { MH_Initialize() } {
+            MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+            status => {
+                append_autoload_debug(format_args!(
+                    "can-move: focus-override MH_Initialize failed: {status:?}"
+                ));
+                return;
+            }
+        }
+        let Ok(addr) = crate::game_rva(IS_ENABLE_CONTROL_ON_DISACTIVE_RVA) else {
+            append_autoload_debug(format_args!("can-move: focus-override game_rva failed"));
+            return;
+        };
+        match unsafe {
+            MhHook::new(
+                addr as *mut c_void,
+                is_enable_control_on_disactive_hook as *mut c_void,
+            )
+        } {
+            Ok(hook) => {
+                if unsafe { hook.queue_enable() }.is_ok()
+                    && matches!(unsafe { MH_ApplyQueued() }, MH_STATUS::MH_OK)
+                {
+                    std::mem::forget(hook);
+                    append_autoload_debug(format_args!(
+                        "can-move: focus-override installed at 0x{addr:x} (IsEnableControlOnDisactiveWindow->1: gameplay input applies while unfocused)"
+                    ));
+                } else {
+                    append_autoload_debug(format_args!("can-move: focus-override enable failed"));
+                }
+            }
+            Err(status) => append_autoload_debug(format_args!(
+                "can-move: focus-override MhHook::new failed: {status:?}"
+            )),
+        }
+    });
+}
+
 /// Install the pad-poll hook once (only when the movement proof is authorized).
 fn install_pad_poll_hook() {
     static INSTALLED: std::sync::Once = std::sync::Once::new();
@@ -127,6 +188,7 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
         return;
     }
     install_pad_poll_hook();
+    install_focus_override_hook();
 
     let epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
     // New load epoch -> reset the probe (each load must re-prove movement on its own).
