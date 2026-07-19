@@ -192,6 +192,12 @@ pub(crate) static SWITCH_ORACLE_MMS_FINISH_HITS: AtomicUsize = AtomicUsize::new(
 /// FUN_1400a40c0: MoveMapStep_StepperArray[0x12]). This is the FINAL fade/finalize step; index 19 =
 /// Cleanup, 20 = Finish follow. The 3rd-load softlock parks the child here.
 pub(crate) const MOVEMAPSTEP_STEP_MOVEMAP_INDEX: i32 = 18;
+/// Live/deobf RVA for `CS::MoveMapStep::STEP_MoveMap` (dump 0x140af7de0 -> deobf 0x140af7cf0,
+/// content-unique shift -0xf0). Hooked after-original to clear +0x4b8 before the state machine consumes
+/// the gate when the same-session reload has not proved movement yet.
+pub(crate) const MOVEMAPSTEP_STEP_MOVEMAP_RVA: usize = 0x00af7cf0;
+pub(crate) static MOVEMAPSTEP_STEP_MOVEMAP_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static MOVEMAPSTEP_STEP_MOVEMAP_ORIG: AtomicUsize = AtomicUsize::new(0);
 /// MoveMapStep advance-gate byte (`field_0x4b8`). STEP_MoveMap sets the u16 at +0x4b8 to 1 each frame,
 /// then blockers knock it down; it advances only when the LOW byte (+0x4b8) stays nonzero. Low byte 0 =
 /// blocked; +0x4b9 high byte 1 with low 0 = the WorldChrMan-not-ready (`0x100`) branch fired.

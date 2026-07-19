@@ -142,6 +142,76 @@ pub(crate) unsafe fn install_title_anim_speed_hook(base: usize) {
     }
     std::mem::forget(hooks);
 }
+
+/// After-original detour for `CS::MoveMapStep::STEP_MoveMap` (state 18). Native writes the advance gate
+/// at `MoveMapStep+0x4b8` near the end of this function; a normal game-task write runs too late because
+/// the state machine can consume the gate and run Cleanup/Finish in the same tick. This detour calls the
+/// original first, then clears the gate only for the current same-session reload until movement proof.
+pub(crate) unsafe extern "system" fn movemapstep_step_move_map_gate_detour(
+    mms: usize,
+    task_data: usize,
+    r8: usize,
+    r9: usize,
+) -> usize {
+    let orig_addr = MOVEMAPSTEP_STEP_MOVEMAP_ORIG.load(Ordering::SeqCst);
+    if orig_addr == TITLE_OWNER_SCAN_START_ADDRESS {
+        return 0;
+    }
+    let orig: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig_addr) };
+    let ret = unsafe { orig(mms, task_data, r8, r9) };
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        let reload_epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+        let movement_proven_for_reload = crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
+            && crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == reload_epoch;
+        if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+            == SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
+            && reload_epoch > 0
+            && !movement_proven_for_reload
+            && mms > 0x10000
+        {
+            let old_gate = unsafe { safe_read_u8(mms + MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET) }
+                .unwrap_or(0);
+            if old_gate != 0 {
+                unsafe {
+                    *((mms + MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET) as *mut u8) = 0;
+                }
+                let n = SYSTEM_QUIT_QUICKLOAD_MMS4B8_HOLD_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+                if n <= 8 || n.is_power_of_two() {
+                    append_autoload_debug(format_args!(
+                        "AUTOLOAD-HANDOFF MMS4B8 DETOUR HOLD #{n}: epoch={reload_epoch} mms=0x{mms:x} old_gate={old_gate}; cleared after STEP_MoveMap before state-machine advance"
+                    ));
+                }
+            }
+        }
+    }));
+    ret
+}
+
+/// Install the `STEP_MoveMap` after-original advance-gate hook ONCE. Runtime-falsified task-tick holds
+/// were too late; this hook runs immediately after the native state-18 body.
+pub(crate) unsafe fn install_movemapstep_step_move_map_gate_hook(base: usize) {
+    if MOVEMAPSTEP_STEP_MOVEMAP_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        != TITLE_OWNER_SCAN_START_ADDRESS
+    {
+        return;
+    }
+    let mut hooks = Vec::new();
+    unsafe {
+        create_continue_trace_hook(
+            &mut hooks,
+            "movemapstep_step_movemap_gate_af7cf0",
+            MOVEMAPSTEP_STEP_MOVEMAP_RVA as u32,
+            movemapstep_step_move_map_gate_detour as *mut c_void,
+            &MOVEMAPSTEP_STEP_MOVEMAP_ORIG,
+        );
+    }
+    append_autoload_debug(format_args!(
+        "movemapstep-step-movemap-gate-hook: INSTALLED on 0x{:x} -- after-original +0x4b8 reload hold armed",
+        base + MOVEMAPSTEP_STEP_MOVEMAP_RVA,
+    ));
+    std::mem::forget(hooks);
+}
 /// READ-ONLY trace detour for the title step-setter `SetState(owner, int state)` (deobf 0x140b0d960).
 /// Logs every native state transition with a timestamp + the current owner+0xe0 (TitleTopDialog
 /// holder) liveness, then calls the original UNCHANGED. Pure observation -- this is the
