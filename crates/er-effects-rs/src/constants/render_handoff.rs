@@ -114,6 +114,10 @@ pub(crate) const MOVEMAPSTEP_FINISH_WARMUP_B0_OFFSET: usize = 0xb0;
 /// `CSMenuMan+0x798` -- NowLoading cover MenuJob slot (the STABLE-session marker; != 0 is HEALTHY).
 #[allow(dead_code)]
 pub(crate) const CSMENUMAN_NOWLOADING_JOB_798_OFFSET: usize = 0x798;
+/// `CSMenuMan+0x728` -- `loadingScreenData.mode` written by deobf `FUN_14067a410` via the helper at
+/// `0x140860d80`: `CSMenuMan+0x720+8 = mode`.
+#[allow(dead_code)]
+pub(crate) const CSMENUMAN_LOADINGSCREEN_MODE_728_OFFSET: usize = 0x728;
 /// `CSMenuMan+0x730` -- `loadingScreenData.field_0x10` (drives per-frame cover-job recreation).
 #[allow(dead_code)]
 pub(crate) const CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET: usize = 0x730;

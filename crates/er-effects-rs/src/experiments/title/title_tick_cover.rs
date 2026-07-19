@@ -1268,86 +1268,10 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         let mms_req248 = mms
             .and_then(|m| unsafe { safe_read_i32(m + MOVEMAPSTEP_FINALIZE_REQ_248_OFFSET) })
             .unwrap_or(-1);
-        // SAME-SESSION RELOAD HANDOFF FIX CANDIDATE (2026-07-19): after native MoveMap reaches FINISH
-        // for a reload, InGameStep::STEP_RequestWait(2) keeps the session alive only while
-        // CSMenuMan+0x798 remains non-null. Ghidra shows +0x798 is recreated from
-        // loadingScreenData.field_0x10 (CSMenuMan+0x730). Runtime then showed field_0x11 stayed asserted
-        // while the job drained, so field_0x10 alone was not enough: keep the native loading-screen job gate
-        // armed and suppress the close/result request until the current reload epoch proves movement.
-        // Do not use it on boot or after movement proof.
-        let reload_epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
-        let movement_proven_for_reload = crate::constants::CAN_MOVE_CONFIRMED
-            .load(Ordering::SeqCst)
-            && crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == reload_epoch;
-        let movemap_finished_or_absent = mms_step >= 20 || (mms.is_none() && ig_d8 >= 1);
-        if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
-            == SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
-            && reload_epoch > 0
-            && !movement_proven_for_reload
-            && movemap_finished_or_absent
-            && matches!(ig_d8, 1 | 2)
-        {
-            if let Some(mms_ptr) = mms {
-                let old244 = unsafe { safe_read_u8(mms_ptr + MOVEMAPSTEP_TITLE_DONE_244_OFFSET) }
-                    .unwrap_or(0);
-                if old244 != 0 {
-                    unsafe {
-                        *((mms_ptr + MOVEMAPSTEP_TITLE_DONE_244_OFFSET) as *mut u8) = 0;
-                    }
-                    let n =
-                        SYSTEM_QUIT_QUICKLOAD_MMS244_HOLD_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-                    if n <= 8 || n.is_power_of_two() {
-                        append_autoload_debug(format_args!(
-                            "AUTOLOAD-HANDOFF MMS244 HOLD #{n}: epoch={reload_epoch} ig_d8={ig_d8} mms_step={mms_step} menu_job=0x{menu_job:x}; deferring TitleStep completion until movement proof"
-                        ));
-                    }
-                }
-            }
-            if let Some(menu) = menu_man {
-                let old6b0 = unsafe { safe_read_u8(menu + CS_MENU_MAN_FIELD_6B0_OFFSET) }.unwrap_or(0);
-                let old10 =
-                    unsafe { safe_read_u8(menu + CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET) }
-                        .unwrap_or(0);
-                let old11 =
-                    unsafe { safe_read_u8(menu + CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET + 1) }
-                        .unwrap_or(0);
-                if old6b0 == 0 {
-                    unsafe {
-                        *((menu + CS_MENU_MAN_FIELD_6B0_OFFSET) as *mut u8) = 1;
-                    }
-                    let n = SYSTEM_QUIT_QUICKLOAD_CSM6B0_HOLD_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-                    if n <= 8 || n.is_power_of_two() {
-                        append_autoload_debug(format_args!(
-                            "AUTOLOAD-HANDOFF CSM6B0 HOLD #{n}: epoch={reload_epoch} ig_d8={ig_d8} mms_step={mms_step} menu_job=0x{menu_job:x}; preserving RequestWait loading-session active bit until movement proof"
-                        ));
-                    }
-                }
-                if old10 == 0 {
-                    unsafe {
-                        *((menu + CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET) as *mut u8) = 1;
-                    }
-                    let n =
-                        SYSTEM_QUIT_QUICKLOAD_LS10_REARM_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-                    if n <= 8 || n.is_power_of_two() {
-                        append_autoload_debug(format_args!(
-                            "AUTOLOAD-HANDOFF LS10 REARM #{n}: epoch={reload_epoch} ig_d8={ig_d8} mms_step={mms_step} menu_job=0x{menu_job:x}; keeping CSMenuMan+0x798 alive until movement proof"
-                        ));
-                    }
-                }
-                if old11 != 0 {
-                    unsafe {
-                        *((menu + CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET + 1) as *mut u8) = 0;
-                    }
-                    let n =
-                        SYSTEM_QUIT_QUICKLOAD_LS11_CLEAR_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-                    if n <= 8 || n.is_power_of_two() {
-                        append_autoload_debug(format_args!(
-                            "AUTOLOAD-HANDOFF LS11 CLEAR #{n}: epoch={reload_epoch} ig_d8={ig_d8} mms_step={mms_step} menu_job=0x{menu_job:x}; suppressing loading close until movement proof"
-                        ));
-                    }
-                }
-            }
-        }
+        // Rejected 2026-07-19 same-session handoff write experiments removed from the live path:
+        // LS10 rearm, LS11 clear, MoveMap+0x244 hold, and CSMenuMan+0x6b0 hold all fired in bounded
+        // probes and still ended with player=false / requestCode 0. Keep probing read-only below so new
+        // evidence is not confounded by stale candidate writes.
         // ENDING-REQUEST diagnostic (2nd runtime-accum lock, 2026-07-16). STEP_MoveMap walks the child
         // to its -1 terminal only while the advancer FUN_140afa7c0 sets menuData+0x5e (cVar10 = an
         // ending/load-completion condition). If 0x5e stays 0 on a re-load, the child parks at resident
@@ -1390,6 +1314,13 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             .unwrap_or(-1);
         let csm6b0 = menu_man
             .and_then(|m| unsafe { safe_read_u8(m + CS_MENU_MAN_FIELD_6B0_OFFSET) })
+            .map(|b| b as i32)
+            .unwrap_or(-1);
+        let lsmode = menu_man
+            .and_then(|m| unsafe { safe_read_u8(m + CSMENUMAN_LOADINGSCREEN_MODE_728_OFFSET) })
+            .map(|b| b as i32)
+            .unwrap_or(-1);
+        let gm_bf5 = unsafe { safe_read_u8(gm + GAME_MAN_LOADING_MODE_BF5_OFFSET) }
             .map(|b| b as i32)
             .unwrap_or(-1);
         let delay_delete = unsafe { safe_read_usize(module_base + CS_DELAY_DELETE_MAN_GLOBAL_RVA) }
@@ -1556,7 +1487,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             // vtable[0x10] load-state getter that returns null (why the legacy load is never created).
             let blk_vt_rva = mms_blk_vt.saturating_sub(module_base);
             append_autoload_debug(format_args!(
-                "SWITCH-ORACLE #{n}: slot={slot} bc4={bc4v} player={player_present} ig_d8={ig_d8} pstep={ig_pstep}/{ig_pnext} menu_job=0x{menu_job:x} csm6b0={csm6b0} ls10={loading_screen_field10} ls11={loading_screen_field11} dd=0x{delay_delete:x} dd40={dd40} dd54={dd54} wcm=0x{world_chr_man:x} mainp=0x{main_player:x} stable_frames={sf} peak={peak} mms=0x{mms_disp:x} mms_step={mms_step}({}) next={mms_next} done50={mms_done} gate={mms_gate_lo}/{mms_gate_hi} end5e={md_5e} rt5d={md_5d} force={ending_force} b7c={gb7c} b7d={gb7d} warp={gwarp} hold270=0x{mms_hold:x} cd100={mms_cd} req248={mms_req248} b7c1={mms_b7c1} blocks={mms_blocks} curblk=0x{mms_cur_block:x} b798=0x{mms_b798:x} b79c=0x{mms_b79c:x} blk_found={mms_block_found} blk_ls=0x{mms_blk_ls:x} blk_2c={mms_blk_2c} blk_2d={mms_blk_2d} blk_35={mms_blk_35} ar_wanted={mms_ar_wanted} ar_state={mms_ar_state} ar_bres={mms_ar_bres} fc_present={mms_fc_present} fc_notloaded={mms_fc_notloaded} fc_stuck=[{mms_fc_stuck}] blk_vt_rva=0x{blk_vt_rva:x} ll_size={ll_size} ll_fcap=0x{ll_fcap:x} ll_path='{ll_path}' ow_cnt={mms_ow_count} ow=[{mms_ow_areas}] blk_areas=[{mms_block_areas}] phase={} -- {cls}",
+                "SWITCH-ORACLE #{n}: slot={slot} bc4={bc4v} player={player_present} ig_d8={ig_d8} pstep={ig_pstep}/{ig_pnext} menu_job=0x{menu_job:x} csm6b0={csm6b0} lsmode={lsmode} ls10={loading_screen_field10} ls11={loading_screen_field11} gm_bf5={gm_bf5} dd=0x{delay_delete:x} dd40={dd40} dd54={dd54} wcm=0x{world_chr_man:x} mainp=0x{main_player:x} stable_frames={sf} peak={peak} mms=0x{mms_disp:x} mms_step={mms_step}({}) next={mms_next} done50={mms_done} gate={mms_gate_lo}/{mms_gate_hi} end5e={md_5e} rt5d={md_5d} force={ending_force} b7c={gb7c} b7d={gb7d} warp={gwarp} hold270=0x{mms_hold:x} cd100={mms_cd} req248={mms_req248} b7c1={mms_b7c1} blocks={mms_blocks} curblk=0x{mms_cur_block:x} b798=0x{mms_b798:x} b79c=0x{mms_b79c:x} blk_found={mms_block_found} blk_ls=0x{mms_blk_ls:x} blk_2c={mms_blk_2c} blk_2d={mms_blk_2d} blk_35={mms_blk_35} ar_wanted={mms_ar_wanted} ar_state={mms_ar_state} ar_bres={mms_ar_bres} fc_present={mms_fc_present} fc_notloaded={mms_fc_notloaded} fc_stuck=[{mms_fc_stuck}] blk_vt_rva=0x{blk_vt_rva:x} ll_size={ll_size} ll_fcap=0x{ll_fcap:x} ll_path='{ll_path}' ow_cnt={mms_ow_count} ow=[{mms_ow_areas}] blk_areas=[{mms_block_areas}] phase={} -- {cls}",
                 movemapstep_step_name(mms_step),
                 SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
             ));

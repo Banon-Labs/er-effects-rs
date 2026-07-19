@@ -26,6 +26,9 @@ pub(crate) const ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA: usize = 0x3d856a0;
 /// stuck re-load one of these is 0 when it should be 1 -- that's the stale runtime flag to reset.
 pub(crate) const GAME_MAN_ENDING_FLAG_B7C_OFFSET: usize = 0xb7c;
 pub(crate) const GAME_MAN_ENDING_FLAG_B7D_OFFSET: usize = 0xb7d;
+/// Gate used by the loading-screen mode setter at deobf `FUN_14067a410`: when this byte is 0,
+/// mode 2 is normalized to mode 0 before calling the `CSMenuMan+0x720` mode writer.
+pub(crate) const GAME_MAN_LOADING_MODE_BF5_OFFSET: usize = 0xbf5;
 pub(crate) const GAME_MAN_WARP_REQUESTED_10_OFFSET: usize = 0x10;
 /// `DAT_143d6c5e8` companion rebuild flag (data RVA). No readers found in the dump, but cleared for
 /// symmetry so we fully undo what the final functor set.
@@ -424,10 +427,6 @@ pub(crate) static SYSTEM_QUIT_QUICKLOAD_LS10_REARM_COUNT: AtomicUsize = AtomicUs
 /// Count of autoload-handoff reload frames where the DLL cleared CSMenuMan.loadingScreenData.field_0x11
 /// so the native loading-screen close/result request cannot prematurely drain +0x798 before movement proof.
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_LS11_CLEAR_COUNT: AtomicUsize = AtomicUsize::new(0);
-/// Count of autoload-handoff reload frames where the DLL held CSMenuMan+0x6b0 true. Native
-/// `STEP_RequestWait` writes this in requestCode 2 immediately before field_0x11 and +0x798 checks; the
-/// 2026-07-19 delay-delete run observed field_0x11 asserted while +0x6b0 read back 0.
-pub(crate) static SYSTEM_QUIT_QUICKLOAD_CSM6B0_HOLD_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Count of autoload-handoff reload frames where the DLL held MoveMapStep+0x244 false so
 /// TitleStep::GameStepWait cannot consume the reload as a completed return-to-title before movement proof.
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_MMS244_HOLD_COUNT: AtomicUsize = AtomicUsize::new(0);
