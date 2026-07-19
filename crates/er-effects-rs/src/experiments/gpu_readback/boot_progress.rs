@@ -427,9 +427,35 @@ fn boot_view_progress() -> (usize, usize) {
     // first-boot is untouched. SWITCH_ORACLE_MMS_STEP is published by the game-thread SWITCH-ORACLE.
     let (idx, pm) = if BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0 {
         let s = SWITCH_ORACLE_MMS_STEP.load(Ordering::SeqCst);
-        if s != usize::MAX && s < MOVEMAPSTEP_STEP_NAMES.len() {
-            let mms_pm = MMS_STEP_FILL_BASE + s * MMS_STEP_FILL_SPAN / MOVEMAPSTEP_STEP_NAMES.len();
-            (MMS_LABEL_IDX_BASE + s, pm.max(mms_pm))
+        // MoveMapStep child step (0..=20) while its child object is live.
+        let child_step = if s != usize::MAX && s <= MOVEMAPSTEP_STEP_FINISH_INDEX {
+            Some(s)
+        } else {
+            None
+        };
+        // InGameStep-level "N+1" step after the child's FINISH (20): the child runs inside the
+        // InGameStep's STEP_MoveMap_Update, so FINISH is NOT genuine readiness -- the InGameStep still
+        // advances STEP_MoveMap_Update -> STEP_MoveMap_Finish (request code +0xd8 draining 1 -> 2) and
+        // then to the resident in-world step. Surface those from the request code (user 2026-07-19:
+        // "the Nth step is really N+1 -- add the step") so the bar shows the true post-FINISH handoff
+        // and FREEZES on it during the render-handoff stall, instead of resting at FINISH 20/20.
+        let rc = SWITCH_ORACLE_REQUEST_CODE.load(Ordering::SeqCst);
+        let ingame_step = if rc >= 2 {
+            Some(INGAMESTEP_INWORLD_STEP_INDEX)
+        } else if rc >= 1 {
+            Some(INGAMESTEP_MAP_FINISH_STEP_INDEX)
+        } else {
+            None
+        };
+        // Furthest-advanced step wins so the bar never regresses across the child -> InGameStep handoff.
+        let step = match (child_step, ingame_step) {
+            (Some(c), Some(g)) => Some(c.max(g)),
+            (Some(c), None) => Some(c),
+            (None, g) => g,
+        };
+        if let Some(step) = step {
+            let step_pm = MMS_STEP_FILL_BASE + step * MMS_STEP_FILL_SPAN / (BOOT_LOAD_STEP_MAX + 1);
+            (MMS_LABEL_IDX_BASE + step, pm.max(step_pm))
         } else {
             (idx, pm)
         }
@@ -570,6 +596,30 @@ fn boot_view_movemap_submilestone(step: usize) -> (&'static str, usize, usize) {
     let request_code = SWITCH_ORACLE_REQUEST_CODE.load(Ordering::SeqCst);
     let mms_step = SWITCH_ORACLE_MMS_STEP.load(Ordering::SeqCst);
     let current_epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+    // InGameStep-level "N+1" handoff steps AFTER the MoveMapStep child FINISH (20). Phase-relevant
+    // substeps only (user 2026-07-19 loading-bar rule): step 21 is the STEP_MoveMap_Finish request-code
+    // drain (+0xd8 1 -> 2); step 22 is the resident in-world step (player + control).
+    if step >= INGAMESTEP_MAP_FINISH_STEP_INDEX {
+        let child_done = mms_step == usize::MAX || mms_step >= MOVEMAPSTEP_STEP_FINISH_INDEX;
+        let request_started = request_code >= 1;
+        let request_stable = request_code >= 2;
+        let menu_job_present = SWITCH_ORACLE_MENU_JOB_PRESENT.load(Ordering::SeqCst) != 0;
+        let player_present = SWITCH_ORACLE_PLAYER_PRESENT.load(Ordering::SeqCst) != 0;
+        let movement_proven = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
+            && MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == current_epoch;
+        if step >= INGAMESTEP_INWORLD_STEP_INDEX {
+            return boot_view_first_pending_substep(&[
+                (player_present, "PLAYER RESIDENT"),
+                (menu_job_present, "CSM 798 MENUJOB"),
+                (movement_proven, "MOVE PROOF"),
+            ]);
+        }
+        return boot_view_first_pending_substep(&[
+            (child_done, "MMS 244 DONE"),
+            (request_started, "IG D8 REQUEST 1"),
+            (request_stable, "IG D8 STABLE 2"),
+        ]);
+    }
     if step < MOVEMAPSTEP_STEP_MOVEMAP_INDEX as usize {
         return boot_view_single_submilestone(movemapstep_step_name(step as i32));
     }
@@ -1297,10 +1347,10 @@ fn boot_view_rasterize(
     };
     let label_buf: String = if idx >= MMS_LABEL_IDX_BASE {
         let step = idx - MMS_LABEL_IDX_BASE;
-        let max = MOVEMAPSTEP_STEP_NAMES.len() - 1;
+        let max = BOOT_LOAD_STEP_MAX;
         format!(
             "{} {}/{} ({} {}/{}{load_suffix})",
-            movemapstep_step_name(step as i32),
+            boot_load_step_name(step),
             step,
             max,
             sub_label,

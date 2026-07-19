@@ -306,8 +306,26 @@ pub(crate) unsafe extern "system" fn title_setstate_trace_detour(owner: usize, s
                 }
             }
         }
+        // BLOCKER ATTRIBUTION (2026-07-19): a post-finalize SetState(owner,2) from committed_was=6
+        // tears down the just-entered reload world. To decide native-vs-ours WITHOUT a return-address
+        // capture, log the concurrent state: our return-title chain is the only way OUR code can cause
+        // a native SetState(2) (we never call the setter with state 2 directly -- we submit the game's
+        // own return-title builder 0x79d700). So SetState(2) with rt_submit unchanged/old across it, at
+        // phase==AUTOLOAD_HANDOFF, is a genuine native InGameStep decision; a fresh rt_submit near it is
+        // ours. request_code (InGameStep+0xd8) tells whether the finalize had reached in-world (>=2).
+        let ig_request_code = if owner > PAB_MIN_HEAP_PTR {
+            unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) }
+                .filter(|&ig| ig > 0x10000)
+                .and_then(|ig| unsafe { safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) })
+                .unwrap_or(-1)
+        } else {
+            -1
+        };
+        let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+        let rt_submit = SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.load(Ordering::SeqCst);
+        let own_phase = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "title-setstate-trace: SetState(owner=0x{owner:x}, state={state}) committed_was={committed} owner+0xe0(dialog)=0x{dialog:x} owner+0xb8(gate)=0x{b8:x}"
+            "title-setstate-trace: SetState(owner=0x{owner:x}, state={state}) committed_was={committed} req_code={ig_request_code} quickload_phase={quickload_phase} rt_submit={rt_submit} own_phase={own_phase} owner+0xe0(dialog)=0x{dialog:x} owner+0xb8(gate)=0x{b8:x}"
         ));
     }));
     let orig = TITLE_SETSTATE_TRACE_ORIG.load(Ordering::SeqCst);
