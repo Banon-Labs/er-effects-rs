@@ -1268,6 +1268,42 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         let mms_req248 = mms
             .and_then(|m| unsafe { safe_read_i32(m + MOVEMAPSTEP_FINALIZE_REQ_248_OFFSET) })
             .unwrap_or(-1);
+        // SAME-SESSION RELOAD HANDOFF FIX CANDIDATE (2026-07-19): after native MoveMap reaches FINISH
+        // for a reload, InGameStep::STEP_RequestWait(2) keeps the session alive only while
+        // CSMenuMan+0x798 remains non-null. Ghidra shows +0x798 is recreated from
+        // loadingScreenData.field_0x10 (CSMenuMan+0x730). Runtime failure showed field_0x10 dropping to 0
+        // immediately after mms=20/-1, then +0x798 draining, requestCode 2->0, and TitleStep returning to
+        // title. During autoload handoff, keep this native loading-screen job gate armed until the current
+        // reload epoch proves movement; do not use it on boot or after movement proof.
+        let reload_epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+        let movement_proven_for_reload = crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
+            && crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == reload_epoch;
+        let movemap_finished_or_absent = mms_step >= 20 || (mms.is_none() && ig_d8 >= 1);
+        if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+            == SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
+            && reload_epoch > 0
+            && !movement_proven_for_reload
+            && movemap_finished_or_absent
+            && matches!(ig_d8, 1 | 2)
+        {
+            if let Some(menu) = menu_man {
+                let old = unsafe { safe_read_u8(menu + CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET) }
+                    .unwrap_or(0);
+                if old == 0 {
+                    unsafe {
+                        *((menu + CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET) as *mut u8) = 1;
+                    }
+                    let n = SYSTEM_QUIT_QUICKLOAD_LS10_REARM_COUNT
+                        .fetch_add(1, Ordering::SeqCst)
+                        + 1;
+                    if n <= 8 || n.is_power_of_two() {
+                        append_autoload_debug(format_args!(
+                            "AUTOLOAD-HANDOFF LS10 REARM #{n}: epoch={reload_epoch} ig_d8={ig_d8} mms_step={mms_step} menu_job=0x{menu_job:x}; keeping CSMenuMan+0x798 alive until movement proof"
+                        ));
+                    }
+                }
+            }
+        }
         // ENDING-REQUEST diagnostic (2nd runtime-accum lock, 2026-07-16). STEP_MoveMap walks the child
         // to its -1 terminal only while the advancer FUN_140afa7c0 sets menuData+0x5e (cVar10 = an
         // ending/load-completion condition). If 0x5e stays 0 on a re-load, the child parks at resident
