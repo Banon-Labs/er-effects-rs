@@ -98,8 +98,7 @@ const TRACE_HB_INTERVAL_MS: u64 = 2000;
 /// sem trace lets loadcmp-diff show exactly which checkpoint each load first has a live clock -- so the
 /// reload can be compared to where it occurs in the boot's chain.
 static PLAY_TIME_TRACE_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
-static PLAY_TIME_TRACE_FIRST: std::sync::atomic::AtomicI64 =
-    std::sync::atomic::AtomicI64::new(-1);
+static PLAY_TIME_TRACE_FIRST: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(-1);
 /// Rise (ms) past the epoch baseline at which the clock counts as genuinely live (>= 1s, matching the
 /// loading-screen playtime stat the user observed incrementing one second at a time).
 const PLAY_TIME_LIVE_THRESHOLD_MS: i64 = 1000;
@@ -516,8 +515,7 @@ fn input_trace_semaphores() -> TraceSem {
         .map(|s| s.protocol_state as i32)
         .unwrap_or(-1);
     let online_mode: i32 = if gm != null {
-        unsafe { safe_read_u8(gm + GAME_MAN_IS_IN_ONLINE_MODE_BC8_OFFSET) }
-            .map_or(-1, i32::from)
+        unsafe { safe_read_u8(gm + GAME_MAN_IS_IN_ONLINE_MODE_BC8_OFFSET) }.map_or(-1, i32::from)
     } else {
         -1
     };
