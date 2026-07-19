@@ -61,21 +61,28 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
         MOVE_PROBE_MOVED_FRAMES.store(0, Ordering::SeqCst);
         MOVE_PROBE_ACTIVE.store(false, Ordering::SeqCst);
         MOVE_PROBE_STICK_LY.store(0, Ordering::SeqCst);
+        crate::experiments::sq_repro_drive_wm_key(0); // release any held forward key from the prior load
         *lock_prev() = None;
     }
 
-    // Already proven for this load -> stop injecting.
+    // Already proven for this load -> stop injecting and release the held forward key.
     if CAN_MOVE_CONFIRMED.load(Ordering::SeqCst) {
         MOVE_PROBE_ACTIVE.store(false, Ordering::SeqCst);
         MOVE_PROBE_STICK_LY.store(0, Ordering::SeqCst);
+        crate::experiments::sq_repro_drive_wm_key(0);
         return;
     }
 
-    // In-world: inject a forward stick and measure this frame's horizontal displacement. During a load
-    // screen / menu / frozen state the character does not move under the stick, so the consecutive
-    // counter simply never accumulates -- no false positive, no dependence on the broken render oracle.
+    // In-world: inject FORWARD input and measure this frame's horizontal displacement. Synthetic
+    // XInput slot-0 did NOT move the character (user-confirmed), so the primary driver is the KEYBOARD
+    // W held via SendInput/RawInput -- the path that provably reached the game for menus (native ER
+    // reads keyboard as RawInput, not WM/DInput). The XInput stick is set too as a harmless backup.
+    // During a load/menu/frozen state the character does not move under either, so the consecutive
+    // counter never accumulates -- no false positive, no dependence on the broken render oracle.
+    const VK_W: u32 = 0x57;
     MOVE_PROBE_STICK_LY.store(MOVE_PROBE_STICK_FORWARD, Ordering::SeqCst);
     MOVE_PROBE_ACTIVE.store(true, Ordering::SeqCst);
+    crate::experiments::sq_repro_drive_wm_key(VK_W);
     let mut prev = lock_prev();
     if let Some((px, _py, pz)) = *prev {
         let dx = pos.0 - px;
