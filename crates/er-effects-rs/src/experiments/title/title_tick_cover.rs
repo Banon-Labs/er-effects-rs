@@ -792,8 +792,8 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         == SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
         && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) > 0
     {
-        let committed = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }
-            .unwrap_or(-1);
+        let committed =
+            unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }.unwrap_or(-1);
         let requested = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_OFFSET) }.unwrap_or(-1);
         if matches!(committed, TITLE_STEP_END_FLOW | TITLE_STEP_END_FLOW_WAIT)
             || matches!(requested, TITLE_STEP_END_FLOW | TITLE_STEP_END_FLOW_WAIT)
@@ -838,10 +838,18 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         } else {
             -1
         };
-        let menu_job = unsafe { safe_read_usize(module_base + 0x3d6b7b0) }
-            .filter(|&m| m > 0x10000)
+        let menu_man = unsafe { safe_read_usize(module_base + 0x3d6b7b0) }.filter(|&m| m > 0x10000);
+        let menu_job = menu_man
             .and_then(|m| unsafe { safe_read_usize(m + 0x798) })
             .unwrap_or(0);
+        let loading_screen_field10 = menu_man
+            .and_then(|m| unsafe { safe_read_u8(m + 0x730) })
+            .map(|v| v as i32)
+            .unwrap_or(-1);
+        let loading_screen_field11 = menu_man
+            .and_then(|m| unsafe { safe_read_u8(m + 0x731) })
+            .map(|v| v as i32)
+            .unwrap_or(-1);
         // MoveMapStep CHILD state (3rd-load root, 2026-07-16 Ghidra). InGameStep step 7
         // STEP_MoveMap_Update loops until the MoveMapStep child's own step machine FINISHES (gate
         // FUN_140eb5550); only then does requestCode(ig_d8) go 1->2. On the softlock the child is
@@ -1431,7 +1439,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             // vtable[0x10] load-state getter that returns null (why the legacy load is never created).
             let blk_vt_rva = mms_blk_vt.saturating_sub(module_base);
             append_autoload_debug(format_args!(
-                "SWITCH-ORACLE #{n}: slot={slot} bc4={bc4v} player={player_present} ig_d8={ig_d8} pstep={ig_pstep}/{ig_pnext} menu_job=0x{menu_job:x} stable_frames={sf} peak={peak} mms=0x{mms_disp:x} mms_step={mms_step}({}) next={mms_next} done50={mms_done} gate={mms_gate_lo}/{mms_gate_hi} end5e={md_5e} rt5d={md_5d} force={ending_force} b7c={gb7c} b7d={gb7d} warp={gwarp} hold270=0x{mms_hold:x} cd100={mms_cd} req248={mms_req248} b7c1={mms_b7c1} blocks={mms_blocks} curblk=0x{mms_cur_block:x} b798=0x{mms_b798:x} b79c=0x{mms_b79c:x} blk_found={mms_block_found} blk_ls=0x{mms_blk_ls:x} blk_2c={mms_blk_2c} blk_2d={mms_blk_2d} blk_35={mms_blk_35} ar_wanted={mms_ar_wanted} ar_state={mms_ar_state} ar_bres={mms_ar_bres} fc_present={mms_fc_present} fc_notloaded={mms_fc_notloaded} fc_stuck=[{mms_fc_stuck}] blk_vt_rva=0x{blk_vt_rva:x} ll_size={ll_size} ll_fcap=0x{ll_fcap:x} ll_path='{ll_path}' ow_cnt={mms_ow_count} ow=[{mms_ow_areas}] blk_areas=[{mms_block_areas}] phase={} -- {cls}",
+                "SWITCH-ORACLE #{n}: slot={slot} bc4={bc4v} player={player_present} ig_d8={ig_d8} pstep={ig_pstep}/{ig_pnext} menu_job=0x{menu_job:x} ls10={loading_screen_field10} ls11={loading_screen_field11} stable_frames={sf} peak={peak} mms=0x{mms_disp:x} mms_step={mms_step}({}) next={mms_next} done50={mms_done} gate={mms_gate_lo}/{mms_gate_hi} end5e={md_5e} rt5d={md_5d} force={ending_force} b7c={gb7c} b7d={gb7d} warp={gwarp} hold270=0x{mms_hold:x} cd100={mms_cd} req248={mms_req248} b7c1={mms_b7c1} blocks={mms_blocks} curblk=0x{mms_cur_block:x} b798=0x{mms_b798:x} b79c=0x{mms_b79c:x} blk_found={mms_block_found} blk_ls=0x{mms_blk_ls:x} blk_2c={mms_blk_2c} blk_2d={mms_blk_2d} blk_35={mms_blk_35} ar_wanted={mms_ar_wanted} ar_state={mms_ar_state} ar_bres={mms_ar_bres} fc_present={mms_fc_present} fc_notloaded={mms_fc_notloaded} fc_stuck=[{mms_fc_stuck}] blk_vt_rva=0x{blk_vt_rva:x} ll_size={ll_size} ll_fcap=0x{ll_fcap:x} ll_path='{ll_path}' ow_cnt={mms_ow_count} ow=[{mms_ow_areas}] blk_areas=[{mms_block_areas}] phase={} -- {cls}",
                 movemapstep_step_name(mms_step),
                 SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
             ));
