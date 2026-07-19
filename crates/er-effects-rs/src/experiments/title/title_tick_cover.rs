@@ -325,7 +325,10 @@ pub(crate) unsafe extern "system" fn title_setstate_trace_detour(owner: usize, s
         let rt_submit = SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.load(Ordering::SeqCst);
         let own_phase = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "title-setstate-trace: SetState(owner=0x{owner:x}, state={state}) committed_was={committed} req_code={ig_request_code} quickload_phase={quickload_phase} rt_submit={rt_submit} own_phase={own_phase} owner+0xe0(dialog)=0x{dialog:x} owner+0xb8(gate)=0x{b8:x}"
+            "title-setstate-trace: SetState(owner=0x{owner:x}, state={state}({})) committed_was={committed}({}) req_code={ig_request_code}({}) quickload_phase={quickload_phase} rt_submit={rt_submit} own_phase={own_phase} owner+0xe0(dialog)=0x{dialog:x} owner+0xb8(gate)=0x{b8:x}",
+            title_step_state_name(state),
+            title_step_state_name(committed),
+            ingamestep_request_code_name(ig_request_code)
         ));
     }));
     let orig = TITLE_SETSTATE_TRACE_ORIG.load(Ordering::SeqCst);
@@ -920,8 +923,8 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
     }
     PRODUCT_CORE_OWNER_TICKS.fetch_add(1, Ordering::SeqCst);
     PRODUCT_CORE_LAST_OWNER.store(owner, Ordering::SeqCst);
-    const TITLE_STEP_END_FLOW: i32 = 7;
-    const TITLE_STEP_END_FLOW_WAIT: i32 = 8;
+    // TITLE_STEP_END_FLOW (7) / TITLE_STEP_END_FLOW_WAIT (8) are the enum-backed teardown-state
+    // constants (constants::stats_panel_background); the parent-fix below forces them to GameStepWait(6).
     if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
         == SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
         && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) > 0
@@ -965,9 +968,11 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
     if slot >= OWN_STEPPER_SLOT_ZERO && gm != null {
         let player_present = unsafe { PlayerIns::local_player_mut() }.is_ok();
         let ig_d8 = if owner != null {
-            unsafe { safe_read_usize(owner + 0x2e8) }
+            unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) }
                 .filter(|&ig| ig > 0x10000)
-                .and_then(|ig| unsafe { safe_read_i32(ig + 0xd8) })
+                .and_then(|ig| unsafe {
+                    safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET)
+                })
                 .unwrap_or(-1)
         } else {
             -1
@@ -992,7 +997,8 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         // point is a RAM semaphore, not the eyeballed "stuck at LOADING SAVE" bar. All reads are
         // safe_read (null/garbage -> None) on the game-thread tick; identical chain to submit.rs.
         let ig_ptr = if owner != null {
-            unsafe { safe_read_usize(owner + 0x2e8) }.filter(|&v| v > 0x10000)
+            unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) }
+                .filter(|&v| v > 0x10000)
         } else {
             None
         };
@@ -1631,7 +1637,10 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                 == SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
         {
             if b80_now == FULLREAD_B80_RESIDENT {
-                unsafe { *((gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *mut i32) = 0 };
+                unsafe {
+                    *((gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *mut i32) =
+                        GAME_MAN_SAVE_STATE_IDLE;
+                }
             }
             let mut cleared_save = false;
             if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
@@ -1705,14 +1714,22 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                 != reload_epoch_now
         {
             SYSTEM_QUIT_QUICKLOAD_PHASE.store(SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE, Ordering::SeqCst);
-            unsafe {
-                *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) = OWN_STEPPER_SLOT_NONE;
-            }
+            // DO NOT clear GameMan+0xb78 here. RE-confirmed (InGameStep::STEP_MoveMap_Update
+            // @0x140aec810 + orchestrator FUN_140afb970, bd er-effects-rs-9fmm): b78
+            // (requestedSaveSlotLoad) IS the MoveMap WARP TARGET the finalize (case 8) consumes to load
+            // the destination block and rebuild the player; STEP_MoveMap_Update skips the map load when
+            // the destination BlockId is 0xffffffff, which is what happens if b78 was cleared to -1
+            // before the warp issues its load. This block fires at finalize>=8 -- exactly the warp window
+            // -- so clearing b78 here removed the warp destination mid-warp and the world was torn down at
+            // Cleanup with nothing to reload (player true->false -> native SetState 6->2 revert; runtime
+            // af27ec75 +84315 clear -> +84746 player gone). The native warp consumes and autoclears b78
+            // itself; leave it armed. Clearing save_requested is safe (it is not the destination and it
+            // satisfies the case-7 ShouldSave gate); phase->IDLE only stops our re-drive.
             if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
                 er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
             }
             append_autoload_debug(format_args!(
-                "system-quit-quickload: post-finish stable proof OK (can_move={can_move_for_reload} sf={sf}) epoch={reload_epoch_now} slot={slot} player_present={player_present} ig_d8={ig_d8} -> phase IDLE, cleared GameMan+0xb78/save_requested; holds the reloaded world (no revert)"
+                "system-quit-quickload: post-finish stable proof OK (can_move={can_move_for_reload} sf={sf}) epoch={reload_epoch_now} slot={slot} player_present={player_present} ig_d8={ig_d8} -> phase IDLE, cleared save_requested; b78 KEPT ARMED as the warp target (native finalize consumes+autoclears it) so the destination reloads instead of reverting"
             ));
         }
         let n = SWITCH_ORACLE_TICK.fetch_add(1, Ordering::SeqCst) + 1;

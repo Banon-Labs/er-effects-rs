@@ -49,6 +49,14 @@ pub(crate) const NATIVE_LOAD_LOG_INTERVAL: u64 = 120;
 /// recipe for the full-read chain.)
 pub(crate) const GAME_MAN_SLOT_SELECT_B78_OFFSET: usize =
     core::mem::offset_of!(GameMan, requested_save_slot_load_index);
+/// GameMan+0xb80 (== GameMan.save_state == load_in_progress) FSM values. The full-save read walks
+/// IDLE(0) -> OPENING(1) -> READING(2) -> RESIDENT(3); a healthy load then drains RESIDENT -> IDLE as
+/// the deserialize consumes the 0x280000 buffer. `load_in_progress_b80_name` (constants::return_title)
+/// gives the display names. The finalize case-7 gate (FUN_14067a170 == save_state==0) waits on b80
+/// reaching IDLE; on the warm reload it is stuck at RESIDENT because the deserialize never consumes it.
+pub(crate) const GAME_MAN_SAVE_STATE_IDLE: i32 = 0;
+pub(crate) const GAME_MAN_SAVE_STATE_OPENING: i32 = 1;
+pub(crate) const GAME_MAN_SAVE_STATE_READING: i32 = 2;
 /// GameMan+0xb80 == 3 == RESIDENT (the full-save read drained into the 0x280000 buffer). The DRAIN
 /// phase ticks the lane + poll each frame until b80 reaches this.
 pub(crate) const FULLREAD_B80_RESIDENT: i32 = 3;

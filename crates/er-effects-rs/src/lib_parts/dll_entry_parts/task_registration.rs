@@ -56,9 +56,8 @@ fn poll_cached_mms18_ending_request_advancer() {
 }
 
 fn poll_autoload_handoff_parent_state_guard() {
-    const TITLE_STEP_END_FLOW: i32 = 7;
-    const TITLE_STEP_END_FLOW_WAIT: i32 = 8;
-
+    // TITLE_STEP_END_FLOW (7) / TITLE_STEP_END_FLOW_WAIT (8): enum-backed teardown-state constants
+    // (constants::stats_panel_background), shared with the product-core parent-fix.
     if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
         != SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
         || SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) == 0

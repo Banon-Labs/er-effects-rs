@@ -66,9 +66,38 @@ pub(crate) enum TitleStepState {
     /// confirm variants. RE 2026-07-07: one of the two world-load entry states.
     BeginNewGame = 4,
     PlayGame = 5,
+    /// STEP_GameStepWait (idx6): the in-world state. `committed_was=6` in the SetState trace is a
+    /// live in-world session; a native `SetState(owner, 2/BeginLogo)` from here is a revert-to-title.
+    GameStepWait = 6,
+    /// STEP_EndFlow (idx7) / STEP_EndFlowWait (idx8): the session teardown states that return the
+    /// world to the title. The AUTOLOAD-HANDOFF parent-fix intercepts a premature 7/8 and forces it
+    /// back to GameStepWait(6) so a just-loaded world is not returned to title. See
+    /// `product_core_autoload_tick` and bd system-quit-load-profile-NOCRASH-milestone-2026-07-01.
+    EndFlow = 7,
+    EndFlowWait = 8,
     MenuJobWait = 10,
     Finish = 11,
 }
+/// Human name for a TitleStep committed/requested state value (out-of-range -> "?").
+pub(crate) fn title_step_state_name(v: i32) -> &'static str {
+    match v {
+        0 => "Min",
+        2 => "BeginLogo",
+        3 => "BeginTitle",
+        4 => "BeginNewGame",
+        5 => "PlayGame",
+        6 => "GameStepWait",
+        7 => "EndFlow",
+        8 => "EndFlowWait",
+        10 => "MenuJobWait",
+        11 => "Finish",
+        _ => "?",
+    }
+}
+/// STEP_EndFlow (7) / STEP_EndFlowWait (8): the session teardown -> title states. Named here so the
+/// `product_core_autoload_tick` parent-fix references the enum instead of bare 7/8 literals.
+pub(crate) const TITLE_STEP_END_FLOW: i32 = TitleStepState::EndFlow as i32;
+pub(crate) const TITLE_STEP_END_FLOW_WAIT: i32 = TitleStepState::EndFlowWait as i32;
 
 pub(crate) const TITLE_STEP_BEGIN_TITLE: i32 = TitleStepState::BeginTitle as i32;
 pub(crate) const TITLE_STEP_BEGIN_NEW_GAME: i32 = TitleStepState::BeginNewGame as i32;

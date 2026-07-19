@@ -1742,8 +1742,8 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
         if gm != 0 && gm != TITLE_OWNER_SCAN_START_ADDRESS {
             let ss_ptr = (gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *mut i32;
             if let Some(ss) = unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) } {
-                if ss == 2 || ss == 3 {
-                    unsafe { *ss_ptr = 0 };
+                if ss == GAME_MAN_SAVE_STATE_READING || ss == FULLREAD_B80_RESIDENT {
+                    unsafe { *ss_ptr = GAME_MAN_SAVE_STATE_IDLE };
                     let n = SYSTEM_QUIT_INWORLD_LOAD_ABORT_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
                     if n <= 8 || n % 120 == 0 {
                         append_autoload_debug(format_args!(

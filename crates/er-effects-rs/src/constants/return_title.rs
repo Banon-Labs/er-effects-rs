@@ -127,8 +127,18 @@ pub(crate) static SWITCH_ORACLE_TRACKED_SLOT: AtomicUsize = AtomicUsize::new(usi
 /// InGameStep requestCode (`InGameStep + 0xd8`) values. 1 = a MoveMap (load) request is pending/in
 /// progress; 2 = STABLE IN-WORLD (the load handoff completed, the world is settled -- player present,
 /// in-game menu job populated). STEP_MoveMap_Update drains 1 -> 2 once the child finishes.
+pub(crate) const INGAMESTEP_REQUEST_CODE_NONE: i32 = 0;
 pub(crate) const INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING: i32 = 1;
 pub(crate) const INGAMESTEP_REQUEST_CODE_STABLE_IN_WORLD: i32 = 2;
+/// Human name for an InGameStep requestCode (`InGameStep + 0xd8`) value (out-of-range/unreadable -> "?").
+pub(crate) fn ingamestep_request_code_name(v: i32) -> &'static str {
+    match v {
+        INGAMESTEP_REQUEST_CODE_NONE => "NONE",
+        INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING => "MOVEMAP PENDING",
+        INGAMESTEP_REQUEST_CODE_STABLE_IN_WORLD => "STABLE IN-WORLD",
+        _ => "?",
+    }
+}
 /// 3RD-LOAD ROOT SHARPENED (Ghidra 1.16.1, 2026-07-16). The softlock parks the InGameStep at
 /// `InGameStep_StepperArray[7] = STEP_MoveMap_Update` (dump 0x140aec810). STEP_MoveMap_Update gates
 /// its advance to step 8 (STEP_MoveMap_Finish) on `FUN_140eb5550(ezChildStepBase)` == "is the
@@ -159,13 +169,14 @@ pub(crate) static SYSTEM_QUIT_STABLE_PROOF_EPOCH: AtomicUsize = AtomicUsize::new
 /// i.e. the load has effectively finished. Used to hold the world the instant the finalize completes --
 /// BEFORE the move probe could prove movement (the world reverts too fast for the 60-frame probe).
 pub(crate) static SYSTEM_QUIT_RELOAD_FINALIZE_DONE_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
-/// b80 FSM state names for the loading-bar / logs.
+/// b80 (== GameMan.save_state) FSM state names for the loading-bar / logs. See the
+/// `GAME_MAN_SAVE_STATE_*` / `FULLREAD_B80_RESIDENT` constants (constants::autoload_state).
 pub(crate) fn load_in_progress_b80_name(v: i32) -> &'static str {
     match v {
-        0 => "IDLE",
-        1 => "OPENING",
-        2 => "READING",
-        3 => "RESIDENT",
+        GAME_MAN_SAVE_STATE_IDLE => "IDLE",
+        GAME_MAN_SAVE_STATE_OPENING => "OPENING",
+        GAME_MAN_SAVE_STATE_READING => "READING",
+        FULLREAD_B80_RESIDENT => "RESIDENT",
         _ => "?",
     }
 }
