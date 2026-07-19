@@ -1307,10 +1307,9 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                 let old10 =
                     unsafe { safe_read_u8(menu + CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET) }
                         .unwrap_or(0);
-                let old11 = unsafe {
-                    safe_read_u8(menu + CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET + 1)
-                }
-                .unwrap_or(0);
+                let old11 =
+                    unsafe { safe_read_u8(menu + CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET + 1) }
+                        .unwrap_or(0);
                 if old10 == 0 {
                     unsafe {
                         *((menu + CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET) as *mut u8) = 1;

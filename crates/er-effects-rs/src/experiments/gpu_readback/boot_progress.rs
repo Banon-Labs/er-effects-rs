@@ -442,23 +442,88 @@ fn boot_view_label_hash(text: &str) -> usize {
     h
 }
 
-fn boot_view_handoff_submilestone() -> (&'static str, usize, usize) {
+fn boot_view_single_submilestone(label: &'static str) -> (&'static str, usize, usize) {
+    (label, 1, 1)
+}
+
+fn boot_view_first_pending_substep(
+    substeps: &[(bool, &'static str)],
+) -> (&'static str, usize, usize) {
+    let total = substeps.len().max(1);
+    for (idx, (ok, label)) in substeps.iter().enumerate() {
+        if !*ok {
+            return (*label, idx + 1, total);
+        }
+    }
+    ("COMPLETE", total, total)
+}
+
+fn boot_view_world_gauge_submilestone(fallback: &'static str) -> (&'static str, usize, usize) {
+    let current = LOADING_SCREEN_BAR_CURRENT_FRAME.load(Ordering::SeqCst);
+    let max = LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst);
+    if LOADING_SCREEN_BAR_ENABLED.load(Ordering::SeqCst) != 0 && max != 0 {
+        ("GAUGE FRAME", current.min(max), max)
+    } else {
+        boot_view_single_submilestone(fallback)
+    }
+}
+
+fn boot_view_entering_world_submilestone() -> (&'static str, usize, usize) {
     let request_code = SWITCH_ORACLE_REQUEST_CODE.load(Ordering::SeqCst);
     let mms_step = SWITCH_ORACLE_MMS_STEP.load(Ordering::SeqCst);
     let current_epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+    let bar_terminal = LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst) >= 998
+        || (LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst) != 0
+            && LOADING_SCREEN_BAR_CURRENT_FRAME.load(Ordering::SeqCst)
+                >= LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst));
+    let loading_close_sent = LOADING_SCREEN_CLOSE_SENT.load(Ordering::SeqCst) != 0
+        || SWITCH_ORACLE_LOADING_FIELD11.load(Ordering::SeqCst) != 0;
+    let request_started = request_code >= 1;
+    let player_present = SWITCH_ORACLE_PLAYER_PRESENT.load(Ordering::SeqCst) != 0;
+    let movemap_done = request_code >= 2 || mms_step >= MOVEMAPSTEP_STEP_NAMES.len() - 1;
     let movement_proven = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
         && MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == current_epoch;
-    let mut done = 0usize;
-    done += usize::from(SWITCH_ORACLE_PLAYER_PRESENT.load(Ordering::SeqCst) != 0);
-    done += usize::from(request_code >= 1);
-    done += usize::from(request_code >= 2 || mms_step >= MOVEMAPSTEP_STEP_NAMES.len() - 1);
-    done += usize::from(
-        LOADING_SCREEN_CLOSE_SENT.load(Ordering::SeqCst) != 0
-            || SWITCH_ORACLE_LOADING_FIELD11.load(Ordering::SeqCst) != 0,
-    );
-    done += usize::from(SWITCH_ORACLE_MENU_JOB_PRESENT.load(Ordering::SeqCst) != 0);
-    done += usize::from(movement_proven);
-    ("HANDOFF", done.min(6), 6)
+    boot_view_first_pending_substep(&[
+        (bar_terminal, "GAUGE FINAL"),
+        (loading_close_sent, "LS 731 CLOSE"),
+        (request_started, "IG D8 REQUEST"),
+        (player_present, "PLAYER RESIDENT"),
+        (movemap_done, "MMS 244 DONE"),
+        (movement_proven, "MOVE PROOF"),
+    ])
+}
+
+fn boot_view_movemap_submilestone(step: usize) -> (&'static str, usize, usize) {
+    let request_code = SWITCH_ORACLE_REQUEST_CODE.load(Ordering::SeqCst);
+    let mms_step = SWITCH_ORACLE_MMS_STEP.load(Ordering::SeqCst);
+    let current_epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+    if step < MOVEMAPSTEP_STEP_MOVEMAP_INDEX as usize {
+        return boot_view_single_submilestone(movemapstep_step_name(step as i32));
+    }
+    let step_active = mms_step == step;
+    let title_done = request_code >= 2 || mms_step >= MOVEMAPSTEP_STEP_NAMES.len() - 1;
+    let session_request = request_code >= 2;
+    let movement_proven = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
+        && MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == current_epoch;
+    boot_view_first_pending_substep(&[
+        (step_active, movemapstep_step_name(step as i32)),
+        (title_done, "MMS 244 DONE"),
+        (session_request, "IG D8 REQUEST"),
+        (movement_proven, "MOVE PROOF"),
+    ])
+}
+
+fn boot_view_phase_submilestone(idx: usize) -> (&'static str, usize, usize) {
+    if idx >= MMS_LABEL_IDX_BASE {
+        return boot_view_movemap_submilestone(idx - MMS_LABEL_IDX_BASE);
+    }
+    match idx.min(BOOT_VIEW_MILESTONE_LABELS.len() - 1) {
+        8 => boot_view_world_gauge_submilestone("BUILDING WORLD"),
+        9 => boot_view_world_gauge_submilestone("STREAMING WORLD"),
+        10 => boot_view_world_gauge_submilestone("FINALIZING WORLD"),
+        11 => boot_view_entering_world_submilestone(),
+        i => boot_view_single_submilestone(BOOT_VIEW_MILESTONE_LABELS[i]),
+    }
 }
 
 /// 5x7 glyphs for the milestone labels + percent readout. Each row byte uses bit 4 as the LEFTMOST
@@ -1052,11 +1117,11 @@ fn boot_view_rasterize(
     if draw_portrait {
         let _ = portrait_onto(&mut buf, w, h);
     }
-    // Label = "<PHASE NAME> <i>/<N> (<SUBMILESTONE> <x>/<y>)". The main numerator/denominator is the
-    // visible/semantic loading phase, and the parenthesized handoff numerator exposes the hidden native
-    // RAM semaphores that may still be pending after the visible bar reaches its nominal end (user
-    // correction 2026-07-19: do not let "11/11" imply there is no further handoff granularity).
-    let (sub_label, sub_i, sub_max) = boot_view_handoff_submilestone();
+    // Label = "<PHASE NAME> <i>/<N> (<SUBMILESTONE> <x>/<y>)". The parenthesized subprogression is
+    // phase-scoped: early phases with no known finer RAM granularity say so with a 1/1 substep, world-gauge
+    // phases use the native Gauge_3 frame, and entering-world / MoveMap phases use only the semaphores that
+    // are relevant to those phases.
+    let (sub_label, sub_i, sub_max) = boot_view_phase_submilestone(idx);
     let label_buf: String = if idx >= MMS_LABEL_IDX_BASE {
         let step = idx - MMS_LABEL_IDX_BASE;
         let max = MOVEMAPSTEP_STEP_NAMES.len() - 1;
