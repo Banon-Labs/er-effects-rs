@@ -421,6 +421,25 @@ fn boot_view_progress() -> (usize, usize) {
     (idx, shown)
 }
 
+fn boot_view_handoff_submilestone() -> (&'static str, usize, usize) {
+    let request_code = SWITCH_ORACLE_REQUEST_CODE.load(Ordering::SeqCst);
+    let mms_step = SWITCH_ORACLE_MMS_STEP.load(Ordering::SeqCst);
+    let current_epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+    let movement_proven = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
+        && MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == current_epoch;
+    let mut done = 0usize;
+    done += usize::from(SWITCH_ORACLE_PLAYER_PRESENT.load(Ordering::SeqCst) != 0);
+    done += usize::from(request_code >= 1);
+    done += usize::from(request_code >= 2 || mms_step >= MOVEMAPSTEP_STEP_NAMES.len() - 1);
+    done += usize::from(
+        LOADING_SCREEN_CLOSE_SENT.load(Ordering::SeqCst) != 0
+            || SWITCH_ORACLE_LOADING_FIELD11.load(Ordering::SeqCst) != 0,
+    );
+    done += usize::from(SWITCH_ORACLE_MENU_JOB_PRESENT.load(Ordering::SeqCst) != 0);
+    done += usize::from(movement_proven);
+    ("HANDOFF", done.min(6), 6)
+}
+
 /// 5x7 glyphs for the milestone labels + percent readout. Each row byte uses bit 4 as the LEFTMOST
 /// pixel. Hand-authored for this module (our own asset; nothing game-derived). Unknown chars render
 /// as blanks rather than failing.
@@ -970,18 +989,35 @@ fn boot_view_rasterize(
     if draw_portrait {
         let _ = portrait_onto(&mut buf, w, h);
     }
-    // Label = "<PHASE NAME> <i>/<N>" (user-requested 2026-07-16): the numerator/denominator makes the
-    // overall progress legible as a number, and on a switch the i/N is the REAL engine step index out of
-    // the MoveMapStep child's 20, so a softlock reads e.g. "MOVE MAP 18/20" -- the stuck step by name AND
-    // position. idx >= MMS_LABEL_IDX_BASE = the live child step name; otherwise the heuristic boot label.
+    // Label = "<PHASE NAME> <i>/<N> (<SUBMILESTONE> <x>/<y>)". The main numerator/denominator is the
+    // visible/semantic loading phase, and the parenthesized handoff numerator exposes the hidden native
+    // RAM semaphores that may still be pending after the visible bar reaches its nominal end (user
+    // correction 2026-07-19: do not let "11/11" imply there is no further handoff granularity).
+    let (sub_label, sub_i, sub_max) = boot_view_handoff_submilestone();
     let label_buf: String = if idx >= MMS_LABEL_IDX_BASE {
         let step = idx - MMS_LABEL_IDX_BASE;
         let max = MOVEMAPSTEP_STEP_NAMES.len() - 1;
-        format!("{} {}/{}", movemapstep_step_name(step as i32), step, max)
+        format!(
+            "{} {}/{} ({} {}/{})",
+            movemapstep_step_name(step as i32),
+            step,
+            max,
+            sub_label,
+            sub_i,
+            sub_max
+        )
     } else {
         let max = BOOT_VIEW_MILESTONE_LABELS.len() - 1;
         let i = idx.min(max);
-        format!("{} {}/{}", BOOT_VIEW_MILESTONE_LABELS[i], i, max)
+        format!(
+            "{} {}/{} ({} {}/{})",
+            BOOT_VIEW_MILESTONE_LABELS[i],
+            i,
+            max,
+            sub_label,
+            sub_i,
+            sub_max
+        )
     };
     let label: &str = &label_buf;
     let strip_h = boot_view_strip_height(text_scale);

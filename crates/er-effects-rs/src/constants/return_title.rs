@@ -123,6 +123,13 @@ pub(crate) const INGAMESTEP_REQUEST_CODE_STABLE_IN_WORLD: i32 = 2;
 /// world-load. This oracle publishes the child's current internal step so the stuck point is a RAM
 /// semaphore, not an eyeball. `usize::MAX` = not sampled / no child.
 pub(crate) static SWITCH_ORACLE_MMS_STEP: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Last sampled InGameStep requestCode (+0xd8) for visible loading-bar sub-milestones.
+pub(crate) static SWITCH_ORACLE_REQUEST_CODE: AtomicI32 = AtomicI32::new(-1);
+/// Last sampled player/menu/loading-screen handoff gates for visible loading-bar sub-milestones.
+pub(crate) static SWITCH_ORACLE_PLAYER_PRESENT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SWITCH_ORACLE_MENU_JOB_PRESENT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SWITCH_ORACLE_LOADING_FIELD10: AtomicI32 = AtomicI32::new(-1);
+pub(crate) static SWITCH_ORACLE_LOADING_FIELD11: AtomicI32 = AtomicI32::new(-1);
 /// Last-seen streaming-enable bit + block count for the stall log (RAM semaphore, -1 = null chain).
 pub(crate) static SWITCH_ORACLE_MMS_B7C1: AtomicI32 = AtomicI32::new(-1);
 pub(crate) static SWITCH_ORACLE_MMS_BLOCKS: AtomicI32 = AtomicI32::new(-1);
