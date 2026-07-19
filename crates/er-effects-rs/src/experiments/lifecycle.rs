@@ -274,13 +274,18 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // the original and returns its value), so installing early is harmless and never alters
     // load behavior. It answers: is WorldBlockRes::Update ticked at all on our path, and do
     // any blocks' phase ([+0x35]) / FD4 gate ([+0x2f]) advance.
-    if own_load_enabled()
-        || own_load_continue_enabled()
-        || own_load_pump_enabled()
-        || golden_observe_enabled()
-    {
-        install_wbr_update_hook();
-    }
+    // Installed UNCONDITIONALLY now (was diagnostic-gated): pure-read pass-through, and it is the only
+    // way to ground WHY WorldResWait stalls on the product save_redirect path -- it tracks each
+    // WorldBlockRes' phase ([+0x35]) 2->0xa (resident) + FD4 gate ([+0x2f]). Runtime-grounded 2026-07-18:
+    // the boot load stalls at WorldResWait (mms 3) with a VALID BlockId + CSRemo idle, so the block-res
+    // FD4 file-load is the suspect; this observer surfaces oracle_own_load_wbr_max_phase in product runs.
+    let _ = (
+        own_load_enabled(),
+        own_load_continue_enabled(),
+        own_load_pump_enabled(),
+        golden_observe_enabled(),
+    );
+    install_wbr_update_hook();
     // PRODUCT DEFAULT (no env gate): install the RequestMoveMap BlockId fix detour once. It is a pure
     // passthrough unless ARMED by our own load trigger, so it never affects normal gameplay map
     // transitions; when armed it substitutes a valid saved-map BlockId so the game builds the world-res
