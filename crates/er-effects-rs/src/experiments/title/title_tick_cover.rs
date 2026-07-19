@@ -179,7 +179,22 @@ pub(crate) unsafe extern "system" fn movemapstep_step_move_map_gate_detour(
                 let n = SYSTEM_QUIT_QUICKLOAD_MMS4B8_HOLD_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
                 if n <= 8 || n.is_power_of_two() {
                     append_autoload_debug(format_args!(
-                        "AUTOLOAD-HANDOFF MMS4B8 DETOUR HOLD #{n}: epoch={reload_epoch} mms=0x{mms:x} old_gate={old_gate}; cleared after STEP_MoveMap before state-machine advance"
+                        "AUTOLOAD-HANDOFF MMS4B8 DETOUR HOLD #{n}: epoch={reload_epoch} mms=0x{mms:x} old_gate={old_gate}; cleared after STEP_MoveMap"
+                    ));
+                }
+            }
+            let old_next = unsafe { safe_read_i32(mms + MOVEMAPSTEP_NEXT_STEP_4C_OFFSET) }
+                .unwrap_or(-1);
+            if old_next != MOVEMAPSTEP_STEP_MOVEMAP_INDEX {
+                unsafe {
+                    *((mms + MOVEMAPSTEP_NEXT_STEP_4C_OFFSET) as *mut i32) =
+                        MOVEMAPSTEP_STEP_MOVEMAP_INDEX;
+                    *((mms + MOVEMAPSTEP_DONE_FLAG_50_OFFSET) as *mut u8) = 0;
+                }
+                let n = SYSTEM_QUIT_QUICKLOAD_MMS18_NEXT_HOLD_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+                if n <= 8 || n.is_power_of_two() {
+                    append_autoload_debug(format_args!(
+                        "AUTOLOAD-HANDOFF MMS18 NEXT HOLD #{n}: epoch={reload_epoch} mms=0x{mms:x} old_next={old_next}; restored next=18/done50=0 before Cleanup/Finish"
                     ));
                 }
             }
@@ -207,7 +222,7 @@ pub(crate) unsafe fn install_movemapstep_step_move_map_gate_hook(base: usize) {
         );
     }
     append_autoload_debug(format_args!(
-        "movemapstep-step-movemap-gate-hook: INSTALLED on 0x{:x} -- after-original +0x4b8 reload hold armed",
+        "movemapstep-step-movemap-gate-hook: INSTALLED on 0x{:x} -- after-original +0x4b8/+0x4c reload hold armed",
         base + MOVEMAPSTEP_STEP_MOVEMAP_RVA,
     ));
     std::mem::forget(hooks);

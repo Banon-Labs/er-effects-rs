@@ -436,6 +436,9 @@ pub(crate) static SYSTEM_QUIT_QUICKLOAD_LS11_CLEAR_COUNT: AtomicUsize = AtomicUs
 /// Count of autoload-handoff reload frames where the DLL held MoveMapStep+0x4b8 low byte at 0 during
 /// state 18 so the native STEP_MoveMap advance gate cannot reach Cleanup/Finish before movement proof.
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_MMS4B8_HOLD_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Count of autoload-handoff reload frames where the DLL held MoveMapStep+0x4c (`next`) at state 18 so
+/// the state machine cannot jump to Cleanup/Finish before movement proof.
+pub(crate) static SYSTEM_QUIT_QUICKLOAD_MMS18_NEXT_HOLD_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Count of autoload-handoff reload frames where the DLL held MoveMapStep+0x244 false so
 /// TitleStep::GameStepWait cannot consume the reload as a completed return-to-title before movement proof.
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_MMS244_HOLD_COUNT: AtomicUsize = AtomicUsize::new(0);
