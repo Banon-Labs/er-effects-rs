@@ -41,6 +41,16 @@ pub(crate) static BOOT_VIEW_LOADSCREEN_TABLE_BASELINE: AtomicUsize = AtomicUsize
 pub(crate) static BOOT_VIEW_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
 /// Last DISPLAYED progress in permille (monotonic; includes the inter-milestone creep).
 pub(crate) static BOOT_VIEW_LAST_PERMILLE: AtomicUsize = AtomicUsize::new(0);
+/// Monotonic-display clamp for the (phase idx, substep) LABEL numbers (user 2026-07-19): the visible
+/// numbers must only advance within one load epoch -- never repeat a value already passed nor
+/// decrement -- or the loading text reads as jumpy/looping. Ordinal = idx*ORD_SCALE + sub (phase idx
+/// dominates). Held label is a `&'static str` (all sub-labels come from const tables, so its ptr/len
+/// stay valid forever). Reset per load epoch.
+static BOOT_VIEW_MONO_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
+static BOOT_VIEW_MONO_ORD: AtomicUsize = AtomicUsize::new(0);
+static BOOT_VIEW_MONO_LABEL_PTR: AtomicUsize = AtomicUsize::new(0);
+static BOOT_VIEW_MONO_LABEL_LEN: AtomicUsize = AtomicUsize::new(0);
+const BOOT_VIEW_MONO_ORD_SCALE: usize = 1000;
 /// Monotonic bitmask of reached milestones (bit i = milestone i seen reached at least once).
 pub(crate) static BOOT_VIEW_REACHED_MASK: AtomicUsize = AtomicUsize::new(0);
 /// Highest reached milestone index (drives the label).
@@ -1240,7 +1250,42 @@ fn boot_view_rasterize(
     // phase-scoped: early phases with no known finer RAM granularity say so with a 1/1 substep, world-gauge
     // phases use the native Gauge_3 frame, and entering-world / MoveMap phases use only the semaphores that
     // are relevant to those phases.
-    let (sub_label, sub_i, sub_max) = boot_view_phase_submilestone(idx);
+    let (raw_sub_label, raw_sub_i, sub_max) = boot_view_phase_submilestone(idx);
+    // MONOTONIC display clamp (user 2026-07-19): within one load epoch the visible substep number must
+    // only advance -- never repeat a passed value nor decrement. idx (main phase) is already monotonic;
+    // clamp the substep to a per-phase high-water and hold the last-advanced label on a regression.
+    let (sub_label, sub_i) = {
+        let epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+        if BOOT_VIEW_MONO_EPOCH.swap(epoch, Ordering::SeqCst) != epoch {
+            BOOT_VIEW_MONO_ORD.store(0, Ordering::SeqCst);
+            BOOT_VIEW_MONO_LABEL_PTR.store(0, Ordering::SeqCst);
+        }
+        let ord = idx
+            .saturating_mul(BOOT_VIEW_MONO_ORD_SCALE)
+            .saturating_add(raw_sub_i.min(BOOT_VIEW_MONO_ORD_SCALE - 1));
+        let hw = BOOT_VIEW_MONO_ORD.load(Ordering::SeqCst);
+        if ord >= hw {
+            BOOT_VIEW_MONO_ORD.store(ord, Ordering::SeqCst);
+            BOOT_VIEW_MONO_LABEL_PTR.store(raw_sub_label.as_ptr() as usize, Ordering::SeqCst);
+            BOOT_VIEW_MONO_LABEL_LEN.store(raw_sub_label.len(), Ordering::SeqCst);
+            (raw_sub_label, raw_sub_i)
+        } else if hw / BOOT_VIEW_MONO_ORD_SCALE == idx {
+            // Regressed within the SAME phase -> hold the high-water substep + its (still-valid) label.
+            let held_sub = hw % BOOT_VIEW_MONO_ORD_SCALE;
+            let ptr = BOOT_VIEW_MONO_LABEL_PTR.load(Ordering::SeqCst);
+            let len = BOOT_VIEW_MONO_LABEL_LEN.load(Ordering::SeqCst);
+            let held: &str = if ptr != 0 {
+                unsafe {
+                    core::str::from_utf8_unchecked(core::slice::from_raw_parts(ptr as *const u8, len))
+                }
+            } else {
+                raw_sub_label
+            };
+            (held, held_sub)
+        } else {
+            (raw_sub_label, raw_sub_i)
+        }
+    };
     let label_buf: String = if idx >= MMS_LABEL_IDX_BASE {
         let step = idx - MMS_LABEL_IDX_BASE;
         let max = MOVEMAPSTEP_STEP_NAMES.len() - 1;
