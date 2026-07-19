@@ -229,6 +229,13 @@ def _checkpoint_names(row: dict) -> list[str]:
         names.append(f"protocol_state:{proto}")
     if row.get("world_stable"):
         names.append("world_stable")
+    # Online flags (GameMan BC8/BC9): a nonzero value in-world can fire the connection-loss /
+    # network-error return-title (user hypothesis 2026-07-19). Checkpoint the ONLINE-re-enable event so
+    # the load1-vs-load2 diff shows if the reload re-flags online right before its revert.
+    if as_int(row.get("online_mode")) > 0:
+        names.append("online_mode:ENABLED")
+    if as_int(row.get("server_conn")) > 0:
+        names.append("server_conn:ENABLED")
     return names
 
 

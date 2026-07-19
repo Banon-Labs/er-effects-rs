@@ -139,22 +139,9 @@ pub(crate) unsafe fn own_load_feed_deserialize(base: usize, gm: usize, want_slot
     ok
 }
 
-/// FD4-IO residency for the menu-free switch reload (bd er-effects-rs-9fmm, 2026-07-19). The boot
-/// `native-fullread` path does SUBMIT -> DRAIN (GameMan+0xb80 -> RESIDENT(3)) BEFORE the deserialize,
-/// so the FD4 IO worker pool drains the full read and the world resources become natively resident.
-/// The menu-free reload skipped this ("No FD4 IO SUBMIT/DRAIN, no b80==3 needed") and only fed the
-/// character bytes -> the streamed world entered with the character mounted but resources NOT resident,
-/// so the native InGameStep reverted to title ~1.4s after "world enters" (can_move never latched, cover
-/// never closed). This gate (marker file `er-effects-reload-fd4io.txt`, since env vars do not propagate
-/// through me3) turns on a per-frame SUBMIT/DRAIN phase before the feed+continue_confirm so the reload
-/// establishes the same residency the boot does. Default OFF for safe A/B against the known-failing
-/// baseline; flip to default-on once a runtime run proves load2 reaches readiness.
-fn own_load_reload_fd4io_enabled() -> bool {
-    game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-reload-fd4io.txt")
-        .exists()
-}
+// FD4-IO residency for the menu-free switch reload (bd er-effects-rs-9fmm, 2026-07-19) is now DEFAULT
+// behavior in own_load_switch_reload_fire (the boot native-fullread SUBMIT -> DRAIN(b80==RESIDENT) ->
+// COMMIT sequence), replacing the old resource-less one-shot. No marker/env gate.
 
 /// Phase machine state for the reload FD4-IO SUBMIT/DRAIN (own_load_switch_reload_fire), persisted
 /// across the caller's per-frame retries. 0=IDLE (do SUBMIT once), 1=DRAIN (tick until b80==3),
@@ -250,13 +237,12 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
     if new_game_flag != FULLREAD_OWNER_NEW_GAME_OK {
         return false;
     }
-    // (b) Either replicate the boot's FD4-IO residency (marker on) or take the original immediate
-    // one-shot (marker off). Owner is already validated, so a flickering frame never burns either.
-    if own_load_reload_fd4io_enabled() {
-        // FD4-IO residency phase machine (bd er-effects-rs-9fmm): SUBMIT the full read, DRAIN until
-        // GameMan+0xb80==RESIDENT(3), THEN fall through to feed+continue_confirm -- so the reload's
-        // streamed world has the resources natively resident (the boot path's behavior) instead of
-        // entering resource-less and reverting to title.
+    // (b) FD4-IO residency phase machine (DEFAULT behavior -- no marker/env toggle; bd er-effects-rs-9fmm):
+    // SUBMIT the full read, DRAIN until GameMan+0xb80==RESIDENT(3), THEN fall through to
+    // feed+continue_confirm -- so the reload's streamed world has the resources natively resident (the
+    // boot path's behavior) instead of entering resource-less and reverting to title. Owner is already
+    // validated, so a flickering frame never burns the one-shot (claimed by SWITCH_RELOAD_FD4IO_COMMITTED).
+    {
         let phase = SWITCH_RELOAD_FD4IO_PHASE.load(Ordering::SeqCst);
         if phase == SWITCH_RELOAD_FD4IO_IDLE {
             if SWITCH_RELOAD_FD4IO_PHASE
@@ -303,11 +289,6 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
         {
             return false;
         }
-    } else if SYSTEM_QUIT_SWITCH_MENU_FREE_RELOAD_FIRED
-        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
-        return false;
     }
     // (c) Defuse the CSGaitemImp free-queue exhaustion AV (live 0x67141a): char#1's leaked gaitem
     // entries still populate the gaitem singleton at the clean title (the lightweight return-title

@@ -288,6 +288,10 @@ struct TraceSem {
     load_target_map_id: i64,
     /// CSSessionManager.protocol_state (WaitReload=4 selects loadTargetMapId over moveMapStepBlockId).
     protocol_state: i32,
+    /// GameMan online flags (BC8 isInOnlineMode / BC9 serverConnectionEnabled): the connection-loss /
+    /// network-error return-title fires when these are nonzero in-world (should stay 0 offline).
+    online_mode: i32,
+    server_conn: i32,
     committed: i32,
     ig_pstep: i32,
     ig_pnext: i32,
@@ -511,6 +515,18 @@ fn input_trace_semaphores() -> TraceSem {
     let protocol_state: i32 = unsafe { eldenring::cs::CSSessionManager::instance() }
         .map(|s| s.protocol_state as i32)
         .unwrap_or(-1);
+    let online_mode: i32 = if gm != null {
+        unsafe { safe_read_u8(gm + GAME_MAN_IS_IN_ONLINE_MODE_BC8_OFFSET) }
+            .map_or(-1, i32::from)
+    } else {
+        -1
+    };
+    let server_conn: i32 = if gm != null {
+        unsafe { safe_read_u8(gm + GAME_MAN_SERVER_CONNECTION_ENABLED_BC9_OFFSET) }
+            .map_or(-1, i32::from)
+    } else {
+        -1
+    };
     let mms_raw = SWITCH_ORACLE_MMS_STEP.load(Ordering::SeqCst);
     let msgbox_raw = MSGBOX_TOTAL_BUILDS.load(Ordering::SeqCst);
     // WORLD-CLOCK-LIVE: GameDataMan::play_time (ms). Reset the per-epoch baseline when the load epoch
@@ -564,6 +580,8 @@ fn input_trace_semaphores() -> TraceSem {
         dest_block_id,
         load_target_map_id,
         protocol_state,
+        online_mode,
+        server_conn,
         committed,
         ig_pstep,
         ig_pnext,
@@ -642,6 +660,8 @@ impl TraceSem {
         mix(self.dest_block_id as u64);
         mix(self.load_target_map_id as u64);
         mix(self.protocol_state as u32 as u64);
+        mix(self.online_mode as u32 as u64);
+        mix(self.server_conn as u32 as u64);
         mix(self.committed as u32 as u64);
         mix(self.ig_pstep as u32 as u64);
         mix(self.ig_pnext as u32 as u64);
@@ -694,6 +714,7 @@ impl TraceSem {
             "\"focused\":{},\"menu_top\":{},\"menu_opt\":{},\"menu_prof\":{},\"prof_cursor\":{},\"opt_tab\":{},\
              \"in_world\":{},\"player\":{},\"world_chr_man\":\"0x{:x}\",\"main_player\":\"0x{:x}\",\
              \"world_stable\":{},\"dest_block_id\":{},\"load_target_map_id\":{},\"protocol_state\":{},\
+             \"online_mode\":{},\"server_conn\":{},\
              \"committed\":{},\"ig_pstep\":{},\"ig_pnext\":{},\"ig_d8\":{},\"bc4\":{},\"c30\":\"0x{:x}\",\
              \"save_slot\":{},\"req_slot\":{},\"save_state\":{},\"save_requested\":{},\
              \"menu_job\":\"0x{:x}\",\"loading_mode\":{},\"loading_field10\":{},\"loading_field11\":{},\
@@ -719,6 +740,8 @@ impl TraceSem {
             self.dest_block_id,
             self.load_target_map_id,
             self.protocol_state,
+            self.online_mode,
+            self.server_conn,
             self.committed,
             self.ig_pstep,
             self.ig_pnext,

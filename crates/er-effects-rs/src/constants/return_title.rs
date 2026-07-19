@@ -183,6 +183,15 @@ pub(crate) const MOVE_MAP_BLOCK_ID_NONE: u32 = 0xffff_ffff;
 /// stable/ready -- a stronger world-ready oracle than can_move. RE-verified offset + constant.
 pub(crate) const WORLD_CHR_MAN_WORLD_STABLE_1E524_OFFSET: usize = 0x1e524;
 pub(crate) const WORLD_CHR_MAN_WORLD_STABLE_VALUE: i32 = 2;
+/// GameMan online-state bytes. The connection-loss / network-error event handlers build their
+/// "cannot connect / connection lost" GR_System_Message (whose side-effect returns to title) gated on
+/// `isInOnlineMode (GameMan+0xBC8) && serverConnectionEnabled (GameMan+0xBC9)`. force_offline_connection_bytes
+/// forces both to 0 each game-task frame, but that is a race: if the reload's session setup re-sets
+/// BC8=1 and the handler fires before the next game-task clear, a network-error return-title reverts the
+/// just-loaded world (user hypothesis 2026-07-19, bd reload-revert-likely-message-interrupt-2026-07-19).
+/// Sem-traced to test whether the online flags re-enable during the reload's in-world window.
+pub(crate) const GAME_MAN_IS_IN_ONLINE_MODE_BC8_OFFSET: usize = 0xBC8;
+pub(crate) const GAME_MAN_SERVER_CONNECTION_ENABLED_BC9_OFFSET: usize = 0xBC9;
 /// b80 (== GameMan.save_state) FSM state names for the loading-bar / logs. See the
 /// `GAME_MAN_SAVE_STATE_*` / `FULLREAD_B80_RESIDENT` constants (constants::autoload_state).
 pub(crate) fn load_in_progress_b80_name(v: i32) -> &'static str {
@@ -328,6 +337,9 @@ pub(crate) static INGAMESTEP_STEP_MOVEMAP_UPDATE_ORIG: AtomicUsize = AtomicUsize
 pub(crate) static INGAMESTEP_MOVEMAP_UPDATE_DEFER_TICKS: AtomicUsize = AtomicUsize::new(0);
 /// Total defer holds (telemetry: >0 means the premature-teardown race was intercepted).
 pub(crate) static INGAMESTEP_MOVEMAP_UPDATE_DEFER_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Total early b73 return-title-latch clears (telemetry: >0 means the quit-save latch was held off
+/// before the MoveMapStep ending evaluator could revert the reloaded world).
+pub(crate) static RELOAD_B73_HOLD_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Fail-soft cap: after this many consecutive held frames, stop deferring and let native decide (so a
 /// genuine return-to-title whose finalize never completes can never be held forever). ~2s at 60fps.
 pub(crate) const INGAMESTEP_MOVEMAP_UPDATE_DEFER_MAX: usize = 120;

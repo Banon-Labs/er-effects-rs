@@ -259,15 +259,6 @@ pub(crate) unsafe fn install_movemapstep_step_move_map_gate_hook(base: usize) {
     std::mem::forget(hooks);
 }
 
-/// Marker gate (`er-effects-reload-defer.txt`) for the STEP_MoveMap_Update finalize-defer detour, so
-/// the fix can be A/B'd against the premature-teardown baseline. Env vars do not propagate through me3.
-fn reload_finalize_defer_enabled() -> bool {
-    game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-reload-defer.txt")
-        .exists()
-}
-
 /// BEFORE-original defer detour for `CS::InGameStep::STEP_MoveMap_Update` (deobf 0x140aec720). Root fix
 /// for the warm-reload revert (bd er-effects-rs-9fmm): the parent reports the ending child finished
 /// (`FUN_140eb5550`, an outer-stepper vtable done-query decoupled from the MoveMapStep finalize substate)
@@ -278,7 +269,7 @@ fn reload_finalize_defer_enabled() -> bool {
 /// the original, so the advancer (pumped elsewhere -- STEP_MoveMap_Update does NOT pump it, confirmed by
 /// decompile) gets the frames to reach 9; then the original runs and advances normally. Bounded by
 /// INGAMESTEP_MOVEMAP_UPDATE_DEFER_MAX (fail-soft) and scoped to a committed reload epoch so the proven
-/// boot load is untouched. Marker-gated for A/B.
+/// boot load is untouched. DEFAULT behavior (no marker/env toggle); scoped to a committed reload epoch.
 pub(crate) unsafe extern "system" fn ingamestep_step_movemap_update_defer_detour(
     ingame_step: usize,
     param2: usize,
@@ -290,8 +281,7 @@ pub(crate) unsafe extern "system" fn ingamestep_step_movemap_update_defer_detour
         return 0;
     }
     let defer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if !reload_finalize_defer_enabled()
-            || ingame_step <= PAB_MIN_HEAP_PTR
+        if ingame_step <= PAB_MIN_HEAP_PTR
             || SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) == 0
         {
             return false;
@@ -353,7 +343,7 @@ pub(crate) unsafe fn install_ingamestep_step_movemap_update_defer_hook(base: usi
         );
     }
     append_autoload_debug(format_args!(
-        "ingamestep-step-movemap-update-defer-hook: INSTALLED on 0x{:x} -- defers d8=2/teardown while MoveMapStep finalize in [1..8] (marker er-effects-reload-defer.txt)",
+        "ingamestep-step-movemap-update-defer-hook: INSTALLED on 0x{:x} -- defers d8=2/teardown while MoveMapStep finalize in [1..8] on a committed reload (default, no marker)",
         base + INGAMESTEP_STEP_MOVEMAP_UPDATE_RVA,
     ));
     std::mem::forget(hooks);
@@ -1715,10 +1705,30 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         };
         SWITCH_ORACLE_B80.store(b80_now, Ordering::SeqCst);
         let finalize_now = SWITCH_ORACLE_FINALIZE_12A.load(Ordering::SeqCst);
-        let drain_b80_on = game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-reload-drainb80.txt")
-            .exists();
+        // EARLY b73 HOLD -- the post-warp revert ROOT FIX (RE er-effects-rs-9fmm). GameMan+0xb73 is the
+        // quit-save RETURN-TITLE latch our System->Quit sets (FUN_14067a490); it persists into the
+        // reload's world, and the MoveMapStep ending evaluator FUN_140afa7c0 -> FUN_140679460
+        // (= b73 && !savePopup && bc4!=3) latches session-end into CSMenuMan.menuData+0x5e at load2's
+        // MoveMap entry -> STEP_EndFlow -> SetState 6->2 revert. The case-7 drain below also clears b73
+        // but only at finalize (mms18) -- TOO LATE, the evaluator already latched. Clear it CONTINUOUSLY
+        // from reload commit (FRESH_DESER_DONE=1), before mms18, so the evaluator never sees b73=1.
+        // Semantically safe: post-SetState5 the quit->return-title intent is already fulfilled (we are
+        // loading, not returning to title) and nothing legitimately re-sets b73 during the stream
+        // (auto-save touches saveRequested, not b73). DEFAULT behavior gated only on the real reload
+        // condition (a committed switch reload); no marker/env toggle -- validated by running.
+        if gm != null && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 1 {
+            let b73 = unsafe { safe_read_u8(gm + GAME_MAN_SAVE_REQUEST_COMPANION_B73_OFFSET) }
+                .unwrap_or(0);
+            if b73 != 0 {
+                unsafe { *((gm + GAME_MAN_SAVE_REQUEST_COMPANION_B73_OFFSET) as *mut u8) = 0 };
+                let n = RELOAD_B73_HOLD_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+                if n <= 8 || n.is_power_of_two() {
+                    append_autoload_debug(format_args!(
+                        "reload-b73-hold #{n}: cleared GameMan+0xb73 return-title latch (mms_step={mms_step} finalize={finalize_now}) BEFORE the MoveMapStep ending evaluator can latch session-end -- keeps the reloaded world"
+                    ));
+                }
+            }
+        }
         // Unblock the finalize case-7->8 gate on the warm reload. The gate is
         // FUN_14067a170() (== saveState==0) && !ShouldSave() (saveRequested==0) && !FUN_140679460()
         // (b73==0) && FUN_140a9ceb0(CSRemo). Fire at the exact stuck signature and satisfy the two
@@ -1726,10 +1736,9 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         // resident IO buffer, never consumed by the feed), and (b) clear saveRequested -- the reload's
         // unwanted SetState5/advancer autosave (user 2026-07-19: the reload must NOT autosave; only an
         // explicit user save writes). Both are re-applied each frame since the native advancer re-sets
-        // them. Narrow signature (world resident+live at mms18 finalize 1..9) so a healthy load is
-        // never touched. Marker-gated for A/B.
-        if drain_b80_on
-            && gm != null
+        // them. DEFAULT behavior gated only on the real stuck runtime signature (world resident+live at
+        // mms18 finalize 1..9, AUTOLOAD_HANDOFF) so a healthy load is never touched; no marker toggle.
+        if gm != null
             && mms_step == MOVEMAPSTEP_STEP_MOVEMAP_INDEX
             && (1..=9).contains(&finalize_now)
             && player_present
