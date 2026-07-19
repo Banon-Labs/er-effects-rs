@@ -139,6 +139,82 @@ pub(crate) unsafe fn own_load_feed_deserialize(base: usize, gm: usize, want_slot
     ok
 }
 
+/// FD4-IO residency for the menu-free switch reload (bd er-effects-rs-9fmm, 2026-07-19). The boot
+/// `native-fullread` path does SUBMIT -> DRAIN (GameMan+0xb80 -> RESIDENT(3)) BEFORE the deserialize,
+/// so the FD4 IO worker pool drains the full read and the world resources become natively resident.
+/// The menu-free reload skipped this ("No FD4 IO SUBMIT/DRAIN, no b80==3 needed") and only fed the
+/// character bytes -> the streamed world entered with the character mounted but resources NOT resident,
+/// so the native InGameStep reverted to title ~1.4s after "world enters" (can_move never latched, cover
+/// never closed). This gate (marker file `er-effects-reload-fd4io.txt`, since env vars do not propagate
+/// through me3) turns on a per-frame SUBMIT/DRAIN phase before the feed+continue_confirm so the reload
+/// establishes the same residency the boot does. Default OFF for safe A/B against the known-failing
+/// baseline; flip to default-on once a runtime run proves load2 reaches readiness.
+fn own_load_reload_fd4io_enabled() -> bool {
+    game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-reload-fd4io.txt")
+        .exists()
+}
+
+/// Phase machine state for the reload FD4-IO SUBMIT/DRAIN (own_load_switch_reload_fire), persisted
+/// across the caller's per-frame retries. 0=IDLE (do SUBMIT once), 1=DRAIN (tick until b80==3),
+/// 2=COMMIT (fall through to feed+continue_confirm).
+static SWITCH_RELOAD_FD4IO_PHASE: AtomicUsize = AtomicUsize::new(0);
+static SWITCH_RELOAD_FD4IO_DRAIN_WAITS: AtomicUsize = AtomicUsize::new(0);
+static SWITCH_RELOAD_FD4IO_COMMITTED: AtomicUsize = AtomicUsize::new(0);
+const SWITCH_RELOAD_FD4IO_IDLE: usize = 0;
+const SWITCH_RELOAD_FD4IO_DRAIN: usize = 1;
+const SWITCH_RELOAD_FD4IO_COMMIT: usize = 2;
+/// Bound the reload drain far below the boot's FULLREAD_DRAIN_MAX (1200): the b80 2->3 save-file read
+/// residency is fast (~17 ticks at boot); if it does not resident within this many frames the read is
+/// not draining at the clean-title timing -> fall through to COMMIT without residency (fail-soft to the
+/// old behavior) rather than hang the switch.
+const SWITCH_RELOAD_FD4IO_DRAIN_MAX: usize = 600;
+
+/// SUBMIT the native full-save-read for `picked` so the FD4 IO worker pool loads it resident, exactly
+/// as the boot native-fullread SUBMIT phase (slot_resolution.rs). Mirrors its calls/RVAs. Sets
+/// GameMan+0xb80=2 (the deserialize arm); the DRAIN tick then advances it to RESIDENT(3).
+unsafe fn own_load_fd4io_submit(base: usize, gm: usize, picked: i32) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    // Mark the slot occupied so the native save-load gate accepts it (idempotent, no other effect).
+    let gdm = game_data_man_ptr_or_null();
+    let summary = if gdm != null {
+        unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(null)
+    } else {
+        null
+    };
+    if summary != null {
+        let mark: unsafe extern "system" fn(usize, i32) -> u8 =
+            unsafe { std::mem::transmute(base + PROFILE_MARK_SLOT_USED_RVA) };
+        let _ = unsafe { mark(summary, picked) };
+    }
+    // Resolve OUR slot + submit the full read (type-0xa; sets b80=2).
+    unsafe { *((gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) as *mut i32) = picked };
+    let set_save_slot: unsafe extern "system" fn(i32) =
+        unsafe { std::mem::transmute(base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+    unsafe { set_save_slot(picked) };
+    let submit: unsafe extern "system" fn(i32) -> i32 =
+        unsafe { std::mem::transmute(base + B80_FULL_LOAD_INITIATOR_RVA) };
+    let sret = unsafe { submit(picked) };
+    let b80 = unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }.unwrap_or(-1);
+    append_autoload_debug(format_args!(
+        "reload-fd4io: SUBMIT slot={picked} submit 0x{:x} ret={sret} b80={b80} -> DRAIN (replicating boot native-fullread residency before feed+continue_confirm)",
+        base + B80_FULL_LOAD_INITIATOR_RVA
+    ));
+}
+
+/// One DRAIN tick: pump the b80 IO lane + poll (exact boot native-fullread calls) and return the
+/// current GameMan+0xb80 so the caller can detect RESIDENT(3).
+unsafe fn own_load_fd4io_drain_tick(base: usize, gm: usize) -> i32 {
+    let lane: unsafe extern "system" fn() -> i32 =
+        unsafe { std::mem::transmute(base + B80_LANE1_DRIVER_RVA) };
+    let _ = unsafe { lane() };
+    let poll: unsafe extern "system" fn(u8, u8) -> i32 =
+        unsafe { std::mem::transmute(base + B80_POLL_RVA) };
+    let _ = unsafe { poll(FULLREAD_POLL_ARG, FULLREAD_POLL_ARG) };
+    unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }.unwrap_or(-1)
+}
+
 /// MENU-FREE clean-title reload of the PICKED slot for a genuine System->Quit->Load-Profile switch.
 /// The warm-rebuilt TitleTopDialog never reaches Loop post-return-title (press-start SceneObjProxy at
 /// dialog+0xb78 unbound), so the title accept-byte/open-menu path deadlocks; native_fullread_tick also
@@ -174,9 +250,56 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
     if new_game_flag != FULLREAD_OWNER_NEW_GAME_OK {
         return false;
     }
-    // (b) Claim the per-switch one-shot ONLY after the owner is good, so a flickering frame never burns
-    // it. Bounds the feed to a single attempt (leak-free fail-closed) independent of FRESH_DESER_DONE.
-    if SYSTEM_QUIT_SWITCH_MENU_FREE_RELOAD_FIRED
+    // (b) Either replicate the boot's FD4-IO residency (marker on) or take the original immediate
+    // one-shot (marker off). Owner is already validated, so a flickering frame never burns either.
+    if own_load_reload_fd4io_enabled() {
+        // FD4-IO residency phase machine (bd er-effects-rs-9fmm): SUBMIT the full read, DRAIN until
+        // GameMan+0xb80==RESIDENT(3), THEN fall through to feed+continue_confirm -- so the reload's
+        // streamed world has the resources natively resident (the boot path's behavior) instead of
+        // entering resource-less and reverting to title.
+        let phase = SWITCH_RELOAD_FD4IO_PHASE.load(Ordering::SeqCst);
+        if phase == SWITCH_RELOAD_FD4IO_IDLE {
+            if SWITCH_RELOAD_FD4IO_PHASE
+                .compare_exchange(
+                    SWITCH_RELOAD_FD4IO_IDLE,
+                    SWITCH_RELOAD_FD4IO_DRAIN,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_ok()
+            {
+                SWITCH_RELOAD_FD4IO_DRAIN_WAITS.store(0, Ordering::SeqCst);
+                unsafe { own_load_fd4io_submit(base, gm, picked) };
+            }
+            return false;
+        }
+        if phase == SWITCH_RELOAD_FD4IO_DRAIN {
+            let b80 = unsafe { own_load_fd4io_drain_tick(base, gm) };
+            let w = SWITCH_RELOAD_FD4IO_DRAIN_WAITS.fetch_add(1, Ordering::SeqCst);
+            let resident = b80 == FULLREAD_B80_RESIDENT;
+            if resident || w >= SWITCH_RELOAD_FD4IO_DRAIN_MAX {
+                // Disarm the native slot-request (b78) before committing: a >=0 request surviving into
+                // the live world runs a SECOND deserialize and exhausts the CSGaitemImp free queue
+                // (the 0x67141a AV) -- the boot fullread disarms on commit for the same reason.
+                unsafe { *((gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) as *mut i32) = OWN_STEPPER_SLOT_NONE };
+                append_autoload_debug(format_args!(
+                    "reload-fd4io: DRAIN done b80={b80} waits={w} resident={resident}{} -> COMMIT (feed+continue_confirm); b78 disarmed",
+                    if resident { "" } else { " (TIMEOUT -- committing without residency, fail-soft to old behavior)" }
+                ));
+                SWITCH_RELOAD_FD4IO_PHASE.store(SWITCH_RELOAD_FD4IO_COMMIT, Ordering::SeqCst);
+                // fall through to feed+continue_confirm this frame
+            } else {
+                return false; // keep draining
+            }
+        }
+        // phase == COMMIT (reached this frame or a prior one): commit exactly once.
+        if SWITCH_RELOAD_FD4IO_COMMITTED
+            .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return false;
+        }
+    } else if SYSTEM_QUIT_SWITCH_MENU_FREE_RELOAD_FIRED
         .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
     {
