@@ -719,6 +719,28 @@ pub(crate) fn prove_movement_enabled() -> bool {
         }
     }
 }
+
+/// AUTONOMOUS-PROOF FOREGROUND (`er-effects-probe-foreground.txt`). Gameplay MOVEMENT input is only
+/// processed while the ER window is FOCUSED (stay-active/DLUID+0x88d covers menus, not locomotion). For
+/// an unattended proof (user away, ER can own the foreground) this authorizes the can-move probe to
+/// force ER foreground while injecting so the walk actually registers. OFF by default so it NEVER
+/// steals focus in a user-present session. Cached.
+pub(crate) fn probe_foreground_enabled() -> bool {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static GATE: AtomicU8 = AtomicU8::new(0);
+    match GATE.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let on = game_directory_path()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("er-effects-probe-foreground.txt")
+                .exists();
+            GATE.store(if on { 1 } else { 2 }, Ordering::Relaxed);
+            on
+        }
+    }
+}
 /// SELF-DRIVEN SYSTEM->QUIT->LOAD-PROFILE REPRO AUTOPILOT (er-effects-system-quit-repro.txt /
 /// ER_EFFECTS_SYSTEM_QUIT_REPRO). OFF by default. When on, after the boot autoload reaches the
 /// world, the DLL keeps the input block engaged and injects a scripted DInput keyboard sequence --

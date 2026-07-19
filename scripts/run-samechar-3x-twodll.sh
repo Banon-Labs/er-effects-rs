@@ -95,9 +95,13 @@ rm -f "$GAME_DIR"/er-effects-*.log "$GAME_DIR"/er-reload-trace.log "$GAME_DIR"/e
 # --- movement-proof gate: authorize the in-DLL can-move probe to inject a forward stick in-world and
 #     prove input moves the character (havok delta) -- the only reliable good-vs-frozen signal. Proof-
 #     only (absent in normal user sessions so it never fights the player). Skip in NO_SQREPRO+user-watch.
+rm -f "$GAME_DIR/er-effects-probe-foreground.txt" 2>/dev/null
 if [[ "${PROVE_MOVEMENT:-1}" == "1" ]]; then
   printf '1\n' > "$GAME_DIR/er-effects-prove-movement.txt"
   printf '1\n' > "$GAME_DIR/er-effects-stay-active.txt"  # accept injected input while unfocused
+  # PROBE_FOREGROUND=1 (unattended proof only): let the probe force ER foreground so gameplay movement
+  # input registers. Default OFF so a user-present run is never focus-stolen.
+  [[ "${PROBE_FOREGROUND:-0}" == "1" ]] && printf '1\n' > "$GAME_DIR/er-effects-probe-foreground.txt"
 else
   rm -f "$GAME_DIR/er-effects-prove-movement.txt" 2>/dev/null
 fi
@@ -108,7 +112,8 @@ cleanup() {
   taskkill.exe /F /IM me3.exe >/dev/null 2>&1
   rm -f "$GAME_DIR/er-effects-system-quit-repro.txt" "$GAME_DIR/er-effects-system-quit-load-switch.txt" \
         "$GAME_DIR/er-effects-sq-target-switches.txt" "$GAME_DIR/er-effects-sq-target-slots.txt" \
-        "$GAME_DIR/er-effects-prove-movement.txt" 2>/dev/null
+        "$GAME_DIR/er-effects-prove-movement.txt" "$GAME_DIR/er-effects-stay-active.txt" \
+        "$GAME_DIR/er-effects-probe-foreground.txt" 2>/dev/null
   [[ -f "$ARTIFACT_DIR/er-effects.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-effects.toml.bak" "$GAME_DIR/er-effects.toml"
 }
 trap cleanup EXIT

@@ -148,6 +148,14 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
     // state the character does not move under the injected stick, so the consecutive counter never
     // accumulates -- no false positive, no dependence on the broken render oracle.
     MOVE_PROBE_ACTIVE.store(true, Ordering::SeqCst);
+    // Gameplay input only applies while ER is focused; for an unattended proof, force ER foreground
+    // (throttled ~1x/sec so it doesn't churn focus every frame). OFF unless the proof harness opts in.
+    if crate::experiments::probe_foreground_enabled() {
+        static FG_TICK: AtomicUsize = AtomicUsize::new(0);
+        if FG_TICK.fetch_add(1, Ordering::Relaxed) % 30 == 0 {
+            crate::experiments::sq_repro_force_foreground_now();
+        }
+    }
     let mut prev = lock_prev();
     if let Some((px, _py, pz)) = *prev {
         let dx = pos.0 - px;

@@ -276,6 +276,7 @@ pub(crate) fn sq_repro_drive_wm_key(vk: u32) {
 /// ONLY when ER is ALREADY the foreground window, and releases any held key the moment ER loses focus.
 /// Used by the can-move probe so it can never steal the user's focus (the earlier probe yanked ER to
 /// the front and trapped the user's keyboard). If the user alt-tabs away, the probe stops injecting.
+#[allow(dead_code)] // kept: fallback OS-keyboard driver; the can-move probe now uses the pad-poll hook
 pub(crate) fn move_probe_drive_key_foreground_only(vk: u32) {
     let hwnd = sq_repro_er_hwnd();
     if hwnd.0.is_null() {
