@@ -302,7 +302,11 @@ pub(crate) unsafe extern "system" fn ingamestep_step_movemap_update_defer_detour
         .filter(|&m| m > PAB_MIN_HEAP_PTR) else {
             return false;
         };
-        let fin = unsafe { safe_read_i32(mms + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET) }
+        // The finalize substate at +0x12a is a single BYTE (the SWITCH-ORACLE reads it with
+        // safe_read_u8 at the same offset). Reading it as i32 folds in the adjacent bytes so the value
+        // is almost never in [1..=8] -- the cause of the 0-firings inert run (DLL 63e70e0e). Read u8.
+        let fin = unsafe { safe_read_u8(mms + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET) }
+            .map(|v| v as i32)
             .unwrap_or(-1);
         if (1..=8).contains(&fin) {
             let held = INGAMESTEP_MOVEMAP_UPDATE_DEFER_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
