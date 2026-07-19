@@ -181,7 +181,16 @@ Passing 4a proves the freeze/recovery mechanism on one character; §4 then gener
   never fights a real player.
 - **Reload driver:** WAIT_RELOAD advances only once a load proves movement (`CAN_MOVE_CONFIRMED` = input
   registered), else force-advances after the freeze deadline (frozen → per parity the next load recovers
-  it). Remaining: prove loads 2–3 (the 3-load chain, movement on load 3).
+  it). `oracle_can_move` is epoch-gated (`MOVE_PROBE_EPOCH == fresh_deser`) so a prior load's proof is
+  never credited to the next when `fresh_deser` flips mid-loading.
+- **3-LOAD CHAIN ACHIEVED (autonomous), run `samechar-3x-221118`, PASS:** angrE loaded three times in a
+  row with the user's exact parity — **load1 (autoload) MOVABLE**, **load2 (reload) FROZEN** (never moved,
+  advanced on deadline), **load3 (reload) MOVABLE** (`moved_frames=60`, epoch-gated to load3, walked to a
+  new position). Movement on the third load proven autonomously (no click, no focus). Rigor caveat:
+  load2's *frozen* verdict came via the WAIT_RELOAD deadline (it didn't prove movement in its window) —
+  consistent with a genuine freeze + the parity, but not independently confirmed un-movable with a longer
+  window. Remaining follow-ups: tighten load2's frozen-vs-deadline distinction; the §4 cross-save
+  generalization; seamless (`.co2`).
 
 ## 5. Invariants the harness must assert & verify (not build)
 
