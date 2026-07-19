@@ -1,4 +1,12 @@
 
+/// Latched once the load reaches requestCode(InGameStep+0xd8)==2 (the game's finalize/in-world-stable
+/// signal). Used to disarm any post-finalize re-drive robustly, since requestCode flips 2->0 within a
+/// few frames and a single-frame equality test races the spurious switch that fires ~3s later.
+static FINALIZE_REQUESTCODE_2_SEEN: AtomicUsize = AtomicUsize::new(0);
+/// Last requestCode value logged by the finalize-disarm diagnostic (throttle to distinct values).
+static FINALIZE_DISARM_LAST_RC: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(i64::MIN);
+
 pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
     std::thread::spawn(move || {
         write_bootstrap_event(
@@ -288,6 +296,67 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // I'm still on the old character"). Gating on SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT keeps load #1
                 // stable (kills the spurious arm) without touching real switches. See
                 // bd repeatable-multi-save-consolidated-plan-2026-07-18.
+                // FINALIZE-COMPLETE DISARM (2026-07-18, bd
+                // warpfix-broke-freeze-remaining-is-teardown-after-finalize-2026-07-18). requestCode
+                // (InGameStep+0xd8) == 2 is the GAME'S OWN "session finalized + in-world stable" signal:
+                // the mms18->19 finalize just completed and the InGameStep handed off to render. Now that
+                // the warp-clear fix lets the finalize fire, latch success on it and disarm the armed
+                // re-drive/self-reload IMMEDIATELY -- but ONLY for an arm that should end at finalize: the
+                // SPURIOUS boot self-reload (armed while player absent) or a COMPLETED reload
+                // (FRESH_DESER_DONE==1, the new world we just streamed). A genuine switch still MID-teardown
+                // has requestCode==2 on the OLD world with FRESH_DESER_DONE==0 and player-was-PRESENT, so it
+                // is NOT disarmed here (that would be the switch-regression). The frame-count disarm below
+                // loses the race to a switch that fires in the ~3 frames right after finalize.
+                if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+                    >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+                {
+                    let mut fin_owner = TITLE_OWNER_PTR.load(Ordering::SeqCst);
+                    if fin_owner == TITLE_OWNER_SCAN_START_ADDRESS {
+                        fin_owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
+                    }
+                    let request_code = if fin_owner != TITLE_OWNER_SCAN_START_ADDRESS {
+                        unsafe { safe_read_usize(fin_owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) }
+                            .filter(|ig| *ig != TITLE_OWNER_SCAN_START_ADDRESS)
+                            .and_then(|ig| unsafe {
+                                safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET)
+                            })
+                            .unwrap_or(-1)
+                    } else {
+                        -1
+                    };
+                    let was_absent = SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT.load(Ordering::SeqCst);
+                    let fresh_deser =
+                        SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst);
+                    // LATCH the finalize on FIRST sight of requestCode==2 (it flips 2->0 within a few
+                    // frames, so a single-frame equality test races the switch that fires ~3s later).
+                    if request_code == 2 {
+                        FINALIZE_REQUESTCODE_2_SEEN.store(1, Ordering::SeqCst);
+                    }
+                    // DIAGNOSTIC (throttled to distinct request_code values): why did the earlier disarm
+                    // miss? See the live requestCode + gate inputs at the finalize window.
+                    let rc64 = i64::from(request_code);
+                    let last_rc = FINALIZE_DISARM_LAST_RC.swap(rc64, Ordering::SeqCst);
+                    if last_rc != rc64 {
+                        append_autoload_debug(format_args!(
+                            "finalize-disarm probe: requestCode={request_code} seen2={} was_absent={was_absent} fresh_deser={fresh_deser} owner=0x{fin_owner:x}",
+                            FINALIZE_REQUESTCODE_2_SEEN.load(Ordering::SeqCst)
+                        ));
+                    }
+                    // Disarm once the finalize has been seen (latched) and this arm is one that ENDS at
+                    // finalize (spurious boot self-reload = player-was-absent, or a completed reload =
+                    // fresh-deser). A genuine switch still MID-teardown has not deserialized the new world
+                    // yet (fresh_deser==0) and armed while player PRESENT (was_absent==0), so it is spared.
+                    if FINALIZE_REQUESTCODE_2_SEEN.load(Ordering::SeqCst) == 1
+                        && (was_absent == 1 || fresh_deser == 1)
+                    {
+                        SYSTEM_QUIT_QUICKLOAD_PHASE
+                            .store(SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE, Ordering::SeqCst);
+                        SYSTEM_QUIT_INWORLD_ARMED_DISARM_COUNT.fetch_add(1, Ordering::SeqCst);
+                        append_autoload_debug(format_args!(
+                            "system-quit-quickload: FINALIZE-COMPLETE (requestCode reached 2, was_absent={was_absent} fresh_deser={fresh_deser}) -> phase IDLE; post-finalize re-drive/self-reload suppressed so the finalized world persists + renders"
+                        ));
+                    }
+                }
                 if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
                     >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
                     && SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT.load(Ordering::SeqCst) == 1

@@ -208,18 +208,13 @@ unsafe fn try_texture2d(ptr: usize) -> Option<(ID3D12Resource, u64)> {
     let unk = unsafe { IUnknown::from_raw_borrowed(&raw) }?;
     let res: ID3D12Resource = match unk.cast() {
         Ok(r) => r,
-        Err(_) => {
-            append_autoload_debug(format_args!(
-                "portrait-scan: cand 0x{ptr:x} QI(ID3D12Resource) failed (d3d obj but not a resource)"
-            ));
-            return None;
-        }
+        // Per-candidate "QI failed" / "IS resource" logs removed 2026-07-18: they fired for EVERY
+        // scanned d3d object (~1.4M lines = 90% of the debug log), crowding out the load/freeze state
+        // the user needs to read. The scan's useful result is still logged by the FOUND / no-TEXTURE2D
+        // summary lines below.
+        Err(_) => return None,
     };
     let desc = unsafe { res.GetDesc() };
-    append_autoload_debug(format_args!(
-        "portrait-scan: cand 0x{ptr:x} IS resource dim={} w={} h={} fmt={}",
-        desc.Dimension.0, desc.Width, desc.Height, desc.Format.0
-    ));
     // COLOR ONLY: the offscreen has a color render target AND a same-size depth-stencil sibling
     // (observed: 256x256 fmt=28 color next to 256x256 fmt=19 R32G8X24 depth). Accept only the 8bpp
     // RGBA/BGRA formats our de-swizzle handles; reject depth/typeless-depth so "largest" can't pick
