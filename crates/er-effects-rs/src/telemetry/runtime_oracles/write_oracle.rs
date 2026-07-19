@@ -37,13 +37,16 @@ fn write_stepfinish_gate_oracle(body: &mut String) {
     };
     let request_code = ingame.map_or(-1, |ig| rdi(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET));
     let mms = ingame.and_then(|ig| rd(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET).filter(|v| *v != null));
-    let (warmup, testnet_stepper, mms_state) = match mms {
+    const MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET: usize = 0x12a;
+    let (warmup, testnet_stepper, mms_state, finalize_substate_12a) = match mms {
         Some(m) => (
             rdi(m + MOVEMAPSTEP_FINISH_WARMUP_B0_OFFSET),
             rd(m + MOVEMAPSTEP_TESTNETSTEP_STEPPER_110_OFFSET).unwrap_or(0),
             rdi(m + MOVEMAPSTEP_STATE_48_RE_OFFSET),
+            unsafe { crate::experiments::safe_read_u8(m + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET) }
+                .map_or(-1, i64::from),
         ),
-        None => (-1, usize::MAX, -1),
+        None => (-1, usize::MAX, -1, -1),
     };
     // CSRemo-idle gate inputs (read-only, no vtable call): remoMan present + pending qword.
     let (csremo, remoman, remo_pending) = if let Ok(base) = crate::experiments::game_module_base() {
@@ -59,7 +62,7 @@ fn write_stepfinish_gate_oracle(body: &mut String) {
         (0, 0, 0)
     };
     body.push_str(&format!(
-        "  \"oracle_stepfinish_request_code\": {request_code},\n  \"oracle_stepfinish_warmup\": {warmup},\n  \"oracle_stepfinish_testnet_stepper_present\": {},\n  \"oracle_stepfinish_mms_state\": {mms_state},\n  \"oracle_csremo_present\": {},\n  \"oracle_csremo_remoman_present\": {},\n  \"oracle_csremo_remo_pending\": {},\n",
+        "  \"oracle_stepfinish_request_code\": {request_code},\n  \"oracle_stepfinish_warmup\": {warmup},\n  \"oracle_stepfinish_testnet_stepper_present\": {},\n  \"oracle_stepfinish_mms_state\": {mms_state},\n  \"oracle_stepfinish_finalize_substate_12a\": {finalize_substate_12a},\n  \"oracle_csremo_present\": {},\n  \"oracle_csremo_remoman_present\": {},\n  \"oracle_csremo_remo_pending\": {},\n",
         (testnet_stepper != 0 && testnet_stepper != usize::MAX),
         csremo != 0,
         remoman != 0,

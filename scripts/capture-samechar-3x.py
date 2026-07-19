@@ -91,6 +91,7 @@ def snap(t: dict) -> dict:
         "oracle_fake_loading_any_visible",
         "oracle_stepfinish_request_code",
         "oracle_stepfinish_mms_state",
+        "oracle_stepfinish_finalize_substate_12a",
         "oracle_saved_map_c30",
         "sq_repro_state",
         "sq_repro_switch_index",
@@ -267,6 +268,7 @@ def main() -> int:
                     f"can_move={can_move}(f{s.get('oracle_move_probe_moved_frames')}) "
                     f"draw_group={s.get('oracle_chr_draw_group_enabled')} "
                     f"req_code={s.get('oracle_stepfinish_request_code')} mms={s.get('oracle_stepfinish_mms_state')} "
+                    f"finalize12a={s.get('oracle_stepfinish_finalize_substate_12a')} "
                     f"fake_cover={fake_cover} switch_idx={s.get('sq_repro_switch_index')} "
                     f"havok={s.get('oracle_havok_pos')}",
                     flush=True,
@@ -335,6 +337,7 @@ def main() -> int:
         lines.append(
             f"- request_code: {s.get('oracle_stepfinish_request_code')}  "
             f"mms_state: {s.get('oracle_stepfinish_mms_state')}  "
+            f"finalize12a: {s.get('oracle_stepfinish_finalize_substate_12a')}  "
             f"now_loading: {s.get('oracle_now_loading')}  "
             f"fake_cover: {s.get('oracle_fake_loading_any_visible')}"
         )
