@@ -128,11 +128,14 @@ echo "======================================================================"
 
 "$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" > "$ARTIFACT_DIR/me3-launch.log" 2>&1 &
 
+CAPTURE_ARGS=()
+[[ "${NO_SQREPRO:-0}" != "1" ]] && CAPTURE_ARGS+=(--require-reload-move)  # full sequence: prove a RELOAD moves
 python3 "$REPO_ROOT/scripts/capture-samechar-3x.py" \
   --game-dir "$GAME_DIR" \
   --artifact-dir "$ARTIFACT_DIR" \
   --max-seconds "$CAP_SECONDS" \
-  --report "$ARTIFACT_DIR/samechar-3x-report.md"
+  --report "$ARTIFACT_DIR/samechar-3x-report.md" \
+  "${CAPTURE_ARGS[@]}"
 RC=$?
 
 echo "== capture done rc=$RC ; artifacts in $ARTIFACT_DIR =="

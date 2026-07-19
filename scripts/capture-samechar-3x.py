@@ -108,6 +108,11 @@ def main() -> int:
     ap.add_argument("--artifact-dir", type=Path, required=True)
     ap.add_argument("--max-seconds", type=float, required=True, help="runtime cap (.auto/runtime_timeout_cap_seconds)")
     ap.add_argument("--report", type=Path, required=True)
+    ap.add_argument(
+        "--require-reload-move",
+        action="store_true",
+        help="success requires a RELOAD (deser>=1) to prove movement, not just load1 (the full-sequence goal)",
+    )
     args = ap.parse_args()
 
     args.artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -163,10 +168,11 @@ def main() -> int:
                 capture_portrait(args.artifact_dir)
                 portrait_captured = True
 
-            # LOAD-1 FOCUS (user 2026-07-18): the goal is narrowed to "load1 loads up AND is movable".
-            # Success = ANY load proves movement (can_move latched: >=60 consecutive frames of injected
-            # motion) -- load1 alone counts. Stop as soon as movement is proven.
-            if can_move:
+            # Success = a load proves movement (can_move latched: >=60 consecutive frames of injected
+            # motion). For the full sequence (--require-reload-move) it must be a RELOAD (deser>=1) --
+            # the user's "third time they can move" -- so load1 moving does NOT end the run; the driver
+            # keeps going through the reloads. For load1-only it's any load.
+            if can_move and (not args.require_reload_move or deser >= 1):
                 result = "MOVEMENT_PROVEN"
                 break
             # TEARDOWN ON UNEXPECTED FAILURE (user 2026-07-18): if the boot never reaches an in-world

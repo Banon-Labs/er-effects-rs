@@ -1026,44 +1026,48 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             // window before advancing. Hold the settle clock at 0 whenever the load is still streaming OR
             // present-but-not-render-ready, so `tick` counts a CONTINUOUS render-ready dwell, not just
             // frames since the cover cleared.
+            // WAIT-FOR-INPUT-TO-REGISTER (user 2026-07-18): advance to the next switch only once this
+            // load's INPUT has REGISTERED -- i.e. the can-move probe proved the char MOVES under injected
+            // input (CAN_MOVE_CONFIRMED, the reliable signal; render_ready is a known false-negative
+            // oracle). Do NOT blow through on a timer while input never took. A load that never proves
+            // movement within the freeze deadline is the FROZEN case -> per the strict parity, drive the
+            // next load to recover it. (render_ready/load_done kept only for the diagnostic log line.)
             let committed = deser >= expected_deser && player_up;
-            let ready_dwell = committed && !loading && render_ready;
-            if !ready_dwell {
-                SQ_REPRO_STATE_TICK.store(0, Ordering::SeqCst);
-                let waited = SQ_REPRO_WAIT_RELOAD_FRAMES.fetch_add(1, Ordering::SeqCst);
-                if waited % SQ_REPRO_WAIT_RELOAD_LOG_EVERY == 0 {
-                    append_autoload_debug(format_args!(
-                        "sq-repro: WAIT_RELOAD gates (switch #{}/{} waited_frames={waited}): fresh_deser={deser}/{expected_deser} player_up={player_up} render_ready={render_ready} load_done={load_done} fake_cover={fake_cover}",
-                        switch_index + 1,
-                        sq_repro_target_switches()
-                    ));
-                }
-                // LOAD-2 FREEZE force-advance: present + reload committed, but never render-ready within
-                // the deadline (cover stuck / render handoff never fires -- the user's can't-see/can't-
-                // move state). Do NOT stall to the runtime cap; trigger the NEXT switch (the recovery
-                // load) exactly as the user re-loads by hand from the still-openable menu.
-                if committed && waited >= SQ_REPRO_FREEZE_RECOVERY_DEADLINE {
-                    let next = switch_index + 1;
-                    SQ_REPRO_SWITCH_INDEX.store(next, Ordering::SeqCst);
-                    sq_repro_begin_switch();
-                    append_autoload_debug(format_args!(
-                        "sq-repro: switch #{}/{} presented but FROZEN (render_ready=false load_done={load_done} fake_cover={fake_cover}) past freeze-deadline {SQ_REPRO_FREEZE_RECOVERY_DEADLINE}f -> triggering RECOVERY switch #{}/{} target_slot={} (reproduces user load2-freeze -> load3-recover); OPEN_MENU",
-                        switch_index + 1,
-                        sq_repro_target_switches(),
-                        next + 1,
-                        sq_repro_target_switches(),
-                        sq_repro_target_slot()
-                    ));
-                    sq_repro_transition(SQ_REPRO_STATE_OPEN_MENU);
-                }
-                return;
-            }
-            if tick >= SQ_REPRO_WORLD_SETTLE_TICKS {
+            let move_proven = committed && CAN_MOVE_CONFIRMED.load(Ordering::SeqCst);
+            if move_proven {
                 let next = switch_index + 1;
                 SQ_REPRO_SWITCH_INDEX.store(next, Ordering::SeqCst);
                 sq_repro_begin_switch();
                 append_autoload_debug(format_args!(
-                    "sq-repro: switch #{}/{} reload RENDER-READY + settled ({tick}f dwell, fresh_deser={deser}) -> arming switch #{}/{} target_slot={}; OPEN_MENU",
+                    "sq-repro: switch #{}/{} reload MOVABLE -- input registered (can_move proven, fresh_deser={deser}) -> arming switch #{}/{} target_slot={}; OPEN_MENU",
+                    switch_index + 1,
+                    sq_repro_target_switches(),
+                    next + 1,
+                    sq_repro_target_switches(),
+                    sq_repro_target_slot()
+                ));
+                sq_repro_transition(SQ_REPRO_STATE_OPEN_MENU);
+                return;
+            }
+            SQ_REPRO_STATE_TICK.store(0, Ordering::SeqCst);
+            let waited = SQ_REPRO_WAIT_RELOAD_FRAMES.fetch_add(1, Ordering::SeqCst);
+            if waited % SQ_REPRO_WAIT_RELOAD_LOG_EVERY == 0 {
+                append_autoload_debug(format_args!(
+                    "sq-repro: WAIT_RELOAD gates (switch #{}/{} waited_frames={waited}): fresh_deser={deser}/{expected_deser} player_up={player_up} can_move={} render_ready={render_ready} load_done={load_done} fake_cover={fake_cover}",
+                    switch_index + 1,
+                    sq_repro_target_switches(),
+                    CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
+                ));
+            }
+            // FROZEN force-advance: reload committed + present, but movement never registered within the
+            // deadline (the user's can't-see/can't-move state). Trigger the NEXT load (the recovery),
+            // exactly as the user re-loads by hand from the still-openable menu.
+            if committed && waited >= SQ_REPRO_FREEZE_RECOVERY_DEADLINE {
+                let next = switch_index + 1;
+                SQ_REPRO_SWITCH_INDEX.store(next, Ordering::SeqCst);
+                sq_repro_begin_switch();
+                append_autoload_debug(format_args!(
+                    "sq-repro: switch #{}/{} FROZEN -- input never registered (can_move=false, load_done={load_done} fake_cover={fake_cover}) past freeze-deadline {SQ_REPRO_FREEZE_RECOVERY_DEADLINE}f -> triggering RECOVERY switch #{}/{} target_slot={}; OPEN_MENU",
                     switch_index + 1,
                     sq_repro_target_switches(),
                     next + 1,
@@ -1072,6 +1076,7 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                 ));
                 sq_repro_transition(SQ_REPRO_STATE_OPEN_MENU);
             }
+            return;
         }
         _ => {
             set_pad(0);

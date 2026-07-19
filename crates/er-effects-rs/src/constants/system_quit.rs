@@ -196,12 +196,12 @@ pub(crate) const SQ_REPRO_WORLD_SETTLE_TICKS: usize = 180;
 /// advancing to the NEXT switch (the recovery load), just as the user re-loads by hand instead of
 /// waiting forever. ~20s at 60fps -- longer than a real reload (~10-15s) so a slow-but-real load is NOT
 /// misread as frozen, yet short enough to drive the recovery load well inside the runtime cap.
-/// Tuned down from 1200 after run samechar-3x-190909: the game task ticks ~32/s there, so 1200f was a
-/// ~37s "big delay" the user saw before the driver re-drove the menu. The freeze-advance only fires
-/// AFTER the reload has committed (deser>=expected), so a short grace past commit is safe -- load2 is
-/// deterministically frozen (no healthy load2 to misclassify), and load3 (the last switch) is never
-/// gated by WAIT_RELOAD anyway. ~400f (~13s) trims the delay while still giving a brief render grace.
-pub(crate) const SQ_REPRO_FREEZE_RECOVERY_DEADLINE: usize = 400;
+/// Sized for the can_move (input-registered) gate: a MOVABLE reload must settle in-world (~20s of
+/// SetState5 streaming after WAIT_RELOAD entry) AND then have the move-probe prove 60 frames of injected
+/// motion (~2s) before this deadline, else it is misread as frozen. A FROZEN reload never proves and is
+/// force-advanced here (per parity, the next load recovers it). ~900f (~28s at 32fps) clears a real
+/// reload+prove while staying tight enough that a 3-load chain finishes inside the runtime cap.
+pub(crate) const SQ_REPRO_FREEZE_RECOVERY_DEADLINE: usize = 900;
 /// WAIT_WORLD movement-proof deadline (2026-07-18): before driving switch #1, wait for load1 to PROVE
 /// movement (CAN_MOVE_CONFIRMED) so the reload is triggered from a genuinely playable state, not a
 /// half-streamed one -- prior runs drove OPEN_MENU while load1 was still at mms 13-16. Fallback ticks
