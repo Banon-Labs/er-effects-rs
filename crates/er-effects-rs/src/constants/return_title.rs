@@ -61,6 +61,18 @@ pub(crate) const IN_GAME_STEP_REQUEST_CODE_D8_OFFSET: usize = 0xd8;
 /// the in-game session's menu job lives. STEP_RequestWait ends the session when it reads 0 at
 /// request code 2.
 pub(crate) const CS_MENU_MAN_IN_GAME_MENU_JOB_798_OFFSET: usize = 0x798;
+/// Loading-screen active bit written by `CS::InGameStep::STEP_MoveMap_Finish` before common finalize
+/// and by `STEP_RequestWait` while the in-game menu job remains alive. Field path from Ghidra decompile
+/// of dump 0x140aec140 / 0x140aecd00.
+pub(crate) const CS_MENU_MAN_FIELD_6B0_OFFSET: usize = 0x6b0;
+/// `[GLOBAL_CSDelayDeleteMan]` pointer global. Ghidra label `GLOBAL_CSDelayDeleteMan` at dump
+/// `0x1445896a8`; `scripts/dump-deobf-shift.py 0x1445896a8` reports zero-shift data-region estimate.
+pub(crate) const CS_DELAY_DELETE_MAN_GLOBAL_RVA: usize = 0x45896a8;
+/// `CSDelayDeleteMan+0x40` pending-delete count/gate checked by `InGameStep::STEP_MoveMap_Finish`.
+pub(crate) const CS_DELAY_DELETE_PENDING_40_OFFSET: usize = 0x40;
+/// `CSDelayDeleteMan+0x54` flag toggled by `InGameStep::STEP_MoveMap_Finish`: 0 while pending deletes
+/// exist, 1 immediately before `_Common_Finalize(param_1)`.
+pub(crate) const CS_DELAY_DELETE_FINALIZE_54_OFFSET: usize = 0x54;
 /// `CS::EzChildStepBase::RequestFinish` (dump `0x140eb5590` -> live `0x140eb5570`, shift -0x20,
 /// content-unique). One-shot: calls the wrapper's CSSetFinishHelper virtual (which sets the child
 /// step's finish-requested byte at child+0xb4) then latches wrapper+0x10. The quit-to-title

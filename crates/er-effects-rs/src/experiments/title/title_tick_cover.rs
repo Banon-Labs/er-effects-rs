@@ -1376,6 +1376,38 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         let gwarp = unsafe { safe_read_u8(gm + GAME_MAN_WARP_REQUESTED_10_OFFSET) }
             .map(|b| b as i32)
             .unwrap_or(-1);
+        let csm6b0 = menu_man
+            .and_then(|m| unsafe { safe_read_u8(m + CS_MENU_MAN_FIELD_6B0_OFFSET) })
+            .map(|b| b as i32)
+            .unwrap_or(-1);
+        let delay_delete = unsafe { safe_read_usize(module_base + CS_DELAY_DELETE_MAN_GLOBAL_RVA) }
+            .unwrap_or(0);
+        let dd40 = if delay_delete != null {
+            unsafe { safe_read_i32(delay_delete + CS_DELAY_DELETE_PENDING_40_OFFSET) }.unwrap_or(-1)
+        } else {
+            -1
+        };
+        let dd54 = if delay_delete != null {
+            unsafe { safe_read_u8(delay_delete + CS_DELAY_DELETE_FINALIZE_54_OFFSET) }
+                .map(|b| b as i32)
+                .unwrap_or(-1)
+        } else {
+            -1
+        };
+        let (world_chr_man, main_player) = if let Ok(world_chr_man) =
+            unsafe { eldenring::cs::WorldChrMan::instance_mut() }
+        {
+            (
+                world_chr_man as *mut _ as usize,
+                world_chr_man
+                    .main_player
+                    .as_ref()
+                    .map(|p| p.as_ptr() as usize)
+                    .unwrap_or(0),
+            )
+        } else {
+            (0, 0)
+        };
         // ENDING-REQUEST RECOVERY (2026-07-18, live-proven fix for the genuine cross-char switch stall,
         // bd live-genuine-switch-stalls-mms18-end5e0-2026-07-18). A genuine switch's return-title
         // suppresses the quit-save (no-save-on-quit by design), so none of cVar10's inputs
@@ -1512,7 +1544,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             // vtable[0x10] load-state getter that returns null (why the legacy load is never created).
             let blk_vt_rva = mms_blk_vt.saturating_sub(module_base);
             append_autoload_debug(format_args!(
-                "SWITCH-ORACLE #{n}: slot={slot} bc4={bc4v} player={player_present} ig_d8={ig_d8} pstep={ig_pstep}/{ig_pnext} menu_job=0x{menu_job:x} ls10={loading_screen_field10} ls11={loading_screen_field11} stable_frames={sf} peak={peak} mms=0x{mms_disp:x} mms_step={mms_step}({}) next={mms_next} done50={mms_done} gate={mms_gate_lo}/{mms_gate_hi} end5e={md_5e} rt5d={md_5d} force={ending_force} b7c={gb7c} b7d={gb7d} warp={gwarp} hold270=0x{mms_hold:x} cd100={mms_cd} req248={mms_req248} b7c1={mms_b7c1} blocks={mms_blocks} curblk=0x{mms_cur_block:x} b798=0x{mms_b798:x} b79c=0x{mms_b79c:x} blk_found={mms_block_found} blk_ls=0x{mms_blk_ls:x} blk_2c={mms_blk_2c} blk_2d={mms_blk_2d} blk_35={mms_blk_35} ar_wanted={mms_ar_wanted} ar_state={mms_ar_state} ar_bres={mms_ar_bres} fc_present={mms_fc_present} fc_notloaded={mms_fc_notloaded} fc_stuck=[{mms_fc_stuck}] blk_vt_rva=0x{blk_vt_rva:x} ll_size={ll_size} ll_fcap=0x{ll_fcap:x} ll_path='{ll_path}' ow_cnt={mms_ow_count} ow=[{mms_ow_areas}] blk_areas=[{mms_block_areas}] phase={} -- {cls}",
+                "SWITCH-ORACLE #{n}: slot={slot} bc4={bc4v} player={player_present} ig_d8={ig_d8} pstep={ig_pstep}/{ig_pnext} menu_job=0x{menu_job:x} csm6b0={csm6b0} ls10={loading_screen_field10} ls11={loading_screen_field11} dd=0x{delay_delete:x} dd40={dd40} dd54={dd54} wcm=0x{world_chr_man:x} mainp=0x{main_player:x} stable_frames={sf} peak={peak} mms=0x{mms_disp:x} mms_step={mms_step}({}) next={mms_next} done50={mms_done} gate={mms_gate_lo}/{mms_gate_hi} end5e={md_5e} rt5d={md_5d} force={ending_force} b7c={gb7c} b7d={gb7d} warp={gwarp} hold270=0x{mms_hold:x} cd100={mms_cd} req248={mms_req248} b7c1={mms_b7c1} blocks={mms_blocks} curblk=0x{mms_cur_block:x} b798=0x{mms_b798:x} b79c=0x{mms_b79c:x} blk_found={mms_block_found} blk_ls=0x{mms_blk_ls:x} blk_2c={mms_blk_2c} blk_2d={mms_blk_2d} blk_35={mms_blk_35} ar_wanted={mms_ar_wanted} ar_state={mms_ar_state} ar_bres={mms_ar_bres} fc_present={mms_fc_present} fc_notloaded={mms_fc_notloaded} fc_stuck=[{mms_fc_stuck}] blk_vt_rva=0x{blk_vt_rva:x} ll_size={ll_size} ll_fcap=0x{ll_fcap:x} ll_path='{ll_path}' ow_cnt={mms_ow_count} ow=[{mms_ow_areas}] blk_areas=[{mms_block_areas}] phase={} -- {cls}",
                 movemapstep_step_name(mms_step),
                 SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
             ));
