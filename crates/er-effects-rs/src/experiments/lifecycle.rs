@@ -377,10 +377,11 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
             // timestamp so we learn exactly when BeginTitle(3) fires and whether the
             // 05_000_Title build has headroom to start earlier. Save-safe pass-through.
             unsafe { install_title_setstate_trace_hook(base) };
-            // Same-session reload guard: after STEP_MoveMap state 18's native body, hold its
-            // +0x4b8 advance gate only until this reload epoch proves movement. Self-gated inside
-            // the detour; installed here with the other title/load transition hooks.
-            unsafe { install_movemapstep_step_move_map_gate_hook(base) };
+            // Failed same-session reload guard experiments are explicit opt-in only; canonical
+            // semaphore-diff runs must remain observational.
+            if movemapstep_step_move_map_gate_hold_enabled() {
+                unsafe { install_movemapstep_step_move_map_gate_hook(base) };
+            }
         }
     }
     // OFFLINE connection-state lever (milestone-3 fix): force GameMan+0xBC8/0xBC9 = 0 each

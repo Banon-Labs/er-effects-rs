@@ -106,12 +106,17 @@ fi
 #     product DLL also self-truncates its debug log on first write per process; this sweep additionally
 #     clears the trace log + stale telemetry + any other *.log the run left behind. Control files
 #     (*.txt) and the boot TOML are intentionally NOT touched. ---
-rm -f "$GAME_DIR"/er-effects-*.log "$GAME_DIR"/er-reload-trace.log "$GAME_DIR"/er-effects-telemetry.json 2>/dev/null
+rm -f "$GAME_DIR"/er-effects-*.log "$GAME_DIR"/er-reload-trace.log "$GAME_DIR"/er-effects-telemetry.json \
+	"$GAME_DIR"/er-effects-input-trace.jsonl 2>/dev/null
 
 # --- movement-proof gate: authorize the in-DLL can-move probe to inject a forward stick in-world and
 #     prove input moves the character (havok delta) -- the only reliable good-vs-frozen signal. Proof-
 #     only (absent in normal user sessions so it never fights the player). Skip in NO_SQREPRO+user-watch.
 rm -f "$GAME_DIR/er-effects-probe-foreground.txt" 2>/dev/null
+# Canonical ordered semaphore trace for boot-vs-reload diffing. The DLL writes in GAME_DIR so the
+# Windows process never needs to open a WSL path; we copy it into ARTIFACT_DIR after capture.
+printf '1\n' >"$GAME_DIR/er-effects-input-trace.txt"
+
 if [[ "${PROVE_MOVEMENT:-1}" == "1" ]]; then
 	printf '1\n' >"$GAME_DIR/er-effects-prove-movement.txt"
 	printf '1\n' >"$GAME_DIR/er-effects-stay-active.txt" # accept injected input while unfocused
@@ -129,7 +134,7 @@ cleanup() {
 	rm -f "$GAME_DIR/er-effects-system-quit-repro.txt" "$GAME_DIR/er-effects-system-quit-load-switch.txt" \
 		"$GAME_DIR/er-effects-sq-target-switches.txt" "$GAME_DIR/er-effects-sq-target-slots.txt" \
 		"$GAME_DIR/er-effects-prove-movement.txt" "$GAME_DIR/er-effects-stay-active.txt" \
-		"$GAME_DIR/er-effects-probe-foreground.txt" 2>/dev/null
+		"$GAME_DIR/er-effects-probe-foreground.txt" "$GAME_DIR/er-effects-input-trace.txt" 2>/dev/null
 	[[ -f "$ARTIFACT_DIR/er-effects.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-effects.toml.bak" "$GAME_DIR/er-effects.toml"
 }
 trap cleanup EXIT
@@ -140,6 +145,7 @@ echo "==   product+trace unioned; sq-repro XInput drives 2 same-slot reloads"
 echo "==   boot=$BOOT_FILE slot=$BOOT_SLOT  target_slots=[$TARGET_SLOTS]  cap=${CAP_SECONDS}s"
 echo "==   INPUT WILL BE CAPTURED (XInput autopilot) -- agent-owned bounded run"
 echo "==   artifacts -> $ARTIFACT_DIR"
+echo "==   semaphore trace -> $ARTIFACT_DIR/load-semaphore-trace.jsonl"
 echo "======================================================================"
 
 "$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
@@ -156,6 +162,10 @@ python3 "$REPO_ROOT/scripts/capture-samechar-3x.py" \
 	--report "$ARTIFACT_DIR/samechar-3x-report.md" \
 	"${CAPTURE_ARGS[@]}"
 RC=$?
+
+if [[ -f "$GAME_DIR/er-effects-input-trace.jsonl" ]]; then
+	cp -f "$GAME_DIR/er-effects-input-trace.jsonl" "$ARTIFACT_DIR/load-semaphore-trace.jsonl"
+fi
 
 echo "== capture done rc=$RC ; artifacts in $ARTIFACT_DIR =="
 exit "$RC"

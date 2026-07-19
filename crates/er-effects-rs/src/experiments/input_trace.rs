@@ -84,6 +84,8 @@ static TRACE_FRAME: AtomicU64 = AtomicU64::new(0);
 static TRACE_HDR_WRITTEN: AtomicUsize = AtomicUsize::new(0);
 /// Change-detection key of the last emitted semaphore row (0 = none yet).
 static TRACE_SEM_LAST_KEY: AtomicU64 = AtomicU64::new(0);
+/// Monotonic event sequence for machine-diffable semaphore order within one process.
+static TRACE_SEM_SEQ: AtomicUsize = AtomicUsize::new(0);
 /// Last heartbeat emission, ms since the shared process-log epoch.
 static TRACE_LAST_HB_MS: AtomicU64 = AtomicU64::new(0);
 const TRACE_HB_INTERVAL_MS: u64 = 2000;
@@ -262,7 +264,11 @@ struct TraceSem {
     opt_tab: i64,
     in_world: bool,
     player: bool,
+    world_chr_man: usize,
+    main_player: usize,
     committed: i32,
+    ig_pstep: i32,
+    ig_pnext: i32,
     ig_d8: i32,
     bc4: i32,
     c30: i32,
@@ -271,12 +277,30 @@ struct TraceSem {
     save_state: i64,
     save_requested: bool,
     menu_job: usize,
+    loading_mode: i32,
+    loading_field10: i32,
+    loading_field11: i32,
     load_done: bool,
     fake_cover: bool,
     native_loadscreen: bool,
     quickload_phase: usize,
+    profile_load_activate: usize,
+    sq_repro_state: usize,
     fresh_deser: usize,
+    can_move: bool,
+    move_epoch: usize,
+    bar_frame: usize,
+    bar_max_frame: usize,
+    bar_progress_permille: usize,
     mms_step: i64,
+    mms_next: i32,
+    mms_done50: i32,
+    mms_gate_lo: i32,
+    mms_gate_hi: i32,
+    mms_hold270: i32,
+    mms_cd100: i32,
+    mms_req248: i32,
+    mms_b7c1: i32,
     mms_blocks: i32,
     stable_frames: usize,
     msgbox_builds: usize,
@@ -310,25 +334,69 @@ fn input_trace_semaphores() -> TraceSem {
     if owner == null {
         owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
     }
-    let (committed, ig_d8) = if owner != null {
+    let ig_ptr = if owner != null {
+        unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) }
+            .filter(|ig| *ig != null)
+            .unwrap_or(null)
+    } else {
+        null
+    };
+    let (committed, ig_pstep, ig_pnext, ig_d8) = if owner != null {
         (
             unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }.unwrap_or(-1),
-            unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) }
-                .filter(|ig| *ig != null)
-                .and_then(|ig| unsafe { safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) })
-                .unwrap_or(-1),
+            if ig_ptr != null {
+                unsafe { safe_read_i32(ig_ptr + 0x48) }.unwrap_or(-1)
+            } else {
+                -1
+            },
+            if ig_ptr != null {
+                unsafe { safe_read_i32(ig_ptr + 0x4c) }.unwrap_or(-1)
+            } else {
+                -1
+            },
+            if ig_ptr != null {
+                unsafe { safe_read_i32(ig_ptr + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) }.unwrap_or(-1)
+            } else {
+                -1
+            },
         )
     } else {
-        (-1, -1)
+        (-1, -1, -1, -1)
     };
     let base = game_module_base().unwrap_or(null);
-    let menu_job = if base != null {
+    let menu_man = if base != null {
         unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
             .filter(|mm| *mm != null)
-            .and_then(|mm| unsafe { safe_read_usize(mm + CS_MENU_MAN_IN_GAME_MENU_JOB_798_OFFSET) })
+            .unwrap_or(null)
+    } else {
+        null
+    };
+    let menu_job = if menu_man != null {
+        unsafe { safe_read_usize(menu_man + CS_MENU_MAN_IN_GAME_MENU_JOB_798_OFFSET) }
             .unwrap_or(usize::MAX)
     } else {
         usize::MAX
+    };
+    let loading_mode = if menu_man != null {
+        unsafe { safe_read_u8(menu_man + CSMENUMAN_LOADINGSCREEN_MODE_728_OFFSET) }
+            .map(|v| v as i32)
+            .unwrap_or(-1)
+    } else {
+        -1
+    };
+    let loading_field10 = if menu_man != null {
+        unsafe { safe_read_u8(menu_man + CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET) }
+            .map(|v| v as i32)
+            .unwrap_or(-1)
+    } else {
+        -1
+    };
+    let loading_field11 = if menu_man != null {
+        unsafe { safe_read_u8(menu_man + CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET + 1) }
+            .map(|v| v as i32)
+            .unwrap_or(-1)
+    } else {
+        -1
     };
     let (load_done, fake_cover) = if base != null {
         (unsafe { now_loading_active(base) }, unsafe {
@@ -337,6 +405,57 @@ fn input_trace_semaphores() -> TraceSem {
     } else {
         (false, false)
     };
+    let mms_ptr = if ig_ptr != null {
+        unsafe { safe_read_usize(ig_ptr + INGAMESTEP_MOVEMAP_CHILD_WRAPPER_E0_OFFSET) }
+            .filter(|w| *w != null)
+            .and_then(|w| unsafe { safe_read_usize(w + EZ_CHILD_STEP_STEPPER_OFFSET) })
+            .filter(|m| *m != null)
+            .unwrap_or(null)
+    } else {
+        null
+    };
+    let (
+        mms_next,
+        mms_done50,
+        mms_gate_lo,
+        mms_gate_hi,
+        mms_hold270,
+        mms_cd100,
+        mms_req248,
+        mms_b7c1,
+    ) = if mms_ptr != null {
+        (
+            unsafe { safe_read_i32(mms_ptr + MOVEMAPSTEP_NEXT_STEP_4C_OFFSET) }.unwrap_or(-1),
+            unsafe { safe_read_u8(mms_ptr + MOVEMAPSTEP_DONE_FLAG_50_OFFSET) }
+                .map(|v| v as i32)
+                .unwrap_or(-1),
+            unsafe { safe_read_u8(mms_ptr + MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET) }
+                .map(|v| v as i32)
+                .unwrap_or(-1),
+            unsafe { safe_read_u8(mms_ptr + MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET + 1) }
+                .map(|v| v as i32)
+                .unwrap_or(-1),
+            unsafe { safe_read_i32(mms_ptr + MOVEMAPSTEP_HOLD_TIMER_270_OFFSET) }.unwrap_or(-1),
+            unsafe { safe_read_i32(mms_ptr + MOVEMAPSTEP_COUNTDOWN_100_OFFSET) }.unwrap_or(-1),
+            unsafe { safe_read_i32(mms_ptr + MOVEMAPSTEP_FINALIZE_REQ_248_OFFSET) }.unwrap_or(-1),
+            SWITCH_ORACLE_MMS_B7C1.load(Ordering::SeqCst),
+        )
+    } else {
+        (-1, -1, -1, -1, -1, -1, -1, -1)
+    };
+    let (world_chr_man, main_player) =
+        if let Ok(world_chr_man) = unsafe { eldenring::cs::WorldChrMan::instance_mut() } {
+            (
+                world_chr_man as *mut _ as usize,
+                world_chr_man
+                    .main_player
+                    .as_ref()
+                    .map(|p| p.as_ptr() as usize)
+                    .unwrap_or(0),
+            )
+        } else {
+            (0, 0)
+        };
     let mms_raw = SWITCH_ORACLE_MMS_STEP.load(Ordering::SeqCst);
     let msgbox_raw = MSGBOX_TOTAL_BUILDS.load(Ordering::SeqCst);
     TraceSem {
@@ -352,7 +471,11 @@ fn input_trace_semaphores() -> TraceSem {
         },
         in_world: IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES,
         player: unsafe { PlayerIns::local_player_mut() }.is_ok(),
+        world_chr_man,
+        main_player,
         committed,
+        ig_pstep,
+        ig_pnext,
         ig_d8,
         bc4,
         c30,
@@ -361,16 +484,34 @@ fn input_trace_semaphores() -> TraceSem {
         save_state: t.save_state as i64,
         save_requested: t.save_requested,
         menu_job,
+        loading_mode,
+        loading_field10,
+        loading_field11,
         load_done,
         fake_cover,
         native_loadscreen: native_loading_screen_active(),
         quickload_phase: SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst),
+        profile_load_activate: SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.load(Ordering::SeqCst),
+        sq_repro_state: SQ_REPRO_STATE.load(Ordering::SeqCst),
         fresh_deser: SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst),
+        can_move: crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst),
+        move_epoch: crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst),
+        bar_frame: LOADING_SCREEN_BAR_CURRENT_FRAME.load(Ordering::SeqCst),
+        bar_max_frame: LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst),
+        bar_progress_permille: LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst),
         mms_step: if mms_raw == usize::MAX {
             -1
         } else {
             mms_raw as i64
         },
+        mms_next,
+        mms_done50,
+        mms_gate_lo,
+        mms_gate_hi,
+        mms_hold270,
+        mms_cd100,
+        mms_req248,
+        mms_b7c1,
         mms_blocks: SWITCH_ORACLE_MMS_BLOCKS.load(Ordering::SeqCst),
         stable_frames: SWITCH_ORACLE_STABLE_FRAMES.load(Ordering::SeqCst),
         msgbox_builds: if msgbox_raw == MENU_TRACE_UNSEEN_SEQ {
@@ -400,7 +541,11 @@ impl TraceSem {
         mix(self.opt_tab as u64);
         mix(self.in_world as u64);
         mix(self.player as u64);
+        mix(self.world_chr_man as u64);
+        mix(self.main_player as u64);
         mix(self.committed as u32 as u64);
+        mix(self.ig_pstep as u32 as u64);
+        mix(self.ig_pnext as u32 as u64);
         mix(self.ig_d8 as u32 as u64);
         mix(self.bc4 as u32 as u64);
         mix(self.c30 as u32 as u64);
@@ -409,12 +554,30 @@ impl TraceSem {
         mix(self.save_state as u64);
         mix(self.save_requested as u64);
         mix(self.menu_job as u64);
+        mix(self.loading_mode as u32 as u64);
+        mix(self.loading_field10 as u32 as u64);
+        mix(self.loading_field11 as u32 as u64);
         mix(self.load_done as u64);
         mix(self.fake_cover as u64);
         mix(self.native_loadscreen as u64);
         mix(self.quickload_phase as u64);
+        mix(self.profile_load_activate as u64);
+        mix(self.sq_repro_state as u64);
         mix(self.fresh_deser as u64);
+        mix(self.can_move as u64);
+        mix(self.move_epoch as u64);
+        mix(self.bar_frame as u64);
+        mix(self.bar_max_frame as u64);
+        mix(self.bar_progress_permille as u64);
         mix(self.mms_step as u64);
+        mix(self.mms_next as u32 as u64);
+        mix(self.mms_done50 as u32 as u64);
+        mix(self.mms_gate_lo as u32 as u64);
+        mix(self.mms_gate_hi as u32 as u64);
+        mix(self.mms_hold270 as u32 as u64);
+        mix(self.mms_cd100 as u32 as u64);
+        mix(self.mms_req248 as u32 as u64);
+        mix(self.mms_b7c1 as u32 as u64);
         mix(self.msgbox_builds as u64);
         mix(self.msgbox_dialog as u64);
         // Key must never collide with the "none yet" sentinel 0.
@@ -426,10 +589,15 @@ impl TraceSem {
     fn json_fields(&self) -> String {
         format!(
             "\"focused\":{},\"menu_top\":{},\"menu_opt\":{},\"menu_prof\":{},\"prof_cursor\":{},\"opt_tab\":{},\
-             \"in_world\":{},\"player\":{},\"committed\":{},\"ig_d8\":{},\"bc4\":{},\"c30\":\"0x{:x}\",\
+             \"in_world\":{},\"player\":{},\"world_chr_man\":\"0x{:x}\",\"main_player\":\"0x{:x}\",\
+             \"committed\":{},\"ig_pstep\":{},\"ig_pnext\":{},\"ig_d8\":{},\"bc4\":{},\"c30\":\"0x{:x}\",\
              \"save_slot\":{},\"req_slot\":{},\"save_state\":{},\"save_requested\":{},\
-             \"menu_job\":\"0x{:x}\",\"load_done\":{},\"fake_cover\":{},\"native_loadscreen\":{},\
-             \"quickload_phase\":{},\"fresh_deser\":{},\"mms_step\":{},\"mms_name\":\"{}\",\
+             \"menu_job\":\"0x{:x}\",\"loading_mode\":{},\"loading_field10\":{},\"loading_field11\":{},\
+             \"load_done\":{},\"fake_cover\":{},\"native_loadscreen\":{},\
+             \"quickload_phase\":{},\"profile_load_activate\":{},\"sq_repro_state\":{},\"fresh_deser\":{},\
+             \"can_move\":{},\"move_epoch\":{},\"bar_frame\":{},\"bar_max_frame\":{},\"bar_progress_permille\":{},\
+             \"mms_step\":{},\"mms_name\":\"{}\",\"mms_next\":{},\"mms_done50\":{},\
+             \"mms_gate_lo\":{},\"mms_gate_hi\":{},\"mms_hold270\":{},\"mms_cd100\":{},\"mms_req248\":{},\"mms_b7c1\":{},\
              \"mms_blocks\":{},\"stable_frames\":{},\"msgbox_builds\":{},\"msgbox_dialog\":{}",
             self.focused,
             self.menu_top,
@@ -439,7 +607,11 @@ impl TraceSem {
             self.opt_tab,
             self.in_world,
             self.player,
+            self.world_chr_man,
+            self.main_player,
             self.committed,
+            self.ig_pstep,
+            self.ig_pnext,
             self.ig_d8,
             self.bc4,
             self.c30,
@@ -448,13 +620,31 @@ impl TraceSem {
             self.save_state,
             self.save_requested,
             self.menu_job,
+            self.loading_mode,
+            self.loading_field10,
+            self.loading_field11,
             self.load_done,
             self.fake_cover,
             self.native_loadscreen,
             self.quickload_phase,
+            self.profile_load_activate,
+            self.sq_repro_state,
             self.fresh_deser,
+            self.can_move,
+            self.move_epoch,
+            self.bar_frame,
+            self.bar_max_frame,
+            self.bar_progress_permille,
             self.mms_step,
             json_escape(movemapstep_step_name(self.mms_step as i32)),
+            self.mms_next,
+            self.mms_done50,
+            self.mms_gate_lo,
+            self.mms_gate_hi,
+            self.mms_hold270,
+            self.mms_cd100,
+            self.mms_req248,
+            self.mms_b7c1,
             self.mms_blocks,
             self.stable_frames,
             self.msgbox_builds,
@@ -511,11 +701,33 @@ pub(crate) fn input_trace_tick() {
     // Publish the game's input-accept state for the hook's focus gate (see TRACE_GAME_INPUT_ACCEPT).
     TRACE_GAME_INPUT_ACCEPT.store(usize::from(sem.focused), Ordering::Relaxed);
     let sem_fields = sem.json_fields();
+    let load_kind = if sem.fresh_deser == 0 && sem.profile_load_activate == 0 {
+        "boot_autoload"
+    } else {
+        "samechar_reload"
+    };
+    let phase_name = if sem.mms_step >= 0 {
+        movemapstep_step_name(sem.mms_step as i32)
+    } else if sem.ig_d8 >= 0 {
+        "INGAMESTEP"
+    } else if sem.quickload_phase != 0 {
+        "QUICKLOAD"
+    } else {
+        "TITLE"
+    };
     // Semaphore-transition row (change-detected on the stable gate fields).
     let key = sem.key();
     if TRACE_SEM_LAST_KEY.swap(key, Ordering::SeqCst) != key {
+        let seq = TRACE_SEM_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
         input_trace_append(&format!(
-            "{{\"t\":\"sem\",\"ms\":{ms},\"frame\":{frame},{sem_fields}}}\n"
+            "{{\"t\":\"sem\",\"seq\":{seq},\"ms\":{ms},\"frame\":{frame},\"load_kind\":\"{load_kind}\",\"load_epoch\":{},\"phase_name\":\"{}\",\"event_key\":\"{}:{}:{}:{}:{}\",{sem_fields}}}\n",
+            sem.fresh_deser,
+            json_escape(phase_name),
+            sem.fresh_deser,
+            sem.ig_d8,
+            sem.mms_step,
+            sem.mms_next,
+            sem.bar_frame,
         ));
     }
     // Drain the hook's edge ring: one pad row per synthesized-button edge, stamped with THIS

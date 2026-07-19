@@ -225,6 +225,15 @@ pub(crate) unsafe extern "system" fn movemapstep_step_move_map_gate_detour(
     ret
 }
 
+/// Diagnostic opt-in for the failed state-18 hold hook. Default OFF so canonical semaphore-diff runs are
+/// observational and not contaminated by candidate writes.
+pub(crate) fn movemapstep_step_move_map_gate_hold_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_MMS18_GATE_HOLD").as_deref(),
+        Ok("1")
+    )
+}
+
 /// Install the `STEP_MoveMap` after-original advance-gate hook ONCE. Runtime-falsified task-tick holds
 /// were too late; this hook runs immediately after the native state-18 body.
 pub(crate) unsafe fn install_movemapstep_step_move_map_gate_hook(base: usize) {

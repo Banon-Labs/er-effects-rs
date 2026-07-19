@@ -138,6 +138,279 @@ def capture_portrait(artifact_dir: Path) -> None:
         )
 
 
+def _load_semaphore_rows(artifact_dir: Path, game_dir: Path) -> list[dict]:
+    paths = [
+        artifact_dir / "load-semaphore-trace.jsonl",
+        game_dir / "er-effects-input-trace.jsonl",
+    ]
+    trace_path = next((p for p in paths if p.exists()), paths[0])
+    rows: list[dict] = []
+    if not trace_path.exists():
+        return rows
+    for line in trace_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if row.get("t") == "sem":
+            rows.append(row)
+    return rows
+
+
+def _present_flag(row: dict, key: str) -> bool:
+    value = row.get(key)
+    if isinstance(value, str):
+        return value not in {"0x0", "0", ""}
+    return bool(value)
+
+
+def _checkpoint_names(row: dict) -> list[str]:
+    names: list[str] = []
+    ig_d8 = as_int(row.get("ig_d8"))
+    ig_pstep = as_int(row.get("ig_pstep"))
+    mms_step = as_int(row.get("mms_step"))
+    mms_next = as_int(row.get("mms_next"))
+    mms_done = as_int(row.get("mms_done50"))
+    gate_lo = as_int(row.get("mms_gate_lo"))
+    gate_hi = as_int(row.get("mms_gate_hi"))
+    loading_mode = as_int(row.get("loading_mode"))
+    loading10 = as_int(row.get("loading_field10"))
+    loading11 = as_int(row.get("loading_field11"))
+    bar_frame = as_int(row.get("bar_frame"))
+    bar_progress = as_int(row.get("bar_progress_permille"))
+    if ig_pstep >= 0:
+        names.append(f"ig_parent:{ig_pstep}")
+    if ig_d8 >= 0:
+        names.append(f"ig_request:{ig_d8}")
+    if mms_step >= 0:
+        names.append(f"mms_step:{mms_step}:{row.get('mms_name', '?')}")
+    if mms_next >= 0:
+        names.append(f"mms_next:{mms_next}")
+    if mms_done >= 0:
+        names.append(f"mms_done50:{mms_done}")
+    if gate_lo >= 0 or gate_hi >= 0:
+        names.append(f"mms_gate:{gate_lo}/{gate_hi}")
+    if loading_mode >= 0:
+        names.append(f"loading_mode:{loading_mode}")
+    if loading10 >= 0 or loading11 >= 0:
+        names.append(f"loading_fields:{loading10}/{loading11}")
+    if bar_frame >= 0:
+        names.append(f"loading_bar:{bar_frame}:{bar_progress}")
+    names.append(
+        "worldchr:present" if _present_flag(row, "world_chr_man") else "worldchr:absent"
+    )
+    names.append(
+        "main_player:present"
+        if _present_flag(row, "main_player")
+        else "main_player:absent"
+    )
+    names.append("player:present" if row.get("player") else "player:absent")
+    if row.get("can_move"):
+        names.append("movement:can_move")
+    return names
+
+
+def _shared_row(row: dict) -> bool:
+    return (
+        as_int(row.get("ig_d8")) >= 0
+        or as_int(row.get("ig_pstep")) >= 0
+        or as_int(row.get("mms_step")) >= 0
+        or as_int(row.get("loading_mode")) >= 0
+        or _present_flag(row, "world_chr_man")
+        or _present_flag(row, "main_player")
+        or bool(row.get("player"))
+    )
+
+
+def _first_checkpoint_times(rows: list[dict], load_epoch: int) -> dict[str, dict]:
+    epoch_rows = [
+        r
+        for r in rows
+        if as_int(r.get("load_epoch"), as_int(r.get("fresh_deser"), -1)) == load_epoch
+    ]
+    if not epoch_rows:
+        return {}
+    shared_start_ms = None
+    out: dict[str, dict] = {}
+    for row in epoch_rows:
+        if shared_start_ms is None and _shared_row(row):
+            shared_start_ms = as_int(row.get("ms"), 0)
+        if shared_start_ms is None:
+            continue
+        ms = as_int(row.get("ms"), 0)
+        for name in _checkpoint_names(row):
+            out.setdefault(
+                name,
+                {
+                    "ms": ms,
+                    "rel_shared_ms": ms - shared_start_ms,
+                    "seq": as_int(row.get("seq"), 0),
+                    "phase": row.get("phase_name"),
+                    "event_key": row.get("event_key"),
+                },
+            )
+    return out
+
+
+def _ordered_event_signature(row: dict) -> tuple:
+    return (
+        as_int(row.get("ig_d8")),
+        as_int(row.get("ig_pstep")),
+        as_int(row.get("ig_pnext")),
+        as_int(row.get("mms_step")),
+        as_int(row.get("mms_next")),
+        as_int(row.get("mms_done50")),
+        as_int(row.get("mms_gate_lo")),
+        as_int(row.get("mms_gate_hi")),
+        as_int(row.get("loading_mode")),
+        as_int(row.get("loading_field10")),
+        as_int(row.get("loading_field11")),
+        bool(row.get("player")),
+        _present_flag(row, "world_chr_man"),
+        _present_flag(row, "main_player"),
+        bool(row.get("can_move")),
+    )
+
+
+def _epoch_shared_rows(rows: list[dict], load_epoch: int) -> list[dict]:
+    epoch_rows = [
+        r
+        for r in rows
+        if as_int(r.get("load_epoch"), as_int(r.get("fresh_deser"), -1)) == load_epoch
+    ]
+    started = False
+    out: list[dict] = []
+    for row in epoch_rows:
+        if not started and _shared_row(row):
+            started = True
+        if started:
+            out.append(row)
+    return out
+
+
+def write_semaphore_diff(
+    artifact_dir: Path, game_dir: Path
+) -> tuple[Path, Path] | None:
+    rows = _load_semaphore_rows(artifact_dir, game_dir)
+    json_out = artifact_dir / "samechar-3x-semaphore-diff.json"
+    md_out = artifact_dir / "samechar-3x-semaphore-diff.md"
+    if not rows:
+        md_out.write_text(
+            "# Semaphore diff\n\nNo semaphore trace rows found.\n", encoding="utf-8"
+        )
+        json_out.write_text(
+            json.dumps({"error": "no semaphore trace rows"}, indent=2), encoding="utf-8"
+        )
+        return json_out, md_out
+    epochs = sorted(
+        {
+            as_int(r.get("load_epoch"), as_int(r.get("fresh_deser"), -1))
+            for r in rows
+            if as_int(r.get("load_epoch"), as_int(r.get("fresh_deser"), -1)) >= 0
+        }
+    )
+    boot_events = _epoch_shared_rows(rows, 0)
+    boot_sigs = [_ordered_event_signature(r) for r in boot_events]
+    analyses = []
+    for epoch in [e for e in epochs if e > 0]:
+        reload_events = _epoch_shared_rows(rows, epoch)
+        boot_index = 0
+        first_unmatched = None
+        matches = []
+        for row in reload_events:
+            sig = _ordered_event_signature(row)
+            try:
+                found = boot_sigs.index(sig, boot_index)
+            except ValueError:
+                first_unmatched = row
+                break
+            matches.append(
+                {
+                    "reload_seq": row.get("seq"),
+                    "boot_seq": boot_events[found].get("seq"),
+                    "sig_index": found,
+                }
+            )
+            boot_index = found + 1
+        expected_next = (
+            boot_events[boot_index] if boot_index < len(boot_events) else None
+        )
+        boot_cp = _first_checkpoint_times(rows, 0)
+        reload_cp = _first_checkpoint_times(rows, epoch)
+        missing = [name for name in boot_cp if name not in reload_cp]
+        common = [name for name in boot_cp if name in reload_cp]
+        timing = {
+            name: reload_cp[name]["rel_shared_ms"] - boot_cp[name]["rel_shared_ms"]
+            for name in common
+        }
+        analyses.append(
+            {
+                "reload_epoch": epoch,
+                "reload_rows": len(reload_events),
+                "matched_prefix_rows": len(matches),
+                "first_unmatched_reload": first_unmatched,
+                "expected_next_boot": expected_next,
+                "first_missing_checkpoint": missing[0] if missing else None,
+                "missing_checkpoints": missing[:50],
+                "timing_delta_ms": timing,
+                "last_reload_row": reload_events[-1] if reload_events else None,
+            }
+        )
+    payload = {
+        "row_count": len(rows),
+        "epochs": epochs,
+        "boot_shared_rows": len(boot_events),
+        "analyses": analyses,
+    }
+    json_out.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    md = ["# Semaphore diff", "", f"trace_rows: {len(rows)}", f"epochs: {epochs}", ""]
+    for a in analyses:
+        md.extend(
+            [
+                f"## Reload epoch {a['reload_epoch']}",
+                f"- shared_rows: {a['reload_rows']}",
+                f"- matched_prefix_rows_against_boot_subset: {a['matched_prefix_rows']}",
+                f"- first_missing_checkpoint: {a['first_missing_checkpoint']}",
+            ]
+        )
+        if a["first_unmatched_reload"]:
+            r = a["first_unmatched_reload"]
+            md.append(
+                f"- first_unmatched_reload_row: seq={r.get('seq')} ms={r.get('ms')} phase={r.get('phase_name')} "
+                f"ig={r.get('ig_pstep')}/{r.get('ig_pnext')} d8={r.get('ig_d8')} "
+                f"mms={r.get('mms_step')} next={r.get('mms_next')} gate={r.get('mms_gate_lo')}/{r.get('mms_gate_hi')} "
+                f"player={r.get('player')} world_chr_man={r.get('world_chr_man')} main_player={r.get('main_player')}"
+            )
+        if a["expected_next_boot"]:
+            b = a["expected_next_boot"]
+            md.append(
+                f"- expected_next_boot_row: seq={b.get('seq')} ms={b.get('ms')} phase={b.get('phase_name')} "
+                f"ig={b.get('ig_pstep')}/{b.get('ig_pnext')} d8={b.get('ig_d8')} "
+                f"mms={b.get('mms_step')} next={b.get('mms_next')} gate={b.get('mms_gate_lo')}/{b.get('mms_gate_hi')} "
+                f"player={b.get('player')} world_chr_man={b.get('world_chr_man')} main_player={b.get('main_player')}"
+            )
+        if a["last_reload_row"]:
+            r = a["last_reload_row"]
+            md.append(
+                f"- last_reload_row: seq={r.get('seq')} ms={r.get('ms')} phase={r.get('phase_name')} "
+                f"ig={r.get('ig_pstep')}/{r.get('ig_pnext')} d8={r.get('ig_d8')} "
+                f"mms={r.get('mms_step')} next={r.get('mms_next')} gate={r.get('mms_gate_lo')}/{r.get('mms_gate_hi')} "
+                f"can_move={r.get('can_move')} world_chr_man={r.get('world_chr_man')} main_player={r.get('main_player')}"
+            )
+        deltas = sorted(
+            a["timing_delta_ms"].items(), key=lambda kv: abs(kv[1]), reverse=True
+        )[:12]
+        if deltas:
+            md.append("- largest_common_timing_deltas_ms:")
+            for name, delta in deltas:
+                md.append(f"  - {name}: {delta}")
+        md.append("")
+    md_out.write_text("\n".join(md), encoding="utf-8")
+    return json_out, md_out
+
+
 def teardown() -> None:
     for image in ("eldenring.exe", "me3.exe"):
         with contextlib.suppress(subprocess.TimeoutExpired):
@@ -462,6 +735,17 @@ def main() -> int:
             "",
         ]
     )
+    diff_paths = write_semaphore_diff(args.artifact_dir, args.game_dir)
+    if diff_paths is not None:
+        lines.extend(
+            [
+                "## Semaphore diff artifacts",
+                f"- json: {diff_paths[0]}",
+                f"- markdown: {diff_paths[1]}",
+                "",
+            ]
+        )
+
     epoch_names = {
         0: "load1 (boot autoload)",
         1: "load2 (first reload)",
