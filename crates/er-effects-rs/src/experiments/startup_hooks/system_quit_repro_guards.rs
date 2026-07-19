@@ -23,6 +23,27 @@ fn sq_repro_confirm_count() -> usize {
         + SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT.load(Ordering::SeqCst)
 }
 
+fn sq_repro_native_load_state() -> (i32, i32, bool) {
+    let owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
+    let ingame = if owner != TITLE_OWNER_SCAN_START_ADDRESS && owner > 0x10000 {
+        unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) }
+            .filter(|ig| *ig != TITLE_OWNER_SCAN_START_ADDRESS && *ig > 0x10000)
+    } else {
+        None
+    };
+    let request_code = ingame
+        .and_then(|ig| unsafe { safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) })
+        .unwrap_or(-1);
+    let mms_live = ingame
+        .and_then(|ig| unsafe { safe_read_usize(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) })
+        .filter(|mms| *mms != TITLE_OWNER_SCAN_START_ADDRESS && *mms > 0x10000)
+        .and_then(|mms| unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET) })
+        .unwrap_or(-1);
+    let native_load_settled =
+        request_code == INGAMESTEP_REQUEST_CODE_STABLE_IN_WORLD && mms_live == -1;
+    (request_code, mms_live, native_load_settled)
+}
+
 /// The ProfileSelect slot the current switch loads (clamped to the target table).
 ///
 /// Runtime override so the multi-load proof harness can drive an explicit sequence of DISTINCT
@@ -365,7 +386,8 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             // non-proving load still advances (parity: one more load recovers a frozen one).
             let load1_move_proven = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
                 || tick >= SQ_REPRO_WAIT_WORLD_MOVE_DEADLINE;
-            if in_world && tick >= SQ_REPRO_WORLD_SETTLE_TICKS && load1_move_proven {
+            let (request_code, mms_live, native_load_settled) = sq_repro_native_load_state();
+            if in_world && tick >= SQ_REPRO_WORLD_SETTLE_TICKS && load1_move_proven && native_load_settled {
                 // FIRST INTERACTION (user, 2026-07-17): the user's real flow begins by clicking the
                 // game in the taskbar to make it the active window BEFORE pressing START. Replicate
                 // that here -- force the ER window foreground at world-readiness so the first menu key
@@ -383,7 +405,7 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                     ));
                 } else {
                     append_autoload_debug(format_args!(
-                        "sq-repro: in-world settled ({SQ_REPRO_WORLD_SETTLE_TICKS} ticks) -> OPEN_MENU switch #{}/{} target_slot={}; START (XInput 0x{XINPUT_GAMEPAD_START:04x}) to open the escape/system menu",
+                        "sq-repro: in-world settled ({SQ_REPRO_WORLD_SETTLE_TICKS} ticks, requestCode={request_code} mms={mms_live}) -> OPEN_MENU switch #{}/{} target_slot={}; START (XInput 0x{XINPUT_GAMEPAD_START:04x}) to open the escape/system menu",
                         SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst) + 1,
                         sq_repro_target_switches(),
                         sq_repro_target_slot()
@@ -1038,23 +1060,7 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             let committed = deser >= expected_deser && player_up;
             let movement_proven_for_deser = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
                 && MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == deser;
-            let owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
-            let ingame = if owner != TITLE_OWNER_SCAN_START_ADDRESS && owner > 0x10000 {
-                unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) }
-                    .filter(|ig| *ig != TITLE_OWNER_SCAN_START_ADDRESS && *ig > 0x10000)
-            } else {
-                None
-            };
-            let request_code = ingame
-                .and_then(|ig| unsafe { safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) })
-                .unwrap_or(-1);
-            let mms_live = ingame
-                .and_then(|ig| unsafe { safe_read_usize(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) })
-                .filter(|mms| *mms != TITLE_OWNER_SCAN_START_ADDRESS && *mms > 0x10000)
-                .and_then(|mms| unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET) })
-                .unwrap_or(-1);
-            let native_load_settled = request_code == INGAMESTEP_REQUEST_CODE_STABLE_IN_WORLD
-                && mms_live == -1;
+            let (request_code, mms_live, native_load_settled) = sq_repro_native_load_state();
             let move_proven = committed && movement_proven_for_deser && native_load_settled;
             if move_proven {
                 let next = switch_index + 1;
