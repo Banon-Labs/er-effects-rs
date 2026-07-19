@@ -26,6 +26,7 @@ RENDER_READY_DWELL_SECONDS = 5.0  # goal SS4 hard render gate dwell
 POLL_SECONDS = 1.0
 TARGET_FINAL_EPOCH = 3  # 4 loads total = fresh_deser 0..3
 FINAL_LOAD_DWELL_SECONDS = 14.0  # after the 4th load appears, give the 60-frame move-probe time to run
+BOOT_TIMEOUT_SECONDS = 110.0  # if no in-world player by here, the boot failed -> tear down, don't idle
 
 # sq-repro autopilot menu-nav stage (constants/system_quit.rs). The MENU-NAV stage the driver reached
 # is the ATTEMPT semaphore: it distinguishes "the driver never drove the menu far enough to start a
@@ -116,6 +117,7 @@ def main() -> int:
     epochs: dict[int, dict] = {}
     portrait_captured = False
     final_load_seen_at: float | None = None
+    first_present_at: float | None = None
     start = time.monotonic()
     last_log = 0.0
     result = "TIMEOUT_NO_LOAD3"
@@ -143,6 +145,8 @@ def main() -> int:
             max_activate = max(max_activate, int(activate))
 
             can_move = bool(s.get("oracle_can_move"))
+            if present and first_present_at is None:
+                first_present_at = now
 
             ep = epochs.setdefault(
                 int(deser),
@@ -160,18 +164,17 @@ def main() -> int:
                 capture_portrait(args.artifact_dir)
                 portrait_captured = True
 
-            # Classify ALL loads by movement (do NOT stop on the first). The milestone is the full
-            # 4-load sequence, and per the strict good/frozen parity we want each load's playable-vs-
-            # frozen verdict. Conclude once the 4th load (TARGET_FINAL_EPOCH) has appeared and had a
-            # dwell for its 60-frame move-probe to run -- or as soon as that final load itself moves.
-            if deser >= TARGET_FINAL_EPOCH:
-                if final_load_seen_at is None:
-                    final_load_seen_at = now
-                final_moved = epochs.get(TARGET_FINAL_EPOCH, {}).get("ever_moved")
-                if final_moved or now - final_load_seen_at >= FINAL_LOAD_DWELL_SECONDS:
-                    moved_reloads = sorted(d for d in epochs if d >= 1 and epochs[d]["ever_moved"])
-                    result = "MOVEMENT_PROVEN" if moved_reloads else "NO_RELOAD_MOVED"
-                    break
+            # LOAD-1 FOCUS (user 2026-07-18): the goal is narrowed to "load1 loads up AND is movable".
+            # Success = ANY load proves movement (can_move latched: >=60 consecutive frames of injected
+            # motion) -- load1 alone counts. Stop as soon as movement is proven.
+            if can_move:
+                result = "MOVEMENT_PROVEN"
+                break
+            # TEARDOWN ON UNEXPECTED FAILURE (user 2026-07-18): if the boot never reaches an in-world
+            # player within the boot budget, do NOT idle to the cap -- fail fast and tear down.
+            if first_present_at is None and elapsed >= BOOT_TIMEOUT_SECONDS:
+                result = "BOOT_TIMEOUT_NO_INWORLD"
+                break
 
             if elapsed - last_log >= 3.0:
                 last_log = elapsed
