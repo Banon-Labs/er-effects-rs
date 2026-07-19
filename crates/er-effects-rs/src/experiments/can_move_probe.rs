@@ -61,7 +61,7 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
         MOVE_PROBE_MOVED_FRAMES.store(0, Ordering::SeqCst);
         MOVE_PROBE_ACTIVE.store(false, Ordering::SeqCst);
         MOVE_PROBE_STICK_LY.store(0, Ordering::SeqCst);
-        crate::experiments::sq_repro_drive_wm_key(0); // release any held forward key from the prior load
+        crate::experiments::move_probe_drive_key_foreground_only(0); // release any held forward key from the prior load
         *lock_prev() = None;
     }
 
@@ -69,7 +69,7 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
     if CAN_MOVE_CONFIRMED.load(Ordering::SeqCst) {
         MOVE_PROBE_ACTIVE.store(false, Ordering::SeqCst);
         MOVE_PROBE_STICK_LY.store(0, Ordering::SeqCst);
-        crate::experiments::sq_repro_drive_wm_key(0);
+        crate::experiments::move_probe_drive_key_foreground_only(0);
         return;
     }
 
@@ -82,7 +82,7 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
     const VK_W: u32 = 0x57;
     MOVE_PROBE_STICK_LY.store(MOVE_PROBE_STICK_FORWARD, Ordering::SeqCst);
     MOVE_PROBE_ACTIVE.store(true, Ordering::SeqCst);
-    crate::experiments::sq_repro_drive_wm_key(VK_W);
+    crate::experiments::move_probe_drive_key_foreground_only(VK_W);
     let mut prev = lock_prev();
     if let Some((px, _py, pz)) = *prev {
         let dx = pos.0 - px;

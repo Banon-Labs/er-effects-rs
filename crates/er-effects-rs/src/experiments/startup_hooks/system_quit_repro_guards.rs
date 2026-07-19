@@ -360,7 +360,12 @@ pub(crate) unsafe fn system_quit_repro_tick() {
         SQ_REPRO_STATE_WAIT_WORLD => {
             set_pad(0);
             let in_world = IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
-            if in_world && tick >= SQ_REPRO_WORLD_SETTLE_TICKS {
+            // Prove load1 is genuinely PLAYABLE (moved under injected input) before driving switch #1 --
+            // not merely present + settle-ticked while still streaming. Fallback to the deadline so a
+            // non-proving load still advances (parity: one more load recovers a frozen one).
+            let load1_move_proven = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
+                || tick >= SQ_REPRO_WAIT_WORLD_MOVE_DEADLINE;
+            if in_world && tick >= SQ_REPRO_WORLD_SETTLE_TICKS && load1_move_proven {
                 // FIRST INTERACTION (user, 2026-07-17): the user's real flow begins by clicking the
                 // game in the taskbar to make it the active window BEFORE pressing START. Replicate
                 // that here -- force the ER window foreground at world-readiness so the first menu key

@@ -202,6 +202,12 @@ pub(crate) const SQ_REPRO_WORLD_SETTLE_TICKS: usize = 180;
 /// deterministically frozen (no healthy load2 to misclassify), and load3 (the last switch) is never
 /// gated by WAIT_RELOAD anyway. ~400f (~13s) trims the delay while still giving a brief render grace.
 pub(crate) const SQ_REPRO_FREEZE_RECOVERY_DEADLINE: usize = 400;
+/// WAIT_WORLD movement-proof deadline (2026-07-18): before driving switch #1, wait for load1 to PROVE
+/// movement (CAN_MOVE_CONFIRMED) so the reload is triggered from a genuinely playable state, not a
+/// half-streamed one -- prior runs drove OPEN_MENU while load1 was still at mms 13-16. Fallback ticks
+/// so a load that never proves movement still advances (per the strict parity, driving one more load
+/// recovers a frozen one) instead of hard-stalling. ~1500f (~47s at 32fps) is generous for a real load.
+pub(crate) const SQ_REPRO_WAIT_WORLD_MOVE_DEADLINE: usize = 1500;
 /// No gamepad buttons asserted this frame.
 pub(crate) const INJECT_NAV_NO_BUTTONS: u16 = 0;
 /// CURSOR-OFFSET PROBE: with exactly ONE deterministic Down (Continue idx0 -> Load Game idx1),

@@ -272,6 +272,36 @@ pub(crate) fn sq_repro_drive_wm_key(vk: u32) {
     }
 }
 
+/// Like `sq_repro_drive_wm_key` but NEVER forces the window foreground -- it delivers the held key
+/// ONLY when ER is ALREADY the foreground window, and releases any held key the moment ER loses focus.
+/// Used by the can-move probe so it can never steal the user's focus (the earlier probe yanked ER to
+/// the front and trapped the user's keyboard). If the user alt-tabs away, the probe stops injecting.
+pub(crate) fn move_probe_drive_key_foreground_only(vk: u32) {
+    let hwnd = sq_repro_er_hwnd();
+    if hwnd.0.is_null() {
+        return;
+    }
+    let fg = unsafe { GetForegroundWindow() };
+    if fg.0 as usize != hwnd.0 as usize {
+        // ER is not focused -> release any held key and do nothing (respect the user's other window).
+        let prev = SQ_REPRO_HELD_VK.swap(0, Ordering::SeqCst) as u32;
+        if prev != 0 {
+            sq_repro_send_vk(prev, true);
+        }
+        return;
+    }
+    let prev = SQ_REPRO_HELD_VK.swap(vk as usize, Ordering::SeqCst) as u32;
+    if prev == vk {
+        return;
+    }
+    if prev != 0 {
+        sq_repro_send_vk(prev, true);
+    }
+    if vk != 0 {
+        sq_repro_send_vk(vk, false);
+    }
+}
+
 /// STAY-ACTIVE gate (`ER_EFFECTS_STAY_ACTIVE=1` / `er-effects-stay-active.txt`). When set, keep ER's
 /// input-accept flag `[DLUID+0x88d]` forced to 1 every tick so a virtual gamepad keeps driving the
 /// menus while ER is UNFOCUSED -- letting the user work in another window during a golden capture.
