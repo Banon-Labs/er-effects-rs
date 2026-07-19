@@ -256,7 +256,10 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // that distinguished a playable load from a frozen one (the render/draw_group oracles read
                 // FALSE even for a visibly-rendered, controllable load). Frozen loads never accumulate.
                 // Game-thread only, so driving input here is safe.
-                {
+                // Skip while sq-repro is actively driving a menu: the menu opens from in-world (player
+                // still present), so the probe's stick lane would preempt sq-repro's menu buttons and
+                // break the nav. Only test movement once settled in-world, not mid-drive.
+                if !sq_repro_actively_driving() {
                     let p = player.chr_ins.modules.physics.position;
                     crate::experiments::can_move_probe::tick((p.0, p.1, p.2));
                 }

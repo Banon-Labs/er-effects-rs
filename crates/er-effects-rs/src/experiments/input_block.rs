@@ -482,7 +482,7 @@ pub(crate) unsafe extern "system" fn xinput_get_state_hook(user_index: u32, stat
     if user_index == XINPUT_PRIMARY_USER_INDEX
         && hr == XINPUT_ERROR_DEVICE_NOT_CONNECTED
         && !state.is_null()
-        && (system_quit_repro_enabled() || inject_nav_enabled())
+        && (system_quit_repro_enabled() || inject_nav_enabled() || prove_movement_enabled())
     {
         // Advance a private keepalive counter (NOT INJECT_NAV_FRAME, whose cadence drives the
         // fabrication schedule) so the "connected" pad always presents a fresh, changing packet.
@@ -591,7 +591,7 @@ pub(crate) unsafe extern "system" fn xinput_get_capabilities_hook(
     if user_index == XINPUT_PRIMARY_USER_INDEX
         && hr == XINPUT_ERROR_DEVICE_NOT_CONNECTED
         && !caps.is_null()
-        && (system_quit_repro_enabled() || inject_nav_enabled())
+        && (system_quit_repro_enabled() || inject_nav_enabled() || prove_movement_enabled())
     {
         unsafe {
             std::ptr::write_bytes(caps, 0, XINPUT_CAPABILITIES_SIZE);

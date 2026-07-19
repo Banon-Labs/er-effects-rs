@@ -697,6 +697,28 @@ pub(crate) fn inject_nav_enabled() -> bool {
             .join("er-effects-inject-nav.txt")
             .exists()
 }
+
+/// MOVEMENT-PROOF probe (`er-effects-prove-movement.txt`). When staged, authorizes the in-DLL
+/// can-move probe to inject a forward stick in-world AND forces XInput slot 0 "connected" so the game
+/// polls it (else, with no physical pad, the injected stick never lands). Proof-only / diagnostic.
+pub(crate) fn prove_movement_enabled() -> bool {
+    // Cached (0=unknown,1=on,2=off): read on the per-poll XInput path, and the control file is staged
+    // before launch, so a one-time stat is enough.
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static GATE: AtomicU8 = AtomicU8::new(0);
+    match GATE.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let on = game_directory_path()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("er-effects-prove-movement.txt")
+                .exists();
+            GATE.store(if on { 1 } else { 2 }, Ordering::Relaxed);
+            on
+        }
+    }
+}
 /// SELF-DRIVEN SYSTEM->QUIT->LOAD-PROFILE REPRO AUTOPILOT (er-effects-system-quit-repro.txt /
 /// ER_EFFECTS_SYSTEM_QUIT_REPRO). OFF by default. When on, after the boot autoload reaches the
 /// world, the DLL keeps the input block engaged and injects a scripted DInput keyboard sequence --

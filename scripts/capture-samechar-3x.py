@@ -24,6 +24,8 @@ from pathlib import Path
 
 RENDER_READY_DWELL_SECONDS = 5.0  # goal SS4 hard render gate dwell
 POLL_SECONDS = 1.0
+TARGET_FINAL_EPOCH = 3  # 4 loads total = fresh_deser 0..3
+FINAL_LOAD_DWELL_SECONDS = 14.0  # after the 4th load appears, give the 60-frame move-probe time to run
 
 # sq-repro autopilot menu-nav stage (constants/system_quit.rs). The MENU-NAV stage the driver reached
 # is the ATTEMPT semaphore: it distinguishes "the driver never drove the menu far enough to start a
@@ -113,6 +115,7 @@ def main() -> int:
     # Per-epoch record: first-seen ts, the max/settled snapshot, whether render-ready was ever held.
     epochs: dict[int, dict] = {}
     portrait_captured = False
+    final_load_seen_at: float | None = None
     start = time.monotonic()
     last_log = 0.0
     result = "TIMEOUT_NO_LOAD3"
@@ -157,11 +160,18 @@ def main() -> int:
                 capture_portrait(args.artifact_dir)
                 portrait_captured = True
 
-            # SUCCESS = a load PROVED MOVEMENT (can_move latched: >=60 consecutive frames of injected-
-            # forward motion). That is the real milestone -- a load that renders AND is playable.
-            if can_move:
-                result = "MOVEMENT_PROVEN"
-                break
+            # Classify ALL loads by movement (do NOT stop on the first). The milestone is the full
+            # 4-load sequence, and per the strict good/frozen parity we want each load's playable-vs-
+            # frozen verdict. Conclude once the 4th load (TARGET_FINAL_EPOCH) has appeared and had a
+            # dwell for its 60-frame move-probe to run -- or as soon as that final load itself moves.
+            if deser >= TARGET_FINAL_EPOCH:
+                if final_load_seen_at is None:
+                    final_load_seen_at = now
+                final_moved = epochs.get(TARGET_FINAL_EPOCH, {}).get("ever_moved")
+                if final_moved or now - final_load_seen_at >= FINAL_LOAD_DWELL_SECONDS:
+                    moved_reloads = sorted(d for d in epochs if d >= 1 and epochs[d]["ever_moved"])
+                    result = "MOVEMENT_PROVEN" if moved_reloads else "NO_RELOAD_MOVED"
+                    break
 
             if elapsed - last_log >= 3.0:
                 last_log = elapsed
