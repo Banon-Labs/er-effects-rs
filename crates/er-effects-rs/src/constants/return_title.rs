@@ -312,6 +312,25 @@ pub(crate) const MOVEMAPSTEP_STEP_MOVEMAP_INDEX: i32 = 18;
 pub(crate) const MOVEMAPSTEP_STEP_MOVEMAP_RVA: usize = 0x00af7cf0;
 pub(crate) static MOVEMAPSTEP_STEP_MOVEMAP_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static MOVEMAPSTEP_STEP_MOVEMAP_ORIG: AtomicUsize = AtomicUsize::new(0);
+/// `CS::InGameStep::STEP_MoveMap_Update` (dump 0x140aec810 -> deobf 0x140aec720, content-unique shift
+/// -0xf0). This is the PARENT step handler: it polls input/flipper, then `if (FUN_140eb5550(child)==0)
+/// return;` (its own per-frame wait), and only past that does `field24_0xd8 = 2; FUN_140eb54e0(child)`
+/// (advance requestCode to STABLE + tear the ending child down). On the warm reload FUN_140eb5550 (an
+/// outer-stepper vtable done-query, DECOUPLED from the MoveMapStep finalize substate) reports finished
+/// while the ending advancer is only at substate 8, so the teardown races ahead of case 8 (which would
+/// post substate 9) and strands the reload -> revert to title (bd er-effects-rs-9fmm, fresh
+/// load1-vs-load2 diff). The defer detour replicates the native's own "child not finished" early-return
+/// while the MoveMapStep finalize substate is in [1..=8], giving the advancer the frames to reach 9.
+pub(crate) const INGAMESTEP_STEP_MOVEMAP_UPDATE_RVA: usize = 0x00aec720;
+pub(crate) static INGAMESTEP_STEP_MOVEMAP_UPDATE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static INGAMESTEP_STEP_MOVEMAP_UPDATE_ORIG: AtomicUsize = AtomicUsize::new(0);
+/// Consecutive frames the defer detour has held STEP_MoveMap_Update (reset when finalize leaves 1..=8).
+pub(crate) static INGAMESTEP_MOVEMAP_UPDATE_DEFER_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// Total defer holds (telemetry: >0 means the premature-teardown race was intercepted).
+pub(crate) static INGAMESTEP_MOVEMAP_UPDATE_DEFER_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Fail-soft cap: after this many consecutive held frames, stop deferring and let native decide (so a
+/// genuine return-to-title whose finalize never completes can never be held forever). ~2s at 60fps.
+pub(crate) const INGAMESTEP_MOVEMAP_UPDATE_DEFER_MAX: usize = 120;
 /// MoveMapStep advance-gate byte (`field_0x4b8`). STEP_MoveMap sets the u16 at +0x4b8 to 1 each frame,
 /// then blockers knock it down; it advances only when the LOW byte (+0x4b8) stays nonzero. Low byte 0 =
 /// blocked; +0x4b9 high byte 1 with low 0 = the WorldChrMan-not-ready (`0x100`) branch fired.

@@ -258,6 +258,102 @@ pub(crate) unsafe fn install_movemapstep_step_move_map_gate_hook(base: usize) {
     ));
     std::mem::forget(hooks);
 }
+
+/// Marker gate (`er-effects-reload-defer.txt`) for the STEP_MoveMap_Update finalize-defer detour, so
+/// the fix can be A/B'd against the premature-teardown baseline. Env vars do not propagate through me3.
+fn reload_finalize_defer_enabled() -> bool {
+    game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-reload-defer.txt")
+        .exists()
+}
+
+/// BEFORE-original defer detour for `CS::InGameStep::STEP_MoveMap_Update` (deobf 0x140aec720). Root fix
+/// for the warm-reload revert (bd er-effects-rs-9fmm): the parent reports the ending child finished
+/// (`FUN_140eb5550`, an outer-stepper vtable done-query decoupled from the MoveMapStep finalize substate)
+/// while the ending advancer is still at substate 8, then sets requestCode `+0xd8=2` and tears the child
+/// down (`FUN_140eb54e0`) BEFORE the advancer runs case 8 (which posts substate 9). That strands the
+/// reload and native reverts to title. This detour replicates the function's OWN "child not finished"
+/// early-return: while the MoveMapStep finalize substate is in [1..=8] (finalize in progress) it skips
+/// the original, so the advancer (pumped elsewhere -- STEP_MoveMap_Update does NOT pump it, confirmed by
+/// decompile) gets the frames to reach 9; then the original runs and advances normally. Bounded by
+/// INGAMESTEP_MOVEMAP_UPDATE_DEFER_MAX (fail-soft) and scoped to a committed reload epoch so the proven
+/// boot load is untouched. Marker-gated for A/B.
+pub(crate) unsafe extern "system" fn ingamestep_step_movemap_update_defer_detour(
+    ingame_step: usize,
+    param2: usize,
+    r8: usize,
+    r9: usize,
+) -> usize {
+    let orig_addr = INGAMESTEP_STEP_MOVEMAP_UPDATE_ORIG.load(Ordering::SeqCst);
+    if orig_addr == TITLE_OWNER_SCAN_START_ADDRESS {
+        return 0;
+    }
+    let defer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if !reload_finalize_defer_enabled()
+            || ingame_step <= PAB_MIN_HEAP_PTR
+            || SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) == 0
+        {
+            return false;
+        }
+        let Some(mms) = (unsafe {
+            safe_read_usize(ingame_step + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET)
+        })
+        .filter(|&m| m > PAB_MIN_HEAP_PTR) else {
+            return false;
+        };
+        let fin = unsafe { safe_read_i32(mms + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET) }
+            .unwrap_or(-1);
+        if (1..=8).contains(&fin) {
+            let held = INGAMESTEP_MOVEMAP_UPDATE_DEFER_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
+            if held > INGAMESTEP_MOVEMAP_UPDATE_DEFER_MAX {
+                return false; // fail-soft: never hold a genuine teardown forever
+            }
+            let n = INGAMESTEP_MOVEMAP_UPDATE_DEFER_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+            if n <= 8 || n.is_power_of_two() {
+                append_autoload_debug(format_args!(
+                    "reload-finalize-defer #{n}: STEP_MoveMap_Update held (finalize={fin} in progress, held_frames={held}) -- deferring d8=2/teardown until the advancer posts substate 9"
+                ));
+            }
+            true
+        } else {
+            // finalize done (9/0) or not started: let the parent advance normally.
+            INGAMESTEP_MOVEMAP_UPDATE_DEFER_TICKS.store(0, Ordering::SeqCst);
+            false
+        }
+    }))
+    .unwrap_or(false);
+    if defer {
+        return 0;
+    }
+    let orig: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig_addr) };
+    unsafe { orig(ingame_step, param2, r8, r9) }
+}
+
+/// Install the STEP_MoveMap_Update finalize-defer hook ONCE.
+pub(crate) unsafe fn install_ingamestep_step_movemap_update_defer_hook(base: usize) {
+    if INGAMESTEP_STEP_MOVEMAP_UPDATE_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        != TITLE_OWNER_SCAN_START_ADDRESS
+    {
+        return;
+    }
+    let mut hooks = Vec::new();
+    unsafe {
+        create_continue_trace_hook(
+            &mut hooks,
+            "ingamestep_step_movemap_update_defer_aec720",
+            INGAMESTEP_STEP_MOVEMAP_UPDATE_RVA as u32,
+            ingamestep_step_movemap_update_defer_detour as *mut c_void,
+            &INGAMESTEP_STEP_MOVEMAP_UPDATE_ORIG,
+        );
+    }
+    append_autoload_debug(format_args!(
+        "ingamestep-step-movemap-update-defer-hook: INSTALLED on 0x{:x} -- defers d8=2/teardown while MoveMapStep finalize in [1..8] (marker er-effects-reload-defer.txt)",
+        base + INGAMESTEP_STEP_MOVEMAP_UPDATE_RVA,
+    ));
+    std::mem::forget(hooks);
+}
 /// READ-ONLY trace detour for the title step-setter `SetState(owner, int state)` (deobf 0x140b0d960).
 /// Logs every native state transition with a timestamp + the current owner+0xe0 (TitleTopDialog
 /// holder) liveness, then calls the original UNCHANGED. Pure observation -- this is the

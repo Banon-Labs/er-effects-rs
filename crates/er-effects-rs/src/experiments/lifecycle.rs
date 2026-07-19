@@ -382,6 +382,10 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
             if movemapstep_step_move_map_gate_hold_enabled() {
                 unsafe { install_movemapstep_step_move_map_gate_hook(base) };
             }
+            // STEP_MoveMap_Update finalize-defer detour: the root fix for the warm-reload premature
+            // teardown (bd er-effects-rs-9fmm). Self-gated internally on the er-effects-reload-defer.txt
+            // marker + a committed reload epoch, so installing it is inert until a marked reload runs.
+            unsafe { install_ingamestep_step_movemap_update_defer_hook(base) };
         }
     }
     // OFFLINE connection-state lever (milestone-3 fix): force GameMan+0xBC8/0xBC9 = 0 each
