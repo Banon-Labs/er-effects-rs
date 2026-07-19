@@ -1293,17 +1293,18 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         // CheckReturnToTitle (return_title.rs:1-7). This is distinct from bc4 (the 1st teardown flag): the
         // suppressed quit-save that would pump bc4->3 and set 0x5d never runs, so we supply the
         // ending-request input directly. Gate on the EXACT stuck signature + a sustained streak so a
-        // healthy load (leaves 18 in a few frames) never trips it. The recovery is old-world TEARDOWN-only:
-        // after Continue/SetState5 hands off to the incoming world (`AUTOLOAD_HANDOFF`), the same mms18
-        // shape can describe the NEW load's finish gate. Replaying rt5d there reopens the return-title path
-        // instead of proving the new world settled, so exclude the whole handoff phase. ENDING_REQUEST_SET_COUNT
-        // is the semaphore.
+        // healthy load (leaves 18 in a few frames) never trips it. The stricter settled-gate run
+        // (target/runtime-probe/samechar-3x-settledgate-20260719-053409) proved this same signature also
+        // appears after Continue/SetState5 during AUTOLOAD_HANDOFF: load2 becomes movable, but its native
+        // MoveMap/requestCode handoff remains parked at mms18 with end5e=0/rt5d=0. So keep this recovery
+        // enabled for the whole active switch phase, including AUTOLOAD_HANDOFF. The separate return-title
+        // chain/final-functor gates now exclude AUTOLOAD_HANDOFF, and this block still clears rt5d the frame
+        // mms leaves 18, so the advancer flag can finish the native load without replaying return-title.
+        // ENDING_REQUEST_SET_COUNT is the semaphore.
         if let Some(md) = menudata {
             let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
-            let old_world_teardown_phase = quickload_phase
-                >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
-                && quickload_phase < SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF;
-            let stuck_mms18 = old_world_teardown_phase
+            let active_switch_phase = quickload_phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED;
+            let stuck_mms18 = active_switch_phase
                 && player_present
                 && ig_d8 == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING
                 && mms_step == MOVEMAPSTEP_STEP_MOVEMAP_INDEX
@@ -1323,7 +1324,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                     }
                     let n = ENDING_REQUEST_SET_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
                     append_autoload_debug(format_args!(
-                        "ENDING-REQUEST RECOVERY #{n}: SET menuData+0x5d=1 at mms18 stall (streak={streak} end5e=0 rt5d=0 b7c1=1 blocks={mms_blocks}) -> advancer should write 0x5e=1 and walk the STEP_MoveMap child 18->19->20->-1 to tear down the old world"
+                        "ENDING-REQUEST RECOVERY #{n}: SET menuData+0x5d=1 at mms18 stall (streak={streak} phase={quickload_phase} end5e=0 rt5d=0 b7c1=1 blocks={mms_blocks}) -> advancer should write 0x5e=1 and walk the STEP_MoveMap child 18->19->20->-1 so native requestCode can settle"
                     ));
                 }
             } else {
