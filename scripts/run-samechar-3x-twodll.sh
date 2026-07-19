@@ -97,6 +97,7 @@ rm -f "$GAME_DIR"/er-effects-*.log "$GAME_DIR"/er-reload-trace.log "$GAME_DIR"/e
 #     only (absent in normal user sessions so it never fights the player). Skip in NO_SQREPRO+user-watch.
 if [[ "${PROVE_MOVEMENT:-1}" == "1" ]]; then
   printf '1\n' > "$GAME_DIR/er-effects-prove-movement.txt"
+  printf '1\n' > "$GAME_DIR/er-effects-stay-active.txt"  # accept injected input while unfocused
 else
   rm -f "$GAME_DIR/er-effects-prove-movement.txt" 2>/dev/null
 fi
