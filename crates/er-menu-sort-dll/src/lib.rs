@@ -1,15 +1,17 @@
 use std::ffi::c_void;
 
-use crate::{config::RuntimeConfig, log::Log, task::MenuSortTask, win::HInstance};
+use crate::{config::RuntimeConfig, log::Log, task::MenuSortTask};
 
 mod config;
 mod log;
 mod menu_sort;
+mod process_memory;
 mod task;
-mod win;
 
 const DLL_MAIN_SUCCESS: i32 = 1;
 const DLL_PROCESS_ATTACH: u32 = 1;
+
+type HInstance = *mut c_void;
 
 #[unsafe(no_mangle)]
 pub extern "system" fn DllMain(_hmodule: HInstance, reason: u32, _reserved: *mut c_void) -> i32 {

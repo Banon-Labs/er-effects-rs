@@ -1,7 +1,5 @@
 use std::ffi::c_void;
 
-pub(crate) type HInstance = *mut c_void;
-
 const CURRENT_PROCESS_PSEUDO_HANDLE: isize = -1;
 const FALSE: i32 = 0;
 
@@ -11,6 +9,11 @@ pub(crate) struct GameAddress(usize);
 impl GameAddress {
     pub(crate) const fn new(value: usize) -> Self {
         Self(value)
+    }
+
+    pub(crate) fn from_ptr<T>(ptr: *mut T) -> Option<Self> {
+        let address = Self(ptr as usize);
+        (!address.is_null()).then_some(address)
     }
 
     pub(crate) const fn value(self) -> usize {
@@ -31,28 +34,6 @@ impl GameAddress {
 
     fn as_mut_ptr(self) -> *mut c_void {
         self.0 as *mut c_void
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct GameModule {
-    base: GameAddress,
-}
-
-impl GameModule {
-    pub(crate) fn current() -> Result<Self, String> {
-        let module = unsafe { GetModuleHandleA(std::ptr::null()) };
-        if module.is_null() {
-            Err("failed to resolve game module".to_owned())
-        } else {
-            Ok(Self {
-                base: GameAddress::new(module as usize),
-            })
-        }
-    }
-
-    pub(crate) const fn rva(self, rva: usize) -> GameAddress {
-        self.base.offset(rva)
     }
 }
 
@@ -107,8 +88,6 @@ impl ProcessMemory {
 
 #[link(name = "kernel32")]
 unsafe extern "system" {
-    fn GetModuleHandleA(module_name: *const u8) -> *mut c_void;
-
     fn ReadProcessMemory(
         process: isize,
         base: *const c_void,
