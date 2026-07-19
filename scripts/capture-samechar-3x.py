@@ -19,6 +19,7 @@ import argparse
 import json
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -27,6 +28,10 @@ POLL_SECONDS = 1.0
 TARGET_FINAL_EPOCH = 3  # 4 loads total = fresh_deser 0..3
 FINAL_LOAD_DWELL_SECONDS = 14.0  # after the 4th load appears, give the 60-frame move-probe time to run
 BOOT_TIMEOUT_SECONDS = 110.0  # if no in-world player by here, the boot failed -> tear down, don't idle
+
+# Interruptible poll wait (never set) -- the sanctioned no-bare-sleep pace primitive (see
+# scripts/multi-load-proof-monitor.py); real synchronization is the telemetry-file readiness checks.
+_POLL_WAIT = threading.Event()
 
 # sq-repro autopilot menu-nav stage (constants/system_quit.rs). The MENU-NAV stage the driver reached
 # is the ATTEMPT semaphore: it distinguishes "the driver never drove the menu far enough to start a
@@ -202,7 +207,7 @@ def main() -> int:
                     f"havok={s.get('oracle_havok_pos')}",
                     flush=True,
                 )
-        time.sleep(POLL_SECONDS)
+        _POLL_WAIT.wait(POLL_SECONDS)
 
     # Snapshot artifacts before teardown clears live state.
     for name in ("er-effects-telemetry.json", "er-effects-autoload-debug.log", "er-reload-trace.log"):
