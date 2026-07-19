@@ -74,16 +74,16 @@ fn poll_autoload_handoff_parent_state_guard() {
     else {
         return;
     };
-    let committed = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }
-        .unwrap_or(-1);
+    let committed =
+        unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }.unwrap_or(-1);
     let requested = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_OFFSET) }.unwrap_or(-1);
     let parent_is_ending = matches!(committed, TITLE_STEP_END_FLOW | TITLE_STEP_END_FLOW_WAIT)
         || matches!(requested, TITLE_STEP_END_FLOW | TITLE_STEP_END_FLOW_WAIT);
     if !parent_is_ending {
         return;
     }
-    let request_code = unsafe { safe_read_i32(ingame + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) }
-        .unwrap_or(-1);
+    let request_code =
+        unsafe { safe_read_i32(ingame + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) }.unwrap_or(-1);
     let mms_step = unsafe { safe_read_usize(ingame + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) }
         .filter(|mms| *mms != TITLE_OWNER_SCAN_START_ADDRESS && *mms > 0x10000)
         .and_then(|mms| unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET) })
@@ -433,7 +433,10 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // proof. The driver now owns the stricter per-epoch movement/native-settle gate before it may
                 // start another switch. This latch has a different job: disarm product_core_autoload_tick as
                 // soon as the native MoveMap child is done so title-loop ownership does not take the loaded
-                // player back down during AUTOLOAD_HANDOFF. Normal user sessions keep the original non-input
+                // player back down during AUTOLOAD_HANDOFF. For strict repro probes, however, native MoveMap
+                // completion alone is not enough: the known bug is exactly "MoveMap finished, then requestCode
+                // drains and the player disappears before movement." Keep handoff armed until the current reload
+                // epoch has epoch-scoped movement proof too. Normal user sessions keep the original non-input
                 // player-present latch and are not forced to walk the character.
                 let movement_proof_required = crate::telemetry::game_directory_path()
                     .map(|d| d.join("er-effects-prove-movement.txt").exists())
@@ -461,7 +464,8 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 let menu_free_reload_ready = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE
                     .load(Ordering::SeqCst)
                     == 1
-                    && (!movement_proof_required || native_movemap_child_done);
+                    && (!movement_proof_required
+                        || (native_movemap_child_done && movement_proven_for_epoch));
                 if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
                     >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
                     && menu_free_reload_ready
