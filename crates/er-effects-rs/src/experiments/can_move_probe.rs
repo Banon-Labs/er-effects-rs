@@ -11,15 +11,88 @@
 //! A static/frozen character repeats its position exactly (delta ~0), so it never accumulates; a
 //! walking character clears 60 frames quickly and latches `CAN_MOVE_CONFIRMED`.
 
+use std::ffi::c_void;
 use std::sync::Mutex;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::constants::{
     CAN_MOVE_CONFIRMED, MOVE_PROBE_ACTIVE, MOVE_PROBE_EPOCH, MOVE_PROBE_MOVED_FRAMES,
-    MOVE_PROBE_PER_FRAME_THRESHOLD, MOVE_PROBE_REQUIRED_FRAMES, MOVE_PROBE_STICK_FORWARD,
-    MOVE_PROBE_STICK_LY, SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT,
+    MOVE_PROBE_PER_FRAME_THRESHOLD, MOVE_PROBE_REQUIRED_FRAMES,
+    SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT,
 };
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 use crate::telemetry::append_autoload_debug;
+
+/// FD4PadDevice poll (deobf `0x141f6bad0`, RE `er-movement-input-stick-boundary-2026-07-18`): the
+/// per-device, per-frame function where XInput / DirectInput / ScePad all deposit the device's
+/// normalized analog-stick into `this`, BELOW the OS/Steam-Input layer and BEFORE locomotion reads it.
+/// Our synthetic `XInputGetState(0)` never moved the character because Steam Input routes the pad
+/// through ScePad/DirectInput, not the raw xinput DLL. Hooking here and writing the left-stick injects a
+/// controller stick deflection at the game's OWN input boundary -- run through the full deadzone ->
+/// mapping -> locomotion chain, identical to any real pad, robust to Steam Input. This injects INPUT
+/// (a stick push), NOT the locomotion output, so it faithfully tests "does input move the character".
+const FD4_PAD_DEVICE_POLL_RVA: u32 = 0x1f6bad0;
+const PAD_STICK_LX_OFFSET: usize = 0x89c; // f32 in [-1.0, 1.0]
+const PAD_STICK_LY_OFFSET: usize = 0x8a0; // f32 in [-1.0, 1.0]; +1.0 = full forward
+static ORIG_PAD_POLL: AtomicUsize = AtomicUsize::new(0);
+
+unsafe extern "system" fn pad_poll_hook(this: usize, a: usize, b: usize, c: usize) -> usize {
+    let orig = ORIG_PAD_POLL.load(Ordering::SeqCst);
+    let ret = if orig != 0 {
+        let f: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+            unsafe { std::mem::transmute(orig) };
+        unsafe { f(this, a, b, c) }
+    } else {
+        0
+    };
+    // After the poll filled the stick from the real source, overwrite with FULL FORWARD while probing.
+    // Every device is overwritten; the priority moderator's active device is the one that moves the char.
+    if this != 0 && MOVE_PROBE_ACTIVE.load(Ordering::SeqCst) {
+        unsafe {
+            *((this + PAD_STICK_LX_OFFSET) as *mut f32) = 0.0;
+            *((this + PAD_STICK_LY_OFFSET) as *mut f32) = 1.0;
+        }
+    }
+    ret
+}
+
+/// Install the pad-poll hook once (only when the movement proof is authorized).
+fn install_pad_poll_hook() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        match unsafe { MH_Initialize() } {
+            MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+            status => {
+                append_autoload_debug(format_args!(
+                    "can-move: pad-poll MH_Initialize failed: {status:?}"
+                ));
+                return;
+            }
+        }
+        let Ok(addr) = crate::game_rva(FD4_PAD_DEVICE_POLL_RVA) else {
+            append_autoload_debug(format_args!("can-move: pad-poll game_rva failed"));
+            return;
+        };
+        match unsafe { MhHook::new(addr as *mut c_void, pad_poll_hook as *mut c_void) } {
+            Ok(hook) => {
+                ORIG_PAD_POLL.store(hook.trampoline() as usize, Ordering::SeqCst);
+                if unsafe { hook.queue_enable() }.is_ok()
+                    && matches!(unsafe { MH_ApplyQueued() }, MH_STATUS::MH_OK)
+                {
+                    std::mem::forget(hook);
+                    append_autoload_debug(format_args!(
+                        "can-move: pad-poll hook installed at 0x{addr:x} (faithful stick injection boundary)"
+                    ));
+                } else {
+                    append_autoload_debug(format_args!("can-move: pad-poll enable failed"));
+                }
+            }
+            Err(status) => append_autoload_debug(format_args!(
+                "can-move: pad-poll MhHook::new failed: {status:?}"
+            )),
+        }
+    });
+}
 
 /// Previous frame's world position while a probe is active (game thread only touches this).
 static PREV_POS: Mutex<Option<(f32, f32, f32)>> = Mutex::new(None);
@@ -53,6 +126,7 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
     if !enabled {
         return;
     }
+    install_pad_poll_hook();
 
     let epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
     // New load epoch -> reset the probe (each load must re-prove movement on its own).
@@ -60,29 +134,20 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
         CAN_MOVE_CONFIRMED.store(false, Ordering::SeqCst);
         MOVE_PROBE_MOVED_FRAMES.store(0, Ordering::SeqCst);
         MOVE_PROBE_ACTIVE.store(false, Ordering::SeqCst);
-        MOVE_PROBE_STICK_LY.store(0, Ordering::SeqCst);
-        crate::experiments::move_probe_drive_key_foreground_only(0); // release any held forward key from the prior load
         *lock_prev() = None;
     }
 
-    // Already proven for this load -> stop injecting and release the held forward key.
+    // Already proven for this load -> stop injecting.
     if CAN_MOVE_CONFIRMED.load(Ordering::SeqCst) {
         MOVE_PROBE_ACTIVE.store(false, Ordering::SeqCst);
-        MOVE_PROBE_STICK_LY.store(0, Ordering::SeqCst);
-        crate::experiments::move_probe_drive_key_foreground_only(0);
         return;
     }
 
-    // In-world: inject FORWARD input and measure this frame's horizontal displacement. Synthetic
-    // XInput slot-0 did NOT move the character (user-confirmed), so the primary driver is the KEYBOARD
-    // W held via SendInput/RawInput -- the path that provably reached the game for menus (native ER
-    // reads keyboard as RawInput, not WM/DInput). The XInput stick is set too as a harmless backup.
-    // During a load/menu/frozen state the character does not move under either, so the consecutive
-    // counter never accumulates -- no false positive, no dependence on the broken render oracle.
-    const VK_W: u32 = 0x57;
-    MOVE_PROBE_STICK_LY.store(MOVE_PROBE_STICK_FORWARD, Ordering::SeqCst);
+    // In-world: arm the injection (the pad-poll hook writes a full-forward stick into the active pad
+    // device this frame) and measure this frame's horizontal displacement. During a load/menu/frozen
+    // state the character does not move under the injected stick, so the consecutive counter never
+    // accumulates -- no false positive, no dependence on the broken render oracle.
     MOVE_PROBE_ACTIVE.store(true, Ordering::SeqCst);
-    crate::experiments::move_probe_drive_key_foreground_only(VK_W);
     let mut prev = lock_prev();
     if let Some((px, _py, pz)) = *prev {
         let dx = pos.0 - px;
@@ -93,7 +158,6 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
             if moved >= MOVE_PROBE_REQUIRED_FRAMES {
                 CAN_MOVE_CONFIRMED.store(true, Ordering::SeqCst);
                 MOVE_PROBE_ACTIVE.store(false, Ordering::SeqCst);
-                MOVE_PROBE_STICK_LY.store(0, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
                     "can-move: PROVEN for load epoch {epoch} -- {moved} consecutive frames of injected-forward movement (last frame horiz={horiz:.4})"
                 ));
