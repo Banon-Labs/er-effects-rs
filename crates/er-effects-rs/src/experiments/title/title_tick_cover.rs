@@ -159,10 +159,31 @@ pub(crate) unsafe extern "system" fn movemapstep_step_move_map_gate_detour(
     }
     let orig: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(orig_addr) };
+    let pre_reload_epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+    let pre_movement_proven = crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
+        && crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == pre_reload_epoch;
+    if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+        == SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
+        && pre_reload_epoch > 0
+        && !pre_movement_proven
+        && mms > 0x10000
+    {
+        unsafe {
+            *((mms + MOVEMAPSTEP_COUNTDOWN_100_OFFSET) as *mut i32) = 3;
+            *((mms + MOVEMAPSTEP_HOLD_TIMER_270_OFFSET) as *mut i32) = 0x3a83126f;
+        }
+        let n = SYSTEM_QUIT_QUICKLOAD_MMS18_TIMER_HOLD_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 8 || n.is_power_of_two() {
+            append_autoload_debug(format_args!(
+                "AUTOLOAD-HANDOFF MMS18 TIMER HOLD #{n}: epoch={pre_reload_epoch} mms=0x{mms:x}; reset cd100=3/hold270=0x3a83126f before STEP_MoveMap"
+            ));
+        }
+    }
     let ret = unsafe { orig(mms, task_data, r8, r9) };
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         let reload_epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
-        let movement_proven_for_reload = crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
+        let movement_proven_for_reload = crate::constants::CAN_MOVE_CONFIRMED
+            .load(Ordering::SeqCst)
             && crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == reload_epoch;
         if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
             == SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
@@ -170,8 +191,8 @@ pub(crate) unsafe extern "system" fn movemapstep_step_move_map_gate_detour(
             && !movement_proven_for_reload
             && mms > 0x10000
         {
-            let old_gate = unsafe { safe_read_u8(mms + MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET) }
-                .unwrap_or(0);
+            let old_gate =
+                unsafe { safe_read_u8(mms + MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET) }.unwrap_or(0);
             if old_gate != 0 {
                 unsafe {
                     *((mms + MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET) as *mut u8) = 0;
@@ -183,15 +204,16 @@ pub(crate) unsafe extern "system" fn movemapstep_step_move_map_gate_detour(
                     ));
                 }
             }
-            let old_next = unsafe { safe_read_i32(mms + MOVEMAPSTEP_NEXT_STEP_4C_OFFSET) }
-                .unwrap_or(-1);
+            let old_next =
+                unsafe { safe_read_i32(mms + MOVEMAPSTEP_NEXT_STEP_4C_OFFSET) }.unwrap_or(-1);
             if old_next != MOVEMAPSTEP_STEP_MOVEMAP_INDEX {
                 unsafe {
                     *((mms + MOVEMAPSTEP_NEXT_STEP_4C_OFFSET) as *mut i32) =
                         MOVEMAPSTEP_STEP_MOVEMAP_INDEX;
                     *((mms + MOVEMAPSTEP_DONE_FLAG_50_OFFSET) as *mut u8) = 0;
                 }
-                let n = SYSTEM_QUIT_QUICKLOAD_MMS18_NEXT_HOLD_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+                let n =
+                    SYSTEM_QUIT_QUICKLOAD_MMS18_NEXT_HOLD_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
                 if n <= 8 || n.is_power_of_two() {
                     append_autoload_debug(format_args!(
                         "AUTOLOAD-HANDOFF MMS18 NEXT HOLD #{n}: epoch={reload_epoch} mms=0x{mms:x} old_next={old_next}; restored next=18/done50=0 before Cleanup/Finish"
@@ -1359,7 +1381,8 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         // WorldChrMan via InGameStep::_Common_Finalize. Hold only that advance bit low during the active
         // reload handoff, and release it as soon as the current reload epoch proves movement.
         let reload_epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
-        let movement_proven_for_reload = crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
+        let movement_proven_for_reload = crate::constants::CAN_MOVE_CONFIRMED
+            .load(Ordering::SeqCst)
             && crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == reload_epoch;
         if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
             == SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
@@ -1368,13 +1391,15 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             && mms_step == 18
         {
             if let Some(mms_ptr) = mms {
-                let old_gate = unsafe { safe_read_u8(mms_ptr + MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET) }
-                    .unwrap_or(0);
+                let old_gate =
+                    unsafe { safe_read_u8(mms_ptr + MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET) }
+                        .unwrap_or(0);
                 if old_gate != 0 {
                     unsafe {
                         *((mms_ptr + MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET) as *mut u8) = 0;
                     }
-                    let n = SYSTEM_QUIT_QUICKLOAD_MMS4B8_HOLD_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+                    let n =
+                        SYSTEM_QUIT_QUICKLOAD_MMS4B8_HOLD_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
                     if n <= 8 || n.is_power_of_two() {
                         append_autoload_debug(format_args!(
                             "AUTOLOAD-HANDOFF MMS4B8 HOLD #{n}: epoch={reload_epoch} ig_d8={ig_d8} mms_step={mms_step} old_gate={old_gate}; blocking Cleanup/Finish until movement proof"
