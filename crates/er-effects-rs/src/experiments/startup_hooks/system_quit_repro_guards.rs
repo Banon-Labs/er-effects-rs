@@ -1356,11 +1356,17 @@ pub(crate) unsafe extern "system" fn system_quit_inworld_load_skip_hook(slot: i3
         }
         if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
             er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
-            er_save_loader::GameManSaveAccess::set_warp_requested(gm_typed, false);
+            // DO NOT clear warp_requested here (RE-corrected 2026-07-18, bd
+            // mms18-external-finalize-trigger-2026-07-18): this fires immediately AFTER the native
+            // deserialize (0x67b290) which SETS warp_requested=true -- the exact cVar10 input the
+            // mms-advancer (FUN_140afa7c0) needs to finalize STEP_MoveMap 18->19->20. Clearing it here
+            // is the most direct starve of the finalize (undoes the deserialize's flag on the same
+            // frame), causing the present-but-frozen (can't see/move, menu opens) load. The advancer
+            // auto-clears warp at its case-8 completion.
         }
         let n = SYSTEM_QUIT_INWORLD_LOAD_ALLOW_COUNT.load(Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "system-quit-quickload: native slot deserialize proof OK via 0x67b290 slot={slot} ret={ret} prior_phase={phase} world_up={world_up} allow_count={n} -> phase IDLE, cleared GameMan+0xb78/save_requested/warp_requested"
+            "system-quit-quickload: native slot deserialize proof OK via 0x67b290 slot={slot} ret={ret} prior_phase={phase} world_up={world_up} allow_count={n} -> phase IDLE, cleared GameMan+0xb78/save_requested (warp_requested LEFT STANDING for mms18 finalize)"
         ));
     }
     ret
@@ -1665,20 +1671,22 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                     }
                 }
                 unsafe { *((base + RETURN_TITLE_REBUILD_FLAG_DAT_RVA) as *mut u8) = 0 };
-                // Also clear GameMan.save_requested defensively (typed): the return-title REQUEST set
-                // it for the teardown; a residual true would drive an immediate quit-save on the reload.
-                // AND clear GameMan.warp_requested: the fresh full deserialize we just ran (native
-                // parser 0x67b290 = dump FUN_14067b380) UNCONDITIONALLY sets warp_requested=true as a
-                // "warp reload pending" flag. On the normal in-world load the MoveMapStep warp machine
-                // consumes it, but our SetState5 forward is a fresh title->world stream that never does;
-                // MoveMapStep::CheckReturnToTitle (dump FUN_140afa7c0) then reads warp_requested==true
-                // every frame as a return-to-title trigger and bounces the freshly-loaded world back to
-                // the title ~4s later (proven: gm-snap shows warp_requested=true for the whole reloaded
-                // world vs false on the healthy boot load). warp_requested=false is the correct in-world
-                // steady state, so clearing it matches the boot load and does not affect which char loads.
+                // Clear GameMan.save_requested defensively (typed): the return-title REQUEST set it for
+                // the teardown; a residual true would drive an immediate quit-save on the reload.
+                // DO **NOT** clear GameMan.warp_requested here (RE-corrected 2026-07-18, bd
+                // mms18-external-finalize-trigger-2026-07-18). The fresh full deserialize (native parser
+                // 0x67b290) UNCONDITIONALLY sets warp_requested=true, and that flag is EXACTLY the cVar10
+                // input the mms-advancer MoveMapStep::CheckReturnToTitle (FUN_140afa7c0, deobf 0x140afa6d0)
+                // needs to walk the STEP_MoveMap child 18->19(CLEANUP)->20(FINISH)->-1 (it consumes+clears
+                // warp itself at its case-8 completion via SetCallForWarp(false)). Clearing it here STARVES
+                // the finalize on the offline save_redirect path: cVar10 stays 0, the child parks at
+                // resident step 18, menuData+0x5e stays 0, InGameStep+0xd8(requestCode) is stuck at 1, and
+                // draw_group never re-enables -> the "present but can't see/move, menu still opens" freeze
+                // (grounded this session: mms=18, WBR resident 0xc, requestCode=1, draw_group=false). The
+                // title-bounce these clears were fighting is a downstream invalid/unconsumed warp TARGET,
+                // now handled by the RequestMoveMap BlockId fix -- so warp_requested must be left standing.
                 if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
                     er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
-                    er_save_loader::GameManSaveAccess::set_warp_requested(gm_typed, false);
                 }
                 // REPEATABLE-SWITCH STATE RESTORE (er-effects-rs-qwj). The switch-#1 works but
                 // switch-#2-stalls symptom is a pure precondition mismatch: these three return-title

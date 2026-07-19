@@ -327,10 +327,15 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                             .store(SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE, Ordering::SeqCst);
                         if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
                             er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
-                            er_save_loader::GameManSaveAccess::set_warp_requested(gm_typed, false);
+                            // DO NOT clear warp_requested (RE-corrected 2026-07-18, bd
+                            // mms18-external-finalize-trigger-2026-07-18): this COMPLETION latch counts a
+                            // present-but-render-FROZEN char as "stable in-world" and fires DURING the
+                            // freeze, so clearing warp here starves the very mms18 finalize (advancer
+                            // FUN_140afa7c0 needs warp_requested as its cVar10 input) that would un-freeze
+                            // it. The advancer auto-clears warp at case-8 once the finalize completes.
                         }
                         append_autoload_debug(format_args!(
-                            "menu-free reload COMPLETION: picked char stable in-world {stable} frames (FRESH_DESER_DONE=1) -> phase IDLE, cleared save_requested/warp_requested; return-title chain disarmed so the loaded world persists for the next switch"
+                            "menu-free reload COMPLETION: picked char stable in-world {stable} frames (FRESH_DESER_DONE=1) -> phase IDLE, cleared save_requested (warp_requested LEFT STANDING for mms18 finalize)"
                         ));
                     }
                 } else {
