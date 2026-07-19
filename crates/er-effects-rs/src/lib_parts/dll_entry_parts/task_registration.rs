@@ -256,10 +256,17 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // that distinguished a playable load from a frozen one (the render/draw_group oracles read
                 // FALSE even for a visibly-rendered, controllable load). Frozen loads never accumulate.
                 // Game-thread only, so driving input here is safe.
-                // Skip while sq-repro is actively driving a menu: the menu opens from in-world (player
-                // still present), so the probe's stick lane would preempt sq-repro's menu buttons and
-                // break the nav. Only test movement once settled in-world, not mid-drive.
-                if !sq_repro_actively_driving() {
+                // Run the move-probe whenever in-world EXCEPT during active MENU-NAV (OPEN_MENU..CONFIRM),
+                // where an injected forward stick would move the menu cursor. WAIT_WORLD(0) / WAIT_RELOAD(7)
+                // / DONE(6) are in-world settle states -- the probe MUST run there (that is where load1 and
+                // each reload prove movement). NB: sq_repro_actively_driving() returns TRUE for WAIT_WORLD
+                // (it blocks during boot), which wrongly skipped load1's proof -- so gate on the STATE range
+                // directly, not that.
+                let sq_menu_nav = system_quit_repro_enabled() && {
+                    let st = SQ_REPRO_STATE.load(Ordering::SeqCst);
+                    (SQ_REPRO_STATE_OPEN_MENU..=SQ_REPRO_STATE_CONFIRM).contains(&st)
+                };
+                if !sq_menu_nav {
                     let p = player.chr_ins.modules.physics.position;
                     crate::experiments::can_move_probe::tick((p.0, p.1, p.2));
                 }

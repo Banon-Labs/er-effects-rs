@@ -163,6 +163,26 @@ including the boot autoload** (raised from 3 to 4 on 2026-07-18 after the user r
 
 Passing 4a proves the freeze/recovery mechanism on one character; §4 then generalizes it across saves.
 
+### 4a-progress (2026-07-18): LOAD 1 proven autonomously; the movement-proof mechanism
+
+- **LOAD 1 DONE (autonomous):** the boot autoload of angrE loads and the character is provably
+  **movable** — injected input walked it 60 consecutive frames (`oracle_can_move`) with **no user
+  interaction and no window focus** (runs `samechar-3x-215629` / `-215629`).
+- **The movement-proof mechanism (three RE-grounded pieces, all in `can_move_probe.rs`):** synthetic
+  `XInputGetState` does NOT reach movement (Steam Input routes the pad via ScePad/DInput). Faithful
+  injection = (1) hook the **pad-device poll** `0x141f6bad0` and write the left stick `device+0x8a0 = 1.0`
+  (below the OS/Steam layer, where all pad sources converge); (2) force **`DLUID+0x88d`** (stay-active)
+  so the device poll runs while unfocused; (3) hook **`Game.Debug::IsEnableControlOnDisactiveWindow`**
+  (`0x140e53220`) to return 1 — the *gameplay* focus gate (`CSPadStep+0xba`) that otherwise discards the
+  injected stick for locomotion when unfocused. Movement is measured as an `oracle_havok_pos` delta,
+  the ONLY reliable playable-vs-frozen signal (`draw_group`/`render_ready`/`request_code`/`fake_cover`
+  read identically in a playable and a frozen load; only motion distinguishes them). Proof runs stage
+  `er-effects-prove-movement.txt` + `er-effects-stay-active.txt`; the injection is proof-gated so it
+  never fights a real player.
+- **Reload driver:** WAIT_RELOAD advances only once a load proves movement (`CAN_MOVE_CONFIRMED` = input
+  registered), else force-advances after the freeze deadline (frozen → per parity the next load recovers
+  it). Remaining: prove loads 2–3 (the 3-load chain, movement on load 3).
+
 ## 5. Invariants the harness must assert & verify (not build)
 
 - **Reads are read-only.** Loading a source save (read-only or read/write) must **read, never
