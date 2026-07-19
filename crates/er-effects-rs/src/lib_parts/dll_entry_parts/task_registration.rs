@@ -1,3 +1,5 @@
+static AUTOLOAD_HANDOFF_PARENT_STATE_FIX_COUNT: AtomicUsize = AtomicUsize::new(0);
+
 fn poll_cached_mms18_ending_request_advancer() {
     // Native full deserialize owns GameMan::warp_requested and MoveMapStep::CheckReturnToTitle
     // consumes/autoclears it at finalize case 8. Agent-side 0x5d or warp pulses finalize by tearing
@@ -53,6 +55,49 @@ fn poll_cached_mms18_ending_request_advancer() {
     }
 }
 
+fn poll_autoload_handoff_parent_state_guard() {
+    const TITLE_STEP_END_FLOW: i32 = 7;
+    const TITLE_STEP_END_FLOW_WAIT: i32 = 8;
+
+    if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
+        || SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) != 1
+    {
+        return;
+    }
+    let owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
+    if owner == TITLE_OWNER_SCAN_START_ADDRESS || owner <= 0x10000 {
+        return;
+    }
+    let Some(ingame) = (unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) })
+        .filter(|ig| *ig != TITLE_OWNER_SCAN_START_ADDRESS && *ig > 0x10000)
+    else {
+        return;
+    };
+    let committed = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }
+        .unwrap_or(-1);
+    let requested = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_OFFSET) }.unwrap_or(-1);
+    let parent_is_ending = matches!(committed, TITLE_STEP_END_FLOW | TITLE_STEP_END_FLOW_WAIT)
+        || matches!(requested, TITLE_STEP_END_FLOW | TITLE_STEP_END_FLOW_WAIT);
+    if !parent_is_ending {
+        return;
+    }
+    let request_code = unsafe { safe_read_i32(ingame + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) }
+        .unwrap_or(-1);
+    let mms_step = unsafe { safe_read_usize(ingame + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) }
+        .filter(|mms| *mms != TITLE_OWNER_SCAN_START_ADDRESS && *mms > 0x10000)
+        .and_then(|mms| unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET) })
+        .unwrap_or(-1);
+    unsafe {
+        *((owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *mut i32) = TITLE_STEP_GAME_STEP_WAIT;
+        *((owner + TITLE_OWNER_STATE_OFFSET) as *mut i32) = TITLE_STEP_GAME_STEP_WAIT;
+    }
+    let n = AUTOLOAD_HANDOFF_PARENT_STATE_FIX_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+    append_autoload_debug(format_args!(
+        "AUTOLOAD-HANDOFF PARENT STATE FIX #{n}: TitleStep {committed}/{requested} -> GameStepWait(6) during handoff (InGameStep=0x{ingame:x} requestCode={request_code} mms={mms_step}); prevents EndFlow/EndFlowWait returning the loaded world to title"
+    ));
+}
+
 pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
     std::thread::spawn(move || {
         write_bootstrap_event(
@@ -86,6 +131,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     return;
                 }
                 tick_before_player_lookup(task_data);
+                poll_autoload_handoff_parent_state_guard();
                 // Startup save-picker: input/navigation runs on the render thread (the Present hook),
                 // the only thread that reads OS keys under Wine. Only the one-shot pick COMPLETION
                 // (redirect + MinHook install) runs here on the game task -- it is alive at pick time
