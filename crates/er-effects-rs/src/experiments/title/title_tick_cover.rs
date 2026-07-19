@@ -1297,21 +1297,16 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         // (target/runtime-probe/samechar-3x-settledgate-20260719-053409) proved this same signature also
         // appears after Continue/SetState5 during AUTOLOAD_HANDOFF: load2 becomes movable, but its native
         // MoveMap/requestCode handoff remains parked at mms18 with end5e=0/rt5d=0. So keep this recovery
-        // enabled for the whole active switch phase, including AUTOLOAD_HANDOFF. The epoch-settled run
-        // (target/runtime-probe/samechar-3x-initialsettled-20260719-054832) then showed the boot autoload
-        // itself can remain parked in the same mms18/end5e0 shape when the harness correctly refuses to
-        // open the load menu from a half-settled world. So allow the same native advancer for the idle
-        // boot-autoload window before any ProfileLoad activation. The separate return-title chain/final-
-        // functor gates exclude AUTOLOAD_HANDOFF and this boot-idle path does not submit that chain; this
-        // block still clears rt5d the frame mms leaves 18, so the advancer flag can finish the native load
-        // without replaying return-title. ENDING_REQUEST_SET_COUNT is the semaphore.
+        // enabled for the whole active switch phase, including AUTOLOAD_HANDOFF. Boot-idle use of this
+        // flag was rejected by the taskadvancer run: setting 0x5d outside an active switch can settle mms18
+        // by tearing down the boot world. The separate return-title chain/final-functor gates now exclude
+        // AUTOLOAD_HANDOFF, and this block still clears rt5d the frame mms leaves 18, so the advancer flag
+        // can finish active-switch native loads without replaying return-title. ENDING_REQUEST_SET_COUNT is
+        // the semaphore.
         if let Some(md) = menudata {
             let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
             let active_switch_phase = quickload_phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED;
-            let boot_autoload_idle_phase = quickload_phase == SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
-                && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) == 0
-                && SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.load(Ordering::SeqCst) == 0;
-            let stuck_mms18 = (active_switch_phase || boot_autoload_idle_phase)
+            let stuck_mms18 = active_switch_phase
                 && ig_d8 == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING
                 && mms_step == MOVEMAPSTEP_STEP_MOVEMAP_INDEX
                 && md_5e == 0

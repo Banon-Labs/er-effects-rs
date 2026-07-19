@@ -4,10 +4,7 @@ fn poll_cached_mms18_ending_request_advancer() {
     }
     let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
     let active_switch_phase = quickload_phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED;
-    let boot_autoload_idle_phase = quickload_phase == SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
-        && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) == 0
-        && SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.load(Ordering::SeqCst) == 0;
-    if !active_switch_phase && !boot_autoload_idle_phase {
+    if !active_switch_phase {
         return;
     }
     let Ok(base) = game_module_base() else {

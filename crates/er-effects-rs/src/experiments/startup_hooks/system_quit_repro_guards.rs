@@ -386,8 +386,7 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             // non-proving load still advances (parity: one more load recovers a frozen one).
             let load1_move_proven = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
                 || tick >= SQ_REPRO_WAIT_WORLD_MOVE_DEADLINE;
-            let (request_code, mms_live, native_load_settled) = sq_repro_native_load_state();
-            if in_world && tick >= SQ_REPRO_WORLD_SETTLE_TICKS && load1_move_proven && native_load_settled {
+            if in_world && tick >= SQ_REPRO_WORLD_SETTLE_TICKS && load1_move_proven {
                 // FIRST INTERACTION (user, 2026-07-17): the user's real flow begins by clicking the
                 // game in the taskbar to make it the active window BEFORE pressing START. Replicate
                 // that here -- force the ER window foreground at world-readiness so the first menu key
@@ -405,7 +404,7 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                     ));
                 } else {
                     append_autoload_debug(format_args!(
-                        "sq-repro: in-world settled ({SQ_REPRO_WORLD_SETTLE_TICKS} ticks, requestCode={request_code} mms={mms_live}) -> OPEN_MENU switch #{}/{} target_slot={}; START (XInput 0x{XINPUT_GAMEPAD_START:04x}) to open the escape/system menu",
+                        "sq-repro: in-world settled ({SQ_REPRO_WORLD_SETTLE_TICKS} ticks, movement proven) -> OPEN_MENU switch #{}/{} target_slot={}; START (XInput 0x{XINPUT_GAMEPAD_START:04x}) to open the escape/system menu",
                         SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst) + 1,
                         sq_repro_target_switches(),
                         sq_repro_target_slot()
