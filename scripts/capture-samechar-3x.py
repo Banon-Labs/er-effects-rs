@@ -186,6 +186,9 @@ def _checkpoint_names(row: dict) -> list[str]:
         names.append(f"ig_request:{ig_d8}")
     if mms_step >= 0:
         names.append(f"mms_step:{mms_step}:{row.get('mms_name', '?')}")
+        fin = as_int(row.get("mms_finalize12a"))
+        if fin >= 0:
+            names.append(f"finalize:{fin}:{row.get('mms_finalize12a_name', '?')}")
         if mms_next >= 0:
             names.append(f"mms_next:{mms_next}")
         if mms_done >= 0:

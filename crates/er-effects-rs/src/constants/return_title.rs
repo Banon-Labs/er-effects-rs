@@ -140,6 +140,10 @@ pub(crate) const INGAMESTEP_REQUEST_CODE_STABLE_IN_WORLD: i32 = 2;
 pub(crate) static SWITCH_ORACLE_MMS_STEP: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// Last sampled InGameStep requestCode (+0xd8) for visible loading-bar sub-milestones.
 pub(crate) static SWITCH_ORACLE_REQUEST_CODE: AtomicI32 = AtomicI32::new(-1);
+/// Last sampled MoveMapStep finalize substate (+0x12a, 0..9) -- the real native sub-progression of
+/// the visible MOVE MAP (18) loading phase, published for the loading-bar parenthesized sub-milestone.
+/// -1 = no live MoveMapStep. See MOVEMAPSTEP_FINALIZE_SUBSTATE_NAMES.
+pub(crate) static SWITCH_ORACLE_FINALIZE_12A: AtomicI32 = AtomicI32::new(-1);
 /// Last sampled player/menu/loading-screen handoff gates for visible loading-bar sub-milestones.
 pub(crate) static SWITCH_ORACLE_PLAYER_PRESENT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SWITCH_ORACLE_MENU_JOB_PRESENT: AtomicUsize = AtomicUsize::new(0);
@@ -180,6 +184,40 @@ pub(crate) const MOVEMAPSTEP_STEP_NAMES: [&str; 21] = [
 pub(crate) fn movemapstep_step_name(idx: i32) -> &'static str {
     if idx >= 0 && (idx as usize) < MOVEMAPSTEP_STEP_NAMES.len() {
         MOVEMAPSTEP_STEP_NAMES[idx as usize]
+    } else {
+        "?"
+    }
+}
+
+/// Byte offset of the MoveMapStep finalize SUBSTATE within the STEP_MoveMap (step 18) phase. The
+/// native advancer `FUN_140afa7c0` (dump VA) drives this `switch`-based sub-state 0..9; the load
+/// orchestrator `FUN_140afb970` treats the world as ready ONLY when it is back to 0. So this is the
+/// inner sub-progression of the visible "MOVE MAP 18" loading phase (see oracle finalize_substate_12a).
+pub(crate) const MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET: usize = 0x12a;
+
+/// Human names for the finalize substate (`MoveMapStep+0x12a`) written by the advancer FUN_140afa7c0.
+/// Grounded in the decompiled `switch(field25_0x12a)` cases (2026-07-19, bd er-effects-rs-9fmm):
+///   0 idle/done; 1 fade-out wait; 2 death/retry check; 3 retry-menu + map-block setup;
+///   4 map-block/session wait; 5/6 fade-in wait (+sfx); 7 remo/save-drain wait; 8 warp/server
+///   finalize; 9 post-finalize. The warm reload parks at 7 (its 7->8 gate --
+///   FUN_14067a170() && !ShouldSave() && !FUN_140679460() && FUN_140a9ceb0(CSRemo) -- never passes),
+///   so 0x12a stays != 0 and the orchestrator never marks the world ready.
+pub(crate) const MOVEMAPSTEP_FINALIZE_SUBSTATE_NAMES: [&str; 10] = [
+    "IDLE/DONE",              // 0
+    "FADE-OUT WAIT",          // 1
+    "DEATH/RETRY CHECK",      // 2
+    "RETRY-MENU+MAPBLOCK",    // 3
+    "MAPBLOCK/SESSION WAIT",  // 4
+    "FADE-IN WAIT",           // 5
+    "FADE-IN WAIT (SFX)",     // 6
+    "REMO/SAVE-DRAIN WAIT",   // 7  <- warm-reload softlock parks here
+    "WARP/SERVER FINALIZE",   // 8
+    "POST-FINALIZE",          // 9
+];
+/// Name a MoveMapStep finalize substate value (out-of-range -> "?").
+pub(crate) fn movemapstep_finalize_substate_name(v: i32) -> &'static str {
+    if v >= 0 && (v as usize) < MOVEMAPSTEP_FINALIZE_SUBSTATE_NAMES.len() {
+        MOVEMAPSTEP_FINALIZE_SUBSTATE_NAMES[v as usize]
     } else {
         "?"
     }

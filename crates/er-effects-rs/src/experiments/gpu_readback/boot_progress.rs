@@ -563,6 +563,17 @@ fn boot_view_movemap_submilestone(step: usize) -> (&'static str, usize, usize) {
     if step < MOVEMAPSTEP_STEP_MOVEMAP_INDEX as usize {
         return boot_view_single_submilestone(movemapstep_step_name(step as i32));
     }
+    // MOVE MAP (18) has a KNOWN native sub-progression: the finalize substate (+0x12a, advancer
+    // FUN_140afa7c0) walks 1..9 then back to 0 (done). Expose it as the parenthesized sub-milestone
+    // with real per-substate labels (the warm-reload softlock parks at 7 = REMO/SAVE-DRAIN WAIT),
+    // per the loading-bar sub-milestone order. Falls back to the coarse handoff proxies only when no
+    // live MoveMapStep finalize substate is readable (-1).
+    let finalize = SWITCH_ORACLE_FINALIZE_12A.load(Ordering::SeqCst);
+    if mms_step == step && finalize >= 0 {
+        let total = MOVEMAPSTEP_FINALIZE_SUBSTATE_NAMES.len() - 1; // 9
+        let cur = (finalize as usize).min(total);
+        return (movemapstep_finalize_substate_name(finalize), cur, total);
+    }
     let step_active = mms_step == step;
     let title_done = request_code >= 2 || mms_step >= MOVEMAPSTEP_STEP_NAMES.len() - 1;
     let session_request = request_code >= 2;

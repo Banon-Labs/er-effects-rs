@@ -314,6 +314,7 @@ struct TraceSem {
     mms_hold270: i32,
     mms_cd100: i32,
     mms_req248: i32,
+    mms_finalize12a: i32,
     mms_b7c1: i32,
     mms_blocks: i32,
     stable_frames: usize,
@@ -463,6 +464,12 @@ fn input_trace_semaphores() -> TraceSem {
     } else {
         (-1, -1, -1, -1, -1, -1, -1, -1)
     };
+    // Finalize substate (MoveMapStep+0x12a): the inner sub-progression of the MOVE MAP (18) step,
+    // driven by the advancer FUN_140afa7c0. The warm reload parks at 7 (REMO/SAVE-DRAIN WAIT). Read the
+    // game-task-published switch-oracle atomic, NOT input_trace's own mms_ptr: at mms18 (in-world) the
+    // title-owner-based mms_ptr resolution here goes stale and misreads 0x12a as 0, disagreeing with
+    // the loading-bar/telemetry value (proven 2026-07-19). The atomic is the live MoveMapStep read.
+    let mms_finalize12a = SWITCH_ORACLE_FINALIZE_12A.load(Ordering::SeqCst);
     let (world_chr_man, main_player) =
         if let Ok(world_chr_man) = unsafe { eldenring::cs::WorldChrMan::instance_mut() } {
             (
@@ -563,6 +570,7 @@ fn input_trace_semaphores() -> TraceSem {
         mms_hold270,
         mms_cd100,
         mms_req248,
+        mms_finalize12a,
         mms_b7c1,
         mms_blocks: SWITCH_ORACLE_MMS_BLOCKS.load(Ordering::SeqCst),
         stable_frames: SWITCH_ORACLE_STABLE_FRAMES.load(Ordering::SeqCst),
@@ -632,6 +640,7 @@ impl TraceSem {
         mix(self.mms_hold270 as u32 as u64);
         mix(self.mms_cd100 as u32 as u64);
         mix(self.mms_req248 as u32 as u64);
+        mix(self.mms_finalize12a as u32 as u64);
         mix(self.mms_b7c1 as u32 as u64);
         mix(self.msgbox_builds as u64);
         mix(self.msgbox_dialog as u64);
@@ -655,7 +664,8 @@ impl TraceSem {
              \"quickload_phase\":{},\"profile_load_activate\":{},\"sq_repro_state\":{},\"fresh_deser\":{},\
              \"can_move\":{},\"move_epoch\":{},\"bar_frame\":{},\"bar_max_frame\":{},\"bar_progress_permille\":{},\
              \"mms_step\":{},\"mms_name\":\"{}\",\"mms_next\":{},\"mms_done50\":{},\
-             \"mms_gate_lo\":{},\"mms_gate_hi\":{},\"mms_hold270\":{},\"mms_cd100\":{},\"mms_req248\":{},\"mms_b7c1\":{},\
+             \"mms_gate_lo\":{},\"mms_gate_hi\":{},\"mms_hold270\":{},\"mms_cd100\":{},\"mms_req248\":{},\
+             \"mms_finalize12a\":{},\"mms_finalize12a_name\":\"{}\",\"mms_b7c1\":{},\
              \"mms_blocks\":{},\"stable_frames\":{},\"msgbox_builds\":{},\"msgbox_dialog\":{},\
              \"play_time_ms\":{},\"play_time_advanced_ms\":{},\"play_time_live\":{}",
             self.focused,
@@ -703,6 +713,8 @@ impl TraceSem {
             self.mms_hold270,
             self.mms_cd100,
             self.mms_req248,
+            self.mms_finalize12a,
+            json_escape(movemapstep_finalize_substate_name(self.mms_finalize12a)),
             self.mms_b7c1,
             self.mms_blocks,
             self.stable_frames,

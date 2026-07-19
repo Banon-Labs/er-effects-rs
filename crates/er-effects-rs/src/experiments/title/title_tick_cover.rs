@@ -1565,6 +1565,18 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         let prev_mms_step = SWITCH_ORACLE_MMS_STEP.swap(mms_step_pub, Ordering::SeqCst);
         let mms_step_changed = prev_mms_step != mms_step_pub;
         SWITCH_ORACLE_REQUEST_CODE.store(ig_d8, Ordering::SeqCst);
+        // Publish the MoveMapStep finalize substate (+0x12a) so the loading-bar MOVE MAP phase shows
+        // its real native sub-progression (0..9) instead of coarse proxies.
+        SWITCH_ORACLE_FINALIZE_12A.store(
+            if mms_disp != 0 {
+                unsafe { safe_read_u8(mms_disp + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET) }
+                    .map(|v| v as i32)
+                    .unwrap_or(-1)
+            } else {
+                -1
+            },
+            Ordering::SeqCst,
+        );
         SWITCH_ORACLE_PLAYER_PRESENT.store(usize::from(player_present), Ordering::SeqCst);
         SWITCH_ORACLE_MENU_JOB_PRESENT.store(usize::from(menu_job != 0), Ordering::SeqCst);
         SWITCH_ORACLE_LOADING_FIELD10.store(loading_screen_field10, Ordering::SeqCst);
