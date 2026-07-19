@@ -116,7 +116,6 @@ def main() -> int:
     # Per-epoch record: first-seen ts, the max/settled snapshot, whether render-ready was ever held.
     epochs: dict[int, dict] = {}
     portrait_captured = False
-    final_load_seen_at: float | None = None
     first_present_at: float | None = None
     start = time.monotonic()
     last_log = 0.0
