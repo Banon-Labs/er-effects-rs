@@ -61,12 +61,11 @@ fn poll_autoload_handoff_parent_state_guard() {
 
     if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
         != SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
-        || SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) != 1
         || SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) == 0
     {
         return;
     }
-    let owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
+    let owner = PRODUCT_CORE_LAST_OWNER.load(Ordering::SeqCst);
     if owner == TITLE_OWNER_SCAN_START_ADDRESS || owner <= 0x10000 {
         return;
     }

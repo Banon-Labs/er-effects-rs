@@ -790,7 +790,6 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
     const TITLE_STEP_END_FLOW_WAIT: i32 = 8;
     if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
         == SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
-        && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 1
         && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) > 0
     {
         let committed = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }
