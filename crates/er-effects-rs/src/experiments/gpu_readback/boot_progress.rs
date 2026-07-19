@@ -1286,11 +1286,20 @@ fn boot_view_rasterize(
             (raw_sub_label, raw_sub_i)
         }
     };
+    // Surface the GameMan load-in-progress FSM (b80 == save_state) when a load is active (b80 > 0):
+    // READING/RESIDENT. It stays visible through streaming and, notably, exposes the finalize-time
+    // b80=RESIDENT stall (the case-7 blocker) directly on the bar. Hidden when idle (b80 <= 0).
+    let b80 = SWITCH_ORACLE_B80.load(Ordering::SeqCst);
+    let load_suffix = if b80 > 0 {
+        format!(" · LOAD {}", load_in_progress_b80_name(b80))
+    } else {
+        String::new()
+    };
     let label_buf: String = if idx >= MMS_LABEL_IDX_BASE {
         let step = idx - MMS_LABEL_IDX_BASE;
         let max = MOVEMAPSTEP_STEP_NAMES.len() - 1;
         format!(
-            "{} {}/{} ({} {}/{})",
+            "{} {}/{} ({} {}/{}{load_suffix})",
             movemapstep_step_name(step as i32),
             step,
             max,
@@ -1302,7 +1311,7 @@ fn boot_view_rasterize(
         let max = BOOT_VIEW_MILESTONE_LABELS.len() - 1;
         let i = idx.min(max);
         format!(
-            "{} {}/{} ({} {}/{})",
+            "{} {}/{} ({} {}/{}{load_suffix})",
             BOOT_VIEW_MILESTONE_LABELS[i], i, max, sub_label, sub_i, sub_max
         )
     };

@@ -1577,6 +1577,65 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             },
             Ordering::SeqCst,
         );
+        // b80 (load_in_progress) IS GameMan.save_state. Publish for the loading bar, and DRAIN the
+        // FD4-IO reload's stuck residency: the reload SUBMIT/DRAIN leaves b80=3 (the resident IO buffer
+        // is never consumed by the feed), and the finalize case-7 gate (FUN_14067a170 == saveState==0)
+        // waits on it forever. Force b80->0 ONLY at the exact stuck signature -- AUTOLOAD_HANDOFF,
+        // MoveMapStep step 18, finalize substate live (1..=9), b80==3 RESIDENT, player present (world
+        // genuinely resident+live) -- so a healthy load (b80 already draining) is never touched.
+        // Marker-gated (er-effects-reload-drainb80.txt) for A/B against the stuck baseline.
+        let b80_now = if gm != null {
+            unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }.unwrap_or(-1)
+        } else {
+            -1
+        };
+        SWITCH_ORACLE_B80.store(b80_now, Ordering::SeqCst);
+        let finalize_now = SWITCH_ORACLE_FINALIZE_12A.load(Ordering::SeqCst);
+        let drain_b80_on = game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-reload-drainb80.txt")
+            .exists();
+        // Unblock the finalize case-7->8 gate on the warm reload. The gate is
+        // FUN_14067a170() (== saveState==0) && !ShouldSave() (saveRequested==0) && !FUN_140679460()
+        // (b73==0) && FUN_140a9ceb0(CSRemo). Fire at the exact stuck signature and satisfy the two
+        // GameMan-owned conditions we control: (a) drain b80 (== save_state) 3->0 (the reload's
+        // resident IO buffer, never consumed by the feed), and (b) clear saveRequested -- the reload's
+        // unwanted SetState5/advancer autosave (user 2026-07-19: the reload must NOT autosave; only an
+        // explicit user save writes). Both are re-applied each frame since the native advancer re-sets
+        // them. Narrow signature (world resident+live at mms18 finalize 1..9) so a healthy load is
+        // never touched. Marker-gated for A/B.
+        if drain_b80_on
+            && gm != null
+            && mms_step == MOVEMAPSTEP_STEP_MOVEMAP_INDEX
+            && (1..=9).contains(&finalize_now)
+            && player_present
+            && SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+                == SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
+        {
+            if b80_now == FULLREAD_B80_RESIDENT {
+                unsafe { *((gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *mut i32) = 0 };
+            }
+            let mut cleared_save = false;
+            if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
+                cleared_save = er_save_loader::GameManSaveAccess::save_requested(gm_typed);
+                er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
+            }
+            // Clear the b73 save-request companion (FUN_140679460 = b73 && menu_gate && bc4!=3): our
+            // return-title REQUEST set it for the switch teardown and it lingers (LEVEL flag, nothing
+            // resets it), keeping the case-7 !FUN_140679460() condition false. Runtime-confirmed b73=1
+            // at the finalize-7 stall.
+            let b73_was = unsafe { safe_read_u8(gm + GAME_MAN_SAVE_REQUEST_COMPANION_B73_OFFSET) }
+                .unwrap_or(0);
+            if b73_was != 0 {
+                unsafe { *((gm + GAME_MAN_SAVE_REQUEST_COMPANION_B73_OFFSET) as *mut u8) = 0 };
+            }
+            let n = RELOAD_DRAIN_B80_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+            if n <= 8 || n.is_power_of_two() {
+                append_autoload_debug(format_args!(
+                    "reload-drain-b80: unblock case-7 at mms18 finalize={finalize_now} b80={b80_now}->0 save_requested_was={cleared_save}->0 b73_was={b73_was}->0 (world resident+live) #{n}"
+                ));
+            }
+        }
         SWITCH_ORACLE_PLAYER_PRESENT.store(usize::from(player_present), Ordering::SeqCst);
         SWITCH_ORACLE_MENU_JOB_PRESENT.store(usize::from(menu_job != 0), Ordering::SeqCst);
         SWITCH_ORACLE_LOADING_FIELD10.store(loading_screen_field10, Ordering::SeqCst);
