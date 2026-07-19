@@ -1,7 +1,56 @@
 fn poll_cached_mms18_ending_request_advancer() {
-    // Intentionally no-op. Native full deserialize owns GameMan::warp_requested and
-    // MoveMapStep::CheckReturnToTitle consumes/autoclears it at finalize case 8.
-    // Agent-side 0x5d or warp pulses finalize by tearing down the loaded world.
+    // Native full deserialize owns GameMan::warp_requested and MoveMapStep::CheckReturnToTitle
+    // consumes/autoclears it at finalize case 8. Agent-side 0x5d or warp pulses finalize by tearing
+    // down the loaded world. The only post-finalize cleanup we own is menuData+0x5e: native sets it
+    // while walking 12a->case8, but leaves it true after mms leaves 18; if it remains true into the
+    // resident world, the player is torn down about a second later.
+    let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    if quickload_phase < SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED {
+        return;
+    }
+    let Ok(base) = game_module_base() else {
+        return;
+    };
+    let Some(md) = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
+        .filter(|m| *m > 0x10000)
+        .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) })
+        .filter(|d| *d > 0x10000)
+    else {
+        return;
+    };
+    let md_5d = unsafe { safe_read_u8(md + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) }
+        .map(|b| b as i32)
+        .unwrap_or(-1);
+    let md_5e = unsafe { safe_read_u8(md + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) }
+        .map(|b| b as i32)
+        .unwrap_or(-1);
+    if md_5e != 1 || md_5d != 0 {
+        return;
+    }
+    let owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
+    let ingame = if owner != TITLE_OWNER_SCAN_START_ADDRESS && owner > 0x10000 {
+        unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) }
+            .filter(|ig| *ig != TITLE_OWNER_SCAN_START_ADDRESS && *ig > 0x10000)
+    } else {
+        None
+    };
+    let request_code = ingame
+        .and_then(|ig| unsafe { safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) })
+        .unwrap_or(-1);
+    let mms_step = ingame
+        .and_then(|ig| unsafe { safe_read_usize(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) })
+        .filter(|mms| *mms != TITLE_OWNER_SCAN_START_ADDRESS && *mms > 0x10000)
+        .and_then(|mms| unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET) })
+        .unwrap_or(-1);
+    if mms_step == -1 && request_code == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING {
+        unsafe {
+            *((md + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) as *mut u8) = 0;
+        }
+        let n = ENDING_REQUEST_SET_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        append_autoload_debug(format_args!(
+            "ENDING-FLAG POST-FINALIZE CLEAR #{n}: cleared menuData+0x5e after mms left 18 (phase={quickload_phase} requestCode={request_code} mms={mms_step}); native warp already autocleared"
+        ));
+    }
 }
 
 pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
@@ -334,21 +383,19 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // the picked slot (FRESH_DESER_DONE=1) and its native SetState5 began streaming the new
                 // character, but the switch phase is still armed. Left armed after the load is genuinely
                 // playable, the return-title branch can keep re-driving state that belongs to the next switch.
-                // However FRESH_DESER_DONE is only a deserialize/SetState5 handoff proof, NOT a playable-world
-                // proof: the load-2 bug reproduced because this latch declared phase IDLE from player-present
-                // frames while the incoming MoveMap was still at 16/18, allowing the next reload to start before
-                // the second load could prove movement or finish its native requestCode/mms handoff. In
-                // autonomous proof mode, require BOTH per-epoch CAN-MOVE and native MoveMap-settled
-                // (requestCode==2 and no live MoveMapStep) before phase IDLE; normal user sessions do not
-                // create the proof marker, so they keep the non-input player-present latch and are not forced
-                // to walk the character.
+                // FRESH_DESER_DONE is only a deserialize/SetState5 handoff proof, NOT a playable-world
+                // proof. The driver now owns the stricter per-epoch movement/native-settle gate before it may
+                // start another switch. This latch has a different job: disarm product_core_autoload_tick as
+                // soon as the native MoveMap child is done so title-loop ownership does not take the loaded
+                // player back down during AUTOLOAD_HANDOFF. Normal user sessions keep the original non-input
+                // player-present latch and are not forced to walk the character.
                 let movement_proof_required = crate::telemetry::game_directory_path()
                     .map(|d| d.join("er-effects-prove-movement.txt").exists())
                     .unwrap_or(false);
                 let current_epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
                 let movement_proven_for_epoch = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
                     && MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == current_epoch;
-                let native_load_settled = if movement_proof_required {
+                let native_movemap_child_done = if movement_proof_required {
                     let owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
                     let ingame = if owner != TITLE_OWNER_SCAN_START_ADDRESS && owner > 0x10000 {
                         unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) }
@@ -356,37 +403,38 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     } else {
                         None
                     };
-                    let request_code = ingame
-                        .and_then(|ig| unsafe { safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) })
-                        .unwrap_or(-1);
-                    let mms_live = ingame
+                    ingame
                         .and_then(|ig| unsafe { safe_read_usize(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) })
                         .filter(|mms| *mms != TITLE_OWNER_SCAN_START_ADDRESS && *mms > 0x10000)
                         .and_then(|mms| unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET) })
-                        .unwrap_or(-1);
-                    request_code == INGAMESTEP_REQUEST_CODE_STABLE_IN_WORLD && mms_live == -1
+                        .unwrap_or(-1)
+                        == -1
                 } else {
                     true
                 };
                 let menu_free_reload_ready = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE
                     .load(Ordering::SeqCst)
                     == 1
-                    && (!movement_proof_required
-                        || (movement_proven_for_epoch && native_load_settled));
+                    && (!movement_proof_required || native_movemap_child_done);
                 if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
                     >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
                     && menu_free_reload_ready
                 {
                     let stable =
                         SYSTEM_QUIT_MENU_FREE_STABLE_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
-                    if stable == SYSTEM_QUIT_MENU_FREE_STABLE_TICKS_THRESHOLD {
+                    let required_stable = if movement_proof_required {
+                        1
+                    } else {
+                        SYSTEM_QUIT_MENU_FREE_STABLE_TICKS_THRESHOLD
+                    };
+                    if stable == required_stable {
                         SYSTEM_QUIT_QUICKLOAD_PHASE
                             .store(SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE, Ordering::SeqCst);
                         if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
                             er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
                         }
                         append_autoload_debug(format_args!(
-                            "menu-free reload COMPLETION: picked char stable in-world {stable} frames (FRESH_DESER_DONE=1 movement_required={movement_proof_required} movement_proven={movement_proven_for_epoch} native_load_settled={native_load_settled}) -> phase IDLE, cleared save_requested; native owns warp_requested autoclear; return-title chain disarmed so the loaded world persists for the next switch"
+                            "menu-free reload COMPLETION: picked char stable in-world {stable} frames (FRESH_DESER_DONE=1 movement_required={movement_proof_required} movement_proven={movement_proven_for_epoch} native_movemap_child_done={native_movemap_child_done}) -> phase IDLE, cleared save_requested; native owns warp_requested autoclear; return-title chain disarmed so the loaded world persists for the next switch"
                         ));
                     }
                 } else {
