@@ -1320,12 +1320,12 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                         .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
                         .is_ok()
                 {
-                    unsafe {
-                        *((md + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) as *mut u8) = 1;
+                    if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
+                        er_save_loader::GameManSaveAccess::set_warp_requested(gm_typed, true);
                     }
                     let n = ENDING_REQUEST_SET_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
                     append_autoload_debug(format_args!(
-                        "ENDING-REQUEST RECOVERY #{n}: SET menuData+0x5d=1 at mms18 stall (streak={streak} phase={quickload_phase} end5e=0 rt5d=0 b7c1=1 blocks={mms_blocks}) -> advancer should write 0x5e=1 and walk the STEP_MoveMap child 18->19->20->-1 so native requestCode can settle"
+                        "WARP-REQUEST RECOVERY #{n}: SET GameMan.warp_requested=true at mms18 stall (streak={streak} phase={quickload_phase} end5e=0 rt5d=0 b7c1=1 blocks={mms_blocks}) -> native cVar10 should advance MoveMap without return-title 0x5d teardown"
                     ));
                 }
             } else {
@@ -1333,12 +1333,12 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                 if ENDING_REQUEST_SET.load(Ordering::SeqCst) == 1
                     && mms_step != MOVEMAPSTEP_STEP_MOVEMAP_INDEX
                 {
-                    unsafe {
-                        *((md + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) as *mut u8) = 0;
+                    if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
+                        er_save_loader::GameManSaveAccess::set_warp_requested(gm_typed, false);
                     }
                     ENDING_REQUEST_SET.store(0, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
-                        "ENDING-REQUEST RECOVERY: cleared menuData+0x5d=0 as the child left step 18 (mms_step={mms_step}) -- bounce-prevention before the resident-world re-title window"
+                        "WARP-REQUEST RECOVERY: cleared GameMan.warp_requested=false as the child left step 18 (mms_step={mms_step}) -- prevents post-finalize warp reload loop"
                     ));
                 }
             }

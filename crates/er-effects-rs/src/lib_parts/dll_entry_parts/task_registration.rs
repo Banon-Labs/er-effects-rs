@@ -49,12 +49,12 @@ fn poll_cached_mms18_ending_request_advancer() {
                 .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
                 .is_ok()
         {
-            unsafe {
-                *((md + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) as *mut u8) = 1;
+            if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
+                er_save_loader::GameManSaveAccess::set_warp_requested(gm_typed, true);
             }
             let n = ENDING_REQUEST_SET_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
             append_autoload_debug(format_args!(
-                "ENDING-REQUEST TASK-ADVANCER #{n}: SET menuData+0x5d=1 at cached mms18 stall (streak={streak} phase={quickload_phase} requestCode={request_code} mms={mms_step}) -> native advancer should write 0x5e=1 and settle MoveMap"
+                "WARP-REQUEST TASK-ADVANCER #{n}: SET GameMan.warp_requested=true at cached mms18 stall (streak={streak} phase={quickload_phase} requestCode={request_code} mms={mms_step}) -> native cVar10 should advance MoveMap without return-title 0x5d teardown"
             ));
         }
     } else {
@@ -62,12 +62,12 @@ fn poll_cached_mms18_ending_request_advancer() {
         if ENDING_REQUEST_SET.load(Ordering::SeqCst) == 1
             && mms_step != MOVEMAPSTEP_STEP_MOVEMAP_INDEX
         {
-            unsafe {
-                *((md + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) as *mut u8) = 0;
+            if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
+                er_save_loader::GameManSaveAccess::set_warp_requested(gm_typed, false);
             }
             ENDING_REQUEST_SET.store(0, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "ENDING-REQUEST TASK-ADVANCER: cleared menuData+0x5d=0 as cached mms left step 18 (mms_step={mms_step})"
+                "WARP-REQUEST TASK-ADVANCER: cleared GameMan.warp_requested=false as cached mms left step 18 (mms_step={mms_step})"
             ));
         }
     }
