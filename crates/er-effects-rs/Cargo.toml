@@ -7,7 +7,7 @@ publish = false
 [lib]
 crate-type = ["cdylib"]
 
-[dependencies]
+[target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 er-effects-data = { path = "../effects-data" }
 er-save-loader = { path = "../er-save-loader" }
