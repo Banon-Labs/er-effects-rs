@@ -340,6 +340,9 @@ pub(crate) static INGAMESTEP_MOVEMAP_UPDATE_DEFER_COUNT: AtomicUsize = AtomicUsi
 /// Total early b73 return-title-latch clears (telemetry: >0 means the quit-save latch was held off
 /// before the MoveMapStep ending evaluator could revert the reloaded world).
 pub(crate) static RELOAD_B73_HOLD_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Total menuData+0x5e/+0x5d ending-latch clears during a reload (telemetry: >0 means the session-end
+/// OUTPUT latch that STEP_EndFlow reads was held off so the reloaded world persists).
+pub(crate) static RELOAD_ENDING_LATCH_HOLD_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Fail-soft cap: after this many consecutive held frames, stop deferring and let native decide (so a
 /// genuine return-to-title whose finalize never completes can never be held forever). ~2s at 60fps.
 pub(crate) const INGAMESTEP_MOVEMAP_UPDATE_DEFER_MAX: usize = 120;

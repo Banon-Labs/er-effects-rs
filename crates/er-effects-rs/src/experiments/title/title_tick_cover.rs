@@ -1728,6 +1728,37 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                     ));
                 }
             }
+            // ENDING-LATCH HOLD: b73 is only ONE of ~8 conditions the MoveMapStep ending evaluator
+            // (FUN_140afa7c0) ORs into CSMenuMan.menuData+0x5e (the session-end OUTPUT latch that
+            // STEP_EndFlow reads to revert 6->title). Clearing b73 at mms18 was too late (the evaluator
+            // already latched +0x5e). Clear the OUTPUT latch +0x5e (and the return-title-request +0x5d)
+            // every reload frame from mms18 onward, so STEP_EndFlow never sees the session marked ended
+            // and the reloaded world persists. Reads/writes are safe_read-guarded. Runs only on a
+            // committed reload during/after the MoveMap finalize (mms18 or torn-down mms==-1 in-world).
+            if mms_step == MOVEMAPSTEP_STEP_MOVEMAP_INDEX || (mms_step < 0 && player_present) {
+                if let Some(md) = (unsafe { safe_read_usize(module_base + CS_MENU_MAN_GLOBAL_RVA) })
+                    .filter(|&m| m > PAB_MIN_HEAP_PTR)
+                    .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) })
+                    .filter(|&m| m > PAB_MIN_HEAP_PTR)
+                {
+                    let e5 = unsafe { safe_read_u8(md + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) }
+                        .unwrap_or(0);
+                    let d5 = unsafe { safe_read_u8(md + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) }
+                        .unwrap_or(0);
+                    if e5 != 0 || d5 != 0 {
+                        unsafe {
+                            *((md + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) as *mut u8) = 0;
+                            *((md + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) as *mut u8) = 0;
+                        }
+                        let n = RELOAD_ENDING_LATCH_HOLD_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+                        if n <= 8 || n.is_power_of_two() {
+                            append_autoload_debug(format_args!(
+                                "reload-ending-latch-hold #{n}: cleared menuData+0x5e={e5}/+0x5d={d5} (mms_step={mms_step} finalize={finalize_now}) -- keeps the reloaded session from ending to title"
+                            ));
+                        }
+                    }
+                }
+            }
         }
         // Unblock the finalize case-7->8 gate on the warm reload. The gate is
         // FUN_14067a170() (== saveState==0) && !ShouldSave() (saveRequested==0) && !FUN_140679460()
