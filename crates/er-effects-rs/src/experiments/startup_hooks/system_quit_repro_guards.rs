@@ -1028,18 +1028,40 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             // frames since the cover cleared.
             // WAIT-FOR-INPUT-TO-REGISTER (user 2026-07-18): advance to the next switch only once this
             // load's INPUT has REGISTERED -- i.e. the can-move probe proved the char MOVES under injected
-            // input (CAN_MOVE_CONFIRMED, the reliable signal; render_ready is a known false-negative
-            // oracle). Do NOT blow through on a timer while input never took. A load that never proves
-            // movement within the freeze deadline is the FROZEN case -> per the strict parity, drive the
-            // next load to recover it. (render_ready/load_done kept only for the diagnostic log line.)
+            // input for THIS fresh-deser epoch (CAN_MOVE_CONFIRMED + MOVE_PROBE_EPOCH, the reliable
+            // signal; render_ready is a known false-negative oracle). Also require native MoveMap/requestCode
+            // settlement, because the load2 bug can move while still stuck at requestCode=1/mms18 with draw
+            // disabled. Do NOT blow through on a timer while current-epoch input never took. A load that
+            // never proves movement within the freeze deadline is the FROZEN case -> per the strict parity,
+            // drive the next load to recover it. (render_ready/load_done kept only for the diagnostic log
+            // line.)
             let committed = deser >= expected_deser && player_up;
-            let move_proven = committed && CAN_MOVE_CONFIRMED.load(Ordering::SeqCst);
+            let movement_proven_for_deser = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
+                && MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == deser;
+            let owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
+            let ingame = if owner != TITLE_OWNER_SCAN_START_ADDRESS && owner > 0x10000 {
+                unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) }
+                    .filter(|ig| *ig != TITLE_OWNER_SCAN_START_ADDRESS && *ig > 0x10000)
+            } else {
+                None
+            };
+            let request_code = ingame
+                .and_then(|ig| unsafe { safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) })
+                .unwrap_or(-1);
+            let mms_live = ingame
+                .and_then(|ig| unsafe { safe_read_usize(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) })
+                .filter(|mms| *mms != TITLE_OWNER_SCAN_START_ADDRESS && *mms > 0x10000)
+                .and_then(|mms| unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET) })
+                .unwrap_or(-1);
+            let native_load_settled = request_code == INGAMESTEP_REQUEST_CODE_STABLE_IN_WORLD
+                && mms_live == -1;
+            let move_proven = committed && movement_proven_for_deser && native_load_settled;
             if move_proven {
                 let next = switch_index + 1;
                 SQ_REPRO_SWITCH_INDEX.store(next, Ordering::SeqCst);
                 sq_repro_begin_switch();
                 append_autoload_debug(format_args!(
-                    "sq-repro: switch #{}/{} reload MOVABLE -- input registered (can_move proven, fresh_deser={deser}) -> arming switch #{}/{} target_slot={}; OPEN_MENU",
+                    "sq-repro: switch #{}/{} reload MOVABLE+SETTLED -- input registered for fresh_deser={deser} and native requestCode={request_code}/mms={mms_live} -> arming switch #{}/{} target_slot={}; OPEN_MENU",
                     switch_index + 1,
                     sq_repro_target_switches(),
                     next + 1,
@@ -1053,16 +1075,19 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             let waited = SQ_REPRO_WAIT_RELOAD_FRAMES.fetch_add(1, Ordering::SeqCst);
             if waited % SQ_REPRO_WAIT_RELOAD_LOG_EVERY == 0 {
                 append_autoload_debug(format_args!(
-                    "sq-repro: WAIT_RELOAD gates (switch #{}/{} waited_frames={waited}): fresh_deser={deser}/{expected_deser} player_up={player_up} can_move={} render_ready={render_ready} load_done={load_done} fake_cover={fake_cover}",
+                    "sq-repro: WAIT_RELOAD gates (switch #{}/{} waited_frames={waited}): fresh_deser={deser}/{expected_deser} player_up={player_up} can_move={} move_epoch={} render_ready={render_ready} load_done={load_done} fake_cover={fake_cover} requestCode={request_code} mms={mms_live}",
                     switch_index + 1,
                     sq_repro_target_switches(),
-                    CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
+                    CAN_MOVE_CONFIRMED.load(Ordering::SeqCst),
+                    MOVE_PROBE_EPOCH.load(Ordering::SeqCst)
                 ));
             }
-            // FROZEN force-advance: reload committed + present, but movement never registered within the
-            // deadline (the user's can't-see/can't-move state). Trigger the NEXT load (the recovery),
-            // exactly as the user re-loads by hand from the still-openable menu.
-            if committed && waited >= SQ_REPRO_FREEZE_RECOVERY_DEADLINE {
+            // FROZEN force-advance: reload committed + present, but current-epoch movement never registered
+            // within the deadline (the user's can't-see/can't-move state). Trigger the NEXT load (the
+            // recovery), exactly as the user re-loads by hand from the still-openable menu. If movement DID
+            // register for this epoch but native settlement is still pending, do not start the next switch;
+            // keep waiting for the mms18/end5e advancer or the global cap so the harness exposes that bug.
+            if committed && !movement_proven_for_deser && waited >= SQ_REPRO_FREEZE_RECOVERY_DEADLINE {
                 let next = switch_index + 1;
                 SQ_REPRO_SWITCH_INDEX.store(next, Ordering::SeqCst);
                 sq_repro_begin_switch();
