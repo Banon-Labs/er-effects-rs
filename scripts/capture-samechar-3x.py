@@ -96,6 +96,11 @@ def snap(t: dict) -> dict:
         "oracle_loading_bar_current_frame",
         "oracle_loading_bar_max_frame",
         "oracle_loading_bar_progress_permille",
+        "oracle_loading_bar_final_hits",
+        "oracle_loading_bar_update_hits",
+        "oracle_loading_screen_close_sent",
+        "oracle_loading_screen_close_sent_hits",
+        "oracle_load_in_progress_b80",
         "oracle_stepfinish_request_code",
         "oracle_stepfinish_mms_state",
         "oracle_stepfinish_finalize_substate_12a",
@@ -220,15 +225,19 @@ def main() -> int:
 
             # User-directed teardown guard (2026-07-19): if the loading bar stops making observable
             # progress for >10s, preserve artifacts and fail immediately instead of consuming the full
-            # runtime cap. Primary signal is the explicit RAM loading-bar progress oracle
-            # (`oracle_loading_bar_current_frame` / `oracle_loading_bar_progress_permille`), not a
-            # screenshot or broad cover-visible proxy. The coarse native-load signature is used only as
-            # a fallback when the loading-bar oracle is unavailable.
+            # runtime cap. Primary signal is the explicit RAM loading-bar progress oracle plus the native
+            # post-bar handoff semaphores, not a screenshot or broad cover-visible proxy. This deliberately
+            # keeps progressing after the visible bar reaches its nominal final frame (e.g. 11/11 or
+            # frame=max): if requestCode, MoveMapStep, close-sent, fake-loading, player presence, or
+            # movement proof still change, the loading-progress signature changes too. The coarse native-load
+            # signature is used only as a fallback when the loading-bar oracle is unavailable.
             request_code = as_int(s.get("oracle_stepfinish_request_code"))
             mms_state = as_int(s.get("oracle_stepfinish_mms_state"))
             bar_enabled = as_int(s.get("oracle_loading_bar_enabled"), 0) > 0
             bar_current_frame = as_int(s.get("oracle_loading_bar_current_frame"))
-            bar_progress_permille = as_int(s.get("oracle_loading_bar_progress_permille"))
+            bar_progress_permille = as_int(
+                s.get("oracle_loading_bar_progress_permille")
+            )
             bar_max_frame = as_int(s.get("oracle_loading_bar_max_frame"))
             bar_progress_available = bar_enabled and (
                 bar_current_frame >= 0 or bar_progress_permille >= 0
@@ -236,12 +245,35 @@ def main() -> int:
             if bar_progress_available:
                 loading_active = True
                 loading_progress_signature = (
-                    "loading_bar",
-                    as_int(deser, 0),
-                    as_int(activate, 0),
-                    bar_current_frame,
-                    bar_progress_permille,
-                    bar_max_frame,
+                    "loading_bar_plus_semaphores",
+                    ("deser", as_int(deser, 0)),
+                    ("activate", as_int(activate, 0)),
+                    ("bar_frame", bar_current_frame),
+                    ("bar_progress_permille", bar_progress_permille),
+                    ("bar_max_frame", bar_max_frame),
+                    (
+                        "bar_terminal",
+                        int(
+                            (bar_max_frame > 0 and bar_current_frame >= bar_max_frame)
+                            or bar_progress_permille >= 998
+                            or as_int(s.get("oracle_loading_bar_final_hits"), 0) > 0
+                        ),
+                    ),
+                    ("close_sent", as_int(s.get("oracle_loading_screen_close_sent"), 0)),
+                    ("request_code", request_code),
+                    ("mms_state", mms_state),
+                    (
+                        "finalize12a",
+                        as_int(s.get("oracle_stepfinish_finalize_substate_12a")),
+                    ),
+                    ("load_in_progress_b80", as_int(s.get("oracle_load_in_progress_b80"))),
+                    ("now_loading", as_int(s.get("oracle_now_loading"))),
+                    ("fake_cover", int(fake_cover)),
+                    ("fake_field_c", as_int(s.get("oracle_fake_loading_field_c"))),
+                    ("fake_field_10", as_int(s.get("oracle_fake_loading_field_10"))),
+                    ("player_present", int(present)),
+                    ("can_move", int(can_move)),
+                    ("moved_frames", as_int(s.get("oracle_move_probe_moved_frames"), 0)),
                 )
             else:
                 loading_active = bool(fake_cover or s.get("oracle_now_loading")) and (
