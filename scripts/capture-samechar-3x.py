@@ -99,7 +99,15 @@ def capture_portrait(artifact_dir: Path) -> None:
 
 def teardown() -> None:
     for image in ("eldenring.exe", "me3.exe"):
-        subprocess.run(["taskkill.exe", "/F", "/IM", image], capture_output=True, text=True)
+        try:
+            subprocess.run(
+                ["taskkill.exe", "/F", "/IM", image],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except subprocess.TimeoutExpired:
+            pass
 
 
 def main() -> int:
