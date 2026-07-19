@@ -256,10 +256,16 @@ fn write_player_presence_oracle(body: &mut String) {
     }
     // CAN-MOVE proof (2026-07-18): input-causes-movement gate. can_move latches once a load sustains
     // >=60 consecutive frames of injected-forward havok motion; moved_frames is the live consecutive
-    // count. These are load-scoped atomics driven by the game-thread can_move_probe.
+    // count. EPOCH-GATED: only report can_move for the CURRENT load -- when fresh_deser flips (a reload
+    // deserialize commits, mid-loading) CAN_MOVE_CONFIRMED is still latched from the PRIOR load until the
+    // probe's next in-world tick resets it, so gate on MOVE_PROBE_EPOCH == current fresh_deser to avoid
+    // misattributing the prior load's movement to the new one (the false-pass fix).
+    let cur_deser = crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+    let probe_epoch = crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst);
+    let can_move = crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst) && probe_epoch == cur_deser;
     body.push_str(&format!(
         "  \"oracle_can_move\": {},\n  \"oracle_move_probe_moved_frames\": {},\n",
-        crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst),
+        can_move,
         crate::constants::MOVE_PROBE_MOVED_FRAMES.load(Ordering::SeqCst)
     ));
 }
