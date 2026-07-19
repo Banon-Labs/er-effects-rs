@@ -606,7 +606,10 @@ fn boot_view_phase_submilestone(idx: usize) -> (&'static str, usize, usize) {
             "GFX CTOR BUILD",
         ),
         5 => boot_view_first_pending_substep(&[
-            (TITLE_PRESS_START_BIND_HITS.load(Ordering::SeqCst) != 0, "PRESS START"),
+            (
+                TITLE_PRESS_START_BIND_HITS.load(Ordering::SeqCst) != 0,
+                "PRESS START",
+            ),
             (
                 TITLE_FADEIN_SKIP_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS,
                 "TITLE LOOP",

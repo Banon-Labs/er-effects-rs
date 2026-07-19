@@ -1288,8 +1288,9 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             && matches!(ig_d8, 1 | 2)
         {
             if let Some(menu) = menu_man {
-                let old_mode = unsafe { safe_read_u8(menu + CSMENUMAN_LOADINGSCREEN_MODE_728_OFFSET) }
-                    .unwrap_or(0);
+                let old_mode =
+                    unsafe { safe_read_u8(menu + CSMENUMAN_LOADINGSCREEN_MODE_728_OFFSET) }
+                        .unwrap_or(0);
                 let old10 =
                     unsafe { safe_read_u8(menu + CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET) }
                         .unwrap_or(0);
@@ -1363,8 +1364,8 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         let gm_bf5 = unsafe { safe_read_u8(gm + GAME_MAN_LOADING_MODE_BF5_OFFSET) }
             .map(|b| b as i32)
             .unwrap_or(-1);
-        let delay_delete = unsafe { safe_read_usize(module_base + CS_DELAY_DELETE_MAN_GLOBAL_RVA) }
-            .unwrap_or(0);
+        let delay_delete =
+            unsafe { safe_read_usize(module_base + CS_DELAY_DELETE_MAN_GLOBAL_RVA) }.unwrap_or(0);
         let dd40 = if delay_delete != null {
             unsafe { safe_read_i32(delay_delete + CS_DELAY_DELETE_PENDING_40_OFFSET) }.unwrap_or(-1)
         } else {
@@ -1377,20 +1378,19 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         } else {
             -1
         };
-        let (world_chr_man, main_player) = if let Ok(world_chr_man) =
-            unsafe { eldenring::cs::WorldChrMan::instance_mut() }
-        {
-            (
-                world_chr_man as *mut _ as usize,
-                world_chr_man
-                    .main_player
-                    .as_ref()
-                    .map(|p| p.as_ptr() as usize)
-                    .unwrap_or(0),
-            )
-        } else {
-            (0, 0)
-        };
+        let (world_chr_man, main_player) =
+            if let Ok(world_chr_man) = unsafe { eldenring::cs::WorldChrMan::instance_mut() } {
+                (
+                    world_chr_man as *mut _ as usize,
+                    world_chr_man
+                        .main_player
+                        .as_ref()
+                        .map(|p| p.as_ptr() as usize)
+                        .unwrap_or(0),
+                )
+            } else {
+                (0, 0)
+            };
         // ENDING-REQUEST RECOVERY (2026-07-18, live-proven fix for the genuine cross-char switch stall,
         // bd live-genuine-switch-stalls-mms18-end5e0-2026-07-18). A genuine switch's return-title
         // suppresses the quit-save (no-save-on-quit by design), so none of cVar10's inputs
