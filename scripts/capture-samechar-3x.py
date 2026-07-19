@@ -212,6 +212,23 @@ def _checkpoint_names(row: dict) -> list[str]:
         names.append("world_clock:live")  # play_time advanced >=1s past this load's baseline
     if row.get("can_move"):
         names.append("movement:can_move")
+    # RE-verified reload-retention semaphores (bd er-effects-rs-9fmm): the MoveMap destination BlockId
+    # STEP_MoveMap_Update loads after requestCode=2 (0xffffffff/4294967295 = skip -> revert), the
+    # session protocol_state (WaitReload=4 selects loadTargetMapId), and the WorldChrMan world-stable
+    # oracle. These pin whether the reload's revert is "no destination" vs a genuine finalize race.
+    dest = as_int(row.get("dest_block_id"))
+    if dest >= 0:
+        tag = "NONE" if dest == 0xFFFFFFFF else f"0x{dest:x}"
+        names.append(f"dest_block_id:{tag}")
+    ltm = as_int(row.get("load_target_map_id"))
+    if ltm >= 0:
+        tag = "NONE" if ltm == 0xFFFFFFFF else f"0x{ltm:x}"
+        names.append(f"load_target_map_id:{tag}")
+    proto = as_int(row.get("protocol_state"))
+    if proto >= 0:
+        names.append(f"protocol_state:{proto}")
+    if row.get("world_stable"):
+        names.append("world_stable")
     return names
 
 

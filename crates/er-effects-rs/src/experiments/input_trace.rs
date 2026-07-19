@@ -280,6 +280,14 @@ struct TraceSem {
     player: bool,
     world_chr_man: usize,
     main_player: usize,
+    /// WorldChrMan+0x1e524 == 2 (FUN_140508d30): world genuinely stable/ready (RE-verified oracle).
+    world_stable: bool,
+    /// MoveMap destination BlockId (GameMan+0x14 moveMapStepBlockId, GameMan+0xac8 loadTargetMapId);
+    /// -1/0xffffffff = no destination -> STEP_MoveMap_Update skips the load and reverts to title.
+    dest_block_id: i64,
+    load_target_map_id: i64,
+    /// CSSessionManager.protocol_state (WaitReload=4 selects loadTargetMapId over moveMapStepBlockId).
+    protocol_state: i32,
     committed: i32,
     ig_pstep: i32,
     ig_pnext: i32,
@@ -483,6 +491,26 @@ fn input_trace_semaphores() -> TraceSem {
         } else {
             (0, 0)
         };
+    // RE-verified reload-retention semaphores (bd er-effects-rs-9fmm): world-stable oracle + the
+    // MoveMap destination BlockId the InGameStep loads after requestCode=2 (0xffffffff = skip -> revert).
+    let world_stable = world_chr_man != 0
+        && unsafe { safe_read_i32(world_chr_man + WORLD_CHR_MAN_WORLD_STABLE_1E524_OFFSET) }
+            == Some(WORLD_CHR_MAN_WORLD_STABLE_VALUE);
+    let dest_block_id: i64 = if gm != null {
+        unsafe { safe_read_i32(gm + GAME_MAN_MOVE_MAP_STEP_BLOCK_ID_14_OFFSET) }
+            .map_or(-1, |v| i64::from(v as u32))
+    } else {
+        -1
+    };
+    let load_target_map_id: i64 = if gm != null {
+        unsafe { safe_read_i32(gm + GAME_MAN_LOAD_TARGET_MAP_ID_AC8_OFFSET) }
+            .map_or(-1, |v| i64::from(v as u32))
+    } else {
+        -1
+    };
+    let protocol_state: i32 = unsafe { eldenring::cs::CSSessionManager::instance() }
+        .map(|s| s.protocol_state as i32)
+        .unwrap_or(-1);
     let mms_raw = SWITCH_ORACLE_MMS_STEP.load(Ordering::SeqCst);
     let msgbox_raw = MSGBOX_TOTAL_BUILDS.load(Ordering::SeqCst);
     // WORLD-CLOCK-LIVE: GameDataMan::play_time (ms). Reset the per-epoch baseline when the load epoch
@@ -532,6 +560,10 @@ fn input_trace_semaphores() -> TraceSem {
         player: unsafe { PlayerIns::local_player_mut() }.is_ok(),
         world_chr_man,
         main_player,
+        world_stable,
+        dest_block_id,
+        load_target_map_id,
+        protocol_state,
         committed,
         ig_pstep,
         ig_pnext,
@@ -606,6 +638,10 @@ impl TraceSem {
         mix(self.player as u64);
         mix(self.world_chr_man as u64);
         mix(self.main_player as u64);
+        mix(self.world_stable as u64);
+        mix(self.dest_block_id as u64);
+        mix(self.load_target_map_id as u64);
+        mix(self.protocol_state as u32 as u64);
         mix(self.committed as u32 as u64);
         mix(self.ig_pstep as u32 as u64);
         mix(self.ig_pnext as u32 as u64);
@@ -657,6 +693,7 @@ impl TraceSem {
         format!(
             "\"focused\":{},\"menu_top\":{},\"menu_opt\":{},\"menu_prof\":{},\"prof_cursor\":{},\"opt_tab\":{},\
              \"in_world\":{},\"player\":{},\"world_chr_man\":\"0x{:x}\",\"main_player\":\"0x{:x}\",\
+             \"world_stable\":{},\"dest_block_id\":{},\"load_target_map_id\":{},\"protocol_state\":{},\
              \"committed\":{},\"ig_pstep\":{},\"ig_pnext\":{},\"ig_d8\":{},\"bc4\":{},\"c30\":\"0x{:x}\",\
              \"save_slot\":{},\"req_slot\":{},\"save_state\":{},\"save_requested\":{},\
              \"menu_job\":\"0x{:x}\",\"loading_mode\":{},\"loading_field10\":{},\"loading_field11\":{},\
@@ -678,6 +715,10 @@ impl TraceSem {
             self.player,
             self.world_chr_man,
             self.main_player,
+            self.world_stable,
+            self.dest_block_id,
+            self.load_target_map_id,
+            self.protocol_state,
             self.committed,
             self.ig_pstep,
             self.ig_pnext,

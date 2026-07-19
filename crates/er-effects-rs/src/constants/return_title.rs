@@ -169,6 +169,20 @@ pub(crate) static SYSTEM_QUIT_STABLE_PROOF_EPOCH: AtomicUsize = AtomicUsize::new
 /// i.e. the load has effectively finished. Used to hold the world the instant the finalize completes --
 /// BEFORE the move probe could prove movement (the world reverts too fast for the 60-frame probe).
 pub(crate) static SYSTEM_QUIT_RELOAD_FINALIZE_DONE_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// MoveMap destination BlockId + world-stable RAM semaphore offsets (RE-verified 2026-07-19,
+/// bd er-effects-rs-9fmm). `InGameStep::STEP_MoveMap_Update` @0x140aec810 loads the destination block
+/// after requestCode(+0xd8)=2; it reads `GameMan+0xac8` (loadTargetMapId) when
+/// `CSSessionManager.protocol_state == WaitReload(4)`, else `GameMan+0x14` (moveMapStepBlockId), and
+/// SKIPS the load when that BlockId == 0xffffffff -> the world reverts to title with nothing reloaded.
+/// So these two fields are the destination-valid RAM semaphore for the reload's retention.
+pub(crate) const GAME_MAN_MOVE_MAP_STEP_BLOCK_ID_14_OFFSET: usize = 0x14;
+pub(crate) const GAME_MAN_LOAD_TARGET_MAP_ID_AC8_OFFSET: usize = 0xac8;
+/// BlockId sentinel meaning "no destination" (skip the map load).
+pub(crate) const MOVE_MAP_BLOCK_ID_NONE: u32 = 0xffff_ffff;
+/// `FUN_140508d30` (dump 0x140508d30) returns `WorldChrMan.field47_0x1e524 == 2` = world genuinely
+/// stable/ready -- a stronger world-ready oracle than can_move. RE-verified offset + constant.
+pub(crate) const WORLD_CHR_MAN_WORLD_STABLE_1E524_OFFSET: usize = 0x1e524;
+pub(crate) const WORLD_CHR_MAN_WORLD_STABLE_VALUE: i32 = 2;
 /// b80 (== GameMan.save_state) FSM state names for the loading-bar / logs. See the
 /// `GAME_MAN_SAVE_STATE_*` / `FULLREAD_B80_RESIDENT` constants (constants::autoload_state).
 pub(crate) fn load_in_progress_b80_name(v: i32) -> &'static str {
