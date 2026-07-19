@@ -20,6 +20,8 @@ python3 "$repo_root/scripts/check-native-continue-static.py"
 python3 "$repo_root/scripts/check-menu-constructor-static.py"
 python3 "$repo_root/scripts/check-env-gate-comments.py"
 python3 "$repo_root/scripts/test-env-gate-comments.py"
+python3 "$repo_root/scripts/check-marker-file-gates.py"
+python3 "$repo_root/scripts/test-marker-file-gates.py"
 python3 "$repo_root/scripts/check-reload-trace-dll-policy.py" --audit
 command -v cupcake >/dev/null 2>&1 || {
 	echo "missing required command: cupcake" >&2
