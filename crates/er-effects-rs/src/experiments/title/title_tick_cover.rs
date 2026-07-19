@@ -786,6 +786,30 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
     }
     PRODUCT_CORE_OWNER_TICKS.fetch_add(1, Ordering::SeqCst);
     PRODUCT_CORE_LAST_OWNER.store(owner, Ordering::SeqCst);
+    const TITLE_STEP_END_FLOW: i32 = 7;
+    const TITLE_STEP_END_FLOW_WAIT: i32 = 8;
+    if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+        == SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
+        && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 1
+        && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) > 0
+    {
+        let committed = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }
+            .unwrap_or(-1);
+        let requested = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_OFFSET) }.unwrap_or(-1);
+        if matches!(committed, TITLE_STEP_END_FLOW | TITLE_STEP_END_FLOW_WAIT)
+            || matches!(requested, TITLE_STEP_END_FLOW | TITLE_STEP_END_FLOW_WAIT)
+        {
+            unsafe {
+                *((owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *mut i32) =
+                    TITLE_STEP_GAME_STEP_WAIT;
+                *((owner + TITLE_OWNER_STATE_OFFSET) as *mut i32) = TITLE_STEP_GAME_STEP_WAIT;
+            }
+            append_autoload_debug(format_args!(
+                "AUTOLOAD-HANDOFF PRODUCT-CORE PARENT FIX: TitleStep {committed}/{requested} -> GameStepWait(6) for reload epoch {}; prevents EndFlow/EndFlowWait returning the loaded world to title",
+                SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst)
+            ));
+        }
+    }
     let gm = game_man_ptr_or_null();
     let mut return_title_job_predicate_bc4 = if gm != null {
         unsafe { safe_read_usize(gm + GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET) }
@@ -1305,7 +1329,8 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         // the semaphore.
         if let Some(md) = menudata {
             let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
-            let active_switch_phase = quickload_phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED;
+            let active_switch_phase =
+                quickload_phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED;
             let stuck_mms18 = active_switch_phase
                 && ig_d8 == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING
                 && mms_step == MOVEMAPSTEP_STEP_MOVEMAP_INDEX
