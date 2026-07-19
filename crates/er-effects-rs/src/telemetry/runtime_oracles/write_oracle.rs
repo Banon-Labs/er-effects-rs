@@ -229,6 +229,21 @@ fn write_title_menu_flow_oracles(body: &mut String) {
 
 fn write_player_presence_oracle(body: &mut String) {
     const BLOCK_ID_NONE: i32 = -1;
+    if let Ok(world_chr_man) = unsafe { eldenring::cs::WorldChrMan::instance_mut() } {
+        body.push_str(&format!(
+            "  \"oracle_worldchrman_present\": true,\n  \"oracle_worldchrman_main_player\": \"0x{:x}\",\n  \"oracle_worldchrman_player_chr_set_capacity\": {},\n",
+            world_chr_man
+                .main_player
+                .as_ref()
+                .map(|p| p.as_ptr() as usize)
+                .unwrap_or(0),
+            world_chr_man.player_chr_set.capacity
+        ));
+    } else {
+        body.push_str(
+            "  \"oracle_worldchrman_present\": false,\n  \"oracle_worldchrman_main_player\": \"0x0\",\n  \"oracle_worldchrman_player_chr_set_capacity\": 0,\n",
+        );
+    }
     if let Ok(player) = unsafe { PlayerIns::local_player_mut() } {
         let pos = player.chr_ins.modules.physics.position;
         let grounded = player.chr_ins.modules.physics.standing_on_solid_ground;

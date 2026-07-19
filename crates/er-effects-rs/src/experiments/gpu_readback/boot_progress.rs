@@ -462,7 +462,7 @@ fn boot_view_world_gauge_submilestone(fallback: &'static str) -> (&'static str, 
     let current = LOADING_SCREEN_BAR_CURRENT_FRAME.load(Ordering::SeqCst);
     let max = LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst);
     if LOADING_SCREEN_BAR_ENABLED.load(Ordering::SeqCst) != 0 && max != 0 {
-        ("GAUGE FRAME", current.min(max), max)
+        ("LOADING BAR", current.min(max), max)
     } else {
         boot_view_single_submilestone(fallback)
     }
@@ -484,7 +484,7 @@ fn boot_view_entering_world_submilestone() -> (&'static str, usize, usize) {
     let movement_proven = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
         && MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == current_epoch;
     boot_view_first_pending_substep(&[
-        (bar_terminal, "GAUGE FINAL"),
+        (bar_terminal, "BAR FINAL"),
         (loading_close_sent, "LS 731 CLOSE"),
         (request_started, "IG D8 REQUEST"),
         (player_present, "PLAYER RESIDENT"),
