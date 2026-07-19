@@ -856,6 +856,11 @@ pub(crate) const GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET: usize = 0xbc4;
 /// Terminal value for `GameMan::field143_0xbc4` observed after the native return-title job tail.
 /// Keep this value named as a predicate terminal, not a semantic enum state.
 pub(crate) const GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY: usize = 3;
+/// "Return-title requested, save not yet pumped" value for `GameMan::field143_0xbc4`: the native
+/// return-title REQUEST (`FUN_14067a490`) sets bc4 = 1, then the quit-save pump advances it 1 -> 2 -> 3.
+/// The switch-2 soft-lock is bc4 FROZEN at this value because the quit-save (`ShouldSave`) aborts on a
+/// stale `CSMenuMan->disableSaveMenu` (see [`CS_MENU_MAN_DISABLE_SAVE_MENU_OFFSET`] in return_title.rs).
+pub(crate) const GAME_MAN_RETURN_TITLE_JOB_PREDICATE_PENDING: usize = 1;
 /// submit_play_game 3-phase states: build CSFeMan -> deserialize slot -> re-submit
 /// the real map. Driven one step per game-task tick.
 pub(crate) const SUBMIT_PHASE_INIT: i32 = 0;

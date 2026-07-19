@@ -49,3 +49,10 @@ offline-launcher.exe
 
 # scratch analysis dumps (game-derived; never commit)
 .auto/scratch-jsm/
+
+# Per-run runtime-probe evidence (y22i Windows validation etc.) -- regenerable, not source.
+/.artifacts/
+
+# Live workflow steering channel (see scripts/steering/README.md) -- ephemeral run
+# control the user drops in while a wf-*.js is running; never source.
+/.workflow-steering/

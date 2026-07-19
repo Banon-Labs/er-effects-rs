@@ -276,6 +276,15 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         ),
         crate::experiments::OWN_LOAD_PUMP_DONE.load(Ordering::SeqCst),
     ));
+    // RequestMoveMap BlockId fix (bd er-effects-rs-um9g): fixups>=1 == the render-handoff fix fired on
+    // this load (substituted last_c30 for the invalid last_before target BlockId).
+    body.push_str(&format!(
+        "  \"oracle_request_move_map_hook_calls\": {},\n  \"oracle_request_move_map_hook_fixups\": {},\n  \"oracle_request_move_map_last_before\": \"0x{:x}\",\n  \"oracle_request_move_map_last_c30\": \"0x{:x}\",\n",
+        crate::experiments::REQUEST_MOVE_MAP_HOOK_CALLS.load(Ordering::SeqCst),
+        crate::experiments::REQUEST_MOVE_MAP_FIXUPS.load(Ordering::SeqCst),
+        crate::experiments::REQUEST_MOVE_MAP_LAST_BEFORE.load(Ordering::SeqCst),
+        crate::experiments::REQUEST_MOVE_MAP_LAST_C30.load(Ordering::SeqCst),
+    ));
     let product_core_blocker = PRODUCT_CORE_LAST_BLOCKER.load(Ordering::SeqCst);
     let format_scan_ptr = |value: usize| -> String {
         if value == TITLE_OWNER_SCAN_START_ADDRESS {

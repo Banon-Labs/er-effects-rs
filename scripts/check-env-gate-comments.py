@@ -4,8 +4,11 @@
 An "env-gated feature" is any read of `std::env::var("ER_EFFECTS_...")` in
 `crates/er-effects-rs/src/**/*.rs`. Reverse engineering breeds dozens of such gates; an undocumented
 gate is a landmine for the next agent (does enabling it write a save? perturb the
-mount? is it a dead path?). This checker forces every NEW or NEWLY-MODIFIED gate
-to explain itself in a comment directly above its enclosing `fn`.
+mount? is it a dead path?). This checker now freezes exact gate locations too: a
+NEW or newly-moved env gate fails closed even with a rationale comment, because new
+runtime knobs should be replaced by product state or a dedicated Rego/runtime contract.
+Existing sanctioned gates must still explain themselves in a comment directly above
+their enclosing `fn` unless they are in the baseline ratchet.
 
 COMPLIANCE
 ==========
@@ -20,12 +23,13 @@ satisfies EITHER:
 
 BASELINE RATCHET
 ================
-This repo already has dozens of pre-existing undocumented gates. Failing all of
-them on day one would be useless noise, so non-compliant gates that already exist
-are recorded in `.auto/env_gate_comment_baseline.json` keyed by a STABLE key
-(env var name + file path -- NOT line number, which drifts on edit). The checker
-FAILS only on a non-compliant gate that is NOT in the baseline -- i.e. any gate a
-dev ADDS or MOVES to a new file must carry the comment.
+This repo already has dozens of pre-existing gates. Failing all of them on day one
+would be useless noise, so the known exact locations are recorded in
+`.auto/env_gate_comment_baseline.json` under `sanctioned_env_gate_locations`, keyed
+by a STABLE key (env var name + file path -- NOT line number, which drifts). The
+checker FAILS on any gate whose exact location is not listed. Non-compliant older
+gates are additionally recorded under `baseline` so the rationale-comment ratchet
+can shrink separately from the hard no-new-gates location freeze.
 
 If a baselined gate has SINCE gained a comment but is still listed, that is
 reported as a soft note (encouraging the dev to shrink the baseline) but is NOT a
@@ -39,13 +43,15 @@ HOW TO CLEAR A BASELINE ENTRY
 2. Delete that entry from `.auto/env_gate_comment_baseline.json`.
    (`--list-shrinkable` prints exactly which entries can now be dropped.)
 
-To make a NEW gate pass, do the same step 1 -- or delete the env gate entirely
-and let the feature through unconditionally.
+A NEW gate should not be made to pass by comment alone. Delete it and make the
+feature unconditional/product-state driven, or use a dedicated Rego/runtime contract;
+adding a sanctioned location is a deliberate reviewed exception.
 
 The declarative policy lives at `.auto/env_gate_comment_policy.rego`; this checker
 also asserts that policy file exists and contains its required snippets so it
 cannot silently drift or disappear.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -70,7 +76,9 @@ MIN_DOC_LINES = 2
 
 ENV_READ_RE = re.compile(r'std::env::var\(\s*"(ER_EFFECTS_[A-Za-z0-9_]*)"')
 # A Rust free function definition (the gates are all `pub(crate) fn ...` / `fn ...`).
-FN_DEF_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+|unsafe\s+|const\s+)*fn\s+([A-Za-z0-9_]+)")
+FN_DEF_RE = re.compile(
+    r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+|unsafe\s+|const\s+)*fn\s+([A-Za-z0-9_]+)"
+)
 
 POLICY_REQUIRED_SNIPPETS = (
     "package auto.env_gate_comment",
@@ -78,6 +86,7 @@ POLICY_REQUIRED_SNIPPETS = (
     "input.has_rationale_comment == true",
     "allow if",
     "deny contains message if",
+    "input.env_gate_location_sanctioned",
     "input.env_var_sanctioned",
     RATIONALE_MARKER,
 )
@@ -213,6 +222,19 @@ def load_sanctioned_env_vars() -> set[str]:
     return set(data.get("sanctioned_env_vars", []))
 
 
+def load_sanctioned_env_gate_locations() -> set[str]:
+    """The FROZEN allowlist of exact env-gate locations.
+
+    This is the stronger no-new-env-gates guard: a reused ER_EFFECTS_* name in a
+    new function/file is still a new runtime knob and hard-fails unless its stable
+    `ENV_VAR@repo/path.rs` key is deliberately added here for review.
+    """
+    if not BASELINE_PATH.exists():
+        return set()
+    data = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    return set(data.get("sanctioned_env_gate_locations", []))
+
+
 def policy_findings() -> list[Finding]:
     findings: list[Finding] = []
     if not POLICY_PATH.exists():
@@ -245,13 +267,33 @@ def policy_findings() -> list[Finding]:
 
 
 def scan_findings(
-    gates: list[Gate], baseline: set[str], sanctioned: set[str]
+    gates: list[Gate],
+    baseline: set[str],
+    sanctioned: set[str],
+    sanctioned_locations: set[str],
 ) -> list[Finding]:
     findings: list[Finding] = policy_findings()
     for gate in gates:
-        # HARD FAIL: an env-var name not in the frozen allowlist is rejected
-        # regardless of any rationale comment or baseline entry. This is the lever
-        # that stops NEW env gates from sneaking in behind a mere comment.
+        # HARD FAIL: an exact env-gate location not in the frozen allowlist is rejected
+        # regardless of rationale comment, reused env-var name, or baseline entry. This is the
+        # no-new-env-gates guard: adding another runtime knob must fail closed.
+        if gate.key not in sanctioned_locations:
+            findings.append(
+                Finding(
+                    gate.path,
+                    gate.line,
+                    "env-gate-new-location",
+                    f'std::env::var("{gate.env_var}") in fn {gate.fn_name}()',
+                    f"{gate.key} is NOT in the frozen sanctioned env-gate location allowlist "
+                    f"(`sanctioned_env_gate_locations` in {relative(BASELINE_PATH)}). No new env "
+                    "gates: tie behavior to existing product state or a dedicated Rego/runtime "
+                    "contract instead. A rationale comment or reused ER_EFFECTS_* name is NOT enough. "
+                    "(See .auto/env_gate_comment_policy.rego.)",
+                )
+            )
+            continue
+        # HARD FAIL: an env-var name not in the frozen allowlist is rejected too, so renames
+        # remain visible even at an already-known location.
         if gate.env_var not in sanctioned:
             findings.append(
                 Finding(
@@ -259,13 +301,9 @@ def scan_findings(
                     gate.line,
                     "env-gate-unknown-var",
                     f'std::env::var("{gate.env_var}") in fn {gate.fn_name}()',
-                    f"{gate.env_var} is NOT in the frozen sanctioned env-var allowlist "
-                    f"(`sanctioned_env_vars` in {relative(BASELINE_PATH)}). The product policy is "
-                    "to tie a new always-on autoload lever to existing autoload state "
-                    "(`if autoload_disabled() { return false } !save_override_telemetry_only()`), "
-                    "NOT to add a new per-lever env/file knob -- do that instead. If a new env gate "
-                    "is genuinely required, add its NAME to `sanctioned_env_vars` deliberately (it "
-                    "will appear in the diff for review). A rationale comment alone is NOT enough. "
+                    f"{gate.env_var} is NOT in the frozen sanctioned env-var name allowlist "
+                    f"(`sanctioned_env_vars` in {relative(BASELINE_PATH)}). No new env gates: "
+                    "prefer existing product state or a dedicated Rego/runtime contract. "
                     "(See .auto/env_gate_comment_policy.rego.)",
                 )
             )
@@ -296,8 +334,12 @@ def shrinkable_baseline_entries(gates: list[Gate], baseline: set[str]) -> list[s
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--json", action="store_true", help="Emit machine-readable findings.")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable findings."
+    )
     parser.add_argument(
         "--list-shrinkable",
         action="store_true",
@@ -308,7 +350,8 @@ def main() -> int:
     gates = scan_gates()
     baseline = load_baseline()
     sanctioned = load_sanctioned_env_vars()
-    findings = scan_findings(gates, baseline, sanctioned)
+    sanctioned_locations = load_sanctioned_env_gate_locations()
+    findings = scan_findings(gates, baseline, sanctioned, sanctioned_locations)
     shrinkable = shrinkable_baseline_entries(gates, baseline)
 
     if args.json:
@@ -318,6 +361,7 @@ def main() -> int:
                 "shrinkable_baseline_entries": shrinkable,
                 "total_gates": len(gates),
                 "baselined": len(baseline),
+                "sanctioned_locations": len(sanctioned_locations),
             },
             sys.stdout,
             indent=2,
@@ -334,12 +378,15 @@ def main() -> int:
     if findings:
         print("Env-gate comment policy violations found.", file=sys.stderr)
         print(
-            "Every env-gated feature (std::env::var(\"ER_EFFECTS_...\")) must carry a justifying comment "
+            'Every env-gated feature (std::env::var("ER_EFFECTS_...")) must carry a justifying comment '
             "directly above its enclosing fn. See .auto/env_gate_comment_policy.rego.\n",
             file=sys.stderr,
         )
         for finding in findings:
-            print(f"{finding.path}:{finding.line}: {finding.rule}: {finding.source}", file=sys.stderr)
+            print(
+                f"{finding.path}:{finding.line}: {finding.rule}: {finding.source}",
+                file=sys.stderr,
+            )
             print(f"  fix: {finding.guidance}", file=sys.stderr)
 
     if shrinkable:

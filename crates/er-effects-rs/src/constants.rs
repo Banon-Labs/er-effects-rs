@@ -64,8 +64,10 @@ pub(crate) const EXCEPTION_ACCESS_VIOLATION_CODE: u32 = 0xC000_0005;
 pub(crate) const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
 /// Run our VEH first so it logs before Arxan's handlers consume the exception.
 pub(crate) const VECTORED_FIRST_HANDLER: u32 = 1;
-/// Cap access-violation log lines so an Arxan exception storm cannot fill disk.
-pub(crate) const MAX_AV_LOG_LINES: usize = 32;
+/// Cap access-violation log lines so an Arxan exception storm cannot fill disk. Raised 32->256
+/// (2026-07-15) so the late 2nd-in-process character-reload AV is not silenced by earlier Arxan
+/// first-chance AVs hitting the cap before the real faulting RIP is logged.
+pub(crate) const MAX_AV_LOG_LINES: usize = 256;
 pub(crate) const AV_LOG_LINE_INCREMENT: usize = 1;
 /// Number of process-exit paths hooked (ExitProcess, TerminateProcess,
 /// RtlExitUserProcess, NtTerminateProcess).
@@ -140,5 +142,6 @@ include!("constants/profile_render.rs");
 include!("constants/return_title.rs");
 include!("constants/switch_liveness.rs");
 include!("constants/loading_cover.rs");
+include!("constants/render_handoff.rs");
 include!("constants/system_quit.rs");
 include!("constants/menu_sort.rs");

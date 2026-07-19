@@ -348,6 +348,26 @@ pub(crate) fn system_quit_save_swap_recommit_after_return_title_save() {
     }
 }
 
+/// The game-owned save file a Load-Save-Profiles pick has COMMITTED foreign character bytes into this
+/// switch, or `None` when no runtime foreign pick is active (normal boot / config-only autoload).
+///
+/// When the human-driven "Load Save Profiles" path activates a foreign slot,
+/// `system_quit_save_swap_prepare_selected_slot` overwrites the ACTIVE `%APPDATA%/EldenRing/<steamid>/
+/// ER0000.{sl2,co2}` file (`st.path` -- the game-owned default, NEVER the read-only picked source or
+/// the configured `save_file`) with the picked slot's candidate bytes and sets `committed = true`. The
+/// own-load feed uses this to read the COMMITTED file instead of the configured `save_file` for that
+/// pick's load (drive.rs `own_load_read_sl2_bytes`): a runtime pick overrides the config default for
+/// exactly one load. Returns `None` unless the commit actually landed AND the path/candidate are still
+/// present, so a normal boot autoload (no pick) still reads the configured `save_file` unchanged.
+pub(crate) fn system_quit_committed_foreign_save_path() -> Option<String> {
+    let st = system_quit_save_swap_lock();
+    if st.committed && !st.path.is_empty() && !st.candidate_bytes.is_empty() {
+        Some(st.path.clone())
+    } else {
+        None
+    }
+}
+
 /// Patch the loaded slot's profile offscreen RT size BEFORE any post-Continue profile renderer is
 /// constructed. The constructor snapshots this table; patching after `PROFILE_TABLE_BUILDER_RVA` runs is
 /// too late and produces the 256x256 loading-screen portrait (Bug A). Returns true only when the loaded
@@ -403,7 +423,12 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     // RE-ENGAGE on every loading screen (subsequent-character-load fix): pause the build pipeline ONLY
     // during active gameplay, not permanently after the first world -- so a System Quit character switch's
     // loading screen re-builds + re-captures the NEW character's portrait.
-    if unsafe { portrait_pipeline_idle_in_gameplay(base) } {
+    // NATIVE PORTRAIT (2026-07-15): but keep running while the native NOW-LOADING screen is actively
+    // rendering, even after PlayerIns resolves -- IN_WORLD_REACHED flips ~1.7s early on a fast load, so
+    // portrait_pipeline_idle_in_gameplay went true mid-load and this tick returned before building the table
+    // (run32: force_profile_render_tick never reached maybe_build). The model must build + render DURING the
+    // loading screen we own, so gate the idle return on the native loading screen being gone.
+    if unsafe { portrait_pipeline_idle_in_gameplay(base) } && !native_loading_screen_active() {
         return;
     }
     let valid = |p: usize| p != 0 && p != null;

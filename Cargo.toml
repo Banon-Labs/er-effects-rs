@@ -1,25 +1,25 @@
 [workspace]
 members = [
-    "crates/er-effects-rs",
-    "crates/effects-data",
-    "crates/er-gfx",
-    "crates/er-safe-input",
-    "crates/er-save-loader",
-    "crates/er-tpf",
-    "crates/erpx-rs",
-    "crates/soulsformats",
-    # Host-only shader subcrates (naga/wgpu/bevy). NOT depended on by the root
-    # `er-effects-rs` cdylib, so `cargo xwin check` (which selects only the root
-    # package) never cross-compiles them into the game DLL; built only when
-    # targeted explicitly (`cargo check -p er-shaderkit ...`).
-    "crates/er-shaderkit",
-    "crates/er-flver",
-    "crates/er-objectkit",
-    "tools/er-param-inspect",
-    "tools/bevy-shader-lab",
-    "tools/er-shaderlab",
-    "tools/er-shader-viewer",
+  "crates/er-effects-rs",
+  "crates/er-reload-trace-dll",
+  "crates/effects-data",
+  "crates/er-gfx",
+  "crates/er-safe-input",
+  "crates/er-save-loader",
+  "crates/er-tpf",
+  "crates/erpx-rs",
+  "crates/soulsformats",
+  # Host-only shader subcrates (naga/wgpu/bevy). NOT depended on by the root
+  # `er-effects-rs` cdylib, so `cargo xwin check` (which selects only the root
+  # package) never cross-compiles them into the game DLL; built only when
+  # targeted explicitly (`cargo check -p er-shaderkit ...`).
+  "crates/er-shaderkit",
+  "crates/er-flver",
+  "crates/er-objectkit",
+  "tools/er-param-inspect",
+  "tools/bevy-shader-lab",
+  "tools/er-shaderlab",
+  "tools/er-shader-viewer",
 ]
 resolver = "2"
 default-members = ["crates/er-effects-rs"]
-

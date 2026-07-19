@@ -22,8 +22,8 @@ use windows::Win32::Graphics::Direct3D12::{
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
-    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_FORMAT_UNKNOWN,
-    DXGI_SAMPLE_DESC,
+    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_FORMAT_R10G10B10A2_UNORM,
+    DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain3;
 use windows::Win32::Graphics::Imaging::{
@@ -41,6 +41,48 @@ use super::*;
 
 /// Bytes per RGBA8 texel.
 const RGBA8_BPP: usize = 4;
+
+/// Pack one straight (non-premultiplied) RGBA8 texel into a little-endian `DXGI_FORMAT_R10G10B10A2_UNORM`
+/// u32: bits 0-9 = R, 10-19 = G, 20-29 = B, 30-31 = A. Widens each 8-bit channel to 10 bits by
+/// `v*1023/255` (rounded) so full-scale white stays full-scale; alpha 8->2 bits by `a*3/255`. This is a
+/// plain UNORM widen -- it does NOT apply scRGB/PQ, so on an HDR display the result reads slightly dim
+/// but is fully VISIBLE (the accepted first step for the native-Windows 10-bit backbuffer; the composite
+/// paths that render through a GPU PSO don't need this because the ROP float-converts to the RTV format).
+#[inline]
+pub(crate) fn pack_rgba8_to_r10g10b10a2(r: u8, g: u8, b: u8, a: u8) -> u32 {
+    let w10 = |v: u8| ((v as u32 * 1023 + 127) / 255) & 0x3ff;
+    let a2 = ((a as u32 * 3 + 127) / 255) & 0x3;
+    w10(r) | (w10(g) << 10) | (w10(b) << 20) | (a2 << 30)
+}
+
+/// How a straight RGBA8 texel must be written into a swapchain backbuffer of a given format, for the
+/// CPU raw-copy composite paths (boot bar, effect-selector HUD). `Straight`/`SwapRb` are 8-bit byte
+/// copies; `Pack10` packs into `R10G10B10A2` (native-Windows HDR/10-bit swapchain). GPU-PSO composite
+/// paths do NOT use this -- the ROP float-converts to the RTV format for them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BackbufferEncoding {
+    /// 8-bit RGBA: copy the tight bytes unchanged.
+    Straight,
+    /// 8-bit BGRA: copy then swap R/B per texel.
+    SwapRb,
+    /// 10-bit R10G10B10A2: pack each texel via `pack_rgba8_to_r10g10b10a2`.
+    Pack10,
+}
+
+/// Classify a backbuffer format for the CPU raw-copy composite, or `None` if we cannot write it safely.
+pub(crate) fn boot_view_backbuffer_encoding(format: DXGI_FORMAT) -> Option<BackbufferEncoding> {
+    match format {
+        DXGI_FORMAT_B8G8R8A8_UNORM | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB => {
+            Some(BackbufferEncoding::SwapRb)
+        }
+        DXGI_FORMAT_R8G8B8A8_UNORM | DXGI_FORMAT_R8G8B8A8_UNORM_SRGB => {
+            Some(BackbufferEncoding::Straight)
+        }
+        DXGI_FORMAT_R10G10B10A2_UNORM => Some(BackbufferEncoding::Pack10),
+        _ => None,
+    }
+}
+
 /// Reject absurd render-target dimensions (corrupt/unexpected desc -> bail).
 const MAX_RT_DIM: u32 = 16384;
 /// Bounded fence wait: a small offscreen-RT copy completes in well under this, and a finite wait
@@ -166,18 +208,13 @@ unsafe fn try_texture2d(ptr: usize) -> Option<(ID3D12Resource, u64)> {
     let unk = unsafe { IUnknown::from_raw_borrowed(&raw) }?;
     let res: ID3D12Resource = match unk.cast() {
         Ok(r) => r,
-        Err(_) => {
-            append_autoload_debug(format_args!(
-                "portrait-scan: cand 0x{ptr:x} QI(ID3D12Resource) failed (d3d obj but not a resource)"
-            ));
-            return None;
-        }
+        // Per-candidate "QI failed" / "IS resource" logs removed 2026-07-18: they fired for EVERY
+        // scanned d3d object (~1.4M lines = 90% of the debug log), crowding out the load/freeze state
+        // the user needs to read. The scan's useful result is still logged by the FOUND / no-TEXTURE2D
+        // summary lines below.
+        Err(_) => return None,
     };
     let desc = unsafe { res.GetDesc() };
-    append_autoload_debug(format_args!(
-        "portrait-scan: cand 0x{ptr:x} IS resource dim={} w={} h={} fmt={}",
-        desc.Dimension.0, desc.Width, desc.Height, desc.Format.0
-    ));
     // COLOR ONLY: the offscreen has a color render target AND a same-size depth-stencil sibling
     // (observed: 256x256 fmt=28 color next to 256x256 fmt=19 R32G8X24 depth). Accept only the 8bpp
     // RGBA/BGRA formats our de-swizzle handles; reject depth/typeless-depth so "largest" can't pick

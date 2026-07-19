@@ -22,4 +22,6 @@ include!("gpu_readback/depth_mask_upload.rs");
 include!("gpu_readback/overlay_composite.rs");
 include!("gpu_readback/boot_progress.rs");
 include!("gpu_readback/save_picker_overlay.rs");
+include!("gpu_readback/stats_overlay.rs");
+include!("gpu_readback/portrait_overlay.rs");
 include!("gpu_readback/portrait_worker.rs");

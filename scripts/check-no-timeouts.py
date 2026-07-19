@@ -7,6 +7,7 @@ import ast
 import json
 import re
 import shlex
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +26,12 @@ IGNORED_DIRECTORIES = {
 IGNORED_FILES = {
     Path("scripts/check-no-timeouts.py"),
     Path("scripts/test-no-timeouts.py"),
+    # Host-side VM GUI-automation tools -- NOT runtime probes. Keystroke pacing and
+    # display-wake waits are inherent to driving a Windows guest via `virsh send-key`
+    # / `virsh screenshot`; there is no readiness primitive for "the guest input queue
+    # drained" or "the display woke". The no-sleep rule targets runtime probes.
+    Path("scripts/vm-sendkeys.py"),
+    Path("scripts/vanilla-control-probe.py"),
 }
 SOURCE_SUFFIXES = {
     ".rs",
@@ -41,6 +48,9 @@ SOURCE_SUFFIXES = {
     ".yaml",
 }
 MAX_TIMEOUT_SECONDS = 30.0
+# Bounded safety cap for the `git ls-files` enumeration below (literal-constant, <= the hard cap so this
+# checker satisfies its own subprocess-timeout rule).
+_GIT_LS_FILES_TIMEOUT_SECONDS = 10.0
 SHELL_DURATION_UNITS = {
     "": 1.0,
     "s": 1.0,
@@ -172,7 +182,30 @@ def strip_line_for_suffix(line: str, suffix: str) -> str:
     return line
 
 
+def tracked_relative_paths() -> set[Path] | None:
+    """Repo-relative paths git tracks (index + committed), or None when git is unavailable.
+
+    Untracked scratch files (git status ??) are -- exactly like the gitignored `.worktrees` sandboxes
+    exempted above -- not part of the committed tree, so their sleep/timeout state must not gate a commit
+    of tracked files. `git ls-files` reports the index, so a staged-but-uncommitted (about-to-be-committed)
+    file IS still gated; only pure `??` scratch is skipped. If git is unavailable, return None so the
+    caller fails OPEN and scans everything -- the gate must never silently disable itself.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "ls-files", "-z"],
+            capture_output=True,
+            check=True,
+            timeout=_GIT_LS_FILES_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    names = result.stdout.decode("utf-8", errors="strict").split("\0")
+    return {Path(name) for name in names if name}
+
+
 def source_files() -> list[Path]:
+    tracked = tracked_relative_paths()
     paths: list[Path] = []
     for path in REPO_ROOT.rglob("*"):
         if not path.is_file():
@@ -181,6 +214,9 @@ def source_files() -> list[Path]:
         if relative in IGNORED_FILES:
             continue
         if any(part in IGNORED_DIRECTORIES for part in relative.parts):
+            continue
+        # Skip untracked scratch: not part of the committed tree, so it must not gate a tracked commit.
+        if tracked is not None and relative not in tracked:
             continue
         if path.suffix in SOURCE_SUFFIXES:
             paths.append(path)

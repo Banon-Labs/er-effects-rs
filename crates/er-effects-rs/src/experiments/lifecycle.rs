@@ -5,7 +5,200 @@
 
 use super::*;
 
+// === SWITCH-HARNESS DISCOVERY (agent-owned; user authorized self-driving 2026-07-15) ===
+// Highest-value feasibility probe for the autonomous consecutive-switch harness: does injecting the
+// menu-open key via the DInput keyboard BLOCK actually open the in-game menu on NATIVE WINDOWS? Under
+// Proton the game reads DInput keyboard (where this injection works); native Windows may use raw input,
+// in which case injection never reaches the menu and the harness needs a different vehicle (PostMessage).
+// Enabled ONLY by ER_EFFECTS_SWITCH_HARNESS_DISCOVERY=1 or a marker file next to the game exe; OFF for
+// product. Once in-world+stable it blocks the keyboard, pulses DIK_ESCAPE once, and (via run_post) logs
+// every MenuWindowJob::Run filename that appears -- so the log reveals whether a menu opened and its
+// structure. Then it unblocks. No effect on the default/product path.
+const HARNESS_DISC_DIK_ESCAPE: u8 = 0x01;
+static HARNESS_DISC_STABLE: AtomicUsize = AtomicUsize::new(0);
+static HARNESS_DISC_PHASE: AtomicUsize = AtomicUsize::new(0); // 0 wait,1 press,2 release,3 observe,4 done
+static HARNESS_DISC_PHASE_FRAME: AtomicUsize = AtomicUsize::new(0);
+static HARNESS_DISC_SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+// ENV-GATE RATIONALE: ER_EFFECTS_SWITCH_HARNESS_DISCOVERY=1 arms the agent-owned switch-harness
+// feasibility probe (once in-world+stable it blocks the keyboard, pulses DIK_ESCAPE once to try to open
+// the in-game menu, logs every MenuWindowJob::Run filename, then unblocks). OFF for product; no save
+// write, no mount change on the default path.
+pub(crate) fn switch_harness_discovery_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_SWITCH_HARNESS_DISCOVERY").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("er-effects-switch-harness-discovery.txt")
+        .exists()
+}
+
+/// Called from run_post for every MenuWindowJob::Run filename during discovery: log each distinct
+/// name once so the menu structure is revealed without per-frame spam.
+pub(crate) fn switch_harness_note_menu_filename(name: &str) {
+    if name.is_empty() {
+        return;
+    }
+    if let Ok(mut seen) = HARNESS_DISC_SEEN.lock() {
+        if !seen.iter().any(|n| n == name) {
+            seen.push(name.to_string());
+            append_autoload_debug(format_args!(
+                "switch-harness-disc: MenuWindowJob::Run filename seen = '{name}' (distinct #{})",
+                seen.len()
+            ));
+        }
+    }
+}
+
+pub(crate) unsafe fn switch_harness_discovery_tick() {
+    if !switch_harness_discovery_enabled() {
+        return;
+    }
+    let phase = HARNESS_DISC_PHASE.load(Ordering::SeqCst);
+    if phase == 4 {
+        return;
+    }
+    let player_present = unsafe { PlayerIns::local_player_mut() }.is_ok();
+    if !player_present {
+        HARNESS_DISC_STABLE.store(0, Ordering::SeqCst);
+        return;
+    }
+    let ib = InputBlocker::get_instance();
+    if phase == 0 {
+        let stable = HARNESS_DISC_STABLE.fetch_add(1, Ordering::SeqCst) + 1;
+        if stable < 180 {
+            return; // ~3s settled in-world before touching input
+        }
+        let _ = unsafe { ib.install_hooks() };
+        ib.block(InputFlags::Keyboard);
+        HARNESS_DISC_PHASE.store(1, Ordering::SeqCst);
+        HARNESS_DISC_PHASE_FRAME.store(0, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "switch-harness-disc: in-world+stable -> keyboard BLOCKED, pulsing DIK_ESCAPE (0x01) to test whether DInput injection opens the native-Windows menu"
+        ));
+        return;
+    }
+    let pf = HARNESS_DISC_PHASE_FRAME.fetch_add(1, Ordering::SeqCst);
+    if phase == 1 {
+        ib.set_injected_key(HARNESS_DISC_DIK_ESCAPE);
+        if pf >= 4 {
+            HARNESS_DISC_PHASE.store(2, Ordering::SeqCst);
+            HARNESS_DISC_PHASE_FRAME.store(0, Ordering::SeqCst);
+        }
+    } else if phase == 2 {
+        ib.set_injected_key(0);
+        if pf >= 10 {
+            HARNESS_DISC_PHASE.store(3, Ordering::SeqCst);
+            HARNESS_DISC_PHASE_FRAME.store(0, Ordering::SeqCst);
+        }
+    } else if phase == 3 {
+        if pf >= 150 {
+            ib.set_injected_key(0);
+            ib.unblock(InputFlags::Keyboard);
+            HARNESS_DISC_PHASE.store(4, Ordering::SeqCst);
+            let count = HARNESS_DISC_SEEN.lock().map(|s| s.len()).unwrap_or(0);
+            append_autoload_debug(format_args!(
+                "switch-harness-disc: observation done -> keyboard UNBLOCKED. distinct MenuWindowJob filenames seen after ESC = {count} (if a game menu like 02_000_IngameTop appeared, DInput injection WORKS on native Windows)"
+            ));
+        }
+    }
+}
+
 pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
+    unsafe { switch_harness_discovery_tick() };
+    // PASSIVE CONTROLLER-INPUT TRACE (er-effects-input-trace.txt): record real pad edges +
+    // semaphore snapshots to er-effects-input-trace.jsonl for USER-DRIVEN runs. Recording only --
+    // never blocks, never fabricates; a marker/env-gated no-op by default.
+    input_trace_tick();
+    // NATIVE-WINDOWS LOADING OVERLAY ownership cycle (bd er-effects-rs-8jz): our separate-window overlay
+    // OWNS the screen (SHOW) whenever the local player is absent -- boot, title, and EVERY loading screen
+    // (fast-travel, area transitions, death re-load) -- and RELEASES it (HIDE) once the world is loaded and
+    // the player exists. This re-owns automatically on each subsequent load. Cheap per-frame check; the
+    // overlay thread reads the flag and toggles ShowWindow. No-op off native Windows.
+    if is_native_windows() {
+        // OWN THE WHOLE LOADING SURFACE (user 2026-07-15): the overlay must keep covering the screen through
+        // EVERY loading sequence -- boot, title, and the game's OWN native loading screen -- and release only
+        // in settled gameplay. Gating on !player_present alone released too early: PlayerIns becomes valid
+        // MID-LOAD (before the world finishes streaming), so the overlay hid and the game's native loading
+        // screen (with its own bar) showed through -- the exact regression the user reported. Reuse the same
+        // gameplay-idle predicate the portrait pipeline uses (portrait_pipeline_idle_in_gameplay: in-world
+        // AND load_done AND no cover up, or the native ProfileSelect menu is open), which stays "not idle"
+        // through boot/title/EVERY loading screen and only goes idle in real gameplay. Always own the screen
+        // while our own startup save picker is up (it needs the overlay regardless of load state).
+        // OWN UNTIL THE NATIVE SCREEN IS ACTUALLY GONE (user 2026-07-15 "if I see the game's native loading
+        // screen, we aren't owning it long enough"). portrait_pipeline_idle_in_gameplay (world-reached +
+        // load-done + no cover) can flip true while the native NOW-LOADING screen is STILL VISUALLY UP on a
+        // fast load, so the overlay released and the native screen flashed through. The native loading screen
+        // is rendering iff CS::LoadingScreen::Update is still ticking (LOADING_SCREEN_UPDATE_HITS increments
+        // each of its frames; it stops the moment the screen is destroyed). Keep owning while it ticks, plus a
+        // short grace to cover its fade-out, so the native screen is never exposed; then release to gameplay.
+        let native_loadscreen_up = {
+            static LAST_LOADSCREEN_HITS: AtomicUsize = AtomicUsize::new(0);
+            static LOADSCREEN_GRACE: AtomicUsize = AtomicUsize::new(0);
+            const LOADSCREEN_GRACE_FRAMES: usize = 12;
+            let hits = LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst);
+            if LAST_LOADSCREEN_HITS.swap(hits, Ordering::SeqCst) != hits {
+                LOADSCREEN_GRACE.store(LOADSCREEN_GRACE_FRAMES, Ordering::SeqCst);
+            }
+            let g = LOADSCREEN_GRACE.load(Ordering::SeqCst);
+            if g > 0 {
+                LOADSCREEN_GRACE.store(g - 1, Ordering::SeqCst);
+                true
+            } else {
+                false
+            }
+        };
+        // While the in-world System->Quit ProfileSelect menu is up, do NOT let the pipeline-based term show
+        // the overlay -- the re-engaging portrait pipeline would draw our stats/portrait over the live menu
+        // (the "ghosting" user-reported 2026-07-15). The actual profile-switch world-load is still covered by
+        // `native_loadscreen_up` once its loading screen ticks, so nothing is exposed.
+        let profile_menu_up = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) != 0
+            || SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.load(Ordering::SeqCst) != 0;
+        // OWN THE SCREEN THE INSTANT A SWITCH IS ARMED (user 2026-07-16): from the slot-click (phase ->
+        // CONFIRMED) until the load completes (phase -> IDLE at repro_guards.rs:1286), cover the screen with
+        // our loading overlay. Without this, the ~5s world-teardown BEFORE the native loading screen starts
+        // ticking left a frozen blank window (Windows said "not responding") so the user couldn't tell the
+        // load was working. Phase is IDLE while ProfileSelect is still interactive (the arm sets CONFIRMED
+        // only ON the pick), so this never covers the live menu.
+        let switch_active =
+            SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE;
+        let owns_surface = save_picker_overlay_active()
+            || native_loadscreen_up
+            || switch_active
+            || (!profile_menu_up
+                && match game_module_base() {
+                    Ok(base) => !unsafe { portrait_pipeline_idle_in_gameplay(base) },
+                    Err(_) => true,
+                });
+        NATIVE_OVERLAY_SHOW.store(usize::from(owns_surface), Ordering::SeqCst);
+        // NATIVE-WINDOWS SAVE PICKER input (bd er-effects-rs-8wt): the picker LIST already renders
+        // via the overlay's shared boot_view_render_frame (overlay_save_picker_onto), but the Wine
+        // build drives the picker's input from the D3D12 Present hook -- which never installs on native
+        // Windows (composite suppressed on the game device). Drive it here on the game task instead:
+        //   * ensure_save_picker_keyboard_hook() installs the GLOBAL WH_KEYBOARD_LL hook on its OWN
+        //     message-pumped, time-critical thread. That hook is focus-independent, so keyboard reaches
+        //     the picker even though the overlay window is WS_EX_NOACTIVATE and the game keeps focus.
+        //   * save_picker_overlay_input_tick() arms the picker when a no-save boot is pending, polls the
+        //     gamepad (XInput), and disarms once the pick releases the hold. The keyboard poll inside it
+        //     self-skips while the LL hook owns keyboard, so there is no double-apply.
+        // Both self-gate on missing_save_selection_pending(), so this is a no-op on a normal (save
+        // found) boot. Gated to native Windows so the Wine Present-hook path is never double-polled
+        // (the gamepad edge-detection state is shared). catch_unwind matches the Present-hook call site.
+        let _ = std::panic::catch_unwind(ensure_save_picker_keyboard_hook);
+        let _ = std::panic::catch_unwind(save_picker_overlay_input_tick);
+        // Loading-screen character STATS (bd er-effects-rs-rbc): build the game-menu-font stats lines on
+        // the GAME THREAD (safe guarded reads of ProfileSummary/PlayerGameData) into STATS_TEXT_CACHE, so
+        // the isolated overlay's render thread can re-raster them at screen scale and composite them at the
+        // expected loading-screen location (5%/60%, game MenuFont). Content-keyed + self-gates on a captured
+        // font + a readable character, so it is a cheap no-op until a character context exists, and updates
+        // as early as the data is available -- before the game's own loading screen. On Wine this is built
+        // from save_swap_profile_table for the in-swapchain composite; on native Windows that composite is
+        // suppressed, so drive the same build here.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            maybe_build_stats_text()
+        }));
+    }
     // Hardware write-watchpoint on GameMan+0xc30: (re)arm each frame until
     // the save-mount write is caught, so the VEH logs the exact writer. Runs
     // HARD input block (DInput keyboard+mouse + XInput gamepad), driven from the
@@ -81,13 +274,24 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // the original and returns its value), so installing early is harmless and never alters
     // load behavior. It answers: is WorldBlockRes::Update ticked at all on our path, and do
     // any blocks' phase ([+0x35]) / FD4 gate ([+0x2f]) advance.
-    if own_load_enabled()
-        || own_load_continue_enabled()
-        || own_load_pump_enabled()
-        || golden_observe_enabled()
-    {
-        install_wbr_update_hook();
-    }
+    // Installed UNCONDITIONALLY now (was diagnostic-gated): pure-read pass-through, and it is the only
+    // way to ground WHY WorldResWait stalls on the product save_redirect path -- it tracks each
+    // WorldBlockRes' phase ([+0x35]) 2->0xa (resident) + FD4 gate ([+0x2f]). Runtime-grounded 2026-07-18:
+    // the boot load stalls at WorldResWait (mms 3) with a VALID BlockId + CSRemo idle, so the block-res
+    // FD4 file-load is the suspect; this observer surfaces oracle_own_load_wbr_max_phase in product runs.
+    let _ = (
+        own_load_enabled(),
+        own_load_continue_enabled(),
+        own_load_pump_enabled(),
+        golden_observe_enabled(),
+    );
+    install_wbr_update_hook();
+    // PRODUCT DEFAULT (no env gate): install the RequestMoveMap BlockId fix detour once. It is a pure
+    // passthrough unless ARMED by our own load trigger, so it never affects normal gameplay map
+    // transitions; when armed it substitutes a valid saved-map BlockId so the game builds the world-res
+    // loadlist path and the load completes + renders instead of stalling at WorldResWait (bd
+    // er-effects-rs-um9g / render-handoff-freeze-worldreswait-loadlist-root-2026-07-18).
+    install_request_move_map_fix_hook();
     if (own_load_enabled() && OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst))
         || golden_observe_enabled()
     {
@@ -173,6 +377,11 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
             // timestamp so we learn exactly when BeginTitle(3) fires and whether the
             // 05_000_Title build has headroom to start earlier. Save-safe pass-through.
             unsafe { install_title_setstate_trace_hook(base) };
+            // Failed same-session reload guard experiments are explicit opt-in only; canonical
+            // semaphore-diff runs must remain observational.
+            if movemapstep_step_move_map_gate_hold_enabled() {
+                unsafe { install_movemapstep_step_move_map_gate_hook(base) };
+            }
         }
     }
     // OFFLINE connection-state lever (milestone-3 fix): force GameMan+0xBC8/0xBC9 = 0 each
@@ -405,6 +614,14 @@ pub(crate) fn install_title_visual_startup_hooks() {
                 .spawn(install_tip_suppression_hook);
         });
     }
+    // er-effects-rs-y22i: ALWAYS-ON Scaleform descriptor-heap null guard (native-Windows crash
+    // 0xec95d1). NOT feature-gated -- it is a crash guard, a transparent passthrough when the null
+    // never occurs. Installed at attach so it is live before the first loading-screen composite.
+    START_SCALEFORM_GUARD.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("er-effects-scaleform-guard".to_owned())
+            .spawn(install_scaleform_descriptor_guard);
+    });
     // D3D12 PRESENT OVERLAY: the deterministic display path -- draw the captured portrait directly onto the
     // swapchain backbuffer when the now-loading screen is up (the in-pipeline forge/Scaleform routes cannot
     // drive the displayed image). Install only on the portrait path (diagnostic), via the dummy-swapchain
@@ -415,6 +632,13 @@ pub(crate) fn install_title_visual_startup_hooks() {
                 .name("er-effects-present-overlay".to_owned())
                 .spawn(install_present_overlay_hook);
         });
+    }
+    // NATIVE-WINDOWS LOADING OVERLAY (bd er-effects-rs-8jz): a SEPARATE topmost window with our OWN D3D12
+    // device/swapchain that OWNS the screen during boot + every loading screen. On native Windows we
+    // cannot composite on the game's shared device (it crashes the strict driver), so this is the only
+    // safe display path there. Wine/vkd3d keeps the in-swapchain composite above. Install is idempotent.
+    if is_native_windows() {
+        install_native_overlay();
     }
 }
 

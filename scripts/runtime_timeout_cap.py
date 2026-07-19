@@ -14,12 +14,18 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_TIMEOUT_CAP_PATH = REPO_ROOT / ".auto" / "runtime_timeout_cap_seconds"
 
-# One minute is the hard truth for the runtime-probe wall-clock cap. The fallback (used if the
-# canonical file is missing/unreadable) and the absolute ceiling (a clamp against a corrupted/tampered
-# file) are pinned to that same value so no other number can leak in. To change the cap, change
-# .auto/runtime_timeout_cap_seconds AND these.
-RUNTIME_TIMEOUT_CAP_FALLBACK_SECONDS = 60
-RUNTIME_TIMEOUT_CAP_CEILING_SECONDS = 60
+# Three minutes is the hard backstop for the GAME runtime probe -- NOT a wall-clock target. It is
+# the idle/stall ceiling: the primary teardown is semaphore-driven (a run tears down a small delay
+# after the last in-memory oracle the specific test cares about, so most runs finish far under this),
+# and this value only bounds a run that makes no semaphore progress (a hang). It governs the GAME
+# path only; non-game/agent-shell ops stay hard-capped at 30s by scripts/check-no-timeouts.py
+# (MAX_TIMEOUT_SECONDS), a separate, tighter limit -- an unbounded Ghidra query still fails fast.
+# The fallback (canonical file missing/unreadable) and the absolute ceiling (clamp against a
+# corrupted/tampered file) are pinned to the same value so no other number can leak in. To change
+# it, change .auto/runtime_timeout_cap_seconds, these two, AND the rego literal, then re-run
+# scripts/check-runtime-probe-contract.py. See bd runtime-teardown-semaphore-progress-watchdog-2026-07-17.
+RUNTIME_TIMEOUT_CAP_FALLBACK_SECONDS = 180
+RUNTIME_TIMEOUT_CAP_CEILING_SECONDS = 180
 
 
 def runtime_timeout_cap_seconds() -> int:

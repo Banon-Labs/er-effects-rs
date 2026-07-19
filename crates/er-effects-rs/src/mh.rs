@@ -3,6 +3,222 @@
 
 use std::ffi::c_void;
 use std::ptr::null_mut;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+// ============================================================================
+// HOOK UNION (2026-07-16, user-directed). MinHook binds ONE detour per address,
+// so two features hooking the same game function silently drop one -- the native-
+// Windows menu race. This unions them: the FIRST feature to hook an address installs
+// a single dispatcher detour (from a fixed pool, so no runtime codegen) that owns the
+// real trampoline; every feature's handler is chained by pointing its existing `orig`
+// slot at the NEXT handler, with the LAST handler's `orig` = the real game trampoline.
+// A handler that calls its orig now calls the next handler in the chain (or the game),
+// so existing handlers work unchanged and NO handler is ever silently dropped.
+//
+// Constraint: the shared signature is `extern "system" fn(usize,usize,usize,usize)->usize`
+// -- correct for the integer/pointer <=4-arg game functions we contend on (menu/dialog
+// Run/activate/build). A handler using fewer args just ignores the extras; unused
+// register args are harmless. Not for float-arg or >4-stack-arg targets.
+// ============================================================================
+pub type UnionFn = unsafe extern "system" fn(usize, usize, usize, usize) -> usize;
+// 96 slots: this DLL's own union targets PLUS a companion DLL's (the log-only
+// er-reload-trace-dll routes its ~40 native load/menu hooks through THIS DLL's union via
+// the `er_effects_union_register` export, so a single MinHook instance owns every shared
+// address instead of two instances corrupting each other's trampolines). One slot per
+// unique game address; chained handlers on the same address share a slot.
+const MAX_UNION_SLOTS: usize = 96;
+
+struct UnionEntry {
+    target: usize,
+    trampoline: usize,
+    /// handler fn ptr + its caller-owned `orig` slot, in chain order.
+    handlers: Vec<(usize, &'static AtomicUsize)>,
+}
+static UNIONS: Mutex<Vec<UnionEntry>> = Mutex::new(Vec::new());
+/// Lock-free head-handler per slot, read on every dispatch (no mutex in the hot path).
+#[allow(clippy::declare_interior_mutable_const)]
+static UNION_HEADS: [AtomicUsize; MAX_UNION_SLOTS] =
+    [const { AtomicUsize::new(0) }; MAX_UNION_SLOTS];
+
+unsafe extern "system" fn union_dispatch<const N: usize>(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let head = UNION_HEADS[N].load(Ordering::Acquire);
+    if head == 0 {
+        return 0;
+    }
+    let f: UnionFn = unsafe { std::mem::transmute::<usize, UnionFn>(head) };
+    unsafe { f(a, b, c, d) }
+}
+
+macro_rules! union_dispatchers {
+    ($($n:literal)*) => { [ $( union_dispatch::<$n> as UnionFn ),* ] };
+}
+static DISPATCHERS: [UnionFn; MAX_UNION_SLOTS] = union_dispatchers!(
+    0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23
+    24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47
+    48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71
+    72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95
+);
+
+/// Register `handler` on `target`, chaining through `orig_slot`. First registrant installs
+/// the dispatcher + owns the trampoline; later ones append and no handler is ever dropped.
+///
+/// # Safety
+/// `handler` must be a valid `UnionFn` matching the target's ABI; `orig_slot` must be the
+/// static the handler reads to call its original.
+pub unsafe fn register_union_hook(
+    target: usize,
+    handler: UnionFn,
+    orig_slot: &'static AtomicUsize,
+) -> Result<(), MH_STATUS> {
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        s => return Err(s),
+    }
+    let handler_addr = handler as usize;
+    let mut unions = UNIONS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(entry) = unions.iter_mut().find(|e| e.target == target) {
+        // already skip a duplicate registration of the SAME handler (idempotent retries).
+        if entry.handlers.iter().any(|(h, _)| *h == handler_addr) {
+            return Ok(());
+        }
+        if let Some((_, prev_orig)) = entry.handlers.last() {
+            prev_orig.store(handler_addr, Ordering::Release); // prev -> new
+        }
+        orig_slot.store(entry.trampoline, Ordering::Release); // new -> game orig
+        entry.handlers.push((handler_addr, orig_slot));
+        crate::telemetry::append_autoload_debug(format_args!(
+            "HOOK UNION: game addr 0x{target:x} now chains {} handlers (added {})",
+            entry.handlers.len(),
+            as_dll_off(handler_addr)
+        ));
+        return Ok(());
+    }
+    let slot = unions.len();
+    if slot >= MAX_UNION_SLOTS {
+        return Err(MH_STATUS::MH_ERROR_MEMORY_ALLOC);
+    }
+    let mut trampoline = null_mut();
+    unsafe {
+        MH_CreateHook(
+            target as *mut c_void,
+            DISPATCHERS[slot] as *mut c_void,
+            &mut trampoline,
+        )
+    }
+    .ok()?;
+    match unsafe { MH_EnableHook(target as *mut c_void) } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ENABLED => {}
+        s => return Err(s),
+    }
+    UNION_HEADS[slot].store(handler_addr, Ordering::Release);
+    orig_slot.store(trampoline as usize, Ordering::Release); // sole handler -> game orig
+    unions.push(UnionEntry {
+        target,
+        trampoline: trampoline as usize,
+        handlers: vec![(handler_addr, orig_slot)],
+    });
+    Ok(())
+}
+
+/// C-ABI export (2026-07-18, user-directed cross-DLL union). A COMPANION DLL loaded into the same
+/// process (the log-only `er-reload-trace-dll`) hooks ~40 native load/menu functions that OVERLAP
+/// this DLL's own hooks (e.g. `0xb0e180` continue-confirm, `0xb0d960` title-SetState). If the
+/// companion drove its OWN MinHook instance, two instances patching the same address would corrupt
+/// each other's trampolines (the exact silent race the internal union was built to fix, now across
+/// DLLs). So the companion calls THIS export instead: every shared address is owned by this DLL's
+/// single MinHook instance + union, and the companion's handler is CHAINED like any internal one.
+///
+/// `orig_slot_ptr` points at a `usize`-sized cell (an `AtomicUsize`) that lives in the COMPANION's
+/// image; the union stores the trampoline (or next chained handler) there for the companion handler
+/// to call. The companion image stays loaded for the process lifetime, so treating it as `'static`
+/// is sound. Returns `0` on success, `-1` for a null `orig_slot_ptr`, or the `MH_STATUS` code as a
+/// positive `i32` on MinHook failure.
+///
+/// # Safety
+/// `handler` must be a valid `UnionFn` matching `target`'s ABI (≤4 integer/pointer args); `target`
+/// must be a real code address in this process; `orig_slot_ptr` must point at a live, aligned
+/// `usize` cell that outlives every dispatch (a companion `'static`).
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn er_effects_union_register(
+    target: usize,
+    handler: UnionFn,
+    orig_slot_ptr: *mut usize,
+) -> i32 {
+    if orig_slot_ptr.is_null() {
+        return -1;
+    }
+    // AtomicUsize is a repr(transparent) wrapper over usize, so a *mut usize aliases it soundly.
+    let orig_slot: &'static AtomicUsize = unsafe { &*(orig_slot_ptr as *const AtomicUsize) };
+    match unsafe { register_union_hook(target, handler, orig_slot) } {
+        Ok(()) => 0,
+        Err(status) => status as i32,
+    }
+}
+
+/// Central hook registry (2026-07-16). Every MinHook detour creation records its TARGET game address
+/// here. MinHook binds only ONE detour per address: when a second feature hooks an address that is
+/// already claimed, MH_CreateHook returns MH_ERROR_ALREADY_CREATED and the loser's handler NEVER runs.
+/// Which detour wins depends on thread install order, so on native Windows it is a non-deterministic
+/// race (Wine's scheduler happens to be consistent, which is why it looks fine there). This registry
+/// turns that invisible race into an explicit LOGGED COLLISION at install time, naming the game offset
+/// and both detours -- so a contested address (the root of the menu flakiness) is visible immediately
+/// instead of surfacing as a flaky runtime bug. Idea + design credit: user, 2026-07-16.
+static HOOK_REGISTRY: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+
+/// Our DLL's load base, so detours can be reported as `dll+0xNNN` (identifiable against the map/disasm)
+/// instead of an absolute pointer that shifts every launch.
+fn dll_base() -> usize {
+    use std::sync::OnceLock;
+    static BASE: OnceLock<usize> = OnceLock::new();
+    *BASE.get_or_init(|| {
+        unsafe extern "system" {
+            fn GetModuleHandleExW(flags: u32, addr: *const c_void, module: *mut *mut c_void)
+            -> i32;
+        }
+        const FROM_ADDRESS: u32 = 0x4;
+        const UNCHANGED_REFCOUNT: u32 = 0x2;
+        let mut h: *mut c_void = null_mut();
+        let anchor = dll_base as *const c_void; // any address inside our DLL
+        if unsafe { GetModuleHandleExW(FROM_ADDRESS | UNCHANGED_REFCOUNT, anchor, &mut h) } != 0 {
+            h as usize
+        } else {
+            0
+        }
+    })
+}
+
+fn as_dll_off(p: usize) -> String {
+    let b = dll_base();
+    if b != 0 && p >= b {
+        format!("dll+0x{:x}", p - b)
+    } else {
+        format!("0x{p:x}")
+    }
+}
+
+fn registry_record(target: usize, detour: usize, create_status: MH_STATUS) {
+    if let Ok(mut reg) = HOOK_REGISTRY.lock() {
+        let prior: Vec<String> = reg
+            .iter()
+            .filter(|(t, _)| *t == target)
+            .map(|(_, d)| as_dll_off(*d))
+            .collect();
+        reg.push((target, detour));
+        if !prior.is_empty() || create_status == MH_STATUS::MH_ERROR_ALREADY_CREATED {
+            crate::telemetry::append_autoload_debug(format_args!(
+                "HOOK REGISTRY COLLISION: game addr 0x{target:x} already hooked by detour(s) [{}], NOW ALSO detour {} (MH_CreateHook={create_status:?}) -- only ONE binds, the loser's handler never fires (silent native-Windows race source)",
+                prior.join(", "),
+                as_dll_off(detour)
+            ));
+        }
+    }
+}
 
 #[allow(non_camel_case_types)]
 #[must_use]
@@ -67,7 +283,9 @@ impl MhHook {
     /// Installs native code detours; caller must ensure ABI and lifetime are valid.
     pub unsafe fn new(addr: *mut c_void, hook_impl: *mut c_void) -> Result<Self, MH_STATUS> {
         let mut trampoline = null_mut();
-        unsafe { MH_CreateHook(addr, hook_impl, &mut trampoline) }.ok_context("MH_CreateHook")?;
+        let status = unsafe { MH_CreateHook(addr, hook_impl, &mut trampoline) };
+        registry_record(addr as usize, hook_impl as usize, status);
+        status.ok_context("MH_CreateHook")?;
 
         Ok(Self {
             addr,

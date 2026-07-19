@@ -4,8 +4,8 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
-        Arc, Mutex, Once, OnceLock,
         atomic::{AtomicU64, AtomicUsize, Ordering},
+        Arc, Mutex, Once, OnceLock,
     },
     time::{Duration, Instant},
 };
@@ -13,7 +13,7 @@ use std::{
 use std::os::windows::ffi::OsStrExt as _;
 
 use crate::input_blocker::{InputBlocker, InputFlags};
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MhHook, MH_STATUS};
 use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
@@ -21,11 +21,12 @@ use eldenring::{
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
 use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
 use windows::{
+    core::{BOOL, PCSTR},
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
         System::{
             LibraryLoader::{GetModuleHandleA, GetProcAddress},
-            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
+            Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION},
             SystemServices::DLL_PROCESS_ATTACH,
             Threading::GetCurrentProcessId,
         },
@@ -34,7 +35,6 @@ use windows::{
             WM_KEYDOWN, WM_KEYUP,
         },
     },
-    core::{BOOL, PCSTR},
 };
 
 #[allow(unused_imports)]
@@ -107,8 +107,50 @@ pub(crate) fn native_profile_capture_enabled() -> bool {
 /// `user-pref-too-many-env-file-gates-default-on-product`): the loading-screen portrait is now product
 /// behavior, so it builds the model on every real autoload run without a staged flag. Master off:
 /// `autoload_disabled()`; telemetry-only/native-capture runs stay off; env/file remain force-on overrides.
+/// True on native Windows (NOT Wine/Proton). Wine's `ntdll` exports `wine_get_version`; native Windows
+/// never does. Cached. Used to disable the character-profile RENDER-DRIVE on native Windows, where
+/// driving the game's own offscreen model render mid-load crashes the strict D3D12 driver (bd
+/// er-effects-rs-n4x, 2026-07-15). vkd3d/Proton tolerates it, so the drive stays on there.
+pub(crate) fn is_native_windows() -> bool {
+    use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+    static CACHED: AtomicUsize = AtomicUsize::new(0); // 0=unknown, 1=native, 2=wine
+    match CACHED.load(Ordering::SeqCst) {
+        1 => return true,
+        2 => return false,
+        _ => {}
+    }
+    let is_wine = unsafe { GetModuleHandleW(windows::core::w!("ntdll.dll")) }
+        .ok()
+        .map(|h| unsafe { GetProcAddress(h, windows::core::s!("wine_get_version")) }.is_some())
+        .unwrap_or(false);
+    CACHED.store(if is_wine { 2 } else { 1 }, Ordering::SeqCst);
+    !is_wine
+}
+
+/// True when the operator force-DISABLED the native-Windows profile render-drive (env
+/// `ER_EFFECTS_ALLOW_NATIVE_PROFILE_DRIVE=0`). The drive is now DEFAULT-ON for native (see the gates below):
+/// the isolated overlay owns its own D3D12 device and the 8-frame settle gate keeps the crash-prone
+/// model-drive blocked, so the portrait pipeline is runtime-proven safe on native (2026-07-15, zero AVs
+/// across 7 boots, animated head captured + displayed). This env is now only a diagnostic force-OFF escape.
+// ENV-GATE RATIONALE: ER_EFFECTS_ALLOW_NATIVE_PROFILE_DRIVE=0 force-DISABLES the (now default-on) native
+// profile render-drive; it is a diagnostic escape hatch only and never writes a save or perturbs the mount.
+fn native_profile_drive_disabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_ALLOW_NATIVE_PROFILE_DRIVE").as_deref(),
+        Ok("0")
+    )
+}
+
+// ENV-GATE RATIONALE: ER_EFFECTS_FORCE_PROFILE_RENDER=1 force-ENABLES the profile portrait render-drive
+// even on telemetry-only/no-load save-override runs (where it is otherwise off); diagnostic force-ON
+// override only. Does not write a save; simply keeps the portrait render pipeline active for the probe.
 pub(crate) fn force_profile_render_enabled() -> bool {
     if autoload_disabled() || native_profile_capture_enabled() {
+        return false;
+    }
+    // Native Windows: DEFAULT-ON now (isolated overlay + settle gate make it safe; see
+    // native_profile_drive_disabled). Operator can still force-OFF with ER_EFFECTS_ALLOW_NATIVE_PROFILE_DRIVE=0.
+    if is_native_windows() && native_profile_drive_disabled() {
         return false;
     }
     !save_override_telemetry_only()
@@ -165,6 +207,9 @@ pub(crate) fn portrait_render_drive_enabled() -> bool {
     if autoload_disabled() || native_profile_capture_enabled() {
         return false;
     }
+    if is_native_windows() && native_profile_drive_disabled() {
+        return false;
+    }
     !save_override_telemetry_only()
         || matches!(
             std::env::var("ER_EFFECTS_PORTRAIT_RENDER_DRIVE").as_deref(),
@@ -191,6 +236,10 @@ pub(crate) fn portrait_lookat_enabled() -> bool {
     if autoload_disabled() || native_profile_capture_enabled() {
         return false;
     }
+    // NOTE: this gate ALSO controls the present-overlay/composite install, so it is NOT disabled on
+    // native Windows -- the composite infra must stay up. The render-DRIVE that crashes native Windows is
+    // gated off separately (force_profile_render_enabled / portrait_render_drive_enabled). With the drive
+    // off, the look-at pose writes have no built model to drive, so they are inert.
     !save_override_telemetry_only()
         || matches!(
             std::env::var("ER_EFFECTS_PORTRAIT_LOOKAT").as_deref(),
@@ -647,6 +696,50 @@ pub(crate) fn inject_nav_enabled() -> bool {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("er-effects-inject-nav.txt")
             .exists()
+}
+
+/// MOVEMENT-PROOF probe (`er-effects-prove-movement.txt`). When staged, authorizes the in-DLL
+/// can-move probe to inject a forward stick in-world AND forces XInput slot 0 "connected" so the game
+/// polls it (else, with no physical pad, the injected stick never lands). Proof-only / diagnostic.
+pub(crate) fn prove_movement_enabled() -> bool {
+    // Cached (0=unknown,1=on,2=off): read on the per-poll XInput path, and the control file is staged
+    // before launch, so a one-time stat is enough.
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static GATE: AtomicU8 = AtomicU8::new(0);
+    match GATE.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let on = game_directory_path()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("er-effects-prove-movement.txt")
+                .exists();
+            GATE.store(if on { 1 } else { 2 }, Ordering::Relaxed);
+            on
+        }
+    }
+}
+
+/// AUTONOMOUS-PROOF FOREGROUND (`er-effects-probe-foreground.txt`). Gameplay MOVEMENT input is only
+/// processed while the ER window is FOCUSED (stay-active/DLUID+0x88d covers menus, not locomotion). For
+/// an unattended proof (user away, ER can own the foreground) this authorizes the can-move probe to
+/// force ER foreground while injecting so the walk actually registers. OFF by default so it NEVER
+/// steals focus in a user-present session. Cached.
+pub(crate) fn probe_foreground_enabled() -> bool {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static GATE: AtomicU8 = AtomicU8::new(0);
+    match GATE.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let on = game_directory_path()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("er-effects-probe-foreground.txt")
+                .exists();
+            GATE.store(if on { 1 } else { 2 }, Ordering::Relaxed);
+            on
+        }
+    }
 }
 /// SELF-DRIVEN SYSTEM->QUIT->LOAD-PROFILE REPRO AUTOPILOT (er-effects-system-quit-repro.txt /
 /// ER_EFFECTS_SYSTEM_QUIT_REPRO). OFF by default. When on, after the boot autoload reaches the

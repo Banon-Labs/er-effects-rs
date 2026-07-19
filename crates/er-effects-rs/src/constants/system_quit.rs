@@ -40,6 +40,33 @@ pub(crate) const INJECT_NAV_LOG_FIRST: usize = 20;
 /// own_stepper idx10 and READ by the XInput hook (so the schedule lives in one place that runs
 /// every frame, instead of the XInput hook which the game may never poll). 0 = no input.
 pub(crate) static INJECT_NAV_CUR_BUTTONS: AtomicUsize = AtomicUsize::new(0);
+// ---- CAN-MOVE probe (2026-07-18, user-directed readiness gate) ----
+// "render-ready" answers "can the user SEE the character"; CAN-MOVE answers "does INPUT MOVE the
+// character" -- the second half of the readiness the earlier automated capture lacked. When
+// MOVE_PROBE_ACTIVE, the XInput hook stamps MOVE_PROBE_STICK_LY into the left thumbstick (sThumbLY);
+// the driver samples oracle_havok_pos before/after and confirms motion beyond a noise threshold.
+// play_time advancing is necessary but NOT sufficient (it ticks during the freeze), so movement must
+// be proven by a position DELTA under a known injected stick, per AGENTS.md direct-measurement.
+/// True while the readiness verifier is injecting a movement stick to test input-causes-movement.
+pub(crate) static MOVE_PROBE_ACTIVE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// Left-thumbstick Y to inject while MOVE_PROBE_ACTIVE (i16 range; +full = forward). Stored as i32.
+pub(crate) static MOVE_PROBE_STICK_LY: std::sync::atomic::AtomicI32 =
+    std::sync::atomic::AtomicI32::new(0);
+/// Latched true once a load sustained >=MOVE_PROBE_REQUIRED_FRAMES consecutive frames of havok-position
+/// motion under the injected stick (input-causes-movement PROVEN). Cleared when a new load epoch begins.
+pub(crate) static CAN_MOVE_CONFIRMED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// Current consecutive-moved-frame count of the in-flight move probe (for the oracle/report).
+pub(crate) static MOVE_PROBE_MOVED_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// The load epoch (fresh_deser_count) the current probe is bound to, so it resets per load.
+pub(crate) static MOVE_PROBE_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Forward stick deflection the probe injects (near full), the per-FRAME horizontal displacement (world
+/// units) that counts as "moving" (a static/frozen char repeats its position exactly, delta ~0; a walk
+/// clears this easily), and the sustained consecutive-frame count that PROVES movement (user: 60/load).
+pub(crate) const MOVE_PROBE_STICK_FORWARD: i32 = 30000;
+pub(crate) const MOVE_PROBE_PER_FRAME_THRESHOLD: f32 = 0.01;
+pub(crate) const MOVE_PROBE_REQUIRED_FRAMES: usize = 60;
 /// DInput keyboard scancode DIK_DOWN (down-arrow) -- the menu "move down" keyboard input. The
 /// menu is keyboard-navigated under Proton with no controller (XInput is not polled), so the
 /// schedule drives this via InputBlocker::set_injected_key (stamped into the blocked keyboard
@@ -92,6 +119,9 @@ pub(crate) const SQ_REPRO_TAB_RETURN_STALL_TICKS: usize = 40;
 /// Dwell on Game Options this many ticks so the pane-visibility oracle samples the (blank) tab 0.
 pub(crate) const SQ_REPRO_TAB_RETURN_DWELL_TICKS: usize = 180;
 pub(crate) static SQ_REPRO_STATE: AtomicUsize = AtomicUsize::new(SQ_REPRO_STATE_WAIT_WORLD);
+/// The VK code the OPEN_MENU auto-discovery is currently sending (and the winner when IngameTop
+/// opens), so the log reports which menu-open key actually worked on native Windows.
+pub(crate) static SQ_REPRO_OPEN_KEY_VK: AtomicUsize = AtomicUsize::new(0);
 /// Which back-to-back switch the autopilot is driving (0-based). Switch `i` loads
 /// `SQ_REPRO_TARGET_SLOTS[i]`. Proves the feature can load N different characters after one startup.
 pub(crate) static SQ_REPRO_SWITCH_INDEX: AtomicUsize = AtomicUsize::new(0);
@@ -159,6 +189,25 @@ pub(crate) const SQ_REPRO_WAIT_RELOAD_LOG_EVERY: usize = 512;
 /// Frames to settle in-world (world stream + HUD) before the autopilot presses START. Pre-existing
 /// world-readiness settle; the run that first opened IngameTop used it.
 pub(crate) const SQ_REPRO_WORLD_SETTLE_TICKS: usize = 180;
+/// FREEZE-RECOVERY DEADLINE (2026-07-18, user-directed readiness gate). Frames the WAIT_RELOAD gate
+/// will wait for a just-triggered reload to become render-ready before classifying it the LOAD-2 FREEZE
+/// (present + reload committed, but the loading cover never lifts / render never hands off -- exactly
+/// the user's "character does not show up + can't move, but the menu still opens" state) and force-
+/// advancing to the NEXT switch (the recovery load), just as the user re-loads by hand instead of
+/// waiting forever. ~20s at 60fps -- longer than a real reload (~10-15s) so a slow-but-real load is NOT
+/// misread as frozen, yet short enough to drive the recovery load well inside the runtime cap.
+/// Sized for the can_move (input-registered) gate: a MOVABLE reload must settle in-world (~20s of
+/// SetState5 streaming after WAIT_RELOAD entry) AND then have the move-probe prove 60 frames of injected
+/// motion (~2s) before this deadline, else it is misread as frozen. A FROZEN reload never proves and is
+/// force-advanced here (per parity, the next load recovers it). ~900f (~28s at 32fps) clears a real
+/// reload+prove while staying tight enough that a 3-load chain finishes inside the runtime cap.
+pub(crate) const SQ_REPRO_FREEZE_RECOVERY_DEADLINE: usize = 900;
+/// WAIT_WORLD movement-proof deadline (2026-07-18): before driving switch #1, wait for load1 to PROVE
+/// movement (CAN_MOVE_CONFIRMED) so the reload is triggered from a genuinely playable state, not a
+/// half-streamed one -- prior runs drove OPEN_MENU while load1 was still at mms 13-16. Fallback ticks
+/// so a load that never proves movement still advances (per the strict parity, driving one more load
+/// recovers a frozen one) instead of hard-stalling. ~1500f (~47s at 32fps) is generous for a real load.
+pub(crate) const SQ_REPRO_WAIT_WORLD_MOVE_DEADLINE: usize = 1500;
 /// No gamepad buttons asserted this frame.
 pub(crate) const INJECT_NAV_NO_BUTTONS: u16 = 0;
 /// CURSOR-OFFSET PROBE: with exactly ONE deterministic Down (Continue idx0 -> Load Game idx1),
@@ -344,7 +393,7 @@ pub(crate) static START_CONTINUE_TRACE: Once = Once::new();
 pub(crate) static START_SAFE_INPUT_HOOKS: Once = Once::new();
 pub(crate) static START_SPLASH_SKIP: Once = Once::new();
 pub(crate) static START_ONLINE_DISABLE: Once = Once::new();
-pub(crate) static START_FOREGROUND_FORCE: Once = Once::new();
+// START_FOREGROUND_FORCE removed 2026-07-16 (foreground-force dropped from the product).
 pub(crate) static START_SOUND_POST_EVENT_OBSERVER: Once = Once::new();
 pub(crate) static START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS: Once = Once::new();
 pub(crate) static START_TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS: Once = Once::new();
@@ -363,6 +412,9 @@ pub(crate) static START_LOADING_BG_REPLACE_BIND: Once = Once::new();
 /// One-shot install of the loading-tip suppression detour (er-effects-rs-jsm). Installed at DLL attach,
 /// BEFORE the KnowledgeLoadingScreen ctor sets the first tip (~15s), so no native tip is ever set.
 pub(crate) static START_TIP_SUPPRESSION: Once = Once::new();
+/// One-shot install of the always-on Scaleform descriptor-heap null guard (er-effects-rs-y22i).
+/// Installed unconditionally at DLL attach -- it is a crash guard, not a feature.
+pub(crate) static START_SCALEFORM_GUARD: Once = Once::new();
 /// One-shot install latch for the D3D12 Present overlay (the deterministic loading-portrait display path).
 pub(crate) static START_PRESENT_OVERLAY: Once = Once::new();
 pub(crate) static START_PROFILE_RENDERER_TEARDOWN_SPARE: Once = Once::new();

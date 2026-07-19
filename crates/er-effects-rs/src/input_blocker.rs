@@ -12,6 +12,12 @@ static INPUT_BLOCKER: OnceLock<&'static InputBlocker> = OnceLock::new();
 static INJECTED_KEY: AtomicU8 = AtomicU8::new(0);
 static SUPPRESS_ARROW_KEYS: AtomicBool = AtomicBool::new(false);
 pub(crate) static DINPUT_SUPPRESSED_ARROW_KEYS: AtomicUsize = AtomicUsize::new(0);
+/// DIAGNOSTIC: how many times the game actually CALLS the DInput keyboard/mouse `GetDeviceState`
+/// (i.e. whether native ER reads input via DInput at all). If the keyboard counter stays 0 while the
+/// harness holds, ER does NOT read keyboard via DInput on native -> our `set_injected_key` stamp never
+/// reaches the game and a different injection path (WM_KEYDOWN / RawInput) is required.
+pub static DINPUT_KB_HOOK_FIRES: AtomicUsize = AtomicUsize::new(0);
+pub static DINPUT_MOUSE_HOOK_FIRES: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Default)]
 pub struct InputBlocker {
@@ -169,6 +175,7 @@ static DINPUT_MOUSE_GET_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
 static DINPUT_KB_ALSO_MOUSE: AtomicBool = AtomicBool::new(false);
 
 unsafe extern "system" fn dinput_kb_get_state_hook(device: usize, size: u32, data: *mut u8) -> i32 {
+    DINPUT_KB_HOOK_FIRES.fetch_add(1, Ordering::Relaxed);
     let original_addr = DINPUT_KB_GET_STATE_ORIG.load(Ordering::Relaxed);
     if original_addr == 0 {
         return 0;
@@ -189,6 +196,7 @@ unsafe extern "system" fn dinput_mouse_get_state_hook(
     size: u32,
     data: *mut u8,
 ) -> i32 {
+    DINPUT_MOUSE_HOOK_FIRES.fetch_add(1, Ordering::Relaxed);
     let original_addr = DINPUT_MOUSE_GET_STATE_ORIG.load(Ordering::Relaxed);
     if original_addr == 0 {
         return 0;

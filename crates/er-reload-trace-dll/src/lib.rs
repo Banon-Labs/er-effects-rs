@@ -1,0 +1,772 @@
+#![allow(non_snake_case)]
+
+use std::{
+    ffi::c_void,
+    fmt,
+    fs::{File, OpenOptions},
+    io::Write,
+    ptr::null_mut,
+    sync::atomic::{AtomicU64, AtomicUsize, Ordering},
+    sync::{Mutex, OnceLock},
+};
+
+const DLL_PROCESS_ATTACH: u32 = 1;
+const DLL_MAIN_SUCCESS: i32 = 1;
+const CURRENT_PROCESS_PSEUDO_HANDLE: isize = -1;
+const LOG_PATH: &str = "er-reload-trace.log";
+
+const MH_OK: i32 = 0;
+const MH_ERROR_ALREADY_INITIALIZED: i32 = 1;
+const MH_ERROR_ENABLED: i32 = 5;
+
+const GAME_MAN_SINGLETON_RVA: usize = 0x3d69918;
+const GAME_DATA_MAN_GLOBAL_RVA: usize = 0x3d5df38;
+const MOUNTED_ARCHIVE_REGISTRY_RVA: usize = 0x448464a8;
+
+const GAME_MAN_REQUESTED_SLOT_B78_OFFSET: usize = 0xb78;
+const GAME_MAN_LOAD_PHASE_B80_OFFSET: usize = 0xb80;
+const GAME_MAN_SAVE_SLOT_AC0_OFFSET: usize = 0xac0;
+const GAME_MAN_CURRENT_MAP_C30_OFFSET: usize = 0xc30;
+const GAME_MAN_RESIDENT_DEVICE_DF0_OFFSET: usize = 0xdf0;
+const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize = 0x08;
+
+const HOOK_ORIGINAL_UNSET: usize = 0;
+
+type TraceHookFn = unsafe extern "system" fn(usize, usize, usize, usize) -> usize;
+
+/// C-ABI shape of the product DLL's `er_effects_union_register` export (crates/er-effects-rs/src/mh.rs).
+/// (target_addr, handler, *mut orig_slot) -> 0 ok / -1 null-slot / positive MH_STATUS on failure.
+/// `TraceHookFn` is exactly the product's `UnionFn`, so our detours plug into its union unchanged.
+type UnionRegisterFn = unsafe extern "system" fn(usize, TraceHookFn, *mut usize) -> i32;
+
+/// The product DLL's module base name as me3 loads it (matched by base name, not full path).
+const PRODUCT_DLL_NAME: &[u8] = b"er_effects_rs.dll\0";
+const UNION_REGISTER_EXPORT: &[u8] = b"er_effects_union_register\0";
+/// Bounded wait for the product DLL to map + export the registrar (both natives load together under
+/// me3; this only covers install-thread ordering). ~3s at 50ms cadence.
+const UNION_RESOLVE_TRIES: u32 = 60;
+const UNION_RESOLVE_SLEEP_MS: u32 = 50;
+
+/// Addresses the PRODUCT DLL owns with a BARE `MhHook` (not its union) in the sq-repro reload mode
+/// this trace runs alongside: 0x67b200 = SYSTEM_QUIT_REQUEST_LOAD_SLOT, 0x67b290 =
+/// SYSTEM_QUIT_INWORLD_LOAD (the reload's picked-slot deserialize proof). Routing OUR observer through
+/// the product union would create the dispatcher on that address first if our install thread wins the
+/// race, making the product's later `MhHook::new` return ALREADY_CREATED and silently dropping the
+/// product's CRITICAL reload hook. So in the unioned run we SKIP these two -- the product's own
+/// menu-trace union hooks + its inworld-load debug line already log the same deserialize events.
+/// (Standalone trace runs, with no product DLL present, still install them via our own MinHook.)
+const UNION_SKIP_RVAS: &[usize] = &[0x67b200, 0x67b290];
+
+static LOG_FILE: OnceLock<Option<Mutex<File>>> = OnceLock::new();
+static EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
+
+static ORIG_MENU_CONTINUE_WRAPPER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_MENU_NEW_OR_LOAD_WRAPPER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_MENU_OTHER_LOAD_WRAPPER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_NATIVE_SUBMIT: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_RESULT_EVENT_HANDLER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_RESULT_ACTION_BUILDER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_RESULT_EVENT_WRAPPER_BUILDER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_TASK_ENQUEUE: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_SET_SAVE_SLOT: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_SAVE_REQUEST_PROFILE: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_REQUEST_SAVE: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_CURRENT_SLOT_LOAD: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_CONTINUE_LOAD: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_COMBINED_LOAD: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_MAP_LOAD: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_SAVE_LOAD_STATE_INIT: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_B80_PREVIEW: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_TITLE_CONFIRM: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_REQUEST_LOAD_SLOT: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_REQUEST_PROFILE_READ: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_B80_POLL: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_SLOT_DESER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_DISPATCHER2: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_DOSAVE_STUFF: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_MAP_REQUEST_DO: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_MAP_WORK: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_CAP_SETSTATE: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_CAP_LOAD_ACTIVATE: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_CAP_LOAD_ACTIVATE2: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_CAP_BUILDER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_CAP_SELECTOR_TICK: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_CAP_MENU_DESER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_CAP_DIALOG_FACTORY: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_MENU_WINDOW_JOB_CTOR: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_MENU_WINDOW_JOB_NATIVE_CTOR_B: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_MENU_WINDOW_JOB_IDLE_CTOR: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIG_TITLE_NATIVE_READY: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+
+struct HookSpec {
+    name: &'static str,
+    rva: usize,
+    detour: TraceHookFn,
+    original: &'static AtomicUsize,
+}
+
+unsafe extern "system" {
+    fn MH_Initialize() -> i32;
+    fn MH_CreateHook(target: *mut c_void, detour: *mut c_void, original: *mut *mut c_void) -> i32;
+    fn MH_EnableHook(target: *mut c_void) -> i32;
+}
+
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetModuleHandleA(name: *const u8) -> *mut c_void;
+    fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
+    fn Sleep(ms: u32);
+    fn GetTickCount64() -> u64;
+    fn ReadProcessMemory(
+        process: isize,
+        base: *const c_void,
+        buffer: *mut c_void,
+        size: usize,
+        read: *mut usize,
+    ) -> i32;
+}
+
+fn open_log_file() -> Option<Mutex<File>> {
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(LOG_PATH)
+        .ok()
+        .map(Mutex::new)
+}
+
+fn reset_log_file() {
+    let _ = File::create(LOG_PATH);
+}
+
+fn log_line(args: fmt::Arguments<'_>) {
+    let Some(lock) = LOG_FILE.get_or_init(open_log_file) else {
+        return;
+    };
+    let Ok(mut file) = lock.lock() else {
+        return;
+    };
+    let tick = unsafe { GetTickCount64() };
+    let seq = EVENT_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+    let _ = writeln!(file, "[{seq:06} +{tick}ms] {args}");
+}
+
+fn game_base() -> Option<usize> {
+    let base = unsafe { GetModuleHandleA(std::ptr::null()) } as usize;
+    (base != 0).then_some(base)
+}
+
+unsafe fn read_usize(addr: usize) -> Option<usize> {
+    let mut value = 0usize;
+    let mut read = 0usize;
+    let ok = unsafe {
+        ReadProcessMemory(
+            CURRENT_PROCESS_PSEUDO_HANDLE,
+            addr as *const c_void,
+            &mut value as *mut usize as *mut c_void,
+            std::mem::size_of::<usize>(),
+            &mut read,
+        )
+    };
+    (ok != 0 && read == std::mem::size_of::<usize>()).then_some(value)
+}
+
+unsafe fn read_i32(addr: usize) -> Option<i32> {
+    let mut value = 0i32;
+    let mut read = 0usize;
+    let ok = unsafe {
+        ReadProcessMemory(
+            CURRENT_PROCESS_PSEUDO_HANDLE,
+            addr as *const c_void,
+            &mut value as *mut i32 as *mut c_void,
+            std::mem::size_of::<i32>(),
+            &mut read,
+        )
+    };
+    (ok != 0 && read == std::mem::size_of::<i32>()).then_some(value)
+}
+
+fn snapshot() -> String {
+    let Some(base) = game_base() else {
+        return "base=<unresolved>".to_owned();
+    };
+    let gm = unsafe { read_usize(base + GAME_MAN_SINGLETON_RVA) }.unwrap_or(0);
+    let gdm = unsafe { read_usize(base + GAME_DATA_MAN_GLOBAL_RVA) }.unwrap_or(0);
+    let mounted = unsafe { read_usize(base + MOUNTED_ARCHIVE_REGISTRY_RVA) }.unwrap_or(0);
+
+    let b78 = unsafe { read_i32(gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) };
+    let b80 = unsafe { read_i32(gm + GAME_MAN_LOAD_PHASE_B80_OFFSET) };
+    let ac0 = unsafe { read_i32(gm + GAME_MAN_SAVE_SLOT_AC0_OFFSET) };
+    let c30 = unsafe { read_i32(gm + GAME_MAN_CURRENT_MAP_C30_OFFSET) };
+    let df0 = unsafe { read_usize(gm + GAME_MAN_RESIDENT_DEVICE_DF0_OFFSET) }.unwrap_or(0);
+    let pgd = unsafe { read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }.unwrap_or(0);
+
+    format!(
+        "base=0x{base:x} gm=0x{gm:x} b78={} b80={} ac0={} c30={} df0=0x{df0:x} gdm=0x{gdm:x} pgd=0x{pgd:x} mounted_registry=0x{mounted:x}",
+        fmt_i32(b78),
+        fmt_i32(b80),
+        fmt_i32(ac0),
+        fmt_c30(c30),
+    )
+}
+
+fn fmt_i32(value: Option<i32>) -> String {
+    value.map_or_else(|| "<unreadable>".to_owned(), |value| value.to_string())
+}
+
+fn fmt_c30(value: Option<i32>) -> String {
+    value.map_or_else(|| "<unreadable>".to_owned(), |value| format!("0x{value:x}"))
+}
+
+unsafe fn call_original(
+    original: &'static AtomicUsize,
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let original = original.load(Ordering::SeqCst);
+    if original == HOOK_ORIGINAL_UNSET {
+        return 0;
+    }
+    let original: TraceHookFn = unsafe { std::mem::transmute(original) };
+    unsafe { original(a, b, c, d) }
+}
+
+unsafe fn trace_hook(
+    name: &'static str,
+    original: &'static AtomicUsize,
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    log_line(format_args!(
+        "{name} ENTER rcx=0x{a:x} rdx=0x{b:x} r8=0x{c:x} r9=0x{d:x} {}",
+        snapshot()
+    ));
+    let ret = unsafe { call_original(original, a, b, c, d) };
+    log_line(format_args!(
+        "{name} LEAVE ret=0x{ret:x} rcx=0x{a:x} rdx=0x{b:x} r8=0x{c:x} r9=0x{d:x} {}",
+        snapshot()
+    ));
+    ret
+}
+
+macro_rules! define_trace_hook {
+    ($fn_name:ident, $original:ident, $label:literal) => {
+        unsafe extern "system" fn $fn_name(a: usize, b: usize, c: usize, d: usize) -> usize {
+            unsafe { trace_hook($label, &$original, a, b, c, d) }
+        }
+    };
+}
+
+define_trace_hook!(
+    hook_menu_continue_wrapper,
+    ORIG_MENU_CONTINUE_WRAPPER,
+    "menu_continue_wrapper_82bac0"
+);
+define_trace_hook!(
+    hook_menu_new_or_load_wrapper,
+    ORIG_MENU_NEW_OR_LOAD_WRAPPER,
+    "menu_new_or_load_wrapper_82ba80"
+);
+define_trace_hook!(
+    hook_menu_other_load_wrapper,
+    ORIG_MENU_OTHER_LOAD_WRAPPER,
+    "menu_other_load_wrapper_82bb00"
+);
+define_trace_hook!(
+    hook_native_submit,
+    ORIG_NATIVE_SUBMIT,
+    "native_submit_7ac890"
+);
+define_trace_hook!(
+    hook_result_event_handler,
+    ORIG_RESULT_EVENT_HANDLER,
+    "result_event_handler_746e80"
+);
+define_trace_hook!(
+    hook_result_action_builder,
+    ORIG_RESULT_ACTION_BUILDER,
+    "result_action_builder_746a00"
+);
+define_trace_hook!(
+    hook_result_event_wrapper_builder,
+    ORIG_RESULT_EVENT_WRAPPER_BUILDER,
+    "result_event_wrapper_builder_744a60"
+);
+define_trace_hook!(hook_task_enqueue, ORIG_TASK_ENQUEUE, "task_enqueue_7a7b60");
+define_trace_hook!(
+    hook_set_save_slot,
+    ORIG_SET_SAVE_SLOT,
+    "set_save_slot_67a810"
+);
+define_trace_hook!(
+    hook_save_request_profile,
+    ORIG_SAVE_REQUEST_PROFILE,
+    "save_request_profile_67a420"
+);
+define_trace_hook!(hook_request_save, ORIG_REQUEST_SAVE, "request_save_67a520");
+define_trace_hook!(
+    hook_current_slot_load,
+    ORIG_CURRENT_SLOT_LOAD,
+    "current_slot_load_67b570"
+);
+define_trace_hook!(
+    hook_continue_load,
+    ORIG_CONTINUE_LOAD,
+    "continue_load_67b750"
+);
+define_trace_hook!(
+    hook_combined_load,
+    ORIG_COMBINED_LOAD,
+    "combined_load_67b940"
+);
+define_trace_hook!(hook_map_load, ORIG_MAP_LOAD, "map_load_67bc10");
+define_trace_hook!(
+    hook_save_load_state_init,
+    ORIG_SAVE_LOAD_STATE_INIT,
+    "save_load_state_init_67b030"
+);
+define_trace_hook!(hook_b80_preview, ORIG_B80_PREVIEW, "b80_preview_67b4e0");
+define_trace_hook!(
+    hook_title_confirm,
+    ORIG_TITLE_CONFIRM,
+    "title_confirm_b0e180"
+);
+define_trace_hook!(
+    hook_request_load_slot,
+    ORIG_REQUEST_LOAD_SLOT,
+    "request_load_slot_67b200"
+);
+define_trace_hook!(
+    hook_request_profile_read,
+    ORIG_REQUEST_PROFILE_READ,
+    "request_profile_read_67b1a0"
+);
+define_trace_hook!(hook_b80_poll, ORIG_B80_POLL, "b80_poll_679180");
+define_trace_hook!(hook_slot_deser, ORIG_SLOT_DESER, "slot_deser_67b290");
+define_trace_hook!(
+    hook_dispatcher2,
+    ORIG_DISPATCHER2,
+    "movemap_dispatcher2_afb880"
+);
+define_trace_hook!(
+    hook_dosave_stuff,
+    ORIG_DOSAVE_STUFF,
+    "movemap_do_save_stuff_afbad0"
+);
+define_trace_hook!(
+    hook_map_request_do,
+    ORIG_MAP_REQUEST_DO,
+    "map_request_do_836f30"
+);
+define_trace_hook!(hook_map_work, ORIG_MAP_WORK, "map_work_82faf0");
+define_trace_hook!(hook_cap_setstate, ORIG_CAP_SETSTATE, "cap_setstate_b0d960");
+define_trace_hook!(
+    hook_cap_load_activate,
+    ORIG_CAP_LOAD_ACTIVATE,
+    "cap_load_activate_9a4670"
+);
+define_trace_hook!(
+    hook_cap_load_activate2,
+    ORIG_CAP_LOAD_ACTIVATE2,
+    "cap_load_activate2_9ac760"
+);
+define_trace_hook!(hook_cap_builder, ORIG_CAP_BUILDER, "cap_builder_826510");
+define_trace_hook!(
+    hook_cap_selector_tick,
+    ORIG_CAP_SELECTOR_TICK,
+    "cap_selector_tick_826d50"
+);
+define_trace_hook!(
+    hook_cap_menu_deser,
+    ORIG_CAP_MENU_DESER,
+    "cap_menu_deser_82c240"
+);
+define_trace_hook!(
+    hook_cap_dialog_factory,
+    ORIG_CAP_DIALOG_FACTORY,
+    "cap_dialog_factory_81ead0"
+);
+define_trace_hook!(
+    hook_menu_window_job_ctor,
+    ORIG_MENU_WINDOW_JOB_CTOR,
+    "menu_window_job_ctor_7ac8c0"
+);
+define_trace_hook!(
+    hook_menu_window_job_native_ctor_b,
+    ORIG_MENU_WINDOW_JOB_NATIVE_CTOR_B,
+    "menu_window_job_native_ctor_b_7acb00"
+);
+define_trace_hook!(
+    hook_menu_window_job_idle_ctor,
+    ORIG_MENU_WINDOW_JOB_IDLE_CTOR,
+    "menu_window_job_idle_ctor_7acf80"
+);
+define_trace_hook!(
+    hook_title_native_ready,
+    ORIG_TITLE_NATIVE_READY,
+    "title_native_ready_733150"
+);
+
+static HOOKS: &[HookSpec] = &[
+    HookSpec {
+        name: "menu_continue_wrapper_82bac0",
+        rva: 0x82bac0,
+        detour: hook_menu_continue_wrapper,
+        original: &ORIG_MENU_CONTINUE_WRAPPER,
+    },
+    HookSpec {
+        name: "menu_new_or_load_wrapper_82ba80",
+        rva: 0x82ba80,
+        detour: hook_menu_new_or_load_wrapper,
+        original: &ORIG_MENU_NEW_OR_LOAD_WRAPPER,
+    },
+    HookSpec {
+        name: "menu_other_load_wrapper_82bb00",
+        rva: 0x82bb00,
+        detour: hook_menu_other_load_wrapper,
+        original: &ORIG_MENU_OTHER_LOAD_WRAPPER,
+    },
+    HookSpec {
+        name: "native_submit_7ac890",
+        rva: 0x7ac890,
+        detour: hook_native_submit,
+        original: &ORIG_NATIVE_SUBMIT,
+    },
+    HookSpec {
+        name: "result_event_handler_746e80",
+        rva: 0x746e80,
+        detour: hook_result_event_handler,
+        original: &ORIG_RESULT_EVENT_HANDLER,
+    },
+    HookSpec {
+        name: "result_action_builder_746a00",
+        rva: 0x746a00,
+        detour: hook_result_action_builder,
+        original: &ORIG_RESULT_ACTION_BUILDER,
+    },
+    HookSpec {
+        name: "result_event_wrapper_builder_744a60",
+        rva: 0x744a60,
+        detour: hook_result_event_wrapper_builder,
+        original: &ORIG_RESULT_EVENT_WRAPPER_BUILDER,
+    },
+    HookSpec {
+        name: "task_enqueue_7a7b60",
+        rva: 0x7a7b60,
+        detour: hook_task_enqueue,
+        original: &ORIG_TASK_ENQUEUE,
+    },
+    HookSpec {
+        name: "set_save_slot_67a810",
+        rva: 0x67a810,
+        detour: hook_set_save_slot,
+        original: &ORIG_SET_SAVE_SLOT,
+    },
+    HookSpec {
+        name: "save_request_profile_67a420",
+        rva: 0x67a420,
+        detour: hook_save_request_profile,
+        original: &ORIG_SAVE_REQUEST_PROFILE,
+    },
+    HookSpec {
+        name: "request_save_67a520",
+        rva: 0x67a520,
+        detour: hook_request_save,
+        original: &ORIG_REQUEST_SAVE,
+    },
+    HookSpec {
+        name: "current_slot_load_67b570",
+        rva: 0x67b570,
+        detour: hook_current_slot_load,
+        original: &ORIG_CURRENT_SLOT_LOAD,
+    },
+    HookSpec {
+        name: "continue_load_67b750",
+        rva: 0x67b750,
+        detour: hook_continue_load,
+        original: &ORIG_CONTINUE_LOAD,
+    },
+    HookSpec {
+        name: "combined_load_67b940",
+        rva: 0x67b940,
+        detour: hook_combined_load,
+        original: &ORIG_COMBINED_LOAD,
+    },
+    HookSpec {
+        name: "map_load_67bc10",
+        rva: 0x67bc10,
+        detour: hook_map_load,
+        original: &ORIG_MAP_LOAD,
+    },
+    HookSpec {
+        name: "save_load_state_init_67b030",
+        rva: 0x67b030,
+        detour: hook_save_load_state_init,
+        original: &ORIG_SAVE_LOAD_STATE_INIT,
+    },
+    HookSpec {
+        name: "b80_preview_67b4e0",
+        rva: 0x67b4e0,
+        detour: hook_b80_preview,
+        original: &ORIG_B80_PREVIEW,
+    },
+    HookSpec {
+        name: "title_confirm_b0e180",
+        rva: 0xb0e180,
+        detour: hook_title_confirm,
+        original: &ORIG_TITLE_CONFIRM,
+    },
+    HookSpec {
+        name: "request_load_slot_67b200",
+        rva: 0x67b200,
+        detour: hook_request_load_slot,
+        original: &ORIG_REQUEST_LOAD_SLOT,
+    },
+    HookSpec {
+        name: "request_profile_read_67b1a0",
+        rva: 0x67b1a0,
+        detour: hook_request_profile_read,
+        original: &ORIG_REQUEST_PROFILE_READ,
+    },
+    HookSpec {
+        name: "b80_poll_679180",
+        rva: 0x679180,
+        detour: hook_b80_poll,
+        original: &ORIG_B80_POLL,
+    },
+    HookSpec {
+        name: "slot_deser_67b290",
+        rva: 0x67b290,
+        detour: hook_slot_deser,
+        original: &ORIG_SLOT_DESER,
+    },
+    HookSpec {
+        name: "movemap_dispatcher2_afb880",
+        rva: 0xafb880,
+        detour: hook_dispatcher2,
+        original: &ORIG_DISPATCHER2,
+    },
+    HookSpec {
+        name: "movemap_do_save_stuff_afbad0",
+        rva: 0xafbad0,
+        detour: hook_dosave_stuff,
+        original: &ORIG_DOSAVE_STUFF,
+    },
+    HookSpec {
+        name: "map_request_do_836f30",
+        rva: 0x836f30,
+        detour: hook_map_request_do,
+        original: &ORIG_MAP_REQUEST_DO,
+    },
+    HookSpec {
+        name: "map_work_82faf0",
+        rva: 0x82faf0,
+        detour: hook_map_work,
+        original: &ORIG_MAP_WORK,
+    },
+    HookSpec {
+        name: "cap_setstate_b0d960",
+        rva: 0xb0d960,
+        detour: hook_cap_setstate,
+        original: &ORIG_CAP_SETSTATE,
+    },
+    HookSpec {
+        name: "cap_load_activate_9a4670",
+        rva: 0x9a4670,
+        detour: hook_cap_load_activate,
+        original: &ORIG_CAP_LOAD_ACTIVATE,
+    },
+    HookSpec {
+        name: "cap_load_activate2_9ac760",
+        rva: 0x9ac760,
+        detour: hook_cap_load_activate2,
+        original: &ORIG_CAP_LOAD_ACTIVATE2,
+    },
+    HookSpec {
+        name: "cap_builder_826510",
+        rva: 0x826510,
+        detour: hook_cap_builder,
+        original: &ORIG_CAP_BUILDER,
+    },
+    HookSpec {
+        name: "cap_selector_tick_826d50",
+        rva: 0x826d50,
+        detour: hook_cap_selector_tick,
+        original: &ORIG_CAP_SELECTOR_TICK,
+    },
+    HookSpec {
+        name: "cap_menu_deser_82c240",
+        rva: 0x82c240,
+        detour: hook_cap_menu_deser,
+        original: &ORIG_CAP_MENU_DESER,
+    },
+    HookSpec {
+        name: "cap_dialog_factory_81ead0",
+        rva: 0x81ead0,
+        detour: hook_cap_dialog_factory,
+        original: &ORIG_CAP_DIALOG_FACTORY,
+    },
+    HookSpec {
+        name: "menu_window_job_ctor_7ac8c0",
+        rva: 0x7ac8c0,
+        detour: hook_menu_window_job_ctor,
+        original: &ORIG_MENU_WINDOW_JOB_CTOR,
+    },
+    HookSpec {
+        name: "menu_window_job_native_ctor_b_7acb00",
+        rva: 0x7acb00,
+        detour: hook_menu_window_job_native_ctor_b,
+        original: &ORIG_MENU_WINDOW_JOB_NATIVE_CTOR_B,
+    },
+    HookSpec {
+        name: "menu_window_job_idle_ctor_7acf80",
+        rva: 0x7acf80,
+        detour: hook_menu_window_job_idle_ctor,
+        original: &ORIG_MENU_WINDOW_JOB_IDLE_CTOR,
+    },
+    HookSpec {
+        name: "title_native_ready_733150",
+        rva: 0x733150,
+        detour: hook_title_native_ready,
+        original: &ORIG_TITLE_NATIVE_READY,
+    },
+];
+
+/// Resolve the product DLL's `er_effects_union_register` export, polling briefly since both natives
+/// load together under me3 and thread ordering is not guaranteed. `None` => the product DLL is not in
+/// this process (a standalone trace run) or has not exported yet; caller falls back to its own MinHook.
+fn resolve_union_register() -> Option<UnionRegisterFn> {
+    for _ in 0..UNION_RESOLVE_TRIES {
+        let hmod = unsafe { GetModuleHandleA(PRODUCT_DLL_NAME.as_ptr()) };
+        if !hmod.is_null() {
+            let proc = unsafe { GetProcAddress(hmod, UNION_REGISTER_EXPORT.as_ptr()) };
+            if !proc.is_null() {
+                // SAFETY: the export's C-ABI shape is fixed by the product DLL; both DLLs live for the
+                // process lifetime so the pointer stays valid.
+                return Some(unsafe { std::mem::transmute::<*mut c_void, UnionRegisterFn>(proc) });
+            }
+        }
+        unsafe { Sleep(UNION_RESOLVE_SLEEP_MS) };
+    }
+    None
+}
+
+fn install_hooks() {
+    reset_log_file();
+    log_line(format_args!(
+        "er-reload-trace-dll attach: trampoline/log-only build; no input, save redirect, autoload, game task, or game-state writes"
+    ));
+    let Some(base) = game_base() else {
+        log_line(format_args!("install abort: game module base unresolved"));
+        return;
+    };
+    // CROSS-DLL HOOK UNION (2026-07-18, user-directed): when the product DLL (er_effects_rs.dll) is
+    // co-loaded, route EVERY trace hook through its `er_effects_union_register` export so a SINGLE
+    // MinHook instance owns every address and our observers CHAIN with the product's own detours on
+    // shared addresses (0xb0e180 continue-confirm, 0xb0d960 title-SetState, etc.). Two independent
+    // MinHook instances patching the same address corrupt each other's trampolines -- the exact race
+    // the product's internal union fixes, now spanning DLLs. Standalone trace runs fall back to our
+    // own MinHook instance (no product DLL => no shared addresses => no corruption).
+    if let Some(reg) = resolve_union_register() {
+        log_line(format_args!(
+            "cross-dll union: resolved product er_effects_union_register -> routing all {} hooks through the product DLL's single MinHook instance",
+            HOOKS.len()
+        ));
+        for spec in HOOKS {
+            install_one_union(reg, base, spec);
+        }
+        log_line(format_args!("install complete (unioned) {}", snapshot()));
+        return;
+    }
+    log_line(format_args!(
+        "cross-dll union: product DLL export not present (standalone trace run) -> own MinHook instance"
+    ));
+    let init_status = unsafe { MH_Initialize() };
+    if init_status != MH_OK && init_status != MH_ERROR_ALREADY_INITIALIZED {
+        log_line(format_args!(
+            "MinHook initialize failed status={init_status}"
+        ));
+        return;
+    }
+    for spec in HOOKS {
+        install_one(base, spec);
+    }
+    log_line(format_args!("install complete {}", snapshot()));
+}
+
+/// Register one trace observer through the product DLL's union (single shared MinHook instance).
+/// The union stores the trampoline (or next chained handler) into `spec.original`, which our
+/// `call_original` already reads -- so chaining is transparent to the detour bodies.
+fn install_one_union(reg: UnionRegisterFn, base: usize, spec: &HookSpec) {
+    if UNION_SKIP_RVAS.contains(&spec.rva) {
+        log_line(format_args!(
+            "hook {} rva=0x{:x} SKIPPED in unioned run (product owns a bare MinHook here; unioning would preempt its critical reload hook)",
+            spec.name, spec.rva
+        ));
+        return;
+    }
+    let target = base + spec.rva;
+    let orig_ptr = spec.original.as_ptr();
+    let rc = unsafe { reg(target, spec.detour, orig_ptr) };
+    if rc == 0 {
+        log_line(format_args!(
+            "hook {} rva=0x{:x} target=0x{target:x} union-registered (chained via product DLL)",
+            spec.name, spec.rva
+        ));
+    } else {
+        log_line(format_args!(
+            "hook {} rva=0x{:x} target=0x{target:x} union register FAILED rc={rc}",
+            spec.name, spec.rva
+        ));
+    }
+}
+
+fn install_one(base: usize, spec: &HookSpec) {
+    let target = base + spec.rva;
+    let mut trampoline: *mut c_void = null_mut();
+    let create_status = unsafe {
+        MH_CreateHook(
+            target as *mut c_void,
+            spec.detour as *mut c_void,
+            &mut trampoline,
+        )
+    };
+    if create_status != MH_OK {
+        log_line(format_args!(
+            "hook {} rva=0x{:x} target=0x{target:x} create failed status={create_status}",
+            spec.name, spec.rva
+        ));
+        return;
+    }
+    spec.original.store(trampoline as usize, Ordering::SeqCst);
+    let enable_status = unsafe { MH_EnableHook(target as *mut c_void) };
+    if enable_status != MH_OK && enable_status != MH_ERROR_ENABLED {
+        log_line(format_args!(
+            "hook {} rva=0x{:x} target=0x{target:x} enable failed status={enable_status}",
+            spec.name, spec.rva
+        ));
+        return;
+    }
+    log_line(format_args!(
+        "hook {} rva=0x{:x} target=0x{target:x} trampoline=0x{:x} installed",
+        spec.name, spec.rva, trampoline as usize
+    ));
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn DllMain(
+    _module: *mut c_void,
+    reason: u32,
+    _reserved: *mut c_void,
+) -> i32 {
+    if reason == DLL_PROCESS_ATTACH {
+        let _ = std::thread::Builder::new()
+            .name("er-reload-trace-install".to_owned())
+            .spawn(install_hooks);
+    }
+    DLL_MAIN_SUCCESS
+}

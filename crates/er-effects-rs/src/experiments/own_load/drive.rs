@@ -353,11 +353,188 @@ pub(crate) fn install_wbr_update_hook() -> bool {
     }
 }
 
+// ===== RequestMoveMap BlockId fix (render-handoff freeze root fix, bd er-effects-rs-um9g) ==========
+//
+// ROOT (RE render-handoff-freeze-worldreswait-loadlist-root-2026-07-18): our in-memory redirect load
+// reaches STEP_PlayGame with a stale/`-1` target BlockId (GameMan+0xc30 was set too late for the
+// Continue-confirm capture into TitleStep.field10_0xbc), so `InGameStep::RequestMoveMap` skips its
+// `FormatV` that builds the world-res loadlist virtual path -> the dest WorldBlockRes is never created
+// -> STEP_WorldResWait (mms_step 3) stalls forever -> the world never resumes, draw_group never
+// re-enables, the loading cover never lifts (present-but-frozen). FIX (native-ownership, no field
+// poking): hook RequestMoveMap and, when ARMED by our own load trigger, if its target BlockId `*param_2`
+// is invalid, substitute the freshly-deserialized saved-map BlockId from GameMan+0xc30 (a valid BlockId
+// as-is; same encoding, area byte = c30>>24). The game's own FormatV -> LoadlistInit ->
+// ProcessMsbLoadLists -> world-stream -> STEP_Finish chain then runs natively and re-enables render.
+/// Trampoline to the original `InGameStep::RequestMoveMap` (set on hook install).
+static REQUEST_MOVE_MAP_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+/// One-shot install guard.
+static REQUEST_MOVE_MAP_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// ARM countdown: our load trigger sets this to `REQUEST_MOVE_MAP_ARM_WINDOW` right before it drives
+/// SetState5/PlayGame. Each RequestMoveMap call while armed decrements it; the fixup fires on the FIRST
+/// call whose target BlockId is actually invalid (disarming immediately), and a valid intervening call
+/// merely decrements without consuming the arm. This is a WINDOW, not a one-shot: the earlier
+/// disarm-on-first-call consumed the arm on a benign valid call (title/early RequestMoveMap) and missed
+/// the actual load's stale `-1` call a few calls later, leaving WorldResWait stuck (bug found runtime
+/// 2026-07-18, run boot-fix-validate-155035: calls=2 fixups=0, boot stuck at mms 3 for 66s).
+static REQUEST_MOVE_MAP_ARM_COUNTDOWN: AtomicUsize = AtomicUsize::new(0);
+/// How many RequestMoveMap calls after a load trigger stay eligible for the fixup. Generous enough to
+/// skip benign intervening calls but bounded so the arm never leaks into unrelated later transitions.
+const REQUEST_MOVE_MAP_ARM_WINDOW: usize = 8;
+/// Total RequestMoveMap calls seen (telemetry oracle_request_move_map_hook_calls).
+pub(crate) static REQUEST_MOVE_MAP_HOOK_CALLS: AtomicU64 = AtomicU64::new(0);
+/// Times we substituted a valid c30 BlockId into an invalid `*param_2`
+/// (telemetry oracle_request_move_map_hook_fixups). >=1 == the fix fired.
+pub(crate) static REQUEST_MOVE_MAP_FIXUPS: AtomicU64 = AtomicU64::new(0);
+/// Last (param_2-before, c30-substituted) pair, for telemetry/diagnosis.
+pub(crate) static REQUEST_MOVE_MAP_LAST_BEFORE: AtomicU64 = AtomicU64::new(0);
+pub(crate) static REQUEST_MOVE_MAP_LAST_C30: AtomicU64 = AtomicU64::new(0);
+
+/// Arm the RequestMoveMap BlockId fixup for the next load. Call this at a load trigger (own-load
+/// continue / boot autoload SetState5) AFTER the saved map is deserialized into GameMan+0xc30, so the
+/// upcoming STEP_PlayGame -> RequestMoveMap gets a valid target BlockId even if the confirm handler
+/// captured a stale one.
+pub(crate) fn arm_request_move_map_fixup() {
+    REQUEST_MOVE_MAP_ARM_COUNTDOWN.store(REQUEST_MOVE_MAP_ARM_WINDOW, Ordering::SeqCst);
+}
+
+/// `__fastcall InGameStep::RequestMoveMap(rcx=InGameStep*, rdx=BlockId* param_2, r8d, r9)` fix detour.
+/// When armed, corrects an invalid target BlockId so FormatV builds the loadlist path. `param_2` points
+/// to a writable caller-stack int in every caller (RE-verified), so `*param_2` is safe to write.
+pub(crate) unsafe extern "system" fn request_move_map_fix_hook(
+    ingame: usize,
+    param2: usize,
+    arg3: usize,
+    arg4: usize,
+) -> usize {
+    REQUEST_MOVE_MAP_HOOK_CALLS.fetch_add(1, Ordering::SeqCst);
+    let armed = REQUEST_MOVE_MAP_ARM_COUNTDOWN.load(Ordering::SeqCst);
+    if armed > 0 && param2 != TITLE_OWNER_SCAN_START_ADDRESS {
+        if let Some(before) = unsafe { safe_read_i32(param2) } {
+            let before_u = before as u32;
+            let before_area = (before_u >> 24) & 0xff;
+            let invalid =
+                before_u == u32::MAX || before_area >= REQUEST_MOVE_MAP_NONDEBUG_AREA_CEIL;
+            let gm = game_man_ptr_or_null();
+            let c30 = if gm != TITLE_OWNER_SCAN_START_ADDRESS {
+                unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }.unwrap_or(-1)
+            } else {
+                -1
+            };
+            let c30_u = c30 as u32;
+            let c30_area = (c30_u >> 24) & 0xff;
+            let c30_valid = c30_u != u32::MAX
+                && c30 != 0
+                && c30_area < REQUEST_MOVE_MAP_NONDEBUG_AREA_CEIL;
+            if invalid && c30_valid {
+                // The actual load's stale/-1 target -- fix it and disarm (done for this load).
+                unsafe {
+                    *(param2 as *mut i32) = c30;
+                }
+                REQUEST_MOVE_MAP_ARM_COUNTDOWN.store(0, Ordering::SeqCst);
+                REQUEST_MOVE_MAP_FIXUPS.fetch_add(1, Ordering::SeqCst);
+                REQUEST_MOVE_MAP_LAST_BEFORE.store(u64::from(before_u), Ordering::SeqCst);
+                REQUEST_MOVE_MAP_LAST_C30.store(u64::from(c30_u), Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "request-move-map-fix: FIXED *param_2 0x{before_u:x}(area=0x{before_area:x} invalid) -> c30 0x{c30_u:x}(area=0x{c30_area:x}) ingame=0x{ingame:x} armed_left={armed} -- FormatV will now build the loadlist path"
+                ));
+            } else {
+                // Benign intervening call (valid BlockId, or c30 not yet mounted): DO NOT consume the
+                // arm -- just decrement the window so the real stale load call a few calls later is
+                // still caught. (The earlier one-shot consumed the arm here and missed the load call.)
+                REQUEST_MOVE_MAP_ARM_COUNTDOWN.store(armed - 1, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "request-move-map-fix: armed passthrough param_2=0x{before_u:x}(area=0x{before_area:x} invalid={invalid}) c30=0x{c30_u:x}(valid={c30_valid}) ingame=0x{ingame:x} armed_left={} -- window decremented, arm kept",
+                    armed - 1
+                ));
+            }
+        }
+    }
+    let orig = REQUEST_MOVE_MAP_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        return TITLE_OWNER_SCAN_START_ADDRESS;
+    }
+    let orig: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    unsafe { orig(ingame, param2, arg3, arg4) }
+}
+
+/// Install the RequestMoveMap BlockId fix detour (MhHook + MH_Initialize + queue_enable +
+/// MH_ApplyQueued), mirroring `install_wbr_update_hook`. Idempotent. Passthrough unless ARMED by our
+/// own load trigger, so installing it unconditionally (product default) never affects normal play.
+pub(crate) fn install_request_move_map_fix_hook() -> bool {
+    if REQUEST_MOVE_MAP_HOOK_INSTALLED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC {
+        return true;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "request-move-map-fix: MH_Initialize failed: {status:?}"
+            ));
+            return false;
+        }
+    }
+    let Ok(addr) = game_rva(REQUEST_MOVE_MAP_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "request-move-map-fix: failed to resolve 0x{REQUEST_MOVE_MAP_RVA:x} rva"
+        ));
+        return false;
+    };
+    match unsafe { MhHook::new(addr as *mut c_void, request_move_map_fix_hook as *mut c_void) } {
+        Ok(hook) => {
+            REQUEST_MOVE_MAP_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "request-move-map-fix: queue_enable failed: {status:?}"
+                ));
+                return false;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    REQUEST_MOVE_MAP_HOOK_INSTALLED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "request-move-map-fix: hooked 0x{addr:x} (armed-only BlockId fixup; passthrough otherwise)"
+                    ));
+                    true
+                }
+                status => {
+                    append_autoload_debug(format_args!(
+                        "request-move-map-fix: MH_ApplyQueued failed: {status:?}"
+                    ));
+                    false
+                }
+            }
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!(
+                "request-move-map-fix: MhHook::new failed: {status:?}"
+            ));
+            false
+        }
+    }
+}
+
 /// Locate the on-disk save file (`.../EldenRing/<steamid>/ER0000.sl2` or `.co2`) and read its bytes.
 /// The directory is built by the NATIVE builder 0x140e0e680 (`SAVE_DIR_BUILDER_RVA`) -- the same
 /// path the engine uses -- so we never hardcode the user-data/steamid prefix. Inside that directory
 /// we pick the save file by extension (`.sl2`/`.co2`) rather than assuming an exact filename, so the
 /// probe works for vanilla and Seamless without a hardcoded name (bd dont-hardcode-savefile-tied).
+/// Optional per-switch cross-file save-source override for the programmatic (file,slot) switch. Reads a
+/// game-dir control file (`er-effects-switch-save-file.txt`) whose contents are a single save path the
+/// game can open (a Windows path, e.g. `A:\...\150-Banon\ER0000.sl2`). None when absent/empty. The
+/// harness writes the target FILE here before writing the slot; own_load_read_sl2_bytes reads it FIRST.
+fn switch_save_file_override() -> Option<String> {
+    let path = game_directory_path()?.join("er-effects-switch-save-file.txt");
+    let contents = std::fs::read_to_string(path).ok()?;
+    let trimmed = contents.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
+}
+
 pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
     const REQ_DIR_SANE_MAX_CU: usize = 320;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -376,6 +553,84 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
     // Same std::fs access the redirect enforcer already uses successfully from this DLL under Proton
     // (save_redirect::save_override_redirect_root_w). The full multi-slot save is returned; the
     // caller slices the picked slot exactly as it does for the native-builder bytes.
+    //
+    // RUNTIME FOREIGN PICK OVERRIDE (Load-Save-Profiles pick-override fix, er-effects-rs, 2026-07-15):
+    // When the human-driven "Load Save Profiles" path has COMMITTED a foreign slot this switch,
+    // `system_quit_save_swap_prepare_selected_slot` has already overwritten the game-owned ACTIVE
+    // `%APPDATA%/EldenRing/<steamid>/ER0000.{sl2,co2}` file with the picked slot's bytes (and re-committed
+    // it after the return-title save). Those committed bytes -- NOT the configured `save_file` -- are what
+    // the user just picked, so the feed MUST read the committed file here. The configured `save_file`
+    // stays the INITIAL boot autoload default (it wins only when no runtime pick is committed): reading it
+    // over a fresh foreign commit is exactly the pick-override bug (preview showed the picked character but
+    // the game loaded the config default). Read the committed path DIRECTLY -- same std::fs source as the
+    // configured-direct branch below -- because in direct mode the CreateFileW redirect does not cover the
+    // native builder's `read_dir` enumeration (see the native-builder note below), so relying on the dir
+    // walk to observe the just-committed bytes is timing/redirect fragile.
+    // RUNTIME CROSS-FILE OVERRIDE (programmatic (file,slot) switch, 2026-07-18). The harness sets the
+    // target save FILE for THIS switch via a game-dir control file (er-effects-switch-save-file.txt = a
+    // Windows path the game can open, e.g. A:\...\150-Banon\ER0000.sl2). Read it FIRST so a programmatic
+    // cross-file switch loads an ARBITRARY vanilla file READ-ONLY, in-memory (the source is only read;
+    // the caller slices the picked slot exactly like the boot TOML save_file path). Absent/empty -> fall
+    // through to the existing committed-foreign / configured precedence (within-file switches leave it
+    // unset). Same std::fs read the redirect enforcer + configured-direct branch already use.
+    if let Some(override_path) = switch_save_file_override() {
+        match std::fs::read(&override_path) {
+            Ok(mut bytes)
+                if bytes.len() as u64 >= crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES =>
+            {
+                normalize_save_bytes_to_active_steam_id(base, &mut bytes, "own-load-switch-file-override");
+                append_autoload_debug(format_args!(
+                    "own-load: read SWITCH FILE OVERRIDE \"{}\" ({} bytes) for slicing (programmatic cross-file (file,slot) switch overrides configured save_file for this load)",
+                    override_path,
+                    bytes.len()
+                ));
+                return Some(bytes);
+            }
+            Ok(bytes) => {
+                append_autoload_debug(format_args!(
+                    "own-load: switch file override \"{}\" too small ({} bytes < {}) -- falling back to committed/configured",
+                    override_path,
+                    bytes.len(),
+                    crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES
+                ));
+            }
+            Err(e) => {
+                append_autoload_debug(format_args!(
+                    "own-load: switch file override \"{}\" read failed ({e}) -- falling back to committed/configured",
+                    override_path
+                ));
+            }
+        }
+    }
+    if let Some(committed_path) = system_quit_committed_foreign_save_path() {
+        match std::fs::read(&committed_path) {
+            Ok(mut bytes)
+                if bytes.len() as u64 >= crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES =>
+            {
+                normalize_save_bytes_to_active_steam_id(base, &mut bytes, "own-load-committed-foreign");
+                append_autoload_debug(format_args!(
+                    "own-load: read COMMITTED FOREIGN save \"{}\" ({} bytes) for slicing (Load-Save-Profiles pick overrides configured save_file for this load)",
+                    committed_path,
+                    bytes.len()
+                ));
+                return Some(bytes);
+            }
+            Ok(bytes) => {
+                append_autoload_debug(format_args!(
+                    "own-load: committed foreign save \"{}\" too small ({} bytes < {}) -- falling back to configured/native save-dir",
+                    committed_path,
+                    bytes.len(),
+                    crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES
+                ));
+            }
+            Err(e) => {
+                append_autoload_debug(format_args!(
+                    "own-load: committed foreign save \"{}\" read failed ({e}) -- falling back to configured/native save-dir",
+                    committed_path
+                ));
+            }
+        }
+    }
     if let Some(path) = configured_or_default_save_file() {
         match std::fs::read(&path) {
             Ok(mut bytes)

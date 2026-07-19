@@ -359,7 +359,8 @@ fn apply_startup_window_final_geometry() {
         GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowRect, MoveWindow, SWP_FRAMECHANGED, SWP_NOZORDER, SetWindowPos,
+        GetWindowRect, MoveWindow, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER,
+        SetWindowPos,
     };
 
     let start = std::time::Instant::now();
@@ -439,6 +440,10 @@ fn apply_startup_window_final_geometry() {
     }
 
     // Mirror the game's own +11s sequence exactly (resize + FRAMECHANGED reposition), just early.
+    // SWP_NOACTIVATE | SWP_NOOWNERZORDER: our EARLY reposition must NOT activate/foreground the game window.
+    // Without SWP_NOACTIVATE, Windows activates the target as a side effect of SetWindowPos, so this early
+    // apply (which fires up to a few times during boot) yanked focus to the game -- user-reported 2026-07-15
+    // "the DLL is changing focus". We only relocate the window; the game's own launch activation is untouched.
     let move_ok = unsafe { MoveWindow(hwnd, target.left, target.top, width, height, true) }.is_ok();
     let pos_ok = unsafe {
         SetWindowPos(
@@ -448,7 +453,7 @@ fn apply_startup_window_final_geometry() {
             target.top,
             width,
             height,
-            SWP_NOZORDER | SWP_FRAMECHANGED,
+            SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
         )
     }
     .is_ok();

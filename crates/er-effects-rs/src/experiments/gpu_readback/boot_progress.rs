@@ -45,6 +45,8 @@ pub(crate) static BOOT_VIEW_LAST_PERMILLE: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static BOOT_VIEW_REACHED_MASK: AtomicUsize = AtomicUsize::new(0);
 /// Highest reached milestone index (drives the label).
 pub(crate) static BOOT_VIEW_MILESTONE_IDX: AtomicUsize = AtomicUsize::new(0);
+/// Hash of the last composed visible loading label logged to the runtime debug log.
+static BOOT_VIEW_LAST_LABEL_HASH: AtomicUsize = AtomicUsize::new(0);
 
 // Our OWN persistent command objects (leaked raw pointers, same pattern as the portrait overlay --
 // windows-rs COM types are !Send). Deliberately SEPARATE from the OVERLAY_* objects so the boot view
@@ -106,44 +108,54 @@ const BOOT_BG_STEAM_APPID: &str = "1245620";
 const BOOT_BG_MAX_DIM: usize = 4096;
 const BOOT_BG_MAX_PIXELS: usize = BOOT_BG_MAX_DIM * BOOT_BG_MAX_DIM;
 
-/// Milestone labels (5x7 font glyph coverage: A-Z subset + digits + '%'; see `boot_glyph_5x7`).
-const BOOT_VIEW_MILESTONE_LABELS: [&str; 7] = [
-    "BOOT", "GAME", "OFFLINE", "TITLE", "MENU", "CONTINUE", "LOADING",
+/// Number of loading phases. Higher granularity than the old 7 (user 2026-07-15: "we need higher
+/// granularity and specificity to the label ... It gets stuck on some of these phases for longer
+/// segments"), especially across the world-load, which is the long stuck stretch.
+const BOOT_VIEW_MILESTONE_COUNT: usize = 12;
+/// Left-aligned phase labels (5x7 font: A-Z + space; see `boot_glyph_5x7`). Specific + multi-word -- this
+/// single label above the bar now carries the whole phase story (all tick markers removed), so it is
+/// left-aligned in the reserved text space and can be more than one word. Ordered; each idx is asserted by
+/// `boot_milestone_reached(idx)` and latched monotonic by the caller.
+const BOOT_VIEW_MILESTONE_LABELS: [&str; BOOT_VIEW_MILESTONE_COUNT] = [
+    "STARTING UP", // 0: our present hook + the game swapchain are live (engine still initializing)
+    "GAME SYSTEMS", // 1: GameMan/global systems constructed
+    "ACQUIRING ASSETS", // 2: title menu resource acquisition begins (start of the long ~32s asset load)
+    "OPENING SCALEFORM", // 3: Scaleform (.gfx) files opening -- ramps through the middle of the asset load
+    "BUILDING SCALEFORM", // 4: Scaleform resource ctors -- ramps late in the asset load
+    "TITLE READY", // 5: engine interactive internally (PRESS START bound); we cover the title itself
+    "PREPARING SAVE", // 6: menu opened internally / offline committed; autoload about to commit the save
+    "LOADING SAVE",   // 7: Continue committed (SetState5)
+    "BUILDING WORLD", // 8: the native loading screen appeared (world build begun)
+    "STREAMING WORLD", // 9: the game's world-load gauge is actively streaming
+    "FINALIZING WORLD", // 10: the world-load gauge is past the midpoint, nearing complete
+    "ENTERING WORLD", // 11: the gauge is near-complete / the loading screen is closing
 ];
-/// Progress targets per milestone, in permille. Spacing follows the measured product-run timeline
-/// (first present +3.5s, offline +8.5s, title/menu ~+10s, continue ~+15s, table builds ~+15.5s) so
-/// the bar's pace roughly matches wall-clock without ever depending on it. The final pre-loading-view
-/// milestone deliberately stops at the native-handoff marker instead of 100%: the remaining gap is owned
-/// by the game's real now-loading Gauge_3 bar, whose terminal frame is the true all-loading-complete
-/// semaphore.
-// SAVE CHECK sits at the fill edge where the bar actually PAUSES while the missing-save overlay
-// picker is up. The native title menu-open is now HELD until the pick (title_open_menu_suppress_hook),
-// so the MENU milestone (490) cannot latch while the picker is pending -- the bar stalls at the TITLE
-// milestone (385) and its inter-milestone creep tops out at 385 + 7/10*(490-385) = 458. The clamp in
-// `boot_view_progress` pins the fill edge exactly here while the pick is pending; it lifts the frame the
-// pick clears the latch, so the bar resumes MENU -> CONTINUE -> SAVE LOAD / NATIVE. (Was 570, which
-// matched the OLD flow where the menu opened before the pick and the bar paused at the MENU milestone.)
-const BOOT_VIEW_SAVE_CHECK_PERMILLE: usize = 458;
-const BOOT_VIEW_SAVE_CHECK_LABEL: &str = "SAVE CHECK";
-const BOOT_VIEW_SAVE_LOAD_PERMILLE: usize = 615;
-const BOOT_VIEW_SAVE_LOAD_LABEL: &str = "SAVE LOAD";
-const BOOT_VIEW_NATIVE_HANDOFF_PERMILLE: usize = 700;
-const BOOT_VIEW_NATIVE_HANDOFF_LABEL: &str = "NATIVE";
-const BOOT_VIEW_HANDOFF_MARKER_W: usize = 3;
-const BOOT_VIEW_HANDOFF_GAP_W: usize = 9;
-const BOOT_VIEW_MILESTONE_PERMILLE: [usize; 7] = [
-    45,
-    140,
-    245,
-    385,
-    490,
-    615,
-    BOOT_VIEW_NATIVE_HANDOFF_PERMILLE,
-];
-/// Inter-milestone creep: over this window the bar moves up to 7/10 of the gap to the next target.
-const BOOT_VIEW_CREEP_FULL_MS: u64 = 6000;
-const BOOT_VIEW_CREEP_NUM: usize = 7;
-const BOOT_VIEW_CREEP_DEN: usize = 10;
+/// Progress target per phase, in permille. The two long stretches -- the title-asset load (2..5) and the
+/// world stream (8..11) -- get the widest spans. The world tail is ALSO driven by the game's real Gauge_3
+/// progress and forced to 1000 at the in-game handoff (see `boot_view_progress`), so our bar owns the whole
+/// 0..100% and reaches 100% right as the character switches in.
+const BOOT_VIEW_MILESTONE_PERMILLE: [usize; BOOT_VIEW_MILESTONE_COUNT] =
+    [30, 80, 150, 220, 290, 360, 440, 520, 610, 730, 860, 950];
+/// SWITCH STEP-NAME LABELS (2026-07-16, user-requested). Once the MoveMapStep child is live during an
+/// own-menu switch, the bar shows the REAL engine step (`movemapstep_step_name`) as its label and
+/// drives the fill from the child step index, so a softlock FREEZES the bar on the exact stuck step by
+/// name (WORLD RES WAIT, LEAVE SESSION WAIT, ...) -- the label becomes the RAM semaphore, not an
+/// eyeballed "stuck at LOADING SAVE". `boot_view_progress` returns `idx >= MMS_LABEL_IDX_BASE` to signal
+/// the rasterizer to name the step instead of using the heuristic milestone label; the child step is
+/// `idx - MMS_LABEL_IDX_BASE`. The `(permille, idx)` draw cache invalidates naturally on a step change.
+const MMS_LABEL_IDX_BASE: usize = 100;
+/// Fill (permille) the child steps span: step 0 starts just past LOADING SAVE (520), the last step
+/// approaches 100%. Keeps the bar monotonic across the heuristic->step-name handoff.
+const MMS_STEP_FILL_BASE: usize = 540;
+const MMS_STEP_FILL_SPAN: usize = 440;
+/// Fill edge the bar pauses at while the startup save picker holds the boot (the MAIN MENU phase, whose
+/// creep tops out near here). `boot_view_progress` clamps the fill here while a pick is pending, then
+/// lifts it the frame the pick clears the latch.
+const BOOT_VIEW_SAVE_CHECK_PERMILLE: usize = 470;
+/// Asymptotic creep time-constant: creep = gap * since/(since + K). At `since == K` the bar is halfway to
+/// the next milestone; it keeps approaching but never reaches it, so the bar NEVER fully freezes during a
+/// long phase (user 2026-07-15: STARTING UP ~23s and the title load ~32s made a 70%-capped bar look stuck).
+const BOOT_VIEW_CREEP_K_MS: u64 = 2600;
 /// Seamless handoff (user 2026-07-06, replacing the earlier fade-out design): at the loading
 /// handoff the cover HOLDS fully lit over the game's black gap and the loading screen's own
 /// fade-in-from-black, then stops in a single cut once the native loading screen is fully lit --
@@ -166,10 +178,10 @@ const BOOT_VIEW_TEXT_BASE_SCALE: usize = 2;
 const BOOT_VIEW_TEXT_REFERENCE_H: u32 = 1080;
 const BOOT_VIEW_TEXT_MIN_SCALE: usize = 1;
 const BOOT_VIEW_TEXT_MAX_SCALE: usize = 4;
-const BOOT_VIEW_GLYPH_W: usize = 5;
-const BOOT_VIEW_GLYPH_H: usize = 7;
+pub(crate) const BOOT_VIEW_GLYPH_W: usize = 5;
+pub(crate) const BOOT_VIEW_GLYPH_H: usize = 7;
 /// Advance per character (5px glyph + 1px gap, pre-scale).
-const BOOT_VIEW_GLYPH_ADV: usize = 6;
+pub(crate) const BOOT_VIEW_GLYPH_ADV: usize = 6;
 /// Hairline bar, like the game's own loading bar.
 const BOOT_VIEW_BAR_H: usize = 3;
 /// Gap between the text row and the bar track.
@@ -212,18 +224,28 @@ fn boot_milestone_reached(idx: usize) -> bool {
             // Drawing at all proves the present hook + game swapchain are live.
             0 => true,
             1 => game_man_ptr_or_null() != 0,
-            // Offline bytes are already cleared by the first boot in the same process.
+            // Offline bytes are already cleared by the first boot in the same process. The own-menu switch
+            // reuses the title pipeline, so the three title-asset ramps assert here too; fall back to the
+            // quickload-phase ordinal when they don't (older/other switch paths).
             2 => FORCE_OFFLINE_BYTES_CLEARED.load(Ordering::SeqCst) != 0,
-            // Own-menu switch phases replace stale first-boot title/menu latches.
-            3 => phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED,
-            4 => phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN,
-            5 => phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
-                || SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
-                || TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0,
-            6 => {
-                PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst)
-                    > BOOT_VIEW_LOADSCREEN_TABLE_BASELINE.load(Ordering::SeqCst)
+            3 => {
+                TITLE_SCALEFORM_FILE_OPEN_HITS.load(Ordering::SeqCst) != 0
+                    || phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
             }
+            4 => {
+                TITLE_SCALEFORM_RESOURCE_CTOR_HITS.load(Ordering::SeqCst) != 0
+                    || phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+            }
+            5 => phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN,
+            6 => phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF,
+            7 => {
+                phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
+                    || SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
+                    || TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0
+            }
+            // World-load phases 8..11, keyed off the game's native loading screen (shared with the normal
+            // path so both flows get the same BUILDING/STREAMING/FINALIZING/ENTERING WORLD granularity).
+            8 | 9 | 10 | 11 => boot_world_phase_reached(idx),
             _ => false,
         };
     }
@@ -231,27 +253,59 @@ fn boot_milestone_reached(idx: usize) -> bool {
         // Drawing at all proves the present hook + game swapchain are live.
         0 => true,
         1 => game_man_ptr_or_null() != 0,
-        2 => FORCE_OFFLINE_BYTES_CLEARED.load(Ordering::SeqCst) != 0,
-        3 => TITLE_FADEIN_SKIP_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS,
-        // Menu-open era: the own-stepper latch when that task runs, OR'd with the network-check
-        // shortcircuit which fires ~10ms after the title-accept-byte natural menu-open on the
+        // ACQUIRING ASSETS: the title menu starts acquiring its Scaleform resources (~12.7s), right after
+        // GameMan. First of three title-asset ramps; splitting the old single ~32s "asset load" label into
+        // three keeps the bar/label advancing across that long stretch.
+        2 => TITLE_MENU_RESOURCE_ACQUIRE_HITS.load(Ordering::SeqCst) != 0,
+        // OPENING SCALEFORM / BUILDING SCALEFORM: the .gfx file-open counter climbs to ~113 across the load,
+        // so keying these off ASCENDING COUNT thresholds (not `!= 0`) spreads the two labels through the
+        // stretch instead of both flipping the instant the first file opens (they all go nonzero together).
+        3 => TITLE_SCALEFORM_FILE_OPEN_HITS.load(Ordering::SeqCst) >= 30,
+        4 => TITLE_SCALEFORM_FILE_OPEN_HITS.load(Ordering::SeqCst) >= 70,
+        // TITLE READY: PRESS START is bound (~40s, the title is actually up internally) -- OR the fade-in
+        // skip fired (backstop). We cover the title itself; this only reflects the engine reaching it.
+        5 => {
+            TITLE_PRESS_START_BIND_HITS.load(Ordering::SeqCst) != 0
+                || TITLE_FADEIN_SKIP_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS
+        }
+        // PREPARING SAVE: menu opened internally -- the own-stepper latch when that task runs, OR'd with the
+        // network-check shortcircuit which fires ~10ms after the title-accept-byte natural menu-open on the
         // product path (runtime-proven 2026-07-05: latch stayed 0, shortcircuit fired at +12.8s).
-        4 => {
+        6 => {
             PRODUCT_CORE_LAST_MENU_OPENED_LATCH.load(Ordering::SeqCst) != 0
                 || NETWORK_CHECK_SHORTCIRCUIT_COUNT.load(Ordering::SeqCst) != 0
         }
-        // Continue committed: the confirm/TFC counters on their paths, OR'd with the portrait
-        // teardown-SPARE which lands in the same millisecond as the Continue SetState5 on the
-        // portrait-lookat product path (runtime-proven 2026-07-05: counters stayed 0, spare fired).
-        5 => {
+        // LOADING SAVE: Continue committed -- the confirm/TFC counters on their paths, OR'd with the portrait
+        // teardown-SPARE which lands in the same millisecond as the Continue SetState5 on the portrait-lookat
+        // product path (runtime-proven 2026-07-05: counters stayed 0, spare fired).
+        7 => {
             SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
                 || TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0
                 || LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) != 0
         }
-        6 => {
-            PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst)
-                > BOOT_VIEW_LOADSCREEN_TABLE_BASELINE.load(Ordering::SeqCst)
-        }
+        // World-load phases: the native loading screen carries these (see boot_world_phase_reached), so
+        // they assert even on the menu-free autoload where the profile table never builds.
+        8 | 9 | 10 | 11 => boot_world_phase_reached(idx),
+        _ => false,
+    }
+}
+
+/// The three world-load phases (6=BUILDING, 7=STREAMING, 8=ENTERING WORLD), keyed off the game's native
+/// CS::LoadingScreen so they assert on every load path (normal autoload AND own-menu switch), independent
+/// of the profile-table build. Pure atomic reads; safe from the render thread.
+fn boot_world_phase_reached(idx: usize) -> bool {
+    let update_hits = LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst);
+    let progress = LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst);
+    let close_hits = LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst);
+    match idx {
+        // BUILDING WORLD: the native loading screen has appeared -> the world build has begun.
+        8 => update_hits != 0,
+        // STREAMING WORLD: the native world-load gauge is actively streaming.
+        9 => progress > 0,
+        // FINALIZING WORLD: the gauge is past the midpoint, splitting the long stream into two labels.
+        10 => progress >= 500,
+        // ENTERING WORLD: the gauge is near-complete or the loading screen sent its close -> switch in-game.
+        11 => progress >= 900 || close_hits != 0,
         _ => false,
     }
 }
@@ -282,6 +336,22 @@ pub(crate) fn rearm_boot_progress_for_own_menu_load(selected_slot: i32, source: 
     BOOT_VIEW_DRAWN_IDX.store(usize::MAX, Ordering::SeqCst);
     BOOT_VIEW_DRAWN_BG_ACTIVE.store(usize::MAX, Ordering::SeqCst);
     BOOT_VIEW_IDX_CHANGED_MS.store(boot_view_epoch_ms(), Ordering::SeqCst);
+    // Reset the WORLD-PHASE semaphores (native loading-screen counters read by boot_world_phase_reached)
+    // so this switch's bar markers 8..11 start UNREACHED instead of inheriting the PREVIOUS load's finished
+    // state (user-reported 2026-07-16: the bar stays FULL and the label never updates for the whole 2nd/3rd
+    // load = "I don't know what's going on for 30s"). Markers 3-4 already re-assert from the switch's phase,
+    // 5-7 from phase advance; only the world-tail counters were sticky. The switch's own native loading
+    // screen re-increments these as its world streams, so 8..11 (BUILDING/STREAMING/FINALIZING/ENTERING
+    // WORLD) advance with the real load and the bar/label move again (and STALL at the true stuck marker).
+    LOADING_SCREEN_UPDATE_HITS.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_BAR_PROGRESS_PERMILLE.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_CLOSE_SENT_HITS.store(0, Ordering::SeqCst);
+    // Clear the PREVIOUS character's portrait/render state IMMEDIATELY when a new load arms (2026-07-16,
+    // user-reported: the old character lingered on the new load screen). The portrait window is otherwise
+    // only reset on load COMPLETION, so the just-loaded character carried into the NEXT switch's cover.
+    // Resetting here rebinds the portrait pipeline for the incoming slot so the cover shows the new
+    // character (or a clean black/bar) instead of the prior one.
+    loading_portrait_window_reset("own-menu-switch-rearm");
     append_autoload_debug(format_args!(
         "boot-view: rearmed for own-menu character load selected_slot={selected_slot} source={source} table_baseline={table_baseline}"
     ));
@@ -312,22 +382,256 @@ fn boot_view_progress() -> (usize, usize) {
         base
     };
     let since = now_ms.saturating_sub(BOOT_VIEW_IDX_CHANGED_MS.load(Ordering::SeqCst));
-    let creep = (next.saturating_sub(base) * (since.min(BOOT_VIEW_CREEP_FULL_MS) as usize)
-        * BOOT_VIEW_CREEP_NUM)
-        / (BOOT_VIEW_CREEP_FULL_MS as usize * BOOT_VIEW_CREEP_DEN);
+    // Asymptotic creep toward (never reaching) the next milestone, so a long phase's bar keeps inching
+    // forward instead of freezing at a fixed cap -- the "is it stuck?" fix.
+    let gap = next.saturating_sub(base) as u64;
+    let creep = (gap * since / (since + BOOT_VIEW_CREEP_K_MS)) as usize;
     let pm = (base + creep).min(1000);
-    // While the overlay picker holds the boot, clamp the fill so its edge stops EXACTLY at the
-    // SAVE CHECK tick (the MENU milestone + creep would otherwise creep ~7 permille past it, leaving
-    // the tick sitting behind the fill edge). The clamp lifts the frame the pick clears the latch,
-    // so the bar resumes past SAVE CHECK toward SAVE LOAD / NATIVE.
+    // While the startup save picker holds the boot, clamp the fill so it PAUSES at the PREPARING SAVE edge
+    // (the phase creep would otherwise drift past it); the clamp lifts the frame the pick clears the latch,
+    // so the bar resumes toward LOADING SAVE / the world phases.
     let pm = if missing_save_selection_pending() {
         pm.min(BOOT_VIEW_SAVE_CHECK_PERMILLE)
     } else {
         pm
     };
+    // WORLD-LOAD tail (native Windows): from BUILDING WORLD onward (idx >= 8) drive the fill from the game's
+    // REAL Gauge_3 world-load progress (LOADING_SCREEN_BAR_PROGRESS_PERMILLE) mapped onto
+    // [BUILDING WORLD permille .. 100%], so the bar shows genuine progress across the long streaming stretch
+    // and reaches 100% exactly as the gauge completes -- the moment the game switches the character in-game
+    // (user 2026-07-15). Native-only so the Wine composite's native-Gauge_3 handoff is untouched; the
+    // fetch_max below keeps it monotonic.
+    let pm = if crate::experiments::is_native_windows() && idx >= 8 {
+        let floor = BOOT_VIEW_MILESTONE_PERMILLE[8];
+        let native = LOADING_SCREEN_BAR_PROGRESS_PERMILLE
+            .load(Ordering::SeqCst)
+            .min(1000);
+        pm.max(floor + native * (1000 - floor) / 1000)
+    } else {
+        pm
+    };
+    // SWITCH STEP-NAME OVERRIDE (user-requested 2026-07-16): once the MoveMapStep child is live during
+    // an own-menu switch, encode the child's real step into idx (>= MMS_LABEL_IDX_BASE) and drive the
+    // fill from it, so the label shows the engine step (MSB LOAD -> WORLD RES WAIT -> ... -> FINISH) and
+    // the bar FREEZES on the exact stuck step during a softlock. Double-gated on OWN_MENU_LOAD_ACTIVE so
+    // first-boot is untouched. SWITCH_ORACLE_MMS_STEP is published by the game-thread SWITCH-ORACLE.
+    let (idx, pm) = if BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0 {
+        let s = SWITCH_ORACLE_MMS_STEP.load(Ordering::SeqCst);
+        if s != usize::MAX && s < MOVEMAPSTEP_STEP_NAMES.len() {
+            let mms_pm = MMS_STEP_FILL_BASE + s * MMS_STEP_FILL_SPAN / MOVEMAPSTEP_STEP_NAMES.len();
+            (MMS_LABEL_IDX_BASE + s, pm.max(mms_pm))
+        } else {
+            (idx, pm)
+        }
+    } else {
+        (idx, pm)
+    };
     // Monotonic display: an idx re-latch or timer wobble must never walk the bar backwards.
-    let shown = BOOT_VIEW_LAST_PERMILLE.fetch_max(pm, Ordering::SeqCst).max(pm);
+    let shown = BOOT_VIEW_LAST_PERMILLE
+        .fetch_max(pm, Ordering::SeqCst)
+        .max(pm);
     (idx, shown)
+}
+
+fn boot_view_label_hash(text: &str) -> usize {
+    let mut h = 14_695_981_039_346_656_037usize;
+    for b in text.bytes() {
+        h ^= b as usize;
+        h = h.wrapping_mul(1_099_511_628_211usize);
+    }
+    h
+}
+
+fn boot_view_single_submilestone(label: &'static str) -> (&'static str, usize, usize) {
+    (label, 1, 1)
+}
+
+fn boot_view_counter_submilestone(
+    label: &'static str,
+    current: usize,
+    max: usize,
+    fallback: &'static str,
+) -> (&'static str, usize, usize) {
+    if current == 0 || max == 0 {
+        boot_view_single_submilestone(fallback)
+    } else {
+        (label, current.min(max), max)
+    }
+}
+
+fn boot_view_first_pending_substep(
+    substeps: &[(bool, &'static str)],
+) -> (&'static str, usize, usize) {
+    let total = substeps.len().max(1);
+    for (idx, (ok, label)) in substeps.iter().enumerate() {
+        if !*ok {
+            return (*label, idx + 1, total);
+        }
+    }
+    ("COMPLETE", total, total)
+}
+
+fn boot_view_world_gauge_submilestone(fallback: &'static str) -> (&'static str, usize, usize) {
+    let current = LOADING_SCREEN_BAR_CURRENT_FRAME.load(Ordering::SeqCst);
+    let max = LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst);
+    if LOADING_SCREEN_BAR_ENABLED.load(Ordering::SeqCst) != 0 && max != 0 {
+        ("LOADING BAR", current.min(max), max)
+    } else {
+        boot_view_single_submilestone(fallback)
+    }
+}
+
+fn boot_view_entering_world_submilestone() -> (&'static str, usize, usize) {
+    let request_code = SWITCH_ORACLE_REQUEST_CODE.load(Ordering::SeqCst);
+    let mms_step = SWITCH_ORACLE_MMS_STEP.load(Ordering::SeqCst);
+    let current_epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+    let bar_terminal = LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst) >= 998
+        || (LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst) != 0
+            && LOADING_SCREEN_BAR_CURRENT_FRAME.load(Ordering::SeqCst)
+                >= LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst));
+    let ls730_held = SWITCH_ORACLE_LOADING_FIELD10.load(Ordering::SeqCst) != 0;
+    let ls731_clear = SWITCH_ORACLE_LOADING_FIELD11.load(Ordering::SeqCst) == 0;
+    let loading_close_sent = LOADING_SCREEN_CLOSE_SENT.load(Ordering::SeqCst) != 0
+        || SWITCH_ORACLE_LOADING_FIELD11.load(Ordering::SeqCst) != 0;
+    let request_started = request_code >= 1;
+    let request_stable = request_code >= 2;
+    let menu_job_present = SWITCH_ORACLE_MENU_JOB_PRESENT.load(Ordering::SeqCst) != 0;
+    let player_present = SWITCH_ORACLE_PLAYER_PRESENT.load(Ordering::SeqCst) != 0;
+    let movemap_done = request_code >= 2 || mms_step >= MOVEMAPSTEP_STEP_NAMES.len() - 1;
+    let movement_proven = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
+        && MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == current_epoch;
+    if BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0 || current_epoch != 0 {
+        boot_view_first_pending_substep(&[
+            (bar_terminal, "BAR FINAL"),
+            (ls730_held, "LS 730 HELD"),
+            (ls731_clear, "LS 731 CLEAR"),
+            (movemap_done, "MMS 244 DONE"),
+            (request_stable, "IG D8 STABLE"),
+            (menu_job_present, "CSM 798 MENUJOB"),
+            (player_present, "PLAYER RESIDENT"),
+            (movement_proven, "MOVE PROOF"),
+        ])
+    } else {
+        boot_view_first_pending_substep(&[
+            (bar_terminal, "BAR FINAL"),
+            (loading_close_sent, "LS CLOSE"),
+            (request_started, "IG D8 REQUEST"),
+            (movemap_done, "MMS 244 DONE"),
+            (request_stable, "IG D8 STABLE"),
+            (menu_job_present, "CSM 798 MENUJOB"),
+            (player_present, "PLAYER RESIDENT"),
+            (movement_proven, "MOVE PROOF"),
+        ])
+    }
+}
+
+fn boot_view_load_save_submilestone() -> (&'static str, usize, usize) {
+    if BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0 {
+        boot_view_first_pending_substep(&[
+            (
+                SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.load(Ordering::SeqCst) != 0,
+                "PROFILE LOAD",
+            ),
+            (
+                SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) != 0,
+                "FRESH DESER",
+            ),
+            (
+                SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0,
+                "CONTINUE OK",
+            ),
+        ])
+    } else {
+        let table_seen = PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst)
+            > BOOT_VIEW_LOADSCREEN_TABLE_BASELINE.load(Ordering::SeqCst);
+        boot_view_first_pending_substep(&[
+            (
+                SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
+                    || TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0
+                    || LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) != 0,
+                "CONTINUE OK",
+            ),
+            (table_seen, "LOAD TABLE"),
+        ])
+    }
+}
+
+fn boot_view_movemap_submilestone(step: usize) -> (&'static str, usize, usize) {
+    let request_code = SWITCH_ORACLE_REQUEST_CODE.load(Ordering::SeqCst);
+    let mms_step = SWITCH_ORACLE_MMS_STEP.load(Ordering::SeqCst);
+    let current_epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+    if step < MOVEMAPSTEP_STEP_MOVEMAP_INDEX as usize {
+        return boot_view_single_submilestone(movemapstep_step_name(step as i32));
+    }
+    let step_active = mms_step == step;
+    let title_done = request_code >= 2 || mms_step >= MOVEMAPSTEP_STEP_NAMES.len() - 1;
+    let session_request = request_code >= 2;
+    let menu_job_present = SWITCH_ORACLE_MENU_JOB_PRESENT.load(Ordering::SeqCst) != 0;
+    let player_present = SWITCH_ORACLE_PLAYER_PRESENT.load(Ordering::SeqCst) != 0;
+    let movement_proven = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
+        && MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == current_epoch;
+    boot_view_first_pending_substep(&[
+        (step_active, movemapstep_step_name(step as i32)),
+        (title_done, "MMS 244 DONE"),
+        (session_request, "IG D8 STABLE"),
+        (menu_job_present, "CSM 798 MENUJOB"),
+        (player_present, "PLAYER RESIDENT"),
+        (movement_proven, "MOVE PROOF"),
+    ])
+}
+
+fn boot_view_phase_submilestone(idx: usize) -> (&'static str, usize, usize) {
+    if idx >= MMS_LABEL_IDX_BASE {
+        return boot_view_movemap_submilestone(idx - MMS_LABEL_IDX_BASE);
+    }
+    match idx.min(BOOT_VIEW_MILESTONE_LABELS.len() - 1) {
+        0 => boot_view_single_submilestone("SWAPCHAIN LIVE"),
+        1 => boot_view_single_submilestone("GAME MAN PTR"),
+        2 => boot_view_counter_submilestone(
+            "MENU RES",
+            TITLE_MENU_RESOURCE_ACQUIRE_HITS.load(Ordering::SeqCst),
+            38,
+            "MENU RES ACQ",
+        ),
+        3 => boot_view_counter_submilestone(
+            "GFX FILE",
+            TITLE_SCALEFORM_FILE_OPEN_HITS.load(Ordering::SeqCst),
+            113,
+            "GFX FILE OPEN",
+        ),
+        4 => boot_view_counter_submilestone(
+            "GFX CTOR",
+            TITLE_SCALEFORM_RESOURCE_CTOR_HITS.load(Ordering::SeqCst),
+            112,
+            "GFX CTOR BUILD",
+        ),
+        5 => boot_view_first_pending_substep(&[
+            (
+                TITLE_PRESS_START_BIND_HITS.load(Ordering::SeqCst) != 0,
+                "PRESS START",
+            ),
+            (
+                TITLE_FADEIN_SKIP_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS,
+                "TITLE LOOP",
+            ),
+        ]),
+        6 => boot_view_first_pending_substep(&[
+            (
+                PRODUCT_CORE_LAST_MENU_OPENED_LATCH.load(Ordering::SeqCst) != 0,
+                "MENU OPEN",
+            ),
+            (
+                NETWORK_CHECK_SHORTCIRCUIT_COUNT.load(Ordering::SeqCst) != 0,
+                "NET CHECK",
+            ),
+        ]),
+        7 => boot_view_load_save_submilestone(),
+        8 => boot_view_world_gauge_submilestone("LS UPDATE"),
+        9 => boot_view_world_gauge_submilestone("LOADING BAR"),
+        10 => boot_view_world_gauge_submilestone("LOADING BAR"),
+        11 => boot_view_entering_world_submilestone(),
+        i => boot_view_single_submilestone(BOOT_VIEW_MILESTONE_LABELS[i]),
+    }
 }
 
 /// 5x7 glyphs for the milestone labels + percent readout. Each row byte uses bit 4 as the LEFTMOST
@@ -389,12 +693,12 @@ fn boot_glyph_5x7(c: char) -> [u8; 7] {
     }
 }
 
-fn boot_text_width(text: &str, scale: usize) -> usize {
+pub(crate) fn boot_text_width(text: &str, scale: usize) -> usize {
     text.chars().count() * BOOT_VIEW_GLYPH_ADV * scale
 }
 
 /// Blit `text` into the tight RGBA buffer at (x, y), scaled by `scale`.
-fn boot_draw_text_rgb(
+pub(crate) fn boot_draw_text_rgb(
     buf: &mut [u8],
     w: usize,
     h: usize,
@@ -617,7 +921,10 @@ fn boot_bg_find_latest_local_steam_screenshot() -> Option<std::path::PathBuf> {
                 let Ok(meta) = entry.metadata() else {
                     continue;
                 };
-                let modified = meta.modified().or_else(|_| meta.created()).unwrap_or(std::time::UNIX_EPOCH);
+                let modified = meta
+                    .modified()
+                    .or_else(|_| meta.created())
+                    .unwrap_or(std::time::UNIX_EPOCH);
                 if best.as_ref().map_or(true, |(t, _)| modified > *t) {
                     best = Some((modified, path));
                 }
@@ -634,20 +941,33 @@ fn boot_bg_steam_userdata_roots() -> Vec<std::path::PathBuf> {
             boot_bg_push_unique_root(&mut roots, ancestor.join("userdata"));
         }
     }
-    for var in ["STEAM_COMPAT_CLIENT_INSTALL_PATH", "STEAM_HOME", "STEAM_ROOT"] {
+    for var in [
+        "STEAM_COMPAT_CLIENT_INSTALL_PATH",
+        "STEAM_HOME",
+        "STEAM_ROOT",
+    ] {
         if let Ok(value) = std::env::var(var) {
             if !value.is_empty() {
-                boot_bg_push_unique_root(&mut roots, std::path::PathBuf::from(value).join("userdata"));
+                boot_bg_push_unique_root(
+                    &mut roots,
+                    std::path::PathBuf::from(value).join("userdata"),
+                );
             }
         }
     }
     if let Ok(home) = std::env::var("HOME") {
         if !home.is_empty() {
             let home = std::path::PathBuf::from(home);
-            boot_bg_push_unique_root(&mut roots, home.join(".steam").join("steam").join("userdata"));
             boot_bg_push_unique_root(
                 &mut roots,
-                home.join(".local").join("share").join("Steam").join("userdata"),
+                home.join(".steam").join("steam").join("userdata"),
+            );
+            boot_bg_push_unique_root(
+                &mut roots,
+                home.join(".local")
+                    .join("share")
+                    .join("Steam")
+                    .join("userdata"),
             );
         }
     }
@@ -666,7 +986,12 @@ fn boot_bg_is_supported_image_path(path: &std::path::Path) -> bool {
         && path
             .extension()
             .and_then(|ext| ext.to_str())
-            .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "jpg" | "jpeg" | "png"))
+            .map(|ext| {
+                matches!(
+                    ext.to_ascii_lowercase().as_str(),
+                    "jpg" | "jpeg" | "png" | "gif"
+                )
+            })
             .unwrap_or(false)
 }
 
@@ -675,7 +1000,12 @@ unsafe fn boot_bg_decode_wic_rgba(path: &std::path::Path) -> Option<BootBgImage>
     // the real gate. WIC is local file decode only -- no network and no helper process.
     let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
     let factory: IWICImagingFactory = unsafe {
-        CoCreateInstance(&CLSID_WICImagingFactory, None::<&IUnknown>, CLSCTX_INPROC_SERVER).ok()?
+        CoCreateInstance(
+            &CLSID_WICImagingFactory,
+            None::<&IUnknown>,
+            CLSCTX_INPROC_SERVER,
+        )
+        .ok()?
     };
     let wide = boot_bg_wide_null(path);
     let decoder = unsafe {
@@ -696,15 +1026,24 @@ unsafe fn boot_bg_decode_wic_rgba(path: &std::path::Path) -> Option<BootBgImage>
     unsafe { converted.GetSize(&mut width, &mut height).ok()? };
     let width_usize = width as usize;
     let height_usize = height as usize;
-    let len = width_usize.checked_mul(height_usize)?.checked_mul(RGBA8_BPP)?;
+    let len = width_usize
+        .checked_mul(height_usize)?
+        .checked_mul(RGBA8_BPP)?;
     let mut rgba = vec![0u8; len];
-    unsafe { converted.CopyPixels(std::ptr::null(), width * RGBA8_BPP as u32, &mut rgba).ok()? };
+    unsafe {
+        converted
+            .CopyPixels(std::ptr::null(), width * RGBA8_BPP as u32, &mut rgba)
+            .ok()?
+    };
     boot_bg_image_from_rgba(width_usize, height_usize, rgba)
 }
 
 fn boot_bg_wide_null(path: &std::path::Path) -> Vec<u16> {
     use std::os::windows::ffi::OsStrExt;
-    path.as_os_str().encode_wide().chain(std::iter::once(0)).collect()
+    path.as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
 }
 
 fn boot_fill_aspect_cover_background(buf: &mut [u8], w: usize, h: usize, bg: &BootBgImage) {
@@ -775,29 +1114,89 @@ fn boot_darken_bar_shadow(
     }
 }
 
-fn boot_draw_marker_label(
-    buf: &mut [u8],
-    w: usize,
-    h: usize,
-    content_x: usize,
-    content_y: usize,
-    content_w: usize,
-    permille: usize,
-    label: &str,
-    has_bg: bool,
-    text_scale: usize,
-) -> usize {
-    let marker_x = content_x + (content_w * permille / 1000).min(content_w.saturating_sub(1));
-    let label_w = boot_text_width(label, text_scale);
-    let label_x = marker_x
-        .saturating_sub(label_w / 2)
-        .min(w.saturating_sub(label_w));
-    if has_bg {
-        boot_draw_text_shadowed(buf, w, h, label_x, content_y, label, text_scale);
+/// The rendered boot/loading frame: CPU RGBA plus where to place it on a `bw`x`bh` backbuffer.
+pub(crate) struct BootViewFrame {
+    pub(crate) rgba: Vec<u8>,
+    pub(crate) w: usize,
+    pub(crate) h: usize,
+    pub(crate) dx: usize,
+    pub(crate) dy: usize,
+}
+
+/// Render the boot/loading-screen frame ONCE, device-agnostically: the loading bar (milestone label,
+/// ticks, text scaling, progress creep) and -- when the startup save picker is armed -- its browser panel
+/// composited on top. This is the SHARED rasterizer for BOTH the Wine in-swapchain composite
+/// (composite_boot_progress_inner) and the native-Windows separate-window overlay, so the loading screen
+/// is identical on both. The caller uploads `rgba` and copies it to its backbuffer at `(dx, dy)`.
+pub(crate) fn boot_view_render_frame(bw: usize, bh: usize) -> BootViewFrame {
+    let bw32 = bw as u32;
+    let bh32 = bh as u32;
+    let text_scale = boot_view_text_scale(bh32);
+    let strip_w = (bw32 * BOOT_VIEW_STRIP_W_NUM / BOOT_VIEW_STRIP_W_DEN)
+        .max(BOOT_VIEW_STRIP_MIN_W)
+        .min(bw32);
+    let strip_h = (boot_view_strip_height(text_scale) as u32).min(bh32);
+    let strip_dx = (bw32 - strip_w) / 2;
+    let strip_dy = (bh32 * BOOT_VIEW_STRIP_Y_NUM / BOOT_VIEW_STRIP_Y_DEN).min(bh32 - strip_h);
+    let bg = boot_bg_image();
+    let picker_active = save_picker_overlay_active();
+    // Loading-screen character stats (game menu font) also need the full-screen canvas so they land at
+    // their expected 5%/60% location; force full_frame when they are shown, exactly like picker_active.
+    let stats_active = stats_overlay_active();
+    // Captured character portrait (from LOADING_BG_PORTRAIT_RGBA) also needs the full-screen canvas so the
+    // head lands at its upper-left rect; force full_frame when a portrait is published, like picker/stats.
+    let portrait_active = portrait_overlay_active();
+    let full_frame = bg.is_some() || picker_active || stats_active || portrait_active;
+    let (region_w, region_h, dx, dy, content_x, content_y, content_w) = if full_frame {
+        (
+            bw,
+            bh,
+            0usize,
+            0usize,
+            strip_dx as usize,
+            strip_dy as usize,
+            strip_w as usize,
+        )
     } else {
-        boot_draw_text(buf, w, h, label_x, content_y, label, text_scale);
+        (
+            strip_w as usize,
+            strip_h as usize,
+            strip_dx as usize,
+            strip_dy as usize,
+            0usize,
+            0usize,
+            strip_w as usize,
+        )
+    };
+    let (ms_idx, permille) = boot_view_progress();
+    // Portrait draws INSIDE the rasterizer (behind the bar) when active and the picker is not up.
+    let draw_portrait = portrait_active && !picker_active;
+    let mut rgba = boot_view_rasterize(
+        region_w,
+        region_h,
+        ms_idx,
+        permille,
+        content_x,
+        content_y,
+        content_w,
+        bg,
+        text_scale,
+        draw_portrait,
+    );
+    if picker_active {
+        // Picker owns the screen exclusively (no character context to portrait/stat yet).
+        let _ = overlay_save_picker_onto(&mut rgba, region_w, region_h);
+    } else if stats_active {
+        // Stats stay in front of the portrait; the game-font block sits at 5%/60%.
+        let _ = overlay_stats_onto(&mut rgba, region_w, region_h);
     }
-    marker_x
+    BootViewFrame {
+        rgba,
+        w: region_w,
+        h: region_h,
+        dx,
+        dy,
+    }
 }
 
 /// Rasterize either the original tight black progress strip, or a full-screen cached screenshot
@@ -812,6 +1211,7 @@ fn boot_view_rasterize(
     content_w: usize,
     bg: Option<&BootBgImage>,
     text_scale: usize,
+    draw_portrait: bool,
 ) -> Vec<u8> {
     let mut buf = vec![0u8; w * h * RGBA8_BPP];
     let has_bg = bg.is_some();
@@ -820,7 +1220,41 @@ fn boot_view_rasterize(
     } else {
         boot_fill_rect(&mut buf, w, h, 0, 0, w, h, BOOT_VIEW_RGB_BLACK);
     }
-    let label = BOOT_VIEW_MILESTONE_LABELS[idx.min(BOOT_VIEW_MILESTONE_LABELS.len() - 1)];
+    // Character portrait BEHIND the bar/label: composite it right after the background so the bar, its
+    // shadow band, and the phase label all draw in front (user 2026-07-15 "behind the loading bar").
+    if draw_portrait {
+        let _ = portrait_onto(&mut buf, w, h);
+    }
+    // Label = "<PHASE NAME> <i>/<N> (<SUBMILESTONE> <x>/<y>)". The parenthesized subprogression is
+    // phase-scoped: early phases with no known finer RAM granularity say so with a 1/1 substep, world-gauge
+    // phases use the native Gauge_3 frame, and entering-world / MoveMap phases use only the semaphores that
+    // are relevant to those phases.
+    let (sub_label, sub_i, sub_max) = boot_view_phase_submilestone(idx);
+    let label_buf: String = if idx >= MMS_LABEL_IDX_BASE {
+        let step = idx - MMS_LABEL_IDX_BASE;
+        let max = MOVEMAPSTEP_STEP_NAMES.len() - 1;
+        format!(
+            "{} {}/{} ({} {}/{})",
+            movemapstep_step_name(step as i32),
+            step,
+            max,
+            sub_label,
+            sub_i,
+            sub_max
+        )
+    } else {
+        let max = BOOT_VIEW_MILESTONE_LABELS.len() - 1;
+        let i = idx.min(max);
+        format!(
+            "{} {}/{} ({} {}/{})",
+            BOOT_VIEW_MILESTONE_LABELS[i], i, max, sub_label, sub_i, sub_max
+        )
+    };
+    let label: &str = &label_buf;
+    let label_hash = boot_view_label_hash(label);
+    if BOOT_VIEW_LAST_LABEL_HASH.swap(label_hash, Ordering::SeqCst) != label_hash {
+        append_autoload_debug(format_args!("boot-view: label -> {label}"));
+    }
     let strip_h = boot_view_strip_height(text_scale);
     let bar_y = content_y + BOOT_VIEW_GLYPH_H * text_scale + BOOT_VIEW_TEXT_BAR_GAP;
     if has_bg {
@@ -833,55 +1267,8 @@ fn boot_view_rasterize(
     } else {
         boot_draw_text(&mut buf, w, h, content_x, content_y, label, text_scale);
     }
-    // SAVE CHECK (the picker-hold pause, ~577) and SAVE LOAD (615) sit close together, so only one
-    // is shown at a time to keep their labels from overlapping: SAVE CHECK while the missing-save
-    // picker holds the boot (that is where the fill visibly pauses), SAVE LOAD otherwise (the normal
-    // continue/save-load checkpoint on every boot). `usize::MAX` = not shown (tick skipped below).
-    let save_picker_hold = missing_save_selection_pending();
-    let save_check_marker_x = if save_picker_hold {
-        boot_draw_marker_label(
-            &mut buf,
-            w,
-            h,
-            content_x,
-            content_y,
-            content_w,
-            BOOT_VIEW_SAVE_CHECK_PERMILLE,
-            BOOT_VIEW_SAVE_CHECK_LABEL,
-            has_bg,
-            text_scale,
-        )
-    } else {
-        usize::MAX
-    };
-    let save_load_marker_x = if save_picker_hold {
-        usize::MAX
-    } else {
-        boot_draw_marker_label(
-            &mut buf,
-            w,
-            h,
-            content_x,
-            content_y,
-            content_w,
-            BOOT_VIEW_SAVE_LOAD_PERMILLE,
-            BOOT_VIEW_SAVE_LOAD_LABEL,
-            has_bg,
-            text_scale,
-        )
-    };
-    let marker_x = boot_draw_marker_label(
-        &mut buf,
-        w,
-        h,
-        content_x,
-        content_y,
-        content_w,
-        BOOT_VIEW_NATIVE_HANDOFF_PERMILLE,
-        BOOT_VIEW_NATIVE_HANDOFF_LABEL,
-        has_bg,
-        text_scale,
-    );
+    // NO tick markers/labels (user 2026-07-15 "remove all of the markers ... remove other tick markers and
+    // labels"): all phase information is carried by the single left-aligned granular label above the bar.
     boot_fill_rect(
         &mut buf,
         w,
@@ -900,58 +1287,6 @@ fn boot_view_rasterize(
         bar_y,
         content_w * permille.min(1000) / 1000,
         BOOT_VIEW_BAR_H,
-        BOOT_VIEW_RGB_FILL,
-    );
-    // Save-check tick: the fill edge where the boot pauses while the overlay picker is up.
-    if save_check_marker_x != usize::MAX {
-        boot_fill_rect(
-            &mut buf,
-            w,
-            h,
-            save_check_marker_x.saturating_sub(BOOT_VIEW_HANDOFF_MARKER_W / 2),
-            bar_y.saturating_sub(2),
-            BOOT_VIEW_HANDOFF_MARKER_W,
-            BOOT_VIEW_BAR_H + 4,
-            BOOT_VIEW_RGB_FILL,
-        );
-    }
-    // Save-load tick: the ShowProgressJob save-data continue/load checkpoint (shown once a save is
-    // resolved, i.e. off the picker hold).
-    if save_load_marker_x != usize::MAX {
-        boot_fill_rect(
-            &mut buf,
-            w,
-            h,
-            save_load_marker_x.saturating_sub(BOOT_VIEW_HANDOFF_MARKER_W / 2),
-            bar_y.saturating_sub(2),
-            BOOT_VIEW_HANDOFF_MARKER_W,
-            BOOT_VIEW_BAR_H + 4,
-            BOOT_VIEW_RGB_FILL,
-        );
-    }
-    // Handoff marker/gap: this pre-loading bar is only phase 1. Leave the remaining track empty for the
-    // native now-loading Gauge_3 phase; the native loading-bar hook supplies the true terminal-frame
-    // semaphore for 100%. Make the split visible: a small black break in the track, a brighter 3px marker,
-    // and the NATIVE label centered above it.
-    let gap_x = marker_x.saturating_sub(BOOT_VIEW_HANDOFF_GAP_W / 2);
-    boot_fill_rect(
-        &mut buf,
-        w,
-        h,
-        gap_x,
-        bar_y.saturating_sub(2),
-        BOOT_VIEW_HANDOFF_GAP_W,
-        BOOT_VIEW_BAR_H + 4,
-        BOOT_VIEW_RGB_BLACK,
-    );
-    boot_fill_rect(
-        &mut buf,
-        w,
-        h,
-        marker_x.saturating_sub(BOOT_VIEW_HANDOFF_MARKER_W / 2),
-        bar_y.saturating_sub(2),
-        BOOT_VIEW_HANDOFF_MARKER_W,
-        BOOT_VIEW_BAR_H + 4,
         BOOT_VIEW_RGB_FILL,
     );
     buf
@@ -1065,7 +1400,8 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
     } else {
         loadscreen_builds != 0 || PROFILE_HAVE_KEYED_FRAME.load(Ordering::SeqCst) != 0
     };
-    let world_handoff = !own_menu_active && IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
+    let world_handoff =
+        !own_menu_active && IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
     if loading_handoff || world_handoff {
         // SEAMLESS CUT (user 2026-07-06): the handoff (loading table build) starts the game's
         // black gap + the loading screen's own fade-in-from-black, so stopping here would cut a
@@ -1084,8 +1420,10 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
             ) {
                 Ok(_) => {
                     seen_ms = now_ms;
-                    BOOT_VIEW_HANDOFF_NATIVE_HITS_BASELINE
-                        .store(LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst), Ordering::SeqCst);
+                    BOOT_VIEW_HANDOFF_NATIVE_HITS_BASELINE.store(
+                        LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst),
+                        Ordering::SeqCst,
+                    );
                     append_autoload_debug(format_args!(
                         "boot-view: handoff detected -> holding cover until native loading screen is lit (draws={} permille={} mask=0x{:x} own_menu={} table_builds={} table_baseline={})",
                         BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst),
@@ -1155,19 +1493,12 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
     if bw == 0 || bh == 0 || bw > MAX_RT_DIM || bh > MAX_RT_DIM {
         return false;
     }
-    // Only the two 8-bit RGBA/BGRA families are handled (format 28 measured on the live swapchain).
-    let swap_rb = matches!(
-        bb_desc.Format,
-        DXGI_FORMAT_B8G8R8A8_UNORM | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
-    );
-    if !swap_rb
-        && !matches!(
-            bb_desc.Format,
-            DXGI_FORMAT_R8G8B8A8_UNORM | DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
-        )
-    {
+    // Backbuffer pixel encoding for the raw-copy path: 8-bit BGRA (swap R/B), 8-bit RGBA (straight),
+    // or 10-bit R10G10B10A2 (pack) -- the last is the native-Windows HDR/10-bit swapchain (format 24),
+    // where a byte copy would garble every pixel, so the map loop must pack instead.
+    let Some(bb_encoding) = boot_view_backbuffer_encoding(bb_desc.Format) else {
         return false;
-    }
+    };
 
     // Progress-bar geometry follows the backbuffer. When a cached screenshot background exists, copy a
     // full-screen region; otherwise preserve the original tiny strip copy over black boot frames.
@@ -1324,6 +1655,7 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
             content_w,
             bg,
             text_scale,
+            false,
         );
         if picker_active
             && overlay_save_picker_onto(&mut tight, region_w as usize, region_h as usize)
@@ -1345,11 +1677,27 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
                 if dofs + src_row > total || so + src_row > tight.len() {
                     break;
                 }
+                let srow = &tight[so..so + src_row];
                 let drow = &mut dst[dofs..dofs + src_row];
-                drow.copy_from_slice(&tight[so..so + src_row]);
-                if swap_rb {
-                    for t in 0..region_w as usize {
-                        drow.swap(t * RGBA8_BPP, t * RGBA8_BPP + 2);
+                match bb_encoding {
+                    BackbufferEncoding::Straight => drow.copy_from_slice(srow),
+                    BackbufferEncoding::SwapRb => {
+                        drow.copy_from_slice(srow);
+                        for t in 0..region_w as usize {
+                            drow.swap(t * RGBA8_BPP, t * RGBA8_BPP + 2);
+                        }
+                    }
+                    BackbufferEncoding::Pack10 => {
+                        for t in 0..region_w as usize {
+                            let s = t * RGBA8_BPP;
+                            let packed = pack_rgba8_to_r10g10b10a2(
+                                srow[s],
+                                srow[s + 1],
+                                srow[s + 2],
+                                srow[s + 3],
+                            );
+                            drow[s..s + 4].copy_from_slice(&packed.to_le_bytes());
+                        }
                     }
                 }
             }
@@ -1380,8 +1728,7 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
     // list would fail every subsequent Reset and silently kill the view).
     let rtv_heap_raw = BOOT_VIEW_RTV_HEAP.load(Ordering::SeqCst) as *mut c_void;
     let rtv_handle = if clear_first {
-        let Some(heap) = (unsafe { ID3D12DescriptorHeap::from_raw_borrowed(&rtv_heap_raw) })
-        else {
+        let Some(heap) = (unsafe { ID3D12DescriptorHeap::from_raw_borrowed(&rtv_heap_raw) }) else {
             return false;
         };
         let handle = unsafe { heap.GetCPUDescriptorHandleForHeapStart() };
@@ -1544,7 +1891,8 @@ unsafe fn effect_selector_view_init(backbuffer: &ID3D12Resource) -> bool {
         Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
         NodeMask: 0,
     };
-    let Ok(queue) = (unsafe { device.CreateCommandQueue::<ID3D12CommandQueue>(&queue_desc) }) else {
+    let Ok(queue) = (unsafe { device.CreateCommandQueue::<ID3D12CommandQueue>(&queue_desc) })
+    else {
         return false;
     };
     EFFECT_SELECTOR_VIEW_ALLOCATOR.store(allocator.into_raw() as usize, Ordering::SeqCst);
@@ -1589,18 +1937,9 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
     if bw == 0 || bh == 0 || bw > MAX_RT_DIM || bh > MAX_RT_DIM {
         return false;
     }
-    let swap_rb = matches!(
-        bb_desc.Format,
-        DXGI_FORMAT_B8G8R8A8_UNORM | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
-    );
-    if !swap_rb
-        && !matches!(
-            bb_desc.Format,
-            DXGI_FORMAT_R8G8B8A8_UNORM | DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
-        )
-    {
+    let Some(bb_encoding) = boot_view_backbuffer_encoding(bb_desc.Format) else {
         return false;
-    }
+    };
 
     let text_lines = effect_selector_overlay_lines(&text);
     let effect_text_scale = BOOT_VIEW_TEXT_BASE_SCALE;
@@ -1612,7 +1951,10 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
     let region_w = (text_w + (EFFECT_SELECTOR_VIEW_PAD_X as u32 * 2))
         .max(EFFECT_SELECTOR_VIEW_MIN_W)
         .min(EFFECT_SELECTOR_VIEW_MAX_W)
-        .min(bw.saturating_sub(EFFECT_SELECTOR_VIEW_SCREEN_MARGIN_X).max(1));
+        .min(
+            bw.saturating_sub(EFFECT_SELECTOR_VIEW_SCREEN_MARGIN_X)
+                .max(1),
+        );
     let line_h = BOOT_VIEW_GLYPH_H * effect_text_scale;
     let text_block_h = text_lines.len() * line_h
         + text_lines.len().saturating_sub(1) * EFFECT_SELECTOR_VIEW_LINE_GAP;
@@ -1637,7 +1979,10 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
         DepthOrArraySize: 1,
         MipLevels: 1,
         Format: bb_desc.Format,
-        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
         Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
         Flags: D3D12_RESOURCE_FLAG_NONE,
     };
@@ -1676,7 +2021,10 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
             DepthOrArraySize: 1,
             MipLevels: 1,
             Format: DXGI_FORMAT_UNKNOWN,
-            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
             Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
             Flags: D3D12_RESOURCE_FLAG_NONE,
         };
@@ -1714,10 +2062,7 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
     let geom_changed = EFFECT_SELECTOR_VIEW_W.swap(region_w as usize, Ordering::SeqCst)
         != region_w as usize
         || EFFECT_SELECTOR_VIEW_H.swap(region_h as usize, Ordering::SeqCst) != region_h as usize;
-    if upload_fresh
-        || geom_changed
-        || EFFECT_SELECTOR_VIEW_HASH.load(Ordering::SeqCst) != hash
-    {
+    if upload_fresh || geom_changed || EFFECT_SELECTOR_VIEW_HASH.load(Ordering::SeqCst) != hash {
         let mut tight = vec![0u8; region_w as usize * region_h as usize * RGBA8_BPP];
         boot_fill_rect(
             &mut tight,
@@ -1751,7 +2096,8 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
         );
         for (line_index, line) in text_lines.iter().enumerate() {
             let y = EFFECT_SELECTOR_VIEW_PAD_Y
-                + line_index * (BOOT_VIEW_GLYPH_H * effect_text_scale + EFFECT_SELECTOR_VIEW_LINE_GAP);
+                + line_index
+                    * (BOOT_VIEW_GLYPH_H * effect_text_scale + EFFECT_SELECTOR_VIEW_LINE_GAP);
             boot_draw_text_rgb(
                 &mut tight,
                 region_w as usize,
@@ -1778,11 +2124,27 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
                 if dofs + src_row > total || so + src_row > tight.len() {
                     break;
                 }
+                let srow = &tight[so..so + src_row];
                 let drow = &mut dst[dofs..dofs + src_row];
-                drow.copy_from_slice(&tight[so..so + src_row]);
-                if swap_rb {
-                    for t in 0..region_w as usize {
-                        drow.swap(t * RGBA8_BPP, t * RGBA8_BPP + 2);
+                match bb_encoding {
+                    BackbufferEncoding::Straight => drow.copy_from_slice(srow),
+                    BackbufferEncoding::SwapRb => {
+                        drow.copy_from_slice(srow);
+                        for t in 0..region_w as usize {
+                            drow.swap(t * RGBA8_BPP, t * RGBA8_BPP + 2);
+                        }
+                    }
+                    BackbufferEncoding::Pack10 => {
+                        for t in 0..region_w as usize {
+                            let s = t * RGBA8_BPP;
+                            let packed = pack_rgba8_to_r10g10b10a2(
+                                srow[s],
+                                srow[s + 1],
+                                srow[s + 2],
+                                srow[s + 3],
+                            );
+                            drow[s..s + 4].copy_from_slice(&packed.to_le_bytes());
+                        }
                     }
                 }
             }
@@ -1826,7 +2188,9 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
     let mut bb_dst = D3D12_TEXTURE_COPY_LOCATION {
         pResource: ManuallyDrop::new(Some(backbuffer.clone())),
         Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 },
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            SubresourceIndex: 0,
+        },
     };
     let up_box = D3D12_BOX {
         left: 0,

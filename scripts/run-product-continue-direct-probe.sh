@@ -187,7 +187,14 @@ preflight() {
   # (wineprefix, CWD, Steam account/save-dir id). With Steam down the game still boots but in a
   # DIFFERENT environment -- the DLL's debug log lands elsewhere and Steam-dependent state degrades,
   # producing a non-representative run (observed 2026-06-21). Fail closed rather than burn a launch.
-  pgrep -x steam >/dev/null 2>&1 || fatal "Steam is not running; start Steam first (the offline eldenring.exe launch needs Steam's environment, else the run is degraded)"
+  # WSL-aware Steam check: on a WSL2 + Windows-Steam box Steam is the WINDOWS process steam.exe, so a
+  # bare `pgrep -x steam` false-negatives and refuses to launch when Steam is actually up (that false
+  # negative once cost an entire overnight session). See scripts/steam-running.sh and bd
+  # steam-detection-wsl-false-negative-2026-07-18.
+  # shellcheck source=scripts/steam-running.sh
+  # shellcheck disable=SC1091
+  source "$REPO_ROOT/scripts/steam-running.sh"
+  steam_running || fatal "Steam is not running; start Steam first (the offline eldenring.exe launch needs Steam's environment, else the run is degraded)"
   [[ "$RUNTIME_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || fatal "RUNTIME_TIMEOUT_SECONDS must be an integer"
   (( RUNTIME_TIMEOUT_SECONDS > 0 && RUNTIME_TIMEOUT_SECONDS <= RUNTIME_TIMEOUT_CAP_SECONDS )) || fatal "RUNTIME_TIMEOUT_SECONDS must be 1..$RUNTIME_TIMEOUT_CAP_SECONDS"
   if [[ "$RUNTIME_TELEMETRY_ONLY" != "1" && "$RUNTIME_USE_DEFAULT_SAVE" != "1" && "$ALLOW_DEPRECATED_STAGED_SAVE_PROBE" != "1" ]]; then

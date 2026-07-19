@@ -19,7 +19,7 @@
       {
         "hooks": [
           {
-            "command": "bd prime",
+            "command": "bash $CLAUDE_PROJECT_DIR/scripts/beads-prime.sh",
             "type": "command"
           }
         ],
@@ -41,12 +41,22 @@
       {
         "hooks": [
           {
-            "command": "bd prime",
+            "command": "bash $CLAUDE_PROJECT_DIR/scripts/beads-prime.sh",
             "type": "command"
           }
         ],
         "matcher": ""
       },
+      {
+        "hooks": [
+          {
+            "command": "cupcake eval --harness claude --policy-dir $CLAUDE_PROJECT_DIR/.cupcake --global-config $CLAUDE_PROJECT_DIR/.cupcake/rulebook.yml",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "Stop": [
       {
         "hooks": [
           {

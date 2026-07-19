@@ -1,4 +1,3 @@
-
 /// Log `msg` exactly once for the current repro phase (`SQ_REPRO_STATE_TAPS` latches it), used when
 /// a phase has issued all its edges and is now HOLDING until its transition is observed. Not a retry
 /// budget -- a boolean latch so the "waiting" line is not spammed.
@@ -24,16 +23,67 @@ fn sq_repro_confirm_count() -> usize {
         + SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT.load(Ordering::SeqCst)
 }
 
+fn sq_repro_native_load_state() -> (i32, i32, bool) {
+    let owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
+    let ingame = if owner != TITLE_OWNER_SCAN_START_ADDRESS && owner > 0x10000 {
+        unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) }
+            .filter(|ig| *ig != TITLE_OWNER_SCAN_START_ADDRESS && *ig > 0x10000)
+    } else {
+        None
+    };
+    let request_code = ingame
+        .and_then(|ig| unsafe { safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) })
+        .unwrap_or(-1);
+    let mms_live = ingame
+        .and_then(|ig| unsafe { safe_read_usize(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) })
+        .filter(|mms| *mms != TITLE_OWNER_SCAN_START_ADDRESS && *mms > 0x10000)
+        .and_then(|mms| unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET) })
+        .unwrap_or(-1);
+    let native_load_settled =
+        request_code == INGAMESTEP_REQUEST_CODE_STABLE_IN_WORLD && mms_live == -1;
+    (request_code, mms_live, native_load_settled)
+}
+
 /// The ProfileSelect slot the current switch loads (clamped to the target table).
+///
+/// Runtime override so the multi-load proof harness can drive an explicit sequence of DISTINCT
+/// within-file characters without a recompile: a game-dir CONTROL FILE
+/// `er-effects-sq-target-slots.txt` = comma/space-separated slot indices (e.g. "0,2,3"). Switch i
+/// loads the i-th entry (clamped to the last). Absent/unparseable -> the compile-time
+/// SQ_REPRO_TARGET_SLOTS table. Control file, not an env gate (env gates are frozen).
 fn sq_repro_target_slot() -> i32 {
     let i = SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst);
+    let path = game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-sq-target-slots.txt");
+    if let Ok(contents) = std::fs::read_to_string(&path) {
+        let slots: Vec<i32> = contents
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .filter_map(|t| t.trim().parse::<i32>().ok())
+            .collect();
+        if !slots.is_empty() {
+            return slots[i.min(slots.len() - 1)];
+        }
+    }
     SQ_REPRO_TARGET_SLOTS[i.min(SQ_REPRO_TARGET_SLOTS.len() - 1)]
 }
 
 /// How many back-to-back switches to drive in the legacy ProfileSelect harness path. The active Save
 /// Game row validation path below is always-on and no longer reads an env selector.
 fn sq_repro_target_switches() -> usize {
-    SQ_REPRO_TARGET_SWITCHES.clamp(0, SQ_REPRO_TARGET_SLOTS.len())
+    // Runtime override so the multi-load proof harness can drive N back-to-back switches without a
+    // recompile (diagnostic/harness knob only; the shipped default stays SQ_REPRO_TARGET_SWITCHES=1).
+    // Uses a game-dir CONTROL FILE (`er-effects-sq-target-switches.txt` = a decimal count), the same
+    // sanctioned runtime-marker pattern as the other sq-repro modes -- NOT a new ER_EFFECTS_* env gate
+    // (env gates are frozen by .auto/env_gate_comment_policy.rego). Absent/unparseable -> the const.
+    let runtime = game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-sq-target-switches.txt");
+    std::fs::read_to_string(&runtime)
+        .ok()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .unwrap_or(SQ_REPRO_TARGET_SWITCHES)
+        .clamp(0, SQ_REPRO_TARGET_SLOTS.len())
 }
 
 fn sq_repro_option_tab_row_fingerprint(option_window: usize, tab: usize) -> Option<(usize, usize)> {
@@ -42,14 +92,14 @@ fn sq_repro_option_tab_row_fingerprint(option_window: usize, tab: usize) -> Opti
         return None;
     }
     let composite = option_window + OPTIONSETTING_COMPOSITE_OFFSET;
-    let dialog = unsafe {
-        safe_read_usize(composite + OPTIONSETTING_COMPOSITE_PANE_CACHE_OFFSET + tab * 8)
-    }
-    .unwrap_or(0);
+    let dialog =
+        unsafe { safe_read_usize(composite + OPTIONSETTING_COMPOSITE_PANE_CACHE_OFFSET + tab * 8) }
+            .unwrap_or(0);
     if dialog < HEAP_LO || dialog == TITLE_OWNER_SCAN_START_ADDRESS {
         return None;
     }
-    let count = unsafe { safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET) }?;
+    let count =
+        unsafe { safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET) }?;
     if count > 64 {
         return None;
     }
@@ -121,10 +171,32 @@ fn sq_repro_profile_back_mode() -> bool {
         .exists()
 }
 
+/// PROFILE-LOAD-SWITCH repro mode: drive the user's exact switch (Quit tab -> Load Profile ->
+/// ProfileSelect -> pick the top character -> confirm -> load). Gated by its OWN marker
+/// `er-effects-system-quit-load-switch.txt` / `ER_EFFECTS_SQ_LOAD_SWITCH=1` -- deliberately NOT the
+/// `system_quit_profile_load_activation_allowed` opt-in, because that opt-in makes the ProfileSelect
+/// slot-activate hook FORWARD to the guarded native load instead of DIRECT-ARMING the save-safe switch
+/// (system_quit_ownership_repro.rs:1215 gates the direct-arm on `!allowed`). The direct-arm is exactly
+/// what the switch needs (it sets QUICKLOAD_PHASE and drives return-title + reload), so this mode must
+/// leave activation-allowed OFF.
+// ENV-GATE RATIONALE: ER_EFFECTS_SQ_LOAD_SWITCH=1 selects the profile-load-switch repro autopilot (Quit
+// tab -> Load Profile -> pick top character -> confirm -> load). This mode DOES drive a real profile
+// load/reload; agent-owned repro only, gated separately from the default Save Game harness.
+fn sq_repro_load_switch_mode() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_SQ_LOAD_SWITCH").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-system-quit-load-switch.txt")
+        .exists()
+}
+
 /// SAVE-GAME ROW mode for the System->Quit repro autopilot. The main
 /// `ER_EFFECTS_SYSTEM_QUIT_REPRO=1` gate still controls whether the repro harness runs at all.
+/// Yields to the tab-return, profile-back, and profile-load-switch modes.
 fn sq_repro_save_game_only() -> bool {
-    !sq_repro_tab_return_mode() && !sq_repro_profile_back_mode()
+    !sq_repro_tab_return_mode() && !sq_repro_profile_back_mode() && !sq_repro_load_switch_mode()
 }
 
 /// Enter a switch: capture the confirm-count baseline and clear the per-switch menu-window/cursor
@@ -137,6 +209,19 @@ fn sq_repro_begin_switch() {
     SYSTEM_QUIT_PROFILE_SELECT_WINDOW.store(0, Ordering::SeqCst);
     SQ_REPRO_INITIAL_CURSOR.store(usize::MAX, Ordering::SeqCst);
     SQ_REPRO_WAIT_RELOAD_FRAMES.store(0, Ordering::SeqCst);
+    // TO_PROFILE one-shot latches: reset PER SWITCH so switch #2+ re-builds the Quit-tab pane, re-captures
+    // a FRESH Load-Profile action, and re-fires the deterministic route -- the exact path that worked for
+    // switch #1. WITHOUT this, these stay latched from switch #1 and switch #2 skips both the pane-rebuild
+    // and the route-fire, falling through to the mouse-only tab-switch key probe that never succeeds
+    // (observed run samechar-3x-190909: switch #2 stuck in TO_PROFILE, load3 never attempted). Also clear
+    // the captured action so TO_PROFILE sees route_action==0 -> rebuilds -> fresh capture (never fires a
+    // stale/freed switch-#1 action), and reset the tab-discovery + row-nav bases for the fallback path.
+    SQ_REPRO_PANE_BUILD_TRIED.store(0, Ordering::SeqCst);
+    SQ_REPRO_ROUTE_FIRED.store(0, Ordering::SeqCst);
+    SQ_REPRO_TAB_DISCOVERED.store(0, Ordering::SeqCst);
+    SQ_REPRO_TAB_BASELINE.store(usize::MAX, Ordering::SeqCst);
+    SQ_REPRO_ROWNAV_BASE.store(usize::MAX, Ordering::SeqCst);
+    SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT.store(0, Ordering::SeqCst);
     SQ_REPRO_PROFILE_BACK_OPENED.store(0, Ordering::SeqCst);
     SQ_REPRO_PROFILE_BACK_DONE.store(0, Ordering::SeqCst);
     SQ_REPRO_PROFILE_BACK_RESTORE_BASELINE.store(
@@ -186,6 +271,66 @@ fn sq_repro_begin_switch() {
     ));
 }
 
+/// KEYBOARD MIRROR (native Windows): map a fabricated gamepad wButtons value to the equivalent DInput
+/// DIK scancode. Runtime-proven 2026-07-17 that native ER polls XInput slot 0 (poll count climbed to
+/// 7000+) and reads our fabricated START (4 poll-frames) but does NOT route fabricated gamepad input
+/// to menu ACTIONS when no real controller is the active input device -- so the menu never opened. The
+/// keyboard IS the active device on native, and ER routes DInput keyboard to menu actions (proven by
+/// the `inject_nav` DIK_DOWN cursor move + the arrow-suppression hook). So the autopilot also stamps
+/// the equivalent key each frame via `InputBlocker::set_injected_key`. Menu nav (arrows), Esc (open/
+/// back), and Enter (confirm) are FIXED menu keys in ER -- not the remappable gameplay binds -- so
+/// this is robust to the user's custom keybinds. Tab-switch (LB/RB) keyboard binds are the least
+/// certain and are refined empirically from the phase the run stalls at. 0 = no key this frame.
+fn sq_repro_gamepad_to_dik(btn: u16) -> u8 {
+    match btn {
+        XINPUT_GAMEPAD_START => 0x01, // DIK_ESCAPE  -- open the in-world system/escape menu
+        XINPUT_GAMEPAD_A => 0x1c,     // DIK_RETURN  -- menu confirm/select
+        XINPUT_GAMEPAD_B => 0x0e,     // DIK_BACK (Backspace) -- menu cancel/back
+        XINPUT_GAMEPAD_DPAD_UP => 0xc8, // DIK_UP
+        XINPUT_GAMEPAD_DPAD_DOWN => 0xd0, // DIK_DOWN
+        XINPUT_GAMEPAD_LEFT_SHOULDER => 0x10, // DIK_Q  -- tab left (empirical; refine if TO_PROFILE stalls)
+        XINPUT_GAMEPAD_RIGHT_SHOULDER => 0x12, // DIK_E  -- tab right (empirical)
+        _ => 0,
+    }
+}
+
+/// Native-Windows keyboard channel: map a fabricated gamepad button to a Win32 VK code posted to the
+/// ER window via WM_KEYDOWN/WM_KEYUP. Runtime-proven 2026-07-17 that native ER reads keyboard via
+/// window messages / RawInput (NOT DInput: dinput_kb_fires==0) and does not route the fabricated pad
+/// to menu actions -- so this WM path is the actual driver on native; the XInput/DInk mirrors stay for
+/// Wine. Esc opens the in-world menu; arrows nav; Enter confirms -- fixed menu keys, not the
+/// remappable gameplay binds. Tab-switch (LB/RB) VKs are the least certain and refined empirically.
+fn sq_repro_gamepad_to_vk(btn: u16) -> u32 {
+    match btn {
+        XINPUT_GAMEPAD_START => 0x1b, // VK_ESCAPE -- open the in-world system/escape menu
+        XINPUT_GAMEPAD_A => 0x0d,     // VK_RETURN -- menu confirm
+        XINPUT_GAMEPAD_B => 0x1b,     // VK_ESCAPE -- back (unused in the load path)
+        XINPUT_GAMEPAD_DPAD_UP => 0x26, // VK_UP
+        XINPUT_GAMEPAD_DPAD_DOWN => 0x28, // VK_DOWN
+        XINPUT_GAMEPAD_LEFT_SHOULDER => 0x51, // 'Q' -- tab left (empirical; refine if TO_PROFILE stalls)
+        XINPUT_GAMEPAD_RIGHT_SHOULDER => 0x45, // 'E' -- tab right (empirical)
+        _ => 0,
+    }
+}
+
+/// TO_PROFILE tab-switch key auto-discovery state (native keyboard): the discovered VK that moves
+/// OPTIONSETTING_CURRENT_TAB (0 = not found yet), the tab index observed when the current candidate
+/// window began (to detect a change), and the phase-local tick when we reached the Quit tab (so the
+/// DOWN,DOWN,Enter row nav has its own base; usize::MAX = not yet on the Quit tab).
+static SQ_REPRO_TAB_DISCOVERED: AtomicUsize = AtomicUsize::new(0);
+static SQ_REPRO_TAB_BASELINE: AtomicUsize = AtomicUsize::new(usize::MAX);
+static SQ_REPRO_ROWNAV_BASE: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// One-shot: the deterministic Load-Profile route (`system_quit_open_profile_load_dialog`) was fired
+/// this switch, so we do not re-fire it. Native ER has no keyboard bind for the OptionSetting
+/// tab-switch (mouse-only), so instead of navigating to the Quit tab we invoke the DLL's own route
+/// directly when the Load-Profile row action was captured -- it opens ProfileSelect and sets the
+/// return-chain System dialog, exactly like a click.
+static SQ_REPRO_ROUTE_FIRED: AtomicUsize = AtomicUsize::new(0);
+/// One-shot: we force-built the OptionSetting Quit-tab pane (via the game's own tab-select
+/// FUN_14093b850) so the cloned Load-Profile row + its action object get created without the
+/// mouse-only tab visit.
+static SQ_REPRO_PANE_BUILD_TRIED: AtomicUsize = AtomicUsize::new(0);
+
 /// Fabricated gamepad wButtons for a phase that issues a FIXED list of button edges ONCE, in order,
 /// then holds. `tick` is phase-local; each edge occupies one `INJECT_NAV_CYCLE` (the RE-grounded
 /// edge hold+gap -- edge-triggered menu nav needs a multi-frame hold to register one step). Returns
@@ -218,17 +363,36 @@ pub(crate) unsafe fn system_quit_repro_tick() {
     if state == SQ_REPRO_STATE_DONE {
         return;
     }
-    // Driven entirely via the XInput poll hook; keep the DInput keyboard stamp clear every frame so
-    // no stale key leaks while the block zeroes the real keyboard.
+    // Clear any stale keyboard stamp; `set_pad` below re-stamps the mirrored key for button frames.
     crate::input_blocker::InputBlocker::get_instance().set_injected_key(DIK_NONE);
-    let set_pad = |b: u16| SQ_REPRO_XINPUT_BUTTONS.store(b as usize, Ordering::SeqCst);
+    // Drive BOTH the XInput poll hook (SQ_REPRO_XINPUT_BUTTONS) AND the DInput keyboard mirror
+    // (set_injected_key): native ER polls the pad but only routes KEYBOARD to menu actions when no
+    // real controller is active (see sq_repro_gamepad_to_dik). One `set_pad` call drives both paths.
+    let set_pad = |b: u16| {
+        SQ_REPRO_XINPUT_BUTTONS.store(b as usize, Ordering::SeqCst);
+        crate::input_blocker::InputBlocker::get_instance()
+            .set_injected_key(sq_repro_gamepad_to_dik(b));
+        // NATIVE path: post the equivalent VK to the ER window (keyboard is WM/RawInput, not DInput).
+        sq_repro_drive_wm_key(sq_repro_gamepad_to_vk(b));
+    };
     let tick = SQ_REPRO_STATE_TICK.fetch_add(1, Ordering::SeqCst);
 
     match state {
         SQ_REPRO_STATE_WAIT_WORLD => {
             set_pad(0);
             let in_world = IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
-            if in_world && tick >= SQ_REPRO_WORLD_SETTLE_TICKS {
+            // Prove load1 is genuinely PLAYABLE (moved under injected input) before driving switch #1 --
+            // not merely present + settle-ticked while still streaming. Fallback to the deadline so a
+            // non-proving load still advances (parity: one more load recovers a frozen one).
+            let load1_move_proven = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
+                || tick >= SQ_REPRO_WAIT_WORLD_MOVE_DEADLINE;
+            if in_world && tick >= SQ_REPRO_WORLD_SETTLE_TICKS && load1_move_proven {
+                // FIRST INTERACTION (user, 2026-07-17): the user's real flow begins by clicking the
+                // game in the taskbar to make it the active window BEFORE pressing START. Replicate
+                // that here -- force the ER window foreground at world-readiness so the first menu key
+                // (START via RawInput) is routed. Belt-and-suspenders with the per-key foreground force
+                // in sq_repro_drive_wm_key; makes the focus step explicit and correctly timed.
+                sq_repro_force_foreground_now();
                 sq_repro_begin_switch();
                 if sq_repro_save_game_only() {
                     append_autoload_debug(format_args!(
@@ -240,7 +404,7 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                     ));
                 } else {
                     append_autoload_debug(format_args!(
-                        "sq-repro: in-world settled ({SQ_REPRO_WORLD_SETTLE_TICKS} ticks) -> OPEN_MENU switch #{}/{} target_slot={}; START (XInput 0x{XINPUT_GAMEPAD_START:04x}) to open the escape/system menu",
+                        "sq-repro: in-world settled ({SQ_REPRO_WORLD_SETTLE_TICKS} ticks, movement proven) -> OPEN_MENU switch #{}/{} target_slot={}; START (XInput 0x{XINPUT_GAMEPAD_START:04x}) to open the escape/system menu",
                         SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst) + 1,
                         sq_repro_target_switches(),
                         sq_repro_target_slot()
@@ -256,17 +420,58 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             let ingame_top = SYSTEM_QUIT_INGAME_TOP_WINDOW.load(Ordering::SeqCst);
             if ingame_top != 0 {
                 append_autoload_debug(format_args!(
-                    "sq-repro: IngameTop opened window=0x{ingame_top:x} (escape/system menu) -> TO_SYSTEM (UP, A into the quit submenu)"
+                    "sq-repro: IngameTop opened window=0x{ingame_top:x} via menu-open key VK 0x{:x} (SendInput RawInput) -> TO_SYSTEM (UP, A into the quit submenu)",
+                    SQ_REPRO_OPEN_KEY_VK.load(Ordering::SeqCst)
                 ));
+                sq_repro_drive_wm_key(0); // release the discovered key
                 set_pad(0);
                 sq_repro_transition(SQ_REPRO_STATE_TO_SYSTEM);
                 return;
             }
-            let (btn, holding) = sq_repro_edges(tick, &[XINPUT_GAMEPAD_START]);
-            if holding {
-                sq_repro_waiting_once("OPEN_MENU: START issued, waiting for 02_000_IngameTop");
+            // INPUT-PATH DIAGNOSTIC (native-Windows XInput poll probe): every ~2s while holding for
+            // IngameTop, log whether native ER is actually polling XInput slot 0. polls==0 across the
+            // hold => the game is NOT polling slot 0 (cached "no controller"; our fabricated START can
+            // never land -> a device re-scan or a DInput keyboard mirror is required). polls>0 but the
+            // menu never opens => it polls but ignores our buttons (START may not be the in-world
+            // menu-open on this build/keybinding).
+            if tick % 120 == 0 {
+                append_autoload_debug(format_args!(
+                    "sq-repro: OPEN_MENU input-diag tick={tick} xinput_slot0_polls={} dinput_kb_fires={} dinput_mouse_fires={} fg_forces={} is_foreground={} (SendInput RawInput to foreground Esc is driving; is_foreground=1 means focus achieved)",
+                    XINPUT_SLOT0_POLLS.load(Ordering::SeqCst),
+                    crate::input_blocker::DINPUT_KB_HOOK_FIRES.load(Ordering::SeqCst),
+                    crate::input_blocker::DINPUT_MOUSE_HOOK_FIRES.load(Ordering::SeqCst),
+                    SQ_REPRO_FOREGROUND_FORCES.load(Ordering::SeqCst),
+                    SQ_REPRO_IS_FOREGROUND.load(Ordering::SeqCst),
+                ));
             }
-            set_pad(btn);
+            // AUTO-DISCOVER the in-world menu-open key. The input channel now works (SendInput RawInput
+            // to the forced-foreground ER window, is_foreground=1) but VK_ESCAPE alone did NOT open
+            // 02_000_IngameTop, so cycle plausible menu-open keys until the IngameTop semaphore fires,
+            // then latch the winner (recorded in SQ_REPRO_OPEN_KEY_VK). Each candidate is pulse-held
+            // for OPEN_KEY_HOLD frames. Semaphore-gated (we advance the instant IngameTop opens,
+            // above), so this is key discovery, not a blind budget. The pad START is fabricated too
+            // (harmless; the Wine path). Candidates are low-gameplay-risk menu keys.
+            const OPEN_CANDIDATES: [(u32, &str); 4] =
+                [(0x1b, "Esc"), (0x5a, "Z"), (0x09, "Tab"), (0x0d, "Enter")];
+            const OPEN_KEY_HOLD: usize = INJECT_NAV_CYCLE * 3;
+            let cand = (tick / OPEN_KEY_HOLD) % OPEN_CANDIDATES.len();
+            let (vk, name) = OPEN_CANDIDATES[cand];
+            let pressed = (tick % INJECT_NAV_CYCLE) < INJECT_NAV_TAP_LEN;
+            sq_repro_drive_wm_key(if pressed { vk } else { 0 });
+            SQ_REPRO_XINPUT_BUTTONS.store(
+                if pressed {
+                    XINPUT_GAMEPAD_START as usize
+                } else {
+                    0
+                },
+                Ordering::SeqCst,
+            );
+            SQ_REPRO_OPEN_KEY_VK.store(vk as usize, Ordering::SeqCst);
+            if tick % OPEN_KEY_HOLD == 0 {
+                append_autoload_debug(format_args!(
+                    "sq-repro: OPEN_MENU trying menu-open key '{name}' (VK 0x{vk:x}) via SendInput RawInput to foreground; waiting for 02_000_IngameTop"
+                ));
+            }
         }
         SQ_REPRO_STATE_TO_SYSTEM => {
             let option_setting = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
@@ -503,10 +708,117 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                 sq_repro_transition(SQ_REPRO_STATE_TO_SLOT);
                 return;
             }
+            // DETERMINISTIC LOAD-PROFILE ROUTE (native-Windows: the OptionSetting tab-switch is
+            // mouse-only, no keyboard bind). Instead of navigating to the Quit tab, fire the DLL's own
+            // Load-Profile route directly the moment the row's action object has been captured (the
+            // OptionSetting Quit-tab pane built the row). `system_quit_open_profile_load_dialog` opens
+            // 05_010_ProfileSelect AND stores SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG (the arm
+            // precondition) -- byte-identical to a real click. One-shot per switch; on success the
+            // `profile != 0` branch above advances to TO_SLOT next frame.
+            let route_action = SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
+            // If the Load-Profile action was never captured (its row is only cloned when the Quit-tab
+            // pane BUILDS, which needs the mouse-only tab visit), force-build that pane once via the
+            // game's own tab-select FUN_14093b850(composite, quit_pane_index). Quit visual tab
+            // OPTIONSETTING_QUIT_TAB_INDEX(8) is backed by cache slot 9. Building it fires the
+            // AddCancelButton clone hook -> captures SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT; the route
+            // fires next frame.
+            if route_action == 0 && SQ_REPRO_PANE_BUILD_TRIED.swap(1, Ordering::SeqCst) == 0 {
+                let opt = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
+                let built = if opt >= 0x10000 {
+                    if let Ok(sel_addr) = game_rva(OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA) {
+                        let composite = opt + OPTIONSETTING_COMPOSITE_OFFSET;
+                        let pane_index = (OPTIONSETTING_QUIT_TAB_INDEX + 1) as i32;
+                        let select_tab: unsafe extern "system" fn(usize, i32) =
+                            unsafe { std::mem::transmute(sel_addr) };
+                        unsafe { select_tab(composite, pane_index) };
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                append_autoload_debug(format_args!(
+                    "sq-repro: TO_PROFILE force-built Quit-tab pane via tab-select(composite, cache_slot 9) built={built} opt=0x{opt:x} (mouse-only tab-visit bypass; capturing Load-Profile action)"
+                ));
+                set_pad(0);
+                return;
+            }
+            if route_action != 0 && SQ_REPRO_ROUTE_FIRED.swap(1, Ordering::SeqCst) == 0 {
+                sq_repro_drive_wm_key(0); // release any held key
+                let opened = unsafe { system_quit_open_profile_load_dialog(route_action) };
+                append_autoload_debug(format_args!(
+                    "sq-repro: TO_PROFILE fired DETERMINISTIC Load-Profile route on captured action=0x{route_action:x} opened={opened} (bypassing mouse-only tab-switch); waiting for 05_010_ProfileSelect"
+                ));
+                set_pad(0);
+                return;
+            }
+            // Navigate to the Quit tab (OPTIONSETTING_QUIT_TAB_INDEX), then DOWN,DOWN,Enter to activate
+            // the Load Profile row. The tab-switch keyboard key is uncertain, so AUTO-DISCOVER it:
+            // cycle candidate keys and watch OPTIONSETTING_CURRENT_TAB change, then keep pressing the
+            // discovered key until we are on the Quit tab. All keys reach the (now correct) ER game
+            // window via SendInput. Semaphore-gated throughout (ProfileSelect open advances, above).
+            let cur = OPTIONSETTING_CURRENT_TAB.load(Ordering::SeqCst);
+            let target = OPTIONSETTING_QUIT_TAB_INDEX;
+            if cur == usize::MAX {
+                set_pad(0); // tab index not readable yet -- hold
+                return;
+            }
+            if cur != target {
+                SQ_REPRO_ROWNAV_BASE.store(usize::MAX, Ordering::SeqCst);
+                // Safe-first candidate order (arrows/Tab/brackets/PgDn before activating keys).
+                const TAB_CANDS: [(u32, &str); 8] = [
+                    (0x27, "Right"),
+                    (0x25, "Left"),
+                    (0x09, "Tab"),
+                    (0xdd, "]"),
+                    (0xdb, "["),
+                    (0x22, "PgDn"),
+                    (0x51, "Q"),
+                    (0x45, "E"),
+                ];
+                const TAB_HOLD: usize = INJECT_NAV_CYCLE * 2;
+                let mut key = SQ_REPRO_TAB_DISCOVERED.load(Ordering::SeqCst) as u32;
+                if key == 0 {
+                    let idx = (tick / TAB_HOLD) % TAB_CANDS.len();
+                    let (vk, name) = TAB_CANDS[idx];
+                    if tick % TAB_HOLD == 0 {
+                        SQ_REPRO_TAB_BASELINE.store(cur, Ordering::SeqCst);
+                        append_autoload_debug(format_args!(
+                            "sq-repro: TO_PROFILE trying tab-switch key '{name}' (VK 0x{vk:x}); cur_tab={cur} target={target}"
+                        ));
+                    }
+                    if cur != SQ_REPRO_TAB_BASELINE.load(Ordering::SeqCst) {
+                        SQ_REPRO_TAB_DISCOVERED.store(vk as usize, Ordering::SeqCst);
+                        key = vk;
+                        append_autoload_debug(format_args!(
+                            "sq-repro: TO_PROFILE tab-switch key DISCOVERED VK 0x{vk:x} ('{name}') -> now at tab {cur}"
+                        ));
+                    } else {
+                        key = vk;
+                    }
+                }
+                let pressed = (tick % INJECT_NAV_CYCLE) < INJECT_NAV_TAP_LEN;
+                sq_repro_drive_wm_key(if pressed { key } else { 0 });
+                SQ_REPRO_XINPUT_BUTTONS.store(0, Ordering::SeqCst);
+                return;
+            }
+            // On the Quit tab: DOWN, DOWN, Enter to activate the cloned Load Profile row.
+            let rn_base = {
+                let b = SQ_REPRO_ROWNAV_BASE.load(Ordering::SeqCst);
+                if b == usize::MAX {
+                    SQ_REPRO_ROWNAV_BASE.store(tick, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "sq-repro: TO_PROFILE on Quit tab {target} -> DOWN,DOWN,Enter to activate Load Profile"
+                    ));
+                    tick
+                } else {
+                    b
+                }
+            };
             let (btn, holding) = sq_repro_edges(
-                tick,
+                tick.saturating_sub(rn_base),
                 &[
-                    XINPUT_GAMEPAD_LEFT_SHOULDER,
                     XINPUT_GAMEPAD_DPAD_DOWN,
                     XINPUT_GAMEPAD_DPAD_DOWN,
                     XINPUT_GAMEPAD_A,
@@ -514,7 +826,7 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             );
             if holding {
                 sq_repro_waiting_once(
-                    "TO_PROFILE: LB+DOWN+DOWN+A issued, waiting for 05_010_ProfileSelect",
+                    "TO_PROFILE: DOWN+DOWN+Enter issued on Quit tab, waiting for 05_010_ProfileSelect",
                 );
             }
             set_pad(btn);
@@ -559,8 +871,8 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             let verify_mask = SQ_REPRO_PROFILE_BACK_VERIFY_MASK.load(Ordering::SeqCst);
             let mismatch_mask = SQ_REPRO_PROFILE_BACK_MISMATCH_MASK.load(Ordering::SeqCst);
             let required_mask = 1usize << OPTIONSETTING_QUIT_TAB_INDEX;
-            let verified_quit = (baseline_mask & required_mask) != 0
-                && (verify_mask & required_mask) != 0;
+            let verified_quit =
+                (baseline_mask & required_mask) != 0 && (verify_mask & required_mask) != 0;
             let quit_mismatch = mismatch_mask & required_mask;
             if cur == OPTIONSETTING_QUIT_TAB_INDEX
                 && verified_quit
@@ -695,7 +1007,22 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             let switch_index = SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst);
             let expected_deser = switch_index + 1;
             let deser = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
-            let player_up = unsafe { PlayerIns::local_player_mut() }.is_ok();
+            // RENDER-READY gate (2026-07-18, user-directed): "present" is not "ready". The user's load-2
+            // freeze is present-but-not-rendered, so gate the READY advance on the SAME render-ready
+            // combination the oracle emits (chr-model present AND draw-group AND render-group AND
+            // enable-render); a load stuck below it past the deadline is classified FROZEN below.
+            let (player_up, render_ready) = match unsafe { PlayerIns::local_player_mut() } {
+                Ok(player) => {
+                    let model_present = player.chr_ins.chr_model_ins.as_ptr() as usize
+                        != TITLE_OWNER_SCAN_START_ADDRESS;
+                    let ready = model_present
+                        && player.chr_ins.load_state.draw_group_enabled()
+                        && player.chr_ins.chr_flags1c4.is_render_group_enabled()
+                        && player.chr_ins.chr_flags1c5.enable_render();
+                    (true, ready)
+                }
+                Err(_) => (false, false),
+            };
             // PlayerIns-present alone is a LOADING-SCREEN/TITLE FALSE POSITIVE (PlayerIns exists during
             // the reload before the world is interactive). Require the reload committed (fresh-deser),
             // the player present, AND the new load COMPLETE.
@@ -715,29 +1042,65 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             let load_done = base_ok && unsafe { now_loading_active(base) };
             let fake_cover = base_ok && unsafe { fake_loading_screen_visible(base) };
             let loading = !base_ok || !load_done || fake_cover;
-            if deser < expected_deser || !player_up || loading {
-                // Still tearing down / at title / streaming: hold the settle clock at 0 so it starts
-                // only when the NEW world is up AND interactive (not a loading-screen false positive).
-                SQ_REPRO_STATE_TICK.store(0, Ordering::SeqCst);
-                // Periodic GATE dump (er-effects-rs-qwj): this state once stalled with switch #1
-                // stable and fresh-deser == expected, so one of these gates was lying. Name the
-                // culprit with data, not a single opaque waiting line.
-                let waited = SQ_REPRO_WAIT_RELOAD_FRAMES.fetch_add(1, Ordering::SeqCst);
-                if waited % SQ_REPRO_WAIT_RELOAD_LOG_EVERY == 0 {
-                    append_autoload_debug(format_args!(
-                        "sq-repro: WAIT_RELOAD gates (switch #{}/{} waited_frames={waited}): fresh_deser={deser}/{expected_deser} player_up={player_up} load_done={load_done} fake_cover={fake_cover}",
-                        switch_index + 1,
-                        sq_repro_target_switches()
-                    ));
-                }
-                return;
-            }
-            if tick >= SQ_REPRO_WORLD_SETTLE_TICKS {
+            // READINESS GATE (2026-07-18, user-directed). "committed + player-present + cover-gone" is
+            // NOT enough -- it holds during the load-2 freeze. Require RENDER-READY held for the settle
+            // window before advancing. Hold the settle clock at 0 whenever the load is still streaming OR
+            // present-but-not-render-ready, so `tick` counts a CONTINUOUS render-ready dwell, not just
+            // frames since the cover cleared.
+            // WAIT-FOR-INPUT-TO-REGISTER (user 2026-07-18): advance to the next switch only once this
+            // load's INPUT has REGISTERED -- i.e. the can-move probe proved the char MOVES under injected
+            // input for THIS fresh-deser epoch (CAN_MOVE_CONFIRMED + MOVE_PROBE_EPOCH, the reliable
+            // signal; render_ready is a known false-negative oracle). Also require native MoveMap/requestCode
+            // settlement, because the load2 bug can move while still stuck at requestCode=1/mms18 with draw
+            // disabled. Do NOT blow through on a timer while current-epoch input never took. A load that
+            // never proves movement within the freeze deadline is the FROZEN case -> per the strict parity,
+            // drive the next load to recover it. (render_ready/load_done kept only for the diagnostic log
+            // line.)
+            let committed = deser >= expected_deser && player_up;
+            let movement_proven_for_deser = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
+                && MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == deser;
+            let (request_code, mms_live, native_load_settled) = sq_repro_native_load_state();
+            let move_proven = committed && movement_proven_for_deser && native_load_settled;
+            if move_proven {
                 let next = switch_index + 1;
                 SQ_REPRO_SWITCH_INDEX.store(next, Ordering::SeqCst);
                 sq_repro_begin_switch();
                 append_autoload_debug(format_args!(
-                    "sq-repro: switch #{}/{} reload committed (fresh_deser={deser}) + new world settled -> arming switch #{}/{} target_slot={}; OPEN_MENU",
+                    "sq-repro: switch #{}/{} reload MOVABLE+SETTLED -- input registered for fresh_deser={deser} and native requestCode={request_code}/mms={mms_live} -> arming switch #{}/{} target_slot={}; OPEN_MENU",
+                    switch_index + 1,
+                    sq_repro_target_switches(),
+                    next + 1,
+                    sq_repro_target_switches(),
+                    sq_repro_target_slot()
+                ));
+                sq_repro_transition(SQ_REPRO_STATE_OPEN_MENU);
+                return;
+            }
+            SQ_REPRO_STATE_TICK.store(0, Ordering::SeqCst);
+            let waited = SQ_REPRO_WAIT_RELOAD_FRAMES.fetch_add(1, Ordering::SeqCst);
+            if waited % SQ_REPRO_WAIT_RELOAD_LOG_EVERY == 0 {
+                append_autoload_debug(format_args!(
+                    "sq-repro: WAIT_RELOAD gates (switch #{}/{} waited_frames={waited}): fresh_deser={deser}/{expected_deser} player_up={player_up} can_move={} move_epoch={} render_ready={render_ready} load_done={load_done} fake_cover={fake_cover} requestCode={request_code} mms={mms_live}",
+                    switch_index + 1,
+                    sq_repro_target_switches(),
+                    CAN_MOVE_CONFIRMED.load(Ordering::SeqCst),
+                    MOVE_PROBE_EPOCH.load(Ordering::SeqCst)
+                ));
+            }
+            // FROZEN force-advance: reload committed + present, but current-epoch movement never registered
+            // within the deadline (the user's can't-see/can't-move state). Trigger the NEXT load (the
+            // recovery), exactly as the user re-loads by hand from the still-openable menu. If movement DID
+            // register for this epoch but native settlement is still pending, do not start the next switch;
+            // keep waiting for the mms18/end5e advancer or the global cap so the harness exposes that bug.
+            if committed
+                && !movement_proven_for_deser
+                && waited >= SQ_REPRO_FREEZE_RECOVERY_DEADLINE
+            {
+                let next = switch_index + 1;
+                SQ_REPRO_SWITCH_INDEX.store(next, Ordering::SeqCst);
+                sq_repro_begin_switch();
+                append_autoload_debug(format_args!(
+                    "sq-repro: switch #{}/{} FROZEN -- input never registered (can_move=false, load_done={load_done} fake_cover={fake_cover}) past freeze-deadline {SQ_REPRO_FREEZE_RECOVERY_DEADLINE}f -> triggering RECOVERY switch #{}/{} target_slot={}; OPEN_MENU",
                     switch_index + 1,
                     sq_repro_target_switches(),
                     next + 1,
@@ -746,6 +1109,7 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                 ));
                 sq_repro_transition(SQ_REPRO_STATE_OPEN_MENU);
             }
+            return;
         }
         _ => {
             set_pad(0);
@@ -851,10 +1215,20 @@ unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, source: &str) {
     // NowLoading transition that froze the menu pump; blocking it here (not reactively) lets the
     // menu-pump-owned return-title chain run + tear the world down. Forwarded at a clean title.
     install_system_quit_request_load_slot_guard();
+    // REVERTED 2026-07-16: wiring install_system_quit_gaitem_deserialize_hook() here (to backstop the
+    // 0x67141a stale-table AV) was WORSE -- its handler's SKIP path during the return-title transition
+    // (phase CONFIRMED..HANDOFF) leaves the gaitem singleton inconsistent and the game DL_PANICs from inside
+    // the gaitem code (crash stk showed the panic called from game+0x671843). That broke the FIRST switch
+    // (DL_PANIC before the load) whereas without the hook the first switch completes via continue_confirm.
+    // The 0x67141a crash on the 2nd+ consecutive switch remains a separate, pre-existing issue to solve
+    // without this SKIP-based hook (2026-07-01 already noted these gaitem guards corrupt the singleton).
     // Re-arm the continue_confirm guard's one-shot: the upcoming clean-title confirm must drive a
     // fresh deserialize of THIS switch's picked slot before it streams (the hook itself is installed
     // unconditionally at attach; see install_system_quit_continue_confirm_hook).
     SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(0, Ordering::SeqCst);
+    // Re-arm the menu-free clean-title switch reload one-shot so every switch (not just the first) can
+    // drive its own picked-slot feed-deserialize -> continue_confirm (own_load_switch_reload_fire).
+    SYSTEM_QUIT_SWITCH_MENU_FREE_RELOAD_FIRED.store(0, Ordering::SeqCst);
     // Re-arm the return-title one-shots so EVERY switch (not just the first) tears the world down.
     // Both are consumed by the first switch and never reset otherwise, so a second switch in the same
     // session would skip the native return-title REQUEST (`== 0` gate, sets saveRequested+bc4=1) and
@@ -868,6 +1242,13 @@ unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, source: &str) {
     // SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT.store(0, Ordering::SeqCst);
     // SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.store(selected_slot as usize, Ordering::SeqCst);
+    // SPURIOUS-vs-GENUINE arm discriminator (2026-07-18). Record whether the local player is ABSENT at
+    // the instant of the arm. A spurious boot self-reload arms from the title/menu (player absent) while a
+    // genuine in-world switch arms with the player present. The in-world time-based disarm keys on this so
+    // it only cancels the spurious boot self-reload, never a real switch. See profile_render.rs
+    // SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT and bd repeatable-multi-save-consolidated-plan-2026-07-18.
+    let arm_player_absent = unsafe { PlayerIns::local_player_mut() }.is_err();
+    SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT.store(usize::from(arm_player_absent), Ordering::SeqCst);
     // PORTRAIT RETARGET (user 2026-07-03): the user just confirmed a NEW character for load, so the
     // loading-screen portrait should render THAT character, not the one still resident (ac0). Make it
     // before-break: retarget the spare/render to the selected slot (portrait_target_slot now returns
@@ -915,11 +1296,49 @@ unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, source: &str) {
     TITLE_OWNER_PTR.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
     TITLE_OWNER_SCAN_COUNTDOWN.store(TITLE_OWNER_SCAN_COUNTDOWN_READY, Ordering::SeqCst);
     OWN_LOAD_CONTINUE_FIRED.store(false, Ordering::SeqCst);
+    // Re-arm the product-core-autoload CONTINUE DRIVER for repeatable switching (2026-07-15): FULLREAD_PHASE is
+    // a one-shot that reaches FULLREAD_PHASE_DONE after the first switch's Continue and then early-returns
+    // (product_continue.rs:282), so the 2ND consecutive switch's return-title reaches the title but nothing
+    // drives its native Continue -> stuck at the covered title (the "black screen"). Reset the phase to SUBMIT
+    // and drop the stale MENU_CONTINUE_* row/router pointers captured for the previous switch's (torn-down)
+    // menu, so the driver re-captures + re-submits the Continue for THIS switch. Idempotent one-shots reset to
+    // their init values, exactly like the per-switch latches above; the continue_confirm/world-up guards still
+    // prevent driving a load into a live world. (Distinct from the return-title one-shots at 868-869, which the
+    // 2026-07-02 bisect showed regress the single switch -- those stay disabled.)
+    FULLREAD_PHASE.store(FULLREAD_PHASE_SUBMIT, Ordering::SeqCst);
+    FULLREAD_DRAIN_WAITS.store(0, Ordering::SeqCst);
+    MENU_CONTINUE_ITEM.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
+    MENU_CONTINUE_ENTRY.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
+    MENU_CONTINUE_FUNCTOR.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
+    MENU_CONTINUE_DOCALL.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
+    MENU_CONTINUE_ROUTER.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
+    MENU_CONTINUE_INDEX.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
     SYSTEM_QUIT_QUICKLOAD_LAST_TITLE_OWNER.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_QUICKLOAD_AUTOLOAD_HANDOFF_COUNT.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_PROFILE_LOAD_JOB_POST_RETURN_TITLE_FIRED.store(0, Ordering::SeqCst);
     PROFILE_REFRESH_KICKED.store(0, Ordering::SeqCst);
     PORTRAIT_RENDER_WINDOW_DONE.store(0, Ordering::SeqCst);
+    // Reset the switch-outcome oracle so THIS switch's classification starts fresh (see the atomics' doc).
+    SWITCH_ORACLE_TICK.store(0, Ordering::SeqCst);
+    SWITCH_ORACLE_STABLE_FRAMES.store(0, Ordering::SeqCst);
+    SWITCH_ORACLE_MAX_STABLE_FRAMES.store(0, Ordering::SeqCst);
+    // SWITCH-2 SOFT-LOCK FIX (arm-point pre-clear, 2026-07-16). RE of the 1.16.1 dump proved the switch-2
+    // freeze is the native quit-save (`ShouldSave` 0x1406794c0) aborting on a stale
+    // `CSMenuMan->disableSaveMenu` (+0x13c, read by `CanShowSaveMenu` 0x14080d150) left set from the prior
+    // switch's menu flow -- so `bc4` freezes at 1 and the world never tears down. Clear it HERE, the moment
+    // this switch arms its return-title, so the gate is already open before the quit-save orchestrator runs
+    // (belt-and-suspenders with the per-frame game-task clear in product_core_autoload_tick and the menu-pump
+    // clear in system_quit_restore_real_system_windows). No-op / inert on switch 1 (its byte is already 0);
+    // reuses the shared startup_hooks helper. SYSTEM_QUIT_DISABLE_SAVE_MENU_CLEAR_COUNT is the runtime
+    // semaphore: >0 on a switch == that switch's quit-save was gated OFF and we unblocked it.
+    let base = game_rva(0).unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    if base != TITLE_OWNER_SCAN_START_ADDRESS {
+        let dsm_prev =
+            unsafe { system_quit_clear_disable_save_menu(base, "arm-quickload-return-title") };
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: arm pre-clear CSMenuMan->disableSaveMenu was {dsm_prev} (>0 = switch-2 quit-save was BLOCKED; cleared so bc4 can pump 1->2->3 and the world tears down) selected_slot={selected_slot} source={source}"
+        ));
+    }
     SYSTEM_QUIT_QUICKLOAD_PHASE.store(
         SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED,
         Ordering::SeqCst,
@@ -1015,7 +1434,26 @@ pub(crate) unsafe extern "system" fn system_quit_inworld_load_skip_hook(slot: i3
         return 0;
     }
     let original: unsafe extern "system" fn(i32) -> usize = unsafe { std::mem::transmute(orig) };
-    unsafe { original(slot) }
+    let ret = unsafe { original(slot) };
+    let selected = SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst);
+    if ret != 0 && selected < TITLE_PROFILE_SLOT_COUNT && slot == selected as i32 {
+        SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(1, Ordering::SeqCst);
+        SYSTEM_QUIT_QUICKLOAD_PHASE.store(SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE, Ordering::SeqCst);
+        let gm = game_man_ptr_or_null();
+        if gm != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe {
+                *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) = OWN_STEPPER_SLOT_NONE;
+            }
+        }
+        if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
+            er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
+        }
+        let n = SYSTEM_QUIT_INWORLD_LOAD_ALLOW_COUNT.load(Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: native slot deserialize proof OK via 0x67b290 slot={slot} ret={ret} prior_phase={phase} world_up={world_up} allow_count={n} -> phase IDLE, cleared GameMan+0xb78/save_requested; native owns warp_requested finalize/autoclear"
+        ));
+    }
+    ret
 }
 
 pub(crate) fn install_system_quit_inworld_load_guard() {
@@ -1183,6 +1621,14 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
     c: usize,
     d: usize,
 ) -> usize {
+    // RENDER-HANDOFF FIX ARM (bd er-effects-rs-um9g): this Continue/Load confirm is the common trigger
+    // for BOTH the boot autoload and the in-world reload; it captures GameMan+0xc30 into the TitleStep,
+    // then forwards to SetState5 -> STEP_PlayGame -> InGameStep::RequestMoveMap. On our redirect load the
+    // captured BlockId can be stale/-1, which makes RequestMoveMap skip building the world-res loadlist
+    // path and stall at WorldResWait. Arm the RequestMoveMap fixup here so the upcoming RequestMoveMap
+    // substitutes the freshly-deserialized saved-map BlockId (armed-only + invalid-param2-only, so it is
+    // a no-op for a load whose BlockId is already valid).
+    crate::experiments::own_load::arm_request_move_map_fixup();
     // Continue-trace compat: this unconditional hook replaced the trace-set `cap_continue_confirm`
     // hook on the same address (two MinHooks on one target fail -- the install_c30_writer_hook
     // precedent), so reproduce its logging + confirm latch exactly when tracing is on.
@@ -1209,7 +1655,7 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
     let switch_active = (SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED
         ..=SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF)
         .contains(&phase);
-    if switch_active && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 0 {
+    if switch_active {
         let selected = SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst);
         let world_up = unsafe { PlayerIns::local_player_mut() }.is_ok();
         if world_up {
@@ -1219,7 +1665,9 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
             append_autoload_debug(format_args!(
                 "system-quit-quickload: continue_confirm called while OLD WORLD STILL UP phase={phase} selected={selected} shim=0x{shim:x} -- forwarding WITHOUT fresh deserialize (unexpected caller)"
             ));
-        } else if selected >= TITLE_PROFILE_SLOT_COUNT {
+        } else if SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 0
+            && selected >= TITLE_PROFILE_SLOT_COUNT
+        {
             let n = SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
             append_autoload_debug(format_args!(
                 "system-quit-quickload: continue_confirm BLOCKED #{n} -- switch active (phase={phase}) but no valid picked slot ({selected}); refusing to stream stale pre-switch state"
@@ -1229,21 +1677,28 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
             let slot = selected as i32;
             let base = game_rva(0).unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
             let gm = game_man_ptr_or_null();
+            let native_slot_proven =
+                SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 1;
             append_autoload_debug(format_args!(
-                "system-quit-quickload: continue_confirm intercepted at clean title phase={phase} -> restore gaitem singleton + fresh feed-deserialize of PICKED slot {slot} before stream (shim=0x{shim:x})"
+                "system-quit-quickload: continue_confirm intercepted at clean title phase={phase} slot={slot} native_slot_proven={native_slot_proven} shim=0x{shim:x}"
             ));
-            // Release char#1's leaked gaitems back to the free-queue at this clean title (player
-            // absent) BEFORE the reload deserialize, else char#2's deserialize exhausts the queue
-            // and OOB-dispatches gaitemInsTable[-1] (the AV at live 0x67141a). Native per-item
-            // release; declines fail-closed if the singleton looks wrong (then the deserialize may
-            // still crash, but we never sweep a bogus pointer).
-            if base != TITLE_OWNER_SCAN_START_ADDRESS {
-                unsafe { own_load_reset_gaitem_singleton(base) };
+            if !native_slot_proven {
+                if gm != TITLE_OWNER_SCAN_START_ADDRESS {
+                    unsafe {
+                        *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) =
+                            OWN_STEPPER_SLOT_NONE;
+                    }
+                }
+                let n = SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+                SYSTEM_QUIT_QUICKLOAD_PHASE.store(
+                    SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF,
+                    Ordering::SeqCst,
+                );
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: continue_confirm FORWARD #{n} -- native requested-slot proof did not fire for slot={slot}; disarmed GameMan+0xb78 and holding phase at AUTOLOAD_HANDOFF until stable-world proof fires (runtime evidence: setting DONE/IDLE here lets the next switch overlap unfinished MoveMap)"
+                ));
             }
-            if base != TITLE_OWNER_SCAN_START_ADDRESS
-                && unsafe { own_load_feed_deserialize(base, gm, slot) }
             {
-                SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(1, Ordering::SeqCst);
                 let n = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
                     .fetch_add(1, Ordering::SeqCst)
                     + 1;
@@ -1258,27 +1713,21 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                 // makes the in-world load guards inert (they gate on [CONFIRMED, AUTOLOAD_HANDOFF)), so
                 // the native world stream is unobstructed, and leaves the session clean for the next
                 // switch (also the durable fix for the post-switch hygiene issue er-effects-rs-qwj).
-                SYSTEM_QUIT_QUICKLOAD_PHASE
-                    .store(SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE, Ordering::SeqCst);
-                // CLEAR the stale in-world load arm. product-core armed GameMan+0xb78 = slot MANY
-                // times before this confirm (title.rs, phase 3-4). Phase -> IDLE stops FURTHER arming
-                // but leaves b78 = slot RESIDENT; once our SetState5 world comes up, the in-world
-                // MoveMapStep loader reads that stale b78 and fires a REDUNDANT second load of the same
-                // slot -> a second CSGaitemImp::Deserialize with the free-queue already populated by
-                // our load -> the 0x67141a exhaustion crash (observed +41705ms). With phase IDLE the
-                // in-world guards are inert, so clear b78 to -1 (native "no requested slot") ourselves.
-                if gm != TITLE_OWNER_SCAN_START_ADDRESS {
-                    unsafe {
-                        *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) =
-                            OWN_STEPPER_SLOT_NONE;
-                    }
-                }
-                // CLEAR the return-title "rebuild the title" request flags the final functor set for
-                // this switch's teardown. They are LEVEL flags nothing resets, so once the reloaded
-                // world comes up the still-set menuData+0x5d re-requests the quit-to-title
-                // (GameMan.save_requested flips true again ~3.6s later, proven by gm-snap) and bounces
-                // the freshly-loaded world back to the title. The teardown they were needed for is done
-                // by now (we are at the clean-title Continue), so undo them.
+                SYSTEM_QUIT_QUICKLOAD_PHASE.store(
+                    SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF,
+                    Ordering::SeqCst,
+                );
+                // Keep GameMan+0xb78 armed through SetState5/MoveMap finalize. Runtime evidence from
+                // samechar-3x-phaseearly shows clearing b78 to -1 before the warp finalize leaves the
+                // loaded target without a valid requested-slot/warp target and TitleStep falls back to
+                // title. A later post-resident proof point must clear it, but not before the world stream
+                // has survived.
+                // CLEAR the return-title "rebuild the title" request flags the final functor set for this
+                // switch's teardown (restored 2026-07-16 after the DEFER experiment failed: the stuck load
+                // has menuData+0x5d==0 to BEGIN with -- the functor never set it, incomplete teardown -- so
+                // deferring OUR clear was inert). They are LEVEL flags nothing resets; left set on a
+                // resident world they re-request quit-to-title (bounce). Undo them at the clean-title
+                // Continue as before.
                 let menu_man = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
                     .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
                 if menu_man != TITLE_OWNER_SCAN_START_ADDRESS
@@ -1293,25 +1742,18 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                             unsafe {
                                 *((menu_data + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET)
                                     as *mut u8) = 0;
+                                *((menu_data + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) as *mut u8) = 0;
                             }
                         }
                     }
                 }
                 unsafe { *((base + RETURN_TITLE_REBUILD_FLAG_DAT_RVA) as *mut u8) = 0 };
-                // Also clear GameMan.save_requested defensively (typed): the return-title REQUEST set
-                // it for the teardown; a residual true would drive an immediate quit-save on the reload.
-                // AND clear GameMan.warp_requested: the fresh full deserialize we just ran (native
-                // parser 0x67b290 = dump FUN_14067b380) UNCONDITIONALLY sets warp_requested=true as a
-                // "warp reload pending" flag. On the normal in-world load the MoveMapStep warp machine
-                // consumes it, but our SetState5 forward is a fresh title->world stream that never does;
-                // MoveMapStep::CheckReturnToTitle (dump FUN_140afa7c0) then reads warp_requested==true
-                // every frame as a return-to-title trigger and bounces the freshly-loaded world back to
-                // the title ~4s later (proven: gm-snap shows warp_requested=true for the whole reloaded
-                // world vs false on the healthy boot load). warp_requested=false is the correct in-world
-                // steady state, so clearing it matches the boot load and does not affect which char loads.
+                // Clear GameMan.save_requested defensively (typed): the return-title REQUEST set it for
+                // the teardown; a residual true would drive an immediate quit-save on the reload. Do NOT
+                // clear GameMan.warp_requested here. Native full deserialize owns that flag; MoveMapStep
+                // finalize case 8 consumes/autoclears it after advancing mms18.
                 if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
                     er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
-                    er_save_loader::GameManSaveAccess::set_warp_requested(gm_typed, false);
                 }
                 // REPEATABLE-SWITCH STATE RESTORE (er-effects-rs-qwj). The switch-#1 works but
                 // switch-#2-stalls symptom is a pure precondition mismatch: these three return-title
@@ -1325,8 +1767,10 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                 // SAFE edge (unlike the disabled arm-time reset above, which re-fires during teardown
                 // and double-submits -> the single-switch bounce that regressed it): it runs once per
                 // switch (fresh-deser latch), AFTER this switch's return-title machinery is fully
-                // consumed, and alongside phase -> IDLE, so no return-title path reads a 0 count until
-                // the next switch arms (all those gates require phase != IDLE).
+                // consumed. The phase remains AUTOLOAD_HANDOFF until the streamed load reaches a stable
+                // world, so every return-title REQUEST/submit/final-functor gate must exclude
+                // AUTOLOAD_HANDOFF; otherwise the reset counts can be consumed by a spurious second
+                // return-title request that leaves bc4=3 stale and blocks the incoming MoveMap finalize.
                 SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT.store(0, Ordering::SeqCst);
                 SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.store(0, Ordering::SeqCst);
                 SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT.store(0, Ordering::SeqCst);
@@ -1347,14 +1791,8 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                 SYSTEM_QUIT_INGAME_TOP_WINDOW.store(0, Ordering::SeqCst);
                 SYSTEM_QUIT_OPTION_SETTING_WINDOW.store(0, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
-                    "system-quit-quickload: fresh picked-slot deserialize OK #{n} slot={slot} -- forwarding continue_confirm so SetState5 streams; phase -> IDLE + cleared GameMan+0xb78=-1 + cleared return-title rebuild flags (menuData+0x5d, DAT, save_requested, warp_requested) + RESET return-title one-shots (request/submit/final-functor) so the NEXT switch starts boot-fresh (er-effects-rs-qwj repeatable switching)"
+                    "system-quit-quickload: native Continue handoff commit OK #{n} slot={slot} -- forwarding continue_confirm so SetState5 streams; phase stays AUTOLOAD_HANDOFF until stable-world proof + keep GameMan+0xb78 armed through native finalize + cleared return-title rebuild flags (menuData+0x5d/0x5e, DAT, save_requested) + native-owned warp_requested finalize/autoclear + RESET return-title one-shots for the NEXT switch only (return-title gates exclude AUTOLOAD_HANDOFF)"
                 ));
-            } else {
-                let n = SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-                append_autoload_debug(format_args!(
-                    "system-quit-quickload: continue_confirm BLOCKED #{n} -- fresh deserialize of picked slot {slot} FAILED (see own-load-feed line); refusing to stream stale pre-switch state"
-                ));
-                return 0;
             }
         }
     }

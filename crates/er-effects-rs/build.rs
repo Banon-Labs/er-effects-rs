@@ -3,6 +3,11 @@ use std::{env, path::Path};
 fn main() {
     let root_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let target = env::var("TARGET").unwrap();
+    if !target.contains("windows") {
+        println!("cargo:rerun-if-changed=build.rs");
+        return;
+    }
+
     let arch = target.split('-').next().unwrap_or_default();
 
     let hde = match arch {

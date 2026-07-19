@@ -7,6 +7,77 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
     write_title_menu_flow_oracles(body);
     write_game_module_oracles(body);
     write_player_presence_oracle(body);
+    write_stepfinish_gate_oracle(body);
+}
+
+/// STEP_Finish sub-gate diagnostic (bd render-handoff-freeze-second-gate-pins-2026-07-18). The
+/// render handoff needs requestCode (InGameStep+0xd8) to advance 1->2, which happens only when
+/// MoveMapStep::STEP_Finish reaches terminal. STEP_Finish is gated on: warmup (+0xb0) >= 2, the
+/// testNetStep child finished (MoveMapStep+0x110 stepper == 0), and the CSRemo-idle gate
+/// (CSRemo[+8]remoMan[+0xd0] pending == 0, remoMan != null). Reading all three here (read-only)
+/// deterministically identifies which sub-gate holds STEP_Finish -- to disambiguate the static
+/// STEP_Finish-gate hypothesis from the runtime return-title-bounce observation (requestCode was seen
+/// briefly reaching 2 then reverting while the return-title request pulsed). MoveMapStep is resolved
+/// via the cached session owner -> InGameStep+0x2e8 -> +0xe8 (same path as gm-snap).
+fn write_stepfinish_gate_oracle(body: &mut String) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let rd = |p: usize| -> Option<usize> { unsafe { crate::experiments::safe_read_usize(p) } };
+    let rdi = |p: usize| -> i64 {
+        unsafe { crate::experiments::safe_read_usize(p) }.map_or(-1, |v| i64::from(v as u32 as i32))
+    };
+    let mut owner = TITLE_OWNER_PTR.load(Ordering::SeqCst);
+    if owner == null {
+        owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
+    }
+    let ingame = if owner != null {
+        rd(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET).filter(|v| *v != null)
+    } else {
+        None
+    };
+    let request_code = ingame.map_or(-1, |ig| rdi(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET));
+    let mms =
+        ingame.and_then(|ig| rd(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET).filter(|v| *v != null));
+    const MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET: usize = 0x12a;
+    let (warmup, testnet_stepper, mms_state, finalize_substate_12a) = match mms {
+        Some(m) => (
+            rdi(m + MOVEMAPSTEP_FINISH_WARMUP_B0_OFFSET),
+            rd(m + MOVEMAPSTEP_TESTNETSTEP_STEPPER_110_OFFSET).unwrap_or(0),
+            rdi(m + MOVEMAPSTEP_STATE_48_RE_OFFSET),
+            unsafe {
+                crate::experiments::safe_read_u8(m + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET)
+            }
+            .map_or(-1, i64::from),
+        ),
+        None => (-1, usize::MAX, -1, -1),
+    };
+    // CSRemo-idle gate inputs (read-only, no vtable call): remoMan present + pending qword.
+    let (csremo, remoman, remo_pending) = if let Ok(base) = crate::experiments::game_module_base() {
+        let csremo = rd(base + GLOBAL_CSREMO_RVA)
+            .filter(|v| *v != null)
+            .unwrap_or(0);
+        let remoman = if csremo != 0 {
+            rd(csremo + CSREMO_REMOMAN_08_OFFSET)
+                .filter(|v| *v != null)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let pending = if remoman != 0 {
+            rd(remoman + CSREMOMAN_PENDING_D0_OFFSET).unwrap_or(0)
+        } else {
+            0
+        };
+        (csremo, remoman, pending)
+    } else {
+        (0, 0, 0)
+    };
+    body.push_str(&format!(
+        "  \"oracle_stepfinish_request_code\": {request_code},\n  \"oracle_stepfinish_warmup\": {warmup},\n  \"oracle_stepfinish_testnet_stepper_present\": {},\n  \"oracle_stepfinish_mms_state\": {mms_state},\n  \"oracle_stepfinish_finalize_substate_12a\": {finalize_substate_12a},\n  \"oracle_csremo_present\": {},\n  \"oracle_csremo_remoman_present\": {},\n  \"oracle_csremo_remo_pending\": {},\n",
+        (testnet_stepper != 0 && testnet_stepper != usize::MAX),
+        csremo != 0,
+        remoman != 0,
+        remo_pending != 0
+    ));
 }
 
 fn format_optional_oracle_ptr(value: usize) -> String {
@@ -158,6 +229,21 @@ fn write_title_menu_flow_oracles(body: &mut String) {
 
 fn write_player_presence_oracle(body: &mut String) {
     const BLOCK_ID_NONE: i32 = -1;
+    if let Ok(world_chr_man) = unsafe { eldenring::cs::WorldChrMan::instance_mut() } {
+        body.push_str(&format!(
+            "  \"oracle_worldchrman_present\": true,\n  \"oracle_worldchrman_main_player\": \"0x{:x}\",\n  \"oracle_worldchrman_player_chr_set_capacity\": {},\n",
+            world_chr_man
+                .main_player
+                .as_ref()
+                .map(|p| p.as_ptr() as usize)
+                .unwrap_or(0),
+            world_chr_man.player_chr_set.capacity
+        ));
+    } else {
+        body.push_str(
+            "  \"oracle_worldchrman_present\": false,\n  \"oracle_worldchrman_main_player\": \"0x0\",\n  \"oracle_worldchrman_player_chr_set_capacity\": 0,\n",
+        );
+    }
     if let Ok(player) = unsafe { PlayerIns::local_player_mut() } {
         let pos = player.chr_ins.modules.physics.position;
         let grounded = player.chr_ins.modules.physics.standing_on_solid_ground;
@@ -196,4 +282,20 @@ fn write_player_presence_oracle(body: &mut String) {
     } else {
         body.push_str("  \"oracle_player_present\": false,\n");
     }
+    // CAN-MOVE proof (2026-07-18): input-causes-movement gate. can_move latches once a load sustains
+    // >=60 consecutive frames of injected-forward havok motion; moved_frames is the live consecutive
+    // count. EPOCH-GATED: only report can_move for the CURRENT load -- when fresh_deser flips (a reload
+    // deserialize commits, mid-loading) CAN_MOVE_CONFIRMED is still latched from the PRIOR load until the
+    // probe's next in-world tick resets it, so gate on MOVE_PROBE_EPOCH == current fresh_deser to avoid
+    // misattributing the prior load's movement to the new one (the false-pass fix).
+    let cur_deser =
+        crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+    let probe_epoch = crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst);
+    let can_move =
+        crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst) && probe_epoch == cur_deser;
+    body.push_str(&format!(
+        "  \"oracle_can_move\": {},\n  \"oracle_move_probe_moved_frames\": {},\n",
+        can_move,
+        crate::constants::MOVE_PROBE_MOVED_FRAMES.load(Ordering::SeqCst)
+    ));
 }

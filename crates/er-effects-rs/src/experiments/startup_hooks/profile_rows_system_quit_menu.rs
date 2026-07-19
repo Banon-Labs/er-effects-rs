@@ -664,10 +664,9 @@ unsafe fn system_quit_reapply_optionsetting_pane_visibility(
         return;
     }
     let composite = option_window + OPTIONSETTING_COMPOSITE_OFFSET;
-    let current = unsafe {
-        safe_read_usize(composite + OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET)
-    }
-    .unwrap_or(0);
+    let current =
+        unsafe { safe_read_usize(composite + OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET) }
+            .unwrap_or(0);
     if current < HEAP_LO {
         return;
     }
@@ -747,7 +746,8 @@ unsafe fn system_quit_reapply_optionsetting_pane_visibility(
     }
     let mut refreshed = false;
     if let Ok(refresh_addr) = game_rva(OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA) {
-        let select_tab: unsafe extern "system" fn(usize, i32) = unsafe { std::mem::transmute(refresh_addr) };
+        let select_tab: unsafe extern "system" fn(usize, i32) =
+            unsafe { std::mem::transmute(refresh_addr) };
         // Native tab-select copies old current pane state into the new pane before refreshing. Because
         // we pre-set current=selected above, the copy is selected->selected (safe), but the helper still
         // runs the internal Scaleform/row refresh that manual SetVisible did not reproduce. It indexes
@@ -791,6 +791,9 @@ unsafe fn system_quit_reset_profile_select_state(source: &str) {
     save_picker_reset(source);
     SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_PROFILE_SELECT_WINDOW.store(0, Ordering::SeqCst);
+    // End the profile-load flow so the legit Quit-Game/Return-to-Desktop confirm MessageBox is no longer
+    // suppressed once ProfileSelect is gone (the flag was set at the Load-Profile click).
+    SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_FIRED.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_TOP_HIDE_TOP_WINDOW.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_TOP_HIDE_PROFILE_WINDOW.store(0, Ordering::SeqCst);
@@ -798,6 +801,121 @@ unsafe fn system_quit_reset_profile_select_state(source: &str) {
     SYSTEM_QUIT_TOP_HIDE_TOP_MENU_ID.store(usize::MAX, Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "system-quit-dup: reset ProfileSelect hide state source={source}"
+    ));
+}
+
+/// Clear a stale `CSMenuMan->disableSaveMenu` (BOOL @ +0x13c) so the native quit-save can run during a
+/// System->Quit switch. RE of the 1.16.1 dump (2026-07-16, persistent Ghidra project) proved the quit-save
+/// (GameMan `bc4` 1->2 pump `FUN_14067b840`/`FUN_14067ba30`, and `ShouldSave`) ABORTS -- clearing
+/// `saveRequested` -- the instant this byte is non-zero (`CanShowSaveMenu` returns it directly). On a 2nd
+/// in-process switch it is left set from the prior switch's menu flow, so the quit-save never runs, `bc4`
+/// freezes at 1, and the world never tears down (the switch-2 soft-lock). Switch 1 has it 0. Called every
+/// frame the switch is active so it holds until the game's save orchestrator polls `saveRequested`, plus
+/// once at the return-title REQUEST for pre-clear telemetry. Returns the pre-clear value (-1 if CSMenuMan
+/// unavailable). Only ever called from switch-active paths, and a no-op when already 0, so normal-gameplay
+/// save-disable behaviour is untouched.
+unsafe fn system_quit_clear_disable_save_menu(base: usize, source: &str) -> i32 {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const HEAP_LO: usize = 0x10000;
+    let cs_menu_man = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }.unwrap_or(NULL);
+    if cs_menu_man < HEAP_LO {
+        return -1;
+    }
+    let dsm = (cs_menu_man + CS_MENU_MAN_DISABLE_SAVE_MENU_OFFSET) as *mut u8;
+    let prev = unsafe { dsm.read_volatile() };
+    if prev != 0 {
+        unsafe { dsm.write_volatile(0) };
+        let n = SYSTEM_QUIT_DISABLE_SAVE_MENU_CLEAR_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 5 || n % 120 == 0 {
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: cleared stale CSMenuMan->disableSaveMenu (was {prev}) #{n} source={source} -- native quit-save was gated OFF (bc4 freezes at 1, world never tears down); now unblocked so bc4 pumps 1->2->3"
+            ));
+        }
+    }
+    prev as i32
+}
+
+/// Drive the return-title predicate `GameMan+0xbc4` straight to READY(3) right after the native REQUEST
+/// set it to 1. Saving is disabled by design (the in-game "Save Game" button is the ONLY save writer),
+/// so the game's quit-save -- which is the ONLY thing that natively pumps bc4 1->2->3 (dump
+/// FUN_14067b840: the bc4 1->2 advance is welded to a successful disk write `cVar4 != 0`) -- will never
+/// run. Forcing bc4=READY here is the single deterministic write that completes the switch WITHOUT a
+/// save: (a) it satisfies the final-functor gate in `product_core_autoload_tick` (which needs bc4==READY
+/// to submit the return-title job that sets rt5d and tears the old world down), and (b) it SUPPRESSES the
+/// quit-save itself -- the orchestrator's `ShouldSave` and `FUN_140679460` both require bc4 != 3, so no
+/// disk write is attempted and no "failed to save" popup can appear. Returns the pre-force bc4 value
+/// (-1 if GameMan unavailable). The incoming world's STEP_MoveMap(18) finalize gate (blocked while
+/// bc4 != 0) is released later by the deterministic streamed-and-parked bc4->0 clear on the game task.
+unsafe fn system_quit_force_return_title_bc4_ready(base: usize, source: &str) -> i32 {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const HEAP_LO: usize = 0x10000;
+    const GAME_MAN_SINGLETON_RVA: usize = 0x3d69918;
+    let gm = unsafe { safe_read_usize(base + GAME_MAN_SINGLETON_RVA) }.unwrap_or(NULL);
+    if gm < HEAP_LO {
+        return -1;
+    }
+    let bc4p = (gm + GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET) as *mut i32;
+    let prev = unsafe { bc4p.read_volatile() };
+    unsafe { bc4p.write_volatile(GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY as i32) };
+    let n = SYSTEM_QUIT_BC4_FORCE_READY_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+    append_autoload_debug(format_args!(
+        "system-quit-quickload: forced return-title bc4 {prev}->READY(3) #{n} source={source} -- save disabled by design, so the game never pumps bc4 via the quit-save; this both fires the final functor and suppresses the quit-save (no disk write)"
+    ));
+    prev
+}
+
+/// Diagnostic (switch-2 save-freeze): the quit-save orchestrator `FUN_140afb970` (RE of the 1.16.1 dump)
+/// gates the save on THREE conditions, any of which blocks it and freezes `bc4` at 1: (a) `BOOL_143d856a0`
+/// -- the load-active / title-accept latch, RVA `0x3d856a0` -- must be 0 (it returns early otherwise); (b)
+/// `GameMan->save_state` (== our b80 offset) must be 0 (`FUN_14067a170`); (c) the menu gate `FUN_14080d660`:
+/// `*(CSMenuMan+0x80)->0x290` (byte) == 0 AND `->0x298` (qword) == 0. `save_state` is already 0 at the
+/// freeze, so this logs all three per-frame during the switch to NAME the actual blocker. Read-only.
+unsafe fn system_quit_log_save_gates(base: usize, source: &str) {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const HEAP_LO: usize = 0x10000;
+    const FORCE_LATCH_RVA: usize = 0x3d856a0;
+    const GAME_MAN_SINGLETON_RVA: usize = 0x3d69918;
+    let n = SYSTEM_QUIT_SAVE_GATE_DIAG_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+    if !(n <= 8 || n % 240 == 0) {
+        return;
+    }
+    let force = unsafe { safe_read_u8(base + FORCE_LATCH_RVA) }.unwrap_or(0xff);
+    let gm = unsafe { safe_read_usize(base + GAME_MAN_SINGLETON_RVA) }.unwrap_or(NULL);
+    let (save_state, bc4) = if gm >= HEAP_LO {
+        (
+            unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }.unwrap_or(-1),
+            unsafe { safe_read_i32(gm + GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET) }
+                .unwrap_or(-1),
+        )
+    } else {
+        (-1, -1)
+    };
+    let csm = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }.unwrap_or(NULL);
+    let sub = if csm >= HEAP_LO {
+        unsafe { safe_read_usize(csm + 0x80) }.unwrap_or(NULL)
+    } else {
+        NULL
+    };
+    let (m290, m298) = if sub >= HEAP_LO {
+        (
+            unsafe { safe_read_u8(sub + 0x290) }.unwrap_or(0xff),
+            unsafe { safe_read_usize(sub + 0x298) }.unwrap_or(usize::MAX),
+        )
+    } else {
+        (0xff, usize::MAX)
+    };
+    let menu_gate_ok = m290 == 0 && m298 == 0;
+    let blocker = if force != 0 {
+        "FORCE_LATCH(0x143d856a0!=0)"
+    } else if save_state != 0 {
+        "save_state!=0"
+    } else if !menu_gate_ok {
+        "MENU_GATE(CSMenuMan+0x80.290/298)"
+    } else {
+        "NONE(save should run)"
+    };
+    append_autoload_debug(format_args!(
+        "save-gate-diag #{n} source={source}: force=0x{force:x} save_state={save_state} bc4={bc4} menu290=0x{m290:x} menu298=0x{m298:x} menu_gate_ok={menu_gate_ok} -> quit-save blocked by {blocker}"
     ));
 }
 
@@ -809,6 +927,13 @@ pub(crate) unsafe fn system_quit_submit_direct_return_title_chain(
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const HEAP_LO: usize = 0x10000;
     if SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.load(Ordering::SeqCst) != 0 {
+        return true;
+    }
+    let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    if !(SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+        ..SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF)
+        .contains(&phase)
+    {
         return true;
     }
     if system_dialog < HEAP_LO {
@@ -861,8 +986,15 @@ pub(crate) unsafe fn system_quit_submit_direct_return_title_chain(
                     unsafe { std::mem::transmute(req_addr) };
                 unsafe { request_fn() };
                 SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT.fetch_add(1, Ordering::SeqCst);
+                // The REQUEST just set saveRequested + bc4=1. Saving is disabled by design (only the in-game
+                // "Save Game" button writes), so the game's quit-save -- the only native pump of bc4 1->2->3 --
+                // must not run. Drive bc4 straight to READY(3) ourselves: this fires the final functor (which
+                // needs bc4==READY) AND suppresses the quit-save (ShouldSave/FUN_140679460 require bc4 != 3), so
+                // the switch completes with NO disk write and no "failed to save" popup. Deterministic, keyed on
+                // the REQUEST we just fired -- not a frame counter. See system_quit_force_return_title_bc4_ready.
+                let bc4_prev = unsafe { system_quit_force_return_title_bc4_ready(base, source) };
                 append_autoload_debug(format_args!(
-                    "system-quit-quickload: native return-title REQUEST fired 0x{req_addr:x} source={source} -- set saveRequested + bc4=1 so the world saves+tears down and the final functor can fire"
+                    "system-quit-quickload: native return-title REQUEST fired 0x{req_addr:x} source={source} -- set saveRequested + bc4=1, then forced bc4 {bc4_prev}->READY(3) (save disabled by design; functor can fire, quit-save suppressed)"
                 ));
             }
             Err(_) => append_autoload_debug(format_args!(
@@ -914,6 +1046,13 @@ unsafe fn system_quit_restore_real_system_windows(base: usize, source: &str) {
     let profile = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
     let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
     if phase != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE {
+        // Keep the native quit-save unblocked every frame the switch is active. On a 2nd in-process switch a
+        // stale CSMenuMan->disableSaveMenu aborts the quit-save so bc4 freezes at 1 and the world never tears
+        // down; clearing it once at the REQUEST can be re-set before the save orchestrator polls, so we also
+        // clear it here on the per-frame switch-active path (no-op once it is 0). See RE note on the offset.
+        unsafe { system_quit_clear_disable_save_menu(base, source) };
+        // Diagnostic: name which of the save orchestrator's three gates is freezing bc4 at 1 on switch 2.
+        unsafe { system_quit_log_save_gates(base, source) };
         let system_dialog = SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.load(Ordering::SeqCst);
         let submitted =
             unsafe { system_quit_submit_direct_return_title_chain(base, system_dialog, source) };
@@ -933,7 +1072,8 @@ unsafe fn system_quit_restore_real_system_windows(base: usize, source: &str) {
         false
     };
     let restored_option = if option != 0 && option != top {
-        let restored = unsafe { system_quit_menu_window_set_visible_and_flags(base, option, true, source) };
+        let restored =
+            unsafe { system_quit_menu_window_set_visible_and_flags(base, option, true, source) };
         unsafe {
             system_quit_reapply_optionsetting_pane_visibility(
                 base,
@@ -1053,7 +1193,13 @@ unsafe fn resolve_optionsetting_pane(
     // The binder fully constructs the out proxy before reading it; a zeroed 0x80-byte buffer mirrors
     // the native uninitialized stack slot. Names carry no '%', safe as the binder's printf format.
     let mut out_buf = [0u8; SCENE_OBJ_PROXY_STACK_BYTES];
-    let out = unsafe { assign(root_proxy, out_buf.as_mut_ptr() as usize, name.as_ptr() as usize) };
+    let out = unsafe {
+        assign(
+            root_proxy,
+            out_buf.as_mut_ptr() as usize,
+            name.as_ptr() as usize,
+        )
+    };
     if out == 0 || out == null {
         return OptionSettingPaneSample {
             resolved: false,
@@ -1081,7 +1227,8 @@ unsafe fn resolve_optionsetting_pane(
 /// objectInterface instance itself). `safe_read` of `*objectInterface` fails closed if unmapped.
 unsafe fn read_scaleform_pane_visible(base: usize, cs_value: usize) -> (bool, bool, i32) {
     let object_interface =
-        unsafe { safe_read_usize(cs_value + CSSCALEFORMVALUE_OBJECT_INTERFACE_OFFSET) }.unwrap_or(0);
+        unsafe { safe_read_usize(cs_value + CSSCALEFORMVALUE_OBJECT_INTERFACE_OFFSET) }
+            .unwrap_or(0);
     let datatype =
         unsafe { safe_read_i32(cs_value + CSSCALEFORMVALUE_DATATYPE_OFFSET) }.unwrap_or(0);
     let value_handle =
@@ -1093,7 +1240,8 @@ unsafe fn read_scaleform_pane_visible(base: usize, cs_value: usize) -> (bool, bo
     }
     let vfptr = unsafe { safe_read_usize(object_interface) }.unwrap_or(0);
     let getfn = if vfptr != 0 {
-        unsafe { safe_read_usize(vfptr + CSSCALEFORMVALUE_GET_DISPLAY_INFO_VTABLE_SLOT) }.unwrap_or(0)
+        unsafe { safe_read_usize(vfptr + CSSCALEFORMVALUE_GET_DISPLAY_INFO_VTABLE_SLOT) }
+            .unwrap_or(0)
     } else {
         0
     };
@@ -1164,7 +1312,11 @@ fn hash_wide_label_ptr(label_ptr: usize) -> usize {
     hash
 }
 
-unsafe fn sample_optionsetting_active_row_table(current_dialog: usize, current_tab: usize, actively_shown: bool) {
+unsafe fn sample_optionsetting_active_row_table(
+    current_dialog: usize,
+    current_tab: usize,
+    actively_shown: bool,
+) {
     const HEAP_LO: usize = 0x10000;
     const MAX_ROWS: usize = 16;
     static OPTIONSETTING_ROW_LAST_LOG_KEY: AtomicUsize = AtomicUsize::new(usize::MAX);
@@ -1188,12 +1340,11 @@ unsafe fn sample_optionsetting_active_row_table(current_dialog: usize, current_t
     let mut label_hash = 0xcbf2_9ce4_8422_2325usize;
     for row_idx in 0..count {
         let row = aligned_properties + EDIT_PROPERTY_SIZE.saturating_mul(row_idx);
-        let controller = unsafe { safe_read_usize(row + EDIT_PROPERTY_CONTROLLER_OFFSET) }.unwrap_or(0);
+        let controller =
+            unsafe { safe_read_usize(row + EDIT_PROPERTY_CONTROLLER_OFFSET) }.unwrap_or(0);
         let action = if controller != 0 {
             unsafe {
-                safe_read_usize(
-                    controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET,
-                )
+                safe_read_usize(controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET)
             }
             .unwrap_or(0)
         } else {
@@ -1268,7 +1419,15 @@ unsafe fn sample_optionsetting_pane_visibility(base: usize, option_window: usize
     let root_proxy = option_window + OPTION_SETTING_ROOT_PROXY_OFFSET;
 
     // The pane CONTAINER: its resolved-but-not-visible state IS the direct blank-pane signature.
-    let wl = unsafe { resolve_optionsetting_pane(base, assign, dtor, root_proxy, OPTIONSETTING_WINDOWLIST_NAME) };
+    let wl = unsafe {
+        resolve_optionsetting_pane(
+            base,
+            assign,
+            dtor,
+            root_proxy,
+            OPTIONSETTING_WINDOWLIST_NAME,
+        )
+    };
 
     // Each option pane -> per-pane resolved/visible bitmasks (bit index = pane order).
     let mut resolved_mask: usize = 0;
@@ -1326,7 +1485,9 @@ unsafe fn sample_optionsetting_pane_visibility(base: usize, option_window: usize
 
     // Which tab is the user on: SettingTabControl (window+0x1870) -> tab view (+0x10) -> index (+0xd4).
     let tab_view = unsafe {
-        safe_read_usize(option_window + OPTIONSETTING_TAB_CONTROL_OFFSET + OPTIONSETTING_TAB_VIEW_OFFSET)
+        safe_read_usize(
+            option_window + OPTIONSETTING_TAB_CONTROL_OFFSET + OPTIONSETTING_TAB_VIEW_OFFSET,
+        )
     }
     .unwrap_or(0);
     let current_tab = if tab_view >= OPTIONSETTING_WINDOW_MIN_PTR {
@@ -1347,7 +1508,8 @@ unsafe fn sample_optionsetting_pane_visibility(base: usize, option_window: usize
     // OLD (mislabeled) signature -- kept only as a secondary diagnostic; it is a constant, not the bug.
     let named_blank = wl.visible && visible_mask == 0;
     // REAL blank: a healthy pane was seen earlier, and now the actively-shown current pane is hidden.
-    let real_blank = ever_visible && actively_shown && current_dialog != 0 && cur_is_display && !cur_visible;
+    let real_blank =
+        ever_visible && actively_shown && current_dialog != 0 && cur_is_display && !cur_visible;
 
     // FIX: when the currently-selected tab's real pane is blank, run the native tab-select refresh for
     // THAT current tab, not just SetVisible. Manual SetVisible was disproven: it increments the fix
@@ -1466,6 +1628,23 @@ pub(crate) unsafe extern "system" fn system_quit_menu_window_job_run_hook(
     let original: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(orig) };
     let ret = unsafe { original(job, load_params, fd4_time, menu_man) };
+    unsafe { system_quit_menu_window_run_post(job, ret) };
+    ret
+}
+
+/// Post-original MenuWindowJob::Run work for System->Quit: System/ProfileSelect resource mapping + the
+/// real-system-window HIDE, the in-world-load ABORT + return-title submit that actually complete a profile
+/// switch, and save-picker pump maintenance. Extracted from the hook body so the WINNING MenuWindowJob::Run
+/// detour can run it too: `title_custom_cover_menu_window_run_hook` and this hook both target the same RVA,
+/// MinHook installs only ONE, so this hook's own install fails `MH_ERROR_ALREADY_CREATED` and none of this
+/// would otherwise run (2026-07-15 root cause: dead hook -> profile load never completes + System menu never
+/// hidden). `title_custom_cover_menu_window_run_hook` calls this after it runs the original.
+pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
+    let filename_ptr = unsafe { safe_read_usize(job + 0x60) }.unwrap_or(0);
+    let filename = system_quit_read_wide_resource_name(filename_ptr);
+    if crate::experiments::lifecycle::switch_harness_discovery_enabled() {
+        crate::experiments::lifecycle::switch_harness_note_menu_filename(&filename);
+    }
     if matches!(
         filename.as_str(),
         "02_000_IngameTop"
@@ -1586,9 +1765,14 @@ pub(crate) unsafe extern "system" fn system_quit_menu_window_job_run_hook(
     // MenuWindowJob, so submitting the return-title chain from here (rather than from the concurrent
     // game-task tick) runs it in the menu pump's own frame and eliminates the Scaleform race that
     // produced the non-deterministic execute-fault crashes. Fire once ProfileSelect has closed (its
-    // window cleared) during a return-title transition; the submit self-gates on queue-ready and
-    // one-shots via the submit count. See bd system-quit-return-title-scaleform-race-2026-07-01.
-    if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
+    // window cleared) during the return-title teardown window only; after AUTOLOAD_HANDOFF the picked
+    // slot's SetState5/MoveMap stream owns the session and a second return-title request would leave
+    // GameMan+0xbc4=3 stale, blocking the incoming world's MoveMap(18) finalize.
+    // See bd system-quit-return-title-scaleform-race-2026-07-01 and er-effects-rs-um9g.
+    let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    if (SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+        ..SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF)
+        .contains(&quickload_phase)
         && SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) == 0
         && SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.load(Ordering::SeqCst) == 0
     {
@@ -1606,5 +1790,4 @@ pub(crate) unsafe extern "system" fn system_quit_menu_window_job_run_hook(
             }
         }
     }
-    ret
 }

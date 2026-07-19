@@ -46,6 +46,12 @@ pub(crate) static SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_LOG_COUNT: AtomicUsize = Atomi
 pub(crate) static SYSTEM_QUIT_INGAME_TOP_WINDOW: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_OPTION_SETTING_WINDOW: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_PROFILE_SELECT_WINDOW: AtomicUsize = AtomicUsize::new(0);
+/// Latched from the moment the user clicks System->Quit->Load Profile (the profile-load route FIRE) until
+/// ProfileSelect is reset. `SYSTEM_QUIT_PROFILE_SELECT_WINDOW` is only set later, in the MenuWindowJob::Run
+/// hook, so there is a window where the own_stepper self-pump builds the native load-confirm MessageBox
+/// while that var is still 0 -- the confirm then escapes msgbox suppression and CRASHES the game (2026-07-15).
+/// This flag spans the whole flow so `switch_active` in the msgbox builder hook covers that gap.
+pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_HIDE_REAL_WINDOWS_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_RESTORE_REAL_WINDOWS_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_SKIP_RESTORE_AFTER_QUICKLOAD_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -183,6 +189,9 @@ pub(crate) static SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_BLOCK_COUNT: AtomicUsize = Atomi
 pub(crate) static SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_GAITEM_DESERIALIZE_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_GAITEM_DESERIALIZE_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Times the CSGaitemImp singleton was reset to pristine right before a switch-reload's native deserialize
+/// (clears char#1's stale items so char#2's deserialize does not dispatch a freed vtable -> the 0x67141a AV).
+pub(crate) static SYSTEM_QUIT_GAITEM_DESERIALIZE_RESET_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_GAITEM_LOOKUP_EMPTY_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_GAITEM_LOOKUP_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_GAITEM_FINALIZE_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -224,6 +233,39 @@ pub(crate) static SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE: AtomicUsize = A
 /// Count of successful fresh picked-slot deserializes driven by the confirm hook (product proof
 /// expects exactly 1 per switch).
 pub(crate) static SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// One-shot guard for the MENU-FREE clean-title switch reload (own_load_switch_reload_fire, 2026-07-18).
+/// The warm-rebuilt TitleTopDialog never reaches Loop post-return-title (press-start SceneObjProxy at
+/// dialog+0xb78 unbound), so the title accept-byte/open-menu path deadlocks. For a genuine in-world
+/// switch we instead drive the picked slot through the boot load's own native commit (feed-deserialize
+/// -> continue_confirm -> SetState5). 0 = not yet attempted this switch; compare_exchange(0,1) claims
+/// the single attempt so a flickering-owner / partial-feed frame never re-runs the leak-prone feed.
+/// Reset per switch in system_quit_arm_quickload_autoload.
+pub(crate) static SYSTEM_QUIT_SWITCH_MENU_FREE_RELOAD_FIRED: AtomicUsize = AtomicUsize::new(0);
+/// MENU-FREE RELOAD COMPLETION LATCH (2026-07-18, repeatability fix). Continuous in-world frames observed
+/// after own_load_switch_reload_fire committed the picked slot (FRESH_DESER_DONE==1) while the switch phase
+/// is still armed. Once sustained, the switch is DONE: reset the phase to IDLE + clear the arm so the
+/// return-title chain cannot re-submit and bounce the freshly-loaded world back to title (which would block
+/// the NEXT switch). Reset whenever the completion condition breaks. See bd
+/// repeatability-menu-free-phase-reset-fix-2026-07-18.
+pub(crate) static SYSTEM_QUIT_MENU_FREE_STABLE_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// Sustained in-world frames after the menu-free reload commit before latching the switch DONE (~1s at
+/// task rate). Long enough that a transient mid-stream player flicker does not latch prematurely, short
+/// enough to disarm well before the return-title chain's queue-ready re-submit window (~tens of seconds).
+pub(crate) const SYSTEM_QUIT_MENU_FREE_STABLE_TICKS_THRESHOLD: usize = 60;
+/// PROGRAMMATIC PER-SLOT SWITCH TRIGGER (2026-07-18, RE workflow wf_b4dae22c). Replaces the brittle
+/// simulated-input autopilot: the harness writes a target slot to a game-dir control file, the DLL
+/// (in-world, world resident @ MoveMapStep 18) arms the menu-free switch by writing menuData+0x5d=1
+/// (the game-polled teardown flag -- no menu-pump/Scaleform op) then phase=RETURN_TITLE_REQUESTED;
+/// the existing ending-recovery -> own_load_switch_reload_fire -> completion-latch chain does the rest.
+/// Counters (surfaced in telemetry) prove each switch with zero simulated input.
+pub(crate) static SWITCH_TRIGGER_ARM_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SWITCH_TRIGGER_TEARDOWN_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SWITCH_TRIGGER_LAST_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static SWITCH_TRIGGER_DEFERRED_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Last-seen mtime (unix secs) of the switch-slot control file; a change == a new harness request.
+pub(crate) static SWITCH_SLOT_CONTROL_MTIME: AtomicUsize = AtomicUsize::new(0);
+/// 0 until the first poll records the baseline mtime, so a stale control file at boot never arms.
+pub(crate) static SWITCH_SLOT_CONTROL_PRIMED: AtomicUsize = AtomicUsize::new(0);
 /// Count of confirms BLOCKED fail-closed because the fresh deserialize could not be proven (no save
 /// bytes / parse failed / fingerprint not real). Streaming stale state would load the wrong
 /// character and the post-load autosave would then write it back to the picked slot.
@@ -236,6 +278,46 @@ pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED: usize = 2;
 pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN: usize = 3;
 pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF: usize = 4;
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_PHASE: AtomicUsize = AtomicUsize::new(0);
+/// Continuous in-world game-task frames observed while a return-title reload is still ARMED
+/// (`SYSTEM_QUIT_QUICKLOAD_PHASE >= RETURN_TITLE_REQUESTED`) with the local player present. A genuine
+/// user-initiated return-title tears the world down within ~1-2s so the player vanishes and this never
+/// climbs; a SPURIOUS arm -- the boot autoload's own ProfileSelect navigation queuing a post-load reload
+/// of the character we just loaded (`system_quit_arm_quickload_autoload`) -- leaves the player present
+/// indefinitely. Reset to 0 whenever no reload is armed. See bd
+/// angre-reload-full-causal-chain-and-fix-2026-07-18.
+pub(crate) static SYSTEM_QUIT_INWORLD_ARMED_STABLE_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// Continuous armed+in-world frames after which a still-armed return-title is treated as SPURIOUS and
+/// disarmed (phase -> IDLE). ~5s at the game-task rate: far below a genuine stable load's tens-of-seconds
+/// presence (observed ~47s to the destructive submit) and comfortably above a real switch's ~1-2s
+/// arm->teardown window, so it never disarms a legitimate user switch.
+pub(crate) const SYSTEM_QUIT_INWORLD_ARMED_DISARM_TICKS: usize = 300;
+pub(crate) static SYSTEM_QUIT_INWORLD_ARMED_DISARM_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// SPURIOUS-vs-GENUINE arm discriminator (2026-07-18, bd repeatable-multi-save-consolidated-plan).
+/// Records whether the LOCAL PLAYER WAS ABSENT at the moment a return-title reload was armed
+/// (`system_quit_arm_quickload_autoload`). The two arm scenarios differ causally by exactly this:
+///   * SPURIOUS boot self-reload -- the boot autoload navigates the ProfileSelect LOAD flow from the
+///     title/menu (player ABSENT) and queues a pointless post-load return-title of the character it is
+///     about to load. `armed_while_absent = 1`.
+///   * GENUINE in-world switch -- the user (or the harness) is already in-world (player PRESENT) and
+///     initiates System->Quit->Load-Profile to a different character. `armed_while_absent = 0`.
+/// The time-based disarm below is only correct for the SPURIOUS case; gating it on this flag stops it
+/// from cancelling a genuine switch whose old world lingers past the threshold (the switch-regression
+/// in bd angre-4loads-goal-met-but-switch-regression-2026-07-18). 1 = armed while player absent.
+pub(crate) static SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT: AtomicUsize = AtomicUsize::new(0);
+/// ENDING-REQUEST RECOVERY (2026-07-18, live-proven fix for the genuine-switch mms18 stall, bd
+/// live-genuine-switch-stalls-mms18-end5e0-2026-07-18). Continuous frames the exact stuck signature
+/// (in-world, ig_d8==1, mms_step==18, menuData+0x5e==0, +0x5d==0, b7c1==1, blocks>0) has held while a
+/// switch's OLD world refuses to tear down. A normally-advancing load leaves step 18 within a few
+/// frames, so this never accumulates on a healthy load. Reset whenever the signature breaks.
+pub(crate) static ENDING_REQUEST_STALL_STREAK: AtomicUsize = AtomicUsize::new(0);
+/// Latch (0/1): we drove menuData+0x5d=1 to walk the child past 18 and are holding it until the child
+/// leaves step 18, then we CLEAR it -- a lingering 0x5d re-requests quit-to-title ~4s after the reload
+/// commits (return_title.rs:1-7), bouncing the freshly-loaded world back to title.
+pub(crate) static ENDING_REQUEST_SET: AtomicUsize = AtomicUsize::new(0);
+/// Runtime semaphore: >0 == the recovery fired (SET menuData+0x5d=1 at an mms18 stall) this run.
+pub(crate) static ENDING_REQUEST_SET_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Sustained stuck-at-18 frames before the recovery drives the ending request (~2s at task rate).
+pub(crate) const ENDING_REQUEST_STALL_RELEASE_FRAMES: usize = 120;
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT: AtomicUsize =
     AtomicUsize::new(0);

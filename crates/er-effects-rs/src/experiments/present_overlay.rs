@@ -73,7 +73,7 @@ const GXDC_OUTPUT_VEC_BEGIN_OFFSET: usize = 0x128;
 /// every swapchain. The real prior blocker was the FIND missing the object, so MinHook was never attempted
 /// on a real swapchain; dinput8 MinHooks fire, so the hook path itself is sound.)
 static GAME_PRESENT_HOOKED: AtomicUsize = AtomicUsize::new(0);
-static GAME_SWAPCHAIN_FIND_TRIES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static GAME_SWAPCHAIN_FIND_TRIES: AtomicUsize = AtomicUsize::new(0);
 /// The dummy swapchain's resolved `Present(8)` / `Present1(22)` addrs. Under vkd3d-proton EVERY dxgi
 /// swapchain shares one DXVK `CDXGISwapChain` vtable, so the GAME swapchain's `vtable[8]`/`vtable[22]`
 /// are byte-identical to these (runtime-proven: resolved 0x..209f0 == VMT-swapped Present8 0x..209f0).
@@ -87,6 +87,49 @@ static PRESENT1_RESOLVED_ADDR: AtomicUsize = AtomicUsize::new(0);
 /// vtable means the detour ALSO fires for our throwaway dummy swapchain, which we must never draw on.
 static GAME_SWAPCHAIN: AtomicUsize = AtomicUsize::new(0);
 static GAME_BASE: AtomicUsize = AtomicUsize::new(0);
+
+// === Swapchain-find reject attribution (RAM oracles) =============================================
+// The 2026-07-15 native-Windows runs burned three probes on an opaque "chain miss": the walk gave no
+// way to tell a null chain link from a REAL candidate rejected by the vtable-equality check. Every
+// find attempt now stores its terminal stage + candidate facts so telemetry alone names the failing
+// predicate (oracle_present_find_* in write_game_module_oracles).
+/// Last find stage (see `FIND_STAGE_*`): which link/predicate the most recent attempt ended on.
+pub(crate) static PRESENT_FIND_STAGE: AtomicUsize = AtomicUsize::new(0);
+/// Last non-null chain candidate (`*output`), its vtable pointer, and its Present(8)/Present1(22).
+pub(crate) static PRESENT_FIND_CANDIDATE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PRESENT_FIND_CANDIDATE_VT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PRESENT_FIND_GOT8: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PRESENT_FIND_GOT22: AtomicUsize = AtomicUsize::new(0);
+/// Owning module of the candidate's vtable: 0=unknown/not-module-backed, 1=dxgi.dll, 2=the game exe
+/// (mis-layout red flag), 3=another module (overlay/wrapper DLL -- name in the debug log).
+pub(crate) static PRESENT_FIND_VT_MODULE_KIND: AtomicUsize = AtomicUsize::new(0);
+/// Consecutive tries that yielded the SAME candidate pointer (the QI-fallback stability gate).
+pub(crate) static PRESENT_FIND_STREAK: AtomicUsize = AtomicUsize::new(0);
+static PRESENT_FIND_LAST_CANDIDATE: AtomicUsize = AtomicUsize::new(0);
+/// How the game swapchain was accepted: 0=not yet, 1=exact vtable match against the dummy-resolved
+/// Present/Present1 (the vkd3d shared-vtable fast path), 2=module-backed + stable + QI fallback (the
+/// native-Windows / wrapped-swapchain path).
+pub(crate) static PRESENT_ACCEPT_PATH: AtomicUsize = AtomicUsize::new(0);
+/// Backbuffer DXGI_FORMAT.0 from the first Present's GetDesc1 (RAM oracle: makes the native-Windows
+/// HDR/10-bit case, DXGI_FORMAT_R10G10B10A2_UNORM=24, directly attributable instead of inferred from
+/// zero composite draw-hits). 0 until the first present.
+pub(crate) static PRESENT_BACKBUFFER_FORMAT: AtomicUsize = AtomicUsize::new(0);
+/// Consecutive same-candidate observations required before the QI fallback may dispatch through the
+/// candidate's vtable. A half-constructed transient does not survive consecutive frames in the game's
+/// single live output slot; the real swapchain does.
+const PRESENT_QI_STABILITY_TRIES: usize = 3;
+/// `PRESENT_FIND_STAGE` values, in chain-walk order.
+const FIND_STAGE_CTX_NULL: usize = 1;
+const FIND_STAGE_VEC_NULL: usize = 2;
+const FIND_STAGE_ENTRY_NULL: usize = 3;
+const FIND_STAGE_CANDIDATE_NULL: usize = 4;
+const FIND_STAGE_VT_UNREADABLE: usize = 5;
+const FIND_STAGE_VT_NOT_MODULE: usize = 6;
+const FIND_STAGE_VT_IN_GAME_EXE: usize = 7;
+const FIND_STAGE_STABILITY_WAIT: usize = 8;
+const FIND_STAGE_QI_REJECTED: usize = 9;
+const FIND_STAGE_ACCEPTED_VTABLE: usize = 10;
+const FIND_STAGE_ACCEPTED_QI: usize = 11;
 
 /// Detour for `IDXGISwapChain::Present(this, SyncInterval, Flags)`. Phase 1: log-only, then tail-call the
 /// original. `this` IS the game's swapchain (we never created it), so a real overlay draws onto its
@@ -106,22 +149,7 @@ unsafe extern "system" fn present_hook(this: *mut c_void, sync: u32, flags: u32)
     if this_u == GAME_SWAPCHAIN.load(Ordering::SeqCst) {
         let base = GAME_BASE.load(Ordering::SeqCst);
         if base != 0 {
-            // NOTE: the offscreen RASTERIZE is NOT driven here. Present is the WRONG GX phase -- the frame's
-            // GX recording is already closed, so the subcontext pool pop no-ops (black). The rasterize is
-            // driven from profile_lookat_realtime_draw_tick (a DRAW-phase CSTaskImp task, live recording
-            // frame). This hook only does the static composite of an already-captured RGBA.
-            // The boot-progress view owns the pre-Continue black gap; once the portrait composite starts
-            // drawing (loading window) it wins, and the boot view self-stops on the same signals.
-            let drew_portrait = unsafe { composite_portrait_on_swapchain(base, this_u) };
-            if !drew_portrait {
-                let _ = unsafe { composite_boot_progress_on_swapchain(base, this_u) };
-            }
-            let _ = unsafe { composite_effect_selector_on_swapchain(this_u) };
-            // Keyboard input runs on an event-driven WH_KEYBOARD_LL hook (spawned once here) so every
-            // press registers regardless of the ~4fps boot Present rate; the render-thread poll below
-            // handles gamepad (and is the keyboard fallback if the hook fails to install).
-            let _ = std::panic::catch_unwind(ensure_save_picker_keyboard_hook);
-            let _ = std::panic::catch_unwind(save_picker_overlay_input_tick);
+            unsafe { composite_on_game_swapchain(base, this_u) };
         }
     }
     let orig = PRESENT_ORIG.load(Ordering::SeqCst);
@@ -154,14 +182,7 @@ unsafe extern "system" fn present1_hook(
     if this_u == GAME_SWAPCHAIN.load(Ordering::SeqCst) {
         let base = GAME_BASE.load(Ordering::SeqCst);
         if base != 0 {
-            let drew_portrait = unsafe { composite_portrait_on_swapchain(base, this_u) };
-            if !drew_portrait {
-                let _ = unsafe { composite_boot_progress_on_swapchain(base, this_u) };
-            }
-            let _ = unsafe { composite_effect_selector_on_swapchain(this_u) };
-            // Event-driven keyboard hook (once) + render-thread gamepad/keyboard-fallback poll.
-            let _ = std::panic::catch_unwind(ensure_save_picker_keyboard_hook);
-            let _ = std::panic::catch_unwind(save_picker_overlay_input_tick);
+            unsafe { composite_on_game_swapchain(base, this_u) };
         }
     }
     let orig = PRESENT1_ORIG.load(Ordering::SeqCst);
@@ -171,6 +192,96 @@ unsafe extern "system" fn present1_hook(
     } else {
         0
     }
+}
+
+/// `+0x754/+0x755` on a CSMenuProfModelRend are the engine's build-request latches -- the kick raises
+/// them and the engine clears them when the model+offscreen build lands (see kick_target_profile_slot's
+/// "kick only when BOTH read 0 = not already in flight" parity check, loading_cover_save_slot.rs:301-306).
+const PROFILE_RENDERER_REQ_754_OFFSET: usize = 0x754;
+const PROFILE_RENDERER_REQ_755_OFFSET: usize = 0x755;
+/// Presents skipped because a profile-model build was in flight (RAM oracle for the crash mitigation).
+pub(crate) static PRESENT_COMPOSITE_BUILD_SKIPS: AtomicUsize = AtomicUsize::new(0);
+
+/// True while the just-kicked profile renderer's build-request latches are still set -- i.e. the engine
+/// is mid-build of the profile model + its offscreen RT. During this window the engine's OWN
+/// ResMan-scheduled offscreen render can reach FUN_141e90290 with a half-seeded GX resource (rcx=0x20)
+/// and access-violate; adding our concurrent composite GPU submit to the game device in the same window
+/// is the ONLY behavioral delta between the crashing fix-run and the six clean control/guard runs
+/// (native-Windows 2026-07-15, bd er-effects-rs-n4x). Bounded: the latches clear when the build lands.
+fn profile_model_build_in_flight() -> bool {
+    let r = PORTRAIT_KICK_RENDERER.load(Ordering::SeqCst);
+    if r == 0 || r == TITLE_OWNER_SCAN_START_ADDRESS {
+        return false;
+    }
+    let l754 = unsafe { safe_read_u8(r + PROFILE_RENDERER_REQ_754_OFFSET) }.unwrap_or(0);
+    let l755 = unsafe { safe_read_u8(r + PROFILE_RENDERER_REQ_755_OFFSET) }.unwrap_or(0);
+    l754 != 0 || l755 != 0
+}
+
+/// Presents skipped because the now-loading display window has not opened yet (RAM oracle).
+pub(crate) static PRESENT_COMPOSITE_EARLY_SKIPS: AtomicUsize = AtomicUsize::new(0);
+
+/// True on native Windows, where our overlay compositing must be fully suppressed. Runtime-proven across
+/// 17 native-Windows runs (bd er-effects-rs-n4x, 2026-07-15): compositing on the GAME's shared D3D12
+/// device -- creating resources + submitting command lists -- crashes the strict native AMD driver at
+/// EVERY phase (early-boot D3D12 init: RIP-outside AV; the game's own now-loading screen: WRITE AV), while
+/// composite-off is 60s clean and reaches gameplay. vkd3d/Proton isolates the shared-device work; native
+/// Windows does not. Displaying our overlay on native Windows therefore needs a different architecture (a
+/// SEPARATE overlay swapchain/window, or the game's own Scaleform/CSEzDraw render primitives), not a
+/// when-gate. Until that redesign, native Windows runs stable with NO custom overlay visuals; the
+/// swapchain-find/HDR/device-removed infra all stay in place for the eventual redesign.
+fn composite_suppressed_on_native() -> bool {
+    !running_under_wine()
+}
+
+/// Shared Present/Present1 composite body: draw the loading bar / save picker (and, where the render-drive
+/// runs, the loading-screen portrait), then the in-world effect-selector HUD, then service overlay input.
+/// Runs on the game render thread; never panics.
+///
+/// NATIVE-WINDOWS SPLIT (2026-07-15, bd er-effects-rs-n4x). The strict native D3D12 driver crashes on the
+/// character-profile RENDER-DRIVE (proven: drive off => 60s stable + reaches gameplay), so on native
+/// Windows the drive is gated off and the animated PORTRAIT cannot render. But the loading BAR + save
+/// PICKER are pure DISPLAY (a CopyTextureRegion of our own CPU-rasterized pixels onto the backbuffer
+/// inside the game's Present, when the backbuffer is guaranteed to be in PRESENT state) -- they need no
+/// drive. So on native Windows: SKIP the portrait composite (it would only ever have a stale/absent head
+/// with the drive off, and its readback path is heavier), and draw the boot-progress bar + picker
+/// directly. On Wine/Proton (vkd3d), keep the full portrait-first path.
+unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) {
+    // NOTE: the offscreen RASTERIZE is NOT driven here. Present is the WRONG GX phase -- the frame's GX
+    // recording is already closed, so the subcontext pool pop no-ops (black). The rasterize is driven from
+    // profile_lookat_realtime_draw_tick (a DRAW-phase CSTaskImp task, live recording frame). This hook
+    // only does the static composite of an already-captured RGBA.
+    //
+    // NATIVE-WINDOWS DISPLAY-WINDOW GATE (2026-07-15, bd er-effects-rs-n4x). Compositing during the fragile
+    // early-boot D3D12 init / title crashes the strict driver even with the render-drive off (RIP-outside
+    // AV ~+8s; composite-off is 60s clean). So on native Windows, do NO GPU work until the game's OWN
+    // now-loading screen is live (LOADING_SCREEN_UPDATE_HITS > 0, set by the native CS::LoadingScreen hook
+    // -- drive-independent, unlike PROFILE_LOADSCREEN_TABLE_BUILDS). Until then the detour is a pure
+    // passthrough and the game boots exactly as it does overlay-less. (Wine/vkd3d composites throughout,
+    // as before.)
+    if composite_suppressed_on_native() {
+        PRESENT_COMPOSITE_EARLY_SKIPS.fetch_add(1, Ordering::SeqCst);
+        return;
+    }
+    let portrait_path = running_under_wine();
+    let drew_portrait = if portrait_path && !profile_model_build_in_flight() {
+        unsafe { composite_portrait_on_swapchain(base, this_u) }
+    } else {
+        if portrait_path {
+            PRESENT_COMPOSITE_BUILD_SKIPS.fetch_add(1, Ordering::SeqCst);
+        }
+        false
+    };
+    if !drew_portrait {
+        // Loading bar + save picker (the native-Windows display path; also the boot/black-gap path on Wine).
+        let _ = unsafe { composite_boot_progress_on_swapchain(base, this_u) };
+    }
+    let _ = unsafe { composite_effect_selector_on_swapchain(this_u) };
+    // Keyboard input runs on an event-driven WH_KEYBOARD_LL hook (spawned once) so every press registers
+    // regardless of the ~4fps boot Present rate; the render-thread poll handles gamepad (and is the
+    // keyboard fallback if the hook fails to install).
+    let _ = std::panic::catch_unwind(ensure_save_picker_keyboard_hook);
+    let _ = std::panic::catch_unwind(save_picker_overlay_input_tick);
 }
 
 static FACTORY2_ORIG: AtomicUsize = AtomicUsize::new(0);
@@ -284,6 +395,32 @@ pub(crate) fn install_present_overlay_hook() {
         .ok();
 }
 
+/// True when running under Wine/Proton (vkd3d), detected by the `wine_get_version` export that Wine's
+/// `ntdll` exposes and native Windows never does. Cached after the first probe. Used to gate the boot
+/// self-present, which is only barrier-safe under vkd3d's tolerant translation layer.
+fn running_under_wine() -> bool {
+    static CACHED: AtomicUsize = AtomicUsize::new(0); // 0=unknown, 1=native, 2=wine
+    match CACHED.load(Ordering::SeqCst) {
+        1 => return false,
+        2 => return true,
+        _ => {}
+    }
+    let is_wine = unsafe { GetModuleHandleW(windows::core::w!("ntdll.dll")) }
+        .ok()
+        .map(|h| {
+            unsafe {
+                windows::Win32::System::LibraryLoader::GetProcAddress(
+                    h,
+                    windows::core::s!("wine_get_version"),
+                )
+            }
+            .is_some()
+        })
+        .unwrap_or(false);
+    CACHED.store(if is_wine { 2 } else { 1 }, Ordering::SeqCst);
+    is_wine
+}
+
 /// Self-present budget: the game's first present lands ~+3.7s; if it has not arrived by this
 /// pump-relative age, something unusual is happening -- stop pumping and let the detour path
 /// (which needs no pump) carry the view whenever presents do start.
@@ -341,6 +478,27 @@ fn boot_present_pump() {
             }
             let found_ms = start.elapsed().as_millis().min(usize::MAX as u128) as usize;
             BOOT_VIEW_SWAPCHAIN_FOUND_MS.store(found_ms, Ordering::SeqCst);
+            // NATIVE-WINDOWS SAFETY (2026-07-15, bd er-effects-rs-n4x). The boot pump self-presents by
+            // drawing on the game swapchain's backbuffer with our own PRESENT<->COPY_DEST transitions at an
+            // ARBITRARY time (our thread, not synchronized with the game's frame). That barrier assumes the
+            // backbuffer is in PRESENT state; on a real D3D12 driver it usually is NOT (the game may be
+            // mid-render), so the wrong-state transition removes the device (Present hr=0x887a0005) and the
+            // game crashes in its device-removed handler (rva=0x1e8ad57). vkd3d/Proton TOLERATES the wrong
+            // barrier (translation layer), which is the only reason this ever worked. So the self-present is
+            // safe ONLY under Wine/Proton; on native Windows (with OR without a co-resident overlay like
+            // Special K) skip it entirely and let the Present DETOUR -- which draws INSIDE the game's Present
+            // call, when D3D12 guarantees the backbuffer is in PRESENT state -- carry the boot bar + portrait.
+            let self_present_safe =
+                running_under_wine() && PRESENT_ACCEPT_PATH.load(Ordering::SeqCst) != 2;
+            if !self_present_safe {
+                BOOT_VIEW_PUMP_STOP_REASON.store(4, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "boot-pump: swapchain hooked at pump+{found_ms}ms -- native/wrapped (wine={}, accept_path={}); handing off to the Present detour without self-presenting",
+                    running_under_wine(),
+                    PRESENT_ACCEPT_PATH.load(Ordering::SeqCst)
+                ));
+                return;
+            }
             append_autoload_debug(format_args!(
                 "boot-pump: swapchain hooked at pump+{found_ms}ms -- self-presenting until the game's first frame"
             ));
@@ -390,9 +548,12 @@ fn boot_present_pump() {
     }
 }
 
-/// Build a throwaway COMPOSITION swapchain (no HWND/window needed) and read its `Present` vtable entry.
-/// All resources are local and dropped at scope end; only the function pointer (shared across all
-/// IDXGISwapChain instances) is kept.
+/// Build a throwaway HWND swapchain (hidden dummy window + `CreateSwapChainForHwnd` -- composition
+/// swapchains are "Not implemented" under vkd3d/Wine) and read its `Present`/`Present1` vtable entries.
+/// All resources are local and dropped at scope end; only the function pointers are kept. NOTE: on
+/// native Windows these are a REFERENCE, not ground truth -- a co-resident overlay may wrap the game's
+/// swapchain (or ours) so the game's vtable slots legitimately differ; `find_game_swapchain` treats a
+/// slot mismatch as a fallback path, not a rejection.
 unsafe fn resolve_present_addrs() -> Option<(usize, usize)> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         let factory: IDXGIFactory4 = match CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)) {
@@ -523,6 +684,7 @@ unsafe fn log_backbuffer_desc(this: *mut c_void) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if let Some(sc) = unsafe { IDXGISwapChain1::from_raw_borrowed(&this) } {
             if let Ok(desc) = unsafe { sc.GetDesc1() } {
+                PRESENT_BACKBUFFER_FORMAT.store(desc.Format.0 as usize, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
                     "present-overlay: backbuffer {}x{} format={} buffers={}",
                     desc.Width, desc.Height, desc.Format.0, desc.BufferCount
@@ -572,22 +734,68 @@ fn swapchain_vtable_matches(obj: usize) -> bool {
     got8 == Some(want8) && got22 == Some(want22)
 }
 
-/// True if `obj` is a live COM object that QIs as `IDXGISwapChain`. Borrow-wraps (no AddRef on `obj`);
-/// the QI result is owned + dropped (its Release balances the QI AddRef), leaving the game object net 0.
-/// The QI is dispatched through `obj`'s vtable, so we FIRST require that vtable to be a dxgi.dll address
-/// (`dxgi_vtable_ok`) -- QI'ing a not-yet-constructed object with a garbage vtable hard-faults (SEH,
-/// uncatchable), which is exactly the early-boot hazard the self-present pump exposed.
-unsafe fn is_idxgi_swapchain(obj: usize) -> bool {
-    if obj < 0x10000 {
-        return false;
+/// The loaded module image containing `addr` (VirtualQuery `AllocationBase` of a `MEM_IMAGE` region),
+/// or `None` when `addr` is heap/unmapped/garbage. This is the crash-safety predicate that lets the QI
+/// fallback run on NON-dxgi vtables: a module-backed vtable belongs to SOME real class (dxgi proper or
+/// an overlay wrapper like SpecialK/GameOverlayRenderer), so a virtual dispatch executes real code
+/// instead of the uncatchable SEH fault a garbage vtable produces.
+fn image_module_base(addr: usize) -> Option<usize> {
+    use windows::Win32::System::Memory::{MEM_IMAGE, MEMORY_BASIC_INFORMATION, VirtualQuery};
+    if addr < 0x10000 {
+        return None;
     }
-    let vt = match unsafe { safe_read_usize(obj) } {
-        Some(v) => v,
-        None => return false,
+    let mut mbi = MEMORY_BASIC_INFORMATION::default();
+    let got = unsafe {
+        VirtualQuery(
+            Some(addr as *const c_void),
+            &mut mbi,
+            std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+        )
     };
-    if !dxgi_vtable_ok(vt) {
-        return false;
+    if got == 0 || mbi.Type != MEM_IMAGE {
+        return None;
     }
+    Some(mbi.AllocationBase as usize)
+}
+
+/// Best-effort module path for a module base (diagnostic log only).
+fn module_name_of_base(module_base: usize) -> String {
+    use windows::Win32::Foundation::HMODULE;
+    use windows::Win32::System::LibraryLoader::GetModuleFileNameA;
+    let mut buf = [0u8; 260];
+    let len =
+        unsafe { GetModuleFileNameA(Some(HMODULE(module_base as *mut c_void)), &mut buf) } as usize;
+    if len == 0 || len > buf.len() {
+        return format!("module@0x{module_base:x}");
+    }
+    // UTF-8 Lossy: diagnostic-only module path; replacement chars still identify the module.
+    String::from_utf8_lossy(&buf[..len]).into_owned()
+}
+
+/// Classify the candidate vtable's owning module for `PRESENT_FIND_VT_MODULE_KIND`.
+fn vt_module_kind(vt_module: usize, game_base: usize) -> usize {
+    if vt_module == game_base {
+        return 2;
+    }
+    if let Some((lo, hi)) = unsafe { module_range(b"dxgi.dll\0") } {
+        if lo <= vt_module && vt_module < hi {
+            return 1;
+        }
+    }
+    3
+}
+
+/// QI `obj` as `IDXGISwapChain` WITHOUT the dxgi-module vtable gate. Borrow-wraps (no AddRef on
+/// `obj`); the QI result is owned + dropped (its Release balances the QI AddRef), net 0 on the game
+/// object. Callers MUST have pre-validated the vtable as module-backed (`image_module_base`), not the
+/// game exe's, AND the candidate as pointer-stable across `PRESENT_QI_STABILITY_TRIES` consecutive
+/// frames -- together those exclude the half-constructed/garbage-vtable object whose QI dispatch
+/// hard-faults (SEH, uncatchable), which is the early-boot hazard the old dxgi-only gate guarded.
+/// The relaxation exists because on native Windows the game's swapchain is routinely WRAPPED by
+/// co-resident overlays (Special K observed in-process on the 2026-07-15 runs; Steam overlay/RTSS in
+/// the wild) whose vtables live outside dxgi.dll -- the dxgi-only gate rejected the real swapchain
+/// forever, which is exactly why no Windows user ever saw the boot bar or the loading portrait.
+unsafe fn qi_confirms_swapchain(obj: usize) -> bool {
     let raw = obj as *mut c_void;
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         match unsafe { IUnknown::from_raw_borrowed(&raw) } {
@@ -622,37 +830,109 @@ unsafe fn find_game_swapchain(base: usize) -> Option<usize> {
             Some(v)
         }
     };
-    let ctx = read_nn(base + G_GX_DRAW_CONTEXT_RVA)?; // GxDrawContext*
+    // Every miss names its terminal stage (RAM oracle + throttled log) -- see the FIND_STAGE block.
+    let miss = |stage: usize| -> Option<usize> {
+        PRESENT_FIND_STAGE.store(stage, Ordering::SeqCst);
+        log_find_miss(stage);
+        None
+    };
+    let Some(ctx) = read_nn(base + G_GX_DRAW_CONTEXT_RVA) else {
+        return miss(FIND_STAGE_CTX_NULL);
+    };
     // Precise chain: output-vector begin -> entry[0] output object -> output[0] swapchain.
-    if let Some(sc) = read_nn(ctx + GXDC_OUTPUT_VEC_BEGIN_OFFSET)
-        .and_then(read_nn)
-        .and_then(read_nn)
-    {
-        // Crash-proof vtable-match first (read-only, safe during early boot); QI only as a fallback
-        // when the resolved addrs are somehow unknown (never reached in practice, and only late).
-        if swapchain_vtable_matches(sc)
-            || (PRESENT_RESOLVED_ADDR.load(Ordering::SeqCst) == 0
-                && unsafe { is_idxgi_swapchain(sc) })
-        {
-            let t = GAME_SWAPCHAIN_FIND_TRIES.load(Ordering::SeqCst);
-            if t <= 1 {
-                append_autoload_debug(format_args!(
-                    "present-overlay: FOUND game swapchain 0x{sc:x} via g_GxDrawContext chain (ctx=0x{ctx:x})"
-                ));
-            }
-            return Some(sc);
+    let Some(vec_begin) = read_nn(ctx + GXDC_OUTPUT_VEC_BEGIN_OFFSET) else {
+        return miss(FIND_STAGE_VEC_NULL);
+    };
+    let Some(entry0) = read_nn(vec_begin) else {
+        return miss(FIND_STAGE_ENTRY_NULL);
+    };
+    let Some(sc) = read_nn(entry0) else {
+        return miss(FIND_STAGE_CANDIDATE_NULL);
+    };
+    PRESENT_FIND_CANDIDATE.store(sc, Ordering::SeqCst);
+    // Same-candidate streak: the QI fallback's stability gate.
+    let streak = if PRESENT_FIND_LAST_CANDIDATE.swap(sc, Ordering::SeqCst) == sc {
+        PRESENT_FIND_STREAK.fetch_add(1, Ordering::SeqCst) + 1
+    } else {
+        PRESENT_FIND_STREAK.store(1, Ordering::SeqCst);
+        1
+    };
+    let Some(vt) = (unsafe { safe_read_usize(sc) }) else {
+        return miss(FIND_STAGE_VT_UNREADABLE);
+    };
+    PRESENT_FIND_CANDIDATE_VT.store(vt, Ordering::SeqCst);
+    PRESENT_FIND_GOT8.store(
+        unsafe { safe_read_usize(vt + PRESENT_VTABLE_INDEX * 8) }.unwrap_or(0),
+        Ordering::SeqCst,
+    );
+    PRESENT_FIND_GOT22.store(
+        unsafe { safe_read_usize(vt + PRESENT1_VTABLE_INDEX * 8) }.unwrap_or(0),
+        Ordering::SeqCst,
+    );
+    // FAST PATH: crash-proof exact vtable match (read-only compares against the dummy-resolved
+    // Present/Present1). Sufficient under vkd3d-proton, where every dxgi swapchain shares one DXVK
+    // CDXGISwapChain vtable.
+    if swapchain_vtable_matches(sc) {
+        PRESENT_FIND_STAGE.store(FIND_STAGE_ACCEPTED_VTABLE, Ordering::SeqCst);
+        if PRESENT_ACCEPT_PATH.swap(1, Ordering::SeqCst) == 0 {
+            append_autoload_debug(format_args!(
+                "present-overlay: FOUND game swapchain 0x{sc:x} via g_GxDrawContext chain (ctx=0x{ctx:x}, exact vtable match)"
+            ));
         }
+        return Some(sc);
     }
-    // Chain not yet populated (early frame) or a candidate failed the vtable match. Do NOT scan the heap
-    // for a fallback -- a vtable-matching object may be a dead swapchain (see SEAMLESS COMPAT above).
-    // Return None so the caller retries next frame; throttle a diagnostic so a persistent miss is visible.
+    // NATIVE-WINDOWS FALLBACK: on real dxgi the exact match can fail legitimately -- co-resident
+    // overlays (Special K, Steam GameOverlayRenderer, RTSS) wrap the game's swapchain in their own
+    // object whose vtable lives in THEIR module, and native dxgi may use distinct concrete vtables
+    // where DXVK uses one. The chain still points at the game's single live output (never BFS, so
+    // the Seamless dead-swapchain hazard from 2026-07-05 stays excluded); accept it when the vtable
+    // is module-backed (real class, QI dispatch executes real code), NOT the game exe's (a game-exe
+    // vtable means the chain layout is wrong -- swapchain impls never live there), the candidate has
+    // been stable for PRESENT_QI_STABILITY_TRIES frames, and QI confirms IDXGISwapChain.
+    let Some(vt_module) = image_module_base(vt) else {
+        PRESENT_FIND_VT_MODULE_KIND.store(0, Ordering::SeqCst);
+        return miss(FIND_STAGE_VT_NOT_MODULE);
+    };
+    let kind = vt_module_kind(vt_module, base);
+    PRESENT_FIND_VT_MODULE_KIND.store(kind, Ordering::SeqCst);
+    if kind == 2 {
+        return miss(FIND_STAGE_VT_IN_GAME_EXE);
+    }
+    if streak < PRESENT_QI_STABILITY_TRIES {
+        return miss(FIND_STAGE_STABILITY_WAIT);
+    }
+    if unsafe { qi_confirms_swapchain(sc) } {
+        PRESENT_FIND_STAGE.store(FIND_STAGE_ACCEPTED_QI, Ordering::SeqCst);
+        if PRESENT_ACCEPT_PATH.swap(2, Ordering::SeqCst) == 0 {
+            append_autoload_debug(format_args!(
+                "present-overlay: FOUND game swapchain 0x{sc:x} via g_GxDrawContext chain + QI fallback (vt=0x{vt:x} in {}, streak={streak})",
+                module_name_of_base(vt_module)
+            ));
+        }
+        return Some(sc);
+    }
+    miss(FIND_STAGE_QI_REJECTED)
+}
+
+/// Throttled, stage-attributed miss line: early tries (1/300/1200), then once every 3600 (~once a
+/// minute at frame cadence) so a session-length retry stays visible without flooding the log.
+fn log_find_miss(stage: usize) {
     let t = GAME_SWAPCHAIN_FIND_TRIES.load(Ordering::SeqCst);
-    if t == 1 || t == 300 || t == 1200 {
-        append_autoload_debug(format_args!(
-            "present-overlay: chain miss try={t} ctx=0x{ctx:x} (real swapchain not yet in g_GxDrawContext output vector)"
-        ));
+    if !(t == 1 || t == 300 || t == 1200 || (t > 0 && t % 3600 == 0)) {
+        return;
     }
-    None
+    let candidate = PRESENT_FIND_CANDIDATE.load(Ordering::SeqCst);
+    let vt = PRESENT_FIND_CANDIDATE_VT.load(Ordering::SeqCst);
+    let got8 = PRESENT_FIND_GOT8.load(Ordering::SeqCst);
+    let got22 = PRESENT_FIND_GOT22.load(Ordering::SeqCst);
+    let want8 = PRESENT_RESOLVED_ADDR.load(Ordering::SeqCst);
+    let want22 = PRESENT1_RESOLVED_ADDR.load(Ordering::SeqCst);
+    let streak = PRESENT_FIND_STREAK.load(Ordering::SeqCst);
+    let vt_module = image_module_base(vt);
+    let module = vt_module.map_or_else(|| "<none>".to_owned(), module_name_of_base);
+    append_autoload_debug(format_args!(
+        "present-overlay: find miss try={t} stage={stage} candidate=0x{candidate:x} vt=0x{vt:x} vt_module={module} got8=0x{got8:x}/want8=0x{want8:x} got22=0x{got22:x}/want22=0x{want22:x} streak={streak}"
+    ));
 }
 
 /// Overwrite the COM `vtable[index]` slot at `slot_addr` so it points at `new_fn`, returning the previous
@@ -700,11 +980,11 @@ pub(crate) unsafe fn try_install_game_present_hook(base: usize) {
     {
         return;
     }
-    // Bound the find attempts (each is a budgeted BFS) so a never-appearing swapchain can't spin forever.
+    // Count attempts for telemetry/log throttling only. The old 3600-try lifetime cap dated from the
+    // removed budgeted-BFS era; today's find is four bounded safe-reads, cheap at frame cadence, and
+    // a lifetime cap would permanently disarm the hook when the chain populates late (the corrected
+    // 2026-07-15 native-Windows analysis showed the finder must keep retrying through the title era).
     let tries = GAME_SWAPCHAIN_FIND_TRIES.fetch_add(1, Ordering::SeqCst) + 1;
-    if tries > 3600 {
-        return;
-    }
     let sc = match unsafe { find_game_swapchain(base) } {
         Some(s) => s,
         None => return,

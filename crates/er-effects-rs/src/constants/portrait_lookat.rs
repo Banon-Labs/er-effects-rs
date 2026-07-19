@@ -231,6 +231,11 @@ pub(crate) static DEPTH_RB_NOGAP: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PORTRAIT_PUMP_BLOCK_R: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PORTRAIT_PUMP_BLOCK_VTABLE: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PORTRAIT_PUMP_BLOCK_OFF: AtomicUsize = AtomicUsize::new(0);
+/// Count of frames where the profile renderer/offscreen object exists, but one of the four native
+/// offscreen texture wrappers is not ready for `FUN_141a02de0`: wrapper is null or wrapper+0x40 is null.
+/// Windows crash 2026-07-14 hit `FUN_141e90290` with rcx=0x20 because `FUN_141a02de0` passed a null
+/// wrapper+0x40 into the GX resource-state classifier; skip the drive until all four wrappers are ready.
+pub(crate) static PORTRAIT_PUMP_BLOCK_OFF_RESOURCE: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PORTRAIT_PUMP_BLOCK_MULTI: AtomicUsize = AtomicUsize::new(0);
 /// The renderer's staged FaceData compare buffer (`param_1 + 0x43` longlongs) and embedded FaceData
 /// object (`param_1 + 0xf1`), from the `STEP_Wait_Play` decompile; compare length 0x120.

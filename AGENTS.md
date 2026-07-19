@@ -1,18 +1,18 @@
 # Agent Instructions
 
-This project uses **bd** (beads) for issue tracking. **Invoke the real binary directly at `/home/banon/.local/bin/bd`** -- do NOT use the bare `bd` command. The bare `bd` is a shell guard *function* (from the interactive shell snapshot) that errors with `bd guard error: unable to locate real bd binary` unless `BD_REAL_BIN` is exported, and non-interactive/agent shells do not get that function or env var. The local-bin path is the same ELF binary the guard would exec, so calling it directly always works. Run `/home/banon/.local/bin/bd prime` for full workflow context.
+This project uses **bd** (beads) for issue tracking. **Invoke the real binary directly at `/home/choza/.local/bin/bd`** -- do NOT use the bare `bd` command. The bare `bd` is a shell guard *function* (from the interactive shell snapshot) that errors with `bd guard error: unable to locate real bd binary` unless `BD_REAL_BIN` is exported, and non-interactive/agent shells do not get that function or env var. The local-bin path is the same ELF binary the guard would exec, so calling it directly always works. Run `/home/choza/.local/bin/bd prime` for full workflow context.
 
 ## Quick Reference
 
 ```bash
-/home/banon/.local/bin/bd ready              # Find available work
-/home/banon/.local/bin/bd show <id>          # View issue details
-/home/banon/.local/bin/bd update <id> --claim  # Claim work atomically
-/home/banon/.local/bin/bd close <id>         # Complete work
-/home/banon/.local/bin/bd dolt push          # Push beads data to remote
+/home/choza/.local/bin/bd ready              # Find available work
+/home/choza/.local/bin/bd show <id>          # View issue details
+/home/choza/.local/bin/bd update <id> --claim  # Claim work atomically
+/home/choza/.local/bin/bd close <id>         # Complete work
+/home/choza/.local/bin/bd dolt push          # Push beads data to remote
 ```
 
-For task startup in this repo, read relevant `bd` memories (`/home/banon/.local/bin/bd memories <topic>` and `/home/banon/.local/bin/bd recall <key>`) before broad source inspection or implementation. Treat memories as the first-pass continuation context; do not discover them midstream after choosing an approach.
+For task startup in this repo, read relevant `bd` memories (`/home/choza/.local/bin/bd memories <topic>` and `/home/choza/.local/bin/bd recall <key>`) before broad source inspection or implementation. Treat memories as the first-pass continuation context; do not discover them midstream after choosing an approach.
 
 ## Elden Ring Runtime Probe Hygiene
 
@@ -21,6 +21,8 @@ When using Frida or the injected DLL to scrape runtime Elden Ring data, keep the
 When a runtime probe is explicitly meant to stay live for manual interaction / `read` follow-up, do **not** use a watcher path that owns process shutdown (`.auto/runtime_probe.sh`, `er-readiness-watch.py`, or helpers that wait on them) unless the user explicitly asks for an agent-owned bounded run. A user-inspection probe must be genuinely live: launch the approved offline/direct `eldenring.exe` path and leave it running for the user.
 
 For user-inspection runs, do **not** enable autopilot/repro drivers, fabricated input, or input-blocking modes unless the user explicitly asks for self-driving. If a probe must drive menus automatically, treat it as an agent-owned runtime experiment with bounded telemetry and do not claim the user is in control. Before saying the user can take over, verify via telemetry that the input block/repro driver has released and that the game process is still alive.
+
+Standing user order (2026-07-17): do not stop or yield merely because the proper next runtime step will launch Elden Ring on the current desktop or may capture input. When launching Elden Ring or capturing input is appropriate for the current objective and uses an approved launch/probe path, proceed instead of asking for generic permission. Tell the user immediately before the launch/input-capture step exactly what will happen and why, then run it. Do **not** emit reminders or reassurance that no launch/input capture is happening; if the current step is non-launching, just do the non-launching work without a no-launch disclaimer. Still respect the forbidden Steam/EAC launch forms, save-safety rules, visual-oracle restrictions, and any truly destructive/irreversible boundary.
 
 Standing user order (2026-07-04): whenever a new DLL build is ready for runtime validation, do not try to validate a newly built DLL in an already-running process.
 
@@ -52,13 +54,17 @@ Legal/EULA/privacy popup detection must not rely on OCR as the only oracle. Pref
 
 Every `CS::MessageBoxDialog` before or immediately after character load is a hard crash/investigation trigger. Do not keep, display, auto-accept, or treat message boxes as acceptable product behavior. The existing MessageBoxDialog OK-handler/auto-accept path is deprecated old fake-input-era behavior: it may be used only as historical/probe reference, not as product proof. The box itself has no product value; identify the native side effect/gate it would perform, decide whether that side effect is irrelevant/offline-only or required, and skip/satisfy the semantic side effect directly without UI/input. Product proof requires zero MessageBoxDialog builds.
 
-For Elden Ring runtime validation, do not rely on slow manual/LLM-paced input timing. Prefer a deterministic fast helper/driver for inputs and captures, and use observable completion or structured failure signals for evidence. Every agent-run shell/runtime operation must also have an explicit hard timeout no greater than the canonical runtime-probe cap for the runtime portion; use that timeout as a safety cap, not as the primary synchronization mechanism. The cap is a single source of truth in `.auto/runtime_timeout_cap_seconds`. **To see the timeout cap, look here: `.auto/runtime_timeout_cap_seconds` (read it directly with `cat`, or call `scripts/runtime_timeout_cap.py`) -- do not duplicate the number elsewhere; it drifts.** That reader is the only place the value is interpreted; its fail-safe fallback (missing/unreadable file) and its absolute clamp are both pinned to the same value in `scripts/runtime_timeout_cap.py`, so the file remains the lone hard truth and no other value can leak in. The value is read through `scripts/runtime_timeout_cap.py` and the bash probes and passed through to `er-readiness-watch.py --max-runtime-seconds`. `run_experiment` timeouts may include build/setup/cleanup overhead, but runtime success is not credible after `runtime_probe_seconds` exceeds that cap and must be scored/treated as failure. Do not use sleeps as synchronization.
+For Elden Ring runtime validation, do not rely on slow manual/LLM-paced input timing. Prefer a deterministic fast helper/driver for inputs and captures, and use observable completion or structured failure signals for evidence. Every agent-run shell/runtime operation must also be time-bounded, but by the regime that fits it: non-game ops (scripts, Ghidra, builds, any subprocess) are hard-capped at 30s (`scripts/check-no-timeouts.py`, `MAX_TIMEOUT_SECONDS`) so mistakes fail fast; the GAME runtime portion is bounded by the semaphore-progress model whose idle/stall backstop is the canonical runtime-probe cap. In both cases the time bound is a safety backstop, NOT the primary synchronization mechanism -- the primary teardown signal is an in-memory RAM oracle (tear down a small delay after the last semaphore the specific test cares about). The cap is a single source of truth in `.auto/runtime_timeout_cap_seconds`. **To see the timeout cap, look here: `.auto/runtime_timeout_cap_seconds` (read it directly with `cat`, or call `scripts/runtime_timeout_cap.py`) -- do not duplicate the number elsewhere; it drifts.** That reader is the only place the value is interpreted; its fail-safe fallback (missing/unreadable file) and its absolute clamp are both pinned to the same value in `scripts/runtime_timeout_cap.py`, so the file remains the lone hard truth and no other value can leak in. The value is read through `scripts/runtime_timeout_cap.py` and the bash probes and passed through to `er-readiness-watch.py --max-runtime-seconds`. `run_experiment` timeouts may include build/setup/cleanup overhead, but runtime success is not credible after `runtime_probe_seconds` exceeds that cap and must be scored/treated as failure. Do not use sleeps as synchronization.
 
 Do not use delayed mouse/keyboard polling as the primary way to advance menus during runtime probes. The smoke driver must default to no pointer nudges. If deterministic state injection/hooks are not enough, add/extend the safe input or save-loader workspace crates, or ask the user to perform the single fast interaction while the probe records structured evidence.
 
 Autoresearch runtime probes are disabled fail-closed unless `scripts/check-runtime-probe-contract.py`, its regression tests, and `.auto/runtime_experiment_policy.rego` are deliberately changed together. The Rego runtime policy must require `timeout_seconds` to be present, greater than 0, and no more than the canonical cap in `.auto/runtime_timeout_cap_seconds` (the single source of truth; the contract checker asserts the policy literal equals it); the runtime path should still terminate from observable progress, completion, or structured failure evidence before that hard cap whenever possible. To change the cap, edit `.auto/runtime_timeout_cap_seconds`, the rego literal, and the fallback/ceiling in `scripts/runtime_timeout_cap.py` together (they are all pinned to the same single value) and re-run the contract checker/test.
 
-For Pi `run_experiment` in this repo, the cap is the same single hard truth as everything else: `timeout_seconds` and `checks_timeout_seconds` must be no greater than the value in `.auto/runtime_timeout_cap_seconds` (user directive 2026-07-01 -- runtime probes now use the one-minute global cap). The executable policy is `.auto/run_experiment_policy.rego`, validated by `scripts/check-run-experiment-contract.py`; do not call `run_experiment` with a larger tool timeout. NOTE (drift to clean up): that `.rego` policy file does not currently exist, so `check-run-experiment-contract.py` is dormant and is not run by `scripts/check.sh`; if the run_experiment policy is revived, author it from the same canonical cap file.
+For Pi `run_experiment` in this repo, the cap is the same single hard truth as everything else: `timeout_seconds` and `checks_timeout_seconds` for the GAME runtime portion must be no greater than the value in `.auto/runtime_timeout_cap_seconds` (currently 180s / 3 min; user directive 2026-07-17). That value is NOT a wall-clock target -- it is the GAME idle/stall backstop of a **semaphore-progress teardown model**: a live run should tear down a small delay after the last in-memory RAM oracle the specific test cares about (so most runs finish far under the backstop), and the 180s only bounds a run that makes no semaphore progress. This is distinct from, and much larger than, the non-game timeout: every non-game/agent-shell op is separately hard-capped at 30s by `scripts/check-no-timeouts.py` (`MAX_TIMEOUT_SECONDS`), so a mistaken/unbounded Ghidra query still fails fast in seconds, never after 3 minutes. See bd `runtime-teardown-semaphore-progress-watchdog-2026-07-17`. The executable policy is `.auto/run_experiment_policy.rego`, validated by `scripts/check-run-experiment-contract.py`; do not call `run_experiment` with a larger tool timeout. NOTE (drift to clean up): that `.rego` policy file does not currently exist, so `check-run-experiment-contract.py` is dormant and is not run by `scripts/check.sh`; if the run_experiment policy is revived, author it from the same canonical cap file.
+
+Standing user order (2026-07-19): during loading-bar runtime probes, if the loading bar stops making observable progress for more than 10 seconds, treat that as a stall semaphore and tear the run down promptly with a failed/incomplete verdict and preserved artifacts. Do not let a known-stalled loading bar consume the full runtime cap; the 180s cap remains only a final backstop for cases where no stricter stall detector applies.
+
+Standing user order (2026-07-19): the loading-bar progress oracle and user-visible loading-bar label must use the shape `<text label> N/M (<sub milestone label> X/Y)` for every loading-screen phase. The main `N/M` is the current visible/semantic loading phase sequence. The parenthesized subprogression belongs to that active main phase and must use labels that correspond to substeps of that phase. If a phase has known granular RAM/native substeps, expose them as distinct labels in the parentheses as they are reached; if a phase has no known substep granularity, codify that ignorance with a single explicit parenthesized step for that phase (for example `<phase-specific label> 1/1`) rather than borrowing unrelated labels. Sub-milestone labels must be phase-relevant: do not show a label whose prerequisite semantics cannot apply in the current main phase (for example `PLAYER PRESENT` is not a relevant substep during boot/resource acquisition before the player can exist, and a label like `Some label 1/Y (PLAYER PRESENT 1/N)` is invalid). Do not use one generic repeated label such as `HANDOFF` or `WAIT ...` for every phase or every substep. Prefer concrete field/owner labels such as `INGAMESTEP+0xD8 REQUEST`, `MOVEMAPSTEP+0x244 DONE`, or another real RAM/native semaphore only inside phases where that field/owner is actually the current phase's loading/handoff gate. Keep the machine-readable loading-progress signature aligned with the visible main/subprogression steps, and do not treat a visible phase's nominal final frame as total completion if its phase-relevant parenthesized substeps remain.
 
 Steam MUST be running before every Elden Ring runtime probe. Verify with `pgrep -x steam` first; if it is absent, ask the user to start Steam (interactive login) before launching any probe. The offline `eldenring.exe` Proton launch reuses Steam's environment (wineprefix, CWD, account/save-dir id); with Steam down the game still boots but in a different environment, so the DLL debug log lands elsewhere and Steam-dependent state degrades into a non-representative run (observed 2026-06-21: a run came back `cold_char_mount_phase=5` yet appended zero debug lines and the default level-9 character). `scripts/run-product-continue-direct-probe.sh` now fails closed in `preflight()` when Steam is down.
 
@@ -82,18 +88,22 @@ User steering is not evidence. When the user proposes a concrete technical hypot
 - Hard safety boundary: x86-64 only. Do **not** attach to or inject into `start_protected_game.exe` / EAC launcher processes. Only use the approved offline/direct `eldenring.exe` target.
 - Hang caveat: the inferior `LoadLibraryA` call runs while target threads are frozen; a blocking `DllMain` or a thread holding the loader lock can hang the attach/inject operation. Keep injected DLL attach paths bounded and non-blocking.
 
+## Reusable Tooling / Hard-Coded Path Corrections
+
+Persistent user directive (2026-07-17): when a tool, script, helper, or documented workflow fails because of a hard-coded local path, username, machine layout, or one-off assumption, fix the reusable tool/instruction at the point of failure before continuing the one-off task. Prefer env-overridable, current-user-aware defaults (`$HOME`, discovered repo root, explicit `*_DIR`/`*_BIN` overrides, bounded known-location fallbacks) over `/home/banon`, `/home/choza`, or other user-specific literals. Do not paper over the failure by running an ad-hoc command that only works in the current session; preserve the reusable fix with validation so future identical use cases benefit.
+
 ## Ghidra Runtime Dump: First-Pass RE Source
 
 **For ANY Elden Ring RE lookup, consult the Ghidra runtime dump FIRST -- before our own static disasm (`scripts/disas-deobf.sh` / `er_disasm`) or any runtime probe -- whenever a Ghidra project is relevant** (resolving a function/VA to a name + signature, decompiling to readable C, getting struct/field layouts, RTTI class names, namespaces). It has real symbols/types that the raw deobf binary lacks, so it is the cheapest, most authoritative first pass; only fall back to disasm/runtime when the dump cannot answer (e.g. runtime-only values, code the dump didn't symbolize).
 
-- Dump file: `/home/banon/projects/reverse/ghidra-projects/pc_eldenring_runtime.1.16.1.exe.gzf` (a pre-analyzed, named export of the live 1.16.1 process; ~1.5 GB). Ghidra install: `/home/banon/tools/ghidra_12.1_PUBLIC`.
+- Dump file: `pc_eldenring_runtime.1.16.1.exe.gzf` (a pre-analyzed, named export of the live 1.16.1 process; ~1.5 GB). Resolve paths through the current machine's configured Ghidra setup instead of hard-coding a username. Common locations are `$HOME/projects/reverse/ghidra-projects/pc_eldenring_runtime.1.16.1.exe.gzf` or a legacy `/home/banon/...` path; the current wrapper also supports explicit `GHIDRA_HEADLESS`, `GHIDRA_INSTALL_DIR`, `GHIDRA_PROJ_DIR`, `GHIDRA_PROJ_NAME`, and `GHIDRA_TMPDIR` overrides.
 - **CRITICAL -- dump is for SEMANTICS, the deobf binary is for ADDRESSES.** The dump and the deobf/live binary (`eldenring-deobf.bin`, == what the DLL patches/calls at runtime, base `0x140000000`) are NOT byte-identical: the same function sits at a different VA in each. The offset (`shift = deobf_va - dump_va`) is **piecewise-constant PER CODE REGION and NOT a single constant** -- measured: `0` near the base, an irregular `-0x80..-0x120` staircase through the low `.text` (`0x1401-0x140d`), a rock-solid `-0x20` across `0x140e-0x141e`, a rock-solid `+0x10` across `0x141f-0x1426` (e.g. dump `IsGameInForeground 0x14266def0` -> deobf `0x14266df00`, `+0x10` -- this is just THAT region's value), messy tail beyond. So use the dump for function *names*, decompiled C, struct/RTTI/field layouts, and *what code does* -- but NEVER call or patch a dump address directly (it lands mid-function and crashes). For any address you will CALL or PATCH, ground-truth it with **`scripts/dump-deobf-shift.py 0x<dump_va>`** (relocation-aware content matcher; `--reverse` for deobf->dump). It returns the exact deobf VA + shift, or a clearly-flagged region estimate to verify with disasm. The shift is NOT driven by Arxan (proven: step boundaries don't coincide with Arxan stubs, and regenerating the deobf via dearxan yields a byte-identical file), so there is no dearxan/formula shortcut. The deobf binary is authoritative for addresses; the dump is authoritative for meaning.
 - The standalone `.gzf` is separate from the shared `From Software.rep` project, which is often open in the user's Ghidra GUI (locked). NEVER open `.rep` headless; import the `.gzf` into a throwaway temp project instead. This is also why the dump is "user-approved single program," not the forbidden whole-repo scan.
-- **PERSISTENT PROJECT (use this; no re-import).** The gzf is now imported+analyzed into a persistent project at `/home/banon/ghidra_maporch/proj` (program `ermaporch`). Query it via the wrapper `scripts/ghidra-query.sh <postScript>.java [args...]`, which runs `analyzeHeadless /home/banon/ghidra_maporch/proj ermaporch -process -noanalysis -readOnly -postScript ...` and reopens in **~5s** (vs the ~2-min import; ~20x faster). Use a **Java** GhidraScript (12.1 dropped Jython; Python needs PyGhidra). Batch all lookups/decompiles for a question into one script anyway. The persistent project is the single approved bounded target (no whole-repo scan).
+- **PERSISTENT PROJECT (use this; no re-import).** The gzf is imported+analyzed into a persistent project at `$HOME/ghidra_maporch/proj` by default (program `ermaporch`; legacy `/home/banon/ghidra_maporch/proj` is only a fallback when it actually exists). Query it via the wrapper `scripts/ghidra-query.sh <postScript>.java [args...]`, which resolves the current user's project/tool paths, runs `analyzeHeadless <project> ermaporch -process -noanalysis -readOnly -postScript ...`, and reopens in **~5s** (vs the ~2-min import; ~20x faster). Use a **Java** GhidraScript (12.1 dropped Jython; Python needs PyGhidra). Batch all lookups/decompiles for a question into one script anyway. The persistent project is the single approved bounded target (no whole-repo scan).
   - If `scripts/ghidra-query.sh` or headless Ghidra reports the persistent project is locked, **do not fall back to offline scans/disassembly just because of the lock**. Use the Ghidra MCP tools against the already-open project first (`ghidra_decompile_function_by_address`, xrefs, disassembly, etc.). If the MCP is unavailable or stale, fix/reconnect the MCP bridge as the next step; only use offline disassembly as a fallback after the MCP path is proven unavailable for the specific query.
-  - The earlier "a `BadDataType` JPMS save error prevents persisting" claim was **WRONG**: the real blocker was `/tmp` (a near-full 32G tmpfs) running out of space while unpacking the gzf. Fix (baked into the wrapper): force `java.io.tmpdir` onto `/home` via `GHIDRA_JAVA_OPTIONS='-Djava.io.tmpdir=/home/banon/ghidra_maporch/tmp'` (plain `TMPDIR` is ignored for `java.io.tmpdir`). The `BadDataType`/`IllegalAccessException` log line still prints on JDK 26 but is **cosmetic/non-fatal** (Save + Import both succeed). See bd `ghidra-persistent-project-reuse-2026-06-22`.
-  - To re-import from scratch (rarely needed, e.g. a new dump version): `/home/banon/ghidra_maporch/scripts/import_persistent.sh`.
-  - **Where to put GhidraScripts: `scripts/ghidra/` (version-controlled), NOT `/tmp/ghidra_scripts/`.** Reusable Java postScripts (and their helper shell wrappers) belong in the repo's `scripts/ghidra/` directory so they survive reboots, are reviewable, and are shared across agents/sessions. `ghidra-query.sh` adds the postScript's own directory to `-scriptPath`, so a script in `scripts/ghidra/` runs the same way: `bash scripts/ghidra-query.sh scripts/ghidra/MyQuery.java [args...]`. Do NOT scatter new query scripts into `/tmp/ghidra_scripts/` -- that path is volatile (lost on reboot) and unversioned; older helpers still living there should be migrated into `scripts/ghidra/` when touched.
+  - The earlier "a `BadDataType` JPMS save error prevents persisting" claim was **WRONG**: the real blocker was `/tmp` (a near-full 32G tmpfs) running out of space while unpacking the gzf. Fix (baked into the wrapper): force `java.io.tmpdir` onto a current-user writable directory such as `$HOME/ghidra_maporch/tmp` via `GHIDRA_JAVA_OPTIONS`; plain `TMPDIR` is ignored for `java.io.tmpdir`. The `BadDataType`/`IllegalAccessException` log line still prints on JDK 26 but is **cosmetic/non-fatal** (Save + Import both succeed). See bd `ghidra-persistent-project-reuse-2026-06-22`.
+  - To re-import from scratch (rarely needed, e.g. a new dump version): use the current user's `ghidra_maporch/scripts/import_persistent.sh` if present, or set explicit paths rather than hard-coding `/home/banon`.
+  - **Where to put GhidraScripts: `scripts/ghidra/` (version-controlled), NOT `/tmp/ghidra_scripts/`.** Reusable Java postScripts (and their helper shell wrappers) belong in the repo's `scripts/ghidra/` directory so they survive reboots, are reviewable, and are shared across agents/sessions. `ghidra-query.sh` copies the requested repo script into the current user's stable Ghidra script cache (`$HOME/ghidra_maporch/gscripts` by default, override `GHIDRA_SCRIPT_CACHE`) before execution, so a script in `scripts/ghidra/` runs as: `bash scripts/ghidra-query.sh scripts/ghidra/MyQuery.java [args...]`. Do NOT scatter new query scripts into `/tmp/ghidra_scripts/` -- that path is volatile (lost on reboot) and unversioned; older helpers still living there should be migrated into `scripts/ghidra/` when touched.
 - Still respect the bounded-query hygiene below (single known program, no multi-program/whole-repo enumeration).
 
 ## Ghidra Shared Project Hygiene
@@ -165,9 +175,9 @@ cp -rf source dest          # NOT: cp -r source dest
 
 ### Rules
 
-- Use `/home/banon/.local/bin/bd` for ALL task tracking -- do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `/home/banon/.local/bin/bd prime` for detailed command reference and session close protocol
-- Use `/home/banon/.local/bin/bd remember` for persistent knowledge -- do NOT use MEMORY.md files (and to READ a memory use `/home/banon/.local/bin/bd recall <key>`, NOT `bd remember <key>` which clobbers it)
+- Use `/home/choza/.local/bin/bd` for ALL task tracking -- do NOT use TodoWrite, TaskCreate, or markdown TODO lists
+- Run `/home/choza/.local/bin/bd prime` for detailed command reference and session close protocol
+- Use `/home/choza/.local/bin/bd remember` for persistent knowledge -- do NOT use MEMORY.md files (and to READ a memory use `/home/choza/.local/bin/bd recall <key>`, NOT `bd remember <key>` which clobbers it)
 
 ## RTK / Code Search Caveat
 
@@ -187,6 +197,44 @@ Note the cupcake/OPA PreToolUse guard still INTERCEPTS raw `grep`/`ls`/`find`/`c
 - Work inside a `.worktrees/<name>` checkout only when that checkout is the intended active repo/branch. Do not merge sandbox contents into `main` just because they live under the repo root; persist shared policy in tracked root files instead.
 - The Bevy shader lab is local tinkering by default. Productizing it into the main workspace requires an explicit user request and normal review of the `Cargo.toml`/`Cargo.lock` impact.
 
+## Pre-Existing Issues Are Yours To Fix (user directive 2026-07-17)
+
+Every pre-existing issue you encounter -- a red gate, a lint violation, a broken check, a tracked
+file that already fails, latent tech debt -- is to be treated as **solely generated by you and
+pre-authorized by the user**. Do NOT disclaim it ("not mine", "pre-existing", "out of scope",
+"someone else committed this") and move on. You own it.
+
+Handling rule:
+- **Default: parallel background subagent.** If the issue does NOT interfere with your current task,
+  dispatch a background subagent to fix it (make the gate green, remove the violation) while you keep
+  working on your original objective. It is a real deliverable, not a footnote -- see it through to a
+  clean state and a commit, same as any other work.
+- **Blocker: do it first.** If the issue interferes with or blocks your current task (a gate you must
+  pass to commit/validate, a broken dependency you need, a failure that makes your own proof
+  untrustworthy), it is a blocker: fix it BEFORE the original task, not in parallel.
+- **Blocker + major digression that touches this code: isolate it in a worktree.** When the fix is
+  both a real blocker AND a substantial change to shared source (not a small localized fix), run the
+  subagent in its OWN git worktree under an agreed untracked dir -- `.worktrees/<name>` (gitignored;
+  see Local Hidden Worktrees) or under `./target` -- via the Agent tool's `isolation: "worktree"` or
+  an explicit `git worktree add`. That keeps its edits/commits out of your main working tree so they
+  cannot collide with your in-flight work; bring the result back only once it is green. A small,
+  localized, non-conflicting fix does NOT need a worktree -- a plain background subagent in the main
+  tree is fine (it must avoid the exact files you are editing).
+
+The pre-authorization is standing, so you do not need to ask before fixing a pre-existing issue; just
+fix it (in parallel, first, or worktree-isolated per the rules above) and report it alongside your
+main work.
+
+## Commit Timing (user directive 2026-07-17)
+
+Commit **immediately after** you perform a runtime validation + data-collection run -- commit the exact
+tree state that produced that run (fix + instrumentation + harness), pass or fail, because the run is
+the evidence and the state must be preserved with it. This overrides the generic "commit only when the
+user asks" default for runtime-affecting work. Otherwise (no runtime validation performed yet) do NOT
+commit, and do NOT ask about committing -- never pause the work to ask whether to commit. Just keep
+working toward the objective; the next runtime run is the commit trigger. See bd
+commit-immediately-after-runtime-validation-2026-07-17.
+
 ## Session Completion
 
 **When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
@@ -199,7 +247,7 @@ Note the cupcake/OPA PreToolUse guard still INTERCEPTS raw `grep`/`ls`/`find`/`c
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
    git pull --rebase
-   /home/banon/.local/bin/bd dolt push
+   /home/choza/.local/bin/bd dolt push
    git push
    git status  # MUST show "up to date with origin"
    ```

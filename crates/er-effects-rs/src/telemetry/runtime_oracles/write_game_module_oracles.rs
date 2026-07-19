@@ -48,6 +48,18 @@ fn write_game_module_oracles(body: &mut String) {
             }
             .unwrap_or(NULL_PTR)
         };
+        // WORLD-LIVE liveness clock: GameDataMan::play_time (u32 ms). Advances only while the world
+        // simulation steps; PAUSED during loads/menus/frozen-world. A rising value across a dwell
+        // window is the render-gate's proof the world is live (not a present-but-frozen reload).
+        const PLAY_TIME_READ_FAIL: i64 = -1;
+        let play_time_ms: i64 = if gdm == NULL_PTR {
+            PLAY_TIME_READ_FAIL
+        } else {
+            unsafe {
+                crate::experiments::safe_read_usize(gdm + crate::GAME_DATA_MAN_PLAY_TIME_A0_OFFSET)
+            }
+            .map_or(PLAY_TIME_READ_FAIL, |v| i64::from((v & 0xffff_ffff) as u32))
+        };
         const U8_MASK: usize = 0xff;
         let read_pgd_u32 = |offset: usize| -> u32 {
             if pgd == NULL_PTR {
@@ -169,7 +181,7 @@ fn write_game_module_oracles(body: &mut String) {
         }
         let stat_values = stats.map(|value| value.to_string()).join(", ");
         body.push_str(&format!(
-            "  \"oracle_char_current_hp\": {current_hp},\n  \"oracle_char_current_max_hp\": {current_max_hp},\n  \"oracle_char_base_max_hp\": {base_max_hp},\n  \"oracle_char_current_fp\": {current_fp},\n  \"oracle_char_current_max_fp\": {current_max_fp},\n  \"oracle_char_base_max_fp\": {base_max_fp},\n  \"oracle_char_current_stamina\": {current_stamina},\n  \"oracle_char_current_max_stamina\": {current_max_stamina},\n  \"oracle_char_base_max_stamina\": {base_max_stamina},\n  \"oracle_char_level\": {level},\n  \"oracle_char_runes\": {runes},\n  \"oracle_char_rune_memory\": {rune_memory},\n  \"oracle_char_chr_type\": {chr_type},\n  \"oracle_char_gender\": {gender},\n  \"oracle_char_archetype\": {archetype},\n  \"oracle_char_voice_type\": {voice_type},\n  \"oracle_char_starting_gift\": {starting_gift},\n  \"oracle_char_unlocked_talisman_slots\": {unlocked_talisman_slots},\n  \"oracle_char_spirit_ash_level\": {spirit_ash_level},\n  \"oracle_char_max_crimson_flask_count\": {max_crimson_flask_count},\n  \"oracle_char_max_cerulean_flask_count\": {max_cerulean_flask_count},\n  \"oracle_char_name\": \"{}\",\n  \"oracle_char_name_len\": {name_len},\n  \"oracle_char_stats\": [{stat_values}],\n  \"oracle_face_data_magic\": \"{}\",\n  \"oracle_face_data_version\": {face_data_version},\n  \"oracle_face_data_buffer_size\": {face_data_buffer_size},\n  \"oracle_face_data_buffer_hex\": \"{face_data_buffer_hex}\",\n  \"oracle_face_body_fields\": {face_body_fields},\n",
+            "  \"oracle_char_current_hp\": {current_hp},\n  \"oracle_char_current_max_hp\": {current_max_hp},\n  \"oracle_char_base_max_hp\": {base_max_hp},\n  \"oracle_char_current_fp\": {current_fp},\n  \"oracle_char_current_max_fp\": {current_max_fp},\n  \"oracle_char_base_max_fp\": {base_max_fp},\n  \"oracle_char_current_stamina\": {current_stamina},\n  \"oracle_char_current_max_stamina\": {current_max_stamina},\n  \"oracle_char_base_max_stamina\": {base_max_stamina},\n  \"oracle_char_level\": {level},\n  \"oracle_char_runes\": {runes},\n  \"oracle_char_rune_memory\": {rune_memory},\n  \"oracle_char_chr_type\": {chr_type},\n  \"oracle_char_gender\": {gender},\n  \"oracle_char_archetype\": {archetype},\n  \"oracle_char_voice_type\": {voice_type},\n  \"oracle_char_starting_gift\": {starting_gift},\n  \"oracle_char_unlocked_talisman_slots\": {unlocked_talisman_slots},\n  \"oracle_char_spirit_ash_level\": {spirit_ash_level},\n  \"oracle_char_max_crimson_flask_count\": {max_crimson_flask_count},\n  \"oracle_char_max_cerulean_flask_count\": {max_cerulean_flask_count},\n  \"oracle_char_name\": \"{}\",\n  \"oracle_char_name_len\": {name_len},\n  \"oracle_play_time_ms\": {play_time_ms},\n  \"oracle_char_stats\": [{stat_values}],\n  \"oracle_face_data_magic\": \"{}\",\n  \"oracle_face_data_version\": {face_data_version},\n  \"oracle_face_data_buffer_size\": {face_data_buffer_size},\n  \"oracle_face_data_buffer_hex\": \"{face_data_buffer_hex}\",\n  \"oracle_face_body_fields\": {face_body_fields},\n",
             json_escape(&name),
             json_escape(&face_data_magic)
         ));
@@ -1594,6 +1606,107 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_present_hook_hits",
             PRESENT_HOOK_HITS.load(Ordering::SeqCst),
         );
+        // Swapchain-find reject attribution (present_overlay.rs FIND_STAGE_*): stage 1-4 = chain link
+        // null, 5-9 = candidate rejected (6=vt not module-backed, 7=vt in game exe, 8=stability wait,
+        // 9=QI rejected), 10/11 = accepted (exact vtable match / QI fallback). Added after the
+        // 2026-07-15 native-Windows runs where an opaque "chain miss" hid WHICH predicate refused the
+        // real swapchain for three full probes.
+        push_json_usize(
+            body,
+            "oracle_present_find_tries",
+            GAME_SWAPCHAIN_FIND_TRIES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_present_find_stage",
+            PRESENT_FIND_STAGE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_present_find_candidate",
+            PRESENT_FIND_CANDIDATE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_present_find_candidate_vt",
+            PRESENT_FIND_CANDIDATE_VT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_present_find_vt_module_kind",
+            PRESENT_FIND_VT_MODULE_KIND.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_present_find_got8",
+            PRESENT_FIND_GOT8.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_present_find_got22",
+            PRESENT_FIND_GOT22.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_present_find_streak",
+            PRESENT_FIND_STREAK.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_present_accept_path",
+            PRESENT_ACCEPT_PATH.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_present_backbuffer_format",
+            PRESENT_BACKBUFFER_FORMAT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_present_composite_build_skips",
+            PRESENT_COMPOSITE_BUILD_SKIPS.load(Ordering::SeqCst),
+        );
+        // Presents where we skipped ALL compositing because the now-loading display window had not opened
+        // yet -- the pure-passthrough gate that keeps our GPU work out of the fragile early-boot crash
+        // window on native Windows (er-effects-rs-n4x). High during boot, stops once now-loading opens.
+        push_json_usize(
+            body,
+            "oracle_present_composite_early_skips",
+            PRESENT_COMPOSITE_EARLY_SKIPS.load(Ordering::SeqCst),
+        );
+        // Native-Windows loading overlay (separate window + own D3D12 device, er-effects-rs-8jz):
+        // stage = how far init got (10 = render loop live); frames = frames presented on OUR swapchain
+        // (proof the isolated overlay is rendering); show = current visibility request from loading state.
+        push_json_usize(
+            body,
+            "oracle_native_overlay_stage",
+            NATIVE_OVERLAY_STAGE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_frames",
+            NATIVE_OVERLAY_FRAMES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_show",
+            NATIVE_OVERLAY_SHOW.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_overlay_stats_draw_hits",
+            OVERLAY_STATS_DRAW_HITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_onto_draw_hits",
+            PORTRAIT_ONTO_DRAW_HITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_alpha_cover_pct",
+            PORTRAIT_ALPHA_COVER_PCT.load(Ordering::SeqCst),
+        );
         push_json_usize(
             body,
             "oracle_overlay_draw_hits",
@@ -1624,7 +1737,11 @@ fn write_game_module_oracles(body: &mut String) {
         push_json_usize(
             body,
             "oracle_overlay_draw_fps_x1000",
-            fps_x1000(overlay_draw_hits, overlay_draw_first_ms, overlay_draw_last_ms),
+            fps_x1000(
+                overlay_draw_hits,
+                overlay_draw_first_ms,
+                overlay_draw_last_ms,
+            ),
         );
         push_json_usize(
             body,
@@ -1639,7 +1756,11 @@ fn write_game_module_oracles(body: &mut String) {
         push_json_usize(
             body,
             "oracle_overlay_reupload_fps_x1000",
-            fps_x1000(overlay_reuploads, overlay_reupload_first_ms, overlay_reupload_last_ms),
+            fps_x1000(
+                overlay_reuploads,
+                overlay_reupload_first_ms,
+                overlay_reupload_last_ms,
+            ),
         );
         push_json_usize(
             body,
@@ -2203,7 +2324,11 @@ fn write_game_module_oracles(body: &mut String) {
         {
             let n = PORTRAIT_RB_COUNT.load(Ordering::SeqCst).max(1);
             let mn = PORTRAIT_RB_MASK_COUNT.load(Ordering::SeqCst).max(1);
-            push_json_usize(body, "oracle_portrait_rb_count", PORTRAIT_RB_COUNT.load(Ordering::SeqCst));
+            push_json_usize(
+                body,
+                "oracle_portrait_rb_count",
+                PORTRAIT_RB_COUNT.load(Ordering::SeqCst),
+            );
             push_json_usize(
                 body,
                 "oracle_portrait_rb_wait_avg_us",
@@ -2438,6 +2563,11 @@ fn write_game_module_oracles(body: &mut String) {
         );
         push_json_usize(
             body,
+            "oracle_portrait_pump_block_off_resource",
+            PORTRAIT_PUMP_BLOCK_OFF_RESOURCE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
             "oracle_portrait_pump_block_multi",
             PORTRAIT_PUMP_BLOCK_MULTI.load(Ordering::SeqCst),
         );
@@ -2516,23 +2646,41 @@ fn write_game_module_oracles(body: &mut String) {
         );
         push_json_usize(
             body,
-            "oracle_loading_bar_enabled",
-            LOADING_SCREEN_BAR_ENABLED.load(Ordering::SeqCst),
+            "oracle_loading_screen_last_this",
+            LOADING_SCREEN_LAST_THIS.load(Ordering::SeqCst),
         );
+        push_json_usize(
+            body,
+            "oracle_loading_screen_last_data",
+            LOADING_SCREEN_LAST_DATA.load(Ordering::SeqCst),
+        );
+        let loading_bar_enabled = LOADING_SCREEN_BAR_ENABLED.load(Ordering::SeqCst);
+        let loading_bar_current_frame = LOADING_SCREEN_BAR_CURRENT_FRAME.load(Ordering::SeqCst);
+        let loading_bar_max_frame = LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst);
+        let loading_bar_progress_permille =
+            LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst);
+        let loading_bar_current_terminal = usize::from(
+            loading_bar_enabled != 0
+                && ((loading_bar_max_frame != 0
+                    && loading_bar_current_frame >= loading_bar_max_frame)
+                    || loading_bar_progress_permille >= 998),
+        );
+        push_json_usize(body, "oracle_loading_bar_enabled", loading_bar_enabled);
         push_json_usize(
             body,
             "oracle_loading_bar_current_frame",
-            LOADING_SCREEN_BAR_CURRENT_FRAME.load(Ordering::SeqCst),
+            loading_bar_current_frame,
         );
-        push_json_usize(
-            body,
-            "oracle_loading_bar_max_frame",
-            LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst),
-        );
+        push_json_usize(body, "oracle_loading_bar_max_frame", loading_bar_max_frame);
         push_json_usize(
             body,
             "oracle_loading_bar_progress_permille",
-            LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst),
+            loading_bar_progress_permille,
+        );
+        push_json_usize(
+            body,
+            "oracle_loading_bar_current_terminal",
+            loading_bar_current_terminal,
         );
         push_json_usize(
             body,
@@ -2656,6 +2804,20 @@ fn write_game_module_oracles(body: &mut String) {
             body,
             "oracle_tip_advance_suppressed_hits",
             KNOWLEDGE_TIP_ADVANCE_SUPPRESSED_HITS.load(Ordering::SeqCst),
+        );
+        // `scaleform_desc_guard_installed` = the descriptor-heap null-guard detour is live;
+        // `scaleform_desc_provider_null_hits` = advances we skipped because the provider was null
+        // (the exact condition that AVs at deobf 0x140ec95d1 / rva 0xec95d1). A non-zero hit count is
+        // direct evidence the guard caught the crash condition. (er-effects-rs-y22i.)
+        push_json_usize(
+            body,
+            "oracle_scaleform_desc_guard_installed",
+            SCALEFORM_DESC_ADVANCE_INSTALLED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_scaleform_desc_provider_null_hits",
+            SCALEFORM_DESC_PROVIDER_NULL_HITS.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,

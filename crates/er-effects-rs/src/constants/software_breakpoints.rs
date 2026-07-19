@@ -39,7 +39,7 @@ pub(crate) const SW_BP_ORIG_NONE: usize = 0x100;
 /// Mask to recover the original byte from the stored slot value.
 pub(crate) const SW_BP_ORIG_BYTE_MASK: usize = 0xff;
 /// Per-breakpoint hit-log cap (so a per-frame breakpoint does not flood the log).
-pub(crate) const SW_BP_MAX_LOGS_PER_BP: usize = 24;
+pub(crate) const SW_BP_MAX_LOGS_PER_BP: usize = 400;
 /// Pending-rearm sentinel (no breakpoint awaiting re-arm on the next single-step).
 pub(crate) const SW_BP_REARM_NONE: usize = 0;
 pub(crate) const SW_BP_HIT_INCREMENT: usize = 1;

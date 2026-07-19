@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Regression tests for scripts/check-env-gate-comments.py."""
+
 from __future__ import annotations
 
 import importlib.util
@@ -38,12 +39,24 @@ def write(relative: str, body: str) -> Path:
     return path
 
 
-def write_baseline(keys: list[str], sanctioned: list[str] | None = None) -> None:
+def write_baseline(
+    keys: list[str],
+    sanctioned: list[str] | None = None,
+    locations: list[str] | None = None,
+) -> None:
     payload: dict[str, object] = {"baseline": keys}
-    # Default the allowlist to the one env var used across these fixtures so the
-    # frozen-allowlist hard gate does not spuriously fire in unrelated cases.
+    # Default the allowlists to the env var + locations used across these fixtures so
+    # the frozen hard gates do not spuriously fire in unrelated cases.
     payload["sanctioned_env_vars"] = (
         sanctioned if sanctioned is not None else ["ER_EFFECTS_BRAND_NEW"]
+    )
+    payload["sanctioned_env_gate_locations"] = (
+        locations
+        if locations is not None
+        else [
+            "ER_EFFECTS_BRAND_NEW@src/new_gate.rs",
+            "ER_EFFECTS_BRAND_NEW@src/unknown_gate.rs",
+        ]
     )
     write(
         ".auto/env_gate_comment_baseline.json",
@@ -57,10 +70,11 @@ def valid_policy() -> str:
         "package auto.env_gate_comment\n"
         "import rego.v1\n"
         "default allow := false\n"
-        "deny contains message if { not input.env_var_sanctioned; message := \"unknown env var\" }\n"
-        "allow if { input.env_var_sanctioned; input.has_rationale_comment == true }\n"
-        "allow if { input.env_var_sanctioned; input.in_baseline == true }\n"
-        "deny contains message if { input.env_var_sanctioned; not allow; message := \"ENV-GATE RATIONALE marker required\" }\n"
+        'deny contains message if { not input.env_gate_location_sanctioned; message := "new env gate location" }\n'
+        'deny contains message if { input.env_gate_location_sanctioned; not input.env_var_sanctioned; message := "unknown env var" }\n'
+        "allow if { input.env_gate_location_sanctioned; input.env_var_sanctioned; input.has_rationale_comment == true }\n"
+        "allow if { input.env_gate_location_sanctioned; input.env_var_sanctioned; input.in_baseline == true }\n"
+        'deny contains message if { input.env_gate_location_sanctioned; input.env_var_sanctioned; not allow; message := "ENV-GATE RATIONALE marker required" }\n'
     )
 
 
@@ -68,7 +82,10 @@ def rules_for(checker) -> set[str]:
     gates = checker.scan_gates()
     baseline = checker.load_baseline()
     sanctioned = checker.load_sanctioned_env_vars()
-    return {f.rule for f in checker.scan_findings(gates, baseline, sanctioned)}
+    locations = checker.load_sanctioned_env_gate_locations()
+    return {
+        f.rule for f in checker.scan_findings(gates, baseline, sanctioned, locations)
+    }
 
 
 def main() -> int:
@@ -151,9 +168,23 @@ def main() -> int:
         "ER_EFFECTS_BRAND_NEW@src/new_gate.rs"
     ]
 
-    # 3c. FROZEN ALLOWLIST HARD GATE: an env var NOT in sanctioned_env_vars FAILS
-    #     even WITH a valid rationale comment (and even if baselined). This is the
-    #     core gap-closing test: a comment must NOT rescue an unknown env var.
+    # 3c. FROZEN LOCATION HARD GATE: a gate at a new location FAILS even WITH a
+    #     valid rationale comment and a sanctioned env-var name. This is the core
+    #     no-new-env-gates test: comments and reused names do not create approval.
+    write_baseline([], sanctioned=["ER_EFFECTS_BRAND_NEW"], locations=[])
+    write(
+        "src/unknown_gate.rs",
+        "// ENV-GATE RATIONALE: this gate only flips a debug log, no save side effects.\n"
+        "pub(crate) fn brand_new_gate() -> bool {\n"
+        '    matches!(std::env::var("ER_EFFECTS_BRAND_NEW").as_deref(), Ok("1"))\n'
+        "}\n",
+    )
+    rules = rules_for(checker)
+    assert rules == {"env-gate-new-location"}, rules
+
+    # 3d. FROZEN NAME ALLOWLIST HARD GATE: an env var NOT in sanctioned_env_vars FAILS
+    #     even WITH a valid rationale comment (and even if baselined), provided the
+    #     location itself is already known. A comment must NOT rescue an unknown env var.
     write_baseline([], sanctioned=["ER_EFFECTS_KNOWN"])
     write(
         "src/unknown_gate.rs",
@@ -165,7 +196,7 @@ def main() -> int:
     rules = rules_for(checker)
     assert rules == {"env-gate-unknown-var"}, rules
 
-    # 3d. A baseline entry must ALSO not rescue an unknown env var.
+    # 3e. A baseline entry must ALSO not rescue an unknown env var.
     write_baseline(
         ["ER_EFFECTS_BRAND_NEW@src/unknown_gate.rs"], sanctioned=["ER_EFFECTS_KNOWN"]
     )
@@ -178,7 +209,7 @@ def main() -> int:
     rules = rules_for(checker)
     assert rules == {"env-gate-unknown-var"}, rules
 
-    # 3e. An ALLOWLISTED env var WITH a comment passes (the allowlist gates, the
+    # 3f. An ALLOWLISTED env var WITH a comment passes (the allowlist gates, the
     #     comment ratchet still applies on top).
     write_baseline([], sanctioned=["ER_EFFECTS_BRAND_NEW"])
     write(
@@ -191,7 +222,7 @@ def main() -> int:
     rules = rules_for(checker)
     assert rules == set(), rules
 
-    # 3f. An ALLOWLISTED env var WITHOUT a comment (and not baselined) still fails
+    # 3g. An ALLOWLISTED env var WITHOUT a comment (and not baselined) still fails
     #     the existing comment ratchet -- the allowlist did not weaken it.
     write(
         "src/unknown_gate.rs",
@@ -219,7 +250,9 @@ def main() -> int:
     rules = rules_for(checker)
     assert rules == {"missing-env-gate-policy"}, rules
 
-    write(".auto/env_gate_comment_policy.rego", "package auto.env_gate_comment\n")  # drifted
+    write(
+        ".auto/env_gate_comment_policy.rego", "package auto.env_gate_comment\n"
+    )  # drifted
     rules = rules_for(checker)
     assert rules == {"env-gate-policy-drift"}, rules
 
