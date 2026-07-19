@@ -1312,7 +1312,6 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                 && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) == 0
                 && SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.load(Ordering::SeqCst) == 0;
             let stuck_mms18 = (active_switch_phase || boot_autoload_idle_phase)
-                && player_present
                 && ig_d8 == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING
                 && mms_step == MOVEMAPSTEP_STEP_MOVEMAP_INDEX
                 && md_5e == 0
