@@ -182,7 +182,12 @@ pub(crate) const SQ_REPRO_WORLD_SETTLE_TICKS: usize = 180;
 /// advancing to the NEXT switch (the recovery load), just as the user re-loads by hand instead of
 /// waiting forever. ~20s at 60fps -- longer than a real reload (~10-15s) so a slow-but-real load is NOT
 /// misread as frozen, yet short enough to drive the recovery load well inside the runtime cap.
-pub(crate) const SQ_REPRO_FREEZE_RECOVERY_DEADLINE: usize = 1200;
+/// Tuned down from 1200 after run samechar-3x-190909: the game task ticks ~32/s there, so 1200f was a
+/// ~37s "big delay" the user saw before the driver re-drove the menu. The freeze-advance only fires
+/// AFTER the reload has committed (deser>=expected), so a short grace past commit is safe -- load2 is
+/// deterministically frozen (no healthy load2 to misclassify), and load3 (the last switch) is never
+/// gated by WAIT_RELOAD anyway. ~400f (~13s) trims the delay while still giving a brief render grace.
+pub(crate) const SQ_REPRO_FREEZE_RECOVERY_DEADLINE: usize = 400;
 /// No gamepad buttons asserted this frame.
 pub(crate) const INJECT_NAV_NO_BUTTONS: u16 = 0;
 /// CURSOR-OFFSET PROBE: with exactly ONE deterministic Down (Continue idx0 -> Load Game idx1),
