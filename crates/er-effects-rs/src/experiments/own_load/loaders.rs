@@ -278,12 +278,16 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
             let w = SWITCH_RELOAD_FD4IO_DRAIN_WAITS.fetch_add(1, Ordering::SeqCst);
             let resident = b80 == FULLREAD_B80_RESIDENT;
             if resident || w >= SWITCH_RELOAD_FD4IO_DRAIN_MAX {
-                // Disarm the native slot-request (b78) before committing: a >=0 request surviving into
-                // the live world runs a SECOND deserialize and exhausts the CSGaitemImp free queue
-                // (the 0x67141a AV) -- the boot fullread disarms on commit for the same reason.
-                unsafe { *((gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) as *mut i32) = OWN_STEPPER_SLOT_NONE };
+                // Do NOT disarm b78 here. Unlike the boot native-fullread (which disarms on commit),
+                // the System->Quit SWITCH path MUST keep GameMan+0xb78 armed (= picked slot) through
+                // SetState5/MoveMap finalize: it is the warp target that MoveMapStep finalize case 8
+                // consumes to warp the character and autoclear warpRequested before advancing mms18
+                // (system_quit_repro_guards.rs:1720-1754). Clearing it early leaves the load with no
+                // warp target -> warp_requested stuck at 1 and STEP_MoveMap self-loops at 18 (observed
+                // in the b78-disarm build: world resident, real char, but mms18 next=18/done50=0
+                // warp=1 forever). The continue_confirm hook's post-resident proof point clears b78.
                 append_autoload_debug(format_args!(
-                    "reload-fd4io: DRAIN done b80={b80} waits={w} resident={resident}{} -> COMMIT (feed+continue_confirm); b78 disarmed",
+                    "reload-fd4io: DRAIN done b80={b80} waits={w} resident={resident}{} -> COMMIT (feed+continue_confirm); b78 kept armed (warp target) through finalize",
                     if resident { "" } else { " (TIMEOUT -- committing without residency, fail-soft to old behavior)" }
                 ));
                 SWITCH_RELOAD_FD4IO_PHASE.store(SWITCH_RELOAD_FD4IO_COMMIT, Ordering::SeqCst);
