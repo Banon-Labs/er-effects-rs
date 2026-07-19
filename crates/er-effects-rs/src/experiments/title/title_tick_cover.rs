@@ -1304,12 +1304,24 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                 }
             }
             if let Some(menu) = menu_man {
+                let old6b0 = unsafe { safe_read_u8(menu + CS_MENU_MAN_FIELD_6B0_OFFSET) }.unwrap_or(0);
                 let old10 =
                     unsafe { safe_read_u8(menu + CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET) }
                         .unwrap_or(0);
                 let old11 =
                     unsafe { safe_read_u8(menu + CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET + 1) }
                         .unwrap_or(0);
+                if old6b0 == 0 {
+                    unsafe {
+                        *((menu + CS_MENU_MAN_FIELD_6B0_OFFSET) as *mut u8) = 1;
+                    }
+                    let n = SYSTEM_QUIT_QUICKLOAD_CSM6B0_HOLD_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+                    if n <= 8 || n.is_power_of_two() {
+                        append_autoload_debug(format_args!(
+                            "AUTOLOAD-HANDOFF CSM6B0 HOLD #{n}: epoch={reload_epoch} ig_d8={ig_d8} mms_step={mms_step} menu_job=0x{menu_job:x}; preserving RequestWait loading-session active bit until movement proof"
+                        ));
+                    }
+                }
                 if old10 == 0 {
                     unsafe {
                         *((menu + CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET) as *mut u8) = 1;

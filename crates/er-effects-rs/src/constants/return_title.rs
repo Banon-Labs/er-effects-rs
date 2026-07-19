@@ -424,6 +424,10 @@ pub(crate) static SYSTEM_QUIT_QUICKLOAD_LS10_REARM_COUNT: AtomicUsize = AtomicUs
 /// Count of autoload-handoff reload frames where the DLL cleared CSMenuMan.loadingScreenData.field_0x11
 /// so the native loading-screen close/result request cannot prematurely drain +0x798 before movement proof.
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_LS11_CLEAR_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Count of autoload-handoff reload frames where the DLL held CSMenuMan+0x6b0 true. Native
+/// `STEP_RequestWait` writes this in requestCode 2 immediately before field_0x11 and +0x798 checks; the
+/// 2026-07-19 delay-delete run observed field_0x11 asserted while +0x6b0 read back 0.
+pub(crate) static SYSTEM_QUIT_QUICKLOAD_CSM6B0_HOLD_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Count of autoload-handoff reload frames where the DLL held MoveMapStep+0x244 false so
 /// TitleStep::GameStepWait cannot consume the reload as a completed return-to-title before movement proof.
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_MMS244_HOLD_COUNT: AtomicUsize = AtomicUsize::new(0);
