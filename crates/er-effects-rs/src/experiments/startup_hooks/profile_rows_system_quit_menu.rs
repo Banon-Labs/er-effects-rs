@@ -928,6 +928,13 @@ pub(crate) unsafe fn system_quit_submit_direct_return_title_chain(
     if SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.load(Ordering::SeqCst) != 0 {
         return true;
     }
+    let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    if !(SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+        ..SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF)
+        .contains(&phase)
+    {
+        return true;
+    }
     if system_dialog < HEAP_LO {
         append_autoload_debug(format_args!(
             "system-quit-quickload: direct return-title chain abort source={source} -- system_dialog=0x{system_dialog:x} not heap-like"
@@ -1734,9 +1741,14 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     // MenuWindowJob, so submitting the return-title chain from here (rather than from the concurrent
     // game-task tick) runs it in the menu pump's own frame and eliminates the Scaleform race that
     // produced the non-deterministic execute-fault crashes. Fire once ProfileSelect has closed (its
-    // window cleared) during a return-title transition; the submit self-gates on queue-ready and
-    // one-shots via the submit count. See bd system-quit-return-title-scaleform-race-2026-07-01.
-    if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
+    // window cleared) during the return-title teardown window only; after AUTOLOAD_HANDOFF the picked
+    // slot's SetState5/MoveMap stream owns the session and a second return-title request would leave
+    // GameMan+0xbc4=3 stale, blocking the incoming world's MoveMap(18) finalize.
+    // See bd system-quit-return-title-scaleform-race-2026-07-01 and er-effects-rs-um9g.
+    let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    if (SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+        ..SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF)
+        .contains(&quickload_phase)
         && SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) == 0
         && SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.load(Ordering::SeqCst) == 0
     {

@@ -1750,8 +1750,10 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                 // SAFE edge (unlike the disabled arm-time reset above, which re-fires during teardown
                 // and double-submits -> the single-switch bounce that regressed it): it runs once per
                 // switch (fresh-deser latch), AFTER this switch's return-title machinery is fully
-                // consumed, and alongside phase -> IDLE, so no return-title path reads a 0 count until
-                // the next switch arms (all those gates require phase != IDLE).
+                // consumed. The phase remains AUTOLOAD_HANDOFF until the streamed load reaches a stable
+                // world, so every return-title REQUEST/submit/final-functor gate must exclude
+                // AUTOLOAD_HANDOFF; otherwise the reset counts can be consumed by a spurious second
+                // return-title request that leaves bc4=3 stale and blocks the incoming MoveMap finalize.
                 SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT.store(0, Ordering::SeqCst);
                 SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.store(0, Ordering::SeqCst);
                 SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT.store(0, Ordering::SeqCst);
@@ -1772,7 +1774,7 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                 SYSTEM_QUIT_INGAME_TOP_WINDOW.store(0, Ordering::SeqCst);
                 SYSTEM_QUIT_OPTION_SETTING_WINDOW.store(0, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
-                    "system-quit-quickload: native Continue handoff commit OK #{n} slot={slot} -- forwarding continue_confirm so SetState5 streams; phase stays AUTOLOAD_HANDOFF until stable-world proof + cleared GameMan+0xb78=-1 + cleared return-title rebuild flags (menuData+0x5d, DAT, save_requested, warp_requested) + RESET return-title one-shots (request/submit/final-functor); stable proof will arm the NEXT switch"
+                    "system-quit-quickload: native Continue handoff commit OK #{n} slot={slot} -- forwarding continue_confirm so SetState5 streams; phase stays AUTOLOAD_HANDOFF until stable-world proof + cleared GameMan+0xb78=-1 + cleared return-title rebuild flags (menuData+0x5d, DAT, save_requested, warp_requested) + RESET return-title one-shots for the NEXT switch only (return-title gates exclude AUTOLOAD_HANDOFF)"
                 ));
             }
         }
