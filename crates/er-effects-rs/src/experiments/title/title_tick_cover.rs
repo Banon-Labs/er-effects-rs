@@ -1268,46 +1268,31 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         let mms_req248 = mms
             .and_then(|m| unsafe { safe_read_i32(m + MOVEMAPSTEP_FINALIZE_REQ_248_OFFSET) })
             .unwrap_or(-1);
-        // SAME-SESSION RELOAD MODE HOLD CANDIDATE (2026-07-19): unconfounded runtime showed native
-        // loadingScreenData in the exact `FUN_14067a410(2)` state at MoveMap FINISH
-        // (mode=2, field_0x10/0x11=1/0), then flipping to close state (mode=0, field_0x10/0x11=0/1)
-        // when WorldChrMan/main_player disappeared before movement proof. Older LS10/LS11/MMS244/+6b0
-        // holds did not fix this because they did not preserve the mode byte. Re-assert the whole native
-        // mode-2 tuple from the first observed MOVE MAP mode drop (mms_step >= 18) during the active
-        // reload handoff and only until epoch-scoped movement proof.
+        // SAME-SESSION RELOAD ADVANCE-GATE CANDIDATE (2026-07-19): state-18 disassembly shows
+        // MoveMapStep::STEP_MoveMap advances to Cleanup/Finish through the native gate at +0x4b8.
+        // The failing reload has gate=1/0 while movement is still false, then Cleanup/Finish destroys
+        // WorldChrMan via InGameStep::_Common_Finalize. Hold only that advance bit low during the active
+        // reload handoff, and release it as soon as the current reload epoch proves movement.
         let reload_epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
-        let movement_proven_for_reload = crate::constants::CAN_MOVE_CONFIRMED
-            .load(Ordering::SeqCst)
+        let movement_proven_for_reload = crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
             && crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == reload_epoch;
-        let movemap_reached_resident_or_absent = mms_step >= 18 || (mms.is_none() && ig_d8 >= 1);
         if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
             == SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
             && reload_epoch > 0
             && !movement_proven_for_reload
-            && movemap_reached_resident_or_absent
-            && matches!(ig_d8, 1 | 2)
+            && mms_step == 18
         {
-            if let Some(menu) = menu_man {
-                let old_mode =
-                    unsafe { safe_read_u8(menu + CSMENUMAN_LOADINGSCREEN_MODE_728_OFFSET) }
-                        .unwrap_or(0);
-                let old10 =
-                    unsafe { safe_read_u8(menu + CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET) }
-                        .unwrap_or(0);
-                let old11 =
-                    unsafe { safe_read_u8(menu + CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET + 1) }
-                        .unwrap_or(0);
-                if old_mode != 2 || old10 != 1 || old11 != 0 {
+            if let Some(mms_ptr) = mms {
+                let old_gate = unsafe { safe_read_u8(mms_ptr + MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET) }
+                    .unwrap_or(0);
+                if old_gate != 0 {
                     unsafe {
-                        *((menu + CSMENUMAN_LOADINGSCREEN_MODE_728_OFFSET) as *mut u8) = 2;
-                        *((menu + CSMENUMAN_LOADINGSCREEN_FIELD_C_72C_OFFSET) as *mut i32) = 0;
-                        *((menu + CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET) as *mut u16) = 1;
+                        *((mms_ptr + MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET) as *mut u8) = 0;
                     }
-                    let n =
-                        SYSTEM_QUIT_QUICKLOAD_LSMODE2_HOLD_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+                    let n = SYSTEM_QUIT_QUICKLOAD_MMS4B8_HOLD_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
                     if n <= 8 || n.is_power_of_two() {
                         append_autoload_debug(format_args!(
-                            "AUTOLOAD-HANDOFF LSMODE2 HOLD #{n}: epoch={reload_epoch} ig_d8={ig_d8} mms_step={mms_step} menu_job=0x{menu_job:x}; preserving loadingScreenData mode=2/10=1/11=0 until movement proof"
+                            "AUTOLOAD-HANDOFF MMS4B8 HOLD #{n}: epoch={reload_epoch} ig_d8={ig_d8} mms_step={mms_step} old_gate={old_gate}; blocking Cleanup/Finish until movement proof"
                         ));
                     }
                 }

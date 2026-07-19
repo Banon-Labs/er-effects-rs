@@ -427,9 +427,9 @@ pub(crate) static SYSTEM_QUIT_QUICKLOAD_LS10_REARM_COUNT: AtomicUsize = AtomicUs
 /// Count of autoload-handoff reload frames where the DLL cleared CSMenuMan.loadingScreenData.field_0x11
 /// so the native loading-screen close/result request cannot prematurely drain +0x798 before movement proof.
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_LS11_CLEAR_COUNT: AtomicUsize = AtomicUsize::new(0);
-/// Count of autoload-handoff reload frames where the DLL kept `CSMenuMan.loadingScreenData` in the
-/// exact `FUN_14067a410(2)` state (mode=2, field_c=0, field_0x10/0x11=1/0) until movement proof.
-pub(crate) static SYSTEM_QUIT_QUICKLOAD_LSMODE2_HOLD_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Count of autoload-handoff reload frames where the DLL held MoveMapStep+0x4b8 low byte at 0 during
+/// state 18 so the native STEP_MoveMap advance gate cannot reach Cleanup/Finish before movement proof.
+pub(crate) static SYSTEM_QUIT_QUICKLOAD_MMS4B8_HOLD_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Count of autoload-handoff reload frames where the DLL held MoveMapStep+0x244 false so
 /// TitleStep::GameStepWait cannot consume the reload as a completed return-to-title before movement proof.
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_MMS244_HOLD_COUNT: AtomicUsize = AtomicUsize::new(0);
