@@ -148,18 +148,35 @@ echo "launching ER via Windows me3.exe (offline) ..."
 "$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" > "$ARTIFACT_DIR/me3-launch.log" 2>&1 &
 LAUNCH_PID=$!
 
-echo "monitoring loads (RAM-oracle verify + report) ..."
-DRIVE_ARGS=()
-[[ "${DRIVE_MODE:-programmatic}" != "autopilot" ]] && DRIVE_ARGS=(--drive-slot-file "$SWITCH_SLOT_FILE" --drive-file-override "$SWITCH_FILE_OVERRIDE")
-python3 "$REPO_ROOT/scripts/multi-load-proof-monitor.py" \
-  --artifact-dir "$GAME_DIR" \
-  --targets "$TARGETS_JSON" \
-  --report "$ARTIFACT_DIR/proof-report.md" \
-  --debug-log-offset "$OFFSET" \
-  "${DRIVE_ARGS[@]}" \
-  --per-load-deadline "${PER_LOAD_DEADLINE:-120}" \
-  --overall-deadline "${OVERALL_DEADLINE:-300}"
-RC=$?
+# CAPTURE MODE (CAPTURE_SLOTS="s1,s2"): diagnostic load1->2->3 sequence capture + diff (the render
+# freeze is deterministic on load2 and recovers on load3; the render-gated monitor can't reach load3).
+# Triggers each reload on a TIMER regardless of render success and diffs the settled per-load semaphores.
+if [[ -n "${CAPTURE_SLOTS:-}" ]]; then
+  echo "CAPTURE mode: load-sequence diff (slots=$CAPTURE_SLOTS) ..."
+  python3 "$REPO_ROOT/scripts/capture-load-sequence.py" \
+    --artifact-dir "$GAME_DIR" \
+    --switch-slot-file "$SWITCH_SLOT_FILE" \
+    --switch-file-override "$SWITCH_FILE_OVERRIDE" \
+    --slots "$CAPTURE_SLOTS" \
+    --switch-files "${CAPTURE_FILES:-}" \
+    --boot-timeout "${BOOT_TIMEOUT:-120}" \
+    --per-load "${CAPTURE_PER_LOAD:-55}" \
+    --report "$ARTIFACT_DIR/load-sequence-diff.md"
+  RC=$?
+else
+  echo "monitoring loads (RAM-oracle verify + report) ..."
+  DRIVE_ARGS=()
+  [[ "${DRIVE_MODE:-programmatic}" != "autopilot" ]] && DRIVE_ARGS=(--drive-slot-file "$SWITCH_SLOT_FILE" --drive-file-override "$SWITCH_FILE_OVERRIDE")
+  python3 "$REPO_ROOT/scripts/multi-load-proof-monitor.py" \
+    --artifact-dir "$GAME_DIR" \
+    --targets "$TARGETS_JSON" \
+    --report "$ARTIFACT_DIR/proof-report.md" \
+    --debug-log-offset "$OFFSET" \
+    "${DRIVE_ARGS[@]}" \
+    --per-load-deadline "${PER_LOAD_DEADLINE:-120}" \
+    --overall-deadline "${OVERALL_DEADLINE:-300}"
+  RC=$?
+fi
 
 # capture my-run artifacts before teardown clears markers
 cp -f "$GAME_DIR/er-effects-telemetry.json" "$ARTIFACT_DIR/er-effects-telemetry.json" 2>/dev/null
