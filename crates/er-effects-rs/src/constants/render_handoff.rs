@@ -118,6 +118,10 @@ pub(crate) const CSMENUMAN_NOWLOADING_JOB_798_OFFSET: usize = 0x798;
 /// `0x140860d80`: `CSMenuMan+0x720+8 = mode`.
 #[allow(dead_code)]
 pub(crate) const CSMENUMAN_LOADINGSCREEN_MODE_728_OFFSET: usize = 0x728;
+/// `CSMenuMan+0x72c` -- `loadingScreenData.field_0xc`, zeroed by deobf `FUN_14067a410` when changing
+/// loading-screen mode.
+#[allow(dead_code)]
+pub(crate) const CSMENUMAN_LOADINGSCREEN_FIELD_C_72C_OFFSET: usize = 0x72c;
 /// `CSMenuMan+0x730` -- `loadingScreenData.field_0x10` (drives per-frame cover-job recreation).
 #[allow(dead_code)]
 pub(crate) const CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET: usize = 0x730;
