@@ -1629,6 +1629,15 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             if b73_was != 0 {
                 unsafe { *((gm + GAME_MAN_SAVE_REQUEST_COMPANION_B73_OFFSET) as *mut u8) = 0 };
             }
+            // Mark the finalize as effectively done once it reaches WARP/SERVER FINALIZE (8) so the
+            // post-finish stable-proof can hold the world immediately (the world reverts before the
+            // 60-frame move probe could latch can_move).
+            if finalize_now >= 8 {
+                SYSTEM_QUIT_RELOAD_FINALIZE_DONE_EPOCH.store(
+                    SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst),
+                    Ordering::SeqCst,
+                );
+            }
             let n = RELOAD_DRAIN_B80_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
             if n <= 8 || n.is_power_of_two() {
                 append_autoload_debug(format_args!(
@@ -1654,12 +1663,28 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             0
         };
         let peak = SWITCH_ORACLE_MAX_STABLE_FRAMES.load(Ordering::SeqCst);
-        if sf == 30
+        // POST-FINISH STABLE-PROOF: hold the reloaded world (phase->IDLE + clear b78) so the native
+        // InGameStep does not revert to title after the MoveMap finish. Trigger on the STRONGEST
+        // readiness signal available -- movement proven (can_move latched) for THIS reload epoch, which
+        // latches ~immediately after the finalize completes, BEFORE the ~1.4s post-finish revert -- OR
+        // the legacy 30 stable frames as a fallback. Latch is per-reload-epoch (NOT FRESH_DESER_DONE,
+        // which own_load consumes at commit -- that consumption is exactly why this block never fired
+        // and the world reverted after finish). bd er-effects-rs-9fmm.
+        let reload_epoch_now = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+        let can_move_for_reload = reload_epoch_now > 0
+            && crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
+            && crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == reload_epoch_now;
+        // Finalize effectively done this reload epoch (reached WARP/SERVER FINALIZE) -- hold NOW, before
+        // the post-finish revert, while the player is still present.
+        let finalize_done_for_reload = reload_epoch_now > 0
+            && SYSTEM_QUIT_RELOAD_FINALIZE_DONE_EPOCH.load(Ordering::SeqCst) == reload_epoch_now
+            && player_present;
+        if (finalize_done_for_reload || sf >= 30 || can_move_for_reload)
+            && reload_epoch_now > 0
             && SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
                 >= SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
-            && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE
-                .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
+            && SYSTEM_QUIT_STABLE_PROOF_EPOCH.swap(reload_epoch_now, Ordering::SeqCst)
+                != reload_epoch_now
         {
             SYSTEM_QUIT_QUICKLOAD_PHASE.store(SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE, Ordering::SeqCst);
             unsafe {
@@ -1669,7 +1694,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                 er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
             }
             append_autoload_debug(format_args!(
-                "system-quit-quickload: native MoveMap stable proof OK sf={sf} slot={slot} player_present={player_present} ig_d8={ig_d8} menu_job=0x{menu_job:x} -> phase IDLE, cleared GameMan+0xb78/save_requested; native owns warp_requested autoclear"
+                "system-quit-quickload: post-finish stable proof OK (can_move={can_move_for_reload} sf={sf}) epoch={reload_epoch_now} slot={slot} player_present={player_present} ig_d8={ig_d8} -> phase IDLE, cleared GameMan+0xb78/save_requested; holds the reloaded world (no revert)"
             ));
         }
         let n = SWITCH_ORACLE_TICK.fetch_add(1, Ordering::SeqCst) + 1;

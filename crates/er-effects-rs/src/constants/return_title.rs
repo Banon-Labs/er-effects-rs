@@ -150,6 +150,15 @@ pub(crate) static SWITCH_ORACLE_FINALIZE_12A: AtomicI32 = AtomicI32::new(-1);
 pub(crate) static SWITCH_ORACLE_B80: AtomicI32 = AtomicI32::new(-1);
 /// Count of forced b80 3->0 drains at the mms18 finalize stall (reload-drain-b80 semaphore).
 pub(crate) static RELOAD_DRAIN_B80_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Reload epoch (fresh_deser) for which the post-finish stable-proof already fired (holds the world:
+/// phase->IDLE + clear b78). One-shot PER reload epoch, decoupled from FRESH_DESER_DONE (own_load
+/// consumes that latch at commit, which used to block the stable-proof and let the world revert to
+/// title after finish). usize::MAX = none yet.
+pub(crate) static SYSTEM_QUIT_STABLE_PROOF_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Reload epoch whose MoveMapStep finalize reached the near-done substates (>=8 WARP/SERVER FINALIZE),
+/// i.e. the load has effectively finished. Used to hold the world the instant the finalize completes --
+/// BEFORE the move probe could prove movement (the world reverts too fast for the 60-frame probe).
+pub(crate) static SYSTEM_QUIT_RELOAD_FINALIZE_DONE_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// b80 FSM state names for the loading-bar / logs.
 pub(crate) fn load_in_progress_b80_name(v: i32) -> &'static str {
     match v {
