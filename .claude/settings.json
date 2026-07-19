@@ -19,7 +19,7 @@
       {
         "hooks": [
           {
-            "command": "bd prime",
+            "command": "bash $CLAUDE_PROJECT_DIR/scripts/beads-prime.sh",
             "type": "command"
           }
         ],
@@ -41,7 +41,7 @@
       {
         "hooks": [
           {
-            "command": "bd prime",
+            "command": "bash $CLAUDE_PROJECT_DIR/scripts/beads-prime.sh",
             "type": "command"
           }
         ],
