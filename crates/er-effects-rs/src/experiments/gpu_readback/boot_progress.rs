@@ -446,6 +446,19 @@ fn boot_view_single_submilestone(label: &'static str) -> (&'static str, usize, u
     (label, 1, 1)
 }
 
+fn boot_view_counter_submilestone(
+    label: &'static str,
+    current: usize,
+    max: usize,
+    fallback: &'static str,
+) -> (&'static str, usize, usize) {
+    if current == 0 || max == 0 {
+        boot_view_single_submilestone(fallback)
+    } else {
+        (label, current.min(max), max)
+    }
+}
+
 fn boot_view_first_pending_substep(
     substeps: &[(bool, &'static str)],
 ) -> (&'static str, usize, usize) {
@@ -476,21 +489,71 @@ fn boot_view_entering_world_submilestone() -> (&'static str, usize, usize) {
         || (LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst) != 0
             && LOADING_SCREEN_BAR_CURRENT_FRAME.load(Ordering::SeqCst)
                 >= LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst));
+    let ls730_held = SWITCH_ORACLE_LOADING_FIELD10.load(Ordering::SeqCst) != 0;
+    let ls731_clear = SWITCH_ORACLE_LOADING_FIELD11.load(Ordering::SeqCst) == 0;
     let loading_close_sent = LOADING_SCREEN_CLOSE_SENT.load(Ordering::SeqCst) != 0
         || SWITCH_ORACLE_LOADING_FIELD11.load(Ordering::SeqCst) != 0;
     let request_started = request_code >= 1;
+    let request_stable = request_code >= 2;
+    let menu_job_present = SWITCH_ORACLE_MENU_JOB_PRESENT.load(Ordering::SeqCst) != 0;
     let player_present = SWITCH_ORACLE_PLAYER_PRESENT.load(Ordering::SeqCst) != 0;
     let movemap_done = request_code >= 2 || mms_step >= MOVEMAPSTEP_STEP_NAMES.len() - 1;
     let movement_proven = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
         && MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == current_epoch;
-    boot_view_first_pending_substep(&[
-        (bar_terminal, "BAR FINAL"),
-        (loading_close_sent, "LS 731 CLOSE"),
-        (request_started, "IG D8 REQUEST"),
-        (player_present, "PLAYER RESIDENT"),
-        (movemap_done, "MMS 244 DONE"),
-        (movement_proven, "MOVE PROOF"),
-    ])
+    if BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0 || current_epoch != 0 {
+        boot_view_first_pending_substep(&[
+            (bar_terminal, "BAR FINAL"),
+            (ls730_held, "LS 730 HELD"),
+            (ls731_clear, "LS 731 CLEAR"),
+            (movemap_done, "MMS 244 DONE"),
+            (request_stable, "IG D8 STABLE"),
+            (menu_job_present, "CSM 798 MENUJOB"),
+            (player_present, "PLAYER RESIDENT"),
+            (movement_proven, "MOVE PROOF"),
+        ])
+    } else {
+        boot_view_first_pending_substep(&[
+            (bar_terminal, "BAR FINAL"),
+            (loading_close_sent, "LS CLOSE"),
+            (request_started, "IG D8 REQUEST"),
+            (movemap_done, "MMS 244 DONE"),
+            (request_stable, "IG D8 STABLE"),
+            (menu_job_present, "CSM 798 MENUJOB"),
+            (player_present, "PLAYER RESIDENT"),
+            (movement_proven, "MOVE PROOF"),
+        ])
+    }
+}
+
+fn boot_view_load_save_submilestone() -> (&'static str, usize, usize) {
+    if BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0 {
+        boot_view_first_pending_substep(&[
+            (
+                SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.load(Ordering::SeqCst) != 0,
+                "PROFILE LOAD",
+            ),
+            (
+                SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) != 0,
+                "FRESH DESER",
+            ),
+            (
+                SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0,
+                "CONTINUE OK",
+            ),
+        ])
+    } else {
+        let table_seen = PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst)
+            > BOOT_VIEW_LOADSCREEN_TABLE_BASELINE.load(Ordering::SeqCst);
+        boot_view_first_pending_substep(&[
+            (
+                SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
+                    || TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0
+                    || LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) != 0,
+                "CONTINUE OK",
+            ),
+            (table_seen, "LOAD TABLE"),
+        ])
+    }
 }
 
 fn boot_view_movemap_submilestone(step: usize) -> (&'static str, usize, usize) {
@@ -503,12 +566,16 @@ fn boot_view_movemap_submilestone(step: usize) -> (&'static str, usize, usize) {
     let step_active = mms_step == step;
     let title_done = request_code >= 2 || mms_step >= MOVEMAPSTEP_STEP_NAMES.len() - 1;
     let session_request = request_code >= 2;
+    let menu_job_present = SWITCH_ORACLE_MENU_JOB_PRESENT.load(Ordering::SeqCst) != 0;
+    let player_present = SWITCH_ORACLE_PLAYER_PRESENT.load(Ordering::SeqCst) != 0;
     let movement_proven = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
         && MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == current_epoch;
     boot_view_first_pending_substep(&[
         (step_active, movemapstep_step_name(step as i32)),
         (title_done, "MMS 244 DONE"),
-        (session_request, "IG D8 REQUEST"),
+        (session_request, "IG D8 STABLE"),
+        (menu_job_present, "CSM 798 MENUJOB"),
+        (player_present, "PLAYER RESIDENT"),
         (movement_proven, "MOVE PROOF"),
     ])
 }
@@ -518,9 +585,47 @@ fn boot_view_phase_submilestone(idx: usize) -> (&'static str, usize, usize) {
         return boot_view_movemap_submilestone(idx - MMS_LABEL_IDX_BASE);
     }
     match idx.min(BOOT_VIEW_MILESTONE_LABELS.len() - 1) {
-        8 => boot_view_world_gauge_submilestone("BUILDING WORLD"),
-        9 => boot_view_world_gauge_submilestone("STREAMING WORLD"),
-        10 => boot_view_world_gauge_submilestone("FINALIZING WORLD"),
+        0 => boot_view_single_submilestone("SWAPCHAIN LIVE"),
+        1 => boot_view_single_submilestone("GAME MAN PTR"),
+        2 => boot_view_counter_submilestone(
+            "MENU RES",
+            TITLE_MENU_RESOURCE_ACQUIRE_HITS.load(Ordering::SeqCst),
+            38,
+            "MENU RES ACQ",
+        ),
+        3 => boot_view_counter_submilestone(
+            "GFX FILE",
+            TITLE_SCALEFORM_FILE_OPEN_HITS.load(Ordering::SeqCst),
+            113,
+            "GFX FILE OPEN",
+        ),
+        4 => boot_view_counter_submilestone(
+            "GFX CTOR",
+            TITLE_SCALEFORM_RESOURCE_CTOR_HITS.load(Ordering::SeqCst),
+            112,
+            "GFX CTOR BUILD",
+        ),
+        5 => boot_view_first_pending_substep(&[
+            (TITLE_PRESS_START_BIND_HITS.load(Ordering::SeqCst) != 0, "PRESS START"),
+            (
+                TITLE_FADEIN_SKIP_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS,
+                "TITLE LOOP",
+            ),
+        ]),
+        6 => boot_view_first_pending_substep(&[
+            (
+                PRODUCT_CORE_LAST_MENU_OPENED_LATCH.load(Ordering::SeqCst) != 0,
+                "MENU OPEN",
+            ),
+            (
+                NETWORK_CHECK_SHORTCIRCUIT_COUNT.load(Ordering::SeqCst) != 0,
+                "NET CHECK",
+            ),
+        ]),
+        7 => boot_view_load_save_submilestone(),
+        8 => boot_view_world_gauge_submilestone("LS UPDATE"),
+        9 => boot_view_world_gauge_submilestone("LOADING BAR"),
+        10 => boot_view_world_gauge_submilestone("LOADING BAR"),
         11 => boot_view_entering_world_submilestone(),
         i => boot_view_single_submilestone(BOOT_VIEW_MILESTONE_LABELS[i]),
     }
