@@ -1444,11 +1444,10 @@ pub(crate) unsafe extern "system" fn system_quit_inworld_load_skip_hook(slot: i3
         }
         if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
             er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
-            er_save_loader::GameManSaveAccess::set_warp_requested(gm_typed, false);
         }
         let n = SYSTEM_QUIT_INWORLD_LOAD_ALLOW_COUNT.load(Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "system-quit-quickload: native slot deserialize proof OK via 0x67b290 slot={slot} ret={ret} prior_phase={phase} world_up={world_up} allow_count={n} -> phase IDLE, cleared GameMan+0xb78/save_requested/warp_requested"
+            "system-quit-quickload: native slot deserialize proof OK via 0x67b290 slot={slot} ret={ret} prior_phase={phase} world_up={world_up} allow_count={n} -> phase IDLE, cleared GameMan+0xb78/save_requested; native owns warp_requested finalize/autoclear"
         ));
     }
     ret
@@ -1753,20 +1752,12 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                     }
                 }
                 unsafe { *((base + RETURN_TITLE_REBUILD_FLAG_DAT_RVA) as *mut u8) = 0 };
-                // Also clear GameMan.save_requested defensively (typed): the return-title REQUEST set
-                // it for the teardown; a residual true would drive an immediate quit-save on the reload.
-                // AND clear GameMan.warp_requested: the fresh full deserialize we just ran (native
-                // parser 0x67b290 = dump FUN_14067b380) UNCONDITIONALLY sets warp_requested=true as a
-                // "warp reload pending" flag. On the normal in-world load the MoveMapStep warp machine
-                // consumes it, but our SetState5 forward is a fresh title->world stream that never does;
-                // MoveMapStep::CheckReturnToTitle (dump FUN_140afa7c0) then reads warp_requested==true
-                // every frame as a return-to-title trigger and bounces the freshly-loaded world back to
-                // the title ~4s later (proven: gm-snap shows warp_requested=true for the whole reloaded
-                // world vs false on the healthy boot load). warp_requested=false is the correct in-world
-                // steady state, so clearing it matches the boot load and does not affect which char loads.
+                // Clear GameMan.save_requested defensively (typed): the return-title REQUEST set it for
+                // the teardown; a residual true would drive an immediate quit-save on the reload. Do NOT
+                // clear GameMan.warp_requested here. Native full deserialize owns that flag; MoveMapStep
+                // finalize case 8 consumes/autoclears it after advancing mms18.
                 if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
                     er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
-                    er_save_loader::GameManSaveAccess::set_warp_requested(gm_typed, false);
                 }
                 // REPEATABLE-SWITCH STATE RESTORE (er-effects-rs-qwj). The switch-#1 works but
                 // switch-#2-stalls symptom is a pure precondition mismatch: these three return-title
@@ -1804,7 +1795,7 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                 SYSTEM_QUIT_INGAME_TOP_WINDOW.store(0, Ordering::SeqCst);
                 SYSTEM_QUIT_OPTION_SETTING_WINDOW.store(0, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
-                    "system-quit-quickload: native Continue handoff commit OK #{n} slot={slot} -- forwarding continue_confirm so SetState5 streams; phase stays AUTOLOAD_HANDOFF until stable-world proof + cleared GameMan+0xb78=-1 + cleared return-title rebuild flags (menuData+0x5d, DAT, save_requested, warp_requested) + RESET return-title one-shots for the NEXT switch only (return-title gates exclude AUTOLOAD_HANDOFF)"
+                    "system-quit-quickload: native Continue handoff commit OK #{n} slot={slot} -- forwarding continue_confirm so SetState5 streams; phase stays AUTOLOAD_HANDOFF until stable-world proof + cleared GameMan+0xb78=-1 + cleared return-title rebuild flags (menuData+0x5d, DAT, save_requested) + native-owned warp_requested finalize/autoclear + RESET return-title one-shots for the NEXT switch only (return-title gates exclude AUTOLOAD_HANDOFF)"
                 ));
             }
         }

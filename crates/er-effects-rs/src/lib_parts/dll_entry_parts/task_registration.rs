@@ -1,76 +1,7 @@
 fn poll_cached_mms18_ending_request_advancer() {
-    if !product_autoload_enabled() {
-        return;
-    }
-    let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
-    let active_switch_phase = quickload_phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED;
-    if !active_switch_phase {
-        return;
-    }
-    let Ok(base) = game_module_base() else {
-        return;
-    };
-    let menudata = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
-        .filter(|m| *m > 0x10000)
-        .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) })
-        .filter(|d| *d > 0x10000);
-    let Some(md) = menudata else {
-        return;
-    };
-    let md_5d = unsafe { safe_read_u8(md + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) }
-        .map(|b| b as i32)
-        .unwrap_or(-1);
-    let md_5e = unsafe { safe_read_u8(md + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) }
-        .map(|b| b as i32)
-        .unwrap_or(-1);
-    let owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
-    let ingame = if owner != TITLE_OWNER_SCAN_START_ADDRESS && owner > 0x10000 {
-        unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) }
-            .filter(|ig| *ig != TITLE_OWNER_SCAN_START_ADDRESS && *ig > 0x10000)
-    } else {
-        None
-    };
-    let request_code = ingame
-        .and_then(|ig| unsafe { safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) })
-        .unwrap_or(-1);
-    let mms_step = ingame
-        .and_then(|ig| unsafe { safe_read_usize(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) })
-        .filter(|mms| *mms != TITLE_OWNER_SCAN_START_ADDRESS && *mms > 0x10000)
-        .and_then(|mms| unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET) })
-        .unwrap_or(-1);
-    let stuck_mms18 = request_code == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING
-        && mms_step == MOVEMAPSTEP_STEP_MOVEMAP_INDEX
-        && md_5e == 0
-        && md_5d == 0;
-    if stuck_mms18 {
-        let streak = ENDING_REQUEST_STALL_STREAK.fetch_add(1, Ordering::SeqCst) + 1;
-        if streak >= ENDING_REQUEST_STALL_RELEASE_FRAMES
-            && ENDING_REQUEST_SET
-                .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
-        {
-            if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
-                er_save_loader::GameManSaveAccess::set_warp_requested(gm_typed, true);
-            }
-            let n = ENDING_REQUEST_SET_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-            append_autoload_debug(format_args!(
-                "WARP-REQUEST TASK-ADVANCER #{n}: SET GameMan.warp_requested=true at cached mms18 stall (streak={streak} phase={quickload_phase} requestCode={request_code} mms={mms_step}) -> native cVar10 should advance MoveMap without return-title 0x5d teardown"
-            ));
-        }
-    } else {
-        ENDING_REQUEST_STALL_STREAK.store(0, Ordering::SeqCst);
-        if ENDING_REQUEST_SET.load(Ordering::SeqCst) == 1
-            && mms_step != MOVEMAPSTEP_STEP_MOVEMAP_INDEX
-        {
-            if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
-                er_save_loader::GameManSaveAccess::set_warp_requested(gm_typed, false);
-            }
-            ENDING_REQUEST_SET.store(0, Ordering::SeqCst);
-            append_autoload_debug(format_args!(
-                "WARP-REQUEST TASK-ADVANCER: cleared GameMan.warp_requested=false as cached mms left step 18 (mms_step={mms_step})"
-            ));
-        }
-    }
+    // Intentionally no-op. Native full deserialize owns GameMan::warp_requested and
+    // MoveMapStep::CheckReturnToTitle consumes/autoclears it at finalize case 8.
+    // Agent-side 0x5d or warp pulses finalize by tearing down the loaded world.
 }
 
 pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
@@ -453,10 +384,9 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                             .store(SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE, Ordering::SeqCst);
                         if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
                             er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
-                            er_save_loader::GameManSaveAccess::set_warp_requested(gm_typed, false);
                         }
                         append_autoload_debug(format_args!(
-                            "menu-free reload COMPLETION: picked char stable in-world {stable} frames (FRESH_DESER_DONE=1 movement_required={movement_proof_required} movement_proven={movement_proven_for_epoch} native_load_settled={native_load_settled}) -> phase IDLE, cleared save_requested/warp_requested; return-title chain disarmed so the loaded world persists for the next switch"
+                            "menu-free reload COMPLETION: picked char stable in-world {stable} frames (FRESH_DESER_DONE=1 movement_required={movement_proof_required} movement_proven={movement_proven_for_epoch} native_load_settled={native_load_settled}) -> phase IDLE, cleared save_requested; native owns warp_requested autoclear; return-title chain disarmed so the loaded world persists for the next switch"
                         ));
                     }
                 } else {

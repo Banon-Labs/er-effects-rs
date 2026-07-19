@@ -1320,12 +1320,9 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                         .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
                         .is_ok()
                 {
-                    if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
-                        er_save_loader::GameManSaveAccess::set_warp_requested(gm_typed, true);
-                    }
                     let n = ENDING_REQUEST_SET_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
                     append_autoload_debug(format_args!(
-                        "WARP-REQUEST RECOVERY #{n}: SET GameMan.warp_requested=true at mms18 stall (streak={streak} phase={quickload_phase} end5e=0 rt5d=0 b7c1=1 blocks={mms_blocks}) -> native cVar10 should advance MoveMap without return-title 0x5d teardown"
+                        "MMS18 NATIVE-WARP OBSERVE #{n}: mms18 stall signature held (streak={streak} phase={quickload_phase} end5e=0 rt5d=0 b7c1=1 blocks={mms_blocks}); leaving GameMan.warp_requested native-owned for case8 autoclear"
                     ));
                 }
             } else {
@@ -1333,12 +1330,9 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                 if ENDING_REQUEST_SET.load(Ordering::SeqCst) == 1
                     && mms_step != MOVEMAPSTEP_STEP_MOVEMAP_INDEX
                 {
-                    if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
-                        er_save_loader::GameManSaveAccess::set_warp_requested(gm_typed, false);
-                    }
                     ENDING_REQUEST_SET.store(0, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
-                        "WARP-REQUEST RECOVERY: cleared GameMan.warp_requested=false as the child left step 18 (mms_step={mms_step}) -- prevents post-finalize warp reload loop"
+                        "MMS18 NATIVE-WARP OBSERVE: cached mms left step 18 (mms_step={mms_step}); native owns warp_requested autoclear"
                     ));
                 }
             }
@@ -1378,10 +1372,9 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             }
             if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
                 er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
-                er_save_loader::GameManSaveAccess::set_warp_requested(gm_typed, false);
             }
             append_autoload_debug(format_args!(
-                "system-quit-quickload: native MoveMap stable proof OK sf={sf} slot={slot} player_present={player_present} ig_d8={ig_d8} menu_job=0x{menu_job:x} -> phase IDLE, cleared GameMan+0xb78/save_requested/warp_requested"
+                "system-quit-quickload: native MoveMap stable proof OK sf={sf} slot={slot} player_present={player_present} ig_d8={ig_d8} menu_job=0x{menu_job:x} -> phase IDLE, cleared GameMan+0xb78/save_requested; native owns warp_requested autoclear"
             ));
         }
         let n = SWITCH_ORACLE_TICK.fetch_add(1, Ordering::SeqCst) + 1;
