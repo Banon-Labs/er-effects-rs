@@ -193,6 +193,9 @@ pub(crate) const MOVEMAPSTEP_NEXT_STEP_4C_OFFSET: usize = 0x4c;
 pub(crate) const MOVEMAPSTEP_DONE_FLAG_50_OFFSET: usize = 0x50;
 pub(crate) const MOVEMAPSTEP_HOLD_TIMER_270_OFFSET: usize = 0x270;
 pub(crate) const MOVEMAPSTEP_COUNTDOWN_100_OFFSET: usize = 0x100;
+/// MoveMapStep+0x244 is the native completion bit consumed by InGameStep/TitleStep
+/// (`FUN_140aebe20` returns true iff MoveMapStep exists and this byte is nonzero).
+pub(crate) const MOVEMAPSTEP_TITLE_DONE_244_OFFSET: usize = 0x244;
 pub(crate) const MOVEMAPSTEP_FINALIZE_REQ_248_OFFSET: usize = 0x248;
 /// SAVE-DISABLED SWITCH COMPLETION (2026-07-16). By design the ONLY save writer is the in-game "Save
 /// Game" button; the game's quit-save on a System->Quit switch must NOT run. But the native return-title
@@ -409,6 +412,9 @@ pub(crate) static SYSTEM_QUIT_QUICKLOAD_LS10_REARM_COUNT: AtomicUsize = AtomicUs
 /// Count of autoload-handoff reload frames where the DLL cleared CSMenuMan.loadingScreenData.field_0x11
 /// so the native loading-screen close/result request cannot prematurely drain +0x798 before movement proof.
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_LS11_CLEAR_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Count of autoload-handoff reload frames where the DLL held MoveMapStep+0x244 false so
+/// TitleStep::GameStepWait cannot consume the reload as a completed return-to-title before movement proof.
+pub(crate) static SYSTEM_QUIT_QUICKLOAD_MMS244_HOLD_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_LAST_TITLE_OWNER: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_DIALOG: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_CURSOR: AtomicUsize =
