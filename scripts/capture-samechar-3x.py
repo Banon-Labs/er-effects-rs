@@ -265,7 +265,16 @@ def main() -> int:
                 ("can_move", int(can_move)),
                 ("moved_frames", as_int(s.get("oracle_move_probe_moved_frames"), 0)),
             )
-            if bar_progress_available:
+            boot_playable_before_reload = (
+                current_epoch == (0, 0) and present and can_move
+            )
+            if boot_playable_before_reload:
+                loading_active = False
+                loading_progress_signature = (
+                    "boot_playable_before_reload",
+                    current_epoch,
+                )
+            elif bar_progress_available:
                 loading_active = True
                 bar_terminal = as_int(s.get("oracle_loading_bar_current_terminal"), 0)
                 live_bar_fields = (
