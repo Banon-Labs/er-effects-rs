@@ -43,7 +43,7 @@ impl TaskRegistration {
     fn register(self) {
         let cs_task = TaskInstance::wait();
         Log::write(format_args!(
-            "menu-sort-dll: CSTaskImp ready; registering recurring task"
+            "menu-sort: CSTaskImp ready; registering recurring task"
         ));
         cs_task.run_recurring(
             move |_task_data: &FD4TaskData| self.applier.apply_once(),
@@ -56,7 +56,7 @@ struct TaskInstance;
 
 impl TaskInstance {
     fn wait() -> &'static CSTaskImp {
-        Log::write(format_args!("menu-sort-dll: waiting for CSTaskImp"));
+        Log::write(format_args!("menu-sort: waiting for CSTaskImp"));
         loop {
             if let Some(instance) = Self::try_current() {
                 return instance;

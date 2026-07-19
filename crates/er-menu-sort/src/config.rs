@@ -24,7 +24,7 @@ pub(crate) struct RuntimeConfig {
 impl RuntimeConfig {
     pub(crate) fn install() {
         let config = RuntimeConfigLoader::load().unwrap_or_else(|err| {
-            Log::write(format_args!("menu-sort-dll: config load warning: {err}"));
+            Log::write(format_args!("menu-sort: config load warning: {err}"));
             Self::default()
         });
         let _ = RUNTIME_CONFIG.set(config);
@@ -106,7 +106,7 @@ fn env_default(env_name: &str, label: &str) -> Option<MenuSortDefault> {
         Ok(choice) => Some(choice),
         Err(err) => {
             Log::write(format_args!(
-                "menu-sort-dll: ignoring invalid {env_name} for menu_sort.{label}: {err}"
+                "menu-sort: ignoring invalid {env_name} for menu_sort.{label}: {err}"
             ));
             None
         }

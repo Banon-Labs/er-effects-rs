@@ -1,4 +1,4 @@
-# er-menu-sort-dll
+# er-menu-sort
 
 Isolated Elden Ring startup menu-sort DLL for the armament, armor/protector, and talisman menu categories.
 
@@ -7,13 +7,13 @@ This crate intentionally duplicates the menu-sort startup behavior from the prod
 ## Build
 
 ```bash
-cargo xwin build -p er-menu-sort-dll --release --target x86_64-pc-windows-msvc
+cargo xwin build -p er-menu-sort --release --target x86_64-pc-windows-msvc
 ```
 
 Output:
 
 ```text
-target/x86_64-pc-windows-msvc/release/er_menu_sort_dll.dll
+target/x86_64-pc-windows-msvc/release/er_menu_sort.dll
 ```
 
 ## Configuration

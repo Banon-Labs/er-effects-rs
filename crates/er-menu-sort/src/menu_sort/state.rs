@@ -108,7 +108,7 @@ impl SortStateSlot {
         let state = memory.read_i32(self.address).map(SortStateValue::from);
         if state.is_none() {
             Log::write(format_args!(
-                "menu-sort-dll: deferred; could not read addr=0x{:x}",
+                "menu-sort: deferred; could not read addr=0x{:x}",
                 self.address.value()
             ));
         }

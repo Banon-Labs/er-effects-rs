@@ -1,7 +1,7 @@
 [workspace]
 members = [
     "crates/er-effects-rs",
-    "crates/er-menu-sort-dll",
+    "crates/er-menu-sort",
     "crates/effects-data",
     "crates/er-gfx",
     "crates/er-safe-input",

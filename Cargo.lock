@@ -2768,7 +2768,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "er-menu-sort-dll"
+name = "er-menu-sort"
 version = "0.1.0"
 dependencies = [
  "eldenring",

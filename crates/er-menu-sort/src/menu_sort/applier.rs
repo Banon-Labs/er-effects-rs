@@ -37,7 +37,7 @@ impl MenuSortApplier {
 
         DEFAULTS_APPLIED.store(true, Ordering::SeqCst);
         Log::write(format_args!(
-            "menu-sort-dll: applied defaults mss=0x{:x} changed={} already={} skipped={} preferences={}",
+            "menu-sort: applied defaults mss=0x{:x} changed={} already={} skipped={} preferences={}",
             menu_state.address().value(),
             report.changed,
             report.already,
@@ -61,7 +61,7 @@ impl MenuSortApplier {
     ) -> Option<CategoryApplyOutcome> {
         let Some(target_state) = SortStateValue::for_default(category.configured_default()) else {
             Log::write(format_args!(
-                "menu-sort-dll: preserve configured category={category}"
+                "menu-sort: preserve configured category={category}"
             ));
             return Some(CategoryApplyOutcome::Skipped);
         };
@@ -73,7 +73,7 @@ impl MenuSortApplier {
         }
         if current_state.criterion() != ITEM_TYPE {
             Log::write(format_args!(
-                "menu-sort-dll: preserve user/non-item category={category} value=0x{:x} configured={}",
+                "menu-sort: preserve user/non-item category={category} value=0x{:x} configured={}",
                 current_state.raw(),
                 category.configured_default()
             ));
@@ -83,7 +83,7 @@ impl MenuSortApplier {
             Some(CategoryApplyOutcome::Changed)
         } else {
             Log::write(format_args!(
-                "menu-sort-dll: deferred; could not write category={category} addr=0x{:x}",
+                "menu-sort: deferred; could not write category={category} addr=0x{:x}",
                 slot.address().value()
             ));
             None

@@ -18,7 +18,7 @@ pub extern "system" fn DllMain(_hmodule: HInstance, reason: u32, _reserved: *mut
     if reason == DLL_PROCESS_ATTACH {
         RuntimeConfig::install();
         Log::write(format_args!(
-            "menu-sort-dll: attach defaults={}",
+            "menu-sort: attach defaults={}",
             RuntimeConfig::active_preferences()
         ));
         MenuSortTask::start_once();
