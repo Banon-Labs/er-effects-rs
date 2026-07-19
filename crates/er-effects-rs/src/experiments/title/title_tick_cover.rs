@@ -1367,14 +1367,10 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             }
             if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
                 er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
-                // DO NOT clear warp_requested (RE-corrected 2026-07-18, bd
-                // mms18-external-finalize-trigger-2026-07-18): it is the cVar10 input the mms-advancer
-                // needs to finalize STEP_MoveMap 18->19->20; the advancer auto-clears it at its case-8
-                // completion. By the stable-proof latch (sf==30) the finalize has already consumed it, so
-                // this clear is redundant at best and starves a still-finalizing load at worst.
+                er_save_loader::GameManSaveAccess::set_warp_requested(gm_typed, false);
             }
             append_autoload_debug(format_args!(
-                "system-quit-quickload: native MoveMap stable proof OK sf={sf} slot={slot} player_present={player_present} ig_d8={ig_d8} menu_job=0x{menu_job:x} -> phase IDLE, cleared GameMan+0xb78/save_requested (warp_requested LEFT STANDING for the mms18 finalize)"
+                "system-quit-quickload: native MoveMap stable proof OK sf={sf} slot={slot} player_present={player_present} ig_d8={ig_d8} menu_job=0x{menu_job:x} -> phase IDLE, cleared GameMan+0xb78/save_requested/warp_requested"
             ));
         }
         let n = SWITCH_ORACLE_TICK.fetch_add(1, Ordering::SeqCst) + 1;

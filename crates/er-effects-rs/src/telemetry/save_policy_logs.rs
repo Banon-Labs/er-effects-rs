@@ -507,13 +507,25 @@ pub(crate) fn note_ls_portrait_capture(w: u32, h: u32, px: &[u8]) -> bool {
 // ENV-GATE RATIONALE: ER_EFFECTS_AUTOLOAD_DEBUG_PATH is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
     use std::io::Write;
-    static HEADER: std::sync::Once = std::sync::Once::new();
+    static INIT: std::sync::Once = std::sync::Once::new();
     let prefix = log_line_prefix();
     let path = std::env::var("ER_EFFECTS_AUTOLOAD_DEBUG_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("er-effects-autoload-debug.log"));
-    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
-        HEADER.call_once(|| write_log_header(&mut file));
+    // TRUNCATE ONCE per process so each run starts a CLEAN log (no cross-run pollution -- the log had
+    // grown to hundreds of MB across many appended runs). Matches the trace DLL's reset-on-attach.
+    // First call recreates + headers the file; every later call appends.
+    INIT.call_once(|| {
+        if let Ok(mut file) = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)
+        {
+            write_log_header(&mut file);
+        }
+    });
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(&path) {
         let _ = writeln!(file, "{prefix} {args}");
     }
 }

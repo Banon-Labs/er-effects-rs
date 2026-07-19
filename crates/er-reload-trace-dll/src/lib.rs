@@ -34,6 +34,29 @@ const HOOK_ORIGINAL_UNSET: usize = 0;
 
 type TraceHookFn = unsafe extern "system" fn(usize, usize, usize, usize) -> usize;
 
+/// C-ABI shape of the product DLL's `er_effects_union_register` export (crates/er-effects-rs/src/mh.rs).
+/// (target_addr, handler, *mut orig_slot) -> 0 ok / -1 null-slot / positive MH_STATUS on failure.
+/// `TraceHookFn` is exactly the product's `UnionFn`, so our detours plug into its union unchanged.
+type UnionRegisterFn = unsafe extern "system" fn(usize, TraceHookFn, *mut usize) -> i32;
+
+/// The product DLL's module base name as me3 loads it (matched by base name, not full path).
+const PRODUCT_DLL_NAME: &[u8] = b"er_effects_rs.dll\0";
+const UNION_REGISTER_EXPORT: &[u8] = b"er_effects_union_register\0";
+/// Bounded wait for the product DLL to map + export the registrar (both natives load together under
+/// me3; this only covers install-thread ordering). ~3s at 50ms cadence.
+const UNION_RESOLVE_TRIES: u32 = 60;
+const UNION_RESOLVE_SLEEP_MS: u32 = 50;
+
+/// Addresses the PRODUCT DLL owns with a BARE `MhHook` (not its union) in the sq-repro reload mode
+/// this trace runs alongside: 0x67b200 = SYSTEM_QUIT_REQUEST_LOAD_SLOT, 0x67b290 =
+/// SYSTEM_QUIT_INWORLD_LOAD (the reload's picked-slot deserialize proof). Routing OUR observer through
+/// the product union would create the dispatcher on that address first if our install thread wins the
+/// race, making the product's later `MhHook::new` return ALREADY_CREATED and silently dropping the
+/// product's CRITICAL reload hook. So in the unioned run we SKIP these two -- the product's own
+/// menu-trace union hooks + its inworld-load debug line already log the same deserialize events.
+/// (Standalone trace runs, with no product DLL present, still install them via our own MinHook.)
+const UNION_SKIP_RVAS: &[usize] = &[0x67b200, 0x67b290];
+
 static LOG_FILE: OnceLock<Option<Mutex<File>>> = OnceLock::new();
 static EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -91,6 +114,8 @@ unsafe extern "system" {
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn GetModuleHandleA(name: *const u8) -> *mut c_void;
+    fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
+    fn Sleep(ms: u32);
     fn GetTickCount64() -> u64;
     fn ReadProcessMemory(
         process: isize,
@@ -611,6 +636,25 @@ static HOOKS: &[HookSpec] = &[
     },
 ];
 
+/// Resolve the product DLL's `er_effects_union_register` export, polling briefly since both natives
+/// load together under me3 and thread ordering is not guaranteed. `None` => the product DLL is not in
+/// this process (a standalone trace run) or has not exported yet; caller falls back to its own MinHook.
+fn resolve_union_register() -> Option<UnionRegisterFn> {
+    for _ in 0..UNION_RESOLVE_TRIES {
+        let hmod = unsafe { GetModuleHandleA(PRODUCT_DLL_NAME.as_ptr()) };
+        if !hmod.is_null() {
+            let proc = unsafe { GetProcAddress(hmod, UNION_REGISTER_EXPORT.as_ptr()) };
+            if !proc.is_null() {
+                // SAFETY: the export's C-ABI shape is fixed by the product DLL; both DLLs live for the
+                // process lifetime so the pointer stays valid.
+                return Some(unsafe { std::mem::transmute::<*mut c_void, UnionRegisterFn>(proc) });
+            }
+        }
+        unsafe { Sleep(UNION_RESOLVE_SLEEP_MS) };
+    }
+    None
+}
+
 fn install_hooks() {
     reset_log_file();
     log_line(format_args!(
@@ -620,6 +664,27 @@ fn install_hooks() {
         log_line(format_args!("install abort: game module base unresolved"));
         return;
     };
+    // CROSS-DLL HOOK UNION (2026-07-18, user-directed): when the product DLL (er_effects_rs.dll) is
+    // co-loaded, route EVERY trace hook through its `er_effects_union_register` export so a SINGLE
+    // MinHook instance owns every address and our observers CHAIN with the product's own detours on
+    // shared addresses (0xb0e180 continue-confirm, 0xb0d960 title-SetState, etc.). Two independent
+    // MinHook instances patching the same address corrupt each other's trampolines -- the exact race
+    // the product's internal union fixes, now spanning DLLs. Standalone trace runs fall back to our
+    // own MinHook instance (no product DLL => no shared addresses => no corruption).
+    if let Some(reg) = resolve_union_register() {
+        log_line(format_args!(
+            "cross-dll union: resolved product er_effects_union_register -> routing all {} hooks through the product DLL's single MinHook instance",
+            HOOKS.len()
+        ));
+        for spec in HOOKS {
+            install_one_union(reg, base, spec);
+        }
+        log_line(format_args!("install complete (unioned) {}", snapshot()));
+        return;
+    }
+    log_line(format_args!(
+        "cross-dll union: product DLL export not present (standalone trace run) -> own MinHook instance"
+    ));
     let init_status = unsafe { MH_Initialize() };
     if init_status != MH_OK && init_status != MH_ERROR_ALREADY_INITIALIZED {
         log_line(format_args!(
@@ -631,6 +696,33 @@ fn install_hooks() {
         install_one(base, spec);
     }
     log_line(format_args!("install complete {}", snapshot()));
+}
+
+/// Register one trace observer through the product DLL's union (single shared MinHook instance).
+/// The union stores the trampoline (or next chained handler) into `spec.original`, which our
+/// `call_original` already reads -- so chaining is transparent to the detour bodies.
+fn install_one_union(reg: UnionRegisterFn, base: usize, spec: &HookSpec) {
+    if UNION_SKIP_RVAS.contains(&spec.rva) {
+        log_line(format_args!(
+            "hook {} rva=0x{:x} SKIPPED in unioned run (product owns a bare MinHook here; unioning would preempt its critical reload hook)",
+            spec.name, spec.rva
+        ));
+        return;
+    }
+    let target = base + spec.rva;
+    let orig_ptr = spec.original.as_ptr();
+    let rc = unsafe { reg(target, spec.detour, orig_ptr) };
+    if rc == 0 {
+        log_line(format_args!(
+            "hook {} rva=0x{:x} target=0x{target:x} union-registered (chained via product DLL)",
+            spec.name, spec.rva
+        ));
+    } else {
+        log_line(format_args!(
+            "hook {} rva=0x{:x} target=0x{target:x} union register FAILED rc={rc}",
+            spec.name, spec.rva
+        ));
+    }
 }
 
 fn install_one(base: usize, spec: &HookSpec) {

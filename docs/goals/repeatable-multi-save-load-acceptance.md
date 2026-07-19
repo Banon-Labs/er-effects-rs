@@ -112,6 +112,45 @@ Success is generic **stable** repeatability: **if we cannot load multiple charac
 prove each one rendered-and-playable before moving on, the goal is not met**, regardless of how well
 any single logical load works. A load that is "present" but frozen is a FAIL, not a pass.
 
+## 4a. CURRENT PRIMARY MILESTONE — same character loaded 3× in a row (added 2026-07-18)
+
+The §4 gate above varies the `(file, slot)` across ≥3 saves. That is the end state, but it is **not**
+the case the user actually reproduces by hand, and the doc had no test for it. The **current primary
+milestone** — the one to pass first — is the **same character (angrE), loaded three times in a row,
+including the boot autoload**:
+
+- **Load 1 = boot autoload** of angrE (TOML `save_file`+`slot`). Known-good: renders + is playable.
+- **Load 2 = reload of the SAME angrE slot** via the real in-game menu path (System→Quit→Load), driven
+  by **XInput** (the sq-repro autopilot fabricating the gamepad sequence — this is the "input driver").
+  Empirically this **freezes deterministically**: character present but **not render-ready and cannot
+  move**, though the in-game menu can still be opened (game shell alive). This frozen state is the bug
+  to capture, not to pass over.
+- **Load 3 = reload of the SAME angrE slot again**, driven the same way. Empirically it **recovers**:
+  character renders and is movable. (Mechanism hypothesis: a stale element from load 1 breaks the
+  load-2 finalize; load 2's teardown clears it so load 3 finalizes.)
+
+**Acceptance for this milestone:**
+1. Runs autonomously with **two DLLs loaded via me3** — the product DLL (being tuned) plus the log-only
+   companion trace DLL — with all overlapping native hooks **unioned through a single MinHook instance**
+   (the product DLL's `er_effects_union_register` export), never two colliding instances.
+2. The XInput driver is **readiness-gated, never blind** (see the correction that the earlier automated
+   capture failed *because* it fired the next load without checking render + movement). Before it
+   triggers the next load it must confirm, via RAM telemetry, the current load's true state:
+   - **render-ready** — `oracle_player_render_ready` (chr-model present AND `draw_group_enabled()` AND
+     `is_render_group_enabled()` AND `enable_render()`), held ≥5 s; and
+   - **can-move / input-causes-movement** — a NEW semaphore: while a movement stick input is injected,
+     `oracle_havok_pos` shifts beyond a noise threshold (world-live `oracle_play_time_ms` advancing is
+     necessary but **not** sufficient — it ticks during the freeze too, so it cannot be the move oracle).
+3. The chain is strict: load 1 must reach render-ready + can-move (dwell) **before** load 2 is triggered;
+   load 2's frozen state is captured (present, render-ready == false, can-move == false) up to its
+   per-load deadline; then load 3 is triggered and must reach render-ready + can-move.
+4. Zero crashes / zero soft-locks. The regression that turned load 2's **recoverable** freeze into a
+   hard soft-lock (warp-clear removal + finalize-disarm) is reverted; load 2 must remain the *recoverable*
+   freeze, and load 3 must recover.
+5. Emits per-load render-ready / can-move / freeze telemetry + timings and a short pass/fail report.
+
+Passing 4a proves the freeze/recovery mechanism on one character; §4 then generalizes it across saves.
+
 ## 5. Invariants the harness must assert & verify (not build)
 
 - **Reads are read-only.** Loading a source save (read-only or read/write) must **read, never

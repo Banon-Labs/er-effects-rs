@@ -22,7 +22,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 // register args are harmless. Not for float-arg or >4-stack-arg targets.
 // ============================================================================
 pub type UnionFn = unsafe extern "system" fn(usize, usize, usize, usize) -> usize;
-const MAX_UNION_SLOTS: usize = 48;
+// 96 slots: this DLL's own union targets PLUS a companion DLL's (the log-only
+// er-reload-trace-dll routes its ~40 native load/menu hooks through THIS DLL's union via
+// the `er_effects_union_register` export, so a single MinHook instance owns every shared
+// address instead of two instances corrupting each other's trampolines). One slot per
+// unique game address; chained handlers on the same address share a slot.
+const MAX_UNION_SLOTS: usize = 96;
 
 struct UnionEntry {
     target: usize,
@@ -56,6 +61,8 @@ macro_rules! union_dispatchers {
 static DISPATCHERS: [UnionFn; MAX_UNION_SLOTS] = union_dispatchers!(
     0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23
     24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47
+    48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71
+    72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95
 );
 
 /// Register `handler` on `target`, chaining through `orig_slot`. First registrant installs
@@ -117,6 +124,41 @@ pub unsafe fn register_union_hook(
         handlers: vec![(handler_addr, orig_slot)],
     });
     Ok(())
+}
+
+/// C-ABI export (2026-07-18, user-directed cross-DLL union). A COMPANION DLL loaded into the same
+/// process (the log-only `er-reload-trace-dll`) hooks ~40 native load/menu functions that OVERLAP
+/// this DLL's own hooks (e.g. `0xb0e180` continue-confirm, `0xb0d960` title-SetState). If the
+/// companion drove its OWN MinHook instance, two instances patching the same address would corrupt
+/// each other's trampolines (the exact silent race the internal union was built to fix, now across
+/// DLLs). So the companion calls THIS export instead: every shared address is owned by this DLL's
+/// single MinHook instance + union, and the companion's handler is CHAINED like any internal one.
+///
+/// `orig_slot_ptr` points at a `usize`-sized cell (an `AtomicUsize`) that lives in the COMPANION's
+/// image; the union stores the trampoline (or next chained handler) there for the companion handler
+/// to call. The companion image stays loaded for the process lifetime, so treating it as `'static`
+/// is sound. Returns `0` on success, `-1` for a null `orig_slot_ptr`, or the `MH_STATUS` code as a
+/// positive `i32` on MinHook failure.
+///
+/// # Safety
+/// `handler` must be a valid `UnionFn` matching `target`'s ABI (≤4 integer/pointer args); `target`
+/// must be a real code address in this process; `orig_slot_ptr` must point at a live, aligned
+/// `usize` cell that outlives every dispatch (a companion `'static`).
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn er_effects_union_register(
+    target: usize,
+    handler: UnionFn,
+    orig_slot_ptr: *mut usize,
+) -> i32 {
+    if orig_slot_ptr.is_null() {
+        return -1;
+    }
+    // AtomicUsize is a repr(transparent) wrapper over usize, so a *mut usize aliases it soundly.
+    let orig_slot: &'static AtomicUsize = unsafe { &*(orig_slot_ptr as *const AtomicUsize) };
+    match unsafe { register_union_hook(target, handler, orig_slot) } {
+        Ok(()) => 0,
+        Err(status) => status as i32,
+    }
 }
 
 /// Central hook registry (2026-07-16). Every MinHook detour creation records its TARGET game address

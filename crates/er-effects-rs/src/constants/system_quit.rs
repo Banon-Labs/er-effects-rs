@@ -40,6 +40,19 @@ pub(crate) const INJECT_NAV_LOG_FIRST: usize = 20;
 /// own_stepper idx10 and READ by the XInput hook (so the schedule lives in one place that runs
 /// every frame, instead of the XInput hook which the game may never poll). 0 = no input.
 pub(crate) static INJECT_NAV_CUR_BUTTONS: AtomicUsize = AtomicUsize::new(0);
+// ---- CAN-MOVE probe (2026-07-18, user-directed readiness gate) ----
+// "render-ready" answers "can the user SEE the character"; CAN-MOVE answers "does INPUT MOVE the
+// character" -- the second half of the readiness the earlier automated capture lacked. When
+// MOVE_PROBE_ACTIVE, the XInput hook stamps MOVE_PROBE_STICK_LY into the left thumbstick (sThumbLY);
+// the driver samples oracle_havok_pos before/after and confirms motion beyond a noise threshold.
+// play_time advancing is necessary but NOT sufficient (it ticks during the freeze), so movement must
+// be proven by a position DELTA under a known injected stick, per AGENTS.md direct-measurement.
+/// True while the readiness verifier is injecting a movement stick to test input-causes-movement.
+pub(crate) static MOVE_PROBE_ACTIVE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// Left-thumbstick Y to inject while MOVE_PROBE_ACTIVE (i16 range; +full = forward). Stored as i32.
+pub(crate) static MOVE_PROBE_STICK_LY: std::sync::atomic::AtomicI32 =
+    std::sync::atomic::AtomicI32::new(0);
 /// DInput keyboard scancode DIK_DOWN (down-arrow) -- the menu "move down" keyboard input. The
 /// menu is keyboard-navigated under Proton with no controller (XInput is not polled), so the
 /// schedule drives this via InputBlocker::set_injected_key (stamped into the blocked keyboard
@@ -162,6 +175,14 @@ pub(crate) const SQ_REPRO_WAIT_RELOAD_LOG_EVERY: usize = 512;
 /// Frames to settle in-world (world stream + HUD) before the autopilot presses START. Pre-existing
 /// world-readiness settle; the run that first opened IngameTop used it.
 pub(crate) const SQ_REPRO_WORLD_SETTLE_TICKS: usize = 180;
+/// FREEZE-RECOVERY DEADLINE (2026-07-18, user-directed readiness gate). Frames the WAIT_RELOAD gate
+/// will wait for a just-triggered reload to become render-ready before classifying it the LOAD-2 FREEZE
+/// (present + reload committed, but the loading cover never lifts / render never hands off -- exactly
+/// the user's "character does not show up + can't move, but the menu still opens" state) and force-
+/// advancing to the NEXT switch (the recovery load), just as the user re-loads by hand instead of
+/// waiting forever. ~20s at 60fps -- longer than a real reload (~10-15s) so a slow-but-real load is NOT
+/// misread as frozen, yet short enough to drive the recovery load well inside the runtime cap.
+pub(crate) const SQ_REPRO_FREEZE_RECOVERY_DEADLINE: usize = 1200;
 /// No gamepad buttons asserted this frame.
 pub(crate) const INJECT_NAV_NO_BUTTONS: u16 = 0;
 /// CURSOR-OFFSET PROBE: with exactly ONE deterministic Down (Continue idx0 -> Load Game idx1),

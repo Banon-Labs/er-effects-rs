@@ -442,6 +442,30 @@ pub(crate) unsafe extern "system" fn xinput_get_state_hook(user_index: u32, stat
     };
     const XINPUT_PACKET_OFFSET: usize = 0;
     const WBUTTONS_OFFSET_IN_GAMEPAD: usize = 0;
+    // sThumbLY within XINPUT_GAMEPAD: wButtons(u16)@0, bLeftTrigger@2, bRightTrigger@3, sThumbLX@4,
+    // sThumbLY@6. Used by the can-move probe lane to walk the character forward and measure motion.
+    const XINPUT_THUMB_LY_OFFSET_IN_GAMEPAD: usize = 6;
+    // CAN-MOVE PROBE lane (2026-07-18): when the readiness verifier is testing input-causes-movement,
+    // present a connected slot-0 pad with ONLY the left stick set (no buttons) so the game walks the
+    // character. Independent of the input-block / sq-repro gates -- the probe owns the pad for its
+    // brief in-world window regardless of block state, so the injected stick always lands.
+    if !state.is_null()
+        && user_index == XINPUT_PRIMARY_USER_INDEX
+        && MOVE_PROBE_ACTIVE.load(Ordering::SeqCst)
+    {
+        let ly = MOVE_PROBE_STICK_LY.load(Ordering::SeqCst) as i16;
+        let pkt = INJECT_NAV_FRAME.fetch_add(1, Ordering::SeqCst) as u32;
+        unsafe {
+            std::ptr::write_bytes(
+                state.add(XINPUT_GAMEPAD_OFFSET),
+                ZERO_FILL_BYTE,
+                XINPUT_GAMEPAD_SIZE,
+            );
+            *(state.add(XINPUT_PACKET_OFFSET) as *mut u32) = pkt;
+            *(state.add(XINPUT_GAMEPAD_OFFSET + XINPUT_THUMB_LY_OFFSET_IN_GAMEPAD) as *mut i16) = ly;
+        }
+        return XINPUT_SUCCESS;
+    }
     // PASSIVE INPUT-TRACE CAPTURE (er-effects-input-trace.txt): record the REAL slot-0 pad state
     // exactly as the original returned it, BEFORE the keepalive/fabrication branches below can
     // overwrite the caller's buffer. A single Relaxed flag load when the trace is off; never

@@ -188,6 +188,19 @@ fn sq_repro_begin_switch() {
     SYSTEM_QUIT_PROFILE_SELECT_WINDOW.store(0, Ordering::SeqCst);
     SQ_REPRO_INITIAL_CURSOR.store(usize::MAX, Ordering::SeqCst);
     SQ_REPRO_WAIT_RELOAD_FRAMES.store(0, Ordering::SeqCst);
+    // TO_PROFILE one-shot latches: reset PER SWITCH so switch #2+ re-builds the Quit-tab pane, re-captures
+    // a FRESH Load-Profile action, and re-fires the deterministic route -- the exact path that worked for
+    // switch #1. WITHOUT this, these stay latched from switch #1 and switch #2 skips both the pane-rebuild
+    // and the route-fire, falling through to the mouse-only tab-switch key probe that never succeeds
+    // (observed run samechar-3x-190909: switch #2 stuck in TO_PROFILE, load3 never attempted). Also clear
+    // the captured action so TO_PROFILE sees route_action==0 -> rebuilds -> fresh capture (never fires a
+    // stale/freed switch-#1 action), and reset the tab-discovery + row-nav bases for the fallback path.
+    SQ_REPRO_PANE_BUILD_TRIED.store(0, Ordering::SeqCst);
+    SQ_REPRO_ROUTE_FIRED.store(0, Ordering::SeqCst);
+    SQ_REPRO_TAB_DISCOVERED.store(0, Ordering::SeqCst);
+    SQ_REPRO_TAB_BASELINE.store(usize::MAX, Ordering::SeqCst);
+    SQ_REPRO_ROWNAV_BASE.store(usize::MAX, Ordering::SeqCst);
+    SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT.store(0, Ordering::SeqCst);
     SQ_REPRO_PROFILE_BACK_OPENED.store(0, Ordering::SeqCst);
     SQ_REPRO_PROFILE_BACK_DONE.store(0, Ordering::SeqCst);
     SQ_REPRO_PROFILE_BACK_RESTORE_BASELINE.store(
@@ -968,7 +981,22 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             let switch_index = SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst);
             let expected_deser = switch_index + 1;
             let deser = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
-            let player_up = unsafe { PlayerIns::local_player_mut() }.is_ok();
+            // RENDER-READY gate (2026-07-18, user-directed): "present" is not "ready". The user's load-2
+            // freeze is present-but-not-rendered, so gate the READY advance on the SAME render-ready
+            // combination the oracle emits (chr-model present AND draw-group AND render-group AND
+            // enable-render); a load stuck below it past the deadline is classified FROZEN below.
+            let (player_up, render_ready) = match unsafe { PlayerIns::local_player_mut() } {
+                Ok(player) => {
+                    let model_present = player.chr_ins.chr_model_ins.as_ptr() as usize
+                        != TITLE_OWNER_SCAN_START_ADDRESS;
+                    let ready = model_present
+                        && player.chr_ins.load_state.draw_group_enabled()
+                        && player.chr_ins.chr_flags1c4.is_render_group_enabled()
+                        && player.chr_ins.chr_flags1c5.enable_render();
+                    (true, ready)
+                }
+                Err(_) => (false, false),
+            };
             // PlayerIns-present alone is a LOADING-SCREEN/TITLE FALSE POSITIVE (PlayerIns exists during
             // the reload before the world is interactive). Require the reload committed (fresh-deser),
             // the player present, AND the new load COMPLETE.
@@ -988,20 +1016,40 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             let load_done = base_ok && unsafe { now_loading_active(base) };
             let fake_cover = base_ok && unsafe { fake_loading_screen_visible(base) };
             let loading = !base_ok || !load_done || fake_cover;
-            if deser < expected_deser || !player_up || loading {
-                // Still tearing down / at title / streaming: hold the settle clock at 0 so it starts
-                // only when the NEW world is up AND interactive (not a loading-screen false positive).
+            // READINESS GATE (2026-07-18, user-directed). "committed + player-present + cover-gone" is
+            // NOT enough -- it holds during the load-2 freeze. Require RENDER-READY held for the settle
+            // window before advancing. Hold the settle clock at 0 whenever the load is still streaming OR
+            // present-but-not-render-ready, so `tick` counts a CONTINUOUS render-ready dwell, not just
+            // frames since the cover cleared.
+            let committed = deser >= expected_deser && player_up;
+            let ready_dwell = committed && !loading && render_ready;
+            if !ready_dwell {
                 SQ_REPRO_STATE_TICK.store(0, Ordering::SeqCst);
-                // Periodic GATE dump (er-effects-rs-qwj): this state once stalled with switch #1
-                // stable and fresh-deser == expected, so one of these gates was lying. Name the
-                // culprit with data, not a single opaque waiting line.
                 let waited = SQ_REPRO_WAIT_RELOAD_FRAMES.fetch_add(1, Ordering::SeqCst);
                 if waited % SQ_REPRO_WAIT_RELOAD_LOG_EVERY == 0 {
                     append_autoload_debug(format_args!(
-                        "sq-repro: WAIT_RELOAD gates (switch #{}/{} waited_frames={waited}): fresh_deser={deser}/{expected_deser} player_up={player_up} load_done={load_done} fake_cover={fake_cover}",
+                        "sq-repro: WAIT_RELOAD gates (switch #{}/{} waited_frames={waited}): fresh_deser={deser}/{expected_deser} player_up={player_up} render_ready={render_ready} load_done={load_done} fake_cover={fake_cover}",
                         switch_index + 1,
                         sq_repro_target_switches()
                     ));
+                }
+                // LOAD-2 FREEZE force-advance: present + reload committed, but never render-ready within
+                // the deadline (cover stuck / render handoff never fires -- the user's can't-see/can't-
+                // move state). Do NOT stall to the runtime cap; trigger the NEXT switch (the recovery
+                // load) exactly as the user re-loads by hand from the still-openable menu.
+                if committed && waited >= SQ_REPRO_FREEZE_RECOVERY_DEADLINE {
+                    let next = switch_index + 1;
+                    SQ_REPRO_SWITCH_INDEX.store(next, Ordering::SeqCst);
+                    sq_repro_begin_switch();
+                    append_autoload_debug(format_args!(
+                        "sq-repro: switch #{}/{} presented but FROZEN (render_ready=false load_done={load_done} fake_cover={fake_cover}) past freeze-deadline {SQ_REPRO_FREEZE_RECOVERY_DEADLINE}f -> triggering RECOVERY switch #{}/{} target_slot={} (reproduces user load2-freeze -> load3-recover); OPEN_MENU",
+                        switch_index + 1,
+                        sq_repro_target_switches(),
+                        next + 1,
+                        sq_repro_target_switches(),
+                        sq_repro_target_slot()
+                    ));
+                    sq_repro_transition(SQ_REPRO_STATE_OPEN_MENU);
                 }
                 return;
             }
@@ -1010,7 +1058,7 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                 SQ_REPRO_SWITCH_INDEX.store(next, Ordering::SeqCst);
                 sq_repro_begin_switch();
                 append_autoload_debug(format_args!(
-                    "sq-repro: switch #{}/{} reload committed (fresh_deser={deser}) + new world settled -> arming switch #{}/{} target_slot={}; OPEN_MENU",
+                    "sq-repro: switch #{}/{} reload RENDER-READY + settled ({tick}f dwell, fresh_deser={deser}) -> arming switch #{}/{} target_slot={}; OPEN_MENU",
                     switch_index + 1,
                     sq_repro_target_switches(),
                     next + 1,
@@ -1356,17 +1404,11 @@ pub(crate) unsafe extern "system" fn system_quit_inworld_load_skip_hook(slot: i3
         }
         if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
             er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
-            // DO NOT clear warp_requested here (RE-corrected 2026-07-18, bd
-            // mms18-external-finalize-trigger-2026-07-18): this fires immediately AFTER the native
-            // deserialize (0x67b290) which SETS warp_requested=true -- the exact cVar10 input the
-            // mms-advancer (FUN_140afa7c0) needs to finalize STEP_MoveMap 18->19->20. Clearing it here
-            // is the most direct starve of the finalize (undoes the deserialize's flag on the same
-            // frame), causing the present-but-frozen (can't see/move, menu opens) load. The advancer
-            // auto-clears warp at its case-8 completion.
+            er_save_loader::GameManSaveAccess::set_warp_requested(gm_typed, false);
         }
         let n = SYSTEM_QUIT_INWORLD_LOAD_ALLOW_COUNT.load(Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "system-quit-quickload: native slot deserialize proof OK via 0x67b290 slot={slot} ret={ret} prior_phase={phase} world_up={world_up} allow_count={n} -> phase IDLE, cleared GameMan+0xb78/save_requested (warp_requested LEFT STANDING for mms18 finalize)"
+            "system-quit-quickload: native slot deserialize proof OK via 0x67b290 slot={slot} ret={ret} prior_phase={phase} world_up={world_up} allow_count={n} -> phase IDLE, cleared GameMan+0xb78/save_requested/warp_requested"
         ));
     }
     ret
@@ -1671,22 +1713,20 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                     }
                 }
                 unsafe { *((base + RETURN_TITLE_REBUILD_FLAG_DAT_RVA) as *mut u8) = 0 };
-                // Clear GameMan.save_requested defensively (typed): the return-title REQUEST set it for
-                // the teardown; a residual true would drive an immediate quit-save on the reload.
-                // DO **NOT** clear GameMan.warp_requested here (RE-corrected 2026-07-18, bd
-                // mms18-external-finalize-trigger-2026-07-18). The fresh full deserialize (native parser
-                // 0x67b290) UNCONDITIONALLY sets warp_requested=true, and that flag is EXACTLY the cVar10
-                // input the mms-advancer MoveMapStep::CheckReturnToTitle (FUN_140afa7c0, deobf 0x140afa6d0)
-                // needs to walk the STEP_MoveMap child 18->19(CLEANUP)->20(FINISH)->-1 (it consumes+clears
-                // warp itself at its case-8 completion via SetCallForWarp(false)). Clearing it here STARVES
-                // the finalize on the offline save_redirect path: cVar10 stays 0, the child parks at
-                // resident step 18, menuData+0x5e stays 0, InGameStep+0xd8(requestCode) is stuck at 1, and
-                // draw_group never re-enables -> the "present but can't see/move, menu still opens" freeze
-                // (grounded this session: mms=18, WBR resident 0xc, requestCode=1, draw_group=false). The
-                // title-bounce these clears were fighting is a downstream invalid/unconsumed warp TARGET,
-                // now handled by the RequestMoveMap BlockId fix -- so warp_requested must be left standing.
+                // Also clear GameMan.save_requested defensively (typed): the return-title REQUEST set
+                // it for the teardown; a residual true would drive an immediate quit-save on the reload.
+                // AND clear GameMan.warp_requested: the fresh full deserialize we just ran (native
+                // parser 0x67b290 = dump FUN_14067b380) UNCONDITIONALLY sets warp_requested=true as a
+                // "warp reload pending" flag. On the normal in-world load the MoveMapStep warp machine
+                // consumes it, but our SetState5 forward is a fresh title->world stream that never does;
+                // MoveMapStep::CheckReturnToTitle (dump FUN_140afa7c0) then reads warp_requested==true
+                // every frame as a return-to-title trigger and bounces the freshly-loaded world back to
+                // the title ~4s later (proven: gm-snap shows warp_requested=true for the whole reloaded
+                // world vs false on the healthy boot load). warp_requested=false is the correct in-world
+                // steady state, so clearing it matches the boot load and does not affect which char loads.
                 if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
                     er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
+                    er_save_loader::GameManSaveAccess::set_warp_requested(gm_typed, false);
                 }
                 // REPEATABLE-SWITCH STATE RESTORE (er-effects-rs-qwj). The switch-#1 works but
                 // switch-#2-stalls symptom is a pure precondition mismatch: these three return-title

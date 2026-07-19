@@ -18,35 +18,32 @@ pub(crate) fn install_system_quit_continue_confirm_hook() {
         ));
         return;
     };
-    match unsafe {
-        MhHook::new(
-            addr as *mut c_void,
+    // CROSS-DLL UNION (2026-07-18): install through the union, NOT a bare MhHook. The companion
+    // er-reload-trace-dll also observes this address (0xb0e180) and routes through THIS DLL's union
+    // via the `er_effects_union_register` export. A bare MhHook here would let whichever DLL grabbed
+    // the single MinHook slot first win and silently drop the other -- and if the trace preempted,
+    // this CRITICAL continue-confirm guard (it drives a fresh picked-slot deserialize before SetState5)
+    // would never fire and the reload would break. The union chains both handlers regardless of order.
+    // `system_quit_continue_confirm_hook` is a 4-arg UnionFn and its orig call
+    // (system_quit_repro_guards.rs) already invokes SYSTEM_QUIT_CONTINUE_CONFIRM_ORIG as
+    // `fn(usize,usize,usize,usize)->usize`, which the union fills with the trampoline (or the next
+    // chained handler) -- so chaining is transparent to the hook body.
+    let handler: crate::mh::UnionFn = unsafe {
+        std::mem::transmute::<*mut c_void, crate::mh::UnionFn>(
             system_quit_continue_confirm_hook as *mut c_void,
         )
+    };
+    match unsafe {
+        crate::mh::register_union_hook(addr, handler, &SYSTEM_QUIT_CONTINUE_CONFIRM_ORIG)
     } {
-        Ok(hook) => {
-            SYSTEM_QUIT_CONTINUE_CONFIRM_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            if let Err(status) = unsafe { hook.queue_enable() } {
-                append_autoload_debug(format_args!(
-                    "system-quit-quickload: queue_enable continue_confirm guard failed: {status:?}"
-                ));
-                return;
-            }
-            match unsafe { MH_ApplyQueued() } {
-                MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
-                    SYSTEM_QUIT_CONTINUE_CONFIRM_INSTALLED.store(1, Ordering::SeqCst);
-                    append_autoload_debug(format_args!(
-                        "system-quit-quickload: hooked title Continue confirm 0x{addr:x}; active switch drives a fresh picked-slot deserialize before SetState5 (fail-closed)"
-                    ));
-                }
-                status => append_autoload_debug(format_args!(
-                    "system-quit-quickload: MH_ApplyQueued continue_confirm guard failed: {status:?}"
-                )),
-            }
+        Ok(()) => {
+            SYSTEM_QUIT_CONTINUE_CONFIRM_INSTALLED.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: UNIONED title Continue confirm 0x{addr:x}; active switch drives a fresh picked-slot deserialize before SetState5 (fail-closed); chains with any companion trace observer"
+            ));
         }
         Err(status) => append_autoload_debug(format_args!(
-            "system-quit-quickload: MhHook::new continue_confirm guard failed: {status:?}"
+            "system-quit-quickload: union register continue_confirm guard failed: {status:?}"
         )),
     }
 }
