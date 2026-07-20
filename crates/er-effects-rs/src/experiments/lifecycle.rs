@@ -307,6 +307,22 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // OWN_LOAD_PUMP_JOB != 0 / OWN_LOAD_PUMP_DONE, so it costs nothing until armed+built and
     // never re-pumps once terminal. Must run THROUGH the loading screen (player absent), so it
     // is here in the recurring game task, before the player check. Pure native call + reads.
+    // FPS oracle (goal 2026-07-19: stable, load1-baseline-comparable framerate). EMA of the frame delta +
+    // per-epoch worst frame time. Unconditional, cheap; read by the telemetry as oracle_fps / oracle_min_fps.
+    {
+        let d = task_data.delta_time.time;
+        if d > 0.0 && d < 1.0 {
+            let us = (d * 1_000_000.0) as u32;
+            let prev = crate::constants::FRAME_TIME_EMA_US.load(Ordering::Relaxed);
+            crate::constants::FRAME_TIME_EMA_US
+                .store(((prev / 10) * 9 + us / 10).max(1), Ordering::Relaxed);
+            let ep = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+            if crate::constants::FRAME_TIME_WORST_EPOCH.swap(ep, Ordering::Relaxed) != ep {
+                crate::constants::FRAME_TIME_WORST_US.store(0, Ordering::Relaxed);
+            }
+            crate::constants::FRAME_TIME_WORST_US.fetch_max(us, Ordering::Relaxed);
+        }
+    }
     if own_load_pump_enabled() {
         if let Ok(base) = game_module_base() {
             let gm = game_man_ptr_or_null();

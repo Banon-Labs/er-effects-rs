@@ -24,8 +24,8 @@ RUNTIME_TIMEOUT_CAP_PATH = REPO_ROOT / ".auto" / "runtime_timeout_cap_seconds"
 # corrupted/tampered file) are pinned to the same value so no other number can leak in. To change
 # it, change .auto/runtime_timeout_cap_seconds, these two, AND the rego literal, then re-run
 # scripts/check-runtime-probe-contract.py. See bd runtime-teardown-semaphore-progress-watchdog-2026-07-17.
-RUNTIME_TIMEOUT_CAP_FALLBACK_SECONDS = 180
-RUNTIME_TIMEOUT_CAP_CEILING_SECONDS = 180
+RUNTIME_TIMEOUT_CAP_FALLBACK_SECONDS = 300
+RUNTIME_TIMEOUT_CAP_CEILING_SECONDS = 300
 
 
 def runtime_timeout_cap_seconds() -> int:

@@ -32,9 +32,15 @@ FINAL_LOAD_DWELL_SECONDS = (
     14.0  # after the 4th load appears, give the 60-frame move-probe time to run
 )
 BOOT_TIMEOUT_SECONDS = (
-    110.0  # if no in-world player by here, the boot failed -> tear down, don't idle
+    # Raised 110->300 (user 2026-07-20): ER asset loading is single-core-bound; parallel cargo/agents
+    # starve that core so boot is SLOW-but-progressing, not failed. Do not tear a slow boot down early.
+    300.0  # if no in-world player by here, the boot failed -> tear down, don't idle
 )
-LOADING_PROGRESS_STALL_SECONDS = 10.0
+# Raised 10->60 (user 2026-07-20, bd teardown-is-core-contention-not-stall): under parallel-cargo core
+# contention the loading bar PROGRESSES SLOWLY (bar increases, labels crawl); a flat window of 10s was
+# firing on core-starvation slowness, not an actual hang. 60s tolerates slow progress; a genuine hang
+# still trips it. The oracle_system_step_label now distinguishes a frozen label (real hang) from crawl.
+LOADING_PROGRESS_STALL_SECONDS = 60.0
 
 # Interruptible poll wait (never set) -- the sanctioned no-bare-sleep pace primitive (see
 # scripts/multi-load-proof-monitor.py); real synchronization is the telemetry-file readiness checks.
@@ -787,6 +793,8 @@ def main() -> int:
                     f"req_code={s.get('oracle_stepfinish_request_code')} mms={s.get('oracle_stepfinish_mms_state')} "
                     f"finalize12a={s.get('oracle_stepfinish_finalize_substate_12a')} "
                     f"fake_cover={fake_cover} switch_idx={s.get('sq_repro_switch_index')} "
+                    f"sysstep={s.get('oracle_system_step_label')}({s.get('oracle_system_step_state')}) "
+                    f"fps={s.get('oracle_fps')}/min{s.get('oracle_min_fps')} "
                     f"havok={s.get('oracle_havok_pos')}",
                     flush=True,
                 )

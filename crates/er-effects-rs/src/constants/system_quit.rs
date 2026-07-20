@@ -57,6 +57,15 @@ pub(crate) static MOVE_PROBE_STICK_LY: std::sync::atomic::AtomicI32 =
 /// motion under the injected stick (input-causes-movement PROVEN). Cleared when a new load epoch begins.
 pub(crate) static CAN_MOVE_CONFIRMED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+/// FPS oracle (goal 2026-07-19: stable framerate, comparable across runs, load1 baseline). EMA of the
+/// per-frame delta in microseconds (init ~60fps). Written each game-task frame by lifecycle, read by the
+/// telemetry oracles as oracle_fps = 1e6 / this. Also the per-epoch worst (max) frame time in us.
+pub(crate) static FRAME_TIME_EMA_US: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(16_667);
+pub(crate) static FRAME_TIME_WORST_US: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+/// Load epoch the worst-frame-time window is scoped to (reset the worst tracker when the epoch changes).
+pub(crate) static FRAME_TIME_WORST_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// Current consecutive-moved-frame count of the in-flight move probe (for the oracle/report).
 pub(crate) static MOVE_PROBE_MOVED_FRAMES: AtomicUsize = AtomicUsize::new(0);
 /// SEMAPHORE SPLIT (user 2026-07-19, bd three-semaphores-can-move-did-move-supplied-input): count of
