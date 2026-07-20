@@ -600,8 +600,9 @@ def main() -> int:
     load1_inworld_fps: list[float] = []
     load2_inworld_fps: list[float] = []
     load2_fps_window_start: float | None = None
-    fps_compared_done = False  # parity already observed -> stop re-checking (do NOT tear down on OK)
-    FPS_COMPARE_WINDOW_S = 3.0
+    fps_compared_logged = False  # parity note already printed once
+    FPS_SETTLE_BEFORE_TEST_S = 5.0  # let load2 FINISH loading into world two before testing the drop
+    FPS_REGRESSION_RATIO = 0.85  # load2 avg < 85% of load1 = a real, user-visible frame drop
 
     while True:
         now = time.monotonic()
@@ -634,31 +635,41 @@ def main() -> int:
             except (TypeError, ValueError):
                 fps_now = -1.0
             _ep = int(deser)
-            if fps_now > 0 and present:
+            # GENUINELY loaded into world (not just present-in-memory): render_ready or movable. `present`
+            # alone is the in-memory deserialize and fires DURING the loading screen, so testing FPS there
+            # measured the loading phase, not the in-world drop (user 2026-07-20). Only sample once loaded.
+            genuinely_loaded = render_ready or can_move
+            if fps_now > 0 and genuinely_loaded:
                 if _ep == 0:
                     load1_inworld_fps.append(fps_now)
                 elif _ep >= 1:
                     if load2_fps_window_start is None:
                         load2_fps_window_start = now
                     load2_inworld_fps.append(fps_now)
+                    # Test the frame drop only AFTER load2 has FINISHED loading into world two (sustained
+                    # present >= FPS_SETTLE_BEFORE_TEST_S), comparing load2's RECENT window to load1's
+                    # baseline, and RE-CHECK every poll so a drop that deepens as it plays is caught (user
+                    # 2026-07-20: the early 3s sample missed the real in-world drop, 20 vs 25). Tear down
+                    # ONLY on a real drop (load2 < 85% of load1); on parity keep going to prove load3.
                     if (
-                        not fps_compared_done
-                        and (now - load2_fps_window_start) >= FPS_COMPARE_WINDOW_S
-                        and len(load2_inworld_fps) >= 3
-                        and load1_inworld_fps
+                        (now - load2_fps_window_start) >= FPS_SETTLE_BEFORE_TEST_S
+                        and len(load2_inworld_fps) >= 6
+                        and len(load1_inworld_fps) >= 6
                     ):
                         l1 = statistics.mean(load1_inworld_fps)
-                        l2 = statistics.mean(load2_inworld_fps)
-                        # User 2026-07-20: tear down ONLY when load2 FPS is NOWHERE NEAR load1 (regression).
-                        # On parity, do NOT tear down -- let load2 settle, prove movement, and drive load3.
-                        if l1 > 0 and l2 < 0.70 * l1:
-                            result = f"FPS_REGRESSION_LOAD2 load2={l2:.0f} vs load1={l1:.0f}fps"
+                        l2 = statistics.mean(load2_inworld_fps[-6:])
+                        if l1 > 0 and l2 < FPS_REGRESSION_RATIO * l1:
+                            result = (
+                                f"FPS_REGRESSION_LOAD2 load2={l2:.0f} vs load1={l1:.0f}fps "
+                                f"(drop {100 * (1 - l2 / l1):.0f}%)"
+                            )
                             break
-                        fps_compared_done = True
-                        print(
-                            f"[fps-compare] load2={l2:.0f} vs load1={l1:.0f}fps -- parity OK, continuing to load3",
-                            flush=True,
-                        )
+                        if not fps_compared_logged:
+                            fps_compared_logged = True
+                            print(
+                                f"[fps-compare] load2={l2:.0f} vs load1={l1:.0f}fps parity so far -- continuing to load3",
+                                flush=True,
+                            )
 
             # User-directed teardown guard (2026-07-19): if the loading bar stops making observable
             # progress for >10s, preserve artifacts and fail immediately instead of consuming the full
