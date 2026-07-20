@@ -1708,9 +1708,11 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                     && ig_d8 == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING
                 {
                     let w = ENDING_REQUEST_WHYNOT_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-                    if w <= 4 || w % 60 == 0 {
+                    let epoch_dbg =
+                        SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+                    if w <= 40 || w % 10 == 0 {
                         append_autoload_debug(format_args!(
-                            "MMS18 RT5D DRIVE WHY-NOT #{w}: stuck_mms18=false at frozen mms18 -- active_switch={active_switch_phase}(phase={quickload_phase}) ig_d8={ig_d8} md_5e={md_5e} md_5d={md_5d} b7c1={mms_b7c1} blocks={mms_blocks} (drive needs active_switch && ig_d8==1 && md_5e==0 && md_5d==0 && b7c1==1 && blocks>0)"
+                            "MMS18 RT5D DRIVE WHY-NOT #{w} epoch={epoch_dbg}: stuck_mms18=false at frozen mms18 -- active_switch={active_switch_phase}(phase={quickload_phase}) ig_d8={ig_d8} md_5e={md_5e} md_5d={md_5d} b7c1={mms_b7c1} blocks={mms_blocks} (drive needs active_switch && ig_d8==1 && md_5e==0 && md_5d==0 && b7c1==1 && blocks>0)"
                         ));
                     }
                 }
