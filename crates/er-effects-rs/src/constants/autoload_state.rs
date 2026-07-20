@@ -419,6 +419,13 @@ pub(crate) static AUTO_ACCEPT_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static IN_WORLD_REACHED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const IN_WORLD_NOT_REACHED: usize = 0;
 pub(crate) const IN_WORLD_REACHED_YES: usize = 1;
+/// The fresh_deser load epoch whose world is genuinely LIVE (play_time advanced past that epoch's
+/// baseline), published by the play-time-live oracle. The boot-view compositor uses this as a
+/// PER-EPOCH world-reached signal to stop its per-frame GPU readback promptly after an own-menu switch
+/// (load2+) becomes playable -- `IN_WORLD_REACHED` above is a stale latch that never re-arms during a
+/// switch, so it cannot stop the readback in-world (bd
+/// fps-killer-rootcaused-per-frame-gpu-readback-boot-view-not-stopping-inworld-load2). `usize::MAX` = none.
+pub(crate) static BOOT_VIEW_EPOCH_WORLD_LIVE: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// DIAGNOSTIC: identify the REAL connection-error dialog (the inferred MessageBoxDialog vtable
 /// 0x142b03550 did NOT match -- the auto-accept never fired). Hook the dialog builder
 /// 0x1409275b0 to log each created dialog's vtable/class + args (the FMG message id is in an

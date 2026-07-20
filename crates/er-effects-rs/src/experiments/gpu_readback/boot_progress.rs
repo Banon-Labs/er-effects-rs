@@ -1515,8 +1515,19 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
     } else {
         loadscreen_builds != 0 || PROFILE_HAVE_KEYED_FRAME.load(Ordering::SeqCst) != 0
     };
-    let world_handoff =
-        !own_menu_active && IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
+    // FPS FIX (bd fps-killer-rootcaused-per-frame-gpu-readback-boot-view-not-stopping-inworld-load2):
+    // for the FIRST/boot load, IN_WORLD_REACHED (a one-shot latch) is the world-reached signal. For an
+    // own-menu switch (load2+) that latch is STALE (already set from load1), so it can never stop the
+    // per-frame GPU readback in-world -- the compositor kept readback-stalling the pipeline (~20-40fps).
+    // Use the PER-EPOCH world-live signal instead: play_time advancing for the CURRENT fresh_deser epoch
+    // means THIS switch's world is genuinely playable, so stop compositing (the loading cover is done).
+    let epoch_world_handoff = own_menu_active && {
+        let cur = crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+        cur >= 1 && crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur
+    };
+    let world_handoff = (!own_menu_active
+        && IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES)
+        || epoch_world_handoff;
     if loading_handoff || world_handoff {
         // SEAMLESS CUT (user 2026-07-06): the handoff (loading table build) starts the game's
         // black gap + the loading screen's own fade-in-from-black, so stopping here would cut a

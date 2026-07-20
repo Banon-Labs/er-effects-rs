@@ -507,15 +507,22 @@ pub(crate) fn note_ls_portrait_capture(w: u32, h: u32, px: &[u8]) -> bool {
 // ENV-GATE RATIONALE: ER_EFFECTS_AUTOLOAD_DEBUG_PATH is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
     use std::io::Write;
-    static INIT: std::sync::Once = std::sync::Once::new();
+    // FPS FIX (bd fps-fix-not-confirmed-new-suspect-perframe-debug-logging): the old path did a full file
+    // OPEN + write + CLOSE on EVERY call (3 syscalls/line). The DLL logs heavily during loads/transitions
+    // (per-frame WORLDRES-GETTER phase changes, oracles, etc.), so that per-call open/close tanked the
+    // framerate exactly when the user sees it. Keep ONE persistent handle: open+truncate+header once, then
+    // only writeln thereafter -- no per-call open/close. Same output, a fraction of the syscalls.
+    static LOG: std::sync::Mutex<Option<std::fs::File>> = std::sync::Mutex::new(None);
     let prefix = log_line_prefix();
-    let path = std::env::var("ER_EFFECTS_AUTOLOAD_DEBUG_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("er-effects-autoload-debug.log"));
-    // TRUNCATE ONCE per process so each run starts a CLEAN log (no cross-run pollution -- the log had
-    // grown to hundreds of MB across many appended runs). Matches the trace DLL's reset-on-attach.
-    // First call recreates + headers the file; every later call appends.
-    INIT.call_once(|| {
+    let mut guard = match LOG.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    if guard.is_none() {
+        // TRUNCATE ONCE per process so each run starts a CLEAN log (matches the trace DLL's reset-on-attach).
+        let path = std::env::var("ER_EFFECTS_AUTOLOAD_DEBUG_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("er-effects-autoload-debug.log"));
         if let Ok(mut file) = fs::OpenOptions::new()
             .create(true)
             .write(true)
@@ -523,9 +530,10 @@ pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
             .open(&path)
         {
             write_log_header(&mut file);
+            *guard = Some(file);
         }
-    });
-    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(&path) {
+    }
+    if let Some(file) = guard.as_mut() {
         let _ = writeln!(file, "{prefix} {args}");
     }
 }

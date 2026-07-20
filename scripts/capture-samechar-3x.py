@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import statistics
 import subprocess
 import sys
 import threading
@@ -593,6 +594,14 @@ def main() -> int:
     loading_stall_seconds = 0.0
     last_bar_epoch: tuple[int, int] | None = None
     last_terminal_bar_fields: tuple | None = None
+    # FAST FPS-COMPARISON TEARDOWN (user 2026-07-20, bd fast-teardown-load2-fps-far-from-load1-3s): once
+    # load2 is in-world, sample its FPS for ~3s and compare to the load1 in-world baseline; tear down
+    # immediately with a regression/ok verdict instead of consuming the full cap.
+    load1_inworld_fps: list[float] = []
+    load2_inworld_fps: list[float] = []
+    load2_fps_window_start: float | None = None
+    fps_compared_done = False  # parity already observed -> stop re-checking (do NOT tear down on OK)
+    FPS_COMPARE_WINDOW_S = 3.0
 
     while True:
         now = time.monotonic()
@@ -617,6 +626,39 @@ def main() -> int:
             can_move = bool(s.get("oracle_can_move"))
             if present and first_present_at is None:
                 first_present_at = now
+
+            # FAST FPS-COMPARISON TEARDOWN (user 2026-07-20): once load2 is loaded into world two, sample
+            # its FPS for ~3s and compare to the load1 in-world baseline; tear down immediately.
+            try:
+                fps_now = float(s.get("oracle_fps"))
+            except (TypeError, ValueError):
+                fps_now = -1.0
+            _ep = int(deser)
+            if fps_now > 0 and present:
+                if _ep == 0:
+                    load1_inworld_fps.append(fps_now)
+                elif _ep >= 1:
+                    if load2_fps_window_start is None:
+                        load2_fps_window_start = now
+                    load2_inworld_fps.append(fps_now)
+                    if (
+                        not fps_compared_done
+                        and (now - load2_fps_window_start) >= FPS_COMPARE_WINDOW_S
+                        and len(load2_inworld_fps) >= 3
+                        and load1_inworld_fps
+                    ):
+                        l1 = statistics.mean(load1_inworld_fps)
+                        l2 = statistics.mean(load2_inworld_fps)
+                        # User 2026-07-20: tear down ONLY when load2 FPS is NOWHERE NEAR load1 (regression).
+                        # On parity, do NOT tear down -- let load2 settle, prove movement, and drive load3.
+                        if l1 > 0 and l2 < 0.70 * l1:
+                            result = f"FPS_REGRESSION_LOAD2 load2={l2:.0f} vs load1={l1:.0f}fps"
+                            break
+                        fps_compared_done = True
+                        print(
+                            f"[fps-compare] load2={l2:.0f} vs load1={l1:.0f}fps -- parity OK, continuing to load3",
+                            flush=True,
+                        )
 
             # User-directed teardown guard (2026-07-19): if the loading bar stops making observable
             # progress for >10s, preserve artifacts and fail immediately instead of consuming the full

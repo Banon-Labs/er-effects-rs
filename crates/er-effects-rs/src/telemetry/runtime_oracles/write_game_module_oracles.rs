@@ -151,6 +151,13 @@ fn write_game_module_oracles(body: &mut String) {
             PLAY_TIME_READ_FAIL
         };
         let play_time_live: bool = play_time_advanced_ms >= PLAY_TIME_LIVE_THRESHOLD_MS;
+        if play_time_live {
+            // Publish the PER-EPOCH world-live signal so the boot-view compositor stops its per-frame GPU
+            // readback once THIS switch's world is genuinely running (bd
+            // fps-killer-rootcaused-per-frame-gpu-readback-boot-view-not-stopping-inworld-load2).
+            crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE
+                .store(pt_epoch, std::sync::atomic::Ordering::Relaxed);
+        }
         const U8_MASK: usize = 0xff;
         let read_pgd_u32 = |offset: usize| -> u32 {
             if pgd == NULL_PTR {
