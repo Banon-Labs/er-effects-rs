@@ -38,8 +38,16 @@ run "marker-file-gates" python3 scripts/check-marker-file-gates.py
 run "env-gate-comments" python3 scripts/check-env-gate-comments.py
 [[ -f scripts/check-no-lossy-utf8.py ]] && run "no-lossy-utf8" python3 scripts/check-no-lossy-utf8.py
 [[ -f scripts/check-no-timeouts.py ]] && run "no-timeouts" python3 scripts/check-no-timeouts.py
-# Formatting drift (rustfmt is fast; check only, never rewrites during a commit).
-run "cargo fmt --check" cargo fmt --all -- --check
+# Formatting drift (rustfmt is fast; check only, never rewrites during a commit). Check ONLY the
+# staged .rs files in THIS repo -- never `cargo fmt --all`, which reaches the sibling
+# `../fromsoftware-rs` path dependency and fails on that repo's unrelated uncommitted drift
+# (bd precommit-fmt-scope-staged-files-not-sibling-repo-2026-07-19). All crates here are edition
+# 2024; rustfmt auto-discovers rustfmt.toml from each file's directory.
+staged_rs="$(grep -E '\.rs$' <<<"$staged" || true)"
+if [[ -n "$staged_rs" ]]; then
+	# shellcheck disable=SC2086
+	run "rustfmt --check (staged)" rustfmt --edition 2024 --check $staged_rs
+fi
 
 if [[ "$fail" -ne 0 ]]; then
 	echo "pre-commit: blocked. Fix the above (a product FIX must be default-on on a real runtime" >&2
