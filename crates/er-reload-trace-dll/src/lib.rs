@@ -46,6 +46,16 @@ const GAME_MAN_LOAD_PHASE_B80_OFFSET: usize = 0xb80;
 const GAME_MAN_SAVE_SLOT_AC0_OFFSET: usize = 0xac0;
 const GAME_MAN_CURRENT_MAP_C30_OFFSET: usize = 0xc30;
 const GAME_MAN_RESIDENT_DEVICE_DF0_OFFSET: usize = 0xdf0;
+// LOAD-SUBMIT gate fields (bd load-submit-67dc00-gate-offsets-to-instrument-pin-load2-divergence).
+// combined_load_67b940 -> submit 0x14067dc00 bails (0x14067e12f) unless these GameMan[0x143d69918]
+// flags are clear/set. Logging them at the finalize-advancer heartbeat (which fires for load2 in the
+// stuck window) pins WHICH gate is the sole load2 divergence vs load1, without Ghidra and without
+// forcing state. cb1/cb2/bca/b5e are byte flags; the global at rva 0x3d68078 must be non-null.
+const GAME_MAN_SUBMIT_GATE_CB1_OFFSET: usize = 0xcb1;
+const GAME_MAN_SUBMIT_GATE_CB2_OFFSET: usize = 0xcb2;
+const GAME_MAN_SUBMIT_GATE_BCA_OFFSET: usize = 0xbca;
+const GAME_MAN_SUBMIT_GATE_B5E_OFFSET: usize = 0xb5e;
+const SUBMIT_GLOBAL_PTR_3D68078_RVA: usize = 0x3d68078;
 const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize = 0x08;
 
 const HOOK_ORIGINAL_UNSET: usize = 0;
@@ -310,12 +320,24 @@ fn snapshot() -> String {
     let df0 = unsafe { read_usize(gm + GAME_MAN_RESIDENT_DEVICE_DF0_OFFSET) }.unwrap_or(0);
     let pgd = unsafe { read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }.unwrap_or(0);
 
+    // Load-submit gate fields (see the *_SUBMIT_GATE_* consts): diff load1 vs load2 to find the gate
+    // that keeps load2's combined_load submit bailing so the world load never completes.
+    let g_cb1 = unsafe { read_u8(gm + GAME_MAN_SUBMIT_GATE_CB1_OFFSET) };
+    let g_cb2 = unsafe { read_u8(gm + GAME_MAN_SUBMIT_GATE_CB2_OFFSET) };
+    let g_bca = unsafe { read_u8(gm + GAME_MAN_SUBMIT_GATE_BCA_OFFSET) };
+    let g_b5e = unsafe { read_u8(gm + GAME_MAN_SUBMIT_GATE_B5E_OFFSET) };
+    let g_glob = unsafe { read_usize(base + SUBMIT_GLOBAL_PTR_3D68078_RVA) }.unwrap_or(0);
+
     format!(
-        "base=0x{base:x} gm=0x{gm:x} b78={} b80={} ac0={} c30={} df0=0x{df0:x} gdm=0x{gdm:x} pgd=0x{pgd:x} mounted_registry=0x{mounted:x}",
+        "base=0x{base:x} gm=0x{gm:x} b78={} b80={} ac0={} c30={} df0=0x{df0:x} gdm=0x{gdm:x} pgd=0x{pgd:x} mounted_registry=0x{mounted:x} submit[cb1={} cb2={} bca={} b5e={} glob=0x{g_glob:x}]",
         fmt_i32(b78),
         fmt_i32(b80),
         fmt_i32(ac0),
         fmt_c30(c30),
+        fmt_u8(g_cb1),
+        fmt_u8(g_cb2),
+        fmt_u8(g_bca),
+        fmt_u8(g_b5e),
     )
 }
 
@@ -325,6 +347,10 @@ fn fmt_i32(value: Option<i32>) -> String {
 
 fn fmt_c30(value: Option<i32>) -> String {
     value.map_or_else(|| "<unreadable>".to_owned(), |value| format!("0x{value:x}"))
+}
+
+fn fmt_u8(value: Option<u8>) -> String {
+    value.map_or_else(|| "<unreadable>".to_owned(), |value| value.to_string())
 }
 
 unsafe fn call_original(
