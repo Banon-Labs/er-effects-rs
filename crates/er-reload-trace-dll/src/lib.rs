@@ -28,6 +28,14 @@ const MOUNTED_ARCHIVE_REGISTRY_RVA: usize = 0x448464a8;
 // sub-state (0..9). cVar10 (the ending request it computes) is written to menuData+0x5e; its rt5d input
 // is menuData+0x5d. Hooking this proves whether the advancer is even TICKED for load2 and what it reads.
 const MOVEMAPSTEP_FINALIZE_12A_OFFSET: usize = 0x12a;
+/// Child teardown FUN_140eb54e0 (dump) -> deobf 0x140eb54c0 / rva 0xeb54c0. STEP_MoveMap_Update calls
+/// it to tear down the MoveMapStep child (whose EzChildStepBase = MoveMapStep + 0x108). Hooking it +
+/// logging the child_base-0x108 MoveMapStep state(+0x48)/field25(+0x12a) shows whether load2's
+/// MoveMapStep child (state==18) is torn down at field25<9 (teardown mechanism) or never appears here
+/// (never re-scheduled). rva 0xafa6d0 = the advancer; the mms= pointer in each log distinguishes loads.
+const CHILD_TEARDOWN_RVA: usize = 0xeb54c0;
+const MOVEMAPSTEP_CHILD_EZSTEP_OFFSET: usize = 0x108;
+const MOVEMAPSTEP_STATE_48_OFFSET: usize = 0x48;
 const CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d6b7b0;
 const CS_MENU_MAN_MENU_DATA_OFFSET: usize = 0x8;
 const MENU_DATA_RT5D_OFFSET: usize = 0x5d;
@@ -81,6 +89,10 @@ static ORIG_FINALIZE_ADVANCER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSE
 static ORIG_CHILD_DONE_QUERY: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static LAST_CHILD_DONE: AtomicI32 = AtomicI32::new(-2);
 static CHILD_DONE_CALLS: AtomicU64 = AtomicU64::new(0);
+/// Child-teardown instrumentation (FUN_140eb54e0): every teardown logs the child + its MoveMapStep
+/// state/field25, so load2's MoveMapStep child teardown (if any) is visible.
+static ORIG_CHILD_TEARDOWN: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static CHILD_TEARDOWN_CALLS: AtomicU64 = AtomicU64::new(0);
 
 static ORIG_MENU_CONTINUE_WRAPPER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static ORIG_MENU_NEW_OR_LOAD_WRAPPER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
@@ -265,6 +277,22 @@ unsafe extern "system" fn hook_child_done_query(a: usize, b: usize, c: usize, d:
         ));
     }
     ret
+}
+
+/// Log-only detour for the child teardown FUN_140eb54e0 (rva 0xeb54c0). Logs every teardown with the
+/// child_base-0x108 MoveMapStep state/field25 so load2's MoveMapStep child teardown (state==18) is
+/// visible -- or its absence proves the child is never re-scheduled rather than torn down. mms= ptr
+/// distinguishes load1 vs load2.
+unsafe extern "system" fn hook_child_teardown(a: usize, b: usize, c: usize, d: usize) -> usize {
+    let n = CHILD_TEARDOWN_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
+    let mms = a.wrapping_sub(MOVEMAPSTEP_CHILD_EZSTEP_OFFSET);
+    let st = unsafe { read_i32(mms + MOVEMAPSTEP_STATE_48_OFFSET) }.unwrap_or(-999);
+    let fin = unsafe { read_u8(mms + MOVEMAPSTEP_FINALIZE_12A_OFFSET) }.map_or(-1, i32::from);
+    log_line(format_args!(
+        "child_teardown_eb54c0 call#{n} child_base=0x{a:x} mms=0x{mms:x} state={st} field25={fin} {}",
+        snapshot()
+    ));
+    unsafe { call_original(&ORIG_CHILD_TEARDOWN, a, b, c, d) }
 }
 
 fn snapshot() -> String {
@@ -720,6 +748,12 @@ static HOOKS: &[HookSpec] = &[
         rva: 0xafa6d0,
         detour: hook_finalize_advancer,
         original: &ORIG_FINALIZE_ADVANCER,
+    },
+    HookSpec {
+        name: "child_teardown_eb54c0",
+        rva: CHILD_TEARDOWN_RVA,
+        detour: hook_child_teardown,
+        original: &ORIG_CHILD_TEARDOWN,
     },
     // child_done_query_eb5530 removed: the PRODUCT DLL now owns 0xeb5530 with its override hook
     // (child_done_query_override_detour); a second trace hook here would chain and muddy the override.
