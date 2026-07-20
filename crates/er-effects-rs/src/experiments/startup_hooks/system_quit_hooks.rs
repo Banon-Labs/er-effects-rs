@@ -141,6 +141,90 @@ pub(crate) fn install_system_quit_child_finish_trace_hook() {
     }
 }
 
+/// Stuck-frame + one-shot state for the load2 testNetStep force-finish below.
+static TESTNET_FF_STUCK_FRAMES: AtomicUsize = AtomicUsize::new(0);
+static TESTNET_FF_LAST_MMS: AtomicUsize = AtomicUsize::new(usize::MAX);
+static TESTNET_FF_FIRED_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+/// LOAD2 WORLD-COMPLETION FIX (bd load2-fires-but-stalls-at-mms18-world-completion-2026-07-19). A
+/// DRIVEN reload (`fresh_deser>=1`) reaches MoveMapStep STEP_Finish but its testNetStep child never
+/// finishes -- observed LOAD2-ONLY: load1's testNetStep finishes so requestCode latches 1->2 and the
+/// world completes; load2's HANGS so requestCode stays 1, STEP_GameStepWait never gets a completed
+/// world, and there is no readiness (mms=18, warmup=0, testnet_stepper_present=True, csremo idle).
+/// Force the hung child via the RE'd SAVE-SAFE lever `EzChildStepBase::RequestFinish` (0xeb5570) on the
+/// testNetStep wrapper at `MoveMapStep+0x108`. TIGHTLY GATED so it can never touch a healthy load1 or a
+/// still-progressing load: only after a reload committed (epoch>=1), only while requestCode==1, only
+/// when the inner stepper (+0x110) is non-null (unfinished), only after STUCK frames of no mms_state
+/// progress, and ONCE per reload epoch. Called per-frame from `tick_before_player_lookup`.
+pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+    if epoch == 0 {
+        // No reload committed yet -> this is load1; never force its (healthy) testNetStep.
+        TESTNET_FF_STUCK_FRAMES.store(0, Ordering::Relaxed);
+        return;
+    }
+    let mut owner = TITLE_OWNER_PTR.load(Ordering::SeqCst);
+    if owner == null {
+        owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
+    }
+    if owner == null {
+        return;
+    }
+    let Some(ig) = (unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) })
+        .filter(|v| *v >= 0x10000)
+    else {
+        return;
+    };
+    // requestCode must be 1 (world loading, not latched to 2 = done). Any other value: reset + bail.
+    if unsafe { safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) }.unwrap_or(-1) != 1 {
+        TESTNET_FF_STUCK_FRAMES.store(0, Ordering::Relaxed);
+        return;
+    }
+    let Some(mms) = (unsafe { safe_read_usize(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) })
+        .filter(|v| *v >= 0x10000)
+    else {
+        return;
+    };
+    let stepper =
+        unsafe { safe_read_usize(mms + MOVEMAPSTEP_TESTNETSTEP_STEPPER_110_OFFSET) }.unwrap_or(0);
+    if stepper < 0x10000 {
+        // testNetStep already finished/skipped -> nothing to force.
+        TESTNET_FF_STUCK_FRAMES.store(0, Ordering::Relaxed);
+        return;
+    }
+    let mms_state =
+        unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET) }.unwrap_or(-1) as usize;
+    let last = TESTNET_FF_LAST_MMS.swap(mms_state, Ordering::Relaxed);
+    let stuck = if mms_state == last {
+        TESTNET_FF_STUCK_FRAMES.fetch_add(1, Ordering::Relaxed) + 1
+    } else {
+        TESTNET_FF_STUCK_FRAMES.store(0, Ordering::Relaxed);
+        0
+    };
+    const STUCK_THRESHOLD: usize = 240; // ~4s at 60fps of zero mms progress with testNetStep unfinished
+    if stuck < STUCK_THRESHOLD {
+        return;
+    }
+    if TESTNET_FF_FIRED_EPOCH.swap(epoch, Ordering::SeqCst) == epoch {
+        return; // already forced this reload epoch
+    }
+    let Ok(addr) = game_rva(EZ_CHILD_STEP_REQUEST_FINISH_RVA) else {
+        return;
+    };
+    let wrapper = mms + MOVEMAPSTEP_TESTNETSTEP_WRAPPER_108_OFFSET;
+    if unsafe { safe_read_usize(wrapper) }.is_none() {
+        return;
+    }
+    let request_finish: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(addr) };
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        request_finish(wrapper)
+    }));
+    append_autoload_debug(format_args!(
+        "testnet-force-finish: load2 epoch {epoch} STUCK {stuck}f at mms={mms_state} req=1 stepper=0x{stepper:x} -> RequestFinish(wrapper 0x{wrapper:x})"
+    ));
+}
+
 pub(crate) unsafe extern "system" fn system_quit_gaitem_deserialize_hook(
     gaitem: usize,
     input_stream: usize,

@@ -100,6 +100,11 @@ pub(crate) unsafe fn switch_harness_discovery_tick() {
 
 pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     unsafe { switch_harness_discovery_tick() };
+    // LOAD2 WORLD-COMPLETION: if a DRIVEN reload (fresh_deser>=1) stalls at MoveMapStep STEP_Finish
+    // because its testNetStep child hangs (load2-only; load1's finishes), force the child to finish so
+    // requestCode latches 2 and the world reaches readiness. Tightly gated + one-shot per reload epoch;
+    // no-op on load1 and on a still-progressing load (bd load2-fires-but-stalls-at-mms18-world-completion).
+    unsafe { maybe_force_finish_stuck_testnet_step() };
     // PASSIVE CONTROLLER-INPUT TRACE (er-effects-input-trace.txt): record real pad edges +
     // semaphore snapshots to er-effects-input-trace.jsonl for USER-DRIVEN runs. Recording only --
     // never blocks, never fabricates; a marker/env-gated no-op by default.
