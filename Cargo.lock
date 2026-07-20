@@ -2768,6 +2768,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-input-harness-dll"
+version = "0.1.0"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "er-objectkit"
 version = "0.1.0"
 dependencies = [

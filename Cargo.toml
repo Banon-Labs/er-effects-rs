@@ -2,6 +2,7 @@
 members = [
   "crates/er-effects-rs",
   "crates/er-reload-trace-dll",
+  "crates/er-input-harness-dll",
   "crates/effects-data",
   "crates/er-gfx",
   "crates/er-safe-input",
