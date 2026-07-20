@@ -20,18 +20,11 @@ static HARNESS_DISC_PHASE: AtomicUsize = AtomicUsize::new(0); // 0 wait,1 press,
 static HARNESS_DISC_PHASE_FRAME: AtomicUsize = AtomicUsize::new(0);
 static HARNESS_DISC_SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
-// ENV-GATE RATIONALE: ER_EFFECTS_SWITCH_HARNESS_DISCOVERY=1 arms the agent-owned switch-harness
-// feasibility probe (once in-world+stable it blocks the keyboard, pulses DIK_ESCAPE once to try to open
-// the in-game menu, logs every MenuWindowJob::Run filename, then unblocks). OFF for product; no save
-// write, no mount change on the default path.
+/// DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): the agent-owned switch-harness
+/// feasibility probe (blocks keyboard, pulses DIK_ESCAPE, logs MenuWindowJob::Run filenames) was an
+/// env/marker-gated diagnostic autopilot. Env/marker feature gates are forbidden; retired (off).
 pub(crate) fn switch_harness_discovery_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_SWITCH_HARNESS_DISCOVERY").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("er-effects-switch-harness-discovery.txt")
-        .exists()
+    false
 }
 
 /// Called from run_post for every MenuWindowJob::Run filename during discovery: log each distinct

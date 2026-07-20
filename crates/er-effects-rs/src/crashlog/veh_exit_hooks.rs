@@ -58,11 +58,11 @@ pub(crate) fn crash_logger_enabled() -> bool {
 /// it must not turn semantic semaphore mismatches into crashes unless a run explicitly asks for
 /// release/fail-fast behavior.
 pub(crate) fn deliberate_fail_fast_enabled() -> bool {
-    matches!(std::env::var("ER_EFFECTS_FAIL_FAST").as_deref(), Ok("1"))
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-fail-fast.txt")
-            .exists()
+    // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): fail-fast changed control flow
+    // (turned semaphore mismatches into deliberate crashes) -- a behavioral proof-gate, not passive
+    // diagnostics. Env/marker feature gates are forbidden; retired (never fail-fast). A release/proof
+    // build wanting fail-fast should express it via a compile-time cfg, not an env/marker toggle.
+    false
 }
 
 pub(crate) fn log_process_exit(api: &str, code: u32, handle: usize) {
@@ -123,13 +123,10 @@ pub(crate) unsafe extern "system" fn nt_terminate_process_hook(
 /// failed FromSoft assertion does not crash -- the game continues past the check.
 /// Diagnostic only (may continue in a degraded state); off by default.
 pub(crate) fn assert_nonfatal() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_ASSERT_NONFATAL").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-assert-nonfatal.txt")
-        .exists()
+    // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): making a failed FromSoft assertion
+    // non-fatal (skip chaining the original -> game continues in a degraded state) is a control-flow
+    // BEHAVIORAL change, not passive diagnostics. Env/marker feature gates are forbidden; retired.
+    false
 }
 
 /// Hook on the FromSoft assert wrapper: log the failing assertion's args as RVAs

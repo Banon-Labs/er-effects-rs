@@ -1351,18 +1351,14 @@ pub(crate) fn map_mount_guard_flip_tick(in_world: bool, mms_step: i32, sf: i64) 
 
 
 
-// ENV-GATE RATIONALE: ER_EFFECTS_STEP3_INIT_FIX is an explicit diagnostic gate for the init-point
-// world-res rebuild while it is being runtime-validated; the INSTRUMENTATION logs unconditionally on a
-// reload, only the corrective native call is gated. Default off until proven, then it becomes the
-// ungated product fix.
+/// DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): this gated a corrective native
+/// world-res rebuild CALL that was never runtime-validated ("default off until proven"). Env/marker
+/// feature gates are forbidden, and force-enabling an unproven corrective native call on the reload
+/// path is behaviorally risky, so it is retired (off) rather than defaulted-on. The unconditional
+/// INSTRUMENTATION/logging is unaffected. NEEDS RUNTIME VALIDATION before being made the ungated
+/// product fix -- see the deprecate-env-marker report handoff.
 fn step3_init_rebuild_call_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_STEP3_INIT_FIX").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-step3-init-fix.txt")
-        .exists()
+    false
 }
 
 /// FD4FileCap resource-name (`std::wstring`, MSVC SSO) offsets. RE (deobf `eldenring-deobf.bin`):
