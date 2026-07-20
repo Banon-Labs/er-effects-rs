@@ -2,56 +2,42 @@ package auto.marker_file_gate
 
 import rego.v1
 
-# A product BEHAVIORAL fix must not be gated behind a marker text file. A "marker-file
-# gate" is any `.join("er-effects-<name>.txt")` in crates/er-effects-rs/src/**/*.rs whose
-# result is consumed by `.exists()` -- the boolean on/off toggle shape from the
-# recurring incident (user feedback 2026-07-19; bd memory
-# no-marker-file-gating-for-product-fixes-2026-07-19):
+# Marker-text-file FEATURE GATES are forbidden
+# (deprecate-env-marker-gate-allowlists-no-gated-features-2026-07-19). A "marker-file gate" is any
+# .join("er-effects-<name>.txt") in crates/er-effects-rs/src/**/*.rs consumed by .exists() -- the
+# boolean on/off toggle shape, SEMANTICALLY IDENTICAL to an env-var gate. User directive: "we don't
+# want any env/marker gated features."
 #
-#     fn reload_b73_hold_enabled() -> bool {
-#         game_directory_path().unwrap_or_else(|| PathBuf::from("."))
-#             .join("er-effects-reload-b73hold.txt").exists()
-#     }
-#     ... if reload_b73_hold_enabled() && <real condition> { <apply the fix> }
+# The former grandfathering allowlist sanctioned_marker_gate_names and the migrate_to_default
+# ratchet in .auto/marker_file_gate_baseline.json are DEPRECATED and must stay EMPTY; the enforcing
+# checker fails if either is re-populated. With the behavioral allowlist empty, every marker gate is
+# denied UNLESS it is a sanctioned DIAGNOSTIC toggle: its NAME appears in `diagnostic_gates` with a
+# non-empty rationale AND the enclosing fn does not classify as behavioral. diagnostic_gates is the
+# ONLY exception and is reserved for toggles that change NO game behavior (passive
+# log/telemetry/trace, read-only sampling). A behavioral fix must be DEFAULT behavior (gated only on
+# the genuine runtime condition) or removed.
 #
-# A marker file consumed by `.exists()` is SEMANTICALLY IDENTICAL to an env-var gate,
-# which AGENTS.md already forbids for product features ("Release/default behavior must
-# not depend on agent-only environment variables"). A RE-backed behavioral fix must be
-# DEFAULT, gated ONLY on the genuine runtime condition, and validated by booting (keep
-# if it works, git revert if not). Diagnostic-only logging/telemetry MAY still be
-# marker-gated; only behavioral FIXES must not be.
-#
-# The env half of this hole is frozen by scripts/check-env-gate-comments.py; this policy
-# freezes the marker-file half. The enforcing checker is
-# scripts/check-marker-file-gates.py (rego cannot read the source tree at eval time);
-# this policy is the declarative statement of intent that the checker asserts-as-text so
-# it cannot silently drift or disappear.
+# The enforcing checker is scripts/check-marker-file-gates.py (rego cannot read the source tree at
+# eval time); this policy is the declarative statement of intent the checker asserts-as-text so it
+# cannot silently drift or disappear.
 
 default allow := false
 
-# FROZEN NAME ALLOWLIST (the hard gate). The exact set of sanctioned marker-file NAMES
-# lives under `sanctioned_marker_gate_names` in .auto/marker_file_gate_baseline.json.
-# The checker sets input.marker_name_sanctioned = (this gate's marker file name is in
-# that list). A NEW marker gate is denied UNCONDITIONALLY -- reusing the ".exists()"
-# toggle shape for another behavioral fix under a NEW name fails closed. Make the
-# behavior default/product-state driven instead of adding another hidden toggle.
+# A marker gate is allowed ONLY when it is a sanctioned diagnostic toggle carrying a rationale. The
+# checker sets input.marker_diagnostic_sanctioned = (this gate's NAME is in diagnostic_gates and its
+# fn is not behavioral) and input.marker_rationale_present = (that entry's rationale is non-empty).
 allow if {
-	input.marker_name_sanctioned
+	input.marker_diagnostic_sanctioned
+	input.marker_rationale_present
 }
 
 deny contains message if {
-	not input.marker_name_sanctioned
-	message := "this marker file name is NOT in the frozen sanctioned allowlist (`sanctioned_marker_gate_names` in .auto/marker_file_gate_baseline.json). No new marker gates: a product behavioral fix consumed by `.exists()` must be DEFAULT behavior gated only on the genuine runtime condition, not hidden behind a `<game_dir>/er-effects-*.txt` toggle. Diagnostic-only logging may be marker-gated, in which case add the name as a reviewed exception."
+	not input.marker_diagnostic_sanctioned
+	message := "marker feature gates (`<game_dir>/er-effects-*.txt` consumed by `.exists()`) are forbidden. Make the behavior DEFAULT (gated only on the genuine runtime condition) or remove it. Only a genuinely-diagnostic toggle that changes NO game behavior may be added to `diagnostic_gates` in .auto/marker_file_gate_baseline.json as a reviewed exception; a behavioral fn is rejected even if listed."
 }
 
-# BEHAVIORAL classification is advisory (the checker attaches it to a finding and to the
-# migrate_to_default TODO). A sanctioned marker that gates a BEHAVIORAL fix is
-# allowlisted only transitionally and must be migrated to default-on behavior, then
-# removed from both lists. That soft ratchet is a note, not a denial, so this policy does
-# not fight the concurrent de-marker-gating work.
 deny contains message if {
-	input.marker_name_sanctioned
-	input.classification == "behavioral"
-	not input.migration_acknowledged
-	message := "sanctioned marker gates a BEHAVIORAL fix -- migrate it to default-on (real runtime condition) and remove from the allowlist. Soft TODO, enforced as a note by the checker, not a hard failure."
+	input.marker_diagnostic_sanctioned
+	not input.marker_rationale_present
+	message := "a diagnostic_gates entry must carry a non-empty rationale justifying why this marker toggle changes no game behavior."
 }

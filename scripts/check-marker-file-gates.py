@@ -1,88 +1,39 @@
 #!/usr/bin/env python3
-"""Reject NEW marker-text-file gates on product BEHAVIORAL fixes in the DLL source.
+"""Forbid marker-text-file feature gates in the DLL source; permit only justified diagnostics.
 
-THE ANTI-PATTERN (user feedback 2026-07-19, repeated; bd memory
-`no-marker-file-gating-for-product-fixes-2026-07-19`)
-==========================================================================
-An agent kept hiding a reverse-engineered BEHAVIORAL fix behind a marker text
-file, e.g.:
+POLICY (deprecate-env-marker-gate-allowlists-no-gated-features-2026-07-19)
+=========================================================================
+User directive: "we don't want any env/marker gated features." A "marker-file gate" is
+any `.join("er-effects-<name>.txt")` in `crates/er-effects-rs/src/**/*.rs` whose result
+is consumed by `.exists()` -- the boolean on/off toggle shape, SEMANTICALLY IDENTICAL to
+an env-var gate. (Data control files read with `read_to_string`, e.g. a slot number, are
+NOT toggles and are out of scope.)
 
-    fn reload_b73_hold_enabled() -> bool {
-        game_directory_path().unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-reload-b73hold.txt").exists()
-    }
-    ... if reload_b73_hold_enabled() && <real runtime condition> { <apply the fix> }
+The former grandfathering allowlist `sanctioned_marker_gate_names` and the
+`migrate_to_default` ratchet are DEPRECATED: they are kept in the baseline JSON only so
+their emptiness is explicit, and this checker FAILS if either is non-empty. With the
+behavioral allowlist empty, EVERY marker gate hard-fails UNLESS its marker NAME appears
+in `diagnostic_gates` (in `.auto/marker_file_gate_baseline.json`) with a non-empty
+rationale AND the enclosing fn does NOT classify as behavioral.
 
-A marker file `<game_dir>/er-effects-*.txt` consumed by `.exists()` as a boolean
-toggle is SEMANTICALLY IDENTICAL to an env-var gate, which AGENTS.md already
-forbids for product features ("Release/default behavior must not depend on
-agent-only environment variables"). The env half is frozen by
-`scripts/check-env-gate-comments.py`; THIS checker freezes the marker-file half so
-the two together close the whole "marker file OR env var" hole.
+`diagnostic_gates` is the ONLY permitted exception and is reserved for genuinely
+diagnostic toggles that change NO game behavior (passive logging/telemetry/trace,
+read-only sampling). A behavioral fix must be DEFAULT behavior (gated only on a real
+runtime condition) or removed; it may never be re-added as a marker gate. Adding a
+`diagnostic_gates` entry is a deliberate reviewed act that shows in the diff and must
+carry a justification.
 
-THE RULE
-========
-A RE-backed behavioral fix must be DEFAULT behavior, gated ONLY on the genuine
-runtime condition (e.g. `FRESH_DESER_DONE==1`, mms18 finalize, the real
-switch-reload signature), then validated by booting/running: KEEP if it works,
-`git revert` if not. The runtime run itself is the A/B -- do NOT add a hidden
-toggle. Diagnostic-only telemetry/logging MAY still be marker/env gated; only
-behavioral FIXES must not be.
-
-WHAT IS DETECTED
-================
-A "marker-file gate" is any `.join("er-effects-<name>.txt")` in
-`crates/er-effects-rs/src/**/*.rs` whose result is consumed by `.exists()` within
-the same statement -- the boolean on/off toggle shape from the incident. (Data
-control files read with `read_to_string`, e.g. a slot number, are NOT toggles and
-are out of scope; env-var gates are covered by check-env-gate-comments.py.)
-
-FROZEN NAME ALLOWLIST (the hard gate)
-=====================================
-The exact set of sanctioned marker-file NAMES lives under
-`sanctioned_marker_gate_names` in `.auto/marker_file_gate_baseline.json`. Any
-`.exists()` marker gate whose file name is NOT in that list HARD-FAILS
-(rule `marker-gate-new-name`) -- this is the no-new-marker-gates guard. The
-allowlist is keyed by NAME (not file+line, which churn as the DLL is refactored)
-because the anti-pattern's identity is the hidden toggle NAME: a NEW behavioral
-fix needs a NEW distinct marker name, which will not be in the list and so fails
-closed. Re-homing an already-sanctioned marker to a different file still passes.
-
-Adding a NAME to the allowlist is a DELIBERATE, REVIEWED act: it shows in the diff
-and must be justified. Prefer NOT adding one -- make the fix default/product-state
-driven instead. A new legitimately-diagnostic marker (logging only) is the only
-routine reason to add a name, and it should be classified `diagnostic` below.
-
-BEHAVIORAL vs DIAGNOSTIC (advisory classification)
-==================================================
-For every detected gate the checker mechanically classifies the enclosing `fn`
-body (brace-matched) as `behavioral`, `diagnostic`, or `unknown` by scanning for
-tokens:
-  * behavioral (forbidden to gate): raw-pointer writes (`as *mut`, `write_volatile`,
-    `ptr::write`, `.write(`), memory patchers (`VirtualProtect`, `WriteProcessMemory`,
-    `patch`), detour/hook installs, native side-effect calls (`apply_speffect`,
-    `continue_confirm`, `SetState`/`set_state`, `enqueue`/`submit`), `transmute`,
-    atomic `.store(`.
-  * diagnostic (allowed to gate): logging/telemetry only (`append_autoload_debug`,
-    `append_line`, `debug_log`, `log_line`, `eprintln`, `println`, `trace`).
-This is ADVISORY guidance attached to a finding (and printed for the migration
-list), NOT the hard gate: because the incident's gate is a trivial `-> bool`
-`_enabled()` fn whose body has no behavioral tokens, per-fn classification alone
-cannot reliably catch it -- so the ENFORCED rule is simply "no new marker names",
-and the classification tells the reviewer whether a flagged/allowlisted gate must
-be deleted-and-made-default (behavioral) or may remain (diagnostic).
-
-MIGRATION RATCHET
-=================
-`migrate_to_default` in the baseline lists sanctioned marker NAMES that gate a
-BEHAVIORAL fix and are only allowlisted transitionally: they MUST be migrated to
-default-on behavior (gated on the real runtime condition) and then removed from
-BOTH lists. Their continued presence is a soft note (a TODO), not a failure, so
-this checker does not fight the concurrent de-marker-gating work.
+BEHAVIORAL vs DIAGNOSTIC classification
+=======================================
+For every detected gate the checker mechanically classifies the enclosing `fn` body
+(brace-matched) as `behavioral`, `diagnostic`, or `unknown` by scanning for tokens
+(raw-pointer writes, memory patchers, detour installs, native side-effect calls =
+behavioral; logging/telemetry = diagnostic). A `diagnostic_gates` exception is REJECTED
+if its fn classifies as behavioral, so a behavioral fix can never sneak in as a
+"diagnostic" gate.
 
 The declarative policy lives at `.auto/marker_file_gate_policy.rego`; this checker
-asserts that file exists and contains its required snippets so it cannot silently
-drift or disappear.
+asserts that file exists and contains its required snippets so it cannot silently drift.
 """
 
 from __future__ import annotations
@@ -100,15 +51,17 @@ AUTO_DIR = REPO_ROOT / ".auto"
 BASELINE_PATH = AUTO_DIR / "marker_file_gate_baseline.json"
 POLICY_PATH = AUTO_DIR / "marker_file_gate_policy.rego"
 
-# `.join("er-effects-<name>.txt")` -- the marker path construction.
+# Deprecated behavioral-allowlist keys that MUST stay empty.
+DEPRECATED_ALLOWLIST_KEYS = (
+    "sanctioned_marker_gate_names",
+    "migrate_to_default",
+)
+
 MARKER_JOIN_RE = re.compile(r'\.join\(\s*"(er-effects-[a-z0-9._-]+\.txt)"\s*\)')
-# A Rust free function definition (mirrors check-env-gate-comments.py).
 FN_DEF_RE = re.compile(
     r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+|unsafe\s+|const\s+|extern\s+(?:\"[^\"]*\"\s+)?)*fn\s+([A-Za-z0-9_]+)"
 )
 
-# Tokens that mark a fn body as applying a BEHAVIORAL change (writes game memory /
-# native side effects). Gating any of these behind a marker file is forbidden.
 BEHAVIORAL_TOKENS = (
     "as *mut",
     "write_volatile",
@@ -129,8 +82,6 @@ BEHAVIORAL_TOKENS = (
     "install_detour",
     "detour",
 )
-# Tokens that mark a fn body as DIAGNOSTIC only (logging/telemetry). Gating these is
-# allowed.
 DIAGNOSTIC_TOKENS = (
     "append_autoload_debug",
     "append_line",
@@ -147,18 +98,20 @@ DIAGNOSTIC_TOKENS = (
 POLICY_REQUIRED_SNIPPETS = (
     "package auto.marker_file_gate",
     "default allow := false",
-    "input.marker_name_sanctioned",
+    "input.marker_diagnostic_sanctioned",
+    "input.marker_rationale_present",
     "allow if",
     "deny contains message if",
+    "diagnostic_gates",
     ".exists()",
 )
 
 
 @dataclass(frozen=True)
 class MarkerGate:
-    name: str  # e.g. er-effects-reload-b73hold.txt
-    path: Path  # repo-relative
-    line: int  # line of the .join(...) read
+    name: str
+    path: Path
+    line: int
     fn_name: str
     classification: str  # behavioral | diagnostic | unknown
 
@@ -189,14 +142,7 @@ def relative(path: Path) -> Path:
 
 
 def statement_is_exists_gate(text: str, join_end: int) -> bool:
-    """True when the marker `.join(...)` ending at `join_end` is consumed by `.exists()`.
-
-    The consumer may be on the same line or a following line in the same method
-    chain, so scan the flattened source forward to the end of the statement (the
-    next `;`, or a block boundary `{`/`}` if there is no semicolon).
-    """
     tail = text[join_end : join_end + 400]
-    # Bound the scan to this statement / expression.
     stop = len(tail)
     for terminator in (";", "{", "}"):
         idx = tail.find(terminator)
@@ -214,7 +160,6 @@ def enclosing_fn(lines: list[str], read_index: int) -> tuple[str, int]:
 
 
 def fn_body_text(lines: list[str], fn_index: int) -> str:
-    """Return the fn body from its opening `{` to the brace-matched close."""
     depth = 0
     started = False
     collected: list[str] = []
@@ -247,7 +192,6 @@ def scan_marker_gates() -> list[MarkerGate]:
     for path in sorted(SRC_DIR.rglob("*.rs")):
         text = path.read_text(encoding="utf-8", errors="replace")
         lines = text.splitlines()
-        # Map byte offset -> line number for the join matches.
         for match in MARKER_JOIN_RE.finditer(text):
             if not statement_is_exists_gate(text, match.end()):
                 continue
@@ -266,23 +210,18 @@ def scan_marker_gates() -> list[MarkerGate]:
     return gates
 
 
-def load_sanctioned_names() -> set[str]:
-    """FROZEN allowlist of sanctioned marker-file NAMES.
-
-    A missing file / missing key yields an EMPTY set, which fails ALL gates closed --
-    intentional: the allowlist must be present and explicit.
-    """
+def load_baseline_data() -> dict:
     if not BASELINE_PATH.exists():
-        return set()
-    data = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
-    return set(data.get("sanctioned_marker_gate_names", []))
+        return {}
+    return json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
 
 
-def load_migrate_to_default() -> set[str]:
-    if not BASELINE_PATH.exists():
-        return set()
-    data = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
-    return set(data.get("migrate_to_default", []))
+def load_diagnostic_gates(data: dict) -> dict[str, str]:
+    """Map of marker NAME -> rationale for sanctioned diagnostic-only toggles."""
+    raw = data.get("diagnostic_gates", {})
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): str(v) for k, v in raw.items()}
 
 
 def policy_findings() -> list[Finding]:
@@ -294,8 +233,8 @@ def policy_findings() -> list[Finding]:
                 0,
                 "missing-marker-gate-policy",
                 "<missing>",
-                "Keep .auto/marker_file_gate_policy.rego: it declares that a product behavioral "
-                "fix must not be gated behind a marker text file (default allow := false). Restore it.",
+                "Keep .auto/marker_file_gate_policy.rego: it declares that marker feature gates are "
+                "forbidden (default allow := false) except justified diagnostic_gates. Restore it.",
             )
         )
         return findings
@@ -309,51 +248,71 @@ def policy_findings() -> list[Finding]:
                 "marker-gate-policy-drift",
                 ", ".join(missing),
                 "The marker-file-gate policy must declare package auto.marker_file_gate, "
-                "default allow := false, an allow rule keyed on input.marker_name_sanctioned, a "
-                "deny message, and mention the .exists() toggle shape. Restore the missing snippet(s).",
+                "default allow := false, an allow rule keyed on input.marker_diagnostic_sanctioned + "
+                "input.marker_rationale_present, a deny message, reference diagnostic_gates, and "
+                "mention the .exists() toggle shape. Restore the missing snippet(s).",
             )
         )
     return findings
 
 
-def scan_findings(gates: list[MarkerGate], sanctioned: set[str]) -> list[Finding]:
-    findings: list[Finding] = policy_findings()
+def deprecation_findings(data: dict) -> list[Finding]:
+    findings: list[Finding] = []
+    for key in DEPRECATED_ALLOWLIST_KEYS:
+        value = data.get(key)
+        if value:
+            findings.append(
+                Finding(
+                    relative(BASELINE_PATH),
+                    0,
+                    "marker-gate-allowlist-not-deprecated",
+                    f'"{key}" has {len(value)} entr{"y" if len(value) == 1 else "ies"}',
+                    f"The behavioral allowlist `{key}` is DEPRECATED and must stay EMPTY "
+                    "(no marker feature gates allowed). Do not re-populate it to grandfather a gate; "
+                    "remove the gate or move a genuinely-diagnostic toggle into `diagnostic_gates`.",
+                )
+            )
+    return findings
+
+
+def scan_findings(gates: list[MarkerGate], diagnostic_gates: dict[str, str]) -> list[Finding]:
+    findings: list[Finding] = []
     for gate in gates:
-        if gate.name in sanctioned:
+        rationale = diagnostic_gates.get(gate.name)
+        sanctioned = bool(rationale and rationale.strip())
+        if sanctioned and gate.classification != "behavioral":
             continue
-        looks = gate.classification
-        if looks == "diagnostic":
-            behavior_note = (
-                "This gate's fn looks DIAGNOSTIC (logging/telemetry only), which MAY be "
-                "marker-gated -- if so, add its name to `sanctioned_marker_gate_names` as a "
-                "reviewed exception."
+        if sanctioned and gate.classification == "behavioral":
+            findings.append(
+                Finding(
+                    gate.path,
+                    gate.line,
+                    "marker-gate-diagnostic-is-behavioral",
+                    f'.join("{gate.name}").exists() in fn {gate.fn_name}()',
+                    f"{gate.name} is listed in `diagnostic_gates` but its fn classifies as BEHAVIORAL "
+                    "(writes game memory / installs a detour / native side effect). A behavioral fix "
+                    "must NOT be gated -- make it DEFAULT on the real runtime condition, or remove it, "
+                    f"and drop {gate.name} from `diagnostic_gates` in {relative(BASELINE_PATH)}.",
+                )
             )
-        else:
-            behavior_note = (
-                f"This gate's fn classifies as {looks.upper()}: a product BEHAVIORAL fix must NOT "
-                "hide behind a marker file. Delete the marker gate and make the fix DEFAULT, gated "
-                "ONLY on the genuine runtime condition; validate by booting (keep if it works, "
-                "git revert if not)."
-            )
+            continue
         findings.append(
             Finding(
                 gate.path,
                 gate.line,
-                "marker-gate-new-name",
+                "marker-gate-forbidden",
                 f'.join("{gate.name}").exists() in fn {gate.fn_name}()',
-                f"{gate.name} is NOT in the frozen sanctioned marker-gate allowlist "
-                f"(`sanctioned_marker_gate_names` in {relative(BASELINE_PATH)}). No new marker gates. "
-                f"{behavior_note} (See .auto/marker_file_gate_policy.rego and bd memory "
+                f"Marker feature gates are forbidden (deprecate-env-marker-gate-allowlists-2026-07-19). "
+                f"{gate.name} (classified {gate.classification.upper()}) is not a sanctioned diagnostic "
+                "toggle. Make the behavior DEFAULT (gated only on the genuine runtime condition) or "
+                "remove it. If -- and ONLY if -- this toggle changes NO game behavior (passive "
+                "log/telemetry/trace, read-only sampling), add its NAME to `diagnostic_gates` in "
+                f"{relative(BASELINE_PATH)} with a justification (a deliberate reviewed exception). "
+                "(See .auto/marker_file_gate_policy.rego and bd memory "
                 "no-marker-file-gating-for-product-fixes-2026-07-19.)",
             )
         )
     return findings
-
-
-def migration_notes(gates: list[MarkerGate], migrate: set[str]) -> list[str]:
-    """Sanctioned-but-behavioral markers still present: soft TODO to make them default."""
-    present = {gate.name for gate in gates}
-    return sorted(migrate & present)
 
 
 def main() -> int:
@@ -366,21 +325,22 @@ def main() -> int:
     parser.add_argument(
         "--snapshot",
         action="store_true",
-        help="Print the current set of detected marker-gate names (one per line) with "
-        "their classification -- used to (re)seed the allowlist. Never a failure.",
+        help="Print detected marker-gate names with classification (never a failure).",
     )
     args = parser.parse_args()
 
     gates = scan_marker_gates()
-    sanctioned = load_sanctioned_names()
-    migrate = load_migrate_to_default()
-    findings = scan_findings(gates, sanctioned)
-    todo = migration_notes(gates, migrate)
+    data = load_baseline_data()
+    diagnostic_gates = load_diagnostic_gates(data)
+    findings = (
+        policy_findings()
+        + deprecation_findings(data)
+        + scan_findings(gates, diagnostic_gates)
+    )
 
     if args.snapshot:
         seen: dict[str, str] = {}
         for gate in gates:
-            # Prefer a behavioral classification if any occurrence is behavioral.
             prior = seen.get(gate.name)
             if prior is None or (prior != "behavioral" and gate.classification == "behavioral"):
                 seen[gate.name] = gate.classification
@@ -392,9 +352,8 @@ def main() -> int:
         json.dump(
             {
                 "findings": [finding.to_json() for finding in findings],
-                "migrate_to_default_present": todo,
                 "total_gates": len(gates),
-                "sanctioned_names": len(sanctioned),
+                "diagnostic_gates": len(diagnostic_gates),
             },
             sys.stdout,
             indent=2,
@@ -406,9 +365,8 @@ def main() -> int:
     if findings:
         print("Marker-file gate policy violations found.", file=sys.stderr)
         print(
-            "A product BEHAVIORAL fix must not be gated behind a marker text file "
-            '(`<game_dir>/er-effects-*.txt` consumed by `.exists()`) -- that is identical to a '
-            "forbidden env-var gate. Make the fix DEFAULT on the real runtime condition. "
+            "Marker feature gates (`<game_dir>/er-effects-*.txt` consumed by `.exists()`) are "
+            "forbidden; only justified diagnostic toggles listed in `diagnostic_gates` are allowed. "
             "See .auto/marker_file_gate_policy.rego.\n",
             file=sys.stderr,
         )
@@ -418,15 +376,6 @@ def main() -> int:
                 file=sys.stderr,
             )
             print(f"  fix: {finding.guidance}", file=sys.stderr)
-
-    if todo:
-        print(
-            f"\nnote: {len(todo)} sanctioned marker gate(s) still gate a BEHAVIORAL fix and are "
-            "allowlisted only transitionally (migrate_to_default). Make them default-on (gated on "
-            "the real runtime condition) and remove them from both lists. This is a soft TODO, not "
-            f"a failure: {', '.join(todo)}",
-            file=sys.stderr,
-        )
 
     return 1 if findings else 0
 
