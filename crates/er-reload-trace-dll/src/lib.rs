@@ -91,6 +91,15 @@ static EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
 /// sub-state change + a periodic heartbeat, instead of per-frame spam).
 static FIN_ADVANCER_CALLS: AtomicU64 = AtomicU64::new(0);
 static LAST_FIN12A: AtomicI32 = AtomicI32::new(-2);
+/// rt5d DIAGNOSTIC DRIVE (bd DECISIVE-load2-divergence-is-rt5d-menudata5d): load1's finalize naturally
+/// gets menuData+0x5d(rt5d)=1 and walks field25 0..9; load2's stays 0 and parks at field25=0 forever.
+/// Once a SINGLE MoveMapStep has been stuck at field25=0 for RT5D_DRIVE_THRESHOLD consecutive advancer
+/// calls (load1 flips at ~call#133, so this only ever fires for a genuinely-stuck load2), supply rt5d=1
+/// once so the game's OWN finalize completes -- then observe complete(field25->9, movable) vs teardown.
+const RT5D_DRIVE_THRESHOLD: u64 = 250;
+static RT5D_DRIVE_MMS: AtomicUsize = AtomicUsize::new(0);
+static RT5D_DRIVE_ZERO_STREAK: AtomicU64 = AtomicU64::new(0);
+static RT5D_DRIVE_DONE_MMS: AtomicUsize = AtomicUsize::new(0);
 static ORIG_FINALIZE_ADVANCER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 /// Child-done query FUN_140eb5550 (deobf 0x140eb5530 / rva 0xeb5530): STEP_MoveMap_Update calls it and,
 /// if it returns nonzero (done), tears the MoveMapStep child down. HYPOTHESIS: it returns done
@@ -245,6 +254,12 @@ unsafe fn read_u8(addr: usize) -> Option<u8> {
     (ok != 0 && read == 1).then_some(value)
 }
 
+/// Write one byte into the (own) process. Used ONLY by the rt5d diagnostic drive below; the address is
+/// a validated menuData field (read successfully just before), so a guarded volatile write is safe.
+unsafe fn write_u8(addr: usize, val: u8) {
+    unsafe { core::ptr::write_volatile(addr as *mut u8, val) };
+}
+
 /// Custom detour for the MoveMapStep finalize advancer (0xafa6d0). Logs field25_0x12a before/after the
 /// native call plus menuData 0x5d(rt5d)/0x5e(cVar10 out) -- ONLY on a sub-state change or every 600th
 /// call (heartbeat), so a FROZEN load2 (field25 stuck at 0) is visible without per-frame flooding while
@@ -252,10 +267,30 @@ unsafe fn read_u8(addr: usize) -> Option<u8> {
 unsafe extern "system" fn hook_finalize_advancer(a: usize, b: usize, c: usize, d: usize) -> usize {
     let calls = FIN_ADVANCER_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
     let fin_before = unsafe { read_u8(a + MOVEMAPSTEP_FINALIZE_12A_OFFSET) }.map_or(-1, i32::from);
-    let ret = unsafe { call_original(&ORIG_FINALIZE_ADVANCER, a, b, c, d) };
-    let fin_after = unsafe { read_u8(a + MOVEMAPSTEP_FINALIZE_12A_OFFSET) }.map_or(-1, i32::from);
     let menu = game_base().and_then(|base| unsafe { read_usize(base + CS_MENU_MAN_GLOBAL_RVA) });
     let menu_data = menu.and_then(|m| unsafe { read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) });
+    // rt5d DIAGNOSTIC DRIVE -- BEFORE the native advancer reads menuData+0x5d. Track the consecutive
+    // field25==0 streak per MoveMapStep; when a single stuck mms crosses the threshold (only load2 ever
+    // does -- load1 flips well under it), write rt5d=1 once so the game's own finalize can advance.
+    if fin_before == 0 {
+        if RT5D_DRIVE_MMS.swap(a, Ordering::SeqCst) != a {
+            RT5D_DRIVE_ZERO_STREAK.store(0, Ordering::SeqCst);
+        }
+        let streak = RT5D_DRIVE_ZERO_STREAK.fetch_add(1, Ordering::SeqCst) + 1;
+        if streak >= RT5D_DRIVE_THRESHOLD && RT5D_DRIVE_DONE_MMS.swap(a, Ordering::SeqCst) != a {
+            if let Some(md) = menu_data {
+                unsafe { write_u8(md + MENU_DATA_RT5D_OFFSET, 1) };
+                log_line(format_args!(
+                    "RT5D_DRIVE: wrote menuData+0x5d=1 on stuck mms=0x{a:x} after {streak} consecutive field25=0 calls {}",
+                    snapshot()
+                ));
+            }
+        }
+    } else {
+        RT5D_DRIVE_ZERO_STREAK.store(0, Ordering::SeqCst);
+    }
+    let ret = unsafe { call_original(&ORIG_FINALIZE_ADVANCER, a, b, c, d) };
+    let fin_after = unsafe { read_u8(a + MOVEMAPSTEP_FINALIZE_12A_OFFSET) }.map_or(-1, i32::from);
     let m5d = menu_data
         .and_then(|md| unsafe { read_u8(md + MENU_DATA_RT5D_OFFSET) })
         .map_or(-1, i32::from);
