@@ -132,6 +132,7 @@ python3 "$REPO_ROOT/scripts/capture-samechar-3x.py" \
 	--game-dir "$GAME_DIR" \
 	--artifact-dir "$ARTIFACT_DIR" \
 	--max-seconds "$CAP_SECONDS" \
+	--require-reload-settled \
 	--report "$ARTIFACT_DIR/samechar-3x-report.md"
 RC=$?
 
