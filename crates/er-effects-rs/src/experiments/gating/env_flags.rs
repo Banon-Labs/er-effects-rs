@@ -427,12 +427,14 @@ pub(crate) fn menu_window_latch_enabled() -> bool {
 /// CSGaitemImp::Deserialize at live/deobf 0x14067141a; default behavior logs the selected cursor and
 /// suppresses the activation so profile-selection investigation stays save-safe.
 pub(crate) fn system_quit_profile_load_activation_allowed() -> bool {
-    // DECOUPLED TOGGLE: allow the real slot-load activation when the input-harness DLL is present
-    // (presence-gated, not env/marker) so a driven load2 actually fires the load and reaches the
-    // STEP_GameStepWait revert we are diagnosing. (2nd+ consecutive switch may still hit the
-    // CSGaitemImp::Deserialize 0x14067141a crash -- separate pre-existing issue; a single load2 is
-    // sufficient to collect the reload-fix telemetry.)
-    harness_dll_present()
+    // MUST stay false. INVERTED SENSE (bd arm-commit-gap-rootcause-my-flip-of-activation-allowed-inverted):
+    // this is the opt-in to the NATIVE-FORWARD slot activation, which CRASHES in CSGaitemImp::Deserialize
+    // (0x14067141a). When it is FALSE, system_quit_ownership_repro.rs's `if !activation_allowed` gate runs
+    // the SAVE-SAFE DIRECT-ARM path (system_quit_arm_quickload_autoload -> advances the quickload phase ->
+    // return-title + own_load reload). Flipping this to true (a prior regression) SKIPPED the direct-arm,
+    // so load2 armed activate_count=1 but never committed (phase stayed IDLE, ProfileSelect pumped open,
+    // fresh_deser=0). The direct-arm is NOT harness-gated -- it fires for any in-range ProfileSelect pick.
+    false
 }
 /// OPT-IN gate for the c30-writer diagnostic hook (hot deserialize-internal 0x67bd70).
 /// OFF by default: a clean run installs NO MinHook / NO detour for this. Enable only when

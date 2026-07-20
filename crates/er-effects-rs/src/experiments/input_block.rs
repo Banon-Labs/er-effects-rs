@@ -796,15 +796,17 @@ pub(crate) fn enforce_input_block_now() {
     // Lock down MOUSE MOVEMENT: the DInput GetDeviceState block zeroes keyboard + mouse buttons +
     // DInput mouse deltas, but ER moves the MENU cursor via the OS cursor position (GetCursorPos),
     // which DInput blocking does NOT cover -- so the user can still move the cursor. Confine the OS
-    // cursor to a 1x1 rect every frame: it physically cannot move regardless of which API reads it,
-    // making the run uncontaminatable by the mouse. Released (ClipCursor(None)) when the block lifts.
-    const CLIP_ORIGIN: i32 = 0;
-    const CLIP_EDGE: i32 = 1;
+    // cursor to a 1x1 rect: it physically cannot move regardless of which API reads it, making the run
+    // uncontaminatable by the mouse. FREEZE IT IN PLACE at its CURRENT position rather than yanking it
+    // to (0,0) -- same protection, but does not disruptively teleport the user's mouse to the top-left
+    // corner during a run (user 2026-07-19). Released (ClipCursor(None)) when the block lifts.
+    let mut pt = windows::Win32::Foundation::POINT { x: 0, y: 0 };
+    let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt) };
     let clip = RECT {
-        left: CLIP_ORIGIN,
-        top: CLIP_ORIGIN,
-        right: CLIP_EDGE,
-        bottom: CLIP_EDGE,
+        left: pt.x,
+        top: pt.y,
+        right: pt.x + 1,
+        bottom: pt.y + 1,
     };
     let _ = unsafe { ClipCursor(Some(&clip)) };
 }
