@@ -177,6 +177,8 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
     // control file `er-effects-prove-movement.txt` next to the game exe. Cached after the first read
     // (0=unknown, 1=on, 2=off); the harness writes the file before launch so it is present in-world.
     static PROOF_GATE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+    // Consecutive non-move frames in the in-flight move run (for the contention-tolerant reset below).
+    static NON_MOVE_STREAK: AtomicUsize = AtomicUsize::new(0);
     let gate = PROOF_GATE.load(Ordering::Relaxed);
     let enabled = if gate == 0 {
         // DECOUPLED TOGGLE (2026-07-19): the movement-proof forward-input drive runs when the
@@ -201,6 +203,7 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
     if MOVE_PROBE_EPOCH.swap(epoch, Ordering::SeqCst) != epoch {
         CAN_MOVE_CONFIRMED.store(false, Ordering::SeqCst);
         MOVE_PROBE_MOVED_FRAMES.store(0, Ordering::SeqCst);
+        NON_MOVE_STREAK.store(0, Ordering::Relaxed);
         DID_MOVE_FRAMES.store(0, Ordering::Relaxed);
         SUPPLIED_MOVEMENT_INPUT_FRAMES.store(0, Ordering::Relaxed);
         MOVE_PROBE_ACTIVE.store(false, Ordering::SeqCst);
@@ -234,18 +237,27 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
         if horiz >= MOVE_PROBE_PER_FRAME_THRESHOLD {
             // DID_MOVE: real displacement observed while supplying input (cumulative, never reset per
             // frame) -- proves the injected input actually moved the character.
+            NON_MOVE_STREAK.store(0, Ordering::Relaxed);
             DID_MOVE_FRAMES.fetch_add(1, Ordering::Relaxed);
             let moved = MOVE_PROBE_MOVED_FRAMES.fetch_add(1, Ordering::SeqCst) + 1;
             if moved >= MOVE_PROBE_REQUIRED_FRAMES {
                 CAN_MOVE_CONFIRMED.store(true, Ordering::SeqCst);
                 MOVE_PROBE_ACTIVE.store(false, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
-                    "can-move: PROVEN for load epoch {epoch} -- {moved} consecutive frames of injected-forward movement (last frame horiz={horiz:.4})"
+                    "can-move: PROVEN for load epoch {epoch} -- {moved} injected-forward move frames (last horiz={horiz:.4})"
                 ));
             }
         } else {
-            // Not moving this frame -> the run must be CONSECUTIVE, so reset.
-            MOVE_PROBE_MOVED_FRAMES.store(0, Ordering::SeqCst);
+            // A single freeze frame under parallel-cargo core contention (bd
+            // fps-is-global-core-contention) is NOT a loss of control -- the character resumes next
+            // frame. Tolerate up to 2 consecutive non-move frames; reset the accumulated run only after
+            // 3+ in a row (a genuine stop/freeze). A truly frozen character never accumulates move frames,
+            // so this tolerance adds no false positive -- it only stops contention hiccups from starving
+            // the proof (load1 ramped clean, load2's window merely hit more contention spikes).
+            let streak = NON_MOVE_STREAK.fetch_add(1, Ordering::Relaxed) + 1;
+            if streak >= 3 {
+                MOVE_PROBE_MOVED_FRAMES.store(0, Ordering::SeqCst);
+            }
         }
     }
     *prev = Some(pos);
