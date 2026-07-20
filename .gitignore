@@ -56,3 +56,4 @@ offline-launcher.exe
 # Live workflow steering channel (see scripts/steering/README.md) -- ephemeral run
 # control the user drops in while a wf-*.js is running; never source.
 /.workflow-steering/
+reference-captures/
