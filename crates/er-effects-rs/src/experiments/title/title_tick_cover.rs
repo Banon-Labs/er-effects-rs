@@ -2179,6 +2179,32 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             append_autoload_debug(format_args!(
                 "save-gate-diag(stall): force=0x{dsg_force:x} save_state={dsg_ss} bc4=0x{return_title_job_predicate_bc4:x} menu_gate_ok={dsg_menu_ok} b72={dsg_b72} b73={dsg_b73} b78={dsg_b78} bVar5_est={bvar5_est} saveSlot={dsg_slot} disableSaveMenu={dsg_dsm} pump_fallback={pump_fallback} -> blocked_by={dsg_blocker}"
             ));
+            // CASE-7 7->8 GATE, computed EXACTLY from the decompiled formulas (FUN_140afa7c0 case 7,
+            // bd CORRECTED-load2-substate7-NOT-save-drain-saving-disabled-shouldsave-structurally-false-2026-07-20).
+            // Advance needs ALL of: c1 FUN_14067a170[saveState b80==0], c2 !ShouldSave, c3 !FUN_140679460,
+            // c4 FUN_140a9ceb0(CSRemo) [historically PASSING]. ShouldSave = b72 && !CanShowSaveMenu()
+            // && menu_gate && bc4!=3, and !CanShowSaveMenu()==(disableSaveMenu==0). Since saving is
+            // DISABLED BY DESIGN (disableSaveMenu!=0), ShouldSave is STRUCTURALLY FALSE => c2 passes and
+            // b72 is irrelevant. This line names whether C1 (saveState) or C3 (b73) is the real blocker,
+            // no game-function calls (zero side-effect risk). All inputs already read above.
+            let bc4_not3_c = return_title_job_predicate_bc4 != 3;
+            let c1_savestate0 = dsg_ss == 0;
+            let shouldsave = dsg_b72 != 0 && dsg_dsm == 0 && dsg_menu_ok && bc4_not3_c;
+            let fun679460 = dsg_b73 != 0 && dsg_menu_ok && bc4_not3_c;
+            let c2_not_shouldsave = !shouldsave;
+            let c3_not_679460 = !fun679460;
+            let case7_blocker = if !c1_savestate0 {
+                "C1 saveState(b80)!=0"
+            } else if !c2_not_shouldsave {
+                "C2 ShouldSave==true (unexpected: saving-disabled should force it false)"
+            } else if !c3_not_679460 {
+                "C3 FUN_140679460==true (b73 && menu_gate && bc4!=3)"
+            } else {
+                "C1-3 pass -> C4 CSRemo (FUN_140a9ceb0) or advancer not ticking"
+            };
+            append_autoload_debug(format_args!(
+                "case7-gate(4-bool): c1_savestate0={c1_savestate0} c2_not_shouldsave={c2_not_shouldsave}(shouldsave={shouldsave}) c3_not_679460={c3_not_679460}(f679460={fun679460}) [b80={dsg_ss} b72={dsg_b72} b73={dsg_b73} disableSaveMenu={dsg_dsm} menu_gate_ok={dsg_menu_ok} bc4!=3={bc4_not3_c}] -> case7_blocker={case7_blocker}"
+            ));
         }
     }
     let post_continue_handoff_active = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
