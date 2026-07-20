@@ -327,6 +327,11 @@ pub(crate) static INWORLD_FINALIZE_DRIVE_SET: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static INWORLD_FINALIZE_DRIVE_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Diagnostic counter: frames at mms18 where the in-world drive's frozen signature was NOT met.
 pub(crate) static INWORLD_FINALIZE_DRIVE_WHYNOT_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// The MoveMapStep pointer as resolved by write_oracle (the ONLY resolution that reliably tracks
+/// load2's in-world step; the game-task's fresh title_owner scan reads a stale owner -> stale step).
+/// Published each telemetry write; the in-world finalize drive consumes it instead of re-resolving.
+/// 0 == not currently resolved.
+pub(crate) static ORACLE_RELIABLE_MMS_PTR: AtomicUsize = AtomicUsize::new(0);
 /// Held frozen-signature frames before the in-world drive fires. ~2s at load2's ~20fps; short so the
 /// RAM-gated drive completes before an incidental unfocused-mouse click can contaminate the run.
 pub(crate) const INWORLD_FINALIZE_DRIVE_RELEASE_FRAMES: usize = 40;

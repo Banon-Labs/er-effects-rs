@@ -1025,9 +1025,17 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         let creq = cingame
             .and_then(|ig| unsafe { safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) })
             .unwrap_or(-1);
-        let cmms = cingame
-            .and_then(|ig| unsafe { safe_read_usize(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) })
-            .filter(|&v| v > 0x10000);
+        // Prefer write_oracle's reliably-resolved MoveMapStep pointer: the cached-owner walk here reads a
+        // STALE step for load2 (proven -- it saw 13-16, not the true 18). Fall back to the local walk only
+        // if the oracle has not published a pointer yet this session.
+        let reliable_mms = ORACLE_RELIABLE_MMS_PTR.load(Ordering::SeqCst);
+        let cmms = if reliable_mms > 0x10000 {
+            Some(reliable_mms)
+        } else {
+            cingame
+                .and_then(|ig| unsafe { safe_read_usize(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) })
+                .filter(|&v| v > 0x10000)
+        };
         let cstate = cmms
             .and_then(|m| unsafe { safe_read_i32(m + INGAMESTEP_STEP_STATE_OFFSET) })
             .unwrap_or(-1);
@@ -1044,12 +1052,11 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         let c5e = cmenu
             .and_then(|d| unsafe { safe_read_u8(d + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) })
             .unwrap_or(0xff);
-        let frozen_mms18 = active_switch
-            && creq == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING
-            && cstate == MOVEMAPSTEP_STEP_MOVEMAP_INDEX
-            && cfin == 0
-            && c5d == 0
-            && c5e == 0;
+        // Gate on the RELIABLE mms_state/finalize (creq dropped from the gate -- it comes from the
+        // possibly-stale cached-owner ingame; kept in the log only). mms_state==18 && finalize==0 with
+        // cVar10 inputs (0x5d/0x5e) both 0 is load2's exact frozen-finalize signature.
+        let frozen_mms18 =
+            active_switch && cstate == MOVEMAPSTEP_STEP_MOVEMAP_INDEX && cfin == 0 && c5d == 0 && c5e == 0;
         if frozen_mms18 {
             if let Some(d) = cmenu {
                 // Fire after ~2s of a HELD frozen signature (40 frames; load2 froze 26s in prior runs,

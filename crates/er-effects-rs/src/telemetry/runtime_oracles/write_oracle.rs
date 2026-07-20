@@ -37,6 +37,11 @@ fn write_stepfinish_gate_oracle(body: &mut String) {
     let request_code = ingame.map_or(-1, |ig| rdi(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET));
     let mms =
         ingame.and_then(|ig| rd(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET).filter(|v| *v != null));
+    // Publish the reliably-resolved MoveMapStep pointer for the in-world finalize drive to consume:
+    // this resolution tracks load2's true in-world step (18) whereas the game-task's fresh title_owner
+    // scan reads a stale owner -> stale step (bd CORRECTED-title-owner-gate-not-blocker-load2-mms18-
+    // resolution-disagrees-writeoracle-reliable-2026-07-20).
+    ORACLE_RELIABLE_MMS_PTR.store(mms.unwrap_or(0), Ordering::SeqCst);
     const MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET: usize = 0x12a;
     let (warmup, testnet_stepper, mms_state, finalize_substate_12a) = match mms {
         Some(m) => (
