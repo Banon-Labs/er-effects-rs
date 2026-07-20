@@ -100,15 +100,12 @@ pub(crate) unsafe fn switch_harness_discovery_tick() {
 
 pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     unsafe { switch_harness_discovery_tick() };
-    // LOAD2 WORLD-COMPLETION probe: DISABLED (bd force-substate-tears-down-player-need-natural-gate-pass).
-    // Forcing the MoveMapStep finalize substate 7->8 DID complete the step (req_code 1->2) but TORE DOWN
-    // the player (present True->False, empty world) -- the map-move needs a valid destination the reload
-    // does not restore, and case 8 warps/teardown. The real fix is to make the substate-7 gate
-    // (FUN_14067a170 && !ShouldSave && !FUN_140679460 && FUN_140a9ceb0(CSRemo)) pass NATURALLY, not force
-    // it. Left installed but not called until the failing gate condition is identified + satisfied.
-    if false {
-        unsafe { maybe_force_finish_stuck_testnet_step() };
-    }
+    // LOAD2 WORLD-COMPLETION (bd load2-sole-failing-gate-is-shouldsave-save_requested-b72): when a
+    // committed reload parks at MoveMapStep finalize substate 7 (SAVE-DRAIN WAIT), the sole failing 7->8
+    // gate condition is !ShouldSave() -- the suppressed quit-save left GameMan.save_requested set. This
+    // clears that spurious flag so the game's OWN advancer passes 7->8->9 and completes RETAINING the
+    // player (NOT a state force). Epoch-scoped; no-op on load1 and on a still-progressing load.
+    unsafe { maybe_force_finish_stuck_testnet_step() };
     // PASSIVE CONTROLLER-INPUT TRACE (er-effects-input-trace.txt): record real pad edges +
     // semaphore snapshots to er-effects-input-trace.jsonl for USER-DRIVEN runs. Recording only --
     // never blocks, never fabricates; a marker/env-gated no-op by default.

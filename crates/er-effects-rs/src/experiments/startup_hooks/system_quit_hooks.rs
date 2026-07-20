@@ -196,47 +196,39 @@ pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
         .map(i32::from)
         .unwrap_or(-1);
     let mms_state = unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET) }.unwrap_or(-1);
-    // Stuck = parked at the same (mms_state, finalize substate) with no progress.
-    let key = ((mms_state as u32 as usize) << 8) | (fin as u8 as usize);
-    let last = TESTNET_FF_LAST_MMS.swap(key, Ordering::Relaxed);
-    let stuck = if key == last {
-        TESTNET_FF_STUCK_FRAMES.fetch_add(1, Ordering::Relaxed) + 1
-    } else {
-        TESTNET_FF_STUCK_FRAMES.store(0, Ordering::Relaxed);
-        0
-    };
-    const STUCK_THRESHOLD: usize = 180; // ~3s parked at finalize substate 7 before we force it forward
-    if fin != 7 || stuck < STUCK_THRESHOLD {
+    let _ = (&TESTNET_FF_LAST_MMS, &TESTNET_FF_STUCK_FRAMES);
+    // MOVABLE-WINDOW PRESERVATION (bd complete-cvar10-ending-request-9-inputs +
+    // precise-ordered-divergence-load1-movable-at-fin0): load1 reaches genuine readiness by becoming
+    // MOVABLE at mms=18/fin=0 -- FUN_140afa7c0 case 0 does `if (cVar10 == 0) return;`, so the finalize
+    // STAYS at 0 (movable window; can_move ramps to 60 frames) while the ending-request cVar10 is 0; the
+    // finalize walk (fin 5->9) is a quick cleanup AFTER, not a prerequisite. Load2 diverges because an
+    // ending-request input is left set (dominant: warpRequested / GameMan+0x10, residue of the
+    // return-title), so cVar10=1 -> the finalize runs early (fin 5->7) -> the character FREEZES ->
+    // can_move never ramps. Fix = keep cVar10 = 0 by clearing warpRequested (and idle saveState) every
+    // frame during the pre-finalize load window, so load2 gets load1's fin=0 movable window. We PREVENT
+    // the ending walk rather than forcing/advancing the finalize (forcing tore the world down). Clear
+    // during 13..=18 (character loaded, warp already consumed) so it is 0 before FUN_140afa7c0 reaches
+    // case 0 at mms=18. Epoch-scoped: load1 (epoch 0) is never touched.
+    if !(13..=18).contains(&mms_state) || fin >= 5 {
         return;
     }
-    if TESTNET_FF_FIRED_EPOCH.swap(epoch, Ordering::SeqCst) == epoch {
-        return; // already forced this reload epoch
-    }
-    // Re-read immediately before the write to avoid a stale race.
-    if unsafe { safe_read_u8(mms + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET) } != Some(7) {
-        return;
-    }
-    // CLEAR the lingering warpRequested (GameMan+0x10) FIRST (user obs 2026-07-19: forcing to 8 with warp
-    // set made case 8 consume the warp and RE-LOAD instead of completing). Load2's return-title+reload
-    // flow leaves warpRequested set; with it cleared, case 8 (WARP/SERVER FINALIZE) takes the CLEAN
-    // server-finalize path to 9 exactly like load1. Byte write; no save touched.
-    let mut warp_was = -1i32;
+    let ss_off = core::mem::offset_of!(eldenring::cs::GameMan, save_state);
     if let Ok(gm) = unsafe { eldenring::cs::GameMan::instance() } {
         let gm_addr = gm as *const _ as usize;
-        warp_was = unsafe { safe_read_u8(gm_addr + crate::constants::GAME_MAN_WARP_REQUESTED_10_OFFSET) }
-            .map(i32::from)
-            .unwrap_or(-1);
-        if warp_was != 0 {
-            unsafe {
-                *((gm_addr + crate::constants::GAME_MAN_WARP_REQUESTED_10_OFFSET) as *mut u8) = 0
-            };
+        if unsafe { safe_read_u8(gm_addr + ss_off) }.unwrap_or(0) > 0 {
+            unsafe { *((gm_addr + ss_off) as *mut u8) = 0 };
+        }
+        let warp_off = crate::constants::GAME_MAN_WARP_REQUESTED_10_OFFSET;
+        let warp = unsafe { safe_read_u8(gm_addr + warp_off) }.unwrap_or(0);
+        if warp != 0 {
+            unsafe { *((gm_addr + warp_off) as *mut u8) = 0 };
+            if TESTNET_FF_FIRED_EPOCH.swap(epoch, Ordering::SeqCst) != epoch {
+                append_autoload_debug(format_args!(
+                    "cvar10-warp-clear: load2 epoch {epoch} mms={mms_state} fin={fin} warpRequested was set -> cleared GameMan+0x10 to hold cVar10=0 (fin=0 movable window like load1)"
+                ));
+            }
         }
     }
-    // Advance 7 -> 8; with warp cleared, case 8 server-finalizes -> 9 -> requestCode 2 -> world completes.
-    unsafe { *((mms + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET) as *mut u8) = 8 };
-    append_autoload_debug(format_args!(
-        "finalize-force-advance: load2 epoch {epoch} parked substate 7 (REMO/SAVE-DRAIN WAIT) {stuck}f mms={mms_state} warpRequested_was={warp_was} -> cleared warp + forced +0x12a=8"
-    ));
 }
 
 pub(crate) unsafe extern "system" fn system_quit_gaitem_deserialize_hook(
