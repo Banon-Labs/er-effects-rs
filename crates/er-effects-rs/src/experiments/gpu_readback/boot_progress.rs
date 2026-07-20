@@ -1583,6 +1583,34 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
         }
         // else: fall through and keep compositing the fully-lit cover over the native fade-in.
     }
+    // FPS BAIL (bd fps-killer-rootcaused-per-frame-gpu-readback-boot-view-not-stopping-inworld-load2):
+    // when an own-menu reload STALLS at the finalize (frozen load2), it builds no new loadscreen table
+    // and its play_time never advances, so NEITHER loading_handoff NOR world_handoff ever fires and the
+    // per-frame GPU readback-with-wait above would run forever (~20fps). The loading bar itself still
+    // fills (world resident/present at mms18), so stop the composite once the bar is essentially full OR
+    // the composite has run past the per-epoch cap -- the readback must never permanently tank FPS.
+    if own_menu_active {
+        let cur_epoch =
+            crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+        let now_ms = boot_view_epoch_ms().max(1);
+        if crate::constants::BOOT_VIEW_COMPOSITE_EPOCH.swap(cur_epoch, Ordering::SeqCst) != cur_epoch {
+            crate::constants::BOOT_VIEW_COMPOSITE_FIRST_MS.store(now_ms as usize, Ordering::SeqCst);
+        }
+        let first_ms = crate::constants::BOOT_VIEW_COMPOSITE_FIRST_MS.load(Ordering::SeqCst) as u64;
+        let composite_ms = now_ms.saturating_sub(first_ms);
+        let permille = BOOT_VIEW_LAST_PERMILLE.load(Ordering::SeqCst);
+        if permille >= crate::constants::BOOT_VIEW_EPOCH_BAIL_PERMILLE as usize
+            || composite_ms >= crate::constants::BOOT_VIEW_EPOCH_COMPOSITE_CAP_MS
+        {
+            if BOOT_VIEW_STOPPED.swap(1, Ordering::SeqCst) == 0 {
+                append_autoload_debug(format_args!(
+                    "boot-view: FPS BAIL stop (own-menu reload epoch={cur_epoch} permille={permille} composite_ms={composite_ms}) -- handoff signals never fired (frozen load2); stopping per-frame GPU readback"
+                ));
+            }
+            BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.store(0, Ordering::SeqCst);
+            return false;
+        }
+    }
     if BOOT_VIEW_DRAW_STATE.load(Ordering::SeqCst) == 2 {
         return false;
     }

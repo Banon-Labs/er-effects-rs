@@ -426,6 +426,19 @@ pub(crate) const IN_WORLD_REACHED_YES: usize = 1;
 /// switch, so it cannot stop the readback in-world (bd
 /// fps-killer-rootcaused-per-frame-gpu-readback-boot-view-not-stopping-inworld-load2). `usize::MAX` = none.
 pub(crate) static BOOT_VIEW_EPOCH_WORLD_LIVE: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// FPS BAIL for own-menu reloads whose handoff signals never fire: when load2 stalls at the finalize
+/// (frozen), it builds no NEW loadscreen table and its play_time never advances, so NEITHER
+/// `loading_handoff` NOR `world_handoff` becomes true and the per-frame GPU readback runs forever
+/// (~20fps). The loading bar itself DOES fill (present=True/mms18 = world resident) so a permille + time
+/// bail reliably stops the readback regardless of the handoff signals. Per-epoch composite clock.
+pub(crate) static BOOT_VIEW_COMPOSITE_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static BOOT_VIEW_COMPOSITE_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
+/// Loading bar permille (0..1000) at/above which the FPS bail stops the composite for an own-menu
+/// reload (bar essentially full = loading visually done).
+pub(crate) const BOOT_VIEW_EPOCH_BAIL_PERMILLE: u32 = 950;
+/// Hard cap (ms) on how long the composite may run for one own-menu reload epoch before the FPS bail
+/// force-stops it, so the GPU readback can never tank FPS indefinitely even if permille stalls.
+pub(crate) const BOOT_VIEW_EPOCH_COMPOSITE_CAP_MS: u64 = 20_000;
 /// DIAGNOSTIC: identify the REAL connection-error dialog (the inferred MessageBoxDialog vtable
 /// 0x142b03550 did NOT match -- the auto-accept never fired). Hook the dialog builder
 /// 0x1409275b0 to log each created dialog's vtable/class + args (the FMG message id is in an
