@@ -6,7 +6,7 @@ use std::{
     fs::{File, OpenOptions},
     io::Write,
     ptr::null_mut,
-    sync::atomic::{AtomicU64, AtomicUsize, Ordering},
+    sync::atomic::{AtomicI32, AtomicU64, AtomicUsize, Ordering},
     sync::{Mutex, OnceLock},
 };
 
@@ -22,6 +22,16 @@ const MH_ERROR_ENABLED: i32 = 5;
 const GAME_MAN_SINGLETON_RVA: usize = 0x3d69918;
 const GAME_DATA_MAN_GLOBAL_RVA: usize = 0x3d5df38;
 const MOUNTED_ARCHIVE_REGISTRY_RVA: usize = 0x448464a8;
+
+// MoveMapStep finalize advancer FUN_140afa7c0 (dump) -> deobf 0x140afa6d0 -> rva 0xafa6d0 (content-
+// unique, scripts/dump-deobf-shift.py). param_1 (rcx) = MoveMapStep; field25_0x12a = the finalize
+// sub-state (0..9). cVar10 (the ending request it computes) is written to menuData+0x5e; its rt5d input
+// is menuData+0x5d. Hooking this proves whether the advancer is even TICKED for load2 and what it reads.
+const MOVEMAPSTEP_FINALIZE_12A_OFFSET: usize = 0x12a;
+const CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d6b7b0;
+const CS_MENU_MAN_MENU_DATA_OFFSET: usize = 0x8;
+const MENU_DATA_RT5D_OFFSET: usize = 0x5d;
+const MENU_DATA_ENDING_5E_OFFSET: usize = 0x5e;
 
 const GAME_MAN_REQUESTED_SLOT_B78_OFFSET: usize = 0xb78;
 const GAME_MAN_LOAD_PHASE_B80_OFFSET: usize = 0xb80;
@@ -59,6 +69,18 @@ const UNION_SKIP_RVAS: &[usize] = &[0x67b200, 0x67b290];
 
 static LOG_FILE: OnceLock<Option<Mutex<File>>> = OnceLock::new();
 static EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
+/// Finalize-advancer instrumentation: total calls + last-seen field25_0x12a (so a run logs on every
+/// sub-state change + a periodic heartbeat, instead of per-frame spam).
+static FIN_ADVANCER_CALLS: AtomicU64 = AtomicU64::new(0);
+static LAST_FIN12A: AtomicI32 = AtomicI32::new(-2);
+static ORIG_FINALIZE_ADVANCER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+/// Child-done query FUN_140eb5550 (deobf 0x140eb5530 / rva 0xeb5530): STEP_MoveMap_Update calls it and,
+/// if it returns nonzero (done), tears the MoveMapStep child down. HYPOTHESIS: it returns done
+/// PREMATURELY for load2 (child field25 still 0) -> premature teardown -> advancer stops. Log-only: logs
+/// the return on change + heartbeat to confirm load2 returns done while load1 returns not-done.
+static ORIG_CHILD_DONE_QUERY: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static LAST_CHILD_DONE: AtomicI32 = AtomicI32::new(-2);
+static CHILD_DONE_CALLS: AtomicU64 = AtomicU64::new(0);
 
 static ORIG_MENU_CONTINUE_WRAPPER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static ORIG_MENU_NEW_OR_LOAD_WRAPPER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
@@ -184,6 +206,65 @@ unsafe fn read_i32(addr: usize) -> Option<i32> {
         )
     };
     (ok != 0 && read == std::mem::size_of::<i32>()).then_some(value)
+}
+
+unsafe fn read_u8(addr: usize) -> Option<u8> {
+    let mut value = 0u8;
+    let mut read = 0usize;
+    let ok = unsafe {
+        ReadProcessMemory(
+            CURRENT_PROCESS_PSEUDO_HANDLE,
+            addr as *const c_void,
+            &mut value as *mut u8 as *mut c_void,
+            1,
+            &mut read,
+        )
+    };
+    (ok != 0 && read == 1).then_some(value)
+}
+
+/// Custom detour for the MoveMapStep finalize advancer (0xafa6d0). Logs field25_0x12a before/after the
+/// native call plus menuData 0x5d(rt5d)/0x5e(cVar10 out) -- ONLY on a sub-state change or every 600th
+/// call (heartbeat), so a FROZEN load2 (field25 stuck at 0) is visible without per-frame flooding while
+/// a healthy walk 0->9 logs every transition. rcx (`a`) = MoveMapStep.
+unsafe extern "system" fn hook_finalize_advancer(a: usize, b: usize, c: usize, d: usize) -> usize {
+    let calls = FIN_ADVANCER_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
+    let fin_before = unsafe { read_u8(a + MOVEMAPSTEP_FINALIZE_12A_OFFSET) }.map_or(-1, i32::from);
+    let ret = unsafe { call_original(&ORIG_FINALIZE_ADVANCER, a, b, c, d) };
+    let fin_after = unsafe { read_u8(a + MOVEMAPSTEP_FINALIZE_12A_OFFSET) }.map_or(-1, i32::from);
+    let menu = game_base().and_then(|base| unsafe { read_usize(base + CS_MENU_MAN_GLOBAL_RVA) });
+    let menu_data = menu.and_then(|m| unsafe { read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) });
+    let m5d = menu_data
+        .and_then(|md| unsafe { read_u8(md + MENU_DATA_RT5D_OFFSET) })
+        .map_or(-1, i32::from);
+    let m5e = menu_data
+        .and_then(|md| unsafe { read_u8(md + MENU_DATA_ENDING_5E_OFFSET) })
+        .map_or(-1, i32::from);
+    let last = LAST_FIN12A.swap(fin_after, Ordering::SeqCst);
+    if fin_before != fin_after || last != fin_after || calls % 600 == 0 {
+        log_line(format_args!(
+            "finalize_advancer_afa6d0 call#{calls} mms=0x{a:x} field25_12a {fin_before}->{fin_after} menuData_5d={m5d} 5e={m5e} {}",
+            snapshot()
+        ));
+    }
+    ret
+}
+
+/// Log-only detour for the child-done query FUN_140eb5550 (rva 0xeb5530). Logs its return (done flag)
+/// on change + a 600-call heartbeat. If load2 returns done=1 while load1 returns done=0 during the
+/// mms18 freeze, the premature-teardown chain is confirmed.
+unsafe extern "system" fn hook_child_done_query(a: usize, b: usize, c: usize, d: usize) -> usize {
+    let calls = CHILD_DONE_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
+    let ret = unsafe { call_original(&ORIG_CHILD_DONE_QUERY, a, b, c, d) };
+    let done = (ret & 0xff) as i32;
+    let last = LAST_CHILD_DONE.swap(done, Ordering::SeqCst);
+    if last != done || calls % 600 == 0 {
+        log_line(format_args!(
+            "child_done_query_eb5530 call#{calls} rcx=0x{a:x} returned done={done} {}",
+            snapshot()
+        ));
+    }
+    ret
 }
 
 fn snapshot() -> String {
@@ -634,6 +715,14 @@ static HOOKS: &[HookSpec] = &[
         detour: hook_title_native_ready,
         original: &ORIG_TITLE_NATIVE_READY,
     },
+    HookSpec {
+        name: "finalize_advancer_afa6d0",
+        rva: 0xafa6d0,
+        detour: hook_finalize_advancer,
+        original: &ORIG_FINALIZE_ADVANCER,
+    },
+    // child_done_query_eb5530 removed: the PRODUCT DLL now owns 0xeb5530 with its override hook
+    // (child_done_query_override_detour); a second trace hook here would chain and muddy the override.
 ];
 
 /// Resolve the product DLL's `er_effects_union_register` export, polling briefly since both natives

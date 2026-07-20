@@ -401,6 +401,11 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
             // teardown (bd er-effects-rs-9fmm). Self-gated internally on the er-effects-reload-defer.txt
             // marker + a committed reload epoch, so installing it is inert until a marked reload runs.
             unsafe { install_ingamestep_step_movemap_update_defer_hook(base) };
+            // Child-done-query override: prevent the PREMATURE MoveMapStep child teardown that strands
+            // load2 (FUN_140eb5550 returns done at field25=0 -> STEP_MoveMap_Update tears the child down
+            // -> advancer stops). Isolated to the MoveMapStep child (rcx==mms+0x108) on a committed
+            // reload; load1 untouched. bd COMPLETE-CHAIN-load2-child-torndown-early-fun140eb5550-done.
+            unsafe { install_child_done_query_override_hook(base) };
         }
     }
     // OFFLINE connection-state lever (milestone-3 fix): force GameMan+0xBC8/0xBC9 = 0 each

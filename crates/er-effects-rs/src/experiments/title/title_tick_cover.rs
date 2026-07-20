@@ -279,6 +279,32 @@ pub(crate) unsafe extern "system" fn ingamestep_step_movemap_update_defer_detour
     if orig_addr == TITLE_OWNER_SCAN_START_ADDRESS {
         return 0;
     }
+    // INSTRUMENT (bd ROOT-load2-finalize-advancer-not-ticked-fun140afa7c0): count STEP_MoveMap_Update
+    // calls per reload epoch. The finalize advancer FUN_140afa7c0 is ticked ~145x for load1 but ~1x for
+    // load2. This detour runs on EVERY STEP_MoveMap_Update call, so if this counter CLIMBS for epoch>=1
+    // (load2) while the advancer stays at 1, STEP_MoveMap_Update runs but skips the advancer call
+    // INTERNALLY (an internal branch); if it stays LOW for load2, the parent stopped calling it.
+    {
+        let epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+        let n = INGAMESTEP_MOVEMAP_UPDATE_DEFER_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 4 || n % 120 == 0 {
+            let mms = unsafe { safe_read_usize(ingame_step + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) }
+                .unwrap_or(0);
+            let (mms_step, fin) = if mms > PAB_MIN_HEAP_PTR {
+                (
+                    unsafe { safe_read_i32(mms + INGAMESTEP_STEP_STATE_OFFSET) }.unwrap_or(-1),
+                    unsafe { safe_read_u8(mms + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET) }
+                        .map(i32::from)
+                        .unwrap_or(-1),
+                )
+            } else {
+                (-1, -1)
+            };
+            append_autoload_debug(format_args!(
+                "STEP_MoveMap_Update CALL #{n} epoch={epoch} ingame=0x{ingame_step:x} mms=0x{mms:x} mms_step={mms_step} fin12a={fin}"
+            ));
+        }
+    }
     let defer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if ingame_step <= PAB_MIN_HEAP_PTR
             || SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) == 0
@@ -338,6 +364,114 @@ pub(crate) unsafe fn install_ingamestep_step_movemap_update_defer_hook(base: usi
     append_autoload_debug(format_args!(
         "ingamestep-step-movemap-update-defer-hook: INSTALLED on 0x{:x} -- defers d8=2/teardown while MoveMapStep finalize in [1..8] on a committed reload (default, no marker)",
         base + INGAMESTEP_STEP_MOVEMAP_UPDATE_RVA,
+    ));
+    std::mem::forget(hooks);
+}
+
+/// After-original override for the child-done query FUN_140eb5550 (rva 0xeb5530). STEP_MoveMap_Update
+/// tears the MoveMapStep child down (FUN_140eb54e0 + requestCode+0xd8=2) when this returns done; for
+/// load2 it returns done PREMATURELY (field25=0) -> advancer stops -> frozen (bd COMPLETE-CHAIN-load2-
+/// child-torndown-early-fun140eb5550-done-premature). Isolate the MoveMapStep child's call
+/// (rcx == current MoveMapStep + 0x108, bd mms-child-ezchildstepbase-at-plus0x108) and, on a committed
+/// reload while the finalize is mid-walk (field25 in 0..=8), force the result NOT-done so
+/// STEP_MoveMap_Update takes its `if(!done) return` branch (keeps the child, no teardown) while the
+/// FD4-ticked child keeps ticking the advancer FUN_140afa7c0 until field25 reaches 9; then the real
+/// done passes -> natural teardown -> world completes. ONLY the MoveMapStep child (rcx gate) on a
+/// committed reload is touched; load1 (epoch 0) and every other child/query are unchanged.
+pub(crate) unsafe extern "system" fn child_done_query_override_detour(
+    child_base: usize,
+    param2: usize,
+    r8: usize,
+    r9: usize,
+) -> usize {
+    let orig_addr = CHILD_DONE_QUERY_ORIG.load(Ordering::SeqCst);
+    if orig_addr == TITLE_OWNER_SCAN_START_ADDRESS {
+        return 0;
+    }
+    let orig: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig_addr) };
+    let ret = unsafe { orig(child_base, param2, r8, r9) };
+    // DIAG: for every call whose child_base-0x108 is a MoveMapStep at step 18, log ret + field25 so a
+    // run shows exactly why the HOLD does/doesn't fire (throttled).
+    if SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) != 0
+        && child_base > PAB_MIN_HEAP_PTR + MOVEMAPSTEP_CHILD_EZSTEP_BASE_OFFSET
+    {
+        // UNGATED: log every committed-reload child-done call whose return is DONE (ret!=0), with the
+        // mms_state + field25 that child_base-0x108 points to. Reveals the ACTUAL child_base<->MoveMapStep
+        // relationship for the reload freeze (run13: the ==18 gate never matched, so the single run11
+        // mms+0x108 data point does not generalize). Also probe the reliable-oracle mms for comparison.
+        if (ret & 0xff) != 0 {
+            let mms_d = child_base - MOVEMAPSTEP_CHILD_EZSTEP_BASE_OFFSET;
+            let st_d = unsafe { safe_read_i32(mms_d + INGAMESTEP_STEP_STATE_OFFSET) }.unwrap_or(-999);
+            let f_d = unsafe { safe_read_u8(mms_d + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET) }
+                .map(i32::from)
+                .unwrap_or(-1);
+            let omms = ORACLE_RELIABLE_MMS_PTR.load(Ordering::SeqCst);
+            let nd = CHILD_DONE_DIAG_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+            if nd <= 12 || nd % 200 == 0 {
+                append_autoload_debug(format_args!(
+                    "child-done DIAG #{nd}: done-call child_base=0x{child_base:x} (child_base-0x108=0x{mms_d:x} state={st_d} field25={f_d}) oracle_mms=0x{omms:x} oracle_mms+0x108=0x{:x}",
+                    omms.wrapping_add(MOVEMAPSTEP_CHILD_EZSTEP_BASE_OFFSET)
+                ));
+            }
+        }
+    }
+    let hold = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) == 0
+            || (ret & 0xff) == 0
+        {
+            return false;
+        }
+        // Derive the MoveMapStep from the query's OWN child_base (child EzChildStepBase = mms+0x108),
+        // self-consistently -- no dependence on the telemetry-published pointer (which raced/mismatched
+        // in run11). Validate it IS the MoveMapStep at step 18 (state @ +0x48 == 18) so other children's
+        // queries (whose child_base-0x108 is not a step-18 MoveMapStep) are never held.
+        if child_base <= PAB_MIN_HEAP_PTR + MOVEMAPSTEP_CHILD_EZSTEP_BASE_OFFSET {
+            return false;
+        }
+        let mms = child_base - MOVEMAPSTEP_CHILD_EZSTEP_BASE_OFFSET;
+        let mms_state = unsafe { safe_read_i32(mms + INGAMESTEP_STEP_STATE_OFFSET) }.unwrap_or(-1);
+        if mms_state != MOVEMAPSTEP_STEP_MOVEMAP_INDEX {
+            return false;
+        }
+        let fin = unsafe { safe_read_u8(mms + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET) }
+            .map(i32::from)
+            .unwrap_or(-1);
+        (0..=8).contains(&fin)
+    }))
+    .unwrap_or(false);
+    if hold {
+        let n = CHILD_DONE_HELD_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 4 || n % 120 == 0 {
+            append_autoload_debug(format_args!(
+                "child-done HOLD #{n}: MoveMapStep child (mms+0x108) done->not-done while finalize walking -- keeps child so the advancer completes (load2 premature-teardown fix)"
+            ));
+        }
+        return 0;
+    }
+    ret
+}
+
+/// Install the child-done-query override hook ONCE (unioned).
+pub(crate) unsafe fn install_child_done_query_override_hook(base: usize) {
+    if CHILD_DONE_QUERY_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        != TITLE_OWNER_SCAN_START_ADDRESS
+    {
+        return;
+    }
+    let mut hooks = Vec::new();
+    unsafe {
+        create_continue_trace_hook(
+            &mut hooks,
+            "child_done_query_override_eb5530",
+            CHILD_DONE_QUERY_RVA as u32,
+            child_done_query_override_detour as *mut c_void,
+            &CHILD_DONE_QUERY_ORIG,
+        );
+    }
+    append_autoload_debug(format_args!(
+        "child-done-query-override-hook: INSTALLED on 0x{:x} -- holds MoveMapStep child (mms+0x108) done->not-done while finalize<9 on a committed reload (prevents premature teardown)",
+        base + CHILD_DONE_QUERY_RVA,
     ));
     std::mem::forget(hooks);
 }

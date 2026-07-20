@@ -332,6 +332,17 @@ pub(crate) static INWORLD_FINALIZE_DRIVE_WHYNOT_COUNT: AtomicUsize = AtomicUsize
 /// Published each telemetry write; the in-world finalize drive consumes it instead of re-resolving.
 /// 0 == not currently resolved.
 pub(crate) static ORACLE_RELIABLE_MMS_PTR: AtomicUsize = AtomicUsize::new(0);
+/// Child-done-query override (FUN_140eb5550, deobf 0x140eb5530). STEP_MoveMap_Update tears the
+/// MoveMapStep child down when this returns done; for load2 it returns done PREMATURELY (field25=0),
+/// stranding the reload. The MoveMapStep child's EzChildStepBase = MoveMapStep + 0x108 (isolates its
+/// call from the generic query's other callers). We hold its result not-done while the finalize is
+/// mid-walk on a committed reload, so the child survives and the advancer completes.
+pub(crate) const CHILD_DONE_QUERY_RVA: usize = 0xeb5530;
+pub(crate) const MOVEMAPSTEP_CHILD_EZSTEP_BASE_OFFSET: usize = 0x108;
+pub(crate) static CHILD_DONE_QUERY_ORIG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static CHILD_DONE_QUERY_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static CHILD_DONE_HELD_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static CHILD_DONE_DIAG_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Held frozen-signature frames before the in-world drive fires. ~2s at load2's ~20fps; short so the
 /// RAM-gated drive completes before an incidental unfocused-mouse click can contaminate the run.
 pub(crate) const INWORLD_FINALIZE_DRIVE_RELEASE_FRAMES: usize = 40;
