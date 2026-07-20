@@ -16,9 +16,9 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::constants::{
-    CAN_MOVE_CONFIRMED, MOVE_PROBE_ACTIVE, MOVE_PROBE_EPOCH, MOVE_PROBE_MOVED_FRAMES,
-    MOVE_PROBE_PER_FRAME_THRESHOLD, MOVE_PROBE_REQUIRED_FRAMES,
-    SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT,
+    CAN_MOVE_CONFIRMED, DID_MOVE_FRAMES, MOVE_PROBE_ACTIVE, MOVE_PROBE_EPOCH,
+    MOVE_PROBE_MOVED_FRAMES, MOVE_PROBE_PER_FRAME_THRESHOLD, MOVE_PROBE_REQUIRED_FRAMES,
+    SUPPLIED_MOVEMENT_INPUT_FRAMES, SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT,
 };
 use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 use crate::telemetry::append_autoload_debug;
@@ -52,6 +52,9 @@ unsafe extern "system" fn pad_poll_hook(this: usize, a: usize, b: usize, c: usiz
             *((this + PAD_STICK_LX_OFFSET) as *mut f32) = 0.0;
             *((this + PAD_STICK_LY_OFFSET) as *mut f32) = 1.0;
         }
+        // SUPPLIED_MOVEMENT_INPUT: we actually wrote the forward stick into a live pad device this
+        // frame (distinct from whether it MOVED the character -- see DID_MOVE).
+        SUPPLIED_MOVEMENT_INPUT_FRAMES.fetch_add(1, Ordering::Relaxed);
     }
     ret
 }
@@ -176,10 +179,12 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
     static PROOF_GATE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
     let gate = PROOF_GATE.load(Ordering::Relaxed);
     let enabled = if gate == 0 {
-        // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): the movement-proof harness was
-        // armed by a marker file; marker feature gates are forbidden, so the proof-only forward-input
-        // drive is retired (off) -- it must never fire in a normal user session anyway.
-        let on = false;
+        // DECOUPLED TOGGLE (2026-07-19): the movement-proof forward-input drive runs when the
+        // input-harness DLL is present (prove_movement_enabled() = harness_dll_present(), a
+        // GetModuleHandle check, not a marker/env gate). It must never fire in a normal user
+        // session (no harness DLL loaded), so it stays off there. bd
+        // three-semaphores-can-move-did-move-supplied-input-2026-07-19.
+        let on = crate::experiments::prove_movement_enabled();
         PROOF_GATE.store(if on { 1 } else { 2 }, Ordering::Relaxed);
         on
     } else {
@@ -196,6 +201,8 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
     if MOVE_PROBE_EPOCH.swap(epoch, Ordering::SeqCst) != epoch {
         CAN_MOVE_CONFIRMED.store(false, Ordering::SeqCst);
         MOVE_PROBE_MOVED_FRAMES.store(0, Ordering::SeqCst);
+        DID_MOVE_FRAMES.store(0, Ordering::Relaxed);
+        SUPPLIED_MOVEMENT_INPUT_FRAMES.store(0, Ordering::Relaxed);
         MOVE_PROBE_ACTIVE.store(false, Ordering::SeqCst);
         *lock_prev() = None;
     }
@@ -225,6 +232,9 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
         let dz = pos.2 - pz;
         let horiz = (dx * dx + dz * dz).sqrt();
         if horiz >= MOVE_PROBE_PER_FRAME_THRESHOLD {
+            // DID_MOVE: real displacement observed while supplying input (cumulative, never reset per
+            // frame) -- proves the injected input actually moved the character.
+            DID_MOVE_FRAMES.fetch_add(1, Ordering::Relaxed);
             let moved = MOVE_PROBE_MOVED_FRAMES.fetch_add(1, Ordering::SeqCst) + 1;
             if moved >= MOVE_PROBE_REQUIRED_FRAMES {
                 CAN_MOVE_CONFIRMED.store(true, Ordering::SeqCst);

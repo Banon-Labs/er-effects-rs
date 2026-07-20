@@ -293,9 +293,16 @@ fn write_player_presence_oracle(body: &mut String) {
     let probe_epoch = crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst);
     let can_move =
         crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst) && probe_epoch == cur_deser;
+    // SEMAPHORE SPLIT (user 2026-07-19): three distinct signals, not one conflated can_move.
+    //  * oracle_can_move           = CAPABILITY proven (>=60 consecutive moved frames under our input)
+    //  * oracle_supplied_movement_input_frames = did WE inject (frames we wrote the forward stick)
+    //  * oracle_did_move_frames    = did the char actually move (cumulative displaced frames)
+    // supplied>0 && did_move==0  => injection layer wrong/ignored (pad stick vs kb+mouse WASD).
     body.push_str(&format!(
-        "  \"oracle_can_move\": {},\n  \"oracle_move_probe_moved_frames\": {},\n",
+        "  \"oracle_can_move\": {},\n  \"oracle_move_probe_moved_frames\": {},\n  \"oracle_supplied_movement_input_frames\": {},\n  \"oracle_did_move_frames\": {},\n",
         can_move,
-        crate::constants::MOVE_PROBE_MOVED_FRAMES.load(Ordering::SeqCst)
+        crate::constants::MOVE_PROBE_MOVED_FRAMES.load(Ordering::SeqCst),
+        crate::constants::SUPPLIED_MOVEMENT_INPUT_FRAMES.load(Ordering::Relaxed),
+        crate::constants::DID_MOVE_FRAMES.load(Ordering::Relaxed)
     ));
 }

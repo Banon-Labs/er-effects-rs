@@ -59,6 +59,15 @@ pub(crate) static CAN_MOVE_CONFIRMED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 /// Current consecutive-moved-frame count of the in-flight move probe (for the oracle/report).
 pub(crate) static MOVE_PROBE_MOVED_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// SEMAPHORE SPLIT (user 2026-07-19, bd three-semaphores-can-move-did-move-supplied-input): count of
+/// frames the probe actually WROTE the forward stick into a live pad device (`SUPPLIED_MOVEMENT_INPUT`
+/// = did WE inject). Distinct from CAN_MOVE (capability) and DID_MOVE (real displacement): if supplied
+/// climbs but DID_MOVE stays 0, the injection layer is wrong/ignored (e.g. pad stick vs kb+mouse WASD).
+pub(crate) static SUPPLIED_MOVEMENT_INPUT_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// CUMULATIVE count of frames with real havok displacement >= threshold WHILE supplying input
+/// (`DID_MOVE` = did the character actually move). Unlike MOVE_PROBE_MOVED_FRAMES it does NOT reset on a
+/// non-moving frame, so `DID_MOVE > 0` means "moved at least once under our input". Reset per load epoch.
+pub(crate) static DID_MOVE_FRAMES: AtomicUsize = AtomicUsize::new(0);
 /// The load epoch (fresh_deser_count) the current probe is bound to, so it resets per load.
 pub(crate) static MOVE_PROBE_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// Forward stick deflection the probe injects (near full), the per-FRAME horizontal displacement (world

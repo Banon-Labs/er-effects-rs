@@ -115,6 +115,11 @@ def snap(t: dict) -> dict:
         "oracle_csremo_present",
         "oracle_csremo_remoman_present",
         "oracle_csremo_remo_pending",
+        # Movement semaphore split (can_move capability vs supplied-input vs did-move):
+        "oracle_can_move",
+        "oracle_move_probe_moved_frames",
+        "oracle_supplied_movement_input_frames",
+        "oracle_did_move_frames",
         "oracle_saved_map_c30",
         "sq_repro_state",
         "sq_repro_switch_index",
