@@ -186,42 +186,56 @@ pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
     else {
         return;
     };
-    let stepper =
-        unsafe { safe_read_usize(mms + MOVEMAPSTEP_TESTNETSTEP_STEPPER_110_OFFSET) }.unwrap_or(0);
-    if stepper < 0x10000 {
-        // testNetStep already finished/skipped -> nothing to force.
-        TESTNET_FF_STUCK_FRAMES.store(0, Ordering::Relaxed);
-        return;
-    }
-    let mms_state =
-        unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET) }.unwrap_or(-1) as usize;
-    let last = TESTNET_FF_LAST_MMS.swap(mms_state, Ordering::Relaxed);
-    let stuck = if mms_state == last {
+    // FINALIZE SUBSTATE force-advance (bd load2-real-blocker-finalize-advancer-stuck-substate7): the
+    // load2 softlock parks at MoveMapStep+0x12a == 7 ("REMO/SAVE-DRAIN WAIT") -- the advancer FUN_140afa7c0's
+    // 7->8 gate (FUN_14067a170 && !ShouldSave && !FUN_140679460 && FUN_140a9ceb0(CSRemo)) never passes for a
+    // warm reload. A just-deserialized load2 has NOT played, so that save/remo drain is spurious. Force the
+    // substate 7->8 (WARP/SERVER FINALIZE) so the advancer continues to 9, STEP_MoveMap_Update latches
+    // requestCode=2, and the world completes. Writing +0x12a is LOAD-STATE progression, NOT a save write.
+    let fin = unsafe { safe_read_u8(mms + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET) }
+        .map(i32::from)
+        .unwrap_or(-1);
+    let mms_state = unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET) }.unwrap_or(-1);
+    // Stuck = parked at the same (mms_state, finalize substate) with no progress.
+    let key = ((mms_state as u32 as usize) << 8) | (fin as u8 as usize);
+    let last = TESTNET_FF_LAST_MMS.swap(key, Ordering::Relaxed);
+    let stuck = if key == last {
         TESTNET_FF_STUCK_FRAMES.fetch_add(1, Ordering::Relaxed) + 1
     } else {
         TESTNET_FF_STUCK_FRAMES.store(0, Ordering::Relaxed);
         0
     };
-    const STUCK_THRESHOLD: usize = 240; // ~4s at 60fps of zero mms progress with testNetStep unfinished
-    if stuck < STUCK_THRESHOLD {
+    const STUCK_THRESHOLD: usize = 180; // ~3s parked at finalize substate 7 before we force it forward
+    if fin != 7 || stuck < STUCK_THRESHOLD {
         return;
     }
     if TESTNET_FF_FIRED_EPOCH.swap(epoch, Ordering::SeqCst) == epoch {
         return; // already forced this reload epoch
     }
-    let Ok(addr) = game_rva(EZ_CHILD_STEP_REQUEST_FINISH_RVA) else {
-        return;
-    };
-    let wrapper = mms + MOVEMAPSTEP_TESTNETSTEP_WRAPPER_108_OFFSET;
-    if unsafe { safe_read_usize(wrapper) }.is_none() {
+    // Re-read immediately before the write to avoid a stale race.
+    if unsafe { safe_read_u8(mms + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET) } != Some(7) {
         return;
     }
-    let request_finish: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(addr) };
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        request_finish(wrapper)
-    }));
+    // CLEAR the lingering warpRequested (GameMan+0x10) FIRST (user obs 2026-07-19: forcing to 8 with warp
+    // set made case 8 consume the warp and RE-LOAD instead of completing). Load2's return-title+reload
+    // flow leaves warpRequested set; with it cleared, case 8 (WARP/SERVER FINALIZE) takes the CLEAN
+    // server-finalize path to 9 exactly like load1. Byte write; no save touched.
+    let mut warp_was = -1i32;
+    if let Ok(gm) = unsafe { eldenring::cs::GameMan::instance() } {
+        let gm_addr = gm as *const _ as usize;
+        warp_was = unsafe { safe_read_u8(gm_addr + crate::constants::GAME_MAN_WARP_REQUESTED_10_OFFSET) }
+            .map(i32::from)
+            .unwrap_or(-1);
+        if warp_was != 0 {
+            unsafe {
+                *((gm_addr + crate::constants::GAME_MAN_WARP_REQUESTED_10_OFFSET) as *mut u8) = 0
+            };
+        }
+    }
+    // Advance 7 -> 8; with warp cleared, case 8 server-finalizes -> 9 -> requestCode 2 -> world completes.
+    unsafe { *((mms + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET) as *mut u8) = 8 };
     append_autoload_debug(format_args!(
-        "testnet-force-finish: load2 epoch {epoch} STUCK {stuck}f at mms={mms_state} req=1 stepper=0x{stepper:x} -> RequestFinish(wrapper 0x{wrapper:x})"
+        "finalize-force-advance: load2 epoch {epoch} parked substate 7 (REMO/SAVE-DRAIN WAIT) {stuck}f mms={mms_state} warpRequested_was={warp_was} -> cleared warp + forced +0x12a=8"
     ));
 }
 

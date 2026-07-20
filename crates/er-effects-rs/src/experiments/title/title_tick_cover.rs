@@ -297,23 +297,17 @@ pub(crate) unsafe extern "system" fn ingamestep_step_movemap_update_defer_detour
         let fin = unsafe { safe_read_u8(mms + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET) }
             .map(|v| v as i32)
             .unwrap_or(-1);
-        if (1..=8).contains(&fin) {
-            let held = INGAMESTEP_MOVEMAP_UPDATE_DEFER_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
-            if held > INGAMESTEP_MOVEMAP_UPDATE_DEFER_MAX {
-                return false; // fail-soft: never hold a genuine teardown forever
-            }
-            let n = INGAMESTEP_MOVEMAP_UPDATE_DEFER_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-            if n <= 8 || n.is_power_of_two() {
-                append_autoload_debug(format_args!(
-                    "reload-finalize-defer #{n}: STEP_MoveMap_Update held (finalize={fin} in progress, held_frames={held}) -- deferring d8=2/teardown until the advancer posts substate 9"
-                ));
-            }
-            true
-        } else {
-            // finalize done (9/0) or not started: let the parent advance normally.
-            INGAMESTEP_MOVEMAP_UPDATE_DEFER_TICKS.store(0, Ordering::SeqCst);
-            false
-        }
+        // DISABLED (bd load2-mms18-real-cause-my-defer-detour-deadlock-2026-07-19): deferring
+        // STEP_MoveMap_Update while finalize is in [1..=8] DEADLOCKED load2. The premise ("the advancer
+        // posts substate 9, pumped elsewhere") is WRONG: STEP_MoveMap_Update itself is what advances the
+        // finalize, so skipping it strands load2 at mms=18/finalize=7 forever (log 'finalize-defer #64
+        // held finalize=7'). load1 (untouched, epoch 0) advances mms 18->done fine. So NEVER defer --
+        // run the update every frame like load1 does, so it sets requestCode=2 and the world completes.
+        let _ = fin;
+        INGAMESTEP_MOVEMAP_UPDATE_DEFER_TICKS.store(0, Ordering::SeqCst);
+        let _ = &INGAMESTEP_MOVEMAP_UPDATE_DEFER_COUNT;
+        let _ = INGAMESTEP_MOVEMAP_UPDATE_DEFER_MAX;
+        false
     }))
     .unwrap_or(false);
     if defer {

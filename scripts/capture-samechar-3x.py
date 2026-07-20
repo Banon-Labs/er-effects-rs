@@ -25,7 +25,8 @@ import time
 from pathlib import Path
 
 RENDER_READY_DWELL_SECONDS = 5.0  # goal SS4 hard render gate dwell
-POLL_SECONDS = 1.0
+POLL_SECONDS = 0.5  # capture cadence (user 2026-07-19: 3s log throttle hid the completion->teardown)
+LOG_THROTTLE_SECONDS = 0.5  # console log cadence -- match the poll so fast transitions are visible
 TARGET_FINAL_EPOCH = 3  # 4 loads total = fresh_deser 0..3
 FINAL_LOAD_DWELL_SECONDS = (
     14.0  # after the 4th load appears, give the 60-frame move-probe time to run
@@ -775,7 +776,7 @@ def main() -> int:
                 result = "BOOT_TIMEOUT_NO_INWORLD"
                 break
 
-            if elapsed - last_log >= 3.0:
+            if elapsed - last_log >= LOG_THROTTLE_SECONDS:
                 last_log = elapsed
                 nav_label = SQ_REPRO_STATE_LABELS.get(int(nav_stage), f"?{nav_stage}")
                 print(
