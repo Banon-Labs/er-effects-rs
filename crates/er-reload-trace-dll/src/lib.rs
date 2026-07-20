@@ -41,6 +41,12 @@ const CS_MENU_MAN_MENU_DATA_OFFSET: usize = 0x8;
 const MENU_DATA_RT5D_OFFSET: usize = 0x5d;
 const MENU_DATA_ENDING_5E_OFFSET: usize = 0x5e;
 
+// Case-7 (7->8) save-drain gate flags read by the finalize advancer (1.16.2 FUN_140afa6d0):
+// ShouldSave() reads GameMan->saveRequested (0xb72); FUN_140679370() reads GameMan+0xb73 (gated by
+// bc4!=3). The suppressed in-world quit-save leaves these set, so !ShouldSave()/!FUN_140679370() fail
+// and load2 parks at field25=7 even after rt5d unblocks case 0. The rt5d drive clears them natively.
+const GAME_MAN_SAVE_REQUESTED_B72_OFFSET: usize = 0xb72;
+const GAME_MAN_FIELD_B73_OFFSET: usize = 0xb73;
 const GAME_MAN_REQUESTED_SLOT_B78_OFFSET: usize = 0xb78;
 const GAME_MAN_LOAD_PHASE_B80_OFFSET: usize = 0xb80;
 const GAME_MAN_SAVE_SLOT_AC0_OFFSET: usize = 0xac0;
@@ -96,10 +102,15 @@ static LAST_FIN12A: AtomicI32 = AtomicI32::new(-2);
 /// Once a SINGLE MoveMapStep has been stuck at field25=0 for RT5D_DRIVE_THRESHOLD consecutive advancer
 /// calls (load1 flips at ~call#133, so this only ever fires for a genuinely-stuck load2), supply rt5d=1
 /// once so the game's OWN finalize completes -- then observe complete(field25->9, movable) vs teardown.
-const RT5D_DRIVE_THRESHOLD: u64 = 250;
+const RT5D_DRIVE_THRESHOLD: u64 = 30;
 static RT5D_DRIVE_MMS: AtomicUsize = AtomicUsize::new(0);
 static RT5D_DRIVE_ZERO_STREAK: AtomicU64 = AtomicU64::new(0);
 static RT5D_DRIVE_DONE_MMS: AtomicUsize = AtomicUsize::new(0);
+/// The most recent MoveMapStep whose finalize was seen ADVANCING (field25>=5) -- i.e. a load that
+/// completes on its own (load1, or a driven load2). Once set, any DIFFERENT mms stuck at field25=0 is
+/// the divergent next load; drive it after only RT5D_DRIVE_THRESHOLD stuck calls (a short run may never
+/// reach a large global count). Also lets the same logic catch load3 after load2 completes.
+static COMPLETION_SEEN_MMS: AtomicUsize = AtomicUsize::new(0);
 static ORIG_FINALIZE_ADVANCER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 /// Child-done query FUN_140eb5550 (deobf 0x140eb5530 / rva 0xeb5530): STEP_MoveMap_Update calls it and,
 /// if it returns nonzero (done), tears the MoveMapStep child down. HYPOTHESIS: it returns done
@@ -269,19 +280,38 @@ unsafe extern "system" fn hook_finalize_advancer(a: usize, b: usize, c: usize, d
     let fin_before = unsafe { read_u8(a + MOVEMAPSTEP_FINALIZE_12A_OFFSET) }.map_or(-1, i32::from);
     let menu = game_base().and_then(|base| unsafe { read_usize(base + CS_MENU_MAN_GLOBAL_RVA) });
     let menu_data = menu.and_then(|m| unsafe { read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) });
-    // rt5d DIAGNOSTIC DRIVE -- BEFORE the native advancer reads menuData+0x5d. Track the consecutive
-    // field25==0 streak per MoveMapStep; when a single stuck mms crosses the threshold (only load2 ever
-    // does -- load1 flips well under it), write rt5d=1 once so the game's own finalize can advance.
+    // Once we've begun driving THIS mms's finalize, keep the case-7 save-drain flags clear every call so
+    // 7->8 can pass (ShouldSave=GameMan->saveRequested(0xb72); FUN_140679370=GameMan+0xb73). The
+    // suppressed quit-save leaves them set -> load2 parks at field25=7 even after rt5d unblocks case 0.
+    if a != 0 && RT5D_DRIVE_DONE_MMS.load(Ordering::SeqCst) == a {
+        if let Some(gm) =
+            game_base().and_then(|base| unsafe { read_usize(base + GAME_MAN_SINGLETON_RVA) })
+        {
+            unsafe { write_u8(gm + GAME_MAN_SAVE_REQUESTED_B72_OFFSET, 0) };
+            unsafe { write_u8(gm + GAME_MAN_FIELD_B73_OFFSET, 0) };
+        }
+    }
+    // A finalize that is advancing (field25>=5) marks its mms as a self-completing load (load1).
+    if fin_before >= 5 {
+        COMPLETION_SEEN_MMS.store(a, Ordering::SeqCst);
+    }
+    // rt5d DIAGNOSTIC DRIVE -- BEFORE the native advancer reads menuData+0x5d. Once a load has completed,
+    // a DIFFERENT mms stuck at field25=0 is the divergent load2; drive it after a few stuck calls.
     if fin_before == 0 {
         if RT5D_DRIVE_MMS.swap(a, Ordering::SeqCst) != a {
             RT5D_DRIVE_ZERO_STREAK.store(0, Ordering::SeqCst);
         }
         let streak = RT5D_DRIVE_ZERO_STREAK.fetch_add(1, Ordering::SeqCst) + 1;
-        if streak >= RT5D_DRIVE_THRESHOLD && RT5D_DRIVE_DONE_MMS.swap(a, Ordering::SeqCst) != a {
+        let seen = COMPLETION_SEEN_MMS.load(Ordering::SeqCst);
+        let is_divergent_load = seen != 0 && seen != a;
+        if is_divergent_load
+            && streak >= RT5D_DRIVE_THRESHOLD
+            && RT5D_DRIVE_DONE_MMS.swap(a, Ordering::SeqCst) != a
+        {
             if let Some(md) = menu_data {
                 unsafe { write_u8(md + MENU_DATA_RT5D_OFFSET, 1) };
                 log_line(format_args!(
-                    "RT5D_DRIVE: wrote menuData+0x5d=1 on stuck mms=0x{a:x} after {streak} consecutive field25=0 calls {}",
+                    "RT5D_DRIVE: wrote menuData+0x5d=1 on stuck mms=0x{a:x} after {streak} field25=0 calls (prior completed mms=0x{seen:x}) {}",
                     snapshot()
                 ));
             }
