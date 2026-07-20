@@ -88,6 +88,8 @@ def snap(t: dict) -> dict:
         "oracle_chr_enable_render",
         "oracle_havok_pos",
         "oracle_play_time_ms",
+        "oracle_play_time_advanced_ms",
+        "oracle_play_time_live",
         "oracle_now_loading",
         "oracle_fake_loading_any_visible",
         "oracle_fake_loading_field_c",

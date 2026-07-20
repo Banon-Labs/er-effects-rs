@@ -60,6 +60,32 @@ fn write_game_module_oracles(body: &mut String) {
             }
             .map_or(PLAY_TIME_READ_FAIL, |v| i64::from((v & 0xffff_ffff) as u32))
         };
+        // WORLD-CLOCK-LIVE semaphore (user 2026-07-19, bd play-time-live-world-clock-semaphore): the
+        // input-trace path computes this but only emits it to the trace jsonl; mirror it into the MAIN
+        // telemetry so the samechar-3x load1-vs-load2 comparison can actually use it (its
+        // "world_clock:live" checkpoint reads `play_time_live`). play_time advances only while the world
+        // sim steps; a >=1s rise past THIS load epoch's first-seen value = the world is genuinely live
+        // (the loading-screen playtime the user watched ticking). Necessary-not-sufficient for control.
+        const PLAY_TIME_LIVE_THRESHOLD_MS: i64 = 1000;
+        static PT_ORACLE_EPOCH: std::sync::atomic::AtomicUsize =
+            std::sync::atomic::AtomicUsize::new(usize::MAX);
+        static PT_ORACLE_FIRST: std::sync::atomic::AtomicI64 =
+            std::sync::atomic::AtomicI64::new(PLAY_TIME_READ_FAIL);
+        let pt_epoch = crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if PT_ORACLE_EPOCH.swap(pt_epoch, std::sync::atomic::Ordering::Relaxed) != pt_epoch {
+            // New load epoch -> reset the baseline to this load's first-seen play_time.
+            PT_ORACLE_FIRST.store(play_time_ms, std::sync::atomic::Ordering::Relaxed);
+        } else if PT_ORACLE_FIRST.load(std::sync::atomic::Ordering::Relaxed) < 0 && play_time_ms >= 0 {
+            PT_ORACLE_FIRST.store(play_time_ms, std::sync::atomic::Ordering::Relaxed);
+        }
+        let pt_first = PT_ORACLE_FIRST.load(std::sync::atomic::Ordering::Relaxed);
+        let play_time_advanced_ms: i64 = if play_time_ms >= 0 && pt_first >= 0 {
+            play_time_ms - pt_first
+        } else {
+            PLAY_TIME_READ_FAIL
+        };
+        let play_time_live: bool = play_time_advanced_ms >= PLAY_TIME_LIVE_THRESHOLD_MS;
         const U8_MASK: usize = 0xff;
         let read_pgd_u32 = |offset: usize| -> u32 {
             if pgd == NULL_PTR {
@@ -181,7 +207,7 @@ fn write_game_module_oracles(body: &mut String) {
         }
         let stat_values = stats.map(|value| value.to_string()).join(", ");
         body.push_str(&format!(
-            "  \"oracle_char_current_hp\": {current_hp},\n  \"oracle_char_current_max_hp\": {current_max_hp},\n  \"oracle_char_base_max_hp\": {base_max_hp},\n  \"oracle_char_current_fp\": {current_fp},\n  \"oracle_char_current_max_fp\": {current_max_fp},\n  \"oracle_char_base_max_fp\": {base_max_fp},\n  \"oracle_char_current_stamina\": {current_stamina},\n  \"oracle_char_current_max_stamina\": {current_max_stamina},\n  \"oracle_char_base_max_stamina\": {base_max_stamina},\n  \"oracle_char_level\": {level},\n  \"oracle_char_runes\": {runes},\n  \"oracle_char_rune_memory\": {rune_memory},\n  \"oracle_char_chr_type\": {chr_type},\n  \"oracle_char_gender\": {gender},\n  \"oracle_char_archetype\": {archetype},\n  \"oracle_char_voice_type\": {voice_type},\n  \"oracle_char_starting_gift\": {starting_gift},\n  \"oracle_char_unlocked_talisman_slots\": {unlocked_talisman_slots},\n  \"oracle_char_spirit_ash_level\": {spirit_ash_level},\n  \"oracle_char_max_crimson_flask_count\": {max_crimson_flask_count},\n  \"oracle_char_max_cerulean_flask_count\": {max_cerulean_flask_count},\n  \"oracle_char_name\": \"{}\",\n  \"oracle_char_name_len\": {name_len},\n  \"oracle_play_time_ms\": {play_time_ms},\n  \"oracle_char_stats\": [{stat_values}],\n  \"oracle_face_data_magic\": \"{}\",\n  \"oracle_face_data_version\": {face_data_version},\n  \"oracle_face_data_buffer_size\": {face_data_buffer_size},\n  \"oracle_face_data_buffer_hex\": \"{face_data_buffer_hex}\",\n  \"oracle_face_body_fields\": {face_body_fields},\n",
+            "  \"oracle_char_current_hp\": {current_hp},\n  \"oracle_char_current_max_hp\": {current_max_hp},\n  \"oracle_char_base_max_hp\": {base_max_hp},\n  \"oracle_char_current_fp\": {current_fp},\n  \"oracle_char_current_max_fp\": {current_max_fp},\n  \"oracle_char_base_max_fp\": {base_max_fp},\n  \"oracle_char_current_stamina\": {current_stamina},\n  \"oracle_char_current_max_stamina\": {current_max_stamina},\n  \"oracle_char_base_max_stamina\": {base_max_stamina},\n  \"oracle_char_level\": {level},\n  \"oracle_char_runes\": {runes},\n  \"oracle_char_rune_memory\": {rune_memory},\n  \"oracle_char_chr_type\": {chr_type},\n  \"oracle_char_gender\": {gender},\n  \"oracle_char_archetype\": {archetype},\n  \"oracle_char_voice_type\": {voice_type},\n  \"oracle_char_starting_gift\": {starting_gift},\n  \"oracle_char_unlocked_talisman_slots\": {unlocked_talisman_slots},\n  \"oracle_char_spirit_ash_level\": {spirit_ash_level},\n  \"oracle_char_max_crimson_flask_count\": {max_crimson_flask_count},\n  \"oracle_char_max_cerulean_flask_count\": {max_cerulean_flask_count},\n  \"oracle_char_name\": \"{}\",\n  \"oracle_char_name_len\": {name_len},\n  \"oracle_play_time_ms\": {play_time_ms},\n  \"oracle_play_time_advanced_ms\": {play_time_advanced_ms},\n  \"oracle_play_time_live\": {play_time_live},\n  \"oracle_char_stats\": [{stat_values}],\n  \"oracle_face_data_magic\": \"{}\",\n  \"oracle_face_data_version\": {face_data_version},\n  \"oracle_face_data_buffer_size\": {face_data_buffer_size},\n  \"oracle_face_data_buffer_hex\": \"{face_data_buffer_hex}\",\n  \"oracle_face_body_fields\": {face_body_fields},\n",
             json_escape(&name),
             json_escape(&face_data_magic)
         ));
