@@ -41,6 +41,10 @@ pub(crate) static BOOT_VIEW_LOADSCREEN_TABLE_BASELINE: AtomicUsize = AtomicUsize
 pub(crate) static BOOT_VIEW_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
 /// Last DISPLAYED progress in permille (monotonic; includes the inter-milestone creep).
 pub(crate) static BOOT_VIEW_LAST_PERMILLE: AtomicUsize = AtomicUsize::new(0);
+/// DIAGNOSTIC (bd ab-portrait-disabled-load2-fps-still-low-boot-view-composite-is-killer-2026-07-20):
+/// last process-ms the per-frame boot-view stop DECISION was logged, so the log is rate-limited to
+/// ~1/s while we diagnose why neither stop path fires for the incomplete load2.
+static BOOT_VIEW_DECISION_LOG_MS: AtomicU64 = AtomicU64::new(0);
 /// Monotonic-display clamp for the (phase idx, substep) LABEL numbers (user 2026-07-19): the visible
 /// numbers must only advance within one load epoch -- never repeat a value already passed nor
 /// decrement -- or the loading text reads as jumpy/looping. Ordinal = idx*ORD_SCALE + sub (phase idx
@@ -1528,6 +1532,39 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
     let world_handoff = (!own_menu_active
         && IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES)
         || epoch_world_handoff;
+    // DIAGNOSTIC (bd ab-portrait-disabled-load2-fps-still-low-boot-view-composite-is-killer-2026-07-20):
+    // the per-frame GPU readback-with-wait below tanks load2 FPS because neither stop path fires. Log
+    // the actual gate values (~1/s) so we can see WHICH one is stuck: own_menu, the two handoffs, the
+    // per-epoch world-live tag, permille, and the fresh_deser epoch vs the tagged live epoch.
+    {
+        let now_log = boot_view_epoch_ms();
+        let last_log = BOOT_VIEW_DECISION_LOG_MS.load(Ordering::SeqCst);
+        if now_log.saturating_sub(last_log) >= 1000
+            && BOOT_VIEW_DECISION_LOG_MS
+                .compare_exchange(last_log, now_log, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        {
+            let fresh_deser =
+                crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+            let epoch_world_live =
+                crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "boot-view DECISION: own_menu={} loading_handoff={} world_handoff={} epoch_world_handoff={} permille={} draw_state={} in_world={} fresh_deser={} epoch_world_live={} loadscreen_builds={} table_baseline={} now_ms={}",
+                own_menu_active,
+                loading_handoff,
+                world_handoff,
+                epoch_world_handoff,
+                BOOT_VIEW_LAST_PERMILLE.load(Ordering::SeqCst),
+                BOOT_VIEW_DRAW_STATE.load(Ordering::SeqCst),
+                IN_WORLD_REACHED.load(Ordering::SeqCst),
+                fresh_deser,
+                epoch_world_live,
+                loadscreen_builds,
+                table_baseline,
+                now_log,
+            ));
+        }
+    }
     if loading_handoff || world_handoff {
         // SEAMLESS CUT (user 2026-07-06): the handoff (loading table build) starts the game's
         // black gap + the loading screen's own fade-in-from-black, so stopping here would cut a
