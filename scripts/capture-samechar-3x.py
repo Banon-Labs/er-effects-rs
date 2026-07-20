@@ -727,7 +727,7 @@ def main() -> int:
                     if loading_stall_seconds > LOADING_PROGRESS_STALL_SECONDS:
                         loading_stall_signature = loading_progress_signature
                         loading_stall_source = loading_progress_source
-                        result = "LOADING_PROGRESS_STALLED_10S"
+                        result = f"LOADING_PROGRESS_STALLED_{int(LOADING_PROGRESS_STALL_SECONDS)}S"
                         break
             else:
                 last_loading_progress_signature = None
