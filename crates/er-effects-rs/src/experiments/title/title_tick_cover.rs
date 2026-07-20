@@ -1679,8 +1679,22 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                         .is_ok()
                 {
                     let n = ENDING_REQUEST_SET_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+                    // DRIVE rt5d=1 -- the NON-WARP finalize input load1 uses (re-enabled from the prior
+                    // observe-only downgrade, RE bd REFINED-load1-finishes-via-rt5d-end5e-warp0-load2-
+                    // overcleared-both-2026-07-20). Run 20260720-101944 proved: LOAD1 completes
+                    // mms18->19(CLEANUP)->20(FINISH) with rt5d/end5e=1 and warp=0, while LOAD2 arrives at
+                    // mms18 with ALL cVar10 inputs 0 (warp consumed + our handoff over-cleared 0x5d/0x5e)
+                    // and freezes at finalize case 0 (present but frozen; 463 move-input frames, 4 moved).
+                    // Setting menuData+0x5d=1 makes the advancer FUN_140afa7c0 compute cVar10=1 and write
+                    // 0x5e=1, walking the child 18->19->20 the SAME non-warp way load1 does -- no case-8
+                    // re-warp (warp stays native-owned/cleared, so no warp-reload teardown loop). The
+                    // ending-latch-residual-clear below clears rt5d the frame mms leaves 18, preventing the
+                    // ~4s CheckReturnToTitle bounce. One-shot per stall (ENDING_REQUEST_SET latch).
+                    unsafe {
+                        *((md + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) as *mut u8) = 1;
+                    }
                     append_autoload_debug(format_args!(
-                        "MMS18 NATIVE-WARP OBSERVE #{n}: mms18 stall signature held (streak={streak} phase={quickload_phase} end5e=0 rt5d=0 b7c1=1 blocks={mms_blocks}); leaving GameMan.warp_requested native-owned for case8 autoclear"
+                        "MMS18 RT5D DRIVE #{n}: drove menuData+0x5d=1 at mms18 stall (streak={streak} phase={quickload_phase} end5e=0 rt5d=0 b7c1=1 blocks={mms_blocks}) -- non-warp finalize driver (load1 path); warp left native-owned"
                     ));
                 }
             } else {
@@ -1935,7 +1949,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             // vtable[0x10] load-state getter that returns null (why the legacy load is never created).
             let blk_vt_rva = mms_blk_vt.saturating_sub(module_base);
             append_autoload_debug(format_args!(
-                "SWITCH-ORACLE #{n}: slot={slot} bc4={bc4v} player={player_present} ig_d8={ig_d8} pstep={ig_pstep}/{ig_pnext} menu_job=0x{menu_job:x} csm6b0={csm6b0} lsmode={lsmode} ls10={loading_screen_field10} ls11={loading_screen_field11} gm_bf5={gm_bf5} dd=0x{delay_delete:x} dd40={dd40} dd54={dd54} wcm=0x{world_chr_man:x} mainp=0x{main_player:x} stable_frames={sf} peak={peak} mms=0x{mms_disp:x} mms_step={mms_step}({}) next={mms_next} done50={mms_done} gate={mms_gate_lo}/{mms_gate_hi} end5e={md_5e} rt5d={md_5d} force={ending_force} b7c={gb7c} b7d={gb7d} warp={gwarp} hold270=0x{mms_hold:x} cd100={mms_cd} req248={mms_req248} b7c1={mms_b7c1} blocks={mms_blocks} curblk=0x{mms_cur_block:x} b798=0x{mms_b798:x} b79c=0x{mms_b79c:x} blk_found={mms_block_found} blk_ls=0x{mms_blk_ls:x} blk_2c={mms_blk_2c} blk_2d={mms_blk_2d} blk_35={mms_blk_35} ar_wanted={mms_ar_wanted} ar_state={mms_ar_state} ar_bres={mms_ar_bres} fc_present={mms_fc_present} fc_notloaded={mms_fc_notloaded} fc_stuck=[{mms_fc_stuck}] blk_vt_rva=0x{blk_vt_rva:x} ll_size={ll_size} ll_fcap=0x{ll_fcap:x} ll_path='{ll_path}' ow_cnt={mms_ow_count} ow=[{mms_ow_areas}] blk_areas=[{mms_block_areas}] phase={} -- {cls}",
+                "SWITCH-ORACLE #{n}: slot={slot} bc4={bc4v} player={player_present} ig_d8={ig_d8} pstep={ig_pstep}/{ig_pnext} menu_job=0x{menu_job:x} csm6b0={csm6b0} lsmode={lsmode} ls10={loading_screen_field10} ls11={loading_screen_field11} gm_bf5={gm_bf5} dd=0x{delay_delete:x} dd40={dd40} dd54={dd54} wcm=0x{world_chr_man:x} mainp=0x{main_player:x} stable_frames={sf} peak={peak} mms=0x{mms_disp:x} mms_step={mms_step}({}) next={mms_next} fin12a={finalize_now} epoch={reload_epoch_now} done50={mms_done} gate={mms_gate_lo}/{mms_gate_hi} end5e={md_5e} rt5d={md_5d} force={ending_force} b7c={gb7c} b7d={gb7d} warp={gwarp} hold270=0x{mms_hold:x} cd100={mms_cd} req248={mms_req248} b7c1={mms_b7c1} blocks={mms_blocks} curblk=0x{mms_cur_block:x} b798=0x{mms_b798:x} b79c=0x{mms_b79c:x} blk_found={mms_block_found} blk_ls=0x{mms_blk_ls:x} blk_2c={mms_blk_2c} blk_2d={mms_blk_2d} blk_35={mms_blk_35} ar_wanted={mms_ar_wanted} ar_state={mms_ar_state} ar_bres={mms_ar_bres} fc_present={mms_fc_present} fc_notloaded={mms_fc_notloaded} fc_stuck=[{mms_fc_stuck}] blk_vt_rva=0x{blk_vt_rva:x} ll_size={ll_size} ll_fcap=0x{ll_fcap:x} ll_path='{ll_path}' ow_cnt={mms_ow_count} ow=[{mms_ow_areas}] blk_areas=[{mms_block_areas}] phase={} -- {cls}",
                 movemapstep_step_name(mms_step),
                 SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
             ));
