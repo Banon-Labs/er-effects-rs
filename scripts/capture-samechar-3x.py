@@ -603,6 +603,14 @@ def main() -> int:
     fps_compared_logged = False  # parity note already printed once
     FPS_SETTLE_BEFORE_TEST_S = 5.0  # let load2 FINISH loading into world two before testing the drop
     FPS_REGRESSION_RATIO = 0.85  # load2 avg < 85% of load1 = a real, user-visible frame drop
+    # BOOTUP-SEQUENCE DIVERGENCE (user 2026-07-20, goal core): compare each reload's MoveMapStep
+    # progression to the load1 baseline at the OVERLAP stages; tear down at the exact stage a later load
+    # stops matching load1. Known divergence: load1 advances mms 18->19->20->-1 (settles); a stuck load2/3
+    # sits at mms=18. Track load1's first mms=18 and its settle (mms=-1 AFTER 18), then flag any later load
+    # that sits at mms=18 well beyond load1's 18->settle window.
+    l1_reached_18_at: float | None = None
+    l1_settle_from_18_s: float | None = None
+    later_load_18_at: dict[int, float] = {}
 
     while True:
         now = time.monotonic()
@@ -681,6 +689,36 @@ def main() -> int:
             # signature is used only as a fallback when the loading-bar oracle is unavailable.
             request_code = as_int(s.get("oracle_stepfinish_request_code"))
             mms_state = as_int(s.get("oracle_stepfinish_mms_state"))
+            # BOOTUP-SEQUENCE DIVERGENCE check (user 2026-07-20). load1 (epoch 0): note first mms=18 and
+            # the settle (first mms=-1 AFTER reaching 18) -> the 18->settle duration baseline. Any later
+            # load (epoch>=1) that sits at mms=18 well past that window has DIVERGED from load1's overlap
+            # sequence -> tear down at that exact stage.
+            _dep = int(deser)
+            if _dep == 0:
+                if mms_state == 18 and l1_reached_18_at is None:
+                    l1_reached_18_at = now
+                if (
+                    mms_state == -1
+                    and l1_reached_18_at is not None
+                    and l1_settle_from_18_s is None
+                ):
+                    l1_settle_from_18_s = now - l1_reached_18_at
+            elif _dep >= 1:
+                if mms_state == 18 and _dep not in later_load_18_at:
+                    later_load_18_at[_dep] = now
+                if (
+                    mms_state == 18
+                    and _dep in later_load_18_at
+                    and l1_settle_from_18_s is not None
+                ):
+                    stuck_s = now - later_load_18_at[_dep]
+                    budget = l1_settle_from_18_s * 3.0 + 8.0
+                    if stuck_s > budget:
+                        result = (
+                            f"BOOTUP_DIVERGENCE_LOAD{_dep + 1} mms=18 stuck {stuck_s:.0f}s "
+                            f"(load1 settled 18->-1 in {l1_settle_from_18_s:.0f}s) -- diverges at MoveMapStep finalize"
+                        )
+                        break
             bar_enabled = as_int(s.get("oracle_loading_bar_enabled"), 0) > 0
             bar_current_frame = as_int(s.get("oracle_loading_bar_current_frame"))
             bar_progress_permille = as_int(
