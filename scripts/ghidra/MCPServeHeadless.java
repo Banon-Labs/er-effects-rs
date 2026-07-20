@@ -26,9 +26,11 @@
 
 import ghidra.app.script.GhidraScript;
 import ghidra.framework.model.TransactionInfo;
-import ghidra.mcp.MCPServer;
+import ghidra.framework.plugintool.PluginTool;
+import ghidra.program.model.listing.Program;
 
 import java.io.File;
+import java.lang.reflect.Method;
 
 public class MCPServeHeadless extends GhidraScript {
 
@@ -44,12 +46,20 @@ public class MCPServeHeadless extends GhidraScript {
 			return;
 		}
 
-		MCPServer server = new MCPServer(null);
-		server.setPort(port);
-		server.setRestrictToLocalhost(true);
-		server.setCurrentProgram(currentProgram);
-		server.startServer();
-		if (!server.isRunning()) {
+		// REFLECTION (bd prefer-ghidra-mcp-daemon-over-perquery-headless): resolve the EXTENSION class
+		// ghidra.mcp.MCPServer at RUNTIME, not via a compile-time import. A GhidraScript compiles into
+		// its own OSGi bundle whose import resolver sees only Ghidra CORE packages, not extension
+		// packages, so a direct `import ghidra.mcp.MCPServer` makes the bundle fail to build ("Failed to
+		// get OSGi bundle containing script"). The extension IS on the framework runtime classpath once
+		// installed under the user Extensions dir, so Class.forName resolves it here.
+		Class<?> serverClass = Class.forName("ghidra.mcp.MCPServer");
+		Object server = serverClass.getConstructor(PluginTool.class).newInstance((PluginTool) null);
+		serverClass.getMethod("setPort", int.class).invoke(server, port);
+		serverClass.getMethod("setRestrictToLocalhost", boolean.class).invoke(server, true);
+		serverClass.getMethod("setCurrentProgram", Program.class).invoke(server, currentProgram);
+		serverClass.getMethod("startServer").invoke(server);
+		Method stopServer = serverClass.getMethod("stopServer");
+		if (!((Boolean) serverClass.getMethod("isRunning").invoke(server))) {
 			println("MCP_HEADLESS: FAILED to start on port " + port + " (already in use?)");
 			return;
 		}
@@ -77,7 +87,7 @@ public class MCPServeHeadless extends GhidraScript {
 		}
 		finally {
 			autoSave(); // final flush of any pending edits on clean shutdown
-			server.stopServer();
+			stopServer.invoke(server);
 			println("MCP_HEADLESS: stopped");
 		}
 	}
