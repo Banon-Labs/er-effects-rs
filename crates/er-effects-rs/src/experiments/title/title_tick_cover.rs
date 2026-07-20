@@ -1769,10 +1769,13 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             // consumes the warp (warpRequested 1->0), md5e stays 1 RESIDUAL and STEP_EndFlow reads that as
             // return-to-title -> SetState 6->2. FIX: clear the residual ONLY when warpRequested==0 (warp
             // consumed / not driving), never during the warp-driven finalize.
+            // Gate ONLY on warpRequested==0 (warp consumed / not driving the finalize). Do NOT also gate
+            // on mms_step/player: the residual persists after the child is torn down (mms==-1) and the
+            // player is briefly gone, which is exactly the frame STEP_EndFlow reads it (run 1707: the
+            // clear fired 0 times because the mms>=18/player sub-gate excluded that frame). While
+            // warpRequested==1 md5e is the live finalize driver and is left untouched.
             let warp_req = unsafe { safe_read_u8(gm + GAME_MAN_WARP_REQUESTED_10_OFFSET) }.unwrap_or(1);
-            if warp_req == 0
-                && (mms_step >= MOVEMAPSTEP_STEP_MOVEMAP_INDEX || (mms_step < 0 && player_present))
-            {
+            if warp_req == 0 {
                 if let Some(md) = (unsafe { safe_read_usize(module_base + CS_MENU_MAN_GLOBAL_RVA) })
                     .filter(|&m| m > PAB_MIN_HEAP_PTR)
                     .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) })
