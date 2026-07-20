@@ -178,9 +178,11 @@ fn sq_repro_profile_back_mode() -> bool {
 // tab -> Load Profile -> pick top character -> confirm -> load). This mode DOES drive a real profile
 // load/reload; agent-owned repro only, gated separately from the default Save Game harness.
 fn sq_repro_load_switch_mode() -> bool {
-    // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): agent-owned profile-load-switch
-    // repro autopilot; env/marker feature gates are forbidden; retired (off).
-    false
+    // DECOUPLED TOGGLE (2026-07-19): the load2 flow drives a REAL profile-load switch (Quit tab ->
+    // Load Profile -> pick top character -> confirm -> load) whenever the separate input-harness DLL
+    // is loaded in the profile. Presence-gated (GetModuleHandle), not env/marker. bd
+    // harness-orchestrates-product-exposes-primitives-boundary-2026-07-19.
+    harness_dll_present()
 }
 
 /// SAVE-GAME ROW mode for the System->Quit repro autopilot. The main

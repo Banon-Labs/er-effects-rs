@@ -117,6 +117,22 @@ fi
 export TMPDIR="$TMP"
 export GHIDRA_JAVA_OPTIONS="-Djava.io.tmpdir=$TMP"
 
+# Serialize concurrent ghidra-query.sh invocations. analyzeHeadless takes an EXCLUSIVE project
+# lock even in -readOnly mode, so parallel agents otherwise race the same persistent project and
+# all-but-one die immediately with "Unable to lock project! ... LockException". Hold an flock on a
+# per-project lock file for the whole headless run: competing invocations BLOCK on flock and run
+# one-at-a-time instead of failing. flock is a blocking wait (no sleep, no timeout literal -- so it
+# stays within scripts/check-no-timeouts.py) and the lock is released the instant the process tree
+# exits, INCLUDING when a caller's own `timeout` kills a stuck run, so there is no hang risk beyond
+# the caller's existing bound. fd 9 survives the exec below and is inherited by analyzeHeadless, so
+# the lock is held for the entire run. Override the lock path with GHIDRA_QUERY_LOCK if $TMP is
+# read-only; set GHIDRA_QUERY_NOLOCK=1 to opt out of serialization entirely.
+if [[ -z "${GHIDRA_QUERY_NOLOCK:-}" ]]; then
+	QUERY_LOCK="${GHIDRA_QUERY_LOCK:-$TMP/ghidra-query.$PROJ_NAME.lock}"
+	exec 9>"$QUERY_LOCK"
+	flock 9
+fi
+
 # -process (no -import) reopens the SAVED program. -noanalysis: it's already analyzed.
 exec "$HEADLESS" "$PROJ_DIR" "$PROJ_NAME" \
 	-process \

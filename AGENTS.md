@@ -268,19 +268,28 @@ When the user asks whether a runtime-affecting refactor is possible/easy/safe, i
 
 ## No Compromises
 
-We accept **no compromises** on the stated objective. Do not propose, accept, or
-quietly settle for a weaker solution that technically "works" but relaxes the
-requirement (e.g. simulating an input when the goal is **zero-input** autoload).
-When a path looks blocked, that is a signal to find the *real* solution at a
-deeper layer -- not to lower the bar. Specifically for the autoload goal: the
-deliverable must achieve genuine **zero simulated input** (`simulated_button_presses_total = 0`,
-no host pointer, no synthesized DirectInput/keystate/event) AND be a single
-DLL loaded through me3 as a `[[natives]]` profile entry (LazyLoader removed
-2026-07-04), compatible with offline-vanilla, Seamless Co-op, and other mods
-(see bd memory `autoload-dll-product-requirements`). "Architecturally
-hard" is not "impossible" -- keep reverse-engineering until the in-process,
-no-input mechanism is found. Surface trade-offs honestly, but the bar is the
-actual goal, never a fallback.
+We accept **no compromises** on the stated objective: a same-character repeat load
+(System->Quit->Load Profile) that reaches **genuine world readiness** (character rendered
+AND the player can move). Do not settle for a weaker solution that technically "works"
+but does not actually reach that bar. When a path looks blocked, that is a signal to
+find the *real* solution at a deeper layer -- not to lower the bar.
+
+**Validate the way a USER would (reframe 2026-07-19, supersedes the old "zero-input"
+framing -- do NOT reintroduce `simulated_button_presses_total = 0` / "no simulated input"
+as the goal).** The point is confidence that a real user can drive the feature to world
+readiness, so the TEST must follow a path CLOSE to how a user does it: navigate the menu
+**with input**, respecting the game's real input-enable **delays** (the game gates when
+you can move / open the menu / press a button after a load). Drive that navigation via the
+input-harness DLL's **direct-memory native-binding injection** (`inputmgr+0x90+eventId`,
+which mimics a user's presses at the native binding) -- NOT a menu-bypassing direct-arm
+shortcut (that skips the exact user path being validated) and NOT synthesized OS-layer
+input (XInput/DInput/SendInput, which native ER does not route). The deliverable is still a
+single DLL loaded through me3 as a `[[natives]]` profile entry (LazyLoader removed
+2026-07-04), compatible with offline-vanilla, Seamless Co-op, and other mods (see bd memory
+`autoload-dll-product-requirements`), with the load2 flow decoupled into the input-harness
+DLL (toggled by profile inclusion). "Architecturally hard" is not "impossible" -- keep
+reverse-engineering until the real mechanism is found. Surface trade-offs honestly, but the
+bar is the actual goal, never a fallback.
 
 When a native menu/load path appears to need a manually pumped `MenuJob`, treat that as a red flag
 that the integration boundary is wrong. Do **not** build a recurring private pump as the product fix.

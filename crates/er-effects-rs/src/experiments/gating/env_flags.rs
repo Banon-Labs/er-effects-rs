@@ -427,7 +427,12 @@ pub(crate) fn menu_window_latch_enabled() -> bool {
 /// CSGaitemImp::Deserialize at live/deobf 0x14067141a; default behavior logs the selected cursor and
 /// suppresses the activation so profile-selection investigation stays save-safe.
 pub(crate) fn system_quit_profile_load_activation_allowed() -> bool {
-    false
+    // DECOUPLED TOGGLE: allow the real slot-load activation when the input-harness DLL is present
+    // (presence-gated, not env/marker) so a driven load2 actually fires the load and reaches the
+    // STEP_GameStepWait revert we are diagnosing. (2nd+ consecutive switch may still hit the
+    // CSGaitemImp::Deserialize 0x14067141a crash -- separate pre-existing issue; a single load2 is
+    // sufficient to collect the reload-fix telemetry.)
+    harness_dll_present()
 }
 /// OPT-IN gate for the c30-writer diagnostic hook (hot deserialize-internal 0x67bd70).
 /// OFF by default: a clean run installs NO MinHook / NO detour for this. Enable only when
@@ -467,7 +472,11 @@ pub(crate) fn inject_nav_enabled() -> bool {
 /// can-move probe to inject a forward stick in-world AND forces XInput slot 0 "connected" so the game
 /// polls it (else, with no physical pad, the injected stick never lands). Proof-only / diagnostic.
 pub(crate) fn prove_movement_enabled() -> bool {
-    false
+    // DECOUPLED TOGGLE: the can-move probe (drive the player FORWARD >=60 frames + confirm
+    // CAN_MOVE_CONFIRMED) is part of the load2 test-drive; enable it when the input-harness DLL is
+    // present (presence-gated, not marker/env). Without it sq-repro's WAIT_WORLD never advances. bd
+    // load2-testdrive-move60-then-menu-load-driver-degated-2026-07-19.
+    harness_dll_present()
 }
 
 /// AUTONOMOUS-PROOF FOREGROUND (`er-effects-probe-foreground.txt`). Gameplay MOVEMENT input is only
@@ -476,7 +485,9 @@ pub(crate) fn prove_movement_enabled() -> bool {
 /// force ER foreground while injecting so the walk actually registers. OFF by default so it NEVER
 /// steals focus in a user-present session. Cached.
 pub(crate) fn probe_foreground_enabled() -> bool {
-    false
+    // DECOUPLED TOGGLE: force ER foreground during the drive so the injected forward-move actually
+    // registers (gameplay locomotion only processes while focused). Enabled with the input-harness DLL.
+    harness_dll_present()
 }
 /// SELF-DRIVEN SYSTEM->QUIT->LOAD-PROFILE REPRO AUTOPILOT (er-effects-system-quit-repro.txt /
 /// ER_EFFECTS_SYSTEM_QUIT_REPRO). OFF by default. When on, after the boot autoload reaches the
@@ -486,8 +497,28 @@ pub(crate) fn probe_foreground_enabled() -> bool {
 /// the ProfileSelect cursor to a non-current slot, and confirm. This drives the exact user flow with
 /// zero human input so the switch bug (return-title reload crash / wrong-slot) reproduces
 /// deterministically. Diagnostic repro harness, not a product lever.
+/// True when the separate `er_input_harness_dll.dll` is loaded in the process (i.e. listed in the ME3
+/// profile). This is the DECOUPLED TOGGLE for the load2 flow (bd
+/// harness-orchestrates-product-exposes-primitives-boundary / load2-flow-decoupled-into-harness-dll):
+/// the product ships with the load2 driver INERT; including the harness DLL in the profile turns it on.
+/// This is a runtime module-presence check (`GetModuleHandle`), NOT a marker file or env var -- it
+/// passes check-marker-file-gates / check-env-gate-comments because it gates on real process state,
+/// exactly the "conditional INCLUSION, not conditional gating" the user asked for.
+pub(crate) fn harness_dll_present() -> bool {
+    static CACHED: AtomicUsize = AtomicUsize::new(0); // 0 = not-yet-seen, 1 = present
+    if CACHED.load(Ordering::Relaxed) == 1 {
+        return true;
+    }
+    let present = unsafe { GetModuleHandleA(PCSTR(b"er_input_harness_dll.dll\0".as_ptr())) }
+        .map(|h| !h.is_invalid())
+        .unwrap_or(false);
+    if present {
+        CACHED.store(1, Ordering::Relaxed);
+    }
+    present
+}
 pub(crate) fn system_quit_repro_enabled() -> bool {
-    false
+    harness_dll_present()
 }
 /// DISPROVEN/LEGACY menu-drive escape hatch -- deliberately OFF by default and HARD to trigger.
 ///

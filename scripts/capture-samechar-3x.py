@@ -107,6 +107,14 @@ def snap(t: dict) -> dict:
         "oracle_stepfinish_request_code",
         "oracle_stepfinish_mms_state",
         "oracle_stepfinish_finalize_substate_12a",
+        # STEP_Finish sub-gate disambiguators: which of these holds STEP_Finish terminal
+        # (so requestCode never latches 2 -> STEP_GameStepWait reverts to title). See bd
+        # product-system-quit-orchestration-proven-working-gaps-false / render-handoff-freeze-second-gate.
+        "oracle_stepfinish_warmup",
+        "oracle_stepfinish_testnet_stepper_present",
+        "oracle_csremo_present",
+        "oracle_csremo_remoman_present",
+        "oracle_csremo_remo_pending",
         "oracle_saved_map_c30",
         "sq_repro_state",
         "sq_repro_switch_index",

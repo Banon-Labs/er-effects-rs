@@ -35,6 +35,11 @@ const TAP_CYCLE_FRAMES: u64 = TAP_SET_FRAMES + TAP_GAP_FRAMES;
 const NAV_MAX_TAPS: u64 = 4;
 const CONFIRM_HOLD_FRAMES: u64 = TAP_SET_FRAMES;
 
+/// When true, this DLL is a pure decoupled TOGGLE (its presence enables the product's proven sq-repro
+/// driver) and does NOT inject menu events itself -- avoids two drivers fighting. Flip to false once the
+/// standalone direct-memory drive (menu-open + page eventIds) is fully reversed and owns the flow.
+const PRESENCE_TOGGLE_ONLY: bool = true;
+
 const STATE_WAIT_MENU: usize = 0;
 const STATE_NAV: usize = 1;
 const STATE_CONFIRM: usize = 2;
@@ -56,6 +61,16 @@ pub fn on_frame(base: usize) {
     // STAY-ACTIVE every frame so injected input applies while the window is unfocused (the whole
     // reason the direct-memory channel needs no window focus).
     keep_input_active(base);
+
+    // PRESENCE-TOGGLE MODE (2026-07-19): for the current load2 diagnostic run this DLL's ROLE is the
+    // decoupled toggle -- its mere presence enables the PRODUCT's proven sq-repro driver (which owns
+    // the System->Quit->Load navigation incl. the direct tab-force write). This DLL must NOT also
+    // inject menu events, or the two drivers fight. So keep stay-active (harmless, same DLUID+0x88d=1)
+    // and return before the standalone menu state machine. The standalone direct-memory drive below is
+    // retained for the eventual fully-decoupled harness once the menu-open/page eventIds are named.
+    if PRESENCE_TOGGLE_ONLY {
+        return;
+    }
 
     let state = STATE.load(Ordering::SeqCst);
     if state == STATE_DONE {
