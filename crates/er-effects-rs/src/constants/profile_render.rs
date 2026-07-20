@@ -319,6 +319,17 @@ pub(crate) static ENDING_REQUEST_SET_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Diagnostic counter: frozen-at-mms18 frames where the rt5d drive's stuck signature was NOT met
 /// (so a run can name which sub-condition blocked the drive).
 pub(crate) static ENDING_REQUEST_WHYNOT_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// IN-WORLD finalize-drive recovery (runs BEFORE the title_owner gate via the cached owner, so it
+/// reaches load2's in-world frozen mms18 which the title_owner-gated path never does). Sustained
+/// frozen-frame streak, one-shot latch, and fire count.
+pub(crate) static INWORLD_FINALIZE_DRIVE_STREAK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static INWORLD_FINALIZE_DRIVE_SET: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static INWORLD_FINALIZE_DRIVE_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Diagnostic counter: frames at mms18 where the in-world drive's frozen signature was NOT met.
+pub(crate) static INWORLD_FINALIZE_DRIVE_WHYNOT_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Held frozen-signature frames before the in-world drive fires. ~2s at load2's ~20fps; short so the
+/// RAM-gated drive completes before an incidental unfocused-mouse click can contaminate the run.
+pub(crate) const INWORLD_FINALIZE_DRIVE_RELEASE_FRAMES: usize = 40;
 /// Sustained stuck-at-18 frames before the recovery drives the ending request (~2s at task rate).
 pub(crate) const ENDING_REQUEST_STALL_RELEASE_FRAMES: usize = 120;
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
