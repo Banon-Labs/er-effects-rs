@@ -152,23 +152,18 @@ fn sq_repro_pause_at_menu() -> bool {
 /// dwells -- reproducing the blank the user reported (tab goes blank on return after the custom tab),
 /// with NO Save Game / no load (save-safe). Takes precedence over the Save Game row path.
 fn sq_repro_tab_return_mode() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_TAB_RETURN_REPRO").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-tab-return-repro.txt")
-        .exists()
+    // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): agent-owned repro autopilot;
+    // env/marker feature gates are forbidden; retired (off).
+    false
 }
 
 /// Exact USER repro: System menu -> Quit tab -> Load Profile -> Back before selecting a profile ->
 /// return to Game Options. This is the cross-populated-row bug path; it does not load a profile and
 /// does not use the file picker. Gated separately so the older Save Game harness stays default.
 fn sq_repro_profile_back_mode() -> bool {
-    game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-profile-back-repro.txt")
-        .exists()
+    // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): agent-owned repro autopilot;
+    // env/marker feature gates are forbidden; retired (off).
+    false
 }
 
 /// PROFILE-LOAD-SWITCH repro mode: drive the user's exact switch (Quit tab -> Load Profile ->
@@ -183,13 +178,9 @@ fn sq_repro_profile_back_mode() -> bool {
 // tab -> Load Profile -> pick top character -> confirm -> load). This mode DOES drive a real profile
 // load/reload; agent-owned repro only, gated separately from the default Save Game harness.
 fn sq_repro_load_switch_mode() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_SQ_LOAD_SWITCH").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-system-quit-load-switch.txt")
-        .exists()
+    // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): agent-owned profile-load-switch
+    // repro autopilot; env/marker feature gates are forbidden; retired (off).
+    false
 }
 
 /// SAVE-GAME ROW mode for the System->Quit repro autopilot. The main

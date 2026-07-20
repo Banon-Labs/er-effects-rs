@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for scripts/check-marker-file-gates.py."""
+"""Regression tests for scripts/check-marker-file-gates.py (deprecated-allowlist policy)."""
 
 from __future__ import annotations
 
@@ -39,11 +39,17 @@ def write(relative: str, body: str) -> Path:
     return path
 
 
-def write_baseline(names: list[str], migrate: list[str] | None = None) -> None:
-    payload = {
-        "sanctioned_marker_gate_names": sorted(names),
-        "migrate_to_default": sorted(migrate or []),
+def write_baseline(
+    diagnostic_gates: dict[str, str] | None = None,
+    deprecated: dict[str, list[str]] | None = None,
+) -> None:
+    payload: dict[str, object] = {
+        "sanctioned_marker_gate_names": [],
+        "migrate_to_default": [],
+        "diagnostic_gates": diagnostic_gates or {},
     }
+    if deprecated:
+        payload.update(deprecated)
     write(
         ".auto/marker_file_gate_baseline.json",
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
@@ -56,15 +62,22 @@ def valid_policy() -> str:
         "package auto.marker_file_gate\n"
         "import rego.v1\n"
         "default allow := false\n"
-        "allow if { input.marker_name_sanctioned }\n"
-        'deny contains message if { not input.marker_name_sanctioned; message := "new marker .exists() gate" }\n'
+        "# references diagnostic_gates; .exists() toggle shape\n"
+        "allow if { input.marker_diagnostic_sanctioned; input.marker_rationale_present }\n"
+        'deny contains message if { not input.marker_diagnostic_sanctioned; message := "forbidden" }\n'
     )
 
 
 def rules_for(checker) -> set[str]:
     gates = checker.scan_marker_gates()
-    sanctioned = checker.load_sanctioned_names()
-    return {f.rule for f in checker.scan_findings(gates, sanctioned)}
+    data = checker.load_baseline_data()
+    diagnostic_gates = checker.load_diagnostic_gates(data)
+    findings = (
+        checker.policy_findings()
+        + checker.deprecation_findings(data)
+        + checker.scan_findings(gates, diagnostic_gates)
+    )
+    return {f.rule for f in findings}
 
 
 def main() -> int:
@@ -75,8 +88,7 @@ def main() -> int:
 
     write(".auto/marker_file_gate_policy.rego", valid_policy())
 
-    # 1. POSITIVE: a NEW behavioral-fix marker gate (bool `_enabled()` fn, marker name
-    #    not allowlisted) -> flagged. This is the exact incident shape.
+    # 1. A behavioral-fix marker gate (the incident shape) is FORBIDDEN.
     write(
         "src/return_title.rs",
         "fn reload_b73_hold_enabled() -> bool {\n"
@@ -88,42 +100,11 @@ def main() -> int:
         "    }\n"
         "}\n",
     )
-    write_baseline([])
-    rules = rules_for(checker)
-    assert rules == {"marker-gate-new-name"}, rules
+    write_baseline({})
+    assert rules_for(checker) == {"marker-gate-forbidden"}, rules_for(checker)
 
-    # 1b. POSITIVE: an INLINE behavioral gate is detected AND classified behavioral.
-    write(
-        "src/inline.rs",
-        "fn tick(p: *mut u8) {\n"
-        '    if game_dir().join("er-effects-inline-fix.txt").exists() {\n'
-        "        unsafe { core::ptr::write_volatile(p, 7u8); }\n"
-        "    }\n"
-        "}\n",
-    )
-    write_baseline([])
-    gates = checker.scan_marker_gates()
-    inline = [g for g in gates if g.name == "er-effects-inline-fix.txt"][0]
-    assert inline.classification == "behavioral", inline.classification
-    # ...and the b73hold bool-fn gate classifies unknown (its fn body has no behavioral
-    # tokens) yet is STILL flagged by the hard name gate -- the point of name-freezing.
-    b73 = [g for g in gates if g.name == "er-effects-reload-b73hold.txt"][0]
-    assert b73.classification == "unknown", b73.classification
-    assert rules_for(checker) == {"marker-gate-new-name"}
-    (FIXTURE_ROOT / "src" / "inline.rs").unlink()
-
-    # 2. NEGATIVE: the SAME gate becomes allowlisted -> passes (the build-preserving
-    #    allowlist for pre-existing markers).
-    write_baseline(["er-effects-reload-b73hold.txt"])
-    rules = rules_for(checker)
-    assert rules == set(), rules
-
-    # 3. A DIAGNOSTIC-logging marker gate. An INLINE gate whose fn body only logs is
-    #    classified `diagnostic` (steering the reviewer that it MAY be allowlisted). It
-    #    still fails closed on a new name until allowlisted -- new names always fail
-    #    closed, diagnostic or not. (A trivial bool `_enabled()` fn instead classifies
-    #    `unknown`, since its body carries no tokens -- the documented limitation; the
-    #    hard name gate still catches it either way.)
+    # 2. A DIAGNOSTIC-logging marker gate becomes allowed once listed in diagnostic_gates
+    #    (with a rationale) AND its fn is not behavioral.
     write(
         "src/diag.rs",
         "fn log_ids() {\n"
@@ -132,22 +113,31 @@ def main() -> int:
         "    }\n"
         "}\n",
     )
-    write_baseline(["er-effects-reload-b73hold.txt"])
-    # New diagnostic name is still flagged (fails closed), but classification == diagnostic.
-    rules = rules_for(checker)
-    assert rules == {"marker-gate-new-name"}, rules
-    gates = checker.scan_marker_gates()
-    diag = [g for g in gates if g.name == "er-effects-grsysmsg-log-x.txt"][0]
-    assert diag.classification == "diagnostic", diag.classification
-    # Allowlisting the diagnostic name clears it.
-    write_baseline(
-        ["er-effects-reload-b73hold.txt", "er-effects-grsysmsg-log-x.txt"]
-    )
-    assert rules_for(checker) == set()
-    (FIXTURE_ROOT / "src" / "diag.rs").unlink()
+    (FIXTURE_ROOT / "src" / "return_title.rs").unlink()
+    write_baseline({})
+    assert rules_for(checker) == {"marker-gate-forbidden"}, rules_for(checker)
+    write_baseline({"er-effects-grsysmsg-log-x.txt": "passive GR_System_Message id log; no game behavior."})
+    assert rules_for(checker) == set(), rules_for(checker)
 
-    # 4. NEGATIVE: a real-runtime-condition fix with NO marker file is NOT flagged.
-    #    (This is the desired product shape -- default behavior on a genuine condition.)
+    # 2b. An EMPTY rationale is not enough -> still forbidden.
+    write_baseline({"er-effects-grsysmsg-log-x.txt": "  "})
+    assert rules_for(checker) == {"marker-gate-forbidden"}, rules_for(checker)
+
+    # 3. A BEHAVIORAL fn cannot sneak into diagnostic_gates: even if listed, it is rejected.
+    write(
+        "src/inline.rs",
+        "fn tick(p: *mut u8) {\n"
+        '    if game_dir().join("er-effects-inline-fix.txt").exists() {\n'
+        "        unsafe { core::ptr::write_volatile(p, 7u8); }\n"
+        "    }\n"
+        "}\n",
+    )
+    (FIXTURE_ROOT / "src" / "diag.rs").unlink()
+    write_baseline({"er-effects-inline-fix.txt": "claims to be diagnostic but writes memory."})
+    assert rules_for(checker) == {"marker-gate-diagnostic-is-behavioral"}, rules_for(checker)
+    (FIXTURE_ROOT / "src" / "inline.rs").unlink()
+
+    # 4. A real-runtime-condition fix with NO marker file is NOT flagged (desired shape).
     write(
         "src/default_fix.rs",
         "fn tick(p: *mut u8) {\n"
@@ -156,13 +146,11 @@ def main() -> int:
         "    }\n"
         "}\n",
     )
-    write_baseline(["er-effects-reload-b73hold.txt"])
-    rules = rules_for(checker)
-    assert rules == set(), rules
+    write_baseline({})
+    assert rules_for(checker) == set(), rules_for(checker)
     (FIXTURE_ROOT / "src" / "default_fix.rs").unlink()
 
-    # 4b. NEGATIVE: a DATA control file read with read_to_string (a slot number, not a
-    #     boolean toggle) is OUT OF SCOPE -- no `.exists()`, so not flagged.
+    # 4b. A DATA control file read with read_to_string (not `.exists()`) is OUT OF SCOPE.
     write(
         "src/data_file.rs",
         "fn wanted_slot() -> Option<u32> {\n"
@@ -170,36 +158,38 @@ def main() -> int:
         "    raw.trim().parse().ok()\n"
         "}\n",
     )
-    write_baseline(["er-effects-reload-b73hold.txt"])
-    rules = rules_for(checker)
-    assert rules == set(), rules
+    write_baseline({})
+    assert rules_for(checker) == set(), rules_for(checker)
     (FIXTURE_ROOT / "src" / "data_file.rs").unlink()
 
-    # 5. MIGRATION NOTE: a sanctioned-but-behavioral marker still present is a SOFT note,
-    #    not a hard finding.
-    write_baseline(
-        ["er-effects-reload-b73hold.txt"], migrate=["er-effects-reload-b73hold.txt"]
+    # 5. Re-populating a DEPRECATED behavioral allowlist is itself a failure.
+    write(
+        "src/diag2.rs",
+        "fn log_ids() {\n"
+        '    if game_dir().join("er-effects-grsysmsg-log-x.txt").exists() {\n'
+        '        append_autoload_debug("id");\n'
+        "    }\n"
+        "}\n",
     )
-    gates = checker.scan_marker_gates()
-    migrate = checker.load_migrate_to_default()
-    assert rules_for(checker) == set()
-    assert checker.migration_notes(gates, migrate) == ["er-effects-reload-b73hold.txt"]
+    write_baseline(
+        {"er-effects-grsysmsg-log-x.txt": "passive log."},
+        deprecated={"sanctioned_marker_gate_names": ["er-effects-grsysmsg-log-x.txt"]},
+    )
+    assert rules_for(checker) == {"marker-gate-allowlist-not-deprecated"}, rules_for(checker)
+    write_baseline(
+        {"er-effects-grsysmsg-log-x.txt": "passive log."},
+        deprecated={"migrate_to_default": ["er-effects-grsysmsg-log-x.txt"]},
+    )
+    assert rules_for(checker) == {"marker-gate-allowlist-not-deprecated"}, rules_for(checker)
+    (FIXTURE_ROOT / "src" / "diag2.rs").unlink()
 
     # 6. POLICY DRIFT: missing / drifted policy file is itself a finding.
-    write_baseline(["er-effects-reload-b73hold.txt"])
+    write_baseline({})
     (FIXTURE_ROOT / ".auto" / "marker_file_gate_policy.rego").unlink()
-    rules = rules_for(checker)
-    assert rules == {"missing-marker-gate-policy"}, rules
+    assert rules_for(checker) == {"missing-marker-gate-policy"}, rules_for(checker)
 
     write(".auto/marker_file_gate_policy.rego", "package auto.marker_file_gate\n")
-    rules = rules_for(checker)
-    assert rules == {"marker-gate-policy-drift"}, rules
-
-    # 7. EMPTY / MISSING allowlist fails ALL gates closed (allowlist must be explicit).
-    write(".auto/marker_file_gate_policy.rego", valid_policy())
-    (FIXTURE_ROOT / ".auto" / "marker_file_gate_baseline.json").unlink()
-    rules = rules_for(checker)
-    assert rules == {"marker-gate-new-name"}, rules
+    assert rules_for(checker) == {"marker-gate-policy-drift"}, rules_for(checker)
 
     print("marker-file gate policy regression tests passed")
     return 0

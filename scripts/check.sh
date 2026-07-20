@@ -41,12 +41,9 @@ shellcheck "$repo_root/scripts/check-no-local-main-commits.sh"
 shellcheck "$repo_root/scripts/stage-autoload-release.sh"
 shellcheck "$repo_root/scripts/run-product-continue-direct-probe.sh"
 shellcheck "$repo_root/scripts/run-me3-product-smoke.sh"
+shellcheck "$repo_root/scripts/check-rust-build.sh"
 
-# Windows-target check, cross-compiled from Linux via cargo-xwin (preferred). Falls back to
-# a plain cargo check only if cargo-xwin is unavailable (which needs an MSVC toolchain on
-# PATH and will otherwise fail at the C-dependency link step).
-if command -v cargo-xwin >/dev/null 2>&1; then
-	cargo xwin check --manifest-path "$repo_root/Cargo.toml" --target x86_64-pc-windows-msvc
-else
-	cargo check --manifest-path "$repo_root/Cargo.toml" --target x86_64-pc-windows-msvc
-fi
+# Rust format + Windows-target BUILD of the injectable DLL (cross-compiled from Linux via
+# cargo-xwin). A real build (not just `cargo check`) so codegen/link regressions -- including
+# any pre-existing rust breakage -- are caught here, producing the linked er_effects_rs.dll.
+bash "$repo_root/scripts/check-rust-build.sh"

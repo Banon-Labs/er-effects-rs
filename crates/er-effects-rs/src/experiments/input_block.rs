@@ -308,12 +308,11 @@ pub(crate) fn move_probe_drive_key_foreground_only(vk: u32) {
 /// menus while ER is UNFOCUSED -- letting the user work in another window during a golden capture.
 /// Decoded: ER clears that flag each frame when it isn't `GetActiveWindow` (`0x141f292bd`); we re-set
 /// it. Touches ONLY focus-input gating, never the sim/save/load.
+/// DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): stay-active forced the input-accept
+/// flag `[DLUID+0x88d]` while unfocused -- a diagnostic golden-capture convenience gated by
+/// env/marker. Env/marker feature gates are forbidden; retired (permanently off).
 pub(crate) fn stay_active_enabled() -> bool {
-    matches!(std::env::var("ER_EFFECTS_STAY_ACTIVE").as_deref(), Ok("1"))
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-stay-active.txt")
-            .exists()
+    false
 }
 
 /// True when the autoload/own-stepper probe must run UNCONTAMINATED -- no real keyboard,
@@ -348,17 +347,8 @@ pub(crate) fn block_input_enabled() -> bool {
     if sq_repro_actively_driving() {
         return true;
     }
-    // FORCE-BLOCK override (env/file): block UNCONDITIONALLY, even past menu-open. Used to
-    // FALSIFY -- runtime-proven 2026-06-17 that blocking through menu-open lets the menu OPEN
-    // (self-fire) but starves the post-open navigation, so the load never selects.
-    if matches!(std::env::var("ER_EFFECTS_BLOCK_INPUT").as_deref(), Ok("1"))
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-block-input.txt")
-            .exists()
-    {
-        return true;
-    }
+    // (DE-GATED 2026-07-19: the env/marker FORCE-BLOCK override -- block unconditionally past
+    // menu-open -- was a falsification diagnostic; env/marker feature gates are forbidden, removed.)
     // INJECT-NAV instrument-capture: keep the block ON past menu-open so the user's input is
     // suppressed while the XInput hook fabricates the cursor nav (so nothing pollutes the
     // capture). The fabricated Down is written INTO the otherwise-blocked gamepad state, so the

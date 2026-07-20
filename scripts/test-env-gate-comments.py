@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for scripts/check-env-gate-comments.py."""
+"""Regression tests for scripts/check-env-gate-comments.py (deprecated-allowlist policy)."""
 
 from __future__ import annotations
 
@@ -40,24 +40,17 @@ def write(relative: str, body: str) -> Path:
 
 
 def write_baseline(
-    keys: list[str],
-    sanctioned: list[str] | None = None,
-    locations: list[str] | None = None,
+    diagnostic_gates: dict[str, str] | None = None,
+    deprecated: dict[str, list[str]] | None = None,
 ) -> None:
-    payload: dict[str, object] = {"baseline": keys}
-    # Default the allowlists to the env var + locations used across these fixtures so
-    # the frozen hard gates do not spuriously fire in unrelated cases.
-    payload["sanctioned_env_vars"] = (
-        sanctioned if sanctioned is not None else ["ER_EFFECTS_BRAND_NEW"]
-    )
-    payload["sanctioned_env_gate_locations"] = (
-        locations
-        if locations is not None
-        else [
-            "ER_EFFECTS_BRAND_NEW@src/new_gate.rs",
-            "ER_EFFECTS_BRAND_NEW@src/unknown_gate.rs",
-        ]
-    )
+    payload: dict[str, object] = {
+        "sanctioned_env_vars": [],
+        "sanctioned_env_gate_locations": [],
+        "baseline": [],
+        "diagnostic_gates": diagnostic_gates or {},
+    }
+    if deprecated:
+        payload.update(deprecated)
     write(
         ".auto/env_gate_comment_baseline.json",
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
@@ -70,22 +63,31 @@ def valid_policy() -> str:
         "package auto.env_gate_comment\n"
         "import rego.v1\n"
         "default allow := false\n"
-        'deny contains message if { not input.env_gate_location_sanctioned; message := "new env gate location" }\n'
-        'deny contains message if { input.env_gate_location_sanctioned; not input.env_var_sanctioned; message := "unknown env var" }\n'
-        "allow if { input.env_gate_location_sanctioned; input.env_var_sanctioned; input.has_rationale_comment == true }\n"
-        "allow if { input.env_gate_location_sanctioned; input.env_var_sanctioned; input.in_baseline == true }\n"
-        'deny contains message if { input.env_gate_location_sanctioned; input.env_var_sanctioned; not allow; message := "ENV-GATE RATIONALE marker required" }\n'
+        "# references diagnostic_gates\n"
+        "allow if { input.env_gate_diagnostic_sanctioned; input.env_gate_rationale_present }\n"
+        'deny contains message if { not input.env_gate_diagnostic_sanctioned; message := "forbidden" }\n'
     )
 
 
 def rules_for(checker) -> set[str]:
     gates = checker.scan_gates()
-    baseline = checker.load_baseline()
-    sanctioned = checker.load_sanctioned_env_vars()
-    locations = checker.load_sanctioned_env_gate_locations()
-    return {
-        f.rule for f in checker.scan_findings(gates, baseline, sanctioned, locations)
-    }
+    data = checker.load_baseline_data()
+    diagnostic_gates = checker.load_diagnostic_gates(data)
+    findings = (
+        checker.policy_findings()
+        + checker.deprecation_findings(data)
+        + checker.scan_findings(gates, diagnostic_gates)
+    )
+    return {f.rule for f in findings}
+
+
+BRAND = "ER_EFFECTS_BRAND_NEW"
+KEY = f"{BRAND}@src/new_gate.rs"
+GATE_SRC = (
+    "pub(crate) fn brand_new_gate() -> bool {\n"
+    f'    matches!(std::env::var("{BRAND}").as_deref(), Ok("1"))\n'
+    "}\n"
+)
 
 
 def main() -> int:
@@ -95,168 +97,46 @@ def main() -> int:
     configure_module_paths(checker)
 
     write(".auto/env_gate_comment_policy.rego", valid_policy())
+    write("src/new_gate.rs", GATE_SRC)
 
-    # 1. A NEW non-compliant gate (no comment above its fn, not baselined) -> flagged.
-    write(
-        "src/new_gate.rs",
-        "pub(crate) fn brand_new_gate() -> bool {\n"
-        '    matches!(std::env::var("ER_EFFECTS_BRAND_NEW").as_deref(), Ok("1"))\n'
-        "}\n",
-    )
-    write_baseline([])
-    rules = rules_for(checker)
-    assert rules == {"env-gate-missing-rationale"}, rules
+    # 1. Any env gate not in diagnostic_gates is FORBIDDEN.
+    write_baseline({})
+    assert rules_for(checker) == {"env-gate-forbidden"}, rules_for(checker)
 
-    # 2. The SAME gate becomes compliant via the ENV-GATE RATIONALE marker -> passes.
-    write(
-        "src/new_gate.rs",
-        "// ENV-GATE RATIONALE: this gate only flips a debug log, no save side effects.\n"
-        "pub(crate) fn brand_new_gate() -> bool {\n"
-        '    matches!(std::env::var("ER_EFFECTS_BRAND_NEW").as_deref(), Ok("1"))\n'
-        "}\n",
-    )
-    rules = rules_for(checker)
-    assert rules == set(), rules
+    # 2. Adding its exact ENV_VAR@path key to diagnostic_gates (with a rationale) permits it.
+    write_baseline({KEY: "passive debug log only; no game behavior change."})
+    assert rules_for(checker) == set(), rules_for(checker)
 
-    # 2b. Compliant via a >=2-line /// doc comment (option 2), no marker -> passes.
-    write(
-        "src/new_gate.rs",
-        "/// Enables the brand-new feature.\n"
-        "/// Save-safe: reads memory only, never writes the .sl2.\n"
-        "pub(crate) fn brand_new_gate() -> bool {\n"
-        '    matches!(std::env::var("ER_EFFECTS_BRAND_NEW").as_deref(), Ok("1"))\n'
-        "}\n",
-    )
-    rules = rules_for(checker)
-    assert rules == set(), rules
+    # 3. A diagnostic_gates entry with an EMPTY rationale is NOT enough -> still forbidden.
+    write_baseline({KEY: "   "})
+    assert rules_for(checker) == {"env-gate-forbidden"}, rules_for(checker)
 
-    # 2c. A single /// line is NOT enough (needs >= 2) -> flagged.
-    write(
-        "src/new_gate.rs",
-        "/// Enables the brand-new feature.\n"
-        "pub(crate) fn brand_new_gate() -> bool {\n"
-        '    matches!(std::env::var("ER_EFFECTS_BRAND_NEW").as_deref(), Ok("1"))\n'
-        "}\n",
-    )
-    rules = rules_for(checker)
-    assert rules == {"env-gate-missing-rationale"}, rules
+    # 4. A key for a DIFFERENT location does not rescue this gate.
+    write_baseline({f"{BRAND}@src/other.rs": "unrelated."})
+    assert rules_for(checker) == {"env-gate-forbidden"}, rules_for(checker)
 
-    # 3. A non-compliant gate that IS in the baseline -> passes (ratchet).
-    write_baseline(["ER_EFFECTS_BRAND_NEW@src/new_gate.rs"])
-    write(
-        "src/new_gate.rs",
-        "pub(crate) fn brand_new_gate() -> bool {\n"
-        '    matches!(std::env::var("ER_EFFECTS_BRAND_NEW").as_deref(), Ok("1"))\n'
-        "}\n",
-    )
-    rules = rules_for(checker)
-    assert rules == set(), rules
-
-    # 3b. A baselined gate that has SINCE gained a comment is reported as shrinkable
-    #     (soft), but is NOT a hard finding.
-    write(
-        "src/new_gate.rs",
-        "// ENV-GATE RATIONALE: documented now.\n"
-        "pub(crate) fn brand_new_gate() -> bool {\n"
-        '    matches!(std::env::var("ER_EFFECTS_BRAND_NEW").as_deref(), Ok("1"))\n'
-        "}\n",
-    )
-    gates = checker.scan_gates()
-    baseline = checker.load_baseline()
-    assert rules_for(checker) == set()
-    assert checker.shrinkable_baseline_entries(gates, baseline) == [
-        "ER_EFFECTS_BRAND_NEW@src/new_gate.rs"
-    ]
-
-    # 3c. FROZEN LOCATION HARD GATE: a gate at a new location FAILS even WITH a
-    #     valid rationale comment and a sanctioned env-var name. This is the core
-    #     no-new-env-gates test: comments and reused names do not create approval.
-    write_baseline([], sanctioned=["ER_EFFECTS_BRAND_NEW"], locations=[])
-    write(
-        "src/unknown_gate.rs",
-        "// ENV-GATE RATIONALE: this gate only flips a debug log, no save side effects.\n"
-        "pub(crate) fn brand_new_gate() -> bool {\n"
-        '    matches!(std::env::var("ER_EFFECTS_BRAND_NEW").as_deref(), Ok("1"))\n'
-        "}\n",
-    )
-    rules = rules_for(checker)
-    assert rules == {"env-gate-new-location"}, rules
-
-    # 3d. FROZEN NAME ALLOWLIST HARD GATE: an env var NOT in sanctioned_env_vars FAILS
-    #     even WITH a valid rationale comment (and even if baselined), provided the
-    #     location itself is already known. A comment must NOT rescue an unknown env var.
-    write_baseline([], sanctioned=["ER_EFFECTS_KNOWN"])
-    write(
-        "src/unknown_gate.rs",
-        "// ENV-GATE RATIONALE: this gate only flips a debug log, no save side effects.\n"
-        "pub(crate) fn brand_new_gate() -> bool {\n"
-        '    matches!(std::env::var("ER_EFFECTS_BRAND_NEW").as_deref(), Ok("1"))\n'
-        "}\n",
-    )
-    rules = rules_for(checker)
-    assert rules == {"env-gate-unknown-var"}, rules
-
-    # 3e. A baseline entry must ALSO not rescue an unknown env var.
+    # 5. Re-populating a DEPRECATED behavioral allowlist is itself a failure.
     write_baseline(
-        ["ER_EFFECTS_BRAND_NEW@src/unknown_gate.rs"], sanctioned=["ER_EFFECTS_KNOWN"]
+        {KEY: "passive debug log only."},
+        deprecated={"sanctioned_env_vars": [BRAND]},
     )
-    write(
-        "src/unknown_gate.rs",
-        "pub(crate) fn brand_new_gate() -> bool {\n"
-        '    matches!(std::env::var("ER_EFFECTS_BRAND_NEW").as_deref(), Ok("1"))\n'
-        "}\n",
-    )
-    rules = rules_for(checker)
-    assert rules == {"env-gate-unknown-var"}, rules
+    assert rules_for(checker) == {"env-gate-allowlist-not-deprecated"}, rules_for(checker)
 
-    # 3f. An ALLOWLISTED env var WITH a comment passes (the allowlist gates, the
-    #     comment ratchet still applies on top).
-    write_baseline([], sanctioned=["ER_EFFECTS_BRAND_NEW"])
-    write(
-        "src/unknown_gate.rs",
-        "// ENV-GATE RATIONALE: this gate only flips a debug log, no save side effects.\n"
-        "pub(crate) fn brand_new_gate() -> bool {\n"
-        '    matches!(std::env::var("ER_EFFECTS_BRAND_NEW").as_deref(), Ok("1"))\n'
-        "}\n",
+    write_baseline(
+        {KEY: "passive debug log only."},
+        deprecated={"baseline": [KEY], "sanctioned_env_gate_locations": [KEY]},
     )
-    rules = rules_for(checker)
-    assert rules == set(), rules
+    assert rules_for(checker) == {"env-gate-allowlist-not-deprecated"}, rules_for(checker)
 
-    # 3g. An ALLOWLISTED env var WITHOUT a comment (and not baselined) still fails
-    #     the existing comment ratchet -- the allowlist did not weaken it.
-    write(
-        "src/unknown_gate.rs",
-        "pub(crate) fn brand_new_gate() -> bool {\n"
-        '    matches!(std::env::var("ER_EFFECTS_BRAND_NEW").as_deref(), Ok("1"))\n'
-        "}\n",
-    )
-    rules = rules_for(checker)
-    assert rules == {"env-gate-missing-rationale"}, rules
-
-    # Clean up the unknown-gate fixture so it does not leak into the policy tests below.
-    (FIXTURE_ROOT / "src" / "unknown_gate.rs").unlink()
-    write_baseline([])
-
-    # 4. Missing / drifted policy file is itself a finding.
-    write_baseline([])
-    write(
-        "src/new_gate.rs",
-        "// ENV-GATE RATIONALE: documented.\n"
-        "pub(crate) fn brand_new_gate() -> bool {\n"
-        '    matches!(std::env::var("ER_EFFECTS_BRAND_NEW").as_deref(), Ok("1"))\n'
-        "}\n",
-    )
+    # 6. Missing / drifted policy file is itself a finding.
+    write_baseline({KEY: "passive debug log only."})
     (FIXTURE_ROOT / ".auto" / "env_gate_comment_policy.rego").unlink()
-    rules = rules_for(checker)
-    assert rules == {"missing-env-gate-policy"}, rules
+    assert rules_for(checker) == {"missing-env-gate-policy"}, rules_for(checker)
 
-    write(
-        ".auto/env_gate_comment_policy.rego", "package auto.env_gate_comment\n"
-    )  # drifted
-    rules = rules_for(checker)
-    assert rules == {"env-gate-policy-drift"}, rules
+    write(".auto/env_gate_comment_policy.rego", "package auto.env_gate_comment\n")  # drifted
+    assert rules_for(checker) == {"env-gate-policy-drift"}, rules_for(checker)
 
-    print("env-gate comment policy regression tests passed")
+    print("env-gate policy regression tests passed")
     return 0
 
 

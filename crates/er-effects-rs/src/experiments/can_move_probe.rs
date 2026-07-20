@@ -176,9 +176,10 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
     static PROOF_GATE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
     let gate = PROOF_GATE.load(Ordering::Relaxed);
     let enabled = if gate == 0 {
-        let on = crate::telemetry::game_directory_path()
-            .map(|d| d.join("er-effects-prove-movement.txt").exists())
-            .unwrap_or(false);
+        // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): the movement-proof harness was
+        // armed by a marker file; marker feature gates are forbidden, so the proof-only forward-input
+        // drive is retired (off) -- it must never fire in a normal user session anyway.
+        let on = false;
         PROOF_GATE.store(if on { 1 } else { 2 }, Ordering::Relaxed);
         on
     } else {

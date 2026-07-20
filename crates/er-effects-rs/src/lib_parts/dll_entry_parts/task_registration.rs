@@ -437,9 +437,10 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // drains and the player disappears before movement." Keep handoff armed until the current reload
                 // epoch has epoch-scoped movement proof too. Normal user sessions keep the original non-input
                 // player-present latch and are not forced to walk the character.
-                let movement_proof_required = crate::telemetry::game_directory_path()
-                    .map(|d| d.join("er-effects-prove-movement.txt").exists())
-                    .unwrap_or(false);
+                // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): marker feature gates are
+                // forbidden; the movement-proof harness marker is retired, so no epoch is ever forced
+                // to walk the character (proof-only behavior, never product).
+                let movement_proof_required = false;
                 let current_epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
                 let movement_proven_for_epoch = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
                     && MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == current_epoch;

@@ -228,10 +228,9 @@ pub(crate) unsafe extern "system" fn movemapstep_step_move_map_gate_detour(
 /// Diagnostic opt-in for the failed state-18 hold hook. Default OFF so canonical semaphore-diff runs are
 /// observational and not contaminated by candidate writes.
 pub(crate) fn movemapstep_step_move_map_gate_hold_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_MMS18_GATE_HOLD").as_deref(),
-        Ok("1")
-    )
+    // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): the state-18 candidate-write hold
+    // was a diagnostic behavioral experiment gated by env; env feature gates are forbidden; retired.
+    false
 }
 
 /// Install the `STEP_MoveMap` after-original advance-gate hook ONCE. Runtime-falsified task-tick holds
