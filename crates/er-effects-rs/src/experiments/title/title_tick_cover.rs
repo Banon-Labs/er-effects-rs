@@ -1760,14 +1760,19 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                     ));
                 }
             }
-            // ENDING-LATCH HOLD: b73 is only ONE of ~8 conditions the MoveMapStep ending evaluator
-            // (FUN_140afa7c0) ORs into CSMenuMan.menuData+0x5e (the session-end OUTPUT latch that
-            // STEP_EndFlow reads to revert 6->title). Clearing b73 at mms18 was too late (the evaluator
-            // already latched +0x5e). Clear the OUTPUT latch +0x5e (and the return-title-request +0x5d)
-            // every reload frame from mms18 onward, so STEP_EndFlow never sees the session marked ended
-            // and the reloaded world persists. Reads/writes are safe_read-guarded. Runs only on a
-            // committed reload during/after the MoveMap finalize (mms18 or torn-down mms==-1 in-world).
-            if mms_step == MOVEMAPSTEP_STEP_MOVEMAP_INDEX || (mms_step < 0 && player_present) {
+            // ENDING-LATCH RESIDUAL CLEAR (corrected, RE er-effects-rs-9fmm run 1650). menuData+0x5e is
+            // NOT a pure return-title flag: FUN_140afa7c0 writes it = cVar10 each frame, and cVar10=1 is
+            // exactly what DRIVES the MoveMap finalize (walk field25_0x12a 0..8, case 8 advances 18->19 and
+            // consumes warpRequested). So while warpRequested==1 md5e=1 is the finalize DRIVER -- clearing
+            // it then SABOTAGES the finalize (the earlier every-frame clear caused the MMS-CLEANUP re-drive
+            // bursts + timing variance). The revert's ENDCOND was ONLY md5e=1 with warp=0: after case 8
+            // consumes the warp (warpRequested 1->0), md5e stays 1 RESIDUAL and STEP_EndFlow reads that as
+            // return-to-title -> SetState 6->2. FIX: clear the residual ONLY when warpRequested==0 (warp
+            // consumed / not driving), never during the warp-driven finalize.
+            let warp_req = unsafe { safe_read_u8(gm + GAME_MAN_WARP_REQUESTED_10_OFFSET) }.unwrap_or(1);
+            if warp_req == 0
+                && (mms_step >= MOVEMAPSTEP_STEP_MOVEMAP_INDEX || (mms_step < 0 && player_present))
+            {
                 if let Some(md) = (unsafe { safe_read_usize(module_base + CS_MENU_MAN_GLOBAL_RVA) })
                     .filter(|&m| m > PAB_MIN_HEAP_PTR)
                     .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) })
@@ -1785,7 +1790,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                         let n = RELOAD_ENDING_LATCH_HOLD_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
                         if n <= 8 || n.is_power_of_two() {
                             append_autoload_debug(format_args!(
-                                "reload-ending-latch-hold #{n}: cleared menuData+0x5e={e5}/+0x5d={d5} (mms_step={mms_step} finalize={finalize_now}) -- keeps the reloaded session from ending to title"
+                                "reload-ending-latch-residual-clear #{n}: warp consumed (warp=0), cleared menuData+0x5e={e5}/+0x5d={d5} residual (mms_step={mms_step} finalize={finalize_now}) -- prevents the post-warp return-to-title revert"
                             ));
                         }
                     }
