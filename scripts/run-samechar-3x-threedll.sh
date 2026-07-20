@@ -140,5 +140,20 @@ RC=$?
 [[ -f "$GAME_DIR/er-input-harness.log" ]] && cp -f "$GAME_DIR/er-input-harness.log" "$ARTIFACT_DIR/er-input-harness.log"
 [[ -f "$GAME_DIR/er-reload-trace.log" ]] && cp -f "$GAME_DIR/er-reload-trace.log" "$ARTIFACT_DIR/er-reload-trace.log"
 
+# DLL VERSION MANIFEST (user 2026-07-19: track exact binaries per run so a result can be tied to a
+# specific build during bisection). Records git HEAD, the in-process DLL build id (dll:XXXX from the
+# debug log), and each staged DLL's mtime + short sha256.
+REL_DIR="$REPO_ROOT/target/x86_64-pc-windows-msvc/release"
+{
+	echo "git_head: $(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?')"
+	echo "dll_build_id: $(grep -oE 'dll:[0-9a-f]{6,}' "$ARTIFACT_DIR/er-effects-autoload-debug.log" 2>/dev/null | head -1 || echo '?')"
+	for d in er_effects_rs.dll er_reload_trace_dll.dll er_input_harness_dll.dll; do
+		if [[ -f "$REL_DIR/$d" ]]; then
+			echo "$d: mtime=$(date -r "$REL_DIR/$d" +%Y%m%d-%H%M%S 2>/dev/null) sha=$(sha256sum "$REL_DIR/$d" 2>/dev/null | cut -c1-16)"
+		fi
+	done
+} > "$ARTIFACT_DIR/dll-versions.txt"
+echo "== DLL versions: $(tr '\n' '; ' < "$ARTIFACT_DIR/dll-versions.txt")"
+
 echo "== capture done rc=$RC ; artifacts in $ARTIFACT_DIR =="
 exit "$RC"
