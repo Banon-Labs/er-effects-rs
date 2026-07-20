@@ -414,8 +414,40 @@ pub(crate) unsafe extern "system" fn title_setstate_trace_detour(owner: usize, s
         let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
         let rt_submit = SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.load(Ordering::SeqCst);
         let own_phase = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
+        // ENDING-CONDITION SNAPSHOT at the exact SetState frame (bd er-effects-rs-9fmm): the MoveMapStep
+        // ending evaluator FUN_140afa7c0 sets its cVar10 from any of {warpRequested GM+0x10, menuData+0x5d,
+        // force-flag 0x143d856a0, GM+0xb7c/0xb7d, deadReset, FUN_140679460=b73&&bc4!=3}. Log ALL of them on
+        // a SetState(...,2) from committed=6 so the run NAMES the revert trigger instead of us guessing.
+        let gm_rt = game_man_ptr_or_null();
+        let (warp_req, b73_now, bc4_now) = if gm_rt > PAB_MIN_HEAP_PTR {
+            (
+                unsafe { safe_read_u8(gm_rt + GAME_MAN_WARP_REQUESTED_10_OFFSET) }
+                    .map_or(-1, i32::from),
+                unsafe { safe_read_u8(gm_rt + GAME_MAN_SAVE_REQUEST_COMPANION_B73_OFFSET) }
+                    .map_or(-1, i32::from),
+                unsafe { safe_read_i32(gm_rt + GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET) }
+                    .unwrap_or(-1),
+            )
+        } else {
+            (-1, -1, -1)
+        };
+        let (md5d, md5e) = game_module_base()
+            .ok()
+            .and_then(|base| unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) })
+            .filter(|&m| m > PAB_MIN_HEAP_PTR)
+            .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) })
+            .filter(|&m| m > PAB_MIN_HEAP_PTR)
+            .map(|md| {
+                (
+                    unsafe { safe_read_u8(md + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) }
+                        .map_or(-1, i32::from),
+                    unsafe { safe_read_u8(md + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) }
+                        .map_or(-1, i32::from),
+                )
+            })
+            .unwrap_or((-1, -1));
         append_autoload_debug(format_args!(
-            "title-setstate-trace: SetState(owner=0x{owner:x}, state={state}({})) committed_was={committed}({}) req_code={ig_request_code}({}) quickload_phase={quickload_phase} rt_submit={rt_submit} own_phase={own_phase} owner+0xe0(dialog)=0x{dialog:x} owner+0xb8(gate)=0x{b8:x}",
+            "title-setstate-trace: SetState(owner=0x{owner:x}, state={state}({})) committed_was={committed}({}) req_code={ig_request_code}({}) quickload_phase={quickload_phase} rt_submit={rt_submit} own_phase={own_phase} ENDCOND[warp={warp_req} b73={b73_now} bc4={bc4_now} md5d={md5d} md5e={md5e}] owner+0xe0(dialog)=0x{dialog:x} owner+0xb8(gate)=0x{b8:x}",
             title_step_state_name(state),
             title_step_state_name(committed),
             ingamestep_request_code_name(ig_request_code)
