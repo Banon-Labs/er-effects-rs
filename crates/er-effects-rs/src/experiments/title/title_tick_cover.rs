@@ -1698,6 +1698,22 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                     ));
                 }
             } else {
+                // WHY-NOT diagnostic: load2 sits FROZEN at mms18/finalize-0 but the rt5d drive above did
+                // not fire, so one of stuck_mms18's sub-conditions is false. Log each one (throttled) so a
+                // run names the exact blocker instead of guessing (b7c1==1/blocks>0 were captured from the
+                // cross-char switch stall and may not hold for the boot-reload freeze). Fires only at the
+                // frozen mms18 signature (present, ig_d8 pending) so healthy loads stay quiet.
+                if mms_step == MOVEMAPSTEP_STEP_MOVEMAP_INDEX
+                    && player_present
+                    && ig_d8 == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING
+                {
+                    let w = ENDING_REQUEST_WHYNOT_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+                    if w <= 4 || w % 60 == 0 {
+                        append_autoload_debug(format_args!(
+                            "MMS18 RT5D DRIVE WHY-NOT #{w}: stuck_mms18=false at frozen mms18 -- active_switch={active_switch_phase}(phase={quickload_phase}) ig_d8={ig_d8} md_5e={md_5e} md_5d={md_5d} b7c1={mms_b7c1} blocks={mms_blocks} (drive needs active_switch && ig_d8==1 && md_5e==0 && md_5d==0 && b7c1==1 && blocks>0)"
+                        ));
+                    }
+                }
                 ENDING_REQUEST_STALL_STREAK.store(0, Ordering::SeqCst);
                 if ENDING_REQUEST_SET.load(Ordering::SeqCst) == 1
                     && mms_step != MOVEMAPSTEP_STEP_MOVEMAP_INDEX

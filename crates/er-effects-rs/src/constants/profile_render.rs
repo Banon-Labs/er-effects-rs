@@ -316,6 +316,9 @@ pub(crate) static ENDING_REQUEST_STALL_STREAK: AtomicUsize = AtomicUsize::new(0)
 pub(crate) static ENDING_REQUEST_SET: AtomicUsize = AtomicUsize::new(0);
 /// Runtime semaphore: >0 == the recovery fired (SET menuData+0x5d=1 at an mms18 stall) this run.
 pub(crate) static ENDING_REQUEST_SET_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Diagnostic counter: frozen-at-mms18 frames where the rt5d drive's stuck signature was NOT met
+/// (so a run can name which sub-condition blocked the drive).
+pub(crate) static ENDING_REQUEST_WHYNOT_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Sustained stuck-at-18 frames before the recovery drives the ending request (~2s at task rate).
 pub(crate) const ENDING_REQUEST_STALL_RELEASE_FRAMES: usize = 120;
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
