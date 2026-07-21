@@ -68,6 +68,28 @@ is whether a programmatic native trigger completes the world stream to movabilit
 the user's manual Continue does; the vanilla run proves the path itself completes, so the
 question is purely our trigger + context, which the exploration must pin down.
 
+## CORRECTED APPROACH (user, 2026-07-21) — AUTHORITATIVE
+
+The custom continue flow is not just unneeded, it is **harmful**: it does not follow the
+recorded vanilla continue. Do NOT drive a custom load. The correct three steps:
+
+1. **Disable what happens when the user clicks to load a character** — the custom/product
+   continue flow: the sq-repro menu-click SendInput drive (Save→Quit→Load Profile→slot→
+   confirm — slow and steals focus the whole time) AND the finalize-forcing (`menuData+0x5d`
+   writes in `product_core_autoload_tick` that shove mms18→19→20).
+2. **On that click, ONLY: make the target save resident in memory + set the active slot**
+   (`GameMan+0xac0` = target, via `set_save_slot 0x67a810`).
+3. **Then let the GAME'S OWN native continue flow trigger** — `continue_confirm 0x140b0e180`
+   → SetState5, which reads the active slot + resident save and streams the world EXACTLY
+   like a vanilla Continue (the vanilla loading experience). No menu nav, no focus-steal,
+   no forcing.
+
+`native_fullread_tick` already implements steps 2–3 (SUBMIT set-slot+read → DRAIN → DESER →
+CONFIRM=continue_confirm/SetState5); the work is to trigger it DIRECTLY on a switch request
+and remove the sq-repro menu-nav + finalize-forcing wrapper. **Divergence corrected here:**
+after this plan was approved I patched the sq-repro menu-click harness with reliable
+semaphores (commits up to f0f09a6) instead of doing the above — that is the wrong mechanism.
+
 ## Implementation plan (phased)
 
 **Why phased.** The finalize-forcing (`menuData+0x5d`) was added *because* the product's
