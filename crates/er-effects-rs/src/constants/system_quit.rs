@@ -194,7 +194,11 @@ pub(crate) static SQ_REPRO_PROFILE_BACK_VERIFY_COUNTS: [AtomicUsize; 10] =
 /// slot 4, matching the 3rd in-session ProfileSelect open that crashed the native thumbnail builder
 /// on the empty renderer table (er-effects-rs-j3r), the deterministic repro/validation for the
 /// table-repair hook.
-pub(crate) const SQ_REPRO_TARGET_SLOTS: [i32; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+// SAME-CHARACTER repeat load (the goal: two+ successive loads of angrE, slot 0). Every switch loads
+// slot 0, not a different slot per switch -- the old [0,1,2,..] loaded a DIFFERENT character on switch #2
+// (user 2026-07-21: "the stats on screen don't match the player loaded"). Override per-run via
+// er-effects-sq-target-slots.txt if a multi-character sweep is ever wanted.
+pub(crate) const SQ_REPRO_TARGET_SLOTS: [i32; 10] = [0; 10];
 /// Baseline of (confirmed_block + confirmed_allow) counts captured at each switch's start, so the
 /// CONFIRM state detects THIS switch's OK as an increase over the baseline rather than a cumulative
 /// `!= 0` (which switch #2 would trip immediately on switch #1's residual count).

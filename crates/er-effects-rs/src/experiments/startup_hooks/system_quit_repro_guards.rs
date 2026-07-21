@@ -381,8 +381,21 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             // still gates the actual menu-open, so an early world-live cannot fire the menu prematurely.
             let cur_epoch =
                 crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
-            let in_world =
-                crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur_epoch;
+            // FULL vanilla movable signature (user 2026-07-21: play_time_live ALONE armed the switch DURING
+            // load1's loading -> soft-locked load1 mid-finalize with mismatched stats). Require the player
+            // present + render-group enabled + enable_render (the char is genuinely rendered in-world) AND
+            // the world clock live for THIS epoch -- the same gate WAIT_RELOAD uses. Only then is it safe to
+            // arm the switch (return-title teardown), i.e. after load1 has actually finished loading.
+            let render_ready = match unsafe { PlayerIns::local_player_mut() } {
+                Ok(player) => {
+                    player.chr_ins.chr_model_ins.as_ptr() as usize != TITLE_OWNER_SCAN_START_ADDRESS
+                        && player.chr_ins.chr_flags1c4.is_render_group_enabled()
+                        && player.chr_ins.chr_flags1c5.enable_render()
+                }
+                Err(_) => false,
+            };
+            let in_world = render_ready
+                && crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur_epoch;
             // PROGRAMMATIC SWITCH (user 2026-07-21): replace the OPEN_MENU->TO_SYSTEM->TO_PROFILE->TO_SLOT
             // ->CONFIRM SendInput menu drive (which forced ER foreground and stole the user's focus the
             // whole time) with the MENU-FREE arm. Once the CURRENT load's world is live + settled, arm the
