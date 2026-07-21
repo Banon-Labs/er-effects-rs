@@ -128,12 +128,20 @@ echo "======================================================================"
 
 "$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
 
+CAPTURE_ARGS=()
+if [[ "${OBSERVE_ONLY:-0}" == "1" ]]; then
+	# Pure observation of the full load1->load2 sequence (havok teleports, mms) -- no probe/verdict
+	# teardowns. Used to test whether load2 shows the same teleport-to-spawn as load1.
+	CAPTURE_ARGS+=(--observe-only --observe-seconds "${OBSERVE_SECONDS:-140}")
+else
+	CAPTURE_ARGS+=(--require-reload-settled)
+fi
 python3 "$REPO_ROOT/scripts/capture-samechar-3x.py" \
 	--game-dir "$GAME_DIR" \
 	--artifact-dir "$ARTIFACT_DIR" \
 	--max-seconds "$CAP_SECONDS" \
-	--require-reload-settled \
-	--report "$ARTIFACT_DIR/samechar-3x-report.md"
+	--report "$ARTIFACT_DIR/samechar-3x-report.md" \
+	"${CAPTURE_ARGS[@]}"
 RC=$?
 
 # Preserve the harness self-drive evidence log alongside the trace + report.

@@ -271,6 +271,34 @@ unsafe fn write_u8(addr: usize, val: u8) {
     unsafe { core::ptr::write_volatile(addr as *mut u8, val) };
 }
 
+/// Dump a window of qwords from the MoveMapStep header (own process, guarded reads). Why: load2's
+/// MoveMapStep Update (FUN_140aff640) stops being ticked by the FD4 scheduler after ~6 ticks while
+/// load1 ticks it ~145x to completion (bd load2-real-blocker-movemapstep-child-advancer-tick-never-runs).
+/// The advancer fires 1:1 with that Update, so dumping the mms header at each tick lets a run diff
+/// load1 (keeps ticking) vs load2 (drops out) and reveal which header field (step-machine state /
+/// active flag / scheduler link) changes when ticking stops. Offsets +0x00..+0x58, plus the child
+/// ezstep pointer region around +0x108. Read-only.
+fn mms_header_window(a: usize) -> String {
+    let mut s = String::from("mmshdr[");
+    let mut off = 0usize;
+    while off <= 0x58 {
+        match unsafe { read_usize(a + off) } {
+            Some(v) => s.push_str(&format!("+{off:x}=0x{v:x} ")),
+            None => s.push_str(&format!("+{off:x}=? ")),
+        }
+        off += 8;
+    }
+    // child ezstep base region (mms+0x108) + the finalize substate byte (+0x12a) neighbourhood
+    for off in [0x100usize, 0x108, 0x110, 0x118, 0x128] {
+        match unsafe { read_usize(a + off) } {
+            Some(v) => s.push_str(&format!("+{off:x}=0x{v:x} ")),
+            None => s.push_str(&format!("+{off:x}=? ")),
+        }
+    }
+    s.push(']');
+    s
+}
+
 /// Custom detour for the MoveMapStep finalize advancer (0xafa6d0). Logs field25_0x12a before/after the
 /// native call plus menuData 0x5d(rt5d)/0x5e(cVar10 out) -- ONLY on a sub-state change or every 600th
 /// call (heartbeat), so a FROZEN load2 (field25 stuck at 0) is visible without per-frame flooding while
@@ -280,45 +308,18 @@ unsafe extern "system" fn hook_finalize_advancer(a: usize, b: usize, c: usize, d
     let fin_before = unsafe { read_u8(a + MOVEMAPSTEP_FINALIZE_12A_OFFSET) }.map_or(-1, i32::from);
     let menu = game_base().and_then(|base| unsafe { read_usize(base + CS_MENU_MAN_GLOBAL_RVA) });
     let menu_data = menu.and_then(|m| unsafe { read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) });
-    // Once we've begun driving THIS mms's finalize, keep the case-7 save-drain flags clear every call so
-    // 7->8 can pass (ShouldSave=GameMan->saveRequested(0xb72); FUN_140679370=GameMan+0xb73). The
-    // suppressed quit-save leaves them set -> load2 parks at field25=7 even after rt5d unblocks case 0.
-    if a != 0 && RT5D_DRIVE_DONE_MMS.load(Ordering::SeqCst) == a {
-        if let Some(gm) =
-            game_base().and_then(|base| unsafe { read_usize(base + GAME_MAN_SINGLETON_RVA) })
-        {
-            unsafe { write_u8(gm + GAME_MAN_SAVE_REQUESTED_B72_OFFSET, 0) };
-            unsafe { write_u8(gm + GAME_MAN_FIELD_B73_OFFSET, 0) };
-        }
-    }
-    // A finalize that is advancing (field25>=5) marks its mms as a self-completing load (load1).
-    if fin_before >= 5 {
-        COMPLETION_SEEN_MMS.store(a, Ordering::SeqCst);
-    }
-    // rt5d DIAGNOSTIC DRIVE -- BEFORE the native advancer reads menuData+0x5d. Once a load has completed,
-    // a DIFFERENT mms stuck at field25=0 is the divergent load2; drive it after a few stuck calls.
-    if fin_before == 0 {
-        if RT5D_DRIVE_MMS.swap(a, Ordering::SeqCst) != a {
-            RT5D_DRIVE_ZERO_STREAK.store(0, Ordering::SeqCst);
-        }
-        let streak = RT5D_DRIVE_ZERO_STREAK.fetch_add(1, Ordering::SeqCst) + 1;
-        let seen = COMPLETION_SEEN_MMS.load(Ordering::SeqCst);
-        let is_divergent_load = seen != 0 && seen != a;
-        if is_divergent_load
-            && streak >= RT5D_DRIVE_THRESHOLD
-            && RT5D_DRIVE_DONE_MMS.swap(a, Ordering::SeqCst) != a
-        {
-            if let Some(md) = menu_data {
-                unsafe { write_u8(md + MENU_DATA_RT5D_OFFSET, 1) };
-                log_line(format_args!(
-                    "RT5D_DRIVE: wrote menuData+0x5d=1 on stuck mms=0x{a:x} after {streak} field25=0 calls (prior completed mms=0x{seen:x}) {}",
-                    snapshot()
-                ));
-            }
-        }
-    } else {
-        RT5D_DRIVE_ZERO_STREAK.store(0, Ordering::SeqCst);
-    }
+    // NOTE: the rt5d/save-flag DRIVE was REMOVED (bd CORRECTION-rt5d-drive-tears-down-load2). Driving
+    // menuData+0x5d=1 (+ clearing saveRequested/0xb73) DID complete load2's finalize 0..9, but that
+    // TORE THE PLAYER DOWN (post-completion: present=False, havok=None, mms=-1 at ~60fps = a player-less
+    // world) -- load2's player is not movable at fin=0 when the finalize runs, unlike load1. So the
+    // finalize-drive is a proven DEAD END; this hook is log-only again so traces show the natural load2.
+    // The write_u8 helper + drive statics/consts are retained for reference but intentionally unused.
+    let _ = (
+        &RT5D_DRIVE_MMS,
+        &RT5D_DRIVE_ZERO_STREAK,
+        &RT5D_DRIVE_DONE_MMS,
+        &COMPLETION_SEEN_MMS,
+    );
     let ret = unsafe { call_original(&ORIG_FINALIZE_ADVANCER, a, b, c, d) };
     let fin_after = unsafe { read_u8(a + MOVEMAPSTEP_FINALIZE_12A_OFFSET) }.map_or(-1, i32::from);
     let m5d = menu_data
@@ -328,12 +329,16 @@ unsafe extern "system" fn hook_finalize_advancer(a: usize, b: usize, c: usize, d
         .and_then(|md| unsafe { read_u8(md + MENU_DATA_ENDING_5E_OFFSET) })
         .map_or(-1, i32::from);
     let last = LAST_FIN12A.swap(fin_after, Ordering::SeqCst);
-    if fin_before != fin_after || last != fin_after || calls % 600 == 0 {
-        log_line(format_args!(
-            "finalize_advancer_afa6d0 call#{calls} mms=0x{a:x} field25_12a {fin_before}->{fin_after} menuData_5d={m5d} 5e={m5e} {}",
-            snapshot()
-        ));
-    }
+    // Log EVERY advancer tick with the mms header window. load2's Update ticks only ~6x before the FD4
+    // scheduler drops it (load1 ~145x), so the per-tick header lets a run diff which mms field flips
+    // when load2 stops ticking. Volume is bounded (a few hundred lines/run) -- acceptable for a
+    // diagnostic (bd load2-real-blocker-movemapstep-child-advancer-tick-never-runs).
+    let _ = (fin_before, last);
+    log_line(format_args!(
+        "finalize_advancer_afa6d0 call#{calls} mms=0x{a:x} field25_12a {fin_before}->{fin_after} menuData_5d={m5d} 5e={m5e} {} {}",
+        mms_header_window(a),
+        snapshot()
+    ));
     ret
 }
 

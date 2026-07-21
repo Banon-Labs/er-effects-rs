@@ -83,6 +83,22 @@ def as_int(value: object, default: int = -1) -> int:
     return default
 
 
+def parse_havok(value: object) -> tuple[float, float, float] | None:
+    """oracle_havok_pos is a [x,y,z] list (or its JSON string, or None). Returns the tuple or None."""
+    v = value
+    if isinstance(v, str):
+        try:
+            v = json.loads(v)
+        except json.JSONDecodeError:
+            return None
+    if isinstance(v, (list, tuple)) and len(v) >= 3:
+        try:
+            return (float(v[0]), float(v[1]), float(v[2]))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def snap(t: dict) -> dict:
     """Extract the load-readiness signature we care about."""
     keys = [
@@ -135,6 +151,8 @@ def snap(t: dict) -> dict:
         "oracle_move_probe_moved_frames",
         "oracle_supplied_movement_input_frames",
         "oracle_did_move_frames",
+        # HARNESS-attributed contamination-proof verdict (0 pending/1 proven/2 disproven/3 contaminated):
+        "oracle_harness_move_verdict",
         "oracle_saved_map_c30",
         "sq_repro_state",
         "sq_repro_switch_index",
@@ -569,6 +587,30 @@ def main() -> int:
             "handoff (requestCode==2, MoveMapStep absent); catches load2 moving under stale mms18"
         ),
     )
+    ap.add_argument(
+        "--capture-load1-imprint",
+        action="store_true",
+        help=(
+            "IMPRINT capture mode (real-oracle foundation): record the load1 boot timeseries and tear "
+            "down the instant the USER walks the char (sustained havok displacement in a stable world). "
+            "No reload driven; no move-probe teardown."
+        ),
+    )
+    ap.add_argument(
+        "--observe-only",
+        action="store_true",
+        help=(
+            "PURE OBSERVATION: record the full timeseries (incl. havok per poll) with NO probe/verdict/"
+            "stall/fps teardowns -- ride to --observe-seconds (or load-epoch target) so the complete "
+            "load1->load2 sequence (teleports, mms) is captured for offline analysis / imprint building."
+        ),
+    )
+    ap.add_argument(
+        "--observe-seconds",
+        type=float,
+        default=140.0,
+        help="observe-only window before teardown (default 140s).",
+    )
     args = ap.parse_args()
 
     args.artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -581,6 +623,22 @@ def main() -> int:
     start = time.monotonic()
     last_log = 0.0
     result = "TIMEOUT_NO_LOAD3"
+    # TELEMETRY TIMESERIES (user 2026-07-20, real-oracle foundation): append every poll's full
+    # semaphore snapshot with a relative timestamp. This is the raw material to (a) BUILD the known-good
+    # load1 boot IMPRINT (ordered semaphores + inter-transition timing) and (b) later compare a live run
+    # against it in lockstep. bd real-oracle-imprint-lockstep-boot-sequence-direction-2026-07-20.
+    ts_path = args.artifact_dir / "telemetry-timeseries.jsonl"
+    ts_f = ts_path.open("w", encoding="utf-8")
+    # IMPRINT capture (boot_to_control phase): the boundary is the USER pressing forward -> SUSTAINED
+    # walking (control-available ground truth; RAM proxies lie). A LOAD reposition is a single-poll
+    # TELEPORT (tens of units, e.g. load1 places the char at spawn) and must NOT count as walking; only
+    # sustained walking-range displacement in a STABLE non-loading world is the user (bd
+    # boot-imprint-boundary-reject-teleport-require-sustained-walk-2026-07-20).
+    prev_havok: tuple[float, float, float] | None = None
+    HAVOK_MOVE_THRESHOLD = 0.3  # min horizontal world-unit displacement/poll that counts as walking
+    HAVOK_TELEPORT = 5.0  # displacement/poll above this = a load reposition/teleport, NOT walking
+    WALK_CONFIRM_POLLS = 3  # consecutive walking-range polls needed to confirm the user is walking
+    walk_streak = 0
     max_nav_stage = (
         0  # highest sq_repro_state reached = how far the driver ever drove the menu
     )
@@ -622,8 +680,28 @@ def main() -> int:
         t = read_telemetry(telemetry_path)
         if t is not None:
             s = snap(t)
+            with contextlib.suppress(Exception):
+                ts_f.write(json.dumps({"t_ms": round(elapsed * 1000), **s}) + "\n")
+                ts_f.flush()
             deser = s.get("system_quit_continue_confirm_fresh_deser_count") or 0
             present = bool(s.get("oracle_player_present"))
+            # PURE OBSERVATION: the timeseries is already written above; skip ALL probe/verdict/stall/fps
+            # teardown logic and just ride to the observe window so the full load1->load2 sequence
+            # (havok teleports, mms progression) is captured for offline analysis.
+            if args.observe_only:
+                if elapsed >= args.observe_seconds:
+                    result = f"OBSERVED_{int(args.observe_seconds)}s_deser{deser}"
+                    break
+                if elapsed - last_log >= LOG_THROTTLE_SECONDS:
+                    last_log = elapsed
+                    print(
+                        f"[{elapsed:6.1f}s] OBSERVE deser={deser} present={present} "
+                        f"now_loading={s.get('oracle_now_loading')} mms={s.get('oracle_stepfinish_mms_state')} "
+                        f"req={s.get('oracle_stepfinish_request_code')} havok={s.get('oracle_havok_pos')}",
+                        flush=True,
+                    )
+                _POLL_WAIT.wait(POLL_SECONDS)
+                continue
             render_ready = bool(s.get("oracle_player_render_ready"))
             fake_cover = bool(s.get("oracle_fake_loading_any_visible"))
 
@@ -633,13 +711,50 @@ def main() -> int:
             max_activate = max(max_activate, int(activate))
 
             can_move = bool(s.get("oracle_can_move"))
+            # DECISIVE: the harness-attributed movement verdict is the whole point of a movement run.
+            # The instant it latches (proven/disproven/contaminated) for the epoch under test, tear down
+            # -- do NOT ride to an fps/stall/cap window after the answer is known (user 2026-07-20, bd
+            # collect-decisive-info-teardown-immediately). Contamination is a first-class outcome here.
+            harness_verdict = as_int(s.get("oracle_harness_move_verdict"), 0)
+            if harness_verdict != 0:
+                vlabel = {
+                    1: "PROVEN_harness_moved_char",
+                    2: "DISPROVEN_injection_ineffective",
+                    3: "CONTAMINATED_external_input",
+                }.get(harness_verdict, f"verdict{harness_verdict}")
+                result = f"HARNESS_MOVE_{vlabel}_epoch{deser}"
+                break
+            # IMPRINT CAPTURE (boot_to_control phase): end the boot imprint the INSTANT control is
+            # available, marked by the USER pressing forward = the char's first real havok displacement.
+            # RAM proxies for control-available (render_ready, present, mms==-1) are unreliable, so the
+            # char actually MOVING is the ground-truth boundary (user 2026-07-20). No injection here, so
+            # any move is the user. The boundary event itself is NOT part of the boot imprint (the
+            # imprint is boot -> the frame BEFORE the move).
+            if args.capture_load1_imprint:
+                hv = parse_havok(s.get("oracle_havok_pos"))
+                not_loading = as_int(s.get("oracle_now_loading"), 1) == 0
+                if deser == 0 and present and hv is not None:
+                    if prev_havok is not None:
+                        dx = hv[0] - prev_havok[0]
+                        dz = hv[2] - prev_havok[2]
+                        disp = (dx * dx + dz * dz) ** 0.5
+                        if disp > HAVOK_TELEPORT:
+                            walk_streak = 0  # load reposition/teleport, not walking
+                        elif not_loading and disp >= HAVOK_MOVE_THRESHOLD:
+                            walk_streak += 1
+                            if walk_streak >= WALK_CONFIRM_POLLS:
+                                result = "PHASE_boot_to_control_CAPTURED"
+                                break
+                        else:
+                            walk_streak = 0
+                    prev_havok = hv
             if present and first_present_at is None:
                 first_present_at = now
 
             # FAST FPS-COMPARISON TEARDOWN (user 2026-07-20): once load2 is loaded into world two, sample
             # its FPS for ~3s and compare to the load1 in-world baseline; tear down immediately.
             try:
-                fps_now = float(s.get("oracle_fps"))
+                fps_now = float(s.get("oracle_fps") or 0.0)
             except (TypeError, ValueError):
                 fps_now = -1.0
             _ep = int(deser)
@@ -896,6 +1011,9 @@ def main() -> int:
                 )
         _POLL_WAIT.wait(POLL_SECONDS)
 
+    with contextlib.suppress(Exception):
+        ts_f.close()
+
     # Snapshot artifacts before teardown clears live state.
     for name in (
         "er-effects-telemetry.json",
@@ -991,19 +1109,32 @@ def main() -> int:
             f"- havok_pos: {s.get('oracle_havok_pos')}  play_time_ms: {s.get('oracle_play_time_ms')}"
         )
         lines.append("")
-    success_results = {"MOVEMENT_PROVEN", "RELOAD_SETTLED"}
+    # EXIT CODE = experiment outcome (user 2026-07-20): a FAILED experiment MUST be non-zero, a PASSED
+    # one zero. HARNESS_MOVE_PROVEN and the imprint capture are passes; DISPROVEN/CONTAMINATED and every
+    # incomplete/stall/timeout are failures. Do not mask this (and never wrap the run in a trailing
+    # always-success shell command). bd never-claim-launch-live / the exit-code masking correction.
+    passed = (
+        result in {"MOVEMENT_PROVEN", "RELOAD_SETTLED", "LOAD1_WORLD_READY_IMPRINT"}
+        or result.startswith("HARNESS_MOVE_PROVEN")
+        or result.endswith("_CAPTURED")
+        or result.startswith("OBSERVED_")  # observation ran to its window as intended
+    )
     if result == "RELOAD_SETTLED":
         verdict = "PASS (a reload PROVED movement and native MoveMap settled: requestCode==2, mms=-1)"
     elif result == "MOVEMENT_PROVEN":
         verdict = "PASS (a load PROVED movement: >=60 frames of injected motion)"
+    elif result == "LOAD1_WORLD_READY_IMPRINT":
+        verdict = "PASS (load1 reached sustained world-ready; imprint timeseries captured)"
+    elif result.endswith("_CAPTURED"):
+        verdict = f"PASS (phase boundary reached via user input; imprint timeseries captured: {result})"
+    elif result.startswith("HARNESS_MOVE_PROVEN"):
+        verdict = "PASS (harness-attributed movement proven, contamination excluded)"
     else:
-        verdict = (
-            "FAIL / incomplete (required movement/settled reload proof was not reached)"
-        )
+        verdict = f"FAIL / incomplete ({result})"
     lines.append(f"## Verdict: {verdict}")
     args.report.write_text("\n".join(lines), encoding="utf-8")
     print("\n".join(lines))
-    return 0 if result in success_results else 1
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":

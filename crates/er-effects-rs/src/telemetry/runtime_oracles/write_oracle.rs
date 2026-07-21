@@ -310,4 +310,16 @@ fn write_player_presence_oracle(body: &mut String) {
         crate::constants::SUPPLIED_MOVEMENT_INPUT_FRAMES.load(Ordering::Relaxed),
         crate::constants::DID_MOVE_FRAMES.load(Ordering::Relaxed)
     ));
+    // HARNESS-ATTRIBUTED verdict (user 2026-07-20): the CONTAMINATION-PROOF movement result -- the
+    // probe alternates inject-on/inject-off windows and requires the char to move under OUR stick AND
+    // stop when we release, so a user moving the char cannot read as proof. Epoch-gated like can_move.
+    // 0=pending 1=PROVEN(harness moved char) 2=DISPROVEN(injection ineffective) 3=CONTAMINATED(external).
+    let harness_move_verdict = if probe_epoch == cur_deser {
+        crate::constants::HARNESS_MOVE_VERDICT.load(Ordering::SeqCst)
+    } else {
+        0
+    };
+    body.push_str(&format!(
+        "  \"oracle_harness_move_verdict\": {harness_move_verdict},\n"
+    ));
 }

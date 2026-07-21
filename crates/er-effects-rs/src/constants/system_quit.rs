@@ -57,6 +57,15 @@ pub(crate) static MOVE_PROBE_STICK_LY: std::sync::atomic::AtomicI32 =
 /// motion under the injected stick (input-causes-movement PROVEN). Cleared when a new load epoch begins.
 pub(crate) static CAN_MOVE_CONFIRMED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+/// HARNESS-ATTRIBUTED movement verdict for the CURRENT load epoch -- the contamination-proof result
+/// (user 2026-07-20, bd canmove-contaminated-user-moved-harness-never-supplied). The move-probe
+/// alternates INJECT-ON / INJECT-OFF windows and requires the char to move WHILE WE inject AND stop
+/// when we release, so a USER moving the char cannot read as proof. 0=pending, 1=PROVEN (moved under
+/// our stick, still when released), 2=DISPROVEN (our injection did not move it), 3=CONTAMINATED
+/// (moved while we were NOT injecting -> external input present). Reset per load epoch. The watcher
+/// tears down the instant this leaves 0 (bd collect-decisive-info-teardown-immediately).
+pub(crate) static HARNESS_MOVE_VERDICT: std::sync::atomic::AtomicU8 =
+    std::sync::atomic::AtomicU8::new(0);
 /// FPS oracle (goal 2026-07-19: stable framerate, comparable across runs, load1 baseline). EMA of the
 /// per-frame delta in microseconds (init ~60fps). Written each game-task frame by lifecycle, read by the
 /// telemetry oracles as oracle_fps = 1e6 / this. Also the per-epoch worst (max) frame time in us.
