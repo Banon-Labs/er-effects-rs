@@ -287,6 +287,8 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
     // Verdict already reached for this load -> stop injecting.
     if HARNESS_MOVE_VERDICT.load(Ordering::SeqCst) != 0 {
         MOVE_PROBE_ACTIVE.store(false, Ordering::SeqCst);
+        // Release any held W the moment the verdict latches, so the proof can't walk the char to death.
+        crate::experiments::move_probe_drive_key_foreground_only(0);
         return;
     }
 
@@ -312,6 +314,13 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
     if is_on {
         unsafe { inject_all_pad_devices() };
     }
+    // KEYBOARD-W movement injection -- THE PROVEN path (bd SWITCH-movement-proof-to-keyboard-W-sendinput):
+    // pad-stick / synthetic-xinput never walk the char, but SendInput 'W' via RawInput does, and ER reads
+    // gameplay keyboard via RawInput (NOT DInput) so the kb+mouse-disable does not block it. Foreground-
+    // only: delivers W only while ER is the foreground window (made so by the scoped burst-start grab
+    // above), auto-releases the moment it loses focus, and releases on OFF/verdict so it cannot drive the
+    // char to death. Faithful real-input path (not a RAM move-vector cheat). VK 'W' = 0x57.
+    crate::experiments::move_probe_drive_key_foreground_only(if is_on { 0x57 } else { 0 });
 
     let mut prev = lock_prev();
     if let Some((px, _py, pz)) = *prev {
