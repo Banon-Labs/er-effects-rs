@@ -365,7 +365,16 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     let st = SQ_REPRO_STATE.load(Ordering::SeqCst);
                     (SQ_REPRO_STATE_OPEN_MENU..=SQ_REPRO_STATE_CONFIRM).contains(&st)
                 };
-                if !sq_menu_nav {
+                // Only inject once the char is actually RENDERED in-world (render_group 1c4 + enable_render
+                // 1c5), NOT merely present. `player present` goes true mid-load (mms=13, ~14s before
+                // render_group), and injecting there latched an invalid DISPROVEN before the char could be
+                // controllable -- then the verdict was frozen and never re-tested (run 092119: verdict at
+                // t=79.9s during loading; render_group did not fire until t=86s). Gating on the rendered
+                // state makes the probe test movability at the stable in-world point, so a DISPROVEN verdict
+                // means the char genuinely did not move, not that we injected before the world was up.
+                let char_rendered = player.chr_ins.chr_flags1c4.is_render_group_enabled()
+                    && player.chr_ins.chr_flags1c5.enable_render();
+                if !sq_menu_nav && char_rendered {
                     let p = player.chr_ins.modules.physics.position;
                     crate::experiments::can_move_probe::tick((p.0, p.1, p.2));
                 }
