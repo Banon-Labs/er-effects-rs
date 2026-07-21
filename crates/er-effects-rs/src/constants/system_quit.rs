@@ -223,6 +223,14 @@ pub(crate) const SQ_REPRO_WAIT_RELOAD_LOG_EVERY: usize = 512;
 /// Frames to settle in-world (world stream + HUD) before the autopilot presses START. Pre-existing
 /// world-readiness settle; the run that first opened IngameTop used it.
 pub(crate) const SQ_REPRO_WORLD_SETTLE_TICKS: usize = 180;
+/// Frames the switch-arm gate will wait, AFTER the settle, for the current load to PROVE genuine
+/// movement (HARNESS_MOVE_VERDICT==1: the can-move probe confirmed >=60 frames of injected-stick
+/// movement with a clean OFF-tail). Once the probe is gated on the rendered state (2026-07-21) the
+/// verdict fires reliably (load3 latched it), so waiting for it makes EACH load prove movement before
+/// the next switch, not just the last. Fallback: if the load cannot latch within this window (drift /
+/// contention / a genuinely non-movable load) arm anyway on the game-global signature so the sequence
+/// never hangs -- the run then records that load as not-proven rather than stalling.
+pub(crate) const SQ_REPRO_MOVE_PROOF_TIMEOUT_TICKS: usize = 900;
 /// FREEZE-RECOVERY DEADLINE (2026-07-18, user-directed readiness gate). Frames the WAIT_RELOAD gate
 /// will wait for a just-triggered reload to become render-ready before classifying it the LOAD-2 FREEZE
 /// (present + reload committed, but the loading cover never lifts / render never hands off -- exactly

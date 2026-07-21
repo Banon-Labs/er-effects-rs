@@ -405,7 +405,16 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             // continue_confirm -> SetState5 -- exactly like a vanilla Continue with the slot preselected.
             // No move-proof gate (it is foreground-limited and never fires); world-live+settle is the
             // reliable readiness. bd CORRECT-disable-custom-onclick-load-save-set-slot-then-native-continue.
-            if in_world && tick >= SQ_REPRO_WORLD_SETTLE_TICKS {
+            // Wait for load1 to PROVE movement (HARNESS_MOVE_VERDICT==1: the can-move probe confirmed
+            // genuine injected-stick movement for this epoch) before arming the switch, so load1's
+            // movement is proven -- not just render-ready. Timeout fallback (SQ_REPRO_MOVE_PROOF_TIMEOUT
+            // _TICKS) arms anyway if the load cannot latch, so a drift/contention load never hangs the run.
+            let move_verdict_proven =
+                crate::constants::HARNESS_MOVE_VERDICT.load(Ordering::SeqCst) == 1;
+            if in_world
+                && tick >= SQ_REPRO_WORLD_SETTLE_TICKS
+                && (move_verdict_proven || tick >= SQ_REPRO_MOVE_PROOF_TIMEOUT_TICKS)
+            {
                 if sq_repro_pause_at_menu() {
                     // Diagnostic mode: 0 switches, no load. Nothing to drive without the menu-nav.
                     sq_repro_transition(SQ_REPRO_STATE_DONE);
@@ -1079,7 +1088,16 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             // play_time_live oracle). Game-global, valid on the native path, reliable across runs.
             let epoch_world_live =
                 crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == deser;
-            let move_proven = committed && render_ready && epoch_world_live;
+            // Require the ACTUAL movement proof (verdict==1: the can-move probe confirmed genuine
+            // injected-stick movement for THIS reload epoch) before arming the next switch, so each reload
+            // PROVES movement -- not just render-ready (render-group fires ~before the char is controllable,
+            // so the previous gate armed switch #2 while load2 was still finalizing). The existing
+            // freeze-recovery (waited >= SQ_REPRO_FREEZE_RECOVERY_DEADLINE=900f) is the timeout fallback: a
+            // reload that cannot latch (drift/contention) force-switches rather than hanging.
+            let move_verdict_proven =
+                crate::constants::HARNESS_MOVE_VERDICT.load(Ordering::SeqCst) == 1;
+            let move_proven =
+                committed && render_ready && epoch_world_live && move_verdict_proven;
             if move_proven {
                 let completed = switch_index + 1;
                 SQ_REPRO_SWITCH_INDEX.store(completed, Ordering::SeqCst);

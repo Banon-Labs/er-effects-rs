@@ -29,6 +29,10 @@ RENDER_READY_DWELL_SECONDS = 5.0  # goal SS4 hard render gate dwell
 POLL_SECONDS = 0.5  # capture cadence (user 2026-07-19: 3s log throttle hid the completion->teardown)
 LOG_THROTTLE_SECONDS = 0.5  # console log cadence -- match the poll so fast transitions are visible
 TARGET_FINAL_EPOCH = 3  # 4 loads total = fresh_deser 0..3
+# The final reload epoch for the current 2-switch run (load1=deser0, load2=deser1, load3=deser2). Success
+# (--require-reload-settled) requires THIS epoch's reload to move+settle so the run drives through all 3
+# loads instead of ending on load2. Matches SQ_REPRO_TARGET_SWITCHES in constants/system_quit.rs.
+FINAL_RELOAD_EPOCH = 2
 FINAL_LOAD_DWELL_SECONDS = (
     14.0  # after the 4th load appears, give the 60-frame move-probe time to run
 )
@@ -751,7 +755,7 @@ def main() -> int:
             # run down before load1 finished (user 2026-07-21: "why did you tear down before load 1").
             # Loads are validated by the game-global signature + the stall guard, not the unreliable
             # injection verdict; a disproven/contaminated verdict just lets the run keep going.
-            if harness_verdict == 1:
+            if harness_verdict == 1 and as_int(deser) >= FINAL_RELOAD_EPOCH:
                 result = f"HARNESS_MOVE_PROVEN_harness_moved_char_epoch{deser}"
                 break
             # IMPRINT CAPTURE (boot_to_control phase): end the boot imprint the INSTANT control is
@@ -898,6 +902,10 @@ def main() -> int:
             # req_code==2/mms==-1 (title-owner-derived, never settle on the reload path). Verified 2026-07-21:
             # render_group(1c4) + enable_render(1c5) DO fire on both loads; draw_group never does.
             reload_epoch = as_int(deser) >= 1
+            # Movement proof = the STRONG harness verdict (CAN_MOVE_CONFIRMED / verdict==1: >=70% ON-moved
+            # + clean OFF-tail), NOT raw did_move_frames -- the per-frame threshold (0.01) counts DRIFT, so
+            # a load that only drifts 0.1u still shows did_move=72 (run 111317 load2). verdict==1 correctly
+            # rejects drift and is the real "the harness moved the char" proof.
             reload_move = can_move and reload_epoch
             reload_settled = (
                 reload_move
@@ -906,7 +914,9 @@ def main() -> int:
                 and bool(s.get("oracle_play_time_live"))
             )
             if args.require_reload_settled:
-                if reload_settled:
+                # Full sequence: succeed only when the FINAL reload (load3) proves movement + settles, so
+                # the run drives through ALL loads rather than ending on load2.
+                if reload_settled and as_int(deser) >= FINAL_RELOAD_EPOCH:
                     result = "RELOAD_SETTLED"
                     break
             elif can_move and (not args.require_reload_move or reload_epoch):
