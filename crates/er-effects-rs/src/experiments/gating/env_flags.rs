@@ -487,12 +487,14 @@ pub(crate) fn prove_movement_enabled() -> bool {
 /// force ER foreground while injecting so the walk actually registers. OFF by default so it NEVER
 /// steals focus in a user-present session. Cached.
 pub(crate) fn probe_foreground_enabled() -> bool {
-    // DISABLED (user 2026-07-20): do NOT force ER to the foreground during runs -- it steals the user's
-    // mouse to ER's screen. The focus-override (IsEnableControlOnDisactiveWindow->1) + DLUID+0x88d
-    // stay_active already make the injected pad input apply while ER is UNFOCUSED (run 202410 proved the
-    // char moved while unfocused), so foreground-forcing is unnecessary. bd
+    // SCOPED (user 2026-07-20): force ER foreground ONLY at the start of each movement-injection burst
+    // ("just when you need to move"), NOT constantly -- the caller (can_move_probe) gates this on the ON
+    // burst so the mouse is grabbed once per cycle, not every frame across the whole movable window.
+    // Gameplay locomotion applies the injected stick only when the window is genuinely active (the
+    // focus-override alone is insufficient: run 205055 unfocused -> did_move=0). kb+mouse are disabled as
+    // game inputs during the run, so this brief grab cannot be contaminated by the user. bd
     // user-stop-forcing-foreground-focus-override-makes-it-unneeded-disable-probe-foreground-2026-07-20.
-    false
+    harness_dll_present()
 }
 /// SELF-DRIVEN SYSTEM->QUIT->LOAD-PROFILE REPRO AUTOPILOT (er-effects-system-quit-repro.txt /
 /// ER_EFFECTS_SYSTEM_QUIT_REPRO). OFF by default. When on, after the boot autoload reaches the

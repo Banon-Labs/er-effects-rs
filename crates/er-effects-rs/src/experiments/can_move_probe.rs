@@ -253,12 +253,6 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
     // Hold ER's input-accept flag EVERY frame so the injected stick applies while the window is
     // unfocused (the fix for the discarded 400 injected frames). Never forces foreground.
     hold_input_active();
-    if crate::experiments::probe_foreground_enabled() {
-        static FG_TICK: AtomicUsize = AtomicUsize::new(0);
-        if FG_TICK.fetch_add(1, Ordering::Relaxed) % 30 == 0 {
-            crate::experiments::sq_repro_force_foreground_now();
-        }
-    }
 
     let pf = PHASE_FRAME.load(Ordering::Relaxed);
     let is_on = pf < ON_FRAMES;
@@ -266,6 +260,12 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
     // leave it false so the real (neutral, unless a user pushes) stick flows through -> the OFF tail
     // measures movement we are NOT causing.
     MOVE_PROBE_ACTIVE.store(is_on, Ordering::SeqCst);
+    // Force ER genuinely focused ONCE at the START of each injection burst (user 2026-07-20: "just when
+    // you need to move", not constantly). Gameplay locomotion applies the injected stick only when the
+    // window is truly active; kb+mouse are disabled as game inputs so this brief grab is uncontaminated.
+    if is_on && pf == 0 && crate::experiments::probe_foreground_enabled() {
+        crate::experiments::sq_repro_force_foreground_now();
+    }
 
     let mut prev = lock_prev();
     if let Some((px, _py, pz)) = *prev {
