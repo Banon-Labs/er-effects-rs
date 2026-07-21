@@ -104,7 +104,14 @@ def epoch_verdict(epoch: int, rows: list[dict]) -> str:
         mmove = _idelta(rows, "oracle_rawinput_mouse_move_events")
         mbtn = _idelta(rows, "oracle_rawinput_mouse_button_events")
         keys = _idelta(rows, "oracle_rawinput_key_events")
+        blocked = _idelta(rows, "oracle_rawinput_blocked_unfocused_events")
         total = mmove + mbtn + keys
+        blk = (
+            f" ({blocked} unfocused user input events were DROPPED as harmless -- you may press buttons"
+            f" freely while the game is unfocused)"
+            if blocked
+            else ""
+        )
         if calls <= 0:
             parts.append(
                 "    RawInput oracle BLIND this epoch: the game made 0 GetRawInputData calls, so it does"
@@ -113,16 +120,17 @@ def epoch_verdict(epoch: int, rows: list[dict]) -> str:
             )
         elif total > 0:
             parts.append(
-                f"    CONTAMINATION (authoritative -- the game RECEIVED user input): {mmove} mouse-move"
-                f" + {mbtn} mouse-button + {keys} keyboard RawInput events this epoch (of {calls}"
-                f" GetRawInputData calls). The harness injects via the direct-memory inputmgr (never"
-                f" RawInput), so these are the USER's -> this epoch is CORRUPTED, its stall/finish INVALID."
+                f"    CONTAMINATION (EFFECTIVE user input -- game was FOCUSED): {mmove} mouse-move +"
+                f" {mbtn} mouse-button + {keys} keyboard events reached the game WITH EFFECT (of {calls}"
+                f" GetRawInputData calls){blk}. The harness injects via direct-memory inputmgr (never"
+                f" RawInput), so these are the USER's and they could affect the run -> this epoch is"
+                f" CORRUPTED, its stall/finish INVALID."
             )
         else:
             parts.append(
-                f"    CLEAN: the game called GetRawInputData {calls}x and got 0 user mouse/keyboard events"
-                f" this epoch -> NOT contaminated (authoritative and LIVE; covers mouse-look/camera input"
-                f" that char-position misses)."
+                f"    CLEAN: 0 EFFECTIVE user input events this epoch (game called GetRawInputData"
+                f" {calls}x){blk} -> NOT contaminated. Only input received while the game was FOCUSED"
+                f" counts; unfocused presses are dropped and cannot affect the run."
             )
     elif verdict_code == 3 or (moved > MOVE_NOISE_FRAMES and supplied == 0):
         parts.append(

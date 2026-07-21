@@ -362,10 +362,11 @@ fn write_player_presence_oracle(body: &mut String) {
     // run. The input-harness injects via the direct-memory inputmgr (NOT RawInput), so any nonzero count
     // here means the user's input reached the game -> the run is CONTAMINATED. Cumulative event counts.
     body.push_str(&format!(
-        "  \"oracle_rawinput_hook_calls\": {},\n  \"oracle_rawinput_mouse_move_events\": {},\n  \"oracle_rawinput_mouse_button_events\": {},\n  \"oracle_rawinput_key_events\": {},\n",
+        "  \"oracle_rawinput_hook_calls\": {},\n  \"oracle_rawinput_mouse_move_events\": {},\n  \"oracle_rawinput_mouse_button_events\": {},\n  \"oracle_rawinput_key_events\": {},\n  \"oracle_rawinput_blocked_unfocused_events\": {},\n",
         crate::experiments::RAWINPUT_HOOK_CALLS.load(Ordering::Relaxed),
         crate::experiments::RAWINPUT_MOUSE_MOVE_EVENTS.load(Ordering::Relaxed),
         crate::experiments::RAWINPUT_MOUSE_BUTTON_EVENTS.load(Ordering::Relaxed),
         crate::experiments::RAWINPUT_KEY_EVENTS.load(Ordering::Relaxed),
+        crate::experiments::RAWINPUT_BLOCKED_UNFOCUSED_EVENTS.load(Ordering::Relaxed),
     ));
 }

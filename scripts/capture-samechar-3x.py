@@ -157,6 +157,8 @@ def snap(t: dict) -> dict:
         # injects via direct-memory inputmgr, not RawInput -> any nonzero = user input = contamination).
         # hook_calls validates the oracle is LIVE (game routes input through GetRawInputData); 0 = blind.
         "oracle_rawinput_hook_calls",
+        # blocked = user input dropped while the game was UNFOCUSED (ineffective, NOT contamination).
+        "oracle_rawinput_blocked_unfocused_events",
         "oracle_rawinput_mouse_move_events",
         "oracle_rawinput_mouse_button_events",
         "oracle_rawinput_key_events",

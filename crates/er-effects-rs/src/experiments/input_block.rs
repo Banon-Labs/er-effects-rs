@@ -765,6 +765,11 @@ pub(crate) static RAWINPUT_KEY_EVENTS: AtomicUsize = AtomicUsize::new(0);
 /// through GetRawInputData -> the reception oracle is BLIND and a 0 event count means nothing. If >0 the
 /// oracle is live and a 0 event count is a genuine "no user input this run".
 pub(crate) static RAWINPUT_HOOK_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// User input events that arrived while the game was UNFOCUSED (agent-owned run): these are DROPPED
+/// (zeroed) so they have no effect, and counted here -- NOT as contamination. The user may press
+/// buttons freely during a run; while unfocused those presses are neutralized and harmless (user
+/// 2026-07-20: "only cares about when inputs are being sent AND you're not blocking them").
+pub(crate) static RAWINPUT_BLOCKED_UNFOCUSED_EVENTS: AtomicUsize = AtomicUsize::new(0);
 static GET_RAW_INPUT_DATA_ORIG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
 /// GetRawInputData(hRawInput, uiCommand, pData, pcbSize, cbSizeHeader) pass-through detour: call the
@@ -785,26 +790,57 @@ unsafe extern "system" fn get_raw_input_data_hook(
     let ret = unsafe { orig(h_raw_input, ui_command, p_data, pcb_size, cb_size_header) };
     const RID_INPUT: u32 = 0x1000_0003;
     if !p_data.is_null() && ui_command == RID_INPUT && ret != u32::MAX && ret >= 0x30 {
+        // EFFECTIVENESS GATE (user 2026-07-20): user input only matters when the game is FOCUSED. When
+        // the game is UNFOCUSED (agent-owned run), the user's presses are ineffective -- DROP them (zero
+        // the RAWINPUT so the game reads a no-op) and count them as BLOCKED, NOT contamination. The
+        // harness injects via the direct-memory inputmgr (not RawInput), so this never touches it.
+        let focused = {
+            let mut pid = 0u32;
+            let fg = unsafe { GetForegroundWindow() };
+            unsafe { GetWindowThreadProcessId(fg, Some(&mut pid)) };
+            pid != 0 && pid == unsafe { GetCurrentProcessId() }
+        };
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let base = p_data as usize;
             let dwtype = unsafe { (base as *const u32).read_unaligned() };
             let d = base + 0x18; // past RAWINPUTHEADER
             if dwtype == 0 {
-                // RIM_TYPEMOUSE
+                // RIM_TYPEMOUSE: usButtonFlags @ +0x04, lLastX @ +0x0C, lLastY @ +0x10
                 let btn = unsafe { ((d + 0x04) as *const u16).read_unaligned() };
                 let lx = unsafe { ((d + 0x0C) as *const i32).read_unaligned() };
                 let ly = unsafe { ((d + 0x10) as *const i32).read_unaligned() };
-                if lx != 0 || ly != 0 {
-                    RAWINPUT_MOUSE_MOVE_EVENTS.fetch_add(1, Ordering::Relaxed);
-                }
-                if btn != 0 {
-                    RAWINPUT_MOUSE_BUTTON_EVENTS.fetch_add(1, Ordering::Relaxed);
+                if lx != 0 || ly != 0 || btn != 0 {
+                    if focused {
+                        if lx != 0 || ly != 0 {
+                            RAWINPUT_MOUSE_MOVE_EVENTS.fetch_add(1, Ordering::Relaxed);
+                        }
+                        if btn != 0 {
+                            RAWINPUT_MOUSE_BUTTON_EVENTS.fetch_add(1, Ordering::Relaxed);
+                        }
+                    } else {
+                        // DROP: zero movement + buttons so the game reads a no-op mouse event.
+                        unsafe {
+                            ((d + 0x0C) as *mut i32).write_unaligned(0);
+                            ((d + 0x10) as *mut i32).write_unaligned(0);
+                            ((d + 0x04) as *mut u16).write_unaligned(0);
+                        }
+                        RAWINPUT_BLOCKED_UNFOCUSED_EVENTS.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
             } else if dwtype == 1 {
-                // RIM_TYPEKEYBOARD -- count key-down messages only
+                // RIM_TYPEKEYBOARD: MakeCode @ +0x00, VKey @ +0x06, Message @ +0x08 (WM_KEYDOWN 0x100)
                 let msg = unsafe { ((d + 0x08) as *const u32).read_unaligned() };
                 if msg == 0x100 || msg == 0x104 {
-                    RAWINPUT_KEY_EVENTS.fetch_add(1, Ordering::Relaxed);
+                    if focused {
+                        RAWINPUT_KEY_EVENTS.fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        // DROP: neutralize the key (VKey=0xFF, MakeCode=0) so it is a no-op.
+                        unsafe {
+                            ((d + 0x06) as *mut u16).write_unaligned(0x00FF);
+                            (d as *mut u16).write_unaligned(0);
+                        }
+                        RAWINPUT_BLOCKED_UNFOCUSED_EVENTS.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
             }
         }));
