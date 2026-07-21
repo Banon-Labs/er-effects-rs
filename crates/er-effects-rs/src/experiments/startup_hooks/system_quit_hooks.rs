@@ -197,6 +197,40 @@ pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
         .unwrap_or(-1);
     let mms_state = unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET) }.unwrap_or(-1);
     let _ = (&TESTNET_FF_LAST_MMS, &TESTNET_FF_STUCK_FRAMES);
+    // FRAMERATE FIX (2026-07-21, case 7 gate decompiled from FUN_140afa6d0 via the ghidra MCP): the
+    // finalize walk (fin 5->9) is a cleanup that runs AFTER the fin=0 movable window; load1 becomes
+    // movable, THEN walks and settles (mms 18->-1) -> exits loading mode -> fps recovers. Holding fin=0
+    // FOREVER (below) keeps load2/load3 in loading mode -> flat 20fps. So: once THIS reload's 60-frame
+    // movement proof has LATCHED, RELEASE the hold and satisfy the case-7 save-drain gate so the game's
+    // OWN advancer completes the walk. Gate 7->8 = (saveState==0 && !ShouldSave() && !ngp && CSRemo-
+    // drained); ShouldSave() reads GameMan.saveRequested (0xb72), left set because the finalize's own
+    // RequestSave(false) autosave is suppressed on a warm reload (gaitem-crash dodge). saveState/ngp/
+    // CSRemo already pass -> saveRequested is the SOLE blocker. Clear saveState + saveRequested native-
+    // flow (let the game run 7->8->9; NOT a forced field25 write, which tore the world down). Movement is
+    // already proven, so completing the walk now cannot regress the proof.
+    let move_proven_for_reload = crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
+        && crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == epoch;
+    if move_proven_for_reload && (13..=18).contains(&mms_state) {
+        if let Ok(gm) = unsafe { eldenring::cs::GameMan::instance() } {
+            let gm_addr = gm as *const _ as usize;
+            let ss = core::mem::offset_of!(eldenring::cs::GameMan, save_state);
+            let sr = core::mem::offset_of!(eldenring::cs::GameMan, save_requested);
+            if unsafe { safe_read_u8(gm_addr + ss) }.unwrap_or(0) != 0 {
+                unsafe { *((gm_addr + ss) as *mut u8) = 0 };
+            }
+            if unsafe { safe_read_u8(gm_addr + sr) }.unwrap_or(0) != 0 {
+                unsafe { *((gm_addr + sr) as *mut u8) = 0 };
+            }
+            static SATISFY_LOG_EPOCH: core::sync::atomic::AtomicUsize =
+                core::sync::atomic::AtomicUsize::new(usize::MAX);
+            if SATISFY_LOG_EPOCH.swap(epoch, Ordering::SeqCst) != epoch {
+                append_autoload_debug(format_args!(
+                    "case7-savedrain-satisfy: epoch {epoch} move-proven mms={mms_state} fin={fin} -> cleared saveState+saveRequested(0xb72) so the finalize completes 7->8->9 natively (loading mode exits, fps -> load1 parity)"
+                ));
+            }
+        }
+        return;
+    }
     // MOVABLE-WINDOW PRESERVATION (bd complete-cvar10-ending-request-9-inputs +
     // precise-ordered-divergence-load1-movable-at-fin0): load1 reaches genuine readiness by becoming
     // MOVABLE at mms=18/fin=0 -- FUN_140afa7c0 case 0 does `if (cVar10 == 0) return;`, so the finalize
