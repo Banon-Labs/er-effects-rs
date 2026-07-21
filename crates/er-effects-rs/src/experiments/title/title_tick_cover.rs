@@ -502,26 +502,31 @@ pub(crate) unsafe extern "system" fn loadlist_init_capture_detour(
 ) -> usize {
     let orig_addr = LOADLIST_INIT_ORIG.load(Ordering::SeqCst);
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let dfs = ingamestep.wrapping_add(INGAMESTEP_WORLDLOADLIST_VPATH_OFFSET);
-        let size = unsafe { safe_read_usize(dfs + 0x08) }.unwrap_or(usize::MAX);
-        let cap = unsafe { safe_read_usize(dfs + 0x10) }.unwrap_or(usize::MAX);
-        let ptr = unsafe { safe_read_usize(dfs) }.unwrap_or(0);
-        let str_base = if cap != usize::MAX && cap > 7 { ptr } else { dfs };
-        let mut preview = String::new();
-        if str_base != 0 && size != usize::MAX && size <= 256 {
-            for i in 0..size.min(96) {
-                // ASCII path chars sit in the low byte of each UTF-16LE unit.
-                match unsafe { safe_read_u8(str_base + i * 2) } {
-                    Some(w) if (0x20..0x7f).contains(&w) => preview.push(w as char),
-                    _ => preview.push('.'),
+        let n = LOADLIST_INIT_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
+        let epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+        // RAW window dump of rcx(InGameStep)+0x100..+0x180 (16 qwords) with ASCII, to pin where
+        // worldloadlistlistVirtualPath's text/size/capacity actually live -- the +0x108 ptr/size/cap
+        // layout read garbage (path chars were interpreted as ptr/size/cap). bd
+        // run193008-contamination-caught-loadlist-read-garbage-need-raw-dump-2026-07-20.
+        let mut hexs = String::new();
+        let mut asci = String::new();
+        for i in 0..16usize {
+            let off = 0x100 + i * 8;
+            match unsafe { safe_read_usize(ingamestep + off) } {
+                Some(v) => {
+                    hexs.push_str(&format!("+{off:x}={v:016x} "));
+                    for b in v.to_le_bytes() {
+                        asci.push(if (0x20..0x7f).contains(&b) { b as char } else { '.' });
+                    }
+                }
+                None => {
+                    hexs.push_str(&format!("+{off:x}=?? "));
+                    asci.push_str("........");
                 }
             }
         }
-        let n = LOADLIST_INIT_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
-        let epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "loadlist-init CAPTURE #{n} epoch={epoch} InGameStep=0x{ingamestep:x} worldloadlist_size={size} cap={cap} ptr=0x{ptr:x} ptr_in_obj={} path='{preview}'",
-            ptr >= dfs && ptr < dfs + 0x130,
+            "loadlist-init RAWDUMP #{n} epoch={epoch} InGameStep=0x{ingamestep:x} ascii='{asci}' {hexs}"
         ));
     }));
     if orig_addr == TITLE_OWNER_SCAN_START_ADDRESS {
