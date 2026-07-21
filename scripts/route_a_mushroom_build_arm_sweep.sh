@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a small asset-only ME3 sweep for arm-rig tuning.
+# Build a small asset/param ME3 sweep for arm-rig tuning.
 #
 # This does not launch either game. It builds several packed ModEngine2 package
 # directories that differ only in the c2280 -> ER arm geometry/weight parameters.
@@ -13,6 +13,7 @@ cd "$repo_root"
 
 sweep_root="target/mushroom-route-a-offline/arm-sweep"
 witchy="/mnt/d/Witchy BND/WitchyBND.exe"
+me3_exe="${ME3_EXE:-}"
 
 bd_high_fallback="target/mushroom-route-a-offline/prototype/mod/parts/bd_m_1010.partsbnd.dcx"
 bd_low_fallback="target/mushroom-route-a-offline/prototype/mod/parts/bd_m_1010_l.partsbnd.dcx"
@@ -20,6 +21,7 @@ fc_high_tpf_fallback="target/mushroom-route-a-offline/prototype/fc_m_0000-mushro
 fc_low_tpf_fallback="target/mushroom-route-a-offline/prototype/fc_m_0000_l-mushroom-parts/FC_M_0000_L.tpf"
 facegen_fallback="target/mushroom-route-a-offline/prototype/mod/facegen/facegen.fgbnd.dcx"
 fg_face_fallback="target/mushroom-route-a-offline/prototype/mod/parts/fg_a_0000_m.partsbnd.dcx"
+hide_armor_script="scripts/route_a_mushroom_hide_armor_regulation.sh"
 fc_high_src="target/mushroom-route-a-offline/er-naked-parts/fc_m_0000-partsbnd-dcx"
 fc_low_src="target/mushroom-route-a-offline/er-naked-parts/fc_m_0000_l-partsbnd-dcx"
 
@@ -29,6 +31,22 @@ require_path() {
 		echo "missing required path: $path" >&2
 		exit 1
 	fi
+}
+
+locate_me3() {
+	if [[ -n "$me3_exe" ]]; then
+		printf '%s\n' "$me3_exe"
+		return
+	fi
+	local candidate
+	for candidate in /mnt/c/Users/*/AppData/Local/garyttierney/me3/bin/me3.exe; do
+		if [[ -f "$candidate" ]]; then
+			printf '%s\n' "$candidate"
+			return
+		fi
+	done
+	echo "could not find me3.exe; set ME3_EXE" >&2
+	exit 1
 }
 
 copy_donor_payload() {
@@ -78,8 +96,19 @@ Offline Route A mushroom arm tuning variant: $label
 Profile:
   ../mushroom-arm-${label}.me3
 
-Payload is asset-only: natives = []
+Payload is asset/param-only: natives = []. The regulation.bin override hides
+equipped head/body/arms/legs armor visuals so the mushroom FC body remains
+visible regardless of equipment. Equipment gameplay/stat effects remain from
+the selected rows; only armor model fields are forced to default no-armor IDs.
 EOF
+}
+
+stage_model_variant_aliases() {
+	local mod_dir="$1"
+	local summary_path="$2"
+	python3 scripts/route_a_mushroom_stage_all_model_variants.py \
+		--mod-dir "$mod_dir" \
+		--summary "$summary_path"
 }
 
 write_witchy_cmd() {
@@ -161,23 +190,34 @@ build_variant() {
 	cp -f "$variant_dir/fc_m_0000_l.partsbnd.dcx" "$variant_dir/mod/parts/fc_m_0000_l.partsbnd.dcx"
 	cp -f "$fg_face_fallback" "$variant_dir/mod/parts/fg_a_0000_m.partsbnd.dcx"
 	cp -f "$facegen_fallback" "$variant_dir/mod/facegen/facegen.fgbnd.dcx"
+	stage_model_variant_aliases "$variant_dir/mod" "$variant_dir/model-variant-staging-summary.txt"
+	bash "$hide_armor_script" \
+		--output "$variant_dir/mod/regulation.bin" \
+		--summary "$variant_dir/hide-armor-regulation-summary.txt" \
+		>"$variant_dir/hide-armor-regulation.out"
 
 	printf '%s\t%s\t%s\n' "$label" "$variant_dir/mushroom-arm-${label}.me3" "$params_text" >>"$sweep_root/variant-index.tsv"
 }
 
+me3_exe="$(locate_me3)"
 require_path "$witchy"
+require_path "$me3_exe"
 require_path "$bd_high_fallback"
 require_path "$bd_low_fallback"
 require_path "$fc_high_tpf_fallback"
 require_path "$fc_low_tpf_fallback"
 require_path "$facegen_fallback"
 require_path "$fg_face_fallback"
+require_path "$hide_armor_script"
+require_path "scripts/route_a_mushroom_build_hidden_naked_slots.sh"
+require_path "scripts/route_a_mushroom_stage_all_model_variants.py"
 require_path "$fc_high_src/FC_M_0000.flver"
 require_path "$fc_low_src/FC_M_0000_L.flver"
 
 mkdir -p target
 rustc scripts/route_a_mushroom_export.rs -O -o target/route_a_mushroom_export
 rustc scripts/route_a_mushroom_patch_donor.rs -O -o target/route_a_mushroom_patch_donor
+bash scripts/route_a_mushroom_build_hidden_naked_slots.sh >"$sweep_root/hidden-naked-slots.out"
 
 variant_params() {
 	case "$1" in
@@ -249,7 +289,7 @@ print_launch_command() {
 	printf '\nlaunch command:\n'
 	printf 'cd %q && %q launch -g eldenring --online false -p %q\n' \
 		"$repo_root" \
-		"/mnt/c/Users/choza/AppData/Local/garyttierney/me3/bin/me3.exe" \
+		"$me3_exe" \
 		"$profile_win"
 }
 
@@ -300,7 +340,7 @@ if [[ "${1:-}" == "--label" ]]; then
 	tail -n 1 "$sweep_root/variant-index.tsv"
 	print_launch_command "$profile_path"
 	if [[ "$launch_after" == true ]]; then
-		"/mnt/c/Users/choza/AppData/Local/garyttierney/me3/bin/me3.exe" launch -g eldenring --online false -p "$(wslpath -w "$(realpath -m "$profile_path")")"
+		"$me3_exe" launch -g eldenring --online false -p "$(wslpath -w "$(realpath -m "$profile_path")")"
 	fi
 	exit 0
 fi

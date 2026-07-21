@@ -1,20 +1,29 @@
 #!/usr/bin/env python3
 # check-no-magic-numbers: allow-file -- installer constants are package-layout and ME3 profile defaults.
-"""Install the asset-only Mushroom Man ModEngine2 package.
+"""Install the asset/runtime-DLL Mushroom Man ModEngine2 package.
 
 Expected zip layout:
 
     install_mushroom_man.py
     mushroom-man/
       mod/
+        mushroom_man.dll
         facegen/facegen.fgbnd.dcx
         parts/fc_m_0000.partsbnd.dcx
         parts/fc_m_0000_l.partsbnd.dcx
+        parts/fc_m_0100.partsbnd.dcx
+        parts/fc_m_0202_l.partsbnd.dcx
+        parts/fc_f_0000.partsbnd.dcx
+        parts/fc_f_0102_l.partsbnd.dcx
         parts/fg_a_0000_m.partsbnd.dcx
-        ...optional fallback parts...
+        parts/fg_a_0000_f.partsbnd.dcx
+        parts/lg_m_0000.partsbnd.dcx
+        parts/lg_f_0000_l.partsbnd.dcx
+        ...all other staged FC/FG/default-slot aliases...
 
 The installer copies the bundled `mod` folder to a stable per-user install
-folder, then writes a ModEngine2/ME3 profile pointing at that installed package.
+folder, then writes a ModEngine2/ME3 profile pointing at that installed package
+and loading `mushroom_man.dll` as the package's runtime native.
 It has no third-party Python dependencies.
 """
 
@@ -33,10 +42,18 @@ DEFAULT_GAME = "eldenring"
 WINDOWS_ME3_RELATIVE_PATH = Path("garyttierney") / "me3" / "bin" / "me3.exe"
 
 REQUIRED_PAYLOAD_FILES = (
+    Path("mushroom_man.dll"),
     Path("facegen") / "facegen.fgbnd.dcx",
     Path("parts") / "fc_m_0000.partsbnd.dcx",
     Path("parts") / "fc_m_0000_l.partsbnd.dcx",
+    Path("parts") / "fc_m_0100.partsbnd.dcx",
+    Path("parts") / "fc_m_0202_l.partsbnd.dcx",
+    Path("parts") / "fc_f_0000.partsbnd.dcx",
+    Path("parts") / "fc_f_0102_l.partsbnd.dcx",
     Path("parts") / "fg_a_0000_m.partsbnd.dcx",
+    Path("parts") / "fg_a_0000_f.partsbnd.dcx",
+    Path("parts") / "lg_m_0000.partsbnd.dcx",
+    Path("parts") / "lg_f_0000_l.partsbnd.dcx",
 )
 OPTIONAL_PAYLOAD_FILES = (
     Path("parts") / "bd_m_1010.partsbnd.dcx",
@@ -130,11 +147,15 @@ def maybe_windows_path(path: Path) -> str:
     return str(resolved)
 
 
-def write_profile(profile_path: Path, package_path_for_me3: str) -> None:
+def write_profile(
+    profile_path: Path, package_path_for_me3: str, native_path_for_me3: str
+) -> None:
     content = "\n".join(
         (
             'profileVersion = "v1"',
-            "natives = []",
+            "",
+            "[[natives]]",
+            f"path = {toml_basic_string(native_path_for_me3)}",
             "",
             "[[supports]]",
             f'game = "{DEFAULT_GAME}"',
@@ -155,15 +176,28 @@ def write_profile(profile_path: Path, package_path_for_me3: str) -> None:
     )  # pi-lens-ignore: python-path-traversal — installer writes user-selected profile path
 
 
-def locate_default_me3() -> Path | None:
+def local_app_data_candidates() -> list[Path]:
+    candidates: list[Path] = []
     local_app_data = os.environ.get("LOCALAPPDATA")
     if local_app_data:
-        candidate = Path(local_app_data) / WINDOWS_ME3_RELATIVE_PATH
+        candidates.append(Path(local_app_data))
+    wsl_users = Path("/mnt/c/Users")
+    if wsl_users.is_dir():
+        for user_dir in sorted(wsl_users.iterdir()):
+            candidate = user_dir / "AppData" / "Local"
+            try:
+                if candidate.is_dir():
+                    candidates.append(candidate)
+            except OSError:
+                continue
+    return candidates
+
+
+def locate_default_me3() -> Path | None:
+    for local_app_data in local_app_data_candidates():
+        candidate = local_app_data / WINDOWS_ME3_RELATIVE_PATH
         if candidate.is_file():
             return candidate
-    wsl_candidate = Path("/mnt/c/Users/choza/AppData/Local") / WINDOWS_ME3_RELATIVE_PATH
-    if wsl_candidate.is_file():
-        return wsl_candidate
     return None
 
 
@@ -279,8 +313,9 @@ def main() -> int:
         else install_root / f"{args.profile_name}.me3"
     )
     package_path_for_me3 = maybe_windows_path(installed_mod)
+    native_path_for_me3 = maybe_windows_path(installed_mod / "mushroom_man.dll")
     profile_path_for_me3 = maybe_windows_path(profile_path)
-    write_profile(profile_path, package_path_for_me3)
+    write_profile(profile_path, package_path_for_me3, native_path_for_me3)
 
     me3_path = args.me3.expanduser().resolve() if args.me3 else locate_default_me3()
     launcher_path = None
@@ -299,6 +334,7 @@ def main() -> int:
         "profile": str(profile_path),
         "profile_for_me3": profile_path_for_me3,
         "package_for_me3": package_path_for_me3,
+        "native_for_me3": native_path_for_me3,
         "launcher": str(launcher_path) if launcher_path else None,
         "me3": str(me3_path) if me3_path else None,
         "warnings": warnings,

@@ -21,6 +21,7 @@ const DEFAULT_TPF_DIR_NAME: &str = "BD_M_1010-tpf";
 const DEFAULT_TPF_FILENAME: &str = "BD_M_1010.tpf";
 const DEFAULT_TEXTURE_SUFFIX: &str = "";
 const DEFAULT_TARGET_PREFIX: &str = "BD_M_1010";
+const DEFAULT_SOURCE_PREFIX: &str = "c2280";
 const DEFAULT_MANIFEST_KIND: &str = "bd";
 
 struct Config {
@@ -30,6 +31,7 @@ struct Config {
     tpf_filename: String,
     texture_suffix: String,
     target_prefix: String,
+    source_prefix: String,
     manifest_kind: String,
 }
 
@@ -42,19 +44,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     copy_texture(
         &config.texture_dir,
         &donor_tpf_dir,
-        "c2280.dds",
+        &format!("{}.dds", config.source_prefix),
         &diffuse_name,
     )?;
     copy_texture(
         &config.texture_dir,
         &donor_tpf_dir,
-        "c2280_s.dds",
+        &format!("{}_s.dds", config.source_prefix),
         &specular_name,
     )?;
     copy_texture(
         &config.texture_dir,
         &donor_tpf_dir,
-        "c2280_n.dds",
+        &format!("{}_n.dds", config.source_prefix),
         &normal_name,
     )?;
     fs::write(
@@ -63,9 +65,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     println!("staged mushroom textures into {}", donor_tpf_dir.display());
-    println!("diffuse={diffuse_name} source=c2280.dds");
-    println!("specular={specular_name} source=c2280_s.dds");
-    println!("normal={normal_name} source=c2280_n.dds");
+    println!("diffuse={diffuse_name} source={}.dds", config.source_prefix);
+    println!(
+        "specular={specular_name} source={}_s.dds",
+        config.source_prefix
+    );
+    println!("normal={normal_name} source={}_n.dds", config.source_prefix);
     println!("donor scale/detail textures preserved when present");
     Ok(())
 }
@@ -77,6 +82,7 @@ fn parse_args() -> Result<Config, Box<dyn std::error::Error>> {
     let mut tpf_filename = DEFAULT_TPF_FILENAME.to_owned();
     let mut texture_suffix = DEFAULT_TEXTURE_SUFFIX.to_owned();
     let mut target_prefix = DEFAULT_TARGET_PREFIX.to_owned();
+    let mut source_prefix = DEFAULT_SOURCE_PREFIX.to_owned();
     let mut manifest_kind = DEFAULT_MANIFEST_KIND.to_owned();
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -87,6 +93,7 @@ fn parse_args() -> Result<Config, Box<dyn std::error::Error>> {
             "--tpf-filename" => tpf_filename = required_value(&arg, args.next())?,
             "--texture-suffix" => texture_suffix = required_value(&arg, args.next())?,
             "--target-prefix" => target_prefix = required_value(&arg, args.next())?,
+            "--source-prefix" => source_prefix = required_value(&arg, args.next())?,
             "--manifest-kind" => manifest_kind = required_value(&arg, args.next())?,
             "--help" | "-h" => {
                 print_help();
@@ -102,6 +109,7 @@ fn parse_args() -> Result<Config, Box<dyn std::error::Error>> {
         tpf_filename,
         texture_suffix,
         target_prefix,
+        source_prefix,
         manifest_kind,
     })
 }
@@ -118,6 +126,7 @@ fn print_help() {
     println!("  --tpf-filename <name>    default: {DEFAULT_TPF_FILENAME}");
     println!("  --texture-suffix <text>  default: empty; use _l for low/detail TPF names");
     println!("  --target-prefix <text>   default: {DEFAULT_TARGET_PREFIX}");
+    println!("  --source-prefix <text>   default: {DEFAULT_SOURCE_PREFIX}; use c2270 for adult mushroom textures");
     println!("  --manifest-kind <bd|fc>  default: {DEFAULT_MANIFEST_KIND}");
 }
 

@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/effects-data", "crates/soulsformats", "tools/er-param-inspect"]
+members = [".", "crates/effects-data", "crates/mushroom-man-runtime", "crates/soulsformats", "tools/er-param-inspect"]
 resolver = "2"
 
 [package]
