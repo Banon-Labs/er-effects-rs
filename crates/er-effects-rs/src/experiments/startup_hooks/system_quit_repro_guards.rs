@@ -373,7 +373,16 @@ pub(crate) unsafe fn system_quit_repro_tick() {
     match state {
         SQ_REPRO_STATE_WAIT_WORLD => {
             set_pad(0);
-            let in_world = IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
+            // Wait on the RELIABLE game-global readiness semaphore, NOT the flaky IN_WORLD_REACHED latch
+            // (user 2026-07-21: the harness is flaky because it waits on a semaphore that may be wrong --
+            // run 073411 never latched IN_WORLD_REACHED so no load2; 074159 did). BOOT_VIEW_EPOCH_WORLD_LIVE
+            // == this fresh_deser epoch means the world clock is advancing for the CURRENT load = genuinely
+            // in-world (set by the play_time_live oracle from GameDataMan+0xa0). The +180-tick settle below
+            // still gates the actual menu-open, so an early world-live cannot fire the menu prematurely.
+            let cur_epoch =
+                crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+            let in_world =
+                crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur_epoch;
             // Prove load1 is genuinely PLAYABLE (moved under injected input) before driving switch #1 --
             // not merely present + settle-ticked while still streaming. Fallback to the deadline so a
             // non-proving load still advances (parity: one more load recovers a frozen one).
@@ -1008,8 +1017,11 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                 Ok(player) => {
                     let model_present = player.chr_ins.chr_model_ins.as_ptr() as usize
                         != TITLE_OWNER_SCAN_START_ADDRESS;
+                    // draw_group_enabled() is DROPPED -- it is NEVER set, even on a vanilla native
+                    // Continue (verified run 074159 + vanilla-174933: chr_draw_group_enabled=NEVER), so
+                    // requiring it hung load3 forever (user 2026-07-21: the harness waited on a semaphore
+                    // that is simply wrong). render-group + enable-render is the reliable rendered signal.
                     let ready = model_present
-                        && player.chr_ins.load_state.draw_group_enabled()
                         && player.chr_ins.chr_flags1c4.is_render_group_enabled()
                         && player.chr_ins.chr_flags1c5.enable_render();
                     (true, ready)
@@ -1050,10 +1062,17 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             // drive the next load to recover it. (render_ready/load_done kept only for the diagnostic log
             // line.)
             let committed = deser >= expected_deser && player_up;
-            let movement_proven_for_deser = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
-                && MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == deser;
-            let (request_code, mms_live, native_load_settled) = sq_repro_native_load_state();
-            let move_proven = committed && movement_proven_for_deser && native_load_settled;
+            let (request_code, mms_live, _native_load_settled) = sq_repro_native_load_state();
+            // RELIABLE reload-movable gate (user 2026-07-21: stop waiting on WRONG semaphores). The move
+            // proof (CAN_MOVE_CONFIRMED) is foreground-limited and never fires here, and the mms
+            // native_load_settled is stale-owner unreliable -- with no deadline fallback, together they hung
+            // load3 FOREVER. Advance on the vanilla movable SIGNATURE instead: reload committed (fresh-deser
+            // reached + player present) + render-group ready + the world clock LIVE for THIS epoch
+            // (BOOT_VIEW_EPOCH_WORLD_LIVE == deser, which already carries a >=1s world-clock settle from the
+            // play_time_live oracle). Game-global, valid on the native path, reliable across runs.
+            let epoch_world_live =
+                crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == deser;
+            let move_proven = committed && render_ready && epoch_world_live;
             if move_proven {
                 let next = switch_index + 1;
                 SQ_REPRO_SWITCH_INDEX.store(next, Ordering::SeqCst);
@@ -1085,10 +1104,7 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             // recovery), exactly as the user re-loads by hand from the still-openable menu. If movement DID
             // register for this epoch but native settlement is still pending, do not start the next switch;
             // keep waiting for the mms18/end5e advancer or the global cap so the harness exposes that bug.
-            if committed
-                && !movement_proven_for_deser
-                && waited >= SQ_REPRO_FREEZE_RECOVERY_DEADLINE
-            {
+            if committed && !move_proven && waited >= SQ_REPRO_FREEZE_RECOVERY_DEADLINE {
                 let next = switch_index + 1;
                 SQ_REPRO_SWITCH_INDEX.store(next, Ordering::SeqCst);
                 sq_repro_begin_switch();

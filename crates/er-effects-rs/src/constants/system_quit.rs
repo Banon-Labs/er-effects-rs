@@ -158,7 +158,10 @@ pub(crate) static SQ_REPRO_SWITCH_INDEX: AtomicUsize = AtomicUsize::new(0);
 /// an env selector. The legacy switch-count constants below are retained for older ProfileSelect
 /// harness code paths, but the active Save Game validation path stops once save-request + menu-close
 /// telemetry fires.
-pub(crate) const SQ_REPRO_TARGET_SWITCHES: usize = 1;
+// 2 back-to-back switches = load1 -> load2 -> load3 (the goal's "no less than two successive loads"
+// after the first automatic load). The harness ships inert (harness_dll_present), so this only affects
+// agent-owned runs. Overridable per-run via er-effects-sq-target-switches.txt.
+pub(crate) const SQ_REPRO_TARGET_SWITCHES: usize = 2;
 /// RAM oracle latch (0 -> 1, never reset): the pause-at-menu autopilot observed 05_010_ProfileSelect
 /// open and STOPPED there (transitioned to DONE without TO_SLOT/CONFIRM). Exported as telemetry
 /// `sq_repro_paused_at_profile_select`; the pause-probe watcher's PASS gate is this latch == 1 while
