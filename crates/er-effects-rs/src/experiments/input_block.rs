@@ -772,6 +772,24 @@ pub(crate) static RAWINPUT_HOOK_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static RAWINPUT_BLOCKED_UNFOCUSED_EVENTS: AtomicUsize = AtomicUsize::new(0);
 static GET_RAW_INPUT_DATA_ORIG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
+/// Whether an AGENT-OWNED RUN is active, detected by the input-harness DLL being loaded (the approved
+/// agent-run signal per product-nav-presence-gated-on-harness-dll, NOT a marker/env gate). During such
+/// a run all user RawInput is blocked so only the harness's direct-memory injection is effective. Cached
+/// once present (the DLL does not unload mid-run); cheap GetModuleHandleA until then.
+fn harness_run_active() -> bool {
+    static PRESENT: AtomicUsize = AtomicUsize::new(0);
+    if PRESENT.load(Ordering::Relaxed) == 1 {
+        return true;
+    }
+    let present = unsafe { GetModuleHandleA(PCSTR(b"er_input_harness_dll.dll\0".as_ptr())) }
+        .map(|h| !h.is_invalid())
+        .unwrap_or(false);
+    if present {
+        PRESENT.store(1, Ordering::Relaxed);
+    }
+    present
+}
+
 /// GetRawInputData(hRawInput, uiCommand, pData, pcbSize, cbSizeHeader) pass-through detour: call the
 /// original, then if it returned a RID_INPUT record, classify it and bump the reception counter. Never
 /// drops input (recording only). RAWINPUTHEADER is 0x18 bytes on x64; RAWMOUSE.usButtonFlags @ +0x04,
@@ -790,16 +808,14 @@ unsafe extern "system" fn get_raw_input_data_hook(
     let ret = unsafe { orig(h_raw_input, ui_command, p_data, pcb_size, cb_size_header) };
     const RID_INPUT: u32 = 0x1000_0003;
     if !p_data.is_null() && ui_command == RID_INPUT && ret != u32::MAX && ret >= 0x30 {
-        // EFFECTIVENESS GATE (user 2026-07-20): user input only matters when the game is FOCUSED. When
-        // the game is UNFOCUSED (agent-owned run), the user's presses are ineffective -- DROP them (zero
-        // the RAWINPUT so the game reads a no-op) and count them as BLOCKED, NOT contamination. The
-        // harness injects via the direct-memory inputmgr (not RawInput), so this never touches it.
-        let focused = {
-            let mut pid = 0u32;
-            let fg = unsafe { GetForegroundWindow() };
-            unsafe { GetWindowThreadProcessId(fg, Some(&mut pid)) };
-            pid != 0 && pid == unsafe { GetCurrentProcessId() }
-        };
+        // EFFECTIVENESS GATE (user 2026-07-20, corrected): user input is EFFECTIVE only when this is NOT
+        // an agent-owned run. Focus is NOT reliable -- the ER window is foreground while the user WATCHES
+        // it, so GetForegroundWindow==game even though the user's presses have no effect during a load.
+        // The reliable agent-run signal is the input-harness DLL being loaded. During an agent-owned run
+        // ALL user RawInput is DROPPED (zeroed) + counted as BLOCKED (harmless); the harness injects via
+        // the direct-memory inputmgr (not RawInput) so it stays effective. Harness absent (normal play):
+        // input passes through and counts as effective.
+        let effective = !harness_run_active();
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let base = p_data as usize;
             let dwtype = unsafe { (base as *const u32).read_unaligned() };
@@ -810,7 +826,7 @@ unsafe extern "system" fn get_raw_input_data_hook(
                 let lx = unsafe { ((d + 0x0C) as *const i32).read_unaligned() };
                 let ly = unsafe { ((d + 0x10) as *const i32).read_unaligned() };
                 if lx != 0 || ly != 0 || btn != 0 {
-                    if focused {
+                    if effective {
                         if lx != 0 || ly != 0 {
                             RAWINPUT_MOUSE_MOVE_EVENTS.fetch_add(1, Ordering::Relaxed);
                         }
@@ -831,7 +847,7 @@ unsafe extern "system" fn get_raw_input_data_hook(
                 // RIM_TYPEKEYBOARD: MakeCode @ +0x00, VKey @ +0x06, Message @ +0x08 (WM_KEYDOWN 0x100)
                 let msg = unsafe { ((d + 0x08) as *const u32).read_unaligned() };
                 if msg == 0x100 || msg == 0x104 {
-                    if focused {
+                    if effective {
                         RAWINPUT_KEY_EVENTS.fetch_add(1, Ordering::Relaxed);
                     } else {
                         // DROP: neutralize the key (VKey=0xFF, MakeCode=0) so it is a no-op.
