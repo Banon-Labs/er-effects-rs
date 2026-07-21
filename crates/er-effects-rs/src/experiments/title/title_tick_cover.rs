@@ -484,7 +484,11 @@ pub(crate) unsafe fn install_child_done_query_override_hook(base: usize) {
 /// trace-DLL copy never fired). READ-ONLY for now: it logs the DlFixedString per load epoch so a run
 /// settles whether the STALLED load's path was EMPTY (empty-loadlist root confirmed) or POPULATED
 /// (root is downstream/contention). The capture-replay WRITE is added once the layout is confirmed.
-pub(crate) const LOADLIST_INIT_RVA: usize = 0xaec480;
+// deobf entry 0x140aec570 (== dump 0x140aec570; shift 0 for this fn -- the dump-deobf-shift tool
+// mislanded at 0xaec480 in the -0xf0 sub-region). Verified by prologue mov [rsp+0x10],rbx; push rsi;
+// sub rsp,0x20; mov rbx,rcx then the DAT_143d5db09=1 store (0x140aec57d) + CreateLoadlistlistFileCap
+// call (0x140aec5f0). bd loadlist-capture-hook-wrong-address-0xaec480-midfunction-refind-entry.
+pub(crate) const LOADLIST_INIT_RVA: usize = 0xaec570;
 const INGAMESTEP_WORLDLOADLIST_VPATH_OFFSET: usize = 0x108;
 pub(crate) static LOADLIST_INIT_ORIG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 static LOADLIST_INIT_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
