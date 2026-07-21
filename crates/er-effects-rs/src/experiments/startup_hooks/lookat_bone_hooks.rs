@@ -354,6 +354,20 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
     if base == 0 || base == null {
         return;
     }
+    // FPS PARITY (bd FPS-BISECT-present-composite-NOT-killer-next-is-lookat-drawphase-pipeline-2026-07-21):
+    // the portrait look-at is a LOADING-screen feature. Once the CURRENT fresh_deser epoch is genuinely
+    // in-world (world-clock live for it), stop ALL its per-frame work (cursor read, pose publish,
+    // draw_step) AND clear PROFILE_LOOKAT_REALTIME so the per-frame push hook detour (`per_frame_push_hook`,
+    // whose work is gated on it) becomes a cheap passthrough. Per-epoch stop (BOOT_VIEW_EPOCH_WORLD_LIVE
+    // == cur), not the stale one-shot IN_WORLD_REACHED latch that never fires for load2.
+    {
+        let cur =
+            crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+        if crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur {
+            PROFILE_LOOKAT_REALTIME.store(false, Ordering::SeqCst);
+            return;
+        }
+    }
     // The 0x1653350 detour stays a passthrough (the per-frame PUSH hook owns the pose write now).
     PROFILE_LOOKAT_REALTIME.store(true, Ordering::SeqCst);
     // Ensure the per-frame push hook is installed -- it writes our pose into the importer + lets the
