@@ -82,6 +82,46 @@ unsafe extern "system" fn pad_poll_hook(this: usize, a: usize, b: usize, c: usiz
     ret
 }
 
+/// FD4PadManager singleton RVA (GLOBAL_FD4PadManager, dump 0x14485dc20 == DLUID+0x8). Its `padDevices`
+/// is a `DLFixedVector<FD4PadDevice*,4>`: inline entries at +0x18, count at +0x40. Each `FD4PadDevice`
+/// holds the concrete `DLUserInputDevice` at +0x8, which carries the normalized stick at +0x89c/+0x8a0.
+/// bd er-movement-input-stick-boundary-2026-07-18.
+const FD4_PAD_MANAGER_RVA: u32 = 0x485dc20;
+const PAD_MGR_DEVICES_OFFSET: usize = 0x18;
+const PAD_MGR_DEVICE_COUNT_OFFSET: usize = 0x40;
+const FD4PADDEVICE_CONCRETE_OFFSET: usize = 0x8;
+
+/// Write full-forward LY (neutral LX) to the CONCRETE device of EVERY registered pad device, not just
+/// the one the poll hook fires for. Two reasons: (1) the player's active device (phantom XInput vs real
+/// ScePad/DInput) is unknown, so cover all up-to-4; (2) this dereferences `FD4PadDevice+0x8` to reach
+/// the concrete device explicitly -- if the poll hook's `this` is the FD4PadDevice (not the concrete
+/// device), `this+0x8a0` is 8 bytes off the real stick and never moves the char; this writes the
+/// definitely-correct `concrete+0x8a0`. Every deref is low-pointer guarded. Called only while injecting.
+unsafe fn inject_all_pad_devices() {
+    let Ok(mgr_ptr) = crate::game_rva(FD4_PAD_MANAGER_RVA) else {
+        return;
+    };
+    let mgr = unsafe { *(mgr_ptr as *const usize) };
+    if mgr < 0x10000 {
+        return;
+    }
+    let count = (unsafe { *((mgr + PAD_MGR_DEVICE_COUNT_OFFSET) as *const u32) } as usize).min(4);
+    for i in 0..count {
+        let dev = unsafe { *((mgr + PAD_MGR_DEVICES_OFFSET + i * 8) as *const usize) };
+        if dev < 0x10000 {
+            continue;
+        }
+        let concrete = unsafe { *((dev + FD4PADDEVICE_CONCRETE_OFFSET) as *const usize) };
+        if concrete < 0x10000 {
+            continue;
+        }
+        unsafe {
+            *((concrete + PAD_STICK_LX_OFFSET) as *mut f32) = 0.0;
+            *((concrete + PAD_STICK_LY_OFFSET) as *mut f32) = 1.0;
+        }
+    }
+}
+
 /// `Game.Debug::IsEnableControlOnDisactiveWindow` (deobf `0x140e53220`, RE `AUTONOMOUS-FOCUS-FIX-...`):
 /// returns false in retail. Its result is cached to `CSPadStep+0xba` every frame; when the ER window
 /// is UNFOCUSED and that byte is 0, `CSPadStep::STEP_Update` runs the pad-manager on the "inactive"
@@ -265,6 +305,12 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
     // window is truly active; kb+mouse are disabled as game inputs so this brief grab is uncontaminated.
     if is_on && pf == 0 && crate::experiments::probe_foreground_enabled() {
         crate::experiments::sq_repro_force_foreground_now();
+    }
+    // Also write full-forward to EVERY registered pad device's CONCRETE pointer -- covers the case where
+    // the poll hook's `this` is the FD4PadDevice (so `this+0x8a0` is 8 bytes off the real stick) or the
+    // player reads a device the poll hook did not fire for this frame.
+    if is_on {
+        unsafe { inject_all_pad_devices() };
     }
 
     let mut prev = lock_prev();
