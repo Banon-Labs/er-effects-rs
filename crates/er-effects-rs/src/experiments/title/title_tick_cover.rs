@@ -1276,8 +1276,17 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         // Gate on the RELIABLE mms_state/finalize (creq dropped from the gate -- it comes from the
         // possibly-stale cached-owner ingame; kept in the log only). mms_state==18 && finalize==0 with
         // cVar10 inputs (0x5d/0x5e) both 0 is load2's exact frozen-finalize signature.
-        let frozen_mms18 =
-            active_switch && cstate == MOVEMAPSTEP_STEP_MOVEMAP_INDEX && cfin == 0 && c5d == 0 && c5e == 0;
+        // FINALIZE-FORCING DISABLED (user 2026-07-21): the custom menuData+0x5d forcing that shoves mms
+        // 18->19->20 is HARMFUL -- it is not the vanilla path (vanilla finalizes naturally). Disable it so
+        // the load follows vanilla; if the load then genuinely stalls at mms18 that is the REAL finding to
+        // pursue, not to re-force. Flip to re-enable only for a diagnostic.
+        const FINALIZE_FORCING_ENABLED: bool = false;
+        let frozen_mms18 = FINALIZE_FORCING_ENABLED
+            && active_switch
+            && cstate == MOVEMAPSTEP_STEP_MOVEMAP_INDEX
+            && cfin == 0
+            && c5d == 0
+            && c5e == 0;
         if frozen_mms18 {
             if let Some(d) = cmenu {
                 // Fire after ~2s of a HELD frozen signature (40 frames; load2 froze 26s in prior runs,
@@ -1993,7 +2002,11 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
             let active_switch_phase =
                 quickload_phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED;
-            let stuck_mms18 = active_switch_phase
+            // FINALIZE-FORCING DISABLED (user 2026-07-21): see the IN-WORLD FINALIZE DRIVE above -- the
+            // menuData+0x5d finalize-forcing is not the vanilla path; disable it so the load follows vanilla.
+            const FINALIZE_FORCING_ENABLED: bool = false;
+            let stuck_mms18 = FINALIZE_FORCING_ENABLED
+                && active_switch_phase
                 && ig_d8 == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING
                 && mms_step == MOVEMAPSTEP_STEP_MOVEMAP_INDEX
                 && md_5e == 0
