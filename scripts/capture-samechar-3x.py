@@ -174,6 +174,11 @@ def snap(t: dict) -> dict:
         "oracle_mms_child_step18",
         "oracle_mms_child_step40",
         "oracle_mms_child_step48",
+        # LOAD2 BLOCK-STREAMING discriminator: is the target-area block registered in resmgr+0xb3030
+        # (registration gap) vs present-but-not-streaming; the deeper root of the mms18 stall.
+        "oracle_l2_req_coord",
+        "oracle_l2_block_count",
+        "oracle_l2_target_block_present",
         "oracle_saved_map_c30",
         "sq_repro_state",
         "sq_repro_switch_index",

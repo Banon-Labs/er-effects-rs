@@ -118,6 +118,44 @@ fn write_stepfinish_gate_oracle(body: &mut String) {
         sb(0x40),
         sb(0x48),
     ));
+    // LOAD2 BLOCK-STREAMING discriminator (bd menu-open-works-real-blocker-is-load2-mms18-completion-
+    // block-streaming-0x35): the loadlist is POPULATED yet load2 stalls at WorldResWait, so scan the
+    // block list from FieldArea=mms+0xf0 to see if the target-area block is REGISTERED (registration gap
+    // vs present-but-not-streaming). Reuses the proven own_load scan offsets but runs on the CURRENT
+    // native-continue/switch path where that observer is dormant. Passive, capped at 64, fault-safe.
+    let field_area = mms.and_then(|m| rd(m + 0xf0)).filter(|&v| v > 0x1_0000);
+    let l2_req_coord = field_area.and_then(|fa| rd(fa + 0x2c)).map(|v| v as u32).unwrap_or(0);
+    let l2_target_area = ((l2_req_coord >> 24) & 0xff) as usize;
+    let l2_resmgr = field_area.and_then(|fa| rd(fa + 0x10)).filter(|&v| v > 0x1_0000);
+    let l2_block_count = l2_resmgr
+        .and_then(|rm| rd(rm + 0xb3140))
+        .map(|v| (v as u32) as i64)
+        .unwrap_or(-1);
+    let mut l2_target_present: i64 = -1;
+    if let Some(rm) = l2_resmgr {
+        if l2_block_count > 0 {
+            l2_target_present = 0;
+            let arr = rm + 0xb3030;
+            let cap = l2_block_count.min(64);
+            let mut i: i64 = 0;
+            while i < cap {
+                if let Some(block) = rd(arr + (i as usize) * 8).filter(|&v| v > 0x1_0000) {
+                    if let Some(inner) = rd(block + 0x8).filter(|&v| v > 0x1_0000) {
+                        if let Some(a) = rd(inner + 0xc) {
+                            if ((a as u32) & 0xff) as usize == l2_target_area {
+                                l2_target_present = 1;
+                                break;
+                            }
+                        }
+                    }
+                }
+                i += 1;
+            }
+        }
+    }
+    body.push_str(&format!(
+        "  \"oracle_l2_req_coord\": \"0x{l2_req_coord:x}\",\n  \"oracle_l2_block_count\": {l2_block_count},\n  \"oracle_l2_target_block_present\": {l2_target_present},\n"
+    ));
 }
 const MOVEMAPSTEP_CHILD_EZSTEP_108_OFFSET: usize = 0x108;
 
