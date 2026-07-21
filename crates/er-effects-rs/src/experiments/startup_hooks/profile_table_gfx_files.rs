@@ -219,6 +219,14 @@ pub(crate) unsafe extern "system" fn loading_bg_replace_bind_hook(rti: usize, sy
             "loading-portrait-probe: call#{total} pae={pae} rti=0x{rti:x} symlen={len} sym='{preview}'"
         ));
     }
+    // VANILLA-CORRELATION (user 2026-07-20): in telemetry-only runs do NOT forge the now-loading
+    // background -- pass through to the VANILLA texture so the real loading screen shows, with only our
+    // (separate) loading bar overlaid. Lets the user visually correlate our bar against a near-vanilla
+    // load while the oracle_* telemetry is captured. call_orig is the safe pass-through (no forge -> no
+    // vkd3d crash path). bd vanilla-reference-telemetry-only-acceptable-loading-screen-is-overlay.
+    if save_override_telemetry_only() {
+        return call_orig();
+    }
     if !pae || rti == 0 || rti == null {
         return call_orig();
     }

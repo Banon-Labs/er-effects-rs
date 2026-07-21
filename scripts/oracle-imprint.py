@@ -54,6 +54,14 @@ DISCRETE_FIELDS = [
     "sq_repro_state",
 ]
 
+# Epoch/driver markers kept in rows (for --load-epoch slicing) but EXCLUDED from the transition
+# sequence, so a load2 run compares against a load1 imprint on GAME semaphores alone. MUST match
+# oracle_common.EXCLUDE_FROM_TRANSITIONS so the imprinter and comparator agree.
+_EXCLUDE_FROM_TRANSITIONS = {
+    "system_quit_continue_confirm_fresh_deser_count",
+    "sq_repro_state",
+}
+
 
 def load_rows(path: Path) -> list[dict]:
     rows = []
@@ -76,7 +84,7 @@ def extract_transitions(rows: list[dict]) -> list[dict]:
     for r in rows:
         t = r.get("t_ms", 0)
         for f in DISCRETE_FIELDS:
-            if f not in r:
+            if f in _EXCLUDE_FROM_TRANSITIONS or f not in r:
                 continue
             v = r.get(f)
             if f not in last:

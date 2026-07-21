@@ -60,6 +60,15 @@ def key(v: object) -> str:
     return json.dumps(v, sort_keys=True)
 
 
+# Epoch / driver markers: kept in the rows (the imprinter slices by deser) but EXCLUDED from the
+# transition sequence, so a load2 (deser=1) run can be compared against a load1 (deser=0) imprint on
+# the GAME semaphores alone -- the deser value and the sq-repro driver state are phase keys, not steps.
+EXCLUDE_FROM_TRANSITIONS = {
+    "system_quit_continue_confirm_fresh_deser_count",
+    "sq_repro_state",
+}
+
+
 def extract_transitions(rows: list[dict]) -> list[dict]:
     """Ordered list of discrete-semaphore value changes across the timeseries."""
     last: dict[str, object] = {}
@@ -67,7 +76,7 @@ def extract_transitions(rows: list[dict]) -> list[dict]:
     for r in rows:
         t = r.get("t_ms", 0)
         for f in DISCRETE_FIELDS:
-            if f not in r:
+            if f in EXCLUDE_FROM_TRANSITIONS or f not in r:
                 continue
             v = r.get(f)
             if f not in last:

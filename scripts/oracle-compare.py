@@ -120,6 +120,14 @@ def compare(imprint: dict, live_rows: list[dict], phase: str = "?") -> dict:
 def run_posthoc(a) -> int:
     imprint = json.loads(Path(a.imprint).read_text(encoding="utf-8"))
     live_rows = oc.load_rows(Path(a.live))
+    if a.load_epoch is not None:
+        # Slice the run to one load epoch (deser==N) so e.g. a load2 (deser=1) reload can be diffed
+        # against a vanilla-continue (deser=0) imprint on the game semaphores alone.
+        live_rows = [
+            r
+            for r in live_rows
+            if r.get("system_quit_continue_confirm_fresh_deser_count") == a.load_epoch
+        ]
     res = compare(imprint, live_rows, a.phase)
     if res["diverged"]:
         print(res["line"])
@@ -174,6 +182,12 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--imprint", required=True)
     ap.add_argument("--phase", default="?")
+    ap.add_argument(
+        "--load-epoch",
+        type=int,
+        default=None,
+        help="post-hoc: filter the live run to deser==N before comparing (e.g. 1 = load2)",
+    )
     ap.add_argument("--live", help="post-hoc: a completed timeseries.jsonl to compare")
     ap.add_argument("--telemetry", help="live: the er-effects-telemetry.json to poll")
     ap.add_argument("--live-out", help="live: timeseries output path")

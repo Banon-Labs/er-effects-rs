@@ -53,8 +53,10 @@ MIGRATIONS: list[tuple[int, list[str]]] = [
                )""",
         ],
     ),
-    # Example future migration (uncomment / append when the 3rd load phase exists):
-    # (2, ["ALTER TABLE imprint_sets ADD COLUMN phase_load3_to_control TEXT"]),
+    # The vanilla NATIVE Continue is the correct reference to diff load2 against (user 2026-07-20).
+    (2, ["ALTER TABLE imprint_sets ADD COLUMN phase_vanilla_continue TEXT"]),
+    # Example future migration (append when the 3rd load phase exists):
+    # (3, ["ALTER TABLE imprint_sets ADD COLUMN phase_load3_to_control TEXT"]),
 ]
 
 
