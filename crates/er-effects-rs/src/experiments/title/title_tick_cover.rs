@@ -3083,6 +3083,10 @@ pub(crate) unsafe fn switch_slot_arm_programmatic(base: usize, slot: i32) {
     SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_SWITCH_MENU_FREE_RELOAD_FIRED.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_MENU_FREE_STABLE_TICKS.store(0, Ordering::SeqCst);
+    // Reset the switch-reload FD4-IO phase machine so THIS switch re-runs SUBMIT/DRAIN/COMMIT. Without
+    // it the one-shot stays claimed from the previous switch and the second reload (load3) never loads
+    // (game sits at the title). bd DECISIVE-load2-loads-fine (switch #2 emitted no reload-fd4io SUBMIT).
+    crate::experiments::own_load::reset_switch_reload_fd4io_phase();
     PRODUCT_AUTOLOAD_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     OWN_STEPPER_SLOT.store(slot, Ordering::SeqCst);
     OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_MENU, Ordering::SeqCst);

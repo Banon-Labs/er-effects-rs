@@ -158,6 +158,20 @@ const SWITCH_RELOAD_FD4IO_COMMIT: usize = 2;
 /// old behavior) rather than hang the switch.
 const SWITCH_RELOAD_FD4IO_DRAIN_MAX: usize = 600;
 
+/// Reset the switch-reload FD4-IO phase machine so a NEW switch re-runs SUBMIT -> DRAIN -> COMMIT.
+/// Without this the one-shot stays claimed after the FIRST switch (PHASE stuck at COMMIT +
+/// SWITCH_RELOAD_FD4IO_COMMITTED=1), so the SECOND switch's own_load_switch_reload_fire hits the
+/// already-committed guard and returns immediately WITHOUT loading -> the 2nd reload (load3) never
+/// initiates and the game sits at a clean/PRESS-ANY-BUTTON title (run 110005: switch #1 loaded load2
+/// via SUBMIT/DRAIN/COMMIT; switch #2 armed + tore the world down but emitted NO reload-fd4io SUBMIT,
+/// so load3 stalled at bar step 1). switch_slot_arm_programmatic calls this on every switch arm so each
+/// switch gets a fresh phase machine.
+pub(crate) fn reset_switch_reload_fd4io_phase() {
+    SWITCH_RELOAD_FD4IO_PHASE.store(SWITCH_RELOAD_FD4IO_IDLE, Ordering::SeqCst);
+    SWITCH_RELOAD_FD4IO_COMMITTED.store(0, Ordering::SeqCst);
+    SWITCH_RELOAD_FD4IO_DRAIN_WAITS.store(0, Ordering::SeqCst);
+}
+
 /// SUBMIT the native full-save-read for `picked` so the FD4 IO worker pool loads it resident, exactly
 /// as the boot native-fullread SUBMIT phase (slot_resolution.rs). Mirrors its calls/RVAs. Sets
 /// GameMan+0xb80=2 (the deserialize arm); the DRAIN tick then advances it to RESIDENT(3).
