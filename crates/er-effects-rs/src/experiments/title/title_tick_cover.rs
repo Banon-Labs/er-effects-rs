@@ -475,6 +475,82 @@ pub(crate) unsafe fn install_child_done_query_override_hook(base: usize) {
     ));
     std::mem::forget(hooks);
 }
+
+/// STEP_MoveMap_LoadlistInit (deobf rva 0xaec480 / dump 0x140aec570). Its build is gated on
+/// `worldloadlistlistVirtualPath.size != 0` (InGameStep+0x108, a DlFixedString<wchar_t,128> inline:
+/// +0x00 union{pointer when capacity>7 / inline}, +0x08 size(wchars), +0x10 capacity). When that
+/// string is empty the game SKIPS building the loadlist -> no block-res -> WorldResWait hangs ->
+/// mms stuck 18. This must be a PRODUCT hook (the union chains a base MinHook the product owns; the
+/// trace-DLL copy never fired). READ-ONLY for now: it logs the DlFixedString per load epoch so a run
+/// settles whether the STALLED load's path was EMPTY (empty-loadlist root confirmed) or POPULATED
+/// (root is downstream/contention). The capture-replay WRITE is added once the layout is confirmed.
+pub(crate) const LOADLIST_INIT_RVA: usize = 0xaec480;
+const INGAMESTEP_WORLDLOADLIST_VPATH_OFFSET: usize = 0x108;
+pub(crate) static LOADLIST_INIT_ORIG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+static LOADLIST_INIT_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+static LOADLIST_INIT_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) unsafe extern "system" fn loadlist_init_capture_detour(
+    ingamestep: usize,
+    param2: usize,
+    r8: usize,
+    r9: usize,
+) -> usize {
+    let orig_addr = LOADLIST_INIT_ORIG.load(Ordering::SeqCst);
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let dfs = ingamestep.wrapping_add(INGAMESTEP_WORLDLOADLIST_VPATH_OFFSET);
+        let size = unsafe { safe_read_usize(dfs + 0x08) }.unwrap_or(usize::MAX);
+        let cap = unsafe { safe_read_usize(dfs + 0x10) }.unwrap_or(usize::MAX);
+        let ptr = unsafe { safe_read_usize(dfs) }.unwrap_or(0);
+        let str_base = if cap != usize::MAX && cap > 7 { ptr } else { dfs };
+        let mut preview = String::new();
+        if str_base != 0 && size != usize::MAX && size <= 256 {
+            for i in 0..size.min(96) {
+                // ASCII path chars sit in the low byte of each UTF-16LE unit.
+                match unsafe { safe_read_u8(str_base + i * 2) } {
+                    Some(w) if (0x20..0x7f).contains(&w) => preview.push(w as char),
+                    _ => preview.push('.'),
+                }
+            }
+        }
+        let n = LOADLIST_INIT_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
+        let epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "loadlist-init CAPTURE #{n} epoch={epoch} InGameStep=0x{ingamestep:x} worldloadlist_size={size} cap={cap} ptr=0x{ptr:x} ptr_in_obj={} path='{preview}'",
+            ptr >= dfs && ptr < dfs + 0x130,
+        ));
+    }));
+    if orig_addr == TITLE_OWNER_SCAN_START_ADDRESS {
+        return 0;
+    }
+    let orig: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig_addr) };
+    unsafe { orig(ingamestep, param2, r8, r9) }
+}
+
+/// Install the LoadlistInit capture hook ONCE (product-owned so the union detour actually fires).
+pub(crate) unsafe fn install_loadlist_init_capture_hook(base: usize) {
+    if LOADLIST_INIT_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        != TITLE_OWNER_SCAN_START_ADDRESS
+    {
+        return;
+    }
+    let mut hooks = Vec::new();
+    unsafe {
+        create_continue_trace_hook(
+            &mut hooks,
+            "loadlist_init_capture_aec480",
+            LOADLIST_INIT_RVA as u32,
+            loadlist_init_capture_detour as *mut c_void,
+            &LOADLIST_INIT_ORIG,
+        );
+    }
+    append_autoload_debug(format_args!(
+        "loadlist-init-capture-hook: INSTALLED on 0x{:x} -- logs worldloadlistlistVirtualPath (InGameStep+0x108) per epoch to disambiguate the mms18 stall (empty-loadlist root vs downstream)",
+        base + LOADLIST_INIT_RVA,
+    ));
+    std::mem::forget(hooks);
+}
 /// READ-ONLY trace detour for the title step-setter `SetState(owner, int state)` (deobf 0x140b0d960).
 /// Logs every native state transition with a timestamp + the current owner+0xe0 (TitleTopDialog
 /// holder) liveness, then calls the original UNCHANGED. Pure observation -- this is the

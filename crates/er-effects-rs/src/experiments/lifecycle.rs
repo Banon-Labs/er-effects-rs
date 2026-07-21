@@ -406,6 +406,16 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
             // -> advancer stops). Isolated to the MoveMapStep child (rcx==mms+0x108) on a committed
             // reload; load1 untouched. bd COMPLETE-CHAIN-load2-child-torndown-early-fun140eb5550-done.
             unsafe { install_child_done_query_override_hook(base) };
+            // LoadlistInit capture (root check for the mms18 stall): STEP_MoveMap_LoadlistInit skips
+            // building the loadlist when worldloadlistlistVirtualPath (InGameStep+0x108) is empty ->
+            // WorldResWait hangs -> mms stuck 18. Product-owned so the union detour fires (the trace
+            // copy was orphaned). Read-only; logs the path per epoch to confirm the empty-loadlist root.
+            // bd fix-point-confirmed-stepmovemap-loadlistinit-gate-worldloadlistvirtualpath-size-populate-it.
+            unsafe {
+                crate::experiments::title::title_tick_cover::install_loadlist_init_capture_hook(
+                    base,
+                )
+            };
         }
     }
     // OFFLINE connection-state lever (milestone-3 fix): force GameMan+0xBC8/0xBC9 = 0 each
