@@ -57,6 +57,16 @@ def _imax(rows: list[dict], key: str) -> int:
     return max(vals) if vals else -1
 
 
+def _idelta(rows: list[dict], key: str) -> int:
+    """Delta of a cumulative counter across this epoch's rows (how much it advanced during the epoch)."""
+    vals: list[int] = []
+    for r in rows:
+        v = r.get(key)
+        if isinstance(v, int):
+            vals.append(v)
+    return (max(vals) - min(vals)) if vals else 0
+
+
 def epoch_verdict(epoch: int, rows: list[dict]) -> str:
     present = any(r.get("oracle_player_present") for r in rows)
     names = {r.get("oracle_char_name") for r in rows if r.get("oracle_char_name")}
@@ -84,34 +94,48 @@ def epoch_verdict(epoch: int, rows: list[dict]) -> str:
         f"{label} (epoch {epoch}): {phase}."
         f" player_present={present} char={char!r} play_time_live={play_live}."
     ]
-    # CONTAMINATION
+    # CONTAMINATION -- RawInput RECEPTION is authoritative: did the GAME receive user mouse/keyboard
+    # input? The harness injects via the direct-memory inputmgr (never RawInput), so any RawInput event
+    # is the USER's. This covers mouse-look (camera) input that char-position cannot see.
+    has_rawinput = any("oracle_rawinput_mouse_move_events" in r for r in rows)
     moved = max(did_move, probe_move)
-    if verdict_code == 3 or (moved > MOVE_NOISE_FRAMES and supplied == 0):
+    if has_rawinput:
+        mmove = _idelta(rows, "oracle_rawinput_mouse_move_events")
+        mbtn = _idelta(rows, "oracle_rawinput_mouse_button_events")
+        keys = _idelta(rows, "oracle_rawinput_key_events")
+        total = mmove + mbtn + keys
+        if total > 0:
+            parts.append(
+                f"    CONTAMINATION (authoritative -- the game RECEIVED user input): {mmove} mouse-move"
+                f" + {mbtn} mouse-button + {keys} keyboard RawInput events this epoch. The harness injects"
+                f" via the direct-memory inputmgr (never RawInput), so these are the USER's input reaching"
+                f" the game -> this epoch is CORRUPTED and its stall/finish signal is INVALID."
+            )
+        else:
+            parts.append(
+                "    CLEAN: the game received 0 user RawInput events (mouse+keyboard) this epoch"
+                " -> NOT contaminated (authoritative; covers mouse-look/camera input that char-position"
+                " misses)."
+            )
+    elif verdict_code == 3 or (moved > MOVE_NOISE_FRAMES and supplied == 0):
         parts.append(
-            f"    CONTAMINATION: character moved ~{moved} frames with {supplied} injected-input frames"
-            f" -> the run was corrupted by input we did NOT supply. ER accepts UNFOCUSED mouse/click"
-            f" input and agent-owned runs do not block it (no focus oracle yet to confirm 'unfocused',"
-            f" but zero injected input means the movement was the user's). This epoch's stall/finish"
-            f" signal is UNTRUSTWORTHY."
-        )
-    elif moved > MOVE_NOISE_FRAMES and supplied > 0:
-        parts.append(
-            f"    movement ~{moved} frames WITH {supplied} injected frames -> attributable to the"
-            f" harness (not contamination)."
+            f"    LIKELY CONTAMINATION: character moved ~{moved} frames with {supplied} injected frames"
+            f" (old build without the RawInput oracle). Zero injection means the movement was the user's;"
+            f" this epoch is UNTRUSTWORTHY."
         )
     else:
         blind = (
-            " BUT this only tracks CHARACTER POSITION; mouse-look moves the CAMERA, for which there is"
-            " no oracle yet, so mouse contamination is INVISIBLE here."
+            " (old build: no RawInput oracle -- this only tracks CHARACTER POSITION, so mouse-look/camera"
+            " contamination is INVISIBLE)"
         )
         trust = (
-            " Since this load did NOT complete, its stall signal is UNTRUSTWORTHY until a focus+camera"
-            " oracle and the unfocused-input block land."
+            " and this load did NOT complete, so its stall signal is UNTRUSTWORTHY until re-run on a"
+            " RawInput-oracle build."
             if mms_max < MMS_WORLD_READY_MIN
             else ""
         )
         parts.append(
-            f"    no CHAR movement without injection (moved ~{moved}, injected {supplied}).{blind}{trust}"
+            f"    no CHAR movement without injection (moved ~{moved}, injected {supplied}){blind}{trust}."
         )
     return "\n".join(parts)
 

@@ -153,6 +153,11 @@ def snap(t: dict) -> dict:
         "oracle_did_move_frames",
         # HARNESS-attributed contamination-proof verdict (0 pending/1 proven/2 disproven/3 contaminated):
         "oracle_harness_move_verdict",
+        # RAWINPUT RECEPTION (contamination oracle): user mouse/kb events the game received (harness
+        # injects via direct-memory inputmgr, not RawInput -> any nonzero = user input = contamination).
+        "oracle_rawinput_mouse_move_events",
+        "oracle_rawinput_mouse_button_events",
+        "oracle_rawinput_key_events",
         # RESIDUAL-STATE diagnostic: MoveMapStep child EzChildStepBase (embedded at mms+0x108) member
         # fields + the step it wraps (*(mms+0x110)), each frame, to pin the field that flips when the
         # FD4 scheduler drops load2's child (load1-vs-load2 diff at mms=18).

@@ -740,6 +740,119 @@ pub(crate) fn ensure_xinput_hook_installed_for_trace() {
     if XINPUT_GET_STATE_ORIG.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS {
         unsafe { install_xinput_block() };
     }
+    ensure_rawinput_counter_installed();
+}
+
+/// Install the RawInput reception counter ONCE (idempotent). Called UNCONDITIONALLY every frame from
+/// tick_before_player_lookup -- unlike the xinput trace path this must run on EVERY run (it is the
+/// contamination oracle: whether the game received user mouse/keyboard input), not only when the
+/// input-trace marker is armed. Pure counting pass-through; never blocks input.
+pub(crate) fn ensure_rawinput_counter_installed() {
+    if GET_RAW_INPUT_DATA_ORIG.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS {
+        unsafe { install_rawinput_counter() };
+    }
+}
+
+/// GetRawInputData reception counters (user 2026-07-20): the oracle must RECORD whether the GAME is
+/// RECEIVING user mouse/keyboard input, at the OS boundary. ER reads gameplay+menu input via RawInput;
+/// the input-harness injects via the direct-memory inputmgr, NOT RawInput -- so every RawInput event
+/// counted here is USER input the game received (contamination during an agent-owned run). Emitted as
+/// oracle_rawinput_* and consumed by the verdict emitter.
+pub(crate) static RAWINPUT_MOUSE_MOVE_EVENTS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static RAWINPUT_MOUSE_BUTTON_EVENTS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static RAWINPUT_KEY_EVENTS: AtomicUsize = AtomicUsize::new(0);
+static GET_RAW_INPUT_DATA_ORIG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+
+/// GetRawInputData(hRawInput, uiCommand, pData, pcbSize, cbSizeHeader) pass-through detour: call the
+/// original, then if it returned a RID_INPUT record, classify it and bump the reception counter. Never
+/// drops input (recording only). RAWINPUTHEADER is 0x18 bytes on x64; RAWMOUSE.usButtonFlags @ +0x04,
+/// lLastX @ +0x0C, lLastY @ +0x10; RAWKEYBOARD Message @ +0x08 (WM_KEYDOWN 0x100 / WM_SYSKEYDOWN 0x104).
+unsafe extern "system" fn get_raw_input_data_hook(
+    h_raw_input: isize,
+    ui_command: u32,
+    p_data: *mut c_void,
+    pcb_size: *mut u32,
+    cb_size_header: u32,
+) -> u32 {
+    let orig_addr = GET_RAW_INPUT_DATA_ORIG.load(Ordering::SeqCst);
+    let orig: unsafe extern "system" fn(isize, u32, *mut c_void, *mut u32, u32) -> u32 =
+        unsafe { std::mem::transmute(orig_addr) };
+    let ret = unsafe { orig(h_raw_input, ui_command, p_data, pcb_size, cb_size_header) };
+    const RID_INPUT: u32 = 0x1000_0003;
+    if !p_data.is_null() && ui_command == RID_INPUT && ret != u32::MAX && ret >= 0x30 {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let base = p_data as usize;
+            let dwtype = unsafe { (base as *const u32).read_unaligned() };
+            let d = base + 0x18; // past RAWINPUTHEADER
+            if dwtype == 0 {
+                // RIM_TYPEMOUSE
+                let btn = unsafe { ((d + 0x04) as *const u16).read_unaligned() };
+                let lx = unsafe { ((d + 0x0C) as *const i32).read_unaligned() };
+                let ly = unsafe { ((d + 0x10) as *const i32).read_unaligned() };
+                if lx != 0 || ly != 0 {
+                    RAWINPUT_MOUSE_MOVE_EVENTS.fetch_add(1, Ordering::Relaxed);
+                }
+                if btn != 0 {
+                    RAWINPUT_MOUSE_BUTTON_EVENTS.fetch_add(1, Ordering::Relaxed);
+                }
+            } else if dwtype == 1 {
+                // RIM_TYPEKEYBOARD -- count key-down messages only
+                let msg = unsafe { ((d + 0x08) as *const u32).read_unaligned() };
+                if msg == 0x100 || msg == 0x104 {
+                    RAWINPUT_KEY_EVENTS.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }));
+    }
+    ret
+}
+
+/// Install the GetRawInputData reception counter (user32.dll). minhook, mirroring install_xinput_block.
+/// Recording only -- never blocks. Retried each frame until user32 GetRawInputData resolves.
+unsafe fn install_rawinput_counter() {
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "rawinput-counter: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let hmod = match unsafe { GetModuleHandleA(PCSTR(b"user32.dll\0".as_ptr())) } {
+        Ok(h) if !h.is_invalid() => h,
+        _ => return,
+    };
+    let Some(addr) = (unsafe { GetProcAddress(hmod, PCSTR(b"GetRawInputData\0".as_ptr())) }) else {
+        return;
+    };
+    let addr = addr as usize;
+    match unsafe { MhHook::new(addr as *mut c_void, get_raw_input_data_hook as *mut c_void) } {
+        Ok(hook) => {
+            // Store the trampoline BEFORE enabling so the detour never transmutes the unset sentinel.
+            GET_RAW_INPUT_DATA_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "rawinput-counter: queue_enable failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    append_autoload_debug(format_args!(
+                        "rawinput-counter: hooked GetRawInputData at 0x{addr:x} -- records user mouse/kb input the game receives (contamination oracle)"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "rawinput-counter: MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "rawinput-counter: MhHook::new GetRawInputData failed: {status:?}"
+        )),
+    }
 }
 
 /// Tracks whether the DInput keyboard+mouse `install_hooks` has succeeded.

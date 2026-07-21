@@ -110,6 +110,10 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // semaphore snapshots to er-effects-input-trace.jsonl for USER-DRIVEN runs. Recording only --
     // never blocks, never fabricates; a marker/env-gated no-op by default.
     input_trace_tick();
+    // RAWINPUT RECEPTION COUNTER (contamination oracle, user 2026-07-20): install once, unconditionally,
+    // so EVERY run records whether the game received user mouse/kb input (input-trace is off by default).
+    // Recording only -- never blocks input. bd oracle-must-record-game-input-reception-hook-getrawinputdata.
+    ensure_rawinput_counter_installed();
     // NATIVE-WINDOWS LOADING OVERLAY ownership cycle (bd er-effects-rs-8jz): our separate-window overlay
     // OWNS the screen (SHOW) whenever the local player is absent -- boot, title, and EVERY loading screen
     // (fast-travel, area transitions, death re-load) -- and RELEASES it (HIDE) once the world is loaded and
@@ -411,11 +415,7 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
             // WorldResWait hangs -> mms stuck 18. Product-owned so the union detour fires (the trace
             // copy was orphaned). Read-only; logs the path per epoch to confirm the empty-loadlist root.
             // bd fix-point-confirmed-stepmovemap-loadlistinit-gate-worldloadlistvirtualpath-size-populate-it.
-            unsafe {
-                crate::experiments::title::title_tick_cover::install_loadlist_init_capture_hook(
-                    base,
-                )
-            };
+            unsafe { install_loadlist_init_capture_hook(base) };
         }
     }
     // OFFLINE connection-state lever (milestone-3 fix): force GameMan+0xBC8/0xBC9 = 0 each

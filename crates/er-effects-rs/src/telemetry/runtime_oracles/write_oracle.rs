@@ -358,4 +358,13 @@ fn write_player_presence_oracle(body: &mut String) {
     body.push_str(&format!(
         "  \"oracle_harness_move_verdict\": {harness_move_verdict},\n"
     ));
+    // RAWINPUT RECEPTION (user 2026-07-20): whether the GAME received USER mouse/keyboard input this
+    // run. The input-harness injects via the direct-memory inputmgr (NOT RawInput), so any nonzero count
+    // here means the user's input reached the game -> the run is CONTAMINATED. Cumulative event counts.
+    body.push_str(&format!(
+        "  \"oracle_rawinput_mouse_move_events\": {},\n  \"oracle_rawinput_mouse_button_events\": {},\n  \"oracle_rawinput_key_events\": {},\n",
+        crate::experiments::RAWINPUT_MOUSE_MOVE_EVENTS.load(Ordering::Relaxed),
+        crate::experiments::RAWINPUT_MOUSE_BUTTON_EVENTS.load(Ordering::Relaxed),
+        crate::experiments::RAWINPUT_KEY_EVENTS.load(Ordering::Relaxed),
+    ));
 }
