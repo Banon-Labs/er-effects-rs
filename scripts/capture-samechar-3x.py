@@ -792,10 +792,17 @@ def main() -> int:
             except (TypeError, ValueError):
                 fps_now = -1.0
             _ep = int(deser)
-            # GENUINELY loaded into world (not just present-in-memory): render_ready or movable. `present`
-            # alone is the in-memory deserialize and fires DURING the loading screen, so testing FPS there
-            # measured the loading phase, not the in-world drop (user 2026-07-20). Only sample once loaded.
-            genuinely_loaded = render_ready or can_move
+            # GENUINELY loaded into world (not just present-in-memory). `present` alone is the in-memory
+            # deserialize and fires DURING the loading screen, so testing FPS there measured the loading
+            # phase (user 2026-07-20). BUT render_ready/can_move are BOTH FALSE for the WHOLE in-world
+            # window on a warm RELOAD (run6 2026-07-21: only 2 genuinely_loaded fps samples for load2, 1
+            # for load3 -> the fps-parity teardown never reached its >=6-sample threshold and never fired,
+            # so a real 65%-of-load1 frame regression sailed through as PASS -- the exact "oracle should
+            # have torn down here" bug). The char IS rendered on a reload (render_group=True, and the
+            # harness verdict proves movement), so gate on render_group -- the same in-world signal the
+            # offline framerate analysis uses (matched load2 n=51 / load3 n=69) -- which fires on reloads.
+            render_group_on = bool(s.get("oracle_chr_render_group_enabled"))
+            genuinely_loaded = render_group_on or render_ready or can_move
             if fps_now > 0 and genuinely_loaded:
                 if _ep == 0:
                     load1_inworld_fps.append(fps_now)
