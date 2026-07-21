@@ -981,6 +981,28 @@ pub(crate) fn enforce_input_block_now() {
     let _ = unsafe { ClipCursor(Some(&clip)) };
 }
 
+/// USER SUGGESTION 2026-07-20: disable KEYBOARD+MOUSE as GAME inputs during an agent-owned run, leaving
+/// the GAMEPAD/XInput path OPEN for the harness. Zeroes DInput kb+mouse GetDeviceState (the user's
+/// WSAD / mouse buttons / DInput mouse deltas) but does NOT block the gamepad and does NOT ClipCursor
+/// (no mouse-trap). The RawInput mouse drop (harness-gated, get_raw_input_data_hook) covers the
+/// RawInput/camera path DInput misses. Net: the ONLY effective game input is the harness's pad-poll
+/// injection, so any character movement is unambiguously the harness (clean 60-frame proof). Idempotent;
+/// safe to call every frame. Distinct from enforce_input_block_now (which blocks ALL + ClipCursor).
+pub(crate) fn enforce_kbmouse_game_input_disable() {
+    let blocker = InputBlocker::get_instance();
+    if DINPUT_BLOCK_INSTALLED.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS {
+        let res = std::panic::catch_unwind(|| unsafe { blocker.install_hooks() });
+        if let Ok(Ok(())) = res {
+            DINPUT_BLOCK_INSTALLED.store(BLOCK_INPUT_ON, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "kbmouse-disable: DInput kb+mouse hooks installed (gamepad/xinput left OPEN for harness; no ClipCursor)"
+            ));
+        }
+    }
+    // Block ONLY keyboard + mouse -- NOT GamePad (harness pad-poll stays live), NOT XInput. No ClipCursor.
+    blocker.block_only(InputFlags::Keyboard | InputFlags::Mouse);
+}
+
 pub(crate) fn render_liveness_probe() {
     if !title_accept_enabled() {
         return;

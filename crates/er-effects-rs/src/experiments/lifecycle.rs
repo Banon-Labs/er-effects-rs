@@ -125,6 +125,17 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
             unsafe { install_loadlist_init_capture_hook(base) };
         }
     }
+    // USER SUGGESTION 2026-07-20: disable kb+mouse as GAME inputs during an agent-owned run once in-world
+    // so the user's typing/mouse cannot contaminate the movement proof; the gamepad/XInput path stays
+    // OPEN for the harness -> any character movement is unambiguously the harness. Only while the harness
+    // DLL is present, the player is in-world, and sq_repro is NOT driving menus (which owns its own full
+    // block + ClipCursor). bd user-suggest-disable-kbmouse-game-inputs-leave-xinput-open-dluid.
+    if crate::experiments::harness_dll_present()
+        && !crate::experiments::sq_repro_actively_driving()
+        && unsafe { PlayerIns::local_player_mut() }.is_ok()
+    {
+        enforce_kbmouse_game_input_disable();
+    }
     // NATIVE-WINDOWS LOADING OVERLAY ownership cycle (bd er-effects-rs-8jz): our separate-window overlay
     // OWNS the screen (SHOW) whenever the local player is absent -- boot, title, and EVERY loading screen
     // (fast-travel, area transitions, death re-load) -- and RELEASES it (HIDE) once the world is loaded and
