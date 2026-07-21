@@ -155,6 +155,8 @@ def snap(t: dict) -> dict:
         "oracle_harness_move_verdict",
         # RAWINPUT RECEPTION (contamination oracle): user mouse/kb events the game received (harness
         # injects via direct-memory inputmgr, not RawInput -> any nonzero = user input = contamination).
+        # hook_calls validates the oracle is LIVE (game routes input through GetRawInputData); 0 = blind.
+        "oracle_rawinput_hook_calls",
         "oracle_rawinput_mouse_move_events",
         "oracle_rawinput_mouse_button_events",
         "oracle_rawinput_key_events",

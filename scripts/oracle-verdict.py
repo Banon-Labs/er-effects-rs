@@ -100,22 +100,29 @@ def epoch_verdict(epoch: int, rows: list[dict]) -> str:
     has_rawinput = any("oracle_rawinput_mouse_move_events" in r for r in rows)
     moved = max(did_move, probe_move)
     if has_rawinput:
+        calls = _idelta(rows, "oracle_rawinput_hook_calls")
         mmove = _idelta(rows, "oracle_rawinput_mouse_move_events")
         mbtn = _idelta(rows, "oracle_rawinput_mouse_button_events")
         keys = _idelta(rows, "oracle_rawinput_key_events")
         total = mmove + mbtn + keys
-        if total > 0:
+        if calls <= 0:
+            parts.append(
+                "    RawInput oracle BLIND this epoch: the game made 0 GetRawInputData calls, so it does"
+                " NOT route input through RawInput here -- a 0 event count is MEANINGLESS and contamination"
+                " CANNOT be ruled out from this signal (needs a different input-path oracle)."
+            )
+        elif total > 0:
             parts.append(
                 f"    CONTAMINATION (authoritative -- the game RECEIVED user input): {mmove} mouse-move"
-                f" + {mbtn} mouse-button + {keys} keyboard RawInput events this epoch. The harness injects"
-                f" via the direct-memory inputmgr (never RawInput), so these are the USER's input reaching"
-                f" the game -> this epoch is CORRUPTED and its stall/finish signal is INVALID."
+                f" + {mbtn} mouse-button + {keys} keyboard RawInput events this epoch (of {calls}"
+                f" GetRawInputData calls). The harness injects via the direct-memory inputmgr (never"
+                f" RawInput), so these are the USER's -> this epoch is CORRUPTED, its stall/finish INVALID."
             )
         else:
             parts.append(
-                "    CLEAN: the game received 0 user RawInput events (mouse+keyboard) this epoch"
-                " -> NOT contaminated (authoritative; covers mouse-look/camera input that char-position"
-                " misses)."
+                f"    CLEAN: the game called GetRawInputData {calls}x and got 0 user mouse/keyboard events"
+                f" this epoch -> NOT contaminated (authoritative and LIVE; covers mouse-look/camera input"
+                f" that char-position misses)."
             )
     elif verdict_code == 3 or (moved > MOVE_NOISE_FRAMES and supplied == 0):
         parts.append(

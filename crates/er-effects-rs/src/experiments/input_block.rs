@@ -761,6 +761,10 @@ pub(crate) fn ensure_rawinput_counter_installed() {
 pub(crate) static RAWINPUT_MOUSE_MOVE_EVENTS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static RAWINPUT_MOUSE_BUTTON_EVENTS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static RAWINPUT_KEY_EVENTS: AtomicUsize = AtomicUsize::new(0);
+/// Total GetRawInputData calls the game made (any command). If this is 0 the game is NOT routing input
+/// through GetRawInputData -> the reception oracle is BLIND and a 0 event count means nothing. If >0 the
+/// oracle is live and a 0 event count is a genuine "no user input this run".
+pub(crate) static RAWINPUT_HOOK_CALLS: AtomicUsize = AtomicUsize::new(0);
 static GET_RAW_INPUT_DATA_ORIG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
 /// GetRawInputData(hRawInput, uiCommand, pData, pcbSize, cbSizeHeader) pass-through detour: call the
@@ -774,6 +778,7 @@ unsafe extern "system" fn get_raw_input_data_hook(
     pcb_size: *mut u32,
     cb_size_header: u32,
 ) -> u32 {
+    RAWINPUT_HOOK_CALLS.fetch_add(1, Ordering::Relaxed);
     let orig_addr = GET_RAW_INPUT_DATA_ORIG.load(Ordering::SeqCst);
     let orig: unsafe extern "system" fn(isize, u32, *mut c_void, *mut u32, u32) -> u32 =
         unsafe { std::mem::transmute(orig_addr) };
