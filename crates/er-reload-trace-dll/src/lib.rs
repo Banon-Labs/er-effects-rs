@@ -342,6 +342,44 @@ unsafe extern "system" fn hook_finalize_advancer(a: usize, b: usize, c: usize, d
     ret
 }
 
+static LOADLIST_INIT_CALLS: AtomicU64 = AtomicU64::new(0);
+static ORIG_LOADLIST_INIT: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+/// worldloadlistlistVirtualPath = InGameStep+0x108, a DlFixedString<wchar_t,128> (inline): +0x00 union
+/// (pointer when capacity>7, else in_place), +0x08 size(wchars), +0x10 capacity.
+const INGAMESTEP_WORLDLOADLIST_VPATH_108_OFFSET: usize = 0x108;
+
+/// Log-only detour for STEP_MoveMap_LoadlistInit (rva 0xaec480 / dump 0x140aec570). Its gate is
+/// worldloadlistlistVirtualPath.size != 0 -- when 0 it SKIPS building the loadlist -> no block-res ->
+/// WorldResWait hangs -> load2 finalize stuck. Logs the DlFixedString (size/cap/ptr + ASCII path
+/// preview) BEFORE the original so a load1-vs-load2 diff shows load1's map:\WorldMsbList\... path and
+/// load2's EMPTY path -- the root of the reload stall (bd fix-point-confirmed-stepmovemap-loadlistinit).
+unsafe extern "system" fn hook_loadlist_init(a: usize, b: usize, c: usize, d: usize) -> usize {
+    let n = LOADLIST_INIT_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
+    let dfs = a.wrapping_add(INGAMESTEP_WORLDLOADLIST_VPATH_108_OFFSET);
+    let size = unsafe { read_usize(dfs + 0x08) }.unwrap_or(usize::MAX);
+    let cap = unsafe { read_usize(dfs + 0x10) }.unwrap_or(usize::MAX);
+    let str_base = if cap != usize::MAX && cap > 7 {
+        unsafe { read_usize(dfs) }.unwrap_or(0)
+    } else {
+        dfs
+    };
+    let mut preview = String::new();
+    if str_base != 0 && size != usize::MAX && size <= 256 {
+        for i in 0..size.min(120) {
+            // ASCII path chars sit in the low byte of each UTF-16LE unit.
+            match unsafe { read_u8(str_base + i * 2) } {
+                Some(w) if (0x20..0x7f).contains(&w) => preview.push(w as char),
+                _ => preview.push('.'),
+            }
+        }
+    }
+    log_line(format_args!(
+        "loadlist_init_aec480 call#{n} InGameStep=0x{a:x} worldloadlist_size={size} cap={cap} strptr=0x{str_base:x} path='{preview}' {}",
+        snapshot()
+    ));
+    unsafe { call_original(&ORIG_LOADLIST_INIT, a, b, c, d) }
+}
+
 /// Log-only detour for the child-done query FUN_140eb5550 (rva 0xeb5530). Logs its return (done flag)
 /// on change + a 600-call heartbeat. If load2 returns done=1 while load1 returns done=0 during the
 /// mms18 freeze, the premature-teardown chain is confirmed.
@@ -844,6 +882,12 @@ static HOOKS: &[HookSpec] = &[
         rva: 0xafa6d0,
         detour: hook_finalize_advancer,
         original: &ORIG_FINALIZE_ADVANCER,
+    },
+    HookSpec {
+        name: "loadlist_init_aec480",
+        rva: 0xaec480,
+        detour: hook_loadlist_init,
+        original: &ORIG_LOADLIST_INIT,
     },
     HookSpec {
         name: "child_teardown_eb54c0",

@@ -88,23 +88,35 @@ fn write_stepfinish_gate_oracle(body: &mut String) {
     // ticking. Publish the child EzChildStepBase ptr + a header window (vtable + state/flags/links) EVERY
     // frame so a load1-vs-load2 diff pins the exact field that flips when the child leaves the tick set.
     // Read-only, fault-safe (null when mms/child unresolved). No behavior change.
-    let child = mms.and_then(|m| rd(m + MOVEMAPSTEP_CHILD_EZSTEP_108_OFFSET).filter(|v| *v != null));
-    let ch = |off: usize| -> String {
-        match child.and_then(|c| rd(c + off)) {
+    // CORRECTED: the MoveMapStep child (EzChildStepBase) is EMBEDDED at mms+0x108 (its first qword is
+    // the vtable), NOT a pointer. Read its member fields directly (mms+0x108+off) and the step object it
+    // wraps (*(mms+0x110), i.e. ezcsb+0x8). One of these holds the active/scheduled state the FD4
+    // scheduler reads; ez00 (vtable) is static so it is omitted. Diff load1(ticking) vs load2(dropped).
+    let cbase = mms.map(|m| m + MOVEMAPSTEP_CHILD_EZSTEP_108_OFFSET);
+    let cb = |off: usize| -> String {
+        match cbase.and_then(|c| rd(c + off)) {
+            Some(v) => format!("\"0x{v:x}\""),
+            None => "null".to_owned(),
+        }
+    };
+    let step = cbase.and_then(|c| rd(c + 0x8).filter(|v| *v != null));
+    let sb = |off: usize| -> String {
+        match step.and_then(|s| rd(s + off)) {
             Some(v) => format!("\"0x{v:x}\""),
             None => "null".to_owned(),
         }
     };
     body.push_str(&format!(
-        "  \"oracle_mms_child_ptr\": {},\n  \"oracle_mms_child_h00\": {},\n  \"oracle_mms_child_h08\": {},\n  \"oracle_mms_child_h10\": {},\n  \"oracle_mms_child_h18\": {},\n  \"oracle_mms_child_h20\": {},\n  \"oracle_mms_child_h28\": {},\n  \"oracle_mms_child_h30\": {},\n",
-        child.map_or("null".to_owned(), |c| format!("\"0x{c:x}\"")),
-        ch(0x00),
-        ch(0x08),
-        ch(0x10),
-        ch(0x18),
-        ch(0x20),
-        ch(0x28),
-        ch(0x30),
+        "  \"oracle_mms_child_ez08_step\": {},\n  \"oracle_mms_child_ez10\": {},\n  \"oracle_mms_child_ez18\": {},\n  \"oracle_mms_child_ez20\": {},\n  \"oracle_mms_child_ez28\": {},\n  \"oracle_mms_child_step10\": {},\n  \"oracle_mms_child_step18\": {},\n  \"oracle_mms_child_step40\": {},\n  \"oracle_mms_child_step48\": {},\n",
+        cb(0x08),
+        cb(0x10),
+        cb(0x18),
+        cb(0x20),
+        cb(0x28),
+        sb(0x10),
+        sb(0x18),
+        sb(0x40),
+        sb(0x48),
     ));
 }
 const MOVEMAPSTEP_CHILD_EZSTEP_108_OFFSET: usize = 0x108;

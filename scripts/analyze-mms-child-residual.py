@@ -18,14 +18,15 @@ from collections import OrderedDict
 from pathlib import Path
 
 CHILD_FIELDS = [
-    "oracle_mms_child_ptr",
-    "oracle_mms_child_h00",
-    "oracle_mms_child_h08",
-    "oracle_mms_child_h10",
-    "oracle_mms_child_h18",
-    "oracle_mms_child_h20",
-    "oracle_mms_child_h28",
-    "oracle_mms_child_h30",
+    "oracle_mms_child_ez08_step",
+    "oracle_mms_child_ez10",
+    "oracle_mms_child_ez18",
+    "oracle_mms_child_ez20",
+    "oracle_mms_child_ez28",
+    "oracle_mms_child_step10",
+    "oracle_mms_child_step18",
+    "oracle_mms_child_step40",
+    "oracle_mms_child_step48",
 ]
 
 
@@ -64,8 +65,8 @@ def main() -> int:
     if not rows:
         print("no rows")
         return 1
-    if "oracle_mms_child_ptr" not in rows[0] and not any("oracle_mms_child_ptr" in r for r in rows):
-        print("timeseries has NO oracle_mms_child_* fields (old DLL build) -- rebuild + re-run first.")
+    if not any("oracle_mms_child_ez08_step" in r for r in rows):
+        print("timeseries has NO corrected oracle_mms_child_* fields (old DLL build) -- rebuild + re-run.")
         return 1
     ep_set: set[int] = set()
     for r in rows:

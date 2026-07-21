@@ -153,16 +153,18 @@ def snap(t: dict) -> dict:
         "oracle_did_move_frames",
         # HARNESS-attributed contamination-proof verdict (0 pending/1 proven/2 disproven/3 contaminated):
         "oracle_harness_move_verdict",
-        # RESIDUAL-STATE diagnostic: MoveMapStep child (mms+0x108) scheduling state each frame, to pin
-        # the field that flips when the FD4 scheduler drops load2's child (load1-vs-load2 diff).
-        "oracle_mms_child_ptr",
-        "oracle_mms_child_h00",
-        "oracle_mms_child_h08",
-        "oracle_mms_child_h10",
-        "oracle_mms_child_h18",
-        "oracle_mms_child_h20",
-        "oracle_mms_child_h28",
-        "oracle_mms_child_h30",
+        # RESIDUAL-STATE diagnostic: MoveMapStep child EzChildStepBase (embedded at mms+0x108) member
+        # fields + the step it wraps (*(mms+0x110)), each frame, to pin the field that flips when the
+        # FD4 scheduler drops load2's child (load1-vs-load2 diff at mms=18).
+        "oracle_mms_child_ez08_step",
+        "oracle_mms_child_ez10",
+        "oracle_mms_child_ez18",
+        "oracle_mms_child_ez20",
+        "oracle_mms_child_ez28",
+        "oracle_mms_child_step10",
+        "oracle_mms_child_step18",
+        "oracle_mms_child_step40",
+        "oracle_mms_child_step48",
         "oracle_saved_map_c30",
         "sq_repro_state",
         "sq_repro_switch_index",
