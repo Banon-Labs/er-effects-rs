@@ -114,6 +114,17 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // so EVERY run records whether the game received user mouse/kb input (input-trace is off by default).
     // Recording only -- never blocks input. bd oracle-must-record-game-input-reception-hook-getrawinputdata.
     ensure_rawinput_counter_installed();
+    // LoadlistInit capture: DEFERRED install (attach-time install crashed ER boot -- MinHook patching
+    // STEP_MoveMap_LoadlistInit's entry during early boot). Install ONCE the local player is present:
+    // post-boot AND after load1's world-load, so no thread is executing LoadlistInit's prologue when
+    // MinHook patches it (no race); load2/load3 reloads still CALL LoadlistInit afterwards so the hook
+    // fires and captures worldloadlistlistVirtualPath. Idempotent (install-once swap guard). bd
+    // loadlist-hook-defer-install-to-player-present-not-attach-2026-07-20.
+    if unsafe { PlayerIns::local_player_mut() }.is_ok() {
+        if let Ok(base) = game_module_base() {
+            unsafe { install_loadlist_init_capture_hook(base) };
+        }
+    }
     // NATIVE-WINDOWS LOADING OVERLAY ownership cycle (bd er-effects-rs-8jz): our separate-window overlay
     // OWNS the screen (SHOW) whenever the local player is absent -- boot, title, and EVERY loading screen
     // (fast-travel, area transitions, death re-load) -- and RELEASES it (HIDE) once the world is loaded and
@@ -410,12 +421,10 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
             // -> advancer stops). Isolated to the MoveMapStep child (rcx==mms+0x108) on a committed
             // reload; load1 untouched. bd COMPLETE-CHAIN-load2-child-torndown-early-fun140eb5550-done.
             unsafe { install_child_done_query_override_hook(base) };
-            // LoadlistInit capture (root check for the mms18 stall): STEP_MoveMap_LoadlistInit skips
-            // building the loadlist when worldloadlistlistVirtualPath (InGameStep+0x108) is empty ->
-            // WorldResWait hangs -> mms stuck 18. Product-owned so the union detour fires (the trace
-            // copy was orphaned). Read-only; logs the path per epoch to confirm the empty-loadlist root.
-            // bd fix-point-confirmed-stepmovemap-loadlistinit-gate-worldloadlistvirtualpath-size-populate-it.
-            unsafe { install_loadlist_init_capture_hook(base) };
+            // NOTE: the LoadlistInit capture hook is NOT installed here -- installing it at DLL attach
+            // crashed ER boot (MinHook patching STEP_MoveMap_LoadlistInit's entry during early boot). It
+            // is deferred to the first player-present frame instead (see the tick below). bd
+            // loadlist-hook-defer-install-to-player-present-not-attach-2026-07-20.
         }
     }
     // OFFLINE connection-state lever (milestone-3 fix): force GameMan+0xBC8/0xBC9 = 0 each
