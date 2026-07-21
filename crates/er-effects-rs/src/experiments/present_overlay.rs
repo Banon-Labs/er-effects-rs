@@ -247,6 +247,21 @@ fn composite_suppressed_on_native() -> bool {
 /// with the drive off, and its readback path is heavier), and draw the boot-progress bar + picker
 /// directly. On Wine/Proton (vkd3d), keep the full portrait-first path.
 unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) {
+    // FPS PARITY (bd FPS-DELTA-CONFIRMED-load2-20fps-load1-45fps): once the CURRENT load epoch is
+    // genuinely in-world (world-clock live for THIS fresh_deser epoch -- BOOT_VIEW_EPOCH_WORLD_LIVE was
+    // set to it by the play_time_live oracle), every overlay here (portrait cover, loading bar, save
+    // picker, effect selector) is a loading/menu surface with nothing to draw in gameplay. Skip ALL of
+    // it so the Present hook is a pure passthrough in-world -- the reliable PER-EPOCH stop (not the stale
+    // one-shot IN_WORLD_REACHED latch that never fires for load2). Isolates/kills the DLL per-frame
+    // composite as a load2 FPS cost; during loading (epoch world not yet live) compositing still runs.
+    {
+        let cur =
+            crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+        if crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur {
+            PRESENT_COMPOSITE_EARLY_SKIPS.fetch_add(1, Ordering::SeqCst);
+            return;
+        }
+    }
     // NOTE: the offscreen RASTERIZE is NOT driven here. Present is the WRONG GX phase -- the frame's GX
     // recording is already closed, so the subcontext pool pop no-ops (black). The rasterize is driven from
     // profile_lookat_realtime_draw_tick (a DRAW-phase CSTaskImp task, live recording frame). This hook
