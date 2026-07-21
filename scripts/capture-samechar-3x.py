@@ -37,11 +37,12 @@ BOOT_TIMEOUT_SECONDS = (
     # starve that core so boot is SLOW-but-progressing, not failed. Do not tear a slow boot down early.
     300.0  # if no in-world player by here, the boot failed -> tear down, don't idle
 )
-# Raised 10->60 (user 2026-07-20, bd teardown-is-core-contention-not-stall): under parallel-cargo core
-# contention the loading bar PROGRESSES SLOWLY (bar increases, labels crawl); a flat window of 10s was
-# firing on core-starvation slowness, not an actual hang. 60s tolerates slow progress; a genuine hang
-# still trips it. The oracle_system_step_label now distinguishes a frozen label (real hang) from crawl.
-LOADING_PROGRESS_STALL_SECONDS = 60.0
+# DEFENSIVE reload backstop (user 2026-07-21): the PRIMARY stall signal is the per-step loading-bar
+# dwell divergence (a reload dwelling at the same bar step far longer than load1 did there -- see the
+# capture loop). This backstop only covers the edge case where a reload reaches an in-world player but
+# the loading-bar step key never populated, so the per-step check could not fire; without it such a
+# reload would ride silently to the cap. Generous so a slow-but-progressing load is never cut.
+RELOAD_STALL_BACKSTOP_SECONDS = 120.0
 
 # Interruptible poll wait (never set) -- the sanctioned no-bare-sleep pace primitive (see
 # scripts/multi-load-proof-monitor.py); real synchronization is the telemetry-file readiness checks.
@@ -671,13 +672,8 @@ def main() -> int:
     max_activate = (
         0  # profile-load confirm activations = number of reload ATTEMPTS started
     )
-    last_loading_progress_signature: tuple | None = None
-    last_loading_progress_at: float | None = None
-    loading_stall_signature: tuple | None = None
-    loading_stall_source: str | None = None
-    loading_stall_seconds = 0.0
-    last_bar_epoch: tuple[int, int] | None = None
-    last_terminal_bar_fields: tuple | None = None
+    # Per-step divergence detail for the report (set when a reload diverges from load1 at a step).
+    step_divergence_detail: str | None = None
     # FAST FPS-COMPARISON TEARDOWN (user 2026-07-20, bd fast-teardown-load2-fps-far-from-load1-3s): once
     # load2 is in-world, sample its FPS for ~3s and compare to the load1 in-world baseline; tear down
     # immediately with a regression/ok verdict instead of consuming the full cap.
@@ -687,14 +683,21 @@ def main() -> int:
     fps_compared_logged = False  # parity note already printed once
     FPS_SETTLE_BEFORE_TEST_S = 5.0  # let load2 FINISH loading into world two before testing the drop
     FPS_REGRESSION_RATIO = 0.85  # load2 avg < 85% of load1 = a real, user-visible frame drop
-    # BOOTUP-SEQUENCE DIVERGENCE (user 2026-07-20, goal core): compare each reload's MoveMapStep
-    # progression to the load1 baseline at the OVERLAP stages; tear down at the exact stage a later load
-    # stops matching load1. Known divergence: load1 advances mms 18->19->20->-1 (settles); a stuck load2/3
-    # sits at mms=18. Track load1's first mms=18 and its settle (mms=-1 AFTER 18), then flag any later load
-    # that sits at mms=18 well beyond load1's 18->settle window.
-    l1_reached_18_at: float | None = None
-    l1_settle_from_18_s: float | None = None
-    later_load_18_at: dict[int, float] = {}
+    # PER-STEP DWELL DIVERGENCE (user 2026-07-21): load1 is the baseline -- it is EXPECTED to dwell at
+    # specific loading-bar steps during a normal first load. A reload (load2/load3) that dwells at the
+    # SAME step SIGNIFICANTLY longer than load1 did there has diverged -> tear down naming the step. Step
+    # key = the game-native loading-bar frame (oracle_loading_bar_current_frame; game-global loading
+    # screen), NOT mms/req_code (title-owner-derived, stale on the reload path). Contention-robust: core
+    # starvation slows BOTH loads, so the RELATIVE load2-vs-load1 per-step comparison holds. Replaces the
+    # old mms18 check AND the 15-field flat-window signature (whose many flickering fields never went flat
+    # -> the "no teardown on stall" bug). bd user-wants-bootup-sequence-divergence-semaphore-2026-07-20.
+    STEP_DWELL_FACTOR = 3.0  # reload dwell > load1_dwell*FACTOR + SLACK at the same step = divergence
+    STEP_DWELL_SLACK_S = 8.0
+    load1_step_dwell: dict[int, float] = {}  # bar-frame -> max dwell (s) observed on load1
+    l1_step_key: int | None = None
+    l1_step_entered_at: float | None = None
+    reload_step_key: int | None = None
+    reload_step_entered_at: float | None = None
 
     while True:
         now = time.monotonic()
@@ -742,13 +745,14 @@ def main() -> int:
             # -- do NOT ride to an fps/stall/cap window after the answer is known (user 2026-07-20, bd
             # collect-decisive-info-teardown-immediately). Contamination is a first-class outcome here.
             harness_verdict = as_int(s.get("oracle_harness_move_verdict"), 0)
-            if harness_verdict != 0:
-                vlabel = {
-                    1: "PROVEN_harness_moved_char",
-                    2: "DISPROVEN_injection_ineffective",
-                    3: "CONTAMINATED_external_input",
-                }.get(harness_verdict, f"verdict{harness_verdict}")
-                result = f"HARNESS_MOVE_{vlabel}_epoch{deser}"
+            # Only a PROVEN verdict ends the run early (a real movement confirmation is decisive). DISPROVEN
+            # is NOT a load failure: the movement injection is foreground-limited and disproves on EVERY
+            # load -- including during load1's own loading before the char is even movable -- which tore the
+            # run down before load1 finished (user 2026-07-21: "why did you tear down before load 1").
+            # Loads are validated by the game-global signature + the stall guard, not the unreliable
+            # injection verdict; a disproven/contaminated verdict just lets the run keep going.
+            if harness_verdict == 1:
+                result = f"HARNESS_MOVE_PROVEN_harness_moved_char_epoch{deser}"
                 break
             # IMPRINT CAPTURE (boot_to_control phase): end the boot imprint the INSTANT control is
             # available, marked by the USER pressing forward = the char's first real havok displacement.
@@ -820,152 +824,43 @@ def main() -> int:
                                 flush=True,
                             )
 
-            # User-directed teardown guard (2026-07-19): if the loading bar stops making observable
-            # progress for >10s, preserve artifacts and fail immediately instead of consuming the full
-            # runtime cap. Primary signal is the explicit RAM loading-bar progress oracle plus the native
-            # post-bar handoff semaphores, not a screenshot or broad cover-visible proxy. This deliberately
-            # keeps progressing after the visible bar reaches its nominal final frame (e.g. 11/11 or
-            # frame=max): if requestCode, MoveMapStep, close-sent, fake-loading, player presence, or
-            # movement proof still change, the loading-progress signature changes too. The coarse native-load
-            # signature is used only as a fallback when the loading-bar oracle is unavailable.
-            request_code = as_int(s.get("oracle_stepfinish_request_code"))
-            mms_state = as_int(s.get("oracle_stepfinish_mms_state"))
-            # BOOTUP-SEQUENCE DIVERGENCE check (user 2026-07-20). load1 (epoch 0): note first mms=18 and
-            # the settle (first mms=-1 AFTER reaching 18) -> the 18->settle duration baseline. Any later
-            # load (epoch>=1) that sits at mms=18 well past that window has DIVERGED from load1's overlap
-            # sequence -> tear down at that exact stage.
+            # PER-STEP DWELL DIVERGENCE (user 2026-07-21): it is EXPECTED for the loading bar to dwell at
+            # specific steps during a normal first load. The stall signal is a RELOAD dwelling at the SAME
+            # loading-bar step SIGNIFICANTLY longer than load1 did there, compared per-step against the
+            # load1 baseline (contention-robust: core starvation slows both loads together). Step key = the
+            # game-native loading-bar frame (game-global), NOT mms/req_code (title-owner-derived, stale on
+            # reloads). Replaces the old mms18 check and the 15-field flat-window signature.
             _dep = int(deser)
-            if _dep == 0:
-                if mms_state == 18 and l1_reached_18_at is None:
-                    l1_reached_18_at = now
-                if (
-                    mms_state == -1
-                    and l1_reached_18_at is not None
-                    and l1_settle_from_18_s is None
-                ):
-                    l1_settle_from_18_s = now - l1_reached_18_at
-            elif _dep >= 1:
-                if mms_state == 18 and _dep not in later_load_18_at:
-                    later_load_18_at[_dep] = now
-                if (
-                    mms_state == 18
-                    and _dep in later_load_18_at
-                    and l1_settle_from_18_s is not None
-                ):
-                    stuck_s = now - later_load_18_at[_dep]
-                    budget = l1_settle_from_18_s * 3.0 + 8.0
-                    if stuck_s > budget:
-                        result = (
-                            f"BOOTUP_DIVERGENCE_LOAD{_dep + 1} mms=18 stuck {stuck_s:.0f}s "
-                            f"(load1 settled 18->-1 in {l1_settle_from_18_s:.0f}s) -- diverges at MoveMapStep finalize"
-                        )
-                        break
             bar_enabled = as_int(s.get("oracle_loading_bar_enabled"), 0) > 0
-            bar_current_frame = as_int(s.get("oracle_loading_bar_current_frame"))
-            bar_progress_permille = as_int(
-                s.get("oracle_loading_bar_progress_permille")
-            )
-            bar_max_frame = as_int(s.get("oracle_loading_bar_max_frame"))
-            bar_progress_available = bar_enabled and (
-                bar_current_frame >= 0 or bar_progress_permille >= 0
-            )
-            current_epoch = (as_int(deser, 0), as_int(activate, 0))
-            handoff_progress_fields = (
-                ("close_sent", as_int(s.get("oracle_loading_screen_close_sent"), 0)),
-                ("request_code", request_code),
-                ("mms_state", mms_state),
-                (
-                    "finalize12a",
-                    as_int(s.get("oracle_stepfinish_finalize_substate_12a")),
-                ),
-                ("load_in_progress_b80", as_int(s.get("oracle_load_in_progress_b80"))),
-                ("now_loading", as_int(s.get("oracle_now_loading"))),
-                ("fake_cover", int(fake_cover)),
-                ("fake_field_c", as_int(s.get("oracle_fake_loading_field_c"))),
-                ("fake_field_10", as_int(s.get("oracle_fake_loading_field_10"))),
-                ("player_present", int(present)),
-                ("can_move", int(can_move)),
-                ("moved_frames", as_int(s.get("oracle_move_probe_moved_frames"), 0)),
-            )
-            boot_playable_before_reload = (
-                current_epoch == (0, 0) and present and can_move
-            )
-            if boot_playable_before_reload:
-                loading_active = False
-                loading_progress_signature = (
-                    "boot_playable_before_reload",
-                    current_epoch,
-                )
-            elif bar_progress_available:
-                loading_active = True
-                bar_terminal = as_int(s.get("oracle_loading_bar_current_terminal"), 0)
-                live_bar_fields = (
-                    ("deser", current_epoch[0]),
-                    ("activate", current_epoch[1]),
-                    ("bar_frame", bar_current_frame),
-                    ("bar_progress_permille", bar_progress_permille),
-                    ("bar_this", as_int(s.get("oracle_loading_screen_last_this"))),
-                    ("bar_data", as_int(s.get("oracle_loading_screen_last_data"))),
-                    ("bar_max_frame", bar_max_frame),
-                    ("bar_terminal_current", bar_terminal),
-                )
-                if bar_terminal:
-                    last_bar_epoch = current_epoch
-                    last_terminal_bar_fields = live_bar_fields
-                else:
-                    last_bar_epoch = None
-                    last_terminal_bar_fields = None
-                loading_progress_signature = (
-                    "loading_bar_plus_semaphores",
-                    *live_bar_fields,
-                    *handoff_progress_fields,
-                )
-            elif (
-                last_bar_epoch == current_epoch and last_terminal_bar_fields is not None
-            ):
-                loading_active = True
-                loading_progress_signature = (
-                    "loading_bar_terminal_plus_semaphores",
-                    *last_terminal_bar_fields,
-                    *handoff_progress_fields,
-                )
-            else:
-                loading_active = bool(fake_cover or s.get("oracle_now_loading")) and (
-                    as_int(activate, 0) > 0
-                    or as_int(deser, 0) >= 1
-                    or request_code >= 0
-                    or mms_state >= 0
-                )
-                loading_progress_signature = (
-                    "native_load_fallback",
-                    as_int(deser, 0),
-                    as_int(activate, 0),
-                    as_int(nav_stage, 0),
-                    request_code,
-                    mms_state,
-                    as_int(s.get("oracle_stepfinish_finalize_substate_12a")),
-                    as_int(s.get("oracle_now_loading")),
-                    int(fake_cover),
-                    as_int(s.get("oracle_fake_loading_field_c")),
-                    as_int(s.get("oracle_fake_loading_field_10")),
-                )
-            loading_progress_source = str(loading_progress_signature[0])
-            if loading_active:
-                if loading_progress_signature != last_loading_progress_signature:
-                    last_loading_progress_signature = loading_progress_signature
-                    last_loading_progress_at = now
-                elif last_loading_progress_at is not None:
-                    loading_stall_seconds = now - last_loading_progress_at
-                    if loading_stall_seconds > LOADING_PROGRESS_STALL_SECONDS:
-                        loading_stall_signature = loading_progress_signature
-                        loading_stall_source = loading_progress_source
-                        result = f"LOADING_PROGRESS_STALLED_{int(LOADING_PROGRESS_STALL_SECONDS)}S"
-                        break
-            else:
-                last_loading_progress_signature = None
-                last_loading_progress_at = None
-                loading_stall_seconds = 0.0
-
+            bar_frame = as_int(s.get("oracle_loading_bar_current_frame"), -1)
+            step_key = bar_frame if (bar_enabled and bar_frame >= 0) else None
+            if step_key is not None:
+                if _dep == 0:
+                    # load1 baseline: track the MAX dwell observed at each loading-bar step.
+                    if step_key != l1_step_key:
+                        l1_step_key = step_key
+                        l1_step_entered_at = now
+                    elif l1_step_entered_at is not None:
+                        load1_step_dwell[step_key] = max(
+                            load1_step_dwell.get(step_key, 0.0), now - l1_step_entered_at
+                        )
+                elif _dep >= 1:
+                    # reload: tear down if it dwells at a step load1 also hit, far beyond load1's dwell.
+                    if step_key != reload_step_key:
+                        reload_step_key = step_key
+                        reload_step_entered_at = now
+                    elif reload_step_entered_at is not None:
+                        dwell = now - reload_step_entered_at
+                        base = load1_step_dwell.get(step_key)
+                        if base is not None:
+                            budget = base * STEP_DWELL_FACTOR + STEP_DWELL_SLACK_S
+                            if dwell > budget:
+                                step_divergence_detail = (
+                                    f"load{_dep + 1} dwelt {dwell:.0f}s at loading-bar step "
+                                    f"{step_key} (load1 dwelt {base:.0f}s there; budget {budget:.0f}s)"
+                                )
+                                result = f"STEP_DIVERGENCE_LOAD{_dep + 1}_barstep{step_key}"
+                                break
             ep = epochs.setdefault(
                 int(deser),
                 {
@@ -996,15 +891,19 @@ def main() -> int:
             # Success = a load proves movement (can_move latched: >=60 consecutive frames of injected
             # motion). For the full sequence (--require-reload-move) it must be a RELOAD (deser>=1) --
             # the user's "third time they can move" -- so load1 moving does NOT end the run; the driver
-            # keeps going through the reloads. Stricter --require-reload-settled also requires the native
-            # MoveMap handoff to finish (requestCode==2 and no live MoveMapStep), because load2 can now
-            # prove movement while the loading/render handoff is still stuck at requestCode=1/mms18.
+            # keeps going through the reloads. Stricter --require-reload-settled also requires the load to
+            # have genuinely COMPLETED, judged by GAME-GLOBAL signals that ACTUALLY fire: now_loading
+            # cleared + render_group(1c4) + world clock live. NOT oracle_player_render_ready (write_oracle
+            # requires chr_draw_group_enabled, which never sets even in vanilla -> always false) and NOT
+            # req_code==2/mms==-1 (title-owner-derived, never settle on the reload path). Verified 2026-07-21:
+            # render_group(1c4) + enable_render(1c5) DO fire on both loads; draw_group never does.
             reload_epoch = as_int(deser) >= 1
             reload_move = can_move and reload_epoch
             reload_settled = (
                 reload_move
-                and as_int(s.get("oracle_stepfinish_request_code")) == 2
-                and as_int(s.get("oracle_stepfinish_mms_state")) == -1
+                and as_int(s.get("oracle_now_loading"), 1) == 0
+                and bool(s.get("oracle_chr_render_group_enabled"))
+                and bool(s.get("oracle_play_time_live"))
             )
             if args.require_reload_settled:
                 if reload_settled:
@@ -1017,6 +916,17 @@ def main() -> int:
             # player within the boot budget, do NOT idle to the cap -- fail fast and tear down.
             if first_present_at is None and elapsed >= BOOT_TIMEOUT_SECONDS:
                 result = "BOOT_TIMEOUT_NO_INWORLD"
+                break
+            # Defensive backstop for the no-bar edge case (see RELOAD_STALL_BACKSTOP_SECONDS): a reload that
+            # reached an in-world player but never became render-ready within the budget tears down instead
+            # of riding to the cap. The per-step dwell divergence above is the primary, faster signal.
+            if (
+                reload_epoch
+                and present
+                and not render_ready
+                and (elapsed - ep["first_seen"]) > RELOAD_STALL_BACKSTOP_SECONDS
+            ):
+                result = f"RELOAD_STALL_BACKSTOP_epoch{deser}_no_render_ready"
                 break
 
             if elapsed - last_log >= LOG_THROTTLE_SECONDS:
@@ -1066,13 +976,11 @@ def main() -> int:
         f"portrait_captured: {portrait_captured}",
         "",
     ]
-    if loading_stall_signature is not None:
+    if step_divergence_detail is not None:
         lines.extend(
             [
-                "## Loading progress stall guard",
-                f"- source: {loading_stall_source}",
-                f"- stalled_for_seconds: {loading_stall_seconds:.1f}",
-                f"- stale_progress_signature: {loading_stall_signature}",
+                "## Per-step divergence (reload vs load1 baseline)",
+                f"- {step_divergence_detail}",
                 "",
             ]
         )
