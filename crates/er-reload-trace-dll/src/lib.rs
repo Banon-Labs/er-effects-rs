@@ -169,11 +169,10 @@ struct HookSpec {
     original: &'static AtomicUsize,
 }
 
-unsafe extern "system" {
-    fn MH_Initialize() -> i32;
-    fn MH_CreateHook(target: *mut c_void, detour: *mut c_void, original: *mut *mut c_void) -> i32;
-    fn MH_EnableHook(target: *mut c_void) -> i32;
-}
+// Raw MinHook FFI comes from the shared `er-hook` crate (single cc-compile). Its externs return the
+// `MH_STATUS` enum; this crate historically compared/logged the status as `i32`, so each call site
+// casts `as i32` -- MH_STATUS is `#[repr(C)]` with the same values, so the integers are unchanged.
+use er_hook::{MH_CreateHook, MH_EnableHook, MH_Initialize};
 
 #[link(name = "kernel32")]
 unsafe extern "system" {
@@ -948,7 +947,7 @@ fn install_hooks() {
     log_line(format_args!(
         "cross-dll union: product DLL export not present (standalone trace run) -> own MinHook instance"
     ));
-    let init_status = unsafe { MH_Initialize() };
+    let init_status = unsafe { MH_Initialize() } as i32;
     if init_status != MH_OK && init_status != MH_ERROR_ALREADY_INITIALIZED {
         log_line(format_args!(
             "MinHook initialize failed status={init_status}"
@@ -997,7 +996,7 @@ fn install_one(base: usize, spec: &HookSpec) {
             spec.detour as *mut c_void,
             &mut trampoline,
         )
-    };
+    } as i32;
     if create_status != MH_OK {
         log_line(format_args!(
             "hook {} rva=0x{:x} target=0x{target:x} create failed status={create_status}",
@@ -1006,7 +1005,7 @@ fn install_one(base: usize, spec: &HookSpec) {
         return;
     }
     spec.original.store(trampoline as usize, Ordering::SeqCst);
-    let enable_status = unsafe { MH_EnableHook(target as *mut c_void) };
+    let enable_status = unsafe { MH_EnableHook(target as *mut c_void) } as i32;
     if enable_status != MH_OK && enable_status != MH_ERROR_ENABLED {
         log_line(format_args!(
             "hook {} rva=0x{:x} target=0x{target:x} enable failed status={enable_status}",

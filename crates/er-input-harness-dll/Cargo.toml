@@ -8,5 +8,7 @@ publish = false
 name = "er_input_harness_dll"
 crate-type = ["cdylib"]
 
-[build-dependencies]
-cc = "1.0"
+# Shared MinHook FFI (compiles the vendored MinHook C once). This crate owns a PRIVATE MinHook
+# instance for its standalone-fallback drive hook; it uses only the raw MH_* externs from er-hook.
+[dependencies]
+er-hook = { path = "../er-hook" }

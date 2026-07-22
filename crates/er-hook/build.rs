@@ -1,5 +1,9 @@
 use std::{env, path::Path};
 
+// Single cc-compile of the vendored MinHook C source, replacing the three near-identical build
+// scripts that previously lived in each game cdylib (er-effects-rs, er-reload-trace-dll,
+// er-input-harness-dll). Windows-target gated -- the C uses Win32 APIs, so a host `cargo check`
+// (which still runs build scripts) must not try to compile it.
 fn main() {
     let root_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let target = env::var("TARGET").unwrap();

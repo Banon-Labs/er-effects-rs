@@ -3,7 +3,9 @@ fn write_game_module_oracles(body: &mut String) {
     // per-epoch WORST-frame fps (min), written each game-task frame by lifecycle from delta_time.
     {
         use std::sync::atomic::Ordering;
-        let ema_us = crate::constants::FRAME_TIME_EMA_US.load(Ordering::Relaxed).max(1);
+        let ema_us = crate::constants::FRAME_TIME_EMA_US
+            .load(Ordering::Relaxed)
+            .max(1);
         let worst_us = crate::constants::FRAME_TIME_WORST_US.load(Ordering::Relaxed);
         let fps = 1_000_000.0f32 / ema_us as f32;
         let min_fps = if worst_us > 0 {
@@ -76,12 +78,13 @@ fn write_game_module_oracles(body: &mut String) {
                 "WaitFile",
                 "Finish",
             ];
-            let state = unsafe { crate::experiments::safe_read_usize(base + CS_SYSTEM_STEP_GLOBAL_RVA) }
-                .filter(|p| *p >= 0x10000)
-                .and_then(|p| unsafe {
-                    crate::experiments::safe_read_usize(p + CS_SYSTEM_STEP_CURRENT_STATE_OFFSET)
-                })
-                .map(|v| v as u32 as i32);
+            let state =
+                unsafe { crate::experiments::safe_read_usize(base + CS_SYSTEM_STEP_GLOBAL_RVA) }
+                    .filter(|p| *p >= 0x10000)
+                    .and_then(|p| unsafe {
+                        crate::experiments::safe_read_usize(p + CS_SYSTEM_STEP_CURRENT_STATE_OFFSET)
+                    })
+                    .map(|v| v as u32 as i32);
             let (sv, sl) = match state {
                 Some(v) if (0..=20).contains(&v) => (v, SYSTEM_STEP_LABELS[v as usize]),
                 Some(v) => (v, "?"),
@@ -141,7 +144,9 @@ fn write_game_module_oracles(body: &mut String) {
         if PT_ORACLE_EPOCH.swap(pt_epoch, std::sync::atomic::Ordering::Relaxed) != pt_epoch {
             // New load epoch -> reset the baseline to this load's first-seen play_time.
             PT_ORACLE_FIRST.store(play_time_ms, std::sync::atomic::Ordering::Relaxed);
-        } else if PT_ORACLE_FIRST.load(std::sync::atomic::Ordering::Relaxed) < 0 && play_time_ms >= 0 {
+        } else if PT_ORACLE_FIRST.load(std::sync::atomic::Ordering::Relaxed) < 0
+            && play_time_ms >= 0
+        {
             PT_ORACLE_FIRST.store(play_time_ms, std::sync::atomic::Ordering::Relaxed);
         }
         let pt_first = PT_ORACLE_FIRST.load(std::sync::atomic::Ordering::Relaxed);

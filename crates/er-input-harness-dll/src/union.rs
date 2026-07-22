@@ -40,11 +40,10 @@ pub const DRIVE_ANCHOR_RVA: usize = 0x826d50;
 /// Trampoline (or next chained handler) for the anchor. Read by the detour to call the original.
 pub static ANCHOR_ORIG: AtomicUsize = AtomicUsize::new(0);
 
-unsafe extern "system" {
-    fn MH_Initialize() -> i32;
-    fn MH_CreateHook(target: *mut c_void, detour: *mut c_void, original: *mut *mut c_void) -> i32;
-    fn MH_EnableHook(target: *mut c_void) -> i32;
-}
+// Raw MinHook FFI comes from the shared `er-hook` crate (single cc-compile). Its externs return the
+// `MH_STATUS` enum; this crate historically compared/logged the status as `i32`, so each call site
+// casts `as i32` -- MH_STATUS is `#[repr(C)]` with the same values, so the integers are unchanged.
+use er_hook::{MH_CreateHook, MH_EnableHook, MH_Initialize};
 
 /// Call the anchor's original (trampoline or next chained union handler).
 pub unsafe fn call_anchor_original(a: usize, b: usize, c: usize, d: usize) -> usize {
@@ -90,7 +89,7 @@ pub fn install_drive_hook(base: usize, detour: HookFn) {
     harness_log!(
         "union: product export absent (standalone) -> own MinHook instance for the drive hook"
     );
-    if unsafe { MH_Initialize() } != MH_OK {
+    if unsafe { MH_Initialize() } as i32 != MH_OK {
         // ALREADY_INITIALIZED is also fine; any other error is logged and we bail.
     }
     let mut trampoline: *mut c_void = null_mut();
@@ -100,13 +99,13 @@ pub fn install_drive_hook(base: usize, detour: HookFn) {
             detour as *mut c_void,
             &mut trampoline,
         )
-    };
+    } as i32;
     if rc != MH_OK {
         harness_log!("union: standalone MH_CreateHook target=0x{target:x} failed status={rc}");
         return;
     }
     ANCHOR_ORIG.store(trampoline as usize, Ordering::SeqCst);
-    let en = unsafe { MH_EnableHook(target as *mut c_void) };
+    let en = unsafe { MH_EnableHook(target as *mut c_void) } as i32;
     harness_log!(
         "union: standalone drive hook target=0x{target:x} enable status={en} trampoline=0x{:x}",
         trampoline as usize

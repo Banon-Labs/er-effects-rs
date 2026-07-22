@@ -9,6 +9,9 @@ crate-type = ["cdylib"]
 
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+# Shared MinHook FFI + hook union (compiles the vendored MinHook C once; this crate defines the
+# `er_effects_union_register` export over `er_hook::register_union_hook`).
+er-hook = { path = "../er-hook" }
 # Shared low-level foundation (fault-safe RAM readers, game base/rva, stable
 # singleton RVA table, logger core). Source of truth for primitives previously
 # defined in experiments/mem.rs. game-types re-exports the typed game bindings.
@@ -78,6 +81,3 @@ windows = { version = "0.62", features = [
   "Win32_Graphics_Dxgi_Common",
   "Win32_Graphics_Direct3D",
 ] }
-
-[build-dependencies]
-cc = "1.0"

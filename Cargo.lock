@@ -2737,11 +2737,11 @@ name = "er-effects-rs"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.13.0",
- "cc",
  "eldenring",
  "er-effects-data",
  "er-game-base",
  "er-gfx",
+ "er-hook",
  "er-save-loader",
  "er-telemetry",
  "er-tpf",
@@ -2777,10 +2777,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "er-input-harness-dll"
+name = "er-hook"
 version = "0.1.0"
 dependencies = [
  "cc",
+]
+
+[[package]]
+name = "er-input-harness-dll"
+version = "0.1.0"
+dependencies = [
+ "er-hook",
 ]
 
 [[package]]
@@ -2811,7 +2818,7 @@ dependencies = [
 name = "er-reload-trace-dll"
 version = "0.1.0"
 dependencies = [
- "cc",
+ "er-hook",
 ]
 
 [[package]]

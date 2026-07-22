@@ -185,6 +185,10 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     if reason != DLL_PROCESS_ATTACH {
         return DLL_MAIN_SUCCESS;
     }
+    // Route the shared er-hook union/registry-collision logging to this DLL's autoload debug log --
+    // the exact sink the union used before it moved into the er-hook crate. Installed here, before any
+    // hook is registered, so no union-chain or collision line is ever missed.
+    er_hook::set_hook_logger(crate::telemetry::append_autoload_debug);
     write_bootstrap_event(BOOTSTRAP_EVENT_DLL_MAIN_ATTACH, BOOTSTRAP_DETAIL_START);
     init_runtime_config(hmodule);
 
