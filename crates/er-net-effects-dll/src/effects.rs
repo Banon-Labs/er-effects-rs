@@ -33,6 +33,7 @@ const VK_UP: u32 = 0x26;
 const VK_RIGHT: u32 = 0x27;
 const VK_DOWN: u32 = 0x28;
 const VK_INSERT: u32 = 0x2d;
+const VK_0: u32 = 0x30;
 const VK_NUMPAD0: u32 = 0x60;
 const VK_NUMPAD9: u32 = 0x69;
 const VK_MULTIPLY: u32 = 0x6a;
@@ -246,7 +247,7 @@ impl NetEffectsState {
             effect_catalogs_signature,
             effect_catalog_live_updates: 0,
             effect_hotkeys_effects_on,
-            effect_selector_visible: false,
+            effect_selector_visible: runtime_config().overlay_visible_on_start,
             effect_trigger_hotkeys,
             effect_trigger_hotkeys_modified: current_effect_trigger_hotkeys_modified(),
             effect_trigger_hotkeys_load_error,
@@ -615,7 +616,7 @@ fn effect_hotkey_action_for_key(vk: u32, alt_down: bool) -> usize {
         VK_RIGHT => EFFECT_HOTKEY_RIGHT,
         VK_DOWN => EFFECT_HOTKEY_DOWN,
         VK_OEM_7 if alt_down => EFFECT_HOTKEY_TOGGLE,
-        VK_NUMPAD0 | VK_INSERT if alt_down => EFFECT_HOTKEY_SELECTOR_TOGGLE,
+        VK_0 | VK_NUMPAD0 | VK_INSERT if alt_down => EFFECT_HOTKEY_SELECTOR_TOGGLE,
         _ => 0,
     }
 }

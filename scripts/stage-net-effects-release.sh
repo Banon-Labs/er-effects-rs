@@ -79,6 +79,9 @@ cat >"$tmp_dir/er-net-effects.toml.example" <<'EOF'
 # This file belongs to er_net_effects_dll.dll and is intentionally separate from
 # er-effects-rs product/autoload configuration.
 network_sync = true
+# Start with the visible selector overlay shown. Press Alt+Numpad0,
+# Alt+0, or Alt+Insert to hide/show it while in-game.
+overlay_visible_on_start = true
 hotkeys_file = ".er-net-effects-hotkeys.json"
 selected_effect_file = ".er-net-effects-setting.txt"
 selected_catalog_file = ".er-net-effects-catalog-setting.txt"

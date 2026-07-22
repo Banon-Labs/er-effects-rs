@@ -7,6 +7,9 @@ const DEFAULT_CONFIG_TOML: &str = r#"# er-net-effects standalone DLL configurati
 # The DLL is optional; include er_net_effects_dll.dll as its own ME3 native when
 # you want keyboard-controlled network-synced SpEffect application.
 network_sync = true
+# Start with the visible selector overlay shown. Press Alt+Numpad0,
+# Alt+0, or Alt+Insert to hide/show it while in-game.
+overlay_visible_on_start = true
 hotkeys_file = ".er-net-effects-hotkeys.json"
 selected_effect_file = ".er-net-effects-setting.txt"
 selected_catalog_file = ".er-net-effects-catalog-setting.txt"
@@ -21,6 +24,7 @@ master_catalog_file = "er-net-effect-master-catalog.json"
 pub(crate) struct RuntimeConfig {
     pub(crate) config_path: PathBuf,
     pub(crate) network_sync: bool,
+    pub(crate) overlay_visible_on_start: bool,
     pub(crate) hotkeys_file: PathBuf,
     pub(crate) selected_effect_file: PathBuf,
     pub(crate) selected_catalog_file: PathBuf,
@@ -39,6 +43,9 @@ impl Default for RuntimeConfig {
             // This standalone DLL is intentionally the network-effects package;
             // users can set `network_sync = false` to preserve local-only behavior.
             network_sync: true,
+            // Default visible because the DLL is optional and the selector UI is the primary
+            // confirmation that it loaded and is listening for keyboard control.
+            overlay_visible_on_start: true,
             hotkeys_file: PathBuf::from(".er-net-effects-hotkeys.json"),
             selected_effect_file: PathBuf::from(".er-net-effects-setting.txt"),
             selected_catalog_file: PathBuf::from(".er-net-effects-catalog-setting.txt"),
@@ -61,9 +68,10 @@ pub(crate) fn init_runtime_config() {
         net_effects_log(format_args!("runtime-config: {error}"));
     } else {
         net_effects_log(format_args!(
-            "runtime-config: loaded {} network_sync={} hotkeys={} catalogs={}",
+            "runtime-config: loaded {} network_sync={} overlay_visible_on_start={} hotkeys={} catalogs={}",
             config.config_path.display(),
             config.network_sync,
+            config.overlay_visible_on_start,
             config.hotkeys_file.display(),
             config.catalog_dir.display()
         ));
@@ -116,6 +124,12 @@ fn load_runtime_config() -> RuntimeConfig {
             "network_sync" => match parse_bool(value) {
                 Some(value) => config.network_sync = value,
                 None => errors.push(format!("line {line_number}: invalid bool for network_sync")),
+            },
+            "overlay_visible_on_start" => match parse_bool(value) {
+                Some(value) => config.overlay_visible_on_start = value,
+                None => errors.push(format!(
+                    "line {line_number}: invalid bool for overlay_visible_on_start"
+                )),
             },
             "hotkeys_file" => config.hotkeys_file = parse_path(value),
             "selected_effect_file" => config.selected_effect_file = parse_path(value),
