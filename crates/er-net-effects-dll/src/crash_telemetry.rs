@@ -47,9 +47,42 @@ pub(crate) enum Phase {
     DrawExecuteWait = 26,
     DrawEndOk = 27,
     DrawEndFail = 28,
-    OriginalPresent = 29,
-    PresentExit = 30,
+    DrawFailureRecorded = 29,
+    PresentFailureRecorded = 30,
+    OriginalPresent = 31,
+    PresentExit = 32,
     ExceptionObserved = 90,
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy)]
+pub(crate) enum DrawFailureStage {
+    None = 0,
+    SwapchainBorrow = 1,
+    GetBuffer = 2,
+    InitGetDevice = 3,
+    InitCreateAllocator = 4,
+    InitCreateList = 5,
+    InitCloseList = 6,
+    InitCreateFence = 7,
+    InitCreateQueue = 8,
+    InvalidBackbufferDimensions = 9,
+    UnsupportedBackbufferFormat = 10,
+    InvalidOverlayRegion = 11,
+    GetDevice = 12,
+    InvalidFootprint = 13,
+    CreateUpload = 14,
+    UploadBorrow = 15,
+    UploadMap = 16,
+    CommandBorrow = 17,
+    CommandReset = 18,
+    CommandClose = 19,
+    CommandListCast = 20,
+    QueueSignal = 21,
+    CreateFenceEvent = 22,
+    SetFenceEvent = 23,
+    FenceWaitTimeout = 24,
+    Panic = 25,
 }
 
 static MODULE_BASE: AtomicUsize = AtomicUsize::new(0);
@@ -62,12 +95,20 @@ static PRESENT_THREAD_ID: AtomicUsize = AtomicUsize::new(0);
 static PRESENT_DEPTH: AtomicUsize = AtomicUsize::new(0);
 static PRESENT_SWAPCHAIN: AtomicUsize = AtomicUsize::new(0);
 static PRESENT_RESULT: AtomicUsize = AtomicUsize::new(0);
+static PRESENT_DEVICE_REMOVED_REASON: AtomicUsize = AtomicUsize::new(0);
+static PRESENT_FAILURE_COUNT: AtomicUsize = AtomicUsize::new(0);
+static LAST_PRESENT_FAILURE_MS: AtomicU64 = AtomicU64::new(0);
 static DRAW_THREAD_ID: AtomicUsize = AtomicUsize::new(0);
 static DRAW_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static LAST_DRAW_BEGIN_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_DRAW_END_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_DRAW_OK: AtomicUsize = AtomicUsize::new(0);
+static LAST_DRAW_FAIL_STAGE: AtomicUsize = AtomicUsize::new(0);
+static LAST_DRAW_FAIL_HRESULT: AtomicUsize = AtomicUsize::new(0);
+static LAST_DRAW_FAIL_DEVICE_REMOVED_REASON: AtomicUsize = AtomicUsize::new(0);
+static LAST_DRAW_FAILURE_MS: AtomicU64 = AtomicU64::new(0);
 static DRAW_SWAPCHAIN: AtomicUsize = AtomicUsize::new(0);
+static DRAW_DEVICE: AtomicUsize = AtomicUsize::new(0);
 static DRAW_BACKBUFFER: AtomicUsize = AtomicUsize::new(0);
 static DRAW_BACKBUFFER_INDEX: AtomicUsize = AtomicUsize::new(0);
 static DRAW_WIDTH: AtomicUsize = AtomicUsize::new(0);
@@ -131,8 +172,19 @@ pub(crate) fn present_call_original() {
     write_snapshot("original-present", false);
 }
 
-pub(crate) fn present_exit(result: i32) {
+pub(crate) fn present_exit(result: i32, device_removed_reason: i32) {
     PRESENT_RESULT.store(result as u32 as usize, Ordering::SeqCst);
+    if result < 0 {
+        store_i32(&PRESENT_DEVICE_REMOVED_REASON, device_removed_reason);
+        PRESENT_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+        LAST_PRESENT_FAILURE_MS.store(now_ms(), Ordering::SeqCst);
+        mark_phase(Phase::PresentFailureRecorded);
+        write_snapshot("present-failed", true);
+        net_effects_log(format_args!(
+            "crash-telemetry: original Present failed result=0x{:08x} device_removed_reason=0x{:08x}",
+            result as u32, device_removed_reason as u32
+        ));
+    }
     mark_phase(Phase::PresentExit);
     let depth = PRESENT_DEPTH.load(Ordering::SeqCst);
     if depth <= 1 {
@@ -151,6 +203,13 @@ pub(crate) fn draw_begin(swapchain: usize) {
     LAST_DRAW_OK.store(0, Ordering::SeqCst);
     mark_phase(Phase::DrawBegin);
     write_snapshot("draw-begin", false);
+}
+
+pub(crate) fn draw_device(device: usize, device_removed_reason: i32) {
+    DRAW_DEVICE.store(device, Ordering::SeqCst);
+    if device_removed_reason != 0 {
+        store_i32(&LAST_DRAW_FAIL_DEVICE_REMOVED_REASON, device_removed_reason);
+    }
 }
 
 pub(crate) fn draw_target(
@@ -172,6 +231,15 @@ pub(crate) fn draw_phase(phase: Phase) {
     mark_phase(phase);
 }
 
+pub(crate) fn draw_failure(stage: DrawFailureStage, hresult: i32, device_removed_reason: i32) {
+    LAST_DRAW_FAIL_STAGE.store(stage as usize, Ordering::SeqCst);
+    store_i32(&LAST_DRAW_FAIL_HRESULT, hresult);
+    store_i32(&LAST_DRAW_FAIL_DEVICE_REMOVED_REASON, device_removed_reason);
+    LAST_DRAW_FAILURE_MS.store(now_ms(), Ordering::SeqCst);
+    mark_phase(Phase::DrawFailureRecorded);
+    write_snapshot("draw-failure", true);
+}
+
 pub(crate) fn draw_end(ok: bool) {
     LAST_DRAW_END_MS.store(now_ms(), Ordering::SeqCst);
     LAST_DRAW_OK.store(usize::from(ok), Ordering::SeqCst);
@@ -187,18 +255,28 @@ pub(crate) fn draw_end(ok: bool) {
 pub(crate) fn telemetry_json_fields() -> String {
     let now = now_ms();
     format!(
-        "  \"crash_telemetry_phase\": \"{}\",\n  \"crash_telemetry_phase_id\": {},\n  \"crash_telemetry_ms_since_phase\": {},\n  \"crash_telemetry_present_depth\": {},\n  \"crash_telemetry_present_thread_id\": {},\n  \"crash_telemetry_draw_thread_id\": {},\n  \"crash_telemetry_draw_sequence\": {},\n  \"crash_telemetry_ms_since_draw_begin\": {},\n  \"crash_telemetry_ms_since_draw_end\": {},\n  \"crash_telemetry_last_draw_ok\": {},\n  \"crash_telemetry_draw_swapchain\": \"0x{:x}\",\n  \"crash_telemetry_draw_backbuffer\": \"0x{:x}\",\n  \"crash_telemetry_draw_backbuffer_index\": {},\n  \"crash_telemetry_draw_width\": {},\n  \"crash_telemetry_draw_height\": {},\n  \"crash_telemetry_draw_format\": {},\n  \"crash_telemetry_last_exception_code\": \"0x{:08x}\",\n  \"crash_telemetry_last_exception_address\": \"0x{:x}\",\n",
+        "  \"crash_telemetry_phase\": \"{}\",\n  \"crash_telemetry_phase_id\": {},\n  \"crash_telemetry_ms_since_phase\": {},\n  \"crash_telemetry_present_depth\": {},\n  \"crash_telemetry_present_thread_id\": {},\n  \"crash_telemetry_present_result\": \"0x{:08x}\",\n  \"crash_telemetry_present_device_removed_reason\": \"0x{:08x}\",\n  \"crash_telemetry_present_failure_count\": {},\n  \"crash_telemetry_ms_since_present_failure\": {},\n  \"crash_telemetry_draw_thread_id\": {},\n  \"crash_telemetry_draw_sequence\": {},\n  \"crash_telemetry_ms_since_draw_begin\": {},\n  \"crash_telemetry_ms_since_draw_end\": {},\n  \"crash_telemetry_last_draw_ok\": {},\n  \"crash_telemetry_last_draw_fail_stage\": \"{}\",\n  \"crash_telemetry_last_draw_fail_stage_id\": {},\n  \"crash_telemetry_last_draw_fail_hresult\": \"0x{:08x}\",\n  \"crash_telemetry_last_draw_fail_device_removed_reason\": \"0x{:08x}\",\n  \"crash_telemetry_ms_since_draw_failure\": {},\n  \"crash_telemetry_draw_swapchain\": \"0x{:x}\",\n  \"crash_telemetry_draw_device\": \"0x{:x}\",\n  \"crash_telemetry_draw_backbuffer\": \"0x{:x}\",\n  \"crash_telemetry_draw_backbuffer_index\": {},\n  \"crash_telemetry_draw_width\": {},\n  \"crash_telemetry_draw_height\": {},\n  \"crash_telemetry_draw_format\": {},\n  \"crash_telemetry_last_exception_code\": \"0x{:08x}\",\n  \"crash_telemetry_last_exception_address\": \"0x{:x}\",\n",
         phase_label(PHASE.load(Ordering::SeqCst)),
         PHASE.load(Ordering::SeqCst),
         age_ms(now, LAST_PHASE_MS.load(Ordering::SeqCst)),
         PRESENT_DEPTH.load(Ordering::SeqCst),
         PRESENT_THREAD_ID.load(Ordering::SeqCst),
+        PRESENT_RESULT.load(Ordering::SeqCst) as u32,
+        load_i32(&PRESENT_DEVICE_REMOVED_REASON) as u32,
+        PRESENT_FAILURE_COUNT.load(Ordering::SeqCst),
+        age_ms(now, LAST_PRESENT_FAILURE_MS.load(Ordering::SeqCst)),
         DRAW_THREAD_ID.load(Ordering::SeqCst),
         DRAW_SEQUENCE.load(Ordering::SeqCst),
         age_ms(now, LAST_DRAW_BEGIN_MS.load(Ordering::SeqCst)),
         age_ms(now, LAST_DRAW_END_MS.load(Ordering::SeqCst)),
         LAST_DRAW_OK.load(Ordering::SeqCst) != 0,
+        draw_failure_stage_label(LAST_DRAW_FAIL_STAGE.load(Ordering::SeqCst)),
+        LAST_DRAW_FAIL_STAGE.load(Ordering::SeqCst),
+        load_i32(&LAST_DRAW_FAIL_HRESULT) as u32,
+        load_i32(&LAST_DRAW_FAIL_DEVICE_REMOVED_REASON) as u32,
+        age_ms(now, LAST_DRAW_FAILURE_MS.load(Ordering::SeqCst)),
         DRAW_SWAPCHAIN.load(Ordering::SeqCst),
+        DRAW_DEVICE.load(Ordering::SeqCst),
         DRAW_BACKBUFFER.load(Ordering::SeqCst),
         DRAW_BACKBUFFER_INDEX.load(Ordering::SeqCst),
         DRAW_WIDTH.load(Ordering::SeqCst),
@@ -320,6 +398,26 @@ fn exception_report(
     let _ = writeln!(out, "present_depth={present_depth}");
     let _ = writeln!(out, "present_thread_id={present_thread}");
     let _ = writeln!(out, "exception_on_present_thread={in_present_thread}");
+    let _ = writeln!(
+        out,
+        "present_result=0x{:08x}",
+        PRESENT_RESULT.load(Ordering::SeqCst) as u32
+    );
+    let _ = writeln!(
+        out,
+        "present_device_removed_reason=0x{:08x}",
+        load_i32(&PRESENT_DEVICE_REMOVED_REASON) as u32
+    );
+    let _ = writeln!(
+        out,
+        "present_failure_count={}",
+        PRESENT_FAILURE_COUNT.load(Ordering::SeqCst)
+    );
+    let _ = writeln!(
+        out,
+        "ms_since_present_failure={}",
+        age_ms(now, LAST_PRESENT_FAILURE_MS.load(Ordering::SeqCst))
+    );
     let _ = writeln!(out, "draw_thread_id={draw_thread}");
     let _ = writeln!(out, "exception_on_draw_thread={in_draw_thread}");
     let _ = writeln!(
@@ -344,18 +442,43 @@ fn exception_report(
     );
     let _ = writeln!(
         out,
+        "last_draw_fail_stage={}",
+        draw_failure_stage_label(LAST_DRAW_FAIL_STAGE.load(Ordering::SeqCst))
+    );
+    let _ = writeln!(
+        out,
+        "last_draw_fail_stage_id={}",
+        LAST_DRAW_FAIL_STAGE.load(Ordering::SeqCst)
+    );
+    let _ = writeln!(
+        out,
+        "last_draw_fail_hresult=0x{:08x}",
+        load_i32(&LAST_DRAW_FAIL_HRESULT) as u32
+    );
+    let _ = writeln!(
+        out,
+        "last_draw_fail_device_removed_reason=0x{:08x}",
+        load_i32(&LAST_DRAW_FAIL_DEVICE_REMOVED_REASON) as u32
+    );
+    let _ = writeln!(
+        out,
+        "ms_since_draw_failure={}",
+        age_ms(now, LAST_DRAW_FAILURE_MS.load(Ordering::SeqCst))
+    );
+    let _ = writeln!(
+        out,
         "present_swapchain=0x{:x}",
         PRESENT_SWAPCHAIN.load(Ordering::SeqCst)
     );
     let _ = writeln!(
         out,
-        "present_result=0x{:08x}",
-        PRESENT_RESULT.load(Ordering::SeqCst) as u32
+        "draw_swapchain=0x{:x}",
+        DRAW_SWAPCHAIN.load(Ordering::SeqCst)
     );
     let _ = writeln!(
         out,
-        "draw_swapchain=0x{:x}",
-        DRAW_SWAPCHAIN.load(Ordering::SeqCst)
+        "draw_device=0x{:x}",
+        DRAW_DEVICE.load(Ordering::SeqCst)
     );
     let _ = writeln!(
         out,
@@ -405,6 +528,21 @@ fn write_snapshot(reason: &str, force: bool) {
     );
     let _ = writeln!(
         out,
+        "present_result=0x{:08x}",
+        PRESENT_RESULT.load(Ordering::SeqCst) as u32
+    );
+    let _ = writeln!(
+        out,
+        "present_device_removed_reason=0x{:08x}",
+        load_i32(&PRESENT_DEVICE_REMOVED_REASON) as u32
+    );
+    let _ = writeln!(
+        out,
+        "present_failure_count={}",
+        PRESENT_FAILURE_COUNT.load(Ordering::SeqCst)
+    );
+    let _ = writeln!(
+        out,
         "draw_thread_id={}",
         DRAW_THREAD_ID.load(Ordering::SeqCst)
     );
@@ -420,6 +558,26 @@ fn write_snapshot(reason: &str, force: bool) {
     );
     let _ = writeln!(
         out,
+        "last_draw_fail_stage={}",
+        draw_failure_stage_label(LAST_DRAW_FAIL_STAGE.load(Ordering::SeqCst))
+    );
+    let _ = writeln!(
+        out,
+        "last_draw_fail_hresult=0x{:08x}",
+        load_i32(&LAST_DRAW_FAIL_HRESULT) as u32
+    );
+    let _ = writeln!(
+        out,
+        "last_draw_fail_device_removed_reason=0x{:08x}",
+        load_i32(&LAST_DRAW_FAIL_DEVICE_REMOVED_REASON) as u32
+    );
+    let _ = writeln!(
+        out,
+        "ms_since_draw_failure={}",
+        age_ms(now, LAST_DRAW_FAILURE_MS.load(Ordering::SeqCst))
+    );
+    let _ = writeln!(
+        out,
         "ms_since_draw_begin={}",
         age_ms(now, LAST_DRAW_BEGIN_MS.load(Ordering::SeqCst))
     );
@@ -432,6 +590,11 @@ fn write_snapshot(reason: &str, force: bool) {
         out,
         "draw_swapchain=0x{:x}",
         DRAW_SWAPCHAIN.load(Ordering::SeqCst)
+    );
+    let _ = writeln!(
+        out,
+        "draw_device=0x{:x}",
+        DRAW_DEVICE.load(Ordering::SeqCst)
     );
     let _ = writeln!(
         out,
@@ -480,10 +643,44 @@ fn phase_label(phase: usize) -> &'static str {
         26 => "draw-execute-wait",
         27 => "draw-end-ok",
         28 => "draw-end-fail",
-        29 => "original-present",
-        30 => "present-exit",
+        29 => "draw-failure-recorded",
+        30 => "present-failure-recorded",
+        31 => "original-present",
+        32 => "present-exit",
         90 => "exception-observed",
         _ => "uninitialized",
+    }
+}
+
+fn draw_failure_stage_label(stage: usize) -> &'static str {
+    match stage {
+        0 => "none",
+        1 => "swapchain-borrow",
+        2 => "get-buffer",
+        3 => "init-get-device",
+        4 => "init-create-allocator",
+        5 => "init-create-list",
+        6 => "init-close-list",
+        7 => "init-create-fence",
+        8 => "init-create-queue",
+        9 => "invalid-backbuffer-dimensions",
+        10 => "unsupported-backbuffer-format",
+        11 => "invalid-overlay-region",
+        12 => "get-device",
+        13 => "invalid-footprint",
+        14 => "create-upload",
+        15 => "upload-borrow",
+        16 => "upload-map",
+        17 => "command-borrow",
+        18 => "command-reset",
+        19 => "command-close",
+        20 => "command-list-cast",
+        21 => "queue-signal",
+        22 => "create-fence-event",
+        23 => "set-fence-event",
+        24 => "fence-wait-timeout",
+        25 => "panic",
+        _ => "unknown",
     }
 }
 
@@ -502,6 +699,14 @@ fn age_ms(now: u64, then: u64) -> u64 {
 
 fn current_thread_id() -> usize {
     unsafe { GetCurrentThreadId() as usize }
+}
+
+fn store_i32(atom: &AtomicUsize, value: i32) {
+    atom.store(value as u32 as usize, Ordering::SeqCst);
+}
+
+fn load_i32(atom: &AtomicUsize) -> i32 {
+    atom.load(Ordering::SeqCst) as u32 as i32
 }
 
 unsafe fn pe_size_of_image(base: usize) -> usize {

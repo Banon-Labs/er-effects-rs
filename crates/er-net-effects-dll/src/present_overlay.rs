@@ -51,11 +51,11 @@ use windows::{
             WS_OVERLAPPEDWINDOW,
         },
     },
-    core::{Interface, w},
+    core::{Error, Interface, w},
 };
 
 use crate::{
-    crash_telemetry::{self, Phase},
+    crash_telemetry::{self, DrawFailureStage, Phase},
     effects::{effect_runtime_ready, effect_selector_text},
     log::net_effects_log,
 };
@@ -88,6 +88,7 @@ static DRAW_STATE: AtomicUsize = AtomicUsize::new(0);
 static DRAW_BUSY: AtomicUsize = AtomicUsize::new(0);
 static DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
 static DRAW_FAILS: AtomicUsize = AtomicUsize::new(0);
+static VIEW_DEVICE: AtomicUsize = AtomicUsize::new(0);
 static VIEW_ALLOCATOR: AtomicUsize = AtomicUsize::new(0);
 static VIEW_LIST: AtomicUsize = AtomicUsize::new(0);
 static VIEW_FENCE: AtomicUsize = AtomicUsize::new(0);
@@ -177,13 +178,18 @@ unsafe extern "system" fn present_hook(this: *mut c_void, sync: u32, flags: u32)
     maybe_draw(this);
     let orig = PRESENT_ORIG.load(Ordering::SeqCst);
     if orig == 0 {
-        crash_telemetry::present_exit(0);
+        crash_telemetry::present_exit(0, 0);
         return 0;
     }
     let f: PresentFn = unsafe { std::mem::transmute(orig) };
     crash_telemetry::present_call_original();
     let result = unsafe { f(this, sync, flags) };
-    crash_telemetry::present_exit(result);
+    let device_removed_reason = if result < 0 {
+        current_device_removed_reason()
+    } else {
+        0
+    };
+    crash_telemetry::present_exit(result, device_removed_reason);
     result
 }
 
@@ -197,13 +203,18 @@ unsafe extern "system" fn present1_hook(
     maybe_draw(this);
     let orig = PRESENT1_ORIG.load(Ordering::SeqCst);
     if orig == 0 {
-        crash_telemetry::present_exit(0);
+        crash_telemetry::present_exit(0, 0);
         return 0;
     }
     let f: Present1Fn = unsafe { std::mem::transmute(orig) };
     crash_telemetry::present_call_original();
     let result = unsafe { f(this, sync, flags, params) };
-    crash_telemetry::present_exit(result);
+    let device_removed_reason = if result < 0 {
+        current_device_removed_reason()
+    } else {
+        0
+    };
+    crash_telemetry::present_exit(result, device_removed_reason);
     result
 }
 
@@ -222,6 +233,41 @@ fn maybe_draw(swapchain: *mut c_void) {
             ));
         }
     }
+}
+
+fn record_draw_failure(
+    stage: DrawFailureStage,
+    hresult: i32,
+    device: Option<&ID3D12Device>,
+) -> bool {
+    let device_removed_reason = device.map_or(0, device_removed_reason);
+    crash_telemetry::draw_failure(stage, hresult, device_removed_reason);
+    false
+}
+
+fn record_draw_error(
+    stage: DrawFailureStage,
+    error: &Error,
+    device: Option<&ID3D12Device>,
+) -> bool {
+    record_draw_failure(stage, error.code().0, device)
+}
+
+fn device_removed_reason(device: &ID3D12Device) -> i32 {
+    match unsafe { device.GetDeviceRemovedReason() } {
+        Ok(()) => 0,
+        Err(error) => error.code().0,
+    }
+}
+
+fn current_device_removed_reason() -> i32 {
+    let raw = VIEW_DEVICE.load(Ordering::SeqCst);
+    if raw == 0 {
+        return 0;
+    }
+    let raw_ptr = raw as *mut c_void;
+    let device = unsafe { ID3D12Device::from_raw_borrowed(&raw_ptr) };
+    device.map_or(0, device_removed_reason)
 }
 
 unsafe fn resolve_present_addrs() -> Option<(usize, usize)> {
@@ -356,35 +402,48 @@ unsafe fn composite_effect_selector_on_swapchain(swapchain_raw: usize) -> bool {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         composite_effect_selector_inner(swapchain_raw)
     }))
-    .unwrap_or(false)
+    .unwrap_or_else(|_| record_draw_failure(DrawFailureStage::Panic, 0, None))
 }
 
 unsafe fn effect_selector_view_init(backbuffer: &ID3D12Resource) -> bool {
     let mut device_opt: Option<ID3D12Device> = None;
-    if unsafe { backbuffer.GetDevice(&mut device_opt) }.is_err() {
-        return false;
+    if let Err(error) = unsafe { backbuffer.GetDevice(&mut device_opt) } {
+        return record_draw_error(DrawFailureStage::InitGetDevice, &error, None);
     }
     let Some(device) = device_opt else {
-        return false;
+        return record_draw_failure(DrawFailureStage::InitGetDevice, 0, None);
     };
-    let Ok(allocator) = (unsafe {
+    VIEW_DEVICE.store(device.as_raw() as usize, Ordering::SeqCst);
+    crash_telemetry::draw_device(device.as_raw() as usize, device_removed_reason(&device));
+    let allocator = match unsafe {
         device.CreateCommandAllocator::<ID3D12CommandAllocator>(D3D12_COMMAND_LIST_TYPE_DIRECT)
-    }) else {
-        return false;
+    } {
+        Ok(allocator) => allocator,
+        Err(error) => {
+            return record_draw_error(DrawFailureStage::InitCreateAllocator, &error, Some(&device));
+        }
     };
-    let Ok(list) = (unsafe {
+    let list = match unsafe {
         device.CreateCommandList::<_, _, ID3D12GraphicsCommandList>(
             0,
             D3D12_COMMAND_LIST_TYPE_DIRECT,
             &allocator,
             None::<&ID3D12PipelineState>,
         )
-    }) else {
-        return false;
+    } {
+        Ok(list) => list,
+        Err(error) => {
+            return record_draw_error(DrawFailureStage::InitCreateList, &error, Some(&device));
+        }
     };
-    let _ = unsafe { list.Close() };
-    let Ok(fence) = (unsafe { device.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) }) else {
-        return false;
+    if let Err(error) = unsafe { list.Close() } {
+        return record_draw_error(DrawFailureStage::InitCloseList, &error, Some(&device));
+    }
+    let fence = match unsafe { device.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) } {
+        Ok(fence) => fence,
+        Err(error) => {
+            return record_draw_error(DrawFailureStage::InitCreateFence, &error, Some(&device));
+        }
     };
     let queue_desc = D3D12_COMMAND_QUEUE_DESC {
         Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
@@ -392,9 +451,11 @@ unsafe fn effect_selector_view_init(backbuffer: &ID3D12Resource) -> bool {
         Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
         NodeMask: 0,
     };
-    let Ok(queue) = (unsafe { device.CreateCommandQueue::<ID3D12CommandQueue>(&queue_desc) })
-    else {
-        return false;
+    let queue = match unsafe { device.CreateCommandQueue::<ID3D12CommandQueue>(&queue_desc) } {
+        Ok(queue) => queue,
+        Err(error) => {
+            return record_draw_error(DrawFailureStage::InitCreateQueue, &error, Some(&device));
+        }
     };
     VIEW_ALLOCATOR.store(allocator.into_raw() as usize, Ordering::SeqCst);
     VIEW_LIST.store(list.into_raw() as usize, Ordering::SeqCst);
@@ -415,11 +476,12 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
 
     let sc_raw = swapchain_raw as *mut c_void;
     let Some(sc) = (unsafe { IDXGISwapChain3::from_raw_borrowed(&sc_raw) }) else {
-        return false;
+        return record_draw_failure(DrawFailureStage::SwapchainBorrow, 0, None);
     };
     let idx = unsafe { sc.GetCurrentBackBufferIndex() };
-    let Ok(backbuffer) = (unsafe { sc.GetBuffer::<ID3D12Resource>(idx) }) else {
-        return false;
+    let backbuffer = match unsafe { sc.GetBuffer::<ID3D12Resource>(idx) } {
+        Ok(backbuffer) => backbuffer,
+        Err(error) => return record_draw_error(DrawFailureStage::GetBuffer, &error, None),
     };
     if DRAW_STATE.load(Ordering::SeqCst) == 0 {
         if unsafe { effect_selector_view_init(&backbuffer) } {
@@ -437,10 +499,10 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
     let bh = bb_desc.Height;
     crash_telemetry::draw_target(backbuffer.as_raw() as usize, idx, bw, bh, bb_desc.Format.0);
     if bw == 0 || bh == 0 || bw as u64 > MAX_RT_DIM || u64::from(bh) > MAX_RT_DIM {
-        return false;
+        return record_draw_failure(DrawFailureStage::InvalidBackbufferDimensions, 0, None);
     }
     let Some(bb_encoding) = backbuffer_encoding(bb_desc.Format) else {
-        return false;
+        return record_draw_failure(DrawFailureStage::UnsupportedBackbufferFormat, 0, None);
     };
     let text_lines = overlay_lines(&text);
     let text_w = text_lines
@@ -457,17 +519,19 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
         text_lines.len() * line_h + text_lines.len().saturating_sub(1) * VIEW_LINE_GAP;
     let region_h = (text_block_h + VIEW_PAD_Y * 2) as u32;
     if region_w == 0 || region_h == 0 || VIEW_Y + region_h > bh {
-        return false;
+        return record_draw_failure(DrawFailureStage::InvalidOverlayRegion, 0, None);
     }
     let dst_x = bw.saturating_sub(region_w + VIEW_MARGIN_X);
 
     let mut device_opt: Option<ID3D12Device> = None;
-    if unsafe { backbuffer.GetDevice(&mut device_opt) }.is_err() {
-        return false;
+    if let Err(error) = unsafe { backbuffer.GetDevice(&mut device_opt) } {
+        return record_draw_error(DrawFailureStage::GetDevice, &error, None);
     }
     let Some(device) = device_opt else {
-        return false;
+        return record_draw_failure(DrawFailureStage::GetDevice, 0, None);
     };
+    VIEW_DEVICE.store(device.as_raw() as usize, Ordering::SeqCst);
+    crash_telemetry::draw_device(device.as_raw() as usize, device_removed_reason(&device));
     let region_desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
         Alignment: 0,
@@ -498,7 +562,7 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
         );
     }
     if total_bytes == 0 || footprint.Footprint.RowPitch == 0 {
-        return false;
+        return record_draw_failure(DrawFailureStage::InvalidFootprint, 0, Some(&device));
     }
 
     let mut upload_fresh = false;
@@ -526,7 +590,7 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
             Flags: D3D12_RESOURCE_FLAG_NONE,
         };
         let mut up_opt: Option<ID3D12Resource> = None;
-        if unsafe {
+        if let Err(error) = unsafe {
             device.CreateCommittedResource(
                 &heap,
                 D3D12_HEAP_FLAG_NONE,
@@ -535,13 +599,11 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
                 None,
                 &mut up_opt,
             )
-        }
-        .is_err()
-        {
-            return false;
+        } {
+            return record_draw_error(DrawFailureStage::CreateUpload, &error, Some(&device));
         }
         let Some(up) = up_opt else {
-            return false;
+            return record_draw_failure(DrawFailureStage::CreateUpload, 0, Some(&device));
         };
         let old = VIEW_UPLOAD.swap(up.into_raw() as usize, Ordering::SeqCst);
         if old != 0 {
@@ -552,7 +614,7 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
     }
     let upload_raw = VIEW_UPLOAD.load(Ordering::SeqCst) as *mut c_void;
     let Some(upload) = (unsafe { ID3D12Resource::from_raw_borrowed(&upload_raw) }) else {
-        return false;
+        return record_draw_failure(DrawFailureStage::UploadBorrow, 0, Some(&device));
     };
 
     let hash = text_hash(&text);
@@ -606,8 +668,11 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
         let row_pitch = footprint.Footprint.RowPitch as usize;
         let total = total_bytes as usize;
         let mut map: *mut c_void = std::ptr::null_mut();
-        if unsafe { upload.Map(0, None, Some(&mut map)) }.is_err() || map.is_null() {
-            return false;
+        if let Err(error) = unsafe { upload.Map(0, None, Some(&mut map)) } {
+            return record_draw_error(DrawFailureStage::UploadMap, &error, Some(&device));
+        }
+        if map.is_null() {
+            return record_draw_failure(DrawFailureStage::UploadMap, 0, Some(&device));
         }
         {
             let dst = unsafe { std::slice::from_raw_parts_mut(map as *mut u8, total) };
@@ -659,10 +724,13 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
             ID3D12CommandQueue::from_raw_borrowed(&queue_raw),
         )
     }) else {
-        return false;
+        return record_draw_failure(DrawFailureStage::CommandBorrow, 0, Some(&device));
     };
-    if unsafe { allocator.Reset() }.is_err() || unsafe { list.Reset(allocator, None) }.is_err() {
-        return false;
+    if let Err(error) = unsafe { allocator.Reset() } {
+        return record_draw_error(DrawFailureStage::CommandReset, &error, Some(&device));
+    }
+    if let Err(error) = unsafe { list.Reset(allocator, None) } {
+        return record_draw_error(DrawFailureStage::CommandReset, &error, Some(&device));
     }
     crash_telemetry::draw_phase(Phase::DrawBarrierToCopy);
     unsafe {
@@ -709,7 +777,7 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
         )
     };
     crash_telemetry::draw_phase(Phase::DrawExecuteWait);
-    if !unsafe { execute_and_wait(queue, list, fence) } {
+    if !unsafe { execute_and_wait(queue, list, fence, &device) } {
         return false;
     }
     let hits = DRAW_HITS.fetch_add(1, Ordering::SeqCst) + 1;
@@ -748,28 +816,42 @@ unsafe fn execute_and_wait(
     queue: &ID3D12CommandQueue,
     list: &ID3D12GraphicsCommandList,
     fence: &ID3D12Fence,
+    device: &ID3D12Device,
 ) -> bool {
-    if unsafe { list.Close() }.is_err() {
-        return false;
+    if let Err(error) = unsafe { list.Close() } {
+        return record_draw_error(DrawFailureStage::CommandClose, &error, Some(device));
     }
-    let Ok(base_list) = list.cast::<ID3D12CommandList>() else {
-        return false;
+    let base_list = match list.cast::<ID3D12CommandList>() {
+        Ok(base_list) => base_list,
+        Err(error) => {
+            return record_draw_error(DrawFailureStage::CommandListCast, &error, Some(device));
+        }
     };
     unsafe { queue.ExecuteCommandLists(&[Some(base_list)]) };
     let val = FENCE_VAL.fetch_add(1, Ordering::SeqCst) + 1;
-    if unsafe { queue.Signal(fence, val) }.is_err() {
-        return false;
+    if let Err(error) = unsafe { queue.Signal(fence, val) } {
+        return record_draw_error(DrawFailureStage::QueueSignal, &error, Some(device));
     }
     if unsafe { fence.GetCompletedValue() } >= val {
         return true;
     }
-    let Ok(event) = (unsafe { CreateEventW(None, false, false, None) }) else {
-        return false;
+    let event = match unsafe { CreateEventW(None, false, false, None) } {
+        Ok(event) => event,
+        Err(error) => {
+            return record_draw_error(DrawFailureStage::CreateFenceEvent, &error, Some(device));
+        }
     };
-    let ok = unsafe { fence.SetEventOnCompletion(val, event) }.is_ok()
-        && unsafe { WaitForSingleObject(event, READBACK_FENCE_WAIT_MS) } == WAIT_OBJECT_0;
+    let set_event = unsafe { fence.SetEventOnCompletion(val, event) };
+    if let Err(error) = set_event {
+        let _ = unsafe { CloseHandle(event) };
+        return record_draw_error(DrawFailureStage::SetFenceEvent, &error, Some(device));
+    }
+    let wait_ok = unsafe { WaitForSingleObject(event, READBACK_FENCE_WAIT_MS) } == WAIT_OBJECT_0;
     let _ = unsafe { CloseHandle(event) };
-    ok
+    if !wait_ok {
+        return record_draw_failure(DrawFailureStage::FenceWaitTimeout, 0, Some(device));
+    }
+    true
 }
 
 #[derive(Clone, Copy)]
