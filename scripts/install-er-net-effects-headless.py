@@ -74,32 +74,80 @@ def default_smithbox_binary_dir() -> Path:
         [
             REPO_ROOT / "vendor" / "smithbox",
             REPO_ROOT / "target" / "soulsformats-bridge" / "bin" / "Release" / "net9.0",
-            REPO_ROOT.parent / "target" / "soulsformats-bridge" / "bin" / "Release" / "net9.0",
+            REPO_ROOT.parent
+            / "target"
+            / "soulsformats-bridge"
+            / "bin"
+            / "Release"
+            / "net9.0",
         ],
         REPO_ROOT / "vendor" / "smithbox",
     )
 
 
 def default_regulation() -> Path:
-    return Path(os.environ.get("ER_REGULATION_BIN", DEFAULT_GAME_DIR / "regulation.bin"))
+    return Path(
+        os.environ.get("ER_REGULATION_BIN", DEFAULT_GAME_DIR / "regulation.bin")
+    )
 
 
 def default_catalog_dir(regulation: Path | None = None) -> Path:
     game_dir = regulation.parent if regulation is not None else DEFAULT_GAME_DIR
-    return Path(os.environ.get("ER_NET_EFFECTS_CATALOG_DIR", game_dir / "er-net-effect-catalogs"))
+    return Path(
+        os.environ.get(
+            "ER_NET_EFFECTS_CATALOG_DIR", game_dir / "er-net-effect-catalogs"
+        )
+    )
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--catalog-dir", type=Path, help="Directory to write selector *.jsonc catalogs into.")
-    parser.add_argument("--regulation-bin", type=Path, help="Path to Elden Ring regulation.bin.")
-    parser.add_argument("--config", type=Path, help="er-net-effects.toml to create/update. Defaults beside regulation.bin.")
-    parser.add_argument("--paramdef", type=Path, default=default_paramdef(), help="SpEffect.xml paramdef path.")
-    parser.add_argument("--smithbox-binary-dir", type=Path, default=default_smithbox_binary_dir(), help="Directory containing Andre.Formats.dll and Andre.SoulsFormats.dll.")
-    parser.add_argument("--effects", type=Path, default=REPO_ROOT / "data" / "effects.json", help="Bundled effects.json path.")
-    parser.add_argument("--dotnet-bin", default=os.environ.get("DOTNET_BIN", "dotnet"), help="dotnet executable to use.")
-    parser.add_argument("--yes", action="store_true", help="Do not prompt for confirmation before writing files.")
-    parser.add_argument("--gui", action="store_true", help="Reserved for a future GUI installer; currently unsupported.")
+    parser.add_argument(
+        "--catalog-dir",
+        type=Path,
+        help="Directory to write selector *.jsonc catalogs into.",
+    )
+    parser.add_argument(
+        "--regulation-bin", type=Path, help="Path to Elden Ring regulation.bin."
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        help="er-net-effects.toml to create/update. Defaults beside regulation.bin.",
+    )
+    parser.add_argument(
+        "--paramdef",
+        type=Path,
+        default=default_paramdef(),
+        help="SpEffect.xml paramdef path.",
+    )
+    parser.add_argument(
+        "--smithbox-binary-dir",
+        type=Path,
+        default=default_smithbox_binary_dir(),
+        help="Directory containing Andre.Formats.dll and Andre.SoulsFormats.dll.",
+    )
+    parser.add_argument(
+        "--effects",
+        type=Path,
+        default=REPO_ROOT / "data" / "effects.json",
+        help="Bundled effects.json path.",
+    )
+    parser.add_argument(
+        "--dotnet-bin",
+        default=os.environ.get("DOTNET_BIN", "dotnet"),
+        help="dotnet executable to use.",
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Do not prompt for confirmation before writing files.",
+    )
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="Reserved for a future GUI installer; currently unsupported.",
+    )
     return parser.parse_args()
 
 
@@ -176,8 +224,14 @@ def set_toml_key(raw: str, key: str, value: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def update_config(config_path: Path, catalog_dir: Path, master_catalog_path: Path) -> None:
-    raw = config_path.read_text(encoding="utf-8") if config_path.exists() else DEFAULT_CONFIG_TEXT
+def update_config(
+    config_path: Path, catalog_dir: Path, master_catalog_path: Path
+) -> None:
+    raw = (
+        config_path.read_text(encoding="utf-8")
+        if config_path.exists()
+        else DEFAULT_CONFIG_TEXT
+    )
     raw = set_toml_key(raw, "catalog_dir", to_runtime_path(catalog_dir))
     raw = set_toml_key(raw, "master_catalog_file", to_runtime_path(master_catalog_path))
     tmp = config_path.with_suffix(config_path.suffix + ".tmp")
@@ -185,7 +239,13 @@ def update_config(config_path: Path, catalog_dir: Path, master_catalog_path: Pat
     tmp.replace(config_path)
 
 
-def confirm(args: argparse.Namespace, catalog_dir: Path, regulation: Path, config: Path, master: Path) -> None:
+def confirm(
+    args: argparse.Namespace,
+    catalog_dir: Path,
+    regulation: Path,
+    config: Path,
+    master: Path,
+) -> None:
     print("catalog_dir=" + str(catalog_dir))
     print("regulation_bin=" + str(regulation))
     print("config=" + str(config))
@@ -202,13 +262,18 @@ def confirm(args: argparse.Namespace, catalog_dir: Path, regulation: Path, confi
 def main() -> int:
     args = parse_args()
     if args.gui:
-        raise SystemExit("GUI installer is not implemented yet; run this headless installer without --gui.")
+        raise SystemExit(
+            "GUI installer is not implemented yet; run this headless installer without --gui."
+        )
 
     regulation = args.regulation_bin or prompt_path(
         "Path to regulation.bin", default_regulation(), must_exist=True, is_file=True
     )
     catalog_dir = args.catalog_dir or prompt_path(
-        "Catalog output directory", default_catalog_dir(regulation), must_exist=False, is_file=False
+        "Catalog output directory",
+        default_catalog_dir(regulation),
+        must_exist=False,
+        is_file=False,
     )
     config = args.config or regulation.parent / CONFIG_FILE_NAME
     master_catalog = catalog_dir / MASTER_CATALOG_FILE_NAME
