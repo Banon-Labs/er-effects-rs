@@ -801,8 +801,20 @@ def main() -> int:
             # have torn down here" bug). The char IS rendered on a reload (render_group=True, and the
             # harness verdict proves movement), so gate on render_group -- the same in-world signal the
             # offline framerate analysis uses (matched load2 n=51 / load3 n=69) -- which fires on reloads.
-            render_group_on = bool(s.get("oracle_chr_render_group_enabled"))
-            genuinely_loaded = render_group_on or render_ready or can_move
+            # SETTLED-FPS GATE (2026-07-21, bd DECISIVE-all-load2-theories-falsified...): judge the fps
+            # regression only once the char is genuinely SETTLED (movable), never mid-load. The decisive
+            # two-agent trace + scripts/analyze-samechar-epochs.py on run 165038 established: (a)
+            # now_loading clears at PRESENT (~in-memory deserialize), ~9-14s BEFORE the char is movable,
+            # so it is NOT a settle signal; (b) render_group comes on DURING the loading ramp (load1
+            # needed ~7.6s AFTER render_group/mms18 to reach can_move); (c) over the SETTLED window load2
+            # fps (29) ~= load1 (27) -- NO real regression; the "load2 20fps" was load2's LOADING-window
+            # fps sampled 5s after render_group, before it settled, which then tore the run down at ~3.5s
+            # post-mms18 -- before load2 could prove movability. So gate the fps comparison on can_move
+            # (the real movable/settled signal): both baselines become settled-vs-settled, and load2 is
+            # never torn down before its ramp completes. If can_move never latches, the fps teardown
+            # simply does not fire and the run rides longer -- the intent here is to give load2 its full
+            # ramp and prove movability. bd fps-test-after-load2-finished-settled-not-during-load.
+            genuinely_loaded = can_move
             if fps_now > 0 and genuinely_loaded:
                 if _ep == 0:
                     load1_inworld_fps.append(fps_now)
