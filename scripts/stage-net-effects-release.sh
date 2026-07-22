@@ -6,7 +6,7 @@ out_dir="$repo_root/target/net-effects-release"
 build=1
 
 usage() {
-  cat <<'EOF'
+	cat <<'EOF'
 Usage: scripts/stage-net-effects-release.sh [--output DIR] [--no-build]
 
 Stages the standalone keyboard-controlled network effects payload:
@@ -27,36 +27,36 @@ EOF
 }
 
 while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --output)
-      out_dir="$2"
-      shift 2
-      ;;
-    --no-build)
-      build=0
-      shift
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "unknown argument: $1" >&2
-      usage >&2
-      exit 2
-      ;;
-  esac
+	case "$1" in
+	--output)
+		out_dir="$2"
+		shift 2
+		;;
+	--no-build)
+		build=0
+		shift
+		;;
+	-h | --help)
+		usage
+		exit 0
+		;;
+	*)
+		echo "unknown argument: $1" >&2
+		usage >&2
+		exit 2
+		;;
+	esac
 done
 
 net_effects_dll="${ER_NET_EFFECTS_DLL:-$repo_root/target/x86_64-pc-windows-msvc/release/er_net_effects_dll.dll}"
 
 if [[ "$build" == "1" ]]; then
-  cargo xwin build --manifest-path "$repo_root/Cargo.toml" --target x86_64-pc-windows-msvc --release -p er-net-effects-dll
+	cargo xwin build --manifest-path "$repo_root/Cargo.toml" --target x86_64-pc-windows-msvc --release -p er-net-effects-dll
 fi
 
 if [[ ! -f "$net_effects_dll" ]]; then
-  echo "missing er_net_effects_dll.dll: $net_effects_dll" >&2
-  exit 1
+	echo "missing er_net_effects_dll.dll: $net_effects_dll" >&2
+	exit 1
 fi
 
 out_dir=$(realpath -m "$out_dir")
@@ -65,7 +65,7 @@ rm -rf "$tmp_dir"
 mkdir -p "$tmp_dir/er-net-effect-catalogs"
 
 cp -f "$net_effects_dll" "$tmp_dir/er_net_effects_dll.dll"
-cat > "$tmp_dir/er-net-effects.me3" <<'EOF'
+cat >"$tmp_dir/er-net-effects.me3" <<'EOF'
 profileVersion = "v1"
 
 [[supports]]
@@ -74,7 +74,7 @@ game = "eldenring"
 [[natives]]
 path = 'er_net_effects_dll.dll'
 EOF
-cat > "$tmp_dir/er-net-effects.toml.example" <<'EOF'
+cat >"$tmp_dir/er-net-effects.toml.example" <<'EOF'
 # Copy to er-net-effects.toml next to eldenring.exe.
 # This file belongs to er_net_effects_dll.dll and is intentionally separate from
 # er-effects-rs product/autoload configuration.
@@ -88,7 +88,7 @@ telemetry_file = "er-net-effects-telemetry.json"
 catalog_dir = "er-net-effect-catalogs"
 master_catalog_file = "er-net-effect-master-catalog.json"
 EOF
-cat > "$tmp_dir/.er-net-effects-hotkeys.json.example" <<'EOF'
+cat >"$tmp_dir/.er-net-effects-hotkeys.json.example" <<'EOF'
 {
   "hotkeys": [
     {
@@ -100,14 +100,14 @@ cat > "$tmp_dir/.er-net-effects-hotkeys.json.example" <<'EOF'
   ]
 }
 EOF
-cat > "$tmp_dir/er-net-effect-catalogs/example.json" <<'EOF'
+cat >"$tmp_dir/er-net-effect-catalogs/example.json" <<'EOF'
 [
   8355
 ]
 EOF
 (
-  cd "$tmp_dir"
-  sha256sum er_net_effects_dll.dll er-net-effects.me3 er-net-effects.toml.example .er-net-effects-hotkeys.json.example er-net-effect-catalogs/example.json > SHA256SUMS.txt
+	cd "$tmp_dir"
+	sha256sum er_net_effects_dll.dll er-net-effects.me3 er-net-effects.toml.example .er-net-effects-hotkeys.json.example er-net-effect-catalogs/example.json >SHA256SUMS.txt
 )
 
 rm -rf "$out_dir"

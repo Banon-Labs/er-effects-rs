@@ -462,4 +462,3 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         let _ = fs::rename(tmp_path, path);
     }
 }
-

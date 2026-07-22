@@ -1,8 +1,5 @@
-
 #[allow(unused_imports)]
-use crate::{
-    config::*, constants::*, crashlog::*, experiments::*, ffi::*, hooks::*, telemetry::*,
-};
+use crate::{config::*, constants::*, crashlog::*, experiments::*, ffi::*, hooks::*, telemetry::*};
 
 // Constants/statics live in constants.rs; keep lib.rs focused on DLL entrypoints and task wiring.
 #[derive(Default)]

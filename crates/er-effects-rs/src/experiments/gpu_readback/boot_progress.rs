@@ -26,82 +26,82 @@
 // wait) -- no backbuffer readback: the pre-Continue frames are the content-free black this view
 // exists to replace, and the strip rect is entirely ours.
 
-/// Draw-state machine: 0 = uninit, 1 = ready, 2 = failed (give up; never retry).
-pub(crate) use er_telemetry::counters::BOOT_VIEW_DRAW_STATE;
-/// One-shot stop latch: the loading window / world took over; reset only for a deliberate own-menu
-/// character switch so the same custom progress bar can cover the return-title/autoload black gap.
-pub(crate) use er_telemetry::counters::BOOT_VIEW_STOPPED;
-/// Nonzero while the System->Quit custom ProfileSelect flow is switching to a picked slot. Value is
-/// selected_slot + 1 so slot 0 is representable. This reopens the boot bar after the first world load.
-pub(crate) use er_telemetry::counters::BOOT_VIEW_OWN_MENU_LOAD_ACTIVE;
-/// Baseline `PROFILE_LOADSCREEN_TABLE_BUILDS` when the own-menu switch rearmed the boot view; a later
-/// increment is this switch's loading-window handoff. Default 0 preserves first-start behavior.
-pub(crate) use er_telemetry::counters::BOOT_VIEW_LOADSCREEN_TABLE_BASELINE;
-/// Per-frame composite counter (RAM semaphore: the boot view is actually reaching the backbuffer).
-pub(crate) use er_telemetry::counters::BOOT_VIEW_DRAW_HITS;
-/// Last DISPLAYED progress in permille (monotonic; includes the inter-milestone creep).
-pub(crate) use er_telemetry::counters::BOOT_VIEW_LAST_PERMILLE;
 /// DIAGNOSTIC (bd ab-portrait-disabled-load2-fps-still-low-boot-view-composite-is-killer-2026-07-20):
 /// last process-ms the per-frame boot-view stop DECISION was logged, so the log is rate-limited to
 /// ~1/s while we diagnose why neither stop path fires for the incomplete load2.
 pub(crate) use er_telemetry::counters::BOOT_VIEW_DECISION_LOG_MS;
+/// Per-frame composite counter (RAM semaphore: the boot view is actually reaching the backbuffer).
+pub(crate) use er_telemetry::counters::BOOT_VIEW_DRAW_HITS;
+/// Draw-state machine: 0 = uninit, 1 = ready, 2 = failed (give up; never retry).
+pub(crate) use er_telemetry::counters::BOOT_VIEW_DRAW_STATE;
+/// Last DISPLAYED progress in permille (monotonic; includes the inter-milestone creep).
+pub(crate) use er_telemetry::counters::BOOT_VIEW_LAST_PERMILLE;
+/// Baseline `PROFILE_LOADSCREEN_TABLE_BUILDS` when the own-menu switch rearmed the boot view; a later
+/// increment is this switch's loading-window handoff. Default 0 preserves first-start behavior.
+pub(crate) use er_telemetry::counters::BOOT_VIEW_LOADSCREEN_TABLE_BASELINE;
 /// Monotonic-display clamp for the (phase idx, substep) LABEL numbers (user 2026-07-19): the visible
 /// numbers must only advance within one load epoch -- never repeat a value already passed nor
 /// decrement -- or the loading text reads as jumpy/looping. Ordinal = idx*ORD_SCALE + sub (phase idx
 /// dominates). Held label is a `&'static str` (all sub-labels come from const tables, so its ptr/len
 /// stay valid forever). Reset per load epoch.
 pub(crate) use er_telemetry::counters::BOOT_VIEW_MONO_EPOCH;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_MONO_ORD;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_MONO_LABEL_PTR;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_MONO_LABEL_LEN;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_MONO_LABEL_PTR;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_MONO_ORD;
+/// Nonzero while the System->Quit custom ProfileSelect flow is switching to a picked slot. Value is
+/// selected_slot + 1 so slot 0 is representable. This reopens the boot bar after the first world load.
+pub(crate) use er_telemetry::counters::BOOT_VIEW_OWN_MENU_LOAD_ACTIVE;
+/// One-shot stop latch: the loading window / world took over; reset only for a deliberate own-menu
+/// character switch so the same custom progress bar can cover the return-title/autoload black gap.
+pub(crate) use er_telemetry::counters::BOOT_VIEW_STOPPED;
 const BOOT_VIEW_MONO_ORD_SCALE: usize = 1000;
-/// Monotonic bitmask of reached milestones (bit i = milestone i seen reached at least once).
-pub(crate) use er_telemetry::counters::BOOT_VIEW_REACHED_MASK;
-/// Highest reached milestone index (drives the label).
-pub(crate) use er_telemetry::counters::BOOT_VIEW_MILESTONE_IDX;
 /// Hash of the last composed visible loading label logged to the runtime debug log.
 pub(crate) use er_telemetry::counters::BOOT_VIEW_LAST_LABEL_HASH;
+/// Highest reached milestone index (drives the label).
+pub(crate) use er_telemetry::counters::BOOT_VIEW_MILESTONE_IDX;
+/// Monotonic bitmask of reached milestones (bit i = milestone i seen reached at least once).
+pub(crate) use er_telemetry::counters::BOOT_VIEW_REACHED_MASK;
 
 // Our OWN persistent command objects (leaked raw pointers, same pattern as the portrait overlay --
 // windows-rs COM types are !Send). Deliberately SEPARATE from the OVERLAY_* objects so the boot view
 // cannot interfere with the proven portrait composite path or thrash its cached buffers at handoff.
 pub(crate) use er_telemetry::counters::BOOT_VIEW_ALLOCATOR;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_LIST;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_FENCE;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_QUEUE;
-/// Persistent UPLOAD buffer holding the rasterized strip (recreated when the footprint changes).
-pub(crate) use er_telemetry::counters::BOOT_VIEW_UPLOAD;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_UPLOAD_SIZE;
-/// 1-descriptor RTV heap for the self-present full-clear (the engine has never rendered the
-/// backbuffer before its first own present, so un-cleared regions would show garbage).
-pub(crate) use er_telemetry::counters::BOOT_VIEW_RTV_HEAP;
+/// 1 when the last rasterized upload included the optional cached screenshot background.
+pub(crate) use er_telemetry::counters::BOOT_VIEW_DRAWN_BG_ACTIVE;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_DRAWN_IDX;
+/// Last (permille, idx) actually rasterized into the upload buffer (skip the map/write when unchanged).
+pub(crate) use er_telemetry::counters::BOOT_VIEW_DRAWN_PERMILLE;
 /// Draw mutual-exclusion latch: the self-present pump thread and the game's render thread (Present
 /// detour) share the command allocator/list; whoever loses the swap skips its frame.
 pub(crate) use er_telemetry::counters::BOOT_VIEW_DRAW_BUSY;
-/// Frames WE presented on the game's swapchain before its render loop produced its first frame.
-pub(crate) use er_telemetry::counters::BOOT_VIEW_SELF_PRESENTS;
-/// Pump-relative ms at which the game swapchain was found + hooked (0 = never; pump path only).
-pub(crate) use er_telemetry::counters::BOOT_VIEW_SWAPCHAIN_FOUND_MS;
-/// Why the self-present pump stopped: 0 = still running/never ran, 1 = game started presenting
-/// (the goal), 2 = timeout budget, 3 = Present returned a failure HRESULT.
-pub(crate) use er_telemetry::counters::BOOT_VIEW_PUMP_STOP_REASON;
-/// (w, h) the current upload buffer was rasterized for (strip geometry follows the backbuffer).
-pub(crate) use er_telemetry::counters::BOOT_VIEW_STRIP_W;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_STRIP_H;
-/// Last (permille, idx) actually rasterized into the upload buffer (skip the map/write when unchanged).
-pub(crate) use er_telemetry::counters::BOOT_VIEW_DRAWN_PERMILLE;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_DRAWN_IDX;
-/// 1 when the last rasterized upload included the optional cached screenshot background.
-pub(crate) use er_telemetry::counters::BOOT_VIEW_DRAWN_BG_ACTIVE;
-/// Epoch-ms (never 0 once set) when the loading/world handoff was first detected; the hold clock
-/// for the seamless cut. Reset by an own-menu rearm.
-pub(crate) use er_telemetry::counters::BOOT_VIEW_HANDOFF_SEEN_MS;
-/// CS::LoadingScreen update hits at the moment the cover stopped (telemetry: proves the cut
-/// happened on a lit loading screen, not into the black gap).
-pub(crate) use er_telemetry::counters::BOOT_VIEW_STOP_NATIVE_HITS;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_FENCE;
 /// LOADING_SCREEN_UPDATE_HITS baseline latched at handoff detection: the counter is cumulative
 /// across loads, so an own-menu second load must measure only ITS loading screen's ticks.
 pub(crate) use er_telemetry::counters::BOOT_VIEW_HANDOFF_NATIVE_HITS_BASELINE;
+/// Epoch-ms (never 0 once set) when the loading/world handoff was first detected; the hold clock
+/// for the seamless cut. Reset by an own-menu rearm.
+pub(crate) use er_telemetry::counters::BOOT_VIEW_HANDOFF_SEEN_MS;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_LIST;
+/// Why the self-present pump stopped: 0 = still running/never ran, 1 = game started presenting
+/// (the goal), 2 = timeout budget, 3 = Present returned a failure HRESULT.
+pub(crate) use er_telemetry::counters::BOOT_VIEW_PUMP_STOP_REASON;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_QUEUE;
+/// 1-descriptor RTV heap for the self-present full-clear (the engine has never rendered the
+/// backbuffer before its first own present, so un-cleared regions would show garbage).
+pub(crate) use er_telemetry::counters::BOOT_VIEW_RTV_HEAP;
+/// Frames WE presented on the game's swapchain before its render loop produced its first frame.
+pub(crate) use er_telemetry::counters::BOOT_VIEW_SELF_PRESENTS;
+/// CS::LoadingScreen update hits at the moment the cover stopped (telemetry: proves the cut
+/// happened on a lit loading screen, not into the black gap).
+pub(crate) use er_telemetry::counters::BOOT_VIEW_STOP_NATIVE_HITS;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_STRIP_H;
+/// (w, h) the current upload buffer was rasterized for (strip geometry follows the backbuffer).
+pub(crate) use er_telemetry::counters::BOOT_VIEW_STRIP_W;
+/// Pump-relative ms at which the game swapchain was found + hooked (0 = never; pump path only).
+pub(crate) use er_telemetry::counters::BOOT_VIEW_SWAPCHAIN_FOUND_MS;
+/// Persistent UPLOAD buffer holding the rasterized strip (recreated when the footprint changes).
+pub(crate) use er_telemetry::counters::BOOT_VIEW_UPLOAD;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_UPLOAD_SIZE;
 /// Creep timing epoch + the epoch-ms when the milestone index last advanced.
 static BOOT_VIEW_EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 pub(crate) use er_telemetry::counters::BOOT_VIEW_IDX_CHANGED_MS;
@@ -1330,7 +1330,10 @@ fn boot_view_rasterize(
             let len = BOOT_VIEW_MONO_LABEL_LEN.load(Ordering::SeqCst);
             let held: &str = if ptr != 0 {
                 unsafe {
-                    core::str::from_utf8_unchecked(core::slice::from_raw_parts(ptr as *const u8, len))
+                    core::str::from_utf8_unchecked(core::slice::from_raw_parts(
+                        ptr as *const u8,
+                        len,
+                    ))
                 }
             } else {
                 raw_sub_label
@@ -1526,7 +1529,8 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
     // Use the PER-EPOCH world-live signal instead: play_time advancing for the CURRENT fresh_deser epoch
     // means THIS switch's world is genuinely playable, so stop compositing (the loading cover is done).
     let epoch_world_handoff = own_menu_active && {
-        let cur = crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+        let cur =
+            crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
         cur >= 1 && crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur
     };
     let world_handoff = (!own_menu_active
@@ -1544,8 +1548,8 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
                 .compare_exchange(last_log, now_log, Ordering::SeqCst, Ordering::SeqCst)
                 .is_ok()
         {
-            let fresh_deser =
-                crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+            let fresh_deser = crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
+                .load(Ordering::SeqCst);
             let epoch_world_live =
                 crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst);
             append_autoload_debug(format_args!(
@@ -1630,7 +1634,9 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
         let cur_epoch =
             crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
         let now_ms = boot_view_epoch_ms().max(1);
-        if crate::constants::BOOT_VIEW_COMPOSITE_EPOCH.swap(cur_epoch, Ordering::SeqCst) != cur_epoch {
+        if crate::constants::BOOT_VIEW_COMPOSITE_EPOCH.swap(cur_epoch, Ordering::SeqCst)
+            != cur_epoch
+        {
             crate::constants::BOOT_VIEW_COMPOSITE_FIRST_MS.store(now_ms as usize, Ordering::SeqCst);
         }
         let first_ms = crate::constants::BOOT_VIEW_COMPOSITE_FIRST_MS.load(Ordering::SeqCst) as u64;
@@ -2010,17 +2016,17 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
 // swapchain-copy path as the boot progress bar. This intentionally uses its own command objects so it
 // cannot interfere with the boot view or loading portrait overlay state.
 static EFFECT_SELECTOR_VIEW_DRAW_STATE: AtomicUsize = AtomicUsize::new(0); // 0=uninit, 1=ready, 2=failed
-pub(crate) use er_telemetry::counters::EFFECT_SELECTOR_VIEW_BUSY;
+pub(crate) use er_telemetry::counters::EFFECT_SELECTOR_OVERLAY_DRAW_HITS;
 pub(crate) use er_telemetry::counters::EFFECT_SELECTOR_VIEW_ALLOCATOR;
-pub(crate) use er_telemetry::counters::EFFECT_SELECTOR_VIEW_LIST;
+pub(crate) use er_telemetry::counters::EFFECT_SELECTOR_VIEW_BUSY;
 pub(crate) use er_telemetry::counters::EFFECT_SELECTOR_VIEW_FENCE;
+pub(crate) use er_telemetry::counters::EFFECT_SELECTOR_VIEW_H;
+pub(crate) use er_telemetry::counters::EFFECT_SELECTOR_VIEW_HASH;
+pub(crate) use er_telemetry::counters::EFFECT_SELECTOR_VIEW_LIST;
 pub(crate) use er_telemetry::counters::EFFECT_SELECTOR_VIEW_QUEUE;
 pub(crate) use er_telemetry::counters::EFFECT_SELECTOR_VIEW_UPLOAD;
 pub(crate) use er_telemetry::counters::EFFECT_SELECTOR_VIEW_UPLOAD_SIZE;
 pub(crate) use er_telemetry::counters::EFFECT_SELECTOR_VIEW_W;
-pub(crate) use er_telemetry::counters::EFFECT_SELECTOR_VIEW_H;
-pub(crate) use er_telemetry::counters::EFFECT_SELECTOR_VIEW_HASH;
-pub(crate) use er_telemetry::counters::EFFECT_SELECTOR_OVERLAY_DRAW_HITS;
 
 const EFFECT_SELECTOR_VIEW_PAD_X: usize = 10;
 const EFFECT_SELECTOR_VIEW_PAD_Y: usize = 8;
