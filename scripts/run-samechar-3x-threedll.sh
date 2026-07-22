@@ -94,9 +94,13 @@ PROFILE="$ARTIFACT_DIR/samechar-3x-threedll.me3"
 	echo
 	echo '[[natives]]'
 	echo "path = '$(win_path "$PRODUCT_GAMEDIR")'"
-	echo
-	echo '[[natives]]'
-	echo "path = '$(win_path "$TRACE_GAMEDIR")'"
+	# NO_TRACE=1 drops the reload-trace DLL to test whether its per-frame file I/O (which floods ~200x
+	# during reloads) is the reload fps cost vs an innocent bystander tracing the real work.
+	if [[ -z "${NO_TRACE:-}" ]]; then
+		echo
+		echo '[[natives]]'
+		echo "path = '$(win_path "$TRACE_GAMEDIR")'"
+	fi
 	echo
 	echo '[[natives]]'
 	echo "path = '$(win_path "$HARNESS_GAMEDIR")'"
