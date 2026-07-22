@@ -264,12 +264,6 @@ unsafe fn read_u8(addr: usize) -> Option<u8> {
     (ok != 0 && read == 1).then_some(value)
 }
 
-/// Write one byte into the (own) process. Used ONLY by the rt5d diagnostic drive below; the address is
-/// a validated menuData field (read successfully just before), so a guarded volatile write is safe.
-unsafe fn write_u8(addr: usize, val: u8) {
-    unsafe { core::ptr::write_volatile(addr as *mut u8, val) };
-}
-
 /// Dump a window of qwords from the MoveMapStep header (own process, guarded reads). Why: load2's
 /// MoveMapStep Update (FUN_140aff640) stops being ticked by the FD4 scheduler after ~6 ticks while
 /// load1 ticks it ~145x to completion (bd load2-real-blocker-movemapstep-child-advancer-tick-never-runs).
@@ -312,7 +306,7 @@ unsafe extern "system" fn hook_finalize_advancer(a: usize, b: usize, c: usize, d
     // TORE THE PLAYER DOWN (post-completion: present=False, havok=None, mms=-1 at ~60fps = a player-less
     // world) -- load2's player is not movable at fin=0 when the finalize runs, unlike load1. So the
     // finalize-drive is a proven DEAD END; this hook is log-only again so traces show the natural load2.
-    // The write_u8 helper + drive statics/consts are retained for reference but intentionally unused.
+    // The removed drive statics/consts are retained for reference but intentionally unused.
     let _ = (
         &RT5D_DRIVE_MMS,
         &RT5D_DRIVE_ZERO_STREAK,
