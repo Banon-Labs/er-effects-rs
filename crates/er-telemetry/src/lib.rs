@@ -327,6 +327,144 @@ fn maybe_trigger_renderdoc(play_time_ms: i64, task_delta: f32, tick_n: u64) -> u
     caps
 }
 
+/// Game-thread sampling profiler (bd: reload 29ms is CPU-bound, present=0.2ms). A separate thread
+/// suspends the game/main thread during SLOW frames (`task_delta` >= threshold) and records its RIP as an
+/// RVA (rip - game_base); the histogram's top RVAs name the native function eating the reload's per-frame
+/// cost. No RenderDoc / no admin needed. Dumps `er-cpu-profile.txt` to the game dir.
+#[cfg(windows)]
+mod profiler {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCurrentThreadId() -> u32;
+        fn OpenThread(access: u32, inherit: i32, tid: u32) -> isize;
+        fn SuspendThread(h: isize) -> u32;
+        fn ResumeThread(h: isize) -> u32;
+        fn GetThreadContext(h: isize, ctx: *mut u8) -> i32;
+        fn CloseHandle(h: isize) -> i32;
+        fn Sleep(ms: u32);
+    }
+    const THREAD_GET_CONTEXT: u32 = 0x0008;
+    const THREAD_SUSPEND_RESUME: u32 = 0x0002;
+    const CONTEXT_CONTROL_AMD64: u32 = 0x0010_0001;
+    const CTX_SIZE: usize = 0x4d0;
+    const CTX_FLAGS_OFF: usize = 0x30;
+    const CTX_RIP_OFF: usize = 0xf8;
+    const SLOW_TASK_DELTA: f32 = 0.033; // >= ~30ms/frame (<=30fps): the reload/loading slow window
+    const BUCKET: usize = 0x10; // RVA bucket granularity (instruction-ish)
+    const DUMP_EVERY: u64 = 2000; // sampler iterations between dumps
+
+    static GAME_TID: AtomicU32 = AtomicU32::new(0);
+    static LAST_TD_BITS: AtomicU32 = AtomicU32::new(0);
+    static GAME_BASE: AtomicUsize = AtomicUsize::new(0);
+    static STARTED: AtomicUsize = AtomicUsize::new(0);
+    static HIST: Mutex<Option<HashMap<usize, u32>>> = Mutex::new(None);
+    static SAMPLES: AtomicUsize = AtomicUsize::new(0);
+
+    /// Called from `standalone_tick` (which runs ON the game thread): record the thread id + latest frame
+    /// time + base, and start the sampler once.
+    pub fn note_frame(base: usize, task_delta: f32) {
+        GAME_TID.store(unsafe { GetCurrentThreadId() }, Ordering::Relaxed);
+        LAST_TD_BITS.store(task_delta.to_bits(), Ordering::Relaxed);
+        if base != 0 {
+            GAME_BASE.store(base, Ordering::Relaxed);
+        }
+        if STARTED.swap(1, Ordering::SeqCst) == 0 {
+            *HIST.lock().unwrap() = Some(HashMap::new());
+            let _ = std::thread::Builder::new()
+                .name("er-cpu-sampler".into())
+                .spawn(sampler_loop);
+        }
+    }
+
+    fn sampler_loop() {
+        let mut iters: u64 = 0;
+        loop {
+            let tid = GAME_TID.load(Ordering::Relaxed);
+            let td = f32::from_bits(LAST_TD_BITS.load(Ordering::Relaxed));
+            let base = GAME_BASE.load(Ordering::Relaxed);
+            if tid != 0 && base != 0 && td >= SLOW_TASK_DELTA {
+                if let Some(rip) = sample_rip(tid) {
+                    if rip > base && rip - base < 0x8000_0000 {
+                        let rva = (rip - base) & !(BUCKET - 1);
+                        if let Ok(mut g) = HIST.lock() {
+                            if let Some(h) = g.as_mut() {
+                                *h.entry(rva).or_insert(0) += 1;
+                            }
+                        }
+                        SAMPLES.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+            iters += 1;
+            if iters % DUMP_EVERY == 0 {
+                dump();
+            }
+            unsafe { Sleep(1) };
+        }
+    }
+
+    fn sample_rip(tid: u32) -> Option<usize> {
+        let h = unsafe { OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME, 0, tid) };
+        if h == 0 {
+            return None;
+        }
+        // 16-byte-aligned CONTEXT buffer; we only set ContextFlags + read Rip.
+        #[repr(align(16))]
+        struct Ctx([u8; CTX_SIZE]);
+        let mut ctx = Ctx([0u8; CTX_SIZE]);
+        let p = ctx.0.as_mut_ptr();
+        unsafe {
+            *(p.add(CTX_FLAGS_OFF) as *mut u32) = CONTEXT_CONTROL_AMD64;
+        }
+        let rip = unsafe {
+            if SuspendThread(h) == u32::MAX {
+                CloseHandle(h);
+                return None;
+            }
+            let ok = GetThreadContext(h, p);
+            ResumeThread(h);
+            let r = if ok != 0 {
+                Some(*(p.add(CTX_RIP_OFF) as *const usize))
+            } else {
+                None
+            };
+            CloseHandle(h);
+            r
+        };
+        rip
+    }
+
+    fn dump() {
+        let Ok(g) = HIST.lock() else { return };
+        let Some(h) = g.as_ref() else { return };
+        let total = SAMPLES.load(Ordering::Relaxed).max(1);
+        let mut v: Vec<(usize, u32)> = h.iter().map(|(k, c)| (*k, *c)).collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1));
+        let mut s = format!(
+            "er-cpu-profile: {total} samples of the game thread during slow frames (task_delta>={SLOW_TASK_DELTA}). Top RVAs (rva -> deobf VA = base+rva):\n"
+        );
+        for (rva, c) in v.iter().take(40) {
+            s.push_str(&format!(
+                "  0x{rva:08x}  {c:>6}  {:.1}%\n",
+                100.0 * *c as f64 / total as f64
+            ));
+        }
+        let path = er_game_base::log::game_directory_path()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("er-cpu-profile.txt");
+        let _ = std::fs::write(path, s);
+    }
+}
+
+#[cfg(not(windows))]
+mod profiler {
+    pub fn note_frame(_base: usize, _task_delta: f32) {}
+}
+
 pub fn standalone_tick() {
     let n = counters::STANDALONE_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
 
@@ -365,6 +503,8 @@ pub fn standalone_tick() {
             .map_or(-1.0, |v| f32::from_bits((v & 0xffff_ffff) as u32))
     };
     let flip_task_delta = read_f32(flipper, 0x268);
+    // Feed the game-thread CPU sampler: this tick runs ON the game thread, so record its id + frame time.
+    profiler::note_frame(base, flip_task_delta);
     let flip_fixed_spf = read_f32(flipper, 0x1c);
     let play_time_ms: i64 = if game_data_man == 0 {
         -1
