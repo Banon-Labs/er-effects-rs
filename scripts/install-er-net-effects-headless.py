@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Headless installer for er-net-effects catalogs.
 
-This installer asks for (or accepts CLI arguments for) a catalog directory and an
-Elden Ring regulation.bin, rips the SpEffect master/discriminator catalogs into
-that directory, and updates er-net-effects.toml so the DLL reads catalogs from the
-chosen location.
+This installer asks for (or accepts CLI arguments for) a catalog directory, an
+Elden Ring regulation.bin, and a user-provided Smithbox executable/app directory.
+It rips the SpEffect master/discriminator catalogs into that directory and updates
+er-net-effects.toml so the DLL reads catalogs from the chosen location.
 """
 
 from __future__ import annotations
@@ -69,20 +69,9 @@ def default_paramdef() -> Path:
     )
 
 
-def default_smithbox_binary_dir() -> Path:
-    return first_existing(
-        [
-            REPO_ROOT / "vendor" / "smithbox",
-            REPO_ROOT / "target" / "soulsformats-bridge" / "bin" / "Release" / "net9.0",
-            REPO_ROOT.parent
-            / "target"
-            / "soulsformats-bridge"
-            / "bin"
-            / "Release"
-            / "net9.0",
-        ],
-        REPO_ROOT / "vendor" / "smithbox",
-    )
+def default_smithbox_path() -> Path | None:
+    raw = os.environ.get("SMITHBOX_EXE") or os.environ.get("SMITHBOX_PATH")
+    return Path(raw) if raw else None
 
 
 def default_regulation() -> Path:
@@ -122,10 +111,21 @@ def parse_args() -> argparse.Namespace:
         help="SpEffect.xml paramdef path.",
     )
     parser.add_argument(
+        "--smithbox",
+        type=Path,
+        default=default_smithbox_path(),
+        help=(
+            "Path to the user's Smithbox.exe or Smithbox app directory. "
+            "Required unless SMITHBOX_EXE or SMITHBOX_PATH is set."
+        ),
+    )
+    parser.add_argument(
         "--smithbox-binary-dir",
         type=Path,
-        default=default_smithbox_binary_dir(),
-        help="Directory containing Andre.Formats.dll and Andre.SoulsFormats.dll.",
+        help=(
+            "Deprecated development-only alias for a directory containing "
+            "Andre.Formats.dll and Andre.SoulsFormats.dll."
+        ),
     )
     parser.add_argument(
         "--effects",
@@ -174,9 +174,49 @@ def require_file(path: Path, label: str) -> None:
         raise SystemExit(f"missing {label}: {path}")
 
 
-def require_smithbox(binary_dir: Path) -> None:
+def require_smithbox_dlls(binary_dir: Path) -> None:
     require_file(binary_dir / "Andre.Formats.dll", "Andre.Formats.dll")
     require_file(binary_dir / "Andre.SoulsFormats.dll", "Andre.SoulsFormats.dll")
+
+
+def prompt_smithbox_path(default: Path | None) -> Path:
+    while True:
+        suffix = f" [{default}]" if default is not None else ""
+        value = input(f"Path to Smithbox.exe or Smithbox app directory{suffix}: ").strip()
+        if value:
+            path = Path(value)
+        elif default is not None:
+            path = default
+        else:
+            print("ERROR: Smithbox path is required.", file=sys.stderr)
+            continue
+        if path.exists():
+            return path
+        print(f"ERROR: Smithbox path does not exist: {path}", file=sys.stderr)
+
+
+def resolve_smithbox_binary_dir(path: Path) -> Path:
+    expanded = path.expanduser()
+    if expanded.is_file():
+        binary_dir = expanded.parent
+    elif expanded.is_dir():
+        binary_dir = expanded
+    else:
+        raise SystemExit(f"missing Smithbox path: {expanded}")
+    require_smithbox_dlls(binary_dir)
+    return binary_dir
+
+
+def smithbox_arg_or_prompt(args: argparse.Namespace) -> Path:
+    supplied = args.smithbox or args.smithbox_binary_dir
+    if supplied is not None:
+        return supplied
+    if sys.stdin.isatty():
+        return prompt_smithbox_path(default_smithbox_path())
+    raise SystemExit(
+        "missing Smithbox path: pass --smithbox /path/to/Smithbox.exe "
+        "or set SMITHBOX_EXE/SMITHBOX_PATH"
+    )
 
 
 def run(command: list[str]) -> None:
@@ -245,9 +285,11 @@ def confirm(
     regulation: Path,
     config: Path,
     master: Path,
+    smithbox_binary_dir: Path,
 ) -> None:
     print("catalog_dir=" + str(catalog_dir))
     print("regulation_bin=" + str(regulation))
+    print("smithbox_binary_dir=" + str(smithbox_binary_dir))
     print("config=" + str(config))
     print("master_catalog=" + str(master))
     print("runtime_catalog_dir=" + to_runtime_path(catalog_dir))
@@ -277,14 +319,14 @@ def main() -> int:
     )
     config = args.config or regulation.parent / CONFIG_FILE_NAME
     master_catalog = catalog_dir / MASTER_CATALOG_FILE_NAME
+    smithbox_binary_dir = resolve_smithbox_binary_dir(smithbox_arg_or_prompt(args))
 
     require_file(regulation, "regulation.bin")
     require_file(args.paramdef, "SpEffect.xml")
     require_file(args.effects, "effects.json")
-    require_smithbox(args.smithbox_binary_dir)
     catalog_dir.mkdir(parents=True, exist_ok=True)
     config.parent.mkdir(parents=True, exist_ok=True)
-    confirm(args, catalog_dir, regulation, config, master_catalog)
+    confirm(args, catalog_dir, regulation, config, master_catalog, smithbox_binary_dir)
 
     run(
         [
@@ -297,7 +339,7 @@ def main() -> int:
             "--effects",
             str(args.effects),
             "--smithbox-binary-dir",
-            str(args.smithbox_binary_dir),
+            str(smithbox_binary_dir),
             "--dotnet-bin",
             args.dotnet_bin,
             "--output",

@@ -87,7 +87,6 @@ DEFAULT_SMITHBOX_BINARY_DIR = Path(
         "SMITHBOX_BINARY_DIR",
         first_existing_path(
             [
-                REPO_ROOT / "vendor" / "smithbox",
                 *ancestor_candidates(
                     Path("target/soulsformats-bridge/bin/Release/net9.0")
                 ),
