@@ -21,10 +21,13 @@
 #![allow(clippy::missing_safety_doc)]
 #![allow(non_snake_case)]
 
+#[cfg(windows)]
 mod drive;
 mod game_mem;
 mod input_inject;
 mod log;
+#[cfg(windows)]
+mod title_scan;
 mod win32;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -42,7 +45,7 @@ use fromsoftware_shared::{FromStatic, SharedTaskImpExt};
 #[cfg(windows)]
 use windows::Win32::{Foundation::HINSTANCE, System::SystemServices::DLL_PROCESS_ATTACH};
 
-use crate::log::{harness_log, reset_log_file};
+use crate::log::{harness_log, reset_log_file, reset_phases_file};
 
 const DLL_MAIN_SUCCESS: i32 = 1;
 
@@ -68,6 +71,7 @@ static START: Once = Once::new();
 #[cfg(windows)]
 fn install() {
     reset_log_file();
+    reset_phases_file();
     harness_log!(
         "er-input-harness-dll attach: TITLE-ACTIVE CSTaskImp FrameBegin self-drive (fires at title + in-world); direct input-memory injection (keystate bitmap + DLUID + accept byte); no SendInput/XInput"
     );

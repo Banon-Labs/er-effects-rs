@@ -45,6 +45,24 @@ fn standalone_json_path() -> PathBuf {
 /// stable singleton pointers. As the real oracle bodies migrate here, this grows
 /// to call `write_game_module_oracles` / `write_oracle_telemetry` with an absent
 /// [`TelemetryFrameInput`] and default (product-unwritten) counters.
+/// Wall-clock ms since boot (GetTickCount64), 0 off-windows. Same clock the input-harness stamps into
+/// `er-input-harness-phases.jsonl` (`start_tick_ms`/`end_tick_ms`), so the ORACLE can align an fps sample
+/// to the harness phase it falls inside and compute per-phase fps. bd ORACLE-dll-decides-reports-2026-07-22.
+fn tick_ms() -> u64 {
+    #[cfg(windows)]
+    {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetTickCount64() -> u64;
+        }
+        unsafe { GetTickCount64() }
+    }
+    #[cfg(not(windows))]
+    {
+        0
+    }
+}
+
 pub fn standalone_tick() {
     let n = counters::STANDALONE_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
 
@@ -101,7 +119,9 @@ pub fn standalone_tick() {
 \"oracle_cs_menu_man_ptr\":\"0x{cs_menu_man:x}\",\
 \"oracle_flip_task_delta\":{flip_task_delta:.6},\
 \"oracle_flip_fixed_spf\":{flip_fixed_spf:.6},\
-\"oracle_play_time_ms\":{play_time_ms}}}\n"
+\"oracle_play_time_ms\":{play_time_ms},\
+\"oracle_tick_ms\":{tick_ms}}}\n",
+        tick_ms = tick_ms()
     );
     // APPEND one JSON line per write -> a timeseries jsonl the agent reads AFTER the run (no polling,
     // no sleep). body already ends in '\n'.

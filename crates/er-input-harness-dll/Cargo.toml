@@ -19,4 +19,8 @@ fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_System_SystemServices",
+  # Title-owner scan (title_scan.rs): VirtualQuery + ReadProcessMemory over this process's own address
+  # space to find the TITLE state machine's owner object and read its PAB/menu semaphores.
+  "Win32_System_Memory",
+  "Win32_System_Diagnostics_Debug",
 ] }
