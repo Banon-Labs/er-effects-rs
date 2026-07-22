@@ -50,6 +50,7 @@ DEFAULT_PARAMDEF = Path(
         "ER_SPEFFECT_PARAMDEF",
         first_existing_path(
             [
+                REPO_ROOT / "resources" / "SpEffect.xml",
                 HOME
                 / "projects/fromsoftware-rs/tools/param-generator/params/eldenring/SpEffect.xml",
                 *ancestor_candidates(
@@ -86,6 +87,7 @@ DEFAULT_SMITHBOX_BINARY_DIR = Path(
         "SMITHBOX_BINARY_DIR",
         first_existing_path(
             [
+                REPO_ROOT / "vendor" / "smithbox",
                 *ancestor_candidates(
                     Path("target/soulsformats-bridge/bin/Release/net9.0")
                 ),
@@ -96,7 +98,13 @@ DEFAULT_SMITHBOX_BINARY_DIR = Path(
     )
 )
 DEFAULT_DOTNET = os.environ.get("DOTNET_BIN", "dotnet")
-DEFAULT_WINDOWS_DOTNET = Path("/mnt/c/Program Files/dotnet/dotnet.exe")
+DEFAULT_WINDOWS_DOTNET = first_existing_path(
+    [
+        Path("/mnt/c/Program Files/dotnet/dotnet.exe"),
+        Path("C:/Program Files/dotnet/dotnet.exe"),
+    ],
+    fallback=Path("/mnt/c/Program Files/dotnet/dotnet.exe"),
+)
 
 
 PROGRAM = r"""

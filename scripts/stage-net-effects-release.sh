@@ -14,6 +14,10 @@ Stages the standalone keyboard-controlled network effects payload:
   er-net-effects.me3           me3 ModProfile loading the game-installed Seamless Co-op DLL plus net-effects DLL
   er-net-effects.toml.example  per-feature configuration file
   .er-net-effects-hotkeys.json.example  keyboard-trigger configuration
+  scripts/install-er-net-effects-headless.py  headless catalog/config installer
+  data/effects.json                    curated bundled effect names
+  resources/SpEffect.xml               SpEffect param definition for catalog ripping
+  vendor/smithbox/                     Andre/SoulsFormats DLLs for regulation.bin reading
   er-net-effect-master-catalog.json     SpEffect metadata for selector labels/tags
   er-net-effect-catalogs/*.jsonc        commentable selector catalogs (network-test, visuals-only, sounds-only, stats, weapon buffs, etc.)
 
@@ -64,9 +68,33 @@ fi
 out_dir=$(realpath -m "$out_dir")
 tmp_dir="$out_dir.tmp"
 rm -rf "$tmp_dir"
-mkdir -p "$tmp_dir/er-net-effect-catalogs"
+mkdir -p "$tmp_dir/er-net-effect-catalogs" "$tmp_dir/scripts" "$tmp_dir/data" "$tmp_dir/resources" "$tmp_dir/vendor/smithbox"
 
 cp -f "$net_effects_dll" "$tmp_dir/er_net_effects_dll.dll"
+cp -f "$repo_root/scripts/install-er-net-effects-headless.py" "$tmp_dir/scripts/install-er-net-effects-headless.py"
+cp -f "$repo_root/scripts/generate-effect-master-catalog.py" "$tmp_dir/scripts/generate-effect-master-catalog.py"
+cp -f "$repo_root/scripts/generate-effect-discriminator-catalogs.py" "$tmp_dir/scripts/generate-effect-discriminator-catalogs.py"
+cp -f "$repo_root/data/effects.json" "$tmp_dir/data/effects.json"
+paramdef_src="$repo_root/../fromsoftware-rs/tools/param-generator/params/eldenring/SpEffect.xml"
+if [[ ! -f "$paramdef_src" ]]; then
+	echo "missing SpEffect paramdef: $paramdef_src" >&2
+	exit 1
+fi
+cp -f "$paramdef_src" "$tmp_dir/resources/SpEffect.xml"
+smithbox_dir=""
+for candidate in \
+	"$repo_root/target/soulsformats-bridge/bin/Release/net9.0" \
+	"$(realpath -m "$repo_root/../../..")/target/soulsformats-bridge/bin/Release/net9.0"; do
+	if [[ -f "$candidate/Andre.Formats.dll" && -f "$candidate/Andre.SoulsFormats.dll" ]]; then
+		smithbox_dir="$candidate"
+		break
+	fi
+done
+if [[ -z "$smithbox_dir" ]]; then
+	echo "missing Smithbox/Andre DLL directory; expected target/soulsformats-bridge/bin/Release/net9.0" >&2
+	exit 1
+fi
+cp -rf "$smithbox_dir"/. "$tmp_dir/vendor/smithbox/"
 cat >"$tmp_dir/er-net-effects.me3" <<'EOF'
 profileVersion = "v1"
 
