@@ -8,7 +8,15 @@ publish = false
 name = "er_input_harness_dll"
 crate-type = ["cdylib"]
 
-# Shared MinHook FFI (compiles the vendored MinHook C once). This crate owns a PRIVATE MinHook
-# instance for its standalone-fallback drive hook; it uses only the raw MH_* externs from er-hook.
-[dependencies]
-er-hook = { path = "../er-hook" }
+# TITLE-ACTIVE drive: the self-drive runs from a CSTaskImp FrameBegin recurring task (fires at the
+# title AND in-world), mirroring er-telemetry-dll, so the harness can drive the full native boot+reload
+# (PRESS ANY BUTTON via the title accept byte, Continue, System->Quit->Continue). No MinHook trampoline
+# is installed, so (unlike the old union anchor) there is no er-hook/MinHook dependency. Game-lib deps
+# are windows-only (cfg(windows)) like er-telemetry-dll.
+[target.'cfg(windows)'.dependencies]
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_SystemServices",
+] }

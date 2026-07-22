@@ -1,135 +1,331 @@
-//! Self-drive state machine, run once per game frame from the union-anchored hook (union.rs). It
-//! exercises the VERIFIED direct-input-memory primitives (input_inject) and is honest about the two
-//! parts of the System->Quit->Load-Profile path that are NOT reversed as menu-event ids.
+//! Self-drive: SEMAPHORE-GATED, TEARDOWN-ON-MISS (user 2026-07-22, bd HARNESS-drive-semaphore-gated-
+//! teardown-on-miss). Every phase presses an input, then waits a BOUNDED number of frames for a SPECIFIC
+//! RAM semaphore confirming the press took effect. If the semaphore does not appear in budget, the
+//! harness is DERAILED: it stops driving and logs DERAILED so the run monitor tears the game down. No
+//! blind A->A->A, no "advance anyway".
 //!
-//! DEFAULT-ON, NO ENV/MARKER GATE: the drive is active whenever this DLL is in the ME3 profile; the
-//! only conditions are real game-state reads (player present, a menu window present). Its mere
-//! PRESENCE enables it; omit the DLL from the profile for production. There is no environment-variable
-//! read, no marker text file, and no product static -- state is re-derived from game memory (game_mem).
+//! KEY RE (bd TITLE-CONTINUE-is-accept-byte-not-keystate): the TITLE screen PRODUCES the inputmgr+0x90
+//! keystate bitmap, so keystate Confirm 0x3d is IGNORED there -- the title's confirm signal is the
+//! global accept byte base+0x4589bdc. So the title (PRESS ANY BUTTON -> menu -> Continue) is driven by
+//! writing the accept byte and gating on the LOAD-STARTED semaphore (now_loading / GameMan+0xb80). The
+//! IN-WORLD pause menu (System->Quit) is a CONSUMER of +0x90 and IS driven by keystate.
 //!
-//! COVERAGE (honest):
-//!  * REVERSED + driven here: keep-input-active (unfocused), and menu cursor nav (Move 0x00/0x45) +
-//!    Confirm (0x3d) via the keystate bitmap -- the input ids proven in
-//!    `frontend-menu-input-injection-ids-2026`.
-//!  * NOT reversed -> logged as gaps, never faked:
-//!      - the in-world ESCAPE-MENU OPEN event id (no verified menu-event id; the old harness used
-//!        SendInput Esc, now a dead path),
-//!      - the OptionSetting -> Quit TAB-SWITCH (mouse-only on native; the product works around it by
-//!        invoking a CAPTURED NATIVE ROUTE object from its own ProfileSelect hooks -- product-side,
-//!        not a menu-event id and not available cross-DLL).
+//! Pattern chosen by the flag file `er-harness-drive-mode.txt` (`boot`|`reload`|`full`, default `full`).
+//! Fires from a CSTaskImp FrameBegin task (title-active). Telemetry-only NATIVE boot+reload for the
+//! vanilla FPS comparison.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
-use crate::game_mem::{menu_data_ptr, player_present};
-use crate::input_inject::{MenuEvent, input_manager, keep_input_active, tap_menu_event};
+use crate::game_mem::{
+    load_fsm, menu_data_ptr, now_loading, read_drive_mode_flag, world_simulating,
+};
+use crate::input_inject::{
+    MenuEvent, advance_press_any_button, input_manager, keep_input_active,
+    request_open_ingame_menu, tap_menu_event,
+};
 use crate::log::harness_log;
 
-// Menu tap cadence (product `MenuTapSchedule`): assert the edge for SET frames, then GAP idle frames,
-// one clean cursor step per cycle (edge-triggered nav, no auto-repeat).
-const TAP_SET_FRAMES: u64 = 2;
-const TAP_GAP_FRAMES: u64 = 10;
+// Keystate tap cadence (in-world menu only): a clean single edge per cycle.
+const TAP_SET_FRAMES: u64 = 3;
+const TAP_GAP_FRAMES: u64 = 6;
 const TAP_CYCLE_FRAMES: u64 = TAP_SET_FRAMES + TAP_GAP_FRAMES;
-/// Bounded Down taps before Confirm (menus are short; Down saturates without wrap so overshoot is
-/// bounded too). Exercises the reversed nav primitive; a cursor-feedback stop needs the per-menu list
-/// object pointer, which is not resolved generically here.
-const NAV_MAX_TAPS: u64 = 4;
-const CONFIRM_HOLD_FRAMES: u64 = TAP_SET_FRAMES;
+/// Frames after a keystate nav step's taps to let the menu react before advancing.
+const SETTLE_FRAMES: u64 = 30;
+/// Popup-accept cadence (dialog-OK id 0x01, harmless when no dialog is up).
+const POPUP_SET_FRAMES: u64 = 2;
+const POPUP_CYCLE_FRAMES: u64 = 8;
 
-/// When true, this DLL is a pure decoupled TOGGLE (its presence enables the product's proven sq-repro
-/// driver) and does NOT inject menu events itself -- avoids two drivers fighting. Flip to false once the
-/// standalone direct-memory drive (menu-open + page eventIds) is fully reversed and owns the flow.
-const PRESENCE_TOGGLE_ONLY: bool = true;
+// ---- per-phase frame budgets (derail if the effect semaphore is not seen within) ----
+/// Accept-byte title Continue: menu-open + confirm + load-kick. ~5s at 60fps.
+const TITLE_CONTINUE_BUDGET: u64 = 300;
+/// In-world menu open: request byte honored + window up. ~4s.
+const MENU_OPEN_BUDGET: u64 = 240;
+/// A keystate nav step (taps + settle + a little slack).
+const NAV_BUDGET: u64 = 120;
+/// Return-to-title: teardown of the world. ~10s.
+const RETURN_TITLE_BUDGET: u64 = 600;
+/// A load completing to genuine in-world simulation (asset load is long + slow). ~150s.
+const LOAD_BUDGET: u64 = 9000;
 
-const STATE_WAIT_MENU: usize = 0;
-const STATE_NAV: usize = 1;
-const STATE_CONFIRM: usize = 2;
-const STATE_TAB_GAP_HALT: usize = 3;
-const STATE_DONE: usize = 4;
-
-static STATE: AtomicUsize = AtomicUsize::new(STATE_WAIT_MENU);
-static PHASE_FRAME: AtomicUsize = AtomicUsize::new(0);
-static OPEN_GAP_LOGGED: AtomicUsize = AtomicUsize::new(0);
-static TAB_GAP_LOGGED: AtomicUsize = AtomicUsize::new(0);
-
-fn set_state(next: usize) {
-    STATE.store(next, Ordering::SeqCst);
-    PHASE_FRAME.store(0, Ordering::SeqCst);
+/// Per-frame semaphore snapshot (world_sim computed once by the caller -- it mutates a rising streak).
+#[derive(Clone, Copy)]
+struct Sem {
+    menu: usize,
+    world_sim: bool,
+    now_loading: bool,
+    load_fsm: i32,
 }
 
-/// Run one frame of the drive. Called on the game thread from the anchor detour.
+impl Sem {
+    fn read(world_sim: bool) -> Self {
+        Sem {
+            menu: menu_data_ptr(),
+            world_sim,
+            now_loading: now_loading(),
+            load_fsm: load_fsm(),
+        }
+    }
+    /// A load has actually STARTED (Continue took effect): the load FSM left idle, the now-loading latch
+    /// tripped, or the world is already simulating.
+    fn load_started(&self) -> bool {
+        self.world_sim || self.now_loading || self.load_fsm > 0
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Status {
+    Running,
+    Advanced,
+    /// Effect semaphore not seen within budget -> the drive is derailed.
+    Derailed,
+}
+
+#[derive(Clone, Copy)]
+enum Phase {
+    /// TITLE: write the accept byte each frame (drives PAB -> menu -> Continue). EFFECT: a load started.
+    TitleContinue,
+    /// Wait for genuine in-world simulation (play_time rising). EFFECT: world_sim.
+    WaitInWorld,
+    /// IN-WORLD: request the pause menu. EFFECT: a menu window came up.
+    OpenIngameMenu,
+    /// IN-WORLD keystate: MoveUp then Confirm (IngameTop -> OptionSetting). EFFECT: settle (coarse).
+    NavToSystemEnter,
+    /// IN-WORLD keystate: TabLeft (OptionSetting -> Quit page). EFFECT: settle (coarse).
+    TabToQuit,
+    /// IN-WORLD keystate: MoveDown then Confirm (return-title row). EFFECT: settle (coarse).
+    ActivateReturnTitle,
+    /// IN-WORLD keystate: Confirm the return-title dialog. EFFECT: world stopped simulating (at title).
+    ConfirmReturnTitle,
+}
+
+impl Phase {
+    fn name(self) -> &'static str {
+        match self {
+            Phase::TitleContinue => "title_continue(accept-byte)",
+            Phase::WaitInWorld => "wait_in_world",
+            Phase::OpenIngameMenu => "open_ingame_menu",
+            Phase::NavToSystemEnter => "nav_to_system_enter",
+            Phase::TabToQuit => "tab_to_quit",
+            Phase::ActivateReturnTitle => "activate_return_title",
+            Phase::ConfirmReturnTitle => "confirm_return_title",
+        }
+    }
+
+    fn budget(self) -> u64 {
+        match self {
+            Phase::TitleContinue => TITLE_CONTINUE_BUDGET,
+            Phase::WaitInWorld => LOAD_BUDGET,
+            Phase::OpenIngameMenu => MENU_OPEN_BUDGET,
+            Phase::NavToSystemEnter | Phase::TabToQuit | Phase::ActivateReturnTitle => NAV_BUDGET,
+            Phase::ConfirmReturnTitle => RETURN_TITLE_BUDGET,
+        }
+    }
+
+    /// One frame of the phase. Returns Advanced (effect seen), Running, or Derailed (past budget).
+    fn tick(self, base: usize, im: usize, frame: u64, sem: &Sem) -> Status {
+        let advanced = match self {
+            Phase::TitleContinue => {
+                // Drive the title via its OWN confirm signal (accept byte), not keystate. Writing it each
+                // frame walks PAB -> menu(Continue focused) -> confirm. Effect: a load began.
+                advance_press_any_button(base);
+                sem.load_started()
+            }
+            Phase::WaitInWorld => sem.world_sim,
+            Phase::OpenIngameMenu => {
+                if sem.menu == 0 {
+                    request_open_ingame_menu(im);
+                }
+                sem.menu != 0
+            }
+            Phase::NavToSystemEnter => {
+                settle_after_taps(im, &[MenuEvent::MoveUp, MenuEvent::Confirm], frame)
+            }
+            Phase::TabToQuit => settle_after_taps(im, &[MenuEvent::TabLeft], frame),
+            Phase::ActivateReturnTitle => {
+                settle_after_taps(im, &[MenuEvent::MoveDown, MenuEvent::Confirm], frame)
+            }
+            Phase::ConfirmReturnTitle => {
+                tap_pattern(im, &[MenuEvent::Confirm], frame);
+                // Returned to title = world stopped simulating (torn down) after a real hold.
+                !sem.world_sim && frame > SETTLE_FRAMES && sem.load_fsm <= 0
+            }
+        };
+        if advanced {
+            Status::Advanced
+        } else if frame >= self.budget() {
+            Status::Derailed
+        } else {
+            Status::Running
+        }
+    }
+}
+
+/// Tap each event once per cycle, cycling through the list (used by phases that keep asserting input).
+fn tap_pattern(im: usize, events: &[MenuEvent], frame: u64) {
+    if events.is_empty() {
+        return;
+    }
+    if (frame % TAP_CYCLE_FRAMES) < TAP_SET_FRAMES {
+        let idx = ((frame / TAP_CYCLE_FRAMES) as usize) % events.len();
+        tap_menu_event(im, events[idx]);
+    }
+}
+
+/// Tap each event once in order (one cycle each), then settle. Returns true once taps are issued and
+/// SETTLE_FRAMES elapsed (the coarse "the nav step ran" signal for in-world menus whose per-pane window
+/// id is not resolved standalone -- the keystate menu IS a +0x90 consumer, so the taps land).
+fn settle_after_taps(im: usize, events: &[MenuEvent], frame: u64) -> bool {
+    let taps = events.len() as u64;
+    let taps_done = frame / TAP_CYCLE_FRAMES;
+    if taps_done < taps {
+        if (frame % TAP_CYCLE_FRAMES) < TAP_SET_FRAMES {
+            tap_menu_event(im, events[taps_done as usize]);
+        }
+        false
+    } else {
+        frame >= taps * TAP_CYCLE_FRAMES + SETTLE_FRAMES
+    }
+}
+
+#[derive(Clone, Copy)]
+enum DriveMode {
+    BootContinueOnly,
+    NativeReloadOnly,
+    FullBootReload,
+}
+
+impl DriveMode {
+    fn from_flag() -> Self {
+        match read_drive_mode_flag().as_str() {
+            "boot" => DriveMode::BootContinueOnly,
+            "reload" => DriveMode::NativeReloadOnly,
+            _ => DriveMode::FullBootReload,
+        }
+    }
+    fn name(self) -> &'static str {
+        match self {
+            DriveMode::BootContinueOnly => "boot",
+            DriveMode::NativeReloadOnly => "reload",
+            DriveMode::FullBootReload => "full",
+        }
+    }
+    fn phases(self) -> &'static [Phase] {
+        const BOOT: &[Phase] = &[Phase::TitleContinue, Phase::WaitInWorld];
+        const RELOAD: &[Phase] = &[
+            Phase::OpenIngameMenu,
+            Phase::NavToSystemEnter,
+            Phase::TabToQuit,
+            Phase::ActivateReturnTitle,
+            Phase::ConfirmReturnTitle,
+            Phase::TitleContinue,
+            Phase::WaitInWorld,
+        ];
+        const FULL: &[Phase] = &[
+            Phase::TitleContinue,
+            Phase::WaitInWorld,
+            Phase::OpenIngameMenu,
+            Phase::NavToSystemEnter,
+            Phase::TabToQuit,
+            Phase::ActivateReturnTitle,
+            Phase::ConfirmReturnTitle,
+            Phase::TitleContinue,
+            Phase::WaitInWorld,
+        ];
+        match self {
+            DriveMode::BootContinueOnly => BOOT,
+            DriveMode::NativeReloadOnly => RELOAD,
+            DriveMode::FullBootReload => FULL,
+        }
+    }
+}
+
+static PHASE_IDX: AtomicUsize = AtomicUsize::new(0);
+static PHASE_FRAME: AtomicU64 = AtomicU64::new(0);
+static POPUP_FRAME: AtomicU64 = AtomicU64::new(0);
+static MODE_IDX: AtomicUsize = AtomicUsize::new(usize::MAX);
+static DERAILED: AtomicBool = AtomicBool::new(false);
+
+fn resolve_mode() -> DriveMode {
+    const MODES: [DriveMode; 3] = [
+        DriveMode::BootContinueOnly,
+        DriveMode::NativeReloadOnly,
+        DriveMode::FullBootReload,
+    ];
+    let cached = MODE_IDX.load(Ordering::SeqCst);
+    if cached != usize::MAX {
+        return MODES[cached];
+    }
+    let mode = DriveMode::from_flag();
+    let idx = match mode {
+        DriveMode::BootContinueOnly => 0,
+        DriveMode::NativeReloadOnly => 1,
+        DriveMode::FullBootReload => 2,
+    };
+    MODE_IDX.store(idx, Ordering::SeqCst);
+    harness_log!(
+        "drive: mode='{}' phases={}",
+        mode.name(),
+        mode.phases().len()
+    );
+    mode
+}
+
+/// Run one frame of the drive. Called on the game thread from the CSTaskImp FrameBegin task.
 pub fn on_frame(base: usize) {
-    // STAY-ACTIVE every frame so injected input applies while the window is unfocused (the whole
-    // reason the direct-memory channel needs no window focus).
     keep_input_active(base);
 
-    // PRESENCE-TOGGLE MODE (2026-07-19): for the current load2 diagnostic run this DLL's ROLE is the
-    // decoupled toggle -- its mere presence enables the PRODUCT's proven sq-repro driver (which owns
-    // the System->Quit->Load navigation incl. the direct tab-force write). This DLL must NOT also
-    // inject menu events, or the two drivers fight. So keep stay-active (harmless, same DLUID+0x88d=1)
-    // and return before the standalone menu state machine. The standalone direct-memory drive below is
-    // retained for the eventual fully-decoupled harness once the menu-open/page eventIds are named.
-    if PRESENCE_TOGGLE_ONLY {
-        return;
+    if DERAILED.load(Ordering::SeqCst) {
+        return; // stopped driving; the run monitor tears the game down on the DERAILED marker
     }
 
-    let state = STATE.load(Ordering::SeqCst);
-    if state == STATE_DONE {
-        return;
-    }
     let Some(im) = input_manager(base) else {
         return;
     };
-    let frame = PHASE_FRAME.fetch_add(1, Ordering::SeqCst) as u64;
-    let in_set_window = (frame % TAP_CYCLE_FRAMES) < TAP_SET_FRAMES;
 
-    match state {
-        STATE_WAIT_MENU => {
-            // We can only navigate a menu that is already up: there is no reversed menu-event id to
-            // OPEN the in-world escape menu (the old SendInput-Esc open is the dead path). Log that
-            // gap once, then wait for a menu to appear (opened by the user or by the product path).
-            if player_present() && OPEN_GAP_LOGGED.swap(1, Ordering::SeqCst) == 0 {
-                harness_log!(
-                    "drive: player present, no menu up. GAP: no reversed menu-event id to OPEN the in-world escape menu (SendInput-Esc was the dead path). Waiting for a menu window before driving reversed Move/Confirm."
-                );
-            }
-            if menu_data_ptr() != 0 {
-                harness_log!(
-                    "drive: menu window present -> NAV (inject Down via keystate bitmap events 0x00+0x45, cadence {TAP_SET_FRAMES}/{TAP_GAP_FRAMES})"
-                );
-                set_state(STATE_NAV);
-            }
-        }
-        STATE_NAV => {
-            let taps_done = frame / TAP_CYCLE_FRAMES;
-            if taps_done >= NAV_MAX_TAPS {
-                harness_log!("drive: NAV issued {NAV_MAX_TAPS} Down taps -> CONFIRM (event 0x3d)");
-                set_state(STATE_CONFIRM);
-                return;
-            }
-            if in_set_window {
-                // Inject BOTH vertical-move ids; only Down advances, Up saturates (harmless).
-                tap_menu_event(im, MenuEvent::MoveA);
-                tap_menu_event(im, MenuEvent::MoveB);
-            }
-        }
-        STATE_CONFIRM => {
-            if frame < CONFIRM_HOLD_FRAMES {
-                tap_menu_event(im, MenuEvent::Confirm);
-            } else {
-                set_state(STATE_TAB_GAP_HALT);
+    // GENERALLY ACCEPT POPUPS every frame (dialog-OK id 0x01; consumed only while a modal dialog is up).
+    let pf = POPUP_FRAME.fetch_add(1, Ordering::SeqCst);
+    if pf % POPUP_CYCLE_FRAMES < POPUP_SET_FRAMES {
+        tap_menu_event(im, MenuEvent::PopupAccept);
+    }
+
+    let phases = resolve_mode().phases();
+    let idx = PHASE_IDX.load(Ordering::SeqCst);
+    if idx >= phases.len() {
+        return; // all phases complete
+    }
+    let phase = phases[idx];
+    let frame = PHASE_FRAME.fetch_add(1, Ordering::SeqCst);
+    // world_simulating mutates a rising streak -> compute exactly once per frame.
+    let sem = Sem::read(world_simulating());
+
+    match phase.tick(base, im, frame, &sem) {
+        Status::Running => {}
+        Status::Advanced => {
+            harness_log!(
+                "phase[{idx}] {} ADVANCED after {frame}f (menu=0x{:x} world_sim={} now_loading={} load_fsm={})",
+                phase.name(),
+                sem.menu,
+                sem.world_sim as u8,
+                sem.now_loading as u8,
+                sem.load_fsm
+            );
+            PHASE_IDX.store(idx + 1, Ordering::SeqCst);
+            PHASE_FRAME.store(0, Ordering::SeqCst);
+            if idx + 1 >= phases.len() {
+                harness_log!("drive: DONE -- all phases complete");
             }
         }
-        STATE_TAB_GAP_HALT => {
-            // The OptionSetting -> Quit tab-switch has NO reversed menu-event id (mouse-only). The
-            // product finishes by invoking a captured native route object from its own ProfileSelect
-            // hooks -- product-side, not reachable from this DLL. Halt honestly here.
-            if TAB_GAP_LOGGED.swap(1, Ordering::SeqCst) == 0 {
-                harness_log!(
-                    "drive: reached the OptionSetting->Quit TAB-SWITCH. GAP: no reversed menu-event id for the tab-switch (mouse-only on native). The product finishes via a captured native route object (ProfileSelect hooks, product-side). Standalone self-drive HALTS here -- NOT claiming an autonomous finish."
-                );
-            }
-            set_state(STATE_DONE);
+        Status::Derailed => {
+            harness_log!(
+                "phase[{idx}] {} DERAILED: effect semaphore not seen within {}f budget (menu=0x{:x} world_sim={} now_loading={} load_fsm={}) -- STOPPING drive; tear down and analyze",
+                phase.name(),
+                phase.budget(),
+                sem.menu,
+                sem.world_sim as u8,
+                sem.now_loading as u8,
+                sem.load_fsm
+            );
+            DERAILED.store(true, Ordering::SeqCst);
         }
-        _ => {}
     }
 }

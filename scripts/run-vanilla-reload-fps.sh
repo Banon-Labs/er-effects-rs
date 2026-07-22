@@ -11,6 +11,7 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/vanilla-reload-fps-$(date +%Y%m%d-%H%M%S)}"
 TELEM_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_telemetry_dll.dll"
+HARNESS_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_input_harness_dll.dll"
 
 fail() {
 	echo "run-vanilla-reload-fps: $*" >&2
@@ -34,15 +35,19 @@ fi
 source "$REPO_ROOT/scripts/steam-running.sh"
 steam_running || fail "Steam is not running. Start Steam (interactive login) first."
 [[ -f "$TELEM_DLL" ]] || fail "telemetry DLL not built: $TELEM_DLL (cargo xwin build --release --target x86_64-pc-windows-msvc -p er-telemetry-dll)"
+[[ -f "$HARNESS_DLL" ]] || fail "input-harness DLL not built: $HARNESS_DLL (cargo xwin build --release --target x86_64-pc-windows-msvc -p er-input-harness-dll)"
 
 ME3="${ME3:-/mnt/c/Users/$USER/AppData/Local/garyttierney/me3/bin/me3.exe}"
 [[ -f "$ME3" ]] || fail "Windows me3.exe not found at $ME3 (set ME3=<path to me3.exe>)"
 mkdir -p "$ARTIFACT_DIR"
 cp -f "$TELEM_DLL" "$GAME_DIR/er_telemetry_dll.dll"
+cp -f "$HARNESS_DLL" "$GAME_DIR/er_input_harness_dll.dll"
 TS_GAME="$GAME_DIR/er-telemetry-timeseries.jsonl"
-rm -f "$TS_GAME"
+rm -f "$TS_GAME" "$GAME_DIR/er-input-harness.log"
 
-WIN_TELEM="$(python3 -c "p='$GAME_DIR/er_telemetry_dll.dll'; print((p[5].upper()+':\\\\'+p[7:].replace('/','\\\\')) if p.startswith('/mnt/') else p)")"
+winpath() { python3 -c "p='$1'; print((p[5].upper()+':\\\\'+p[7:].replace('/','\\\\')) if p.startswith('/mnt/') else p)"; }
+WIN_TELEM="$(winpath "$GAME_DIR/er_telemetry_dll.dll")"
+WIN_HARNESS="$(winpath "$GAME_DIR/er_input_harness_dll.dll")"
 PROFILE="$ARTIFACT_DIR/vanilla-telemetry.me3"
 cat >"$PROFILE" <<EOF
 profileVersion = "v1"
@@ -52,13 +57,16 @@ game = "eldenring"
 
 [[natives]]
 path = '$WIN_TELEM'
+
+[[natives]]
+path = '$WIN_HARNESS'
 EOF
 
 echo "======================================================================"
 echo "== LAUNCHING ELDEN RING (offline, me3) -- VANILLA telemetry-only run =="
-echo "==   telemetry-only DLL: no product hooks, no reload driver, NO autopilot"
-echo "==   YOU drive: (1) title -> Continue (loads angrE), walk forward a few s"
-echo "==             (2) System -> Quit to Title -> Continue (RELOAD), walk fwd ~3s"
+echo "==   telemetry DLL (fps) + input-harness DLL (drives NATIVE boot + reload via"
+echo "==   direct input-memory injection -- NO product, NO user, NO mouse)"
+echo "==   harness drives: title->Continue (BOOT) then System->Quit->Continue (RELOAD)"
 echo "==   artifacts -> $ARTIFACT_DIR"
 echo "======================================================================"
 

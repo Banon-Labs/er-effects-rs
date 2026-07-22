@@ -42,21 +42,66 @@ const HEAP_LO: usize = 0x10000;
 /// tab-switch -- that is mouse-only on native and is the known self-drive gap.
 #[derive(Clone, Copy)]
 pub enum MenuEvent {
-    /// One of the two vertical-move ids. Callers inject BOTH (`MoveA` and `MoveB`) for a "Down": only
-    /// Down advances the cursor, Up saturates at the top so it is harmless.
-    MoveA,
-    MoveB,
+    /// Vertical move DOWN (id 0x00) and UP (id 0x45) -- verified vertical-move ids. Injected singly now
+    /// (directional), so nav can stop on a middle row instead of saturating an extreme.
+    MoveDown,
+    MoveUp,
+    /// OptionSetting tab-switch: LEFT/prev tab (id 0x30) and RIGHT/next tab (id 0x31). RE 2026-07-22
+    /// (bd MENU-GAPS-CLOSED): GridControl pager FUN_1407392f0 -> tab handler FUN_14093b760.
+    TabLeft,
+    TabRight,
     Confirm,
+    /// Modal-dialog OK/accept (id 0x01). Consumed ONLY by the dialog builder FUN_140e9a920 while a modal
+    /// CS dialog (connection-error / offline-notice / save-data / ToS popup) is up; a no-op otherwise.
+    /// Tapped EVERY frame to generally accept the 0-N boot-flow popups that block Continue. bd
+    /// HARNESS-must-tap-dialog-OK-0x01-every-frame-2026-07-22.
+    PopupAccept,
 }
 
 impl MenuEvent {
     const fn id(self) -> usize {
         match self {
-            MenuEvent::MoveA => 0x00,
-            MenuEvent::MoveB => 0x45,
+            MenuEvent::MoveDown => 0x00,
+            MenuEvent::MoveUp => 0x45,
+            MenuEvent::TabLeft => 0x30,
+            MenuEvent::TabRight => 0x31,
             MenuEvent::Confirm => 0x3d,
+            MenuEvent::PopupAccept => 0x01,
         }
     }
+}
+
+/// CSMenuManImp.popupMenu (+0x80) and its request-open-IngameTop flag (+0x121). RE 2026-07-22.
+const CS_MENU_MAN_POPUP_MENU_80_OFFSET: usize = 0x80;
+const POPUP_MENU_REQUEST_OPEN_INGAME_TOP_121_OFFSET: usize = 0x121;
+/// The in-world menu-open guard id: opening IngameTop is only honored while `inputmgr+0x90+0x1c & 1 == 0`
+/// (the raw-pad Options press is read elsewhere; this is the equivalent of the native open fn's guard).
+const MENU_OPEN_GUARD_EVENT_ID: usize = 0x1c;
+
+/// Request the in-world pause/System menu (02_000_IngameTop) to open, the equivalent one-shot effect of
+/// the native open fn (deobf 0x7ede50): set `popupMenu+0x121 = 1`. Fault-safe; game-thread only. Returns
+/// true once the request was written. Gated on the same guard the native fn uses so it is a no-op when a
+/// menu is already up. bd MENU-GAPS-CLOSED-tabswitch...pausemenu-open-2026-07-22.
+pub fn request_open_ingame_menu(input_manager_ptr: usize) -> bool {
+    let guard = input_manager_ptr + INPUTMGR_BITMAP_90_OFFSET + MENU_OPEN_GUARD_EVENT_ID;
+    if unsafe { read_u8(guard) }.is_none_or(|g| g & 1 != 0) {
+        return false;
+    }
+    let Some(popup) = (unsafe { read_usize(input_manager_ptr + CS_MENU_MAN_POPUP_MENU_80_OFFSET) })
+        .filter(|p| *p >= HEAP_LO)
+    else {
+        return false;
+    };
+    let req = popup + POPUP_MENU_REQUEST_OPEN_INGAME_TOP_121_OFFSET;
+    if unsafe { read_u8(req) }.is_none() {
+        return false;
+    }
+    // SAFETY: confirmed-readable byte in the live CSPopupMenu; +0x121 is the request-open-IngameTop
+    // flag CSPopupMenu::Update consumes next frame (RE 2026-07-22).
+    unsafe {
+        *(req as *mut u8) = 1;
+    }
+    true
 }
 
 /// Resolve the dereferenced input-manager pointer, or `None` before it is initialized.
@@ -94,6 +139,28 @@ pub fn keep_input_active(base: usize) -> bool {
     // SAFETY: confirmed-readable flag byte inside the live DLUID singleton.
     unsafe {
         *(flag as *mut u8) = 1;
+    }
+    true
+}
+
+/// Title global accept byte RVA (`TITLE_GLOBAL_ACCEPT_BYTE_RVA` in the product constant tree). PRESS
+/// ANY BUTTON is read on the raw-pad layer, NOT the keystate bitmap; the game's own
+/// `TitleTopDialog::update` accept-gate advances the parked press-any-button title when this byte is 1
+/// (bd title-global-accept-byte-144589bdc-zeroinput-advance). This is the decoded accept flag, not an
+/// OS input event -- the harness sets it to blow through PRESS ANY BUTTON and open the title menu.
+const TITLE_GLOBAL_ACCEPT_BYTE_RVA: usize = 0x4589bdc;
+
+/// Set the title global accept byte = 1 to advance the parked PRESS ANY BUTTON title into its menu.
+/// Fault-safe; game-thread only. Returns true once written. A no-op effect once past the title.
+pub fn advance_press_any_button(base: usize) -> bool {
+    let addr = base + TITLE_GLOBAL_ACCEPT_BYTE_RVA;
+    if unsafe { read_u8(addr) }.is_none() {
+        return false;
+    }
+    // SAFETY: confirmed-readable byte in the mapped game image; this is the product's own accept-byte
+    // write (product_autoload_gates.rs: `*(base + TITLE_GLOBAL_ACCEPT_BYTE_RVA) = 1`).
+    unsafe {
+        *(addr as *mut u8) = 1;
     }
     true
 }
