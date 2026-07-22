@@ -151,7 +151,10 @@ echo "======================================================================"
 "$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
 
 CAPTURE_ARGS=()
-if [[ "${NO_SQREPRO:-0}" != "1" ]]; then
+if [[ "${CAPTURE_LOAD1_IMPRINT:-0}" == "1" ]]; then
+	# IMPRINT capture: record the clean load1 boot timeseries; tear down on sustained world-ready.
+	CAPTURE_ARGS+=(--capture-load1-imprint)
+elif [[ "${NO_SQREPRO:-0}" != "1" ]]; then
 	CAPTURE_ARGS+=(--require-reload-move)    # full sequence: prove a RELOAD moves
 	CAPTURE_ARGS+=(--require-reload-settled) # and that native MoveMap/requestCode handoff finished
 fi

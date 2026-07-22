@@ -316,6 +316,36 @@ pub(crate) static ENDING_REQUEST_STALL_STREAK: AtomicUsize = AtomicUsize::new(0)
 pub(crate) static ENDING_REQUEST_SET: AtomicUsize = AtomicUsize::new(0);
 /// Runtime semaphore: >0 == the recovery fired (SET menuData+0x5d=1 at an mms18 stall) this run.
 pub(crate) static ENDING_REQUEST_SET_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Diagnostic counter: frozen-at-mms18 frames where the rt5d drive's stuck signature was NOT met
+/// (so a run can name which sub-condition blocked the drive).
+pub(crate) static ENDING_REQUEST_WHYNOT_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// IN-WORLD finalize-drive recovery (runs BEFORE the title_owner gate via the cached owner, so it
+/// reaches load2's in-world frozen mms18 which the title_owner-gated path never does). Sustained
+/// frozen-frame streak, one-shot latch, and fire count.
+pub(crate) static INWORLD_FINALIZE_DRIVE_STREAK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static INWORLD_FINALIZE_DRIVE_SET: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static INWORLD_FINALIZE_DRIVE_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Diagnostic counter: frames at mms18 where the in-world drive's frozen signature was NOT met.
+pub(crate) static INWORLD_FINALIZE_DRIVE_WHYNOT_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// The MoveMapStep pointer as resolved by write_oracle (the ONLY resolution that reliably tracks
+/// load2's in-world step; the game-task's fresh title_owner scan reads a stale owner -> stale step).
+/// Published each telemetry write; the in-world finalize drive consumes it instead of re-resolving.
+/// 0 == not currently resolved.
+pub(crate) static ORACLE_RELIABLE_MMS_PTR: AtomicUsize = AtomicUsize::new(0);
+/// Child-done-query override (FUN_140eb5550, deobf 0x140eb5530). STEP_MoveMap_Update tears the
+/// MoveMapStep child down when this returns done; for load2 it returns done PREMATURELY (field25=0),
+/// stranding the reload. The MoveMapStep child's EzChildStepBase = MoveMapStep + 0x108 (isolates its
+/// call from the generic query's other callers). We hold its result not-done while the finalize is
+/// mid-walk on a committed reload, so the child survives and the advancer completes.
+pub(crate) const CHILD_DONE_QUERY_RVA: usize = 0xeb5530;
+pub(crate) const MOVEMAPSTEP_CHILD_EZSTEP_BASE_OFFSET: usize = 0x108;
+pub(crate) static CHILD_DONE_QUERY_ORIG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static CHILD_DONE_QUERY_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static CHILD_DONE_HELD_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static CHILD_DONE_DIAG_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Held frozen-signature frames before the in-world drive fires. ~2s at load2's ~20fps; short so the
+/// RAM-gated drive completes before an incidental unfocused-mouse click can contaminate the run.
+pub(crate) const INWORLD_FINALIZE_DRIVE_RELEASE_FRAMES: usize = 40;
 /// Sustained stuck-at-18 frames before the recovery drives the ending request (~2s at task rate).
 pub(crate) const ENDING_REQUEST_STALL_RELEASE_FRAMES: usize = 120;
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);

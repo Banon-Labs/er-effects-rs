@@ -141,6 +141,130 @@ pub(crate) fn install_system_quit_child_finish_trace_hook() {
     }
 }
 
+/// Stuck-frame + one-shot state for the load2 testNetStep force-finish below.
+static TESTNET_FF_STUCK_FRAMES: AtomicUsize = AtomicUsize::new(0);
+static TESTNET_FF_LAST_MMS: AtomicUsize = AtomicUsize::new(usize::MAX);
+static TESTNET_FF_FIRED_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+/// LOAD2 WORLD-COMPLETION FIX (bd load2-fires-but-stalls-at-mms18-world-completion-2026-07-19). A
+/// DRIVEN reload (`fresh_deser>=1`) reaches MoveMapStep STEP_Finish but its testNetStep child never
+/// finishes -- observed LOAD2-ONLY: load1's testNetStep finishes so requestCode latches 1->2 and the
+/// world completes; load2's HANGS so requestCode stays 1, STEP_GameStepWait never gets a completed
+/// world, and there is no readiness (mms=18, warmup=0, testnet_stepper_present=True, csremo idle).
+/// Force the hung child via the RE'd SAVE-SAFE lever `EzChildStepBase::RequestFinish` (0xeb5570) on the
+/// testNetStep wrapper at `MoveMapStep+0x108`. TIGHTLY GATED so it can never touch a healthy load1 or a
+/// still-progressing load: only after a reload committed (epoch>=1), only while requestCode==1, only
+/// when the inner stepper (+0x110) is non-null (unfinished), only after STUCK frames of no mms_state
+/// progress, and ONCE per reload epoch. Called per-frame from `tick_before_player_lookup`.
+pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+    if epoch == 0 {
+        // No reload committed yet -> this is load1; never force its (healthy) testNetStep.
+        TESTNET_FF_STUCK_FRAMES.store(0, Ordering::Relaxed);
+        return;
+    }
+    let mut owner = TITLE_OWNER_PTR.load(Ordering::SeqCst);
+    if owner == null {
+        owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
+    }
+    if owner == null {
+        return;
+    }
+    let Some(ig) = (unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) })
+        .filter(|v| *v >= 0x10000)
+    else {
+        return;
+    };
+    // requestCode must be 1 (world loading, not latched to 2 = done). Any other value: reset + bail.
+    if unsafe { safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) }.unwrap_or(-1) != 1 {
+        TESTNET_FF_STUCK_FRAMES.store(0, Ordering::Relaxed);
+        return;
+    }
+    let Some(mms) = (unsafe { safe_read_usize(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) })
+        .filter(|v| *v >= 0x10000)
+    else {
+        return;
+    };
+    // FINALIZE SUBSTATE force-advance (bd load2-real-blocker-finalize-advancer-stuck-substate7): the
+    // load2 softlock parks at MoveMapStep+0x12a == 7 ("REMO/SAVE-DRAIN WAIT") -- the advancer FUN_140afa7c0's
+    // 7->8 gate (FUN_14067a170 && !ShouldSave && !FUN_140679460 && FUN_140a9ceb0(CSRemo)) never passes for a
+    // warm reload. A just-deserialized load2 has NOT played, so that save/remo drain is spurious. Force the
+    // substate 7->8 (WARP/SERVER FINALIZE) so the advancer continues to 9, STEP_MoveMap_Update latches
+    // requestCode=2, and the world completes. Writing +0x12a is LOAD-STATE progression, NOT a save write.
+    let fin = unsafe { safe_read_u8(mms + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET) }
+        .map(i32::from)
+        .unwrap_or(-1);
+    let mms_state = unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET) }.unwrap_or(-1);
+    let _ = (&TESTNET_FF_LAST_MMS, &TESTNET_FF_STUCK_FRAMES);
+    // FRAMERATE FIX (2026-07-21, case 7 gate decompiled from FUN_140afa6d0 via the ghidra MCP): the
+    // finalize walk (fin 5->9) is a cleanup that runs AFTER the fin=0 movable window; load1 becomes
+    // movable, THEN walks and settles (mms 18->-1) -> exits loading mode -> fps recovers. Holding fin=0
+    // FOREVER (below) keeps load2/load3 in loading mode -> flat 20fps. So: once THIS reload's 60-frame
+    // movement proof has LATCHED, RELEASE the hold and satisfy the case-7 save-drain gate so the game's
+    // OWN advancer completes the walk. Gate 7->8 = (saveState==0 && !ShouldSave() && !ngp && CSRemo-
+    // drained); ShouldSave() reads GameMan.saveRequested (0xb72), left set because the finalize's own
+    // RequestSave(false) autosave is suppressed on a warm reload (gaitem-crash dodge). saveState/ngp/
+    // CSRemo already pass -> saveRequested is the SOLE blocker. Clear saveState + saveRequested native-
+    // flow (let the game run 7->8->9; NOT a forced field25 write, which tore the world down). Movement is
+    // already proven, so completing the walk now cannot regress the proof.
+    let move_proven_for_reload = crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
+        && crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == epoch;
+    if move_proven_for_reload && (13..=18).contains(&mms_state) {
+        if let Ok(gm) = unsafe { eldenring::cs::GameMan::instance() } {
+            let gm_addr = gm as *const _ as usize;
+            let ss = core::mem::offset_of!(eldenring::cs::GameMan, save_state);
+            let sr = core::mem::offset_of!(eldenring::cs::GameMan, save_requested);
+            if unsafe { safe_read_u8(gm_addr + ss) }.unwrap_or(0) != 0 {
+                unsafe { *((gm_addr + ss) as *mut u8) = 0 };
+            }
+            if unsafe { safe_read_u8(gm_addr + sr) }.unwrap_or(0) != 0 {
+                unsafe { *((gm_addr + sr) as *mut u8) = 0 };
+            }
+            static SATISFY_LOG_EPOCH: core::sync::atomic::AtomicUsize =
+                core::sync::atomic::AtomicUsize::new(usize::MAX);
+            if SATISFY_LOG_EPOCH.swap(epoch, Ordering::SeqCst) != epoch {
+                append_autoload_debug(format_args!(
+                    "case7-savedrain-satisfy: epoch {epoch} move-proven mms={mms_state} fin={fin} -> cleared saveState+saveRequested(0xb72) so the finalize completes 7->8->9 natively (loading mode exits, fps -> load1 parity)"
+                ));
+            }
+        }
+        return;
+    }
+    // MOVABLE-WINDOW PRESERVATION (bd complete-cvar10-ending-request-9-inputs +
+    // precise-ordered-divergence-load1-movable-at-fin0): load1 reaches genuine readiness by becoming
+    // MOVABLE at mms=18/fin=0 -- FUN_140afa7c0 case 0 does `if (cVar10 == 0) return;`, so the finalize
+    // STAYS at 0 (movable window; can_move ramps to 60 frames) while the ending-request cVar10 is 0; the
+    // finalize walk (fin 5->9) is a quick cleanup AFTER, not a prerequisite. Load2 diverges because an
+    // ending-request input is left set (dominant: warpRequested / GameMan+0x10, residue of the
+    // return-title), so cVar10=1 -> the finalize runs early (fin 5->7) -> the character FREEZES ->
+    // can_move never ramps. Fix = keep cVar10 = 0 by clearing warpRequested (and idle saveState) every
+    // frame during the pre-finalize load window, so load2 gets load1's fin=0 movable window. We PREVENT
+    // the ending walk rather than forcing/advancing the finalize (forcing tore the world down). Clear
+    // during 13..=18 (character loaded, warp already consumed) so it is 0 before FUN_140afa7c0 reaches
+    // case 0 at mms=18. Epoch-scoped: load1 (epoch 0) is never touched.
+    if !(13..=18).contains(&mms_state) || fin >= 5 {
+        return;
+    }
+    let ss_off = core::mem::offset_of!(eldenring::cs::GameMan, save_state);
+    if let Ok(gm) = unsafe { eldenring::cs::GameMan::instance() } {
+        let gm_addr = gm as *const _ as usize;
+        if unsafe { safe_read_u8(gm_addr + ss_off) }.unwrap_or(0) > 0 {
+            unsafe { *((gm_addr + ss_off) as *mut u8) = 0 };
+        }
+        let warp_off = crate::constants::GAME_MAN_WARP_REQUESTED_10_OFFSET;
+        let warp = unsafe { safe_read_u8(gm_addr + warp_off) }.unwrap_or(0);
+        if warp != 0 {
+            unsafe { *((gm_addr + warp_off) as *mut u8) = 0 };
+            if TESTNET_FF_FIRED_EPOCH.swap(epoch, Ordering::SeqCst) != epoch {
+                append_autoload_debug(format_args!(
+                    "cvar10-warp-clear: load2 epoch {epoch} mms={mms_state} fin={fin} warpRequested was set -> cleared GameMan+0x10 to hold cVar10=0 (fin=0 movable window like load1)"
+                ));
+            }
+        }
+    }
+}
+
 pub(crate) unsafe extern "system" fn system_quit_gaitem_deserialize_hook(
     gaitem: usize,
     input_stream: usize,

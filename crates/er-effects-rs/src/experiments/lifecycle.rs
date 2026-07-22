@@ -20,18 +20,11 @@ static HARNESS_DISC_PHASE: AtomicUsize = AtomicUsize::new(0); // 0 wait,1 press,
 static HARNESS_DISC_PHASE_FRAME: AtomicUsize = AtomicUsize::new(0);
 static HARNESS_DISC_SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
-// ENV-GATE RATIONALE: ER_EFFECTS_SWITCH_HARNESS_DISCOVERY=1 arms the agent-owned switch-harness
-// feasibility probe (once in-world+stable it blocks the keyboard, pulses DIK_ESCAPE once to try to open
-// the in-game menu, logs every MenuWindowJob::Run filename, then unblocks). OFF for product; no save
-// write, no mount change on the default path.
+/// DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): the agent-owned switch-harness
+/// feasibility probe (blocks keyboard, pulses DIK_ESCAPE, logs MenuWindowJob::Run filenames) was an
+/// env/marker-gated diagnostic autopilot. Env/marker feature gates are forbidden; retired (off).
 pub(crate) fn switch_harness_discovery_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_SWITCH_HARNESS_DISCOVERY").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("er-effects-switch-harness-discovery.txt")
-        .exists()
+    false
 }
 
 /// Called from run_post for every MenuWindowJob::Run filename during discovery: log each distinct
@@ -107,10 +100,42 @@ pub(crate) unsafe fn switch_harness_discovery_tick() {
 
 pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     unsafe { switch_harness_discovery_tick() };
+    // LOAD2 WORLD-COMPLETION (bd load2-sole-failing-gate-is-shouldsave-save_requested-b72): when a
+    // committed reload parks at MoveMapStep finalize substate 7 (SAVE-DRAIN WAIT), the sole failing 7->8
+    // gate condition is !ShouldSave() -- the suppressed quit-save left GameMan.save_requested set. This
+    // clears that spurious flag so the game's OWN advancer passes 7->8->9 and completes RETAINING the
+    // player (NOT a state force). Epoch-scoped; no-op on load1 and on a still-progressing load.
+    unsafe { maybe_force_finish_stuck_testnet_step() };
     // PASSIVE CONTROLLER-INPUT TRACE (er-effects-input-trace.txt): record real pad edges +
     // semaphore snapshots to er-effects-input-trace.jsonl for USER-DRIVEN runs. Recording only --
     // never blocks, never fabricates; a marker/env-gated no-op by default.
     input_trace_tick();
+    // RAWINPUT RECEPTION COUNTER (contamination oracle, user 2026-07-20): install once, unconditionally,
+    // so EVERY run records whether the game received user mouse/kb input (input-trace is off by default).
+    // Recording only -- never blocks input. bd oracle-must-record-game-input-reception-hook-getrawinputdata.
+    ensure_rawinput_counter_installed();
+    // LoadlistInit capture: DEFERRED install (attach-time install crashed ER boot -- MinHook patching
+    // STEP_MoveMap_LoadlistInit's entry during early boot). Install ONCE the local player is present:
+    // post-boot AND after load1's world-load, so no thread is executing LoadlistInit's prologue when
+    // MinHook patches it (no race); load2/load3 reloads still CALL LoadlistInit afterwards so the hook
+    // fires and captures worldloadlistlistVirtualPath. Idempotent (install-once swap guard). bd
+    // loadlist-hook-defer-install-to-player-present-not-attach-2026-07-20.
+    if unsafe { PlayerIns::local_player_mut() }.is_ok() {
+        if let Ok(base) = game_module_base() {
+            unsafe { install_loadlist_init_capture_hook(base) };
+        }
+    }
+    // USER SUGGESTION 2026-07-20: disable kb+mouse as GAME inputs during an agent-owned run once in-world
+    // so the user's typing/mouse cannot contaminate the movement proof; the gamepad/XInput path stays
+    // OPEN for the harness -> any character movement is unambiguously the harness. Only while the harness
+    // DLL is present, the player is in-world, and sq_repro is NOT driving menus (which owns its own full
+    // block + ClipCursor). bd user-suggest-disable-kbmouse-game-inputs-leave-xinput-open-dluid.
+    if crate::experiments::harness_dll_present()
+        && !crate::experiments::sq_repro_actively_driving()
+        && unsafe { PlayerIns::local_player_mut() }.is_ok()
+    {
+        enforce_kbmouse_game_input_disable();
+    }
     // NATIVE-WINDOWS LOADING OVERLAY ownership cycle (bd er-effects-rs-8jz): our separate-window overlay
     // OWNS the screen (SHOW) whenever the local player is absent -- boot, title, and EVERY loading screen
     // (fast-travel, area transitions, death re-load) -- and RELEASES it (HIDE) once the world is loaded and
@@ -308,6 +333,22 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // OWN_LOAD_PUMP_JOB != 0 / OWN_LOAD_PUMP_DONE, so it costs nothing until armed+built and
     // never re-pumps once terminal. Must run THROUGH the loading screen (player absent), so it
     // is here in the recurring game task, before the player check. Pure native call + reads.
+    // FPS oracle (goal 2026-07-19: stable, load1-baseline-comparable framerate). EMA of the frame delta +
+    // per-epoch worst frame time. Unconditional, cheap; read by the telemetry as oracle_fps / oracle_min_fps.
+    {
+        let d = task_data.delta_time.time;
+        if d > 0.0 && d < 1.0 {
+            let us = (d * 1_000_000.0) as u32;
+            let prev = crate::constants::FRAME_TIME_EMA_US.load(Ordering::Relaxed);
+            crate::constants::FRAME_TIME_EMA_US
+                .store(((prev / 10) * 9 + us / 10).max(1), Ordering::Relaxed);
+            let ep = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+            if crate::constants::FRAME_TIME_WORST_EPOCH.swap(ep, Ordering::Relaxed) != ep {
+                crate::constants::FRAME_TIME_WORST_US.store(0, Ordering::Relaxed);
+            }
+            crate::constants::FRAME_TIME_WORST_US.fetch_max(us, Ordering::Relaxed);
+        }
+    }
     if own_load_pump_enabled() {
         if let Ok(base) = game_module_base() {
             let gm = game_man_ptr_or_null();
@@ -382,6 +423,19 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
             if movemapstep_step_move_map_gate_hold_enabled() {
                 unsafe { install_movemapstep_step_move_map_gate_hook(base) };
             }
+            // STEP_MoveMap_Update finalize-defer detour: the root fix for the warm-reload premature
+            // teardown (bd er-effects-rs-9fmm). Self-gated internally on the er-effects-reload-defer.txt
+            // marker + a committed reload epoch, so installing it is inert until a marked reload runs.
+            unsafe { install_ingamestep_step_movemap_update_defer_hook(base) };
+            // Child-done-query override: prevent the PREMATURE MoveMapStep child teardown that strands
+            // load2 (FUN_140eb5550 returns done at field25=0 -> STEP_MoveMap_Update tears the child down
+            // -> advancer stops). Isolated to the MoveMapStep child (rcx==mms+0x108) on a committed
+            // reload; load1 untouched. bd COMPLETE-CHAIN-load2-child-torndown-early-fun140eb5550-done.
+            unsafe { install_child_done_query_override_hook(base) };
+            // NOTE: the LoadlistInit capture hook is NOT installed here -- installing it at DLL attach
+            // crashed ER boot (MinHook patching STEP_MoveMap_LoadlistInit's entry during early boot). It
+            // is deferred to the first player-present frame instead (see the tick below). bd
+            // loadlist-hook-defer-install-to-player-present-not-attach-2026-07-20.
         }
     }
     // OFFLINE connection-state lever (milestone-3 fix): force GameMan+0xBC8/0xBC9 = 0 each

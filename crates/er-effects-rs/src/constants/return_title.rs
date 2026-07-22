@@ -127,8 +127,18 @@ pub(crate) static SWITCH_ORACLE_TRACKED_SLOT: AtomicUsize = AtomicUsize::new(usi
 /// InGameStep requestCode (`InGameStep + 0xd8`) values. 1 = a MoveMap (load) request is pending/in
 /// progress; 2 = STABLE IN-WORLD (the load handoff completed, the world is settled -- player present,
 /// in-game menu job populated). STEP_MoveMap_Update drains 1 -> 2 once the child finishes.
+pub(crate) const INGAMESTEP_REQUEST_CODE_NONE: i32 = 0;
 pub(crate) const INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING: i32 = 1;
 pub(crate) const INGAMESTEP_REQUEST_CODE_STABLE_IN_WORLD: i32 = 2;
+/// Human name for an InGameStep requestCode (`InGameStep + 0xd8`) value (out-of-range/unreadable -> "?").
+pub(crate) fn ingamestep_request_code_name(v: i32) -> &'static str {
+    match v {
+        INGAMESTEP_REQUEST_CODE_NONE => "NONE",
+        INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING => "MOVEMAP PENDING",
+        INGAMESTEP_REQUEST_CODE_STABLE_IN_WORLD => "STABLE IN-WORLD",
+        _ => "?",
+    }
+}
 /// 3RD-LOAD ROOT SHARPENED (Ghidra 1.16.1, 2026-07-16). The softlock parks the InGameStep at
 /// `InGameStep_StepperArray[7] = STEP_MoveMap_Update` (dump 0x140aec810). STEP_MoveMap_Update gates
 /// its advance to step 8 (STEP_MoveMap_Finish) on `FUN_140eb5550(ezChildStepBase)` == "is the
@@ -140,6 +150,59 @@ pub(crate) const INGAMESTEP_REQUEST_CODE_STABLE_IN_WORLD: i32 = 2;
 pub(crate) static SWITCH_ORACLE_MMS_STEP: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// Last sampled InGameStep requestCode (+0xd8) for visible loading-bar sub-milestones.
 pub(crate) static SWITCH_ORACLE_REQUEST_CODE: AtomicI32 = AtomicI32::new(-1);
+/// Last sampled MoveMapStep finalize substate (+0x12a, 0..9) -- the real native sub-progression of
+/// the visible MOVE MAP (18) loading phase, published for the loading-bar parenthesized sub-milestone.
+/// -1 = no live MoveMapStep. See MOVEMAPSTEP_FINALIZE_SUBSTATE_NAMES.
+pub(crate) static SWITCH_ORACLE_FINALIZE_12A: AtomicI32 = AtomicI32::new(-1);
+/// Last sampled GameMan load-in-progress FSM (b80, == GameMan.save_state): 0 idle/done, 2 read
+/// submitted, 3 resident. Published for the loading bar (a distinct, meaningful load-state the user
+/// asked to see). The finalize case-7 gate (FUN_14067a170 = saveState==0) needs this back at 0.
+pub(crate) static SWITCH_ORACLE_B80: AtomicI32 = AtomicI32::new(-1);
+/// Count of forced b80 3->0 drains at the mms18 finalize stall (reload-drain-b80 semaphore).
+pub(crate) static RELOAD_DRAIN_B80_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Reload epoch (fresh_deser) for which the post-finish stable-proof already fired (holds the world:
+/// phase->IDLE + clear b78). One-shot PER reload epoch, decoupled from FRESH_DESER_DONE (own_load
+/// consumes that latch at commit, which used to block the stable-proof and let the world revert to
+/// title after finish). usize::MAX = none yet.
+pub(crate) static SYSTEM_QUIT_STABLE_PROOF_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Reload epoch whose MoveMapStep finalize reached the near-done substates (>=8 WARP/SERVER FINALIZE),
+/// i.e. the load has effectively finished. Used to hold the world the instant the finalize completes --
+/// BEFORE the move probe could prove movement (the world reverts too fast for the 60-frame probe).
+pub(crate) static SYSTEM_QUIT_RELOAD_FINALIZE_DONE_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// MoveMap destination BlockId + world-stable RAM semaphore offsets (RE-verified 2026-07-19,
+/// bd er-effects-rs-9fmm). `InGameStep::STEP_MoveMap_Update` @0x140aec810 loads the destination block
+/// after requestCode(+0xd8)=2; it reads `GameMan+0xac8` (loadTargetMapId) when
+/// `CSSessionManager.protocol_state == WaitReload(4)`, else `GameMan+0x14` (moveMapStepBlockId), and
+/// SKIPS the load when that BlockId == 0xffffffff -> the world reverts to title with nothing reloaded.
+/// So these two fields are the destination-valid RAM semaphore for the reload's retention.
+pub(crate) const GAME_MAN_MOVE_MAP_STEP_BLOCK_ID_14_OFFSET: usize = 0x14;
+pub(crate) const GAME_MAN_LOAD_TARGET_MAP_ID_AC8_OFFSET: usize = 0xac8;
+/// BlockId sentinel meaning "no destination" (skip the map load).
+pub(crate) const MOVE_MAP_BLOCK_ID_NONE: u32 = 0xffff_ffff;
+/// `FUN_140508d30` (dump 0x140508d30) returns `WorldChrMan.field47_0x1e524 == 2` = world genuinely
+/// stable/ready -- a stronger world-ready oracle than can_move. RE-verified offset + constant.
+pub(crate) const WORLD_CHR_MAN_WORLD_STABLE_1E524_OFFSET: usize = 0x1e524;
+pub(crate) const WORLD_CHR_MAN_WORLD_STABLE_VALUE: i32 = 2;
+/// GameMan online-state bytes. The connection-loss / network-error event handlers build their
+/// "cannot connect / connection lost" GR_System_Message (whose side-effect returns to title) gated on
+/// `isInOnlineMode (GameMan+0xBC8) && serverConnectionEnabled (GameMan+0xBC9)`. force_offline_connection_bytes
+/// forces both to 0 each game-task frame, but that is a race: if the reload's session setup re-sets
+/// BC8=1 and the handler fires before the next game-task clear, a network-error return-title reverts the
+/// just-loaded world (user hypothesis 2026-07-19, bd reload-revert-likely-message-interrupt-2026-07-19).
+/// Sem-traced to test whether the online flags re-enable during the reload's in-world window.
+pub(crate) const GAME_MAN_IS_IN_ONLINE_MODE_BC8_OFFSET: usize = 0xBC8;
+pub(crate) const GAME_MAN_SERVER_CONNECTION_ENABLED_BC9_OFFSET: usize = 0xBC9;
+/// b80 (== GameMan.save_state) FSM state names for the loading-bar / logs. See the
+/// `GAME_MAN_SAVE_STATE_*` / `FULLREAD_B80_RESIDENT` constants (constants::autoload_state).
+pub(crate) fn load_in_progress_b80_name(v: i32) -> &'static str {
+    match v {
+        GAME_MAN_SAVE_STATE_IDLE => "IDLE",
+        GAME_MAN_SAVE_STATE_OPENING => "OPENING",
+        GAME_MAN_SAVE_STATE_READING => "READING",
+        FULLREAD_B80_RESIDENT => "RESIDENT",
+        _ => "?",
+    }
+}
 /// Last sampled player/menu/loading-screen handoff gates for visible loading-bar sub-milestones.
 pub(crate) static SWITCH_ORACLE_PLAYER_PRESENT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SWITCH_ORACLE_MENU_JOB_PRESENT: AtomicUsize = AtomicUsize::new(0);
@@ -184,6 +247,66 @@ pub(crate) fn movemapstep_step_name(idx: i32) -> &'static str {
         "?"
     }
 }
+
+/// InGameStep-level load steps that run AFTER the MoveMapStep child's own FINISH (20). RE grounding
+/// (2026-07-19, InGameStep step table 0x143d70190: STEP_MoveMap_Init -> STEP_MoveMap_Update ->
+/// STEP_MoveMap_Finish): the MoveMapStep child (steps 0..20) runs entirely INSIDE the InGameStep's
+/// STEP_MoveMap_Update. So the child reaching FINISH (20) is NOT genuine world readiness -- the
+/// InGameStep must still advance STEP_MoveMap_Update -> STEP_MoveMap_Finish (the request code at
+/// InGameStep+0xd8 draining 1 -> 2) and then hand off to the resident in-world step. Those are two
+/// real "N+1" load steps the loading bar previously collapsed into "FINISH 20/20" (user 2026-07-19:
+/// "when we are at the Nth step, it is really N+1 -- add an Nth loading step"). Surface them as
+/// synthetic main steps 21/22 driven by the request code so the bar shows the true post-FINISH state
+/// (and FREEZES on the exact handoff substep during the render-handoff stall) instead of falsely
+/// resting at FINISH or dropping to the coarse ENTERING WORLD heuristic.
+pub(crate) const MOVEMAPSTEP_STEP_FINISH_INDEX: usize = 20;
+pub(crate) const INGAMESTEP_MAP_FINISH_STEP_INDEX: usize = 21;
+pub(crate) const INGAMESTEP_INWORLD_STEP_INDEX: usize = 22;
+/// Highest load-step index for the extended (MoveMapStep child + InGameStep handoff) N/M display.
+pub(crate) const BOOT_LOAD_STEP_MAX: usize = INGAMESTEP_INWORLD_STEP_INDEX;
+/// Name any load step in the extended space (MoveMapStep child 0..20 + InGameStep handoff 21/22).
+pub(crate) fn boot_load_step_name(step: usize) -> &'static str {
+    match step {
+        s if s < MOVEMAPSTEP_STEP_NAMES.len() => MOVEMAPSTEP_STEP_NAMES[s],
+        INGAMESTEP_MAP_FINISH_STEP_INDEX => "MAP FINISH HANDOFF", // InGameStep STEP_MoveMap_Finish
+        INGAMESTEP_INWORLD_STEP_INDEX => "IN WORLD", // InGameStep in-world: player resident + control
+        _ => "?",
+    }
+}
+
+/// Byte offset of the MoveMapStep finalize SUBSTATE within the STEP_MoveMap (step 18) phase. The
+/// native advancer `FUN_140afa7c0` (dump VA) drives this `switch`-based sub-state 0..9; the load
+/// orchestrator `FUN_140afb970` treats the world as ready ONLY when it is back to 0. So this is the
+/// inner sub-progression of the visible "MOVE MAP 18" loading phase (see oracle finalize_substate_12a).
+pub(crate) const MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET: usize = 0x12a;
+
+/// Human names for the finalize substate (`MoveMapStep+0x12a`) written by the advancer FUN_140afa7c0.
+/// Grounded in the decompiled `switch(field25_0x12a)` cases (2026-07-19, bd er-effects-rs-9fmm):
+///   0 idle/done; 1 fade-out wait; 2 death/retry check; 3 retry-menu + map-block setup;
+///   4 map-block/session wait; 5/6 fade-in wait (+sfx); 7 remo/save-drain wait; 8 warp/server
+///   finalize; 9 post-finalize. The warm reload parks at 7 (its 7->8 gate --
+///   FUN_14067a170() && !ShouldSave() && !FUN_140679460() && FUN_140a9ceb0(CSRemo) -- never passes),
+///   so 0x12a stays != 0 and the orchestrator never marks the world ready.
+pub(crate) const MOVEMAPSTEP_FINALIZE_SUBSTATE_NAMES: [&str; 10] = [
+    "IDLE/DONE",              // 0
+    "FADE-OUT WAIT",          // 1
+    "DEATH/RETRY CHECK",      // 2
+    "RETRY-MENU+MAPBLOCK",    // 3
+    "MAPBLOCK/SESSION WAIT",  // 4
+    "FADE-IN WAIT",           // 5
+    "FADE-IN WAIT (SFX)",     // 6
+    "REMO/SAVE-DRAIN WAIT",   // 7  <- warm-reload softlock parks here
+    "WARP/SERVER FINALIZE",   // 8
+    "POST-FINALIZE",          // 9
+];
+/// Name a MoveMapStep finalize substate value (out-of-range -> "?").
+pub(crate) fn movemapstep_finalize_substate_name(v: i32) -> &'static str {
+    if v >= 0 && (v as usize) < MOVEMAPSTEP_FINALIZE_SUBSTATE_NAMES.len() {
+        MOVEMAPSTEP_FINALIZE_SUBSTATE_NAMES[v as usize]
+    } else {
+        "?"
+    }
+}
 /// MoveMapStep child edge-hook counters (STEP_MoveMap_Init fires when the child is created; Finish
 /// fires when the load completes). On the softlock INIT fires but FINISH never does = the semaphore.
 pub(crate) static SWITCH_ORACLE_MMS_INIT_HITS: AtomicUsize = AtomicUsize::new(0);
@@ -198,6 +321,31 @@ pub(crate) const MOVEMAPSTEP_STEP_MOVEMAP_INDEX: i32 = 18;
 pub(crate) const MOVEMAPSTEP_STEP_MOVEMAP_RVA: usize = 0x00af7cf0;
 pub(crate) static MOVEMAPSTEP_STEP_MOVEMAP_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static MOVEMAPSTEP_STEP_MOVEMAP_ORIG: AtomicUsize = AtomicUsize::new(0);
+/// `CS::InGameStep::STEP_MoveMap_Update` (dump 0x140aec810 -> deobf 0x140aec720, content-unique shift
+/// -0xf0). This is the PARENT step handler: it polls input/flipper, then `if (FUN_140eb5550(child)==0)
+/// return;` (its own per-frame wait), and only past that does `field24_0xd8 = 2; FUN_140eb54e0(child)`
+/// (advance requestCode to STABLE + tear the ending child down). On the warm reload FUN_140eb5550 (an
+/// outer-stepper vtable done-query, DECOUPLED from the MoveMapStep finalize substate) reports finished
+/// while the ending advancer is only at substate 8, so the teardown races ahead of case 8 (which would
+/// post substate 9) and strands the reload -> revert to title (bd er-effects-rs-9fmm, fresh
+/// load1-vs-load2 diff). The defer detour replicates the native's own "child not finished" early-return
+/// while the MoveMapStep finalize substate is in [1..=8], giving the advancer the frames to reach 9.
+pub(crate) const INGAMESTEP_STEP_MOVEMAP_UPDATE_RVA: usize = 0x00aec720;
+pub(crate) static INGAMESTEP_STEP_MOVEMAP_UPDATE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static INGAMESTEP_STEP_MOVEMAP_UPDATE_ORIG: AtomicUsize = AtomicUsize::new(0);
+/// Consecutive frames the defer detour has held STEP_MoveMap_Update (reset when finalize leaves 1..=8).
+pub(crate) static INGAMESTEP_MOVEMAP_UPDATE_DEFER_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// Total defer holds (telemetry: >0 means the premature-teardown race was intercepted).
+pub(crate) static INGAMESTEP_MOVEMAP_UPDATE_DEFER_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Total early b73 return-title-latch clears (telemetry: >0 means the quit-save latch was held off
+/// before the MoveMapStep ending evaluator could revert the reloaded world).
+pub(crate) static RELOAD_B73_HOLD_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Total menuData+0x5e/+0x5d ending-latch clears during a reload (telemetry: >0 means the session-end
+/// OUTPUT latch that STEP_EndFlow reads was held off so the reloaded world persists).
+pub(crate) static RELOAD_ENDING_LATCH_HOLD_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Fail-soft cap: after this many consecutive held frames, stop deferring and let native decide (so a
+/// genuine return-to-title whose finalize never completes can never be held forever). ~2s at 60fps.
+pub(crate) const INGAMESTEP_MOVEMAP_UPDATE_DEFER_MAX: usize = 120;
 /// MoveMapStep advance-gate byte (`field_0x4b8`). STEP_MoveMap sets the u16 at +0x4b8 to 1 each frame,
 /// then blockers knock it down; it advances only when the LOW byte (+0x4b8) stays nonzero. Low byte 0 =
 /// blocked; +0x4b9 high byte 1 with low 0 = the WorldChrMan-not-ready (`0x100`) branch fired.

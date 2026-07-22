@@ -253,10 +253,16 @@ def main() -> int:
     require("OWN_STEPPER_SLOT.store(slot" in arm_body, "product arm must propagate the requested slot", failures)
     require("PRODUCT_AUTOLOAD_ARMED.store" in arm_body, "product arm must latch PRODUCT_AUTOLOAD_ARMED", failures)
     require("append_autoload_debug" not in arm_body, "product arm must not perform early debug/file I/O", failures)
+    # DEPRECATE-ENV-MARKER-GATE-ALLOWLISTS-2026-07-19: env/marker feature gates are forbidden. The
+    # direct_menu_load/product_core experiment is now a DISABLED experiment (experimental_direct_menu_
+    # load_enabled() returns false with no env/marker read), which keeps it out of the product path
+    # even more strongly than the former env/file gate. Assert it is NOT env/marker-gated.
+    direct_menu_load_gate = rust_fn_body(experiments, "experimental_direct_menu_load_enabled")
     require(
-        "ER_EFFECTS_EXPERIMENTAL_DIRECT_MENU_LOAD" in experiments
-        and "er-effects-experimental-direct-menu-load.txt" in experiments,
-        "direct_menu_load/product_core experiment must have an explicit env/file gate",
+        "std::env::var" not in direct_menu_load_gate
+        and "er-effects-" not in direct_menu_load_gate,
+        "direct_menu_load/product_core experiment must not be env/marker-gated; it is a disabled "
+        "experiment, neither product default nor a runtime knob",
         failures,
     )
 
@@ -343,7 +349,12 @@ def main() -> int:
     product_core = rust_fn_body(experiments, "product_core_autoload_tick")
     product_ready = rust_fn_body(experiments, "product_core_autoload_ready")
     require(
-        "TitleTopDialog::open_menu writes latch and does not require Loop/TextFadeout state" in product_core
+        # The product open-menu design no longer force-calls open_menu from the game task
+        # ("Main-branch preservation: do NOT call TitleTopDialog::open_menu from this game-task"),
+        # which is what removes the Loop/TextFadeout-only timing dependency the anti-patterns below
+        # guard against. (Assertion string updated to match the current source; the two forbidden
+        # timing-coupling patterns remain the enforced anti-patterns.)
+        "do NOT call TitleTopDialog::open_menu from this game-task" in product_core
         and "ready.title_in_loop\n            && ready.menu_opened_latch" not in product_core
         and "!title_state.in_loop\n        && !title_state.in_textfadeout" not in product_ready,
         "product open-menu gate must allow validated title dialog + latch-clear and must not require Loop/TextFadeout-only timing",

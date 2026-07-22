@@ -49,6 +49,14 @@ pub(crate) const NATIVE_LOAD_LOG_INTERVAL: u64 = 120;
 /// recipe for the full-read chain.)
 pub(crate) const GAME_MAN_SLOT_SELECT_B78_OFFSET: usize =
     core::mem::offset_of!(GameMan, requested_save_slot_load_index);
+/// GameMan+0xb80 (== GameMan.save_state == load_in_progress) FSM values. The full-save read walks
+/// IDLE(0) -> OPENING(1) -> READING(2) -> RESIDENT(3); a healthy load then drains RESIDENT -> IDLE as
+/// the deserialize consumes the 0x280000 buffer. `load_in_progress_b80_name` (constants::return_title)
+/// gives the display names. The finalize case-7 gate (FUN_14067a170 == save_state==0) waits on b80
+/// reaching IDLE; on the warm reload it is stuck at RESIDENT because the deserialize never consumes it.
+pub(crate) const GAME_MAN_SAVE_STATE_IDLE: i32 = 0;
+pub(crate) const GAME_MAN_SAVE_STATE_OPENING: i32 = 1;
+pub(crate) const GAME_MAN_SAVE_STATE_READING: i32 = 2;
 /// GameMan+0xb80 == 3 == RESIDENT (the full-save read drained into the 0x280000 buffer). The DRAIN
 /// phase ticks the lane + poll each frame until b80 reaches this.
 pub(crate) const FULLREAD_B80_RESIDENT: i32 = 3;
@@ -411,6 +419,26 @@ pub(crate) static AUTO_ACCEPT_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static IN_WORLD_REACHED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const IN_WORLD_NOT_REACHED: usize = 0;
 pub(crate) const IN_WORLD_REACHED_YES: usize = 1;
+/// The fresh_deser load epoch whose world is genuinely LIVE (play_time advanced past that epoch's
+/// baseline), published by the play-time-live oracle. The boot-view compositor uses this as a
+/// PER-EPOCH world-reached signal to stop its per-frame GPU readback promptly after an own-menu switch
+/// (load2+) becomes playable -- `IN_WORLD_REACHED` above is a stale latch that never re-arms during a
+/// switch, so it cannot stop the readback in-world (bd
+/// fps-killer-rootcaused-per-frame-gpu-readback-boot-view-not-stopping-inworld-load2). `usize::MAX` = none.
+pub(crate) static BOOT_VIEW_EPOCH_WORLD_LIVE: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// FPS BAIL for own-menu reloads whose handoff signals never fire: when load2 stalls at the finalize
+/// (frozen), it builds no NEW loadscreen table and its play_time never advances, so NEITHER
+/// `loading_handoff` NOR `world_handoff` becomes true and the per-frame GPU readback runs forever
+/// (~20fps). The loading bar itself DOES fill (present=True/mms18 = world resident) so a permille + time
+/// bail reliably stops the readback regardless of the handoff signals. Per-epoch composite clock.
+pub(crate) static BOOT_VIEW_COMPOSITE_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static BOOT_VIEW_COMPOSITE_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
+/// Loading bar permille (0..1000) at/above which the FPS bail stops the composite for an own-menu
+/// reload (bar essentially full = loading visually done).
+pub(crate) const BOOT_VIEW_EPOCH_BAIL_PERMILLE: u32 = 950;
+/// Hard cap (ms) on how long the composite may run for one own-menu reload epoch before the FPS bail
+/// force-stops it, so the GPU readback can never tank FPS indefinitely even if permille stalls.
+pub(crate) const BOOT_VIEW_EPOCH_COMPOSITE_CAP_MS: u64 = 20_000;
 /// DIAGNOSTIC: identify the REAL connection-error dialog (the inferred MessageBoxDialog vtable
 /// 0x142b03550 did NOT match -- the auto-accept never fired). Hook the dialog builder
 /// 0x1409275b0 to log each created dialog's vtable/class + args (the FMG message id is in an

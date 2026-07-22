@@ -1,7 +1,13 @@
 [workspace]
 members = [
   "crates/er-effects-rs",
+  "crates/er-game-base",
+  "crates/er-telemetry",
+  "crates/er-telemetry-dll",
   "crates/er-reload-trace-dll",
+  "crates/er-input-harness-dll",
+  "crates/er-cutscene-replacer",
+  "crates/er-cutscene-overlay-helper",
   "crates/effects-data",
   "crates/er-gfx",
   "crates/er-safe-input",

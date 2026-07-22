@@ -41,6 +41,20 @@ pub(crate) static BOOT_VIEW_LOADSCREEN_TABLE_BASELINE: AtomicUsize = AtomicUsize
 pub(crate) static BOOT_VIEW_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
 /// Last DISPLAYED progress in permille (monotonic; includes the inter-milestone creep).
 pub(crate) static BOOT_VIEW_LAST_PERMILLE: AtomicUsize = AtomicUsize::new(0);
+/// DIAGNOSTIC (bd ab-portrait-disabled-load2-fps-still-low-boot-view-composite-is-killer-2026-07-20):
+/// last process-ms the per-frame boot-view stop DECISION was logged, so the log is rate-limited to
+/// ~1/s while we diagnose why neither stop path fires for the incomplete load2.
+static BOOT_VIEW_DECISION_LOG_MS: AtomicU64 = AtomicU64::new(0);
+/// Monotonic-display clamp for the (phase idx, substep) LABEL numbers (user 2026-07-19): the visible
+/// numbers must only advance within one load epoch -- never repeat a value already passed nor
+/// decrement -- or the loading text reads as jumpy/looping. Ordinal = idx*ORD_SCALE + sub (phase idx
+/// dominates). Held label is a `&'static str` (all sub-labels come from const tables, so its ptr/len
+/// stay valid forever). Reset per load epoch.
+static BOOT_VIEW_MONO_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
+static BOOT_VIEW_MONO_ORD: AtomicUsize = AtomicUsize::new(0);
+static BOOT_VIEW_MONO_LABEL_PTR: AtomicUsize = AtomicUsize::new(0);
+static BOOT_VIEW_MONO_LABEL_LEN: AtomicUsize = AtomicUsize::new(0);
+const BOOT_VIEW_MONO_ORD_SCALE: usize = 1000;
 /// Monotonic bitmask of reached milestones (bit i = milestone i seen reached at least once).
 pub(crate) static BOOT_VIEW_REACHED_MASK: AtomicUsize = AtomicUsize::new(0);
 /// Highest reached milestone index (drives the label).
@@ -417,9 +431,35 @@ fn boot_view_progress() -> (usize, usize) {
     // first-boot is untouched. SWITCH_ORACLE_MMS_STEP is published by the game-thread SWITCH-ORACLE.
     let (idx, pm) = if BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0 {
         let s = SWITCH_ORACLE_MMS_STEP.load(Ordering::SeqCst);
-        if s != usize::MAX && s < MOVEMAPSTEP_STEP_NAMES.len() {
-            let mms_pm = MMS_STEP_FILL_BASE + s * MMS_STEP_FILL_SPAN / MOVEMAPSTEP_STEP_NAMES.len();
-            (MMS_LABEL_IDX_BASE + s, pm.max(mms_pm))
+        // MoveMapStep child step (0..=20) while its child object is live.
+        let child_step = if s != usize::MAX && s <= MOVEMAPSTEP_STEP_FINISH_INDEX {
+            Some(s)
+        } else {
+            None
+        };
+        // InGameStep-level "N+1" step after the child's FINISH (20): the child runs inside the
+        // InGameStep's STEP_MoveMap_Update, so FINISH is NOT genuine readiness -- the InGameStep still
+        // advances STEP_MoveMap_Update -> STEP_MoveMap_Finish (request code +0xd8 draining 1 -> 2) and
+        // then to the resident in-world step. Surface those from the request code (user 2026-07-19:
+        // "the Nth step is really N+1 -- add the step") so the bar shows the true post-FINISH handoff
+        // and FREEZES on it during the render-handoff stall, instead of resting at FINISH 20/20.
+        let rc = SWITCH_ORACLE_REQUEST_CODE.load(Ordering::SeqCst);
+        let ingame_step = if rc >= 2 {
+            Some(INGAMESTEP_INWORLD_STEP_INDEX)
+        } else if rc >= 1 {
+            Some(INGAMESTEP_MAP_FINISH_STEP_INDEX)
+        } else {
+            None
+        };
+        // Furthest-advanced step wins so the bar never regresses across the child -> InGameStep handoff.
+        let step = match (child_step, ingame_step) {
+            (Some(c), Some(g)) => Some(c.max(g)),
+            (Some(c), None) => Some(c),
+            (None, g) => g,
+        };
+        if let Some(step) = step {
+            let step_pm = MMS_STEP_FILL_BASE + step * MMS_STEP_FILL_SPAN / (BOOT_LOAD_STEP_MAX + 1);
+            (MMS_LABEL_IDX_BASE + step, pm.max(step_pm))
         } else {
             (idx, pm)
         }
@@ -560,8 +600,43 @@ fn boot_view_movemap_submilestone(step: usize) -> (&'static str, usize, usize) {
     let request_code = SWITCH_ORACLE_REQUEST_CODE.load(Ordering::SeqCst);
     let mms_step = SWITCH_ORACLE_MMS_STEP.load(Ordering::SeqCst);
     let current_epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+    // InGameStep-level "N+1" handoff steps AFTER the MoveMapStep child FINISH (20). Phase-relevant
+    // substeps only (user 2026-07-19 loading-bar rule): step 21 is the STEP_MoveMap_Finish request-code
+    // drain (+0xd8 1 -> 2); step 22 is the resident in-world step (player + control).
+    if step >= INGAMESTEP_MAP_FINISH_STEP_INDEX {
+        let child_done = mms_step == usize::MAX || mms_step >= MOVEMAPSTEP_STEP_FINISH_INDEX;
+        let request_started = request_code >= 1;
+        let request_stable = request_code >= 2;
+        let menu_job_present = SWITCH_ORACLE_MENU_JOB_PRESENT.load(Ordering::SeqCst) != 0;
+        let player_present = SWITCH_ORACLE_PLAYER_PRESENT.load(Ordering::SeqCst) != 0;
+        let movement_proven = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
+            && MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == current_epoch;
+        if step >= INGAMESTEP_INWORLD_STEP_INDEX {
+            return boot_view_first_pending_substep(&[
+                (player_present, "PLAYER RESIDENT"),
+                (menu_job_present, "CSM 798 MENUJOB"),
+                (movement_proven, "MOVE PROOF"),
+            ]);
+        }
+        return boot_view_first_pending_substep(&[
+            (child_done, "MMS 244 DONE"),
+            (request_started, "IG D8 REQUEST 1"),
+            (request_stable, "IG D8 STABLE 2"),
+        ]);
+    }
     if step < MOVEMAPSTEP_STEP_MOVEMAP_INDEX as usize {
         return boot_view_single_submilestone(movemapstep_step_name(step as i32));
+    }
+    // MOVE MAP (18) has a KNOWN native sub-progression: the finalize substate (+0x12a, advancer
+    // FUN_140afa7c0) walks 1..9 then back to 0 (done). Expose it as the parenthesized sub-milestone
+    // with real per-substate labels (the warm-reload softlock parks at 7 = REMO/SAVE-DRAIN WAIT),
+    // per the loading-bar sub-milestone order. Falls back to the coarse handoff proxies only when no
+    // live MoveMapStep finalize substate is readable (-1).
+    let finalize = SWITCH_ORACLE_FINALIZE_12A.load(Ordering::SeqCst);
+    if mms_step == step && finalize >= 0 {
+        let total = MOVEMAPSTEP_FINALIZE_SUBSTATE_NAMES.len() - 1; // 9
+        let cur = (finalize as usize).min(total);
+        return (movemapstep_finalize_substate_name(finalize), cur, total);
     }
     let step_active = mms_step == step;
     let title_done = request_code >= 2 || mms_step >= MOVEMAPSTEP_STEP_NAMES.len() - 1;
@@ -1229,13 +1304,57 @@ fn boot_view_rasterize(
     // phase-scoped: early phases with no known finer RAM granularity say so with a 1/1 substep, world-gauge
     // phases use the native Gauge_3 frame, and entering-world / MoveMap phases use only the semaphores that
     // are relevant to those phases.
-    let (sub_label, sub_i, sub_max) = boot_view_phase_submilestone(idx);
+    let (raw_sub_label, raw_sub_i, sub_max) = boot_view_phase_submilestone(idx);
+    // MONOTONIC display clamp (user 2026-07-19): within one load epoch the visible substep number must
+    // only advance -- never repeat a passed value nor decrement. idx (main phase) is already monotonic;
+    // clamp the substep to a per-phase high-water and hold the last-advanced label on a regression.
+    let (sub_label, sub_i) = {
+        let epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+        if BOOT_VIEW_MONO_EPOCH.swap(epoch, Ordering::SeqCst) != epoch {
+            BOOT_VIEW_MONO_ORD.store(0, Ordering::SeqCst);
+            BOOT_VIEW_MONO_LABEL_PTR.store(0, Ordering::SeqCst);
+        }
+        let ord = idx
+            .saturating_mul(BOOT_VIEW_MONO_ORD_SCALE)
+            .saturating_add(raw_sub_i.min(BOOT_VIEW_MONO_ORD_SCALE - 1));
+        let hw = BOOT_VIEW_MONO_ORD.load(Ordering::SeqCst);
+        if ord >= hw {
+            BOOT_VIEW_MONO_ORD.store(ord, Ordering::SeqCst);
+            BOOT_VIEW_MONO_LABEL_PTR.store(raw_sub_label.as_ptr() as usize, Ordering::SeqCst);
+            BOOT_VIEW_MONO_LABEL_LEN.store(raw_sub_label.len(), Ordering::SeqCst);
+            (raw_sub_label, raw_sub_i)
+        } else if hw / BOOT_VIEW_MONO_ORD_SCALE == idx {
+            // Regressed within the SAME phase -> hold the high-water substep + its (still-valid) label.
+            let held_sub = hw % BOOT_VIEW_MONO_ORD_SCALE;
+            let ptr = BOOT_VIEW_MONO_LABEL_PTR.load(Ordering::SeqCst);
+            let len = BOOT_VIEW_MONO_LABEL_LEN.load(Ordering::SeqCst);
+            let held: &str = if ptr != 0 {
+                unsafe {
+                    core::str::from_utf8_unchecked(core::slice::from_raw_parts(ptr as *const u8, len))
+                }
+            } else {
+                raw_sub_label
+            };
+            (held, held_sub)
+        } else {
+            (raw_sub_label, raw_sub_i)
+        }
+    };
+    // Surface the GameMan load-in-progress FSM (b80 == save_state) when a load is active (b80 > 0):
+    // READING/RESIDENT. It stays visible through streaming and, notably, exposes the finalize-time
+    // b80=RESIDENT stall (the case-7 blocker) directly on the bar. Hidden when idle (b80 <= 0).
+    let b80 = SWITCH_ORACLE_B80.load(Ordering::SeqCst);
+    let load_suffix = if b80 > 0 {
+        format!(" · LOAD {}", load_in_progress_b80_name(b80))
+    } else {
+        String::new()
+    };
     let label_buf: String = if idx >= MMS_LABEL_IDX_BASE {
         let step = idx - MMS_LABEL_IDX_BASE;
-        let max = MOVEMAPSTEP_STEP_NAMES.len() - 1;
+        let max = BOOT_LOAD_STEP_MAX;
         format!(
-            "{} {}/{} ({} {}/{})",
-            movemapstep_step_name(step as i32),
+            "{} {}/{} ({} {}/{}{load_suffix})",
+            boot_load_step_name(step),
             step,
             max,
             sub_label,
@@ -1246,7 +1365,7 @@ fn boot_view_rasterize(
         let max = BOOT_VIEW_MILESTONE_LABELS.len() - 1;
         let i = idx.min(max);
         format!(
-            "{} {}/{} ({} {}/{})",
+            "{} {}/{} ({} {}/{}{load_suffix})",
             BOOT_VIEW_MILESTONE_LABELS[i], i, max, sub_label, sub_i, sub_max
         )
     };
@@ -1400,8 +1519,52 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
     } else {
         loadscreen_builds != 0 || PROFILE_HAVE_KEYED_FRAME.load(Ordering::SeqCst) != 0
     };
-    let world_handoff =
-        !own_menu_active && IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
+    // FPS FIX (bd fps-killer-rootcaused-per-frame-gpu-readback-boot-view-not-stopping-inworld-load2):
+    // for the FIRST/boot load, IN_WORLD_REACHED (a one-shot latch) is the world-reached signal. For an
+    // own-menu switch (load2+) that latch is STALE (already set from load1), so it can never stop the
+    // per-frame GPU readback in-world -- the compositor kept readback-stalling the pipeline (~20-40fps).
+    // Use the PER-EPOCH world-live signal instead: play_time advancing for the CURRENT fresh_deser epoch
+    // means THIS switch's world is genuinely playable, so stop compositing (the loading cover is done).
+    let epoch_world_handoff = own_menu_active && {
+        let cur = crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+        cur >= 1 && crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur
+    };
+    let world_handoff = (!own_menu_active
+        && IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES)
+        || epoch_world_handoff;
+    // DIAGNOSTIC (bd ab-portrait-disabled-load2-fps-still-low-boot-view-composite-is-killer-2026-07-20):
+    // the per-frame GPU readback-with-wait below tanks load2 FPS because neither stop path fires. Log
+    // the actual gate values (~1/s) so we can see WHICH one is stuck: own_menu, the two handoffs, the
+    // per-epoch world-live tag, permille, and the fresh_deser epoch vs the tagged live epoch.
+    {
+        let now_log = boot_view_epoch_ms();
+        let last_log = BOOT_VIEW_DECISION_LOG_MS.load(Ordering::SeqCst);
+        if now_log.saturating_sub(last_log) >= 1000
+            && BOOT_VIEW_DECISION_LOG_MS
+                .compare_exchange(last_log, now_log, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        {
+            let fresh_deser =
+                crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+            let epoch_world_live =
+                crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "boot-view DECISION: own_menu={} loading_handoff={} world_handoff={} epoch_world_handoff={} permille={} draw_state={} in_world={} fresh_deser={} epoch_world_live={} loadscreen_builds={} table_baseline={} now_ms={}",
+                own_menu_active,
+                loading_handoff,
+                world_handoff,
+                epoch_world_handoff,
+                BOOT_VIEW_LAST_PERMILLE.load(Ordering::SeqCst),
+                BOOT_VIEW_DRAW_STATE.load(Ordering::SeqCst),
+                IN_WORLD_REACHED.load(Ordering::SeqCst),
+                fresh_deser,
+                epoch_world_live,
+                loadscreen_builds,
+                table_baseline,
+                now_log,
+            ));
+        }
+    }
     if loading_handoff || world_handoff {
         // SEAMLESS CUT (user 2026-07-06): the handoff (loading table build) starts the game's
         // black gap + the loading screen's own fade-in-from-black, so stopping here would cut a
@@ -1456,6 +1619,34 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
             return false;
         }
         // else: fall through and keep compositing the fully-lit cover over the native fade-in.
+    }
+    // FPS BAIL (bd fps-killer-rootcaused-per-frame-gpu-readback-boot-view-not-stopping-inworld-load2):
+    // when an own-menu reload STALLS at the finalize (frozen load2), it builds no new loadscreen table
+    // and its play_time never advances, so NEITHER loading_handoff NOR world_handoff ever fires and the
+    // per-frame GPU readback-with-wait above would run forever (~20fps). The loading bar itself still
+    // fills (world resident/present at mms18), so stop the composite once the bar is essentially full OR
+    // the composite has run past the per-epoch cap -- the readback must never permanently tank FPS.
+    if own_menu_active {
+        let cur_epoch =
+            crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+        let now_ms = boot_view_epoch_ms().max(1);
+        if crate::constants::BOOT_VIEW_COMPOSITE_EPOCH.swap(cur_epoch, Ordering::SeqCst) != cur_epoch {
+            crate::constants::BOOT_VIEW_COMPOSITE_FIRST_MS.store(now_ms as usize, Ordering::SeqCst);
+        }
+        let first_ms = crate::constants::BOOT_VIEW_COMPOSITE_FIRST_MS.load(Ordering::SeqCst) as u64;
+        let composite_ms = now_ms.saturating_sub(first_ms);
+        let permille = BOOT_VIEW_LAST_PERMILLE.load(Ordering::SeqCst);
+        if permille >= crate::constants::BOOT_VIEW_EPOCH_BAIL_PERMILLE as usize
+            || composite_ms >= crate::constants::BOOT_VIEW_EPOCH_COMPOSITE_CAP_MS
+        {
+            if BOOT_VIEW_STOPPED.swap(1, Ordering::SeqCst) == 0 {
+                append_autoload_debug(format_args!(
+                    "boot-view: FPS BAIL stop (own-menu reload epoch={cur_epoch} permille={permille} composite_ms={composite_ms}) -- handoff signals never fired (frozen load2); stopping per-frame GPU readback"
+                ));
+            }
+            BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.store(0, Ordering::SeqCst);
+            return false;
+        }
     }
     if BOOT_VIEW_DRAW_STATE.load(Ordering::SeqCst) == 2 {
         return false;

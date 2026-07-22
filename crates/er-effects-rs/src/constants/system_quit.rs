@@ -57,8 +57,35 @@ pub(crate) static MOVE_PROBE_STICK_LY: std::sync::atomic::AtomicI32 =
 /// motion under the injected stick (input-causes-movement PROVEN). Cleared when a new load epoch begins.
 pub(crate) static CAN_MOVE_CONFIRMED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+/// HARNESS-ATTRIBUTED movement verdict for the CURRENT load epoch -- the contamination-proof result
+/// (user 2026-07-20, bd canmove-contaminated-user-moved-harness-never-supplied). The move-probe
+/// alternates INJECT-ON / INJECT-OFF windows and requires the char to move WHILE WE inject AND stop
+/// when we release, so a USER moving the char cannot read as proof. 0=pending, 1=PROVEN (moved under
+/// our stick, still when released), 2=DISPROVEN (our injection did not move it), 3=CONTAMINATED
+/// (moved while we were NOT injecting -> external input present). Reset per load epoch. The watcher
+/// tears down the instant this leaves 0 (bd collect-decisive-info-teardown-immediately).
+pub(crate) static HARNESS_MOVE_VERDICT: std::sync::atomic::AtomicU8 =
+    std::sync::atomic::AtomicU8::new(0);
+/// FPS oracle (goal 2026-07-19: stable framerate, comparable across runs, load1 baseline). EMA of the
+/// per-frame delta in microseconds (init ~60fps). Written each game-task frame by lifecycle, read by the
+/// telemetry oracles as oracle_fps = 1e6 / this. Also the per-epoch worst (max) frame time in us.
+pub(crate) static FRAME_TIME_EMA_US: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(16_667);
+pub(crate) static FRAME_TIME_WORST_US: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+/// Load epoch the worst-frame-time window is scoped to (reset the worst tracker when the epoch changes).
+pub(crate) static FRAME_TIME_WORST_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// Current consecutive-moved-frame count of the in-flight move probe (for the oracle/report).
 pub(crate) static MOVE_PROBE_MOVED_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// SEMAPHORE SPLIT (user 2026-07-19, bd three-semaphores-can-move-did-move-supplied-input): count of
+/// frames the probe actually WROTE the forward stick into a live pad device (`SUPPLIED_MOVEMENT_INPUT`
+/// = did WE inject). Distinct from CAN_MOVE (capability) and DID_MOVE (real displacement): if supplied
+/// climbs but DID_MOVE stays 0, the injection layer is wrong/ignored (e.g. pad stick vs kb+mouse WASD).
+pub(crate) static SUPPLIED_MOVEMENT_INPUT_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// CUMULATIVE count of frames with real havok displacement >= threshold WHILE supplying input
+/// (`DID_MOVE` = did the character actually move). Unlike MOVE_PROBE_MOVED_FRAMES it does NOT reset on a
+/// non-moving frame, so `DID_MOVE > 0` means "moved at least once under our input". Reset per load epoch.
+pub(crate) static DID_MOVE_FRAMES: AtomicUsize = AtomicUsize::new(0);
 /// The load epoch (fresh_deser_count) the current probe is bound to, so it resets per load.
 pub(crate) static MOVE_PROBE_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// Forward stick deflection the probe injects (near full), the per-FRAME horizontal displacement (world
@@ -131,7 +158,10 @@ pub(crate) static SQ_REPRO_SWITCH_INDEX: AtomicUsize = AtomicUsize::new(0);
 /// an env selector. The legacy switch-count constants below are retained for older ProfileSelect
 /// harness code paths, but the active Save Game validation path stops once save-request + menu-close
 /// telemetry fires.
-pub(crate) const SQ_REPRO_TARGET_SWITCHES: usize = 1;
+// 2 back-to-back switches = load1 -> load2 -> load3 (the goal's "no less than two successive loads"
+// after the first automatic load). The harness ships inert (harness_dll_present), so this only affects
+// agent-owned runs. Overridable per-run via er-effects-sq-target-switches.txt.
+pub(crate) const SQ_REPRO_TARGET_SWITCHES: usize = 2;
 /// RAM oracle latch (0 -> 1, never reset): the pause-at-menu autopilot observed 05_010_ProfileSelect
 /// open and STOPPED there (transitioned to DONE without TO_SLOT/CONFIRM). Exported as telemetry
 /// `sq_repro_paused_at_profile_select`; the pause-probe watcher's PASS gate is this latch == 1 while
@@ -164,7 +194,11 @@ pub(crate) static SQ_REPRO_PROFILE_BACK_VERIFY_COUNTS: [AtomicUsize; 10] =
 /// slot 4, matching the 3rd in-session ProfileSelect open that crashed the native thumbnail builder
 /// on the empty renderer table (er-effects-rs-j3r), the deterministic repro/validation for the
 /// table-repair hook.
-pub(crate) const SQ_REPRO_TARGET_SLOTS: [i32; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+// SAME-CHARACTER repeat load (the goal: two+ successive loads of angrE, slot 0). Every switch loads
+// slot 0, not a different slot per switch -- the old [0,1,2,..] loaded a DIFFERENT character on switch #2
+// (user 2026-07-21: "the stats on screen don't match the player loaded"). Override per-run via
+// er-effects-sq-target-slots.txt if a multi-character sweep is ever wanted.
+pub(crate) const SQ_REPRO_TARGET_SLOTS: [i32; 10] = [0; 10];
 /// Baseline of (confirmed_block + confirmed_allow) counts captured at each switch's start, so the
 /// CONFIRM state detects THIS switch's OK as an increase over the baseline rather than a cumulative
 /// `!= 0` (which switch #2 would trip immediately on switch #1's residual count).
@@ -189,6 +223,14 @@ pub(crate) const SQ_REPRO_WAIT_RELOAD_LOG_EVERY: usize = 512;
 /// Frames to settle in-world (world stream + HUD) before the autopilot presses START. Pre-existing
 /// world-readiness settle; the run that first opened IngameTop used it.
 pub(crate) const SQ_REPRO_WORLD_SETTLE_TICKS: usize = 180;
+/// Frames the switch-arm gate will wait, AFTER the settle, for the current load to PROVE genuine
+/// movement (HARNESS_MOVE_VERDICT==1: the can-move probe confirmed >=60 frames of injected-stick
+/// movement with a clean OFF-tail). Once the probe is gated on the rendered state (2026-07-21) the
+/// verdict fires reliably (load3 latched it), so waiting for it makes EACH load prove movement before
+/// the next switch, not just the last. Fallback: if the load cannot latch within this window (drift /
+/// contention / a genuinely non-movable load) arm anyway on the game-global signature so the sequence
+/// never hangs -- the run then records that load as not-proven rather than stalling.
+pub(crate) const SQ_REPRO_MOVE_PROOF_TIMEOUT_TICKS: usize = 900;
 /// FREEZE-RECOVERY DEADLINE (2026-07-18, user-directed readiness gate). Frames the WAIT_RELOAD gate
 /// will wait for a just-triggered reload to become render-ready before classifying it the LOAD-2 FREEZE
 /// (present + reload committed, but the loading cover never lifts / render never hands off -- exactly

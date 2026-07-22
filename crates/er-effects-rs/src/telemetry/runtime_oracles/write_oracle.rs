@@ -37,6 +37,11 @@ fn write_stepfinish_gate_oracle(body: &mut String) {
     let request_code = ingame.map_or(-1, |ig| rdi(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET));
     let mms =
         ingame.and_then(|ig| rd(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET).filter(|v| *v != null));
+    // Publish the reliably-resolved MoveMapStep pointer for the in-world finalize drive to consume:
+    // this resolution tracks load2's true in-world step (18) whereas the game-task's fresh title_owner
+    // scan reads a stale owner -> stale step (bd CORRECTED-title-owner-gate-not-blocker-load2-mms18-
+    // resolution-disagrees-writeoracle-reliable-2026-07-20).
+    ORACLE_RELIABLE_MMS_PTR.store(mms.unwrap_or(0), Ordering::SeqCst);
     const MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET: usize = 0x12a;
     let (warmup, testnet_stepper, mms_state, finalize_substate_12a) = match mms {
         Some(m) => (
@@ -78,7 +83,81 @@ fn write_stepfinish_gate_oracle(body: &mut String) {
         remoman != 0,
         remo_pending != 0
     ));
+    // RESIDUAL-STATE DIAGNOSTIC (bd fix-real-gap-is-residual-teardown-state-not-continue-shape): the FD4
+    // scheduler stops ticking load2's MoveMapStep child (mms+0x108) after ~6 ticks while load1's keeps
+    // ticking. Publish the child EzChildStepBase ptr + a header window (vtable + state/flags/links) EVERY
+    // frame so a load1-vs-load2 diff pins the exact field that flips when the child leaves the tick set.
+    // Read-only, fault-safe (null when mms/child unresolved). No behavior change.
+    // CORRECTED: the MoveMapStep child (EzChildStepBase) is EMBEDDED at mms+0x108 (its first qword is
+    // the vtable), NOT a pointer. Read its member fields directly (mms+0x108+off) and the step object it
+    // wraps (*(mms+0x110), i.e. ezcsb+0x8). One of these holds the active/scheduled state the FD4
+    // scheduler reads; ez00 (vtable) is static so it is omitted. Diff load1(ticking) vs load2(dropped).
+    let cbase = mms.map(|m| m + MOVEMAPSTEP_CHILD_EZSTEP_108_OFFSET);
+    let cb = |off: usize| -> String {
+        match cbase.and_then(|c| rd(c + off)) {
+            Some(v) => format!("\"0x{v:x}\""),
+            None => "null".to_owned(),
+        }
+    };
+    let step = cbase.and_then(|c| rd(c + 0x8).filter(|v| *v != null));
+    let sb = |off: usize| -> String {
+        match step.and_then(|s| rd(s + off)) {
+            Some(v) => format!("\"0x{v:x}\""),
+            None => "null".to_owned(),
+        }
+    };
+    body.push_str(&format!(
+        "  \"oracle_mms_child_ez08_step\": {},\n  \"oracle_mms_child_ez10\": {},\n  \"oracle_mms_child_ez18\": {},\n  \"oracle_mms_child_ez20\": {},\n  \"oracle_mms_child_ez28\": {},\n  \"oracle_mms_child_step10\": {},\n  \"oracle_mms_child_step18\": {},\n  \"oracle_mms_child_step40\": {},\n  \"oracle_mms_child_step48\": {},\n",
+        cb(0x08),
+        cb(0x10),
+        cb(0x18),
+        cb(0x20),
+        cb(0x28),
+        sb(0x10),
+        sb(0x18),
+        sb(0x40),
+        sb(0x48),
+    ));
+    // LOAD2 BLOCK-STREAMING discriminator (bd menu-open-works-real-blocker-is-load2-mms18-completion-
+    // block-streaming-0x35): the loadlist is POPULATED yet load2 stalls at WorldResWait, so scan the
+    // block list from FieldArea=mms+0xf0 to see if the target-area block is REGISTERED (registration gap
+    // vs present-but-not-streaming). Reuses the proven own_load scan offsets but runs on the CURRENT
+    // native-continue/switch path where that observer is dormant. Passive, capped at 64, fault-safe.
+    let field_area = mms.and_then(|m| rd(m + 0xf0)).filter(|&v| v > 0x1_0000);
+    let l2_req_coord = field_area.and_then(|fa| rd(fa + 0x2c)).map(|v| v as u32).unwrap_or(0);
+    let l2_target_area = ((l2_req_coord >> 24) & 0xff) as usize;
+    let l2_resmgr = field_area.and_then(|fa| rd(fa + 0x10)).filter(|&v| v > 0x1_0000);
+    let l2_block_count = l2_resmgr
+        .and_then(|rm| rd(rm + 0xb3140))
+        .map(|v| (v as u32) as i64)
+        .unwrap_or(-1);
+    let mut l2_target_present: i64 = -1;
+    if let Some(rm) = l2_resmgr {
+        if l2_block_count > 0 {
+            l2_target_present = 0;
+            let arr = rm + 0xb3030;
+            let cap = l2_block_count.min(64);
+            let mut i: i64 = 0;
+            while i < cap {
+                if let Some(block) = rd(arr + (i as usize) * 8).filter(|&v| v > 0x1_0000) {
+                    if let Some(inner) = rd(block + 0x8).filter(|&v| v > 0x1_0000) {
+                        if let Some(a) = rd(inner + 0xc) {
+                            if ((a as u32) & 0xff) as usize == l2_target_area {
+                                l2_target_present = 1;
+                                break;
+                            }
+                        }
+                    }
+                }
+                i += 1;
+            }
+        }
+    }
+    body.push_str(&format!(
+        "  \"oracle_l2_req_coord\": \"0x{l2_req_coord:x}\",\n  \"oracle_l2_block_count\": {l2_block_count},\n  \"oracle_l2_target_block_present\": {l2_target_present},\n"
+    ));
 }
+const MOVEMAPSTEP_CHILD_EZSTEP_108_OFFSET: usize = 0x108;
 
 fn format_optional_oracle_ptr(value: usize) -> String {
     if value == TITLE_OWNER_SCAN_START_ADDRESS {
@@ -293,9 +372,39 @@ fn write_player_presence_oracle(body: &mut String) {
     let probe_epoch = crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst);
     let can_move =
         crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst) && probe_epoch == cur_deser;
+    // SEMAPHORE SPLIT (user 2026-07-19): three distinct signals, not one conflated can_move.
+    //  * oracle_can_move           = CAPABILITY proven (>=60 consecutive moved frames under our input)
+    //  * oracle_supplied_movement_input_frames = did WE inject (frames we wrote the forward stick)
+    //  * oracle_did_move_frames    = did the char actually move (cumulative displaced frames)
+    // supplied>0 && did_move==0  => injection layer wrong/ignored (pad stick vs kb+mouse WASD).
     body.push_str(&format!(
-        "  \"oracle_can_move\": {},\n  \"oracle_move_probe_moved_frames\": {},\n",
+        "  \"oracle_can_move\": {},\n  \"oracle_move_probe_moved_frames\": {},\n  \"oracle_supplied_movement_input_frames\": {},\n  \"oracle_did_move_frames\": {},\n",
         can_move,
-        crate::constants::MOVE_PROBE_MOVED_FRAMES.load(Ordering::SeqCst)
+        crate::constants::MOVE_PROBE_MOVED_FRAMES.load(Ordering::SeqCst),
+        crate::constants::SUPPLIED_MOVEMENT_INPUT_FRAMES.load(Ordering::Relaxed),
+        crate::constants::DID_MOVE_FRAMES.load(Ordering::Relaxed)
+    ));
+    // HARNESS-ATTRIBUTED verdict (user 2026-07-20): the CONTAMINATION-PROOF movement result -- the
+    // probe alternates inject-on/inject-off windows and requires the char to move under OUR stick AND
+    // stop when we release, so a user moving the char cannot read as proof. Epoch-gated like can_move.
+    // 0=pending 1=PROVEN(harness moved char) 2=DISPROVEN(injection ineffective) 3=CONTAMINATED(external).
+    let harness_move_verdict = if probe_epoch == cur_deser {
+        crate::constants::HARNESS_MOVE_VERDICT.load(Ordering::SeqCst)
+    } else {
+        0
+    };
+    body.push_str(&format!(
+        "  \"oracle_harness_move_verdict\": {harness_move_verdict},\n"
+    ));
+    // RAWINPUT RECEPTION (user 2026-07-20): whether the GAME received USER mouse/keyboard input this
+    // run. The input-harness injects via the direct-memory inputmgr (NOT RawInput), so any nonzero count
+    // here means the user's input reached the game -> the run is CONTAMINATED. Cumulative event counts.
+    body.push_str(&format!(
+        "  \"oracle_rawinput_hook_calls\": {},\n  \"oracle_rawinput_mouse_move_events\": {},\n  \"oracle_rawinput_mouse_button_events\": {},\n  \"oracle_rawinput_key_events\": {},\n  \"oracle_rawinput_blocked_unfocused_events\": {},\n",
+        crate::experiments::RAWINPUT_HOOK_CALLS.load(Ordering::Relaxed),
+        crate::experiments::RAWINPUT_MOUSE_MOVE_EVENTS.load(Ordering::Relaxed),
+        crate::experiments::RAWINPUT_MOUSE_BUTTON_EVENTS.load(Ordering::Relaxed),
+        crate::experiments::RAWINPUT_KEY_EVENTS.load(Ordering::Relaxed),
+        crate::experiments::RAWINPUT_BLOCKED_UNFOCUSED_EVENTS.load(Ordering::Relaxed),
     ));
 }

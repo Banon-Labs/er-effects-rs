@@ -90,6 +90,19 @@ static TRACE_SEM_SEQ: AtomicUsize = AtomicUsize::new(0);
 static TRACE_LAST_HB_MS: AtomicU64 = AtomicU64::new(0);
 const TRACE_HB_INTERVAL_MS: u64 = 2000;
 
+/// WORLD-CLOCK-LIVE semaphore (user-directed 2026-07-19): GameDataMan::play_time (ms) advances only
+/// while the world simulation steps. Tracking how far it has risen BEYOND the value first seen this
+/// load epoch proves the world is genuinely ticking -- a distinct, earlier readiness stage than
+/// `can_move` (which needs control) and than "loading complete". Per load epoch (fresh_deser) the
+/// baseline resets, so `play_time_advanced_ms` is the clock's rise within THIS load; emitting it in the
+/// sem trace lets loadcmp-diff show exactly which checkpoint each load first has a live clock -- so the
+/// reload can be compared to where it occurs in the boot's chain.
+static PLAY_TIME_TRACE_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
+static PLAY_TIME_TRACE_FIRST: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(-1);
+/// Rise (ms) past the epoch baseline at which the clock counts as genuinely live (>= 1s, matching the
+/// loading-screen playtime stat the user observed incrementing one second at a time).
+const PLAY_TIME_LIVE_THRESHOLD_MS: i64 = 1000;
+
 /// Stick deflection past which a stick counts as a synthesized nav "press" (menu nav semantics;
 /// half of full scale, well past the XInput deadzone). Triggers likewise at half pull.
 const TRACE_STICK_NAV_THRESHOLD: i32 = 16384;
@@ -266,6 +279,18 @@ struct TraceSem {
     player: bool,
     world_chr_man: usize,
     main_player: usize,
+    /// WorldChrMan+0x1e524 == 2 (FUN_140508d30): world genuinely stable/ready (RE-verified oracle).
+    world_stable: bool,
+    /// MoveMap destination BlockId (GameMan+0x14 moveMapStepBlockId, GameMan+0xac8 loadTargetMapId);
+    /// -1/0xffffffff = no destination -> STEP_MoveMap_Update skips the load and reverts to title.
+    dest_block_id: i64,
+    load_target_map_id: i64,
+    /// CSSessionManager.protocol_state (WaitReload=4 selects loadTargetMapId over moveMapStepBlockId).
+    protocol_state: i32,
+    /// GameMan online flags (BC8 isInOnlineMode / BC9 serverConnectionEnabled): the connection-loss /
+    /// network-error return-title fires when these are nonzero in-world (should stay 0 offline).
+    online_mode: i32,
+    server_conn: i32,
     committed: i32,
     ig_pstep: i32,
     ig_pnext: i32,
@@ -300,11 +325,18 @@ struct TraceSem {
     mms_hold270: i32,
     mms_cd100: i32,
     mms_req248: i32,
+    mms_finalize12a: i32,
     mms_b7c1: i32,
     mms_blocks: i32,
     stable_frames: usize,
     msgbox_builds: usize,
     msgbox_dialog: bool,
+    /// Raw GameDataMan::play_time (ms); -1 if unreadable.
+    play_time_ms: i64,
+    /// play_time rise past this load epoch's first-seen value; -1 until a baseline exists.
+    play_time_advanced_ms: i64,
+    /// The world clock has advanced >= PLAY_TIME_LIVE_THRESHOLD_MS this epoch (world genuinely live).
+    play_time_live: bool,
 }
 
 fn input_trace_semaphores() -> TraceSem {
@@ -443,6 +475,12 @@ fn input_trace_semaphores() -> TraceSem {
     } else {
         (-1, -1, -1, -1, -1, -1, -1, -1)
     };
+    // Finalize substate (MoveMapStep+0x12a): the inner sub-progression of the MOVE MAP (18) step,
+    // driven by the advancer FUN_140afa7c0. The warm reload parks at 7 (REMO/SAVE-DRAIN WAIT). Read the
+    // game-task-published switch-oracle atomic, NOT input_trace's own mms_ptr: at mms18 (in-world) the
+    // title-owner-based mms_ptr resolution here goes stale and misreads 0x12a as 0, disagreeing with
+    // the loading-bar/telemetry value (proven 2026-07-19). The atomic is the live MoveMapStep read.
+    let mms_finalize12a = SWITCH_ORACLE_FINALIZE_12A.load(Ordering::SeqCst);
     let (world_chr_man, main_player) =
         if let Ok(world_chr_man) = unsafe { eldenring::cs::WorldChrMan::instance_mut() } {
             (
@@ -456,8 +494,71 @@ fn input_trace_semaphores() -> TraceSem {
         } else {
             (0, 0)
         };
+    // RE-verified reload-retention semaphores (bd er-effects-rs-9fmm): world-stable oracle + the
+    // MoveMap destination BlockId the InGameStep loads after requestCode=2 (0xffffffff = skip -> revert).
+    let world_stable = world_chr_man != 0
+        && unsafe { safe_read_i32(world_chr_man + WORLD_CHR_MAN_WORLD_STABLE_1E524_OFFSET) }
+            == Some(WORLD_CHR_MAN_WORLD_STABLE_VALUE);
+    let dest_block_id: i64 = if gm != null {
+        unsafe { safe_read_i32(gm + GAME_MAN_MOVE_MAP_STEP_BLOCK_ID_14_OFFSET) }
+            .map_or(-1, |v| i64::from(v as u32))
+    } else {
+        -1
+    };
+    let load_target_map_id: i64 = if gm != null {
+        unsafe { safe_read_i32(gm + GAME_MAN_LOAD_TARGET_MAP_ID_AC8_OFFSET) }
+            .map_or(-1, |v| i64::from(v as u32))
+    } else {
+        -1
+    };
+    let protocol_state: i32 = unsafe { eldenring::cs::CSSessionManager::instance() }
+        .map(|s| s.protocol_state as i32)
+        .unwrap_or(-1);
+    let online_mode: i32 = if gm != null {
+        unsafe { safe_read_u8(gm + GAME_MAN_IS_IN_ONLINE_MODE_BC8_OFFSET) }.map_or(-1, i32::from)
+    } else {
+        -1
+    };
+    let server_conn: i32 = if gm != null {
+        unsafe { safe_read_u8(gm + GAME_MAN_SERVER_CONNECTION_ENABLED_BC9_OFFSET) }
+            .map_or(-1, i32::from)
+    } else {
+        -1
+    };
     let mms_raw = SWITCH_ORACLE_MMS_STEP.load(Ordering::SeqCst);
     let msgbox_raw = MSGBOX_TOTAL_BUILDS.load(Ordering::SeqCst);
+    // WORLD-CLOCK-LIVE: GameDataMan::play_time (ms). Reset the per-epoch baseline when the load epoch
+    // changes, then measure the rise past it. Only baseline on a real (>=0) reading so a paused/-1 read
+    // never fixes a bogus origin.
+    let gdm_for_pt = game_data_man_ptr_or_null();
+    let play_time_ms: i64 = if gdm_for_pt == null {
+        -1
+    } else {
+        unsafe { safe_read_usize(gdm_for_pt + crate::GAME_DATA_MAN_PLAY_TIME_A0_OFFSET) }
+            .map_or(-1, |v| i64::from((v & 0xffff_ffff) as u32))
+    };
+    let pt_epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+    if PLAY_TIME_TRACE_EPOCH.swap(pt_epoch, Ordering::SeqCst) != pt_epoch {
+        PLAY_TIME_TRACE_FIRST.store(-1, Ordering::SeqCst);
+    }
+    // Baseline only on a LOADED-character playtime (> 0). A pre-load frame reads play_time == 0
+    // (no character resident yet); baselining there makes the delta explode to the whole save's
+    // playtime once the character loads (observed on boot). Requiring > 0 latches the baseline at the
+    // character's real loaded playtime, so advanced_ms is the clock's rise within THIS load.
+    if play_time_ms > 0
+        && PLAY_TIME_TRACE_FIRST
+            .compare_exchange(-1, play_time_ms, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    {
+        // baseline latched this frame
+    }
+    let pt_first = PLAY_TIME_TRACE_FIRST.load(Ordering::SeqCst);
+    let play_time_advanced_ms: i64 = if play_time_ms >= 0 && pt_first >= 0 {
+        play_time_ms - pt_first
+    } else {
+        -1
+    };
+    let play_time_live = play_time_advanced_ms >= PLAY_TIME_LIVE_THRESHOLD_MS;
     TraceSem {
         focused: game_input_accept_now(),
         menu_top: SYSTEM_QUIT_INGAME_TOP_WINDOW.load(Ordering::SeqCst) != null,
@@ -473,6 +574,12 @@ fn input_trace_semaphores() -> TraceSem {
         player: unsafe { PlayerIns::local_player_mut() }.is_ok(),
         world_chr_man,
         main_player,
+        world_stable,
+        dest_block_id,
+        load_target_map_id,
+        protocol_state,
+        online_mode,
+        server_conn,
         committed,
         ig_pstep,
         ig_pnext,
@@ -511,6 +618,7 @@ fn input_trace_semaphores() -> TraceSem {
         mms_hold270,
         mms_cd100,
         mms_req248,
+        mms_finalize12a,
         mms_b7c1,
         mms_blocks: SWITCH_ORACLE_MMS_BLOCKS.load(Ordering::SeqCst),
         stable_frames: SWITCH_ORACLE_STABLE_FRAMES.load(Ordering::SeqCst),
@@ -520,6 +628,9 @@ fn input_trace_semaphores() -> TraceSem {
             msgbox_raw
         },
         msgbox_dialog: MSGBOX_LAST_DIALOG.load(Ordering::SeqCst) != null,
+        play_time_ms,
+        play_time_advanced_ms,
+        play_time_live,
     }
 }
 
@@ -543,6 +654,12 @@ impl TraceSem {
         mix(self.player as u64);
         mix(self.world_chr_man as u64);
         mix(self.main_player as u64);
+        mix(self.world_stable as u64);
+        mix(self.dest_block_id as u64);
+        mix(self.load_target_map_id as u64);
+        mix(self.protocol_state as u32 as u64);
+        mix(self.online_mode as u32 as u64);
+        mix(self.server_conn as u32 as u64);
         mix(self.committed as u32 as u64);
         mix(self.ig_pstep as u32 as u64);
         mix(self.ig_pnext as u32 as u64);
@@ -577,9 +694,13 @@ impl TraceSem {
         mix(self.mms_hold270 as u32 as u64);
         mix(self.mms_cd100 as u32 as u64);
         mix(self.mms_req248 as u32 as u64);
+        mix(self.mms_finalize12a as u32 as u64);
         mix(self.mms_b7c1 as u32 as u64);
         mix(self.msgbox_builds as u64);
         mix(self.msgbox_dialog as u64);
+        // Only the LIVE transition keys a row (not the per-frame raw ms), so "world clock went live"
+        // shows up as one checkpoint in the load1-vs-load2 diff, not a row every tick.
+        mix(self.play_time_live as u64);
         // Key must never collide with the "none yet" sentinel 0.
         h | 1
     }
@@ -590,6 +711,8 @@ impl TraceSem {
         format!(
             "\"focused\":{},\"menu_top\":{},\"menu_opt\":{},\"menu_prof\":{},\"prof_cursor\":{},\"opt_tab\":{},\
              \"in_world\":{},\"player\":{},\"world_chr_man\":\"0x{:x}\",\"main_player\":\"0x{:x}\",\
+             \"world_stable\":{},\"dest_block_id\":{},\"load_target_map_id\":{},\"protocol_state\":{},\
+             \"online_mode\":{},\"server_conn\":{},\
              \"committed\":{},\"ig_pstep\":{},\"ig_pnext\":{},\"ig_d8\":{},\"bc4\":{},\"c30\":\"0x{:x}\",\
              \"save_slot\":{},\"req_slot\":{},\"save_state\":{},\"save_requested\":{},\
              \"menu_job\":\"0x{:x}\",\"loading_mode\":{},\"loading_field10\":{},\"loading_field11\":{},\
@@ -597,8 +720,10 @@ impl TraceSem {
              \"quickload_phase\":{},\"profile_load_activate\":{},\"sq_repro_state\":{},\"fresh_deser\":{},\
              \"can_move\":{},\"move_epoch\":{},\"bar_frame\":{},\"bar_max_frame\":{},\"bar_progress_permille\":{},\
              \"mms_step\":{},\"mms_name\":\"{}\",\"mms_next\":{},\"mms_done50\":{},\
-             \"mms_gate_lo\":{},\"mms_gate_hi\":{},\"mms_hold270\":{},\"mms_cd100\":{},\"mms_req248\":{},\"mms_b7c1\":{},\
-             \"mms_blocks\":{},\"stable_frames\":{},\"msgbox_builds\":{},\"msgbox_dialog\":{}",
+             \"mms_gate_lo\":{},\"mms_gate_hi\":{},\"mms_hold270\":{},\"mms_cd100\":{},\"mms_req248\":{},\
+             \"mms_finalize12a\":{},\"mms_finalize12a_name\":\"{}\",\"mms_b7c1\":{},\
+             \"mms_blocks\":{},\"stable_frames\":{},\"msgbox_builds\":{},\"msgbox_dialog\":{},\
+             \"play_time_ms\":{},\"play_time_advanced_ms\":{},\"play_time_live\":{}",
             self.focused,
             self.menu_top,
             self.menu_opt,
@@ -609,6 +734,12 @@ impl TraceSem {
             self.player,
             self.world_chr_man,
             self.main_player,
+            self.world_stable,
+            self.dest_block_id,
+            self.load_target_map_id,
+            self.protocol_state,
+            self.online_mode,
+            self.server_conn,
             self.committed,
             self.ig_pstep,
             self.ig_pnext,
@@ -644,11 +775,16 @@ impl TraceSem {
             self.mms_hold270,
             self.mms_cd100,
             self.mms_req248,
+            self.mms_finalize12a,
+            json_escape(movemapstep_finalize_substate_name(self.mms_finalize12a)),
             self.mms_b7c1,
             self.mms_blocks,
             self.stable_frames,
             self.msgbox_builds,
             self.msgbox_dialog,
+            self.play_time_ms,
+            self.play_time_advanced_ms,
+            self.play_time_live,
         )
     }
 }

@@ -2725,6 +2725,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-cutscene-overlay-helper"
+version = "0.1.0"
+dependencies = [
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "er-cutscene-replacer"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-game-base",
+ "fromsoftware-shared",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "er-effects-data"
 version = "0.1.0"
 dependencies = [
@@ -2740,9 +2757,10 @@ dependencies = [
  "cc",
  "eldenring",
  "er-effects-data",
+ "er-game-base",
  "er-gfx",
- "er-safe-input",
  "er-save-loader",
+ "er-telemetry",
  "er-tpf",
  "erpx-rs",
  "fromsoftware-shared",
@@ -2761,10 +2779,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-game-base"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "fromsoftware-shared",
+]
+
+[[package]]
 name = "er-gfx"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.13.0",
+]
+
+[[package]]
+name = "er-input-harness-dll"
+version = "0.1.0"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -2846,6 +2879,26 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "er-telemetry"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-game-base",
+ "er-save-loader",
+ "fromsoftware-shared",
+]
+
+[[package]]
+name = "er-telemetry-dll"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-telemetry",
+ "fromsoftware-shared",
+ "windows 0.62.2",
 ]
 
 [[package]]

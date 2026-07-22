@@ -17,16 +17,31 @@
 #   ... start --proj-dir /home/banon/ghidra_maporch/proj-deobf --proj-name erdeobf
 set -euo pipefail
 
-HEADLESS=/home/banon/tools/ghidra_12.1_PUBLIC/support/analyzeHeadless
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RUN_DIR=/home/banon/ghidra_maporch/mcp
-TMP=/home/banon/ghidra_maporch/tmp
+# HEADLESS + maporch dir are current-user-aware (matches scripts/ghidra-query.sh). NEVER hard-code a
+# user (bd prefer-ghidra-mcp-daemon-over-perquery-headless / Reusable Tooling path-correction rule).
+resolve_headless() {
+  if [[ -n "${GHIDRA_HEADLESS:-}" && -x "${GHIDRA_HEADLESS}" ]]; then printf '%s\n' "$GHIDRA_HEADLESS"; return 0; fi
+  if [[ -n "${GHIDRA_INSTALL_DIR:-}" && -x "$GHIDRA_INSTALL_DIR/support/analyzeHeadless" ]]; then
+    printf '%s\n' "$GHIDRA_INSTALL_DIR/support/analyzeHeadless"; return 0; fi
+  local c
+  for c in "$HOME"/tools/ghidra*/support/analyzeHeadless /mnt/d/ghidra/ghidra*/support/analyzeHeadless \
+    /opt/ghidra*/support/analyzeHeadless /home/banon/tools/ghidra*/support/analyzeHeadless; do
+    [[ -x "$c" ]] && { printf '%s\n' "$c"; return 0; }
+  done
+  return 1
+}
+HEADLESS="$(resolve_headless)" || { echo "analyzeHeadless not found; set GHIDRA_HEADLESS or GHIDRA_INSTALL_DIR" >&2; exit 3; }
+GH_MAPORCH="${GHIDRA_MAPORCH_DIR:-$HOME/ghidra_maporch}"
+[[ -d "$GH_MAPORCH" ]] || GH_MAPORCH="/home/banon/ghidra_maporch"
+RUN_DIR="$GH_MAPORCH/mcp"
+TMP="${GHIDRA_TMPDIR:-$GH_MAPORCH/tmp}"
 LOG="$RUN_DIR/daemon.log"
 STOPFILE="$RUN_DIR/STOP"
 PIDFILE="$RUN_DIR/daemon.pid"
 
-PROJ_DIR=/home/banon/ghidra_maporch/proj
-PROJ_NAME=ermaporch
+PROJ_DIR="${GHIDRA_PROJ_DIR:-$GH_MAPORCH/proj}"
+PROJ_NAME="${GHIDRA_PROJ_NAME:-ermaporch}"
 PORT=8765
 RO=""        # default writable; edits persist via the daemon's periodic save. --readonly to opt out.
 SAVE_SEC=60  # periodic auto-save interval (seconds); 0 disables. Edits also flush on clean stop.
@@ -54,9 +69,16 @@ do_start() {
   if is_running; then echo "already running (pid $(pgrep -f MCPServeHeadless.java | tr '\n' ' '))"; return 0; fi
   rm -f "$STOPFILE"
   echo "starting MCP daemon: $PROJ_NAME on port $PORT ${RO:-(writable)}"
+  # Isolate the postScript in a CLEAN script dir. Ghidra builds ONE OSGi bundle for the ENTIRE
+  # -scriptPath directory, so a compile error in ANY sibling .java (scripts/ghidra holds ~40 RE
+  # scripts) fails the whole bundle and MCPServeHeadless never loads ("Failed to get OSGi bundle
+  # containing script"). Staging only this script sidesteps sibling-compile coupling.
+  local MCP_SCRIPT_DIR="$GH_MAPORCH/mcp-script"
+  mkdir -p "$MCP_SCRIPT_DIR"
+  cp -f "$SCRIPT_DIR/MCPServeHeadless.java" "$MCP_SCRIPT_DIR/MCPServeHeadless.java"
   # Fully detach so the daemon outlives this shell/session; the stop-file is the clean exit.
   setsid bash -c "exec '$HEADLESS' '$PROJ_DIR' '$PROJ_NAME' -process -noanalysis $RO \
-    -scriptPath '$SCRIPT_DIR' -postScript MCPServeHeadless.java '$PORT' '$STOPFILE' '$SAVE_SEC'" \
+    -scriptPath '$MCP_SCRIPT_DIR' -postScript MCPServeHeadless.java '$PORT' '$STOPFILE' '$SAVE_SEC'" \
     >"$LOG" 2>&1 < /dev/null &
   echo $! > "$PIDFILE"
   # Event-driven readiness: block on the daemon's own READY/FAILED heartbeat line via `tail -F`

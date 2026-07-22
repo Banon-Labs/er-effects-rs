@@ -139,6 +139,83 @@ pub(crate) unsafe fn own_load_feed_deserialize(base: usize, gm: usize, want_slot
     ok
 }
 
+// FD4-IO residency for the menu-free switch reload (bd er-effects-rs-9fmm, 2026-07-19) is now DEFAULT
+// behavior in own_load_switch_reload_fire (the boot native-fullread SUBMIT -> DRAIN(b80==RESIDENT) ->
+// COMMIT sequence), replacing the old resource-less one-shot. No marker/env gate.
+
+/// Phase machine state for the reload FD4-IO SUBMIT/DRAIN (own_load_switch_reload_fire), persisted
+/// across the caller's per-frame retries. 0=IDLE (do SUBMIT once), 1=DRAIN (tick until b80==3),
+/// 2=COMMIT (fall through to feed+continue_confirm).
+static SWITCH_RELOAD_FD4IO_PHASE: AtomicUsize = AtomicUsize::new(0);
+static SWITCH_RELOAD_FD4IO_DRAIN_WAITS: AtomicUsize = AtomicUsize::new(0);
+static SWITCH_RELOAD_FD4IO_COMMITTED: AtomicUsize = AtomicUsize::new(0);
+const SWITCH_RELOAD_FD4IO_IDLE: usize = 0;
+const SWITCH_RELOAD_FD4IO_DRAIN: usize = 1;
+const SWITCH_RELOAD_FD4IO_COMMIT: usize = 2;
+/// Bound the reload drain far below the boot's FULLREAD_DRAIN_MAX (1200): the b80 2->3 save-file read
+/// residency is fast (~17 ticks at boot); if it does not resident within this many frames the read is
+/// not draining at the clean-title timing -> fall through to COMMIT without residency (fail-soft to the
+/// old behavior) rather than hang the switch.
+const SWITCH_RELOAD_FD4IO_DRAIN_MAX: usize = 600;
+
+/// Reset the switch-reload FD4-IO phase machine so a NEW switch re-runs SUBMIT -> DRAIN -> COMMIT.
+/// Without this the one-shot stays claimed after the FIRST switch (PHASE stuck at COMMIT +
+/// SWITCH_RELOAD_FD4IO_COMMITTED=1), so the SECOND switch's own_load_switch_reload_fire hits the
+/// already-committed guard and returns immediately WITHOUT loading -> the 2nd reload (load3) never
+/// initiates and the game sits at a clean/PRESS-ANY-BUTTON title (run 110005: switch #1 loaded load2
+/// via SUBMIT/DRAIN/COMMIT; switch #2 armed + tore the world down but emitted NO reload-fd4io SUBMIT,
+/// so load3 stalled at bar step 1). switch_slot_arm_programmatic calls this on every switch arm so each
+/// switch gets a fresh phase machine.
+pub(crate) fn reset_switch_reload_fd4io_phase() {
+    SWITCH_RELOAD_FD4IO_PHASE.store(SWITCH_RELOAD_FD4IO_IDLE, Ordering::SeqCst);
+    SWITCH_RELOAD_FD4IO_COMMITTED.store(0, Ordering::SeqCst);
+    SWITCH_RELOAD_FD4IO_DRAIN_WAITS.store(0, Ordering::SeqCst);
+}
+
+/// SUBMIT the native full-save-read for `picked` so the FD4 IO worker pool loads it resident, exactly
+/// as the boot native-fullread SUBMIT phase (slot_resolution.rs). Mirrors its calls/RVAs. Sets
+/// GameMan+0xb80=2 (the deserialize arm); the DRAIN tick then advances it to RESIDENT(3).
+unsafe fn own_load_fd4io_submit(base: usize, gm: usize, picked: i32) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    // Mark the slot occupied so the native save-load gate accepts it (idempotent, no other effect).
+    let gdm = game_data_man_ptr_or_null();
+    let summary = if gdm != null {
+        unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(null)
+    } else {
+        null
+    };
+    if summary != null {
+        let mark: unsafe extern "system" fn(usize, i32) -> u8 =
+            unsafe { std::mem::transmute(base + PROFILE_MARK_SLOT_USED_RVA) };
+        let _ = unsafe { mark(summary, picked) };
+    }
+    // Resolve OUR slot + submit the full read (type-0xa; sets b80=2).
+    unsafe { *((gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) as *mut i32) = picked };
+    let set_save_slot: unsafe extern "system" fn(i32) =
+        unsafe { std::mem::transmute(base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+    unsafe { set_save_slot(picked) };
+    let submit: unsafe extern "system" fn(i32) -> i32 =
+        unsafe { std::mem::transmute(base + B80_FULL_LOAD_INITIATOR_RVA) };
+    let sret = unsafe { submit(picked) };
+    let b80 = unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }.unwrap_or(-1);
+    append_autoload_debug(format_args!(
+        "reload-fd4io: SUBMIT slot={picked} submit 0x{:x} ret={sret} b80={b80} -> DRAIN (replicating boot native-fullread residency before feed+continue_confirm)",
+        base + B80_FULL_LOAD_INITIATOR_RVA
+    ));
+}
+
+/// One DRAIN tick: pump the b80 IO lane + poll (exact boot native-fullread calls) and return the
+/// current GameMan+0xb80 so the caller can detect RESIDENT(3).
+unsafe fn own_load_fd4io_drain_tick(base: usize, gm: usize) -> i32 {
+    let lane: unsafe extern "system" fn() -> i32 =
+        unsafe { std::mem::transmute(base + B80_LANE1_DRIVER_RVA) };
+    let _ = unsafe { lane() };
+    let poll: unsafe extern "system" fn(u8, u8) -> i32 =
+        unsafe { std::mem::transmute(base + B80_POLL_RVA) };
+    let _ = unsafe { poll(FULLREAD_POLL_ARG, FULLREAD_POLL_ARG) };
+    unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }.unwrap_or(-1)
+}
+
 /// MENU-FREE clean-title reload of the PICKED slot for a genuine System->Quit->Load-Profile switch.
 /// The warm-rebuilt TitleTopDialog never reaches Loop post-return-title (press-start SceneObjProxy at
 /// dialog+0xb78 unbound), so the title accept-byte/open-menu path deadlocks; native_fullread_tick also
@@ -174,13 +251,58 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
     if new_game_flag != FULLREAD_OWNER_NEW_GAME_OK {
         return false;
     }
-    // (b) Claim the per-switch one-shot ONLY after the owner is good, so a flickering frame never burns
-    // it. Bounds the feed to a single attempt (leak-free fail-closed) independent of FRESH_DESER_DONE.
-    if SYSTEM_QUIT_SWITCH_MENU_FREE_RELOAD_FIRED
-        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
+    // (b) FD4-IO residency phase machine (DEFAULT behavior -- no marker/env toggle; bd er-effects-rs-9fmm):
+    // SUBMIT the full read, DRAIN until GameMan+0xb80==RESIDENT(3), THEN fall through to
+    // feed+continue_confirm -- so the reload's streamed world has the resources natively resident (the
+    // boot path's behavior) instead of entering resource-less and reverting to title. Owner is already
+    // validated, so a flickering frame never burns the one-shot (claimed by SWITCH_RELOAD_FD4IO_COMMITTED).
     {
-        return false;
+        let phase = SWITCH_RELOAD_FD4IO_PHASE.load(Ordering::SeqCst);
+        if phase == SWITCH_RELOAD_FD4IO_IDLE {
+            if SWITCH_RELOAD_FD4IO_PHASE
+                .compare_exchange(
+                    SWITCH_RELOAD_FD4IO_IDLE,
+                    SWITCH_RELOAD_FD4IO_DRAIN,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_ok()
+            {
+                SWITCH_RELOAD_FD4IO_DRAIN_WAITS.store(0, Ordering::SeqCst);
+                unsafe { own_load_fd4io_submit(base, gm, picked) };
+            }
+            return false;
+        }
+        if phase == SWITCH_RELOAD_FD4IO_DRAIN {
+            let b80 = unsafe { own_load_fd4io_drain_tick(base, gm) };
+            let w = SWITCH_RELOAD_FD4IO_DRAIN_WAITS.fetch_add(1, Ordering::SeqCst);
+            let resident = b80 == FULLREAD_B80_RESIDENT;
+            if resident || w >= SWITCH_RELOAD_FD4IO_DRAIN_MAX {
+                // Do NOT disarm b78 here. Unlike the boot native-fullread (which disarms on commit),
+                // the System->Quit SWITCH path MUST keep GameMan+0xb78 armed (= picked slot) through
+                // SetState5/MoveMap finalize: it is the warp target that MoveMapStep finalize case 8
+                // consumes to warp the character and autoclear warpRequested before advancing mms18
+                // (system_quit_repro_guards.rs:1720-1754). Clearing it early leaves the load with no
+                // warp target -> warp_requested stuck at 1 and STEP_MoveMap self-loops at 18 (observed
+                // in the b78-disarm build: world resident, real char, but mms18 next=18/done50=0
+                // warp=1 forever). The continue_confirm hook's post-resident proof point clears b78.
+                append_autoload_debug(format_args!(
+                    "reload-fd4io: DRAIN done b80={b80} waits={w} resident={resident}{} -> COMMIT (feed+continue_confirm); b78 kept armed (warp target) through finalize",
+                    if resident { "" } else { " (TIMEOUT -- committing without residency, fail-soft to old behavior)" }
+                ));
+                SWITCH_RELOAD_FD4IO_PHASE.store(SWITCH_RELOAD_FD4IO_COMMIT, Ordering::SeqCst);
+                // fall through to feed+continue_confirm this frame
+            } else {
+                return false; // keep draining
+            }
+        }
+        // phase == COMMIT (reached this frame or a prior one): commit exactly once.
+        if SWITCH_RELOAD_FD4IO_COMMITTED
+            .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return false;
+        }
     }
     // (c) Defuse the CSGaitemImp free-queue exhaustion AV (live 0x67141a): char#1's leaked gaitem
     // entries still populate the gaitem singleton at the clean title (the lightweight return-title

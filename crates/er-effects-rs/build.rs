@@ -1,4 +1,6 @@
-use std::{env, path::Path};
+use std::{env, path::PathBuf};
+
+const MINHOOK_SRC_DIR_ENV: &str = "MINHOOK_SRC_DIR";
 
 fn main() {
     let root_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -16,7 +18,11 @@ fn main() {
         _ => panic!("Architecture '{arch}' not supported by bundled MinHook"),
     };
 
-    let mh_src_dir = Path::new(&root_dir).join("../../vendor/minhook/src");
+    println!("cargo:rerun-if-env-changed={MINHOOK_SRC_DIR_ENV}");
+    let default_mh_src_dir = PathBuf::from(&root_dir).join("../../vendor/minhook/src");
+    let mh_src_dir = env::var_os(MINHOOK_SRC_DIR_ENV)
+        .map(PathBuf::from)
+        .unwrap_or(default_mh_src_dir);
 
     cc::Build::new()
         .file(mh_src_dir.join("buffer.c"))
@@ -25,5 +31,5 @@ fn main() {
         .file(mh_src_dir.join(hde))
         .compile("minhook");
 
-    println!("cargo:rerun-if-changed=../../vendor/minhook/src");
+    println!("cargo:rerun-if-changed={}", mh_src_dir.display());
 }

@@ -152,23 +152,18 @@ fn sq_repro_pause_at_menu() -> bool {
 /// dwells -- reproducing the blank the user reported (tab goes blank on return after the custom tab),
 /// with NO Save Game / no load (save-safe). Takes precedence over the Save Game row path.
 fn sq_repro_tab_return_mode() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_TAB_RETURN_REPRO").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-tab-return-repro.txt")
-        .exists()
+    // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): agent-owned repro autopilot;
+    // env/marker feature gates are forbidden; retired (off).
+    false
 }
 
 /// Exact USER repro: System menu -> Quit tab -> Load Profile -> Back before selecting a profile ->
 /// return to Game Options. This is the cross-populated-row bug path; it does not load a profile and
 /// does not use the file picker. Gated separately so the older Save Game harness stays default.
 fn sq_repro_profile_back_mode() -> bool {
-    game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-profile-back-repro.txt")
-        .exists()
+    // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): agent-owned repro autopilot;
+    // env/marker feature gates are forbidden; retired (off).
+    false
 }
 
 /// PROFILE-LOAD-SWITCH repro mode: drive the user's exact switch (Quit tab -> Load Profile ->
@@ -183,13 +178,11 @@ fn sq_repro_profile_back_mode() -> bool {
 // tab -> Load Profile -> pick top character -> confirm -> load). This mode DOES drive a real profile
 // load/reload; agent-owned repro only, gated separately from the default Save Game harness.
 fn sq_repro_load_switch_mode() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_SQ_LOAD_SWITCH").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-system-quit-load-switch.txt")
-        .exists()
+    // DECOUPLED TOGGLE (2026-07-19): the load2 flow drives a REAL profile-load switch (Quit tab ->
+    // Load Profile -> pick top character -> confirm -> load) whenever the separate input-harness DLL
+    // is loaded in the profile. Presence-gated (GetModuleHandle), not env/marker. bd
+    // harness-orchestrates-product-exposes-primitives-boundary-2026-07-19.
+    harness_dll_present()
 }
 
 /// SAVE-GAME ROW mode for the System->Quit repro autopilot. The main
@@ -380,37 +373,62 @@ pub(crate) unsafe fn system_quit_repro_tick() {
     match state {
         SQ_REPRO_STATE_WAIT_WORLD => {
             set_pad(0);
-            let in_world = IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
-            // Prove load1 is genuinely PLAYABLE (moved under injected input) before driving switch #1 --
-            // not merely present + settle-ticked while still streaming. Fallback to the deadline so a
-            // non-proving load still advances (parity: one more load recovers a frozen one).
-            let load1_move_proven = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
-                || tick >= SQ_REPRO_WAIT_WORLD_MOVE_DEADLINE;
-            if in_world && tick >= SQ_REPRO_WORLD_SETTLE_TICKS && load1_move_proven {
-                // FIRST INTERACTION (user, 2026-07-17): the user's real flow begins by clicking the
-                // game in the taskbar to make it the active window BEFORE pressing START. Replicate
-                // that here -- force the ER window foreground at world-readiness so the first menu key
-                // (START via RawInput) is routed. Belt-and-suspenders with the per-key foreground force
-                // in sq_repro_drive_wm_key; makes the focus step explicit and correctly timed.
-                sq_repro_force_foreground_now();
-                sq_repro_begin_switch();
-                if sq_repro_save_game_only() {
+            // Wait on the RELIABLE game-global readiness semaphore, NOT the flaky IN_WORLD_REACHED latch
+            // (user 2026-07-21: the harness is flaky because it waits on a semaphore that may be wrong --
+            // run 073411 never latched IN_WORLD_REACHED so no load2; 074159 did). BOOT_VIEW_EPOCH_WORLD_LIVE
+            // == this fresh_deser epoch means the world clock is advancing for the CURRENT load = genuinely
+            // in-world (set by the play_time_live oracle from GameDataMan+0xa0). The +180-tick settle below
+            // still gates the actual menu-open, so an early world-live cannot fire the menu prematurely.
+            let cur_epoch =
+                crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+            // FULL vanilla movable signature (user 2026-07-21: play_time_live ALONE armed the switch DURING
+            // load1's loading -> soft-locked load1 mid-finalize with mismatched stats). Require the player
+            // present + render-group enabled + enable_render (the char is genuinely rendered in-world) AND
+            // the world clock live for THIS epoch -- the same gate WAIT_RELOAD uses. Only then is it safe to
+            // arm the switch (return-title teardown), i.e. after load1 has actually finished loading.
+            let render_ready = match unsafe { PlayerIns::local_player_mut() } {
+                Ok(player) => {
+                    player.chr_ins.chr_model_ins.as_ptr() as usize != TITLE_OWNER_SCAN_START_ADDRESS
+                        && player.chr_ins.chr_flags1c4.is_render_group_enabled()
+                        && player.chr_ins.chr_flags1c5.enable_render()
+                }
+                Err(_) => false,
+            };
+            let in_world = render_ready
+                && crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur_epoch;
+            // PROGRAMMATIC SWITCH (user 2026-07-21): replace the OPEN_MENU->TO_SYSTEM->TO_PROFILE->TO_SLOT
+            // ->CONFIRM SendInput menu drive (which forced ER foreground and stole the user's focus the
+            // whole time) with the MENU-FREE arm. Once the CURRENT load's world is live + settled, arm the
+            // switch directly: switch_slot_arm_programmatic sets the target slot + writes the return-title
+            // teardown (menuData+0x5d=1); the game tears the old world down to a clean title (player
+            // absent), then own_load_switch_reload_fire runs the native load (submit/drain/deser) +
+            // continue_confirm -> SetState5 -- exactly like a vanilla Continue with the slot preselected.
+            // No move-proof gate (it is foreground-limited and never fires); world-live+settle is the
+            // reliable readiness. bd CORRECT-disable-custom-onclick-load-save-set-slot-then-native-continue.
+            // Wait for load1 to PROVE movement (HARNESS_MOVE_VERDICT==1: the can-move probe confirmed
+            // genuine injected-stick movement for this epoch) before arming the switch, so load1's
+            // movement is proven -- not just render-ready. Timeout fallback (SQ_REPRO_MOVE_PROOF_TIMEOUT
+            // _TICKS) arms anyway if the load cannot latch, so a drift/contention load never hangs the run.
+            let move_verdict_proven =
+                crate::constants::HARNESS_MOVE_VERDICT.load(Ordering::SeqCst) == 1;
+            if in_world
+                && tick >= SQ_REPRO_WORLD_SETTLE_TICKS
+                && (move_verdict_proven || tick >= SQ_REPRO_MOVE_PROOF_TIMEOUT_TICKS)
+            {
+                if sq_repro_pause_at_menu() {
+                    // Diagnostic mode: 0 switches, no load. Nothing to drive without the menu-nav.
+                    sq_repro_transition(SQ_REPRO_STATE_DONE);
+                } else if let Ok(base) = game_rva(0) {
+                    sq_repro_begin_switch();
+                    let slot = sq_repro_target_slot();
+                    unsafe { crate::experiments::switch_slot_arm_programmatic(base, slot) };
                     append_autoload_debug(format_args!(
-                        "sq-repro: in-world settled ({SQ_REPRO_WORLD_SETTLE_TICKS} ticks) -> OPEN_MENU Save Game row mode; START (XInput 0x{XINPUT_GAMEPAD_START:04x}) to open the escape/system menu"
-                    ));
-                } else if sq_repro_pause_at_menu() {
-                    append_autoload_debug(format_args!(
-                        "sq-repro: in-world settled ({SQ_REPRO_WORLD_SETTLE_TICKS} ticks) -> OPEN_MENU PAUSE-AT-MENU mode (0 switches: stop at ProfileSelect, no load); START (XInput 0x{XINPUT_GAMEPAD_START:04x}) to open the escape/system menu"
-                    ));
-                } else {
-                    append_autoload_debug(format_args!(
-                        "sq-repro: in-world settled ({SQ_REPRO_WORLD_SETTLE_TICKS} ticks, movement proven) -> OPEN_MENU switch #{}/{} target_slot={}; START (XInput 0x{XINPUT_GAMEPAD_START:04x}) to open the escape/system menu",
+                        "sq-repro: world-live+settled -> PROGRAMMATIC arm switch #{}/{} target_slot={slot} (menu-free, NO focus-steal); WAIT_RELOAD",
                         SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst) + 1,
                         sq_repro_target_switches(),
-                        sq_repro_target_slot()
                     ));
+                    sq_repro_transition(SQ_REPRO_STATE_WAIT_RELOAD);
                 }
-                sq_repro_transition(SQ_REPRO_STATE_OPEN_MENU);
             } else if !in_world {
                 // Not in-world yet (boot autoload still loading): hold the settle counter at 0.
                 SQ_REPRO_STATE_TICK.store(0, Ordering::SeqCst);
@@ -1015,8 +1033,11 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                 Ok(player) => {
                     let model_present = player.chr_ins.chr_model_ins.as_ptr() as usize
                         != TITLE_OWNER_SCAN_START_ADDRESS;
+                    // draw_group_enabled() is DROPPED -- it is NEVER set, even on a vanilla native
+                    // Continue (verified run 074159 + vanilla-174933: chr_draw_group_enabled=NEVER), so
+                    // requiring it hung load3 forever (user 2026-07-21: the harness waited on a semaphore
+                    // that is simply wrong). render-group + enable-render is the reliable rendered signal.
                     let ready = model_present
-                        && player.chr_ins.load_state.draw_group_enabled()
                         && player.chr_ins.chr_flags1c4.is_render_group_enabled()
                         && player.chr_ins.chr_flags1c5.enable_render();
                     (true, ready)
@@ -1057,23 +1078,51 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             // drive the next load to recover it. (render_ready/load_done kept only for the diagnostic log
             // line.)
             let committed = deser >= expected_deser && player_up;
-            let movement_proven_for_deser = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
-                && MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == deser;
-            let (request_code, mms_live, native_load_settled) = sq_repro_native_load_state();
-            let move_proven = committed && movement_proven_for_deser && native_load_settled;
+            let (request_code, mms_live, _native_load_settled) = sq_repro_native_load_state();
+            // RELIABLE reload-movable gate (user 2026-07-21: stop waiting on WRONG semaphores). The move
+            // proof (CAN_MOVE_CONFIRMED) is foreground-limited and never fires here, and the mms
+            // native_load_settled is stale-owner unreliable -- with no deadline fallback, together they hung
+            // load3 FOREVER. Advance on the vanilla movable SIGNATURE instead: reload committed (fresh-deser
+            // reached + player present) + render-group ready + the world clock LIVE for THIS epoch
+            // (BOOT_VIEW_EPOCH_WORLD_LIVE == deser, which already carries a >=1s world-clock settle from the
+            // play_time_live oracle). Game-global, valid on the native path, reliable across runs.
+            let epoch_world_live =
+                crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == deser;
+            // Require the ACTUAL movement proof (verdict==1: the can-move probe confirmed genuine
+            // injected-stick movement for THIS reload epoch) before arming the next switch, so each reload
+            // PROVES movement -- not just render-ready (render-group fires ~before the char is controllable,
+            // so the previous gate armed switch #2 while load2 was still finalizing). The existing
+            // freeze-recovery (waited >= SQ_REPRO_FREEZE_RECOVERY_DEADLINE=900f) is the timeout fallback: a
+            // reload that cannot latch (drift/contention) force-switches rather than hanging.
+            let move_verdict_proven =
+                crate::constants::HARNESS_MOVE_VERDICT.load(Ordering::SeqCst) == 1;
+            let move_proven =
+                committed && render_ready && epoch_world_live && move_verdict_proven;
             if move_proven {
-                let next = switch_index + 1;
-                SQ_REPRO_SWITCH_INDEX.store(next, Ordering::SeqCst);
+                let completed = switch_index + 1;
+                SQ_REPRO_SWITCH_INDEX.store(completed, Ordering::SeqCst);
+                if completed >= sq_repro_target_switches() {
+                    append_autoload_debug(format_args!(
+                        "sq-repro: switch #{completed}/{} reload MOVABLE+SETTLED (fresh_deser={deser}) -- all target switches done -> DONE",
+                        sq_repro_target_switches(),
+                    ));
+                    sq_repro_transition(SQ_REPRO_STATE_DONE);
+                    return;
+                }
+                // More loads to drive: arm the NEXT switch the SAME menu-free programmatic way (no menu-nav,
+                // no focus-steal) instead of OPEN_MENU. bd CORRECT-disable-custom-onclick.
                 sq_repro_begin_switch();
-                append_autoload_debug(format_args!(
-                    "sq-repro: switch #{}/{} reload MOVABLE+SETTLED -- input registered for fresh_deser={deser} and native requestCode={request_code}/mms={mms_live} -> arming switch #{}/{} target_slot={}; OPEN_MENU",
-                    switch_index + 1,
-                    sq_repro_target_switches(),
-                    next + 1,
-                    sq_repro_target_switches(),
-                    sq_repro_target_slot()
-                ));
-                sq_repro_transition(SQ_REPRO_STATE_OPEN_MENU);
+                if let Ok(base) = game_rva(0) {
+                    let slot = sq_repro_target_slot();
+                    unsafe { crate::experiments::switch_slot_arm_programmatic(base, slot) };
+                    append_autoload_debug(format_args!(
+                        "sq-repro: switch #{completed}/{} reload MOVABLE (fresh_deser={deser} requestCode={request_code}/mms={mms_live}) -> PROGRAMMATIC arm switch #{}/{} target_slot={slot}; WAIT_RELOAD",
+                        sq_repro_target_switches(),
+                        completed + 1,
+                        sq_repro_target_switches(),
+                    ));
+                }
+                sq_repro_transition(SQ_REPRO_STATE_WAIT_RELOAD);
                 return;
             }
             SQ_REPRO_STATE_TICK.store(0, Ordering::SeqCst);
@@ -1092,22 +1141,30 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             // recovery), exactly as the user re-loads by hand from the still-openable menu. If movement DID
             // register for this epoch but native settlement is still pending, do not start the next switch;
             // keep waiting for the mms18/end5e advancer or the global cap so the harness exposes that bug.
-            if committed
-                && !movement_proven_for_deser
-                && waited >= SQ_REPRO_FREEZE_RECOVERY_DEADLINE
-            {
-                let next = switch_index + 1;
-                SQ_REPRO_SWITCH_INDEX.store(next, Ordering::SeqCst);
-                sq_repro_begin_switch();
-                append_autoload_debug(format_args!(
-                    "sq-repro: switch #{}/{} FROZEN -- input never registered (can_move=false, load_done={load_done} fake_cover={fake_cover}) past freeze-deadline {SQ_REPRO_FREEZE_RECOVERY_DEADLINE}f -> triggering RECOVERY switch #{}/{} target_slot={}; OPEN_MENU",
-                    switch_index + 1,
-                    sq_repro_target_switches(),
-                    next + 1,
-                    sq_repro_target_switches(),
-                    sq_repro_target_slot()
-                ));
-                sq_repro_transition(SQ_REPRO_STATE_OPEN_MENU);
+            if committed && !move_proven && waited >= SQ_REPRO_FREEZE_RECOVERY_DEADLINE {
+                let completed = switch_index + 1;
+                SQ_REPRO_SWITCH_INDEX.store(completed, Ordering::SeqCst);
+                if completed >= sq_repro_target_switches() {
+                    append_autoload_debug(format_args!(
+                        "sq-repro: switch #{completed}/{} FROZEN past deadline {SQ_REPRO_FREEZE_RECOVERY_DEADLINE}f (fresh_deser={deser}) -- target reached -> DONE",
+                        sq_repro_target_switches(),
+                    ));
+                    sq_repro_transition(SQ_REPRO_STATE_DONE);
+                } else {
+                    sq_repro_begin_switch();
+                    if let Ok(base) = game_rva(0) {
+                        let slot = sq_repro_target_slot();
+                        unsafe { crate::experiments::switch_slot_arm_programmatic(base, slot) };
+                    }
+                    append_autoload_debug(format_args!(
+                        "sq-repro: switch #{completed}/{} FROZEN past deadline (load_done={load_done} fake_cover={fake_cover}) -> PROGRAMMATIC recovery arm switch #{}/{} target_slot={}; WAIT_RELOAD",
+                        sq_repro_target_switches(),
+                        completed + 1,
+                        sq_repro_target_switches(),
+                        sq_repro_target_slot()
+                    ));
+                    sq_repro_transition(SQ_REPRO_STATE_WAIT_RELOAD);
+                }
             }
             return;
         }

@@ -6,7 +6,7 @@ use std::{
     fs::{File, OpenOptions},
     io::Write,
     ptr::null_mut,
-    sync::atomic::{AtomicU64, AtomicUsize, Ordering},
+    sync::atomic::{AtomicI32, AtomicU64, AtomicUsize, Ordering},
     sync::{Mutex, OnceLock},
 };
 
@@ -23,11 +23,45 @@ const GAME_MAN_SINGLETON_RVA: usize = 0x3d69918;
 const GAME_DATA_MAN_GLOBAL_RVA: usize = 0x3d5df38;
 const MOUNTED_ARCHIVE_REGISTRY_RVA: usize = 0x448464a8;
 
+// MoveMapStep finalize advancer FUN_140afa7c0 (dump) -> deobf 0x140afa6d0 -> rva 0xafa6d0 (content-
+// unique, scripts/dump-deobf-shift.py). param_1 (rcx) = MoveMapStep; field25_0x12a = the finalize
+// sub-state (0..9). cVar10 (the ending request it computes) is written to menuData+0x5e; its rt5d input
+// is menuData+0x5d. Hooking this proves whether the advancer is even TICKED for load2 and what it reads.
+const MOVEMAPSTEP_FINALIZE_12A_OFFSET: usize = 0x12a;
+/// Child teardown FUN_140eb54e0 (dump) -> deobf 0x140eb54c0 / rva 0xeb54c0. STEP_MoveMap_Update calls
+/// it to tear down the MoveMapStep child (whose EzChildStepBase = MoveMapStep + 0x108). Hooking it +
+/// logging the child_base-0x108 MoveMapStep state(+0x48)/field25(+0x12a) shows whether load2's
+/// MoveMapStep child (state==18) is torn down at field25<9 (teardown mechanism) or never appears here
+/// (never re-scheduled). rva 0xafa6d0 = the advancer; the mms= pointer in each log distinguishes loads.
+const CHILD_TEARDOWN_RVA: usize = 0xeb54c0;
+const MOVEMAPSTEP_CHILD_EZSTEP_OFFSET: usize = 0x108;
+const MOVEMAPSTEP_STATE_48_OFFSET: usize = 0x48;
+const CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d6b7b0;
+const CS_MENU_MAN_MENU_DATA_OFFSET: usize = 0x8;
+const MENU_DATA_RT5D_OFFSET: usize = 0x5d;
+const MENU_DATA_ENDING_5E_OFFSET: usize = 0x5e;
+
+// Case-7 (7->8) save-drain gate flags read by the finalize advancer (1.16.2 FUN_140afa6d0):
+// ShouldSave() reads GameMan->saveRequested (0xb72); FUN_140679370() reads GameMan+0xb73 (gated by
+// bc4!=3). The suppressed in-world quit-save leaves these set, so !ShouldSave()/!FUN_140679370() fail
+// and load2 parks at field25=7 even after rt5d unblocks case 0. The rt5d drive clears them natively.
+const GAME_MAN_SAVE_REQUESTED_B72_OFFSET: usize = 0xb72;
+const GAME_MAN_FIELD_B73_OFFSET: usize = 0xb73;
 const GAME_MAN_REQUESTED_SLOT_B78_OFFSET: usize = 0xb78;
 const GAME_MAN_LOAD_PHASE_B80_OFFSET: usize = 0xb80;
 const GAME_MAN_SAVE_SLOT_AC0_OFFSET: usize = 0xac0;
 const GAME_MAN_CURRENT_MAP_C30_OFFSET: usize = 0xc30;
 const GAME_MAN_RESIDENT_DEVICE_DF0_OFFSET: usize = 0xdf0;
+// LOAD-SUBMIT gate fields (bd load-submit-67dc00-gate-offsets-to-instrument-pin-load2-divergence).
+// combined_load_67b940 -> submit 0x14067dc00 bails (0x14067e12f) unless these GameMan[0x143d69918]
+// flags are clear/set. Logging them at the finalize-advancer heartbeat (which fires for load2 in the
+// stuck window) pins WHICH gate is the sole load2 divergence vs load1, without Ghidra and without
+// forcing state. cb1/cb2/bca/b5e are byte flags; the global at rva 0x3d68078 must be non-null.
+const GAME_MAN_SUBMIT_GATE_CB1_OFFSET: usize = 0xcb1;
+const GAME_MAN_SUBMIT_GATE_CB2_OFFSET: usize = 0xcb2;
+const GAME_MAN_SUBMIT_GATE_BCA_OFFSET: usize = 0xbca;
+const GAME_MAN_SUBMIT_GATE_B5E_OFFSET: usize = 0xb5e;
+const SUBMIT_GLOBAL_PTR_3D68078_RVA: usize = 0x3d68078;
 const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize = 0x08;
 
 const HOOK_ORIGINAL_UNSET: usize = 0;
@@ -59,6 +93,36 @@ const UNION_SKIP_RVAS: &[usize] = &[0x67b200, 0x67b290];
 
 static LOG_FILE: OnceLock<Option<Mutex<File>>> = OnceLock::new();
 static EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
+/// Finalize-advancer instrumentation: total calls + last-seen field25_0x12a (so a run logs on every
+/// sub-state change + a periodic heartbeat, instead of per-frame spam).
+static FIN_ADVANCER_CALLS: AtomicU64 = AtomicU64::new(0);
+static LAST_FIN12A: AtomicI32 = AtomicI32::new(-2);
+/// rt5d DIAGNOSTIC DRIVE (bd DECISIVE-load2-divergence-is-rt5d-menudata5d): load1's finalize naturally
+/// gets menuData+0x5d(rt5d)=1 and walks field25 0..9; load2's stays 0 and parks at field25=0 forever.
+/// Once a SINGLE MoveMapStep has been stuck at field25=0 for RT5D_DRIVE_THRESHOLD consecutive advancer
+/// calls (load1 flips at ~call#133, so this only ever fires for a genuinely-stuck load2), supply rt5d=1
+/// once so the game's OWN finalize completes -- then observe complete(field25->9, movable) vs teardown.
+const RT5D_DRIVE_THRESHOLD: u64 = 30;
+static RT5D_DRIVE_MMS: AtomicUsize = AtomicUsize::new(0);
+static RT5D_DRIVE_ZERO_STREAK: AtomicU64 = AtomicU64::new(0);
+static RT5D_DRIVE_DONE_MMS: AtomicUsize = AtomicUsize::new(0);
+/// The most recent MoveMapStep whose finalize was seen ADVANCING (field25>=5) -- i.e. a load that
+/// completes on its own (load1, or a driven load2). Once set, any DIFFERENT mms stuck at field25=0 is
+/// the divergent next load; drive it after only RT5D_DRIVE_THRESHOLD stuck calls (a short run may never
+/// reach a large global count). Also lets the same logic catch load3 after load2 completes.
+static COMPLETION_SEEN_MMS: AtomicUsize = AtomicUsize::new(0);
+static ORIG_FINALIZE_ADVANCER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+/// Child-done query FUN_140eb5550 (deobf 0x140eb5530 / rva 0xeb5530): STEP_MoveMap_Update calls it and,
+/// if it returns nonzero (done), tears the MoveMapStep child down. HYPOTHESIS: it returns done
+/// PREMATURELY for load2 (child field25 still 0) -> premature teardown -> advancer stops. Log-only: logs
+/// the return on change + heartbeat to confirm load2 returns done while load1 returns not-done.
+static ORIG_CHILD_DONE_QUERY: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static LAST_CHILD_DONE: AtomicI32 = AtomicI32::new(-2);
+static CHILD_DONE_CALLS: AtomicU64 = AtomicU64::new(0);
+/// Child-teardown instrumentation (FUN_140eb54e0): every teardown logs the child + its MoveMapStep
+/// state/field25, so load2's MoveMapStep child teardown (if any) is visible.
+static ORIG_CHILD_TEARDOWN: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static CHILD_TEARDOWN_CALLS: AtomicU64 = AtomicU64::new(0);
 
 static ORIG_MENU_CONTINUE_WRAPPER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static ORIG_MENU_NEW_OR_LOAD_WRAPPER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
@@ -186,6 +250,164 @@ unsafe fn read_i32(addr: usize) -> Option<i32> {
     (ok != 0 && read == std::mem::size_of::<i32>()).then_some(value)
 }
 
+unsafe fn read_u8(addr: usize) -> Option<u8> {
+    let mut value = 0u8;
+    let mut read = 0usize;
+    let ok = unsafe {
+        ReadProcessMemory(
+            CURRENT_PROCESS_PSEUDO_HANDLE,
+            addr as *const c_void,
+            &mut value as *mut u8 as *mut c_void,
+            1,
+            &mut read,
+        )
+    };
+    (ok != 0 && read == 1).then_some(value)
+}
+
+/// Dump a window of qwords from the MoveMapStep header (own process, guarded reads). Why: load2's
+/// MoveMapStep Update (FUN_140aff640) stops being ticked by the FD4 scheduler after ~6 ticks while
+/// load1 ticks it ~145x to completion (bd load2-real-blocker-movemapstep-child-advancer-tick-never-runs).
+/// The advancer fires 1:1 with that Update, so dumping the mms header at each tick lets a run diff
+/// load1 (keeps ticking) vs load2 (drops out) and reveal which header field (step-machine state /
+/// active flag / scheduler link) changes when ticking stops. Offsets +0x00..+0x58, plus the child
+/// ezstep pointer region around +0x108. Read-only.
+fn mms_header_window(a: usize) -> String {
+    let mut s = String::from("mmshdr[");
+    let mut off = 0usize;
+    while off <= 0x58 {
+        match unsafe { read_usize(a + off) } {
+            Some(v) => s.push_str(&format!("+{off:x}=0x{v:x} ")),
+            None => s.push_str(&format!("+{off:x}=? ")),
+        }
+        off += 8;
+    }
+    // child ezstep base region (mms+0x108) + the finalize substate byte (+0x12a) neighbourhood
+    for off in [0x100usize, 0x108, 0x110, 0x118, 0x128] {
+        match unsafe { read_usize(a + off) } {
+            Some(v) => s.push_str(&format!("+{off:x}=0x{v:x} ")),
+            None => s.push_str(&format!("+{off:x}=? ")),
+        }
+    }
+    s.push(']');
+    s
+}
+
+/// Custom detour for the MoveMapStep finalize advancer (0xafa6d0). Logs field25_0x12a before/after the
+/// native call plus menuData 0x5d(rt5d)/0x5e(cVar10 out) -- ONLY on a sub-state change or every 600th
+/// call (heartbeat), so a FROZEN load2 (field25 stuck at 0) is visible without per-frame flooding while
+/// a healthy walk 0->9 logs every transition. rcx (`a`) = MoveMapStep.
+unsafe extern "system" fn hook_finalize_advancer(a: usize, b: usize, c: usize, d: usize) -> usize {
+    let calls = FIN_ADVANCER_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
+    let fin_before = unsafe { read_u8(a + MOVEMAPSTEP_FINALIZE_12A_OFFSET) }.map_or(-1, i32::from);
+    let menu = game_base().and_then(|base| unsafe { read_usize(base + CS_MENU_MAN_GLOBAL_RVA) });
+    let menu_data = menu.and_then(|m| unsafe { read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) });
+    // NOTE: the rt5d/save-flag DRIVE was REMOVED (bd CORRECTION-rt5d-drive-tears-down-load2). Driving
+    // menuData+0x5d=1 (+ clearing saveRequested/0xb73) DID complete load2's finalize 0..9, but that
+    // TORE THE PLAYER DOWN (post-completion: present=False, havok=None, mms=-1 at ~60fps = a player-less
+    // world) -- load2's player is not movable at fin=0 when the finalize runs, unlike load1. So the
+    // finalize-drive is a proven DEAD END; this hook is log-only again so traces show the natural load2.
+    // The old write-capable helper was removed after the rt5d drive was proven dead-end; keep only
+    // the drive statics/consts as read-only trace context.
+    let _ = (
+        &RT5D_DRIVE_MMS,
+        &RT5D_DRIVE_ZERO_STREAK,
+        &RT5D_DRIVE_DONE_MMS,
+        &COMPLETION_SEEN_MMS,
+    );
+    let ret = unsafe { call_original(&ORIG_FINALIZE_ADVANCER, a, b, c, d) };
+    let fin_after = unsafe { read_u8(a + MOVEMAPSTEP_FINALIZE_12A_OFFSET) }.map_or(-1, i32::from);
+    let m5d = menu_data
+        .and_then(|md| unsafe { read_u8(md + MENU_DATA_RT5D_OFFSET) })
+        .map_or(-1, i32::from);
+    let m5e = menu_data
+        .and_then(|md| unsafe { read_u8(md + MENU_DATA_ENDING_5E_OFFSET) })
+        .map_or(-1, i32::from);
+    let last = LAST_FIN12A.swap(fin_after, Ordering::SeqCst);
+    // Log EVERY advancer tick with the mms header window. load2's Update ticks only ~6x before the FD4
+    // scheduler drops it (load1 ~145x), so the per-tick header lets a run diff which mms field flips
+    // when load2 stops ticking. Volume is bounded (a few hundred lines/run) -- acceptable for a
+    // diagnostic (bd load2-real-blocker-movemapstep-child-advancer-tick-never-runs).
+    let _ = (fin_before, last);
+    log_line(format_args!(
+        "finalize_advancer_afa6d0 call#{calls} mms=0x{a:x} field25_12a {fin_before}->{fin_after} menuData_5d={m5d} 5e={m5e} {} {}",
+        mms_header_window(a),
+        snapshot()
+    ));
+    ret
+}
+
+static LOADLIST_INIT_CALLS: AtomicU64 = AtomicU64::new(0);
+static ORIG_LOADLIST_INIT: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+/// worldloadlistlistVirtualPath = InGameStep+0x108, a DlFixedString<wchar_t,128> (inline): +0x00 union
+/// (pointer when capacity>7, else in_place), +0x08 size(wchars), +0x10 capacity.
+const INGAMESTEP_WORLDLOADLIST_VPATH_108_OFFSET: usize = 0x108;
+
+/// Log-only detour for STEP_MoveMap_LoadlistInit (rva 0xaec480 / dump 0x140aec570). Its gate is
+/// worldloadlistlistVirtualPath.size != 0 -- when 0 it SKIPS building the loadlist -> no block-res ->
+/// WorldResWait hangs -> load2 finalize stuck. Logs the DlFixedString (size/cap/ptr + ASCII path
+/// preview) BEFORE the original so a load1-vs-load2 diff shows load1's map:\WorldMsbList\... path and
+/// load2's EMPTY path -- the root of the reload stall (bd fix-point-confirmed-stepmovemap-loadlistinit).
+unsafe extern "system" fn hook_loadlist_init(a: usize, b: usize, c: usize, d: usize) -> usize {
+    let n = LOADLIST_INIT_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
+    let dfs = a.wrapping_add(INGAMESTEP_WORLDLOADLIST_VPATH_108_OFFSET);
+    let size = unsafe { read_usize(dfs + 0x08) }.unwrap_or(usize::MAX);
+    let cap = unsafe { read_usize(dfs + 0x10) }.unwrap_or(usize::MAX);
+    let str_base = if cap != usize::MAX && cap > 7 {
+        unsafe { read_usize(dfs) }.unwrap_or(0)
+    } else {
+        dfs
+    };
+    let mut preview = String::new();
+    if str_base != 0 && size != usize::MAX && size <= 256 {
+        for i in 0..size.min(120) {
+            // ASCII path chars sit in the low byte of each UTF-16LE unit.
+            match unsafe { read_u8(str_base + i * 2) } {
+                Some(w) if (0x20..0x7f).contains(&w) => preview.push(w as char),
+                _ => preview.push('.'),
+            }
+        }
+    }
+    log_line(format_args!(
+        "loadlist_init_aec480 call#{n} InGameStep=0x{a:x} worldloadlist_size={size} cap={cap} strptr=0x{str_base:x} path='{preview}' {}",
+        snapshot()
+    ));
+    unsafe { call_original(&ORIG_LOADLIST_INIT, a, b, c, d) }
+}
+
+/// Log-only detour for the child-done query FUN_140eb5550 (rva 0xeb5530). Logs its return (done flag)
+/// on change + a 600-call heartbeat. If load2 returns done=1 while load1 returns done=0 during the
+/// mms18 freeze, the premature-teardown chain is confirmed.
+unsafe extern "system" fn hook_child_done_query(a: usize, b: usize, c: usize, d: usize) -> usize {
+    let calls = CHILD_DONE_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
+    let ret = unsafe { call_original(&ORIG_CHILD_DONE_QUERY, a, b, c, d) };
+    let done = (ret & 0xff) as i32;
+    let last = LAST_CHILD_DONE.swap(done, Ordering::SeqCst);
+    if last != done || calls % 600 == 0 {
+        log_line(format_args!(
+            "child_done_query_eb5530 call#{calls} rcx=0x{a:x} returned done={done} {}",
+            snapshot()
+        ));
+    }
+    ret
+}
+
+/// Log-only detour for the child teardown FUN_140eb54e0 (rva 0xeb54c0). Logs every teardown with the
+/// child_base-0x108 MoveMapStep state/field25 so load2's MoveMapStep child teardown (state==18) is
+/// visible -- or its absence proves the child is never re-scheduled rather than torn down. mms= ptr
+/// distinguishes load1 vs load2.
+unsafe extern "system" fn hook_child_teardown(a: usize, b: usize, c: usize, d: usize) -> usize {
+    let n = CHILD_TEARDOWN_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
+    let mms = a.wrapping_sub(MOVEMAPSTEP_CHILD_EZSTEP_OFFSET);
+    let st = unsafe { read_i32(mms + MOVEMAPSTEP_STATE_48_OFFSET) }.unwrap_or(-999);
+    let fin = unsafe { read_u8(mms + MOVEMAPSTEP_FINALIZE_12A_OFFSET) }.map_or(-1, i32::from);
+    log_line(format_args!(
+        "child_teardown_eb54c0 call#{n} child_base=0x{a:x} mms=0x{mms:x} state={st} field25={fin} {}",
+        snapshot()
+    ));
+    unsafe { call_original(&ORIG_CHILD_TEARDOWN, a, b, c, d) }
+}
+
 fn snapshot() -> String {
     let Some(base) = game_base() else {
         return "base=<unresolved>".to_owned();
@@ -201,12 +423,24 @@ fn snapshot() -> String {
     let df0 = unsafe { read_usize(gm + GAME_MAN_RESIDENT_DEVICE_DF0_OFFSET) }.unwrap_or(0);
     let pgd = unsafe { read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }.unwrap_or(0);
 
+    // Load-submit gate fields (see the *_SUBMIT_GATE_* consts): diff load1 vs load2 to find the gate
+    // that keeps load2's combined_load submit bailing so the world load never completes.
+    let g_cb1 = unsafe { read_u8(gm + GAME_MAN_SUBMIT_GATE_CB1_OFFSET) };
+    let g_cb2 = unsafe { read_u8(gm + GAME_MAN_SUBMIT_GATE_CB2_OFFSET) };
+    let g_bca = unsafe { read_u8(gm + GAME_MAN_SUBMIT_GATE_BCA_OFFSET) };
+    let g_b5e = unsafe { read_u8(gm + GAME_MAN_SUBMIT_GATE_B5E_OFFSET) };
+    let g_glob = unsafe { read_usize(base + SUBMIT_GLOBAL_PTR_3D68078_RVA) }.unwrap_or(0);
+
     format!(
-        "base=0x{base:x} gm=0x{gm:x} b78={} b80={} ac0={} c30={} df0=0x{df0:x} gdm=0x{gdm:x} pgd=0x{pgd:x} mounted_registry=0x{mounted:x}",
+        "base=0x{base:x} gm=0x{gm:x} b78={} b80={} ac0={} c30={} df0=0x{df0:x} gdm=0x{gdm:x} pgd=0x{pgd:x} mounted_registry=0x{mounted:x} submit[cb1={} cb2={} bca={} b5e={} glob=0x{g_glob:x}]",
         fmt_i32(b78),
         fmt_i32(b80),
         fmt_i32(ac0),
         fmt_c30(c30),
+        fmt_u8(g_cb1),
+        fmt_u8(g_cb2),
+        fmt_u8(g_bca),
+        fmt_u8(g_b5e),
     )
 }
 
@@ -216,6 +450,10 @@ fn fmt_i32(value: Option<i32>) -> String {
 
 fn fmt_c30(value: Option<i32>) -> String {
     value.map_or_else(|| "<unreadable>".to_owned(), |value| format!("0x{value:x}"))
+}
+
+fn fmt_u8(value: Option<u8>) -> String {
+    value.map_or_else(|| "<unreadable>".to_owned(), |value| value.to_string())
 }
 
 unsafe fn call_original(
@@ -634,6 +872,26 @@ static HOOKS: &[HookSpec] = &[
         detour: hook_title_native_ready,
         original: &ORIG_TITLE_NATIVE_READY,
     },
+    HookSpec {
+        name: "finalize_advancer_afa6d0",
+        rva: 0xafa6d0,
+        detour: hook_finalize_advancer,
+        original: &ORIG_FINALIZE_ADVANCER,
+    },
+    HookSpec {
+        name: "loadlist_init_aec480",
+        rva: 0xaec480,
+        detour: hook_loadlist_init,
+        original: &ORIG_LOADLIST_INIT,
+    },
+    HookSpec {
+        name: "child_teardown_eb54c0",
+        rva: CHILD_TEARDOWN_RVA,
+        detour: hook_child_teardown,
+        original: &ORIG_CHILD_TEARDOWN,
+    },
+    // child_done_query_eb5530 removed: the PRODUCT DLL now owns 0xeb5530 with its override hook
+    // (child_done_query_override_detour); a second trace hook here would chain and muddy the override.
 ];
 
 /// Resolve the product DLL's `er_effects_union_register` export, polling briefly since both natives

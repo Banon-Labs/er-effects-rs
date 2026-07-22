@@ -1,0 +1,19 @@
+[package]
+name = "er-cutscene-replacer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_cutscene_replacer"
+crate-type = ["cdylib", "rlib"]
+
+[target.'cfg(windows)'.dependencies]
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+er-game-base = { path = "../er-game-base", features = ["game-types"] }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_LibraryLoader",
+  "Win32_System_SystemServices",
+] }

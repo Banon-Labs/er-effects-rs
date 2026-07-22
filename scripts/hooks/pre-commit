@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Fast static guards for the normal rust build/format/commit cycle (bd
+# static-guards-run-in-build-format-cycle-precommit-hook-2026-07-19). Runs the quick,
+# source-only checks so hidden feature toggles (marker files / env vars), lossy UTF-8, and
+# unbounded timeouts are caught BEFORE they land -- without the slow windows cargo check / tests
+# that scripts/check.sh runs. Install with: bash scripts/install-git-hooks.sh
+#
+# Bypass for an emergency commit: `git commit --no-verify` (use sparingly, then fix + re-run check.sh).
+set -uo pipefail
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+	echo "pre-commit: not in a git repo; skipping" >&2
+	exit 0
+}
+cd "$repo_root" || exit 0
+
+# Only run when the commit actually touches rust source or the scripts/policies that gate it, so a
+# docs- or beads-only commit is not slowed down.
+staged="$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null)"
+if ! grep -qE '\.rs$|^scripts/|^\.auto/|^\.cupcake/' <<<"$staged"; then
+	exit 0
+fi
+
+fail=0
+run() {
+	local label="$1"
+	shift
+	if ! "$@" >/tmp/precommit-$$.log 2>&1; then
+		echo "pre-commit: FAIL [$label]" >&2
+		sed 's/^/    /' /tmp/precommit-$$.log >&2
+		fail=1
+	fi
+	rm -f /tmp/precommit-$$.log
+}
+
+# Fast source-only guards (each is a static scan; all finish in well under a second).
+run "marker-file-gates" python3 scripts/check-marker-file-gates.py
+run "env-gate-comments" python3 scripts/check-env-gate-comments.py
+[[ -f scripts/check-no-lossy-utf8.py ]] && run "no-lossy-utf8" python3 scripts/check-no-lossy-utf8.py
+[[ -f scripts/check-no-timeouts.py ]] && run "no-timeouts" python3 scripts/check-no-timeouts.py
+# Formatting drift. Use real `cargo fmt --check` (matches the crate's edition/rustfmt.toml and module
+# context -- per-file `rustfmt` formats imports differently and false-positives), but only FAIL on
+# diffs in THIS repo: `cargo fmt --all` also reaches the sibling `../fromsoftware-rs` path dependency,
+# whose unrelated uncommitted drift must not block our commits
+# (bd precommit-fmt-scope-staged-files-not-sibling-repo-2026-07-19).
+if grep -qE '\.rs$' <<<"$staged"; then
+	fmt_out="$(cargo fmt --all -- --check 2>&1 || true)"
+	repo_diffs="$(grep -E '^Diff in ' <<<"$fmt_out" | grep -F "$repo_root/" || true)"
+	if [[ -n "$repo_diffs" ]]; then
+		echo "pre-commit: FAIL [cargo fmt --check]" >&2
+		sed 's/^/    /' <<<"$repo_diffs" >&2
+		fail=1
+	fi
+fi
+
+if [[ "$fail" -ne 0 ]]; then
+	echo "pre-commit: blocked. Fix the above (a product FIX must be default-on on a real runtime" >&2
+	echo "  condition -- no marker-file/env toggle), or 'git commit --no-verify' to bypass intentionally." >&2
+	exit 1
+fi
+exit 0

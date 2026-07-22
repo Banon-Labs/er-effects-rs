@@ -56,9 +56,8 @@ fn poll_cached_mms18_ending_request_advancer() {
 }
 
 fn poll_autoload_handoff_parent_state_guard() {
-    const TITLE_STEP_END_FLOW: i32 = 7;
-    const TITLE_STEP_END_FLOW_WAIT: i32 = 8;
-
+    // TITLE_STEP_END_FLOW (7) / TITLE_STEP_END_FLOW_WAIT (8): enum-backed teardown-state constants
+    // (constants::stats_panel_background), shared with the product-core parent-fix.
     if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
         != SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
         || SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) == 0
@@ -366,7 +365,16 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     let st = SQ_REPRO_STATE.load(Ordering::SeqCst);
                     (SQ_REPRO_STATE_OPEN_MENU..=SQ_REPRO_STATE_CONFIRM).contains(&st)
                 };
-                if !sq_menu_nav {
+                // Only inject once the char is actually RENDERED in-world (render_group 1c4 + enable_render
+                // 1c5), NOT merely present. `player present` goes true mid-load (mms=13, ~14s before
+                // render_group), and injecting there latched an invalid DISPROVEN before the char could be
+                // controllable -- then the verdict was frozen and never re-tested (run 092119: verdict at
+                // t=79.9s during loading; render_group did not fire until t=86s). Gating on the rendered
+                // state makes the probe test movability at the stable in-world point, so a DISPROVEN verdict
+                // means the char genuinely did not move, not that we injected before the world was up.
+                let char_rendered = player.chr_ins.chr_flags1c4.is_render_group_enabled()
+                    && player.chr_ins.chr_flags1c5.enable_render();
+                if !sq_menu_nav && char_rendered {
                     let p = player.chr_ins.modules.physics.position;
                     crate::experiments::can_move_probe::tick((p.0, p.1, p.2));
                 }
@@ -438,9 +446,10 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // drains and the player disappears before movement." Keep handoff armed until the current reload
                 // epoch has epoch-scoped movement proof too. Normal user sessions keep the original non-input
                 // player-present latch and are not forced to walk the character.
-                let movement_proof_required = crate::telemetry::game_directory_path()
-                    .map(|d| d.join("er-effects-prove-movement.txt").exists())
-                    .unwrap_or(false);
+                // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): marker feature gates are
+                // forbidden; the movement-proof harness marker is retired, so no epoch is ever forced
+                // to walk the character (proof-only behavior, never product).
+                let movement_proof_required = false;
                 let current_epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
                 let movement_proven_for_epoch = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
                     && MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == current_epoch;

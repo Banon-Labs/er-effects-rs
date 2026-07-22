@@ -1,4 +1,21 @@
 fn write_game_module_oracles(body: &mut String) {
+    // FPS oracle (goal 2026-07-19: stable, load1-baseline-comparable framerate). Current EMA fps + the
+    // per-epoch WORST-frame fps (min), written each game-task frame by lifecycle from delta_time.
+    {
+        use std::sync::atomic::Ordering;
+        let ema_us = crate::constants::FRAME_TIME_EMA_US.load(Ordering::Relaxed).max(1);
+        let worst_us = crate::constants::FRAME_TIME_WORST_US.load(Ordering::Relaxed);
+        let fps = 1_000_000.0f32 / ema_us as f32;
+        let min_fps = if worst_us > 0 {
+            1_000_000.0f32 / worst_us as f32
+        } else {
+            fps
+        };
+        body.push_str(&format!(
+            "  \"oracle_fps\": {fps:.1},\n  \"oracle_min_fps\": {min_fps:.1},\n  \"oracle_frame_ms\": {:.2},\n",
+            ema_us as f32 / 1000.0
+        ));
+    }
     const GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET: usize = core::mem::offset_of!(GameMan, save_state);
     const GAME_MAN_SAVED_MAP_C30_OFFSET: usize =
         core::mem::offset_of!(GameMan, stay_in_multiplay_area_saved_rotation)
@@ -26,6 +43,54 @@ fn write_game_module_oracles(body: &mut String) {
         body.push_str(&format!(
             "  \"oracle_load_in_progress_b80\": {b80},\n  \"oracle_saved_map_c30\": \"{c30:#x}\",\n"
         ));
+        // LOADING SUBSTEP oracle (bd user-loading-bar-labels-stuck + WIP fromsoftware-rs
+        // generic-menu-save-layouts): CSSystemStep (global base+0x3d85680 -> instance) drives the
+        // boot/resource load; current_state (+0x40, states 0..20 per CSSystemStepState) names the exact
+        // subsystem being waited on (WaitRes/File/Graphics/Sound/Pad), so the loading-bar sublabel can
+        // track the real hanging substep instead of a stuck label. Read raw (main fromsoftware-rs lacks
+        // this type; layout from the WIP worktree: current_state at stepper+0x40, verified by the unk48
+        // field naming). current_state is the low 4 bytes (requested_state is the adjacent +0x44).
+        {
+            const CS_SYSTEM_STEP_GLOBAL_RVA: usize = 0x3d85680;
+            const CS_SYSTEM_STEP_CURRENT_STATE_OFFSET: usize = 0x40;
+            const SYSTEM_STEP_LABELS: [&str; 21] = [
+                "Init",
+                "InitBoot1",
+                "WaitBoot1",
+                "InitBoot2",
+                "WaitBoot2",
+                "InitBoot3",
+                "WaitBoot3",
+                "InitBoot4",
+                "WaitBoot4",
+                "InitBoot5",
+                "WaitBoot5",
+                "InitGameFlow",
+                "WaitGameFlow",
+                "FinishGameFlow",
+                "WaitPreGraphics",
+                "WaitGraphics",
+                "WaitPad",
+                "WaitRes",
+                "WaitSound",
+                "WaitFile",
+                "Finish",
+            ];
+            let state = unsafe { crate::experiments::safe_read_usize(base + CS_SYSTEM_STEP_GLOBAL_RVA) }
+                .filter(|p| *p >= 0x10000)
+                .and_then(|p| unsafe {
+                    crate::experiments::safe_read_usize(p + CS_SYSTEM_STEP_CURRENT_STATE_OFFSET)
+                })
+                .map(|v| v as u32 as i32);
+            let (sv, sl) = match state {
+                Some(v) if (0..=20).contains(&v) => (v, SYSTEM_STEP_LABELS[v as usize]),
+                Some(v) => (v, "?"),
+                None => (-2, "unresolved"),
+            };
+            body.push_str(&format!(
+                "  \"oracle_system_step_state\": {sv},\n  \"oracle_system_step_label\": \"{sl}\",\n"
+            ));
+        }
         // IDENTITY oracle: loaded character values that should match the chosen save slot.
         // These mirror ER-Save-File-Readers' player_game_data models (health/fp today, broader
         // slot attributes as that reference grows) while reading the live GameDataMan path used by
@@ -60,6 +125,39 @@ fn write_game_module_oracles(body: &mut String) {
             }
             .map_or(PLAY_TIME_READ_FAIL, |v| i64::from((v & 0xffff_ffff) as u32))
         };
+        // WORLD-CLOCK-LIVE semaphore (user 2026-07-19, bd play-time-live-world-clock-semaphore): the
+        // input-trace path computes this but only emits it to the trace jsonl; mirror it into the MAIN
+        // telemetry so the samechar-3x load1-vs-load2 comparison can actually use it (its
+        // "world_clock:live" checkpoint reads `play_time_live`). play_time advances only while the world
+        // sim steps; a >=1s rise past THIS load epoch's first-seen value = the world is genuinely live
+        // (the loading-screen playtime the user watched ticking). Necessary-not-sufficient for control.
+        const PLAY_TIME_LIVE_THRESHOLD_MS: i64 = 1000;
+        static PT_ORACLE_EPOCH: std::sync::atomic::AtomicUsize =
+            std::sync::atomic::AtomicUsize::new(usize::MAX);
+        static PT_ORACLE_FIRST: std::sync::atomic::AtomicI64 =
+            std::sync::atomic::AtomicI64::new(PLAY_TIME_READ_FAIL);
+        let pt_epoch = crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if PT_ORACLE_EPOCH.swap(pt_epoch, std::sync::atomic::Ordering::Relaxed) != pt_epoch {
+            // New load epoch -> reset the baseline to this load's first-seen play_time.
+            PT_ORACLE_FIRST.store(play_time_ms, std::sync::atomic::Ordering::Relaxed);
+        } else if PT_ORACLE_FIRST.load(std::sync::atomic::Ordering::Relaxed) < 0 && play_time_ms >= 0 {
+            PT_ORACLE_FIRST.store(play_time_ms, std::sync::atomic::Ordering::Relaxed);
+        }
+        let pt_first = PT_ORACLE_FIRST.load(std::sync::atomic::Ordering::Relaxed);
+        let play_time_advanced_ms: i64 = if play_time_ms >= 0 && pt_first >= 0 {
+            play_time_ms - pt_first
+        } else {
+            PLAY_TIME_READ_FAIL
+        };
+        let play_time_live: bool = play_time_advanced_ms >= PLAY_TIME_LIVE_THRESHOLD_MS;
+        if play_time_live {
+            // Publish the PER-EPOCH world-live signal so the boot-view compositor stops its per-frame GPU
+            // readback once THIS switch's world is genuinely running (bd
+            // fps-killer-rootcaused-per-frame-gpu-readback-boot-view-not-stopping-inworld-load2).
+            crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE
+                .store(pt_epoch, std::sync::atomic::Ordering::Relaxed);
+        }
         const U8_MASK: usize = 0xff;
         let read_pgd_u32 = |offset: usize| -> u32 {
             if pgd == NULL_PTR {
@@ -181,7 +279,7 @@ fn write_game_module_oracles(body: &mut String) {
         }
         let stat_values = stats.map(|value| value.to_string()).join(", ");
         body.push_str(&format!(
-            "  \"oracle_char_current_hp\": {current_hp},\n  \"oracle_char_current_max_hp\": {current_max_hp},\n  \"oracle_char_base_max_hp\": {base_max_hp},\n  \"oracle_char_current_fp\": {current_fp},\n  \"oracle_char_current_max_fp\": {current_max_fp},\n  \"oracle_char_base_max_fp\": {base_max_fp},\n  \"oracle_char_current_stamina\": {current_stamina},\n  \"oracle_char_current_max_stamina\": {current_max_stamina},\n  \"oracle_char_base_max_stamina\": {base_max_stamina},\n  \"oracle_char_level\": {level},\n  \"oracle_char_runes\": {runes},\n  \"oracle_char_rune_memory\": {rune_memory},\n  \"oracle_char_chr_type\": {chr_type},\n  \"oracle_char_gender\": {gender},\n  \"oracle_char_archetype\": {archetype},\n  \"oracle_char_voice_type\": {voice_type},\n  \"oracle_char_starting_gift\": {starting_gift},\n  \"oracle_char_unlocked_talisman_slots\": {unlocked_talisman_slots},\n  \"oracle_char_spirit_ash_level\": {spirit_ash_level},\n  \"oracle_char_max_crimson_flask_count\": {max_crimson_flask_count},\n  \"oracle_char_max_cerulean_flask_count\": {max_cerulean_flask_count},\n  \"oracle_char_name\": \"{}\",\n  \"oracle_char_name_len\": {name_len},\n  \"oracle_play_time_ms\": {play_time_ms},\n  \"oracle_char_stats\": [{stat_values}],\n  \"oracle_face_data_magic\": \"{}\",\n  \"oracle_face_data_version\": {face_data_version},\n  \"oracle_face_data_buffer_size\": {face_data_buffer_size},\n  \"oracle_face_data_buffer_hex\": \"{face_data_buffer_hex}\",\n  \"oracle_face_body_fields\": {face_body_fields},\n",
+            "  \"oracle_char_current_hp\": {current_hp},\n  \"oracle_char_current_max_hp\": {current_max_hp},\n  \"oracle_char_base_max_hp\": {base_max_hp},\n  \"oracle_char_current_fp\": {current_fp},\n  \"oracle_char_current_max_fp\": {current_max_fp},\n  \"oracle_char_base_max_fp\": {base_max_fp},\n  \"oracle_char_current_stamina\": {current_stamina},\n  \"oracle_char_current_max_stamina\": {current_max_stamina},\n  \"oracle_char_base_max_stamina\": {base_max_stamina},\n  \"oracle_char_level\": {level},\n  \"oracle_char_runes\": {runes},\n  \"oracle_char_rune_memory\": {rune_memory},\n  \"oracle_char_chr_type\": {chr_type},\n  \"oracle_char_gender\": {gender},\n  \"oracle_char_archetype\": {archetype},\n  \"oracle_char_voice_type\": {voice_type},\n  \"oracle_char_starting_gift\": {starting_gift},\n  \"oracle_char_unlocked_talisman_slots\": {unlocked_talisman_slots},\n  \"oracle_char_spirit_ash_level\": {spirit_ash_level},\n  \"oracle_char_max_crimson_flask_count\": {max_crimson_flask_count},\n  \"oracle_char_max_cerulean_flask_count\": {max_cerulean_flask_count},\n  \"oracle_char_name\": \"{}\",\n  \"oracle_char_name_len\": {name_len},\n  \"oracle_play_time_ms\": {play_time_ms},\n  \"oracle_play_time_advanced_ms\": {play_time_advanced_ms},\n  \"oracle_play_time_live\": {play_time_live},\n  \"oracle_char_stats\": [{stat_values}],\n  \"oracle_face_data_magic\": \"{}\",\n  \"oracle_face_data_version\": {face_data_version},\n  \"oracle_face_data_buffer_size\": {face_data_buffer_size},\n  \"oracle_face_data_buffer_hex\": \"{face_data_buffer_hex}\",\n  \"oracle_face_body_fields\": {face_body_fields},\n",
             json_escape(&name),
             json_escape(&face_data_magic)
         ));

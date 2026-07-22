@@ -308,12 +308,11 @@ pub(crate) fn move_probe_drive_key_foreground_only(vk: u32) {
 /// menus while ER is UNFOCUSED -- letting the user work in another window during a golden capture.
 /// Decoded: ER clears that flag each frame when it isn't `GetActiveWindow` (`0x141f292bd`); we re-set
 /// it. Touches ONLY focus-input gating, never the sim/save/load.
+/// DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): stay-active forced the input-accept
+/// flag `[DLUID+0x88d]` while unfocused -- a diagnostic golden-capture convenience gated by
+/// env/marker. Env/marker feature gates are forbidden; retired (permanently off).
 pub(crate) fn stay_active_enabled() -> bool {
-    matches!(std::env::var("ER_EFFECTS_STAY_ACTIVE").as_deref(), Ok("1"))
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-stay-active.txt")
-            .exists()
+    false
 }
 
 /// True when the autoload/own-stepper probe must run UNCONTAMINATED -- no real keyboard,
@@ -348,17 +347,8 @@ pub(crate) fn block_input_enabled() -> bool {
     if sq_repro_actively_driving() {
         return true;
     }
-    // FORCE-BLOCK override (env/file): block UNCONDITIONALLY, even past menu-open. Used to
-    // FALSIFY -- runtime-proven 2026-06-17 that blocking through menu-open lets the menu OPEN
-    // (self-fire) but starves the post-open navigation, so the load never selects.
-    if matches!(std::env::var("ER_EFFECTS_BLOCK_INPUT").as_deref(), Ok("1"))
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-block-input.txt")
-            .exists()
-    {
-        return true;
-    }
+    // (DE-GATED 2026-07-19: the env/marker FORCE-BLOCK override -- block unconditionally past
+    // menu-open -- was a falsification diagnostic; env/marker feature gates are forbidden, removed.)
     // INJECT-NAV instrument-capture: keep the block ON past menu-open so the user's input is
     // suppressed while the XInput hook fabricates the cursor nav (so nothing pollutes the
     // capture). The fabricated Down is written INTO the otherwise-blocked gamepad state, so the
@@ -750,6 +740,176 @@ pub(crate) fn ensure_xinput_hook_installed_for_trace() {
     if XINPUT_GET_STATE_ORIG.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS {
         unsafe { install_xinput_block() };
     }
+    ensure_rawinput_counter_installed();
+}
+
+/// Install the RawInput reception counter ONCE (idempotent). Called UNCONDITIONALLY every frame from
+/// tick_before_player_lookup -- unlike the xinput trace path this must run on EVERY run (it is the
+/// contamination oracle: whether the game received user mouse/keyboard input), not only when the
+/// input-trace marker is armed. Pure counting pass-through; never blocks input.
+pub(crate) fn ensure_rawinput_counter_installed() {
+    if GET_RAW_INPUT_DATA_ORIG.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS {
+        unsafe { install_rawinput_counter() };
+    }
+}
+
+/// GetRawInputData reception counters (user 2026-07-20): the oracle must RECORD whether the GAME is
+/// RECEIVING user mouse/keyboard input, at the OS boundary. ER reads gameplay+menu input via RawInput;
+/// the input-harness injects via the direct-memory inputmgr, NOT RawInput -- so every RawInput event
+/// counted here is USER input the game received (contamination during an agent-owned run). Emitted as
+/// oracle_rawinput_* and consumed by the verdict emitter.
+pub(crate) static RAWINPUT_MOUSE_MOVE_EVENTS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static RAWINPUT_MOUSE_BUTTON_EVENTS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static RAWINPUT_KEY_EVENTS: AtomicUsize = AtomicUsize::new(0);
+/// Total GetRawInputData calls the game made (any command). If this is 0 the game is NOT routing input
+/// through GetRawInputData -> the reception oracle is BLIND and a 0 event count means nothing. If >0 the
+/// oracle is live and a 0 event count is a genuine "no user input this run".
+pub(crate) static RAWINPUT_HOOK_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// User input events that arrived while the game was UNFOCUSED (agent-owned run): these are DROPPED
+/// (zeroed) so they have no effect, and counted here -- NOT as contamination. The user may press
+/// buttons freely during a run; while unfocused those presses are neutralized and harmless (user
+/// 2026-07-20: "only cares about when inputs are being sent AND you're not blocking them").
+pub(crate) static RAWINPUT_BLOCKED_UNFOCUSED_EVENTS: AtomicUsize = AtomicUsize::new(0);
+static GET_RAW_INPUT_DATA_ORIG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+
+/// Whether an AGENT-OWNED RUN is active, detected by the input-harness DLL being loaded (the approved
+/// agent-run signal per product-nav-presence-gated-on-harness-dll, NOT a marker/env gate). During such
+/// a run all user RawInput is blocked so only the harness's direct-memory injection is effective. Cached
+/// once present (the DLL does not unload mid-run); cheap GetModuleHandleA until then.
+fn harness_run_active() -> bool {
+    static PRESENT: AtomicUsize = AtomicUsize::new(0);
+    if PRESENT.load(Ordering::Relaxed) == 1 {
+        return true;
+    }
+    let present = unsafe { GetModuleHandleA(PCSTR(b"er_input_harness_dll.dll\0".as_ptr())) }
+        .map(|h| !h.is_invalid())
+        .unwrap_or(false);
+    if present {
+        PRESENT.store(1, Ordering::Relaxed);
+    }
+    present
+}
+
+/// GetRawInputData(hRawInput, uiCommand, pData, pcbSize, cbSizeHeader) pass-through detour: call the
+/// original, then if it returned a RID_INPUT record, classify it and bump the reception counter. Never
+/// drops input (recording only). RAWINPUTHEADER is 0x18 bytes on x64; RAWMOUSE.usButtonFlags @ +0x04,
+/// lLastX @ +0x0C, lLastY @ +0x10; RAWKEYBOARD Message @ +0x08 (WM_KEYDOWN 0x100 / WM_SYSKEYDOWN 0x104).
+unsafe extern "system" fn get_raw_input_data_hook(
+    h_raw_input: isize,
+    ui_command: u32,
+    p_data: *mut c_void,
+    pcb_size: *mut u32,
+    cb_size_header: u32,
+) -> u32 {
+    RAWINPUT_HOOK_CALLS.fetch_add(1, Ordering::Relaxed);
+    let orig_addr = GET_RAW_INPUT_DATA_ORIG.load(Ordering::SeqCst);
+    let orig: unsafe extern "system" fn(isize, u32, *mut c_void, *mut u32, u32) -> u32 =
+        unsafe { std::mem::transmute(orig_addr) };
+    let ret = unsafe { orig(h_raw_input, ui_command, p_data, pcb_size, cb_size_header) };
+    const RID_INPUT: u32 = 0x1000_0003;
+    if !p_data.is_null() && ui_command == RID_INPUT && ret != u32::MAX && ret >= 0x30 {
+        // EFFECTIVENESS GATE (user 2026-07-20, corrected): user input is EFFECTIVE only when this is NOT
+        // an agent-owned run. Focus is NOT reliable -- the ER window is foreground while the user WATCHES
+        // it, so GetForegroundWindow==game even though the user's presses have no effect during a load.
+        // The reliable agent-run signal is the input-harness DLL being loaded. During an agent-owned run
+        // ALL user RawInput is DROPPED (zeroed) + counted as BLOCKED (harmless); the harness injects via
+        // the direct-memory inputmgr (not RawInput) so it stays effective. Harness absent (normal play):
+        // input passes through and counts as effective.
+        let effective = !harness_run_active();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let base = p_data as usize;
+            let dwtype = unsafe { (base as *const u32).read_unaligned() };
+            let d = base + 0x18; // past RAWINPUTHEADER
+            if dwtype == 0 {
+                // RIM_TYPEMOUSE: usButtonFlags @ +0x04, lLastX @ +0x0C, lLastY @ +0x10
+                let btn = unsafe { ((d + 0x04) as *const u16).read_unaligned() };
+                let lx = unsafe { ((d + 0x0C) as *const i32).read_unaligned() };
+                let ly = unsafe { ((d + 0x10) as *const i32).read_unaligned() };
+                if lx != 0 || ly != 0 || btn != 0 {
+                    if effective {
+                        if lx != 0 || ly != 0 {
+                            RAWINPUT_MOUSE_MOVE_EVENTS.fetch_add(1, Ordering::Relaxed);
+                        }
+                        if btn != 0 {
+                            RAWINPUT_MOUSE_BUTTON_EVENTS.fetch_add(1, Ordering::Relaxed);
+                        }
+                    } else {
+                        // DROP: zero movement + buttons so the game reads a no-op mouse event.
+                        unsafe {
+                            ((d + 0x0C) as *mut i32).write_unaligned(0);
+                            ((d + 0x10) as *mut i32).write_unaligned(0);
+                            ((d + 0x04) as *mut u16).write_unaligned(0);
+                        }
+                        RAWINPUT_BLOCKED_UNFOCUSED_EVENTS.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            } else if dwtype == 1 {
+                // RIM_TYPEKEYBOARD: MakeCode @ +0x00, VKey @ +0x06, Message @ +0x08 (WM_KEYDOWN 0x100)
+                let msg = unsafe { ((d + 0x08) as *const u32).read_unaligned() };
+                if msg == 0x100 || msg == 0x104 {
+                    if effective {
+                        RAWINPUT_KEY_EVENTS.fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        // DROP: neutralize the key (VKey=0xFF, MakeCode=0) so it is a no-op.
+                        unsafe {
+                            ((d + 0x06) as *mut u16).write_unaligned(0x00FF);
+                            (d as *mut u16).write_unaligned(0);
+                        }
+                        RAWINPUT_BLOCKED_UNFOCUSED_EVENTS.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+        }));
+    }
+    ret
+}
+
+/// Install the GetRawInputData reception counter (user32.dll). minhook, mirroring install_xinput_block.
+/// Recording only -- never blocks. Retried each frame until user32 GetRawInputData resolves.
+unsafe fn install_rawinput_counter() {
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "rawinput-counter: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let hmod = match unsafe { GetModuleHandleA(PCSTR(b"user32.dll\0".as_ptr())) } {
+        Ok(h) if !h.is_invalid() => h,
+        _ => return,
+    };
+    let Some(addr) = (unsafe { GetProcAddress(hmod, PCSTR(b"GetRawInputData\0".as_ptr())) }) else {
+        return;
+    };
+    let addr = addr as usize;
+    match unsafe { MhHook::new(addr as *mut c_void, get_raw_input_data_hook as *mut c_void) } {
+        Ok(hook) => {
+            // Store the trampoline BEFORE enabling so the detour never transmutes the unset sentinel.
+            GET_RAW_INPUT_DATA_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "rawinput-counter: queue_enable failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    append_autoload_debug(format_args!(
+                        "rawinput-counter: hooked GetRawInputData at 0x{addr:x} -- records user mouse/kb input the game receives (contamination oracle)"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "rawinput-counter: MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "rawinput-counter: MhHook::new GetRawInputData failed: {status:?}"
+        )),
+    }
 }
 
 /// Tracks whether the DInput keyboard+mouse `install_hooks` has succeeded.
@@ -806,17 +966,41 @@ pub(crate) fn enforce_input_block_now() {
     // Lock down MOUSE MOVEMENT: the DInput GetDeviceState block zeroes keyboard + mouse buttons +
     // DInput mouse deltas, but ER moves the MENU cursor via the OS cursor position (GetCursorPos),
     // which DInput blocking does NOT cover -- so the user can still move the cursor. Confine the OS
-    // cursor to a 1x1 rect every frame: it physically cannot move regardless of which API reads it,
-    // making the run uncontaminatable by the mouse. Released (ClipCursor(None)) when the block lifts.
-    const CLIP_ORIGIN: i32 = 0;
-    const CLIP_EDGE: i32 = 1;
+    // cursor to a 1x1 rect: it physically cannot move regardless of which API reads it, making the run
+    // uncontaminatable by the mouse. FREEZE IT IN PLACE at its CURRENT position rather than yanking it
+    // to (0,0) -- same protection, but does not disruptively teleport the user's mouse to the top-left
+    // corner during a run (user 2026-07-19). Released (ClipCursor(None)) when the block lifts.
+    let mut pt = windows::Win32::Foundation::POINT { x: 0, y: 0 };
+    let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt) };
     let clip = RECT {
-        left: CLIP_ORIGIN,
-        top: CLIP_ORIGIN,
-        right: CLIP_EDGE,
-        bottom: CLIP_EDGE,
+        left: pt.x,
+        top: pt.y,
+        right: pt.x + 1,
+        bottom: pt.y + 1,
     };
     let _ = unsafe { ClipCursor(Some(&clip)) };
+}
+
+/// USER SUGGESTION 2026-07-20: disable KEYBOARD+MOUSE as GAME inputs during an agent-owned run, leaving
+/// the GAMEPAD/XInput path OPEN for the harness. Zeroes DInput kb+mouse GetDeviceState (the user's
+/// WSAD / mouse buttons / DInput mouse deltas) but does NOT block the gamepad and does NOT ClipCursor
+/// (no mouse-trap). The RawInput mouse drop (harness-gated, get_raw_input_data_hook) covers the
+/// RawInput/camera path DInput misses. Net: the ONLY effective game input is the harness's pad-poll
+/// injection, so any character movement is unambiguously the harness (clean 60-frame proof). Idempotent;
+/// safe to call every frame. Distinct from enforce_input_block_now (which blocks ALL + ClipCursor).
+pub(crate) fn enforce_kbmouse_game_input_disable() {
+    let blocker = InputBlocker::get_instance();
+    if DINPUT_BLOCK_INSTALLED.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS {
+        let res = std::panic::catch_unwind(|| unsafe { blocker.install_hooks() });
+        if let Ok(Ok(())) = res {
+            DINPUT_BLOCK_INSTALLED.store(BLOCK_INPUT_ON, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "kbmouse-disable: DInput kb+mouse hooks installed (gamepad/xinput left OPEN for harness; no ClipCursor)"
+            ));
+        }
+    }
+    // Block ONLY keyboard + mouse -- NOT GamePad (harness pad-poll stays live), NOT XInput. No ClipCursor.
+    blocker.block_only(InputFlags::Keyboard | InputFlags::Mouse);
 }
 
 pub(crate) fn render_liveness_probe() {

@@ -814,7 +814,7 @@ pub(crate) const TITLE_OWNER_PLAY_GAME_SLOT_OFFSET: usize =
 /// STEP_GameStepWait (handler 0x140b0cde0) waits on the load job at owner+0x2e8:
 /// `cmp dword [job+0xd8],0 / jne wait`. Observe job+0xd8 while holding here to
 /// learn whether anything drains the job (needs a pump) or it is static.
-pub(crate) const TITLE_STEP_GAME_STEP_WAIT: i32 = 6;
+pub(crate) const TITLE_STEP_GAME_STEP_WAIT: i32 = TitleStepState::GameStepWait as i32;
 pub(crate) const TITLE_OWNER_JOB_OFFSET: usize = core::mem::offset_of!(TitleOwnerLayout, load_job);
 pub(crate) const TITLE_OWNER_JOB_PENDING_OFFSET: usize =
     core::mem::offset_of!(TitleOwnerLoadJobLayout, pending);

@@ -1099,24 +1099,12 @@ pub(crate) fn enforce_save_override_or_abort() -> SaveOverrideMode {
 // PEB-registered; without that concrete launch-mode signal, the pre-save missing-save picker can
 // expose the wrong save flavor and stage a file the active runtime will never own.
 pub(crate) fn save_picker_seamless_mode_after_settle(reason: &str) -> bool {
-    if let Ok(raw) = std::env::var("ER_EFFECTS_SAVE_MODE_HINT") {
-        let hint = raw.trim().to_ascii_lowercase();
-        if matches!(hint.as_str(), "seamless" | "co2" | "ersc") {
-            append_autoload_debug(format_args!(
-                "save-override: save-picker mode forced to Seamless .co2 by ER_EFFECTS_SAVE_MODE_HINT='{raw}' reason={reason}"
-            ));
-            return true;
-        }
-        if matches!(hint.as_str(), "vanilla" | "sl2") {
-            append_autoload_debug(format_args!(
-                "save-override: save-picker mode forced to vanilla .sl2 by ER_EFFECTS_SAVE_MODE_HINT='{raw}' reason={reason}"
-            ));
-            return false;
-        }
-        append_autoload_debug(format_args!(
-            "save-override: ignoring unknown ER_EFFECTS_SAVE_MODE_HINT='{raw}' reason={reason}"
-        ));
-    }
+    // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): the ER_EFFECTS_SAVE_MODE_HINT env
+    // override that forced Seamless `.co2` vs vanilla `.sl2` is removed -- env feature gates are
+    // forbidden. Picker flavor now comes solely from the real ERSC runtime module latch
+    // (`seamless_coop_loaded()`), which this `_after_settle` path reads once ERSC has had time to
+    // PEB-register. (Compatibility flag: early-Seamless disambiguation now depends on the latch
+    // being populated by settle time -- see deprecate report; verify on a Seamless launch.)
     let seamless = crate::telemetry::seamless_coop_loaded();
     append_autoload_debug(format_args!(
         "save-override: save-picker mode from ERSC module latch seamless={seamless} reason={reason}"
