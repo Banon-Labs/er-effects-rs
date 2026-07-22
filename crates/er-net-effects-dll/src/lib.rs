@@ -10,6 +10,8 @@
 #[cfg(windows)]
 mod config;
 #[cfg(windows)]
+mod crash_telemetry;
+#[cfg(windows)]
 mod effects;
 #[cfg(windows)]
 mod input_suppression;
@@ -25,7 +27,7 @@ use std::sync::{Arc, Mutex, Once};
 
 #[cfg(windows)]
 use eldenring::{
-    cs::{CSTaskGroupIndex, CSTaskImp, PlayerIns},
+    cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, PlayerIns},
     fd4::FD4TaskData,
 };
 #[cfg(windows)]
@@ -61,6 +63,12 @@ fn wait_for_task_instance() -> &'static CSTaskImp {
 }
 
 #[cfg(windows)]
+fn player_runtime_ready(player: &PlayerIns) -> bool {
+    player.chr_ins.chr_flags1c4.is_render_group_enabled()
+        && player.chr_ins.chr_flags1c5.enable_render()
+}
+
+#[cfg(windows)]
 fn spawn_game_task(state: Arc<Mutex<NetEffectsState>>) {
     let _ = std::thread::Builder::new()
         .name("er-net-effects-task".to_owned())
@@ -73,16 +81,16 @@ fn spawn_game_task(state: Arc<Mutex<NetEffectsState>>) {
                     let mut state = state_or_recover(&state);
                     state.game_task_ticks = state.game_task_ticks.saturating_add(1);
                     let Ok(player) = (unsafe { PlayerIns::local_player_mut() }) else {
-                        let discarded = effects::discard_pending_effect_trigger_keys();
-                        if discarded != 0 {
-                            state.last_driver_command = Some(format!(
-                                "effect-trigger: discarded {discarded} pre-load keypresses"
-                            ));
-                        }
-                        effects::publish_effect_selector_text(&mut state);
+                        effects::set_runtime_ready(&mut state, false);
                         write_telemetry_throttled(&mut state, false);
                         return;
                     };
+                    if !player_runtime_ready(player) {
+                        effects::set_runtime_ready(&mut state, false);
+                        write_telemetry_throttled(&mut state, true);
+                        return;
+                    }
+                    effects::set_runtime_ready(&mut state, true);
 
                     effects::apply_pending_effect_work(player, &mut state);
                     effects::remove_requested_calls(player, &mut state);
@@ -104,6 +112,7 @@ fn spawn_game_task(state: Arc<Mutex<NetEffectsState>>) {
 fn install() {
     config::init_runtime_config();
     log::reset_log_file();
+    crash_telemetry::install_handler();
     net_effects_log(format_args!(
         "er-net-effects attach: standalone keyboard-controlled SpEffect selector; network_sync={} config={}",
         config::runtime_config().network_sync,
@@ -126,6 +135,7 @@ pub unsafe extern "system" fn DllMain(
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
         START.call_once(|| {
+            crash_telemetry::set_module_base(_module);
             let _ = std::thread::Builder::new()
                 .name("er-net-effects-install".to_owned())
                 .spawn(install);

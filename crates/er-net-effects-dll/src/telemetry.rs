@@ -2,6 +2,7 @@ use std::{fs, time::Duration};
 
 use crate::{
     config::runtime_config,
+    crash_telemetry,
     effects::{self, NetEffectsState},
 };
 
@@ -30,6 +31,7 @@ fn write_telemetry(state: &NetEffectsState, player_available: bool) {
     let mut body = String::new();
     body.push_str("{\n");
     body.push_str(&format!("  \"player_available\": {player_available},\n"));
+    body.push_str(&format!("  \"runtime_ready\": {},\n", state.runtime_ready));
     body.push_str(&format!(
         "  \"game_task_ticks\": {},\n",
         state.game_task_ticks
@@ -62,6 +64,7 @@ fn write_telemetry(state: &NetEffectsState, player_available: bool) {
         state.effect_selector_visible,
         json_escape(&effects::effect_selector_text())
     ));
+    body.push_str(&crash_telemetry::telemetry_json_fields());
     body.push_str(&format!(
         "  \"effect_hotkeys_effects_on\": {},\n  \"effect_trigger_hotkey_count\": {},\n  \"effect_trigger_hotkeys_load_error\": {},\n  \"effect_trigger_fire_count\": {},\n  \"effect_trigger_last_key\": {},\n  \"effect_trigger_last_id\": {},\n  \"effect_trigger_last_count\": {},\n",
         state.effect_hotkeys_effects_on,

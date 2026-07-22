@@ -19,7 +19,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, HC_ACTION, KBDLLHOOKSTRUCT, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
-use crate::{config::runtime_config, input_suppression, log::net_effects_log};
+use crate::{config::runtime_config, crash_telemetry, input_suppression, log::net_effects_log};
 
 const EFFECT_HOTKEY_UP: usize = 1 << 0;
 const EFFECT_HOTKEY_DOWN: usize = 1 << 1;
@@ -62,6 +62,7 @@ static EFFECT_TRIGGER_PENDING_KEYS: OnceLock<Mutex<Vec<EffectTriggerKeyPress>>> 
 static EFFECT_HOTKEY_HOOK_STARTED: AtomicBool = AtomicBool::new(false);
 static EFFECT_HOTKEY_HOOK_ACTIVE: AtomicBool = AtomicBool::new(false);
 static EFFECT_SELECTOR_VISIBLE_FOR_HOOK: AtomicBool = AtomicBool::new(false);
+static EFFECT_RUNTIME_READY_FOR_HOOK: AtomicBool = AtomicBool::new(false);
 static EFFECT_HOTKEY_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_HOTKEY_APPLIED_ACTIONS: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_INPUT_SUPPRESSED_KEYS: AtomicUsize = AtomicUsize::new(0);
@@ -192,6 +193,7 @@ pub(crate) struct NetEffectsState {
     pub(crate) last_telemetry_write: Option<Instant>,
     pub(crate) last_driver_command: Option<String>,
     pub(crate) game_task_ticks: u64,
+    pub(crate) runtime_ready: bool,
 }
 
 impl NetEffectsState {
@@ -264,6 +266,7 @@ impl NetEffectsState {
             last_telemetry_write: None,
             last_driver_command: None,
             game_task_ticks: 0,
+            runtime_ready: false,
         }
     }
 }
@@ -653,10 +656,12 @@ unsafe extern "system" fn effect_hotkey_ll_keyboard_proc(
         let msg = wparam.0 as u32;
         let key_down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
         let key_up = msg == WM_KEYUP || msg == WM_SYSKEYUP;
-        let suppress_arrow = (key_down || key_up)
+        let runtime_ready = EFFECT_RUNTIME_READY_FOR_HOOK.load(Ordering::SeqCst);
+        let suppress_arrow = runtime_ready
+            && (key_down || key_up)
             && is_arrow_key(kb.vkCode)
             && EFFECT_SELECTOR_VISIBLE_FOR_HOOK.load(Ordering::SeqCst);
-        if key_down {
+        if key_down && runtime_ready {
             let alt_down = msg == WM_SYSKEYDOWN || (kb.flags.0 & LLKHF_ALTDOWN) != 0;
             queue_effect_trigger_key(kb.vkCode, alt_down);
             let action = effect_hotkey_action_for_key(kb.vkCode, alt_down);
@@ -771,6 +776,55 @@ pub(crate) fn record_suppressed_arrow_keys(count: usize) {
     EFFECT_INPUT_SUPPRESSED_ARROW_KEYS.fetch_add(count, Ordering::SeqCst);
 }
 
+pub(crate) fn effect_runtime_ready() -> bool {
+    EFFECT_RUNTIME_READY_FOR_HOOK.load(Ordering::SeqCst)
+}
+
+fn clear_effect_selector_text() {
+    if let Ok(mut slot) = EFFECT_SELECTOR_TEXT
+        .get_or_init(|| Mutex::new(String::new()))
+        .lock()
+    {
+        slot.clear();
+    }
+}
+
+fn discard_pending_effect_selector_inputs() -> usize {
+    EFFECT_HOTKEY_PENDING_UP.swap(0, Ordering::SeqCst)
+        + EFFECT_HOTKEY_PENDING_DOWN.swap(0, Ordering::SeqCst)
+        + EFFECT_HOTKEY_PENDING_LEFT.swap(0, Ordering::SeqCst)
+        + EFFECT_HOTKEY_PENDING_RIGHT.swap(0, Ordering::SeqCst)
+        + EFFECT_HOTKEY_PENDING_TOGGLE.swap(0, Ordering::SeqCst)
+        + EFFECT_HOTKEY_PENDING_SELECTOR_TOGGLE.swap(0, Ordering::SeqCst)
+        + discard_pending_effect_trigger_keys()
+}
+
+pub(crate) fn set_runtime_ready(state: &mut NetEffectsState, ready: bool) {
+    if state.runtime_ready == ready {
+        return;
+    }
+    state.runtime_ready = ready;
+    EFFECT_RUNTIME_READY_FOR_HOOK.store(ready, Ordering::SeqCst);
+    crash_telemetry::runtime_ready(ready);
+    if ready {
+        sync_effect_selector_input_suppression(state.effect_selector_visible);
+        state.last_driver_command = Some("runtime-gate: character/map ready".to_owned());
+        net_effects_log(format_args!(
+            "runtime-gate: character/map ready; enabling net-effects processing"
+        ));
+    } else {
+        let discarded = discard_pending_effect_selector_inputs();
+        sync_effect_selector_input_suppression(false);
+        clear_effect_selector_text();
+        state.last_driver_command = Some(format!(
+            "runtime-gate: character/map absent; suspended net-effects processing; discarded={discarded}"
+        ));
+        net_effects_log(format_args!(
+            "runtime-gate: character/map absent; suspended net-effects processing; discarded={discarded}"
+        ));
+    }
+}
+
 pub(crate) fn effect_selector_text() -> String {
     EFFECT_SELECTOR_TEXT
         .get_or_init(|| Mutex::new(String::new()))
@@ -807,6 +861,11 @@ fn sync_effect_selector_input_suppression(visible: bool) {
 }
 
 pub(crate) fn publish_effect_selector_text(state: &mut NetEffectsState) {
+    if !state.runtime_ready {
+        sync_effect_selector_input_suppression(false);
+        clear_effect_selector_text();
+        return;
+    }
     let selector_toggles = EFFECT_HOTKEY_PENDING_SELECTOR_TOGGLE.swap(0, Ordering::SeqCst);
     if selector_toggles != 0 {
         if selector_toggles % 2 == 1 {
@@ -824,12 +883,7 @@ pub(crate) fn publish_effect_selector_text(state: &mut NetEffectsState) {
     }
     sync_effect_selector_input_suppression(state.effect_selector_visible);
     if !state.effect_selector_visible {
-        if let Ok(mut slot) = EFFECT_SELECTOR_TEXT
-            .get_or_init(|| Mutex::new(String::new()))
-            .lock()
-        {
-            slot.clear();
-        }
+        clear_effect_selector_text();
         return;
     }
     let catalog = state

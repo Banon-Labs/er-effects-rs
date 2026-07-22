@@ -54,7 +54,11 @@ use windows::{
     core::{Interface, w},
 };
 
-use crate::{effects::effect_selector_text, log::net_effects_log};
+use crate::{
+    crash_telemetry::{self, Phase},
+    effects::{effect_runtime_ready, effect_selector_text},
+    log::net_effects_log,
+};
 
 const PRESENT_VTABLE_INDEX: usize = 8;
 const PRESENT1_VTABLE_INDEX: usize = 22;
@@ -169,13 +173,18 @@ pub(crate) fn install_present_overlay_hook() {
 }
 
 unsafe extern "system" fn present_hook(this: *mut c_void, sync: u32, flags: u32) -> i32 {
+    crash_telemetry::present_enter(this as usize);
     maybe_draw(this);
     let orig = PRESENT_ORIG.load(Ordering::SeqCst);
     if orig == 0 {
+        crash_telemetry::present_exit(0);
         return 0;
     }
     let f: PresentFn = unsafe { std::mem::transmute(orig) };
-    unsafe { f(this, sync, flags) }
+    crash_telemetry::present_call_original();
+    let result = unsafe { f(this, sync, flags) };
+    crash_telemetry::present_exit(result);
+    result
 }
 
 unsafe extern "system" fn present1_hook(
@@ -184,20 +193,27 @@ unsafe extern "system" fn present1_hook(
     flags: u32,
     params: *const DXGI_PRESENT_PARAMETERS,
 ) -> i32 {
+    crash_telemetry::present_enter(this as usize);
     maybe_draw(this);
     let orig = PRESENT1_ORIG.load(Ordering::SeqCst);
     if orig == 0 {
+        crash_telemetry::present_exit(0);
         return 0;
     }
     let f: Present1Fn = unsafe { std::mem::transmute(orig) };
-    unsafe { f(this, sync, flags, params) }
+    crash_telemetry::present_call_original();
+    let result = unsafe { f(this, sync, flags, params) };
+    crash_telemetry::present_exit(result);
+    result
 }
 
 fn maybe_draw(swapchain: *mut c_void) {
-    if swapchain.is_null() || effect_selector_text().trim().is_empty() {
+    if swapchain.is_null() || !effect_runtime_ready() || effect_selector_text().trim().is_empty() {
         return;
     }
+    crash_telemetry::draw_begin(swapchain as usize);
     let ok = unsafe { composite_effect_selector_on_swapchain(swapchain as usize) };
+    crash_telemetry::draw_end(ok);
     if !ok {
         let failures = DRAW_FAILS.fetch_add(1, Ordering::SeqCst) + 1;
         if failures == 1 || failures % 300 == 0 {
@@ -419,6 +435,7 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
     let bb_desc = unsafe { backbuffer.GetDesc() };
     let bw = bb_desc.Width as u32;
     let bh = bb_desc.Height;
+    crash_telemetry::draw_target(backbuffer.as_raw() as usize, idx, bw, bh, bb_desc.Format.0);
     if bw == 0 || bh == 0 || bw as u64 > MAX_RT_DIM || u64::from(bh) > MAX_RT_DIM {
         return false;
     }
@@ -647,6 +664,7 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
     if unsafe { allocator.Reset() }.is_err() || unsafe { list.Reset(allocator, None) }.is_err() {
         return false;
     }
+    crash_telemetry::draw_phase(Phase::DrawBarrierToCopy);
     unsafe {
         record_transition(
             list,
@@ -677,9 +695,11 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
         bottom: region_h,
         back: 1,
     };
+    crash_telemetry::draw_phase(Phase::DrawCopy);
     unsafe { list.CopyTextureRegion(&bb_dst, dst_x, VIEW_Y, 0, &up_src, Some(&up_box)) };
     unsafe { ManuallyDrop::drop(&mut up_src.pResource) };
     unsafe { ManuallyDrop::drop(&mut bb_dst.pResource) };
+    crash_telemetry::draw_phase(Phase::DrawBarrierToPresent);
     unsafe {
         record_transition(
             list,
@@ -688,6 +708,7 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
             D3D12_RESOURCE_STATE_PRESENT,
         )
     };
+    crash_telemetry::draw_phase(Phase::DrawExecuteWait);
     if !unsafe { execute_and_wait(queue, list, fence) } {
         return false;
     }
