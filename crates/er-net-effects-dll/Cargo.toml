@@ -15,7 +15,9 @@ er-effects-data = { path = "../effects-data" }
 er-hook = { path = "../er-hook" }
 windows = { version = "0.62", features = [
   "Win32_Foundation",
+  "Win32_Graphics_Gdi",
   "Win32_System_LibraryLoader",
   "Win32_System_SystemServices",
+  "Win32_System_Threading",
   "Win32_UI_WindowsAndMessaging",
 ] }
