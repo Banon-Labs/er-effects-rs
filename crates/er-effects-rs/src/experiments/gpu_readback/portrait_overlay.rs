@@ -12,23 +12,23 @@
 /// Cumulative count of overlay frames where the portrait actually blended onto the backbuffer (telemetry
 /// `oracle_portrait_onto_draw_hits`). RAM proof the captured head reached the isolated overlay; distinct
 /// from the readback/publish counters (which prove the head was CAPTURED, not displayed).
-pub(crate) static PORTRAIT_ONTO_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::PORTRAIT_ONTO_DRAW_HITS;
 
 /// Last measured alpha-coverage of the captured portrait, in percent of the full source area (telemetry
 /// `oracle_portrait_alpha_cover_pct`). The captured head sits in a central region of the square source with
 /// transparent padding around it; this is how much of that square the head's bounding box actually fills, so
 /// a low value confirms most of the source is margin (why scaling the padded square did not enlarge the head).
-pub(crate) static PORTRAIT_ALPHA_COVER_PCT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::PORTRAIT_ALPHA_COVER_PCT;
 
 /// Stable crop envelope: the union of the head's alpha bounding box over the first `PORTRAIT_CROP_SEED_N`
 /// frames, then FROZEN. Re-cropping to a fresh per-frame bounding box made the rect chase the swaying head,
 /// which showed as horizontal jitter and cancelled the real idle animation. Freezing the envelope lets the
 /// head's actual sway play WITHIN a fixed rect. Single render thread, so plain atomics need no ordering care.
-static PORTRAIT_CROP_MINX: AtomicUsize = AtomicUsize::new(usize::MAX);
-static PORTRAIT_CROP_MINY: AtomicUsize = AtomicUsize::new(usize::MAX);
-static PORTRAIT_CROP_MAXX: AtomicUsize = AtomicUsize::new(0);
-static PORTRAIT_CROP_MAXY: AtomicUsize = AtomicUsize::new(0);
-static PORTRAIT_CROP_SEED_FRAMES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::PORTRAIT_CROP_MINX;
+pub(crate) use er_telemetry::counters::PORTRAIT_CROP_MINY;
+pub(crate) use er_telemetry::counters::PORTRAIT_CROP_MAXX;
+pub(crate) use er_telemetry::counters::PORTRAIT_CROP_MAXY;
+pub(crate) use er_telemetry::counters::PORTRAIT_CROP_SEED_FRAMES;
 const PORTRAIT_CROP_SEED_N: usize = 40;
 
 /// True when the overlay should composite the captured character portrait: a published head exists and the

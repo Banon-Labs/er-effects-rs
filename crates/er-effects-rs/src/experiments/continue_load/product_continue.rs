@@ -810,8 +810,8 @@ pub(crate) unsafe fn native_load_tick(owner: usize, base: usize, n: u64) {
             unsafe { std::mem::transmute(base + GET_SAVE_SYSTEM_RVA) };
         const NATIVE_LOAD_SAVE_DATA_POLL_RVA: usize = 0x00679180;
         const PROFILE_SUMMARY_POPULATE_SLOT_RVA: usize = 0x00262270;
-        static NATIVE_PROFILE_READ_PHASE: AtomicUsize = AtomicUsize::new(0);
-        static NATIVE_PROFILE_READ_LAST_POLL_STATUS: AtomicUsize = AtomicUsize::new(usize::MAX);
+        pub(crate) use er_telemetry::counters::NATIVE_PROFILE_READ_PHASE;
+        pub(crate) use er_telemetry::counters::NATIVE_PROFILE_READ_LAST_POLL_STATUS;
         let poll_save_load: unsafe extern "system" fn(u8, u32) -> i32 =
             unsafe { std::mem::transmute(base + NATIVE_LOAD_SAVE_DATA_POLL_RVA) };
         let populate_profile_summary_slot: unsafe extern "system" fn(usize, u32) -> usize =

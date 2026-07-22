@@ -90,9 +90,9 @@ pub(crate) const IN_GAME_STEP_STAY_WRAPPER_B8_OFFSET: usize = 0xb8;
 /// `EzChildStepBase::stepper` (the owned child step object) at wrapper+0x8; the finish latch byte
 /// is wrapper+0x10 and the CSSetFinishHelper pointer wrapper+0x18 (dump 0x140eb5590 decompile).
 pub(crate) const EZ_CHILD_STEP_STEPPER_OFFSET: usize = 0x8;
-pub(crate) static SYSTEM_QUIT_CHILD_FINISH_TRACE_ORIG: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_CHILD_FINISH_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_CHILD_FINISH_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CHILD_FINISH_TRACE_ORIG;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CHILD_FINISH_TRACE_INSTALLED;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CHILD_FINISH_TRACE_COUNT;
 /// Native builder for a MenuJob wrapping the final return-title functor (`FUN_14079f780` dump ->
 /// live/deobf `0x14079f690`). Submit this job through the native queue so the flag transition happens
 /// in menu-pump ownership, not from our game-task thread.
@@ -102,28 +102,28 @@ pub(crate) static SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT: AtomicUsize
 /// Count of quick-load handoffs that invoked the original native Quit Game row action trampoline
 /// instead of the low-level accepted callback alone. This is an experiment to test whether the full
 /// native return-title menu-job chain is the missing teardown boundary.
-pub(crate) static SYSTEM_QUIT_QUICKLOAD_NATIVE_QUIT_ACTION_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_NATIVE_QUIT_ACTION_COUNT;
 pub(crate) static SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT: AtomicUsize =
     AtomicUsize::new(0);
 /// Count of frames we cleared a stale `CSMenuMan->disableSaveMenu` during an active switch (the switch-2
 /// quit-save gate; see [`CS_MENU_MAN_DISABLE_SAVE_MENU_OFFSET`]). Non-zero on a switch == that switch's
 /// quit-save was being blocked and we unblocked it (the runtime semaphore for this fix).
-pub(crate) static SYSTEM_QUIT_DISABLE_SAVE_MENU_CLEAR_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_DISABLE_SAVE_MENU_CLEAR_COUNT;
 /// Rate-limit counter for the switch-2 save-gate diagnostic (which of the save orchestrator
 /// `FUN_140afb970`'s three gates -- force latch `0x143d856a0`, `save_state`, or the CSMenuMan menu gate
 /// `FUN_14080d660` -- is blocking the quit-save so `bc4` freezes at 1).
-pub(crate) static SYSTEM_QUIT_SAVE_GATE_DIAG_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_GATE_DIAG_COUNT;
 /// SWITCH-OUTCOME ORACLE (2026-07-16, user-mandated reliable semaphore). Read-only per-frame classifier of
 /// a switch/load outcome so the state is ALWAYS knowable from telemetry, never from eyeballing. `_TICK` is
 /// the frame counter since a switch was picked (if it STOPS advancing the game task froze = FROZE). `_STABLE`
 /// is consecutive frames the game's own stable-in-world condition holds (player present + requestCode==2 +
 /// in-game menu job CSMenuMan+0x798 != 0): climbing high == LOADED_STABLE; resetting to 0 after climbing ==
 /// the world dropped (BOUNCED/reload). `_MAX_STABLE` latches the peak so a later drop is still visible.
-pub(crate) static SWITCH_ORACLE_TICK: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SWITCH_ORACLE_STABLE_FRAMES: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SWITCH_ORACLE_MAX_STABLE_FRAMES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SWITCH_ORACLE_TICK;
+pub(crate) use er_telemetry::counters::SWITCH_ORACLE_STABLE_FRAMES;
+pub(crate) use er_telemetry::counters::SWITCH_ORACLE_MAX_STABLE_FRAMES;
 /// The picked slot the oracle is tracking (usize::MAX = none / classified); reset on a new pick.
-pub(crate) static SWITCH_ORACLE_TRACKED_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) use er_telemetry::counters::SWITCH_ORACLE_TRACKED_SLOT;
 /// InGameStep requestCode (`InGameStep + 0xd8`) values. 1 = a MoveMap (load) request is pending/in
 /// progress; 2 = STABLE IN-WORLD (the load handoff completed, the world is settled -- player present,
 /// in-game menu job populated). STEP_MoveMap_Update drains 1 -> 2 once the child finishes.
@@ -147,7 +147,7 @@ pub(crate) fn ingamestep_request_code_name(v: i32) -> &'static str {
 /// Finish, so requestCode stays 1 forever. So the true stall is INSIDE the MoveMapStep child's
 /// world-load. This oracle publishes the child's current internal step so the stuck point is a RAM
 /// semaphore, not an eyeball. `usize::MAX` = not sampled / no child.
-pub(crate) static SWITCH_ORACLE_MMS_STEP: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) use er_telemetry::counters::SWITCH_ORACLE_MMS_STEP;
 /// Last sampled InGameStep requestCode (+0xd8) for visible loading-bar sub-milestones.
 pub(crate) static SWITCH_ORACLE_REQUEST_CODE: AtomicI32 = AtomicI32::new(-1);
 /// Last sampled MoveMapStep finalize substate (+0x12a, 0..9) -- the real native sub-progression of
@@ -159,16 +159,16 @@ pub(crate) static SWITCH_ORACLE_FINALIZE_12A: AtomicI32 = AtomicI32::new(-1);
 /// asked to see). The finalize case-7 gate (FUN_14067a170 = saveState==0) needs this back at 0.
 pub(crate) static SWITCH_ORACLE_B80: AtomicI32 = AtomicI32::new(-1);
 /// Count of forced b80 3->0 drains at the mms18 finalize stall (reload-drain-b80 semaphore).
-pub(crate) static RELOAD_DRAIN_B80_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::RELOAD_DRAIN_B80_COUNT;
 /// Reload epoch (fresh_deser) for which the post-finish stable-proof already fired (holds the world:
 /// phase->IDLE + clear b78). One-shot PER reload epoch, decoupled from FRESH_DESER_DONE (own_load
 /// consumes that latch at commit, which used to block the stable-proof and let the world revert to
 /// title after finish). usize::MAX = none yet.
-pub(crate) static SYSTEM_QUIT_STABLE_PROOF_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_STABLE_PROOF_EPOCH;
 /// Reload epoch whose MoveMapStep finalize reached the near-done substates (>=8 WARP/SERVER FINALIZE),
 /// i.e. the load has effectively finished. Used to hold the world the instant the finalize completes --
 /// BEFORE the move probe could prove movement (the world reverts too fast for the 60-frame probe).
-pub(crate) static SYSTEM_QUIT_RELOAD_FINALIZE_DONE_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_RELOAD_FINALIZE_DONE_EPOCH;
 /// MoveMap destination BlockId + world-stable RAM semaphore offsets (RE-verified 2026-07-19,
 /// bd er-effects-rs-9fmm). `InGameStep::STEP_MoveMap_Update` @0x140aec810 loads the destination block
 /// after requestCode(+0xd8)=2; it reads `GameMan+0xac8` (loadTargetMapId) when
@@ -204,8 +204,8 @@ pub(crate) fn load_in_progress_b80_name(v: i32) -> &'static str {
     }
 }
 /// Last sampled player/menu/loading-screen handoff gates for visible loading-bar sub-milestones.
-pub(crate) static SWITCH_ORACLE_PLAYER_PRESENT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SWITCH_ORACLE_MENU_JOB_PRESENT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SWITCH_ORACLE_PLAYER_PRESENT;
+pub(crate) use er_telemetry::counters::SWITCH_ORACLE_MENU_JOB_PRESENT;
 pub(crate) static SWITCH_ORACLE_LOADING_FIELD10: AtomicI32 = AtomicI32::new(-1);
 pub(crate) static SWITCH_ORACLE_LOADING_FIELD11: AtomicI32 = AtomicI32::new(-1);
 /// Last-seen streaming-enable bit + block count for the stall log (RAM semaphore, -1 = null chain).
@@ -309,8 +309,8 @@ pub(crate) fn movemapstep_finalize_substate_name(v: i32) -> &'static str {
 }
 /// MoveMapStep child edge-hook counters (STEP_MoveMap_Init fires when the child is created; Finish
 /// fires when the load completes). On the softlock INIT fires but FINISH never does = the semaphore.
-pub(crate) static SWITCH_ORACLE_MMS_INIT_HITS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SWITCH_ORACLE_MMS_FINISH_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SWITCH_ORACLE_MMS_INIT_HITS;
+pub(crate) use er_telemetry::counters::SWITCH_ORACLE_MMS_FINISH_HITS;
 /// The MoveMapStep child step index whose handler is `STEP_MoveMap` (dump registrar
 /// FUN_1400a40c0: MoveMapStep_StepperArray[0x12]). This is the FINAL fade/finalize step; index 19 =
 /// Cleanup, 20 = Finish follow. The 3rd-load softlock parks the child here.
@@ -319,8 +319,8 @@ pub(crate) const MOVEMAPSTEP_STEP_MOVEMAP_INDEX: i32 = 18;
 /// content-unique shift -0xf0). Hooked after-original to clear +0x4b8 before the state machine consumes
 /// the gate when the same-session reload has not proved movement yet.
 pub(crate) const MOVEMAPSTEP_STEP_MOVEMAP_RVA: usize = 0x00af7cf0;
-pub(crate) static MOVEMAPSTEP_STEP_MOVEMAP_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static MOVEMAPSTEP_STEP_MOVEMAP_ORIG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::MOVEMAPSTEP_STEP_MOVEMAP_HOOK_INSTALLED;
+pub(crate) use er_telemetry::counters::MOVEMAPSTEP_STEP_MOVEMAP_ORIG;
 /// `CS::InGameStep::STEP_MoveMap_Update` (dump 0x140aec810 -> deobf 0x140aec720, content-unique shift
 /// -0xf0). This is the PARENT step handler: it polls input/flipper, then `if (FUN_140eb5550(child)==0)
 /// return;` (its own per-frame wait), and only past that does `field24_0xd8 = 2; FUN_140eb54e0(child)`
@@ -331,18 +331,18 @@ pub(crate) static MOVEMAPSTEP_STEP_MOVEMAP_ORIG: AtomicUsize = AtomicUsize::new(
 /// load1-vs-load2 diff). The defer detour replicates the native's own "child not finished" early-return
 /// while the MoveMapStep finalize substate is in [1..=8], giving the advancer the frames to reach 9.
 pub(crate) const INGAMESTEP_STEP_MOVEMAP_UPDATE_RVA: usize = 0x00aec720;
-pub(crate) static INGAMESTEP_STEP_MOVEMAP_UPDATE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static INGAMESTEP_STEP_MOVEMAP_UPDATE_ORIG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::INGAMESTEP_STEP_MOVEMAP_UPDATE_HOOK_INSTALLED;
+pub(crate) use er_telemetry::counters::INGAMESTEP_STEP_MOVEMAP_UPDATE_ORIG;
 /// Consecutive frames the defer detour has held STEP_MoveMap_Update (reset when finalize leaves 1..=8).
-pub(crate) static INGAMESTEP_MOVEMAP_UPDATE_DEFER_TICKS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::INGAMESTEP_MOVEMAP_UPDATE_DEFER_TICKS;
 /// Total defer holds (telemetry: >0 means the premature-teardown race was intercepted).
-pub(crate) static INGAMESTEP_MOVEMAP_UPDATE_DEFER_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::INGAMESTEP_MOVEMAP_UPDATE_DEFER_COUNT;
 /// Total early b73 return-title-latch clears (telemetry: >0 means the quit-save latch was held off
 /// before the MoveMapStep ending evaluator could revert the reloaded world).
-pub(crate) static RELOAD_B73_HOLD_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::RELOAD_B73_HOLD_COUNT;
 /// Total menuData+0x5e/+0x5d ending-latch clears during a reload (telemetry: >0 means the session-end
 /// OUTPUT latch that STEP_EndFlow reads was held off so the reloaded world persists).
-pub(crate) static RELOAD_ENDING_LATCH_HOLD_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::RELOAD_ENDING_LATCH_HOLD_COUNT;
 /// Fail-soft cap: after this many consecutive held frames, stop deferring and let native decide (so a
 /// genuine return-to-title whose finalize never completes can never be held forever). ~2s at 60fps.
 pub(crate) const INGAMESTEP_MOVEMAP_UPDATE_DEFER_MAX: usize = 120;
@@ -379,8 +379,8 @@ pub(crate) const MOVEMAPSTEP_FINALIZE_REQ_248_OFFSET: usize = 0x248;
 /// cleared every frame (FUN_140679010 reads bc4), once the new character is fully streamed (b7c1=1,
 /// blocks>0) and parked at STEP_MoveMap with the final functor already fired, we clear bc4->0 so it
 /// advances 18->19->20 and the world enters. `_FINALIZE_CLEAR_COUNT` = those incoming-world bc4->0 clears.
-pub(crate) static SYSTEM_QUIT_BC4_FORCE_READY_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_LOAD3_FINALIZE_CLEAR_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_BC4_FORCE_READY_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_LOAD3_FINALIZE_CLEAR_COUNT;
 /// TEARDOWN SAVE-REQUEST CLEAR (2026-07-16). The MoveMapStep ending sub-machine (FUN_140afa7c0) that
 /// walks the old world's child out of STEP_MoveMap(18) hangs at case 7 unless `ShouldSave() == false`
 /// AND `FUN_140679460() == false`. Those read `GameMan.saveRequested` (b72) and `GameMan+0xb73`, both
@@ -389,7 +389,7 @@ pub(crate) static SYSTEM_QUIT_LOAD3_FINALIZE_CLEAR_COUNT: AtomicUsize = AtomicUs
 /// = frames we cleared the flags (a switch that stalls-then-recovers shows it climbing during teardown).
 pub(crate) const GAME_MAN_SAVE_REQUESTED_B72_OFFSET: usize = 0xb72;
 pub(crate) const GAME_MAN_SAVE_REQUEST_COMPANION_B73_OFFSET: usize = 0xb73;
-pub(crate) static SYSTEM_QUIT_TEARDOWN_SAVEREQ_CLEAR_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TEARDOWN_SAVEREQ_CLEAR_COUNT;
 /// STEP-3 (WORLD RES WAIT) DETERMINANT instrumentation (2026-07-16, Ghidra-proven). STEP_WorldResWait
 /// (dump 0x140af9de0) advances 3->4 only when FUN_14066d4d0(worldInfoOwner, &currentBlockId) finds the
 /// block matching currentBlockId's areaId in the world block-list AND that block's load-state reaches
@@ -527,9 +527,9 @@ pub(crate) const MOUNT_EBL_ARCHIVE_RVA: u32 = 0x001efc00;
 /// Consecutive frames the switch has sat at WORLD RES WAIT with the incoming block's load-state NULL
 /// (a real stall; the boot-load transient clears in << 2s), the one-shot latch for the ProcessMsbLoadLists
 /// rebuild, and the count of rebuilds performed (runtime semaphore).
-pub(crate) static SWITCH_WORLDRES_NULL_STREAK: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SWITCH_WORLDRES_REBUILD_TRIED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SWITCH_WORLDRES_REBUILD_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SWITCH_WORLDRES_NULL_STREAK;
+pub(crate) use er_telemetry::counters::SWITCH_WORLDRES_REBUILD_TRIED;
+pub(crate) use er_telemetry::counters::SWITCH_WORLDRES_REBUILD_COUNT;
 // The matched block's load-state, read exactly as FUN_14066d4d0 does: call the block's vtable slot
 // +0x10 (`block->vtable[0x10](block)`) to get the load-state object, then LOADED requires +0x2d != 0
 // AND +0x35 == 0x0a(10). +0x35 (the stream-state/phase enum) stuck below 10 = the block is registered
@@ -572,48 +572,48 @@ pub(crate) static SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_LAST_DIALOG: AtomicUsize
     AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_LAST_QUEUE_READY: AtomicUsize =
     AtomicUsize::new(usize::MAX);
-pub(crate) static SYSTEM_QUIT_QUICKLOAD_TITLE_OWNER_SEEN_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_QUICKLOAD_AUTOLOAD_HANDOFF_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_TITLE_OWNER_SEEN_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_AUTOLOAD_HANDOFF_COUNT;
 /// Count of autoload-handoff reload frames where the DLL re-armed CSMenuMan.loadingScreenData.field_0x10
 /// so STEP_RequestWait keeps the native +0x798 loading job alive until movement proof instead of draining
 /// requestCode to 0 and returning to title.
-pub(crate) static SYSTEM_QUIT_QUICKLOAD_LS10_REARM_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_LS10_REARM_COUNT;
 /// Count of autoload-handoff reload frames where the DLL cleared CSMenuMan.loadingScreenData.field_0x11
 /// so the native loading-screen close/result request cannot prematurely drain +0x798 before movement proof.
-pub(crate) static SYSTEM_QUIT_QUICKLOAD_LS11_CLEAR_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_LS11_CLEAR_COUNT;
 /// Count of autoload-handoff reload frames where the DLL held MoveMapStep+0x4b8 low byte at 0 during
 /// state 18 so the native STEP_MoveMap advance gate cannot reach Cleanup/Finish before movement proof.
-pub(crate) static SYSTEM_QUIT_QUICKLOAD_MMS4B8_HOLD_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_MMS4B8_HOLD_COUNT;
 /// Count of autoload-handoff reload frames where the DLL held MoveMapStep+0x4c (`next`) at state 18 so
 /// the state machine cannot jump to Cleanup/Finish before movement proof.
-pub(crate) static SYSTEM_QUIT_QUICKLOAD_MMS18_NEXT_HOLD_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_MMS18_NEXT_HOLD_COUNT;
 /// Count of autoload-handoff reload frames where the DLL reset MoveMapStep state-18 timer/countdown
 /// fields before the native body could expire into Cleanup/Finish.
-pub(crate) static SYSTEM_QUIT_QUICKLOAD_MMS18_TIMER_HOLD_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_MMS18_TIMER_HOLD_COUNT;
 /// Count of autoload-handoff reload frames where the DLL held MoveMapStep+0x244 false so
 /// TitleStep::GameStepWait cannot consume the reload as a completed return-to-title before movement proof.
-pub(crate) static SYSTEM_QUIT_QUICKLOAD_MMS244_HOLD_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_QUICKLOAD_LAST_TITLE_OWNER: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_DIALOG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_MMS244_HOLD_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_LAST_TITLE_OWNER;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_DIALOG;
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_CURSOR: AtomicUsize =
     AtomicUsize::new(usize::MAX);
-pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_BOUND: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_TOP_HIDE_ARMED_LIST: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_TOP_HIDE_ARMED_DIALOG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_BOUND;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TOP_HIDE_ARMED_LIST;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TOP_HIDE_ARMED_DIALOG;
 /// Original System dialog saved for the post-ProfileSelect quickload return-title chain.
 /// Unlike SYSTEM_QUIT_TOP_HIDE_ARMED_DIALOG, this must survive the ProfileSelect append observer reset.
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG: AtomicUsize =
     AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_TOP_HIDE_TOP_WINDOW: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_TOP_HIDE_PROFILE_WINDOW: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_TOP_HIDE_LIST: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_TOP_HIDE_TOP_MENU_ID: AtomicUsize = AtomicUsize::new(usize::MAX);
-pub(crate) static SYSTEM_QUIT_TOP_HIDE_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_TOP_RESTORE_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TOP_HIDE_TOP_WINDOW;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TOP_HIDE_PROFILE_WINDOW;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TOP_HIDE_LIST;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TOP_HIDE_TOP_MENU_ID;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TOP_HIDE_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TOP_RESTORE_COUNT;
 /// `PropertyEditDialog`/System dialog embedded `SceneObjProxy` used by the Quit tab builder for child binds.
 pub(crate) const SYSTEM_QUIT_DIALOG_SCENE_PROXY_1200_OFFSET: usize = 0x1200;
-pub(crate) static SYSTEM_QUIT_DUPLICATE_LAST_COUNT_BEFORE: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_DUPLICATE_LAST_COUNT_AFTER: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_DUPLICATE_LAST_COUNT_BEFORE;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_DUPLICATE_LAST_COUNT_AFTER;
 pub(crate) static START_SYSTEM_QUIT_DUPLICATE_BUTTON_HOOK: Once = Once::new();
 /// One-shot spawn guard for the save-source redirect hook install (CreateFileW/CopyFileW path
 /// redirect). Armed at process attach only when `enforce_save_override_or_abort` resolved a valid
@@ -623,13 +623,13 @@ pub(crate) static START_SAVE_REDIRECT: Once = Once::new();
 /// MENU_WINDOW_LATCH_INSTALLED). Installed unconditionally at process attach; the
 /// hook is a pure passthrough that logs the c30-write gate, c30 before/after, and a
 /// window of the resident save buffer to diagnose why GameMan+0xc30 stays default.
-pub(crate) static C30_WRITER_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::C30_WRITER_HOOK_INSTALLED;
 pub(crate) const C30_WRITER_HOOK_NOT_INSTALLED: usize = 0;
 pub(crate) const C30_WRITER_HOOK_INSTALLED_YES: usize = 1;
 pub(crate) static START_C30_WRITER_HOOK: Once = Once::new();
 /// Rate limit for the c30-writer diagnostic log: only the first few calls are logged
 /// (the cold deserialize drives a small bounded number of c30-writer entries).
-pub(crate) static C30_WRITER_LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::C30_WRITER_LOG_COUNT;
 pub(crate) const C30_WRITER_LOG_MAX: usize = 8;
 /// Bytes of the resident save buffer (rdx) to dump as hex from the c30-writer ENTER,
 /// so the real target map record can be spotted offline. Read-only header window.
@@ -655,7 +655,7 @@ pub(crate) static MSGBOX_LAST_ARG_R8: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MSGBOX_LAST_ARG_R9: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static DISMISS_WRITE_LOG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::DISMISS_WRITE_LOG;
 /// The dialog pointer OnDecide was last fired on, so we press OK exactly ONCE per dialog instead
 /// of every frame (re-dispatching every frame keeps the dialog stuck "deciding" and it never
 /// closes). A newly-built dialog has a different pointer, so it gets its own single OK.

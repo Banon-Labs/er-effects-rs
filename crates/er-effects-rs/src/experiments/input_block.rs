@@ -64,43 +64,43 @@ use super::*;
 /// DInput8 keyboard+mouse (state zeroed by the `InputBlocker` hook) AND XInput
 /// gamepad (this module's hook). Read by `xinput_get_state_hook` each poll so the block is
 /// authoritative regardless of window focus.
-pub(crate) static BLOCK_INPUT_ACTIVE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::BLOCK_INPUT_ACTIVE;
 const BLOCK_INPUT_ON: usize = 1;
-/// Original `XInputGetState` (minhook trampoline). 0 until the hook installs.
-pub(crate) static XINPUT_GET_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
-/// Monotonic `dwPacketNumber` for the no-controller "connected idle pad" keepalive the
-/// `xinput_get_state_hook` presents on slot 0 while an XInput harness is armed (see the hook doc).
-/// Private to the keepalive so it never perturbs the fabrication cadence in `INJECT_NAV_FRAME`.
-static XINPUT_KEEPALIVE_PACKET: AtomicUsize = AtomicUsize::new(0);
+/// Cached ER main window HWND for WM keyboard injection (0 = not found yet). Native ER does NOT read
+/// keyboard via DInput (proven 2026-07-17: dinput_kb_fires==0) nor route fabricated XInput to menu
+/// actions, so the self-drive posts real WM_KEYDOWN/WM_KEYUP to this window (ER reads keyboard via
+/// window messages / RawInput; PostMessageW reaches it without foreground).
+pub(crate) use er_telemetry::counters::SQ_REPRO_ER_HWND;
+/// The VK currently "held" by the WM key driver (0 = none), so we post one clean KEYDOWN on press and
+/// one KEYUP on release instead of spamming per frame.
+pub(crate) use er_telemetry::counters::SQ_REPRO_HELD_VK;
 /// Original `XInputGetCapabilities` (minhook trampoline). 0 until the hook installs. The game uses
 /// this to ENUMERATE which pad slots exist; with no controller it returns DEVICE_NOT_CONNECTED and
 /// the game then never polls `XInputGetState(0)`. The harness forces slot 0 connected here too.
-static XINPUT_GET_CAPABILITIES_ORIG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::XINPUT_GET_CAPABILITIES_ORIG;
+/// Original `XInputGetState` (minhook trampoline). 0 until the hook installs.
+pub(crate) use er_telemetry::counters::XINPUT_GET_STATE_ORIG;
+/// Monotonic `dwPacketNumber` for the no-controller "connected idle pad" keepalive the
+/// `xinput_get_state_hook` presents on slot 0 while an XInput harness is armed (see the hook doc).
+/// Private to the keepalive so it never perturbs the fabrication cadence in `INJECT_NAV_FRAME`.
+pub(crate) use er_telemetry::counters::XINPUT_KEEPALIVE_PACKET;
+/// DIAGNOSTIC: total `XInputGetCapabilities(user_index==0)` calls (the ENUMERATION probe). Non-zero
+/// means the game re-enumerated slot 0 after our hook installed (so forcing "connected" there can
+/// convince it slot 0 exists); 0 means it enumerated once at startup and cached the result.
+pub(crate) use er_telemetry::counters::XINPUT_SLOT0_CAPS_QUERIES;
+/// DIAGNOSTIC: times we wrote a NON-ZERO fabricated button into a slot-0 poll (so the log can show
+/// the game both polled slot 0 AND received a real button edge from us).
+pub(crate) use er_telemetry::counters::XINPUT_SLOT0_FABRICATED_BUTTONS;
 /// DIAGNOSTIC: total `XInputGetState(user_index==0)` calls the game makes (the poll counter). If this
 /// stays 0 while the sq-repro harness holds at OPEN_MENU, native ER is NOT polling slot 0 (cached
 /// "no controller" from a pre-hook enumeration -> our button fabrication can never land, and a device
 /// re-scan is required). If it climbs but the menu still does not open, ER polls but ignores the
 /// fabricated buttons (a different problem). Read/logged from `system_quit_repro_tick`.
-pub(crate) static XINPUT_SLOT0_POLLS: AtomicUsize = AtomicUsize::new(0);
-/// DIAGNOSTIC: times we wrote a NON-ZERO fabricated button into a slot-0 poll (so the log can show
-/// the game both polled slot 0 AND received a real button edge from us).
-pub(crate) static XINPUT_SLOT0_FABRICATED_BUTTONS: AtomicUsize = AtomicUsize::new(0);
-/// DIAGNOSTIC: total `XInputGetCapabilities(user_index==0)` calls (the ENUMERATION probe). Non-zero
-/// means the game re-enumerated slot 0 after our hook installed (so forcing "connected" there can
-/// convince it slot 0 exists); 0 means it enumerated once at startup and cached the result.
-pub(crate) static XINPUT_SLOT0_CAPS_QUERIES: AtomicUsize = AtomicUsize::new(0);
-/// Cached ER main window HWND for WM keyboard injection (0 = not found yet). Native ER does NOT read
-/// keyboard via DInput (proven 2026-07-17: dinput_kb_fires==0) nor route fabricated XInput to menu
-/// actions, so the self-drive posts real WM_KEYDOWN/WM_KEYUP to this window (ER reads keyboard via
-/// window messages / RawInput; PostMessageW reaches it without foreground).
-static SQ_REPRO_ER_HWND: AtomicUsize = AtomicUsize::new(0);
-/// The VK currently "held" by the WM key driver (0 = none), so we post one clean KEYDOWN on press and
-/// one KEYUP on release instead of spamming per frame.
-static SQ_REPRO_HELD_VK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::XINPUT_SLOT0_POLLS;
 
+pub(crate) use er_telemetry::counters::SQ_REPRO_BEST_AREA;
 /// Best (largest-area) candidate window + its area, tracked across the EnumWindows callback.
-static SQ_REPRO_BEST_HWND: AtomicUsize = AtomicUsize::new(0);
-static SQ_REPRO_BEST_AREA: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SQ_REPRO_BEST_HWND;
 
 unsafe extern "system" fn sq_repro_find_hwnd_cb(hwnd: HWND, _l: LPARAM) -> BOOL {
     let mut pid = 0u32;
@@ -163,8 +163,8 @@ fn sq_repro_er_hwnd() -> HWND {
 
 /// Count of foreground-forces performed (diagnostic) and whether the ER window is currently the
 /// foreground window at the last drive (1/0), so the OPEN_MENU diag can report if focus was achieved.
-pub(crate) static SQ_REPRO_FOREGROUND_FORCES: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SQ_REPRO_IS_FOREGROUND: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SQ_REPRO_FOREGROUND_FORCES;
+pub(crate) use er_telemetry::counters::SQ_REPRO_IS_FOREGROUND;
 
 /// Force the ER window to the foreground (headless me3 launches often leave it non-foreground, and
 /// native ER only processes RawInput menu input for the FOREGROUND window). Uses the AttachThreadInput
@@ -217,7 +217,7 @@ pub(crate) fn sq_repro_force_foreground_now() {
         ));
     }
 }
-static SQ_REPRO_INITIAL_FOREGROUND_LOGGED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SQ_REPRO_INITIAL_FOREGROUND_LOGGED;
 
 /// SendInput one VK keyboard event (down or up) at the OS level -> delivered as RawInput to the
 /// foreground window. Native ER reads keyboard via RawInput (proven: not DInput, ignores posted
@@ -753,23 +753,23 @@ pub(crate) fn ensure_rawinput_counter_installed() {
     }
 }
 
+/// User input events that arrived while the game was UNFOCUSED (agent-owned run): these are DROPPED
+/// (zeroed) so they have no effect, and counted here -- NOT as contamination. The user may press
+/// buttons freely during a run; while unfocused those presses are neutralized and harmless (user
+/// 2026-07-20: "only cares about when inputs are being sent AND you're not blocking them").
+pub(crate) use er_telemetry::counters::RAWINPUT_BLOCKED_UNFOCUSED_EVENTS;
+/// Total GetRawInputData calls the game made (any command). If this is 0 the game is NOT routing input
+/// through GetRawInputData -> the reception oracle is BLIND and a 0 event count means nothing. If >0 the
+/// oracle is live and a 0 event count is a genuine "no user input this run".
+pub(crate) use er_telemetry::counters::RAWINPUT_HOOK_CALLS;
+pub(crate) use er_telemetry::counters::RAWINPUT_KEY_EVENTS;
+pub(crate) use er_telemetry::counters::RAWINPUT_MOUSE_BUTTON_EVENTS;
 /// GetRawInputData reception counters (user 2026-07-20): the oracle must RECORD whether the GAME is
 /// RECEIVING user mouse/keyboard input, at the OS boundary. ER reads gameplay+menu input via RawInput;
 /// the input-harness injects via the direct-memory inputmgr, NOT RawInput -- so every RawInput event
 /// counted here is USER input the game received (contamination during an agent-owned run). Emitted as
 /// oracle_rawinput_* and consumed by the verdict emitter.
-pub(crate) static RAWINPUT_MOUSE_MOVE_EVENTS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static RAWINPUT_MOUSE_BUTTON_EVENTS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static RAWINPUT_KEY_EVENTS: AtomicUsize = AtomicUsize::new(0);
-/// Total GetRawInputData calls the game made (any command). If this is 0 the game is NOT routing input
-/// through GetRawInputData -> the reception oracle is BLIND and a 0 event count means nothing. If >0 the
-/// oracle is live and a 0 event count is a genuine "no user input this run".
-pub(crate) static RAWINPUT_HOOK_CALLS: AtomicUsize = AtomicUsize::new(0);
-/// User input events that arrived while the game was UNFOCUSED (agent-owned run): these are DROPPED
-/// (zeroed) so they have no effect, and counted here -- NOT as contamination. The user may press
-/// buttons freely during a run; while unfocused those presses are neutralized and harmless (user
-/// 2026-07-20: "only cares about when inputs are being sent AND you're not blocking them").
-pub(crate) static RAWINPUT_BLOCKED_UNFOCUSED_EVENTS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::RAWINPUT_MOUSE_MOVE_EVENTS;
 static GET_RAW_INPUT_DATA_ORIG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
 /// Whether an AGENT-OWNED RUN is active, detected by the input-harness DLL being loaded (the approved
@@ -777,7 +777,7 @@ static GET_RAW_INPUT_DATA_ORIG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_
 /// a run all user RawInput is blocked so only the harness's direct-memory injection is effective. Cached
 /// once present (the DLL does not unload mid-run); cheap GetModuleHandleA until then.
 fn harness_run_active() -> bool {
-    static PRESENT: AtomicUsize = AtomicUsize::new(0);
+    pub(crate) use er_telemetry::counters::PRESENT;
     if PRESENT.load(Ordering::Relaxed) == 1 {
         return true;
     }
@@ -913,8 +913,8 @@ unsafe fn install_rawinput_counter() {
 }
 
 /// Tracks whether the DInput keyboard+mouse `install_hooks` has succeeded.
-static DINPUT_BLOCK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-static MISSING_SAVE_INPUT_RELEASE_LOGGED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::DINPUT_BLOCK_INSTALLED;
+pub(crate) use er_telemetry::counters::MISSING_SAVE_INPUT_RELEASE_LOGGED;
 
 /// Enforce the comprehensive input block for this frame. Self-contained (no args) so it can
 /// run from EITHER the game task OR the render loop -- critical because under the offline

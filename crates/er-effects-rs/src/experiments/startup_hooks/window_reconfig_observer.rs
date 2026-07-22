@@ -12,20 +12,20 @@
 // its before/after proof. Pure passthrough: nothing is modified, reordered, or suppressed.
 
 /// Trampolines (0 = hook not installed).
-pub(crate) static WINRECONFIG_CREATE_WINDOW_ORIG: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static WINRECONFIG_SET_WINDOW_POS_ORIG: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static WINRECONFIG_SET_WINDOW_LONG_ORIG: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static WINRECONFIG_MOVE_WINDOW_ORIG: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static WINRECONFIG_CHANGE_DISPLAY_ORIG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::WINRECONFIG_CREATE_WINDOW_ORIG;
+pub(crate) use er_telemetry::counters::WINRECONFIG_SET_WINDOW_POS_ORIG;
+pub(crate) use er_telemetry::counters::WINRECONFIG_SET_WINDOW_LONG_ORIG;
+pub(crate) use er_telemetry::counters::WINRECONFIG_MOVE_WINDOW_ORIG;
+pub(crate) use er_telemetry::counters::WINRECONFIG_CHANGE_DISPLAY_ORIG;
 
 /// Total call counts (telemetry: the reconfig timeline's RAM counters).
-pub(crate) static WINRECONFIG_CREATE_WINDOW_CALLS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static WINRECONFIG_SET_WINDOW_POS_CALLS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static WINRECONFIG_SET_WINDOW_LONG_CALLS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static WINRECONFIG_MOVE_WINDOW_CALLS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static WINRECONFIG_CHANGE_DISPLAY_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::WINRECONFIG_CREATE_WINDOW_CALLS;
+pub(crate) use er_telemetry::counters::WINRECONFIG_SET_WINDOW_POS_CALLS;
+pub(crate) use er_telemetry::counters::WINRECONFIG_SET_WINDOW_LONG_CALLS;
+pub(crate) use er_telemetry::counters::WINRECONFIG_MOVE_WINDOW_CALLS;
+pub(crate) use er_telemetry::counters::WINRECONFIG_CHANGE_DISPLAY_CALLS;
 /// Last SetWindowPos geometry, packed (cx << 32 | cy) and (x << 32 | y as u32) for telemetry.
-pub(crate) static WINRECONFIG_LAST_SET_POS_SIZE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::WINRECONFIG_LAST_SET_POS_SIZE;
 
 /// Per-hook log cap: the first calls carry the whole startup story; later calls only count.
 const WINRECONFIG_LOG_CAP: usize = 48;
@@ -288,10 +288,10 @@ pub(crate) fn install_window_reconfig_observer_hooks() {
 
 /// Result latch: 0 = not finished, 1 = applied, 2 = skipped (WINDOWED), 3 = window never found,
 /// 4 = monitor info failed, 5 = config unreadable (skipped), 6 = already at final geometry.
-pub(crate) static WINRECONFIG_EARLY_APPLY_RESULT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::WINRECONFIG_EARLY_APPLY_RESULT;
 /// Attach-relative ms when the early apply finished, and the applied (w<<16|h) pack.
-pub(crate) static WINRECONFIG_EARLY_APPLY_MS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static WINRECONFIG_EARLY_APPLY_RECT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::WINRECONFIG_EARLY_APPLY_MS;
+pub(crate) use er_telemetry::counters::WINRECONFIG_EARLY_APPLY_RECT;
 
 const WINRECONFIG_EARLY_APPLY_MAX_MS: u128 = 20_000;
 const WINRECONFIG_EARLY_APPLY_POLL_MS: u64 = 20;

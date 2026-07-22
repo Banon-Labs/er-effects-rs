@@ -299,7 +299,7 @@ static PROFILE_OFFSCREEN_SETTLE_INNERS: [AtomicUsize; 4] = [
     AtomicUsize::new(0),
     AtomicUsize::new(0),
 ];
-static PROFILE_OFFSCREEN_SETTLE_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::PROFILE_OFFSCREEN_SETTLE_COUNT;
 
 unsafe fn profile_offscreen_gx_resources_ready(off: usize) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -530,7 +530,7 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                 // an idle title screen. This stamps the exact completion so the theory is measured,
                 // not inferred.
                 {
-                    static MODEL_WAS_LIVE: AtomicUsize = AtomicUsize::new(0);
+                    pub(crate) use er_telemetry::counters::MODEL_WAS_LIVE;
                     let m = unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
                         .unwrap_or(0);
                     let live_now = (m != 0 && m != null) as usize;

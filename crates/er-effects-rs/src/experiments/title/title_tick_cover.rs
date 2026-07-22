@@ -492,7 +492,7 @@ pub(crate) const LOADLIST_INIT_RVA: usize = 0xaec570;
 const INGAMESTEP_WORLDLOADLIST_VPATH_OFFSET: usize = 0x108;
 pub(crate) static LOADLIST_INIT_ORIG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 static LOADLIST_INIT_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-static LOADLIST_INIT_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::LOADLIST_INIT_CALLS;
 
 pub(crate) unsafe extern "system" fn loadlist_init_capture_detour(
     ingamestep: usize,

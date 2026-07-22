@@ -9,15 +9,15 @@ use windows::core::{GUID, s};
 use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 
 static INPUT_BLOCKER: OnceLock<&'static InputBlocker> = OnceLock::new();
-static INJECTED_KEY: AtomicU8 = AtomicU8::new(0);
-static SUPPRESS_ARROW_KEYS: AtomicBool = AtomicBool::new(false);
-pub(crate) static DINPUT_SUPPRESSED_ARROW_KEYS: AtomicUsize = AtomicUsize::new(0);
 /// DIAGNOSTIC: how many times the game actually CALLS the DInput keyboard/mouse `GetDeviceState`
 /// (i.e. whether native ER reads input via DInput at all). If the keyboard counter stays 0 while the
 /// harness holds, ER does NOT read keyboard via DInput on native -> our `set_injected_key` stamp never
 /// reaches the game and a different injection path (WM_KEYDOWN / RawInput) is required.
-pub static DINPUT_KB_HOOK_FIRES: AtomicUsize = AtomicUsize::new(0);
-pub static DINPUT_MOUSE_HOOK_FIRES: AtomicUsize = AtomicUsize::new(0);
+pub use er_telemetry::counters::DINPUT_KB_HOOK_FIRES;
+pub use er_telemetry::counters::DINPUT_MOUSE_HOOK_FIRES;
+pub(crate) use er_telemetry::counters::DINPUT_SUPPRESSED_ARROW_KEYS;
+pub(crate) use er_telemetry::counters::INJECTED_KEY;
+pub(crate) use er_telemetry::counters::SUPPRESS_ARROW_KEYS;
 
 #[derive(Default)]
 pub struct InputBlocker {
@@ -170,9 +170,9 @@ unsafe fn with_probe_device(
 
 type GetDeviceStateFn = unsafe extern "system" fn(usize, u32, *mut u8) -> i32;
 
-static DINPUT_KB_GET_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
-static DINPUT_MOUSE_GET_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
-static DINPUT_KB_ALSO_MOUSE: AtomicBool = AtomicBool::new(false);
+pub(crate) use er_telemetry::counters::DINPUT_KB_ALSO_MOUSE;
+pub(crate) use er_telemetry::counters::DINPUT_KB_GET_STATE_ORIG;
+pub(crate) use er_telemetry::counters::DINPUT_MOUSE_GET_STATE_ORIG;
 
 unsafe extern "system" fn dinput_kb_get_state_hook(device: usize, size: u32, data: *mut u8) -> i32 {
     DINPUT_KB_HOOK_FIRES.fetch_add(1, Ordering::Relaxed);

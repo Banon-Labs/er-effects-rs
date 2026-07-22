@@ -70,7 +70,7 @@ pub(crate) unsafe fn portrait_pipeline_idle_in_gameplay(base: usize) -> bool {
 /// pipeline returned before the model could build+render (run32: force_profile_render_tick never reached
 /// maybe_build). Wall-clock recency (not a per-call decrement) makes it safe to poll multiple times a frame.
 pub(crate) fn native_loading_screen_active() -> bool {
-    static LAST_HITS: AtomicUsize = AtomicUsize::new(0);
+    pub(crate) use er_telemetry::counters::LAST_HITS;
     static LAST_CHANGE_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
     let now_ms = EPOCH.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64;
@@ -628,8 +628,8 @@ const SAVE_FACE_DATA_BUFFER_SIZE: usize = 0x120;
 /// itself instead of relying on human review of RT dumps).
 pub(crate) static PROFILE_PREVIEW_FACE_HASH: [AtomicUsize; TITLE_PROFILE_SLOT_COUNT] =
     [const { AtomicUsize::new(0) }; TITLE_PROFILE_SLOT_COUNT];
-pub(crate) static PORTRAIT_FACE_IDENTITY_CHECKS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static PORTRAIT_FACE_IDENTITY_MISMATCHES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::PORTRAIT_FACE_IDENTITY_CHECKS;
+pub(crate) use er_telemetry::counters::PORTRAIT_FACE_IDENTITY_MISMATCHES;
 const SAVE_PGD_SCAN_LEADING_FACE_COUNT: usize = 4;
 const SAVE_PGD_FACE_DELTA_WINDOW_LOW: usize = 0xa000;
 const SAVE_PGD_FACE_DELTA_WINDOW_HIGH: usize = 0xa600;
@@ -686,8 +686,8 @@ const SAVE_NOT_ALONE_FLAG_SIZE: usize = 0x01;
 const SAVE_INGAME_TIMER_PADDING_AFTER_NOT_ALONE: usize = 0x04;
 const SAVE_INGAME_TIMER_TICKS_MAX: u32 = 999 * 60 * 60 / 10 + 59 * 60 / 10 + 59 / 10 + 1;
 const SYSTEM_QUIT_SAVE_SWAP_POLL_INTERVAL_TICKS: usize = 30;
-static SYSTEM_QUIT_SAVE_SWAP_POLL_TICK: AtomicUsize = AtomicUsize::new(0);
-static PROFILE_STATS_PREVIEW_ROW_CURSOR: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_SWAP_POLL_TICK;
+pub(crate) use er_telemetry::counters::PROFILE_STATS_PREVIEW_ROW_CURSOR;
 
 #[derive(Default)]
 struct SystemQuitSaveSwapState {

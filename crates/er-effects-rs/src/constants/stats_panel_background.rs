@@ -41,15 +41,15 @@ pub(crate) const STATS_PANEL_ERR_PANIC: usize = 4;
 pub(crate) const STATS_PANEL_ERR_RESCAP_NULL: usize = 5;
 pub(crate) const STATS_PANEL_ERR_BASE_UNRESOLVED: usize = 6;
 /// Bitmask (bit N = slot N) of slots whose neutral-bg texture is registered in the repos.
-pub(crate) static STATS_PANEL_TEX_REGISTERED_MASK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::STATS_PANEL_TEX_REGISTERED_MASK;
 /// Count of native `CreateTpfResCap` register attempts across all slots.
-pub(crate) static STATS_PANEL_TEX_REGISTER_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::STATS_PANEL_TEX_REGISTER_ATTEMPTS;
 /// Count of failed/abandoned register attempts (precondition miss or caught panic).
-pub(crate) static STATS_PANEL_TEX_REGISTER_FAILURES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::STATS_PANEL_TEX_REGISTER_FAILURES;
 /// Count of bind-observer target rewrites that pointed a dummy-face bind at our key.
-pub(crate) static STATS_PANEL_BIND_REDIRECTS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::STATS_PANEL_BIND_REDIRECTS;
 /// Bitmask (bit N = slot N) of slots whose native bind target we have redirected at least once.
-pub(crate) static STATS_PANEL_BIND_REDIRECT_MASK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::STATS_PANEL_BIND_REDIRECT_MASK;
 /// Last error code (see `STATS_PANEL_ERR_*`).
 pub(crate) static STATS_PANEL_LAST_ERROR: AtomicUsize = AtomicUsize::new(STATS_PANEL_ERR_NONE);
 
@@ -270,8 +270,8 @@ pub(crate) const TITLE_GFX_VALUE_SET_POSITION_RVA: usize = 0xd83e20;
 pub(crate) const TITLE_GFX_VALUE_SET_SCALE_RVA: usize = 0xd84090;
 pub(crate) static TITLE_GFX_VALUE_SET_VISIBLE_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static TITLE_GFX_VALUE_SET_VISIBLE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static TITLE_GFX_VISIBLE_TITLE_FADEIN_SEEN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::TITLE_GFX_VALUE_SET_VISIBLE_INSTALLED;
+pub(crate) use er_telemetry::counters::TITLE_GFX_VISIBLE_TITLE_FADEIN_SEEN;
 pub(crate) static TITLE_PRESS_START_GFX_VALUE: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// Small fixed set of title text CSScaleformValue pointers that must remain hidden while the
@@ -287,8 +287,8 @@ pub(crate) static TITLE_TEXT_GFX_VALUES: [AtomicUsize; 8] = [
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS),
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS),
 ];
-pub(crate) static TITLE_TEXT_GFX_VALUE_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static TITLE_PRESS_START_GFX_FORCE_FALSE_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::TITLE_TEXT_GFX_VALUE_COUNT;
+pub(crate) use er_telemetry::counters::TITLE_PRESS_START_GFX_FORCE_FALSE_CALLS;
 pub(crate) static TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_VALUE: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_REQUESTED: AtomicUsize =
@@ -301,9 +301,9 @@ pub(crate) static TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_INSTALLED: AtomicUsize =
     AtomicUsize::new(0);
-pub(crate) static TITLE_PROFILE_FACE_BIND_HITS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static TITLE_PROFILE_FACE_TRANSFORM_APPLIED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static TITLE_PROFILE_FACE_OTHER_HIDDEN: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static TITLE_PROFILE_FACE_LAST_PROXY: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static TITLE_PROFILE_FACE_LAST_VALUE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::TITLE_PROFILE_FACE_BIND_HITS;
+pub(crate) use er_telemetry::counters::TITLE_PROFILE_FACE_TRANSFORM_APPLIED;
+pub(crate) use er_telemetry::counters::TITLE_PROFILE_FACE_OTHER_HIDDEN;
+pub(crate) use er_telemetry::counters::TITLE_PROFILE_FACE_LAST_PROXY;
+pub(crate) use er_telemetry::counters::TITLE_PROFILE_FACE_LAST_VALUE;
 

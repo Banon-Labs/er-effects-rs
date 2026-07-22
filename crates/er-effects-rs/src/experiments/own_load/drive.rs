@@ -67,13 +67,13 @@ static OWN_LOAD_GATE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicB
 /// Trampoline to the original 0x67b100 (set on hook install).
 static READ_67B100_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 /// One-shot install guard for the 0x67b100 detour.
-static OWN_LOAD_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OWN_LOAD_HOOK_INSTALLED;
 /// The sliced plaintext slot body the hook feeds: a leaked `&'static [u8]`, exposed to the detour
 /// as (ptr, len) atomics so the game-thread detour reads it lock-free. Set BEFORE arming the gate.
-static OWN_LOAD_BODY_PTR: AtomicUsize = AtomicUsize::new(0);
-static OWN_LOAD_BODY_LEN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OWN_LOAD_BODY_PTR;
+pub(crate) use er_telemetry::counters::OWN_LOAD_BODY_LEN;
 /// Count of bytes the gated hook fed into the engine buffer on the latched call (verify telemetry).
-static OWN_LOAD_FED_BYTES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OWN_LOAD_FED_BYTES;
 
 /// Gated detour for 0x67b100. While `OWN_LOAD_GATE` is set, copies our sliced plaintext slot body
 /// into the engine-allocated out_buf (`rcx`) for `min(size, body.len())` bytes and returns al=1 --
@@ -178,17 +178,17 @@ const WBR_GATE_2F_OFFSET: usize = 0x2f;
 
 /// Total calls to `WorldBlockRes::Update` observed via the detour (per-block-per-frame; 0 == the
 /// FieldArea update loop never ticked our block on this path).
-pub(crate) static OWN_LOAD_WBR_UPDATE_CALLS: AtomicU64 = AtomicU64::new(0);
+pub(crate) use er_telemetry::counters::OWN_LOAD_WBR_UPDATE_CALLS;
 /// Max phase byte ([this+0x35]) seen across all observed calls. <0xa across the stall == the block's
 /// resource-stream never reached residency.
-pub(crate) static OWN_LOAD_WBR_MAX_PHASE: AtomicU64 = AtomicU64::new(0);
+pub(crate) use er_telemetry::counters::OWN_LOAD_WBR_MAX_PHASE;
 /// Whether ANY observed block had its FD4 completion gate ([this+0x2f]) set non-zero. false across the
 /// stall == the FD4 file-load never completed for any block (the IO/CSFile gap).
 pub(crate) static OWN_LOAD_WBR_ANY_GATE_SET: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 /// Count of successful OWN-LOAD m28 `AddDefaultFileLoadProcess` dispatch calls (one per cap, one-shot
 /// per cap pointer). 0 == the lever never fired. Exposed as telemetry `oracle_own_m28_dispatch_fired`.
-pub(crate) static OWN_LOAD_M28_DISPATCH_FIRED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OWN_LOAD_M28_DISPATCH_FIRED;
 /// One-shot guard: FD4FileCap pointers we already dispatched `AddDefaultFileLoadProcess` for.
 /// `AppendFileLoadProcessor` does NOT early-out on an already-present processor, so a double-call
 /// would append a second processor -- this set makes each cap fire exactly once. Const-constructible
@@ -200,11 +200,11 @@ static WBR_UPDATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 /// from the engine) is at the stuck phase 2, dump its candidate cap fields READ-ONLY so we locate the
 /// FD4FileCap on the authoritative object instead of reconstructing it from the resmgr container.
 /// Throttled to the first few sightings (the hook fires ~500k times).
-static WBR_PHASE2_DIAG_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::WBR_PHASE2_DIAG_CALLS;
 const WBR_PHASE2_DIAG_MAX: usize = 24;
 const WBR_STUCK_PHASE: u8 = 2;
 /// One-shot install guard for the `WorldBlockRes::Update` diagnostic detour.
-static WBR_UPDATE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::WBR_UPDATE_HOOK_INSTALLED;
 
 /// `__fastcall WorldBlockRes::Update(this)` diagnostic detour. `rcx` = WorldBlockRes* (`this`).
 /// OBSERVE-ONLY: increments the call counter, fault-tolerantly reads [this+0x35] (phase) and
@@ -368,7 +368,7 @@ pub(crate) fn install_wbr_update_hook() -> bool {
 /// Trampoline to the original `InGameStep::RequestMoveMap` (set on hook install).
 static REQUEST_MOVE_MAP_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 /// One-shot install guard.
-static REQUEST_MOVE_MAP_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_HOOK_INSTALLED;
 /// ARM countdown: our load trigger sets this to `REQUEST_MOVE_MAP_ARM_WINDOW` right before it drives
 /// SetState5/PlayGame. Each RequestMoveMap call while armed decrements it; the fixup fires on the FIRST
 /// call whose target BlockId is actually invalid (disarming immediately), and a valid intervening call
@@ -376,18 +376,18 @@ static REQUEST_MOVE_MAP_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 /// disarm-on-first-call consumed the arm on a benign valid call (title/early RequestMoveMap) and missed
 /// the actual load's stale `-1` call a few calls later, leaving WorldResWait stuck (bug found runtime
 /// 2026-07-18, run boot-fix-validate-155035: calls=2 fixups=0, boot stuck at mms 3 for 66s).
-static REQUEST_MOVE_MAP_ARM_COUNTDOWN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_ARM_COUNTDOWN;
 /// How many RequestMoveMap calls after a load trigger stay eligible for the fixup. Generous enough to
 /// skip benign intervening calls but bounded so the arm never leaks into unrelated later transitions.
 const REQUEST_MOVE_MAP_ARM_WINDOW: usize = 8;
 /// Total RequestMoveMap calls seen (telemetry oracle_request_move_map_hook_calls).
-pub(crate) static REQUEST_MOVE_MAP_HOOK_CALLS: AtomicU64 = AtomicU64::new(0);
+pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_HOOK_CALLS;
 /// Times we substituted a valid c30 BlockId into an invalid `*param_2`
 /// (telemetry oracle_request_move_map_hook_fixups). >=1 == the fix fired.
-pub(crate) static REQUEST_MOVE_MAP_FIXUPS: AtomicU64 = AtomicU64::new(0);
+pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_FIXUPS;
 /// Last (param_2-before, c30-substituted) pair, for telemetry/diagnosis.
-pub(crate) static REQUEST_MOVE_MAP_LAST_BEFORE: AtomicU64 = AtomicU64::new(0);
-pub(crate) static REQUEST_MOVE_MAP_LAST_C30: AtomicU64 = AtomicU64::new(0);
+pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_LAST_BEFORE;
+pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_LAST_C30;
 
 /// Arm the RequestMoveMap BlockId fixup for the next load. Call this at a load trigger (own-load
 /// continue / boot autoload SetState5) AFTER the saved map is deserialized into GameMan+0xc30, so the
@@ -875,7 +875,7 @@ pub(crate) unsafe fn own_load_stream_telemetry(base: usize, gm: usize, title_own
 }
 
 /// Diagnostic throttle for `own_load_m28_dispatch`: log the first HEAD entries, then every INTERVALth.
-static OWN_LOAD_M28_DISPATCH_DIAG_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OWN_LOAD_M28_DISPATCH_DIAG_CALLS;
 const OWN_LOAD_M28_DISPATCH_DIAG_HEAD: usize = 8;
 const OWN_LOAD_M28_DISPATCH_DIAG_INTERVAL: usize = 600;
 

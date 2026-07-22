@@ -310,19 +310,19 @@ fn sq_repro_gamepad_to_vk(btn: u16) -> u32 {
 /// OPTIONSETTING_CURRENT_TAB (0 = not found yet), the tab index observed when the current candidate
 /// window began (to detect a change), and the phase-local tick when we reached the Quit tab (so the
 /// DOWN,DOWN,Enter row nav has its own base; usize::MAX = not yet on the Quit tab).
-static SQ_REPRO_TAB_DISCOVERED: AtomicUsize = AtomicUsize::new(0);
-static SQ_REPRO_TAB_BASELINE: AtomicUsize = AtomicUsize::new(usize::MAX);
-static SQ_REPRO_ROWNAV_BASE: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) use er_telemetry::counters::SQ_REPRO_TAB_DISCOVERED;
+pub(crate) use er_telemetry::counters::SQ_REPRO_TAB_BASELINE;
+pub(crate) use er_telemetry::counters::SQ_REPRO_ROWNAV_BASE;
 /// One-shot: the deterministic Load-Profile route (`system_quit_open_profile_load_dialog`) was fired
 /// this switch, so we do not re-fire it. Native ER has no keyboard bind for the OptionSetting
 /// tab-switch (mouse-only), so instead of navigating to the Quit tab we invoke the DLL's own route
 /// directly when the Load-Profile row action was captured -- it opens ProfileSelect and sets the
 /// return-chain System dialog, exactly like a click.
-static SQ_REPRO_ROUTE_FIRED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SQ_REPRO_ROUTE_FIRED;
 /// One-shot: we force-built the OptionSetting Quit-tab pane (via the game's own tab-select
 /// FUN_14093b850) so the cloned Load-Profile row + its action object get created without the
 /// mouse-only tab visit.
-static SQ_REPRO_PANE_BUILD_TRIED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SQ_REPRO_PANE_BUILD_TRIED;
 
 /// Fabricated gamepad wButtons for a phase that issues a FIXED list of button edges ONCE, in order,
 /// then holds. `tick` is phase-local; each edge occupies one `INJECT_NAV_CYCLE` (the RE-grounded

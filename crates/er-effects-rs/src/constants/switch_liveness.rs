@@ -28,8 +28,8 @@ pub(crate) const MENU_EVENT_MOVE_B_45: usize = MenuEventId::MoveB as usize;
 pub(crate) const AUTO_CONFIRM_CYCLE_FRAMES: u64 = 120;
 pub(crate) const AUTO_CONFIRM_SET_FRAMES: u64 = 3;
 pub(crate) const AUTO_CONFIRM_LOG_INTERVAL: u64 = 60;
-pub(crate) static AUTO_CONFIRM_FRAME: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static AUTO_CONFIRM_MODAL_SEEN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::AUTO_CONFIRM_FRAME;
+pub(crate) use er_telemetry::counters::AUTO_CONFIRM_MODAL_SEEN;
 /// Menu list cursor (highlighted index) and item count, on the list object (cursor getter
 /// 0x140739e20 = `mov eax,[rcx+0xd4]`). Used to LOG the live cursor (diagnostic) while injecting.
 #[repr(C)]

@@ -160,12 +160,12 @@ pub(crate) const PGD_STAT_COUNT: usize =
 pub(crate) const GAME_MAN_NAME_IS_EMPTY_E70_OFFSET: usize =
     core::mem::offset_of!(GameMan, character_name_is_empty);
 /// One-shot latch for the in-world LOAD-CORRECTNESS dump.
-pub(crate) static LOAD_CORRECTNESS_DUMPED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::LOAD_CORRECTNESS_DUMPED;
 pub(crate) const LOAD_CORRECTNESS_NOT_DUMPED: usize = 0;
 /// One-shot latches for the OBSERVE-mode title->menu timing baseline (T0 at the parked title,
 /// T_menu_open when the TitleTopDialog reaches TextFadeOut). Lets a true-vanilla run (no forcing,
 /// modals + presses by the user) emit the SAME markers as the DLL-headless run for comparison.
-pub(crate) static OBSERVE_T0_EMITTED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OBSERVE_T0_EMITTED;
 pub(crate) static OBSERVE_MENU_OPEN_EMITTED: AtomicUsize =
     AtomicUsize::new(OBSERVE_MARKER_NOT_EMITTED);
 pub(crate) const OBSERVE_MARKER_NOT_EMITTED: usize = 0;

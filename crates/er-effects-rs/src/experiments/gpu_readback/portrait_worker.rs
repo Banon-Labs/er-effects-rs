@@ -288,7 +288,7 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
         // alpha is 255 everywhere the bg is opaque (need a chroma-key or engine-side
         // IBL/env suppression). Fires only on a confirmed non-checker head frame.
         {
-            static ALPHA_DIAG_LOGGED: AtomicUsize = AtomicUsize::new(0);
+            pub(crate) use er_telemetry::counters::ALPHA_DIAG_LOGGED;
             let w = cw as usize;
             let h = ch as usize;
             if w > 16
@@ -448,7 +448,7 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
                 // the update task (*(td+8); 0 would freeze the anim
                 // silently), and the offscreen scene-registered bit
                 // (off+0x58; 1 == the engine re-renders the RT per frame).
-                static MOTION_LOG_TICKS: AtomicUsize = AtomicUsize::new(0);
+                pub(crate) use er_telemetry::counters::MOTION_LOG_TICKS;
                 let n = MOTION_LOG_TICKS.fetch_add(1, Ordering::SeqCst);
                 if n % 60 == 0 {
                     let anim_t = job.anim_t;

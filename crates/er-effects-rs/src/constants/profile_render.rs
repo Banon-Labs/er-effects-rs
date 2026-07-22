@@ -33,32 +33,32 @@ pub(crate) static OWNED_MAX_OUTSTANDING: [AtomicUsize; OWNED_CLASS_COUNT] =
     [const { AtomicUsize::new(0) }; OWNED_CLASS_COUNT];
 /// Total ledger-check violations observed (outstanding > bound). Nonzero == a taken-without-release
 /// leak of a native-owned object -- the run-stopping oracle for this bug class.
-pub(crate) static OWNED_LEDGER_VIOLATIONS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OWNED_LEDGER_VIOLATIONS;
 
 /// Gate-local `CS::MenuWindowJob::Run` hook state. `MENU_WINDOW_JOB_RUN_RVA` is defined with the
 /// title-cover constants above; System Quit reuses that same live/deobf target.
 pub(crate) static SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED;
 pub(crate) const SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED_YES: usize = 1;
-pub(crate) static SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_INGAME_TOP_WINDOW: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_OPTION_SETTING_WINDOW: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_PROFILE_SELECT_WINDOW: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_LOG_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_INGAME_TOP_WINDOW;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPTION_SETTING_WINDOW;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_SELECT_WINDOW;
 /// Latched from the moment the user clicks System->Quit->Load Profile (the profile-load route FIRE) until
 /// ProfileSelect is reset. `SYSTEM_QUIT_PROFILE_SELECT_WINDOW` is only set later, in the MenuWindowJob::Run
 /// hook, so there is a window where the own_stepper self-pump builds the native load-confirm MessageBox
 /// while that var is still 0 -- the confirm then escapes msgbox suppression and CRASHES the game (2026-07-15).
 /// This flag spans the whole flow so `switch_active` in the msgbox builder hook covers that gap.
-pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_HIDE_REAL_WINDOWS_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_RESTORE_REAL_WINDOWS_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_SKIP_RESTORE_AFTER_QUICKLOAD_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_REAL_WINDOWS_HIDDEN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_HIDE_REAL_WINDOWS_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_RESTORE_REAL_WINDOWS_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SKIP_RESTORE_AFTER_QUICKLOAD_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_REAL_WINDOWS_HIDDEN;
 pub(crate) static SYSTEM_QUIT_WINDOW_LIST_PUSH_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED;
 pub(crate) const SYSTEM_QUIT_WINDOW_LIST_PUSH_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED_YES: usize = 1;
 /// Live/deobf `CS::ProfileLoadDialog` activation vtable target (`dump 0x1409a47c0` -> deobf
@@ -94,9 +94,9 @@ pub(crate) const SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA: u32 = 0x7ac890;
 pub(crate) const PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA: u32 = 0x9a4ed0;
 /// One-shot latch: set when we have invoked the native ProfileSelect close during a return-title
 /// transition, so the per-tick handler closes it exactly once. Reset with the ProfileSelect state.
-pub(crate) static SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_FIRED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_FIRED;
 /// Telemetry: number of native ProfileSelect close-finalize calls issued (expected 1 per flow).
-pub(crate) static SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_COUNT;
 /// The load-ONLY save routine `FUN_14067b380` (dump 0x14067b380 -> LIVE/deobf 0x67b290, shift -0xf0),
 /// called by `CS::MoveMapStep::DoSaveStuff` when `GameMan.saveState/b80 == 2`: it reads the slot's save
 /// file and runs `PlayerGameData::Deserialize -> CSGaitemImp::Deserialize` (the in-world deserialize
@@ -109,12 +109,12 @@ pub(crate) static SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_COUNT: AtomicUsize = At
 pub(crate) const SYSTEM_QUIT_INWORLD_LOAD_RVA: u32 = 0x67b290;
 pub(crate) static SYSTEM_QUIT_INWORLD_LOAD_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static SYSTEM_QUIT_INWORLD_LOAD_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_INWORLD_LOAD_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_INWORLD_LOAD_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_INWORLD_LOAD_INSTALLED;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_INWORLD_LOAD_SKIP_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_INWORLD_LOAD_ALLOW_COUNT;
 /// Count of frames the menu-pump Run hook forced GameMan.saveState/b80 back to idle to abort a
 /// half-started in-world load transition so the queued return-title chain can run.
-pub(crate) static SYSTEM_QUIT_INWORLD_LOAD_ABORT_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_INWORLD_LOAD_ABORT_COUNT;
 /// `CS::GameMan::RequestLoadSlot(slot)` -- the native setter that transitions GameMan.saveState/b80
 /// 0->2 to REQUEST an in-world load of an explicit slot 0-9 (dump `FUN_14067b2f0` -> LIVE/deobf
 /// `0x67b200`, shift -0xf0, content-unique). It validates the slot's ProfileSummary then calls the
@@ -132,11 +132,11 @@ pub(crate) static SYSTEM_QUIT_INWORLD_LOAD_ABORT_COUNT: AtomicUsize = AtomicUsiz
 pub(crate) const SYSTEM_QUIT_REQUEST_LOAD_SLOT_RVA: u32 = 0x67b200;
 pub(crate) static SYSTEM_QUIT_REQUEST_LOAD_SLOT_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static SYSTEM_QUIT_REQUEST_LOAD_SLOT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_REQUEST_LOAD_SLOT_INSTALLED;
 /// Count of in-world load requests we neutralized (returned "not armed") during the switch so
 /// GameMan.saveState/b80 stayed 0 and no NowLoading transition started.
-pub(crate) static SYSTEM_QUIT_REQUEST_LOAD_SLOT_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_REQUEST_LOAD_SLOT_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_REQUEST_LOAD_SLOT_BLOCK_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_REQUEST_LOAD_SLOT_ALLOW_COUNT;
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ORIG: AtomicUsize =
@@ -151,17 +151,17 @@ pub(crate) static SYSTEM_QUIT_GAITEM_LOOKUP_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SYSTEM_QUIT_GAITEM_FINALIZE_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ADDR: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_GAITEM_DESERIALIZE_ADDR: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_GAITEM_LOOKUP_ADDR: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_GAITEM_FINALIZE_ADDR: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_INSTALLED;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_INSTALLED;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ADDR;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_DESERIALIZE_ADDR;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_LOOKUP_ADDR;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_FINALIZE_ADDR;
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED_YES: usize = 1;
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_NOT_INSTALLED: usize = 0;
@@ -180,24 +180,24 @@ pub(crate) const SYSTEM_QUIT_GAITEM_LOOKUP_DISABLED: usize = 2;
 pub(crate) const SYSTEM_QUIT_GAITEM_FINALIZE_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED_YES: usize = 1;
 pub(crate) const SYSTEM_QUIT_GAITEM_FINALIZE_DISABLED: usize = 2;
-pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_GAITEM_DESERIALIZE_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_GAITEM_DESERIALIZE_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_BLOCK_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_ALLOW_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_BLOCK_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ALLOW_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_DESERIALIZE_SKIP_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_DESERIALIZE_ALLOW_COUNT;
 /// Times the CSGaitemImp singleton was reset to pristine right before a switch-reload's native deserialize
 /// (clears char#1's stale items so char#2's deserialize does not dispatch a freed vtable -> the 0x67141a AV).
-pub(crate) static SYSTEM_QUIT_GAITEM_DESERIALIZE_RESET_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_GAITEM_LOOKUP_EMPTY_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_GAITEM_LOOKUP_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_GAITEM_FINALIZE_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_GAITEM_FINALIZE_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_JOB: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_LIST: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_DESERIALIZE_RESET_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_LOOKUP_EMPTY_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_LOOKUP_ALLOW_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_FINALIZE_SKIP_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_FINALIZE_ALLOW_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_JOB;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_LIST;
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_PROFILE_ID: AtomicUsize =
     AtomicUsize::new(usize::MAX);
 /// Captured fourth constructor argument for native ProfileSelect LoadJob builder, mirrored from the
@@ -223,16 +223,16 @@ pub(crate) const SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA: u32 = 0x67a3a0;
 /// a separate trace-set hook -- same precedent as `install_c30_writer_hook`).
 pub(crate) static SYSTEM_QUIT_CONTINUE_CONFIRM_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static SYSTEM_QUIT_CONTINUE_CONFIRM_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_INSTALLED;
 pub(crate) static START_SYSTEM_QUIT_CONTINUE_CONFIRM_HOOK: Once = Once::new();
 pub(crate) static START_SYSTEM_QUIT_CHILD_FINISH_TRACE_HOOK: Once = Once::new();
 /// One-shot per armed switch: 0 = the fresh picked-slot deserialize has not yet run for the active
 /// System->Quit switch (reset by `system_quit_arm_quickload_autoload`); 1 = it succeeded and the
 /// confirm may stream. While 0, any confirm during an active switch first drives the deserialize.
-pub(crate) static SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE;
 /// Count of successful fresh picked-slot deserializes driven by the confirm hook (product proof
 /// expects exactly 1 per switch).
-pub(crate) static SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT;
 /// One-shot guard for the MENU-FREE clean-title switch reload (own_load_switch_reload_fire, 2026-07-18).
 /// The warm-rebuilt TitleTopDialog never reaches Loop post-return-title (press-start SceneObjProxy at
 /// dialog+0xb78 unbound), so the title accept-byte/open-menu path deadlocks. For a genuine in-world
@@ -240,14 +240,14 @@ pub(crate) static SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT: AtomicUsize = 
 /// -> continue_confirm -> SetState5). 0 = not yet attempted this switch; compare_exchange(0,1) claims
 /// the single attempt so a flickering-owner / partial-feed frame never re-runs the leak-prone feed.
 /// Reset per switch in system_quit_arm_quickload_autoload.
-pub(crate) static SYSTEM_QUIT_SWITCH_MENU_FREE_RELOAD_FIRED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SWITCH_MENU_FREE_RELOAD_FIRED;
 /// MENU-FREE RELOAD COMPLETION LATCH (2026-07-18, repeatability fix). Continuous in-world frames observed
 /// after own_load_switch_reload_fire committed the picked slot (FRESH_DESER_DONE==1) while the switch phase
 /// is still armed. Once sustained, the switch is DONE: reset the phase to IDLE + clear the arm so the
 /// return-title chain cannot re-submit and bounce the freshly-loaded world back to title (which would block
 /// the NEXT switch). Reset whenever the completion condition breaks. See bd
 /// repeatability-menu-free-phase-reset-fix-2026-07-18.
-pub(crate) static SYSTEM_QUIT_MENU_FREE_STABLE_TICKS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_MENU_FREE_STABLE_TICKS;
 /// Sustained in-world frames after the menu-free reload commit before latching the switch DONE (~1s at
 /// task rate). Long enough that a transient mid-stream player flicker does not latch prematurely, short
 /// enough to disarm well before the return-title chain's queue-ready re-submit window (~tens of seconds).
@@ -258,26 +258,26 @@ pub(crate) const SYSTEM_QUIT_MENU_FREE_STABLE_TICKS_THRESHOLD: usize = 60;
 /// (the game-polled teardown flag -- no menu-pump/Scaleform op) then phase=RETURN_TITLE_REQUESTED;
 /// the existing ending-recovery -> own_load_switch_reload_fire -> completion-latch chain does the rest.
 /// Counters (surfaced in telemetry) prove each switch with zero simulated input.
-pub(crate) static SWITCH_TRIGGER_ARM_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SWITCH_TRIGGER_TEARDOWN_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SWITCH_TRIGGER_LAST_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
-pub(crate) static SWITCH_TRIGGER_DEFERRED_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SWITCH_TRIGGER_ARM_COUNT;
+pub(crate) use er_telemetry::counters::SWITCH_TRIGGER_TEARDOWN_COUNT;
+pub(crate) use er_telemetry::counters::SWITCH_TRIGGER_LAST_SLOT;
+pub(crate) use er_telemetry::counters::SWITCH_TRIGGER_DEFERRED_COUNT;
 /// Last-seen mtime (unix secs) of the switch-slot control file; a change == a new harness request.
-pub(crate) static SWITCH_SLOT_CONTROL_MTIME: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SWITCH_SLOT_CONTROL_MTIME;
 /// 0 until the first poll records the baseline mtime, so a stale control file at boot never arms.
-pub(crate) static SWITCH_SLOT_CONTROL_PRIMED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SWITCH_SLOT_CONTROL_PRIMED;
 /// Count of confirms BLOCKED fail-closed because the fresh deserialize could not be proven (no save
 /// bytes / parse failed / fingerprint not real). Streaming stale state would load the wrong
 /// character and the post-load autosave would then write it back to the picked slot.
-pub(crate) static SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT;
 /// Count of confirms forwarded to the native original (boot autoload, normal play, or post-deser).
-pub(crate) static SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT;
 pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE: usize = 0;
 pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED: usize = 1;
 pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED: usize = 2;
 pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN: usize = 3;
 pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF: usize = 4;
-pub(crate) static SYSTEM_QUIT_QUICKLOAD_PHASE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_PHASE;
 /// Continuous in-world game-task frames observed while a return-title reload is still ARMED
 /// (`SYSTEM_QUIT_QUICKLOAD_PHASE >= RETURN_TITLE_REQUESTED`) with the local player present. A genuine
 /// user-initiated return-title tears the world down within ~1-2s so the player vanishes and this never
@@ -285,13 +285,13 @@ pub(crate) static SYSTEM_QUIT_QUICKLOAD_PHASE: AtomicUsize = AtomicUsize::new(0)
 /// of the character we just loaded (`system_quit_arm_quickload_autoload`) -- leaves the player present
 /// indefinitely. Reset to 0 whenever no reload is armed. See bd
 /// angre-reload-full-causal-chain-and-fix-2026-07-18.
-pub(crate) static SYSTEM_QUIT_INWORLD_ARMED_STABLE_TICKS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_INWORLD_ARMED_STABLE_TICKS;
 /// Continuous armed+in-world frames after which a still-armed return-title is treated as SPURIOUS and
 /// disarmed (phase -> IDLE). ~5s at the game-task rate: far below a genuine stable load's tens-of-seconds
 /// presence (observed ~47s to the destructive submit) and comfortably above a real switch's ~1-2s
 /// arm->teardown window, so it never disarms a legitimate user switch.
 pub(crate) const SYSTEM_QUIT_INWORLD_ARMED_DISARM_TICKS: usize = 300;
-pub(crate) static SYSTEM_QUIT_INWORLD_ARMED_DISARM_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_INWORLD_ARMED_DISARM_COUNT;
 /// SPURIOUS-vs-GENUINE arm discriminator (2026-07-18, bd repeatable-multi-save-consolidated-plan).
 /// Records whether the LOCAL PLAYER WAS ABSENT at the moment a return-title reload was armed
 /// (`system_quit_arm_quickload_autoload`). The two arm scenarios differ causally by exactly this:
@@ -303,35 +303,35 @@ pub(crate) static SYSTEM_QUIT_INWORLD_ARMED_DISARM_COUNT: AtomicUsize = AtomicUs
 /// The time-based disarm below is only correct for the SPURIOUS case; gating it on this flag stops it
 /// from cancelling a genuine switch whose old world lingers past the threshold (the switch-regression
 /// in bd angre-4loads-goal-met-but-switch-regression-2026-07-18). 1 = armed while player absent.
-pub(crate) static SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT;
 /// ENDING-REQUEST RECOVERY (2026-07-18, live-proven fix for the genuine-switch mms18 stall, bd
 /// live-genuine-switch-stalls-mms18-end5e0-2026-07-18). Continuous frames the exact stuck signature
 /// (in-world, ig_d8==1, mms_step==18, menuData+0x5e==0, +0x5d==0, b7c1==1, blocks>0) has held while a
 /// switch's OLD world refuses to tear down. A normally-advancing load leaves step 18 within a few
 /// frames, so this never accumulates on a healthy load. Reset whenever the signature breaks.
-pub(crate) static ENDING_REQUEST_STALL_STREAK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::ENDING_REQUEST_STALL_STREAK;
 /// Latch (0/1): we drove menuData+0x5d=1 to walk the child past 18 and are holding it until the child
 /// leaves step 18, then we CLEAR it -- a lingering 0x5d re-requests quit-to-title ~4s after the reload
 /// commits (return_title.rs:1-7), bouncing the freshly-loaded world back to title.
-pub(crate) static ENDING_REQUEST_SET: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::ENDING_REQUEST_SET;
 /// Runtime semaphore: >0 == the recovery fired (SET menuData+0x5d=1 at an mms18 stall) this run.
-pub(crate) static ENDING_REQUEST_SET_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::ENDING_REQUEST_SET_COUNT;
 /// Diagnostic counter: frozen-at-mms18 frames where the rt5d drive's stuck signature was NOT met
 /// (so a run can name which sub-condition blocked the drive).
-pub(crate) static ENDING_REQUEST_WHYNOT_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::ENDING_REQUEST_WHYNOT_COUNT;
 /// IN-WORLD finalize-drive recovery (runs BEFORE the title_owner gate via the cached owner, so it
 /// reaches load2's in-world frozen mms18 which the title_owner-gated path never does). Sustained
 /// frozen-frame streak, one-shot latch, and fire count.
-pub(crate) static INWORLD_FINALIZE_DRIVE_STREAK: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static INWORLD_FINALIZE_DRIVE_SET: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static INWORLD_FINALIZE_DRIVE_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::INWORLD_FINALIZE_DRIVE_STREAK;
+pub(crate) use er_telemetry::counters::INWORLD_FINALIZE_DRIVE_SET;
+pub(crate) use er_telemetry::counters::INWORLD_FINALIZE_DRIVE_COUNT;
 /// Diagnostic counter: frames at mms18 where the in-world drive's frozen signature was NOT met.
-pub(crate) static INWORLD_FINALIZE_DRIVE_WHYNOT_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::INWORLD_FINALIZE_DRIVE_WHYNOT_COUNT;
 /// The MoveMapStep pointer as resolved by write_oracle (the ONLY resolution that reliably tracks
 /// load2's in-world step; the game-task's fresh title_owner scan reads a stale owner -> stale step).
 /// Published each telemetry write; the in-world finalize drive consumes it instead of re-resolving.
 /// 0 == not currently resolved.
-pub(crate) static ORACLE_RELIABLE_MMS_PTR: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::ORACLE_RELIABLE_MMS_PTR;
 /// Child-done-query override (FUN_140eb5550, deobf 0x140eb5530). STEP_MoveMap_Update tears the
 /// MoveMapStep child down when this returns done; for load2 it returns done PREMATURELY (field25=0),
 /// stranding the reload. The MoveMapStep child's EzChildStepBase = MoveMapStep + 0x108 (isolates its
@@ -339,16 +339,16 @@ pub(crate) static ORACLE_RELIABLE_MMS_PTR: AtomicUsize = AtomicUsize::new(0);
 /// mid-walk on a committed reload, so the child survives and the advancer completes.
 pub(crate) const CHILD_DONE_QUERY_RVA: usize = 0xeb5530;
 pub(crate) const MOVEMAPSTEP_CHILD_EZSTEP_BASE_OFFSET: usize = 0x108;
-pub(crate) static CHILD_DONE_QUERY_ORIG: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static CHILD_DONE_QUERY_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static CHILD_DONE_HELD_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static CHILD_DONE_DIAG_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::CHILD_DONE_QUERY_ORIG;
+pub(crate) use er_telemetry::counters::CHILD_DONE_QUERY_HOOK_INSTALLED;
+pub(crate) use er_telemetry::counters::CHILD_DONE_HELD_COUNT;
+pub(crate) use er_telemetry::counters::CHILD_DONE_DIAG_COUNT;
 /// Held frozen-signature frames before the in-world drive fires. ~2s at load2's ~20fps; short so the
 /// RAM-gated drive completes before an incidental unfocused-mouse click can contaminate the run.
 pub(crate) const INWORLD_FINALIZE_DRIVE_RELEASE_FRAMES: usize = 40;
 /// Sustained stuck-at-18 frames before the recovery drives the ending request (~2s at task rate).
 pub(crate) const ENDING_REQUEST_STALL_RELEASE_FRAMES: usize = 120;
-pub(crate) static SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT;
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT: AtomicUsize =
     AtomicUsize::new(0);
 /// Native return-title final functor (`FUN_1407a3990` dump -> live/deobf `0x1407a3900`).

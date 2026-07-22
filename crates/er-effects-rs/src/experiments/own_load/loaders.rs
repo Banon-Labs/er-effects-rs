@@ -146,9 +146,9 @@ pub(crate) unsafe fn own_load_feed_deserialize(base: usize, gm: usize, want_slot
 /// Phase machine state for the reload FD4-IO SUBMIT/DRAIN (own_load_switch_reload_fire), persisted
 /// across the caller's per-frame retries. 0=IDLE (do SUBMIT once), 1=DRAIN (tick until b80==3),
 /// 2=COMMIT (fall through to feed+continue_confirm).
-static SWITCH_RELOAD_FD4IO_PHASE: AtomicUsize = AtomicUsize::new(0);
-static SWITCH_RELOAD_FD4IO_DRAIN_WAITS: AtomicUsize = AtomicUsize::new(0);
-static SWITCH_RELOAD_FD4IO_COMMITTED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_PHASE;
+pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_DRAIN_WAITS;
+pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_COMMITTED;
 const SWITCH_RELOAD_FD4IO_IDLE: usize = 0;
 const SWITCH_RELOAD_FD4IO_DRAIN: usize = 1;
 const SWITCH_RELOAD_FD4IO_COMMIT: usize = 2;

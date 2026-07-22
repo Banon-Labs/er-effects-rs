@@ -68,8 +68,8 @@ static PROFILE_05_010_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::new();
 /// for later opens. This keeps the DLL self-contained: no shipped GFx, only in-memory edits
 /// against the game's own loaded bytes.
 static OPTIONS_02_040_QUIT4_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::new();
-static OPTIONS_02_040_QUIT4_RUNTIME_SERVES: AtomicUsize = AtomicUsize::new(0);
-static OPTIONS_02_040_QUIT4_RUNTIME_FAILURES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OPTIONS_02_040_QUIT4_RUNTIME_SERVES;
+pub(crate) use er_telemetry::counters::OPTIONS_02_040_QUIT4_RUNTIME_FAILURES;
 
 fn load_memory_gfx_from_env(var: &str, slot: &OnceLock<Vec<u8>>, label: &str) {
     // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): the env-driven memory-GFX override

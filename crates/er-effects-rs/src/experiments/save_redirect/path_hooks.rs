@@ -95,7 +95,7 @@ pub(crate) fn save_trace_enabled() -> bool {
             .exists()
 }
 
-static OBSERVED_ACTIVE_STEAM_ID64: AtomicU64 = AtomicU64::new(0);
+pub(crate) use er_telemetry::counters::OBSERVED_ACTIVE_STEAM_ID64;
 
 fn steam_id64_from_wide_save_path(path: &[u16]) -> Option<u64> {
     const ELDENRING: &[u16] = &[
@@ -348,10 +348,10 @@ static SAVE_REDIRECT_DIR_W: OnceLock<Vec<u16>> = OnceLock::new();
 /// are redirected to that staged tree, never back to this source path.
 static SAVE_DIRECT_SOURCE_FILE: OnceLock<PathBuf> = OnceLock::new();
 static SAVE_DIRECT_STAGE_ROOT: OnceLock<PathBuf> = OnceLock::new();
-static SAVE_DIRECT_STAGE_DONE_STEAM_ID: AtomicU64 = AtomicU64::new(0);
-static SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID: AtomicU64 = AtomicU64::new(0);
-static SAVE_DIRECT_STAGE_DIAG_HITS: AtomicU64 = AtomicU64::new(0);
-static SAVE_DIRECT_STAGE_NO_STEAMID_HITS: AtomicU64 = AtomicU64::new(0);
+pub(crate) use er_telemetry::counters::SAVE_DIRECT_STAGE_DONE_STEAM_ID;
+pub(crate) use er_telemetry::counters::SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID;
+pub(crate) use er_telemetry::counters::SAVE_DIRECT_STAGE_DIAG_HITS;
+pub(crate) use er_telemetry::counters::SAVE_DIRECT_STAGE_NO_STEAMID_HITS;
 static SAVE_DIRECT_STAGE_LAST_NO_STEAMID_KIND: AtomicUsize =
     AtomicUsize::new(DIRECT_STAGE_NO_STEAMID_KIND_NONE);
 const DIRECT_STAGE_NO_STEAMID_KIND_NONE: usize = 0;
@@ -597,11 +597,11 @@ static SAVE_REDIRECT_ORIG_FINDFIRSTW: AtomicUsize = AtomicUsize::new(HOOK_ORIGIN
 /// the game build AND open the full save path under our tree NATIVELY (Wine does case-insensitive
 /// resolution), so the character is read without depending on intercepting each handle-relative open.
 static SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-static SAVE_REDIRECT_SHGFP_LOGGED: AtomicUsize = AtomicUsize::new(0);
-static SAVE_REDIRECT_SHGFP_APPDATA_REQUESTS: AtomicUsize = AtomicUsize::new(0);
-static SAVE_REDIRECT_SHGFP_DIRECT_FILE_BLOCKS: AtomicUsize = AtomicUsize::new(0);
-static SAVE_REDIRECT_SHGFP_FIRST_LOAD_DONE_BLOCKS: AtomicUsize = AtomicUsize::new(0);
-static SAVE_REDIRECT_SHGFP_NO_ROOT_BLOCKS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_LOGGED;
+pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_APPDATA_REQUESTS;
+pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_DIRECT_FILE_BLOCKS;
+pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_FIRST_LOAD_DONE_BLOCKS;
+pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_NO_ROOT_BLOCKS;
 /// One-shot redirect latch (user design 2026-06-23): the gold is provided via the Z: staged dir for
 /// the FIRST load (reading from Z: works), but writing to Z: fails (Wine free-space) AND would mutate
 /// the user's save. So once the gold profile is loaded (profile_slot_active != 0), we STOP redirecting
@@ -613,7 +613,7 @@ pub(crate) static SAVE_FIRST_LOAD_DONE: std::sync::atomic::AtomicBool =
 /// GetFileAttributesW/FindFirstFileW hit the save), so hook the ntdll chokepoint to SEE the actual
 /// open of ER0000.sl2 -- its NT path form and whether it is relative to a RootDirectory handle.
 static SAVE_REDIRECT_ORIG_NTCREATEFILE: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-static SAVE_NTCREATE_DIAG_LOGGED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SAVE_NTCREATE_DIAG_LOGGED;
 const SAVE_NTCREATE_DIAG_MAX: usize = 120;
 /// THE corruption fix (corrupted-save-re-findings): the save commit prechecks free space via
 /// GetDiskFreeSpaceExW(saveDir), which on the Wine Z:->/home drive mapping returns bogus/ZERO free
@@ -621,41 +621,41 @@ const SAVE_NTCREATE_DIAG_MAX: usize = 120;
 /// We hook it to report ample free space for the save dir so the game's OWN save flow writes our
 /// staged save (no hardcoded paths, no Steam Cloud).
 static SAVE_REDIRECT_ORIG_GETDISKFREEW: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-static SAVE_DISKFREE_LOGGED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SAVE_DISKFREE_LOGGED;
 /// The game doesn't call kernel32!GetDiskFreeSpaceExW from our hook (no fire) -- under Wine all
 /// free-space queries funnel to ntdll!NtQueryVolumeInformationFile. Override the AVAILABLE allocation
 /// units for FileFsSizeInformation(3)/FileFsFullSizeInformation(7) so the save-commit free-space
 /// precheck sees ample space regardless of the bogus Z:-drive report. THE corruption fix, robust.
 static SAVE_REDIRECT_ORIG_NTQUERYVOLINFO: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-static SAVE_VOLINFO_LOGGED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SAVE_VOLINFO_LOGGED;
 static SAVE_REDIRECT_INSTALL_ONCE: Once = Once::new();
-static SAVE_STEAM_ID_ENV_NORMALIZE_DONE: AtomicUsize = AtomicUsize::new(0);
-static SAVE_STEAM_API_STEAM_ID_LOGGED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SAVE_STEAM_ID_ENV_NORMALIZE_DONE;
+pub(crate) use er_telemetry::counters::SAVE_STEAM_API_STEAM_ID_LOGGED;
 /// Count of save-path opens we have redirected, logged for the first few so a probe can CONFIRM the
 /// game actually opened our staged save through the redirect (not the default dir). Capped so a
 /// busy IO loop cannot spam the debug log.
-static SAVE_REDIRECT_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SAVE_REDIRECT_HITS;
 const SAVE_REDIRECT_LOG_MAX: usize = 8;
 /// Diagnostic: total CreateFileW calls our detour observed (proves the hook is live at all under
 /// Wine's kernel32->kernelbase forwarding), and a bounded log of save-LIKE paths so we can see the
 /// exact path form the game opens the save with (to fix the filter or confirm a missed hook).
-static SAVE_CREATEFILEW_CALLS: AtomicUsize = AtomicUsize::new(0);
-static SAVE_CREATEFILEW_DIAG_LOGGED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_CALLS;
+pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_DIAG_LOGGED;
 const SAVE_CREATEFILEW_DIAG_MAX: usize = 200;
 /// Sparse-sampling counter for the save-LIKE CreateFileW diag line (the `save_like` opens churn
 /// thousands of identical lines per run). Logs the first 8 hits then only at power-of-two intervals
 /// (16/32/64/...) -- same rate-limit pattern as `now_loading_helper_update_hook` -- so the diagnostic
 /// keeps its early window and a sparse tail without flooding the debug log.
-static SAVE_CREATEFILEW_DIAG_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_DIAG_HITS;
 static SAVE_CREATEFILEW_LAST_SAVE_LIKE_KIND: AtomicUsize = AtomicUsize::new(SAVE_PATH_KIND_NONE);
-static SAVE_CREATEFILEW_STAGE_STEAMID_DIR_HITS: AtomicUsize = AtomicUsize::new(0);
-static SAVE_CREATEFILEW_STAGE_SAVE_FILE_HITS: AtomicUsize = AtomicUsize::new(0);
-static SAVE_CREATEFILEW_CONFIGURED_FILE_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_STAGE_STEAMID_DIR_HITS;
+pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_STAGE_SAVE_FILE_HITS;
+pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_CONFIGURED_FILE_HITS;
 const MISSING_SAVE_DIALOG_IDLE: usize = 0;
 const MISSING_SAVE_DIALOG_PENDING: usize = 1;
 const MISSING_SAVE_DIALOG_READY: usize = 2;
 static MISSING_SAVE_DIALOG_STATE: AtomicUsize = AtomicUsize::new(MISSING_SAVE_DIALOG_IDLE);
-static MISSING_SAVE_BLOCKED_IO_LOGGED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::MISSING_SAVE_BLOCKED_IO_LOGGED;
 static SAVE_QUERY_LAST_SAVE_LIKE_KIND: AtomicUsize = AtomicUsize::new(SAVE_PATH_KIND_NONE);
 
 fn set_missing_save_dialog_state(state: usize) {
@@ -674,9 +674,9 @@ pub(crate) fn missing_save_selection_pending() -> bool {
 pub(crate) fn direct_save_file_source_active() -> bool {
     SAVE_DIRECT_SOURCE_FILE.get().is_some()
 }
-static SAVE_QUERY_STAGE_STEAMID_DIR_HITS: AtomicUsize = AtomicUsize::new(0);
-static SAVE_QUERY_STAGE_SAVE_FILE_HITS: AtomicUsize = AtomicUsize::new(0);
-static SAVE_QUERY_CONFIGURED_FILE_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SAVE_QUERY_STAGE_STEAMID_DIR_HITS;
+pub(crate) use er_telemetry::counters::SAVE_QUERY_STAGE_SAVE_FILE_HITS;
+pub(crate) use er_telemetry::counters::SAVE_QUERY_CONFIGURED_FILE_HITS;
 const SAVE_PATH_KIND_NONE: usize = 0;
 const SAVE_PATH_KIND_ELDENRING_ROOT: usize = 1;
 const SAVE_PATH_KIND_GRAPHICS_CONFIG: usize = 2;
@@ -689,7 +689,7 @@ const SAVE_PATH_KIND_OTHER_SAVE_LIKE: usize = 6;
 /// (GraphicsConfig.xml etc.) BEFORE the actual save read, hiding whether/with-what-steamid the game
 /// ever queries ER0000.sl2. This separate counter guarantees those queries are always logged. Reveals
 /// the exact `EldenRing\<steamid>\ER0000.sl2` path the game builds (steamid match vs the staged 766).
-static SAVE_SL2_QUERY_LOGGED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SAVE_SL2_QUERY_LOGGED;
 const SAVE_SL2_QUERY_MAX: usize = 40;
 /// Log EVERY CreateFileW path for the first N calls (the whole early-boot save-detection window), so
 /// we can see exactly what the game opens after our staged EldenRing\ dir (why it never reads the
@@ -699,7 +699,7 @@ const SAVE_CREATEFILEW_DIAG_ALL_BELOW: usize = 120;
 /// Frames of "profile summary present but ZERO active slots" tolerated before the save-load watchdog
 /// aborts. ~15s at 60fps -- long enough to ignore the boot transient before the summary is parsed,
 /// short enough to fast-fail well under the runtime cap instead of stalling on the privacy policy.
-pub(crate) static SAVE_WATCHDOG_ZERO_FRAMES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SAVE_WATCHDOG_ZERO_FRAMES;
 pub(crate) const SAVE_WATCHDOG_ZERO_BUDGET: usize = 900;
 
 /// Convert a configured path root to the Wine drive form the in-process `CreateFileW` accepts.

@@ -102,51 +102,51 @@ const GX_COMMAND_QUEUE_RVA: usize = 0x8012a8;
 // Persistent portrait-overlay draw state. The COM objects are leaked (`into_raw`) for the process lifetime
 // and re-borrowed (`from_raw_borrowed`) each Present -- storing raw `usize` keeps them `Send` across the
 // `static` boundary (windows-rs COM types are `!Send`). State machine: 0=uninit, 1=ready, 2=failed/give-up.
-static OVERLAY_DRAW_STATE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OVERLAY_DRAW_STATE;
 static OVERLAY_PORTRAIT_VERSION: AtomicUsize = AtomicUsize::new(usize::MAX); // last LOADING_BG_PORTRAIT_RGBA_VERSION composited to the backbuffer
 static OVERLAY_ALLOCATOR: AtomicUsize = AtomicUsize::new(0); // ID3D12CommandAllocator (DIRECT)
 static OVERLAY_LIST: AtomicUsize = AtomicUsize::new(0); // ID3D12GraphicsCommandList (DIRECT, kept closed)
 static OVERLAY_FENCE: AtomicUsize = AtomicUsize::new(0); // ID3D12Fence
 static OVERLAY_QUEUE: AtomicUsize = AtomicUsize::new(0); // our OWN private DIRECT ID3D12CommandQueue (leaked)
 static OVERLAY_FENCE_VAL: AtomicU64 = AtomicU64::new(0); // monotonically incremented per submit
-static OVERLAY_PORTRAIT_W: AtomicUsize = AtomicUsize::new(0);
-static OVERLAY_PORTRAIT_H: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OVERLAY_PORTRAIT_W;
+pub(crate) use er_telemetry::counters::OVERLAY_PORTRAIT_H;
 /// Successful backbuffer composites submitted (RAM semaphore that the portrait is actually being drawn).
-pub(crate) static OVERLAY_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OVERLAY_DRAW_HITS;
 /// Timing window for successful overlay composites. These prove whether the portrait overlay itself is
 /// presenting below refresh rate (draw FPS), independent of whether the source portrait changed.
-pub(crate) static OVERLAY_DRAW_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OVERLAY_DRAW_LAST_MS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OVERLAY_DRAW_FIRST_MS;
+pub(crate) use er_telemetry::counters::OVERLAY_DRAW_LAST_MS;
 /// Count of LIVE RE-UPLOADS: each time the overlay source texture was rebuilt from a fresh
 /// (version-bumped) `LOADING_BG_PORTRAIT_RGBA` -> proves the DISPLAYED head updated per-frame (followed
 /// the cursor), not froze on the first captured frame. `oracle_overlay_reuploads`.
-pub(crate) static OVERLAY_REUPLOADS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OVERLAY_REUPLOADS;
 /// Timing window for distinct source-frame updates that reached the overlay. These prove source playback
 /// FPS, and distinguish a slow source from a slow compositor.
-pub(crate) static OVERLAY_REUPLOAD_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OVERLAY_REUPLOAD_LAST_MS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OVERLAY_REUPLOAD_FIRST_MS;
+pub(crate) use er_telemetry::counters::OVERLAY_REUPLOAD_LAST_MS;
 /// Consecutive successful overlay presents that reused the same source version. High max == visible held
 /// frames/choppiness even if the overlay presents every frame.
-pub(crate) static OVERLAY_STALE_PRESENT_RUN: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OVERLAY_STALE_PRESENT_MAX: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OVERLAY_STALE_PRESENT_RUN;
+pub(crate) use er_telemetry::counters::OVERLAY_STALE_PRESENT_MAX;
 /// Per-stage timing for the CPU full-backbuffer composite. These answer whether the bottleneck is GPU
 /// readback synchronization, CPU per-pixel blending, or GPU upload synchronization.
-pub(crate) static OVERLAY_STAGE_READBACK_WAIT_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OVERLAY_STAGE_READBACK_WAIT_MS_SUM: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OVERLAY_STAGE_READBACK_WAIT_MS_MAX: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OVERLAY_STAGE_BLEND_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OVERLAY_STAGE_BLEND_MS_SUM: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OVERLAY_STAGE_BLEND_MS_MAX: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OVERLAY_STAGE_UPLOAD_WAIT_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OVERLAY_STAGE_UPLOAD_WAIT_MS_SUM: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OVERLAY_STAGE_UPLOAD_WAIT_MS_MAX: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OVERLAY_STAGE_READBACK_WAIT_COUNT;
+pub(crate) use er_telemetry::counters::OVERLAY_STAGE_READBACK_WAIT_MS_SUM;
+pub(crate) use er_telemetry::counters::OVERLAY_STAGE_READBACK_WAIT_MS_MAX;
+pub(crate) use er_telemetry::counters::OVERLAY_STAGE_BLEND_COUNT;
+pub(crate) use er_telemetry::counters::OVERLAY_STAGE_BLEND_MS_SUM;
+pub(crate) use er_telemetry::counters::OVERLAY_STAGE_BLEND_MS_MAX;
+pub(crate) use er_telemetry::counters::OVERLAY_STAGE_UPLOAD_WAIT_COUNT;
+pub(crate) use er_telemetry::counters::OVERLAY_STAGE_UPLOAD_WAIT_MS_SUM;
+pub(crate) use er_telemetry::counters::OVERLAY_STAGE_UPLOAD_WAIT_MS_MAX;
 static OVERLAY_TIMING_EPOCH: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 /// Latches once the `now_loading` streaming screen (the tips+bar loading screen the portrait belongs on)
 /// has been seen this window. The correct STOP is this-seen-then-gone: the bar appeared, filled, and the
 /// game transitioned to gameplay. Reset per window on re-arm.
-static OVERLAY_NOW_LOADING_SEEN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OVERLAY_NOW_LOADING_SEEN;
 /// One-shot diagnostic when the anti-runaway backstop disables the loading portrait overlay.
-static OVERLAY_WORLD_STOP_LOGGED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OVERLAY_WORLD_STOP_LOGGED;
 
 // LOADING-SCREEN WINDOW state machine. DECISIVE timeline (run portrait-swap-fix2-noteardown-20260702-213407):
 // the tips+bar loading screen the loaded character sits on is the `now_loading` streaming flag, TRUE from
@@ -158,12 +158,12 @@ static OVERLAY_WORLD_STOP_LOGGED: AtomicUsize = AtomicUsize::new(0);
 // stops only when it has been seen and then drops (the game's own transition). A generous present-counted
 // backstop guards the (non-product) case where now_loading never appears, so we can't composite forever.
 /// 1 = stopped (window over); stays stopped until a NEW loading window re-arms it.
-static OVERLAY_STOPPED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OVERLAY_STOPPED;
 /// `PROFILE_LOADSCREEN_TABLE_BUILDS` at the moment of the stop -- a later build = a new window (re-arm).
-static OVERLAY_STOP_TABLE_BUILDS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OVERLAY_STOP_TABLE_BUILDS;
 /// Presents counted while IN_WORLD but now_loading NOT yet seen -- the pre-loading-screen bridge gap. Reset
 /// to 0 the instant now_loading latches (then the seen-then-gone stop takes over) and on re-arm.
-static OVERLAY_BRIDGE_PRESENTS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OVERLAY_BRIDGE_PRESENTS;
 /// `load_done && !fake_vis` can assert before the visible loading surface finishes its fade/hand-off. Keep
 /// compositing for a bounded bridge after that predicate so the portrait does not pop off while the user
 /// still sees the loading screen. The product stop is now the native LoadingScreen close/result semaphore;
@@ -175,11 +175,11 @@ const OVERLAY_LOAD_DONE_VISIBLE_BRIDGE_PRESENTS: usize = 360;
 /// overlay errs toward holding the portrait (the product requirement) over popping early (the bug).
 const OVERLAY_NOWLOAD_BRIDGE_MAX_PRESENTS: usize = 60000;
 /// RAM oracle: number of overlay window stops (`oracle_overlay_window_stops`).
-pub(crate) static OVERLAY_WINDOW_STOPS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OVERLAY_WINDOW_STOPS;
 /// RAM oracle: last stop reason (`oracle_overlay_stop_reason`): 0=none yet, 1=load-done bridge elapsed,
 /// 3=anti-runaway backstop (loading never stopped cleanly), 4=legacy native now-loading Gauge_3 terminal
 /// frame, 5=native LoadingScreen close/result handoff (preferred product stop).
-pub(crate) static OVERLAY_STOP_REASON: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OVERLAY_STOP_REASON;
 
 /// PE image range `[base, base+SizeOfImage)` read from the in-memory PE headers at `base`.
 unsafe fn pe_image_range(base: usize) -> Option<(usize, usize)> {
@@ -338,13 +338,13 @@ unsafe fn find_d3d12_resource(start: usize) -> Option<ID3D12Resource> {
 // the largest-candidate heuristic. Pinning the CANDIDATE POINTER (re-QI'd each frame) -- not the resource
 // handle -- avoids the stale-cache dangling-handle bug that killed `readback_cached_content_rgba8`.
 /// Pinned content-RT candidate object pointer (0 = unpinned). `oracle_portrait_rt_pin`.
-pub(crate) static PROFILE_RT_PIN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::PROFILE_RT_PIN;
 /// Times the pin moved to a DIFFERENT candidate after first latch (`oracle_portrait_rt_pin_switches`).
 /// >0 on a single load window means the content source was unstable -- the swap-bug tripwire.
-pub(crate) static PROFILE_RT_PIN_SWITCHES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::PROFILE_RT_PIN_SWITCHES;
 /// Pinned depth-sibling candidate pointer (0 = unpinned); latched when a depth readback yields a mask
 /// with clean bg/head separation, so the alpha cutout can't sample a foreign slot's depth buffer.
-pub(crate) static PROFILE_DEPTH_PIN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::PROFILE_DEPTH_PIN;
 // COLOR/DEPTH SOURCE PROVENANCE (green-face wrong-buffer fix, 2026-07-03). The offscreen nest holds
 // same-size same-format non-final render targets (material/G-buffer: flat-green face, saturated
 // orange emissive -- user screenshot), and the whole-nest "largest texture" scan can pick one when
@@ -353,15 +353,15 @@ pub(crate) static PROFILE_DEPTH_PIN: AtomicUsize = AtomicUsize::new(0);
 // color (identity-proven by construction), and scan-resolved frames hold the bridge instead.
 /// Per-tick color provenance: 1 = scene-bundle RTV (identity-proven), 0 = whole-nest scan fallback.
 /// Written by the readback, consumed immediately by the same-thread draw tick.
-pub(crate) static PROFILE_COLOR_SRC_BUNDLE_LAST: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::PROFILE_COLOR_SRC_BUNDLE_LAST;
 /// Cumulative ticks whose color resolved from the scene bundle vs the scan fallback.
-pub(crate) static PROFILE_COLOR_FROM_BUNDLE: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static PROFILE_COLOR_FROM_SCAN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::PROFILE_COLOR_FROM_BUNDLE;
+pub(crate) use er_telemetry::counters::PROFILE_COLOR_FROM_SCAN;
 /// Cumulative depth resolutions via the deterministic bundle chain vs the heuristic BFS fallback.
-pub(crate) static PROFILE_DEPTH_FROM_CHAIN: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static PROFILE_DEPTH_FROM_BFS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::PROFILE_DEPTH_FROM_CHAIN;
+pub(crate) use er_telemetry::counters::PROFILE_DEPTH_FROM_BFS;
 /// Keyed+clean frames NOT displayed because their color was scan-resolved (no bundle provenance).
-pub(crate) static PROFILE_PUBLISH_SKIPPED_UNPAIRED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::PROFILE_PUBLISH_SKIPPED_UNPAIRED;
 
 // Static-RE'd offscreen scene-target member chain (Ghidra dump decompiles, 2026-07-03 -- the
 // black-background-on-reload root fix). The CSEzOffscreenRend stores its GXSgCompositeScene facade
@@ -382,7 +382,7 @@ const TARGET_BUNDLE_DSV_VIEW_OFFSET: usize = 0x40;
 /// resolving BOTH from one bundle guarantees the color and depth are the same render pass's siblings.
 const TARGET_BUNDLE_RTV_VIEW_OFFSET: usize = 0x30;
 /// One-shot diagnostic latch for the deterministic depth-view chain (first resolve + first miss).
-static DEPTH_CHAIN_DIAG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::DEPTH_CHAIN_DIAG;
 
 /// Find the offscreen scene's DEPTH-STENCIL resource (same-size sibling of the color RT, observed
 /// format 19 = R32G8X24_TYPELESS). Used for the depth-key transparent background: background =

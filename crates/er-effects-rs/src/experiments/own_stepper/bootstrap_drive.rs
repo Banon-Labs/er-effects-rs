@@ -106,7 +106,7 @@ pub(crate) unsafe fn worldres_coldbuild_probe(base: usize) {
     const STUB_STATE_OFFSET: usize = 0x48;
     const STUB_STATE_VALUE: i32 = 6;
     const PROBE_DONE: usize = 1;
-    static COLDBUILD_DONE: AtomicUsize = AtomicUsize::new(0);
+    pub(crate) use er_telemetry::counters::COLDBUILD_DONE;
     if COLDBUILD_DONE.swap(PROBE_DONE, Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS {
         return;
     }
@@ -263,9 +263,9 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
     const LOG_INTERVAL: usize = 30;
     const WAIT_INC: usize = 1;
     static MOUNT_PHASE: AtomicUsize = AtomicUsize::new(PHASE_INIT);
-    static MOUNT_WAITS: AtomicUsize = AtomicUsize::new(0);
+    pub(crate) use er_telemetry::counters::MOUNT_WAITS;
     // Fire the warm FD4 worker-kick (0x67b4e0) at most once per process.
-    static WARM_KICK_FIRED: AtomicUsize = AtomicUsize::new(0);
+    pub(crate) use er_telemetry::counters::WARM_KICK_FIRED;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if gm == null {
         return;

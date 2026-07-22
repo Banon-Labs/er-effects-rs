@@ -1,4 +1,4 @@
-static AUTOLOAD_HANDOFF_PARENT_STATE_FIX_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::AUTOLOAD_HANDOFF_PARENT_STATE_FIX_COUNT;
 
 fn poll_cached_mms18_ending_request_advancer() {
     // Native full deserialize owns GameMan::warp_requested and MoveMapStep::CheckReturnToTitle

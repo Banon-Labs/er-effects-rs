@@ -15,9 +15,9 @@ use super::*;
 // every MenuWindowJob::Run filename that appears -- so the log reveals whether a menu opened and its
 // structure. Then it unblocks. No effect on the default/product path.
 const HARNESS_DISC_DIK_ESCAPE: u8 = 0x01;
-static HARNESS_DISC_STABLE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::HARNESS_DISC_STABLE;
 static HARNESS_DISC_PHASE: AtomicUsize = AtomicUsize::new(0); // 0 wait,1 press,2 release,3 observe,4 done
-static HARNESS_DISC_PHASE_FRAME: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::HARNESS_DISC_PHASE_FRAME;
 static HARNESS_DISC_SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
 /// DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): the agent-owned switch-harness
@@ -159,8 +159,8 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
         // each of its frames; it stops the moment the screen is destroyed). Keep owning while it ticks, plus a
         // short grace to cover its fade-out, so the native screen is never exposed; then release to gameplay.
         let native_loadscreen_up = {
-            static LAST_LOADSCREEN_HITS: AtomicUsize = AtomicUsize::new(0);
-            static LOADSCREEN_GRACE: AtomicUsize = AtomicUsize::new(0);
+            pub(crate) use er_telemetry::counters::LAST_LOADSCREEN_HITS;
+            pub(crate) use er_telemetry::counters::LOADSCREEN_GRACE;
             const LOADSCREEN_GRACE_FRAMES: usize = 12;
             let hits = LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst);
             if LAST_LOADSCREEN_HITS.swap(hits, Ordering::SeqCst) != hits {

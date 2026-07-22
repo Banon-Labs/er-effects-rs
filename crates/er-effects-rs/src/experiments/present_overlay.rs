@@ -42,12 +42,12 @@ use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 
 use super::*;
 
-/// Original `IDXGISwapChain::Present` / `Present1` trampolines; 0 until installed.
-static PRESENT_ORIG: AtomicUsize = AtomicUsize::new(0);
-static PRESENT1_ORIG: AtomicUsize = AtomicUsize::new(0);
-static PRESENT_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 /// Per-frame Present hit counter (RAM semaphore that the overlay hook is live + firing).
-pub(crate) static PRESENT_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::PRESENT_HOOK_HITS;
+pub(crate) use er_telemetry::counters::PRESENT_HOOK_INSTALLED;
+/// Original `IDXGISwapChain::Present` / `Present1` trampolines; 0 until installed.
+pub(crate) use er_telemetry::counters::PRESENT_ORIG;
+pub(crate) use er_telemetry::counters::PRESENT1_ORIG;
 
 /// `IDXGISwapChain::Present` vtable index: IUnknown(3) + IDXGIObject(4) + IDXGIDeviceSubObject(1) = slot 8.
 const PRESENT_VTABLE_INDEX: usize = 8;
@@ -67,53 +67,53 @@ type Present1Fn = unsafe extern "system" fn(*mut c_void, u32, u32, *const c_void
 const G_GX_DRAW_CONTEXT_RVA: usize = 0x47ef360;
 /// `GxDrawContext+0x128` = begin pointer of the per-window render-output vector (vector object at +0x120).
 const GXDC_OUTPUT_VEC_BEGIN_OFFSET: usize = 0x128;
+pub(crate) use er_telemetry::counters::GAME_BASE;
 /// Set once we've found the GAME's swapchain and hooked its REAL Present/Present1. (The earlier "dummy
 /// swapchain vtable funcs differ under vkd3d-proton" theory was unsound -- under Proton all dxgi.dll
 /// swapchains share one DXVK `CDXGISwapChain` vtable, so Present(8)/Present1(22) are the same function for
 /// every swapchain. The real prior blocker was the FIND missing the object, so MinHook was never attempted
 /// on a real swapchain; dinput8 MinHooks fire, so the hook path itself is sound.)
-static GAME_PRESENT_HOOKED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static GAME_SWAPCHAIN_FIND_TRIES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::GAME_PRESENT_HOOKED;
+/// The found GAME swapchain pointer + game module base, latched in `try_install_game_present_hook`. The
+/// Present detour composites the portrait only when `this` matches `GAME_SWAPCHAIN` -- the shared dxgi
+/// vtable means the detour ALSO fires for our throwaway dummy swapchain, which we must never draw on.
+pub(crate) use er_telemetry::counters::GAME_SWAPCHAIN;
+pub(crate) use er_telemetry::counters::GAME_SWAPCHAIN_FIND_TRIES;
 /// The dummy swapchain's resolved `Present(8)` / `Present1(22)` addrs. Under vkd3d-proton EVERY dxgi
 /// swapchain shares one DXVK `CDXGISwapChain` vtable, so the GAME swapchain's `vtable[8]`/`vtable[22]`
 /// are byte-identical to these (runtime-proven: resolved 0x..209f0 == VMT-swapped Present8 0x..209f0).
 /// This lets `swapchain_vtable_matches` confirm a candidate by READING + comparing these two slots --
 /// never by dispatching `QueryInterface`, which faults on a half-constructed early-boot object whose
 /// dxgi-ranged-but-bogus vtable can't be caught by `catch_unwind` (that AV killed the pump at +726ms).
-static PRESENT_RESOLVED_ADDR: AtomicUsize = AtomicUsize::new(0);
-static PRESENT1_RESOLVED_ADDR: AtomicUsize = AtomicUsize::new(0);
-/// The found GAME swapchain pointer + game module base, latched in `try_install_game_present_hook`. The
-/// Present detour composites the portrait only when `this` matches `GAME_SWAPCHAIN` -- the shared dxgi
-/// vtable means the detour ALSO fires for our throwaway dummy swapchain, which we must never draw on.
-static GAME_SWAPCHAIN: AtomicUsize = AtomicUsize::new(0);
-static GAME_BASE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::PRESENT_RESOLVED_ADDR;
+pub(crate) use er_telemetry::counters::PRESENT1_RESOLVED_ADDR;
 
 // === Swapchain-find reject attribution (RAM oracles) =============================================
 // The 2026-07-15 native-Windows runs burned three probes on an opaque "chain miss": the walk gave no
 // way to tell a null chain link from a REAL candidate rejected by the vtable-equality check. Every
 // find attempt now stores its terminal stage + candidate facts so telemetry alone names the failing
 // predicate (oracle_present_find_* in write_game_module_oracles).
-/// Last find stage (see `FIND_STAGE_*`): which link/predicate the most recent attempt ended on.
-pub(crate) static PRESENT_FIND_STAGE: AtomicUsize = AtomicUsize::new(0);
-/// Last non-null chain candidate (`*output`), its vtable pointer, and its Present(8)/Present1(22).
-pub(crate) static PRESENT_FIND_CANDIDATE: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static PRESENT_FIND_CANDIDATE_VT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static PRESENT_FIND_GOT8: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static PRESENT_FIND_GOT22: AtomicUsize = AtomicUsize::new(0);
-/// Owning module of the candidate's vtable: 0=unknown/not-module-backed, 1=dxgi.dll, 2=the game exe
-/// (mis-layout red flag), 3=another module (overlay/wrapper DLL -- name in the debug log).
-pub(crate) static PRESENT_FIND_VT_MODULE_KIND: AtomicUsize = AtomicUsize::new(0);
-/// Consecutive tries that yielded the SAME candidate pointer (the QI-fallback stability gate).
-pub(crate) static PRESENT_FIND_STREAK: AtomicUsize = AtomicUsize::new(0);
-static PRESENT_FIND_LAST_CANDIDATE: AtomicUsize = AtomicUsize::new(0);
 /// How the game swapchain was accepted: 0=not yet, 1=exact vtable match against the dummy-resolved
 /// Present/Present1 (the vkd3d shared-vtable fast path), 2=module-backed + stable + QI fallback (the
 /// native-Windows / wrapped-swapchain path).
-pub(crate) static PRESENT_ACCEPT_PATH: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::PRESENT_ACCEPT_PATH;
 /// Backbuffer DXGI_FORMAT.0 from the first Present's GetDesc1 (RAM oracle: makes the native-Windows
 /// HDR/10-bit case, DXGI_FORMAT_R10G10B10A2_UNORM=24, directly attributable instead of inferred from
 /// zero composite draw-hits). 0 until the first present.
-pub(crate) static PRESENT_BACKBUFFER_FORMAT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::PRESENT_BACKBUFFER_FORMAT;
+/// Last non-null chain candidate (`*output`), its vtable pointer, and its Present(8)/Present1(22).
+pub(crate) use er_telemetry::counters::PRESENT_FIND_CANDIDATE;
+pub(crate) use er_telemetry::counters::PRESENT_FIND_CANDIDATE_VT;
+pub(crate) use er_telemetry::counters::PRESENT_FIND_GOT8;
+pub(crate) use er_telemetry::counters::PRESENT_FIND_GOT22;
+pub(crate) use er_telemetry::counters::PRESENT_FIND_LAST_CANDIDATE;
+/// Last find stage (see `FIND_STAGE_*`): which link/predicate the most recent attempt ended on.
+pub(crate) use er_telemetry::counters::PRESENT_FIND_STAGE;
+/// Consecutive tries that yielded the SAME candidate pointer (the QI-fallback stability gate).
+pub(crate) use er_telemetry::counters::PRESENT_FIND_STREAK;
+/// Owning module of the candidate's vtable: 0=unknown/not-module-backed, 1=dxgi.dll, 2=the game exe
+/// (mis-layout red flag), 3=another module (overlay/wrapper DLL -- name in the debug log).
+pub(crate) use er_telemetry::counters::PRESENT_FIND_VT_MODULE_KIND;
 /// Consecutive same-candidate observations required before the QI fallback may dispatch through the
 /// candidate's vtable. A half-constructed transient does not survive consecutive frames in the game's
 /// single live output slot; the real swapchain does.
@@ -200,7 +200,7 @@ unsafe extern "system" fn present1_hook(
 const PROFILE_RENDERER_REQ_754_OFFSET: usize = 0x754;
 const PROFILE_RENDERER_REQ_755_OFFSET: usize = 0x755;
 /// Presents skipped because a profile-model build was in flight (RAM oracle for the crash mitigation).
-pub(crate) static PRESENT_COMPOSITE_BUILD_SKIPS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::PRESENT_COMPOSITE_BUILD_SKIPS;
 
 /// True while the just-kicked profile renderer's build-request latches are still set -- i.e. the engine
 /// is mid-build of the profile model + its offscreen RT. During this window the engine's OWN
@@ -219,7 +219,7 @@ fn profile_model_build_in_flight() -> bool {
 }
 
 /// Presents skipped because the now-loading display window has not opened yet (RAM oracle).
-pub(crate) static PRESENT_COMPOSITE_EARLY_SKIPS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::PRESENT_COMPOSITE_EARLY_SKIPS;
 
 /// True on native Windows, where our overlay compositing must be fully suppressed. Runtime-proven across
 /// 17 native-Windows runs (bd er-effects-rs-n4x, 2026-07-15): compositing on the GAME's shared D3D12
@@ -299,7 +299,7 @@ unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) {
     let _ = std::panic::catch_unwind(save_picker_overlay_input_tick);
 }
 
-static FACTORY2_ORIG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::FACTORY2_ORIG;
 type Factory2Fn =
     unsafe extern "system" fn(u32, *const windows::core::GUID, *mut *mut c_void) -> i32;
 

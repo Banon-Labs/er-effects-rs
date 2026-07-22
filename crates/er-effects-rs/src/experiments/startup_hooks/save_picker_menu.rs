@@ -12,27 +12,27 @@
 
 /// 1 while the live `05_010_ProfileSelect` window is OUR file-picker (rows = directory listing).
 /// 0 when it is the normal character-slot view.
-pub(crate) static SAVE_PICKER_MODE_ACTIVE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SAVE_PICKER_MODE_ACTIVE;
 /// 1 = the picker window was closed for a directory/page change; the menu-pump Run hook must
 /// resubmit a fresh `05_010` job (records already restaged) instead of restoring the System UI.
-pub(crate) static SAVE_PICKER_REOPEN_PENDING: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SAVE_PICKER_REOPEN_PENDING;
 /// 1 = a file was ingested from the picker; the menu-pump Run hook must resubmit `05_010` as the
 /// NORMAL slot view (picker mode already cleared) so the user picks a character slot next.
-pub(crate) static SAVE_PICKER_OPEN_SLOTS_PENDING: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SAVE_PICKER_OPEN_SLOTS_PENDING;
 /// Action object of the "Load Save Profiles" row; `system_quit_open_profile_load_dialog` derives
 /// the System dialog (action+0x8), submit queue and window list from it on every (re)submit.
-pub(crate) static SAVE_PICKER_ACTION_OBJ: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SAVE_PICKER_ACTION_OBJ;
 /// Diagnostics / telemetry oracles.
-pub(crate) static SAVE_PICKER_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SAVE_PICKER_REPOPULATE_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SAVE_PICKER_PICK_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SAVE_PICKER_PICK_REJECT_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SAVE_PICKER_RESUBMIT_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SAVE_PICKER_CANCEL_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SAVE_PICKER_STAGED_ROW_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SAVE_PICKER_OPEN_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_REPOPULATE_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_PICK_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_PICK_REJECT_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_RESUBMIT_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_CANCEL_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_STAGED_ROW_COUNT;
 /// Dialog whose row list must be rebuilt in menu-pump ownership (0 = none). Set by a
 /// navigation/page activation after restaging records; consumed by the Run hook.
-pub(crate) static SAVE_PICKER_REBUILD_PENDING_DIALOG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SAVE_PICKER_REBUILD_PENDING_DIALOG;
 
 /// Windows-form (`Z:\...`) string for a possibly Linux-form absolute path; drive-prefixed paths
 /// pass through with separators normalized. String twin of `system_quit_path_for_windows`.

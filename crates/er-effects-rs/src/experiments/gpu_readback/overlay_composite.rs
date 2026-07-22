@@ -33,41 +33,41 @@ use windows::Win32::Graphics::Direct3D12::{
 };
 use windows::core::BOOL;
 
-static OVERLAY_ROOT_SIGNATURE: AtomicUsize = AtomicUsize::new(0);
-static OVERLAY_PSO: AtomicUsize = AtomicUsize::new(0);
-static OVERLAY_SRV_HEAP: AtomicUsize = AtomicUsize::new(0);
-static OVERLAY_RTV_HEAP: AtomicUsize = AtomicUsize::new(0);
-static OVERLAY_GPU_TEXTURE: AtomicUsize = AtomicUsize::new(0);
-static OVERLAY_GPU_UPLOAD: AtomicUsize = AtomicUsize::new(0);
-static OVERLAY_GPU_UPLOAD_SIZE: AtomicU64 = AtomicU64::new(0);
-static OVERLAY_GPU_TEX_W: AtomicUsize = AtomicUsize::new(0);
-static OVERLAY_GPU_TEX_H: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OVERLAY_ROOT_SIGNATURE;
+pub(crate) use er_telemetry::counters::OVERLAY_PSO;
+pub(crate) use er_telemetry::counters::OVERLAY_SRV_HEAP;
+pub(crate) use er_telemetry::counters::OVERLAY_RTV_HEAP;
+pub(crate) use er_telemetry::counters::OVERLAY_GPU_TEXTURE;
+pub(crate) use er_telemetry::counters::OVERLAY_GPU_UPLOAD;
+pub(crate) use er_telemetry::counters::OVERLAY_GPU_UPLOAD_SIZE;
+pub(crate) use er_telemetry::counters::OVERLAY_GPU_TEX_W;
+pub(crate) use er_telemetry::counters::OVERLAY_GPU_TEX_H;
 static OVERLAY_GPU_TEX_STATE: AtomicUsize = AtomicUsize::new(0); // 0=COPY_DEST/unknown, 1=PIXEL_SHADER_RESOURCE
-static OVERLAY_GPU_TEX_VERSION: AtomicUsize = AtomicUsize::new(usize::MAX);
-static OVERLAY_TEXT_GPU_TEXTURE: AtomicUsize = AtomicUsize::new(0);
-static OVERLAY_TEXT_GPU_UPLOAD: AtomicUsize = AtomicUsize::new(0);
-static OVERLAY_TEXT_GPU_UPLOAD_SIZE: AtomicU64 = AtomicU64::new(0);
-static OVERLAY_TEXT_GPU_TEX_W: AtomicUsize = AtomicUsize::new(0);
-static OVERLAY_TEXT_GPU_TEX_H: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OVERLAY_GPU_TEX_VERSION;
+pub(crate) use er_telemetry::counters::OVERLAY_TEXT_GPU_TEXTURE;
+pub(crate) use er_telemetry::counters::OVERLAY_TEXT_GPU_UPLOAD;
+pub(crate) use er_telemetry::counters::OVERLAY_TEXT_GPU_UPLOAD_SIZE;
+pub(crate) use er_telemetry::counters::OVERLAY_TEXT_GPU_TEX_W;
+pub(crate) use er_telemetry::counters::OVERLAY_TEXT_GPU_TEX_H;
 static OVERLAY_TEXT_GPU_TEX_STATE: AtomicUsize = AtomicUsize::new(0); // 0=COPY_DEST/unknown, 1=PIXEL_SHADER_RESOURCE
-static OVERLAY_TEXT_GPU_TEX_VERSION: AtomicUsize = AtomicUsize::new(usize::MAX);
-static OVERLAY_PSO_FORMAT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OVERLAY_GPU_FAIL_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OVERLAY_GPU_FAIL_CODE: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OVERLAY_GPU_FAIL_VERSION: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OVERLAY_TEXT_GPU_TEX_VERSION;
+pub(crate) use er_telemetry::counters::OVERLAY_PSO_FORMAT;
+pub(crate) use er_telemetry::counters::OVERLAY_GPU_FAIL_COUNT;
+pub(crate) use er_telemetry::counters::OVERLAY_GPU_FAIL_CODE;
+pub(crate) use er_telemetry::counters::OVERLAY_GPU_FAIL_VERSION;
 /// Loading-screen build currently accepted by Present. When this changes, any already-published portrait
 /// snapshot is stale/previous-window content (often a different source resolution), so Present holds until
 /// a later live publish bumps `LOADING_BG_PORTRAIT_RGBA_VERSION` for this build.
-static OVERLAY_LOADSCREEN_BUILD_SEEN: AtomicUsize = AtomicUsize::new(0);
-static OVERLAY_LOADSCREEN_BASELINE_VERSION: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OVERLAY_LOADSCREEN_BUILD_SEEN;
+pub(crate) use er_telemetry::counters::OVERLAY_LOADSCREEN_BASELINE_VERSION;
 /// Native loading-bar final hits already consumed by this overlay window. Reset on re-arm so a prior
 /// load's terminal-frame latch cannot instantly affect the next loading portrait window.
-static OVERLAY_NATIVE_BAR_FINAL_HITS_SEEN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OVERLAY_NATIVE_BAR_FINAL_HITS_SEEN;
 /// Native LoadingScreen close/result hits already consumed by this overlay window. This fires after the
 /// post-100%-bar countdown and is the preferred stop for matching the visible loading-screen teardown.
-static OVERLAY_NATIVE_CLOSE_HITS_SEEN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OVERLAY_NATIVE_CLOSE_HITS_SEEN;
 /// Present counter for throttling the head pixel-oracle while the overlay is demoted.
-static OVERLAY_HEAD_PROBE_TICK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OVERLAY_HEAD_PROBE_TICK;
 
 const OVERLAY_SHADER_HLSL: &[u8] = br#"
 Texture2D portrait_tex : register(t0);

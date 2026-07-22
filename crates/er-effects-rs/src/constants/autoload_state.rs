@@ -90,15 +90,15 @@ pub(crate) const FULLREAD_PHASE_GUARD: usize = 3;
 pub(crate) const FULLREAD_PHASE_DONE: usize = 4;
 /// Live phase + drain-wait counters for the full-read chain (one-shot per run).
 pub(crate) static FULLREAD_PHASE: AtomicUsize = AtomicUsize::new(FULLREAD_PHASE_SUBMIT);
-pub(crate) static FULLREAD_DRAIN_WAITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::FULLREAD_DRAIN_WAITS;
 /// Terminal non-commit disarm counters for the full-read chain (bd er-effects-rs-ns4n). SUBMIT arms
 /// the native slot-request register (GameMan+0xb78, `requested_save_slot_load_index`); the in-game
 /// save manager services any >=0 request on the first frames after world arrival, running a second
 /// full deserialize into the live world (CSGaitemImp free-queue exhaustion, AV at live 0x67141a).
 /// Every DONE exit that does not hand off to the native confirm chain must clear the register; these
 /// count the clears and record the slot value the last clear removed (u32-packed i32; !0 == none).
-pub(crate) static FULLREAD_REQ_DISARM_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static FULLREAD_REQ_DISARM_LAST_PREV_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) use er_telemetry::counters::FULLREAD_REQ_DISARM_COUNT;
+pub(crate) use er_telemetry::counters::FULLREAD_REQ_DISARM_LAST_PREV_SLOT;
 /// LATCHED peak-load semaphore (bd er-effects-rs-ns4n follow-up). The live `oracle_char_*` fields read
 /// PlayerGameData directly, so a quit-to-title tears the character down and a final telemetry snapshot
 /// reads them empty even on a fully-successful run -- the load proof lived only in the mid-run
@@ -107,10 +107,10 @@ pub(crate) static FULLREAD_REQ_DISARM_LAST_PREV_SLOT: AtomicUsize = AtomicUsize:
 /// name), so `oracle_load_correctness_seen > 0` proves a real char reached the world regardless of a
 /// later quit. Process-lifetime (never reset within a session): it attests "a real character loaded at
 /// some point this run", which a quit or a later System->Quit switch cannot falsify.
-pub(crate) static LOADED_PEAK_SEEN_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static LOADED_PEAK_LEVEL: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static LOADED_PEAK_C30: AtomicI32 = AtomicI32::new(0);
-pub(crate) static LOADED_PEAK_NAME_LEN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::LOADED_PEAK_SEEN_COUNT;
+pub(crate) use er_telemetry::counters::LOADED_PEAK_LEVEL;
+pub(crate) use er_telemetry::counters::LOADED_PEAK_C30;
+pub(crate) use er_telemetry::counters::LOADED_PEAK_NAME_LEN;
 pub(crate) static LOADED_PEAK_NAME: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 /// The native full-read chain shares the semantic `title_menu_action_ready` menu readiness gate;
 /// it no longer latches a first-seen frame before starting the save-read phase machine.
@@ -403,20 +403,20 @@ pub(crate) const AUTO_ACCEPT_LOG_INTERVAL: usize = 30;
 /// its entry each call). The MessageBox builder hook -- which fires nested inside that Run when a job
 /// shows a `CS::MessageBoxDialog` -- reads this to learn WHICH job is building a (Seamless-suppressed)
 /// popup, so that job's next Run can be advanced past the never-shown modal.
-pub(crate) static CURRENT_MENU_WINDOW_JOB_RUN_JOB: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::CURRENT_MENU_WINDOW_JOB_RUN_JOB;
 /// A `MenuWindowJob` whose Run built a Seamless-suppressed (ERSC post-PAB) MessageBox. Its next Run
 /// is forced to `MenuJobResult(Success)` so the title `FixOrderJobSequence` steps past the popup that
 /// was never shown -- the same advance the ToS-skip performs. 0 = none pending.
-pub(crate) static MSGBOX_STALL_JOB: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::MSGBOX_STALL_JOB;
 /// Original finished-poll getter trampoline (0 until the hook installs).
 pub(crate) static MSGBOX_FINISHED_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static AUTO_ACCEPT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::AUTO_ACCEPT_INSTALLED;
 pub(crate) const AUTO_ACCEPT_NOT_INSTALLED: usize = 0;
 pub(crate) const AUTO_ACCEPT_INSTALLED_YES: usize = 1;
-pub(crate) static AUTO_ACCEPT_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::AUTO_ACCEPT_COUNT;
 /// Set once when the local player first exists in-world; gates the auto-accept OFF so in-game
 /// MessageBoxDialogs (which need real choices) are never force-accepted.
-pub(crate) static IN_WORLD_REACHED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::IN_WORLD_REACHED;
 pub(crate) const IN_WORLD_NOT_REACHED: usize = 0;
 pub(crate) const IN_WORLD_REACHED_YES: usize = 1;
 /// The fresh_deser load epoch whose world is genuinely LIVE (play_time advanced past that epoch's
@@ -425,14 +425,14 @@ pub(crate) const IN_WORLD_REACHED_YES: usize = 1;
 /// (load2+) becomes playable -- `IN_WORLD_REACHED` above is a stale latch that never re-arms during a
 /// switch, so it cannot stop the readback in-world (bd
 /// fps-killer-rootcaused-per-frame-gpu-readback-boot-view-not-stopping-inworld-load2). `usize::MAX` = none.
-pub(crate) static BOOT_VIEW_EPOCH_WORLD_LIVE: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) use er_telemetry::counters::BOOT_VIEW_EPOCH_WORLD_LIVE;
 /// FPS BAIL for own-menu reloads whose handoff signals never fire: when load2 stalls at the finalize
 /// (frozen), it builds no NEW loadscreen table and its play_time never advances, so NEITHER
 /// `loading_handoff` NOR `world_handoff` becomes true and the per-frame GPU readback runs forever
 /// (~20fps). The loading bar itself DOES fill (present=True/mms18 = world resident) so a permille + time
 /// bail reliably stops the readback regardless of the handoff signals. Per-epoch composite clock.
-pub(crate) static BOOT_VIEW_COMPOSITE_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
-pub(crate) static BOOT_VIEW_COMPOSITE_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::BOOT_VIEW_COMPOSITE_EPOCH;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_COMPOSITE_FIRST_MS;
 /// Loading bar permille (0..1000) at/above which the FPS bail stops the composite for an own-menu
 /// reload (bar essentially full = loading visually done).
 pub(crate) const BOOT_VIEW_EPOCH_BAIL_PERMILLE: u32 = 950;
@@ -465,7 +465,7 @@ pub(crate) static POLICY_TOS_SELECTOR_WRAPPER_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static POLICY_TOS_SELECTOR_CTOR_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static POLICY_TOS_TITLE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::POLICY_TOS_TITLE_HOOK_INSTALLED;
 pub(crate) const POLICY_TOS_TITLE_HOOK_NOT_INSTALLED: usize = 0;
 pub(crate) const POLICY_TOS_TITLE_HOOK_INSTALLED_YES: usize = 1;
 pub(crate) static POLICY_TOS_TITLE_TOTAL_BUILDS: AtomicUsize =
@@ -474,7 +474,7 @@ pub(crate) static POLICY_TOS_TITLE_TOTAL_BUILDS: AtomicUsize =
 /// suppression). Non-zero only when `policy_tos_suppress_enabled()` is on; the
 /// suppressed build returns null, mimicking the wrapper's native allocation-failure
 /// path so the unnecessary startup ToS modal is never constructed.
-pub(crate) static POLICY_TOS_TITLE_SUPPRESSED_BUILDS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::POLICY_TOS_TITLE_SUPPRESSED_BUILDS;
 /// Return value our suppressed ToS-modal wrapper hands back: 0 (null), identical to the
 /// native wrapper's allocation-failure return, a path the caller already tolerates.
 pub(crate) const POLICY_TOS_MODAL_SUPPRESSED_RETURN: usize = 0;
@@ -609,7 +609,7 @@ pub(crate) const SERVER_STATUS_LOGGING_IN_TEXT_ID: usize = 401_150;
 pub(crate) const SERVER_STATUS_RETRIEVING_DATA_TEXT_ID: usize = 401_160;
 pub(crate) const SERVER_STATUS_SAVING_DATA_TEXT_ID: usize = 401_165;
 pub(crate) static SERVER_STATUS_FORMATTER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static SERVER_STATUS_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SERVER_STATUS_HOOK_INSTALLED;
 pub(crate) const SERVER_STATUS_HOOK_NOT_INSTALLED: usize = 0;
 pub(crate) const SERVER_STATUS_HOOK_INSTALLED_YES: usize = 1;
 pub(crate) static SERVER_STATUS_TOTAL_SEEN: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
@@ -618,8 +618,8 @@ pub(crate) static SERVER_STATUS_LAST_STATE: AtomicUsize =
 pub(crate) static SERVER_STATUS_LAST_TEXT_ID: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static START_SERVER_STATUS_HOOK: Once = Once::new();
-pub(crate) static AUTO_ACCEPT_VT_LAST: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static AUTO_ACCEPT_VT_LOG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::AUTO_ACCEPT_VT_LAST;
+pub(crate) use er_telemetry::counters::AUTO_ACCEPT_VT_LOG;
 pub(crate) const AUTO_ACCEPT_VT_LOG_MAX: usize = 24;
 /// CS::SceneObjProxy ctor 0x14074a700 -- the fn the title dialog-build path runs to wrap the live
 /// host MenuWindow in a transient SceneObjProxy. Disasm-verified prologue: `mov %rdx,%rbx`
@@ -631,13 +631,13 @@ pub(crate) const AUTO_ACCEPT_VT_LOG_MAX: usize = 24;
 /// (bd live-dialog-probe6-factory-fires-returns-dialog-rdx-not-menuwindow-2026).
 pub(crate) const SCENE_OBJ_PROXY_CTOR_RVA: u32 = 0x74a700;
 /// Trampoline for the SceneObjProxy-ctor latch hook (0 = unset).
-pub(crate) static SCENE_OBJ_PROXY_CTOR_ORIG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SCENE_OBJ_PROXY_CTOR_ORIG;
 /// The host MenuWindow* latched from the SceneObjProxy ctor (incoming rdx) at title build. 0 until
 /// the title builds. Updated on every VALID (vtable-checked) call. Read by
 /// `locate_live_loadgame_node` (SeqCst); fail-closed when still 0.
-pub(crate) static LATCHED_MENU_WINDOW: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::LATCHED_MENU_WINDOW;
 /// One-shot install guard for the MenuWindow-latch factory hook (mirrors AUTO_ACCEPT_INSTALLED).
-pub(crate) static MENU_WINDOW_LATCH_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::MENU_WINDOW_LATCH_INSTALLED;
 pub(crate) const MENU_WINDOW_LATCH_NOT_INSTALLED: usize = 0;
 pub(crate) const MENU_WINDOW_LATCH_INSTALLED_YES: usize = 1;
 pub(crate) static START_MENU_WINDOW_LATCH: Once = Once::new();
@@ -737,12 +737,12 @@ pub(crate) static SYSTEM_QUIT_SAVE_GAME_GET_AND_FORMAT_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SYSTEM_QUIT_SAVE_GAME_RETURN_TITLE_REQUEST_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static SYSTEM_QUIT_DUPLICATE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_NOOP_ACTION_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_RETURN_DESKTOP_ACTION_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_SAVE_GAME_TEXT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_SAVE_GAME_CONFIRM_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_DUPLICATE_INSTALLED;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_NOOP_ACTION_INSTALLED;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_RETURN_DESKTOP_ACTION_INSTALLED;
+pub(crate) use er_telemetry::counters::PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_INSTALLED;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_GAME_TEXT_INSTALLED;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_GAME_CONFIRM_INSTALLED;
 pub(crate) const SYSTEM_QUIT_DUPLICATE_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_DUPLICATE_INSTALLED_YES: usize = 1;
 pub(crate) const SYSTEM_QUIT_NOOP_ACTION_NOT_INSTALLED: usize = 0;
@@ -755,44 +755,44 @@ pub(crate) const SYSTEM_QUIT_SAVE_GAME_TEXT_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_SAVE_GAME_TEXT_INSTALLED_YES: usize = 1;
 pub(crate) const SYSTEM_QUIT_SAVE_GAME_CONFIRM_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_SAVE_GAME_CONFIRM_INSTALLED_YES: usize = 1;
-pub(crate) static SYSTEM_QUIT_DUPLICATE_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_DUPLICATE_COUNT;
 /// Native first Quit-tab row action object (label is replaced to Save Game by our text hook). Captured
 /// from the row table immediately after the native first AddCancelButton call returns.
-pub(crate) static SYSTEM_QUIT_NATIVE_SAVE_GAME_ACTION_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_NATIVE_SAVE_GAME_ACTION_LAST_OBJECT;
 /// Native second Quit-tab row action object (Return to Desktop). The patched 4-slot GameEnd GFx can
 /// still dispatch this native object for the lower visual buttons; the action hook disambiguates those
 /// by the live dialog cursor so row 2/3 become Load Profile / Load Save Profiles instead of showing
 /// the native desktop confirmation.
 pub(crate) static SYSTEM_QUIT_NATIVE_RETURN_DESKTOP_ACTION_LAST_OBJECT: AtomicUsize =
     AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_NOOP_SELECTION_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_SAVE_GAME_TEXT_SUBSTITUTION_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_SAVE_GAME_CONFIRM_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_SAVE_GAME_CLOSE_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_WINDOW: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_FRAMES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_NOOP_SELECTION_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_GAME_TEXT_SUBSTITUTION_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_GAME_CONFIRM_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_GAME_CLOSE_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_WINDOW;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_FRAMES;
 /// Recorded cloned action implementation object for the quick-load row; only this action is routed.
-pub(crate) static SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT;
 /// Recorded `PropertyNewButtonController` for the quick-load row. This is the authoritative click
 /// dispatch identity when the GFx/native bridge bypasses the action-object thunk.
-pub(crate) static SYSTEM_QUIT_LOAD_PROFILE_CONTROLLER_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_LOAD_PROFILE_CONTROLLER_LAST_OBJECT;
 /// Recorded cloned action implementation object for the save-folder row; only this action opens the
 /// env-provided save directory.
-pub(crate) static SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_LAST_OBJECT;
 /// Recorded `PropertyNewButtonController` for the save-folder row. This is the authoritative click
 /// dispatch identity when the GFx/native bridge bypasses the action-object thunk.
-pub(crate) static SYSTEM_QUIT_OPEN_SAVE_DIR_CONTROLLER_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_OPEN_SAVE_DIR_SUCCESS_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_CONTROLLER_LAST_OBJECT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_SUCCESS_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT;
 /// Legacy fallback latch for older confirmation-based Save Game routing. The product Save Game row
 /// now requests save + closes menus directly and clears this latch so it never reaches the native
 /// Quit Game / return-title action.
-pub(crate) static SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG;
 /// Stable qword slot passed to the native `05_010_ProfileSelect` wrapper. The wrapper writes the
 /// MenuWindowJob pointer here and captures this slot for its later ProfileLoadDialog factory call.
-pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT;
 /// Live/deobf native `05_010_ProfileSelect` wrapper (`FUN_14081f7e0` dump -> live `0x14081f6f0`).
 pub(crate) const PROFILE_SELECT_WRAPPER_RVA: u32 = 0x81f6f0;
 /// Live/deobf native menu-job submit helper (`FUN_1407a9340` dump -> live `0x1407a9250`).
@@ -828,7 +828,7 @@ pub(crate) const SCALEFORM_HANDLER_CTOR_RVA: usize = 0x11a8870;
 pub(crate) const SCALEFORM_HANDLER_DTOR_RVA: usize = 0x11a8900;
 pub(crate) static SCALEFORM_HANDLER_CTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SCALEFORM_HANDLER_DTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static SCALEFORM_HANDLER_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SCALEFORM_HANDLER_TRACE_INSTALLED;
 /// Live handler-object addresses (ctor'd, not yet dtor'd). Linear-scanned Vec -- volume is a few
 /// dozen menu handlers, not a hot per-frame path. Capped so a genuine leak can't grow it unbounded.
 pub(crate) static SCALEFORM_HANDLER_LIVE: std::sync::Mutex<Vec<usize>> =
@@ -836,10 +836,10 @@ pub(crate) static SCALEFORM_HANDLER_LIVE: std::sync::Mutex<Vec<usize>> =
 pub(crate) const SCALEFORM_HANDLER_LIVE_CAP: usize = 8192;
 /// Oracles: total ctors/dtors seen, double-frees detected+skipped, and the last skipped object +
 /// its container/parent for correlation with the switch timeline.
-pub(crate) static SCALEFORM_HANDLER_CTORS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SCALEFORM_HANDLER_DTORS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SCALEFORM_HANDLER_DOUBLE_FREES: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SCALEFORM_HANDLER_LAST_DOUBLE_FREE_OBJ: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SCALEFORM_HANDLER_CTORS;
+pub(crate) use er_telemetry::counters::SCALEFORM_HANDLER_DTORS;
+pub(crate) use er_telemetry::counters::SCALEFORM_HANDLER_DOUBLE_FREES;
+pub(crate) use er_telemetry::counters::SCALEFORM_HANDLER_LAST_DOUBLE_FREE_OBJ;
 
 /// ~MenuWindowJob DOOMED-WINDOW GUARD (er-effects-rs-j74t, return-to-title crash rva 0x7ada87 AND
 /// 0x7adb28). Root of the whack-a-mole: `CS::MenuWindowJob::~MenuWindowJob` (deobf 0x1407ac720) calls
@@ -891,11 +891,11 @@ pub(crate) const MENU_WINDOW_LIST_REMOVE_RVA: usize = 0x733d70;
 pub(crate) const MENU_WINDOW_LIST_COUNT_48_OFFSET: usize = 0x48;
 pub(crate) const MENU_WINDOW_LIST_SANE_MAX_COUNT: i32 = 64;
 pub(crate) static MENU_WINDOW_JOB_DTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static MENU_WINDOW_JOB_DTOR_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static MENU_WINDOW_JOB_DTOR_DOOMED_GUARDS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static MENU_WINDOW_JOB_DTOR_LIST_REMOVALS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static MENU_WINDOW_JOB_DTOR_LAST_GUARDED_WINDOW: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static MENU_WINDOW_JOB_DTOR_LAST_GUARDED_INDEX: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_TRACE_INSTALLED;
+pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_DOOMED_GUARDS;
+pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_LIST_REMOVALS;
+pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_LAST_GUARDED_WINDOW;
+pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_LAST_GUARDED_INDEX;
 
 /// QUIT-TO-DESKTOP CLEAN KILL (user directive 2026-07-08): the native quit saves the character then
 /// tears the world down and rebuilds the title -- slow, and with our flow the rebuilt title's
@@ -914,8 +914,8 @@ pub(crate) const GET_PARAM_RESCAP_RVA: usize = 0xd4cc50;
 pub(crate) const MENU_OFFSCR_REND_PARAM_TYPE: u32 = 0x4e;
 pub(crate) static MENU_OFFSCR_REND_PARAM_LOOKUP_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static MENU_OFFSCR_REND_PARAM_LOOKUP_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static QUIT_TO_DESKTOP_CLEAN_KILLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::MENU_OFFSCR_REND_PARAM_LOOKUP_INSTALLED;
+pub(crate) use er_telemetry::counters::QUIT_TO_DESKTOP_CLEAN_KILLS;
 
 // === Game-Options pane VISIBILITY oracle (READ-ONLY, `oracle_optionsetting_pane_*`) ===============
 // Detects the "blank Game Options pane" bug on OptionSetting menu re-entry: the tab strip + footer
@@ -965,46 +965,46 @@ pub(crate) const OPTIONSETTING_PANE_NAMES: [&str; 8] = [
     "PadSetting\0",
 ];
 /// Total pane-visibility samples taken (one per OptionSetting `MenuWindowJob::Run` with a live owner).
-pub(crate) static OPTIONSETTING_PANE_SAMPLE_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OPTIONSETTING_PANE_SAMPLE_COUNT;
 /// Last sample: whether the `WindowList` container resolved (0/1).
-pub(crate) static OPTIONSETTING_PANE_LAST_WINDOWLIST_RESOLVED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OPTIONSETTING_PANE_LAST_WINDOWLIST_RESOLVED;
 /// Last sample: whether the `WindowList` container's DisplayInfo.Visible was set (0/1).
-pub(crate) static OPTIONSETTING_PANE_LAST_WINDOWLIST_VISIBLE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OPTIONSETTING_PANE_LAST_WINDOWLIST_VISIBLE;
 /// Last sample: bitmask (bit N = pane N of `OPTIONSETTING_PANE_NAMES`) of panes that resolved.
-pub(crate) static OPTIONSETTING_PANE_LAST_RESOLVED_MASK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OPTIONSETTING_PANE_LAST_RESOLVED_MASK;
 /// Last sample: bitmask of panes whose DisplayInfo.Visible was set.
-pub(crate) static OPTIONSETTING_PANE_LAST_VISIBLE_MASK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OPTIONSETTING_PANE_LAST_VISIBLE_MASK;
 /// Last sample: the `WindowList` child's raw dataType (for gate diagnosis).
-pub(crate) static OPTIONSETTING_PANE_LAST_DATATYPE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OPTIONSETTING_PANE_LAST_DATATYPE;
 /// Count of vcalls skipped fail-closed because objectInterface/vtable/getfn were not game-image-live.
-pub(crate) static OPTIONSETTING_PANE_GUARD_SKIPS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OPTIONSETTING_PANE_GUARD_SKIPS;
 /// Last sample: whether the composite sub-dialog job slot was bound (0/1).
-pub(crate) static OPTIONSETTING_PANE_COMPOSITE_BOUND: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OPTIONSETTING_PANE_COMPOSITE_BOUND;
 /// Count of samples where the blank-pane signature fired (`WindowList` resolved but NOT visible).
-pub(crate) static OPTIONSETTING_PANE_BLANK_DETECTED_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OPTIONSETTING_PANE_BLANK_DETECTED_COUNT;
 /// The REAL row-pane signal: the current tab dialog (`*(composite+0xb8)`) and the DisplayInfo.Visible of
 /// its embedded pane proxy at `dialog+0x1200` -- the object the game's own tab-select SetVisibles. The 8
 /// named WindowList children are always Visible=0 and are NOT the signal (they made blank_detected fire
 /// before the user could even reproduce). `actively_shown` = CSMenuMan flag bit 0x4 (drawn this frame).
-pub(crate) static OPTIONSETTING_CURRENT_DIALOG: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OPTIONSETTING_CURRENT_PANE_VISIBLE: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OPTIONSETTING_CURRENT_PANE_DATATYPE: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OPTIONSETTING_ACTIVELY_SHOWN: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OPTIONSETTING_LAST_FLAG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OPTIONSETTING_CURRENT_DIALOG;
+pub(crate) use er_telemetry::counters::OPTIONSETTING_CURRENT_PANE_VISIBLE;
+pub(crate) use er_telemetry::counters::OPTIONSETTING_CURRENT_PANE_DATATYPE;
+pub(crate) use er_telemetry::counters::OPTIONSETTING_ACTIVELY_SHOWN;
+pub(crate) use er_telemetry::counters::OPTIONSETTING_LAST_FLAG;
 /// Latch: the current pane was seen VISIBLE at least once (a healthy Game Options open). The teardown
 /// oracle `..._REAL_BLANK_DETECTED_COUNT` only fires AFTER this latch, so a boot/preload state (pane
 /// never yet shown) can never be mistaken for the bug -- the bug is healthy(visible)->blank(hidden).
-pub(crate) static OPTIONSETTING_CURRENT_PANE_EVER_VISIBLE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OPTIONSETTING_CURRENT_PANE_EVER_VISIBLE;
 /// Run-stopping oracle: healthy pane was seen, THEN the actively-shown current pane went hidden.
-pub(crate) static OPTIONSETTING_REAL_BLANK_DETECTED_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OPTIONSETTING_REAL_BLANK_DETECTED_COUNT;
 /// The selected tab index the user is on (`*(*(window+0x1870+0x10)+0xd4)`) at the last sample, and the
 /// cache slot the current pane dialog matches -- to identify WHICH tab is blank (e.g. the Quit/Exit tab
 /// where our injected Load-Profile rows live vs the Game tab).
-pub(crate) static OPTIONSETTING_CURRENT_TAB: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) use er_telemetry::counters::OPTIONSETTING_CURRENT_TAB;
 /// The System/OptionSetting Quit tab index. The custom Load Profile / Load Save Profiles rows are
 /// children of this tab, so Back from their ProfileSelect child must restore this tab as the parent.
 pub(crate) const OPTIONSETTING_QUIT_TAB_INDEX: usize = 8;
-pub(crate) static OPTIONSETTING_CURRENT_TAB_AT_BLANK: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) use er_telemetry::counters::OPTIONSETTING_CURRENT_TAB_AT_BLANK;
 pub(crate) static SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_REAPPLY_COUNT: AtomicUsize =
     AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_TAB: AtomicUsize =
@@ -1013,28 +1013,28 @@ pub(crate) static SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_OLD_CURRENT: Ato
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_SELECTED: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static SYSTEM_QUIT_OPTIONSETTING_DIRECT_REFRESH_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPTIONSETTING_DIRECT_REFRESH_COUNT;
 pub(crate) static SYSTEM_QUIT_OPTIONSETTING_DIRECT_REFRESH_LAST_SELECTED: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// Count of times the fix forced the actively-shown current tab's pane back visible (via SetVisible on
 /// dialog+0x1200 -- the same proxy/call the game's own tab-select uses). Nonzero = the blank was caught
 /// and corrected; the pane draws again.
-pub(crate) static OPTIONSETTING_PANE_FIX_APPLIED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OPTIONSETTING_PANE_FIX_APPLIED;
 /// Active OptionSetting row-table sampler: read-only row/action classification for the currently
 /// visible tab dialog. This is the product-proof oracle for the Game Options/Quit contamination class:
 /// tab 0 must not contain cloned quick-load/open-profile actions; Quit tab should contain them once the
 /// feature is injected.
-pub(crate) static OPTIONSETTING_ACTIVE_ROW_SAMPLE_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OPTIONSETTING_ACTIVE_ROW_DIALOG: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OPTIONSETTING_ACTIVE_ROW_TAB: AtomicUsize = AtomicUsize::new(usize::MAX);
-pub(crate) static OPTIONSETTING_ACTIVE_ROW_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OPTIONSETTING_ACTIVE_ROW_CLONED_MASK: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OPTIONSETTING_ACTIVE_ROW_NATIVE_SAVE_MASK: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OPTIONSETTING_ACTIVE_ROW_ACTION_HASH: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OPTIONSETTING_ACTIVE_ROW_LABEL_HASH: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OPTIONSETTING_ACTIVE_ROW_QUIT_LABEL_MASK: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OPTIONSETTING_GAME_OPTIONS_CLONED_ROW_HITS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static OPTIONSETTING_GAME_OPTIONS_QUIT_LABEL_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OPTIONSETTING_ACTIVE_ROW_SAMPLE_COUNT;
+pub(crate) use er_telemetry::counters::OPTIONSETTING_ACTIVE_ROW_DIALOG;
+pub(crate) use er_telemetry::counters::OPTIONSETTING_ACTIVE_ROW_TAB;
+pub(crate) use er_telemetry::counters::OPTIONSETTING_ACTIVE_ROW_COUNT;
+pub(crate) use er_telemetry::counters::OPTIONSETTING_ACTIVE_ROW_CLONED_MASK;
+pub(crate) use er_telemetry::counters::OPTIONSETTING_ACTIVE_ROW_NATIVE_SAVE_MASK;
+pub(crate) use er_telemetry::counters::OPTIONSETTING_ACTIVE_ROW_ACTION_HASH;
+pub(crate) use er_telemetry::counters::OPTIONSETTING_ACTIVE_ROW_LABEL_HASH;
+pub(crate) use er_telemetry::counters::OPTIONSETTING_ACTIVE_ROW_QUIT_LABEL_MASK;
+pub(crate) use er_telemetry::counters::OPTIONSETTING_GAME_OPTIONS_CLONED_ROW_HITS;
+pub(crate) use er_telemetry::counters::OPTIONSETTING_GAME_OPTIONS_QUIT_LABEL_HITS;
 /// window -> SettingTabControl (+0x1870), -> tab view (+0x10), -> selected index (view+0xd4).
 pub(crate) const OPTIONSETTING_TAB_CONTROL_OFFSET: usize = 0x1870;
 pub(crate) const OPTIONSETTING_TAB_VIEW_OFFSET: usize = 0x10;
@@ -1064,13 +1064,13 @@ pub(crate) const GX_CMD_QUEUE_COUNT_OFFSET: usize = 0x30;
 pub(crate) const GX_CMD_QUEUE_CAP_OFFSET: usize = 0x34;
 pub(crate) static GX_RESERVE_CMD_QUEUE_SLOT_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static GX_RESERVE_CMD_QUEUE_SLOT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::GX_RESERVE_CMD_QUEUE_SLOT_INSTALLED;
 /// Cumulative occupancy high-water, per-switch high-water (reset by `sq_repro_begin_switch`), the
 /// observed capacity, and total reserve calls.
-pub(crate) static GX_CMD_QUEUE_MAX_FILL: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static GX_CMD_QUEUE_SWITCH_MAX_FILL: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static GX_CMD_QUEUE_CAP_SEEN: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static GX_CMD_QUEUE_SUBMITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::GX_CMD_QUEUE_MAX_FILL;
+pub(crate) use er_telemetry::counters::GX_CMD_QUEUE_SWITCH_MAX_FILL;
+pub(crate) use er_telemetry::counters::GX_CMD_QUEUE_CAP_SEEN;
+pub(crate) use er_telemetry::counters::GX_CMD_QUEUE_SUBMITS;
 /// Producer histogram: open-addressed key -> count. Key = first game-.text return address (as RVA)
 /// above the reserve/add_command_list wrapper band, with `GX_CMD_QUEUE_SELF_TAG` ORed in when any
 /// stack frame lies inside our own DLL (attributes submissions our pipeline caused vs pure-native).
@@ -1084,12 +1084,12 @@ pub(crate) static GX_CMD_QUEUE_HIST_KEYS: [AtomicUsize; GX_CMD_QUEUE_HIST_SLOTS]
     [const { AtomicUsize::new(0) }; GX_CMD_QUEUE_HIST_SLOTS];
 pub(crate) static GX_CMD_QUEUE_HIST_COUNTS: [AtomicUsize; GX_CMD_QUEUE_HIST_SLOTS] =
     [const { AtomicUsize::new(0) }; GX_CMD_QUEUE_HIST_SLOTS];
-pub(crate) static GX_CMD_QUEUE_HIST_DROPPED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::GX_CMD_QUEUE_HIST_DROPPED;
 /// Near-full evidence: hits with count >= cap - margin, and a log throttle so the dump lands BEFORE
 /// the crash frame without spamming (one line per 64 near-full reserves).
 pub(crate) const GX_CMD_QUEUE_NEARFULL_MARGIN: usize = 24;
 pub(crate) const GX_CMD_QUEUE_NEARFULL_LOG_EVERY: usize = 64;
-pub(crate) static GX_CMD_QUEUE_NEARFULL_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::GX_CMD_QUEUE_NEARFULL_HITS;
 /// BUCKET-TABLE instrument (names the RETAINER class the producer histogram cannot: run 10d proved
 /// the drain pump FUN_141b3bdc0 dominates reserves by RESUBMITTING its context list each frame, so
 /// the leak is list membership). The pump's context (its param_1; latched by a thin entry hook at
@@ -1099,8 +1099,8 @@ pub(crate) static GX_CMD_QUEUE_NEARFULL_HITS: AtomicUsize = AtomicUsize::new(0);
 /// bucket's submissions grow toward the 192 cap.
 pub(crate) const GX_CMD_PUMP_RVA: usize = 0x1b3bda0;
 pub(crate) static GX_CMD_PUMP_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static GX_CMD_PUMP_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static GX_CMD_PUMP_CTX: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::GX_CMD_PUMP_INSTALLED;
+pub(crate) use er_telemetry::counters::GX_CMD_PUMP_CTX;
 pub(crate) const GX_CMD_QUEUE_BUCKET_COUNT: usize = 0x6d;
 pub(crate) const GX_CMD_QUEUE_BUCKET_BEGIN_OFFSET: usize = 0x30;
 pub(crate) const GX_CMD_QUEUE_BUCKET_END_OFFSET: usize = 0x34;
@@ -1115,7 +1115,7 @@ pub(crate) const GX_CMD_QUEUE_BUCKET_WIDTH_SANE_MAX: i32 = 192;
 /// grown by >= STEP since the last snapshot, so every switch's peak-frame composition is diffable.
 pub(crate) const GX_CMD_QUEUE_PEAK_LOG_MIN: usize = 80;
 pub(crate) const GX_CMD_QUEUE_PEAK_LOG_STEP: usize = 8;
-pub(crate) static GX_CMD_QUEUE_PEAK_LAST_LOGGED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::GX_CMD_QUEUE_PEAK_LAST_LOGGED;
 /// COMMAND-BYTE ARENA fill (user-reported render corruption during switch #3's return-title window,
 /// 2026-07-03): `reserve_command_queue_slot` allocates command BYTES from a bump arena at
 /// queue+0x40 (FUN_141c48e80: alloc counter at arena+0x14, limit at +0x20, cursor at +0x28;
@@ -1128,8 +1128,8 @@ pub(crate) const GX_CMD_ARENA_ALLOC_COUNT_OFFSET: usize = 0x14;
 pub(crate) const GX_CMD_ARENA_LIMIT_OFFSET: usize = 0x20;
 pub(crate) const GX_CMD_ARENA_CURSOR_OFFSET: usize = 0x28;
 /// Low-water sentinel: usize::MAX until the first sample lands.
-pub(crate) static GX_CMD_ARENA_MIN_REMAINING: AtomicUsize = AtomicUsize::new(usize::MAX);
-pub(crate) static GX_CMD_ARENA_SWITCH_MIN_REMAINING: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) use er_telemetry::counters::GX_CMD_ARENA_MIN_REMAINING;
+pub(crate) use er_telemetry::counters::GX_CMD_ARENA_SWITCH_MIN_REMAINING;
 /// CSDelayDeleteMan PENDING-COUNT read (repeated-switch GX overflow root-cause probe, 2026-07-03).
 /// The profile-renderer teardown (`FUN_1409b2f00`) does NOT destroy the 10 old CSMenuProfModelRend
 /// per switch -- it hands each to CSDelayDeleteMan (`FUN_140e77540`) and nulls the table slot. The
@@ -1164,6 +1164,6 @@ pub(crate) const DELAY_DELETE_ENQUEUE_RVA: usize = 0xe77490;
 /// ~switch #4). The reset now MOVES the pointer here (render thread, a plain store); the game-thread
 /// teardown-spare hook delete-enqueues it via CSDelayDeleteMan at the next teardown (thread-correct,
 /// same thread the native teardown runs on).
-pub(crate) static PROFILE_SPARE_ORPHAN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::PROFILE_SPARE_ORPHAN;
 /// Count of leaked spared renderers reclaimed via the native delete path (repeated-switch GX fix).
-pub(crate) static PROFILE_SPARE_ORPHANS_DELETED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::PROFILE_SPARE_ORPHANS_DELETED;

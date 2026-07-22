@@ -56,22 +56,22 @@ const DEFAULT_EFFECT_TRIGGER_HOTKEYS_JSON: &str = r#"{
 const EFFECT_TRIGGER_COUNT_MAX: u32 = 200;
 const EFFECT_SELECTOR_OVERLAY_NAME_CHARS: usize = 36;
 
-static EFFECT_HOTKEY_PENDING_UP: AtomicUsize = AtomicUsize::new(0);
-static EFFECT_HOTKEY_PENDING_DOWN: AtomicUsize = AtomicUsize::new(0);
-static EFFECT_HOTKEY_PENDING_LEFT: AtomicUsize = AtomicUsize::new(0);
-static EFFECT_HOTKEY_PENDING_RIGHT: AtomicUsize = AtomicUsize::new(0);
-static EFFECT_HOTKEY_PENDING_TOGGLE: AtomicUsize = AtomicUsize::new(0);
-static EFFECT_HOTKEY_PENDING_OVERLAY_TOGGLE: AtomicUsize = AtomicUsize::new(0);
-static EFFECT_HOTKEY_HOOK_STARTED: AtomicBool = AtomicBool::new(false);
-static EFFECT_HOTKEY_HOOK_ACTIVE: AtomicBool = AtomicBool::new(false);
+pub(crate) use er_telemetry::counters::EFFECT_HOTKEY_HOOK_ACTIVE;
+pub(crate) use er_telemetry::counters::EFFECT_HOTKEY_HOOK_STARTED;
+pub(crate) use er_telemetry::counters::EFFECT_HOTKEY_PENDING_DOWN;
+pub(crate) use er_telemetry::counters::EFFECT_HOTKEY_PENDING_LEFT;
+pub(crate) use er_telemetry::counters::EFFECT_HOTKEY_PENDING_OVERLAY_TOGGLE;
+pub(crate) use er_telemetry::counters::EFFECT_HOTKEY_PENDING_RIGHT;
+pub(crate) use er_telemetry::counters::EFFECT_HOTKEY_PENDING_TOGGLE;
+pub(crate) use er_telemetry::counters::EFFECT_HOTKEY_PENDING_UP;
 static EFFECT_SELECTOR_OVERLAY_TEXT: OnceLock<Mutex<String>> = OnceLock::new();
-static EFFECT_SELECTOR_OVERLAY_VISIBLE_FOR_HOOK: AtomicBool = AtomicBool::new(false);
-static EFFECT_SELECTOR_DINPUT_HOOK_INSTALL_ATTEMPTED: AtomicBool = AtomicBool::new(false);
+pub(crate) use er_telemetry::counters::EFFECT_SELECTOR_DINPUT_HOOK_INSTALL_ATTEMPTED;
+pub(crate) use er_telemetry::counters::EFFECT_SELECTOR_OVERLAY_VISIBLE_FOR_HOOK;
 static EFFECT_TRIGGER_PENDING_KEYS: OnceLock<Mutex<Vec<EffectTriggerKeyPress>>> = OnceLock::new();
-pub(crate) static EFFECT_HOTKEY_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static EFFECT_HOTKEY_APPLIED_ACTIONS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static EFFECT_INPUT_SUPPRESSED_KEYS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static EFFECT_INPUT_SUPPRESSED_ARROW_KEYS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::EFFECT_HOTKEY_APPLIED_ACTIONS;
+pub(crate) use er_telemetry::counters::EFFECT_HOTKEY_HOOK_HITS;
+pub(crate) use er_telemetry::counters::EFFECT_INPUT_SUPPRESSED_ARROW_KEYS;
+pub(crate) use er_telemetry::counters::EFFECT_INPUT_SUPPRESSED_KEYS;
 
 /// A named runtime effect call the overlay can trigger.
 ///

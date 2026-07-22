@@ -64,13 +64,13 @@ use crate::telemetry::append_autoload_debug;
 /// Visibility request set by the game task each frame from the loading state: 1 = SHOW (cover the game),
 /// 0 = HIDE (release to gameplay). Starts SHOWN so the boot black gap is covered immediately.
 pub(crate) static NATIVE_OVERLAY_SHOW: AtomicUsize = AtomicUsize::new(1);
-/// One-shot install latch.
-pub(crate) static NATIVE_OVERLAY_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 /// Frames presented (RAM oracle: the overlay is live + presenting).
-pub(crate) static NATIVE_OVERLAY_FRAMES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::NATIVE_OVERLAY_FRAMES;
+/// One-shot install latch.
+pub(crate) use er_telemetry::counters::NATIVE_OVERLAY_INSTALLED;
 /// Last init stage reached (RAM oracle for diagnosis): 1=thread, 2=class, 3=window, 4=factory, 5=device,
 /// 6=queue, 7=swapchain, 8=rtv-heap, 9=cmd-objects, 10=render-loop-entered.
-pub(crate) static NATIVE_OVERLAY_STAGE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::NATIVE_OVERLAY_STAGE;
 
 /// Install the native-Windows loading overlay (idempotent). Spawns a dedicated thread that owns the
 /// window + our D3D12 device and runs the render loop. Safe to call unconditionally at attach; the caller

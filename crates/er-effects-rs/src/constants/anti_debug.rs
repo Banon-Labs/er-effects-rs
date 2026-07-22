@@ -37,7 +37,7 @@ pub(crate) const PE_SECTION_VADDR_OFFSET: usize = 0xc;
 /// The executable section name we scan/patch.
 pub(crate) const PE_TEXT_SECTION_NAME: &[u8] = b".text";
 /// Once-guard for the anti-anti-debug patch (0 = not yet applied).
-pub(crate) static ANTI_ANTIDEBUG_APPLIED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::ANTI_ANTIDEBUG_APPLIED;
 pub(crate) const ANTI_ANTIDEBUG_NOT_APPLIED: usize = 0;
 pub(crate) const ANTI_ANTIDEBUG_STEP: usize = 1;
 pub(crate) const ANTI_ANTIDEBUG_COUNT_INIT: usize = 0;
@@ -282,7 +282,7 @@ pub(crate) const TITLE_ANIM_SPEEDUP_MAX: f32 = 16.0;
 /// instead). Kept as an f32 toggle so the existing env/file override (set to 1.0 = off) still works.
 pub(crate) const TITLE_ANIM_SPEEDUP_DEFAULT: f32 = 4.0;
 /// Diagnostic frame counter for the title-anim lever (logs SM state every Nth detour call).
-pub(crate) static TITLE_ANIM_DIAG_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::TITLE_ANIM_DIAG_CALLS;
 /// Log the title SM state every this many detour calls.
 pub(crate) const TITLE_ANIM_DIAG_INTERVAL: usize = 60;
 /// FD4 state-machine `SetState`/request-transition (deobf 0x1407499e0; dump 0x140749ae0, shift -0x100).
@@ -311,7 +311,7 @@ pub(crate) static TITLE_NATIVE_MENU_VISUAL_SUPPRESS_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static TITLE_NATIVE_MENU_VISUAL_SUPPRESS_INSTALLED: AtomicUsize =
     AtomicUsize::new(TITLE_NATIVE_MENU_VISUAL_SUPPRESS_NOT_INSTALLED);
-pub(crate) static TITLE_NATIVE_MENU_VISUAL_SUPPRESSED_BUILDS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::TITLE_NATIVE_MENU_VISUAL_SUPPRESSED_BUILDS;
 pub(crate) static TITLE_NATIVE_MENU_VISUAL_LAST_OUT_SLOT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_NATIVE_MENU_VISUAL_LAST_PREV_OUT: AtomicUsize =
@@ -331,8 +331,8 @@ pub(crate) static TITLE_NATIVE_MENU_VISUAL_NATIVE_WINDOW: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_PAB_INFORMATION_VISUAL_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static TITLE_PAB_INFORMATION_VISUAL_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static TITLE_PAB_INFORMATION_VISUAL_BUILDS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::TITLE_PAB_INFORMATION_VISUAL_INSTALLED;
+pub(crate) use er_telemetry::counters::TITLE_PAB_INFORMATION_VISUAL_BUILDS;
 pub(crate) static TITLE_PAB_INFORMATION_VISUAL_LAST_JOB: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_PAB_INFORMATION_VISUAL_LAST_WINDOW: AtomicUsize =
@@ -430,7 +430,7 @@ pub(crate) const TITLE_PROFILE_SLOT_COUNT: usize = 10;
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET: usize = 0xa8;
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_OFFSCREEN_TEX_RESCAP_OFFSET: usize = 0x10;
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_TEX_INDEX_OFFSET: usize = 0x9a8;
-pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_SAMPLE_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::TITLE_CUSTOM_COVER_PROFILE_SOURCE_SAMPLE_CALLS;
 pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_SLOT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_RENDERER: AtomicUsize =
@@ -447,14 +447,14 @@ pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_754: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_755: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS;
 pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_RET: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_JOB: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_CALLER_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_CUSTOM_COVER_BLACK_BUILDS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::TITLE_CUSTOM_COVER_BLACK_BUILDS;
 pub(crate) static TITLE_CUSTOM_COVER_BLACK_LAST_RET: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_CUSTOM_COVER_BLACK_LAST_JOB: AtomicUsize =
@@ -466,13 +466,13 @@ pub(crate) static TITLE_CUSTOM_COVER_BLACK_LAST_CALLER_RVA: AtomicUsize =
 /// preserved title job, instead of replacing the authoritative BeginTitle out-slot.
 pub(crate) const MENU_WINDOW_JOB_RUN_RVA: usize = 0x7ad1c0;
 pub(crate) static TITLE_CUSTOM_COVER_RUN_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static TITLE_CUSTOM_COVER_RUN_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static TITLE_CUSTOM_COVER_RUN_RECURSION: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static TITLE_CUSTOM_COVER_RUN_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::TITLE_CUSTOM_COVER_RUN_INSTALLED;
+pub(crate) use er_telemetry::counters::TITLE_CUSTOM_COVER_RUN_RECURSION;
+pub(crate) use er_telemetry::counters::TITLE_CUSTOM_COVER_RUN_CALLS;
 /// PAB detour -> system_quit_menu_window_run_post call count. Confirms the deterministic-winner wiring
 /// (2026-07-15 install-race fix) is live at runtime: >0 means PAB is driving run_post on MenuWindowJob::Run
 /// passes, so the hide + slot-activation-gate latches get written regardless of the MinHook race.
-pub(crate) static PAB_RUN_POST_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::PAB_RUN_POST_CALLS;
 pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_NATIVE_JOB: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_COVER_JOB: AtomicUsize =
@@ -483,18 +483,18 @@ pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_RET: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// Removed fallback-cover counters kept only so older telemetry references compile during cleanup.
 /// Product title/loading cover work must use native CSEzDraw/Scaleform/game-render surfaces.
-pub(crate) static TITLE_OVERLAY_COVER_RENDER_CALLS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static TITLE_OVERLAY_COVER_LAST_DISPLAY_W: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static TITLE_OVERLAY_COVER_LAST_DISPLAY_H: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::TITLE_OVERLAY_COVER_RENDER_CALLS;
+pub(crate) use er_telemetry::counters::TITLE_OVERLAY_COVER_LAST_DISPLAY_W;
+pub(crate) use er_telemetry::counters::TITLE_OVERLAY_COVER_LAST_DISPLAY_H;
 /// `CS::TexResCap` embeds the draw-usable `CSGxTexture*` at +0x78, and that wrapper keeps
 /// the backing graphics texture/reference at +0x10. The overlay cannot safely reinterpret this as
 /// a generic texture ID yet, but observing these handles during a native draw would be a concrete
 /// draw-side consumption oracle for the RAM-backed profile portrait source rather than generic scaffolding.
 pub(crate) const TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET: usize = 0x78;
 pub(crate) const TITLE_CUSTOM_COVER_GX_TEXTURE_RESOURCE_OFFSET: usize = 0x10;
-pub(crate) static TITLE_OVERLAY_COVER_TEXTURE_BOUND: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static TITLE_OVERLAY_COVER_LAST_GX_TEXTURE: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static TITLE_OVERLAY_COVER_LAST_TEXTURE_RESOURCE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::TITLE_OVERLAY_COVER_TEXTURE_BOUND;
+pub(crate) use er_telemetry::counters::TITLE_OVERLAY_COVER_LAST_GX_TEXTURE;
+pub(crate) use er_telemetry::counters::TITLE_OVERLAY_COVER_LAST_TEXTURE_RESOURCE;
 /// Observe the native now-loading helper visible during the black/progress-bar loading surface.
 /// This is the first-pass target for a separate custom loading/masquerade surface after live title-logo
 /// remaps proved crash-prone.
@@ -503,9 +503,9 @@ pub(crate) const NOW_LOADING_HELPER_UPDATE_RVA: usize = 0x2a2c40;
 pub(crate) static NOW_LOADING_HELPER_CTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static NOW_LOADING_HELPER_UPDATE_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static NOW_LOADING_HELPER_HOOKS_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static NOW_LOADING_HELPER_CTOR_HITS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static NOW_LOADING_HELPER_UPDATE_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::NOW_LOADING_HELPER_HOOKS_INSTALLED;
+pub(crate) use er_telemetry::counters::NOW_LOADING_HELPER_CTOR_HITS;
+pub(crate) use er_telemetry::counters::NOW_LOADING_HELPER_UPDATE_HITS;
 pub(crate) static NOW_LOADING_HELPER_LAST_THIS: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static NOW_LOADING_HELPER_LAST_MENU_INDEX: AtomicUsize =
@@ -523,8 +523,8 @@ pub(crate) static NOW_LOADING_HELPER_LAST_FLAGS: AtomicUsize =
 /// visible loading bar reaching 100%, later and more exact than TimeAct/world-ready.
 pub(crate) const LOADING_SCREEN_UPDATE_RVA: usize = 0x90a6b0;
 pub(crate) static LOADING_SCREEN_UPDATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static LOADING_SCREEN_UPDATE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static LOADING_SCREEN_UPDATE_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::LOADING_SCREEN_UPDATE_HOOK_INSTALLED;
+pub(crate) use er_telemetry::counters::LOADING_SCREEN_UPDATE_HITS;
 /// `CS::KnowledgeLoadingScreen` tip-refresh (dump `FUN_14090a3f0` -> deobf/live `0x14090a300`, RVA
 /// 0x90a300). `fn(this)` -- picks the next tip msg id and SetTexts the title (`this+0xb28`) + body
 /// (`this+0xb88`). er-effects-rs-jsm PIVOT: we NO-OP it (skip the original) so the native tip title/body
@@ -532,8 +532,8 @@ pub(crate) static LOADING_SCREEN_UPDATE_HITS: AtomicUsize = AtomicUsize::new(0);
 /// the widget ctor so even the ctor's one-shot initial tip is suppressed.
 pub(crate) const KNOWLEDGE_TIP_REFRESH_RVA: usize = 0x90a300;
 pub(crate) static KNOWLEDGE_TIP_REFRESH_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static KNOWLEDGE_TIP_REFRESH_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static KNOWLEDGE_TIP_SUPPRESSED_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::KNOWLEDGE_TIP_REFRESH_INSTALLED;
+pub(crate) use er_telemetry::counters::KNOWLEDGE_TIP_SUPPRESSED_HITS;
 /// `CS::KnowledgeLoadingScreen` tip-text SetText handles (CSScaleformValue): title `this+0xb28`
 /// ('Main/Knowledge/IetmName/Text_0'), body `this+0xb88` ('Main/Knowledge/ItemInfo/Text_0'). The
 /// suppression detour SetTexts both to empty after the original runs. (bd loading-tip-text-pipeline-RE.)
@@ -552,8 +552,8 @@ pub(crate) const KNOWLEDGE_TIP_BODY_HANDLE_OFFSET: usize = 0xb88;
 pub(crate) const KNOWLEDGE_TIP_ADVANCE_ENABLED_RVA: usize = 0x90a0c0;
 pub(crate) static KNOWLEDGE_TIP_ADVANCE_ENABLED_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static KNOWLEDGE_TIP_ADVANCE_ENABLED_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static KNOWLEDGE_TIP_ADVANCE_SUPPRESSED_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::KNOWLEDGE_TIP_ADVANCE_ENABLED_INSTALLED;
+pub(crate) use er_telemetry::counters::KNOWLEDGE_TIP_ADVANCE_SUPPRESSED_HITS;
 
 /// Scaleform (GFx) D3D12 `CBV_SRV_UAV` descriptor-heap ring/sub-allocator advance
 /// (deobf entry `0x140ec9530`; `f(this /rcx/, count /edx/)`). Verified disasm: the new-page branch
@@ -569,22 +569,22 @@ pub(crate) const SCALEFORM_DESC_ADVANCE_RVA: usize = 0xec9530;
 /// Byte offset of the current-page provider field within the descriptor sub-allocator `this`.
 pub(crate) const SCALEFORM_DESC_PROVIDER_OFFSET: usize = 0x38;
 pub(crate) static SCALEFORM_DESC_ADVANCE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static SCALEFORM_DESC_ADVANCE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SCALEFORM_DESC_PROVIDER_NULL_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SCALEFORM_DESC_ADVANCE_INSTALLED;
+pub(crate) use er_telemetry::counters::SCALEFORM_DESC_PROVIDER_NULL_HITS;
 pub(crate) static LOADING_SCREEN_LAST_THIS: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static LOADING_SCREEN_LAST_DATA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static LOADING_SCREEN_BAR_ENABLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static LOADING_SCREEN_BAR_CURRENT_FRAME: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static LOADING_SCREEN_BAR_MAX_FRAME: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static LOADING_SCREEN_BAR_PROGRESS_PERMILLE: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static LOADING_SCREEN_BAR_FINAL_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::LOADING_SCREEN_BAR_ENABLED;
+pub(crate) use er_telemetry::counters::LOADING_SCREEN_BAR_CURRENT_FRAME;
+pub(crate) use er_telemetry::counters::LOADING_SCREEN_BAR_MAX_FRAME;
+pub(crate) use er_telemetry::counters::LOADING_SCREEN_BAR_PROGRESS_PERMILLE;
+pub(crate) use er_telemetry::counters::LOADING_SCREEN_BAR_FINAL_HITS;
 /// `CS::LoadingScreen::Update` sets this byte after the post-100%-bar countdown elapses, calls the
 /// owning MenuWindow result callback, and resets the `LoadingScreenData`. This is later than Gauge_3's
 /// terminal frame and matches the native loading-screen close handoff more closely than "bar is full".
-pub(crate) static LOADING_SCREEN_CLOSE_SENT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static LOADING_SCREEN_CLOSE_SENT_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::LOADING_SCREEN_CLOSE_SENT;
+pub(crate) use er_telemetry::counters::LOADING_SCREEN_CLOSE_SENT_HITS;
 pub(crate) const LOADING_SCREEN_DATA_OFFSET: usize = 0xa38;
 pub(crate) const LOADING_SCREEN_FINISH_SENT_OFFSET: usize = 0xa44;
 pub(crate) const LOADING_SCREEN_GAUGE_COMPONENT_OFFSET: usize = 0xa48;
@@ -598,8 +598,8 @@ pub(crate) const LOADING_SCREEN_DATA_INTERP_DURATION_OFFSET: usize = 0x20;
 pub(crate) const LOADING_SCREEN_DATA_INTERP_ELAPSED_OFFSET: usize = 0x24;
 /// Read-only latch of the native CSFakeLoadingScreen singleton visible during the black/progress
 /// loading UI. Sampled from telemetry writes; no hooks or native calls.
-pub(crate) static FAKE_LOADING_SCREEN_SAMPLE_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static FAKE_LOADING_SCREEN_VISIBLE_SAMPLES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::FAKE_LOADING_SCREEN_SAMPLE_COUNT;
+pub(crate) use er_telemetry::counters::FAKE_LOADING_SCREEN_VISIBLE_SAMPLES;
 pub(crate) static FAKE_LOADING_SCREEN_LAST_PTR: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static FAKE_LOADING_SCREEN_LAST_VISIBLE: AtomicUsize =
@@ -608,20 +608,20 @@ pub(crate) static FAKE_LOADING_SCREEN_LAST_FIELD_C: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static FAKE_LOADING_SCREEN_LAST_FIELD_10: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static RENDER_LOADING_LAYER_SAMPLE_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static RENDER_LOADING_LAYER_NONNULL_SAMPLES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::RENDER_LOADING_LAYER_SAMPLE_COUNT;
+pub(crate) use er_telemetry::counters::RENDER_LOADING_LAYER_NONNULL_SAMPLES;
 pub(crate) static RENDER_LOADING_LAYER_LAST_RENDMAN: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static RENDER_LOADING_LAYER_LAST_CSGRAPHICS: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static RENDER_LOADING_LAYER_LAST_CSSCALEFORM: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static RENDER_LOADING_LAYER_LAST_SLOTS_MASK: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static RENDER_LOADING_LAYER_VISIBLE_SLOTS_MASK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::RENDER_LOADING_LAYER_LAST_SLOTS_MASK;
+pub(crate) use er_telemetry::counters::RENDER_LOADING_LAYER_VISIBLE_SLOTS_MASK;
 /// RAM oracle (`oracle_loading_cover_suppress_writes`): frames the loading-cover experiment actually
 /// cleared `CSFakeLoadingScreenImp.visible`. >0 means the clamp engaged during at least one map load; 0
 /// with the gate on means the cover object never resolved / was never raised (nothing was suppressed).
-pub(crate) static LOADING_COVER_SUPPRESS_WRITES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::LOADING_COVER_SUPPRESS_WRITES;
 /// `CS::CSFakeLoadingScreenImp` -- the full-screen fade/cover PLATE the game draws during a map load to
 /// HIDE the world teardown/rebuild behind the now-loading UI. RE'd from its ctor (deobf 0x140bbeee0,
 /// vtable 0x142b803b8) which is called from `CSDrawStep`, so this object lives in the render pipeline, not
@@ -731,14 +731,14 @@ pub(crate) const DLSTRING_U16_SSO_THRESHOLD: usize = 7;
 pub(crate) const LOADING_BG_SYMBOL_PREFIX: &str = "MENU_Load_";
 pub(crate) static LOADING_BG_TEXTURE_REDIRECT_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static LOADING_BG_TEXTURE_REDIRECT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::LOADING_BG_TEXTURE_REDIRECT_INSTALLED;
 /// Times the producer-bind hook saw a MENU_Load_ symbol (a now-loading background request).
-pub(crate) static LOADING_BG_TEXTURE_REDIRECT_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::LOADING_BG_TEXTURE_REDIRECT_ATTEMPTS;
 /// Times we successfully forged + injected our portrait TPF cap on the rti (the proof oracle: >0
 /// means our texture was bound as the loading-screen background).
-pub(crate) static LOADING_BG_TEXTURE_REDIRECT_COMMITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::LOADING_BG_TEXTURE_REDIRECT_COMMITS;
 /// Last forge outcome code: 1=injected, 2=tpf-build-fail, 3=createrescap-null, 4=alloc-null.
-pub(crate) static LOADING_BG_TEXTURE_REDIRECT_LAST_SYMBOL_MATCH: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::LOADING_BG_TEXTURE_REDIRECT_LAST_SYMBOL_MATCH;
 /// Last forged TpfFileCap pointer.
 pub(crate) static LOADING_BG_TEXTURE_REDIRECT_LAST_PORTRAIT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -746,17 +746,17 @@ pub(crate) static LOADING_BG_TEXTURE_REDIRECT_LAST_PORTRAIT: AtomicUsize =
 /// AFTER the bind (the now-loading background binds ~15-17s, BEFORE our post-Continue renderer's RT is
 /// live, and never re-binds -- so the live portrait must be swapped into the displayed container after the
 /// fact). >0 means the loading screen's displayed background is now sampling our live animated portrait.
-pub(crate) static LOADING_BG_LIVE_GX_REBINDS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::LOADING_BG_LIVE_GX_REBINDS;
 /// The live CSGxTexture currently re-bound into the now-loading container (telemetry/sweep).
-pub(crate) static LOADING_BG_LIVE_GX_BOUND: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::LOADING_BG_LIVE_GX_BOUND;
 /// Diagnostic: total calls into the replace-bind hook (every symbol, ungated), so we can tell
 /// whether `FUN_140d69880` is even on the now-loading background path vs the producer cache-hit path.
-pub(crate) static LOADING_BG_REPLACE_BIND_TOTAL_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::LOADING_BG_REPLACE_BIND_TOTAL_CALLS;
 /// The kept-alive portrait `CSGxTexture` captured during ProfileSelect (0 until captured). When set,
 /// the forge swaps it into its TpfResCap container's TexResCap so the loading screen shows the real
 /// rendered character portrait instead of the placeholder checker.
-pub(crate) static LOADING_BG_PORTRAIT_GX_KEPT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static LOADING_BG_PORTRAIT_GX_CAPTURE_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::LOADING_BG_PORTRAIT_GX_KEPT;
+pub(crate) use er_telemetry::counters::LOADING_BG_PORTRAIT_GX_CAPTURE_HITS;
 /// The live profile-portrait offscreen render target, read back via D3D12 into CPU RGBA8 once the
 /// character head has rendered (`portrait_real_pixels_enabled()` gate). Tuple = (width, height,
 /// tightly-packed `width*height*4` RGBA8 pixels). `None` until a successful readback. When `Some`,
@@ -765,14 +765,14 @@ pub(crate) static LOADING_BG_PORTRAIT_RGBA: std::sync::Mutex<Option<(u32, u32, V
     std::sync::Mutex::new(None);
 /// 1 if the read-back portrait has any non-black texel (max(R,G,B) > 24) inside a center 64x64
 /// region, else 0 (a black/blank capture). Exposed as `oracle_loading_bg_portrait_gx_nonblack`.
-pub(crate) static LOADING_BG_PORTRAIT_NONBLACK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::LOADING_BG_PORTRAIT_NONBLACK;
 /// Bumped every time LOADING_BG_PORTRAIT_RGBA is REPLACED with a fresh capture. The present-overlay
 /// composite watches this: when it changes, the overlay re-uploads its source texture from the new RGBA,
 /// so a LIVE per-frame (throttled) readback of the built renderer's offscreen makes the displayed head
 /// UPDATE (look-at follows) instead of freezing on the first captured frame.
-pub(crate) static LOADING_BG_PORTRAIT_RGBA_VERSION: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::LOADING_BG_PORTRAIT_RGBA_VERSION;
 /// One-shot log latch for the live-display-feed (built RT content -> overlay).
-pub(crate) static PROFILE_LIVE_FEED_LOGGED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::PROFILE_LIVE_FEED_LOGGED;
 
 // === Candidate A: live head INSIDE the now-loading GFx movie (er-effects-rs-jsm) ==================
 // STATIC-RE PROVEN 2026-07-05 (bd tooltip-above-portrait-VERDICT-2026-07-05, gfx-decoded-tex-

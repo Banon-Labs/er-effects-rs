@@ -142,9 +142,9 @@ pub(crate) fn install_system_quit_child_finish_trace_hook() {
 }
 
 /// Stuck-frame + one-shot state for the load2 testNetStep force-finish below.
-static TESTNET_FF_STUCK_FRAMES: AtomicUsize = AtomicUsize::new(0);
-static TESTNET_FF_LAST_MMS: AtomicUsize = AtomicUsize::new(usize::MAX);
-static TESTNET_FF_FIRED_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) use er_telemetry::counters::TESTNET_FF_STUCK_FRAMES;
+pub(crate) use er_telemetry::counters::TESTNET_FF_LAST_MMS;
+pub(crate) use er_telemetry::counters::TESTNET_FF_FIRED_EPOCH;
 
 /// LOAD2 WORLD-COMPLETION FIX (bd load2-fires-but-stalls-at-mms18-world-completion-2026-07-19). A
 /// DRIVEN reload (`fresh_deser>=1`) reaches MoveMapStep STEP_Finish but its testNetStep child never

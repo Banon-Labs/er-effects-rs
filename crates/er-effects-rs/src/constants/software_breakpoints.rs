@@ -57,7 +57,7 @@ pub(crate) static SW_BP_HITS: [AtomicUsize; SW_BP_MAX] =
 /// Address awaiting re-arm on the next single-step (set in the #BP handler, consumed
 /// in the single-step handler). Single global: our breakpoints fire on one menu thread.
 pub(crate) static SW_BP_REARM_PENDING: AtomicUsize = AtomicUsize::new(SW_BP_REARM_NONE);
-pub(crate) static SW_BP_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SW_BP_INSTALLED;
 /// Diagnostic: count #BP exceptions our VEH sees that are NOT at one of our armed addresses,
 /// to distinguish "VEH gets #BP but addr mismatch" from "VEH never sees #BP" under wine.
 pub(crate) static SW_BP_UNMATCHED_LOGGED: AtomicUsize = AtomicUsize::new(SW_BP_HITS_INIT);

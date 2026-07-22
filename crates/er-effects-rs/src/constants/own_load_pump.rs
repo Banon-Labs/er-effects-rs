@@ -160,8 +160,8 @@ pub(crate) const REGULATION_MANAGER_VERSION_44_OFFSET: usize = 0x44;
 pub(crate) const TITLE_FLOW_CONTEXT_RECORD_REGULATION_VERSION_RVA: usize = 0x82cb00;
 pub(crate) static TITLE_FLOW_CONTEXT_RECORD_REGULATION_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static TITLE_FLOW_CONTEXT_RECORD_REGULATION_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static TITLE_FLOW_CONTEXT_RECORD_REGULATION_FIXUPS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::TITLE_FLOW_CONTEXT_RECORD_REGULATION_INSTALLED;
+pub(crate) use er_telemetry::counters::TITLE_FLOW_CONTEXT_RECORD_REGULATION_FIXUPS;
 
 pub(crate) const OWN_STEPPER_LOG_INTERVAL: u64 = TitleNativeJobTiming::FrameRate as u64;
 pub(crate) const OWN_STEPPER_CALL_INC: usize = true as usize;
@@ -322,14 +322,14 @@ pub(crate) const SEQUENCE_CHILD_COUNT_MAX: usize = 64;
 pub(crate) const MENU_WINDOW_JOB_VTABLE_RVA: usize = 0x2aa97e8;
 /// Diagnostic: log distinct MenuWindowJob children the Sequence iterator walks (with docall
 /// chain) so one run reveals the full opened-menu entry set. Capped to avoid flooding.
-pub(crate) static SEQ_ITER_CHILD_LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SEQ_ITER_CHILD_LOG_COUNT;
 pub(crate) const SEQ_ITER_CHILD_LOG_MAX: usize = 240;
-pub(crate) static SEQ_ITER_CHILD_LAST: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SEQ_ITER_CHILD_LAST;
 /// Unconditional structural dump of the first N Sequence-iterator calls (seq vtable, count,
 /// child0 vtable) -- reveals what the iterator actually walks (Sequence vs MenuWindowJob,
 /// real counts) regardless of the count-range gate, to diagnose why no menu-item child was
 /// found. Capped.
-pub(crate) static SEQ_ITER_DEBUG_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SEQ_ITER_DEBUG_COUNT;
 pub(crate) const SEQ_ITER_DEBUG_MAX: usize = 80;
 pub(crate) static MENU_ITEM_UPDATE_CAPTURE_COUNT: AtomicUsize =
     AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);

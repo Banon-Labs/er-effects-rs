@@ -157,9 +157,9 @@ pub(crate) fn grsysmsg_log_enabled() -> bool {
             .exists()
 }
 
-static GR_SYSMSG_LOG_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-static GR_SYSMSG_LOG_ORIG: AtomicUsize = AtomicUsize::new(0);
-static GR_SYSMSG_LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::GR_SYSMSG_LOG_INSTALLED;
+pub(crate) use er_telemetry::counters::GR_SYSMSG_LOG_ORIG;
+pub(crate) use er_telemetry::counters::GR_SYSMSG_LOG_COUNT;
 /// `CS::GetGR_System_Message` (deobf entry 0x140762e30): `MenuString* (rcx=out, edx=int messageId)`.
 /// The dump labels it 0x140762e40 but that is MID-INSTRUCTION (inside `movq $-2,[rsp+0x28]`); the real
 /// MSVC prologue (`mov [rsp+8],rcx; push rdi; sub rsp,0x30`) is at 0x140762e30 -- VERIFIED by deobf
@@ -194,7 +194,7 @@ pub(crate) static CORRUPTED_SAVE_LOAD_FAILED_SEEN_ID: std::sync::atomic::AtomicI
     std::sync::atomic::AtomicI32::new(0);
 pub(crate) static CORRUPTED_SAVE_SEEN_CALLER_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static CORRUPTED_SAVE_SEEN_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::CORRUPTED_SAVE_SEEN_COUNT;
 
 pub(crate) unsafe extern "system" fn gr_sysmsg_log_hook(
     rcx: usize,
@@ -300,10 +300,10 @@ const FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA: usize = 0x29c8e48;
 /// `MenuJobState::Continue` (the no-modal result), verified from the deobf clean leaf (`lea edx,[r8+1]`).
 const MENU_JOB_STATE_CONTINUE: i32 = 1;
 
-static NETWORK_CHECK_SHORTCIRCUIT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::NETWORK_CHECK_SHORTCIRCUIT_INSTALLED;
 /// pub(crate): the boot-progress view reads this as its menu-open-era milestone (the shortcircuit
 /// fires within ~10ms of the title-accept-byte natural menu-open on the product path).
-pub(crate) static NETWORK_CHECK_SHORTCIRCUIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::NETWORK_CHECK_SHORTCIRCUIT_COUNT;
 
 /// THE MILESTONE-3 FIX (zero-input, save-safe). `CS::NetworkCheckJob::Run` is a title-flow MenuJob the
 /// TitleTopDialog registrar chains UNCONDITIONALLY at menu-open. Offline, its Steam-holder check
@@ -423,8 +423,8 @@ const SHOW_PROGRESS_JOB_RUN_RVA: u32 = 0x8349c0;
 /// loop the timed job; Success(2) completes it cleanly.
 const MENU_JOB_STATE_SUCCESS: i32 = 2;
 
-static SHOW_PROGRESS_SHORTCIRCUIT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-static SHOW_PROGRESS_SHORTCIRCUIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SHOW_PROGRESS_SHORTCIRCUIT_INSTALLED;
+pub(crate) use er_telemetry::counters::SHOW_PROGRESS_SHORTCIRCUIT_COUNT;
 /// Original CS::ShowProgressJob::Run trampoline (MinHook). Needed so the SAVE-data progressType can be
 /// PASSED THROUGH to its real delegate -- that delegate IS the boot ProfileSummary read (SLLoadSession
 /// -> ER0000.sl2). Blanket-suppressing every type (the prior behavior) killed the save read, leaving
@@ -434,7 +434,7 @@ static SHOW_PROGRESS_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 /// delegate); 20=network, 30/31=sign-in, 60=login (offline-modal types we still short-circuit).
 const SHOW_PROGRESS_TYPE_OFFSET: usize = 0x18;
 const SHOW_PROGRESS_SAVE_TYPE: u32 = 10;
-static SHOW_PROGRESS_TYPE_LOGGED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SHOW_PROGRESS_TYPE_LOGGED;
 
 /// THE MILESTONE-3 FIX, part 2 (zero-input, save-safe). `CS::ShowProgressJob::Run` (deobf 0x1408349c0)
 /// is the SHARED Run for the offline title-flow check steps (save=10/network=20/sign-in=30,31/
@@ -672,9 +672,9 @@ pub(crate) fn install_show_progress_shortcircuit_hook() {
 // where the normal post-pick accept-byte flow opens it fresh -- identical to the working early-pick
 // path, regardless of how long the user waits. Self-gates on `missing_save_selection_pending()`, so it
 // is a pure pass-through on an early pick and on any run without the missing-save picker armed.
-static TITLE_OPEN_MENU_SUPPRESS_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::TITLE_OPEN_MENU_SUPPRESS_INSTALLED;
 static TITLE_OPEN_MENU_SUPPRESS_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static TITLE_OPEN_MENU_SUPPRESSED_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::TITLE_OPEN_MENU_SUPPRESSED_COUNT;
 
 pub(crate) unsafe extern "system" fn title_open_menu_suppress_hook(
     rcx: usize,
@@ -780,7 +780,7 @@ pub(crate) unsafe extern "system" fn scene_obj_proxy_ctor_hook(
     const PTR_ALIGN_MASK: usize = 0x7;
     const SCENE_OBJ_PROXY_CTOR_LOG_MAX: usize = 32;
     const SCENE_OBJ_PROXY_CTOR_HIT_INC: usize = 1;
-    static SCENE_OBJ_PROXY_CTOR_HITS: AtomicUsize = AtomicUsize::new(0);
+    pub(crate) use er_telemetry::counters::SCENE_OBJ_PROXY_CTOR_HITS;
 
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let menu_window = rdx;

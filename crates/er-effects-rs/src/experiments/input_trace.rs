@@ -49,45 +49,45 @@ fn input_trace_path() -> PathBuf {
 
 /// Read by the XInput detour every slot-0 poll (Relaxed): 1 = capture, 0 = skip. Written per frame
 /// by `input_trace_tick` so the hook never touches the filesystem gate itself.
-static INPUT_TRACE_ARMED: AtomicUsize = AtomicUsize::new(0);
-/// Total REAL successful slot-0 polls captured (hook-side, Relaxed hot counter).
-static TRACE_REAL_POLLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::INPUT_TRACE_ARMED;
+/// Last synthesized button word seen by the HOOK (edge detector). usize::MAX = no poll yet.
+pub(crate) use er_telemetry::counters::TRACE_HOOK_LAST_SYNTH;
 /// Latest real pad state, packed for lock-free cross-thread hand-off (hook writes, task reads).
 /// Word A: wButtons u16 | bLeftTrigger u8 <<16 | bRightTrigger u8 <<24 | sThumbLX u16 <<32 | sThumbLY u16 <<48.
 /// Word B: sThumbRX u16 | sThumbRY u16 <<16 | dwPacketNumber u32 <<32. Each word is internally
 /// consistent; A/B may tear across concurrent polls (acceptable: sticks are advisory context).
-static TRACE_PAD_WORD_A: AtomicU64 = AtomicU64::new(0);
-static TRACE_PAD_WORD_B: AtomicU64 = AtomicU64::new(0);
-/// Last synthesized button word seen by the HOOK (edge detector). usize::MAX = no poll yet.
-static TRACE_HOOK_LAST_SYNTH: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) use er_telemetry::counters::TRACE_PAD_WORD_A;
+pub(crate) use er_telemetry::counters::TRACE_PAD_WORD_B;
+/// Total REAL successful slot-0 polls captured (hook-side, Relaxed hot counter).
+pub(crate) use er_telemetry::counters::TRACE_REAL_POLLS;
 /// SPSC-ish edge ring: hook pushes on synth-word change, game task drains once per frame. Entry:
 /// bit 63 = valid, bits 32..62 = dwPacketNumber (low 31 bits), bits 0..31 = synth button word.
 const TRACE_RING_LEN: usize = 64;
 static TRACE_RING: [AtomicU64; TRACE_RING_LEN] = [const { AtomicU64::new(0) }; TRACE_RING_LEN];
-/// Total edges pushed (write cursor) / drained (read cursor) / lost to ring overrun.
-static TRACE_RING_SEQ: AtomicUsize = AtomicUsize::new(0);
-static TRACE_RING_READ: AtomicUsize = AtomicUsize::new(0);
-static TRACE_DROPPED: AtomicUsize = AtomicUsize::new(0);
+/// Drain-side previous synth word for pressed/released splitting (usize::MAX = first event).
+pub(crate) use er_telemetry::counters::TRACE_DRAIN_PREV;
+pub(crate) use er_telemetry::counters::TRACE_DROPPED;
+/// Trace-local frame counter (ticks only while armed) and one-shot header latch.
+pub(crate) use er_telemetry::counters::TRACE_FRAME;
 /// 1 while the GAME is accepting input this frame (the DLUID+0x88d input-accept byte ER clears
 /// each frame it is not the active window; stay-active forces it 1). Published per frame by the
 /// tick, read by the hook: XInput polling is focus-agnostic, so without this gate the trace
 /// records pad presses the game itself discards while unfocused (observed session 4: two START
 /// presses before the user focused the window).
-static TRACE_GAME_INPUT_ACCEPT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::TRACE_GAME_INPUT_ACCEPT;
+pub(crate) use er_telemetry::counters::TRACE_HDR_WRITTEN;
+/// Last heartbeat emission, ms since the shared process-log epoch.
+pub(crate) use er_telemetry::counters::TRACE_LAST_HB_MS;
+pub(crate) use er_telemetry::counters::TRACE_RING_READ;
+/// Total edges pushed (write cursor) / drained (read cursor) / lost to ring overrun.
+pub(crate) use er_telemetry::counters::TRACE_RING_SEQ;
+/// Change-detection key of the last emitted semaphore row (0 = none yet).
+pub(crate) use er_telemetry::counters::TRACE_SEM_LAST_KEY;
+/// Monotonic event sequence for machine-diffable semaphore order within one process.
+pub(crate) use er_telemetry::counters::TRACE_SEM_SEQ;
 /// Edges observed while the game was NOT accepting input -- suppressed (no pad row), counted for
 /// the heartbeat so the focus gate is RAM-verifiable.
-static TRACE_UNFOCUSED_EDGES: AtomicUsize = AtomicUsize::new(0);
-/// Drain-side previous synth word for pressed/released splitting (usize::MAX = first event).
-static TRACE_DRAIN_PREV: AtomicUsize = AtomicUsize::new(usize::MAX);
-/// Trace-local frame counter (ticks only while armed) and one-shot header latch.
-static TRACE_FRAME: AtomicU64 = AtomicU64::new(0);
-static TRACE_HDR_WRITTEN: AtomicUsize = AtomicUsize::new(0);
-/// Change-detection key of the last emitted semaphore row (0 = none yet).
-static TRACE_SEM_LAST_KEY: AtomicU64 = AtomicU64::new(0);
-/// Monotonic event sequence for machine-diffable semaphore order within one process.
-static TRACE_SEM_SEQ: AtomicUsize = AtomicUsize::new(0);
-/// Last heartbeat emission, ms since the shared process-log epoch.
-static TRACE_LAST_HB_MS: AtomicU64 = AtomicU64::new(0);
+pub(crate) use er_telemetry::counters::TRACE_UNFOCUSED_EDGES;
 const TRACE_HB_INTERVAL_MS: u64 = 2000;
 
 /// WORLD-CLOCK-LIVE semaphore (user-directed 2026-07-19): GameDataMan::play_time (ms) advances only
@@ -97,7 +97,7 @@ const TRACE_HB_INTERVAL_MS: u64 = 2000;
 /// baseline resets, so `play_time_advanced_ms` is the clock's rise within THIS load; emitting it in the
 /// sem trace lets loadcmp-diff show exactly which checkpoint each load first has a live clock -- so the
 /// reload can be compared to where it occurs in the boot's chain.
-static PLAY_TIME_TRACE_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) use er_telemetry::counters::PLAY_TIME_TRACE_EPOCH;
 static PLAY_TIME_TRACE_FIRST: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(-1);
 /// Rise (ms) past the epoch baseline at which the clock counts as genuinely live (>= 1s, matching the
 /// loading-screen playtime stat the user observed incrementing one second at a time).

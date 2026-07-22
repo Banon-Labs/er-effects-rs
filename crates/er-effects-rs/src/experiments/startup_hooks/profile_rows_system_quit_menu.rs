@@ -1319,7 +1319,7 @@ unsafe fn sample_optionsetting_active_row_table(
 ) {
     const HEAP_LO: usize = 0x10000;
     const MAX_ROWS: usize = 16;
-    static OPTIONSETTING_ROW_LAST_LOG_KEY: AtomicUsize = AtomicUsize::new(usize::MAX);
+    pub(crate) use er_telemetry::counters::OPTIONSETTING_ROW_LAST_LOG_KEY;
     if !actively_shown || current_dialog < HEAP_LO {
         return;
     }
@@ -1401,7 +1401,7 @@ unsafe fn sample_optionsetting_active_row_table(
 /// entry so stale Quit-tab rows cannot remain cross-populated under the vanilla Game Options tab.
 /// Runs on the menu/game thread (the `MenuWindowJob::Run` hook) as required for GFx vcalls.
 unsafe fn sample_optionsetting_pane_visibility(base: usize, option_window: usize) {
-    static OPTIONSETTING_LAST_ACTIVE_TAB: AtomicUsize = AtomicUsize::new(usize::MAX);
+    pub(crate) use er_telemetry::counters::OPTIONSETTING_LAST_ACTIVE_TAB;
     if option_window == 0 || option_window < OPTIONSETTING_WINDOW_MIN_PTR {
         return;
     }
@@ -1591,7 +1591,7 @@ pub(crate) unsafe extern "system" fn system_quit_menu_window_job_run_hook(
     // its modal). Two Seamless cases: (1) the official-servers ToS job (`06_000_TermOfService_BNE`);
     // (2) the ERSC post-PAB MessageBox job -- its dialog build was already nulled by
     // `msgbox_builder_hook`, which latched THIS job into `MSGBOX_STALL_JOB`, so its next Run advances.
-    static SEAMLESS_TOS_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);
+    pub(crate) use er_telemetry::counters::SEAMLESS_TOS_SKIP_COUNT;
     let is_tos = filename.contains("TermOfService");
     let is_stalled_msgbox = job != 0 && MSGBOX_STALL_JOB.load(Ordering::SeqCst) == job;
     if policy_tos_suppress_enabled() && (is_tos || is_stalled_msgbox) {

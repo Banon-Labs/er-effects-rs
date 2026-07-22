@@ -370,7 +370,7 @@ pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hoo
         .unwrap_or(0);
         // Diagnostic (throttled): surface every non-cloned controller activation so the real Return-to-Desktop
         // dispatch is visible even when the action does not match, instead of guessing the path again.
-        static RETURN_DESKTOP_CONTROLLER_DIAG: AtomicUsize = AtomicUsize::new(0);
+        pub(crate) use er_telemetry::counters::RETURN_DESKTOP_CONTROLLER_DIAG;
         let dn = RETURN_DESKTOP_CONTROLLER_DIAG.fetch_add(1, Ordering::SeqCst);
         if dn < 24 {
             append_autoload_debug(format_args!(
