@@ -48,24 +48,17 @@ use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 
 use super::*;
 
-pub(crate) fn game_module_base() -> Result<usize, String> {
-    let module = unsafe { GetModuleHandleA(PCSTR::null()) }
-        .map_err(|error| format!("failed to resolve game module: {error}"))?;
-    Ok(module.0 as usize)
-}
-pub(crate) fn game_rva(rva: u32) -> Result<usize, String> {
-    Ok(game_module_base()? + rva as usize)
-}
-pub(crate) unsafe fn is_heap_aligned_ptr(ptr: usize) -> bool {
-    const HEAP_LO: usize = 0x10000;
-    const PTR_ALIGN_MASK: usize = 0x7;
-    ptr >= HEAP_LO && (ptr & PTR_ALIGN_MASK) == TITLE_OWNER_SCAN_START_ADDRESS
-}
-pub(crate) fn vtable_in_game_image(vtable: usize, base: usize) -> bool {
-    const MODULE_MIN_OFFSET: usize = 0x1000;
-    const MODULE_SPAN_FALLBACK: usize = 0x3000000;
-    vtable >= base + MODULE_MIN_OFFSET && vtable < base + MODULE_SPAN_FALLBACK
-}
+// Fault-safe RAM readers + game base/rva/image primitives now live in the shared
+// er-game-base crate (single source of truth across product + telemetry + the
+// mini-DLLs). Re-exported at their historical `crate::experiments::` paths so the
+// ~40 product/telemetry call sites (bare via glob and fully-qualified) are
+// unchanged. patch_3byte_stub / apply_xor_ret_stub stay below: they depend on the
+// windows crate + product constants + append_autoload_debug.
+pub(crate) use er_game_base::mem::{
+    game_module_base, game_rva, is_heap_aligned_ptr, safe_read_f32, safe_read_i32, safe_read_u8,
+    safe_read_u16, safe_read_usize, vtable_in_game_image,
+};
+
 pub(crate) fn utf16_name_empty_like(units: &[u16], len: usize) -> bool {
     const NAME_LEN_NONE: usize = 0;
     const NAME_LEN_SINGLE: usize = 1;
@@ -210,102 +203,4 @@ pub(crate) fn apply_xor_ret_stub(base: usize, rva: usize, label: &str) {
         base + rva
     ));
 }
-/// Fault-tolerant pointer-sized read via ReadProcessMemory: returns None on
-/// unmapped/freed memory instead of raising an access violation. Used by the
-/// title-owner scan to survive the TOCTOU race against the booting game.
-pub(crate) unsafe fn safe_read_usize(addr: usize) -> Option<usize> {
-    let mut value: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    let mut read: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    let ok = unsafe {
-        ReadProcessMemory(
-            CURRENT_PROCESS_PSEUDO_HANDLE,
-            addr as *const c_void,
-            &mut value as *mut usize as *mut c_void,
-            std::mem::size_of::<usize>(),
-            &mut read,
-        )
-    };
-    if ok != HOOK_FALSE_RETURN as i32 && read == std::mem::size_of::<usize>() {
-        Some(value)
-    } else {
-        None
-    }
-}
-/// Fault-tolerant i32 read via ReadProcessMemory (None on unmapped memory).
-pub(crate) unsafe fn safe_read_i32(addr: usize) -> Option<i32> {
-    let mut value: i32 = TITLE_OWNER_SCAN_START_ADDRESS as i32;
-    let mut read: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    let ok = unsafe {
-        ReadProcessMemory(
-            CURRENT_PROCESS_PSEUDO_HANDLE,
-            addr as *const c_void,
-            &mut value as *mut i32 as *mut c_void,
-            std::mem::size_of::<i32>(),
-            &mut read,
-        )
-    };
-    if ok != HOOK_FALSE_RETURN as i32 && read == std::mem::size_of::<i32>() {
-        Some(value)
-    } else {
-        None
-    }
-}
-/// Fault-tolerant f32 read via ReadProcessMemory (None on unmapped memory).
-pub(crate) unsafe fn safe_read_f32(addr: usize) -> Option<f32> {
-    let mut value: f32 = 0.0;
-    let mut read: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    let ok = unsafe {
-        ReadProcessMemory(
-            CURRENT_PROCESS_PSEUDO_HANDLE,
-            addr as *const c_void,
-            &mut value as *mut f32 as *mut c_void,
-            std::mem::size_of::<f32>(),
-            &mut read,
-        )
-    };
-    if ok != HOOK_FALSE_RETURN as i32 && read == std::mem::size_of::<f32>() {
-        Some(value)
-    } else {
-        None
-    }
-}
-/// Fault-tolerant single-byte read via ReadProcessMemory (None on unmapped memory). Used by the
-/// WorldBlockRes::Update diagnostic detour to sample the phase ([+0x35]) and gate ([+0x2f]) bytes
-/// without ever dereferencing a raw pointer into possibly-unmapped block memory.
-pub(crate) unsafe fn safe_read_u8(addr: usize) -> Option<u8> {
-    let mut value: u8 = 0;
-    let mut read: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    let ok = unsafe {
-        ReadProcessMemory(
-            CURRENT_PROCESS_PSEUDO_HANDLE,
-            addr as *const c_void,
-            &mut value as *mut u8 as *mut c_void,
-            std::mem::size_of::<u8>(),
-            &mut read,
-        )
-    };
-    if ok != HOOK_FALSE_RETURN as i32 && read == std::mem::size_of::<u8>() {
-        Some(value)
-    } else {
-        None
-    }
-}
-
-pub(crate) unsafe fn safe_read_u16(addr: usize) -> Option<u16> {
-    let mut value: u16 = 0;
-    let mut read: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    let ok = unsafe {
-        ReadProcessMemory(
-            CURRENT_PROCESS_PSEUDO_HANDLE,
-            addr as *const c_void,
-            &mut value as *mut u16 as *mut c_void,
-            std::mem::size_of::<u16>(),
-            &mut read,
-        )
-    };
-    if ok != HOOK_FALSE_RETURN as i32 && read == std::mem::size_of::<u16>() {
-        Some(value)
-    } else {
-        None
-    }
-}
+// safe_read_usize/i32/f32/u8/u16 moved to er_game_base::mem (re-exported above).

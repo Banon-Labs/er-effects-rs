@@ -1,0 +1,26 @@
+[package]
+name = "er-telemetry-dll"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_telemetry_dll"
+crate-type = ["cdylib"]
+
+# Thin standalone telemetry DLL: a DllMain shell that drives er-telemetry's
+# read-side oracles on a game-thread FrameBegin tick. Loads as its own me3
+# [[natives]] entry (telemetry-only profile, or as a 4th native alongside the
+# product DLL). All reusable logic lives in the er-telemetry LIB; a cdylib
+# cannot be depended on as a lib, which is why this is a separate shell.
+#
+# Read-only telemetry installs no MinHook trampolines, so (unlike the product
+# DLL / er-reload-trace-dll) there is no build.rs / cc dependency.
+[target.'cfg(windows)'.dependencies]
+er-telemetry = { path = "../er-telemetry" }
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_SystemServices",
+] }

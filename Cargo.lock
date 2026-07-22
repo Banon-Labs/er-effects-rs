@@ -2740,9 +2740,10 @@ dependencies = [
  "cc",
  "eldenring",
  "er-effects-data",
+ "er-game-base",
  "er-gfx",
- "er-safe-input",
  "er-save-loader",
+ "er-telemetry",
  "er-tpf",
  "erpx-rs",
  "fromsoftware-shared",
@@ -2758,6 +2759,14 @@ dependencies = [
  "fstools_formats",
  "thiserror 2.0.18",
  "wgpu",
+]
+
+[[package]]
+name = "er-game-base"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "fromsoftware-shared",
 ]
 
 [[package]]
@@ -2853,6 +2862,26 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "er-telemetry"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-game-base",
+ "er-save-loader",
+ "fromsoftware-shared",
+]
+
+[[package]]
+name = "er-telemetry-dll"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-telemetry",
+ "fromsoftware-shared",
+ "windows 0.62.2",
 ]
 
 [[package]]

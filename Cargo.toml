@@ -1,6 +1,9 @@
 [workspace]
 members = [
   "crates/er-effects-rs",
+  "crates/er-game-base",
+  "crates/er-telemetry",
+  "crates/er-telemetry-dll",
   "crates/er-reload-trace-dll",
   "crates/er-input-harness-dll",
   "crates/effects-data",
