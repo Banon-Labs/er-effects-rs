@@ -9,11 +9,12 @@
 //! `er-input-harness-phases.jsonl` with the phase name, duration (ms + frames), and the semaphore state
 //! at exit, so vanilla and product runs can be diffed phase-by-phase.
 //!
-//! LAYERS (bd TITLE-CONTINUE-is-accept-byte-not-keystate): the TITLE screen PRODUCES the inputmgr+0x90
-//! keystate bitmap, so keystate Confirm 0x3d is IGNORED there -- the title (PRESS ANY BUTTON -> menu ->
-//! Continue) is driven by writing the global accept byte `base+0x4589bdc` and gating on the title-owner
-//! RAM semaphores (owner+0x48 state, dialog+0xa40) and the LOAD-STARTED semaphores. The IN-WORLD pause
-//! menu (System->Quit) is a CONSUMER of +0x90 and IS driven by keystate.
+//! LAYERS: the TITLE screen PRODUCES the inputmgr+0x90 keystate bitmap (bd TITLE-CONTINUE-is-accept-byte-
+//! not-keystate), so the title (PRESS ANY BUTTON -> menu -> Continue) is driven by the global accept byte
+//! `base+0x4589bdc` and gated on the title-owner semaphores (title_scan). The IN-WORLD pause menu
+//! (System->Quit) is a CONSUMER of +0x90 and IS driven by keystate, gated on the popup top-job pane
+//! semaphores (bd QUIT-TO-MENU-semaphores): HasTopMenuJob, menu_id (0xffff IngameTop / 0x25 OptionSetting),
+//! OptionSetting tab index (Quit tab = 8), return-title request.
 //!
 //! Pattern chosen by the flag file `er-harness-drive-mode.txt` (`boot`|`reload`|`full`, default `full`).
 //! Fires from a CSTaskImp FrameBegin task (title-active). Telemetry-only NATIVE boot+reload for the
@@ -22,7 +23,9 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use crate::game_mem::{
-    load_fsm, menu_data_ptr, now_loading, read_drive_mode_flag, world_simulating,
+    OPTIONSETTING_MENU_ID, OPTIONSETTING_QUIT_TAB_INDEX, load_fsm, menu_data_ptr, now_loading,
+    optionsetting_tab_index, pause_menu_open, read_drive_mode_flag, return_title_requested,
+    top_menu_id, world_simulating,
 };
 use crate::input_inject::{
     MenuEvent, advance_press_any_button, input_manager, keep_input_active,
@@ -36,8 +39,6 @@ use crate::win32::GetTickCount64;
 const TAP_SET_FRAMES: u64 = 3;
 const TAP_GAP_FRAMES: u64 = 6;
 const TAP_CYCLE_FRAMES: u64 = TAP_SET_FRAMES + TAP_GAP_FRAMES;
-/// Frames after a keystate nav step's taps to let the menu react before advancing.
-const SETTLE_FRAMES: u64 = 30;
 /// Popup-accept cadence (dialog-OK id 0x01, harmless when no dialog is up).
 const POPUP_SET_FRAMES: u64 = 2;
 const POPUP_CYCLE_FRAMES: u64 = 8;
@@ -51,9 +52,9 @@ const PAB_BUDGET: u64 = 300;
 const CONTINUE_BUDGET: u64 = 300;
 /// A load completing to genuine in-world simulation (asset load is long + slow). ~150s.
 const LOAD_BUDGET: u64 = 9000;
-/// In-world: open pause menu + navigate to the return-title row. ~10s.
-const MENU_FLOW_BUDGET: u64 = 600;
-/// Native quit-to-menu: confirm the return-title dialog + teardown of the world. ~10s.
+/// A single in-world keystate nav step (open / pane change / tab). ~8s.
+const NAV_BUDGET: u64 = 480;
+/// Native quit-to-menu confirm + world teardown. ~10s.
 const QUIT_BUDGET: u64 = 600;
 
 /// Per-frame semaphore snapshot (world_sim computed once by the caller -- it mutates a rising streak).
@@ -92,23 +93,24 @@ enum Status {
 #[derive(Clone, Copy)]
 enum Phase {
     /// NO input: wait until the title is parked at PRESS ANY BUTTON. EFFECT: title_pab_parked.
-    /// (measures boot -> PAB time)
     Startup,
     /// Write the accept byte each frame (advances PAB). EFFECT: the Continue/Load menu is built.
-    /// (measures PAB -> menu)
     PressAnyButton,
     /// Write the accept byte each frame (Continue is default-focused). EFFECT: a load started.
-    /// (measures Continue -> load-start)
     Continue,
     /// NO input: wait for genuine in-world simulation (play_time rising). EFFECT: world_sim.
-    /// (measures load duration)
     WaitLoadIn,
-    /// IN-WORLD: open the pause menu, then keystate-nav to the return-title row. EFFECT: coarse settle.
-    /// (the "menu flow" section)
-    MenuFlow,
-    /// IN-WORLD keystate Confirm: accept the return-title dialog. EFFECT: the world was torn down.
-    /// (the native quit-to-menu; its telemetry captures the teardown)
-    QuitToMenu,
+    /// IN-WORLD: request the pause menu open. EFFECT: a popup top-job exists (pause_menu_open).
+    OpenPauseMenu,
+    /// IN-WORLD keystate MoveUp,Confirm. EFFECT: the top pane is OptionSetting (menu_id==0x25).
+    NavToOptionSetting,
+    /// IN-WORLD keystate TabLeft. EFFECT: the OptionSetting selected tab is the Quit tab (index==8).
+    TabToQuit,
+    /// IN-WORLD keystate MoveDown,Confirm (activate "Quit to main menu"; popup-accept confirms the
+    /// dialog). EFFECT: return-title requested (menuData+0x5d==1) or the world already stopped.
+    Quit,
+    /// NO input: the native teardown to title. EFFECT: world stopped simulating AND load FSM idle.
+    QuitTeardown,
 }
 
 impl Phase {
@@ -118,8 +120,11 @@ impl Phase {
             Phase::PressAnyButton => "press_any_button",
             Phase::Continue => "continue",
             Phase::WaitLoadIn => "wait_load_in",
-            Phase::MenuFlow => "menu_flow",
-            Phase::QuitToMenu => "quit_to_menu",
+            Phase::OpenPauseMenu => "open_pause_menu",
+            Phase::NavToOptionSetting => "nav_to_optionsetting",
+            Phase::TabToQuit => "tab_to_quit",
+            Phase::Quit => "quit",
+            Phase::QuitTeardown => "quit_teardown",
         }
     }
 
@@ -129,8 +134,8 @@ impl Phase {
             Phase::PressAnyButton => PAB_BUDGET,
             Phase::Continue => CONTINUE_BUDGET,
             Phase::WaitLoadIn => LOAD_BUDGET,
-            Phase::MenuFlow => MENU_FLOW_BUDGET,
-            Phase::QuitToMenu => QUIT_BUDGET,
+            Phase::OpenPauseMenu | Phase::NavToOptionSetting | Phase::TabToQuit => NAV_BUDGET,
+            Phase::Quit | Phase::QuitTeardown => QUIT_BUDGET,
         }
     }
 
@@ -139,22 +144,36 @@ impl Phase {
         let advanced = match self {
             Phase::Startup => title_scan::title_pab_parked(base),
             Phase::PressAnyButton => {
-                // Drive the title via its OWN confirm signal (accept byte), not keystate.
                 advance_press_any_button(base);
                 title_scan::title_menu_up(base)
             }
             Phase::Continue => {
-                // Continue is default-focused once the menu is up; the accept byte confirms it.
                 advance_press_any_button(base);
                 sem.load_started()
             }
             Phase::WaitLoadIn => sem.world_sim,
-            Phase::MenuFlow => menu_flow_tick(im, frame),
-            Phase::QuitToMenu => {
-                tap_pattern(im, &[MenuEvent::Confirm], frame);
-                // Returned to title = world stopped simulating (torn down) after a real hold.
-                !sem.world_sim && sem.load_fsm <= 0 && frame > SETTLE_FRAMES
+            Phase::OpenPauseMenu => {
+                if !pause_menu_open() {
+                    request_open_ingame_menu(im);
+                }
+                pause_menu_open()
             }
+            Phase::NavToOptionSetting => {
+                issue_taps_once(im, &[MenuEvent::MoveUp, MenuEvent::Confirm], frame);
+                top_menu_id() == OPTIONSETTING_MENU_ID
+            }
+            Phase::TabToQuit => {
+                issue_taps_once(im, &[MenuEvent::TabLeft], frame);
+                optionsetting_tab_index() == OPTIONSETTING_QUIT_TAB_INDEX
+            }
+            Phase::Quit => {
+                issue_taps_once(im, &[MenuEvent::MoveDown, MenuEvent::Confirm], frame);
+                // Down+Confirm activates the Quit-to-main-menu row -> confirm dialog; the every-frame
+                // popup-accept (id 0x01) confirms the dialog. Quit started once the request byte is set
+                // (or the world already began tearing down).
+                return_title_requested() || !sem.world_sim
+            }
+            Phase::QuitTeardown => !sem.world_sim && sem.load_fsm <= 0 && frame > TAP_CYCLE_FRAMES,
         };
         if advanced {
             Status::Advanced
@@ -166,63 +185,13 @@ impl Phase {
     }
 }
 
-/// Frame (within the MenuFlow phase) at which the pause menu first came up, or `u64::MAX` before then.
-/// The keystate nav sequence is anchored to this so it starts only after the menu is actually open.
-static MENU_OPENED_FRAME: AtomicU64 = AtomicU64::new(u64::MAX);
-
-/// MenuFlow: request the in-world pause menu until a menu-data owner exists, THEN run the ordered
-/// keystate nav (MoveUp,Confirm -> OptionSetting; TabLeft -> Quit page; MoveDown,Confirm -> return-title
-/// row) with the standard tap cadence. Returns true (coarse settle) once the taps are issued + settled.
-fn menu_flow_tick(im: usize, frame: u64) -> bool {
-    // Step 1: open the pause menu (request while no menu-data owner exists).
-    if menu_data_ptr() == 0 {
-        request_open_ingame_menu(im);
-        MENU_OPENED_FRAME.store(u64::MAX, Ordering::SeqCst);
-        return false;
-    }
-    // Step 2: anchor the nav to the frame the menu opened, then run the ordered tap sequence.
-    let opened = match MENU_OPENED_FRAME.load(Ordering::SeqCst) {
-        u64::MAX => {
-            MENU_OPENED_FRAME.store(frame, Ordering::SeqCst);
-            frame
-        }
-        f => f,
-    };
-    let local = frame - opened;
-    const NAV: &[MenuEvent] = &[
-        MenuEvent::MoveUp,
-        MenuEvent::Confirm,
-        MenuEvent::TabLeft,
-        MenuEvent::MoveDown,
-        MenuEvent::Confirm,
-    ];
-    settle_after_taps(im, NAV, local)
-}
-
-/// Tap each event once per cycle, cycling through the list (used by phases that keep asserting input).
-fn tap_pattern(im: usize, events: &[MenuEvent], frame: u64) {
-    if events.is_empty() {
-        return;
-    }
-    if (frame % TAP_CYCLE_FRAMES) < TAP_SET_FRAMES {
-        let idx = ((frame / TAP_CYCLE_FRAMES) as usize) % events.len();
-        tap_menu_event(im, events[idx]);
-    }
-}
-
-/// Tap each event once in order (one cycle each), then settle. Returns true once taps are issued and
-/// SETTLE_FRAMES elapsed (the coarse "the nav step ran" signal for in-world menus whose per-pane window
-/// id is not resolved standalone -- the keystate menu IS a +0x90 consumer, so the taps land).
-fn settle_after_taps(im: usize, events: &[MenuEvent], frame: u64) -> bool {
-    let taps = events.len() as u64;
+/// Issue each event in `events` exactly once (one tap cycle each, in order), then stop. The phase's
+/// ADVANCE is its own effect semaphore, not the taps -- so a press that lands is confirmed by a specific
+/// RAM change, and a press that does nothing derails on budget (per the semaphore-gated contract).
+fn issue_taps_once(im: usize, events: &[MenuEvent], frame: u64) {
     let taps_done = frame / TAP_CYCLE_FRAMES;
-    if taps_done < taps {
-        if (frame % TAP_CYCLE_FRAMES) < TAP_SET_FRAMES {
-            tap_menu_event(im, events[taps_done as usize]);
-        }
-        false
-    } else {
-        frame >= taps * TAP_CYCLE_FRAMES + SETTLE_FRAMES
+    if (taps_done as usize) < events.len() && (frame % TAP_CYCLE_FRAMES) < TAP_SET_FRAMES {
+        tap_menu_event(im, events[taps_done as usize]);
     }
 }
 
@@ -256,10 +225,21 @@ impl DriveMode {
             Phase::Continue,
             Phase::WaitLoadIn,
         ];
-        // reload: assumes already in-world; menu flow -> native quit-to-menu -> reload Continue.
+        // The native quit-to-menu flow (each keystate step gated on its own pane semaphore).
+        const QUIT_FLOW: [Phase; 5] = [
+            Phase::OpenPauseMenu,
+            Phase::NavToOptionSetting,
+            Phase::TabToQuit,
+            Phase::Quit,
+            Phase::QuitTeardown,
+        ];
+        // reload: assumes already in-world; quit-to-menu -> reload Continue.
         const RELOAD: &[Phase] = &[
-            Phase::MenuFlow,
-            Phase::QuitToMenu,
+            QUIT_FLOW[0],
+            QUIT_FLOW[1],
+            QUIT_FLOW[2],
+            QUIT_FLOW[3],
+            QUIT_FLOW[4],
             Phase::PressAnyButton,
             Phase::Continue,
             Phase::WaitLoadIn,
@@ -270,8 +250,11 @@ impl DriveMode {
             Phase::PressAnyButton,
             Phase::Continue,
             Phase::WaitLoadIn,
-            Phase::MenuFlow,
-            Phase::QuitToMenu,
+            QUIT_FLOW[0],
+            QUIT_FLOW[1],
+            QUIT_FLOW[2],
+            QUIT_FLOW[3],
+            QUIT_FLOW[4],
             Phase::PressAnyButton,
             Phase::Continue,
             Phase::WaitLoadIn,
@@ -316,7 +299,8 @@ fn resolve_mode() -> DriveMode {
     mode
 }
 
-/// Emit one per-phase telemetry line (the exact shape the run oracle consumes).
+/// Emit one per-phase telemetry line (the exact shape the run oracle consumes). Includes the in-world
+/// pane semaphores so a phase's boundary is fully reconstructable offline.
 fn emit_phase_telemetry(
     base: usize,
     name: &str,
@@ -330,9 +314,16 @@ fn emit_phase_telemetry(
     let duration_ms = end_tick.saturating_sub(start_tick);
     let title_state = title_scan::title_state(base);
     let a40 = title_scan::title_dialog_a40(base);
+    let menu_id = top_menu_id();
+    let tab = optionsetting_tab_index();
     let line = format!(
-        "{{\"phase\":\"{name}\",\"idx\":{idx},\"outcome\":\"{outcome}\",\"start_tick_ms\":{start_tick},\"end_tick_ms\":{end_tick},\"duration_ms\":{duration_ms},\"start_frame\":0,\"end_frame\":{frame},\"duration_frames\":{frame},\"title_state\":{title_state},\"a40\":{a40},\"menu\":\"0x{:x}\",\"world_sim\":{},\"now_loading\":{},\"load_fsm\":{}}}",
-        sem.menu, sem.world_sim as u8, sem.now_loading as u8, sem.load_fsm
+        "{{\"phase\":\"{name}\",\"idx\":{idx},\"outcome\":\"{outcome}\",\"start_tick_ms\":{start_tick},\"end_tick_ms\":{end_tick},\"duration_ms\":{duration_ms},\"start_frame\":0,\"end_frame\":{frame},\"duration_frames\":{frame},\"title_state\":{title_state},\"a40\":{a40},\"pause_menu_open\":{},\"menu_id\":{menu_id},\"tab_index\":{tab},\"return_title\":{},\"menu\":\"0x{:x}\",\"world_sim\":{},\"now_loading\":{},\"load_fsm\":{}}}",
+        pause_menu_open() as u8,
+        return_title_requested() as u8,
+        sem.menu,
+        sem.world_sim as u8,
+        sem.now_loading as u8,
+        sem.load_fsm
     );
     log_phase(&line);
 }
@@ -363,10 +354,8 @@ pub fn on_frame(base: usize) {
     let phase = phases[idx];
     let frame = PHASE_FRAME.fetch_add(1, Ordering::SeqCst);
     if frame == 0 {
-        // Phase entry: stamp the wall-clock start tick and reset per-phase internal state.
         let tick = unsafe { GetTickCount64() };
         PHASE_START_TICK.store(tick, Ordering::SeqCst);
-        MENU_OPENED_FRAME.store(u64::MAX, Ordering::SeqCst);
         harness_log!("phase[{idx}] {} ENTER at +{tick}ms", phase.name());
     }
     let start_tick = PHASE_START_TICK.load(Ordering::SeqCst);
@@ -377,11 +366,13 @@ pub fn on_frame(base: usize) {
         Status::Running => {}
         Status::Advanced => {
             harness_log!(
-                "phase[{idx}] {} ADVANCED after {frame}f (menu=0x{:x} world_sim={} now_loading={} load_fsm={} title_state={})",
+                "phase[{idx}] {} ADVANCED after {frame}f (pause_menu={} menu_id={} tab={} return_title={} world_sim={} load_fsm={} title_state={})",
                 phase.name(),
-                sem.menu,
+                pause_menu_open() as u8,
+                top_menu_id(),
+                optionsetting_tab_index(),
+                return_title_requested() as u8,
                 sem.world_sim as u8,
-                sem.now_loading as u8,
                 sem.load_fsm,
                 title_scan::title_state(base)
             );
@@ -394,12 +385,14 @@ pub fn on_frame(base: usize) {
         }
         Status::Derailed => {
             harness_log!(
-                "phase[{idx}] {} DERAILED: effect semaphore not seen within {}f budget (menu=0x{:x} world_sim={} now_loading={} load_fsm={} title_state={}) -- STOPPING drive; tear down and analyze",
+                "phase[{idx}] {} DERAILED: effect not seen within {}f (pause_menu={} menu_id={} tab={} return_title={} world_sim={} load_fsm={} title_state={}) -- STOPPING drive; tear down and analyze",
                 phase.name(),
                 phase.budget(),
-                sem.menu,
+                pause_menu_open() as u8,
+                top_menu_id(),
+                optionsetting_tab_index(),
+                return_title_requested() as u8,
                 sem.world_sim as u8,
-                sem.now_loading as u8,
                 sem.load_fsm,
                 title_scan::title_state(base)
             );

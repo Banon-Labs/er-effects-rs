@@ -141,6 +141,106 @@ pub fn now_loading() -> bool {
     unsafe { read_usize(helper + NOW_LOADING_FLAG_ED_OFFSET) }.is_some_and(|v| (v & 0xff) != 0)
 }
 
+// IN-WORLD MENU-PANE semaphores for the quit-to-menu flow (bd QUIT-TO-MENU-semaphores-2026-07-22).
+// menuData (inputmgr+0x8) is non-null for the whole SESSION -> useless as "menu open". The real open
+// signal is the popupMenu's currentTopMenuJob (HasTopMenuJob 0x14080d810), and the pane identity is the
+// top window's menu_id.
+const CS_MENU_MAN_POPUP_MENU_80_OFFSET: usize = 0x80;
+const CS_POPUP_CURRENT_TOP_JOB_B0_OFFSET: usize = 0xb0;
+const TOP_JOB_WINDOW_130_OFFSET: usize = 0x130;
+const TOP_WINDOW_MENU_ID_180_OFFSET: usize = 0x180;
+/// OptionSetting SettingTabControl (window+0x1870) -> tab view ptr (+0x10, deref) -> selected index (+0xd4).
+const OPTIONSETTING_TAB_CONTROL_1870_OFFSET: usize = 0x1870;
+const OPTIONSETTING_TAB_VIEW_10_OFFSET: usize = 0x10;
+const OPTIONSETTING_TAB_INDEX_D4_OFFSET: usize = 0xd4;
+/// Return-title request byte within menuData (set when the quit-to-title functor fires) = quit STARTED.
+const MENU_DATA_RETURN_TITLE_5D_OFFSET: usize = 0x5d;
+
+/// In-world menu pane ids read at top_window+0x180 (u16).
+pub const INGAMETOP_MENU_ID: i32 = 0xffff;
+pub const OPTIONSETTING_MENU_ID: i32 = 0x25;
+pub const OPTIONSETTING_QUIT_TAB_INDEX: i32 = 8;
+
+fn input_mgr() -> usize {
+    game_base()
+        .and_then(|b| deref_singleton(b, CS_MENU_MAN_GLOBAL_RVA))
+        .unwrap_or(0)
+}
+
+/// `popupMenu->currentTopMenuJob` (inputmgr+0x80 -> +0xB0), or 0. Non-zero ONLY when a popup/pause menu
+/// is actually up -- the correct "pause menu open" signal (unlike menuData+0x8).
+fn top_menu_job() -> usize {
+    let im = input_mgr();
+    if im == 0 {
+        return 0;
+    }
+    let Some(popup) =
+        (unsafe { read_usize(im + CS_MENU_MAN_POPUP_MENU_80_OFFSET) }).filter(|p| *p >= HEAP_LO)
+    else {
+        return 0;
+    };
+    unsafe { read_usize(popup + CS_POPUP_CURRENT_TOP_JOB_B0_OFFSET) }
+        .filter(|p| *p >= HEAP_LO)
+        .unwrap_or(0)
+}
+
+/// The top menu window (`currentTopMenuJob+0x130`), or 0.
+fn top_window() -> usize {
+    let job = top_menu_job();
+    if job == 0 {
+        return 0;
+    }
+    unsafe { read_usize(job + TOP_JOB_WINDOW_130_OFFSET) }
+        .filter(|p| *p >= HEAP_LO)
+        .unwrap_or(0)
+}
+
+/// TRUE only when the in-world pause menu (a popup top-job) is up. Replaces the false-positive
+/// menu_data_ptr check.
+pub fn pause_menu_open() -> bool {
+    top_menu_job() != 0
+}
+
+/// The topmost pane's menu id (top_window+0x180, u16), or -1: `INGAMETOP_MENU_ID`=0xffff,
+/// `OPTIONSETTING_MENU_ID`=0x25.
+pub fn top_menu_id() -> i32 {
+    let w = top_window();
+    if w == 0 {
+        return -1;
+    }
+    unsafe { read_usize(w + TOP_WINDOW_MENU_ID_180_OFFSET) }.map_or(-1, |v| (v & 0xffff) as i32)
+}
+
+/// OptionSetting selected tab index (window+0x1870+0x10[deref]+0xd4, i32), or -1. Quit tab = 8.
+pub fn optionsetting_tab_index() -> i32 {
+    let w = top_window();
+    if w == 0 {
+        return -1;
+    }
+    let Some(view) = (unsafe {
+        read_usize(w + OPTIONSETTING_TAB_CONTROL_1870_OFFSET + OPTIONSETTING_TAB_VIEW_10_OFFSET)
+    })
+    .filter(|p| *p >= HEAP_LO) else {
+        return -1;
+    };
+    unsafe { read_usize(view + OPTIONSETTING_TAB_INDEX_D4_OFFSET) }
+        .map_or(-1, |v| (v & 0xffff_ffff) as i32)
+}
+
+/// Return-title request byte (menuData+0x5d == 1): the quit-to-title functor fired = quit STARTED.
+pub fn return_title_requested() -> bool {
+    let im = input_mgr();
+    if im == 0 {
+        return false;
+    }
+    let Some(md) =
+        (unsafe { read_usize(im + CS_MENU_MAN_MENU_DATA_OFFSET) }).filter(|p| *p >= HEAP_LO)
+    else {
+        return false;
+    };
+    unsafe { read_usize(md + MENU_DATA_RETURN_TITLE_5D_OFFSET) }.is_some_and(|v| (v & 0xff) == 1)
+}
+
 /// Read the optional drive-mode flag file (CWD-relative, same dir as the log): one of `boot`,
 /// `reload`, `full` (default `full`). Lets a run switch the drive PATTERN without a rebuild.
 pub fn read_drive_mode_flag() -> String {

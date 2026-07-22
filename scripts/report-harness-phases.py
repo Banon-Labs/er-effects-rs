@@ -37,6 +37,38 @@ def load(path: str):
     return rows, path
 
 
+def load_timeseries(phases_path: str):
+    """Load the sibling telemetry timeseries (fps samples with oracle_tick_ms) so each phase window can
+    be annotated with its mean fps. Returns a list of (tick_ms, fps) sorted by tick_ms, or []."""
+    d = os.path.dirname(phases_path)
+    p = os.path.join(d, "er-telemetry-timeseries.jsonl")
+    samples = []
+    if not os.path.exists(p):
+        return samples
+    for line in open(p, encoding="utf-8", errors="replace").read().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            r = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        tick = r.get("oracle_tick_ms")
+        spf = r.get("oracle_flip_task_delta")
+        if isinstance(tick, (int, float)) and tick > 0 and isinstance(spf, (int, float)) and spf > 0:
+            samples.append((float(tick), 1.0 / spf))
+    samples.sort()
+    return samples
+
+
+def phase_fps(samples, start_ms, end_ms):
+    """Mean fps of samples whose tick_ms falls in [start_ms, end_ms]."""
+    if not isinstance(start_ms, (int, float)) or not isinstance(end_ms, (int, float)):
+        return None
+    fps = [f for (t, f) in samples if start_ms <= t <= end_ms]
+    return sum(fps) / len(fps) if fps else None
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(__doc__)
@@ -46,8 +78,11 @@ def main() -> int:
     if not rows:
         print("no phase telemetry -- did the harness write er-input-harness-phases.jsonl? (harness DLL loaded, phase-split build?)")
         return 1
+    samples = load_timeseries(path)
+    fps_note = f"  (fps from {len(samples)} aligned telemetry samples)" if samples else "  (no aligned telemetry timeseries -- oracle_tick_ms missing)"
 
-    hdr = f"{'idx':>3} {'phase':<22} {'outcome':<9} {'ms':>7} {'frames':>7} {'state':>6} {'a40':>4} {'load_fsm':>8} {'world':>5}"
+    print(f"# per-phase timing + boundary semaphores{fps_note}")
+    hdr = f"{'idx':>3} {'phase':<22} {'outcome':<9} {'ms':>7} {'frames':>7} {'fps':>5} {'state':>6} {'a40':>4} {'load_fsm':>8} {'world':>5}"
     print(hdr)
     print("-" * len(hdr))
     total_ms = 0
@@ -57,9 +92,11 @@ def main() -> int:
             total_ms += dur_ms
         outcome = r.get("outcome", "?")
         mark = "" if outcome == "advanced" else "  <-- DERAILED"
+        fps = phase_fps(samples, r.get("start_tick_ms"), r.get("end_tick_ms"))
+        fps_s = f"{fps:>5.0f}" if fps is not None else f"{'-':>5}"
         print(
             f"{r.get('idx','?'):>3} {str(r.get('phase','?')):<22} {outcome:<9} "
-            f"{dur_ms:>7} {r.get('duration_frames','?'):>7} {r.get('title_state','?'):>6} "
+            f"{dur_ms:>7} {r.get('duration_frames','?'):>7} {fps_s} {r.get('title_state','?'):>6} "
             f"{r.get('a40','?'):>4} {r.get('load_fsm','?'):>8} {r.get('world_sim','?'):>5}{mark}"
         )
     print("-" * len(hdr))
