@@ -27,6 +27,11 @@ ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/samechar-3x-threed
 PRODUCT_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll"
 TRACE_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_reload_trace_dll.dll"
 HARNESS_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_input_harness_dll.dll"
+# TELEMETRY (semaphore DLL): standalone read-side oracle -- writes er-telemetry-timeseries.jsonl with
+# fixed_spf / now_loading / play_time AND per-core CPU (oracle_core_max_busy / proc_cpu_cores), aligned by
+# oracle_tick_ms, so a product load2/load3 run can be tested for single-core contention (bd NEXT-telemetry
+# -capture-per-core-cpu). Shipped alongside the product per the goal (product + semaphore/oracle DLLs).
+TELEM_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_telemetry_dll.dll"
 CAP_SECONDS="$(cat "$REPO_ROOT/.auto/runtime_timeout_cap_seconds" 2>/dev/null || echo 180)"
 
 fail() {
@@ -56,6 +61,7 @@ steam_running || fail "Steam is not running. Start Steam (interactive login) fir
 [[ -f "$PRODUCT_DLL" ]] || fail "product DLL not built: $PRODUCT_DLL"
 [[ -f "$TRACE_DLL" ]] || fail "trace DLL not built: $TRACE_DLL"
 [[ -f "$HARNESS_DLL" ]] || fail "input-harness DLL not built: $HARNESS_DLL (cargo xwin build --release --target x86_64-pc-windows-msvc -p er-input-harness-dll)"
+[[ -f "$TELEM_DLL" ]] || fail "telemetry DLL not built: $TELEM_DLL (cargo xwin build --release --target x86_64-pc-windows-msvc -p er-telemetry-dll)"
 [[ -f "$BOOT_FILE" ]] || fail "boot save not found: $BOOT_FILE"
 
 ME3="${ME3:-/mnt/c/Users/$USER/AppData/Local/garyttierney/me3/bin/me3.exe}"
@@ -68,9 +74,15 @@ win_path() { python3 -c "import sys;p=sys.argv[1];print((p[5].upper()+':\\\\'+p[
 PRODUCT_GAMEDIR="$GAME_DIR/er_effects_rs.dll"
 TRACE_GAMEDIR="$GAME_DIR/er_reload_trace_dll.dll"
 HARNESS_GAMEDIR="$GAME_DIR/er_input_harness_dll.dll"
+TELEM_GAMEDIR="$GAME_DIR/er_telemetry_dll.dll"
 cp -f "$PRODUCT_DLL" "$PRODUCT_GAMEDIR"
 cp -f "$TRACE_DLL" "$TRACE_GAMEDIR"
 cp -f "$HARNESS_DLL" "$HARNESS_GAMEDIR"
+cp -f "$TELEM_DLL" "$TELEM_GAMEDIR"
+rm -f "$GAME_DIR/er-telemetry-timeseries.jsonl" # fresh per-run core/fps timeseries
+# COMPANION: the harness auto-detects the product DLL is loaded and stands down (passive) on its own -- a
+# real runtime condition, not a marker file. Clear any stale standalone-run mode flag so nothing leaks in.
+rm -f "$GAME_DIR/er-harness-drive-mode.txt"
 PROFILE="$ARTIFACT_DIR/samechar-3x-threedll.me3"
 # Product FIRST so its er_effects_union_register export is mapped before the companions' install
 # threads resolve it (union chaining is load-order-safe either way; this just avoids the resolve poll).
@@ -88,6 +100,9 @@ PROFILE="$ARTIFACT_DIR/samechar-3x-threedll.me3"
 	echo
 	echo '[[natives]]'
 	echo "path = '$(win_path "$HARNESS_GAMEDIR")'"
+	echo
+	echo '[[natives]]'
+	echo "path = '$(win_path "$TELEM_GAMEDIR")'"
 } >"$PROFILE"
 
 # --- boot TOML (in-memory read-only redirect) for load1 ---

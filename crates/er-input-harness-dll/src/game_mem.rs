@@ -37,6 +37,14 @@ pub fn game_base() -> Option<usize> {
     (base != 0).then_some(base)
 }
 
+/// True when the PRODUCT DLL (`er_effects_rs.dll`) is loaded in this process -- a REAL runtime condition
+/// (not a marker file): when the product is present the harness is a COMPANION (the product owns the
+/// drive), so the standalone boot/menu drive must stand down and not fight it.
+pub fn product_dll_present() -> bool {
+    let name = b"er_effects_rs.dll\0";
+    (unsafe { GetModuleHandleA(name.as_ptr().cast()) } as usize) != 0
+}
+
 fn deref_singleton(base: usize, rva: usize) -> Option<usize> {
     let p = unsafe { read_usize(base + rva) }?;
     (p >= HEAP_LO).then_some(p)

@@ -63,6 +63,123 @@ fn tick_ms() -> u64 {
     }
 }
 
+/// Per-core CPU + this-process CPU sampler, to test whether single-core CONTENTION (H-B) is a factor in
+/// the load2 20fps (bd NEXT-telemetry-capture-per-core-cpu). Returns (max_core_busy%, cores_over_85,
+/// ncores, proc_cpu_core_equivalents). Delta-based vs the previous call. -1 until it has two samples.
+#[cfg(windows)]
+mod cpu {
+    use std::ffi::c_void;
+    use std::mem::size_of;
+    use std::sync::Mutex;
+
+    const SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION: u32 = 8;
+    const ALL_PROCESSOR_GROUPS: u16 = 0xffff;
+    const MAX_CORES: usize = 64;
+    const SATURATED_PCT: f32 = 85.0;
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct SppInfo {
+        idle: i64,
+        kernel: i64, // includes idle
+        user: i64,
+        dpc: i64,
+        interrupt: i64,
+        interrupt_count: u32,
+        _pad: u32,
+    }
+
+    #[link(name = "ntdll")]
+    unsafe extern "system" {
+        fn NtQuerySystemInformation(class: u32, info: *mut c_void, len: u32, ret: *mut u32) -> i32;
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCurrentProcess() -> isize;
+        fn GetProcessTimes(h: isize, c: *mut i64, e: *mut i64, k: *mut i64, u: *mut i64) -> i32;
+        fn GetActiveProcessorCount(group: u16) -> u32;
+        fn GetTickCount64() -> u64;
+    }
+
+    struct Prev {
+        cores: [(i64, i64, i64); MAX_CORES], // (idle, kernel, user)
+        proc_k: i64,
+        proc_u: i64,
+        tick: u64,
+        valid: bool,
+    }
+    impl Prev {
+        const fn new() -> Self {
+            Prev {
+                cores: [(0, 0, 0); MAX_CORES],
+                proc_k: 0,
+                proc_u: 0,
+                tick: 0,
+                valid: false,
+            }
+        }
+    }
+    static PREV: Mutex<Prev> = Mutex::new(Prev::new());
+
+    pub fn sample() -> (f32, u32, u32, f32) {
+        let ncores =
+            (unsafe { GetActiveProcessorCount(ALL_PROCESSOR_GROUPS) } as usize).clamp(1, MAX_CORES);
+        let mut buf = [SppInfo::default(); MAX_CORES];
+        let mut ret = 0u32;
+        let status = unsafe {
+            NtQuerySystemInformation(
+                SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION,
+                buf.as_mut_ptr() as *mut c_void,
+                (ncores * size_of::<SppInfo>()) as u32,
+                &mut ret,
+            )
+        };
+        let now_tick = unsafe { GetTickCount64() };
+        let (mut pk, mut pu, mut d0, mut d1) = (0i64, 0i64, 0i64, 0i64);
+        unsafe { GetProcessTimes(GetCurrentProcess(), &mut d0, &mut d1, &mut pk, &mut pu) };
+
+        let Ok(mut g) = PREV.lock() else {
+            return (-1.0, 0, ncores as u32, -1.0);
+        };
+        let (mut max_busy, mut saturated, mut proc_cpu) = (-1.0f32, 0u32, -1.0f32);
+        if status == 0 && g.valid {
+            for i in 0..ncores {
+                let idle_d = (buf[i].idle - g.cores[i].0) as f64;
+                let total =
+                    (buf[i].kernel - g.cores[i].1) as f64 + (buf[i].user - g.cores[i].2) as f64;
+                if total > 0.0 {
+                    let busy = ((total - idle_d) / total * 100.0) as f32;
+                    if busy > max_busy {
+                        max_busy = busy;
+                    }
+                    if busy > SATURATED_PCT {
+                        saturated += 1;
+                    }
+                }
+            }
+            let wall_100ns = now_tick.saturating_sub(g.tick) as f64 * 10_000.0;
+            if wall_100ns > 0.0 {
+                proc_cpu = (((pk - g.proc_k) + (pu - g.proc_u)) as f64 / wall_100ns) as f32;
+            }
+        }
+        for i in 0..ncores {
+            g.cores[i] = (buf[i].idle, buf[i].kernel, buf[i].user);
+        }
+        g.proc_k = pk;
+        g.proc_u = pu;
+        g.tick = now_tick;
+        g.valid = true;
+        (max_busy, saturated, ncores as u32, proc_cpu)
+    }
+}
+
+#[cfg(not(windows))]
+mod cpu {
+    pub fn sample() -> (f32, u32, u32, f32) {
+        (-1.0, 0, 0, -1.0)
+    }
+}
+
 pub fn standalone_tick() {
     let n = counters::STANDALONE_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
 
@@ -111,6 +228,8 @@ pub fn standalone_tick() {
         .map_or(-1, |v| i64::from((v & 0xffff_ffff) as u32))
     };
 
+    // Per-core + this-process CPU, to test whether single-core contention (H-B) drives the load2 20fps.
+    let (core_max_busy, cores_saturated, ncores, proc_cpu_cores) = cpu::sample();
     let body = format!(
         "{{\"oracle_standalone_ticks\":{n},\
 \"oracle_game_module_base\":\"0x{base:x}\",\
@@ -120,7 +239,11 @@ pub fn standalone_tick() {
 \"oracle_flip_task_delta\":{flip_task_delta:.6},\
 \"oracle_flip_fixed_spf\":{flip_fixed_spf:.6},\
 \"oracle_play_time_ms\":{play_time_ms},\
-\"oracle_tick_ms\":{tick_ms}}}\n",
+\"oracle_tick_ms\":{tick_ms},\
+\"oracle_core_max_busy\":{core_max_busy:.1},\
+\"oracle_cores_saturated\":{cores_saturated},\
+\"oracle_ncores\":{ncores},\
+\"oracle_proc_cpu_cores\":{proc_cpu_cores:.3}}}\n",
         tick_ms = tick_ms()
     );
     // APPEND one JSON line per write -> a timeseries jsonl the agent reads AFTER the run (no polling,

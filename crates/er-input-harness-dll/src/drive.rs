@@ -279,12 +279,16 @@ fn issue_pad_taps_once(buttons: &[PadButton], frame: u64) {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum DriveMode {
     BootContinueOnly,
     NativeReloadOnly,
     FullBootReload,
     Probe,
+    /// COMPANION mode for the product run (samechar-3x): the harness does NOT drive boot/menu/continue
+    /// (the PRODUCT owns that). It only keeps input active (stay-active/presence) so the product's
+    /// harness-gated behavior is enabled without the standalone drive fighting it.
+    Passive,
 }
 
 impl DriveMode {
@@ -293,6 +297,7 @@ impl DriveMode {
             "boot" => DriveMode::BootContinueOnly,
             "reload" => DriveMode::NativeReloadOnly,
             "probe" => DriveMode::Probe,
+            "passive" => DriveMode::Passive,
             _ => DriveMode::FullBootReload,
         }
     }
@@ -302,6 +307,7 @@ impl DriveMode {
             DriveMode::NativeReloadOnly => "reload",
             DriveMode::FullBootReload => "full",
             DriveMode::Probe => "probe",
+            DriveMode::Passive => "passive",
         }
     }
     fn phases(self) -> &'static [Phase] {
@@ -359,6 +365,7 @@ impl DriveMode {
             DriveMode::NativeReloadOnly => RELOAD,
             DriveMode::FullBootReload => FULL,
             DriveMode::Probe => PROBE,
+            DriveMode::Passive => &[], // companion: no drive, presence only
         }
     }
 }
@@ -373,22 +380,30 @@ static DERAILED: AtomicBool = AtomicBool::new(false);
 static INGAMETOP_JOB: AtomicUsize = AtomicUsize::new(0);
 
 fn resolve_mode() -> DriveMode {
-    const MODES: [DriveMode; 4] = [
+    const MODES: [DriveMode; 5] = [
         DriveMode::BootContinueOnly,
         DriveMode::NativeReloadOnly,
         DriveMode::FullBootReload,
         DriveMode::Probe,
+        DriveMode::Passive,
     ];
     let cached = MODE_IDX.load(Ordering::SeqCst);
     if cached != usize::MAX {
         return MODES[cached];
     }
-    let mode = DriveMode::from_flag();
+    // Product loaded -> COMPANION: stand down (real runtime condition, not a marker file). Only when
+    // running standalone does the mode flag select a standalone drive pattern.
+    let mode = if crate::game_mem::product_dll_present() {
+        DriveMode::Passive
+    } else {
+        DriveMode::from_flag()
+    };
     let idx = match mode {
         DriveMode::BootContinueOnly => 0,
         DriveMode::NativeReloadOnly => 1,
         DriveMode::FullBootReload => 2,
         DriveMode::Probe => 3,
+        DriveMode::Passive => 4,
     };
     MODE_IDX.store(idx, Ordering::SeqCst);
     harness_log!(
@@ -435,6 +450,12 @@ fn emit_phase_telemetry(
 /// Run one frame of the drive. Called on the game thread from the CSTaskImp FrameBegin task.
 pub fn on_frame(base: usize) {
     keep_input_active(base);
+
+    // COMPANION (product run): presence + stay-active only; the PRODUCT owns the drive. No phases, no
+    // popup-accept, no pad injection -- so the standalone drive never fights the product's own flow.
+    if resolve_mode() == DriveMode::Passive {
+        return;
+    }
 
     if DERAILED.load(Ordering::SeqCst) {
         return; // stopped driving; the run monitor tears the game down on the DERAILED marker
