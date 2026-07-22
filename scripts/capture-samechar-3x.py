@@ -942,7 +942,12 @@ def main() -> int:
             # simply does not fire and the run rides longer -- the intent here is to give load2 its full
             # ramp and prove movability. bd fps-test-after-load2-finished-settled-not-during-load.
             genuinely_loaded = can_move
-            if fps_now > 0 and genuinely_loaded:
+            # In DRIVE mode, do NOT tear down early on an fps regression: load2/load3 reach can_move much
+            # later than load1 (slower ramp), so an early fps sample catches the still-ramping first
+            # seconds of movability, not settled movement (run eligfix-224410: 45% "drop" that was really
+            # settled-parity 27/28/29). Let the full 3-load sequence complete its 3s windows and judge fps
+            # parity OFFLINE (analyze-samechar-epochs.py). bd MILESTONE-deterministic-3x-angre-works-clean.
+            if fps_now > 0 and genuinely_loaded and not switch_plan:
                 if _ep == 0:
                     load1_inworld_fps.append(fps_now)
                 elif _ep >= 1:
