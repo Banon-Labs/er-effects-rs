@@ -16,7 +16,7 @@ mod input_suppression;
 #[cfg(windows)]
 mod log;
 #[cfg(windows)]
-mod overlay_window;
+mod present_overlay;
 #[cfg(windows)]
 mod telemetry;
 
@@ -110,7 +110,7 @@ fn install() {
         config::runtime_config().config_path.display()
     ));
     effects::ensure_effect_hotkey_hook();
-    overlay_window::start_overlay_window_thread();
+    present_overlay::install_present_overlay_hook();
     let state = Arc::new(Mutex::new(NetEffectsState::new()));
     spawn_game_task(state);
 }
