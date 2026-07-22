@@ -169,6 +169,22 @@ def snap(t: dict) -> dict:
         "oracle_flip_use_dynamic_lock",
         "oracle_flip_dynamic_fps_lock",
         "oracle_flip_dynamic_active",
+        # FOCUS (2026-07-21 focus A/B): is the ER window the OS foreground? Tests the compositor-throttle
+        # theory -- does the 20fps stall correlate with the surface being unfocused?
+        "oracle_window_foreground",
+        # PRESENT DURATION (2026-07-21): us inside the original Present. ~tens-of-ms = present-block
+        # (compositor/vsync throttle); ~1-2ms with a 50ms frame = real per-frame WORK stall.
+        "oracle_present_call_us",
+        # COMPOSITE (2026-07-22): DLL boot-view composite duration in present detour + boot-view epoch
+        # state. composite ~tens-of-ms in-world on reloads + bv_epoch_live != current_epoch => the
+        # boot-view composite never stopped for the reload => fixable DLL bug.
+        "oracle_composite_us",
+        "oracle_boot_view_epoch_live",
+        "oracle_current_load_epoch",
+        # DLL MAIN GAME-TASK duration (2026-07-22): large on reloads => DLL per-frame code cost; fast =>
+        # game-side loop (playable-window 50ms not the DLL).
+        "oracle_game_task_us",
+        "oracle_build_driver_us",
         "oracle_frame_ms",
         "oracle_system_step_state",
         "oracle_system_step_label",

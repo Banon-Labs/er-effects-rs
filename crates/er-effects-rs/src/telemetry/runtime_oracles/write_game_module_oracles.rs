@@ -170,6 +170,45 @@ fn write_game_module_oracles(body: &mut String) {
                 read_flip_i32(0x2c9) & BYTE_MASK,
             ));
         }
+        // FOCUS SEMAPHORE (2026-07-21, focus-controlled A/B): is the ER window the OS foreground (this
+        // process)? Tests whether the load2/load3 20fps stall correlates with the surface being
+        // unfocused (the surviving compositor-present-throttle theory). Under Proton/Wine this is
+        // Wine's foreground; a false during a 20fps window supports the compositor theory.
+        {
+            let fg = crate::experiments::game_window_is_foreground();
+            body.push_str(&format!("  \"oracle_window_foreground\": {fg},\n"));
+        }
+        // PRESENT-DURATION semaphore: microseconds inside the last original Present call. Splits a
+        // present-BLOCK (compositor/vsync throttle => ~tens of ms) from a real per-frame WORK stall
+        // (present fast but frame still 50ms). bd FOCUS-AB-falsifies...next-present-duration-2026-07-21.
+        {
+            use std::sync::atomic::Ordering as PsOrd;
+            let present_us = er_telemetry::counters::PRESENT_CALL_LAST_US.load(PsOrd::SeqCst);
+            body.push_str(&format!("  \"oracle_present_call_us\": {present_us},\n"));
+        }
+        // COMPOSITE-DURATION + BOOT-VIEW EPOCH: is the DLL boot-view composite still running in-world on
+        // reloads? bv_epoch_live is the epoch the boot-view stop thinks is live; if it != current_epoch
+        // for load2/load3 the composite never stopped for that reload. bd PRESENT-FAST-work-stall...
+        {
+            use std::sync::atomic::Ordering as CoOrd;
+            let composite_us = er_telemetry::counters::COMPOSITE_LAST_US.load(CoOrd::SeqCst);
+            let bv_epoch = crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(CoOrd::Relaxed);
+            let cur_epoch =
+                crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(CoOrd::SeqCst);
+            body.push_str(&format!(
+                "  \"oracle_composite_us\": {composite_us},\n  \"oracle_boot_view_epoch_live\": {bv_epoch},\n  \"oracle_current_load_epoch\": {cur_epoch},\n"
+            ));
+        }
+        // DLL MAIN GAME-TASK duration: large on reloads => DLL per-frame code cost (our bug); fast =>
+        // game-side loop cost (the playable-window 50ms is not the DLL). bd CORRECTION-scan-fix-didnt...
+        {
+            use std::sync::atomic::Ordering as GtOrd;
+            let gt_us = er_telemetry::counters::GAME_TASK_LAST_US.load(GtOrd::SeqCst);
+            let bd_us = er_telemetry::counters::BUILD_DRIVER_LAST_US.load(GtOrd::SeqCst);
+            body.push_str(&format!(
+                "  \"oracle_game_task_us\": {gt_us},\n  \"oracle_build_driver_us\": {bd_us},\n"
+            ));
+        }
         // IDENTITY oracle: loaded character values that should match the chosen save slot.
         // These mirror ER-Save-File-Readers' player_game_data models (health/fp today, broader
         // slot attributes as that reference grows) while reading the live GameDataMan path used by

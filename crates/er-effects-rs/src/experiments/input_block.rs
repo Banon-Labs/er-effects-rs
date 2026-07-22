@@ -169,6 +169,24 @@ pub(crate) use er_telemetry::counters::SQ_REPRO_IS_FOREGROUND;
 /// Force the ER window to the foreground (headless me3 launches often leave it non-foreground, and
 /// native ER only processes RawInput menu input for the FOREGROUND window). Uses the AttachThreadInput
 /// trick so `SetForegroundWindow` is not silently refused. Records whether it ended up foreground.
+/// FOCUS SEMAPHORE (2026-07-21, focus-controlled A/B): is the OS foreground window owned by THIS (the
+/// game) process? Computed FRESH each call (independent of the sq-repro forcing, which stands down in
+/// deterministic mode). Under Proton/Wine this reflects Wine's foreground window; we emit it as
+/// oracle_window_foreground to test whether the load2/load3 20fps stall correlates with the ER surface
+/// being unfocused (the surviving compositor-present-throttle theory). bd
+/// CANDIDATE-A-empty-native-loadmode-excluded-compositor-B-surviving-2026-07-21.
+pub(crate) fn game_window_is_foreground() -> bool {
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.0.is_null() {
+            return false;
+        }
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(fg, Some(&mut pid as *mut u32));
+        pid != 0 && pid == GetCurrentProcessId()
+    }
+}
+
 fn sq_repro_ensure_foreground(hwnd: HWND) {
     unsafe {
         let fg = GetForegroundWindow();

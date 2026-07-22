@@ -25,6 +25,24 @@ pub static PRESENT_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub static PRESENT1_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub static PRESENT_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static PRESENT_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
+/// Microseconds spent INSIDE the last original IDXGISwapChain::Present/Present1 call (measured in the
+/// present detour). Discriminates a present-BLOCK (compositor/vsync throttle => ~40ms) from a real
+/// CPU/GPU per-frame WORK stall (present fast ~1-2ms but the frame is still 50ms). bd
+/// FOCUS-AB-falsifies-unfocused-throttle...next-present-duration-2026-07-21.
+pub static PRESENT_CALL_LAST_US: AtomicUsize = AtomicUsize::new(0);
+/// Microseconds spent in the DLL's boot-view composite (composite_on_game_swapchain) in the present
+/// detour, BEFORE the original Present. If this is ~tens of ms in-world on reloads it is the per-frame
+/// WORK stall (present_call_us is fast but the composite is invisible to it, yet counts in the
+/// present-to-present frame time). bd PRESENT-FAST-work-stall...dll-bootview-composite-2026-07-22.
+pub static COMPOSITE_LAST_US: AtomicUsize = AtomicUsize::new(0);
+/// Microseconds spent in the DLL's MAIN recurring game-task body (FrameBegin) last frame. Splits a
+/// DLL per-frame CODE cost (large on reloads => our bug) from a game-side loop cost (fast => game/env).
+/// bd CORRECTION-scan-fix-didnt-recover...suspect-moveprobe-2026-07-22.
+pub static GAME_TASK_LAST_US: AtomicUsize = AtomicUsize::new(0);
+/// Microseconds in the DLL build-driver FrameBegin task (maybe_register_stats_panel_textures +
+/// force_profile_render_tick) last frame -- the last untimed DLL per-frame task. bd
+/// SWEEP-DIAG-CHEAP-last-dll-suspect-is-build-driver-2026-07-22.
+pub static BUILD_DRIVER_LAST_US: AtomicUsize = AtomicUsize::new(0);
 pub static GAME_PRESENT_HOOKED: AtomicUsize = AtomicUsize::new(0);
 pub static GAME_SWAPCHAIN_FIND_TRIES: AtomicUsize = AtomicUsize::new(0);
 pub static PRESENT_RESOLVED_ADDR: AtomicUsize = AtomicUsize::new(0);

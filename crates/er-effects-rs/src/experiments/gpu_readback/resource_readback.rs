@@ -560,6 +560,21 @@ unsafe fn find_d3d12_resource_ex(
     if start == 0 || start == null {
         return None;
     }
+    // FPS PARITY ROOT (bd FPS-ROOT-perframe-find_d3d12_resource_ex-...-2026-07-22): this process-wide
+    // "largest TEXTURE2D" walk is a LOADING/portrait/boot-view readback helper. A per-frame caller was
+    // running it ~3400x in-world on reloads (load2/load3) vs 8x on load1, burning ~30ms/frame -- the
+    // 20fps reload root (present fast, composite skipped, focused, flip targets 60; the cost was HERE).
+    // Once the CURRENT fresh_deser epoch is genuinely in-world (world-clock live), there is no loading RT
+    // to find, so skip the scan -- the same per-epoch gate the composite (present_overlay.rs:277) and the
+    // lookat draw-tick (lookat_bone_hooks.rs:366) already use. Loading-time scans (world not yet live)
+    // still run.
+    {
+        use std::sync::atomic::Ordering as RbOrd;
+        let cur = crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(RbOrd::SeqCst);
+        if crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(RbOrd::SeqCst) == cur {
+            return None;
+        }
+    }
     let er = match unsafe { pe_image_range(game_module_base().ok()?) } {
         Some(r) => r,
         None => {

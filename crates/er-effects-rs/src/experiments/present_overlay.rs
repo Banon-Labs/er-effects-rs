@@ -149,13 +149,23 @@ unsafe extern "system" fn present_hook(this: *mut c_void, sync: u32, flags: u32)
     if this_u == GAME_SWAPCHAIN.load(Ordering::SeqCst) {
         let base = GAME_BASE.load(Ordering::SeqCst);
         if base != 0 {
+            // Time the boot-view composite (the suspected per-frame WORK stall on reloads).
+            let tc = std::time::Instant::now();
             unsafe { composite_on_game_swapchain(base, this_u) };
+            er_telemetry::counters::COMPOSITE_LAST_US
+                .store(tc.elapsed().as_micros() as usize, Ordering::SeqCst);
         }
     }
     let orig = PRESENT_ORIG.load(Ordering::SeqCst);
     if orig != 0 {
         let f: PresentFn = unsafe { std::mem::transmute(orig) };
-        unsafe { f(this, sync, flags) }
+        // Time the original Present to split present-BLOCK (compositor/vsync throttle) from a real
+        // per-frame WORK stall. bd FOCUS-AB-falsifies-unfocused-throttle...next-present-duration.
+        let t0 = std::time::Instant::now();
+        let r = unsafe { f(this, sync, flags) };
+        er_telemetry::counters::PRESENT_CALL_LAST_US
+            .store(t0.elapsed().as_micros() as usize, Ordering::SeqCst);
+        r
     } else {
         0
     }
@@ -182,13 +192,20 @@ unsafe extern "system" fn present1_hook(
     if this_u == GAME_SWAPCHAIN.load(Ordering::SeqCst) {
         let base = GAME_BASE.load(Ordering::SeqCst);
         if base != 0 {
+            let tc = std::time::Instant::now();
             unsafe { composite_on_game_swapchain(base, this_u) };
+            er_telemetry::counters::COMPOSITE_LAST_US
+                .store(tc.elapsed().as_micros() as usize, Ordering::SeqCst);
         }
     }
     let orig = PRESENT1_ORIG.load(Ordering::SeqCst);
     if orig != 0 {
         let f: Present1Fn = unsafe { std::mem::transmute(orig) };
-        unsafe { f(this, sync, flags, params) }
+        let t0 = std::time::Instant::now();
+        let r = unsafe { f(this, sync, flags, params) };
+        er_telemetry::counters::PRESENT_CALL_LAST_US
+            .store(t0.elapsed().as_micros() as usize, Ordering::SeqCst);
+        r
     } else {
         0
     }

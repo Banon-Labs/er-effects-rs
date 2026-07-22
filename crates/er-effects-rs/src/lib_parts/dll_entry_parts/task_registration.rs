@@ -97,6 +97,16 @@ fn poll_autoload_handoff_parent_state_guard() {
     ));
 }
 
+/// RAII timer: records the DLL main game-task body duration (any return path) into GAME_TASK_LAST_US,
+/// to split a DLL per-frame CODE cost from a game-side loop cost for the playable-window fps.
+struct GameTaskTimer(std::time::Instant);
+impl Drop for GameTaskTimer {
+    fn drop(&mut self) {
+        er_telemetry::counters::GAME_TASK_LAST_US
+            .store(self.0.elapsed().as_micros() as usize, Ordering::SeqCst);
+    }
+}
+
 pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
     std::thread::spawn(move || {
         write_bootstrap_event(
@@ -116,6 +126,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
 
         cs_task.run_recurring(
             move |task_data: &FD4TaskData| {
+                let _gt = GameTaskTimer(std::time::Instant::now());
                 // Boot-phase marker: first frame our recurring task actually ticks.
                 if profiler_enabled()
                     && BOOT_FIRST_FRAME_LOGGED
@@ -648,6 +659,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
         // Gated by portrait_render_drive_enabled so it can be A/B'd against the safe checker baseline.
         cs_task.run_recurring(
             move |_task_data: &FD4TaskData| {
+                let _bt = std::time::Instant::now();
                 if let Ok(base) = game_module_base() {
                     // Stats-panel neutral-bg register: runs on EVERY frame regardless of the autoload
                     // path (the `save_requested` product path never enters product_core_autoload_tick,
@@ -661,6 +673,8 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         };
                     }
                 }
+                er_telemetry::counters::BUILD_DRIVER_LAST_US
+                    .store(_bt.elapsed().as_micros() as usize, Ordering::SeqCst);
             },
             CSTaskGroupIndex::FrameBegin,
         );

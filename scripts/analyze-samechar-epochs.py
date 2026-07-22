@@ -168,6 +168,62 @@ def main() -> int:
             )
         else:
             print("   flip (playable)  : (no can_move samples with flip data -- old DLL?)")
+        # FOCUS correlation: fraction of the playable window where the ER window was OS-foreground.
+        fg_window = [
+            s.get("oracle_window_foreground")
+            for s in samples
+            if as_bool(s.get("oracle_can_move")) and s.get("oracle_window_foreground") is not None
+        ]
+        if fg_window:
+            fg_true = sum(1 for v in fg_window if v in (True, 1, "true"))
+            print(
+                f"   focus (playable) : foreground {fg_true}/{len(fg_window)} samples "
+                f"({'FOCUSED' if fg_true == len(fg_window) else 'UNFOCUSED' if fg_true == 0 else 'MIXED'})"
+                f"   <-- unfocused during 20fps => compositor throttle (B)"
+            )
+        present_us = [
+            as_float(s.get("oracle_present_call_us"))
+            for s in samples
+            if as_bool(s.get("oracle_can_move")) and as_float(s.get("oracle_present_call_us")) > 0
+        ]
+        if present_us:
+            pm = statistics.mean(present_us)
+            verdict = "PRESENT-BLOCK (compositor/vsync)" if pm > 15000 else "present fast => WORK stall elsewhere"
+            print(
+                f"   present (playable): {pm / 1000:.1f}ms/present (n={len(present_us)})   <-- {verdict}"
+            )
+        comp_us = [
+            as_float(s.get("oracle_composite_us"))
+            for s in samples
+            if as_bool(s.get("oracle_can_move")) and as_float(s.get("oracle_composite_us")) >= 0
+        ]
+        bv_live = {as_int(s.get("oracle_boot_view_epoch_live"), -1) for s in samples if as_bool(s.get("oracle_can_move"))}
+        cur_ep = {as_int(s.get("oracle_current_load_epoch"), -1) for s in samples if as_bool(s.get("oracle_can_move"))}
+        if comp_us:
+            cm_mean = statistics.mean(comp_us)
+            print(
+                f"   composite (play) : {cm_mean / 1000:.1f}ms/frame (n={len(comp_us)}) "
+                f"boot_view_epoch_live={sorted(bv_live)} current_epoch={sorted(cur_ep)}   "
+                f"<-- composite tens-of-ms + bv_live!=current => boot-view never stopped on reload (DLL bug)"
+            )
+        gt_us = [
+            as_float(s.get("oracle_game_task_us"))
+            for s in samples
+            if as_bool(s.get("oracle_can_move")) and as_float(s.get("oracle_game_task_us")) > 0
+        ]
+        if gt_us:
+            gm = statistics.mean(gt_us)
+            print(
+                f"   dll_game_task    : {gm / 1000:.1f}ms/frame (n={len(gt_us)})   "
+                f"<-- large on reloads => DLL per-frame code cost; fast => game-side loop"
+            )
+        bd_us = [
+            as_float(s.get("oracle_build_driver_us"))
+            for s in samples
+            if as_bool(s.get("oracle_can_move")) and as_float(s.get("oracle_build_driver_us")) > 0
+        ]
+        if bd_us:
+            print(f"   dll_build_driver : {statistics.mean(bd_us) / 1000:.1f}ms/frame (n={len(bd_us)})")
 
     # settled-vs-settled cross-epoch fps comparison (the real regression question)
     print("\n## settled fps comparison (settled-vs-settled, the real regression check)")
