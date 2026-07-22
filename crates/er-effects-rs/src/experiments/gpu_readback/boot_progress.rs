@@ -2094,7 +2094,7 @@ unsafe fn effect_selector_view_init(backbuffer: &ID3D12Resource) -> bool {
 }
 
 unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
-    let text = crate::effects::effect_selector_overlay_text();
+    let text = String::new();
     if text.trim().is_empty() || EFFECT_SELECTOR_VIEW_DRAW_STATE.load(Ordering::SeqCst) == 2 {
         return false;
     }

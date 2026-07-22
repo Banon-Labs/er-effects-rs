@@ -1,0 +1,21 @@
+[package]
+name = "er-net-effects-dll"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_net_effects_dll"
+crate-type = ["cdylib"]
+
+[target.'cfg(windows)'.dependencies]
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+er-effects-data = { path = "../effects-data" }
+er-hook = { path = "../er-hook" }
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_LibraryLoader",
+  "Win32_System_SystemServices",
+  "Win32_UI_WindowsAndMessaging",
+] }

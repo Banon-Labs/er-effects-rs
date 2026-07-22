@@ -2738,7 +2738,6 @@ version = "0.1.0"
 dependencies = [
  "bitflags 2.13.0",
  "eldenring",
- "er-effects-data",
  "er-game-base",
  "er-gfx",
  "er-hook",
@@ -2788,6 +2787,17 @@ name = "er-input-harness-dll"
 version = "0.1.0"
 dependencies = [
  "er-hook",
+]
+
+[[package]]
+name = "er-net-effects-dll"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-effects-data",
+ "er-hook",
+ "fromsoftware-shared",
+ "windows 0.62.2",
 ]
 
 [[package]]
