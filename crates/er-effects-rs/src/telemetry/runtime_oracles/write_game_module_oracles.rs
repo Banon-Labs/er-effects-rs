@@ -126,6 +126,50 @@ fn write_game_module_oracles(body: &mut String) {
                 "  \"oracle_system_step_state\": {sv},\n  \"oracle_system_step_label\": \"{sl}\",\n"
             ));
         }
+        // FLIP-TIMING oracle (RE 2026-07-21, bd MECHANISM-20fps-cap-is-csflipperimp-fixedspf): the
+        // load2/load3 20fps flat cap is the GAME's own frame limiter -- CSFlipperImp::UpdateFlipTiming
+        // sleeps each frame until elapsed >= fixedSpf. fixedSpf=0.05 (FLIP_20FPS_ADAPTIVE, or
+        // useDynamicFpsLock+dynamicFpsLock=20) => 20fps; boot runs 60/120. oracle_flip_fixed_spf is
+        // DECISIVE (0.05=cap vs 0.0167=60); last_frame_time distinguishes CAP (0.05) from a stall
+        // (fixed_spf small but last=0.05). Focus is provably irrelevant. Singleton at base+0x4589ad8
+        // (same 0x14458_9xxx singleton table as IoDevice/DELAY_DELETE/ACCEPT_BYTE).
+        {
+            const CS_FLIPPER_SINGLETON_RVA: usize = 0x4589ad8;
+            let flipper =
+                unsafe { crate::experiments::safe_read_usize(base + CS_FLIPPER_SINGLETON_RVA) }
+                    .filter(|p| *p >= 0x10000)
+                    .unwrap_or(NULL_PTR);
+            let read_flip_f32 = |off: usize| -> f32 {
+                if flipper == NULL_PTR {
+                    -1.0
+                } else {
+                    unsafe { crate::experiments::safe_read_usize(flipper + off) }
+                        .map_or(-1.0, |v| f32::from_bits((v & 0xffff_ffff) as u32))
+                }
+            };
+            let read_flip_i32 = |off: usize| -> i32 {
+                if flipper == NULL_PTR {
+                    READ_FAIL_SENTINEL
+                } else {
+                    unsafe { crate::experiments::safe_read_usize(flipper + off) }
+                        .map_or(READ_FAIL_SENTINEL, |v| v as u32 as i32)
+                }
+            };
+            const BYTE_MASK: i32 = 0xff;
+            body.push_str(&format!(
+                "  \"oracle_flip_fixed_spf\": {:.6},\n  \"oracle_flip_last_frame_time\": {:.6},\n  \"oracle_flip_task_delta\": {:.6},\n  \"oracle_flip_calc_fps\": {:.2},\n  \"oracle_flip_mode_current\": {},\n  \"oracle_flip_mode_initial\": {},\n  \"oracle_flip_vsync_interval\": {},\n  \"oracle_flip_use_dynamic_lock\": {},\n  \"oracle_flip_dynamic_fps_lock\": {:.2},\n  \"oracle_flip_dynamic_active\": {},\n",
+                read_flip_f32(0x1c),
+                read_flip_f32(0x264),
+                read_flip_f32(0x268),
+                read_flip_f32(0x2b8),
+                read_flip_i32(0xc),
+                read_flip_i32(0x8),
+                read_flip_i32(0x18),
+                read_flip_i32(0x2c8) & BYTE_MASK,
+                read_flip_f32(0x2c4),
+                read_flip_i32(0x2c9) & BYTE_MASK,
+            ));
+        }
         // IDENTITY oracle: loaded character values that should match the chosen save slot.
         // These mirror ER-Save-File-Readers' player_game_data models (health/fp today, broader
         // slot attributes as that reference grows) while reading the live GameDataMan path used by

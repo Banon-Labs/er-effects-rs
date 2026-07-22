@@ -151,6 +151,23 @@ def main() -> int:
             f"player_present={as_int(last.get('oracle_switch_player_present'), -1)} "
             f"menu_job={as_int(last.get('oracle_switch_menu_job_present'), -1)}"
         )
+        flip_spf = [
+            as_float(s.get("oracle_flip_fixed_spf"))
+            for s in samples
+            if as_bool(s.get("oracle_can_move")) and as_float(s.get("oracle_flip_fixed_spf")) > 0
+        ]
+        flip_modes = sorted(
+            {as_int(s.get("oracle_flip_mode_current"), -1) for s in samples if as_bool(s.get("oracle_can_move"))}
+        )
+        if flip_spf:
+            spf = statistics.mean(flip_spf)
+            print(
+                f"   flip (playable)  : fixed_spf={spf:.4f} (~{1 / spf:.0f}fps cap) mode_current={flip_modes} "
+                f"use_dyn_lock={as_int(last.get('oracle_flip_use_dynamic_lock'), -1)} "
+                f"dyn_lock={last.get('oracle_flip_dynamic_fps_lock')}   <-- 0.05=20fps CAP, 0.0167=60"
+            )
+        else:
+            print("   flip (playable)  : (no can_move samples with flip data -- old DLL?)")
 
     # settled-vs-settled cross-epoch fps comparison (the real regression question)
     print("\n## settled fps comparison (settled-vs-settled, the real regression check)")

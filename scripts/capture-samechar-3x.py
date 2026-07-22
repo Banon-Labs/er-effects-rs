@@ -157,6 +157,18 @@ def snap(t: dict) -> dict:
         "oracle_switch_stable_frames",
         "oracle_fps",
         "oracle_min_fps",
+        # FLIP-TIMING (2026-07-21): the game's frame limiter. oracle_flip_fixed_spf is DECISIVE for the
+        # load2/load3 20fps cap -- 0.05=20fps CAP, 0.0167=60. mode_current/dynamic_lock name the lever.
+        "oracle_flip_fixed_spf",
+        "oracle_flip_last_frame_time",
+        "oracle_flip_task_delta",
+        "oracle_flip_calc_fps",
+        "oracle_flip_mode_current",
+        "oracle_flip_mode_initial",
+        "oracle_flip_vsync_interval",
+        "oracle_flip_use_dynamic_lock",
+        "oracle_flip_dynamic_fps_lock",
+        "oracle_flip_dynamic_active",
         "oracle_frame_ms",
         "oracle_system_step_state",
         "oracle_system_step_label",
