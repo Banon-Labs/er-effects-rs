@@ -525,7 +525,14 @@ pub(crate) fn harness_dll_present() -> bool {
     present
 }
 pub(crate) fn system_quit_repro_enabled() -> bool {
+    // Stand down the flaky menu-nav switch driver when the DETERMINISTIC control-file driver owns the
+    // switch (er-effects-switch-slot.txt present). Running both fought over arming AND the menu-nav
+    // suppressed the move-probe (load2 can_move never latched). The move-probe (prove_movement_enabled)
+    // stays on harness presence. bd MILESTONE-detdrive-works-but-sqrepro-menunav-conflict-2026-07-21.
     harness_dll_present()
+        && er_telemetry::counters::DETERMINISTIC_SWITCH_DRIVER_ACTIVE
+            .load(std::sync::atomic::Ordering::SeqCst)
+            == 0
 }
 /// DISPROVEN/LEGACY menu-drive escape hatch -- deliberately OFF by default and HARD to trigger.
 ///

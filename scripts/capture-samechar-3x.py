@@ -33,6 +33,10 @@ TARGET_FINAL_EPOCH = 3  # 4 loads total = fresh_deser 0..3
 # (--require-reload-settled) requires THIS epoch's reload to move+settle so the run drives through all 3
 # loads instead of ending on load2. Matches SQ_REPRO_TARGET_SWITCHES in constants/system_quit.rs.
 FINAL_RELOAD_EPOCH = 2
+# The goal requires 3 SECONDS of movement per load. Hold each load's playable+moving window at least
+# this long (sampling fps) before triggering the next switch, so FPS parity is measured over a real
+# window rather than a single frame.
+MOVE_WINDOW_SECONDS = 3.0
 FINAL_LOAD_DWELL_SECONDS = (
     14.0  # after the 4th load appears, give the 60-frame move-probe time to run
 )
@@ -716,6 +720,15 @@ def main() -> int:
                 switch_plan.append((int(tok), None))
     if args.drive_cross_save_file and args.drive_cross_save_slot >= 0:
         switch_plan.append((args.drive_cross_save_slot, args.drive_cross_save_file))
+    # DETERMINISTIC-DRIVER HANDOFF: create the switch control file with an OUT-OF-RANGE sentinel (-1)
+    # before any load so the product marks the deterministic driver as owning switches from boot (the
+    # flaky sq-repro menu-nav stands down, which also un-suppresses the move-probe) WITHOUT triggering a
+    # switch (-1 is rejected as out-of-range). This also clears any stale trigger/override from a prior
+    # run. Real triggers overwrite it with a valid slot after each load proves movement.
+    if switch_plan:
+        with contextlib.suppress(OSError):
+            (args.game_dir / "er-effects-switch-save-file.txt").write_text("", encoding="utf-8")
+            (args.game_dir / "er-effects-switch-slot.txt").write_text("-1", encoding="utf-8")
 
     args.artifact_dir.mkdir(parents=True, exist_ok=True)
     telemetry_path = args.game_dir / "er-effects-telemetry.json"
@@ -725,6 +738,8 @@ def main() -> int:
     # Deterministic switch driver: which plan entry to fire next, and the final success epoch.
     next_switch_idx = 0
     final_epoch = len(switch_plan) if switch_plan else FINAL_RELOAD_EPOCH
+    # Per-epoch time the playable+moving window opened (first can_move), to enforce the 3s hold.
+    epoch_canmove_start: dict[int, float] = {}
     if switch_plan:
         print(
             f"[drive-switch] plan: {len(switch_plan)} triggered load(s) after load1; "
@@ -837,27 +852,37 @@ def main() -> int:
             # run down before load1 finished (user 2026-07-21: "why did you tear down before load 1").
             # Loads are validated by the game-global signature + the stall guard, not the unreliable
             # injection verdict; a disproven/contaminated verdict just lets the run keep going.
-            # DETERMINISTIC SWITCH DRIVER: once the CURRENT load proves movement, write the control file
-            # to trigger the NEXT load (replaces the flaky menu-nav). Plan entry i fires after epoch i
-            # proves (epoch 0 = boot load1 -> plan[0] triggers load2, plan[1] -> load3, ...).
+            # Track when THIS epoch's playable+moving window opened (first can_move), to enforce the 3s
+            # sustained-movement hold before the next switch / the success verdict.
+            cur_ep = as_int(deser)
+            if can_move and cur_ep not in epoch_canmove_start:
+                epoch_canmove_start[cur_ep] = now
+            move_window_ok = (
+                cur_ep in epoch_canmove_start
+                and (now - epoch_canmove_start[cur_ep]) >= MOVE_WINDOW_SECONDS
+            )
+            # DETERMINISTIC SWITCH DRIVER: once the CURRENT load proves movement AND has sustained a 3s
+            # playable+moving window, write the control file to trigger the NEXT load (replaces the flaky
+            # menu-nav). Plan entry i fires after epoch i (epoch 0 = boot load1 -> plan[0] triggers load2).
             if (
                 switch_plan
                 and next_switch_idx < len(switch_plan)
-                and as_int(deser) == next_switch_idx
+                and cur_ep == next_switch_idx
                 and harness_verdict == 1
+                and move_window_ok
             ):
                 _slot, _save_file = switch_plan[next_switch_idx]
                 write_switch_trigger(args.game_dir, _slot, _save_file)
                 print(
-                    f"[drive-switch] load{next_switch_idx + 2}: proved movement on epoch "
-                    f"{next_switch_idx}; wrote trigger slot={_slot} "
+                    f"[drive-switch] load{next_switch_idx + 2}: epoch {next_switch_idx} proved movement + "
+                    f"held {MOVE_WINDOW_SECONDS:.0f}s window; wrote trigger slot={_slot} "
                     f"cross_save={_save_file or 'no (active angrE save)'}",
                     flush=True,
                 )
                 next_switch_idx += 1
-            # Success = the FINAL planned load proves movement (final_epoch = len(plan) when driving, else
-            # the legacy FINAL_RELOAD_EPOCH). Earlier epochs proving just advance the driver, above.
-            if harness_verdict == 1 and as_int(deser) >= final_epoch:
+            # Success = the FINAL planned load proves movement AND holds the 3s window (final_epoch =
+            # len(plan) when driving, else the legacy FINAL_RELOAD_EPOCH).
+            if harness_verdict == 1 and cur_ep >= final_epoch and move_window_ok:
                 result = f"HARNESS_MOVE_PROVEN_harness_moved_char_epoch{deser}"
                 break
             # IMPRINT CAPTURE (boot_to_control phase): end the boot imprint the INSTANT control is
@@ -1192,15 +1217,19 @@ def main() -> int:
     if completions >= 1:
         trigger_reason = f"reload(s) DID fire ({completions} committed); the trigger worked."
     elif sw_arm == 0 and sw_deferred > 0:
-        if not sw_menujob:
-            gate = "the in-world menu job (CSMenuMan+0x798) was absent"
-        elif not sw_player:
-            gate = "the local player was absent"
+        # Eligibility is now player-present only (menu_job requirement dropped 2026-07-21). Use the
+        # AUTHORITATIVE WorldChrMan signal oracle_player_present; oracle_switch_player_present only
+        # updates during an ACTIVE switch tick (reads 0 in pre-switch gameplay), so it must NOT be the
+        # reason source (that mis-attributed run cleandrive-223256 to "player absent" when the real block
+        # was menu_job). bd DECISIVE-poller-eligibility-menujob-overconservative-2026-07-21.
+        real_present = bool(final_s.get("oracle_player_present"))
+        if not real_present:
+            gate = "the local player was absent (world torn down / mid-load / never spawned)"
         else:
-            gate = f"the world was not stable long enough (stable_frames={sw_stable})"
+            gate = "phase was not idle / a switch was already in flight (the player IS present)"
         trigger_reason = (
-            f"NEVER ARMED: {sw_deferred} deferred arm(s) -- a switch request was seen but {gate} "
-            f"(player_present={sw_player} menu_job_present={sw_menujob})."
+            f"NEVER ARMED: {sw_deferred} deferred arm(s) -- {gate} "
+            f"(oracle_player_present={real_present}, switch_menu_job={sw_menujob})."
         )
     elif sw_arm == 0:
         trigger_reason = (

@@ -610,6 +610,11 @@ pub static SWITCH_TRIGGER_LAST_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static SWITCH_TRIGGER_DEFERRED_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SWITCH_SLOT_CONTROL_MTIME: AtomicUsize = AtomicUsize::new(0);
 pub static SWITCH_SLOT_CONTROL_PRIMED: AtomicUsize = AtomicUsize::new(0);
+/// Set to 1 by poll_switch_slot_control_file the moment the switch control file
+/// (er-effects-switch-slot.txt) EXISTS, marking that the DETERMINISTIC control-file driver owns the
+/// switch. The product's sq-repro menu-nav switch driver stands down when this is set, so the two
+/// drivers never fight (which was arming extra switches AND suppressing the move-probe). 0 = not seen.
+pub static DETERMINISTIC_SWITCH_DRIVER_ACTIVE: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_QUICKLOAD_PHASE: AtomicUsize = AtomicUsize::new(0);

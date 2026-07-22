@@ -3052,7 +3052,13 @@ unsafe fn switch_world_resident_state(base: usize) -> (bool, i32) {
     if unsafe { PlayerIns::local_player_mut() }.is_err() {
         return (false, -1);
     }
-    let menu_job = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
+    // menu_job (an OPEN in-game menu at CSMenuMan+0x798) is read for context but is NOT required for
+    // eligibility: switch_slot_arm_programmatic is MENU-FREE (sq-repro's auto-chain at guards.rs:1117
+    // arms "the SAME menu-free programmatic way instead of OPEN_MENU"). Requiring it made the
+    // deterministic control-file poller defer forever (9873x, 'eligible=false') once sq-repro -- which
+    // used to open the menu via nav -- was disabled, even though the char was fully movable. bd
+    // DECISIVE-poller-eligibility-menujob-overconservative-arm-is-menufree-2026-07-21.
+    let _menu_job = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
         .filter(|&m| m > 0x10000)
         .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_IN_GAME_MENU_JOB_798_OFFSET) })
         .unwrap_or(0);
@@ -3067,7 +3073,9 @@ unsafe fn switch_world_resident_state(base: usize) -> (bool, i32) {
                 .and_then(|m| unsafe { safe_read_i32(m + INGAMESTEP_STEP_STATE_OFFSET) })
         })
         .unwrap_or(-1);
-    (menu_job != 0, mms_step)
+    // Eligible whenever the local player is present (the is_err gate above already enforces that);
+    // menu_job is NOT required -- the arm is menu-free.
+    (true, mms_step)
 }
 
 /// Arm a menu-free character switch to `slot` PROGRAMMATICALLY (no menu navigation, no simulated
@@ -3139,6 +3147,13 @@ pub(crate) unsafe fn poll_switch_slot_control_file(base: usize) {
     // mtime==0 means "no control file present". Prime UNCONDITIONALLY on the first in-world poll
     // (recording 0 if absent) so a control file CREATED after boot arms on its first write, while a
     // STALE file present at boot only arms if the harness later rewrites it to a newer mtime.
+    // The moment the switch control file EXISTS, the DETERMINISTIC control-file driver owns switches, so
+    // the sq-repro menu-nav switch driver stands down (env_flags::system_quit_repro_enabled) -- the two
+    // were fighting (arming extra switches) AND the menu-nav suppressed the move-probe (load2 can_move
+    // never latched). bd MILESTONE-detdrive-works-but-sqrepro-menunav-conflict-2026-07-21.
+    if path.exists() {
+        er_telemetry::counters::DETERMINISTIC_SWITCH_DRIVER_ACTIVE.store(1, Ordering::SeqCst);
+    }
     let mtime = std::fs::metadata(&path)
         .ok()
         .and_then(|m| m.modified().ok())
