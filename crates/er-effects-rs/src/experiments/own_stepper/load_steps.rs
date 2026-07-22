@@ -605,9 +605,9 @@ pub(crate) unsafe fn own_stepper_stage2(
             }
         }
         OWN_STEPPER_EXPECTED_SLOT.store(expected_slot, Ordering::SeqCst);
-        if (live_dialog_enabled() || product_autoload_enabled())
-            && expected_slot != OWN_STEPPER_SLOT_NONE
-        {
+        // PHASE A: stage2's set_save_slot is diagnostic-only (live_dialog gate, hardcoded off);
+        // the product boot slot-arm lives in native_autoload_once.
+        if live_dialog_enabled() && expected_slot != OWN_STEPPER_SLOT_NONE {
             let set_save_slot: unsafe extern "system" fn(i32) =
                 unsafe { std::mem::transmute(base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
             unsafe { set_save_slot(expected_slot) };
@@ -639,7 +639,8 @@ pub(crate) unsafe fn own_stepper_stage2(
         // that native selector instead of jumping straight to the cold full-read helper. This is the
         // proper Load-Game beginning: profile rows/record state -> load_activate -> selector tick ->
         // menu_deser/mount. The cold helper remains for the older non-selector diagnostic paths.
-        let native_selector_path = live_dialog_enabled() || product_autoload_enabled();
+        // PHASE A: the native-selector self-pump is diagnostic-only; product runs must not pump it.
+        let native_selector_path = live_dialog_enabled();
         if native_selector_path {
             const SELECTOR_TICK_RVA: usize = PROFILE_LOAD_SELECTOR_TICK_RVA;
             #[repr(C)]

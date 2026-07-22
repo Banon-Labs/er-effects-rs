@@ -271,10 +271,36 @@ pub(crate) unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u
         return;
     }
     if load_in_progress != TITLE_NATIVE_JOB_TASK_DATA_ZERO {
-        append_autoload_debug(format_args!(
-            "native_autoload: load already in progress (b80={load_in_progress}) before arm; skipping tick={tick}"
-        ));
+        // Pre-arm this runs every product tick; throttle like the observe branch so a
+        // non-idle boot save FSM cannot spam per-frame file I/O on the game thread.
+        if tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
+            append_autoload_debug(format_args!(
+                "native_autoload: load already in progress (b80={load_in_progress}) before arm; skipping tick={tick}"
+            ));
+        }
         return;
+    }
+    // GUARD (same user spec as fire-tfc-continue: "any slot active" / "never load a slot if
+    // none active"): never arm the native autoload with the raw configured slot. It can be
+    // null/empty (the gold save's configured slot 0 is a NULL slot -> loading it spawns the
+    // new-game INTRO cutscene + a null character) or negative (the documented Finish-teardown
+    // crash from arming with slot -1). resolve_active_load_slot() honors the configured slot
+    // only when its RECORD fingerprint is real and falls back to the best active slot;
+    // OWN_STEPPER_SLOT_NONE means nothing loadable (or profile records not yet ready) --
+    // refuse and retry next tick (the one-shot is preserved; no latch consumed here).
+    let want_slot = unsafe { resolve_active_load_slot(slot) };
+    if want_slot < OWN_STEPPER_SLOT_ZERO {
+        if tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
+            append_autoload_debug(format_args!(
+                "native_autoload: REFUSE to arm -- no ACTIVE save slot (configured={slot}; profile records not real/ready). Never arming a null slot (would spawn the new-game intro). tick={tick}"
+            ));
+        }
+        return;
+    }
+    if want_slot != slot {
+        append_autoload_debug(format_args!(
+            "native_autoload: configured slot {slot} is null/inactive -> arming best ACTIVE slot {want_slot} instead (user guard: load an active slot, never a null one)"
+        ));
     }
     // CORRECTED recipe (native-continue-and-slotn-recipe-2026): the latch
     // 0x143d856a0 must stay CLEAR; the arm flag is [GameMan+0xb72]=1. (The old
@@ -282,7 +308,7 @@ pub(crate) unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u
     let latch_before = unsafe { *((module_base + SELECTBOT_LOAD_GATE_RVA) as *const u8) };
     let set_save_slot: unsafe extern "system" fn(i32) =
         unsafe { std::mem::transmute(module_base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
-    unsafe { set_save_slot(slot) };
+    unsafe { set_save_slot(want_slot) };
     let slot_after = unsafe { *((game_man + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) as *const i32) };
     unsafe {
         *((game_man + GAME_MAN_ARM_FLAG_B72_OFFSET) as *mut u8) = TITLE_PROCEED_GATE_SET_VALUE;

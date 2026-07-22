@@ -368,9 +368,9 @@ pub(crate) unsafe extern "system" fn cap_builder_hook(
         b80_mount_trace_summary()
     ));
     let ret = unsafe { call_cap_original(&CAP_BUILDER_ORIG, owner, rdx, effective_slot, r9) };
-    if (live_dialog_enabled() || product_autoload_enabled())
-        && ret != TITLE_OWNER_SCAN_START_ADDRESS
-    {
+    // PHASE A: the selector self-pump feed is diagnostic-only (live_dialog gate, hardcoded off);
+    // product runs must not feed own_stepper's self-pump inputs.
+    if live_dialog_enabled() && ret != TITLE_OWNER_SCAN_START_ADDRESS {
         #[repr(C)]
         struct SelectorBuilderOwnerLayout {
             unknown_000: [u8; 0xf8],
@@ -540,7 +540,16 @@ pub(crate) unsafe extern "system" fn cap_dialog_factory_hook(
         "CAP dialog_factory LEAVE dialog_this=0x{ret:x} dialog_vt=0x{ret_vt:x}"
     ));
     let base = game_module_base().unwrap_or(NULL);
-    if product_autoload_enabled()
+    // PHASE A: gate the S2 auto-entry on the ProfileSelect flow's own gate instead of
+    // product_autoload_enabled(). NOTE: OWN_STEPPER_TITLE_FIRED is NOT set only by the
+    // compile-time-off ProfileSelect flow -- it is also set by the open-menu park latch
+    // (product_core_own_stepper.rs:1191, reachable in product) and the legacy title-confirm
+    // fire (:1247, behind hardcoded-false legacy_menu_drive_enabled()). The regate is still
+    // behavior-identical in product because none of those setters coincides with a
+    // ProfileLoadDialog build there: the shipping flow drives the native Continue row and
+    // never constructs a ProfileLoadDialog, so this branch's vtable check never passes on a
+    // product run. This removes the last product-gated own_stepper entry.
+    if profile_select_load_flow_enabled()
         && base != NULL
         && OWN_STEPPER_TITLE_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS
         && OWN_STEPPER_PHASE.load(Ordering::SeqCst) == OWN_STEPPER_PHASE_MENU

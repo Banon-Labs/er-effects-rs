@@ -1221,123 +1221,6 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         return true;
     }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    // IN-WORLD FINALIZE-DRIVE RECOVERY (bd rt5d-drive-blocked-by-title-owner-gate-early-return-inworld-
-    // 2026-07-20). The product-core tick EARLY-RETURNS at the title_owner gate just below, and
-    // title_owner() is None during stable in-world -- so the rt5d recovery further down NEVER runs for
-    // load2's in-world frozen mms18. Resolve MoveMapStep via the CACHED owner here (write_oracle.rs path),
-    // BEFORE that gate, and drive menuData+0x5d=1 at the exact frozen-finalize signature so load2 walks
-    // 18->19->20 the SAME non-warp way load1 does (load1 proven: rt5d/end5e=1, warp=0, run 1042). Purely
-    // ADDITIVE (does not alter the existing flow); tightly gated on active-switch + requestCode==1 +
-    // mms_state(+0x48)==18 + finalize(+0x12a)==0 + cVar10 inputs (0x5d/0x5e)==0 after a sustained streak,
-    // so a healthy load never trips it; clears 0x5d the frame mms leaves 18 (avoids the ~4s bounce).
-    {
-        let active_switch = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
-            >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED;
-        let mut cowner = TITLE_OWNER_PTR.load(Ordering::SeqCst);
-        if cowner == null {
-            cowner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
-        }
-        let cingame = if cowner != null {
-            unsafe { safe_read_usize(cowner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) }
-                .filter(|&v| v > 0x10000)
-        } else {
-            None
-        };
-        let creq = cingame
-            .and_then(|ig| unsafe { safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) })
-            .unwrap_or(-1);
-        // Prefer write_oracle's reliably-resolved MoveMapStep pointer: the cached-owner walk here reads a
-        // STALE step for load2 (proven -- it saw 13-16, not the true 18). Fall back to the local walk only
-        // if the oracle has not published a pointer yet this session.
-        let reliable_mms = ORACLE_RELIABLE_MMS_PTR.load(Ordering::SeqCst);
-        let cmms = if reliable_mms > 0x10000 {
-            Some(reliable_mms)
-        } else {
-            cingame
-                .and_then(|ig| unsafe { safe_read_usize(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) })
-                .filter(|&v| v > 0x10000)
-        };
-        let cstate = cmms
-            .and_then(|m| unsafe { safe_read_i32(m + INGAMESTEP_STEP_STATE_OFFSET) })
-            .unwrap_or(-1);
-        let cfin = cmms
-            .and_then(|m| unsafe { safe_read_u8(m + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET) })
-            .unwrap_or(0xff);
-        let cmenu = unsafe { safe_read_usize(module_base + CS_MENU_MAN_GLOBAL_RVA) }
-            .filter(|&m| m > 0x10000)
-            .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) })
-            .filter(|&d| d > 0x10000);
-        let c5d = cmenu
-            .and_then(|d| unsafe { safe_read_u8(d + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) })
-            .unwrap_or(0xff);
-        let c5e = cmenu
-            .and_then(|d| unsafe { safe_read_u8(d + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) })
-            .unwrap_or(0xff);
-        // Gate on the RELIABLE mms_state/finalize (creq dropped from the gate -- it comes from the
-        // possibly-stale cached-owner ingame; kept in the log only). mms_state==18 && finalize==0 with
-        // cVar10 inputs (0x5d/0x5e) both 0 is load2's exact frozen-finalize signature.
-        // FINALIZE-FORCING DISABLED (user 2026-07-21): the custom menuData+0x5d forcing that shoves mms
-        // 18->19->20 is HARMFUL -- it is not the vanilla path (vanilla finalizes naturally). Disable it so
-        // the load follows vanilla; if the load then genuinely stalls at mms18 that is the REAL finding to
-        // pursue, not to re-force. Flip to re-enable only for a diagnostic.
-        const FINALIZE_FORCING_ENABLED: bool = false;
-        let frozen_mms18 = FINALIZE_FORCING_ENABLED
-            && active_switch
-            && cstate == MOVEMAPSTEP_STEP_MOVEMAP_INDEX
-            && cfin == 0
-            && c5d == 0
-            && c5e == 0;
-        if frozen_mms18 {
-            if let Some(d) = cmenu {
-                // Fire after ~2s of a HELD frozen signature (40 frames; load2 froze 26s in prior runs,
-                // and a healthy load leaves 18 / walks cfin within a few frames, so this can't trip on a
-                // transient). Short so the RAM-gated drive completes before an incidental unfocused-mouse
-                // click can contaminate the run (bd er-accepts-unfocused-mouse-input-contaminates-runs).
-                let streak = INWORLD_FINALIZE_DRIVE_STREAK.fetch_add(1, Ordering::SeqCst) + 1;
-                if streak >= INWORLD_FINALIZE_DRIVE_RELEASE_FRAMES
-                    && INWORLD_FINALIZE_DRIVE_SET
-                        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
-                        .is_ok()
-                {
-                    unsafe {
-                        *((d + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) as *mut u8) = 1;
-                    }
-                    let n = INWORLD_FINALIZE_DRIVE_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-                    append_autoload_debug(format_args!(
-                        "IN-WORLD FINALIZE DRIVE #{n}: drove menuData+0x5d=1 at frozen in-world mms18 (streak={streak} creq={creq} cstate={cstate} cfin={cfin} c5d=0 c5e=0) -- cached-owner path past the title_owner gate; non-warp finalize driver (load1 path)"
-                    ));
-                }
-            }
-        } else {
-            // WHY-NOT: load2 at mms18 but the frozen signature was not met -> name which field blocks so
-            // a run is conclusive even if the drive never fires (throttled). Only at cstate==18.
-            if cstate == MOVEMAPSTEP_STEP_MOVEMAP_INDEX {
-                let w = INWORLD_FINALIZE_DRIVE_WHYNOT_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-                if w <= 20 || w % 20 == 0 {
-                    append_autoload_debug(format_args!(
-                        "IN-WORLD FINALIZE DRIVE WHY-NOT #{w}: frozen_mms18=false at cstate=18 -- active_switch={active_switch}(phase={}) creq={creq} cfin={cfin} c5d={c5d} c5e={c5e} cmenu={} (needs active_switch && creq==1 && cfin==0 && c5d==0 && c5e==0)",
-                        SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst),
-                        cmenu.is_some()
-                    ));
-                }
-            }
-            INWORLD_FINALIZE_DRIVE_STREAK.store(0, Ordering::SeqCst);
-            if INWORLD_FINALIZE_DRIVE_SET.load(Ordering::SeqCst) == 1
-                && cstate != MOVEMAPSTEP_STEP_MOVEMAP_INDEX
-            {
-                INWORLD_FINALIZE_DRIVE_SET.store(0, Ordering::SeqCst);
-                if let Some(d) = cmenu {
-                    unsafe {
-                        *((d + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) as *mut u8) = 0;
-                    }
-                }
-                let n = INWORLD_FINALIZE_DRIVE_COUNT.load(Ordering::SeqCst);
-                append_autoload_debug(format_args!(
-                    "IN-WORLD FINALIZE DRIVE: mms left step 18 (cstate={cstate}) after {n} drive(s); cleared menuData+0x5d"
-                ));
-            }
-        }
-    }
     let Some(owner_ptr) = (unsafe { title_owner(module_base) }) else {
         PRODUCT_CORE_READY_BLOCKS.fetch_add(1, Ordering::SeqCst);
         PRODUCT_CORE_LAST_BLOCKER.store(PRODUCT_CORE_BLOCKER_NO_TITLE_OWNER, Ordering::SeqCst);
@@ -1972,103 +1855,6 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             } else {
                 (0, 0)
             };
-        // ENDING-REQUEST RECOVERY (2026-07-18, live-proven fix for the genuine cross-char switch stall,
-        // bd live-genuine-switch-stalls-mms18-end5e0-2026-07-18). A genuine switch's return-title
-        // suppresses the quit-save (no-save-on-quit by design), so none of cVar10's inputs
-        // (b7c/b7d/force/warp/rt5d) are set, the advancer FUN_140afa7c0 never writes menuData+0x5e=1,
-        // and the OLD world's MoveMapStep child parks at STEP_MoveMap(18): the InGameStep parent (step 7)
-        // waits forever on MoveMapStep+0x48 != -1, so the world never tears down (the switched-from char
-        // stays resident, mms_step pinned at 18, end5e=0, rt5d=0, b7c1=1, blocks>0 -- the exact runtime
-        // signature captured live). RE-proven differentiator (bd
-        // ending-request-recovery-fix-applied-2026-07-16): an ADVANCING child has menuData+0x5d(rt5d)==1;
-        // the stuck child has rt5d==0. So drive rt5d=1 -> the advancer computes cVar10=1 -> writes 0x5e=1
-        // -> STEP_MoveMap walks the child 18->Cleanup(19)->Finish(20)->-1, tearing down the old world so
-        // the clean-title autoload of the picked slot proceeds via the proven boot path. Then CLEAR rt5d
-        // the frame the child leaves 18, BEFORE the ~4s resident-world bounce a lingering rt5d triggers via
-        // CheckReturnToTitle (return_title.rs:1-7). This is distinct from bc4 (the 1st teardown flag): the
-        // suppressed quit-save that would pump bc4->3 and set 0x5d never runs, so we supply the
-        // ending-request input directly. Gate on the EXACT stuck signature + a sustained streak so a
-        // healthy load (leaves 18 in a few frames) never trips it. The stricter settled-gate run
-        // (target/runtime-probe/samechar-3x-settledgate-20260719-053409) proved this same signature also
-        // appears after Continue/SetState5 during AUTOLOAD_HANDOFF: load2 becomes movable, but its native
-        // MoveMap/requestCode handoff remains parked at mms18 with end5e=0/rt5d=0. So keep this recovery
-        // enabled for the whole active switch phase, including AUTOLOAD_HANDOFF. Boot-idle use of this
-        // flag was rejected by the taskadvancer run: setting 0x5d outside an active switch can settle mms18
-        // by tearing down the boot world. The separate return-title chain/final-functor gates now exclude
-        // AUTOLOAD_HANDOFF, and this block still clears rt5d the frame mms leaves 18, so the advancer flag
-        // can finish active-switch native loads without replaying return-title. ENDING_REQUEST_SET_COUNT is
-        // the semaphore.
-        if let Some(md) = menudata {
-            let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
-            let active_switch_phase =
-                quickload_phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED;
-            // FINALIZE-FORCING DISABLED (user 2026-07-21): see the IN-WORLD FINALIZE DRIVE above -- the
-            // menuData+0x5d finalize-forcing is not the vanilla path; disable it so the load follows vanilla.
-            const FINALIZE_FORCING_ENABLED: bool = false;
-            let stuck_mms18 = FINALIZE_FORCING_ENABLED
-                && active_switch_phase
-                && ig_d8 == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING
-                && mms_step == MOVEMAPSTEP_STEP_MOVEMAP_INDEX
-                && md_5e == 0
-                && md_5d == 0
-                && mms_b7c1 == 1
-                && mms_blocks > 0;
-            if stuck_mms18 {
-                let streak = ENDING_REQUEST_STALL_STREAK.fetch_add(1, Ordering::SeqCst) + 1;
-                if streak >= ENDING_REQUEST_STALL_RELEASE_FRAMES
-                    && ENDING_REQUEST_SET
-                        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
-                        .is_ok()
-                {
-                    let n = ENDING_REQUEST_SET_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-                    // DRIVE rt5d=1 -- the NON-WARP finalize input load1 uses (re-enabled from the prior
-                    // observe-only downgrade, RE bd REFINED-load1-finishes-via-rt5d-end5e-warp0-load2-
-                    // overcleared-both-2026-07-20). Run 20260720-101944 proved: LOAD1 completes
-                    // mms18->19(CLEANUP)->20(FINISH) with rt5d/end5e=1 and warp=0, while LOAD2 arrives at
-                    // mms18 with ALL cVar10 inputs 0 (warp consumed + our handoff over-cleared 0x5d/0x5e)
-                    // and freezes at finalize case 0 (present but frozen; 463 move-input frames, 4 moved).
-                    // Setting menuData+0x5d=1 makes the advancer FUN_140afa7c0 compute cVar10=1 and write
-                    // 0x5e=1, walking the child 18->19->20 the SAME non-warp way load1 does -- no case-8
-                    // re-warp (warp stays native-owned/cleared, so no warp-reload teardown loop). The
-                    // ending-latch-residual-clear below clears rt5d the frame mms leaves 18, preventing the
-                    // ~4s CheckReturnToTitle bounce. One-shot per stall (ENDING_REQUEST_SET latch).
-                    unsafe {
-                        *((md + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) as *mut u8) = 1;
-                    }
-                    append_autoload_debug(format_args!(
-                        "MMS18 RT5D DRIVE #{n}: drove menuData+0x5d=1 at mms18 stall (streak={streak} phase={quickload_phase} end5e=0 rt5d=0 b7c1=1 blocks={mms_blocks}) -- non-warp finalize driver (load1 path); warp left native-owned"
-                    ));
-                }
-            } else {
-                // WHY-NOT diagnostic: load2 sits FROZEN at mms18/finalize-0 but the rt5d drive above did
-                // not fire, so one of stuck_mms18's sub-conditions is false. Log each one (throttled) so a
-                // run names the exact blocker instead of guessing (b7c1==1/blocks>0 were captured from the
-                // cross-char switch stall and may not hold for the boot-reload freeze). Fires only at the
-                // frozen mms18 signature (present, ig_d8 pending) so healthy loads stay quiet.
-                if mms_step == MOVEMAPSTEP_STEP_MOVEMAP_INDEX
-                    && player_present
-                    && ig_d8 == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING
-                {
-                    let w = ENDING_REQUEST_WHYNOT_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-                    let epoch_dbg =
-                        SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
-                    if w <= 40 || w % 10 == 0 {
-                        append_autoload_debug(format_args!(
-                            "MMS18 RT5D DRIVE WHY-NOT #{w} epoch={epoch_dbg}: stuck_mms18=false at frozen mms18 -- active_switch={active_switch_phase}(phase={quickload_phase}) ig_d8={ig_d8} md_5e={md_5e} md_5d={md_5d} b7c1={mms_b7c1} blocks={mms_blocks} (drive needs active_switch && ig_d8==1 && md_5e==0 && md_5d==0 && b7c1==1 && blocks>0)"
-                        ));
-                    }
-                }
-                ENDING_REQUEST_STALL_STREAK.store(0, Ordering::SeqCst);
-                if ENDING_REQUEST_SET.load(Ordering::SeqCst) == 1
-                    && mms_step != MOVEMAPSTEP_STEP_MOVEMAP_INDEX
-                {
-                    ENDING_REQUEST_SET.store(0, Ordering::SeqCst);
-                    append_autoload_debug(format_args!(
-                        "MMS18 NATIVE-WARP OBSERVE: cached mms left step 18 (mms_step={mms_step}); native owns warp_requested autoclear"
-                    ));
-                }
-            }
-        }
         let mms_disp = mms.unwrap_or(0);
         let mms_step_pub = if mms.is_some() && mms_step >= 0 {
             mms_step as usize
@@ -2847,6 +2633,32 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
     if phase == OWN_STEPPER_PHASE_MENU {
         unsafe { maybe_hide_title_press_start(module_base, &ready) };
         unsafe { maybe_hide_title_logo_surface(module_base, &ready) };
+        // PHASE A (docs/plans/native-continue-rebuild.md, CORRECTED APPROACH): the boot
+        // (load1) commit is the game's OWN native continue lane -- set the active slot
+        // (ac0 via set_save_slot 0x67a810) + arm GameMan+0xb72 ONCE at a bootstrapped
+        // title (product_core_autoload_ready) and let the save-mgr per-frame update
+        // 0x14067f5d0 run the load. No menu drive, no dialog build, no selector pump,
+        // no menuData+0x5d/0x5e writes. One-shot via NATIVE_AUTOLOAD_ARMED. The switch
+        // (load2/3) and direct-file lanes below are byte-identical to before.
+        // Missing-save picker gate (same rationale as maybe_set_title_accept_byte, bd
+        // missing-save-picker-disabled-continue-soft-lock-2026-07-07): while the user has
+        // not yet picked a save, the default save is absent and the redirect is not
+        // installed, so arming b72 would fire the game's own autoload against a missing
+        // save AND consume the one-shot before the pick. Defer here; the pick installs
+        // direct-file staging, which routes the boot through the fullread lane below.
+        // NOTE: this early return also precedes the profile_select_load_flow_enabled()
+        // probe branch further down -- with that const flipped ON for a probe, the boot
+        // lane no longer reaches it (the probe flow is dead at boot in this tree).
+        if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) == SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
+            && !direct_save_file_source_active()
+            && !missing_save_selection_pending()
+        {
+            if ready.menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO {
+                unsafe { maybe_refresh_title_profile_cover(module_base, &ready) };
+            }
+            unsafe { native_autoload_once(module_base, slot, tick) };
+            return true;
+        }
         if ready.menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO {
             unsafe { maybe_refresh_title_profile_cover(module_base, &ready) };
             // Main-branch preservation: do NOT call TitleTopDialog::open_menu from this game-task
@@ -3111,11 +2923,9 @@ pub(crate) unsafe fn switch_slot_arm_programmatic(base: usize, slot: i32) {
         ));
         return;
     };
-    ENDING_REQUEST_STALL_STREAK.store(0, Ordering::SeqCst);
     unsafe {
         *((md + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) as *mut u8) = 1;
     }
-    ENDING_REQUEST_SET.store(1, Ordering::SeqCst); // enable the existing clear-on-leave-18 latch
     SWITCH_TRIGGER_TEARDOWN_COUNT.fetch_add(1, Ordering::SeqCst);
     // Phase LAST, only after the teardown flag is set, so the fire gate can never see a half-arm.
     SYSTEM_QUIT_QUICKLOAD_PHASE.store(

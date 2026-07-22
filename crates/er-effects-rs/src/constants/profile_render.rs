@@ -304,29 +304,11 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_INWORLD_ARMED_DISARM_COUNT;
 /// from cancelling a genuine switch whose old world lingers past the threshold (the switch-regression
 /// in bd angre-4loads-goal-met-but-switch-regression-2026-07-18). 1 = armed while player absent.
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT;
-/// ENDING-REQUEST RECOVERY (2026-07-18, live-proven fix for the genuine-switch mms18 stall, bd
-/// live-genuine-switch-stalls-mms18-end5e0-2026-07-18). Continuous frames the exact stuck signature
-/// (in-world, ig_d8==1, mms_step==18, menuData+0x5e==0, +0x5d==0, b7c1==1, blocks>0) has held while a
-/// switch's OLD world refuses to tear down. A normally-advancing load leaves step 18 within a few
-/// frames, so this never accumulates on a healthy load. Reset whenever the signature breaks.
-pub(crate) use er_telemetry::counters::ENDING_REQUEST_STALL_STREAK;
-/// Latch (0/1): we drove menuData+0x5d=1 to walk the child past 18 and are holding it until the child
-/// leaves step 18, then we CLEAR it -- a lingering 0x5d re-requests quit-to-title ~4s after the reload
-/// commits (return_title.rs:1-7), bouncing the freshly-loaded world back to title.
-pub(crate) use er_telemetry::counters::ENDING_REQUEST_SET;
-/// Runtime semaphore: >0 == the recovery fired (SET menuData+0x5d=1 at an mms18 stall) this run.
+/// Runtime semaphore: >0 == the post-finalize menuData+0x5e clear fired this run
+/// (task_registration.rs `ENDING-FLAG POST-FINALIZE CLEAR`). The mms18-stall recovery machinery
+/// that also used this family (`ENDING_REQUEST_STALL_STREAK`/`ENDING_REQUEST_SET`) was removed
+/// with the MMS18 RT5D drive (Phase A, docs/plans/native-continue-rebuild.md).
 pub(crate) use er_telemetry::counters::ENDING_REQUEST_SET_COUNT;
-/// Diagnostic counter: frozen-at-mms18 frames where the rt5d drive's stuck signature was NOT met
-/// (so a run can name which sub-condition blocked the drive).
-pub(crate) use er_telemetry::counters::ENDING_REQUEST_WHYNOT_COUNT;
-/// IN-WORLD finalize-drive recovery (runs BEFORE the title_owner gate via the cached owner, so it
-/// reaches load2's in-world frozen mms18 which the title_owner-gated path never does). Sustained
-/// frozen-frame streak, one-shot latch, and fire count.
-pub(crate) use er_telemetry::counters::INWORLD_FINALIZE_DRIVE_STREAK;
-pub(crate) use er_telemetry::counters::INWORLD_FINALIZE_DRIVE_SET;
-pub(crate) use er_telemetry::counters::INWORLD_FINALIZE_DRIVE_COUNT;
-/// Diagnostic counter: frames at mms18 where the in-world drive's frozen signature was NOT met.
-pub(crate) use er_telemetry::counters::INWORLD_FINALIZE_DRIVE_WHYNOT_COUNT;
 /// The MoveMapStep pointer as resolved by write_oracle (the ONLY resolution that reliably tracks
 /// load2's in-world step; the game-task's fresh title_owner scan reads a stale owner -> stale step).
 /// Published each telemetry write; the in-world finalize drive consumes it instead of re-resolving.
@@ -343,11 +325,6 @@ pub(crate) use er_telemetry::counters::CHILD_DONE_QUERY_ORIG;
 pub(crate) use er_telemetry::counters::CHILD_DONE_QUERY_HOOK_INSTALLED;
 pub(crate) use er_telemetry::counters::CHILD_DONE_HELD_COUNT;
 pub(crate) use er_telemetry::counters::CHILD_DONE_DIAG_COUNT;
-/// Held frozen-signature frames before the in-world drive fires. ~2s at load2's ~20fps; short so the
-/// RAM-gated drive completes before an incidental unfocused-mouse click can contaminate the run.
-pub(crate) const INWORLD_FINALIZE_DRIVE_RELEASE_FRAMES: usize = 40;
-/// Sustained stuck-at-18 frames before the recovery drives the ending request (~2s at task rate).
-pub(crate) const ENDING_REQUEST_STALL_RELEASE_FRAMES: usize = 120;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT;
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT: AtomicUsize =
     AtomicUsize::new(0);
