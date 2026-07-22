@@ -107,6 +107,13 @@ def main() -> int:
             if as_float(s.get("oracle_fps")) > 0
             and as_int(s.get("oracle_now_loading"), 1) == 0
         ]
+        # The GOAL's exact metric: fps in the PLAYABLE + MOVING window (can_move latched = the char is
+        # movable and the harness is driving forward). This is the window to compare across loads.
+        move_fps = [
+            as_float(s.get("oracle_fps"))
+            for s in samples
+            if as_float(s.get("oracle_fps")) > 0 and as_bool(s.get("oracle_can_move"))
+        ]
         did_moves = [as_int(s.get("oracle_did_move_frames"), 0) for s in samples]
         names = {s.get("oracle_char_name") for s in samples if s.get("oracle_char_name")}
 
@@ -130,6 +137,20 @@ def main() -> int:
             print(f"   fps SETTLED      : mean={statistics.mean(settled_fps):.0f} min={min(settled_fps):.0f} max={max(settled_fps):.0f} n={len(settled_fps)}")
         else:
             print("   fps SETTLED      : (NONE -- now_loading never cleared this epoch)")
+        if move_fps:
+            print(f"   fps PLAYABLE+MOVE: mean={statistics.mean(move_fps):.0f} min={min(move_fps):.0f} max={max(move_fps):.0f} n={len(move_fps)}   <-- goal metric")
+        else:
+            print("   fps PLAYABLE+MOVE: (NONE -- can_move never latched this epoch)")
+        last = samples[-1]
+        print(
+            "   switch semaphores: "
+            f"arm={as_int(last.get('oracle_switch_arm_count'), -1)} "
+            f"deferred={as_int(last.get('oracle_switch_deferred_count'), -1)} "
+            f"reload_phase={as_int(last.get('oracle_switch_reload_phase'), -1)} "
+            f"committed={as_int(last.get('oracle_switch_reload_committed'), -1)} "
+            f"player_present={as_int(last.get('oracle_switch_player_present'), -1)} "
+            f"menu_job={as_int(last.get('oracle_switch_menu_job_present'), -1)}"
+        )
 
     # settled-vs-settled cross-epoch fps comparison (the real regression question)
     print("\n## settled fps comparison (settled-vs-settled, the real regression check)")
@@ -151,6 +172,27 @@ def main() -> int:
         else:
             ratio = f"{100 * m / base:.0f}% of load1" if base else "n/a"
             print(f"   load{ep + 1}: {m:.0f}fps  n={len(sf)}  ({ratio})")
+
+    # GOAL check: fps in the PLAYABLE+MOVING window, compared across loads (no significant difference).
+    print("\n## playable+moving fps comparison (GOAL: no significant difference across loads)")
+    move_means = {}
+    for ep in sorted(epochs):
+        mf = [
+            as_float(s.get("oracle_fps"))
+            for s in epochs[ep]
+            if as_float(s.get("oracle_fps")) > 0 and as_bool(s.get("oracle_can_move"))
+        ]
+        if mf:
+            move_means[ep] = statistics.mean(mf)
+            print(f"   load{ep + 1}: {move_means[ep]:.0f}fps  n={len(mf)}")
+        else:
+            print(f"   load{ep + 1}: no playable+moving samples (can_move never latched)")
+    if len(move_means) >= 2:
+        lo, hi = min(move_means.values()), max(move_means.values())
+        spread = 100 * (hi - lo) / hi if hi > 0 else 0.0
+        # "significant" placeholder threshold: >15% spread across loads = a real difference to explain.
+        verdict = "PARITY" if spread <= 15.0 else "DIFFERENCE"
+        print(f"   -> spread {spread:.0f}% across {len(move_means)} loads: {verdict} (<=15% = parity)")
     return 0
 
 

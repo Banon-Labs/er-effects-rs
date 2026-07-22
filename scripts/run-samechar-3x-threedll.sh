@@ -135,6 +135,21 @@ if [[ "${OBSERVE_ONLY:-0}" == "1" ]]; then
 	CAPTURE_ARGS+=(--observe-only --observe-seconds "${OBSERVE_SECONDS:-140}")
 else
 	CAPTURE_ARGS+=(--require-reload-settled)
+	# DETERMINISTIC SWITCH DRIVER (2026-07-21, bd DETERMINISTIC-switch-trigger-recipe): drive each
+	# subsequent load by writing the product control file (er-effects-switch-slot.txt) once the prior
+	# load proves movement, instead of the flaky input-harness menu-nav. DRIVE_RELOAD_SLOTS default
+	# '0,0' = load2+load3 reload angrE slot 0 (the 3x-angrE goal); set DRIVE_RELOAD_SLOTS='' to fall
+	# back to the legacy menu-nav. DRIVE_CROSS_SAVE_FILE (Windows path to a NON-angrE .sl2/.co2) +
+	# DRIVE_CROSS_SAVE_SLOT add the final cross-save load. The input-harness DLL still drives the 3s
+	# forward-movement proof; only the SWITCH trigger moves to the control file.
+	DRIVE_RELOAD_SLOTS="${DRIVE_RELOAD_SLOTS-0,0}"
+	if [[ -n "$DRIVE_RELOAD_SLOTS" ]]; then
+		CAPTURE_ARGS+=(--drive-reload-slots "$DRIVE_RELOAD_SLOTS")
+	fi
+	if [[ -n "${DRIVE_CROSS_SAVE_FILE:-}" && -n "${DRIVE_CROSS_SAVE_SLOT:-}" ]]; then
+		CAPTURE_ARGS+=(--drive-cross-save-file "$DRIVE_CROSS_SAVE_FILE" \
+			--drive-cross-save-slot "$DRIVE_CROSS_SAVE_SLOT")
+	fi
 fi
 python3 "$REPO_ROOT/scripts/capture-samechar-3x.py" \
 	--game-dir "$GAME_DIR" \

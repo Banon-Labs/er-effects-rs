@@ -135,6 +135,22 @@ def snap(t: dict) -> dict:
         "oracle_loading_screen_close_sent",
         "oracle_loading_screen_close_sent_hits",
         "oracle_load_in_progress_b80",
+        # SWITCH-TRIGGER pipeline (2026-07-21): makes a NO-LOAD explain itself instead of CAP_REACHED.
+        # arm_count rises when a switch actually arms; deferred rises when a request is seen but the world
+        # is not eligible; reload_phase 0 IDLE/1 DRAIN/2 COMMIT; player_present+menu_job_present+
+        # stable_frames = the arm-eligibility gate (needs a live in-world menu job).
+        "oracle_switch_arm_count",
+        "oracle_switch_teardown_count",
+        "oracle_switch_deferred_count",
+        "oracle_switch_last_slot",
+        "oracle_switch_reload_phase",
+        "oracle_switch_reload_drain_waits",
+        "oracle_switch_reload_committed",
+        "oracle_switch_slot_control_mtime",
+        "oracle_switch_slot_control_primed",
+        "oracle_switch_player_present",
+        "oracle_switch_menu_job_present",
+        "oracle_switch_stable_frames",
         "oracle_fps",
         "oracle_min_fps",
         "oracle_frame_ms",
@@ -589,6 +605,26 @@ def teardown() -> None:
             )
 
 
+def write_switch_trigger(game_dir: Path, slot: int, save_file: str | None) -> None:
+    """Deterministically trigger the product's programmatic switch to (save_file, slot).
+
+    Writes er-effects-switch-save-file.txt (the source override; empty/absent = keep active save) then
+    er-effects-switch-slot.txt (the mtime-triggered slot). The product's poll_switch_slot_control_file
+    consumes the fresh mtime and arms switch_slot_arm_programmatic when the world is eligible. bd
+    DETERMINISTIC-switch-trigger-recipe-write-slot-control-file-not-menu-nav-2026-07-21.
+    """
+    save_ctl = game_dir / "er-effects-switch-save-file.txt"
+    if save_file:
+        save_ctl.write_text(save_file, encoding="utf-8")
+    else:
+        # case 1 (same active save): ensure the override is empty so the source falls through to active.
+        with contextlib.suppress(OSError):
+            if save_ctl.exists():
+                save_ctl.write_text("", encoding="utf-8")
+    # The slot file's fresh mtime is the trigger; write it LAST (after the source override is in place).
+    (game_dir / "er-effects-switch-slot.txt").write_text(str(slot), encoding="utf-8")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
@@ -642,13 +678,59 @@ def main() -> int:
         default=140.0,
         help="observe-only window before teardown (default 140s).",
     )
+    # DETERMINISTIC SWITCH DRIVER (2026-07-21, bd DETERMINISTIC-switch-trigger-recipe): drive each
+    # subsequent load by WRITING the product's control file (er-effects-switch-slot.txt, +
+    # er-effects-switch-save-file.txt for cross-save) once the current load proves movement -- instead of
+    # the flaky input-harness menu-nav. The product's poll_switch_slot_control_file arms the switch
+    # programmatically when the world is eligible (player present + live menu job). The input-harness DLL
+    # is still loaded to drive the 3s FORWARD-MOVEMENT proof; only the SWITCH trigger moves to the file.
+    ap.add_argument(
+        "--drive-reload-slots",
+        default="",
+        help=(
+            "comma list of slots to drive for load2,load3,... on the SAME (active) save, each triggered "
+            "after the prior load proves movement (e.g. '0,0' = reload angrE slot 0 twice). Empty = do "
+            "not drive (legacy harness menu-nav)."
+        ),
+    )
+    ap.add_argument(
+        "--drive-cross-save-file",
+        default="",
+        help="Windows path to a NON-angrE read/write .sl2/.co2 to load as the FINAL step (case 2).",
+    )
+    ap.add_argument(
+        "--drive-cross-save-slot",
+        type=int,
+        default=-1,
+        help="slot within --drive-cross-save-file to load (>=0 enables the final cross-save step).",
+    )
     args = ap.parse_args()
+
+    # Build the deterministic switch plan: list of (slot, save_file|None). Each entry i is triggered
+    # after epoch i proves movement (epoch 0 = boot load1), producing epoch i+1.
+    switch_plan: list[tuple[int, str | None]] = []
+    if args.drive_reload_slots.strip():
+        for tok in args.drive_reload_slots.split(","):
+            tok = tok.strip()
+            if tok:
+                switch_plan.append((int(tok), None))
+    if args.drive_cross_save_file and args.drive_cross_save_slot >= 0:
+        switch_plan.append((args.drive_cross_save_slot, args.drive_cross_save_file))
 
     args.artifact_dir.mkdir(parents=True, exist_ok=True)
     telemetry_path = args.game_dir / "er-effects-telemetry.json"
 
     # Per-epoch record: first-seen ts, the max/settled snapshot, whether render-ready was ever held.
     epochs: dict[int, dict] = {}
+    # Deterministic switch driver: which plan entry to fire next, and the final success epoch.
+    next_switch_idx = 0
+    final_epoch = len(switch_plan) if switch_plan else FINAL_RELOAD_EPOCH
+    if switch_plan:
+        print(
+            f"[drive-switch] plan: {len(switch_plan)} triggered load(s) after load1; "
+            f"final success epoch={final_epoch}; entries={switch_plan}",
+            flush=True,
+        )
     portrait_captured = False
     first_present_at: float | None = None
     start = time.monotonic()
@@ -755,7 +837,27 @@ def main() -> int:
             # run down before load1 finished (user 2026-07-21: "why did you tear down before load 1").
             # Loads are validated by the game-global signature + the stall guard, not the unreliable
             # injection verdict; a disproven/contaminated verdict just lets the run keep going.
-            if harness_verdict == 1 and as_int(deser) >= FINAL_RELOAD_EPOCH:
+            # DETERMINISTIC SWITCH DRIVER: once the CURRENT load proves movement, write the control file
+            # to trigger the NEXT load (replaces the flaky menu-nav). Plan entry i fires after epoch i
+            # proves (epoch 0 = boot load1 -> plan[0] triggers load2, plan[1] -> load3, ...).
+            if (
+                switch_plan
+                and next_switch_idx < len(switch_plan)
+                and as_int(deser) == next_switch_idx
+                and harness_verdict == 1
+            ):
+                _slot, _save_file = switch_plan[next_switch_idx]
+                write_switch_trigger(args.game_dir, _slot, _save_file)
+                print(
+                    f"[drive-switch] load{next_switch_idx + 2}: proved movement on epoch "
+                    f"{next_switch_idx}; wrote trigger slot={_slot} "
+                    f"cross_save={_save_file or 'no (active angrE save)'}",
+                    flush=True,
+                )
+                next_switch_idx += 1
+            # Success = the FINAL planned load proves movement (final_epoch = len(plan) when driving, else
+            # the legacy FINAL_RELOAD_EPOCH). Earlier epochs proving just advance the driver, above.
+            if harness_verdict == 1 and as_int(deser) >= final_epoch:
                 result = f"HARNESS_MOVE_PROVEN_harness_moved_char_epoch{deser}"
                 break
             # IMPRINT CAPTURE (boot_to_control phase): end the boot imprint the INSTANT control is
@@ -935,7 +1037,7 @@ def main() -> int:
             if args.require_reload_settled:
                 # Full sequence: succeed only when the FINAL reload (load3) proves movement + settles, so
                 # the run drives through ALL loads rather than ending on load2.
-                if reload_settled and as_int(deser) >= FINAL_RELOAD_EPOCH:
+                if reload_settled and as_int(deser) >= final_epoch:
                     result = "RELOAD_SETTLED"
                     break
             elif can_move and (not args.require_reload_move or reload_epoch):
@@ -1072,6 +1174,62 @@ def main() -> int:
             f"- havok_pos: {s.get('oracle_havok_pos')}  play_time_ms: {s.get('oracle_play_time_ms')}"
         )
         lines.append("")
+    # LOAD-TRIGGER DIAGNOSIS (2026-07-21, bd er-effects-rs-tx9n + USER-oracle-must-emit-teardown-and-
+    # noload-cause): make a no-load EXPLAIN itself instead of a silent CAP_REACHED. Derive WHY the reload
+    # did/didn't fire from the switch-trigger semaphores in the final sample.
+    final_s = (epochs[max(epochs)]["last"] if epochs else {}) or {}
+    sw_arm = as_int(final_s.get("oracle_switch_arm_count"), 0)
+    sw_deferred = as_int(final_s.get("oracle_switch_deferred_count"), 0)
+    sw_phase = as_int(final_s.get("oracle_switch_reload_phase"), 0)
+    sw_committed = as_int(final_s.get("oracle_switch_reload_committed"), 0)
+    sw_drain = as_int(final_s.get("oracle_switch_reload_drain_waits"), 0)
+    sw_player = as_int(final_s.get("oracle_switch_player_present"), 0)
+    sw_menujob = as_int(final_s.get("oracle_switch_menu_job_present"), 0)
+    sw_stable = as_int(final_s.get("oracle_switch_stable_frames"), 0)
+    sw_primed = as_int(final_s.get("oracle_switch_slot_control_primed"), 0)
+    b80_final = as_int(final_s.get("oracle_load_in_progress_b80"), -1)
+    phase_label = {0: "IDLE", 1: "DRAIN", 2: "COMMIT"}.get(sw_phase, f"?{sw_phase}")
+    if completions >= 1:
+        trigger_reason = f"reload(s) DID fire ({completions} committed); the trigger worked."
+    elif sw_arm == 0 and sw_deferred > 0:
+        if not sw_menujob:
+            gate = "the in-world menu job (CSMenuMan+0x798) was absent"
+        elif not sw_player:
+            gate = "the local player was absent"
+        else:
+            gate = f"the world was not stable long enough (stable_frames={sw_stable})"
+        trigger_reason = (
+            f"NEVER ARMED: {sw_deferred} deferred arm(s) -- a switch request was seen but {gate} "
+            f"(player_present={sw_player} menu_job_present={sw_menujob})."
+        )
+    elif sw_arm == 0:
+        trigger_reason = (
+            f"NEVER ARMED and 0 deferred -> no switch request was ever issued this run (control file "
+            f"never written with a new mtime; slot_control_primed={sw_primed}). Trigger never invoked."
+        )
+    elif sw_phase == 0:
+        trigger_reason = f"ARMED ({sw_arm}x) but the reload FSM never entered SUBMIT (phase IDLE)."
+    elif sw_phase == 1:
+        trigger_reason = (
+            f"ARMED ({sw_arm}x), SUBMIT issued, but the deserialize never reached RESIDENT "
+            f"(phase DRAIN, drain_waits={sw_drain}, b80={b80_final})."
+        )
+    else:
+        trigger_reason = (
+            f"ARMED ({sw_arm}x), drained to RESIDENT, COMMIT issued (committed={sw_committed}) but "
+            f"fresh_deser never latched -- check continue_confirm/SetState5."
+        )
+    lines.extend(
+        [
+            "## Load-trigger diagnosis (why the reload did/didn't fire)",
+            f"- {trigger_reason}",
+            f"- switch semaphores: arm_count={sw_arm} deferred={sw_deferred} "
+            f"reload_phase={phase_label}({sw_phase}) committed={sw_committed} drain_waits={sw_drain} "
+            f"b80={b80_final} player_present={sw_player} menu_job_present={sw_menujob} "
+            f"stable_frames={sw_stable}",
+            "",
+        ]
+    )
     # EXIT CODE = experiment outcome (user 2026-07-20): a FAILED experiment MUST be non-zero, a PASSED
     # one zero. HARNESS_MOVE_PROVEN and the imprint capture are passes; DISPROVEN/CONTAMINATED and every
     # incomplete/stall/timeout are failures. Do not mask this (and never wrap the run in a trailing
