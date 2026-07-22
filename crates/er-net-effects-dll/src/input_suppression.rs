@@ -1,5 +1,11 @@
-use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::{
+    ffi::c_void,
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
+    time::{Duration, Instant},
+};
 
 use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
@@ -15,13 +21,45 @@ static DINPUT_KB_ALSO_MOUSE: AtomicBool = AtomicBool::new(false);
 static DINPUT_KB_HOOK_FIRES: AtomicUsize = AtomicUsize::new(0);
 static DINPUT_MOUSE_HOOK_FIRES: AtomicUsize = AtomicUsize::new(0);
 static DINPUT_SUPPRESSED_ARROW_KEYS: AtomicUsize = AtomicUsize::new(0);
+static DINPUT_PREVIOUS_SELECTOR_KEYS: AtomicUsize = AtomicUsize::new(0);
+static DINPUT_QUEUED_SELECTOR_KEYS: AtomicUsize = AtomicUsize::new(0);
+static DINPUT_REPEATED_SELECTOR_KEYS: AtomicUsize = AtomicUsize::new(0);
+static DINPUT_REPEAT_STATE: OnceLock<Mutex<DinputRepeatState>> = OnceLock::new();
 
 const DIRECTINPUT_VERSION: u32 = 0x0800;
 const DINPUT_KEYBOARD_BUFFER_LEN: usize = 256;
+const DIK_0: usize = 0x0b;
+const DIK_LEFT_ALT: usize = 0x38;
+const DIK_NUMPAD0: usize = 0x52;
+const DIK_RIGHT_ALT: usize = 0xb8;
 const DIK_LEFT: usize = 0xcb;
 const DIK_RIGHT: usize = 0xcd;
 const DIK_UP: usize = 0xc8;
 const DIK_DOWN: usize = 0xd0;
+const DIK_INSERT: usize = 0xd2;
+
+const VK_LEFT: u32 = 0x25;
+const VK_UP: u32 = 0x26;
+const VK_RIGHT: u32 = 0x27;
+const VK_DOWN: u32 = 0x28;
+const VK_INSERT: u32 = 0x2d;
+const VK_0: u32 = 0x30;
+const VK_NUMPAD0: u32 = 0x60;
+
+const DINPUT_KEY_LEFT: usize = 1 << 0;
+const DINPUT_KEY_RIGHT: usize = 1 << 1;
+const DINPUT_KEY_UP: usize = 1 << 2;
+const DINPUT_KEY_DOWN: usize = 1 << 3;
+const DINPUT_KEY_0: usize = 1 << 4;
+const DINPUT_KEY_NUMPAD0: usize = 1 << 5;
+const DINPUT_KEY_INSERT: usize = 1 << 6;
+const DINPUT_ARROW_KEY_MASK: usize =
+    DINPUT_KEY_LEFT | DINPUT_KEY_RIGHT | DINPUT_KEY_UP | DINPUT_KEY_DOWN;
+
+const HOLD_REPEAT_LATCH_DELAY: Duration = Duration::from_millis(280);
+const HOLD_REPEAT_INITIAL_INTERVAL: Duration = Duration::from_millis(120);
+const HOLD_REPEAT_ACCEL_STEP: Duration = Duration::from_millis(12);
+const HOLD_REPEAT_MIN_INTERVAL: Duration = Duration::from_millis(42);
 const IID_IDIRECTINPUT8W: GUID = GUID::from_values(
     0xbf798031,
     0x483a,
@@ -52,12 +90,51 @@ type CreateDeviceFn = unsafe extern "system" fn(RawObj, *const GUID, *mut RawObj
 type ReleaseFn = unsafe extern "system" fn(RawObj) -> u32;
 type GetDeviceStateFn = unsafe extern "system" fn(usize, u32, *mut u8) -> i32;
 
+#[derive(Clone, Copy)]
+struct RepeatKey {
+    bit: usize,
+    vk: u32,
+}
+
+const REPEAT_KEYS: [RepeatKey; 4] = [
+    RepeatKey {
+        bit: DINPUT_KEY_LEFT,
+        vk: VK_LEFT,
+    },
+    RepeatKey {
+        bit: DINPUT_KEY_RIGHT,
+        vk: VK_RIGHT,
+    },
+    RepeatKey {
+        bit: DINPUT_KEY_UP,
+        vk: VK_UP,
+    },
+    RepeatKey {
+        bit: DINPUT_KEY_DOWN,
+        vk: VK_DOWN,
+    },
+];
+
+struct DinputRepeatState {
+    next_repeat_at: [Option<Instant>; 4],
+    repeat_interval: [Duration; 4],
+}
+
+impl Default for DinputRepeatState {
+    fn default() -> Self {
+        Self {
+            next_repeat_at: [None; 4],
+            repeat_interval: [HOLD_REPEAT_INITIAL_INTERVAL; 4],
+        }
+    }
+}
+
 pub(crate) fn set_arrow_key_suppression(enabled: bool) {
     SUPPRESS_ARROW_KEYS.store(enabled, Ordering::Relaxed);
-    if enabled && !HOOKS_INSTALLED.load(Ordering::Relaxed) {
+    if !HOOKS_INSTALLED.load(Ordering::Relaxed) {
         match unsafe { install_dinput_hooks() } {
             Ok(()) => net_effects_log(format_args!(
-                "input-suppression: DirectInput arrow suppression hook installed"
+                "input-suppression: DirectInput selector input hook installed"
             )),
             Err(status) => net_effects_log(format_args!(
                 "input-suppression: DirectInput hook install failed: {status:?}"
@@ -76,6 +153,14 @@ pub(crate) fn dinput_mouse_hook_fires() -> usize {
 
 pub(crate) fn dinput_suppressed_arrow_keys() -> usize {
     DINPUT_SUPPRESSED_ARROW_KEYS.load(Ordering::Relaxed)
+}
+
+pub(crate) fn dinput_queued_selector_keys() -> usize {
+    DINPUT_QUEUED_SELECTOR_KEYS.load(Ordering::Relaxed)
+}
+
+pub(crate) fn dinput_repeated_selector_keys() -> usize {
+    DINPUT_REPEATED_SELECTOR_KEYS.load(Ordering::Relaxed)
 }
 
 unsafe fn vtable_fn<F: Copy>(obj: RawObj, slot: usize) -> F {
@@ -129,6 +214,7 @@ unsafe extern "system" fn dinput_kb_get_state_hook(device: usize, size: u32, dat
     }
     let original: GetDeviceStateFn = unsafe { std::mem::transmute(original_addr) };
     let hr = unsafe { original(device, size, data) };
+    queue_dinput_selector_edges(hr, size, data);
     zero_dinput_arrow_state(hr, size, data);
     hr
 }
@@ -145,6 +231,121 @@ unsafe extern "system" fn dinput_mouse_get_state_hook(
     }
     let original: GetDeviceStateFn = unsafe { std::mem::transmute(original_addr) };
     unsafe { original(device, size, data) }
+}
+
+fn dinput_key_down(size: u32, data: *mut u8, offset: usize) -> bool {
+    !data.is_null() && size as usize > offset && unsafe { *data.add(offset) & 0x80 } != 0
+}
+
+fn reset_dinput_repeat_state() {
+    DINPUT_PREVIOUS_SELECTOR_KEYS.store(0, Ordering::Relaxed);
+    if let Some(state) = DINPUT_REPEAT_STATE.get()
+        && let Ok(mut state) = state.lock()
+    {
+        *state = DinputRepeatState::default();
+    }
+}
+
+fn queue_dinput_selector_edges(hr: i32, size: u32, data: *mut u8) {
+    if hr != 0 || data.is_null() || !effects::effect_runtime_ready() {
+        reset_dinput_repeat_state();
+        return;
+    }
+
+    let alt_down =
+        dinput_key_down(size, data, DIK_LEFT_ALT) || dinput_key_down(size, data, DIK_RIGHT_ALT);
+    let mut pressed_mask = 0usize;
+    for (bit, offset) in [
+        (DINPUT_KEY_LEFT, DIK_LEFT),
+        (DINPUT_KEY_RIGHT, DIK_RIGHT),
+        (DINPUT_KEY_UP, DIK_UP),
+        (DINPUT_KEY_DOWN, DIK_DOWN),
+        (DINPUT_KEY_0, DIK_0),
+        (DINPUT_KEY_NUMPAD0, DIK_NUMPAD0),
+        (DINPUT_KEY_INSERT, DIK_INSERT),
+    ] {
+        if dinput_key_down(size, data, offset) {
+            pressed_mask |= bit;
+        }
+    }
+
+    let previous_mask = DINPUT_PREVIOUS_SELECTOR_KEYS.swap(pressed_mask, Ordering::Relaxed);
+    let new_edges = pressed_mask & !previous_mask;
+
+    let mut queued = 0usize;
+    for (bit, vk, needs_alt) in [
+        (DINPUT_KEY_LEFT, VK_LEFT, false),
+        (DINPUT_KEY_RIGHT, VK_RIGHT, false),
+        (DINPUT_KEY_UP, VK_UP, false),
+        (DINPUT_KEY_DOWN, VK_DOWN, false),
+        (DINPUT_KEY_0, VK_0, true),
+        (DINPUT_KEY_NUMPAD0, VK_NUMPAD0, true),
+        (DINPUT_KEY_INSERT, VK_INSERT, true),
+    ] {
+        if new_edges & bit == 0 || (needs_alt && !alt_down) {
+            continue;
+        }
+        effects::queue_effect_keyboard_vk(vk, alt_down);
+        queued = queued.saturating_add(1);
+    }
+    let repeated = queue_held_arrow_repeats(pressed_mask, new_edges);
+    queued = queued.saturating_add(repeated);
+    if repeated != 0 {
+        DINPUT_REPEATED_SELECTOR_KEYS.fetch_add(repeated, Ordering::SeqCst);
+    }
+    if queued != 0 {
+        DINPUT_QUEUED_SELECTOR_KEYS.fetch_add(queued, Ordering::SeqCst);
+    }
+}
+
+fn queue_held_arrow_repeats(pressed_mask: usize, new_edges: usize) -> usize {
+    let held_arrows = pressed_mask & DINPUT_ARROW_KEY_MASK;
+    if held_arrows == 0 || !SUPPRESS_ARROW_KEYS.load(Ordering::Relaxed) {
+        if let Some(state) = DINPUT_REPEAT_STATE.get()
+            && let Ok(mut state) = state.lock()
+        {
+            *state = DinputRepeatState::default();
+        }
+        return 0;
+    }
+
+    let now = Instant::now();
+    let mut queued = 0usize;
+    let Ok(mut state) = DINPUT_REPEAT_STATE
+        .get_or_init(|| Mutex::new(DinputRepeatState::default()))
+        .lock()
+    else {
+        return 0;
+    };
+
+    for (index, key) in REPEAT_KEYS.iter().enumerate() {
+        if held_arrows & key.bit == 0 {
+            state.next_repeat_at[index] = None;
+            state.repeat_interval[index] = HOLD_REPEAT_INITIAL_INTERVAL;
+            continue;
+        }
+        if new_edges & key.bit != 0 || state.next_repeat_at[index].is_none() {
+            state.next_repeat_at[index] = Some(now + HOLD_REPEAT_LATCH_DELAY);
+            state.repeat_interval[index] = HOLD_REPEAT_INITIAL_INTERVAL;
+            continue;
+        }
+        let Some(next_repeat_at) = state.next_repeat_at[index] else {
+            continue;
+        };
+        if now < next_repeat_at {
+            continue;
+        }
+        effects::queue_effect_keyboard_vk(key.vk, false);
+        queued = queued.saturating_add(1);
+        let interval = state.repeat_interval[index]
+            .checked_sub(HOLD_REPEAT_ACCEL_STEP)
+            .unwrap_or(HOLD_REPEAT_MIN_INTERVAL)
+            .max(HOLD_REPEAT_MIN_INTERVAL);
+        state.repeat_interval[index] = interval;
+        state.next_repeat_at[index] = Some(now + interval);
+    }
+
+    queued
 }
 
 fn zero_dinput_arrow_state(hr: i32, size: u32, data: *mut u8) {

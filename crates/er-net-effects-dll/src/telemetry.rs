@@ -49,7 +49,7 @@ fn write_telemetry(state: &NetEffectsState, player_available: bool) {
         )
     ));
     body.push_str(&format!(
-        "  \"effect_hotkey_hook_active\": {},\n  \"effect_hotkey_hook_hits\": {},\n  \"effect_hotkey_applied_actions\": {},\n  \"effect_input_suppressed_keys\": {},\n  \"effect_input_suppressed_arrow_keys\": {},\n  \"effect_dinput_kb_hook_fires\": {},\n  \"effect_dinput_mouse_hook_fires\": {},\n  \"effect_dinput_suppressed_arrow_keys\": {},\n",
+        "  \"effect_hotkey_hook_active\": {},\n  \"effect_hotkey_hook_hits\": {},\n  \"effect_hotkey_applied_actions\": {},\n  \"effect_input_suppressed_keys\": {},\n  \"effect_input_suppressed_arrow_keys\": {},\n  \"effect_dinput_kb_hook_fires\": {},\n  \"effect_dinput_mouse_hook_fires\": {},\n  \"effect_dinput_suppressed_arrow_keys\": {},\n  \"effect_dinput_queued_selector_keys\": {},\n  \"effect_dinput_repeated_selector_keys\": {},\n",
         effects::effect_hotkey_hook_active(),
         effects::effect_hotkey_hook_hits(),
         effects::effect_hotkey_applied_actions(),
@@ -57,7 +57,9 @@ fn write_telemetry(state: &NetEffectsState, player_available: bool) {
         effects::effect_input_suppressed_arrow_keys(),
         effects::dinput_kb_hook_fires(),
         effects::dinput_mouse_hook_fires(),
-        effects::dinput_suppressed_arrow_keys()
+        effects::dinput_suppressed_arrow_keys(),
+        effects::dinput_queued_selector_keys(),
+        effects::dinput_repeated_selector_keys()
     ));
     body.push_str(&format!(
         "  \"effect_selector_visible\": {},\n  \"effect_selector_text\": \"{}\",\n",

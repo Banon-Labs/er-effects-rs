@@ -13,6 +13,7 @@ eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 er-effects-data = { path = "../effects-data" }
 er-hook = { path = "../er-hook" }
+hudhook = { version = "0.9.2", default-features = false, features = ["dx12"] }
 windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_Graphics_Direct3D",

@@ -15,8 +15,10 @@ use er_effects_data::{
     parse_effect_master_catalog_json,
 };
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, HC_ACTION, KBDLLHOOKSTRUCT, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    CallNextHookEx, GetForegroundWindow, GetWindowThreadProcessId, HC_ACTION, KBDLLHOOKSTRUCT,
+    WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 use crate::{config::runtime_config, crash_telemetry, input_suppression, log::net_effects_log};
@@ -299,6 +301,41 @@ fn command_path() -> PathBuf {
     runtime_config().command_file.clone()
 }
 
+fn is_effect_catalog_path(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|ext| ext.to_str()),
+        Some("json") | Some("jsonc")
+    )
+}
+
+fn prefer_effect_catalog_path(existing: &Path, candidate: &Path) -> bool {
+    existing.extension().and_then(|ext| ext.to_str()) == Some("json")
+        && candidate.extension().and_then(|ext| ext.to_str()) == Some("jsonc")
+}
+
+fn effect_catalog_paths() -> std::io::Result<Vec<PathBuf>> {
+    let entries = fs::read_dir(user_effect_catalog_dir())?;
+    let mut by_stem = HashMap::<String, PathBuf>::new();
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if !is_effect_catalog_path(&path) {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        match by_stem.get(stem) {
+            Some(existing) if !prefer_effect_catalog_path(existing, &path) => {}
+            _ => {
+                by_stem.insert(stem.to_owned(), path);
+            }
+        }
+    }
+    let mut paths = by_stem.into_values().collect::<Vec<_>>();
+    paths.sort();
+    Ok(paths)
+}
+
 fn effect_file_signature(path: &Path) -> String {
     let Ok(metadata) = fs::metadata(path) else {
         return "missing".to_owned();
@@ -319,18 +356,11 @@ fn current_effect_catalog_signature() -> String {
         "master:{}",
         effect_file_signature(&effect_master_catalog_path())
     ));
-    if let Ok(entries) = fs::read_dir(user_effect_catalog_dir()) {
-        let mut catalog_parts = entries
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
-            .filter_map(|path| {
-                let file_name = path.file_name()?.to_str()?.to_owned();
-                Some(format!("{file_name}:{}", effect_file_signature(&path)))
-            })
-            .collect::<Vec<_>>();
-        catalog_parts.sort();
-        parts.extend(catalog_parts);
+    if let Ok(paths) = effect_catalog_paths() {
+        parts.extend(paths.into_iter().filter_map(|path| {
+            let file_name = path.file_name()?.to_str()?.to_owned();
+            Some(format!("{file_name}:{}", effect_file_signature(&path)))
+        }));
     } else {
         parts.push("catalogs:missing".to_owned());
     }
@@ -539,13 +569,7 @@ fn build_effect_catalog_state() -> (Vec<NamedEffectCall>, Vec<EffectCatalog>, Op
     };
 
     let mut raw_catalogs = Vec::new();
-    if let Ok(entries) = fs::read_dir(user_effect_catalog_dir()) {
-        let mut paths = entries
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
-            .collect::<Vec<_>>();
-        paths.sort();
+    if let Ok(paths) = effect_catalog_paths() {
         for path in paths {
             let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
                 continue;
@@ -634,6 +658,33 @@ fn queue_effect_trigger_key(vk: u32, alt: bool) {
     }
 }
 
+pub(crate) fn queue_effect_keyboard_vk(vk: u32, alt_down: bool) {
+    queue_effect_trigger_key(vk, alt_down);
+    let action = effect_hotkey_action_for_key(vk, alt_down);
+    if action == 0 {
+        return;
+    }
+    EFFECT_HOTKEY_HOOK_HITS.fetch_add(1, Ordering::SeqCst);
+    if action & EFFECT_HOTKEY_UP != 0 {
+        EFFECT_HOTKEY_PENDING_UP.fetch_add(1, Ordering::SeqCst);
+    }
+    if action & EFFECT_HOTKEY_DOWN != 0 {
+        EFFECT_HOTKEY_PENDING_DOWN.fetch_add(1, Ordering::SeqCst);
+    }
+    if action & EFFECT_HOTKEY_LEFT != 0 {
+        EFFECT_HOTKEY_PENDING_LEFT.fetch_add(1, Ordering::SeqCst);
+    }
+    if action & EFFECT_HOTKEY_RIGHT != 0 {
+        EFFECT_HOTKEY_PENDING_RIGHT.fetch_add(1, Ordering::SeqCst);
+    }
+    if action & EFFECT_HOTKEY_TOGGLE != 0 {
+        EFFECT_HOTKEY_PENDING_TOGGLE.fetch_add(1, Ordering::SeqCst);
+    }
+    if action & EFFECT_HOTKEY_SELECTOR_TOGGLE != 0 {
+        EFFECT_HOTKEY_PENDING_SELECTOR_TOGGLE.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
 fn drain_effect_trigger_keys() -> Vec<EffectTriggerKeyPress> {
     EFFECT_TRIGGER_PENDING_KEYS
         .get_or_init(|| Mutex::new(Vec::new()))
@@ -644,6 +695,16 @@ fn drain_effect_trigger_keys() -> Vec<EffectTriggerKeyPress> {
 
 pub(crate) fn discard_pending_effect_trigger_keys() -> usize {
     drain_effect_trigger_keys().len()
+}
+
+fn foreground_window_belongs_to_this_process() -> bool {
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.0.is_null() {
+        return false;
+    }
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    pid == unsafe { GetCurrentProcessId() }
 }
 
 unsafe extern "system" fn effect_hotkey_ll_keyboard_proc(
@@ -657,35 +718,15 @@ unsafe extern "system" fn effect_hotkey_ll_keyboard_proc(
         let key_down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
         let key_up = msg == WM_KEYUP || msg == WM_SYSKEYUP;
         let runtime_ready = EFFECT_RUNTIME_READY_FOR_HOOK.load(Ordering::SeqCst);
-        let suppress_arrow = runtime_ready
+        let foreground_is_game = foreground_window_belongs_to_this_process();
+        let suppress_arrow = foreground_is_game
+            && runtime_ready
             && (key_down || key_up)
             && is_arrow_key(kb.vkCode)
             && EFFECT_SELECTOR_VISIBLE_FOR_HOOK.load(Ordering::SeqCst);
-        if key_down && runtime_ready {
+        if key_down && runtime_ready && !foreground_is_game {
             let alt_down = msg == WM_SYSKEYDOWN || (kb.flags.0 & LLKHF_ALTDOWN) != 0;
-            queue_effect_trigger_key(kb.vkCode, alt_down);
-            let action = effect_hotkey_action_for_key(kb.vkCode, alt_down);
-            if action != 0 {
-                EFFECT_HOTKEY_HOOK_HITS.fetch_add(1, Ordering::SeqCst);
-                if action & EFFECT_HOTKEY_UP != 0 {
-                    EFFECT_HOTKEY_PENDING_UP.fetch_add(1, Ordering::SeqCst);
-                }
-                if action & EFFECT_HOTKEY_DOWN != 0 {
-                    EFFECT_HOTKEY_PENDING_DOWN.fetch_add(1, Ordering::SeqCst);
-                }
-                if action & EFFECT_HOTKEY_LEFT != 0 {
-                    EFFECT_HOTKEY_PENDING_LEFT.fetch_add(1, Ordering::SeqCst);
-                }
-                if action & EFFECT_HOTKEY_RIGHT != 0 {
-                    EFFECT_HOTKEY_PENDING_RIGHT.fetch_add(1, Ordering::SeqCst);
-                }
-                if action & EFFECT_HOTKEY_TOGGLE != 0 {
-                    EFFECT_HOTKEY_PENDING_TOGGLE.fetch_add(1, Ordering::SeqCst);
-                }
-                if action & EFFECT_HOTKEY_SELECTOR_TOGGLE != 0 {
-                    EFFECT_HOTKEY_PENDING_SELECTOR_TOGGLE.fetch_add(1, Ordering::SeqCst);
-                }
-            }
+            queue_effect_keyboard_vk(kb.vkCode, alt_down);
         }
         if suppress_arrow {
             record_suppressed_arrow_keys(1);
@@ -861,11 +902,6 @@ fn sync_effect_selector_input_suppression(visible: bool) {
 }
 
 pub(crate) fn publish_effect_selector_text(state: &mut NetEffectsState) {
-    if !state.runtime_ready {
-        sync_effect_selector_input_suppression(false);
-        clear_effect_selector_text();
-        return;
-    }
     let selector_toggles = EFFECT_HOTKEY_PENDING_SELECTOR_TOGGLE.swap(0, Ordering::SeqCst);
     if selector_toggles != 0 {
         if selector_toggles % 2 == 1 {
@@ -929,8 +965,13 @@ pub(crate) fn publish_effect_selector_text(state: &mut NetEffectsState) {
     } else {
         catalog_index.saturating_add(1)
     };
+    let runtime_status = if state.runtime_ready {
+        "READY"
+    } else {
+        "WAITING"
+    };
     let mut text = format!(
-        "CAT {}/{} {} | ID {}{} | {}/{} | {} | NET {}{}",
+        "CAT {}/{} {} | ID {}{} | {}/{} | {} | NET {} | {}{}",
         catalog_display_index,
         catalog_count,
         catalog_name,
@@ -944,6 +985,7 @@ pub(crate) fn publish_effect_selector_text(state: &mut NetEffectsState) {
             "OFF"
         },
         if state.network_sync { "ON" } else { "OFF" },
+        runtime_status,
         trigger_text
     );
     text = text
@@ -1018,10 +1060,10 @@ pub(crate) fn consume_effect_hotkeys(player: &mut PlayerIns, state: &mut NetEffe
         step_selected_catalog(player, state, 1);
     }
     for _ in 0..ups {
-        step_selected_effect(player, state, -1);
+        step_selected_effect(player, state, 1);
     }
     for _ in 0..downs {
-        step_selected_effect(player, state, 1);
+        step_selected_effect(player, state, -1);
     }
 }
 
@@ -1665,4 +1707,12 @@ pub(crate) fn dinput_mouse_hook_fires() -> usize {
 
 pub(crate) fn dinput_suppressed_arrow_keys() -> usize {
     input_suppression::dinput_suppressed_arrow_keys()
+}
+
+pub(crate) fn dinput_queued_selector_keys() -> usize {
+    input_suppression::dinput_queued_selector_keys()
+}
+
+pub(crate) fn dinput_repeated_selector_keys() -> usize {
+    input_suppression::dinput_repeated_selector_keys()
 }

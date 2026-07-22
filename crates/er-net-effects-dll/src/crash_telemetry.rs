@@ -51,6 +51,12 @@ pub(crate) enum Phase {
     PresentFailureRecorded = 30,
     OriginalPresent = 31,
     PresentExit = 32,
+    HudhookApplyOk = 40,
+    HudhookApplyFailed = 41,
+    HudhookInitialize = 42,
+    HudhookRenderEnter = 43,
+    HudhookRenderVisible = 44,
+    HudhookRenderExit = 45,
     ExceptionObserved = 90,
 }
 
@@ -114,6 +120,13 @@ static DRAW_BACKBUFFER_INDEX: AtomicUsize = AtomicUsize::new(0);
 static DRAW_WIDTH: AtomicUsize = AtomicUsize::new(0);
 static DRAW_HEIGHT: AtomicUsize = AtomicUsize::new(0);
 static DRAW_FORMAT: AtomicUsize = AtomicUsize::new(0);
+static HUDHOOK_THREAD_ID: AtomicUsize = AtomicUsize::new(0);
+static HUDHOOK_RENDER_DEPTH: AtomicUsize = AtomicUsize::new(0);
+static HUDHOOK_RENDER_COUNT: AtomicU64 = AtomicU64::new(0);
+static HUDHOOK_VISIBLE_RENDER_COUNT: AtomicU64 = AtomicU64::new(0);
+static LAST_HUDHOOK_RENDER_BEGIN_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_HUDHOOK_RENDER_END_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_HUDHOOK_VISIBLE_RENDER_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_EXCEPTION_CODE: AtomicUsize = AtomicUsize::new(0);
 static LAST_EXCEPTION_ADDRESS: AtomicUsize = AtomicUsize::new(0);
 static LAST_EXCEPTION_THREAD_ID: AtomicUsize = AtomicUsize::new(0);
@@ -146,6 +159,47 @@ pub(crate) fn install_handler() {
         MODULE_BASE.load(Ordering::SeqCst),
         MODULE_SIZE.load(Ordering::SeqCst)
     ));
+}
+
+pub(crate) fn hudhook_apply_ok() {
+    mark_phase(Phase::HudhookApplyOk);
+    write_snapshot("hudhook-apply-ok", true);
+}
+
+pub(crate) fn hudhook_apply_failed() {
+    mark_phase(Phase::HudhookApplyFailed);
+    write_snapshot("hudhook-apply-failed", true);
+}
+
+pub(crate) fn hudhook_initialize() {
+    mark_phase(Phase::HudhookInitialize);
+    write_snapshot("hudhook-initialize", true);
+}
+
+pub(crate) fn hudhook_render_enter() {
+    HUDHOOK_THREAD_ID.store(current_thread_id(), Ordering::SeqCst);
+    HUDHOOK_RENDER_DEPTH.fetch_add(1, Ordering::SeqCst);
+    HUDHOOK_RENDER_COUNT.fetch_add(1, Ordering::SeqCst);
+    LAST_HUDHOOK_RENDER_BEGIN_MS.store(now_ms(), Ordering::SeqCst);
+    mark_phase(Phase::HudhookRenderEnter);
+}
+
+pub(crate) fn hudhook_render_visible() {
+    HUDHOOK_VISIBLE_RENDER_COUNT.fetch_add(1, Ordering::SeqCst);
+    LAST_HUDHOOK_VISIBLE_RENDER_MS.store(now_ms(), Ordering::SeqCst);
+    mark_phase(Phase::HudhookRenderVisible);
+}
+
+pub(crate) fn hudhook_render_exit() {
+    LAST_HUDHOOK_RENDER_END_MS.store(now_ms(), Ordering::SeqCst);
+    mark_phase(Phase::HudhookRenderExit);
+    let depth = HUDHOOK_RENDER_DEPTH.load(Ordering::SeqCst);
+    if depth <= 1 {
+        HUDHOOK_RENDER_DEPTH.store(0, Ordering::SeqCst);
+        HUDHOOK_THREAD_ID.store(0, Ordering::SeqCst);
+    } else {
+        HUDHOOK_RENDER_DEPTH.store(depth - 1, Ordering::SeqCst);
+    }
 }
 
 pub(crate) fn runtime_ready(ready: bool) {
@@ -255,10 +309,17 @@ pub(crate) fn draw_end(ok: bool) {
 pub(crate) fn telemetry_json_fields() -> String {
     let now = now_ms();
     format!(
-        "  \"crash_telemetry_phase\": \"{}\",\n  \"crash_telemetry_phase_id\": {},\n  \"crash_telemetry_ms_since_phase\": {},\n  \"crash_telemetry_present_depth\": {},\n  \"crash_telemetry_present_thread_id\": {},\n  \"crash_telemetry_present_result\": \"0x{:08x}\",\n  \"crash_telemetry_present_device_removed_reason\": \"0x{:08x}\",\n  \"crash_telemetry_present_failure_count\": {},\n  \"crash_telemetry_ms_since_present_failure\": {},\n  \"crash_telemetry_draw_thread_id\": {},\n  \"crash_telemetry_draw_sequence\": {},\n  \"crash_telemetry_ms_since_draw_begin\": {},\n  \"crash_telemetry_ms_since_draw_end\": {},\n  \"crash_telemetry_last_draw_ok\": {},\n  \"crash_telemetry_last_draw_fail_stage\": \"{}\",\n  \"crash_telemetry_last_draw_fail_stage_id\": {},\n  \"crash_telemetry_last_draw_fail_hresult\": \"0x{:08x}\",\n  \"crash_telemetry_last_draw_fail_device_removed_reason\": \"0x{:08x}\",\n  \"crash_telemetry_ms_since_draw_failure\": {},\n  \"crash_telemetry_draw_swapchain\": \"0x{:x}\",\n  \"crash_telemetry_draw_device\": \"0x{:x}\",\n  \"crash_telemetry_draw_backbuffer\": \"0x{:x}\",\n  \"crash_telemetry_draw_backbuffer_index\": {},\n  \"crash_telemetry_draw_width\": {},\n  \"crash_telemetry_draw_height\": {},\n  \"crash_telemetry_draw_format\": {},\n  \"crash_telemetry_last_exception_code\": \"0x{:08x}\",\n  \"crash_telemetry_last_exception_address\": \"0x{:x}\",\n",
+        "  \"crash_telemetry_phase\": \"{}\",\n  \"crash_telemetry_phase_id\": {},\n  \"crash_telemetry_ms_since_phase\": {},\n  \"crash_telemetry_hudhook_render_depth\": {},\n  \"crash_telemetry_hudhook_thread_id\": {},\n  \"crash_telemetry_hudhook_render_count\": {},\n  \"crash_telemetry_hudhook_visible_render_count\": {},\n  \"crash_telemetry_ms_since_hudhook_render_begin\": {},\n  \"crash_telemetry_ms_since_hudhook_render_end\": {},\n  \"crash_telemetry_ms_since_hudhook_visible_render\": {},\n  \"crash_telemetry_present_depth\": {},\n  \"crash_telemetry_present_thread_id\": {},\n  \"crash_telemetry_present_result\": \"0x{:08x}\",\n  \"crash_telemetry_present_device_removed_reason\": \"0x{:08x}\",\n  \"crash_telemetry_present_failure_count\": {},\n  \"crash_telemetry_ms_since_present_failure\": {},\n  \"crash_telemetry_draw_thread_id\": {},\n  \"crash_telemetry_draw_sequence\": {},\n  \"crash_telemetry_ms_since_draw_begin\": {},\n  \"crash_telemetry_ms_since_draw_end\": {},\n  \"crash_telemetry_last_draw_ok\": {},\n  \"crash_telemetry_last_draw_fail_stage\": \"{}\",\n  \"crash_telemetry_last_draw_fail_stage_id\": {},\n  \"crash_telemetry_last_draw_fail_hresult\": \"0x{:08x}\",\n  \"crash_telemetry_last_draw_fail_device_removed_reason\": \"0x{:08x}\",\n  \"crash_telemetry_ms_since_draw_failure\": {},\n  \"crash_telemetry_draw_swapchain\": \"0x{:x}\",\n  \"crash_telemetry_draw_device\": \"0x{:x}\",\n  \"crash_telemetry_draw_backbuffer\": \"0x{:x}\",\n  \"crash_telemetry_draw_backbuffer_index\": {},\n  \"crash_telemetry_draw_width\": {},\n  \"crash_telemetry_draw_height\": {},\n  \"crash_telemetry_draw_format\": {},\n  \"crash_telemetry_last_exception_code\": \"0x{:08x}\",\n  \"crash_telemetry_last_exception_address\": \"0x{:x}\",\n",
         phase_label(PHASE.load(Ordering::SeqCst)),
         PHASE.load(Ordering::SeqCst),
         age_ms(now, LAST_PHASE_MS.load(Ordering::SeqCst)),
+        HUDHOOK_RENDER_DEPTH.load(Ordering::SeqCst),
+        HUDHOOK_THREAD_ID.load(Ordering::SeqCst),
+        HUDHOOK_RENDER_COUNT.load(Ordering::SeqCst),
+        HUDHOOK_VISIBLE_RENDER_COUNT.load(Ordering::SeqCst),
+        age_ms(now, LAST_HUDHOOK_RENDER_BEGIN_MS.load(Ordering::SeqCst)),
+        age_ms(now, LAST_HUDHOOK_RENDER_END_MS.load(Ordering::SeqCst)),
+        age_ms(now, LAST_HUDHOOK_VISIBLE_RENDER_MS.load(Ordering::SeqCst)),
         PRESENT_DEPTH.load(Ordering::SeqCst),
         PRESENT_THREAD_ID.load(Ordering::SeqCst),
         PRESENT_RESULT.load(Ordering::SeqCst) as u32,
@@ -366,9 +427,12 @@ fn exception_report(
     let phase = PHASE.load(Ordering::SeqCst);
     let present_thread = PRESENT_THREAD_ID.load(Ordering::SeqCst);
     let draw_thread = DRAW_THREAD_ID.load(Ordering::SeqCst);
+    let hudhook_thread = HUDHOOK_THREAD_ID.load(Ordering::SeqCst);
     let present_depth = PRESENT_DEPTH.load(Ordering::SeqCst);
+    let hudhook_depth = HUDHOOK_RENDER_DEPTH.load(Ordering::SeqCst);
     let in_present_thread = present_depth != 0 && present_thread == thread_id;
     let in_draw_thread = draw_thread != 0 && draw_thread == thread_id;
+    let in_hudhook_render_thread = hudhook_depth != 0 && hudhook_thread == thread_id;
     let exception_in_dll = module_contains(addr) || module_contains(rip);
     let mut out = String::new();
     let _ = writeln!(out, "reason=veh-crash-like-exception");
@@ -394,6 +458,37 @@ fn exception_report(
         out,
         "ms_since_runtime_ready={}",
         age_ms(now, LAST_RUNTIME_READY_MS.load(Ordering::SeqCst))
+    );
+    let _ = writeln!(out, "hudhook_render_depth={hudhook_depth}");
+    let _ = writeln!(out, "hudhook_thread_id={hudhook_thread}");
+    let _ = writeln!(
+        out,
+        "exception_on_hudhook_render_thread={in_hudhook_render_thread}"
+    );
+    let _ = writeln!(
+        out,
+        "hudhook_render_count={}",
+        HUDHOOK_RENDER_COUNT.load(Ordering::SeqCst)
+    );
+    let _ = writeln!(
+        out,
+        "hudhook_visible_render_count={}",
+        HUDHOOK_VISIBLE_RENDER_COUNT.load(Ordering::SeqCst)
+    );
+    let _ = writeln!(
+        out,
+        "ms_since_hudhook_render_begin={}",
+        age_ms(now, LAST_HUDHOOK_RENDER_BEGIN_MS.load(Ordering::SeqCst))
+    );
+    let _ = writeln!(
+        out,
+        "ms_since_hudhook_render_end={}",
+        age_ms(now, LAST_HUDHOOK_RENDER_END_MS.load(Ordering::SeqCst))
+    );
+    let _ = writeln!(
+        out,
+        "ms_since_hudhook_visible_render={}",
+        age_ms(now, LAST_HUDHOOK_VISIBLE_RENDER_MS.load(Ordering::SeqCst))
     );
     let _ = writeln!(out, "present_depth={present_depth}");
     let _ = writeln!(out, "present_thread_id={present_thread}");
@@ -516,6 +611,36 @@ fn write_snapshot(reason: &str, force: bool) {
     let _ = writeln!(out, "reason={reason}");
     let _ = writeln!(out, "phase={}", phase_label(PHASE.load(Ordering::SeqCst)));
     let _ = writeln!(out, "phase_id={}", PHASE.load(Ordering::SeqCst));
+    let _ = writeln!(
+        out,
+        "hudhook_render_depth={}",
+        HUDHOOK_RENDER_DEPTH.load(Ordering::SeqCst)
+    );
+    let _ = writeln!(
+        out,
+        "hudhook_thread_id={}",
+        HUDHOOK_THREAD_ID.load(Ordering::SeqCst)
+    );
+    let _ = writeln!(
+        out,
+        "hudhook_render_count={}",
+        HUDHOOK_RENDER_COUNT.load(Ordering::SeqCst)
+    );
+    let _ = writeln!(
+        out,
+        "hudhook_visible_render_count={}",
+        HUDHOOK_VISIBLE_RENDER_COUNT.load(Ordering::SeqCst)
+    );
+    let _ = writeln!(
+        out,
+        "ms_since_hudhook_render_begin={}",
+        age_ms(now, LAST_HUDHOOK_RENDER_BEGIN_MS.load(Ordering::SeqCst))
+    );
+    let _ = writeln!(
+        out,
+        "ms_since_hudhook_render_end={}",
+        age_ms(now, LAST_HUDHOOK_RENDER_END_MS.load(Ordering::SeqCst))
+    );
     let _ = writeln!(
         out,
         "present_depth={}",
@@ -647,6 +772,12 @@ fn phase_label(phase: usize) -> &'static str {
         30 => "present-failure-recorded",
         31 => "original-present",
         32 => "present-exit",
+        40 => "hudhook-apply-ok",
+        41 => "hudhook-apply-failed",
+        42 => "hudhook-initialize",
+        43 => "hudhook-render-enter",
+        44 => "hudhook-render-visible",
+        45 => "hudhook-render-exit",
         90 => "exception-observed",
         _ => "uninitialized",
     }

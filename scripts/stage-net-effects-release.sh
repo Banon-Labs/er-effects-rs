@@ -11,13 +11,15 @@ Usage: scripts/stage-net-effects-release.sh [--output DIR] [--no-build]
 
 Stages the standalone keyboard-controlled network effects payload:
   er_net_effects_dll.dll       standalone DLL, loaded by me3 as its own native
-  er-net-effects.me3           me3 ModProfile loading only the net-effects DLL
+  er-net-effects.me3           me3 ModProfile loading the game-installed Seamless Co-op DLL plus net-effects DLL
   er-net-effects.toml.example  per-feature configuration file
   .er-net-effects-hotkeys.json.example  keyboard-trigger configuration
-  er-net-effect-catalogs/example.json   example selector catalog
+  er-net-effect-master-catalog.json     SpEffect metadata for selector labels/tags
+  er-net-effect-catalogs/*.jsonc        commentable selector catalogs (network-test, visuals-only, sounds-only, stats, weapon buffs, etc.)
 
-Install: keep the folder together anywhere (the profile references the DLL
-relative to itself), copy the wanted er-net-effects config/catalog files next to
+Install: keep the folder together anywhere (the profile references the net-effects
+DLL relative to itself and references the game-installed Seamless Co-op DLL by
+absolute path), copy the wanted er-net-effects config/catalog files next to
 eldenring.exe, then launch:
   me3 launch -g eldenring -p /path/to/er-net-effects.me3
 
@@ -72,6 +74,9 @@ profileVersion = "v1"
 game = "eldenring"
 
 [[natives]]
+path = 'C:\SteamLibrary\steamapps\common\ELDEN RING\Game\SeamlessCoop\ersc.dll'
+
+[[natives]]
 path = 'er_net_effects_dll.dll'
 EOF
 cat >"$tmp_dir/er-net-effects.toml.example" <<'EOF'
@@ -103,14 +108,60 @@ cat >"$tmp_dir/.er-net-effects-hotkeys.json.example" <<'EOF'
   ]
 }
 EOF
-cat >"$tmp_dir/er-net-effect-catalogs/example.json" <<'EOF'
-[
-  8355
-]
-EOF
+rich_master="$repo_root/target/er-net-effect-master-catalog-rich.json"
+if [[ -f "$rich_master" ]]; then
+	cp -f "$rich_master" "$tmp_dir/er-net-effect-master-catalog.json"
+else
+	python3 - "$tmp_dir" "$repo_root" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+out = Path(sys.argv[1])
+repo = Path(sys.argv[2])
+effects = json.loads((repo / "data" / "effects.json").read_text(encoding="utf-8"))["calls"]
+if not effects:
+    raise SystemExit("data/effects.json contains no calls")
+master = {
+    "schema_version": 1,
+    "kind": "sp_effect_master_catalog",
+    "source": {
+        "param": "SpEffectParam",
+        "binder_version": "",
+        "row_count": len(effects),
+        "regulation_file": "data/effects.json",
+        "paramdef_file": "",
+        "names_file": "",
+    },
+    "field_index": {},
+    "effects": [
+        {
+            "id": int(call["id"]),
+            "name": str(call["name"]),
+            "row_name": None,
+            "community_name": None,
+            "curated_name": None,
+            "vfx": [],
+            "tags": ["bundled"],
+            "fields": {},
+        }
+        for call in effects
+    ],
+}
+(out / "er-net-effect-master-catalog.json").write_text(
+    json.dumps(master, indent=2) + "\n", encoding="utf-8"
+)
+PY
+fi
+python3 "$repo_root/scripts/generate-effect-discriminator-catalogs.py" \
+	--master "$tmp_dir/er-net-effect-master-catalog.json" \
+	--catalog-dir "$tmp_dir/er-net-effect-catalogs" \
+	--effects "$repo_root/data/effects.json" \
+	--clean
+
 (
 	cd "$tmp_dir"
-	sha256sum er_net_effects_dll.dll er-net-effects.me3 er-net-effects.toml.example .er-net-effects-hotkeys.json.example er-net-effect-catalogs/example.json >SHA256SUMS.txt
+	find . -type f -print0 | sort -z | xargs -0 sha256sum >SHA256SUMS.txt
 )
 
 rm -rf "$out_dir"

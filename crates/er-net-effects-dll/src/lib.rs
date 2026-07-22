@@ -82,11 +82,13 @@ fn spawn_game_task(state: Arc<Mutex<NetEffectsState>>) {
                     state.game_task_ticks = state.game_task_ticks.saturating_add(1);
                     let Ok(player) = (unsafe { PlayerIns::local_player_mut() }) else {
                         effects::set_runtime_ready(&mut state, false);
+                        effects::publish_effect_selector_text(&mut state);
                         write_telemetry_throttled(&mut state, false);
                         return;
                     };
                     if !player_runtime_ready(player) {
                         effects::set_runtime_ready(&mut state, false);
+                        effects::publish_effect_selector_text(&mut state);
                         write_telemetry_throttled(&mut state, true);
                         return;
                     }
@@ -109,7 +111,7 @@ fn spawn_game_task(state: Arc<Mutex<NetEffectsState>>) {
 }
 
 #[cfg(windows)]
-fn install() {
+fn install(hmodule_raw: usize) {
     config::init_runtime_config();
     log::reset_log_file();
     crash_telemetry::install_handler();
@@ -119,7 +121,7 @@ fn install() {
         config::runtime_config().config_path.display()
     ));
     effects::ensure_effect_hotkey_hook();
-    present_overlay::install_present_overlay_hook();
+    present_overlay::install_present_overlay_hook(hmodule_raw);
     let state = Arc::new(Mutex::new(NetEffectsState::new()));
     spawn_game_task(state);
 }
@@ -136,9 +138,10 @@ pub unsafe extern "system" fn DllMain(
     if reason == DLL_PROCESS_ATTACH {
         START.call_once(|| {
             crash_telemetry::set_module_base(_module);
+            let hmodule_raw = _module.0 as usize;
             let _ = std::thread::Builder::new()
                 .name("er-net-effects-install".to_owned())
-                .spawn(install);
+                .spawn(move || install(hmodule_raw));
         });
     }
     DLL_MAIN_SUCCESS
