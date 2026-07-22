@@ -524,6 +524,24 @@ pub(crate) fn harness_dll_present() -> bool {
     }
     present
 }
+/// True when `renderdoc.dll` is loaded (a RenderDoc capture is hooking D3D12). The product's Present-overlay
+/// hook + throwaway dummy swapchain conflict with RenderDoc's resource tracking (bd RENDERDOC-assert-cause-
+/// is-product-dummy-swapchain: RenderDoc double-tracks the dummy swapchain -> resource_manager `ref>=0`
+/// assert -> ER dies ~50s). So the render-thread hooks stand down under RenderDoc; the reload still drives
+/// via the CSTask/load path (no render hooks needed to CAPTURE the render state).
+pub(crate) fn renderdoc_active() -> bool {
+    static CACHED: AtomicUsize = AtomicUsize::new(0);
+    if CACHED.load(Ordering::Relaxed) == 1 {
+        return true;
+    }
+    let present = unsafe { GetModuleHandleA(PCSTR(b"renderdoc.dll\0".as_ptr())) }
+        .map(|h| !h.is_invalid())
+        .unwrap_or(false);
+    if present {
+        CACHED.store(1, Ordering::Relaxed);
+    }
+    present
+}
 pub(crate) fn system_quit_repro_enabled() -> bool {
     // Stand down the flaky menu-nav switch driver when the DETERMINISTIC control-file driver owns the
     // switch (er-effects-switch-slot.txt present). Running both fought over arming AND the menu-nav

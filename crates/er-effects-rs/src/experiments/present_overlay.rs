@@ -388,6 +388,15 @@ fn install_dxgi_factory_export_hook() {
 /// vtable funcs are NOT hooked -- under vkd3d-proton the game's swapchain is a different object, so the
 /// REAL Present hook is installed later by `try_install_game_present_hook` once the GX device is up.
 pub(crate) fn install_present_overlay_hook() {
+    // Under a RenderDoc capture, our throwaway dummy swapchain double-registers with RenderDoc's resource
+    // tracker and trips its `ref>=0` assertion (bd RENDERDOC-assert-cause-is-product-dummy-swapchain). Skip
+    // the overlay entirely -- it is not needed to CAPTURE the render state.
+    if crate::experiments::renderdoc_active() {
+        append_autoload_debug(format_args!(
+            "present-overlay: SKIPPED -- renderdoc.dll loaded (dummy swapchain would trip RenderDoc resource assert)"
+        ));
+        return;
+    }
     if PRESENT_HOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
         return;
     }
@@ -1007,6 +1016,7 @@ unsafe fn vtable_swap_slot(slot_addr: usize, new_fn: usize) -> Option<usize> {
 /// but never fires on Wine's dxgi.dll). One-shot (latched on success); bounded retries.
 pub(crate) unsafe fn try_install_game_present_hook(base: usize) {
     if !portrait_lookat_enabled()
+        || crate::experiments::renderdoc_active()
         || PRESENT_HOOK_INSTALLED.load(Ordering::SeqCst) == 0
         || GAME_PRESENT_HOOKED.load(Ordering::SeqCst) != 0
     {

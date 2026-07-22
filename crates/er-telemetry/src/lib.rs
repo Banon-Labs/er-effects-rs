@@ -180,6 +180,153 @@ mod cpu {
     }
 }
 
+/// Programmatic RenderDoc frame trigger (bd RENDERDOC-inject-via-me3-native). When `renderdoc.dll` is
+/// loaded into ER (as the first me3 native -- native Windows D3D12, NOT a Vulkan layer), fire
+/// `TriggerCapture` at the reload's playable window so we capture the 20fps product-reload frame -- and,
+/// with `ER_RENDERDOC_SLOW_MS=0`, the fast vanilla-reload frame -- agent-driven, no F12 timing. No-op
+/// when `renderdoc.dll` is absent (a normal run without RENDERDOC=1).
+#[cfg(windows)]
+mod renderdoc {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// RENDERDOC_API_1_4_0 function-pointer table. Layout must match renderdoc_app.h exactly. We use
+    /// `SetCaptureFilePathTemplate` (index 11 -- preceded by GetAPIVersion, Set/GetCaptureOption{U32,F32},
+    /// SetFocusToggleKeys, SetCaptureKeys, Get/MaskOverlayBits, RemoveHooks, UnloadCrashHandler) and
+    /// `TriggerCapture` (index 15 -- preceded by GetCaptureFilePathTemplate, GetNumCaptures, GetCapture).
+    #[repr(C)]
+    struct Api {
+        before_set_path: [usize; 11],
+        set_capture_file_path_template: unsafe extern "C" fn(*const u8),
+        between: [usize; 3],
+        trigger_capture: unsafe extern "C" fn(),
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetModuleHandleA(name: *const u8) -> usize;
+        fn GetProcAddress(module: usize, name: *const u8) -> usize;
+    }
+
+    static API_PTR: AtomicUsize = AtomicUsize::new(0);
+    const NOT_AVAILABLE: usize = usize::MAX;
+
+    fn resolve() -> usize {
+        let h = unsafe { GetModuleHandleA(b"renderdoc.dll\0".as_ptr()) };
+        if h == 0 {
+            return 0;
+        }
+        let getapi = unsafe { GetProcAddress(h, b"RENDERDOC_GetAPI\0".as_ptr()) };
+        if getapi == 0 {
+            return 0;
+        }
+        type GetApiFn = unsafe extern "C" fn(version: u32, out: *mut *mut Api) -> i32;
+        let getapi: GetApiFn = unsafe { std::mem::transmute(getapi) };
+        let mut out: *mut Api = std::ptr::null_mut();
+        // eRENDERDOC_API_Version_1_4_0 = 10400
+        let ok = unsafe { getapi(10400, &mut out) };
+        if ok != 1 || out.is_null() {
+            return 0;
+        }
+        out as usize
+    }
+
+    static PATH_SET: AtomicUsize = AtomicUsize::new(0);
+
+    /// Fire a RenderDoc capture of the next present. Returns true if the API was available + triggered.
+    /// On the first call, points the capture-file template at `ER_RENDERDOC_CAPFILE` (else %TEMP%).
+    pub fn trigger_capture() -> bool {
+        let mut api = API_PTR.load(Ordering::SeqCst);
+        if api == NOT_AVAILABLE {
+            return false;
+        }
+        if api == 0 {
+            api = resolve();
+            API_PTR.store(if api == 0 { NOT_AVAILABLE } else { api }, Ordering::SeqCst);
+            if api == 0 {
+                return false;
+            }
+        }
+        let api_ref = unsafe { &*(api as *const Api) };
+        if PATH_SET
+            .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            if let Ok(path) = std::env::var("ER_RENDERDOC_CAPFILE") {
+                if let Ok(c) = std::ffi::CString::new(path) {
+                    unsafe { (api_ref.set_capture_file_path_template)(c.as_ptr() as *const u8) };
+                }
+            }
+        }
+        unsafe { (api_ref.trigger_capture)() };
+        true
+    }
+}
+
+#[cfg(not(windows))]
+mod renderdoc {
+    pub fn trigger_capture() -> bool {
+        false
+    }
+}
+
+/// Slow-frame threshold (ms) above which an in-world frame is a capture candidate. Default 40ms (~25fps)
+/// catches the 20fps reload but NOT the ~30fps boot; set `ER_RENDERDOC_SLOW_MS=0` for the fast vanilla
+/// reload so its playable frame is captured too.
+fn renderdoc_slow_ms() -> f32 {
+    use std::sync::atomic::AtomicU32;
+    static CACHED: AtomicU32 = AtomicU32::new(u32::MAX);
+    let c = CACHED.load(Ordering::SeqCst);
+    if c != u32::MAX {
+        return f32::from_bits(c);
+    }
+    let v = std::env::var("ER_RENDERDOC_SLOW_MS")
+        .ok()
+        .and_then(|s| s.trim().parse::<f32>().ok())
+        .unwrap_or(40.0);
+    CACHED.store(v.to_bits(), Ordering::SeqCst);
+    v
+}
+
+/// Fire a RenderDoc capture once the world has been simulating (play_time rising) for a settled window
+/// AND the frame is slow enough (reload) -- throttled + capped. Returns the running capture count.
+fn maybe_trigger_renderdoc(play_time_ms: i64, task_delta: f32, tick_n: u64) -> u32 {
+    use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64};
+    static PREV_PT: AtomicI64 = AtomicI64::new(-1);
+    static STREAK: AtomicU32 = AtomicU32::new(0);
+    static LAST_CAP: AtomicU64 = AtomicU64::new(0);
+    static CAPS: AtomicU32 = AtomicU32::new(0);
+    const MAX_CAPS: u32 = 4;
+    const SETTLE_TICKS: u32 = 8; // ~32 game frames of settled in-world play before a capture
+    const COOLDOWN_TICKS: u64 = 30; // ~120 game frames between captures (one per in-world window)
+
+    let caps = CAPS.load(Ordering::SeqCst);
+    if play_time_ms <= 0 {
+        STREAK.store(0, Ordering::SeqCst);
+        PREV_PT.store(play_time_ms, Ordering::SeqCst);
+        return caps;
+    }
+    if caps >= MAX_CAPS {
+        return caps;
+    }
+    let prev = PREV_PT.swap(play_time_ms, Ordering::SeqCst);
+    let streak = if prev >= 0 && play_time_ms > prev {
+        STREAK.fetch_add(1, Ordering::SeqCst) + 1
+    } else {
+        STREAK.store(0, Ordering::SeqCst);
+        0
+    };
+    let frame_ms = task_delta * 1000.0;
+    if streak >= SETTLE_TICKS
+        && frame_ms >= renderdoc_slow_ms()
+        && tick_n.saturating_sub(LAST_CAP.load(Ordering::SeqCst)) >= COOLDOWN_TICKS
+        && renderdoc::trigger_capture()
+    {
+        LAST_CAP.store(tick_n, Ordering::SeqCst);
+        return CAPS.fetch_add(1, Ordering::SeqCst) + 1;
+    }
+    caps
+}
+
 pub fn standalone_tick() {
     let n = counters::STANDALONE_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
 
@@ -230,6 +377,8 @@ pub fn standalone_tick() {
 
     // Per-core + this-process CPU, to test whether single-core contention (H-B) drives the load2 20fps.
     let (core_max_busy, cores_saturated, ncores, proc_cpu_cores) = cpu::sample();
+    // RenderDoc: capture the reload's playable frame when running under the capture layer (no-op else).
+    let renderdoc_captures = maybe_trigger_renderdoc(play_time_ms, flip_task_delta, n);
     let body = format!(
         "{{\"oracle_standalone_ticks\":{n},\
 \"oracle_game_module_base\":\"0x{base:x}\",\
@@ -243,7 +392,8 @@ pub fn standalone_tick() {
 \"oracle_core_max_busy\":{core_max_busy:.1},\
 \"oracle_cores_saturated\":{cores_saturated},\
 \"oracle_ncores\":{ncores},\
-\"oracle_proc_cpu_cores\":{proc_cpu_cores:.3}}}\n",
+\"oracle_proc_cpu_cores\":{proc_cpu_cores:.3},\
+\"oracle_renderdoc_captures\":{renderdoc_captures}}}\n",
         tick_ms = tick_ms()
     );
     // APPEND one JSON line per write -> a timeseries jsonl the agent reads AFTER the run (no polling,

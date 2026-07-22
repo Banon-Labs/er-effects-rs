@@ -32,6 +32,8 @@ HARNESS_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_input_harness_d
 # oracle_tick_ms, so a product load2/load3 run can be tested for single-core contention (bd NEXT-telemetry
 # -capture-per-core-cpu). Shipped alongside the product per the goal (product + semaphore/oracle DLLs).
 TELEM_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_telemetry_dll.dll"
+# RENDERDOC=1: the Windows RenderDoc DLL, loaded as a me3 native to hook ER's D3D12 device.
+RDOC_DLL="${RENDERDOC_DLL:-/mnt/c/Program Files/RenderDoc/renderdoc.dll}"
 CAP_SECONDS="$(cat "$REPO_ROOT/.auto/runtime_timeout_cap_seconds" 2>/dev/null || echo 180)"
 
 fail() {
@@ -62,6 +64,7 @@ steam_running || fail "Steam is not running. Start Steam (interactive login) fir
 [[ -f "$TRACE_DLL" ]] || fail "trace DLL not built: $TRACE_DLL"
 [[ -f "$HARNESS_DLL" ]] || fail "input-harness DLL not built: $HARNESS_DLL (cargo xwin build --release --target x86_64-pc-windows-msvc -p er-input-harness-dll)"
 [[ -f "$TELEM_DLL" ]] || fail "telemetry DLL not built: $TELEM_DLL (cargo xwin build --release --target x86_64-pc-windows-msvc -p er-telemetry-dll)"
+[[ "${RENDERDOC:-0}" != "1" || -f "$RDOC_DLL" ]] || fail "RENDERDOC=1 but renderdoc.dll not found at '$RDOC_DLL' (set RENDERDOC_DLL=<path to Windows renderdoc.dll>)."
 [[ -f "$BOOT_FILE" ]] || fail "boot save not found: $BOOT_FILE"
 
 ME3="${ME3:-/mnt/c/Users/$USER/AppData/Local/garyttierney/me3/bin/me3.exe}"
@@ -92,6 +95,14 @@ PROFILE="$ARTIFACT_DIR/samechar-3x-threedll.me3"
 	echo '[[supports]]'
 	echo 'game = "eldenring"'
 	echo
+	# RENDERDOC=1: renderdoc.dll FIRST me3 native (renderdoccmd wrapping me3 does NOT inject into the ER
+	# child + breaks me3's launch -- proven dead end 2026-07-22). The old double-capturer/resource assert
+	# was the PRODUCT's dummy swapchain, now gated off under renderdoc via renderdoc_active().
+	if [[ "${RENDERDOC:-0}" == "1" ]]; then
+		echo '[[natives]]'
+		echo "path = '$(win_path "$RDOC_DLL")'"
+		echo
+	fi
 	echo '[[natives]]'
 	echo "path = '$(win_path "$PRODUCT_GAMEDIR")'"
 	# NO_TRACE=1 drops the reload-trace DLL to test whether its per-frame file I/O (which floods ~200x
@@ -145,7 +156,36 @@ echo "==   tab-switch finish is a KNOWN GAP (mouse-only; see er-input-harness.lo
 echo "==   artifacts -> $ARTIFACT_DIR"
 echo "======================================================================"
 
-"$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
+# RENDERDOC=1: renderdoc.dll is loaded as the FIRST me3 native (see the profile above) so RenderDoc hooks
+# ER's D3D12 device at process init; the telemetry DLL then auto-fires TriggerCapture at the reload
+# playable window (bd RENDERDOC-inject-via-me3-native). ER is NATIVE WINDOWS -> Windows RenderDoc. The
+# .rdc must land on a Windows-accessible path (GAME_DIR under /mnt/c), NOT the WSL artifact dir; copied
+# back after the run. ER_RENDERDOC_CAPFILE (a Windows path) is read inside ER by the telemetry DLL.
+RDOC_LAUNCH_ENV=()
+if [[ "${RENDERDOC:-0}" == "1" ]]; then
+	RDOC_CAP_WSL="$GAME_DIR/er_cap"
+	rm -f "$GAME_DIR"/er_cap_frame*.rdc # fresh captures this run
+	RDOC_LAUNCH_ENV=(env "ER_RENDERDOC_CAPFILE=$(win_path "$RDOC_CAP_WSL")")
+	# RenderDoc BLOCKS ER's OLD amd_ags_x64.dll ("Blocked attempt to initialise old version of AGS") ->
+	# ER's AMD device setup falls over -> DXGI_DEVICE_REMOVED (2026-07-22). ER REQUIRES AGS (removing it =
+	# ER won't start), so SWAP in a newer RenderDoc-compatible amd_ags_x64.dll for the capture and RESTORE
+	# the original on ANY exit via trap. RENDERDOC_AGS_DLL overrides the staged newer DLL; RENDERDOC_KEEP_AGS=1
+	# opts out (then RenderDoc will device-remove on ER's old AGS).
+	# STUB amd_ags_x64.dll (er-ags-stub): exports every name ER imports but agsInit reports "no AMD driver"
+	# so ER takes its non-AGS D3D12 path -> no driver escape for RenderDoc to block. NOT the newer real AGS
+	# (that dropped ER's 5.x export agsDeInit -> ER won't load).
+	RDOC_AGS_NEW="${RENDERDOC_AGS_DLL:-$REPO_ROOT/target/x86_64-pc-windows-msvc/release/amd_ags_x64.dll}"
+	if [[ "${RENDERDOC_KEEP_AGS:-0}" != "1" && -f "$GAME_DIR/amd_ags_x64.dll" && -f "$RDOC_AGS_NEW" ]]; then
+		cp -f "$GAME_DIR/amd_ags_x64.dll" "$GAME_DIR/amd_ags_x64.dll.orig-bak"
+		cp -f "$RDOC_AGS_NEW" "$GAME_DIR/amd_ags_x64.dll"
+		trap 'mv -f "$GAME_DIR/amd_ags_x64.dll.orig-bak" "$GAME_DIR/amd_ags_x64.dll" 2>/dev/null || true' EXIT
+		echo "==   RENDERDOC: swapped in STUB amd_ags_x64.dll ($(stat -c%s "$RDOC_AGS_NEW")B); ER's original restored on exit"
+	elif [[ "${RENDERDOC_KEEP_AGS:-0}" != "1" && ! -f "$RDOC_AGS_NEW" ]]; then
+		echo "==   RENDERDOC: WARNING no stub AGS at $RDOC_AGS_NEW -- RenderDoc will block ER's old AGS -> device-removed"
+	fi
+	echo "==   RENDERDOC=1: renderdoc.dll first me3 native; telemetry auto-TriggerCapture at the reload window -> $GAME_DIR/er_cap_frameN.rdc (copied to artifacts)"
+fi
+"${RDOC_LAUNCH_ENV[@]}" "$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
 
 CAPTURE_ARGS=()
 if [[ "${OBSERVE_ONLY:-0}" == "1" ]]; then
@@ -181,6 +221,22 @@ RC=$?
 # Preserve the harness self-drive evidence log alongside the trace + report.
 [[ -f "$GAME_DIR/er-input-harness.log" ]] && cp -f "$GAME_DIR/er-input-harness.log" "$ARTIFACT_DIR/er-input-harness.log"
 [[ -f "$GAME_DIR/er-reload-trace.log" ]] && cp -f "$GAME_DIR/er-reload-trace.log" "$ARTIFACT_DIR/er-reload-trace.log"
+# RENDERDOC: the Windows ER wrote .rdc captures to GAME_DIR (/mnt/c, Windows-writable); move them to the
+# WSL artifact dir for offline diff with qrenderdoc.exe / the RenderDoc python API.
+if [[ "${RENDERDOC:-0}" == "1" ]]; then
+	rdc_n=0
+	for r in "$GAME_DIR"/er_cap_frame*.rdc; do
+		[[ -f "$r" ]] || continue
+		mv -f "$r" "$ARTIFACT_DIR/" && rdc_n=$((rdc_n + 1))
+	done
+	echo "== RenderDoc: $rdc_n .rdc capture(s) -> $ARTIFACT_DIR (0 = renderdoc.dll did not hook / TriggerCapture never fired -- check er-effects-telemetry oracle_renderdoc_captures)"
+	if [[ -f "$GAME_DIR/er-antiarxan.txt" ]]; then
+		cp -f "$GAME_DIR/er-antiarxan.txt" "$ARTIFACT_DIR/"
+		echo "== antiarxan: $(cat "$GAME_DIR/er-antiarxan.txt")"
+	else
+		echo "== antiarxan: marker ABSENT (er_antiarxan DllMain did not run / .text not patched)"
+	fi
+fi
 
 # DLL VERSION MANIFEST (user 2026-07-19: track exact binaries per run so a result can be tied to a
 # specific build during bisection). Records git HEAD, the in-process DLL build id (dll:XXXX from the
