@@ -180,9 +180,6 @@ def write_package_files(stage_dir: Path, package_name: str, commit: str) -> None
             # save_file = '/absolute/path/to/ER0000.sl2'
             # boot_background_image = '/absolute/path/to/background.png'
             persist_boot_background_to_loading_screen = true
-            # menu_sort.armaments = "order_of_acquisition"
-            # menu_sort.armor = "order_of_acquisition"
-            # menu_sort.talismans = "order_of_acquisition"
             """
         ).lstrip(),
         encoding="utf-8",

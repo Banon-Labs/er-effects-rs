@@ -2791,6 +2791,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-inventory-sort-dll"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-game-base",
+ "fromsoftware-shared",
+]
+
+[[package]]
 name = "er-objectkit"
 version = "0.1.0"
 dependencies = [
