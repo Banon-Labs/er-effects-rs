@@ -34,6 +34,12 @@ fi
 # shellcheck disable=SC1091
 source "$REPO_ROOT/scripts/steam-running.sh"
 steam_running || fail "Steam is not running. Start Steam (interactive login) first."
+# Fail closed if an ER is already running -- a second launch on top double-loads the DLLs and
+# contaminates the run (observed 2026-07-22). tasklist.exe not resolving just yields no match (safe);
+# do NOT guard on `command -v` (it failed in the script PATH and silently skipped this check).
+if tasklist.exe 2>/dev/null | grep -qiE 'eldenring\.exe|start_protected_game\.exe'; then
+	fail "An Elden Ring process is already running. Tear it down (taskkill.exe /F /IM eldenring.exe) before launching."
+fi
 [[ -f "$TELEM_DLL" ]] || fail "telemetry DLL not built: $TELEM_DLL (cargo xwin build --release --target x86_64-pc-windows-msvc -p er-telemetry-dll)"
 [[ -f "$HARNESS_DLL" ]] || fail "input-harness DLL not built: $HARNESS_DLL (cargo xwin build --release --target x86_64-pc-windows-msvc -p er-input-harness-dll)"
 

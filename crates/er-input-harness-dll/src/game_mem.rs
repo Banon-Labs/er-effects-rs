@@ -265,6 +265,20 @@ pub fn optionsetting_tab_index() -> i32 {
         .map_or(-1, |v| (v & 0xffff_ffff) as i32)
 }
 
+/// getShownMenuFlags result word (CSMenuManImp+0x1c, u32): the native "which menu input fired this
+/// frame" bits -- the passive VERIFICATION that an injected pad button reached the menu layer (bd
+/// PAD-BUTTON-OFFSETS): 0x100=confirm(0x3d), 0x10=cancel(0x1c), 0x1000=tab-left(0x30),
+/// 0x80000=tab-right(0x31), 0x8000=OptionSetting up. (Up/Down 0x00/0x45 are NOT in this word.)
+const CS_MENU_MAN_FLAGS_1C_OFFSET: usize = 0x1c;
+
+pub fn menu_flags() -> u32 {
+    let im = input_mgr();
+    if im == 0 {
+        return 0;
+    }
+    unsafe { read_usize(im + CS_MENU_MAN_FLAGS_1C_OFFSET) }.map_or(0, |v| (v & 0xffff_ffff) as u32)
+}
+
 /// Return-title request byte (menuData+0x5d == 1): the quit-to-title functor fired = quit STARTED.
 pub fn return_title_requested() -> bool {
     let im = input_mgr();

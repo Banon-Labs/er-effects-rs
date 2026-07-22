@@ -23,7 +23,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use crate::game_mem::{
-    flip_fixed_spf, flip_mode_current, load_fsm, menu_data_ptr, now_loading,
+    flip_fixed_spf, flip_mode_current, load_fsm, menu_data_ptr, menu_flags, now_loading,
     optionsetting_tab_index, pause_menu_open, read_drive_mode_flag, return_title_requested,
     top_menu_id, top_menu_job_ptr, world_simulating,
 };
@@ -32,6 +32,7 @@ use crate::input_inject::{
     request_open_ingame_menu, tap_menu_event,
 };
 use crate::log::{harness_log, log_phase};
+use crate::pad_inject::{PadButton, set_pad_button, set_vk_id};
 use crate::title_scan;
 use crate::win32::GetTickCount64;
 
@@ -58,6 +59,64 @@ const LOAD_BUDGET: u64 = 9000;
 const NAV_BUDGET: u64 = 480;
 /// Native quit-to-menu confirm + world teardown. ~10s.
 const QUIT_BUDGET: u64 = 600;
+
+// ---- diagnostic probe (mode `probe`): sweep the DLUID virtual-key id space and log the menu response,
+// to discover which id (1000..1080) is up/down/confirm/cancel/tab (bd MENU-INPUT-LAYER-virtual-key). ----
+const PROBE_OPEN_FRAMES: u64 = 48;
+const PROBE_VK_ID_MIN: u32 = 1000;
+const PROBE_VK_ID_MAX: u32 = 1080;
+const PROBE_ID_SEG_FRAMES: u64 = 24; // per id: edge-toggled presses + observe
+const PROBE_LOG_EVERY: u64 = 6;
+const PROBE_TOTAL_FRAMES: u64 =
+    PROBE_OPEN_FRAMES + (PROBE_VK_ID_MAX - PROBE_VK_ID_MIN + 1) as u64 * PROBE_ID_SEG_FRAMES + 30;
+
+/// Diagnostic: open the pause menu, then inject each virtual-key id 1000..1080 in turn (edge-toggled)
+/// into `source+0x88` and LOG the menu response (job ptr, menuMan+0x1c flags word, tab) so the id ->
+/// action map is read from evidence -- a confirm id changes the job/flags, a tab id sets a flags bit.
+fn probe_menu_tick(im: usize, frame: u64) -> bool {
+    if frame < PROBE_OPEN_FRAMES {
+        set_vk_id(0);
+        if !pause_menu_open() {
+            request_open_ingame_menu(im);
+        }
+        if frame % PROBE_LOG_EVERY == 0 {
+            let (bf, wf, gsrc, msrc, obs) = crate::pad_inject::pad_snapshot();
+            harness_log!(
+                "probe OPEN f{frame} pause_menu={} builder_fires={bf} writer_fires={wf} game_src=0x{gsrc:x} my_src=0x{msrc:x} obs=[{:x},{:x},{:x}] job=0x{:x} flags=0x{:x}",
+                pause_menu_open() as u8,
+                obs[0],
+                obs[1],
+                obs[2],
+                top_menu_job_ptr(),
+                menu_flags()
+            );
+        }
+        return false;
+    }
+    let _ = im;
+    let sweep = frame - PROBE_OPEN_FRAMES;
+    let seg = sweep / PROBE_ID_SEG_FRAMES;
+    let id = PROBE_VK_ID_MIN + seg as u32;
+    if id <= PROBE_VK_ID_MAX {
+        let local = sweep % PROBE_ID_SEG_FRAMES;
+        // edge-toggle within the id segment: hold TAP_SET frames, release, a few clean edges.
+        let held = (local % TAP_CYCLE_FRAMES) < TAP_SET_FRAMES;
+        set_vk_id(if held { id } else { 0 });
+        if local % PROBE_LOG_EVERY == 0 {
+            let (bf, wf, gsrc, msrc, _obs) = crate::pad_inject::pad_snapshot();
+            harness_log!(
+                "probe id={id} f{frame} bf={bf} wf={wf} gsrc=0x{gsrc:x} msrc=0x{msrc:x} job=0x{:x} flags=0x{:x} tab={} return_title={}",
+                top_menu_job_ptr(),
+                menu_flags(),
+                optionsetting_tab_index(),
+                return_title_requested() as u8
+            );
+        }
+    } else {
+        set_vk_id(0);
+    }
+    frame >= PROBE_TOTAL_FRAMES
+}
 
 /// Per-frame semaphore snapshot (world_sim computed once by the caller -- it mutates a rising streak).
 #[derive(Clone, Copy)]
@@ -113,6 +172,10 @@ enum Phase {
     Quit,
     /// NO input: the native teardown to title. EFFECT: world stopped simulating AND load FSM idle.
     QuitTeardown,
+    /// DIAGNOSTIC (mode `probe`): in-world with the pause menu open, inject a LABELED input sweep (one
+    /// eventId at a time, well spaced) and log the observables each frame, to empirically find which
+    /// injected keystate actually moves the in-world menu. Never derails; advances at its budget.
+    ProbeMenu,
 }
 
 impl Phase {
@@ -127,6 +190,7 @@ impl Phase {
             Phase::TabToQuit => "tab_to_quit",
             Phase::Quit => "quit",
             Phase::QuitTeardown => "quit_teardown",
+            Phase::ProbeMenu => "probe_menu",
         }
     }
 
@@ -138,6 +202,7 @@ impl Phase {
             Phase::WaitLoadIn => LOAD_BUDGET,
             Phase::OpenPauseMenu | Phase::NavToOptionSetting | Phase::TabToQuit => NAV_BUDGET,
             Phase::Quit | Phase::QuitTeardown => QUIT_BUDGET,
+            Phase::ProbeMenu => PROBE_TOTAL_FRAMES,
         }
     }
 
@@ -161,13 +226,14 @@ impl Phase {
                 pause_menu_open()
             }
             Phase::NavToOptionSetting => {
-                // currentTopMenuJob (+0xB0) is a FixOrderJobSequence, REPLACED when a submenu opens
-                // (bd PANE-ID-FIX). Record the IngameTop job on entry; entering System/OptionSetting
-                // swaps +0xB0 to a new job. EFFECT: the top-job pointer CHANGED (a submenu is up).
+                // In-world menu nav is driven by the RAW PAD DEVICE (bd ROOTCAUSE-plus90-is-OUTPUT), not
+                // +0x90. currentTopMenuJob (+0xB0) is REPLACED when a submenu opens (bd PANE-ID-FIX):
+                // record the IngameTop job on entry; entering System/OptionSetting swaps it. EFFECT: the
+                // top-job pointer CHANGED (a submenu is up).
                 if frame == 0 {
                     INGAMETOP_JOB.store(top_menu_job_ptr(), Ordering::SeqCst);
                 }
-                issue_taps_once(im, &[MenuEvent::MoveUp, MenuEvent::Confirm], frame);
+                issue_pad_taps_once(&[PadButton::Up, PadButton::Confirm], frame);
                 let job = top_menu_job_ptr();
                 job != 0 && job != INGAMETOP_JOB.load(Ordering::SeqCst)
             }
@@ -175,17 +241,18 @@ impl Phase {
                 // No passive tab-index read (option_window is buried in the +0xB0 sequence). Issue one
                 // TabLeft and settle; the QUIT phase's return_title_requested verifies the whole nav
                 // landed (if TabLeft missed the Quit tab, quit derails downstream -- honest).
-                issue_taps_once(im, &[MenuEvent::TabLeft], frame);
+                issue_pad_taps_once(&[PadButton::TabLeft], frame);
                 frame >= TAP_CYCLE_FRAMES + TAB_SETTLE_FRAMES
             }
             Phase::Quit => {
-                issue_taps_once(im, &[MenuEvent::MoveDown, MenuEvent::Confirm], frame);
+                issue_pad_taps_once(&[PadButton::Down, PadButton::Confirm], frame);
                 // Down+Confirm activates the Quit-to-main-menu row -> confirm dialog; the every-frame
-                // popup-accept (id 0x01) confirms the dialog. Quit started once the request byte is set
-                // (or the world already began tearing down).
+                // popup-accept confirms the dialog. Quit started once the request byte is set (or the
+                // world already began tearing down).
                 return_title_requested() || !sem.world_sim
             }
             Phase::QuitTeardown => !sem.world_sim && sem.load_fsm <= 0 && frame > TAP_CYCLE_FRAMES,
+            Phase::ProbeMenu => probe_menu_tick(im, frame),
         };
         if advanced {
             Status::Advanced
@@ -197,13 +264,18 @@ impl Phase {
     }
 }
 
-/// Issue each event in `events` exactly once (one tap cycle each, in order), then stop. The phase's
-/// ADVANCE is its own effect semaphore, not the taps -- so a press that lands is confirmed by a specific
-/// RAM change, and a press that does nothing derails on budget (per the semaphore-gated contract).
-fn issue_taps_once(im: usize, events: &[MenuEvent], frame: u64) {
-    let taps_done = frame / TAP_CYCLE_FRAMES;
-    if (taps_done as usize) < events.len() && (frame % TAP_CYCLE_FRAMES) < TAP_SET_FRAMES {
-        tap_menu_event(im, events[taps_done as usize]);
+/// Issue each PAD button in `buttons` once (one tap cycle each, in order), EDGE-TOGGLED (held for
+/// TAP_SET frames then released, so the edge-triggered menu registers one clean press per button), then
+/// release. The phase's ADVANCE is its own effect semaphore, not the taps -- a press that lands is
+/// confirmed by a specific RAM change, and one that does nothing derails on budget. Drives the RAW PAD
+/// (bd ROOTCAUSE-plus90-is-OUTPUT), not the +0x90 keystate.
+fn issue_pad_taps_once(buttons: &[PadButton], frame: u64) {
+    let idx = (frame / TAP_CYCLE_FRAMES) as usize;
+    let held = (frame % TAP_CYCLE_FRAMES) < TAP_SET_FRAMES;
+    if idx < buttons.len() && held {
+        set_pad_button(buttons[idx]);
+    } else {
+        set_pad_button(PadButton::None);
     }
 }
 
@@ -212,6 +284,7 @@ enum DriveMode {
     BootContinueOnly,
     NativeReloadOnly,
     FullBootReload,
+    Probe,
 }
 
 impl DriveMode {
@@ -219,6 +292,7 @@ impl DriveMode {
         match read_drive_mode_flag().as_str() {
             "boot" => DriveMode::BootContinueOnly,
             "reload" => DriveMode::NativeReloadOnly,
+            "probe" => DriveMode::Probe,
             _ => DriveMode::FullBootReload,
         }
     }
@@ -227,6 +301,7 @@ impl DriveMode {
             DriveMode::BootContinueOnly => "boot",
             DriveMode::NativeReloadOnly => "reload",
             DriveMode::FullBootReload => "full",
+            DriveMode::Probe => "probe",
         }
     }
     fn phases(self) -> &'static [Phase] {
@@ -271,10 +346,19 @@ impl DriveMode {
             Phase::Continue,
             Phase::WaitLoadIn,
         ];
+        // probe: reach in-world, then the diagnostic input sweep (mode `probe`).
+        const PROBE: &[Phase] = &[
+            Phase::Startup,
+            Phase::PressAnyButton,
+            Phase::Continue,
+            Phase::WaitLoadIn,
+            Phase::ProbeMenu,
+        ];
         match self {
             DriveMode::BootContinueOnly => BOOT,
             DriveMode::NativeReloadOnly => RELOAD,
             DriveMode::FullBootReload => FULL,
+            DriveMode::Probe => PROBE,
         }
     }
 }
@@ -289,10 +373,11 @@ static DERAILED: AtomicBool = AtomicBool::new(false);
 static INGAMETOP_JOB: AtomicUsize = AtomicUsize::new(0);
 
 fn resolve_mode() -> DriveMode {
-    const MODES: [DriveMode; 3] = [
+    const MODES: [DriveMode; 4] = [
         DriveMode::BootContinueOnly,
         DriveMode::NativeReloadOnly,
         DriveMode::FullBootReload,
+        DriveMode::Probe,
     ];
     let cached = MODE_IDX.load(Ordering::SeqCst);
     if cached != usize::MAX {
@@ -303,6 +388,7 @@ fn resolve_mode() -> DriveMode {
         DriveMode::BootContinueOnly => 0,
         DriveMode::NativeReloadOnly => 1,
         DriveMode::FullBootReload => 2,
+        DriveMode::Probe => 3,
     };
     MODE_IDX.store(idx, Ordering::SeqCst);
     harness_log!(

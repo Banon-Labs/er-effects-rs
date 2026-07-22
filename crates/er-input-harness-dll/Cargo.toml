@@ -8,11 +8,13 @@ publish = false
 name = "er_input_harness_dll"
 crate-type = ["cdylib"]
 
-# TITLE-ACTIVE drive: the self-drive runs from a CSTaskImp FrameBegin recurring task (fires at the
-# title AND in-world), mirroring er-telemetry-dll, so the harness can drive the full native boot+reload
-# (PRESS ANY BUTTON via the title accept byte, Continue, System->Quit->Continue). No MinHook trampoline
-# is installed, so (unlike the old union anchor) there is no er-hook/MinHook dependency. Game-lib deps
-# are windows-only (cfg(windows)) like er-telemetry-dll.
+# The self-drive runs from a CSTaskImp FrameBegin task (title accept byte, Continue), PLUS a MinHook on
+# FD4PadDevice::poll (0x1f6bad0) to inject the raw pad button/dpad snapshot the IN-WORLD menu reads
+# (inputmgr+0x90 is OUTPUT, not input -- bd ROOTCAUSE-plus90-is-OUTPUT-not-input). er-hook provides the
+# shared MinHook FFI for that pad-poll hook.
+[dependencies]
+er-hook = { path = "../er-hook" }
+
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }

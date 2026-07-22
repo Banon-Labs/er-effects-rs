@@ -27,6 +27,8 @@ mod game_mem;
 mod input_inject;
 mod log;
 #[cfg(windows)]
+mod pad_inject;
+#[cfg(windows)]
 mod title_scan;
 mod win32;
 
@@ -84,6 +86,10 @@ fn install() {
     };
     let base = resolve_base();
     input_inject::log_resolution(base);
+    // Install the FD4PadDevice::poll MinHook so the in-world menu can be driven by the raw pad snapshot
+    // (inputmgr+0x90 is OUTPUT in-world; the menu reads the pad device). Title/boot still use the accept
+    // byte from the CSTaskImp task below.
+    pad_inject::install_pad_poll_hook(base);
     harness_log!(
         "er-input-harness-dll install complete {}",
         game_mem::snapshot()
