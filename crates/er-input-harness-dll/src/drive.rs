@@ -23,9 +23,9 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use crate::game_mem::{
-    OPTIONSETTING_MENU_ID, OPTIONSETTING_QUIT_TAB_INDEX, load_fsm, menu_data_ptr, now_loading,
+    flip_fixed_spf, flip_mode_current, load_fsm, menu_data_ptr, now_loading,
     optionsetting_tab_index, pause_menu_open, read_drive_mode_flag, return_title_requested,
-    top_menu_id, world_simulating,
+    top_menu_id, top_menu_job_ptr, world_simulating,
 };
 use crate::input_inject::{
     MenuEvent, advance_press_any_button, input_manager, keep_input_active,
@@ -42,6 +42,8 @@ const TAP_CYCLE_FRAMES: u64 = TAP_SET_FRAMES + TAP_GAP_FRAMES;
 /// Popup-accept cadence (dialog-OK id 0x01, harmless when no dialog is up).
 const POPUP_SET_FRAMES: u64 = 2;
 const POPUP_CYCLE_FRAMES: u64 = 8;
+/// Settle after the tab-switch tap (no passive tab-index read; verified downstream by the quit phase).
+const TAB_SETTLE_FRAMES: u64 = 30;
 
 // ---- per-phase frame budgets (derail if the effect semaphore is not seen within) ----
 /// Boot -> PRESS ANY BUTTON ready: image map + boot-flow settle is long (~150s at 60fps).
@@ -159,12 +161,22 @@ impl Phase {
                 pause_menu_open()
             }
             Phase::NavToOptionSetting => {
+                // currentTopMenuJob (+0xB0) is a FixOrderJobSequence, REPLACED when a submenu opens
+                // (bd PANE-ID-FIX). Record the IngameTop job on entry; entering System/OptionSetting
+                // swaps +0xB0 to a new job. EFFECT: the top-job pointer CHANGED (a submenu is up).
+                if frame == 0 {
+                    INGAMETOP_JOB.store(top_menu_job_ptr(), Ordering::SeqCst);
+                }
                 issue_taps_once(im, &[MenuEvent::MoveUp, MenuEvent::Confirm], frame);
-                top_menu_id() == OPTIONSETTING_MENU_ID
+                let job = top_menu_job_ptr();
+                job != 0 && job != INGAMETOP_JOB.load(Ordering::SeqCst)
             }
             Phase::TabToQuit => {
+                // No passive tab-index read (option_window is buried in the +0xB0 sequence). Issue one
+                // TabLeft and settle; the QUIT phase's return_title_requested verifies the whole nav
+                // landed (if TabLeft missed the Quit tab, quit derails downstream -- honest).
                 issue_taps_once(im, &[MenuEvent::TabLeft], frame);
-                optionsetting_tab_index() == OPTIONSETTING_QUIT_TAB_INDEX
+                frame >= TAP_CYCLE_FRAMES + TAB_SETTLE_FRAMES
             }
             Phase::Quit => {
                 issue_taps_once(im, &[MenuEvent::MoveDown, MenuEvent::Confirm], frame);
@@ -273,6 +285,8 @@ static PHASE_START_TICK: AtomicU64 = AtomicU64::new(0);
 static POPUP_FRAME: AtomicU64 = AtomicU64::new(0);
 static MODE_IDX: AtomicUsize = AtomicUsize::new(usize::MAX);
 static DERAILED: AtomicBool = AtomicBool::new(false);
+/// currentTopMenuJob (+0xB0) recorded at IngameTop, to detect the submenu-entry replacement.
+static INGAMETOP_JOB: AtomicUsize = AtomicUsize::new(0);
 
 fn resolve_mode() -> DriveMode {
     const MODES: [DriveMode; 3] = [
@@ -316,8 +330,12 @@ fn emit_phase_telemetry(
     let a40 = title_scan::title_dialog_a40(base);
     let menu_id = top_menu_id();
     let tab = optionsetting_tab_index();
+    // The DECISIVE fps signal (bd MECHANISM-20fps-cap-fixedspf-0.05): 0.05 = the loading 20fps cap,
+    // 0.0167 = 60fps. The differential loop diffs THIS per phase, not raw fps.
+    let fixed_spf = flip_fixed_spf();
+    let flip_mode = flip_mode_current();
     let line = format!(
-        "{{\"phase\":\"{name}\",\"idx\":{idx},\"outcome\":\"{outcome}\",\"start_tick_ms\":{start_tick},\"end_tick_ms\":{end_tick},\"duration_ms\":{duration_ms},\"start_frame\":0,\"end_frame\":{frame},\"duration_frames\":{frame},\"title_state\":{title_state},\"a40\":{a40},\"pause_menu_open\":{},\"menu_id\":{menu_id},\"tab_index\":{tab},\"return_title\":{},\"menu\":\"0x{:x}\",\"world_sim\":{},\"now_loading\":{},\"load_fsm\":{}}}",
+        "{{\"phase\":\"{name}\",\"idx\":{idx},\"outcome\":\"{outcome}\",\"start_tick_ms\":{start_tick},\"end_tick_ms\":{end_tick},\"duration_ms\":{duration_ms},\"start_frame\":0,\"end_frame\":{frame},\"duration_frames\":{frame},\"title_state\":{title_state},\"a40\":{a40},\"pause_menu_open\":{},\"menu_id\":{menu_id},\"tab_index\":{tab},\"return_title\":{},\"fixed_spf\":{fixed_spf:.4},\"flip_mode\":{flip_mode},\"menu\":\"0x{:x}\",\"world_sim\":{},\"now_loading\":{},\"load_fsm\":{}}}",
         pause_menu_open() as u8,
         return_title_requested() as u8,
         sem.menu,

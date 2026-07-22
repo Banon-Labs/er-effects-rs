@@ -141,6 +141,41 @@ pub fn now_loading() -> bool {
     unsafe { read_usize(helper + NOW_LOADING_FLAG_ED_OFFSET) }.is_some_and(|v| (v & 0xff) != 0)
 }
 
+// FLIP-CAP semaphore (bd MECHANISM-20fps-cap-is-csflipperimp-fixedspf-0.05): the load2/load3 20fps is
+// CSFlipperImp.fixed_spf = 0.05 (the game's own loading-mode frame cap), held while the load hasn't
+// fully completed. This is the DECISIVE per-phase fps signal for the vanilla-vs-product differential
+// loop -- far sharper than raw fps. CSFlipperImp singleton base+0x4589ad8; fixed_spf f32@+0x1c
+// (0.05=20, 0.0167=60, 0.0333=30, 0.0083=120), mode_current i32@+0xc.
+const CS_FLIPPER_SINGLETON_RVA: usize = 0x4589ad8;
+const CS_FLIPPER_FIXED_SPF_1C_OFFSET: usize = 0x1c;
+const CS_FLIPPER_MODE_CURRENT_C_OFFSET: usize = 0xc;
+
+/// CSFlipperImp fixed_spf (+0x1c, f32): the game's frame-time TARGET. 0.05 = the 20fps loading cap,
+/// 0.0167 = 60fps. -1.0 if unavailable. The decisive load-completion / fps-cap semaphore.
+pub fn flip_fixed_spf() -> f32 {
+    let Some(base) = game_base() else {
+        return -1.0;
+    };
+    let Some(flipper) = deref_singleton(base, CS_FLIPPER_SINGLETON_RVA) else {
+        return -1.0;
+    };
+    unsafe { read_usize(flipper + CS_FLIPPER_FIXED_SPF_1C_OFFSET) }
+        .map_or(-1.0, |v| f32::from_bits((v & 0xffff_ffff) as u32))
+}
+
+/// CSFlipperImp flip mode_current (+0xc, i32): which flip mode is engaged (FLIP_20FPS_ADAPTIVE forces
+/// the 0.05 cap; FLIP_60FPS_VSYNC_ON is the default). -1 if unavailable.
+pub fn flip_mode_current() -> i32 {
+    let Some(base) = game_base() else {
+        return -1;
+    };
+    let Some(flipper) = deref_singleton(base, CS_FLIPPER_SINGLETON_RVA) else {
+        return -1;
+    };
+    unsafe { read_usize(flipper + CS_FLIPPER_MODE_CURRENT_C_OFFSET) }
+        .map_or(-1, |v| (v & 0xffff_ffff) as i32)
+}
+
 // IN-WORLD MENU-PANE semaphores for the quit-to-menu flow (bd QUIT-TO-MENU-semaphores-2026-07-22).
 // menuData (inputmgr+0x8) is non-null for the whole SESSION -> useless as "menu open". The real open
 // signal is the popupMenu's currentTopMenuJob (HasTopMenuJob 0x14080d810), and the pane identity is the
@@ -168,8 +203,11 @@ fn input_mgr() -> usize {
 }
 
 /// `popupMenu->currentTopMenuJob` (inputmgr+0x80 -> +0xB0), or 0. Non-zero ONLY when a popup/pause menu
-/// is actually up -- the correct "pause menu open" signal (unlike menuData+0x8).
-fn top_menu_job() -> usize {
+/// is actually up -- the correct "pause menu open" signal (unlike menuData+0x8). It is a
+/// FixOrderJobSequence (NOT a MenuWindowJob), and it is REPLACED when a submenu opens (old pushed to
+/// popupMenu+0xD0), so a CHANGE in this pointer is the passive "entered a submenu" semaphore (bd
+/// PANE-ID-FIX-currenttopjob-is-sequence-use-plusB0-ptr-change).
+pub fn top_menu_job_ptr() -> usize {
     let im = input_mgr();
     if im == 0 {
         return 0;
@@ -186,7 +224,7 @@ fn top_menu_job() -> usize {
 
 /// The top menu window (`currentTopMenuJob+0x130`), or 0.
 fn top_window() -> usize {
-    let job = top_menu_job();
+    let job = top_menu_job_ptr();
     if job == 0 {
         return 0;
     }
@@ -198,7 +236,7 @@ fn top_window() -> usize {
 /// TRUE only when the in-world pause menu (a popup top-job) is up. Replaces the false-positive
 /// menu_data_ptr check.
 pub fn pause_menu_open() -> bool {
-    top_menu_job() != 0
+    top_menu_job_ptr() != 0
 }
 
 /// The topmost pane's menu id (top_window+0x180, u16), or -1: `INGAMETOP_MENU_ID`=0xffff,

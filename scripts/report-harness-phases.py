@@ -82,7 +82,8 @@ def main() -> int:
     fps_note = f"  (fps from {len(samples)} aligned telemetry samples)" if samples else "  (no aligned telemetry timeseries -- oracle_tick_ms missing)"
 
     print(f"# per-phase timing + boundary semaphores{fps_note}")
-    hdr = f"{'idx':>3} {'phase':<22} {'outcome':<9} {'ms':>7} {'frames':>7} {'fps':>5} {'state':>6} {'a40':>4} {'load_fsm':>8} {'world':>5}"
+    print("#   fixed_spf: 0.0500=20fps loading cap / 0.0167=60fps (the differential-loop metric)")
+    hdr = f"{'idx':>3} {'phase':<22} {'outcome':<9} {'ms':>7} {'frames':>7} {'fps':>5} {'fixed_spf':>9} {'nowload':>7} {'load_fsm':>8} {'world':>5}"
     print(hdr)
     print("-" * len(hdr))
     total_ms = 0
@@ -94,10 +95,12 @@ def main() -> int:
         mark = "" if outcome == "advanced" else "  <-- DERAILED"
         fps = phase_fps(samples, r.get("start_tick_ms"), r.get("end_tick_ms"))
         fps_s = f"{fps:>5.0f}" if fps is not None else f"{'-':>5}"
+        spf = r.get("fixed_spf", None)
+        spf_s = f"{spf:>9.4f}" if isinstance(spf, (int, float)) else f"{'-':>9}"
         print(
             f"{r.get('idx','?'):>3} {str(r.get('phase','?')):<22} {outcome:<9} "
-            f"{dur_ms:>7} {r.get('duration_frames','?'):>7} {fps_s} {r.get('title_state','?'):>6} "
-            f"{r.get('a40','?'):>4} {r.get('load_fsm','?'):>8} {r.get('world_sim','?'):>5}{mark}"
+            f"{dur_ms:>7} {r.get('duration_frames','?'):>7} {fps_s} {spf_s} "
+            f"{r.get('now_loading','?'):>7} {r.get('load_fsm','?'):>8} {r.get('world_sim','?'):>5}{mark}"
         )
     print("-" * len(hdr))
     print(f"total driven time: {total_ms} ms ({total_ms/1000:.1f}s) across {len(rows)} phases")
