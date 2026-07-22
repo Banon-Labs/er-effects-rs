@@ -2725,6 +2725,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-cutscene-overlay-helper"
+version = "0.1.0"
+dependencies = [
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "er-cutscene-replacer"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-game-base",
+ "fromsoftware-shared",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "er-effects-data"
 version = "0.1.0"
 dependencies = [
