@@ -1,0 +1,9 @@
+Windows Registry Editor Version 5.00
+
+; Raise the Windows GPU TDR timeout to 60s so RenderDoc can capture Elden Ring without DXGI_DEVICE_REMOVED
+; (RenderDoc's overhead during ER's title load overruns the default 2s GPU-op timeout -> TDR). Only affects
+; GPU-hang recovery; normal gameplay is unchanged. Double-click + confirm UAC, or `reg import` elevated,
+; then REBOOT. Revert: set both back to dword:00000002 (or delete the values). bd RENDERDOC-deviceremoved-is-TDR.
+[HKEY_LOCAL_MACHINE\System\CurrentControlSet\Control\GraphicsDrivers]
+"TdrDelay"=dword:0000003c
+"TdrDdiDelay"=dword:0000003c
