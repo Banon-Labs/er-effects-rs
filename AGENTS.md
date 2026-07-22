@@ -26,6 +26,8 @@ Standing user order (2026-07-17): do not stop or yield merely because the proper
 
 Standing user order (2026-07-04): whenever a new DLL build is ready for runtime validation, do not try to validate a newly built DLL in an already-running process.
 
+If a live user-inspection Elden Ring run becomes invalid because the agent finds structured evidence that a required DLL/runtime patch did not apply, the wrong build is loaded, or the test state cannot answer the user's current visual question, stop the agent-launched run before continuing implementation. Do not let the user keep inspecting a known-invalid run while the agent quietly fixes the cause in the background. Do not announce the stop and then pause before acting; complete the stop/teardown action first, then tell the user what was stopped and why.
+
 Do not launch Elden Ring through Steam from agent workflows. Forbidden launch forms include `steam -applaunch 1245620`, `steam://run/1245620`, `steam://rungameid/1245620`, and `xdg-open` or similar wrappers around those URLs. Do not launch `start_protected_game.exe` directly or through Proton/Wine/Steam; that is the protected/EAC launcher, not an approved agent runtime target. Process detection of stale `start_protected_game.exe` is allowed, but launching it is not. Runtime work must use only an approved, explicitly gated direct/offline `eldenring.exe` probe path.
 
 Do not bundle `ersc.dll`. Seamless Co-op is a compatibility target, but this repo must not copy, move, archive, release-package, or stage `SeamlessCoop/ersc.dll` into me3/product release artifacts or repo `target/` bundles.
@@ -56,7 +58,9 @@ Every `CS::MessageBoxDialog` before or immediately after character load is a har
 
 For Elden Ring runtime validation, do not rely on slow manual/LLM-paced input timing. Prefer a deterministic fast helper/driver for inputs and captures, and use observable completion or structured failure signals for evidence. Every agent-run shell/runtime operation must also be time-bounded, but by the regime that fits it: non-game ops (scripts, Ghidra, builds, any subprocess) are hard-capped at 30s (`scripts/check-no-timeouts.py`, `MAX_TIMEOUT_SECONDS`) so mistakes fail fast; the GAME runtime portion is bounded by the semaphore-progress model whose idle/stall backstop is the canonical runtime-probe cap. In both cases the time bound is a safety backstop, NOT the primary synchronization mechanism -- the primary teardown signal is an in-memory RAM oracle (tear down a small delay after the last semaphore the specific test cares about). The cap is a single source of truth in `.auto/runtime_timeout_cap_seconds`. **To see the timeout cap, look here: `.auto/runtime_timeout_cap_seconds` (read it directly with `cat`, or call `scripts/runtime_timeout_cap.py`) -- do not duplicate the number elsewhere; it drifts.** That reader is the only place the value is interpreted; its fail-safe fallback (missing/unreadable file) and its absolute clamp are both pinned to the same value in `scripts/runtime_timeout_cap.py`, so the file remains the lone hard truth and no other value can leak in. The value is read through `scripts/runtime_timeout_cap.py` and the bash probes and passed through to `er-readiness-watch.py --max-runtime-seconds`. `run_experiment` timeouts may include build/setup/cleanup overhead, but runtime success is not credible after `runtime_probe_seconds` exceeds that cap and must be scored/treated as failure. Do not use sleeps as synchronization.
 
-Do not use delayed mouse/keyboard polling as the primary way to advance menus during runtime probes. The smoke driver must default to no pointer nudges. If deterministic state injection/hooks are not enough, add/extend the safe input or save-loader workspace crates, or ask the user to perform the single fast interaction while the probe records structured evidence.
+Do not use delayed mouse/keyboard polling as the primary way to advance menus during runtime probes. The smoke driver must default to no pointer nudges. If deterministic state injection/hooks are not enough, add/extend the safe input or save-loader workspace crates.
+
+Standing user order (2026-07-22): there is NO single input a user can perform that the agent cannot perform itself if it actually tries. The AGENT drives every required input (menu navigation, Continue, System->Quit, tab-switch, movement, anything) -- via the input-harness direct-memory native-binding injection (`inputmgr+0x90+eventId` keystate bitmap, `DLUID+0x88d`), the movement-injection probe, or synthesized OS keyboard/mouse to the ER window. A menu/input "gap" (e.g. the OptionSetting->Quit tab-switch having no reversed menu-event id) is a mechanism to SOLVE -- reverse the id, drive the cursor/mouse to the tab, or use direct input -- NEVER a reason to ask the user to drive. Asking the user to perform an in-game input is an instruction-following failure; the vanilla-like comparison run and every runtime test are agent-driven end to end.
 
 Autoresearch runtime probes are disabled fail-closed unless `scripts/check-runtime-probe-contract.py`, its regression tests, and `.auto/runtime_experiment_policy.rego` are deliberately changed together. The Rego runtime policy must require `timeout_seconds` to be present, greater than 0, and no more than the canonical cap in `.auto/runtime_timeout_cap_seconds` (the single source of truth; the contract checker asserts the policy literal equals it); the runtime path should still terminate from observable progress, completion, or structured failure evidence before that hard cap whenever possible. To change the cap, edit `.auto/runtime_timeout_cap_seconds`, the rego literal, and the fallback/ceiling in `scripts/runtime_timeout_cap.py` together (they are all pinned to the same single value) and re-run the contract checker/test.
 
@@ -225,15 +229,19 @@ The pre-authorization is standing, so you do not need to ask before fixing a pre
 fix it (in parallel, first, or worktree-isolated per the rules above) and report it alongside your
 main work.
 
-## Commit Timing (user directive 2026-07-17)
+## Commit Timing (user directive 2026-07-17, REVISED 2026-07-21)
 
-Commit **immediately after** you perform a runtime validation + data-collection run -- commit the exact
-tree state that produced that run (fix + instrumentation + harness), pass or fail, because the run is
-the evidence and the state must be preserved with it. This overrides the generic "commit only when the
-user asks" default for runtime-affecting work. Otherwise (no runtime validation performed yet) do NOT
-commit, and do NOT ask about committing -- never pause the work to ask whether to commit. Just keep
-working toward the objective; the next runtime run is the commit trigger. See bd
-commit-immediately-after-runtime-validation-2026-07-17.
+Commit **after a runtime validation run COMPLETES, and only if the changes are worth keeping** -- i.e.
+the completed run showed the change is good/useful, or the tree state is genuinely worth preserving as
+evidence. Do **NOT** commit before or during a run (do not commit a fix just because a run was launched),
+and do **NOT** commit changes a completed run showed are not worth keeping (revert or fix them instead).
+Otherwise do NOT commit and do NOT ask about committing -- keep working; a completed, worth-keeping run
+is the commit trigger. (Superseded the old "commit immediately after launching, pass or fail" behavior,
+which committed premature/unvalidated fixes.)
+
+Same discipline for **`bd remember`**: record a memory **after** a step, and **only if the finding is
+worth keeping** (validated, durable, non-obvious) -- not eagerly for every intermediate hypothesis or
+run. See bd commit-immediately-after-runtime-validation-2026-07-17 (revised).
 
 ## Session Completion
 

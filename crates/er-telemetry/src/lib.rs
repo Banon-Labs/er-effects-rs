@@ -30,7 +30,7 @@ pub struct TelemetryFrameInput {
 
 /// CWD-relative artifact written by the standalone telemetry-only DLL. Distinct
 /// from the product's `er-effects-telemetry.json` so a combined run keeps both.
-const STANDALONE_JSON: &str = "er-telemetry-standalone.json";
+const STANDALONE_JSON: &str = "er-telemetry-timeseries.jsonl";
 
 fn standalone_json_path() -> PathBuf {
     er_game_base::log::game_directory_path()
@@ -48,8 +48,9 @@ fn standalone_json_path() -> PathBuf {
 pub fn standalone_tick() {
     let n = counters::STANDALONE_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
 
-    // Throttle disk writes: only every 64th tick (read-side snapshot, not a stream).
-    const WRITE_EVERY: u64 = 64;
+    // Throttle disk writes to every 4th tick -- dense enough to sample the game frame time across a
+    // ~3s vanilla-reload playable window (at 20fps that is ~0.2s between writes), still a snapshot.
+    const WRITE_EVERY: u64 = 4;
     if n % WRITE_EVERY != 0 {
         return;
     }
@@ -65,12 +66,51 @@ pub fn standalone_tick() {
     let game_man = read_singleton(er_game_base::rva::GAME_MAN_SINGLETON_RVA);
     let cs_menu_man = read_singleton(er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA);
 
+    // VANILLA-RELOAD FPS COMPARISON (2026-07-22): read the game's own frame timer. CSFlipperImp
+    // singleton at base+0x4589ad8; task_delta (+0x268) = the game loop frame time (1/task_delta = fps),
+    // fixed_spf (+0x1c) = the flip target (0.0167=60). play_time (GameDataMan+0xa0, u32 ms) rises only
+    // while the world simulates -> the in-world/playable gate. Lets a telemetry-only run measure a
+    // user-driven native reload's playable fps to compare against our reload path. bd
+    // USER-chose-vanilla-reload-comparison-2026-07-22.
+    const CS_FLIPPER_SINGLETON_RVA: usize = 0x4589ad8;
+    const GAME_DATA_MAN_PLAY_TIME_A0_OFFSET: usize = 0xa0;
+    let flipper = read_singleton(CS_FLIPPER_SINGLETON_RVA);
+    let read_f32 = |ptr: usize, off: usize| -> f32 {
+        if ptr == 0 {
+            return -1.0;
+        }
+        unsafe { er_game_base::mem::safe_read_usize(ptr + off) }
+            .map_or(-1.0, |v| f32::from_bits((v & 0xffff_ffff) as u32))
+    };
+    let flip_task_delta = read_f32(flipper, 0x268);
+    let flip_fixed_spf = read_f32(flipper, 0x1c);
+    let play_time_ms: i64 = if game_data_man == 0 {
+        -1
+    } else {
+        unsafe {
+            er_game_base::mem::safe_read_usize(game_data_man + GAME_DATA_MAN_PLAY_TIME_A0_OFFSET)
+        }
+        .map_or(-1, |v| i64::from((v & 0xffff_ffff) as u32))
+    };
+
     let body = format!(
         "{{\"oracle_standalone_ticks\":{n},\
 \"oracle_game_module_base\":\"0x{base:x}\",\
 \"oracle_game_data_man_ptr\":\"0x{game_data_man:x}\",\
 \"oracle_game_man_ptr\":\"0x{game_man:x}\",\
-\"oracle_cs_menu_man_ptr\":\"0x{cs_menu_man:x}\"}}\n"
+\"oracle_cs_menu_man_ptr\":\"0x{cs_menu_man:x}\",\
+\"oracle_flip_task_delta\":{flip_task_delta:.6},\
+\"oracle_flip_fixed_spf\":{flip_fixed_spf:.6},\
+\"oracle_play_time_ms\":{play_time_ms}}}\n"
     );
-    let _ = std::fs::write(standalone_json_path(), body);
+    // APPEND one JSON line per write -> a timeseries jsonl the agent reads AFTER the run (no polling,
+    // no sleep). body already ends in '\n'.
+    use std::io::Write as _;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(standalone_json_path())
+    {
+        let _ = f.write_all(body.as_bytes());
+    }
 }
