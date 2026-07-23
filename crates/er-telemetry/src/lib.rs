@@ -208,7 +208,6 @@ mod renderdoc {
     }
 
     static API_PTR: AtomicUsize = AtomicUsize::new(0);
-    const NOT_AVAILABLE: usize = usize::MAX;
 
     fn resolve() -> usize {
         let h = unsafe { GetModuleHandleA(b"renderdoc.dll\0".as_ptr()) };
@@ -236,12 +235,16 @@ mod renderdoc {
     /// On the first call, points the capture-file template at `ER_RENDERDOC_CAPFILE` (else %TEMP%).
     pub fn trigger_capture() -> bool {
         let mut api = API_PTR.load(Ordering::SeqCst);
-        if api == NOT_AVAILABLE {
-            return false;
-        }
         if api == 0 {
+            // RE-CHECK each call until found (do NOT permanently cache "absent"): RenderDoc may be injected
+            // AFTER boot via `renderdoccmd inject --PID` (the native-Windows capture path -- injecting at
+            // boot/device-creation stalls ER, bd STEP4-me3-native-renderdoc-dll-STALLS-boot). trigger_capture
+            // only runs on slow steady frames, so the GetModuleHandle re-check is negligible. Cache only the
+            // positive result.
             api = resolve();
-            API_PTR.store(if api == 0 { NOT_AVAILABLE } else { api }, Ordering::SeqCst);
+            if api != 0 {
+                API_PTR.store(api, Ordering::SeqCst);
+            }
             if api == 0 {
                 return false;
             }

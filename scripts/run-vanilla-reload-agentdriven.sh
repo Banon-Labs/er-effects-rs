@@ -172,7 +172,24 @@ echo "==   INPUT WILL BE DRIVEN (raw-pad taps) -- agent-owned bounded run    =="
 echo "==   artifacts -> $ARTIFACT_DIR"
 echo "======================================================================"
 
-"$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
+# RDC_CAPTURE=1: wrap the me3 launch in the NATIVE-Windows RenderDoc `renderdoccmd capture` so RenderDoc
+# is present at ER's D3D12 device creation (the ONLY point it can hook -- inject-after-boot cannot hook an
+# already-created device, verified run62; me3-native DLL load stalls boot, run59). --opt-hook-children
+# propagates the hook through me3 -> me3-launcher -> eldenring (grandchild). The telemetry DLL's
+# trigger_capture (re-check enabled) then fires at the slow reload frame (er-effects-rdoc-slow-ms.txt).
+# Accepts a slower boot (RenderDoc serializes D3D12); give a long window. bd VERIFIED-game-is-NATIVE-WINDOWS.
+if [[ "${RDC_CAPTURE:-0}" == "1" ]]; then
+	RDCMD="${RENDERDOCCMD:-/mnt/c/Program Files/RenderDoc/renderdoccmd.exe}"
+	[[ -f "$RDCMD" ]] || fail "RDC_CAPTURE=1 but renderdoccmd.exe not found at '$RDCMD'"
+	rm -f "$GAME_DIR"/er_cap_frame*.rdc
+	[[ -f "$GAME_DIR/er-effects-rdoc-slow-ms.txt" ]] || echo -n "15" >"$GAME_DIR/er-effects-rdoc-slow-ms.txt"
+	"$RDCMD" capture --opt-hook-children \
+		--capture-file 'C:\SteamLibrary\steamapps\common\ELDEN RING\Game\er_cap_frame' \
+		"$(wslpath -w "$ME3")" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" \
+		>"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
+else
+	"$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
+fi
 
 python3 "$REPO_ROOT/scripts/capture-samechar-3x.py" \
 	--game-dir "$GAME_DIR" \

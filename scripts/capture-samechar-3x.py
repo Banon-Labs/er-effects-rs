@@ -885,12 +885,28 @@ def main() -> int:
         os.environ.get("OBSERVE_SETTLE_TEARDOWN_SECONDS", "45") or "0"
     )
     final_reload_settled_at: float | None = None
+    # GAME-GONE detection (bd WAKE-immediately-when-game-tears-down): if the telemetry file stops updating
+    # (mtime frozen) the game has torn down -- external close, crash, or our own teardown -- so EXIT
+    # IMMEDIATELY instead of riding the observe/max window and leaving a lingering monitor.
+    telemetry_stale_seconds = float(os.environ.get("TELEMETRY_STALE_SECONDS", "12") or "12")
+    last_mtime: float | None = None
+    last_mtime_change = start
 
     while True:
         now = time.monotonic()
         elapsed = now - start
         if elapsed >= args.max_seconds:
             result = "CAP_REACHED"
+            break
+        try:
+            mtime = os.path.getmtime(telemetry_path)
+        except OSError:
+            mtime = None
+        if mtime != last_mtime:
+            last_mtime = mtime
+            last_mtime_change = now
+        elif now - last_mtime_change > telemetry_stale_seconds and elapsed > 20:
+            result = "TELEMETRY_STALE_GAME_GONE"
             break
 
         t = read_telemetry(telemetry_path)
