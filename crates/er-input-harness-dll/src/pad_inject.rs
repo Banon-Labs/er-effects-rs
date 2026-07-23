@@ -2,7 +2,7 @@
 //! 0x88). The in-world Scaleform menu reads a per-key array at `source+0x88`, where
 //! `source = *(*(base+0x485dc20)+0x18)` (FD4PadManager device 0); index = `id-1000`, ids 1000..1080, a
 //! `1` byte = "down this frame". It is rebuilt EVERY frame from GLOBAL_DLUserInputManager by the builders
-//! (deobf 0x140240dc0 + twin 0x140241080). Raw pad buttons (+0x890/+0x9f0) and inputmgr+0x90 are BOTH
+//! (deobf FUN_140240f20/FUN_1402411e0 dump = deobf 0x140240e70/0x140241130, CORRECTED 2026-07-23). Raw pad buttons (+0x890/+0x9f0) and inputmgr+0x90 are BOTH
 //! off the read path (proven at runtime across 3 cycles). So we MinHook the builders and, AFTER the
 //! original rebuilds the array, write our desired key id into `source+0x88` (a pre-original write is
 //! wiped by the rebuild). Edge-triggered: hold `1` one frame then `0` >=1 frame.
@@ -18,9 +18,17 @@ use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 
 use crate::log::harness_log;
 
-const BUILDER_A_RVA: usize = 0x240dc0;
-const BUILDER_B_RVA: usize = 0x241080;
-const WRITER_RVA: usize = 0x2634b0; // FUN_1426634a0: writes source+0x88+(id-1000)*2 = 1
+// CORRECTED 2026-07-23 (bd ROOTCAUSE-padinject-builder-RVAs-are-wrong / CORRECTED-inworld-input-writer):
+// the prior RVAs (0x240dc0/0x241080/0x2634b0) were WRONG -- they pointed at neighboring thunk stubs, so
+// the MinHook detour never fired in-world (probe run4: builder_fires=0) and no injected input reached the
+// menu. Recovered from the Ghidra dump via the mcp_bridge: the writer FUN_142663490 (dump)'s callers are
+// the real builders FUN_140240f20 / FUN_1402411e0 (dump). Each builder loops ids 1000..0x438 and, for
+// each down key, calls the writer FUN_142663490 with (device=source, id). dump-deobf-shift + prologue
+// disasm confirm the deobf entries below (builder prologue `mov [rsp+8],rcx; push rbp/rsi/rdi/r12`;
+// writer `lea eax,[rdx-0x3e8]; cmp eax,0x50` = id-1000 bounds-checked 0..80).
+const BUILDER_A_RVA: usize = 0x240e70; // FUN_140240f20 (dump): rebuilds source+0x88, loops ids 1000..1080
+const BUILDER_B_RVA: usize = 0x241130; // FUN_1402411e0 (dump): twin builder (second device/slot)
+const WRITER_RVA: usize = 0x26634a0; // FUN_142663490 (dump): writes source+0x88[id-1000]=1 per down key
 const FD4_PAD_MANAGER_RVA: usize = 0x485dc20;
 const PAD_MGR_DEVICES_18_OFFSET: usize = 0x18;
 const VK_ARRAY_88_OFFSET: usize = 0x88;
