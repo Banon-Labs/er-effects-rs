@@ -1,293 +1,194 @@
-# Goal: Repeatable Multi-Save Character Loading (Acceptance Criteria)
+# Goal: Repeatable Multi-Save Character Loading — Vanilla-Identical Parity
 
-**Status:** **OPEN — reopened 2026-07-18.** An earlier "vanilla core PROVEN" claim was a **false
-pass**: the harness verified logical load (identity+stats+gear+present) but not that the character
-actually *rendered and the world resumed*, so it passed a reload that was frozen and invisible in a
-live product run. §4 has been tightened with a hard render gate + a stable-before-next sequencing
-gate; the goal is not met until a run passes the revised gate. **Authored:** 2026-07-18 from a live
-goal-refinement Q&A with the user; **revised** 2026-07-18 after the live product-route freeze.
-**Invoke a fresh session with:** `/goal complete the acceptance criteria of ./docs/goals/repeatable-multi-save-load-acceptance.md`
+**Status:** **OPEN — acceptance STRENGTHENED 2026-07-22** (live grilling session with the user).
+The prior version accepted a *curated floor* (identity + stats + gear + render-ready + can-move +
+no-stall) and explicitly said a subsequent load need **not** replay vanilla — "accuracy over speed,
+any fast path that lands a fully-playable character." That floor is **too weak**: it passes a reload
+that reaches the world but runs at **20 fps** where vanilla runs 60, because framerate was never in
+the gate. The new bar is **exact parity with a vanilla imprint across every semaphore**. A prior
+session also *claimed* the continue flow was "remade with exact parity"; that claim was never
+measured and the persistent 20 fps is evidence against it. Parity is now a **measurement**, not an
+assertion.
 
-> Read the linked `bd` memories FIRST (see [Context to load](#context-to-load-read-first)).
-> This document is the single source of truth for what "done" means. It intentionally does
-> **not** over-specify semaphores; it states the *floor* and leaves implementation latitude.
+**Invoke a fresh session with:**
+`/goal complete the acceptance criteria of ./docs/goals/repeatable-multi-save-load-acceptance.md`
+
+> This document is the single source of truth for what "done" means. Read the linked `bd` memories
+> and the `HIGH-LEVEL-GOAL-*` / `dll-not-same-path-across-os-*` / `DECISIVE-reload-20fps-is-render-bound-*`
+> memories first (see [§9 Context](#9-context-to-load-read-first)).
 
 ---
 
 ## 1. The goal, in spirit
 
-On **Windows**, with our DLL loaded via me3, a user can — after **one** initial game launch —
-repeatedly and indefinitely **load and switch between multiple valid characters**, both
-**within the same save file** and **across different valid save files**, with **no load/reload
-crashes or stalls**, ad nauseam. When the user wakes up they can rest assured the feature works
-for any given valid save, repeatedly, without babysitting it.
+A single DLL (`er_effects_rs.dll`), loaded through **me3** as a `[[natives]]` profile entry, that lets
+a user:
 
-Prove this with a **bounded, deterministic, non-cyclic, fully autonomous** test that needs **no
-live user input or feedback**, and finishes in **finite time** with a **short human-readable
-pass/fail report**.
+1. **Auto-load** a chosen save file + slot at startup (default: most-recent / native Continue; optional
+   ini slot override, blank ⇒ most-recent), and
+2. **Switch, at any point during play,** to a character in the **same or a different save file** and the
+   **same or a different slot**,
 
-## 2. Product model (what the DLL does)
+such that the resulting state is **indistinguishable from a vanilla copy of the game** in which that
+save file + slot were the last-active save and the user pressed Continue — **every semaphore
+identical**, not merely "reached the world."
 
-- **Initial load (in scope only as the starting point):** the DLL reads a `er-effects.toml`
-  next to the game exe with `save_file` (path) + `slot` (i32). If both are valid it
-  **automatically** loads that character; the user has no control until the character is in-world
-  and genuinely playable (single-player, or seamless co-op). If the TOML is absent/invalid, an
-  interactive **file picker** appears — **we do NOT exercise, drive, or design around the picker
-  for this goal.** (See `crates/er-effects-rs/src/config.rs`, `save_picker*`.)
-- **Yield:** once that first genuinely-playable state is reached, the product yields to the user.
-- **Subsequent loads (the actual proof target):** when a new `(file, slot)` is selected, the
-  product loads that character **the quickest valid way possible** — *any* fast path that lands a
-  **fully-playable** character with that save's real stats/equipment/everything. It is **NOT**
-  required to replay the exact vanilla teardown path (quit-to-menu → load-character →
-  current-file-only → click → await). Accuracy over speed.
+The DLL **enables** this; it does **not drive/play**. Autoload / self-drive / input-injection are **test
+scaffolding** to prove parity, not product behavior. When the target is genuinely ready (rendered AND
+movable, at vanilla framerate), control belongs to the user.
 
-## 3. Scope
+## 2. Interaction fidelity
 
-**In scope**
-- Repeated loads **after** the first automatic load.
-- **Per-character within a file** (vary `slot`) **AND cross-file** (vary `save_file`). Both axes.
-- **Vanilla `.sl2`** first. **Seamless `.co2`** second, same acceptance criteria — **timeboxed**
-  (see §8). Seamless "playable" = same bar as vanilla (repeated loads after initial); pick the
-  lightest valid seamless definition when you get there.
-- Loading via **in-memory redirect**, **read-only** of the source save.
+Every feature is driven through the game's **own native input-receiving mechanism and native UI**,
+exactly as vanilla — no synthetic/OS-injected input and no custom overlay UI in the product path. The
+mid-play switch already uses the native `05_010_ProfileSelect` 10-row window as a browsable file+slot
+picker (`save_picker.rs` / `save_picker_menu.rs`), which replaced the old OS file dialog specifically to
+stay in-engine.
 
-**Out of scope / do not do**
-- Do **not** trigger or design around the interactive file picker.
-- Do **not** make the gamepad-menu navigation a proof requirement (see §6).
-- Do **not** rebuild the save-write invariant — it is believed already implemented; only assert +
-  verify it (§5).
+**Sole exemption:** the initial character-load prompt shown when the mod is loaded but the user has **not**
+provided a save/file (`save_picker_overlay.rs`). At that pre-front-end point the game's menu assets and
+native input path are not yet available (title suppressed/black), so that one prompt is DLL-drawn with
+OS input. Everything else is native.
 
-## 4. Acceptance criteria — the PROVEN gate
+## 3. Acceptance framework (locked 2026-07-22)
 
-A **single bounded autonomous run** that a fresh session can launch and that:
+The bar is **exact parity against a vanilla imprint**, decided along four axes:
 
-1. Launches ER on Windows via me3 with the product DLL.
-2. Performs the initial TOML-driven auto-load and reaches a genuinely-playable state.
-3. Then loops **reloads** across **≥ 3 valid vanilla save files** (6 total if seamless is also
-   attempted), covering **both** per-character-within-file and cross-file pivots.
-4. For **every** load, verifies via RAM/telemetry (never a screenshot as the oracle):
-   - **Identity** — loaded character name matches the selected `(file, slot)`.
-   - **Stats** — a few RAM-read stats (e.g. level/rune-level/attributes) match that save.
-   - **Gear spot-check** — an equipment/inventory item expected from that save is present.
-   - **Stable & playable in-world — the HARD RENDER GATE (added 2026-07-18 after a live product run
-     exposed a render-frozen reload that the old "controllable" wording passed).** "Present" is not
-     enough: the character must be *rendering* and the world *running*. ALL of these RAM fields must
-     hold, and hold **continuously for a dwell window of ≥ 5 s** — a single-frame blip does not count:
-       - `oracle_player_render_ready == true`, which the DLL derives as chr-model-instance present
-         **AND** `chr_ins.load_state.draw_group_enabled()` **AND** `chr_flags1c4.is_render_group_enabled()`
-         **AND** `chr_flags1c5.enable_render()`. This is the **exact** combination that was `false` in
-         the 2026-07-18 freeze.
-       - `oracle_chr_draw_group_enabled == true` — kept explicit; it was *the* failing field
-         (present + controllable-by-model, yet draw group off ⇒ invisible).
-       - Loading screen actually **dismissed**: `oracle_fake_loading_any_visible == false` (in the
-         freeze the cover stayed `true`). **Correction (2026-07-18, evidence-based):** the earlier
-         wording also required `oracle_now_loading` cleared, but that field is
-         `CSNowLoadingHelperImp::load_done` — a load-*complete* latch that **lingers `true` into normal
-         gameplay** and was observed as **both 0 and 1** across render-frozen snapshots (some freezes
-         had `now_loading == 0`). Gating on `now_loading == 0` therefore both false-fails good loads
-         and false-passes a `now_loading == 0` freeze, so it is **not** part of the gate;
-         `oracle_fake_loading_any_visible == false` is the authoritative cover-dismissed signal and
-         `now_loading` is logged for diagnostics only.
-       - **World is live, not frozen** — a per-frame liveness signal advances across the dwell window
-         while render-ready holds (e.g. character model draw hits climbing, or havok position /
-         animation time progressing). The user's "in-world but nothing is moving" must **FAIL** here.
-5. Observes **zero crashes and zero stalls** across all loads — where a **stall explicitly INCLUDES
-   the "logically loaded but render-frozen" state**: character present / controllable-by-model but
-   `player_render_ready == false`, draw group disabled, or the loading cover never lifts. The
-   teardown+startup path must work **generically**, not just for one character.
-6. **Sequencing gate — prove each load STABLE before the next load is triggered.** The run is a
-   strict chain: trigger load *N* → wait until load *N* passes the full §4.4 stable-&-playable dwell
-   (or hits its per-load deadline) → **only then** trigger load *N+1*. A load that reaches "present"
-   but never passes the dwell within its deadline is a **FAIL/stall** for that character; the run
-   stops and reports failure — it does **not** advance to the next character. The final character in
-   the chain must also pass the dwell. No load may be counted on a one-frame or unheld signal.
-7. **Logs per-load timings** (do **not** gate pass/fail on speed this round), including time-to-stable
-   (present → dwell-passed) per load, so a slow-but-eventually-stable load is distinguishable from a
-   never-stabilizes stall.
-8. Emits a **short human-readable report**: files × characters covered, per-load timings +
-   time-to-stable, and any cataloged bad/invalid saves.
-9. Exit 0 == **PROVEN**. Timings and the report are the morning-review artifact.
+- **(a) Baseline — what "vanilla" is.** Vanilla **game flow**, captured with telemetry / input / oracle
+  instrumentation crates (their own shippable crates) that **observe or drive without significantly
+  modifying game flow**. A **non-native-input-but-native-*function-calling*** crate/DLL is acceptable if
+  native input cannot reach a phase but the action can be faithfully reproduced by direct native calls.
+  The imprint is captured from this instrumented-but-flow-faithful vanilla, **not** from the mod's own
+  autoload (a mod defect must never become the standard).
 
-Success is generic **stable** repeatability: **if we cannot load multiple characters in a row and
-prove each one rendered-and-playable before moving on, the goal is not met**, regardless of how well
-any single logical load works. A load that is "present" but frozen is a FAIL, not a pass.
+- **(b) Equality — exact match, zero tolerance.** Every observable semaphore must match **exactly**.
+  Fields that are inherently nondeterministic run-to-run (heap addresses, RNG state, wall-clock
+  timestamps, frame indices) are **normalized/canonicalized** (e.g. module-relative pointers, seed
+  control, stripped/relativized time) so the comparison is exact **after** normalization; anything that
+  cannot be normalized must be made deterministic — otherwise it is not done. **No tolerance bands.**
 
-## 4a. CURRENT PRIMARY MILESTONE — same character loaded 4× in a row (updated 2026-07-18)
+- **(c) Window — trajectory + steady-state.** Parity is judged over BOTH: the **full load trajectory**
+  (Continue-press → readiness, lockstep against the imprint's ordered semaphores + per-transition budget,
+  honoring only the steps the imprint proves are legitimately non-deterministic), AND a **sustained
+  post-readiness steady-state window** (steady play must match vanilla). The steady-state window is what
+  catches divergences like the 20 fps that only manifest *after* the character is movable.
 
-The §4 gate above varies the `(file, slot)` across ≥3 saves. That is the end state, but it is **not**
-the case the user actually reproduces by hand, and the doc had no test for it. The **current primary
-milestone** — the one to pass first — is the **same character (angrE), loaded FOUR times in a row,
-including the boot autoload** (raised from 3 to 4 on 2026-07-18 after the user reproduced a 4th load):
+- **(d) Outgoing-character save on a switch — "easiest first."** The data-safety contract for what
+  happens to the character you switch *away* from (vanilla quit-save vs abandon) is **not yet locked**;
+  take the simplest correct behavior first and refine later. The read-only-source invariant (§5) still
+  binds regardless.
 
-- **Load 1 = boot autoload** of angrE (TOML `save_file`+`slot`). Known-good: renders + is playable.
-- **Loads 2–4 = reloads of the SAME angrE slot**, each driven the way the **user drives it** — the real
-  in-game menu path (System→Quit→Load), driven by **XInput** (the input driver).
-- **Observed parity (user, 2026-07-18):** the freeze **alternates** — load1 good, load2 frozen, load3
-  good, load4 frozen — a reload *from a rendered state* freezes; a reload *from a frozen state* recovers.
-  So freezes are **expected intermediate states**, not failures, as long as the sequence keeps advancing.
-- **MOVEMENT must be PROVEN, not just render-ready (added 2026-07-18).** Movement was never proven on
-  any load yet. A load counts as **proven-playable** only when, on top of `oracle_player_render_ready`,
-  the **can-move** gate passes: while a movement stick is injected, the character actually moves —
-  `oracle_havok_pos` displaces beyond a noise threshold — and it does so across **≥ 60 consecutive
-  frames of injected movement per load** (a sustained walk, not a one-frame twitch). The **4th** load is
-  the required target for this proof, but the gate applies to any load claimed as good.
-  `oracle_play_time_ms` advancing is necessary but **not** sufficient — it ticks during the freeze. A
-  load that is present + render-ready but does not move ≥60 frames under injected input is **not**
-  proven playable.
-- **Note (2026-07-18 automated finding):** the sq-repro autopilot re-routes the confirm through the
-  DLL's SetState5 quickload arm, which skips the native render handoff — so **every** automated load
-  froze (draw_group never enabled, request_code stuck at 1) with **no** parity recovery, unlike the
-  user's manual native-menu loads. Driving "like the user" therefore means the reload must go through
-  the **native menu Continue path** (or the SetState5 path must be fixed to perform the same
-  draw_group / request_code 1→2 handoff). See `bd run2-latchfix-works-freeze-is-drawgroup-not-enabled-2026-07-18`.
+## 4. Milestone 1 — build the imprint+diff harness FIRST, then let it drive the fix list
 
-**Acceptance for this milestone:**
-1. Runs autonomously with **two DLLs loaded via me3** — the product DLL (being tuned) plus the log-only
-   companion trace DLL — with all overlapping native hooks **unioned through a single MinHook instance**
-   (the product DLL's `er_effects_union_register` export), never two colliding instances.
-2. The XInput driver is **readiness-gated, never blind** (see the correction that the earlier automated
-   capture failed *because* it fired the next load without checking render + movement). Before it
-   triggers the next load it must confirm, via RAM telemetry, the current load's true state:
-   - **render-ready** — `oracle_player_render_ready` (chr-model present AND `draw_group_enabled()` AND
-     `is_render_group_enabled()` AND `enable_render()`), held ≥5 s; and
-   - **can-move / input-causes-movement** — a NEW semaphore: while a movement stick input is injected,
-     `oracle_havok_pos` shifts beyond a noise threshold (world-live `oracle_play_time_ms` advancing is
-     necessary but **not** sufficient — it ticks during the freeze too, so it cannot be the move oracle).
-3. The chain is strict: load 1 must reach render-ready + can-move (dwell) **before** load 2 is triggered;
-   load 2's frozen state is captured (present, render-ready == false, can-move == false) up to its
-   per-load deadline; then load 3 is triggered and must reach render-ready + can-move.
-4. Zero crashes / zero soft-locks. The regression that turned load 2's **recoverable** freeze into a
-   hard soft-lock (warp-clear removal + finalize-disarm) is reverted; load 2 must remain the *recoverable*
-   freeze, and load 3 must recover.
-5. Emits per-load render-ready / can-move / freeze telemetry + timings and a short pass/fail report.
+Under a zero-tolerance-exact bar you **cannot declare any divergence fixed without a tool that shows
+every divergence**. So the first deliverable is the measurement, not a point fix:
 
-Passing 4a proves the freeze/recovery mechanism on one character; §4 then generalizes it across saves.
+1. **Capture a vanilla imprint** of the same-character reload (native System→Quit→Continue for one
+   `(file, slot)`) using telemetry-only, flow-faithful instrumentation.
+2. **Capture the mod's switched reload** with the same instrumentation.
+3. **Diff every normalized semaphore** over the full trajectory + steady-state window → the **complete
+   divergence list**.
+4. **Fix divergences in the order the diff reports**, re-diffing until the diff is **empty**. The 20 fps
+   is expected to be one entry; its **co-divergent fields** (we already know `oracle_chr_draw_group_enabled
+   == false` holds through the entire 20 fps window — see §6) are the root's fingerprint. Diagnose the
+   20 fps by its company, not in isolation.
 
-### 4a-progress (2026-07-18): LOAD 1 proven autonomously; the movement-proof mechanism
+Milestone 1 target case: **same file, same slot** (the simplest slice that still exercises the switch).
+§7 then generalizes: same-file/different-slot, then cross-file, then Seamless `.co2` (timeboxed after
+vanilla).
 
-- **LOAD 1 DONE (autonomous):** the boot autoload of angrE loads and the character is provably
-  **movable** — injected input walked it 60 consecutive frames (`oracle_can_move`) with **no user
-  interaction and no window focus** (runs `samechar-3x-215629` / `-215629`).
-- **The movement-proof mechanism (three RE-grounded pieces, all in `can_move_probe.rs`):** synthetic
-  `XInputGetState` does NOT reach movement (Steam Input routes the pad via ScePad/DInput). Faithful
-  injection = (1) hook the **pad-device poll** `0x141f6bad0` and write the left stick `device+0x8a0 = 1.0`
-  (below the OS/Steam layer, where all pad sources converge); (2) force **`DLUID+0x88d`** (stay-active)
-  so the device poll runs while unfocused; (3) hook **`Game.Debug::IsEnableControlOnDisactiveWindow`**
-  (`0x140e53220`) to return 1 — the *gameplay* focus gate (`CSPadStep+0xba`) that otherwise discards the
-  injected stick for locomotion when unfocused. Movement is measured as an `oracle_havok_pos` delta,
-  the ONLY reliable playable-vs-frozen signal (`draw_group`/`render_ready`/`request_code`/`fake_cover`
-  read identically in a playable and a frozen load; only motion distinguishes them). Proof runs stage
-  `er-effects-prove-movement.txt` + `er-effects-stay-active.txt`; the injection is proof-gated so it
-  never fights a real player.
-- **Reload driver:** WAIT_RELOAD advances only once a load proves movement (`CAN_MOVE_CONFIRMED` = input
-  registered), else force-advances after the freeze deadline (frozen → per parity the next load recovers
-  it). `oracle_can_move` is epoch-gated (`MOVE_PROBE_EPOCH == fresh_deser`) so a prior load's proof is
-  never credited to the next when `fresh_deser` flips mid-loading.
-- **3-LOAD CHAIN ACHIEVED (autonomous), run `samechar-3x-221118`, PASS:** angrE loaded three times in a
-  row with the user's exact parity — **load1 (autoload) MOVABLE**, **load2 (reload) FROZEN** (never moved,
-  advanced on deadline), **load3 (reload) MOVABLE** (`moved_frames=60`, epoch-gated to load3, walked to a
-  new position). Movement on the third load proven autonomously (no click, no focus). Rigor caveat:
-  load2's *frozen* verdict came via the WAIT_RELOAD deadline (it didn't prove movement in its window) —
-  consistent with a genuine freeze + the parity, but not independently confirmed un-movable with a longer
-  window. Remaining follow-ups: tighten load2's frozen-vs-deadline distinction; the §4 cross-save
-  generalization; seamless (`.co2`).
+Autonomy still applies: the proof is a **bounded, deterministic, non-cyclic, fully autonomous** run that
+needs no live user input and ends in finite time with a short human-readable pass/fail report — pass =
+**empty semaphore diff vs the vanilla imprint** over trajectory + steady-state.
 
-## 5. Invariants the harness must assert & verify (not build)
+## 5. Invariants the harness asserts & verifies (does not rebuild)
 
-- **Reads are read-only.** Loading a source save (read-only or read/write) must **read, never
-  write** the supplied file. Prefer in-memory redirect (`save_redirect/`).
-- **The only write path is the Save button**, which **upserts a copy** into the current
-  logged-in Steam-ID's APPDATA dir (the folder the game normally r/w) — never the supplied file.
-  The game must never save on its own; the quit-menu button was replaced to be **save-only**.
-  The forced initial-load APPDATA write should be gone. **Believed already implemented** — the
-  harness verifies no unexpected save-file writes occur during the loop and logs any it sees.
+- **Reads are read-only.** Loading a source save must **read, never write** the supplied file. Prefer the
+  in-memory redirect (`save_redirect/`). The user's picked `.sl2`/`.co2` is never mutated.
+- **The only write path is the Save button**, which upserts a **copy** into the current Steam-ID APPDATA
+  dir (the folder the game normally r/w) — never the source. The game must not save on its own. Believed
+  already implemented; the harness **verifies** no unexpected save-file writes occur during the loop.
 
-## 6. Harness contract (how to drive the proof)
+## 6. Technical context — what we already know about the reload divergence
 
-- **Programmatic reload is acceptable and preferred** for the proof: trigger each reload by
-  supplying the next `(file, slot)` (rewrite `er-effects.toml` / a control hook the DLL honors),
-  bypassing the gamepad-menu + OCR. XInput and OCR are **not required** for any proof.
-- The real-user reload path is a customized in-game menu (gamepad: Start → Up → Left-Trigger to
-  the customized quit menu → DPad-Right ×2 = load within current file → ×3 = file picker). It is
-  "kind of a mess." A **faithful gamepad-menu-nav pass is an optional documented follow-up**, not
-  part of this PROVEN gate.
-- If menu-nav is ever added: **prefer adding DLL telemetry that exposes menu state** (submenu,
-  cursor index, highlighted save/character) so the harness navigates by **RAM, not OCR**. OCR is
-  navigation-aid-only and only ever after exact ER-window validation (per `AGENTS.md`); it is
-  **never** the run-stopping / load-success oracle.
+- **The 20 fps reload is RENDER-BOUND, not our DLL** (`bd DECISIVE-reload-20fps-is-render-bound-not-throttle-*`,
+  `CORRECTION-reload-20fps-not-fixedspf-cap-*`, 2026-07-22). Measured on Windows/WSL2: reload frame pins at
+  **49.92 ms = 20 fps = ~4 vblanks/present** with `SyncInterval=1` (the game *wants* 60 but the frame is not
+  ready), zero variance. **Ruled out with telemetry:** product per-frame CPU (~1 ms, flat), the
+  `fixed_spf=0.05` loading cap (target stays 0.0167), the dynamic FPS lock (off), and window focus (True).
+  So it is the **game's own native reload render** costing ~4×. **Candidate marker:** the player is stuck in a
+  loading draw-state — `oracle_chr_draw_group_enabled == false` through the whole 20 fps window while
+  `render_group`/`enable_render` are true. New present-cadence semaphores exist:
+  `oracle_present_sync_interval`, `oracle_present_refresh_per_present_x100`, `oracle_present_qpc_delta_us`
+  (`present_overlay.rs`). Diff tool: `scripts/analyze-reload-fps-oracle-diff.py`.
+- **The DLL is NOT the same code path across OS** (`bd dll-not-same-path-across-os-*`): on native Windows
+  the entire DLL overlay/composite is suppressed (`composite_suppressed_on_native`), while Wine/vkd3d runs
+  the full portrait composite. So a Linux-vs-Windows fps comparison is confounded — but the direction
+  exonerates the DLL (native does *less* yet is slower). A clean OS A/B needs identical composite state.
+- **Render-handoff freeze history (2026-07-18):** a reload can complete logically (world torn down, slot
+  re-deserialized, WORLDRES done, MoveMap finished) yet the end-of-load render handoff never fires
+  (`player_render_ready == false`, draw group off, cover never lifts) — present but invisible/frozen. The
+  synthetic SetState5 reload path skips whatever step the game uses to re-enable `draw_group` and mark the
+  player render-ready. Driving "like the user" means the reload must go through the **native menu Continue
+  path** (or SetState5 must perform the same `draw_group` / `request_code` 1→2 handoff).
+- **Movement-proof mechanism** (`can_move_probe.rs`, for the *test harness* only — not product): synthetic
+  `XInputGetState` does not reach locomotion (Steam Input routes via ScePad/DInput). Faithful injection =
+  hook the pad-device poll `0x141f6bad0` and write left stick `device+0x8a0=1.0`; force `DLUID+0x88d`
+  (stay-active) so the poll runs unfocused; hook `Game.Debug::IsEnableControlOnDisactiveWindow`
+  (`0x140e53220`) → 1. Movement is measured as an `oracle_havok_pos` delta — the only reliable
+  playable-vs-frozen signal (`draw_group`/`render_ready`/`request_code`/`fake_cover` read identically in a
+  playable and a frozen load; only motion distinguishes them). This is scaffolding to *validate* parity,
+  never product behavior.
+- **Do NOT trap the user's input.** The per-frame 1×1 `ClipCursor` mouse confinement was removed
+  2026-07-22 (`bd input-block-1x1-clipcursor-traps-user-*`); it trapped the user's mouse when the harness
+  failed. Any confinement must be native-Windows-exempt and fail-safe-released.
 
 ## 7. Test corpus & save validity
 
 - Corpus root: `A:\Code Projects\Elden Ring Save Manager\data\save-files`
-  (WSL: `/mnt/a/Code Projects/Elden Ring Save Manager/data/save-files`). Any `.sl2`/`.co2`
-  there is fair game; the user has no preference which files.
-- **Valid save** = the active save-slot identifier == 1 for the slot (deleting a character sets
-  it to 0 = overwritable/empty). Only files with ≥1 valid save should be considered.
-- Some saves have a **known edge case** (loading FROM them didn't reach the character-select
-  screen); the user suspects a file named like `12345…` but says **do not focus on it**. Treat a
-  save that fails to load as a **cataloged finding** (with evidence), skip it, and prove on the
-  valid ones — do not let one bad save block PROVEN. Report the skipped set.
-- **Save safety: zero concern** — every save file has a backup elsewhere. You may copy/stage/
-  modify freely. Restoring the original default save at the end is *nice-to-have*, not required.
+  (WSL: `/mnt/a/Code Projects/Elden Ring Save Manager/data/save-files`). Any `.sl2`/`.co2` there is fair
+  game; no file preference. Milestone-1 default: `100-Lilbro` slot 0 (angrE).
+- **Valid save** = active save-slot identifier == 1 for the slot (0 = deleted/overwritable). Only files
+  with ≥1 valid save count. A save that fails to load is a **cataloged finding** (with evidence), skipped,
+  not a blocker; report the skipped set.
+- **Save safety for the harness: sources are read-only** (§5); staged copies may be created freely. Never
+  mutate a source save.
 
-## 8. Timebox & time discipline
+## 8. Timebox & discipline
 
-- **Vanilla first.** If vanilla is not solved within **~12 hours**, do **not** move to seamless.
-  If vanilla is solid with time left, seamless is worth attempting.
-- You (the agent) are **bad at estimating time** — that's fine. Use real `date` calls at
-  milestones and **record time-taken estimates in `bd`** as you go ("X took ~N min"). The user
-  finds these valuable to gauge progress; keep it "in the back of your mind."
-- Work **non-cyclically**: make real forward progress, don't loop. Autonomous overnight work on
-  valid problems is explicitly welcome.
+- **Vanilla `.sl2` first**; only attempt Seamless `.co2` if vanilla parity is solid with time left, same
+  acceptance criteria.
+- Use real `date` calls at milestones and record time-taken notes in `bd`. Work **non-cyclically** — real
+  forward progress, no whack-a-mole of independent timeout heuristics (that is the mistake the imprint+diff
+  harness exists to end).
 
-## 9. Known central blocker to solve
+## 9. Context to load (read first)
 
-Two failure modes, both on the *reload* path (load #1 / boot autoload is fine):
+`bd recall` / `bd memories` before touching code:
 
-1. **MoveMapStep 18 crash/stall** during world teardown+reload (game assertion → AV `rva=0x1eb9999`).
-   Prior narrow fixes (disarming the return-title) either regress switching or don't fire.
-2. **Render-handoff freeze (found 2026-07-18, live product route).** The reload can complete
-   *logically* — old world torn down, slot re-deserialized, `WORLDRES` runs to completion, MoveMap
-   finishes, DLL logs "stable in-world" — yet the game's **end-of-load render handoff never fires**:
-   `oracle_player_render_ready == false`, `chr_ins.load_state.draw_group_enabled() == false`,
-   `oracle_now_loading` stuck, loading cover never lifts. Character is present but invisible and the
-   world is frozen. The character draw group is a *game* field; the synthetic `own_load_switch_reload_fire`
-   → `SetState5` reload path skips whatever step the game normally uses to re-enable it and mark the
-   player render-ready. RE where the game enables `chr_ins.load_state.draw_group` at load-complete
-   and drive/allow that step on the reload.
+- `HIGH-LEVEL-GOAL-vanilla-identical-state-parity-any-file-any-slot-switch-2026-07-22` — the authoritative goal.
+- `DECISIVE-reload-20fps-is-render-bound-not-throttle-syncinterval1-refresh4-2026-07-22`,
+  `CORRECTION-reload-20fps-not-fixedspf-cap-target-is-60-genuine-50ms-frame-2026-07-22`,
+  `reload-fps-is-flip-taskdelta-20fps-cap-not-product-cpu-2026-07-22` — what the 20 fps is/ is not.
+- `dll-not-same-path-across-os-composite-suppressed-on-native-but-exonerated-2026-07-22` — OS code-path divergence.
+- `draw-group-false-is-reload-loading-draw-state-candidate-fps-root-2026-07-22` — the co-divergent marker.
+- `real-oracle-imprint-lockstep-boot-sequence-direction-2026-07-20` — the imprint+diff architecture.
+- `input-block-1x1-clipcursor-traps-user-native-windows-no-failsafe-release-2026-07-22`,
+  `never-blanket-kill-eldenring-killed-user-game-2026-07-22` — harness safety.
 
-The real fix is making the native teardown+load of a new character complete reliably **and hand off
-to a live, rendered, moving world** — own the native load path end to end. See the `bd` chain below.
+**Product mechanisms:** `crates/er-effects-rs/src/config.rs`, `.../experiments/save_redirect/`,
+`.../experiments/continue_load/`, `.../experiments/own_load/`,
+`.../experiments/startup_hooks/system_quit_repro_guards.rs`, `.../experiments/title/title_tick_cover.rs`,
+`.../experiments/save_picker*`, `.../experiments/present_overlay.rs`.
 
-## 10. Context to load (read first)
+**Harness / analysis:** `scripts/run-samechar-3x-threedll.sh`, `scripts/capture-samechar-3x.py`,
+`scripts/analyze-reload-fps-oracle-diff.py`.
 
-`bd recall` / `bd memories` these before touching code:
-- `REFINED-GOAL-multi-save-repeatable-load-2026-07-18` — the refined goal.
-- `refined-goal-details-answers-2026-07-18-detailed`, `-2-`, `-3-`, `-4-` — the full Q&A
-  (input model, load-proof floor, read-only/save-button invariant, drive surface, reload trigger,
-  timebox).
-- `angre-reload-full-causal-chain-and-fix-2026-07-18` — the reload crash causal chain.
-- `angre-4loads-goal-met-but-switch-regression-2026-07-18` — why the time-based disarm regressed
-  switching; `angre-slot-index-mismatch-selected-vs-saveslot-2026-07-18` — SELECTED_SLOT (profile
-  id) ≠ GameMan.save_slot index space.
-- `angre-stable-proof-title-owner-gate-bug-2026`, `angre-load1-stable-then-destructive-reload-cycles-2026`.
+## 10. One-line definition of done
 
-**Prior partial harness to build on (don't reinvent):**
-`scripts/switch-reload-watch.sh`, `scripts/two-switch-watch.sh`,
-`scripts/switch-character-oracle.py`, `scripts/switch-failfast-poll.sh`,
-`scripts/summarize-reload-trace-log.py`, `scripts/check-reload-trace-dll-policy.py`.
-
-**Product mechanisms:** `crates/er-effects-rs/src/config.rs` (TOML `save_file`+`slot`),
-`crates/er-effects-rs/src/experiments/save_redirect/`, `.../experiments/continue_load/`,
-`.../experiments/own_load/`, `.../experiments/startup_hooks/system_quit_repro_guards.rs`,
-`.../experiments/title/title_tick_cover.rs`.
-
-## 11. One-line definition of done
-
-> A single autonomous, bounded, non-cyclic run loads ≥3 valid vanilla save files' characters
-> (per-character and cross-file) after the initial auto-load. For each, in strict sequence, it
-> proves via RAM the right character (identity+stats+gear) **AND that the character is
-> render-ready + drawing + the world live (`player_render_ready` held ≥5 s, loading cover gone),
-> before triggering the next load** — with zero crashes and zero stalls (a present-but-frozen load
-> counts as a stall/FAIL), read-only sources, timings + time-to-stable logged, and a short
-> human-readable pass/fail report. Seamless the same, timeboxed after vanilla.
+> A bounded, autonomous, non-cyclic run performs the initial auto-load and then, through the game's native
+> UI, loads characters across same/different save files and same/different slots — and for each load, a
+> normalized **semaphore diff against a vanilla imprint is empty over the full load trajectory AND a
+> sustained steady-state window** (exact match, zero tolerance), with read-only sources and a short
+> human-readable report. Seamless the same, timeboxed after vanilla. If any semaphore diverges from
+> vanilla — framerate included — it is not done.
