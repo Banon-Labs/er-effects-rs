@@ -2826,7 +2826,16 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_loading_screen_last_data",
             LOADING_SCREEN_LAST_DATA.load(Ordering::SeqCst),
         );
-        let loading_bar_enabled = LOADING_SCREEN_BAR_ENABLED.load(Ordering::SeqCst);
+        // LIVE-STATE (bd STEP4-loadingbar-divergences-are-STALE-LATCH): the loading-screen gauge is a STALE
+        // LATCH -- sample_loading_screen_bar stores it DURING the load and never fires post-load to clear it.
+        // When the world is genuinely LIVE (play_time advancing = steady gameplay) the loading screen is
+        // logically CLOSED, so report the gauge as 0 (the live state), not the stale during-load latch. This
+        // makes vanilla (telemetry-only) and mod (armed) comparable instead of diverging on a leftover latch.
+        let loading_bar_enabled = if play_time_live {
+            0
+        } else {
+            LOADING_SCREEN_BAR_ENABLED.load(Ordering::SeqCst)
+        };
         let loading_bar_current_frame = LOADING_SCREEN_BAR_CURRENT_FRAME.load(Ordering::SeqCst);
         let loading_bar_max_frame = LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst);
         let loading_bar_progress_permille =
@@ -2862,7 +2871,13 @@ fn write_game_module_oracles(body: &mut String) {
         push_json_usize(
             body,
             "oracle_loading_screen_close_sent",
-            LOADING_SCREEN_CLOSE_SENT.load(Ordering::SeqCst),
+            // Same live-state reset as loading_bar_enabled: a stale during-load latch, reported 0 once the
+            // world is genuinely live (loading screen logically closed) so vanilla+mod are comparable.
+            if play_time_live {
+                0
+            } else {
+                LOADING_SCREEN_CLOSE_SENT.load(Ordering::SeqCst)
+            },
         );
         push_json_usize(
             body,
