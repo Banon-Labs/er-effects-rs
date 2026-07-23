@@ -107,7 +107,9 @@ PROFILE="$ARTIFACT_DIR/vanilla-reload-agentdriven.me3"
 # --- VANILLA wiring markers ---
 # telemetry-only: disarm the product autoload; product emits telemetry (+ present-cadence via the
 # decoupled detour) but loads no character. The NATIVE Continue is driven by the harness below.
-: >"$GAME_DIR/er-effects-telemetry-only.txt"
+# MOD_ARMED=1: skip telemetry-only so the PRODUCT is ARMED (autoload + full composite) -- the mod-side of
+# the Milestone-1 A/B diff (vanilla=disarmed run vs mod=armed run, same native reload). Default: disarmed.
+[[ -z "${MOD_ARMED:-}" ]] && : >"$GAME_DIR/er-effects-telemetry-only.txt"
 # harness drive mode (DRIVE_MODE env, default 'full'): 'full' drives the whole
 # boot->Continue->play->System->Quit->Continue reload; 'boot' drives boot->Continue and holds in-world
 # (no quit) -- use 'boot' for a CLEAN vanilla in-world steady-state window when the reload nav derails.
