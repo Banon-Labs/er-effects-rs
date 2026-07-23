@@ -99,9 +99,9 @@ def main() -> int:
     ap.add_argument("--game-dir", required=True, type=Path)
     ap.add_argument("--artifact-dir", required=True, type=Path)
     ap.add_argument("--max-seconds", required=True, type=float)
-    ap.add_argument("--settle-seconds", type=float, default=12.0,
+    ap.add_argument("--settle-seconds", type=float, default=3.0,
                     help="keep the game up this long after the decisive semaphore before teardown")
-    ap.add_argument("--capture-settle-seconds", type=float, default=6.0,
+    ap.add_argument("--capture-settle-seconds", type=float, default=5.0,
                     help="wait this long after the menu opens before the first capture (fade-in)")
     ap.add_argument("--pre-er-pids", default="")
     ap.add_argument("--pre-me3-pids", default="")

@@ -60,9 +60,9 @@ const NAV_BUDGET: u64 = 480;
 /// Native quit-to-menu confirm + world teardown. ~10s.
 const QUIT_BUDGET: u64 = 600;
 /// Dwell on the opened Equipment menu (mode `equip`) so its armament tiles populate, the menu
-/// FULLY renders (fade-in settles), and the oracle has time to capture + process before teardown
-/// (user 2026-07-23: don't tear down too early). ~20s at 60fps.
-const EQUIP_DWELL_FRAMES: u64 = 1200;
+/// renders (fade-in settles), and the oracle can capture + process before teardown. 9s at 60fps
+/// (user 2026-07-23: 9s is the preferred dwell).
+const EQUIP_DWELL_FRAMES: u64 = 540;
 
 // ---- diagnostic probe (mode `probe`): sweep the DLUID virtual-key id space and log the menu response,
 // to discover which id (1000..1080) is up/down/confirm/cancel/tab (bd MENU-INPUT-LAYER-virtual-key). ----

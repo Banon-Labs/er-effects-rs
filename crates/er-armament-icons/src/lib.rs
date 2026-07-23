@@ -65,6 +65,13 @@ const PROXY_GLOBAL_RECT_RVA: usize = 0xd81970;
 /// `MenuGaitem.itemId` (+0x4c): top nibble = category (0 = weapon), low 28 bits =
 /// EquipParamWeapon id. Identifies the weapon in a tile for deterministic slot picking.
 const MENU_GAITEM_ITEM_ID_OFFSET: usize = 0x4c;
+/// `GetEquipParamGem(EquipParamGemLookupResult* out, uint id)` -- out.paramId@0, out.paramRow@8
+/// (0 on miss). dump 0x140d2a420 -> deobf 0x140d2a360 (-0xc0; prologue disasm-confirmed:
+/// id<0 js + SoloParamRepository load). CALL target.
+const GET_EQUIP_PARAM_GEM_RVA: usize = 0xd2a360;
+/// `EquipParamGem.iconId` = u16 at row+0x4 (Ghidra get_structure _EQUIP_PARAM_GEM_ST). The
+/// applied ash's inventory item icon = the crescent icon shown in the detail panel.
+const EQUIP_PARAM_GEM_ICON_ID_OFFSET: usize = 0x4;
 /// SwordArtsParam row: skill iconId is the u16 at row +0x1A. Ground-truthed to the
 /// game's OWN HUD skill-icon builder CS::CSFeManImp::UpdatePlayerComponents (dump
 /// 0x140772b70): it reads `*(u16*)(swordArtsRow + offsetof(_EQUIP_PARAM_GOODS_ST,
@@ -292,6 +299,42 @@ unsafe extern "system" fn tile_populate_hook(tile: usize, gaitem: usize) -> usiz
 
 /// Resolve the tile's weapon skill and drive the dormant `ArtsIcon/IconImage` child
 /// with the game's own icon primitives (bd er-effects-rs-pe98 RE #2/#3).
+/// Resolve the Ash-of-War icon for a resolved swordArtsParamId via the gem that carries it.
+/// The ash's item icon = the crescent icon the detail panel shows. Verified offline (WitchyBND
+/// regulation extract): the primary gem for an ash sits at EquipParamGem id = arts_id * 100
+/// (holds for 113 of the icon-bearing gems; e.g. arts 123 -> gem 12300 iconId 8320 Stormcaller,
+/// arts 201 -> gem 20100 iconId 8331 Sacred Blade). This maps arts -> icon regardless of whether
+/// the weapon has the ash innately or applied, avoiding the per-instance gaitem gem chain.
+/// Returns 0 if no such gem / no icon (the caller falls back to SwordArtsParam.iconId).
+#[cfg(windows)]
+unsafe fn resolve_gem_icon_id(base: usize, arts_id: i32) -> u32 {
+    #[repr(C)]
+    struct GemLookupResult {
+        param_id: u32,
+        _pad: u32,
+        row: usize,
+    }
+    type GetGemFn = unsafe extern "system" fn(*mut GemLookupResult, u32);
+
+    if arts_id <= 0 {
+        return 0;
+    }
+    let Some(gem_id) = (arts_id as u32).checked_mul(100) else {
+        return 0;
+    };
+    let get_gem: GetGemFn = unsafe { std::mem::transmute(base + GET_EQUIP_PARAM_GEM_RVA) };
+    let mut res = GemLookupResult {
+        param_id: 0,
+        _pad: 0,
+        row: 0,
+    };
+    unsafe { get_gem(&mut res, gem_id) };
+    if res.row == 0 {
+        return 0;
+    }
+    unsafe { *((res.row + EQUIP_PARAM_GEM_ICON_ID_OFFSET) as *const u16) as u32 }
+}
+
 #[cfg(windows)]
 unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
     let Ok(base) = er_game_base::mem::game_module_base() else {
@@ -338,8 +381,18 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
         }
         return;
     }
-    let real_icon_id =
+    let arts_icon_id =
         unsafe { *((lookup_result.row + SWORD_ARTS_PARAM_ICON_ID_OFFSET) as *const u16) } as u32;
+    // PRIMARY SOURCE: the applied Ash-of-War GEM's item icon -- what the detail panel shows.
+    // Verified offline (WitchyBND regulation extract): most SwordArtsParam rows have iconId=0
+    // (Stormcaller/Sword Dance/...), so the skill-param icon is blank; the real crescent icon is
+    // EquipParamGem.iconId (row+0x4), e.g. gem 12300 "Ash of War: Stormcaller" iconId=8320.
+    let gem_icon_id = unsafe { resolve_gem_icon_id(base, arts_id) };
+    let real_icon_id = if gem_icon_id != 0 {
+        gem_icon_id
+    } else {
+        arts_icon_id
+    };
     // DIAGNOSTIC-ONLY override (ER_ARMAMENT_ICONS_FORCE_ICON=<u16 menu icon id>): draw a fixed,
     // guaranteed-visible icon into every badge instead of the skill icon. Used to (a) locate the
     // badge's on-screen rect via a locator-vs-vanilla pixel diff and (b) prove the pixel path flips
@@ -435,6 +488,7 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
             let item_id = unsafe { *((gaitem + MENU_GAITEM_ITEM_ID_OFFSET) as *const u32) };
             log_message(format_args!(
                 "badge sample: DRAWN #{drawn_total} arts_id={arts_id} icon_id={icon_id} \
+                 gem_icon={gem_icon_id} arts_icon={arts_icon_id} \
                  item_id=0x{item_id:x} weapon_id={} tile=0x{tile:x}",
                 item_id & 0x0fff_ffff
             ));
