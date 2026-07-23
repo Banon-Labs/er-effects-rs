@@ -876,6 +876,15 @@ def main() -> int:
     reload_step_key: int | None = None
     reload_step_entered_at: float | None = None
     fps_dip_polls = 0  # consecutive movable polls below target on the current reload epoch
+    # Observe-only settle-then-teardown (tear-down-after-insight, bd tear-down-immediately-after-insight):
+    # once the FINAL reload epoch has been continuously in-world for this many seconds, tear down instead of
+    # riding the full --observe-seconds window (which leaves the game up capturing input long after the
+    # steady-state is captured). 0 disables (ride the full window). Default 45s = enough sustained
+    # steady-state for the parity diff, then a prompt teardown.
+    observe_settle_teardown_s = float(
+        os.environ.get("OBSERVE_SETTLE_TEARDOWN_SECONDS", "45") or "0"
+    )
+    final_reload_settled_at: float | None = None
 
     while True:
         now = time.monotonic()
@@ -899,6 +908,22 @@ def main() -> int:
                 if elapsed >= args.observe_seconds:
                     result = f"OBSERVED_{int(args.observe_seconds)}s_deser{deser}"
                     break
+                # settle-then-teardown: the final reload epoch reached + continuously in-world -> once it
+                # has been stable for observe_settle_teardown_s, tear down promptly (don't ride the window).
+                cur_ep_o = s.get("oracle_current_load_epoch")
+                at_final_reload = (
+                    present and cur_ep_o is not None and cur_ep_o >= final_epoch
+                )
+                if observe_settle_teardown_s > 0 and at_final_reload:
+                    if final_reload_settled_at is None:
+                        final_reload_settled_at = elapsed
+                    elif elapsed - final_reload_settled_at >= observe_settle_teardown_s:
+                        result = (
+                            f"OBSERVED_SETTLED_{int(observe_settle_teardown_s)}s_epoch{cur_ep_o}_deser{deser}"
+                        )
+                        break
+                else:
+                    final_reload_settled_at = None
                 if elapsed - last_log >= LOG_THROTTLE_SECONDS:
                     last_log = elapsed
                     print(

@@ -85,28 +85,17 @@ cp -f "$TELEM_DLL" "$TELEM_GAMEDIR"
 rm -f "$GAME_DIR/er-telemetry-timeseries.jsonl"
 
 PROFILE="$ARTIFACT_DIR/vanilla-reload-agentdriven.me3"
-# RENDERDOC=1: stage renderdoc.dll as the FIRST me3 native so it hooks ER's D3D12 device at init; the
-# telemetry DLL auto-fires TriggerCapture at a steady reload frame (ER_RENDERDOC_SLOW_MS=0 => any steady
-# frame, incl. the fast vanilla). Under RenderDoc the product render hooks stand down (renderdoc_active),
-# so the .rdc shows the GAME's own render -> diff a vanilla-reload vs mod-reload frame (bd CORRECTION-
-# RenderDoc-GPU-frame-analysis-IS-AUTONOMOUS). .rdc lands in GAME_DIR (Windows-writable).
-RDOC_DLL="${RENDERDOC_DLL:-/mnt/c/Program Files/RenderDoc/renderdoc.dll}"
-if [[ "${RENDERDOC:-0}" == "1" ]]; then
-	[[ -f "$RDOC_DLL" ]] || fail "RENDERDOC=1 but renderdoc.dll not found at '$RDOC_DLL'"
-	rm -f "$GAME_DIR"/er_cap_frame*.rdc
-	echo -n "15" >"$GAME_DIR/er-effects-rdoc-slow-ms.txt"
-fi
+# NOTE: the old RENDERDOC=1 me3-native path (stage renderdoc.dll as the first native so it hooks ER's
+# D3D12 device at init) was REMOVED 2026-07-23: it STALLS ER's boot (RenderDoc-at-device-creation on ER's
+# heavy asset load hangs; user confirmed "Game stalled on boot", run59). RenderDoc must be run the
+# NATIVE-WINDOWS way (renderdoccmd inject/capture against eldenring.exe), NOT injected through me3.
+# bd STEP4-me3-native-renderdoc-dll-STALLS-boot.
 {
 	echo 'profileVersion = "v1"'
 	echo
 	echo '[[supports]]'
 	echo 'game = "eldenring"'
 	echo
-	if [[ "${RENDERDOC:-0}" == "1" ]]; then
-		echo '[[natives]]'
-		echo "path = '$(win_path "$RDOC_DLL")'"
-		echo
-	fi
 	echo '[[natives]]'
 	echo "path = '$(win_path "$PRODUCT_GAMEDIR")'"
 	echo
