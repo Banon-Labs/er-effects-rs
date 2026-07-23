@@ -392,12 +392,16 @@ fn resolve_mode() -> DriveMode {
         return MODES[cached];
     }
     // Product loaded -> COMPANION: stand down (real runtime condition, not a marker file). Only when
-    // running standalone does the mode flag select a standalone drive pattern.
-    let mode = if crate::game_mem::product_dll_present() {
-        DriveMode::Passive
-    } else {
-        DriveMode::from_flag()
-    };
+    // running standalone does the mode flag select a standalone drive pattern. EXCEPTION: the force-drive
+    // override (er-harness-force-drive.txt / ER_HARNESS_FORCE_DRIVE) makes the harness drive even with the
+    // product loaded -- the VANILLA agent-driven baseline needs the product's telemetry AND harness drive
+    // (bd VANILLA-BASELINE-blocked-harness-forces-passive-when-product-loaded).
+    let mode =
+        if crate::game_mem::product_dll_present() && !crate::game_mem::force_drive_requested() {
+            DriveMode::Passive
+        } else {
+            DriveMode::from_flag()
+        };
     let idx = match mode {
         DriveMode::BootContinueOnly => 0,
         DriveMode::NativeReloadOnly => 1,

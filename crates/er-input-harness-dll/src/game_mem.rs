@@ -312,6 +312,16 @@ pub fn read_drive_mode_flag() -> String {
         .unwrap_or_default()
 }
 
+/// FORCE-DRIVE override (env `ER_HARNESS_FORCE_DRIVE=1` OR CWD file `er-harness-force-drive.txt`):
+/// make the harness honor its drive-mode flag EVEN when the product DLL is loaded. Default off, so the
+/// samechar-3x product run keeps the companion/Passive stand-down (the product owns the drive there).
+/// The VANILLA agent-driven baseline needs this: it loads the product for its telemetry (autoload
+/// disarmed via telemetry-only) but the HARNESS must drive the native Continue -> Quit -> Continue.
+pub fn force_drive_requested() -> bool {
+    matches!(std::env::var("ER_HARNESS_FORCE_DRIVE").as_deref(), Ok("1"))
+        || std::path::Path::new("er-harness-force-drive.txt").exists()
+}
+
 /// Compact one-line state snapshot for the log (mirrors the trace DLL's `snapshot()` habit).
 pub fn snapshot() -> String {
     let base = game_base().unwrap_or(0);

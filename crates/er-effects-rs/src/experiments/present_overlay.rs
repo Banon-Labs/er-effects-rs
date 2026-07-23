@@ -205,9 +205,13 @@ unsafe extern "system" fn present_hook(this: *mut c_void, sync: u32, flags: u32)
     if this_u == GAME_SWAPCHAIN.load(Ordering::SeqCst) {
         let base = GAME_BASE.load(Ordering::SeqCst);
         if base != 0 {
-            // Time the boot-view composite (the suspected per-frame WORK stall on reloads).
+            // Time the boot-view composite (the suspected per-frame WORK stall on reloads). Gated on the
+            // overlay being a product feature this run: telemetry-only measurement records cadence (below)
+            // but SKIPS the flow-modifying composite so the vanilla baseline stays flow-faithful.
             let tc = std::time::Instant::now();
-            unsafe { composite_on_game_swapchain(base, this_u) };
+            if portrait_overlay_enabled() {
+                unsafe { composite_on_game_swapchain(base, this_u) };
+            }
             er_telemetry::counters::COMPOSITE_LAST_US
                 .store(tc.elapsed().as_micros() as usize, Ordering::SeqCst);
         }
@@ -249,8 +253,13 @@ unsafe extern "system" fn present1_hook(
     if this_u == GAME_SWAPCHAIN.load(Ordering::SeqCst) {
         let base = GAME_BASE.load(Ordering::SeqCst);
         if base != 0 {
+            // Composite gated on the overlay being a product feature this run; telemetry-only measurement
+            // records cadence (below) but skips the flow-modifying composite (vanilla baseline stays
+            // flow-faithful). See the Present(8) detour for the rationale.
             let tc = std::time::Instant::now();
-            unsafe { composite_on_game_swapchain(base, this_u) };
+            if portrait_overlay_enabled() {
+                unsafe { composite_on_game_swapchain(base, this_u) };
+            }
             er_telemetry::counters::COMPOSITE_LAST_US
                 .store(tc.elapsed().as_micros() as usize, Ordering::SeqCst);
         }
@@ -1072,7 +1081,13 @@ unsafe fn vtable_swap_slot(slot_addr: usize, new_fn: usize) -> Option<usize> {
 /// its REAL Present(8)/Present1(22) via a vtable-slot swap (NOT a MinHook code patch -- that reports MH_OK
 /// but never fires on Wine's dxgi.dll). One-shot (latched on success); bounded retries.
 pub(crate) unsafe fn try_install_game_present_hook(base: usize) {
-    if !portrait_overlay_enabled()
+    // Install the present detour for the overlay composite OR for telemetry-only CADENCE MEASUREMENT.
+    // The detour records present cadence (record_present_frame_stats) read-only every frame; the
+    // flow-modifying composite call is separately gated on portrait_overlay_enabled() below. So a
+    // flow-faithful telemetry-only vanilla baseline (overlay off) still gets the present-cadence +
+    // GetFrameStatistics + GX semaphores WITHOUT the overlay composite -- decoupling the instrumentation
+    // from the feature it measures (bd present-cadence-gx-instrumentation-coupled-to-overlay-install-gate).
+    if (!portrait_overlay_enabled() && !crate::experiments::save_override_telemetry_only())
         || crate::experiments::renderdoc_active()
         || PRESENT_HOOK_INSTALLED.load(Ordering::SeqCst) == 0
         || GAME_PRESENT_HOOKED.load(Ordering::SeqCst) != 0

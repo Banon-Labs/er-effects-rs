@@ -81,6 +81,42 @@ native continue+reload with no user input — replacing the deprecated user-driv
 This is the real Milestone-1 critical path (the vanilla imprint the diff needs), and it is mechanism-ready,
 not blocked.
 
+## Proposal 5 — Decouple the present-cadence / GX instrumentation from the overlay (DONE this session)
+
+**Evidence:** the present-cadence semaphores (`oracle_present_sync_interval` / `refresh_per_present` /
+`qpc_delta` and the GX cmd-queue fields) are written by the present detour, but the detour only installs
+when `portrait_overlay_enabled()` — false under telemetry-only. So a flow-faithful vanilla capture (overlay
+off) reads them as stale/zero, and the fps-cadence comparison that catches the 20 fps is impossible.
+
+**Done (present_overlay.rs, 2026-07-23):** the detour now installs for measurement under telemetry-only too
+(it records cadence read-only every frame), and only the flow-modifying `composite_on_game_swapchain` call is
+gated on the overlay. Instrumentation is decoupled from the feature it measures. *(Compiled; runtime
+validation pending — see Proposal 6's blocker.)*
+
+## Proposal 6 — The vanilla baseline needs the oracle telemetry OUT of the flow-altering product (or a force-drive shim)
+
+**Evidence (this session's vanilla run):** the agent-driven vanilla capture didn't drive — the input-harness
+logged `drive: mode='passive'`. `drive.rs resolve_mode()` forces `Passive` whenever the **product DLL is
+loaded** (the samechar companion design). But the rich `oracle_*` telemetry lives *in the product*, so you
+must load the product to observe those fields — which makes the harness stand down, so nothing drives the
+native Continue, so the game idles at the title. Product-telemetry and harness-driving are mutually exclusive
+under the current architecture.
+
+**Two resolutions:**
+- **(a) pragmatic shim (implemented this session):** a force-drive override (`er-harness-force-drive.txt` /
+  `ER_HARNESS_FORCE_DRIVE`) so the harness honors its drive flag even with the product loaded. Vanilla then =
+  telemetry-only product (autoload disarmed, composite gated off per Proposal 5) + harness drives. Caveat:
+  the product's *other* hooks are still resident, so this is "observation-mostly," not bit-pure vanilla —
+  acceptable under §3a's own allowance ("observe/drive without *significantly* modifying flow"), but worth
+  stating in the doc as the baseline's fidelity level.
+- **(b) ideal architecture (§3a's real intent):** move the rich `oracle_*` telemetry from the flow-altering
+  **product** into the non-flow-altering **er-telemetry-dll** (bd CRATE-CONSOLIDATION-ROADMAP). Then a truly
+  vanilla capture is telemetry-DLL + harness only — no product resident at all. Bigger refactor; the correct
+  long-term home for the acceptance baseline.
+
+**Proposal:** §4 should name which fidelity level the baseline uses. Ship (a) now to unblock Milestone-1, and
+file (b) as the durable follow-up so "vanilla" eventually means *no product DLL in the process at all*.
+
 ---
 
 ### Net
