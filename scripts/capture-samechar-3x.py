@@ -885,10 +885,28 @@ def main() -> int:
         os.environ.get("OBSERVE_SETTLE_TEARDOWN_SECONDS", "45") or "0"
     )
     final_reload_settled_at: float | None = None
-    # GAME-GONE detection (bd WAKE-immediately-when-game-tears-down): if the telemetry file stops updating
-    # (mtime frozen) the game has torn down -- external close, crash, or our own teardown -- so EXIT
-    # IMMEDIATELY instead of riding the observe/max window and leaving a lingering monitor.
-    telemetry_stale_seconds = float(os.environ.get("TELEMETRY_STALE_SECONDS", "12") or "12")
+    # TEARDOWN DETECTION (bd timeout-design-use-DETERMINISTIC-process-exit): the PRIMARY signal is the game
+    # PROCESS, not a fixed timeout. Once eldenring.exe has been seen alive and then disappears, exit
+    # IMMEDIATELY (bounded only by the ~1s process-poll, so a crash at t=0.5s reacts at ~1s, not a flat 12s).
+    # A time value is ONLY a backstop for a HUNG-but-alive game (process present, telemetry frozen).
+    import subprocess as _sp  # noqa: PLC0415
+
+    def _er_alive() -> bool:
+        try:
+            out = _sp.run(
+                ["tasklist.exe", "/FI", "IMAGENAME eq eldenring.exe", "/NH"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            ).stdout
+            return "eldenring.exe" in out.lower()
+        except Exception:
+            return True  # can't determine -> assume alive, never false-exit
+
+    game_seen_alive = False
+    last_proc_check = 0.0
+    proc_check_interval = 1.0
+    hung_stale_seconds = float(os.environ.get("HUNG_STALE_SECONDS", "60") or "60")
     last_mtime: float | None = None
     last_mtime_change = start
 
@@ -898,6 +916,15 @@ def main() -> int:
         if elapsed >= args.max_seconds:
             result = "CAP_REACHED"
             break
+        # PRIMARY: process exit -> immediate teardown (throttled ~1s check).
+        if now - last_proc_check >= proc_check_interval:
+            last_proc_check = now
+            if _er_alive():
+                game_seen_alive = True
+            elif game_seen_alive:
+                result = "GAME_EXITED"
+                break
+        # BACKSTOP: hung-but-alive (process present, telemetry frozen) -- long window, not a primary signal.
         try:
             mtime = os.path.getmtime(telemetry_path)
         except OSError:
@@ -905,8 +932,12 @@ def main() -> int:
         if mtime != last_mtime:
             last_mtime = mtime
             last_mtime_change = now
-        elif now - last_mtime_change > telemetry_stale_seconds and elapsed > 20:
-            result = "TELEMETRY_STALE_GAME_GONE"
+        elif (
+            last_mtime is not None
+            and now - last_mtime_change > hung_stale_seconds
+            and elapsed > 20
+        ):
+            result = "TELEMETRY_FROZEN_HUNG"
             break
 
         t = read_telemetry(telemetry_path)
