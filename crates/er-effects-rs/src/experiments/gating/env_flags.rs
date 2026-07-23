@@ -181,8 +181,25 @@ pub(crate) fn portrait_render_drive_enabled() -> bool {
 }
 /// Product gate for the live loading-screen portrait overlay. This keeps the rendered character portrait
 /// visible during real quick-load runs, but it deliberately does not track the mouse cursor.
+/// MEASUREMENT diagnostic (acceptance §2: no custom overlay UI in the product path -- the composite is
+/// scaffolding). For the Milestone-1 vanilla-parity diff, `er-effects-measure-no-composite.txt` disables
+/// the composite so the product's LOAD path is compared to vanilla WITHOUT the overlay's per-frame fps cost.
+/// Cached (portrait_overlay_enabled runs every present frame, so no per-frame filesystem stat).
+fn measure_no_composite() -> bool {
+    static CACHED: AtomicUsize = AtomicUsize::new(0); // 0=unknown, 1=off, 2=on
+    match CACHED.load(Ordering::Relaxed) {
+        1 => false,
+        2 => true,
+        _ => {
+            let v = std::path::Path::new("er-effects-measure-no-composite.txt").exists();
+            CACHED.store(if v { 2 } else { 1 }, Ordering::Relaxed);
+            v
+        }
+    }
+}
+
 pub(crate) fn portrait_overlay_enabled() -> bool {
-    if autoload_disabled() || native_profile_capture_enabled() {
+    if measure_no_composite() || autoload_disabled() || native_profile_capture_enabled() {
         return false;
     }
     !save_override_telemetry_only()

@@ -110,6 +110,7 @@ PROFILE="$ARTIFACT_DIR/vanilla-reload-agentdriven.me3"
 # MOD_ARMED=1: skip telemetry-only so the PRODUCT is ARMED (autoload + full composite) -- the mod-side of
 # the Milestone-1 A/B diff (vanilla=disarmed run vs mod=armed run, same native reload). Default: disarmed.
 [[ -z "${MOD_ARMED:-}" ]] && : >"$GAME_DIR/er-effects-telemetry-only.txt"
+[[ -n "${NO_COMPOSITE:-}" ]] && : >"$GAME_DIR/er-effects-measure-no-composite.txt"
 # harness drive mode (DRIVE_MODE env, default 'full'): 'full' drives the whole
 # boot->Continue->play->System->Quit->Continue reload; 'boot' drives boot->Continue and holds in-world
 # (no quit) -- use 'boot' for a CLEAN vanilla in-world steady-state window when the reload nav derails.
@@ -150,7 +151,7 @@ cleanup() {
 		[[ "$PRE_ME3_PIDS" == *" $pid "* ]] || taskkill.exe /F /PID "$pid" >/dev/null 2>&1
 	done
 	# Restore: remove vanilla markers so a later product run is not accidentally telemetry-only / driven.
-	rm -f "$GAME_DIR/er-effects-telemetry-only.txt" "$GAME_DIR/er-harness-drive-mode.txt" \
+	rm -f "$GAME_DIR/er-effects-measure-no-composite.txt" "$GAME_DIR/er-effects-telemetry-only.txt" "$GAME_DIR/er-harness-drive-mode.txt" \
 		"$GAME_DIR/er-harness-force-drive.txt" "$GAME_DIR/er-harness-probe-hold-id.txt" "$GAME_DIR/er-harness-os-input.txt" "$GAME_DIR/er-harness-native-quit.txt" 2>/dev/null
 	[[ -f "$ARTIFACT_DIR/er-effects.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-effects.toml.bak" "$GAME_DIR/er-effects.toml"
 }
