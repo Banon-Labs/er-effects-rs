@@ -185,7 +185,7 @@ pub unsafe fn stamp_vk_direct(base: usize, id: u32) {
         .unwrap_or(1)
         .min(PADMAPS_COUNT);
     // One-time diagnostic dump of the resolved structure (so wrong offsets are visible, not fatal).
-    let diag = TREEWALK_DIAG.swap(1, Ordering::SeqCst) == 0;
+    let diag = false; // BISECT: DIAG logging disabled (test if the 6-line burst breaks the log)
     if diag {
         harness_log!(
             "treewalk DIAG: manager=0x{manager:x} padmaps_count={ndev} target=0x{target:x}"
