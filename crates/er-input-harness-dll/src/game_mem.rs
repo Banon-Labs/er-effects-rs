@@ -149,11 +149,14 @@ pub fn now_loading() -> bool {
     unsafe { read_usize(helper + NOW_LOADING_FLAG_ED_OFFSET) }.is_some_and(|v| (v & 0xff) != 0)
 }
 
-// FLIP-CAP semaphore (bd MECHANISM-20fps-cap-is-csflipperimp-fixedspf-0.05): the load2/load3 20fps is
-// CSFlipperImp.fixed_spf = 0.05 (the game's own loading-mode frame cap), held while the load hasn't
-// fully completed. This is the DECISIVE per-phase fps signal for the vanilla-vs-product differential
-// loop -- far sharper than raw fps. CSFlipperImp singleton base+0x4589ad8; fixed_spf f32@+0x1c
-// (0.05=20, 0.0167=60, 0.0333=30, 0.0083=120), mode_current i32@+0xc.
+// FLIP-TIMING semaphore. CSFlipperImp singleton base+0x4589ad8; fixed_spf f32@+0x1c is the game's
+// frame-time TARGET (0.0167=60, 0.05=20, 0.0333=30, 0.0083=120), mode_current i32@+0xc.
+// CORRECTION (bd DECISIVE-reload-20fps-is-render-bound-not-throttle-syncinterval1-refresh4-2026-07-22,
+// build a38dccd): the reload 20fps is NOT a fixed_spf=0.05 cap. Measured across the full reload movable
+// windows fixed_spf stays 0.0167 (60fps TARGET) while task_delta(+0x268, actual)=0.05; the game passes
+// SyncInterval=1 to Present yet GetFrameStatistics shows 4 refreshes/present -> the frame is RENDER-BOUND
+// (not ready within 1 vblank), not a loading-mode cap. Keep fixed_spf as a phase signal (target vs actual
+// divergence) but do NOT treat 0.05 as the cap mechanism; the earlier fixedspf-0.05 memory is refuted.
 const CS_FLIPPER_SINGLETON_RVA: usize = 0x4589ad8;
 const CS_FLIPPER_FIXED_SPF_1C_OFFSET: usize = 0x1c;
 const CS_FLIPPER_MODE_CURRENT_C_OFFSET: usize = 0xc;

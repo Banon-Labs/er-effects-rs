@@ -126,13 +126,16 @@ fn write_game_module_oracles(body: &mut String) {
                 "  \"oracle_system_step_state\": {sv},\n  \"oracle_system_step_label\": \"{sl}\",\n"
             ));
         }
-        // FLIP-TIMING oracle (RE 2026-07-21, bd MECHANISM-20fps-cap-is-csflipperimp-fixedspf): the
-        // load2/load3 20fps flat cap is the GAME's own frame limiter -- CSFlipperImp::UpdateFlipTiming
-        // sleeps each frame until elapsed >= fixedSpf. fixedSpf=0.05 (FLIP_20FPS_ADAPTIVE, or
-        // useDynamicFpsLock+dynamicFpsLock=20) => 20fps; boot runs 60/120. oracle_flip_fixed_spf is
-        // DECISIVE (0.05=cap vs 0.0167=60); last_frame_time distinguishes CAP (0.05) from a stall
-        // (fixed_spf small but last=0.05). Focus is provably irrelevant. Singleton at base+0x4589ad8
-        // (same 0x14458_9xxx singleton table as IoDevice/DELAY_DELETE/ACCEPT_BYTE).
+        // FLIP-TIMING oracle. CSFlipperImp singleton at base+0x4589ad8 (same 0x14458_9xxx singleton
+        // table as IoDevice/DELAY_DELETE/ACCEPT_BYTE). fixed_spf(+0x1c)=frame-time TARGET,
+        // task_delta(+0x268)=actual measured delta, mode_current(+0xc), use_dynamic_lock(+0x2c8).
+        // CORRECTION (bd DECISIVE-reload-20fps-is-render-bound-not-throttle-syncinterval1-refresh4,
+        // build a38dccd): the reload 20fps is NOT a fixedSpf=0.05 cap and NOT the dynamic FPS lock.
+        // Measured: fixed_spf stays 0.0167 (60fps TARGET) and use_dynamic_lock=0 through both 20fps
+        // reloads; only task_delta rises to 0.05. The game passes SyncInterval=1 to Present but
+        // GetFrameStatistics reports 4 refreshes/present (oracle_present_refresh_per_present_x100=400)
+        // -> the frame is RENDER-BOUND, not sleep-capped. The 2026-07-21 fixedspf-0.05 cap claim is
+        // refuted; keep fixed_spf vs task_delta as the target-vs-actual divergence signal.
         {
             const CS_FLIPPER_SINGLETON_RVA: usize = 0x4589ad8;
             let flipper =
