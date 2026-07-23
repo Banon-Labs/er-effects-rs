@@ -140,7 +140,7 @@ pub(crate) unsafe fn suppress_loading_cover_tick(base: usize) {
 /// per-frame look-at hook + draw + pixel oracle then re-engage on the loading screen automatically (they
 /// all key off this table). Latched per load (reset when now-loading drops) so there's no per-frame churn.
 pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
-    if !portrait_lookat_enabled() {
+    if !portrait_overlay_enabled() {
         return;
     }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;

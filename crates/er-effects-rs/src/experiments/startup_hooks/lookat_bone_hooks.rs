@@ -337,17 +337,14 @@ unsafe fn profile_offscreen_gx_resources_ready(off: usize) -> bool {
     PROFILE_OFFSCREEN_SETTLE_COUNT.fetch_add(1, Ordering::SeqCst) + 1 >= PROFILE_OFFSCREEN_SETTLE_FRAMES
 }
 
-/// REALTIME LOOK-AT DRAW TICK -- registered as a recurring task in a DRAW phase
+/// LIVE LOADING PORTRAIT DRAW TICK -- registered as a recurring task in a DRAW phase
 /// (`CSTaskGroupIndex::GameSceneDraw`), so it runs on the render thread INSIDE an actively-recording GX
 /// frame (unlike the FrameBegin game task, where the GX subcontext pool is still empty -> a black no-op).
-/// Each frame: read the live cursor, drive every registered profile holder's Head/Neck/Spine2 toward it
-/// (drift-free `base ⊗ delta`) + recompute model-space, then call the profile draw step to rasterize ALL
-/// portraits' offscreen RTs with the fresh pose. The engine only redraws thumbnails on profile
-/// data-change, so without this they track the cursor only at the ~4s model-rebuild cadence; here they
-/// track every frame. The draw step fail-closes (the GX pool pop returns 0 -> no-op) if a phase ever
-/// lacks a live frame, so it can never crash from being driven off a recording frame.
+/// Each frame: keep the loaded-character portrait renderer alive, run the safe draw/publish pump, and
+/// deliberately publish a neutral pose. Cursor/head tracking is retired; this path never reads or warps
+/// the OS cursor for portrait motion.
 pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4TaskData) {
-    if !portrait_lookat_enabled() {
+    if !portrait_overlay_enabled() {
         return;
     }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -373,32 +370,10 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
     // Ensure the per-frame push hook is installed -- it writes our pose into the importer + lets the
     // engine propagate it to the GPU-skinned submodels each frame (the actual head movement).
     install_per_frame_push_hook();
-    let frame = PROFILE_LOOKAT_DRAW_FRAME.fetch_add(1, Ordering::SeqCst);
-    // PUBLISH the drive angle for the per-frame push hook to consume: a deterministic SINUSOID in selftest
-    // (zero-input, reproducible -> the pixel oracle proves the head moves with the driven angle), else the
-    // live cursor (the product input). The pose WRITE happens in the push hook; here we only publish + draw.
-    let (yaw, pitch) = if PROFILE_CURSOR_SWEEP_ON.load(Ordering::SeqCst) {
-        // CURSOR-TRACKING PROOF: deterministically warp the OS cursor to a held L/C/R position over the ER
-        // window, THEN read it back through the SAME GetCursorPos path the product uses, and drive the head
-        // from that read cursor (no sinusoid). Zero foreign input: the DLL self-drives the cursor at the
-        // exact stage the look-at polls it. The yaw lands in a left/center/right bucket -> the bucket dump
-        // below captures the head at each real cursor position.
-        let hold = (frame / CURSOR_SWEEP_HOLD_FRAMES) % CURSOR_SWEEP_TARGETS_X.len();
-        drive_cursor_to_window_fraction(CURSOR_SWEEP_TARGETS_X[hold], 0.5);
-        let (cx, cy) = read_cursor_normalized().unwrap_or((0.0, 0.0));
-        PROFILE_LOOKAT_LAST_CURSOR.store(pack_cursor(cx, cy), Ordering::SeqCst);
-        (cx * LOOKAT_YAW_SIGN, cy * LOOKAT_PITCH_SIGN)
-    } else if PROFILE_LOOKAT_SELFTEST_ON.load(Ordering::SeqCst) {
-        let t = frame as f32 * LOOKAT_SELFTEST_W;
-        (
-            t.sin() * LOOKAT_SELFTEST_YAW_AMP * LOOKAT_YAW_SIGN,
-            (t * 0.7).sin() * LOOKAT_SELFTEST_PITCH_AMP * LOOKAT_PITCH_SIGN,
-        )
-    } else {
-        let (cx, cy) = read_cursor_normalized().unwrap_or((0.0, 0.0));
-        PROFILE_LOOKAT_LAST_CURSOR.store(pack_cursor(cx, cy), Ordering::SeqCst);
-        (cx * LOOKAT_YAW_SIGN, cy * LOOKAT_PITCH_SIGN)
-    };
+    let _frame = PROFILE_LOOKAT_DRAW_FRAME.fetch_add(1, Ordering::SeqCst);
+    // Cursor/head tracking is retired. Keep the portrait render/readback/publish pump alive, but publish
+    // a neutral pose drive and never read or warp the OS cursor for portrait motion.
+    let (yaw, pitch) = (0.0f32, 0.0f32);
     PROFILE_LOOKAT_YAW_BITS.store(yaw.to_bits() as usize, Ordering::SeqCst);
     PROFILE_LOOKAT_PITCH_BITS.store(pitch.to_bits() as usize, Ordering::SeqCst);
     // Rasterize all profile offscreen RTs on the render thread inside the live GX frame, so the pose the
@@ -820,7 +795,7 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                             PROFILE_CONTENT_EXCL_DUMPED.store(0, Ordering::SeqCst);
                         }
                     }
-                    // LIVE TRACKING -- EVERY FRAME. FIX (2026-06-30): use readback_offscreen_fast, which
+                    // LIVE PORTRAIT PUBLISH -- EVERY FRAME. FIX (2026-06-30): use readback_offscreen_fast, which
                     // RE-RESOLVES the live content RT fresh each frame (find_d3d12_resource(off)) -- the exact
                     // path the in-process RT sample uses (proven nonblack ~63% with the clear disabled) -- but
                     // copies via the cached RB_FAST_* objects so it still succeeds every frame. The previous
@@ -933,7 +908,6 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                                 color_from_bundle: staged.color_from_bundle,
                                 incarnation,
                                 pipeline_gen,
-                                yaw,
                                 anim_t,
                                 dt_cap,
                                 dt_own,

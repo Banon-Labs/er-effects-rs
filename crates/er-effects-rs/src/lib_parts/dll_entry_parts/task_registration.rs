@@ -569,17 +569,10 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
             BOOTSTRAP_EVENT_GAME_TASK_RECURRING_REGISTERED,
             BOOTSTRAP_DETAIL_DONE,
         );
-        // REALTIME PORTRAIT LOOK-AT draw-phase SWEEP: register the realtime draw task in EACH candidate
-        // DRAW phase, so it runs on the render thread inside an actively-recording GX frame (where the
-        // profile draw step's GX subcontext-pool pop succeeds -- FrameBegin, above, is before the frame
-        // records, so a draw there is a black no-op). Each registration bumps its own per-frame tick
-        // counter; only the phase whose index == PROFILE_LOOKAT_SELECTED_PHASE actually rasterizes, so
-        // exactly one phase draws per frame. The active phase is switchable live via
-        // er-effects-lookat-phase.txt (no recompile), to find one that ticks per-frame at the menu
-        // (GameSceneDraw measured ~11% -- world-gated). We own these tasks (cancel() is a fromsoftware-rs
-        // no-op + self-leaked Arc), so the chosen one persists past Continue = the loading-screen port.
-        // Order MUST match constants::LOOKAT_DRAW_PHASE_NAMES.
-        let lookat_phases = [
+        // LIVE LOADING PORTRAIT render/publish pump: register in each candidate DRAW phase so exactly
+        // one active phase can run on the render thread inside a live GX frame. This keeps the portrait
+        // visible/refreshing during loading; cursor/head tracking remains retired.
+        let portrait_phases = [
             CSTaskGroupIndex::Draw_Pre,
             CSTaskGroupIndex::GraphicsStep,
             CSTaskGroupIndex::DrawStep,
@@ -589,7 +582,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
             CSTaskGroupIndex::DrawEnd,
             CSTaskGroupIndex::Draw_Post,
         ];
-        for (i, phase) in lookat_phases.into_iter().enumerate() {
+        for (i, phase) in portrait_phases.into_iter().enumerate() {
             cs_task.run_recurring(
                 move |task_data: &FD4TaskData| unsafe {
                     profile_lookat_phase_draw_tick(i, task_data)
@@ -597,7 +590,6 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 phase,
             );
         }
-        // Sweep diagnostic + live selector re-read, paced by a FrameBegin task (ticks every frame).
         cs_task.run_recurring(
             move |_task_data: &FD4TaskData| profile_lookat_phase_diag_tick(),
             CSTaskGroupIndex::FrameBegin,

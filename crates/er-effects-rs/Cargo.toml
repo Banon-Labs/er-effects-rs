@@ -28,7 +28,7 @@ er-tpf = { path = "../er-tpf" }
 # the full asset (er-effects-rs-h7x). Pure-Rust, std-only.
 er-gfx = { path = "../er-gfx" }
 # ERPX portrait-dump container (encode side): single source of truth for the debug RGBA dump format
-# the look-at proof writes. Core-only (default-features off) so the DLL never pulls the host `png` dep.
+# portrait/debug proof tooling writes. Core-only (default-features off) so the DLL never pulls the host `png` dep.
 erpx-rs = { path = "../erpx-rs", default-features = false }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 pelite = "0.10"
