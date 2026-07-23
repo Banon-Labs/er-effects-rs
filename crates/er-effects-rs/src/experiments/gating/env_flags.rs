@@ -328,11 +328,12 @@ pub(crate) fn native_load_enabled() -> bool {
 /// that should not auto-Continue). Mirrors the splash-skip de-gating precedent
 /// (`user-pref-too-many-env-file-gates-default-on-product-2026-06-23`).
 pub(crate) fn autoload_disabled() -> bool {
-    // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): the always-on product autoload no
-    // longer honors an ER_EFFECTS_NO_AUTOLOAD env/marker opt-out -- env/marker feature gates are
-    // forbidden. Autoload is unconditionally the default DLL behavior (product default was already on).
-    // If a non-autoload/overlay-only mode is needed, drive it from me3 profile config, not an env/marker.
-    false
+    // DE-GATED for PRODUCT (deprecate-env-marker-gate-allowlists-2026-07-19): autoload is unconditionally
+    // the product default. DIAGNOSTIC-ONLY marker (er-effects-diag-no-autoload.txt) disables it for the
+    // clean-A/B step-4 test (armed + autoload-off + DRIVE_MODE=full -> reload via harness-Continue epoch1
+    // like vanilla, isolating arming from the epoch1-path confound; bd
+    // STEP4-4fps-AB-is-STRUCTURALLY-CONFOUNDED). This is a measurement override, NOT a product feature gate.
+    std::path::Path::new("er-effects-diag-no-autoload.txt").exists()
 }
 /// PRODUCT DIRECTION (2026-07-04): the ProfileSelect / Load-Game menu shows a **stats panel** instead
 /// of the character portrait in each 128x128 save-slot face box. When this is on (the product default)
