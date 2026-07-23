@@ -239,7 +239,9 @@ fn lock_prev() -> std::sync::MutexGuard<'static, Option<(f32, f32, f32)>> {
 pub(crate) fn tick(pos: (f32, f32, f32)) {
     // INJECT-ON / INJECT-OFF window sizes. OFF_TAIL = the last N OFF frames, measured after the char
     // has decelerated, so residual momentum just after releasing the stick isn't miscounted as movement.
-    const ON_FRAMES: usize = 30;
+    // ON must cover the full PROVEN bar (ot >= 40) in ONE burst: a shorter window forces a second
+    // visible movement interval before the verdict can latch (user 2026-07-22: one interval only).
+    const ON_FRAMES: usize = 45;
     const OFF_FRAMES: usize = 20;
     const CYCLE: usize = ON_FRAMES + OFF_FRAMES;
     const OFF_TAIL: usize = 8;
@@ -348,8 +350,10 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
         let fm = OFF_TAIL_MOVED.load(Ordering::Relaxed);
         let verdict = if ft >= OFF_TAIL && fm * 100 > 40 * ft {
             3 // CONTAMINATED: char moves while we are NOT injecting -> external input present
-        } else if ot >= 40 && om * 100 >= 70 * ot && (ft == 0 || fm * 100 <= 15 * ft) {
-            1 // PROVEN: moved under our stick, still (mostly) in the OFF tail when released
+        } else if ot >= 40 && om * 100 >= 70 * ot && ft >= OFF_TAIL && fm * 100 <= 15 * ft {
+            1 // PROVEN: moved under our stick, still (mostly) in the OFF tail when released.
+        // The off-tail is REQUIRED (ft >= OFF_TAIL): with ON_FRAMES >= the ot bar, ot can hit 40
+        // mid-burst with ft==0, and latching there would skip the stops-when-released check.
         } else if ot >= 90 && om * 100 <= 10 * ot {
             2 // DISPROVEN: many ON frames injected, char barely moved -> injection ineffective
         } else {
