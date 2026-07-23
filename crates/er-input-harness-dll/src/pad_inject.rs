@@ -147,7 +147,7 @@ unsafe fn inject_vk(manager: usize, dev: usize) {
 /// injection is too sparse to drive the menu; the menu READS `source+0x88` every frame, so the drive must
 /// WRITE it every frame. `source = *(*(base+FD4_PAD_MANAGER_RVA)+0x18)` (device 0). `id`=0 (or out of
 /// range) is a no-op release. Guarded by HEAP_LO on every deref; never panics.
-pub unsafe fn stamp_vk_direct(base: usize, id: u32) {
+pub unsafe fn stamp_vk_direct(base: usize, id: u32, val: u8) {
     if !(VK_ID_MIN..=VK_ID_MAX).contains(&id) || base < HEAP_LO {
         return;
     }

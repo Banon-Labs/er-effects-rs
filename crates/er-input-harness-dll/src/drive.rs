@@ -95,7 +95,7 @@ fn probe_menu_tick(im: usize, frame: u64) -> bool {
         // write source+0x88[hold] every frame so the menu consistently sees the held key.
         set_vk_id(hold);
         if let Some(base) = crate::game_mem::game_base() {
-            unsafe { crate::pad_inject::stamp_vk_direct(base, hold) };
+            unsafe { crate::pad_inject::stamp_vk_direct(base, hold, 1) };
         }
         if frame % PROBE_LOG_EVERY == 0 {
             let (bf, _wf, _gs, _ms, _o) = crate::pad_inject::pad_snapshot();
@@ -141,10 +141,10 @@ fn probe_menu_tick(im: usize, frame: u64) -> bool {
         set_vk_id(if held { id } else { 0 });
         // PER-FRAME stamp (now cached: resolves the pad once, then a fault-safe write/frame -- no per-frame
         // RPM tree-walk that stopped the drive, bd BISECT-stamp_vk_direct-stops-drive).
-        if held {
-            if let Some(base) = crate::game_mem::game_base() {
-                unsafe { crate::pad_inject::stamp_vk_direct(base, id) };
-            }
+        // EDGE test: write 1 on held frames, 0 on release -> clean 0->1 edges the menu can repeat on
+        // (bd DECISIVE-source88... : held-1-only gave no edges). Every frame, cached pad = cheap.
+        if let Some(base) = crate::game_mem::game_base() {
+            unsafe { crate::pad_inject::stamp_vk_direct(base, id, if held { 1 } else { 0 }) };
         }
         if local % PROBE_LOG_EVERY == 0 {
             let (bf, wf, gsrc, msrc, _obs) = crate::pad_inject::pad_snapshot();
