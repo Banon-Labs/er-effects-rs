@@ -30,6 +30,10 @@ const BUILDER_A_RVA: usize = 0x240e70; // FUN_140240f20 (dump): rebuilds source+
 const BUILDER_B_RVA: usize = 0x241130; // FUN_1402411e0 (dump): twin builder (second device/slot)
 const WRITER_RVA: usize = 0x26634a0; // FUN_142663490 (dump): writes source+0x88[id-1000]=1 per down key
 const FD4_PAD_MANAGER_RVA: usize = 0x485dc20;
+/// FUN_1402413f0 (deobf; dump FUN_1402414a0): CSInGamePad* accessor(FD4PadManager*, deviceIndex). A
+/// padMaps MAP lookup (bounds-checked, returns 0 out of range) -- the correct way to get a device's
+/// CSInGamePad, since padMaps is a tree not a flat array (bd CORRECTION-inworld-menu-injection-NOT-solved).
+const CS_INGAME_PAD_ACCESSOR_RVA: usize = 0x2413f0;
 const PAD_MGR_DEVICES_18_OFFSET: usize = 0x18;
 const VK_ARRAY_88_OFFSET: usize = 0x88;
 const VK_ID_MIN: u32 = 1000;
@@ -142,6 +146,14 @@ pub unsafe fn stamp_vk_direct(base: usize, id: u32) {
     if manager < HEAP_LO {
         return;
     }
+    // padMaps is a MAP (red-black tree), NOT a flat array, so `*(manager+0x18+dev*8)` resolves the WRONG
+    // object and writes never reach the menu. CALLING the game accessor FUN_1402413f0(manager,dev) DID
+    // resolve the real pad (run9 msrc=0x1bdedf31200) but FROZE the game after one frame -- the accessor
+    // takes an input-system lock our CSTaskImp task deadlocks on (bd CORRECTION-inworld-menu-injection-NOT-
+    // solved / accessor-call-hangs). So neither path drives the menu yet. Keep the (harmless) device-0
+    // flat write as a placeholder; the real fix is to SAFELY replicate the padMaps lookup in Rust (read the
+    // tree, no game call) OR find the higher menu-input layer the pause menu actually reads.
+    let _ = CS_INGAME_PAD_ACCESSOR_RVA;
     let source = unsafe { *((manager + PAD_MGR_DEVICES_18_OFFSET) as *const usize) };
     if source < HEAP_LO {
         return;
