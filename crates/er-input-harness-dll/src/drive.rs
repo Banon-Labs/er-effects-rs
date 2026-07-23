@@ -433,8 +433,11 @@ impl DriveMode {
         // native-return-to-title) -- input can't reach the Scaleform menu, so no OpenPauseMenu/Nav/Tab/Quit
         // input nav; write the native request, then wait for the native teardown to title.
         const QUIT_FLOW: [Phase; 2] = [Phase::NativeQuit, Phase::QuitTeardown];
-        // reload: assumes already in-world; native quit-to-title -> reload Continue.
+        // reload: WAIT for in-world first (so the PRODUCT's own autoload -- mod-side A/B, MOD_ARMED -- can
+        // reach in-world before we act), then native quit-to-title -> reload Continue. The leading
+        // WaitLoadIn is a no-input observe, so it is harmless when the harness itself drove the load.
         const RELOAD: &[Phase] = &[
+            Phase::WaitLoadIn,
             QUIT_FLOW[0],
             QUIT_FLOW[1],
             Phase::PressAnyButton,
