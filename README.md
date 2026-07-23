@@ -168,9 +168,9 @@ Common quick-load files/config:
 | `er-effects-boot-background.rgba` | Game-directory developer/power-user predecoded screenshot override; not required for production local Steam screenshot discovery. |
 
 Important experimental/probe files exist too (`er-effects-force-profile-render.txt`,
-`er-effects-portrait-lookat.txt`, `er-effects-portrait-render-drive.txt`, etc.).
-Those are for controlled runtime probes and are not the minimal quick-load
-release surface.
+`er-effects-portrait-render-drive.txt`, etc.). Those are for controlled runtime probes
+and are not the minimal quick-load release surface. Cursor/head tracking for the
+loading portrait is intentionally not a supported feature.
 
 ## Save-source behavior
 
@@ -243,7 +243,7 @@ entrypoint is:
 
 <!-- md-test: bash-n -->
 ```bash
-bash scripts/run-postcontinue-lookat-smoke.sh
+bash scripts/run-product-continue-direct-probe.sh
 ```
 
 The smoke expects Steam to be running, stages an isolated save/artifact directory,

@@ -755,7 +755,7 @@ pub(crate) fn maybe_capture_portrait_gxtexture(base: usize, slot: i32) {
 /// Read the OS mouse cursor -- which IS the menu cursor ER drives via `GetCursorPos` -- normalized to
 /// the ER window client space: returns `(nx, ny)` where `(0,0)` is the window CENTER, `nx`/`ny` in
 /// roughly `[-1, 1]` (left/up negative, right/down positive). `None` if the window or cursor can't be
-/// resolved. Used to aim the portrait look-at at the cursor. (Cheap pure Win32; no game state touched.)
+/// resolved. Used by menu/input handlers only; portrait cursor tracking is retired. (Cheap pure Win32; no game state touched.)
 fn read_cursor_normalized() -> Option<(f32, f32)> {
     use windows::Win32::Foundation::POINT;
     use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetWindowRect};
@@ -781,38 +781,6 @@ fn read_cursor_normalized() -> Option<(f32, f32)> {
     let ny = ((pt.y - rect.top) as f32 / h) * 2.0 - 1.0;
     // Clamp a little beyond the edges so an off-window cursor saturates rather than flailing.
     Some((nx.clamp(-1.5, 1.5), ny.clamp(-1.5, 1.5)))
-}
-
-/// CURSOR-SWEEP PROOF helper: warp the OS cursor to `(fx, fy)` as a fraction of the Elden Ring window's
-/// client rect (`fx=0.10` left .. `0.90` right; `fy=0.5` mid-height), via `SetCursorPos`. This runs INSIDE
-/// the game process, so it sets the same Wine cursor that [`read_cursor_normalized`]'s `GetCursorPos` reads
-/// back -- a zero-foreign-input self-drive at the exact stage the look-at polls. Logs the first warp +
-/// result. Best-effort: `None` if the window/SetCursorPos is unavailable (the proof then visibly fails:
-/// the head won't move and the buckets won't fill).
-fn drive_cursor_to_window_fraction(fx: f32, fy: f32) -> Option<()> {
-    use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, SetCursorPos};
-    let hwnd = own_window()?;
-    let mut rect = RECT {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
-    };
-    if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
-        return None;
-    }
-    let w = (rect.right - rect.left).max(1) as f32;
-    let h = (rect.bottom - rect.top).max(1) as f32;
-    let x = rect.left + (fx * w) as i32;
-    let y = rect.top + (fy * h) as i32;
-    let ok = unsafe { SetCursorPos(x, y) }.is_ok();
-    if PROFILE_CURSOR_SWEEP_FIRST_WARP.swap(true, Ordering::SeqCst) != true {
-        append_autoload_debug(format_args!(
-            "cursor-sweep: first SetCursorPos({x},{y}) ok={ok} window=[{},{} {}x{}] frac=({fx},{fy})",
-            rect.left, rect.top, w as i32, h as i32
-        ));
-    }
-    ok.then_some(())
 }
 
 /// Hamilton product `a * b` of two `(x, y, z, w)` quaternions (w = scalar, matching `BoneData.q`).
@@ -912,19 +880,8 @@ unsafe fn dump_and_resolve_lookat_bones(bones: usize, count: usize, slot: i32) -
     (head, neck, spine2)
 }
 
-/// Pack a normalized cursor `(cx, cy)` into a usize as two i16 milli-units for telemetry.
-fn pack_cursor(cx: f32, cy: f32) -> usize {
-    let xi = (cx.clamp(-2.0, 2.0) * 1000.0) as i16 as u16 as usize;
-    let yi = (cy.clamp(-2.0, 2.0) * 1000.0) as i16 as u16 as usize;
-    (xi << 16) | yi
-}
-
-/// LOOK-AT LEVER: rotate the loaded character's Head/Neck/Spine2 bones toward the mouse cursor so the
-/// portrait's gaze (eyes welded to the Head bone) follows it. Per tick: reach the pose holder, resolve
-/// + latch the base pose ONCE, read the cursor, write each bone's LOCAL quaternion = `base ⊗ delta`,
-/// then mark every bone's model-space dirty + `isUpdated=false` so the render's `updateBoneModelSpace`
-/// rebuilds the chain (and the head's children) before the offscreen draw. `renderer` must be a
-/// validated live CSMenuProfModelRend. Returns true once a rotation was written.
+/// Retired look-at internals: resolve and cache the loaded character's Head/Neck/Spine2 pose-holder
+/// metadata for diagnostics. Product portrait rendering now publishes a neutral pose and does not use cursor input.
 unsafe fn apply_profile_lookat(renderer: usize, slot: i32) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null;
@@ -939,8 +896,8 @@ unsafe fn apply_profile_lookat(renderer: usize, slot: i32) -> bool {
             // `profile_pose_holder` returns None on ~89% of frames even though the model + its PoseHolder
             // persist. The caller only invokes us for a still-valid (vtable-checked) renderer, so a
             // transient None here is just the throttle -- KEEP the last resolved holder registered so the
-            // draw-phase task can drive + recompute + redraw it EVERY frame (60 Hz tracking), decoupled
-            // from the engine's throttled pose update. A genuinely stale holder (model rebuilt/torn down)
+            // draw-phase task can keep the renderer metadata available, decoupled from the engine's
+            // throttled pose update. A genuinely stale holder (model rebuilt/torn down)
             // is dropped explicitly: the force-rebuild path clears PROFILE_LOOKAT_HOLDERS, and the
             // teardown spare hook owns post-Continue lifetime. Do NOT unregister on transient None.
             return false;
@@ -993,11 +950,8 @@ unsafe fn apply_profile_lookat(renderer: usize, slot: i32) -> bool {
             );
         }
     }
-    // FrameBegin role: resolve + cache the Head/Neck/Spine2 indices (above) and register the holder. The
-    // drive ANGLE is published by the draw-phase task (cursor or selftest sinusoid) -- do NOT publish it
-    // here too, or this FrameBegin cursor value would race/override the draw task's value within a frame
-    // and the per-frame push hook would read the wrong angle. The pose WRITE happens in the per-frame push
-    // hook (which propagates to the GPU-skinned submodels); install it here so it is live once a renderer is.
+    // FrameBegin role: resolve + cache the Head/Neck/Spine2 indices (above) and register the holder.
+    // Product portrait rendering now publishes a neutral pose; the old cursor/selftest drive is retired.
     PROFILE_LOOKAT_HOLDERS[idx].store(holder, Ordering::SeqCst);
     install_lookat_hook();
     install_per_frame_push_hook();

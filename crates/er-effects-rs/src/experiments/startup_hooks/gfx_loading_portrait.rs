@@ -26,7 +26,7 @@
 /// Candidate A is active exactly when the live look-at head path owns the loading portrait (product
 /// default). The head is baked into the forge background; the overlay demotes once it is displayed.
 pub(crate) fn gfx_loading_portrait_enabled() -> bool {
-    portrait_lookat_enabled()
+    portrait_overlay_enabled()
 }
 
 /// Bare `MENU_Load_NNNNN` symbol of the artwork the now-loading movie is CURRENTLY displaying, read from
@@ -135,7 +135,7 @@ fn blend_top_left(dst: &mut [u8], dw: u32, dh: u32, src: &[u8], sw: u32, sh: u32
     }
 }
 
-/// Build the forged now-loading background TPF for `symbol` on the lookat path: aspect-cover the boot
+/// Build the forged now-loading background TPF for `symbol` on the live-portrait overlay path: aspect-cover the boot
 /// background (or a neutral checker) into the visible top-left sub-rect of a 2:1 texture (centre-crop, no
 /// stretch), then -- once the live head has been captured -- alpha-blend the head (also aspect-cover into
 /// the same sub-rect) over it. Records `symbol` as head-baked so the updater can demote the overlay when

@@ -237,10 +237,6 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     } else {
         release_input_block_now();
     }
-    // Session-local sort defaults: CSMenuSystemSaveLoad initializes the target
-    // categories to Item Type every process; write once so vanilla remembers the
-    // configured Order-of-Acquisition defaults across later character loads.
-    apply_default_menu_sort_preferences_once();
     // GameMan field transition trace (change-detected): captures the STABLE boot-load
     // trajectory and the BOUNCE switch-load trajectory in one run so they can be diffed to
     // find which GameMan field re-triggers the title post-load. Runs every frame; the
@@ -648,10 +644,10 @@ pub(crate) fn install_title_visual_startup_hooks() {
     // It is fail-open (non-matching symbols/build failures tail-call original). Default behavior now keeps
     // the selected boot background continuous through the native loading GFX background; users can opt out
     // with `persist_boot_background_to_loading_screen = false` in DLL-adjacent er-effects.toml. On the
-    // portrait-lookat path, only install when a real background source exists, so a no-image run does not
+    // live-portrait overlay path, only install when a real background source exists, so a no-image run does not
     // accidentally forge the diagnostic checker behind the live portrait overlay.
     let persist_loading_bg = crate::config::persist_boot_background_to_loading_screen_enabled();
-    if !portrait_lookat_enabled() || (persist_loading_bg && boot_bg_image_rgba_clone().is_some()) {
+    if !portrait_overlay_enabled() || (persist_loading_bg && boot_bg_image_rgba_clone().is_some()) {
         START_LOADING_BG_REPLACE_BIND.call_once(|| {
             let _ = std::thread::Builder::new()
                 .name("er-effects-loading-bg-portrait".to_owned())
@@ -660,8 +656,8 @@ pub(crate) fn install_title_visual_startup_hooks() {
     }
     // er-effects-rs-jsm PIVOT: suppress the native loading tips (our overlay renders player-stats text
     // instead). Install at ATTACH -- BEFORE the KnowledgeLoadingScreen ctor's one-shot initial tip (~15s),
-    // else the first tip is already set and only later cycles are suppressed. Lookat (feature) path only.
-    if portrait_lookat_enabled() {
+    // else the first tip is already set and only later cycles are suppressed. Live portrait overlay path only.
+    if portrait_overlay_enabled() {
         START_TIP_SUPPRESSION.call_once(|| {
             let _ = std::thread::Builder::new()
                 .name("er-effects-tip-suppress".to_owned())
@@ -680,7 +676,7 @@ pub(crate) fn install_title_visual_startup_hooks() {
     // swapchain backbuffer when the now-loading screen is up (the in-pipeline forge/Scaleform routes cannot
     // drive the displayed image). Install only on the portrait path (diagnostic), via the dummy-swapchain
     // vtable technique. Phase 1 is log-only (proves the hook fires) before any backbuffer write.
-    if portrait_lookat_enabled() {
+    if portrait_overlay_enabled() {
         START_PRESENT_OVERLAY.call_once(|| {
             let _ = std::thread::Builder::new()
                 .name("er-effects-present-overlay".to_owned())

@@ -19,7 +19,6 @@ er-game-base = { path = "../er-game-base", features = ["game-types"] }
 # Telemetry subsystem (extraction in progress). Product depends on the lib; the
 # standalone er-telemetry-dll is a separate cdylib shell over the same lib.
 er-telemetry = { path = "../er-telemetry" }
-er-effects-data = { path = "../effects-data" }
 er-save-loader = { path = "../er-save-loader" }
 # In-memory texture-payload builder: portrait pixels -> uncompressed R8G8B8A8 DDS -> TPF003 blob,
 # fed to the game's in-memory TPF factory to replace the now-loading background. Pure-Rust, std-only.
@@ -29,7 +28,7 @@ er-tpf = { path = "../er-tpf" }
 # the full asset (er-effects-rs-h7x). Pure-Rust, std-only.
 er-gfx = { path = "../er-gfx" }
 # ERPX portrait-dump container (encode side): single source of truth for the debug RGBA dump format
-# the look-at proof writes. Core-only (default-features off) so the DLL never pulls the host `png` dep.
+# portrait/debug proof tooling writes. Core-only (default-features off) so the DLL never pulls the host `png` dep.
 erpx-rs = { path = "../erpx-rs", default-features = false }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 pelite = "0.10"

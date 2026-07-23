@@ -171,13 +171,6 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     if lite_mode() {
                         return;
                     }
-                    let discarded_effect_triggers = discard_pending_effect_trigger_keys();
-                    if discarded_effect_triggers != 0 {
-                        state.last_driver_command = Some(format!(
-                            "effect-trigger: discarded {discarded_effect_triggers} pre-load keypresses"
-                        ));
-                    }
-                    publish_effect_selector_overlay_text(&mut state);
                     unsafe { system_quit_profile_select_top_menu_tick() };
                     // Product autoload: run the native title open-menu predicate + minimal
                     // native save-load core from the recurring game task, before the idx10
@@ -577,36 +570,8 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     state.expected_animation_seen = true;
                 }
                 state.last_write_idx = Some(observation.write_idx);
-                apply_pending_effect_work(player, &mut state);
-
-                remove_requested_calls(player, &mut state);
-                process_driver_command(player, &mut state);
-                poll_live_effect_catalogs(player, &mut state);
-                poll_live_effect_setting(player, &mut state);
-                consume_effect_hotkeys(player, &mut state);
-                publish_effect_selector_overlay_text(&mut state);
-
-                let appear_playing = observation.current_animation_id == Some(APPEAR_ANIMATION_ID);
-                if !appear_playing {
-                    state.applied_for_current_appear = false;
-                }
-
-                let should_apply_for_appear = (observation.appear_newly_queued || appear_playing)
-                    && !state.applied_for_current_appear;
-                let should_apply = should_apply_for_appear || state.manual_apply_requested;
-                state.manual_apply_requested = false;
-
-                if should_apply_for_appear {
-                    state.applied_for_current_appear = true;
-                }
-
-                if should_apply {
-                    apply_selected_calls(player, &mut state);
-                }
 
                 process_global_driver_command(&mut state);
-                refresh_call_status(player, &mut state);
-                reapply_expired_enabled_calls(player, &mut state);
                 write_telemetry_throttled(&mut state, true);
             },
             CSTaskGroupIndex::FrameBegin,
@@ -615,17 +580,10 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
             BOOTSTRAP_EVENT_GAME_TASK_RECURRING_REGISTERED,
             BOOTSTRAP_DETAIL_DONE,
         );
-        // REALTIME PORTRAIT LOOK-AT draw-phase SWEEP: register the realtime draw task in EACH candidate
-        // DRAW phase, so it runs on the render thread inside an actively-recording GX frame (where the
-        // profile draw step's GX subcontext-pool pop succeeds -- FrameBegin, above, is before the frame
-        // records, so a draw there is a black no-op). Each registration bumps its own per-frame tick
-        // counter; only the phase whose index == PROFILE_LOOKAT_SELECTED_PHASE actually rasterizes, so
-        // exactly one phase draws per frame. The active phase is switchable live via
-        // er-effects-lookat-phase.txt (no recompile), to find one that ticks per-frame at the menu
-        // (GameSceneDraw measured ~11% -- world-gated). We own these tasks (cancel() is a fromsoftware-rs
-        // no-op + self-leaked Arc), so the chosen one persists past Continue = the loading-screen port.
-        // Order MUST match constants::LOOKAT_DRAW_PHASE_NAMES.
-        let lookat_phases = [
+        // LIVE LOADING PORTRAIT render/publish pump: register in each candidate DRAW phase so exactly
+        // one active phase can run on the render thread inside a live GX frame. This keeps the portrait
+        // visible/refreshing during loading; cursor/head tracking remains retired.
+        let portrait_phases = [
             CSTaskGroupIndex::Draw_Pre,
             CSTaskGroupIndex::GraphicsStep,
             CSTaskGroupIndex::DrawStep,
@@ -635,7 +593,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
             CSTaskGroupIndex::DrawEnd,
             CSTaskGroupIndex::Draw_Post,
         ];
-        for (i, phase) in lookat_phases.into_iter().enumerate() {
+        for (i, phase) in portrait_phases.into_iter().enumerate() {
             cs_task.run_recurring(
                 move |task_data: &FD4TaskData| unsafe {
                     profile_lookat_phase_draw_tick(i, task_data)
@@ -643,7 +601,6 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 phase,
             );
         }
-        // Sweep diagnostic + live selector re-read, paced by a FrameBegin task (ticks every frame).
         cs_task.run_recurring(
             move |_task_data: &FD4TaskData| profile_lookat_phase_diag_tick(),
             CSTaskGroupIndex::FrameBegin,

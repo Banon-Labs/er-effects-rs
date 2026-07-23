@@ -179,19 +179,9 @@ pub(crate) fn portrait_render_drive_enabled() -> bool {
     }
     !save_override_telemetry_only()
 }
-/// DEFAULT-OFF gate for the portrait LOOK-AT lever (head/eyes follow the mouse cursor). When on, the
-/// per-tick `force_profile_render_tick` reaches the loaded character's Havok pose holder and rotates the
-/// Head/Neck/Spine2 bone local quaternions toward the cursor (ER eyes are welded to the Head bone, so
-/// the eyes track as the head turns). Also selects OVERLAY-ONLY display (the live present-overlay owns the
-/// loading-screen surface; the native forge/re-forge is suppressed so there is only ONE head). Requires
-/// `force_profile_render` (the render that builds the model + drives the pose).
-///
-/// DE-GATED to DEFAULT-ON for real (non-telemetry) runs (user 2026-06-30 "just a feature without a gate";
-/// mirrors the de-gating precedent `user-pref-too-many-env-file-gates-default-on-product`). Runtime-proven
-/// safe across the 2026-06-30 smokes. Master off: `autoload_disabled()`; telemetry-only/native-capture
-/// runs stay off; env/file remain force-on overrides. (The zero-input test drivers -- lookat-selftest,
-/// cursor-sweep, force-rebuild -- stay OFF by default; product look-at tracks the real cursor.)
-pub(crate) fn portrait_lookat_enabled() -> bool {
+/// Product gate for the live loading-screen portrait overlay. This keeps the rendered character portrait
+/// visible during real quick-load runs, but it deliberately does not track the mouse cursor.
+pub(crate) fn portrait_overlay_enabled() -> bool {
     if autoload_disabled() || native_profile_capture_enabled() {
         return false;
     }
@@ -207,33 +197,9 @@ pub(crate) fn portrait_lookat_enabled() -> bool {
 pub(crate) fn disable_loading_cover_enabled() -> bool {
     false
 }
-/// DEFAULT-OFF: when set, `force_profile_render_tick` does the DESTRUCTIVE periodic rebuild -- every ~240
-/// ticks it CLEARS each renderer's build latch (+0x754/+0x755) + resets the look-at slot cache, forcing a
-/// FRESH async model build. That churn leaves the models in a not-live (rebuilding) state most of the time,
-/// which makes the realtime look-at draw fail ~88% of frames -> flicker. So it is OFF by default: the model
-/// builds ONCE (idempotent mark+refresh) and PERSISTS, so the pose-holder stays live every frame and the
-/// portrait tracks the cursor smoothly. Flip this on briefly (then off) only to force a fresh rebuild that
-/// re-captures the post-FaceData face. Mirrors `portrait_lookat_enabled` (env OR file).
+/// DEFAULT-OFF diagnostic rebuild: clear profile-renderer build latches so a later frame rebuilds and
+/// re-captures the post-FaceData portrait. Keep off for product runs; it can flicker during rebuild churn.
 pub(crate) fn portrait_force_rebuild_enabled() -> bool {
-    false
-}
-/// DEFAULT-OFF self-validation: when set, the realtime draw task drives Head/Neck/Spine2 from a
-/// DETERMINISTIC SINUSOID (frame-counter based) instead of GetCursorPos -- zero-input, reproducible, no
-/// human mouse -- and reads back the portrait offscreen RT each sample to record nonblack% + hash-change%
-/// as in-process telemetry semaphores (oracle_profile_lookat_rt_*). PASS = nonblack≈100% (no flicker) AND
-/// changed≈100% under the sinusoid (the rendered head moves with the driven angle) AND render_drives≈frames
-/// (per-frame redraw). This replaces the human-eyeball oracle. Mirrors `portrait_lookat_enabled`.
-pub(crate) fn portrait_lookat_selftest_enabled() -> bool {
-    false
-}
-/// DEFAULT-OFF cursor-tracking PROOF: when set, the realtime draw task deterministically self-drives the
-/// OS cursor (`SetCursorPos`) through held left/center/right positions over the Elden Ring window, then
-/// reads it back through the SAME `GetCursorPos` path the product uses and drives the head from that read
-/// cursor (NO sinusoid shortcut). It dumps the live head at each held cursor position
-/// (`portrait-capture-slot{200,201,202}.bin`), so the three distinct poses prove the head tracks the
-/// ACTUAL cursor input -- zero foreign input (the DLL warps the cursor itself, at the exact stage the game
-/// polls). Takes precedence over `selftest`. Mirrors `portrait_lookat_enabled` (env OR file).
-pub(crate) fn portrait_cursor_sweep_enabled() -> bool {
     false
 }
 /// Kill-switch to skip installing the continue_trace hooks (bisecting a ~19s

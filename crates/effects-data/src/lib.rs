@@ -1,8 +1,9 @@
 //! Shared schemas for effect metadata and user-provided effect catalogs.
 //!
-//! Runtime selector catalogs are external JSON files in `effect-catalogs/*.json`
-//! next to `eldenring.exe`. `data/effects.json` remains a host-side curated list
-//! used by validation/generation tooling, not a runtime built-in catalog.
+//! Runtime selector catalogs are external JSONC files in `effect-catalogs/*.jsonc`
+//! next to `eldenring.exe`. The runtime still accepts legacy `*.json` catalogs.
+//! `data/effects.json` remains a host-side curated list used by validation/generation
+//! tooling, not a runtime built-in catalog.
 
 use std::collections::BTreeMap;
 
@@ -93,22 +94,152 @@ pub enum EffectKindSpec {
     SpEffect,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum EffectIdCatalogEntry {
+    Id(i32),
+    Object(EffectIdCatalogObjectEntry),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EffectIdCatalogObjectEntry {
+    id: i32,
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    comment: Option<String>,
+}
+
 pub fn parse_effects_json(json: &str) -> Result<EffectsFile, serde_json::Error> {
-    serde_json::from_str(json)
+    serde_json::from_str(&normalize_jsonc(json))
 }
 
 pub fn parse_effect_id_catalog_json(json: &str) -> Result<Vec<i32>, serde_json::Error> {
-    serde_json::from_str(json)
+    let entries: Vec<EffectIdCatalogEntry> = serde_json::from_str(&normalize_jsonc(json))?;
+    Ok(entries
+        .into_iter()
+        .map(|entry| match entry {
+            EffectIdCatalogEntry::Id(id) => id,
+            EffectIdCatalogEntry::Object(entry) => {
+                let _ = (entry.label, entry.comment);
+                entry.id
+            }
+        })
+        .collect())
 }
 
 pub fn parse_effect_hotkeys_json(json: &str) -> Result<EffectHotkeysFile, serde_json::Error> {
-    serde_json::from_str(json)
+    serde_json::from_str(&normalize_jsonc(json))
 }
 
 pub fn parse_effect_master_catalog_json(
     json: &str,
 ) -> Result<EffectMasterCatalog, serde_json::Error> {
-    serde_json::from_str(json)
+    serde_json::from_str(&normalize_jsonc(json))
+}
+
+fn normalize_jsonc(json: &str) -> String {
+    strip_trailing_commas(&strip_jsonc_comments(json))
+}
+
+fn strip_jsonc_comments(json: &str) -> String {
+    let mut output = String::with_capacity(json.len());
+    let mut chars = json.chars().peekable();
+    let mut in_string = false;
+    let mut escaped = false;
+
+    while let Some(ch) = chars.next() {
+        if in_string {
+            output.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => {
+                in_string = true;
+                output.push(ch);
+            }
+            '/' if chars.peek() == Some(&'/') => {
+                chars.next();
+                output.push(' ');
+                for comment_char in chars.by_ref() {
+                    if comment_char == '\n' || comment_char == '\r' {
+                        output.push(comment_char);
+                        break;
+                    }
+                }
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                output.push(' ');
+                let mut previous = '\0';
+                for comment_char in chars.by_ref() {
+                    if comment_char == '\n' || comment_char == '\r' {
+                        output.push(comment_char);
+                    }
+                    if previous == '*' && comment_char == '/' {
+                        break;
+                    }
+                    previous = comment_char;
+                }
+            }
+            _ => output.push(ch),
+        }
+    }
+
+    output
+}
+
+fn strip_trailing_commas(json: &str) -> String {
+    let chars = json.chars().collect::<Vec<_>>();
+    let mut output = String::with_capacity(json.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut index = 0;
+
+    while index < chars.len() {
+        let ch = chars[index];
+        if in_string {
+            output.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            index += 1;
+            continue;
+        }
+
+        match ch {
+            '"' => {
+                in_string = true;
+                output.push(ch);
+            }
+            ',' => {
+                let mut next = index + 1;
+                while next < chars.len() && chars[next].is_whitespace() {
+                    next += 1;
+                }
+                if next >= chars.len() || !matches!(chars[next], ']' | '}') {
+                    output.push(ch);
+                }
+            }
+            _ => output.push(ch),
+        }
+        index += 1;
+    }
+
+    output
 }
 
 /// Parses the compile-time embedded copy of `data/effects.json`.
@@ -204,6 +335,41 @@ mod tests {
     fn user_effect_catalogs_are_plain_id_lists() {
         let ids = parse_effect_id_catalog_json("[18570, 20004380]").expect("plain ID list parses");
         assert_eq!(ids, vec![18570, 20004380]);
+    }
+
+    #[test]
+    fn user_effect_catalogs_accept_jsonc_comments_and_trailing_commas() {
+        let ids = parse_effect_id_catalog_json(
+            r#"[
+                8355,      // Deathblight network test
+                20010719,  // VFX 20050101
+            ]"#,
+        )
+        .expect("JSONC ID list parses");
+        assert_eq!(ids, vec![8355, 20010719]);
+    }
+
+    #[test]
+    fn user_effect_catalogs_accept_object_entries_with_human_notes() {
+        let ids = parse_effect_id_catalog_json(
+            r#"[
+                { "id": 8355, "label": "Deathblight", "comment": "network test" },
+                20010719,
+            ]"#,
+        )
+        .expect("mixed JSONC ID/object list parses");
+        assert_eq!(ids, vec![8355, 20010719]);
+    }
+
+    #[test]
+    fn jsonc_comment_markers_inside_strings_are_preserved() {
+        let parsed = parse_effect_id_catalog_json(
+            r#"[
+                { "id": 8355, "label": "not // a comment", "comment": "not /* a comment */" }
+            ]"#,
+        )
+        .expect("comment markers inside strings parse");
+        assert_eq!(parsed, vec![8355]);
     }
 
     #[test]

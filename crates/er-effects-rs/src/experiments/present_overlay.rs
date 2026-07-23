@@ -366,7 +366,6 @@ unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) {
         // Loading bar + save picker (the native-Windows display path; also the boot/black-gap path on Wine).
         let _ = unsafe { composite_boot_progress_on_swapchain(base, this_u) };
     }
-    let _ = unsafe { composite_effect_selector_on_swapchain(this_u) };
     // Keyboard input runs on an event-driven WH_KEYBOARD_LL hook (spawned once) so every press registers
     // regardless of the ~4fps boot Present rate; the render-thread poll handles gamepad (and is the
     // keyboard fallback if the hook fails to install).
@@ -539,7 +538,7 @@ const BOOT_PUMP_FRAME_SLEEP_MS: u64 = 16;
 /// Body of the `er-effects-boot-present-pump` thread. See the spawn comment for the contract.
 fn boot_present_pump() {
     // Same gate as the install: the boot view + its swapchain hook are the portrait-path feature.
-    if !portrait_lookat_enabled() {
+    if !portrait_overlay_enabled() {
         return;
     }
     let start = std::time::Instant::now();
@@ -1073,7 +1072,7 @@ unsafe fn vtable_swap_slot(slot_addr: usize, new_fn: usize) -> Option<usize> {
 /// its REAL Present(8)/Present1(22) via a vtable-slot swap (NOT a MinHook code patch -- that reports MH_OK
 /// but never fires on Wine's dxgi.dll). One-shot (latched on success); bounded retries.
 pub(crate) unsafe fn try_install_game_present_hook(base: usize) {
-    if !portrait_lookat_enabled()
+    if !portrait_overlay_enabled()
         || crate::experiments::renderdoc_active()
         || PRESENT_HOOK_INSTALLED.load(Ordering::SeqCst) == 0
         || GAME_PRESENT_HOOKED.load(Ordering::SeqCst) != 0
