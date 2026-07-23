@@ -7,7 +7,7 @@ use std::{
     io::Write,
     path::PathBuf,
     sync::atomic::{AtomicBool, Ordering},
-    time::{Duration, SystemTime},
+    time::SystemTime,
 };
 
 use eldenring::{
@@ -23,10 +23,8 @@ const PROTECTOR_PARAM_INDEX: usize = 1;
 const PRIMARY_RES_CAP_INDEX: usize = 0;
 const NO_PATCH_ATTEMPTS: u32 = 0;
 const FIRST_PATCH_ATTEMPT: u32 = 1;
-const PATCH_RETRY_LOG_INTERVAL: u32 = 10;
+const PATCH_RETRY_LOG_INTERVAL: u32 = 100_000;
 const PATCH_RETRY_REMAINDER: u32 = 0;
-const PATCH_WAIT_SECONDS: u64 = 1;
-const PATCH_RETRY_SLEEP_MILLIS: u64 = 250;
 const PATCHED_ROW_INCREMENT: usize = 1;
 const NO_PATCHED_ROWS: usize = 0;
 const HIDDEN_MODEL_ID: u16 = 0;
@@ -67,7 +65,7 @@ fn spawn_param_patch_task() {
     write_runtime_log("patch task started");
     let mut attempts = NO_PATCH_ATTEMPTS;
     let cs_task = loop {
-        match CSTaskImp::wait_for_instance(Duration::from_secs(PATCH_WAIT_SECONDS)) {
+        match unsafe { CSTaskImp::instance() } {
             Ok(instance) => break instance,
             Err(error) => {
                 attempts = attempts.saturating_add(FIRST_PATCH_ATTEMPT);
@@ -78,7 +76,7 @@ fn spawn_param_patch_task() {
                         "waiting for CSTaskImp attempt={attempts} error={error:?}"
                     ));
                 }
-                std::thread::sleep(Duration::from_millis(PATCH_RETRY_SLEEP_MILLIS));
+                std::thread::yield_now();
             }
         }
     };

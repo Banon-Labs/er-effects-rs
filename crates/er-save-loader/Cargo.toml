@@ -1,0 +1,11 @@
+[package]
+name = "er-save-loader"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+er-safe-input = { path = "../er-safe-input" }
+
+[target.'cfg(windows)'.dependencies]
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }

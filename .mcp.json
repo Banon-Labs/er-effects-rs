@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "ghidra": {
+      "command": "${HOME}/projects/ghidra-mcp-13bm/mcp-bridge/mcp_bridge",
+      "args": [
+        "-host",
+        "localhost",
+        "-port",
+        "8765"
+      ],
+      "env": {
+        "GHIDRA_JP_DICT": "${HOME}/projects/er-effects-rs/scripts/ghidra/jp-en-dict.json"
+      },
+      "directTools": true
+    }
+  }
+}

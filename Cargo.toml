@@ -1,19 +1,33 @@
 [workspace]
-members = [".", "crates/effects-data", "crates/mushroom-man-runtime", "crates/soulsformats", "tools/er-param-inspect"]
+members = [
+  "crates/er-effects-rs",
+  "crates/er-hook",
+  "crates/er-game-base",
+  "crates/er-telemetry",
+  "crates/er-telemetry-dll",
+  "crates/er-reload-trace-dll",
+  "crates/er-input-harness-dll",
+  "crates/er-inventory-sort-dll",
+  "crates/er-net-effects-dll",
+  "crates/mushroom-man-runtime",
+  "crates/effects-data",
+  "crates/er-gfx",
+  "crates/er-safe-input",
+  "crates/er-save-loader",
+  "crates/er-tpf",
+  "crates/erpx-rs",
+  "crates/soulsformats",
+  # Host-only shader subcrates (naga/wgpu/bevy). NOT depended on by the root
+  # `er-effects-rs` cdylib, so `cargo xwin check` (which selects only the root
+  # package) never cross-compiles them into the game DLL; built only when
+  # targeted explicitly (`cargo check -p er-shaderkit ...`).
+  "crates/er-shaderkit",
+  "crates/er-flver",
+  "crates/er-objectkit",
+  "tools/er-param-inspect",
+  "tools/bevy-shader-lab",
+  "tools/er-shaderlab",
+  "tools/er-shader-viewer",
+]
 resolver = "2"
-
-[package]
-name = "er-effects-rs"
-version = "0.1.0"
-edition = "2024"
-publish = false
-
-[lib]
-crate-type = ["cdylib"]
-
-[dependencies]
-eldenring = { path = "../fromsoftware-rs/crates/eldenring" }
-er-effects-data = { path = "crates/effects-data" }
-fromsoftware-shared = { path = "../fromsoftware-rs/crates/shared" }
-debug = { path = "../fromsoftware-rs/crates/debug" }
-hudhook = { git = "https://github.com/veeenu/hudhook", features = ["imgui-tables-api"] }
+default-members = ["crates/er-effects-rs"]

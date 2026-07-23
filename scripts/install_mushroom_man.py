@@ -142,6 +142,7 @@ def maybe_windows_path(path: Path) -> str:
             check=True,
             capture_output=True,
             text=True,
+            timeout=30,
         )
         return result.stdout.strip()
     return str(resolved)
@@ -366,6 +367,7 @@ def main() -> int:
                 profile_path_for_me3,
             ],
             check=True,
+            timeout=30,
         )
     return 0
 

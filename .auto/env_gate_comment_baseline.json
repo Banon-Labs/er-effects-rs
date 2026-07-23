@@ -1,0 +1,26 @@
+{
+  "_comment": "DEPRECATED-ALLOWLIST POLICY (deprecate-env-marker-gate-allowlists-no-gated-features-2026-07-19). The user directive is 'we don't want any env gated features.' The former grandfathering allowlists (`sanctioned_env_vars`, `sanctioned_env_gate_locations`, `baseline`) are DEPRECATED and permanently EMPTY: an empty behavioral allowlist means NO env feature gate is permitted. scripts/check-env-gate-comments.py now FAILS on ANY `std::env::var(\"ER_EFFECTS_...\")` read in crates/er-effects-rs/src/**/*.rs unless its exact `ENV_VAR@repo/path.rs` key appears in `diagnostic_gates` below with a non-empty rationale. `diagnostic_gates` is the ONLY permitted exception and is reserved for genuinely diagnostic reads that change NO game behavior (passive logging/telemetry/trace, read-only sampling, or a pure diagnostic OUTPUT-PATH/tuning override). A behavioral feature must be DEFAULT (gated only on a real runtime condition) or removed -- it may never be re-added here. Adding a `diagnostic_gates` entry is a deliberate reviewed act that must show in the diff and carry a justification.",
+  "_deprecated_behavioral_allowlists_comment": "These three keys are retained ONLY so the checker still loads and so their emptiness is explicit and reviewable. They MUST stay empty. Do NOT re-populate them to grandfather a gate; the checker treats any env/marker feature gate outside `diagnostic_gates` as a hard failure.",
+  "sanctioned_env_vars": [],
+  "sanctioned_env_gate_locations": [],
+  "baseline": [],
+  "diagnostic_gates": {
+    "ER_EFFECTS_C30_WATCH@crates/er-effects-rs/src/crashlog/veh_exit_hooks.rs": "Diagnostic HW write-watchpoint on GameMan+0xc30: the VEH traps the save-mount write, logs the writing RIP/stack, then disarms DR7 and resumes. Observe-only; changes no game behavior.",
+    "ER_EFFECTS_SW_BP@crates/er-effects-rs/src/crashlog/veh_exit_hooks.rs": "Diagnostic INT3 software breakpoints (RVAs from er-effects-breakpoints.txt): the VEH logs each hit's register/stack context, restores the original byte, single-steps and re-arms. Observe-only; net game behavior unchanged.",
+    "ER_EFFECTS_ANTI_ANTIDEBUG@crates/er-effects-rs/src/crashlog/veh_exit_hooks.rs": "Enables the anti-anti-debug patches so debug exceptions / our INT3 diagnostics reach the VEH (auto-on with SW_BP). Diagnostic-enablement for the crash/breakpoint tooling only; not a product feature.",
+    "ER_EFFECTS_INPUT_TRACE@crates/er-effects-rs/src/experiments/input_trace.rs": "Passive controller-input trace: records the real slot-0 pad state to a log. Observe-only; injects and changes nothing.",
+    "ER_EFFECTS_PROFILE@crates/er-effects-rs/src/experiments/profiler.rs": "Boot CPU profiler master switch: a standalone sampler thread reads QueryThreadCycleTime/GetThreadTimes and writes a JSONL. Read-only sampling; cannot perturb the game.",
+    "ER_EFFECTS_PROFILE_RIP@crates/er-effects-rs/src/experiments/profiler.rs": "Profiler RIP-sampling sub-switch (SuspendThread+GetThreadContext to capture Rip). Read-only sampling; no game behavior change.",
+    "ER_EFFECTS_PROFILE_PATH@crates/er-effects-rs/src/experiments/profiler.rs": "Diagnostic OUTPUT-PATH override for the profiler JSONL. Chooses where the log is written; no game behavior change.",
+    "ER_EFFECTS_PROFILE_INTERVAL_MS@crates/er-effects-rs/src/experiments/profiler.rs": "Profiler sampling cadence (ms) tuning knob. Diagnostic-only; no game behavior change.",
+    "ER_EFFECTS_PROFILE_RIP_EVERY@crates/er-effects-rs/src/experiments/profiler.rs": "Profiler RIP-sample decimation tuning knob. Diagnostic-only; no game behavior change.",
+    "ER_EFFECTS_PROFILE_MAX_S@crates/er-effects-rs/src/experiments/profiler.rs": "Profiler hard-stop (s) bound. Diagnostic-only; no game behavior change.",
+    "ER_EFFECTS_TELEMETRY_ONLY@crates/er-effects-rs/src/experiments/save_redirect/path_hooks.rs": "Sanctioned save-source exemption (AGENTS.md 'ER_EFFECTS_TELEMETRY_ONLY save-source exemption'): selects a telemetry-only/no-load observe mode for diagnostic runs. Diagnostic save-source selection, explicitly allowed by project policy.",
+    "ER_EFFECTS_SAVE_TRACE@crates/er-effects-rs/src/experiments/save_redirect/path_hooks.rs": "Passive save-IO trace hook: logs save-path activity. Observe-only; no game behavior change.",
+    "ER_EFFECTS_AUTOLOAD_DEBUG_PATH@crates/er-effects-rs/src/experiments/startup_hooks/dlstring_lookat_math.rs": "Diagnostic OUTPUT-PATH override for the autoload debug log. Path only; no game behavior change.",
+    "ER_EFFECTS_AUTOLOAD_DEBUG_PATH@crates/er-effects-rs/src/telemetry/save_policy_logs.rs": "Diagnostic OUTPUT-PATH override for the autoload debug log (canonical resolver). Path only; no game behavior change.",
+    "ER_EFFECTS_GRSYSMSG_LOG@crates/er-effects-rs/src/experiments/startup_hooks/startup_modals_menu_cover.rs": "Diagnostic log of the GR_System_Message ids seen at startup. Observe-only; no game behavior change.",
+    "ER_EFFECTS_CRASH_LOG_PATH@crates/er-effects-rs/src/telemetry/save_policy_logs.rs": "Diagnostic OUTPUT-PATH override for the crash log. Path only; no game behavior change.",
+    "ER_EFFECTS_TRACE_CONTINUE_PATH@crates/er-effects-rs/src/telemetry/save_policy_logs.rs": "Diagnostic OUTPUT-PATH override for the continue-trace log. Path only; no game behavior change."
+  }
+}

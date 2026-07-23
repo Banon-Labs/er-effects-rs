@@ -1,0 +1,8 @@
+# Keep routine agent builds/checks concise. Existing warning backlog is large and otherwise
+# drowns runtime-probe evidence in Pi context. Explicit warning-audit commands can still pass
+# their own lint flags when warning cleanup is the task.
+[build]
+rustflags = ["-Awarnings"]
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-Awarnings", "-C", "target-feature=+crt-static"]

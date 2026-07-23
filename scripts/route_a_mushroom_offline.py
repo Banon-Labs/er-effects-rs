@@ -67,7 +67,6 @@ def run_command(
     command: list[str],
     *,
     cwd: Path | None = None,
-    timeout: int = 30,
     accept: Iterable[int] = (0,),
 ) -> CommandResult:
     proc = subprocess.run(
@@ -75,7 +74,7 @@ def run_command(
         cwd=str(cwd) if cwd else None,
         text=True,
         capture_output=True,
-        timeout=timeout,
+        timeout=30,
         check=False,
     )
     accepted = proc.returncode in set(accept)
@@ -83,7 +82,7 @@ def run_command(
 
 
 def wsl_to_windows(path: Path) -> str:
-    result = run_command(["wslpath", "-w", str(path)], timeout=10)
+    result = run_command(["wslpath", "-w", str(path)])
     if not result.accepted:
         raise RuntimeError(
             f"wslpath failed for {path}: {result.stderr or result.stdout}"
@@ -150,7 +149,6 @@ def extract_with_fstools(
                     filter_text,
                 ],
                 cwd=fstools_cwd,
-                timeout=30,
             )
         )
     return results
@@ -172,7 +170,7 @@ def expected_witchy_dir(input_path: Path) -> Path:
     return parent / stem
 
 
-def run_witchy(witchy: Path, input_path: Path, timeout: int = 45) -> CommandResult:
+def run_witchy(witchy: Path, input_path: Path) -> CommandResult:
     if not witchy.exists():
         return CommandResult(str(witchy), 127, "", "WitchyBND.exe not found", False)
     cmd_dir = input_path.parent / ".witchy-cmd"
@@ -185,7 +183,7 @@ def run_witchy(witchy: Path, input_path: Path, timeout: int = 45) -> CommandResu
         encoding="utf-8",
     )
     script_win = wsl_to_windows(script)
-    result = run_command(["cmd.exe", "/c", script_win], timeout=timeout, accept=(0, 82))
+    result = run_command(["cmd.exe", "/c", script_win], accept=(0, 82))
     out_dir = expected_witchy_dir(input_path)
     result.accepted = result.accepted and out_dir.exists()
     return result

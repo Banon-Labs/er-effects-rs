@@ -1,0 +1,1163 @@
+
+/// DEPTH-KEYED TRANSPARENT BACKGROUND: read back the offscreen scene's depth plane and set the color
+/// buffer's per-pixel alpha to 0 for every BACKGROUND pixel. The portrait depth is BIMODAL -- the model
+/// (head+shoulders) forms one cluster and the dark IBL surround another, separated by an empty depth GAP
+/// (the "air" between the model and the backdrop). We histogram the depth, put the threshold in the WIDEST
+/// empty gap, and KEEP whichever cluster the COLOUR-classified head sits in, cutting the other. Keying on
+/// the head's own cluster (not an assumed clear value) makes this robust to the engine's Z direction and to
+/// the fact that the corners are NOT all background (a portrait's shoulders fill the bottom corners), and
+/// deriving the head reference from the colour buffer (not the geometric centre) makes it robust to where
+/// the head sits in the frame (er-effects-rs-y134). FAIL-OPEN on
+/// every uncertainty (no depth buffer, dims mismatch, no separable gap) -> the color buffer is left fully
+/// opaque, exactly the pre-existing display, so this can only ADD the cutout, never regress the head. Emits
+/// a one-shot `depth-key` diagnostic and drives the `oracle_depth_key_*` RAM semaphores. `cpx` is the
+/// tightly-packed RGBA8 the caller is about to publish (mutated in place).
+pub(crate) fn apply_depth_alpha_key(
+    depth: &[f32],
+    dw: usize,
+    dh: usize,
+    incarnation: usize,
+    w: u32,
+    h: u32,
+    cpx: &mut [u8],
+) {
+    let w = w as usize;
+    let h = h as usize;
+    if cpx.len() < w * h * 4 {
+        return;
+    }
+    // (1) RECALCULATE the mask from the CURRENT depth buffer (captured coherently on the render thread
+    //     and passed in as a plain Vec<f32>, so this whole pass runs on the worker thread with no game
+    //     pointer or D3D12 object).
+    let fresh = compute_depth_mask(depth, dw, dh, w, h, cpx);
+    // (2) On a fresh mask, CACHE it; on a dead frame (depth read back cleared -> no gap), REUSE the last
+    //     cached mask so the cutout stays stable. Recalculated whenever fresh depth is available (tracks a
+    //     genuine re-render), cached only for the frames in between -- never a frozen one-shot.
+    let mask = if let Some(m) = fresh {
+        DEPTH_KEY_FRESH.fetch_add(1, Ordering::SeqCst);
+        // Tag the cache with the character it was computed for, so a later cross-character reuse is
+        // detectable (the stale-reuse desync semaphore below). This uses the FRAME's incarnation (snapshot
+        // on the render thread and passed in), NOT a live read -- so the mask cache is tagged/compared
+        // against the character this frame belongs to, not whatever is rendering now (the 2nd-character
+        // desync safety fix under the worker offload).
+        LAST_DEPTH_MASK_INCARNATION.store(incarnation, Ordering::SeqCst);
+        if let Ok(mut g) = LAST_DEPTH_MASK.lock() {
+            *g = Some((w, h, m.clone()));
+        }
+        Some(m)
+    } else {
+        let reused = LAST_DEPTH_MASK.lock().ok().and_then(|g| match g.as_ref() {
+            Some((cw, ch, m)) if *cw == w && *ch == h => Some(m.clone()),
+            _ => None,
+        });
+        if reused.is_some() {
+            // FAIL-FAST desync semaphore: this depth was dead (no fresh gap) so we are reusing the cached
+            // mask -- but if it was computed for a DIFFERENT character incarnation than the one rendering
+            // now, its silhouette will not match this head (the 2nd-character depth-mask desync). Detect
+            // it as a run-stopping RAM oracle rather than only seeing it on screen.
+            let cur = incarnation;
+            let cached = LAST_DEPTH_MASK_INCARNATION.load(Ordering::SeqCst);
+            if cur != 0 && cached != 0 && cur != cached {
+                let n = PROFILE_MASK_STALE_REUSE.fetch_add(1, Ordering::SeqCst);
+                if PROFILE_MASK_STALE_REUSE_LOGGED.swap(1, Ordering::SeqCst) == 0 {
+                    append_autoload_debug(format_args!(
+                        "MASK-STALE-REUSE-DESYNC: reusing depth mask from portrait incarnation {cached} on incarnation {cur} (prior character's silhouette on the new head) -- #{}",
+                        n + 1
+                    ));
+                    // HARD FAIL-FAST during the diagnostic repro ONLY: abort the process the instant the
+                    // desync is detected so the run stops in ~40s instead of six minutes. A fast crash ==
+                    // the semaphore caught the stale-reuse; no crash == the desync is NOT stale-reuse (a
+                    // different mechanism) and the hypothesis is refuted. Never fires in product (gated on
+                    // the System-Quit repro being active), so it cannot crash a real player session.
+                    if system_quit_repro_enabled() {
+                        append_autoload_debug(format_args!(
+                            "MASK-STALE-REUSE-DESYNC: FAIL-FAST abort() (repro diagnostic stop)"
+                        ));
+                        std::process::abort();
+                    }
+                }
+            }
+        }
+        reused
+    };
+    // No fresh gap and no cache yet -> fail open (opaque), no regression.
+    let Some(mask) = mask else {
+        return;
+    };
+    let mut masked = 0usize;
+    for i in 0..(w * h) {
+        if mask[i] != 0 {
+            cpx[i * 4 + 3] = 0;
+            masked += 1;
+        }
+    }
+    if masked > 0 {
+        DEPTH_KEY_APPLIED.fetch_add(1, Ordering::SeqCst);
+        DEPTH_KEY_BG_PCT.store(masked * 100 / (w * h), Ordering::SeqCst);
+        // FAIL-FAST mask/head coherence (2nd-character desync): does the KEPT cutout match THIS head?
+        let iou = mask_head_iou(&mask, cpx, w, h);
+        PROFILE_MASK_HEAD_IOU_LAST.store(iou, Ordering::SeqCst);
+        if iou < MASK_HEAD_IOU_MIN {
+            let streak = PROFILE_MASK_HEAD_MISMATCH_STREAK.fetch_add(1, Ordering::SeqCst) + 1;
+            PROFILE_MASK_HEAD_MISMATCH_TOTAL.fetch_add(1, Ordering::SeqCst);
+            if streak == 1 || streak % 16 == 0 {
+                append_autoload_debug(format_args!(
+                    "MASK-HEAD-MISMATCH: IoU={iou}% < {MASK_HEAD_IOU_MIN}% (kept cutout vs colour head) streak={streak} -- fresh-but-wrong depth silhouette on this head"
+                ));
+            }
+            // Abort only on a SUSTAINED gross mismatch (a whole loading screen desyncs; a transient
+            // build glitch is a few frames), and only during the repro (never a real player session).
+            if streak >= MASK_HEAD_ABORT_STREAK && system_quit_repro_enabled() {
+                append_autoload_debug(format_args!(
+                    "MASK-HEAD-MISMATCH: FAIL-FAST abort() after {streak} sustained mismatch frames (IoU={iou}%) -- repro diagnostic stop"
+                ));
+                std::process::abort();
+            }
+        } else {
+            PROFILE_MASK_HEAD_MISMATCH_STREAK.store(0, Ordering::SeqCst);
+        }
+    }
+}
+
+/// Foreground colour classification bar: a pixel is "head" when its sum-abs channel distance (0..765)
+/// from the corner-background colour exceeds this. Shared by the IoU oracle (`mask_head_iou`) and the
+/// head-cluster foreground reference (`color_head_median_depth`) so the mask is SELECTED by the same
+/// criterion it is later SCORED against.
+const FG_DIST: i32 = 90;
+
+/// Mean RGB of the four 8x8 corner patches -- the portrait backdrop colour reference shared by the IoU
+/// oracle and the head-cluster foreground reference. `None` on degenerate dims.
+fn corner_bg_rgb(cpx: &[u8], w: usize, h: usize) -> Option<(i32, i32, i32)> {
+    if w < 16 || h < 16 || cpx.len() < w * h * 4 {
+        return None;
+    }
+    let (mut br, mut bgc, mut bb, mut bn) = (0u64, 0u64, 0u64, 0u64);
+    for &(ox, oy) in &[(0usize, 0usize), (w - 8, 0), (0, h - 8), (w - 8, h - 8)] {
+        for yy in oy..oy + 8 {
+            for xx in ox..ox + 8 {
+                let p = (yy * w + xx) * 4;
+                br += cpx[p] as u64;
+                bgc += cpx[p + 1] as u64;
+                bb += cpx[p + 2] as u64;
+                bn += 1;
+            }
+        }
+    }
+    if bn == 0 {
+        return None;
+    }
+    Some(((br / bn) as i32, (bgc / bn) as i32, (bb / bn) as i32))
+}
+
+/// Median depth of the COLOUR-head pixels -- the pixels the IoU oracle classifies as head (far from the
+/// corner-background colour), subsampled by 2 on both axes. Used as `compute_depth_mask`'s foreground
+/// reference: comparing this median against a threshold is a majority vote of the head's own pixels, so
+/// the kept cluster is the one that actually overlaps the head, wherever the head sits in the frame
+/// (er-effects-rs-y134: Sacred Bean's pose at the 6.0x framing put the geometric centre off the head,
+/// the central patch sampled the wrong cluster, and the fresh silhouette missed the head -- IoU=14%).
+/// `None` when the colour head is degenerate (under ~1% of the frame) -- caller falls back to the
+/// central-patch reference.
+fn color_head_median_depth(depth: &[f32], cpx: &[u8], w: usize, h: usize) -> Option<f32> {
+    if depth.len() < w * h {
+        return None;
+    }
+    let (br, bgc, bb) = corner_bg_rgb(cpx, w, h)?;
+    let mut head_depths: Vec<f32> = Vec::new();
+    let mut y = 0;
+    while y < h {
+        let mut x = 0;
+        while x < w {
+            let i = y * w + x;
+            let p = i * 4;
+            let dist = (cpx[p] as i32 - br).abs()
+                + (cpx[p + 1] as i32 - bgc).abs()
+                + (cpx[p + 2] as i32 - bb).abs();
+            if dist > FG_DIST {
+                let d = depth[i];
+                if d.is_finite() {
+                    head_depths.push(d);
+                }
+            }
+            x += 2;
+        }
+        y += 2;
+    }
+    // Samples cover 1/4 of the frame, so w*h/400 samples ~= a head filling 1% of the frame; anything
+    // smaller is too little colour evidence to trust for cluster selection.
+    if head_depths.len() < ((w * h) / 400).max(1) {
+        return None;
+    }
+    let mid = head_depths.len() / 2;
+    let (_, med, _) = head_depths
+        .select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    Some(*med)
+}
+
+/// Mask/head coherence score (0..100) of the depth cutout's KEPT region (mask==0) vs the colour's OWN
+/// head (pixels whose colour is clearly far from the corner background). ~high when the mask matches the
+/// head; low when a fresh mask of the WRONG depth silhouette is applied to this head (the 2nd-character
+/// desync). Subsampled by 2 for cost; 100 (perfect) on any degenerate input so it never false-trips.
+///
+/// Two regimes (er-effects-rs-y134): symmetric IoU assumes the colour-head and the kept region have
+/// comparable sizes, but a DARK character on the dark IBL backdrop clears FG_DIST on only a sliver of
+/// its pixels (Sacred Bean: 2.6% of the frame vs a 19% kept cluster), so even a PERFECT mask is capped
+/// at |head|/|kept| ~= 14% and the gate held every frame (clean=0, no portrait/stats). When that
+/// best-possible IoU (min/max of the two class sizes) cannot clear the bar with headroom even for a
+/// perfect mask, IoU is meaningless -- score COVERAGE instead (kept ∩ head / head: are the provably-
+/// character bright pixels kept?). Coverage >= IoU always, so bright characters (whose ceiling is high)
+/// keep the stricter symmetric IoU and no previously-clean character can regress. Wrong-side and
+/// missing-head masks still score ~0 in both regimes; near-empty colour-heads fall through to the
+/// symmetric IoU (~0 -> held), preserving the old all-dark-frame behaviour.
+fn mask_head_iou(mask: &[u8], cpx: &[u8], w: usize, h: usize) -> usize {
+    if mask.len() < w * h {
+        return 100;
+    }
+    let Some((br, bgc, bb)) = corner_bg_rgb(cpx, w, h) else {
+        return 100;
+    };
+    let (mut inter, mut union) = (0u64, 0u64);
+    let (mut head_n, mut kept_n, mut samples) = (0u64, 0u64, 0u64);
+    let mut y = 0;
+    while y < h {
+        let mut x = 0;
+        while x < w {
+            let i = y * w + x;
+            let p = i * 4;
+            let kept = mask[i] == 0; // mask==1 => background/cut; ==0 => keep (the cutout foreground)
+            let dist = (cpx[p] as i32 - br).abs()
+                + (cpx[p + 1] as i32 - bgc).abs()
+                + (cpx[p + 2] as i32 - bb).abs();
+            let head = dist > FG_DIST;
+            samples += 1;
+            if head {
+                head_n += 1;
+            }
+            if kept {
+                kept_n += 1;
+            }
+            if kept || head {
+                union += 1;
+                if kept && head {
+                    inter += 1;
+                }
+            }
+            x += 2;
+        }
+        y += 1;
+    }
+    if union == 0 {
+        return 100;
+    }
+    let iou = (inter * 100 / union) as usize;
+    // Best-possible IoU for these class sizes (perfectly nested classes). Below 2x the gate bar the
+    // symmetric IoU cannot pass with headroom even when the mask is perfect -> coverage regime. The
+    // colour-head must still be a non-trivial share of the frame (>= ~0.05%, the same spirit as the
+    // histogram's empty_thresh) or an all-dark frame would score 100 and publish garbage.
+    let ceiling = (head_n.min(kept_n) * 100 / head_n.max(kept_n).max(1)) as usize;
+    let head_floor = (samples / 2000).max(1);
+    if ceiling < MASK_HEAD_IOU_MIN * 2 && head_n >= head_floor {
+        (inter * 100 / head_n) as usize
+    } else {
+        iou
+    }
+}
+
+/// Compute the per-pixel background mask (1 = background/cut, 0 = keep) via the bimodal-gap threshold from
+/// the depth plane passed in. The depth was captured COHERENTLY with this frame's color (single fence, bug
+/// #3 fix) and taken on the render thread, so this fn is now pure CPU over plain slices and runs on the
+/// consume worker -- no game pointer, no D3D12 object. `cpx` is that same frame's tightly-packed RGBA8
+/// colour, used to derive the head's foreground depth reference (colour and depth are the same GPU
+/// submission, so the classification aligns). Returns `None` when the depth has no content / no
+/// separable gap (the caller then reuses the cached mask). Emits the one-shot `depth-key` diagnostic
+/// (success) and a separate one-shot skip diagnostic (dims mismatch / no gap) so both are visible once.
+fn compute_depth_mask(
+    depth: &[f32],
+    dw: usize,
+    dh: usize,
+    w: usize,
+    h: usize,
+    cpx: &[u8],
+) -> Option<Vec<u8>> {
+    if dw != w || dh != h || depth.len() < w * h {
+        // At higher-res (1024) the depth sibling MUST match the color RT or the mask can't align.
+        if DEPTH_KEY_NOGAP_LOGGED.swap(1, Ordering::SeqCst) == 0 {
+            append_autoload_debug(format_args!(
+                "depth-key: SKIP dims-mismatch color={w}x{h} depth={dw}x{dh} depthlen={}",
+                depth.len()
+            ));
+        }
+        return None;
+    }
+    let idx = |x: usize, y: usize| y * w + x;
+    // Frame depth extent over finite values.
+    let mut dmin = f32::INFINITY;
+    let mut dmax = f32::NEG_INFINITY;
+    for &d in depth.iter().take(w * h) {
+        if d.is_finite() {
+            dmin = dmin.min(d);
+            dmax = dmax.max(d);
+        }
+    }
+    let range = dmax - dmin;
+
+    // FOREGROUND reference = the COLOUR head's depth: the median depth of the pixels the IoU oracle
+    // classifies as head (far from the corner-background colour). We KEEP the cluster this belongs to
+    // and CUT the other -- so the cut is robust to the engine's Z direction (we never assume near/far
+    // == 0) AND to where the head sits in the frame. The old CENTRAL-PATCH median broke on Sacred Bean
+    // (er-effects-rs-y134): at the 6.0x head-and-torso framing this model's pose put the geometric
+    // centre off the head, the patch sampled the wrong cluster, and every fresh silhouette missed the
+    // head (IoU=14% < 25% -> zero clean publishes, no portrait/stats). The central patch survives only
+    // as the fallback when the colour head is degenerate.
+    let (fg_ref, fg_src) = match color_head_median_depth(depth, cpx, w, h) {
+        Some(d) => (d, "colorhead"),
+        None => {
+            let cr = (w.min(h) / 16).max(2);
+            let (cx, cy) = (w / 2, h / 2);
+            let mut cpatch: Vec<f32> = Vec::new();
+            let mut yy = cy.saturating_sub(cr);
+            while yy <= (cy + cr).min(h.saturating_sub(1)) {
+                let mut xx = cx.saturating_sub(cr);
+                while xx <= (cx + cr).min(w.saturating_sub(1)) {
+                    let d = depth[idx(xx, yy)];
+                    if d.is_finite() {
+                        cpatch.push(d);
+                    }
+                    xx += 1;
+                }
+                yy += 1;
+            }
+            cpatch.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let center = if cpatch.is_empty() {
+                f32::NAN
+            } else {
+                cpatch[cpatch.len() / 2]
+            };
+            (center, "centerpatch")
+        }
+    };
+
+    // Histogram over [dmin,dmax]; the threshold is the midpoint of the WIDEST run of near-empty bins --
+    // i.e. the gap between the background cluster and the foreground cluster.
+    const NB: usize = 128;
+    let mut hist = [0u32; NB];
+    if range > 0.0 {
+        for &d in depth.iter().take(w * h) {
+            if d.is_finite() {
+                let bi = ((((d - dmin) / range) * NB as f32) as isize).clamp(0, NB as isize - 1);
+                hist[bi as usize] += 1;
+            }
+        }
+    }
+    // A bin is "empty" if it holds < ~0.05% of the frame (tolerates a few depth-edge stragglers).
+    let empty_thresh = ((w * h) / 2000).max(1) as u32;
+    let (mut best_lo, mut best_len) = (0usize, 0usize);
+    let (mut cur_lo, mut cur_len) = (0usize, 0usize);
+    for b in 0..NB {
+        if hist[b] <= empty_thresh {
+            if cur_len == 0 {
+                cur_lo = b;
+            }
+            cur_len += 1;
+            if cur_len > best_len {
+                best_len = cur_len;
+                best_lo = cur_lo;
+            }
+        } else {
+            cur_len = 0;
+        }
+    }
+    let gap_mid_bin = best_lo as f32 + best_len as f32 * 0.5;
+    let threshold = dmin + (gap_mid_bin / NB as f32) * range;
+    // Require a REAL gap (>= ~4% of the range empty) and a valid foreground reference, else no separable
+    // background this frame -> return None (caller reuses the cached mask; a unimodal depth would slice
+    // the head).
+    let have_gap = range > 0.0 && (best_len as f32 / NB as f32) >= 0.04 && fg_ref.is_finite();
+    // Keep the side of the gap the head's reference depth sits on; the other side is the background.
+    let keep_high = fg_ref > threshold;
+    let mut mask = vec![0u8; w * h];
+    let mut masked = 0usize;
+    if have_gap {
+        for i in 0..(w * h) {
+            let d = depth[i];
+            let is_bg = if keep_high {
+                d < threshold
+            } else {
+                d > threshold
+            };
+            if is_bg {
+                mask[i] = 1;
+                masked += 1;
+            }
+        }
+    }
+    // DEGENERATE-MASK REJECTION (er-effects-rs-hi2): a fresh mask cutting under the publish floor is
+    // not a real bg/head separation -- accepting it used to CACHE it, and every later gapless frame
+    // reused the poisoned cache, so a whole window sat in the lowmask band (run 2026-07-03 ~21:17,
+    // window slot4: lowmask=203 clean=0, prior head stuck on screen ~30s). Reject it (None) so the
+    // cache keeps the last REAL mask and later frames retry fresh.
+    let share_pct = masked * 100 / (w * h).max(1);
+    let degenerate = !have_gap || share_pct < PORTRAIT_MIN_TRANSPARENT_PCT;
+    let first_diag = DEPTH_KEY_DIAG_LOGGED.swap(1, Ordering::SeqCst) == 0;
+    let deg_n = if degenerate {
+        DEPTH_KEY_DEGENERATE.fetch_add(1, Ordering::SeqCst)
+    } else {
+        0
+    };
+    // Diagnostic: once at first-ever mask, then throttled on every degenerate frame -- the depth
+    // picture of a collapsing window is the evidence the one-shot boot diag never captured.
+    if first_diag || (degenerate && deg_n % 64 == 0) {
+        let inset = (w.min(h) / 32).max(2);
+        let (tl, tr, bl, br) = (
+            depth[idx(inset, inset)],
+            depth[idx(w - 1 - inset, inset)],
+            depth[idx(inset, h - 1 - inset)],
+            depth[idx(w - 1 - inset, h - 1 - inset)],
+        );
+        append_autoload_debug(format_args!(
+            "depth-key: {w}x{h} min={dmin} max={dmax} fgref={fg_ref} fgsrc={fg_src} corners[tl={tl} tr={tr} bl={bl} br={br}] gap[bins {best_lo}..+{best_len}/{NB}] thr={threshold} keep_high={keep_high} have_gap={have_gap} masked={masked}/{} ({share_pct}%) degenerate={degenerate} deg_n={deg_n}",
+            w * h,
+        ));
+    }
+    if !degenerate {
+        // A clean bimodal bg/head separation confirms this depth buffer belongs to OUR portrait scene.
+        // (The depth candidate is now resolved + pinned on the render-thread coherent readback; the worker
+        // no longer sees the candidate pointer, so PROFILE_DEPTH_PIN is not written here anymore.)
+        return Some(mask);
+    }
+    // SECOND PASS (backdrop-geometry recovery -- er-effects-rs-hi2 root fix, runs 2026-07-03).
+    // Some characters' portrait scenes render backdrop GEOMETRY at a depth just behind the head
+    // (observed: box ~0.0199 vs head ~0.0210) plus a sliver of true cleared depth (exact dmin=0).
+    // The widest histogram gap is then the WRONG gap (cleared..geometry, bins 1..112), so the "bg"
+    // cut is only the cleared sliver (~0%) and the whole window starves (slot4 Speed Bean
+    // unkeyed=204, slot9 Moonsent Bean unkeyed=260). Excluding the BIT-EXACT extreme values (the
+    // clear planes) and re-running the same histogram over the interior geometry makes the real
+    // head/backdrop air gap dominant; excluded extremes are then classified by the same threshold
+    // (cleared lands on the bg side). Only runs when the validated first pass failed.
+    if range > 0.0 && fg_ref.is_finite() {
+        let dmin_bits = dmin.to_bits();
+        let dmax_bits = dmax.to_bits();
+        let interior =
+            |d: f32| d.is_finite() && d.to_bits() != dmin_bits && d.to_bits() != dmax_bits;
+        let mut imin = f32::INFINITY;
+        let mut imax = f32::NEG_INFINITY;
+        for &d in depth.iter().take(w * h) {
+            if interior(d) {
+                imin = imin.min(d);
+                imax = imax.max(d);
+            }
+        }
+        let irange = imax - imin;
+        if irange > 0.0 {
+            let mut hist2 = [0u32; NB];
+            for &d in depth.iter().take(w * h) {
+                if interior(d) {
+                    let bi =
+                        ((((d - imin) / irange) * NB as f32) as isize).clamp(0, NB as isize - 1);
+                    hist2[bi as usize] += 1;
+                }
+            }
+            // VALLEY, not empty run (run 7: the model's own body fills intermediate depths, so no
+            // EMPTY bins exist between the backdrop and head clusters at any binning -- the empty-
+            // run second pass never fired). A LOW-DENSITY run (<= 0.5% of the frame per bin, vs the
+            // first pass's 0.05%) between the two dominant clusters is the real separator; min run
+            // 2% of bins so single noisy bins can't split a cluster.
+            let low_thresh = ((w * h) / 200).max(1) as u32;
+            let (mut b_lo, mut b_len) = (0usize, 0usize);
+            let (mut c_lo, mut c_len) = (0usize, 0usize);
+            for b in 0..NB {
+                if hist2[b] <= low_thresh {
+                    if c_len == 0 {
+                        c_lo = b;
+                    }
+                    c_len += 1;
+                    if c_len > b_len {
+                        b_len = c_len;
+                        b_lo = c_lo;
+                    }
+                } else {
+                    c_len = 0;
+                }
+            }
+            let thr2 = imin + ((b_lo as f32 + b_len as f32 * 0.5) / NB as f32) * irange;
+            if (b_len as f32 / NB as f32) >= 0.02 {
+                let keep_high2 = fg_ref > thr2;
+                let mut mask2 = vec![0u8; w * h];
+                let mut masked2 = 0usize;
+                for i in 0..(w * h) {
+                    let d = depth[i];
+                    let is_bg = if keep_high2 { d < thr2 } else { d > thr2 };
+                    if is_bg {
+                        mask2[i] = 1;
+                        masked2 += 1;
+                    }
+                }
+                let share2 = masked2 * 100 / (w * h).max(1);
+                if share2 >= PORTRAIT_MIN_TRANSPARENT_PCT {
+                    let n = DEPTH_KEY_SECOND_PASS.fetch_add(1, Ordering::SeqCst);
+                    if n % 64 == 0 {
+                        append_autoload_debug(format_args!(
+                            "depth-key: SECOND-PASS recovered mask -- interior[{imin},{imax}] gap[bins {b_lo}..+{b_len}/{NB}] thr={thr2} keep_high={keep_high2} masked={share2}% (first pass degenerate: clear-plane extremes excluded)"
+                        ));
+                    }
+                    // (Depth candidate pinning moved to the render-thread coherent readback; not here.)
+                    return Some(mask2);
+                }
+            }
+            // Ground-truth dump, once per run, when even the valley pass fails: the compact
+            // interior histogram (nonzero-bin runs) is the evidence for the NEXT split design.
+            if DEPTH_KEY_HIST_DUMPED.swap(1, Ordering::SeqCst) == 0 {
+                let mut runs = String::new();
+                let mut b = 0usize;
+                while b < NB {
+                    if hist2[b] > 0 {
+                        let lo = b;
+                        let mut px = 0u64;
+                        while b < NB && hist2[b] > 0 {
+                            px += hist2[b] as u64;
+                            b += 1;
+                        }
+                        runs.push_str(&format!(" [{lo}..{}]={px}", b - 1));
+                    } else {
+                        b += 1;
+                    }
+                }
+                append_autoload_debug(format_args!(
+                    "depth-key: VALLEY-FAIL interior[{imin},{imax}] low_thresh={low_thresh} nonzero-runs:{runs}"
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// Force the offscreen RT->SRV resolve in D3D12: CopyResource the render-target texture behind
+/// `src_gpu_child` (the renderer's offscreen RT, which holds the rendered head) into the sampleable SRV
+/// texture behind `dst_gpu_child` (offscreen+0x10's CSGxTexture, what the loading-screen forge binds and
+/// GFx samples). The engine's own per-frame resolve almost never fires post-Continue (RT has content, SRV
+/// stays black), so we do the copy ourselves every render-thread frame. Returns true on a completed copy
+/// (or when src==dst so no copy is needed). Same safety contract as the readback: our OWN
+/// queue/allocator/list/fence, game resources borrowed (never Released), never panics/crashes.
+pub(crate) unsafe fn copy_offscreen_rt_to_srv(src_gpu_child: usize, dst_gpu_child: usize) -> bool {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        copy_offscreen_rt_to_srv_inner(src_gpu_child, dst_gpu_child)
+    }))
+    .unwrap_or(false)
+}
+
+unsafe fn copy_offscreen_rt_to_srv_inner(src_gpu_child: usize, dst_gpu_child: usize) -> bool {
+    // Resolve the SRV (dst) first from its OWN single-texture nest -> deterministic, plus its candidate
+    // pointer. Then resolve the source as the largest texture in the offscreen nest EXCLUDING that SRV,
+    // so we never pick the (black) SRV as the source and self-skip.
+    let Some((dst, dst_v)) = (unsafe { find_d3d12_resource_ex(dst_gpu_child, 0, false, 0) }) else {
+        return false;
+    };
+    // Prefer the pinned content RT for the source too, so the SRV the native forge samples is fed from
+    // the same confirmed-ours texture the display publishes (never a foreign slot's RT).
+    let rt_pin = PROFILE_RT_PIN.load(Ordering::SeqCst);
+    let Some((src, _src_v)) =
+        (unsafe { find_d3d12_resource_ex(src_gpu_child, dst_v, false, rt_pin) })
+    else {
+        return false;
+    };
+    // CopyResource requires identical dimensions + format.
+    let sd: D3D12_RESOURCE_DESC = unsafe { src.GetDesc() };
+    let dd: D3D12_RESOURCE_DESC = unsafe { dst.GetDesc() };
+    // One-shot diagnostic: are src (RT) and dst (SRV) distinct resources, and do their descs match? If
+    // find_d3d12_resource returns the SAME resource for both starts (RT==SRV by BFS), the copy is a
+    // self-skip and can never populate the SRV -- the signature of the BFS "largest texture" ambiguity.
+    if PROFILE_RT_SRV_COPY_DIAGGED.fetch_add(1, Ordering::SeqCst) < 6 {
+        append_autoload_debug(format_args!(
+            "rt-srv-copy-diag: src=0x{:x} dst=0x{:x} same={} src_dims={}x{} fmt={} dst_dims={}x{} fmt={}",
+            src.as_raw() as usize,
+            dst.as_raw() as usize,
+            (src.as_raw() == dst.as_raw()) as u8,
+            sd.Width,
+            sd.Height,
+            sd.Format.0,
+            dd.Width,
+            dd.Height,
+            dd.Format.0,
+        ));
+    }
+    // Same physical resource (already resolved / single texture) -> nothing to copy.
+    if src.as_raw() == dst.as_raw() {
+        return true;
+    }
+    if sd.Width != dd.Width || sd.Height != dd.Height || sd.Format != dd.Format {
+        return false;
+    }
+    let mut device_opt: Option<ID3D12Device> = None;
+    if unsafe { src.GetDevice(&mut device_opt) }.is_err() {
+        return false;
+    }
+    let Some(device) = device_opt else {
+        return false;
+    };
+    let queue_desc = D3D12_COMMAND_QUEUE_DESC {
+        Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+        Priority: 0,
+        Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
+        NodeMask: 0,
+    };
+    let Ok(queue) = (unsafe { device.CreateCommandQueue::<ID3D12CommandQueue>(&queue_desc) })
+    else {
+        return false;
+    };
+    let Ok(allocator) = (unsafe {
+        device.CreateCommandAllocator::<ID3D12CommandAllocator>(D3D12_COMMAND_LIST_TYPE_DIRECT)
+    }) else {
+        return false;
+    };
+    let Ok(list) = (unsafe {
+        device.CreateCommandList::<_, _, ID3D12GraphicsCommandList>(
+            0,
+            D3D12_COMMAND_LIST_TYPE_DIRECT,
+            &allocator,
+            None,
+        )
+    }) else {
+        return false;
+    };
+    // src (RT): COMMON -> COPY_SOURCE; dst (SRV): COMMON -> COPY_DEST; copy; both back to COMMON.
+    unsafe {
+        record_transition(
+            &list,
+            &src,
+            D3D12_RESOURCE_STATE_COMMON,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+        )
+    };
+    unsafe {
+        record_transition(
+            &list,
+            &dst,
+            D3D12_RESOURCE_STATE_COMMON,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+        )
+    };
+    unsafe { list.CopyResource(&dst, &src) };
+    unsafe {
+        record_transition(
+            &list,
+            &src,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+            D3D12_RESOURCE_STATE_COMMON,
+        )
+    };
+    unsafe {
+        record_transition(
+            &list,
+            &dst,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_COMMON,
+        )
+    };
+    if unsafe { list.Close() }.is_err() {
+        return false;
+    }
+    let Ok(base_list) = list.cast::<ID3D12CommandList>() else {
+        return false;
+    };
+    unsafe { queue.ExecuteCommandLists(&[Some(base_list)]) };
+    let Ok(fence) = (unsafe { device.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) }) else {
+        return false;
+    };
+    if unsafe { queue.Signal(&fence, READBACK_FENCE_TARGET) }.is_err() {
+        return false;
+    }
+    if unsafe { fence.GetCompletedValue() } < READBACK_FENCE_TARGET {
+        let Ok(event) = (unsafe { CreateEventW(None, false, false, None) }) else {
+            return false;
+        };
+        if unsafe { fence.SetEventOnCompletion(READBACK_FENCE_TARGET, event) }.is_err() {
+            let _ = unsafe { CloseHandle(event) };
+            return false;
+        }
+        let wait = unsafe { WaitForSingleObject(event, READBACK_FENCE_WAIT_MS) };
+        let _ = unsafe { CloseHandle(event) };
+        if wait != WAIT_OBJECT_0 {
+            return false;
+        }
+    }
+    true
+}
+
+/// Upload tightly-packed RGBA8 `pixels` (`w`x`h`) into the TEXTURE2D found in `dst_gpu_child`'s nest --
+/// overwriting the displayed now-loading background texture's pixels in place, so the Scaleform sprite
+/// (which already registered that texture by name on the first bind) composites the real portrait without
+/// any re-registration. Dims/format must match the destination (R8G8B8A8_UNORM, same w/h). Our own
+/// upload heap + queue/list/fence; the game's resource is borrowed (never Released). Never panics.
+pub(crate) unsafe fn upload_rgba_to_texture(
+    dst_gpu_child: usize,
+    w: u32,
+    h: u32,
+    pixels: &[u8],
+) -> bool {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        upload_rgba_to_texture_inner(dst_gpu_child, w, h, pixels)
+    }))
+    .unwrap_or(false)
+}
+
+unsafe fn upload_rgba_to_texture_inner(
+    dst_gpu_child: usize,
+    w: u32,
+    h: u32,
+    pixels: &[u8],
+) -> bool {
+    if pixels.len() < (w as usize) * (h as usize) * RGBA8_BPP {
+        return false;
+    }
+    let Some(dst) = (unsafe { find_d3d12_resource(dst_gpu_child) }) else {
+        return false;
+    };
+    unsafe { copy_rgba_into_resource(&dst, w, h, pixels) }
+}
+
+/// Candidate A (er-effects-rs-jsm) per-frame in-movie copy: resolve the GFx-sampled `ID3D12Resource` for
+/// the Scaleform HAL texture `hal` (deterministic, dim-matched to the forged `want_dim`), aspect-cover
+/// resample the live head `spx` (`sw`x`sh`) down to that resource's dims, and CopyTextureRegion it in.
+/// Returns the destination dims on success. Fail-open (`None`) leaves the Present-overlay in charge.
+pub(crate) unsafe fn upload_head_into_gfx_texture(
+    hal: usize,
+    want_dim: u32,
+    sw: u32,
+    sh: u32,
+    spx: &[u8],
+) -> Option<(u32, u32)> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        if sw == 0 || sh == 0 || spx.len() < (sw as usize) * (sh as usize) * RGBA8_BPP {
+            return None;
+        }
+        let dst = resolve_gfx_hal_resource(hal, want_dim, want_dim)?;
+        let desc: D3D12_RESOURCE_DESC = dst.GetDesc();
+        let dw = desc.Width as u32;
+        let dh = desc.Height;
+        if dw == 0 || dh == 0 || dw > MAX_RT_DIM || dh > MAX_RT_DIM {
+            return None;
+        }
+        let resampled = cover_resample_rgba8(spx, sw, sh, dw, dh);
+        if copy_rgba_into_resource(&dst, dw, dh, &resampled) {
+            Some((dw, dh))
+        } else {
+            None
+        }
+    }))
+    .ok()
+    .flatten()
+}
+
+/// Single-sample aspect-cover resample of tightly-packed RGBA8 `spx` (`sw`x`sh`) into a fresh `dw`x`dh`
+/// RGBA8 buffer: preserve aspect, scale until the destination is covered, crop the excess in source
+/// space (the same mapping `sample_portrait_rgba_cover` uses for the Present composite). No supersample.
+pub(crate) fn cover_resample_rgba8(spx: &[u8], sw: u32, sh: u32, dw: u32, dh: u32) -> Vec<u8> {
+    let (sw, sh, dw, dh) = (sw as usize, sh as usize, dw as usize, dh as usize);
+    let mut out = vec![0u8; dw * dh * RGBA8_BPP];
+    if sw == 0 || sh == 0 {
+        return out;
+    }
+    let scale = (dw as f32 / sw as f32).max(dh as f32 / sh as f32);
+    let visible_w = dw as f32 / scale;
+    let visible_h = dh as f32 / scale;
+    let off_x = (sw as f32 - visible_w) * 0.5;
+    let off_y = (sh as f32 - visible_h) * 0.5;
+    for y in 0..dh {
+        let src_y = ((y as f32 + 0.5) / dh as f32) * visible_h + off_y;
+        let sy = (src_y.floor().max(0.0) as usize).min(sh - 1);
+        let src_row = sy * sw;
+        let dst_row = y * dw;
+        for x in 0..dw {
+            let src_x = ((x as f32 + 0.5) / dw as f32) * visible_w + off_x;
+            let sx = (src_x.floor().max(0.0) as usize).min(sw - 1);
+            let so = (src_row + sx) * RGBA8_BPP;
+            let d_o = (dst_row + x) * RGBA8_BPP;
+            if so + RGBA8_BPP <= spx.len() {
+                out[d_o..d_o + RGBA8_BPP].copy_from_slice(&spx[so..so + RGBA8_BPP]);
+            }
+        }
+    }
+    out
+}
+
+/// Record + submit a CopyTextureRegion of a tightly-packed RGBA8 buffer (`w`x`h`, must match `dst`'s
+/// dims) into subresource 0 of an already-resolved game texture `dst`, on our OWN queue with a CPU fence
+/// wait. `dst` is borrowed (never Released). `false` on any COM failure or dim mismatch. Never Releases
+/// the game resource; the barrier clone is balanced by `record_transition`.
+unsafe fn copy_rgba_into_resource(dst: &ID3D12Resource, w: u32, h: u32, pixels: &[u8]) -> bool {
+    if pixels.len() < (w as usize) * (h as usize) * RGBA8_BPP {
+        return false;
+    }
+    let desc: D3D12_RESOURCE_DESC = unsafe { dst.GetDesc() };
+    if desc.Width as u32 != w || desc.Height != h {
+        return false; // dim mismatch -- caller must match the destination texture's own size
+    }
+    let mut device_opt: Option<ID3D12Device> = None;
+    if unsafe { dst.GetDevice(&mut device_opt) }.is_err() {
+        return false;
+    }
+    let Some(device) = device_opt else {
+        return false;
+    };
+    // Copyable footprint of subresource 0 (256-aligned row pitch).
+    let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+    let mut num_rows: u32 = 0;
+    let mut row_size_bytes: u64 = 0;
+    let mut total_bytes: u64 = 0;
+    unsafe {
+        device.GetCopyableFootprints(
+            &desc,
+            0,
+            1,
+            0,
+            Some(&mut footprint),
+            Some(&mut num_rows),
+            Some(&mut row_size_bytes),
+            Some(&mut total_bytes),
+        )
+    };
+    if total_bytes == 0 || footprint.Footprint.RowPitch == 0 {
+        return false;
+    }
+    // UPLOAD-heap buffer sized to the footprint; fill it with the RGBA rows at the 256-aligned pitch.
+    let heap_props = D3D12_HEAP_PROPERTIES {
+        Type: D3D12_HEAP_TYPE_UPLOAD,
+        CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+        MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+        CreationNodeMask: 1,
+        VisibleNodeMask: 1,
+    };
+    let buffer_desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+        Alignment: 0,
+        Width: total_bytes,
+        Height: 1,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: DXGI_FORMAT_UNKNOWN,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+        Flags: D3D12_RESOURCE_FLAG_NONE,
+    };
+    let mut upload_opt: Option<ID3D12Resource> = None;
+    if unsafe {
+        device.CreateCommittedResource(
+            &heap_props,
+            D3D12_HEAP_FLAG_NONE,
+            &buffer_desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            None,
+            &mut upload_opt,
+        )
+    }
+    .is_err()
+    {
+        return false;
+    }
+    let Some(upload) = upload_opt else {
+        return false;
+    };
+    let row_pitch = footprint.Footprint.RowPitch as usize;
+    let src_row = (w as usize) * RGBA8_BPP;
+    let mut mapped: *mut c_void = std::ptr::null_mut();
+    if unsafe { upload.Map(0, None, Some(&mut mapped)) }.is_err() || mapped.is_null() {
+        return false;
+    }
+    let dstp = mapped as *mut u8;
+    for y in 0..h as usize {
+        let so = y * src_row;
+        let d_o = y * row_pitch;
+        if so + src_row > pixels.len() || (d_o + src_row) as u64 > total_bytes {
+            break;
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(pixels.as_ptr().add(so), dstp.add(d_o), src_row);
+        }
+    }
+    unsafe { upload.Unmap(0, None) };
+    // Record list: dst COMMON -> COPY_DEST, CopyTextureRegion(upload -> dst sub 0), dst back to COMMON.
+    let queue_desc = D3D12_COMMAND_QUEUE_DESC {
+        Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+        Priority: 0,
+        Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
+        NodeMask: 0,
+    };
+    let Ok(queue) = (unsafe { device.CreateCommandQueue::<ID3D12CommandQueue>(&queue_desc) })
+    else {
+        return false;
+    };
+    let Ok(allocator) = (unsafe {
+        device.CreateCommandAllocator::<ID3D12CommandAllocator>(D3D12_COMMAND_LIST_TYPE_DIRECT)
+    }) else {
+        return false;
+    };
+    let Ok(list) = (unsafe {
+        device.CreateCommandList::<_, _, ID3D12GraphicsCommandList>(
+            0,
+            D3D12_COMMAND_LIST_TYPE_DIRECT,
+            &allocator,
+            None,
+        )
+    }) else {
+        return false;
+    };
+    unsafe {
+        record_transition(
+            &list,
+            dst,
+            D3D12_RESOURCE_STATE_COMMON,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+        )
+    };
+    let mut src_loc = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(upload.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            PlacedFootprint: footprint,
+        },
+    };
+    let mut dst_loc = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(dst.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            SubresourceIndex: 0,
+        },
+    };
+    unsafe { list.CopyTextureRegion(&dst_loc, 0, 0, 0, &src_loc, None) };
+    unsafe { ManuallyDrop::drop(&mut src_loc.pResource) };
+    unsafe { ManuallyDrop::drop(&mut dst_loc.pResource) };
+    unsafe {
+        record_transition(
+            &list,
+            dst,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_COMMON,
+        )
+    };
+    if unsafe { list.Close() }.is_err() {
+        return false;
+    }
+    let Ok(base_list) = list.cast::<ID3D12CommandList>() else {
+        return false;
+    };
+    unsafe { queue.ExecuteCommandLists(&[Some(base_list)]) };
+    let Ok(fence) = (unsafe { device.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) }) else {
+        return false;
+    };
+    if unsafe { queue.Signal(&fence, READBACK_FENCE_TARGET) }.is_err() {
+        return false;
+    }
+    if unsafe { fence.GetCompletedValue() } < READBACK_FENCE_TARGET {
+        let Ok(event) = (unsafe { CreateEventW(None, false, false, None) }) else {
+            return false;
+        };
+        if unsafe { fence.SetEventOnCompletion(READBACK_FENCE_TARGET, event) }.is_err() {
+            let _ = unsafe { CloseHandle(event) };
+            return false;
+        }
+        let wait = unsafe { WaitForSingleObject(event, READBACK_FENCE_WAIT_MS) };
+        let _ = unsafe { CloseHandle(event) };
+        if wait != WAIT_OBJECT_0 {
+            return false;
+        }
+    }
+    true
+}
+
+/// Create a persistent DEFAULT-heap R8G8B8A8 TEXTURE2D, upload `pixels` into it via a one-shot private
+/// queue, and leave it in `COPY_SOURCE` so the per-frame composite can use it as a `CopyTextureRegion`
+/// source. Returns the texture (the temp queue/allocator/list/upload-buffer are released here). `None` on
+/// any failure -- never panics.
+///
+/// RETAINED FOR REFERENCE: the alpha-honoring composite now blends the portrait onto the backbuffer on the
+/// CPU (see `blend_portrait_over_backbuffer`), so this GPU upload path is currently unused. Kept as the
+/// proven RGBA->DEFAULT-heap upload for a future GPU-draw composite.
+#[allow(dead_code)]
+unsafe fn create_portrait_source_texture(
+    device: &ID3D12Device,
+    pw: u32,
+    ph: u32,
+    pixels: &[u8],
+) -> Option<ID3D12Resource> {
+    let tex_heap = D3D12_HEAP_PROPERTIES {
+        Type: D3D12_HEAP_TYPE_DEFAULT,
+        CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+        MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+        CreationNodeMask: 1,
+        VisibleNodeMask: 1,
+    };
+    let tex_desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        Alignment: 0,
+        Width: pw as u64,
+        Height: ph,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
+        Flags: D3D12_RESOURCE_FLAG_NONE,
+    };
+    let mut tex_opt: Option<ID3D12Resource> = None;
+    if unsafe {
+        device.CreateCommittedResource(
+            &tex_heap,
+            D3D12_HEAP_FLAG_NONE,
+            &tex_desc,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            None,
+            &mut tex_opt,
+        )
+    }
+    .is_err()
+    {
+        return None;
+    }
+    let tex = tex_opt?;
+
+    // Copyable footprint of subresource 0 (256-aligned row pitch).
+    let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+    let mut total_bytes: u64 = 0;
+    unsafe {
+        device.GetCopyableFootprints(
+            &tex_desc,
+            0,
+            1,
+            0,
+            Some(&mut footprint),
+            None,
+            None,
+            Some(&mut total_bytes),
+        )
+    };
+    if total_bytes == 0 || footprint.Footprint.RowPitch == 0 {
+        return None;
+    }
+    let buf_heap = D3D12_HEAP_PROPERTIES {
+        Type: D3D12_HEAP_TYPE_UPLOAD,
+        CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+        MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+        CreationNodeMask: 1,
+        VisibleNodeMask: 1,
+    };
+    let buf_desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+        Alignment: 0,
+        Width: total_bytes,
+        Height: 1,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: DXGI_FORMAT_UNKNOWN,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+        Flags: D3D12_RESOURCE_FLAG_NONE,
+    };
+    let mut upload_opt: Option<ID3D12Resource> = None;
+    if unsafe {
+        device.CreateCommittedResource(
+            &buf_heap,
+            D3D12_HEAP_FLAG_NONE,
+            &buf_desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            None,
+            &mut upload_opt,
+        )
+    }
+    .is_err()
+    {
+        return None;
+    }
+    let upload = upload_opt?;
+    let row_pitch = footprint.Footprint.RowPitch as usize;
+    let src_row = (pw as usize) * RGBA8_BPP;
+    let mut mapped: *mut c_void = std::ptr::null_mut();
+    if unsafe { upload.Map(0, None, Some(&mut mapped)) }.is_err() || mapped.is_null() {
+        return None;
+    }
+    let dstp = mapped as *mut u8;
+    for y in 0..ph as usize {
+        let so = y * src_row;
+        let d_o = y * row_pitch;
+        if so + src_row > pixels.len() || (d_o + src_row) as u64 > total_bytes {
+            break;
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(pixels.as_ptr().add(so), dstp.add(d_o), src_row);
+        }
+    }
+    unsafe { upload.Unmap(0, None) };
+
+    let queue_desc = D3D12_COMMAND_QUEUE_DESC {
+        Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+        Priority: 0,
+        Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
+        NodeMask: 0,
+    };
+    let queue = unsafe { device.CreateCommandQueue::<ID3D12CommandQueue>(&queue_desc) }.ok()?;
+    let allocator = unsafe {
+        device.CreateCommandAllocator::<ID3D12CommandAllocator>(D3D12_COMMAND_LIST_TYPE_DIRECT)
+    }
+    .ok()?;
+    let list = unsafe {
+        device.CreateCommandList::<_, _, ID3D12GraphicsCommandList>(
+            0,
+            D3D12_COMMAND_LIST_TYPE_DIRECT,
+            &allocator,
+            None,
+        )
+    }
+    .ok()?;
+    // tex was created in COPY_DEST -- copy upload -> tex sub 0, then transition tex to COPY_SOURCE.
+    let mut src_loc = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(upload.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            PlacedFootprint: footprint,
+        },
+    };
+    let mut dst_loc = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(tex.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            SubresourceIndex: 0,
+        },
+    };
+    unsafe { list.CopyTextureRegion(&dst_loc, 0, 0, 0, &src_loc, None) };
+    unsafe { ManuallyDrop::drop(&mut src_loc.pResource) };
+    unsafe { ManuallyDrop::drop(&mut dst_loc.pResource) };
+    unsafe {
+        record_transition(
+            &list,
+            &tex,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+        )
+    };
+    if unsafe { list.Close() }.is_err() {
+        return None;
+    }
+    let base_list = list.cast::<ID3D12CommandList>().ok()?;
+    unsafe { queue.ExecuteCommandLists(&[Some(base_list)]) };
+    let fence = unsafe { device.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) }.ok()?;
+    if unsafe { queue.Signal(&fence, READBACK_FENCE_TARGET) }.is_err() {
+        return None;
+    }
+    if unsafe { fence.GetCompletedValue() } < READBACK_FENCE_TARGET {
+        let event = unsafe { CreateEventW(None, false, false, None) }.ok()?;
+        let _ = unsafe { fence.SetEventOnCompletion(READBACK_FENCE_TARGET, event) };
+        let wait = unsafe { WaitForSingleObject(event, READBACK_FENCE_WAIT_MS) };
+        let _ = unsafe { CloseHandle(event) };
+        if wait != WAIT_OBJECT_0 {
+            return None;
+        }
+    }
+    Some(tex)
+}

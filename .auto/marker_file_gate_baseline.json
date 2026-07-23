@@ -1,0 +1,16 @@
+{
+  "_comment": "DEPRECATED-ALLOWLIST POLICY (deprecate-env-marker-gate-allowlists-no-gated-features-2026-07-19). The user directive is 'we don't want any env/marker gated features.' The former grandfathering allowlist `sanctioned_marker_gate_names` and the `migrate_to_default` ratchet are DEPRECATED and permanently EMPTY: an empty behavioral allowlist means NO marker feature gate is permitted. scripts/check-marker-file-gates.py now FAILS on ANY `.join(\"er-effects-*.txt\").exists()` toggle in crates/er-effects-rs/src/**/*.rs unless its marker NAME appears in `diagnostic_gates` below with a non-empty rationale AND the enclosing fn does NOT classify as behavioral. `diagnostic_gates` is the ONLY permitted exception and is reserved for genuinely diagnostic toggles that change NO game behavior (passive logging/telemetry/trace, read-only sampling). A behavioral fix must be DEFAULT (gated only on a real runtime condition) or removed -- it may never be re-added here. Adding a `diagnostic_gates` entry is a deliberate reviewed act that must show in the diff and carry a justification.",
+  "_deprecated_behavioral_allowlists_comment": "These two keys are retained ONLY so the checker still loads and so their emptiness is explicit and reviewable. They MUST stay empty. Do NOT re-populate them to grandfather a gate; the checker treats any marker feature gate outside `diagnostic_gates` as a hard failure.",
+  "sanctioned_marker_gate_names": [],
+  "migrate_to_default": [],
+  "diagnostic_gates": {
+    "er-effects-anti-antidebug.txt": "Marker twin of ER_EFFECTS_ANTI_ANTIDEBUG: enables the anti-anti-debug patches so debug exceptions / INT3 diagnostics reach the VEH (auto-on with SW_BP). Diagnostic-enablement for the crash/breakpoint tooling only; not a product feature.",
+    "er-effects-c30-watch.txt": "Marker twin of ER_EFFECTS_C30_WATCH: arms the diagnostic HW write-watchpoint on GameMan+0xc30 (trap/log/disarm/resume). Observe-only; changes no game behavior.",
+    "er-effects-grsysmsg-log.txt": "Marker twin of ER_EFFECTS_GRSYSMSG_LOG: diagnostic log of the GR_System_Message ids seen at startup. Observe-only; no game behavior change.",
+    "er-effects-input-trace.txt": "Marker twin of ER_EFFECTS_INPUT_TRACE: passive controller-input trace to a log. Observe-only; injects and changes nothing.",
+    "er-effects-profile-rip.txt": "Marker twin of ER_EFFECTS_PROFILE_RIP: profiler RIP-sampling sub-switch (read-only thread sampling). No game behavior change.",
+    "er-effects-profile.txt": "Marker twin of ER_EFFECTS_PROFILE: boot CPU profiler master switch (read-only sampler thread -> JSONL). Cannot perturb the game.",
+    "er-effects-save-trace.txt": "Marker twin of ER_EFFECTS_SAVE_TRACE: passive save-IO trace hook that logs save-path activity. Observe-only; no game behavior change.",
+    "er-effects-telemetry-only.txt": "Marker twin of ER_EFFECTS_TELEMETRY_ONLY: the sanctioned save-source exemption (AGENTS.md) selecting a telemetry-only/no-load observe mode for diagnostic runs. Diagnostic save-source selection, explicitly allowed by project policy."
+  }
+}

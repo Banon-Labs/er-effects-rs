@@ -177,7 +177,10 @@ def run_witchy_pack(witchy: Path, alias_dir: Path, log_path: Path) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("w", encoding="utf-8", errors="replace") as log:
         proc = subprocess.run(
-            [str(witchy), "-p", str(alias_dir)], stdout=log, stderr=subprocess.STDOUT
+            [str(witchy), "-p", str(alias_dir)],
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            timeout=30,
         )
     if proc.returncode not in (0, 82):
         tail = ""

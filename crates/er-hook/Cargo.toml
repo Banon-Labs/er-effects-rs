@@ -1,0 +1,14 @@
+[package]
+name = "er-hook"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+# Shared MinHook FFI + hook union. A normal rlib: each dependent cdylib statically links
+# its OWN MinHook instance (required -- the union owns exactly one instance per DLL), while
+# the vendored MinHook C source is cc-compiled ONCE here instead of in three build scripts.
+name = "er_hook"
+
+[build-dependencies]
+cc = "1.0"

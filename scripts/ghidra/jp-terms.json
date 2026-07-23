@@ -1,0 +1,4817 @@
+[
+  {
+    "jp": "ランク",
+    "count": 12,
+    "example": "u\"決闘：ランクC\""
+  },
+  {
+    "jp": "モデル",
+    "count": 10,
+    "example": "u\"装飾（眼帯）モデルID\""
+  },
+  {
+    "jp": "乱入赤",
+    "count": 9,
+    "example": "u\"乱入赤_A\""
+  },
+  {
+    "jp": "テクスチャ",
+    "count": 8,
+    "example": "u\"テクスチャ：設定なし\""
+  },
+  {
+    "jp": "通常赤",
+    "count": 8,
+    "example": "u\"【通常赤2：マップ守護】\""
+  },
+  {
+    "jp": "通常白",
+    "count": 7,
+    "example": "u\"【通常白1：バーサーカー白】\""
+  },
+  {
+    "jp": "が未初期化です",
+    "count": 7,
+    "example": "\"DLResourceManagerが未初期化です\""
+  },
+  {
+    "jp": "髭",
+    "count": 6,
+    "example": "u\"Beard_Flushed_Pale（髭、明暗）\""
+  },
+  {
+    "jp": "サウンド用環境音制御用ダミーポイント",
+    "count": 6,
+    "example": "u\"サウンド用環境音制御用ダミーポイント\""
+  },
+  {
+    "jp": "エラー",
+    "count": 6,
+    "example": "u\"エラー\""
+  },
+  {
+    "jp": "破片の君主",
+    "count": 6,
+    "example": "u\"破片の君主、ゴドリック\""
+  },
+  {
+    "jp": "肌の色",
+    "count": 5,
+    "example": "u\"Skin_Flushed_Pale（肌の色）\""
+  },
+  {
+    "jp": "体型スケール",
+    "count": 5,
+    "example": "u\"体型スケール：頭部\""
+  },
+  {
+    "jp": "の位送り",
+    "count": 5,
+    "example": "u\": 3個飛ばし\\n: 5個飛ばし\\n: 10の位送り\\n: 100の位送り\\n: 1_000の位送り\\n: 10_000の位送り\\n: 100_000の位送り\""
+  },
+  {
+    "jp": "ルートタイプ",
+    "count": 5,
+    "example": "u\"ルートタイプＡ\""
+  },
+  {
+    "jp": "青赤白",
+    "count": 5,
+    "example": "u\"【青赤白1：乱入赤】\""
+  },
+  {
+    "jp": "決闘",
+    "count": 5,
+    "example": "u\"決闘：ランクなし\""
+  },
+  {
+    "jp": "乱闘・共闘",
+    "count": 5,
+    "example": "u\"乱闘・共闘：ランクなし\""
+  },
+  {
+    "jp": "遺灰",
+    "count": 5,
+    "example": "u\"遺灰：ランクなし\""
+  },
+  {
+    "jp": "血文字",
+    "count": 4,
+    "example": "u\"血文字 DB\""
+  },
+  {
+    "jp": "バーサーカー白",
+    "count": 4,
+    "example": "u\"バーサーカー白\""
+  },
+  {
+    "jp": "赤狩り",
+    "count": 4,
+    "example": "u\"赤狩り\""
+  },
+  {
+    "jp": "擬似マルチ用侵入",
+    "count": 4,
+    "example": "u\"NPC擬似マルチ用侵入_A\""
+  },
+  {
+    "jp": "攻撃側",
+    "count": 4,
+    "example": "u\"攻撃側：位置合わせ中\""
+  },
+  {
+    "jp": "防御側",
+    "count": 4,
+    "example": "u\"防御側：位置合わせ中\""
+  },
+  {
+    "jp": "血痕",
+    "count": 4,
+    "example": "u\"血痕\""
+  },
+  {
+    "jp": "マップ守護",
+    "count": 4,
+    "example": "u\"【マップ守護：マップ守護】\""
+  },
+  {
+    "jp": "されている",
+    "count": 4,
+    "example": "u\"アカウントがBANされている\""
+  },
+  {
+    "jp": "倍",
+    "count": 4,
+    "example": "u\"LB : 数値操作10倍、リスト移動10倍\""
+  },
+  {
+    "jp": "不正な状態",
+    "count": 4,
+    "example": "\"エラー：不正な状態。Finalize後に処理が行われています\""
+  },
+  {
+    "jp": "後に処理が行われています",
+    "count": 4,
+    "example": "\"エラー：不正な状態。Finalize後に処理が行われています\""
+  },
+  {
+    "jp": "猀",
+    "count": 4,
+    "example": "u\"┰猀ᄀ㰰─猀\""
+  },
+  {
+    "jp": "罪人狩り",
+    "count": 3,
+    "example": "u\"罪人狩り\""
+  },
+  {
+    "jp": "太陽霊",
+    "count": 3,
+    "example": "u\"太陽霊（白サイン）\""
+  },
+  {
+    "jp": "乱入",
+    "count": 3,
+    "example": "u\"太陽霊（乱入）\""
+  },
+  {
+    "jp": "寿命",
+    "count": 3,
+    "example": "u\"■寿命 %f\""
+  },
+  {
+    "jp": "距離",
+    "count": 3,
+    "example": "u\"■距離 %f\""
+  },
+  {
+    "jp": "唇の形",
+    "count": 3,
+    "example": "u\"Mouth_drawn_pursed（唇の形）\""
+  },
+  {
+    "jp": "不明",
+    "count": 3,
+    "example": "u\"不明\""
+  },
+  {
+    "jp": "度",
+    "count": 3,
+    "example": "u\"X軸角度差:%0.1f(%0.1f)度\\n\""
+  },
+  {
+    "jp": "参照数",
+    "count": 3,
+    "example": "u\"■共有ヒット優先度履歴 (参照数:%d)\""
+  },
+  {
+    "jp": "弾丸",
+    "count": 3,
+    "example": "u\"(弾丸)\""
+  },
+  {
+    "jp": "上書き",
+    "count": 3,
+    "example": "u\"転がるOBJ上書き\""
+  },
+  {
+    "jp": "ポイントタイプ",
+    "count": 3,
+    "example": "u\"ポイントタイプ_遮蔽ボックス\""
+  },
+  {
+    "jp": "地図ポイント",
+    "count": 3,
+    "example": "u\"地図ポイント\""
+  },
+  {
+    "jp": "未使用",
+    "count": 3,
+    "example": "u\"(GR未使用)マップオフセット\""
+  },
+  {
+    "jp": "が",
+    "count": 3,
+    "example": "u\"救援(ホスト)がOFFになってる\""
+  },
+  {
+    "jp": "青白",
+    "count": 3,
+    "example": "u\"【青白1：バーサーカー白】\""
+  },
+  {
+    "jp": "サイン赤",
+    "count": 3,
+    "example": "u\"【通常赤2：サイン赤】\""
+  },
+  {
+    "jp": "ランクなし",
+    "count": 3,
+    "example": "u\"決闘：ランクなし\""
+  },
+  {
+    "jp": "時間経過",
+    "count": 3,
+    "example": "u\"時間経過：朝まで\""
+  },
+  {
+    "jp": "版専用",
+    "count": 3,
+    "example": "u\"VAC(Valve Anti-Cheat)によりBANされている(Steam版専用)\""
+  },
+  {
+    "jp": "中",
+    "count": 3,
+    "example": "u\"%s中\""
+  },
+  {
+    "jp": "自分",
+    "count": 3,
+    "example": "u\"血痕_自分\""
+  },
+  {
+    "jp": "他人",
+    "count": 3,
+    "example": "u\"召喚サイン_他人\""
+  },
+  {
+    "jp": "ロードバランサー",
+    "count": 3,
+    "example": "u\"GX LoadBalancer Helper｜GX ロードバランサー ヘルパー\""
+  },
+  {
+    "jp": "個",
+    "count": 3,
+    "example": "u\"[Param][%d個][%0.1fMB]\""
+  },
+  {
+    "jp": "ソースファイルごとのメモリ使用状況用",
+    "count": 3,
+    "example": "u\"【ソースファイルごとのメモリ使用状況用】 メモリ使用量ランキング形式で出力\""
+  },
+  {
+    "jp": "白召喚",
+    "count": 2,
+    "example": "u\"白召喚\""
+  },
+  {
+    "jp": "ロザリア守護",
+    "count": 2,
+    "example": "u\"ロザリア守護\""
+  },
+  {
+    "jp": "儀式召喚",
+    "count": 2,
+    "example": "u\"儀式召喚\""
+  },
+  {
+    "jp": "赤サイン",
+    "count": 2,
+    "example": "u\"太陽霊（赤サイン）\""
+  },
+  {
+    "jp": "バーサーカー霊",
+    "count": 2,
+    "example": "u\"バーサーカー霊（赤サイン）\""
+  },
+  {
+    "jp": "幻影",
+    "count": 2,
+    "example": "u\"■幻影ID %s\""
+  },
+  {
+    "jp": "のロードプロセス用クラスのバージョンが違います",
+    "count": 2,
+    "example": "\"anibndのロードプロセス用クラスのバージョンが違います\""
+  },
+  {
+    "jp": "眉間の幅",
+    "count": 2,
+    "example": "u\"Forehead_small_large（眉間の幅）\""
+  },
+  {
+    "jp": "鼻筋",
+    "count": 2,
+    "example": "u\"Nose_sellion_shallow_deep（鼻筋、上部の凹凸）\""
+  },
+  {
+    "jp": "上部の凹凸",
+    "count": 2,
+    "example": "u\"Nose_sellion_shallow_deep（鼻筋、上部の凹凸）\""
+  },
+  {
+    "jp": "瞳の色",
+    "count": 2,
+    "example": "u\"Eyes_Dark_Brown_Light_Blue（瞳の色）\""
+  },
+  {
+    "jp": "まぶた",
+    "count": 2,
+    "example": "u\"Eyelids_Light_Dark（まぶた）\""
+  },
+  {
+    "jp": "鼻の高さ",
+    "count": 2,
+    "example": "u\"Nose_flat_pointed（鼻の高さ）\""
+  },
+  {
+    "jp": "頬",
+    "count": 2,
+    "example": "u\"Cheeks_round_gaunt（頬）\""
+  },
+  {
+    "jp": "口紅",
+    "count": 2,
+    "example": "u\"Lipstick_Dark_Red_Light_Blue（口紅）\""
+  },
+  {
+    "jp": "顎の突き出し",
+    "count": 2,
+    "example": "u\"Chin_retracted_jutting（顎の突き出し_）\""
+  },
+  {
+    "jp": "明暗",
+    "count": 2,
+    "example": "u\"Beard_Flushed_Pale（髭、明暗）\""
+  },
+  {
+    "jp": "アニメ",
+    "count": 2,
+    "example": "u\"%03dアニメID:%d\""
+  },
+  {
+    "jp": "元アニメ",
+    "count": 2,
+    "example": "u\"(完全使いまわし>元アニメID:%d)\""
+  },
+  {
+    "jp": "パーツリスト",
+    "count": 2,
+    "example": "u\"PARTS LIST <パーツリスト(武器)>\""
+  },
+  {
+    "jp": "個飛ばし",
+    "count": 2,
+    "example": "u\": 3個飛ばし\\n: 5個飛ばし\\n: 10の位送り\\n: 100の位送り\\n: 1_000の位送り\\n: 10_000の位送り\\n: 100_000の位送り\""
+  },
+  {
+    "jp": "リスト",
+    "count": 2,
+    "example": "u\"BANK SOUND ID LIST(Wwise) <Bank内サウンドIDリスト(Wwise)>\""
+  },
+  {
+    "jp": "通常",
+    "count": 2,
+    "example": "u\"通常\""
+  },
+  {
+    "jp": "索敵",
+    "count": 2,
+    "example": "u\"索敵（低警戒）\""
+  },
+  {
+    "jp": "ウェイポイント",
+    "count": 2,
+    "example": "u\"Staticウェイポイント\""
+  },
+  {
+    "jp": "デフォルト",
+    "count": 2,
+    "example": "u\"デフォルト\""
+  },
+  {
+    "jp": "軸角度差",
+    "count": 2,
+    "example": "u\"X軸角度差:%0.1f(%0.1f)度\\n\""
+  },
+  {
+    "jp": "安定死体",
+    "count": 2,
+    "example": "u\"安定死体\""
+  },
+  {
+    "jp": "値",
+    "count": 2,
+    "example": "u\"SA値 現[%.2f]/基[%.2f] \""
+  },
+  {
+    "jp": "デバッグ",
+    "count": 2,
+    "example": "u\"デバッグ\\n\""
+  },
+  {
+    "jp": "の",
+    "count": 2,
+    "example": "u\"TimeAct「攻撃判定設定」の「ダメージタイプ」に無効な値が設定されています\""
+  },
+  {
+    "jp": "ダメージタイプ",
+    "count": 2,
+    "example": "u\"TimeAct「攻撃判定設定」の「ダメージタイプ」に無効な値が設定されています\""
+  },
+  {
+    "jp": "に無効な値が設定されています",
+    "count": 2,
+    "example": "u\"TimeAct「攻撃判定設定」の「ダメージタイプ」に無効な値が設定されています\""
+  },
+  {
+    "jp": "位置合わせ中",
+    "count": 2,
+    "example": "u\"攻撃側：位置合わせ中\""
+  },
+  {
+    "jp": "投げ中",
+    "count": 2,
+    "example": "u\"攻撃側：投げ中\""
+  },
+  {
+    "jp": "投げ死亡",
+    "count": 2,
+    "example": "u\"攻撃側：投げ死亡\""
+  },
+  {
+    "jp": "投げ抜け",
+    "count": 2,
+    "example": "u\"攻撃側：投げ抜け\""
+  },
+  {
+    "jp": "設定なし",
+    "count": 2,
+    "example": "u\"モデル：設定なし\""
+  },
+  {
+    "jp": "ダミー",
+    "count": 2,
+    "example": "u\"モデル：ダミー\""
+  },
+  {
+    "jp": "小型",
+    "count": 2,
+    "example": "u\"モデル：小型\""
+  },
+  {
+    "jp": "中型",
+    "count": 2,
+    "example": "u\"モデル：中型\""
+  },
+  {
+    "jp": "大型",
+    "count": 2,
+    "example": "u\"モデル：大型\""
+  },
+  {
+    "jp": "超大型",
+    "count": 2,
+    "example": "u\"モデル：超大型\""
+  },
+  {
+    "jp": "超超大型",
+    "count": 2,
+    "example": "u\"モデル：超超大型\""
+  },
+  {
+    "jp": "規格外",
+    "count": 2,
+    "example": "u\"モデル：規格外\""
+  },
+  {
+    "jp": "優先度",
+    "count": 2,
+    "example": "u\"　[%s](優先度:%d)%s\""
+  },
+  {
+    "jp": "秒",
+    "count": 2,
+    "example": "u\"■ヒット履歴 (寿命:%.2f秒, 参照数:%d)\""
+  },
+  {
+    "jp": "攻撃力",
+    "count": 2,
+    "example": "u\"■攻撃力 P: %.2f, M: %.2f, F: %.2f\""
+  },
+  {
+    "jp": "騎乗大ジャンプポイント",
+    "count": 2,
+    "example": "u\"騎乗大ジャンプポイント\""
+  },
+  {
+    "jp": "降りる大ジャンプポイント",
+    "count": 2,
+    "example": "u\"降りる大ジャンプポイント\""
+  },
+  {
+    "jp": "封印可能",
+    "count": 2,
+    "example": "u\"DLC騎乗大ジャンプポイント_封印可能\""
+  },
+  {
+    "jp": "への侵入ポイント",
+    "count": 2,
+    "example": "u\"NPCへの侵入ポイント\""
+  },
+  {
+    "jp": "側のみ",
+    "count": 2,
+    "example": "u\"＋側のみ\""
+  },
+  {
+    "jp": "モード",
+    "count": 2,
+    "example": "u\"Mouse Debug Mode : Mモード\""
+  },
+  {
+    "jp": "ボタン",
+    "count": 2,
+    "example": "u\"%s ノードを開く(○ボタン)\""
+  },
+  {
+    "jp": "呼んでください",
+    "count": 2,
+    "example": "u\"原因不明のエラーです。EventPG呼んでください[EventID:%u]\""
+  },
+  {
+    "jp": "呪",
+    "count": 2,
+    "example": "u\"呪\""
+  },
+  {
+    "jp": "ホスト",
+    "count": 2,
+    "example": "u\"ホスト＋協力メンバーの数以上の侵入者がいる\""
+  },
+  {
+    "jp": "になってる",
+    "count": 2,
+    "example": "u\"救援(ホスト)がOFFになってる\""
+  },
+  {
+    "jp": "サイン",
+    "count": 2,
+    "example": "u\"ローカルのSOSサイン\""
+  },
+  {
+    "jp": "灰",
+    "count": 2,
+    "example": "u\"0～30°:灰, 30～35°:茶, 35～45°:赤, 45～60°:紫, 60～180°:灰\""
+  },
+  {
+    "jp": "決定",
+    "count": 2,
+    "example": "u\"決定\""
+  },
+  {
+    "jp": "オプション",
+    "count": 2,
+    "example": "u\"オプション\""
+  },
+  {
+    "jp": "タイトル画面に戻ります",
+    "count": 2,
+    "example": "u\"エラーが発生しました、タイトル画面に戻ります\""
+  },
+  {
+    "jp": "リトライしますか",
+    "count": 2,
+    "example": "u\"認可コード取得失敗\\nリトライしますか？\""
+  },
+  {
+    "jp": "アカウントが",
+    "count": 2,
+    "example": "u\"アカウントがBANされている\""
+  },
+  {
+    "jp": "チーム",
+    "count": 2,
+    "example": "u\"チームＡ用召喚・リスポン時\""
+  },
+  {
+    "jp": "用召喚・リスポン時",
+    "count": 2,
+    "example": "u\"チームＡ用召喚・リスポン時\""
+  },
+  {
+    "jp": "訪問",
+    "count": 2,
+    "example": "u\"訪問\""
+  },
+  {
+    "jp": "マルチプレイ中",
+    "count": 2,
+    "example": "u\"マルチプレイ中\""
+  },
+  {
+    "jp": "インゲーム",
+    "count": 2,
+    "example": "u\"インゲーム（ワールド描画のみ）\""
+  },
+  {
+    "jp": "アイテム取得",
+    "count": 2,
+    "example": "u\"アイテム取得\""
+  },
+  {
+    "jp": "召喚サイン",
+    "count": 2,
+    "example": "u\"召喚サイン_自分\""
+  },
+  {
+    "jp": "データを引きなおしてください",
+    "count": 2,
+    "example": "\"マルチ補正パラメータのバージョンが古いです.データを引きなおしてください\""
+  },
+  {
+    "jp": "を取得できません",
+    "count": 2,
+    "example": "\"ネットワークメッセージパラメータから無効データ(NETWORK_MSG_SITUATION_TYPE_INVALID)を取得できません\""
+  },
+  {
+    "jp": "小",
+    "count": 2,
+    "example": "u\"Map/Obj 小\""
+  },
+  {
+    "jp": "大",
+    "count": 2,
+    "example": "u\"Map/Obj 大\""
+  },
+  {
+    "jp": "特大",
+    "count": 2,
+    "example": "u\"Map/Obj 特大\""
+  },
+  {
+    "jp": "屋外",
+    "count": 2,
+    "example": "u\"屋内屋外タイプ(0:屋外,1:半屋内,2:完全屋内)\""
+  },
+  {
+    "jp": "自動環境音",
+    "count": 2,
+    "example": "u\"自動環境音_全衝突点の材質の硬さ比率(比率)\""
+  },
+  {
+    "jp": "ルーム",
+    "count": 2,
+    "example": "u\"3:ルーム(木)\""
+  },
+  {
+    "jp": "未設定",
+    "count": 2,
+    "example": "u\"-1:未設定\""
+  },
+  {
+    "jp": "閾値",
+    "count": 2,
+    "example": "u\"【%%.1f】 レベルダウンFPS閾値：Lv%d\""
+  },
+  {
+    "jp": "モーグ",
+    "count": 2,
+    "example": "u\"破片の君主、モーグ\""
+  },
+  {
+    "jp": "忌み鬼",
+    "count": 2,
+    "example": "u\"忌み鬼、マルギット\""
+  },
+  {
+    "jp": "に渡されました",
+    "count": 2,
+    "example": "\"使用中ではないブロックがFreeに渡されました。２重解放の可能性があります。(%p)\""
+  },
+  {
+    "jp": "下のノード数",
+    "count": 2,
+    "example": "u\"Root下のノード数:%d\""
+  },
+  {
+    "jp": "数値操作",
+    "count": 2,
+    "example": "u\"LB : 数値操作10倍、リスト移動10倍\""
+  },
+  {
+    "jp": "リスト移動",
+    "count": 2,
+    "example": "u\"LB : 数値操作10倍、リスト移動10倍\""
+  },
+  {
+    "jp": "㰰",
+    "count": 2,
+    "example": "u\"┰猀ᄀ㰰─猀\""
+  },
+  {
+    "jp": "ヒープのデータ構造をフルダンプ用",
+    "count": 2,
+    "example": "u\"【ヒープのデータ構造をフルダンプ用】人が読みやすいフォーマットで出力\""
+  },
+  {
+    "jp": "確保ブロックごとのメモリダンプ用",
+    "count": 2,
+    "example": "u\"【確保ブロックごとのメモリダンプ用】 全情報出力(ファイルなど)\""
+  },
+  {
+    "jp": "開発名不明",
+    "count": 1,
+    "example": "u\"開発名不明(%s)\""
+  },
+  {
+    "jp": "自分の血文字",
+    "count": 1,
+    "example": "u\"自分の血文字\""
+  },
+  {
+    "jp": "プレイ領域",
+    "count": 1,
+    "example": "u\"プレイ領域\""
+  },
+  {
+    "jp": "赤召喚",
+    "count": 1,
+    "example": "u\"赤召喚\""
+  },
+  {
+    "jp": "有限",
+    "count": 1,
+    "example": "u\"乱入赤_A_有限\""
+  },
+  {
+    "jp": "罪人英雄白",
+    "count": 1,
+    "example": "u\"罪人英雄白\""
+  },
+  {
+    "jp": "森マップ守護",
+    "count": 1,
+    "example": "u\"森マップ守護\""
+  },
+  {
+    "jp": "アノールマップ守護",
+    "count": 1,
+    "example": "u\"アノールマップ守護\""
+  },
+  {
+    "jp": "アバター戦",
+    "count": 1,
+    "example": "u\"アバター戦\""
+  },
+  {
+    "jp": "バトルロイヤル戦",
+    "count": 1,
+    "example": "u\"バトルロイヤル戦\""
+  },
+  {
+    "jp": "白サイン",
+    "count": 1,
+    "example": "u\"太陽霊（白サイン）\""
+  },
+  {
+    "jp": "擬似マルチ用白霊",
+    "count": 1,
+    "example": "u\"NPC擬似マルチ用白霊\""
+  },
+  {
+    "jp": "擬似マルチ用幻視イベント",
+    "count": 1,
+    "example": "u\"NPC擬似マルチ用幻視イベント\""
+  },
+  {
+    "jp": "セッションホスト",
+    "count": 1,
+    "example": "u\"NPC擬似マルチ用侵入_セッションホスト\""
+  },
+  {
+    "jp": "セッションゲスト",
+    "count": 1,
+    "example": "u\"NPC擬似マルチ用侵入_セッションゲスト\""
+  },
+  {
+    "jp": "無効サイン",
+    "count": 1,
+    "example": "u\"無効サイン\""
+  },
+  {
+    "jp": "徘徊幻影",
+    "count": 1,
+    "example": "u\"徘徊幻影 DB\""
+  },
+  {
+    "jp": "幻影データ圧縮サイズ",
+    "count": 1,
+    "example": "u\"■幻影データ圧縮サイズ %d\""
+  },
+  {
+    "jp": "幻影データ非圧縮サイズ",
+    "count": 1,
+    "example": "u\"■幻影データ非圧縮サイズ %d\""
+  },
+  {
+    "jp": "コードネーム",
+    "count": 1,
+    "example": "u\"■コードネーム %s\""
+  },
+  {
+    "jp": "移動先ステップ未定義",
+    "count": 1,
+    "example": "u\"移動先ステップ未定義\""
+  },
+  {
+    "jp": "ロードプロセス用構造体バージョンが違います",
+    "count": 1,
+    "example": "\"ロードプロセス用構造体バージョンが違います\""
+  },
+  {
+    "jp": "の読み込みでロードプロセスのデータになっていません",
+    "count": 1,
+    "example": "\"chrbndの読み込みでロードプロセスのデータになっていません\""
+  },
+  {
+    "jp": "結合ファイル内ファイルが",
+    "count": 1,
+    "example": "\"結合ファイル内ファイルが16バイトアライメントになっていません。PS4では、このまま続行するとハングするので、原因が分かりやすいようにここでハングさせます。\""
+  },
+  {
+    "jp": "バイトアライメントになっていません",
+    "count": 1,
+    "example": "\"結合ファイル内ファイルが16バイトアライメントになっていません。PS4では、このまま続行するとハングするので、原因が分かりやすいようにここでハングさせます。\""
+  },
+  {
+    "jp": "では",
+    "count": 1,
+    "example": "\"結合ファイル内ファイルが16バイトアライメントになっていません。PS4では、このまま続行するとハングするので、原因が分かりやすいようにここでハングさせます。\""
+  },
+  {
+    "jp": "このまま続行するとハングするので",
+    "count": 1,
+    "example": "\"結合ファイル内ファイルが16バイトアライメントになっていません。PS4では、このまま続行するとハングするので、原因が分かりやすいようにここでハングさせます。\""
+  },
+  {
+    "jp": "原因が分かりやすいようにここでハングさせます",
+    "count": 1,
+    "example": "\"結合ファイル内ファイルが16バイトアライメントになっていません。PS4では、このまま続行するとハングするので、原因が分かりやすいようにここでハングさせます。\""
+  },
+  {
+    "jp": "可能",
+    "count": 1,
+    "example": "u\"可能\""
+  },
+  {
+    "jp": "眉",
+    "count": 1,
+    "example": "u\"Face_blow_nose_chin_ratio（眉、鼻、顎の比率）\""
+  },
+  {
+    "jp": "鼻",
+    "count": 1,
+    "example": "u\"Face_blow_nose_chin_ratio（眉、鼻、顎の比率）\""
+  },
+  {
+    "jp": "顎の比率",
+    "count": 1,
+    "example": "u\"Face_blow_nose_chin_ratio（眉、鼻、顎の比率）\""
+  },
+  {
+    "jp": "額付近の比率",
+    "count": 1,
+    "example": "u\"Face_forehead_sellion_nose_ratio（額付近の比率）\""
+  },
+  {
+    "jp": "顔幅",
+    "count": 1,
+    "example": "u\"Face_heavy_light（顔幅）\""
+  },
+  {
+    "jp": "顔の丸み",
+    "count": 1,
+    "example": "u\"Face_round_gaunt（顔の丸み）\""
+  },
+  {
+    "jp": "顔パーツバランス",
+    "count": 1,
+    "example": "u\"Face_tall_short（顔パーツバランス）\""
+  },
+  {
+    "jp": "顔パーツ傾き上下",
+    "count": 1,
+    "example": "u\"Face_up_down（顔パーツ傾き上下）\""
+  },
+  {
+    "jp": "顔パーツバランス左右",
+    "count": 1,
+    "example": "u\"Face_wide_thin（顔パーツバランス左右）\""
+  },
+  {
+    "jp": "鼻筋の色",
+    "count": 1,
+    "example": "u\"Nose_Pale_Red（鼻筋の色）\""
+  },
+  {
+    "jp": "頬色",
+    "count": 1,
+    "example": "u\"Cheek_Blush_Light_Red（頬色）\""
+  },
+  {
+    "jp": "眉間の深さ",
+    "count": 1,
+    "example": "u\"Forehead_tall_short（眉間の深さ）\""
+  },
+  {
+    "jp": "眉間の位置",
+    "count": 1,
+    "example": "u\"Forehead_tilt_foward_back（眉間の位置）\""
+  },
+  {
+    "jp": "眉間の高さ",
+    "count": 1,
+    "example": "u\"Nose_sellion_down_up（眉間の高さ）\""
+  },
+  {
+    "jp": "眉の高さ",
+    "count": 1,
+    "example": "u\"Brow_Ridge_high_low（眉の高さ）\""
+  },
+  {
+    "jp": "眉の内端",
+    "count": 1,
+    "example": "u\"Brow_Ridge_Inner_down_up（眉の内端）\""
+  },
+  {
+    "jp": "眉の外端",
+    "count": 1,
+    "example": "u\"Brow_Ridge_Outer_up_down（眉の外端）\""
+  },
+  {
+    "jp": "眉の濃さ",
+    "count": 1,
+    "example": "u\"Eyebrows_Dark_Light（眉の濃さ）\""
+  },
+  {
+    "jp": "眉の角度",
+    "count": 1,
+    "example": "u\"Eyebrows_Low_High（眉の角度）\""
+  },
+  {
+    "jp": "眉の太さ",
+    "count": 1,
+    "example": "u\"Eyebrows_Thick_Thin（眉の太さ：細_太）\""
+  },
+  {
+    "jp": "細",
+    "count": 1,
+    "example": "u\"Eyebrows_Thick_Thin（眉の太さ：細_太）\""
+  },
+  {
+    "jp": "太",
+    "count": 1,
+    "example": "u\"Eyebrows_Thick_Thin（眉の太さ：細_太）\""
+  },
+  {
+    "jp": "極細",
+    "count": 1,
+    "example": "u\"Eyebrows_Very_Thin_Thick（極細_極太）\""
+  },
+  {
+    "jp": "極太",
+    "count": 1,
+    "example": "u\"Eyebrows_Very_Thin_Thick（極細_極太）\""
+  },
+  {
+    "jp": "眉ライト下部",
+    "count": 1,
+    "example": "u\"Eyebrows_Lower_Light_Dark（眉ライト下部）\""
+  },
+  {
+    "jp": "眉ライト外側",
+    "count": 1,
+    "example": "u\"Eyebrows_Outer_Light_Dark（眉ライト外側）\""
+  },
+  {
+    "jp": "眉ライト上部",
+    "count": 1,
+    "example": "u\"Eyebrows_Upper_Dark_Light（眉ライト上部）\""
+  },
+  {
+    "jp": "眼の位置",
+    "count": 1,
+    "example": "u\"Eyes_down_up（眼の位置）\""
+  },
+  {
+    "jp": "眼の大きさ",
+    "count": 1,
+    "example": "u\"Eyes_small_large（眼の大きさ）\""
+  },
+  {
+    "jp": "眼の傾き",
+    "count": 1,
+    "example": "u\"Eyes_tilt_inward_outward（眼の傾き）\""
+  },
+  {
+    "jp": "眼の間隔",
+    "count": 1,
+    "example": "u\"Eyes_apart_together（眼の間隔）\""
+  },
+  {
+    "jp": "白目",
+    "count": 1,
+    "example": "u\"Eye_Whites_Dim_Bright（白目）\""
+  },
+  {
+    "jp": "眼窩の色",
+    "count": 1,
+    "example": "u\"Eye_Sockets_Bruised_Bright（眼窩の色）\""
+  },
+  {
+    "jp": "眼窩の明るさ",
+    "count": 1,
+    "example": "u\"Eye_Sockets_Dark_Light（眼窩の明るさ２）\""
+  },
+  {
+    "jp": "アイライナー",
+    "count": 1,
+    "example": "u\"Eyeliner_Light_Dark（アイライナー）\""
+  },
+  {
+    "jp": "アイシャドー",
+    "count": 1,
+    "example": "u\"Eyeshadow_Light_Dark（アイシャドー）\""
+  },
+  {
+    "jp": "鼻筋の深さ",
+    "count": 1,
+    "example": "u\"Nose_bridge_shallow_deep（鼻筋の深さ）\""
+  },
+  {
+    "jp": "鼻筋の長さ",
+    "count": 1,
+    "example": "u\"Nose_bridge_short_long（鼻筋の長さ）\""
+  },
+  {
+    "jp": "鼻の長さ",
+    "count": 1,
+    "example": "u\"Nose_down_up（鼻の長さ）\""
+  },
+  {
+    "jp": "鼻の凹凸",
+    "count": 1,
+    "example": "u\"Nose_region_concave_convex（鼻の凹凸）\""
+  },
+  {
+    "jp": "小鼻の上下",
+    "count": 1,
+    "example": "u\"Nose_tilt_down_up（小鼻の上下）\""
+  },
+  {
+    "jp": "小鼻の傾斜",
+    "count": 1,
+    "example": "u\"Nose_nostril_tilt_down_up（小鼻の傾斜）\""
+  },
+  {
+    "jp": "小鼻の大きさ",
+    "count": 1,
+    "example": "u\"Nose_nostrils_small_large（小鼻の大きさ）\""
+  },
+  {
+    "jp": "小鼻の幅",
+    "count": 1,
+    "example": "u\"Nose_nostrils_wide_thin（小鼻の幅）\""
+  },
+  {
+    "jp": "鼻孔の大きさ",
+    "count": 1,
+    "example": "u\"Nares_Small_Large（鼻孔の大きさ）\""
+  },
+  {
+    "jp": "頬骨の高さ",
+    "count": 1,
+    "example": "u\"Cheekbones_low_high（頬骨の高さ）\""
+  },
+  {
+    "jp": "頬骨の深み",
+    "count": 1,
+    "example": "u\"Cheekbones_shallow_pronounced（頬骨の深み）\""
+  },
+  {
+    "jp": "頬骨の広さ",
+    "count": 1,
+    "example": "u\"Cheekbones_thin_wide（頬骨の広さ）\""
+  },
+  {
+    "jp": "頬の凹凸",
+    "count": 1,
+    "example": "u\"Cheeks_concave_convex（頬の凹凸）\""
+  },
+  {
+    "jp": "頬のしわライン",
+    "count": 1,
+    "example": "u\"Naso_Labial_Lines_Light_Dark（頬のしわライン）\""
+  },
+  {
+    "jp": "口元の表情",
+    "count": 1,
+    "example": "u\"Mouth_happy_sad（口元の表情、喜_悲）\""
+  },
+  {
+    "jp": "喜",
+    "count": 1,
+    "example": "u\"Mouth_happy_sad（口元の表情、喜_悲）\""
+  },
+  {
+    "jp": "悲",
+    "count": 1,
+    "example": "u\"Mouth_happy_sad（口元の表情、喜_悲）\""
+  },
+  {
+    "jp": "唇の膨らみ",
+    "count": 1,
+    "example": "u\"Mouth_Lips_deflated_inflated（唇の膨らみ）\""
+  },
+  {
+    "jp": "唇の大きさ",
+    "count": 1,
+    "example": "u\"Mouth_Lips_large_small（唇の大きさ）\""
+  },
+  {
+    "jp": "唇の厚さ",
+    "count": 1,
+    "example": "u\"Mouth_Lips_thin_thicks（唇の厚さ）\""
+  },
+  {
+    "jp": "口の凹凸",
+    "count": 1,
+    "example": "u\"Mouth_puckered_retracted（口の凹凸）\""
+  },
+  {
+    "jp": "口元",
+    "count": 1,
+    "example": "u\"Mouth_tilt_up_down（口元）\""
+  },
+  {
+    "jp": "口の位置",
+    "count": 1,
+    "example": "u\"Mouth_up_down（口の位置）\""
+  },
+  {
+    "jp": "口の幅",
+    "count": 1,
+    "example": "u\"Mouth_wide_thin（口の幅）\""
+  },
+  {
+    "jp": "口から顎の距離",
+    "count": 1,
+    "example": "u\"Mouth_Chin_distance_short_long（口から顎の距離）\""
+  },
+  {
+    "jp": "唇の明暗",
+    "count": 1,
+    "example": "u\"Lips_Flushed_Pale（唇の明暗）\""
+  },
+  {
+    "jp": "顎の前後",
+    "count": 1,
+    "example": "u\"Chin_foward_backward（顎の前後）\""
+  },
+  {
+    "jp": "顎の縦の長さ",
+    "count": 1,
+    "example": "u\"Chin_pronounced_recessed（顎の縦の長さ_）\""
+  },
+  {
+    "jp": "顎の深さ",
+    "count": 1,
+    "example": "u\"Chin_shallow_deep（顎の深さ）\""
+  },
+  {
+    "jp": "顎の大きさ",
+    "count": 1,
+    "example": "u\"Chin_small_large（顎の大きさ）\""
+  },
+  {
+    "jp": "顎の高さ",
+    "count": 1,
+    "example": "u\"Chin_tall_short（顎の高さ）\""
+  },
+  {
+    "jp": "顎の広さ",
+    "count": 1,
+    "example": "u\"Chin_wide_thin（顎の広さ）\""
+  },
+  {
+    "jp": "顎の幅",
+    "count": 1,
+    "example": "u\"Jaw_wide_thin（顎の幅）\""
+  },
+  {
+    "jp": "顎下部",
+    "count": 1,
+    "example": "u\"Jaw_Neck_slope_high_low（顎下部）\""
+  },
+  {
+    "jp": "顎のライン",
+    "count": 1,
+    "example": "u\"Jawline_concave_convex（顎のライン）\""
+  },
+  {
+    "jp": "口周り",
+    "count": 1,
+    "example": "u\"Beard_Circle_light_dark（髭、口周り）\""
+  },
+  {
+    "jp": "山羊髭",
+    "count": 1,
+    "example": "u\"Beard_Goatee_light_dark（髭、山羊髭）\""
+  },
+  {
+    "jp": "口髭",
+    "count": 1,
+    "example": "u\"Beard_Moustache_light_dark（髭、口髭）\""
+  },
+  {
+    "jp": "基本の顔",
+    "count": 1,
+    "example": "u\"BASIC_FACE（基本の顔(Asian?)）\""
+  },
+  {
+    "jp": "ランダム作成",
+    "count": 1,
+    "example": "u\"RANDOM（ランダム作成）\""
+  },
+  {
+    "jp": "平均値に作成",
+    "count": 1,
+    "example": "u\"AVERAGE（平均値に作成(Reset？)）\""
+  },
+  {
+    "jp": "年設定",
+    "count": 1,
+    "example": "u\"AGE（年設定）\""
+  },
+  {
+    "jp": "男女傾向",
+    "count": 1,
+    "example": "u\"GENDER（男女傾向）\""
+  },
+  {
+    "jp": "似た顔作成",
+    "count": 1,
+    "example": "u\"SIMILAR（似た顔作成）\""
+  },
+  {
+    "jp": "誇張",
+    "count": 1,
+    "example": "u\"Caricature（誇張）\""
+  },
+  {
+    "jp": "顔モデル",
+    "count": 1,
+    "example": "u\"顔モデルID\""
+  },
+  {
+    "jp": "髪モデル",
+    "count": 1,
+    "example": "u\"髪モデルID\""
+  },
+  {
+    "jp": "瞳モデル",
+    "count": 1,
+    "example": "u\"瞳モデルID\""
+  },
+  {
+    "jp": "眉モデル",
+    "count": 1,
+    "example": "u\"眉モデルID\""
+  },
+  {
+    "jp": "髭モデル",
+    "count": 1,
+    "example": "u\"髭モデルID\""
+  },
+  {
+    "jp": "装飾",
+    "count": 1,
+    "example": "u\"装飾（眼帯）モデルID\""
+  },
+  {
+    "jp": "眼帯",
+    "count": 1,
+    "example": "u\"装飾（眼帯）モデルID\""
+  },
+  {
+    "jp": "デカールモデル",
+    "count": 1,
+    "example": "u\"デカールモデルID\""
+  },
+  {
+    "jp": "まつげモデル",
+    "count": 1,
+    "example": "u\"まつげモデルID\""
+  },
+  {
+    "jp": "年頃",
+    "count": 1,
+    "example": "u\"年頃\""
+  },
+  {
+    "jp": "骨格",
+    "count": 1,
+    "example": "u\"骨格\""
+  },
+  {
+    "jp": "体質",
+    "count": 1,
+    "example": "u\"体質\""
+  },
+  {
+    "jp": "頭部",
+    "count": 1,
+    "example": "u\"体型スケール：頭部\""
+  },
+  {
+    "jp": "胸部",
+    "count": 1,
+    "example": "u\"体型スケール：胸部\""
+  },
+  {
+    "jp": "腹部",
+    "count": 1,
+    "example": "u\"体型スケール：腹部\""
+  },
+  {
+    "jp": "腕部",
+    "count": 1,
+    "example": "u\"体型スケール：腕部\""
+  },
+  {
+    "jp": "脚部",
+    "count": 1,
+    "example": "u\"体型スケール：脚部\""
+  },
+  {
+    "jp": "完全使いまわし",
+    "count": 1,
+    "example": "u\"(完全使いまわし>元アニメID:%d)\""
+  },
+  {
+    "jp": "のみ使いまわし",
+    "count": 1,
+    "example": "u\"(HKXのみ使いまわし>元アニメID:%d)\""
+  },
+  {
+    "jp": "データのみ",
+    "count": 1,
+    "example": "u\"(TAEデータのみ>HKXデータがありません)\""
+  },
+  {
+    "jp": "データがありません",
+    "count": 1,
+    "example": "u\"(TAEデータのみ>HKXデータがありません)\""
+  },
+  {
+    "jp": "武器",
+    "count": 1,
+    "example": "u\"PARTS LIST <パーツリスト(武器)>\""
+  },
+  {
+    "jp": "防具",
+    "count": 1,
+    "example": "u\"PARTS LIST <パーツリスト(防具)>\""
+  },
+  {
+    "jp": "アセットリスト",
+    "count": 1,
+    "example": "u\"ASSET LIST <アセットリスト>\""
+  },
+  {
+    "jp": "天球リスト",
+    "count": 1,
+    "example": "u\"SKYBOX LIST <天球リスト>\""
+  },
+  {
+    "jp": "天球を無効化",
+    "count": 1,
+    "example": "u\"天球を無効化\""
+  },
+  {
+    "jp": "テキストリスト",
+    "count": 1,
+    "example": "u\"TEXTLIST LIST <テキストリスト>\""
+  },
+  {
+    "jp": "ヴィネットトリスト",
+    "count": 1,
+    "example": "u\"VIGNETTE LIST <ヴィネットトリスト>\""
+  },
+  {
+    "jp": "内サウンド",
+    "count": 1,
+    "example": "u\"BANK SOUND ID LIST(Wwise) <Bank内サウンドIDリスト(Wwise)>\""
+  },
+  {
+    "jp": "内",
+    "count": 1,
+    "example": "u\"BANK EVENT NAME LIST(Wwise) <Bank内Event名リスト(Wwise)>\""
+  },
+  {
+    "jp": "名リスト",
+    "count": 1,
+    "example": "u\"BANK EVENT NAME LIST(Wwise) <Bank内Event名リスト(Wwise)>\""
+  },
+  {
+    "jp": "決定ボタンでイベントポスト",
+    "count": 1,
+    "example": "u\"決定ボタンでイベントポスト\""
+  },
+  {
+    "jp": "サウンドテスト",
+    "count": 1,
+    "example": "u\"SOUND TEST(Wwise) <サウンドテスト(Wwise)>\""
+  },
+  {
+    "jp": "ファイル",
+    "count": 1,
+    "example": "u\"ファイル(Bank)リスト\""
+  },
+  {
+    "jp": "帰巣行動中",
+    "count": 1,
+    "example": "u\"帰巣行動中\""
+  },
+  {
+    "jp": "ちがう",
+    "count": 1,
+    "example": "u\"ちがう\""
+  },
+  {
+    "jp": "帰巣行動中か",
+    "count": 1,
+    "example": "u\"帰巣行動中か：%s\""
+  },
+  {
+    "jp": "見てる",
+    "count": 1,
+    "example": "u\"見てる\""
+  },
+  {
+    "jp": "見てない",
+    "count": 1,
+    "example": "u\"見てない\""
+  },
+  {
+    "jp": "見てるか",
+    "count": 1,
+    "example": "u\"見てるか：%s\""
+  },
+  {
+    "jp": "帰巣時ガードアクション",
+    "count": 1,
+    "example": "u\"帰巣時ガードアクションID：%d\""
+  },
+  {
+    "jp": "帰巣時ガードアクションなし",
+    "count": 1,
+    "example": "u\"帰巣時ガードアクションなし\""
+  },
+  {
+    "jp": "ターゲットを見ている時間",
+    "count": 1,
+    "example": "u\"ターゲットを見ている時間[sec]：%.2f\""
+  },
+  {
+    "jp": "ターゲットを見ている距離",
+    "count": 1,
+    "example": "u\"ターゲットを見ている距離[m]：%.2f\""
+  },
+  {
+    "jp": "晦㾦",
+    "count": 1,
+    "example": "u\"晦㾦\""
+  },
+  {
+    "jp": "巡回",
+    "count": 1,
+    "example": "u\"巡回\""
+  },
+  {
+    "jp": "往復",
+    "count": 1,
+    "example": "u\"往復\""
+  },
+  {
+    "jp": "ランダム",
+    "count": 1,
+    "example": "u\"ランダム\""
+  },
+  {
+    "jp": "ガーゴイル空中巡回",
+    "count": 1,
+    "example": "u\"ガーゴイル空中巡回\""
+  },
+  {
+    "jp": "ガーゴイル着地",
+    "count": 1,
+    "example": "u\"ガーゴイル着地\""
+  },
+  {
+    "jp": "片道巡回",
+    "count": 1,
+    "example": "u\"片道巡回＆巣の位置を変更\""
+  },
+  {
+    "jp": "巣の位置を変更",
+    "count": 1,
+    "example": "u\"片道巡回＆巣の位置を変更\""
+  },
+  {
+    "jp": "自由巡回",
+    "count": 1,
+    "example": "u\"自由巡回\""
+  },
+  {
+    "jp": "攻撃役",
+    "count": 1,
+    "example": "u\"攻撃役 ATKER\""
+  },
+  {
+    "jp": "とりまき役",
+    "count": 1,
+    "example": "u\"とりまき役 COVER\""
+  },
+  {
+    "jp": "観客役",
+    "count": 1,
+    "example": "u\"観客役 SPECTATOR\""
+  },
+  {
+    "jp": "役割なし",
+    "count": 1,
+    "example": "u\"役割なし NON\""
+  },
+  {
+    "jp": "敵に反応する距離",
+    "count": 1,
+    "example": "u\"敵に反応する距離[m]\""
+  },
+  {
+    "jp": "警戒",
+    "count": 1,
+    "example": "u\"警戒\""
+  },
+  {
+    "jp": "発見",
+    "count": 1,
+    "example": "u\"発見\""
+  },
+  {
+    "jp": "応答",
+    "count": 1,
+    "example": "u\"応答\""
+  },
+  {
+    "jp": "記憶",
+    "count": 1,
+    "example": "u\"記憶\""
+  },
+  {
+    "jp": "低警戒",
+    "count": 1,
+    "example": "u\"索敵（低警戒）\""
+  },
+  {
+    "jp": "高警戒",
+    "count": 1,
+    "example": "u\"索敵（高警戒）\""
+  },
+  {
+    "jp": "巡回ルート",
+    "count": 1,
+    "example": "u\"巡回ルート\""
+  },
+  {
+    "jp": "作成イベント",
+    "count": 1,
+    "example": "u\"作成イベント： %s_%s\""
+  },
+  {
+    "jp": "未決定",
+    "count": 1,
+    "example": "u\"未決定\""
+  },
+  {
+    "jp": "更新しない",
+    "count": 1,
+    "example": "u\"更新しない\""
+  },
+  {
+    "jp": "描画範囲外",
+    "count": 1,
+    "example": "u\"描画範囲外\""
+  },
+  {
+    "jp": "位置だけ更新",
+    "count": 1,
+    "example": "u\"位置だけ更新\""
+  },
+  {
+    "jp": "スキンアニメ",
+    "count": 1,
+    "example": "u\"スキンアニメ\""
+  },
+  {
+    "jp": "クロスシミュレーション",
+    "count": 1,
+    "example": "u\"クロスシミュレーション\""
+  },
+  {
+    "jp": "スキンアニメ遷移中",
+    "count": 1,
+    "example": "u\"スキンアニメ遷移中\""
+  },
+  {
+    "jp": "問題なし",
+    "count": 1,
+    "example": "u\"問題なし\""
+  },
+  {
+    "jp": "でヒットパーツの当たりフィルタに",
+    "count": 1,
+    "example": "u\"MapStudioでヒットパーツの当たりフィルタに「召喚禁止あたり」が設定されてるor召喚禁止領域内\""
+  },
+  {
+    "jp": "召喚禁止あたり",
+    "count": 1,
+    "example": "u\"MapStudioでヒットパーツの当たりフィルタに「召喚禁止あたり」が設定されてるor召喚禁止領域内\""
+  },
+  {
+    "jp": "が設定されてる",
+    "count": 1,
+    "example": "u\"MapStudioでヒットパーツの当たりフィルタに「召喚禁止あたり」が設定されてるor召喚禁止領域内\""
+  },
+  {
+    "jp": "召喚禁止領域内",
+    "count": 1,
+    "example": "u\"MapStudioでヒットパーツの当たりフィルタに「召喚禁止あたり」が設定されてるor召喚禁止領域内\""
+  },
+  {
+    "jp": "接地していない",
+    "count": 1,
+    "example": "u\"接地していない\""
+  },
+  {
+    "jp": "はしご中",
+    "count": 1,
+    "example": "u\"はしご中\""
+  },
+  {
+    "jp": "床インスタンスが安全でない",
+    "count": 1,
+    "example": "u\"床インスタンスが安全でない\""
+  },
+  {
+    "jp": "強靭度",
+    "count": 1,
+    "example": "u\"強靭度 [%.2f]/[%.2f] \""
+  },
+  {
+    "jp": "現",
+    "count": 1,
+    "example": "u\"SA値 現[%.2f]/基[%.2f] \""
+  },
+  {
+    "jp": "基",
+    "count": 1,
+    "example": "u\"SA値 現[%.2f]/基[%.2f] \""
+  },
+  {
+    "jp": "相",
+    "count": 1,
+    "example": "u\"相[%.0f]=距[%.0f]*1.8/%.1f\\n\""
+  },
+  {
+    "jp": "距",
+    "count": 1,
+    "example": "u\"相[%.0f]=距[%.0f]*1.8/%.1f\\n\""
+  },
+  {
+    "jp": "終了",
+    "count": 1,
+    "example": "u\"終了\""
+  },
+  {
+    "jp": "バックリード無効",
+    "count": 1,
+    "example": "u\"バックリード無効\\n\""
+  },
+  {
+    "jp": "ヒット不安定",
+    "count": 1,
+    "example": "u\"ヒット不安定\\n\""
+  },
+  {
+    "jp": "巡回リーダー無効",
+    "count": 1,
+    "example": "u\"巡回リーダー無効\\n\""
+  },
+  {
+    "jp": "消滅死亡",
+    "count": 1,
+    "example": "u\"消滅死亡\\n\""
+  },
+  {
+    "jp": "天候・時間帯",
+    "count": 1,
+    "example": "u\"天候・時間帯\\n\""
+  },
+  {
+    "jp": "描画グループ",
+    "count": 1,
+    "example": "u\"描画グループ\\n\""
+  },
+  {
+    "jp": "近く",
+    "count": 1,
+    "example": "u\"PC近く\\n\""
+  },
+  {
+    "jp": "評価値足切り",
+    "count": 1,
+    "example": "u\"評価値足切り\\n\""
+  },
+  {
+    "jp": "ホスト非アクティブ",
+    "count": 1,
+    "example": "u\"ホスト非アクティブ\\n\""
+  },
+  {
+    "jp": "制御権結果待ち",
+    "count": 1,
+    "example": "u\"制御権結果待ち\\n\""
+  },
+  {
+    "jp": "人数制限",
+    "count": 1,
+    "example": "u\"人数制限[%.1f]\\n\""
+  },
+  {
+    "jp": "更新頻度指定",
+    "count": 1,
+    "example": "u\"更新頻度指定\\n\""
+  },
+  {
+    "jp": "強制更新",
+    "count": 1,
+    "example": "u\"強制更新\\n\""
+  },
+  {
+    "jp": "キャラ無効",
+    "count": 1,
+    "example": "u\"キャラ無効\\n\""
+  },
+  {
+    "jp": "グループマスク",
+    "count": 1,
+    "example": "u\"グループマスク\\n\""
+  },
+  {
+    "jp": "フェード",
+    "count": 1,
+    "example": "u\"フェード\\n\""
+  },
+  {
+    "jp": "視界外",
+    "count": 1,
+    "example": "u\"視界外Lv30\\n\""
+  },
+  {
+    "jp": "騎乗",
+    "count": 1,
+    "example": "u\"騎乗\""
+  },
+  {
+    "jp": "キャラ方向基準",
+    "count": 1,
+    "example": "u\"[キャラ方向基準]\""
+  },
+  {
+    "jp": "モディファイア",
+    "count": 1,
+    "example": "u\"モディファイアID:%d\\nダミポリ:%d%s\\n\""
+  },
+  {
+    "jp": "ダミポリ",
+    "count": 1,
+    "example": "u\"モディファイアID:%d\\nダミポリ:%d%s\\n\""
+  },
+  {
+    "jp": "基点旋回オフセット",
+    "count": 1,
+    "example": "u\"(基点旋回オフセット%0.1f度)\""
+  },
+  {
+    "jp": "攻撃判定設定",
+    "count": 1,
+    "example": "u\"TimeAct「攻撃判定設定」の「ダメージタイプ」に無効な値が設定されています\""
+  },
+  {
+    "jp": "叩き",
+    "count": 1,
+    "example": "u\"【001:叩き】\""
+  },
+  {
+    "jp": "押し",
+    "count": 1,
+    "example": "u\"【002:押し】\""
+  },
+  {
+    "jp": "突き",
+    "count": 1,
+    "example": "u\"【003:突き】\""
+  },
+  {
+    "jp": "ダメージで投げ",
+    "count": 1,
+    "example": "u\"【062:ダメージで投げ】\""
+  },
+  {
+    "jp": "背後攻撃",
+    "count": 1,
+    "example": "u\"【063:背後攻撃】\""
+  },
+  {
+    "jp": "通常投げ",
+    "count": 1,
+    "example": "u\"【065:通常投げ】\""
+  },
+  {
+    "jp": "流し",
+    "count": 1,
+    "example": "u\"【066:流し】\""
+  },
+  {
+    "jp": "シナリオ",
+    "count": 1,
+    "example": "u\"(シナリオID[%d])。有効値(【000:斬り(デフォルト)】or【064:パリィ】)を設定してください\""
+  },
+  {
+    "jp": "有効値",
+    "count": 1,
+    "example": "u\"(シナリオID[%d])。有効値(【000:斬り(デフォルト)】or【064:パリィ】)を設定してください\""
+  },
+  {
+    "jp": "斬り",
+    "count": 1,
+    "example": "u\"(シナリオID[%d])。有効値(【000:斬り(デフォルト)】or【064:パリィ】)を設定してください\""
+  },
+  {
+    "jp": "パリィ",
+    "count": 1,
+    "example": "u\"(シナリオID[%d])。有効値(【000:斬り(デフォルト)】or【064:パリィ】)を設定してください\""
+  },
+  {
+    "jp": "を設定してください",
+    "count": 1,
+    "example": "u\"(シナリオID[%d])。有効値(【000:斬り(デフォルト)】or【064:パリィ】)を設定してください\""
+  },
+  {
+    "jp": "新攻撃判定設定",
+    "count": 1,
+    "example": "u\"TimeAct「新攻撃判定設定」の「ダメージタイプ」に無効な値が設定されています\""
+  },
+  {
+    "jp": "停止",
+    "count": 1,
+    "example": "u\"停止\""
+  },
+  {
+    "jp": "ノックバックパラ",
+    "count": 1,
+    "example": "u\"ノックバックパラID:%d\\n\""
+  },
+  {
+    "jp": "ダメージアニメタイプ",
+    "count": 1,
+    "example": "u\"ダメージアニメタイプ:%d\\n\""
+  },
+  {
+    "jp": "ノックバック肩代わり時間",
+    "count": 1,
+    "example": "u\"ノックバック肩代わり時間:%.2f\\n\""
+  },
+  {
+    "jp": "ノックバック距離",
+    "count": 1,
+    "example": "u\"ノックバック距離:%.2f\\n\""
+  },
+  {
+    "jp": "ノックバック補正率",
+    "count": 1,
+    "example": "u\"ノックバック補正率:%.2f\\n\""
+  },
+  {
+    "jp": "実際の距離",
+    "count": 1,
+    "example": "u\"実際の距離:%.2f\\n\""
+  },
+  {
+    "jp": "許容誤差範囲",
+    "count": 1,
+    "example": "u\"--許容誤差範囲--\""
+  },
+  {
+    "jp": "投げ中ではない",
+    "count": 1,
+    "example": "u\"投げ中ではない\""
+  },
+  {
+    "jp": "同優先度の特殊効果",
+    "count": 1,
+    "example": "u\"同優先度の特殊効果VFXが多すぎます[Category:%d][Priority:%d]\""
+  },
+  {
+    "jp": "が多すぎます",
+    "count": 1,
+    "example": "u\"同優先度の特殊効果VFXが多すぎます[Category:%d][Priority:%d]\""
+  },
+  {
+    "jp": "が既に存在している",
+    "count": 1,
+    "example": "\"ChrInsが既に存在している。想定外\""
+  },
+  {
+    "jp": "想定外",
+    "count": 1,
+    "example": "\"ChrInsが既に存在している。想定外\""
+  },
+  {
+    "jp": "キャラスロット",
+    "count": 1,
+    "example": "u\"キャラスロット\""
+  },
+  {
+    "jp": "武器設置場所が不正",
+    "count": 1,
+    "example": "\"武器設置場所が不正[%d]\""
+  },
+  {
+    "jp": "リソースタイプ別",
+    "count": 1,
+    "example": "u\"リソースタイプ別\""
+  },
+  {
+    "jp": "空き敵データインデックスがありません",
+    "count": 1,
+    "example": "\"空き敵データインデックスがありません\""
+  },
+  {
+    "jp": "デバッグ発動特殊効果パラム",
+    "count": 1,
+    "example": "u\"デバッグ発動特殊効果パラムID\""
+  },
+  {
+    "jp": "相手キャラの選択",
+    "count": 1,
+    "example": "u\"相手キャラの選択\""
+  },
+  {
+    "jp": "過負荷",
+    "count": 1,
+    "example": "u\"過負荷\""
+  },
+  {
+    "jp": "緊急",
+    "count": 1,
+    "example": "u\"緊急\""
+  },
+  {
+    "jp": "更新数",
+    "count": 1,
+    "example": "u\"【%%d】<Lv2更新数(%s)\""
+  },
+  {
+    "jp": "共有ヒット優先度履歴",
+    "count": 1,
+    "example": "u\"■共有ヒット優先度履歴 (参照数:%d)\""
+  },
+  {
+    "jp": "ヒット履歴",
+    "count": 1,
+    "example": "u\"■ヒット履歴 (寿命:%.2f秒, 参照数:%d)\""
+  },
+  {
+    "jp": "共有ヒット履歴",
+    "count": 1,
+    "example": "u\"■共有ヒット履歴 (寿命:%.2f秒, 参照数:%d)\""
+  },
+  {
+    "jp": "行動",
+    "count": 1,
+    "example": "u\"■行動ID %d\""
+  },
+  {
+    "jp": "攻撃",
+    "count": 1,
+    "example": "u\"■攻撃ID %d\""
+  },
+  {
+    "jp": "攻撃倍率",
+    "count": 1,
+    "example": "u\"■攻撃倍率 P: %.2f, M: %.2f, F: %.2f\""
+  },
+  {
+    "jp": "攻撃追加倍率",
+    "count": 1,
+    "example": "u\"■攻撃追加倍率 P: %.2f, M: %.2f, F: %.2f, T: %.2f\""
+  },
+  {
+    "jp": "スタミナ攻撃力追加倍率",
+    "count": 1,
+    "example": "u\"■スタミナ攻撃力追加倍率: %.2f, ノックバック倍率: %.2f\""
+  },
+  {
+    "jp": "ノックバック倍率",
+    "count": 1,
+    "example": "u\"■スタミナ攻撃力追加倍率: %.2f, ノックバック倍率: %.2f\""
+  },
+  {
+    "jp": "スィート",
+    "count": 1,
+    "example": "u\"■スィート！\""
+  },
+  {
+    "jp": "ウィーク",
+    "count": 1,
+    "example": "u\"■ウィーク！\""
+  },
+  {
+    "jp": "ダメージ優先度",
+    "count": 1,
+    "example": "u\"■ダメージ優先度 %d\""
+  },
+  {
+    "jp": "ダメージ管理",
+    "count": 1,
+    "example": "u\"ダメージ管理\""
+  },
+  {
+    "jp": "発生ダメージ一覧",
+    "count": 1,
+    "example": "u\"発生ダメージ一覧\""
+  },
+  {
+    "jp": "侵入ポイント",
+    "count": 1,
+    "example": "u\"侵入ポイント\""
+  },
+  {
+    "jp": "環境マップポイント",
+    "count": 1,
+    "example": "u\"環境マップポイント\""
+  },
+  {
+    "jp": "サウンド",
+    "count": 1,
+    "example": "u\"サウンド\""
+  },
+  {
+    "jp": "風",
+    "count": 1,
+    "example": "u\"風SFX\""
+  },
+  {
+    "jp": "復帰ポイント",
+    "count": 1,
+    "example": "u\"復帰ポイント\""
+  },
+  {
+    "jp": "ヒント血文字",
+    "count": 1,
+    "example": "u\"ヒント血文字\""
+  },
+  {
+    "jp": "環境マップ効果",
+    "count": 1,
+    "example": "u\"環境マップ効果BOX\""
+  },
+  {
+    "jp": "風配置範囲",
+    "count": 1,
+    "example": "u\"風配置範囲\""
+  },
+  {
+    "jp": "マップ接続参照点",
+    "count": 1,
+    "example": "u\"マップ接続参照点\""
+  },
+  {
+    "jp": "マップグリッドレイヤー接続情報",
+    "count": 1,
+    "example": "u\"マップグリッドレイヤー接続情報\""
+  },
+  {
+    "jp": "未使用スポーンポイント",
+    "count": 1,
+    "example": "u\"未使用スポーンポイント\""
+  },
+  {
+    "jp": "バディ召喚ポイント",
+    "count": 1,
+    "example": "u\"バディ召喚ポイント\""
+  },
+  {
+    "jp": "転がる",
+    "count": 1,
+    "example": "u\"転がるOBJ上書き\""
+  },
+  {
+    "jp": "遮蔽ボックス",
+    "count": 1,
+    "example": "u\"ポイントタイプ_遮蔽ボックス\""
+  },
+  {
+    "jp": "遮蔽ポータル",
+    "count": 1,
+    "example": "u\"ポイントタイプ_遮蔽ポータル\""
+  },
+  {
+    "jp": "サウンド領域",
+    "count": 1,
+    "example": "u\"サウンド領域\""
+  },
+  {
+    "jp": "遮蔽板",
+    "count": 1,
+    "example": "u\"ポイントタイプ_遮蔽板\""
+  },
+  {
+    "jp": "巡回ポイント",
+    "count": 1,
+    "example": "u\"巡回ポイント\""
+  },
+  {
+    "jp": "サウンドステート制御",
+    "count": 1,
+    "example": "u\"サウンドステート制御\""
+  },
+  {
+    "jp": "マップ情報上書き領域",
+    "count": 1,
+    "example": "u\"マップ情報上書き領域\""
+  },
+  {
+    "jp": "自動描画グループ撮影ポイント",
+    "count": 1,
+    "example": "u\"自動描画グループ撮影ポイント\""
+  },
+  {
+    "jp": "集団配置ポイント",
+    "count": 1,
+    "example": "u\"集団配置ポイント\""
+  },
+  {
+    "jp": "発見領域上書き",
+    "count": 1,
+    "example": "u\"地図ポイント_発見領域上書き\""
+  },
+  {
+    "jp": "出場領域上書き",
+    "count": 1,
+    "example": "u\"地図ポイント_出場領域上書き\""
+  },
+  {
+    "jp": "エリア内ヒットパーツ設定エリア",
+    "count": 1,
+    "example": "u\"エリア内ヒットパーツ設定エリア\""
+  },
+  {
+    "jp": "ファストトラベル許可フラグ上書き",
+    "count": 1,
+    "example": "u\"ファストトラベル許可フラグ上書き\""
+  },
+  {
+    "jp": "天候アセット生成ポイント",
+    "count": 1,
+    "example": "u\"天候アセット生成ポイント\""
+  },
+  {
+    "jp": "中景環境マップ出力目印ポイント",
+    "count": 1,
+    "example": "u\"中景環境マップ出力目印ポイント\""
+  },
+  {
+    "jp": "マップ視界タイプ上書き領域",
+    "count": 1,
+    "example": "u\"マップ視界タイプ上書き領域\""
+  },
+  {
+    "jp": "オープンキャラアクティベート制限",
+    "count": 1,
+    "example": "u\"オープンキャラアクティベート制限_評価値閾値上書き\""
+  },
+  {
+    "jp": "評価値閾値上書き",
+    "count": 1,
+    "example": "u\"オープンキャラアクティベート制限_評価値閾値上書き\""
+  },
+  {
+    "jp": "落下防止壁削除",
+    "count": 1,
+    "example": "u\"落下防止壁削除\""
+  },
+  {
+    "jp": "ナビメッシュ隣接カッティング結合制限領域",
+    "count": 1,
+    "example": "u\"ナビメッシュ隣接カッティング結合制限領域\""
+  },
+  {
+    "jp": "マップ名",
+    "count": 1,
+    "example": "u\"マップ名ID上書き\""
+  },
+  {
+    "jp": "馬禁止",
+    "count": 1,
+    "example": "u\"馬禁止/許可上書き\""
+  },
+  {
+    "jp": "許可上書き",
+    "count": 1,
+    "example": "u\"馬禁止/許可上書き\""
+  },
+  {
+    "jp": "和",
+    "count": 1,
+    "example": "u\"和\""
+  },
+  {
+    "jp": "積",
+    "count": 1,
+    "example": "u\"積\""
+  },
+  {
+    "jp": "差",
+    "count": 1,
+    "example": "u\"差\""
+  },
+  {
+    "jp": "用宝箱情報",
+    "count": 1,
+    "example": "u\"OBJ用宝箱情報\""
+  },
+  {
+    "jp": "敵ジェネレーター",
+    "count": 1,
+    "example": "u\"敵ジェネレーター\""
+  },
+  {
+    "jp": "オブジェアクション情報",
+    "count": 1,
+    "example": "u\"オブジェアクション情報\""
+  },
+  {
+    "jp": "マップオフセット",
+    "count": 1,
+    "example": "u\"(GR未使用)マップオフセット\""
+  },
+  {
+    "jp": "敵巡回情報",
+    "count": 1,
+    "example": "u\"(GR未使用)敵巡回情報\""
+  },
+  {
+    "jp": "敵小隊情報",
+    "count": 1,
+    "example": "u\"敵小隊情報\""
+  },
+  {
+    "jp": "自動描画グループ撮影ポイント所属ヒット",
+    "count": 1,
+    "example": "u\"自動描画グループ撮影ポイント所属ヒット\""
+  },
+  {
+    "jp": "サイン溜まり",
+    "count": 1,
+    "example": "u\"サイン溜まり\""
+  },
+  {
+    "jp": "リトライポイント",
+    "count": 1,
+    "example": "u\"リトライポイント\""
+  },
+  {
+    "jp": "マルチあり",
+    "count": 1,
+    "example": "u\"NPCへの侵入ポイント_マルチあり\""
+  },
+  {
+    "jp": "遮蔽ポータル間リンク",
+    "count": 1,
+    "example": "u\"ルートタイプ_遮蔽ポータル間リンク\""
+  },
+  {
+    "jp": "遮蔽ボックス間リンク",
+    "count": 1,
+    "example": "u\"ルートタイプ_遮蔽ボックス間リンク\""
+  },
+  {
+    "jp": "距離測定",
+    "count": 1,
+    "example": "u\"DebugDistMeasure｜距離測定\""
+  },
+  {
+    "jp": "描画グループデバッグ",
+    "count": 1,
+    "example": "u\"DRAW GROUP｜描画グループデバッグ\""
+  },
+  {
+    "jp": "マルチプレイエリア",
+    "count": 1,
+    "example": "u\"■マルチプレイエリアID %d\""
+  },
+  {
+    "jp": "との",
+    "count": 1,
+    "example": "u\"■PCとのXZ距離 %.2fm\""
+  },
+  {
+    "jp": "所属ブロック",
+    "count": 1,
+    "example": "u\"■所属ブロック %s\""
+  },
+  {
+    "jp": "マップレイアウト出力",
+    "count": 1,
+    "example": "u\"MAP LAYOUT EXPORTER｜マップレイアウト出力\""
+  },
+  {
+    "jp": "デバッグ看板",
+    "count": 1,
+    "example": "u\"DebugSignboard｜デバッグ看板\""
+  },
+  {
+    "jp": "不正な引数指定",
+    "count": 1,
+    "example": "\"DebugMode::_GetProperty：不正な引数指定(%d/%d)\""
+  },
+  {
+    "jp": "実行条件",
+    "count": 1,
+    "example": "u\"[0(実行条件):%s]\""
+  },
+  {
+    "jp": "イベントワークの連続確保はできません",
+    "count": 1,
+    "example": "\"イベントワークの連続確保はできません。先に解放してから次を確保してください。 %s %s\""
+  },
+  {
+    "jp": "先に解放してから次を確保してください",
+    "count": 1,
+    "example": "\"イベントワークの連続確保はできません。先に解放してから次を確保してください。 %s %s\""
+  },
+  {
+    "jp": "ローカルプレイヤー",
+    "count": 1,
+    "example": "u\"ローカルプレイヤー\""
+  },
+  {
+    "jp": "ノードを開く",
+    "count": 1,
+    "example": "u\"%s ノードを開く(○ボタン)\""
+  },
+  {
+    "jp": "ホストとの距離",
+    "count": 1,
+    "example": "u\"《%.3f》<ホストとの距離[m]\""
+  },
+  {
+    "jp": "ホストとの限界距離",
+    "count": 1,
+    "example": "u\"【%.1f】<ホストとの限界距離[m]\""
+  },
+  {
+    "jp": "ホストから離れたことの警告メッセージの表示間隔",
+    "count": 1,
+    "example": "u\"【%.1f】<ホストから離れたことの警告メッセージの表示間隔[sec]\""
+  },
+  {
+    "jp": "判定を停止するか",
+    "count": 1,
+    "example": "u\"【%s】<判定を停止するか\""
+  },
+  {
+    "jp": "イベントがありません",
+    "count": 1,
+    "example": "u\"イベントがありません。EventMakerに定義されているか確認してください。[EventID:%u]\""
+  },
+  {
+    "jp": "に定義されているか確認してください",
+    "count": 1,
+    "example": "u\"イベントがありません。EventMakerに定義されているか確認してください。[EventID:%u]\""
+  },
+  {
+    "jp": "既にこのイベントは終了しています",
+    "count": 1,
+    "example": "u\"既にこのイベントは終了しています。[EventID:%u]\""
+  },
+  {
+    "jp": "原因不明のエラーです",
+    "count": 1,
+    "example": "u\"原因不明のエラーです。EventPG呼んでください[EventID:%u]\""
+  },
+  {
+    "jp": "プログラム側がエラーコードに対応できていません",
+    "count": 1,
+    "example": "u\"プログラム側がエラーコードに対応できていません。ObjActPG呼んでください[EventID:%u]\""
+  },
+  {
+    "jp": "監視",
+    "count": 1,
+    "example": "u\"監視\""
+  },
+  {
+    "jp": "要請",
+    "count": 1,
+    "example": "u\"要請\""
+  },
+  {
+    "jp": "予約",
+    "count": 1,
+    "example": "u\"予約\""
+  },
+  {
+    "jp": "実行",
+    "count": 1,
+    "example": "u\"実行\""
+  },
+  {
+    "jp": "ありえない",
+    "count": 1,
+    "example": "u\"不明(ありえない)\""
+  },
+  {
+    "jp": "マッピング先が存在しない",
+    "count": 1,
+    "example": "\"マッピング先が存在しない eventFlagId[%u] order[%d]\""
+  },
+  {
+    "jp": "テストマップ用のフラグ領域が生成されていない",
+    "count": 1,
+    "example": "\"テストマップ用のフラグ領域が生成されていない order[%d]\""
+  },
+  {
+    "jp": "ネットワーク用の送信先発見失敗",
+    "count": 1,
+    "example": "\"ネットワーク用の送信先発見失敗 order[%d]\""
+  },
+  {
+    "jp": "ホストの",
+    "count": 1,
+    "example": "\"ホストのNPC世界用の送信先発見失敗 order[%d]\""
+  },
+  {
+    "jp": "世界用の送信先発見失敗",
+    "count": 1,
+    "example": "\"ホストのNPC世界用の送信先発見失敗 order[%d]\""
+  },
+  {
+    "jp": "ただの点",
+    "count": 1,
+    "example": "u\":Point（ただの点）\""
+  },
+  {
+    "jp": "デバッグノード名生成失敗",
+    "count": 1,
+    "example": "u\"デバッグノード名生成失敗\""
+  },
+  {
+    "jp": "武器強化デバッグ",
+    "count": 1,
+    "example": "u\"武器強化デバッグ\""
+  },
+  {
+    "jp": "筋力",
+    "count": 1,
+    "example": "u\"筋力\""
+  },
+  {
+    "jp": "技量",
+    "count": 1,
+    "example": "u\"技量\""
+  },
+  {
+    "jp": "理力",
+    "count": 1,
+    "example": "u\"理力\""
+  },
+  {
+    "jp": "信仰",
+    "count": 1,
+    "example": "u\"信仰\""
+  },
+  {
+    "jp": "運",
+    "count": 1,
+    "example": "u\"運\""
+  },
+  {
+    "jp": "かぶと",
+    "count": 1,
+    "example": "u\"かぶと\""
+  },
+  {
+    "jp": "よろい",
+    "count": 1,
+    "example": "u\"よろい\""
+  },
+  {
+    "jp": "こて",
+    "count": 1,
+    "example": "u\"こて\""
+  },
+  {
+    "jp": "あし",
+    "count": 1,
+    "example": "u\"あし\""
+  },
+  {
+    "jp": "ずら",
+    "count": 1,
+    "example": "u\"ずら\""
+  },
+  {
+    "jp": "生命力",
+    "count": 1,
+    "example": "u\"生命力\""
+  },
+  {
+    "jp": "精神力",
+    "count": 1,
+    "example": "u\"精神力\""
+  },
+  {
+    "jp": "持久力",
+    "count": 1,
+    "example": "u\"持久力\""
+  },
+  {
+    "jp": "体力",
+    "count": 1,
+    "example": "u\"体力\""
+  },
+  {
+    "jp": "物理",
+    "count": 1,
+    "example": "u\"物理 %s [%%.3f]\""
+  },
+  {
+    "jp": "魔法",
+    "count": 1,
+    "example": "u\"魔法 %s [%%.3f]\""
+  },
+  {
+    "jp": "炎",
+    "count": 1,
+    "example": "u\"炎 %s [%%.3f]\""
+  },
+  {
+    "jp": "電撃",
+    "count": 1,
+    "example": "u\"電撃 %s [%%.3f]\""
+  },
+  {
+    "jp": "闇",
+    "count": 1,
+    "example": "u\"闇 %s [%%.3f]\""
+  },
+  {
+    "jp": "毒",
+    "count": 1,
+    "example": "u\"毒 %s [%%.3f]\""
+  },
+  {
+    "jp": "出血",
+    "count": 1,
+    "example": "u\"出血 %s [%%.3f]\""
+  },
+  {
+    "jp": "冷気",
+    "count": 1,
+    "example": "u\"冷気 %s [%%.3f]\""
+  },
+  {
+    "jp": "初期化",
+    "count": 1,
+    "example": "u\"初期化\""
+  },
+  {
+    "jp": "データなし",
+    "count": 1,
+    "example": "u\"データなし\""
+  },
+  {
+    "jp": "モデル初期化",
+    "count": 1,
+    "example": "u\"モデル初期化\""
+  },
+  {
+    "jp": "モデル待ち",
+    "count": 1,
+    "example": "u\"モデル待ち\""
+  },
+  {
+    "jp": "モデル終了",
+    "count": 1,
+    "example": "u\"モデル終了\""
+  },
+  {
+    "jp": "モデル解放",
+    "count": 1,
+    "example": "u\"モデル解放\""
+  },
+  {
+    "jp": "ロウテクスチャ初期化",
+    "count": 1,
+    "example": "u\"ロウテクスチャ初期化\""
+  },
+  {
+    "jp": "ロウテクスチャ待ち",
+    "count": 1,
+    "example": "u\"ロウテクスチャ待ち\""
+  },
+  {
+    "jp": "ロウテクスチャ終了",
+    "count": 1,
+    "example": "u\"ロウテクスチャ終了\""
+  },
+  {
+    "jp": "ロウテクスチャ解放",
+    "count": 1,
+    "example": "u\"ロウテクスチャ解放\""
+  },
+  {
+    "jp": "ロウハイテクスチャ初期化",
+    "count": 1,
+    "example": "u\"ロウハイテクスチャ初期化\""
+  },
+  {
+    "jp": "ロウハイテクスチャ待ち",
+    "count": 1,
+    "example": "u\"ロウハイテクスチャ待ち\""
+  },
+  {
+    "jp": "ロウハイテクスチャ終了",
+    "count": 1,
+    "example": "u\"ロウハイテクスチャ終了\""
+  },
+  {
+    "jp": "ロウハイテクスチャ解放",
+    "count": 1,
+    "example": "u\"ロウハイテクスチャ解放\""
+  },
+  {
+    "jp": "ハイテクスチャ初期化",
+    "count": 1,
+    "example": "u\"ハイテクスチャ初期化\""
+  },
+  {
+    "jp": "ハイテクスチャ待ち",
+    "count": 1,
+    "example": "u\"ハイテクスチャ待ち\""
+  },
+  {
+    "jp": "ハイテクスチャ終了",
+    "count": 1,
+    "example": "u\"ハイテクスチャ終了\""
+  },
+  {
+    "jp": "ハイテクスチャ解放",
+    "count": 1,
+    "example": "u\"ハイテクスチャ解放\""
+  },
+  {
+    "jp": "終端",
+    "count": 1,
+    "example": "u\"NULL終端\""
+  },
+  {
+    "jp": "ロウテクスチャ",
+    "count": 1,
+    "example": "u\"ロウテクスチャ\""
+  },
+  {
+    "jp": "ハイテクスチャ",
+    "count": 1,
+    "example": "u\"ハイテクスチャ\""
+  },
+  {
+    "jp": "幻影データ取得中",
+    "count": 1,
+    "example": "u\"幻影データ取得中[timeout：%.2f]\""
+  },
+  {
+    "jp": "幻影データ取得成功",
+    "count": 1,
+    "example": "u\"幻影データ取得成功\""
+  },
+  {
+    "jp": "幻影データ取得失敗",
+    "count": 1,
+    "example": "u\"幻影データ取得失敗\""
+  },
+  {
+    "jp": "位置",
+    "count": 1,
+    "example": "u\"位置[%.2f][%.2f][%.2f]\""
+  },
+  {
+    "jp": "による判定で制限中",
+    "count": 1,
+    "example": "u\"SosSignCheckerによる判定で制限中\""
+  },
+  {
+    "jp": "できる",
+    "count": 1,
+    "example": "u\"できる\""
+  },
+  {
+    "jp": "上限人数に達している",
+    "count": 1,
+    "example": "u\"上限人数に達している\""
+  },
+  {
+    "jp": "ペナルティ中",
+    "count": 1,
+    "example": "u\"ペナルティ中\""
+  },
+  {
+    "jp": "サーバーから切断されている",
+    "count": 1,
+    "example": "u\"Steamサーバーから切断されている\""
+  },
+  {
+    "jp": "クールタイムで制限中",
+    "count": 1,
+    "example": "u\"クールタイムで制限中\""
+  },
+  {
+    "jp": "ゲストとしてホスト世界にいる",
+    "count": 1,
+    "example": "u\"ゲストとしてホスト世界にいる\""
+  },
+  {
+    "jp": "乱入禁止な場所にいる",
+    "count": 1,
+    "example": "u\"乱入禁止な場所にいる\""
+  },
+  {
+    "jp": "召喚枠に空きがない",
+    "count": 1,
+    "example": "u\"召喚枠に空きがない\""
+  },
+  {
+    "jp": "ホストとして乱入開始不可なプレイ領域",
+    "count": 1,
+    "example": "u\"ホストとして乱入開始不可なプレイ領域\""
+  },
+  {
+    "jp": "協力霊を召喚していない",
+    "count": 1,
+    "example": "u\"協力霊を召喚していない and ソロ侵入が許可されていない\""
+  },
+  {
+    "jp": "ソロ侵入が許可されていない",
+    "count": 1,
+    "example": "u\"協力霊を召喚していない and ソロ侵入が許可されていない\""
+  },
+  {
+    "jp": "協力メンバーの数以上の侵入者がいる",
+    "count": 1,
+    "example": "u\"ホスト＋協力メンバーの数以上の侵入者がいる\""
+  },
+  {
+    "jp": "ホスト化していない",
+    "count": 1,
+    "example": "u\"ホスト化していない\""
+  },
+  {
+    "jp": "救援",
+    "count": 1,
+    "example": "u\"救援(ホスト)がOFFになってる\""
+  },
+  {
+    "jp": "以外の闇霊に乱入されていない",
+    "count": 1,
+    "example": "u\"NPC以外の闇霊に乱入されていない\""
+  },
+  {
+    "jp": "赤サイン召喚霊がいる",
+    "count": 1,
+    "example": "u\"赤サイン召喚霊がいる\""
+  },
+  {
+    "jp": "デバッグ用無制限マッチング状態",
+    "count": 1,
+    "example": "u\"【デバッグ用無制限マッチング状態】\""
+  },
+  {
+    "jp": "召喚枠",
+    "count": 1,
+    "example": "u\"|召喚枠>%d%d%d%d%d%d%d %d%d%d%d%d%d%d\""
+  },
+  {
+    "jp": "召喚状態",
+    "count": 1,
+    "example": "u\"|召喚状態>\""
+  },
+  {
+    "jp": "ボス守護",
+    "count": 1,
+    "example": "u\"【ボス守護：ロザリア守護】\""
+  },
+  {
+    "jp": "罪人英雄",
+    "count": 1,
+    "example": "u\"【通常白1：罪人英雄】\""
+  },
+  {
+    "jp": "白霊",
+    "count": 1,
+    "example": "u\"【通常白1：儀式召喚NPC白霊】\""
+  },
+  {
+    "jp": "召喚中",
+    "count": 1,
+    "example": "u\"≪召喚中%d人≫\""
+  },
+  {
+    "jp": "人",
+    "count": 1,
+    "example": "u\"≪召喚中%d人≫\""
+  },
+  {
+    "jp": "結果",
+    "count": 1,
+    "example": "u\"|結果>%d%d%d%d%d%d%d(CoolTimeDisable:%d)\""
+  },
+  {
+    "jp": "ローカルの",
+    "count": 1,
+    "example": "u\"ローカルのSOSサイン\""
+  },
+  {
+    "jp": "発動中の",
+    "count": 1,
+    "example": "u\"発動中のSOSサイン\""
+  },
+  {
+    "jp": "インスタンス毎にランダム色",
+    "count": 1,
+    "example": "u\"インスタンス毎にランダム色\""
+  },
+  {
+    "jp": "茶",
+    "count": 1,
+    "example": "u\"0～30°:灰, 30～35°:茶, 35～45°:赤, 45～60°:紫, 60～180°:灰\""
+  },
+  {
+    "jp": "赤",
+    "count": 1,
+    "example": "u\"0～30°:灰, 30～35°:茶, 35～45°:赤, 45～60°:紫, 60～180°:灰\""
+  },
+  {
+    "jp": "紫",
+    "count": 1,
+    "example": "u\"0～30°:灰, 30～35°:茶, 35～45°:赤, 45～60°:紫, 60～180°:灰\""
+  },
+  {
+    "jp": "選択した材質の強調表示",
+    "count": 1,
+    "example": "u\"選択した材質の強調表示\""
+  },
+  {
+    "jp": "ブロック毎にランダム色",
+    "count": 1,
+    "example": "u\"ブロック毎にランダム色\""
+  },
+  {
+    "jp": "ヒット",
+    "count": 1,
+    "example": "u\"ヒットID\""
+  },
+  {
+    "jp": "アクションポイント",
+    "count": 1,
+    "example": "u\"アクションポイント\""
+  },
+  {
+    "jp": "キャンセル",
+    "count": 1,
+    "example": "u\"キャンセル\""
+  },
+  {
+    "jp": "墓メニュー開く",
+    "count": 1,
+    "example": "u\"墓メニュー開く\""
+  },
+  {
+    "jp": "メニューオープン",
+    "count": 1,
+    "example": "u\"メニューオープン\""
+  },
+  {
+    "jp": "ポップアップウィンドウオープン",
+    "count": 1,
+    "example": "u\"ポップアップウィンドウオープン\""
+  },
+  {
+    "jp": "メニュークローズ",
+    "count": 1,
+    "example": "u\"メニュークローズ\""
+  },
+  {
+    "jp": "トーストオープン",
+    "count": 1,
+    "example": "u\"トーストオープン\""
+  },
+  {
+    "jp": "ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ",
+    "count": 1,
+    "example": "u\"ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ\""
+  },
+  {
+    "jp": "ステータスグループ",
+    "count": 1,
+    "example": "u\"ステータスグループ\""
+  },
+  {
+    "jp": "ショートカットグループ",
+    "count": 1,
+    "example": "u\"ショートカットグループ\""
+  },
+  {
+    "jp": "ソウル表示グループ",
+    "count": 1,
+    "example": "u\"ソウル表示グループ\""
+  },
+  {
+    "jp": "スコア表示グループ",
+    "count": 1,
+    "example": "u\"スコア表示グループ\""
+  },
+  {
+    "jp": "コンパス表示グループ",
+    "count": 1,
+    "example": "u\"コンパス表示グループ\""
+  },
+  {
+    "jp": "ランク表示グループ",
+    "count": 1,
+    "example": "u\"ランク表示グループ\""
+  },
+  {
+    "jp": "装備品が壊れそう",
+    "count": 1,
+    "example": "u\"FE装備品が壊れそう\""
+  },
+  {
+    "jp": "装備品が壊れた",
+    "count": 1,
+    "example": "u\"FE装備品が壊れた\""
+  },
+  {
+    "jp": "朝まで",
+    "count": 1,
+    "example": "u\"時間経過：朝まで\""
+  },
+  {
+    "jp": "昼まで",
+    "count": 1,
+    "example": "u\"時間経過：昼まで\""
+  },
+  {
+    "jp": "夜まで",
+    "count": 1,
+    "example": "u\"時間経過：夜まで\""
+  },
+  {
+    "jp": "会話選択用",
+    "count": 1,
+    "example": "u\"決定(会話選択用)\""
+  },
+  {
+    "jp": "ロード成功",
+    "count": 1,
+    "example": "u\"%sロード成功\""
+  },
+  {
+    "jp": "データ破損",
+    "count": 1,
+    "example": "u\"データ破損\""
+  },
+  {
+    "jp": "バージョンエラー",
+    "count": 1,
+    "example": "u\"バージョンエラー\""
+  },
+  {
+    "jp": "不正終了",
+    "count": 1,
+    "example": "u\"不正終了\""
+  },
+  {
+    "jp": "その他エラー",
+    "count": 1,
+    "example": "u\"その他エラー\""
+  },
+  {
+    "jp": "プロフィール",
+    "count": 1,
+    "example": "u\"プロフィール%d\""
+  },
+  {
+    "jp": "レギュレーション",
+    "count": 1,
+    "example": "u\"レギュレーション\""
+  },
+  {
+    "jp": "原因不明のエラー",
+    "count": 1,
+    "example": "u\"原因不明のエラー\""
+  },
+  {
+    "jp": "ゲストプロフィールではゲーム開始できません",
+    "count": 1,
+    "example": "u\"ゲストプロフィールではゲーム開始できません\""
+  },
+  {
+    "jp": "プロフィールを選択していないためゲーム開始できません",
+    "count": 1,
+    "example": "u\"プロフィールを選択していないためゲーム開始できません\""
+  },
+  {
+    "jp": "エラーが発生しました",
+    "count": 1,
+    "example": "u\"エラーが発生しました、タイトル画面に戻ります\""
+  },
+  {
+    "jp": "通信エラー",
+    "count": 1,
+    "example": "u\"通信エラー\""
+  },
+  {
+    "jp": "サインアウトしています",
+    "count": 1,
+    "example": "u\"サインアウトしています\""
+  },
+  {
+    "jp": "オフライン状態です",
+    "count": 1,
+    "example": "u\"オフライン状態です\""
+  },
+  {
+    "jp": "ネットワーク接続状態のチェックに失敗しました",
+    "count": 1,
+    "example": "u\"ネットワーク接続状態のチェックに失敗しました\""
+  },
+  {
+    "jp": "サインインのチェックに失敗しました",
+    "count": 1,
+    "example": "u\"サインインのチェックに失敗しました\""
+  },
+  {
+    "jp": "オンライン状態チェックに失敗しました",
+    "count": 1,
+    "example": "u\"オンライン状態チェックに失敗しました\""
+  },
+  {
+    "jp": "視聴年齢制限によりプレイ不可です",
+    "count": 1,
+    "example": "u\"視聴年齢制限によりプレイ不可です\""
+  },
+  {
+    "jp": "システムソフトウェアをアップデートしてください",
+    "count": 1,
+    "example": "u\"システムソフトウェアをアップデートしてください\""
+  },
+  {
+    "jp": "最新のアップデートファイルを",
+    "count": 1,
+    "example": "u\"最新のアップデートファイルをDLしてください\""
+  },
+  {
+    "jp": "してください",
+    "count": 1,
+    "example": "u\"最新のアップデートファイルをDLしてください\""
+  },
+  {
+    "jp": "サインインしてください",
+    "count": 1,
+    "example": "u\"サインインしてください\""
+  },
+  {
+    "jp": "ネットワーク機能の使用可否チェックに失敗しました",
+    "count": 1,
+    "example": "u\"ネットワーク機能の使用可否チェックに失敗しました\""
+  },
+  {
+    "jp": "パレンタルコントロール情報取得失敗",
+    "count": 1,
+    "example": "u\"パレンタルコントロール情報取得失敗\""
+  },
+  {
+    "jp": "最新レギュレーションの取得に失敗しました",
+    "count": 1,
+    "example": "u\"最新レギュレーションの取得に失敗しました\""
+  },
+  {
+    "jp": "認可コード取得失敗",
+    "count": 1,
+    "example": "u\"認可コード取得失敗\\nリトライしますか？\""
+  },
+  {
+    "jp": "バージョン不正",
+    "count": 1,
+    "example": "u\"バージョン不正（クライアントバージョンが古い）\""
+  },
+  {
+    "jp": "クライアントバージョンが古い",
+    "count": 1,
+    "example": "u\"バージョン不正（クライアントバージョンが古い）\""
+  },
+  {
+    "jp": "サービス停止中",
+    "count": 1,
+    "example": "u\"サービス停止中（サーバーメンテ中など）\""
+  },
+  {
+    "jp": "サーバーメンテ中など",
+    "count": 1,
+    "example": "u\"サービス停止中（サーバーメンテ中など）\""
+  },
+  {
+    "jp": "により",
+    "count": 1,
+    "example": "u\"VAC(Valve Anti-Cheat)によりBANされている(Steam版専用)\""
+  },
+  {
+    "jp": "関連のエラー",
+    "count": 1,
+    "example": "u\"EOSSDK関連のエラー(Steam版専用)\""
+  },
+  {
+    "jp": "認証チケット関連のエラー",
+    "count": 1,
+    "example": "u\"Steam認証チケット関連のエラー(Steam版専用)\""
+  },
+  {
+    "jp": "ログイン失敗",
+    "count": 1,
+    "example": "u\"ログイン失敗\\nリトライしますか？\""
+  },
+  {
+    "jp": "チェックに失敗",
+    "count": 1,
+    "example": "u\"Plusチェックに失敗\""
+  },
+  {
+    "jp": "ユーザーチェック",
+    "count": 1,
+    "example": "u\"ユーザーチェック\""
+  },
+  {
+    "jp": "セーブデータチェック",
+    "count": 1,
+    "example": "u\"セーブデータチェック\""
+  },
+  {
+    "jp": "ネットワーク状態チェック",
+    "count": 1,
+    "example": "u\"ネットワーク状態チェック\""
+  },
+  {
+    "jp": "コミュニケーション制限チェック",
+    "count": 1,
+    "example": "u\"コミュニケーション制限チェック\""
+  },
+  {
+    "jp": "制限チェック",
+    "count": 1,
+    "example": "u\"UGC制限チェック\""
+  },
+  {
+    "jp": "サインインチェック",
+    "count": 1,
+    "example": "u\"サインインチェック\""
+  },
+  {
+    "jp": "オンライン状態チェック",
+    "count": 1,
+    "example": "u\"オンライン状態チェック\""
+  },
+  {
+    "jp": "ネットワーク機能使用可否チェック",
+    "count": 1,
+    "example": "u\"ネットワーク機能使用可否チェック\""
+  },
+  {
+    "jp": "ペアレンタルコントール情報取得",
+    "count": 1,
+    "example": "u\"ペアレンタルコントール情報取得\""
+  },
+  {
+    "jp": "レギュレーションダウンロード",
+    "count": 1,
+    "example": "u\"レギュレーションダウンロード\""
+  },
+  {
+    "jp": "ログイン",
+    "count": 1,
+    "example": "u\"ログイン\""
+  },
+  {
+    "jp": "チェック",
+    "count": 1,
+    "example": "u\"Plusチェック\""
+  },
+  {
+    "jp": "加入",
+    "count": 1,
+    "example": "u\"Plus加入\""
+  },
+  {
+    "jp": "マルチプレイ権限チェック",
+    "count": 1,
+    "example": "u\"マルチプレイ権限チェック\""
+  },
+  {
+    "jp": "運営通知取得",
+    "count": 1,
+    "example": "u\"運営通知取得\""
+  },
+  {
+    "jp": "キャラ",
+    "count": 1,
+    "example": "u\"キャラIDの同期\""
+  },
+  {
+    "jp": "の同期",
+    "count": 1,
+    "example": "u\"キャラIDの同期\""
+  },
+  {
+    "jp": "トロフィーインストール",
+    "count": 1,
+    "example": "u\"トロフィーインストール\""
+  },
+  {
+    "jp": "無効値",
+    "count": 1,
+    "example": "u\"無効値\""
+  },
+  {
+    "jp": "アイテム種別順",
+    "count": 1,
+    "example": "u\"アイテム種別順\""
+  },
+  {
+    "jp": "入手順",
+    "count": 1,
+    "example": "u\"入手順\""
+  },
+  {
+    "jp": "所持数",
+    "count": 1,
+    "example": "u\"所持数\""
+  },
+  {
+    "jp": "初期並び",
+    "count": 1,
+    "example": "u\"初期並び\""
+  },
+  {
+    "jp": "重量",
+    "count": 1,
+    "example": "u\"重量\""
+  },
+  {
+    "jp": "ガード時カット率",
+    "count": 1,
+    "example": "u\"ガード時カット率\""
+  },
+  {
+    "jp": "カット率",
+    "count": 1,
+    "example": "u\"カット率\""
+  },
+  {
+    "jp": "耐性値",
+    "count": 1,
+    "example": "u\"耐性値\""
+  },
+  {
+    "jp": "使用スロット",
+    "count": 1,
+    "example": "u\"使用スロット\""
+  },
+  {
+    "jp": "消費",
+    "count": 1,
+    "example": "u\"消費MP\""
+  },
+  {
+    "jp": "地図ポイント入場",
+    "count": 1,
+    "example": "u\"FE地図ポイント入場\""
+  },
+  {
+    "jp": "地図ポイント発見",
+    "count": 1,
+    "example": "u\"FE地図ポイント発見\""
+  },
+  {
+    "jp": "地図断片",
+    "count": 1,
+    "example": "u\"地図断片 ID:%d を入手した<『○』\""
+  },
+  {
+    "jp": "を入手した",
+    "count": 1,
+    "example": "u\"地図断片 ID:%d を入手した<『○』\""
+  },
+  {
+    "jp": "マップ入場してない",
+    "count": 1,
+    "example": "u\"マップ入場してない\""
+  },
+  {
+    "jp": "篝火使用中",
+    "count": 1,
+    "example": "u\"篝火使用中\""
+  },
+  {
+    "jp": "カットシーン中",
+    "count": 1,
+    "example": "u\"カットシーン中\""
+  },
+  {
+    "jp": "ボス戦中",
+    "count": 1,
+    "example": "u\"ボス戦中\""
+  },
+  {
+    "jp": "一定時間無操作だった",
+    "count": 1,
+    "example": "u\"一定時間無操作だった\""
+  },
+  {
+    "jp": "成功",
+    "count": 1,
+    "example": "u\"成功 \""
+  },
+  {
+    "jp": "不明エラー",
+    "count": 1,
+    "example": "u\"不明エラー \""
+  },
+  {
+    "jp": "不正エラー",
+    "count": 1,
+    "example": "u\"不正エラー \""
+  },
+  {
+    "jp": "メモリ不足",
+    "count": 1,
+    "example": "u\"メモリ不足 \""
+  },
+  {
+    "jp": "引数が不正",
+    "count": 1,
+    "example": "u\"引数が不正 \""
+  },
+  {
+    "jp": "外部ライブラリエラー",
+    "count": 1,
+    "example": "u\"外部ライブラリエラー \""
+  },
+  {
+    "jp": "未実装",
+    "count": 1,
+    "example": "u\"未実装 \""
+  },
+  {
+    "jp": "データベースエラー",
+    "count": 1,
+    "example": "u\"データベースエラー \""
+  },
+  {
+    "jp": "コネクションが見つからない",
+    "count": 1,
+    "example": "u\"DBコネクションが見つからない \""
+  },
+  {
+    "jp": "でデータが見つからない",
+    "count": 1,
+    "example": "u\"DBでデータが見つからない \""
+  },
+  {
+    "jp": "更新行数が無い",
+    "count": 1,
+    "example": "u\"更新行数が無い \""
+  },
+  {
+    "jp": "既に利用されている",
+    "count": 1,
+    "example": "u\"既に利用されている \""
+  },
+  {
+    "jp": "アプリケーションバージョンが不正",
+    "count": 1,
+    "example": "u\"アプリケーションバージョンが不正 \""
+  },
+  {
+    "jp": "無効なプロトコル",
+    "count": 1,
+    "example": "u\"無効なプロトコル \""
+  },
+  {
+    "jp": "サンドボックスが不正",
+    "count": 1,
+    "example": "u\"サンドボックスが不正 \""
+  },
+  {
+    "jp": "サービスは停止中",
+    "count": 1,
+    "example": "u\"サービスは停止中 \""
+  },
+  {
+    "jp": "データが見つからない",
+    "count": 1,
+    "example": "u\"データが見つからない \""
+  },
+  {
+    "jp": "先約が居る",
+    "count": 1,
+    "example": "u\"先約が居る \""
+  },
+  {
+    "jp": "チケット認証エラー",
+    "count": 1,
+    "example": "u\"チケット認証エラー \""
+  },
+  {
+    "jp": "で",
+    "count": 1,
+    "example": "u\"VACでBANされている \""
+  },
+  {
+    "jp": "初期化されていないエラー",
+    "count": 1,
+    "example": "u\"初期化されていないエラー \""
+  },
+  {
+    "jp": "に接続できていない",
+    "count": 1,
+    "example": "u\"Redisに接続できていない \""
+  },
+  {
+    "jp": "マッチングサーバータイムアウトエラー",
+    "count": 1,
+    "example": "u\"マッチングサーバータイムアウトエラー \""
+  },
+  {
+    "jp": "マッチングサーバーリクエストエラー",
+    "count": 1,
+    "example": "u\"マッチングサーバーリクエストエラー \""
+  },
+  {
+    "jp": "マッチングサーバーに接続できない",
+    "count": 1,
+    "example": "u\"マッチングサーバーに接続できない \""
+  },
+  {
+    "jp": "マッチングサーバーのレスポンスが空",
+    "count": 1,
+    "example": "u\"マッチングサーバーのレスポンスが空 \""
+  },
+  {
+    "jp": "マッチングサーバーのレスポンスが不正",
+    "count": 1,
+    "example": "u\"マッチングサーバーのレスポンスが不正 \""
+  },
+  {
+    "jp": "マッチングサーバーのレスポンスが不一致",
+    "count": 1,
+    "example": "u\"マッチングサーバーのレスポンスが不一致 \""
+  },
+  {
+    "jp": "に接続できない",
+    "count": 1,
+    "example": "u\"memcachedに接続できない \""
+  },
+  {
+    "jp": "コンテナへの要素の追加に失敗",
+    "count": 1,
+    "example": "u\"コンテナへの要素の追加に失敗 \""
+  },
+  {
+    "jp": "ボスエリア",
+    "count": 1,
+    "example": "u\"ボスエリアIDが見つからない \""
+  },
+  {
+    "jp": "が見つからない",
+    "count": 1,
+    "example": "u\"ボスエリアIDが見つからない \""
+  },
+  {
+    "jp": "マルチプレイエリアコンテナが見つからない",
+    "count": 1,
+    "example": "u\"マルチプレイエリアコンテナが見つからない \""
+  },
+  {
+    "jp": "血文字検索インデックスの登録に失敗",
+    "count": 1,
+    "example": "u\"血文字検索インデックスの登録に失敗 \""
+  },
+  {
+    "jp": "指定された血文字データが存在しない",
+    "count": 1,
+    "example": "u\"指定された血文字データが存在しない \""
+  },
+  {
+    "jp": "指定された血文字データは既に削除済み",
+    "count": 1,
+    "example": "u\"指定された血文字データは既に削除済み \""
+  },
+  {
+    "jp": "指定された幻影",
+    "count": 1,
+    "example": "u\"指定された幻影IDのデータは既に登録されている \""
+  },
+  {
+    "jp": "のデータは既に登録されている",
+    "count": 1,
+    "example": "u\"指定された幻影IDのデータは既に登録されている \""
+  },
+  {
+    "jp": "死亡幻影データが見つからない",
+    "count": 1,
+    "example": "u\"死亡幻影データが見つからない \""
+  },
+  {
+    "jp": "クライアントタイムアウトエラー",
+    "count": 1,
+    "example": "u\"クライアントタイムアウトエラー \""
+  },
+  {
+    "jp": "サインインしていないエラー",
+    "count": 1,
+    "example": "u\"サインインしていないエラー \""
+  },
+  {
+    "jp": "リクエストが途中中断された",
+    "count": 1,
+    "example": "u\"リクエストが途中中断された \""
+  },
+  {
+    "jp": "のパースに失敗した",
+    "count": 1,
+    "example": "u\"flatbuffersのパースに失敗した \""
+  },
+  {
+    "jp": "レスポンスが不正",
+    "count": 1,
+    "example": "u\"レスポンスが不正 \""
+  },
+  {
+    "jp": "クライアントライブラリの状態が不正",
+    "count": 1,
+    "example": "u\"クライアントライブラリの状態が不正 \""
+  },
+  {
+    "jp": "ログインは途中でキャンセルされた",
+    "count": 1,
+    "example": "u\"ログインは途中でキャンセルされた \""
+  },
+  {
+    "jp": "サーバー接続に失敗した",
+    "count": 1,
+    "example": "u\"サーバー接続に失敗した \""
+  },
+  {
+    "jp": "プラットフォーマーへのチケット取得に失敗",
+    "count": 1,
+    "example": "u\"プラットフォーマーへのチケット取得に失敗 \""
+  },
+  {
+    "jp": "リクエスト送信に失敗した",
+    "count": 1,
+    "example": "u\"リクエスト送信に失敗した \""
+  },
+  {
+    "jp": "再接続中",
+    "count": 1,
+    "example": "u\"再接続中 \""
+  },
+  {
+    "jp": "ログインが必要",
+    "count": 1,
+    "example": "u\"ログインが必要 \""
+  },
+  {
+    "jp": "頻度制限を超えた",
+    "count": 1,
+    "example": "u\"頻度制限を超えた \""
+  },
+  {
+    "jp": "サーバー側でタイムアウトした",
+    "count": 1,
+    "example": "u\"サーバー側でタイムアウトした \""
+  },
+  {
+    "jp": "のコンフリクトが発生した",
+    "count": 1,
+    "example": "u\"memcachedのコンフリクトが発生した \""
+  },
+  {
+    "jp": "のインデックスレプリケーションに失敗",
+    "count": 1,
+    "example": "u\"MatchingServerのインデックスレプリケーションに失敗 \""
+  },
+  {
+    "jp": "リダイレクトが必要",
+    "count": 1,
+    "example": "u\"リダイレクトが必要 \""
+  },
+  {
+    "jp": "セッションは他のセッションにより上書きされた",
+    "count": 1,
+    "example": "u\"セッションは他のセッションにより上書きされた \""
+  },
+  {
+    "jp": "セッションは他の何かにより無効にされた",
+    "count": 1,
+    "example": "u\"セッションは他の何かにより無効にされた \""
+  },
+  {
+    "jp": "クイックマッチ",
+    "count": 1,
+    "example": "u\"QUICK_MATCH|クイックマッチ\""
+  },
+  {
+    "jp": "死亡時",
+    "count": 1,
+    "example": "u\"死亡時\""
+  },
+  {
+    "jp": "撃破時",
+    "count": 1,
+    "example": "u\"撃破時\""
+  },
+  {
+    "jp": "一位時王冠",
+    "count": 1,
+    "example": "u\"一位時王冠\""
+  },
+  {
+    "jp": "同率一位時王冠",
+    "count": 1,
+    "example": "u\"同率一位時王冠\""
+  },
+  {
+    "jp": "一位時の特殊効果を消す通知用",
+    "count": 1,
+    "example": "u\"一位時の特殊効果を消す通知用\""
+  },
+  {
+    "jp": "一位者殺害時回復",
+    "count": 1,
+    "example": "u\"一位者殺害時回復\""
+  },
+  {
+    "jp": "同率一位者殺害時回復",
+    "count": 1,
+    "example": "u\"同率一位者殺害時回復\""
+  },
+  {
+    "jp": "一位時回復",
+    "count": 1,
+    "example": "u\"一位時回復\""
+  },
+  {
+    "jp": "同率一位時回復",
+    "count": 1,
+    "example": "u\"同率一位時回復\""
+  },
+  {
+    "jp": "ランキング",
+    "count": 1,
+    "example": "u\"ランキング\""
+  },
+  {
+    "jp": "無し",
+    "count": 1,
+    "example": "u\"無し\""
+  },
+  {
+    "jp": "㰀䘜㰀䘜㰀䘜",
+    "count": 1,
+    "example": "u\"㰀䘜㰀䘜㰀䘜\""
+  },
+  {
+    "jp": "準備完了",
+    "count": 1,
+    "example": "u\"準備完了\""
+  },
+  {
+    "jp": "オフラインモード",
+    "count": 1,
+    "example": "u\"オフラインモード\""
+  },
+  {
+    "jp": "ネットワーク要素の一時無効中",
+    "count": 1,
+    "example": "u\"ネットワーク要素の一時無効中\""
+  },
+  {
+    "jp": "ローディング中",
+    "count": 1,
+    "example": "u\"ローディング中\""
+  },
+  {
+    "jp": "一定時間無操作帰還した",
+    "count": 1,
+    "example": "u\"一定時間無操作帰還した\""
+  },
+  {
+    "jp": "ゲストでプレイ中",
+    "count": 1,
+    "example": "u\"ゲストでプレイ中\""
+  },
+  {
+    "jp": "イベントから許可されてない",
+    "count": 1,
+    "example": "u\"イベントから許可されてない\""
+  },
+  {
+    "jp": "マルチプレイ開始不可なマルチプレイエリア",
+    "count": 1,
+    "example": "u\"マルチプレイ開始不可なマルチプレイエリア\""
+  },
+  {
+    "jp": "ゲスト",
+    "count": 1,
+    "example": "u\"訪問(ゲスト)がOFFになってる\""
+  },
+  {
+    "jp": "必要な特殊効果がかかってない",
+    "count": 1,
+    "example": "u\"必要な特殊効果がかかってない\""
+  },
+  {
+    "jp": "マルチプレイペナルティ中",
+    "count": 1,
+    "example": "u\"マルチプレイペナルティ中\""
+  },
+  {
+    "jp": "開始初期化",
+    "count": 1,
+    "example": "u\"BeginInit/開始初期化\""
+  },
+  {
+    "jp": "読込",
+    "count": 1,
+    "example": "u\"MsbLoad/MSB読込\""
+  },
+  {
+    "jp": "読込待ち",
+    "count": 1,
+    "example": "u\"MsbLoadWait/MSB読込待ち\""
+  },
+  {
+    "jp": "ワールドリソース待ち",
+    "count": 1,
+    "example": "u\"WorldResWait/ワールドリソース待ち\""
+  },
+  {
+    "jp": "カレント",
+    "count": 1,
+    "example": "u\"CurrentLodBlockWait/カレントLODブロック構築待ち\""
+  },
+  {
+    "jp": "ブロック構築待ち",
+    "count": 1,
+    "example": "u\"CurrentLodBlockWait/カレントLODブロック構築待ち\""
+  },
+  {
+    "jp": "ネットワーク解散終了待ち",
+    "count": 1,
+    "example": "u\"LeaveSessionWait/ネットワーク解散終了待ち\""
+  },
+  {
+    "jp": "サインイン",
+    "count": 1,
+    "example": "u\"SignIn/サインイン\""
+  },
+  {
+    "jp": "サインイン待ち",
+    "count": 1,
+    "example": "u\"SignInWaitAndLogIn/サインイン待ち＆ゲームサーバログイン\""
+  },
+  {
+    "jp": "ゲームサーバログイン",
+    "count": 1,
+    "example": "u\"SignInWaitAndLogIn/サインイン待ち＆ゲームサーバログイン\""
+  },
+  {
+    "jp": "世界侵入用のキャラタイプ同期準備完了待ち",
+    "count": 1,
+    "example": "u\"WaitChrTypeSyncReady_forInvadeNpcWorld/NPC世界侵入用のキャラタイプ同期準備完了待ち\""
+  },
+  {
+    "jp": "描画計画作成",
+    "count": 1,
+    "example": "u\"CreateDrawPlan/描画計画作成\""
+  },
+  {
+    "jp": "アニメーション初期化",
+    "count": 1,
+    "example": "u\"InitAnim/アニメーション初期化\""
+  },
+  {
+    "jp": "グリッド初期位置補正",
+    "count": 1,
+    "example": "u\"FixedGridInitPos/グリッド初期位置補正\""
+  },
+  {
+    "jp": "チート被害ユーザーの救済対応",
+    "count": 1,
+    "example": "u\"EscapeDeathLoop_forGrSEQ44762/チート被害ユーザーの救済対応\""
+  },
+  {
+    "jp": "ヒット安定待ち",
+    "count": 1,
+    "example": "u\"HitStabilizeWait/ヒット安定待ち\""
+  },
+  {
+    "jp": "ヒット安定待ち後",
+    "count": 1,
+    "example": "u\"HitStabilizeWaitPost/ヒット安定待ち後\""
+  },
+  {
+    "jp": "ヒット安定待ち後後",
+    "count": 1,
+    "example": "u\"HitStabilizeWaitPostPost/ヒット安定待ち後後\""
+  },
+  {
+    "jp": "テクスチャ安定待ち",
+    "count": 1,
+    "example": "u\"TexStabilizeWait/テクスチャ安定待ち\""
+  },
+  {
+    "jp": "馬待ち",
+    "count": 1,
+    "example": "u\"HorseWait/馬待ち\""
+  },
+  {
+    "jp": "モデル描画処理",
+    "count": 1,
+    "example": "u\"MoveMap/モデル描画処理\""
+  },
+  {
+    "jp": "リソースの解放など",
+    "count": 1,
+    "example": "u\"Cleanup/リソースの解放など\""
+  },
+  {
+    "jp": "モデル描画終了処理",
+    "count": 1,
+    "example": "u\"Finish/モデル描画終了処理\""
+  },
+  {
+    "jp": "謎",
+    "count": 1,
+    "example": "\"謎\""
+  },
+  {
+    "jp": "ワールド描画のみ",
+    "count": 1,
+    "example": "u\"インゲーム（ワールド描画のみ）\""
+  },
+  {
+    "jp": "メニュー",
+    "count": 1,
+    "example": "u\"メニュー\""
+  },
+  {
+    "jp": "デバッグメニュー",
+    "count": 1,
+    "example": "u\"デバッグメニュー\""
+  },
+  {
+    "jp": "セッションに参加してない",
+    "count": 1,
+    "example": "u\"None|セッションに参加してない\""
+  },
+  {
+    "jp": "マルチプレイ開始チェック",
+    "count": 1,
+    "example": "u\"JoinCheck|マルチプレイ開始チェック\""
+  },
+  {
+    "jp": "初期同期データ受信待ち",
+    "count": 1,
+    "example": "u\"WaitInitData|初期同期データ受信待ち\""
+  },
+  {
+    "jp": "召喚メッセージ表示完了待ち",
+    "count": 1,
+    "example": "u\"WaitReloadWait|召喚メッセージ表示完了待ち\""
+  },
+  {
+    "jp": "再ロード開始",
+    "count": 1,
+    "example": "u\"WaitReload|再ロード開始～キャラ初期化まで待ち\""
+  },
+  {
+    "jp": "キャラ初期化まで待ち",
+    "count": 1,
+    "example": "u\"WaitReload|再ロード開始～キャラ初期化まで待ち\""
+  },
+  {
+    "jp": "キャラ初期化",
+    "count": 1,
+    "example": "u\"WaitReload2|キャラ初期化～再ロード完了まで待ち\""
+  },
+  {
+    "jp": "再ロード完了まで待ち",
+    "count": 1,
+    "example": "u\"WaitReload2|キャラ初期化～再ロード完了まで待ち\""
+  },
+  {
+    "jp": "マルチ継続しつつマップ再入場中",
+    "count": 1,
+    "example": "u\"WaitReentryToMap|マルチ継続しつつマップ再入場中\""
+  },
+  {
+    "jp": "のパーツデータでパーツタイプの指定がおかしいものがあります",
+    "count": 1,
+    "example": "\"MapStudioのパーツデータでパーツタイプの指定がおかしいものがあります[%s Type：%d]\""
+  },
+  {
+    "jp": "が捨てたアイテム",
+    "count": 1,
+    "example": "u\"アイテム取得_PCが捨てたアイテム\""
+  },
+  {
+    "jp": "会話",
+    "count": 1,
+    "example": "u\"NPC会話\""
+  },
+  {
+    "jp": "オブジェクトアクション系",
+    "count": 1,
+    "example": "u\"オブジェクトアクション系\""
+  },
+  {
+    "jp": "会話送り",
+    "count": 1,
+    "example": "u\"会話送り\""
+  },
+  {
+    "jp": "システム",
+    "count": 1,
+    "example": "u\"血文字_システム\""
+  },
+  {
+    "jp": "ネムリアイテム",
+    "count": 1,
+    "example": "u\"ネムリアイテム\""
+  },
+  {
+    "jp": "マルチ補正パラメータのバージョンが古いです",
+    "count": 1,
+    "example": "\"マルチ補正パラメータのバージョンが古いです.データを引きなおしてください\""
+  },
+  {
+    "jp": "ネットワークメッセージパラメータから無効データ",
+    "count": 1,
+    "example": "\"ネットワークメッセージパラメータから無効データ(NETWORK_MSG_SITUATION_TYPE_INVALID)を取得できません\""
+  },
+  {
+    "jp": "ネットワークパラメータがありません",
+    "count": 1,
+    "example": "\"ネットワークパラメータがありません\""
+  },
+  {
+    "jp": "ネットワークパラメータ唯一のデータ",
+    "count": 1,
+    "example": "\"ネットワークパラメータ唯一のデータ(ID:%d)を取得できません\""
+  },
+  {
+    "jp": "パラメータのバージョンが古いです",
+    "count": 1,
+    "example": "\"NPCパラメータのバージョンが古いです.データを引きなおしてください\""
+  },
+  {
+    "jp": "リモートプレイヤー",
+    "count": 1,
+    "example": "u\"リモートプレイヤー\""
+  },
+  {
+    "jp": "プレイ領域パラメータがありません",
+    "count": 1,
+    "example": "\"プレイ領域パラメータがありません\""
+  },
+  {
+    "jp": "アイテム作成用",
+    "count": 1,
+    "example": "u\"_アイテム作成用\""
+  },
+  {
+    "jp": "時間帯変化用値",
+    "count": 1,
+    "example": "u\"時間帯変化用値\""
+  },
+  {
+    "jp": "平行風の風速",
+    "count": 1,
+    "example": "u\"平行風の風速\""
+  },
+  {
+    "jp": "リバーブタイプ",
+    "count": 1,
+    "example": "u\"リバーブタイプ\""
+  },
+  {
+    "jp": "ルームタイプ",
+    "count": 1,
+    "example": "u\"ルームタイプ\""
+  },
+  {
+    "jp": "リスナー室内率",
+    "count": 1,
+    "example": "u\"リスナー室内率(1.0:完全室内)\""
+  },
+  {
+    "jp": "完全室内",
+    "count": 1,
+    "example": "u\"リスナー室内率(1.0:完全室内)\""
+  },
+  {
+    "jp": "屋内屋外タイプ",
+    "count": 1,
+    "example": "u\"屋内屋外タイプ(0:屋外,1:半屋内,2:完全屋内)\""
+  },
+  {
+    "jp": "半屋内",
+    "count": 1,
+    "example": "u\"屋内屋外タイプ(0:屋外,1:半屋内,2:完全屋内)\""
+  },
+  {
+    "jp": "完全屋内",
+    "count": 1,
+    "example": "u\"屋内屋外タイプ(0:屋外,1:半屋内,2:完全屋内)\""
+  },
+  {
+    "jp": "天候",
+    "count": 1,
+    "example": "u\"天候\""
+  },
+  {
+    "jp": "位置の水深",
+    "count": 1,
+    "example": "u\"PC位置の水深(m)\""
+  },
+  {
+    "jp": "の平均移動速度",
+    "count": 1,
+    "example": "u\"PCの平均移動速度(km/h)\""
+  },
+  {
+    "jp": "全衝突点の材質の硬さ比率",
+    "count": 1,
+    "example": "u\"自動環境音_全衝突点の材質の硬さ比率(比率)\""
+  },
+  {
+    "jp": "比率",
+    "count": 1,
+    "example": "u\"自動環境音_全衝突点の材質の硬さ比率(比率)\""
+  },
+  {
+    "jp": "自動リバーブ使用されているか",
+    "count": 1,
+    "example": "u\"自動環境音_自動リバーブ使用されているか(0:未使用,1:使用)\""
+  },
+  {
+    "jp": "使用",
+    "count": 1,
+    "example": "u\"自動環境音_自動リバーブ使用されているか(0:未使用,1:使用)\""
+  },
+  {
+    "jp": "レガシーの基準位置からの高さ",
+    "count": 1,
+    "example": "u\"レガシーの基準位置からの高さ[m](SEQ15727)\""
+  },
+  {
+    "jp": "オープンの基準位置からの高さ",
+    "count": 1,
+    "example": "u\"オープンの基準位置からの高さ[m](SEQ15727)\""
+  },
+  {
+    "jp": "メニュー操作中か",
+    "count": 1,
+    "example": "u\"メニュー操作中か？(ボイス制限用)(SEQ14657)\""
+  },
+  {
+    "jp": "ボイス制限用",
+    "count": 1,
+    "example": "u\"メニュー操作中か？(ボイス制限用)(SEQ14657)\""
+  },
+  {
+    "jp": "ポーズ中か",
+    "count": 1,
+    "example": "u\"ポーズ中か？\""
+  },
+  {
+    "jp": "プリレンダムービー再生中か",
+    "count": 1,
+    "example": "u\"プリレンダムービー再生中か？\""
+  },
+  {
+    "jp": "リバーブなし",
+    "count": 1,
+    "example": "u\"0:リバーブなし\""
+  },
+  {
+    "jp": "屋外狭所",
+    "count": 1,
+    "example": "u\"2:屋外狭所\""
+  },
+  {
+    "jp": "木",
+    "count": 1,
+    "example": "u\"3:ルーム(木)\""
+  },
+  {
+    "jp": "石",
+    "count": 1,
+    "example": "u\"4:ルーム(石)\""
+  },
+  {
+    "jp": "ホール",
+    "count": 1,
+    "example": "u\"5:ホール\""
+  },
+  {
+    "jp": "ラージホール",
+    "count": 1,
+    "example": "u\"6:ラージホール\""
+  },
+  {
+    "jp": "地下迷宮狭所",
+    "count": 1,
+    "example": "u\"7:地下迷宮狭所\""
+  },
+  {
+    "jp": "地下迷宮開所",
+    "count": 1,
+    "example": "u\"8:地下迷宮開所\""
+  },
+  {
+    "jp": "自動",
+    "count": 1,
+    "example": "u\"-1:自動\""
+  },
+  {
+    "jp": "強制表示バジェットモニタ",
+    "count": 1,
+    "example": "u\"FORCE BUDGET MONITOR｜強制表示バジェットモニタ\""
+  },
+  {
+    "jp": "お知らせ",
+    "count": 1,
+    "example": "u\"お知らせ\""
+  },
+  {
+    "jp": "不具合情報",
+    "count": 1,
+    "example": "u\"不具合情報\""
+  },
+  {
+    "jp": "高",
+    "count": 1,
+    "example": "u\"高\""
+  },
+  {
+    "jp": "低",
+    "count": 1,
+    "example": "u\"低\""
+  },
+  {
+    "jp": "ヘルパー",
+    "count": 1,
+    "example": "u\"GX LoadBalancer Helper｜GX ロードバランサー ヘルパー\""
+  },
+  {
+    "jp": "レベルダウン",
+    "count": 1,
+    "example": "u\"【%%.1f】 レベルダウンFPS閾値：Lv%d\""
+  },
+  {
+    "jp": "レベルアップ",
+    "count": 1,
+    "example": "u\"【%%.1f】 レベルアップFPS閾値：Lv%d\""
+  },
+  {
+    "jp": "メモリ",
+    "count": 1,
+    "example": "u\"Mem LoadBalancer｜メモリ ロードバランサー\""
+  },
+  {
+    "jp": "未定義の引数",
+    "count": 1,
+    "example": "\"CSMoWwiseAllocator::GetCapability 未定義の引数\""
+  },
+  {
+    "jp": "プレイヤー生存時間",
+    "count": 1,
+    "example": "u\"プレイヤー生存時間\""
+  },
+  {
+    "jp": "エルデンリング",
+    "count": 1,
+    "example": "u\"エルデンリング\""
+  },
+  {
+    "jp": "エルデの王",
+    "count": 1,
+    "example": "u\"エルデの王\""
+  },
+  {
+    "jp": "星の世紀",
+    "count": 1,
+    "example": "u\"星の世紀\""
+  },
+  {
+    "jp": "狂い火の王",
+    "count": 1,
+    "example": "u\"狂い火の王\""
+  },
+  {
+    "jp": "ゴドリック",
+    "count": 1,
+    "example": "u\"破片の君主、ゴドリック\""
+  },
+  {
+    "jp": "ラダーン",
+    "count": 1,
+    "example": "u\"破片の君主、ラダーン\""
+  },
+  {
+    "jp": "モーゴット",
+    "count": 1,
+    "example": "u\"破片の君主、モーゴット\""
+  },
+  {
+    "jp": "ライカード",
+    "count": 1,
+    "example": "u\"破片の君主、ライカード\""
+  },
+  {
+    "jp": "マレニア",
+    "count": 1,
+    "example": "u\"破片の君主、マレニア\""
+  },
+  {
+    "jp": "黒き剣のマリケス",
+    "count": 1,
+    "example": "u\"黒き剣のマリケス\""
+  },
+  {
+    "jp": "戦士",
+    "count": 1,
+    "example": "u\"戦士、ホーラ・ルー\""
+  },
+  {
+    "jp": "ホーラ・ルー",
+    "count": 1,
+    "example": "u\"戦士、ホーラ・ルー\""
+  },
+  {
+    "jp": "竜王プラキドサクス",
+    "count": 1,
+    "example": "u\"竜王プラキドサクス\""
+  },
+  {
+    "jp": "神を殺す武器",
+    "count": 1,
+    "example": "u\"神を殺す武器\""
+  },
+  {
+    "jp": "伝説の武器",
+    "count": 1,
+    "example": "u\"伝説の武器\""
+  },
+  {
+    "jp": "伝説の霊体",
+    "count": 1,
+    "example": "u\"伝説の霊体\""
+  },
+  {
+    "jp": "伝説の魔術",
+    "count": 1,
+    "example": "u\"伝説の魔術／祈祷\""
+  },
+  {
+    "jp": "祈祷",
+    "count": 1,
+    "example": "u\"伝説の魔術／祈祷\""
+  },
+  {
+    "jp": "伝説のタリスマン",
+    "count": 1,
+    "example": "u\"伝説のタリスマン\""
+  },
+  {
+    "jp": "満月の女王",
+    "count": 1,
+    "example": "u\"満月の女王、レナラ\""
+  },
+  {
+    "jp": "レナラ",
+    "count": 1,
+    "example": "u\"満月の女王、レナラ\""
+  },
+  {
+    "jp": "死竜フォルサクス",
+    "count": 1,
+    "example": "u\"死竜フォルサクス\""
+  },
+  {
+    "jp": "神肌のふたり",
+    "count": 1,
+    "example": "u\"神肌のふたり\""
+  },
+  {
+    "jp": "火の巨人",
+    "count": 1,
+    "example": "u\"火の巨人\""
+  },
+  {
+    "jp": "竜人兵",
+    "count": 1,
+    "example": "u\"竜人兵\""
+  },
+  {
+    "jp": "祖霊の王",
+    "count": 1,
+    "example": "u\"祖霊の王\""
+  },
+  {
+    "jp": "英雄のガーゴイル",
+    "count": 1,
+    "example": "u\"英雄のガーゴイル\""
+  },
+  {
+    "jp": "マルギット",
+    "count": 1,
+    "example": "u\"忌み鬼、マルギット\""
+  },
+  {
+    "jp": "ラダゴンの赤狼",
+    "count": 1,
+    "example": "u\"ラダゴンの赤狼\""
+  },
+  {
+    "jp": "神肌の貴種",
+    "count": 1,
+    "example": "u\"神肌の貴種\""
+  },
+  {
+    "jp": "溶岩土竜",
+    "count": 1,
+    "example": "u\"溶岩土竜\""
+  },
+  {
+    "jp": "最初の王",
+    "count": 1,
+    "example": "u\"最初の王、ゴッドフレイ\""
+  },
+  {
+    "jp": "ゴッドフレイ",
+    "count": 1,
+    "example": "u\"最初の王、ゴッドフレイ\""
+  },
+  {
+    "jp": "写し身の雫",
+    "count": 1,
+    "example": "u\"写し身の雫\""
+  },
+  {
+    "jp": "アーバーガード",
+    "count": 1,
+    "example": "u\"アーバーガード\""
+  },
+  {
+    "jp": "暗黒の落とし子",
+    "count": 1,
+    "example": "u\"暗黒の落とし子、アステール\""
+  },
+  {
+    "jp": "アステール",
+    "count": 1,
+    "example": "u\"暗黒の落とし子、アステール\""
+  },
+  {
+    "jp": "獅子の混種",
+    "count": 1,
+    "example": "u\"獅子の混種\""
+  },
+  {
+    "jp": "カーリアの親衛騎士",
+    "count": 1,
+    "example": "u\"カーリアの親衛騎士\""
+  },
+  {
+    "jp": "鉄茨のエレメール",
+    "count": 1,
+    "example": "u\"鉄茨のエレメール\""
+  },
+  {
+    "jp": "祖霊",
+    "count": 1,
+    "example": "u\"祖霊\""
+  },
+  {
+    "jp": "宿将二アール",
+    "count": 1,
+    "example": "u\"宿将二アール\""
+  },
+  {
+    "jp": "円卓",
+    "count": 1,
+    "example": "u\"円卓\""
+  },
+  {
+    "jp": "大ルーン",
+    "count": 1,
+    "example": "u\"大ルーン\""
+  },
+  {
+    "jp": "燃える黄金樹",
+    "count": 1,
+    "example": "u\"燃える黄金樹\""
+  },
+  {
+    "jp": "継承関係が循環しています",
+    "count": 1,
+    "example": "\"継承関係が循環しています\""
+  },
+  {
+    "jp": "使用中ではないブロックが",
+    "count": 1,
+    "example": "\"使用中ではないブロックがFreeに渡されました。２重解放の可能性があります。(%p)\""
+  },
+  {
+    "jp": "重解放の可能性があります",
+    "count": 1,
+    "example": "\"使用中ではないブロックがFreeに渡されました。２重解放の可能性があります。(%p)\""
+  },
+  {
+    "jp": "ヒープの範囲外のポインタ",
+    "count": 1,
+    "example": "\"ヒープの範囲外のポインタ(0x%p)がFreeに渡されました\""
+  },
+  {
+    "jp": "数値が格納されていない",
+    "count": 1,
+    "example": "u\"数値が格納されていないEzStateValueを数値として解釈しようとしました\""
+  },
+  {
+    "jp": "を数値として解釈しようとしました",
+    "count": 1,
+    "example": "u\"数値が格納されていないEzStateValueを数値として解釈しようとしました\""
+  },
+  {
+    "jp": "文字列が格納されていない",
+    "count": 1,
+    "example": "u\"文字列が格納されていないEzStateValueを文字列として解釈しようとしました\""
+  },
+  {
+    "jp": "を文字列として解釈しようとしました",
+    "count": 1,
+    "example": "u\"文字列が格納されていないEzStateValueを文字列として解釈しようとしました\""
+  },
+  {
+    "jp": "引数名のインデックスが大きすぎます",
+    "count": 1,
+    "example": "u\"Error:引数名のインデックスが大きすぎます。1つのステートに254個以上の条件付きイベントを設定した可能性があります。\""
+  },
+  {
+    "jp": "つのステートに",
+    "count": 1,
+    "example": "u\"Error:引数名のインデックスが大きすぎます。1つのステートに254個以上の条件付きイベントを設定した可能性があります。\""
+  },
+  {
+    "jp": "個以上の条件付きイベントを設定した可能性があります",
+    "count": 1,
+    "example": "u\"Error:引数名のインデックスが大きすぎます。1つのステートに254個以上の条件付きイベントを設定した可能性があります。\""
+  },
+  {
+    "jp": "の実装クラスのメモリ確保失敗",
+    "count": 1,
+    "example": "\"NRManagerの実装クラスのメモリ確保失敗。\""
+  },
+  {
+    "jp": "直下のノード数",
+    "count": 1,
+    "example": "u\"直下のノード数:%d\""
+  },
+  {
+    "jp": "不明なインデックス",
+    "count": 1,
+    "example": "u\"不明なインデックス(%d)\""
+  },
+  {
+    "jp": "選択",
+    "count": 1,
+    "example": "u\"A : 選択\""
+  },
+  {
+    "jp": "戻る",
+    "count": 1,
+    "example": "u\"B : 戻る\""
+  },
+  {
+    "jp": "十字キー",
+    "count": 1,
+    "example": "u\"RB + 十字キー : 親ノードを元に移動\""
+  },
+  {
+    "jp": "親ノードを元に移動",
+    "count": 1,
+    "example": "u\"RB + 十字キー : 親ノードを元に移動\""
+  },
+  {
+    "jp": "数値初期化",
+    "count": 1,
+    "example": "u\"Y : 数値初期化\""
+  },
+  {
+    "jp": "スロットシステム",
+    "count": 1,
+    "example": "u\"スロットシステム\""
+  },
+  {
+    "jp": "スロットタイプ",
+    "count": 1,
+    "example": "u\"スロットタイプ<<%d>> - スロット番号<<%d>>\""
+  },
+  {
+    "jp": "スロット番号",
+    "count": 1,
+    "example": "u\"スロットタイプ<<%d>> - スロット番号<<%d>>\""
+  },
+  {
+    "jp": "不正なジェスチャー",
+    "count": 1,
+    "example": "\"不正なジェスチャー : %d\""
+  },
+  {
+    "jp": "無効",
+    "count": 1,
+    "example": "u\"無効\""
+  },
+  {
+    "jp": "タグ",
+    "count": 1,
+    "example": "u\"タグ<?%s?>は登録されていません。\""
+  },
+  {
+    "jp": "は登録されていません",
+    "count": 1,
+    "example": "u\"タグ<?%s?>は登録されていません。\""
+  },
+  {
+    "jp": "搀",
+    "count": 1,
+    "example": "u\"─搀\""
+  },
+  {
+    "jp": "プロパティファイル操作",
+    "count": 1,
+    "example": "u\"PropertyFileCtrl|プロパティファイル操作\""
+  },
+  {
+    "jp": "定義された属性一覧",
+    "count": 1,
+    "example": "u\"AttributeList|定義された属性一覧\""
+  },
+  {
+    "jp": "一致レベル無し",
+    "count": 1,
+    "example": "u\"一致レベル無し\""
+  },
+  {
+    "jp": "新規セーブ",
+    "count": 1,
+    "example": "u\"※Push【A+X】新規セーブ[%s]\""
+  },
+  {
+    "jp": "ソースファイルごとのメモリ使用状況",
+    "count": 1,
+    "example": "u\"ソースファイルごとのメモリ使用状況\""
+  },
+  {
+    "jp": "ブロックサイズ別確保量など詳細情報",
+    "count": 1,
+    "example": "u\"ブロックサイズ別確保量など詳細情報\""
+  },
+  {
+    "jp": "確保ブロックごとのメモリダンプ",
+    "count": 1,
+    "example": "u\"確保ブロックごとのメモリダンプ\""
+  },
+  {
+    "jp": "メモリ使用状況",
+    "count": 1,
+    "example": "u\"メモリ使用状況(確保量、空き容量、ブロック数等)\""
+  },
+  {
+    "jp": "確保量",
+    "count": 1,
+    "example": "u\"メモリ使用状況(確保量、空き容量、ブロック数等)\""
+  },
+  {
+    "jp": "空き容量",
+    "count": 1,
+    "example": "u\"メモリ使用状況(確保量、空き容量、ブロック数等)\""
+  },
+  {
+    "jp": "ブロック数等",
+    "count": 1,
+    "example": "u\"メモリ使用状況(確保量、空き容量、ブロック数等)\""
+  },
+  {
+    "jp": "人が読みやすいフォーマットで出力",
+    "count": 1,
+    "example": "u\"【ヒープのデータ構造をフルダンプ用】人が読みやすいフォーマットで出力\""
+  },
+  {
+    "jp": "ヒープのデータ構造をフルダンプ",
+    "count": 1,
+    "example": "u\"ヒープのデータ構造をフルダンプ\""
+  },
+  {
+    "jp": "全体か",
+    "count": 1,
+    "example": "u\"全体か     %s\""
+  },
+  {
+    "jp": "フォーマットで出力",
+    "count": 1,
+    "example": "u\"【ヒープのデータ構造をフルダンプ用】 CSVフォーマットで出力\""
+  },
+  {
+    "jp": "メモリ使用量ランキング形式で出力",
+    "count": 1,
+    "example": "u\"【ソースファイルごとのメモリ使用状況用】 メモリ使用量ランキング形式で出力\""
+  },
+  {
+    "jp": "ブロック数ランキング形式で出力",
+    "count": 1,
+    "example": "u\"【ソースファイルごとのメモリ使用状況用】ブロック数ランキング形式で出力\""
+  },
+  {
+    "jp": "タイプ",
+    "count": 1,
+    "example": "u\"タイプ     %s\""
+  },
+  {
+    "jp": "全情報出力",
+    "count": 1,
+    "example": "u\"【確保ブロックごとのメモリダンプ用】 全情報出力(ファイルなど)\""
+  },
+  {
+    "jp": "ファイルなど",
+    "count": 1,
+    "example": "u\"【確保ブロックごとのメモリダンプ用】 全情報出力(ファイルなど)\""
+  },
+  {
+    "jp": "メモリダンプ",
+    "count": 1,
+    "example": "u\"メモリダンプ\""
+  },
+  {
+    "jp": "アロケータ情報",
+    "count": 1,
+    "example": "u\"アロケータ情報\""
+  },
+  {
+    "jp": "ディレクトリ階層ツリー形式で出力",
+    "count": 1,
+    "example": "u\"【ソースファイルごとのメモリ使用状況用】 ディレクトリ階層ツリー形式で出力\""
+  },
+  {
+    "jp": "ヒープ",
+    "count": 1,
+    "example": "u\"【確保ブロックごとのメモリダンプ用】ヒープ、ポインタ、サイズのみの出力に制限\""
+  },
+  {
+    "jp": "ポインタ",
+    "count": 1,
+    "example": "u\"【確保ブロックごとのメモリダンプ用】ヒープ、ポインタ、サイズのみの出力に制限\""
+  },
+  {
+    "jp": "サイズのみの出力に制限",
+    "count": 1,
+    "example": "u\"【確保ブロックごとのメモリダンプ用】ヒープ、ポインタ、サイズのみの出力に制限\""
+  },
+  {
+    "jp": "デバッグ機能",
+    "count": 1,
+    "example": "u\"デバッグ機能\""
+  },
+  {
+    "jp": "ヒープ情報",
+    "count": 1,
+    "example": "u\"ヒープ情報\""
+  },
+  {
+    "jp": "詳細設定出力",
+    "count": 1,
+    "example": "u\"詳細設定出力\""
+  },
+  {
+    "jp": "詳細出力",
+    "count": 1,
+    "example": "u\"-- 詳細出力 ----------\""
+  },
+  {
+    "jp": "簡易出力",
+    "count": 1,
+    "example": "u\"-- 簡易出力 ----------\""
+  },
+  {
+    "jp": "簡易設定出力",
+    "count": 1,
+    "example": "u\"簡易設定出力(CSVフォーマット)\""
+  },
+  {
+    "jp": "フォーマット",
+    "count": 1,
+    "example": "u\"簡易設定出力(CSVフォーマット)\""
+  },
+  {
+    "jp": "出力アロケータ",
+    "count": 1,
+    "example": "u\"出力アロケータ :(%02d)%s\""
+  },
+  {
+    "jp": "未初期化のシングルトンにアクセスしました",
+    "count": 1,
+    "example": "\"%s:未初期化のシングルトンにアクセスしました。\""
+  },
+  {
+    "jp": "バディ小隊",
+    "count": 1,
+    "example": "u\"バディ小隊:forPlayer0\""
+  }
+]

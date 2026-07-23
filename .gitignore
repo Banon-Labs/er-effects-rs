@@ -1,7 +1,59 @@
 /target
 *.log
+__pycache__/
 
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db
 .beads-credential-key
+
+/save-files
+
+# Runtime/user-provided SpEffect metadata belongs next to eldenring.exe:
+# Game/effect-master-catalog.json and Game/effect-catalogs/*.json.
+/effect-master-catalog.json
+/effect-catalogs/
+/data/effect-master-catalog.json
+/data/effect-catalogs/
+
+# Deobfuscated (Arxan-decrypted) ER image for static RE -- copyrighted game binary, NEVER commit
+eldenring-deobf.bin
+*.deobf.bin
+# Raw executable bytes exported from the Ghidra runtime DUMP (copyrighted) -- used by
+# scripts/dump-deobf-shift.py to ground-truth dump<->deobf addresses. NEVER commit.
+dump-exec.bin
+# Agent scratch / derived analysis artifacts (TSV dumps of function bytes, etc.)
+/scratchpad/
+
+# Local hidden git worktrees / sandboxes (for example Bevy shader tinkering).
+/.worktrees/
+
+ProDebug.dll
+offline-launcher.exe
+
+# Local runtime-probe env files (may contain AUTHORIZED runtime flags)
+.envs/
+
+# Local/user-specific agent settings and generated research artifacts.
+.claude/settings.local.json
+/autoresearch/
+/investigations/
+.auto/autoload-request-*.txt
+.auto/ideas.md
+.auto/prompt.md
+.auto/run-portrait-source-probe.sh
+
+# Third-party reference binaries for RE/compat analysis (copyrighted; NEVER commit,
+# NEVER bundle into product/release/target). Seamless Co-op (ersc.dll) lives here.
+/vendor/
+
+# scratch analysis dumps (game-derived; never commit)
+.auto/scratch-jsm/
+
+# Per-run runtime-probe evidence (y22i Windows validation etc.) -- regenerable, not source.
+/.artifacts/
+
+# Live workflow steering channel (see scripts/steering/README.md) -- ephemeral run
+# control the user drops in while a wf-*.js is running; never source.
+/.workflow-steering/
+reference-captures/

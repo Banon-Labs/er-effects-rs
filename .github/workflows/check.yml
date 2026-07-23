@@ -2,13 +2,31 @@ name: check
 
 on:
   push:
+    branches: [main]
   pull_request:
+  # Manual trigger to re-warm the main-scoped tool caches (cupcake, xwin
+  # CRT/SDK, rust-cache) if GitHub evicts them after an idle week, without
+  # having to push a commit.
+  workflow_dispatch:
+
+# One live run per ref: superseded runs on the same PR/branch are cancelled
+# instead of running to completion. Runs on main are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   # Commit of vswarte/fromsoftware-rs the workspace is developed against.
   # The root crate uses `../fromsoftware-rs` path dependencies, so the
   # workspace cannot even be loaded by cargo without this sibling checkout.
   FROMSOFTWARE_RS_REV: 902851865d05069eda7dcfd6385c8881eadf29bf
+  # Commit of eqtylab/cupcake the policy checker is built from. Also keys the
+  # cache of the built binary -- bumping the rev invalidates the cache.
+  CUPCAKE_REV: 27b94b8
+  # cargo-xwin release to install. Pinned because it also keys the cache of the
+  # Windows CRT/SDK that cargo-xwin downloads (defaults such as the bundled
+  # xwin manifest version only move when this version moves).
+  CARGO_XWIN_VERSION: 0.23.0
 
 jobs:
   check:
@@ -21,26 +39,75 @@ jobs:
           git clone https://github.com/vswarte/fromsoftware-rs.git "$GITHUB_WORKSPACE/../fromsoftware-rs"
           git -C "$GITHUB_WORKSPACE/../fromsoftware-rs" checkout "$FROMSOFTWARE_RS_REV"
 
+      - name: Check out MinHook vendor source
+        run: git clone --depth 1 --branch v1.3.4 https://github.com/TsudaKageyu/minhook.git vendor/minhook
+
       - name: Install Rust (stable + windows target)
         run: |
+          # Runner apt lists are usually fresh enough to install without an
+          # `apt-get update` (~20-60 s); fall back to updating only on a miss.
+          sudo apt-get install -y --no-install-recommends clang lld llvm \
+            || { sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld llvm; }
           rustup toolchain install stable --profile minimal --component rustfmt
           rustup target add x86_64-pc-windows-msvc
 
-      - uses: Swatinem/rust-cache@v2
+      # Prebuilt release binary; replaces a ~1 min `cargo install cargo-xwin`.
+      - name: Install cargo-xwin
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-xwin@${{ env.CARGO_XWIN_VERSION }}
 
-      - name: Lint - no magic numbers
-        run: python3 scripts/check-no-magic-numbers.py
+      # On first use cargo-xwin downloads + unpacks the MSVC CRT and Windows
+      # SDK into ~/.cache/cargo-xwin. That download comes from Microsoft's CDN
+      # and its duration is wildly variable -- observed 40 s on a good run and
+      # 12 m 44 s on a throttled one (run 28757404582) -- so restore it from
+      # the Actions cache instead of re-downloading every run. The content is
+      # fully determined by the pinned cargo-xwin version, so an exact-key hit
+      # is expected every run and the ~1 GB dir is only uploaded once per bump.
+      - name: Cache xwin Windows CRT/SDK
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/cargo-xwin
+          key: xwin-sdk-${{ runner.os }}-cargo-xwin-${{ env.CARGO_XWIN_VERSION }}
+
+      - name: Install OPA policy engine
+        run: |
+          curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static
+          chmod +x opa
+          sudo mv opa /usr/local/bin/opa
+
+      # Cupcake has no prebuilt releases at our pinned rev, so cache the binary
+      # we build; the ~4.5 min source build then only runs when CUPCAKE_REV moves.
+      - name: Cache Cupcake binary
+        id: cache-cupcake
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cupcake
+          key: cupcake-${{ runner.os }}-${{ env.CUPCAKE_REV }}
+
+      - name: Install Cupcake policy checker
+        if: steps.cache-cupcake.outputs.cache-hit != 'true'
+        run: cargo install --git https://github.com/eqtylab/cupcake.git --rev "$CUPCAKE_REV" cupcake-cli --locked
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Lint - no lossy UTF-8
         run: python3 scripts/check-no-lossy-utf8.py
 
+      - name: Lint - no timeout/sleep control flow
+        run: |
+          python3 scripts/check-no-timeouts.py
+          python3 scripts/test-no-timeouts.py
+          cupcake validate --log-level error
+          python3 scripts/test-cupcake-policies.py
+
       - name: rustfmt
-        run: cargo fmt -- --check
+        run: cargo fmt --all -- --check
 
       - name: Test host-buildable crates
         run: cargo test -p er-soulsformats -p er-param-inspect
 
-      # Full link of the DLL needs the MSVC linker; `cargo check` of the
-      # windows target works on Linux and still type-checks the game code.
+      # Full link of the DLL needs the MSVC linker; cargo-xwin provides the
+      # Windows SDK import libraries needed for Linux-hosted type-checks.
       - name: Check DLL crate (windows target)
-        run: cargo check --target x86_64-pc-windows-msvc
+        run: cargo xwin check --target x86_64-pc-windows-msvc

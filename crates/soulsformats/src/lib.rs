@@ -1,4 +1,5 @@
 pub mod recon;
+pub mod shaders;
 
 use std::{
     env, fs,
@@ -131,6 +132,16 @@ impl SoulsFormats {
         let mut checked_paths = Vec::new();
 
         if let Some(path) = env::var_os(SMITHBOX_SOURCE_DIR_ENV) {
+            let smithbox_root = PathBuf::from(path);
+            checked_paths.push(smithbox_root.clone());
+            return Self::from_smithbox_root_with_repo_root(
+                smithbox_root,
+                repo_root,
+                checked_paths,
+            );
+        }
+
+        if let Some(path) = env::var_os(SMITHBOX_BINARY_DIR_ENV) {
             let smithbox_root = PathBuf::from(path);
             checked_paths.push(smithbox_root.clone());
             return Self::from_smithbox_root_with_repo_root(

@@ -1,25 +1,79 @@
 {
+  "env": {
+    "BASH_DEFAULT_TIMEOUT_MS": "120000",
+    "BASH_MAX_TIMEOUT_MS": "120000"
+  },
   "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "cupcake eval --harness claude --policy-dir $CLAUDE_PROJECT_DIR/.cupcake --global-config $CLAUDE_PROJECT_DIR/.cupcake/rulebook.yml",
+            "type": "command"
+          }
+        ],
+        "matcher": "Edit|MultiEdit|Write"
+      }
+    ],
     "PreCompact": [
       {
         "hooks": [
           {
-            "command": "bd prime",
+            "command": "bash $CLAUDE_PROJECT_DIR/scripts/beads-prime.sh",
             "type": "command"
           }
         ],
         "matcher": ""
       }
     ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "cupcake eval --harness claude --policy-dir $CLAUDE_PROJECT_DIR/.cupcake --global-config $CLAUDE_PROJECT_DIR/.cupcake/rulebook.yml",
+            "type": "command"
+          }
+        ],
+        "matcher": "*"
+      }
+    ],
     "SessionStart": [
       {
         "hooks": [
           {
-            "command": "bd prime",
+            "command": "bash $CLAUDE_PROJECT_DIR/scripts/beads-prime.sh",
             "type": "command"
           }
         ],
         "matcher": ""
+      },
+      {
+        "hooks": [
+          {
+            "command": "cupcake eval --harness claude --policy-dir $CLAUDE_PROJECT_DIR/.cupcake --global-config $CLAUDE_PROJECT_DIR/.cupcake/rulebook.yml",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "cupcake eval --harness claude --policy-dir $CLAUDE_PROJECT_DIR/.cupcake --global-config $CLAUDE_PROJECT_DIR/.cupcake/rulebook.yml",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "command": "cupcake eval --harness claude --policy-dir $CLAUDE_PROJECT_DIR/.cupcake --global-config $CLAUDE_PROJECT_DIR/.cupcake/rulebook.yml",
+            "type": "command"
+          }
+        ]
       }
     ]
   }
