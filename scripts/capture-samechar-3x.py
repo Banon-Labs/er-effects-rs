@@ -211,6 +211,9 @@ def snap(t: dict) -> dict:
         # boot-view composite never stopped for the reload => fixable DLL bug.
         "oracle_composite_us",
         "oracle_boot_view_epoch_live",
+        "oracle_boot_view_self_presents",
+        "oracle_boot_view_pump_stop_reason",
+        "oracle_boot_view_stop_native_hits",
         "oracle_current_load_epoch",
         # DLL MAIN GAME-TASK duration (2026-07-22): large on reloads => DLL per-frame code cost; fast =>
         # game-side loop (playable-window 50ms not the DLL).
