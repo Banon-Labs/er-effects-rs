@@ -9,6 +9,7 @@ members = [
   "crates/er-input-harness-dll",
   "crates/er-ags-stub",
   "crates/er-inventory-sort-dll",
+  "crates/er-armament-icons",
   "crates/er-net-effects-dll",
   "crates/mushroom-man-runtime",
   "crates/effects-data",

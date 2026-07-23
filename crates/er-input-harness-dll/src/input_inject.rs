@@ -109,6 +109,72 @@ pub fn input_manager(base: usize) -> Option<usize> {
     unsafe { read_usize(base + INPUT_MANAGER_GLOBAL_RVA) }.filter(|p| *p >= HEAP_LO)
 }
 
+// --- NATIVE EquipTop open (bd er-effects-rs-pe98, RE 2026-07-23) ---
+// The pause list opens submenus exclusively through MenuJob FACTORIES + CSPopupMenu job submit;
+// there is NO request byte for Equipment (the +0x121/+0x122 request family covers only
+// IngameTop/WorldMap). Equipment row = st_pauseMenuClickHandlerInfoList[0], factory dump
+// 0x140801cb0 (builds the 02_010_EquipTop union job from popup+0x10 alone); submit wrapper dump
+// 0x1407ee2e0 is the SAME one the proven +0x121 IngameTop request path uses (core
+// CSPopupMenu::StartTopMenuJob dump 0x1407f0c40 pushes the current top job to popup+0xD0 so Back
+// pops natively, and bumps the job serial at popup+0x168). All deobf VAs ground-truthed
+// content-unique via scripts/dump-deobf-shift.py.
+
+/// `FUN_140801cb0` deobf: Equipment pause-row MenuJob factory
+/// `(DLReferencePointer<CS::MenuJob>* out, ComponentStack* popup+0x10) -> out`.
+const EQUIP_TOP_JOB_FACTORY_RVA: usize = 0x801bc0;
+/// `FUN_1407ee2e0` deobf: popup top-job submit wrapper `(popup, refptr* out, u64* serial_out,
+/// refptr* job)` -- the exact call shape of the +0x121 IngameTop open path.
+const POPUP_SUBMIT_TOP_JOB_RVA: usize = 0x7ee1f0;
+/// CSPopupMenu.componentStack used by every pause-row factory.
+const POPUP_COMPONENT_STACK_10_OFFSET: usize = 0x10;
+/// CSPopupMenu top-job submit serial; increments per StartTopMenuJob -- a clean open semaphore.
+const POPUP_JOB_SERIAL_168_OFFSET: usize = 0x168;
+
+fn popup_menu(input_manager_ptr: usize) -> Option<usize> {
+    unsafe { read_usize(input_manager_ptr + CS_MENU_MAN_POPUP_MENU_80_OFFSET) }
+        .filter(|p| *p >= HEAP_LO)
+}
+
+/// Read the CSPopupMenu job-submit serial (popup+0x168), or 0 when unresolvable.
+pub fn popup_job_serial(input_manager_ptr: usize) -> u64 {
+    popup_menu(input_manager_ptr)
+        .and_then(|popup| unsafe { read_usize(popup + POPUP_JOB_SERIAL_168_OFFSET) })
+        .unwrap_or(0) as u64
+}
+
+/// NATIVE Equipment-menu open: build the EquipTop union job with the game's own pause-row factory
+/// and submit it through the native CSPopupMenu top-job path (native enqueue + native pump
+/// ownership; no Scaleform input). Faithful nesting requires the pause menu (IngameTop) to already
+/// be the top job -- call only after `pause_menu_open()`. Game thread only. Returns true once the
+/// job was built and submitted.
+pub fn native_open_equip_menu(base: usize, input_manager_ptr: usize) -> bool {
+    type EquipJobFactoryFn = unsafe extern "system" fn(*mut [usize; 2], usize) -> *mut [usize; 2];
+    type SubmitTopJobFn =
+        unsafe extern "system" fn(usize, *mut [usize; 2], *mut u64, *mut [usize; 2]);
+
+    let Some(popup) = popup_menu(input_manager_ptr) else {
+        return false;
+    };
+    let factory: EquipJobFactoryFn =
+        unsafe { std::mem::transmute(base + EQUIP_TOP_JOB_FACTORY_RVA) };
+    let submit: SubmitTopJobFn = unsafe { std::mem::transmute(base + POPUP_SUBMIT_TOP_JOB_RVA) };
+
+    let mut job: [usize; 2] = [0; 2];
+    // SAFETY: the factory constructs a DLReferencePointer<MenuJob> into raw 16-byte out storage
+    // from popup+0x10, exactly as every native pause-row confirm does (RE 2026-07-23).
+    unsafe { factory(&mut job, popup + POPUP_COMPONENT_STACK_10_OFFSET) };
+    if job[0] < HEAP_LO {
+        return false;
+    }
+    let mut out: [usize; 2] = [0; 2];
+    let mut serial: u64 = 0;
+    // SAFETY: same call shape as the native +0x121 IngameTop open (popup, &out, &serial, &job);
+    // the core pushes the current top job to popup+0xD0 so Back pops natively. The job refptr's
+    // one retained reference is intentionally left alive (the menu owns the job's lifetime).
+    unsafe { submit(popup, &mut out, &mut serial, &mut job) };
+    true
+}
+
 /// Tap one menu event into the keystate bitmap (edge OR). Fault-safe: only writes once the target
 /// byte is confirmed readable. Must be called on the game thread (from the per-frame drive hook) so
 /// the write lands in the same frame the game re-polls the bitmap.

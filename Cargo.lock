@@ -2728,6 +2728,16 @@ name = "er-ags-stub"
 version = "0.1.0"
 
 [[package]]
+name = "er-armament-icons"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-game-base",
+ "er-hook",
+ "fromsoftware-shared",
+]
+
+[[package]]
 name = "er-bevy-shader-lab"
 version = "0.1.0"
 dependencies = [
