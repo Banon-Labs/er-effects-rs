@@ -546,8 +546,11 @@ const BOOT_PUMP_FRAME_SLEEP_MS: u64 = 16;
 
 /// Body of the `er-effects-boot-present-pump` thread. See the spawn comment for the contract.
 fn boot_present_pump() {
-    // Same gate as the install: the boot view + its swapchain hook are the portrait-path feature.
-    if !portrait_overlay_enabled() {
+    // Same gate as the install: the boot view + its swapchain hook are the portrait-path feature. Also
+    // run under telemetry-only so the pump installs the present detour for CADENCE MEASUREMENT (the
+    // composite is gated off separately; the boot self-presents only pace the pre-game-present boot phase
+    // and do not touch the in-world steady-state cadence being measured).
+    if !portrait_overlay_enabled() && !crate::experiments::save_override_telemetry_only() {
         return;
     }
     let start = std::time::Instant::now();

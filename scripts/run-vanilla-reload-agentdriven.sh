@@ -108,8 +108,10 @@ PROFILE="$ARTIFACT_DIR/vanilla-reload-agentdriven.me3"
 # telemetry-only: disarm the product autoload; product emits telemetry (+ present-cadence via the
 # decoupled detour) but loads no character. The NATIVE Continue is driven by the harness below.
 : >"$GAME_DIR/er-effects-telemetry-only.txt"
-# harness FullBootReload drive mode: the harness drives boot->Continue->play->System->Quit->Continue.
-echo -n "full" >"$GAME_DIR/er-harness-drive-mode.txt"
+# harness drive mode (DRIVE_MODE env, default 'full'): 'full' drives the whole
+# boot->Continue->play->System->Quit->Continue reload; 'boot' drives boot->Continue and holds in-world
+# (no quit) -- use 'boot' for a CLEAN vanilla in-world steady-state window when the reload nav derails.
+echo -n "${DRIVE_MODE:-full}" >"$GAME_DIR/er-harness-drive-mode.txt"
 # FORCE-DRIVE: the harness normally stands down to Passive when the product DLL is loaded (companion
 # design). This vanilla capture loads the product for its telemetry but needs the HARNESS to drive, so
 # override that stand-down (bd VANILLA-BASELINE-blocked-harness-forces-passive-when-product-loaded).
