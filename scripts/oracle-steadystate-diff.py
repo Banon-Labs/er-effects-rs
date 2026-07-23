@@ -56,6 +56,7 @@ DROP_FIELDS = {
     "oracle_play_time_live",
     "oracle_play_time_advanced_ms",
     # monotonic hit/event counters -- grow unbounded with window length, not a state value
+    "oracle_gx_cmdqueue_reserves",  # cumulative reserve counter -- grows with window length
     "oracle_loading_bar_update_hits",
     "oracle_loading_bar_final_hits",
     "oracle_loading_screen_close_sent_hits",
