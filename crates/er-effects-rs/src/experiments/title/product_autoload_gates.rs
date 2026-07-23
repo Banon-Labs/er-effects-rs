@@ -46,6 +46,18 @@ use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 use super::*;
 
 pub(crate) fn arm_product_autoload_from_request(request: &SaveLoader) {
+    // ARMING DIAG (2026-07-23, bd trace own_load arming): static tracing said own_load should NOT arm with
+    // no autoload file (default request), yet own_load_continue fired in run71. Log the ACTUAL request the
+    // product armed from, and whether autoload_disabled(), so the real arming source is evidence-based.
+    append_autoload_debug(format_args!(
+        "ARM_AUTOLOAD_REQUEST: method={} own_load={} own_load_continue={} own_dispatch={} own_stepper={} autoload_disabled={}",
+        request.method().label(),
+        request.own_load(),
+        request.own_load_continue(),
+        request.own_dispatch(),
+        request.own_stepper(),
+        autoload_disabled(),
+    ));
     // Product autoload is the release/default behavior. Do not make it depend on smoke-only env
     // variables, `er-effects-autoload.txt`, or the experimental DirectMenuLoad method: the title/menu
     // visual suppression is also default-on for real runs, so leaving the load driver unarmed creates

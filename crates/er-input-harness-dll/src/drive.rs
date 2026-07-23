@@ -532,7 +532,17 @@ fn resolve_mode() -> DriveMode {
     // (bd VANILLA-BASELINE-blocked-harness-forces-passive-when-product-loaded).
     let mode =
         if crate::game_mem::product_dll_present() && !crate::game_mem::force_drive_requested() {
-            DriveMode::Passive
+            if crate::game_mem::companion_autoload_requested() {
+                // Drive the boot menu-Continue as the AUTOLOAD (menu path = run49 PARITY) instead of
+                // standing down for the product's menu-free own_load_continue, which leaves the ~4-6fps
+                // epoch1 render residual preserved through reloads (bd STEP4-FIX-DIRECTION-PROVEN). The
+                // product's own autoload must be disarmed (er-effects-diag-no-autoload) so they don't
+                // compete for the boot load; after the boot Continue the harness is done and the product's
+                // switch machinery owns subsequent loads.
+                DriveMode::BootContinueOnly
+            } else {
+                DriveMode::Passive
+            }
         } else {
             DriveMode::from_flag()
         };

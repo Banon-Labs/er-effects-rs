@@ -501,6 +501,14 @@ unsafe fn own_load_continue_fire(
     fp_level: u32,
     n: u64,
 ) {
+    // CALLER-TRACE DIAG (2026-07-23, bd trace own_load arming): log the FULL runtime caller chain each
+    // time the continue actually fires, so the ACTUAL entry/arming path is captured from evidence (static
+    // tracing was repeatedly wrong -- own_load fired in run71 despite no autoload file + DIAG_NO_AUTOLOAD).
+    append_autoload_debug(format_args!(
+        "OWN_LOAD_CONTINUE_FIRE ENTRY c30_real={c30_real} fp_real={fp_real} own_load_continue_enabled={} CALLERS: {}",
+        own_load_continue_enabled(),
+        crate::crashlog::trace_callers_summary(),
+    ));
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     // Hard c30 + fingerprint guard (absolute save-safety backstop). NOTE: unlike the native-fullread
     // COMMIT path (which needs a level>=10 floor to reject the level-9 NEW-GAME PREVIEW), OWN-LOAD has

@@ -364,6 +364,19 @@ pub fn force_drive_requested() -> bool {
         || std::path::Path::new("er-harness-force-drive.txt").exists()
 }
 
+/// COMPANION-AUTOLOAD (bd STEP4-FIX-DIRECTION-PROVEN): when the product DLL is loaded, drive the boot
+/// menu-Continue as the AUTOLOAD (DriveMode::BootContinueOnly) instead of standing down Passive -- so the
+/// initial load goes through the menu path (run49 PARITY) rather than the product's menu-free
+/// `own_load_continue` (which leaves the ~4-6fps epoch1 render residual). Opt-in marker while validating;
+/// intended to become the product default once the pure-default smoke reaches parity. The product's own
+/// autoload must stand down (er-effects-diag-no-autoload.txt) so the two do not compete for the boot load.
+pub fn companion_autoload_requested() -> bool {
+    matches!(
+        std::env::var("ER_HARNESS_COMPANION_AUTOLOAD").as_deref(),
+        Ok("1")
+    ) || std::path::Path::new("er-harness-companion-autoload.txt").exists()
+}
+
 /// Compact one-line state snapshot for the log (mirrors the trace DLL's `snapshot()` habit).
 pub fn snapshot() -> String {
     let base = game_base().unwrap_or(0);
