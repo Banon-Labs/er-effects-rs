@@ -125,17 +125,15 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
             unsafe { install_loadlist_init_capture_hook(base) };
         }
     }
-    // USER SUGGESTION 2026-07-20: disable kb+mouse as GAME inputs during an agent-owned run once in-world
-    // so the user's typing/mouse cannot contaminate the movement proof; the gamepad/XInput path stays
-    // OPEN for the harness -> any character movement is unambiguously the harness. Only while the harness
-    // DLL is present, the player is in-world, and sq_repro is NOT driving menus (which owns its own full
-    // block + ClipCursor). bd user-suggest-disable-kbmouse-game-inputs-leave-xinput-open-dluid.
-    if crate::experiments::harness_dll_present()
-        && !crate::experiments::sq_repro_actively_driving()
-        && unsafe { PlayerIns::local_player_mut() }.is_ok()
-    {
-        enforce_kbmouse_game_input_disable();
-    }
+    // REMOVED (bd input-blocking-only-in-harness-during-driving-never-in-product-never-outside-window-
+    // 2026-07-23): this used to call enforce_keyboard_game_input_disable() EVERY in-world frame whenever the
+    // harness DLL was present + the player was in-world -- i.e. for the WHOLE post-load dwell -- which
+    // disabled the user's keyboard (W-move + Escape-menu) for the entire in-world time. That was the
+    // camera-only-control bug. Disabling the USER's input is valid ONLY inside the input-harness crate AND
+    // ONLY during its active driving/injection window; it must NEVER run in the product during normal
+    // in-world play. The can-move probe already scopes its own contamination handling to its brief injection
+    // interval (MOVE_PROBE_ACTIVE) and detects (not blocks) any user contamination, so no product-wide
+    // keyboard disable belongs here. The user's keyboard is now fully live throughout the dwell.
     // NATIVE-WINDOWS LOADING OVERLAY ownership cycle (bd er-effects-rs-8jz): our separate-window overlay
     // OWNS the screen (SHOW) whenever the local player is absent -- boot, title, and EVERY loading screen
     // (fast-travel, area transitions, death re-load) -- and RELEASES it (HIDE) once the world is loaded and
@@ -226,12 +224,12 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     }
     // Hardware write-watchpoint on GameMan+0xc30: (re)arm each frame until
     // the save-mount write is caught, so the VEH logs the exact writer. Runs
-    // HARD input block (DInput keyboard+mouse + XInput gamepad), driven from the
-    // game task so it is active even when no render callback is running
-    // (it does not under the offline launcher at the title). Runs every frame the
-    // task ticks -- before the player check -- so a focused window cannot inject any
-    // real input during the zero-input own-stepper/autoload probe. Pure suppression,
-    // never synthesis.
+    // the input block (DInput keyboard + XInput gamepad; the mouse is never blocked
+    // and the cursor is never confined), driven from the game task so it is active
+    // even when no render callback is running (it does not under the offline launcher
+    // at the title). Runs every frame the task ticks -- before the player check -- so a
+    // focused window cannot inject foreign keyboard/gamepad input during the own-stepper/
+    // autoload probe. Pure suppression, never synthesis.
     if block_input_enabled() {
         enforce_input_block_now();
     } else {
@@ -257,6 +255,11 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // (portrait path only, one-shot on success, bounded retries) so it's cheap every frame.
     if let Ok(base) = game_module_base() {
         unsafe { try_install_game_present_hook(base) };
+        // GPU-FRAME TIMESTAMP ORACLE (goal §3.3 gpu_frame_us; bd er-effects-rs-03ma): once the present
+        // hook is up, piggyback timestamp command-lists onto the game queue's ExecuteCommandLists to
+        // measure per-frame GPU-busy time (splits the reload-20fps residual into GPU-render vs
+        // present-wait). One-shot, self-gated (Wine + telemetry-measurement only), fail-closed.
+        unsafe { try_install_gpu_frame_oracle(base) };
     }
     // LOADING-COVER EXPERIMENT: clear CSFakeLoadingScreenImp.visible each frame so the world
     // draws uncovered during map loads. Self-gates (disable_loading_cover_enabled); runs before

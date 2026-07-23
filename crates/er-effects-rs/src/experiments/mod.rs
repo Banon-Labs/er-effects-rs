@@ -34,8 +34,8 @@ use windows::{
             Threading::GetCurrentProcessId,
         },
         UI::WindowsAndMessaging::{
-            ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-            WM_KEYDOWN, WM_KEYUP,
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
+            WM_KEYUP,
         },
     },
     core::{BOOL, PCSTR},
@@ -60,6 +60,9 @@ pub(crate) use gpu_readback::*;
 
 mod present_overlay;
 pub(crate) use present_overlay::*;
+
+mod gpu_frame_timing;
+pub(crate) use gpu_frame_timing::*;
 
 mod native_overlay;
 pub(crate) use native_overlay::*;

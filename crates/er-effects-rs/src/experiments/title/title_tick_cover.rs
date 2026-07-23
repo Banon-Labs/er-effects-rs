@@ -2737,6 +2737,9 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         && gm != null
         && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 0
         && unsafe { PlayerIns::local_player_mut() }.is_err()
+        // CLEAN-A/B: skip the menu-free switch-reload so the harness's menu-driven Continue is the sole
+        // reload path -- isolates menu-free vs menu-driven under identical epoch1 (bd STEP4-RUNTIME-TRACE).
+        && !crate::experiments::gating::switch_reload_ownload_disabled()
         && unsafe {
             crate::experiments::own_load::own_load_switch_reload_fire(
                 module_base,

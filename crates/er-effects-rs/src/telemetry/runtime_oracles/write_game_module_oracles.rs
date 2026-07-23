@@ -202,8 +202,14 @@ fn write_game_module_oracles(body: &mut String) {
             let refresh_x100 =
                 er_telemetry::counters::PRESENT_REFRESH_PER_PRESENT_X100.load(PcOrd::SeqCst);
             let qpc_delta_us = er_telemetry::counters::PRESENT_QPC_DELTA_US.load(PcOrd::SeqCst);
+            // gpu_frame_us (goal §3.3): per-frame GPU-busy time from the injected D3D12 timestamp pair on
+            // the game queue. Large => render-bound; small with a big qpc_delta_us => present/vblank wait.
+            // samples/state make a 0 attributable (oracle not live vs GPU instant). bd er-effects-rs-03ma.
+            let gpu_frame_us = er_telemetry::counters::GPU_FRAME_US_LAST.load(PcOrd::SeqCst);
+            let gpu_frame_samples = er_telemetry::counters::GPU_FRAME_ORACLE_SAMPLES.load(PcOrd::SeqCst);
+            let gpu_frame_state = er_telemetry::counters::GPU_FRAME_ORACLE_STATE.load(PcOrd::SeqCst);
             body.push_str(&format!(
-                "  \"oracle_present_sync_interval\": {sync_interval},\n  \"oracle_present_refresh_per_present_x100\": {refresh_x100},\n  \"oracle_present_qpc_delta_us\": {qpc_delta_us},\n"
+                "  \"oracle_present_sync_interval\": {sync_interval},\n  \"oracle_present_refresh_per_present_x100\": {refresh_x100},\n  \"oracle_present_qpc_delta_us\": {qpc_delta_us},\n  \"oracle_gpu_frame_us\": {gpu_frame_us},\n  \"oracle_gpu_frame_samples\": {gpu_frame_samples},\n  \"oracle_gpu_frame_state\": {gpu_frame_state},\n"
             ));
         }
         // COMPOSITE-DURATION + BOOT-VIEW EPOCH: is the DLL boot-view composite still running in-world on

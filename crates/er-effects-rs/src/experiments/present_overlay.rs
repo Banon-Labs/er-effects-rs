@@ -199,6 +199,12 @@ unsafe extern "system" fn present_hook(this: *mut c_void, sync: u32, flags: u32)
         ));
         unsafe { log_backbuffer_desc(this) };
     }
+    // GPU-frame oracle: a present is the frame boundary -- the next ExecuteCommandLists on the game
+    // queue is the new frame's first ECL. Game swapchain only (the shared dxgi vtable fires the detour
+    // for the dummy swapchain too).
+    if this as usize == GAME_SWAPCHAIN.load(Ordering::SeqCst) {
+        gpu_frame_oracle_on_present();
+    }
     // Composite the captured portrait onto the backbuffer (gated; never panics). Only on the GAME's
     // swapchain -- the shared dxgi vtable means this detour also fires for our throwaway dummy swapchain.
     let this_u = this as usize;
@@ -246,6 +252,12 @@ unsafe extern "system" fn present1_hook(
             this as usize
         ));
         unsafe { log_backbuffer_desc(this) };
+    }
+    // GPU-frame oracle: a present is the frame boundary -- the next ExecuteCommandLists on the game
+    // queue is the new frame's first ECL. Game swapchain only (the shared dxgi vtable fires the detour
+    // for the dummy swapchain too).
+    if this as usize == GAME_SWAPCHAIN.load(Ordering::SeqCst) {
+        gpu_frame_oracle_on_present();
     }
     // Composite the captured portrait onto the backbuffer (gated; never panics). Only on the GAME's
     // swapchain -- the shared dxgi vtable means this detour also fires for our throwaway dummy swapchain.
@@ -505,7 +517,7 @@ pub(crate) fn install_present_overlay_hook() {
 /// True when running under Wine/Proton (vkd3d), detected by the `wine_get_version` export that Wine's
 /// `ntdll` exposes and native Windows never does. Cached after the first probe. Used to gate the boot
 /// self-present, which is only barrier-safe under vkd3d's tolerant translation layer.
-fn running_under_wine() -> bool {
+pub(crate) fn running_under_wine() -> bool {
     static CACHED: AtomicUsize = AtomicUsize::new(0); // 0=unknown, 1=native, 2=wine
     match CACHED.load(Ordering::SeqCst) {
         1 => return false,
@@ -1053,7 +1065,7 @@ fn log_find_miss(stage: usize) {
 /// pointer in the dxgi vtable -- NOT the function body -- so it sidesteps the W^X code-page patch that
 /// MinHook cannot apply on Wine's dxgi.dll (it reports MH_OK yet the detour never fires). `VirtualProtect`
 /// the 8-byte slot to RW, swap the pointer, then restore the original page protection.
-unsafe fn vtable_swap_slot(slot_addr: usize, new_fn: usize) -> Option<usize> {
+pub(crate) unsafe fn vtable_swap_slot(slot_addr: usize, new_fn: usize) -> Option<usize> {
     use windows::Win32::System::Memory::{PAGE_PROTECTION_FLAGS, PAGE_READWRITE, VirtualProtect};
     let slot = slot_addr as *mut usize;
     let mut old_prot = PAGE_PROTECTION_FLAGS(0);

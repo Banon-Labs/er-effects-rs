@@ -37,7 +37,7 @@ use windows::{
                 OFN_HIDEREADONLY, OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST, OPENFILENAMEW,
             },
             WindowsAndMessaging::{
-                ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
+                EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
                 WM_KEYDOWN, WM_KEYUP,
             },
         },

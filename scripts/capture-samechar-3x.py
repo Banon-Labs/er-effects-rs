@@ -198,6 +198,15 @@ def snap(t: dict) -> dict:
         "oracle_present_sync_interval",
         "oracle_present_refresh_per_present_x100",
         "oracle_present_qpc_delta_us",
+        # GPU-BUSY per frame (goal §3.3 gpu_frame_us oracle, bd er-effects-rs-03ma): injected D3D12
+        # timestamp pair on the GAME queue -- START on the first ExecuteCommandLists after a present,
+        # END at the top of the Present detour (before the original Present), so it EXCLUDES the
+        # vsync/flip present-wait. Large => render-bound (GPU genuinely busy); small while qpc_delta_us
+        # stays ~50ms => present/vblank throttle. samples/state make a 0 attributable (oracle not live
+        # vs GPU instant): samples==0 => oracle never produced, state names where setup stopped.
+        "oracle_gpu_frame_us",
+        "oracle_gpu_frame_samples",
+        "oracle_gpu_frame_state",
         # GX COMMAND-QUEUE submission volume (2026-07-22): reserves = cumulative GX cmd-queue slot
         # reservations (per-submission hook, fires every frame in-world). Reserve RATE (delta/frame)
         # boot-vs-reload measures whether the reload frame submits MORE draw work (render-bound cause).
@@ -816,6 +825,19 @@ def main() -> int:
     final_epoch = len(switch_plan) if switch_plan else FINAL_RELOAD_EPOCH
     # Per-epoch time the playable+moving window opened (first can_move), to enforce the 3s hold.
     epoch_canmove_start: dict[int, float] = {}
+    # DECOUPLE (user 2026-07-23): the harness cycle + steady-window dwell gate on WORLD-STABLE (in-world:
+    # player_present + draw_group_enabled + play_time_live), NOT on the movement walk-proof. The only
+    # walk-injection that works is foreground-only SendInput 'W'; with force-focus removed it disproves on
+    # EVERY load, so gating the cycle on the move verdict flashed in-world then advanced (regression). The
+    # frame_ms measurement + a visible dwell only need world-stable; movement is RECORDED, non-gating.
+    epoch_worldstable_start: dict[int, float] = {}  # first world-stable ts per epoch (dwell anchor)
+    epoch_first_seen_ts: dict[int, float] = {}  # first-seen ts per epoch (world-stable stall-timeout anchor)
+    # Optional per-epoch ceiling on reaching world-stable before declaring a load STALL (e.g. Bonky
+    # mms=18 / draw-group never enabled). USER-CONSULTED via env -- no baked-in duration (rule
+    # no-fixed-durations-without-consulting-user-first-2026-07-23). 0/unset = OFF: rely on the existing
+    # stall guards + the user-set .auto/runtime_timeout_cap_seconds cap. If set, must exceed the longest
+    # legit load-to-world-stable time (~66s for angrE load1).
+    WORLD_STABLE_TIMEOUT_S = float(os.environ.get("WORLD_STABLE_TIMEOUT_S", "0") or "0")
     if switch_plan:
         print(
             f"[drive-switch] plan: {len(switch_plan)} triggered load(s) after load1; "
@@ -1045,39 +1067,76 @@ def main() -> int:
                     fps_dip_polls = 0
             else:
                 fps_dip_polls = 0
-            # DETERMINISTIC SWITCH DRIVER: once the CURRENT load proves movement AND has sustained a 3s
-            # playable+moving window, write the control file to trigger the NEXT load (replaces the flaky
-            # menu-nav). Plan entry i fires after epoch i (epoch 0 = boot load1 -> plan[0] triggers load2).
-            # SINGLE-PRESS DRIVE (user 2026-07-22): the instant control is confirmed for this epoch
-            # (harness_verdict==1 = one forward-press moved the char), trigger the NEXT load. Do NOT
-            # require a sustained 3s move window / repeat the movement burst -- one press = go.
-            # PARITY-MEASUREMENT hold (goal 3c): in steady mode, do not advance to the next load until
-            # THIS epoch has held can_move for --steady-window-seconds (a sustained post-readiness window
-            # is now in the telemetry). Off (<=0) preserves the legacy single-press-advances behavior.
-            steady_held = args.steady_window_seconds <= 0 or (
-                cur_ep in epoch_canmove_start
-                and (now - epoch_canmove_start[cur_ep]) >= args.steady_window_seconds
+            # DETERMINISTIC SWITCH DRIVER -- ONE MOVE INTERVAL PER LOAD (user 2026-07-23, bd harness-drive-
+            # contract-one-move-interval-per-load-no-force-focus-no-move-loop-2026-07-23): the DLL move-probe
+            # now runs EXACTLY ONE forward-movement interval per load and always latches a TERMINAL verdict
+            # (1 proven / 2 disproven / 3 contaminated) -- it never loops waiting for a clean proof. So the
+            # instant that ONE interval completes (harness_verdict != 0), trigger the NEXT same-character load
+            # REGARDLESS of the result: sample movement, record it, then advance load -> reload -> load. The
+            # old `harness_verdict == 1` gate hung FOREVER on a load whose movement never cleanly proved
+            # (Bonky) -- the harness re-drove movement (and previously re-forced focus) on the same load and
+            # never reached the reload. The telemetry epoch-gates the verdict (probe_epoch == cur_deser in
+            # write_oracle), so a nonzero value always belongs to the CURRENT load: no stale cross-epoch
+            # verdict can leak and skip an interval. Plan entry i fires after epoch i (epoch 0 = boot load1).
+            # WORLD-STABLE dwell gate (decoupled from the walk-proof; see epoch_worldstable_start above).
+            # world_stable = genuinely in-world: player present + draw-group enabled (the world is drawing,
+            # NOT the frozen mms=18/draw-group-off state) + world clock live. This is what the frame_ms
+            # window (§3.1) and a visible dwell need -- the char need not WALK.
+            epoch_first_seen_ts.setdefault(cur_ep, now)
+            world_stable = (
+                bool(s.get("oracle_player_present"))
+                and bool(s.get("oracle_chr_draw_group_enabled"))
+                and bool(s.get("oracle_play_time_live"))
+            )
+            if world_stable and cur_ep not in epoch_worldstable_start:
+                epoch_worldstable_start[cur_ep] = now
+                print(
+                    f"[drive-switch] epoch {cur_ep}: WORLD-STABLE reached (in-world, draw-group on) -- "
+                    f"dwelling {max(args.steady_window_seconds, 0):.0f}s",
+                    flush=True,
+                )
+            # Dwell held once world-stable has been in effect for the steady window (0 => advance on the
+            # first world-stable sample). Independent of the movement verdict (recorded, non-gating).
+            dwell_held = cur_ep in epoch_worldstable_start and (
+                args.steady_window_seconds <= 0
+                or (now - epoch_worldstable_start[cur_ep]) >= args.steady_window_seconds
+            )
+            # STALL: world-stable never reached within the timeout for this epoch -> the load did not
+            # finalize (Bonky mms=18 / draw-group never enabled). Tear down naming it, don't ride to the cap.
+            if (
+                WORLD_STABLE_TIMEOUT_S > 0
+                and cur_ep not in epoch_worldstable_start
+                and (now - epoch_first_seen_ts[cur_ep]) >= WORLD_STABLE_TIMEOUT_S
+            ):
+                result = f"WORLD_STABLE_STALL_epoch{cur_ep}_no_drawgroup"
+                print(
+                    f"[{elapsed:6.1f}s] WORLD-STABLE STALL epoch{cur_ep}: never reached "
+                    f"draw-group/simulating in {WORLD_STABLE_TIMEOUT_S:.0f}s (load did not finalize) -> teardown",
+                    flush=True,
+                )
+                break
+            _verdict_label = {1: "proven", 2: "disproven", 3: "contaminated"}.get(
+                harness_verdict, str(harness_verdict)
             )
             if (
                 switch_plan
                 and next_switch_idx < len(switch_plan)
                 and cur_ep == next_switch_idx
-                and harness_verdict == 1
-                and steady_held
+                and dwell_held
             ):
                 _slot, _save_file = switch_plan[next_switch_idx]
                 write_switch_trigger(args.game_dir, _slot, _save_file)
                 print(
-                    f"[drive-switch] load{next_switch_idx + 2}: epoch {next_switch_idx} proved movement + "
-                    f"held {MOVE_WINDOW_SECONDS:.0f}s window; wrote trigger slot={_slot} "
-                    f"cross_save={_save_file or 'no (active angrE save)'}",
+                    f"[drive-switch] load{next_switch_idx + 2}: epoch {next_switch_idx} dwelled world-stable "
+                    f"(move verdict={_verdict_label}, non-gating) -- wrote trigger "
+                    f"slot={_slot} cross_save={_save_file or 'no (active save)'}",
                     flush=True,
                 )
                 next_switch_idx += 1
-            # Success = the FINAL planned load proves movement AND holds the 3s window (final_epoch =
-            # len(plan) when driving, else the legacy FINAL_RELOAD_EPOCH).
-            if harness_verdict == 1 and cur_ep >= final_epoch and steady_held:
-                result = f"HARNESS_MOVE_PROVEN_harness_moved_char_epoch{deser}"
+            # Success = the FINAL planned load dwelled world-stable for the window (movement recorded, not a
+            # gate). final_epoch = len(plan) when driving, else the legacy FINAL_RELOAD_EPOCH.
+            if dwell_held and cur_ep >= final_epoch:
+                result = f"HARNESS_WORLDSTABLE_DWELL_DONE_epoch{deser}_verdict_{_verdict_label}"
                 break
             # IMPRINT CAPTURE (boot_to_control phase): end the boot imprint the INSTANT control is
             # available, marked by the USER pressing forward = the char's first real havok displacement.

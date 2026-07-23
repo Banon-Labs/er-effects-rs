@@ -45,6 +45,24 @@ pub static PRESENT_REFRESH_PER_PRESENT_X100: AtomicUsize = AtomicUsize::new(0);
 /// Wall-clock microseconds between the last two GetFrameStatistics SyncQPCTime samples (present-to-present
 /// spacing straight from DXGI, independent of our Instant timing). ~49920 on the pinned reload frame.
 pub static PRESENT_QPC_DELTA_US: AtomicUsize = AtomicUsize::new(0);
+/// Per-frame GPU-busy time in MICROSECONDS: the median-of-recent span between two D3D12 TIMESTAMP
+/// queries the DLL injects onto the GAME's ID3D12CommandQueue -- START on the first ExecuteCommandLists
+/// after a present, END at the top of the Present detour (before the original Present). Excludes the
+/// vsync/flip present-wait (that happens INSIDE the original Present, after the END stamp), so a large
+/// value == render-bound (GPU genuinely busy ~50ms) while a small value with a 50ms frame == a
+/// present/vblank throttle. This is the goal-doc §3.3 `gpu_frame_us` oracle, splitting the reload-20fps
+/// residual into GPU-render vs present-wait. bd er-effects-rs-03ma /
+/// switch-reload-framerate-parity-acceptance.md.
+pub static GPU_FRAME_US_LAST: AtomicUsize = AtomicUsize::new(0);
+/// Count of successful GPU-timestamp readbacks (each = one resolved START/END pair). Emitted as
+/// `oracle_gpu_frame_samples` so a `gpu_frame_us == 0` is attributable: 0 samples == the oracle never
+/// produced (queue not latched / D3D12 setup failed / not under Wine), NOT "GPU is instant".
+pub static GPU_FRAME_ORACLE_SAMPLES: AtomicUsize = AtomicUsize::new(0);
+/// GPU-timestamp oracle lifecycle state (emitted `oracle_gpu_frame_state`): 0=not started,
+/// 1=game device + query heap/list/readback created, 2=game ExecuteCommandLists hooked + queue latched,
+/// 3=producing (at least one full START..END pair resolved). Distinguishes WHERE setup stopped when
+/// `gpu_frame_us` stays 0.
+pub static GPU_FRAME_ORACLE_STATE: AtomicUsize = AtomicUsize::new(0);
 /// Internal previous-sample state for the GetFrameStatistics deltas (not emitted): last PresentCount,
 /// last SyncRefreshCount, last SyncQPCTime (QPC ticks, low bits).
 pub static PRESENT_STATS_PREV_PRESENT_COUNT: AtomicUsize = AtomicUsize::new(0);

@@ -126,6 +126,9 @@ echo -n "${DRIVE_MODE:-full}" >"$GAME_DIR/er-harness-drive-mode.txt"
 [[ -n "${OS_INPUT:-}" ]] && : >"$GAME_DIR/er-harness-os-input.txt"
 [[ -n "${NATIVE_QUIT:-}" ]] && : >"$GAME_DIR/er-harness-native-quit.txt"
 if [[ -n "${DIAG_NO_AUTOLOAD:-}" ]]; then : >"$GAME_DIR/er-effects-diag-no-autoload.txt"; else rm -f "$GAME_DIR/er-effects-diag-no-autoload.txt"; fi
+# CLEAN-A/B: DISABLE_SWITCH_OWNLOAD=1 skips the menu-free own_load_switch_reload_fire so the harness's
+# menu-driven Continue is the sole reload path (isolates menu-free vs menu-driven; bd STEP4-RUNTIME-TRACE).
+if [[ -n "${DISABLE_SWITCH_OWNLOAD:-}" ]]; then : >"$GAME_DIR/er-effects-disable-switch-reload-ownload.txt"; else rm -f "$GAME_DIR/er-effects-disable-switch-reload-ownload.txt"; fi
 # FORCE-DRIVE: the harness normally stands down to Passive when the product DLL is loaded (companion
 # design). This vanilla capture loads the product for its telemetry but needs the HARNESS to drive, so
 # override that stand-down (bd VANILLA-BASELINE-blocked-harness-forces-passive-when-product-loaded).

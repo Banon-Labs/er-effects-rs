@@ -31,7 +31,7 @@ use windows::{
             Threading::GetCurrentProcessId,
         },
         UI::WindowsAndMessaging::{
-            ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
             WM_KEYDOWN, WM_KEYUP,
         },
     },
@@ -327,6 +327,16 @@ pub(crate) fn native_load_enabled() -> bool {
 /// `er-effects-no-autoload.txt` next to eldenring.exe to suppress it (overlay-only use, or a session
 /// that should not auto-Continue). Mirrors the splash-skip de-gating precedent
 /// (`user-pref-too-many-env-file-gates-default-on-product-2026-06-23`).
+/// CLEAN-A/B DIAGNOSTIC (bd STEP4-RUNTIME-TRACE + STEP4-4fps-AB-STRUCTURALLY-CONFOUNDED): disable the
+/// menu-free switch-reload (`own_load_switch_reload_fire`) so the ONLY reload path is the harness's
+/// menu-driven native quit->Continue. Run with vs without this marker under IDENTICAL config (armed,
+/// same epoch1, same DRIVE_MODE=reload) to isolate JUST the reload mechanism (menu-free vs menu-driven)
+/// -- the same-epoch1 A/B the confound memory says is needed to tell a real render divergence from a
+/// measurement artifact. Diagnostic-only marker; not product behavior.
+pub(crate) fn switch_reload_ownload_disabled() -> bool {
+    std::path::Path::new("er-effects-disable-switch-reload-ownload.txt").exists()
+}
+
 pub(crate) fn autoload_disabled() -> bool {
     // DE-GATED for PRODUCT (deprecate-env-marker-gate-allowlists-2026-07-19): autoload is unconditionally
     // the product default. DIAGNOSTIC-ONLY marker (er-effects-diag-no-autoload.txt) disables it for the
@@ -465,21 +475,10 @@ pub(crate) fn prove_movement_enabled() -> bool {
     harness_dll_present()
 }
 
-/// AUTONOMOUS-PROOF FOREGROUND (`er-effects-probe-foreground.txt`). Gameplay MOVEMENT input is only
-/// processed while the ER window is FOCUSED (stay-active/DLUID+0x88d covers menus, not locomotion). For
-/// an unattended proof (user away, ER can own the foreground) this authorizes the can-move probe to
-/// force ER foreground while injecting so the walk actually registers. OFF by default so it NEVER
-/// steals focus in a user-present session. Cached.
-pub(crate) fn probe_foreground_enabled() -> bool {
-    // SCOPED (user 2026-07-20): force ER foreground ONLY at the start of each movement-injection burst
-    // ("just when you need to move"), NOT constantly -- the caller (can_move_probe) gates this on the ON
-    // burst so the mouse is grabbed once per cycle, not every frame across the whole movable window.
-    // Gameplay locomotion applies the injected stick only when the window is genuinely active (the
-    // focus-override alone is insufficient: run 205055 unfocused -> did_move=0). kb+mouse are disabled as
-    // game inputs during the run, so this brief grab cannot be contaminated by the user. bd
-    // user-stop-forcing-foreground-focus-override-makes-it-unneeded-disable-probe-foreground-2026-07-20.
-    harness_dll_present()
-}
+// REMOVED (user 2026-07-23, bd harness-drive-contract-...-no-force-focus): `probe_foreground_enabled`
+// authorized the can-move probe to FORCE the ER window foreground while injecting. The user's window focus
+// must never be seized, so the force-focus call was removed from can_move_probe and this gate deleted.
+// Movement is now delivered foreground-ONLY (only when ER is already the active window).
 /// SELF-DRIVEN SYSTEM->QUIT->LOAD-PROFILE REPRO AUTOPILOT (er-effects-system-quit-repro.txt /
 /// ER_EFFECTS_SYSTEM_QUIT_REPRO). OFF by default. When on, after the boot autoload reaches the
 /// world, the DLL keeps the input block engaged and injects a scripted DInput keyboard sequence --
