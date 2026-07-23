@@ -34,6 +34,13 @@ const FD4_PAD_MANAGER_RVA: usize = 0x485dc20;
 /// padMaps MAP lookup (bounds-checked, returns 0 out of range) -- the correct way to get a device's
 /// CSInGamePad, since padMaps is a tree not a flat array (bd CORRECTION-inworld-menu-injection-NOT-solved).
 const CS_INGAME_PAD_ACCESSOR_RVA: usize = 0x2413f0;
+/// FD4PadManager.padMaps: DLFixedVector<Map<TypeID,FD4BasePad>*,4> at +0x48 (Ghidra get_structure). Each
+/// padMaps[dev] is a std::map keyed by TypeID; the CSInGamePad entry is found by TypeID.
+const PADMAPS_88_OFFSET: usize = 0x48;
+const PADMAPS_COUNT: usize = 4;
+/// The TypeID key of the CSInGamePad entry in each padMaps map (dump const 0x143d5df27, RVA 0x3d5df27;
+/// runtime = base + this). A wrong value just fails the BST search safely (returns no pad, no crash).
+const CS_INGAME_PAD_TYPEID_RVA: usize = 0x3d5df27;
 const PAD_MGR_DEVICES_18_OFFSET: usize = 0x18;
 const VK_ARRAY_88_OFFSET: usize = 0x88;
 const VK_ID_MIN: u32 = 1000;
@@ -54,6 +61,7 @@ static BUILDER_FIRES: AtomicU32 = AtomicU32::new(0);
 static WRITER_FIRES: AtomicU32 = AtomicU32::new(0);
 static GAME_SOURCE: AtomicUsize = AtomicUsize::new(0); // rcx of the real writer = the game's source
 static MY_SOURCE: AtomicUsize = AtomicUsize::new(0); // source my inject_vk computed
+static TREEWALK_DIAG: AtomicUsize = AtomicUsize::new(0); // one-time padMaps tree-walk structure dump
 static OBSERVED_IDS: [AtomicU32; 3] = [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)]; // 81-bit set of ids the game's writer fired (id-1000)
 
 /// Snapshot for the probe/drive to log: (builder_fires, writer_fires, game_source, my_source, obs_ids).
@@ -142,25 +150,86 @@ pub unsafe fn stamp_vk_direct(base: usize, id: u32) {
     if !(VK_ID_MIN..=VK_ID_MAX).contains(&id) || base < HEAP_LO {
         return;
     }
-    let manager = unsafe { *((base + FD4_PAD_MANAGER_RVA) as *const usize) };
-    if manager < HEAP_LO {
+    // FAULT-SAFE reads (ReadProcessMemory pseudo-handle) so a wrong offset returns None instead of
+    // CRASHING the game (raw derefs froze run10/run11). This makes the padMaps tree-walk safe to probe.
+    let rd = |p: usize| -> Option<usize> {
+        if p < HEAP_LO {
+            None
+        } else {
+            unsafe { crate::win32::read_usize(p) }
+        }
+    };
+    let Some(manager) = rd(base + FD4_PAD_MANAGER_RVA).filter(|m| *m >= HEAP_LO) else {
         return;
+    };
+    // SAFE read-only replication of the CSInGamePad lookup (bd STRUCT-padMaps-is-at-0x48). padMaps (+0x48)
+    // is a DLFixedVector<Map<TypeID,FD4BasePad>*,4>; padMaps[dev]'s std::map (keyed by TypeID) holds the
+    // CSInGamePad. Walk the tree READ-ONLY to the CSInGamePad-TypeID entry, stamp its +0x88. MSVC _Tree
+    // node: _Left+0, _Right+0x10, _Isnil+0x19, key+0x20, value+0x28; _Myhead at map+8, root at _Myhead+8.
+    let _ = (CS_INGAME_PAD_ACCESSOR_RVA, PAD_MGR_DEVICES_18_OFFSET);
+    let off = VK_ARRAY_88_OFFSET + ((id - VK_ID_MIN) as usize) * 2;
+    let target = base + CS_INGAME_PAD_TYPEID_RVA;
+    let ndev = rd(manager + PADMAPS_88_OFFSET + PADMAPS_COUNT * 8)
+        .unwrap_or(1)
+        .min(PADMAPS_COUNT);
+    // One-time diagnostic dump of the resolved structure (so wrong offsets are visible, not fatal).
+    let diag = TREEWALK_DIAG.swap(1, Ordering::SeqCst) == 0;
+    if diag {
+        harness_log!(
+            "treewalk DIAG: manager=0x{manager:x} padmaps_count={ndev} target=0x{target:x}"
+        );
     }
-    // padMaps is a MAP (red-black tree), NOT a flat array, so `*(manager+0x18+dev*8)` resolves the WRONG
-    // object and writes never reach the menu. CALLING the game accessor FUN_1402413f0(manager,dev) DID
-    // resolve the real pad (run9 msrc=0x1bdedf31200) but FROZE the game after one frame -- the accessor
-    // takes an input-system lock our CSTaskImp task deadlocks on (bd CORRECTION-inworld-menu-injection-NOT-
-    // solved / accessor-call-hangs). So neither path drives the menu yet. Keep the (harmless) device-0
-    // flat write as a placeholder; the real fix is to SAFELY replicate the padMaps lookup in Rust (read the
-    // tree, no game call) OR find the higher menu-input layer the pause menu actually reads.
-    let _ = CS_INGAME_PAD_ACCESSOR_RVA;
-    let source = unsafe { *((manager + PAD_MGR_DEVICES_18_OFFSET) as *const usize) };
-    if source < HEAP_LO {
-        return;
-    }
-    MY_SOURCE.store(source, Ordering::SeqCst);
-    unsafe {
-        *((source + VK_ARRAY_88_OFFSET + ((id - VK_ID_MIN) as usize) * 2) as *mut u8) = 1;
+    for dev in 0..ndev {
+        let Some(map_ptr) = rd(manager + PADMAPS_88_OFFSET + dev * 8).filter(|m| *m >= HEAP_LO)
+        else {
+            continue;
+        };
+        let head = rd(map_ptr + 8);
+        let root = head.and_then(rd);
+        if diag {
+            let n0key = root.and_then(|r| rd(r + 0x20));
+            let n0val = root.and_then(|r| rd(r + 0x28));
+            harness_log!(
+                "treewalk DIAG dev{dev}: map=0x{map_ptr:x} head={:x?} root={:x?} root.key={:x?} root.val={:x?}",
+                head,
+                root,
+                n0key,
+                n0val
+            );
+        }
+        let Some(mut node) = root.filter(|r| *r >= HEAP_LO) else {
+            continue;
+        };
+        let mut guard = 0;
+        loop {
+            guard += 1;
+            if guard > 64 || node < HEAP_LO {
+                break;
+            }
+            match unsafe { crate::win32::read_u8(node + 0x19) } {
+                Some(0) => {}
+                _ => break, // nil node / unreadable -- not found
+            }
+            let Some(key) = rd(node + 0x20) else { break };
+            if key == target {
+                if let Some(pad) = rd(node + 0x28).filter(|p| *p >= HEAP_LO) {
+                    MY_SOURCE.store(pad, Ordering::SeqCst);
+                    unsafe { *((pad + off) as *mut u8) = 1 };
+                    if diag {
+                        harness_log!("treewalk DIAG dev{dev}: FOUND pad=0x{pad:x}");
+                    }
+                }
+                break;
+            }
+            node = match if key < target {
+                rd(node + 0x10)
+            } else {
+                rd(node)
+            } {
+                Some(n) => n,
+                None => break,
+            };
+        }
     }
 }
 
