@@ -12,6 +12,24 @@ This project uses **bd** (beads) for issue tracking. **Invoke the real binary di
 /home/choza/.local/bin/bd dolt push          # Push beads data to remote
 ```
 
+## Offline Game-Asset Investigation Boundary
+
+When the user explicitly says to continue until a game run is required, do not stop at a plan-only checkpoint. Continue all available non-runtime work first: unpack/localize assets, inspect binders, run static/Ghidra/tooling probes, validate exports/imports offline, and update Beads as evidence accumulates. Treat archive extraction/unpacking of installed game files as offline asset work, not as a game run; do it before claiming the next step requires running a game. Report back only when the next material step truly requires launching/running a game, needs subjective user choice, or hits a concrete capability blocker.
+
+## Runtime Failure Attribution Before Retest
+
+When a user-visible asset/runtime test shows no change, do not answer with a "most likely" cause or ask for another blind run. First determine exactly what was wrong from offline evidence whenever possible: verify the profile/package paths, map the in-game mechanism to the exact regulation rows/part IDs/asset filenames, and only then build the next package or ask for a runtime retest. If a previous run was not instrumented or configured to capture enough evidence, treat that as a validation failure and fix the evidence path before retrying.
+
+## User-Visible Launch Follow-Up Gate
+
+After launching Elden Ring, Blender, or any other user-visible app for the user's live inspection, do not immediately pivot into unrelated edits, checks, or background work. First perform and report a bounded post-launch state check: launched profile/artifact path, launcher/process state, matched top-level window when applicable, latest relevant launcher/log evidence, and crash/modal/error-window scan when the tool can provide it. If the launch remains open for the user, explicitly record it as a tracked live resource with PID/title/profile path and then stop mutating until the user's next observation or an agreed monitor/teardown step. A process/window appearing is not enough by itself to claim the launch is safe or review-ready.
+
+## Asset Deformation Feedback Before More Slider Tuning
+
+When user feedback shows that offline slider changes are not producing the intended deformation, stop continuing blind slider iterations. Establish a direct authoring/feedback surface first: load the ER donor/player body and the imported source model together in a 3D tool, compare literal model bounds/proportions, inspect weights/bone ownership, and make the next edit from that evidence. Prefer Blender plus a Souls/FLVER-capable importer/exporter or another direct FLVER authoring tool over more runtime-only guesswork. Do not propose skeleton or weapon-socket edits as the next step until the model-scale/fit comparison has been made or proven unavailable.
+
+When the issue becomes visual/material-specific (for example texture placement, UVs, seams, normals, or lighting), do not continue blind exporter changes from verbal descriptions alone. Ask for a focused, non-desktop visual artifact/crop as the fastest evidence path, while respecting screenshot sensitivity: request the smallest crop that shows the defect and avoid full-desktop capture unless the user explicitly permits it.
+
 For task startup in this repo, read relevant `bd` memories (`/home/choza/.local/bin/bd memories <topic>` and `/home/choza/.local/bin/bd recall <key>`) before broad source inspection or implementation. Treat memories as the first-pass continuation context; do not discover them midstream after choosing an approach.
 
 ## Elden Ring Runtime Probe Hygiene
