@@ -39,8 +39,6 @@ pub(crate) struct PortraitFrameJob {
     /// Pipeline generation snapshotted at submit; the consume DISCARDS (no pin/publish) if a window reset
     /// bumped `PORTRAIT_PIPELINE_GEN` while this frame was in flight.
     pub(crate) pipeline_gen: usize,
-    /// Drive angle (used only by the selftest/cursor-sweep bucket dump).
-    pub(crate) yaw: f32,
     /// Motion-log diagnostic scalars snapshotted on the render thread (those are game reads; the worker
     /// cannot read game memory).
     pub(crate) anim_t: f32,
@@ -217,7 +215,6 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
     let ch = job.ch;
     let rt_cand = job.rt_cand;
     let color_from_bundle = job.color_from_bundle;
-    let yaw = job.yaw;
     // MAP + DE-SWIZZLE (moved off the render thread in Step 2). The render thread already resolved + copied
     // + WAITED, so this slot's staging buffers hold the raw copy; map them and de-swizzle color +
     // reinterpret depth into plain Vecs here. Time it HERE now (the GPU-WAIT timer stays on the render
@@ -356,34 +353,6 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
             Ordering::SeqCst,
         );
         PORTRAIT_RB_MASK_COUNT.fetch_add(1, Ordering::SeqCst);
-        // MOUSE-TRACK PROOF (selftest): one-shot dump the LIVE head at three
-        // held yaw buckets so the look-left/center/look-right poses are
-        // visually inspectable. The selftest sinusoid sweeps `yaw` across
-        // [-1,1] each period, so all three buckets fill within one loading
-        // window. In product the same PROFILE_LOOKAT_YAW_BITS atomic is set
-        // from the normalized cursor, so distinct poses here = the head pose
-        // tracks the drive signal. Dump from `&cpx` BEFORE it moves into the
-        // overlay lock below.
-        if PROFILE_LOOKAT_SELFTEST_ON.load(Ordering::SeqCst)
-            || PROFILE_CURSOR_SWEEP_ON.load(Ordering::SeqCst)
-        {
-            let bucket = if yaw <= -0.5 {
-                Some(0usize)
-            } else if yaw >= 0.5 {
-                Some(2usize)
-            } else if yaw.abs() <= 0.15 {
-                Some(1usize)
-            } else {
-                None
-            };
-            if let Some(b) = bucket {
-                let prev = PROFILE_LOOKAT_TRACK_BUCKETS
-                    .fetch_or(1 << b, Ordering::SeqCst);
-                if prev & (1 << b) == 0 {
-                    dump_portrait_rgba(200 + b as i32, cw, ch, &cpx);
-                }
-            }
-        }
         // PIXEL-MOTION + FLICKER oracles (before the publish move). The
         // lighting changes every frame (user 2026-07-03), so MOTION is judged
         // on the depth-keyed ALPHA silhouette (lighting-immune: alpha comes

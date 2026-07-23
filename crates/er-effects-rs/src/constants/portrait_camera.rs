@@ -11,7 +11,7 @@
 // (it re-reads the param and clobbers the orbit fields).
 //
 // All offsets are BYTE offsets from the renderer (CSMenuProfModelRend) base.
-/// Orbit look-at point, `Vec3` (x@+0x9b4, y@+0x9b8, z@+0x9bc); `w`@+0x9c0 is 1.0.
+/// Orbit target point, `Vec3` (x@+0x9b4, y@+0x9b8, z@+0x9bc); `w`@+0x9c0 is 1.0.
 pub(crate) const PROFILE_CAM_TARGET_OFFSET: usize = 0x9b4;
 pub(crate) const PROFILE_CAM_TARGET_W_OFFSET: usize = 0x9c0;
 /// Orbit distance (f32). Consumed sign-flipped by the matrix builder (camera sits behind the target);

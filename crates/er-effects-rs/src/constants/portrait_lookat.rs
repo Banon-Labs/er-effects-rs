@@ -1,8 +1,7 @@
 // ---------------------------------------------------------------------------------------------------
-// LOOK-AT LEVER (portrait head/eyes follow the mouse cursor). VERIFIED RE 2026-06-29 -- bd
-// `portrait-lookat-RE-VERIFIED-2026-06-29`. ER's c0000 rig has NO eye bone: the eyes are FaceGen mesh
-// rigidly skinned to the single "Head" bone, so gaze is delivered by rotating Spine2->Neck->Head; the
-// eyes follow because they ride the head. We rotate those bones' LOCAL quaternions toward the cursor.
+// RETIRED LOOK-AT INTERNALS. The live loading portrait no longer tracks the cursor; these offsets and
+// helper structures are retained only for the neutral render/publish pump and historical diagnostics.
+// ER's c0000 rig has NO eye bone: the eyes are FaceGen mesh rigidly skinned to the single "Head" bone.
 //
 // REACH (per tick, from renderer R = CSMenuProfModelRend*): require *(R+0x778) != 0 (model built);
 // X = *(R + ANIM_LOCATION) ; importer = *(X + IMPORTER) ; poseHolder = importer + POSEHOLDER (embedded,
@@ -49,9 +48,6 @@ pub(crate) const LOOKAT_NECK_YAW_GAIN: f32 = 0.15;
 pub(crate) const LOOKAT_NECK_PITCH_GAIN: f32 = 0.10;
 pub(crate) const LOOKAT_SPINE2_YAW_GAIN: f32 = 0.08;
 pub(crate) const LOOKAT_SPINE2_PITCH_GAIN: f32 = 0.05;
-/// Sign flips for runtime calibration without a rebuild loop (set from the first visual check).
-pub(crate) const LOOKAT_YAW_SIGN: f32 = 1.0;
-pub(crate) const LOOKAT_PITCH_SIGN: f32 = 1.0;
 /// Per-renderer-slot cached look-at state: the resolved Head/Neck/Spine2 bone indices and the latched
 /// base (idle) local quaternions, captured ONCE so the per-tick rotation composes from an immutable
 /// base (drift-free). `-1` index = bone not found in this slot's skeleton.
@@ -71,21 +67,14 @@ pub(crate) struct LookatSlot {
 }
 pub(crate) static PROFILE_LOOKAT_SLOTS: std::sync::Mutex<[Option<LookatSlot>; 10]> =
     std::sync::Mutex::new([None; 10]);
-/// Look-at telemetry (RAM semaphores): apply count, resolved bone indices (packed), live bone count,
-/// last normalized cursor (packed i16 x/y * 1000), and a one-shot bone-name dump latch (bit per slot).
+/// Look-at internals retained for the neutral portrait render/publish pump: apply count, resolved bone
+/// indices, live bone count, and a one-shot bone-name dump latch (bit per slot).
 pub(crate) use er_telemetry::counters::PROFILE_LOOKAT_APPLY_CALLS;
 pub(crate) use er_telemetry::counters::PROFILE_LOOKAT_HEAD_IDX;
 pub(crate) use er_telemetry::counters::PROFILE_LOOKAT_NECK_IDX;
 pub(crate) use er_telemetry::counters::PROFILE_LOOKAT_SPINE2_IDX;
 pub(crate) use er_telemetry::counters::PROFILE_LOOKAT_BONE_COUNT;
-pub(crate) use er_telemetry::counters::PROFILE_LOOKAT_LAST_CURSOR;
 pub(crate) use er_telemetry::counters::PROFILE_LOOKAT_BONES_DUMPED_MASK;
-/// MOUSE-TRACK PROOF latch (selftest only): bit 0/1/2 set once the live head has been dumped at a
-/// look-left / center / look-right yaw bucket (`portrait-capture-slot{200,201,202}.bin`). The three
-/// dumps are visually distinct head poses, converting the ambiguous per-frame `rt changed%` into a
-/// decisive before/after that the head pose tracks the drive signal (= the normalized cursor in
-/// product). Mask == 0b111 once all three captured (`oracle_profile_lookat_track_buckets`).
-pub(crate) use er_telemetry::counters::PROFILE_LOOKAT_TRACK_BUCKETS;
 /// DIAGNOSTIC: per-frame readback outcomes -- how many readbacks returned content, and how many of those
 /// were classified as a checker/placeholder (so did NOT publish). `oracle_profile_readback_some` /
 /// `oracle_profile_readback_checker`; `_some - _checker` == the publish count.
@@ -469,12 +458,14 @@ pub(crate) const PROFILE_LOOKAT_STAGE_NAMES: [&str; PROFILE_LOOKAT_STAGE_COUNT] 
 ];
 pub(crate) static PROFILE_LOOKAT_STAGE_OK: [AtomicUsize; PROFILE_LOOKAT_STAGE_COUNT] =
     [const { AtomicUsize::new(0) }; PROFILE_LOOKAT_STAGE_COUNT];
-/// Draw-task frame counter (drives the selftest sinusoid + throttles the RT-readback oracle).
+/// Draw-task frame counter for the live portrait render/publish pump.
 pub(crate) use er_telemetry::counters::PROFILE_LOOKAT_DRAW_FRAME;
+/// Cached selftest flag retained for the dormant RT oracle; kept false by the diag tick.
+pub(crate) use er_telemetry::counters::PROFILE_LOOKAT_SELFTEST_ON;
 /// IN-PROCESS PIXEL ORACLE (replaces the human-eyeball check). Each sample reads back the probe slot's
 /// offscreen RT AFTER the draw step and records: rt_samples (readbacks taken), rt_nonblack (head rendered,
 /// not black -> no flicker), rt_changed (hash != previous -> RT content moved with the driven angle ->
-/// tracking), rt_lasthash. PASS under the sinusoid selftest = nonblack≈samples AND changed≈samples.
+/// publish), rt_lasthash. These counters measure live portrait refresh/nonblack behavior.
 pub(crate) use er_telemetry::counters::PROFILE_LOOKAT_RT_SAMPLES;
 pub(crate) use er_telemetry::counters::PROFILE_LOOKAT_RT_NONBLACK;
 pub(crate) use er_telemetry::counters::PROFILE_LOOKAT_RT_CHANGED;
@@ -629,28 +620,6 @@ pub(crate) use er_telemetry::counters::PROFILE_LOOKAT_RT_LASTHASH;
 /// consecutive samples are the SAME slot -- otherwise a slot switch (different character) would look like
 /// motion. usize::MAX = none yet.
 pub(crate) use er_telemetry::counters::PROFILE_LOOKAT_RT_LASTSLOT;
-/// Cached selftest flag (the draw task reads this atomic; the FrameBegin diag tick refreshes it from the
-/// file throttled, so the draw path never does a per-frame file stat).
-pub(crate) use er_telemetry::counters::PROFILE_LOOKAT_SELFTEST_ON;
-/// Cached cursor-sweep PROOF flag (same latch pattern as selftest). When set, the draw task self-drives
-/// the OS cursor through held L/C/R positions and drives the head from the read-back cursor.
-pub(crate) use er_telemetry::counters::PROFILE_CURSOR_SWEEP_ON;
-/// One-shot latch so the cursor-sweep helper logs only its first `SetCursorPos` warp + result.
-pub(crate) use er_telemetry::counters::PROFILE_CURSOR_SWEEP_FIRST_WARP;
-/// Cursor-sweep proof: draw-frames held at each cursor position (~24 frames ≈ 1s at ~23fps), and the
-/// per-hold cursor X target as a fraction of the ER window width (left / center / right). Y is held at
-/// mid-height. `SetCursorPos(rect.left + fx*w, rect.top + 0.5*h)`.
-// Hold of 6 draw-frames per position: a full L/C/R cycle is ~18 frames (<1s), so every position is
-// visited several times within the (short) post-Continue live-render window -> all three one-shot bucket
-// dumps fill before the menu renderer winds down. The bone drive is instant (no interpolation), so each
-// captured frame's pose exactly matches that frame's cursor even at this cadence.
-pub(crate) const CURSOR_SWEEP_HOLD_FRAMES: usize = 6;
-pub(crate) const CURSOR_SWEEP_TARGETS_X: [f32; 3] = [0.10, 0.50, 0.90];
-/// Selftest sinusoid: angular step per draw-frame and yaw/pitch amplitudes (same units as the normalized
-/// cursor, so the downstream Head/Neck/Spine2 gains apply identically). ~150-frame period -> ~2.5 s sweep.
-pub(crate) const LOOKAT_SELFTEST_W: f32 = 0.0419; // 2*pi/150
-pub(crate) const LOOKAT_SELFTEST_YAW_AMP: f32 = 1.0;
-pub(crate) const LOOKAT_SELFTEST_PITCH_AMP: f32 = 0.6;
 /// RT-readback oracle throttle: sample every N draw-frames (readback is a GPU->CPU stall; don't do it
 /// every frame). 8 -> ~7 samples/s, plenty to measure nonblack% and hash-change%.
 pub(crate) const LOOKAT_RT_SAMPLE_INTERVAL: usize = 8;

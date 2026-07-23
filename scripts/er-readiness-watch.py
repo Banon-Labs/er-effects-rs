@@ -711,7 +711,7 @@ def telemetry_loading_screen_portrait_capture_ready(telemetry: dict[str, Any] | 
     gx_nonblack = bool(telemetry.get("oracle_loading_bg_portrait_gx_nonblack"))
     # FORGE cover path: the native now-loading background was replaced (commits>0) and we have a portrait.
     forge_ready = commits > 0 and (builds > 0 or gx_nonblack)
-    # OVERLAY-ONLY path (portrait-lookat): the native forge is disabled, so the live present-overlay is the
+    # OVERLAY-ONLY path (live portrait overlay): the native forge is disabled, so the live present-overlay is the
     # display surface. Capture once it is actually compositing (overlay_draw_hits>0) on the loading screen
     # (our post-Continue renderer table was built). Without this the screenshot never fires in overlay mode.
     overlay_hits = as_int(telemetry.get("oracle_overlay_draw_hits"), 0)
