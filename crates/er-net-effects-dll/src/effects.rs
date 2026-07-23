@@ -6,33 +6,36 @@ use std::{
         Mutex, OnceLock,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
-    time::UNIX_EPOCH,
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use eldenring::cs::{ChrInsExt, PlayerIns};
 use er_effects_data::{
-    EffectCallSpec, EffectKindSpec, parse_effect_hotkeys_json, parse_effect_id_catalog_json,
+    EffectKindSpec, parse_effect_hotkeys_json, parse_effect_id_catalog_json,
     parse_effect_master_catalog_json,
 };
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, HC_ACTION, KBDLLHOOKSTRUCT, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    CallNextHookEx, GetForegroundWindow, GetWindowThreadProcessId, HC_ACTION, KBDLLHOOKSTRUCT,
+    WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
-use crate::{EffectsState, append_autoload_debug, command_path, input_blocker::InputBlocker};
+use crate::{config::runtime_config, crash_telemetry, input_suppression, log::net_effects_log};
 
 const EFFECT_HOTKEY_UP: usize = 1 << 0;
 const EFFECT_HOTKEY_DOWN: usize = 1 << 1;
 const EFFECT_HOTKEY_LEFT: usize = 1 << 2;
 const EFFECT_HOTKEY_RIGHT: usize = 1 << 3;
 const EFFECT_HOTKEY_TOGGLE: usize = 1 << 4;
-const EFFECT_HOTKEY_OVERLAY_TOGGLE: usize = 1 << 5;
+const EFFECT_HOTKEY_SELECTOR_TOGGLE: usize = 1 << 5;
 
 const VK_LEFT: u32 = 0x25;
 const VK_UP: u32 = 0x26;
 const VK_RIGHT: u32 = 0x27;
 const VK_DOWN: u32 = 0x28;
 const VK_INSERT: u32 = 0x2d;
+const VK_0: u32 = 0x30;
 const VK_NUMPAD0: u32 = 0x60;
 const VK_NUMPAD9: u32 = 0x69;
 const VK_MULTIPLY: u32 = 0x6a;
@@ -45,7 +48,7 @@ const LLKHF_ALTDOWN: u32 = 0x20;
 const DEFAULT_EFFECT_TRIGGER_HOTKEYS_JSON: &str = r#"{
   "hotkeys": [
     {
-      "name": "deathblight self test",
+      "name": "deathblight network test",
       "key": "numpad_multiply",
       "effect_id": 8355,
       "count": 1
@@ -54,49 +57,38 @@ const DEFAULT_EFFECT_TRIGGER_HOTKEYS_JSON: &str = r#"{
 }
 "#;
 const EFFECT_TRIGGER_COUNT_MAX: u32 = 200;
-const EFFECT_SELECTOR_OVERLAY_NAME_CHARS: usize = 36;
+const EFFECT_SELECTOR_NAME_CHARS: usize = 36;
 
-pub(crate) use er_telemetry::counters::EFFECT_HOTKEY_HOOK_ACTIVE;
-pub(crate) use er_telemetry::counters::EFFECT_HOTKEY_HOOK_STARTED;
-pub(crate) use er_telemetry::counters::EFFECT_HOTKEY_PENDING_DOWN;
-pub(crate) use er_telemetry::counters::EFFECT_HOTKEY_PENDING_LEFT;
-pub(crate) use er_telemetry::counters::EFFECT_HOTKEY_PENDING_OVERLAY_TOGGLE;
-pub(crate) use er_telemetry::counters::EFFECT_HOTKEY_PENDING_RIGHT;
-pub(crate) use er_telemetry::counters::EFFECT_HOTKEY_PENDING_TOGGLE;
-pub(crate) use er_telemetry::counters::EFFECT_HOTKEY_PENDING_UP;
-static EFFECT_SELECTOR_OVERLAY_TEXT: OnceLock<Mutex<String>> = OnceLock::new();
-pub(crate) use er_telemetry::counters::EFFECT_SELECTOR_DINPUT_HOOK_INSTALL_ATTEMPTED;
-pub(crate) use er_telemetry::counters::EFFECT_SELECTOR_OVERLAY_VISIBLE_FOR_HOOK;
+static EFFECT_SELECTOR_TEXT: OnceLock<Mutex<String>> = OnceLock::new();
 static EFFECT_TRIGGER_PENDING_KEYS: OnceLock<Mutex<Vec<EffectTriggerKeyPress>>> = OnceLock::new();
-pub(crate) use er_telemetry::counters::EFFECT_HOTKEY_APPLIED_ACTIONS;
-pub(crate) use er_telemetry::counters::EFFECT_HOTKEY_HOOK_HITS;
-pub(crate) use er_telemetry::counters::EFFECT_INPUT_SUPPRESSED_ARROW_KEYS;
-pub(crate) use er_telemetry::counters::EFFECT_INPUT_SUPPRESSED_KEYS;
+static EFFECT_HOTKEY_HOOK_STARTED: AtomicBool = AtomicBool::new(false);
+static EFFECT_HOTKEY_HOOK_ACTIVE: AtomicBool = AtomicBool::new(false);
+static EFFECT_SELECTOR_VISIBLE_FOR_HOOK: AtomicBool = AtomicBool::new(false);
+static EFFECT_RUNTIME_READY_FOR_HOOK: AtomicBool = AtomicBool::new(false);
+static EFFECT_HOTKEY_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_HOTKEY_APPLIED_ACTIONS: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_INPUT_SUPPRESSED_KEYS: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_INPUT_SUPPRESSED_ARROW_KEYS: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_HOTKEY_PENDING_UP: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_HOTKEY_PENDING_DOWN: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_HOTKEY_PENDING_LEFT: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_HOTKEY_PENDING_RIGHT: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_HOTKEY_PENDING_TOGGLE: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_HOTKEY_PENDING_SELECTOR_TOGGLE: AtomicUsize = AtomicUsize::new(0);
 
-/// A named runtime effect call the overlay can trigger.
-///
-/// Adding a new call kind (e.g. an SFX/FXR spawn once `fromsoftware-rs`
-/// exposes a wrapper for it) takes three mechanical steps:
-/// 1. add a variant to `er_effects_data::EffectKindSpec` (the
-///    `data/effects.json` schema),
-/// 2. add the matching variant here plus arms in `label`/`apply`/`remove`/
-///    `is_active`,
-/// 3. map it in `call_kind_from_spec`.
-/// The overlay and the game task dispatch exclusively through those four
-/// methods, so nothing else needs to change.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EffectCallKind {
     SpEffect { id: i32 },
 }
 
 impl EffectCallKind {
-    pub(crate) fn label(self) -> String {
+    fn label(self) -> String {
         match self {
             Self::SpEffect { id } => format!("SpEffect {id}"),
         }
     }
 
-    pub(crate) fn apply(self, player: &mut PlayerIns, network_sync: bool) {
+    fn apply(self, player: &mut PlayerIns, network_sync: bool) {
         match self {
             Self::SpEffect { id } => {
                 let dont_sync = !network_sync;
@@ -105,16 +97,13 @@ impl EffectCallKind {
         }
     }
 
-    pub(crate) fn remove(self, player: &mut PlayerIns) {
+    fn remove(self, player: &mut PlayerIns) {
         match self {
             Self::SpEffect { id } => player.chr_ins.remove_speffect(id),
         }
     }
 
-    /// Whether the call is currently in force on the player. The game's
-    /// apply/remove calls return nothing, so the active-SpEffect list is the
-    /// ground truth for surfacing success and failure in the overlay.
-    pub(crate) fn is_active(self, player: &PlayerIns) -> bool {
+    fn is_active(self, player: &PlayerIns) -> bool {
         match self {
             Self::SpEffect { id } => player
                 .chr_ins
@@ -129,18 +118,10 @@ pub(crate) struct NamedEffectCall {
     pub(crate) name: String,
     pub(crate) kind: EffectCallKind,
     pub(crate) enabled: bool,
-    pub(crate) remove_requested: bool,
-    /// Live status, recomputed every game tick from the player's SpEffect
-    /// list.
+    remove_requested: bool,
     pub(crate) active: bool,
-    /// Latched after this enabled call has appeared in the player's active
-    /// SpEffect list. Once latched, the game task can reapply the call after a
-    /// finite-duration effect naturally expires without hammering IDs that
-    /// never took in the first place.
-    pub(crate) active_seen_since_enable: bool,
-    /// Set when an apply attempt did not take (e.g. the ID has no
-    /// `SpEffectParam` row); cleared as soon as the effect shows up active.
-    pub(crate) apply_failed: bool,
+    active_seen_since_enable: bool,
+    apply_failed: bool,
 }
 
 impl NamedEffectCall {
@@ -159,7 +140,7 @@ impl NamedEffectCall {
 
 #[derive(Clone)]
 pub(crate) struct EffectCatalog {
-    pub(crate) source_key: String,
+    source_key: String,
     pub(crate) file_name: String,
     pub(crate) name: String,
     pub(crate) call_indices: Vec<usize>,
@@ -173,7 +154,7 @@ struct EffectTriggerKeyPress {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct EffectTriggerKey {
+struct EffectTriggerKey {
     vk: u32,
     alt: bool,
 }
@@ -183,32 +164,176 @@ pub(crate) struct EffectTriggerHotkey {
     pub(crate) name: String,
     pub(crate) key_name: String,
     key: EffectTriggerKey,
-    pub(crate) effect_id: i32,
-    pub(crate) count: u32,
+    effect_id: i32,
+    count: u32,
 }
 
-pub(crate) fn effect_setting_path() -> PathBuf {
-    PathBuf::from(".effect-setting.txt")
+pub(crate) struct NetEffectsState {
+    pub(crate) calls: Vec<NamedEffectCall>,
+    pub(crate) catalogs: Vec<EffectCatalog>,
+    pub(crate) load_error: Option<String>,
+    pub(crate) network_sync: bool,
+    pub(crate) selected_effect_index: Option<usize>,
+    pub(crate) selected_catalog_index: Option<usize>,
+    effect_catalogs_signature: String,
+    pub(crate) effect_catalog_live_updates: u64,
+    pub(crate) effect_hotkeys_effects_on: bool,
+    pub(crate) effect_selector_visible: bool,
+    pub(crate) effect_trigger_hotkeys: Vec<EffectTriggerHotkey>,
+    effect_trigger_hotkeys_modified: Option<SystemTime>,
+    pub(crate) effect_trigger_hotkeys_load_error: Option<String>,
+    pending_effect_triggers: Vec<EffectTriggerHotkey>,
+    pub(crate) effect_trigger_fire_count: u64,
+    pub(crate) effect_trigger_last_key: Option<String>,
+    pub(crate) effect_trigger_last_id: Option<i32>,
+    pub(crate) effect_trigger_last_count: u32,
+    pub(crate) effect_setting_last_id: Option<i32>,
+    effect_setting_last_modified: Option<SystemTime>,
+    pub(crate) effect_setting_live_updates: u64,
+    pub(crate) effect_reapply_count: u64,
+    pub(crate) effect_reapply_last_index: Option<usize>,
+    pub(crate) last_telemetry_write: Option<Instant>,
+    pub(crate) last_driver_command: Option<String>,
+    pub(crate) game_task_ticks: u64,
+    pub(crate) runtime_ready: bool,
 }
 
-pub(crate) fn effect_catalog_setting_path() -> PathBuf {
-    PathBuf::from(".effect-catalog-setting.txt")
+impl NetEffectsState {
+    pub(crate) fn new() -> Self {
+        let effect_catalogs_signature = current_effect_catalog_signature();
+        let (mut calls, catalogs, load_error) = build_effect_catalog_state();
+        let (effect_trigger_hotkeys, effect_trigger_hotkeys_load_error) =
+            match load_effect_trigger_hotkeys() {
+                Ok(hotkeys) => (hotkeys, None),
+                Err(error) => (Vec::new(), Some(error)),
+            };
+        let selected_effect_id = restore_selected_effect_id();
+        let selected_effect_index =
+            selected_effect_id.and_then(|id| find_call_index_by_id(&calls, id));
+        let restored_catalog_key = restore_selected_catalog_key();
+        let selected_catalog_index = restored_catalog_key
+            .as_deref()
+            .and_then(|key| {
+                catalogs
+                    .iter()
+                    .position(|catalog| catalog.source_key == key)
+            })
+            .or_else(|| {
+                selected_effect_index.and_then(|selected| {
+                    catalogs.iter().position(|catalog| {
+                        catalog
+                            .call_indices
+                            .iter()
+                            .any(|call_index| *call_index == selected)
+                    })
+                })
+            })
+            .or_else(|| (!catalogs.is_empty()).then_some(0));
+        let effect_hotkeys_effects_on =
+            restore_effects_enabled() && selected_effect_index.is_some();
+        if effect_hotkeys_effects_on
+            && let Some(index) = selected_effect_index
+            && let Some(call) = calls.get_mut(index)
+        {
+            call.enabled = true;
+            call.remove_requested = false;
+            call.active_seen_since_enable = false;
+            call.apply_failed = false;
+        }
+
+        Self {
+            calls,
+            catalogs,
+            load_error,
+            network_sync: runtime_config().network_sync,
+            selected_effect_index,
+            selected_catalog_index,
+            effect_catalogs_signature,
+            effect_catalog_live_updates: 0,
+            effect_hotkeys_effects_on,
+            effect_selector_visible: runtime_config().overlay_visible_on_start,
+            effect_trigger_hotkeys,
+            effect_trigger_hotkeys_modified: current_effect_trigger_hotkeys_modified(),
+            effect_trigger_hotkeys_load_error,
+            pending_effect_triggers: Vec::new(),
+            effect_trigger_fire_count: 0,
+            effect_trigger_last_key: None,
+            effect_trigger_last_id: None,
+            effect_trigger_last_count: 0,
+            effect_setting_last_id: selected_effect_id,
+            effect_setting_last_modified: current_effect_setting_modified(),
+            effect_setting_live_updates: 0,
+            effect_reapply_count: 0,
+            effect_reapply_last_index: None,
+            last_telemetry_write: None,
+            last_driver_command: None,
+            game_task_ticks: 0,
+            runtime_ready: false,
+        }
+    }
 }
 
-pub(crate) fn effect_enabled_setting_path() -> PathBuf {
-    PathBuf::from(".effect-enabled-setting.txt")
+fn effect_setting_path() -> PathBuf {
+    runtime_config().selected_effect_file.clone()
 }
 
-pub(crate) fn effect_trigger_hotkeys_path() -> PathBuf {
-    PathBuf::from(".effect-hotkeys.json")
+fn effect_catalog_setting_path() -> PathBuf {
+    runtime_config().selected_catalog_file.clone()
 }
 
-pub(crate) fn user_effect_catalog_dir() -> PathBuf {
-    PathBuf::from("effect-catalogs")
+fn effect_enabled_setting_path() -> PathBuf {
+    runtime_config().enabled_file.clone()
 }
 
-pub(crate) fn effect_master_catalog_path() -> PathBuf {
-    PathBuf::from("effect-master-catalog.json")
+fn effect_trigger_hotkeys_path() -> PathBuf {
+    runtime_config().hotkeys_file.clone()
+}
+
+fn user_effect_catalog_dir() -> PathBuf {
+    runtime_config().catalog_dir.clone()
+}
+
+fn effect_master_catalog_path() -> PathBuf {
+    runtime_config().master_catalog_file.clone()
+}
+
+fn command_path() -> PathBuf {
+    runtime_config().command_file.clone()
+}
+
+fn is_effect_catalog_path(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|ext| ext.to_str()),
+        Some("json") | Some("jsonc")
+    )
+}
+
+fn prefer_effect_catalog_path(existing: &Path, candidate: &Path) -> bool {
+    existing.extension().and_then(|ext| ext.to_str()) == Some("json")
+        && candidate.extension().and_then(|ext| ext.to_str()) == Some("jsonc")
+}
+
+fn effect_catalog_paths() -> std::io::Result<Vec<PathBuf>> {
+    let entries = fs::read_dir(user_effect_catalog_dir())?;
+    let mut by_stem = HashMap::<String, PathBuf>::new();
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if !is_effect_catalog_path(&path) {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        match by_stem.get(stem) {
+            Some(existing) if !prefer_effect_catalog_path(existing, &path) => {}
+            _ => {
+                by_stem.insert(stem.to_owned(), path);
+            }
+        }
+    }
+    let mut paths = by_stem.into_values().collect::<Vec<_>>();
+    paths.sort();
+    Ok(paths)
 }
 
 fn effect_file_signature(path: &Path) -> String {
@@ -225,48 +350,44 @@ fn effect_file_signature(path: &Path) -> String {
     format!("{len}:{modified}")
 }
 
-pub(crate) fn current_effect_catalog_signature() -> String {
+fn current_effect_catalog_signature() -> String {
     let mut parts = Vec::new();
     parts.push(format!(
         "master:{}",
         effect_file_signature(&effect_master_catalog_path())
     ));
-    if let Ok(entries) = fs::read_dir(user_effect_catalog_dir()) {
-        let mut catalog_parts = entries
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
-            .filter_map(|path| {
-                let file_name = path.file_name()?.to_str()?.to_owned();
-                Some(format!("{file_name}:{}", effect_file_signature(&path)))
-            })
-            .collect::<Vec<_>>();
-        catalog_parts.sort();
-        parts.extend(catalog_parts);
+    if let Ok(paths) = effect_catalog_paths() {
+        parts.extend(paths.into_iter().filter_map(|path| {
+            let file_name = path.file_name()?.to_str()?.to_owned();
+            Some(format!("{file_name}:{}", effect_file_signature(&path)))
+        }));
     } else {
         parts.push("catalogs:missing".to_owned());
     }
     parts.join("|")
 }
 
-pub(crate) fn current_effect_setting_modified() -> Option<std::time::SystemTime> {
+fn current_effect_setting_modified() -> Option<SystemTime> {
     fs::metadata(effect_setting_path())
         .and_then(|metadata| metadata.modified())
         .ok()
 }
 
-pub(crate) fn restore_selected_effect_id() -> Option<i32> {
-    let path = effect_setting_path();
-    fs::read_to_string(path).ok()?.trim().parse::<i32>().ok()
+fn restore_selected_effect_id() -> Option<i32> {
+    fs::read_to_string(effect_setting_path())
+        .ok()?
+        .trim()
+        .parse::<i32>()
+        .ok()
 }
 
-pub(crate) fn restore_selected_catalog_key() -> Option<String> {
+fn restore_selected_catalog_key() -> Option<String> {
     let value = fs::read_to_string(effect_catalog_setting_path()).ok()?;
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
-pub(crate) fn restore_effects_enabled() -> bool {
+fn restore_effects_enabled() -> bool {
     let Ok(value) = fs::read_to_string(effect_enabled_setting_path()) else {
         return false;
     };
@@ -276,24 +397,13 @@ pub(crate) fn restore_effects_enabled() -> bool {
     )
 }
 
-pub(crate) fn persist_effects_enabled(enabled: bool) {
+fn persist_effects_enabled(enabled: bool) {
     let path = effect_enabled_setting_path();
     let tmp_path = path.with_extension("txt.tmp");
     let value = if enabled { "on\n" } else { "off\n" };
     if fs::write(&tmp_path, value).is_ok() {
         let _ = fs::rename(tmp_path, path);
     }
-}
-
-pub(crate) fn restore_selected_effect_index(calls: &[NamedEffectCall]) -> Option<usize> {
-    let id = restore_selected_effect_id()?;
-    find_call_index_by_id(calls, id)
-}
-
-fn find_call_index_by_id(calls: &[NamedEffectCall], id: i32) -> Option<usize> {
-    calls.iter().position(|call| match call.kind {
-        EffectCallKind::SpEffect { id: call_id } => call_id == id,
-    })
 }
 
 fn persist_selected_effect(call: &NamedEffectCall) {
@@ -332,13 +442,13 @@ fn ensure_default_effect_trigger_hotkeys_file() {
     }
 }
 
-pub(crate) fn current_effect_trigger_hotkeys_modified() -> Option<std::time::SystemTime> {
+fn current_effect_trigger_hotkeys_modified() -> Option<SystemTime> {
     fs::metadata(effect_trigger_hotkeys_path())
         .and_then(|metadata| metadata.modified())
         .ok()
 }
 
-pub(crate) fn load_effect_trigger_hotkeys() -> Result<Vec<EffectTriggerHotkey>, String> {
+fn load_effect_trigger_hotkeys() -> Result<Vec<EffectTriggerHotkey>, String> {
     ensure_default_effect_trigger_hotkeys_file();
     let path = effect_trigger_hotkeys_path();
     let raw = fs::read_to_string(&path)
@@ -407,35 +517,13 @@ fn parse_effect_trigger_key(raw: &str) -> Result<EffectTriggerKey, String> {
         }
         other => return Err(format!("unknown key {other:?}")),
     };
-    if !(VK_NUMPAD0..=VK_NUMPAD9).contains(&vk)
-        && !matches!(
-            vk,
-            VK_MULTIPLY
-                | VK_ADD
-                | VK_SUBTRACT
-                | VK_DECIMAL
-                | VK_DIVIDE
-                | VK_UP
-                | VK_DOWN
-                | VK_LEFT
-                | VK_RIGHT
-                | VK_OEM_7
-        )
-    {
-        return Err(format!("unsupported key {raw:?}"));
-    }
     Ok(EffectTriggerKey { vk, alt })
 }
 
-pub(crate) fn call_kind_from_spec(kind: EffectKindSpec, id: i32) -> EffectCallKind {
+fn call_kind_from_spec(kind: EffectKindSpec, id: i32) -> EffectCallKind {
     match kind {
         EffectKindSpec::SpEffect => EffectCallKind::SpEffect { id },
     }
-}
-
-pub(crate) fn named_call_from_spec(spec: EffectCallSpec) -> NamedEffectCall {
-    let kind = call_kind_from_spec(spec.kind, spec.id);
-    NamedEffectCall::new(spec.name, kind, spec.enabled)
 }
 
 struct RawEffectCatalog {
@@ -444,8 +532,7 @@ struct RawEffectCatalog {
     ids: Vec<i32>,
 }
 
-pub(crate) fn build_effect_catalog_state()
--> (Vec<NamedEffectCall>, Vec<EffectCatalog>, Option<String>) {
+fn build_effect_catalog_state() -> (Vec<NamedEffectCall>, Vec<EffectCatalog>, Option<String>) {
     let mut load_errors = Vec::new();
     let master_names = match fs::read_to_string(effect_master_catalog_path()) {
         Ok(json) => match parse_effect_master_catalog_json(&json) {
@@ -482,13 +569,7 @@ pub(crate) fn build_effect_catalog_state()
     };
 
     let mut raw_catalogs = Vec::new();
-    if let Ok(entries) = fs::read_dir(user_effect_catalog_dir()) {
-        let mut paths = entries
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
-            .collect::<Vec<_>>();
-        paths.sort();
+    if let Ok(paths) = effect_catalog_paths() {
         for path in paths {
             let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
                 continue;
@@ -532,7 +613,7 @@ pub(crate) fn build_effect_catalog_state()
                 let index = calls.len();
                 calls.push(NamedEffectCall::new(
                     name,
-                    EffectCallKind::SpEffect { id },
+                    call_kind_from_spec(EffectKindSpec::SpEffect, id),
                     false,
                 ));
                 index
@@ -555,42 +636,6 @@ pub(crate) fn build_effect_catalog_state()
     (calls, catalogs, load_error)
 }
 
-pub(crate) fn call_status_text(call: &NamedEffectCall) -> &'static str {
-    if call.active {
-        "[active]"
-    } else if call.apply_failed {
-        "[apply failed]"
-    } else {
-        "[inactive]"
-    }
-}
-
-pub(crate) fn effect_application_allowed(_state: &EffectsState) -> bool {
-    // All callers already hold a live PlayerIns reference. Requiring the sampled TimeAct
-    // animation id here makes standing-idle characters look unavailable until movement
-    // changes the sampled slot, even though SpEffect application is already valid.
-    true
-}
-
-fn effect_application_block_reason(state: &EffectsState) -> &'static str {
-    if effect_application_allowed(state) {
-        "ready"
-    } else {
-        "player is not loaded"
-    }
-}
-
-pub(crate) fn add_custom_call(state: &mut EffectsState) {
-    let id = state.custom_call_id;
-    let kind = EffectCallKind::SpEffect { id };
-    if state.calls.iter().any(|call| call.kind == kind) {
-        return;
-    }
-    state
-        .calls
-        .push(NamedEffectCall::new(format!("Custom {id}"), kind, true));
-}
-
 fn effect_hotkey_action_for_key(vk: u32, alt_down: bool) -> usize {
     match vk {
         VK_LEFT => EFFECT_HOTKEY_LEFT,
@@ -598,7 +643,7 @@ fn effect_hotkey_action_for_key(vk: u32, alt_down: bool) -> usize {
         VK_RIGHT => EFFECT_HOTKEY_RIGHT,
         VK_DOWN => EFFECT_HOTKEY_DOWN,
         VK_OEM_7 if alt_down => EFFECT_HOTKEY_TOGGLE,
-        VK_NUMPAD0 | VK_INSERT if alt_down => EFFECT_HOTKEY_OVERLAY_TOGGLE,
+        VK_0 | VK_NUMPAD0 | VK_INSERT if alt_down => EFFECT_HOTKEY_SELECTOR_TOGGLE,
         _ => 0,
     }
 }
@@ -607,10 +652,36 @@ fn queue_effect_trigger_key(vk: u32, alt: bool) {
     if let Ok(mut pending) = EFFECT_TRIGGER_PENDING_KEYS
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()
+        && pending.len() < 64
     {
-        if pending.len() < 64 {
-            pending.push(EffectTriggerKeyPress { vk, alt });
-        }
+        pending.push(EffectTriggerKeyPress { vk, alt });
+    }
+}
+
+pub(crate) fn queue_effect_keyboard_vk(vk: u32, alt_down: bool) {
+    queue_effect_trigger_key(vk, alt_down);
+    let action = effect_hotkey_action_for_key(vk, alt_down);
+    if action == 0 {
+        return;
+    }
+    EFFECT_HOTKEY_HOOK_HITS.fetch_add(1, Ordering::SeqCst);
+    if action & EFFECT_HOTKEY_UP != 0 {
+        EFFECT_HOTKEY_PENDING_UP.fetch_add(1, Ordering::SeqCst);
+    }
+    if action & EFFECT_HOTKEY_DOWN != 0 {
+        EFFECT_HOTKEY_PENDING_DOWN.fetch_add(1, Ordering::SeqCst);
+    }
+    if action & EFFECT_HOTKEY_LEFT != 0 {
+        EFFECT_HOTKEY_PENDING_LEFT.fetch_add(1, Ordering::SeqCst);
+    }
+    if action & EFFECT_HOTKEY_RIGHT != 0 {
+        EFFECT_HOTKEY_PENDING_RIGHT.fetch_add(1, Ordering::SeqCst);
+    }
+    if action & EFFECT_HOTKEY_TOGGLE != 0 {
+        EFFECT_HOTKEY_PENDING_TOGGLE.fetch_add(1, Ordering::SeqCst);
+    }
+    if action & EFFECT_HOTKEY_SELECTOR_TOGGLE != 0 {
+        EFFECT_HOTKEY_PENDING_SELECTOR_TOGGLE.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -626,6 +697,16 @@ pub(crate) fn discard_pending_effect_trigger_keys() -> usize {
     drain_effect_trigger_keys().len()
 }
 
+fn foreground_window_belongs_to_this_process() -> bool {
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.0.is_null() {
+        return false;
+    }
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    pid == unsafe { GetCurrentProcessId() }
+}
+
 unsafe extern "system" fn effect_hotkey_ll_keyboard_proc(
     ncode: i32,
     wparam: WPARAM,
@@ -636,38 +717,19 @@ unsafe extern "system" fn effect_hotkey_ll_keyboard_proc(
         let msg = wparam.0 as u32;
         let key_down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
         let key_up = msg == WM_KEYUP || msg == WM_SYSKEYUP;
-        let suppress_arrow = (key_down || key_up)
+        let runtime_ready = EFFECT_RUNTIME_READY_FOR_HOOK.load(Ordering::SeqCst);
+        let foreground_is_game = foreground_window_belongs_to_this_process();
+        let suppress_arrow = foreground_is_game
+            && runtime_ready
+            && (key_down || key_up)
             && is_arrow_key(kb.vkCode)
-            && EFFECT_SELECTOR_OVERLAY_VISIBLE_FOR_HOOK.load(Ordering::SeqCst);
-        if key_down {
+            && EFFECT_SELECTOR_VISIBLE_FOR_HOOK.load(Ordering::SeqCst);
+        if key_down && runtime_ready && !foreground_is_game {
             let alt_down = msg == WM_SYSKEYDOWN || (kb.flags.0 & LLKHF_ALTDOWN) != 0;
-            queue_effect_trigger_key(kb.vkCode, alt_down);
-            let action = effect_hotkey_action_for_key(kb.vkCode, alt_down);
-            if action != 0 {
-                EFFECT_HOTKEY_HOOK_HITS.fetch_add(1, Ordering::SeqCst);
-                if action & EFFECT_HOTKEY_UP != 0 {
-                    EFFECT_HOTKEY_PENDING_UP.fetch_add(1, Ordering::SeqCst);
-                }
-                if action & EFFECT_HOTKEY_DOWN != 0 {
-                    EFFECT_HOTKEY_PENDING_DOWN.fetch_add(1, Ordering::SeqCst);
-                }
-                if action & EFFECT_HOTKEY_LEFT != 0 {
-                    EFFECT_HOTKEY_PENDING_LEFT.fetch_add(1, Ordering::SeqCst);
-                }
-                if action & EFFECT_HOTKEY_RIGHT != 0 {
-                    EFFECT_HOTKEY_PENDING_RIGHT.fetch_add(1, Ordering::SeqCst);
-                }
-                if action & EFFECT_HOTKEY_TOGGLE != 0 {
-                    EFFECT_HOTKEY_PENDING_TOGGLE.fetch_add(1, Ordering::SeqCst);
-                }
-                if action & EFFECT_HOTKEY_OVERLAY_TOGGLE != 0 {
-                    EFFECT_HOTKEY_PENDING_OVERLAY_TOGGLE.fetch_add(1, Ordering::SeqCst);
-                }
-            }
+            queue_effect_keyboard_vk(kb.vkCode, alt_down);
         }
         if suppress_arrow {
-            EFFECT_INPUT_SUPPRESSED_KEYS.fetch_add(1, Ordering::SeqCst);
-            EFFECT_INPUT_SUPPRESSED_ARROW_KEYS.fetch_add(1, Ordering::SeqCst);
+            record_suppressed_arrow_keys(1);
             return LRESULT(1);
         }
     }
@@ -679,7 +741,7 @@ pub(crate) fn ensure_effect_hotkey_hook() {
         return;
     }
     let spawned = std::thread::Builder::new()
-        .name("er-effects-hotkeys".to_owned())
+        .name("er-net-effects-hotkeys".to_owned())
         .spawn(|| {
             use windows::Win32::Foundation::HWND;
             use windows::Win32::UI::WindowsAndMessaging::{
@@ -697,11 +759,11 @@ pub(crate) fn ensure_effect_hotkey_hook() {
                 )
             }) else {
                 EFFECT_HOTKEY_HOOK_STARTED.store(false, Ordering::SeqCst);
-                append_autoload_debug(format_args!("effect-hotkeys: hook install failed"));
+                net_effects_log(format_args!("effect-hotkeys: hook install failed"));
                 return;
             };
             EFFECT_HOTKEY_HOOK_ACTIVE.store(true, Ordering::SeqCst);
-            append_autoload_debug(format_args!("effect-hotkeys: hook installed"));
+            net_effects_log(format_args!("effect-hotkeys: hook installed"));
             let mut msg = MSG::default();
             loop {
                 let _ = unsafe {
@@ -734,15 +796,85 @@ pub(crate) fn effect_hotkey_hook_active() -> bool {
     EFFECT_HOTKEY_HOOK_ACTIVE.load(Ordering::SeqCst)
 }
 
-pub(crate) fn effect_selector_overlay_text() -> String {
-    EFFECT_SELECTOR_OVERLAY_TEXT
+pub(crate) fn effect_hotkey_hook_hits() -> usize {
+    EFFECT_HOTKEY_HOOK_HITS.load(Ordering::SeqCst)
+}
+
+pub(crate) fn effect_hotkey_applied_actions() -> usize {
+    EFFECT_HOTKEY_APPLIED_ACTIONS.load(Ordering::SeqCst)
+}
+
+pub(crate) fn effect_input_suppressed_keys() -> usize {
+    EFFECT_INPUT_SUPPRESSED_KEYS.load(Ordering::SeqCst)
+}
+
+pub(crate) fn effect_input_suppressed_arrow_keys() -> usize {
+    EFFECT_INPUT_SUPPRESSED_ARROW_KEYS.load(Ordering::SeqCst)
+}
+
+pub(crate) fn record_suppressed_arrow_keys(count: usize) {
+    EFFECT_INPUT_SUPPRESSED_KEYS.fetch_add(count, Ordering::SeqCst);
+    EFFECT_INPUT_SUPPRESSED_ARROW_KEYS.fetch_add(count, Ordering::SeqCst);
+}
+
+pub(crate) fn effect_runtime_ready() -> bool {
+    EFFECT_RUNTIME_READY_FOR_HOOK.load(Ordering::SeqCst)
+}
+
+fn clear_effect_selector_text() {
+    if let Ok(mut slot) = EFFECT_SELECTOR_TEXT
+        .get_or_init(|| Mutex::new(String::new()))
+        .lock()
+    {
+        slot.clear();
+    }
+}
+
+fn discard_pending_effect_selector_inputs() -> usize {
+    EFFECT_HOTKEY_PENDING_UP.swap(0, Ordering::SeqCst)
+        + EFFECT_HOTKEY_PENDING_DOWN.swap(0, Ordering::SeqCst)
+        + EFFECT_HOTKEY_PENDING_LEFT.swap(0, Ordering::SeqCst)
+        + EFFECT_HOTKEY_PENDING_RIGHT.swap(0, Ordering::SeqCst)
+        + EFFECT_HOTKEY_PENDING_TOGGLE.swap(0, Ordering::SeqCst)
+        + EFFECT_HOTKEY_PENDING_SELECTOR_TOGGLE.swap(0, Ordering::SeqCst)
+        + discard_pending_effect_trigger_keys()
+}
+
+pub(crate) fn set_runtime_ready(state: &mut NetEffectsState, ready: bool) {
+    if state.runtime_ready == ready {
+        return;
+    }
+    state.runtime_ready = ready;
+    EFFECT_RUNTIME_READY_FOR_HOOK.store(ready, Ordering::SeqCst);
+    crash_telemetry::runtime_ready(ready);
+    if ready {
+        sync_effect_selector_input_suppression(state.effect_selector_visible);
+        state.last_driver_command = Some("runtime-gate: character/map ready".to_owned());
+        net_effects_log(format_args!(
+            "runtime-gate: character/map ready; enabling net-effects processing"
+        ));
+    } else {
+        let discarded = discard_pending_effect_selector_inputs();
+        sync_effect_selector_input_suppression(false);
+        clear_effect_selector_text();
+        state.last_driver_command = Some(format!(
+            "runtime-gate: character/map absent; suspended net-effects processing; discarded={discarded}"
+        ));
+        net_effects_log(format_args!(
+            "runtime-gate: character/map absent; suspended net-effects processing; discarded={discarded}"
+        ));
+    }
+}
+
+pub(crate) fn effect_selector_text() -> String {
+    EFFECT_SELECTOR_TEXT
         .get_or_init(|| Mutex::new(String::new()))
         .lock()
         .map(|text| text.clone())
         .unwrap_or_default()
 }
 
-fn truncated_effect_overlay_name(call: &NamedEffectCall) -> Option<String> {
+fn truncated_effect_name(call: &NamedEffectCall) -> Option<String> {
     let EffectCallKind::SpEffect { id } = call.kind;
     let fallback = format!("SpEffect {id}");
     let name = call.name.trim();
@@ -752,7 +884,7 @@ fn truncated_effect_overlay_name(call: &NamedEffectCall) -> Option<String> {
     let mut out = String::new();
     let mut truncated = false;
     for (index, ch) in name.chars().enumerate() {
-        if index >= EFFECT_SELECTOR_OVERLAY_NAME_CHARS {
+        if index >= EFFECT_SELECTOR_NAME_CHARS {
             truncated = true;
             break;
         }
@@ -765,55 +897,29 @@ fn truncated_effect_overlay_name(call: &NamedEffectCall) -> Option<String> {
 }
 
 fn sync_effect_selector_input_suppression(visible: bool) {
-    EFFECT_SELECTOR_OVERLAY_VISIBLE_FOR_HOOK.store(visible, Ordering::SeqCst);
-    let blocker = InputBlocker::get_instance();
-    blocker.set_arrow_key_suppression(visible);
-    if !EFFECT_SELECTOR_DINPUT_HOOK_INSTALL_ATTEMPTED.swap(true, Ordering::SeqCst) {
-        let res = std::panic::catch_unwind(|| unsafe { blocker.install_hooks() });
-        match res {
-            Ok(Ok(())) => append_autoload_debug(format_args!(
-                "effect-selector: DInput arrow suppression hook installed"
-            )),
-            Ok(Err(status)) => {
-                EFFECT_SELECTOR_DINPUT_HOOK_INSTALL_ATTEMPTED.store(false, Ordering::SeqCst);
-                append_autoload_debug(format_args!(
-                    "effect-selector: DInput arrow suppression hook install failed: {status:?}"
-                ));
-            }
-            Err(_) => {
-                EFFECT_SELECTOR_DINPUT_HOOK_INSTALL_ATTEMPTED.store(false, Ordering::SeqCst);
-                append_autoload_debug(format_args!(
-                    "effect-selector: DInput arrow suppression hook install panicked"
-                ));
-            }
-        }
-    }
+    EFFECT_SELECTOR_VISIBLE_FOR_HOOK.store(visible, Ordering::SeqCst);
+    input_suppression::set_arrow_key_suppression(visible);
 }
 
-pub(crate) fn publish_effect_selector_overlay_text(state: &mut EffectsState) {
-    let overlay_toggles = EFFECT_HOTKEY_PENDING_OVERLAY_TOGGLE.swap(0, Ordering::SeqCst);
-    if overlay_toggles != 0 {
-        if overlay_toggles % 2 == 1 {
-            state.effect_selector_overlay_visible = !state.effect_selector_overlay_visible;
+pub(crate) fn publish_effect_selector_text(state: &mut NetEffectsState) {
+    let selector_toggles = EFFECT_HOTKEY_PENDING_SELECTOR_TOGGLE.swap(0, Ordering::SeqCst);
+    if selector_toggles != 0 {
+        if selector_toggles % 2 == 1 {
+            state.effect_selector_visible = !state.effect_selector_visible;
         }
         state.last_driver_command = Some(format!(
-            "effect-overlay: {}",
-            if state.effect_selector_overlay_visible {
+            "effect-selector: {}",
+            if state.effect_selector_visible {
                 "shown"
             } else {
                 "hidden"
             }
         ));
-        EFFECT_HOTKEY_APPLIED_ACTIONS.fetch_add(overlay_toggles, Ordering::SeqCst);
+        EFFECT_HOTKEY_APPLIED_ACTIONS.fetch_add(selector_toggles, Ordering::SeqCst);
     }
-    sync_effect_selector_input_suppression(state.effect_selector_overlay_visible);
-    if !state.effect_selector_overlay_visible {
-        if let Ok(mut slot) = EFFECT_SELECTOR_OVERLAY_TEXT
-            .get_or_init(|| Mutex::new(String::new()))
-            .lock()
-        {
-            slot.clear();
-        }
+    sync_effect_selector_input_suppression(state.effect_selector_visible);
+    if !state.effect_selector_visible {
+        clear_effect_selector_text();
         return;
     }
     let catalog = state
@@ -852,15 +958,20 @@ pub(crate) fn publish_effect_selector_overlay_text(state: &mut EffectsState) {
         EffectCallKind::SpEffect { id } => id,
     });
     let effect_label = selected_call
-        .and_then(truncated_effect_overlay_name)
+        .and_then(truncated_effect_name)
         .map_or_else(String::new, |name| format!(" {name}"));
     let catalog_display_index = if catalog_count == 0 {
         0
     } else {
         catalog_index.saturating_add(1)
     };
+    let runtime_status = if state.runtime_ready {
+        "READY"
+    } else {
+        "WAITING"
+    };
     let mut text = format!(
-        "CAT {}/{} {} | ID {}{} | {}/{} | {}{}",
+        "CAT {}/{} {} | ID {}{} | {}/{} | {} | NET {} | {}{}",
         catalog_display_index,
         catalog_count,
         catalog_name,
@@ -873,6 +984,8 @@ pub(crate) fn publish_effect_selector_overlay_text(state: &mut EffectsState) {
         } else {
             "OFF"
         },
+        if state.network_sync { "ON" } else { "OFF" },
+        runtime_status,
         trigger_text
     );
     text = text
@@ -906,7 +1019,7 @@ pub(crate) fn publish_effect_selector_overlay_text(state: &mut EffectsState) {
     if text.len() > 128 {
         text.truncate(128);
     }
-    if let Ok(mut slot) = EFFECT_SELECTOR_OVERLAY_TEXT
+    if let Ok(mut slot) = EFFECT_SELECTOR_TEXT
         .get_or_init(|| Mutex::new(String::new()))
         .lock()
     {
@@ -914,7 +1027,7 @@ pub(crate) fn publish_effect_selector_overlay_text(state: &mut EffectsState) {
     }
 }
 
-pub(crate) fn consume_effect_hotkeys(player: &mut PlayerIns, state: &mut EffectsState) {
+pub(crate) fn consume_effect_hotkeys(player: &mut PlayerIns, state: &mut NetEffectsState) {
     poll_effect_trigger_hotkeys(state);
     consume_effect_trigger_hotkeys(player, state);
     let toggles = EFFECT_HOTKEY_PENDING_TOGGLE.swap(0, Ordering::SeqCst);
@@ -923,11 +1036,11 @@ pub(crate) fn consume_effect_hotkeys(player: &mut PlayerIns, state: &mut Effects
     let lefts = EFFECT_HOTKEY_PENDING_LEFT.swap(0, Ordering::SeqCst);
     let rights = EFFECT_HOTKEY_PENDING_RIGHT.swap(0, Ordering::SeqCst);
     let arrow_total = ups + downs + lefts + rights;
-    let arrows_allowed = state.effect_selector_overlay_visible;
+    let arrows_allowed = state.effect_selector_visible;
     let applied_total = toggles + if arrows_allowed { arrow_total } else { 0 };
     if !arrows_allowed && arrow_total != 0 {
         state.last_driver_command = Some(format!(
-            "effect-hotkey: ignored {arrow_total} arrow keypresses because debug menu is hidden"
+            "effect-hotkey: ignored {arrow_total} arrow keypresses because selector is hidden"
         ));
     }
     if applied_total == 0 {
@@ -947,14 +1060,14 @@ pub(crate) fn consume_effect_hotkeys(player: &mut PlayerIns, state: &mut Effects
         step_selected_catalog(player, state, 1);
     }
     for _ in 0..ups {
-        step_selected_effect(player, state, -1);
+        step_selected_effect(player, state, 1);
     }
     for _ in 0..downs {
-        step_selected_effect(player, state, 1);
+        step_selected_effect(player, state, -1);
     }
 }
 
-fn poll_effect_trigger_hotkeys(state: &mut EffectsState) {
+fn poll_effect_trigger_hotkeys(state: &mut NetEffectsState) {
     let modified = current_effect_trigger_hotkeys_modified();
     if state.effect_trigger_hotkeys_modified == modified {
         return;
@@ -975,14 +1088,14 @@ fn poll_effect_trigger_hotkeys(state: &mut EffectsState) {
     }
 }
 
-fn consume_effect_trigger_hotkeys(player: &mut PlayerIns, state: &mut EffectsState) {
+fn consume_effect_trigger_hotkeys(player: &mut PlayerIns, state: &mut NetEffectsState) {
     let pending = drain_effect_trigger_keys();
     if pending.is_empty() || state.effect_trigger_hotkeys.is_empty() {
         return;
     }
     let mut hidden_arrow_ignores = 0usize;
     for keypress in pending {
-        if !state.effect_selector_overlay_visible && is_arrow_key(keypress.vk) {
+        if !state.effect_selector_visible && is_arrow_key(keypress.vk) {
             hidden_arrow_ignores = hidden_arrow_ignores.saturating_add(1);
             continue;
         }
@@ -998,7 +1111,7 @@ fn consume_effect_trigger_hotkeys(player: &mut PlayerIns, state: &mut EffectsSta
     }
     if hidden_arrow_ignores != 0 {
         state.last_driver_command = Some(format!(
-            "effect-trigger: ignored {hidden_arrow_ignores} arrow keypresses because debug menu is hidden"
+            "effect-trigger: ignored {hidden_arrow_ignores} arrow keypresses because selector is hidden"
         ));
     }
 }
@@ -1009,32 +1122,19 @@ fn is_arrow_key(vk: u32) -> bool {
 
 fn trigger_effect_hotkey(
     player: &mut PlayerIns,
-    state: &mut EffectsState,
+    state: &mut NetEffectsState,
     hotkey: &EffectTriggerHotkey,
 ) {
     let count = hotkey.count.clamp(1, EFFECT_TRIGGER_COUNT_MAX);
     state.effect_trigger_last_key = Some(hotkey.key_name.clone());
     state.effect_trigger_last_id = Some(hotkey.effect_id);
     state.effect_trigger_last_count = count;
-    if !effect_application_allowed(state) {
-        if state.pending_effect_triggers.len() < 16 {
-            state.pending_effect_triggers.push(hotkey.clone());
-        }
-        state.last_driver_command = Some(format!(
-            "effect-trigger: {} armed {} x{} until next animation ({})",
-            hotkey.key_name,
-            hotkey.effect_id,
-            count,
-            effect_application_block_reason(state)
-        ));
-        return;
-    }
     apply_effect_trigger_now(player, state, hotkey);
 }
 
 fn apply_effect_trigger_now(
     player: &mut PlayerIns,
-    state: &mut EffectsState,
+    state: &mut NetEffectsState,
     hotkey: &EffectTriggerHotkey,
 ) {
     let count = hotkey.count.clamp(1, EFFECT_TRIGGER_COUNT_MAX);
@@ -1063,18 +1163,16 @@ fn apply_effect_trigger_now(
         }
     }
     state.last_driver_command = Some(format!(
-        "effect-trigger: {} fired {} x{} ({})",
+        "effect-trigger: {} fired {} x{} ({}, network_sync={})",
         hotkey.key_name,
         hotkey.effect_id,
         count,
-        if active { "active" } else { "not active" }
+        if active { "active" } else { "not active" },
+        state.network_sync
     ));
 }
 
-pub(crate) fn apply_pending_effect_work(player: &mut PlayerIns, state: &mut EffectsState) {
-    if !effect_application_allowed(state) {
-        return;
-    }
+pub(crate) fn apply_pending_effect_work(player: &mut PlayerIns, state: &mut NetEffectsState) {
     let pending_triggers = std::mem::take(&mut state.pending_effect_triggers);
     for hotkey in pending_triggers {
         state.effect_trigger_last_key = Some(hotkey.key_name.clone());
@@ -1085,7 +1183,7 @@ pub(crate) fn apply_pending_effect_work(player: &mut PlayerIns, state: &mut Effe
     apply_pending_enabled_calls(player, state);
 }
 
-fn toggle_selected_effect(player: &mut PlayerIns, state: &mut EffectsState) {
+fn toggle_selected_effect(player: &mut PlayerIns, state: &mut NetEffectsState) {
     if state.effect_hotkeys_effects_on {
         disable_all_calls(player, state);
         state.effect_hotkeys_effects_on = false;
@@ -1105,7 +1203,7 @@ fn toggle_selected_effect(player: &mut PlayerIns, state: &mut EffectsState) {
     enable_only_call(player, state, index, true);
 }
 
-fn selected_catalog_indices(state: &EffectsState) -> Vec<usize> {
+fn selected_catalog_indices(state: &NetEffectsState) -> Vec<usize> {
     state
         .selected_catalog_index
         .and_then(|catalog_index| state.catalogs.get(catalog_index))
@@ -1113,14 +1211,7 @@ fn selected_catalog_indices(state: &EffectsState) -> Vec<usize> {
         .unwrap_or_else(|| (0..state.calls.len()).collect())
 }
 
-fn selected_catalog_position(state: &EffectsState) -> Option<usize> {
-    let selected = state.selected_effect_index?;
-    selected_catalog_indices(state)
-        .iter()
-        .position(|index| *index == selected)
-}
-
-fn step_selected_effect(player: &mut PlayerIns, state: &mut EffectsState, delta: isize) {
+fn step_selected_effect(player: &mut PlayerIns, state: &mut NetEffectsState, delta: isize) {
     let catalog_indices = selected_catalog_indices(state);
     let len = catalog_indices.len();
     if len == 0 {
@@ -1139,7 +1230,7 @@ fn step_selected_effect(player: &mut PlayerIns, state: &mut EffectsState, delta:
     enable_only_call(player, state, catalog_indices[next_position], true);
 }
 
-fn step_selected_catalog(player: &mut PlayerIns, state: &mut EffectsState, delta: isize) {
+fn step_selected_catalog(player: &mut PlayerIns, state: &mut NetEffectsState, delta: isize) {
     let len = state.catalogs.len();
     if len == 0 {
         state.last_driver_command = Some("effect-hotkey: no catalogs available".to_owned());
@@ -1157,7 +1248,7 @@ fn step_selected_catalog(player: &mut PlayerIns, state: &mut EffectsState, delta
 
 fn select_catalog(
     player: &mut PlayerIns,
-    state: &mut EffectsState,
+    state: &mut NetEffectsState,
     catalog_index: usize,
     persist: bool,
 ) {
@@ -1191,7 +1282,7 @@ fn select_catalog(
     ));
 }
 
-fn disable_all_calls(player: &mut PlayerIns, state: &mut EffectsState) {
+fn disable_all_calls(player: &mut PlayerIns, state: &mut NetEffectsState) {
     for call in &mut state.calls {
         call.kind.remove(player);
         call.enabled = false;
@@ -1202,23 +1293,21 @@ fn disable_all_calls(player: &mut PlayerIns, state: &mut EffectsState) {
     }
 }
 
-fn enable_only_call(player: &mut PlayerIns, state: &mut EffectsState, index: usize, persist: bool) {
+fn enable_only_call(
+    player: &mut PlayerIns,
+    state: &mut NetEffectsState,
+    index: usize,
+    persist: bool,
+) {
     let network_sync = state.network_sync;
-    let can_apply = effect_application_allowed(state);
     for (call_index, call) in state.calls.iter_mut().enumerate() {
         if call_index == index {
             call.enabled = true;
             call.remove_requested = false;
-            if can_apply {
-                call.kind.apply(player, network_sync);
-                call.active = call.kind.is_active(player);
-                call.active_seen_since_enable = call.active;
-                call.apply_failed = !call.active;
-            } else {
-                call.active = call.kind.is_active(player);
-                call.active_seen_since_enable = false;
-                call.apply_failed = false;
-            }
+            call.kind.apply(player, network_sync);
+            call.active = call.kind.is_active(player);
+            call.active_seen_since_enable = call.active;
+            call.apply_failed = !call.active;
         } else {
             call.kind.remove(player);
             call.enabled = false;
@@ -1245,18 +1334,14 @@ fn enable_only_call(player: &mut PlayerIns, state: &mut EffectsState, index: usi
         }
         state.effect_setting_last_id = Some(id);
         state.effect_setting_last_modified = current_effect_setting_modified();
-        state.last_driver_command = Some(if can_apply {
-            format!("effect-hotkey: selected {label} ({name})")
-        } else {
-            format!(
-                "effect-hotkey: armed {label} ({name}); not applied because {}",
-                effect_application_block_reason(state)
-            )
-        });
+        state.last_driver_command = Some(format!(
+            "effect-hotkey: selected {label} ({name}); network_sync={}",
+            state.network_sync
+        ));
     }
 }
 
-pub(crate) fn poll_live_effect_catalogs(player: &mut PlayerIns, state: &mut EffectsState) {
+pub(crate) fn poll_live_effect_catalogs(player: &mut PlayerIns, state: &mut NetEffectsState) {
     let signature = current_effect_catalog_signature();
     if state.effect_catalogs_signature == signature {
         return;
@@ -1273,18 +1358,26 @@ pub(crate) fn poll_live_effect_catalogs(player: &mut PlayerIns, state: &mut Effe
     let effects_were_on = state.effect_hotkeys_effects_on;
 
     disable_all_calls(player, state);
-    let (mut calls, catalogs, load_error) = build_effect_catalog_state();
-    let selected_effect_index = selected_id.and_then(|id| find_call_index_by_id(&calls, id));
-    let selected_catalog_index = selected_catalog_key
+    let (calls, catalogs, load_error) = build_effect_catalog_state();
+    state.calls = calls;
+    state.catalogs = catalogs;
+    state.load_error = load_error;
+    state.effect_catalogs_signature = signature;
+    state.effect_catalog_live_updates = state.effect_catalog_live_updates.saturating_add(1);
+
+    state.selected_effect_index =
+        selected_id.and_then(|id| find_call_index_by_id(&state.calls, id));
+    state.selected_catalog_index = selected_catalog_key
         .as_deref()
         .and_then(|key| {
-            catalogs
+            state
+                .catalogs
                 .iter()
                 .position(|catalog| catalog.source_key == key)
         })
         .or_else(|| {
-            selected_effect_index.and_then(|selected| {
-                catalogs.iter().position(|catalog| {
+            state.selected_effect_index.and_then(|selected| {
+                state.catalogs.iter().position(|catalog| {
                     catalog
                         .call_indices
                         .iter()
@@ -1292,41 +1385,25 @@ pub(crate) fn poll_live_effect_catalogs(player: &mut PlayerIns, state: &mut Effe
                 })
             })
         })
-        .or_else(|| (!catalogs.is_empty()).then_some(0));
+        .or_else(|| (!state.catalogs.is_empty()).then_some(0));
 
-    state.effect_catalogs_signature = signature;
-    state.effect_catalog_live_updates = state.effect_catalog_live_updates.saturating_add(1);
-    state.calls = std::mem::take(&mut calls);
-    state.catalogs = catalogs;
-    state.load_error = load_error;
-    state.selected_effect_index = selected_effect_index;
-    state.selected_catalog_index = selected_catalog_index;
-    state.effect_hotkeys_effects_on = false;
-    state.last_driver_command = Some(format!(
-        "effect-catalogs: reloaded {} catalog(s)",
-        state.catalogs.len()
-    ));
-
-    if effects_were_on && let Some(index) = selected_effect_index {
+    if effects_were_on && let Some(index) = state.selected_effect_index {
         enable_only_call(player, state, index, false);
     }
+    state.last_driver_command = Some(format!(
+        "effect-catalog: reloaded {} catalogs ({} calls)",
+        state.catalogs.len(),
+        state.calls.len()
+    ));
 }
 
-pub(crate) fn poll_live_effect_setting(player: &mut PlayerIns, state: &mut EffectsState) {
-    let path = effect_setting_path();
-    let Ok(metadata) = fs::metadata(&path) else {
-        state.effect_setting_last_modified = None;
-        return;
-    };
-    let Ok(modified) = metadata.modified() else {
-        return;
-    };
-    if state.effect_setting_last_modified == Some(modified) {
+pub(crate) fn poll_live_effect_setting(player: &mut PlayerIns, state: &mut NetEffectsState) {
+    let modified = current_effect_setting_modified();
+    if state.effect_setting_last_modified == modified {
         return;
     }
-    state.effect_setting_last_modified = Some(modified);
-
-    let Ok(raw_id) = fs::read_to_string(&path) else {
+    state.effect_setting_last_modified = modified;
+    let Ok(raw_id) = fs::read_to_string(effect_setting_path()) else {
         state.last_driver_command = Some("effect-setting: failed to read live setting".to_owned());
         return;
     };
@@ -1366,73 +1443,74 @@ pub(crate) fn poll_live_effect_setting(player: &mut PlayerIns, state: &mut Effec
         persist_selected_catalog(catalog);
     }
 
-    let can_apply = effect_application_allowed(state);
     enable_only_call(player, state, index, false);
     persist_effects_enabled(true);
     state.effect_setting_live_updates = state.effect_setting_live_updates.saturating_add(1);
     if let Some(call) = state.calls.get(index) {
-        state.last_driver_command = Some(if can_apply {
-            format!(
-                "effect-setting: selected {} ({})",
-                call.kind.label(),
-                call.name
-            )
-        } else {
-            format!(
-                "effect-setting: armed {} ({}); not applied because {}",
-                call.kind.label(),
-                call.name,
-                effect_application_block_reason(state)
-            )
-        });
+        state.last_driver_command = Some(format!(
+            "effect-setting: selected {} ({}); network_sync={}",
+            call.kind.label(),
+            call.name,
+            state.network_sync
+        ));
     }
 }
 
-pub(crate) fn process_driver_command(player: &mut PlayerIns, state: &mut EffectsState) {
+pub(crate) fn process_driver_command(player: &mut PlayerIns, state: &mut NetEffectsState) {
     let path = command_path();
     let Ok(raw_command) = fs::read_to_string(&path) else {
         return;
     };
     let _ = fs::remove_file(path);
-
     execute_and_record_driver_command(player, state, raw_command.trim());
 }
 
-pub(crate) fn execute_and_record_driver_command(
+fn execute_and_record_driver_command(
     player: &mut PlayerIns,
-    state: &mut EffectsState,
+    state: &mut NetEffectsState,
     command: &str,
 ) {
     if command.is_empty() {
         return;
     }
-
     state.last_driver_command = Some(match execute_driver_command(player, state, command) {
         Ok(()) => format!("ok: {command}"),
         Err(error) => format!("error: {command}: {error}"),
     });
 }
 
-pub(crate) fn execute_driver_command(
+fn execute_driver_command(
     player: &mut PlayerIns,
-    state: &mut EffectsState,
+    state: &mut NetEffectsState,
     command: &str,
 ) -> Result<(), String> {
     let parts: Vec<_> = command.split_whitespace().collect();
     match parts.as_slice() {
-        ["overlay", "on"] => {
-            state.effect_selector_overlay_visible = true;
+        ["selector", "on"] | ["overlay", "on"] => {
+            state.effect_selector_visible = true;
             sync_effect_selector_input_suppression(true);
             Ok(())
         }
-        ["overlay", "off"] => {
-            state.effect_selector_overlay_visible = false;
+        ["selector", "off"] | ["overlay", "off"] => {
+            state.effect_selector_visible = false;
             sync_effect_selector_input_suppression(false);
             Ok(())
         }
-        ["overlay", "toggle"] => {
-            state.effect_selector_overlay_visible = !state.effect_selector_overlay_visible;
-            sync_effect_selector_input_suppression(state.effect_selector_overlay_visible);
+        ["selector", "toggle"] | ["overlay", "toggle"] => {
+            state.effect_selector_visible = !state.effect_selector_visible;
+            sync_effect_selector_input_suppression(state.effect_selector_visible);
+            Ok(())
+        }
+        ["network", "on"] => {
+            state.network_sync = true;
+            Ok(())
+        }
+        ["network", "off"] => {
+            state.network_sync = false;
+            Ok(())
+        }
+        ["network", "toggle"] => {
+            state.network_sync = !state.network_sync;
             Ok(())
         }
         ["apply_all"] => {
@@ -1466,23 +1544,23 @@ pub(crate) fn execute_driver_command(
                 .enabled;
             set_call_enabled(player, state, index, enabled)
         }
-        _ => Err("expected overlay on|off|toggle, apply_all, remove_all, apply <index>, remove <index>, set <index> on|off, toggle <index>, or load_slot <index> before player load".to_owned()),
+        _ => Err("expected selector/overlay on|off|toggle, network on|off|toggle, apply_all, remove_all, apply <index>, remove <index>, set <index> on|off, or toggle <index>".to_owned()),
     }
 }
 
-pub(crate) fn parse_call_index(index: &str) -> Result<usize, String> {
+fn parse_call_index(index: &str) -> Result<usize, String> {
     index
         .parse()
         .map_err(|error| format!("invalid call index {index:?}: {error}"))
 }
 
-pub(crate) fn set_call_enabled(
+fn set_call_enabled(
     player: &mut PlayerIns,
-    state: &mut EffectsState,
+    state: &mut NetEffectsState,
     index: usize,
     enabled: bool,
 ) -> Result<(), String> {
-    let can_apply = effect_application_allowed(state);
+    let network_sync = state.network_sync;
     let call = state
         .calls
         .get_mut(index)
@@ -1490,16 +1568,10 @@ pub(crate) fn set_call_enabled(
 
     call.enabled = enabled;
     if enabled {
-        if can_apply {
-            call.kind.apply(player, state.network_sync);
-            call.active = call.kind.is_active(player);
-            call.active_seen_since_enable = call.active;
-            call.apply_failed = !call.active;
-        } else {
-            call.active = call.kind.is_active(player);
-            call.active_seen_since_enable = false;
-            call.apply_failed = false;
-        }
+        call.kind.apply(player, network_sync);
+        call.active = call.kind.is_active(player);
+        call.active_seen_since_enable = call.active;
+        call.apply_failed = !call.active;
         state.selected_effect_index = Some(index);
         state.effect_hotkeys_effects_on = true;
         persist_effects_enabled(true);
@@ -1525,18 +1597,7 @@ pub(crate) fn set_call_enabled(
     Ok(())
 }
 
-pub(crate) fn remove_requested_calls(player: &mut PlayerIns, state: &mut EffectsState) {
-    if state.remove_all_requested {
-        for call in &mut state.calls {
-            call.kind.remove(player);
-            call.remove_requested = false;
-            call.active_seen_since_enable = false;
-            call.apply_failed = false;
-        }
-        state.remove_all_requested = false;
-        return;
-    }
-
+pub(crate) fn remove_requested_calls(player: &mut PlayerIns, state: &mut NetEffectsState) {
     for call in &mut state.calls {
         if call.remove_requested {
             call.kind.remove(player);
@@ -1547,21 +1608,17 @@ pub(crate) fn remove_requested_calls(player: &mut PlayerIns, state: &mut Effects
     }
 }
 
-pub(crate) fn apply_selected_calls(player: &mut PlayerIns, state: &mut EffectsState) {
-    if !effect_application_allowed(state) {
-        return;
-    }
+fn apply_selected_calls(player: &mut PlayerIns, state: &mut NetEffectsState) {
     let network_sync = state.network_sync;
     for call in state.calls.iter_mut().filter(|call| call.enabled) {
         call.kind.apply(player, network_sync);
-        // The game call reports nothing, so check the active list directly.
         call.active = call.kind.is_active(player);
         call.active_seen_since_enable |= call.active;
         call.apply_failed = !call.active;
     }
 }
 
-fn apply_pending_enabled_calls(player: &mut PlayerIns, state: &mut EffectsState) {
+fn apply_pending_enabled_calls(player: &mut PlayerIns, state: &mut NetEffectsState) {
     let network_sync = state.network_sync;
     for call in state
         .calls
@@ -1575,10 +1632,7 @@ fn apply_pending_enabled_calls(player: &mut PlayerIns, state: &mut EffectsState)
     }
 }
 
-pub(crate) fn reapply_expired_enabled_calls(player: &mut PlayerIns, state: &mut EffectsState) {
-    if !effect_application_allowed(state) {
-        return;
-    }
+pub(crate) fn reapply_expired_enabled_calls(player: &mut PlayerIns, state: &mut NetEffectsState) {
     let network_sync = state.network_sync;
     for (index, call) in state
         .calls
@@ -1595,7 +1649,7 @@ pub(crate) fn reapply_expired_enabled_calls(player: &mut PlayerIns, state: &mut 
     }
 }
 
-pub(crate) fn refresh_call_status(player: &PlayerIns, state: &mut EffectsState) {
+pub(crate) fn refresh_call_status(player: &PlayerIns, state: &mut NetEffectsState) {
     for call in &mut state.calls {
         call.active = call.kind.is_active(player);
         if call.active {
@@ -1603,4 +1657,62 @@ pub(crate) fn refresh_call_status(player: &PlayerIns, state: &mut EffectsState) 
             call.apply_failed = false;
         }
     }
+}
+
+fn find_call_index_by_id(calls: &[NamedEffectCall], id: i32) -> Option<usize> {
+    calls.iter().position(|call| match call.kind {
+        EffectCallKind::SpEffect { id: call_id } => call_id == id,
+    })
+}
+
+pub(crate) fn selected_catalog_position(state: &NetEffectsState) -> Option<usize> {
+    let selected = state.selected_effect_index?;
+    state
+        .selected_catalog_index
+        .and_then(|catalog_index| state.catalogs.get(catalog_index))
+        .and_then(|catalog| {
+            catalog
+                .call_indices
+                .iter()
+                .position(|call_index| *call_index == selected)
+        })
+}
+
+pub(crate) fn selected_effect_id(state: &NetEffectsState) -> Option<i32> {
+    state
+        .selected_effect_index
+        .and_then(|index| state.calls.get(index))
+        .map(|call| match call.kind {
+            EffectCallKind::SpEffect { id } => id,
+        })
+}
+
+pub(crate) fn call_status_text(call: &NamedEffectCall) -> &'static str {
+    if call.active {
+        "active"
+    } else if call.apply_failed {
+        "apply_failed"
+    } else {
+        "inactive"
+    }
+}
+
+pub(crate) fn dinput_kb_hook_fires() -> usize {
+    input_suppression::dinput_kb_hook_fires()
+}
+
+pub(crate) fn dinput_mouse_hook_fires() -> usize {
+    input_suppression::dinput_mouse_hook_fires()
+}
+
+pub(crate) fn dinput_suppressed_arrow_keys() -> usize {
+    input_suppression::dinput_suppressed_arrow_keys()
+}
+
+pub(crate) fn dinput_queued_selector_keys() -> usize {
+    input_suppression::dinput_queued_selector_keys()
+}
+
+pub(crate) fn dinput_repeated_selector_keys() -> usize {
+    input_suppression::dinput_repeated_selector_keys()
 }

@@ -57,8 +57,6 @@ mod constants;
 #[cfg(windows)]
 mod crashlog;
 #[cfg(windows)]
-mod effects;
-#[cfg(windows)]
 mod experiments;
 #[cfg(windows)]
 mod ffi;

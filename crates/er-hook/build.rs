@@ -1,4 +1,7 @@
-use std::{env, path::Path};
+use std::{
+    env,
+    path::{Path, PathBuf},
+};
 
 // Single cc-compile of the vendored MinHook C source, replacing the three near-identical build
 // scripts that previously lived in each game cdylib (er-effects-rs, er-reload-trace-dll,
@@ -20,7 +23,7 @@ fn main() {
         _ => panic!("Architecture '{arch}' not supported by bundled MinHook"),
     };
 
-    let mh_src_dir = Path::new(&root_dir).join("../../vendor/minhook/src");
+    let mh_src_dir = resolve_minhook_src_dir(Path::new(&root_dir));
 
     cc::Build::new()
         .file(mh_src_dir.join("buffer.c"))
@@ -29,5 +32,34 @@ fn main() {
         .file(mh_src_dir.join(hde))
         .compile("minhook");
 
-    println!("cargo:rerun-if-changed=../../vendor/minhook/src");
+    println!("cargo:rerun-if-changed={}", mh_src_dir.display());
+}
+
+fn resolve_minhook_src_dir(manifest_dir: &Path) -> PathBuf {
+    if let Ok(dir) = env::var("ER_EFFECTS_MINHOOK_SRC_DIR") {
+        let dir = PathBuf::from(dir);
+        if dir.join("buffer.c").exists() {
+            return dir;
+        }
+        panic!(
+            "ER_EFFECTS_MINHOOK_SRC_DIR={} does not contain buffer.c",
+            dir.display()
+        );
+    }
+
+    let repo_local = manifest_dir.join("../../vendor/minhook/src");
+    if repo_local.join("buffer.c").exists() {
+        return repo_local;
+    }
+
+    for ancestor in manifest_dir.ancestors() {
+        let candidate = ancestor.join("vendor/minhook/src");
+        if candidate.join("buffer.c").exists() {
+            return candidate;
+        }
+    }
+
+    panic!(
+        "unable to find vendor/minhook/src (set ER_EFFECTS_MINHOOK_SRC_DIR to the MinHook src directory)"
+    );
 }

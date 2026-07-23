@@ -250,8 +250,6 @@ fn zero_dinput_arrow_keys(data: *mut u8) {
     }
     if cleared != 0 {
         DINPUT_SUPPRESSED_ARROW_KEYS.fetch_add(cleared, Ordering::SeqCst);
-        crate::effects::EFFECT_INPUT_SUPPRESSED_KEYS.fetch_add(cleared, Ordering::SeqCst);
-        crate::effects::EFFECT_INPUT_SUPPRESSED_ARROW_KEYS.fetch_add(cleared, Ordering::SeqCst);
     }
 }
 
