@@ -279,9 +279,17 @@ fn renderdoc_slow_ms() -> f32 {
     if c != u32::MAX {
         return f32::from_bits(c);
     }
-    let v = std::env::var("ER_RENDERDOC_SLOW_MS")
+    // Prefer a GAME-DIR MARKER file (er-effects-rdoc-slow-ms.txt): env does NOT propagate through
+    // me3/Proton to the game process (bd CORRECTION-RenderDoc...), so a marker is the reliable way to set a
+    // low threshold that captures the FAST vanilla/mod reload (16-18ms) for the per-pass GPU A/B diff.
+    let v = std::fs::read_to_string("er-effects-rdoc-slow-ms.txt")
         .ok()
         .and_then(|s| s.trim().parse::<f32>().ok())
+        .or_else(|| {
+            std::env::var("ER_RENDERDOC_SLOW_MS")
+                .ok()
+                .and_then(|s| s.trim().parse::<f32>().ok())
+        })
         .unwrap_or(40.0);
     CACHED.store(v.to_bits(), Ordering::SeqCst);
     v
