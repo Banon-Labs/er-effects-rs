@@ -74,6 +74,61 @@ const PROBE_TOTAL_FRAMES: u64 =
 /// into `source+0x88` and LOG the menu response (job ptr, menuMan+0x1c flags word, tab) so the id ->
 /// action map is read from evidence -- a confirm id changes the job/flags, a tab id sets a flags bit.
 fn probe_menu_tick(im: usize, frame: u64) -> bool {
+    // NATIVE-QUIT mode (er-harness-native-quit.txt): drive System->Quit by the DIRECT NATIVE return-to-title
+    // request (acceptance §3a: native input can't reach the Scaleform menu; reproduce the action by a native
+    // state write). Wait for a brief in-world settle, write menuData+0x5d=1 ONCE, then watch return_title
+    // latch + world sim tear down. If it returns to title, the harness title->Continue phases reload.
+    if crate::game_mem::native_quit_enabled() {
+        let rt = return_title_requested();
+        // Fire once at frame 120 (~2s in-world settle). Keep logging to see the quit-to-title transition.
+        if frame == 120 {
+            let wrote = crate::game_mem::request_return_to_title();
+            harness_log!(
+                "probe NATIVEQUIT f{frame}: wrote menuData+0x5d=1 ok={wrote} (direct native return-to-title)"
+            );
+        }
+        if frame % 15 == 0 || (118..=140).contains(&frame) {
+            harness_log!(
+                "probe NATIVEQUIT f{frame} return_title={} world_sim={} now_loading={} pause_menu={} menu_id=0x{:x}",
+                rt as u8,
+                world_simulating() as u8,
+                now_loading(),
+                pause_menu_open() as u8,
+                top_menu_id(),
+            );
+        }
+        return frame >= PROBE_TOTAL_FRAMES;
+    }
+    // OS-INPUT mode (er-harness-os-input.txt): send focus-gated OS keyboard taps to the pause menu -- the
+    // game's REAL input path that reaches Scaleform (bd SYNTHESIS-pause-menu-is-scaleform; RAM injection
+    // proven dead). Open the menu, then tap VK_DOWN (0x28) every ~30 frames; log the menu state so a
+    // cursor/tab/menu_id change proves OS input drives the Scaleform menu.
+    if crate::game_mem::os_input_enabled() {
+        // DISAMBIGUATION (bd OS-keybd-event-ESCAPE...): does keybd_event route to ER under Wine/Proton AT
+        // ALL? Test with an OBSERVABLE in-world effect FIRST -- HOLD W (0x57, forward) for frames 60..360
+        // (~5s) while in-world, BEFORE opening any menu. The run's OBSERVE loop logs havok position; if the
+        // player MOVES during the hold window, keybd_event routes (and the menu no-response is a wrong-key
+        // problem). If the player does NOT move, OS keyboard is fundamentally dead in this env.
+        // CONTINUOUS hold of W (0x57) from frame 60 onward, re-asserted every 30 frames, NEVER released --
+        // so the STABLE-tail havok (well past the load transition) is measured WHILE W is held. If the
+        // player position stays frozen during a late continuous W-hold, keybd_event definitively does not
+        // route to ER under Wine (the load-transition confound is removed by measuring the frozen tail).
+        const VK_W: u8 = 0x57;
+        let mut sent = 0u8;
+        if frame >= 60 && frame % 30 == 0 {
+            sent = crate::win32::send_key_down(VK_W) as u8;
+        }
+        if frame % 30 == 0 {
+            harness_log!(
+                "probe OSMOVE f{frame} fg={} holdW={sent} pause_menu={} menu_id=0x{:x}",
+                crate::win32::er_window_is_foreground() as u8,
+                pause_menu_open() as u8,
+                top_menu_id(),
+            );
+        }
+        // Never returns the "done" until the cap; leave W held the whole in-world window.
+        return frame >= PROBE_TOTAL_FRAMES;
+    }
     // HOLD-ID mode: if er-harness-probe-hold-id.txt sets a vk-id, HOLD only that id (no sweep) to isolate
     // one index's menu action -- e.g. confirm index 34 (id 1034) drives return-to-title (bd NEXT-inworld-
     // menu-idmap-recovery-plan). Stop injecting the instant return_title latches so the quit completes.

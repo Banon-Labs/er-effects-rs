@@ -36,6 +36,61 @@ unsafe extern "system" {
     ) -> i32;
 }
 
+#[link(name = "user32")]
+unsafe extern "system" {
+    pub fn keybd_event(vk: u8, scan: u8, flags: u32, extra: usize);
+    pub fn GetForegroundWindow() -> *mut c_void;
+    pub fn GetWindowThreadProcessId(hwnd: *mut c_void, pid: *mut u32) -> u32;
+}
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    pub fn GetCurrentProcessId() -> u32;
+}
+
+/// True when the FOREGROUND window belongs to THIS process (i.e. the ER game window is focused). The
+/// focus gate for OS-synthesized input (bd SYNTHESIS-pause-menu-is-scaleform): keyboard events are
+/// system-wide and route to the focused window, so we only ever send when ER is foreground -- never into
+/// the user's other windows.
+pub fn er_window_is_foreground() -> bool {
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.is_null() {
+        return false;
+    }
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
+    pid != 0 && pid == unsafe { GetCurrentProcessId() }
+}
+
+const KEYEVENTF_KEYUP: u32 = 0x0002;
+
+/// Send ONE OS keyboard tap (down+up) of virtual-key `vk`, but ONLY when the ER window is foreground
+/// (`er_window_is_foreground`). Returns true if the key was sent. Real input path -> reaches Scaleform.
+pub fn send_key_tap(vk: u8) -> bool {
+    if !er_window_is_foreground() {
+        return false;
+    }
+    unsafe {
+        keybd_event(vk, 0, 0, 0);
+        keybd_event(vk, 0, KEYEVENTF_KEYUP, 0);
+    }
+    true
+}
+
+/// Focus-gated OS key DOWN (hold) -- for a sustained press (movement test: hold W). Returns true if sent.
+pub fn send_key_down(vk: u8) -> bool {
+    if !er_window_is_foreground() {
+        return false;
+    }
+    unsafe { keybd_event(vk, 0, 0, 0) };
+    true
+}
+
+/// Focus-gated OS key UP (release) -- pairs with `send_key_down`. Always sent (release is safe even if the
+/// window lost focus mid-hold, to avoid a stuck key).
+pub fn send_key_up(vk: u8) {
+    unsafe { keybd_event(vk, 0, KEYEVENTF_KEYUP, 0) };
+}
+
 /// Read a pointer-sized value from this process's own address space. Uses `ReadProcessMemory` on the
 /// pseudo-handle (never faults on an unmapped/garbage pointer, unlike a raw deref) -- the same passive
 /// read idiom `er-reload-trace-dll` uses.

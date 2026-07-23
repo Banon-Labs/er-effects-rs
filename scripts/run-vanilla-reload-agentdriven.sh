@@ -115,6 +115,8 @@ echo -n "${DRIVE_MODE:-full}" >"$GAME_DIR/er-harness-drive-mode.txt"
 # PROBE HOLD-ID (diagnostic): with DRIVE_MODE=probe, HOLD_VKID=<1000..1080> holds one vk-id instead of
 # sweeping, to isolate which index drives a menu action (e.g. HOLD_VKID=1034 tests return-to-title).
 [[ -n "${HOLD_VKID:-}" ]] && echo -n "${HOLD_VKID}" >"$GAME_DIR/er-harness-probe-hold-id.txt"
+[[ -n "${OS_INPUT:-}" ]] && : >"$GAME_DIR/er-harness-os-input.txt"
+[[ -n "${NATIVE_QUIT:-}" ]] && : >"$GAME_DIR/er-harness-native-quit.txt"
 # FORCE-DRIVE: the harness normally stands down to Passive when the product DLL is loaded (companion
 # design). This vanilla capture loads the product for its telemetry but needs the HARNESS to drive, so
 # override that stand-down (bd VANILLA-BASELINE-blocked-harness-forces-passive-when-product-loaded).
@@ -147,7 +149,7 @@ cleanup() {
 	done
 	# Restore: remove vanilla markers so a later product run is not accidentally telemetry-only / driven.
 	rm -f "$GAME_DIR/er-effects-telemetry-only.txt" "$GAME_DIR/er-harness-drive-mode.txt" \
-		"$GAME_DIR/er-harness-force-drive.txt" "$GAME_DIR/er-harness-probe-hold-id.txt" 2>/dev/null
+		"$GAME_DIR/er-harness-force-drive.txt" "$GAME_DIR/er-harness-probe-hold-id.txt" "$GAME_DIR/er-harness-os-input.txt" "$GAME_DIR/er-harness-native-quit.txt" 2>/dev/null
 	[[ -f "$ARTIFACT_DIR/er-effects.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-effects.toml.bak" "$GAME_DIR/er-effects.toml"
 }
 trap cleanup EXIT

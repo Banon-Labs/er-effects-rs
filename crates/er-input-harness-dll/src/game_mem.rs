@@ -316,6 +316,37 @@ pub fn read_drive_mode_flag() -> String {
 /// `probe` drive mode, HOLD that single vk-id (instead of sweeping the whole range) so one index's
 /// in-world menu action can be isolated -- e.g. confirm which index drives return-to-title. 0/absent =
 /// normal sweep. Diagnostic only (bd NEXT-inworld-menu-idmap-recovery-plan).
+/// OS-INPUT test mode (CWD file `er-harness-os-input.txt`): in `probe` drive mode, instead of RAM
+/// injection, send focus-gated OS keyboard taps (VK_DOWN) to the pause menu -- the game's REAL input path
+/// that reaches Scaleform (bd SYNTHESIS-pause-menu-is-scaleform). Tests whether OS input drives the menu.
+pub fn os_input_enabled() -> bool {
+    std::path::Path::new("er-harness-os-input.txt").exists()
+}
+
+/// NATIVE-QUIT test mode (CWD file `er-harness-native-quit.txt`): drive System->Quit by the DIRECT NATIVE
+/// request instead of menu input (acceptance §3a: native input cannot reach the Scaleform menu, so the
+/// action is reproduced by a direct native state write). See `request_return_to_title`.
+pub fn native_quit_enabled() -> bool {
+    std::path::Path::new("er-harness-native-quit.txt").exists()
+}
+
+/// DIRECT NATIVE return-to-title: write `menuData+0x5d = 1`, the return-to-title request byte the game's
+/// own quit-functor / idle-timeout sets (proven: `return_title_requested()` reads exactly this and latches
+/// on the game's idle timeout). This reproduces the System->Quit result without any menu input. Returns
+/// true if the byte was written (fault-safe via WriteProcessMemory).
+pub fn request_return_to_title() -> bool {
+    let im = input_mgr();
+    if im == 0 {
+        return false;
+    }
+    let Some(md) =
+        (unsafe { read_usize(im + CS_MENU_MAN_MENU_DATA_OFFSET) }).filter(|p| *p >= HEAP_LO)
+    else {
+        return false;
+    };
+    unsafe { crate::win32::write_u8(md + MENU_DATA_RETURN_TITLE_5D_OFFSET, 1) }
+}
+
 pub fn probe_hold_id() -> u32 {
     std::fs::read_to_string("er-harness-probe-hold-id.txt")
         .ok()
