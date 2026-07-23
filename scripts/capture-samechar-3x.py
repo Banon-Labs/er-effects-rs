@@ -175,6 +175,14 @@ def snap(t: dict) -> dict:
         # PRESENT DURATION (2026-07-21): us inside the original Present. ~tens-of-ms = present-block
         # (compositor/vsync throttle); ~1-2ms with a 50ms frame = real per-frame WORK stall.
         "oracle_present_call_us",
+        # PRESENT CADENCE (2026-07-22, bd GPU-timestamp-semaphore-split-reload-20fps-residual): the
+        # reload 20fps is 100% flip/present residual (fixed_spf cap + dynamic lock REFUTED; target=60).
+        # sync_interval = the SyncInterval the GAME passes to Present (3 => deliberate 20fps throttle;
+        # 1 => wants 60 but can't keep up). refresh_per_present_x100 = observed refreshes/present from
+        # GetFrameStatistics (300 => vsync-locked to every 3rd vblank). qpc_delta_us = DXGI present spacing.
+        "oracle_present_sync_interval",
+        "oracle_present_refresh_per_present_x100",
+        "oracle_present_qpc_delta_us",
         # COMPOSITE (2026-07-22): DLL boot-view composite duration in present detour + boot-view epoch
         # state. composite ~tens-of-ms in-world on reloads + bv_epoch_live != current_epoch => the
         # boot-view composite never stopped for the reload => fixable DLL bug.

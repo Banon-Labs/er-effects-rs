@@ -120,6 +120,17 @@ def analyze(path: Path, settle: int) -> None:
                 print(f"   {k[7:]:18s} mean={s['mean']/1000:7.3f} median={s['median']/1000:7.3f} p95={s['p95']/1000:7.3f} max={s['max']/1000:7.3f}")
         if resid_s:
             print(f"   {'residual(flip/gpu)':18s} mean={resid_s['mean']:7.3f} median={resid_s['median']:7.3f} p95={resid_s['p95']:7.3f} max={resid_s['max']:7.3f}")
+        # present-cadence semaphores (2026-07-22): sync_interval = requested vblank interval
+        # (3 => deliberate 20fps throttle); refresh_per_present = observed refreshes/present /100.
+        from collections import Counter as _C
+        si = _C(r.get("oracle_present_sync_interval") for r in settled if r.get("oracle_present_sync_interval") is not None)
+        rpp = _stats([_f(r.get("oracle_present_refresh_per_present_x100")) for r in settled])
+        qpc = _stats([_f(r.get("oracle_present_qpc_delta_us")) for r in settled])
+        if si or rpp or qpc:
+            rpp_s = f"{rpp['median']/100:.2f}" if rpp else "n/a"
+            qpc_s = f"{qpc['median']:.0f}us" if qpc else "n/a"
+            print(f"   --- present cadence ---")
+            print(f"   sync_interval(requested)={dict(si)}  refresh/present(observed)={rpp_s}  qpc_delta={qpc_s}")
         # context (last value in window)
         ctx = {k: settled[-1].get(k) for k in CONTEXT if k in settled[-1]}
         print(f"   ctx: {ctx}\n")

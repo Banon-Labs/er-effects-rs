@@ -30,6 +30,26 @@ pub static PRESENT_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
 /// CPU/GPU per-frame WORK stall (present fast ~1-2ms but the frame is still 50ms). bd
 /// FOCUS-AB-falsifies-unfocused-throttle...next-present-duration-2026-07-21.
 pub static PRESENT_CALL_LAST_US: AtomicUsize = AtomicUsize::new(0);
+/// The `SyncInterval` argument the GAME passes to its own Present(this, SyncInterval, Flags) call,
+/// latched in the present detour. DECISIVE for the reload 20fps: SyncInterval=3 => the game DELIBERATELY
+/// requests present-every-3rd-vblank (a 20fps loading/low-priority throttle); =1 while frames are still
+/// 3 vblanks apart => the game requests 60 but the GPU cannot keep up (render-bound). 0 = no-vsync.
+/// bd GPU-timestamp-semaphore-split-reload-20fps-residual-2026-07-22.
+pub static PRESENT_SYNC_INTERVAL_LAST: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// From IDXGISwapChain::GetFrameStatistics on the GAME swapchain: display-refreshes elapsed per present,
+/// x100 (ratio ΔSyncRefreshCount/ΔPresentCount). ~300 (=3.00) on a 20fps flip-model reload means the
+/// swapchain is vsync-locked to every 3rd vblank; ~100 (=1.00) means one present per vblank. 0 = no
+/// stats yet / DISJOINT. Companion to PRESENT_SYNC_INTERVAL_LAST (requested) -- this is the OBSERVED
+/// cadence. bd GPU-timestamp-semaphore-split-reload-20fps-residual-2026-07-22.
+pub static PRESENT_REFRESH_PER_PRESENT_X100: AtomicUsize = AtomicUsize::new(0);
+/// Wall-clock microseconds between the last two GetFrameStatistics SyncQPCTime samples (present-to-present
+/// spacing straight from DXGI, independent of our Instant timing). ~49920 on the pinned reload frame.
+pub static PRESENT_QPC_DELTA_US: AtomicUsize = AtomicUsize::new(0);
+/// Internal previous-sample state for the GetFrameStatistics deltas (not emitted): last PresentCount,
+/// last SyncRefreshCount, last SyncQPCTime (QPC ticks, low bits).
+pub static PRESENT_STATS_PREV_PRESENT_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub static PRESENT_STATS_PREV_SYNC_REFRESH: AtomicUsize = AtomicUsize::new(0);
+pub static PRESENT_STATS_PREV_QPC: AtomicU64 = AtomicU64::new(0);
 /// Microseconds spent in the DLL's boot-view composite (composite_on_game_swapchain) in the present
 /// detour, BEFORE the original Present. If this is ~tens of ms in-world on reloads it is the per-frame
 /// WORK stall (present_call_us is fast but the composite is invisible to it, yet counts in the

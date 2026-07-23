@@ -134,6 +134,62 @@ const FIND_STAGE_ACCEPTED_QI: usize = 11;
 /// Detour for `IDXGISwapChain::Present(this, SyncInterval, Flags)`. Phase 1: log-only, then tail-call the
 /// original. `this` IS the game's swapchain (we never created it), so a real overlay draws onto its
 /// current backbuffer here. Must never panic (runs on the game's render thread every frame).
+/// Cached QueryPerformanceCounter frequency (ticks/sec) for converting DXGI SyncQPCTime deltas to us.
+fn qpc_frequency() -> u64 {
+    static FREQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let f = FREQ.load(Ordering::Relaxed);
+    if f != 0 {
+        return f;
+    }
+    let mut v = 0i64;
+    let _ = unsafe { windows::Win32::System::Performance::QueryPerformanceFrequency(&mut v) };
+    let v = v.max(0) as u64;
+    FREQ.store(v, Ordering::Relaxed);
+    v
+}
+
+/// Record the present-cadence semaphores for the GAME swapchain (read-only; never panics): the game's
+/// requested `SyncInterval`, plus the OBSERVED cadence from IDXGISwapChain::GetFrameStatistics
+/// (display-refreshes/present x100 and present-to-present QPC spacing). Splits a deliberate 20fps
+/// present throttle (SyncInterval=3) from GPU-can't-keep-up (SyncInterval=1 but 3 vblanks/present).
+/// bd GPU-timestamp-semaphore-split-reload-20fps-residual-2026-07-22.
+unsafe fn record_present_frame_stats(this: *mut c_void, sync: u32) {
+    if this as usize != GAME_SWAPCHAIN.load(Ordering::SeqCst) {
+        return;
+    }
+    er_telemetry::counters::PRESENT_SYNC_INTERVAL_LAST.store(sync as usize, Ordering::SeqCst);
+    let Some(sc) = (unsafe { IDXGISwapChain::from_raw_borrowed(&this) }) else {
+        return;
+    };
+    // GetFrameStatistics returns DXGI_ERROR_FRAME_STATISTICS_DISJOINT until a stable present series
+    // exists; treat any error as "no sample this frame" and leave the prior oracle values in place.
+    let mut stats = windows::Win32::Graphics::Dxgi::DXGI_FRAME_STATISTICS::default();
+    if unsafe { sc.GetFrameStatistics(&mut stats) }.is_err() {
+        return;
+    }
+    let pc = stats.PresentCount as usize;
+    let sr = stats.SyncRefreshCount as usize;
+    let qpc = stats.SyncQPCTime.max(0) as u64;
+    let prev_pc =
+        er_telemetry::counters::PRESENT_STATS_PREV_PRESENT_COUNT.swap(pc, Ordering::SeqCst);
+    let prev_sr =
+        er_telemetry::counters::PRESENT_STATS_PREV_SYNC_REFRESH.swap(sr, Ordering::SeqCst);
+    let prev_qpc = er_telemetry::counters::PRESENT_STATS_PREV_QPC.swap(qpc, Ordering::SeqCst);
+    let dpc = pc.wrapping_sub(prev_pc);
+    let dsr = sr.wrapping_sub(prev_sr);
+    if dpc > 0 && dpc < 1000 {
+        er_telemetry::counters::PRESENT_REFRESH_PER_PRESENT_X100
+            .store(dsr.wrapping_mul(100) / dpc, Ordering::SeqCst);
+    }
+    if prev_qpc != 0 && qpc > prev_qpc {
+        let freq = qpc_frequency();
+        if freq > 0 {
+            let us = ((qpc - prev_qpc) as u128 * 1_000_000 / freq as u128) as usize;
+            er_telemetry::counters::PRESENT_QPC_DELTA_US.store(us, Ordering::SeqCst);
+        }
+    }
+}
+
 unsafe extern "system" fn present_hook(this: *mut c_void, sync: u32, flags: u32) -> i32 {
     let hits = PRESENT_HOOK_HITS.fetch_add(1, Ordering::SeqCst) + 1;
     if hits == 1 {
@@ -165,6 +221,7 @@ unsafe extern "system" fn present_hook(this: *mut c_void, sync: u32, flags: u32)
         let r = unsafe { f(this, sync, flags) };
         er_telemetry::counters::PRESENT_CALL_LAST_US
             .store(t0.elapsed().as_micros() as usize, Ordering::SeqCst);
+        unsafe { record_present_frame_stats(this, sync) };
         r
     } else {
         0
@@ -205,6 +262,7 @@ unsafe extern "system" fn present1_hook(
         let r = unsafe { f(this, sync, flags, params) };
         er_telemetry::counters::PRESENT_CALL_LAST_US
             .store(t0.elapsed().as_micros() as usize, Ordering::SeqCst);
+        unsafe { record_present_frame_stats(this, sync) };
         r
     } else {
         0
