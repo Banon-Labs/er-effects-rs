@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import os
 import statistics
 import subprocess
 import sys
@@ -737,6 +738,20 @@ def main() -> int:
         default=140.0,
         help="observe-only window before teardown (default 140s).",
     )
+    ap.add_argument(
+        "--steady-window-seconds",
+        type=float,
+        default=float(os.environ.get("STEADY_WINDOW_SECONDS", "0") or "0"),
+        help=(
+            "PARITY-MEASUREMENT mode (goal 3c, acceptance strengthened 2026-07-22): after each load "
+            "reaches can_move, HOLD this many seconds of movable steady-state before driving the next "
+            "load (and before declaring final-epoch success), so the telemetry captures a SUSTAINED "
+            "post-readiness window per load for the vanilla-vs-mod semaphore diff. >0 also DISABLES the "
+            "eager fps-dip teardown, which fires during a reload's LOADING ramp (high task_delta because "
+            "loading, not steady-state) and tears down before the window can form. 0=off (env "
+            "STEADY_WINDOW_SECONDS)."
+        ),
+    )
     # DETERMINISTIC SWITCH DRIVER (2026-07-21, bd DETERMINISTIC-switch-trigger-recipe): drive each
     # subsequent load by WRITING the product's control file (er-effects-switch-slot.txt, +
     # er-effects-switch-save-file.txt for cross-save) once the current load proves movement -- instead of
@@ -918,7 +933,11 @@ def main() -> int:
             # NO can_move gate: the reload's 20fps render-bound state has render_ready=False -> can_move
             # never latches, so gating on it rode past 155s at 20fps (run7). task_delta is the frame time
             # regardless of movability; a reload rendering sustained sub-target IS the answer.
-            if cur_ep >= 1:
+            # PARITY-MEASUREMENT mode (--steady-window-seconds > 0) DISABLES this eager teardown: it fires
+            # during the reload's loading ramp (task_delta is high while loading, not because of the
+            # steady-state dip) and prevents the sustained post-readiness window from forming (bd
+            # LOBOTOMIZE-single-core-contention-...: premature early-boot teardown is the one real hazard).
+            if cur_ep >= 1 and args.steady_window_seconds <= 0:
                 _td_raw = s.get("oracle_flip_task_delta")
                 try:
                     _td = float(_td_raw) if _td_raw is not None else 0.0
@@ -947,11 +966,19 @@ def main() -> int:
             # SINGLE-PRESS DRIVE (user 2026-07-22): the instant control is confirmed for this epoch
             # (harness_verdict==1 = one forward-press moved the char), trigger the NEXT load. Do NOT
             # require a sustained 3s move window / repeat the movement burst -- one press = go.
+            # PARITY-MEASUREMENT hold (goal 3c): in steady mode, do not advance to the next load until
+            # THIS epoch has held can_move for --steady-window-seconds (a sustained post-readiness window
+            # is now in the telemetry). Off (<=0) preserves the legacy single-press-advances behavior.
+            steady_held = args.steady_window_seconds <= 0 or (
+                cur_ep in epoch_canmove_start
+                and (now - epoch_canmove_start[cur_ep]) >= args.steady_window_seconds
+            )
             if (
                 switch_plan
                 and next_switch_idx < len(switch_plan)
                 and cur_ep == next_switch_idx
                 and harness_verdict == 1
+                and steady_held
             ):
                 _slot, _save_file = switch_plan[next_switch_idx]
                 write_switch_trigger(args.game_dir, _slot, _save_file)
@@ -964,7 +991,7 @@ def main() -> int:
                 next_switch_idx += 1
             # Success = the FINAL planned load proves movement AND holds the 3s window (final_epoch =
             # len(plan) when driving, else the legacy FINAL_RELOAD_EPOCH).
-            if harness_verdict == 1 and cur_ep >= final_epoch:
+            if harness_verdict == 1 and cur_ep >= final_epoch and steady_held:
                 result = f"HARNESS_MOVE_PROVEN_harness_moved_char_epoch{deser}"
                 break
             # IMPRINT CAPTURE (boot_to_control phase): end the boot imprint the INSTANT control is
