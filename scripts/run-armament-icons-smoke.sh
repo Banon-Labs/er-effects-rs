@@ -78,14 +78,20 @@ PROFILE="$ARTIFACT_DIR/armament-icons-smoke.me3"
 	echo
 	echo '[[natives]]'
 	echo "path = '$(win_path "$TELEM_GAMEDIR")'"
-	echo
-	echo '[[natives]]'
-	echo "path = '$(win_path "$BADGE_GAMEDIR")'"
+	# BADGE=0 omits the badge DLL entirely -> VANILLA baseline capture (no glyph) for the
+	# pixel-diff oracle. Default includes it.
+	if [[ "${BADGE:-1}" != "0" ]]; then
+		echo
+		echo '[[natives]]'
+		echo "path = '$(win_path "$BADGE_GAMEDIR")'"
+	fi
 } >"$PROFILE"
 
 # --- wiring markers: harness drive mode (MODE=equip|inv, default inv -- the Inventory tabs
 #     are the user's primary target and their cells carry the bottom-left ArtsIcon child) ---
 echo -n "${MODE:-inv}" >"$GAME_DIR/er-harness-drive-mode.txt"
+# FORCE_ICON=<u16>: diagnostic -- draw a fixed visible icon into every badge (locator / oracle proof).
+export ER_ARMAMENT_ICONS_FORCE_ICON="${FORCE_ICON:-}"
 # NO save redirect: pure APPDATA vanilla save (whatever character is last-active).
 [[ -f "$GAME_DIR/er-effects.toml" ]] && mv -f "$GAME_DIR/er-effects.toml" "$ARTIFACT_DIR/er-effects.toml.bak"
 # Sweep stale logs/markers so a prior run cannot pollute this one.

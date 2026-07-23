@@ -53,6 +53,10 @@ const MENU_GAITEM_SWORD_ARTS_RESOLVER_RVA: usize = 0x849880;
 /// `{ u32 paramId @0x0, SwordArtsParam* row @0x8 }`, row null when the id misses.
 /// dump 0x140d50d70 -> deobf 0x140d50cc0 (-0xb0). CALL target.
 const LOOKUP_SWORD_ARTS_PARAM_RVA: usize = 0xd50cc0;
+/// `FUN_1408487d0(MenuGaitem*) -> u32 iconId` -- the tile's own item icon id (the main
+/// ItemIcon). Used by the mirror-item-icon diagnostic to draw a guaranteed-visible glyph
+/// into the badge for oracle rect-location. dump 0x1408487d0 -> deobf 0x1408486e0 (-0xf0).
+const MENU_GAITEM_ICON_ID_RVA: usize = 0x8486e0;
 /// SwordArtsParam row: skill iconId is the u16 at row +0x1A. Ground-truthed to the
 /// game's OWN HUD skill-icon builder CS::CSFeManImp::UpdatePlayerComponents (dump
 /// 0x140772b70): it reads `*(u16*)(swordArtsRow + offsetof(_EQUIP_PARAM_GOODS_ST,
@@ -110,6 +114,13 @@ static BADGE_UNBOUND: AtomicU64 = AtomicU64::new(0);
 /// Weapon tiles that reached the icon stage (badge-draw attempts). Sampling ordinal --
 /// the raw TilePopulate fire count is dominated by early non-weapon/empty tiles.
 static BADGE_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
+/// Sentinel: no forced icon (use the real skill icon).
+const FORCE_ICON_NONE: u32 = u32::MAX;
+/// Sentinel (ER_ARMAMENT_ICONS_FORCE_ICON=mirror): draw the tile's own item icon into the badge.
+const FORCE_ICON_MIRROR: u32 = u32::MAX - 1;
+/// Diagnostic forced icon id (ER_ARMAMENT_ICONS_FORCE_ICON), or FORCE_ICON_NONE / _MIRROR.
+static FORCE_ICON_ID: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(FORCE_ICON_NONE);
 
 fn log_message(args: fmt::Arguments<'_>) {
     let path = game_directory_path()
@@ -152,11 +163,25 @@ fn spawn_install_thread() {
             use eldenring::cs::CSTaskImp;
             use fromsoftware_shared::FromStatic;
 
+            if let Ok(v) = std::env::var("ER_ARMAMENT_ICONS_FORCE_ICON") {
+                let v = v.trim();
+                if v.eq_ignore_ascii_case("mirror") {
+                    FORCE_ICON_ID.store(FORCE_ICON_MIRROR, Ordering::Relaxed);
+                } else if let Ok(id) = v.parse::<u32>() {
+                    FORCE_ICON_ID.store(id, Ordering::Relaxed);
+                }
+            }
+            let forced = FORCE_ICON_ID.load(Ordering::Relaxed);
             log_message(format_args!(
                 "attach: milestone-2 badge draw (TilePopulate hook -> ArtsIcon un-hide + icon set); \
-                 icon_setter_rva=0x{ICON_SETTER_RVA:x} \
+                 force_icon={} icon_setter_rva=0x{ICON_SETTER_RVA:x} \
                  resolver_rva=0x{MENU_GAITEM_SWORD_ARTS_RESOLVER_RVA:x} \
-                 lookup_sword_arts_param_rva=0x{LOOKUP_SWORD_ARTS_PARAM_RVA:x}"
+                 lookup_sword_arts_param_rva=0x{LOOKUP_SWORD_ARTS_PARAM_RVA:x}",
+                match forced {
+                    FORCE_ICON_NONE => "off".to_owned(),
+                    FORCE_ICON_MIRROR => "mirror".to_owned(),
+                    id => id.to_string(),
+                }
             ));
             // Wait for the game's task manager the way the sibling DLLs do (yield, no sleep):
             // its readiness implies the game image and its statics are mapped.
@@ -305,8 +330,24 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
         }
         return;
     }
-    let icon_id =
+    let real_icon_id =
         unsafe { *((lookup_result.row + SWORD_ARTS_PARAM_ICON_ID_OFFSET) as *const u16) } as u32;
+    // DIAGNOSTIC-ONLY override (ER_ARMAMENT_ICONS_FORCE_ICON=<u16 menu icon id>): draw a fixed,
+    // guaranteed-visible icon into every badge instead of the skill icon. Used to (a) locate the
+    // badge's on-screen rect via a locator-vs-vanilla pixel diff and (b) prove the pixel path flips
+    // the diff oracle to SUCCESS. NOT product behavior -- product uses the real skill icon.
+    let forced = FORCE_ICON_ID.load(Ordering::Relaxed);
+    let icon_id = if forced == FORCE_ICON_MIRROR {
+        // Mirror the tile's own item icon (guaranteed visible) into the badge -- locator for the
+        // pixel oracle's rect discovery and a proof that the pixel path is visible.
+        type IconIdFn = unsafe extern "system" fn(usize) -> u32;
+        let resolver: IconIdFn = unsafe { std::mem::transmute(base + MENU_GAITEM_ICON_ID_RVA) };
+        unsafe { resolver(gaitem) }
+    } else if forced != FORCE_ICON_NONE {
+        forced
+    } else {
+        real_icon_id
+    };
     // Badge-attempt ordinal (weapon tiles that reached the icon stage). The first N raw
     // TilePopulate fires are non-weapon/empty tiles that return early, so sampling on the
     // raw fire count never captures a weapon tile -- sample on this instead.
