@@ -271,6 +271,11 @@ enum Phase {
     Quit,
     /// NO input: the native teardown to title. EFFECT: world stopped simulating AND load FSM idle.
     QuitTeardown,
+    /// DIRECT NATIVE System->Quit (acceptance §3a, bd BREAKTHROUGH-native-return-to-title): native input
+    /// can't reach the Scaleform menu, so write menuData+0x5d=1 (the game's own return-title request byte)
+    /// each frame. EFFECT: return-title requested (return_title_requested()==1). Replaces the whole input-
+    /// based OpenPauseMenu/NavToOptionSetting/TabToQuit/Quit nav.
+    NativeQuit,
     /// DIAGNOSTIC (mode `probe`): in-world with the pause menu open, inject a LABELED input sweep (one
     /// eventId at a time, well spaced) and log the observables each frame, to empirically find which
     /// injected keystate actually moves the in-world menu. Never derails; advances at its budget.
@@ -289,6 +294,7 @@ impl Phase {
             Phase::TabToQuit => "tab_to_quit",
             Phase::Quit => "quit",
             Phase::QuitTeardown => "quit_teardown",
+            Phase::NativeQuit => "native_quit",
             Phase::ProbeMenu => "probe_menu",
         }
     }
@@ -300,7 +306,7 @@ impl Phase {
             Phase::Continue => CONTINUE_BUDGET,
             Phase::WaitLoadIn => LOAD_BUDGET,
             Phase::OpenPauseMenu | Phase::NavToOptionSetting | Phase::TabToQuit => NAV_BUDGET,
-            Phase::Quit | Phase::QuitTeardown => QUIT_BUDGET,
+            Phase::Quit | Phase::QuitTeardown | Phase::NativeQuit => QUIT_BUDGET,
             Phase::ProbeMenu => PROBE_TOTAL_FRAMES,
         }
     }
@@ -351,6 +357,12 @@ impl Phase {
                 return_title_requested() || !sem.world_sim
             }
             Phase::QuitTeardown => !sem.world_sim && sem.load_fsm <= 0 && frame > TAP_CYCLE_FRAMES,
+            Phase::NativeQuit => {
+                // Direct native return-to-title: write menuData+0x5d=1 each frame until the request latches
+                // (bd BREAKTHROUGH-native-return-to-title). No menu input. EFFECT: return_title requested.
+                crate::game_mem::request_return_to_title();
+                return_title_requested()
+            }
             Phase::ProbeMenu => probe_menu_tick(im, frame),
         };
         if advanced {
@@ -417,21 +429,14 @@ impl DriveMode {
             Phase::Continue,
             Phase::WaitLoadIn,
         ];
-        // The native quit-to-menu flow (each keystate step gated on its own pane semaphore).
-        const QUIT_FLOW: [Phase; 5] = [
-            Phase::OpenPauseMenu,
-            Phase::NavToOptionSetting,
-            Phase::TabToQuit,
-            Phase::Quit,
-            Phase::QuitTeardown,
-        ];
-        // reload: assumes already in-world; quit-to-menu -> reload Continue.
+        // The native quit-to-title flow: DIRECT NATIVE return-to-title (menuData+0x5d=1, bd BREAKTHROUGH-
+        // native-return-to-title) -- input can't reach the Scaleform menu, so no OpenPauseMenu/Nav/Tab/Quit
+        // input nav; write the native request, then wait for the native teardown to title.
+        const QUIT_FLOW: [Phase; 2] = [Phase::NativeQuit, Phase::QuitTeardown];
+        // reload: assumes already in-world; native quit-to-title -> reload Continue.
         const RELOAD: &[Phase] = &[
             QUIT_FLOW[0],
             QUIT_FLOW[1],
-            QUIT_FLOW[2],
-            QUIT_FLOW[3],
-            QUIT_FLOW[4],
             Phase::PressAnyButton,
             Phase::Continue,
             Phase::WaitLoadIn,
@@ -444,9 +449,6 @@ impl DriveMode {
             Phase::WaitLoadIn,
             QUIT_FLOW[0],
             QUIT_FLOW[1],
-            QUIT_FLOW[2],
-            QUIT_FLOW[3],
-            QUIT_FLOW[4],
             Phase::PressAnyButton,
             Phase::Continue,
             Phase::WaitLoadIn,
