@@ -145,7 +145,9 @@ python3 "$REPO_ROOT/scripts/armament-icons-watch.py" \
 	--settle-seconds "$SETTLE_SECONDS" \
 	--pre-er-pids "$PRE_ER_PIDS" \
 	--pre-me3-pids "$PRE_ME3_PIDS" \
-	--repo-root "$REPO_ROOT"
+	--repo-root "$REPO_ROOT" \
+	${BASELINE_PNG:+--baseline "$BASELINE_PNG"} \
+	${STAGE_BOX:+--stage-box "$STAGE_BOX"}
 RC=$?
 
 # The watcher already tore the game down; disable the safety-net trap and append DLL

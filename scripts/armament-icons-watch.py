@@ -99,10 +99,19 @@ def main() -> int:
     ap.add_argument("--game-dir", required=True, type=Path)
     ap.add_argument("--artifact-dir", required=True, type=Path)
     ap.add_argument("--max-seconds", required=True, type=float)
-    ap.add_argument("--settle-seconds", type=float, default=10.0)
+    ap.add_argument("--settle-seconds", type=float, default=12.0,
+                    help="keep the game up this long after the decisive semaphore before teardown")
+    ap.add_argument("--capture-settle-seconds", type=float, default=6.0,
+                    help="wait this long after the menu opens before the first capture (fade-in)")
     ap.add_argument("--pre-er-pids", default="")
     ap.add_argument("--pre-me3-pids", default="")
     ap.add_argument("--repo-root", type=Path, default=Path.cwd())
+    # Pixel-diff oracle (optional): when both are given, the final verdict is the pixel
+    # comparison of the captured tile crop vs the vanilla baseline -- SUCCESS / FAILURE /
+    # TIMEOUT -- instead of the DRAWN-log heuristic.
+    ap.add_argument("--baseline", type=Path, help="vanilla baseline PNG for the pixel oracle")
+    ap.add_argument("--stage-box", help="x,y,w,h in 1920x1080 stage units (the tile crop)")
+    ap.add_argument("--threshold", type=float, default=0.02)
     args = ap.parse_args()
 
     pre_er = {int(x) for x in args.pre_er_pids.split() if x.isdigit()}
@@ -115,6 +124,7 @@ def main() -> int:
     verdict = "INCOMPLETE"
     capture_line = "capture: not attempted"
     captured = False
+    menu_open_at = 0.0
     while True:
         elapsed = time.monotonic() - start
         if elapsed >= args.max_seconds:
@@ -129,13 +139,17 @@ def main() -> int:
         )
         drawn = contains(badge_log, "badge sample: DRAWN")
         derailed = contains(phases, '"outcome":"derailed"')
-        # Capture the pixels while the Equipment menu is up (equip open), BEFORE teardown --
-        # this is the moment the user reviews (the loading-screen-portrait pattern).
-        if equip_open and not captured:
+        if equip_open and menu_open_at == 0.0:
+            menu_open_at = time.monotonic()
+        # Capture only AFTER the menu has been up long enough to fully render (fade-in settled),
+        # not at the open edge (user 2026-07-23: don't tear down / capture too early).
+        if menu_open_at > 0.0 and not captured and (
+            time.monotonic() - menu_open_at >= args.capture_settle_seconds
+        ):
             capture_line = capture_window(args.repo_root, args.artifact_dir)
             captured = True
         if decisive == 0.0:
-            if dwell_done:
+            if dwell_done and captured:
                 verdict = "PASS" if drawn else "DWELL_NO_DRAW"
                 decisive = time.monotonic()
             elif derailed:
@@ -145,8 +159,8 @@ def main() -> int:
             break
         _POLL_WAIT.wait(POLL_SECONDS)
 
-    # Re-capture right at the end of dwell too (badges fully settled), if the menu is still up.
-    if verdict == "PASS":
+    # Final settled re-capture just before teardown (menu fully rendered, badges settled).
+    if verdict in ("PASS", "DWELL_NO_DRAW") and menu_open_at > 0.0:
         capture_line = capture_window(args.repo_root, args.artifact_dir)
 
     status_line = teardown(pre_er, pre_me3)
@@ -161,9 +175,27 @@ def main() -> int:
         if src.exists():
             shutil.copy(src, args.artifact_dir / name)
 
+    # PIXEL-DIFF ORACLE (when configured): the authoritative verdict is the tile crop vs the
+    # vanilla baseline. TIMEOUT if the menu was never reached / nothing captured.
+    oracle_line = "oracle: not configured"
+    if args.baseline and args.stage_box:
+        capture_png = args.artifact_dir / "armament-icons-equip.png"
+        if not captured or not capture_png.exists() or not args.baseline.exists():
+            verdict = "TIMEOUT"
+            oracle_line = f"oracle: TIMEOUT (captured={captured} png={capture_png.exists()})"
+        else:
+            proc = subprocess.run(
+                ["python3", str(args.repo_root / "scripts" / "armament-icons-pixel-oracle.py"),
+                 "verdict", "--baseline", str(args.baseline), "--candidate", str(capture_png),
+                 "--stage-box", args.stage_box, "--threshold", str(args.threshold)],
+                capture_output=True, text=True, timeout=25,
+            )
+            oracle_line = "oracle: " + (proc.stdout.strip() or proc.stderr.strip())
+            verdict = "SUCCESS" if proc.returncode == 0 else "FAILURE"
+
     report = args.artifact_dir / "report.txt"
     lines = [f"verdict: {verdict}", f"elapsed_seconds: {int(time.monotonic() - start)}",
-             capture_line, status_line]
+             capture_line, oracle_line, status_line]
     log_copy = args.artifact_dir / "er-armament-icons.log"
     if log_copy.exists():
         lines.append("--- badge log tail ---")
@@ -171,7 +203,7 @@ def main() -> int:
     report.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     print(f"armament-icons-watch: verdict={verdict}")
-    return 0 if verdict == "PASS" else 1
+    return 0 if verdict in ("PASS", "SUCCESS") else 1
 
 
 if __name__ == "__main__":

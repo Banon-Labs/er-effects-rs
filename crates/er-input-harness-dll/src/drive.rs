@@ -59,9 +59,10 @@ const LOAD_BUDGET: u64 = 9000;
 const NAV_BUDGET: u64 = 480;
 /// Native quit-to-menu confirm + world teardown. ~10s.
 const QUIT_BUDGET: u64 = 600;
-/// Dwell on the opened Equipment menu (mode `equip`) so its armament tiles populate and any
-/// tile-hooking companion DLL (er-armament-icons) can act and log. ~10s at 60fps.
-const EQUIP_DWELL_FRAMES: u64 = 600;
+/// Dwell on the opened Equipment menu (mode `equip`) so its armament tiles populate, the menu
+/// FULLY renders (fade-in settles), and the oracle has time to capture + process before teardown
+/// (user 2026-07-23: don't tear down too early). ~20s at 60fps.
+const EQUIP_DWELL_FRAMES: u64 = 1200;
 
 // ---- diagnostic probe (mode `probe`): sweep the DLUID virtual-key id space and log the menu response,
 // to discover which id (1000..1080) is up/down/confirm/cancel/tab (bd MENU-INPUT-LAYER-virtual-key). ----

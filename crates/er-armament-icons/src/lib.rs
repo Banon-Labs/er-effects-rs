@@ -57,6 +57,14 @@ const LOOKUP_SWORD_ARTS_PARAM_RVA: usize = 0xd50cc0;
 /// ItemIcon). Used by the mirror-item-icon diagnostic to draw a guaranteed-visible glyph
 /// into the badge for oracle rect-location. dump 0x1408487d0 -> deobf 0x1408486e0 (-0xf0).
 const MENU_GAITEM_ICON_ID_RVA: usize = 0x8486e0;
+/// `FUN_140d81a20(CSScaleformValue* value, float* out4)` -- GLOBAL/stage-space bounds of a
+/// bound display object: out = {xmin, ymin, xmax, ymax} in the 1920x1080 GFx stage, pixels
+/// (twips->px already applied). value = proxy+0x28. Its local-space sibling is FUN_140d82060.
+/// dump 0x140d81a20 -> deobf 0x140d81970 (-0xb0). CALL target for the oracle crop rect.
+const PROXY_GLOBAL_RECT_RVA: usize = 0xd81970;
+/// `MenuGaitem.itemId` (+0x4c): top nibble = category (0 = weapon), low 28 bits =
+/// EquipParamWeapon id. Identifies the weapon in a tile for deterministic slot picking.
+const MENU_GAITEM_ITEM_ID_OFFSET: usize = 0x4c;
 /// SwordArtsParam row: skill iconId is the u16 at row +0x1A. Ground-truthed to the
 /// game's OWN HUD skill-icon builder CS::CSFeManImp::UpdatePlayerComponents (dump
 /// 0x140772b70): it reads `*(u16*)(swordArtsRow + offsetof(_EQUIP_PARAM_GOODS_ST,
@@ -421,8 +429,14 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
     if drawn {
         let drawn_total = BADGE_DRAWN.fetch_add(1, Ordering::SeqCst) + 1;
         if drawn_total <= SAMPLE_LOG_CALLS {
+            // MenuGaitem.itemId (+0x4c): identifies the weapon in this tile (top nibble =
+            // category, low 28 bits = EquipParamWeapon id) so a specific slot (e.g. the
+            // Executioner's Greataxe) can be picked deterministically for the oracle crop.
+            let item_id = unsafe { *((gaitem + MENU_GAITEM_ITEM_ID_OFFSET) as *const u32) };
             log_message(format_args!(
-                "badge sample: DRAWN #{drawn_total} arts_id={arts_id} icon_id={icon_id} tile=0x{tile:x}"
+                "badge sample: DRAWN #{drawn_total} arts_id={arts_id} icon_id={icon_id} \
+                 item_id=0x{item_id:x} weapon_id={} tile=0x{tile:x}",
+                item_id & 0x0fff_ffff
             ));
         }
     } else {
