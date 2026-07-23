@@ -23,7 +23,7 @@ fn main() {
         _ => panic!("Architecture '{arch}' not supported by bundled MinHook"),
     };
 
-    let mh_src_dir = resolve_minhook_src_dir(&root_dir);
+    let mh_src_dir = resolve_minhook_src_dir(Path::new(&root_dir));
 
     cc::Build::new()
         .file(mh_src_dir.join("buffer.c"))
@@ -33,25 +33,24 @@ fn main() {
         .compile("minhook");
 
     println!("cargo:rerun-if-env-changed=ER_MINHOOK_SRC_DIR");
+    println!("cargo:rerun-if-env-changed=ER_EFFECTS_MINHOOK_SRC_DIR");
     println!("cargo:rerun-if-changed={}", mh_src_dir.display());
 }
 
-fn resolve_minhook_src_dir(root_dir: &str) -> PathBuf {
-    if let Ok(override_dir) = env::var("ER_MINHOOK_SRC_DIR") {
-        let path = PathBuf::from(override_dir);
-        if path.join("buffer.c").is_file() {
-            return path;
+fn resolve_minhook_src_dir(manifest_dir: &Path) -> PathBuf {
+    for env_name in ["ER_MINHOOK_SRC_DIR", "ER_EFFECTS_MINHOOK_SRC_DIR"] {
+        if let Ok(dir) = env::var(env_name) {
+            let dir = PathBuf::from(dir);
+            if dir.join("buffer.c").is_file() {
+                return dir;
+            }
+            panic!("{env_name}={} does not point at MinHook src", dir.display());
         }
-        panic!(
-            "ER_MINHOOK_SRC_DIR does not point at MinHook src: {}",
-            path.display()
-        );
     }
 
-    let manifest_dir = Path::new(root_dir);
-    let default = manifest_dir.join("../../vendor/minhook/src");
-    if default.join("buffer.c").is_file() {
-        return default;
+    let repo_local = manifest_dir.join("../../vendor/minhook/src");
+    if repo_local.join("buffer.c").is_file() {
+        return repo_local;
     }
 
     for ancestor in manifest_dir.ancestors() {
@@ -62,7 +61,7 @@ fn resolve_minhook_src_dir(root_dir: &str) -> PathBuf {
     }
 
     panic!(
-        "could not find vendor/minhook/src (checked {} and ancestor vendor dirs); set ER_MINHOOK_SRC_DIR to the MinHook src directory",
-        default.display()
+        "unable to find vendor/minhook/src (checked {} and ancestor vendor dirs; set ER_MINHOOK_SRC_DIR or ER_EFFECTS_MINHOOK_SRC_DIR to the MinHook src directory)",
+        repo_local.display()
     );
 }

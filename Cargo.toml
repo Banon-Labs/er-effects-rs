@@ -8,6 +8,7 @@ members = [
   "crates/er-reload-trace-dll",
   "crates/er-input-harness-dll",
   "crates/er-inventory-sort-dll",
+  "crates/er-net-effects-dll",
   "crates/effects-data",
   "crates/er-gfx",
   "crates/er-safe-input",

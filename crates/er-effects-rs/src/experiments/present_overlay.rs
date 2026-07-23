@@ -291,7 +291,6 @@ unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) {
         // Loading bar + save picker (the native-Windows display path; also the boot/black-gap path on Wine).
         let _ = unsafe { composite_boot_progress_on_swapchain(base, this_u) };
     }
-    let _ = unsafe { composite_effect_selector_on_swapchain(this_u) };
     // Keyboard input runs on an event-driven WH_KEYBOARD_LL hook (spawned once) so every press registers
     // regardless of the ~4fps boot Present rate; the render-thread poll handles gamepad (and is the
     // keyboard fallback if the hook fails to install).
