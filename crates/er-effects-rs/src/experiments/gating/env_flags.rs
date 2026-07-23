@@ -185,7 +185,7 @@ pub(crate) fn portrait_render_drive_enabled() -> bool {
 /// scaffolding). For the Milestone-1 vanilla-parity diff, `er-effects-measure-no-composite.txt` disables
 /// the composite so the product's LOAD path is compared to vanilla WITHOUT the overlay's per-frame fps cost.
 /// Cached (portrait_overlay_enabled runs every present frame, so no per-frame filesystem stat).
-fn measure_no_composite() -> bool {
+pub(crate) fn measure_no_composite() -> bool {
     static CACHED: AtomicUsize = AtomicUsize::new(0); // 0=unknown, 1=off, 2=on
     match CACHED.load(Ordering::Relaxed) {
         1 => false,

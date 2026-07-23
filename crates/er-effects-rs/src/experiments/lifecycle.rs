@@ -681,7 +681,10 @@ pub(crate) fn install_title_visual_startup_hooks() {
     // overlay is not a product feature this run). Lets a flow-faithful vanilla baseline capture the
     // render-bound fingerprint (bd present-cadence-gx-instrumentation-coupled-to-overlay-install-gate;
     // VANILLA-run2-forcedrive-WORKS-...cadence-decouple-insufficient).
-    if portrait_overlay_enabled() || save_override_telemetry_only() {
+    if portrait_overlay_enabled()
+        || save_override_telemetry_only()
+        || crate::experiments::measure_no_composite()
+    {
         START_PRESENT_OVERLAY.call_once(|| {
             let _ = std::thread::Builder::new()
                 .name("er-effects-present-overlay".to_owned())

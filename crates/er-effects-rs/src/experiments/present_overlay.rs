@@ -550,7 +550,10 @@ fn boot_present_pump() {
     // run under telemetry-only so the pump installs the present detour for CADENCE MEASUREMENT (the
     // composite is gated off separately; the boot self-presents only pace the pre-game-present boot phase
     // and do not touch the in-world steady-state cadence being measured).
-    if !portrait_overlay_enabled() && !crate::experiments::save_override_telemetry_only() {
+    if !portrait_overlay_enabled()
+        && !crate::experiments::save_override_telemetry_only()
+        && !crate::experiments::measure_no_composite()
+    {
         return;
     }
     let start = std::time::Instant::now();
@@ -1090,7 +1093,9 @@ pub(crate) unsafe fn try_install_game_present_hook(base: usize) {
     // flow-faithful telemetry-only vanilla baseline (overlay off) still gets the present-cadence +
     // GetFrameStatistics + GX semaphores WITHOUT the overlay composite -- decoupling the instrumentation
     // from the feature it measures (bd present-cadence-gx-instrumentation-coupled-to-overlay-install-gate).
-    if (!portrait_overlay_enabled() && !crate::experiments::save_override_telemetry_only())
+    if (!portrait_overlay_enabled()
+        && !crate::experiments::save_override_telemetry_only()
+        && !crate::experiments::measure_no_composite())
         || crate::experiments::renderdoc_active()
         || PRESENT_HOOK_INSTALLED.load(Ordering::SeqCst) == 0
         || GAME_PRESENT_HOOKED.load(Ordering::SeqCst) != 0
