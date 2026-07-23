@@ -147,15 +147,25 @@ def _canon(v):
     return json.dumps(v, sort_keys=True) if isinstance(v, (list, dict)) else v
 
 
-def steady_window(rows: list[dict], epoch: int | None, settle: int) -> list[dict]:
+def steady_window(
+    rows: list[dict], epoch: int | None, settle: int, window_field: str = "oracle_can_move"
+) -> list[dict]:
+    """Sustained post-readiness window: rows where `window_field` is truthy, first `settle` dropped.
+
+    Default `oracle_can_move` = genuinely movable (the strictest readiness). A vanilla telemetry-only
+    capture driven in BOOT mode holds the character in-world without movement injection, so use
+    `oracle_player_present` there -- the char is rendered + cadence-populated even if can_move never
+    latched. Comparing a vanilla present-window to a mod can_move-window is honest for the render-bound
+    fps/cadence/GX semaphores (they are readiness-independent); the caller picks the field per side.
+    """
     sel = rows
     if epoch is not None:
         def _ep(r):
             e = _f(r.get("oracle_current_load_epoch"))
             return int(e) if e is not None else None
         sel = [r for r in rows if _ep(r) == epoch]
-    mov = [r for r in sel if _truthy(r.get("oracle_can_move"))]
-    return mov[settle:] if len(mov) > settle else mov
+    win = [r for r in sel if _truthy(r.get(window_field))]
+    return win[settle:] if len(win) > settle else win
 
 
 def summarize(window: list[dict]) -> dict:
@@ -247,6 +257,11 @@ def main() -> int:
     ap.add_argument("--candidate", type=Path, help="two-file mode: candidate (mod) timeseries.jsonl")
     ap.add_argument("--baseline-epoch", type=int, default=None, help="single-file: baseline load epoch")
     ap.add_argument("--candidate-epoch", type=int, default=None, help="single-file: candidate load epoch")
+    ap.add_argument("--baseline-window", default="oracle_can_move",
+                    help="readiness field for the baseline window (e.g. oracle_player_present for a "
+                         "boot-mode vanilla hold that never latches can_move)")
+    ap.add_argument("--candidate-window", default="oracle_can_move",
+                    help="readiness field for the candidate window")
     ap.add_argument("--settle", type=int, default=60, help="drop first N movable frames per window")
     ap.add_argument("--min-frames", type=int, default=20, help="minimum settled frames to compare")
     ap.add_argument("--json", action="store_true", help="emit findings as JSON")
@@ -254,14 +269,14 @@ def main() -> int:
 
     if a.baseline and a.candidate:
         brows, crows = load(a.baseline), load(a.candidate)
-        bwin = steady_window(brows, a.baseline_epoch, a.settle)
-        cwin = steady_window(crows, a.candidate_epoch, a.settle)
+        bwin = steady_window(brows, a.baseline_epoch, a.settle, a.baseline_window)
+        cwin = steady_window(crows, a.candidate_epoch, a.settle, a.candidate_window)
         bsrc = f"{a.baseline} epoch={a.baseline_epoch}"
         csrc = f"{a.candidate} epoch={a.candidate_epoch}"
     elif a.timeseries and a.baseline_epoch is not None and a.candidate_epoch is not None:
         rows = load(a.timeseries)
-        bwin = steady_window(rows, a.baseline_epoch, a.settle)
-        cwin = steady_window(rows, a.candidate_epoch, a.settle)
+        bwin = steady_window(rows, a.baseline_epoch, a.settle, a.baseline_window)
+        cwin = steady_window(rows, a.candidate_epoch, a.settle, a.candidate_window)
         bsrc = f"{a.timeseries} epoch={a.baseline_epoch}"
         csrc = f"{a.timeseries} epoch={a.candidate_epoch}"
     else:
