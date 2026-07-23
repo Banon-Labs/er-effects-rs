@@ -394,6 +394,11 @@ fn issue_pad_taps_once(buttons: &[PadButton], frame: u64) {
 enum DriveMode {
     BootContinueOnly,
     NativeReloadOnly,
+    /// Like NativeReloadOnly but drives TWO reload cycles, so epoch3 is a reload FROM a native reload
+    /// (epoch2), not from the product autoload. Tests whether repeated reloads self-correct to parity
+    /// after the autoload's epoch1 residual is flushed by the first reload (bd
+    /// STEP4-RELOAD-REACHES-PARITY / autoload-residual).
+    NativeReloadTwice,
     FullBootReload,
     Probe,
     /// COMPANION mode for the product run (samechar-3x): the harness does NOT drive boot/menu/continue
@@ -407,6 +412,7 @@ impl DriveMode {
         match read_drive_mode_flag().as_str() {
             "boot" => DriveMode::BootContinueOnly,
             "reload" => DriveMode::NativeReloadOnly,
+            "reload2" => DriveMode::NativeReloadTwice,
             "probe" => DriveMode::Probe,
             "passive" => DriveMode::Passive,
             _ => DriveMode::FullBootReload,
@@ -416,6 +422,7 @@ impl DriveMode {
         match self {
             DriveMode::BootContinueOnly => "boot",
             DriveMode::NativeReloadOnly => "reload",
+            DriveMode::NativeReloadTwice => "reload2",
             DriveMode::FullBootReload => "full",
             DriveMode::Probe => "probe",
             DriveMode::Passive => "passive",
@@ -437,6 +444,20 @@ impl DriveMode {
         // reach in-world before we act), then native quit-to-title -> reload Continue. The leading
         // WaitLoadIn is a no-input observe, so it is harmless when the harness itself drove the load.
         const RELOAD: &[Phase] = &[
+            Phase::WaitLoadIn,
+            QUIT_FLOW[0],
+            QUIT_FLOW[1],
+            Phase::PressAnyButton,
+            Phase::Continue,
+            Phase::WaitLoadIn,
+        ];
+        // reload2: two full reload cycles -> epoch3 is a reload from the native epoch2 (not the autoload).
+        const RELOAD2: &[Phase] = &[
+            Phase::WaitLoadIn,
+            QUIT_FLOW[0],
+            QUIT_FLOW[1],
+            Phase::PressAnyButton,
+            Phase::Continue,
             Phase::WaitLoadIn,
             QUIT_FLOW[0],
             QUIT_FLOW[1],
@@ -467,6 +488,7 @@ impl DriveMode {
         match self {
             DriveMode::BootContinueOnly => BOOT,
             DriveMode::NativeReloadOnly => RELOAD,
+            DriveMode::NativeReloadTwice => RELOAD2,
             DriveMode::FullBootReload => FULL,
             DriveMode::Probe => PROBE,
             DriveMode::Passive => &[], // companion: no drive, presence only
@@ -513,6 +535,7 @@ fn resolve_mode() -> DriveMode {
         DriveMode::FullBootReload => 2,
         DriveMode::Probe => 3,
         DriveMode::Passive => 4,
+        DriveMode::NativeReloadTwice => 5,
     };
     MODE_IDX.store(idx, Ordering::SeqCst);
     harness_log!(
