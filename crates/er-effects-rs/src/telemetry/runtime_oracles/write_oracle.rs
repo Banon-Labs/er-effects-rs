@@ -309,14 +309,21 @@ fn write_title_menu_flow_oracles(body: &mut String) {
 fn write_player_presence_oracle(body: &mut String) {
     const BLOCK_ID_NONE: i32 = -1;
     if let Ok(world_chr_man) = unsafe { eldenring::cs::WorldChrMan::instance_mut() } {
+        // Loaded-entity list counts (bd STEP4-4fps-attribution-needs-NEW-telemetry): the ~4fps is a
+        // heavier GAME render at identical render-state flags -> test whether the mod SetState5 reload
+        // leaves MORE entities resident (heavier draw) than the vanilla native-Continue reload. These are
+        // the WorldChrMan world-block/area character-list counts.
         body.push_str(&format!(
-            "  \"oracle_worldchrman_present\": true,\n  \"oracle_worldchrman_main_player\": \"0x{:x}\",\n  \"oracle_worldchrman_player_chr_set_capacity\": {},\n",
+            "  \"oracle_worldchrman_present\": true,\n  \"oracle_worldchrman_main_player\": \"0x{:x}\",\n  \"oracle_worldchrman_player_chr_set_capacity\": {},\n  \"oracle_wcm_world_area_chr_list_count\": {},\n  \"oracle_wcm_world_block_chr_list_count\": {},\n  \"oracle_wcm_world_grid_area_chr_list_count\": {},\n",
             world_chr_man
                 .main_player
                 .as_ref()
                 .map(|p| p.as_ptr() as usize)
                 .unwrap_or(0),
-            world_chr_man.player_chr_set.capacity
+            world_chr_man.player_chr_set.capacity,
+            world_chr_man.world_area_chr_list_count,
+            world_chr_man.world_block_chr_list_count,
+            world_chr_man.world_grid_area_chr_list_count
         ));
     } else {
         body.push_str(

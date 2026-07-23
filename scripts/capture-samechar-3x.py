@@ -122,6 +122,9 @@ def snap(t: dict) -> dict:
     keys = [
         "oracle_char_name",
         "oracle_player_present",
+        "oracle_wcm_world_area_chr_list_count",
+        "oracle_wcm_world_block_chr_list_count",
+        "oracle_wcm_world_grid_area_chr_list_count",
         "oracle_player_render_ready",
         "oracle_can_move",
         "oracle_move_probe_moved_frames",
