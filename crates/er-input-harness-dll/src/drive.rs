@@ -29,7 +29,7 @@ use crate::game_mem::{
 };
 use crate::input_inject::{
     MenuEvent, advance_press_any_button, input_manager, keep_input_active, native_open_equip_menu,
-    popup_job_serial, request_open_ingame_menu, tap_menu_event,
+    native_open_inventory_menu, popup_job_serial, request_open_ingame_menu, tap_menu_event,
 };
 use crate::log::{harness_log, log_phase};
 use crate::pad_inject::{PadButton, set_pad_button, set_vk_id};
@@ -290,6 +290,9 @@ enum Phase {
     /// NO input: dwell on the opened Equipment menu so its armament tiles populate (and the
     /// er-armament-icons companion's tile hook fires and logs). Advances at its dwell budget.
     DwellEquip,
+    /// NATIVE open of the Inventory menu (02_020_Inventory) whose item cells carry the bottom-left
+    /// ArtsIcon child. EFFECT: top-job replaced OR the submit serial bumped.
+    OpenInventoryMenu,
 }
 
 impl Phase {
@@ -308,6 +311,7 @@ impl Phase {
             Phase::ProbeMenu => "probe_menu",
             Phase::OpenEquipMenu => "open_equip_menu",
             Phase::DwellEquip => "dwell_equip",
+            Phase::OpenInventoryMenu => "open_inventory_menu",
         }
     }
 
@@ -320,7 +324,8 @@ impl Phase {
             Phase::OpenPauseMenu
             | Phase::NavToOptionSetting
             | Phase::TabToQuit
-            | Phase::OpenEquipMenu => NAV_BUDGET,
+            | Phase::OpenEquipMenu
+            | Phase::OpenInventoryMenu => NAV_BUDGET,
             Phase::Quit | Phase::QuitTeardown | Phase::NativeQuit => QUIT_BUDGET,
             Phase::ProbeMenu => PROBE_TOTAL_FRAMES,
             Phase::DwellEquip => EQUIP_DWELL_FRAMES,
@@ -400,6 +405,20 @@ impl Phase {
                     || serial > EQUIP_SERIAL.load(Ordering::SeqCst)
             }
             Phase::DwellEquip => frame >= EQUIP_DWELL_FRAMES,
+            Phase::OpenInventoryMenu => {
+                // Native open of the Inventory menu (same factory+submit path as EquipTop; the
+                // 02_020_Inventory item cells carry the bottom-left ArtsIcon child).
+                if frame == 0 {
+                    INGAMETOP_JOB.store(top_menu_job_ptr(), Ordering::SeqCst);
+                    EQUIP_SERIAL.store(popup_job_serial(im) as usize, Ordering::SeqCst);
+                    let dispatched = native_open_inventory_menu(base, im);
+                    harness_log!("inv: native Inventory open dispatched={dispatched}");
+                }
+                let job = top_menu_job_ptr();
+                let serial = popup_job_serial(im) as usize;
+                (job != 0 && job != INGAMETOP_JOB.load(Ordering::SeqCst))
+                    || serial > EQUIP_SERIAL.load(Ordering::SeqCst)
+            }
         };
         if advanced {
             Status::Advanced
@@ -444,6 +463,9 @@ enum DriveMode {
     /// Boot to in-world, open the pause menu, Confirm into the Equipment menu, then dwell so the
     /// armament tiles populate (er-armament-icons badge oracle run, bd er-effects-rs-pe98).
     EquipMenu,
+    /// Boot to in-world, open the pause menu, native-open the Inventory menu (02_020_Inventory --
+    /// the Melee/Ranged/Shields tabs with bottom-left ArtsIcon cells), then dwell.
+    InventoryMenu,
 }
 
 impl DriveMode {
@@ -455,6 +477,7 @@ impl DriveMode {
             "probe" => DriveMode::Probe,
             "passive" => DriveMode::Passive,
             "equip" => DriveMode::EquipMenu,
+            "inv" => DriveMode::InventoryMenu,
             _ => DriveMode::FullBootReload,
         }
     }
@@ -467,6 +490,7 @@ impl DriveMode {
             DriveMode::Probe => "probe",
             DriveMode::Passive => "passive",
             DriveMode::EquipMenu => "equip",
+            DriveMode::InventoryMenu => "inv",
         }
     }
     fn phases(self) -> &'static [Phase] {
@@ -537,6 +561,16 @@ impl DriveMode {
             Phase::OpenEquipMenu,
             Phase::DwellEquip,
         ];
+        // inv: reach in-world, open the pause menu, native-open the Inventory menu, dwell.
+        const INV: &[Phase] = &[
+            Phase::Startup,
+            Phase::PressAnyButton,
+            Phase::Continue,
+            Phase::WaitLoadIn,
+            Phase::OpenPauseMenu,
+            Phase::OpenInventoryMenu,
+            Phase::DwellEquip,
+        ];
         match self {
             DriveMode::BootContinueOnly => BOOT,
             DriveMode::NativeReloadOnly => RELOAD,
@@ -545,6 +579,7 @@ impl DriveMode {
             DriveMode::Probe => PROBE,
             DriveMode::Passive => &[], // companion: no drive, presence only
             DriveMode::EquipMenu => EQUIP,
+            DriveMode::InventoryMenu => INV,
         }
     }
 }
@@ -565,7 +600,7 @@ fn resolve_mode() -> DriveMode {
     // MUST stay index-aligned with the `idx` match below (bd reload2-crash-MODES-oob): every DriveMode
     // needs a slot here or MODES[cached] panics. NativeReloadTwice=5 was added to the match but not here,
     // so the 2nd per-frame resolve_mode() indexed MODES[5] out-of-bounds -> crash ~after boot (run64/65/67).
-    const MODES: [DriveMode; 7] = [
+    const MODES: [DriveMode; 8] = [
         DriveMode::BootContinueOnly,  // 0
         DriveMode::NativeReloadOnly,  // 1
         DriveMode::FullBootReload,    // 2
@@ -573,6 +608,7 @@ fn resolve_mode() -> DriveMode {
         DriveMode::Passive,           // 4
         DriveMode::NativeReloadTwice, // 5
         DriveMode::EquipMenu,         // 6
+        DriveMode::InventoryMenu,     // 7
     ];
     let cached = MODE_IDX.load(Ordering::SeqCst);
     if cached != usize::MAX {
@@ -607,6 +643,7 @@ fn resolve_mode() -> DriveMode {
         DriveMode::Passive => 4,
         DriveMode::NativeReloadTwice => 5,
         DriveMode::EquipMenu => 6,
+        DriveMode::InventoryMenu => 7,
     };
     MODE_IDX.store(idx, Ordering::SeqCst);
     harness_log!(

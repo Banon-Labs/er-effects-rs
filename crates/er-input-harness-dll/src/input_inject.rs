@@ -122,6 +122,9 @@ pub fn input_manager(base: usize) -> Option<usize> {
 /// `FUN_140801cb0` deobf: Equipment pause-row MenuJob factory
 /// `(DLReferencePointer<CS::MenuJob>* out, ComponentStack* popup+0x10) -> out`.
 const EQUIP_TOP_JOB_FACTORY_RVA: usize = 0x801bc0;
+/// `InventoryUiLoad` deobf (dump 0x140801e40): Inventory pause-row MenuJob factory,
+/// same `(out, ComponentStack*)` signature -- builds the 02_020_Inventory union job.
+const INVENTORY_JOB_FACTORY_RVA: usize = 0x801d50;
 /// `FUN_1407ee2e0` deobf: popup top-job submit wrapper `(popup, refptr* out, u64* serial_out,
 /// refptr* job)` -- the exact call shape of the +0x121 IngameTop open path.
 const POPUP_SUBMIT_TOP_JOB_RVA: usize = 0x7ee1f0;
@@ -142,21 +145,20 @@ pub fn popup_job_serial(input_manager_ptr: usize) -> u64 {
         .unwrap_or(0) as u64
 }
 
-/// NATIVE Equipment-menu open: build the EquipTop union job with the game's own pause-row factory
-/// and submit it through the native CSPopupMenu top-job path (native enqueue + native pump
-/// ownership; no Scaleform input). Faithful nesting requires the pause menu (IngameTop) to already
-/// be the top job -- call only after `pause_menu_open()`. Game thread only. Returns true once the
-/// job was built and submitted.
-pub fn native_open_equip_menu(base: usize, input_manager_ptr: usize) -> bool {
-    type EquipJobFactoryFn = unsafe extern "system" fn(*mut [usize; 2], usize) -> *mut [usize; 2];
+/// NATIVE top-menu open: build a pause-row MenuJob with the game's own factory (Equipment or
+/// Inventory -- identical `(out, ComponentStack*)` signature) and submit it through the native
+/// CSPopupMenu top-job path (native enqueue + native pump ownership; no Scaleform input). Faithful
+/// nesting requires the pause menu (IngameTop) to already be the top job -- call only after
+/// `pause_menu_open()`. Game thread only. Returns true once the job was built and submitted.
+fn native_open_top_menu(base: usize, input_manager_ptr: usize, factory_rva: usize) -> bool {
+    type JobFactoryFn = unsafe extern "system" fn(*mut [usize; 2], usize) -> *mut [usize; 2];
     type SubmitTopJobFn =
         unsafe extern "system" fn(usize, *mut [usize; 2], *mut u64, *mut [usize; 2]);
 
     let Some(popup) = popup_menu(input_manager_ptr) else {
         return false;
     };
-    let factory: EquipJobFactoryFn =
-        unsafe { std::mem::transmute(base + EQUIP_TOP_JOB_FACTORY_RVA) };
+    let factory: JobFactoryFn = unsafe { std::mem::transmute(base + factory_rva) };
     let submit: SubmitTopJobFn = unsafe { std::mem::transmute(base + POPUP_SUBMIT_TOP_JOB_RVA) };
 
     let mut job: [usize; 2] = [0; 2];
@@ -173,6 +175,17 @@ pub fn native_open_equip_menu(base: usize, input_manager_ptr: usize) -> bool {
     // one retained reference is intentionally left alive (the menu owns the job's lifetime).
     unsafe { submit(popup, &mut out, &mut serial, &mut job) };
     true
+}
+
+/// Native open of the EquipTop menu (equipped-slot summary + slot-selection grids).
+pub fn native_open_equip_menu(base: usize, input_manager_ptr: usize) -> bool {
+    native_open_top_menu(base, input_manager_ptr, EQUIP_TOP_JOB_FACTORY_RVA)
+}
+
+/// Native open of the Inventory menu (02_020_Inventory -- the Melee/Ranged/Shields tabs whose item
+/// cells carry the bottom-left ArtsIcon child, bd er-effects-rs-pe98 GFX geometry).
+pub fn native_open_inventory_menu(base: usize, input_manager_ptr: usize) -> bool {
+    native_open_top_menu(base, input_manager_ptr, INVENTORY_JOB_FACTORY_RVA)
 }
 
 /// Tap one menu event into the keystate bitmap (edge OR). Fault-safe: only writes once the target

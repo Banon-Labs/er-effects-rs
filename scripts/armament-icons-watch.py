@@ -120,9 +120,10 @@ def main() -> int:
         if elapsed >= args.max_seconds:
             verdict = "CAP_BACKSTOP"
             break
-        equip_open = contains(phases, '"phase":"open_equip_menu"') and contains(
-            phases, '"outcome":"advanced"'
-        )
+        equip_open = (
+            contains(phases, '"phase":"open_equip_menu"')
+            or contains(phases, '"phase":"open_inventory_menu"')
+        ) and contains(phases, '"outcome":"advanced"')
         dwell_done = contains(phases, '"phase":"dwell_equip"') and contains(
             phases, '"outcome":"advanced"'
         )

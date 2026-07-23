@@ -83,8 +83,9 @@ PROFILE="$ARTIFACT_DIR/armament-icons-smoke.me3"
 	echo "path = '$(win_path "$BADGE_GAMEDIR")'"
 } >"$PROFILE"
 
-# --- wiring markers: harness `equip` drive; no product => no telemetry-only marker needed ---
-echo -n "equip" >"$GAME_DIR/er-harness-drive-mode.txt"
+# --- wiring markers: harness drive mode (MODE=equip|inv, default inv -- the Inventory tabs
+#     are the user's primary target and their cells carry the bottom-left ArtsIcon child) ---
+echo -n "${MODE:-inv}" >"$GAME_DIR/er-harness-drive-mode.txt"
 # NO save redirect: pure APPDATA vanilla save (whatever character is last-active).
 [[ -f "$GAME_DIR/er-effects.toml" ]] && mv -f "$GAME_DIR/er-effects.toml" "$ARTIFACT_DIR/er-effects.toml.bak"
 # Sweep stale logs/markers so a prior run cannot pollute this one.
