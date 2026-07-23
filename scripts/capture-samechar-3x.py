@@ -904,6 +904,7 @@ def main() -> int:
             return True  # can't determine -> assume alive, never false-exit
 
     game_seen_alive = False
+    gone_streak = 0  # consecutive "process gone" checks -> debounce transient tasklist blips (heavy boot)
     last_proc_check = 0.0
     proc_check_interval = 1.0
     hung_stale_seconds = float(os.environ.get("HUNG_STALE_SECONDS", "60") or "60")
@@ -921,9 +922,15 @@ def main() -> int:
             last_proc_check = now
             if _er_alive():
                 game_seen_alive = True
+                gone_streak = 0
             elif game_seen_alive:
-                result = "GAME_EXITED"
-                break
+                # DEBOUNCE: require several consecutive "gone" checks before declaring exit -- tasklist can
+                # transiently miss a live eldenring.exe during heavy boot/load (this false-fired GAME_EXITED
+                # at ~33s in run64/65, tearing down a still-booting game). ~4s of confirmation, still fast.
+                gone_streak += 1
+                if gone_streak >= 4:
+                    result = "GAME_EXITED"
+                    break
         # BACKSTOP: hung-but-alive (process present, telemetry frozen) -- long window, not a primary signal.
         try:
             mtime = os.path.getmtime(telemetry_path)
