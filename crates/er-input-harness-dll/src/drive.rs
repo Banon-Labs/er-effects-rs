@@ -139,8 +139,8 @@ fn probe_menu_tick(im: usize, frame: u64) -> bool {
         // edge-toggle within the id segment: hold TAP_SET frames, release, a few clean edges.
         let held = (local % TAP_CYCLE_FRAMES) < TAP_SET_FRAMES;
         set_vk_id(if held { id } else { 0 });
-        // PER-FRAME direct stamp on held frames (the builder hook is too sparse in-menu) so each swept id
-        // actually reaches the menu (bd DECISIVE-builder-not-perframe).
+        // PER-FRAME stamp (now cached: resolves the pad once, then a fault-safe write/frame -- no per-frame
+        // RPM tree-walk that stopped the drive, bd BISECT-stamp_vk_direct-stops-drive).
         if held {
             if let Some(base) = crate::game_mem::game_base() {
                 unsafe { crate::pad_inject::stamp_vk_direct(base, id) };
@@ -420,6 +420,7 @@ static PHASE_START_TICK: AtomicU64 = AtomicU64::new(0);
 static POPUP_FRAME: AtomicU64 = AtomicU64::new(0);
 static MODE_IDX: AtomicUsize = AtomicUsize::new(usize::MAX);
 static DERAILED: AtomicBool = AtomicBool::new(false);
+static ONFRAME_IM_NULL_DIAG: AtomicBool = AtomicBool::new(false);
 /// currentTopMenuJob (+0xB0) recorded at IngameTop, to detect the submenu-entry replacement.
 static INGAMETOP_JOB: AtomicUsize = AtomicUsize::new(0);
 
@@ -510,6 +511,13 @@ pub fn on_frame(base: usize) {
     }
 
     let Some(im) = input_manager(base) else {
+        // DIAG (bd BREAKTHROUGH2 task-stop): log ONCE if input_manager stops resolving mid-drive (the
+        // suspected cause of the drive silently stopping after the first pad injection changed the menu).
+        if !ONFRAME_IM_NULL_DIAG.swap(true, Ordering::SeqCst) {
+            harness_log!(
+                "on_frame: input_manager returned None -> drive silently stops this frame"
+            );
+        }
         return;
     };
 

@@ -62,6 +62,7 @@ static WRITER_FIRES: AtomicU32 = AtomicU32::new(0);
 static GAME_SOURCE: AtomicUsize = AtomicUsize::new(0); // rcx of the real writer = the game's source
 static MY_SOURCE: AtomicUsize = AtomicUsize::new(0); // source my inject_vk computed
 static TREEWALK_DIAG: AtomicUsize = AtomicUsize::new(0); // one-time padMaps tree-walk structure dump
+static CACHED_PAD: AtomicUsize = AtomicUsize::new(0); // resolved CSInGamePad, cached to skip per-frame RPM
 static OBSERVED_IDS: [AtomicU32; 3] = [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)]; // 81-bit set of ids the game's writer fired (id-1000)
 
 /// Snapshot for the probe/drive to log: (builder_fires, writer_fires, game_source, my_source, obs_ids).
@@ -169,6 +170,17 @@ pub unsafe fn stamp_vk_direct(base: usize, id: u32) {
     let _ = (CS_INGAME_PAD_ACCESSOR_RVA, PAD_MGR_DEVICES_18_OFFSET);
     let off = VK_ARRAY_88_OFFSET + ((id - VK_ID_MIN) as usize) * 2;
     let target = base + CS_INGAME_PAD_TYPEID_RVA;
+    // CACHE the resolved pad (bd BISECT-stamp_vk_direct-stops-drive): the per-frame RPM tree-walk
+    // (~10-20 syscalls/frame) stalls the CSTaskImp task and STOPS the drive. Resolve the CSInGamePad ONCE
+    // via the tree-walk, then per-frame do ONE fault-safe write to the cached pad -- no per-frame RPM.
+    let cached = CACHED_PAD.load(Ordering::SeqCst);
+    if cached >= HEAP_LO {
+        unsafe {
+            let _ = crate::win32::write_u8;
+            let _ = (cached, off);
+        } // BISECT: write disabled
+        return;
+    }
     let ndev = rd(manager + PADMAPS_88_OFFSET + PADMAPS_COUNT * 8)
         .unwrap_or(1)
         .min(PADMAPS_COUNT);
@@ -214,7 +226,10 @@ pub unsafe fn stamp_vk_direct(base: usize, id: u32) {
             if key == target {
                 if let Some(pad) = rd(node + 0x28).filter(|p| *p >= HEAP_LO) {
                     MY_SOURCE.store(pad, Ordering::SeqCst);
-                    unsafe { *((pad + off) as *mut u8) = 1 };
+                    CACHED_PAD.store(pad, Ordering::SeqCst); // cache: subsequent frames skip the tree-walk
+                    unsafe {
+                        let _ = (pad, off);
+                    } // BISECT: write disabled (keep tree-walk + cache)
                     if diag {
                         harness_log!("treewalk DIAG dev{dev}: FOUND pad=0x{pad:x}");
                     }

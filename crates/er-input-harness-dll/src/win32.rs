@@ -27,6 +27,13 @@ unsafe extern "system" {
         size: usize,
         read: *mut usize,
     ) -> i32;
+    pub fn WriteProcessMemory(
+        process: isize,
+        base: *const c_void,
+        buffer: *const c_void,
+        size: usize,
+        written: *mut usize,
+    ) -> i32;
 }
 
 /// Read a pointer-sized value from this process's own address space. Uses `ReadProcessMemory` on the
@@ -45,6 +52,23 @@ pub unsafe fn read_usize(addr: usize) -> Option<usize> {
         )
     };
     (ok != 0 && read == std::mem::size_of::<usize>()).then_some(value)
+}
+
+/// Write a single byte to this process's own address space via `WriteProcessMemory` (fault-safe: returns
+/// false instead of crashing on a stale/unmapped pointer). Used to stamp the input array without a raw
+/// deref that would fault the game thread if the target was reallocated.
+pub unsafe fn write_u8(addr: usize, value: u8) -> bool {
+    let mut wrote = 0usize;
+    let ok = unsafe {
+        WriteProcessMemory(
+            CURRENT_PROCESS_PSEUDO_HANDLE,
+            addr as *const c_void,
+            (&value as *const u8).cast(),
+            1,
+            &mut wrote,
+        )
+    };
+    ok != 0 && wrote == 1
 }
 
 /// Read a single byte from this process's own address space (fault-safe). Used to confirm a keystate
