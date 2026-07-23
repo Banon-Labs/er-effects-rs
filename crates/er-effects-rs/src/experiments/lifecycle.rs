@@ -237,10 +237,6 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     } else {
         release_input_block_now();
     }
-    // Session-local sort defaults: CSMenuSystemSaveLoad initializes the target
-    // categories to Item Type every process; write once so vanilla remembers the
-    // configured Order-of-Acquisition defaults across later character loads.
-    apply_default_menu_sort_preferences_once();
     // GameMan field transition trace (change-detected): captures the STABLE boot-load
     // trajectory and the BOUNCE switch-load trajectory in one run so they can be diffed to
     // find which GameMan field re-triggers the title post-load. Runs every frame; the

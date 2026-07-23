@@ -306,7 +306,7 @@ unsafe extern "system" fn hook_finalize_advancer(a: usize, b: usize, c: usize, d
     // TORE THE PLAYER DOWN (post-completion: present=False, havok=None, mms=-1 at ~60fps = a player-less
     // world) -- load2's player is not movable at fin=0 when the finalize runs, unlike load1. So the
     // finalize-drive is a proven DEAD END; this hook is log-only again so traces show the natural load2.
-    // The removed drive statics/consts are retained for reference but intentionally unused.
+    // The old drive statics/consts are retained for reference but intentionally unused.
     let _ = (
         &RT5D_DRIVE_MMS,
         &RT5D_DRIVE_ZERO_STREAK,
