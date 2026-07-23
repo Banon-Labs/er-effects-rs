@@ -494,6 +494,12 @@ pub static AUTO_ACCEPT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static AUTO_ACCEPT_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static IN_WORLD_REACHED: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_EPOCH_WORLD_LIVE: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Consecutive frames the reloaded world has been genuinely LIVE (play_time advancing). Once high enough,
+/// the child-done-query override RELEASES the held MoveMapStep child so it tears down like vanilla (the
+/// override only needs to prevent PREMATURE teardown DURING the load; post-stabilization it must let go, or
+/// it strands the child alive forever = the ez10-set + ~4fps steady-state divergence). bd
+/// CORRECTION-STEP4-finalize-substate-is-0.
+pub static WORLD_LIVE_STABLE_FRAMES: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_COMPOSITE_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static BOOT_VIEW_COMPOSITE_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
 pub static POLICY_TOS_TITLE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);

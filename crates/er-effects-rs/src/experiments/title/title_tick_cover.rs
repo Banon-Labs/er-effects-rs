@@ -422,6 +422,18 @@ pub(crate) unsafe extern "system" fn child_done_query_override_detour(
         {
             return false;
         }
+        // RELEASE post-stabilization (bd CORRECTION-STEP4-finalize-substate-is-0): the override only needs to
+        // prevent PREMATURE child teardown DURING the load. Once the reloaded world has been genuinely live
+        // (play_time advancing) for a sustained window, the load is complete -- stop holding so the
+        // MoveMapStep child tears down like vanilla (else it is stranded alive forever = ez10-set + ~4fps
+        // steady-state divergence). 180 frames (~3s) is well past load completion, so no premature-teardown
+        // risk (the stranding it guards against happens in the first ~1s of the reload).
+        const WORLD_STABLE_RELEASE_FRAMES: usize = 180;
+        if er_telemetry::counters::WORLD_LIVE_STABLE_FRAMES.load(Ordering::SeqCst)
+            >= WORLD_STABLE_RELEASE_FRAMES
+        {
+            return false;
+        }
         // Derive the MoveMapStep from the query's OWN child_base (child EzChildStepBase = mms+0x108),
         // self-consistently -- no dependence on the telemetry-published pointer (which raced/mismatched
         // in run11). Validate it IS the MoveMapStep at step 18 (state @ +0x48 == 18) so other children's

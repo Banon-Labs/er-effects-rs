@@ -291,6 +291,15 @@ fn write_game_module_oracles(body: &mut String) {
             PLAY_TIME_READ_FAIL
         };
         let play_time_live: bool = play_time_advanced_ms >= PLAY_TIME_LIVE_THRESHOLD_MS;
+        // Consecutive-live-frames streak for the child-done-override RELEASE (bd
+        // CORRECTION-STEP4-finalize-substate-is-0): count up while live, reset on any non-live frame.
+        if play_time_live {
+            er_telemetry::counters::WORLD_LIVE_STABLE_FRAMES
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        } else {
+            er_telemetry::counters::WORLD_LIVE_STABLE_FRAMES
+                .store(0, std::sync::atomic::Ordering::Relaxed);
+        }
         if play_time_live {
             // Publish the PER-EPOCH world-live signal so the boot-view compositor stops its per-frame GPU
             // readback once THIS switch's world is genuinely running (bd
