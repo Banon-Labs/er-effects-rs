@@ -62,6 +62,12 @@ const MENU_GAITEM_ICON_ID_RVA: usize = 0x8486e0;
 /// (twips->px already applied). value = proxy+0x28. Its local-space sibling is FUN_140d82060.
 /// dump 0x140d81a20 -> deobf 0x140d81970 (-0xb0). CALL target for the oracle crop rect.
 const PROXY_GLOBAL_RECT_RVA: usize = 0xd81970;
+/// `FUN_140d82060(CSScaleformValue* value, float* out4) -> out` -- LOCAL-space bounds of a
+/// bound display object, {xmin,ymin,xmax,ymax} px; {0,0,0,0} when unbound/empty. This is
+/// the rect the icon setter reads to compute the drawn quad's scale (= rect/tex), so an
+/// empty (zero-extent) container yields a zero-scale, invisible icon. value = proxy+0x28.
+/// dump 0x140d82060 -> deobf 0x140d81fb0 (-0xb0, content-unique). CALL target.
+const PROXY_LOCAL_RECT_RVA: usize = 0xd81fb0;
 /// `MenuGaitem.itemId` (+0x4c): top nibble = category (0 = weapon), low 28 bits =
 /// EquipParamWeapon id. Identifies the weapon in a tile for deterministic slot picking.
 const MENU_GAITEM_ITEM_ID_OFFSET: usize = 0x4c;
@@ -335,6 +341,56 @@ unsafe fn resolve_gem_icon_id(base: usize, arts_id: i32) -> u32 {
     unsafe { *((res.row + EQUIP_PARAM_GEM_ICON_ID_OFFSET) as *const u16) as u32 }
 }
 
+/// Rect-getter FFI shape (takes a `CSScaleformValue*` = proxy+0x28, writes 4 floats out).
+#[cfg(windows)]
+type RectGetterFn = unsafe extern "system" fn(*const u8, *mut f32) -> *mut f32;
+
+/// Bind `name` under `tile`, read its LOCAL and GLOBAL(stage) bounds, drop the transient
+/// value. Returns `None` if the name did not bind. Used to compare the working control
+/// (`ItemIcon`) against the dormant target (`ArtsIcon`) so one run reveals whether the badge
+/// is invisible because its container is zero-extent (approach-A/B discriminator).
+#[cfg(windows)]
+unsafe fn probe_child_rects(
+    base: usize,
+    tile: usize,
+    name: &std::ffi::CStr,
+) -> Option<([f32; 4], [f32; 4])> {
+    type AssignFn = unsafe extern "system" fn(usize, *mut u8, *const u8) -> *mut u8;
+    type IsBoundFn = unsafe extern "system" fn(*const u8) -> bool;
+    type ScaleformValueDtorFn = unsafe extern "system" fn(*mut u8);
+
+    let assign: AssignFn = unsafe { std::mem::transmute(base + ASSIGN_COMPONENT_WITH_NAME_RVA) };
+    let is_bound: IsBoundFn = unsafe { std::mem::transmute(base + PROXY_IS_BOUND_RVA) };
+    let local_getter: RectGetterFn = unsafe { std::mem::transmute(base + PROXY_LOCAL_RECT_RVA) };
+    let global_getter: RectGetterFn = unsafe { std::mem::transmute(base + PROXY_GLOBAL_RECT_RVA) };
+    let value_dtor: ScaleformValueDtorFn =
+        unsafe { std::mem::transmute(base + SCALEFORM_VALUE_DTOR_RVA) };
+
+    let mut proxy = [0u8; PROXY_SIZE];
+    unsafe { assign(tile, proxy.as_mut_ptr(), name.as_ptr().cast()) };
+    let bound = unsafe { is_bound(proxy.as_ptr()) };
+    let mut local = [0f32; 4];
+    let mut global = [0f32; 4];
+    if bound {
+        let val = unsafe { proxy.as_ptr().add(PROXY_SCALEFORM_VALUE_OFFSET) };
+        unsafe { local_getter(val, local.as_mut_ptr()) };
+        unsafe { global_getter(val, global.as_mut_ptr()) };
+    }
+    unsafe { value_dtor(proxy.as_mut_ptr().add(PROXY_SCALEFORM_VALUE_OFFSET)) };
+    if bound { Some((local, global)) } else { None }
+}
+
+#[cfg(windows)]
+fn fmt_rects(r: Option<([f32; 4], [f32; 4])>) -> String {
+    match r {
+        Some((l, g)) => format!(
+            "local[{:.1},{:.1},{:.1},{:.1}] global[{:.1},{:.1},{:.1},{:.1}]",
+            l[0], l[1], l[2], l[3], g[0], g[1], g[2], g[3]
+        ),
+        None => "unbound".to_owned(),
+    }
+}
+
 #[cfg(windows)]
 unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
     let Ok(base) = er_game_base::mem::game_module_base() else {
@@ -463,6 +519,21 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
         ));
     }
 
+    // A/B DIAGNOSTIC (one run answers both): the icon setter scales the drawn quad by
+    // rect/tex where rect = the target's LOCAL bounds (verified: FUN_140d816f0 computes
+    // scaleXY = (rect_wh)/(tex_wh)). If ArtsIcon is an empty, zero-extent container its rect
+    // is 0 => scale 0 => invisible, which is exactly why a "DRAWN" badge still matches vanilla.
+    // Log the working control (ItemIcon) vs ArtsIcon(pre) so the trace confirms the cause and
+    // hands approach B (GFX template edit) its exact geometry target.
+    let trace = attempt <= SAMPLE_LOG_CALLS;
+    if trace {
+        log_message(format_args!(
+            "rect trace #{attempt}: ItemIcon={} | ArtsIcon_pre={}",
+            fmt_rects(unsafe { probe_child_rects(base, tile, c"ItemIcon") }),
+            fmt_rects(unsafe { probe_child_rects(base, tile, c"ArtsIcon") }),
+        ));
+    }
+
     // Draw into the "ArtsIcon" CONTAINER directly. Bind probe (run-4 20260723-132050)
     // proved the equipped-slot tiles bind "ArtsIcon" but NOT "ArtsIcon/IconImage" -- the
     // container clip exists, the nested image child does not. The icon setter recurses
@@ -474,6 +545,18 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
         unsafe {
             icon_setter(proxy.as_mut_ptr(), icon_info.as_ptr());
             set_visible(proxy.as_mut_ptr(), 1);
+        }
+        // The setter draws into ArtsIcon's first child scaled to that child's local rect;
+        // ArtsIcon is a zero-extent empty clip, so this paints nothing. Runtime container
+        // bounds-set was falsified (FUN_140d84450 is a no-op on an empty MovieClip -- run
+        // 20260723-155530: ArtsIcon_post still [0,0,0,0]). The visible fix is the GFX
+        // template edit (approach B): give ArtsIcon a sized IconImage child. Post trace
+        // confirms the child rect once B lands.
+        if trace {
+            log_message(format_args!(
+                "rect trace #{attempt}: ArtsIcon_post={}",
+                fmt_rects(unsafe { probe_child_rects(base, tile, c"ArtsIcon") }),
+            ));
         }
         drawn = true;
     }
