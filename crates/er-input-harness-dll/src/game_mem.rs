@@ -312,6 +312,17 @@ pub fn read_drive_mode_flag() -> String {
         .unwrap_or_default()
 }
 
+/// PROBE HOLD-ID (CWD file `er-harness-probe-hold-id.txt` containing a decimal vk-id 1000..1080): in
+/// `probe` drive mode, HOLD that single vk-id (instead of sweeping the whole range) so one index's
+/// in-world menu action can be isolated -- e.g. confirm which index drives return-to-title. 0/absent =
+/// normal sweep. Diagnostic only (bd NEXT-inworld-menu-idmap-recovery-plan).
+pub fn probe_hold_id() -> u32 {
+    std::fs::read_to_string("er-harness-probe-hold-id.txt")
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .unwrap_or(0)
+}
+
 /// FORCE-DRIVE override (env `ER_HARNESS_FORCE_DRIVE=1` OR CWD file `er-harness-force-drive.txt`):
 /// make the harness honor its drive-mode flag EVEN when the product DLL is loaded. Default off, so the
 /// samechar-3x product run keeps the companion/Passive stand-down (the product owns the drive there).

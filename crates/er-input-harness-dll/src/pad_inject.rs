@@ -128,6 +128,30 @@ unsafe fn inject_vk(manager: usize, dev: usize) {
     }
 }
 
+/// PER-FRAME DIRECT stamp of `id` into `source+0x88` (device 0), resolving the source from the game base
+/// (bd DECISIVE-builder-not-perframe-in-menu-need-perframe-direct-stamp). The builder that `builder_*_hook`
+/// stamps after does NOT run per-frame while a menu is open (builder_fires stuck), so builder-hook
+/// injection is too sparse to drive the menu; the menu READS `source+0x88` every frame, so the drive must
+/// WRITE it every frame. `source = *(*(base+FD4_PAD_MANAGER_RVA)+0x18)` (device 0). `id`=0 (or out of
+/// range) is a no-op release. Guarded by HEAP_LO on every deref; never panics.
+pub unsafe fn stamp_vk_direct(base: usize, id: u32) {
+    if !(VK_ID_MIN..=VK_ID_MAX).contains(&id) || base < HEAP_LO {
+        return;
+    }
+    let manager = unsafe { *((base + FD4_PAD_MANAGER_RVA) as *const usize) };
+    if manager < HEAP_LO {
+        return;
+    }
+    let source = unsafe { *((manager + PAD_MGR_DEVICES_18_OFFSET) as *const usize) };
+    if source < HEAP_LO {
+        return;
+    }
+    MY_SOURCE.store(source, Ordering::SeqCst);
+    unsafe {
+        *((source + VK_ARRAY_88_OFFSET + ((id - VK_ID_MIN) as usize) * 2) as *mut u8) = 1;
+    }
+}
+
 unsafe extern "system" fn builder_a_hook(manager: usize, dev: usize, c: usize, d: usize) -> usize {
     BUILDER_FIRES.fetch_add(1, Ordering::SeqCst);
     let orig = ORIG_BUILDER_A.load(Ordering::SeqCst);

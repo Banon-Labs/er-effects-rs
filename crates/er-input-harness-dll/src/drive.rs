@@ -74,6 +74,43 @@ const PROBE_TOTAL_FRAMES: u64 =
 /// into `source+0x88` and LOG the menu response (job ptr, menuMan+0x1c flags word, tab) so the id ->
 /// action map is read from evidence -- a confirm id changes the job/flags, a tab id sets a flags bit.
 fn probe_menu_tick(im: usize, frame: u64) -> bool {
+    // HOLD-ID mode: if er-harness-probe-hold-id.txt sets a vk-id, HOLD only that id (no sweep) to isolate
+    // one index's menu action -- e.g. confirm index 34 (id 1034) drives return-to-title (bd NEXT-inworld-
+    // menu-idmap-recovery-plan). Stop injecting the instant return_title latches so the quit completes.
+    let hold = crate::game_mem::probe_hold_id();
+    if hold != 0 {
+        if return_title_requested() {
+            set_vk_id(0);
+            harness_log!(
+                "probe HOLD id={hold} f{frame}: RETURN_TITLE LATCHED -> quit triggered, stop inject"
+            );
+            return true;
+        }
+        if !pause_menu_open() {
+            request_open_ingame_menu(im);
+            set_vk_id(0);
+            return false;
+        }
+        // PER-FRAME direct stamp (the builder hook is too sparse in-menu, bd DECISIVE-builder-not-perframe):
+        // write source+0x88[hold] every frame so the menu consistently sees the held key.
+        set_vk_id(hold);
+        if let Some(base) = crate::game_mem::game_base() {
+            unsafe { crate::pad_inject::stamp_vk_direct(base, hold) };
+        }
+        if frame % PROBE_LOG_EVERY == 0 {
+            let (bf, _wf, _gs, _ms, _o) = crate::pad_inject::pad_snapshot();
+            harness_log!(
+                "probe HOLD id={hold} f{frame} bf={bf} pause_menu={} menu_id=0x{:x} job=0x{:x} flags=0x{:x} tab={} rt={}",
+                pause_menu_open() as u8,
+                top_menu_id(),
+                top_menu_job_ptr(),
+                menu_flags(),
+                optionsetting_tab_index(),
+                return_title_requested() as u8
+            );
+        }
+        return frame >= PROBE_TOTAL_FRAMES;
+    }
     if frame < PROBE_OPEN_FRAMES {
         set_vk_id(0);
         if !pause_menu_open() {
@@ -102,6 +139,13 @@ fn probe_menu_tick(im: usize, frame: u64) -> bool {
         // edge-toggle within the id segment: hold TAP_SET frames, release, a few clean edges.
         let held = (local % TAP_CYCLE_FRAMES) < TAP_SET_FRAMES;
         set_vk_id(if held { id } else { 0 });
+        // PER-FRAME direct stamp on held frames (the builder hook is too sparse in-menu) so each swept id
+        // actually reaches the menu (bd DECISIVE-builder-not-perframe).
+        if held {
+            if let Some(base) = crate::game_mem::game_base() {
+                unsafe { crate::pad_inject::stamp_vk_direct(base, id) };
+            }
+        }
         if local % PROBE_LOG_EVERY == 0 {
             let (bf, wf, gsrc, msrc, _obs) = crate::pad_inject::pad_snapshot();
             harness_log!(
