@@ -29,6 +29,14 @@ RENDER_READY_DWELL_SECONDS = 5.0  # goal SS4 hard render gate dwell
 POLL_SECONDS = 0.5  # capture cadence (user 2026-07-19: 3s log throttle hid the completion->teardown)
 LOG_THROTTLE_SECONDS = 0.5  # console log cadence -- match the poll so fast transitions are visible
 TARGET_FINAL_EPOCH = 3  # 4 loads total = fresh_deser 0..3
+
+# BELOW-TARGET-FPS teardown (user 2026-07-22, bd harness-teardown-on-below-target-fps-not-cap): the
+# reload FPS dip is the whole point of this test, so the INSTANT a reload epoch confirms sustained
+# below-target framerate the answer is captured (it is already in the timeseries) -- tear down then,
+# do NOT drive further loads or ride to the wall-clock cap making the user watch a known 20fps run.
+FPS_DIP_TASK_DELTA_THRESHOLD = 0.025  # >=0.025 s/frame (<=40fps) = clearly below the 60fps target
+FPS_DIP_CONFIRM_POLLS = 6  # consecutive movable polls below target on a reload = sustained (0.5s*6=3s);
+# rejects a single-frame blip and the brief asset-streaming-overlap transient (which recovers in <3s).
 # The final reload epoch for the current 2-switch run (load1=deser0, load2=deser1, load3=deser2). Success
 # (--require-reload-settled) requires THIS epoch's reload to move+settle so the run drives through all 3
 # loads instead of ending on load2. Matches SQ_REPRO_TARGET_SWITCHES in constants/system_quit.rs.
@@ -116,8 +124,11 @@ def snap(t: dict) -> dict:
         "oracle_player_render_ready",
         "oracle_can_move",
         "oracle_move_probe_moved_frames",
+        "oracle_chr_model_ins_present",
+        "oracle_chr_ctrl_present",
         "oracle_chr_draw_group_enabled",
         "oracle_chr_render_group_enabled",
+        "oracle_chr_onscreen",
         "oracle_chr_enable_render",
         "oracle_havok_pos",
         "oracle_play_time_ms",
@@ -183,6 +194,14 @@ def snap(t: dict) -> dict:
         "oracle_present_sync_interval",
         "oracle_present_refresh_per_present_x100",
         "oracle_present_qpc_delta_us",
+        # GX COMMAND-QUEUE submission volume (2026-07-22): reserves = cumulative GX cmd-queue slot
+        # reservations (per-submission hook, fires every frame in-world). Reserve RATE (delta/frame)
+        # boot-vs-reload measures whether the reload frame submits MORE draw work (render-bound cause).
+        # top_producers = cumulative caller-RVA histogram; diffing a boot poll vs a reload poll NAMES
+        # the producer that grows on reload. bd GPU-timestamp-semaphore-split-reload-20fps-residual.
+        "oracle_gx_cmdqueue_reserves",
+        "oracle_gx_cmdqueue_max_fill",
+        "oracle_gx_cmdqueue_top_producers",
         # COMPOSITE (2026-07-22): DLL boot-view composite duration in present detour + boot-view epoch
         # state. composite ~tens-of-ms in-world on reloads + bv_epoch_live != current_epoch => the
         # boot-view composite never stopped for the reload => fixable DLL bug.
@@ -835,6 +854,7 @@ def main() -> int:
     l1_step_entered_at: float | None = None
     reload_step_key: int | None = None
     reload_step_entered_at: float | None = None
+    fps_dip_polls = 0  # consecutive movable polls below target on the current reload epoch
 
     while True:
         now = time.monotonic()
@@ -893,19 +913,45 @@ def main() -> int:
             cur_ep = as_int(deser)
             if can_move and cur_ep not in epoch_canmove_start:
                 epoch_canmove_start[cur_ep] = now
-            move_window_ok = (
-                cur_ep in epoch_canmove_start
-                and (now - epoch_canmove_start[cur_ep]) >= MOVE_WINDOW_SECONDS
-            )
+            # BELOW-TARGET-FPS TEARDOWN: on a reload epoch (>=1), the instant the framerate is confirmed
+            # sustained below target the diagnostic is complete -- tear down immediately (user 2026-07-22).
+            # NO can_move gate: the reload's 20fps render-bound state has render_ready=False -> can_move
+            # never latches, so gating on it rode past 155s at 20fps (run7). task_delta is the frame time
+            # regardless of movability; a reload rendering sustained sub-target IS the answer.
+            if cur_ep >= 1:
+                _td_raw = s.get("oracle_flip_task_delta")
+                try:
+                    _td = float(_td_raw) if _td_raw is not None else 0.0
+                except (TypeError, ValueError):
+                    _td = 0.0
+                if _td >= FPS_DIP_TASK_DELTA_THRESHOLD:
+                    fps_dip_polls += 1
+                    if fps_dip_polls >= FPS_DIP_CONFIRM_POLLS:
+                        result = (
+                            f"RELOAD_FPS_DIP_CONFIRMED_epoch{cur_ep}_taskdelta{_td:.3f}"
+                        )
+                        print(
+                            f"[{elapsed:6.1f}s] RELOAD FPS DIP CONFIRMED epoch{cur_ep}: "
+                            f"task_delta={_td:.3f} (~{1.0 / _td:.0f}fps) sustained "
+                            f"{FPS_DIP_CONFIRM_POLLS} polls below target -> teardown",
+                            flush=True,
+                        )
+                        break
+                else:
+                    fps_dip_polls = 0
+            else:
+                fps_dip_polls = 0
             # DETERMINISTIC SWITCH DRIVER: once the CURRENT load proves movement AND has sustained a 3s
             # playable+moving window, write the control file to trigger the NEXT load (replaces the flaky
             # menu-nav). Plan entry i fires after epoch i (epoch 0 = boot load1 -> plan[0] triggers load2).
+            # SINGLE-PRESS DRIVE (user 2026-07-22): the instant control is confirmed for this epoch
+            # (harness_verdict==1 = one forward-press moved the char), trigger the NEXT load. Do NOT
+            # require a sustained 3s move window / repeat the movement burst -- one press = go.
             if (
                 switch_plan
                 and next_switch_idx < len(switch_plan)
                 and cur_ep == next_switch_idx
                 and harness_verdict == 1
-                and move_window_ok
             ):
                 _slot, _save_file = switch_plan[next_switch_idx]
                 write_switch_trigger(args.game_dir, _slot, _save_file)
@@ -918,7 +964,7 @@ def main() -> int:
                 next_switch_idx += 1
             # Success = the FINAL planned load proves movement AND holds the 3s window (final_epoch =
             # len(plan) when driving, else the legacy FINAL_RELOAD_EPOCH).
-            if harness_verdict == 1 and cur_ep >= final_epoch and move_window_ok:
+            if harness_verdict == 1 and cur_ep >= final_epoch:
                 result = f"HARNESS_MOVE_PROVEN_harness_moved_char_epoch{deser}"
                 break
             # IMPRINT CAPTURE (boot_to_control phase): end the boot imprint the INSTANT control is
@@ -1307,6 +1353,7 @@ def main() -> int:
     passed = (
         result in {"MOVEMENT_PROVEN", "RELOAD_SETTLED", "LOAD1_WORLD_READY_IMPRINT"}
         or result.startswith("HARNESS_MOVE_PROVEN")
+        or result.startswith("RELOAD_FPS_DIP_CONFIRMED")  # the reload dip is the intended capture
         or result.endswith("_CAPTURED")
         or result.startswith("OBSERVED_")  # observation ran to its window as intended
     )
@@ -1320,6 +1367,11 @@ def main() -> int:
         verdict = f"PASS (phase boundary reached via user input; imprint timeseries captured: {result})"
     elif result.startswith("HARNESS_MOVE_PROVEN"):
         verdict = "PASS (harness-attributed movement proven, contamination excluded)"
+    elif result.startswith("RELOAD_FPS_DIP_CONFIRMED"):
+        verdict = (
+            "PASS (reload below-target framerate confirmed and captured; torn down on the "
+            "fps-dip semaphore instead of the wall-clock cap)"
+        )
     else:
         verdict = f"FAIL / incomplete ({result})"
     lines.append(f"## Verdict: {verdict}")

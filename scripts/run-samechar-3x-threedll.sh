@@ -139,10 +139,27 @@ rm -f "$GAME_DIR"/er-effects-system-quit-repro.txt "$GAME_DIR"/er-effects-system
 rm -f "$GAME_DIR"/er-effects-*.log "$GAME_DIR"/er-reload-trace.log "$GAME_DIR"/er-input-harness.log \
 	"$GAME_DIR"/er-effects-telemetry.json 2>/dev/null
 
+# SAFETY (bd never-blanket-kill-eldenring-killed-user-game-2026-07-22): capture the eldenring.exe/me3
+# PIDs that already exist BEFORE we launch (a user's live game, another agent's run) so teardown can
+# NEVER touch them. A blanket `taskkill /IM eldenring.exe` here once killed the user's active session.
+win_pids_for() {
+	tasklist.exe /FI "IMAGENAME eq $1" /FO CSV /NH 2>/dev/null |
+		python3 -c "import sys,csv; print(' '.join(r[1] for r in csv.reader(sys.stdin) if len(r)>1 and r[1].isdigit()))"
+}
+PRE_ER_PIDS=" $(win_pids_for eldenring.exe) "
+PRE_ME3_PIDS=" $(win_pids_for me3.exe) $(win_pids_for me3-launcher.exe) "
+
 # shellcheck disable=SC2317
 cleanup() {
-	taskkill.exe /F /IM eldenring.exe >/dev/null 2>&1
-	taskkill.exe /F /IM me3.exe >/dev/null 2>&1
+	# Kill ONLY the eldenring.exe/me3 PIDs THIS run spawned (current set minus the pre-launch set).
+	# NEVER a blanket /IM -- that killed a user's live game (bd never-blanket-kill-eldenring-killed-user-game).
+	local pid
+	for pid in $(win_pids_for eldenring.exe); do
+		[[ "$PRE_ER_PIDS" == *" $pid "* ]] || taskkill.exe /F /PID "$pid" >/dev/null 2>&1
+	done
+	for pid in $(win_pids_for me3.exe) $(win_pids_for me3-launcher.exe); do
+		[[ "$PRE_ME3_PIDS" == *" $pid "* ]] || taskkill.exe /F /PID "$pid" >/dev/null 2>&1
+	done
 	[[ -f "$ARTIFACT_DIR/er-effects.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-effects.toml.bak" "$GAME_DIR/er-effects.toml"
 }
 trap cleanup EXIT

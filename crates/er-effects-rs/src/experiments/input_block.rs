@@ -981,22 +981,13 @@ pub(crate) fn enforce_input_block_now() {
         // Not yet hooked (xinput DLL may load late): retry each frame until it sticks.
         unsafe { install_xinput_block() };
     }
-    // Lock down MOUSE MOVEMENT: the DInput GetDeviceState block zeroes keyboard + mouse buttons +
-    // DInput mouse deltas, but ER moves the MENU cursor via the OS cursor position (GetCursorPos),
-    // which DInput blocking does NOT cover -- so the user can still move the cursor. Confine the OS
-    // cursor to a 1x1 rect: it physically cannot move regardless of which API reads it, making the run
-    // uncontaminatable by the mouse. FREEZE IT IN PLACE at its CURRENT position rather than yanking it
-    // to (0,0) -- same protection, but does not disruptively teleport the user's mouse to the top-left
-    // corner during a run (user 2026-07-19). Released (ClipCursor(None)) when the block lifts.
-    let mut pt = windows::Win32::Foundation::POINT { x: 0, y: 0 };
-    let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt) };
-    let clip = RECT {
-        left: pt.x,
-        top: pt.y,
-        right: pt.x + 1,
-        bottom: pt.y + 1,
-    };
-    let _ = unsafe { ClipCursor(Some(&clip)) };
+    // CURSOR CONFINEMENT REMOVED (user 2026-07-22, bd input-block-1x1-clipcursor-traps-user-native-
+    // windows-no-failsafe-release): the per-frame `ClipCursor(Some(1x1 rect))` that used to confine the
+    // OS cursor is gone. It re-applied every frame while the block was active, and because it has no
+    // fail-safe release it TRAPPED the user's mouse whenever the harness failed/stalled (an external
+    // ClipCursor(None) was instantly overwritten by the next frame). The DInput/XInput zeroing above
+    // still suppresses keyboard + mouse buttons + gamepad; the OS cursor is left free. If a future probe
+    // genuinely needs cursor confinement it must be paired with a stall watchdog + DllMain-detach release.
 }
 
 /// USER SUGGESTION 2026-07-20: disable KEYBOARD+MOUSE as GAME inputs during an agent-owned run, leaving

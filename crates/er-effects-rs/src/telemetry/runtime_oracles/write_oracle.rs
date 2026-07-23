@@ -334,9 +334,16 @@ fn write_player_presence_oracle(body: &mut String) {
         let chr_render_group_enabled = player.chr_ins.chr_flags1c4.is_render_group_enabled();
         let chr_onscreen = player.chr_ins.chr_flags1c4.is_onscreen();
         let chr_enable_render = player.chr_ins.chr_flags1c5.enable_render();
+        // player_render_ready = the player is actually being RENDERED: model+ctrl instances exist and
+        // the render-group + enable_render flags are on. It intentionally does NOT require
+        // chr_draw_group_enabled -- that is a LOAD draw-state flag that stays FALSE through a valid
+        // movable reload (run4 load3 moved 115 frames with draw_group=False), which made render_ready a
+        // false-negative reading False while the game presented frames at 20fps (user 2026-07-22:
+        // ">0 fps with render_ready false makes no sense"). draw_group is kept as its own oracle
+        // (oracle_chr_draw_group_enabled): it is the reload "still in loading draw-state" signal, which
+        // stays False for the whole 20fps render-bound reload window and is a candidate FPS-root marker.
         let player_render_ready = chr_model_ins_ptr != TITLE_OWNER_SCAN_START_ADDRESS
             && chr_ctrl_ptr != TITLE_OWNER_SCAN_START_ADDRESS
-            && chr_draw_group_enabled
             && chr_render_group_enabled
             && chr_enable_render;
         body.push_str(&format!(
