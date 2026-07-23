@@ -358,10 +358,13 @@ impl Phase {
             }
             Phase::QuitTeardown => !sem.world_sim && sem.load_fsm <= 0 && frame > TAP_CYCLE_FRAMES,
             Phase::NativeQuit => {
-                // Direct native return-to-title: write menuData+0x5d=1 each frame until the request latches
-                // (bd BREAKTHROUGH-native-return-to-title). No menu input. EFFECT: return_title requested.
+                // Direct native return-to-title: write menuData+0x5d=1 each frame (bd BREAKTHROUGH-native-
+                // return-to-title). No menu input. Complete when the world ACTUALLY tears down (!world_sim),
+                // NOT merely when return_title_requested() latches -- that flag can be STALE from a prior
+                // reload cycle (reload2: the 2nd native_quit saw return_title=1 left from reload1 and
+                // advanced in 0f without quitting). world_sim going false is the real, per-cycle effect.
                 crate::game_mem::request_return_to_title();
-                return_title_requested()
+                !sem.world_sim
             }
             Phase::ProbeMenu => probe_menu_tick(im, frame),
         };
