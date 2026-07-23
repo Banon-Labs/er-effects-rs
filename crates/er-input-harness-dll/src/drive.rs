@@ -507,12 +507,16 @@ static ONFRAME_IM_NULL_DIAG: AtomicBool = AtomicBool::new(false);
 static INGAMETOP_JOB: AtomicUsize = AtomicUsize::new(0);
 
 fn resolve_mode() -> DriveMode {
-    const MODES: [DriveMode; 5] = [
-        DriveMode::BootContinueOnly,
-        DriveMode::NativeReloadOnly,
-        DriveMode::FullBootReload,
-        DriveMode::Probe,
-        DriveMode::Passive,
+    // MUST stay index-aligned with the `idx` match below (bd reload2-crash-MODES-oob): every DriveMode
+    // needs a slot here or MODES[cached] panics. NativeReloadTwice=5 was added to the match but not here,
+    // so the 2nd per-frame resolve_mode() indexed MODES[5] out-of-bounds -> crash ~after boot (run64/65/67).
+    const MODES: [DriveMode; 6] = [
+        DriveMode::BootContinueOnly,  // 0
+        DriveMode::NativeReloadOnly,  // 1
+        DriveMode::FullBootReload,    // 2
+        DriveMode::Probe,             // 3
+        DriveMode::Passive,           // 4
+        DriveMode::NativeReloadTwice, // 5
     ];
     let cached = MODE_IDX.load(Ordering::SeqCst);
     if cached != usize::MAX {
