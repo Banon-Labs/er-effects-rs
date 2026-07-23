@@ -53,6 +53,28 @@ def contains(path: Path, needle: str) -> bool:
         return False
 
 
+def capture_window(repo_root: Path, artifact_dir: Path) -> str:
+    """Capture the live ER window to a PNG via the Windows-native PowerShell helper.
+    Returns a status line. Best-effort: never raises."""
+    ps1 = repo_root / "scripts" / "capture-er-window-win.ps1"
+    out = artifact_dir / "armament-icons-equip.png"
+    try:
+        win_out = subprocess.run(["wslpath", "-w", str(out)], text=True,
+                                 capture_output=True, timeout=15).stdout.strip()
+        win_ps1 = subprocess.run(["wslpath", "-w", str(ps1)], text=True,
+                                 capture_output=True, timeout=15).stdout.strip()
+        subprocess.run(
+            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-File", win_ps1, win_out],
+            capture_output=True, timeout=25,
+        )
+    except Exception as exc:
+        return f"capture error: {exc}"
+    note = out.with_suffix(".txt")
+    detail = note.read_text(encoding="utf-8", errors="replace").strip() if note.exists() else "no note"
+    return f"capture: {'PNG ' + str(out) if out.exists() else 'FAILED'} ({detail})"
+
+
 def teardown(pre_er: set[int], pre_me3: set[int]) -> str:
     """Kill only this run's PIDs; two passes with a verify wait. Returns a status line."""
     attempt = 0
@@ -80,6 +102,7 @@ def main() -> int:
     ap.add_argument("--settle-seconds", type=float, default=10.0)
     ap.add_argument("--pre-er-pids", default="")
     ap.add_argument("--pre-me3-pids", default="")
+    ap.add_argument("--repo-root", type=Path, default=Path.cwd())
     args = ap.parse_args()
 
     pre_er = {int(x) for x in args.pre_er_pids.split() if x.isdigit()}
@@ -90,16 +113,26 @@ def main() -> int:
     start = time.monotonic()
     decisive = 0.0
     verdict = "INCOMPLETE"
+    capture_line = "capture: not attempted"
+    captured = False
     while True:
         elapsed = time.monotonic() - start
         if elapsed >= args.max_seconds:
             verdict = "CAP_BACKSTOP"
             break
+        equip_open = contains(phases, '"phase":"open_equip_menu"') and contains(
+            phases, '"outcome":"advanced"'
+        )
         dwell_done = contains(phases, '"phase":"dwell_equip"') and contains(
             phases, '"outcome":"advanced"'
         )
         drawn = contains(badge_log, "badge sample: DRAWN")
         derailed = contains(phases, '"outcome":"derailed"')
+        # Capture the pixels while the Equipment menu is up (equip open), BEFORE teardown --
+        # this is the moment the user reviews (the loading-screen-portrait pattern).
+        if equip_open and not captured:
+            capture_line = capture_window(args.repo_root, args.artifact_dir)
+            captured = True
         if decisive == 0.0:
             if dwell_done:
                 verdict = "PASS" if drawn else "DWELL_NO_DRAW"
@@ -110,6 +143,10 @@ def main() -> int:
         elif time.monotonic() - decisive >= args.settle_seconds:
             break
         _POLL_WAIT.wait(POLL_SECONDS)
+
+    # Re-capture right at the end of dwell too (badges fully settled), if the menu is still up.
+    if verdict == "PASS":
+        capture_line = capture_window(args.repo_root, args.artifact_dir)
 
     status_line = teardown(pre_er, pre_me3)
 
@@ -124,7 +161,8 @@ def main() -> int:
             shutil.copy(src, args.artifact_dir / name)
 
     report = args.artifact_dir / "report.txt"
-    lines = [f"verdict: {verdict}", f"elapsed_seconds: {int(time.monotonic() - start)}", status_line]
+    lines = [f"verdict: {verdict}", f"elapsed_seconds: {int(time.monotonic() - start)}",
+             capture_line, status_line]
     log_copy = args.artifact_dir / "er-armament-icons.log"
     if log_copy.exists():
         lines.append("--- badge log tail ---")

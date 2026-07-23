@@ -53,8 +53,12 @@ const MENU_GAITEM_SWORD_ARTS_RESOLVER_RVA: usize = 0x849880;
 /// `{ u32 paramId @0x0, SwordArtsParam* row @0x8 }`, row null when the id misses.
 /// dump 0x140d50d70 -> deobf 0x140d50cc0 (-0xb0). CALL target.
 const LOOKUP_SWORD_ARTS_PARAM_RVA: usize = 0xd50cc0;
-/// SwordArtsParam row: iconId is the u16 at row +0x1A (HUD consumer
-/// CS::CSFeManImp::UpdatePlayerComponents dump 0x140772b70 reads it there).
+/// SwordArtsParam row: skill iconId is the u16 at row +0x1A. Ground-truthed to the
+/// game's OWN HUD skill-icon builder CS::CSFeManImp::UpdatePlayerComponents (dump
+/// 0x140772b70): it reads `*(u16*)(swordArtsRow + offsetof(_EQUIP_PARAM_GOODS_ST,
+/// behaviorId=0x18) + 2)` = row+0x1A and feeds it to the iconInfo builder for the
+/// equipped-weapon skill icon. Reading the same offset makes the badge match the
+/// game's own skill icon exactly.
 const SWORD_ARTS_PARAM_ICON_ID_OFFSET: usize = 0x1a;
 /// iconInfo builder `FUN_14073d4e0(iconInfo* out, uint iconId)`: zero-fills the
 /// 0x40-byte iconInfo, writes category (+0x38, from the iconId range table) and
