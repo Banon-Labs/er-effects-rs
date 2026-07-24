@@ -80,7 +80,9 @@ require_fresh_dll \
 	"$REPO_ROOT/crates/er-safe-input/Cargo.toml" \
 	"$REPO_ROOT/crates/er-safe-input/src" \
 	"$REPO_ROOT/crates/er-hook/Cargo.toml" \
-	"$REPO_ROOT/crates/er-hook/src"
+	"$REPO_ROOT/crates/er-hook/src" \
+	"$REPO_ROOT/crates/er-game-base/Cargo.toml" \
+	"$REPO_ROOT/crates/er-game-base/src"
 require_fresh_dll \
 	"$TELEM_DLL" \
 	"$REPO_ROOT/crates/er-telemetry-dll/Cargo.toml" \
@@ -93,8 +95,8 @@ win_pids_for() {
 		python3 -c "import sys,csv; print(' '.join(r[1] for r in csv.reader(sys.stdin) if len(r)>1 and r[1].isdigit()))"
 }
 
-if [[ -n "$(win_pids_for eldenring.exe)$(win_pids_for start_protected_game.exe)" ]]; then
-	fail "An Elden Ring process is already running. Tear it down before launching."
+if [[ -n "$(win_pids_for eldenring.exe)$(win_pids_for start_protected_game.exe)$(win_pids_for me3.exe)$(win_pids_for me3-launcher.exe)" ]]; then
+	fail "An Elden Ring/me3 process is already running. Tear it down before launching."
 fi
 
 ME3="${ME3:-/mnt/c/Users/$USER/AppData/Local/garyttierney/me3/bin/me3.exe}"

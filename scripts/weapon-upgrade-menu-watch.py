@@ -29,6 +29,8 @@ from pathlib import Path
 
 POLL_SECONDS = 2.0
 KILL_VERIFY_SECONDS = 2.0
+TASKLIST_TIMEOUT_SECONDS = 3
+TASKKILL_TIMEOUT_SECONDS = 5
 NO_HARNESS_PHASES_SECONDS = 12.0
 NO_PHASE_PROGRESS_SECONDS = 12.0
 _POLL_WAIT = threading.Event()
@@ -40,7 +42,7 @@ def win_pids_for(image: str) -> set[int]:
             ["tasklist.exe", "/FI", f"IMAGENAME eq {image}", "/FO", "CSV", "/NH"],
             text=True,
             capture_output=True,
-            timeout=15,
+            timeout=TASKLIST_TIMEOUT_SECONDS,
         ).stdout
     except Exception:
         return set()
@@ -85,6 +87,17 @@ def newest_mtime(paths: tuple[Path, ...]) -> float:
     return latest
 
 
+def last_phase_fields(events: list[dict[str, object]]) -> tuple[str, str, str]:
+    if not events:
+        return "", "", ""
+    last = events[-1]
+    return (
+        str(last.get("phase", "")),
+        str(last.get("outcome", "")),
+        str(last.get("duration_frames", last.get("end_frame", ""))),
+    )
+
+
 def teardown(pre_er: set[int], pre_me3: set[int]) -> str:
     attempt = 0
     for _ in (1, 2):
@@ -93,15 +106,14 @@ def teardown(pre_er: set[int], pre_me3: set[int]) -> str:
             subprocess.run(
                 ["taskkill.exe", "/F", "/PID", str(pid)],
                 capture_output=True,
-                timeout=15,
+                timeout=TASKKILL_TIMEOUT_SECONDS,
             )
         for image in ("me3.exe", "me3-launcher.exe"):
-            baseline = pre_me3 if image == "me3.exe" else set()
-            for pid in win_pids_for(image) - baseline:
+            for pid in win_pids_for(image) - pre_me3:
                 subprocess.run(
                     ["taskkill.exe", "/F", "/PID", str(pid)],
                     capture_output=True,
-                    timeout=15,
+                    timeout=TASKKILL_TIMEOUT_SECONDS,
                 )
         _POLL_WAIT.wait(KILL_VERIFY_SECONDS)
         if not (win_pids_for("eldenring.exe") - pre_er):
@@ -137,10 +149,12 @@ def main() -> int:
     verdict = "INCOMPLETE"
     last_activity_mtime = 0.0
     last_activity_seen = start
+    last_events: list[dict[str, object]] = []
     while True:
         now = time.monotonic()
         elapsed = now - start
         events = phase_events(phases)
+        last_events = events
         outcomes = phase_outcomes(events)
         activity_mtime = newest_mtime((phases, harness_log))
         if activity_mtime > last_activity_mtime:
@@ -199,6 +213,7 @@ def main() -> int:
         _POLL_WAIT.wait(POLL_SECONDS)
 
     status_line = teardown(pre_er, pre_me3)
+    last_phase, last_outcome, last_phase_frame = last_phase_fields(last_events)
 
     for name in (
         "er-input-harness.log",
@@ -218,6 +233,9 @@ def main() -> int:
         f"mode: {args.mode}",
         status_line,
         f"last_activity_idle_seconds: {int(time.monotonic() - last_activity_seen)}",
+        f"last_phase: {last_phase}",
+        f"last_phase_outcome: {last_outcome}",
+        f"last_phase_frame: {last_phase_frame}",
     ]
     phase_copy = args.artifact_dir / "er-input-harness-phases.jsonl"
     if phase_copy.exists():

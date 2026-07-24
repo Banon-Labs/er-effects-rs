@@ -30,6 +30,8 @@ mod log;
 #[cfg(windows)]
 mod pad_inject;
 #[cfg(windows)]
+mod strengthen_probe;
+#[cfg(windows)]
 mod title_scan;
 mod win32;
 
@@ -91,6 +93,7 @@ fn install() {
     // (inputmgr+0x90 is OUTPUT in-world; the menu reads the pad device). Title/boot still use the accept
     // byte from the CSTaskImp task below.
     pad_inject::install_pad_poll_hook(base);
+    strengthen_probe::install_strengthen_row_hook(base);
     harness_log!(
         "er-input-harness-dll install complete {}",
         game_mem::snapshot()

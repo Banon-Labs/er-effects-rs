@@ -35,6 +35,7 @@ use crate::input_inject::{
 };
 use crate::log::{harness_log, log_phase};
 use crate::pad_inject::{PadButton, set_pad_button, set_vk_id};
+use crate::strengthen_probe::{last_row_snapshot, last_selected_row_is_weapon};
 use crate::title_scan;
 use crate::win32::GetTickCount64;
 
@@ -45,6 +46,9 @@ const TAP_CYCLE_FRAMES: u64 = TAP_SET_FRAMES + TAP_GAP_FRAMES;
 /// Popup-accept cadence (dialog-OK id 0x01, harmless when no dialog is up).
 const POPUP_SET_FRAMES: u64 = 2;
 const POPUP_CYCLE_FRAMES: u64 = 8;
+/// Emit phase heartbeat telemetry while a long phase is still running. This lets the external watcher
+/// distinguish active loading/boot progress from a silent wedged harness.
+const PHASE_HEARTBEAT_FRAMES: u64 = 60;
 /// Settle after the tab-switch tap (no passive tab-index read; verified downstream by the quit phase).
 const TAB_SETTLE_FRAMES: u64 = 30;
 
@@ -501,15 +505,20 @@ impl Phase {
             Phase::BuildStrengthenDialog => {
                 issue_pad_taps_once(&[PadButton::Confirm], frame);
                 let gate = top_window_dialog_accept_gate();
+                let row = last_row_snapshot();
+                let weapon_row = last_selected_row_is_weapon();
                 if frame % TAP_CYCLE_FRAMES == 0 {
                     harness_log!(
-                        "upgrade-det: build dialog semaphores dialog_exists={} dialog_ready={} open_menu={}",
+                        "upgrade-det: build dialog semaphores dialog_exists={} dialog_ready={} open_menu={} row_kind={} row_item_id=0x{:x} row_serial={}",
                         gate.is_some() as u8,
                         gate.is_some_and(crate::input_scheduler::DialogAcceptGate::is_ready) as u8,
-                        sem.open_menu
+                        sem.open_menu,
+                        row.kind.as_str(),
+                        row.item_id,
+                        row.serial
                     );
                 }
-                gate.is_some()
+                gate.is_some() && weapon_row
             }
             Phase::BufferedStrengthenDialogOk => {
                 let gate = top_window_dialog_accept_gate();
@@ -865,8 +874,9 @@ fn emit_phase_telemetry(
     // 0.0167 = 60fps. The differential loop diffs THIS per phase, not raw fps.
     let fixed_spf = flip_fixed_spf();
     let flip_mode = flip_mode_current();
+    let row = last_row_snapshot();
     let line = format!(
-        "{{\"phase\":\"{name}\",\"idx\":{idx},\"outcome\":\"{outcome}\",\"start_tick_ms\":{start_tick},\"end_tick_ms\":{end_tick},\"duration_ms\":{duration_ms},\"start_frame\":0,\"end_frame\":{frame},\"duration_frames\":{frame},\"title_state\":{title_state},\"a40\":{a40},\"pause_menu_open\":{},\"menu_id\":{menu_id},\"open_menu\":{},\"top_window\":\"0x{:x}\",\"top_window_vtable\":\"0x{:x}\",\"tab_index\":{tab},\"return_title\":{},\"dialog_accept_ready\":{},\"fixed_spf\":{fixed_spf:.4},\"flip_mode\":{flip_mode},\"menu\":\"0x{:x}\",\"world_sim\":{},\"now_loading\":{},\"load_fsm\":{}}}",
+        "{{\"phase\":\"{name}\",\"idx\":{idx},\"outcome\":\"{outcome}\",\"start_tick_ms\":{start_tick},\"end_tick_ms\":{end_tick},\"duration_ms\":{duration_ms},\"start_frame\":0,\"end_frame\":{frame},\"duration_frames\":{frame},\"title_state\":{title_state},\"a40\":{a40},\"pause_menu_open\":{},\"menu_id\":{menu_id},\"open_menu\":{},\"top_window\":\"0x{:x}\",\"top_window_vtable\":\"0x{:x}\",\"tab_index\":{tab},\"return_title\":{},\"dialog_accept_ready\":{},\"fixed_spf\":{fixed_spf:.4},\"flip_mode\":{flip_mode},\"menu\":\"0x{:x}\",\"world_sim\":{},\"now_loading\":{},\"load_fsm\":{},\"strengthen_row_kind\":\"{}\",\"strengthen_row_serial\":{},\"strengthen_row_selected\":\"0x{:x}\",\"strengthen_row_item_id\":\"0x{:x}\",\"strengthen_row_item_type\":\"0x{:x}\",\"strengthen_row_item_category\":\"0x{:x}\",\"strengthen_row_item_id_category\":\"0x{:x}\",\"strengthen_row_open_menu\":\"0x{:x}\"}}",
         pause_menu_open() as u8,
         sem.open_menu,
         sem.top_window,
@@ -876,7 +886,15 @@ fn emit_phase_telemetry(
         sem.menu,
         sem.world_sim as u8,
         sem.now_loading as u8,
-        sem.load_fsm
+        sem.load_fsm,
+        row.kind.as_str(),
+        row.serial,
+        row.selected_ptr,
+        row.item_id,
+        row.item_type,
+        row.item_category,
+        row.item_id_category,
+        row.open_menu
     );
     log_phase(&line);
 }
@@ -927,6 +945,19 @@ pub fn on_frame(base: usize) {
     let start_tick = PHASE_START_TICK.load(Ordering::SeqCst);
     // world_simulating mutates a rising streak -> compute exactly once per frame.
     let sem = Sem::read(world_simulating());
+    if frame == 0 {
+        emit_phase_telemetry(base, phase.name(), idx, "enter", start_tick, frame, &sem);
+    } else if frame % PHASE_HEARTBEAT_FRAMES == 0 {
+        emit_phase_telemetry(
+            base,
+            phase.name(),
+            idx,
+            "heartbeat",
+            start_tick,
+            frame,
+            &sem,
+        );
+    }
 
     let status = match im {
         Some(im) => phase.tick(base, im, frame, &sem),
