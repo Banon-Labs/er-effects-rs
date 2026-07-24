@@ -28,6 +28,10 @@ When a user-visible asset/runtime test shows no change, do not answer with a "mo
 
 After launching Elden Ring, Blender, or any other user-visible app for the user's live inspection, do not immediately pivot into unrelated edits, checks, or background work. First perform and report a bounded post-launch state check: launched profile/artifact path, launcher/process state, matched top-level window when applicable, latest relevant launcher/log evidence, and crash/modal/error-window scan when the tool can provide it. If the launch remains open for the user, explicitly record it as a tracked live resource with PID/title/profile path and then stop mutating until the user's next observation or an agreed monitor/teardown step. A process/window appearing is not enough by itself to claim the launch is safe or review-ready.
 
+## Steam Runtime Preflight Evidence
+
+Do not use WSL-only process checks such as `pgrep -x steam` as authoritative evidence that Windows Steam is absent. They can false-negative when Steam is running on the Windows side or under a different process name. For Elden Ring launch/probe readiness, use the repo's approved Cupcake/policy-enforced preflight path or an equivalent Windows-side structured process check; if that path is blocked, state the blocker instead of concluding Steam is absent.
+
 ## Asset Deformation Feedback Before More Slider Tuning
 
 When user feedback shows that offline slider changes are not producing the intended deformation, stop continuing blind slider iterations. Establish a direct authoring/feedback surface first: load the ER donor/player body and the imported source model together in a 3D tool, compare literal model bounds/proportions, inspect weights/bone ownership, and make the next edit from that evidence. Prefer Blender plus a Souls/FLVER-capable importer/exporter or another direct FLVER authoring tool over more runtime-only guesswork. Do not propose skeleton or weapon-socket edits as the next step until the model-scale/fit comparison has been made or proven unavailable.
