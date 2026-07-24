@@ -2728,6 +2728,14 @@ name = "er-ags-stub"
 version = "0.1.0"
 
 [[package]]
+name = "er-better-refills-dll"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "er-hook",
+]
+
+[[package]]
 name = "er-bevy-shader-lab"
 version = "0.1.0"
 dependencies = [
