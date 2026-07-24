@@ -63,6 +63,10 @@ const CONTINUE_BUDGET: u64 = 300;
 /// load-state semaphores do not settle promptly, fail closed and tear down instead of leaving the user
 /// sitting in-game behind a stalled watchdog.
 const LOAD_BUDGET: u64 = 1200;
+/// If world simulation and the load FSM look settled but the now-loading latch is still stuck, fail
+/// closed quickly instead of idling in game. This captures the 2026-07-24 user-intervention artifact
+/// where `world_sim=1, load_fsm=0, now_loading=1` persisted through many heartbeats.
+const LOAD_READY_MISMATCH_BUDGET: u64 = 120;
 /// A single in-world keystate nav step (open / pane change / tab). ~8s.
 const NAV_BUDGET: u64 = 480;
 /// Native quit-to-menu confirm + world teardown. ~10s.
@@ -399,7 +403,19 @@ impl Phase {
                 advance_press_any_button(base);
                 sem.load_started()
             }
-            Phase::WaitLoadIn => sem.world_sim && !sem.now_loading,
+            Phase::WaitLoadIn => {
+                if sem.world_sim
+                    && sem.load_fsm == 0
+                    && sem.now_loading
+                    && frame >= LOAD_READY_MISMATCH_BUDGET
+                {
+                    harness_log!(
+                        "wait-load-in: DERAILED readiness mismatch world_sim=1 load_fsm=0 now_loading=1 after {frame}f"
+                    );
+                    return Status::Derailed;
+                }
+                sem.world_sim && !sem.now_loading
+            }
             Phase::OpenPauseMenu => {
                 if !pause_menu_open() {
                     request_open_ingame_menu(im);

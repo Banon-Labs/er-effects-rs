@@ -5,6 +5,7 @@ These tests are no-launch/no-Windows-process tests. They import the watcher, mon
 lookup to an empty set, and drive synthetic harness files so the teardown verdicts that protect the
 user's desktop remain executable.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -19,7 +20,9 @@ WATCH_PATH = REPO_ROOT / "scripts" / "weapon-upgrade-menu-watch.py"
 
 
 def load_watcher():
-    spec = importlib.util.spec_from_file_location("weapon_upgrade_menu_watch", WATCH_PATH)
+    spec = importlib.util.spec_from_file_location(
+        "weapon_upgrade_menu_watch", WATCH_PATH
+    )
     if spec is None or spec.loader is None:
         raise RuntimeError(f"failed to load {WATCH_PATH}")
     module = importlib.util.module_from_spec(spec)
@@ -32,7 +35,9 @@ def load_watcher():
     return module
 
 
-def run_watch(watcher, game_dir: Path, artifact_dir: Path, *extra: str) -> tuple[int, str]:
+def run_watch(
+    watcher, game_dir: Path, artifact_dir: Path, *extra: str
+) -> tuple[int, str]:
     old_argv = sys.argv[:]
     sys.argv = [
         str(WATCH_PATH),
