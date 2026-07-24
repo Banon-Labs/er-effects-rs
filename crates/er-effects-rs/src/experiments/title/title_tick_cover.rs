@@ -311,10 +311,10 @@ pub(crate) unsafe extern "system" fn ingamestep_step_movemap_update_defer_detour
         {
             return false;
         }
-        let Some(mms) = (unsafe {
-            safe_read_usize(ingame_step + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET)
-        })
-        .filter(|&m| m > PAB_MIN_HEAP_PTR) else {
+        let Some(mms) =
+            (unsafe { safe_read_usize(ingame_step + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) })
+                .filter(|&m| m > PAB_MIN_HEAP_PTR)
+        else {
             return false;
         };
         // The finalize substate at +0x12a is a single BYTE (the SWITCH-ORACLE reads it with
@@ -368,16 +368,9 @@ pub(crate) unsafe fn install_ingamestep_step_movemap_update_defer_hook(base: usi
     std::mem::forget(hooks);
 }
 
-/// After-original override for the child-done query FUN_140eb5550 (rva 0xeb5530). STEP_MoveMap_Update
-/// tears the MoveMapStep child down (FUN_140eb54e0 + requestCode+0xd8=2) when this returns done; for
-/// load2 it returns done PREMATURELY (field25=0) -> advancer stops -> frozen (bd COMPLETE-CHAIN-load2-
-/// child-torndown-early-fun140eb5550-done-premature). Isolate the MoveMapStep child's call
-/// (rcx == current MoveMapStep + 0x108, bd mms-child-ezchildstepbase-at-plus0x108) and, on a committed
-/// reload while the finalize is mid-walk (field25 in 0..=8), force the result NOT-done so
-/// STEP_MoveMap_Update takes its `if(!done) return` branch (keeps the child, no teardown) while the
-/// FD4-ticked child keeps ticking the advancer FUN_140afa7c0 until field25 reaches 9; then the real
-/// done passes -> natural teardown -> world completes. ONLY the MoveMapStep child (rcx gate) on a
-/// committed reload is touched; load1 (epoch 0) and every other child/query are unchanged.
+/// After-original override for child-done query FUN_140eb5550 (rva 0xeb5530).
+/// On committed load2, force the MoveMapStep child query NOT-done while finalize field25 is 0..=8;
+/// field25==9 then lets native teardown proceed. Load1 and all other child queries are unchanged.
 pub(crate) unsafe extern "system" fn child_done_query_override_detour(
     child_base: usize,
     param2: usize,
@@ -391,18 +384,15 @@ pub(crate) unsafe extern "system" fn child_done_query_override_detour(
     let orig: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(orig_addr) };
     let ret = unsafe { orig(child_base, param2, r8, r9) };
-    // DIAG: for every call whose child_base-0x108 is a MoveMapStep at step 18, log ret + field25 so a
-    // run shows exactly why the HOLD does/doesn't fire (throttled).
+    // DIAG: log relevant committed-reload child-done calls so a run explains HOLD behavior.
     if SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) != 0
         && child_base > PAB_MIN_HEAP_PTR + MOVEMAPSTEP_CHILD_EZSTEP_BASE_OFFSET
     {
-        // UNGATED: log every committed-reload child-done call whose return is DONE (ret!=0), with the
-        // mms_state + field25 that child_base-0x108 points to. Reveals the ACTUAL child_base<->MoveMapStep
-        // relationship for the reload freeze (run13: the ==18 gate never matched, so the single run11
-        // mms+0x108 data point does not generalize). Also probe the reliable-oracle mms for comparison.
+        // UNGATED: log DONE calls plus mms_state/field25 for child_base-0x108 and oracle mms.
         if (ret & 0xff) != 0 {
             let mms_d = child_base - MOVEMAPSTEP_CHILD_EZSTEP_BASE_OFFSET;
-            let st_d = unsafe { safe_read_i32(mms_d + INGAMESTEP_STEP_STATE_OFFSET) }.unwrap_or(-999);
+            let st_d =
+                unsafe { safe_read_i32(mms_d + INGAMESTEP_STEP_STATE_OFFSET) }.unwrap_or(-999);
             let f_d = unsafe { safe_read_u8(mms_d + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET) }
                 .map(i32::from)
                 .unwrap_or(-1);
@@ -422,22 +412,16 @@ pub(crate) unsafe extern "system" fn child_done_query_override_detour(
         {
             return false;
         }
-        // RELEASE post-stabilization (bd CORRECTION-STEP4-finalize-substate-is-0): the override only needs to
-        // prevent PREMATURE child teardown DURING the load. Once the reloaded world has been genuinely live
-        // (play_time advancing) for a sustained window, the load is complete -- stop holding so the
-        // MoveMapStep child tears down like vanilla (else it is stranded alive forever = ez10-set + ~4fps
-        // steady-state divergence). 180 frames (~3s) is well past load completion, so no premature-teardown
-        // risk (the stranding it guards against happens in the first ~1s of the reload).
+        // RELEASE: hold only during load. After ~3s of genuine world-liveness, release so the
+        // MoveMapStep child tears down like vanilla instead of staying stranded at ~4fps.
         const WORLD_STABLE_RELEASE_FRAMES: usize = 180;
         if er_telemetry::counters::WORLD_LIVE_STABLE_FRAMES.load(Ordering::SeqCst)
             >= WORLD_STABLE_RELEASE_FRAMES
         {
             return false;
         }
-        // Derive the MoveMapStep from the query's OWN child_base (child EzChildStepBase = mms+0x108),
-        // self-consistently -- no dependence on the telemetry-published pointer (which raced/mismatched
-        // in run11). Validate it IS the MoveMapStep at step 18 (state @ +0x48 == 18) so other children's
-        // queries (whose child_base-0x108 is not a step-18 MoveMapStep) are never held.
+        // Derive MoveMapStep from this query's child_base (mms+0x108), then gate on step 18 so
+        // unrelated child queries are never held.
         if child_base <= PAB_MIN_HEAP_PTR + MOVEMAPSTEP_CHILD_EZSTEP_BASE_OFFSET {
             return false;
         }
@@ -502,7 +486,8 @@ pub(crate) unsafe fn install_child_done_query_override_hook(base: usize) {
 // call (0x140aec5f0). bd loadlist-capture-hook-wrong-address-0xaec480-midfunction-refind-entry.
 pub(crate) const LOADLIST_INIT_RVA: usize = 0xaec570;
 const INGAMESTEP_WORLDLOADLIST_VPATH_OFFSET: usize = 0x108;
-pub(crate) static LOADLIST_INIT_ORIG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static LOADLIST_INIT_ORIG: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 static LOADLIST_INIT_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) use er_telemetry::counters::LOADLIST_INIT_CALLS;
 
@@ -1435,9 +1420,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         let ig_d8 = if owner != null {
             unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) }
                 .filter(|&ig| ig > 0x10000)
-                .and_then(|ig| unsafe {
-                    safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET)
-                })
+                .and_then(|ig| unsafe { safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) })
                 .unwrap_or(-1)
         } else {
             -1
@@ -2153,7 +2136,8 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             // player is briefly gone, which is exactly the frame STEP_EndFlow reads it (run 1707: the
             // clear fired 0 times because the mms>=18/player sub-gate excluded that frame). While
             // warpRequested==1 md5e is the live finalize driver and is left untouched.
-            let warp_req = unsafe { safe_read_u8(gm + GAME_MAN_WARP_REQUESTED_10_OFFSET) }.unwrap_or(1);
+            let warp_req =
+                unsafe { safe_read_u8(gm + GAME_MAN_WARP_REQUESTED_10_OFFSET) }.unwrap_or(1);
             if warp_req == 0 {
                 if let Some(md) = (unsafe { safe_read_usize(module_base + CS_MENU_MAN_GLOBAL_RVA) })
                     .filter(|&m| m > PAB_MIN_HEAP_PTR)
@@ -2162,8 +2146,9 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                 {
                     let e5 = unsafe { safe_read_u8(md + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) }
                         .unwrap_or(0);
-                    let d5 = unsafe { safe_read_u8(md + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) }
-                        .unwrap_or(0);
+                    let d5 =
+                        unsafe { safe_read_u8(md + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) }
+                            .unwrap_or(0);
                     if e5 != 0 || d5 != 0 {
                         unsafe {
                             *((md + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) as *mut u8) = 0;
@@ -2256,7 +2241,8 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         // the legacy 30 stable frames as a fallback. Latch is per-reload-epoch (NOT FRESH_DESER_DONE,
         // which own_load consumes at commit -- that consumption is exactly why this block never fired
         // and the world reverted after finish). bd er-effects-rs-9fmm.
-        let reload_epoch_now = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+        let reload_epoch_now =
+            SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
         let can_move_for_reload = reload_epoch_now > 0
             && crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
             && crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == reload_epoch_now;

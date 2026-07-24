@@ -18,7 +18,7 @@
 #     See bd steam-detection-wsl-false-negative-2026-07-18.
 #   routing:
 #     required_events: ["PreToolUse"]
-#     required_tools: ["Bash"]
+#     required_tools: ["Bash", "bash"]
 package cupcake.policies.claude.block_manual_pgrep
 
 import rego.v1
@@ -47,7 +47,7 @@ block_reason := "🧁 Cupcake blocked a manual pgrep. On this WSL2 + native-Wind
 
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
-	input.tool_name == "Bash"
+	lower(input.tool_name) == "bash"
 	manual_pgrep_detected
 
 	decision := {

@@ -17,6 +17,12 @@ bash_event(cmd) := {
 	"tool_input": {"command": cmd, "timeout": 30000, "description": "test case"},
 }
 
+lowercase_bash_event(cmd) := {
+	"hook_event_name": "PreToolUse",
+	"tool_name": "bash",
+	"tool_input": {"command": cmd, "timeout": 30000, "description": "test case"},
+}
+
 rule_ids(denials) := {d.rule_id | some d in denials}
 
 denied(cmd) if {
@@ -29,6 +35,11 @@ denied(cmd) if {
 # The canonical false-negative form that blocked the overnight session.
 test_deny_bare_pgrep_steam if {
 	denied("pgrep -x steam")
+}
+
+test_deny_lowercase_bash_tool_pgrep_steam if {
+	denials := guard.deny with input as lowercase_bash_event("pgrep -x steam")
+	"ER-EFFECTS-BLOCK-MANUAL-PGREP" in rule_ids(denials)
 }
 
 test_deny_bare_pgrep_steamwebhelper if {
