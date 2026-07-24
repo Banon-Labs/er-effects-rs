@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import shutil
 import subprocess
 import threading
@@ -44,11 +45,22 @@ def win_pids_for(image: str) -> set[int]:
     return pids
 
 
-def contains(path: Path, needle: str) -> bool:
+def phase_outcomes(path: Path) -> dict[str, set[str]]:
+    outcomes: dict[str, set[str]] = {}
     try:
-        return needle in path.read_text(encoding="utf-8", errors="replace")
+        raw_lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
-        return False
+        return outcomes
+    for line in raw_lines:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        phase = event.get("phase")
+        outcome = event.get("outcome")
+        if isinstance(phase, str) and isinstance(outcome, str):
+            outcomes.setdefault(phase, set()).add(outcome)
+    return outcomes
 
 
 def teardown(pre_er: set[int], pre_me3: set[int]) -> str:
@@ -98,13 +110,10 @@ def main() -> int:
         if elapsed >= args.max_seconds:
             verdict = "CAP_BACKSTOP"
             break
-        opened = contains(phases, '"phase":"open_weapon_upgrade_menu"') and contains(
-            phases, '"outcome":"advanced"'
-        )
-        dwell_done = contains(phases, '"phase":"dwell_equip"') and contains(
-            phases, '"outcome":"advanced"'
-        )
-        derailed = contains(phases, '"outcome":"derailed"')
+        outcomes = phase_outcomes(phases)
+        opened = "advanced" in outcomes.get("open_weapon_upgrade_menu", set())
+        dwell_done = "advanced" in outcomes.get("dwell_equip", set())
+        derailed = any("derailed" in outcomes_for_phase for outcomes_for_phase in outcomes.values())
         if decisive == 0.0:
             if opened and dwell_done:
                 verdict = "PASS"

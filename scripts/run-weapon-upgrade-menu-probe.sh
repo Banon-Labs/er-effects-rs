@@ -34,9 +34,53 @@ fi
 # shellcheck disable=SC1091
 source "$REPO_ROOT/scripts/steam-running.sh"
 steam_running || fail "Steam is not running. Start Steam (interactive login) first."
-for d in "$HARNESS_DLL" "$TELEM_DLL"; do
-	[[ -f "$d" ]] || fail "DLL not built: $d (cargo xwin build --release --target x86_64-pc-windows-msvc)"
-done
+
+require_fresh_dll() {
+	local dll="$1"
+	shift
+	[[ -f "$dll" ]] || fail "DLL not built: $dll (cargo xwin build --release --target x86_64-pc-windows-msvc)"
+	python3 - "$dll" "$@" <<'PY'
+import sys
+from pathlib import Path
+
+dll = Path(sys.argv[1])
+roots = [Path(p) for p in sys.argv[2:]]
+dll_mtime = dll.stat().st_mtime
+stale: list[Path] = []
+for root in roots:
+    if root.is_file():
+        candidates = [root]
+    else:
+        candidates = [p for p in root.rglob("*") if p.is_file()]
+    for path in candidates:
+        if path.suffix in {".rs", ".toml"} and path.stat().st_mtime > dll_mtime:
+            stale.append(path)
+            if len(stale) >= 8:
+                break
+    if len(stale) >= 8:
+        break
+if stale:
+    print(f"STALE_DLL: {dll} is older than source files:", file=sys.stderr)
+    for path in stale:
+        print(f"  {path}", file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
+require_fresh_dll \
+	"$HARNESS_DLL" \
+	"$REPO_ROOT/crates/er-input-harness-dll/Cargo.toml" \
+	"$REPO_ROOT/crates/er-input-harness-dll/src" \
+	"$REPO_ROOT/crates/er-safe-input/Cargo.toml" \
+	"$REPO_ROOT/crates/er-safe-input/src" \
+	"$REPO_ROOT/crates/er-hook/Cargo.toml" \
+	"$REPO_ROOT/crates/er-hook/src"
+require_fresh_dll \
+	"$TELEM_DLL" \
+	"$REPO_ROOT/crates/er-telemetry-dll/Cargo.toml" \
+	"$REPO_ROOT/crates/er-telemetry-dll/src" \
+	"$REPO_ROOT/crates/er-telemetry/Cargo.toml" \
+	"$REPO_ROOT/crates/er-telemetry/src"
 
 win_pids_for() {
 	tasklist.exe /FI "IMAGENAME eq $1" /FO CSV /NH 2>/dev/null |
