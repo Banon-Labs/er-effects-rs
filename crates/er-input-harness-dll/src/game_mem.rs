@@ -17,8 +17,8 @@
 
 use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
 
-use crate::input_scheduler::DialogAcceptGate;
-use crate::win32::{GetModuleHandleA, read_f32, read_usize};
+use crate::input_scheduler::{DialogAcceptGate, WEAPON_UPGRADE_OPEN_MENU_ID};
+use crate::win32::{GetModuleHandleA, read_f32, read_u32, read_usize};
 
 // RVAs/offsets ported verbatim from the product's constant tree (image base 0x140000000):
 //   GAME_DATA_MAN_GLOBAL_RVA / +0x08 PlayerGameData -- er-reload-trace-dll src/lib.rs
@@ -28,6 +28,10 @@ const GAME_DATA_MAN_GLOBAL_RVA: usize = 0x3d5df38;
 const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize = 0x08;
 const CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d6b7b0;
 const CS_MENU_MAN_MENU_DATA_OFFSET: usize = 0x8;
+/// `CurrentOpenMenu` global written by the EventFlag/menu invoke open-menu helpers. In the 1.16.x
+/// Ghidra dump, invoke case `0x88` calls `FUN_140e9da60`, which writes `0x17` here for weapon
+/// reinforcement/upgrade.
+const CURRENT_OPEN_MENU_ID_RVA: usize = 0x458baec;
 
 /// Lowest plausible heap/image pointer -- filters null and small sentinel values out of walks.
 const HEAP_LO: usize = 0x10000;
@@ -78,6 +82,16 @@ pub fn menu_data_ptr() -> usize {
     unsafe { read_usize(menu_man + CS_MENU_MAN_MENU_DATA_OFFSET) }
         .filter(|p| *p >= HEAP_LO)
         .unwrap_or(0)
+}
+
+/// Current high-level open-menu id, if readable.
+pub fn current_open_menu_id() -> Option<u32> {
+    game_base().and_then(|b| unsafe { read_u32(b + CURRENT_OPEN_MENU_ID_RVA) })
+}
+
+/// TRUE once the native weapon-reinforcement open path has selected the weapon-upgrade menu family.
+pub fn weapon_upgrade_open_menu_active() -> bool {
+    current_open_menu_id() == Some(WEAPON_UPGRADE_OPEN_MENU_ID)
 }
 
 /// Cumulative play time (`GameDataMan+0xa0`, u32 ms), or -1 if unavailable. Rises ONLY while the world
@@ -411,8 +425,11 @@ pub fn snapshot() -> String {
         .and_then(|b| deref_singleton(b, GAME_DATA_MAN_GLOBAL_RVA))
         .unwrap_or(0);
     format!(
-        "base=0x{base:x} gdm=0x{gdm:x} player_present={} menu_data=0x{:x}",
+        "base=0x{base:x} gdm=0x{gdm:x} player_present={} menu_data=0x{:x} open_menu={}",
         player_present() as u8,
-        menu_data_ptr()
+        menu_data_ptr(),
+        current_open_menu_id()
+            .map(|id| format!("0x{id:x}"))
+            .unwrap_or_else(|| "unreadable".to_string())
     )
 }
