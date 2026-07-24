@@ -43,10 +43,30 @@ const IS_ITEM_REPLANISH_FROM_CHEST_REQUESTED_RVA: usize = 0x67a050;
 const MOVE_MAP_STEP_UPDATE_PLAYER_INFO_RVA: usize = 0xafc160;
 /// `CS::CSLuaEventScriptImitation::OnEvent_BonfireFirstLvUp(this, proxy)`: first grace activation.
 const BONFIRE_FIRST_LVUP_RVA: usize = 0x59c1e0;
+/// `CS::EquipGameData::GetEquipInventoryData(equipGameData)` -> main `EquipInventoryData*`.
+const GET_EQUIP_INVENTORY_DATA_RVA: usize = 0x247b30;
+/// `GetMainPlayerStorageBoxInventory()` -> storage-box `EquipInventoryData*`.
+const GET_MAIN_PLAYER_STORAGE_BOX_INVENTORY_RVA: usize = 0x786810;
+/// `EquipInventoryData::GetQuantityByItemId(inventory, int *itemId)`.
+const GET_QUANTITY_BY_ITEM_ID_RVA: usize = 0x24c1b0;
+/// `EquipInventoryData::GetItemInventoryIdx(inventory, int *itemId)`.
+const GET_ITEM_INVENTORY_IDX_RVA: usize = 0x24c560;
+/// `EquipInventoryData::ChangeAmountInBox(storageInventory, int *itemId, int requestedAmount)`.
+const CHANGE_AMOUNT_IN_BOX_RVA: usize = 0x24e3d0;
+/// `TransferItemBetweenInventoryDatas(itemIdx, source, destination, quantity, isWithdraw)`.
+const TRANSFER_ITEM_BETWEEN_INVENTORY_DATAS_RVA: usize = 0x24db90;
+/// `CS::EquipGameData::UpdateTrophyStats(equipGameData, int *itemId)`.
+const UPDATE_TROPHY_STATS_RVA: usize = 0x24a1a0;
 
 /// `GameDataMan -> PlayerGameData` is shared in `er-game-base`; within `PlayerGameData`,
-/// the native `ItemReplenishStateTracker*` used by SetItemReplenishState sits at +0x5e8.
+/// `equipGameData` is by-value at +0x2b0 and the native `ItemReplenishStateTracker*` used by
+/// SetItemReplenishState sits at +0x5e8 (`equipGameData + 0x338`).
+const PLAYER_GAME_DATA_EQUIP_GAME_DATA_OFFSET: usize = 0x2b0;
 const PLAYER_GAME_DATA_ITEM_REPLENISH_TRACKER_OFFSET: usize = 0x5e8;
+/// `EquipGameData.equipmentItemIdxList: int[22]`; native deposit UI leaves one behind when the
+/// selected item index is equipped and storage could otherwise accept the full carried quantity.
+const EQUIP_GAME_DATA_EQUIPMENT_ITEM_IDX_LIST_OFFSET: usize = 0x8;
+const EQUIPMENT_ITEM_IDX_LIST_LEN: usize = 22;
 
 const HOOK_INACTIVE: usize = 0;
 const HOOK_ACTIVE: usize = 1;
@@ -62,6 +82,9 @@ static IMMEDIATE_REFILLS: AtomicU64 = AtomicU64::new(0);
 static LOAD_COMPLETION_REFILLS: AtomicU64 = AtomicU64::new(0);
 static LOAD_COMPLETION_VANILLA_PENDING: AtomicU64 = AtomicU64::new(0);
 static FIRST_GRACE_REFILLS: AtomicU64 = AtomicU64::new(0);
+static DISABLE_DEPOSITS: AtomicU64 = AtomicU64::new(0);
+static DISABLE_DEPOSIT_SKIPS: AtomicU64 = AtomicU64::new(0);
+static DISABLE_DEPOSIT_EQUIPPED_KEEP_ONE: AtomicU64 = AtomicU64::new(0);
 static SKIPPED_DISABLED_AFTER_TOGGLE: AtomicU64 = AtomicU64::new(0);
 static SKIPPED_NO_TRACKER: AtomicU64 = AtomicU64::new(0);
 
@@ -244,11 +267,34 @@ unsafe extern "system" fn set_item_replenish_state_hook(item_id: *mut i32) {
         unsafe { std::mem::transmute(base + SHOULD_REPLENISH_ITEM_RVA) };
     if !unsafe { should_replenish(tracker, item_id) } {
         let skipped = SKIPPED_DISABLED_AFTER_TOGGLE.fetch_add(1, Ordering::SeqCst) + 1;
-        if skipped <= 8 || skipped % 32 == 0 {
-            let raw_item_id = unsafe { item_id.read_unaligned() };
-            log_message(format_args!(
-                "toggle#{call_index}: item=0x{raw_item_id:08x} disabled after toggle; no refill (skipped_disabled={skipped})"
-            ));
+        let raw_item_id = unsafe { item_id.read_unaligned() };
+        match deposit_inventory_item_to_storage(raw_item_id) {
+            DepositBackResult::Deposited {
+                moved,
+                carried_before,
+                source_item_idx,
+                kept_one_equipped,
+            } => {
+                let deposits = DISABLE_DEPOSITS.fetch_add(1, Ordering::SeqCst) + 1;
+                if kept_one_equipped {
+                    DISABLE_DEPOSIT_EQUIPPED_KEEP_ONE.fetch_add(1, Ordering::SeqCst);
+                }
+                log_message(format_args!(
+                    "toggle#{call_index}: item=0x{raw_item_id:08x} disabled after toggle; deposited {moved}/{carried_before} back to storage via native TransferItemBetweenInventoryDatas (source_item_idx={source_item_idx}, kept_one_equipped={kept_one_equipped}, disable_deposits={deposits}, skipped_disabled={skipped})"
+                ));
+            }
+            DepositBackResult::Skipped { reason } => {
+                let deposit_skips = DISABLE_DEPOSIT_SKIPS.fetch_add(1, Ordering::SeqCst) + 1;
+                if skipped <= 8
+                    || skipped % 32 == 0
+                    || deposit_skips <= 8
+                    || deposit_skips % 32 == 0
+                {
+                    log_message(format_args!(
+                        "toggle#{call_index}: item=0x{raw_item_id:08x} disabled after toggle; no deposit: {reason} (deposit_skips={deposit_skips}, skipped_disabled={skipped})"
+                    ));
+                }
+            }
         }
         return;
     }
@@ -335,6 +381,137 @@ unsafe extern "system" fn bonfire_first_lvup_hook(
 }
 
 #[cfg(windows)]
+enum DepositBackResult {
+    Deposited {
+        moved: i32,
+        carried_before: i32,
+        source_item_idx: i32,
+        kept_one_equipped: bool,
+    },
+    Skipped {
+        reason: &'static str,
+    },
+}
+
+#[cfg(windows)]
+fn deposit_inventory_item_to_storage(raw_item_id: i32) -> DepositBackResult {
+    let base = GAME_BASE.load(Ordering::SeqCst);
+    if base == 0 {
+        return DepositBackResult::Skipped {
+            reason: "missing game base",
+        };
+    }
+    let Some(player_game_data) = (unsafe { resolve_player_game_data() }) else {
+        return DepositBackResult::Skipped {
+            reason: "missing PlayerGameData",
+        };
+    };
+
+    let equip_game_data = player_game_data + PLAYER_GAME_DATA_EQUIP_GAME_DATA_OFFSET;
+    let mut item_id = raw_item_id;
+
+    type GetEquipInventoryDataFn = unsafe extern "system" fn(usize) -> usize;
+    type GetMainPlayerStorageBoxInventoryFn = unsafe extern "system" fn() -> usize;
+    type GetQuantityByItemIdFn = unsafe extern "system" fn(usize, *mut i32) -> i32;
+    type GetItemInventoryIdxFn = unsafe extern "system" fn(usize, *mut i32) -> i32;
+    type ChangeAmountInBoxFn = unsafe extern "system" fn(usize, *mut i32, i32) -> i32;
+    type TransferItemBetweenInventoryDatasFn =
+        unsafe extern "system" fn(i32, usize, usize, i32, bool);
+    type UpdateTrophyStatsFn = unsafe extern "system" fn(usize, *mut i32);
+
+    let get_main_inventory: GetEquipInventoryDataFn =
+        unsafe { std::mem::transmute(base + GET_EQUIP_INVENTORY_DATA_RVA) };
+    let get_storage_inventory: GetMainPlayerStorageBoxInventoryFn =
+        unsafe { std::mem::transmute(base + GET_MAIN_PLAYER_STORAGE_BOX_INVENTORY_RVA) };
+    let get_quantity: GetQuantityByItemIdFn =
+        unsafe { std::mem::transmute(base + GET_QUANTITY_BY_ITEM_ID_RVA) };
+    let get_item_idx: GetItemInventoryIdxFn =
+        unsafe { std::mem::transmute(base + GET_ITEM_INVENTORY_IDX_RVA) };
+    let change_amount_in_box: ChangeAmountInBoxFn =
+        unsafe { std::mem::transmute(base + CHANGE_AMOUNT_IN_BOX_RVA) };
+    let transfer_item: TransferItemBetweenInventoryDatasFn =
+        unsafe { std::mem::transmute(base + TRANSFER_ITEM_BETWEEN_INVENTORY_DATAS_RVA) };
+    let update_trophy_stats: UpdateTrophyStatsFn =
+        unsafe { std::mem::transmute(base + UPDATE_TROPHY_STATS_RVA) };
+
+    let main_inventory = unsafe { get_main_inventory(equip_game_data) };
+    if main_inventory == 0 {
+        return DepositBackResult::Skipped {
+            reason: "missing main EquipInventoryData",
+        };
+    }
+    let storage_inventory = unsafe { get_storage_inventory() };
+    if storage_inventory == 0 {
+        return DepositBackResult::Skipped {
+            reason: "missing storage EquipInventoryData",
+        };
+    }
+
+    let carried_before = unsafe { get_quantity(main_inventory, &mut item_id) };
+    if carried_before <= 0 {
+        return DepositBackResult::Skipped {
+            reason: "item not carried",
+        };
+    }
+    let source_item_idx = unsafe { get_item_idx(main_inventory, &mut item_id) };
+    if source_item_idx < 0 {
+        return DepositBackResult::Skipped {
+            reason: "source item index not found",
+        };
+    }
+
+    let mut moved =
+        unsafe { change_amount_in_box(storage_inventory, &mut item_id, carried_before) };
+    if moved <= 0 {
+        return DepositBackResult::Skipped {
+            reason: "storage cannot accept item",
+        };
+    }
+
+    let source_item_equipped = unsafe { is_equipped_item_idx(equip_game_data, source_item_idx) };
+    let mut kept_one_equipped = false;
+    if source_item_equipped && moved >= carried_before {
+        moved = carried_before.saturating_sub(1);
+        kept_one_equipped = true;
+    }
+    if moved <= 0 {
+        return DepositBackResult::Skipped {
+            reason: "equipped item must keep one carried",
+        };
+    }
+
+    unsafe {
+        transfer_item(
+            source_item_idx,
+            main_inventory,
+            storage_inventory,
+            moved,
+            false,
+        )
+    };
+    unsafe { update_trophy_stats(equip_game_data, &mut item_id) };
+
+    DepositBackResult::Deposited {
+        moved,
+        carried_before,
+        source_item_idx,
+        kept_one_equipped,
+    }
+}
+
+#[cfg(windows)]
+unsafe fn is_equipped_item_idx(equip_game_data: usize, item_idx: i32) -> bool {
+    for slot in 0..EQUIPMENT_ITEM_IDX_LIST_LEN {
+        let addr = equip_game_data + EQUIP_GAME_DATA_EQUIPMENT_ITEM_IDX_LIST_OFFSET + slot * 4;
+        let equipped_idx = unsafe { (addr as *const i32).read_unaligned() };
+        if equipped_idx == item_idx {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(windows)]
 fn call_native_refill(source: &str) -> bool {
     let base = GAME_BASE.load(Ordering::SeqCst);
     if base == 0 {
@@ -361,10 +538,16 @@ fn call_native_refill(source: &str) -> bool {
 }
 
 #[cfg(windows)]
-unsafe fn resolve_item_replenish_state_tracker() -> Option<usize> {
+unsafe fn resolve_player_game_data() -> Option<usize> {
     let base = GAME_BASE.load(Ordering::SeqCst);
     let game_data_man = unsafe { safe_read_usize(base + GAME_DATA_MAN_GLOBAL_RVA) }?;
-    let player_game_data = unsafe { safe_read_usize(game_data_man + 0x8) }?;
+    unsafe { safe_read_usize(game_data_man + 0x8) }
+        .filter(|&player_game_data| player_game_data != 0)
+}
+
+#[cfg(windows)]
+unsafe fn resolve_item_replenish_state_tracker() -> Option<usize> {
+    let player_game_data = unsafe { resolve_player_game_data() }?;
     unsafe { safe_read_usize(player_game_data + PLAYER_GAME_DATA_ITEM_REPLENISH_TRACKER_OFFSET) }
         .filter(|&tracker| tracker != 0)
 }
@@ -381,6 +564,16 @@ mod tests {
         assert_eq!(IS_ITEM_REPLANISH_FROM_CHEST_REQUESTED_RVA, 0x67a050);
         assert_eq!(MOVE_MAP_STEP_UPDATE_PLAYER_INFO_RVA, 0xafc160);
         assert_eq!(BONFIRE_FIRST_LVUP_RVA, 0x59c1e0);
+        assert_eq!(GET_EQUIP_INVENTORY_DATA_RVA, 0x247b30);
+        assert_eq!(GET_MAIN_PLAYER_STORAGE_BOX_INVENTORY_RVA, 0x786810);
+        assert_eq!(GET_QUANTITY_BY_ITEM_ID_RVA, 0x24c1b0);
+        assert_eq!(GET_ITEM_INVENTORY_IDX_RVA, 0x24c560);
+        assert_eq!(CHANGE_AMOUNT_IN_BOX_RVA, 0x24e3d0);
+        assert_eq!(TRANSFER_ITEM_BETWEEN_INVENTORY_DATAS_RVA, 0x24db90);
+        assert_eq!(UPDATE_TROPHY_STATS_RVA, 0x24a1a0);
+        assert_eq!(PLAYER_GAME_DATA_EQUIP_GAME_DATA_OFFSET, 0x2b0);
         assert_eq!(PLAYER_GAME_DATA_ITEM_REPLENISH_TRACKER_OFFSET, 0x5e8);
+        assert_eq!(EQUIP_GAME_DATA_EQUIPMENT_ITEM_IDX_LIST_OFFSET, 0x8);
+        assert_eq!(EQUIPMENT_ITEM_IDX_LIST_LEN, 22);
     }
 }
