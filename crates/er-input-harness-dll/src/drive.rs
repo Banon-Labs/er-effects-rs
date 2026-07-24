@@ -542,6 +542,10 @@ impl DriveMode {
             DriveMode::WeaponUpgradeMenu => "upgrade",
         }
     }
+    fn auto_accept_popups(self) -> bool {
+        !matches!(self, DriveMode::WeaponUpgradeMenu)
+    }
+
     fn phases(self) -> &'static [Phase] {
         // boot: process start -> in-world (the four boot phases only).
         const BOOT: &[Phase] = &[
@@ -757,7 +761,8 @@ pub fn on_frame(base: usize) {
 
     // COMPANION (product run): presence + stay-active only; the PRODUCT owns the drive. No phases, no
     // popup-accept, no pad injection -- so the standalone drive never fights the product's own flow.
-    if resolve_mode() == DriveMode::Passive {
+    let mode = resolve_mode();
+    if mode == DriveMode::Passive {
         return;
     }
 
@@ -768,9 +773,12 @@ pub fn on_frame(base: usize) {
     let im = input_manager(base);
     if let Some(im) = im {
         // GENERALLY ACCEPT POPUPS every frame (dialog-OK id 0x01; consumed only while a modal dialog is up).
-        let pf = POPUP_FRAME.fetch_add(1, Ordering::SeqCst);
-        if pf % POPUP_CYCLE_FRAMES < POPUP_SET_FRAMES {
-            tap_menu_event(im, MenuEvent::PopupAccept);
+        // Upgrade probes disable this so opening a future confirm dialog cannot accidentally apply an upgrade.
+        if mode.auto_accept_popups() {
+            let pf = POPUP_FRAME.fetch_add(1, Ordering::SeqCst);
+            if pf % POPUP_CYCLE_FRAMES < POPUP_SET_FRAMES {
+                tap_menu_event(im, MenuEvent::PopupAccept);
+            }
         }
     } else if !ONFRAME_IM_NULL_DIAG.swap(true, Ordering::SeqCst) {
         harness_log!(
@@ -778,7 +786,7 @@ pub fn on_frame(base: usize) {
         );
     }
 
-    let phases = resolve_mode().phases();
+    let phases = mode.phases();
     let idx = PHASE_IDX.load(Ordering::SeqCst);
     if idx >= phases.len() {
         return; // all phases complete
