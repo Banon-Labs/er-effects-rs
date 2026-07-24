@@ -32,6 +32,10 @@ use er_game_base::log::{append_line, game_directory_path};
 #[cfg(windows)]
 mod gfx_equip_hook;
 
+/// In-DLL crash tracer (VEH deep traces on access violations) -- windows-only.
+#[cfg(windows)]
+mod crash_trace;
+
 const DLL_PROCESS_ATTACH: u32 = 1;
 const DLL_MAIN_SUCCESS: i32 = 1;
 
@@ -147,6 +151,25 @@ const FORCE_ICON_MIRROR: u32 = u32::MAX - 1;
 static FORCE_ICON_ID: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(FORCE_ICON_NONE);
 
+/// Approach-B target child (ER_ARMAMENT_ICONS_TARGET): the named tile child the badge icon
+/// is drawn INTO. The file-swap approach (default `ArtsBadge`, a GFX-injected clip) is proven
+/// unreachable -- the equip movie is boot-preloaded/cached so no parse-time swap lands, and
+/// `ArtsBadge`/`ZReachProbe` never bind (bd armament-icons-fileswap-paradigm-exhausted). The
+/// live bind probe shows the grid tile already has a real, drawable, structurally-ItemIcon-like
+/// corner clip -- `AttributeIcon` (binds with an `/IconImage` child) -- so approach B draws into
+/// an EXISTING clip instead of an injected one. Configurable so one approved run can prove which
+/// clip renders the badge visibly and where. Default keeps the historical `ArtsBadge`.
+static TARGET_CHILD: std::sync::OnceLock<std::ffi::CString> = std::sync::OnceLock::new();
+
+/// Resolve the configured approach-B draw-target child name (default `ArtsBadge`).
+#[cfg(windows)]
+fn target_child() -> &'static std::ffi::CStr {
+    TARGET_CHILD
+        .get()
+        .map(|c| c.as_c_str())
+        .unwrap_or(c"ArtsBadge")
+}
+
 pub(crate) fn log_message(args: fmt::Arguments<'_>) {
     let path = game_directory_path()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
@@ -188,12 +211,26 @@ fn spawn_install_thread() {
             use eldenring::cs::CSTaskImp;
             use fromsoftware_shared::FromStatic;
 
+            // Install the crash tracer FIRST so any subsequent hook-install or parse-hook
+            // access violation writes a deep trace (faulting RVA + backtrace) to the log.
+            crash_trace::install();
+
             if let Ok(v) = std::env::var("ER_ARMAMENT_ICONS_FORCE_ICON") {
                 let v = v.trim();
                 if v.eq_ignore_ascii_case("mirror") {
                     FORCE_ICON_ID.store(FORCE_ICON_MIRROR, Ordering::Relaxed);
                 } else if let Ok(id) = v.parse::<u32>() {
                     FORCE_ICON_ID.store(id, Ordering::Relaxed);
+                }
+            }
+            // Approach-B draw target (default ArtsBadge): the existing grid-tile clip to draw the
+            // badge INTO, e.g. ER_ARMAMENT_ICONS_TARGET=AttributeIcon.
+            if let Ok(v) = std::env::var("ER_ARMAMENT_ICONS_TARGET") {
+                let v = v.trim();
+                if !v.is_empty() {
+                    if let Ok(cstr) = std::ffi::CString::new(v) {
+                        let _ = TARGET_CHILD.set(cstr);
+                    }
                 }
             }
             let forced = FORCE_ICON_ID.load(Ordering::Relaxed);
@@ -543,21 +580,25 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
         // is zero while the ItemIcon/IconImage control is non-zero, the re-pointed clip is
         // free-running past its frame-0 placeholder shape (needs a single-frame target).
         log_message(format_args!(
-            "rect trace #{attempt}: ItemIcon={} | ArtsBadge(new-char)={} ZReachProbe(existing-char)={} ArtsIcon={}",
+            "rect trace #{attempt}: ItemIcon={} | AttributeIcon={} AttributeIcon/IconImage={} | \
+             ArtsBadge={} ZReachProbe={} ArtsIcon={}",
             fmt_rects(unsafe { probe_child_rects(base, tile, c"ItemIcon") }),
+            fmt_rects(unsafe { probe_child_rects(base, tile, c"AttributeIcon") }),
+            fmt_rects(unsafe { probe_child_rects(base, tile, c"AttributeIcon/IconImage") }),
             fmt_rects(unsafe { probe_child_rects(base, tile, c"ArtsBadge") }),
             fmt_rects(unsafe { probe_child_rects(base, tile, c"ZReachProbe") }),
             fmt_rects(unsafe { probe_child_rects(base, tile, c"ArtsIcon") }),
         ));
     }
 
-    // Draw into "ArtsBadge" -- the single-frame sized clip the runtime GFX edit
-    // (er_gfx::equip_02_011) injects into the tile as a sibling of the dormant ArtsIcon
-    // container (whose subtree the game never instantiates). ArtsBadge rests a 160px
-    // placeholder shape, so the icon setter reads a real rect and draws the ash icon at
-    // the bottom-left. If ArtsBadge is unbound the GFX edit did not reach this instance
-    // (fall through to nothing rather than paint into the zero-extent ArtsIcon).
-    unsafe { assign(tile, proxy.as_mut_ptr(), c"ArtsBadge".as_ptr().cast()) };
+    // Approach B: draw the badge icon into an EXISTING tile child (default `ArtsBadge`, the
+    // now-unreachable GFX-injected clip; set ER_ARMAMENT_ICONS_TARGET=AttributeIcon to draw into
+    // the real, already-bound corner clip instead). The icon setter reads the target's LOCAL rect
+    // to scale the drawn quad, so the target must be a bound, real-extent clip (ItemIcon-like:
+    // container + IconImage). If the target is unbound or zero-extent we skip rather than paint an
+    // invisible/wrong badge, and the rect trace above records why.
+    let target = target_child();
+    unsafe { assign(tile, proxy.as_mut_ptr(), target.as_ptr().cast()) };
     if unsafe { is_bound(proxy.as_ptr()) } {
         unsafe {
             icon_setter(proxy.as_mut_ptr(), icon_info.as_ptr());
@@ -565,8 +606,9 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
         }
         if trace {
             log_message(format_args!(
-                "rect trace #{attempt}: ArtsBadge_post={}",
-                fmt_rects(unsafe { probe_child_rects(base, tile, c"ArtsBadge") }),
+                "rect trace #{attempt}: {}_post={}",
+                target.to_str().unwrap_or("target"),
+                fmt_rects(unsafe { probe_child_rects(base, tile, target) }),
             ));
         }
         drawn = true;
