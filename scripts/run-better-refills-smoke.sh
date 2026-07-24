@@ -4,7 +4,7 @@
 #
 # This is an agent-owned runtime probe: it launches the approved direct/offline Elden Ring path
 # through me3 with only the standalone better-refills DLL loaded, waits for the DLL's own log line
-# proving the SetItemReplenishState hook installed, then tears down only the PIDs this run spawned.
+# proving the better-refills hooks installed, then tears down only the PIDs this run spawned.
 # It does not use screenshots or visual state as an oracle.
 set -euo pipefail
 
@@ -116,7 +116,7 @@ trap cleanup EXIT INT TERM HUP
 wait_for_hook_active() {
 	local deadline=$((SECONDS + MAX_WAIT_SECONDS))
 	while ((SECONDS < deadline)); do
-		if timeout 30 grep --line-buffered -m1 "SetItemReplenishState hook ACTIVE" < <(tail -n +1 -F -- "$GAME_LOG" 2>/dev/null) >"$ARTIFACT_DIR/hook-active.log"; then
+		if timeout 30 grep -E --line-buffered -m1 "(SetItemReplenishState hook ACTIVE|hooks ACTIVE .*SetItemReplenishState)" < <(tail -n +1 -F -- "$GAME_LOG" 2>/dev/null) >"$ARTIFACT_DIR/hook-active.log"; then
 			return 0
 		fi
 	done
