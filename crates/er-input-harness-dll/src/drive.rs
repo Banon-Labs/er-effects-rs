@@ -23,10 +23,11 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use crate::game_mem::{
-    current_open_menu_id, flip_fixed_spf, flip_mode_current, load_fsm, menu_data_ptr, menu_flags,
-    now_loading, optionsetting_tab_index, pause_menu_open, read_drive_mode_flag,
-    return_title_requested, top_menu_id, top_menu_job_ptr, top_window_dialog_accept_gate,
-    top_window_dialog_accept_ready, top_window_ptr, top_window_vtable, world_simulating,
+    ReinforceShopCategories, current_open_menu_id, flip_fixed_spf, flip_mode_current, load_fsm,
+    menu_data_ptr, menu_flags, now_loading, optionsetting_tab_index, pause_menu_open,
+    read_drive_mode_flag, reinforce_shop_categories, return_title_requested, top_menu_id,
+    top_menu_job_ptr, top_window_dialog_accept_gate, top_window_dialog_accept_ready,
+    top_window_ptr, top_window_vtable, world_simulating,
 };
 use crate::input_inject::{
     MenuEvent, advance_press_any_button, grant_deterministic_strengthen_seed, input_manager,
@@ -244,6 +245,7 @@ struct Sem {
     world_sim: bool,
     now_loading: bool,
     load_fsm: i32,
+    reinforce_shop_categories: ReinforceShopCategories,
 }
 
 impl Sem {
@@ -257,6 +259,7 @@ impl Sem {
             world_sim,
             now_loading: now_loading(),
             load_fsm: load_fsm(),
+            reinforce_shop_categories: reinforce_shop_categories().unwrap_or_default(),
         }
     }
     /// A load has actually STARTED (Continue took effect): the load FSM left idle, the now-loading latch
@@ -491,17 +494,31 @@ impl Phase {
                 if frame == 0 {
                     INGAMETOP_JOB.store(top_menu_job_ptr(), Ordering::SeqCst);
                     EQUIP_SERIAL.store(popup_job_serial(im) as usize, Ordering::SeqCst);
-                    let dispatched = native_open_weapon_upgrade_menu(base, im);
-                    harness_log!("upgrade: native WeaponUpgrade open dispatched={dispatched}");
+                    if !sem.reinforce_shop_categories.any_enabled() {
+                        harness_log!(
+                            "upgrade: NOT opening shared strengthen shell; reinforce shop context fields are all zero (cat1={} cat2={} cat3={} cat4={})",
+                            sem.reinforce_shop_categories.category_1,
+                            sem.reinforce_shop_categories.category_2,
+                            sem.reinforce_shop_categories.category_3,
+                            sem.reinforce_shop_categories.category_4
+                        );
+                    } else {
+                        let dispatched = native_open_weapon_upgrade_menu(base, im);
+                        harness_log!("upgrade: native WeaponUpgrade open dispatched={dispatched}");
+                    }
                 }
                 let job = top_menu_job_ptr();
                 let serial = popup_job_serial(im) as usize;
                 if frame % TAP_CYCLE_FRAMES == 0 {
                     harness_log!(
-                        "upgrade: open probe semaphores open_menu={} top_job_changed={} serial_changed={}",
+                        "upgrade: open probe semaphores open_menu={} top_job_changed={} serial_changed={} reinforce_ctx=[{},{},{},{}]",
                         sem.open_menu,
                         (job != 0 && job != INGAMETOP_JOB.load(Ordering::SeqCst)) as u8,
-                        (serial > EQUIP_SERIAL.load(Ordering::SeqCst)) as u8
+                        (serial > EQUIP_SERIAL.load(Ordering::SeqCst)) as u8,
+                        sem.reinforce_shop_categories.category_1,
+                        sem.reinforce_shop_categories.category_2,
+                        sem.reinforce_shop_categories.category_3,
+                        sem.reinforce_shop_categories.category_4
                     );
                 }
                 sem.open_menu == i64::from(crate::input_scheduler::WEAPON_UPGRADE_OPEN_MENU_ID)
@@ -892,7 +909,7 @@ fn emit_phase_telemetry(
     let flip_mode = flip_mode_current();
     let row = last_row_snapshot();
     let line = format!(
-        "{{\"phase\":\"{name}\",\"idx\":{idx},\"outcome\":\"{outcome}\",\"start_tick_ms\":{start_tick},\"end_tick_ms\":{end_tick},\"duration_ms\":{duration_ms},\"start_frame\":0,\"end_frame\":{frame},\"duration_frames\":{frame},\"title_state\":{title_state},\"a40\":{a40},\"pause_menu_open\":{},\"menu_id\":{menu_id},\"open_menu\":{},\"top_window\":\"0x{:x}\",\"top_window_vtable\":\"0x{:x}\",\"tab_index\":{tab},\"return_title\":{},\"dialog_accept_ready\":{},\"fixed_spf\":{fixed_spf:.4},\"flip_mode\":{flip_mode},\"menu\":\"0x{:x}\",\"world_sim\":{},\"now_loading\":{},\"load_fsm\":{},\"strengthen_row_kind\":\"{}\",\"strengthen_row_serial\":{},\"strengthen_row_selected\":\"0x{:x}\",\"strengthen_row_item_id\":\"0x{:x}\",\"strengthen_row_item_type\":\"0x{:x}\",\"strengthen_row_item_category\":\"0x{:x}\",\"strengthen_row_item_id_category\":\"0x{:x}\",\"strengthen_row_open_menu\":\"0x{:x}\"}}",
+        "{{\"phase\":\"{name}\",\"idx\":{idx},\"outcome\":\"{outcome}\",\"start_tick_ms\":{start_tick},\"end_tick_ms\":{end_tick},\"duration_ms\":{duration_ms},\"start_frame\":0,\"end_frame\":{frame},\"duration_frames\":{frame},\"title_state\":{title_state},\"a40\":{a40},\"pause_menu_open\":{},\"menu_id\":{menu_id},\"open_menu\":{},\"top_window\":\"0x{:x}\",\"top_window_vtable\":\"0x{:x}\",\"tab_index\":{tab},\"return_title\":{},\"dialog_accept_ready\":{},\"fixed_spf\":{fixed_spf:.4},\"flip_mode\":{flip_mode},\"menu\":\"0x{:x}\",\"world_sim\":{},\"now_loading\":{},\"load_fsm\":{},\"reinforce_shop_category_1\":{},\"reinforce_shop_category_2\":{},\"reinforce_shop_category_3\":{},\"reinforce_shop_category_4\":{},\"strengthen_row_kind\":\"{}\",\"strengthen_row_serial\":{},\"strengthen_row_selected\":\"0x{:x}\",\"strengthen_row_item_id\":\"0x{:x}\",\"strengthen_row_item_type\":\"0x{:x}\",\"strengthen_row_item_category\":\"0x{:x}\",\"strengthen_row_item_id_category\":\"0x{:x}\",\"strengthen_row_open_menu\":\"0x{:x}\"}}",
         pause_menu_open() as u8,
         sem.open_menu,
         sem.top_window,
@@ -903,6 +920,10 @@ fn emit_phase_telemetry(
         sem.world_sim as u8,
         sem.now_loading as u8,
         sem.load_fsm,
+        sem.reinforce_shop_categories.category_1,
+        sem.reinforce_shop_categories.category_2,
+        sem.reinforce_shop_categories.category_3,
+        sem.reinforce_shop_categories.category_4,
         row.kind.as_str(),
         row.serial,
         row.selected_ptr,

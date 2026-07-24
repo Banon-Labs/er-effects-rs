@@ -28,6 +28,10 @@ const GAME_DATA_MAN_GLOBAL_RVA: usize = 0x3d5df38;
 const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize = 0x08;
 const CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d6b7b0;
 const CS_MENU_MAN_MENU_DATA_OFFSET: usize = 0x8;
+const CSMENU_REINFORCE_SHOP_CATEGORY_1_OFFSET: usize = 0x47c;
+const CSMENU_REINFORCE_SHOP_CATEGORY_2_OFFSET: usize = 0x480;
+const CSMENU_REINFORCE_SHOP_CATEGORY_3_OFFSET: usize = 0x484;
+const CSMENU_REINFORCE_SHOP_CATEGORY_4_OFFSET: usize = 0x488;
 /// Base `CS::MessageBoxDialog` vtable RVA. The top-window dialog accept reader uses this as a type
 /// gate before reading dialog-layout offsets.
 const MSGBOX_DIALOG_VTABLE_RVA: usize = 0x2b03550;
@@ -101,6 +105,37 @@ pub fn menu_data_ptr() -> usize {
 /// Current high-level open-menu id, if readable.
 pub fn current_open_menu_id() -> Option<u32> {
     game_base().and_then(|b| unsafe { read_u32(b + CURRENT_OPEN_MENU_ID_RVA) })
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ReinforceShopCategories {
+    pub category_1: i32,
+    pub category_2: i32,
+    pub category_3: i32,
+    pub category_4: i32,
+}
+
+impl ReinforceShopCategories {
+    pub fn any_enabled(self) -> bool {
+        self.category_1 != 0 || self.category_2 != 0 || self.category_3 != 0 || self.category_4 != 0
+    }
+}
+
+/// `FUN_140784380` rejects non-zero `EquipParamWeapon.reinforceShopCategory` rows when the
+/// corresponding `CSMenuMan` category context slot is zero. A plain `CurrentOpenMenu == 0x17` shell
+/// with all four slots zero is the repeatedly observed Spirit Tuning/shared-strengthen wrong path,
+/// not a weapon-upgrade context.
+pub fn reinforce_shop_categories() -> Option<ReinforceShopCategories> {
+    let base = game_base()?;
+    let menu = deref_singleton(base, CS_MENU_MAN_GLOBAL_RVA)?;
+    Some(unsafe {
+        ReinforceShopCategories {
+            category_1: read_u32(menu + CSMENU_REINFORCE_SHOP_CATEGORY_1_OFFSET)? as i32,
+            category_2: read_u32(menu + CSMENU_REINFORCE_SHOP_CATEGORY_2_OFFSET)? as i32,
+            category_3: read_u32(menu + CSMENU_REINFORCE_SHOP_CATEGORY_3_OFFSET)? as i32,
+            category_4: read_u32(menu + CSMENU_REINFORCE_SHOP_CATEGORY_4_OFFSET)? as i32,
+        }
+    })
 }
 
 /// TRUE once the native weapon-reinforcement open path has selected the weapon-upgrade menu family.
