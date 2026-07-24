@@ -51,6 +51,9 @@ const ARM_BROKEN_ISLAND_MAX_SPINE: f32 = 0.02;
 const ARM_BROKEN_ISLAND_MAX_UPPER: f32 = 0.12;
 const ARM_BROKEN_ISLAND_MIN_DISTAL: f32 = 0.75;
 const ARM_FOREARM_SURFACE_PRESERVE_RESPONSE: &str = "preserved_forearm_surface_no_weight_proxy";
+const ARM_VOLUME_MIN_SIDE_WEIGHT: f32 = 0.12;
+const ARM_VOLUME_MAX_LATERAL_DELTA: f32 = 0.035;
+const ARM_VOLUME_Z_SCALE: f32 = 0.35;
 
 const HEADER_SIZE: usize = 0x80;
 const DUMMY_SIZE: usize = 0x40;
@@ -162,6 +165,21 @@ struct SourceMesh {
     region_response: RegionResponseReport,
     arm_compensation: ArmCompensationReport,
     arm_island_prune: ArmIslandPruneReport,
+    arm_volume_profile: ArmVolumeProfileReport,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ArmVolumeProfileReport {
+    enabled: bool,
+    affected_vertices: usize,
+    max_lateral_delta: f32,
+    elbow_radius_before: f32,
+    elbow_radius_after: f32,
+    bicep_radius_before: f32,
+    bicep_radius_after: f32,
+    shoulder_radius_before: f32,
+    shoulder_radius_after: f32,
+    response: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -292,6 +310,7 @@ struct Config {
     spine_core_compensation: bool,
     arm_compensation: bool,
     arm_island_prune: bool,
+    arm_volume_profile: bool,
     region_map_tsv: Option<PathBuf>,
 }
 
@@ -307,6 +326,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.spine_core_compensation,
         config.arm_compensation,
         config.arm_island_prune,
+        config.arm_volume_profile,
         config.region_map_tsv.as_ref(),
     )?;
 
@@ -331,6 +351,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         source.weight_compensation.hard_spine_limb_edges_before,
         source.weight_compensation.hard_spine_limb_edges_after
     );
+    if source.arm_volume_profile.enabled {
+        println!(
+            "arm_volume_profile affected={} elbow_radius={:.4}→{:.4} bicep_radius={:.4}→{:.4} shoulder_radius={:.4}→{:.4} max_delta={:.4} response={}",
+            source.arm_volume_profile.affected_vertices,
+            source.arm_volume_profile.elbow_radius_before,
+            source.arm_volume_profile.elbow_radius_after,
+            source.arm_volume_profile.bicep_radius_before,
+            source.arm_volume_profile.bicep_radius_after,
+            source.arm_volume_profile.shoulder_radius_before,
+            source.arm_volume_profile.shoulder_radius_after,
+            source.arm_volume_profile.max_lateral_delta,
+            source.arm_volume_profile.response
+        );
+    }
     if source.arm_island_prune.enabled {
         println!(
             "arm_island_prune broken={}→{} pruned_components={} pruned_vertices={} pruned_triangles={} response={}",
@@ -390,6 +424,7 @@ fn parse_args() -> Result<Config, Box<dyn std::error::Error>> {
     let mut spine_core_compensation = true;
     let mut arm_compensation = false;
     let mut arm_island_prune = true;
+    let mut arm_volume_profile = true;
     let mut region_map_tsv = None;
 
     let mut args = env::args().skip(1);
@@ -407,6 +442,7 @@ fn parse_args() -> Result<Config, Box<dyn std::error::Error>> {
             "--arm-compensation" => arm_compensation = true,
             "--no-arm-compensation" => arm_compensation = false,
             "--no-arm-island-prune" => arm_island_prune = false,
+            "--no-arm-volume-profile" => arm_volume_profile = false,
             "--region-map-tsv" => {
                 region_map_tsv = Some(PathBuf::from(required_value(&arg, args.next())?))
             }
@@ -428,6 +464,7 @@ fn parse_args() -> Result<Config, Box<dyn std::error::Error>> {
         spine_core_compensation,
         arm_compensation,
         arm_island_prune,
+        arm_volume_profile,
         region_map_tsv,
     })
 }
@@ -523,6 +560,7 @@ fn read_obj(path: &PathBuf) -> Result<SourceMesh, Box<dyn std::error::Error>> {
         region_response: RegionResponseReport::default(),
         arm_compensation: ArmCompensationReport::default(),
         arm_island_prune: ArmIslandPruneReport::default(),
+        arm_volume_profile: ArmVolumeProfileReport::default(),
     })
 }
 
@@ -542,6 +580,7 @@ fn apply_weights(
     spine_core_compensation: bool,
     arm_compensation: bool,
     arm_island_prune: bool,
+    arm_volume_profile: bool,
     region_map_tsv: Option<&PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let text = fs::read_to_string(path)?;
@@ -570,6 +609,9 @@ fn apply_weights(
         vertex[donor_bone as usize] += weight;
     }
 
+    if arm_volume_profile {
+        mesh.arm_volume_profile = apply_arm_volume_profile(mesh, &accum, donor_lookup)?;
+    }
     if arm_island_prune {
         mesh.arm_island_prune = prune_broken_arm_islands(mesh, &accum, donor_lookup)?;
     }
@@ -878,6 +920,188 @@ fn spine_target_weights(
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a * (1.0 - t) + b * t
+}
+
+fn apply_arm_volume_profile(
+    mesh: &mut SourceMesh,
+    accum: &[[f32; 256]],
+    donor_lookup: &DonorBoneLookup,
+) -> Result<ArmVolumeProfileReport, Box<dyn std::error::Error>> {
+    let left_upper = resolve_required_bone_u8(donor_lookup, "L_UpperArm")?;
+    let left_forearm = resolve_required_bone_u8(donor_lookup, "L_Forearm")?;
+    let left_hand = resolve_required_bone_u8(donor_lookup, "L_Hand")?;
+    let right_upper = resolve_required_bone_u8(donor_lookup, "R_UpperArm")?;
+    let right_forearm = resolve_required_bone_u8(donor_lookup, "R_Forearm")?;
+    let right_hand = resolve_required_bone_u8(donor_lookup, "R_Hand")?;
+    let center_x = (mesh.bbox_min.x + mesh.bbox_max.x) * 0.5;
+    let center_z = (mesh.bbox_min.z + mesh.bbox_max.z) * 0.5;
+    let height_span = (mesh.bbox_max.y - mesh.bbox_min.y).max(f32::EPSILON);
+    let (elbow_before, bicep_before, shoulder_before) = arm_volume_profile_radii(
+        mesh,
+        accum,
+        left_upper,
+        left_forearm,
+        left_hand,
+        right_upper,
+        right_forearm,
+        right_hand,
+        center_x,
+        center_z,
+    );
+
+    let mut affected_vertices = 0;
+    let mut max_lateral_delta = 0.0_f32;
+    for (vertex_index, vertex) in mesh.vertices.iter_mut().enumerate() {
+        let row = &accum[vertex_index];
+        let left_weight =
+            row[left_upper as usize] + row[left_forearm as usize] + row[left_hand as usize];
+        let right_weight =
+            row[right_upper as usize] + row[right_forearm as usize] + row[right_hand as usize];
+        let (side_weight, side_sign) = if left_weight >= right_weight {
+            (left_weight, 1.0_f32)
+        } else {
+            (right_weight, -1.0_f32)
+        };
+        if side_weight < ARM_VOLUME_MIN_SIDE_WEIGHT {
+            continue;
+        }
+        let height = normalized_height(vertex.position, mesh.bbox_min.y, height_span);
+        let delta = arm_volume_profile_delta(height)
+            * ((side_weight - ARM_VOLUME_MIN_SIDE_WEIGHT) / (1.0 - ARM_VOLUME_MIN_SIDE_WEIGHT))
+                .clamp(0.0, 1.0)
+                .sqrt();
+        if delta <= 0.0 {
+            continue;
+        }
+        vertex.position.x += side_sign * delta;
+        vertex.position.z += (vertex.position.z - center_z) * delta * ARM_VOLUME_Z_SCALE;
+        affected_vertices += 1;
+        max_lateral_delta = max_lateral_delta.max(delta.abs());
+    }
+
+    let (elbow_after, bicep_after, shoulder_after) = arm_volume_profile_radii(
+        mesh,
+        accum,
+        left_upper,
+        left_forearm,
+        left_hand,
+        right_upper,
+        right_forearm,
+        right_hand,
+        center_x,
+        center_z,
+    );
+    recompute_source_bbox(mesh);
+    Ok(ArmVolumeProfileReport {
+        enabled: true,
+        affected_vertices,
+        max_lateral_delta,
+        elbow_radius_before: elbow_before,
+        elbow_radius_after: elbow_after,
+        bicep_radius_before: bicep_before,
+        bicep_radius_after: bicep_after,
+        shoulder_radius_before: shoulder_before,
+        shoulder_radius_after: shoulder_after,
+        response: "profile_curve_radial_inflation".to_string(),
+    })
+}
+
+fn arm_volume_profile_delta(height: f32) -> f32 {
+    const PROFILE: &[(f32, f32)] = &[
+        (0.34, 0.000),
+        (0.40, 0.008),
+        (0.47, 0.014),
+        (0.51, 0.018),
+        (0.56, ARM_VOLUME_MAX_LATERAL_DELTA),
+        (0.60, 0.020),
+        (0.64, 0.032),
+        (0.70, 0.000),
+    ];
+    for window in PROFILE.windows(2) {
+        let (h0, d0) = window[0];
+        let (h1, d1) = window[1];
+        if (h0..=h1).contains(&height) {
+            let t = ((height - h0) / (h1 - h0)).clamp(0.0, 1.0);
+            return lerp(d0, d1, t);
+        }
+    }
+    0.0
+}
+
+#[allow(clippy::too_many_arguments)]
+fn arm_volume_profile_radii(
+    mesh: &SourceMesh,
+    accum: &[[f32; 256]],
+    left_upper: u8,
+    left_forearm: u8,
+    left_hand: u8,
+    right_upper: u8,
+    right_forearm: u8,
+    right_hand: u8,
+    center_x: f32,
+    center_z: f32,
+) -> (f32, f32, f32) {
+    let height_span = (mesh.bbox_max.y - mesh.bbox_min.y).max(f32::EPSILON);
+    let mut elbow = Vec::new();
+    let mut bicep = Vec::new();
+    let mut shoulder = Vec::new();
+    for (vertex_index, vertex) in mesh.vertices.iter().enumerate() {
+        let row = &accum[vertex_index];
+        let side_weight =
+            (row[left_upper as usize] + row[left_forearm as usize] + row[left_hand as usize]).max(
+                row[right_upper as usize] + row[right_forearm as usize] + row[right_hand as usize],
+            );
+        if side_weight < ARM_VOLUME_MIN_SIDE_WEIGHT {
+            continue;
+        }
+        let height = normalized_height(vertex.position, mesh.bbox_min.y, height_span);
+        let radius = ((vertex.position.x - center_x).powi(2)
+            + (vertex.position.z - center_z).powi(2))
+        .sqrt();
+        if (0.48..0.535).contains(&height) {
+            elbow.push(radius);
+        } else if (0.535..0.59).contains(&height) {
+            bicep.push(radius);
+        } else if (0.59..0.66).contains(&height) {
+            shoulder.push(radius);
+        }
+    }
+    (
+        average_or_zero(&elbow),
+        average_or_zero(&bicep),
+        average_or_zero(&shoulder),
+    )
+}
+
+fn average_or_zero(values: &[f32]) -> f32 {
+    if values.is_empty() {
+        0.0
+    } else {
+        values.iter().sum::<f32>() / values.len() as f32
+    }
+}
+
+fn recompute_source_bbox(mesh: &mut SourceMesh) {
+    let mut min = Vec3 {
+        x: f32::INFINITY,
+        y: f32::INFINITY,
+        z: f32::INFINITY,
+    };
+    let mut max = Vec3 {
+        x: f32::NEG_INFINITY,
+        y: f32::NEG_INFINITY,
+        z: f32::NEG_INFINITY,
+    };
+    for vertex in &mesh.vertices {
+        min.x = min.x.min(vertex.position.x);
+        min.y = min.y.min(vertex.position.y);
+        min.z = min.z.min(vertex.position.z);
+        max.x = max.x.max(vertex.position.x);
+        max.y = max.y.max(vertex.position.y);
+        max.z = max.z.max(vertex.position.z);
+    }
+    mesh.bbox_min = min;
+    mesh.bbox_max = max;
 }
 
 fn prune_broken_arm_islands(
@@ -2248,6 +2472,46 @@ fn write_summary(
         "arm_compensation_enabled={}",
         source.arm_compensation.enabled
     )?;
+    writeln!(
+        file,
+        "arm_volume_profile_enabled={}",
+        source.arm_volume_profile.enabled
+    )?;
+    if source.arm_volume_profile.enabled {
+        writeln!(
+            file,
+            "arm_volume_profile_affected_vertices={}",
+            source.arm_volume_profile.affected_vertices
+        )?;
+        writeln!(
+            file,
+            "arm_volume_profile_max_lateral_delta={:.6}",
+            source.arm_volume_profile.max_lateral_delta
+        )?;
+        writeln!(
+            file,
+            "arm_volume_profile_elbow_radius_before_after={:.6},{:.6}",
+            source.arm_volume_profile.elbow_radius_before,
+            source.arm_volume_profile.elbow_radius_after
+        )?;
+        writeln!(
+            file,
+            "arm_volume_profile_bicep_radius_before_after={:.6},{:.6}",
+            source.arm_volume_profile.bicep_radius_before,
+            source.arm_volume_profile.bicep_radius_after
+        )?;
+        writeln!(
+            file,
+            "arm_volume_profile_shoulder_radius_before_after={:.6},{:.6}",
+            source.arm_volume_profile.shoulder_radius_before,
+            source.arm_volume_profile.shoulder_radius_after
+        )?;
+        writeln!(
+            file,
+            "arm_volume_profile_response={}",
+            source.arm_volume_profile.response
+        )?;
+    }
     writeln!(
         file,
         "arm_island_prune_enabled={}",

@@ -48,6 +48,19 @@ def parse_int_pair(value: str | None) -> tuple[int, int]:
     return (int(left), int(right))
 
 
+def parse_float(value: str | None) -> float:
+    if value is None or not value.strip():
+        return 0.0
+    return float(value.strip())
+
+
+def parse_float_pair(value: str | None) -> tuple[float, float]:
+    if value is None or not value.strip():
+        return (0.0, 0.0)
+    left, right = value.split(",", 1)
+    return (float(left), float(right))
+
+
 def parse_summary(path: Path) -> dict[str, str]:
     fields: dict[str, str] = {}
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -90,6 +103,23 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
         summary.get("arm_distal_overweighted_components_before_after")
     )
     disconnected_groups = disconnected_arm_weight_groups(audit)
+    arm_volume_profile_enabled = parse_bool(summary.get("arm_volume_profile_enabled"))
+    arm_volume_profile_affected_vertices = parse_int(
+        summary.get("arm_volume_profile_affected_vertices")
+    )
+    arm_volume_profile_max_delta = parse_float(
+        summary.get("arm_volume_profile_max_lateral_delta")
+    )
+    elbow_radius_before, elbow_radius_after = parse_float_pair(
+        summary.get("arm_volume_profile_elbow_radius_before_after")
+    )
+    bicep_radius_before, bicep_radius_after = parse_float_pair(
+        summary.get("arm_volume_profile_bicep_radius_before_after")
+    )
+    shoulder_radius_before, shoulder_radius_after = parse_float_pair(
+        summary.get("arm_volume_profile_shoulder_radius_before_after")
+    )
+    arm_volume_profile_response = summary.get("arm_volume_profile_response", "")
     arm_island_prune_enabled = parse_bool(summary.get("arm_island_prune_enabled"))
     broken_visible_before, broken_visible_after = parse_int_pair(
         summary.get("arm_broken_visible_components_before_after")
@@ -114,6 +144,40 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
         detached_components == 0 and independent_detached_components == 0
     )
 
+    if (
+        broken_visible_before > 0
+        and (
+            not arm_volume_profile_enabled
+            or arm_volume_profile_affected_vertices <= 0
+            or arm_volume_profile_max_delta <= 0.0
+            or elbow_radius_after <= elbow_radius_before
+            or bicep_radius_after <= bicep_radius_before
+            or shoulder_radius_after <= shoulder_radius_before
+        )
+    ):
+        alerts.append(
+            {
+                "code": "ARM_VOLUME_PROFILE_MISSING_OR_INEFFECTIVE",
+                "severity": "error",
+                "message": "The arm has the elbow/forearm visual-risk pattern but no effective volume-profile inflation across elbow, bicep, and shoulder bands.",
+                "arm_volume_profile_enabled": arm_volume_profile_enabled,
+                "affected_vertices": arm_volume_profile_affected_vertices,
+                "max_lateral_delta": arm_volume_profile_max_delta,
+                "elbow_radius_before_after": [
+                    elbow_radius_before,
+                    elbow_radius_after,
+                ],
+                "bicep_radius_before_after": [
+                    bicep_radius_before,
+                    bicep_radius_after,
+                ],
+                "shoulder_radius_before_after": [
+                    shoulder_radius_before,
+                    shoulder_radius_after,
+                ],
+                "recommended_response": "do_not_package; apply a measurable 1D arm-volume profile before runtime review",
+            }
+        )
     if pruned_island_vertices > 0 or pruned_island_triangles > 0:
         alerts.append(
             {
@@ -217,6 +281,22 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
                 distal_after,
             ],
             "disconnected_arm_weight_groups": disconnected_groups,
+            "arm_volume_profile_enabled": arm_volume_profile_enabled,
+            "arm_volume_profile_affected_vertices": arm_volume_profile_affected_vertices,
+            "arm_volume_profile_max_lateral_delta": arm_volume_profile_max_delta,
+            "arm_volume_profile_elbow_radius_before_after": [
+                elbow_radius_before,
+                elbow_radius_after,
+            ],
+            "arm_volume_profile_bicep_radius_before_after": [
+                bicep_radius_before,
+                bicep_radius_after,
+            ],
+            "arm_volume_profile_shoulder_radius_before_after": [
+                shoulder_radius_before,
+                shoulder_radius_after,
+            ],
+            "arm_volume_profile_response": arm_volume_profile_response,
             "arm_island_prune_enabled": arm_island_prune_enabled,
             "arm_broken_visible_components_before_after": [
                 broken_visible_before,
