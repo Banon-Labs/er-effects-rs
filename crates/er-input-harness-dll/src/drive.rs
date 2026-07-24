@@ -26,7 +26,7 @@ use crate::game_mem::{
     current_open_menu_id, flip_fixed_spf, flip_mode_current, load_fsm, menu_data_ptr, menu_flags,
     now_loading, optionsetting_tab_index, pause_menu_open, read_drive_mode_flag,
     return_title_requested, top_menu_id, top_menu_job_ptr, top_window_dialog_accept_ready,
-    world_simulating,
+    top_window_ptr, top_window_vtable, world_simulating,
 };
 use crate::input_inject::{
     MenuEvent, advance_press_any_button, input_manager, keep_input_active, native_open_equip_menu,
@@ -228,6 +228,8 @@ fn probe_menu_tick(im: usize, frame: u64) -> bool {
 struct Sem {
     menu: usize,
     open_menu: i64,
+    top_window: usize,
+    top_window_vtable: usize,
     dialog_accept_ready: bool,
     world_sim: bool,
     now_loading: bool,
@@ -239,6 +241,8 @@ impl Sem {
         Sem {
             menu: menu_data_ptr(),
             open_menu: current_open_menu_id().map_or(-1, i64::from),
+            top_window: top_window_ptr(),
+            top_window_vtable: top_window_vtable(),
             dialog_accept_ready: top_window_dialog_accept_ready(),
             world_sim,
             now_loading: now_loading(),
@@ -742,9 +746,11 @@ fn emit_phase_telemetry(
     let fixed_spf = flip_fixed_spf();
     let flip_mode = flip_mode_current();
     let line = format!(
-        "{{\"phase\":\"{name}\",\"idx\":{idx},\"outcome\":\"{outcome}\",\"start_tick_ms\":{start_tick},\"end_tick_ms\":{end_tick},\"duration_ms\":{duration_ms},\"start_frame\":0,\"end_frame\":{frame},\"duration_frames\":{frame},\"title_state\":{title_state},\"a40\":{a40},\"pause_menu_open\":{},\"menu_id\":{menu_id},\"open_menu\":{},\"tab_index\":{tab},\"return_title\":{},\"dialog_accept_ready\":{},\"fixed_spf\":{fixed_spf:.4},\"flip_mode\":{flip_mode},\"menu\":\"0x{:x}\",\"world_sim\":{},\"now_loading\":{},\"load_fsm\":{}}}",
+        "{{\"phase\":\"{name}\",\"idx\":{idx},\"outcome\":\"{outcome}\",\"start_tick_ms\":{start_tick},\"end_tick_ms\":{end_tick},\"duration_ms\":{duration_ms},\"start_frame\":0,\"end_frame\":{frame},\"duration_frames\":{frame},\"title_state\":{title_state},\"a40\":{a40},\"pause_menu_open\":{},\"menu_id\":{menu_id},\"open_menu\":{},\"top_window\":\"0x{:x}\",\"top_window_vtable\":\"0x{:x}\",\"tab_index\":{tab},\"return_title\":{},\"dialog_accept_ready\":{},\"fixed_spf\":{fixed_spf:.4},\"flip_mode\":{flip_mode},\"menu\":\"0x{:x}\",\"world_sim\":{},\"now_loading\":{},\"load_fsm\":{}}}",
         pause_menu_open() as u8,
         sem.open_menu,
+        sem.top_window,
+        sem.top_window_vtable,
         return_title_requested() as u8,
         sem.dialog_accept_ready as u8,
         sem.menu,

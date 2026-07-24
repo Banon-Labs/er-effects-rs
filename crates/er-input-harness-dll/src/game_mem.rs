@@ -271,6 +271,20 @@ fn top_window() -> usize {
         .unwrap_or(0)
 }
 
+/// Current top popup window pointer, if any.
+pub fn top_window_ptr() -> usize {
+    top_window()
+}
+
+/// Current top popup window vtable pointer, if readable.
+pub fn top_window_vtable() -> usize {
+    let window = top_window();
+    if window == 0 {
+        return 0;
+    }
+    unsafe { read_usize(window) }.unwrap_or(0)
+}
+
 /// Read the generic `CS::MessageBoxDialog` fade/settle accept gate from a known dialog pointer.
 pub fn dialog_accept_gate(dialog: usize) -> Option<DialogAcceptGate> {
     if dialog < HEAP_LO {
