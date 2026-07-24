@@ -1,16 +1,11 @@
 {
   "mcpServers": {
     "ghidra": {
-      "command": "${HOME}/projects/ghidra-mcp-13bm/mcp-bridge/mcp_bridge",
+      "command": "/bin/bash",
       "args": [
-        "-host",
-        "localhost",
-        "-port",
-        "8765"
+        "-lc",
+        "GHIDRA_JP_DICT=\"$HOME/projects/er-effects-rs/scripts/ghidra/jp-en-dict.json\" exec \"$HOME/projects/ghidra-mcp-13bm/mcp-bridge/mcp_bridge\" --host localhost --port 8765"
       ],
-      "env": {
-        "GHIDRA_JP_DICT": "${HOME}/projects/er-effects-rs/scripts/ghidra/jp-en-dict.json"
-      },
       "directTools": true
     }
   }
