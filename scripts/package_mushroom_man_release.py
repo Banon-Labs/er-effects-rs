@@ -22,7 +22,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--summary", required=True, type=Path)
     parser.add_argument("--audit", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--install-script", default=Path("scripts/install_mushroom_man.py"), type=Path)
+    parser.add_argument(
+        "--install-script", default=Path("scripts/install_mushroom_man.py"), type=Path
+    )
     return parser.parse_args()
 
 
@@ -74,7 +76,9 @@ def write_readme(path: Path, summary: dict[str, Any]) -> None:
     )
 
 
-def build_manifest(source_mod: Path, summary: dict[str, Any], audit: dict[str, Any]) -> dict[str, Any]:
+def build_manifest(
+    source_mod: Path, summary: dict[str, Any], audit: dict[str, Any]
+) -> dict[str, Any]:
     files = []
     for path in iter_files(source_mod):
         relative = path.relative_to(source_mod).as_posix()
@@ -92,7 +96,9 @@ def build_manifest(source_mod: Path, summary: dict[str, Any], audit: dict[str, A
         "weight_target_counts": summary.get("weight_target_counts"),
         "connectivity_audit": {
             "isolated_vertices": len(audit.get("isolated_vertices", [])),
-            "mesh_component_sizes": [component.get("size") for component in audit.get("mesh_components", [])],
+            "mesh_component_sizes": [
+                component.get("size") for component in audit.get("mesh_components", [])
+            ],
             "disconnected_weight_groups": audit.get("disconnected_weight_groups", []),
         },
         "source_mod": str(source_mod),
@@ -106,7 +112,9 @@ def zip_directory(staging_root: Path, output: Path) -> None:
     temp_output = output.with_suffix(output.suffix + ".tmp")
     if temp_output.exists():
         temp_output.unlink()
-    with zipfile.ZipFile(temp_output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zip_file:
+    with zipfile.ZipFile(
+        temp_output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
+    ) as zip_file:
         for path in iter_files(staging_root):
             zip_file.write(path, path.relative_to(staging_root).as_posix())
     temp_output.replace(output)
