@@ -558,7 +558,39 @@ def main() -> int:
             include_timeout=False,
             tool_name="Write",
         ),
+        # AskUserQuestion (the multiple-choice questionnaire tool) is HARD-BLOCKED
+        # unconditionally (block_askuserquestion): the user does not want
+        # questionnaire prompts surfaced during /goal work -- the agent must
+        # proceed autonomously and state blockers/recommendations in prose. There
+        # is no reliable goal-active signal to gate on, so the block is always-on.
+        PolicyCase(
+            "deny-askuserquestion-questionnaire",
+            "",
+            False,
+            "blocked the AskUserQuestion questionnaire tool",
+            {"questions": [{"question": "Which?", "header": "H", "options": [{"label": "A"}, {"label": "B"}]}]},
+            include_timeout=False,
+            tool_name="AskUserQuestion",
+        ),
     ]
+
+    # --- ER launch per-session authorization gate (er_launch_requires_session_auth) --------------
+    # The deny/allow-by-SIGNAL matrix is covered by the OPA unit tests
+    # (.cupcake/tests/er_launch_requires_session_auth_test.rego) and the signal behavioral test
+    # (scripts/test-er-launch-auth-signal.py) -- NOT re-tested end-to-end here, because cupcake
+    # RE-RUNS the er_launch_authorized signal with a SANITIZED env and the signal reads the CURRENT
+    # session's real transcript (getcwd() project root); neither event-injected signals nor env
+    # (ER_LAUNCH_AUTH_TRANSCRIPT_FILE / CLAUDE_PROJECT_DIR) reach it through cupcake, so an engine case
+    # cannot deterministically make it authorized/unauthorized (bd
+    # cupcake-policy-authoring-signals-rerun-no-sprintf-2026-07-23). These two cases are
+    # signal-INDEPENDENT (a launcher name as an ARGUMENT is never a launch -> ALLOWED regardless of
+    # authorization) and guard against a command-position regression that would block committing or
+    # linting the launcher scripts.
+    cases.extend([
+        PolicyCase("allow-git-add-launcher-name", "git add scripts/run-vanilla-reload-agentdriven.sh", True),
+        PolicyCase("allow-shellcheck-launcher-name", "shellcheck scripts/run-camera-smoke.sh", True),
+    ])
+
     # The GitHub attribution guard is MACHINE-GLOBAL (XDG config, Banon-Labs/cupcake-config), not
     # repo-local, so CI checkouts do not have it and a footerless gh body is (correctly) allowed
     # there. Exercise its heredoc-substitution fallback only where that policy is installed.
