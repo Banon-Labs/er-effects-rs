@@ -9,7 +9,12 @@
 //!   rustc scripts/route_a_mushroom_patch_donor.rs -O -o target/route_a_mushroom_patch_donor
 //!   target/route_a_mushroom_patch_donor
 
-use std::{collections::HashMap, env, fs, io::Write, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    env, fs,
+    io::Write,
+    path::PathBuf,
+};
 
 const DEFAULT_OBJ: &str =
     "target/mushroom-route-a-offline/prototype/c2280-rust-export/c2280_route_a_scaled.obj";
@@ -22,6 +27,14 @@ const DEFAULT_OUTPUT_FLVER: &str =
 const DEFAULT_SUMMARY: &str =
     "target/mushroom-route-a-offline/prototype/bd_m_1010-mushroom-parts-summary.txt";
 const DEFAULT_DONOR_MESH_INDEX: usize = 1;
+
+const SPINE_COMPENSATION_MIN_HEIGHT_NORM: f32 = 0.08;
+const SPINE_COMPENSATION_LOWER_FADE_HEIGHT_NORM: f32 = 0.16;
+const SPINE_COMPENSATION_BASE_STRENGTH: f32 = 0.35;
+const SPINE_COMPENSATION_CENTER_BOOST: f32 = 0.45;
+const SPINE_COMPENSATION_CORE_RADIUS_MIN: f32 = 0.08;
+const SPINE_COMPENSATION_CORE_RADIUS_MAX: f32 = 0.16;
+const SPINE_COMPENSATION_METRIC_CORE_RADIUS: f32 = 0.10;
 
 const HEADER_SIZE: usize = 0x80;
 const DUMMY_SIZE: usize = 0x40;
@@ -129,6 +142,30 @@ struct SourceMesh {
     triangles: Vec<[u32; 3]>,
     bbox_min: Vec3,
     bbox_max: Vec3,
+    weight_compensation: WeightCompensationReport,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct WeightCompensationReport {
+    enabled: bool,
+    axis_center_x: f32,
+    axis_center_z: f32,
+    compensated_vertices: usize,
+    central_core_vertices: usize,
+    central_core_avg_spine_before: f32,
+    central_core_avg_limb_before: f32,
+    central_core_avg_spine_after: f32,
+    central_core_avg_limb_after: f32,
+    hard_spine_limb_edges_before: usize,
+    hard_spine_limb_edges_after: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct WeightCompensationMetrics {
+    central_core_vertices: usize,
+    central_core_avg_spine: f32,
+    central_core_avg_limb: f32,
+    hard_spine_limb_edges: usize,
 }
 
 struct Config {
@@ -138,6 +175,7 @@ struct Config {
     output_flver: PathBuf,
     summary_path: PathBuf,
     donor_mesh_index: usize,
+    spine_core_compensation: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -145,7 +183,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut source = read_obj(&config.obj_path)?;
     let mut donor_bytes = fs::read(&config.donor_flver)?;
     let donor_lookup = donor_bone_lookup(&donor_bytes)?;
-    apply_weights(&mut source, &config.weights_path, &donor_lookup)?;
+    apply_weights(
+        &mut source,
+        &config.weights_path,
+        &donor_lookup,
+        config.spine_core_compensation,
+    )?;
 
     let patch_report = patch_donor_flver(&mut donor_bytes, &source, config.donor_mesh_index)?;
 
@@ -158,12 +201,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("wrote {}", config.output_flver.display());
     println!("wrote {}", config.summary_path.display());
     println!(
-        "patched_mesh={} vertices={} triangles={} donor_vertex_capacity={} lod0_capacity={}",
+        "patched_mesh={} vertices={} triangles={} donor_vertex_capacity={} lod0_capacity={} spine_compensated_vertices={} hard_spine_limb_edges={}→{}",
         config.donor_mesh_index,
         source.vertices.len(),
         source.triangles.len(),
         patch_report.vertex_capacity,
-        patch_report.lod0_index_capacity / 3
+        patch_report.lod0_index_capacity / 3,
+        source.weight_compensation.compensated_vertices,
+        source.weight_compensation.hard_spine_limb_edges_before,
+        source.weight_compensation.hard_spine_limb_edges_after
     );
     Ok(())
 }
@@ -182,6 +228,7 @@ fn parse_args() -> Result<Config, Box<dyn std::error::Error>> {
     let mut output_flver = PathBuf::from(DEFAULT_OUTPUT_FLVER);
     let mut summary_path = PathBuf::from(DEFAULT_SUMMARY);
     let mut donor_mesh_index = DEFAULT_DONOR_MESH_INDEX;
+    let mut spine_core_compensation = true;
 
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -194,6 +241,7 @@ fn parse_args() -> Result<Config, Box<dyn std::error::Error>> {
             "--donor-mesh-index" => {
                 donor_mesh_index = required_value(&arg, args.next())?.parse()?
             }
+            "--no-spine-core-compensation" => spine_core_compensation = false,
             "--help" | "-h" => {
                 print_help();
                 std::process::exit(0);
@@ -209,6 +257,7 @@ fn parse_args() -> Result<Config, Box<dyn std::error::Error>> {
         output_flver,
         summary_path,
         donor_mesh_index,
+        spine_core_compensation,
     })
 }
 
@@ -224,6 +273,7 @@ fn print_help() {
     println!("  --output-flver <path>     default: {DEFAULT_OUTPUT_FLVER}");
     println!("  --summary <path>          default: {DEFAULT_SUMMARY}");
     println!("  --donor-mesh-index <idx>  default: {DEFAULT_DONOR_MESH_INDEX}");
+    println!("  --no-spine-core-compensation  disable automatic mushroom trunk/cap spine-weight self-healing");
 }
 
 fn read_obj(path: &PathBuf) -> Result<SourceMesh, Box<dyn std::error::Error>> {
@@ -292,6 +342,7 @@ fn read_obj(path: &PathBuf) -> Result<SourceMesh, Box<dyn std::error::Error>> {
         triangles,
         bbox_min,
         bbox_max,
+        weight_compensation: WeightCompensationReport::default(),
     })
 }
 
@@ -308,6 +359,7 @@ fn apply_weights(
     mesh: &mut SourceMesh,
     path: &PathBuf,
     donor_lookup: &DonorBoneLookup,
+    spine_core_compensation: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let text = fs::read_to_string(path)?;
     let mut accum = vec![[0.0_f32; 256]; mesh.vertices.len()];
@@ -335,6 +387,10 @@ fn apply_weights(
         vertex[donor_bone as usize] += weight;
     }
 
+    if spine_core_compensation {
+        mesh.weight_compensation = compensate_spine_core_weights(mesh, &mut accum, donor_lookup)?;
+    }
+
     for (vertex_index, vertex) in mesh.vertices.iter_mut().enumerate() {
         let mut pairs: Vec<(u8, f32)> = accum[vertex_index]
             .iter()
@@ -357,6 +413,278 @@ fn apply_weights(
     }
 
     Ok(())
+}
+
+fn compensate_spine_core_weights(
+    mesh: &SourceMesh,
+    accum: &mut [[f32; 256]],
+    donor_lookup: &DonorBoneLookup,
+) -> Result<WeightCompensationReport, Box<dyn std::error::Error>> {
+    let pelvis = resolve_required_bone_u8(donor_lookup, "Pelvis")?;
+    let spine = resolve_required_bone_u8(donor_lookup, "Spine")?;
+    let spine1 = resolve_required_bone_u8(donor_lookup, "Spine1")?;
+    let spine2 = resolve_required_bone_u8(donor_lookup, "Spine2")?;
+    let spine_bones = [pelvis, spine, spine1, spine2];
+    let limb_bones = resolve_optional_bones(
+        donor_lookup,
+        &[
+            "L_Thigh",
+            "R_Thigh",
+            "L_Calf",
+            "R_Calf",
+            "L_Foot",
+            "R_Foot",
+            "L_UpperArm",
+            "R_UpperArm",
+            "L_Forearm",
+            "R_Forearm",
+            "L_Hand",
+            "R_Hand",
+        ],
+    )?;
+    let axis_center_x = (mesh.bbox_min.x + mesh.bbox_max.x) * 0.5;
+    let axis_center_z = (mesh.bbox_min.z + mesh.bbox_max.z) * 0.5;
+    let before = weight_compensation_metrics(
+        mesh,
+        accum,
+        &spine_bones,
+        &limb_bones,
+        axis_center_x,
+        axis_center_z,
+    );
+
+    let height_span = (mesh.bbox_max.y - mesh.bbox_min.y).max(f32::EPSILON);
+    let mut compensated_vertices = 0;
+    for (vertex_index, vertex) in mesh.vertices.iter().enumerate() {
+        let height = normalized_height(vertex.position, mesh.bbox_min.y, height_span);
+        if height < SPINE_COMPENSATION_MIN_HEIGHT_NORM {
+            continue;
+        }
+        let radius = ((vertex.position.x - axis_center_x).powi(2)
+            + (vertex.position.z - axis_center_z).powi(2))
+        .sqrt();
+        let radius_t = ((height - 0.15) / 0.55).clamp(0.0, 1.0);
+        let core_radius = SPINE_COMPENSATION_CORE_RADIUS_MIN
+            + (SPINE_COMPENSATION_CORE_RADIUS_MAX - SPINE_COMPENSATION_CORE_RADIUS_MIN) * radius_t;
+        let centrality = (1.0 - radius / core_radius).clamp(0.0, 1.0);
+        let mut strength = SPINE_COMPENSATION_BASE_STRENGTH
+            + SPINE_COMPENSATION_CENTER_BOOST * centrality;
+        if height < SPINE_COMPENSATION_LOWER_FADE_HEIGHT_NORM {
+            strength *= 0.55;
+        }
+        strength = strength.clamp(0.0, 0.92);
+        if strength <= 0.0 {
+            continue;
+        }
+
+        let total = accum[vertex_index].iter().sum::<f32>();
+        if total <= 0.0 {
+            continue;
+        }
+        for weight in &mut accum[vertex_index] {
+            *weight *= 1.0 - strength;
+        }
+        for (bone, target_weight) in spine_target_weights(height, pelvis, spine, spine1, spine2) {
+            if target_weight > 0.0 {
+                accum[vertex_index][bone as usize] += total * strength * target_weight;
+            }
+        }
+        normalize_accumulated_weights(&mut accum[vertex_index]);
+        compensated_vertices += 1;
+    }
+
+    let after = weight_compensation_metrics(
+        mesh,
+        accum,
+        &spine_bones,
+        &limb_bones,
+        axis_center_x,
+        axis_center_z,
+    );
+    Ok(WeightCompensationReport {
+        enabled: true,
+        axis_center_x,
+        axis_center_z,
+        compensated_vertices,
+        central_core_vertices: after.central_core_vertices,
+        central_core_avg_spine_before: before.central_core_avg_spine,
+        central_core_avg_limb_before: before.central_core_avg_limb,
+        central_core_avg_spine_after: after.central_core_avg_spine,
+        central_core_avg_limb_after: after.central_core_avg_limb,
+        hard_spine_limb_edges_before: before.hard_spine_limb_edges,
+        hard_spine_limb_edges_after: after.hard_spine_limb_edges,
+    })
+}
+
+fn resolve_required_bone_u8(
+    donor_lookup: &DonorBoneLookup,
+    name: &str,
+) -> Result<u8, Box<dyn std::error::Error>> {
+    let index = donor_lookup
+        .resolve(name)
+        .ok_or_else(|| format!("missing required donor bone {name}"))?;
+    bone_index_to_u8(index, name)
+}
+
+fn resolve_optional_bones(
+    donor_lookup: &DonorBoneLookup,
+    names: &[&str],
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let mut bones = Vec::new();
+    for name in names {
+        if let Some(index) = donor_lookup.resolve(name) {
+            bones.push(bone_index_to_u8(index, name)?);
+        }
+    }
+    Ok(bones)
+}
+
+fn normalized_height(position: Vec3, min_y: f32, height_span: f32) -> f32 {
+    ((position.y - min_y) / height_span).clamp(0.0, 1.0)
+}
+
+fn normalize_accumulated_weights(weights: &mut [f32; 256]) {
+    let total = weights.iter().sum::<f32>();
+    if total <= 0.0 {
+        return;
+    }
+    for weight in weights {
+        *weight /= total;
+    }
+}
+
+fn weight_compensation_metrics(
+    mesh: &SourceMesh,
+    accum: &[[f32; 256]],
+    spine_bones: &[u8],
+    limb_bones: &[u8],
+    axis_center_x: f32,
+    axis_center_z: f32,
+) -> WeightCompensationMetrics {
+    let height_span = (mesh.bbox_max.y - mesh.bbox_min.y).max(f32::EPSILON);
+    let mut central_core_vertices = 0;
+    let mut central_core_spine_sum = 0.0;
+    let mut central_core_limb_sum = 0.0;
+
+    for (vertex_index, vertex) in mesh.vertices.iter().enumerate() {
+        let height = normalized_height(vertex.position, mesh.bbox_min.y, height_span);
+        if height < SPINE_COMPENSATION_MIN_HEIGHT_NORM {
+            continue;
+        }
+        let radius = ((vertex.position.x - axis_center_x).powi(2)
+            + (vertex.position.z - axis_center_z).powi(2))
+        .sqrt();
+        if radius <= SPINE_COMPENSATION_METRIC_CORE_RADIUS {
+            central_core_vertices += 1;
+            central_core_spine_sum += sum_bone_weights(&accum[vertex_index], spine_bones);
+            central_core_limb_sum += sum_bone_weights(&accum[vertex_index], limb_bones);
+        }
+    }
+
+    let mut hard_spine_limb_edges = 0;
+    for (a, b) in unique_triangle_edges(&mesh.triangles) {
+        let a = a as usize;
+        let b = b as usize;
+        if a >= mesh.vertices.len() || b >= mesh.vertices.len() {
+            continue;
+        }
+        let height_a = normalized_height(mesh.vertices[a].position, mesh.bbox_min.y, height_span);
+        let height_b = normalized_height(mesh.vertices[b].position, mesh.bbox_min.y, height_span);
+        let mid_height = (height_a + height_b) * 0.5;
+        if !(0.12..=0.70).contains(&mid_height) {
+            continue;
+        }
+        let a_spine = sum_bone_weights(&accum[a], spine_bones);
+        let a_limb = sum_bone_weights(&accum[a], limb_bones);
+        let b_spine = sum_bone_weights(&accum[b], spine_bones);
+        let b_limb = sum_bone_weights(&accum[b], limb_bones);
+        if (a_spine > 0.75 && b_limb > 0.75) || (b_spine > 0.75 && a_limb > 0.75) {
+            hard_spine_limb_edges += 1;
+        }
+    }
+
+    let divisor = central_core_vertices.max(1) as f32;
+    WeightCompensationMetrics {
+        central_core_vertices,
+        central_core_avg_spine: central_core_spine_sum / divisor,
+        central_core_avg_limb: central_core_limb_sum / divisor,
+        hard_spine_limb_edges,
+    }
+}
+
+fn unique_triangle_edges(triangles: &[[u32; 3]]) -> HashSet<(u32, u32)> {
+    let mut edges = HashSet::new();
+    for [a, b, c] in triangles {
+        insert_edge(&mut edges, *a, *b);
+        insert_edge(&mut edges, *b, *c);
+        insert_edge(&mut edges, *c, *a);
+    }
+    edges
+}
+
+fn insert_edge(edges: &mut HashSet<(u32, u32)>, a: u32, b: u32) {
+    if a <= b {
+        edges.insert((a, b));
+    } else {
+        edges.insert((b, a));
+    }
+}
+
+fn sum_bone_weights(weights: &[f32; 256], bones: &[u8]) -> f32 {
+    bones
+        .iter()
+        .map(|bone| weights[*bone as usize])
+        .sum::<f32>()
+}
+
+fn spine_target_weights(
+    height: f32,
+    pelvis: u8,
+    spine: u8,
+    spine1: u8,
+    spine2: u8,
+) -> [(u8, f32); 4] {
+    if height < 0.18 {
+        return [(pelvis, 0.85), (spine, 0.15), (spine1, 0.0), (spine2, 0.0)];
+    }
+    if height < 0.36 {
+        let t = ((height - 0.18) / 0.18).clamp(0.0, 1.0);
+        return [
+            (pelvis, lerp(0.85, 0.35, t)),
+            (spine, lerp(0.15, 0.65, t)),
+            (spine1, 0.0),
+            (spine2, 0.0),
+        ];
+    }
+    if height < 0.58 {
+        let t = ((height - 0.36) / 0.22).clamp(0.0, 1.0);
+        return [
+            (pelvis, lerp(0.35, 0.0, t)),
+            (spine, lerp(0.65, 0.70, t)),
+            (spine1, lerp(0.0, 0.30, t)),
+            (spine2, 0.0),
+        ];
+    }
+    if height < 0.78 {
+        let t = ((height - 0.58) / 0.20).clamp(0.0, 1.0);
+        return [
+            (pelvis, 0.0),
+            (spine, lerp(0.70, 0.0, t)),
+            (spine1, lerp(0.30, 0.65, t)),
+            (spine2, lerp(0.0, 0.35, t)),
+        ];
+    }
+    let t = ((height - 0.78) / 0.22).clamp(0.0, 1.0);
+    [
+        (pelvis, 0.0),
+        (spine, 0.0),
+        (spine1, lerp(0.65, 0.20, t)),
+        (spine2, lerp(0.35, 0.80, t)),
+    ]
+}
+
+fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    a * (1.0 - t) + b * t
 }
 
 fn patch_donor_flver(
@@ -866,6 +1194,44 @@ fn write_summary(
     writeln!(file, "donor_flver={}", config.donor_flver.display())?;
     writeln!(file, "output_flver={}", config.output_flver.display())?;
     writeln!(file, "donor_mesh_index={}", config.donor_mesh_index)?;
+    writeln!(
+        file,
+        "spine_core_compensation_enabled={}",
+        source.weight_compensation.enabled
+    )?;
+    writeln!(
+        file,
+        "spine_core_compensation_axis_center={:.9},{:.9}",
+        source.weight_compensation.axis_center_x, source.weight_compensation.axis_center_z
+    )?;
+    writeln!(
+        file,
+        "spine_core_compensated_vertices={}",
+        source.weight_compensation.compensated_vertices
+    )?;
+    writeln!(
+        file,
+        "spine_core_vertices={}",
+        source.weight_compensation.central_core_vertices
+    )?;
+    writeln!(
+        file,
+        "spine_core_avg_spine_weight_before_after={:.6},{:.6}",
+        source.weight_compensation.central_core_avg_spine_before,
+        source.weight_compensation.central_core_avg_spine_after
+    )?;
+    writeln!(
+        file,
+        "spine_core_avg_limb_weight_before_after={:.6},{:.6}",
+        source.weight_compensation.central_core_avg_limb_before,
+        source.weight_compensation.central_core_avg_limb_after
+    )?;
+    writeln!(
+        file,
+        "hard_spine_limb_edges_before_after={},{}",
+        source.weight_compensation.hard_spine_limb_edges_before,
+        source.weight_compensation.hard_spine_limb_edges_after
+    )?;
     writeln!(file, "vertices={}", source.vertices.len())?;
     writeln!(file, "triangles={}", source.triangles.len())?;
     writeln!(
