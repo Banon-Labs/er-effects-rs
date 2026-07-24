@@ -30,17 +30,10 @@ unsafe fn title_dialog_sm_state(
     Some((dialog, in_fadein, in_loop, in_textfadeout, latch))
 }
 
-/// Skip the title FadeIn ONCE: the first frame the dialog SM is settled in FadeIn (menu-open latch
-/// clear), drive the FD4 state machine FadeIn->Loop by calling the game's OWN transition `SetState`
-/// (deobf 0x1407499e0) with `(sm = dialog+0xa60, desc = Loop 0x142a8f9e8)`. This is EXACTLY the call
-/// `CS::TitleTopDialog::update`'s input-skip branch makes on a confirm/cancel press (Ghidra: bd
-/// fadein-* RE), so it is save-safe and routes through the SM's own vtable[0x150] request path (no
-/// struct stomp) -- but ZERO input. `SetState` internally no-ops unless the current node is settled
-/// (`[node+0x20]&0x8f >= 2`), so an early call before the node is eligible cannot corrupt the SM.
-/// One-shot via `TITLE_FADEIN_SKIP_FIRED`; the dt-scale / frame-burst / anim-complete-predicate levers
-/// were all runtime-falsified (bd title-anim-framedelta / pab-to-menuopen-real-breakdown / fadein-
-/// predicate-75cea0). The FadeIn IS frame-paced animation -- it is just skipped by the state transition,
-/// not by pacing.
+/// Skip title FadeIn once by calling the game's own FD4 `SetState(sm, Loop)` transition from settled
+/// FadeIn with the menu-open latch clear. This mirrors `CS::TitleTopDialog::update`'s input-skip path
+/// without input, is one-shot via `TITLE_FADEIN_SKIP_FIRED`, and preserves the runtime-falsified finding
+/// that FadeIn is frame-paced animation skipped by state transition, not by pacing changes.
 unsafe fn title_anim_fadein_skip(owner: usize) {
     if TITLE_FADEIN_SKIP_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS {
         return; // one-shot: already transitioned
@@ -104,8 +97,7 @@ pub(crate) unsafe extern "system" fn title_menujob_speed_detour(
     unsafe { orig(owner, task_data, r8, r9) }
 }
 
-/// Install the title-anim speedup hook ONCE (MinHook, mirroring `install_pab_advance_hook`). Gated by
-/// `title_anim_speedup_enabled` at the call site; the detour self-gates per frame too.
+/// Install the one-shot title-anim speedup hook; call-site and detour both gate it.
 pub(crate) unsafe fn install_title_anim_speed_hook(base: usize) {
     if TITLE_ANIM_SPEED_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
         != TITLE_OWNER_SCAN_START_ADDRESS
@@ -143,10 +135,8 @@ pub(crate) unsafe fn install_title_anim_speed_hook(base: usize) {
     std::mem::forget(hooks);
 }
 
-/// After-original detour for `CS::MoveMapStep::STEP_MoveMap` (state 18). Native writes the advance gate
-/// at `MoveMapStep+0x4b8` near the end of this function; a normal game-task write runs too late because
-/// the state machine can consume the gate and run Cleanup/Finish in the same tick. This detour calls the
-/// original first, then clears the gate only for the current same-session reload until movement proof.
+/// After-original `CS::MoveMapStep::STEP_MoveMap` detour. Native writes the advance gate near function
+/// end, so this clears it after original only for the current same-session reload until movement proof.
 pub(crate) unsafe extern "system" fn movemapstep_step_move_map_gate_detour(
     mms: usize,
     task_data: usize,
