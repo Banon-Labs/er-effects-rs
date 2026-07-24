@@ -121,6 +121,65 @@ const PROXY_SIZE: usize = 0x60;
 /// iconInfo size for the universal icon setter (zero-filled by the builder).
 const ICON_INFO_SIZE: usize = 0x40;
 
+// -- Runtime Scaleform clip creation (bottom-left badge = our own clip, not a reused one).
+//    All offsets/slots ground-truthed 2026-07-23 (bd armament-icons-OI-vtable-slot-map,
+//    armament-icons-objectinterface-vtable-anchors). SceneObjProxy+0x28 = CSScaleformValue
+//    { _vfptr@0; GFx::Value@0x8 }; GFx::Value { objectInterface@0x10, dataType@0x18, value@0x20 }.
+/// From a bound proxy: `*(proxy + PROXY_OBJECTINTERFACE_OFFSET)` = the GFx ObjectInterface instance.
+const PROXY_OBJECTINTERFACE_OFFSET: usize = 0x40;
+/// From a bound proxy: `*(proxy + PROXY_GFX_OBJECT_OFFSET)` = GFx::Value.value (the display-object handle).
+const PROXY_GFX_OBJECT_OFFSET: usize = 0x50;
+/// ObjectInterface vtable slot: `Invoke(oi, objHandle, char* method, GfxValue* result, GfxValue* args, u64 nargs)`.
+const OI_VTABLE_INVOKE_SLOT: usize = 0x30;
+/// `Scaleform::GFx::Value` sizeof (Ghidra get_structure = 0x30) -- args array stride for Invoke.
+const GFX_VALUE_SIZE: usize = 0x30;
+/// GFx ValueType (corroborated by DisplayObject==10 in GetMember): String=6, Number=5.
+const GFX_VT_STRING: u32 = 6;
+const GFX_VT_NUMBER: u32 = 5;
+/// Depth for the duplicated badge clip -- high, to avoid colliding with the tile's own children.
+const BADGE_CLIP_DEPTH: f64 = 30000.0;
+
+/// `Scaleform::GFx::Value` (0x30 bytes) -- hand-built for Invoke args (name String + depth Number).
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct GfxValue {
+    gc_prev: usize,
+    gc_next: usize,
+    object_interface: usize,
+    data_type: u32,
+    _pad: u32,
+    value: u64,
+    data_aux: u64,
+}
+
+#[cfg(windows)]
+impl GfxValue {
+    const fn zeroed() -> Self {
+        GfxValue {
+            gc_prev: 0,
+            gc_next: 0,
+            object_interface: 0,
+            data_type: 0,
+            _pad: 0,
+            value: 0,
+            data_aux: 0,
+        }
+    }
+    fn string(ptr: *const u8) -> Self {
+        let mut v = Self::zeroed();
+        v.data_type = GFX_VT_STRING;
+        v.value = ptr as u64;
+        v
+    }
+    fn number(n: f64) -> Self {
+        let mut v = Self::zeroed();
+        v.data_type = GFX_VT_NUMBER;
+        v.value = n.to_bits();
+        v
+    }
+}
+
 /// How many initial TilePopulate calls get a per-call sample log line.
 const SAMPLE_LOG_CALLS: u64 = 16;
 /// After sampling, log a heartbeat every this many TilePopulate fires.
@@ -145,6 +204,10 @@ static BADGE_UNBOUND: AtomicU64 = AtomicU64::new(0);
 static BADGE_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
 /// One-time guard for the Scaleform vtable dump (pins ObjectInterface Invoke/clip-create slots).
 static VTABLE_DUMPED: AtomicUsize = AtomicUsize::new(0);
+/// Opt-in (ER_ARMAMENT_ICONS_DUP marker): when the target badge clip is unbound, CREATE it at
+/// runtime by duplicating AttributeIcon (bd armament-icons-need-own-runtime-created-clip). Gated
+/// so the proven draw-into-existing-clip baseline is untouched until the create path is validated.
+static DUP_CREATE: AtomicUsize = AtomicUsize::new(0);
 /// Sentinel: no forced icon (use the real skill icon).
 const FORCE_ICON_NONE: u32 = u32::MAX;
 /// Sentinel (ER_ARMAMENT_ICONS_FORCE_ICON=mirror): draw the tile's own item icon into the badge.
@@ -255,6 +318,9 @@ fn spawn_install_thread() {
                 if let Ok(cstr) = std::ffi::CString::new(v) {
                     let _ = TARGET_CHILD.set(cstr);
                 }
+            }
+            if diag_override("ER_ARMAMENT_ICONS_DUP", "er-armament-icons-dup.txt").is_some() {
+                DUP_CREATE.store(1, Ordering::Relaxed);
             }
             let forced = FORCE_ICON_ID.load(Ordering::Relaxed);
             log_message(format_args!(
@@ -516,6 +582,81 @@ unsafe fn dump_scaleform_vtables(base: usize, tile: usize) {
     unsafe { dtor(proxy.as_mut_ptr().add(PROXY_SCALEFORM_VALUE_OFFSET)) };
 }
 
+/// Create our OWN badge clip at runtime by duplicating `AttributeIcon` (a bound clip that
+/// carries a real rect + `IconImage`, so the proven icon_setter draws into the copy) into a new
+/// child named `name` under the tile. This is the additive "own marker" path (bd
+/// armament-icons-need-own-runtime-created-clip): no existing clip is reused, no GFX file edit.
+/// AS `duplicateMovieClip(newName, depth)` clones into the source's parent (the tile). Returns
+/// true if the Invoke was dispatched. Reposition to bottom-left is a separate step (this first
+/// lands the copy at AttributeIcon's spot to isolate whether create+draw works).
+#[cfg(windows)]
+unsafe fn create_badge_clip(base: usize, tile: usize, name: &std::ffi::CStr) -> bool {
+    use er_game_base::mem::safe_read_usize;
+
+    type AssignFn = unsafe extern "system" fn(usize, *mut u8, *const u8) -> *mut u8;
+    type IsBoundFn = unsafe extern "system" fn(*const u8) -> bool;
+    type DtorFn = unsafe extern "system" fn(*mut u8);
+    // ObjectInterface::Invoke(oi, objHandle, GfxValue* result, char* method, GfxValue* args, u64 n)
+    // -- verified via FUN_1410dc6a0 decompile: param_3=result (written by FUN_1410d1ed0),
+    // param_4=methodName (interned by FUN_1411773a0), param_5=args (stride 0x30), param_6=nargs.
+    type InvokeFn = unsafe extern "system" fn(
+        usize,
+        usize,
+        *mut GfxValue,
+        *const u8,
+        *const GfxValue,
+        u64,
+    ) -> u64;
+
+    let assign: AssignFn = unsafe { std::mem::transmute(base + ASSIGN_COMPONENT_WITH_NAME_RVA) };
+    let is_bound: IsBoundFn = unsafe { std::mem::transmute(base + PROXY_IS_BOUND_RVA) };
+    let dtor: DtorFn = unsafe { std::mem::transmute(base + SCALEFORM_VALUE_DTOR_RVA) };
+
+    let mut src = [0u8; PROXY_SIZE];
+    unsafe { assign(tile, src.as_mut_ptr(), c"AttributeIcon".as_ptr().cast()) };
+    let mut invoked = false;
+    if unsafe { is_bound(src.as_ptr()) } {
+        let p = src.as_ptr() as usize;
+        let oi = unsafe { safe_read_usize(p + PROXY_OBJECTINTERFACE_OFFSET) }.unwrap_or(0);
+        let obj = unsafe { safe_read_usize(p + PROXY_GFX_OBJECT_OFFSET) }.unwrap_or(0);
+        let oi_vt = if oi >= 0x10000 {
+            unsafe { safe_read_usize(oi) }.unwrap_or(0)
+        } else {
+            0
+        };
+        if obj >= 0x10000 && oi_vt >= 0x10000 {
+            if let Some(invoke_fn) = unsafe { safe_read_usize(oi_vt + OI_VTABLE_INVOKE_SLOT) } {
+                let invoke: InvokeFn = unsafe { std::mem::transmute(invoke_fn) };
+                let name_bytes = name.to_bytes_with_nul();
+                let args = [
+                    GfxValue::string(name_bytes.as_ptr()),
+                    GfxValue::number(BADGE_CLIP_DEPTH),
+                ];
+                let mut result = GfxValue::zeroed();
+                let method = c"duplicateMovieClip";
+                let ret = unsafe {
+                    invoke(
+                        oi,
+                        obj,
+                        &mut result,
+                        method.as_ptr().cast(),
+                        args.as_ptr(),
+                        args.len() as u64,
+                    )
+                };
+                log_message(format_args!(
+                    "dup invoke: ret={ret} result.dataType={} result.value=0x{:x}",
+                    result.data_type, result.value
+                ));
+                invoked = true;
+            }
+        }
+    }
+    unsafe { dtor(src.as_mut_ptr().add(PROXY_SCALEFORM_VALUE_OFFSET)) };
+    let _ = GFX_VALUE_SIZE;
+    invoked
+}
+
 #[cfg(windows)]
 unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
     let Ok(base) = er_game_base::mem::game_module_base() else {
@@ -693,6 +834,20 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
     // invisible/wrong badge, and the rect trace above records why.
     let target = target_child();
     unsafe { assign(tile, proxy.as_mut_ptr(), target.as_ptr().cast()) };
+    // If our badge clip doesn't exist yet and runtime creation is enabled, duplicate AttributeIcon
+    // into it (our own additive clip), then re-resolve so the draw below fills the fresh copy.
+    if !unsafe { is_bound(proxy.as_ptr()) } && DUP_CREATE.load(Ordering::Relaxed) != 0 {
+        unsafe { value_dtor(proxy.as_mut_ptr().add(PROXY_SCALEFORM_VALUE_OFFSET)) };
+        let created = unsafe { create_badge_clip(base, tile, target) };
+        unsafe { assign(tile, proxy.as_mut_ptr(), target.as_ptr().cast()) };
+        if trace {
+            log_message(format_args!(
+                "dup #{attempt}: invoked={created} {}_bound_after={}",
+                target.to_str().unwrap_or("target"),
+                unsafe { is_bound(proxy.as_ptr()) }
+            ));
+        }
+    }
     if unsafe { is_bound(proxy.as_ptr()) } {
         unsafe {
             icon_setter(proxy.as_mut_ptr(), icon_info.as_ptr());

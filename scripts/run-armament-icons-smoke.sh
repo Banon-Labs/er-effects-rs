@@ -99,6 +99,7 @@ echo -n "${MODE:-inv}" >"$GAME_DIR/er-harness-drive-mode.txt"
 #   TARGET=<childName>      : approach-B draw target clip (e.g. AttributeIcon; default ArtsBadge).
 export ER_ARMAMENT_ICONS_FORCE_ICON="${FORCE_ICON:-}"
 export ER_ARMAMENT_ICONS_TARGET="${TARGET:-}"
+export ER_ARMAMENT_ICONS_DUP="${DUP:-}"
 # NO save redirect: pure APPDATA vanilla save (whatever character is last-active).
 [[ -f "$GAME_DIR/er-effects.toml" ]] && mv -f "$GAME_DIR/er-effects.toml" "$ARTIFACT_DIR/er-effects.toml.bak"
 # Sweep stale logs/markers so a prior run cannot pollute this one.
@@ -106,10 +107,11 @@ rm -f "$GAME_DIR"/er-armament-icons.log "$GAME_DIR"/er-input-harness.log \
 	"$GAME_DIR"/er-input-harness-phases.jsonl "$GAME_DIR"/er-telemetry-timeseries.jsonl \
 	"$GAME_DIR"/er-harness-probe-hold-id.txt "$GAME_DIR"/er-harness-os-input.txt \
 	"$GAME_DIR"/er-harness-native-quit.txt "$GAME_DIR"/er-harness-force-drive.txt \
-	"$GAME_DIR"/er-armament-icons-force-icon.txt "$GAME_DIR"/er-armament-icons-target.txt 2>/dev/null
+	"$GAME_DIR"/er-armament-icons-force-icon.txt "$GAME_DIR"/er-armament-icons-target.txt "$GAME_DIR"/er-armament-icons-dup.txt 2>/dev/null
 # Write fresh diagnostic markers (AFTER the sweep) when set.
 [[ -n "${FORCE_ICON:-}" ]] && printf '%s' "$FORCE_ICON" >"$GAME_DIR/er-armament-icons-force-icon.txt"
 [[ -n "${TARGET:-}" ]] && printf '%s' "$TARGET" >"$GAME_DIR/er-armament-icons-target.txt"
+[[ -n "${DUP:-}" ]] && printf '%s' "$DUP" >"$GAME_DIR/er-armament-icons-dup.txt"
 
 # SAFETY (bd never-blanket-kill-eldenring): only tear down the PIDs THIS run spawns.
 win_pids_for() {
@@ -131,7 +133,7 @@ cleanup() {
 	for pid in $(win_pids_for me3.exe) $(win_pids_for me3-launcher.exe); do
 		[[ "$PRE_ME3_PIDS" == *" $pid "* ]] || taskkill.exe /F /PID "$pid" >/dev/null 2>&1
 	done
-	rm -f "$GAME_DIR/er-harness-drive-mode.txt" "$GAME_DIR/er-armament-icons-force-icon.txt" "$GAME_DIR/er-armament-icons-target.txt" 2>/dev/null
+	rm -f "$GAME_DIR/er-harness-drive-mode.txt" "$GAME_DIR/er-armament-icons-force-icon.txt" "$GAME_DIR/er-armament-icons-target.txt" "$GAME_DIR/er-armament-icons-dup.txt" 2>/dev/null
 	[[ -f "$ARTIFACT_DIR/er-effects.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-effects.toml.bak" "$GAME_DIR/er-effects.toml"
 }
 trap cleanup EXIT
@@ -165,7 +167,7 @@ RC=$?
 # The watcher already tore the game down; disable the safety-net trap and append DLL
 # provenance + harness phases to the report it wrote.
 trap - EXIT
-rm -f "$GAME_DIR/er-harness-drive-mode.txt" "$GAME_DIR/er-armament-icons-force-icon.txt" "$GAME_DIR/er-armament-icons-target.txt" 2>/dev/null
+rm -f "$GAME_DIR/er-harness-drive-mode.txt" "$GAME_DIR/er-armament-icons-force-icon.txt" "$GAME_DIR/er-armament-icons-target.txt" "$GAME_DIR/er-armament-icons-dup.txt" 2>/dev/null
 [[ -f "$ARTIFACT_DIR/er-effects.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-effects.toml.bak" "$GAME_DIR/er-effects.toml"
 {
 	echo "git_head: $(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?')"
