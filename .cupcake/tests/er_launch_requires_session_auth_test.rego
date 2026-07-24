@@ -47,6 +47,24 @@ test_deny_unauth_me3_launch_argv_form if {
 	denied(ev("/some/path/me3 launch -g eldenring -n dll.dll", "0"))
 }
 
+# Regression (2026-07-24): the armament-icons smoke launcher was ABSENT from the launch_form allowlist,
+# so the agent launched ER through `bash scripts/run-armament-icons-smoke.sh` with no clearance. Gated now.
+test_deny_unauth_run_armament_icons_smoke if {
+	denied(ev("bash scripts/run-armament-icons-smoke.sh", "0"))
+}
+
+test_deny_unauth_run_armament_icons_smoke_wrapped if {
+	denied(ev("LLDRAW=1 MODE=equip bash scripts/run-armament-icons-smoke.sh", "0"))
+}
+
+test_deny_unauth_armament_watch_direct if {
+	denied(ev("python3 scripts/armament-icons-watch.py --max-seconds 300", "0"))
+}
+
+test_allow_auth_run_armament_icons_smoke if {
+	not denied(ev("bash scripts/run-armament-icons-smoke.sh", "1"))
+}
+
 # The exact command the agent ran without asking (the failure that motivated this policy).
 test_deny_unauth_the_failure_script if {
 	denied(ev("bash scripts/run-vanilla-reload-agentdriven.sh", "0"))
@@ -268,6 +286,90 @@ test_deny_source_lib_then_me3_launch_func if {
 
 test_deny_conditional_with_launch_flag_hardened if {
 	denied(ev("bash scripts/build_mushroom_blender_edit.sh --launch", "0"))
+}
+
+# === (i) GENERAL future-launcher pattern (fragility reducer, 2026-07-24) =============================
+# Proves a FUTURE ER launcher (not in the explicit allowlist) is gated by naming convention, while the
+# offline armament tools and non-launch helpers stay UN-gated.
+
+# (a) hypothetical future launchers by naming convention are GATED.
+test_deny_general_future_armament_smoke if {
+	denied(ev("bash scripts/run-armament-foo-smoke.sh", "0"))
+}
+
+test_deny_general_future_capture_armament_py if {
+	denied(ev("bash scripts/capture-armament-bar.py", "0"))
+}
+
+test_deny_general_future_launch_armament if {
+	denied(ev("bash scripts/launch-armament-baz.sh", "0"))
+}
+
+test_deny_general_future_record_armament if {
+	denied(ev("python3 scripts/record-armament-run.py", "0"))
+}
+
+test_deny_general_future_armament_watch if {
+	denied(ev("python3 scripts/armament-tiles-watch.py", "0"))
+}
+
+test_deny_general_future_generic_smoke if {
+	denied(ev("bash scripts/run-someother-smoke.sh", "0"))
+}
+
+test_deny_general_direct_position_smoke if {
+	denied(ev("./scripts/run-armament-foo-smoke.sh", "0"))
+}
+
+test_deny_general_wrapped_future_launcher if {
+	denied(ev("timeout 300 bash scripts/run-armament-foo-smoke.sh", "0"))
+}
+
+test_deny_general_absolute_path_future_launcher if {
+	denied(ev("bash /home/choza/projects/er-effects-rs/scripts/run-armament-foo-smoke.sh", "0"))
+}
+
+test_deny_general_future_launcher_run_experiment_code if {
+	denied(ev_code("bash scripts/capture-armament-bar.py", "0", "run_experiment"))
+}
+
+# (b) NON-launch helpers must stay ALLOWED even though the general clause exists.
+test_allow_general_steam_running if {
+	not denied(ev("bash scripts/steam-running.sh", "0"))
+}
+
+test_allow_general_check_sh if {
+	not denied(ev("bash scripts/check.sh", "0"))
+}
+
+# The OFFLINE armament pixel-diff oracle contains "armament" but is NOT a launcher (no launcher verb /
+# not a watcher) -- the tightened armament arm must NOT gate it.
+test_allow_general_armament_pixel_oracle if {
+	not denied(ev("python3 scripts/armament-icons-pixel-oracle.py verdict --baseline v.png --candidate c.png", "0"))
+}
+
+# A frida instrument library that contains "armament" is not launcher-shaped -> must not gate.
+test_allow_general_armament_frida_lib if {
+	not denied(ev("python3 scripts/frida/armament_probe.js", "0"))
+}
+
+# A -smoke.PY summarizer (not .sh) is offline post-processing -> the -smoke arm only matches .sh.
+test_allow_general_smoke_py_summarizer if {
+	not denied(ev("python3 scripts/summarize-er-window-placement-smoke.py out/", "0"))
+}
+
+# A launcher name as an ARGUMENT to a non-executing tool (shellcheck/git) is not an execution.
+test_allow_general_shellcheck_future_launcher if {
+	not denied(ev("shellcheck scripts/run-armament-foo-smoke.sh", "0"))
+}
+
+test_allow_general_git_add_future_launcher if {
+	not denied(ev("git add scripts/run-armament-foo-smoke.sh", "0"))
+}
+
+# The general clause is only a NET: an authorized session still launches a future launcher fine.
+test_allow_general_authorized_future_launcher if {
+	not denied(ev("bash scripts/run-armament-foo-smoke.sh", "1"))
 }
 
 # === (h) HARDENING: run_experiment / ctx code+commands payloads =====================================
