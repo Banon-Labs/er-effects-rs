@@ -44,6 +44,7 @@ const ARM_COMPENSATION_STRENGTH: f32 = 0.72;
 const ARM_ROOT_TWEEN_FRACTION: f32 = 0.28;
 const ARM_DISTAL_OVERWEIGHT_THRESHOLD: f32 = 0.70;
 const ARM_LOW_UPPER_THRESHOLD: f32 = 0.18;
+const ARM_BODY_ATTACHMENT_DISTANCE: f32 = 0.08;
 
 const HEADER_SIZE: usize = 0x80;
 const DUMMY_SIZE: usize = 0x40;
@@ -173,6 +174,12 @@ struct ArmCompensationReport {
     distal_overweighted_components_after: usize,
     weak_shoulder_components_before: usize,
     weak_shoulder_components_after: usize,
+    detached_components: usize,
+    detached_vertices: usize,
+    detached_proxy_vertices: usize,
+    independent_detached_components: usize,
+    max_detached_body_distance: f32,
+    detached_island_response: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -195,6 +202,19 @@ enum ArmSide {
 struct ArmComponent {
     side: ArmSide,
     vertices: Vec<usize>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ArmAttachment {
+    BodyNear,
+    Detached,
+}
+
+#[derive(Clone, Debug)]
+struct ClassifiedArmComponent {
+    component: ArmComponent,
+    attachment: ArmAttachment,
+    nearest_body_distance: f32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -290,14 +310,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     if source.arm_compensation.enabled {
         println!(
-            "arm_compensation vertices={} upper={:.3}→{:.3} distal={:.3}→{:.3} weak_shoulder={}→{}",
+            "arm_compensation vertices={} upper={:.3}→{:.3} distal={:.3}→{:.3} weak_shoulder={}→{} detached={} proxy={} response={}",
             source.arm_compensation.compensated_vertices,
             source.arm_compensation.avg_upper_before,
             source.arm_compensation.avg_upper_after,
             source.arm_compensation.avg_forearm_hand_before,
             source.arm_compensation.avg_forearm_hand_after,
             source.arm_compensation.weak_shoulder_components_before,
-            source.arm_compensation.weak_shoulder_components_after
+            source.arm_compensation.weak_shoulder_components_after,
+            source.arm_compensation.detached_components,
+            source.arm_compensation.detached_proxy_vertices,
+            source.arm_compensation.detached_island_response
         );
     }
     if source.region_response.enabled {
@@ -838,12 +861,28 @@ fn compensate_arm_weights(
     if components.is_empty() {
         return Ok(ArmCompensationReport {
             enabled: true,
+            detached_island_response: "no_arm_components_found".to_string(),
             ..ArmCompensationReport::default()
         });
     }
+    let classified = classify_arm_components(
+        mesh,
+        accum,
+        components,
+        left_upper,
+        left_forearm,
+        left_hand,
+        right_upper,
+        right_forearm,
+        right_hand,
+    );
+    let metric_components = classified
+        .iter()
+        .map(|classified| classified.component.clone())
+        .collect::<Vec<_>>();
     let before = arm_compensation_metrics(
         accum,
-        &components,
+        &metric_components,
         left_upper,
         left_forearm,
         left_hand,
@@ -856,26 +895,40 @@ fn compensate_arm_weights(
         mesh,
     );
 
-    for component in &components {
-        apply_arm_component_gradient(
-            mesh,
-            accum,
-            component,
-            center_x,
-            left_upper,
-            left_forearm,
-            left_hand,
-            right_upper,
-            right_forearm,
-            right_hand,
-            spine1,
-            spine2,
-        );
+    for classified_component in &classified {
+        match classified_component.attachment {
+            ArmAttachment::BodyNear => apply_arm_component_gradient(
+                mesh,
+                accum,
+                &classified_component.component,
+                center_x,
+                left_upper,
+                left_forearm,
+                left_hand,
+                right_upper,
+                right_forearm,
+                right_hand,
+                spine1,
+                spine2,
+            ),
+            ArmAttachment::Detached => apply_detached_arm_proxy(
+                accum,
+                &classified_component.component,
+                left_upper,
+                left_forearm,
+                left_hand,
+                right_upper,
+                right_forearm,
+                right_hand,
+                spine1,
+                spine2,
+            ),
+        }
     }
 
     let after = arm_compensation_metrics(
         accum,
-        &components,
+        &metric_components,
         left_upper,
         left_forearm,
         left_hand,
@@ -888,8 +941,22 @@ fn compensate_arm_weights(
         mesh,
     );
 
-    let (left_components, right_components) = component_side_counts(&components);
-    let (left_vertices, right_vertices) = component_side_vertices(&components);
+    let (left_components, right_components) = component_side_counts(&metric_components);
+    let (left_vertices, right_vertices) = component_side_vertices(&metric_components);
+    let detached_components = classified
+        .iter()
+        .filter(|component| matches!(component.attachment, ArmAttachment::Detached))
+        .count();
+    let detached_vertices = classified
+        .iter()
+        .filter(|component| matches!(component.attachment, ArmAttachment::Detached))
+        .map(|component| component.component.vertices.len())
+        .sum::<usize>();
+    let max_detached_body_distance = classified
+        .iter()
+        .filter(|component| matches!(component.attachment, ArmAttachment::Detached))
+        .map(|component| component.nearest_body_distance)
+        .fold(0.0_f32, f32::max);
     Ok(ArmCompensationReport {
         enabled: true,
         compensated_vertices: after.vertices,
@@ -906,6 +973,12 @@ fn compensate_arm_weights(
         distal_overweighted_components_after: after.distal_overweighted_components,
         weak_shoulder_components_before: before.weak_shoulder_components,
         weak_shoulder_components_after: after.weak_shoulder_components,
+        detached_components,
+        detached_vertices,
+        detached_proxy_vertices: detached_vertices,
+        independent_detached_components: 0,
+        max_detached_body_distance,
+        detached_island_response: "body_proxy_low_hand".to_string(),
     })
 }
 
@@ -940,6 +1013,57 @@ fn find_arm_components(
         }
     }
     components
+}
+
+fn classify_arm_components(
+    mesh: &SourceMesh,
+    accum: &[[f32; 256]],
+    components: Vec<ArmComponent>,
+    left_upper: u8,
+    left_forearm: u8,
+    left_hand: u8,
+    right_upper: u8,
+    right_forearm: u8,
+    right_hand: u8,
+) -> Vec<ClassifiedArmComponent> {
+    let arm_bones = [
+        left_upper,
+        left_forearm,
+        left_hand,
+        right_upper,
+        right_forearm,
+        right_hand,
+    ];
+    let non_arm_vertices = (0..mesh.vertices.len())
+        .filter(|index| sum_bone_weights(&accum[*index], &arm_bones) < ARM_COMPENSATION_MIN_ARM_WEIGHT)
+        .collect::<Vec<_>>();
+    components
+        .into_iter()
+        .map(|component| {
+            let nearest_body_distance = nearest_component_distance(mesh, &component.vertices, &non_arm_vertices);
+            let attachment = if nearest_body_distance <= ARM_BODY_ATTACHMENT_DISTANCE {
+                ArmAttachment::BodyNear
+            } else {
+                ArmAttachment::Detached
+            };
+            ClassifiedArmComponent {
+                component,
+                attachment,
+                nearest_body_distance,
+            }
+        })
+        .collect()
+}
+
+fn nearest_component_distance(mesh: &SourceMesh, first: &[usize], second: &[usize]) -> f32 {
+    let mut best = f32::INFINITY;
+    for first_vertex in first {
+        let first_position = mesh.vertices[*first_vertex].position;
+        for second_vertex in second {
+            best = best.min(vec3_distance(first_position, mesh.vertices[*second_vertex].position));
+        }
+    }
+    best
 }
 
 fn connected_components(mesh: &SourceMesh, candidates: &HashSet<usize>) -> Vec<Vec<usize>> {
@@ -1007,6 +1131,34 @@ fn apply_arm_component_gradient(
         let lateral = arm_lateral_progress_axis(component.side, mesh.vertices[*vertex].position.x, center_x);
         let progress = ((lateral - min_lateral) / lateral_span).clamp(0.0, 1.0);
         let targets = shoulder_to_hand_targets(progress, upper, forearm, hand, spine1, spine2);
+        blend_to_targets(&mut accum[*vertex], &targets, ARM_COMPENSATION_STRENGTH);
+    }
+}
+
+fn apply_detached_arm_proxy(
+    accum: &mut [[f32; 256]],
+    component: &ArmComponent,
+    left_upper: u8,
+    left_forearm: u8,
+    left_hand: u8,
+    right_upper: u8,
+    right_forearm: u8,
+    right_hand: u8,
+    spine1: u8,
+    spine2: u8,
+) {
+    let (upper, forearm, hand) = match component.side {
+        ArmSide::Left => (left_upper, left_forearm, left_hand),
+        ArmSide::Right => (right_upper, right_forearm, right_hand),
+    };
+    let targets = [
+        (spine1, 0.20),
+        (spine2, 0.18),
+        (upper, 0.40),
+        (forearm, 0.18),
+        (hand, 0.04),
+    ];
+    for vertex in &component.vertices {
         blend_to_targets(&mut accum[*vertex], &targets, ARM_COMPENSATION_STRENGTH);
     }
 }
@@ -1904,6 +2056,12 @@ fn write_summary(
         writeln!(file, "arm_avg_body_tween_after={:.6}", source.arm_compensation.avg_body_tween_after)?;
         writeln!(file, "arm_distal_overweighted_components_before_after={},{}", source.arm_compensation.distal_overweighted_components_before, source.arm_compensation.distal_overweighted_components_after)?;
         writeln!(file, "arm_weak_shoulder_components_before_after={},{}", source.arm_compensation.weak_shoulder_components_before, source.arm_compensation.weak_shoulder_components_after)?;
+        writeln!(file, "arm_detached_components={}", source.arm_compensation.detached_components)?;
+        writeln!(file, "arm_detached_vertices={}", source.arm_compensation.detached_vertices)?;
+        writeln!(file, "arm_detached_proxy_vertices={}", source.arm_compensation.detached_proxy_vertices)?;
+        writeln!(file, "arm_independent_detached_components={}", source.arm_compensation.independent_detached_components)?;
+        writeln!(file, "arm_max_detached_body_distance={:.6}", source.arm_compensation.max_detached_body_distance)?;
+        writeln!(file, "arm_detached_island_response={}", source.arm_compensation.detached_island_response)?;
     }
     writeln!(file, "region_response_enabled={}", source.region_response.enabled)?;
     if source.region_response.enabled {

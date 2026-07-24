@@ -90,11 +90,22 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
         summary.get("arm_distal_overweighted_components_before_after")
     )
     disconnected_groups = disconnected_arm_weight_groups(audit)
+    detached_response = summary.get("arm_detached_island_response", "")
+    independent_detached_components = parse_int(
+        summary.get("arm_independent_detached_components")
+    )
+    detached_proxy_vertices = parse_int(summary.get("arm_detached_proxy_vertices"))
+    detached_islands_handled = (
+        detached_response == "body_proxy_low_hand"
+        and independent_detached_components == 0
+        and detached_proxy_vertices > 0
+    )
 
     if (
         arm_enabled
         and arm_vertices > 0
         and (left_components > 1 or right_components > 1)
+        and not detached_islands_handled
     ):
         alerts.append(
             {
@@ -106,7 +117,7 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
                 "recommended_response": "do_not_package; use proxy body tweening or human geometry merge/split guidance before arm mutation",
             }
         )
-    if arm_enabled and arm_vertices > 0 and weak_before > 0:
+    if arm_enabled and arm_vertices > 0 and weak_before > 0 and not detached_islands_handled:
         alerts.append(
             {
                 "code": "ARM_HAND_ISLAND_WITH_WEAK_UPPER_ANCHOR",
@@ -117,7 +128,7 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
                 "recommended_response": "do_not_package; classify detached hand/forearm islands and avoid independent shoulder-to-hand gradients",
             }
         )
-    if arm_enabled and arm_vertices > 0 and disconnected_groups:
+    if arm_enabled and arm_vertices > 0 and disconnected_groups and not detached_islands_handled:
         alerts.append(
             {
                 "code": "ARM_WEIGHT_GROUPS_DISCONNECTED_IN_SOURCE",
@@ -133,6 +144,7 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
         and distal_before > 0
         and distal_after == 0
         and weak_before > 0
+        and not detached_islands_handled
     ):
         alerts.append(
             {
@@ -157,6 +169,10 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
                 distal_after,
             ],
             "disconnected_arm_weight_groups": disconnected_groups,
+            "arm_detached_island_response": detached_response,
+            "arm_independent_detached_components": independent_detached_components,
+            "arm_detached_proxy_vertices": detached_proxy_vertices,
+            "detached_islands_handled": detached_islands_handled,
         },
         "alerts": alerts,
     }
