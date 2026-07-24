@@ -2733,6 +2733,7 @@ version = "0.1.0"
 dependencies = [
  "eldenring",
  "er-game-base",
+ "er-gfx",
  "er-hook",
  "fromsoftware-shared",
 ]

@@ -18,8 +18,10 @@ HARNESS_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_input_harness_d
 TELEM_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_telemetry_dll.dll"
 BADGE_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_armament_icons.dll"
 CAP_SECONDS="$(cat "$REPO_ROOT/.auto/runtime_timeout_cap_seconds" 2>/dev/null || echo 300)"
-# Settle window after the decisive semaphore before teardown.
-SETTLE_SECONDS="${SETTLE_SECONDS:-10}"
+# Settle window after the decisive semaphore before teardown (user 2026-07-23: ~3s teardown).
+SETTLE_SECONDS="${SETTLE_SECONDS:-2}"
+# Wait after the menu opens before capturing (must fit within the 3s equip dwell).
+CAPTURE_SETTLE_SECONDS="${CAPTURE_SETTLE_SECONDS:-2}"
 
 fail() {
 	echo "run-armament-icons-smoke: $*" >&2
@@ -143,6 +145,7 @@ python3 "$REPO_ROOT/scripts/armament-icons-watch.py" \
 	--artifact-dir "$ARTIFACT_DIR" \
 	--max-seconds "$CAP_SECONDS" \
 	--settle-seconds "$SETTLE_SECONDS" \
+	--capture-settle-seconds "$CAPTURE_SETTLE_SECONDS" \
 	--pre-er-pids "$PRE_ER_PIDS" \
 	--pre-me3-pids "$PRE_ME3_PIDS" \
 	--repo-root "$REPO_ROOT" \

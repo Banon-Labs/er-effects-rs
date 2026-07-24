@@ -28,6 +28,10 @@ use std::{
 
 use er_game_base::log::{append_line, game_directory_path};
 
+/// Runtime GFX template edit (equip menu ArtsIcon/IconImage) -- windows-only.
+#[cfg(windows)]
+mod gfx_equip_hook;
+
 const DLL_PROCESS_ATTACH: u32 = 1;
 const DLL_MAIN_SUCCESS: i32 = 1;
 
@@ -143,7 +147,7 @@ const FORCE_ICON_MIRROR: u32 = u32::MAX - 1;
 static FORCE_ICON_ID: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(FORCE_ICON_NONE);
 
-fn log_message(args: fmt::Arguments<'_>) {
+pub(crate) fn log_message(args: fmt::Arguments<'_>) {
     let path = game_directory_path()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
         .join(LOG_FILE_NAME);
@@ -204,20 +208,27 @@ fn spawn_install_thread() {
                     id => id.to_string(),
                 }
             ));
-            // Wait for the game's task manager the way the sibling DLLs do (yield, no sleep):
-            // its readiness implies the game image and its statics are mapped.
-            loop {
-                match unsafe { CSTaskImp::instance() } {
-                    Ok(_) => break,
-                    Err(_) => std::thread::yield_now(),
-                }
-            }
+            // Arm the GFX file-open hook AS EARLY AS POSSIBLE (only needs the module base, not
+            // CSTaskImp): the equip movie can preload before the task manager is ready, and the
+            // edit must reach the FIRST parse or the tile instantiates from vanilla bytes.
             let Ok(base) = er_game_base::mem::game_module_base() else {
                 log_message(format_args!(
                     "install: game_module_base unresolved; aborting"
                 ));
                 return;
             };
+            // Runtime GFX template edit: inject the sized "ArtsBadge" child into the equip tile so
+            // the badge draw target has a real rect (the tile-populate hook draws the icon into it).
+            gfx_equip_hook::install(base);
+            // Wait for the game's task manager the way the sibling DLLs do (yield, no sleep):
+            // its readiness implies the game image and its statics are mapped, before the
+            // tile-populate draw hook (whose draw path uses live game state).
+            loop {
+                match unsafe { CSTaskImp::instance() } {
+                    Ok(_) => break,
+                    Err(_) => std::thread::yield_now(),
+                }
+            }
             install_tile_populate_hook(base);
         });
 }
@@ -527,35 +538,35 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
     // hands approach B (GFX template edit) its exact geometry target.
     let trace = attempt <= SAMPLE_LOG_CALLS;
     if trace {
+        // Probe the nested IconImage children too: after the GFX re-point (char52->44),
+        // ArtsIcon/IconImage should now BIND (edit reached the instance) -- if it binds but
+        // is zero while the ItemIcon/IconImage control is non-zero, the re-pointed clip is
+        // free-running past its frame-0 placeholder shape (needs a single-frame target).
         log_message(format_args!(
-            "rect trace #{attempt}: ItemIcon={} | ArtsIcon_pre={}",
+            "rect trace #{attempt}: ItemIcon={} | ArtsBadge(new-char)={} ZReachProbe(existing-char)={} ArtsIcon={}",
             fmt_rects(unsafe { probe_child_rects(base, tile, c"ItemIcon") }),
+            fmt_rects(unsafe { probe_child_rects(base, tile, c"ArtsBadge") }),
+            fmt_rects(unsafe { probe_child_rects(base, tile, c"ZReachProbe") }),
             fmt_rects(unsafe { probe_child_rects(base, tile, c"ArtsIcon") }),
         ));
     }
 
-    // Draw into the "ArtsIcon" CONTAINER directly. Bind probe (run-4 20260723-132050)
-    // proved the equipped-slot tiles bind "ArtsIcon" but NOT "ArtsIcon/IconImage" -- the
-    // container clip exists, the nested image child does not. The icon setter recurses
-    // into an "IconImage" child if present, else draws the bitmap-fill quad into the clip
-    // itself, so the container is the right target. (Grid-selection cells bind no ArtsIcon
-    // at all -- they need a GFX-template child add, tracked separately.)
-    unsafe { assign(tile, proxy.as_mut_ptr(), c"ArtsIcon".as_ptr().cast()) };
+    // Draw into "ArtsBadge" -- the single-frame sized clip the runtime GFX edit
+    // (er_gfx::equip_02_011) injects into the tile as a sibling of the dormant ArtsIcon
+    // container (whose subtree the game never instantiates). ArtsBadge rests a 160px
+    // placeholder shape, so the icon setter reads a real rect and draws the ash icon at
+    // the bottom-left. If ArtsBadge is unbound the GFX edit did not reach this instance
+    // (fall through to nothing rather than paint into the zero-extent ArtsIcon).
+    unsafe { assign(tile, proxy.as_mut_ptr(), c"ArtsBadge".as_ptr().cast()) };
     if unsafe { is_bound(proxy.as_ptr()) } {
         unsafe {
             icon_setter(proxy.as_mut_ptr(), icon_info.as_ptr());
             set_visible(proxy.as_mut_ptr(), 1);
         }
-        // The setter draws into ArtsIcon's first child scaled to that child's local rect;
-        // ArtsIcon is a zero-extent empty clip, so this paints nothing. Runtime container
-        // bounds-set was falsified (FUN_140d84450 is a no-op on an empty MovieClip -- run
-        // 20260723-155530: ArtsIcon_post still [0,0,0,0]). The visible fix is the GFX
-        // template edit (approach B): give ArtsIcon a sized IconImage child. Post trace
-        // confirms the child rect once B lands.
         if trace {
             log_message(format_args!(
-                "rect trace #{attempt}: ArtsIcon_post={}",
-                fmt_rects(unsafe { probe_child_rects(base, tile, c"ArtsIcon") }),
+                "rect trace #{attempt}: ArtsBadge_post={}",
+                fmt_rects(unsafe { probe_child_rects(base, tile, c"ArtsBadge") }),
             ));
         }
         drawn = true;

@@ -15,6 +15,10 @@ crate-type = ["cdylib"]
 [dependencies]
 er-hook = { path = "../er-hook" }
 er-game-base = { path = "../er-game-base" }
+# er-gfx is a foundational format crate (Scaleform GFx codec + content-addressed tag
+# edits); depending on it keeps this crate isolated from the PRODUCT DLL while reusing
+# the byte-exact GFX edit machinery for the runtime ArtsIcon template edit.
+er-gfx = { path = "../er-gfx" }
 
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
