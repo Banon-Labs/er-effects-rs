@@ -720,6 +720,36 @@ def write_switch_trigger(game_dir: Path, slot: int, save_file: str | None) -> No
     (game_dir / "er-effects-switch-slot.txt").write_text(str(slot), encoding="utf-8")
 
 
+def _try_parse_crash_dump(artifact_dir: Path, since_epoch: float) -> str | None:
+    """Best-effort: auto-parse any Windows minidump written during this run into a deep crash trace.
+
+    The in-process VEH (crates/er-effects-rs/src/crashlog/) cannot see a fault that happens BEFORE our
+    DLL loads -- e.g. a me3-loader boot crash (observed 2026-07-24: eldenring.exe crashed ~3s after
+    launch in me3_mod_host/ntdll heap code, our DLL never initialised). The Windows minidump is then the
+    only record. This shells scripts/parse-crash-dump.py to auto-find the newest eldenring.exe.<pid>.dmp
+    created after the run started and write <artifact_dir>/crash-trace.txt. Never raises: a missing dump,
+    missing parser, or missing `minidump` package is a silent no-op so it can never break the run report.
+    """
+    parser = Path(__file__).resolve().parent / "parse-crash-dump.py"
+    if not parser.exists():
+        return None
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(parser), "--auto", "--since", f"{since_epoch:.0f}", "--out", str(artifact_dir)],
+            capture_output=True,
+            text=True,
+            timeout=25,
+        )
+    except Exception:  # noqa: BLE001 - crash-trace capture must never break the run report
+        return None
+    trace = artifact_dir / "crash-trace.txt"
+    if trace.exists():
+        head = "\n".join(trace.read_text(encoding="utf-8", errors="replace").splitlines()[:12])
+        return f"- wrote crash-trace.txt (deep trace of a minidump from this run):\n\n```\n{head}\n```"
+    first = (proc.stdout or proc.stderr or "").strip().splitlines()
+    return f"- no crash minidump for this run ({first[0] if first else 'no dump'})"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
@@ -836,6 +866,7 @@ def main() -> int:
             (args.game_dir / "er-effects-switch-slot.txt").write_text("-1", encoding="utf-8")
 
     args.artifact_dir.mkdir(parents=True, exist_ok=True)
+    run_start_epoch = time.time()  # crash-dump filter: only parse minidumps written after the run began
     telemetry_path = args.game_dir / "er-effects-telemetry.json"
 
     # Per-epoch record: first-seen ts, the max/settled snapshot, whether render-ready was ever held.
@@ -1441,6 +1472,10 @@ def main() -> int:
                 "",
             ]
         )
+
+    crash_note = _try_parse_crash_dump(args.artifact_dir, run_start_epoch)
+    if crash_note:
+        lines.extend(["## Crash trace", crash_note, ""])
 
     epoch_names = {
         0: "load1 (boot autoload)",
