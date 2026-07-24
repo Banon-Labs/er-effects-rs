@@ -125,6 +125,10 @@ const EQUIP_TOP_JOB_FACTORY_RVA: usize = 0x801bc0;
 /// `InventoryUiLoad` deobf (dump 0x140801e40): Inventory pause-row MenuJob factory,
 /// same `(out, ComponentStack*)` signature -- builds the 02_020_Inventory union job.
 const INVENTORY_JOB_FACTORY_RVA: usize = 0x801d50;
+/// Weapon-reinforcement/upgrade menu-job factory. Active Ghidra MCP 1.16.2 dump `FUN_1407f6090`
+/// builds `MakeTutorialMenuJob(..., 0x28)` + the 02_020_Inventory reinforce job and unions them; a
+/// direct deobf byte/prologue search found the same implementation at this live RVA.
+const WEAPON_UPGRADE_JOB_FACTORY_RVA: usize = 0x7f6090;
 /// `FUN_1407ee2e0` deobf: popup top-job submit wrapper `(popup, refptr* out, u64* serial_out,
 /// refptr* job)` -- the exact call shape of the +0x121 IngameTop open path.
 const POPUP_SUBMIT_TOP_JOB_RVA: usize = 0x7ee1f0;
@@ -186,6 +190,12 @@ pub fn native_open_equip_menu(base: usize, input_manager_ptr: usize) -> bool {
 /// cells carry the bottom-left ArtsIcon child, bd er-effects-rs-pe98 GFX geometry).
 pub fn native_open_inventory_menu(base: usize, input_manager_ptr: usize) -> bool {
     native_open_top_menu(base, input_manager_ptr, INVENTORY_JOB_FACTORY_RVA)
+}
+
+/// Native open of the weapon-reinforcement/upgrade menu. Not wired into a drive mode until runtime
+/// telemetry proves the row/open semantics in the live process.
+pub fn native_open_weapon_upgrade_menu(base: usize, input_manager_ptr: usize) -> bool {
+    native_open_top_menu(base, input_manager_ptr, WEAPON_UPGRADE_JOB_FACTORY_RVA)
 }
 
 /// Tap one menu event into the keystate bitmap (edge OR). Fault-safe: only writes once the target

@@ -1,6 +1,4 @@
-/// Read the TitleTopDialog FD4 state machine by NAME (is_in_state) given the title `owner` (rcx of
-/// STEP_MenuJobWait). Returns `(dialog_ptr, in_fadein, in_loop, in_textfadeout, menu_opened_latch)` or
-/// `None` if the dialog isn't the TitleTopDialog yet. Read-only / no side effects. Mirrors STAGE1d.
+/// Read the TitleTopDialog FD4 state machine by name from STEP_MenuJobWait's title owner.
 unsafe fn title_dialog_sm_state(
     owner: usize,
     base: usize,
@@ -31,9 +29,7 @@ unsafe fn title_dialog_sm_state(
 }
 
 /// Skip title FadeIn once by calling the game's own FD4 `SetState(sm, Loop)` transition from settled
-/// FadeIn with the menu-open latch clear. This mirrors `CS::TitleTopDialog::update`'s input-skip path
-/// without input, is one-shot via `TITLE_FADEIN_SKIP_FIRED`, and preserves the runtime-falsified finding
-/// that FadeIn is frame-paced animation skipped by state transition, not by pacing changes.
+/// FadeIn with the menu-open latch clear; this mirrors the input-skip path without input.
 unsafe fn title_anim_fadein_skip(owner: usize) {
     if TITLE_FADEIN_SKIP_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS {
         return; // one-shot: already transitioned
@@ -77,8 +73,7 @@ unsafe fn title_anim_fadein_skip(owner: usize) {
     ));
 }
 
-/// Detour for STEP_MenuJobWait (0x140b0d400, `__fastcall(rcx=owner, rdx=task_data, ...)`). Drives the
-/// one-shot FadeIn->Loop skip from the live SM state, then passes through to the original unchanged.
+/// STEP_MenuJobWait detour: drive the one-shot FadeIn->Loop skip, then pass through unchanged.
 pub(crate) unsafe extern "system" fn title_menujob_speed_detour(
     owner: usize,
     task_data: usize,
@@ -301,10 +296,10 @@ pub(crate) unsafe extern "system" fn ingamestep_step_movemap_update_defer_detour
         {
             return false;
         }
-        let Some(mms) = (unsafe {
-            safe_read_usize(ingame_step + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET)
-        })
-        .filter(|&m| m > PAB_MIN_HEAP_PTR) else {
+        let Some(mms) =
+            (unsafe { safe_read_usize(ingame_step + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) })
+                .filter(|&m| m > PAB_MIN_HEAP_PTR)
+        else {
             return false;
         };
         // The finalize substate at +0x12a is a single BYTE (the SWITCH-ORACLE reads it with
@@ -392,7 +387,8 @@ pub(crate) unsafe extern "system" fn child_done_query_override_detour(
         // mms+0x108 data point does not generalize). Also probe the reliable-oracle mms for comparison.
         if (ret & 0xff) != 0 {
             let mms_d = child_base - MOVEMAPSTEP_CHILD_EZSTEP_BASE_OFFSET;
-            let st_d = unsafe { safe_read_i32(mms_d + INGAMESTEP_STEP_STATE_OFFSET) }.unwrap_or(-999);
+            let st_d =
+                unsafe { safe_read_i32(mms_d + INGAMESTEP_STEP_STATE_OFFSET) }.unwrap_or(-999);
             let f_d = unsafe { safe_read_u8(mms_d + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET) }
                 .map(i32::from)
                 .unwrap_or(-1);
@@ -492,7 +488,8 @@ pub(crate) unsafe fn install_child_done_query_override_hook(base: usize) {
 // call (0x140aec5f0). bd loadlist-capture-hook-wrong-address-0xaec480-midfunction-refind-entry.
 pub(crate) const LOADLIST_INIT_RVA: usize = 0xaec570;
 const INGAMESTEP_WORLDLOADLIST_VPATH_OFFSET: usize = 0x108;
-pub(crate) static LOADLIST_INIT_ORIG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static LOADLIST_INIT_ORIG: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 static LOADLIST_INIT_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) use er_telemetry::counters::LOADLIST_INIT_CALLS;
 
@@ -1425,9 +1422,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         let ig_d8 = if owner != null {
             unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) }
                 .filter(|&ig| ig > 0x10000)
-                .and_then(|ig| unsafe {
-                    safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET)
-                })
+                .and_then(|ig| unsafe { safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) })
                 .unwrap_or(-1)
         } else {
             -1
@@ -2143,7 +2138,8 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             // player is briefly gone, which is exactly the frame STEP_EndFlow reads it (run 1707: the
             // clear fired 0 times because the mms>=18/player sub-gate excluded that frame). While
             // warpRequested==1 md5e is the live finalize driver and is left untouched.
-            let warp_req = unsafe { safe_read_u8(gm + GAME_MAN_WARP_REQUESTED_10_OFFSET) }.unwrap_or(1);
+            let warp_req =
+                unsafe { safe_read_u8(gm + GAME_MAN_WARP_REQUESTED_10_OFFSET) }.unwrap_or(1);
             if warp_req == 0 {
                 if let Some(md) = (unsafe { safe_read_usize(module_base + CS_MENU_MAN_GLOBAL_RVA) })
                     .filter(|&m| m > PAB_MIN_HEAP_PTR)
@@ -2152,8 +2148,9 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                 {
                     let e5 = unsafe { safe_read_u8(md + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) }
                         .unwrap_or(0);
-                    let d5 = unsafe { safe_read_u8(md + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) }
-                        .unwrap_or(0);
+                    let d5 =
+                        unsafe { safe_read_u8(md + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) }
+                            .unwrap_or(0);
                     if e5 != 0 || d5 != 0 {
                         unsafe {
                             *((md + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) as *mut u8) = 0;
@@ -2246,7 +2243,8 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         // the legacy 30 stable frames as a fallback. Latch is per-reload-epoch (NOT FRESH_DESER_DONE,
         // which own_load consumes at commit -- that consumption is exactly why this block never fired
         // and the world reverted after finish). bd er-effects-rs-9fmm.
-        let reload_epoch_now = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+        let reload_epoch_now =
+            SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
         let can_move_for_reload = reload_epoch_now > 0
             && crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
             && crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == reload_epoch_now;
