@@ -34,14 +34,21 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--obj", type=Path, required=True)
     parser.add_argument("--weights", type=Path, required=True)
-    parser.add_argument("--region-map", type=Path, required=True, help="JSON from route_a_mushroom_extract_blender_region_map.py")
+    parser.add_argument(
+        "--region-map",
+        type=Path,
+        required=True,
+        help="JSON from route_a_mushroom_extract_blender_region_map.py",
+    )
     parser.add_argument("--region", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--fail-on-alert", action="store_true")
     return parser.parse_args()
 
 
-def read_obj(path: Path) -> tuple[list[tuple[float, float, float]], list[tuple[int, int, int]]]:
+def read_obj(
+    path: Path,
+) -> tuple[list[tuple[float, float, float]], list[tuple[int, int, int]]]:
     vertices: list[tuple[float, float, float]] = []
     triangles: list[tuple[int, int, int]] = []
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -69,7 +76,9 @@ def read_weights(path: Path) -> dict[int, dict[str, float]]:
             weight = float(row["weight"])
             if weight <= 0.0 or bone.startswith("<"):
                 continue
-            weights[int(row["vertex"])][bone] = weights[int(row["vertex"])].get(bone, 0.0) + weight
+            weights[int(row["vertex"])][bone] = (
+                weights[int(row["vertex"])].get(bone, 0.0) + weight
+            )
     return weights
 
 
@@ -82,7 +91,9 @@ def read_region(path: Path, region: str) -> set[int]:
     return set(indices)
 
 
-def unique_edges(triangles: list[tuple[int, int, int]]) -> dict[tuple[int, int], list[int]]:
+def unique_edges(
+    triangles: list[tuple[int, int, int]],
+) -> dict[tuple[int, int], list[int]]:
     edges: dict[tuple[int, int], list[int]] = defaultdict(list)
     for face_index, (a, b, c) in enumerate(triangles):
         for u, v in ((a, b), (b, c), (c, a)):
@@ -92,12 +103,20 @@ def unique_edges(triangles: list[tuple[int, int, int]]) -> dict[tuple[int, int],
     return edges
 
 
-def mixed_faces(triangles: list[tuple[int, int, int]], region: set[int]) -> list[dict[str, Any]]:
+def mixed_faces(
+    triangles: list[tuple[int, int, int]], region: set[int]
+) -> list[dict[str, Any]]:
     mixed: list[dict[str, Any]] = []
     for face_index, triangle in enumerate(triangles):
         count = sum(vertex in region for vertex in triangle)
         if 0 < count < 3:
-            mixed.append({"face_index": face_index, "triangle": list(triangle), "region_vertex_count": count})
+            mixed.append(
+                {
+                    "face_index": face_index,
+                    "triangle": list(triangle),
+                    "region_vertex_count": count,
+                }
+            )
     return mixed
 
 
@@ -123,11 +142,17 @@ def face_closed_variants(
     return expanded, shrunk
 
 
-def bone_sums(weights: dict[int, dict[str, float]], vertex: int) -> tuple[float, float, str]:
+def bone_sums(
+    weights: dict[int, dict[str, float]], vertex: int
+) -> tuple[float, float, str]:
     vertex_weights = weights.get(vertex, {})
     spine = sum(vertex_weights.get(bone, 0.0) for bone in SPINE_BONES)
     limb = sum(vertex_weights.get(bone, 0.0) for bone in LOWER_LIMB_BONES)
-    dominant = max(vertex_weights, key=lambda bone: vertex_weights[bone]) if vertex_weights else "<none>"
+    dominant = (
+        max(vertex_weights, key=lambda bone: vertex_weights[bone])
+        if vertex_weights
+        else "<none>"
+    )
     return spine, limb, dominant
 
 
@@ -148,7 +173,9 @@ def boundary_edges(
         other_vertex = v if u in region else u
         r_spine, r_limb, r_dom = bone_sums(weights, region_vertex)
         o_spine, o_limb, o_dom = bone_sums(weights, other_vertex)
-        midpoint_height = ((vertices[region_vertex][1] + vertices[other_vertex][1]) * 0.5 - min_y) / height_span
+        midpoint_height = (
+            (vertices[region_vertex][1] + vertices[other_vertex][1]) * 0.5 - min_y
+        ) / height_span
         out.append(
             {
                 "edge": [u, v],
@@ -195,7 +222,9 @@ def main() -> int:
                 "code": "REGION_SPLIT_CUTS_TRIANGLES",
                 "message": "Manual region boundary cuts through triangulated faces instead of following whole-face ownership.",
                 "mixed_triangle_count": len(mixed),
-                "recommended_response": choose_response(len(region), len(expanded), len(shrunk)),
+                "recommended_response": choose_response(
+                    len(region), len(expanded), len(shrunk)
+                ),
             }
         )
     if boundaries:
@@ -239,7 +268,9 @@ def main() -> int:
         f"shrink_face_closed={len(shrunk)} alerts={len(alerts)}"
     )
     for alert in alerts:
-        print(f"ALERT {alert['code']}: {alert['message']} response={alert['recommended_response']}")
+        print(
+            f"ALERT {alert['code']}: {alert['message']} response={alert['recommended_response']}"
+        )
     if args.fail_on_alert and alerts:
         return 1
     return 0
