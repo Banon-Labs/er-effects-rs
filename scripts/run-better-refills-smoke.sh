@@ -36,13 +36,13 @@ runtime_pids() {
 	for proc in /proc/[0-9]*; do
 		pid=${proc##*/}
 		[[ -r "$proc/comm" ]] || continue
-		comm=$(<"$proc/comm")
+		comm=$(tr -d '\0' 2>/dev/null <"$proc/comm") || continue
 		if [[ "$comm" == "eldenring.exe" ]]; then
 			printf '%s\n' "$pid"
 			continue
 		fi
 		[[ -r "$proc/cmdline" ]] || continue
-		cmdline=$(tr '\0' ' ' <"$proc/cmdline" 2>/dev/null || true)
+		cmdline=$(tr '\0' ' ' 2>/dev/null <"$proc/cmdline") || continue
 		if [[ "$cmdline" == *"$GAME_DIR/eldenring.exe"* ]]; then
 			printf '%s\n' "$pid"
 			continue
