@@ -300,39 +300,42 @@ fn renderdoc_slow_ms() -> f32 {
 
 /// Fire a RenderDoc capture once the world has been simulating (play_time rising) for a settled window
 /// AND the frame is slow enough (reload) -- throttled + capped. Returns the running capture count.
-fn maybe_trigger_renderdoc(play_time_ms: i64, task_delta: f32, tick_n: u64) -> u32 {
-    use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64};
+fn maybe_trigger_renderdoc(play_time_ms: i64, task_delta: f32, _tick_n: u64) -> u32 {
+    use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32};
     static PREV_PT: AtomicI64 = AtomicI64::new(-1);
     static STREAK: AtomicU32 = AtomicU32::new(0);
-    static LAST_CAP: AtomicU64 = AtomicU64::new(0);
+    static FLAT: AtomicU32 = AtomicU32::new(0); // consecutive ticks play_time did NOT advance
+    static ARMED: AtomicBool = AtomicBool::new(true); // eligible to capture ONCE this in-world window
     static CAPS: AtomicU32 = AtomicU32::new(0);
-    const MAX_CAPS: u32 = 4;
+    const MAX_CAPS: u32 = 6; // load1 + 2 reloads + headroom
     const SETTLE_TICKS: u32 = 8; // ~32 game frames of settled in-world play before a capture
-    const COOLDOWN_TICKS: u64 = 30; // ~120 game frames between captures (one per in-world window)
+    const LOADING_GAP_TICKS: u32 = 10; // play_time flat this long = a load boundary -> re-arm one capture
 
     let caps = CAPS.load(Ordering::SeqCst);
-    if play_time_ms <= 0 {
-        STREAK.store(0, Ordering::SeqCst);
-        PREV_PT.store(play_time_ms, Ordering::SeqCst);
-        return caps;
-    }
     if caps >= MAX_CAPS {
         return caps;
     }
     let prev = PREV_PT.swap(play_time_ms, Ordering::SeqCst);
-    let streak = if prev >= 0 && play_time_ms > prev {
-        STREAK.fetch_add(1, Ordering::SeqCst) + 1
-    } else {
+    // ONE capture per in-world window (fixes "4x load1, 0x reload" -- MAX_CAPS was burned inside load1's
+    // window before the quit->reload). play_time NOT advancing = a load/loading pause; a SUSTAINED flat
+    // window (>= LOADING_GAP_TICKS) is a load boundary that RE-ARMS the next window's single capture, so
+    // we get load1 AND each reload (a single in-world hiccup does not re-arm).
+    if play_time_ms <= 0 || !(prev >= 0 && play_time_ms > prev) {
         STREAK.store(0, Ordering::SeqCst);
-        0
-    };
+        if FLAT.fetch_add(1, Ordering::SeqCst) + 1 >= LOADING_GAP_TICKS {
+            ARMED.store(true, Ordering::SeqCst);
+        }
+        return caps;
+    }
+    FLAT.store(0, Ordering::SeqCst);
+    let streak = STREAK.fetch_add(1, Ordering::SeqCst) + 1;
     let frame_ms = task_delta * 1000.0;
     if streak >= SETTLE_TICKS
         && frame_ms >= renderdoc_slow_ms()
-        && tick_n.saturating_sub(LAST_CAP.load(Ordering::SeqCst)) >= COOLDOWN_TICKS
+        && ARMED.load(Ordering::SeqCst)
         && renderdoc::trigger_capture()
     {
-        LAST_CAP.store(tick_n, Ordering::SeqCst);
+        ARMED.store(false, Ordering::SeqCst); // one capture per in-world window
         return CAPS.fetch_add(1, Ordering::SeqCst) + 1;
     }
     caps
