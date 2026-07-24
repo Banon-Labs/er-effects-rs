@@ -561,7 +561,9 @@ def main() -> int:
     layouts = parse_layouts(data, offsets["layout"], header.buffer_layout_count)
 
     materials = parse_materials(data, offsets["material"], header.material_count)
-    selected_mesh_indices = select_mesh_indices(args.donor_mesh_index, meshes, materials)
+    selected_mesh_indices = select_mesh_indices(
+        args.donor_mesh_index, meshes, materials
+    )
     invalid_indices = [index for index in selected_mesh_indices if index >= len(meshes)]
     if invalid_indices:
         raise ValueError(f"donor mesh index out of range: {invalid_indices}")
@@ -598,7 +600,9 @@ def main() -> int:
         for vertex_buffer_index in vertex_buffer_indices:
             vertex_buffer = vertex_buffers[vertex_buffer_index]
             layout = layouts[vertex_buffer.layout_index]
-            members = parse_layout_members(data, layout.member_offset, layout.member_count)
+            members = parse_layout_members(
+                data, layout.member_offset, layout.member_count
+            )
             donor_positions = read_donor_positions(data, header, vertex_buffer, members)
             contexts.append((vertex_buffer, members, donor_positions))
             all_donor_positions.extend(donor_positions)
@@ -612,7 +616,9 @@ def main() -> int:
     for mesh_index in selected_mesh_indices:
         mesh = meshes[mesh_index]
         mesh_morphed_positions: list[Vec3] = []
-        for vertex_buffer, members, donor_positions in selected_vertex_contexts[mesh_index]:
+        for vertex_buffer, members, donor_positions in selected_vertex_contexts[
+            mesh_index
+        ]:
             morphed_positions = morph_positions(
                 source_bounds,
                 source_envelope,
@@ -620,7 +626,9 @@ def main() -> int:
                 donor_envelope,
                 donor_positions,
             )
-            patch_morphed_vertices(data, header, vertex_buffer, members, morphed_positions)
+            patch_morphed_vertices(
+                data, header, vertex_buffer, members, morphed_positions
+            )
             mesh_morphed_positions.extend(morphed_positions)
             all_morphed_positions.extend(morphed_positions)
             morphed_vertex_count += len(morphed_positions)
