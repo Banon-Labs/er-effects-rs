@@ -8,6 +8,9 @@
 
 #![allow(non_snake_case)]
 
+#[cfg(windows)]
+mod crashlog;
+
 use std::{
     fmt,
     path::PathBuf,
@@ -66,12 +69,13 @@ fn log_message(args: fmt::Arguments<'_>) {
 ///
 /// Called by the Windows loader. Do not call directly.
 pub unsafe extern "system" fn DllMain(
-    _module: *mut core::ffi::c_void,
+    module: *mut core::ffi::c_void,
     reason: u32,
     _reserved: *mut core::ffi::c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
-        START.call_once(spawn_better_refills_task);
+        let module_base = module as usize;
+        START.call_once(|| spawn_better_refills_task(module_base));
     }
     DLL_MAIN_SUCCESS
 }
@@ -83,10 +87,14 @@ pub extern "C" fn er_better_refills_host_stub() -> i32 {
 }
 
 #[cfg(windows)]
-fn spawn_better_refills_task() {
+fn spawn_better_refills_task(module_base: usize) {
     let _ = std::thread::Builder::new()
         .name("er-better-refills".to_owned())
-        .spawn(|| {
+        .spawn(move || {
+            crashlog::install(module_base);
+            if crashlog::force_crash_requested() {
+                unsafe { crashlog::force_crash_for_smoke() };
+            }
             let mut attempts = 0_u64;
             loop {
                 match game_module_base() {
