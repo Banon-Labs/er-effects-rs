@@ -428,9 +428,30 @@ fn patch_donor_flver(
         )?;
     }
 
+    let donor_face_set_indices =
+        parse_u32_list(bytes, donor_mesh.face_set_offset, donor_mesh.face_set_count)?;
+    let source_index_count = source.triangles.len() * 3;
+    let (primary_face_set_index, primary_face_set) = donor_face_set_indices
+        .iter()
+        .copied()
+        .filter_map(|index| {
+            face_sets
+                .get(index as usize)
+                .copied()
+                .map(|face_set| (index as usize, face_set))
+        })
+        .find(|(_, face_set)| !face_set.triangle_strip && face_set.index_count >= source_index_count)
+        .ok_or_else(|| {
+            format!(
+                "no selected donor face set can hold source indices: need={} selected={:?}",
+                source_index_count, donor_face_set_indices
+            )
+        })?;
+    patch_face_set_indices(bytes, header, primary_face_set, &source.triangles)?;
+
     let mut patched_face_sets = 0;
     let mut hidden_face_sets = 0;
-    let mut lod0_index_capacity = 0;
+    let lod0_index_capacity = primary_face_set.index_count;
     for (mesh_index, mesh) in meshes.iter().enumerate() {
         let indices = parse_u32_list(bytes, mesh.face_set_offset, mesh.face_set_count)?;
         for face_set_index in indices {
@@ -444,10 +465,14 @@ fn patch_donor_flver(
                             .into(),
                     );
                 }
-                if patched_face_sets == 0 {
-                    lod0_index_capacity = face_set.index_count;
+                if face_set_index as usize != primary_face_set_index {
+                    redirect_face_set_indices(
+                        bytes,
+                        face_set_table,
+                        face_set_index as usize,
+                        primary_face_set,
+                    )?;
                 }
-                patch_face_set_indices(bytes, header, face_set, &source.triangles)?;
                 patched_face_sets += 1;
             } else {
                 zero_face_set_indices(bytes, header, face_set)?;
@@ -559,6 +584,21 @@ fn patch_face_set_indices(
         }
         other => return Err(format!("unsupported donor face index size: {other}").into()),
     }
+    Ok(())
+}
+
+fn redirect_face_set_indices(
+    bytes: &mut [u8],
+    face_set_table: usize,
+    face_set_index: usize,
+    primary_face_set: FaceSet,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let record_offset = face_set_table + face_set_index * FACE_SET_SIZE;
+    bounds(bytes, record_offset, FACE_SET_SIZE)?;
+    bytes[record_offset + 0x04] = 0;
+    write_u32(bytes, record_offset + 0x08, primary_face_set.index_count as u32)?;
+    write_u32(bytes, record_offset + 0x0C, primary_face_set.index_offset as u32)?;
+    write_u32(bytes, record_offset + 0x18, primary_face_set.index_size)?;
     Ok(())
 }
 
