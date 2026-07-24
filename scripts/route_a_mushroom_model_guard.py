@@ -114,16 +114,28 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
         detached_components == 0 and independent_detached_components == 0
     )
 
+    if pruned_island_vertices > 0 or pruned_island_triangles > 0:
+        alerts.append(
+            {
+                "code": "ARM_FOREARM_SURFACE_PRUNED",
+                "severity": "error",
+                "message": "The arm response removed detached forearm/hand island surface; runtime review showed this creates elbow gaps or missing forearms.",
+                "pruned_components": pruned_island_components,
+                "pruned_vertices": pruned_island_vertices,
+                "pruned_triangles": pruned_island_triangles,
+                "recommended_response": "do_not_package; preserve forearm surface and avoid detached weight proxying instead of deleting the visible arm surface",
+            }
+        )
     if broken_visible_after > 0:
         alerts.append(
             {
-                "code": "ARM_BROKEN_VISIBLE_ISLANDS_AFTER_PRUNE",
+                "code": "ARM_BROKEN_VISIBLE_ISLANDS_AFTER_RESPONSE",
                 "severity": "error",
-                "message": "Rendered arm geometry still contains the far detached hand/forearm island pattern that failed visual review.",
+                "message": "Rendered arm geometry still contains the far detached hand/forearm island pattern in an unresolved response mode.",
                 "broken_visible_components_before": broken_visible_before,
                 "broken_visible_components_after": broken_visible_after,
                 "arm_island_prune_enabled": arm_island_prune_enabled,
-                "recommended_response": "do_not_package; remove the broken island triangles or merge the source geometry before production",
+                "recommended_response": "do_not_package; preserve the surface only when no detached proxy/independent arm rewrite is applied, or merge the source geometry before production",
             }
         )
     if arm_enabled and arm_vertices > 0 and detached_proxy_response_claimed:

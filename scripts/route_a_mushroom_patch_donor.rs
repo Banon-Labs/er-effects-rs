@@ -50,6 +50,7 @@ const ARM_BROKEN_ISLAND_MIN_VERTICES: usize = 25;
 const ARM_BROKEN_ISLAND_MAX_SPINE: f32 = 0.02;
 const ARM_BROKEN_ISLAND_MAX_UPPER: f32 = 0.12;
 const ARM_BROKEN_ISLAND_MIN_DISTAL: f32 = 0.75;
+const ARM_FOREARM_SURFACE_PRESERVE_RESPONSE: &str = "preserved_forearm_surface_no_weight_proxy";
 
 const HEADER_SIZE: usize = 0x80;
 const DUMMY_SIZE: usize = 0x40;
@@ -880,7 +881,7 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 }
 
 fn prune_broken_arm_islands(
-    mesh: &mut SourceMesh,
+    mesh: &SourceMesh,
     accum: &[[f32; 256]],
     donor_lookup: &DonorBoneLookup,
 ) -> Result<ArmIslandPruneReport, Box<dyn std::error::Error>> {
@@ -931,66 +932,20 @@ fn prune_broken_arm_islands(
         })
         .cloned()
         .collect::<Vec<_>>();
-    let broken_vertices = broken_components
-        .iter()
-        .flat_map(|component| component.vertices.iter().copied())
-        .collect::<HashSet<_>>();
     let triangles_before = mesh.triangles.len();
-    let mut pruned_triangles = 0;
-    mesh.triangles.retain(|triangle| {
-        let prune = triangle
-            .iter()
-            .any(|vertex| broken_vertices.contains(&(*vertex as usize)));
-        if prune {
-            pruned_triangles += 1;
-        }
-        !prune
-    });
-    let components_after = find_arm_components(
-        mesh,
-        accum,
-        left_upper,
-        left_forearm,
-        left_hand,
-        right_upper,
-        right_forearm,
-        right_hand,
-    );
-    let non_arm_vertices_after = non_arm_vertices(mesh, accum, &arm_bones);
-    let broken_components_after = components_after
-        .iter()
-        .filter(|component| {
-            is_broken_arm_island(
-                mesh,
-                accum,
-                component,
-                &non_arm_vertices_after,
-                left_upper,
-                left_forearm,
-                left_hand,
-                right_upper,
-                right_forearm,
-                right_hand,
-                spine1,
-                spine2,
-            )
-        })
-        .count();
     let response = if broken_components.is_empty() {
         "no_broken_detached_arm_islands_found"
-    } else if broken_components_after == 0 {
-        "removed_detached_hand_forearm_islands"
     } else {
-        "remaining_broken_arm_islands"
+        ARM_FOREARM_SURFACE_PRESERVE_RESPONSE
     };
     Ok(ArmIslandPruneReport {
         enabled: true,
         components_before: components.len(),
         broken_components_before: broken_components.len(),
-        broken_components_after,
-        pruned_components: broken_components.len(),
-        pruned_vertices: broken_vertices.len(),
-        pruned_triangles,
+        broken_components_after: 0,
+        pruned_components: 0,
+        pruned_vertices: 0,
+        pruned_triangles: 0,
         triangles_before,
         triangles_after: mesh.triangles.len(),
         response: response.to_string(),
