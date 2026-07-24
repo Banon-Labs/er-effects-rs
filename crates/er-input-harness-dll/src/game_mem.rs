@@ -42,6 +42,13 @@ const CURRENT_OPEN_MENU_ID_RVA: usize = 0x458baec;
 
 /// Lowest plausible heap/image pointer -- filters null and small sentinel values out of walks.
 const HEAP_LO: usize = 0x10000;
+/// Upper bound for canonical lower-half user pointers. Filters tagged/sentinel values that happen to
+/// be larger than `HEAP_LO` (observed top-window false positive: `0x3314102800000002`).
+const USER_PTR_HI: usize = 0x0000_8000_0000_0000;
+
+fn valid_user_ptr(p: usize) -> bool {
+    p >= HEAP_LO && p < USER_PTR_HI && p & 0x7 == 0
+}
 
 /// The game image base (`GetModuleHandleA(NULL)`), or `None` before the image is mapped.
 pub fn game_base() -> Option<usize> {
@@ -267,7 +274,7 @@ fn top_window() -> usize {
         return 0;
     }
     unsafe { read_usize(job + TOP_JOB_WINDOW_130_OFFSET) }
-        .filter(|p| *p >= HEAP_LO)
+        .filter(|p| valid_user_ptr(*p))
         .unwrap_or(0)
 }
 
@@ -282,7 +289,9 @@ pub fn top_window_vtable() -> usize {
     if window == 0 {
         return 0;
     }
-    unsafe { read_usize(window) }.unwrap_or(0)
+    unsafe { read_usize(window) }
+        .filter(|p| valid_user_ptr(*p))
+        .unwrap_or(0)
 }
 
 /// Read the generic `CS::MessageBoxDialog` fade/settle accept gate from a known dialog pointer.
