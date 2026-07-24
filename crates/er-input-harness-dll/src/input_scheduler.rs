@@ -68,8 +68,9 @@ impl WeaponUpgradeConfirmReadiness {
 /// Effect predicate inputs for a weapon-upgrade confirm intent.
 ///
 /// A late buffered confirm must not be considered successful from "button emitted" alone. The driver
-/// should report an authoritative upgrade/economy delta and a dialog/menu transition before the next
-/// buffered confirm is allowed to run.
+/// should report an authoritative upgraded-item/reinforcement delta and a dialog/menu transition
+/// before the next buffered confirm is allowed to run. Cost/material consumption is supporting
+/// evidence, but not sufficient on its own because a cost-only delta would be a bad partial apply.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct WeaponUpgradeConfirmEffect {
     pub(crate) reinforcement_changed: bool,
@@ -79,7 +80,7 @@ pub(crate) struct WeaponUpgradeConfirmEffect {
 
 impl WeaponUpgradeConfirmEffect {
     pub(crate) fn is_observed(self) -> bool {
-        self.dialog_closed_or_rebuilt && (self.reinforcement_changed || self.cost_consumed)
+        self.dialog_closed_or_rebuilt && self.reinforcement_changed
     }
 }
 
@@ -342,6 +343,14 @@ mod tests {
         );
         assert!(
             WeaponUpgradeConfirmEffect {
+                reinforcement_changed: true,
+                cost_consumed: true,
+                dialog_closed_or_rebuilt: true,
+            }
+            .is_observed()
+        );
+        assert!(
+            !WeaponUpgradeConfirmEffect {
                 cost_consumed: true,
                 dialog_closed_or_rebuilt: true,
                 ..WeaponUpgradeConfirmEffect::default()
