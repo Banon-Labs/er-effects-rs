@@ -16,9 +16,11 @@ use crate::log::harness_log;
 use crate::win32::{read_u8, read_u32, read_usize};
 
 const HEAP_LO: usize = 0x1_0000_0000;
-/// Dump `FUN_140848fa0` -> deobf/live `0x140848eb0`, content-unique via
-/// `scripts/dump-deobf-shift.py 0x140848fa0` from the parent repo (2026-07-24).
-const FORGE_SELECTED_GAITEM_RVA: usize = 0x848eb0;
+/// Deobf/live function start for the selected-row after-forge helper called by dump
+/// `FUN_14098df10(param_3, local_220)`. Initial content matching of dump `FUN_140848fa0` landed
+/// inside this function at `0x140848eb0`; bounded parent-repo disassembly proves the clean prologue at
+/// `0x140848dd0` (`48 89 5c 24 08 ... 55 48 8b ec`). Hook the prologue, never the interior block.
+const FORGE_SELECTED_GAITEM_RVA: usize = 0x848dd0;
 
 const MENU_GAITEM_ITEM_ID_OFFSET: usize = 0x4c;
 const MENU_GAITEM_ITEM_TYPE_OFFSET: usize = 0x54;
