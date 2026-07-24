@@ -160,6 +160,12 @@ def snap(t: dict) -> dict:
         # stable_frames = the arm-eligibility gate (needs a live in-world menu job).
         "oracle_switch_arm_count",
         "oracle_switch_teardown_count",
+        # Phase-3 outgoing-world-teardown fix (2026-07-23): the render-release metric + drive state.
+        "oracle_common_finalize_count",
+        "oracle_outgoing_teardown_baseline",
+        "oracle_outgoing_teardown_done",
+        "oracle_outgoing_teardown_wait_ticks",
+        "oracle_outgoing_teardown_failsoft",
         "oracle_switch_deferred_count",
         "oracle_switch_last_slot",
         "oracle_switch_reload_phase",
@@ -223,6 +229,20 @@ def snap(t: dict) -> dict:
         "oracle_boot_view_self_presents",
         "oracle_boot_view_pump_stop_reason",
         "oracle_boot_view_stop_native_hits",
+        # RENDER-RESIDENCY (bd AC-2-ANSWERED-native-reload-no-dip-mod-ownload-dips +
+        # PHASE3-render-release-is-CommonFinalize): the live GxDrawContext render-output vector
+        # (span/count/capacity + ptr) plus the render managers CS::InGameStep::_Common_Finalize frees
+        # (CSDistViewManager, MapItemMan). own_load_switch_reload_fire SKIPS that native teardown, so a
+        # heavier reload epoch shows extra render outputs / leftover managers vs a clean native reload.
+        # These already exist in the product SNAPSHOT (write_game_module_oracles.rs, passive base+safe_read,
+        # no hooks); pulling them into the per-frame timeseries lets the analyzer diff render residency per
+        # load epoch (mod reload vs vanilla reload). Phase-1 = pinpoint WHICH render resource stays resident.
+        "oracle_gxdc_ptr",
+        "oracle_gxdc_output_span_bytes",
+        "oracle_gxdc_output_count",
+        "oracle_gxdc_output_capacity",
+        "oracle_render_distview_mgr_ptr",
+        "oracle_render_mapitem_mgr_ptr",
         "oracle_current_load_epoch",
         # DLL MAIN GAME-TASK duration (2026-07-22): large on reloads => DLL per-frame code cost; fast =>
         # game-side loop (playable-window 50ms not the DLL).
