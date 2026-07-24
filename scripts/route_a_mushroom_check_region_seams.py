@@ -203,7 +203,10 @@ def weight_l1_distance(
     first_weights = weights.get(first, {})
     second_weights = weights.get(second, {})
     bones = set(first_weights) | set(second_weights)
-    return sum(abs(first_weights.get(bone, 0.0) - second_weights.get(bone, 0.0)) for bone in bones)
+    return sum(
+        abs(first_weights.get(bone, 0.0) - second_weights.get(bone, 0.0))
+        for bone in bones
+    )
 
 
 def near_shell_pairs(
@@ -254,7 +257,9 @@ def main() -> int:
     shell_pairs = near_shell_pairs(vertices, region, weights)
     expanded_shell_pairs = near_shell_pairs(vertices, expanded, weights)
     weight_mismatch_pairs = [
-        pair for pair in shell_pairs if pair["weight_l1_mismatch"] > WEIGHT_SYNC_L1_THRESHOLD
+        pair
+        for pair in shell_pairs
+        if pair["weight_l1_mismatch"] > WEIGHT_SYNC_L1_THRESHOLD
     ]
     expanded_weight_mismatch_pairs = [
         pair
@@ -292,7 +297,9 @@ def main() -> int:
                 "code": "REGION_HAS_COINCIDENT_OR_NEAR_SHELL_SEAM",
                 "message": "Region has nearby/coincident non-region vertices that are not represented by connected edge boundaries.",
                 "near_shell_pair_count": len(shell_pairs),
-                "near_shell_outside_vertex_count": len({pair["outside_vertex"] for pair in shell_pairs}),
+                "near_shell_outside_vertex_count": len(
+                    {pair["outside_vertex"] for pair in shell_pairs}
+                ),
                 "max_weight_l1_mismatch": max_shell_mismatch,
                 "recommended_response": "only_sync_local_weights_if_REGION_WEIGHT_SEAM_MISMATCH_fires",
             }
@@ -345,7 +352,9 @@ def main() -> int:
         "expanded_face_closed_vertex_count": len(expanded),
         "shrunk_face_closed_vertex_count": len(shrunk),
         "near_shell_pair_count": len(shell_pairs),
-        "near_shell_outside_vertex_count": len({pair["outside_vertex"] for pair in shell_pairs}),
+        "near_shell_outside_vertex_count": len(
+            {pair["outside_vertex"] for pair in shell_pairs}
+        ),
         "weight_mismatch_pair_count": len(weight_mismatch_pairs),
         "expanded_near_shell_pair_count": len(expanded_shell_pairs),
         "expanded_near_shell_outside_vertex_count": len(
