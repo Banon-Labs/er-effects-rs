@@ -143,6 +143,8 @@ static BADGE_UNBOUND: AtomicU64 = AtomicU64::new(0);
 /// Weapon tiles that reached the icon stage (badge-draw attempts). Sampling ordinal --
 /// the raw TilePopulate fire count is dominated by early non-weapon/empty tiles.
 static BADGE_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
+/// One-time guard for the Scaleform vtable dump (pins ObjectInterface Invoke/clip-create slots).
+static VTABLE_DUMPED: AtomicUsize = AtomicUsize::new(0);
 /// Sentinel: no forced icon (use the real skill icon).
 const FORCE_ICON_NONE: u32 = u32::MAX;
 /// Sentinel (ER_ARMAMENT_ICONS_FORCE_ICON=mirror): draw the tile's own item icon into the badge.
@@ -460,6 +462,60 @@ fn fmt_rects(r: Option<([f32; 4], [f32; 4])>) -> String {
     }
 }
 
+/// One-time runtime dump of a bound clip's Scaleform vtables, to pin the UNSYMBOLIZED
+/// ObjectInterface slots (Invoke / CreateEmptyMovieClip / AttachMovie) needed for runtime clip
+/// creation of the bottom-left badge (bd armament-icons-runtime-clip-create-objectinterface-abi).
+/// Layout (Ghidra get_structure): proxy+0x28 = CSScaleformValue { _vfptr@0; GFx::Value value@0x8 };
+/// GFx::Value { gcPrev@0, gcNext@8, objectInterface@0x10, dataType@0x18, value@0x20 }. So the OI
+/// instance = *(proxy+0x28+0x8+0x10) = *(proxy+0x40); OI vtable = *(OI). CSScaleformValue's own
+/// vtable = *(proxy+0x28). Logs each slot as game+RVA so the interesting funcs decompile offline.
+#[cfg(windows)]
+unsafe fn dump_scaleform_vtables(base: usize, tile: usize) {
+    use er_game_base::mem::safe_read_usize;
+
+    if VTABLE_DUMPED.swap(1, Ordering::SeqCst) != 0 {
+        return;
+    }
+    type AssignFn = unsafe extern "system" fn(usize, *mut u8, *const u8) -> *mut u8;
+    type IsBoundFn = unsafe extern "system" fn(*const u8) -> bool;
+    type DtorFn = unsafe extern "system" fn(*mut u8);
+    let assign: AssignFn = unsafe { std::mem::transmute(base + ASSIGN_COMPONENT_WITH_NAME_RVA) };
+    let is_bound: IsBoundFn = unsafe { std::mem::transmute(base + PROXY_IS_BOUND_RVA) };
+    let dtor: DtorFn = unsafe { std::mem::transmute(base + SCALEFORM_VALUE_DTOR_RVA) };
+
+    let mut proxy = [0u8; PROXY_SIZE];
+    unsafe { assign(tile, proxy.as_mut_ptr(), c"AttributeIcon".as_ptr().cast()) };
+    if unsafe { is_bound(proxy.as_ptr()) } {
+        let p = proxy.as_ptr() as usize;
+        let rva = |a: usize| {
+            if a >= base && a < base + 0x0800_0000 {
+                a - base
+            } else {
+                0
+            }
+        };
+        let dump = |label: &str, vt: usize, n: usize| {
+            let mut s = String::new();
+            for i in 0..n {
+                if let Some(f) = unsafe { safe_read_usize(vt + i * 8) } {
+                    s.push_str(&format!("[{:x}]=+{:x} ", i * 8, rva(f)));
+                }
+            }
+            log_message(format_args!("VTDUMP {label} @0x{vt:x}: {s}"));
+        };
+        if let Some(cssv_vt) = unsafe { safe_read_usize(p + PROXY_SCALEFORM_VALUE_OFFSET) } {
+            dump("cssv", cssv_vt, 0x22);
+        }
+        if let Some(oi) = unsafe { safe_read_usize(p + 0x40) } {
+            if let Some(oi_vt) = unsafe { safe_read_usize(oi) } {
+                log_message(format_args!("VTDUMP oi-instance=0x{oi:x}"));
+                dump("oi", oi_vt, 0x30);
+            }
+        }
+    }
+    unsafe { dtor(proxy.as_mut_ptr().add(PROXY_SCALEFORM_VALUE_OFFSET)) };
+}
+
 #[cfg(windows)]
 unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
     let Ok(base) = er_game_base::mem::game_module_base() else {
@@ -562,6 +618,9 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
     // KNOWN-PRESENT control -- if it fails too, the assign call/parent is wrong; if only
     // ArtsIcon fails, this tile template lacks that child.
     if attempt <= SAMPLE_LOG_CALLS {
+        // One-time: dump the bound clip's Scaleform vtables to pin the ObjectInterface
+        // Invoke/clip-create slots for the bottom-left badge's runtime clip creation.
+        unsafe { dump_scaleform_vtables(base, tile) };
         // Full child inventory with LOCAL rects (tile-relative: +x=right, +y=down; AttributeIcon
         // local[17,30,43,56]=bottom-right proven). Names are the AUTHORITATIVE set the game's
         // TilePopulate references (deobf 0x1408ff470 string refs). Goal: find a BOTTOM-LEFT clip
