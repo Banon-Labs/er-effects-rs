@@ -35,8 +35,9 @@ const SPINE_COMPENSATION_CENTER_BOOST: f32 = 0.45;
 const SPINE_COMPENSATION_CORE_RADIUS_MIN: f32 = 0.08;
 const SPINE_COMPENSATION_CORE_RADIUS_MAX: f32 = 0.16;
 const SPINE_COMPENSATION_METRIC_CORE_RADIUS: f32 = 0.10;
-const REGION_FEET_BODY_BLEND_STRENGTH: f32 = 0.30;
-const REGION_FEET_REGION_STRENGTH: f32 = 0.78;
+const REGION_NEAR_SHELL_DISTANCE: f32 = 0.08;
+const REGION_WEIGHT_SYNC_L1_THRESHOLD: f32 = 0.35;
+const REGION_WEIGHT_SYNC_MAX_STRENGTH: f32 = 0.25;
 
 const HEADER_SIZE: usize = 0x80;
 const DUMMY_SIZE: usize = 0x40;
@@ -161,6 +162,11 @@ struct RegionResponseReport {
     feet_mixed_triangles_after: usize,
     feet_boundary_edges_before: usize,
     feet_boundary_edges_after: usize,
+    feet_near_shell_pairs: usize,
+    feet_near_shell_outside_vertices: usize,
+    feet_weight_mismatch_pairs: usize,
+    feet_weight_sync_vertices: usize,
+    feet_max_weight_l1_mismatch: f32,
     response: String,
 }
 
@@ -234,12 +240,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     if source.region_response.enabled {
         println!(
-            "region_response feet={}→{} mixed_triangles={}→{} blend_band={} response={}",
+            "region_response feet={} face_candidate={} mixed_triangles={}→{} near_pairs={} mismatches={} synced_vertices={} response={}",
             source.region_response.feet_authored_vertices,
-            source.region_response.feet_normalized_vertices,
+            source.region_response.feet_expanded_vertices,
             source.region_response.feet_mixed_triangles_before,
             source.region_response.feet_mixed_triangles_after,
-            source.region_response.feet_blend_band_vertices,
+            source.region_response.feet_near_shell_pairs,
+            source.region_response.feet_weight_mismatch_pairs,
+            source.region_response.feet_weight_sync_vertices,
             source.region_response.response
         );
     }
@@ -734,7 +742,7 @@ fn apply_region_responses(
     mesh: &SourceMesh,
     accum: &mut [[f32; 256]],
     region_map_tsv: &PathBuf,
-    donor_lookup: &DonorBoneLookup,
+    _donor_lookup: &DonorBoneLookup,
 ) -> Result<RegionResponseReport, Box<dyn std::error::Error>> {
     let regions = read_region_map_tsv(region_map_tsv)?;
     let authored_feet = match regions.get("feet") {
@@ -751,45 +759,40 @@ fn apply_region_responses(
 
     let expanded_feet = face_closed_region(mesh, &authored_feet, FaceClosureMode::Expand);
     let shrunk_feet = face_closed_region(mesh, &authored_feet, FaceClosureMode::Shrink);
-    // The human-authored foot split is a positive signal: preserve that intent by
-    // expanding ambiguous cuts to whole triangles rather than shrinking away most
-    // of the hand-marked foot geometry.
-    let normalized_feet = expanded_feet.clone();
-    let blend_band = outside_boundary_vertices(mesh, &normalized_feet);
+    let mixed_before = mixed_triangle_count(mesh, &authored_feet);
+    let boundary_before = boundary_edge_count(mesh, &authored_feet);
+    let near_pairs = near_shell_pairs(mesh, &authored_feet, REGION_NEAR_SHELL_DISTANCE);
+    let near_shell_outside_vertices = near_pairs
+        .iter()
+        .map(|pair| pair.outside_vertex)
+        .collect::<HashSet<_>>()
+        .len();
 
-    let center_x = (mesh.bbox_min.x + mesh.bbox_max.x) * 0.5;
-    let left_foot = resolve_required_bone_u8(donor_lookup, "L_Foot")?;
-    let right_foot = resolve_required_bone_u8(donor_lookup, "R_Foot")?;
-    let left_calf = resolve_required_bone_u8(donor_lookup, "L_Calf")?;
-    let right_calf = resolve_required_bone_u8(donor_lookup, "R_Calf")?;
-    let pelvis = resolve_required_bone_u8(donor_lookup, "Pelvis")?;
+    let mut max_mismatch = 0.0_f32;
+    let mut mismatch_pairs = 0_usize;
+    let mut synced_vertices = HashSet::new();
+    for pair in near_pairs.iter().copied() {
+        let mismatch = weight_l1_distance(&accum[pair.region_vertex], &accum[pair.outside_vertex]);
+        max_mismatch = max_mismatch.max(mismatch);
+        if mismatch <= REGION_WEIGHT_SYNC_L1_THRESHOLD {
+            continue;
+        }
+        mismatch_pairs += 1;
+        let proximity_strength = (1.0 - pair.distance / REGION_NEAR_SHELL_DISTANCE).clamp(0.0, 1.0);
+        let strength = REGION_WEIGHT_SYNC_MAX_STRENGTH * proximity_strength;
+        if strength <= 0.0 {
+            continue;
+        }
+        blend_weight_rows(accum, pair.region_vertex, pair.outside_vertex, strength);
+        synced_vertices.insert(pair.region_vertex);
+        synced_vertices.insert(pair.outside_vertex);
+    }
 
-    for vertex_index in &normalized_feet {
-        apply_lower_limb_target(
-            &mut accum[*vertex_index],
-            mesh.vertices[*vertex_index].position.x,
-            center_x,
-            left_foot,
-            right_foot,
-            left_calf,
-            right_calf,
-            pelvis,
-            REGION_FEET_REGION_STRENGTH,
-        );
-    }
-    for vertex_index in &blend_band {
-        apply_lower_limb_target(
-            &mut accum[*vertex_index],
-            mesh.vertices[*vertex_index].position.x,
-            center_x,
-            left_foot,
-            right_foot,
-            left_calf,
-            right_calf,
-            pelvis,
-            REGION_FEET_BODY_BLEND_STRENGTH,
-        );
-    }
+    let response = if mismatch_pairs == 0 {
+        "alert_only_no_weight_mismatch"
+    } else {
+        "local_proximity_weight_sync"
+    };
 
     Ok(RegionResponseReport {
         enabled: true,
@@ -797,13 +800,18 @@ fn apply_region_responses(
         feet_authored_vertices: authored_feet.len(),
         feet_expanded_vertices: expanded_feet.len(),
         feet_shrunk_vertices: shrunk_feet.len(),
-        feet_normalized_vertices: normalized_feet.len(),
-        feet_blend_band_vertices: blend_band.len(),
-        feet_mixed_triangles_before: mixed_triangle_count(mesh, &authored_feet),
-        feet_mixed_triangles_after: mixed_triangle_count(mesh, &normalized_feet),
-        feet_boundary_edges_before: boundary_edge_count(mesh, &authored_feet),
-        feet_boundary_edges_after: boundary_edge_count(mesh, &normalized_feet),
-        response: "expand_to_face_closed_region_and_add_blend_band".to_string(),
+        feet_normalized_vertices: authored_feet.len(),
+        feet_blend_band_vertices: 0,
+        feet_mixed_triangles_before: mixed_before,
+        feet_mixed_triangles_after: mixed_before,
+        feet_boundary_edges_before: boundary_before,
+        feet_boundary_edges_after: boundary_before,
+        feet_near_shell_pairs: near_pairs.len(),
+        feet_near_shell_outside_vertices: near_shell_outside_vertices,
+        feet_weight_mismatch_pairs: mismatch_pairs,
+        feet_weight_sync_vertices: synced_vertices.len(),
+        feet_max_weight_l1_mismatch: max_mismatch,
+        response: response.to_string(),
     })
 }
 
@@ -831,6 +839,13 @@ fn read_region_map_tsv(
 enum FaceClosureMode {
     Expand,
     Shrink,
+}
+
+#[derive(Clone, Copy)]
+struct NearShellPair {
+    region_vertex: usize,
+    outside_vertex: usize,
+    distance: f32,
 }
 
 fn face_closed_region(
@@ -887,50 +902,49 @@ fn boundary_edge_count(mesh: &SourceMesh, region: &HashSet<usize>) -> usize {
         .count()
 }
 
-fn outside_boundary_vertices(mesh: &SourceMesh, region: &HashSet<usize>) -> HashSet<usize> {
-    let mut vertices = HashSet::new();
-    for (a, b) in unique_triangle_edges(&mesh.triangles) {
-        let a_inside = region.contains(&(a as usize));
-        let b_inside = region.contains(&(b as usize));
-        if a_inside == b_inside {
-            continue;
-        }
-        if a_inside {
-            vertices.insert(b as usize);
-        } else {
-            vertices.insert(a as usize);
+fn near_shell_pairs(mesh: &SourceMesh, region: &HashSet<usize>, max_distance: f32) -> Vec<NearShellPair> {
+    let mut pairs = Vec::new();
+    for region_vertex in region {
+        let position = mesh.vertices[*region_vertex].position;
+        for (outside_vertex, outside) in mesh.vertices.iter().enumerate() {
+            if region.contains(&outside_vertex) || *region_vertex == outside_vertex {
+                continue;
+            }
+            let distance = vec3_distance(position, outside.position);
+            if distance <= max_distance {
+                pairs.push(NearShellPair {
+                    region_vertex: *region_vertex,
+                    outside_vertex,
+                    distance,
+                });
+            }
         }
     }
-    vertices
+    pairs
 }
 
-fn apply_lower_limb_target(
-    weights: &mut [f32; 256],
-    x: f32,
-    center_x: f32,
-    left_foot: u8,
-    right_foot: u8,
-    left_calf: u8,
-    right_calf: u8,
-    pelvis: u8,
-    strength: f32,
-) {
-    let total = weights.iter().sum::<f32>();
-    if total <= 0.0 {
-        return;
+fn vec3_distance(a: Vec3, b: Vec3) -> f32 {
+    ((a.x - b.x).powi(2) + (a.y - b.y).powi(2) + (a.z - b.z).powi(2)).sqrt()
+}
+
+fn weight_l1_distance(a: &[f32; 256], b: &[f32; 256]) -> f32 {
+    a.iter()
+        .zip(b.iter())
+        .map(|(a_weight, b_weight)| (a_weight - b_weight).abs())
+        .sum::<f32>()
+}
+
+fn blend_weight_rows(accum: &mut [[f32; 256]], a: usize, b: usize, strength: f32) {
+    let mut average = [0.0_f32; 256];
+    for (index, slot) in average.iter_mut().enumerate() {
+        *slot = (accum[a][index] + accum[b][index]) * 0.5;
     }
-    let (foot, calf) = if x >= center_x {
-        (left_foot, left_calf)
-    } else {
-        (right_foot, right_calf)
-    };
-    for weight in weights.iter_mut() {
-        *weight *= 1.0 - strength;
+    for index in 0..256 {
+        accum[a][index] = accum[a][index] * (1.0 - strength) + average[index] * strength;
+        accum[b][index] = accum[b][index] * (1.0 - strength) + average[index] * strength;
     }
-    weights[foot as usize] += total * strength * 0.72;
-    weights[calf as usize] += total * strength * 0.25;
-    weights[pelvis as usize] += total * strength * 0.03;
-    normalize_accumulated_weights(weights);
+    normalize_accumulated_weights(&mut accum[a]);
+    normalize_accumulated_weights(&mut accum[b]);
 }
 
 fn patch_donor_flver(
@@ -1454,6 +1468,11 @@ fn write_summary(
         writeln!(file, "feet_blend_band_vertices={}", source.region_response.feet_blend_band_vertices)?;
         writeln!(file, "feet_mixed_triangles_before_after={},{}", source.region_response.feet_mixed_triangles_before, source.region_response.feet_mixed_triangles_after)?;
         writeln!(file, "feet_boundary_edges_before_after={},{}", source.region_response.feet_boundary_edges_before, source.region_response.feet_boundary_edges_after)?;
+        writeln!(file, "feet_near_shell_pairs={}", source.region_response.feet_near_shell_pairs)?;
+        writeln!(file, "feet_near_shell_outside_vertices={}", source.region_response.feet_near_shell_outside_vertices)?;
+        writeln!(file, "feet_weight_mismatch_pairs={}", source.region_response.feet_weight_mismatch_pairs)?;
+        writeln!(file, "feet_weight_sync_vertices={}", source.region_response.feet_weight_sync_vertices)?;
+        writeln!(file, "feet_max_weight_l1_mismatch={:.6}", source.region_response.feet_max_weight_l1_mismatch)?;
     }
     writeln!(
         file,

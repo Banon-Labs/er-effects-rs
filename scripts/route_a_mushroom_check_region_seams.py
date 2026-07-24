@@ -28,6 +28,8 @@ from typing import Any
 
 SPINE_BONES = {"Pelvis", "Spine", "Spine1", "Spine2"}
 LOWER_LIMB_BONES = {"L_Thigh", "R_Thigh", "L_Calf", "R_Calf", "L_Foot", "R_Foot"}
+NEAR_SHELL_DISTANCE = 0.08
+WEIGHT_SYNC_L1_THRESHOLD = 0.35
 
 
 def parse_args() -> argparse.Namespace:
@@ -195,6 +197,40 @@ def boundary_edges(
     return sorted(out, key=lambda row: row["length"], reverse=True)
 
 
+def weight_l1_distance(
+    weights: dict[int, dict[str, float]], first: int, second: int
+) -> float:
+    first_weights = weights.get(first, {})
+    second_weights = weights.get(second, {})
+    bones = set(first_weights) | set(second_weights)
+    return sum(abs(first_weights.get(bone, 0.0) - second_weights.get(bone, 0.0)) for bone in bones)
+
+
+def near_shell_pairs(
+    vertices: list[tuple[float, float, float]],
+    region: set[int],
+    weights: dict[int, dict[str, float]],
+) -> list[dict[str, Any]]:
+    pairs: list[dict[str, Any]] = []
+    for region_vertex in region:
+        for outside_vertex, outside_position in enumerate(vertices):
+            if outside_vertex in region:
+                continue
+            distance = math.dist(vertices[region_vertex], outside_position)
+            if distance > NEAR_SHELL_DISTANCE:
+                continue
+            mismatch = weight_l1_distance(weights, region_vertex, outside_vertex)
+            pairs.append(
+                {
+                    "region_vertex": region_vertex,
+                    "outside_vertex": outside_vertex,
+                    "distance": distance,
+                    "weight_l1_mismatch": mismatch,
+                }
+            )
+    return sorted(pairs, key=lambda row: row["distance"])
+
+
 def choose_response(region_size: int, expanded_size: int, shrunk_size: int) -> str:
     expand_delta = expanded_size - region_size
     shrink_delta = region_size - shrunk_size
@@ -215,6 +251,16 @@ def main() -> int:
     mixed = mixed_faces(triangles, region)
     expanded, shrunk = face_closed_variants(triangles, region)
     boundaries = boundary_edges(vertices, triangles, region, weights)
+    shell_pairs = near_shell_pairs(vertices, region, weights)
+    expanded_shell_pairs = near_shell_pairs(vertices, expanded, weights)
+    weight_mismatch_pairs = [
+        pair for pair in shell_pairs if pair["weight_l1_mismatch"] > WEIGHT_SYNC_L1_THRESHOLD
+    ]
+    expanded_weight_mismatch_pairs = [
+        pair
+        for pair in expanded_shell_pairs
+        if pair["weight_l1_mismatch"] > WEIGHT_SYNC_L1_THRESHOLD
+    ]
     alerts = []
     if mixed:
         alerts.append(
@@ -222,9 +268,10 @@ def main() -> int:
                 "code": "REGION_SPLIT_CUTS_TRIANGLES",
                 "message": "Manual region boundary cuts through triangulated faces instead of following whole-face ownership.",
                 "mixed_triangle_count": len(mixed),
-                "recommended_response": choose_response(
+                "candidate_face_closure": choose_response(
                     len(region), len(expanded), len(shrunk)
                 ),
+                "recommended_response": "report_face_closed_candidate_do_not_mutate_weights",
             }
         )
     if boundaries:
@@ -233,11 +280,53 @@ def main() -> int:
             alerts.append(
                 {
                     "code": "REGION_BOUNDARY_HAS_LONG_DEFORMATION_EDGES",
-                    "message": "Region boundary has long edges across the movement seam; use a blend band rather than a hard weight jump.",
+                    "message": "Region boundary has long connected edges across the movement seam.",
                     "max_boundary_edge_length": max_edge,
-                    "recommended_response": "add_boundary_blend_band",
+                    "recommended_response": "inspect_boundary_do_not_rewrite_weights_without_weight_mismatch",
                 }
             )
+    if shell_pairs:
+        max_shell_mismatch = max(pair["weight_l1_mismatch"] for pair in shell_pairs)
+        alerts.append(
+            {
+                "code": "REGION_HAS_COINCIDENT_OR_NEAR_SHELL_SEAM",
+                "message": "Region has nearby/coincident non-region vertices that are not represented by connected edge boundaries.",
+                "near_shell_pair_count": len(shell_pairs),
+                "near_shell_outside_vertex_count": len({pair["outside_vertex"] for pair in shell_pairs}),
+                "max_weight_l1_mismatch": max_shell_mismatch,
+                "recommended_response": "only_sync_local_weights_if_REGION_WEIGHT_SEAM_MISMATCH_fires",
+            }
+        )
+    if expanded_shell_pairs:
+        max_expanded_shell_mismatch = max(
+            pair["weight_l1_mismatch"] for pair in expanded_shell_pairs
+        )
+        alerts.append(
+            {
+                "code": "FACE_CLOSURE_CANDIDATE_HAS_NEAR_SHELL_SEAM",
+                "message": "The face-closed expansion candidate creates or exposes nearby/coincident non-region shell vertices.",
+                "near_shell_pair_count": len(expanded_shell_pairs),
+                "near_shell_outside_vertex_count": len(
+                    {pair["outside_vertex"] for pair in expanded_shell_pairs}
+                ),
+                "weight_mismatch_pair_count": len(expanded_weight_mismatch_pairs),
+                "max_weight_l1_mismatch": max_expanded_shell_mismatch,
+                "recommended_response": "do_not_auto_apply_face_closure_as_weight_region",
+            }
+        )
+    if weight_mismatch_pairs:
+        alerts.append(
+            {
+                "code": "REGION_WEIGHT_SEAM_MISMATCH",
+                "message": "Nearby/coincident region and non-region vertices have materially different weights.",
+                "mismatch_pair_count": len(weight_mismatch_pairs),
+                "threshold": WEIGHT_SYNC_L1_THRESHOLD,
+                "max_weight_l1_mismatch": max(
+                    pair["weight_l1_mismatch"] for pair in weight_mismatch_pairs
+                ),
+                "recommended_response": "local_proximity_weight_sync",
+            }
+        )
 
     report = {
         "obj": str(args.obj),
@@ -255,16 +344,31 @@ def main() -> int:
         ],
         "expanded_face_closed_vertex_count": len(expanded),
         "shrunk_face_closed_vertex_count": len(shrunk),
+        "near_shell_pair_count": len(shell_pairs),
+        "near_shell_outside_vertex_count": len({pair["outside_vertex"] for pair in shell_pairs}),
+        "weight_mismatch_pair_count": len(weight_mismatch_pairs),
+        "expanded_near_shell_pair_count": len(expanded_shell_pairs),
+        "expanded_near_shell_outside_vertex_count": len(
+            {pair["outside_vertex"] for pair in expanded_shell_pairs}
+        ),
+        "expanded_weight_mismatch_pair_count": len(expanded_weight_mismatch_pairs),
+        "weight_mismatch_threshold": WEIGHT_SYNC_L1_THRESHOLD,
         "alerts": alerts,
         "mixed_triangles_sample": mixed[:60],
         "boundary_edges_sample": boundaries[:60],
+        "near_shell_pairs_sample": shell_pairs[:60],
+        "expanded_near_shell_pairs_sample": expanded_shell_pairs[:60],
+        "weight_mismatch_pairs_sample": weight_mismatch_pairs[:60],
+        "expanded_weight_mismatch_pairs_sample": expanded_weight_mismatch_pairs[:60],
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(f"wrote {args.output}")
     print(
         f"region={args.region} vertices={len(region)} mixed_triangles={len(mixed)} "
-        f"boundary_edges={len(boundaries)} expand_face_closed={len(expanded)} "
+        f"boundary_edges={len(boundaries)} near_shell_pairs={len(shell_pairs)} "
+        f"weight_mismatches={len(weight_mismatch_pairs)} expanded_near_shell_pairs={len(expanded_shell_pairs)} "
+        f"expanded_weight_mismatches={len(expanded_weight_mismatch_pairs)} expand_face_closed={len(expanded)} "
         f"shrink_face_closed={len(shrunk)} alerts={len(alerts)}"
     )
     for alert in alerts:
