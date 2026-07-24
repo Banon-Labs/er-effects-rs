@@ -507,19 +507,30 @@ impl Phase {
                 sem.open_menu == i64::from(crate::input_scheduler::WEAPON_UPGRADE_OPEN_MENU_ID)
             }
             Phase::BuildStrengthenDialog => {
+                if frame == 0 {
+                    let baseline = last_row_snapshot().serial;
+                    DIALOG_ROW_BASELINE_SERIAL.store(baseline, Ordering::SeqCst);
+                    harness_log!(
+                        "upgrade-det: build dialog row baseline serial={baseline}; requiring a fresh weapon row from the open strengthen shell"
+                    );
+                }
                 issue_pad_taps_once(&[PadButton::Confirm], frame);
                 let gate = top_window_dialog_accept_gate();
                 let row = last_row_snapshot();
-                let weapon_row = last_selected_row_is_weapon();
+                let baseline = DIALOG_ROW_BASELINE_SERIAL.load(Ordering::SeqCst);
+                let fresh_row = row.serial > baseline;
+                let weapon_row = fresh_row && last_selected_row_is_weapon();
                 if frame % TAP_CYCLE_FRAMES == 0 {
                     harness_log!(
-                        "upgrade-det: build dialog semaphores dialog_exists={} dialog_ready={} open_menu={} row_kind={} row_item_id=0x{:x} row_serial={}",
+                        "upgrade-det: build dialog semaphores dialog_exists={} dialog_ready={} open_menu={} row_kind={} row_item_id=0x{:x} row_serial={} row_baseline={} fresh_row={}",
                         gate.is_some() as u8,
                         gate.is_some_and(crate::input_scheduler::DialogAcceptGate::is_ready) as u8,
                         sem.open_menu,
                         row.kind.as_str(),
                         row.item_id,
-                        row.serial
+                        row.serial,
+                        baseline,
+                        fresh_row as u8
                     );
                 }
                 gate.is_some() && weapon_row
@@ -788,6 +799,7 @@ static POPUP_FRAME: AtomicU64 = AtomicU64::new(0);
 static MODE_IDX: AtomicUsize = AtomicUsize::new(usize::MAX);
 static BUFFERED_OK_READY_AT_QUEUE: AtomicBool = AtomicBool::new(false);
 static BUFFERED_OK_DIALOG_PTR: AtomicUsize = AtomicUsize::new(0);
+static DIALOG_ROW_BASELINE_SERIAL: AtomicU64 = AtomicU64::new(0);
 static DERAILED: AtomicBool = AtomicBool::new(false);
 static ONFRAME_IM_NULL_DIAG: AtomicBool = AtomicBool::new(false);
 /// currentTopMenuJob (+0xB0) recorded at IngameTop, to detect the submenu-entry replacement.
