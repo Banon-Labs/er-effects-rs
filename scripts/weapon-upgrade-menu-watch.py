@@ -25,6 +25,7 @@ from pathlib import Path
 
 POLL_SECONDS = 2.0
 KILL_VERIFY_SECONDS = 2.0
+NO_PHASES_MIN_SECONDS = 60.0
 _POLL_WAIT = threading.Event()
 
 
@@ -101,6 +102,7 @@ def main() -> int:
     pre_er = {int(x) for x in args.pre_er_pids.split() if x.isdigit()}
     pre_me3 = {int(x) for x in args.pre_me3_pids.split() if x.isdigit()}
     phases = args.game_dir / "er-input-harness-phases.jsonl"
+    harness_log = args.game_dir / "er-input-harness.log"
 
     start = time.monotonic()
     decisive = 0.0
@@ -108,12 +110,18 @@ def main() -> int:
     while True:
         elapsed = time.monotonic() - start
         if elapsed >= args.max_seconds:
-            verdict = "CAP_BACKSTOP"
+            outcomes = phase_outcomes(phases)
+            if not outcomes and not harness_log.exists() and elapsed >= NO_PHASES_MIN_SECONDS:
+                verdict = "NO_HARNESS_PHASES"
+            else:
+                verdict = "CAP_BACKSTOP"
             break
         outcomes = phase_outcomes(phases)
         opened = "advanced" in outcomes.get("open_weapon_upgrade_menu", set())
         dwell_done = "advanced" in outcomes.get("dwell_equip", set())
-        derailed = any("derailed" in outcomes_for_phase for outcomes_for_phase in outcomes.values())
+        derailed = any(
+            "derailed" in outcomes_for_phase for outcomes_for_phase in outcomes.values()
+        )
         if decisive == 0.0:
             if opened and dwell_done:
                 verdict = "PASS"
@@ -140,6 +148,8 @@ def main() -> int:
     lines = [
         f"verdict: {verdict}",
         f"elapsed_seconds: {int(time.monotonic() - start)}",
+        f"harness_log_exists: {harness_log.exists()}",
+        f"phases_exists: {phases.exists()}",
         status_line,
     ]
     phase_copy = args.artifact_dir / "er-input-harness-phases.jsonl"
