@@ -7,6 +7,8 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import subprocess
+import sys
 import tempfile
 import zipfile
 from pathlib import Path
@@ -24,6 +26,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument(
         "--install-script", default=Path("scripts/install_mushroom_man.py"), type=Path
+    )
+    parser.add_argument(
+        "--flver-summary",
+        type=Path,
+        help="optional generated FLVER patch summary; defaults to source-mod parent/fc_m_0000-lod-redirect-summary.txt when present",
     )
     return parser.parse_args()
 
@@ -51,6 +58,37 @@ def load_json(path: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise TypeError(f"expected object JSON in {path}")
     return data
+
+
+def resolve_flver_summary(source_mod: Path, override: Path | None) -> Path | None:
+    if override is not None:
+        return require_file(override, "FLVER patch summary")
+    candidate = source_mod.parent / "fc_m_0000-lod-redirect-summary.txt"
+    return candidate.resolve() if candidate.is_file() else None
+
+
+def run_model_guards(flver_summary: Path | None, connectivity_audit: Path) -> Path | None:
+    if flver_summary is None:
+        return None
+    guard_script = Path(__file__).with_name("route_a_mushroom_model_guard.py")
+    require_file(guard_script, "model guard script")
+    report_path = flver_summary.parent / "model-guard-report.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(guard_script),
+            "--flver-summary",
+            str(flver_summary),
+            "--connectivity-audit",
+            str(connectivity_audit),
+            "--output",
+            str(report_path),
+        ],
+        check=False,
+    )
+    if result.returncode != 0:
+        raise SystemExit(f"model guard failed; see {report_path}")
+    return report_path
 
 
 def write_readme(path: Path, summary: dict[str, Any]) -> None:
@@ -124,8 +162,11 @@ def main() -> int:
     args = parse_args()
     source_mod = require_dir(args.source_mod, "source mod")
     summary = load_json(require_file(args.summary, "export summary"))
-    audit = load_json(require_file(args.audit, "connectivity audit"))
+    audit_path = require_file(args.audit, "connectivity audit")
+    audit = load_json(audit_path)
     install_script = require_file(args.install_script, "installer")
+    flver_summary = resolve_flver_summary(source_mod, args.flver_summary)
+    run_model_guards(flver_summary, audit_path)
     with tempfile.TemporaryDirectory(prefix="mushroom-man-release-") as temp_dir:
         staging = Path(temp_dir)
         shutil.copytree(source_mod, staging / ZIP_ROOT)
