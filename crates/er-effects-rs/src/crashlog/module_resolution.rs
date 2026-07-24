@@ -20,6 +20,136 @@ unsafe fn find_text_section(base: usize) -> Option<(usize, usize)> {
     None
 }
 
+/// x86-64 loader-walk offsets used to enumerate loaded modules at fault time. All reads go through
+/// `safe_read_usize`/`safe_read_u16` (ReadProcessMemory-guarded), so a torn/unmapped loader node
+/// yields `None` and stops the walk instead of re-faulting into the VEH.
+const PEB_LDR_OFFSET: usize = 0x18;
+const PEB_LDR_IN_MEMORY_ORDER_LIST_OFFSET: usize = 0x20;
+/// An InMemoryOrderModuleList node points at LDR_DATA_TABLE_ENTRY+0x10; subtract to reach the entry.
+const LDR_ENTRY_IN_MEMORY_ORDER_LINKS_OFFSET: usize = 0x10;
+const LDR_ENTRY_DLL_BASE_OFFSET: usize = 0x30;
+const LDR_ENTRY_SIZE_OF_IMAGE_OFFSET: usize = 0x40;
+/// BaseDllName UNICODE_STRING: `Length`(u16) at +0x58, `Buffer`(PWSTR) at +0x60 (UNICODE_STRING+0x8).
+const LDR_ENTRY_BASE_DLL_NAME_OFFSET: usize = 0x58;
+const UNICODE_STRING_BUFFER_OFFSET: usize = 0x8;
+/// Defensive cap on modules walked (a corrupt/looping loader list must not spin the fault handler).
+const MODULE_WALK_MAX: usize = 512;
+/// Defensive cap on wide chars read for a single module's BaseDllName.
+const MODULE_NAME_MAX_WCHARS: usize = 260;
+/// Loader pointers below this are never a valid PEB/Ldr/entry/name buffer -- treat as "stop".
+const MODULE_WALK_MIN_PTR: usize = 0x1000;
+
+/// Read the current thread's PEB pointer from `gs:[0x60]` (TEB->ProcessEnvironmentBlock on x86-64).
+/// Reading it directly means the loaded-module walk needs no ntdll/psapi call at fault time.
+#[cfg(all(windows, target_arch = "x86_64"))]
+#[inline(always)]
+fn current_peb() -> usize {
+    let peb: usize;
+    // A plain segment-relative load of an always-mapped TEB field; touches no stack and no flags.
+    unsafe {
+        core::arch::asm!(
+            "mov {peb}, gs:[0x60]",
+            peb = out(reg) peb,
+            options(nostack, preserves_flags),
+        );
+    }
+    peb
+}
+
+/// Decode a module's BaseDllName (UTF-16 UNICODE_STRING at LDR entry +0x58) into a String. `Length`
+/// is a byte count; each wide char is read guarded so a torn buffer just truncates the name.
+#[cfg(all(windows, target_arch = "x86_64"))]
+fn read_module_base_name(entry: usize) -> String {
+    let name_field = entry + LDR_ENTRY_BASE_DLL_NAME_OFFSET;
+    let len_bytes = unsafe { safe_read_u16(name_field) }.unwrap_or(0) as usize;
+    let Some(buffer) = (unsafe { safe_read_usize(name_field + UNICODE_STRING_BUFFER_OFFSET) }) else {
+        return String::new();
+    };
+    if buffer < MODULE_WALK_MIN_PTR || len_bytes == 0 {
+        return String::new();
+    }
+    let wchars = (len_bytes / core::mem::size_of::<u16>()).min(MODULE_NAME_MAX_WCHARS);
+    let mut units: Vec<u16> = Vec::with_capacity(wchars);
+    let mut index = 0usize;
+    while index < wchars {
+        match unsafe { safe_read_u16(buffer + index * core::mem::size_of::<u16>()) } {
+            Some(unit) => units.push(unit),
+            None => break,
+        }
+        index += 1;
+    }
+    // A loader BaseDllName is well-formed UTF-16; a lossy decode only affects the diagnostic label
+    // and is preferable to erroring at fault time (from_utf16_lossy, not the banned from_utf8_lossy).
+    String::from_utf16_lossy(&units)
+}
+
+/// Snapshot the loaded modules as `(base, size, name)` by walking
+/// PEB->Ldr->InMemoryOrderModuleList. Rebuilt per access violation (AVs are rate-limited) rather
+/// than cached, since modules load over the process lifetime and the fault-time snapshot must
+/// reflect what is mapped now. Returns an empty Vec if the loader chain cannot be read. Enables the
+/// AV path to name return addresses in ANY module (me3_mod_host.dll, ntdll.dll, our own er_*.dll),
+/// matching the `module+0xoffset` shape `scripts/parse-crash-dump.py` prints from a minidump.
+#[cfg(all(windows, target_arch = "x86_64"))]
+pub(crate) fn loaded_modules() -> Vec<(usize, usize, String)> {
+    let mut modules: Vec<(usize, usize, String)> = Vec::new();
+    let peb = current_peb();
+    if peb < MODULE_WALK_MIN_PTR {
+        return modules;
+    }
+    let Some(ldr) = (unsafe { safe_read_usize(peb + PEB_LDR_OFFSET) }) else {
+        return modules;
+    };
+    if ldr < MODULE_WALK_MIN_PTR {
+        return modules;
+    }
+    let list_head = ldr + PEB_LDR_IN_MEMORY_ORDER_LIST_OFFSET;
+    let Some(mut node) = (unsafe { safe_read_usize(list_head) }) else {
+        return modules;
+    };
+    let mut count = 0usize;
+    while node != list_head && node >= MODULE_WALK_MIN_PTR && count < MODULE_WALK_MAX {
+        let entry = node - LDR_ENTRY_IN_MEMORY_ORDER_LINKS_OFFSET;
+        let base = unsafe { safe_read_usize(entry + LDR_ENTRY_DLL_BASE_OFFSET) }
+            .unwrap_or(NULL_MODULE_BASE);
+        let size = unsafe { safe_read_usize(entry + LDR_ENTRY_SIZE_OF_IMAGE_OFFSET) }
+            .map(|value| value & PE_U32_MASK)
+            .unwrap_or(0);
+        if base != NULL_MODULE_BASE && size != 0 {
+            modules.push((base, size, read_module_base_name(entry)));
+        }
+        let Some(next) = (unsafe { safe_read_usize(node) }) else {
+            break;
+        };
+        if next == node {
+            break;
+        }
+        node = next;
+        count += 1;
+    }
+    modules
+}
+
+/// Non-Windows / non-x86-64 stub: no loader walk available; the AV path degrades to `modbt=[]`.
+#[cfg(not(all(windows, target_arch = "x86_64")))]
+pub(crate) fn loaded_modules() -> Vec<(usize, usize, String)> {
+    Vec::new()
+}
+
+/// Return `(name, offset)` for the first loaded module whose `[base, base+size)` contains `addr`.
+pub(crate) fn module_for_addr(
+    addr: usize,
+    modules: &[(usize, usize, String)],
+) -> Option<(&str, usize)> {
+    for (base, size, name) in modules {
+        if let Some(offset) = addr.checked_sub(*base) {
+            if offset < *size {
+                return Some((name.as_str(), offset));
+            }
+        }
+    }
+    None
+}
+
 /// Port of ProDebug's patchDbgChecks, corrected for ER 1.16.1: scan THIS module's .text (resolved
 /// from the real game_module_base, not GetModuleHandle(NULL) which ProDebug got wrong under the
 /// LazyLoader) for the timed anti-debug patterns and neutralize them, so debug exceptions reach
