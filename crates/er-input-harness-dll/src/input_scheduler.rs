@@ -8,6 +8,31 @@
 
 use std::collections::VecDeque;
 
+/// Native modal/dialog OK-readiness gate extracted from the `CS::MessageBoxDialog` OK path.
+///
+/// The engine can render a dialog before OK is valid. The OK handler commits only when its elapsed
+/// fade/settle accumulator has reached the required duration (`dialog+0x2300 >= dialog+0x1278` in
+/// the 1.16.x dump/deobf evidence). This helper keeps that predicate explicit and testable so the
+/// scheduler can wait instead of replaying raw confirms blindly.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct DialogAcceptGate {
+    pub(crate) required_elapsed: f32,
+    pub(crate) elapsed: f32,
+}
+
+impl DialogAcceptGate {
+    pub(crate) const fn new(required_elapsed: f32, elapsed: f32) -> Self {
+        Self {
+            required_elapsed,
+            elapsed,
+        }
+    }
+
+    pub(crate) fn is_ready(self) -> bool {
+        self.required_elapsed <= self.elapsed
+    }
+}
+
 /// High-level input the harness intends to perform once its native readiness predicate passes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InputIntentKind {
@@ -196,6 +221,20 @@ mod tests {
 
     fn confirm() -> InputIntent {
         InputIntent::confirm(2, 2, 10)
+    }
+
+    #[test]
+    fn dialog_accept_gate_waits_for_native_fade_settle() {
+        assert!(!DialogAcceptGate::new(0.25, 0.0).is_ready());
+        assert!(!DialogAcceptGate::new(0.25, 0.249).is_ready());
+        assert!(DialogAcceptGate::new(0.25, 0.25).is_ready());
+        assert!(DialogAcceptGate::new(0.25, 0.5).is_ready());
+    }
+
+    #[test]
+    fn dialog_accept_gate_does_not_treat_nan_as_ready() {
+        assert!(!DialogAcceptGate::new(f32::NAN, 1.0).is_ready());
+        assert!(!DialogAcceptGate::new(0.25, f32::NAN).is_ready());
     }
 
     #[test]
