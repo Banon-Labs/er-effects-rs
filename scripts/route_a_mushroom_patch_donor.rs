@@ -35,6 +35,8 @@ const SPINE_COMPENSATION_CENTER_BOOST: f32 = 0.45;
 const SPINE_COMPENSATION_CORE_RADIUS_MIN: f32 = 0.08;
 const SPINE_COMPENSATION_CORE_RADIUS_MAX: f32 = 0.16;
 const SPINE_COMPENSATION_METRIC_CORE_RADIUS: f32 = 0.10;
+const REGION_FEET_BODY_BLEND_STRENGTH: f32 = 0.30;
+const REGION_FEET_REGION_STRENGTH: f32 = 0.78;
 
 const HEADER_SIZE: usize = 0x80;
 const DUMMY_SIZE: usize = 0x40;
@@ -143,6 +145,23 @@ struct SourceMesh {
     bbox_min: Vec3,
     bbox_max: Vec3,
     weight_compensation: WeightCompensationReport,
+    region_response: RegionResponseReport,
+}
+
+#[derive(Clone, Debug, Default)]
+struct RegionResponseReport {
+    enabled: bool,
+    region_map_path: String,
+    feet_authored_vertices: usize,
+    feet_expanded_vertices: usize,
+    feet_shrunk_vertices: usize,
+    feet_normalized_vertices: usize,
+    feet_blend_band_vertices: usize,
+    feet_mixed_triangles_before: usize,
+    feet_mixed_triangles_after: usize,
+    feet_boundary_edges_before: usize,
+    feet_boundary_edges_after: usize,
+    response: String,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -176,6 +195,7 @@ struct Config {
     summary_path: PathBuf,
     donor_mesh_index: usize,
     spine_core_compensation: bool,
+    region_map_tsv: Option<PathBuf>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -188,6 +208,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &config.weights_path,
         &donor_lookup,
         config.spine_core_compensation,
+        config.region_map_tsv.as_ref(),
     )?;
 
     let patch_report = patch_donor_flver(&mut donor_bytes, &source, config.donor_mesh_index)?;
@@ -211,6 +232,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         source.weight_compensation.hard_spine_limb_edges_before,
         source.weight_compensation.hard_spine_limb_edges_after
     );
+    if source.region_response.enabled {
+        println!(
+            "region_response feet={}→{} mixed_triangles={}→{} blend_band={} response={}",
+            source.region_response.feet_authored_vertices,
+            source.region_response.feet_normalized_vertices,
+            source.region_response.feet_mixed_triangles_before,
+            source.region_response.feet_mixed_triangles_after,
+            source.region_response.feet_blend_band_vertices,
+            source.region_response.response
+        );
+    }
     Ok(())
 }
 
@@ -229,6 +261,7 @@ fn parse_args() -> Result<Config, Box<dyn std::error::Error>> {
     let mut summary_path = PathBuf::from(DEFAULT_SUMMARY);
     let mut donor_mesh_index = DEFAULT_DONOR_MESH_INDEX;
     let mut spine_core_compensation = true;
+    let mut region_map_tsv = None;
 
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -242,6 +275,9 @@ fn parse_args() -> Result<Config, Box<dyn std::error::Error>> {
                 donor_mesh_index = required_value(&arg, args.next())?.parse()?
             }
             "--no-spine-core-compensation" => spine_core_compensation = false,
+            "--region-map-tsv" => {
+                region_map_tsv = Some(PathBuf::from(required_value(&arg, args.next())?))
+            }
             "--help" | "-h" => {
                 print_help();
                 std::process::exit(0);
@@ -258,6 +294,7 @@ fn parse_args() -> Result<Config, Box<dyn std::error::Error>> {
         summary_path,
         donor_mesh_index,
         spine_core_compensation,
+        region_map_tsv,
     })
 }
 
@@ -274,6 +311,7 @@ fn print_help() {
     println!("  --summary <path>          default: {DEFAULT_SUMMARY}");
     println!("  --donor-mesh-index <idx>  default: {DEFAULT_DONOR_MESH_INDEX}");
     println!("  --no-spine-core-compensation  disable automatic mushroom trunk/cap spine-weight self-healing");
+    println!("  --region-map-tsv <path>  apply human-authored region responses, e.g. feet face-closure/blend");
 }
 
 fn read_obj(path: &PathBuf) -> Result<SourceMesh, Box<dyn std::error::Error>> {
@@ -343,6 +381,7 @@ fn read_obj(path: &PathBuf) -> Result<SourceMesh, Box<dyn std::error::Error>> {
         bbox_min,
         bbox_max,
         weight_compensation: WeightCompensationReport::default(),
+        region_response: RegionResponseReport::default(),
     })
 }
 
@@ -360,6 +399,7 @@ fn apply_weights(
     path: &PathBuf,
     donor_lookup: &DonorBoneLookup,
     spine_core_compensation: bool,
+    region_map_tsv: Option<&PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let text = fs::read_to_string(path)?;
     let mut accum = vec![[0.0_f32; 256]; mesh.vertices.len()];
@@ -389,6 +429,9 @@ fn apply_weights(
 
     if spine_core_compensation {
         mesh.weight_compensation = compensate_spine_core_weights(mesh, &mut accum, donor_lookup)?;
+    }
+    if let Some(region_map_tsv) = region_map_tsv {
+        mesh.region_response = apply_region_responses(mesh, &mut accum, region_map_tsv, donor_lookup)?;
     }
 
     for (vertex_index, vertex) in mesh.vertices.iter_mut().enumerate() {
@@ -685,6 +728,209 @@ fn spine_target_weights(
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a * (1.0 - t) + b * t
+}
+
+fn apply_region_responses(
+    mesh: &SourceMesh,
+    accum: &mut [[f32; 256]],
+    region_map_tsv: &PathBuf,
+    donor_lookup: &DonorBoneLookup,
+) -> Result<RegionResponseReport, Box<dyn std::error::Error>> {
+    let regions = read_region_map_tsv(region_map_tsv)?;
+    let authored_feet = match regions.get("feet") {
+        Some(region) if !region.is_empty() => region.clone(),
+        _ => {
+            return Ok(RegionResponseReport {
+                enabled: true,
+                region_map_path: region_map_tsv.display().to_string(),
+                response: "no_feet_region_found".to_string(),
+                ..RegionResponseReport::default()
+            });
+        }
+    };
+
+    let expanded_feet = face_closed_region(mesh, &authored_feet, FaceClosureMode::Expand);
+    let shrunk_feet = face_closed_region(mesh, &authored_feet, FaceClosureMode::Shrink);
+    // The human-authored foot split is a positive signal: preserve that intent by
+    // expanding ambiguous cuts to whole triangles rather than shrinking away most
+    // of the hand-marked foot geometry.
+    let normalized_feet = expanded_feet.clone();
+    let blend_band = outside_boundary_vertices(mesh, &normalized_feet);
+
+    let center_x = (mesh.bbox_min.x + mesh.bbox_max.x) * 0.5;
+    let left_foot = resolve_required_bone_u8(donor_lookup, "L_Foot")?;
+    let right_foot = resolve_required_bone_u8(donor_lookup, "R_Foot")?;
+    let left_calf = resolve_required_bone_u8(donor_lookup, "L_Calf")?;
+    let right_calf = resolve_required_bone_u8(donor_lookup, "R_Calf")?;
+    let pelvis = resolve_required_bone_u8(donor_lookup, "Pelvis")?;
+
+    for vertex_index in &normalized_feet {
+        apply_lower_limb_target(
+            &mut accum[*vertex_index],
+            mesh.vertices[*vertex_index].position.x,
+            center_x,
+            left_foot,
+            right_foot,
+            left_calf,
+            right_calf,
+            pelvis,
+            REGION_FEET_REGION_STRENGTH,
+        );
+    }
+    for vertex_index in &blend_band {
+        apply_lower_limb_target(
+            &mut accum[*vertex_index],
+            mesh.vertices[*vertex_index].position.x,
+            center_x,
+            left_foot,
+            right_foot,
+            left_calf,
+            right_calf,
+            pelvis,
+            REGION_FEET_BODY_BLEND_STRENGTH,
+        );
+    }
+
+    Ok(RegionResponseReport {
+        enabled: true,
+        region_map_path: region_map_tsv.display().to_string(),
+        feet_authored_vertices: authored_feet.len(),
+        feet_expanded_vertices: expanded_feet.len(),
+        feet_shrunk_vertices: shrunk_feet.len(),
+        feet_normalized_vertices: normalized_feet.len(),
+        feet_blend_band_vertices: blend_band.len(),
+        feet_mixed_triangles_before: mixed_triangle_count(mesh, &authored_feet),
+        feet_mixed_triangles_after: mixed_triangle_count(mesh, &normalized_feet),
+        feet_boundary_edges_before: boundary_edge_count(mesh, &authored_feet),
+        feet_boundary_edges_after: boundary_edge_count(mesh, &normalized_feet),
+        response: "expand_to_face_closed_region_and_add_blend_band".to_string(),
+    })
+}
+
+fn read_region_map_tsv(
+    path: &PathBuf,
+) -> Result<HashMap<String, HashSet<usize>>, Box<dyn std::error::Error>> {
+    let text = fs::read_to_string(path)?;
+    let mut regions: HashMap<String, HashSet<usize>> = HashMap::new();
+    for (line_index, line) in text.lines().enumerate() {
+        if line_index == 0 || line.trim().is_empty() {
+            continue;
+        }
+        let cols: Vec<&str> = line.split('\t').collect();
+        if cols.len() != 2 {
+            return Err(format!("malformed region TSV line {}: {line}", line_index + 1).into());
+        }
+        let region = cols[0].to_string();
+        let vertex_index = cols[1].parse::<usize>()?;
+        regions.entry(region).or_default().insert(vertex_index);
+    }
+    Ok(regions)
+}
+
+#[derive(Clone, Copy)]
+enum FaceClosureMode {
+    Expand,
+    Shrink,
+}
+
+fn face_closed_region(
+    mesh: &SourceMesh,
+    region: &HashSet<usize>,
+    mode: FaceClosureMode,
+) -> HashSet<usize> {
+    let mut closed = region.clone();
+    let mut changed = true;
+    let mut iterations = 0;
+    while changed && iterations < 32 {
+        changed = false;
+        iterations += 1;
+        for triangle in &mesh.triangles {
+            let vertices = [triangle[0] as usize, triangle[1] as usize, triangle[2] as usize];
+            let inside = vertices.iter().filter(|vertex| closed.contains(vertex)).count();
+            if inside == 0 || inside == 3 {
+                continue;
+            }
+            let before = closed.len();
+            match mode {
+                FaceClosureMode::Expand => {
+                    closed.extend(vertices);
+                }
+                FaceClosureMode::Shrink => {
+                    for vertex in vertices {
+                        closed.remove(&vertex);
+                    }
+                }
+            }
+            changed |= before != closed.len();
+        }
+    }
+    closed
+}
+
+fn mixed_triangle_count(mesh: &SourceMesh, region: &HashSet<usize>) -> usize {
+    mesh.triangles
+        .iter()
+        .filter(|triangle| {
+            let inside = triangle
+                .iter()
+                .filter(|vertex| region.contains(&(**vertex as usize)))
+                .count();
+            inside > 0 && inside < 3
+        })
+        .count()
+}
+
+fn boundary_edge_count(mesh: &SourceMesh, region: &HashSet<usize>) -> usize {
+    unique_triangle_edges(&mesh.triangles)
+        .into_iter()
+        .filter(|(a, b)| region.contains(&(*a as usize)) != region.contains(&(*b as usize)))
+        .count()
+}
+
+fn outside_boundary_vertices(mesh: &SourceMesh, region: &HashSet<usize>) -> HashSet<usize> {
+    let mut vertices = HashSet::new();
+    for (a, b) in unique_triangle_edges(&mesh.triangles) {
+        let a_inside = region.contains(&(a as usize));
+        let b_inside = region.contains(&(b as usize));
+        if a_inside == b_inside {
+            continue;
+        }
+        if a_inside {
+            vertices.insert(b as usize);
+        } else {
+            vertices.insert(a as usize);
+        }
+    }
+    vertices
+}
+
+fn apply_lower_limb_target(
+    weights: &mut [f32; 256],
+    x: f32,
+    center_x: f32,
+    left_foot: u8,
+    right_foot: u8,
+    left_calf: u8,
+    right_calf: u8,
+    pelvis: u8,
+    strength: f32,
+) {
+    let total = weights.iter().sum::<f32>();
+    if total <= 0.0 {
+        return;
+    }
+    let (foot, calf) = if x >= center_x {
+        (left_foot, left_calf)
+    } else {
+        (right_foot, right_calf)
+    };
+    for weight in weights.iter_mut() {
+        *weight *= 1.0 - strength;
+    }
+    weights[foot as usize] += total * strength * 0.72;
+    weights[calf as usize] += total * strength * 0.25;
+    weights[pelvis as usize] += total * strength * 0.03;
+    normalize_accumulated_weights(weights);
 }
 
 fn patch_donor_flver(
@@ -1194,6 +1440,21 @@ fn write_summary(
     writeln!(file, "donor_flver={}", config.donor_flver.display())?;
     writeln!(file, "output_flver={}", config.output_flver.display())?;
     writeln!(file, "donor_mesh_index={}", config.donor_mesh_index)?;
+    if let Some(region_map_tsv) = &config.region_map_tsv {
+        writeln!(file, "region_map_tsv={}", region_map_tsv.display())?;
+    }
+    writeln!(file, "region_response_enabled={}", source.region_response.enabled)?;
+    if source.region_response.enabled {
+        writeln!(file, "region_response_map={}", source.region_response.region_map_path)?;
+        writeln!(file, "feet_region_response={}", source.region_response.response)?;
+        writeln!(file, "feet_authored_vertices={}", source.region_response.feet_authored_vertices)?;
+        writeln!(file, "feet_expanded_vertices={}", source.region_response.feet_expanded_vertices)?;
+        writeln!(file, "feet_shrunk_vertices={}", source.region_response.feet_shrunk_vertices)?;
+        writeln!(file, "feet_normalized_vertices={}", source.region_response.feet_normalized_vertices)?;
+        writeln!(file, "feet_blend_band_vertices={}", source.region_response.feet_blend_band_vertices)?;
+        writeln!(file, "feet_mixed_triangles_before_after={},{}", source.region_response.feet_mixed_triangles_before, source.region_response.feet_mixed_triangles_after)?;
+        writeln!(file, "feet_boundary_edges_before_after={},{}", source.region_response.feet_boundary_edges_before, source.region_response.feet_boundary_edges_after)?;
+    }
     writeln!(
         file,
         "spine_core_compensation_enabled={}",
