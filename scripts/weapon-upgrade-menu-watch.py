@@ -111,7 +111,11 @@ def main() -> int:
         elapsed = time.monotonic() - start
         if elapsed >= args.max_seconds:
             outcomes = phase_outcomes(phases)
-            if not outcomes and not harness_log.exists() and elapsed >= NO_PHASES_MIN_SECONDS:
+            if (
+                not outcomes
+                and not harness_log.exists()
+                and elapsed >= NO_PHASES_MIN_SECONDS
+            ):
                 verdict = "NO_HARNESS_PHASES"
             else:
                 verdict = "CAP_BACKSTOP"
