@@ -4,8 +4,10 @@
 
 This keeps the donor mesh vertex count, vertex order, face-set lists, and index buffers intact.
 Only selected mesh vertex positions/normals and the mesh/header bounding boxes are rewritten.
-That preserves the game's existing FC LOD face sets so distance switches draw coherent subsets
-of the same morphed donor surface instead of truncated subsets of a replacement mesh.
+By default, the selected meshes are the base body material islands (#03#..#16#), while
+hair/plane/special donor meshes are hidden. That preserves the game's existing FC LOD
+face sets so distance switches draw coherent subsets of the same morphed donor surface
+instead of truncated subsets of a replacement mesh.
 """
 
 from __future__ import annotations
@@ -50,11 +52,18 @@ class Vec3:
 
 @dataclass(frozen=True)
 class Mesh:
+    material_index: int
     bounding_box_offset: int
     face_set_count: int
     face_set_offset: int
     vertex_buffer_count: int
     vertex_buffer_offset: int
+
+
+@dataclass(frozen=True)
+class Material:
+    name: str
+    matxml: str
 
 
 @dataclass(frozen=True)
@@ -108,13 +117,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--donor-flver", required=True, type=Path)
     parser.add_argument("--output-flver", required=True, type=Path)
     parser.add_argument("--summary", required=True, type=Path)
-    parser.add_argument("--donor-mesh-index", required=True, type=int)
+    parser.add_argument(
+        "--donor-mesh-index",
+        action="append",
+        type=int,
+        default=[],
+        help=(
+            "mesh index to morph; may be passed repeatedly. Defaults to every "
+            "base body material island (#NN# with no _hairy/_plane/_Special suffix)."
+        ),
+    )
     parser.add_argument("--bins", type=int, default=DEFAULT_BINS)
     parser.add_argument(
         "--material-index",
         type=int,
-        default=0,
-        help="material slot to assign to the morphed donor mesh; default keeps Route A mushroom material slot 0",
+        default=None,
+        help="optional material slot override; by default every selected donor mesh keeps its original material",
     )
     parser.add_argument(
         "--keep-other-meshes",
@@ -191,16 +209,14 @@ def parse_header(data: bytes | bytearray) -> Header:
 
 
 def table_offsets(header: Header) -> dict[str, int]:
-    bone_table = (
-        HEADER_SIZE
-        + DUMMY_SIZE * header.dummy_count
-        + MATERIAL_SIZE * header.material_count
-    )
+    material_table = HEADER_SIZE + DUMMY_SIZE * header.dummy_count
+    bone_table = material_table + MATERIAL_SIZE * header.material_count
     mesh_table = bone_table + BONE_SIZE * header.bone_count
     face_set_table = mesh_table + MESH_SIZE * header.mesh_count
     vertex_buffer_table = face_set_table + FACE_SET_SIZE * header.face_set_count
     layout_table = vertex_buffer_table + VERTEX_BUFFER_SIZE * header.vertex_buffer_count
     return {
+        "material": material_table,
         "mesh": mesh_table,
         "face_set": face_set_table,
         "vertex_buffer": vertex_buffer_table,
@@ -214,6 +230,7 @@ def parse_meshes(data: bytes | bytearray, offset: int, count: int) -> list[Mesh]
         base = offset + i * MESH_SIZE
         meshes.append(
             Mesh(
+                material_index=read_u32(data, base + MATERIAL_INDEX_OFFSET_IN_MESH),
                 bounding_box_offset=read_u32(data, base + 0x18),
                 face_set_count=read_u32(data, base + 0x20),
                 face_set_offset=read_u32(data, base + 0x24),
@@ -222,6 +239,33 @@ def parse_meshes(data: bytes | bytearray, offset: int, count: int) -> list[Mesh]
             )
         )
     return meshes
+
+
+def read_flver_string(data: bytes | bytearray, offset: int) -> str:
+    if offset <= 0 or offset >= len(data):
+        return ""
+    units: list[int] = []
+    cursor = offset
+    while cursor + 1 < len(data):
+        value = struct.unpack_from("<H", data, cursor)[0]
+        if value == 0:
+            break
+        units.append(value)
+        cursor += 2
+    return "".join(chr(value) for value in units)
+
+
+def parse_materials(data: bytes | bytearray, offset: int, count: int) -> list[Material]:
+    materials: list[Material] = []
+    for i in range(count):
+        base = offset + i * MATERIAL_SIZE
+        materials.append(
+            Material(
+                name=read_flver_string(data, read_u32(data, base)),
+                matxml=read_flver_string(data, read_u32(data, base + 0x04)),
+            )
+        )
+    return materials
 
 
 def parse_face_sets(
@@ -402,13 +446,30 @@ def read_donor_positions(
     ]
 
 
+def is_base_body_material(material: Material) -> bool:
+    return material.name.startswith("#") and material.name.endswith("#")
+
+
+def select_mesh_indices(
+    requested_indices: list[int], meshes: list[Mesh], materials: list[Material]
+) -> list[int]:
+    if requested_indices:
+        return sorted(set(requested_indices))
+    return [
+        index
+        for index, mesh in enumerate(meshes)
+        if mesh.material_index < len(materials)
+        and is_base_body_material(materials[mesh.material_index])
+    ]
+
+
 def morph_positions(
-    source_positions: list[Vec3], donor_positions: list[Vec3], bins: int
+    source_bounds: tuple[Vec3, Vec3],
+    source_envelope: list[float],
+    donor_bounds: tuple[Vec3, Vec3],
+    donor_envelope: list[float],
+    donor_positions: list[Vec3],
 ) -> list[Vec3]:
-    source_bounds = bbox(source_positions)
-    donor_bounds = bbox(donor_positions)
-    source_envelope = envelope(source_positions, source_bounds, bins)
-    donor_envelope = envelope(donor_positions, donor_bounds, bins)
     source_min, source_max = source_bounds
 
     morphed: list[Vec3] = []
@@ -499,35 +560,83 @@ def main() -> int:
     )
     layouts = parse_layouts(data, offsets["layout"], header.buffer_layout_count)
 
-    donor_mesh = meshes[args.donor_mesh_index]
-    donor_mesh_table_offset = offsets["mesh"] + args.donor_mesh_index * MESH_SIZE
-    write_u32(
-        data,
-        donor_mesh_table_offset + MATERIAL_INDEX_OFFSET_IN_MESH,
-        args.material_index,
-    )
+    materials = parse_materials(data, offsets["material"], header.material_count)
+    selected_mesh_indices = select_mesh_indices(args.donor_mesh_index, meshes, materials)
+    invalid_indices = [index for index in selected_mesh_indices if index >= len(meshes)]
+    if invalid_indices:
+        raise ValueError(f"donor mesh index out of range: {invalid_indices}")
+    if not selected_mesh_indices:
+        raise ValueError("no donor meshes selected for topology-preserving morph")
 
-    vertex_buffer_indices = parse_u32_list(
-        data, donor_mesh.vertex_buffer_offset, donor_mesh.vertex_buffer_count
-    )
-    if not vertex_buffer_indices:
-        raise ValueError("selected donor mesh has no vertex buffers")
-    vertex_buffer = vertex_buffers[vertex_buffer_indices[0]]
-    layout = layouts[vertex_buffer.layout_index]
-    members = parse_layout_members(data, layout.member_offset, layout.member_count)
+    source_bounds = bbox(source_positions)
+    source_envelope = envelope(source_positions, source_bounds, args.bins)
+    selected_mesh_set = set(selected_mesh_indices)
+    selected_materials: list[str] = []
+    selected_vertex_contexts: dict[
+        int, list[tuple[VertexBuffer, list[LayoutMember], list[Vec3]]]
+    ] = {}
+    all_donor_positions: list[Vec3] = []
 
-    donor_positions = read_donor_positions(data, header, vertex_buffer, members)
-    morphed_positions = morph_positions(source_positions, donor_positions, args.bins)
-    patch_morphed_vertices(data, header, vertex_buffer, members, morphed_positions)
+    for mesh_index in selected_mesh_indices:
+        mesh = meshes[mesh_index]
+        material = materials[mesh.material_index]
+        selected_materials.append(f"{mesh_index}:{mesh.material_index}:{material.name}")
+        if args.material_index is not None:
+            write_u32(
+                data,
+                offsets["mesh"]
+                + mesh_index * MESH_SIZE
+                + MATERIAL_INDEX_OFFSET_IN_MESH,
+                args.material_index,
+            )
+        vertex_buffer_indices = parse_u32_list(
+            data, mesh.vertex_buffer_offset, mesh.vertex_buffer_count
+        )
+        if not vertex_buffer_indices:
+            raise ValueError(f"selected donor mesh {mesh_index} has no vertex buffers")
+        contexts: list[tuple[VertexBuffer, list[LayoutMember], list[Vec3]]] = []
+        for vertex_buffer_index in vertex_buffer_indices:
+            vertex_buffer = vertex_buffers[vertex_buffer_index]
+            layout = layouts[vertex_buffer.layout_index]
+            members = parse_layout_members(data, layout.member_offset, layout.member_count)
+            donor_positions = read_donor_positions(data, header, vertex_buffer, members)
+            contexts.append((vertex_buffer, members, donor_positions))
+            all_donor_positions.extend(donor_positions)
+        selected_vertex_contexts[mesh_index] = contexts
 
-    morphed_bounds = bbox(morphed_positions)
+    donor_bounds = bbox(all_donor_positions)
+    donor_envelope = envelope(all_donor_positions, donor_bounds, args.bins)
+    all_morphed_positions: list[Vec3] = []
+    morphed_vertex_count = 0
+
+    for mesh_index in selected_mesh_indices:
+        mesh = meshes[mesh_index]
+        mesh_morphed_positions: list[Vec3] = []
+        for vertex_buffer, members, donor_positions in selected_vertex_contexts[mesh_index]:
+            morphed_positions = morph_positions(
+                source_bounds,
+                source_envelope,
+                donor_bounds,
+                donor_envelope,
+                donor_positions,
+            )
+            patch_morphed_vertices(data, header, vertex_buffer, members, morphed_positions)
+            mesh_morphed_positions.extend(morphed_positions)
+            all_morphed_positions.extend(morphed_positions)
+            morphed_vertex_count += len(morphed_positions)
+        if mesh.bounding_box_offset:
+            write_bbox(data, mesh.bounding_box_offset, bbox(mesh_morphed_positions))
+
+    morphed_bounds = bbox(all_morphed_positions)
     write_bbox(data, HEADER_BBOX_MIN_OFFSET, morphed_bounds)
-    if donor_mesh.bounding_box_offset:
-        write_bbox(data, donor_mesh.bounding_box_offset, morphed_bounds)
 
-    selected_face_set_indices = set(
-        parse_u32_list(data, donor_mesh.face_set_offset, donor_mesh.face_set_count)
-    )
+    selected_face_set_indices: set[int] = set()
+    for mesh_index in selected_mesh_indices:
+        mesh = meshes[mesh_index]
+        selected_face_set_indices.update(
+            parse_u32_list(data, mesh.face_set_offset, mesh.face_set_count)
+        )
+
     retained_face_sets = 0
     hidden_face_sets = 0
     retained_face_set_capacities: list[int] = []
@@ -535,7 +644,7 @@ def main() -> int:
         indices = parse_u32_list(data, mesh.face_set_offset, mesh.face_set_count)
         for face_set_index in indices:
             face_set = face_sets[face_set_index]
-            if mesh_index == args.donor_mesh_index:
+            if mesh_index in selected_mesh_set:
                 retained_face_sets += 1
                 retained_face_set_capacities.append(face_set.index_count // 3)
             elif (
@@ -552,8 +661,6 @@ def main() -> int:
         )
     args.output_flver.parent.mkdir(parents=True, exist_ok=True)
     args.output_flver.write_bytes(data)
-
-    source_bounds = bbox(source_positions)
     args.summary.parent.mkdir(parents=True, exist_ok=True)
     args.summary.write_text(
         "\n".join(
@@ -563,8 +670,12 @@ def main() -> int:
                 f"source_obj={args.source_obj}",
                 f"donor_flver={args.donor_flver}",
                 f"output_flver={args.output_flver}",
-                f"donor_mesh_index={args.donor_mesh_index}",
-                f"donor_vertex_count={len(donor_positions)}",
+                f"requested_donor_mesh_indices={','.join(str(v) for v in args.donor_mesh_index) or '<default-base-body>'}",
+                f"selected_mesh_indices={','.join(str(v) for v in selected_mesh_indices)}",
+                f"selected_materials={','.join(selected_materials)}",
+                f"selected_mesh_count={len(selected_mesh_indices)}",
+                f"donor_vertex_count={len(all_donor_positions)}",
+                f"morphed_vertex_count={morphed_vertex_count}",
                 f"source_vertex_count={len(source_positions)}",
                 f"retained_face_sets={retained_face_sets}",
                 f"retained_face_set_triangle_capacities={','.join(str(v) for v in retained_face_set_capacities)}",
