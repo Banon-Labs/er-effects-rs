@@ -35,6 +35,14 @@ const SET_ITEM_REPLENISH_STATE_RVA: usize = 0x786430;
 const REPLANISH_ITEMS_FROM_CHEST_RVA: usize = 0x24dff0;
 /// `ItemReplenishStateTracker::ShouldReplenishItem(tracker, int *itemId)`.
 const SHOULD_REPLENISH_ITEM_RVA: usize = 0x23d990;
+/// `IsItemReplanishFromChestRequested()`: reads `GameMan->itemReplanishFromChestRequested`.
+const IS_ITEM_REPLANISH_FROM_CHEST_REQUESTED_RVA: usize = 0x67a050;
+/// `CS::MoveMapStep::UpdatePlayerInfo(this)`: native post-load player handoff. The function tail
+/// already consumes the vanilla chest-refill request flag, so a post-hook here is the load-complete
+/// point for deaths, map warps, continue/load, and other MoveMapStep-backed loading screens.
+const MOVE_MAP_STEP_UPDATE_PLAYER_INFO_RVA: usize = 0xafc160;
+/// `CS::CSLuaEventScriptImitation::OnEvent_BonfireFirstLvUp(this, proxy)`: first grace activation.
+const BONFIRE_FIRST_LVUP_RVA: usize = 0x59c1e0;
 
 /// `GameDataMan -> PlayerGameData` is shared in `er-game-base`; within `PlayerGameData`,
 /// the native `ItemReplenishStateTracker*` used by SetItemReplenishState sits at +0x5e8.
@@ -47,8 +55,13 @@ static LOG_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static HOOK_STATE: AtomicUsize = AtomicUsize::new(HOOK_INACTIVE);
 static GAME_BASE: AtomicUsize = AtomicUsize::new(0);
 static ORIG_SET_ITEM_REPLENISH_STATE: AtomicUsize = AtomicUsize::new(0);
+static ORIG_MOVE_MAP_STEP_UPDATE_PLAYER_INFO: AtomicUsize = AtomicUsize::new(0);
+static ORIG_BONFIRE_FIRST_LVUP: AtomicUsize = AtomicUsize::new(0);
 static TOGGLE_CALLS: AtomicU64 = AtomicU64::new(0);
 static IMMEDIATE_REFILLS: AtomicU64 = AtomicU64::new(0);
+static LOAD_COMPLETION_REFILLS: AtomicU64 = AtomicU64::new(0);
+static LOAD_COMPLETION_VANILLA_PENDING: AtomicU64 = AtomicU64::new(0);
+static FIRST_GRACE_REFILLS: AtomicU64 = AtomicU64::new(0);
 static SKIPPED_DISABLED_AFTER_TOGGLE: AtomicU64 = AtomicU64::new(0);
 static SKIPPED_NO_TRACKER: AtomicU64 = AtomicU64::new(0);
 
@@ -100,7 +113,7 @@ fn spawn_better_refills_task(module_base: usize) {
                 match game_module_base() {
                     Ok(base) => {
                         GAME_BASE.store(base, Ordering::SeqCst);
-                        install_set_item_replenish_state_hook(base);
+                        install_better_refills_hooks(base);
                         break;
                     }
                     Err(err) => {
@@ -118,7 +131,7 @@ fn spawn_better_refills_task(module_base: usize) {
 }
 
 #[cfg(windows)]
-fn install_set_item_replenish_state_hook(base: usize) {
+fn install_better_refills_hooks(base: usize) {
     use std::ffi::c_void;
 
     use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
@@ -134,33 +147,54 @@ fn install_set_item_replenish_state_hook(base: usize) {
         }
     }
 
-    let target = base + SET_ITEM_REPLENISH_STATE_RVA;
-    let hook = match unsafe {
-        MhHook::new(
-            target as *mut c_void,
+    let targets = [
+        (
+            "SetItemReplenishState",
+            base + SET_ITEM_REPLENISH_STATE_RVA,
             set_item_replenish_state_hook as *mut c_void,
-        )
-    } {
-        Ok(hook) => hook,
-        Err(status) => {
+            &ORIG_SET_ITEM_REPLENISH_STATE,
+        ),
+        (
+            "MoveMapStep::UpdatePlayerInfo",
+            base + MOVE_MAP_STEP_UPDATE_PLAYER_INFO_RVA,
+            move_map_step_update_player_info_hook as *mut c_void,
+            &ORIG_MOVE_MAP_STEP_UPDATE_PLAYER_INFO,
+        ),
+        (
+            "OnEvent_BonfireFirstLvUp",
+            base + BONFIRE_FIRST_LVUP_RVA,
+            bonfire_first_lvup_hook as *mut c_void,
+            &ORIG_BONFIRE_FIRST_LVUP,
+        ),
+    ];
+
+    for (name, target, detour, orig_slot) in targets {
+        let hook = match unsafe { MhHook::new(target as *mut c_void, detour) } {
+            Ok(hook) => hook,
+            Err(status) => {
+                log_message(format_args!(
+                    "install: MhHook::new({name} @0x{target:x}) failed: {status:?}"
+                ));
+                return;
+            }
+        };
+        orig_slot.store(hook.trampoline() as usize, Ordering::SeqCst);
+        if let Err(status) = unsafe { hook.queue_enable() } {
             log_message(format_args!(
-                "install: MhHook::new(SetItemReplenishState @0x{target:x}) failed: {status:?}"
+                "install: queue_enable({name} @0x{target:x}) failed: {status:?}"
             ));
             return;
         }
-    };
-    ORIG_SET_ITEM_REPLENISH_STATE.store(hook.trampoline() as usize, Ordering::SeqCst);
-    if let Err(status) = unsafe { hook.queue_enable() } {
-        log_message(format_args!(
-            "install: queue_enable(SetItemReplenishState) failed: {status:?}"
-        ));
-        return;
     }
+
     match unsafe { MH_ApplyQueued() } {
         MH_STATUS::MH_OK => {
             HOOK_STATE.store(HOOK_ACTIVE, Ordering::SeqCst);
             log_message(format_args!(
-                "install: SetItemReplenishState hook ACTIVE @0x{target:x}; native refill rva=0x{REPLANISH_ITEMS_FROM_CHEST_RVA:x}"
+                "install: hooks ACTIVE SetItemReplenishState @0x{:x}, MoveMapStep::UpdatePlayerInfo @0x{:x}, OnEvent_BonfireFirstLvUp @0x{:x}; native refill rva=0x{REPLANISH_ITEMS_FROM_CHEST_RVA:x}",
+                base + SET_ITEM_REPLENISH_STATE_RVA,
+                base + MOVE_MAP_STEP_UPDATE_PLAYER_INFO_RVA,
+                base + BONFIRE_FIRST_LVUP_RVA,
             ));
         }
         status => log_message(format_args!("install: MH_ApplyQueued failed: {status:?}")),
@@ -219,16 +253,111 @@ unsafe extern "system" fn set_item_replenish_state_hook(item_id: *mut i32) {
         return;
     }
 
+    let raw_item_id = unsafe { item_id.read_unaligned() };
+    if call_native_refill("storage-toggle-on") {
+        let refills = IMMEDIATE_REFILLS.fetch_add(1, Ordering::SeqCst) + 1;
+        log_message(format_args!(
+            "toggle#{call_index}: item=0x{raw_item_id:08x} enabled after toggle; called native ReplanishItemsFromChest (immediate_refills={refills})"
+        ));
+    } else {
+        log_message(format_args!(
+            "toggle#{call_index}: item=0x{raw_item_id:08x} enabled after toggle; skipped native ReplanishItemsFromChest: missing runtime context"
+        ));
+    }
+}
+
+/// Post-hook on `CS::MoveMapStep::UpdatePlayerInfo(this)`.
+///
+/// The original function is the native post-load player-info handoff and already consumes the
+/// vanilla `GameMan->itemReplanishFromChestRequested` flag at its tail. If that flag was pending at
+/// entry, the original performs the native refill and clears it; otherwise this hook adds the desired
+/// refill-on-load-completion behavior after the native player update returns.
+#[cfg(windows)]
+unsafe extern "system" fn move_map_step_update_player_info_hook(this: *mut core::ffi::c_void) {
+    let base = GAME_BASE.load(Ordering::SeqCst);
+    let vanilla_request_pending = if base == 0 {
+        false
+    } else {
+        type IsItemReplanishFromChestRequestedFn = unsafe extern "system" fn() -> bool;
+        let is_requested: IsItemReplanishFromChestRequestedFn =
+            unsafe { std::mem::transmute(base + IS_ITEM_REPLANISH_FROM_CHEST_REQUESTED_RVA) };
+        unsafe { is_requested() }
+    };
+
+    let orig = ORIG_MOVE_MAP_STEP_UPDATE_PLAYER_INFO.load(Ordering::SeqCst);
+    if orig != 0 {
+        let original: unsafe extern "system" fn(*mut core::ffi::c_void) =
+            unsafe { std::mem::transmute(orig) };
+        unsafe { original(this) };
+    }
+
+    if vanilla_request_pending {
+        let count = LOAD_COMPLETION_VANILLA_PENDING.fetch_add(1, Ordering::SeqCst) + 1;
+        if count <= 8 || count % 32 == 0 {
+            log_message(format_args!(
+                "load-complete#{count}: vanilla itemReplanishFromChestRequested was pending; original UpdatePlayerInfo consumed native refill"
+            ));
+        }
+        return;
+    }
+
+    if call_native_refill("load-complete") {
+        let count = LOAD_COMPLETION_REFILLS.fetch_add(1, Ordering::SeqCst) + 1;
+        if count <= 8 || count % 32 == 0 {
+            log_message(format_args!(
+                "load-complete#{count}: called native ReplanishItemsFromChest after MoveMapStep::UpdatePlayerInfo"
+            ));
+        }
+    }
+}
+
+/// Post-hook on first grace activation (`OnEvent_BonfireFirstLvUp`).
+#[cfg(windows)]
+unsafe extern "system" fn bonfire_first_lvup_hook(
+    this: *mut core::ffi::c_void,
+    proxy: *mut core::ffi::c_void,
+) {
+    let orig = ORIG_BONFIRE_FIRST_LVUP.load(Ordering::SeqCst);
+    if orig != 0 {
+        let original: unsafe extern "system" fn(*mut core::ffi::c_void, *mut core::ffi::c_void) =
+            unsafe { std::mem::transmute(orig) };
+        unsafe { original(this, proxy) };
+    }
+
+    if call_native_refill("first-grace-activation") {
+        let count = FIRST_GRACE_REFILLS.fetch_add(1, Ordering::SeqCst) + 1;
+        if count <= 8 || count % 32 == 0 {
+            log_message(format_args!(
+                "first-grace#{count}: called native ReplanishItemsFromChest after OnEvent_BonfireFirstLvUp"
+            ));
+        }
+    }
+}
+
+#[cfg(windows)]
+fn call_native_refill(source: &str) -> bool {
+    let base = GAME_BASE.load(Ordering::SeqCst);
+    if base == 0 {
+        log_message(format_args!(
+            "{source}: skipped native ReplanishItemsFromChest: missing game base"
+        ));
+        return false;
+    }
+    if unsafe { resolve_item_replenish_state_tracker() }.is_none() {
+        let skipped = SKIPPED_NO_TRACKER.fetch_add(1, Ordering::SeqCst) + 1;
+        if skipped <= 8 || skipped % 32 == 0 {
+            log_message(format_args!(
+                "{source}: skipped native ReplanishItemsFromChest: no ItemReplenishStateTracker (skipped_no_tracker={skipped})"
+            ));
+        }
+        return false;
+    }
+
     type ReplanishItemsFromChestFn = unsafe extern "system" fn();
     let refill: ReplanishItemsFromChestFn =
         unsafe { std::mem::transmute(base + REPLANISH_ITEMS_FROM_CHEST_RVA) };
     unsafe { refill() };
-
-    let refills = IMMEDIATE_REFILLS.fetch_add(1, Ordering::SeqCst) + 1;
-    let raw_item_id = unsafe { item_id.read_unaligned() };
-    log_message(format_args!(
-        "toggle#{call_index}: item=0x{raw_item_id:08x} enabled after toggle; called native ReplanishItemsFromChest (immediate_refills={refills})"
-    ));
+    true
 }
 
 #[cfg(windows)]
@@ -249,6 +378,9 @@ mod tests {
         assert_eq!(SET_ITEM_REPLENISH_STATE_RVA, 0x786430);
         assert_eq!(REPLANISH_ITEMS_FROM_CHEST_RVA, 0x24dff0);
         assert_eq!(SHOULD_REPLENISH_ITEM_RVA, 0x23d990);
+        assert_eq!(IS_ITEM_REPLANISH_FROM_CHEST_REQUESTED_RVA, 0x67a050);
+        assert_eq!(MOVE_MAP_STEP_UPDATE_PLAYER_INFO_RVA, 0xafc160);
+        assert_eq!(BONFIRE_FIRST_LVUP_RVA, 0x59c1e0);
         assert_eq!(PLAYER_GAME_DATA_ITEM_REPLENISH_TRACKER_OFFSET, 0x5e8);
     }
 }
