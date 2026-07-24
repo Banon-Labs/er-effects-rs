@@ -8,6 +8,8 @@
 
 use std::collections::VecDeque;
 
+use er_safe_input::SafeButton;
+
 /// Native modal/dialog OK-readiness gate extracted from the `CS::MessageBoxDialog` OK path.
 ///
 /// The engine can render a dialog before OK is valid. The OK handler commits only when its elapsed
@@ -35,27 +37,8 @@ impl DialogAcceptGate {
 
 /// High-level input the harness intends to perform once its native readiness predicate passes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum InputIntentKind {
-    /// Generic modal/dialog affirmative action. For weapon upgrade confirms this must be paired with
-    /// a dialog/readiness predicate and a reinforcement/economy effect predicate.
-    Confirm,
-    /// Generic cancel/back action.
-    Cancel,
-    /// Move selection in a menu row/list.
-    Navigate(NavDirection),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum NavDirection {
-    Up,
-    Down,
-    Left,
-    Right,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct InputIntent {
-    pub(crate) kind: InputIntentKind,
+    pub(crate) button: SafeButton,
     /// Number of consecutive frames to hold the input down once readiness opens.
     pub(crate) hold_frames: u8,
     /// Number of release frames required before another intent may emit.
@@ -66,17 +49,31 @@ pub(crate) struct InputIntent {
 }
 
 impl InputIntent {
-    pub(crate) const fn confirm(
+    pub(crate) const fn new(
+        button: SafeButton,
         hold_frames: u8,
         release_gap_frames: u8,
         max_wait_frames: u16,
     ) -> Self {
         Self {
-            kind: InputIntentKind::Confirm,
+            button,
             hold_frames,
             release_gap_frames,
             max_wait_frames,
         }
+    }
+
+    pub(crate) const fn confirm(
+        hold_frames: u8,
+        release_gap_frames: u8,
+        max_wait_frames: u16,
+    ) -> Self {
+        Self::new(
+            SafeButton::Confirm,
+            hold_frames,
+            release_gap_frames,
+            max_wait_frames,
+        )
     }
 }
 
@@ -93,12 +90,12 @@ pub(crate) struct IntentObservation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SchedulerDecision {
     Idle,
-    WaitForReady(InputIntentKind),
-    Emit(InputIntentKind),
-    ReleaseGap(InputIntentKind),
-    Completed(InputIntentKind),
-    DroppedStale(InputIntentKind),
-    TimedOut(InputIntentKind),
+    WaitForReady(SafeButton),
+    Emit(SafeButton),
+    ReleaseGap(SafeButton),
+    Completed(SafeButton),
+    DroppedStale(SafeButton),
+    TimedOut(SafeButton),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,15 +141,15 @@ impl SemanticInputScheduler {
             return SchedulerDecision::Idle;
         };
 
-        let kind = active.intent.kind;
+        let button = active.intent.button;
         if observation.stale {
             self.active = None;
-            return SchedulerDecision::DroppedStale(kind);
+            return SchedulerDecision::DroppedStale(button);
         }
 
         if active.age_frames >= active.intent.max_wait_frames {
             self.active = None;
-            return SchedulerDecision::TimedOut(kind);
+            return SchedulerDecision::TimedOut(button);
         }
         active.age_frames = active.age_frames.saturating_add(1);
 
@@ -163,52 +160,52 @@ impl SemanticInputScheduler {
                         remaining: active.intent.hold_frames.saturating_sub(1),
                     };
                     self.active = Some(active);
-                    SchedulerDecision::Emit(kind)
+                    SchedulerDecision::Emit(button)
                 } else {
                     self.active = Some(active);
-                    SchedulerDecision::WaitForReady(kind)
+                    SchedulerDecision::WaitForReady(button)
                 }
             }
             ActivePhase::Holding { remaining } => {
                 if remaining == 0 {
                     active.phase = ActivePhase::AwaitingEffect;
                     self.active = Some(active);
-                    SchedulerDecision::ReleaseGap(kind)
+                    SchedulerDecision::ReleaseGap(button)
                 } else {
                     active.phase = ActivePhase::Holding {
                         remaining: remaining - 1,
                     };
                     self.active = Some(active);
-                    SchedulerDecision::Emit(kind)
+                    SchedulerDecision::Emit(button)
                 }
             }
             ActivePhase::AwaitingEffect => {
                 if observation.effect_observed {
                     if active.intent.release_gap_frames == 0 {
                         self.active = None;
-                        SchedulerDecision::Completed(kind)
+                        SchedulerDecision::Completed(button)
                     } else {
                         active.phase = ActivePhase::ReleaseGap {
                             remaining: active.intent.release_gap_frames,
                         };
                         self.active = Some(active);
-                        SchedulerDecision::ReleaseGap(kind)
+                        SchedulerDecision::ReleaseGap(button)
                     }
                 } else {
                     self.active = Some(active);
-                    SchedulerDecision::ReleaseGap(kind)
+                    SchedulerDecision::ReleaseGap(button)
                 }
             }
             ActivePhase::ReleaseGap { remaining } => {
                 if remaining <= 1 {
                     self.active = None;
-                    SchedulerDecision::Completed(kind)
+                    SchedulerDecision::Completed(button)
                 } else {
                     active.phase = ActivePhase::ReleaseGap {
                         remaining: remaining - 1,
                     };
                     self.active = Some(active);
-                    SchedulerDecision::ReleaseGap(kind)
+                    SchedulerDecision::ReleaseGap(button)
                 }
             }
         }
@@ -238,12 +235,9 @@ mod tests {
     }
 
     #[test]
-    fn names_future_layer_intents_without_raw_key_buffering() {
-        let _ = InputIntentKind::Cancel;
-        let _ = InputIntentKind::Navigate(NavDirection::Up);
-        let _ = InputIntentKind::Navigate(NavDirection::Down);
-        let _ = InputIntentKind::Navigate(NavDirection::Left);
-        let _ = InputIntentKind::Navigate(NavDirection::Right);
+    fn uses_safe_input_buttons_instead_of_raw_key_codes() {
+        let intent = InputIntent::new(SafeButton::DpadDown, 1, 1, 5);
+        assert_eq!(intent.button, SafeButton::DpadDown);
     }
 
     #[test]
@@ -253,14 +247,14 @@ mod tests {
 
         assert_eq!(
             scheduler.tick(IntentObservation::default()),
-            SchedulerDecision::WaitForReady(InputIntentKind::Confirm)
+            SchedulerDecision::WaitForReady(SafeButton::Confirm)
         );
         assert_eq!(
             scheduler.tick(IntentObservation {
                 ready: true,
                 ..IntentObservation::default()
             }),
-            SchedulerDecision::Emit(InputIntentKind::Confirm)
+            SchedulerDecision::Emit(SafeButton::Confirm)
         );
     }
 
@@ -274,33 +268,33 @@ mod tests {
                 ready: true,
                 ..IntentObservation::default()
             }),
-            SchedulerDecision::Emit(InputIntentKind::Confirm)
+            SchedulerDecision::Emit(SafeButton::Confirm)
         );
         assert_eq!(
             scheduler.tick(IntentObservation {
                 ready: true,
                 ..IntentObservation::default()
             }),
-            SchedulerDecision::Emit(InputIntentKind::Confirm)
+            SchedulerDecision::Emit(SafeButton::Confirm)
         );
         assert_eq!(
             scheduler.tick(IntentObservation::default()),
-            SchedulerDecision::ReleaseGap(InputIntentKind::Confirm)
+            SchedulerDecision::ReleaseGap(SafeButton::Confirm)
         );
         assert_eq!(
             scheduler.tick(IntentObservation {
                 effect_observed: true,
                 ..IntentObservation::default()
             }),
-            SchedulerDecision::ReleaseGap(InputIntentKind::Confirm)
+            SchedulerDecision::ReleaseGap(SafeButton::Confirm)
         );
         assert_eq!(
             scheduler.tick(IntentObservation::default()),
-            SchedulerDecision::ReleaseGap(InputIntentKind::Confirm)
+            SchedulerDecision::ReleaseGap(SafeButton::Confirm)
         );
         assert_eq!(
             scheduler.tick(IntentObservation::default()),
-            SchedulerDecision::Completed(InputIntentKind::Confirm)
+            SchedulerDecision::Completed(SafeButton::Confirm)
         );
         assert!(scheduler.is_idle());
     }
@@ -316,7 +310,7 @@ mod tests {
                 ready: true,
                 ..IntentObservation::default()
             }),
-            SchedulerDecision::DroppedStale(InputIntentKind::Confirm)
+            SchedulerDecision::DroppedStale(SafeButton::Confirm)
         );
         assert!(scheduler.is_idle());
     }
@@ -328,15 +322,15 @@ mod tests {
 
         assert_eq!(
             scheduler.tick(IntentObservation::default()),
-            SchedulerDecision::WaitForReady(InputIntentKind::Confirm)
+            SchedulerDecision::WaitForReady(SafeButton::Confirm)
         );
         assert_eq!(
             scheduler.tick(IntentObservation::default()),
-            SchedulerDecision::WaitForReady(InputIntentKind::Confirm)
+            SchedulerDecision::WaitForReady(SafeButton::Confirm)
         );
         assert_eq!(
             scheduler.tick(IntentObservation::default()),
-            SchedulerDecision::TimedOut(InputIntentKind::Confirm)
+            SchedulerDecision::TimedOut(SafeButton::Confirm)
         );
         assert!(scheduler.is_idle());
     }

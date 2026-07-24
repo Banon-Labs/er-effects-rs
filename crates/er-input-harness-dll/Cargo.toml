@@ -14,6 +14,7 @@ crate-type = ["cdylib"]
 # shared MinHook FFI for that pad-poll hook.
 [dependencies]
 er-hook = { path = "../er-hook" }
+er-safe-input = { path = "../er-safe-input" }
 
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }

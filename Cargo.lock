@@ -2809,6 +2809,7 @@ version = "0.1.0"
 dependencies = [
  "eldenring",
  "er-hook",
+ "er-safe-input",
  "fromsoftware-shared",
  "windows 0.62.2",
 ]
