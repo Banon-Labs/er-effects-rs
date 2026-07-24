@@ -354,7 +354,7 @@ fn parse_args() -> Result<Config, Box<dyn std::error::Error>> {
     let mut summary_path = PathBuf::from(DEFAULT_SUMMARY);
     let mut donor_mesh_index = DEFAULT_DONOR_MESH_INDEX;
     let mut spine_core_compensation = true;
-    let mut arm_compensation = true;
+    let mut arm_compensation = false;
     let mut region_map_tsv = None;
 
     let mut args = env::args().skip(1);
@@ -369,6 +369,7 @@ fn parse_args() -> Result<Config, Box<dyn std::error::Error>> {
                 donor_mesh_index = required_value(&arg, args.next())?.parse()?
             }
             "--no-spine-core-compensation" => spine_core_compensation = false,
+            "--arm-compensation" => arm_compensation = true,
             "--no-arm-compensation" => arm_compensation = false,
             "--region-map-tsv" => {
                 region_map_tsv = Some(PathBuf::from(required_value(&arg, args.next())?))
@@ -407,7 +408,12 @@ fn print_help() {
     println!("  --summary <path>          default: {DEFAULT_SUMMARY}");
     println!("  --donor-mesh-index <idx>  default: {DEFAULT_DONOR_MESH_INDEX}");
     println!("  --no-spine-core-compensation  disable automatic mushroom trunk/cap spine-weight self-healing");
-    println!("  --no-arm-compensation  disable automatic shoulder-to-hand arm gradient compensation");
+    println!(
+        "  --arm-compensation  opt into experimental shoulder/hand compensation; currently guard-blocked when components remain disconnected"
+    );
+    println!(
+        "  --no-arm-compensation  explicit default: keep failed arm compensation disabled"
+    );
     println!("  --region-map-tsv <path>  apply human-authored region responses, e.g. feet face-closure/blend");
 }
 
@@ -533,7 +539,8 @@ fn apply_weights(
         mesh.arm_compensation = compensate_arm_weights(mesh, &mut accum, donor_lookup)?;
     }
     if let Some(region_map_tsv) = region_map_tsv {
-        mesh.region_response = apply_region_responses(mesh, &mut accum, region_map_tsv, donor_lookup)?;
+        mesh.region_response =
+            apply_region_responses(mesh, &mut accum, region_map_tsv, donor_lookup)?;
     }
 
     for (vertex_index, vertex) in mesh.vertices.iter_mut().enumerate() {
@@ -612,8 +619,8 @@ fn compensate_spine_core_weights(
         let core_radius = SPINE_COMPENSATION_CORE_RADIUS_MIN
             + (SPINE_COMPENSATION_CORE_RADIUS_MAX - SPINE_COMPENSATION_CORE_RADIUS_MIN) * radius_t;
         let centrality = (1.0 - radius / core_radius).clamp(0.0, 1.0);
-        let mut strength = SPINE_COMPENSATION_BASE_STRENGTH
-            + SPINE_COMPENSATION_CENTER_BOOST * centrality;
+        let mut strength =
+            SPINE_COMPENSATION_BASE_STRENGTH + SPINE_COMPENSATION_CENTER_BOOST * centrality;
         if height < SPINE_COMPENSATION_LOWER_FADE_HEIGHT_NORM {
             strength *= 0.55;
         }
@@ -832,7 +839,6 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a * (1.0 - t) + b * t
 }
 
-
 fn compensate_arm_weights(
     mesh: &SourceMesh,
     accum: &mut [[f32; 256]],
@@ -1035,12 +1041,15 @@ fn classify_arm_components(
         right_hand,
     ];
     let non_arm_vertices = (0..mesh.vertices.len())
-        .filter(|index| sum_bone_weights(&accum[*index], &arm_bones) < ARM_COMPENSATION_MIN_ARM_WEIGHT)
+        .filter(|index| {
+            sum_bone_weights(&accum[*index], &arm_bones) < ARM_COMPENSATION_MIN_ARM_WEIGHT
+        })
         .collect::<Vec<_>>();
     components
         .into_iter()
         .map(|component| {
-            let nearest_body_distance = nearest_component_distance(mesh, &component.vertices, &non_arm_vertices);
+            let nearest_body_distance =
+                nearest_component_distance(mesh, &component.vertices, &non_arm_vertices);
             let attachment = if nearest_body_distance <= ARM_BODY_ATTACHMENT_DISTANCE {
                 ArmAttachment::BodyNear
             } else {
@@ -1060,7 +1069,10 @@ fn nearest_component_distance(mesh: &SourceMesh, first: &[usize], second: &[usiz
     for first_vertex in first {
         let first_position = mesh.vertices[*first_vertex].position;
         for second_vertex in second {
-            best = best.min(vec3_distance(first_position, mesh.vertices[*second_vertex].position));
+            best = best.min(vec3_distance(
+                first_position,
+                mesh.vertices[*second_vertex].position,
+            ));
         }
     }
     best
@@ -1117,7 +1129,9 @@ fn apply_arm_component_gradient(
     let laterals = component
         .vertices
         .iter()
-        .map(|vertex| arm_lateral_progress_axis(component.side, mesh.vertices[*vertex].position.x, center_x))
+        .map(|vertex| {
+            arm_lateral_progress_axis(component.side, mesh.vertices[*vertex].position.x, center_x)
+        })
         .collect::<Vec<_>>();
     let min_lateral = laterals.iter().copied().fold(f32::INFINITY, f32::min);
     let max_lateral = laterals.iter().copied().fold(f32::NEG_INFINITY, f32::max);
@@ -1128,7 +1142,8 @@ fn apply_arm_component_gradient(
     };
 
     for vertex in &component.vertices {
-        let lateral = arm_lateral_progress_axis(component.side, mesh.vertices[*vertex].position.x, center_x);
+        let lateral =
+            arm_lateral_progress_axis(component.side, mesh.vertices[*vertex].position.x, center_x);
         let progress = ((lateral - min_lateral) / lateral_span).clamp(0.0, 1.0);
         let targets = shoulder_to_hand_targets(progress, upper, forearm, hand, spine1, spine2);
         blend_to_targets(&mut accum[*vertex], &targets, ARM_COMPENSATION_STRENGTH);
@@ -1184,10 +1199,18 @@ fn shoulder_to_hand_targets(
         (lerp(0.68, 0.62, t), lerp(0.12, 0.26, t), lerp(0.0, 0.02, t))
     } else if progress < 0.66 {
         let t = ((progress - 0.22) / 0.44).clamp(0.0, 1.0);
-        (lerp(0.62, 0.34, t), lerp(0.26, 0.52, t), lerp(0.02, 0.14, t))
+        (
+            lerp(0.62, 0.34, t),
+            lerp(0.26, 0.52, t),
+            lerp(0.02, 0.14, t),
+        )
     } else {
         let t = ((progress - 0.66) / 0.34).clamp(0.0, 1.0);
-        (lerp(0.34, 0.14, t), lerp(0.52, 0.44, t), lerp(0.14, 0.42, t))
+        (
+            lerp(0.34, 0.14, t),
+            lerp(0.52, 0.44, t),
+            lerp(0.14, 0.42, t),
+        )
     };
     let limb_total = (1.0 - body).max(0.0);
     let limb_sum = upper_weight + forearm_weight + hand_weight;
@@ -1252,18 +1275,12 @@ fn arm_compensation_metrics(
         let divisor = component.vertices.len().max(1) as f32;
         let avg_upper = component_upper / divisor;
         let avg_forearm_hand = component_forearm_hand / divisor;
-        if avg_forearm_hand > ARM_DISTAL_OVERWEIGHT_THRESHOLD && avg_upper < ARM_LOW_UPPER_THRESHOLD {
+        if avg_forearm_hand > ARM_DISTAL_OVERWEIGHT_THRESHOLD && avg_upper < ARM_LOW_UPPER_THRESHOLD
+        {
             metrics.distal_overweighted_components += 1;
         }
-        if root_band_upper_body_average(
-            accum,
-            component,
-            upper,
-            spine1,
-            spine2,
-            center_x,
-            mesh,
-        ) < 0.42
+        if root_band_upper_body_average(accum, component, upper, spine1, spine2, center_x, mesh)
+            < 0.42
         {
             metrics.weak_shoulder_components += 1;
         }
@@ -1287,7 +1304,9 @@ fn root_band_upper_body_average(
     let laterals = component
         .vertices
         .iter()
-        .map(|vertex| arm_lateral_progress_axis(component.side, mesh.vertices[*vertex].position.x, center_x))
+        .map(|vertex| {
+            arm_lateral_progress_axis(component.side, mesh.vertices[*vertex].position.x, center_x)
+        })
         .collect::<Vec<_>>();
     let min_lateral = laterals.iter().copied().fold(f32::INFINITY, f32::min);
     let max_lateral = laterals.iter().copied().fold(f32::NEG_INFINITY, f32::max);
@@ -1295,7 +1314,8 @@ fn root_band_upper_body_average(
     let mut sum = 0.0;
     let mut count = 0;
     for vertex in &component.vertices {
-        let lateral = arm_lateral_progress_axis(component.side, mesh.vertices[*vertex].position.x, center_x);
+        let lateral =
+            arm_lateral_progress_axis(component.side, mesh.vertices[*vertex].position.x, center_x);
         let progress = ((lateral - min_lateral) / lateral_span).clamp(0.0, 1.0);
         if progress <= ARM_ROOT_TWEEN_FRACTION {
             let row = &accum[*vertex];
@@ -1449,8 +1469,15 @@ fn face_closed_region(
         changed = false;
         iterations += 1;
         for triangle in &mesh.triangles {
-            let vertices = [triangle[0] as usize, triangle[1] as usize, triangle[2] as usize];
-            let inside = vertices.iter().filter(|vertex| closed.contains(vertex)).count();
+            let vertices = [
+                triangle[0] as usize,
+                triangle[1] as usize,
+                triangle[2] as usize,
+            ];
+            let inside = vertices
+                .iter()
+                .filter(|vertex| closed.contains(vertex))
+                .count();
             if inside == 0 || inside == 3 {
                 continue;
             }
@@ -1491,7 +1518,11 @@ fn boundary_edge_count(mesh: &SourceMesh, region: &HashSet<usize>) -> usize {
         .count()
 }
 
-fn near_shell_pairs(mesh: &SourceMesh, region: &HashSet<usize>, max_distance: f32) -> Vec<NearShellPair> {
+fn near_shell_pairs(
+    mesh: &SourceMesh,
+    region: &HashSet<usize>,
+    max_distance: f32,
+) -> Vec<NearShellPair> {
     let mut pairs = Vec::new();
     for region_vertex in region {
         let position = mesh.vertices[*region_vertex].position;
@@ -2046,39 +2077,166 @@ fn write_summary(
     if let Some(region_map_tsv) = &config.region_map_tsv {
         writeln!(file, "region_map_tsv={}", region_map_tsv.display())?;
     }
-    writeln!(file, "arm_compensation_enabled={}", source.arm_compensation.enabled)?;
+    writeln!(
+        file,
+        "arm_compensation_enabled={}",
+        source.arm_compensation.enabled
+    )?;
     if source.arm_compensation.enabled {
-        writeln!(file, "arm_compensated_vertices={}", source.arm_compensation.compensated_vertices)?;
-        writeln!(file, "arm_components_left_right={},{}", source.arm_compensation.left_components, source.arm_compensation.right_components)?;
-        writeln!(file, "arm_vertices_left_right={},{}", source.arm_compensation.left_vertices, source.arm_compensation.right_vertices)?;
-        writeln!(file, "arm_avg_upper_before_after={:.6},{:.6}", source.arm_compensation.avg_upper_before, source.arm_compensation.avg_upper_after)?;
-        writeln!(file, "arm_avg_forearm_hand_before_after={:.6},{:.6}", source.arm_compensation.avg_forearm_hand_before, source.arm_compensation.avg_forearm_hand_after)?;
-        writeln!(file, "arm_avg_body_tween_after={:.6}", source.arm_compensation.avg_body_tween_after)?;
-        writeln!(file, "arm_distal_overweighted_components_before_after={},{}", source.arm_compensation.distal_overweighted_components_before, source.arm_compensation.distal_overweighted_components_after)?;
-        writeln!(file, "arm_weak_shoulder_components_before_after={},{}", source.arm_compensation.weak_shoulder_components_before, source.arm_compensation.weak_shoulder_components_after)?;
-        writeln!(file, "arm_detached_components={}", source.arm_compensation.detached_components)?;
-        writeln!(file, "arm_detached_vertices={}", source.arm_compensation.detached_vertices)?;
-        writeln!(file, "arm_detached_proxy_vertices={}", source.arm_compensation.detached_proxy_vertices)?;
-        writeln!(file, "arm_independent_detached_components={}", source.arm_compensation.independent_detached_components)?;
-        writeln!(file, "arm_max_detached_body_distance={:.6}", source.arm_compensation.max_detached_body_distance)?;
-        writeln!(file, "arm_detached_island_response={}", source.arm_compensation.detached_island_response)?;
+        writeln!(
+            file,
+            "arm_compensated_vertices={}",
+            source.arm_compensation.compensated_vertices
+        )?;
+        writeln!(
+            file,
+            "arm_components_left_right={},{}",
+            source.arm_compensation.left_components, source.arm_compensation.right_components
+        )?;
+        writeln!(
+            file,
+            "arm_vertices_left_right={},{}",
+            source.arm_compensation.left_vertices, source.arm_compensation.right_vertices
+        )?;
+        writeln!(
+            file,
+            "arm_avg_upper_before_after={:.6},{:.6}",
+            source.arm_compensation.avg_upper_before, source.arm_compensation.avg_upper_after
+        )?;
+        writeln!(
+            file,
+            "arm_avg_forearm_hand_before_after={:.6},{:.6}",
+            source.arm_compensation.avg_forearm_hand_before,
+            source.arm_compensation.avg_forearm_hand_after
+        )?;
+        writeln!(
+            file,
+            "arm_avg_body_tween_after={:.6}",
+            source.arm_compensation.avg_body_tween_after
+        )?;
+        writeln!(
+            file,
+            "arm_distal_overweighted_components_before_after={},{}",
+            source
+                .arm_compensation
+                .distal_overweighted_components_before,
+            source.arm_compensation.distal_overweighted_components_after
+        )?;
+        writeln!(
+            file,
+            "arm_weak_shoulder_components_before_after={},{}",
+            source.arm_compensation.weak_shoulder_components_before,
+            source.arm_compensation.weak_shoulder_components_after
+        )?;
+        writeln!(
+            file,
+            "arm_detached_components={}",
+            source.arm_compensation.detached_components
+        )?;
+        writeln!(
+            file,
+            "arm_detached_vertices={}",
+            source.arm_compensation.detached_vertices
+        )?;
+        writeln!(
+            file,
+            "arm_detached_proxy_vertices={}",
+            source.arm_compensation.detached_proxy_vertices
+        )?;
+        writeln!(
+            file,
+            "arm_independent_detached_components={}",
+            source.arm_compensation.independent_detached_components
+        )?;
+        writeln!(
+            file,
+            "arm_max_detached_body_distance={:.6}",
+            source.arm_compensation.max_detached_body_distance
+        )?;
+        writeln!(
+            file,
+            "arm_detached_island_response={}",
+            source.arm_compensation.detached_island_response
+        )?;
     }
-    writeln!(file, "region_response_enabled={}", source.region_response.enabled)?;
+    writeln!(
+        file,
+        "region_response_enabled={}",
+        source.region_response.enabled
+    )?;
     if source.region_response.enabled {
-        writeln!(file, "region_response_map={}", source.region_response.region_map_path)?;
-        writeln!(file, "feet_region_response={}", source.region_response.response)?;
-        writeln!(file, "feet_authored_vertices={}", source.region_response.feet_authored_vertices)?;
-        writeln!(file, "feet_expanded_vertices={}", source.region_response.feet_expanded_vertices)?;
-        writeln!(file, "feet_shrunk_vertices={}", source.region_response.feet_shrunk_vertices)?;
-        writeln!(file, "feet_normalized_vertices={}", source.region_response.feet_normalized_vertices)?;
-        writeln!(file, "feet_blend_band_vertices={}", source.region_response.feet_blend_band_vertices)?;
-        writeln!(file, "feet_mixed_triangles_before_after={},{}", source.region_response.feet_mixed_triangles_before, source.region_response.feet_mixed_triangles_after)?;
-        writeln!(file, "feet_boundary_edges_before_after={},{}", source.region_response.feet_boundary_edges_before, source.region_response.feet_boundary_edges_after)?;
-        writeln!(file, "feet_near_shell_pairs={}", source.region_response.feet_near_shell_pairs)?;
-        writeln!(file, "feet_near_shell_outside_vertices={}", source.region_response.feet_near_shell_outside_vertices)?;
-        writeln!(file, "feet_weight_mismatch_pairs={}", source.region_response.feet_weight_mismatch_pairs)?;
-        writeln!(file, "feet_weight_sync_vertices={}", source.region_response.feet_weight_sync_vertices)?;
-        writeln!(file, "feet_max_weight_l1_mismatch={:.6}", source.region_response.feet_max_weight_l1_mismatch)?;
+        writeln!(
+            file,
+            "region_response_map={}",
+            source.region_response.region_map_path
+        )?;
+        writeln!(
+            file,
+            "feet_region_response={}",
+            source.region_response.response
+        )?;
+        writeln!(
+            file,
+            "feet_authored_vertices={}",
+            source.region_response.feet_authored_vertices
+        )?;
+        writeln!(
+            file,
+            "feet_expanded_vertices={}",
+            source.region_response.feet_expanded_vertices
+        )?;
+        writeln!(
+            file,
+            "feet_shrunk_vertices={}",
+            source.region_response.feet_shrunk_vertices
+        )?;
+        writeln!(
+            file,
+            "feet_normalized_vertices={}",
+            source.region_response.feet_normalized_vertices
+        )?;
+        writeln!(
+            file,
+            "feet_blend_band_vertices={}",
+            source.region_response.feet_blend_band_vertices
+        )?;
+        writeln!(
+            file,
+            "feet_mixed_triangles_before_after={},{}",
+            source.region_response.feet_mixed_triangles_before,
+            source.region_response.feet_mixed_triangles_after
+        )?;
+        writeln!(
+            file,
+            "feet_boundary_edges_before_after={},{}",
+            source.region_response.feet_boundary_edges_before,
+            source.region_response.feet_boundary_edges_after
+        )?;
+        writeln!(
+            file,
+            "feet_near_shell_pairs={}",
+            source.region_response.feet_near_shell_pairs
+        )?;
+        writeln!(
+            file,
+            "feet_near_shell_outside_vertices={}",
+            source.region_response.feet_near_shell_outside_vertices
+        )?;
+        writeln!(
+            file,
+            "feet_weight_mismatch_pairs={}",
+            source.region_response.feet_weight_mismatch_pairs
+        )?;
+        writeln!(
+            file,
+            "feet_weight_sync_vertices={}",
+            source.region_response.feet_weight_sync_vertices
+        )?;
+        writeln!(
+            file,
+            "feet_max_weight_l1_mismatch={:.6}",
+            source.region_response.feet_max_weight_l1_mismatch
+        )?;
     }
     writeln!(
         file,
