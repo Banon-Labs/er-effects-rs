@@ -12,6 +12,10 @@ bd close <id>         # Complete work
 bd dolt push          # Push beads data to remote
 ```
 
+## Commit Granularity for User-Steered Asset Work
+
+When the user explicitly asks to commit often during an asset/reverse-engineering branch, commit each coherent, validated script/source change promptly instead of batching unrelated steps. Keep commits scoped to the specific change and its proof artifacts. For runtime-affecting changes, still wait until the relevant offline or runtime validation proves the committed state is worth preserving.
+
 ## Offline Game-Asset Investigation Boundary
 
 When the user explicitly says to continue until a game run is required, do not stop at a plan-only checkpoint. Continue all available non-runtime work first: unpack/localize assets, inspect binders, run static/Ghidra/tooling probes, validate exports/imports offline, and update Beads as evidence accumulates. Treat archive extraction/unpacking of installed game files as offline asset work, not as a game run; do it before claiming the next step requires running a game. Report back only when the next material step truly requires launching/running a game, needs subjective user choice, or hits a concrete capability blocker.
