@@ -35,6 +35,54 @@ impl DialogAcceptGate {
     }
 }
 
+/// Menu id the 1.16.x weapon-reinforcement path stores in `CurrentOpenMenu` while opening the
+/// reinforce inventory job. The driver should read the live value from game memory; this constant is
+/// only the semantic expected value.
+pub(crate) const WEAPON_UPGRADE_OPEN_MENU_ID: u32 = 0x17;
+
+/// Readiness predicate inputs for a weapon-upgrade confirm intent.
+///
+/// These are semantic fields supplied by the runtime driver, not hard-coded memory reads. The Ghidra
+/// spike identified the corresponding native sources as: `CurrentOpenMenu == 0x17`, active top menu
+/// job/`IsOpenMenuJobCurrentTop`, candidate availability, cost affordability, and the generic dialog
+/// accept gate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct WeaponUpgradeConfirmReadiness {
+    pub(crate) current_open_menu: u32,
+    pub(crate) top_menu_job_active: bool,
+    pub(crate) candidate_available: bool,
+    pub(crate) cost_affordable: bool,
+    pub(crate) dialog_gate: DialogAcceptGate,
+}
+
+impl WeaponUpgradeConfirmReadiness {
+    pub(crate) fn is_ready(self) -> bool {
+        self.current_open_menu == WEAPON_UPGRADE_OPEN_MENU_ID
+            && self.top_menu_job_active
+            && self.candidate_available
+            && self.cost_affordable
+            && self.dialog_gate.is_ready()
+    }
+}
+
+/// Effect predicate inputs for a weapon-upgrade confirm intent.
+///
+/// A late buffered confirm must not be considered successful from "button emitted" alone. The driver
+/// should report an authoritative upgrade/economy delta and a dialog/menu transition before the next
+/// buffered confirm is allowed to run.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct WeaponUpgradeConfirmEffect {
+    pub(crate) reinforcement_changed: bool,
+    pub(crate) cost_consumed: bool,
+    pub(crate) dialog_closed_or_rebuilt: bool,
+}
+
+impl WeaponUpgradeConfirmEffect {
+    pub(crate) fn is_observed(self) -> bool {
+        self.dialog_closed_or_rebuilt && (self.reinforcement_changed || self.cost_consumed)
+    }
+}
+
 /// High-level input the harness intends to perform once its native readiness predicate passes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct InputIntent {
@@ -232,6 +280,89 @@ mod tests {
     fn dialog_accept_gate_does_not_treat_nan_as_ready() {
         assert!(!DialogAcceptGate::new(f32::NAN, 1.0).is_ready());
         assert!(!DialogAcceptGate::new(0.25, f32::NAN).is_ready());
+    }
+
+    #[test]
+    fn weapon_upgrade_confirm_requires_all_readiness_sources() {
+        let ready = WeaponUpgradeConfirmReadiness {
+            current_open_menu: WEAPON_UPGRADE_OPEN_MENU_ID,
+            top_menu_job_active: true,
+            candidate_available: true,
+            cost_affordable: true,
+            dialog_gate: DialogAcceptGate::new(0.25, 0.25),
+        };
+        assert!(ready.is_ready());
+
+        assert!(
+            !WeaponUpgradeConfirmReadiness {
+                current_open_menu: 0x16,
+                ..ready
+            }
+            .is_ready()
+        );
+        assert!(
+            !WeaponUpgradeConfirmReadiness {
+                top_menu_job_active: false,
+                ..ready
+            }
+            .is_ready()
+        );
+        assert!(
+            !WeaponUpgradeConfirmReadiness {
+                candidate_available: false,
+                ..ready
+            }
+            .is_ready()
+        );
+        assert!(
+            !WeaponUpgradeConfirmReadiness {
+                cost_affordable: false,
+                ..ready
+            }
+            .is_ready()
+        );
+        assert!(
+            !WeaponUpgradeConfirmReadiness {
+                dialog_gate: DialogAcceptGate::new(0.25, 0.0),
+                ..ready
+            }
+            .is_ready()
+        );
+    }
+
+    #[test]
+    fn weapon_upgrade_effect_requires_state_delta_and_dialog_transition() {
+        assert!(
+            WeaponUpgradeConfirmEffect {
+                reinforcement_changed: true,
+                dialog_closed_or_rebuilt: true,
+                ..WeaponUpgradeConfirmEffect::default()
+            }
+            .is_observed()
+        );
+        assert!(
+            WeaponUpgradeConfirmEffect {
+                cost_consumed: true,
+                dialog_closed_or_rebuilt: true,
+                ..WeaponUpgradeConfirmEffect::default()
+            }
+            .is_observed()
+        );
+        assert!(
+            !WeaponUpgradeConfirmEffect {
+                reinforcement_changed: true,
+                dialog_closed_or_rebuilt: false,
+                ..WeaponUpgradeConfirmEffect::default()
+            }
+            .is_observed()
+        );
+        assert!(
+            !WeaponUpgradeConfirmEffect {
+                dialog_closed_or_rebuilt: true,
+                ..WeaponUpgradeConfirmEffect::default()
+            }
+            .is_observed()
+        );
     }
 
     #[test]
