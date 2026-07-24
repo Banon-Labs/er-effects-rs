@@ -10,6 +10,7 @@ python3 "$repo_root/scripts/check-launch-guardrails.py" --audit
 python3 "$repo_root/scripts/check-runtime-probe-contract.py" --audit
 python3 "$repo_root/scripts/test-runtime-probe-contract.py"
 python3 "$repo_root/scripts/test-er-readiness-watch.py"
+python3 "$repo_root/scripts/test-weapon-upgrade-menu-watch.py"
 python3 "$repo_root/scripts/test-save-slot-oracle.py"
 python3 "$repo_root/scripts/test-detect-proc.py"
 python3 "$repo_root/scripts/test-semaphore-watchdog.py"
