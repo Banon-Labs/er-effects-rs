@@ -25,6 +25,8 @@
 mod drive;
 mod game_mem;
 mod input_inject;
+#[cfg(any(test, windows))]
+mod input_scheduler;
 mod log;
 #[cfg(windows)]
 mod pad_inject;

@@ -175,23 +175,34 @@ static HOOK_REGISTRY: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
 /// Our DLL's load base, so detours can be reported as `dll+0xNNN` (identifiable against the map/disasm)
 /// instead of an absolute pointer that shifts every launch.
 fn dll_base() -> usize {
-    use std::sync::OnceLock;
-    static BASE: OnceLock<usize> = OnceLock::new();
-    *BASE.get_or_init(|| {
-        unsafe extern "system" {
-            fn GetModuleHandleExW(flags: u32, addr: *const c_void, module: *mut *mut c_void)
-            -> i32;
-        }
-        const FROM_ADDRESS: u32 = 0x4;
-        const UNCHANGED_REFCOUNT: u32 = 0x2;
-        let mut h: *mut c_void = null_mut();
-        let anchor = dll_base as *const c_void; // any address inside our DLL
-        if unsafe { GetModuleHandleExW(FROM_ADDRESS | UNCHANGED_REFCOUNT, anchor, &mut h) } != 0 {
-            h as usize
-        } else {
-            0
-        }
-    })
+    #[cfg(not(windows))]
+    {
+        0
+    }
+    #[cfg(windows)]
+    {
+        use std::sync::OnceLock;
+        static BASE: OnceLock<usize> = OnceLock::new();
+        *BASE.get_or_init(|| {
+            unsafe extern "system" {
+                fn GetModuleHandleExW(
+                    flags: u32,
+                    addr: *const c_void,
+                    module: *mut *mut c_void,
+                ) -> i32;
+            }
+            const FROM_ADDRESS: u32 = 0x4;
+            const UNCHANGED_REFCOUNT: u32 = 0x2;
+            let mut h: *mut c_void = null_mut();
+            let anchor = dll_base as *const c_void; // any address inside our DLL
+            if unsafe { GetModuleHandleExW(FROM_ADDRESS | UNCHANGED_REFCOUNT, anchor, &mut h) } != 0
+            {
+                h as usize
+            } else {
+                0
+            }
+        })
+    }
 }
 
 fn as_dll_off(p: usize) -> String {

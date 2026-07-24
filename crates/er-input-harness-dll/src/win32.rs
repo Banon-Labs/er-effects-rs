@@ -14,6 +14,7 @@ use std::ffi::c_void;
 
 pub const CURRENT_PROCESS_PSEUDO_HANDLE: isize = -1;
 
+#[cfg(windows)]
 #[link(name = "kernel32")]
 unsafe extern "system" {
     pub fn GetModuleHandleA(name: *const u8) -> *mut c_void;
@@ -36,15 +37,84 @@ unsafe extern "system" {
     ) -> i32;
 }
 
+#[cfg(windows)]
 #[link(name = "user32")]
 unsafe extern "system" {
     pub fn keybd_event(vk: u8, scan: u8, flags: u32, extra: usize);
     pub fn GetForegroundWindow() -> *mut c_void;
     pub fn GetWindowThreadProcessId(hwnd: *mut c_void, pid: *mut u32) -> u32;
 }
+#[cfg(windows)]
 #[link(name = "kernel32")]
 unsafe extern "system" {
     pub fn GetCurrentProcessId() -> u32;
+}
+
+#[cfg(not(windows))]
+pub unsafe fn GetModuleHandleA(_name: *const u8) -> *mut c_void {
+    std::ptr::null_mut()
+}
+
+#[cfg(not(windows))]
+pub unsafe fn GetProcAddress(_module: *mut c_void, _name: *const u8) -> *mut c_void {
+    std::ptr::null_mut()
+}
+
+#[cfg(not(windows))]
+pub fn Sleep(_ms: u32) {}
+
+#[cfg(not(windows))]
+pub fn GetTickCount64() -> u64 {
+    0
+}
+
+#[cfg(not(windows))]
+pub unsafe fn ReadProcessMemory(
+    _process: isize,
+    _base: *const c_void,
+    _buffer: *mut c_void,
+    _size: usize,
+    read: *mut usize,
+) -> i32 {
+    if !read.is_null() {
+        unsafe { *read = 0 };
+    }
+    0
+}
+
+#[cfg(not(windows))]
+pub unsafe fn WriteProcessMemory(
+    _process: isize,
+    _base: *const c_void,
+    _buffer: *const c_void,
+    _size: usize,
+    written: *mut usize,
+) -> i32 {
+    if !written.is_null() {
+        unsafe { *written = 0 };
+    }
+    0
+}
+
+#[cfg(not(windows))]
+pub unsafe fn keybd_event(_vk: u8, _scan: u8, _flags: u32, _extra: usize) {}
+
+#[cfg(not(windows))]
+pub unsafe fn GetForegroundWindow() -> *mut c_void {
+    std::ptr::null_mut()
+}
+
+#[cfg(not(windows))]
+pub unsafe fn GetWindowThreadProcessId(_hwnd: *mut c_void, pid: *mut u32) -> u32 {
+    if !pid.is_null() {
+        unsafe { *pid = 0 };
+    }
+    0
+}
+
+#[cfg(not(windows))]
+pub unsafe fn GetCurrentProcessId() -> u32 {
+    0
 }
 
 /// True when the FOREGROUND window belongs to THIS process (i.e. the ER game window is focused). The
