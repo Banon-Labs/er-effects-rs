@@ -30,7 +30,8 @@ use crate::game_mem::{
 };
 use crate::input_inject::{
     MenuEvent, advance_press_any_button, input_manager, keep_input_active, native_open_equip_menu,
-    native_open_inventory_menu, popup_job_serial, request_open_ingame_menu, tap_menu_event,
+    native_open_inventory_menu, native_open_weapon_upgrade_menu, popup_job_serial,
+    request_open_ingame_menu, tap_menu_event,
 };
 use crate::log::{harness_log, log_phase};
 use crate::pad_inject::{PadButton, set_pad_button, set_vk_id};
@@ -299,6 +300,9 @@ enum Phase {
     /// NATIVE open of the Inventory menu (02_020_Inventory) whose item cells carry the bottom-left
     /// ArtsIcon child. EFFECT: top-job replaced OR the submit serial bumped.
     OpenInventoryMenu,
+    /// NATIVE open of the weapon-upgrade/reinforcement menu. EFFECT: researched open-menu id 0x17 or
+    /// the native submit path visibly swaps/serializes the top job.
+    OpenWeaponUpgradeMenu,
 }
 
 impl Phase {
@@ -318,6 +322,7 @@ impl Phase {
             Phase::OpenEquipMenu => "open_equip_menu",
             Phase::DwellEquip => "dwell_equip",
             Phase::OpenInventoryMenu => "open_inventory_menu",
+            Phase::OpenWeaponUpgradeMenu => "open_weapon_upgrade_menu",
         }
     }
 
@@ -331,7 +336,8 @@ impl Phase {
             | Phase::NavToOptionSetting
             | Phase::TabToQuit
             | Phase::OpenEquipMenu
-            | Phase::OpenInventoryMenu => NAV_BUDGET,
+            | Phase::OpenInventoryMenu
+            | Phase::OpenWeaponUpgradeMenu => NAV_BUDGET,
             Phase::Quit | Phase::QuitTeardown | Phase::NativeQuit => QUIT_BUDGET,
             Phase::ProbeMenu => PROBE_TOTAL_FRAMES,
             Phase::DwellEquip => EQUIP_DWELL_FRAMES,
@@ -425,6 +431,22 @@ impl Phase {
                 (job != 0 && job != INGAMETOP_JOB.load(Ordering::SeqCst))
                     || serial > EQUIP_SERIAL.load(Ordering::SeqCst)
             }
+            Phase::OpenWeaponUpgradeMenu => {
+                // Native open of the weapon-upgrade/reinforcement menu. Advance only when the
+                // current-open-menu semaphore reaches the researched weapon-upgrade id or the native
+                // submit path visibly swaps/serializes the top job.
+                if frame == 0 {
+                    INGAMETOP_JOB.store(top_menu_job_ptr(), Ordering::SeqCst);
+                    EQUIP_SERIAL.store(popup_job_serial(im) as usize, Ordering::SeqCst);
+                    let dispatched = native_open_weapon_upgrade_menu(base, im);
+                    harness_log!("upgrade: native WeaponUpgrade open dispatched={dispatched}");
+                }
+                let job = top_menu_job_ptr();
+                let serial = popup_job_serial(im) as usize;
+                sem.open_menu == i64::from(crate::input_scheduler::WEAPON_UPGRADE_OPEN_MENU_ID)
+                    || (job != 0 && job != INGAMETOP_JOB.load(Ordering::SeqCst))
+                    || serial > EQUIP_SERIAL.load(Ordering::SeqCst)
+            }
         };
         if advanced {
             Status::Advanced
@@ -472,6 +494,9 @@ enum DriveMode {
     /// Boot to in-world, open the pause menu, native-open the Inventory menu (02_020_Inventory --
     /// the Melee/Ranged/Shields tabs with bottom-left ArtsIcon cells), then dwell.
     InventoryMenu,
+    /// Boot to in-world, open the pause menu, native-open the weapon-upgrade/reinforcement menu,
+    /// then dwell for semaphore logging. No confirm inputs.
+    WeaponUpgradeMenu,
 }
 
 impl DriveMode {
@@ -484,6 +509,7 @@ impl DriveMode {
             "passive" => DriveMode::Passive,
             "equip" => DriveMode::EquipMenu,
             "inv" => DriveMode::InventoryMenu,
+            "upgrade" => DriveMode::WeaponUpgradeMenu,
             _ => DriveMode::FullBootReload,
         }
     }
@@ -497,6 +523,7 @@ impl DriveMode {
             DriveMode::Passive => "passive",
             DriveMode::EquipMenu => "equip",
             DriveMode::InventoryMenu => "inv",
+            DriveMode::WeaponUpgradeMenu => "upgrade",
         }
     }
     fn phases(self) -> &'static [Phase] {
@@ -577,6 +604,16 @@ impl DriveMode {
             Phase::OpenInventoryMenu,
             Phase::DwellEquip,
         ];
+        // upgrade: reach in-world, native-open the weapon-upgrade menu, dwell/log semaphores only.
+        const UPGRADE: &[Phase] = &[
+            Phase::Startup,
+            Phase::PressAnyButton,
+            Phase::Continue,
+            Phase::WaitLoadIn,
+            Phase::OpenPauseMenu,
+            Phase::OpenWeaponUpgradeMenu,
+            Phase::DwellEquip,
+        ];
         match self {
             DriveMode::BootContinueOnly => BOOT,
             DriveMode::NativeReloadOnly => RELOAD,
@@ -586,6 +623,7 @@ impl DriveMode {
             DriveMode::Passive => &[], // companion: no drive, presence only
             DriveMode::EquipMenu => EQUIP,
             DriveMode::InventoryMenu => INV,
+            DriveMode::WeaponUpgradeMenu => UPGRADE,
         }
     }
 }
@@ -650,6 +688,7 @@ fn resolve_mode() -> DriveMode {
         DriveMode::NativeReloadTwice => 5,
         DriveMode::EquipMenu => 6,
         DriveMode::InventoryMenu => 7,
+        DriveMode::WeaponUpgradeMenu => 8,
     };
     MODE_IDX.store(idx, Ordering::SeqCst);
     harness_log!(
