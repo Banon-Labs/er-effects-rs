@@ -63,7 +63,8 @@ def case(name: str, events: list[dict], expected: str) -> None:
 case("granted_plain", [user("please LAUNCH CLEARANCE GRANTED and run the vanilla capture")], "1")
 case("granted_case_insensitive", [user("launch clearance granted")], "1")
 case("granted_across_turns", [user("do the offline analysis"), user("ok LAUNCH CLEARANCE GRANTED")], "1")
-case("granted_persists_after_neutral_prompt", [user("LAUNCH CLEARANCE GRANTED"), user("now check the logs")], "1")
+# PER-LAUNCH: a grant does NOT persist -- a later prompt without the keyphrase re-locks launches.
+case("granted_does_not_persist_after_neutral_prompt", [user("LAUNCH CLEARANCE GRANTED"), user("now check the logs")], "0")
 case("user_text_blocks", [user_blocks([{"type": "text", "text": "LAUNCH CLEARANCE GRANTED"}])], "1")
 case("revoked_then_regranted", [user("LAUNCH CLEARANCE REVOKED"), user("LAUNCH CLEARANCE GRANTED")], "1")
 

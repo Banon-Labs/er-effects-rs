@@ -14,16 +14,16 @@
 # the CURRENT session is the newest transcript jsonl in ~/.claude/projects/<cwd-key>/, and authorization
 # is a keyphrase the USER typed in that session's own prompts.
 #
-# SESSION-SCOPED BY CONSTRUCTION: the authorization lives in the session transcript, so it is inherently
-# per-agent-session and vanishes when the session ends. A brand-new session starts unauthorized.
+# PER-LAUNCH BY CONSTRUCTION (user directive 2026-07-24 "gate each and every launch"): the signal reads
+# ONLY the user's MOST RECENT prompt. The keyphrase authorizes launches for that prompt/turn ONLY; it
+# does NOT persist across the session -- the next user prompt without the keyphrase re-locks launches.
+# Session-bounded (a brand-new session starts unauthorized). Superseded the session-scoped scan where the
+# keyphrase anywhere in the transcript authorized the whole session.
 #
 # KEYPHRASES (rename here in ONE place; matched case-insensitively; quoted/backticked spans are stripped
-# first so that DISCUSSING the phrase -- like the message that introduced this gate -- does not
-# authorize a launch):
-#   AUTH   : "LAUNCH CLEARANCE GRANTED"  -> authorize ER launches for the rest of THIS session
-#   REVOKE : "LAUNCH CLEARANCE REVOKED"  -> re-lock (deny launches again) from that prompt onward
-# The LAST of {auth, revoke} the user typed wins (across prompts: the latest prompt with a keyphrase
-# decides; within a prompt: the later occurrence decides).
+# first so that DISCUSSING the phrase does not authorize a launch):
+#   AUTH   : "LAUNCH CLEARANCE GRANTED"  -> authorize the launch(es) driven from THIS prompt
+#   REVOKE : "LAUNCH CLEARANCE REVOKED"  -> explicit deny (a later occurrence in the same prompt wins)
 #
 # FAIL-CLOSED: any error, missing transcript, or absent keyphrase -> "0" (deny). A launch gate must
 # never fail open. The `|| printf 0` backstops a missing/broken python; python itself try/excepts to 0.
@@ -93,7 +93,12 @@ try:
             return "\n".join(parts) if parts else None
         return None
 
-    authorized = False
+    # PER-LAUNCH gating (user directive 2026-07-24: "gate each and every launch"): authorize ONLY when
+    # the keyphrase is in the user's MOST RECENT prompt, so every launch requires a fresh clearance in
+    # the latest message. A one-time grant does NOT persist across the session -- once the user sends any
+    # later prompt without the keyphrase, launches are denied again. (Superseded the session-scoped scan
+    # where the keyphrase anywhere in the transcript authorized the whole session.)
+    last_prompt = None
     with open(files[0], encoding="utf-8", errors="replace") as fh:
         for line in fh:
             try:
@@ -101,18 +106,18 @@ try:
             except ValueError:
                 continue
             txt = user_prompt_text(ev)
-            if not txt:
-                continue
-            # Strip quoted/backticked spans so DISCUSSING the phrase does not authorize a launch.
-            scrubbed = re.sub(r'"[^"]*"', " ", txt)
-            scrubbed = re.sub(r"'[^']*'", " ", scrubbed)
-            scrubbed = re.sub(r"`[^`]*`", " ", scrubbed)
-            low = scrubbed.lower()
-            ai = low.rfind(AUTH)
-            ri = low.rfind(REVOKE)
-            if ai == -1 and ri == -1:
-                continue  # this prompt carries no keyphrase -> current state persists
-            authorized = ai > ri  # later occurrence in this (latest keyphrase) prompt wins
+            if txt is not None:
+                last_prompt = txt
+    authorized = False
+    if last_prompt is not None:
+        # Strip quoted/backticked spans so DISCUSSING the phrase does not authorize a launch.
+        scrubbed = re.sub(r'"[^"]*"', " ", last_prompt)
+        scrubbed = re.sub(r"'[^']*'", " ", scrubbed)
+        scrubbed = re.sub(r"`[^`]*`", " ", scrubbed)
+        low = scrubbed.lower()
+        ai = low.rfind(AUTH)
+        ri = low.rfind(REVOKE)
+        authorized = ai != -1 and ai > ri  # granted, and no revoke later in the same prompt
     emit(authorized)
 except Exception:
     emit(False)
