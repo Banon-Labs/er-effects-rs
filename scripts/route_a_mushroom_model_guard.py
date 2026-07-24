@@ -94,41 +94,39 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
     independent_detached_components = parse_int(
         summary.get("arm_independent_detached_components")
     )
+    detached_components = parse_int(summary.get("arm_detached_components"))
+    detached_vertices = parse_int(summary.get("arm_detached_vertices"))
     detached_proxy_vertices = parse_int(summary.get("arm_detached_proxy_vertices"))
-    detached_islands_handled = (
+    detached_proxy_response_claimed = (
         detached_response == "body_proxy_low_hand"
         and independent_detached_components == 0
         and detached_proxy_vertices > 0
     )
+    detached_islands_handled = detached_components == 0 and independent_detached_components == 0
 
-    if (
-        arm_enabled
-        and arm_vertices > 0
-        and (left_components > 1 or right_components > 1)
-        and not detached_islands_handled
-    ):
+    if arm_enabled and arm_vertices > 0 and (left_components > 1 or right_components > 1):
         alerts.append(
             {
                 "code": "ARM_COMPONENT_DISCONNECTED",
                 "severity": "error",
-                "message": "Arm compensation was applied while arm-weighted geometry is split into multiple components per side.",
+                "message": "Arm compensation was applied while arm-weighted geometry is split into multiple components per side; user visual review proved detached proxying still looks broken up.",
                 "left_components": left_components,
                 "right_components": right_components,
-                "recommended_response": "do_not_package; use proxy body tweening or human geometry merge/split guidance before arm mutation",
+                "recommended_response": "do_not_package; require geometry/topology unification or remove the disconnected arm islands from the arm path before production",
             }
         )
-    if arm_enabled and arm_vertices > 0 and weak_before > 0 and not detached_islands_handled:
+    if arm_enabled and arm_vertices > 0 and weak_before > 0:
         alerts.append(
             {
                 "code": "ARM_HAND_ISLAND_WITH_WEAK_UPPER_ANCHOR",
                 "severity": "error",
-                "message": "Arm compensation attempted to fix weak shoulder/root anchors after generation; this is the failed arm-v1 pattern unless a detached-island response is explicitly implemented.",
+                "message": "Arm compensation attempted to fix weak shoulder/root anchors after generation; arm-v2 proved the detached proxy response is still visually broken.",
                 "weak_shoulder_components_before": weak_before,
                 "weak_shoulder_components_after": weak_after,
-                "recommended_response": "do_not_package; classify detached hand/forearm islands and avoid independent shoulder-to-hand gradients",
+                "recommended_response": "do_not_package; solve the disconnected source geometry/topology instead of masking it with post-hoc weights",
             }
         )
-    if arm_enabled and arm_vertices > 0 and disconnected_groups and not detached_islands_handled:
+    if arm_enabled and arm_vertices > 0 and disconnected_groups:
         alerts.append(
             {
                 "code": "ARM_WEIGHT_GROUPS_DISCONNECTED_IN_SOURCE",
@@ -144,7 +142,6 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
         and distal_before > 0
         and distal_after == 0
         and weak_before > 0
-        and not detached_islands_handled
     ):
         alerts.append(
             {
@@ -171,7 +168,10 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
             "disconnected_arm_weight_groups": disconnected_groups,
             "arm_detached_island_response": detached_response,
             "arm_independent_detached_components": independent_detached_components,
+            "arm_detached_components": detached_components,
+            "arm_detached_vertices": detached_vertices,
             "arm_detached_proxy_vertices": detached_proxy_vertices,
+            "detached_proxy_response_claimed": detached_proxy_response_claimed,
             "detached_islands_handled": detached_islands_handled,
         },
         "alerts": alerts,
