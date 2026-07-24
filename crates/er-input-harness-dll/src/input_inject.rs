@@ -21,11 +21,21 @@
 //! pointer can never fault the game thread.
 
 use crate::log::harness_log;
-use crate::win32::{read_u8, read_u32, read_usize};
+use crate::win32::{read_u8, read_u32, read_usize, write_u32};
 
 /// `inputmgr`/CSMenuMan singleton RVA (`SELECTBOT_INPUT_MANAGER_GLOBAL_RVA` /
 /// `GLOBAL_CSMENUMAN_RVA` in the product constant tree).
 const INPUT_MANAGER_GLOBAL_RVA: usize = 0x3d6b7b0;
+/// Boolean shop-category context slots consumed by `FUN_140784380` when filtering weapon
+/// strengthen rows. Static RE found only reads in that filter and clear-writes in the shared Gaitem
+/// constructors through `GLOBAL_CSMenuMan`, so the deterministic harness may seed them as probe
+/// context; fresh selected-row telemetry remains the proof that the seed actually produced a weapon
+/// row.
+const CSMENU_REINFORCE_SHOP_CATEGORY_1_OFFSET: usize = 0x47c;
+const CSMENU_REINFORCE_SHOP_CATEGORY_2_OFFSET: usize = 0x480;
+const CSMENU_REINFORCE_SHOP_CATEGORY_3_OFFSET: usize = 0x484;
+const CSMENU_REINFORCE_SHOP_CATEGORY_4_OFFSET: usize = 0x488;
+const DETERMINISTIC_REINFORCE_SHOP_CATEGORY_ENABLED: u32 = 1;
 /// Keystate bitmap base within the input manager (`INPUTMGR_BITMAP_90_OFFSET`).
 const INPUTMGR_BITMAP_90_OFFSET: usize = 0x90;
 /// Edge bit written per event (`MENU_EVENT_PRESSED_BIT`).
@@ -107,6 +117,26 @@ pub fn request_open_ingame_menu(input_manager_ptr: usize) -> bool {
 /// Resolve the dereferenced input-manager pointer, or `None` before it is initialized.
 pub fn input_manager(base: usize) -> Option<usize> {
     unsafe { read_usize(base + INPUT_MANAGER_GLOBAL_RVA) }.filter(|p| *p >= HEAP_LO)
+}
+
+/// Seed the blacksmith-style weapon strengthen category gates for the deterministic `upgrade_det`
+/// harness. The native shared Gaitem constructors clear these slots while opening the shell, so the
+/// caller deliberately writes before and after the native opener. This is harness-only setup, not
+/// product behavior: the selected-row hook must still observe a fresh weapon row after the shell opens
+/// before any confirm dialog can advance.
+pub fn seed_reinforce_shop_categories_for_probe(base: usize) -> bool {
+    let Some(menu) = input_manager(base) else {
+        return false;
+    };
+    let slots = [
+        CSMENU_REINFORCE_SHOP_CATEGORY_1_OFFSET,
+        CSMENU_REINFORCE_SHOP_CATEGORY_2_OFFSET,
+        CSMENU_REINFORCE_SHOP_CATEGORY_3_OFFSET,
+        CSMENU_REINFORCE_SHOP_CATEGORY_4_OFFSET,
+    ];
+    slots.into_iter().all(|offset| unsafe {
+        write_u32(menu + offset, DETERMINISTIC_REINFORCE_SHOP_CATEGORY_ENABLED)
+    })
 }
 
 // --- NATIVE EquipTop open (bd er-effects-rs-pe98, RE 2026-07-23) ---

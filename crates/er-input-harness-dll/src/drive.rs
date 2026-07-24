@@ -32,7 +32,8 @@ use crate::game_mem::{
 use crate::input_inject::{
     MenuEvent, advance_press_any_button, grant_deterministic_strengthen_seed, input_manager,
     keep_input_active, native_open_equip_menu, native_open_inventory_menu,
-    native_open_weapon_upgrade_menu, popup_job_serial, request_open_ingame_menu, tap_menu_event,
+    native_open_weapon_upgrade_menu, popup_job_serial, request_open_ingame_menu,
+    seed_reinforce_shop_categories_for_probe, tap_menu_event,
 };
 use crate::log::{harness_log, log_phase};
 use crate::pad_inject::{PadButton, set_pad_button, set_vk_id};
@@ -490,21 +491,24 @@ impl Phase {
             }
             Phase::OpenWeaponUpgradeMenu => {
                 // Native open of the weapon-upgrade/reinforcement menu. PASS requires the semantic
-                // CurrentOpenMenu semaphore; top-job/serial movement is only supporting telemetry.
+                // CurrentOpenMenu semaphore plus the deterministic nonzero reinforce-shop context;
+                // top-job/serial movement is only supporting telemetry.
                 if frame == 0 {
                     INGAMETOP_JOB.store(top_menu_job_ptr(), Ordering::SeqCst);
                     EQUIP_SERIAL.store(popup_job_serial(im) as usize, Ordering::SeqCst);
-                    if !sem.reinforce_shop_categories.any_enabled() {
+                    let pre_seeded = seed_reinforce_shop_categories_for_probe(base);
+                    if !pre_seeded {
                         harness_log!(
-                            "upgrade: NOT opening shared strengthen shell; reinforce shop context fields are all zero (cat1={} cat2={} cat3={} cat4={})",
-                            sem.reinforce_shop_categories.category_1,
-                            sem.reinforce_shop_categories.category_2,
-                            sem.reinforce_shop_categories.category_3,
-                            sem.reinforce_shop_categories.category_4
+                            "upgrade: NOT opening shared strengthen shell; failed to seed deterministic reinforce shop context"
                         );
                     } else {
                         let dispatched = native_open_weapon_upgrade_menu(base, im);
-                        harness_log!("upgrade: native WeaponUpgrade open dispatched={dispatched}");
+                        let post_seeded = seed_reinforce_shop_categories_for_probe(base);
+                        harness_log!(
+                            "upgrade: native WeaponUpgrade open dispatched={dispatched} reinforce_context_pre_seeded={} post_seeded={} (post-seed covers constructor clear)",
+                            pre_seeded as u8,
+                            post_seeded as u8
+                        );
                     }
                 }
                 let job = top_menu_job_ptr();
@@ -522,6 +526,7 @@ impl Phase {
                     );
                 }
                 sem.open_menu == i64::from(crate::input_scheduler::WEAPON_UPGRADE_OPEN_MENU_ID)
+                    && sem.reinforce_shop_categories.any_enabled()
             }
             Phase::BuildStrengthenDialog => {
                 if frame == 0 {

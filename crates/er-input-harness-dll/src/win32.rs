@@ -230,6 +230,21 @@ pub unsafe fn read_u32(addr: usize) -> Option<u32> {
     (ok != 0 && read == std::mem::size_of::<u32>()).then_some(value)
 }
 
+/// Write a 32-bit unsigned integer to this process's own address space (fault-safe).
+pub unsafe fn write_u32(addr: usize, value: u32) -> bool {
+    let mut wrote = 0usize;
+    let ok = unsafe {
+        WriteProcessMemory(
+            CURRENT_PROCESS_PSEUDO_HANDLE,
+            addr as *const c_void,
+            (&value as *const u32).cast(),
+            std::mem::size_of::<u32>(),
+            &mut wrote,
+        )
+    };
+    ok != 0 && wrote == std::mem::size_of::<u32>()
+}
+
 /// Read a 32-bit float from this process's own address space (fault-safe).
 pub unsafe fn read_f32(addr: usize) -> Option<f32> {
     let mut value = 0f32;
