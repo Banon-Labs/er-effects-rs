@@ -10,18 +10,18 @@ Usage:
   fmg-id-lookup.py --root <dir> --max-ids            # print per-file max id (range probe)
   fmg-id-lookup.py --root <dir> --near <id> [--win N] # ids within +/- N of <id>, per file
 
-Ids may be decimal or 0x-hex. Default root is the menu tree.
+Ids may be decimal or 0x-hex. Default root is $ER_MSG_ROOT when set, otherwise
+~/projects/er-msg/engus.
 """
 from __future__ import annotations
 
 import argparse
 import glob
 import os
-import re
 import sys
 import xml.etree.ElementTree as ET
 
-DEFAULT_ROOT = "/home/banon/projects/er-msg/engus"
+DEFAULT_ROOT = os.environ.get("ER_MSG_ROOT", os.path.expanduser("~/projects/er-msg/engus"))
 
 
 def parse_id(tok: str) -> int:
