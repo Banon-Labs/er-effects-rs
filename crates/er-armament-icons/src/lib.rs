@@ -170,6 +170,27 @@ fn target_child() -> &'static std::ffi::CStr {
         .unwrap_or(c"ArtsBadge")
 }
 
+/// Read a diagnostic override, preferring a game-dir FILE marker over the env var of the
+/// same meaning. WSL bash env vars do NOT cross the WSL->Windows boundary unless listed in
+/// WSLENV (bd wslenv-env-not-propagating-to-windows-game), so a file marker is the reliable
+/// channel the smoke harness already uses (er-harness-drive-mode.txt). Returns the trimmed
+/// non-empty value, or `None`.
+#[cfg(windows)]
+fn diag_override(env_name: &str, file_name: &str) -> Option<String> {
+    if let Some(dir) = game_directory_path() {
+        if let Ok(s) = std::fs::read_to_string(dir.join(file_name)) {
+            let s = s.trim().to_owned();
+            if !s.is_empty() {
+                return Some(s);
+            }
+        }
+    }
+    match std::env::var(env_name) {
+        Ok(v) if !v.trim().is_empty() => Some(v.trim().to_owned()),
+        _ => None,
+    }
+}
+
 pub(crate) fn log_message(args: fmt::Arguments<'_>) {
     let path = game_directory_path()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
@@ -215,8 +236,9 @@ fn spawn_install_thread() {
             // access violation writes a deep trace (faulting RVA + backtrace) to the log.
             crash_trace::install();
 
-            if let Ok(v) = std::env::var("ER_ARMAMENT_ICONS_FORCE_ICON") {
-                let v = v.trim();
+            if let Some(v) =
+                diag_override("ER_ARMAMENT_ICONS_FORCE_ICON", "er-armament-icons-force-icon.txt")
+            {
                 if v.eq_ignore_ascii_case("mirror") {
                     FORCE_ICON_ID.store(FORCE_ICON_MIRROR, Ordering::Relaxed);
                 } else if let Ok(id) = v.parse::<u32>() {
@@ -225,12 +247,11 @@ fn spawn_install_thread() {
             }
             // Approach-B draw target (default ArtsBadge): the existing grid-tile clip to draw the
             // badge INTO, e.g. ER_ARMAMENT_ICONS_TARGET=AttributeIcon.
-            if let Ok(v) = std::env::var("ER_ARMAMENT_ICONS_TARGET") {
-                let v = v.trim();
-                if !v.is_empty() {
-                    if let Ok(cstr) = std::ffi::CString::new(v) {
-                        let _ = TARGET_CHILD.set(cstr);
-                    }
+            if let Some(v) =
+                diag_override("ER_ARMAMENT_ICONS_TARGET", "er-armament-icons-target.txt")
+            {
+                if let Ok(cstr) = std::ffi::CString::new(v) {
+                    let _ = TARGET_CHILD.set(cstr);
                 }
             }
             let forced = FORCE_ICON_ID.load(Ordering::Relaxed);
@@ -541,29 +562,43 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
     // KNOWN-PRESENT control -- if it fails too, the assign call/parent is wrong; if only
     // ArtsIcon fails, this tile template lacks that child.
     if attempt <= SAMPLE_LOG_CALLS {
-        let mut bound_names = String::new();
+        // Full child inventory with LOCAL rects (tile-relative: +x=right, +y=down; AttributeIcon
+        // local[17,30,43,56]=bottom-right proven). Names are the AUTHORITATIVE set the game's
+        // TilePopulate references (deobf 0x1408ff470 string refs). Goal: find a BOTTOM-LEFT clip
+        // (local x<0, y>0) for the additive AoW badge, since AttributeIcon is bottom-right
+        // (infusion, untouched), ArtsIcon is detail-only + zero-extent, and grid tiles otherwise
+        // bind only ItemIcon/AttributeIcon. A bound child with a real rect is a draw candidate.
+        let mut inv = String::new();
         for name in [
             c"ItemIcon",
-            c"ItemIcon/IconImage",
-            c"AutoReplenish",
             c"AttributeIcon",
-            c"AttributeIcon/IconImage",
+            c"AttributeIconList",
             c"ArtsIcon",
-            c"ArtsIcon/IconImage",
+            c"inadequacy",
             c"New",
+            c"StockNum",
+            c"SetNum",
+            c"Selected",
+            c"ItemName",
+            c"ItemCost",
+            c"AutoReplenish",
+            c"ItemBreakMark",
+            c"ItemBreakMark2",
+            c"Dish/Root",
         ] {
-            unsafe { assign(tile, proxy.as_mut_ptr(), name.as_ptr().cast()) };
-            let bound = unsafe { is_bound(proxy.as_ptr()) };
-            unsafe { value_dtor(proxy.as_mut_ptr().add(PROXY_SCALEFORM_VALUE_OFFSET)) };
-            if bound {
-                if !bound_names.is_empty() {
-                    bound_names.push(',');
-                }
-                bound_names.push_str(name.to_str().unwrap_or("?"));
+            if let Some((l, _g)) = unsafe { probe_child_rects(base, tile, name) } {
+                inv.push_str(&format!(
+                    "{}=L[{:.0},{:.0},{:.0},{:.0}] ",
+                    name.to_str().unwrap_or("?"),
+                    l[0],
+                    l[1],
+                    l[2],
+                    l[3]
+                ));
             }
         }
         log_message(format_args!(
-            "bind probe #{attempt}: fires={fires} tile=0x{tile:x} arts_id={arts_id} bound=[{bound_names}]"
+            "child inv #{attempt}: fires={fires} tile=0x{tile:x} arts_id={arts_id} {inv}"
         ));
     }
 
