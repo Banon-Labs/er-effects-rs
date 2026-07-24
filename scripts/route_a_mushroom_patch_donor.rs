@@ -38,6 +38,12 @@ const SPINE_COMPENSATION_METRIC_CORE_RADIUS: f32 = 0.10;
 const REGION_NEAR_SHELL_DISTANCE: f32 = 0.08;
 const REGION_WEIGHT_SYNC_L1_THRESHOLD: f32 = 0.35;
 const REGION_WEIGHT_SYNC_MAX_STRENGTH: f32 = 0.25;
+const ARM_COMPENSATION_MIN_ARM_WEIGHT: f32 = 0.25;
+const ARM_COMPENSATION_MIN_COMPONENT_VERTICES: usize = 12;
+const ARM_COMPENSATION_STRENGTH: f32 = 0.72;
+const ARM_ROOT_TWEEN_FRACTION: f32 = 0.28;
+const ARM_DISTAL_OVERWEIGHT_THRESHOLD: f32 = 0.70;
+const ARM_LOW_UPPER_THRESHOLD: f32 = 0.18;
 
 const HEADER_SIZE: usize = 0x80;
 const DUMMY_SIZE: usize = 0x40;
@@ -147,6 +153,48 @@ struct SourceMesh {
     bbox_max: Vec3,
     weight_compensation: WeightCompensationReport,
     region_response: RegionResponseReport,
+    arm_compensation: ArmCompensationReport,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ArmCompensationReport {
+    enabled: bool,
+    compensated_vertices: usize,
+    left_components: usize,
+    right_components: usize,
+    left_vertices: usize,
+    right_vertices: usize,
+    avg_upper_before: f32,
+    avg_upper_after: f32,
+    avg_forearm_hand_before: f32,
+    avg_forearm_hand_after: f32,
+    avg_body_tween_after: f32,
+    distal_overweighted_components_before: usize,
+    distal_overweighted_components_after: usize,
+    weak_shoulder_components_before: usize,
+    weak_shoulder_components_after: usize,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ArmCompensationMetrics {
+    vertices: usize,
+    avg_upper: f32,
+    avg_forearm_hand: f32,
+    avg_body_tween: f32,
+    distal_overweighted_components: usize,
+    weak_shoulder_components: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ArmSide {
+    Left,
+    Right,
+}
+
+#[derive(Clone, Debug)]
+struct ArmComponent {
+    side: ArmSide,
+    vertices: Vec<usize>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -201,6 +249,7 @@ struct Config {
     summary_path: PathBuf,
     donor_mesh_index: usize,
     spine_core_compensation: bool,
+    arm_compensation: bool,
     region_map_tsv: Option<PathBuf>,
 }
 
@@ -214,6 +263,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &config.weights_path,
         &donor_lookup,
         config.spine_core_compensation,
+        config.arm_compensation,
         config.region_map_tsv.as_ref(),
     )?;
 
@@ -238,6 +288,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         source.weight_compensation.hard_spine_limb_edges_before,
         source.weight_compensation.hard_spine_limb_edges_after
     );
+    if source.arm_compensation.enabled {
+        println!(
+            "arm_compensation vertices={} upper={:.3}→{:.3} distal={:.3}→{:.3} weak_shoulder={}→{}",
+            source.arm_compensation.compensated_vertices,
+            source.arm_compensation.avg_upper_before,
+            source.arm_compensation.avg_upper_after,
+            source.arm_compensation.avg_forearm_hand_before,
+            source.arm_compensation.avg_forearm_hand_after,
+            source.arm_compensation.weak_shoulder_components_before,
+            source.arm_compensation.weak_shoulder_components_after
+        );
+    }
     if source.region_response.enabled {
         println!(
             "region_response feet={} face_candidate={} mixed_triangles={}→{} near_pairs={} mismatches={} synced_vertices={} response={}",
@@ -269,6 +331,7 @@ fn parse_args() -> Result<Config, Box<dyn std::error::Error>> {
     let mut summary_path = PathBuf::from(DEFAULT_SUMMARY);
     let mut donor_mesh_index = DEFAULT_DONOR_MESH_INDEX;
     let mut spine_core_compensation = true;
+    let mut arm_compensation = true;
     let mut region_map_tsv = None;
 
     let mut args = env::args().skip(1);
@@ -283,6 +346,7 @@ fn parse_args() -> Result<Config, Box<dyn std::error::Error>> {
                 donor_mesh_index = required_value(&arg, args.next())?.parse()?
             }
             "--no-spine-core-compensation" => spine_core_compensation = false,
+            "--no-arm-compensation" => arm_compensation = false,
             "--region-map-tsv" => {
                 region_map_tsv = Some(PathBuf::from(required_value(&arg, args.next())?))
             }
@@ -302,6 +366,7 @@ fn parse_args() -> Result<Config, Box<dyn std::error::Error>> {
         summary_path,
         donor_mesh_index,
         spine_core_compensation,
+        arm_compensation,
         region_map_tsv,
     })
 }
@@ -319,6 +384,7 @@ fn print_help() {
     println!("  --summary <path>          default: {DEFAULT_SUMMARY}");
     println!("  --donor-mesh-index <idx>  default: {DEFAULT_DONOR_MESH_INDEX}");
     println!("  --no-spine-core-compensation  disable automatic mushroom trunk/cap spine-weight self-healing");
+    println!("  --no-arm-compensation  disable automatic shoulder-to-hand arm gradient compensation");
     println!("  --region-map-tsv <path>  apply human-authored region responses, e.g. feet face-closure/blend");
 }
 
@@ -390,6 +456,7 @@ fn read_obj(path: &PathBuf) -> Result<SourceMesh, Box<dyn std::error::Error>> {
         bbox_max,
         weight_compensation: WeightCompensationReport::default(),
         region_response: RegionResponseReport::default(),
+        arm_compensation: ArmCompensationReport::default(),
     })
 }
 
@@ -407,6 +474,7 @@ fn apply_weights(
     path: &PathBuf,
     donor_lookup: &DonorBoneLookup,
     spine_core_compensation: bool,
+    arm_compensation: bool,
     region_map_tsv: Option<&PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let text = fs::read_to_string(path)?;
@@ -437,6 +505,9 @@ fn apply_weights(
 
     if spine_core_compensation {
         mesh.weight_compensation = compensate_spine_core_weights(mesh, &mut accum, donor_lookup)?;
+    }
+    if arm_compensation {
+        mesh.arm_compensation = compensate_arm_weights(mesh, &mut accum, donor_lookup)?;
     }
     if let Some(region_map_tsv) = region_map_tsv {
         mesh.region_response = apply_region_responses(mesh, &mut accum, region_map_tsv, donor_lookup)?;
@@ -736,6 +807,372 @@ fn spine_target_weights(
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a * (1.0 - t) + b * t
+}
+
+
+fn compensate_arm_weights(
+    mesh: &SourceMesh,
+    accum: &mut [[f32; 256]],
+    donor_lookup: &DonorBoneLookup,
+) -> Result<ArmCompensationReport, Box<dyn std::error::Error>> {
+    let left_upper = resolve_required_bone_u8(donor_lookup, "L_UpperArm")?;
+    let left_forearm = resolve_required_bone_u8(donor_lookup, "L_Forearm")?;
+    let left_hand = resolve_required_bone_u8(donor_lookup, "L_Hand")?;
+    let right_upper = resolve_required_bone_u8(donor_lookup, "R_UpperArm")?;
+    let right_forearm = resolve_required_bone_u8(donor_lookup, "R_Forearm")?;
+    let right_hand = resolve_required_bone_u8(donor_lookup, "R_Hand")?;
+    let spine1 = resolve_required_bone_u8(donor_lookup, "Spine1")?;
+    let spine2 = resolve_required_bone_u8(donor_lookup, "Spine2")?;
+    let center_x = (mesh.bbox_min.x + mesh.bbox_max.x) * 0.5;
+
+    let components = find_arm_components(
+        mesh,
+        accum,
+        left_upper,
+        left_forearm,
+        left_hand,
+        right_upper,
+        right_forearm,
+        right_hand,
+    );
+    if components.is_empty() {
+        return Ok(ArmCompensationReport {
+            enabled: true,
+            ..ArmCompensationReport::default()
+        });
+    }
+    let before = arm_compensation_metrics(
+        accum,
+        &components,
+        left_upper,
+        left_forearm,
+        left_hand,
+        right_upper,
+        right_forearm,
+        right_hand,
+        spine1,
+        spine2,
+        center_x,
+        mesh,
+    );
+
+    for component in &components {
+        apply_arm_component_gradient(
+            mesh,
+            accum,
+            component,
+            center_x,
+            left_upper,
+            left_forearm,
+            left_hand,
+            right_upper,
+            right_forearm,
+            right_hand,
+            spine1,
+            spine2,
+        );
+    }
+
+    let after = arm_compensation_metrics(
+        accum,
+        &components,
+        left_upper,
+        left_forearm,
+        left_hand,
+        right_upper,
+        right_forearm,
+        right_hand,
+        spine1,
+        spine2,
+        center_x,
+        mesh,
+    );
+
+    let (left_components, right_components) = component_side_counts(&components);
+    let (left_vertices, right_vertices) = component_side_vertices(&components);
+    Ok(ArmCompensationReport {
+        enabled: true,
+        compensated_vertices: after.vertices,
+        left_components,
+        right_components,
+        left_vertices,
+        right_vertices,
+        avg_upper_before: before.avg_upper,
+        avg_upper_after: after.avg_upper,
+        avg_forearm_hand_before: before.avg_forearm_hand,
+        avg_forearm_hand_after: after.avg_forearm_hand,
+        avg_body_tween_after: after.avg_body_tween,
+        distal_overweighted_components_before: before.distal_overweighted_components,
+        distal_overweighted_components_after: after.distal_overweighted_components,
+        weak_shoulder_components_before: before.weak_shoulder_components,
+        weak_shoulder_components_after: after.weak_shoulder_components,
+    })
+}
+
+fn find_arm_components(
+    mesh: &SourceMesh,
+    accum: &[[f32; 256]],
+    left_upper: u8,
+    left_forearm: u8,
+    left_hand: u8,
+    right_upper: u8,
+    right_forearm: u8,
+    right_hand: u8,
+) -> Vec<ArmComponent> {
+    let mut components = Vec::new();
+    for (side, bones) in [
+        (ArmSide::Left, [left_upper, left_forearm, left_hand]),
+        (ArmSide::Right, [right_upper, right_forearm, right_hand]),
+    ] {
+        let candidates: HashSet<usize> = mesh
+            .vertices
+            .iter()
+            .enumerate()
+            .filter_map(|(index, _)| {
+                (sum_bone_weights(&accum[index], &bones) >= ARM_COMPENSATION_MIN_ARM_WEIGHT)
+                    .then_some(index)
+            })
+            .collect();
+        for vertices in connected_components(mesh, &candidates) {
+            if vertices.len() >= ARM_COMPENSATION_MIN_COMPONENT_VERTICES {
+                components.push(ArmComponent { side, vertices });
+            }
+        }
+    }
+    components
+}
+
+fn connected_components(mesh: &SourceMesh, candidates: &HashSet<usize>) -> Vec<Vec<usize>> {
+    let mut adjacency: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (a, b) in unique_triangle_edges(&mesh.triangles) {
+        let a = a as usize;
+        let b = b as usize;
+        if candidates.contains(&a) && candidates.contains(&b) {
+            adjacency.entry(a).or_default().push(b);
+            adjacency.entry(b).or_default().push(a);
+        }
+    }
+    let mut seen = HashSet::new();
+    let mut components = Vec::new();
+    for candidate in candidates {
+        if !seen.insert(*candidate) {
+            continue;
+        }
+        let mut stack = vec![*candidate];
+        let mut component = Vec::new();
+        while let Some(vertex) = stack.pop() {
+            component.push(vertex);
+            if let Some(neighbors) = adjacency.get(&vertex) {
+                for neighbor in neighbors {
+                    if seen.insert(*neighbor) {
+                        stack.push(*neighbor);
+                    }
+                }
+            }
+        }
+        components.push(component);
+    }
+    components.sort_by_key(|component| std::cmp::Reverse(component.len()));
+    components
+}
+
+fn apply_arm_component_gradient(
+    mesh: &SourceMesh,
+    accum: &mut [[f32; 256]],
+    component: &ArmComponent,
+    center_x: f32,
+    left_upper: u8,
+    left_forearm: u8,
+    left_hand: u8,
+    right_upper: u8,
+    right_forearm: u8,
+    right_hand: u8,
+    spine1: u8,
+    spine2: u8,
+) {
+    let laterals = component
+        .vertices
+        .iter()
+        .map(|vertex| arm_lateral_progress_axis(component.side, mesh.vertices[*vertex].position.x, center_x))
+        .collect::<Vec<_>>();
+    let min_lateral = laterals.iter().copied().fold(f32::INFINITY, f32::min);
+    let max_lateral = laterals.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let lateral_span = (max_lateral - min_lateral).max(f32::EPSILON);
+    let (upper, forearm, hand) = match component.side {
+        ArmSide::Left => (left_upper, left_forearm, left_hand),
+        ArmSide::Right => (right_upper, right_forearm, right_hand),
+    };
+
+    for vertex in &component.vertices {
+        let lateral = arm_lateral_progress_axis(component.side, mesh.vertices[*vertex].position.x, center_x);
+        let progress = ((lateral - min_lateral) / lateral_span).clamp(0.0, 1.0);
+        let targets = shoulder_to_hand_targets(progress, upper, forearm, hand, spine1, spine2);
+        blend_to_targets(&mut accum[*vertex], &targets, ARM_COMPENSATION_STRENGTH);
+    }
+}
+
+fn arm_lateral_progress_axis(side: ArmSide, x: f32, center_x: f32) -> f32 {
+    match side {
+        ArmSide::Left => x - center_x,
+        ArmSide::Right => center_x - x,
+    }
+}
+
+fn shoulder_to_hand_targets(
+    progress: f32,
+    upper: u8,
+    forearm: u8,
+    hand: u8,
+    spine1: u8,
+    spine2: u8,
+) -> [(u8, f32); 5] {
+    let body = ARM_ROOT_TWEEN_FRACTION * (1.0 - progress / 0.35).clamp(0.0, 1.0);
+    let (upper_weight, forearm_weight, hand_weight) = if progress < 0.22 {
+        let t = (progress / 0.22).clamp(0.0, 1.0);
+        (lerp(0.68, 0.62, t), lerp(0.12, 0.26, t), lerp(0.0, 0.02, t))
+    } else if progress < 0.66 {
+        let t = ((progress - 0.22) / 0.44).clamp(0.0, 1.0);
+        (lerp(0.62, 0.34, t), lerp(0.26, 0.52, t), lerp(0.02, 0.14, t))
+    } else {
+        let t = ((progress - 0.66) / 0.34).clamp(0.0, 1.0);
+        (lerp(0.34, 0.14, t), lerp(0.52, 0.44, t), lerp(0.14, 0.42, t))
+    };
+    let limb_total = (1.0 - body).max(0.0);
+    let limb_sum = upper_weight + forearm_weight + hand_weight;
+    [
+        (spine1, body * 0.60),
+        (spine2, body * 0.40),
+        (upper, limb_total * upper_weight / limb_sum),
+        (forearm, limb_total * forearm_weight / limb_sum),
+        (hand, limb_total * hand_weight / limb_sum),
+    ]
+}
+
+fn blend_to_targets(weights: &mut [f32; 256], targets: &[(u8, f32)], strength: f32) {
+    let total = weights.iter().sum::<f32>();
+    if total <= 0.0 {
+        return;
+    }
+    for weight in weights.iter_mut() {
+        *weight *= 1.0 - strength;
+    }
+    for (bone, target_weight) in targets {
+        weights[*bone as usize] += total * strength * *target_weight;
+    }
+    normalize_accumulated_weights(weights);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn arm_compensation_metrics(
+    accum: &[[f32; 256]],
+    components: &[ArmComponent],
+    left_upper: u8,
+    left_forearm: u8,
+    left_hand: u8,
+    right_upper: u8,
+    right_forearm: u8,
+    right_hand: u8,
+    spine1: u8,
+    spine2: u8,
+    center_x: f32,
+    mesh: &SourceMesh,
+) -> ArmCompensationMetrics {
+    let mut metrics = ArmCompensationMetrics::default();
+    let mut upper_sum = 0.0;
+    let mut forearm_hand_sum = 0.0;
+    let mut body_tween_sum = 0.0;
+    for component in components {
+        let (upper, forearm, hand) = match component.side {
+            ArmSide::Left => (left_upper, left_forearm, left_hand),
+            ArmSide::Right => (right_upper, right_forearm, right_hand),
+        };
+        let mut component_upper = 0.0;
+        let mut component_forearm_hand = 0.0;
+        for vertex in &component.vertices {
+            metrics.vertices += 1;
+            let row = &accum[*vertex];
+            upper_sum += row[upper as usize];
+            forearm_hand_sum += row[forearm as usize] + row[hand as usize];
+            body_tween_sum += row[spine1 as usize] + row[spine2 as usize];
+            component_upper += row[upper as usize];
+            component_forearm_hand += row[forearm as usize] + row[hand as usize];
+        }
+        let divisor = component.vertices.len().max(1) as f32;
+        let avg_upper = component_upper / divisor;
+        let avg_forearm_hand = component_forearm_hand / divisor;
+        if avg_forearm_hand > ARM_DISTAL_OVERWEIGHT_THRESHOLD && avg_upper < ARM_LOW_UPPER_THRESHOLD {
+            metrics.distal_overweighted_components += 1;
+        }
+        if root_band_upper_body_average(
+            accum,
+            component,
+            upper,
+            spine1,
+            spine2,
+            center_x,
+            mesh,
+        ) < 0.42
+        {
+            metrics.weak_shoulder_components += 1;
+        }
+    }
+    let divisor = metrics.vertices.max(1) as f32;
+    metrics.avg_upper = upper_sum / divisor;
+    metrics.avg_forearm_hand = forearm_hand_sum / divisor;
+    metrics.avg_body_tween = body_tween_sum / divisor;
+    metrics
+}
+
+fn root_band_upper_body_average(
+    accum: &[[f32; 256]],
+    component: &ArmComponent,
+    upper: u8,
+    spine1: u8,
+    spine2: u8,
+    center_x: f32,
+    mesh: &SourceMesh,
+) -> f32 {
+    let laterals = component
+        .vertices
+        .iter()
+        .map(|vertex| arm_lateral_progress_axis(component.side, mesh.vertices[*vertex].position.x, center_x))
+        .collect::<Vec<_>>();
+    let min_lateral = laterals.iter().copied().fold(f32::INFINITY, f32::min);
+    let max_lateral = laterals.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let lateral_span = (max_lateral - min_lateral).max(f32::EPSILON);
+    let mut sum = 0.0;
+    let mut count = 0;
+    for vertex in &component.vertices {
+        let lateral = arm_lateral_progress_axis(component.side, mesh.vertices[*vertex].position.x, center_x);
+        let progress = ((lateral - min_lateral) / lateral_span).clamp(0.0, 1.0);
+        if progress <= ARM_ROOT_TWEEN_FRACTION {
+            let row = &accum[*vertex];
+            sum += row[upper as usize] + row[spine1 as usize] + row[spine2 as usize];
+            count += 1;
+        }
+    }
+    sum / count.max(1) as f32
+}
+
+fn component_side_counts(components: &[ArmComponent]) -> (usize, usize) {
+    let left = components
+        .iter()
+        .filter(|component| matches!(component.side, ArmSide::Left))
+        .count();
+    (left, components.len() - left)
+}
+
+fn component_side_vertices(components: &[ArmComponent]) -> (usize, usize) {
+    let left = components
+        .iter()
+        .filter(|component| matches!(component.side, ArmSide::Left))
+        .map(|component| component.vertices.len())
+        .sum::<usize>();
+    let total = components
+        .iter()
+        .map(|component| component.vertices.len())
+        .sum::<usize>();
+    (left, total - left)
 }
 
 fn apply_region_responses(
@@ -1456,6 +1893,17 @@ fn write_summary(
     writeln!(file, "donor_mesh_index={}", config.donor_mesh_index)?;
     if let Some(region_map_tsv) = &config.region_map_tsv {
         writeln!(file, "region_map_tsv={}", region_map_tsv.display())?;
+    }
+    writeln!(file, "arm_compensation_enabled={}", source.arm_compensation.enabled)?;
+    if source.arm_compensation.enabled {
+        writeln!(file, "arm_compensated_vertices={}", source.arm_compensation.compensated_vertices)?;
+        writeln!(file, "arm_components_left_right={},{}", source.arm_compensation.left_components, source.arm_compensation.right_components)?;
+        writeln!(file, "arm_vertices_left_right={},{}", source.arm_compensation.left_vertices, source.arm_compensation.right_vertices)?;
+        writeln!(file, "arm_avg_upper_before_after={:.6},{:.6}", source.arm_compensation.avg_upper_before, source.arm_compensation.avg_upper_after)?;
+        writeln!(file, "arm_avg_forearm_hand_before_after={:.6},{:.6}", source.arm_compensation.avg_forearm_hand_before, source.arm_compensation.avg_forearm_hand_after)?;
+        writeln!(file, "arm_avg_body_tween_after={:.6}", source.arm_compensation.avg_body_tween_after)?;
+        writeln!(file, "arm_distal_overweighted_components_before_after={},{}", source.arm_compensation.distal_overweighted_components_before, source.arm_compensation.distal_overweighted_components_after)?;
+        writeln!(file, "arm_weak_shoulder_components_before_after={},{}", source.arm_compensation.weak_shoulder_components_before, source.arm_compensation.weak_shoulder_components_after)?;
     }
     writeln!(file, "region_response_enabled={}", source.region_response.enabled)?;
     if source.region_response.enabled {
