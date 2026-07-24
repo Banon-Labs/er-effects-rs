@@ -154,7 +154,9 @@ def write_f32(data: bytearray, offset: int, value: float) -> None:
 
 
 def read_vec3(data: bytes | bytearray, offset: int) -> Vec3:
-    return Vec3(read_f32(data, offset), read_f32(data, offset + 4), read_f32(data, offset + 8))
+    return Vec3(
+        read_f32(data, offset), read_f32(data, offset + 4), read_f32(data, offset + 8)
+    )
 
 
 def write_vec3(data: bytearray, offset: int, value: Vec3) -> None:
@@ -163,7 +165,9 @@ def write_vec3(data: bytearray, offset: int, value: Vec3) -> None:
     write_f32(data, offset + 8, value.z)
 
 
-def write_snorm8x4(data: bytearray, offset: int, values: tuple[float, float, float, float]) -> None:
+def write_snorm8x4(
+    data: bytearray, offset: int, values: tuple[float, float, float, float]
+) -> None:
     for i, value in enumerate(values):
         scaled = max(-127, min(127, round(value * 127.0)))
         data[offset + i] = scaled & 0xFF
@@ -187,7 +191,11 @@ def parse_header(data: bytes | bytearray) -> Header:
 
 
 def table_offsets(header: Header) -> dict[str, int]:
-    bone_table = HEADER_SIZE + DUMMY_SIZE * header.dummy_count + MATERIAL_SIZE * header.material_count
+    bone_table = (
+        HEADER_SIZE
+        + DUMMY_SIZE * header.dummy_count
+        + MATERIAL_SIZE * header.material_count
+    )
     mesh_table = bone_table + BONE_SIZE * header.bone_count
     face_set_table = mesh_table + MESH_SIZE * header.mesh_count
     vertex_buffer_table = face_set_table + FACE_SET_SIZE * header.face_set_count
@@ -216,7 +224,9 @@ def parse_meshes(data: bytes | bytearray, offset: int, count: int) -> list[Mesh]
     return meshes
 
 
-def parse_face_sets(data: bytes | bytearray, offset: int, count: int, vertex_index_size: int) -> list[FaceSet]:
+def parse_face_sets(
+    data: bytes | bytearray, offset: int, count: int, vertex_index_size: int
+) -> list[FaceSet]:
     face_sets: list[FaceSet] = []
     for i in range(count):
         base = offset + i * FACE_SET_SIZE
@@ -231,7 +241,9 @@ def parse_face_sets(data: bytes | bytearray, offset: int, count: int, vertex_ind
     return face_sets
 
 
-def parse_vertex_buffers(data: bytes | bytearray, offset: int, count: int) -> list[VertexBuffer]:
+def parse_vertex_buffers(
+    data: bytes | bytearray, offset: int, count: int
+) -> list[VertexBuffer]:
     buffers: list[VertexBuffer] = []
     for i in range(count):
         base = offset + i * VERTEX_BUFFER_SIZE
@@ -251,11 +263,18 @@ def parse_layouts(data: bytes | bytearray, offset: int, count: int) -> list[Layo
     layouts: list[Layout] = []
     for i in range(count):
         base = offset + i * BUFFER_LAYOUT_SIZE
-        layouts.append(Layout(member_count=read_u32(data, base), member_offset=read_u32(data, base + 0x0C)))
+        layouts.append(
+            Layout(
+                member_count=read_u32(data, base),
+                member_offset=read_u32(data, base + 0x0C),
+            )
+        )
     return layouts
 
 
-def parse_layout_members(data: bytes | bytearray, offset: int, count: int) -> list[LayoutMember]:
+def parse_layout_members(
+    data: bytes | bytearray, offset: int, count: int
+) -> list[LayoutMember]:
     members: list[LayoutMember] = []
     for i in range(count):
         base = offset + i * LAYOUT_MEMBER_SIZE
@@ -287,8 +306,16 @@ def read_obj_positions(path: Path) -> list[Vec3]:
 
 def bbox(positions: list[Vec3]) -> tuple[Vec3, Vec3]:
     return (
-        Vec3(min(p.x for p in positions), min(p.y for p in positions), min(p.z for p in positions)),
-        Vec3(max(p.x for p in positions), max(p.y for p in positions), max(p.z for p in positions)),
+        Vec3(
+            min(p.x for p in positions),
+            min(p.y for p in positions),
+            min(p.z for p in positions),
+        ),
+        Vec3(
+            max(p.x for p in positions),
+            max(p.y for p in positions),
+            max(p.z for p in positions),
+        ),
     )
 
 
@@ -304,7 +331,9 @@ def lerp(a: float, b: float, t: float) -> float:
     return a + (b - a) * t
 
 
-def envelope(positions: list[Vec3], bounds: tuple[Vec3, Vec3], bins: int) -> list[float]:
+def envelope(
+    positions: list[Vec3], bounds: tuple[Vec3, Vec3], bins: int
+) -> list[float]:
     values = [0.0 for _ in range(bins)]
     for position in positions:
         index = min(bins - 1, int(normalize_height(position.y, bounds) * (bins - 1)))
@@ -357,7 +386,8 @@ def read_donor_positions(
         (
             member
             for member in members
-            if member.semantic_id == POSITION_SEMANTIC_ID and member.format_id == FLOAT3_FORMAT_ID
+            if member.semantic_id == POSITION_SEMANTIC_ID
+            and member.format_id == FLOAT3_FORMAT_ID
         ),
         None,
     )
@@ -365,12 +395,16 @@ def read_donor_positions(
         raise ValueError("selected donor vertex buffer has no float3 position member")
     start = header.data_offset + vertex_buffer.buffer_offset
     return [
-        read_vec3(data, start + i * vertex_buffer.vertex_size + position_member.struct_offset)
+        read_vec3(
+            data, start + i * vertex_buffer.vertex_size + position_member.struct_offset
+        )
         for i in range(vertex_buffer.vertex_count)
     ]
 
 
-def morph_positions(source_positions: list[Vec3], donor_positions: list[Vec3], bins: int) -> list[Vec3]:
+def morph_positions(
+    source_positions: list[Vec3], donor_positions: list[Vec3], bins: int
+) -> list[Vec3]:
     source_bounds = bbox(source_positions)
     donor_bounds = bbox(donor_positions)
     source_envelope = envelope(source_positions, source_bounds, bins)
@@ -385,7 +419,11 @@ def morph_positions(source_positions: list[Vec3], donor_positions: list[Vec3], b
         radius_fraction = max(0.0, min(1.0, donor_radius / donor_shell_radius))
         target_shell_radius = sample(source_envelope, t)
         target_radius = target_shell_radius * math.sqrt(radius_fraction)
-        angle = math.atan2(donor.z, donor.x) if donor_radius >= EPSILON else fallback_angle(index)
+        angle = (
+            math.atan2(donor.z, donor.x)
+            if donor_radius >= EPSILON
+            else fallback_angle(index)
+        )
         morphed.append(
             Vec3(
                 math.cos(angle) * target_radius,
@@ -405,15 +443,23 @@ def patch_morphed_vertices(
 ) -> None:
     start = header.data_offset + vertex_buffer.buffer_offset
     if len(positions) != vertex_buffer.vertex_count:
-        raise ValueError(f"morphed vertex count {len(positions)} != donor count {vertex_buffer.vertex_count}")
+        raise ValueError(
+            f"morphed vertex count {len(positions)} != donor count {vertex_buffer.vertex_count}"
+        )
     for vertex_index, position in enumerate(positions):
         vertex_start = start + vertex_index * vertex_buffer.vertex_size
         normal = normal_for(position)
         for member in members:
             offset = vertex_start + member.struct_offset
-            if member.semantic_id == POSITION_SEMANTIC_ID and member.format_id == FLOAT3_FORMAT_ID:
+            if (
+                member.semantic_id == POSITION_SEMANTIC_ID
+                and member.format_id == FLOAT3_FORMAT_ID
+            ):
                 write_vec3(data, offset, position)
-            elif member.semantic_id == NORMAL_SEMANTIC_ID and member.format_id in NORMAL_FORMAT_IDS:
+            elif (
+                member.semantic_id == NORMAL_SEMANTIC_ID
+                and member.format_id in NORMAL_FORMAT_IDS
+            ):
                 write_snorm8x4(data, offset, (normal.x, normal.y, normal.z, 1.0))
 
 
@@ -445,15 +491,25 @@ def main() -> int:
 
     offsets = table_offsets(header)
     meshes = parse_meshes(data, offsets["mesh"], header.mesh_count)
-    face_sets = parse_face_sets(data, offsets["face_set"], header.face_set_count, header.vertex_index_size)
-    vertex_buffers = parse_vertex_buffers(data, offsets["vertex_buffer"], header.vertex_buffer_count)
+    face_sets = parse_face_sets(
+        data, offsets["face_set"], header.face_set_count, header.vertex_index_size
+    )
+    vertex_buffers = parse_vertex_buffers(
+        data, offsets["vertex_buffer"], header.vertex_buffer_count
+    )
     layouts = parse_layouts(data, offsets["layout"], header.buffer_layout_count)
 
     donor_mesh = meshes[args.donor_mesh_index]
     donor_mesh_table_offset = offsets["mesh"] + args.donor_mesh_index * MESH_SIZE
-    write_u32(data, donor_mesh_table_offset + MATERIAL_INDEX_OFFSET_IN_MESH, args.material_index)
+    write_u32(
+        data,
+        donor_mesh_table_offset + MATERIAL_INDEX_OFFSET_IN_MESH,
+        args.material_index,
+    )
 
-    vertex_buffer_indices = parse_u32_list(data, donor_mesh.vertex_buffer_offset, donor_mesh.vertex_buffer_count)
+    vertex_buffer_indices = parse_u32_list(
+        data, donor_mesh.vertex_buffer_offset, donor_mesh.vertex_buffer_count
+    )
     if not vertex_buffer_indices:
         raise ValueError("selected donor mesh has no vertex buffers")
     vertex_buffer = vertex_buffers[vertex_buffer_indices[0]]
@@ -482,12 +538,18 @@ def main() -> int:
             if mesh_index == args.donor_mesh_index:
                 retained_face_sets += 1
                 retained_face_set_capacities.append(face_set.index_count // 3)
-            elif not args.keep_other_meshes and face_set_index not in selected_face_set_indices:
+            elif (
+                not args.keep_other_meshes
+                and face_set_index not in selected_face_set_indices
+            ):
                 zero_face_set_indices(data, header, face_set)
                 hidden_face_sets += 1
 
     if args.output_flver.exists() and args.backup_existing:
-        shutil.copy2(args.output_flver, args.output_flver.with_suffix(args.output_flver.suffix + ".bak"))
+        shutil.copy2(
+            args.output_flver,
+            args.output_flver.with_suffix(args.output_flver.suffix + ".bak"),
+        )
     args.output_flver.parent.mkdir(parents=True, exist_ok=True)
     args.output_flver.write_bytes(data)
 
@@ -519,7 +581,9 @@ def main() -> int:
     )
     print(args.output_flver)
     print(args.summary)
-    print(f"retained_face_sets={retained_face_sets} hidden_face_sets={hidden_face_sets}")
+    print(
+        f"retained_face_sets={retained_face_sets} hidden_face_sets={hidden_face_sets}"
+    )
     return 0
 
 
