@@ -440,7 +440,9 @@ fn patch_donor_flver(
                 .copied()
                 .map(|face_set| (index as usize, face_set))
         })
-        .find(|(_, face_set)| !face_set.triangle_strip && face_set.index_count >= source_index_count)
+        .find(|(_, face_set)| {
+            !face_set.triangle_strip && face_set.index_count >= source_index_count
+        })
         .ok_or_else(|| {
             format!(
                 "no selected donor face set can hold source indices: need={} selected={:?}",
@@ -596,8 +598,16 @@ fn redirect_face_set_indices(
     let record_offset = face_set_table + face_set_index * FACE_SET_SIZE;
     bounds(bytes, record_offset, FACE_SET_SIZE)?;
     bytes[record_offset + 0x04] = 0;
-    write_u32(bytes, record_offset + 0x08, primary_face_set.index_count as u32)?;
-    write_u32(bytes, record_offset + 0x0C, primary_face_set.index_offset as u32)?;
+    write_u32(
+        bytes,
+        record_offset + 0x08,
+        primary_face_set.index_count as u32,
+    )?;
+    write_u32(
+        bytes,
+        record_offset + 0x0C,
+        primary_face_set.index_offset as u32,
+    )?;
     write_u32(bytes, record_offset + 0x18, primary_face_set.index_size)?;
     Ok(())
 }
