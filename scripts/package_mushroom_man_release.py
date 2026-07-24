@@ -30,7 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--flver-summary",
         type=Path,
-        help="optional generated FLVER patch summary; defaults to source-mod parent/fc_m_0000-lod-redirect-summary.txt when present",
+        help="generated FLVER patch summary; defaults to source-mod parent/fc_m_0000-lod-redirect-summary.txt and is required for model-guard enforcement",
     )
     return parser.parse_args()
 
@@ -60,18 +60,19 @@ def load_json(path: Path) -> dict[str, Any]:
     return data
 
 
-def resolve_flver_summary(source_mod: Path, override: Path | None) -> Path | None:
+def resolve_flver_summary(source_mod: Path, override: Path | None) -> Path:
     if override is not None:
         return require_file(override, "FLVER patch summary")
     candidate = source_mod.parent / "fc_m_0000-lod-redirect-summary.txt"
-    return candidate.resolve() if candidate.is_file() else None
+    if not candidate.is_file():
+        raise FileNotFoundError(
+            "FLVER patch summary is required for model-guard enforcement: "
+            f"{candidate.resolve()}"
+        )
+    return candidate.resolve()
 
 
-def run_model_guards(
-    flver_summary: Path | None, connectivity_audit: Path
-) -> Path | None:
-    if flver_summary is None:
-        return None
+def run_model_guards(flver_summary: Path, connectivity_audit: Path) -> Path:
     guard_script = Path(__file__).with_name("route_a_mushroom_model_guard.py")
     require_file(guard_script, "model guard script")
     report_path = flver_summary.parent / "model-guard-report.json"

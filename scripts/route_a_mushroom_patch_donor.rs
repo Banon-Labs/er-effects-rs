@@ -45,6 +45,11 @@ const ARM_ROOT_TWEEN_FRACTION: f32 = 0.28;
 const ARM_DISTAL_OVERWEIGHT_THRESHOLD: f32 = 0.70;
 const ARM_LOW_UPPER_THRESHOLD: f32 = 0.18;
 const ARM_BODY_ATTACHMENT_DISTANCE: f32 = 0.08;
+const ARM_BROKEN_ISLAND_DISTANCE: f32 = 0.12;
+const ARM_BROKEN_ISLAND_MIN_VERTICES: usize = 25;
+const ARM_BROKEN_ISLAND_MAX_SPINE: f32 = 0.02;
+const ARM_BROKEN_ISLAND_MAX_UPPER: f32 = 0.12;
+const ARM_BROKEN_ISLAND_MIN_DISTAL: f32 = 0.75;
 
 const HEADER_SIZE: usize = 0x80;
 const DUMMY_SIZE: usize = 0x40;
@@ -155,6 +160,21 @@ struct SourceMesh {
     weight_compensation: WeightCompensationReport,
     region_response: RegionResponseReport,
     arm_compensation: ArmCompensationReport,
+    arm_island_prune: ArmIslandPruneReport,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ArmIslandPruneReport {
+    enabled: bool,
+    components_before: usize,
+    broken_components_before: usize,
+    broken_components_after: usize,
+    pruned_components: usize,
+    pruned_vertices: usize,
+    pruned_triangles: usize,
+    triangles_before: usize,
+    triangles_after: usize,
+    response: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -270,6 +290,7 @@ struct Config {
     donor_mesh_index: usize,
     spine_core_compensation: bool,
     arm_compensation: bool,
+    arm_island_prune: bool,
     region_map_tsv: Option<PathBuf>,
 }
 
@@ -284,6 +305,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &donor_lookup,
         config.spine_core_compensation,
         config.arm_compensation,
+        config.arm_island_prune,
         config.region_map_tsv.as_ref(),
     )?;
 
@@ -308,6 +330,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         source.weight_compensation.hard_spine_limb_edges_before,
         source.weight_compensation.hard_spine_limb_edges_after
     );
+    if source.arm_island_prune.enabled {
+        println!(
+            "arm_island_prune broken={}→{} pruned_components={} pruned_vertices={} pruned_triangles={} response={}",
+            source.arm_island_prune.broken_components_before,
+            source.arm_island_prune.broken_components_after,
+            source.arm_island_prune.pruned_components,
+            source.arm_island_prune.pruned_vertices,
+            source.arm_island_prune.pruned_triangles,
+            source.arm_island_prune.response
+        );
+    }
     if source.arm_compensation.enabled {
         println!(
             "arm_compensation vertices={} upper={:.3}→{:.3} distal={:.3}→{:.3} weak_shoulder={}→{} detached={} proxy={} response={}",
@@ -355,6 +388,7 @@ fn parse_args() -> Result<Config, Box<dyn std::error::Error>> {
     let mut donor_mesh_index = DEFAULT_DONOR_MESH_INDEX;
     let mut spine_core_compensation = true;
     let mut arm_compensation = false;
+    let mut arm_island_prune = true;
     let mut region_map_tsv = None;
 
     let mut args = env::args().skip(1);
@@ -371,6 +405,7 @@ fn parse_args() -> Result<Config, Box<dyn std::error::Error>> {
             "--no-spine-core-compensation" => spine_core_compensation = false,
             "--arm-compensation" => arm_compensation = true,
             "--no-arm-compensation" => arm_compensation = false,
+            "--no-arm-island-prune" => arm_island_prune = false,
             "--region-map-tsv" => {
                 region_map_tsv = Some(PathBuf::from(required_value(&arg, args.next())?))
             }
@@ -391,6 +426,7 @@ fn parse_args() -> Result<Config, Box<dyn std::error::Error>> {
         donor_mesh_index,
         spine_core_compensation,
         arm_compensation,
+        arm_island_prune,
         region_map_tsv,
     })
 }
@@ -411,9 +447,8 @@ fn print_help() {
     println!(
         "  --arm-compensation  opt into experimental shoulder/hand compensation; currently guard-blocked when components remain disconnected"
     );
-    println!(
-        "  --no-arm-compensation  explicit default: keep failed arm compensation disabled"
-    );
+    println!("  --no-arm-compensation  explicit default: keep failed arm compensation disabled");
+    println!("  --no-arm-island-prune  disable default pruning of broken detached hand/forearm island triangles");
     println!("  --region-map-tsv <path>  apply human-authored region responses, e.g. feet face-closure/blend");
 }
 
@@ -486,6 +521,7 @@ fn read_obj(path: &PathBuf) -> Result<SourceMesh, Box<dyn std::error::Error>> {
         weight_compensation: WeightCompensationReport::default(),
         region_response: RegionResponseReport::default(),
         arm_compensation: ArmCompensationReport::default(),
+        arm_island_prune: ArmIslandPruneReport::default(),
     })
 }
 
@@ -504,6 +540,7 @@ fn apply_weights(
     donor_lookup: &DonorBoneLookup,
     spine_core_compensation: bool,
     arm_compensation: bool,
+    arm_island_prune: bool,
     region_map_tsv: Option<&PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let text = fs::read_to_string(path)?;
@@ -532,6 +569,9 @@ fn apply_weights(
         vertex[donor_bone as usize] += weight;
     }
 
+    if arm_island_prune {
+        mesh.arm_island_prune = prune_broken_arm_islands(mesh, &accum, donor_lookup)?;
+    }
     if spine_core_compensation {
         mesh.weight_compensation = compensate_spine_core_weights(mesh, &mut accum, donor_lookup)?;
     }
@@ -837,6 +877,177 @@ fn spine_target_weights(
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a * (1.0 - t) + b * t
+}
+
+fn prune_broken_arm_islands(
+    mesh: &mut SourceMesh,
+    accum: &[[f32; 256]],
+    donor_lookup: &DonorBoneLookup,
+) -> Result<ArmIslandPruneReport, Box<dyn std::error::Error>> {
+    let left_upper = resolve_required_bone_u8(donor_lookup, "L_UpperArm")?;
+    let left_forearm = resolve_required_bone_u8(donor_lookup, "L_Forearm")?;
+    let left_hand = resolve_required_bone_u8(donor_lookup, "L_Hand")?;
+    let right_upper = resolve_required_bone_u8(donor_lookup, "R_UpperArm")?;
+    let right_forearm = resolve_required_bone_u8(donor_lookup, "R_Forearm")?;
+    let right_hand = resolve_required_bone_u8(donor_lookup, "R_Hand")?;
+    let spine1 = resolve_required_bone_u8(donor_lookup, "Spine1")?;
+    let spine2 = resolve_required_bone_u8(donor_lookup, "Spine2")?;
+    let components = find_arm_components(
+        mesh,
+        accum,
+        left_upper,
+        left_forearm,
+        left_hand,
+        right_upper,
+        right_forearm,
+        right_hand,
+    );
+    let arm_bones = [
+        left_upper,
+        left_forearm,
+        left_hand,
+        right_upper,
+        right_forearm,
+        right_hand,
+    ];
+    let body_vertices = non_arm_vertices(mesh, accum, &arm_bones);
+    let broken_components = components
+        .iter()
+        .filter(|component| {
+            is_broken_arm_island(
+                mesh,
+                accum,
+                component,
+                &body_vertices,
+                left_upper,
+                left_forearm,
+                left_hand,
+                right_upper,
+                right_forearm,
+                right_hand,
+                spine1,
+                spine2,
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let broken_vertices = broken_components
+        .iter()
+        .flat_map(|component| component.vertices.iter().copied())
+        .collect::<HashSet<_>>();
+    let triangles_before = mesh.triangles.len();
+    let mut pruned_triangles = 0;
+    mesh.triangles.retain(|triangle| {
+        let prune = triangle
+            .iter()
+            .any(|vertex| broken_vertices.contains(&(*vertex as usize)));
+        if prune {
+            pruned_triangles += 1;
+        }
+        !prune
+    });
+    let components_after = find_arm_components(
+        mesh,
+        accum,
+        left_upper,
+        left_forearm,
+        left_hand,
+        right_upper,
+        right_forearm,
+        right_hand,
+    );
+    let non_arm_vertices_after = non_arm_vertices(mesh, accum, &arm_bones);
+    let broken_components_after = components_after
+        .iter()
+        .filter(|component| {
+            is_broken_arm_island(
+                mesh,
+                accum,
+                component,
+                &non_arm_vertices_after,
+                left_upper,
+                left_forearm,
+                left_hand,
+                right_upper,
+                right_forearm,
+                right_hand,
+                spine1,
+                spine2,
+            )
+        })
+        .count();
+    let response = if broken_components.is_empty() {
+        "no_broken_detached_arm_islands_found"
+    } else if broken_components_after == 0 {
+        "removed_detached_hand_forearm_islands"
+    } else {
+        "remaining_broken_arm_islands"
+    };
+    Ok(ArmIslandPruneReport {
+        enabled: true,
+        components_before: components.len(),
+        broken_components_before: broken_components.len(),
+        broken_components_after,
+        pruned_components: broken_components.len(),
+        pruned_vertices: broken_vertices.len(),
+        pruned_triangles,
+        triangles_before,
+        triangles_after: mesh.triangles.len(),
+        response: response.to_string(),
+    })
+}
+
+fn non_arm_vertices(mesh: &SourceMesh, accum: &[[f32; 256]], arm_bones: &[u8]) -> Vec<usize> {
+    (0..mesh.vertices.len())
+        .filter(|index| {
+            sum_bone_weights(&accum[*index], arm_bones) < ARM_COMPENSATION_MIN_ARM_WEIGHT
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn is_broken_arm_island(
+    mesh: &SourceMesh,
+    accum: &[[f32; 256]],
+    component: &ArmComponent,
+    non_arm_vertices: &[usize],
+    left_upper: u8,
+    left_forearm: u8,
+    left_hand: u8,
+    right_upper: u8,
+    right_forearm: u8,
+    right_hand: u8,
+    spine1: u8,
+    spine2: u8,
+) -> bool {
+    if component.vertices.len() < ARM_BROKEN_ISLAND_MIN_VERTICES {
+        return false;
+    }
+    let nearest_body_distance =
+        nearest_component_distance(mesh, &component.vertices, non_arm_vertices);
+    if nearest_body_distance < ARM_BROKEN_ISLAND_DISTANCE {
+        return false;
+    }
+    let (upper, forearm, hand) = match component.side {
+        ArmSide::Left => (left_upper, left_forearm, left_hand),
+        ArmSide::Right => (right_upper, right_forearm, right_hand),
+    };
+    let divisor = component.vertices.len().max(1) as f32;
+    let mut spine_sum = 0.0;
+    let mut upper_sum = 0.0;
+    let mut distal_sum = 0.0;
+    for vertex in &component.vertices {
+        let row = &accum[*vertex];
+        spine_sum += row[spine1 as usize] + row[spine2 as usize];
+        upper_sum += row[upper as usize];
+        distal_sum += row[forearm as usize] + row[hand as usize];
+    }
+    let avg_spine = spine_sum / divisor;
+    let avg_upper = upper_sum / divisor;
+    let avg_distal = distal_sum / divisor;
+    avg_spine <= ARM_BROKEN_ISLAND_MAX_SPINE
+        && avg_upper <= ARM_BROKEN_ISLAND_MAX_UPPER
+        && avg_distal >= ARM_BROKEN_ISLAND_MIN_DISTAL
 }
 
 fn compensate_arm_weights(
@@ -2082,6 +2293,49 @@ fn write_summary(
         "arm_compensation_enabled={}",
         source.arm_compensation.enabled
     )?;
+    writeln!(
+        file,
+        "arm_island_prune_enabled={}",
+        source.arm_island_prune.enabled
+    )?;
+    if source.arm_island_prune.enabled {
+        writeln!(
+            file,
+            "arm_island_components_before={}",
+            source.arm_island_prune.components_before
+        )?;
+        writeln!(
+            file,
+            "arm_broken_visible_components_before_after={},{}",
+            source.arm_island_prune.broken_components_before,
+            source.arm_island_prune.broken_components_after
+        )?;
+        writeln!(
+            file,
+            "arm_island_pruned_components={}",
+            source.arm_island_prune.pruned_components
+        )?;
+        writeln!(
+            file,
+            "arm_island_pruned_vertices={}",
+            source.arm_island_prune.pruned_vertices
+        )?;
+        writeln!(
+            file,
+            "arm_island_pruned_triangles={}",
+            source.arm_island_prune.pruned_triangles
+        )?;
+        writeln!(
+            file,
+            "arm_triangles_before_after={},{}",
+            source.arm_island_prune.triangles_before, source.arm_island_prune.triangles_after
+        )?;
+        writeln!(
+            file,
+            "arm_island_prune_response={}",
+            source.arm_island_prune.response
+        )?;
+    }
     if source.arm_compensation.enabled {
         writeln!(
             file,

@@ -90,6 +90,14 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
         summary.get("arm_distal_overweighted_components_before_after")
     )
     disconnected_groups = disconnected_arm_weight_groups(audit)
+    arm_island_prune_enabled = parse_bool(summary.get("arm_island_prune_enabled"))
+    broken_visible_before, broken_visible_after = parse_int_pair(
+        summary.get("arm_broken_visible_components_before_after")
+    )
+    pruned_island_components = parse_int(summary.get("arm_island_pruned_components"))
+    pruned_island_vertices = parse_int(summary.get("arm_island_pruned_vertices"))
+    pruned_island_triangles = parse_int(summary.get("arm_island_pruned_triangles"))
+    arm_island_prune_response = summary.get("arm_island_prune_response", "")
     detached_response = summary.get("arm_detached_island_response", "")
     independent_detached_components = parse_int(
         summary.get("arm_independent_detached_components")
@@ -102,9 +110,40 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
         and independent_detached_components == 0
         and detached_proxy_vertices > 0
     )
-    detached_islands_handled = detached_components == 0 and independent_detached_components == 0
+    detached_islands_handled = (
+        detached_components == 0 and independent_detached_components == 0
+    )
 
-    if arm_enabled and arm_vertices > 0 and (left_components > 1 or right_components > 1):
+    if broken_visible_after > 0:
+        alerts.append(
+            {
+                "code": "ARM_BROKEN_VISIBLE_ISLANDS_AFTER_PRUNE",
+                "severity": "error",
+                "message": "Rendered arm geometry still contains the far detached hand/forearm island pattern that failed visual review.",
+                "broken_visible_components_before": broken_visible_before,
+                "broken_visible_components_after": broken_visible_after,
+                "arm_island_prune_enabled": arm_island_prune_enabled,
+                "recommended_response": "do_not_package; remove the broken island triangles or merge the source geometry before production",
+            }
+        )
+    if arm_enabled and arm_vertices > 0 and detached_proxy_response_claimed:
+        alerts.append(
+            {
+                "code": "ARM_DETACHED_PROXY_VISUAL_FAILURE",
+                "severity": "error",
+                "message": "The body_proxy_low_hand detached-arm response is blocked because runtime visual review proved it still looks broken up.",
+                "detached_components": detached_components,
+                "detached_vertices": detached_vertices,
+                "detached_proxy_vertices": detached_proxy_vertices,
+                "recommended_response": "do_not_package; use geometry/topology removal or merge, not a detached weight proxy",
+            }
+        )
+
+    if (
+        arm_enabled
+        and arm_vertices > 0
+        and (left_components > 1 or right_components > 1)
+    ):
         alerts.append(
             {
                 "code": "ARM_COMPONENT_DISCONNECTED",
@@ -166,6 +205,15 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
                 distal_after,
             ],
             "disconnected_arm_weight_groups": disconnected_groups,
+            "arm_island_prune_enabled": arm_island_prune_enabled,
+            "arm_broken_visible_components_before_after": [
+                broken_visible_before,
+                broken_visible_after,
+            ],
+            "arm_island_pruned_components": pruned_island_components,
+            "arm_island_pruned_vertices": pruned_island_vertices,
+            "arm_island_pruned_triangles": pruned_island_triangles,
+            "arm_island_prune_response": arm_island_prune_response,
             "arm_detached_island_response": detached_response,
             "arm_independent_detached_components": independent_detached_components,
             "arm_detached_components": detached_components,
