@@ -69,14 +69,20 @@ def disconnected_arm_weight_groups(audit: dict[str, Any]) -> list[str]:
     groups = audit.get("disconnected_weight_groups", [])
     if not isinstance(groups, list):
         return []
-    return sorted(group for group in groups if isinstance(group, str) and group in ARM_WEIGHT_GROUPS)
+    return sorted(
+        group
+        for group in groups
+        if isinstance(group, str) and group in ARM_WEIGHT_GROUPS
+    )
 
 
 def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, Any]:
     alerts: list[dict[str, Any]] = []
     arm_enabled = parse_bool(summary.get("arm_compensation_enabled"))
     arm_vertices = parse_int(summary.get("arm_compensated_vertices"))
-    left_components, right_components = parse_int_pair(summary.get("arm_components_left_right"))
+    left_components, right_components = parse_int_pair(
+        summary.get("arm_components_left_right")
+    )
     weak_before, weak_after = parse_int_pair(
         summary.get("arm_weak_shoulder_components_before_after")
     )
@@ -85,7 +91,11 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
     )
     disconnected_groups = disconnected_arm_weight_groups(audit)
 
-    if arm_enabled and arm_vertices > 0 and (left_components > 1 or right_components > 1):
+    if (
+        arm_enabled
+        and arm_vertices > 0
+        and (left_components > 1 or right_components > 1)
+    ):
         alerts.append(
             {
                 "code": "ARM_COMPONENT_DISCONNECTED",
@@ -117,7 +127,13 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
                 "recommended_response": "do_not_package; require arm-specific topology/proximity oracle before production",
             }
         )
-    if arm_enabled and arm_vertices > 0 and distal_before > 0 and distal_after == 0 and weak_before > 0:
+    if (
+        arm_enabled
+        and arm_vertices > 0
+        and distal_before > 0
+        and distal_after == 0
+        and weak_before > 0
+    ):
         alerts.append(
             {
                 "code": "ARM_DISTAL_OVERWEIGHTED_MASKED_BY_GLOBAL_REWRITE",
@@ -136,7 +152,10 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
             "arm_compensated_vertices": arm_vertices,
             "arm_components_left_right": [left_components, right_components],
             "arm_weak_shoulder_components_before_after": [weak_before, weak_after],
-            "arm_distal_overweighted_components_before_after": [distal_before, distal_after],
+            "arm_distal_overweighted_components_before_after": [
+                distal_before,
+                distal_after,
+            ],
             "disconnected_arm_weight_groups": disconnected_groups,
         },
         "alerts": alerts,

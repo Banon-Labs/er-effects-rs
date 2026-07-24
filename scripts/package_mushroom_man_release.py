@@ -67,7 +67,9 @@ def resolve_flver_summary(source_mod: Path, override: Path | None) -> Path | Non
     return candidate.resolve() if candidate.is_file() else None
 
 
-def run_model_guards(flver_summary: Path | None, connectivity_audit: Path) -> Path | None:
+def run_model_guards(
+    flver_summary: Path | None, connectivity_audit: Path
+) -> Path | None:
     if flver_summary is None:
         return None
     guard_script = Path(__file__).with_name("route_a_mushroom_model_guard.py")
