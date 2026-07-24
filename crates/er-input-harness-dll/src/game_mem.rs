@@ -28,9 +28,16 @@ const GAME_DATA_MAN_GLOBAL_RVA: usize = 0x3d5df38;
 const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize = 0x08;
 const CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d6b7b0;
 const CS_MENU_MAN_MENU_DATA_OFFSET: usize = 0x8;
-/// `CurrentOpenMenu` global written by the EventFlag/menu invoke open-menu helpers. In the 1.16.x
-/// Ghidra dump, invoke case `0x88` calls `FUN_140e9da60`, which writes `0x17` here for weapon
-/// reinforcement/upgrade.
+/// Base `CS::MessageBoxDialog` vtable RVA. The top-window dialog accept reader uses this as a type
+/// gate before reading dialog-layout offsets.
+const MSGBOX_DIALOG_VTABLE_RVA: usize = 0x2b03550;
+/// `CS::SaveRetryDialog` is a `MessageBoxDialog` subclass used by startup/offline title paths and
+/// shares the same fade/settle accept fields.
+const SAVE_RETRY_DIALOG_VTABLE_RVA: usize = 0x2aaabf8;
+/// `CurrentOpenMenu` global written by the EventFlag/menu invoke open-menu helpers. In the active
+/// Ghidra MCP 1.16.2 dump, invoke case `0x88` calls `FUN_140e9da60`, which writes `0x17` here for
+/// weapon reinforcement/upgrade. This is diagnostic telemetry until a runtime trace correlates it
+/// against the live process build.
 const CURRENT_OPEN_MENU_ID_RVA: usize = 0x458baec;
 
 /// Lowest plausible heap/image pointer -- filters null and small sentinel values out of walks.
@@ -274,10 +281,21 @@ pub fn dialog_accept_gate(dialog: usize) -> Option<DialogAcceptGate> {
     Some(DialogAcceptGate::new(required_elapsed, elapsed))
 }
 
-/// Candidate accept gate for the current top popup window, valid when the top window is a
-/// `CS::MessageBoxDialog`/modal confirm object.
+fn known_message_box_dialog(window: usize) -> bool {
+    let Some(base) = game_base() else {
+        return false;
+    };
+    let Some(vtable) = (unsafe { read_usize(window) }).filter(|p| *p >= base) else {
+        return false;
+    };
+    vtable == base + MSGBOX_DIALOG_VTABLE_RVA || vtable == base + SAVE_RETRY_DIALOG_VTABLE_RVA
+}
+
+/// Candidate accept gate for the current top popup window, valid only when the top window has a
+/// known `CS::MessageBoxDialog`-family vtable.
 pub fn top_window_dialog_accept_gate() -> Option<DialogAcceptGate> {
-    dialog_accept_gate(top_window())
+    let window = top_window();
+    known_message_box_dialog(window).then(|| dialog_accept_gate(window))?
 }
 
 /// TRUE when the top popup window is a readable dialog whose native fade/settle gate is ready.
