@@ -76,6 +76,18 @@ pub(crate) use er_telemetry::counters::NATIVE_OVERLAY_STAGE;
 /// window + our D3D12 device and runs the render loop. Safe to call unconditionally at attach; the caller
 /// gates it to native Windows.
 pub(crate) fn install_native_overlay() {
+    // Under a RenderDoc capture, this overlay's OWN D3D12 device + swapchain + Present loop are hooked by
+    // renderdoc.dll's D3D12/DXGI resource tracker, which null-derefs on our separate present path and takes
+    // ER down in BOOT before char-load (bd; crash: renderdoc.dll+0x83db51 READ of 0x18 on the native-overlay
+    // present). This mirrors the present-overlay gate at install_present_overlay_hook. Skip the overlay
+    // entirely so RenderDoc captures the game's REAL present -- the overlay is not needed to CAPTURE the
+    // render state, and the passive gxdc/distview/mapitem oracle reads (no D3D12 calls) are unaffected.
+    if crate::experiments::renderdoc_active() {
+        append_autoload_debug(format_args!(
+            "native-overlay: SKIPPED -- renderdoc.dll loaded (own device/swapchain/present would crash RenderDoc's D3D12 tracker)"
+        ));
+        return;
+    }
     if NATIVE_OVERLAY_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
         return;
     }
