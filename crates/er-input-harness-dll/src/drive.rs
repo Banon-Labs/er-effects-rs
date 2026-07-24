@@ -344,6 +344,17 @@ impl Phase {
         }
     }
 
+    fn requires_input_manager(self) -> bool {
+        matches!(
+            self,
+            Phase::OpenPauseMenu
+                | Phase::ProbeMenu
+                | Phase::OpenEquipMenu
+                | Phase::OpenInventoryMenu
+                | Phase::OpenWeaponUpgradeMenu
+        )
+    }
+
     /// One frame of the phase. Returns Advanced (effect seen), Running, or Derailed (past budget).
     fn tick(self, base: usize, im: usize, frame: u64, sem: &Sem) -> Status {
         let advanced = match self {
@@ -432,9 +443,8 @@ impl Phase {
                     || serial > EQUIP_SERIAL.load(Ordering::SeqCst)
             }
             Phase::OpenWeaponUpgradeMenu => {
-                // Native open of the weapon-upgrade/reinforcement menu. Advance only when the
-                // current-open-menu semaphore reaches the researched weapon-upgrade id or the native
-                // submit path visibly swaps/serializes the top job.
+                // Native open of the weapon-upgrade/reinforcement menu. PASS requires the semantic
+                // CurrentOpenMenu semaphore; top-job/serial movement is only supporting telemetry.
                 if frame == 0 {
                     INGAMETOP_JOB.store(top_menu_job_ptr(), Ordering::SeqCst);
                     EQUIP_SERIAL.store(popup_job_serial(im) as usize, Ordering::SeqCst);
@@ -443,9 +453,15 @@ impl Phase {
                 }
                 let job = top_menu_job_ptr();
                 let serial = popup_job_serial(im) as usize;
+                if frame % TAP_CYCLE_FRAMES == 0 {
+                    harness_log!(
+                        "upgrade: open probe semaphores open_menu={} top_job_changed={} serial_changed={}",
+                        sem.open_menu,
+                        (job != 0 && job != INGAMETOP_JOB.load(Ordering::SeqCst)) as u8,
+                        (serial > EQUIP_SERIAL.load(Ordering::SeqCst)) as u8
+                    );
+                }
                 sem.open_menu == i64::from(crate::input_scheduler::WEAPON_UPGRADE_OPEN_MENU_ID)
-                    || (job != 0 && job != INGAMETOP_JOB.load(Ordering::SeqCst))
-                    || serial > EQUIP_SERIAL.load(Ordering::SeqCst)
             }
         };
         if advanced {
@@ -644,7 +660,7 @@ fn resolve_mode() -> DriveMode {
     // MUST stay index-aligned with the `idx` match below (bd reload2-crash-MODES-oob): every DriveMode
     // needs a slot here or MODES[cached] panics. NativeReloadTwice=5 was added to the match but not here,
     // so the 2nd per-frame resolve_mode() indexed MODES[5] out-of-bounds -> crash ~after boot (run64/65/67).
-    const MODES: [DriveMode; 8] = [
+    const MODES: [DriveMode; 9] = [
         DriveMode::BootContinueOnly,  // 0
         DriveMode::NativeReloadOnly,  // 1
         DriveMode::FullBootReload,    // 2
@@ -653,6 +669,7 @@ fn resolve_mode() -> DriveMode {
         DriveMode::NativeReloadTwice, // 5
         DriveMode::EquipMenu,         // 6
         DriveMode::InventoryMenu,     // 7
+        DriveMode::WeaponUpgradeMenu, // 8
     ];
     let cached = MODE_IDX.load(Ordering::SeqCst);
     if cached != usize::MAX {
@@ -748,21 +765,17 @@ pub fn on_frame(base: usize) {
         return; // stopped driving; the run monitor tears the game down on the DERAILED marker
     }
 
-    let Some(im) = input_manager(base) else {
-        // DIAG (bd BREAKTHROUGH2 task-stop): log ONCE if input_manager stops resolving mid-drive (the
-        // suspected cause of the drive silently stopping after the first pad injection changed the menu).
-        if !ONFRAME_IM_NULL_DIAG.swap(true, Ordering::SeqCst) {
-            harness_log!(
-                "on_frame: input_manager returned None -> drive silently stops this frame"
-            );
+    let im = input_manager(base);
+    if let Some(im) = im {
+        // GENERALLY ACCEPT POPUPS every frame (dialog-OK id 0x01; consumed only while a modal dialog is up).
+        let pf = POPUP_FRAME.fetch_add(1, Ordering::SeqCst);
+        if pf % POPUP_CYCLE_FRAMES < POPUP_SET_FRAMES {
+            tap_menu_event(im, MenuEvent::PopupAccept);
         }
-        return;
-    };
-
-    // GENERALLY ACCEPT POPUPS every frame (dialog-OK id 0x01; consumed only while a modal dialog is up).
-    let pf = POPUP_FRAME.fetch_add(1, Ordering::SeqCst);
-    if pf % POPUP_CYCLE_FRAMES < POPUP_SET_FRAMES {
-        tap_menu_event(im, MenuEvent::PopupAccept);
+    } else if !ONFRAME_IM_NULL_DIAG.swap(true, Ordering::SeqCst) {
+        harness_log!(
+            "on_frame: input_manager returned None; title/no-input phases continue, menu-input phases wait"
+        );
     }
 
     let phases = resolve_mode().phases();
@@ -781,7 +794,14 @@ pub fn on_frame(base: usize) {
     // world_simulating mutates a rising streak -> compute exactly once per frame.
     let sem = Sem::read(world_simulating());
 
-    match phase.tick(base, im, frame, &sem) {
+    let status = match im {
+        Some(im) => phase.tick(base, im, frame, &sem),
+        None if phase.requires_input_manager() && frame >= phase.budget() => Status::Derailed,
+        None if phase.requires_input_manager() => Status::Running,
+        None => phase.tick(base, 0, frame, &sem),
+    };
+
+    match status {
         Status::Running => {}
         Status::Advanced => {
             harness_log!(
