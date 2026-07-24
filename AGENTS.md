@@ -24,6 +24,10 @@ When the user explicitly says to continue until a game run is required, do not s
 
 When a user-visible asset/runtime test shows no change, do not answer with a "most likely" cause or ask for another blind run. First determine exactly what was wrong from offline evidence whenever possible: verify the profile/package paths, map the in-game mechanism to the exact regulation rows/part IDs/asset filenames, and only then build the next package or ask for a runtime retest. If a previous run was not instrumented or configured to capture enough evidence, treat that as a validation failure and fix the evidence path before retrying.
 
+## User-Gated User-Visible Launches
+
+All user-visible launches are user-gated. Do not launch Elden Ring, Blender, ME3, games, or other current-desktop/user-visible applications unless the user gives explicit current-turn approval for that exact launch class after the expected user-visible impact is stated. Previous standing runtime-validation orders do not override this gate. If a launch would be the next proof step, stop at the launch-ready artifact/profile and ask for the narrow launch gate instead of proceeding. This must be enforced by Cupcake/Rego policy for agent Bash launch paths; if policy coverage is missing or not loaded, fix that executable gate before attempting another launch.
+
 ## User-Visible Launch Follow-Up Gate
 
 After launching Elden Ring, Blender, or any other user-visible app for the user's live inspection, do not immediately pivot into unrelated edits, checks, or background work. First perform and report a bounded post-launch state check: launched profile/artifact path, launcher/process state, matched top-level window when applicable, latest relevant launcher/log evidence, and crash/modal/error-window scan when the tool can provide it. If the launch remains open for the user, explicitly record it as a tracked live resource with PID/title/profile path and then stop mutating until the user's next observation or an agreed monitor/teardown step. A process/window appearing is not enough by itself to claim the launch is safe or review-ready.
