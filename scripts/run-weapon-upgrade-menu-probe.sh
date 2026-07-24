@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Weapon-upgrade menu probe: stages input-harness + telemetry only, drives boot -> Continue ->
-# pause menu -> native weapon-upgrade menu open, then dwells for semaphore logging. No upgrade
-# confirm inputs are sent.
+# Weapon-upgrade menu probe: stages input-harness + telemetry only. Default `upgrade` mode drives
+# boot -> Continue -> pause -> native weapon-upgrade menu open, then dwells for semaphore logging.
+# `HARNESS_DRIVE_MODE=upgrade_det` additionally seeds a +0 weapon/materials/runes and buffers the
+# strengthen dialog OK until native dialog readiness.
 set -euo pipefail
 
 fail() {
@@ -13,7 +14,12 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 HARNESS_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_input_harness_dll.dll"
 TELEM_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_telemetry_dll.dll"
-ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/weapon-upgrade-menu-$(date +%Y%m%d-%H%M%S)}"
+DRIVE_MODE="${HARNESS_DRIVE_MODE:-upgrade}"
+case "$DRIVE_MODE" in
+upgrade | upgrade_det) ;;
+*) fail "HARNESS_DRIVE_MODE must be 'upgrade' or 'upgrade_det', got '$DRIVE_MODE'" ;;
+esac
+ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/weapon-upgrade-menu-${DRIVE_MODE}-$(date +%Y%m%d-%H%M%S)}"
 CAP_SECONDS="$(cat "$REPO_ROOT/.auto/runtime_timeout_cap_seconds" 2>/dev/null || echo 300)"
 
 if [[ -z "${GAME_DIR:-}" ]]; then
@@ -118,7 +124,7 @@ PROFILE="$ARTIFACT_DIR/weapon-upgrade-menu-probe.me3"
 	echo "path = '$(win_path "$TELEM_GAMEDIR")'"
 } >"$PROFILE"
 
-echo -n upgrade >"$GAME_DIR/er-harness-drive-mode.txt"
+echo -n "$DRIVE_MODE" >"$GAME_DIR/er-harness-drive-mode.txt"
 [[ -f "$GAME_DIR/er-effects.toml" ]] && mv -f "$GAME_DIR/er-effects.toml" "$ARTIFACT_DIR/er-effects.toml.bak"
 rm -f "$GAME_DIR"/er-input-harness.log "$GAME_DIR"/er-input-harness-phases.jsonl \
 	"$GAME_DIR"/er-telemetry-timeseries.jsonl "$GAME_DIR"/er-harness-force-drive.txt 2>/dev/null
@@ -142,13 +148,19 @@ trap cleanup EXIT
 
 echo "======================================================================"
 echo "== LAUNCHING ELDEN RING (offline, me3) -- WEAPON-UPGRADE MENU PROBE =="
-echo "==   harness drive 'upgrade': boot -> Continue -> pause -> native upgrade menu"
-echo "==   no upgrade confirms; semaphore logging only; cap=${CAP_SECONDS}s backstop"
+echo "==   harness drive '$DRIVE_MODE'"
+if [[ "$DRIVE_MODE" == "upgrade_det" ]]; then
+	echo "==   deterministic seed + native upgrade menu + early buffered dialog OK"
+else
+	echo "==   no upgrade confirms; semaphore logging only"
+fi
+echo "==   cap=${CAP_SECONDS}s backstop"
 echo "==   INPUT WILL BE DRIVEN (menu/pad/native open) -- agent-owned bounded run"
 echo "==   artifacts -> $ARTIFACT_DIR"
 echo "======================================================================"
 
-"$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
+ER_HARNESS_DRIVE_MODE="$DRIVE_MODE" \
+	"$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
 ME3_PID=$!
 echo "$ME3_PID" >"$ARTIFACT_DIR/me3-launch.pid"
 
@@ -158,7 +170,8 @@ python3 "$SCRIPT_DIR/weapon-upgrade-menu-watch.py" \
 	--artifact-dir "$ARTIFACT_DIR" \
 	--max-seconds "$CAP_SECONDS" \
 	--pre-er-pids "$PRE_ER_PIDS" \
-	--pre-me3-pids "$PRE_ME3_PIDS"
+	--pre-me3-pids "$PRE_ME3_PIDS" \
+	--mode "$DRIVE_MODE"
 RC=$?
 set -e
 

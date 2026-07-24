@@ -386,11 +386,19 @@ pub fn return_title_requested() -> bool {
     unsafe { read_usize(md + MENU_DATA_RETURN_TITLE_5D_OFFSET) }.is_some_and(|v| (v & 0xff) == 1)
 }
 
-/// Read the optional drive-mode flag file (CWD-relative, same dir as the log): one of `boot`,
-/// `reload`, `full` (default `full`). Lets a run switch the drive PATTERN without a rebuild.
+/// Read the optional drive-mode selector: prefer `ER_HARNESS_DRIVE_MODE`, then the legacy
+/// CWD-relative flag file. The environment path is explicit for me3/Win32 launches where the game
+/// process CWD is not guaranteed to be the directory where the launcher staged marker files.
 pub fn read_drive_mode_flag() -> String {
-    std::fs::read_to_string("er-harness-drive-mode.txt")
+    std::env::var("ER_HARNESS_DRIVE_MODE")
+        .ok()
         .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            std::fs::read_to_string("er-harness-drive-mode.txt")
+                .ok()
+                .map(|s| s.trim().to_ascii_lowercase())
+        })
         .unwrap_or_default()
 }
 

@@ -21,7 +21,7 @@
 //! pointer can never fault the game thread.
 
 use crate::log::harness_log;
-use crate::win32::{read_u8, read_usize};
+use crate::win32::{read_u8, read_u32, read_usize};
 
 /// `inputmgr`/CSMenuMan singleton RVA (`SELECTBOT_INPUT_MANAGER_GLOBAL_RVA` /
 /// `GLOBAL_CSMENUMAN_RVA` in the product constant tree).
@@ -208,6 +208,123 @@ pub fn native_open_weapon_upgrade_menu(base: usize, input_manager_ptr: usize) ->
     // and performs the same build/submit + CurrentOpenMenu update as the event invoke case.
     unsafe { open_weapon_upgrade(&mut open_menu_job) };
     open_menu_job[0] >= HEAP_LO
+}
+
+/// CT `ER_TGA_v1.16.1.CT` ItemGive target (`AOB 8B 02 83 F8 0A - 0x52`), Ghidra-named
+/// `CS::MapItemManImpl::GiveItems(MapItemManImpl*, ItemLotSpawnDataList*, ItemLotSpawnDataStatus*,
+/// DL_BOOL)`. This is a harness-only deterministic setup lever, not product behavior.
+const GIVE_ITEMS_RVA: usize = 0x5605b0;
+/// CT MapItemMan singleton AOB (`48 8B 0D ?? ?? ?? ?? C7 44 24 50 FF FF FF FF`).
+const MAP_ITEM_MAN_GLOBAL_RVA: usize = 0x3d67a50;
+/// CT AddSoul AOB (`44 8B ?? ?? 45 33 ?? 44 89 5C 24`), Ghidra-named `AddRunes`.
+const ADD_RUNES_RVA: usize = 0x25e100;
+/// Repo-canonical `PlayerGameData::rune_count` offset (see `player_correctness.rs`). Read this before
+/// calling `AddRunes` so a bad `PlayerGameData*` fails closed instead of crashing at the function's
+/// first dereference.
+const PLAYER_GAME_DATA_RUNE_COUNT_OFFSET: usize = 0x6c;
+
+const DETERMINISTIC_DAGGER_ID: i32 = 0x000f4240;
+const SMITHING_STONE_1_RAW_GOODS_ID: i32 = 0x2774;
+const NO_GEM_ID: i32 = -1;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ItemLotSpawnDataItemEntry {
+    item_id: i32,
+    quantity: i32,
+    upgrade: i32,
+    gem_id: i32,
+}
+
+#[repr(C)]
+struct ItemLotSpawnDataList {
+    count: u32,
+    items: [ItemLotSpawnDataItemEntry; 10],
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct ItemLotSpawnDataStatus {
+    fields: [u32; 3],
+}
+
+/// Deterministically seed a +0 Dagger, Smithing Stone [1] material, and enough runes for a first
+/// strengthen attempt. The item table layout comes from Ghidra `ItemLotSpawnDataList` and the IDs from
+/// the CT dropdown / `ItemGive` helper, which strips the goods category base before calling `GiveItems`.
+/// Rune setup uses the repo-canonical `GameDataMan` global, not the CT helper's stale singleton slot.
+pub fn grant_deterministic_strengthen_seed(base: usize) -> bool {
+    type GiveItemsFn = unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut ItemLotSpawnDataList,
+        *mut ItemLotSpawnDataStatus,
+        u32,
+    );
+    type AddRunesFn = unsafe extern "system" fn(*mut core::ffi::c_void, i32) -> i32;
+    let Some(map_item_man) = unsafe { read_usize(base + MAP_ITEM_MAN_GLOBAL_RVA) }
+        .filter(|p| *p >= HEAP_LO)
+        .map(|p| p as *mut core::ffi::c_void)
+    else {
+        return false;
+    };
+    let Some(game_data_man) =
+        (unsafe { read_usize(base + er_game_base::rva::GAME_DATA_MAN_GLOBAL_RVA) })
+            .filter(|p| *p >= HEAP_LO)
+    else {
+        return false;
+    };
+    let Some(player_game_data) = (unsafe {
+        read_usize(game_data_man + er_game_base::rva::GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET)
+    })
+    .filter(|p| *p >= HEAP_LO) else {
+        return false;
+    };
+    let Some(runes_before) =
+        (unsafe { read_u32(player_game_data + PLAYER_GAME_DATA_RUNE_COUNT_OFFSET) })
+    else {
+        harness_log!(
+            "deterministic-strengthen: refusing AddRunes because PlayerGameData rune_count unreadable pgd=0x{player_game_data:x}"
+        );
+        return false;
+    };
+
+    let mut list = ItemLotSpawnDataList {
+        count: 2,
+        items: [ItemLotSpawnDataItemEntry {
+            item_id: 0,
+            quantity: 0,
+            upgrade: -1,
+            gem_id: NO_GEM_ID,
+        }; 10],
+    };
+    list.items[0] = ItemLotSpawnDataItemEntry {
+        item_id: DETERMINISTIC_DAGGER_ID,
+        quantity: 1,
+        upgrade: 0,
+        gem_id: NO_GEM_ID,
+    };
+    list.items[1] = ItemLotSpawnDataItemEntry {
+        item_id: SMITHING_STONE_1_RAW_GOODS_ID,
+        quantity: 10,
+        upgrade: -1,
+        gem_id: NO_GEM_ID,
+    };
+    let mut status = ItemLotSpawnDataStatus::default();
+    let give_items: GiveItemsFn = unsafe { std::mem::transmute(base + GIVE_ITEMS_RVA) };
+    let add_runes: AddRunesFn = unsafe { std::mem::transmute(base + ADD_RUNES_RVA) };
+
+    // SAFETY: The callees and struct layout are resolved from CT + Ghidra decompile. The live crash on
+    // 2026-07-24 was caused by using the CT helper's stale GameDataMan global for the first argument to
+    // `AddRunes`; this now uses the repo-canonical singleton and a fault-safe rune-count readability
+    // guard before calling into the native function.
+    let runes_added = unsafe {
+        give_items(map_item_man, &mut list, &mut status, 0);
+        add_runes(player_game_data as *mut core::ffi::c_void, 10_000)
+    };
+    harness_log!(
+        "deterministic-strengthen: seeded dagger=0x{DETERMINISTIC_DAGGER_ID:x} upgrade=0 smithing_stone_1=0x{SMITHING_STONE_1_RAW_GOODS_ID:x}x10 runes_before={runes_before} runes_added={runes_added} status={:x?}",
+        status.fields
+    );
+    true
 }
 
 /// Tap one menu event into the keystate bitmap (edge OR). Fault-safe: only writes once the target

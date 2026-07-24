@@ -2808,6 +2808,7 @@ name = "er-input-harness-dll"
 version = "0.1.0"
 dependencies = [
  "eldenring",
+ "er-game-base",
  "er-hook",
  "er-safe-input",
  "fromsoftware-shared",

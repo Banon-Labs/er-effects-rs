@@ -13,6 +13,7 @@ Usage:
 Ids may be decimal or 0x-hex. Default root is $ER_MSG_ROOT when set, otherwise
 ~/projects/er-msg/engus.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -21,7 +22,9 @@ import os
 import sys
 import xml.etree.ElementTree as ET
 
-DEFAULT_ROOT = os.environ.get("ER_MSG_ROOT", os.path.expanduser("~/projects/er-msg/engus"))
+DEFAULT_ROOT = os.environ.get(
+    "ER_MSG_ROOT", os.path.expanduser("~/projects/er-msg/engus")
+)
 
 
 def parse_id(tok: str) -> int:
@@ -45,7 +48,7 @@ def load_entries(path: str) -> dict[int, str]:
         if raw is None:
             continue
         try:
-            out[int(raw)] = (el.text or "")
+            out[int(raw)] = el.text or ""
         except ValueError:
             continue
     return out

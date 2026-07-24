@@ -13,6 +13,7 @@ crate-type = ["cdylib"]
 # (inputmgr+0x90 is OUTPUT, not input -- bd ROOTCAUSE-plus90-is-OUTPUT-not-input). er-hook provides the
 # shared MinHook FFI for that pad-poll hook.
 [dependencies]
+er-game-base = { path = "../er-game-base" }
 er-hook = { path = "../er-hook" }
 er-safe-input = { path = "../er-safe-input" }
 

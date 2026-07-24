@@ -2,11 +2,14 @@
 """Semaphore watcher for the weapon-upgrade menu probe.
 
 The shell runner stages the input harness + telemetry DLLs and sets
-`er-harness-drive-mode.txt=upgrade`. This watcher owns the bounded poll loop and
-teardown. It never uses screenshots; verdict comes from harness phase telemetry:
+`er-harness-drive-mode.txt` to `upgrade` or `upgrade_det`. This watcher owns the bounded poll loop
+and teardown. It never uses screenshots; verdict comes from harness phase telemetry:
 
-- PASS: `open_weapon_upgrade_menu` advanced and the following dwell advanced.
+- PASS (`upgrade`): `open_weapon_upgrade_menu` advanced and the following dwell advanced.
+- PASS (`upgrade_det`): deterministic seed, open menu, strengthen-dialog build, buffered OK, OK-effect transition, and dwell all advanced.
 - DERAILED: any harness phase derailed.
+- NO_HARNESS_PHASES: no harness log/phase telemetry appeared promptly after launch.
+- NO_PHASE_PROGRESS: harness telemetry appeared but stopped advancing before a decisive verdict.
 - CAP_BACKSTOP: no decisive phase evidence before the runtime cap.
 
 Only PIDs spawned by this run are torn down.
@@ -15,6 +18,7 @@ Only PIDs spawned by this run are torn down.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 import json
 import shutil
@@ -25,7 +29,8 @@ from pathlib import Path
 
 POLL_SECONDS = 2.0
 KILL_VERIFY_SECONDS = 2.0
-NO_PHASES_MIN_SECONDS = 60.0
+NO_HARNESS_PHASES_SECONDS = 12.0
+NO_PHASE_PROGRESS_SECONDS = 12.0
 _POLL_WAIT = threading.Event()
 
 
@@ -46,22 +51,38 @@ def win_pids_for(image: str) -> set[int]:
     return pids
 
 
-def phase_outcomes(path: Path) -> dict[str, set[str]]:
-    outcomes: dict[str, set[str]] = {}
+def phase_events(path: Path) -> list[dict[str, object]]:
     try:
         raw_lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
-        return outcomes
+        return []
+    events: list[dict[str, object]] = []
     for line in raw_lines:
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if isinstance(event, dict):
+            events.append(event)
+    return events
+
+
+def phase_outcomes(events: list[dict[str, object]]) -> dict[str, set[str]]:
+    outcomes: dict[str, set[str]] = {}
+    for event in events:
         phase = event.get("phase")
         outcome = event.get("outcome")
         if isinstance(phase, str) and isinstance(outcome, str):
             outcomes.setdefault(phase, set()).add(outcome)
     return outcomes
+
+
+def newest_mtime(paths: tuple[Path, ...]) -> float:
+    latest = 0.0
+    for path in paths:
+        with contextlib.suppress(OSError):
+            latest = max(latest, path.stat().st_mtime)
+    return latest
 
 
 def teardown(pre_er: set[int], pre_me3: set[int]) -> str:
@@ -97,6 +118,13 @@ def main() -> int:
     ap.add_argument("--settle-seconds", type=float, default=3.0)
     ap.add_argument("--pre-er-pids", default="")
     ap.add_argument("--pre-me3-pids", default="")
+    ap.add_argument("--mode", choices=("upgrade", "upgrade_det"), default="upgrade")
+    ap.add_argument(
+        "--no-harness-seconds", type=float, default=NO_HARNESS_PHASES_SECONDS
+    )
+    ap.add_argument(
+        "--no-progress-seconds", type=float, default=NO_PHASE_PROGRESS_SECONDS
+    )
     args = ap.parse_args()
 
     pre_er = {int(x) for x in args.pre_er_pids.split() if x.isdigit()}
@@ -107,27 +135,60 @@ def main() -> int:
     start = time.monotonic()
     decisive = 0.0
     verdict = "INCOMPLETE"
+    last_activity_mtime = 0.0
+    last_activity_seen = start
     while True:
-        elapsed = time.monotonic() - start
-        if elapsed >= args.max_seconds:
-            outcomes = phase_outcomes(phases)
-            if (
-                not outcomes
-                and not harness_log.exists()
-                and elapsed >= NO_PHASES_MIN_SECONDS
-            ):
-                verdict = "NO_HARNESS_PHASES"
-            else:
-                verdict = "CAP_BACKSTOP"
+        now = time.monotonic()
+        elapsed = now - start
+        events = phase_events(phases)
+        outcomes = phase_outcomes(events)
+        activity_mtime = newest_mtime((phases, harness_log))
+        if activity_mtime > last_activity_mtime:
+            last_activity_mtime = activity_mtime
+            last_activity_seen = now
+        if (
+            not outcomes
+            and not harness_log.exists()
+            and elapsed >= args.no_harness_seconds
+        ):
+            verdict = "NO_HARNESS_PHASES"
             break
-        outcomes = phase_outcomes(phases)
+        if (
+            outcomes or harness_log.exists()
+        ) and now - last_activity_seen >= args.no_progress_seconds:
+            verdict = "NO_PHASE_PROGRESS"
+            break
+        if elapsed >= args.max_seconds:
+            verdict = "CAP_BACKSTOP"
+            break
         opened = "advanced" in outcomes.get("open_weapon_upgrade_menu", set())
         dwell_done = "advanced" in outcomes.get("dwell_equip", set())
+        if args.mode == "upgrade_det":
+            seed_done = "advanced" in outcomes.get(
+                "grant_deterministic_strengthen_seed", set()
+            )
+            dialog_done = "advanced" in outcomes.get("build_strengthen_dialog", set())
+            buffered_ok_done = "advanced" in outcomes.get(
+                "buffered_strengthen_dialog_ok", set()
+            )
+            ok_effect_done = "advanced" in outcomes.get(
+                "wait_buffered_dialog_ok_effect", set()
+            )
+            pass_ready = (
+                seed_done
+                and opened
+                and dialog_done
+                and buffered_ok_done
+                and ok_effect_done
+                and dwell_done
+            )
+        else:
+            pass_ready = opened and dwell_done
         derailed = any(
             "derailed" in outcomes_for_phase for outcomes_for_phase in outcomes.values()
         )
         if decisive == 0.0:
-            if opened and dwell_done:
+            if pass_ready:
                 verdict = "PASS"
                 decisive = time.monotonic()
             elif derailed:
@@ -154,7 +215,9 @@ def main() -> int:
         f"elapsed_seconds: {int(time.monotonic() - start)}",
         f"harness_log_exists: {harness_log.exists()}",
         f"phases_exists: {phases.exists()}",
+        f"mode: {args.mode}",
         status_line,
+        f"last_activity_idle_seconds: {int(time.monotonic() - last_activity_seen)}",
     ]
     phase_copy = args.artifact_dir / "er-input-harness-phases.jsonl"
     if phase_copy.exists():

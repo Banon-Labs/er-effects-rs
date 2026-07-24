@@ -25,13 +25,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use crate::game_mem::{
     current_open_menu_id, flip_fixed_spf, flip_mode_current, load_fsm, menu_data_ptr, menu_flags,
     now_loading, optionsetting_tab_index, pause_menu_open, read_drive_mode_flag,
-    return_title_requested, top_menu_id, top_menu_job_ptr, top_window_dialog_accept_ready,
-    top_window_ptr, top_window_vtable, world_simulating,
+    return_title_requested, top_menu_id, top_menu_job_ptr, top_window_dialog_accept_gate,
+    top_window_dialog_accept_ready, top_window_ptr, top_window_vtable, world_simulating,
 };
 use crate::input_inject::{
-    MenuEvent, advance_press_any_button, input_manager, keep_input_active, native_open_equip_menu,
-    native_open_inventory_menu, native_open_weapon_upgrade_menu, popup_job_serial,
-    request_open_ingame_menu, tap_menu_event,
+    MenuEvent, advance_press_any_button, grant_deterministic_strengthen_seed, input_manager,
+    keep_input_active, native_open_equip_menu, native_open_inventory_menu,
+    native_open_weapon_upgrade_menu, popup_job_serial, request_open_ingame_menu, tap_menu_event,
 };
 use crate::log::{harness_log, log_phase};
 use crate::pad_inject::{PadButton, set_pad_button, set_vk_id};
@@ -55,8 +55,10 @@ const STARTUP_BUDGET: u64 = 9000;
 const PAB_BUDGET: u64 = 300;
 /// Continue -> a load started. ~5s.
 const CONTINUE_BUDGET: u64 = 300;
-/// A load completing to genuine in-world simulation (asset load is long + slow). ~150s.
-const LOAD_BUDGET: u64 = 9000;
+/// Continue -> genuine in-world simulation for agent-owned probes. Keep this short: if loading or
+/// load-state semaphores do not settle promptly, fail closed and tear down instead of leaving the user
+/// sitting in-game behind a stalled watchdog.
+const LOAD_BUDGET: u64 = 1200;
 /// A single in-world keystate nav step (open / pane change / tab). ~8s.
 const NAV_BUDGET: u64 = 480;
 /// Native quit-to-menu confirm + world teardown. ~10s.
@@ -304,9 +306,19 @@ enum Phase {
     /// NATIVE open of the Inventory menu (02_020_Inventory) whose item cells carry the bottom-left
     /// ArtsIcon child. EFFECT: top-job replaced OR the submit serial bumped.
     OpenInventoryMenu,
+    /// NATIVE grant of deterministic Dagger +0 / Smithing Stone [1] / rune seed. EFFECT: native
+    /// `GiveItems`/`AddRunes` call returned after all singleton pointers were readable.
+    GrantDeterministicStrengthenSeed,
     /// NATIVE open of the weapon-upgrade/reinforcement menu. EFFECT: researched open-menu id 0x17 or
     /// the native submit path visibly swaps/serializes the top job.
     OpenWeaponUpgradeMenu,
+    /// User-equivalent row Confirm in the strengthen menu. EFFECT: a known message-box dialog exists.
+    BuildStrengthenDialog,
+    /// Queue dialog OK before readiness, then emit the OK once `dialog+0x2300 >= dialog+0x1278`.
+    /// EFFECT: the ready-gated OK edge was emitted.
+    BufferedStrengthenDialogOk,
+    /// NO input: wait for the ready-gated OK edge to close/rebuild the dialog.
+    WaitBufferedDialogOkEffect,
 }
 
 impl Phase {
@@ -326,7 +338,11 @@ impl Phase {
             Phase::OpenEquipMenu => "open_equip_menu",
             Phase::DwellEquip => "dwell_equip",
             Phase::OpenInventoryMenu => "open_inventory_menu",
+            Phase::GrantDeterministicStrengthenSeed => "grant_deterministic_strengthen_seed",
             Phase::OpenWeaponUpgradeMenu => "open_weapon_upgrade_menu",
+            Phase::BuildStrengthenDialog => "build_strengthen_dialog",
+            Phase::BufferedStrengthenDialogOk => "buffered_strengthen_dialog_ok",
+            Phase::WaitBufferedDialogOkEffect => "wait_buffered_dialog_ok_effect",
         }
     }
 
@@ -341,7 +357,11 @@ impl Phase {
             | Phase::TabToQuit
             | Phase::OpenEquipMenu
             | Phase::OpenInventoryMenu
-            | Phase::OpenWeaponUpgradeMenu => NAV_BUDGET,
+            | Phase::GrantDeterministicStrengthenSeed
+            | Phase::OpenWeaponUpgradeMenu
+            | Phase::BuildStrengthenDialog
+            | Phase::BufferedStrengthenDialogOk
+            | Phase::WaitBufferedDialogOkEffect => NAV_BUDGET,
             Phase::Quit | Phase::QuitTeardown | Phase::NativeQuit => QUIT_BUDGET,
             Phase::ProbeMenu => PROBE_TOTAL_FRAMES,
             Phase::DwellEquip => EQUIP_DWELL_FRAMES,
@@ -355,7 +375,11 @@ impl Phase {
                 | Phase::ProbeMenu
                 | Phase::OpenEquipMenu
                 | Phase::OpenInventoryMenu
+                | Phase::GrantDeterministicStrengthenSeed
                 | Phase::OpenWeaponUpgradeMenu
+                | Phase::BuildStrengthenDialog
+                | Phase::BufferedStrengthenDialogOk
+                | Phase::WaitBufferedDialogOkEffect
         )
     }
 
@@ -371,7 +395,7 @@ impl Phase {
                 advance_press_any_button(base);
                 sem.load_started()
             }
-            Phase::WaitLoadIn => sem.world_sim,
+            Phase::WaitLoadIn => sem.world_sim && !sem.now_loading,
             Phase::OpenPauseMenu => {
                 if !pause_menu_open() {
                     request_open_ingame_menu(im);
@@ -432,6 +456,13 @@ impl Phase {
                     || serial > EQUIP_SERIAL.load(Ordering::SeqCst)
             }
             Phase::DwellEquip => frame >= EQUIP_DWELL_FRAMES,
+            Phase::GrantDeterministicStrengthenSeed => {
+                let seeded = grant_deterministic_strengthen_seed(base);
+                if frame % TAP_CYCLE_FRAMES == 0 {
+                    harness_log!("upgrade-det: deterministic seed dispatched={seeded}");
+                }
+                seeded
+            }
             Phase::OpenInventoryMenu => {
                 // Native open of the Inventory menu (same factory+submit path as EquipTop; the
                 // 02_020_Inventory item cells carry the bottom-left ArtsIcon child).
@@ -466,6 +497,68 @@ impl Phase {
                     );
                 }
                 sem.open_menu == i64::from(crate::input_scheduler::WEAPON_UPGRADE_OPEN_MENU_ID)
+            }
+            Phase::BuildStrengthenDialog => {
+                issue_pad_taps_once(&[PadButton::Confirm], frame);
+                let gate = top_window_dialog_accept_gate();
+                if frame % TAP_CYCLE_FRAMES == 0 {
+                    harness_log!(
+                        "upgrade-det: build dialog semaphores dialog_exists={} dialog_ready={} open_menu={}",
+                        gate.is_some() as u8,
+                        gate.is_some_and(crate::input_scheduler::DialogAcceptGate::is_ready) as u8,
+                        sem.open_menu
+                    );
+                }
+                gate.is_some()
+            }
+            Phase::BufferedStrengthenDialogOk => {
+                let gate = top_window_dialog_accept_gate();
+                if frame == 0 {
+                    let ready_at_queue =
+                        gate.is_some_and(crate::input_scheduler::DialogAcceptGate::is_ready);
+                    BUFFERED_OK_READY_AT_QUEUE.store(ready_at_queue, Ordering::SeqCst);
+                    harness_log!(
+                        "upgrade-det: queued dialog OK intent ready_at_queue={} queued_before_ready={}",
+                        ready_at_queue as u8,
+                        (!ready_at_queue) as u8
+                    );
+                }
+                if let Some(gate) = gate {
+                    if frame % POPUP_CYCLE_FRAMES == 0 {
+                        harness_log!(
+                            "upgrade-det: dialog OK gate elapsed={:.3} required={:.3} ready={} queued_before_ready={}",
+                            gate.elapsed,
+                            gate.required_elapsed,
+                            gate.is_ready() as u8,
+                            (!BUFFERED_OK_READY_AT_QUEUE.load(Ordering::SeqCst)) as u8
+                        );
+                    }
+                    if gate.is_ready() {
+                        BUFFERED_OK_DIALOG_PTR.store(sem.top_window, Ordering::SeqCst);
+                        tap_menu_event(im, MenuEvent::PopupAccept);
+                        harness_log!(
+                            "upgrade-det: emitted buffered dialog OK queued_before_ready={} dialog=0x{:x}",
+                            (!BUFFERED_OK_READY_AT_QUEUE.load(Ordering::SeqCst)) as u8,
+                            sem.top_window
+                        );
+                        return Status::Advanced;
+                    }
+                }
+                false
+            }
+            Phase::WaitBufferedDialogOkEffect => {
+                let previous = BUFFERED_OK_DIALOG_PTR.load(Ordering::SeqCst);
+                let current = sem.top_window;
+                let dialog_still_known = top_window_dialog_accept_gate().is_some();
+                let transitioned = !dialog_still_known || (previous != 0 && current != previous);
+                if frame % POPUP_CYCLE_FRAMES == 0 {
+                    harness_log!(
+                        "upgrade-det: buffered OK effect previous_dialog=0x{previous:x} current_top_window=0x{current:x} dialog_still_known={} transitioned={}",
+                        dialog_still_known as u8,
+                        transitioned as u8
+                    );
+                }
+                transitioned
             }
         };
         if advanced {
@@ -517,6 +610,10 @@ enum DriveMode {
     /// Boot to in-world, open the pause menu, native-open the weapon-upgrade/reinforcement menu,
     /// then dwell for semaphore logging. No confirm inputs.
     WeaponUpgradeMenu,
+    /// Deterministic weapon-upgrade scenario: seed a +0 upgradeable weapon/materials, native-open the
+    /// strengthen menu, build its confirmation dialog with a user-equivalent input, then buffer the
+    /// dialog OK until the native accept gate becomes ready.
+    DeterministicWeaponUpgrade,
 }
 
 impl DriveMode {
@@ -530,6 +627,7 @@ impl DriveMode {
             "equip" => DriveMode::EquipMenu,
             "inv" => DriveMode::InventoryMenu,
             "upgrade" => DriveMode::WeaponUpgradeMenu,
+            "upgrade_det" | "strengthen_det" => DriveMode::DeterministicWeaponUpgrade,
             _ => DriveMode::FullBootReload,
         }
     }
@@ -544,10 +642,14 @@ impl DriveMode {
             DriveMode::EquipMenu => "equip",
             DriveMode::InventoryMenu => "inv",
             DriveMode::WeaponUpgradeMenu => "upgrade",
+            DriveMode::DeterministicWeaponUpgrade => "upgrade_det",
         }
     }
     fn auto_accept_popups(self) -> bool {
-        !matches!(self, DriveMode::WeaponUpgradeMenu)
+        !matches!(
+            self,
+            DriveMode::WeaponUpgradeMenu | DriveMode::DeterministicWeaponUpgrade
+        )
     }
 
     fn phases(self) -> &'static [Phase] {
@@ -638,6 +740,19 @@ impl DriveMode {
             Phase::OpenWeaponUpgradeMenu,
             Phase::DwellEquip,
         ];
+        const UPGRADE_DET: &[Phase] = &[
+            Phase::Startup,
+            Phase::PressAnyButton,
+            Phase::Continue,
+            Phase::WaitLoadIn,
+            Phase::GrantDeterministicStrengthenSeed,
+            Phase::OpenPauseMenu,
+            Phase::OpenWeaponUpgradeMenu,
+            Phase::BuildStrengthenDialog,
+            Phase::BufferedStrengthenDialogOk,
+            Phase::WaitBufferedDialogOkEffect,
+            Phase::DwellEquip,
+        ];
         match self {
             DriveMode::BootContinueOnly => BOOT,
             DriveMode::NativeReloadOnly => RELOAD,
@@ -648,6 +763,7 @@ impl DriveMode {
             DriveMode::EquipMenu => EQUIP,
             DriveMode::InventoryMenu => INV,
             DriveMode::WeaponUpgradeMenu => UPGRADE,
+            DriveMode::DeterministicWeaponUpgrade => UPGRADE_DET,
         }
     }
 }
@@ -657,6 +773,8 @@ static PHASE_FRAME: AtomicU64 = AtomicU64::new(0);
 static PHASE_START_TICK: AtomicU64 = AtomicU64::new(0);
 static POPUP_FRAME: AtomicU64 = AtomicU64::new(0);
 static MODE_IDX: AtomicUsize = AtomicUsize::new(usize::MAX);
+static BUFFERED_OK_READY_AT_QUEUE: AtomicBool = AtomicBool::new(false);
+static BUFFERED_OK_DIALOG_PTR: AtomicUsize = AtomicUsize::new(0);
 static DERAILED: AtomicBool = AtomicBool::new(false);
 static ONFRAME_IM_NULL_DIAG: AtomicBool = AtomicBool::new(false);
 /// currentTopMenuJob (+0xB0) recorded at IngameTop, to detect the submenu-entry replacement.
@@ -668,16 +786,17 @@ fn resolve_mode() -> DriveMode {
     // MUST stay index-aligned with the `idx` match below (bd reload2-crash-MODES-oob): every DriveMode
     // needs a slot here or MODES[cached] panics. NativeReloadTwice=5 was added to the match but not here,
     // so the 2nd per-frame resolve_mode() indexed MODES[5] out-of-bounds -> crash ~after boot (run64/65/67).
-    const MODES: [DriveMode; 9] = [
-        DriveMode::BootContinueOnly,  // 0
-        DriveMode::NativeReloadOnly,  // 1
-        DriveMode::FullBootReload,    // 2
-        DriveMode::Probe,             // 3
-        DriveMode::Passive,           // 4
-        DriveMode::NativeReloadTwice, // 5
-        DriveMode::EquipMenu,         // 6
-        DriveMode::InventoryMenu,     // 7
-        DriveMode::WeaponUpgradeMenu, // 8
+    const MODES: [DriveMode; 10] = [
+        DriveMode::BootContinueOnly,           // 0
+        DriveMode::NativeReloadOnly,           // 1
+        DriveMode::FullBootReload,             // 2
+        DriveMode::Probe,                      // 3
+        DriveMode::Passive,                    // 4
+        DriveMode::NativeReloadTwice,          // 5
+        DriveMode::EquipMenu,                  // 6
+        DriveMode::InventoryMenu,              // 7
+        DriveMode::WeaponUpgradeMenu,          // 8
+        DriveMode::DeterministicWeaponUpgrade, // 9
     ];
     let cached = MODE_IDX.load(Ordering::SeqCst);
     if cached != usize::MAX {
@@ -714,6 +833,7 @@ fn resolve_mode() -> DriveMode {
         DriveMode::EquipMenu => 6,
         DriveMode::InventoryMenu => 7,
         DriveMode::WeaponUpgradeMenu => 8,
+        DriveMode::DeterministicWeaponUpgrade => 9,
     };
     MODE_IDX.store(idx, Ordering::SeqCst);
     harness_log!(
