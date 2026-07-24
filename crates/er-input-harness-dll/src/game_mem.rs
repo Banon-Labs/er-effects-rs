@@ -17,7 +17,8 @@
 
 use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
 
-use crate::win32::{GetModuleHandleA, read_usize};
+use crate::input_scheduler::DialogAcceptGate;
+use crate::win32::{GetModuleHandleA, read_f32, read_usize};
 
 // RVAs/offsets ported verbatim from the product's constant tree (image base 0x140000000):
 //   GAME_DATA_MAN_GLOBAL_RVA / +0x08 PlayerGameData -- er-reload-trace-dll src/lib.rs
@@ -195,6 +196,11 @@ const CS_MENU_MAN_POPUP_MENU_80_OFFSET: usize = 0x80;
 const CS_POPUP_CURRENT_TOP_JOB_B0_OFFSET: usize = 0xb0;
 const TOP_JOB_WINDOW_130_OFFSET: usize = 0x130;
 const TOP_WINDOW_MENU_ID_180_OFFSET: usize = 0x180;
+/// Generic `CS::MessageBoxDialog` accept gate: OK handler commits only when `+0x2300 >= +0x1278`.
+/// These offsets are used only after a caller has independently established that the top window is a
+/// message-box/dialog object.
+const MSGBOX_FADE_REQUIRED_1278_OFFSET: usize = 0x1278;
+const MSGBOX_FADE_ELAPSED_2300_OFFSET: usize = 0x2300;
 /// OptionSetting SettingTabControl (window+0x1870) -> tab view ptr (+0x10, deref) -> selected index (+0xd4).
 const OPTIONSETTING_TAB_CONTROL_1870_OFFSET: usize = 0x1870;
 const OPTIONSETTING_TAB_VIEW_10_OFFSET: usize = 0x10;
@@ -242,6 +248,27 @@ fn top_window() -> usize {
     unsafe { read_usize(job + TOP_JOB_WINDOW_130_OFFSET) }
         .filter(|p| *p >= HEAP_LO)
         .unwrap_or(0)
+}
+
+/// Read the generic `CS::MessageBoxDialog` fade/settle accept gate from a known dialog pointer.
+pub fn dialog_accept_gate(dialog: usize) -> Option<DialogAcceptGate> {
+    if dialog < HEAP_LO {
+        return None;
+    }
+    let required_elapsed = unsafe { read_f32(dialog + MSGBOX_FADE_REQUIRED_1278_OFFSET) }?;
+    let elapsed = unsafe { read_f32(dialog + MSGBOX_FADE_ELAPSED_2300_OFFSET) }?;
+    Some(DialogAcceptGate::new(required_elapsed, elapsed))
+}
+
+/// Candidate accept gate for the current top popup window, valid when the top window is a
+/// `CS::MessageBoxDialog`/modal confirm object.
+pub fn top_window_dialog_accept_gate() -> Option<DialogAcceptGate> {
+    dialog_accept_gate(top_window())
+}
+
+/// TRUE when the top popup window is a readable dialog whose native fade/settle gate is ready.
+pub fn top_window_dialog_accept_ready() -> bool {
+    top_window_dialog_accept_gate().is_some_and(DialogAcceptGate::is_ready)
 }
 
 /// TRUE only when the in-world pause menu (a popup top-job) is up. Replaces the false-positive

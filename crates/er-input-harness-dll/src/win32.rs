@@ -213,3 +213,35 @@ pub unsafe fn read_u8(addr: usize) -> Option<u8> {
     };
     (ok != 0 && read == std::mem::size_of::<u8>()).then_some(value)
 }
+
+/// Read a 32-bit unsigned integer from this process's own address space (fault-safe).
+pub unsafe fn read_u32(addr: usize) -> Option<u32> {
+    let mut value = 0u32;
+    let mut read = 0usize;
+    let ok = unsafe {
+        ReadProcessMemory(
+            CURRENT_PROCESS_PSEUDO_HANDLE,
+            addr as *const c_void,
+            (&mut value as *mut u32).cast(),
+            std::mem::size_of::<u32>(),
+            &mut read,
+        )
+    };
+    (ok != 0 && read == std::mem::size_of::<u32>()).then_some(value)
+}
+
+/// Read a 32-bit float from this process's own address space (fault-safe).
+pub unsafe fn read_f32(addr: usize) -> Option<f32> {
+    let mut value = 0f32;
+    let mut read = 0usize;
+    let ok = unsafe {
+        ReadProcessMemory(
+            CURRENT_PROCESS_PSEUDO_HANDLE,
+            addr as *const c_void,
+            (&mut value as *mut f32).cast(),
+            std::mem::size_of::<f32>(),
+            &mut read,
+        )
+    };
+    (ok != 0 && read == std::mem::size_of::<f32>()).then_some(value)
+}
