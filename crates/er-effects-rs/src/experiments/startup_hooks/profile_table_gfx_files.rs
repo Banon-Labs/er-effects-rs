@@ -103,24 +103,11 @@ pub(crate) fn install_profile_renderer_teardown_spare_hook() {
     }
 }
 
-/// Build a distinctive POC test-image TPF (magenta/yellow checker) whose single texture is named
-/// EXACTLY `symbol`, so the CSScaleform pump's name-registration binds it to the now-loading image.
-/// (Real loaded-character portrait pixels are a follow-up; this proves the injection + object shape.)
-fn build_portrait_test_tpf(symbol: &str) -> Option<Vec<u8>> {
-    // 1024x1024 to MATCH the captured menu-portrait dims, so once the real portrait is read back we can
-    // D3D12-upload it straight into THIS (already-registered) displayed texture (the Scaleform pump binds
-    // the name only on the first bind, so a re-forge can't swap it -- we overwrite the live pixels instead).
-    let dds = er_tpf::DdsImage::checker(1024, 1024, 64, [255, 0, 255, 255], [255, 255, 0, 255])
-        .to_dds_bytes_with(er_tpf::DdsHeaderMode::LegacyRgba8);
-    er_tpf::Tpf::single_pc(symbol, dds, 1).build().ok()
-}
-
 /// Build the now-loading background TPF named exactly `symbol`. When `portrait_real_pixels_enabled()`
 /// AND a live portrait readback is available (`LOADING_BG_PORTRAIT_RGBA` is `Some`), build the TPF
 /// from the REAL rendered character-head RGBA8 pixels (uncompressed legacy-RGBA8 DDS). The engine
-/// rebuilds a correct SRV from these bytes at `CreateTpfResCap` time -- the same mechanism that makes
-/// the checker display correctly. Otherwise (default, or no capture yet) fall back to the proven
-/// magenta/yellow checker, byte-for-byte unchanged.
+/// rebuilds a correct SRV from these bytes at `CreateTpfResCap` time. Otherwise, return `None` so the
+/// caller leaves the stock loading artwork alone instead of injecting a debug texture.
 /// THE SWAPPABLE LOADING-BACKGROUND LEVER (retained, NOT wired in by default). Building the TPF served here
 /// replaces the game's `MENU_Load_*` now-loading background artwork. Currently a fully TRANSPARENT (RGBA
 /// 0,0,0,0) 64x64 texture (Scaleform stretches it to fill; for a real image build at the native ~1024x1024
@@ -179,7 +166,7 @@ fn build_portrait_tpf(symbol: &str) -> Option<Vec<u8>> {
             }
         }
     }
-    build_portrait_test_tpf(symbol)
+    None
 }
 
 /// `FUN_140d69880` (deobf `LOADING_BG_REPLACE_BIND_RVA`) full-replace: the producer's "bind a
@@ -267,8 +254,8 @@ pub(crate) unsafe extern "system" fn loading_bg_replace_bind_hook(rti: usize, sy
     1
 }
 
-/// Build a now-loading TPF (baking LOADING_BG_PORTRAIT_RGBA if captured, else the checker), materialize it
-/// through the game's in-memory CreateTpfResCap factory, wrap it in a fresh TpfFileCap, and bind it to
+/// Build a now-loading TPF when a product/custom image source is available, materialize it through the
+/// game's in-memory CreateTpfResCap factory, wrap it in a fresh TpfFileCap, and bind it to
 /// `rti`. `substr_symbol != 0` copies that DLString into the rti's symbol field (the initial forge);
 /// pass 0 to leave the rti's existing symbol (a RE-FORGE of an already-bound rti). Returns the cap on
 /// success. The PINs/refcount bump match the original forge so the CSScaleform GC can't free our graph.
@@ -556,8 +543,7 @@ pub(crate) unsafe fn maybe_reforge_loading_portrait(base: usize) {
     };
     let ok = unsafe { upload_rgba_to_texture(gx, w, h, &px) };
     // VERIFY: read back the SAME gx right after the upload. If it now reads the portrait, the upload DID
-    // land in this texture (so any remaining checker on screen means Scaleform samples a DIFFERENT copy);
-    // if it still reads the checker (bright magenta/yellow, rgb~255 with high variance), find_d3d12_resource
+    // land in this texture; if it still reads a high-variance placeholder/clear pattern, find_d3d12_resource
     // picked the wrong same-size texture and the upload missed -> fixable by targeting deterministically.
     let mut verify_rgb = (0u8, 0u8, 0u8);
     if let Some((vw, vh, vpx)) = unsafe { readback_offscreen_rgba8(gx) } {

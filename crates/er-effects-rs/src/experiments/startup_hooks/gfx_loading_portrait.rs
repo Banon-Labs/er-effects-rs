@@ -136,22 +136,20 @@ fn blend_top_left(dst: &mut [u8], dw: u32, dh: u32, src: &[u8], sw: u32, sh: u32
 }
 
 /// Build the forged now-loading background TPF for `symbol` on the lookat path: aspect-cover the boot
-/// background (or a neutral checker) into the visible top-left sub-rect of a 2:1 texture (centre-crop, no
-/// stretch), then -- once the live head has been captured -- alpha-blend the head (also aspect-cover into
-/// the same sub-rect) over it. Records `symbol` as head-baked so the updater can demote the overlay when
-/// it is displayed. Returns the TPF bytes (`None` on build failure -> caller falls back).
+/// background (or a neutral black background) into the visible top-left sub-rect of a 2:1 texture
+/// (centre-crop, no stretch), then -- once the live head has been captured -- alpha-blend the head
+/// (also aspect-cover into the same sub-rect) over it. Records `symbol` as head-baked so the updater can
+/// demote the overlay when it is displayed. Returns the TPF bytes (`None` on build failure -> caller falls
+/// back).
 pub(crate) fn build_baked_loading_bg(symbol: &str) -> Option<Vec<u8>> {
     let (tw, th) = forge_tex_dims();
     let (vw, vh) = visible_subrect(tw, th);
     // Base: black texture; the off-screen right/bottom margins stay black (never visible on stage).
     let mut base = vec![0u8; (tw as usize) * (th as usize) * RGBA8_BPP];
-    // Background: boot bg aspect-cover -> visible sub-rect (centre-crop = "zoomed in"), else checker.
+    // Background: boot bg aspect-cover -> visible sub-rect (centre-crop = "zoomed in"), else neutral black.
     let mut bg = boot_bg_image_rgba_clone()
         .map(|(w, h, px)| cover_resample_rgba8(&px, w as u32, h as u32, vw, vh))
-        .unwrap_or_else(|| {
-            let c = er_tpf::DdsImage::checker(vw, vh, 64, [255, 0, 255, 255], [255, 255, 0, 255]);
-            c.pixels
-        });
+        .unwrap_or_else(|| vec![0u8; (vw as usize) * (vh as usize) * RGBA8_BPP]);
     // Dim to MATCH the first (boot) loading screen, which multiplies the screenshot by 6/16 in
     // `boot_fill_aspect_cover_background` -- so the two loading screens read as the same background.
     for px in bg.chunks_exact_mut(4) {

@@ -739,7 +739,7 @@ pub(crate) static LOADING_BG_PORTRAIT_GX_CAPTURE_HITS: AtomicUsize = AtomicUsize
 /// The live profile-portrait offscreen render target, read back via D3D12 into CPU RGBA8 once the
 /// character head has rendered (`portrait_real_pixels_enabled()` gate). Tuple = (width, height,
 /// tightly-packed `width*height*4` RGBA8 pixels). `None` until a successful readback. When `Some`,
-/// the now-loading forge builds its TPF from these REAL pixels instead of the magenta/yellow checker.
+/// the now-loading forge builds its TPF from these real pixels.
 pub(crate) static LOADING_BG_PORTRAIT_RGBA: std::sync::Mutex<Option<(u32, u32, Vec<u8>)>> =
     std::sync::Mutex::new(None);
 /// 1 if the read-back portrait has any non-black texel (max(R,G,B) > 24) inside a center 64x64

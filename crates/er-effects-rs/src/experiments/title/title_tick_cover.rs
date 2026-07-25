@@ -652,49 +652,9 @@ pub(crate) unsafe fn sample_title_profile_portrait_source(base: usize, slot: i32
         && ready_755 != TITLE_OWNER_SCAN_START_ADDRESS
 }
 
-/// Build the er-tpf Tier-4 cover blob ONCE and cache it for the process lifetime. A bright
-/// magenta/white checker (unmistakable on the loading-screen-portrait screenshot), encoded uncompressed
-/// `R8G8B8A8_UNORM` with a LEGACY DDS header (maps to DXGI 28 and bypasses the DX10 format validator),
-/// wrapped in a one-entry TPF003 whose ENTRY NAME == `ER_TPF_COVER_SYSTEX_KEY` (which becomes the
-/// `GLOBAL_TexRepository` GPU key the Scaleform bridge resolves). Held alive forever so the engine's
-/// deferred GPU upload can never read freed bytes. Pure CPU; no native call, no disk.
-fn er_tpf_cover_blob() -> &'static [u8] {
-    static BLOB: OnceLock<Vec<u8>> = OnceLock::new();
-    BLOB.get_or_init(|| {
-        let img = DdsImage::checker(
-            ER_TPF_COVER_TEX_DIM,
-            ER_TPF_COVER_TEX_DIM,
-            ER_TPF_COVER_TEX_CELL,
-            [255, 0, 255, 255],   // magenta
-            [255, 255, 255, 255], // white
-        );
-        let dds = img.to_dds_bytes_with(DdsHeaderMode::LegacyRgba8);
-        match Tpf::single_pc(ER_TPF_COVER_SYSTEX_KEY, dds, 1).build() {
-            Ok(bytes) => {
-                ER_TPF_COVER_TEXTURE_BUILT.store(1, Ordering::SeqCst);
-                ER_TPF_COVER_BLOB_LEN.store(bytes.len(), Ordering::SeqCst);
-                bytes
-            }
-            Err(_) => Vec::new(),
-        }
-    })
-}
-
-/// er-tpf Tier-4 ONE-SHOT, fail-closed register of our in-memory cover texture into the live texture
-/// repositories via the engine's own raw-(ptr,len) TPF factory `CS::CreateTpfResCap` (deobf
-/// `CREATE_TPF_RES_CAP_RVA`), mirroring the FaceGen call exactly. Runs on the CSTaskImp game-task thread
-/// (post-graphics-init), NEVER from DllMain/loader. Validates every precondition before the first native
-/// call (module base resolved, `GLOBAL_TpfRepository` + `GLOBAL_TexRepository` non-null == gfx up, blob
-/// non-empty), wraps the call in `catch_unwind`, and on any failure bumps `ER_TPF_COVER_FAILURES` +
-/// records `ER_TPF_COVER_LAST_ERROR` and bails (never crashes). Does NOT consume the one-shot until a
-/// real call is attempted, so a not-yet-initialized repo simply retries next tick. The actual DRAW
-/// redirect (pointing the visible profile surface's bind TARGET at our key) is a separate one-shot in
-/// the Scaleform bind observer, gated on `ER_TPF_COVER_REGISTERED`.
-/// RETIRED (2026-06-30, user): the `SYSTEX_ErTpf_Cover00` POC cover -- a 1024x1024 magenta/YELLOW checker
-/// -- was the early "prove we own the title/loading surface" test feature. The real character portrait now
-/// displays, so it is dead weight AND actively harmful: being the same 1024 size as the head RT, the
-/// portrait readback's "largest TEXTURE2D" scan grabbed IT instead of the head (nondeterministic
-/// magenta/yellow checker on the loading screen). The registration is removed -- this is now a no-op.
+/// RETIRED (2026-06-30, user): the `SYSTEX_ErTpf_Cover00` POC cover was the early
+/// "prove we own the title/loading surface" test feature. The real character portrait now displays, so
+/// registration is removed and this remains only as a no-op compatibility entrypoint for older callers.
 pub(crate) unsafe fn maybe_register_er_tpf_cover_texture(_base: usize) {}
 
 pub(crate) unsafe fn maybe_refresh_title_profile_cover(

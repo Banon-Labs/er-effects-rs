@@ -2379,8 +2379,8 @@ pub(crate) fn portrait_center_nonblack(width: u32, height: u32, pixels: &[u8]) -
     false
 }
 
-/// True if the read-back RGBA8 image looks like a SOLID-COLOR-CHECKER PLACEHOLDER (our magenta/white or
-/// magenta/yellow er-tpf cover, or an unrendered RT clear pattern) rather than a real 3D head render.
+/// True if the read-back RGBA8 image looks like a solid-color checker/clear placeholder rather than a
+/// real 3D head render.
 ///
 /// WHY: `portrait_center_nonblack` only proves "not all black" -- a bright magenta checker (255,0,255)
 /// trivially passes it, so `oracle_loading_bg_portrait_gx_nonblack` was a FALSE POSITIVE for the autoload
