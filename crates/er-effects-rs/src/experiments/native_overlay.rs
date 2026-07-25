@@ -9,7 +9,7 @@ use std::ffi::c_void;
 use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::{
     D3D12_BOX, D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC,
@@ -179,12 +179,25 @@ fn bridge_clear_color() -> [f32; 4] {
     [0.015, 0.010, 0.030, 1.0]
 }
 
-fn bridge_clear_color_expected_rgba() -> [u8; 4] {
-    [4, 3, 8, 255]
+fn bridge_marker_color() -> [f32; 4] {
+    [0.18, 0.72, 0.93, 1.0]
+}
+
+fn bridge_marker_rect() -> RECT {
+    RECT {
+        left: 32,
+        top: 32,
+        right: 160,
+        bottom: 96,
+    }
+}
+
+fn bridge_marker_color_expected_rgba() -> [u8; 4] {
+    [46, 184, 237, 255]
 }
 
 fn bridge_pixel_matches_expected(rgba: [u8; 4]) -> bool {
-    let exp = bridge_clear_color_expected_rgba();
+    let exp = bridge_marker_color_expected_rgba();
     rgba.iter()
         .zip(exp.iter())
         .all(|(a, b)| a.abs_diff(*b) <= 2)
@@ -273,11 +286,11 @@ unsafe fn record_bridge_pixel_copy(
         },
     };
     let read_box = D3D12_BOX {
-        left: 0,
-        top: 0,
+        left: 32,
+        top: 32,
         front: 0,
-        right: 1,
-        bottom: 1,
+        right: 33,
+        bottom: 33,
         back: 1,
     };
     unsafe { list.CopyTextureRegion(&dst, 0, 0, 0, &src, Some(&read_box)) };
@@ -607,6 +620,8 @@ unsafe fn native_overlay_run() {
             ptr: rtv_base.ptr + idx * rtv_size,
         };
         unsafe { list.ClearRenderTargetView(handle, &bridge_clear_color(), None) };
+        let marker_rect = bridge_marker_rect();
+        unsafe { list.ClearRenderTargetView(handle, &bridge_marker_color(), Some(&[marker_rect])) };
         NATIVE_OVERLAY_DRAW_HITS.fetch_add(1, Ordering::SeqCst);
         if NATIVE_OVERLAY_PIXEL_PROBE_HITS.load(Ordering::SeqCst) == 0 {
             if let Some((readback, footprint, _total_bytes)) = bridge_pixel_readback.as_ref() {
