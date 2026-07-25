@@ -1,0 +1,13 @@
+[package]
+name = "mushroom-man-runtime"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "mushroom_man"
+crate-type = ["cdylib"]
+
+[target.'cfg(windows)'.dependencies]
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }

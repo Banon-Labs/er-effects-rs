@@ -1,0 +1,18 @@
+[package]
+name = "er-inventory-sort-dll"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_inventory_sort"
+crate-type = ["cdylib"]
+
+# Standalone inventory sort DLL. It intentionally does not depend on the product
+# DLL crate or on product-only save/autoload/rendering dependencies.
+[dependencies]
+er-game-base = { path = "../er-game-base" }
+
+[target.'cfg(windows)'.dependencies]
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
