@@ -113,7 +113,6 @@ while true; do
   if grep -q "index.lock" "$err_file" && (( attempt < RETRIES )); then
     rm -f "$err_file"
     attempt=$((attempt + 1))
-    sleep 0.25
     continue
   fi
   rm -f "$err_file"

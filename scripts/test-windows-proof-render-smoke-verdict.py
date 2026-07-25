@@ -177,6 +177,7 @@ def test_require_handoff_alias_uses_world_stable_target() -> None:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                timeout=30,
             )
             summary = json.loads((artifact / "dry-run-summary.json").read_text(encoding="utf-8"))
             assert summary["watch_target"] == "world-stable", flag
