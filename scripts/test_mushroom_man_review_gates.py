@@ -25,7 +25,9 @@ REQUIRED_HIDE_CATEGORIES = {"face", "hair", "eyelashes", "beards", "eyeballs"}
 REQUIRED_ORACLE_MARKERS = {
     "world_character_saveload_readiness",
     "patch_missing_at_readiness_teardown",
+    "PATCH_MISSING_AT_READINESS_FRAME_LIMIT",
     "PATCH_APPLIED",
+    "std::process::abort()",
 }
 MIN_OUTWARD_NORMAL_DOT_RATIO = 0.98
 

@@ -6,7 +6,7 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::PathBuf,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU32, Ordering},
     time::{Duration, SystemTime},
 };
 
@@ -27,6 +27,8 @@ const PATCH_RETRY_LOG_INTERVAL: u32 = 10;
 const PATCH_RETRY_REMAINDER: u32 = 0;
 const PATCH_WAIT_SECONDS: u64 = 1;
 const PATCH_RETRY_SLEEP_MILLIS: u64 = 250;
+const PATCH_MISSING_AT_READINESS_FRAME_LIMIT: u32 = 3600;
+const PATCH_MISSING_FRAME_INCREMENT: u32 = 1;
 const PATCHED_ROW_INCREMENT: usize = 1;
 const NO_PATCHED_ROWS: usize = 0;
 const HIDDEN_MODEL_ID: u16 = 0;
@@ -41,6 +43,7 @@ const PATCH_MISSING_AT_READINESS_TEARDOWN_MARKER: &str = "patch_missing_at_readi
 
 static START_PATCH_TASK: AtomicBool = AtomicBool::new(false);
 static PATCH_APPLIED: AtomicBool = AtomicBool::new(false);
+static PATCH_MISSING_FRAME_COUNT: AtomicU32 = AtomicU32::new(0);
 
 #[unsafe(no_mangle)]
 /// # Safety
@@ -93,9 +96,21 @@ fn spawn_param_patch_task() {
             }
 
             let Some(report) = try_patch_loaded_protectors() else {
+                let missing_frames = PATCH_MISSING_FRAME_COUNT
+                    .fetch_add(PATCH_MISSING_FRAME_INCREMENT, Ordering::AcqRel)
+                    .saturating_add(PATCH_MISSING_FRAME_INCREMENT);
+                if patch_missing_at_readiness_teardown(world_character_saveload_readiness(
+                    missing_frames,
+                )) {
+                    write_runtime_log(&format!(
+                        "{PATCH_MISSING_AT_READINESS_TEARDOWN_MARKER} {WORLD_CHARACTER_SAVELOAD_READINESS_ORACLE_MARKER} missing_frames={missing_frames}"
+                    ));
+                    std::process::abort();
+                }
                 return;
             };
 
+            PATCH_MISSING_FRAME_COUNT.store(NO_PATCH_ATTEMPTS, Ordering::Release);
             write_runtime_log(&format!(
                 "patched EquipParamProtector visual rows: {}",
                 report.eligible_slot_rows
@@ -289,6 +304,10 @@ fn clear_visual_hide_masks(row: &mut EQUIP_PARAM_PROTECTOR_ST) {
     row.set_invisible_flag_sex_ver93(CLEARED_SEX_VARIANT_HIDE_MASK);
     row.set_invisible_flag_sex_ver94(CLEARED_SEX_VARIANT_HIDE_MASK);
     row.set_invisible_flag_sex_ver95(CLEARED_SEX_VARIANT_HIDE_MASK);
+}
+
+fn world_character_saveload_readiness(missing_patch_frames: u32) -> bool {
+    missing_patch_frames >= PATCH_MISSING_AT_READINESS_FRAME_LIMIT
 }
 
 fn patch_missing_at_readiness_teardown(world_character_saveload_readiness: bool) -> bool {
