@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/er-ags-stub",
     "crates/er-effects-rs",
     "crates/er-menu-sort",
     "crates/effects-data",

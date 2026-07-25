@@ -1,0 +1,16 @@
+[package]
+name = "er-ags-stub"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# A STUB amd_ags_x64.dll (AMD GPU Services) with zero deps. Swapped in ONLY for RenderDoc capture runs:
+# it exports every function ER's real AGS DLL exports so ER's imports bind, but agsInit reports
+# AGS_NO_AMD_DRIVER_INSTALLED (=6) -- exactly what ER sees on a non-AMD GPU -- so ER falls back to plain
+# D3D12 with NO AMD driver-extension escape, which is what RenderDoc blocks and what device-removed ER.
+# bd RENDERDOC-ags-fix-is-STUB-amd-ags-dll. Output DLL name is amd_ags_x64.dll (see [lib] name).
+[lib]
+name = "amd_ags_x64"
+crate-type = ["cdylib"]
+
+[dependencies]
