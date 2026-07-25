@@ -117,6 +117,9 @@ BOOTSTRAP_STATE_PATH="$ARTIFACT_DIR/bootstrap-state.json"
 CRASH_LOG_PATH="$ARTIFACT_DIR/er-effects-crash-log.txt"
 AUTOLOAD_DEBUG_PATH="$ARTIFACT_DIR/er-effects-autoload-debug.log"
 VERDICT_PATH="$ARTIFACT_DIR/windows-proof-render-smoke-verdict.json"
+GAME_DIR="${ER_GAME_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game}"
+STANDALONE_TELEMETRY_JSONL="$GAME_DIR/er-telemetry-timeseries.jsonl"
+STANDALONE_TELEMETRY_JSON="$GAME_DIR/er-telemetry-standalone.json"
 
 if (( DRY_RUN )); then
   cat > "$ARTIFACT_DIR/dry-run-summary.json" <<EOF
@@ -128,6 +131,7 @@ EOF
 fi
 
 rm -f "$PID_FILE" "$TELEMETRY_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH" "$CRASH_LOG_PATH" "$AUTOLOAD_DEBUG_PATH" "$VERDICT_PATH"
+rm -f "$STANDALONE_TELEMETRY_JSONL" "$STANDALONE_TELEMETRY_JSON"
 trap cleanup_runtime_pids EXIT
 
 LAUNCH_EPOCH="$(date +%s.%N)"
@@ -155,6 +159,13 @@ ER_PROBE_LAUNCH_EPOCH="$LAUNCH_EPOCH" \
 RUNTIME_SKIP_VISUAL_CAPTURE=1 \
 RUNTIME_EXTRA_WATCH_ARGS="${RUNTIME_EXTRA_WATCH_ARGS:---no-phase-watchdog --no-world-load-deadline}" \
 "$REPO_ROOT/.auto/runtime_probe.sh" > "$ARTIFACT_DIR/runtime-probe.out" 2> "$ARTIFACT_DIR/runtime-probe.err" || watcher_status=$?
+
+if [[ -f "$STANDALONE_TELEMETRY_JSONL" ]]; then
+  cp -f "$STANDALONE_TELEMETRY_JSONL" "$ARTIFACT_DIR/er-telemetry-timeseries.jsonl"
+fi
+if [[ -f "$STANDALONE_TELEMETRY_JSON" ]]; then
+  cp -f "$STANDALONE_TELEMETRY_JSON" "$ARTIFACT_DIR/er-telemetry-standalone.json"
+fi
 
 verdict_args=(
   --artifact-dir "$ARTIFACT_DIR"

@@ -70,7 +70,10 @@ while True:
     if not lock.exists():
         raise SystemExit(0)
     owners = owner_pids()
-    age = time.time() - lock.stat().st_mtime
+    try:
+        age = time.time() - lock.stat().st_mtime
+    except FileNotFoundError:
+        raise SystemExit(0)
     if owners:
         if time.time() >= deadline:
             print(
