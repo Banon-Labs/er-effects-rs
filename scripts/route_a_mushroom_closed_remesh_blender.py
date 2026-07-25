@@ -236,7 +236,9 @@ def write_obj(
     return vertices, triangles, removed_components
 
 
-def mesh_centroid(vertices: list[tuple[float, float, float]]) -> tuple[float, float, float]:
+def mesh_centroid(
+    vertices: list[tuple[float, float, float]],
+) -> tuple[float, float, float]:
     return (
         sum(vertex[0] for vertex in vertices) / len(vertices),
         sum(vertex[1] for vertex in vertices) / len(vertices),
@@ -271,7 +273,9 @@ def orient_triangles_outward(
     return oriented
 
 
-def outward_vertex_normals(vertices: list[tuple[float, float, float]]) -> list[tuple[float, float, float]]:
+def outward_vertex_normals(
+    vertices: list[tuple[float, float, float]],
+) -> list[tuple[float, float, float]]:
     center = mesh_centroid(vertices)
     normals = []
     for x, y, z in vertices:
