@@ -51,14 +51,12 @@ TARGET_REQUEST_CONSUMPTION = "request-consumption"
 TARGET_PLAYER_LOAD = "player-load"
 TARGET_WORLD_STABLE = "world-stable"
 TARGET_LOADING_PORTRAIT_STOP = "loading-portrait-stop"
-TARGET_NATIVE_OVERLAY_HANDOFF = "native-overlay-handoff"
 READY_REASON = "game_man_telemetry_ready"
 COLD_CHAR_MOUNT_COMPLETE = "cold_char_mount_complete"
 COLD_CHAR_MOUNT_PHASE_DONE = 5  # cold_char_mount_drive MOUNT_PHASE PHASE_DONE, published as phase+1
 MODULE_BASE_READY = "runtime_module_base_observed"
 WORLD_STABLE = "world_stable"
 LOADING_PORTRAIT_STOPPED = "loading_portrait_stopped"
-NATIVE_OVERLAY_HANDOFF_READY = "native_overlay_handoff_ready"
 RUNTIME_EXE_NAME = "eldenring.exe"
 WINDOW_WITHOUT_BOOTSTRAP = "window_without_bootstrap_marker"
 WINDOW_WITHOUT_TASK = "window_without_game_task_ready"
@@ -2449,21 +2447,6 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
                     expected_animation_id=args.expected_animation_id,
                 )
             )
-        if args.target == TARGET_NATIVE_OVERLAY_HANDOFF and telemetry_native_overlay_handoff_ready(telemetry):
-            return with_runtime_module_info(
-                ReadinessResult(
-                    True,
-                    NATIVE_OVERLAY_HANDOFF_READY,
-                    pid,
-                    bootstrap,
-                    telemetry,
-                    [],
-                    spawn_polls + poll,
-                    float(args.max_runtime_seconds),
-                    expected_save_oracle=expected_save_oracle,
-                    expected_animation_id=args.expected_animation_id,
-                )
-            )
         if args.target == TARGET_LOADING_PORTRAIT_STOP and telemetry_loading_portrait_stopped(telemetry):
             return with_runtime_module_info(
                 ReadinessResult(
@@ -2898,7 +2881,6 @@ def parse_args() -> argparse.Namespace:
             TARGET_PLAYER_LOAD,
             TARGET_WORLD_STABLE,
             TARGET_LOADING_PORTRAIT_STOP,
-            TARGET_NATIVE_OVERLAY_HANDOFF,
         ],
         default=TARGET_GAME_MAN,
     )
