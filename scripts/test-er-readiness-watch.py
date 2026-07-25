@@ -388,6 +388,14 @@ def main() -> int:
     assert watcher.telemetry_server_status_semaphore_detected({"oracle_server_status_any_seen": True})
     assert watcher.telemetry_server_status_semaphore_detected({"oracle_server_status_total_seen": 1})
     assert not watcher.telemetry_server_status_semaphore_detected({"oracle_server_status_text_id": 401110})
+    assert watcher.telemetry_windows_proof_render_violation(None) is None
+    assert watcher.telemetry_windows_proof_render_violation({}) == watcher.WINDOWS_PROOF_RENDER_NOT_PROVEN
+    assert watcher.telemetry_windows_proof_render_violation({"oracle_windows_proof_mode": 0}) == watcher.WINDOWS_PROOF_RENDER_NOT_PROVEN
+    assert watcher.telemetry_windows_proof_render_violation({"oracle_windows_proof_mode": 1, "oracle_forbidden_render_backend_hits": 0}) is None
+    assert (
+        watcher.telemetry_windows_proof_render_violation({"oracle_windows_proof_mode": 1, "oracle_forbidden_render_backend_hits": 2})
+        == watcher.FORBIDDEN_RENDER_BACKEND_HIT
+    )
 
     manual_world_wait = watcher.classify_snapshot(
         pid=TEST_PID,

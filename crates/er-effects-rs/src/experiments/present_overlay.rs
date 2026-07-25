@@ -21,22 +21,22 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::{
     D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC, D3D12_COMMAND_QUEUE_FLAG_NONE,
-    D3D12CreateDevice, ID3D12CommandQueue, ID3D12Device,
+    ID3D12CommandQueue, ID3D12Device,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_UNSPECIFIED, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
-    CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1,
+    DXGI_CREATE_FACTORY_FLAGS, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1,
     DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIFactory4, IDXGISwapChain,
     IDXGISwapChain1,
 };
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW};
 use windows::Win32::UI::WindowsAndMessaging::{
     CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW,
     UnregisterClassW, WINDOW_EX_STYLE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
-use windows::core::{IUnknown, Interface, w};
+use windows::core::{Error, HRESULT, IUnknown, Interface, PCSTR, w};
 
 use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 
@@ -390,28 +390,88 @@ fn boot_present_pump() {
     }
 }
 
+fn dynamic_graphics_proc(module: windows::core::PCWSTR, proc: PCSTR) -> Option<*mut c_void> {
+    let handle = unsafe {
+        GetModuleHandleW(module)
+            .or_else(|_| LoadLibraryW(module))
+            .ok()?
+    };
+    unsafe { GetProcAddress(handle, proc).map(|addr| addr as *mut c_void) }
+}
+
+unsafe fn create_dxgi_factory2_dynamic<T: Interface>(
+    flags: DXGI_CREATE_FACTORY_FLAGS,
+) -> windows::core::Result<T> {
+    type CreateDXGIFactory2Raw = unsafe extern "system" fn(
+        DXGI_CREATE_FACTORY_FLAGS,
+        *const windows::core::GUID,
+        *mut *mut c_void,
+    ) -> HRESULT;
+    let Some(proc) = dynamic_graphics_proc(w!("dxgi.dll"), windows::core::s!("CreateDXGIFactory2"))
+    else {
+        return Err(Error::from_hresult(HRESULT(0x80004005u32 as i32)));
+    };
+    let raw: CreateDXGIFactory2Raw = unsafe { std::mem::transmute(proc) };
+    let mut result = std::ptr::null_mut();
+    unsafe { raw(flags, &T::IID, &mut result).ok()? };
+    if result.is_null() {
+        return Err(Error::from_hresult(HRESULT(0x80004003u32 as i32)));
+    }
+    Ok(unsafe { T::from_raw(result) })
+}
+
+unsafe fn d3d12_create_device_dynamic() -> windows::core::Result<ID3D12Device> {
+    type D3D12CreateDeviceRaw = unsafe extern "system" fn(
+        *mut c_void,
+        windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL,
+        *const windows::core::GUID,
+        *mut *mut c_void,
+    ) -> HRESULT;
+    let Some(proc) = dynamic_graphics_proc(w!("d3d12.dll"), windows::core::s!("D3D12CreateDevice"))
+    else {
+        return Err(Error::from_hresult(HRESULT(0x80004005u32 as i32)));
+    };
+    let raw: D3D12CreateDeviceRaw = unsafe { std::mem::transmute(proc) };
+    let mut result = std::ptr::null_mut();
+    unsafe {
+        raw(
+            std::ptr::null_mut(),
+            D3D_FEATURE_LEVEL_11_0,
+            &ID3D12Device::IID,
+            &mut result,
+        )
+        .ok()?
+    };
+    if result.is_null() {
+        return Err(Error::from_hresult(HRESULT(0x80004003u32 as i32)));
+    }
+    Ok(unsafe { ID3D12Device::from_raw(result) })
+}
+
 /// Build a throwaway COMPOSITION swapchain (no HWND/window needed) and read its `Present` vtable entry.
 /// All resources are local and dropped at scope end; only the function pointer (shared across all
 /// IDXGISwapChain instances) is kept.
 unsafe fn resolve_present_addrs() -> Option<(usize, usize)> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        let factory: IDXGIFactory4 = match CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)) {
-            Ok(f) => f,
+        let factory: IDXGIFactory4 =
+            match create_dxgi_factory2_dynamic(DXGI_CREATE_FACTORY_FLAGS(0)) {
+                Ok(f) => f,
+                Err(e) => {
+                    append_autoload_debug(format_args!(
+                        "present-overlay: CreateDXGIFactory2 failed: {e:?}"
+                    ));
+                    return None;
+                }
+            };
+        let device = match d3d12_create_device_dynamic() {
+            Ok(device) => device,
             Err(e) => {
                 append_autoload_debug(format_args!(
-                    "present-overlay: CreateDXGIFactory2 failed: {e:?}"
+                    "present-overlay: D3D12CreateDevice failed: {e:?}"
                 ));
                 return None;
             }
         };
-        let mut device_opt: Option<ID3D12Device> = None;
-        if let Err(e) = D3D12CreateDevice(None, D3D_FEATURE_LEVEL_11_0, &mut device_opt) {
-            append_autoload_debug(format_args!(
-                "present-overlay: D3D12CreateDevice failed: {e:?}"
-            ));
-            return None;
-        }
-        let device = device_opt?;
         let queue_desc = D3D12_COMMAND_QUEUE_DESC {
             Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
             Priority: 0,

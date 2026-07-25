@@ -74,6 +74,8 @@ SPAWN_BUDGET_EXHAUSTED = "runtime_process_not_observed_within_spawn_poll_budget"
 READINESS_BUDGET_EXHAUSTED = "readiness_poll_budget_exhausted"
 TIMEOUT_BUDGET_EXHAUSTED = "timeout_seconds_budget_exhausted"
 GAME_FPS_BELOW_MIN = "game_fps_below_min"
+WINDOWS_PROOF_RENDER_NOT_PROVEN = "windows_proof_render_not_proven"
+FORBIDDEN_RENDER_BACKEND_HIT = "forbidden_render_backend_hit"
 WORLD_STREAM_STALLED = "world_stream_stalled"
 TITLE_STALLED = "title_stalled"
 CONTINUE_STALLED = "continue_stalled"
@@ -1218,6 +1220,22 @@ def telemetry_messagebox_dialog_detected(telemetry: dict[str, Any] | None) -> bo
     )
 
 
+def telemetry_windows_proof_render_violation(telemetry: dict[str, Any] | None) -> str | None:
+    """Return the fail-fast reason when a runtime proof uses a Windows-unsafe renderer.
+
+    Linux/Proton runtime proof only counts when the DLL itself reports Windows-proof mode and the
+    forbidden backend counter stays zero. The mode oracle is intentionally required on every valid
+    telemetry frame so an old or misbuilt DLL cannot pass by merely omitting the field.
+    """
+    if not isinstance(telemetry, dict):
+        return None
+    if as_int(telemetry.get("oracle_windows_proof_mode"), 0) != 1:
+        return WINDOWS_PROOF_RENDER_NOT_PROVEN
+    if as_int(telemetry.get("oracle_forbidden_render_backend_hits"), 0) > 0:
+        return FORBIDDEN_RENDER_BACKEND_HIT
+    return None
+
+
 def telemetry_portrait_publish_failure_detected(telemetry: dict[str, Any] | None) -> bool:
     """User directive 2026-07-06: the loading-portrait publish gates (torn/unkeyed/badiou/lowmask)
     must not silently degrade the product. A window that drove the model but published no portrait
@@ -2296,6 +2314,22 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
         # deadline can't preempt the precise 6s world_stream_stalled semaphore. Before continue fires
         # it's launch-anchored, so it also catches a continue-never-fires hang. Default 30s (room for a
         # real ER load after continue). Complementary to world_stream_stalled. Off: --no-world-load-deadline.
+        windows_proof_render_violation = telemetry_windows_proof_render_violation(telemetry)
+        if windows_proof_render_violation is not None:
+            return with_runtime_module_info(
+                ReadinessResult(
+                    False,
+                    windows_proof_render_violation,
+                    pid,
+                    bootstrap,
+                    telemetry,
+                    [],
+                    spawn_polls + poll,
+                    float(args.max_runtime_seconds),
+                    expected_save_oracle=expected_save_oracle,
+                    expected_animation_id=args.expected_animation_id,
+                )
+            )
         if (
             args.world_load_deadline_exit
             and args.target == TARGET_WORLD_STABLE

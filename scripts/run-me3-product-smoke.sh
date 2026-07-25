@@ -424,9 +424,35 @@ def read(path):
     except OSError:
         return ""
 
+
+def read_json(path):
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def as_int(value, default=0):
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value, 0)
+        except ValueError:
+            return default
+    return default
+
 boot = read(bootstrap)
 debug = read(debug_log)
 crash = read(crash_log)
+telemetry_json = read_json(telemetry)
+windows_proof_mode = isinstance(telemetry_json, dict) and as_int(telemetry_json.get("oracle_windows_proof_mode"), 0) == 1
+forbidden_render_backend_hits = as_int(
+    telemetry_json.get("oracle_forbidden_render_backend_hits") if isinstance(telemetry_json, dict) else None,
+    -1,
+)
 
 verdict = {
     "dll_attach": '"stage": "dllmain_attach"' in boot or '"stage":"dllmain_attach"' in boot,
@@ -437,14 +463,19 @@ verdict = {
     "watcher_status": watcher_status,
     "crash_free": "ACCESS_VIOLATION" not in crash and "unhandled" not in crash.lower(),
     "telemetry_written": Path(telemetry).is_file(),
+    "windows_proof_mode": windows_proof_mode,
+    "forbidden_render_backend_hits": forbidden_render_backend_hits,
+    "forbidden_render_backend_clean": forbidden_render_backend_hits == 0,
 }
 me3_logs = sorted(p.name for p in Path(artifact_dir).glob("*.log") if p.name != Path(debug_log).name)
 verdict["me3_log_files"] = me3_logs
 core_ok = verdict["dll_attach"] and verdict["env_stick"] and verdict["telemetry_written"]
+render_proof_ok = verdict["windows_proof_mode"] and verdict["forbidden_render_backend_clean"]
 verdict["settings_stick"] = core_ok
+verdict["windows_proof_render_runtime"] = render_proof_ok
 Path(artifact_dir, "me3-smoke-verdict.json").write_text(json.dumps(verdict, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 print("me3-smoke-verdict:", json.dumps(verdict, sort_keys=True))
-sys.exit(0 if core_ok and verdict["watcher_pass"] else 3)
+sys.exit(0 if core_ok and render_proof_ok and verdict["watcher_pass"] else 3)
 PY
 then
   verdict_status=0

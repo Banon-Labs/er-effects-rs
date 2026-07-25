@@ -1604,6 +1604,23 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_overlay_reuploads",
             OVERLAY_REUPLOADS.load(Ordering::SeqCst),
         );
+        let windows_proof_mode = crate::experiments::windows_proof_render_enabled();
+        push_json_usize(body, "oracle_windows_proof_mode", usize::from(windows_proof_mode));
+        let forbidden_render_backend_hits = if windows_proof_mode {
+            PRESENT_HOOK_HITS
+                .load(Ordering::SeqCst)
+                .saturating_add(PROFILE_READBACK_SOME.load(Ordering::SeqCst))
+                .saturating_add(OVERLAY_DRAW_HITS.load(Ordering::SeqCst))
+                .saturating_add(OVERLAY_REUPLOADS.load(Ordering::SeqCst))
+                .saturating_add(BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst))
+        } else {
+            0
+        };
+        push_json_usize(
+            body,
+            "oracle_forbidden_render_backend_hits",
+            forbidden_render_backend_hits,
+        );
 
         let overlay_draw_hits = OVERLAY_DRAW_HITS.load(Ordering::SeqCst);
         let overlay_draw_first_ms = OVERLAY_DRAW_FIRST_MS.load(Ordering::SeqCst);

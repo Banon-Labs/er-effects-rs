@@ -60,6 +60,14 @@ pub(crate) fn experimental_direct_menu_load_enabled() -> bool {
 pub(crate) fn product_autoload_enabled() -> bool {
     PRODUCT_AUTOLOAD_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
 }
+/// Windows-proof rendering mode is the product proof posture: Linux/Proton smokes must exercise only paths
+/// that are structurally safe for native Windows. In this mode, custom rendered assets may use game-owned
+/// GFx/Scaleform/native resource seams, but must not use Proton/vkd3d-tolerated game-swapchain Present
+/// hooks, game D3D12 readback, or shared-device composites. This is deliberately unconditional so an env/file
+/// knob cannot turn a Proton-only renderer into release proof.
+pub(crate) fn windows_proof_render_enabled() -> bool {
+    true
+}
 /// Portrait render window: hold the autoload's own load-commit at the open main menu until the loaded
 /// character's profile portrait has rendered, so the now-loading screen can show it.
 ///
@@ -133,7 +141,7 @@ pub(crate) fn force_profile_render_enabled() -> bool {
 /// mirrors the de-gating precedent `user-pref-too-many-env-file-gates-default-on-product`). Master off:
 /// `autoload_disabled()`; telemetry-only/native-capture runs stay off; env/file remain force-on overrides.
 pub(crate) fn portrait_real_pixels_enabled() -> bool {
-    if autoload_disabled() || native_profile_capture_enabled() {
+    if windows_proof_render_enabled() || autoload_disabled() || native_profile_capture_enabled() {
         return false;
     }
     !save_override_telemetry_only()
@@ -162,7 +170,7 @@ pub(crate) fn portrait_real_pixels_enabled() -> bool {
 /// Master off: `autoload_disabled()`; telemetry-only/native-capture runs stay off; env/file remain
 /// force-on overrides.
 pub(crate) fn portrait_render_drive_enabled() -> bool {
-    if autoload_disabled() || native_profile_capture_enabled() {
+    if windows_proof_render_enabled() || autoload_disabled() || native_profile_capture_enabled() {
         return false;
     }
     !save_override_telemetry_only()
@@ -188,7 +196,7 @@ pub(crate) fn portrait_render_drive_enabled() -> bool {
 /// runs stay off; env/file remain force-on overrides. (The zero-input test drivers -- lookat-selftest,
 /// cursor-sweep, force-rebuild -- stay OFF by default; product look-at tracks the real cursor.)
 pub(crate) fn portrait_lookat_enabled() -> bool {
-    if autoload_disabled() || native_profile_capture_enabled() {
+    if windows_proof_render_enabled() || autoload_disabled() || native_profile_capture_enabled() {
         return false;
     }
     !save_override_telemetry_only()

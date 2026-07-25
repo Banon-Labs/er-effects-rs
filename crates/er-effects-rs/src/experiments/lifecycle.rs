@@ -41,8 +41,10 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // D3D12 PRESENT OVERLAY: once the GX device is up, find the game's live swapchain and hook
     // its REAL Present (the dummy-swapchain vtable differs under vkd3d-proton). Self-gated
     // (portrait path only, one-shot on success, bounded retries) so it's cheap every frame.
-    if let Ok(base) = game_module_base() {
-        unsafe { try_install_game_present_hook(base) };
+    if !windows_proof_render_enabled() {
+        if let Ok(base) = game_module_base() {
+            unsafe { try_install_game_present_hook(base) };
+        }
     }
     // LOADING-COVER EXPERIMENT: clear CSFakeLoadingScreenImp.visible each frame so the world
     // draws uncovered during map loads. Self-gates (disable_loading_cover_enabled); runs before
@@ -388,7 +390,11 @@ pub(crate) fn install_title_visual_startup_hooks() {
     // portrait-lookat path, only install when a real background source exists, so a no-image run does not
     // accidentally forge the diagnostic checker behind the live portrait overlay.
     let persist_loading_bg = crate::config::persist_boot_background_to_loading_screen_enabled();
-    if !portrait_lookat_enabled() || (persist_loading_bg && boot_bg_image_rgba_clone().is_some()) {
+    if !portrait_lookat_enabled()
+        || (!windows_proof_render_enabled()
+            && persist_loading_bg
+            && boot_bg_image_rgba_clone().is_some())
+    {
         START_LOADING_BG_REPLACE_BIND.call_once(|| {
             let _ = std::thread::Builder::new()
                 .name("er-effects-loading-bg-portrait".to_owned())
@@ -409,7 +415,7 @@ pub(crate) fn install_title_visual_startup_hooks() {
     // swapchain backbuffer when the now-loading screen is up (the in-pipeline forge/Scaleform routes cannot
     // drive the displayed image). Install only on the portrait path (diagnostic), via the dummy-swapchain
     // vtable technique. Phase 1 is log-only (proves the hook fires) before any backbuffer write.
-    if portrait_lookat_enabled() {
+    if !windows_proof_render_enabled() && portrait_lookat_enabled() {
         START_PRESENT_OVERLAY.call_once(|| {
             let _ = std::thread::Builder::new()
                 .name("er-effects-present-overlay".to_owned())

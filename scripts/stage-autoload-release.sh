@@ -61,6 +61,8 @@ if [[ ! -f "$er_effects_dll" ]]; then
   exit 1
 fi
 
+python3 "$repo_root/scripts/check-windows-proof-render.py" --dll "$er_effects_dll" --require-dll
+
 out_dir=$(realpath -m "$out_dir")
 tmp_dir="$out_dir.tmp"
 rm -rf "$tmp_dir"

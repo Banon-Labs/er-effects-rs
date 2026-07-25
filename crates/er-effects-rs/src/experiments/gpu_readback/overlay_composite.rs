@@ -1,12 +1,9 @@
 
 use windows::Win32::Foundation::RECT;
-use windows::Win32::Graphics::Direct3D::{
-    D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, ID3DBlob, ID3DInclude,
-};
-use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
+use windows::Win32::Graphics::Direct3D::{D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, ID3DBlob};
 use windows::Win32::Graphics::Direct3D12::{
-    D3D_ROOT_SIGNATURE_VERSION_1, D3D12_BLEND_DESC, D3D12_BLEND_INV_SRC_ALPHA,
-    D3D12_BLEND_ONE, D3D12_BLEND_OP_ADD, D3D12_BLEND_SRC_ALPHA,
+    D3D_ROOT_SIGNATURE_VERSION, D3D_ROOT_SIGNATURE_VERSION_1, D3D12_BLEND_DESC,
+    D3D12_BLEND_INV_SRC_ALPHA, D3D12_BLEND_ONE, D3D12_BLEND_OP_ADD, D3D12_BLEND_SRC_ALPHA,
     D3D12_COLOR_WRITE_ENABLE_ALL, D3D12_COMPARISON_FUNC_ALWAYS,
     D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF, D3D12_CULL_MODE_NONE,
     D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, D3D12_DEPTH_STENCIL_DESC,
@@ -29,9 +26,13 @@ use windows::Win32::Graphics::Direct3D12::{
     D3D12_SHADER_VISIBILITY_PIXEL, D3D12_SRV_DIMENSION_TEXTURE2D,
     D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK, D3D12_STATIC_SAMPLER_DESC,
     D3D12_TEXTURE_ADDRESS_MODE_CLAMP, D3D12_TEX2D_RTV, D3D12_TEX2D_SRV, D3D12_VIEWPORT,
-    D3D12SerializeRootSignature, ID3D12DescriptorHeap, ID3D12PipelineState, ID3D12RootSignature,
+    ID3D12DescriptorHeap, ID3D12PipelineState, ID3D12RootSignature,
 };
-use windows::core::BOOL;
+use windows::Win32::System::LibraryLoader::{
+    GetModuleHandleW as GetGraphicsModuleHandleW, GetProcAddress as GetGraphicsProcAddress,
+    LoadLibraryW as LoadGraphicsLibraryW,
+};
+use windows::core::{BOOL, Error, HRESULT};
 
 static OVERLAY_ROOT_SIGNATURE: AtomicUsize = AtomicUsize::new(0);
 static OVERLAY_PSO: AtomicUsize = AtomicUsize::new(0);
@@ -215,6 +216,95 @@ unsafe fn init_overlay_draw_state(backbuffer: &ID3D12Resource) -> bool {
     true
 }
 
+fn dynamic_graphics_proc(
+    module: windows::core::PCWSTR,
+    proc: windows::core::PCSTR,
+) -> Option<*mut c_void> {
+    let handle = unsafe {
+        GetGraphicsModuleHandleW(module)
+            .or_else(|_| LoadGraphicsLibraryW(module))
+            .ok()?
+    };
+    unsafe { GetGraphicsProcAddress(handle, proc).map(|addr| addr as *mut c_void) }
+}
+
+unsafe fn d3d12_serialize_root_signature_dynamic(
+    desc: *const D3D12_ROOT_SIGNATURE_DESC,
+    version: D3D_ROOT_SIGNATURE_VERSION,
+    blob: *mut Option<ID3DBlob>,
+    err: Option<*mut Option<ID3DBlob>>,
+) -> windows::core::Result<()> {
+    type D3D12SerializeRootSignatureRaw = unsafe extern "system" fn(
+        *const D3D12_ROOT_SIGNATURE_DESC,
+        D3D_ROOT_SIGNATURE_VERSION,
+        *mut *mut c_void,
+        *mut *mut c_void,
+    ) -> HRESULT;
+    let Some(proc) = dynamic_graphics_proc(
+        windows::core::w!("d3d12.dll"),
+        windows::core::s!("D3D12SerializeRootSignature"),
+    ) else {
+        return Err(Error::from_hresult(HRESULT(0x80004005u32 as i32)));
+    };
+    let raw: D3D12SerializeRootSignatureRaw = unsafe { std::mem::transmute(proc) };
+    unsafe {
+        raw(
+            desc,
+            version,
+            std::mem::transmute(blob),
+            err.unwrap_or(std::ptr::null_mut()) as _,
+        )
+        .ok()
+    }
+}
+
+unsafe fn d3d_compile_dynamic(
+    src: *const c_void,
+    src_size: usize,
+    source_name: PCSTR,
+    entry: PCSTR,
+    target: PCSTR,
+    code: *mut Option<ID3DBlob>,
+    err: Option<*mut Option<ID3DBlob>>,
+) -> windows::core::Result<()> {
+    type D3DCompileRaw = unsafe extern "system" fn(
+        *const c_void,
+        usize,
+        PCSTR,
+        *const windows::Win32::Graphics::Direct3D::D3D_SHADER_MACRO,
+        *mut c_void,
+        PCSTR,
+        PCSTR,
+        u32,
+        u32,
+        *mut *mut c_void,
+        *mut *mut c_void,
+    ) -> HRESULT;
+    let Some(proc) = dynamic_graphics_proc(
+        windows::core::w!("d3dcompiler_47.dll"),
+        windows::core::s!("D3DCompile"),
+    ) else {
+        return Err(Error::from_hresult(HRESULT(0x80004005u32 as i32)));
+    };
+    let raw: D3DCompileRaw = unsafe { std::mem::transmute(proc) };
+    unsafe {
+        raw(
+            src,
+            src_size,
+            source_name,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            entry,
+            target,
+            0,
+            0,
+            std::mem::transmute(code),
+            err.unwrap_or(std::ptr::null_mut()) as _,
+        )
+        .ok()
+    }
+}
+
 unsafe fn create_overlay_root_signature(device: &ID3D12Device) -> Option<ID3D12RootSignature> {
     let range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
@@ -272,7 +362,7 @@ unsafe fn create_overlay_root_signature(device: &ID3D12Device) -> Option<ID3D12R
     let mut blob: Option<ID3DBlob> = None;
     let mut err: Option<ID3DBlob> = None;
     if unsafe {
-        D3D12SerializeRootSignature(
+        d3d12_serialize_root_signature_dynamic(
             &desc,
             D3D_ROOT_SIGNATURE_VERSION_1,
             &mut blob,
@@ -359,16 +449,12 @@ unsafe fn compile_overlay_shader(entry: &'static [u8], target: &'static [u8]) ->
     let mut code: Option<ID3DBlob> = None;
     let mut err: Option<ID3DBlob> = None;
     if unsafe {
-        D3DCompile(
+        d3d_compile_dynamic(
             OVERLAY_SHADER_HLSL.as_ptr() as *const c_void,
             OVERLAY_SHADER_HLSL.len(),
             PCSTR::from_raw(b"er-effects-present-overlay\0".as_ptr()),
-            None,
-            None::<&ID3DInclude>,
             PCSTR::from_raw(entry.as_ptr()),
             PCSTR::from_raw(target.as_ptr()),
-            0,
-            0,
             &mut code,
             Some(&mut err),
         )

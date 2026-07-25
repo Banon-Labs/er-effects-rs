@@ -45,7 +45,29 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="er-effects-autoload-stage-") as tmp:
         tmp_path = Path(tmp)
         er_dll = tmp_path / "er_effects_rs.dll"
-        er_dll.write_bytes(b"fake er effects dll\n")
+        if shutil.which("clang") is None or shutil.which("lld-link") is None:
+            raise SystemExit("test-autoload-happy-path needs clang + lld-link to build a tiny PE DLL")
+        tiny_c = tmp_path / "er_effects_stage_test.c"
+        tiny_c.write_text(
+            "__declspec(dllexport) void er_effects_stage_test(void) {}\n",
+            encoding="utf-8",
+        )
+        subprocess.run(
+            [
+                "clang",
+                "--target=x86_64-pc-windows-msvc",
+                "-nostdlib",
+                "-fuse-ld=lld",
+                "-Wl,/dll",
+                "-Wl,/noentry",
+                str(tiny_c),
+                "-o",
+                str(er_dll),
+            ],
+            cwd=REPO_ROOT,
+            check=True,
+            timeout=30,
+        )
         out = tmp_path / "release"
 
         env = os.environ.copy()
