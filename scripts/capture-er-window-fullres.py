@@ -5,8 +5,9 @@ Like scripts/capture-er-window.py but keeps the capture at FULL resolution (no
 854x480 downscale / quality-35 jpg), so on-screen menu/title text is legible.
 
 Selects strictly the window owned by the running eldenring.exe PID (preferring
-class steam_app_1245620). Validates mapped + sane geometry, focuses/raises it,
-then grim-captures that exact region. Never enumerates or captures other windows
+class steam_app_1245620). Validates mapped, focused/topmost, and sane geometry,
+then grim-captures that exact region. It never switches workspace, focuses,
+raises, moves, or resizes the target. Never enumerates or captures other windows
 / the desktop. Writes a .txt note and takes NO screenshot if the game window
 can't be safely validated.
 
@@ -74,24 +75,12 @@ def main() -> int:
     w = find_game_window(hypr_clients(hyprctl), pids)
     if w is None:
         note.write_text(f"capture fail-closed: no game window for pids={pids}\n"); return 0
-    addr = w.get("address")
-    ws = w.get("workspace")
-    ws_id = ws.get("id") if isinstance(ws, dict) else ws
-    for _ in range(24):
-        try:
-            if ws_id is not None:
-                subprocess.run([hyprctl, "dispatch", "workspace", str(ws_id)], capture_output=True, timeout=10)
-            if addr:
-                subprocess.run([hyprctl, "dispatch", "focuswindow", f"address:{addr}"], capture_output=True, timeout=10)
-                subprocess.run([hyprctl, "dispatch", "alterzorder", f"top,address:{addr}"], capture_output=True, timeout=10)
-        except Exception:
-            pass
-        w2 = find_game_window(hypr_clients(hyprctl), pids)
-        if w2:
-            w = w2
-            fh = w.get("focusHistoryID")
-            if fh is not None and int(fh) == 0:
-                break
+    w2 = find_game_window(hypr_clients(hyprctl), pids)
+    if w2:
+        w = w2
+    fh = w.get("focusHistoryID")
+    if fh is None or int(fh) != 0:
+        note.write_text(f"capture fail-closed: window not focused/topmost {summ(w)}\n"); return 0
     probs = problems(w)
     if probs:
         note.write_text(f"capture fail-closed: window unsafe {probs} {summ(w)}\n"); return 0

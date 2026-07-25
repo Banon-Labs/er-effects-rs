@@ -8,8 +8,7 @@
 // every CreateWindowExW / SetWindowPos / SetWindowLongPtrW / MoveWindow /
 // ChangeDisplaySettingsExW call is counted, and the first few are logged with their args and
 // the first game caller RVA, so a recorded video's black runs can be attributed to exact
-// native calls -- and the eventual product fix (window at final geometry from creation) has
-// its before/after proof. Pure passthrough: nothing is modified, reordered, or suppressed.
+// native calls. Pure passthrough: nothing is modified, reordered, or suppressed.
 
 /// Trampolines (0 = hook not installed).
 pub(crate) static WINRECONFIG_CREATE_WINDOW_ORIG: AtomicUsize = AtomicUsize::new(0);
@@ -271,79 +270,28 @@ pub(crate) fn install_window_reconfig_observer_hooks() {
         )),
     }
     std::mem::forget(hooks);
-    apply_startup_window_final_geometry();
+    winreconfig_finish(
+        WINRECONFIG_RESULT_DISABLED,
+        0,
+        "startup geometry manipulation disabled; observer hooks remain observe-only",
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
-// EARLY FINAL-GEOMETRY APPLY -- the product fix for the mid-boot black flashes.
+// STARTUP GEOMETRY APPLY -- DISABLED.
 //
-// Observed (run 195813, exact frame correlation): the game applies its display config at ~+11.4s
-// with MoveWindow(resize-in-place to monitor size) + SetWindowPos(FRAMECHANGED), and each
-// geometry-CHANGING call costs 2-7 black presented frames while XWayland remaps the surface;
-// the two later calls that change nothing produce no flash at all. So: apply the final monitor
-// rect ourselves as soon as the game window exists -- BEFORE the first present, while the screen
-// is legitimately black -- and the game's own reconfiguration becomes a chain of no-ops.
-// The boot pump holds its FIRST self-present until this declares a result, so no pixel can reach
-// the screen at pre-final geometry. Config-respecting: WINDOWED mode skips the apply entirely.
+// This module now observes native window reconfiguration only. It does not apply a final monitor
+// rect, resize, move, focus, pin, float, or otherwise place Elden Ring.
 
-/// Result latch: 0 = not finished, 1 = applied, 2 = skipped (WINDOWED), 3 = window never found,
-/// 4 = monitor info failed, 5 = config unreadable (skipped), 6 = already at final geometry.
+/// Result latch: 0 = not finished, 7 = disabled. Older telemetry consumers may still know the
+/// removed historical values 1..6 from the previous early-apply implementation.
 pub(crate) static WINRECONFIG_EARLY_APPLY_RESULT: AtomicUsize = AtomicUsize::new(0);
-/// Attach-relative ms when the early apply finished, and the applied (w<<16|h) pack.
+/// Attach-relative ms when the disabled apply latch fired. The rect pack stays 0 because no rect is
+/// applied.
 pub(crate) static WINRECONFIG_EARLY_APPLY_MS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static WINRECONFIG_EARLY_APPLY_RECT: AtomicUsize = AtomicUsize::new(0);
 
-const WINRECONFIG_EARLY_APPLY_MAX_MS: u128 = 20_000;
-const WINRECONFIG_EARLY_APPLY_POLL_MS: u64 = 20;
-const WINRECONFIG_RESULT_APPLIED: usize = 1;
-const WINRECONFIG_RESULT_SKIP_WINDOWED: usize = 2;
-const WINRECONFIG_RESULT_NO_WINDOW: usize = 3;
-const WINRECONFIG_RESULT_NO_MONITOR: usize = 4;
-const WINRECONFIG_RESULT_NO_CONFIG: usize = 5;
-const WINRECONFIG_RESULT_ALREADY_FINAL: usize = 6;
-const CSIDL_APPDATA: i32 = 0x1a;
-const SHGFP_TYPE_CURRENT: u32 = 0;
-const MAX_PATH_W: usize = 260;
-
-type WinreconfigShGetFolderPathWFn =
-    unsafe extern "system" fn(isize, i32, isize, u32, *mut u16) -> i32;
-
-/// Read the game's own GraphicsConfig.xml ScreenMode (UTF-16 XML). Resolves %APPDATA% through
-/// SHGetFolderPathW so an active save-redirect (which the game also sees) is honored.
-fn winreconfig_screen_mode() -> Option<String> {
-    let mut root = [0u16; MAX_PATH_W];
-    let resolved = match safe_input_proc(b"shell32.dll\0", b"SHGetFolderPathW\0") {
-        Ok(addr) => {
-            let f: WinreconfigShGetFolderPathWFn = unsafe { std::mem::transmute(addr) };
-            (unsafe { f(0, CSIDL_APPDATA, 0, SHGFP_TYPE_CURRENT, root.as_mut_ptr()) }) == 0
-        }
-        Err(_) => false,
-    };
-    let root_string = if resolved {
-        let len = root.iter().position(|&u| u == 0).unwrap_or(0);
-        String::from_utf16(&root[..len]).ok()?
-    } else {
-        std::env::var("APPDATA").ok()?
-    };
-    let path = format!("{root_string}\\EldenRing\\GraphicsConfig.xml");
-    let bytes = std::fs::read(&path).ok()?;
-    let mut units: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-        .collect();
-    if units.first() == Some(&0xFEFF) {
-        units.remove(0);
-    }
-    let text = String::from_utf16(&units).ok()?;
-    let open = "<ScreenMode>";
-    let start = text.find(open)? + open.len();
-    let end = text[start..].find("</ScreenMode>")? + start;
-    let mode = text[start..end].trim().to_owned();
-    append_autoload_debug(format_args!(
-        "winreconfig: GraphicsConfig ScreenMode='{mode}' (from {path})"
-    ));
-    Some(mode)
-}
+const WINRECONFIG_RESULT_DISABLED: usize = 7;
 
 fn winreconfig_finish(result: usize, since_ms: u128, detail: &str) {
     WINRECONFIG_EARLY_APPLY_MS.store(since_ms.min(usize::MAX as u128) as usize, Ordering::SeqCst);
@@ -351,113 +299,4 @@ fn winreconfig_finish(result: usize, since_ms: u128, detail: &str) {
     append_autoload_debug(format_args!(
         "winreconfig: EARLY-APPLY result={result} at +{since_ms}ms -- {detail}"
     ));
-}
-
-fn apply_startup_window_final_geometry() {
-    use windows::Win32::Foundation::RECT;
-    use windows::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
-    };
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowRect, MoveWindow, SWP_FRAMECHANGED, SWP_NOZORDER, SetWindowPos,
-    };
-
-    let start = std::time::Instant::now();
-    match winreconfig_screen_mode() {
-        None => {
-            winreconfig_finish(
-                WINRECONFIG_RESULT_NO_CONFIG,
-                start.elapsed().as_millis(),
-                "GraphicsConfig unreadable; leaving startup geometry to the game",
-            );
-            return;
-        }
-        Some(mode) if mode.eq_ignore_ascii_case("WINDOWED") => {
-            winreconfig_finish(
-                WINRECONFIG_RESULT_SKIP_WINDOWED,
-                start.elapsed().as_millis(),
-                "ScreenMode=WINDOWED; the game keeps its own window sizing",
-            );
-            return;
-        }
-        Some(_) => {}
-    }
-
-    // Bounded wait for the game's main window (same pacing primitive as the boot pump: a
-    // held-but-never-sent channel; recv_timeout is the sanctioned bounded wait).
-    let (_tick_tx, tick_rx) = std::sync::mpsc::channel::<()>();
-    let poll = std::time::Duration::from_millis(WINRECONFIG_EARLY_APPLY_POLL_MS);
-    let hwnd = loop {
-        if let Some(hwnd) = own_window() {
-            break hwnd;
-        }
-        if start.elapsed().as_millis() > WINRECONFIG_EARLY_APPLY_MAX_MS {
-            winreconfig_finish(
-                WINRECONFIG_RESULT_NO_WINDOW,
-                start.elapsed().as_millis(),
-                "game window never became visible within budget",
-            );
-            return;
-        }
-        let _ = tick_rx.recv_timeout(poll);
-    };
-
-    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
-    let mut info = MONITORINFO {
-        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-        ..Default::default()
-    };
-    if monitor.is_invalid() || !unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
-        winreconfig_finish(
-            WINRECONFIG_RESULT_NO_MONITOR,
-            start.elapsed().as_millis(),
-            "MonitorFromWindow/GetMonitorInfoW failed",
-        );
-        return;
-    }
-    let target = info.rcMonitor;
-    let width = target.right - target.left;
-    let height = target.bottom - target.top;
-    WINRECONFIG_EARLY_APPLY_RECT.store(
-        (((width as u32 as usize) << 16) | (height as u32 as usize & 0xffff)).min(usize::MAX),
-        Ordering::SeqCst,
-    );
-
-    let mut current = RECT::default();
-    if unsafe { GetWindowRect(hwnd, &mut current) }.is_ok()
-        && current.left == target.left
-        && current.top == target.top
-        && current.right == target.right
-        && current.bottom == target.bottom
-    {
-        winreconfig_finish(
-            WINRECONFIG_RESULT_ALREADY_FINAL,
-            start.elapsed().as_millis(),
-            "window already at the monitor rect",
-        );
-        return;
-    }
-
-    // Mirror the game's own +11s sequence exactly (resize + FRAMECHANGED reposition), just early.
-    let move_ok = unsafe { MoveWindow(hwnd, target.left, target.top, width, height, true) }.is_ok();
-    let pos_ok = unsafe {
-        SetWindowPos(
-            hwnd,
-            None,
-            target.left,
-            target.top,
-            width,
-            height,
-            SWP_NOZORDER | SWP_FRAMECHANGED,
-        )
-    }
-    .is_ok();
-    winreconfig_finish(
-        WINRECONFIG_RESULT_APPLIED,
-        start.elapsed().as_millis(),
-        &format!(
-            "monitor rect ({},{} {width}x{height}) applied early (move_ok={move_ok} pos_ok={pos_ok}); the game's own reconfig should now be a no-op",
-            target.left, target.top,
-        ),
-    );
 }

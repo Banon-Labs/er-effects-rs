@@ -29,20 +29,9 @@ def find_window():
     return None
 
 def focus_window(w):
-    hyprctl=shutil.which('hyprctl')
-    if not hyprctl or not w:
-        return
-    ws=w.get('workspace')
-    ws_id=ws.get('id') if isinstance(ws,dict) else ws
-    addr=w.get('address')
-    try:
-        if ws_id is not None:
-            run([hyprctl,'dispatch','workspace',str(ws_id)])
-        if addr:
-            run([hyprctl,'dispatch','focuswindow',f'address:{addr}'])
-            run([hyprctl,'dispatch','alterzorder',f'top,address:{addr}'])
-    except Exception:
-        pass
+    # Compositor manipulation is disabled. Capture helpers must observe the ER window's natural
+    # focused/topmost state instead of switching workspace, focusing, or raising it.
+    return
 
 def sane_window(w):
     if not w or w.get('mapped') is False or w.get('hidden') is True:
@@ -100,11 +89,9 @@ def main():
     # before our Hyprland placer settles it. Synchronize on the placer proof and then require the
     # current exact ER window address+geometry to match that placed record.
     w, placed=wait_for_placed_window(art)
-    focus_window(w)
-    pause_for(0.05)
     w2=find_window() or w
-    if not sane_window(w2) or w2.get('address') != w.get('address'):
-        raise SystemExit(f'placed ER window changed/unsafe after focus: before={w} after={w2}')
+    if not sane_window(w2) or w2.get('address') != w.get('address') or w2.get('focusHistoryID') != 0:
+        raise SystemExit(f'placed ER window unsafe/not focused; no compositor focus/raise will be attempted: before={w} after={w2}')
     at=w2.get('at') or []; size=w2.get('size') or []
     geom=f'{int(at[0])},{int(at[1])} {int(size[0])}x{int(size[1])}'
     meta={'window_initial':{k:w2.get(k) for k in ('class','at','size','mapped','hidden','focusHistoryID','fullscreen','address','workspace')},'placer_record':placed,'geom':geom,'fps':fps,'seconds':seconds,'frames':[]}

@@ -2,14 +2,16 @@
 # Validated capture loop for the Elden Ring runtime window.
 #
 # Captures ONLY the exact Elden Ring target window (class == steam_app_1245620), fail-closed:
-# validates the window is mapped, not hidden, focused/topmost (focusHistoryID == 0) and has sane
-# geometry before each grim. Writes frame-NNN.png for the whole life of the game process so the LAST
-# frame is "immediately before teardown". Never enumerates / prints other windows (privacy hygiene).
+# validates the window is mapped, not hidden, already focused/topmost (focusHistoryID == 0) and has
+# sane geometry before each grim. It never focuses, raises, moves, or resizes the target. Writes
+# frame-NNN.png for the whole life of the game process so the LAST frame is "immediately before
+# teardown". Never enumerates / prints other windows (privacy hygiene).
 #
 # Usage: capture-er-window-loop.sh <out_dir> [max_iters] [interval_seconds]
 set -euo pipefail
 OUT_DIR="${1:?out dir required}"
 MAX_ITERS="${2:-60}"
+# shellcheck disable=SC2034 # accepted legacy arg; cadence is fixed below by policy.
 INTERVAL="${3:-1}"
 CLASS="steam_app_1245620"
 mkdir -p "$OUT_DIR"
@@ -35,15 +37,7 @@ for ((i = 1; i <= MAX_ITERS; i++)); do
     continue
   fi
 
-  # Bring the EXACT target window topmost (by address) so the region we grim is not occluded by
-  # another app. Focus-by-address only touches the ER window; it injects no game input (not DInput/
-  # XInput), so it cannot contaminate the load logic. Then re-query to confirm it is now topmost.
-  addr="$(jq -r '.address' <<<"$win")"
-  hyprctl dispatch focuswindow "address:$addr" >/dev/null 2>&1 || true
-  win="$(hyprctl clients -j 2>/dev/null \
-    | jq -c --arg c "$CLASS" 'map(select(.class == $c)) | .[0] // empty' 2>/dev/null || true)"
-  [[ -z "$win" ]] && { pace_frame; continue; }
-
+  # Do not manipulate compositor focus/z-order. If ER is not already topmost, skip this frame.
   mapped="$(jq -r '.mapped' <<<"$win")"
   hidden="$(jq -r '.hidden' <<<"$win")"
   fhid="$(jq -r '.focusHistoryID' <<<"$win")"

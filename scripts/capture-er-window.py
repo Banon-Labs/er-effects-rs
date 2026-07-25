@@ -2,11 +2,10 @@
 """Low-quality screenshot of ONLY the Elden Ring window for a specific probe event.
 
 Captures only an exact-class (steam_app_1245620), mapped, unhidden window with sane geometry.
-This helper is focus-independent: it switches to the window's workspace and raises the exact ER
-window before capture, but it does not fail merely because Hyprland still reports a nonzero
-focusHistoryID. grim -g captures the validated ER window region only (never the full desktop or an
-unrelated fallback window), so the artifact can be taken at the loading-screen-portrait/portrait-cover
-moment instead of at teardown.
+This helper never switches workspace, focuses, raises, moves, or resizes the target. It captures only
+when the already-visible ER window is mapped, unhidden, focused/topmost, and has sane geometry.
+grim -g captures the validated ER window region only (never the full desktop or an unrelated fallback
+window); otherwise the helper writes a fail-closed note.
 
 Usage: capture-er-window.py <out.jpg>
 Exit 0 always (best-effort evidence; never fails the caller's runtime probe).
@@ -16,7 +15,6 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-import time
 from pathlib import Path
 import sys
 
@@ -69,31 +67,16 @@ def main() -> int:
         note.write_text(f"capture fail-closed: no window class={WINDOW_CLASS} (game gone/crashed)\n")
         return 0
 
-    # Make the ER window visible for grim's region capture, but do not require focus to stick.
-    # Switch to its workspace first (grim captures the visible output; the window must be on it),
-    # focus + raise to top, and retry -- a single focuswindow often doesn't win focus on teardown.
-    addr = w.get("address")
-    ws = w.get("workspace")
-    ws_id = ws.get("id") if isinstance(ws, dict) else ws
-    # Re-query after each dispatch so geometry follows any compositor move/resize. Focus is
-    # best-effort only; not-focused teardown captures are mandatory now, not a fail-closed reason.
-    # Each hyprctl subprocess call is synchronous (timeout=10) and the re-query itself spawns
-    # hyprctl, so the loop paces on real IPC latency -- no sleep needed.
-    for _attempt in range(24):
-        try:
-            if ws_id is not None:
-                subprocess.run([hyprctl, "dispatch", "workspace", str(ws_id)], capture_output=True, timeout=10)
-            if addr:
-                subprocess.run([hyprctl, "dispatch", "focuswindow", f"address:{addr}"], capture_output=True, timeout=10)
-                subprocess.run([hyprctl, "dispatch", "alterzorder", f"top,address:{addr}"], capture_output=True, timeout=10)
-        except Exception:
-            pass
-        w2 = find_er(hypr_clients(hyprctl))
-        if w2:
-            w = w2
-            fh = w.get("focusHistoryID")
-            if fh is not None and int(fh) == 0:
-                break
+    # Do not manipulate the compositor to make grim's region capture work. If ER is not already
+    # topmost/focused, fail closed and let the caller/user decide whether a capture is worth changing
+    # desktop state.
+    w2 = find_er(hypr_clients(hyprctl))
+    if w2:
+        w = w2
+    fh = w.get("focusHistoryID")
+    if fh is None or int(fh) != 0:
+        note.write_text(f"capture fail-closed: ER window not focused/topmost window={summary(w)}\n")
+        return 0
 
     probs = problems(w)
     if probs:

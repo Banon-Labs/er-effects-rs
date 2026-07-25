@@ -2080,17 +2080,10 @@ def visual_save_data_popup_visible(artifact_dir: Path, windows: list[dict[str, A
 
 
 def focus_target_window(window_class: str) -> None:
-    hyprctl = shutil.which("hyprctl")
-    if not hyprctl:
-        return
-    selector = f"class:^{re.escape(window_class)}$"
-    subprocess.run(
-        [hyprctl, "dispatch", "focuswindow", selector],
-        capture_output=True,
-        text=True,
-        timeout=OBSERVATION_SUBPROCESS_TIMEOUT_SECONDS,
-        check=False,
-    )
+    # Compositor focus manipulation is disabled. Visual checks fail closed unless the target is
+    # already capture-safe.
+    _ = window_class
+    return
 
 
 def hypr_windows(window_class: str) -> list[dict[str, Any]]:
@@ -2631,9 +2624,6 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
             )
         windows = hypr_windows(args.window_class) if process_running else []
         if process_running and windows and (args.visual_legal_popup_check or args.visual_save_data_popup_check or args.visual_world_check):
-            if not window_capture_safe(windows[0], args.window_class):
-                focus_target_window(args.window_class)
-                windows = hypr_windows(args.window_class)
             if not windows or not window_capture_safe(windows[0], args.window_class):
                 if args.defer_unsafe_visual_capture_until_telemetry and telemetry is None:
                     os.sched_yield()

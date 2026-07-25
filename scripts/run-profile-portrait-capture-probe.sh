@@ -221,24 +221,11 @@ def capture_window() -> dict:
     w = find_er(hyprctl)
     if not w:
         raise RuntimeError(f"no exact target window class={window_class}")
-    addr = w.get("address")
-    ws = w.get("workspace")
-    ws_id = ws.get("id") if isinstance(ws, dict) else ws
-    for _ in range(24):
-        try:
-            if ws_id is not None:
-                subprocess.run([hyprctl, "dispatch", "workspace", str(ws_id)], capture_output=True, timeout=10)
-            if addr:
-                subprocess.run([hyprctl, "dispatch", "focuswindow", f"address:{addr}"], capture_output=True, timeout=10)
-                subprocess.run([hyprctl, "dispatch", "alterzorder", f"top,address:{addr}"], capture_output=True, timeout=10)
-        except Exception:
-            pass
-        refreshed = find_er(hyprctl)
-        if refreshed:
-            w = refreshed
-            if as_int(w.get("focusHistoryID"), -1) == 0:
-                break
-        os.sched_yield()
+    refreshed = find_er(hyprctl)
+    if refreshed:
+        w = refreshed
+    if as_int(w.get("focusHistoryID"), -1) != 0:
+        raise RuntimeError(f"target window not focused/topmost; no compositor focus/raise will be attempted: {window_summary(w)}")
     at = w.get("at") or []
     size = w.get("size") or []
     if w.get("mapped") is False or w.get("hidden") is True or len(at) != 2 or len(size) != 2:
