@@ -24,6 +24,7 @@ python3 "$repo_root/scripts/test-cupcake-policies.py"
 python3 "$repo_root/scripts/check-no-lossy-utf8.py"
 python3 "$repo_root/scripts/check-windows-proof-render.py"
 python3 "$repo_root/scripts/test-windows-proof-render.py"
+bash "$repo_root/scripts/run-windows-proof-render-smoke.sh" --dry-run >/dev/null
 python3 "$repo_root/scripts/check-rust-file-sizes.py"
 python3 "$repo_root/scripts/check-markdown-code-blocks.py" "$repo_root/README.md"
 cargo fmt --all --manifest-path "$repo_root/Cargo.toml" -- --check
@@ -31,6 +32,7 @@ shellcheck "$repo_root/scripts/check-no-local-main-commits.sh"
 shellcheck "$repo_root/scripts/stage-autoload-release.sh"
 shellcheck "$repo_root/scripts/run-product-continue-direct-probe.sh"
 shellcheck "$repo_root/scripts/run-me3-product-smoke.sh"
+shellcheck "$repo_root/scripts/run-windows-proof-render-smoke.sh"
 
 # Windows-target check, cross-compiled from Linux via cargo-xwin (preferred). Falls back to
 # a plain cargo check only if cargo-xwin is unavailable (which needs an MSVC toolchain on
