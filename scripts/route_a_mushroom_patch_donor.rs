@@ -893,6 +893,104 @@ fn insert_edge(edges: &mut HashSet<(u32, u32)>, a: u32, b: u32) {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct MeshTopologyTearMetrics {
+    triangle_components: usize,
+    boundary_edges: usize,
+    boundary_components: usize,
+    nonmanifold_edges: usize,
+    degenerate_faces: usize,
+}
+
+fn mesh_topology_tear_metrics(mesh: &SourceMesh) -> MeshTopologyTearMetrics {
+    let mut edge_faces: HashMap<(u32, u32), Vec<usize>> = HashMap::new();
+    let mut degenerate_faces = 0_usize;
+    for (face_index, [a, b, c]) in mesh.triangles.iter().enumerate() {
+        if a == b || a == c || b == c {
+            degenerate_faces += 1;
+            continue;
+        }
+        for (u, v) in [(*a, *b), (*b, *c), (*c, *a)] {
+            let edge = if u <= v { (u, v) } else { (v, u) };
+            edge_faces.entry(edge).or_default().push(face_index);
+        }
+    }
+    let boundary_edges = edge_faces.values().filter(|faces| faces.len() == 1).count();
+    let nonmanifold_edges = edge_faces.values().filter(|faces| faces.len() > 2).count();
+    let triangle_components = triangle_component_count(mesh.triangles.len(), &edge_faces);
+    let boundary_components = boundary_component_count(&edge_faces);
+    MeshTopologyTearMetrics {
+        triangle_components,
+        boundary_edges,
+        boundary_components,
+        nonmanifold_edges,
+        degenerate_faces,
+    }
+}
+
+fn triangle_component_count(
+    face_count: usize,
+    edge_faces: &HashMap<(u32, u32), Vec<usize>>,
+) -> usize {
+    let mut adjacency = vec![Vec::<usize>::new(); face_count];
+    for faces in edge_faces.values() {
+        for i in 0..faces.len() {
+            for j in (i + 1)..faces.len() {
+                adjacency[faces[i]].push(faces[j]);
+                adjacency[faces[j]].push(faces[i]);
+            }
+        }
+    }
+    let mut seen = vec![false; face_count];
+    let mut components = 0_usize;
+    for start in 0..face_count {
+        if seen[start] {
+            continue;
+        }
+        components += 1;
+        let mut stack = vec![start];
+        seen[start] = true;
+        while let Some(face) = stack.pop() {
+            for neighbor in &adjacency[face] {
+                if !seen[*neighbor] {
+                    seen[*neighbor] = true;
+                    stack.push(*neighbor);
+                }
+            }
+        }
+    }
+    components
+}
+
+fn boundary_component_count(edge_faces: &HashMap<(u32, u32), Vec<usize>>) -> usize {
+    let mut adjacency: HashMap<u32, Vec<u32>> = HashMap::new();
+    for ((a, b), faces) in edge_faces {
+        if faces.len() == 1 {
+            adjacency.entry(*a).or_default().push(*b);
+            adjacency.entry(*b).or_default().push(*a);
+        }
+    }
+    let mut seen = HashSet::new();
+    let mut components = 0_usize;
+    for start in adjacency.keys().copied().collect::<Vec<_>>() {
+        if !seen.insert(start) {
+            continue;
+        }
+        components += 1;
+        let mut stack = vec![start];
+        while let Some(vertex) = stack.pop() {
+            if let Some(neighbors) = adjacency.get(&vertex) {
+                for neighbor in neighbors {
+                    if seen.insert(*neighbor) {
+                        stack.push(*neighbor);
+                    }
+                }
+            }
+        }
+    }
+    components
+}
+
 fn sum_bone_weights(weights: &[f32; 256], bones: &[u8]) -> f32 {
     bones
         .iter()
@@ -3148,6 +3246,28 @@ fn write_summary(
     )?;
     writeln!(file, "vertices={}", source.vertices.len())?;
     writeln!(file, "triangles={}", source.triangles.len())?;
+    let topology = mesh_topology_tear_metrics(source);
+    writeln!(
+        file,
+        "topology_triangle_components={}",
+        topology.triangle_components
+    )?;
+    writeln!(file, "topology_boundary_edges={}", topology.boundary_edges)?;
+    writeln!(
+        file,
+        "topology_boundary_components={}",
+        topology.boundary_components
+    )?;
+    writeln!(
+        file,
+        "topology_nonmanifold_edges={}",
+        topology.nonmanifold_edges
+    )?;
+    writeln!(
+        file,
+        "topology_degenerate_faces={}",
+        topology.degenerate_faces
+    )?;
     writeln!(
         file,
         "bbox_min={:.9},{:.9},{:.9}",

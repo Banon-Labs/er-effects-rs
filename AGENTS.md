@@ -44,6 +44,8 @@ When user feedback shows that offline slider changes are not producing the inten
 
 When the issue becomes visual/material-specific (for example texture placement, UVs, seams, normals, or lighting), do not continue blind exporter changes from verbal descriptions alone. Ask for a focused, non-desktop visual artifact/crop as the fastest evidence path, while respecting screenshot sensitivity: request the smallest crop that shows the defect and avoid full-desktop capture unless the user explicitly permits it.
 
+For model replacement packages emitted for user/runtime review, treat mesh tearing as a zero-tolerance blocker. Do not package, install, launch, or present a model candidate to the user if any offline metric, topology audit, export/import validation, or structured report indicates possible tears, disconnected surface gaps, split seams, nonmanifold rupture, missing bridge triangles, or peak/valley discontinuities that can manifest as tearing. A candidate with `tears > 0` is a failed build, not a reviewable artifact; first add or fix the executable tear metric/guard and rebuild until it reports zero.
+
 ## Non-Interactive Shell Commands
 
 **ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.

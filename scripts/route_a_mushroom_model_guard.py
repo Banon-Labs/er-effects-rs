@@ -103,6 +103,15 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
         summary.get("arm_distal_overweighted_components_before_after")
     )
     disconnected_groups = disconnected_arm_weight_groups(audit)
+    topology_triangle_components = parse_int(
+        summary.get("topology_triangle_components")
+    )
+    topology_boundary_edges = parse_int(summary.get("topology_boundary_edges"))
+    topology_boundary_components = parse_int(
+        summary.get("topology_boundary_components")
+    )
+    topology_nonmanifold_edges = parse_int(summary.get("topology_nonmanifold_edges"))
+    topology_degenerate_faces = parse_int(summary.get("topology_degenerate_faces"))
     arm_volume_profile_enabled = parse_bool(summary.get("arm_volume_profile_enabled"))
     arm_volume_profile_affected_vertices = parse_int(
         summary.get("arm_volume_profile_affected_vertices")
@@ -170,6 +179,26 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
     detached_islands_handled = (
         detached_components == 0 and independent_detached_components == 0
     )
+
+    if (
+        topology_triangle_components != 1
+        or topology_boundary_edges != 0
+        or topology_boundary_components != 0
+        or topology_nonmanifold_edges != 0
+        or topology_degenerate_faces != 0
+    ):
+        alerts.append(
+            {
+                "code": "MODEL_TOPOLOGY_TEAR_PROXY_NONZERO",
+                "severity": "error",
+                "message": "The emitted model has nonzero topology tear proxies; user-review packages require zero tears.",
+                "triangle_components": topology_triangle_components,
+                "boundary_edges": topology_boundary_edges,
+                "boundary_components": topology_boundary_components,
+                "nonmanifold_edges": topology_nonmanifold_edges,
+                "degenerate_faces": topology_degenerate_faces,
+            }
+        )
 
     if broken_visible_before > 0 and (
         not arm_volume_profile_enabled
@@ -336,6 +365,11 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
                 distal_after,
             ],
             "disconnected_arm_weight_groups": disconnected_groups,
+            "topology_triangle_components": topology_triangle_components,
+            "topology_boundary_edges": topology_boundary_edges,
+            "topology_boundary_components": topology_boundary_components,
+            "topology_nonmanifold_edges": topology_nonmanifold_edges,
+            "topology_degenerate_faces": topology_degenerate_faces,
             "arm_volume_profile_enabled": arm_volume_profile_enabled,
             "arm_volume_profile_affected_vertices": arm_volume_profile_affected_vertices,
             "arm_volume_profile_side_surface_vertices": arm_volume_profile_side_surface_vertices,
