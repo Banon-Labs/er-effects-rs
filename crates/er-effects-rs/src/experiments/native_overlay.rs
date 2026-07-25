@@ -38,6 +38,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{Error, HRESULT, Interface, PCSTR, w};
 
+use crate::constants::{
+    LOADING_SCREEN_BAR_ENABLED, LOADING_SCREEN_BAR_MAX_FRAME, LOADING_SCREEN_CLOSE_SENT,
+    LOADING_SCREEN_UPDATE_HITS,
+};
 use crate::telemetry::append_autoload_debug;
 
 /// Visibility requested by the game task: 1 = cover title/loading, 0 = release to gameplay.
@@ -53,6 +57,8 @@ pub(crate) static NATIVE_OVERLAY_STAGE: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static NATIVE_OVERLAY_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
 /// Last HRESULT-ish stage failure code (0 = none; values are local diagnostic buckets).
 pub(crate) static NATIVE_OVERLAY_FAILURE: AtomicUsize = AtomicUsize::new(0);
+/// 1 while the game's native loading GFx/bar surface is live enough for this bridge to hand off.
+pub(crate) static NATIVE_OVERLAY_HANDOFF_READY: AtomicUsize = AtomicUsize::new(0);
 
 const FAILURE_DYNAMIC_FACTORY: usize = 1;
 const FAILURE_DYNAMIC_DEVICE: usize = 2;
@@ -70,7 +76,19 @@ pub(crate) fn install_native_overlay() {
 }
 
 pub(crate) fn native_overlay_player_presence_tick(player_available: bool) {
-    NATIVE_OVERLAY_SHOW.store(usize::from(!player_available), Ordering::SeqCst);
+    let handoff_ready = native_loading_surface_handoff_ready();
+    NATIVE_OVERLAY_HANDOFF_READY.store(usize::from(handoff_ready), Ordering::SeqCst);
+    NATIVE_OVERLAY_SHOW.store(
+        usize::from(!player_available && !handoff_ready),
+        Ordering::SeqCst,
+    );
+}
+
+fn native_loading_surface_handoff_ready() -> bool {
+    LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst) != 0
+        && LOADING_SCREEN_BAR_ENABLED.load(Ordering::SeqCst) != 0
+        && LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst) != 0
+        && LOADING_SCREEN_CLOSE_SENT.load(Ordering::SeqCst) == 0
 }
 
 unsafe extern "system" fn overlay_wndproc(
