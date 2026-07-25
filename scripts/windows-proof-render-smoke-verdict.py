@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""Build the Windows-proof renderer smoke verdict from runtime telemetry."""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+from typing import Any
+
+
+def as_int(value: Any, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value, 0)
+        except ValueError:
+            return default
+    return default
+
+
+def build_verdict(
+    *,
+    artifact_dir: Path,
+    telemetry: dict[str, Any] | None,
+    telemetry_written: bool,
+    watcher_status: int,
+    require_handoff: bool,
+) -> dict[str, Any]:
+    mode = isinstance(telemetry, dict) and as_int(telemetry.get("oracle_windows_proof_mode"), 0) == 1
+    hits = as_int(
+        telemetry.get("oracle_forbidden_render_backend_hits") if isinstance(telemetry, dict) else None,
+        -1,
+    )
+    native_overlay_frames = as_int(
+        telemetry.get("oracle_native_overlay_frames") if isinstance(telemetry, dict) else None,
+        -1,
+    )
+    native_overlay_stage = as_int(
+        telemetry.get("oracle_native_overlay_stage") if isinstance(telemetry, dict) else None,
+        -1,
+    )
+    native_overlay_failure = as_int(
+        telemetry.get("oracle_native_overlay_failure") if isinstance(telemetry, dict) else None,
+        -1,
+    )
+    native_overlay_handoff_ready_hits = as_int(
+        telemetry.get("oracle_native_overlay_handoff_ready_hits") if isinstance(telemetry, dict) else None,
+        -1,
+    )
+    native_overlay_show = as_int(
+        telemetry.get("oracle_native_overlay_show") if isinstance(telemetry, dict) else None,
+        -1,
+    )
+    native_overlay_pixel_probe_matches = as_int(
+        telemetry.get("oracle_native_overlay_pixel_probe_matches") if isinstance(telemetry, dict) else None,
+        -1,
+    )
+    native_overlay_pixel_probe_rgba = as_int(
+        telemetry.get("oracle_native_overlay_pixel_probe_rgba") if isinstance(telemetry, dict) else None,
+        -1,
+    )
+    scaleform_memoryfile_custom_asset_hits = as_int(
+        telemetry.get("oracle_scaleform_memoryfile_custom_asset_hits") if isinstance(telemetry, dict) else None,
+        -1,
+    )
+    native_overlay_proven = native_overlay_frames > 0 and native_overlay_pixel_probe_matches > 0
+    native_overlay_handoff_proven = native_overlay_handoff_ready_hits > 0
+    scaleform_memoryfile_custom_asset_proven = scaleform_memoryfile_custom_asset_hits > 0
+    native_overlay_hidden_at_handoff = native_overlay_show == 0
+    windows_proof_render_runtime = (
+        mode
+        and hits == 0
+        and native_overlay_proven
+        and (
+            not require_handoff
+            or (
+                native_overlay_handoff_proven
+                and native_overlay_hidden_at_handoff
+                and scaleform_memoryfile_custom_asset_proven
+            )
+        )
+    )
+    return {
+        "artifact_dir": str(artifact_dir),
+        "watcher_status": watcher_status,
+        "watcher_pass": watcher_status == 0,
+        "telemetry_written": telemetry_written,
+        "oracle_windows_proof_mode": 1 if mode else 0,
+        "oracle_forbidden_render_backend_hits": hits,
+        "oracle_native_overlay_frames": native_overlay_frames,
+        "oracle_native_overlay_stage": native_overlay_stage,
+        "oracle_native_overlay_failure": native_overlay_failure,
+        "oracle_native_overlay_handoff_ready_hits": native_overlay_handoff_ready_hits,
+        "oracle_native_overlay_show": native_overlay_show,
+        "oracle_native_overlay_pixel_probe_matches": native_overlay_pixel_probe_matches,
+        "oracle_native_overlay_pixel_probe_rgba": native_overlay_pixel_probe_rgba,
+        "oracle_scaleform_memoryfile_custom_asset_hits": scaleform_memoryfile_custom_asset_hits,
+        "native_overlay_proven": native_overlay_proven,
+        "native_overlay_handoff_proven": native_overlay_handoff_proven,
+        "scaleform_memoryfile_custom_asset_proven": scaleform_memoryfile_custom_asset_proven,
+        "native_overlay_hidden_at_handoff": native_overlay_hidden_at_handoff,
+        "require_handoff": require_handoff,
+        "windows_proof_render_runtime": windows_proof_render_runtime,
+    }
+
+
+def load_telemetry(path: Path) -> dict[str, Any] | None:
+    try:
+        telemetry = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return None
+    return telemetry if isinstance(telemetry, dict) else None
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--artifact-dir", type=Path, required=True)
+    parser.add_argument("--telemetry", type=Path, required=True)
+    parser.add_argument("--verdict", type=Path, required=True)
+    parser.add_argument("--watcher-status", type=int, required=True)
+    parser.add_argument("--require-handoff", action="store_true")
+    args = parser.parse_args()
+
+    telemetry = load_telemetry(args.telemetry)
+    verdict = build_verdict(
+        artifact_dir=args.artifact_dir,
+        telemetry=telemetry,
+        telemetry_written=args.telemetry.is_file(),
+        watcher_status=args.watcher_status,
+        require_handoff=args.require_handoff,
+    )
+    args.verdict.write_text(json.dumps(verdict, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print("windows-proof-render-smoke:", json.dumps(verdict, sort_keys=True))
+    return 0 if verdict["watcher_pass"] and verdict["windows_proof_render_runtime"] else 3
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

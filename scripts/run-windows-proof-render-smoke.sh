@@ -151,71 +151,13 @@ RUNTIME_SKIP_VISUAL_CAPTURE=1 \
 RUNTIME_EXTRA_WATCH_ARGS="${RUNTIME_EXTRA_WATCH_ARGS:---no-phase-watchdog --no-world-load-deadline}" \
 "$REPO_ROOT/.auto/runtime_probe.sh" > "$ARTIFACT_DIR/runtime-probe.out" 2> "$ARTIFACT_DIR/runtime-probe.err" || watcher_status=$?
 
-python3 - "$ARTIFACT_DIR" "$TELEMETRY_PATH" "$VERDICT_PATH" "$watcher_status" "$REQUIRE_HANDOFF" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-artifact = Path(sys.argv[1])
-telemetry_path = Path(sys.argv[2])
-verdict_path = Path(sys.argv[3])
-watcher_status = int(sys.argv[4])
-require_handoff = sys.argv[5] == "1"
-
-def as_int(value, default=0):
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str):
-        try:
-            return int(value, 0)
-        except ValueError:
-            return default
-    return default
-
-try:
-    telemetry = json.loads(telemetry_path.read_text(encoding="utf-8", errors="replace"))
-except Exception:
-    telemetry = None
-
-mode = isinstance(telemetry, dict) and as_int(telemetry.get("oracle_windows_proof_mode"), 0) == 1
-hits = as_int(telemetry.get("oracle_forbidden_render_backend_hits") if isinstance(telemetry, dict) else None, -1)
-native_overlay_frames = as_int(telemetry.get("oracle_native_overlay_frames") if isinstance(telemetry, dict) else None, -1)
-native_overlay_stage = as_int(telemetry.get("oracle_native_overlay_stage") if isinstance(telemetry, dict) else None, -1)
-native_overlay_failure = as_int(telemetry.get("oracle_native_overlay_failure") if isinstance(telemetry, dict) else None, -1)
-native_overlay_handoff_ready_hits = as_int(telemetry.get("oracle_native_overlay_handoff_ready_hits") if isinstance(telemetry, dict) else None, -1)
-native_overlay_show = as_int(telemetry.get("oracle_native_overlay_show") if isinstance(telemetry, dict) else None, -1)
-native_overlay_pixel_probe_matches = as_int(telemetry.get("oracle_native_overlay_pixel_probe_matches") if isinstance(telemetry, dict) else None, -1)
-native_overlay_pixel_probe_rgba = as_int(telemetry.get("oracle_native_overlay_pixel_probe_rgba") if isinstance(telemetry, dict) else None, -1)
-scaleform_memoryfile_custom_asset_hits = as_int(telemetry.get("oracle_scaleform_memoryfile_custom_asset_hits") if isinstance(telemetry, dict) else None, -1)
-native_overlay_proven = native_overlay_frames > 0 and native_overlay_pixel_probe_matches > 0
-native_overlay_handoff_proven = native_overlay_handoff_ready_hits > 0
-scaleform_memoryfile_custom_asset_proven = scaleform_memoryfile_custom_asset_hits > 0
-native_overlay_hidden_at_handoff = native_overlay_show == 0
-verdict = {
-    "artifact_dir": str(artifact),
-    "watcher_status": watcher_status,
-    "watcher_pass": watcher_status == 0,
-    "telemetry_written": telemetry_path.is_file(),
-    "oracle_windows_proof_mode": 1 if mode else 0,
-    "oracle_forbidden_render_backend_hits": hits,
-    "oracle_native_overlay_frames": native_overlay_frames,
-    "oracle_native_overlay_stage": native_overlay_stage,
-    "oracle_native_overlay_failure": native_overlay_failure,
-    "oracle_native_overlay_handoff_ready_hits": native_overlay_handoff_ready_hits,
-    "oracle_native_overlay_show": native_overlay_show,
-    "oracle_native_overlay_pixel_probe_matches": native_overlay_pixel_probe_matches,
-    "oracle_native_overlay_pixel_probe_rgba": native_overlay_pixel_probe_rgba,
-    "oracle_scaleform_memoryfile_custom_asset_hits": scaleform_memoryfile_custom_asset_hits,
-    "native_overlay_proven": native_overlay_proven,
-    "native_overlay_handoff_proven": native_overlay_handoff_proven,
-    "scaleform_memoryfile_custom_asset_proven": scaleform_memoryfile_custom_asset_proven,
-    "native_overlay_hidden_at_handoff": native_overlay_hidden_at_handoff,
-    "require_handoff": require_handoff,
-    "windows_proof_render_runtime": mode and hits == 0 and native_overlay_proven and (not require_handoff or (native_overlay_handoff_proven and native_overlay_hidden_at_handoff and scaleform_memoryfile_custom_asset_proven)),
-}
-verdict_path.write_text(json.dumps(verdict, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-print("windows-proof-render-smoke:", json.dumps(verdict, sort_keys=True))
-sys.exit(0 if verdict["watcher_pass"] and verdict["windows_proof_render_runtime"] else 3)
-PY
+verdict_args=(
+  --artifact-dir "$ARTIFACT_DIR"
+  --telemetry "$TELEMETRY_PATH"
+  --verdict "$VERDICT_PATH"
+  --watcher-status "$watcher_status"
+)
+if (( REQUIRE_HANDOFF )); then
+  verdict_args+=(--require-handoff)
+fi
+python3 "$REPO_ROOT/scripts/windows-proof-render-smoke-verdict.py" "${verdict_args[@]}"

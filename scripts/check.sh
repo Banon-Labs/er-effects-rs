@@ -24,6 +24,7 @@ python3 "$repo_root/scripts/test-cupcake-policies.py"
 python3 "$repo_root/scripts/check-no-lossy-utf8.py"
 python3 "$repo_root/scripts/check-windows-proof-render.py"
 python3 "$repo_root/scripts/test-windows-proof-render.py"
+python3 "$repo_root/scripts/test-windows-proof-render-smoke-verdict.py"
 bash "$repo_root/scripts/run-windows-proof-render-smoke.sh" --dry-run >/dev/null
 python3 "$repo_root/scripts/check-rust-file-sizes.py"
 python3 "$repo_root/scripts/check-markdown-code-blocks.py" "$repo_root/README.md"
