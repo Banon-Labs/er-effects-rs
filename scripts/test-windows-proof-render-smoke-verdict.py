@@ -36,6 +36,7 @@ def good_telemetry() -> dict[str, Any]:
         "oracle_native_overlay_handoff_ready_hits": 2,
         "oracle_native_overlay_covering_loading_hits": 2,
         "oracle_native_overlay_show": 0,
+        "oracle_native_overlay_content_frames": 2,
         "oracle_native_overlay_pixel_probe_matches": 1,
         "oracle_native_overlay_pixel_probe_rgba": 0x2EB8EDFF,
         "oracle_scaleform_memoryfile_custom_asset_hits": 0,
@@ -70,6 +71,8 @@ def test_require_world_ready_accepts_full_positive_contract() -> None:
     assert got["watcher_pass"] is True
     assert got["native_overlay_proven"] is True
     assert got["native_overlay_handoff_observed"] is True
+    assert got["native_overlay_visible_during_loading"] is True
+    assert got["native_overlay_full_content_proven"] is True
     assert got["native_overlay_covered_loading"] is True
     assert got["native_overlay_hidden_at_world_ready"] is True
     assert got["scaleform_memoryfile_custom_asset_observed"] is False
@@ -86,8 +89,12 @@ def test_rejects_missing_bridge_pixel_match() -> None:
     assert_rejects_missing("oracle_native_overlay_pixel_probe_matches")
 
 
-def test_rejects_missing_loading_coverage() -> None:
+def test_rejects_missing_loading_visibility() -> None:
     assert_rejects_missing("oracle_native_overlay_covering_loading_hits")
+
+
+def test_rejects_missing_full_content_proof() -> None:
+    assert_rejects_missing("oracle_native_overlay_content_frames")
 
 
 def test_rejects_bridge_still_visible_at_world_ready() -> None:
@@ -113,6 +120,7 @@ def test_rejects_old_gfx_handoff_semantics() -> None:
     telemetry["oracle_native_overlay_show"] = 0
     got = verdict(telemetry)
     assert got["native_overlay_handoff_observed"] is True
+    assert got["native_overlay_visible_during_loading"] is False
     assert got["native_overlay_covered_loading"] is False
     assert not got["windows_proof_render_runtime"]
 
@@ -155,7 +163,8 @@ def main() -> int:
         test_require_world_ready_accepts_full_positive_contract,
         test_rejects_forbidden_backend_hit,
         test_rejects_missing_bridge_pixel_match,
-        test_rejects_missing_loading_coverage,
+        test_rejects_missing_loading_visibility,
+        test_rejects_missing_full_content_proof,
         test_rejects_bridge_still_visible_at_world_ready,
         test_does_not_require_scaleform_memoryfile_asset_commit,
         test_rejects_old_gfx_handoff_semantics,

@@ -70,6 +70,8 @@ pub(crate) static NATIVE_OVERLAY_HANDOFF_READY: AtomicUsize = AtomicUsize::new(0
 pub(crate) static NATIVE_OVERLAY_HANDOFF_READY_HITS: AtomicUsize = AtomicUsize::new(0);
 /// Counts frames where the game loading UI existed, the player was absent, and the bridge stayed visible.
 pub(crate) static NATIVE_OVERLAY_COVERING_LOADING_HITS: AtomicUsize = AtomicUsize::new(0);
+/// Counts frames where the bridge rendered real full-frame/content coverage, not just the 1px marker.
+pub(crate) static NATIVE_OVERLAY_CONTENT_FRAMES: AtomicUsize = AtomicUsize::new(0);
 /// One-shot objective pixel readback attempts against the bridge backbuffer.
 pub(crate) static NATIVE_OVERLAY_PIXEL_PROBE_HITS: AtomicUsize = AtomicUsize::new(0);
 /// One-shot bridge pixel readback matches against the unique clear color.
