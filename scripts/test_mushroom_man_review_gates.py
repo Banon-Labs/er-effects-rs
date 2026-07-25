@@ -16,7 +16,7 @@ from typing import Any, cast
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CANDIDATE_ROOT = (
-    REPO_ROOT / "target/mushroom-route-a-offline/blender-edit/adult-closed-remesh-v12"
+    REPO_ROOT / "target/mushroom-route-a-offline/blender-edit/adult-closed-remesh-v13"
 )
 CANDIDATE_OBJ = CANDIDATE_ROOT / "closed_remesh.obj"
 CANDIDATE_FLVER_GUARD = CANDIDATE_ROOT / "flver/model-guard-report.json"
@@ -29,11 +29,11 @@ SOURCE_WEIGHTS = (
 BUILD_TIME_GUARD_REPORT = CANDIDATE_ROOT / "mushroom-build-time-guard-report.json"
 CANDIDATE_PROFILE = (
     REPO_ROOT
-    / "target/mushroom-replacement-lod-redirect-spine-arm-closed-remesh-v12-install/mushroom-man.me3"
+    / "target/mushroom-replacement-lod-redirect-spine-arm-closed-remesh-v13-install/mushroom-man.me3"
 )
 CANDIDATE_ZIP = (
     REPO_ROOT
-    / "target/mushroom-man-replacement-lod-redirect-spine-arm-closed-remesh-v12.zip"
+    / "target/mushroom-man-replacement-lod-redirect-spine-arm-closed-remesh-v13.zip"
 )
 RUNTIME_SOURCE = REPO_ROOT / "crates/mushroom-man-runtime/src/lib.rs"
 REQUIRED_HIDE_CATEGORIES = {"face", "hair", "eyelashes", "beards", "eyeballs"}

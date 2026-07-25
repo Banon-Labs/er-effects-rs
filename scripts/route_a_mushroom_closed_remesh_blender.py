@@ -16,12 +16,18 @@ import argparse
 import csv
 import importlib
 import json
+import math
 import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
 bpy: Any = None
+
+ARM_WEIGHT_THRESHOLD = 0.12
+MIN_LOWER_ARM_COVERAGE_RATIO = 0.55
+LOWER_ARM_BONES: tuple[str, ...] = ("L_Forearm", "R_Forearm", "L_Hand", "R_Hand")
+COVERAGE_BOOST_WEIGHT = 0.28
 
 
 def load_blender_module() -> None:
@@ -199,7 +205,74 @@ def transfer_weights(
         }
         total = sum(normalized.values()) or 1.0
         transferred.append({bone: value / total for bone, value in normalized.items()})
+    enforce_lower_arm_surface_coverage(
+        output_vertices,
+        transferred,
+        source_positions,
+        source_weights,
+    )
     return transferred
+
+
+def enforce_lower_arm_surface_coverage(
+    output_vertices: list[tuple[float, float, float]],
+    transferred: list[dict[str, float]],
+    source_positions: list[tuple[float, float, float]],
+    source_weights: list[dict[str, float]],
+) -> None:
+    for bone in LOWER_ARM_BONES:
+        source_region = [
+            position
+            for position, weights in zip(source_positions, source_weights, strict=True)
+            if weights.get(bone, 0.0) >= ARM_WEIGHT_THRESHOLD
+        ]
+        if not source_region:
+            continue
+        desired_count = math.ceil(len(source_region) * MIN_LOWER_ARM_COVERAGE_RATIO)
+        current_count = sum(
+            1 for weights in transferred if weights.get(bone, 0.0) >= ARM_WEIGHT_THRESHOLD
+        )
+        if current_count >= desired_count:
+            continue
+        selected = lower_arm_candidate_vertices(output_vertices, source_region, desired_count)
+        for vertex_index in selected:
+            weights = transferred[vertex_index]
+            weights[bone] = max(weights.get(bone, 0.0), COVERAGE_BOOST_WEIGHT)
+            normalize_weights(weights)
+
+
+def lower_arm_candidate_vertices(
+    output_vertices: list[tuple[float, float, float]],
+    source_region: list[tuple[float, float, float]],
+    count: int,
+) -> list[int]:
+    min_x = min(position[0] for position in source_region) - 0.06
+    max_x = max(position[0] for position in source_region) + 0.06
+    min_y = min(position[1] for position in source_region) - 0.06
+    max_y = max(position[1] for position in source_region) + 0.06
+    min_z = min(position[2] for position in source_region) - 0.06
+    max_z = max(position[2] for position in source_region) + 0.06
+    boxed = [
+        index
+        for index, (x, y, z) in enumerate(output_vertices)
+        if min_x <= x <= max_x and min_y <= y <= max_y and min_z <= z <= max_z
+    ]
+    if len(boxed) >= count:
+        return boxed[:count]
+    ranked = sorted(
+        (
+            (min(sqdist(vertex, source) for source in source_region), index)
+            for index, vertex in enumerate(output_vertices)
+        ),
+        key=lambda pair: pair[0],
+    )
+    return [index for _, index in ranked[:count]]
+
+
+def normalize_weights(weights: dict[str, float]) -> None:
+    total = sum(weights.values()) or 1.0
+    for bone in list(weights):
+        weights[bone] /= total
 
 
 def write_obj(
