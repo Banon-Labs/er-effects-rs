@@ -8,11 +8,11 @@ RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-}"
 RUNTIME_WATCH_TARGET="${RUNTIME_WATCH_TARGET:-}"
 RUNTIME_EXPECTED_MODE="${RUNTIME_EXPECTED_MODE:-vanilla}"
 DRY_RUN=0
-REQUIRE_HANDOFF=0
+REQUIRE_WORLD_READY=0
 
 usage() {
   cat <<EOF
-Usage: scripts/run-windows-proof-render-smoke.sh [--dry-run] [--require-handoff]
+Usage: scripts/run-windows-proof-render-smoke.sh [--dry-run] [--require-world-ready|--require-handoff]
 
 Launches the normal user/product ME3 launcher ($PRODUCT_LAUNCHER) and fails unless runtime telemetry proves:
   oracle_windows_proof_mode == 1
@@ -20,33 +20,32 @@ Launches the normal user/product ME3 launcher ($PRODUCT_LAUNCHER) and fails unle
   oracle_native_overlay_frames > 0
   oracle_native_overlay_pixel_probe_matches > 0
 
-With --require-handoff, also requires:
-  oracle_native_overlay_handoff_ready_hits > 0
+With --require-world-ready, also requires:
+  oracle_native_overlay_covering_loading_hits > 0
   oracle_native_overlay_show == 0
-  oracle_scaleform_memoryfile_custom_asset_hits > 0
 
-Default target is game-man so this is a short renderer-safety smoke. --require-handoff switches the default target to native-overlay-handoff and uses the canonical runtime cap unless overridden.
+Default target is game-man so this is a short renderer-safety smoke. --require-world-ready switches the default target to world-stable and uses the canonical runtime cap unless overridden. --require-handoff is a compatibility alias for --require-world-ready; GFx handoff is not the product cover.
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=1; shift ;;
-    --require-handoff) REQUIRE_HANDOFF=1; shift ;;
+    --require-world-ready|--require-handoff) REQUIRE_WORLD_READY=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 
 if [[ -z "$RUNTIME_WATCH_TARGET" ]]; then
-  if (( REQUIRE_HANDOFF )); then
-    RUNTIME_WATCH_TARGET="native-overlay-handoff"
+  if (( REQUIRE_WORLD_READY )); then
+    RUNTIME_WATCH_TARGET="world-stable"
   else
     RUNTIME_WATCH_TARGET="game-man"
   fi
 fi
 if [[ -z "$RUNTIME_TIMEOUT_SECONDS" ]]; then
-  if (( REQUIRE_HANDOFF )); then
+  if (( REQUIRE_WORLD_READY )); then
     RUNTIME_TIMEOUT_SECONDS="$(python3 "$REPO_ROOT/scripts/runtime_timeout_cap.py")"
   else
     RUNTIME_TIMEOUT_SECONDS=20
@@ -115,7 +114,7 @@ VERDICT_PATH="$ARTIFACT_DIR/windows-proof-render-smoke-verdict.json"
 
 if (( DRY_RUN )); then
   cat > "$ARTIFACT_DIR/dry-run-summary.json" <<EOF
-{"artifact_dir":"$ARTIFACT_DIR","launcher":"$PRODUCT_LAUNCHER","watch_target":"$RUNTIME_WATCH_TARGET","timeout_seconds":$RUNTIME_TIMEOUT_SECONDS,"require_handoff":$REQUIRE_HANDOFF,"criteria":["oracle_windows_proof_mode == 1","oracle_forbidden_render_backend_hits == 0","oracle_native_overlay_frames > 0","oracle_native_overlay_pixel_probe_matches > 0","oracle_native_overlay_handoff_ready_hits > 0 if --require-handoff","oracle_native_overlay_show == 0 if --require-handoff","oracle_scaleform_memoryfile_custom_asset_hits > 0 if --require-handoff"]}
+{"artifact_dir":"$ARTIFACT_DIR","launcher":"$PRODUCT_LAUNCHER","watch_target":"$RUNTIME_WATCH_TARGET","timeout_seconds":$RUNTIME_TIMEOUT_SECONDS,"require_world_ready":$REQUIRE_WORLD_READY,"criteria":["oracle_windows_proof_mode == 1","oracle_forbidden_render_backend_hits == 0","oracle_native_overlay_frames > 0","oracle_native_overlay_pixel_probe_matches > 0","oracle_native_overlay_covering_loading_hits > 0 if --require-world-ready","oracle_native_overlay_show == 0 if --require-world-ready"]}
 EOF
   echo "dry-run ok: would launch $PRODUCT_LAUNCHER, watch target '$RUNTIME_WATCH_TARGET', require Windows-proof renderer telemetry, then cleanup exact eldenring.exe pids"
   echo "artifact_dir=$ARTIFACT_DIR"
@@ -157,7 +156,7 @@ verdict_args=(
   --verdict "$VERDICT_PATH"
   --watcher-status "$watcher_status"
 )
-if (( REQUIRE_HANDOFF )); then
-  verdict_args+=(--require-handoff)
+if (( REQUIRE_WORLD_READY )); then
+  verdict_args+=(--require-world-ready)
 fi
 python3 "$REPO_ROOT/scripts/windows-proof-render-smoke-verdict.py" "${verdict_args[@]}"

@@ -30,21 +30,27 @@ def good_telemetry() -> dict[str, Any]:
         "oracle_native_overlay_stage": 10,
         "oracle_native_overlay_failure": 0,
         "oracle_native_overlay_handoff_ready_hits": 2,
+        "oracle_native_overlay_covering_loading_hits": 2,
         "oracle_native_overlay_show": 0,
         "oracle_native_overlay_pixel_probe_matches": 1,
         "oracle_native_overlay_pixel_probe_rgba": 0x2EB8EDFF,
-        "oracle_scaleform_memoryfile_custom_asset_hits": 1,
+        "oracle_scaleform_memoryfile_custom_asset_hits": 0,
     }
 
 
-def verdict(telemetry: dict[str, Any], *, require_handoff: bool = True, watcher_status: int = 0) -> dict[str, Any]:
+def verdict(
+    telemetry: dict[str, Any],
+    *,
+    require_world_ready: bool = True,
+    watcher_status: int = 0,
+) -> dict[str, Any]:
     module = load_verdict_module()
     return module.build_verdict(
         artifact_dir=Path("/tmp/artifact"),
         telemetry=telemetry,
         telemetry_written=True,
         watcher_status=watcher_status,
-        require_handoff=require_handoff,
+        require_world_ready=require_world_ready,
     )
 
 
@@ -55,13 +61,14 @@ def assert_rejects_missing(key: str) -> None:
     assert not got["windows_proof_render_runtime"], key
 
 
-def test_require_handoff_accepts_full_positive_contract() -> None:
+def test_require_world_ready_accepts_full_positive_contract() -> None:
     got = verdict(good_telemetry())
     assert got["watcher_pass"] is True
     assert got["native_overlay_proven"] is True
-    assert got["native_overlay_handoff_proven"] is True
-    assert got["native_overlay_hidden_at_handoff"] is True
-    assert got["scaleform_memoryfile_custom_asset_proven"] is True
+    assert got["native_overlay_handoff_observed"] is True
+    assert got["native_overlay_covered_loading"] is True
+    assert got["native_overlay_hidden_at_world_ready"] is True
+    assert got["scaleform_memoryfile_custom_asset_observed"] is False
     assert got["windows_proof_render_runtime"] is True
 
 
@@ -75,40 +82,56 @@ def test_rejects_missing_bridge_pixel_match() -> None:
     assert_rejects_missing("oracle_native_overlay_pixel_probe_matches")
 
 
-def test_rejects_missing_handoff_hit() -> None:
-    assert_rejects_missing("oracle_native_overlay_handoff_ready_hits")
+def test_rejects_missing_loading_coverage() -> None:
+    assert_rejects_missing("oracle_native_overlay_covering_loading_hits")
 
 
-def test_rejects_bridge_still_visible_at_handoff() -> None:
+def test_rejects_bridge_still_visible_at_world_ready() -> None:
     telemetry = good_telemetry()
     telemetry["oracle_native_overlay_show"] = 1
     got = verdict(telemetry)
-    assert got["native_overlay_hidden_at_handoff"] is False
+    assert got["native_overlay_hidden_at_world_ready"] is False
     assert not got["windows_proof_render_runtime"]
 
 
-def test_rejects_missing_scaleform_memoryfile_asset_commit() -> None:
-    assert_rejects_missing("oracle_scaleform_memoryfile_custom_asset_hits")
-
-
-def test_short_mode_does_not_require_handoff_specific_oracles() -> None:
+def test_does_not_require_scaleform_memoryfile_asset_commit() -> None:
     telemetry = good_telemetry()
-    telemetry["oracle_native_overlay_handoff_ready_hits"] = 0
+    telemetry["oracle_scaleform_memoryfile_custom_asset_hits"] = 0
+    got = verdict(telemetry)
+    assert got["scaleform_memoryfile_custom_asset_observed"] is False
+    assert got["windows_proof_render_runtime"] is True
+
+
+def test_rejects_old_gfx_handoff_semantics() -> None:
+    telemetry = good_telemetry()
+    telemetry["oracle_native_overlay_handoff_ready_hits"] = 2
+    telemetry["oracle_native_overlay_covering_loading_hits"] = 0
+    telemetry["oracle_native_overlay_show"] = 0
+    got = verdict(telemetry)
+    assert got["native_overlay_handoff_observed"] is True
+    assert got["native_overlay_covered_loading"] is False
+    assert not got["windows_proof_render_runtime"]
+
+
+def test_short_mode_does_not_require_world_ready_specific_oracles() -> None:
+    telemetry = good_telemetry()
+    telemetry["oracle_native_overlay_covering_loading_hits"] = 0
     telemetry["oracle_native_overlay_show"] = 1
     telemetry["oracle_scaleform_memoryfile_custom_asset_hits"] = 0
-    got = verdict(telemetry, require_handoff=False)
+    got = verdict(telemetry, require_world_ready=False)
     assert got["windows_proof_render_runtime"] is True
 
 
 def main() -> int:
     tests = [
-        test_require_handoff_accepts_full_positive_contract,
+        test_require_world_ready_accepts_full_positive_contract,
         test_rejects_forbidden_backend_hit,
         test_rejects_missing_bridge_pixel_match,
-        test_rejects_missing_handoff_hit,
-        test_rejects_bridge_still_visible_at_handoff,
-        test_rejects_missing_scaleform_memoryfile_asset_commit,
-        test_short_mode_does_not_require_handoff_specific_oracles,
+        test_rejects_missing_loading_coverage,
+        test_rejects_bridge_still_visible_at_world_ready,
+        test_does_not_require_scaleform_memoryfile_asset_commit,
+        test_rejects_old_gfx_handoff_semantics,
+        test_short_mode_does_not_require_world_ready_specific_oracles,
     ]
     for test in tests:
         test()

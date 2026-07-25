@@ -1663,6 +1663,11 @@ fn write_game_module_oracles(body: &mut String) {
         );
         push_json_usize(
             body,
+            "oracle_native_overlay_covering_loading_hits",
+            NATIVE_OVERLAY_COVERING_LOADING_HITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
             "oracle_native_overlay_pixel_probe_hits",
             NATIVE_OVERLAY_PIXEL_PROBE_HITS.load(Ordering::SeqCst),
         );

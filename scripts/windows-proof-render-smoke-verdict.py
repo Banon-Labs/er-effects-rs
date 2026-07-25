@@ -28,7 +28,7 @@ def build_verdict(
     telemetry: dict[str, Any] | None,
     telemetry_written: bool,
     watcher_status: int,
-    require_handoff: bool,
+    require_world_ready: bool,
 ) -> dict[str, Any]:
     mode = isinstance(telemetry, dict) and as_int(telemetry.get("oracle_windows_proof_mode"), 0) == 1
     hits = as_int(
@@ -51,6 +51,10 @@ def build_verdict(
         telemetry.get("oracle_native_overlay_handoff_ready_hits") if isinstance(telemetry, dict) else None,
         -1,
     )
+    native_overlay_covering_loading_hits = as_int(
+        telemetry.get("oracle_native_overlay_covering_loading_hits") if isinstance(telemetry, dict) else None,
+        -1,
+    )
     native_overlay_show = as_int(
         telemetry.get("oracle_native_overlay_show") if isinstance(telemetry, dict) else None,
         -1,
@@ -68,20 +72,17 @@ def build_verdict(
         -1,
     )
     native_overlay_proven = native_overlay_frames > 0 and native_overlay_pixel_probe_matches > 0
-    native_overlay_handoff_proven = native_overlay_handoff_ready_hits > 0
-    scaleform_memoryfile_custom_asset_proven = scaleform_memoryfile_custom_asset_hits > 0
-    native_overlay_hidden_at_handoff = native_overlay_show == 0
+    native_overlay_handoff_observed = native_overlay_handoff_ready_hits > 0
+    native_overlay_covered_loading = native_overlay_covering_loading_hits > 0
+    native_overlay_hidden_at_world_ready = native_overlay_show == 0
+    scaleform_memoryfile_custom_asset_observed = scaleform_memoryfile_custom_asset_hits > 0
     windows_proof_render_runtime = (
         mode
         and hits == 0
         and native_overlay_proven
         and (
-            not require_handoff
-            or (
-                native_overlay_handoff_proven
-                and native_overlay_hidden_at_handoff
-                and scaleform_memoryfile_custom_asset_proven
-            )
+            not require_world_ready
+            or (native_overlay_covered_loading and native_overlay_hidden_at_world_ready)
         )
     )
     return {
@@ -95,15 +96,17 @@ def build_verdict(
         "oracle_native_overlay_stage": native_overlay_stage,
         "oracle_native_overlay_failure": native_overlay_failure,
         "oracle_native_overlay_handoff_ready_hits": native_overlay_handoff_ready_hits,
+        "oracle_native_overlay_covering_loading_hits": native_overlay_covering_loading_hits,
         "oracle_native_overlay_show": native_overlay_show,
         "oracle_native_overlay_pixel_probe_matches": native_overlay_pixel_probe_matches,
         "oracle_native_overlay_pixel_probe_rgba": native_overlay_pixel_probe_rgba,
         "oracle_scaleform_memoryfile_custom_asset_hits": scaleform_memoryfile_custom_asset_hits,
         "native_overlay_proven": native_overlay_proven,
-        "native_overlay_handoff_proven": native_overlay_handoff_proven,
-        "scaleform_memoryfile_custom_asset_proven": scaleform_memoryfile_custom_asset_proven,
-        "native_overlay_hidden_at_handoff": native_overlay_hidden_at_handoff,
-        "require_handoff": require_handoff,
+        "native_overlay_handoff_observed": native_overlay_handoff_observed,
+        "native_overlay_covered_loading": native_overlay_covered_loading,
+        "native_overlay_hidden_at_world_ready": native_overlay_hidden_at_world_ready,
+        "scaleform_memoryfile_custom_asset_observed": scaleform_memoryfile_custom_asset_observed,
+        "require_world_ready": require_world_ready,
         "windows_proof_render_runtime": windows_proof_render_runtime,
     }
 
@@ -122,7 +125,12 @@ def main() -> int:
     parser.add_argument("--telemetry", type=Path, required=True)
     parser.add_argument("--verdict", type=Path, required=True)
     parser.add_argument("--watcher-status", type=int, required=True)
-    parser.add_argument("--require-handoff", action="store_true")
+    parser.add_argument("--require-world-ready", action="store_true")
+    parser.add_argument(
+        "--require-handoff",
+        action="store_true",
+        help="Compatibility alias for --require-world-ready; GFx handoff is not product cover.",
+    )
     args = parser.parse_args()
 
     telemetry = load_telemetry(args.telemetry)
@@ -131,7 +139,7 @@ def main() -> int:
         telemetry=telemetry,
         telemetry_written=args.telemetry.is_file(),
         watcher_status=args.watcher_status,
-        require_handoff=args.require_handoff,
+        require_world_ready=args.require_world_ready or args.require_handoff,
     )
     args.verdict.write_text(json.dumps(verdict, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print("windows-proof-render-smoke:", json.dumps(verdict, sort_keys=True))

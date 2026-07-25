@@ -1,9 +1,10 @@
 //! Windows-proof bridge renderer: a separate top-level window with its own D3D12 device/swapchain.
 //!
-//! The native loading/title GFx surface is not alive at process launch. This bridge owns the pre-GFx gap
-//! without touching Elden Ring's D3D device, swapchain, or Present path. It starts visible, renders on an
-//! isolated device, hides when a live player exists, and shows again on later player-absent load/title phases.
-//! Product proof still requires the game-owned GFx/MemoryFile handoff; this module is only the early bridge.
+//! The native loading/title GFx surfaces are game-owned and have disjoint startup/teardown lifetimes during
+//! vanilla loading/autoload. This bridge owns the full launch/load cover without touching Elden Ring's D3D
+//! device, swapchain, or Present path. It starts visible, renders on an isolated device, hides when a live
+//! player exists, and shows again on later player-absent load/title phases. GFx/MemoryFile remains an
+//! opportunistic asset seam, not the product cover surface.
 
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
@@ -63,10 +64,12 @@ pub(crate) static NATIVE_OVERLAY_STAGE: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static NATIVE_OVERLAY_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
 /// Last HRESULT-ish stage failure code (0 = none; values are local diagnostic buckets).
 pub(crate) static NATIVE_OVERLAY_FAILURE: AtomicUsize = AtomicUsize::new(0);
-/// 1 while the game's native loading GFx/bar surface is live enough for this bridge to hand off.
+/// 1 while the game's native loading GFx/bar surface is live. Telemetry only: GFx is not the product cover.
 pub(crate) static NATIVE_OVERLAY_HANDOFF_READY: AtomicUsize = AtomicUsize::new(0);
-/// Counts frames where the bridge saw the native loading GFx/bar surface and hid itself.
+/// Counts frames where the bridge saw the native loading GFx/bar surface while remaining owner of cover.
 pub(crate) static NATIVE_OVERLAY_HANDOFF_READY_HITS: AtomicUsize = AtomicUsize::new(0);
+/// Counts frames where the game loading UI existed, the player was absent, and the bridge stayed visible.
+pub(crate) static NATIVE_OVERLAY_COVERING_LOADING_HITS: AtomicUsize = AtomicUsize::new(0);
 /// One-shot objective pixel readback attempts against the bridge backbuffer.
 pub(crate) static NATIVE_OVERLAY_PIXEL_PROBE_HITS: AtomicUsize = AtomicUsize::new(0);
 /// One-shot bridge pixel readback matches against the unique clear color.
@@ -94,11 +97,11 @@ pub(crate) fn native_overlay_player_presence_tick(player_available: bool) {
     NATIVE_OVERLAY_HANDOFF_READY.store(usize::from(handoff_ready), Ordering::SeqCst);
     if handoff_ready {
         NATIVE_OVERLAY_HANDOFF_READY_HITS.fetch_add(1, Ordering::SeqCst);
+        if !player_available {
+            NATIVE_OVERLAY_COVERING_LOADING_HITS.fetch_add(1, Ordering::SeqCst);
+        }
     }
-    NATIVE_OVERLAY_SHOW.store(
-        usize::from(!player_available && !handoff_ready),
-        Ordering::SeqCst,
-    );
+    NATIVE_OVERLAY_SHOW.store(usize::from(!player_available), Ordering::SeqCst);
 }
 
 fn native_loading_surface_handoff_ready() -> bool {

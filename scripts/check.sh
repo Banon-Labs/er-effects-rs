@@ -26,6 +26,7 @@ python3 "$repo_root/scripts/check-windows-proof-render.py"
 python3 "$repo_root/scripts/test-windows-proof-render.py"
 python3 "$repo_root/scripts/test-windows-proof-render-smoke-verdict.py"
 bash "$repo_root/scripts/run-windows-proof-render-smoke.sh" --dry-run >/dev/null
+bash "$repo_root/scripts/run-windows-proof-render-smoke.sh" --dry-run --require-world-ready >/dev/null
 python3 "$repo_root/scripts/check-rust-file-sizes.py"
 python3 "$repo_root/scripts/check-markdown-code-blocks.py" "$repo_root/README.md"
 cargo fmt --all --manifest-path "$repo_root/Cargo.toml" -- --check
