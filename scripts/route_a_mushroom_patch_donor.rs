@@ -51,9 +51,17 @@ const ARM_BROKEN_ISLAND_MAX_SPINE: f32 = 0.02;
 const ARM_BROKEN_ISLAND_MAX_UPPER: f32 = 0.12;
 const ARM_BROKEN_ISLAND_MIN_DISTAL: f32 = 0.75;
 const ARM_FOREARM_SURFACE_PRESERVE_RESPONSE: &str = "preserved_forearm_surface_no_weight_proxy";
-const ARM_VOLUME_MIN_SIDE_WEIGHT: f32 = 0.12;
-const ARM_VOLUME_MAX_LATERAL_DELTA: f32 = 0.035;
-const ARM_VOLUME_Z_SCALE: f32 = 0.35;
+const ARM_VOLUME_MIN_SIDE_WEIGHT: f32 = 0.08;
+const ARM_VOLUME_SIDE_SURFACE_MIN_HEIGHT: f32 = 0.46;
+const ARM_VOLUME_SIDE_SURFACE_MAX_HEIGHT: f32 = 0.69;
+const ARM_VOLUME_SIDE_SURFACE_MIN_LATERAL: f32 = 0.22;
+const ARM_VOLUME_MAX_LATERAL_DELTA: f32 = 0.090;
+const ARM_VOLUME_Z_SCALE: f32 = 0.45;
+const ARM_HAND_FIT_MIN_HAND_WEIGHT: f32 = 0.30;
+const ARM_HAND_FIT_STRENGTH: f32 = 0.75;
+const ARM_HAND_FIT_TARGET_LEFT_X: f32 = 0.590;
+const ARM_HAND_FIT_TARGET_RIGHT_X: f32 = -0.587;
+const ARM_HAND_FIT_TARGET_Z: f32 = 0.006;
 
 const HEADER_SIZE: usize = 0x80;
 const DUMMY_SIZE: usize = 0x40;
@@ -172,13 +180,20 @@ struct SourceMesh {
 struct ArmVolumeProfileReport {
     enabled: bool,
     affected_vertices: usize,
+    side_surface_vertices: usize,
+    hand_fit_vertices: usize,
     max_lateral_delta: f32,
+    max_hand_translation: f32,
     elbow_radius_before: f32,
     elbow_radius_after: f32,
     bicep_radius_before: f32,
     bicep_radius_after: f32,
     shoulder_radius_before: f32,
     shoulder_radius_after: f32,
+    left_hand_center_z_before: f32,
+    left_hand_center_z_after: f32,
+    right_hand_center_z_before: f32,
+    right_hand_center_z_after: f32,
     response: String,
 }
 
@@ -948,8 +963,11 @@ fn apply_arm_volume_profile(
         center_x,
         center_z,
     );
+    let (left_hand_before, right_hand_before) =
+        arm_hand_centers(mesh, accum, left_hand, right_hand);
 
     let mut affected_vertices = 0;
+    let mut side_surface_vertices = 0;
     let mut max_lateral_delta = 0.0_f32;
     for (vertex_index, vertex) in mesh.vertices.iter_mut().enumerate() {
         let row = &accum[vertex_index];
@@ -962,21 +980,63 @@ fn apply_arm_volume_profile(
         } else {
             (right_weight, -1.0_f32)
         };
-        if side_weight < ARM_VOLUME_MIN_SIDE_WEIGHT {
+        let height = normalized_height(vertex.position, mesh.bbox_min.y, height_span);
+        let lateral = side_sign * (vertex.position.x - center_x);
+        let side_surface_weight = if (ARM_VOLUME_SIDE_SURFACE_MIN_HEIGHT
+            ..=ARM_VOLUME_SIDE_SURFACE_MAX_HEIGHT)
+            .contains(&height)
+            && lateral >= ARM_VOLUME_SIDE_SURFACE_MIN_LATERAL
+        {
+            0.85
+        } else {
+            0.0
+        };
+        let influence = if side_weight >= ARM_VOLUME_MIN_SIDE_WEIGHT {
+            ((side_weight - ARM_VOLUME_MIN_SIDE_WEIGHT) / (1.0 - ARM_VOLUME_MIN_SIDE_WEIGHT))
+                .clamp(0.0, 1.0)
+                .sqrt()
+        } else {
+            side_surface_weight
+        };
+        if influence <= 0.0 {
             continue;
         }
-        let height = normalized_height(vertex.position, mesh.bbox_min.y, height_span);
-        let delta = arm_volume_profile_delta(height)
-            * ((side_weight - ARM_VOLUME_MIN_SIDE_WEIGHT) / (1.0 - ARM_VOLUME_MIN_SIDE_WEIGHT))
-                .clamp(0.0, 1.0)
-                .sqrt();
+        let delta = arm_volume_profile_delta(height) * influence;
         if delta <= 0.0 {
             continue;
         }
         vertex.position.x += side_sign * delta;
         vertex.position.z += (vertex.position.z - center_z) * delta * ARM_VOLUME_Z_SCALE;
         affected_vertices += 1;
+        if side_surface_weight > 0.0 {
+            side_surface_vertices += 1;
+        }
         max_lateral_delta = max_lateral_delta.max(delta.abs());
+    }
+
+    let mut hand_fit_vertices = 0;
+    let mut max_hand_translation = 0.0_f32;
+    for (vertex_index, vertex) in mesh.vertices.iter_mut().enumerate() {
+        let row = &accum[vertex_index];
+        let left_weight = row[left_hand as usize];
+        let right_weight = row[right_hand as usize];
+        let (hand_weight, before_center, target_x) = if left_weight >= right_weight {
+            (left_weight, left_hand_before, ARM_HAND_FIT_TARGET_LEFT_X)
+        } else {
+            (right_weight, right_hand_before, ARM_HAND_FIT_TARGET_RIGHT_X)
+        };
+        if hand_weight < ARM_HAND_FIT_MIN_HAND_WEIGHT {
+            continue;
+        }
+        let strength = ARM_HAND_FIT_STRENGTH
+            * ((hand_weight - ARM_HAND_FIT_MIN_HAND_WEIGHT) / (1.0 - ARM_HAND_FIT_MIN_HAND_WEIGHT))
+                .clamp(0.0, 1.0);
+        let dx = (target_x - before_center.x) * strength;
+        let dz = (ARM_HAND_FIT_TARGET_Z - before_center.z) * strength;
+        vertex.position.x += dx;
+        vertex.position.z += dz;
+        hand_fit_vertices += 1;
+        max_hand_translation = max_hand_translation.max((dx * dx + dz * dz).sqrt());
     }
 
     let (elbow_after, bicep_after, shoulder_after) = arm_volume_profile_radii(
@@ -991,30 +1051,78 @@ fn apply_arm_volume_profile(
         center_x,
         center_z,
     );
+    let (left_hand_after, right_hand_after) = arm_hand_centers(mesh, accum, left_hand, right_hand);
     recompute_source_bbox(mesh);
     Ok(ArmVolumeProfileReport {
         enabled: true,
         affected_vertices,
+        side_surface_vertices,
+        hand_fit_vertices,
         max_lateral_delta,
+        max_hand_translation,
         elbow_radius_before: elbow_before,
         elbow_radius_after: elbow_after,
         bicep_radius_before: bicep_before,
         bicep_radius_after: bicep_after,
         shoulder_radius_before: shoulder_before,
         shoulder_radius_after: shoulder_after,
-        response: "profile_curve_radial_inflation".to_string(),
+        left_hand_center_z_before: left_hand_before.z,
+        left_hand_center_z_after: left_hand_after.z,
+        right_hand_center_z_before: right_hand_before.z,
+        right_hand_center_z_after: right_hand_after.z,
+        response: "side_surface_profile_curve_with_hand_fit".to_string(),
     })
+}
+
+fn arm_hand_centers(
+    mesh: &SourceMesh,
+    accum: &[[f32; 256]],
+    left_hand: u8,
+    right_hand: u8,
+) -> (Vec3, Vec3) {
+    let mut left_sum = Vec3::default();
+    let mut right_sum = Vec3::default();
+    let mut left_weight_sum = 0.0_f32;
+    let mut right_weight_sum = 0.0_f32;
+    for (vertex_index, vertex) in mesh.vertices.iter().enumerate() {
+        let row = &accum[vertex_index];
+        let left_weight = row[left_hand as usize];
+        let right_weight = row[right_hand as usize];
+        if left_weight >= ARM_HAND_FIT_MIN_HAND_WEIGHT {
+            left_sum.x += vertex.position.x * left_weight;
+            left_sum.y += vertex.position.y * left_weight;
+            left_sum.z += vertex.position.z * left_weight;
+            left_weight_sum += left_weight;
+        }
+        if right_weight >= ARM_HAND_FIT_MIN_HAND_WEIGHT {
+            right_sum.x += vertex.position.x * right_weight;
+            right_sum.y += vertex.position.y * right_weight;
+            right_sum.z += vertex.position.z * right_weight;
+            right_weight_sum += right_weight;
+        }
+    }
+    if left_weight_sum > 0.0 {
+        left_sum.x /= left_weight_sum;
+        left_sum.y /= left_weight_sum;
+        left_sum.z /= left_weight_sum;
+    }
+    if right_weight_sum > 0.0 {
+        right_sum.x /= right_weight_sum;
+        right_sum.y /= right_weight_sum;
+        right_sum.z /= right_weight_sum;
+    }
+    (left_sum, right_sum)
 }
 
 fn arm_volume_profile_delta(height: f32) -> f32 {
     const PROFILE: &[(f32, f32)] = &[
         (0.34, 0.000),
-        (0.40, 0.008),
-        (0.47, 0.014),
-        (0.51, 0.018),
+        (0.42, 0.010),
+        (0.49, 0.024),
+        (0.53, 0.045),
         (0.56, ARM_VOLUME_MAX_LATERAL_DELTA),
-        (0.60, 0.020),
-        (0.64, 0.032),
+        (0.60, 0.050),
+        (0.65, 0.090),
         (0.70, 0.000),
     ];
     for window in PROFILE.windows(2) {
@@ -2485,8 +2593,23 @@ fn write_summary(
         )?;
         writeln!(
             file,
+            "arm_volume_profile_side_surface_vertices={}",
+            source.arm_volume_profile.side_surface_vertices
+        )?;
+        writeln!(
+            file,
+            "arm_volume_profile_hand_fit_vertices={}",
+            source.arm_volume_profile.hand_fit_vertices
+        )?;
+        writeln!(
+            file,
             "arm_volume_profile_max_lateral_delta={:.6}",
             source.arm_volume_profile.max_lateral_delta
+        )?;
+        writeln!(
+            file,
+            "arm_volume_profile_max_hand_translation={:.6}",
+            source.arm_volume_profile.max_hand_translation
         )?;
         writeln!(
             file,
@@ -2505,6 +2628,18 @@ fn write_summary(
             "arm_volume_profile_shoulder_radius_before_after={:.6},{:.6}",
             source.arm_volume_profile.shoulder_radius_before,
             source.arm_volume_profile.shoulder_radius_after
+        )?;
+        writeln!(
+            file,
+            "arm_volume_profile_left_hand_z_before_after={:.6},{:.6}",
+            source.arm_volume_profile.left_hand_center_z_before,
+            source.arm_volume_profile.left_hand_center_z_after
+        )?;
+        writeln!(
+            file,
+            "arm_volume_profile_right_hand_z_before_after={:.6},{:.6}",
+            source.arm_volume_profile.right_hand_center_z_before,
+            source.arm_volume_profile.right_hand_center_z_after
         )?;
         writeln!(
             file,

@@ -107,8 +107,17 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
     arm_volume_profile_affected_vertices = parse_int(
         summary.get("arm_volume_profile_affected_vertices")
     )
+    arm_volume_profile_side_surface_vertices = parse_int(
+        summary.get("arm_volume_profile_side_surface_vertices")
+    )
+    arm_volume_profile_hand_fit_vertices = parse_int(
+        summary.get("arm_volume_profile_hand_fit_vertices")
+    )
     arm_volume_profile_max_delta = parse_float(
         summary.get("arm_volume_profile_max_lateral_delta")
+    )
+    arm_volume_profile_max_hand_translation = parse_float(
+        summary.get("arm_volume_profile_max_hand_translation")
     )
     elbow_radius_before, elbow_radius_after = parse_float_pair(
         summary.get("arm_volume_profile_elbow_radius_before_after")
@@ -118,6 +127,12 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
     )
     shoulder_radius_before, shoulder_radius_after = parse_float_pair(
         summary.get("arm_volume_profile_shoulder_radius_before_after")
+    )
+    left_hand_z_before, left_hand_z_after = parse_float_pair(
+        summary.get("arm_volume_profile_left_hand_z_before_after")
+    )
+    right_hand_z_before, right_hand_z_after = parse_float_pair(
+        summary.get("arm_volume_profile_right_hand_z_before_after")
     )
     arm_volume_profile_response = summary.get("arm_volume_profile_response", "")
     arm_island_prune_enabled = parse_bool(summary.get("arm_island_prune_enabled"))
@@ -144,16 +159,18 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
         detached_components == 0 and independent_detached_components == 0
     )
 
-    if (
-        broken_visible_before > 0
-        and (
-            not arm_volume_profile_enabled
-            or arm_volume_profile_affected_vertices <= 0
-            or arm_volume_profile_max_delta <= 0.0
-            or elbow_radius_after <= elbow_radius_before
-            or bicep_radius_after <= bicep_radius_before
-            or shoulder_radius_after <= shoulder_radius_before
-        )
+    if broken_visible_before > 0 and (
+        not arm_volume_profile_enabled
+        or arm_volume_profile_affected_vertices <= 0
+        or arm_volume_profile_side_surface_vertices <= 0
+        or arm_volume_profile_hand_fit_vertices <= 0
+        or arm_volume_profile_max_delta < 0.06
+        or arm_volume_profile_max_hand_translation <= 0.0
+        or elbow_radius_after - elbow_radius_before < 0.02
+        or bicep_radius_after - bicep_radius_before < 0.04
+        or shoulder_radius_after - shoulder_radius_before < 0.025
+        or abs(left_hand_z_after - 0.006) >= abs(left_hand_z_before - 0.006)
+        or abs(right_hand_z_after - 0.006) >= abs(right_hand_z_before - 0.006)
     ):
         alerts.append(
             {
@@ -162,7 +179,10 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
                 "message": "The arm has the elbow/forearm visual-risk pattern but no effective volume-profile inflation across elbow, bicep, and shoulder bands.",
                 "arm_volume_profile_enabled": arm_volume_profile_enabled,
                 "affected_vertices": arm_volume_profile_affected_vertices,
+                "side_surface_vertices": arm_volume_profile_side_surface_vertices,
+                "hand_fit_vertices": arm_volume_profile_hand_fit_vertices,
                 "max_lateral_delta": arm_volume_profile_max_delta,
+                "max_hand_translation": arm_volume_profile_max_hand_translation,
                 "elbow_radius_before_after": [
                     elbow_radius_before,
                     elbow_radius_after,
@@ -175,7 +195,15 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
                     shoulder_radius_before,
                     shoulder_radius_after,
                 ],
-                "recommended_response": "do_not_package; apply a measurable 1D arm-volume profile before runtime review",
+                "left_hand_z_before_after": [
+                    left_hand_z_before,
+                    left_hand_z_after,
+                ],
+                "right_hand_z_before_after": [
+                    right_hand_z_before,
+                    right_hand_z_after,
+                ],
+                "recommended_response": "do_not_package; apply side-surface upper-arm volume and hand-fit correction before runtime review",
             }
         )
     if pruned_island_vertices > 0 or pruned_island_triangles > 0:
@@ -283,7 +311,10 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
             "disconnected_arm_weight_groups": disconnected_groups,
             "arm_volume_profile_enabled": arm_volume_profile_enabled,
             "arm_volume_profile_affected_vertices": arm_volume_profile_affected_vertices,
+            "arm_volume_profile_side_surface_vertices": arm_volume_profile_side_surface_vertices,
+            "arm_volume_profile_hand_fit_vertices": arm_volume_profile_hand_fit_vertices,
             "arm_volume_profile_max_lateral_delta": arm_volume_profile_max_delta,
+            "arm_volume_profile_max_hand_translation": arm_volume_profile_max_hand_translation,
             "arm_volume_profile_elbow_radius_before_after": [
                 elbow_radius_before,
                 elbow_radius_after,
@@ -295,6 +326,14 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
             "arm_volume_profile_shoulder_radius_before_after": [
                 shoulder_radius_before,
                 shoulder_radius_after,
+            ],
+            "arm_volume_profile_left_hand_z_before_after": [
+                left_hand_z_before,
+                left_hand_z_after,
+            ],
+            "arm_volume_profile_right_hand_z_before_after": [
+                right_hand_z_before,
+                right_hand_z_after,
             ],
             "arm_volume_profile_response": arm_volume_profile_response,
             "arm_island_prune_enabled": arm_island_prune_enabled,

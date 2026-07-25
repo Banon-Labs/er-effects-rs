@@ -173,19 +173,31 @@ def rename_if_exists(alias_dir: Path, old_name: str, new_name: str) -> None:
         old.rename(new)
 
 
-def run_witchy_pack(witchy: Path, alias_dir: Path, log_path: Path) -> None:
+def run_witchy_pack(
+    witchy: Path, alias_dir: Path, log_path: Path, retries: int
+) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("w", encoding="utf-8", errors="replace") as log:
-        proc = subprocess.run(
-            [str(witchy), "-p", str(alias_dir)], stdout=log, stderr=subprocess.STDOUT
+    last_returncode = 0
+    for attempt in range(1, retries + 1):
+        attempt_log_path = log_path.with_name(
+            f"{log_path.stem}-attempt-{attempt}{log_path.suffix}"
         )
-    if proc.returncode not in (0, 82):
-        tail = ""
-        if log_path.exists():
-            tail = "\n".join(log_path.read_text(errors="replace").splitlines()[-80:])
-        raise SystemExit(
-            f"WitchyBND pack failed for {alias_dir} with exit {proc.returncode}\n{tail}"
-        )
+        with attempt_log_path.open("w", encoding="utf-8", errors="replace") as log:
+            proc = subprocess.run(
+                [str(witchy), "-p", str(alias_dir)],
+                stdout=log,
+                stderr=subprocess.STDOUT,
+            )
+        last_returncode = proc.returncode
+        if proc.returncode in (0, 82):
+            shutil.copy2(attempt_log_path, log_path)
+            return
+    tail = ""
+    if log_path.exists():
+        tail = "\n".join(log_path.read_text(errors="replace").splitlines()[-80:])
+    raise SystemExit(
+        f"WitchyBND pack failed for {alias_dir} after {retries} attempts with exit {last_returncode}\n{tail}"
+    )
 
 
 def build_fc_alias(
@@ -195,6 +207,7 @@ def build_fc_alias(
     name: str,
     source_high: Path,
     source_low: Path,
+    witchy_retries: int,
 ) -> None:
     stem = part_stem(name)
     target_upper = stem.upper()
@@ -222,13 +235,15 @@ def build_fc_alias(
             (source_root, target_root),
         ],
     )
-    run_witchy_pack(witchy, alias_dir, alias_root / f"{stem}-pack.log")
+    run_witchy_pack(witchy, alias_dir, alias_root / f"{stem}-pack.log", witchy_retries)
     copy_file(
         existing_file(alias_root / name, f"packed FC alias {name}"), parts_dir / name
     )
 
 
-def build_fg_alias(witchy: Path, alias_root: Path, parts_dir: Path, name: str) -> None:
+def build_fg_alias(
+    witchy: Path, alias_root: Path, parts_dir: Path, name: str, witchy_retries: int
+) -> None:
     stem = part_stem(name)
     target_upper = stem.upper()
     target_root = root_stem(target_upper)
@@ -250,7 +265,7 @@ def build_fg_alias(witchy: Path, alias_root: Path, parts_dir: Path, name: str) -
             ("FG_A_0000", target_root),
         ],
     )
-    run_witchy_pack(witchy, alias_dir, alias_root / f"{stem}-pack.log")
+    run_witchy_pack(witchy, alias_dir, alias_root / f"{stem}-pack.log", witchy_retries)
     copy_file(
         existing_file(alias_root / name, f"packed FG alias {name}"), parts_dir / name
     )
@@ -263,19 +278,32 @@ def stage_fc(
     names: list[str],
     source_high: Path,
     source_low: Path,
+    witchy_retries: int,
 ) -> int:
     for name in names:
         build_fc_alias(
-            witchy, alias_root / "fc", parts_dir, name, source_high, source_low
+            witchy,
+            alias_root / "fc",
+            parts_dir,
+            name,
+            source_high,
+            source_low,
+            witchy_retries,
         )
     return len(names)
 
 
-def stage_fg(witchy: Path, alias_root: Path, parts_dir: Path, names: list[str]) -> int:
+def stage_fg(
+    witchy: Path,
+    alias_root: Path,
+    parts_dir: Path,
+    names: list[str],
+    witchy_retries: int,
+) -> int:
     compat = {"fg_a_0000_m.partsbnd.dcx", "fg_a_0000_f.partsbnd.dcx"}
     all_names = sorted(set(names) | compat)
     for name in all_names:
-        build_fg_alias(witchy, alias_root / "fg", parts_dir, name)
+        build_fg_alias(witchy, alias_root / "fg", parts_dir, name, witchy_retries)
     return len(all_names)
 
 
@@ -329,6 +357,12 @@ def parse_args() -> argparse.Namespace:
         help="limit to a specific partsbnd filename; may be passed repeatedly",
     )
     parser.add_argument(
+        "--witchy-retries",
+        type=int,
+        default=3,
+        help="per-alias WitchyBND pack attempts; retries recover transient WSL interop/vsock failures",
+    )
+    parser.add_argument(
         "--stage-fg-aliases",
         action="store_true",
         help=(
@@ -371,10 +405,16 @@ def main() -> int:
             )
     args.alias_root.mkdir(parents=True, exist_ok=True)
     fc_count = stage_fc(
-        witchy, args.alias_root, parts_dir, fc_names, fc_source_high, fc_source_low
+        witchy,
+        args.alias_root,
+        parts_dir,
+        fc_names,
+        fc_source_high,
+        fc_source_low,
+        args.witchy_retries,
     )
     fg_inputs = fg_names if args.stage_fg_aliases else []
-    fg_count = stage_fg(witchy, args.alias_root, parts_dir, fg_inputs)
+    fg_count = stage_fg(witchy, args.alias_root, parts_dir, fg_inputs, args.witchy_retries)
     fg_mode = "dictionary" if args.stage_fg_aliases else "compatibility-only"
     hidden_slot_count = stage_hidden_slots(parts_dir, args.hidden_slot_dir)
     lines = [
