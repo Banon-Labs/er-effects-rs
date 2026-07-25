@@ -140,6 +140,12 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
     right_hand_z_before, right_hand_z_after = parse_float_pair(
         summary.get("arm_volume_profile_right_hand_z_before_after")
     )
+    arm_volume_profile_slope_limited_edges = parse_int(
+        summary.get("arm_volume_profile_slope_limited_edges")
+    )
+    slope_before, slope_after = parse_float_pair(
+        summary.get("arm_volume_profile_max_displacement_slope_before_after")
+    )
     arm_volume_profile_response = summary.get("arm_volume_profile_response", "")
     arm_island_prune_enabled = parse_bool(summary.get("arm_island_prune_enabled"))
     broken_visible_before, broken_visible_after = parse_int_pair(
@@ -170,7 +176,10 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
         or arm_volume_profile_affected_vertices <= 0
         or arm_volume_profile_side_surface_vertices <= 0
         or arm_volume_profile_hand_fit_vertices <= 0
-        or arm_volume_profile_response != "local_cross_section_volume_with_hand_fit"
+        or arm_volume_profile_response != "slope_limited_local_cross_section_volume_with_hand_fit"
+        or arm_volume_profile_slope_limited_edges <= 0
+        or slope_after >= slope_before
+        or slope_after > 4.0
         or arm_volume_profile_max_delta < 0.20
         or arm_volume_profile_max_hand_translation < 0.02
         or elbow_radius_after - elbow_radius_before < 0.03
@@ -192,6 +201,8 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
                 "hand_fit_vertices": arm_volume_profile_hand_fit_vertices,
                 "max_lateral_delta": arm_volume_profile_max_delta,
                 "max_hand_translation": arm_volume_profile_max_hand_translation,
+                "slope_limited_edges": arm_volume_profile_slope_limited_edges,
+                "max_displacement_slope_before_after": [slope_before, slope_after],
                 "elbow_radius_before_after": [
                     elbow_radius_before,
                     elbow_radius_after,
@@ -332,6 +343,11 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
             "arm_volume_profile_hand_fit_vertices": arm_volume_profile_hand_fit_vertices,
             "arm_volume_profile_max_lateral_delta": arm_volume_profile_max_delta,
             "arm_volume_profile_max_hand_translation": arm_volume_profile_max_hand_translation,
+            "arm_volume_profile_slope_limited_edges": arm_volume_profile_slope_limited_edges,
+            "arm_volume_profile_max_displacement_slope_before_after": [
+                slope_before,
+                slope_after,
+            ],
             "arm_volume_profile_elbow_radius_before_after": [
                 elbow_radius_before,
                 elbow_radius_after,

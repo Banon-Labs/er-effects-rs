@@ -60,6 +60,9 @@ const ARM_VOLUME_Z_SCALE: f32 = 0.55;
 const ARM_LOCAL_VOLUME_MIN_LATERAL: f32 = 0.16;
 const ARM_HAND_FIT_MIN_HAND_WEIGHT: f32 = 0.12;
 const ARM_HAND_FIT_STRENGTH: f32 = 1.00;
+const ARM_VOLUME_SLOPE_LIMIT_ITERATIONS: usize = 8;
+const ARM_VOLUME_SLOPE_LIMIT_ABSOLUTE: f32 = 0.055;
+const ARM_VOLUME_SLOPE_LIMIT_PER_EDGE: f32 = 1.20;
 const ARM_HAND_FIT_TARGET_LEFT_X: f32 = 0.590;
 const ARM_HAND_FIT_TARGET_RIGHT_X: f32 = -0.587;
 const ARM_HAND_FIT_TARGET_Y: f32 = 0.939;
@@ -186,6 +189,9 @@ struct ArmVolumeProfileReport {
     hand_fit_vertices: usize,
     max_lateral_delta: f32,
     max_hand_translation: f32,
+    slope_limited_edges: usize,
+    max_displacement_slope_before: f32,
+    max_displacement_slope_after: f32,
     elbow_radius_before: f32,
     elbow_radius_after: f32,
     bicep_radius_before: f32,
@@ -971,6 +977,11 @@ fn apply_arm_volume_profile(
     );
     let (left_hand_before, right_hand_before) =
         arm_hand_centers(mesh, accum, left_hand, right_hand);
+    let before_positions = mesh
+        .vertices
+        .iter()
+        .map(|vertex| vertex.position)
+        .collect::<Vec<_>>();
 
     let mut affected_vertices = 0;
     let mut side_surface_vertices = 0;
@@ -1062,6 +1073,8 @@ fn apply_arm_volume_profile(
         max_hand_translation = max_hand_translation.max((dx * dx + dy * dy + dz * dz).sqrt());
     }
 
+    let slope_report = limit_arm_volume_displacement_slope(mesh, &before_positions);
+
     let (elbow_after, bicep_after, shoulder_after) = arm_volume_profile_radii(
         mesh,
         accum,
@@ -1083,6 +1096,9 @@ fn apply_arm_volume_profile(
         hand_fit_vertices,
         max_lateral_delta,
         max_hand_translation,
+        slope_limited_edges: slope_report.limited_edges,
+        max_displacement_slope_before: slope_report.max_slope_before,
+        max_displacement_slope_after: slope_report.max_slope_after,
         elbow_radius_before: elbow_before,
         elbow_radius_after: elbow_after,
         bicep_radius_before: bicep_before,
@@ -1097,8 +1113,116 @@ fn apply_arm_volume_profile(
         right_hand_center_y_after: right_hand_after.y,
         right_hand_center_z_before: right_hand_before.z,
         right_hand_center_z_after: right_hand_after.z,
-        response: "local_cross_section_volume_with_hand_fit".to_string(),
+        response: "slope_limited_local_cross_section_volume_with_hand_fit".to_string(),
     })
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ArmVolumeSlopeLimitReport {
+    limited_edges: usize,
+    max_slope_before: f32,
+    max_slope_after: f32,
+}
+
+fn limit_arm_volume_displacement_slope(
+    mesh: &mut SourceMesh,
+    before_positions: &[Vec3],
+) -> ArmVolumeSlopeLimitReport {
+    let edges = unique_triangle_edges(&mesh.triangles)
+        .into_iter()
+        .map(|(a, b)| (a as usize, b as usize))
+        .collect::<Vec<_>>();
+    let mut displacements = mesh
+        .vertices
+        .iter()
+        .zip(before_positions.iter())
+        .map(|(vertex, before)| vec3_sub(vertex.position, *before))
+        .collect::<Vec<_>>();
+    let max_slope_before = max_displacement_slope(before_positions, &displacements, &edges);
+    let mut limited_edges = 0_usize;
+    for _ in 0..ARM_VOLUME_SLOPE_LIMIT_ITERATIONS {
+        let mut pass_limited_edges = 0_usize;
+        for (a, b) in &edges {
+            if *a >= before_positions.len() || *b >= before_positions.len() {
+                continue;
+            }
+            let edge_length = vec3_distance(before_positions[*a], before_positions[*b]).max(0.001);
+            let allowed =
+                ARM_VOLUME_SLOPE_LIMIT_ABSOLUTE + ARM_VOLUME_SLOPE_LIMIT_PER_EDGE * edge_length;
+            let difference = vec3_sub(displacements[*a], displacements[*b]);
+            let difference_len = vec3_length(difference);
+            if difference_len <= allowed {
+                continue;
+            }
+            let excess = difference_len - allowed;
+            let correction = vec3_scale(difference, 0.5 * excess / difference_len);
+            displacements[*a] = vec3_sub(displacements[*a], correction);
+            displacements[*b] = vec3_add(displacements[*b], correction);
+            pass_limited_edges += 1;
+        }
+        limited_edges += pass_limited_edges;
+        if pass_limited_edges == 0 {
+            break;
+        }
+    }
+    for (vertex, (before, displacement)) in mesh
+        .vertices
+        .iter_mut()
+        .zip(before_positions.iter().zip(displacements.iter()))
+    {
+        vertex.position = vec3_add(*before, *displacement);
+    }
+    let max_slope_after = max_displacement_slope(before_positions, &displacements, &edges);
+    ArmVolumeSlopeLimitReport {
+        limited_edges,
+        max_slope_before,
+        max_slope_after,
+    }
+}
+
+fn max_displacement_slope(
+    before_positions: &[Vec3],
+    displacements: &[Vec3],
+    edges: &[(usize, usize)],
+) -> f32 {
+    edges
+        .iter()
+        .filter_map(|(a, b)| {
+            (*a < before_positions.len() && *b < before_positions.len()).then(|| {
+                let edge_length =
+                    vec3_distance(before_positions[*a], before_positions[*b]).max(0.001);
+                vec3_length(vec3_sub(displacements[*a], displacements[*b])) / edge_length
+            })
+        })
+        .fold(0.0, f32::max)
+}
+
+fn vec3_sub(a: Vec3, b: Vec3) -> Vec3 {
+    Vec3 {
+        x: a.x - b.x,
+        y: a.y - b.y,
+        z: a.z - b.z,
+    }
+}
+
+fn vec3_add(a: Vec3, b: Vec3) -> Vec3 {
+    Vec3 {
+        x: a.x + b.x,
+        y: a.y + b.y,
+        z: a.z + b.z,
+    }
+}
+
+fn vec3_scale(value: Vec3, scale: f32) -> Vec3 {
+    Vec3 {
+        x: value.x * scale,
+        y: value.y * scale,
+        z: value.z * scale,
+    }
+}
+
+fn vec3_length(value: Vec3) -> f32 {
+    (value.x * value.x + value.y * value.y + value.z * value.z).sqrt()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2712,6 +2836,17 @@ fn write_summary(
             file,
             "arm_volume_profile_max_hand_translation={:.6}",
             source.arm_volume_profile.max_hand_translation
+        )?;
+        writeln!(
+            file,
+            "arm_volume_profile_slope_limited_edges={}",
+            source.arm_volume_profile.slope_limited_edges
+        )?;
+        writeln!(
+            file,
+            "arm_volume_profile_max_displacement_slope_before_after={:.6},{:.6}",
+            source.arm_volume_profile.max_displacement_slope_before,
+            source.arm_volume_profile.max_displacement_slope_after
         )?;
         writeln!(
             file,
