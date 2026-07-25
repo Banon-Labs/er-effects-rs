@@ -187,8 +187,8 @@ fn bridge_marker_rect() -> RECT {
     RECT {
         left: 32,
         top: 32,
-        right: 160,
-        bottom: 96,
+        right: 33,
+        bottom: 33,
     }
 }
 
