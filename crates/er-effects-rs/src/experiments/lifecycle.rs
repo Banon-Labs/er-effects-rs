@@ -257,6 +257,13 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
 }
 
 pub(crate) fn install_title_visual_startup_hooks() {
+    // Windows-proof bridge renderer: owns the process-launch -> native GFx-loading-surface gap with an
+    // isolated top-level window + its own D3D12 device/swapchain. This never touches Elden Ring's device,
+    // swapchain, or Present path; the game-owned GFx/MemoryFile renderer remains the handoff/product path.
+    if windows_proof_render_enabled() {
+        install_native_overlay();
+    }
+
     // Passive title-resource observer is deliberately independent of the cover/hide bundle: recent
     // branches have kept the stock logo invisible, so resource-path proof must not depend on any
     // visual/logo-hide state.

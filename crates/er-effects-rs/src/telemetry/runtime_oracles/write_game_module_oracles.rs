@@ -1621,6 +1621,36 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_forbidden_render_backend_hits",
             forbidden_render_backend_hits,
         );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_installed",
+            NATIVE_OVERLAY_INSTALLED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_stage",
+            NATIVE_OVERLAY_STAGE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_frames",
+            NATIVE_OVERLAY_FRAMES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_draw_hits",
+            NATIVE_OVERLAY_DRAW_HITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_show",
+            NATIVE_OVERLAY_SHOW.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_failure",
+            NATIVE_OVERLAY_FAILURE.load(Ordering::SeqCst),
+        );
 
         let overlay_draw_hits = OVERLAY_DRAW_HITS.load(Ordering::SeqCst);
         let overlay_draw_first_ms = OVERLAY_DRAW_FIRST_MS.load(Ordering::SeqCst);

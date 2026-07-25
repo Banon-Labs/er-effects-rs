@@ -16,6 +16,7 @@ Usage: scripts/run-windows-proof-render-smoke.sh [--dry-run]
 Launches the normal user/product ME3 launcher ($PRODUCT_LAUNCHER) and fails unless runtime telemetry proves:
   oracle_windows_proof_mode == 1
   oracle_forbidden_render_backend_hits == 0
+  oracle_native_overlay_frames > 0
 
 Default target is game-man so this is a short renderer-safety smoke, not a character-load/autoload proof.
 EOF
@@ -91,7 +92,7 @@ VERDICT_PATH="$ARTIFACT_DIR/windows-proof-render-smoke-verdict.json"
 
 if (( DRY_RUN )); then
   cat > "$ARTIFACT_DIR/dry-run-summary.json" <<EOF
-{"artifact_dir":"$ARTIFACT_DIR","launcher":"$PRODUCT_LAUNCHER","watch_target":"$RUNTIME_WATCH_TARGET","timeout_seconds":$RUNTIME_TIMEOUT_SECONDS,"criteria":["oracle_windows_proof_mode == 1","oracle_forbidden_render_backend_hits == 0"]}
+{"artifact_dir":"$ARTIFACT_DIR","launcher":"$PRODUCT_LAUNCHER","watch_target":"$RUNTIME_WATCH_TARGET","timeout_seconds":$RUNTIME_TIMEOUT_SECONDS,"criteria":["oracle_windows_proof_mode == 1","oracle_forbidden_render_backend_hits == 0","oracle_native_overlay_frames > 0"]}
 EOF
   echo "dry-run ok: would launch $PRODUCT_LAUNCHER, watch target '$RUNTIME_WATCH_TARGET', require Windows-proof renderer telemetry, then cleanup exact eldenring.exe pids"
   echo "artifact_dir=$ARTIFACT_DIR"
@@ -156,6 +157,10 @@ except Exception:
 
 mode = isinstance(telemetry, dict) and as_int(telemetry.get("oracle_windows_proof_mode"), 0) == 1
 hits = as_int(telemetry.get("oracle_forbidden_render_backend_hits") if isinstance(telemetry, dict) else None, -1)
+native_overlay_frames = as_int(telemetry.get("oracle_native_overlay_frames") if isinstance(telemetry, dict) else None, -1)
+native_overlay_stage = as_int(telemetry.get("oracle_native_overlay_stage") if isinstance(telemetry, dict) else None, -1)
+native_overlay_failure = as_int(telemetry.get("oracle_native_overlay_failure") if isinstance(telemetry, dict) else None, -1)
+native_overlay_proven = native_overlay_frames > 0
 verdict = {
     "artifact_dir": str(artifact),
     "watcher_status": watcher_status,
@@ -163,7 +168,11 @@ verdict = {
     "telemetry_written": telemetry_path.is_file(),
     "oracle_windows_proof_mode": 1 if mode else 0,
     "oracle_forbidden_render_backend_hits": hits,
-    "windows_proof_render_runtime": mode and hits == 0,
+    "oracle_native_overlay_frames": native_overlay_frames,
+    "oracle_native_overlay_stage": native_overlay_stage,
+    "oracle_native_overlay_failure": native_overlay_failure,
+    "native_overlay_proven": native_overlay_proven,
+    "windows_proof_render_runtime": mode and hits == 0 and native_overlay_proven,
 }
 verdict_path.write_text(json.dumps(verdict, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 print("windows-proof-render-smoke:", json.dumps(verdict, sort_keys=True))
