@@ -43,10 +43,10 @@ use windows::Win32::System::Threading::{
     CreateEventW, GetCurrentProcessId, INFINITE, WaitForSingleObject,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetClientRect,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetClientRect, GetParent,
     GetWindowThreadProcessId, IsWindowVisible, MSG, PM_REMOVE, PeekMessageW, RegisterClassW,
     SW_HIDE, SW_SHOWNOACTIVATE, ShowWindow, TranslateMessage, WNDCLASSW, WS_CHILD,
-    WS_EX_NOACTIVATE, WS_POPUP, WS_VISIBLE,
+    WS_EX_NOACTIVATE, WS_VISIBLE,
 };
 use windows::core::{BOOL, Error, HRESULT, Interface, PCSTR, w};
 
@@ -89,6 +89,16 @@ pub(crate) static NATIVE_OVERLAY_PIXEL_PROBE_RGBA: AtomicUsize = AtomicUsize::ne
 pub(crate) static NATIVE_OVERLAY_PARENT_HWND: AtomicUsize = AtomicUsize::new(0);
 /// 1 when the bridge HWND was created as a child of the game's own visible window.
 pub(crate) static NATIVE_OVERLAY_CHILD_WINDOW: AtomicUsize = AtomicUsize::new(0);
+/// 1 when GetParent(child) still equals the game HWND.
+pub(crate) static NATIVE_OVERLAY_CHILD_PARENT_MATCH: AtomicUsize = AtomicUsize::new(0);
+/// 1 when the child overlay client size matches the parent game client size.
+pub(crate) static NATIVE_OVERLAY_CHILD_CLIENT_MATCH: AtomicUsize = AtomicUsize::new(0);
+/// Counts frames where parent/child relation or client-size match failed.
+pub(crate) static NATIVE_OVERLAY_CHILD_GEOMETRY_MISMATCH_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static NATIVE_OVERLAY_PARENT_CLIENT_W: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static NATIVE_OVERLAY_PARENT_CLIENT_H: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static NATIVE_OVERLAY_CHILD_CLIENT_W: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static NATIVE_OVERLAY_CHILD_CLIENT_H: AtomicUsize = AtomicUsize::new(0);
 
 const FAILURE_DYNAMIC_FACTORY: usize = 1;
 const FAILURE_DYNAMIC_DEVICE: usize = 2;
@@ -172,6 +182,43 @@ fn wait_for_parent_game_window() -> Option<(HWND, i32, i32)> {
         let _ = tick_rx.recv_timeout(std::time::Duration::from_millis(16));
     }
     None
+}
+
+fn rect_size(rect: RECT) -> (usize, usize) {
+    (
+        (rect.right - rect.left).max(0) as usize,
+        (rect.bottom - rect.top).max(0) as usize,
+    )
+}
+
+fn record_child_geometry_oracle(parent: HWND, child: HWND) {
+    let parent_match = unsafe { GetParent(child) }.is_ok_and(|actual| actual == parent);
+    NATIVE_OVERLAY_CHILD_PARENT_MATCH.store(usize::from(parent_match), Ordering::SeqCst);
+
+    let mut parent_rect = RECT::default();
+    let mut child_rect = RECT::default();
+    let parent_ok = unsafe { GetClientRect(parent, &mut parent_rect) }.is_ok();
+    let child_ok = unsafe { GetClientRect(child, &mut child_rect) }.is_ok();
+    let (parent_w, parent_h) = if parent_ok {
+        rect_size(parent_rect)
+    } else {
+        (0, 0)
+    };
+    let (child_w, child_h) = if child_ok {
+        rect_size(child_rect)
+    } else {
+        (0, 0)
+    };
+    NATIVE_OVERLAY_PARENT_CLIENT_W.store(parent_w, Ordering::SeqCst);
+    NATIVE_OVERLAY_PARENT_CLIENT_H.store(parent_h, Ordering::SeqCst);
+    NATIVE_OVERLAY_CHILD_CLIENT_W.store(child_w, Ordering::SeqCst);
+    NATIVE_OVERLAY_CHILD_CLIENT_H.store(child_h, Ordering::SeqCst);
+
+    let client_match = parent_ok && child_ok && parent_w == child_w && parent_h == child_h;
+    NATIVE_OVERLAY_CHILD_CLIENT_MATCH.store(usize::from(client_match), Ordering::SeqCst);
+    if !parent_match || !client_match {
+        NATIVE_OVERLAY_CHILD_GEOMETRY_MISMATCH_HITS.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 fn dynamic_graphics_proc(module: windows::core::PCWSTR, proc: PCSTR) -> Option<*mut c_void> {
@@ -645,6 +692,7 @@ unsafe fn native_overlay_run() {
     };
     NATIVE_OVERLAY_PARENT_HWND.store(parent_hwnd.0 as usize, Ordering::SeqCst);
     NATIVE_OVERLAY_CHILD_WINDOW.store(1, Ordering::SeqCst);
+    record_child_geometry_oracle(parent_hwnd, hwnd);
     NATIVE_OVERLAY_STAGE.store(3, Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "native-overlay: child bridge window created parent=0x{:x} hwnd=0x{:x} {win_w}x{win_h}",
@@ -824,6 +872,8 @@ unsafe fn native_overlay_run() {
             let _ = unsafe { TranslateMessage(&msg) };
             unsafe { DispatchMessageW(&msg) };
         }
+
+        record_child_geometry_oracle(parent_hwnd, hwnd);
 
         let want_show = NATIVE_OVERLAY_SHOW.load(Ordering::SeqCst) != 0;
         if want_show != shown {

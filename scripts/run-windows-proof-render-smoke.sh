@@ -19,6 +19,9 @@ Launches the normal user/product ME3 launcher ($PRODUCT_LAUNCHER) and fails unle
   oracle_forbidden_render_backend_hits == 0
   oracle_native_overlay_child_window == 1
   oracle_native_overlay_parent_hwnd > 0
+  oracle_native_overlay_child_parent_match == 1
+  oracle_native_overlay_child_client_match == 1
+  oracle_native_overlay_child_geometry_mismatch_hits == 0
   oracle_native_overlay_frames > 0
   oracle_native_overlay_pixel_probe_matches > 0
 
@@ -117,7 +120,7 @@ VERDICT_PATH="$ARTIFACT_DIR/windows-proof-render-smoke-verdict.json"
 
 if (( DRY_RUN )); then
   cat > "$ARTIFACT_DIR/dry-run-summary.json" <<EOF
-{"artifact_dir":"$ARTIFACT_DIR","launcher":"$PRODUCT_LAUNCHER","watch_target":"$RUNTIME_WATCH_TARGET","timeout_seconds":$RUNTIME_TIMEOUT_SECONDS,"require_world_ready":$REQUIRE_WORLD_READY,"criteria":["oracle_windows_proof_mode == 1","oracle_forbidden_render_backend_hits == 0","oracle_native_overlay_child_window == 1","oracle_native_overlay_parent_hwnd > 0","oracle_native_overlay_frames > 0","oracle_native_overlay_pixel_probe_matches > 0","oracle_native_overlay_covering_loading_hits > 0 if --require-world-ready","oracle_native_overlay_content_frames > 0 if --require-world-ready","oracle_native_overlay_show == 0 if --require-world-ready"]}
+{"artifact_dir":"$ARTIFACT_DIR","launcher":"$PRODUCT_LAUNCHER","watch_target":"$RUNTIME_WATCH_TARGET","timeout_seconds":$RUNTIME_TIMEOUT_SECONDS,"require_world_ready":$REQUIRE_WORLD_READY,"criteria":["oracle_windows_proof_mode == 1","oracle_forbidden_render_backend_hits == 0","oracle_native_overlay_child_window == 1","oracle_native_overlay_parent_hwnd > 0","oracle_native_overlay_child_parent_match == 1","oracle_native_overlay_child_client_match == 1","oracle_native_overlay_child_geometry_mismatch_hits == 0","oracle_native_overlay_frames > 0","oracle_native_overlay_pixel_probe_matches > 0","oracle_native_overlay_covering_loading_hits > 0 if --require-world-ready","oracle_native_overlay_content_frames > 0 if --require-world-ready","oracle_native_overlay_show == 0 if --require-world-ready"]}
 EOF
   echo "dry-run ok: would launch $PRODUCT_LAUNCHER, watch target '$RUNTIME_WATCH_TARGET', require Windows-proof renderer telemetry, then cleanup exact eldenring.exe pids"
   echo "artifact_dir=$ARTIFACT_DIR"

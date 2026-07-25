@@ -1668,6 +1668,41 @@ fn write_game_module_oracles(body: &mut String) {
         );
         push_json_usize(
             body,
+            "oracle_native_overlay_child_parent_match",
+            NATIVE_OVERLAY_CHILD_PARENT_MATCH.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_child_client_match",
+            NATIVE_OVERLAY_CHILD_CLIENT_MATCH.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_child_geometry_mismatch_hits",
+            NATIVE_OVERLAY_CHILD_GEOMETRY_MISMATCH_HITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_parent_client_w",
+            NATIVE_OVERLAY_PARENT_CLIENT_W.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_parent_client_h",
+            NATIVE_OVERLAY_PARENT_CLIENT_H.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_child_client_w",
+            NATIVE_OVERLAY_CHILD_CLIENT_W.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_child_client_h",
+            NATIVE_OVERLAY_CHILD_CLIENT_H.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
             "oracle_native_overlay_handoff_ready",
             NATIVE_OVERLAY_HANDOFF_READY.load(Ordering::SeqCst),
         );

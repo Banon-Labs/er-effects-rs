@@ -67,6 +67,20 @@ def build_verdict(
         telemetry.get("oracle_native_overlay_child_window") if isinstance(telemetry, dict) else None,
         -1,
     )
+    native_overlay_child_parent_match = as_int(
+        telemetry.get("oracle_native_overlay_child_parent_match") if isinstance(telemetry, dict) else None,
+        -1,
+    )
+    native_overlay_child_client_match = as_int(
+        telemetry.get("oracle_native_overlay_child_client_match") if isinstance(telemetry, dict) else None,
+        -1,
+    )
+    native_overlay_child_geometry_mismatch_hits = as_int(
+        telemetry.get("oracle_native_overlay_child_geometry_mismatch_hits")
+        if isinstance(telemetry, dict)
+        else None,
+        -1,
+    )
     native_overlay_parent_hwnd = as_int(
         telemetry.get("oracle_native_overlay_parent_hwnd") if isinstance(telemetry, dict) else None,
         -1,
@@ -83,7 +97,13 @@ def build_verdict(
         telemetry.get("oracle_scaleform_memoryfile_custom_asset_hits") if isinstance(telemetry, dict) else None,
         -1,
     )
-    native_overlay_child_attached = native_overlay_child_window == 1 and native_overlay_parent_hwnd > 0
+    native_overlay_child_attached = (
+        native_overlay_child_window == 1
+        and native_overlay_parent_hwnd > 0
+        and native_overlay_child_parent_match == 1
+        and native_overlay_child_client_match == 1
+        and native_overlay_child_geometry_mismatch_hits == 0
+    )
     native_overlay_proven = native_overlay_frames > 0 and native_overlay_pixel_probe_matches > 0
     native_overlay_handoff_observed = native_overlay_handoff_ready_hits > 0
     native_overlay_visible_during_loading = native_overlay_covering_loading_hits > 0
@@ -120,6 +140,9 @@ def build_verdict(
         "oracle_native_overlay_show": native_overlay_show,
         "oracle_native_overlay_content_frames": native_overlay_content_frames,
         "oracle_native_overlay_child_window": native_overlay_child_window,
+        "oracle_native_overlay_child_parent_match": native_overlay_child_parent_match,
+        "oracle_native_overlay_child_client_match": native_overlay_child_client_match,
+        "oracle_native_overlay_child_geometry_mismatch_hits": native_overlay_child_geometry_mismatch_hits,
         "oracle_native_overlay_parent_hwnd": native_overlay_parent_hwnd,
         "oracle_native_overlay_pixel_probe_matches": native_overlay_pixel_probe_matches,
         "oracle_native_overlay_pixel_probe_rgba": native_overlay_pixel_probe_rgba,

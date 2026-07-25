@@ -246,7 +246,11 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     return;
                 };
 
-                let native_overlay_release_ready = player.chr_ins.chr_flags1c4.is_render_group_enabled()
+                let native_overlay_release_ready = player.chr_ins.chr_model_ins.as_ptr() as usize
+                    != TITLE_OWNER_SCAN_START_ADDRESS
+                    && player.chr_ins.chr_ctrl.as_ptr() as usize != TITLE_OWNER_SCAN_START_ADDRESS
+                    && player.chr_ins.load_state.draw_group_enabled()
+                    && player.chr_ins.chr_flags1c4.is_render_group_enabled()
                     && player.chr_ins.chr_flags1c5.enable_render();
                 native_overlay_release_tick(native_overlay_release_ready);
                 let mut state = state_or_return(&state);
