@@ -1686,6 +1686,16 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_native_overlay_failure",
             NATIVE_OVERLAY_FAILURE.load(Ordering::SeqCst),
         );
+        push_json_usize(
+            body,
+            "oracle_scaleform_desc_guard_installed",
+            SCALEFORM_DESC_ADVANCE_INSTALLED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_scaleform_desc_provider_null_hits",
+            SCALEFORM_DESC_PROVIDER_NULL_HITS.load(Ordering::SeqCst),
+        );
 
         let overlay_draw_hits = OVERLAY_DRAW_HITS.load(Ordering::SeqCst);
         let overlay_draw_first_ms = OVERLAY_DRAW_FIRST_MS.load(Ordering::SeqCst);

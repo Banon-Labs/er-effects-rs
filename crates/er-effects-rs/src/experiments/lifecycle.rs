@@ -257,9 +257,16 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
 }
 
 pub(crate) fn install_title_visual_startup_hooks() {
-    // Windows-proof bridge renderer: owns the process-launch -> native GFx-loading-surface gap with an
-    // isolated top-level window + its own D3D12 device/swapchain. This never touches Elden Ring's device,
-    // swapchain, or Present path; the game-owned GFx/MemoryFile renderer remains the handoff/product path.
+    // Native-Windows defensive GFx guard: GFx is not the loading/autoload cover surface, but product menu
+    // UI still legitimately uses the game's Scaleform path and must not crash on native D3D12 reset seams.
+    START_SCALEFORM_DESCRIPTOR_GUARD.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("er-effects-scaleform-guard".to_owned())
+            .spawn(install_scaleform_descriptor_guard);
+    });
+
+    // Windows-proof bridge renderer: owns the full launch/load cover with an isolated top-level window +
+    // its own D3D12 device/swapchain. This never touches Elden Ring's device, swapchain, or Present path.
     if windows_proof_render_enabled() {
         install_native_overlay();
     }

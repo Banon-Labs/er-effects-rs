@@ -57,6 +57,13 @@ pub(crate) const SYNTHETIC_ZERO_QWORD: u64 = 0;
 /// .rdata wide-string pointers) before the crash.
 pub(crate) const ASSERT_WRAPPER_RVA: usize = 0x1eb97a0;
 pub(crate) const MAX_ASSERT_LOG_LINES: usize = 16;
+/// Scaleform D3D12 descriptor-heap ring advance. Native Windows can expose a reset window where
+/// the current-page provider at +0x38 is null and the vanilla function faults at provider+0x20.
+pub(crate) const SCALEFORM_DESC_ADVANCE_RVA: usize = 0xec9530;
+pub(crate) const SCALEFORM_DESC_PROVIDER_OFFSET: usize = 0x38;
+pub(crate) static SCALEFORM_DESC_ADVANCE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static SCALEFORM_DESC_ADVANCE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SCALEFORM_DESC_PROVIDER_NULL_HITS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const BOOTSTRAP_TELEMETRY_UNSEEN: usize = 0;
 pub(crate) const BOOTSTRAP_TELEMETRY_SEEN_VALUE: usize = 1;
 pub(crate) const BOOTSTRAP_EVENT_DLL_MAIN_ATTACH: &str = "dllmain_attach";

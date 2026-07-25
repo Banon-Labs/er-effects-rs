@@ -354,6 +354,7 @@ pub(crate) static START_TITLE_PAB_INFORMATION_COVER: Once = Once::new();
 pub(crate) static START_TITLE_GFX_VALUE_SET_VISIBLE: Once = Once::new();
 pub(crate) static START_TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND: Once = Once::new();
 pub(crate) static START_TITLE_SCALEFORM_BIND_OBSERVER: Once = Once::new();
+pub(crate) static START_SCALEFORM_DESCRIPTOR_GUARD: Once = Once::new();
 pub(crate) static START_TITLE_MENU_RESOURCE_ACQUIRE_OBSERVER: Once = Once::new();
 pub(crate) static START_TITLE_FLOW_CONTEXT_RECORD_REGULATION: Once = Once::new();
 /// One-shot install guard for the stats-panel native-text hooks (named-child capture + SetText).

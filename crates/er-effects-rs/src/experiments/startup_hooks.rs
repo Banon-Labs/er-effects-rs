@@ -3,6 +3,7 @@
 #![allow(unused_imports)]
 
 include!("startup_hooks/title_scaleform_msgbox.rs");
+include!("startup_hooks/scaleform_descriptor_guard.rs");
 include!("startup_hooks/startup_modals_menu_cover.rs");
 include!("startup_hooks/dlstring_lookat_math.rs");
 include!("startup_hooks/lookat_bone_hooks.rs");
