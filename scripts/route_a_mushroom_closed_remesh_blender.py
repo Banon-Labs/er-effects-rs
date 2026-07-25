@@ -50,7 +50,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--smooth-iterations", type=int, default=4)
     parser.add_argument("--min-component-faces", type=int, default=8)
     parser.add_argument("--nearest", type=int, default=4)
-    return parser.parse_args(sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else None)
+    return parser.parse_args(
+        sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else None
+    )
 
 
 def import_obj(path: Path) -> Any:
@@ -126,7 +128,13 @@ def remesh_closed(obj: Any, args: argparse.Namespace) -> None:
         vertices, triangles = mesh_counts(obj)
         if vertices <= args.target_vertices and triangles <= args.target_triangles:
             break
-        ratio = min(args.target_vertices / max(vertices, 1), args.target_triangles / max(triangles, 1)) * 0.94
+        ratio = (
+            min(
+                args.target_vertices / max(vertices, 1),
+                args.target_triangles / max(triangles, 1),
+            )
+            * 0.94
+        )
         if ratio >= 0.995:
             break
         decimate = obj.modifiers.new("flver_capacity_decimate", "DECIMATE")
@@ -137,7 +145,9 @@ def remesh_closed(obj: Any, args: argparse.Namespace) -> None:
         triangulate(obj)
 
 
-def read_weight_rows(path: Path) -> tuple[list[tuple[float, float, float]], list[dict[str, float]]]:
+def read_weight_rows(
+    path: Path,
+) -> tuple[list[tuple[float, float, float]], list[dict[str, float]]]:
     positions_by_vertex: dict[int, tuple[float, float, float]] = {}
     weights_by_vertex: dict[int, dict[str, float]] = defaultdict(dict)
     with path.open(newline="", encoding="utf-8") as handle:
@@ -149,9 +159,9 @@ def read_weight_rows(path: Path) -> tuple[list[tuple[float, float, float]], list
                 float(row["source_y"]),
                 float(row["source_z"]),
             )
-            weights_by_vertex[vertex][row["er_target_bone"]] = weights_by_vertex[vertex].get(
-                row["er_target_bone"], 0.0
-            ) + float(row["weight"])
+            weights_by_vertex[vertex][row["er_target_bone"]] = weights_by_vertex[
+                vertex
+            ].get(row["er_target_bone"], 0.0) + float(row["weight"])
     max_index = max(positions_by_vertex)
     positions = [positions_by_vertex[i] for i in range(max_index + 1)]
     weights = [weights_by_vertex[i] for i in range(max_index + 1)]
@@ -171,7 +181,10 @@ def transfer_weights(
     transferred: list[dict[str, float]] = []
     for vertex in output_vertices:
         ranked = sorted(
-            ((sqdist(vertex, source), index) for index, source in enumerate(source_positions)),
+            (
+                (sqdist(vertex, source), index)
+                for index, source in enumerate(source_positions)
+            ),
             key=lambda pair: pair[0],
         )[:nearest]
         accum: dict[str, float] = defaultdict(float)
@@ -181,7 +194,9 @@ def transfer_weights(
             divisor += weight
             for bone, bone_weight in source_weights[index].items():
                 accum[bone] += bone_weight * weight
-        normalized = {bone: value / divisor for bone, value in accum.items() if value > 1.0e-8}
+        normalized = {
+            bone: value / divisor for bone, value in accum.items() if value > 1.0e-8
+        }
         total = sum(normalized.values()) or 1.0
         transferred.append({bone: value / total for bone, value in normalized.items()})
     return transferred
@@ -203,7 +218,8 @@ def write_obj(
     vertices, triangles, removed_components = filter_small_triangle_components(
         vertices, triangles, min_component_faces
     )
-    normals = vertex_normals(vertices, triangles)
+    triangles = orient_triangles_outward(vertices, triangles)
+    normals = outward_vertex_normals(vertices)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="\n") as handle:
         handle.write("o closed_mushroom_man\n")
@@ -214,14 +230,25 @@ def write_obj(
         for x, y, z in normals:
             handle.write(f"vn {x:.9f} {y:.9f} {z:.9f}\n")
         for a, b, c in triangles:
-            handle.write(f"f {a + 1}/{a + 1}/{a + 1} {b + 1}/{b + 1}/{b + 1} {c + 1}/{c + 1}/{c + 1}\n")
+            handle.write(
+                f"f {a + 1}/{a + 1}/{a + 1} {b + 1}/{b + 1}/{b + 1} {c + 1}/{c + 1}/{c + 1}\n"
+            )
     return vertices, triangles, removed_components
 
 
-def vertex_normals(
+def mesh_centroid(vertices: list[tuple[float, float, float]]) -> tuple[float, float, float]:
+    return (
+        sum(vertex[0] for vertex in vertices) / len(vertices),
+        sum(vertex[1] for vertex in vertices) / len(vertices),
+        sum(vertex[2] for vertex in vertices) / len(vertices),
+    )
+
+
+def orient_triangles_outward(
     vertices: list[tuple[float, float, float]], triangles: list[tuple[int, int, int]]
-) -> list[tuple[float, float, float]]:
-    normals = [(0.0, 0.0, 0.0) for _ in vertices]
+) -> list[tuple[int, int, int]]:
+    center = mesh_centroid(vertices)
+    oriented: list[tuple[int, int, int]] = []
     for a, b, c in triangles:
         ax, ay, az = vertices[a]
         bx, by, bz = vertices[b]
@@ -231,14 +258,27 @@ def vertex_normals(
         nx = uy * vz - uz * vy
         ny = uz * vx - ux * vz
         nz = ux * vy - uy * vx
-        for index in (a, b, c):
-            ox, oy, oz = normals[index]
-            normals[index] = (ox + nx, oy + ny, oz + nz)
-    normalized = []
-    for x, y, z in normals:
-        length = max((x * x + y * y + z * z) ** 0.5, 1.0e-8)
-        normalized.append((x / length, y / length, z / length))
-    return normalized
+        face_center = ((ax + bx + cx) / 3.0, (ay + by + cy) / 3.0, (az + bz + cz) / 3.0)
+        outward = (
+            face_center[0] - center[0],
+            face_center[1] - center[1],
+            face_center[2] - center[2],
+        )
+        if nx * outward[0] + ny * outward[1] + nz * outward[2] < 0.0:
+            oriented.append((a, c, b))
+        else:
+            oriented.append((a, b, c))
+    return oriented
+
+
+def outward_vertex_normals(vertices: list[tuple[float, float, float]]) -> list[tuple[float, float, float]]:
+    center = mesh_centroid(vertices)
+    normals = []
+    for x, y, z in vertices:
+        nx, ny, nz = x - center[0], y - center[1], z - center[2]
+        length = max((nx * nx + ny * ny + nz * nz) ** 0.5, 1.0e-8)
+        normals.append((nx / length, ny / length, nz / length))
+    return normals
 
 
 def filter_small_triangle_components(
@@ -295,9 +335,15 @@ def write_weights(
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="\n") as handle:
-        handle.write("vertex\tsource_x\tsource_y\tsource_z\tsource_bone\ter_target_bone\tweight\n")
-        for index, ((x, y, z), bone_weights) in enumerate(zip(vertices, weights, strict=True)):
-            for bone, weight in sorted(bone_weights.items(), key=lambda pair: pair[1], reverse=True):
+        handle.write(
+            "vertex\tsource_x\tsource_y\tsource_z\tsource_bone\ter_target_bone\tweight\n"
+        )
+        for index, ((x, y, z), bone_weights) in enumerate(
+            zip(vertices, weights, strict=True)
+        ):
+            for bone, weight in sorted(
+                bone_weights.items(), key=lambda pair: pair[1], reverse=True
+            ):
                 if weight <= 1.0e-7:
                     continue
                 handle.write(
@@ -376,7 +422,9 @@ def main() -> int:
     vertices, triangles, removed_components = write_obj(
         args.output_obj, obj, args.min_component_faces
     )
-    transferred = transfer_weights(vertices, source_positions, source_weights, args.nearest)
+    transferred = transfer_weights(
+        vertices, source_positions, source_weights, args.nearest
+    )
     write_weights(args.output_weights, vertices, transferred)
     topology = topology_metrics(vertices, triangles)
     summary: dict[str, object] = {

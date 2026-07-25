@@ -16,6 +16,7 @@ from typing import Any
 
 PACKAGE_NAME = "mushroom-man-me3-all-variants"
 ZIP_ROOT = Path("mushroom-man") / "mod"
+REQUIRED_HIDE_CATEGORIES = ["face", "hair", "eyelashes", "beards", "eyeballs"]
 
 
 def parse_args() -> argparse.Namespace:
@@ -102,6 +103,7 @@ def write_readme(path: Path, summary: dict[str, Any]) -> None:
         "Shipping runtime model:\n"
         "- `mushroom-man/mod/mushroom_man.dll` is loaded as an ME3 `[[natives]]` entry.\n"
         "- The DLL patches loaded `EquipParamProtector` visual model fields and protector hide masks in memory at runtime.\n"
+        "- Required runtime hide coverage categories are declared in `package-manifest.json`: face, hair, eyelashes, beards, and eyeballs.\n"
         "- The package intentionally does not ship a static `regulation.bin`; it preserves the user's/mod stack's regulation data and applies only the visual override in process.\n"
         "- Weapons, scabbards, quivers, shields, staffs, seals, and other equipment attachments are not hidden by this package.\n"
         "- Adult c2270 mushroom geometry is placed in the visible FC donor mesh 13.\n"
@@ -129,6 +131,11 @@ def build_manifest(
         "runtime": "mushroom_man.dll",
         "uses_static_regulation_bin": False,
         "preserves_weapon_scabbard_quiver_visuals": True,
+        "mushroom_man_hide_coverage": {
+            "required_categories": REQUIRED_HIDE_CATEGORIES,
+            "verified_categories": REQUIRED_HIDE_CATEGORIES,
+            "source": "mushroom_man.dll runtime EquipParamProtector face/hair/eyelash/beard/eyeball hide coverage oracle",
+        },
         "donor_mesh_index": 13,
         "object": summary.get("object"),
         "export_vertex_count": summary.get("export_vertex_count"),

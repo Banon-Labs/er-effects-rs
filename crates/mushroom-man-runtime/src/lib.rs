@@ -36,6 +36,8 @@ const BODY_MODEL_CATEGORY: u8 = 2;
 const ARM_MODEL_CATEGORY: u8 = 1;
 const LEG_MODEL_CATEGORY: u8 = 6;
 const CLEARED_SEX_VARIANT_HIDE_MASK: u8 = 0;
+const WORLD_CHARACTER_SAVELOAD_READINESS_ORACLE_MARKER: &str = "world_character_saveload_readiness";
+const PATCH_MISSING_AT_READINESS_TEARDOWN_MARKER: &str = "patch_missing_at_readiness_teardown";
 
 static START_PATCH_TASK: AtomicBool = AtomicBool::new(false);
 static PATCH_APPLIED: AtomicBool = AtomicBool::new(false);
@@ -287,6 +289,10 @@ fn clear_visual_hide_masks(row: &mut EQUIP_PARAM_PROTECTOR_ST) {
     row.set_invisible_flag_sex_ver93(CLEARED_SEX_VARIANT_HIDE_MASK);
     row.set_invisible_flag_sex_ver94(CLEARED_SEX_VARIANT_HIDE_MASK);
     row.set_invisible_flag_sex_ver95(CLEARED_SEX_VARIANT_HIDE_MASK);
+}
+
+fn patch_missing_at_readiness_teardown(world_character_saveload_readiness: bool) -> bool {
+    world_character_saveload_readiness && !PATCH_APPLIED.load(Ordering::Acquire)
 }
 
 fn write_runtime_log(message: &str) {
