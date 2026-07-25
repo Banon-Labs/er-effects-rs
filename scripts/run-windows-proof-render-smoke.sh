@@ -18,6 +18,7 @@ Launches the normal user/product ME3 launcher ($PRODUCT_LAUNCHER) and fails unle
   oracle_windows_proof_mode == 1
   oracle_forbidden_render_backend_hits == 0
   oracle_native_overlay_frames > 0
+  oracle_native_overlay_pixel_probe_matches > 0
 
 With --require-handoff, also requires:
   oracle_native_overlay_handoff_ready_hits > 0
@@ -113,7 +114,7 @@ VERDICT_PATH="$ARTIFACT_DIR/windows-proof-render-smoke-verdict.json"
 
 if (( DRY_RUN )); then
   cat > "$ARTIFACT_DIR/dry-run-summary.json" <<EOF
-{"artifact_dir":"$ARTIFACT_DIR","launcher":"$PRODUCT_LAUNCHER","watch_target":"$RUNTIME_WATCH_TARGET","timeout_seconds":$RUNTIME_TIMEOUT_SECONDS,"require_handoff":$REQUIRE_HANDOFF,"criteria":["oracle_windows_proof_mode == 1","oracle_forbidden_render_backend_hits == 0","oracle_native_overlay_frames > 0","oracle_native_overlay_handoff_ready_hits > 0 if --require-handoff","oracle_scaleform_memoryfile_custom_asset_hits > 0 if --require-handoff"]}
+{"artifact_dir":"$ARTIFACT_DIR","launcher":"$PRODUCT_LAUNCHER","watch_target":"$RUNTIME_WATCH_TARGET","timeout_seconds":$RUNTIME_TIMEOUT_SECONDS,"require_handoff":$REQUIRE_HANDOFF,"criteria":["oracle_windows_proof_mode == 1","oracle_forbidden_render_backend_hits == 0","oracle_native_overlay_frames > 0","oracle_native_overlay_pixel_probe_matches > 0","oracle_native_overlay_handoff_ready_hits > 0 if --require-handoff","oracle_scaleform_memoryfile_custom_asset_hits > 0 if --require-handoff"]}
 EOF
   echo "dry-run ok: would launch $PRODUCT_LAUNCHER, watch target '$RUNTIME_WATCH_TARGET', require Windows-proof renderer telemetry, then cleanup exact eldenring.exe pids"
   echo "artifact_dir=$ARTIFACT_DIR"
@@ -183,8 +184,10 @@ native_overlay_frames = as_int(telemetry.get("oracle_native_overlay_frames") if 
 native_overlay_stage = as_int(telemetry.get("oracle_native_overlay_stage") if isinstance(telemetry, dict) else None, -1)
 native_overlay_failure = as_int(telemetry.get("oracle_native_overlay_failure") if isinstance(telemetry, dict) else None, -1)
 native_overlay_handoff_ready_hits = as_int(telemetry.get("oracle_native_overlay_handoff_ready_hits") if isinstance(telemetry, dict) else None, -1)
+native_overlay_pixel_probe_matches = as_int(telemetry.get("oracle_native_overlay_pixel_probe_matches") if isinstance(telemetry, dict) else None, -1)
+native_overlay_pixel_probe_rgba = as_int(telemetry.get("oracle_native_overlay_pixel_probe_rgba") if isinstance(telemetry, dict) else None, -1)
 scaleform_memoryfile_custom_asset_hits = as_int(telemetry.get("oracle_scaleform_memoryfile_custom_asset_hits") if isinstance(telemetry, dict) else None, -1)
-native_overlay_proven = native_overlay_frames > 0
+native_overlay_proven = native_overlay_frames > 0 and native_overlay_pixel_probe_matches > 0
 native_overlay_handoff_proven = native_overlay_handoff_ready_hits > 0
 scaleform_memoryfile_custom_asset_proven = scaleform_memoryfile_custom_asset_hits > 0
 verdict = {
@@ -198,6 +201,8 @@ verdict = {
     "oracle_native_overlay_stage": native_overlay_stage,
     "oracle_native_overlay_failure": native_overlay_failure,
     "oracle_native_overlay_handoff_ready_hits": native_overlay_handoff_ready_hits,
+    "oracle_native_overlay_pixel_probe_matches": native_overlay_pixel_probe_matches,
+    "oracle_native_overlay_pixel_probe_rgba": native_overlay_pixel_probe_rgba,
     "oracle_scaleform_memoryfile_custom_asset_hits": scaleform_memoryfile_custom_asset_hits,
     "native_overlay_proven": native_overlay_proven,
     "native_overlay_handoff_proven": native_overlay_handoff_proven,

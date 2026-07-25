@@ -12,17 +12,23 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::{
-    D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC, D3D12_COMMAND_QUEUE_FLAG_NONE,
-    D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_DESCRIPTOR_HEAP_DESC, D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
-    D3D12_DESCRIPTOR_HEAP_TYPE_RTV, D3D12_FENCE_FLAG_NONE, D3D12_RESOURCE_BARRIER,
-    D3D12_RESOURCE_BARRIER_0, D3D12_RESOURCE_BARRIER_FLAG_NONE,
-    D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, D3D12_RESOURCE_STATE_PRESENT,
-    D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES, D3D12_RESOURCE_TRANSITION_BARRIER,
-    ID3D12CommandAllocator, ID3D12CommandQueue, ID3D12DescriptorHeap, ID3D12Device, ID3D12Fence,
-    ID3D12GraphicsCommandList, ID3D12Resource,
+    D3D12_BOX, D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC,
+    D3D12_COMMAND_QUEUE_FLAG_NONE, D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+    D3D12_DESCRIPTOR_HEAP_DESC, D3D12_DESCRIPTOR_HEAP_FLAG_NONE, D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
+    D3D12_FENCE_FLAG_NONE, D3D12_HEAP_FLAG_NONE, D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_READBACK,
+    D3D12_MEMORY_POOL_UNKNOWN, D3D12_PLACED_SUBRESOURCE_FOOTPRINT, D3D12_RANGE,
+    D3D12_RESOURCE_BARRIER, D3D12_RESOURCE_BARRIER_0, D3D12_RESOURCE_BARRIER_FLAG_NONE,
+    D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, D3D12_RESOURCE_DESC, D3D12_RESOURCE_DIMENSION_BUFFER,
+    D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE,
+    D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES,
+    D3D12_RESOURCE_TRANSITION_BARRIER, D3D12_TEXTURE_COPY_LOCATION, D3D12_TEXTURE_COPY_LOCATION_0,
+    D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+    D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_TEXTURE_LAYOUT_UNKNOWN, ID3D12CommandAllocator,
+    ID3D12CommandQueue, ID3D12DescriptorHeap, ID3D12Device, ID3D12Fence, ID3D12GraphicsCommandList,
+    ID3D12Resource,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
+    DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
     DXGI_CREATE_FACTORY_FLAGS, DXGI_PRESENT, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1,
@@ -61,6 +67,12 @@ pub(crate) static NATIVE_OVERLAY_FAILURE: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static NATIVE_OVERLAY_HANDOFF_READY: AtomicUsize = AtomicUsize::new(0);
 /// Counts frames where the bridge saw the native loading GFx/bar surface and hid itself.
 pub(crate) static NATIVE_OVERLAY_HANDOFF_READY_HITS: AtomicUsize = AtomicUsize::new(0);
+/// One-shot objective pixel readback attempts against the bridge backbuffer.
+pub(crate) static NATIVE_OVERLAY_PIXEL_PROBE_HITS: AtomicUsize = AtomicUsize::new(0);
+/// One-shot bridge pixel readback matches against the unique clear color.
+pub(crate) static NATIVE_OVERLAY_PIXEL_PROBE_MATCHES: AtomicUsize = AtomicUsize::new(0);
+/// Last readback pixel as packed RGBA8.
+pub(crate) static NATIVE_OVERLAY_PIXEL_PROBE_RGBA: AtomicUsize = AtomicUsize::new(0);
 
 const FAILURE_DYNAMIC_FACTORY: usize = 1;
 const FAILURE_DYNAMIC_DEVICE: usize = 2;
@@ -161,6 +173,143 @@ unsafe fn d3d12_create_device_dynamic() -> windows::core::Result<ID3D12Device> {
         return Err(Error::from_hresult(HRESULT(0x80004003u32 as i32)));
     }
     Ok(unsafe { ID3D12Device::from_raw(result) })
+}
+
+fn bridge_clear_color() -> [f32; 4] {
+    [0.015, 0.010, 0.030, 1.0]
+}
+
+fn bridge_clear_color_expected_rgba() -> [u8; 4] {
+    [4, 3, 8, 255]
+}
+
+fn bridge_pixel_matches_expected(rgba: [u8; 4]) -> bool {
+    let exp = bridge_clear_color_expected_rgba();
+    rgba.iter()
+        .zip(exp.iter())
+        .all(|(a, b)| a.abs_diff(*b) <= 2)
+}
+
+unsafe fn create_bridge_readback(
+    device: &ID3D12Device,
+    backbuffer: &ID3D12Resource,
+) -> Option<(ID3D12Resource, D3D12_PLACED_SUBRESOURCE_FOOTPRINT, u64)> {
+    let desc = unsafe { backbuffer.GetDesc() };
+    let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+    let mut total_bytes: u64 = 0;
+    unsafe {
+        device.GetCopyableFootprints(
+            &desc,
+            0,
+            1,
+            0,
+            Some(&mut footprint),
+            None,
+            None,
+            Some(&mut total_bytes),
+        )
+    };
+    if total_bytes == 0 || footprint.Footprint.RowPitch < 4 {
+        return None;
+    }
+    let heap = D3D12_HEAP_PROPERTIES {
+        Type: D3D12_HEAP_TYPE_READBACK,
+        CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+        MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+        CreationNodeMask: 1,
+        VisibleNodeMask: 1,
+    };
+    let buf_desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+        Alignment: 0,
+        Width: total_bytes,
+        Height: 1,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: DXGI_FORMAT_UNKNOWN,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+        Flags: D3D12_RESOURCE_FLAG_NONE,
+    };
+    let mut out = None;
+    if unsafe {
+        device.CreateCommittedResource(
+            &heap,
+            D3D12_HEAP_FLAG_NONE,
+            &buf_desc,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            None,
+            &mut out,
+        )
+    }
+    .is_err()
+    {
+        return None;
+    }
+    Some((out?, footprint, total_bytes))
+}
+
+unsafe fn record_bridge_pixel_copy(
+    list: &ID3D12GraphicsCommandList,
+    backbuffer: &ID3D12Resource,
+    readback: &ID3D12Resource,
+    footprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT,
+) {
+    let mut dst = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(readback.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            PlacedFootprint: footprint,
+        },
+    };
+    let mut src = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(backbuffer.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            SubresourceIndex: 0,
+        },
+    };
+    let read_box = D3D12_BOX {
+        left: 0,
+        top: 0,
+        front: 0,
+        right: 1,
+        bottom: 1,
+        back: 1,
+    };
+    unsafe { list.CopyTextureRegion(&dst, 0, 0, 0, &src, Some(&read_box)) };
+    unsafe { ManuallyDrop::drop(&mut dst.pResource) };
+    unsafe { ManuallyDrop::drop(&mut src.pResource) };
+}
+
+unsafe fn sample_bridge_pixel_probe(readback: &ID3D12Resource, total_bytes: u64) {
+    if NATIVE_OVERLAY_PIXEL_PROBE_HITS.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    NATIVE_OVERLAY_PIXEL_PROBE_HITS.store(1, Ordering::SeqCst);
+    let range = D3D12_RANGE {
+        Begin: 0,
+        End: total_bytes.min(4) as usize,
+    };
+    let mut ptr: *mut c_void = std::ptr::null_mut();
+    if unsafe { readback.Map(0, Some(&range), Some(&mut ptr)) }.is_err() || ptr.is_null() {
+        return;
+    }
+    let b = unsafe { std::slice::from_raw_parts(ptr as *const u8, 4) };
+    let rgba = [b[0], b[1], b[2], b[3]];
+    let packed = ((rgba[0] as usize) << 24)
+        | ((rgba[1] as usize) << 16)
+        | ((rgba[2] as usize) << 8)
+        | rgba[3] as usize;
+    NATIVE_OVERLAY_PIXEL_PROBE_RGBA.store(packed, Ordering::SeqCst);
+    if bridge_pixel_matches_expected(rgba) {
+        NATIVE_OVERLAY_PIXEL_PROBE_MATCHES.store(1, Ordering::SeqCst);
+    }
+    let empty = D3D12_RANGE { Begin: 0, End: 0 };
+    unsafe { readback.Unmap(0, Some(&empty)) };
 }
 
 unsafe fn overlay_transition(
@@ -363,6 +512,8 @@ unsafe fn native_overlay_run() {
     }
     NATIVE_OVERLAY_STAGE.store(8, Ordering::SeqCst);
 
+    let bridge_pixel_readback = unsafe { create_bridge_readback(&device, &backbuffers[0]) };
+
     let allocator: ID3D12CommandAllocator =
         match unsafe { device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) } {
             Ok(a) => a,
@@ -455,16 +606,47 @@ unsafe fn native_overlay_run() {
         let handle = D3D12_CPU_DESCRIPTOR_HANDLE {
             ptr: rtv_base.ptr + idx * rtv_size,
         };
-        unsafe { list.ClearRenderTargetView(handle, &[0.015, 0.010, 0.030, 1.0], None) };
+        unsafe { list.ClearRenderTargetView(handle, &bridge_clear_color(), None) };
         NATIVE_OVERLAY_DRAW_HITS.fetch_add(1, Ordering::SeqCst);
-        unsafe {
-            overlay_transition(
-                &list,
-                bb,
-                D3D12_RESOURCE_STATE_RENDER_TARGET,
-                D3D12_RESOURCE_STATE_PRESENT,
-            )
-        };
+        if NATIVE_OVERLAY_PIXEL_PROBE_HITS.load(Ordering::SeqCst) == 0 {
+            if let Some((readback, footprint, _total_bytes)) = bridge_pixel_readback.as_ref() {
+                unsafe {
+                    overlay_transition(
+                        &list,
+                        bb,
+                        D3D12_RESOURCE_STATE_RENDER_TARGET,
+                        D3D12_RESOURCE_STATE_COPY_SOURCE,
+                    )
+                };
+                unsafe { record_bridge_pixel_copy(&list, bb, readback, *footprint) };
+                unsafe {
+                    overlay_transition(
+                        &list,
+                        bb,
+                        D3D12_RESOURCE_STATE_COPY_SOURCE,
+                        D3D12_RESOURCE_STATE_PRESENT,
+                    )
+                };
+            } else {
+                unsafe {
+                    overlay_transition(
+                        &list,
+                        bb,
+                        D3D12_RESOURCE_STATE_RENDER_TARGET,
+                        D3D12_RESOURCE_STATE_PRESENT,
+                    )
+                };
+            }
+        } else {
+            unsafe {
+                overlay_transition(
+                    &list,
+                    bb,
+                    D3D12_RESOURCE_STATE_RENDER_TARGET,
+                    D3D12_RESOURCE_STATE_PRESENT,
+                )
+            };
+        }
         if unsafe { list.Close() }.is_err() {
             let _ = tick_rx.recv_timeout(hidden_poll);
             continue;
@@ -477,11 +659,18 @@ unsafe fn native_overlay_run() {
         }
 
         fence_val += 1;
-        if unsafe { queue.Signal(&fence, fence_val) }.is_ok()
+        let signaled = unsafe { queue.Signal(&fence, fence_val) }.is_ok();
+        if signaled
             && unsafe { fence.GetCompletedValue() } < fence_val
             && unsafe { fence.SetEventOnCompletion(fence_val, fence_event) }.is_ok()
         {
             unsafe { WaitForSingleObject(fence_event, INFINITE) };
+        }
+        if signaled
+            && NATIVE_OVERLAY_PIXEL_PROBE_HITS.load(Ordering::SeqCst) == 0
+            && let Some((readback, _footprint, total_bytes)) = bridge_pixel_readback.as_ref()
+        {
+            unsafe { sample_bridge_pixel_probe(readback, *total_bytes) };
         }
     }
 }
