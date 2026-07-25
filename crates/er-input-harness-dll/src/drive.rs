@@ -23,22 +23,20 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use crate::game_mem::{
-    ReinforceShopCategories, current_open_menu_id, flip_fixed_spf, flip_mode_current, load_fsm,
-    menu_data_ptr, menu_flags, now_loading, optionsetting_tab_index, pause_menu_open,
-    read_drive_mode_flag, reinforce_shop_categories, return_title_requested, top_menu_id,
-    top_menu_job_ptr, top_window_dialog_accept_gate, top_window_dialog_accept_ready,
-    top_window_ptr, top_window_vtable, world_simulating,
+    ReinforceShopCategories, current_open_menu_id, flip_fixed_spf, flip_mode_current,
+    frida_release_open_requested, load_fsm, menu_data_ptr, menu_flags, now_loading,
+    optionsetting_tab_index, pause_menu_open, read_drive_mode_flag, reinforce_shop_categories,
+    return_title_requested, top_menu_id, top_menu_job_ptr, top_window_dialog_accept_gate,
+    top_window_dialog_accept_ready, top_window_ptr, top_window_vtable, world_simulating,
 };
 use crate::input_inject::{
     MenuEvent, advance_press_any_button, grant_deterministic_strengthen_seed, input_manager,
     keep_input_active, native_open_equip_menu, native_open_inventory_menu,
-    native_open_weapon_upgrade_menu, popup_job_serial, request_open_ingame_menu,
-    seed_reinforce_shop_categories_for_probe, tap_menu_event,
+    native_open_weapon_upgrade_menu, popup_job_serial, request_open_ingame_menu, tap_menu_event,
 };
 use crate::log::{harness_log, log_phase};
 use crate::pad_inject::{PadButton, set_pad_button, set_vk_id};
-use crate::strengthen_probe::{last_row_snapshot, last_selected_row_is_weapon};
-use crate::title_scan;
+use crate::strengthen_probe::{armament_weapon_row_seen, last_row_snapshot};
 use crate::win32::GetTickCount64;
 
 // Keystate tap cadence (in-world menu only): a clean single edge per cycle.
@@ -77,6 +75,10 @@ const QUIT_BUDGET: u64 = 600;
 /// renders (fade-in settles), and the oracle can capture + process before teardown. 3s at 60fps
 /// (user 2026-07-23: reduced 9s -> 3s teardown delay).
 const EQUIP_DWELL_FRAMES: u64 = 180;
+/// Long hold after opening the armament-upgrade menu so an external Windows-side Frida diagnostic can
+/// attach and inspect/call native functions while the menu remains live. The external watcher owns
+/// teardown when Frida finishes; this is only a backstop.
+const FRIDA_HOLD_FRAMES: u64 = 3600;
 
 // ---- diagnostic probe (mode `probe`): sweep the DLUID virtual-key id space and log the menu response,
 // to discover which id (1000..1080) is up/down/confirm/cancel/tab (bd MENU-INPUT-LAYER-virtual-key). ----
@@ -280,9 +282,10 @@ enum Status {
 
 #[derive(Clone, Copy)]
 enum Phase {
-    /// NO input: wait until the title is parked at PRESS ANY BUTTON. EFFECT: title_pab_parked.
+    /// NO input: wait until the menu singleton exists. EFFECT: menu memory is ready for title input.
     Startup,
-    /// Write the accept byte each frame (advances PAB). EFFECT: the Continue/Load menu is built.
+    /// Write the accept byte each frame (advances PAB), then settle briefly. EFFECT is proven later by
+    /// `Continue` observing a load start, avoiding the slow/brittle title-owner scan as an oracle.
     PressAnyButton,
     /// Write the accept byte each frame (Continue is default-focused). EFFECT: a load started.
     Continue,
@@ -321,8 +324,8 @@ enum Phase {
     /// NATIVE grant of deterministic Dagger +0 / Smithing Stone [1] / rune seed. EFFECT: native
     /// `GiveItems`/`AddRunes` call returned after all singleton pointers were readable.
     GrantDeterministicStrengthenSeed,
-    /// NATIVE open of the weapon-upgrade/reinforcement menu. EFFECT: researched open-menu id 0x17 or
-    /// the native submit path visibly swaps/serializes the top job.
+    /// NATIVE open of the armament-upgrade/reinforcement menu. EFFECT: `OpenEnhanceShop(0)`
+    /// `CurrentOpenMenu == 9` plus the native submit path visibly swaps/serializes the top job.
     OpenWeaponUpgradeMenu,
     /// User-equivalent row Confirm in the strengthen menu. EFFECT: a known message-box dialog exists.
     BuildStrengthenDialog,
@@ -331,6 +334,12 @@ enum Phase {
     BufferedStrengthenDialogOk,
     /// NO input: wait for the ready-gated OK edge to close/rebuild the dialog.
     WaitBufferedDialogOkEffect,
+    /// NO input: hold before the deterministic item seed and before opening any menu until Frida loads.
+    HoldBeforePreMenuSeedForFrida,
+    /// NO input: hold before opening the armament-upgrade menu until the external Frida helper loads.
+    HoldBeforeWeaponUpgradeMenuForFrida,
+    /// NO input: hold the opened armament-upgrade menu for an external Frida diagnostic.
+    HoldForFrida,
 }
 
 impl Phase {
@@ -355,6 +364,11 @@ impl Phase {
             Phase::BuildStrengthenDialog => "build_strengthen_dialog",
             Phase::BufferedStrengthenDialogOk => "buffered_strengthen_dialog_ok",
             Phase::WaitBufferedDialogOkEffect => "wait_buffered_dialog_ok_effect",
+            Phase::HoldBeforePreMenuSeedForFrida => "hold_before_pre_menu_seed_for_frida",
+            Phase::HoldBeforeWeaponUpgradeMenuForFrida => {
+                "hold_before_weapon_upgrade_menu_for_frida"
+            }
+            Phase::HoldForFrida => "hold_for_frida",
         }
     }
 
@@ -377,6 +391,9 @@ impl Phase {
             Phase::Quit | Phase::QuitTeardown | Phase::NativeQuit => QUIT_BUDGET,
             Phase::ProbeMenu => PROBE_TOTAL_FRAMES,
             Phase::DwellEquip => EQUIP_DWELL_FRAMES,
+            Phase::HoldBeforePreMenuSeedForFrida
+            | Phase::HoldBeforeWeaponUpgradeMenuForFrida
+            | Phase::HoldForFrida => FRIDA_HOLD_FRAMES,
         }
     }
 
@@ -398,10 +415,10 @@ impl Phase {
     /// One frame of the phase. Returns Advanced (effect seen), Running, or Derailed (past budget).
     fn tick(self, base: usize, im: usize, frame: u64, sem: &Sem) -> Status {
         let advanced = match self {
-            Phase::Startup => title_scan::title_pab_parked(base),
+            Phase::Startup => sem.menu != 0,
             Phase::PressAnyButton => {
                 advance_press_any_button(base);
-                title_scan::title_menu_up(base)
+                frame >= PHASE_HEARTBEAT_FRAMES
             }
             Phase::Continue => {
                 advance_press_any_button(base);
@@ -468,12 +485,48 @@ impl Phase {
                     || serial > EQUIP_SERIAL.load(Ordering::SeqCst)
             }
             Phase::DwellEquip => frame >= EQUIP_DWELL_FRAMES,
+            Phase::HoldBeforePreMenuSeedForFrida | Phase::HoldBeforeWeaponUpgradeMenuForFrida => {
+                frida_release_open_requested()
+            }
+            Phase::HoldForFrida => false,
             Phase::GrantDeterministicStrengthenSeed => {
-                let seeded = grant_deterministic_strengthen_seed(base);
-                if frame % TAP_CYCLE_FRAMES == 0 {
-                    harness_log!("upgrade-det: deterministic seed dispatched={seeded}");
+                if armament_weapon_row_seen() {
+                    if frame == 0 {
+                        harness_log!(
+                            "upgrade-det: existing armament weapon row observed; deterministic give skipped"
+                        );
+                    }
+                    return Status::Advanced;
                 }
-                seeded
+                if frame == 0 {
+                    let seeded = grant_deterministic_strengthen_seed(base);
+                    let reopened = if seeded {
+                        native_open_weapon_upgrade_menu(base, im)
+                    } else {
+                        false
+                    };
+                    harness_log!(
+                        "upgrade-det: no armament weapon row observed; deterministic give dispatched={} reopen_dispatched={}",
+                        seeded as u8,
+                        reopened as u8
+                    );
+                }
+                if frame > 0 && frame % PHASE_HEARTBEAT_FRAMES == 0 {
+                    let reopened = native_open_weapon_upgrade_menu(base, im);
+                    harness_log!(
+                        "upgrade-det: still no armament weapon row after conditional give; reopen_dispatched={} frame={}",
+                        reopened as u8,
+                        frame
+                    );
+                }
+                if frame % TAP_CYCLE_FRAMES == 0 {
+                    harness_log!(
+                        "upgrade-det: ensure weapon row waiting armament_weapon_row_seen={} last_row_kind={}",
+                        armament_weapon_row_seen() as u8,
+                        last_row_snapshot().kind.as_str()
+                    );
+                }
+                armament_weapon_row_seen()
             }
             Phase::OpenInventoryMenu => {
                 // Native open of the Inventory menu (same factory+submit path as EquipTop; the
@@ -490,35 +543,29 @@ impl Phase {
                     || serial > EQUIP_SERIAL.load(Ordering::SeqCst)
             }
             Phase::OpenWeaponUpgradeMenu => {
-                // Native open of the weapon-upgrade/reinforcement menu. PASS requires the semantic
-                // CurrentOpenMenu semaphore plus the deterministic nonzero reinforce-shop context;
-                // top-job/serial movement is only supporting telemetry.
+                // Native open of the armament-upgrade/reinforcement menu. PASS requires the semantic
+                // OpenEnhanceShop(0) CurrentOpenMenu semaphore plus native top-job/serial movement.
+                // The old shared Spirit Tuning shell (`CurrentOpenMenu=0x17`) is explicitly wrong.
                 if frame == 0 {
                     INGAMETOP_JOB.store(top_menu_job_ptr(), Ordering::SeqCst);
                     EQUIP_SERIAL.store(popup_job_serial(im) as usize, Ordering::SeqCst);
-                    let pre_seeded = seed_reinforce_shop_categories_for_probe(base);
-                    if !pre_seeded {
-                        harness_log!(
-                            "upgrade: NOT opening shared strengthen shell; failed to seed deterministic reinforce shop context"
-                        );
-                    } else {
-                        let dispatched = native_open_weapon_upgrade_menu(base, im);
-                        let post_seeded = seed_reinforce_shop_categories_for_probe(base);
-                        harness_log!(
-                            "upgrade: native WeaponUpgrade open dispatched={dispatched} reinforce_context_pre_seeded={} post_seeded={} (post-seed covers constructor clear)",
-                            pre_seeded as u8,
-                            post_seeded as u8
-                        );
-                    }
+                    let dispatched = native_open_weapon_upgrade_menu(base, im);
+                    harness_log!(
+                        "upgrade: native OpenEnhanceShop(0) armament upgrade open dispatched={dispatched}"
+                    );
                 }
                 let job = top_menu_job_ptr();
                 let serial = popup_job_serial(im) as usize;
+                let top_job_changed = job != 0 && job != INGAMETOP_JOB.load(Ordering::SeqCst);
+                let serial_changed = serial > EQUIP_SERIAL.load(Ordering::SeqCst);
+                let reinforce_ctx_enabled = sem.reinforce_shop_categories.any_enabled();
                 if frame % TAP_CYCLE_FRAMES == 0 {
                     harness_log!(
-                        "upgrade: open probe semaphores open_menu={} top_job_changed={} serial_changed={} reinforce_ctx=[{},{},{},{}]",
+                        "upgrade: open probe semaphores open_menu={} top_job_changed={} serial_changed={} legacy_reinforce_ctx_enabled={} reinforce_ctx=[{},{},{},{}]",
                         sem.open_menu,
-                        (job != 0 && job != INGAMETOP_JOB.load(Ordering::SeqCst)) as u8,
-                        (serial > EQUIP_SERIAL.load(Ordering::SeqCst)) as u8,
+                        top_job_changed as u8,
+                        serial_changed as u8,
+                        reinforce_ctx_enabled as u8,
                         sem.reinforce_shop_categories.category_1,
                         sem.reinforce_shop_categories.category_2,
                         sem.reinforce_shop_categories.category_3,
@@ -526,14 +573,14 @@ impl Phase {
                     );
                 }
                 sem.open_menu == i64::from(crate::input_scheduler::WEAPON_UPGRADE_OPEN_MENU_ID)
-                    && sem.reinforce_shop_categories.any_enabled()
+                    && (top_job_changed || serial_changed)
             }
             Phase::BuildStrengthenDialog => {
                 if frame == 0 {
                     let baseline = last_row_snapshot().serial;
                     DIALOG_ROW_BASELINE_SERIAL.store(baseline, Ordering::SeqCst);
                     harness_log!(
-                        "upgrade-det: build dialog row baseline serial={baseline}; requiring a fresh weapon row from the open strengthen shell"
+                        "upgrade-det: build dialog row baseline serial={baseline}; requiring an observed armament weapon row"
                     );
                 }
                 issue_pad_taps_once(&[PadButton::Confirm], frame);
@@ -541,10 +588,10 @@ impl Phase {
                 let row = last_row_snapshot();
                 let baseline = DIALOG_ROW_BASELINE_SERIAL.load(Ordering::SeqCst);
                 let fresh_row = row.serial > baseline;
-                let weapon_row = fresh_row && last_selected_row_is_weapon();
+                let weapon_row_seen = armament_weapon_row_seen();
                 if frame % TAP_CYCLE_FRAMES == 0 {
                     harness_log!(
-                        "upgrade-det: build dialog semaphores dialog_exists={} dialog_ready={} open_menu={} row_kind={} row_item_id=0x{:x} row_serial={} row_baseline={} fresh_row={}",
+                        "upgrade-det: build dialog semaphores dialog_exists={} dialog_ready={} open_menu={} row_kind={} row_item_id=0x{:x} row_serial={} row_baseline={} fresh_row={} weapon_row_seen={}",
                         gate.is_some() as u8,
                         gate.is_some_and(crate::input_scheduler::DialogAcceptGate::is_ready) as u8,
                         sem.open_menu,
@@ -552,10 +599,11 @@ impl Phase {
                         row.item_id,
                         row.serial,
                         baseline,
-                        fresh_row as u8
+                        fresh_row as u8,
+                        weapon_row_seen as u8
                     );
                 }
-                gate.is_some() && weapon_row
+                gate.is_some() && weapon_row_seen
             }
             Phase::BufferedStrengthenDialogOk => {
                 let gate = top_window_dialog_accept_gate();
@@ -653,13 +701,17 @@ enum DriveMode {
     /// Boot to in-world, open the pause menu, native-open the Inventory menu (02_020_Inventory --
     /// the Melee/Ranged/Shields tabs with bottom-left ArtsIcon cells), then dwell.
     InventoryMenu,
-    /// Boot to in-world, open the pause menu, native-open the weapon-upgrade/reinforcement menu,
-    /// then dwell for semaphore logging. No confirm inputs.
+    /// Boot to in-world, open the pause menu, native-open the `OpenEnhanceShop(0)` armament-upgrade
+    /// menu, then dwell for semaphore logging. No confirm inputs.
     WeaponUpgradeMenu,
     /// Deterministic weapon-upgrade scenario: seed a +0 upgradeable weapon/materials, native-open the
-    /// strengthen menu, build its confirmation dialog with a user-equivalent input, then buffer the
-    /// dialog OK until the native accept gate becomes ready.
+    /// `OpenEnhanceShop(0)` armament menu, build its confirmation dialog with a user-equivalent input,
+    /// then buffer the dialog OK until the native accept gate becomes ready.
     DeterministicWeaponUpgrade,
+    /// Open the armament-upgrade menu and hold it for an external Windows-side Frida diagnostic.
+    WeaponUpgradeFrida,
+    /// Hold for Frida before seeding deterministic upgrade items and before opening any menu.
+    WeaponUpgradeFridaPreseed,
 }
 
 impl DriveMode {
@@ -674,6 +726,8 @@ impl DriveMode {
             "inv" => DriveMode::InventoryMenu,
             "upgrade" => DriveMode::WeaponUpgradeMenu,
             "upgrade_det" | "strengthen_det" => DriveMode::DeterministicWeaponUpgrade,
+            "upgrade_frida" => DriveMode::WeaponUpgradeFrida,
+            "upgrade_frida_preseed" => DriveMode::WeaponUpgradeFridaPreseed,
             _ => DriveMode::FullBootReload,
         }
     }
@@ -689,12 +743,17 @@ impl DriveMode {
             DriveMode::InventoryMenu => "inv",
             DriveMode::WeaponUpgradeMenu => "upgrade",
             DriveMode::DeterministicWeaponUpgrade => "upgrade_det",
+            DriveMode::WeaponUpgradeFrida => "upgrade_frida",
+            DriveMode::WeaponUpgradeFridaPreseed => "upgrade_frida_preseed",
         }
     }
     fn auto_accept_popups(self) -> bool {
         !matches!(
             self,
-            DriveMode::WeaponUpgradeMenu | DriveMode::DeterministicWeaponUpgrade
+            DriveMode::WeaponUpgradeMenu
+                | DriveMode::DeterministicWeaponUpgrade
+                | DriveMode::WeaponUpgradeFrida
+                | DriveMode::WeaponUpgradeFridaPreseed
         )
     }
 
@@ -776,7 +835,7 @@ impl DriveMode {
             Phase::OpenInventoryMenu,
             Phase::DwellEquip,
         ];
-        // upgrade: reach in-world, native-open the weapon-upgrade menu, dwell/log semaphores only.
+        // upgrade: reach in-world, native-open the OpenEnhanceShop(0) armament-upgrade menu, dwell/log semaphores only.
         const UPGRADE: &[Phase] = &[
             Phase::Startup,
             Phase::PressAnyButton,
@@ -791,13 +850,34 @@ impl DriveMode {
             Phase::PressAnyButton,
             Phase::Continue,
             Phase::WaitLoadIn,
-            Phase::GrantDeterministicStrengthenSeed,
             Phase::OpenPauseMenu,
             Phase::OpenWeaponUpgradeMenu,
+            Phase::GrantDeterministicStrengthenSeed,
             Phase::BuildStrengthenDialog,
             Phase::BufferedStrengthenDialogOk,
             Phase::WaitBufferedDialogOkEffect,
             Phase::DwellEquip,
+        ];
+        const UPGRADE_FRIDA: &[Phase] = &[
+            Phase::Startup,
+            Phase::PressAnyButton,
+            Phase::Continue,
+            Phase::WaitLoadIn,
+            Phase::OpenPauseMenu,
+            Phase::HoldBeforeWeaponUpgradeMenuForFrida,
+            Phase::OpenWeaponUpgradeMenu,
+            Phase::HoldForFrida,
+        ];
+        const UPGRADE_FRIDA_PRESEED: &[Phase] = &[
+            Phase::Startup,
+            Phase::PressAnyButton,
+            Phase::Continue,
+            Phase::WaitLoadIn,
+            Phase::HoldBeforePreMenuSeedForFrida,
+            Phase::GrantDeterministicStrengthenSeed,
+            Phase::OpenPauseMenu,
+            Phase::OpenWeaponUpgradeMenu,
+            Phase::HoldForFrida,
         ];
         match self {
             DriveMode::BootContinueOnly => BOOT,
@@ -810,6 +890,8 @@ impl DriveMode {
             DriveMode::InventoryMenu => INV,
             DriveMode::WeaponUpgradeMenu => UPGRADE,
             DriveMode::DeterministicWeaponUpgrade => UPGRADE_DET,
+            DriveMode::WeaponUpgradeFrida => UPGRADE_FRIDA,
+            DriveMode::WeaponUpgradeFridaPreseed => UPGRADE_FRIDA_PRESEED,
         }
     }
 }
@@ -833,7 +915,7 @@ fn resolve_mode() -> DriveMode {
     // MUST stay index-aligned with the `idx` match below (bd reload2-crash-MODES-oob): every DriveMode
     // needs a slot here or MODES[cached] panics. NativeReloadTwice=5 was added to the match but not here,
     // so the 2nd per-frame resolve_mode() indexed MODES[5] out-of-bounds -> crash ~after boot (run64/65/67).
-    const MODES: [DriveMode; 10] = [
+    const MODES: [DriveMode; 12] = [
         DriveMode::BootContinueOnly,           // 0
         DriveMode::NativeReloadOnly,           // 1
         DriveMode::FullBootReload,             // 2
@@ -844,6 +926,8 @@ fn resolve_mode() -> DriveMode {
         DriveMode::InventoryMenu,              // 7
         DriveMode::WeaponUpgradeMenu,          // 8
         DriveMode::DeterministicWeaponUpgrade, // 9
+        DriveMode::WeaponUpgradeFrida,         // 10
+        DriveMode::WeaponUpgradeFridaPreseed,  // 11
     ];
     let cached = MODE_IDX.load(Ordering::SeqCst);
     if cached != usize::MAX {
@@ -881,6 +965,8 @@ fn resolve_mode() -> DriveMode {
         DriveMode::InventoryMenu => 7,
         DriveMode::WeaponUpgradeMenu => 8,
         DriveMode::DeterministicWeaponUpgrade => 9,
+        DriveMode::WeaponUpgradeFrida => 10,
+        DriveMode::WeaponUpgradeFridaPreseed => 11,
     };
     MODE_IDX.store(idx, Ordering::SeqCst);
     harness_log!(
@@ -894,7 +980,7 @@ fn resolve_mode() -> DriveMode {
 /// Emit one per-phase telemetry line (the exact shape the run oracle consumes). Includes the in-world
 /// pane semaphores so a phase's boundary is fully reconstructable offline.
 fn emit_phase_telemetry(
-    base: usize,
+    _base: usize,
     name: &str,
     idx: usize,
     outcome: &str,
@@ -904,8 +990,10 @@ fn emit_phase_telemetry(
 ) {
     let end_tick = unsafe { GetTickCount64() };
     let duration_ms = end_tick.saturating_sub(start_tick);
-    let title_state = title_scan::title_state(base);
-    let a40 = title_scan::title_dialog_a40(base);
+    // The title-owner scan is deliberately not part of the runtime oracle here: it is too brittle and
+    // expensive during early boot. Keep the legacy JSON fields as explicit unknowns for compatibility.
+    let title_state = -1;
+    let a40 = -1;
     let menu_id = top_menu_id();
     let tab = optionsetting_tab_index();
     // The DECISIVE fps signal (bd MECHANISM-20fps-cap-fixedspf-0.05): 0.05 = the loading 20fps cap,
@@ -1012,7 +1100,7 @@ pub fn on_frame(base: usize) {
         Status::Running => {}
         Status::Advanced => {
             harness_log!(
-                "phase[{idx}] {} ADVANCED after {frame}f (pause_menu={} menu_id={} open_menu={} tab={} return_title={} dialog_accept_ready={} world_sim={} load_fsm={} title_state={})",
+                "phase[{idx}] {} ADVANCED after {frame}f (pause_menu={} menu_id={} open_menu={} tab={} return_title={} dialog_accept_ready={} world_sim={} load_fsm={})",
                 phase.name(),
                 pause_menu_open() as u8,
                 top_menu_id(),
@@ -1021,8 +1109,7 @@ pub fn on_frame(base: usize) {
                 return_title_requested() as u8,
                 sem.dialog_accept_ready as u8,
                 sem.world_sim as u8,
-                sem.load_fsm,
-                title_scan::title_state(base)
+                sem.load_fsm
             );
             emit_phase_telemetry(base, phase.name(), idx, "advanced", start_tick, frame, &sem);
             PHASE_IDX.store(idx + 1, Ordering::SeqCst);
@@ -1033,7 +1120,7 @@ pub fn on_frame(base: usize) {
         }
         Status::Derailed => {
             harness_log!(
-                "phase[{idx}] {} DERAILED: effect not seen within {}f (pause_menu={} menu_id={} open_menu={} tab={} return_title={} dialog_accept_ready={} world_sim={} load_fsm={} title_state={}) -- STOPPING drive; tear down and analyze",
+                "phase[{idx}] {} DERAILED: effect not seen within {}f (pause_menu={} menu_id={} open_menu={} tab={} return_title={} dialog_accept_ready={} world_sim={} load_fsm={}) -- STOPPING drive; tear down and analyze",
                 phase.name(),
                 phase.budget(),
                 pause_menu_open() as u8,
@@ -1043,8 +1130,7 @@ pub fn on_frame(base: usize) {
                 return_title_requested() as u8,
                 sem.dialog_accept_ready as u8,
                 sem.world_sim as u8,
-                sem.load_fsm,
-                title_scan::title_state(base)
+                sem.load_fsm
             );
             emit_phase_telemetry(base, phase.name(), idx, "derailed", start_tick, frame, &sem);
             DERAILED.store(true, Ordering::SeqCst);

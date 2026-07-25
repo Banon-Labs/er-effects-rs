@@ -21,21 +21,11 @@
 //! pointer can never fault the game thread.
 
 use crate::log::harness_log;
-use crate::win32::{read_u8, read_u32, read_usize, write_u32};
+use crate::win32::{read_u8, read_u32, read_usize};
 
 /// `inputmgr`/CSMenuMan singleton RVA (`SELECTBOT_INPUT_MANAGER_GLOBAL_RVA` /
 /// `GLOBAL_CSMENUMAN_RVA` in the product constant tree).
 const INPUT_MANAGER_GLOBAL_RVA: usize = 0x3d6b7b0;
-/// Boolean shop-category context slots consumed by `FUN_140784380` when filtering weapon
-/// strengthen rows. Static RE found only reads in that filter and clear-writes in the shared Gaitem
-/// constructors through `GLOBAL_CSMenuMan`, so the deterministic harness may seed them as probe
-/// context; fresh selected-row telemetry remains the proof that the seed actually produced a weapon
-/// row.
-const CSMENU_REINFORCE_SHOP_CATEGORY_1_OFFSET: usize = 0x47c;
-const CSMENU_REINFORCE_SHOP_CATEGORY_2_OFFSET: usize = 0x480;
-const CSMENU_REINFORCE_SHOP_CATEGORY_3_OFFSET: usize = 0x484;
-const CSMENU_REINFORCE_SHOP_CATEGORY_4_OFFSET: usize = 0x488;
-const DETERMINISTIC_REINFORCE_SHOP_CATEGORY_ENABLED: u32 = 1;
 /// Keystate bitmap base within the input manager (`INPUTMGR_BITMAP_90_OFFSET`).
 const INPUTMGR_BITMAP_90_OFFSET: usize = 0x90;
 /// Edge bit written per event (`MENU_EVENT_PRESSED_BIT`).
@@ -119,26 +109,6 @@ pub fn input_manager(base: usize) -> Option<usize> {
     unsafe { read_usize(base + INPUT_MANAGER_GLOBAL_RVA) }.filter(|p| *p >= HEAP_LO)
 }
 
-/// Seed the blacksmith-style weapon strengthen category gates for the deterministic `upgrade_det`
-/// harness. The native shared Gaitem constructors clear these slots while opening the shell, so the
-/// caller deliberately writes before and after the native opener. This is harness-only setup, not
-/// product behavior: the selected-row hook must still observe a fresh weapon row after the shell opens
-/// before any confirm dialog can advance.
-pub fn seed_reinforce_shop_categories_for_probe(base: usize) -> bool {
-    let Some(menu) = input_manager(base) else {
-        return false;
-    };
-    let slots = [
-        CSMENU_REINFORCE_SHOP_CATEGORY_1_OFFSET,
-        CSMENU_REINFORCE_SHOP_CATEGORY_2_OFFSET,
-        CSMENU_REINFORCE_SHOP_CATEGORY_3_OFFSET,
-        CSMENU_REINFORCE_SHOP_CATEGORY_4_OFFSET,
-    ];
-    slots.into_iter().all(|offset| unsafe {
-        write_u32(menu + offset, DETERMINISTIC_REINFORCE_SHOP_CATEGORY_ENABLED)
-    })
-}
-
 // --- NATIVE EquipTop open (bd er-effects-rs-pe98, RE 2026-07-23) ---
 // The pause list opens submenus exclusively through MenuJob FACTORIES + CSPopupMenu job submit;
 // there is NO request byte for Equipment (the +0x121/+0x122 request family covers only
@@ -155,11 +125,12 @@ const EQUIP_TOP_JOB_FACTORY_RVA: usize = 0x801bc0;
 /// `InventoryUiLoad` deobf (dump 0x140801e40): Inventory pause-row MenuJob factory,
 /// same `(out, ComponentStack*)` signature -- builds the 02_020_Inventory union job.
 const INVENTORY_JOB_FACTORY_RVA: usize = 0x801d50;
-/// Native weapon-reinforcement/upgrade open wrapper. Live disasm at `0x140e9da60` calls the
-/// `FUN_14080ddd0` builder/submit path, writes `CurrentOpenMenu=0x17`, then calls
-/// `IsOpenMenuJobCurrentTop`. Use this instead of direct factory submit so the semantic open-menu
-/// semaphore is native.
-const WEAPON_UPGRADE_OPEN_WRAPPER_RVA: usize = 0xe9da60;
+/// Native armament-reinforcement/upgrade open wrapper for `OpenEnhanceShop(0)`. Ghidra 1.16.2:
+/// `CS::CSEzStateTalkEvent::Invoke` case `0x18` calls `FUN_140e9de00(out, type)`. With `type == 0`,
+/// this calls `FUN_14080ee90` / `FUN_1407f7e80` / `FUN_140989620`, writes `CurrentOpenMenu=9`, then
+/// calls `IsOpenMenuJobCurrentTop`. Use this instead of the old case `0x88`/`FUN_140e9da60` buddy
+/// upgrade path, which only opened the shared Spirit Tuning strengthen shell (`CurrentOpenMenu=0x17`).
+const WEAPON_UPGRADE_OPEN_WRAPPER_RVA: usize = 0xe9de00;
 /// `FUN_1407ee2e0` deobf: popup top-job submit wrapper `(popup, refptr* out, u64* serial_out,
 /// refptr* job)` -- the exact call shape of the +0x121 IngameTop open path.
 const POPUP_SUBMIT_TOP_JOB_RVA: usize = 0x7ee1f0;
@@ -223,10 +194,10 @@ pub fn native_open_inventory_menu(base: usize, input_manager_ptr: usize) -> bool
     native_open_top_menu(base, input_manager_ptr, INVENTORY_JOB_FACTORY_RVA)
 }
 
-/// Native open of the weapon-reinforcement/upgrade menu through the same wrapper the invoke-case path
-/// uses, so `CurrentOpenMenu` is set by native code.
+/// Native open of the blacksmith armament-reinforcement/upgrade menu through the same wrapper the
+/// `OpenEnhanceShop(0)` invoke-case path uses, so `CurrentOpenMenu` is set by native code.
 pub fn native_open_weapon_upgrade_menu(base: usize, input_manager_ptr: usize) -> bool {
-    type WeaponUpgradeOpenFn = unsafe extern "system" fn(*mut [usize; 3]);
+    type WeaponUpgradeOpenFn = unsafe extern "system" fn(*mut [usize; 3], i32);
 
     if popup_menu(input_manager_ptr).is_none() {
         return false;
@@ -234,9 +205,14 @@ pub fn native_open_weapon_upgrade_menu(base: usize, input_manager_ptr: usize) ->
     let open_weapon_upgrade: WeaponUpgradeOpenFn =
         unsafe { std::mem::transmute(base + WEAPON_UPGRADE_OPEN_WRAPPER_RVA) };
     let mut open_menu_job: [usize; 3] = [0; 3];
-    // SAFETY: live disassembly shows the wrapper writes an OpenMenuJob-like 24-byte out struct at RCX
-    // and performs the same build/submit + CurrentOpenMenu update as the event invoke case.
-    unsafe { open_weapon_upgrade(&mut open_menu_job) };
+    // SAFETY: live decompile shows `FUN_140e9de00(out, type)` writes an OpenMenuJob-like 24-byte out
+    // struct at RCX and performs the same build/submit + CurrentOpenMenu update as `OpenEnhanceShop`.
+    // `type == 0` selects the normal blacksmith armament upgrade menu (`CurrentOpenMenu=9`).
+    crate::strengthen_probe::begin_armament_upgrade_row_build(
+        crate::input_scheduler::WEAPON_UPGRADE_OPEN_MENU_ID,
+    );
+    unsafe { open_weapon_upgrade(&mut open_menu_job, 0) };
+    crate::strengthen_probe::end_armament_upgrade_row_build();
     open_menu_job[0] >= HEAP_LO
 }
 

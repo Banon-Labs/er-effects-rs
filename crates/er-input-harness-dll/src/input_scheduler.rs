@@ -35,15 +35,15 @@ impl DialogAcceptGate {
     }
 }
 
-/// Menu id the 1.16.x weapon-reinforcement path stores in `CurrentOpenMenu` while opening the
-/// reinforce inventory job. The driver should read the live value from game memory; this constant is
-/// only the semantic expected value.
-pub(crate) const WEAPON_UPGRADE_OPEN_MENU_ID: u32 = 0x17;
+/// Menu id the 1.16.x `OpenEnhanceShop(0)` armament-upgrade path stores in `CurrentOpenMenu`
+/// while opening the normal blacksmith reinforcement inventory job. The driver should read the live
+/// value from game memory; this constant is only the semantic expected value.
+pub(crate) const WEAPON_UPGRADE_OPEN_MENU_ID: u32 = 9;
 
 /// Readiness predicate inputs for a weapon-upgrade confirm intent.
 ///
 /// These are semantic fields supplied by the runtime driver, not hard-coded memory reads. The Ghidra
-/// spike identified the corresponding native sources as: `CurrentOpenMenu == 0x17`, active top menu
+/// spike identified the corresponding native sources as: `CurrentOpenMenu == 9`, active top menu
 /// job/`IsOpenMenuJobCurrentTop`, candidate availability, cost affordability, and the generic dialog
 /// accept gate.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -297,6 +297,13 @@ mod tests {
         assert!(
             !WeaponUpgradeConfirmReadiness {
                 current_open_menu: 0x16,
+                ..ready
+            }
+            .is_ready()
+        );
+        assert!(
+            !WeaponUpgradeConfirmReadiness {
+                current_open_menu: 0x17,
                 ..ready
             }
             .is_ready()

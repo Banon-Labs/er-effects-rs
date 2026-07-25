@@ -39,9 +39,8 @@ const MSGBOX_DIALOG_VTABLE_RVA: usize = 0x2b03550;
 /// shares the same fade/settle accept fields.
 const SAVE_RETRY_DIALOG_VTABLE_RVA: usize = 0x2aaabf8;
 /// `CurrentOpenMenu` global written by the EventFlag/menu invoke open-menu helpers. In the active
-/// Ghidra MCP 1.16.2 dump, invoke case `0x88` calls `FUN_140e9da60`, which writes `0x17` here for
-/// weapon reinforcement/upgrade. This is diagnostic telemetry until a runtime trace correlates it
-/// against the live process build.
+/// Ghidra MCP 1.16.2 dump, armament upgrades are `OpenEnhanceShop(0)` / invoke case `0x18`, which
+/// writes `9` here; invoke case `0x88` writes `0x17` for the wrong Buddy/Spirit-Tuning shell.
 const CURRENT_OPEN_MENU_ID_RVA: usize = 0x458baec;
 
 /// Lowest plausible heap/image pointer -- filters null and small sentinel values out of walks.
@@ -121,10 +120,9 @@ impl ReinforceShopCategories {
     }
 }
 
-/// `FUN_140784380` rejects non-zero `EquipParamWeapon.reinforceShopCategory` rows when the
-/// corresponding `CSMenuMan` category context slot is zero. A plain `CurrentOpenMenu == 0x17` shell
-/// with all four slots zero is the repeatedly observed Spirit Tuning/shared-strengthen wrong path,
-/// not a weapon-upgrade context.
+/// Legacy shared-strengthen category slots used by the `OpenBuddyUpgradeMenu`/`CurrentOpenMenu == 0x17`
+/// path. Keep these as telemetry so a runtime run can prove we did not accidentally fall back to that
+/// Spirit-Tuning shell; the armament path is `OpenEnhanceShop(0)` / `CurrentOpenMenu == 9`.
 pub fn reinforce_shop_categories() -> Option<ReinforceShopCategories> {
     let base = game_base()?;
     let menu = deref_singleton(base, CS_MENU_MAN_GLOBAL_RVA)?;
@@ -138,7 +136,7 @@ pub fn reinforce_shop_categories() -> Option<ReinforceShopCategories> {
     })
 }
 
-/// TRUE once the native weapon-reinforcement open path has selected the weapon-upgrade menu family.
+/// TRUE once the native `OpenEnhanceShop(0)` armament-reinforcement path has selected the upgrade menu.
 pub fn weapon_upgrade_open_menu_active() -> bool {
     current_open_menu_id() == Some(WEAPON_UPGRADE_OPEN_MENU_ID)
 }
@@ -453,6 +451,13 @@ pub fn os_input_enabled() -> bool {
 /// action is reproduced by a direct native state write). See `request_return_to_title`.
 pub fn native_quit_enabled() -> bool {
     std::path::Path::new("er-harness-native-quit.txt").exists()
+}
+
+/// FRIDA PRE-OPEN RELEASE (CWD file `er-harness-frida-release-open.txt`): in `upgrade_frida`
+/// drive mode, wait before calling `OpenEnhanceShop(0)` until the Windows-side Frida helper has
+/// loaded its hooks and written this marker. This keeps the row-transform/open call observable.
+pub fn frida_release_open_requested() -> bool {
+    std::path::Path::new("er-harness-frida-release-open.txt").exists()
 }
 
 /// DIRECT NATIVE return-to-title: write `menuData+0x5d = 1`, the return-to-title request byte the game's

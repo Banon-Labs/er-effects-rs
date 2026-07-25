@@ -29,7 +29,6 @@ mod input_scheduler;
 mod log;
 #[cfg(windows)]
 mod pad_inject;
-#[cfg(windows)]
 mod strengthen_probe;
 #[cfg(windows)]
 mod title_scan;

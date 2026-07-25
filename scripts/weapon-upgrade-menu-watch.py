@@ -5,8 +5,8 @@ The shell runner stages the input harness + telemetry DLLs and sets
 `er-harness-drive-mode.txt` to `upgrade` or `upgrade_det`. This watcher owns the bounded poll loop
 and teardown. It never uses screenshots; verdict comes from harness phase telemetry:
 
-- PASS (`upgrade`): `open_weapon_upgrade_menu` advanced and the following dwell advanced.
-- PASS (`upgrade_det`): deterministic seed, open menu, strengthen-dialog build, buffered OK, OK-effect transition, and dwell all advanced.
+- PASS (`upgrade`): `open_weapon_upgrade_menu` advanced through the `OpenEnhanceShop(0)` armament path and the following dwell advanced.
+- PASS (`upgrade_det`): deterministic seed, armament menu open, strengthen-dialog build, buffered OK, OK-effect transition, and dwell all advanced.
 - DERAILED: any harness phase derailed.
 - NO_HARNESS_PHASES: no harness log/phase telemetry appeared promptly after launch.
 - NO_PHASE_PROGRESS: harness telemetry appeared but stopped advancing before a decisive verdict.

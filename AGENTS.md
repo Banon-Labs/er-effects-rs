@@ -44,7 +44,7 @@ For every agent-owned Elden Ring runtime probe/watchdog, teardown must be tied t
 
 For weapon-upgrade/strengthen probes specifically, repeated entry into the shared strengthen/Spirit-Tuning family is a hard stop signal. `CurrentOpenMenu == 0x17`, the generic shared strengthen shell, or a visible strengthening menu is never enough evidence that the weapon-upgrade context is correct. After any user report that the probe opened Spirit Tuning / spirit ashes / the wrong shared strengthen view, do not launch another weapon-upgrade probe until offline/static evidence or a no-launch harness proof establishes a weapon-specific selected-row/context semaphore before Confirm. The next step must be offline RE/instrumentation of the weapon row/context owner; relaunching the generic `0x17` shell is prohibited until that weapon-specific precondition is implemented and validated without launching.
 
-Standing user order (2026-07-17): do not stop or yield merely because the proper next runtime step will launch Elden Ring on the current desktop or may capture input. When launching Elden Ring or capturing input is appropriate for the current objective and uses an approved launch/probe path, proceed instead of asking for generic permission. Tell the user immediately before the launch/input-capture step exactly what will happen and why, then run it. Do **not** emit reminders or reassurance that no launch/input capture is happening; if the current step is non-launching, just do the non-launching work without a no-launch disclaimer. Still respect the forbidden Steam/EAC launch forms, save-safety rules, visual-oracle restrictions, and any truly destructive/irreversible boundary.
+Standing user order (2026-07-24): before any command whose immediate next step would launch Elden Ring or another game/input-capturing runtime probe, stop and ask the user to reply exactly `LAUNCH CLEARANCE GRANTED`. Do not launch unless that exact phrase is provided in the current turn for that immediate launch. Ask only when the immediate next command would be the launch; if the current step is non-launching, do the non-launching work without a no-launch disclaimer. Still respect the forbidden Steam/EAC launch forms, save-safety rules, visual-oracle restrictions, stale-DLL guards, no-existing-ER preflight, watcher teardown obligations, and any truly destructive/irreversible boundary.
 
 Standing user order (2026-07-04): whenever a new DLL build is ready for runtime validation, do not try to validate a newly built DLL in an already-running process.
 
@@ -117,6 +117,10 @@ User steering is not evidence. When the user proposes a concrete technical hypot
 ## Reusable Tooling / Hard-Coded Path Corrections
 
 Persistent user directive (2026-07-17): when a tool, script, helper, or documented workflow fails because of a hard-coded local path, username, machine layout, or one-off assumption, fix the reusable tool/instruction at the point of failure before continuing the one-off task. Prefer env-overridable, current-user-aware defaults (`$HOME`, discovered repo root, explicit `*_DIR`/`*_BIN` overrides, bounded known-location fallbacks) over `/home/banon`, `/home/choza`, or other user-specific literals. Do not paper over the failure by running an ad-hoc command that only works in the current session; preserve the reusable fix with validation so future identical use cases benefit.
+
+## Python Tooling Type Hygiene
+
+When a Python helper imports an optional or platform-specific package, do not silence type diagnostics by annotating the imported module or API surface as `Any`. Find existing type information from the installed package/stubs when available, or define the narrow local `Protocol`/stub needed for the API actually used. Use `cast` to that explicit type only after the dynamic import succeeds, and keep the remaining script type-checkable without erasing the dependency boundary.
 
 ## Ghidra Runtime Dump: First-Pass RE Source
 

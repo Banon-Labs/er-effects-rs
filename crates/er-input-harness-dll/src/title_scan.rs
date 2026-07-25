@@ -11,11 +11,11 @@
 //!
 //! All reads are fault-safe (`ReadProcessMemory` on the current-process pseudo handle, same idiom as
 //! `win32::read_usize`/`read_u8`), so a not-yet-initialized/garbage pointer can never fault the game
-//! thread. The full-memory scan is THROTTLED (attempted only every ~120 calls until the owner is found)
-//! so a not-found state does not scan every frame and cripple FPS. Game-thread only.
+//! thread. Discovery is incremental and bounded per frame so a not-found state can still emit phase
+//! heartbeats instead of blocking the game thread. Game-thread only.
 
 use core::ffi::c_void;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::Diagnostics::Debug::ReadProcessMemory;
@@ -45,17 +45,19 @@ const TITLETOP_DIALOG_VTABLE_RVA: usize = 0x2b26468;
 const TITLETOP_DIALOG_A40_OFFSET: usize = 0xa40;
 
 // --- scan tuning ---
-/// One `ReadProcessMemory` per 64KB keeps the address-space walk fast.
+/// One `ReadProcessMemory` per 64KB keeps an individual memory read bounded.
 const SCAN_CHUNK: usize = 0x10000;
+/// Limit title-owner discovery work per game frame so startup never stalls inside one full address-space
+/// walk. The external watcher can then observe phase heartbeats instead of killing a silently blocked
+/// game thread.
+const SCAN_CHUNKS_PER_CALL: usize = 8;
 /// Upper scan bound (above 64-bit user address space; `VirtualQuery` fails out before this in practice).
 const SCAN_MAX: usize = 1usize << 47;
 /// Lowest plausible heap/image pointer -- filters null and small sentinels out of pointer walks.
 const HEAP_LO: usize = 0x10000;
-/// How many `find_title_owner` calls to skip between full-memory scans while the owner is not yet found.
-const SCAN_THROTTLE: u64 = 120;
 
 static CACHED_OWNER: AtomicUsize = AtomicUsize::new(0);
-static SCAN_COUNTDOWN: AtomicU64 = AtomicU64::new(0);
+static SCAN_CURSOR: AtomicUsize = AtomicUsize::new(0);
 static OWNER_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// The current-process pseudo handle (`-1`) for `ReadProcessMemory`.
@@ -103,13 +105,19 @@ fn scan_chunk(
     None
 }
 
-/// Full-memory walk for the title owner. Bounded, fault-safe, and only called on the throttle boundary.
+/// Incremental memory walk for the title owner. Each call scans at most `SCAN_CHUNKS_PER_CALL`
+/// 64KB chunks, then stores a cursor for the next frame. This preserves the same fault-safe evidence
+/// path as the previous full scan but avoids blocking the game thread for seconds during boot.
 fn scan_for_owner(base: usize) -> Option<usize> {
     let want_vtable = base.checked_add(TITLE_OWNER_VTABLE_RVA)?;
     let want_table = base.checked_add(INNER_TITLE_STATE_TABLE_RVA)?;
-    let mut buf = vec![0u8; SCAN_CHUNK];
-    let mut address: usize = 0;
-    while address < SCAN_MAX {
+    let mut buf = [0u8; SCAN_CHUNK];
+    let mut address = SCAN_CURSOR
+        .load(Ordering::SeqCst)
+        .min(SCAN_MAX.saturating_sub(1));
+    let mut chunks_scanned = 0usize;
+
+    while address < SCAN_MAX && chunks_scanned < SCAN_CHUNKS_PER_CALL {
         let mut info = MEMORY_BASIC_INFORMATION::default();
         let queried = unsafe {
             VirtualQuery(
@@ -119,53 +127,58 @@ fn scan_for_owner(base: usize) -> Option<usize> {
             )
         };
         if queried == 0 {
-            break;
+            SCAN_CURSOR.store(0, Ordering::SeqCst);
+            return None;
         }
         let region_base = info.BaseAddress as usize;
         let size = info.RegionSize;
-        let next = region_base.saturating_add(size);
+        let next_region = region_base.saturating_add(size);
         let protect = info.Protect.0;
         let readable = info.State.0 == MEM_COMMIT.0
             && protect & PAGE_NOACCESS.0 == 0
             && protect & PAGE_GUARD.0 == 0;
         if readable && size >= TITLE_OWNER_STATE_OFFSET + core::mem::size_of::<i32>() {
-            let mut region_off = 0usize;
-            while region_off < size {
-                let chunk = (size - region_off).min(SCAN_CHUNK);
-                let chunk_base = region_base + region_off;
-                if let Some(hit) = scan_chunk(want_vtable, want_table, chunk_base, chunk, &mut buf)
-                {
-                    return Some(hit);
-                }
-                region_off += chunk;
+            let region_off = address.saturating_sub(region_base).min(size);
+            let chunk = (size - region_off).min(SCAN_CHUNK);
+            let chunk_base = region_base + region_off;
+            if let Some(hit) = scan_chunk(want_vtable, want_table, chunk_base, chunk, &mut buf) {
+                SCAN_CURSOR.store(0, Ordering::SeqCst);
+                return Some(hit);
             }
+            chunks_scanned += 1;
+            let next_chunk = chunk_base.saturating_add(chunk);
+            address = if next_chunk < next_region {
+                next_chunk
+            } else {
+                next_region
+            };
+        } else {
+            address = next_region;
         }
-        if next <= address {
-            break;
+        if address <= region_base {
+            SCAN_CURSOR.store(0, Ordering::SeqCst);
+            return None;
         }
-        address = next;
     }
+
+    if address >= SCAN_MAX {
+        address = 0;
+    }
+    SCAN_CURSOR.store(address, Ordering::SeqCst);
     None
 }
 
-/// Resolve the title owner: return the cached pointer if `[ptr+0] == base+vtable` still holds; otherwise
-/// scan (THROTTLED to once every `SCAN_THROTTLE` calls while not found). Caches and logs once on capture.
+/// Resolve the title owner: return the cached pointer if `[ptr+0] == base+vtable` still holds;
+/// otherwise advance the bounded incremental scan. Caches and logs once on capture.
 pub fn find_title_owner(base: usize) -> Option<usize> {
     let cached = CACHED_OWNER.load(Ordering::SeqCst);
     if cached != 0 {
         if unsafe { read_usize(cached) } == Some(base + TITLE_OWNER_VTABLE_RVA) {
             return Some(cached);
         }
-        // The owner was freed / vtable no longer matches -> invalidate and rescan (throttled).
+        // The owner was freed / vtable no longer matches -> invalidate and resume scanning.
         CACHED_OWNER.store(0, Ordering::SeqCst);
     }
-
-    let countdown = SCAN_COUNTDOWN.load(Ordering::SeqCst);
-    if countdown > 0 {
-        SCAN_COUNTDOWN.store(countdown - 1, Ordering::SeqCst);
-        return None;
-    }
-    SCAN_COUNTDOWN.store(SCAN_THROTTLE, Ordering::SeqCst);
 
     let owner = scan_for_owner(base)?;
     CACHED_OWNER.store(owner, Ordering::SeqCst);
