@@ -38,7 +38,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // (loading starts only after the pick releases the hold).
                 save_picker_overlay_process_completion();
                 let Ok(player) = (unsafe { PlayerIns::local_player_mut() }) else {
-                    native_overlay_player_presence_tick(false);
+                    native_overlay_release_tick(false);
                     let mut state = state_or_return(&state);
                     state.game_task_ticks += GAME_TASK_TICK_INCREMENT;
                     // Install the MessageBoxDialog builder hook for native telemetry. Product
@@ -246,7 +246,9 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     return;
                 };
 
-                native_overlay_player_presence_tick(true);
+                let native_overlay_release_ready = player.chr_ins.chr_flags1c4.is_render_group_enabled()
+                    && player.chr_ins.chr_flags1c5.enable_render();
+                native_overlay_release_tick(native_overlay_release_ready);
                 let mut state = state_or_return(&state);
                 state.game_task_ticks += GAME_TASK_TICK_INCREMENT;
                 // In-world: latch OFF the startup popup auto-accept (in-game dialogs need real

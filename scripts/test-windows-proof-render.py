@@ -56,6 +56,25 @@ def test_source_scan_rejects_hard_linked_graphics_entrypoint() -> None:
     assert any("D3D12CreateDevice" in finding.line for finding in findings)
 
 
+def test_source_scan_rejects_top_level_native_bridge_window() -> None:
+    checker = load_checker()
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "src"
+        src.mkdir()
+        (src / "native_overlay.rs").write_text(
+            "CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, class_name, title, WS_POPUP, 0, 0, SM_CXSCREEN, SM_CYSCREEN, None, None, None, None);\n",
+            encoding="utf-8",
+        )
+        old_src_root = checker.SRC_ROOT
+        try:
+            checker.SRC_ROOT = src
+            findings = checker.source_findings()
+        finally:
+            checker.SRC_ROOT = old_src_root
+    assert findings
+    assert any("child/owned game-window" in finding.message for finding in findings)
+
+
 def test_source_scan_allows_dynamic_wrapper_names() -> None:
     checker = load_checker()
     with tempfile.TemporaryDirectory() as tmp:
@@ -79,6 +98,7 @@ def main() -> int:
     tests = [
         test_parse_imported_dlls_flags_case_insensitively,
         test_source_scan_rejects_hard_linked_graphics_entrypoint,
+        test_source_scan_rejects_top_level_native_bridge_window,
         test_source_scan_allows_dynamic_wrapper_names,
     ]
     for test in tests:

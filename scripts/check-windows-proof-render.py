@@ -41,6 +41,17 @@ BANNED_HARD_LINK_SYMBOLS = {
     "D3DCompile",
 }
 
+# The bridge cover must be attached to Elden Ring's own HWND, not a separate desktop/topmost window.
+# A top-level overlay can move independently, spawn independently, and fail to cover the real loading
+# surface -- exactly the product failure this branch is eliminating.
+BANNED_NATIVE_BRIDGE_WINDOW_TOKENS = {
+    "WS_EX_TOPMOST",
+    "WS_EX_TOOLWINDOW",
+    "SM_CXSCREEN",
+    "SM_CYSCREEN",
+    "GetSystemMetrics",
+}
+
 ALLOWED_SOURCE_LINE_SNIPPETS = (
     "Raw = unsafe extern",
     "s!(\"",
@@ -77,26 +88,38 @@ def source_findings() -> list[Finding]:
     symbol_pattern = re.compile(r"\b(" + "|".join(map(re.escape, BANNED_HARD_LINK_SYMBOLS)) + r")\b")
     for path in rust_files():
         for line_number, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
-            if not symbol_pattern.search(line):
-                continue
             stripped = line.strip()
-            if stripped.startswith("//") or stripped.startswith("///") or stripped.startswith("//!"):
-                continue
-            if '"' in line:
-                continue
-            if any(snippet in line for snippet in ALLOWED_SOURCE_LINE_SNIPPETS):
-                continue
-            if re.search(r"\b(?:let|const)\s+[A-Za-z0-9_]+\s*=\s*", line):
-                # Local variable names and prose constants are not hard imports by themselves.
-                continue
-            findings.append(
-                Finding(
-                    path,
-                    line_number,
-                    "Windows-proof render must not hard-link D3D12/DXGI/compiler entrypoints; dynamic-load or move behind a dev-only artifact",
-                    line.strip(),
+            is_comment = stripped.startswith(("//", "///", "//!"))
+            if symbol_pattern.search(line):
+                if is_comment:
+                    continue
+                if '"' in line:
+                    continue
+                if any(snippet in line for snippet in ALLOWED_SOURCE_LINE_SNIPPETS):
+                    continue
+                if re.search(r"\b(?:let|const)\s+[A-Za-z0-9_]+\s*=\s*", line):
+                    # Local variable names and prose constants are not hard imports by themselves.
+                    continue
+                findings.append(
+                    Finding(
+                        path,
+                        line_number,
+                        "Windows-proof render must not hard-link D3D12/DXGI/compiler entrypoints; dynamic-load or move behind a dev-only artifact",
+                        line.strip(),
+                    )
                 )
-            )
+            if path.name == "native_overlay.rs":
+                for token in BANNED_NATIVE_BRIDGE_WINDOW_TOKENS:
+                    if token in line and not is_comment:
+                        findings.append(
+                            Finding(
+                                path,
+                                line_number,
+                                "native bridge cover must be a child/owned game-window surface, not a separate top-level/screen-sized overlay",
+                                line.strip(),
+                            )
+                        )
+                        break
     return findings
 
 

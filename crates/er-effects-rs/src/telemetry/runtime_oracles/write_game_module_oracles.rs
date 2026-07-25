@@ -1658,6 +1658,16 @@ fn write_game_module_oracles(body: &mut String) {
         );
         push_json_usize(
             body,
+            "oracle_native_overlay_parent_hwnd",
+            NATIVE_OVERLAY_PARENT_HWND.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_child_window",
+            NATIVE_OVERLAY_CHILD_WINDOW.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
             "oracle_native_overlay_handoff_ready",
             NATIVE_OVERLAY_HANDOFF_READY.load(Ordering::SeqCst),
         );

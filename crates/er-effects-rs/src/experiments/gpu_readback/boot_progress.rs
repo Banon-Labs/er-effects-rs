@@ -957,6 +957,75 @@ fn boot_view_rasterize(
     buf
 }
 
+/// Device-agnostic CPU frame for the native bridge renderer: either the tight progress strip or a
+/// full-screen black/picker/background frame, plus the destination rectangle on the caller's backbuffer.
+pub(crate) struct BootViewFrame {
+    pub(crate) rgba: Vec<u8>,
+    pub(crate) w: usize,
+    pub(crate) h: usize,
+    pub(crate) dx: usize,
+    pub(crate) dy: usize,
+}
+
+pub(crate) fn boot_view_render_frame(bw: usize, bh: usize) -> BootViewFrame {
+    if bw == 0 || bh == 0 {
+        return BootViewFrame {
+            rgba: Vec::new(),
+            w: 0,
+            h: 0,
+            dx: 0,
+            dy: 0,
+        };
+    }
+    let bw32 = bw as u32;
+    let bh32 = bh as u32;
+    let text_scale = boot_view_text_scale(bh32);
+    let strip_w = (bw32 * BOOT_VIEW_STRIP_W_NUM / BOOT_VIEW_STRIP_W_DEN)
+        .max(BOOT_VIEW_STRIP_MIN_W)
+        .min(bw32);
+    let strip_h = (boot_view_strip_height(text_scale) as u32).min(bh32);
+    let strip_dx = (bw32 - strip_w) / 2;
+    let strip_dy = (bh32 * BOOT_VIEW_STRIP_Y_NUM / BOOT_VIEW_STRIP_Y_DEN).min(bh32 - strip_h);
+    let bg = boot_bg_image();
+    let picker_active = save_picker_overlay_active();
+    let full_frame = bg.is_some() || picker_active;
+    let (region_w, region_h, dx, dy, content_x, content_y, content_w) = if full_frame {
+        (
+            bw,
+            bh,
+            0usize,
+            0usize,
+            strip_dx as usize,
+            strip_dy as usize,
+            strip_w as usize,
+        )
+    } else {
+        (
+            strip_w as usize,
+            strip_h as usize,
+            strip_dx as usize,
+            strip_dy as usize,
+            0usize,
+            0usize,
+            strip_w as usize,
+        )
+    };
+    let (ms_idx, permille) = boot_view_progress();
+    let mut rgba = boot_view_rasterize(
+        region_w, region_h, ms_idx, permille, content_x, content_y, content_w, bg, text_scale,
+    );
+    if picker_active && overlay_save_picker_onto(&mut rgba, region_w, region_h) {
+        SAVE_PICKER_OVERLAY_DRAW_HITS.fetch_add(1, Ordering::SeqCst);
+    }
+    BootViewFrame {
+        rgba,
+        w: region_w,
+        h: region_h,
+        dx,
+        dy,
+    }
+}
+
 /// One-time command-object init (device derived from the backbuffer; own DIRECT queue -- never the
 /// game's). Mirrors the proven portrait-overlay init; separate objects on purpose.
 unsafe fn boot_view_init(backbuffer: &ID3D12Resource) -> bool {

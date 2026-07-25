@@ -37,6 +37,8 @@ def good_telemetry() -> dict[str, Any]:
         "oracle_native_overlay_covering_loading_hits": 2,
         "oracle_native_overlay_show": 0,
         "oracle_native_overlay_content_frames": 2,
+        "oracle_native_overlay_child_window": 1,
+        "oracle_native_overlay_parent_hwnd": 0x1234,
         "oracle_native_overlay_pixel_probe_matches": 1,
         "oracle_native_overlay_pixel_probe_rgba": 0x2EB8EDFF,
         "oracle_scaleform_memoryfile_custom_asset_hits": 0,
@@ -69,6 +71,7 @@ def assert_rejects_missing(key: str) -> None:
 def test_require_world_ready_accepts_full_positive_contract() -> None:
     got = verdict(good_telemetry())
     assert got["watcher_pass"] is True
+    assert got["native_overlay_child_attached"] is True
     assert got["native_overlay_proven"] is True
     assert got["native_overlay_handoff_observed"] is True
     assert got["native_overlay_visible_during_loading"] is True
@@ -83,6 +86,14 @@ def test_rejects_forbidden_backend_hit() -> None:
     telemetry = good_telemetry()
     telemetry["oracle_forbidden_render_backend_hits"] = 1
     assert not verdict(telemetry)["windows_proof_render_runtime"]
+
+
+def test_rejects_missing_child_window_attachment() -> None:
+    assert_rejects_missing("oracle_native_overlay_child_window")
+
+
+def test_rejects_missing_parent_hwnd() -> None:
+    assert_rejects_missing("oracle_native_overlay_parent_hwnd")
 
 
 def test_rejects_missing_bridge_pixel_match() -> None:
@@ -162,6 +173,8 @@ def main() -> int:
     tests = [
         test_require_world_ready_accepts_full_positive_contract,
         test_rejects_forbidden_backend_hit,
+        test_rejects_missing_child_window_attachment,
+        test_rejects_missing_parent_hwnd,
         test_rejects_missing_bridge_pixel_match,
         test_rejects_missing_loading_visibility,
         test_rejects_missing_full_content_proof,

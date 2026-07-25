@@ -1,10 +1,10 @@
-//! Windows-proof bridge renderer: a separate top-level window with its own D3D12 device/swapchain.
+//! Windows-proof bridge renderer: a child overlay inside Elden Ring's own window with its own D3D12 device/swapchain.
 //!
 //! The native loading/title GFx surfaces are game-owned and have disjoint startup/teardown lifetimes during
 //! vanilla loading/autoload. This bridge owns the full launch/load cover without touching Elden Ring's D3D
-//! device, swapchain, or Present path. It starts visible, renders on an isolated device, hides when a live
-//! player exists, and shows again on later player-absent load/title phases. GFx/MemoryFile remains an
-//! opportunistic asset seam, not the product cover surface.
+//! device, swapchain, or Present path. It starts visible, renders on an isolated device, hides when the
+//! loaded character render flags are ready, and shows again on later non-ready load/title phases.
+//! GFx/MemoryFile remains an opportunistic asset seam, not the product cover surface.
 
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
@@ -17,12 +17,14 @@ use windows::Win32::Graphics::Direct3D12::{
     D3D12_COMMAND_QUEUE_FLAG_NONE, D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
     D3D12_DESCRIPTOR_HEAP_DESC, D3D12_DESCRIPTOR_HEAP_FLAG_NONE, D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
     D3D12_FENCE_FLAG_NONE, D3D12_HEAP_FLAG_NONE, D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_READBACK,
-    D3D12_MEMORY_POOL_UNKNOWN, D3D12_PLACED_SUBRESOURCE_FOOTPRINT, D3D12_RANGE,
-    D3D12_RESOURCE_BARRIER, D3D12_RESOURCE_BARRIER_0, D3D12_RESOURCE_BARRIER_FLAG_NONE,
-    D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, D3D12_RESOURCE_DESC, D3D12_RESOURCE_DIMENSION_BUFFER,
-    D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE,
-    D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES,
-    D3D12_RESOURCE_TRANSITION_BARRIER, D3D12_TEXTURE_COPY_LOCATION, D3D12_TEXTURE_COPY_LOCATION_0,
+    D3D12_HEAP_TYPE_UPLOAD, D3D12_MEMORY_POOL_UNKNOWN, D3D12_PLACED_SUBRESOURCE_FOOTPRINT,
+    D3D12_RANGE, D3D12_RESOURCE_BARRIER, D3D12_RESOURCE_BARRIER_0,
+    D3D12_RESOURCE_BARRIER_FLAG_NONE, D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, D3D12_RESOURCE_DESC,
+    D3D12_RESOURCE_DIMENSION_BUFFER, D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_FLAG_NONE,
+    D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE,
+    D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_STATE_PRESENT,
+    D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES, D3D12_RESOURCE_TRANSITION_BARRIER,
+    D3D12_TEXTURE_COPY_LOCATION, D3D12_TEXTURE_COPY_LOCATION_0,
     D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
     D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_TEXTURE_LAYOUT_UNKNOWN, ID3D12CommandAllocator,
     ID3D12CommandQueue, ID3D12DescriptorHeap, ID3D12Device, ID3D12Fence, ID3D12GraphicsCommandList,
@@ -37,13 +39,18 @@ use windows::Win32::Graphics::Dxgi::{
     IDXGISwapChain3,
 };
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW};
-use windows::Win32::System::Threading::{CreateEventW, INFINITE, WaitForSingleObject};
-use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetSystemMetrics, MSG, PM_REMOVE,
-    PeekMessageW, RegisterClassW, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_SHOWNOACTIVATE, ShowWindow,
-    TranslateMessage, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+use windows::Win32::System::Threading::{
+    CreateEventW, GetCurrentProcessId, INFINITE, WaitForSingleObject,
 };
-use windows::core::{Error, HRESULT, Interface, PCSTR, w};
+use windows::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetClientRect,
+    GetWindowThreadProcessId, IsWindowVisible, MSG, PM_REMOVE, PeekMessageW, RegisterClassW,
+    SW_HIDE, SW_SHOWNOACTIVATE, ShowWindow, TranslateMessage, WNDCLASSW, WS_CHILD,
+    WS_EX_NOACTIVATE, WS_POPUP, WS_VISIBLE,
+};
+use windows::core::{BOOL, Error, HRESULT, Interface, PCSTR, w};
+
+use super::gpu_readback::boot_view_render_frame;
 
 use crate::constants::{
     LOADING_SCREEN_BAR_ENABLED, LOADING_SCREEN_BAR_MAX_FRAME, LOADING_SCREEN_CLOSE_SENT,
@@ -78,10 +85,15 @@ pub(crate) static NATIVE_OVERLAY_PIXEL_PROBE_HITS: AtomicUsize = AtomicUsize::ne
 pub(crate) static NATIVE_OVERLAY_PIXEL_PROBE_MATCHES: AtomicUsize = AtomicUsize::new(0);
 /// Last readback pixel as packed RGBA8.
 pub(crate) static NATIVE_OVERLAY_PIXEL_PROBE_RGBA: AtomicUsize = AtomicUsize::new(0);
+/// Nonzero parent game HWND used for the bridge child window.
+pub(crate) static NATIVE_OVERLAY_PARENT_HWND: AtomicUsize = AtomicUsize::new(0);
+/// 1 when the bridge HWND was created as a child of the game's own visible window.
+pub(crate) static NATIVE_OVERLAY_CHILD_WINDOW: AtomicUsize = AtomicUsize::new(0);
 
 const FAILURE_DYNAMIC_FACTORY: usize = 1;
 const FAILURE_DYNAMIC_DEVICE: usize = 2;
 const FAILURE_WINDOW: usize = 3;
+const FAILURE_PARENT_WINDOW: usize = 4;
 
 pub(crate) fn install_native_overlay() {
     if NATIVE_OVERLAY_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
@@ -94,16 +106,16 @@ pub(crate) fn install_native_overlay() {
         });
 }
 
-pub(crate) fn native_overlay_player_presence_tick(player_available: bool) {
+pub(crate) fn native_overlay_release_tick(release_ready: bool) {
     let handoff_ready = native_loading_surface_handoff_ready();
     NATIVE_OVERLAY_HANDOFF_READY.store(usize::from(handoff_ready), Ordering::SeqCst);
     if handoff_ready {
         NATIVE_OVERLAY_HANDOFF_READY_HITS.fetch_add(1, Ordering::SeqCst);
-        if !player_available {
+        if !release_ready {
             NATIVE_OVERLAY_COVERING_LOADING_HITS.fetch_add(1, Ordering::SeqCst);
         }
     }
-    NATIVE_OVERLAY_SHOW.store(usize::from(!player_available), Ordering::SeqCst);
+    NATIVE_OVERLAY_SHOW.store(usize::from(!release_ready), Ordering::SeqCst);
 }
 
 fn native_loading_surface_handoff_ready() -> bool {
@@ -120,6 +132,46 @@ unsafe extern "system" fn overlay_wndproc(
     lparam: LPARAM,
 ) -> LRESULT {
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+}
+
+unsafe extern "system" fn enum_current_process_visible_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    if pid == unsafe { GetCurrentProcessId() } && unsafe { IsWindowVisible(hwnd) }.as_bool() {
+        let out = lparam.0 as *mut HWND;
+        if !out.is_null() {
+            unsafe { *out = hwnd };
+            return BOOL(0);
+        }
+    }
+    BOOL(1)
+}
+
+fn find_current_process_visible_window() -> Option<HWND> {
+    let mut hwnd = HWND(std::ptr::null_mut());
+    unsafe {
+        let _ = EnumWindows(
+            Some(enum_current_process_visible_window),
+            LPARAM((&mut hwnd as *mut HWND) as isize),
+        );
+    }
+    if !hwnd.0.is_null() { Some(hwnd) } else { None }
+}
+
+fn wait_for_parent_game_window() -> Option<(HWND, i32, i32)> {
+    let (_tick_tx, tick_rx) = std::sync::mpsc::channel::<()>();
+    for _ in 0..600 {
+        if let Some(parent) = find_current_process_visible_window() {
+            let mut rect = RECT::default();
+            if unsafe { GetClientRect(parent, &mut rect) }.is_ok() {
+                let w = (rect.right - rect.left).max(1);
+                let h = (rect.bottom - rect.top).max(1);
+                return Some((parent, w, h));
+            }
+        }
+        let _ = tick_rx.recv_timeout(std::time::Duration::from_millis(16));
+    }
+    None
 }
 
 fn dynamic_graphics_proc(module: windows::core::PCWSTR, proc: PCSTR) -> Option<*mut c_void> {
@@ -270,6 +322,188 @@ unsafe fn create_bridge_readback(
     Some((out?, footprint, total_bytes))
 }
 
+unsafe fn create_bridge_upload(
+    device: &ID3D12Device,
+    width: usize,
+    height: usize,
+) -> Option<ID3D12Resource> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        Alignment: 0,
+        Width: width as u64,
+        Height: height as u32,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
+        Flags: D3D12_RESOURCE_FLAG_NONE,
+    };
+    let mut total_bytes: u64 = 0;
+    unsafe {
+        device.GetCopyableFootprints(&desc, 0, 1, 0, None, None, None, Some(&mut total_bytes))
+    };
+    if total_bytes == 0 {
+        return None;
+    }
+    let heap = D3D12_HEAP_PROPERTIES {
+        Type: D3D12_HEAP_TYPE_UPLOAD,
+        CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+        MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+        CreationNodeMask: 1,
+        VisibleNodeMask: 1,
+    };
+    let buf_desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+        Alignment: 0,
+        Width: total_bytes,
+        Height: 1,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: DXGI_FORMAT_UNKNOWN,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+        Flags: D3D12_RESOURCE_FLAG_NONE,
+    };
+    let mut out = None;
+    if unsafe {
+        device.CreateCommittedResource(
+            &heap,
+            D3D12_HEAP_FLAG_NONE,
+            &buf_desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            None,
+            &mut out,
+        )
+    }
+    .is_err()
+    {
+        return None;
+    }
+    out
+}
+
+unsafe fn copy_bridge_content_frame(
+    device: &ID3D12Device,
+    list: &ID3D12GraphicsCommandList,
+    backbuffer: &ID3D12Resource,
+    upload: &ID3D12Resource,
+    backbuffer_width: usize,
+    backbuffer_height: usize,
+) -> bool {
+    let frame = boot_view_render_frame(backbuffer_width, backbuffer_height);
+    if frame.w == 0
+        || frame.h == 0
+        || frame.rgba.len() < frame.w.saturating_mul(frame.h).saturating_mul(4)
+    {
+        return false;
+    }
+    let region_desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        Alignment: 0,
+        Width: frame.w as u64,
+        Height: frame.h as u32,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
+        Flags: D3D12_RESOURCE_FLAG_NONE,
+    };
+    let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+    let mut total_bytes: u64 = 0;
+    unsafe {
+        device.GetCopyableFootprints(
+            &region_desc,
+            0,
+            1,
+            0,
+            Some(&mut footprint),
+            None,
+            None,
+            Some(&mut total_bytes),
+        )
+    };
+    let row_pitch = footprint.Footprint.RowPitch as usize;
+    let src_row = frame.w * 4;
+    if total_bytes == 0 || row_pitch < src_row {
+        return false;
+    }
+    let mut mapped: *mut c_void = std::ptr::null_mut();
+    if unsafe { upload.Map(0, None, Some(&mut mapped)) }.is_err() || mapped.is_null() {
+        return false;
+    }
+    {
+        let dst =
+            unsafe { std::slice::from_raw_parts_mut(mapped as *mut u8, total_bytes as usize) };
+        for y in 0..frame.h {
+            let so = y * src_row;
+            let dofs = y * row_pitch;
+            if dofs + src_row > dst.len() || so + src_row > frame.rgba.len() {
+                break;
+            }
+            dst[dofs..dofs + src_row].copy_from_slice(&frame.rgba[so..so + src_row]);
+        }
+    }
+    unsafe { upload.Unmap(0, None) };
+
+    unsafe {
+        overlay_transition(
+            list,
+            backbuffer,
+            D3D12_RESOURCE_STATE_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+        )
+    };
+    let mut dst_loc = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(backbuffer.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            SubresourceIndex: 0,
+        },
+    };
+    let mut src_loc = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(upload.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            PlacedFootprint: footprint,
+        },
+    };
+    unsafe {
+        list.CopyTextureRegion(
+            &dst_loc,
+            frame.dx as u32,
+            frame.dy as u32,
+            0,
+            &src_loc,
+            None,
+        )
+    };
+    unsafe { ManuallyDrop::drop(&mut dst_loc.pResource) };
+    unsafe { ManuallyDrop::drop(&mut src_loc.pResource) };
+    unsafe {
+        overlay_transition(
+            list,
+            backbuffer,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_RENDER_TARGET,
+        )
+    };
+    true
+}
+
 unsafe fn record_bridge_pixel_copy(
     list: &ID3D12GraphicsCommandList,
     backbuffer: &ID3D12Resource,
@@ -376,25 +610,25 @@ unsafe fn native_overlay_run() {
     let _atom = unsafe { RegisterClassW(&wc) };
     NATIVE_OVERLAY_STAGE.store(2, Ordering::SeqCst);
 
-    let sw = unsafe { GetSystemMetrics(SM_CXSCREEN) };
-    let sh = unsafe { GetSystemMetrics(SM_CYSCREEN) };
-    let (win_w, win_h) = if sw > 0 && sh > 0 {
-        (sw, sh)
-    } else {
-        (1920, 1080)
+    let Some((parent_hwnd, win_w, win_h)) = wait_for_parent_game_window() else {
+        NATIVE_OVERLAY_FAILURE.store(FAILURE_PARENT_WINDOW, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "native-overlay: no visible current-process parent game window found"
+        ));
+        return;
     };
 
     let hwnd = match unsafe {
         CreateWindowExW(
-            WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+            WS_EX_NOACTIVATE,
             class_name,
             w!("er-effects bridge cover"),
-            WS_POPUP,
+            WS_CHILD | WS_VISIBLE,
             0,
             0,
             win_w,
             win_h,
-            None,
+            Some(parent_hwnd),
             None,
             Some(hinstance.into()),
             None,
@@ -409,10 +643,12 @@ unsafe fn native_overlay_run() {
             return;
         }
     };
+    NATIVE_OVERLAY_PARENT_HWND.store(parent_hwnd.0 as usize, Ordering::SeqCst);
+    NATIVE_OVERLAY_CHILD_WINDOW.store(1, Ordering::SeqCst);
     NATIVE_OVERLAY_STAGE.store(3, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "native-overlay: bridge window created hwnd=0x{:x} {win_w}x{win_h}",
-        hwnd.0 as usize
+        "native-overlay: child bridge window created parent=0x{:x} hwnd=0x{:x} {win_w}x{win_h}",
+        parent_hwnd.0 as usize, hwnd.0 as usize
     ));
 
     let factory: IDXGIFactory4 =
@@ -531,6 +767,7 @@ unsafe fn native_overlay_run() {
     NATIVE_OVERLAY_STAGE.store(8, Ordering::SeqCst);
 
     let bridge_pixel_readback = unsafe { create_bridge_readback(&device, &backbuffers[0]) };
+    let bridge_upload = unsafe { create_bridge_upload(&device, win_w as usize, win_h as usize) };
 
     let allocator: ID3D12CommandAllocator =
         match unsafe { device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) } {
@@ -572,7 +809,8 @@ unsafe fn native_overlay_run() {
 
     NATIVE_OVERLAY_STAGE.store(9, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "native-overlay: isolated D3D12 bridge ready; entering render loop"
+        "native-overlay: isolated D3D12 bridge ready; entering render loop (content_upload={})",
+        bridge_upload.is_some()
     ));
 
     let (_tick_tx, tick_rx) = std::sync::mpsc::channel::<()>();
@@ -625,6 +863,20 @@ unsafe fn native_overlay_run() {
             ptr: rtv_base.ptr + idx * rtv_size,
         };
         unsafe { list.ClearRenderTargetView(handle, &bridge_clear_color(), None) };
+        if let Some(upload) = bridge_upload.as_ref()
+            && unsafe {
+                copy_bridge_content_frame(
+                    &device,
+                    &list,
+                    bb,
+                    upload,
+                    win_w as usize,
+                    win_h as usize,
+                )
+            }
+        {
+            NATIVE_OVERLAY_CONTENT_FRAMES.fetch_add(1, Ordering::SeqCst);
+        }
         let marker_rect = bridge_marker_rect();
         unsafe { list.ClearRenderTargetView(handle, &bridge_marker_color(), Some(&[marker_rect])) };
         NATIVE_OVERLAY_DRAW_HITS.fetch_add(1, Ordering::SeqCst);
