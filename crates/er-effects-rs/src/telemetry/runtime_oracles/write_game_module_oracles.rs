@@ -1059,6 +1059,11 @@ fn write_game_module_oracles(body: &mut String) {
         ));
         push_json_usize(
             body,
+            "oracle_scaleform_memoryfile_custom_asset_hits",
+            loading_bg_portrait_redirect_commits,
+        );
+        push_json_usize(
+            body,
             "oracle_title_custom_cover_black_cover_window",
             title_custom_cover_black_cover_window,
         );
