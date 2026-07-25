@@ -126,7 +126,9 @@ def resolve_staging_summary(source_mod: Path, override: Path | None) -> Path:
 def resolve_candidate_weights(source_mod: Path, override: Path | None) -> Path:
     if override is not None:
         return require_file(override, "candidate remesh weights")
-    return require_file(source_mod.parent / "closed_remesh_weights.tsv", "candidate remesh weights")
+    return require_file(
+        source_mod.parent / "closed_remesh_weights.tsv", "candidate remesh weights"
+    )
 
 
 def run_build_time_guard(
@@ -158,7 +160,9 @@ def run_build_time_guard(
         check=False,
     )
     if result.returncode != 0:
-        raise SystemExit(f"Mushroom Man build-time visual guard failed; see {report_path}")
+        raise SystemExit(
+            f"Mushroom Man build-time visual guard failed; see {report_path}"
+        )
     return report_path
 
 

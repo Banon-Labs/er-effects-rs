@@ -57,7 +57,8 @@ def find_dictionary(explicit: Path | None, repo_root: Path) -> Path:
         candidates.append(Path(env_path))
     candidates.extend(
         [
-            repo_root / ".deps/Smithbox/Assets/File Dictionaries/ER-File-Dictionary.json",
+            repo_root
+            / ".deps/Smithbox/Assets/File Dictionaries/ER-File-Dictionary.json",
             repo_root / "../Smithbox/Assets/File Dictionaries/ER-File-Dictionary.json",
             repo_root / "../smithbox/Assets/File Dictionaries/ER-File-Dictionary.json",
             Path("/mnt/d/Smithbox/Assets/File Dictionaries/ER-File-Dictionary.json"),
@@ -66,7 +67,9 @@ def find_dictionary(explicit: Path | None, repo_root: Path) -> Path:
     for candidate in candidates:
         if candidate.is_file():
             return candidate
-    raise FileNotFoundError("could not find ER-File-Dictionary.json for FG_A coverage guard")
+    raise FileNotFoundError(
+        "could not find ER-File-Dictionary.json for FG_A coverage guard"
+    )
 
 
 def dictionary_fg_names(dictionary_path: Path) -> set[str]:
@@ -77,7 +80,11 @@ def dictionary_fg_names(dictionary_path: Path) -> set[str]:
             continue
         path = str(entry.get("Path", "")).lower()
         filename = str(entry.get("Filename", "")).lower()
-        if path.startswith("/parts/") and path.endswith(PART_EXT) and filename.startswith("fg_a_"):
+        if (
+            path.startswith("/parts/")
+            and path.endswith(PART_EXT)
+            and filename.startswith("fg_a_")
+        ):
             names.add(Path(path).name)
     if not names:
         raise ValueError(f"dictionary has no FG_A part entries: {dictionary_path}")
@@ -116,14 +123,18 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     source_counts = load_weight_counts(args.source_weights)
     flver_guard_status = "unknown"
     if args.flver_guard and args.flver_guard.exists():
-        flver_guard_status = json.loads(args.flver_guard.read_text(encoding="utf-8")).get(
-            "status", "unknown"
-        )
+        flver_guard_status = json.loads(
+            args.flver_guard.read_text(encoding="utf-8")
+        ).get("status", "unknown")
 
     alerts: list[dict[str, Any]] = []
     fg_mode = staging_summary.get("fg_alias_mode", "")
     staged_fg_count = int(staging_summary.get("fg_hidden_face_files", "0"))
-    if fg_mode != "dictionary" or staged_fg_count < len(expected_fg) or not expected_fg <= actual_fg:
+    if (
+        fg_mode != "dictionary"
+        or staged_fg_count < len(expected_fg)
+        or not expected_fg <= actual_fg
+    ):
         alerts.append(
             {
                 "code": "MUSHROOM_HIDE_FG_ALIAS_COVERAGE_INCOMPLETE",
@@ -189,7 +200,9 @@ def main() -> int:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(report, indent=2), encoding="utf-8")
         print(f"wrote {args.output}")
-    print(f"mushroom_build_time_guard_status={report['status']} alerts={len(report['alerts'])}")
+    print(
+        f"mushroom_build_time_guard_status={report['status']} alerts={len(report['alerts'])}"
+    )
     for alert in report["alerts"]:
         print(f"ALERT {alert['code']}: {alert['message']}")
     return 0 if report["status"] == "pass" else 1

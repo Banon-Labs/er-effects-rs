@@ -230,11 +230,15 @@ def enforce_lower_arm_surface_coverage(
             continue
         desired_count = math.ceil(len(source_region) * MIN_LOWER_ARM_COVERAGE_RATIO)
         current_count = sum(
-            1 for weights in transferred if weights.get(bone, 0.0) >= ARM_WEIGHT_THRESHOLD
+            1
+            for weights in transferred
+            if weights.get(bone, 0.0) >= ARM_WEIGHT_THRESHOLD
         )
         if current_count >= desired_count:
             continue
-        selected = lower_arm_candidate_vertices(output_vertices, source_region, desired_count)
+        selected = lower_arm_candidate_vertices(
+            output_vertices, source_region, desired_count
+        )
         for vertex_index in selected:
             weights = transferred[vertex_index]
             weights[bone] = max(weights.get(bone, 0.0), COVERAGE_BOOST_WEIGHT)
