@@ -4,7 +4,11 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -122,6 +126,30 @@ def test_short_mode_does_not_require_world_ready_specific_oracles() -> None:
     assert got["windows_proof_render_runtime"] is True
 
 
+def test_require_handoff_alias_uses_world_stable_target() -> None:
+    script = REPO_ROOT / "scripts" / "run-windows-proof-render-smoke.sh"
+    for flag in ["--require-world-ready", "--require-handoff"]:
+        with tempfile.TemporaryDirectory() as tmp:
+            artifact = Path(tmp) / "artifact"
+            subprocess.run(
+                ["bash", str(script), "--dry-run", flag],
+                check=True,
+                cwd=REPO_ROOT,
+                env={**os.environ, "ARTIFACT_DIR": str(artifact)},
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            summary = json.loads((artifact / "dry-run-summary.json").read_text(encoding="utf-8"))
+            assert summary["watch_target"] == "world-stable", flag
+            assert summary["require_world_ready"] == 1, flag
+
+
+def test_native_overlay_handoff_target_is_not_registered() -> None:
+    watcher = (REPO_ROOT / "scripts" / "er-readiness-watch.py").read_text(encoding="utf-8")
+    assert "native-overlay-handoff" not in watcher
+
+
 def main() -> int:
     tests = [
         test_require_world_ready_accepts_full_positive_contract,
@@ -132,6 +160,8 @@ def main() -> int:
         test_does_not_require_scaleform_memoryfile_asset_commit,
         test_rejects_old_gfx_handoff_semantics,
         test_short_mode_does_not_require_world_ready_specific_oracles,
+        test_require_handoff_alias_uses_world_stable_target,
+        test_native_overlay_handoff_target_is_not_registered,
     ]
     for test in tests:
         test()
