@@ -63,7 +63,7 @@ fn write_game_module_oracles(body: &mut String) {
                 sw_last_slot as i64
             };
             body.push_str(&format!(
-                "  \"oracle_switch_arm_count\": {},\n  \"oracle_switch_teardown_count\": {},\n  \"oracle_switch_deferred_count\": {},\n  \"oracle_switch_last_slot\": {sw_last_slot_i},\n  \"oracle_switch_reload_phase\": {},\n  \"oracle_switch_reload_drain_waits\": {},\n  \"oracle_switch_reload_committed\": {},\n  \"oracle_switch_slot_control_mtime\": {},\n  \"oracle_switch_slot_control_primed\": {},\n  \"oracle_switch_player_present\": {},\n  \"oracle_switch_menu_job_present\": {},\n  \"oracle_switch_stable_frames\": {},\n",
+                "  \"oracle_switch_arm_count\": {},\n  \"oracle_switch_teardown_count\": {},\n  \"oracle_switch_deferred_count\": {},\n  \"oracle_switch_last_slot\": {sw_last_slot_i},\n  \"oracle_switch_reload_phase\": {},\n  \"oracle_switch_reload_drain_waits\": {},\n  \"oracle_switch_reload_committed\": {},\n  \"oracle_switch_slot_control_mtime\": {},\n  \"oracle_switch_slot_control_primed\": {},\n  \"oracle_switch_player_present\": {},\n  \"oracle_switch_menu_job_present\": {},\n  \"oracle_switch_stable_frames\": {},\n  \"oracle_common_finalize_count\": {},\n  \"oracle_outgoing_teardown_baseline\": {},\n  \"oracle_outgoing_teardown_done\": {},\n  \"oracle_outgoing_teardown_wait_ticks\": {},\n  \"oracle_outgoing_teardown_failsoft\": {},\n  \"oracle_worldreswait_gate_calls\": {},\n  \"oracle_worldreswait_hold_armed\": {},\n  \"oracle_worldreswait_hold_engaged\": {},\n  \"oracle_worldreswait_held_frames\": {},\n  \"oracle_worldreswait_released_on_settle\": {},\n  \"oracle_worldreswait_released_on_failsoft\": {},\n",
                 swctr::SWITCH_TRIGGER_ARM_COUNT.load(SwOrd::SeqCst),
                 swctr::SWITCH_TRIGGER_TEARDOWN_COUNT.load(SwOrd::SeqCst),
                 swctr::SWITCH_TRIGGER_DEFERRED_COUNT.load(SwOrd::SeqCst),
@@ -75,6 +75,24 @@ fn write_game_module_oracles(body: &mut String) {
                 swctr::SWITCH_ORACLE_PLAYER_PRESENT.load(SwOrd::SeqCst),
                 swctr::SWITCH_ORACLE_MENU_JOB_PRESENT.load(SwOrd::SeqCst),
                 swctr::SWITCH_ORACLE_STABLE_FRAMES.load(SwOrd::SeqCst),
+                // PHASE-3 outgoing-world teardown oracles (bd PHASE3-render-release-is-CommonFinalize):
+                // common_finalize_count is THE render-release oracle (flat=in-place bug, +1/switch=fixed).
+                swctr::COMMON_FINALIZE_CALLS.load(SwOrd::SeqCst),
+                swctr::OUTGOING_TEARDOWN_BASELINE.load(SwOrd::SeqCst),
+                swctr::OUTGOING_TEARDOWN_DONE.load(SwOrd::SeqCst),
+                swctr::OUTGOING_TEARDOWN_WAIT_TICKS.load(SwOrd::SeqCst),
+                swctr::OUTGOING_TEARDOWN_FAILSOFT.load(SwOrd::SeqCst),
+                // WORLDRESWAIT streaming-settle HOLD oracles (bd reload-overlap-fix-design-worldreswait-
+                // defer-release-on-streaming-settle-2026-07-24): engaged==1 means residency was reached
+                // while armed and the release was deferred; released_on_settle==1 is the good outcome
+                // (geometry settled), released_on_failsoft==1 means the bounded cap fell back to today's
+                // in-place release; held_frames is the deferral length.
+                swctr::WORLDRESWAIT_GATE_HOOK_CALLS.load(SwOrd::SeqCst),
+                swctr::WORLDRESWAIT_HOLD_ARMED.load(SwOrd::SeqCst),
+                swctr::WORLDRESWAIT_HOLD_ENGAGED.load(SwOrd::SeqCst),
+                swctr::WORLDRESWAIT_HELD_FRAMES.load(SwOrd::SeqCst),
+                swctr::WORLDRESWAIT_RELEASED_ON_SETTLE.load(SwOrd::SeqCst),
+                swctr::WORLDRESWAIT_RELEASED_ON_FAILSOFT.load(SwOrd::SeqCst),
             ));
         }
         // LOADING SUBSTEP oracle (bd user-loading-bar-labels-stuck + WIP fromsoftware-rs
@@ -2689,6 +2707,83 @@ fn write_game_module_oracles(body: &mut String) {
             ));
             body.push_str(&format!(
                 "  \"oracle_delaydelete_highwater\": {dd_highwater},\n"
+            ));
+        }
+        // RENDER-RESOURCE-RELEASE oracles (bd AC-2-ANSWERED-native-reload-no-dip-mod-ownload-dips-real-
+        // divergence-phase3 + PHASE3-render-release-is-CommonFinalize). The switch reload renders ~+40ms/
+        // frame heavier than firstload at IDLE with FLAT GX cmdqueue fill and FLAT entity counts, so the
+        // extra cost is render EXECUTION the reload leaves live: own_load_switch_reload_fire SKIPS the native
+        // return-title render-resource release that `CS::InGameStep::_Common_Finalize` (RVA 0xaed380)
+        // performs -- that teardown resets g_GxDrawContext's per-window render outputs (FUN_1419eaf90) and
+        // frees GLOBAL_CSDistViewManager / GLOBAL_WorldChrMan / GLOBAL_MapItemMan / bullet+dmg managers.
+        // These are PASSIVE reads (no hooks -- per bd gpu-frame-us-ecl-piggyback-oracle-crashes-native-path
+        // NO per-ECL/per-draw hooks) that expose the live render-output vector plus the render managers the
+        // skipped teardown would have freed, so a heavier reload frame can be told apart from a clean control
+        // by STRUCTURE (extra render outputs / leftover managers) rather than only the _Common_Finalize hook
+        // counter (oracle_common_finalize_count). RE grounding (dump pc_eldenring_runtime.1.16.2.exe, base
+        // 0x140000000): the 0xaed380 disasm loads these exact GLOBAL_* data globals; the GxDrawContext
+        // render-output container layout is confirmed by its ctor GXSR::GxDrawContext::GxDrawContext
+        // (0x1419e4740 -> FUN_1419e3dc0), a DLKR container = {allocator@+0x120, begin@+0x128, end@+0x130,
+        // cap@+0x138}, and +0x128==begin matches the production swapchain-find chain
+        // (present_overlay::find_game_swapchain, runtime-proven). NOTE: WorldChrMan entity list-counts are
+        // already emitted (oracle_wcm_*/oracle_worldchrman_* in write_player_presence_oracle) and are flat
+        // per AC-2, so they are not duplicated here.
+        {
+            const G_GX_DRAW_CONTEXT_RVA: usize = 0x47ef360;
+            const GXDC_OUTPUT_VEC_BEGIN_OFFSET: usize = 0x128;
+            const GXDC_OUTPUT_VEC_END_OFFSET: usize = 0x130;
+            const GXDC_OUTPUT_VEC_CAP_OFFSET: usize = 0x138;
+            // Per-window render-output entry stride (prior RE, present_overlay: each inline entry is 0x170
+            // bytes, first qword = the per-window output object). Used ONLY to derive a human-readable count;
+            // the raw byte span is emitted alongside so the signal survives if the stride is ever corrected.
+            const GXDC_OUTPUT_ENTRY_STRIDE: usize = 0x170;
+            // GLOBAL_* render managers _Common_Finalize frees (data RVAs read straight off the 0xaed380
+            // disasm; 0-shift data-global convention, same 0x143d_xxxx block as GameDataMan/CSSystemStep).
+            const GLOBAL_CS_DIST_VIEW_MANAGER_RVA: usize = 0x3d675c0;
+            const GLOBAL_MAP_ITEM_MAN_RVA: usize = 0x3d67a50;
+            const RENDER_READ_FAIL: i64 = -1;
+            const MIN_VALID_PTR: usize = 0x10000;
+            let gxdc = unsafe { crate::experiments::safe_read_usize(base + G_GX_DRAW_CONTEXT_RVA) }
+                .filter(|p| *p >= MIN_VALID_PTR)
+                .unwrap_or(NULL_PTR);
+            let (out_span_bytes, out_count, out_capacity) = if gxdc == NULL_PTR {
+                (RENDER_READ_FAIL, RENDER_READ_FAIL, RENDER_READ_FAIL)
+            } else {
+                let begin = unsafe {
+                    crate::experiments::safe_read_usize(gxdc + GXDC_OUTPUT_VEC_BEGIN_OFFSET)
+                };
+                let end = unsafe {
+                    crate::experiments::safe_read_usize(gxdc + GXDC_OUTPUT_VEC_END_OFFSET)
+                };
+                let cap = unsafe {
+                    crate::experiments::safe_read_usize(gxdc + GXDC_OUTPUT_VEC_CAP_OFFSET)
+                };
+                match (begin, end, cap) {
+                    (Some(b), Some(e), Some(c)) if e >= b && c >= b => {
+                        let span = e - b;
+                        let cap_span = c - b;
+                        (
+                            span as i64,
+                            (span / GXDC_OUTPUT_ENTRY_STRIDE) as i64,
+                            (cap_span / GXDC_OUTPUT_ENTRY_STRIDE) as i64,
+                        )
+                    }
+                    _ => (RENDER_READ_FAIL, RENDER_READ_FAIL, RENDER_READ_FAIL),
+                }
+            };
+            let distview =
+                unsafe { crate::experiments::safe_read_usize(base + GLOBAL_CS_DIST_VIEW_MANAGER_RVA) }
+                    .filter(|p| *p >= MIN_VALID_PTR)
+                    .unwrap_or(NULL_PTR);
+            let mapitemman =
+                unsafe { crate::experiments::safe_read_usize(base + GLOBAL_MAP_ITEM_MAN_RVA) }
+                    .filter(|p| *p >= MIN_VALID_PTR)
+                    .unwrap_or(NULL_PTR);
+            body.push_str(&format!(
+                "  \"oracle_gxdc_ptr\": {},\n  \"oracle_gxdc_output_span_bytes\": {out_span_bytes},\n  \"oracle_gxdc_output_count\": {out_count},\n  \"oracle_gxdc_output_capacity\": {out_capacity},\n  \"oracle_render_distview_mgr_ptr\": {},\n  \"oracle_render_mapitem_mgr_ptr\": {},\n",
+                format_optional_ptr(gxdc),
+                format_optional_ptr(distview),
+                format_optional_ptr(mapitemman),
             ));
         }
         push_json_usize(

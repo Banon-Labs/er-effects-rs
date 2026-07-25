@@ -518,6 +518,58 @@ pub static BOOT_VIEW_EPOCH_WORLD_LIVE: AtomicUsize = AtomicUsize::new(usize::MAX
 /// it strands the child alive forever = the ez10-set + ~4fps steady-state divergence). bd
 /// CORRECTION-STEP4-finalize-substate-is-0.
 pub static WORLD_LIVE_STABLE_FRAMES: AtomicUsize = AtomicUsize::new(0);
+// ---- PHASE-3 OUTGOING-WORLD TEARDOWN (bd PHASE3-render-release-is-CommonFinalize-...-2026-07-23) ----
+/// One-shot install guard for the observe-only `CS::InGameStep::_Common_Finalize` hook.
+pub static COMMON_FINALIZE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Count of native `_Common_Finalize` invocations (the world render-release that frees GLOBAL_WorldChrMan,
+/// CSDistViewManager, g_GxDrawContext, WorldRes area lists, FieldArea, ...). This is THE teardown oracle:
+/// on the broken in-place switch it stays flat across a reload (0 finalizes); the Phase-3 fix routes the
+/// OUTGOING world through this release so it increments once per switch (like a native quit->Continue).
+/// Exposed as `oracle_common_finalize_count` (distinct from `oracle_switch_teardown_count`, which merely
+/// counts our menuData+0x5d ARM writes).
+pub static COMMON_FINALIZE_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// `COMMON_FINALIZE_CALLS` captured at switch-arm, so the reload gate can detect the OUTGOING finalize.
+pub static OUTGOING_TEARDOWN_BASELINE: AtomicUsize = AtomicUsize::new(0);
+/// Latched 1 once the OUTGOING world's `_Common_Finalize` was observed for the current switch (before the
+/// reload's continue_confirm), i.e. the pre-quit world was released so the rebuild starts fresh.
+pub static OUTGOING_TEARDOWN_DONE: AtomicUsize = AtomicUsize::new(0);
+/// Frames own_load_switch_reload_fire has held continue_confirm waiting for the OUTGOING finalize.
+pub static OUTGOING_TEARDOWN_WAIT_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// Latched 1 when the bounded wait for the OUTGOING finalize expired -> fail-soft to the OLD in-place
+/// reload (the two holds re-engage to protect the reused world). Keeps the fix from ever softlocking.
+pub static OUTGOING_TEARDOWN_FAILSOFT: AtomicUsize = AtomicUsize::new(0);
+// ---- WORLDRESWAIT streaming-settle HOLD (bd reload-overlap-fix-design-worldreswait-defer-release-on-
+//      streaming-settle-2026-07-24) -- the armed switch-reload movable-while-streaming dip fix. A hook on
+//      CS::MoveMapStep::STEP_WorldResWait's residency predicate FUN_140624bd0 (deobf 0x624bd0; that step
+//      is its SOLE code caller) defers STEP_WorldResWait's player warp + step advance (i.e. the coupled
+//      movability/loading-close release) until CS::CSWorldGeomMan geometry streaming settles, scoped to
+//      the System-Quit switch reload ONLY. Bounded fail-soft; never writes WorldBlockRes phase/gate bytes. ----
+/// One-shot install guard for the STEP_WorldResWait gate (FUN_140624bd0) defer-release hook.
+pub static WORLDRESWAIT_GATE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Total gate-hook invocations (per-frame during any world load). Telemetry oracle_worldreswait_gate_calls.
+pub static WORLDRESWAIT_GATE_HOOK_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// Per-switch ARM latch (1 == this switch reload's WorldResWait release should be held). Set by
+/// `arm_worldreswait_hold()` from `own_load_switch_reload_fire` (switch-only, marker-gated), cleared per
+/// switch by `reset_worldreswait_hold_latches()` and on release. On boot/load1 it is never set, so the
+/// gate hook is a pure passthrough there (the anti-softlock crux).
+pub static WORLDRESWAIT_HOLD_ARMED: AtomicUsize = AtomicUsize::new(0);
+/// Per-switch latch: WorldBlockRes residency was reached while armed (so the gate's ONE legit
+/// `FUN_14066d610` residency-pop already ran). Once set, the hook stops calling the original (no repeat
+/// pop / no repeat pending-vector erase) and holds on geometry-settle instead.
+pub static WORLDRESWAIT_RESIDENCY_SEEN: AtomicUsize = AtomicUsize::new(0);
+/// Frames since residency was reached (the hold window length); bounds the fail-soft cap.
+pub static WORLDRESWAIT_HOLD_WAIT_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// Consecutive frames CS::CSWorldGeomMan reported settled (for the K-frame sustain before release).
+pub static WORLDRESWAIT_SETTLE_STREAK: AtomicUsize = AtomicUsize::new(0);
+/// Run-cumulative outcome telemetry: 1 == the hold engaged (residency seen while armed) at least once.
+pub static WORLDRESWAIT_HOLD_ENGAGED: AtomicUsize = AtomicUsize::new(0);
+/// Run-cumulative: total frames the gate hook returned not-ready to DEFER the release (hold length).
+pub static WORLDRESWAIT_HELD_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// Run-cumulative: 1 == a hold released because geometry settled (the good outcome).
+pub static WORLDRESWAIT_RELEASED_ON_SETTLE: AtomicUsize = AtomicUsize::new(0);
+/// Run-cumulative: 1 == a hold released on the bounded fail-soft cap (geometry never settled -> fall
+/// back to today's in-place release; no softlock, no regression).
+pub static WORLDRESWAIT_RELEASED_ON_FAILSOFT: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_COMPOSITE_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static BOOT_VIEW_COMPOSITE_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
 pub static POLICY_TOS_TITLE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);

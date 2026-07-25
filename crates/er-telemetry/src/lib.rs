@@ -12,6 +12,8 @@
 //! telemetry never needs the product lock type.
 
 pub mod counters;
+pub mod log_channels;
+mod read;
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -560,4 +562,9 @@ pub fn standalone_tick() {
     {
         let _ = f.write_all(body.as_bytes());
     }
+
+    // Independently-marker-gated, passive read-side oracles (title-binding +
+    // stream-overlap). Each no-ops unless its own game-dir marker is present, so a
+    // plain run carries zero extra cost and one A/B enables exactly what it needs.
+    read::tick(base, play_time_ms, flip_task_delta);
 }

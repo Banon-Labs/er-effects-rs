@@ -20,12 +20,12 @@
 //! Fires from a CSTaskImp FrameBegin task (title-active). Telemetry-only NATIVE boot+reload for the
 //! vanilla FPS comparison.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 use crate::game_mem::{
-    flip_fixed_spf, flip_mode_current, load_fsm, menu_data_ptr, menu_flags, now_loading,
-    optionsetting_tab_index, pause_menu_open, read_drive_mode_flag, return_title_requested,
-    top_menu_id, top_menu_job_ptr, world_simulating,
+    OPTIONSETTING_MENU_ID, OPTIONSETTING_QUIT_TAB_INDEX, flip_fixed_spf, flip_mode_current,
+    load_fsm, menu_data_ptr, menu_flags, now_loading, optionsetting_tab_index, pause_menu_open,
+    read_drive_mode_flag, return_title_requested, top_menu_id, top_menu_job_ptr, world_simulating,
 };
 use crate::input_inject::{
     MenuEvent, advance_press_any_button, input_manager, keep_input_active,
@@ -331,29 +331,38 @@ impl Phase {
                 pause_menu_open()
             }
             Phase::NavToOptionSetting => {
-                // In-world menu nav is driven by the RAW PAD DEVICE (bd ROOTCAUSE-plus90-is-OUTPUT), not
-                // +0x90. currentTopMenuJob (+0xB0) is REPLACED when a submenu opens (bd PANE-ID-FIX):
-                // record the IngameTop job on entry; entering System/OptionSetting swaps it. EFFECT: the
-                // top-job pointer CHANGED (a submenu is up).
-                if frame == 0 {
-                    INGAMETOP_JOB.store(top_menu_job_ptr(), Ordering::SeqCst);
-                }
-                issue_pad_taps_once(&[PadButton::Up, PadButton::Confirm], frame);
-                let job = top_menu_job_ptr();
-                job != 0 && job != INGAMETOP_JOB.load(Ordering::SeqCst)
+                // Native-binding menu-event nav (inputmgr+0x90 keystate): MoveUp (0x45) then Confirm
+                // (0x3d) enters the System/OptionSetting pane from IngameTop (UP+Confirm confirmed
+                // 2026-07-17; bd MENU-GAPS-CLOSED). This is the CONFIRMED read path -- getShownMenuFlags
+                // (0x1407665e0) reads inputmgr+0x90[eventId] & 1 (decompiled 2026-07-23), so the menu
+                // consumes these ids; the prior "+0x90 is OUTPUT, drive the raw pad" theory was refuted
+                // (that raw-pad path was BISECT-disabled and never actually injected). EFFECT: the top
+                // pane is OptionSetting (menu_id == 0x25).
+                issue_menu_taps_once(im, &[MenuEvent::MoveUp, MenuEvent::Confirm], frame);
+                top_menu_id() == OPTIONSETTING_MENU_ID
             }
             Phase::TabToQuit => {
-                // No passive tab-index read (option_window is buried in the +0xB0 sequence). Issue one
-                // TabLeft and settle; the QUIT phase's return_title_requested verifies the whole nav
-                // landed (if TabLeft missed the Quit tab, quit derails downstream -- honest).
-                issue_pad_taps_once(&[PadButton::TabLeft], frame);
-                frame >= TAP_CYCLE_FRAMES + TAB_SETTLE_FRAMES
+                // THE TAB-SWITCH (the D_van blocker): one TabLeft = native-binding menu-event 0x30. From
+                // the default tab 0 the prev-tab edge WRAPS to the last tab = Quit (index 8). RE-CONFIRMED
+                // on the loaded dump: getShownMenuFlags reads inputmgr+0x90+0x30 & 1 -> flag 0x1000
+                // (tab-left) and +0x31 -> 0x80000 (tab-right); the OptionSetting GridControl pager consumes
+                // it (bd MENU-GAPS-CLOSED-tabswitch-0x30L-0x31R / menu-eventid-set-enumerated). NOT
+                // mouse-only -- the 2026-07-17 "mouse-only" verdict was an OS-layer (SendInput) artifact.
+                // EFFECT (passive verify): the OptionSetting selected tab index == the Quit tab (8),
+                // read at option_window+0x1870+0x10[deref]+0xd4.
+                issue_menu_taps_once(im, &[MenuEvent::TabLeft], frame);
+                optionsetting_tab_index() == OPTIONSETTING_QUIT_TAB_INDEX
             }
             Phase::Quit => {
-                issue_pad_taps_once(&[PadButton::Down, PadButton::Confirm], frame);
-                // Down+Confirm activates the Quit-to-main-menu row -> confirm dialog; the every-frame
-                // popup-accept confirms the dialog. Quit started once the request byte is set (or the
-                // world already began tearing down).
+                // On the Quit tab (tab-switch proven): COMMIT the return-to-title by satisfying its native
+                // side effect directly -- write menuData+0x5d=1, the exact request byte the quit-confirm
+                // modal's "Yes" sets -- WITHOUT building/auto-accepting a CS::MessageBoxDialog (AGENTS
+                // MessageBox rule: skip the modal, satisfy its semantic side effect without UI/input). The
+                // native world-teardown + render-resource release this triggers is identical to the menu's
+                // Quit-to-main-menu (menuData+0x5d is the shared quit-functor/idle-timeout request byte),
+                // so the reload it feeds is the faithful native reload D_van needs. EFFECT: return-title
+                // requested, or the world already began tearing down.
+                crate::game_mem::request_return_to_title();
                 return_title_requested() || !sem.world_sim
             }
             Phase::QuitTeardown => !sem.world_sim && sem.load_fsm <= 0 && frame > TAP_CYCLE_FRAMES,
@@ -391,6 +400,23 @@ fn issue_pad_taps_once(buttons: &[PadButton], frame: u64) {
     } else {
         set_pad_button(PadButton::None);
     }
+}
+
+/// Issue each MENU EVENT in `events` once (one edge each, in order), via the CONFIRMED native-binding
+/// keystate channel `inputmgr+0x90+eventId` (`tap_menu_event`). Same edge cadence as `issue_pad_taps_once`
+/// (OR the edge bit for `TAP_SET_FRAMES`, then gap -- the game's own input producer rewrites +0x90 to 0 on
+/// the gap frames, giving one clean 0->1 edge with no auto-repeat). This is the in-world MENU nav lever
+/// (open->OptionSetting->tab-switch->quit): getShownMenuFlags (0x1407665e0) reads +0x90[id]&1, so the menu
+/// consumes exactly what this writes. Replaces the raw-pad `set_pad_button` path (that `source+0x88` path
+/// was BISECT-disabled and never drove the menu). The phase's ADVANCE is its own RAM semaphore, so an event
+/// that lands is confirmed by a specific state change and one that does nothing derails on budget.
+fn issue_menu_taps_once(im: usize, events: &[MenuEvent], frame: u64) {
+    let idx = (frame / TAP_CYCLE_FRAMES) as usize;
+    let held = (frame % TAP_CYCLE_FRAMES) < TAP_SET_FRAMES;
+    if idx < events.len() && held {
+        tap_menu_event(im, events[idx]);
+    }
+    // Gap frames: do not OR; the native input producer writes 0 -> clean edge release (no auto-repeat).
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -468,8 +494,37 @@ impl DriveMode {
             Phase::Continue,
             Phase::WaitLoadIn,
         ];
-        // full: the whole native flow, then a reload Continue for the FPS comparison.
-        const FULL: &[Phase] = &[
+        // MENU-DRIVEN quit-to-title (the D_van default, bd MENU-GAPS-CLOSED / d_van-blocker-...tabswitch):
+        // open the pause menu (popup+0x121), nav to OptionSetting (MoveUp+Confirm), TAB-SWITCH to the Quit
+        // tab (native-binding menu-event 0x30 -- the reversed blocker), then commit the native return-title.
+        // This is the GENUINE menu-driven native reload the acceptance §4 confound-free D_van needs (vanilla
+        // must be menu-driven, not the menu-free NativeQuit shortcut that mirrors the mod's own_load path).
+        const MENU_QUIT_FLOW: [Phase; 5] = [
+            Phase::OpenPauseMenu,
+            Phase::NavToOptionSetting,
+            Phase::TabToQuit,
+            Phase::Quit,
+            Phase::QuitTeardown,
+        ];
+        // full (menu-driven default): boot -> in-world -> menu-driven Quit-to-title -> reload Continue.
+        const FULL_MENU: &[Phase] = &[
+            Phase::Startup,
+            Phase::PressAnyButton,
+            Phase::Continue,
+            Phase::WaitLoadIn,
+            MENU_QUIT_FLOW[0],
+            MENU_QUIT_FLOW[1],
+            MENU_QUIT_FLOW[2],
+            MENU_QUIT_FLOW[3],
+            MENU_QUIT_FLOW[4],
+            Phase::PressAnyButton,
+            Phase::Continue,
+            Phase::WaitLoadIn,
+        ];
+        // full (NativeQuit fallback, opt-in via er-harness-native-quit.txt): the direct menuData+0x5d=1
+        // write with NO menu nav -- the pre-tab-switch path. Kept as an escape hatch if the menu-driven
+        // nav derails at runtime; produces the same native teardown but is menu-FREE (§4 confound).
+        const FULL_NATIVE: &[Phase] = &[
             Phase::Startup,
             Phase::PressAnyButton,
             Phase::Continue,
@@ -492,7 +547,14 @@ impl DriveMode {
             DriveMode::BootContinueOnly => BOOT,
             DriveMode::NativeReloadOnly => RELOAD,
             DriveMode::NativeReloadTwice => RELOAD2,
-            DriveMode::FullBootReload => FULL,
+            // Menu-driven by default (drives the tab-switch); NativeQuit only when the fallback flag is set.
+            DriveMode::FullBootReload => {
+                if full_quit_native() {
+                    FULL_NATIVE
+                } else {
+                    FULL_MENU
+                }
+            }
             DriveMode::Probe => PROBE,
             DriveMode::Passive => &[], // companion: no drive, presence only
         }
@@ -506,8 +568,31 @@ static POPUP_FRAME: AtomicU64 = AtomicU64::new(0);
 static MODE_IDX: AtomicUsize = AtomicUsize::new(usize::MAX);
 static DERAILED: AtomicBool = AtomicBool::new(false);
 static ONFRAME_IM_NULL_DIAG: AtomicBool = AtomicBool::new(false);
-/// currentTopMenuJob (+0xB0) recorded at IngameTop, to detect the submenu-entry replacement.
-static INGAMETOP_JOB: AtomicUsize = AtomicUsize::new(0);
+/// FULL quit-flow selector cache: u8::MAX = unresolved, 0 = menu-driven (default), 1 = NativeQuit fallback.
+static FULL_QUIT_MODE: AtomicU8 = AtomicU8::new(u8::MAX);
+
+/// Whether the FULL drive mode should use the NativeQuit (menuData+0x5d=1 direct) fallback instead of the
+/// menu-driven Quit flow (open->OptionSetting->TabToQuit(0x30)->commit). Opt-in via er-harness-native-quit.txt.
+/// Resolved and logged ONCE, then cached, so `phases()` does not read a file every frame.
+fn full_quit_native() -> bool {
+    match FULL_QUIT_MODE.load(Ordering::SeqCst) {
+        0 => false,
+        1 => true,
+        _ => {
+            let native = crate::game_mem::native_quit_enabled();
+            FULL_QUIT_MODE.store(native as u8, Ordering::SeqCst);
+            harness_log!(
+                "drive: FULL quit flow = {}",
+                if native {
+                    "NativeQuit fallback (menuData+0x5d=1 direct, menu-FREE)"
+                } else {
+                    "menu-driven (open -> OptionSetting -> TabToQuit(0x30) -> native commit)"
+                }
+            );
+            native
+        }
+    }
+}
 
 fn resolve_mode() -> DriveMode {
     // MUST stay index-aligned with the `idx` match below (bd reload2-crash-MODES-oob): every DriveMode

@@ -871,6 +871,16 @@ pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
     // PRODUCT_AUTOLOAD_ARMED, so gating on product_autoload alone never spared anything there.
     if LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) == 0
         && (product_autoload_enabled() || portrait_overlay_enabled())
+        // DISABLE-ON-RELOAD FALLBACK (user 2026-07-23): do NOT spare the portrait renderer on a
+        // System->Quit->Load SWITCH reload. A spared renderer whose GX resource goes stale across the
+        // reload crashed load2 near completion (null native GX resource wrapper -> FUN_141e90290 rcx=0x20
+        // AV; spared[model_ok=0]; lookat off_resource_bad climbing 68->128). Skipping the spare lets the
+        // native teardown free it with the world -- no stale spared renderer, so the per-frame profile-draw
+        // never runs against a dead resource. LOAD1/first-load is UNAFFECTED (switch_reload_active()==false
+        // there), so the loading-portrait still shows on the initial load, just not on reloads. This is the
+        // user-chosen fallback ahead of the full Root A teardown fix (unregister the ResMan draw task +
+        // free per reload). bd rootB-fd4io-fix-works-load2-resubmits-but-exposes-rootA-spared-renderer-crash-2026-07-23.
+        && !crate::experiments::gating::switch_reload_active()
     {
         if let Ok(base) = game_module_base() {
             // The slot we render (er-effects-rs-j3r): the newly-selected character on a switch

@@ -134,8 +134,8 @@ const BOOT_VIEW_MILESTONE_LABELS: [&str; BOOT_VIEW_MILESTONE_COUNT] = [
     "STARTING UP", // 0: our present hook + the game swapchain are live (engine still initializing)
     "GAME SYSTEMS", // 1: GameMan/global systems constructed
     "ACQUIRING ASSETS", // 2: title menu resource acquisition begins (start of the long ~32s asset load)
-    "OPENING SCALEFORM", // 3: Scaleform (.gfx) files opening -- ramps through the middle of the asset load
-    "BUILDING SCALEFORM", // 4: Scaleform resource ctors -- ramps late in the asset load
+    "OPENING MENU UI", // 3: Scaleform (.gfx) menu-UI files opening -- ramps through the middle of the asset load
+    "BUILDING MENU UI", // 4: Scaleform menu-UI resource ctors -- ramps late in the asset load
     "TITLE READY", // 5: engine interactive internally (PRESS START bound); we cover the title itself
     "PREPARING SAVE", // 6: menu opened internally / offline committed; autoload about to commit the save
     "LOADING SAVE",   // 7: Continue committed (SetState5)
@@ -515,7 +515,7 @@ fn boot_view_world_gauge_submilestone(fallback: &'static str) -> (&'static str, 
     let current = LOADING_SCREEN_BAR_CURRENT_FRAME.load(Ordering::SeqCst);
     let max = LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst);
     if LOADING_SCREEN_BAR_ENABLED.load(Ordering::SeqCst) != 0 && max != 0 {
-        ("LOADING BAR", current.min(max), max)
+        ("WORLD LOADING", current.min(max), max)
     } else {
         boot_view_single_submilestone(fallback)
     }
@@ -542,25 +542,25 @@ fn boot_view_entering_world_submilestone() -> (&'static str, usize, usize) {
         && MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == current_epoch;
     if BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0 || current_epoch != 0 {
         boot_view_first_pending_substep(&[
-            (bar_terminal, "BAR FINAL"),
-            (ls730_held, "LS 730 HELD"),
-            (ls731_clear, "LS 731 CLEAR"),
-            (movemap_done, "MMS 244 DONE"),
-            (request_stable, "IG D8 STABLE"),
-            (menu_job_present, "CSM 798 MENUJOB"),
-            (player_present, "PLAYER RESIDENT"),
-            (movement_proven, "MOVE PROOF"),
+            (bar_terminal, "LOAD BAR FULL"),
+            (ls730_held, "LOAD SCREEN UP"),
+            (ls731_clear, "CLOSE HANDSHAKE"),
+            (movemap_done, "MAP STEP DONE"),
+            (request_stable, "WORLD HANDOFF"),
+            (menu_job_present, "GAME UI LIVE"),
+            (player_present, "PLAYER IN WORLD"),
+            (movement_proven, "CAN MOVE"),
         ])
     } else {
         boot_view_first_pending_substep(&[
-            (bar_terminal, "BAR FINAL"),
-            (loading_close_sent, "LS CLOSE"),
-            (request_started, "IG D8 REQUEST"),
-            (movemap_done, "MMS 244 DONE"),
-            (request_stable, "IG D8 STABLE"),
-            (menu_job_present, "CSM 798 MENUJOB"),
-            (player_present, "PLAYER RESIDENT"),
-            (movement_proven, "MOVE PROOF"),
+            (bar_terminal, "LOAD BAR FULL"),
+            (loading_close_sent, "CLOSING SCREEN"),
+            (request_started, "MAP LOAD SENT"),
+            (movemap_done, "MAP STEP DONE"),
+            (request_stable, "WORLD HANDOFF"),
+            (menu_job_present, "GAME UI LIVE"),
+            (player_present, "PLAYER IN WORLD"),
+            (movement_proven, "CAN MOVE"),
         ])
     }
 }
@@ -570,15 +570,15 @@ fn boot_view_load_save_submilestone() -> (&'static str, usize, usize) {
         boot_view_first_pending_substep(&[
             (
                 SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.load(Ordering::SeqCst) != 0,
-                "PROFILE LOAD",
+                "SAVE SELECTED",
             ),
             (
                 SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) != 0,
-                "FRESH DESER",
+                "READING SAVE",
             ),
             (
                 SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0,
-                "CONTINUE OK",
+                "LOAD CONFIRMED",
             ),
         ])
     } else {
@@ -589,9 +589,9 @@ fn boot_view_load_save_submilestone() -> (&'static str, usize, usize) {
                 SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
                     || TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0
                     || LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) != 0,
-                "CONTINUE OK",
+                "LOAD CONFIRMED",
             ),
-            (table_seen, "LOAD TABLE"),
+            (table_seen, "SCREEN DATA READY"),
         ])
     }
 }
@@ -613,15 +613,15 @@ fn boot_view_movemap_submilestone(step: usize) -> (&'static str, usize, usize) {
             && MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == current_epoch;
         if step >= INGAMESTEP_INWORLD_STEP_INDEX {
             return boot_view_first_pending_substep(&[
-                (player_present, "PLAYER RESIDENT"),
-                (menu_job_present, "CSM 798 MENUJOB"),
-                (movement_proven, "MOVE PROOF"),
+                (player_present, "PLAYER IN WORLD"),
+                (menu_job_present, "GAME UI LIVE"),
+                (movement_proven, "CAN MOVE"),
             ]);
         }
         return boot_view_first_pending_substep(&[
-            (child_done, "MMS 244 DONE"),
-            (request_started, "IG D8 REQUEST 1"),
-            (request_stable, "IG D8 STABLE 2"),
+            (child_done, "MAP STEP DONE"),
+            (request_started, "MAP LOAD SENT"),
+            (request_stable, "WORLD HANDOFF"),
         ]);
     }
     if step < MOVEMAPSTEP_STEP_MOVEMAP_INDEX as usize {
@@ -647,12 +647,113 @@ fn boot_view_movemap_submilestone(step: usize) -> (&'static str, usize, usize) {
         && MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == current_epoch;
     boot_view_first_pending_substep(&[
         (step_active, movemapstep_step_name(step as i32)),
-        (title_done, "MMS 244 DONE"),
-        (session_request, "IG D8 STABLE"),
-        (menu_job_present, "CSM 798 MENUJOB"),
-        (player_present, "PLAYER RESIDENT"),
-        (movement_proven, "MOVE PROOF"),
+        (title_done, "MAP STEP DONE"),
+        (session_request, "WORLD HANDOFF"),
+        (menu_job_present, "GAME UI LIVE"),
+        (player_present, "PLAYER IN WORLD"),
+        (movement_proven, "CAN MOVE"),
     ])
+}
+
+/// STARTING UP (phase 0) sub-progression: the render/display bring-up chain, every step a concrete
+/// RAM semaphore set by OUR OWN present path (swapchain resolve + Present detour install, our D3D12
+/// command objects, our loading cover reaching the backbuffer, the game's own render loop presenting)
+/// -- never the game's boot state, which is not yet observable this early. Each predicate ORs in every
+/// LATER signal so an earlier step can never read false once a later stage has fired (keeps the
+/// reported step monotonic even when a counter path is skipped, e.g. no self-present pump on Wine).
+/// The reported step is the first not-yet-satisfied one (the stage in progress); once all are done we
+/// hold the final milestone label. All labels are 5x7 font-safe (uppercase A-Z + space).
+fn boot_view_starting_up_submilestone() -> (&'static str, usize, usize) {
+    use er_telemetry::counters as c;
+    // 1: the game swapchain is resolved and our Present detour is installed (the display path exists).
+    let swapchain = c::GAME_SWAPCHAIN.load(Ordering::SeqCst) != 0
+        || c::PRESENT_HOOK_INSTALLED.load(Ordering::SeqCst) != 0
+        || BOOT_VIEW_SWAPCHAIN_FOUND_MS.load(Ordering::SeqCst) != 0
+        || c::PRESENT_HOOK_HITS.load(Ordering::SeqCst) != 0;
+    // 2: our own D3D12 device + command objects are up (derived from the backbuffer) -- we can draw.
+    let device = BOOT_VIEW_DRAW_STATE.load(Ordering::SeqCst) == 1
+        || BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst) != 0
+        || BOOT_VIEW_SELF_PRESENTS.load(Ordering::SeqCst) != 0
+        || c::PRESENT_HOOK_HITS.load(Ordering::SeqCst) != 0;
+    // 3: our loading cover has actually reached the backbuffer / been presented at least once.
+    let cover = BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst) != 0
+        || BOOT_VIEW_SELF_PRESENTS.load(Ordering::SeqCst) != 0
+        || c::PRESENT_HOOK_HITS.load(Ordering::SeqCst) != 0;
+    // 4: the game's OWN render loop is presenting frames now (the engine is live behind our cover).
+    let engine_frames = c::PRESENT_HOOK_HITS.load(Ordering::SeqCst) != 0
+        || BOOT_VIEW_PUMP_STOP_REASON.load(Ordering::SeqCst) == 1;
+    let steps: [(bool, &'static str); 4] = [
+        (swapchain, "SWAPCHAIN"),
+        (device, "RENDER DEVICE"),
+        (cover, "COVER LIVE"),
+        (engine_frames, "ENGINE FRAMES"),
+    ];
+    let mut current = steps.len();
+    for (i, (ok, _)) in steps.iter().enumerate() {
+        if !*ok {
+            current = i + 1;
+            break;
+        }
+    }
+    (steps[current - 1].1, current, steps.len())
+}
+
+/// GAME SYSTEMS (phase 1) sub-progression = the game's OWN top-level boot state machine,
+/// CS::CSSystemStep. Its `current_state` (states 0..20 of CSSystemStepState) names the exact
+/// subsystem the boot thread is constructing / waiting on -- this IS the singleton + manager
+/// construction sequence this phase covers, so the sublabel tracks the real substep instead of a
+/// single placeholder. One guaranteed-ordered RAM read: base + global -> +0x40 (u32 low dword).
+/// The global staying null very early, or an out-of-range value, falls back to the coarse label so a
+/// state number is never fabricated. RVA/offset/state names from the Ghidra 1.16.2 dump (CSSystemStep
+/// ctor @0x140dec7c0, singleton @base+0x3d85680, current_state @+0x40) cross-checked against the
+/// existing `oracle_system_step_label` telemetry; the Wait* states map to the ctor child steps
+/// (res/file/pad/sound/graphics). InitBoot/WaitBoot pairs are the early core-boot sub-phases (each
+/// InitBootN kicks the work, the paired WaitBootN blocks on it) -- named generically because their
+/// per-index subsystem was not statically pinned. Labels are 5x7 font-safe (uppercase + digits).
+const BOOT_SYS_STEP_GLOBAL_RVA: usize = 0x3d85680;
+const BOOT_SYS_STEP_STATE_OFFSET: usize = 0x40;
+const BOOT_SYS_STEP_STATE_COUNT: usize = 21;
+const BOOT_SYS_STEP_SUBLABELS: [&str; BOOT_SYS_STEP_STATE_COUNT] = [
+    "SYSTEM INIT",     // 0  Init
+    "CORE BOOT 1",     // 1  InitBoot1
+    "CORE BOOT 1",     // 2  WaitBoot1
+    "CORE BOOT 2",     // 3  InitBoot2
+    "CORE BOOT 2",     // 4  WaitBoot2
+    "CORE BOOT 3",     // 5  InitBoot3
+    "CORE BOOT 3",     // 6  WaitBoot3
+    "CORE BOOT 4",     // 7  InitBoot4
+    "CORE BOOT 4",     // 8  WaitBoot4
+    "CORE BOOT 5",     // 9  InitBoot5
+    "CORE BOOT 5",     // 10 WaitBoot5
+    "GAME FLOW INIT",  // 11 InitGameFlow
+    "GAME FLOW WAIT",  // 12 WaitGameFlow
+    "GAME FLOW DONE",  // 13 FinishGameFlow
+    "PRE GRAPHICS",    // 14 WaitPreGraphics
+    "GRAPHICS UP",     // 15 WaitGraphics
+    "INPUT DEVICES",   // 16 WaitPad
+    "RESOURCE SYSTEM", // 17 WaitRes
+    "SOUND SYSTEM",    // 18 WaitSound
+    "FILE SYSTEM",     // 19 WaitFile
+    "SYSTEMS READY",   // 20 Finish
+];
+
+fn boot_view_game_systems_submilestone() -> (&'static str, usize, usize) {
+    let total = BOOT_SYS_STEP_STATE_COUNT - 1; // 20 (Finish)
+    let state = crate::experiments::game_module_base()
+        .ok()
+        .and_then(|base| unsafe {
+            crate::experiments::safe_read_usize(base + BOOT_SYS_STEP_GLOBAL_RVA)
+        })
+        .filter(|instance| *instance >= 0x10000)
+        .and_then(|instance| unsafe {
+            crate::experiments::safe_read_usize(instance + BOOT_SYS_STEP_STATE_OFFSET)
+        })
+        .map(|v| v & 0xffff_ffff);
+    match state {
+        Some(s) if s < BOOT_SYS_STEP_STATE_COUNT => (BOOT_SYS_STEP_SUBLABELS[s], s, total),
+        // Not resolvable yet (very early) or unexpected: keep the coarse label, fabricate nothing.
+        _ => boot_view_single_submilestone("GAME CORE UP"),
+    }
 }
 
 fn boot_view_phase_submilestone(idx: usize) -> (&'static str, usize, usize) {
@@ -660,25 +761,25 @@ fn boot_view_phase_submilestone(idx: usize) -> (&'static str, usize, usize) {
         return boot_view_movemap_submilestone(idx - MMS_LABEL_IDX_BASE);
     }
     match idx.min(BOOT_VIEW_MILESTONE_LABELS.len() - 1) {
-        0 => boot_view_single_submilestone("SWAPCHAIN LIVE"),
-        1 => boot_view_single_submilestone("GAME MAN PTR"),
+        0 => boot_view_starting_up_submilestone(),
+        1 => boot_view_game_systems_submilestone(),
         2 => boot_view_counter_submilestone(
-            "MENU RES",
+            "MENU FILES",
             TITLE_MENU_RESOURCE_ACQUIRE_HITS.load(Ordering::SeqCst),
             38,
-            "MENU RES ACQ",
+            "MENU FILES",
         ),
         3 => boot_view_counter_submilestone(
-            "GFX FILE",
+            "UI FILES",
             TITLE_SCALEFORM_FILE_OPEN_HITS.load(Ordering::SeqCst),
             113,
-            "GFX FILE OPEN",
+            "UI FILES",
         ),
         4 => boot_view_counter_submilestone(
-            "GFX CTOR",
+            "UI BUILD",
             TITLE_SCALEFORM_RESOURCE_CTOR_HITS.load(Ordering::SeqCst),
             112,
-            "GFX CTOR BUILD",
+            "UI BUILD",
         ),
         5 => boot_view_first_pending_substep(&[
             (
@@ -687,7 +788,7 @@ fn boot_view_phase_submilestone(idx: usize) -> (&'static str, usize, usize) {
             ),
             (
                 TITLE_FADEIN_SKIP_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS,
-                "TITLE LOOP",
+                "TITLE UP",
             ),
         ]),
         6 => boot_view_first_pending_substep(&[
@@ -697,13 +798,13 @@ fn boot_view_phase_submilestone(idx: usize) -> (&'static str, usize, usize) {
             ),
             (
                 NETWORK_CHECK_SHORTCIRCUIT_COUNT.load(Ordering::SeqCst) != 0,
-                "NET CHECK",
+                "NETWORK CHECK",
             ),
         ]),
         7 => boot_view_load_save_submilestone(),
-        8 => boot_view_world_gauge_submilestone("LS UPDATE"),
-        9 => boot_view_world_gauge_submilestone("LOADING BAR"),
-        10 => boot_view_world_gauge_submilestone("LOADING BAR"),
+        8 => boot_view_world_gauge_submilestone("LOAD SCREEN"),
+        9 => boot_view_world_gauge_submilestone("WORLD LOADING"),
+        10 => boot_view_world_gauge_submilestone("WORLD LOADING"),
         11 => boot_view_entering_world_submilestone(),
         i => boot_view_single_submilestone(BOOT_VIEW_MILESTONE_LABELS[i]),
     }
@@ -1348,7 +1449,7 @@ fn boot_view_rasterize(
     // b80=RESIDENT stall (the case-7 blocker) directly on the bar. Hidden when idle (b80 <= 0).
     let b80 = SWITCH_ORACLE_B80.load(Ordering::SeqCst);
     let load_suffix = if b80 > 0 {
-        format!(" · LOAD {}", load_in_progress_b80_name(b80))
+        format!(" - SAVE {}", load_in_progress_b80_name(b80))
     } else {
         String::new()
     };
