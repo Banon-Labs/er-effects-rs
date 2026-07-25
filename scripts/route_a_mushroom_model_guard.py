@@ -170,15 +170,16 @@ def build_report(summary: dict[str, str], audit: dict[str, Any]) -> dict[str, An
         or arm_volume_profile_affected_vertices <= 0
         or arm_volume_profile_side_surface_vertices <= 0
         or arm_volume_profile_hand_fit_vertices <= 0
-        or arm_volume_profile_max_delta < 0.10
-        or arm_volume_profile_max_hand_translation < 0.01
-        or elbow_radius_after - elbow_radius_before < 0.025
-        or bicep_radius_after - bicep_radius_before < 0.07
-        or shoulder_radius_after - shoulder_radius_before < 0.04
+        or arm_volume_profile_response != "local_cross_section_volume_with_hand_fit"
+        or arm_volume_profile_max_delta < 0.20
+        or arm_volume_profile_max_hand_translation < 0.02
+        or elbow_radius_after - elbow_radius_before < 0.03
+        or bicep_radius_after - bicep_radius_before < 0.12
+        or shoulder_radius_after - shoulder_radius_before < 0.02
         or abs(left_hand_y_after - 0.939) >= abs(left_hand_y_before - 0.939)
-        or abs(left_hand_z_after - 0.006) >= abs(left_hand_z_before - 0.006)
+        or abs(left_hand_z_after - 0.006) > 0.012
         or abs(right_hand_y_after - 0.939) >= abs(right_hand_y_before - 0.939)
-        or abs(right_hand_z_after - 0.006) >= abs(right_hand_z_before - 0.006)
+        or abs(right_hand_z_after - 0.006) > 0.012
     ):
         alerts.append(
             {

@@ -57,8 +57,9 @@ const ARM_VOLUME_SIDE_SURFACE_MAX_HEIGHT: f32 = 0.69;
 const ARM_VOLUME_SIDE_SURFACE_MIN_LATERAL: f32 = 0.18;
 const ARM_VOLUME_MAX_LATERAL_DELTA: f32 = 0.130;
 const ARM_VOLUME_Z_SCALE: f32 = 0.55;
-const ARM_HAND_FIT_MIN_HAND_WEIGHT: f32 = 0.30;
-const ARM_HAND_FIT_STRENGTH: f32 = 0.88;
+const ARM_LOCAL_VOLUME_MIN_LATERAL: f32 = 0.16;
+const ARM_HAND_FIT_MIN_HAND_WEIGHT: f32 = 0.12;
+const ARM_HAND_FIT_STRENGTH: f32 = 1.00;
 const ARM_HAND_FIT_TARGET_LEFT_X: f32 = 0.590;
 const ARM_HAND_FIT_TARGET_RIGHT_X: f32 = -0.587;
 const ARM_HAND_FIT_TARGET_Y: f32 = 0.939;
@@ -629,9 +630,6 @@ fn apply_weights(
         vertex[donor_bone as usize] += weight;
     }
 
-    if arm_volume_profile {
-        mesh.arm_volume_profile = apply_arm_volume_profile(mesh, &accum, donor_lookup)?;
-    }
     if arm_island_prune {
         mesh.arm_island_prune = prune_broken_arm_islands(mesh, &accum, donor_lookup)?;
     }
@@ -644,6 +642,9 @@ fn apply_weights(
     if let Some(region_map_tsv) = region_map_tsv {
         mesh.region_response =
             apply_region_responses(mesh, &mut accum, region_map_tsv, donor_lookup)?;
+    }
+    if arm_volume_profile {
+        mesh.arm_volume_profile = apply_arm_volume_profile(mesh, &accum, donor_lookup)?;
     }
 
     for (vertex_index, vertex) in mesh.vertices.iter_mut().enumerate() {
@@ -1019,6 +1020,21 @@ fn apply_arm_volume_profile(
         max_lateral_delta = max_lateral_delta.max(delta.abs());
     }
 
+    let (local_scale_vertices, local_scale_delta) = apply_arm_local_cross_section_volume(
+        mesh,
+        accum,
+        left_upper,
+        left_forearm,
+        left_hand,
+        right_upper,
+        right_forearm,
+        right_hand,
+        center_x,
+        height_span,
+    );
+    affected_vertices += local_scale_vertices;
+    max_lateral_delta = max_lateral_delta.max(local_scale_delta);
+
     let mut hand_fit_vertices = 0;
     let mut max_hand_translation = 0.0_f32;
     for (vertex_index, vertex) in mesh.vertices.iter_mut().enumerate() {
@@ -1081,8 +1097,83 @@ fn apply_arm_volume_profile(
         right_hand_center_y_after: right_hand_after.y,
         right_hand_center_z_before: right_hand_before.z,
         right_hand_center_z_after: right_hand_after.z,
-        response: "side_surface_profile_curve_with_hand_fit".to_string(),
+        response: "local_cross_section_volume_with_hand_fit".to_string(),
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_arm_local_cross_section_volume(
+    mesh: &mut SourceMesh,
+    accum: &[[f32; 256]],
+    left_upper: u8,
+    left_forearm: u8,
+    left_hand: u8,
+    right_upper: u8,
+    right_forearm: u8,
+    right_hand: u8,
+    center_x: f32,
+    height_span: f32,
+) -> (usize, f32) {
+    const BANDS: &[(f32, f32, f32)] = &[
+        (0.47, 0.535, 1.30),
+        (0.535, 0.605, 1.95),
+        (0.605, 0.680, 1.75),
+    ];
+    let mut total_vertices = 0;
+    let mut max_delta = 0.0_f32;
+    for side_sign in [1.0_f32, -1.0_f32] {
+        for (min_height, max_height, scale) in BANDS {
+            let indices = mesh
+                .vertices
+                .iter()
+                .enumerate()
+                .filter_map(|(vertex_index, vertex)| {
+                    let row = &accum[vertex_index];
+                    let left_weight = row[left_upper as usize]
+                        + row[left_forearm as usize]
+                        + row[left_hand as usize];
+                    let right_weight = row[right_upper as usize]
+                        + row[right_forearm as usize]
+                        + row[right_hand as usize];
+                    let side_weight = if side_sign > 0.0 {
+                        left_weight
+                    } else {
+                        right_weight
+                    };
+                    let height = normalized_height(vertex.position, mesh.bbox_min.y, height_span);
+                    let lateral = side_sign * (vertex.position.x - center_x);
+                    ((side_weight >= ARM_VOLUME_MIN_SIDE_WEIGHT
+                        || lateral >= ARM_LOCAL_VOLUME_MIN_LATERAL)
+                        && (*min_height..=*max_height).contains(&height)
+                        && lateral >= ARM_LOCAL_VOLUME_MIN_LATERAL)
+                        .then_some(vertex_index)
+                })
+                .collect::<Vec<_>>();
+            if indices.len() < 3 {
+                continue;
+            }
+            let center = indices.iter().fold(Vec3::default(), |mut sum, index| {
+                let position = mesh.vertices[*index].position;
+                sum.x += position.x;
+                sum.z += position.z;
+                sum
+            });
+            let center_x_local = center.x / indices.len() as f32;
+            let center_z_local = center.z / indices.len() as f32;
+            for index in indices {
+                let vertex = &mut mesh.vertices[index];
+                let old_x = vertex.position.x;
+                let old_z = vertex.position.z;
+                vertex.position.x = center_x_local + (vertex.position.x - center_x_local) * *scale;
+                vertex.position.z = center_z_local + (vertex.position.z - center_z_local) * *scale;
+                let dx = vertex.position.x - old_x;
+                let dz = vertex.position.z - old_z;
+                max_delta = max_delta.max((dx * dx + dz * dz).sqrt());
+                total_vertices += 1;
+            }
+        }
+    }
+    (total_vertices, max_delta)
 }
 
 fn arm_hand_centers(
