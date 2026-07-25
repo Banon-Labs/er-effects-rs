@@ -54,13 +54,14 @@ const ARM_FOREARM_SURFACE_PRESERVE_RESPONSE: &str = "preserved_forearm_surface_n
 const ARM_VOLUME_MIN_SIDE_WEIGHT: f32 = 0.08;
 const ARM_VOLUME_SIDE_SURFACE_MIN_HEIGHT: f32 = 0.46;
 const ARM_VOLUME_SIDE_SURFACE_MAX_HEIGHT: f32 = 0.69;
-const ARM_VOLUME_SIDE_SURFACE_MIN_LATERAL: f32 = 0.22;
-const ARM_VOLUME_MAX_LATERAL_DELTA: f32 = 0.090;
-const ARM_VOLUME_Z_SCALE: f32 = 0.45;
+const ARM_VOLUME_SIDE_SURFACE_MIN_LATERAL: f32 = 0.18;
+const ARM_VOLUME_MAX_LATERAL_DELTA: f32 = 0.130;
+const ARM_VOLUME_Z_SCALE: f32 = 0.55;
 const ARM_HAND_FIT_MIN_HAND_WEIGHT: f32 = 0.30;
-const ARM_HAND_FIT_STRENGTH: f32 = 0.75;
+const ARM_HAND_FIT_STRENGTH: f32 = 0.88;
 const ARM_HAND_FIT_TARGET_LEFT_X: f32 = 0.590;
 const ARM_HAND_FIT_TARGET_RIGHT_X: f32 = -0.587;
+const ARM_HAND_FIT_TARGET_Y: f32 = 0.939;
 const ARM_HAND_FIT_TARGET_Z: f32 = 0.006;
 
 const HEADER_SIZE: usize = 0x80;
@@ -190,8 +191,12 @@ struct ArmVolumeProfileReport {
     bicep_radius_after: f32,
     shoulder_radius_before: f32,
     shoulder_radius_after: f32,
+    left_hand_center_y_before: f32,
+    left_hand_center_y_after: f32,
     left_hand_center_z_before: f32,
     left_hand_center_z_after: f32,
+    right_hand_center_y_before: f32,
+    right_hand_center_y_after: f32,
     right_hand_center_z_before: f32,
     right_hand_center_z_after: f32,
     response: String,
@@ -1032,11 +1037,13 @@ fn apply_arm_volume_profile(
             * ((hand_weight - ARM_HAND_FIT_MIN_HAND_WEIGHT) / (1.0 - ARM_HAND_FIT_MIN_HAND_WEIGHT))
                 .clamp(0.0, 1.0);
         let dx = (target_x - before_center.x) * strength;
+        let dy = (ARM_HAND_FIT_TARGET_Y - before_center.y) * strength;
         let dz = (ARM_HAND_FIT_TARGET_Z - before_center.z) * strength;
         vertex.position.x += dx;
+        vertex.position.y += dy;
         vertex.position.z += dz;
         hand_fit_vertices += 1;
-        max_hand_translation = max_hand_translation.max((dx * dx + dz * dz).sqrt());
+        max_hand_translation = max_hand_translation.max((dx * dx + dy * dy + dz * dz).sqrt());
     }
 
     let (elbow_after, bicep_after, shoulder_after) = arm_volume_profile_radii(
@@ -1066,8 +1073,12 @@ fn apply_arm_volume_profile(
         bicep_radius_after: bicep_after,
         shoulder_radius_before: shoulder_before,
         shoulder_radius_after: shoulder_after,
+        left_hand_center_y_before: left_hand_before.y,
+        left_hand_center_y_after: left_hand_after.y,
         left_hand_center_z_before: left_hand_before.z,
         left_hand_center_z_after: left_hand_after.z,
+        right_hand_center_y_before: right_hand_before.y,
+        right_hand_center_y_after: right_hand_after.y,
         right_hand_center_z_before: right_hand_before.z,
         right_hand_center_z_after: right_hand_after.z,
         response: "side_surface_profile_curve_with_hand_fit".to_string(),
@@ -1117,12 +1128,12 @@ fn arm_hand_centers(
 fn arm_volume_profile_delta(height: f32) -> f32 {
     const PROFILE: &[(f32, f32)] = &[
         (0.34, 0.000),
-        (0.42, 0.010),
-        (0.49, 0.024),
-        (0.53, 0.045),
+        (0.42, 0.014),
+        (0.49, 0.038),
+        (0.53, 0.075),
         (0.56, ARM_VOLUME_MAX_LATERAL_DELTA),
-        (0.60, 0.050),
-        (0.65, 0.090),
+        (0.60, 0.092),
+        (0.65, 0.122),
         (0.70, 0.000),
     ];
     for window in PROFILE.windows(2) {
@@ -2631,9 +2642,21 @@ fn write_summary(
         )?;
         writeln!(
             file,
+            "arm_volume_profile_left_hand_y_before_after={:.6},{:.6}",
+            source.arm_volume_profile.left_hand_center_y_before,
+            source.arm_volume_profile.left_hand_center_y_after
+        )?;
+        writeln!(
+            file,
             "arm_volume_profile_left_hand_z_before_after={:.6},{:.6}",
             source.arm_volume_profile.left_hand_center_z_before,
             source.arm_volume_profile.left_hand_center_z_after
+        )?;
+        writeln!(
+            file,
+            "arm_volume_profile_right_hand_y_before_after={:.6},{:.6}",
+            source.arm_volume_profile.right_hand_center_y_before,
+            source.arm_volume_profile.right_hand_center_y_after
         )?;
         writeln!(
             file,

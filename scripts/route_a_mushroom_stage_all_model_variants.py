@@ -414,7 +414,9 @@ def main() -> int:
         args.witchy_retries,
     )
     fg_inputs = fg_names if args.stage_fg_aliases else []
-    fg_count = stage_fg(witchy, args.alias_root, parts_dir, fg_inputs, args.witchy_retries)
+    fg_count = stage_fg(
+        witchy, args.alias_root, parts_dir, fg_inputs, args.witchy_retries
+    )
     fg_mode = "dictionary" if args.stage_fg_aliases else "compatibility-only"
     hidden_slot_count = stage_hidden_slots(parts_dir, args.hidden_slot_dir)
     lines = [
