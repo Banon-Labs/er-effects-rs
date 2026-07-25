@@ -8,18 +8,33 @@ showed up only after package/runtime review. They do not launch Elden Ring.
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import zipfile
 from pathlib import Path
+from typing import Any, cast
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CANDIDATE_ROOT = REPO_ROOT / "target/mushroom-route-a-offline/blender-edit/adult-closed-remesh-v12"
+CANDIDATE_ROOT = (
+    REPO_ROOT / "target/mushroom-route-a-offline/blender-edit/adult-closed-remesh-v12"
+)
 CANDIDATE_OBJ = CANDIDATE_ROOT / "closed_remesh.obj"
 CANDIDATE_FLVER_GUARD = CANDIDATE_ROOT / "flver/model-guard-report.json"
+CANDIDATE_STAGING_SUMMARY = CANDIDATE_ROOT / "model-variant-staging-summary.txt"
+CANDIDATE_WEIGHTS = CANDIDATE_ROOT / "closed_remesh_weights.tsv"
+SOURCE_WEIGHTS = (
+    REPO_ROOT
+    / "target/mushroom-route-a-offline/blender-edit/adult-auto-rig-v10/export/blender_edit_c2280_weights.tsv"
+)
+BUILD_TIME_GUARD_REPORT = CANDIDATE_ROOT / "mushroom-build-time-guard-report.json"
 CANDIDATE_PROFILE = (
     REPO_ROOT
     / "target/mushroom-replacement-lod-redirect-spine-arm-closed-remesh-v12-install/mushroom-man.me3"
 )
-CANDIDATE_ZIP = REPO_ROOT / "target/mushroom-man-replacement-lod-redirect-spine-arm-closed-remesh-v12.zip"
+CANDIDATE_ZIP = (
+    REPO_ROOT
+    / "target/mushroom-man-replacement-lod-redirect-spine-arm-closed-remesh-v12.zip"
+)
 RUNTIME_SOURCE = REPO_ROOT / "crates/mushroom-man-runtime/src/lib.rs"
 REQUIRED_HIDE_CATEGORIES = {"face", "hair", "eyelashes", "beards", "eyeballs"}
 REQUIRED_ORACLE_MARKERS = {
@@ -30,9 +45,16 @@ REQUIRED_ORACLE_MARKERS = {
     "std::process::abort()",
 }
 MIN_OUTWARD_NORMAL_DOT_RATIO = 0.98
+MIN_ARM_SURFACE_COVERAGE_RATIO = 0.50
 
 
-def load_obj(path: Path) -> tuple[list[tuple[float, float, float]], list[tuple[float, float, float]], list[list[tuple[int, int]]]]:
+def load_obj(
+    path: Path,
+) -> tuple[
+    list[tuple[float, float, float]],
+    list[tuple[float, float, float]],
+    list[list[tuple[int, int]]],
+]:
     vertices: list[tuple[float, float, float]] = []
     normals: list[tuple[float, float, float]] = []
     faces: list[list[tuple[int, int]]] = []
@@ -48,7 +70,11 @@ def load_obj(path: Path) -> tuple[list[tuple[float, float, float]], list[tuple[f
             for part in line.split()[1:4]:
                 pieces = part.split("/")
                 vertex_index = int(pieces[0]) - 1
-                normal_index = int(pieces[2]) - 1 if len(pieces) > 2 and pieces[2] else vertex_index
+                normal_index = (
+                    int(pieces[2]) - 1
+                    if len(pieces) > 2 and pieces[2]
+                    else vertex_index
+                )
                 face.append((vertex_index, normal_index))
             faces.append(face)
     return vertices, normals, faces
@@ -58,7 +84,9 @@ def dot(a: tuple[float, float, float], b: tuple[float, float, float]) -> float:
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 
 
-def sub(a: tuple[float, float, float], b: tuple[float, float, float]) -> tuple[float, float, float]:
+def sub(
+    a: tuple[float, float, float], b: tuple[float, float, float]
+) -> tuple[float, float, float]:
     return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
 
 
@@ -89,7 +117,9 @@ def test_closed_topology_has_zero_tear_proxies() -> None:
 def test_normals_face_outward_for_review_candidate() -> None:
     vertices, normals, faces = load_obj(CANDIDATE_OBJ)
     assert vertices, "candidate OBJ has no vertices"
-    assert len(normals) == len(vertices), "candidate OBJ must include one normal per vertex"
+    assert len(normals) == len(vertices), (
+        "candidate OBJ must include one normal per vertex"
+    )
     center = centroid(vertices)
     outward = 0
     total = 0
@@ -118,21 +148,69 @@ def test_package_and_profile_include_mushroom_runtime_dll() -> None:
     assert any(file["path"].endswith("/mushroom_man.dll") for file in manifest_files)
 
 
-def test_package_manifest_declares_required_hide_coverage_categories() -> None:
-    with zipfile.ZipFile(CANDIDATE_ZIP) as package:
-        manifest = json.loads(package.read("package-manifest.json"))
-    coverage = manifest.get("mushroom_man_hide_coverage", {})
-    categories = set(coverage.get("required_categories", []))
-    assert categories >= REQUIRED_HIDE_CATEGORIES, (
-        "package manifest must explicitly prove hide coverage for "
-        f"{sorted(REQUIRED_HIDE_CATEGORIES)}; got {sorted(categories)}"
+def run_build_time_guard() -> dict[str, Any]:
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts/mushroom_man_build_time_guard.py"),
+            "--source-mod",
+            str(CANDIDATE_ROOT / "mod"),
+            "--staging-summary",
+            str(CANDIDATE_STAGING_SUMMARY),
+            "--candidate-weights",
+            str(CANDIDATE_WEIGHTS),
+            "--source-weights",
+            str(SOURCE_WEIGHTS),
+            "--flver-guard",
+            str(CANDIDATE_FLVER_GUARD),
+            "--output",
+            str(BUILD_TIME_GUARD_REPORT),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
     )
-    assert set(coverage.get("verified_categories", [])) >= REQUIRED_HIDE_CATEGORIES
+    if not BUILD_TIME_GUARD_REPORT.is_file():
+        raise AssertionError(
+            "build-time guard did not write a report\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+    report: dict[str, Any] = json.loads(
+        BUILD_TIME_GUARD_REPORT.read_text(encoding="utf-8")
+    )
+    return report
+
+
+def test_build_time_guard_proves_static_hide_coverage() -> None:
+    report = run_build_time_guard()
+    summary = cast(dict[str, Any], report["summary"])
+    assert summary["fg_alias_mode"] == "dictionary"
+    assert summary["actual_fg_count"] >= summary["expected_fg_count"]
+    hide_alerts = [
+        alert
+        for alert in cast(list[dict[str, Any]], report["alerts"])
+        if alert["code"] == "MUSHROOM_HIDE_FG_ALIAS_COVERAGE_INCOMPLETE"
+    ]
+    assert not hide_alerts, hide_alerts
+
+
+def test_build_time_guard_preserves_lower_arm_surface_coverage() -> None:
+    report = run_build_time_guard()
+    summary = cast(dict[str, Any], report["summary"])
+    coverage = cast(dict[str, dict[str, float]], summary["lower_arm_surface_coverage"])
+    low = {
+        bone: metrics
+        for bone, metrics in coverage.items()
+        if metrics["ratio"] < MIN_ARM_SURFACE_COVERAGE_RATIO
+    }
+    assert not low, low
 
 
 def test_runtime_has_fail_closed_readiness_oracle_for_missing_patch() -> None:
     source = RUNTIME_SOURCE.read_text(encoding="utf-8")
-    missing = sorted(marker for marker in REQUIRED_ORACLE_MARKERS if marker not in source)
+    missing = sorted(
+        marker for marker in REQUIRED_ORACLE_MARKERS if marker not in source
+    )
     assert not missing, (
         "runtime must expose an oracle that tears down when world+character+saveload "
         f"readiness is reached before the hide patch applies; missing markers: {missing}"
@@ -144,7 +222,8 @@ def main() -> int:
         test_closed_topology_has_zero_tear_proxies,
         test_normals_face_outward_for_review_candidate,
         test_package_and_profile_include_mushroom_runtime_dll,
-        test_package_manifest_declares_required_hide_coverage_categories,
+        test_build_time_guard_proves_static_hide_coverage,
+        test_build_time_guard_preserves_lower_arm_surface_coverage,
         test_runtime_has_fail_closed_readiness_oracle_for_missing_patch,
     ]
     failures: list[str] = []

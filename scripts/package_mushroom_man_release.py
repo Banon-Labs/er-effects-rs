@@ -17,6 +17,9 @@ from typing import Any
 PACKAGE_NAME = "mushroom-man-me3-all-variants"
 ZIP_ROOT = Path("mushroom-man") / "mod"
 REQUIRED_HIDE_CATEGORIES = ["face", "hair", "eyelashes", "beards", "eyeballs"]
+DEFAULT_SOURCE_WEIGHTS = Path(
+    "target/mushroom-route-a-offline/blender-edit/adult-auto-rig-v10/export/blender_edit_c2280_weights.tsv"
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -32,6 +35,22 @@ def parse_args() -> argparse.Namespace:
         "--flver-summary",
         type=Path,
         help="generated FLVER patch summary; defaults to source-mod parent/fc_m_0000-lod-redirect-summary.txt and is required for model-guard enforcement",
+    )
+    parser.add_argument(
+        "--staging-summary",
+        type=Path,
+        help="generated all-model-variant staging summary for build-time visual guard",
+    )
+    parser.add_argument(
+        "--candidate-weights",
+        type=Path,
+        help="candidate remesh weights TSV for lower-arm/hand coverage guard",
+    )
+    parser.add_argument(
+        "--source-weights",
+        type=Path,
+        default=DEFAULT_SOURCE_WEIGHTS,
+        help="authored source weights TSV used as lower-arm/hand coverage baseline",
     )
     return parser.parse_args()
 
@@ -92,6 +111,54 @@ def run_model_guards(flver_summary: Path, connectivity_audit: Path) -> Path:
     )
     if result.returncode != 0:
         raise SystemExit(f"model guard failed; see {report_path}")
+    return report_path
+
+
+def resolve_staging_summary(source_mod: Path, override: Path | None) -> Path:
+    if override is not None:
+        return require_file(override, "all-model-variant staging summary")
+    return require_file(
+        source_mod.parent / "model-variant-staging-summary.txt",
+        "all-model-variant staging summary",
+    )
+
+
+def resolve_candidate_weights(source_mod: Path, override: Path | None) -> Path:
+    if override is not None:
+        return require_file(override, "candidate remesh weights")
+    return require_file(source_mod.parent / "closed_remesh_weights.tsv", "candidate remesh weights")
+
+
+def run_build_time_guard(
+    source_mod: Path,
+    staging_summary: Path,
+    candidate_weights: Path,
+    source_weights: Path,
+    flver_guard: Path,
+) -> Path:
+    script = Path(__file__).with_name("mushroom_man_build_time_guard.py")
+    report_path = source_mod.parent / "mushroom-build-time-guard-report.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--source-mod",
+            str(source_mod),
+            "--staging-summary",
+            str(staging_summary),
+            "--candidate-weights",
+            str(candidate_weights),
+            "--source-weights",
+            str(source_weights),
+            "--flver-guard",
+            str(flver_guard),
+            "--output",
+            str(report_path),
+        ],
+        check=False,
+    )
+    if result.returncode != 0:
+        raise SystemExit(f"Mushroom Man build-time visual guard failed; see {report_path}")
     return report_path
 
 
@@ -176,7 +243,17 @@ def main() -> int:
     audit = load_json(audit_path)
     install_script = require_file(args.install_script, "installer")
     flver_summary = resolve_flver_summary(source_mod, args.flver_summary)
-    run_model_guards(flver_summary, audit_path)
+    flver_guard = run_model_guards(flver_summary, audit_path)
+    staging_summary = resolve_staging_summary(source_mod, args.staging_summary)
+    candidate_weights = resolve_candidate_weights(source_mod, args.candidate_weights)
+    source_weights = require_file(args.source_weights, "source arm coverage weights")
+    run_build_time_guard(
+        source_mod,
+        staging_summary,
+        candidate_weights,
+        source_weights,
+        flver_guard,
+    )
     with tempfile.TemporaryDirectory(prefix="mushroom-man-release-") as temp_dir:
         staging = Path(temp_dir)
         shutil.copytree(source_mod, staging / ZIP_ROOT)
