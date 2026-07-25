@@ -1653,6 +1653,11 @@ fn write_game_module_oracles(body: &mut String) {
         );
         push_json_usize(
             body,
+            "oracle_native_overlay_handoff_ready_hits",
+            NATIVE_OVERLAY_HANDOFF_READY_HITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
             "oracle_native_overlay_failure",
             NATIVE_OVERLAY_FAILURE.load(Ordering::SeqCst),
         );

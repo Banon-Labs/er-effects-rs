@@ -4,31 +4,51 @@ set -euo pipefail
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 PRODUCT_LAUNCHER="${PRODUCT_LAUNCHER:-$HOME/Elden/launch.sh}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/windows-proof-render-smoke-$(date +%Y%m%d-%H%M%S)}"
-RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-20}"
-RUNTIME_WATCH_TARGET="${RUNTIME_WATCH_TARGET:-game-man}"
+RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-}"
+RUNTIME_WATCH_TARGET="${RUNTIME_WATCH_TARGET:-}"
 RUNTIME_EXPECTED_MODE="${RUNTIME_EXPECTED_MODE:-vanilla}"
 DRY_RUN=0
+REQUIRE_HANDOFF=0
 
 usage() {
   cat <<EOF
-Usage: scripts/run-windows-proof-render-smoke.sh [--dry-run]
+Usage: scripts/run-windows-proof-render-smoke.sh [--dry-run] [--require-handoff]
 
 Launches the normal user/product ME3 launcher ($PRODUCT_LAUNCHER) and fails unless runtime telemetry proves:
   oracle_windows_proof_mode == 1
   oracle_forbidden_render_backend_hits == 0
   oracle_native_overlay_frames > 0
 
-Default target is game-man so this is a short renderer-safety smoke, not a character-load/autoload proof.
+With --require-handoff, also requires:
+  oracle_native_overlay_handoff_ready_hits > 0
+
+Default target is game-man so this is a short renderer-safety smoke. --require-handoff switches the default target to native-overlay-handoff and uses the canonical runtime cap unless overridden.
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=1; shift ;;
+    --require-handoff) REQUIRE_HANDOFF=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+if [[ -z "$RUNTIME_WATCH_TARGET" ]]; then
+  if (( REQUIRE_HANDOFF )); then
+    RUNTIME_WATCH_TARGET="native-overlay-handoff"
+  else
+    RUNTIME_WATCH_TARGET="game-man"
+  fi
+fi
+if [[ -z "$RUNTIME_TIMEOUT_SECONDS" ]]; then
+  if (( REQUIRE_HANDOFF )); then
+    RUNTIME_TIMEOUT_SECONDS="$(python3 "$REPO_ROOT/scripts/runtime_timeout_cap.py")"
+  else
+    RUNTIME_TIMEOUT_SECONDS=20
+  fi
+fi
 
 fatal() { echo "run-windows-proof-render-smoke: $*" >&2; exit 2; }
 require_file() { [[ -f "$1" ]] || fatal "missing file: $1"; }
@@ -92,7 +112,7 @@ VERDICT_PATH="$ARTIFACT_DIR/windows-proof-render-smoke-verdict.json"
 
 if (( DRY_RUN )); then
   cat > "$ARTIFACT_DIR/dry-run-summary.json" <<EOF
-{"artifact_dir":"$ARTIFACT_DIR","launcher":"$PRODUCT_LAUNCHER","watch_target":"$RUNTIME_WATCH_TARGET","timeout_seconds":$RUNTIME_TIMEOUT_SECONDS,"criteria":["oracle_windows_proof_mode == 1","oracle_forbidden_render_backend_hits == 0","oracle_native_overlay_frames > 0"]}
+{"artifact_dir":"$ARTIFACT_DIR","launcher":"$PRODUCT_LAUNCHER","watch_target":"$RUNTIME_WATCH_TARGET","timeout_seconds":$RUNTIME_TIMEOUT_SECONDS,"require_handoff":$REQUIRE_HANDOFF,"criteria":["oracle_windows_proof_mode == 1","oracle_forbidden_render_backend_hits == 0","oracle_native_overlay_frames > 0","oracle_native_overlay_handoff_ready_hits > 0 if --require-handoff"]}
 EOF
   echo "dry-run ok: would launch $PRODUCT_LAUNCHER, watch target '$RUNTIME_WATCH_TARGET', require Windows-proof renderer telemetry, then cleanup exact eldenring.exe pids"
   echo "artifact_dir=$ARTIFACT_DIR"
@@ -128,7 +148,7 @@ RUNTIME_SKIP_VISUAL_CAPTURE=1 \
 RUNTIME_EXTRA_WATCH_ARGS="${RUNTIME_EXTRA_WATCH_ARGS:---no-phase-watchdog --no-world-load-deadline}" \
 "$REPO_ROOT/.auto/runtime_probe.sh" > "$ARTIFACT_DIR/runtime-probe.out" 2> "$ARTIFACT_DIR/runtime-probe.err" || watcher_status=$?
 
-python3 - "$ARTIFACT_DIR" "$TELEMETRY_PATH" "$VERDICT_PATH" "$watcher_status" <<'PY'
+python3 - "$ARTIFACT_DIR" "$TELEMETRY_PATH" "$VERDICT_PATH" "$watcher_status" "$REQUIRE_HANDOFF" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -137,6 +157,7 @@ artifact = Path(sys.argv[1])
 telemetry_path = Path(sys.argv[2])
 verdict_path = Path(sys.argv[3])
 watcher_status = int(sys.argv[4])
+require_handoff = sys.argv[5] == "1"
 
 def as_int(value, default=0):
     if isinstance(value, bool):
@@ -160,7 +181,9 @@ hits = as_int(telemetry.get("oracle_forbidden_render_backend_hits") if isinstanc
 native_overlay_frames = as_int(telemetry.get("oracle_native_overlay_frames") if isinstance(telemetry, dict) else None, -1)
 native_overlay_stage = as_int(telemetry.get("oracle_native_overlay_stage") if isinstance(telemetry, dict) else None, -1)
 native_overlay_failure = as_int(telemetry.get("oracle_native_overlay_failure") if isinstance(telemetry, dict) else None, -1)
+native_overlay_handoff_ready_hits = as_int(telemetry.get("oracle_native_overlay_handoff_ready_hits") if isinstance(telemetry, dict) else None, -1)
 native_overlay_proven = native_overlay_frames > 0
+native_overlay_handoff_proven = native_overlay_handoff_ready_hits > 0
 verdict = {
     "artifact_dir": str(artifact),
     "watcher_status": watcher_status,
@@ -171,8 +194,11 @@ verdict = {
     "oracle_native_overlay_frames": native_overlay_frames,
     "oracle_native_overlay_stage": native_overlay_stage,
     "oracle_native_overlay_failure": native_overlay_failure,
+    "oracle_native_overlay_handoff_ready_hits": native_overlay_handoff_ready_hits,
     "native_overlay_proven": native_overlay_proven,
-    "windows_proof_render_runtime": mode and hits == 0 and native_overlay_proven,
+    "native_overlay_handoff_proven": native_overlay_handoff_proven,
+    "require_handoff": require_handoff,
+    "windows_proof_render_runtime": mode and hits == 0 and native_overlay_proven and (not require_handoff or native_overlay_handoff_proven),
 }
 verdict_path.write_text(json.dumps(verdict, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 print("windows-proof-render-smoke:", json.dumps(verdict, sort_keys=True))

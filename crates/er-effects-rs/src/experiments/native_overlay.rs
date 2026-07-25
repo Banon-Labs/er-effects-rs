@@ -59,6 +59,8 @@ pub(crate) static NATIVE_OVERLAY_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static NATIVE_OVERLAY_FAILURE: AtomicUsize = AtomicUsize::new(0);
 /// 1 while the game's native loading GFx/bar surface is live enough for this bridge to hand off.
 pub(crate) static NATIVE_OVERLAY_HANDOFF_READY: AtomicUsize = AtomicUsize::new(0);
+/// Counts frames where the bridge saw the native loading GFx/bar surface and hid itself.
+pub(crate) static NATIVE_OVERLAY_HANDOFF_READY_HITS: AtomicUsize = AtomicUsize::new(0);
 
 const FAILURE_DYNAMIC_FACTORY: usize = 1;
 const FAILURE_DYNAMIC_DEVICE: usize = 2;
@@ -78,6 +80,9 @@ pub(crate) fn install_native_overlay() {
 pub(crate) fn native_overlay_player_presence_tick(player_available: bool) {
     let handoff_ready = native_loading_surface_handoff_ready();
     NATIVE_OVERLAY_HANDOFF_READY.store(usize::from(handoff_ready), Ordering::SeqCst);
+    if handoff_ready {
+        NATIVE_OVERLAY_HANDOFF_READY_HITS.fetch_add(1, Ordering::SeqCst);
+    }
     NATIVE_OVERLAY_SHOW.store(
         usize::from(!player_available && !handoff_ready),
         Ordering::SeqCst,
