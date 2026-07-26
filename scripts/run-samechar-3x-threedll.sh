@@ -37,6 +37,8 @@ LAUNCH_ENV_VARS=()
 RDOC_DLL="${RENDERDOC_DLL:-/mnt/c/Program Files/RenderDoc/renderdoc.dll}"
 CAP_SECONDS="${CAP_SECONDS:-$(cat "$REPO_ROOT/.auto/runtime_timeout_cap_seconds" 2>/dev/null || echo 180)}"
 DRIVE_RELOAD_SLOTS="${DRIVE_RELOAD_SLOTS-0,0}"
+WORLD_STABLE_TIMEOUT_S="${WORLD_STABLE_TIMEOUT_S:-90}"
+export WORLD_STABLE_TIMEOUT_S
 
 fail() {
 	echo "run-samechar-3x-threedll: $*" >&2
