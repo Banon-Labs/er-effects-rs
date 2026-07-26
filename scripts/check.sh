@@ -24,6 +24,9 @@ python3 "$repo_root/scripts/test-env-gate-comments.py"
 python3 "$repo_root/scripts/check-marker-file-gates.py"
 python3 "$repo_root/scripts/test-marker-file-gates.py"
 python3 "$repo_root/scripts/check-reload-trace-dll-policy.py" --audit
+python3 "$repo_root/scripts/check-windows-proof-render.py"
+python3 "$repo_root/scripts/test-windows-proof-render.py"
+python3 "$repo_root/scripts/test-windows-proof-render-smoke-verdict.py"
 command -v cupcake >/dev/null 2>&1 || {
 	echo "missing required command: cupcake" >&2
 	exit 127
@@ -42,6 +45,7 @@ shellcheck "$repo_root/scripts/check-no-local-main-commits.sh"
 shellcheck "$repo_root/scripts/stage-autoload-release.sh"
 shellcheck "$repo_root/scripts/run-product-continue-direct-probe.sh"
 shellcheck "$repo_root/scripts/run-me3-product-smoke.sh"
+shellcheck "$repo_root/scripts/run-windows-proof-render-smoke.sh"
 shellcheck "$repo_root/scripts/check-rust-build.sh"
 
 # Rust format + Windows-target BUILD of the injectable DLL (cross-compiled from Linux via
