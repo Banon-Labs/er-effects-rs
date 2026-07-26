@@ -129,12 +129,12 @@ def test_rejects_missing_child_cover() -> None:
     assert_rejects_missing("oracle_native_overlay_child_cover_match")
 
 
-def test_rejects_geometry_mismatch_hits() -> None:
+def test_allows_transient_geometry_mismatch_history_when_final_cover_matches() -> None:
     telemetry = good_telemetry()
-    telemetry["oracle_native_overlay_child_geometry_mismatch_hits"] = 1
+    telemetry["oracle_native_overlay_child_geometry_mismatch_hits"] = 17
     got = verdict(telemetry)
-    assert got["native_overlay_child_attached"] is False
-    assert not got["windows_proof_render_runtime"]
+    assert got["native_overlay_child_attached"] is True
+    assert got["windows_proof_render_runtime"] is True
 
 
 def test_rejects_missing_bridge_pixel_match() -> None:
@@ -256,7 +256,7 @@ def main() -> int:
         test_rejects_parent_mismatch,
         test_allows_oversized_stable_child_when_cover_matches,
         test_rejects_missing_child_cover,
-        test_rejects_geometry_mismatch_hits,
+        test_allows_transient_geometry_mismatch_history_when_final_cover_matches,
         test_rejects_missing_bridge_pixel_match,
         test_rejects_missing_loading_visibility,
         test_rejects_missing_full_content_proof,

@@ -118,6 +118,12 @@ def test_native_overlay_child_covers_parent_without_visible_resize() -> None:
     assert "SetWindowPos" in native_overlay
     assert "SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW" in native_overlay
     assert "record_bridge_pixel_copy(&list, bb, readback, *footprint, probe_x, probe_y)" in native_overlay
+
+    winreconfig = (REPO_ROOT / "crates/er-effects-rs/src/experiments/startup_hooks/window_reconfig_observer.rs").read_text()
+    assert "winreconfig_change_display_hook" in winreconfig
+    assert "WINRECONFIG_CHANGE_DISPLAY_SUPPRESSED" in winreconfig
+    assert "crate::experiments::NATIVE_OVERLAY_SHOW.load(Ordering::SeqCst) != 0" in winreconfig
+    assert "return DISP_CHANGE_SUCCESSFUL" in winreconfig
     assert "left: x" in native_overlay
     assert "top: y" in native_overlay
     assert "NATIVE_OVERLAY_BAR_PIXEL_MISSING_FRAMES" in native_overlay
@@ -147,6 +153,7 @@ def test_native_overlay_child_covers_parent_without_visible_resize() -> None:
     assert "oracle_native_overlay_present_fail_hits" in telemetry
     assert "oracle_native_overlay_child_is_window" in telemetry
     assert "oracle_native_overlay_child_is_visible" in telemetry
+    assert "oracle_winreconfig_change_display_suppressed" in telemetry
 
 
 def test_native_overlay_release_uses_semantic_render_ready() -> None:

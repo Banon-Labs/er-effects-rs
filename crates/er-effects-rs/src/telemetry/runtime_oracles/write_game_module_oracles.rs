@@ -2008,6 +2008,11 @@ fn write_game_module_oracles(body: &mut String) {
         );
         push_json_usize(
             body,
+            "oracle_winreconfig_change_display_suppressed",
+            WINRECONFIG_CHANGE_DISPLAY_SUPPRESSED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
             "oracle_winreconfig_early_apply_result",
             WINRECONFIG_EARLY_APPLY_RESULT.load(Ordering::SeqCst),
         );

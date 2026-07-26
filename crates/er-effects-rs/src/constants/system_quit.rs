@@ -346,6 +346,7 @@ pub(crate) static START_SPLASH_SKIP: Once = Once::new();
 pub(crate) static START_ONLINE_DISABLE: Once = Once::new();
 pub(crate) static START_FOREGROUND_FORCE: Once = Once::new();
 pub(crate) static START_SOUND_POST_EVENT_OBSERVER: Once = Once::new();
+pub(crate) static START_WINRECONFIG_DISPLAY_MODE_GUARD: Once = Once::new();
 pub(crate) static START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS: Once = Once::new();
 pub(crate) static START_TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS: Once = Once::new();
 pub(crate) static START_TITLE_LOGO_START_LOGIN_HIDE: Once = Once::new();

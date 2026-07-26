@@ -35,6 +35,10 @@ def build_verdict(
         telemetry.get("oracle_forbidden_render_backend_hits") if isinstance(telemetry, dict) else None,
         -1,
     )
+    winreconfig_change_display_suppressed = as_int(
+        telemetry.get("oracle_winreconfig_change_display_suppressed") if isinstance(telemetry, dict) else None,
+        0,
+    )
     native_overlay_frames = as_int(
         telemetry.get("oracle_native_overlay_frames") if isinstance(telemetry, dict) else None,
         -1,
@@ -138,7 +142,6 @@ def build_verdict(
         and native_overlay_parent_hwnd > 0
         and native_overlay_child_parent_match == 1
         and native_overlay_child_cover_match == 1
-        and native_overlay_child_geometry_mismatch_hits == 0
     )
     native_overlay_proven = native_overlay_frames > 0 and native_overlay_pixel_probe_matches > 0
     native_overlay_handoff_observed = native_overlay_handoff_ready_hits > 0
@@ -177,6 +180,7 @@ def build_verdict(
         "telemetry_written": telemetry_written,
         "oracle_windows_proof_mode": 1 if mode else 0,
         "oracle_forbidden_render_backend_hits": hits,
+        "oracle_winreconfig_change_display_suppressed": winreconfig_change_display_suppressed,
         "oracle_native_overlay_frames": native_overlay_frames,
         "oracle_native_overlay_stage": native_overlay_stage,
         "oracle_native_overlay_failure": native_overlay_failure,

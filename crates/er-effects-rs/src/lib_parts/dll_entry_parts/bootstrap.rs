@@ -305,6 +305,11 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
             .name("er-effects-sound-post-event".to_owned())
             .spawn(install_sound_post_event_observer_hook);
     });
+    START_WINRECONFIG_DISPLAY_MODE_GUARD.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("er-effects-winreconfig-guard".to_owned())
+            .spawn(install_window_reconfig_display_mode_guard);
+    });
 
     install_title_visual_startup_hooks();
     install_profile_and_system_quit_hooks();

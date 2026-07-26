@@ -1,14 +1,12 @@
-// Observe-only user32 window-reconfiguration hooks (bd er-effects-rs-rzow).
+// user32 window-reconfiguration hooks (bd er-effects-rs-rzow).
 //
 // The 60fps boot videos proved the mid-boot black flashes are the game's own startup
-// display-mode application: the boot window is created small/windowed and jumps to borderless
-// fullscreen at ~+11s through user32 window calls, each of which XWayland/Hyprland services
-// with a few black frames in the presented surface (bd boot-video-black-flash-root-cause-
-// 2026-07-06). These hooks are the in-process RAM-timeline semaphore for that phenomenon:
-// every CreateWindowExW / SetWindowPos / SetWindowLongPtrW / MoveWindow /
-// ChangeDisplaySettingsExW call is counted, and the first few are logged with their args and
-// the first game caller RVA, so a recorded video's black runs can be attributed to exact
-// native calls. Pure passthrough: nothing is modified, reordered, or suppressed.
+// display-mode application: the boot window is created small/windowed and jumps to fullscreen at
+// ~+11s through user32 window calls, each of which XWayland/Hyprland services with a few black frames
+// in the presented surface (bd boot-video-black-flash-root-cause-2026-07-06). The full observer set
+// remains diagnostic/sidecar-owned. Product installs only a narrow ChangeDisplaySettingsExW guard:
+// while the native bridge cover is visible, report success without changing display mode, preserving
+// child-window composition until the bridge hands off to the rendered world.
 
 /// Trampolines (0 = hook not installed).
 pub(crate) static WINRECONFIG_CREATE_WINDOW_ORIG: AtomicUsize = AtomicUsize::new(0);
@@ -23,6 +21,8 @@ pub(crate) static WINRECONFIG_SET_WINDOW_POS_CALLS: AtomicUsize = AtomicUsize::n
 pub(crate) static WINRECONFIG_SET_WINDOW_LONG_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static WINRECONFIG_MOVE_WINDOW_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static WINRECONFIG_CHANGE_DISPLAY_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// ChangeDisplaySettingsExW calls suppressed by the product bridge guard while the native cover is visible.
+pub(crate) static WINRECONFIG_CHANGE_DISPLAY_SUPPRESSED: AtomicUsize = AtomicUsize::new(0);
 /// Last SetWindowPos geometry, packed (cx << 32 | cy) and (x << 32 | y as u32) for telemetry.
 pub(crate) static WINRECONFIG_LAST_SET_POS_SIZE: AtomicUsize = AtomicUsize::new(0);
 
@@ -174,6 +174,8 @@ unsafe extern "system" fn winreconfig_move_window_hook(
 type ChangeDisplaySettingsExWFn =
     unsafe extern "system" fn(usize, usize, usize, u32, usize) -> i32;
 
+const DISP_CHANGE_SUCCESSFUL: i32 = 0;
+
 unsafe extern "system" fn winreconfig_change_display_hook(
     devname: usize,
     devmode: usize,
@@ -182,6 +184,19 @@ unsafe extern "system" fn winreconfig_change_display_hook(
     param: usize,
 ) -> i32 {
     let count = WINRECONFIG_CHANGE_DISPLAY_CALLS.fetch_add(1, Ordering::SeqCst);
+    if crate::experiments::windows_proof_render_enabled()
+        && crate::experiments::NATIVE_OVERLAY_SHOW.load(Ordering::SeqCst) != 0
+    {
+        WINRECONFIG_CHANGE_DISPLAY_SUPPRESSED.fetch_add(1, Ordering::SeqCst);
+        if count < WINRECONFIG_LOG_CAP {
+            append_autoload_debug(format_args!(
+                "winreconfig: ChangeDisplaySettingsExW #{count} SUPPRESSED while native bridge visible dev={} devmode=0x{devmode:x} hwnd=0x{hwnd:x} flags=0x{flags:x} caller_rva=0x{:x}",
+                winreconfig_name(devname),
+                trace_first_game_caller_rva(),
+            ));
+        }
+        return DISP_CHANGE_SUCCESSFUL;
+    }
     if count < WINRECONFIG_LOG_CAP {
         let (pels_w, pels_h) = if devmode == 0 {
             (0u32, 0u32)
@@ -207,6 +222,38 @@ unsafe extern "system" fn winreconfig_change_display_hook(
 /// Install all observe-only user32 window-reconfiguration hooks. Runs from its own attach
 /// thread (same early-attach pattern as the safe-input hooks) so CreateWindowExW is covered
 /// before the game builds its startup window.
+pub(crate) fn install_window_reconfig_display_mode_guard() {
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "winreconfig: display-mode guard MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(target) = safe_input_proc(b"user32.dll\0", b"ChangeDisplaySettingsExW\0") else {
+        append_autoload_debug(format_args!(
+            "winreconfig: display-mode guard ChangeDisplaySettingsExW resolve failed"
+        ));
+        return;
+    };
+    let mut hooks = Vec::new();
+    unsafe {
+        create_absolute_hook(
+            &mut hooks,
+            "ChangeDisplaySettingsExW",
+            target,
+            winreconfig_change_display_hook as *mut c_void,
+            &WINRECONFIG_CHANGE_DISPLAY_ORIG,
+        )
+    };
+    let _ = unsafe { MH_ApplyQueued() };
+    append_autoload_debug(format_args!(
+        "winreconfig: display-mode guard installed for native bridge"
+    ));
+}
+
 pub(crate) fn install_window_reconfig_observer_hooks() {
     match unsafe { MH_Initialize() } {
         MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
