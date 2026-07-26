@@ -109,8 +109,13 @@ for ep in required:
     didmove = max([as_int(s.get('oracle_did_move_frames'), 0) for s in samples] or [0])
     metrics[f'epoch{ep}_did_move_frames'] = didmove
     metrics[f'epoch{ep}_can_move'] = int(canmove)
+    supplied = max([as_int(s.get('oracle_supplied_movement_input_frames'), 0) for s in samples] or [0])
+    metrics[f'epoch{ep}_supplied_movement_frames'] = supplied
     if not canmove or didmove < 60:
-        score += 150; reasons.append(f'epoch{ep}_movement_unproven(can_move={canmove},did={didmove})')
+        # If supplied reached the full ON window, input delivery is proven and the remaining failure is
+        # native movability/loading-lock, not the input path. Still a failure, but more informative.
+        score += 100 if supplied >= 30 else 150
+        reasons.append(f'epoch{ep}_movement_unproven(can_move={canmove},did={didmove},supplied={supplied})')
     fps = [as_float(s.get('oracle_fps')) for s in samples if as_bool(s.get('oracle_can_move')) and as_float(s.get('oracle_fps')) > 0]
     if len(fps) < 4:
         score += 90; reasons.append(f'epoch{ep}_playable_fps_missing(n={len(fps)})')

@@ -269,14 +269,16 @@ pub(crate) fn move_probe_drive_key_foreground_only(vk: u32) {
         return;
     }
     let prev = SQ_REPRO_HELD_VK.swap(vk as usize, Ordering::SeqCst) as u32;
-    if prev == vk {
-        return;
-    }
-    if prev != 0 {
+    if prev != 0 && prev != vk {
         sq_repro_send_vk(prev, true);
     }
     if vk != 0 {
+        // Movement proof is sampled per frame. Send a foreground-gated key-down every ON frame instead
+        // of only on the first transition so a lost/filtered single event cannot make the proof falsely
+        // report "no supplied input". This path never forces focus; if ER is not already foreground it
+        // returned above. Count keyboard delivery as supplied movement input, distinct from actual motion.
         sq_repro_send_vk(vk, false);
+        crate::constants::SUPPLIED_MOVEMENT_INPUT_FRAMES.fetch_add(1, Ordering::Relaxed);
     }
 }
 
