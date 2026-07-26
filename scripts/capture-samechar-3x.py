@@ -1165,19 +1165,21 @@ def main() -> int:
             # write_oracle), so a nonzero value always belongs to the CURRENT load: no stale cross-epoch
             # verdict can leak and skip an interval. Plan entry i fires after epoch i (epoch 0 = boot load1).
             # WORLD-STABLE dwell gate (decoupled from the walk-proof; see epoch_worldstable_start above).
-            # world_stable = genuinely in-world: player present + draw-group enabled (the world is drawing,
-            # NOT the frozen mms=18/draw-group-off state) + world clock live. This is what the frame_ms
-            # window (§3.1) and a visible dwell need -- the char need not WALK.
+            # world_stable = genuinely in-world: player present + render-group + enable-render + world clock
+            # live. Do NOT require draw_group: telemetry and prior vanilla comparisons show draw_group can
+            # stay false during valid playable reloads, while render_group/enable_render are the stable
+            # rendered-world semaphores. Movement remains scored separately via oracle_can_move/did_move.
             epoch_first_seen_ts.setdefault(cur_ep, now)
             world_stable = (
                 bool(s.get("oracle_player_present"))
-                and bool(s.get("oracle_chr_draw_group_enabled"))
+                and bool(s.get("oracle_chr_render_group_enabled"))
+                and bool(s.get("oracle_chr_enable_render"))
                 and bool(s.get("oracle_play_time_live"))
             )
             if world_stable and cur_ep not in epoch_worldstable_start:
                 epoch_worldstable_start[cur_ep] = now
                 print(
-                    f"[drive-switch] epoch {cur_ep}: WORLD-STABLE reached (in-world, draw-group on) -- "
+                    f"[drive-switch] epoch {cur_ep}: WORLD-STABLE reached (in-world, render enabled) -- "
                     f"dwelling {max(args.steady_window_seconds, 0):.0f}s",
                     flush=True,
                 )
