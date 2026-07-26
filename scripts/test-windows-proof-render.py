@@ -110,6 +110,9 @@ def test_native_overlay_child_covers_parent_without_visible_resize() -> None:
     assert "child_w >= parent_w && child_h >= parent_h" in native_overlay
     assert "fn bridge_progress_pixel_count" in native_overlay
     assert "fn bridge_progress_fill_probe" in native_overlay
+    assert "fn keep_child_on_top" in native_overlay
+    assert "SetWindowPos" in native_overlay
+    assert "SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW" in native_overlay
     assert "record_bridge_pixel_copy(&list, bb, readback, *footprint, probe_x, probe_y)" in native_overlay
     assert "left: x" in native_overlay
     assert "top: y" in native_overlay
@@ -135,6 +138,7 @@ def test_native_overlay_child_covers_parent_without_visible_resize() -> None:
     assert "oracle_native_overlay_child_cover_match" in telemetry
     assert "oracle_native_overlay_bar_pixel_frames" in telemetry
     assert "oracle_native_overlay_bar_pixel_missing_frames" in telemetry
+    assert "oracle_native_overlay_zorder_lift_hits" in telemetry
 
 
 def test_native_overlay_release_uses_semantic_render_ready() -> None:

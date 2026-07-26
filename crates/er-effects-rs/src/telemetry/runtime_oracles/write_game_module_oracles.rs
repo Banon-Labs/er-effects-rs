@@ -1673,6 +1673,11 @@ fn write_game_module_oracles(body: &mut String) {
         );
         push_json_usize(
             body,
+            "oracle_native_overlay_zorder_lift_hits",
+            NATIVE_OVERLAY_ZORDER_LIFT_HITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
             "oracle_native_overlay_parent_hwnd",
             NATIVE_OVERLAY_PARENT_HWND.load(Ordering::SeqCst),
         );

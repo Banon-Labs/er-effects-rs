@@ -44,8 +44,9 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetClientRect, GetParent,
-    GetWindowThreadProcessId, IsWindowVisible, MSG, MoveWindow, PM_REMOVE, PeekMessageW,
-    RegisterClassW, SW_HIDE, SW_SHOWNOACTIVATE, ShowWindow, TranslateMessage, WNDCLASSW, WS_CHILD,
+    GetWindowThreadProcessId, HWND_TOP, IsWindowVisible, MSG, MoveWindow, PM_REMOVE, PeekMessageW,
+    RegisterClassW, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_SHOWWINDOW, SetWindowPos, ShowWindow, TranslateMessage, WNDCLASSW, WS_CHILD,
     WS_EX_NOACTIVATE, WS_VISIBLE,
 };
 use windows::core::{BOOL, Error, HRESULT, Interface, PCSTR, w};
@@ -85,6 +86,8 @@ pub(crate) static NATIVE_OVERLAY_BAR_PIXEL_FRAMES: AtomicUsize = AtomicUsize::ne
 pub(crate) static NATIVE_OVERLAY_BAR_PIXEL_MISSING_FRAMES: AtomicUsize = AtomicUsize::new(0);
 /// Last exact progress-bar/text pixel count in the CPU-rasterized bridge frame.
 pub(crate) static NATIVE_OVERLAY_BAR_PIXEL_LAST_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Successful child z-order lifts while the bridge is visible.
+pub(crate) static NATIVE_OVERLAY_ZORDER_LIFT_HITS: AtomicUsize = AtomicUsize::new(0);
 /// One-shot objective pixel readback attempts against the bridge backbuffer.
 pub(crate) static NATIVE_OVERLAY_PIXEL_PROBE_HITS: AtomicUsize = AtomicUsize::new(0);
 /// One-shot bridge pixel readback matches against the unique clear color.
@@ -200,6 +203,24 @@ fn rect_size(rect: RECT) -> (usize, usize) {
         (rect.right - rect.left).max(0) as usize,
         (rect.bottom - rect.top).max(0) as usize,
     )
+}
+
+fn keep_child_on_top(child: HWND) {
+    if unsafe {
+        SetWindowPos(
+            child,
+            Some(HWND_TOP),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        )
+    }
+    .is_ok()
+    {
+        NATIVE_OVERLAY_ZORDER_LIFT_HITS.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 fn sync_child_to_parent_client(parent: HWND, child: HWND) {
@@ -970,6 +991,7 @@ unsafe fn native_overlay_run() {
             let _ = tick_rx.recv_timeout(hidden_poll);
             continue;
         }
+        keep_child_on_top(hwnd);
 
         let idx = unsafe { swapchain.GetCurrentBackBufferIndex() } as usize;
         let bb = &backbuffers[idx];

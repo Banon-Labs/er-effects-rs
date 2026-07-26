@@ -40,6 +40,7 @@ def good_telemetry() -> dict[str, Any]:
         "oracle_native_overlay_bar_pixel_frames": 2,
         "oracle_native_overlay_bar_pixel_missing_frames": 0,
         "oracle_native_overlay_bar_pixel_last_count": 1024,
+        "oracle_native_overlay_zorder_lift_hits": 2,
         "oracle_native_overlay_child_window": 1,
         "oracle_native_overlay_child_parent_match": 1,
         "oracle_native_overlay_child_client_match": 1,
@@ -84,6 +85,7 @@ def test_require_world_ready_accepts_full_positive_contract() -> None:
     assert got["native_overlay_visible_during_loading"] is True
     assert got["native_overlay_full_content_proven"] is True
     assert got["native_overlay_bar_pixels_proven"] is True
+    assert got["native_overlay_zorder_proven"] is True
     assert got["native_overlay_covered_loading"] is True
     assert got["native_overlay_hidden_at_world_ready"] is True
     assert got["scaleform_memoryfile_custom_asset_observed"] is False
@@ -139,6 +141,10 @@ def test_rejects_missing_loading_visibility() -> None:
 
 def test_rejects_missing_full_content_proof() -> None:
     assert_rejects_missing("oracle_native_overlay_content_frames")
+
+
+def test_rejects_missing_zorder_lift() -> None:
+    assert_rejects_missing("oracle_native_overlay_zorder_lift_hits")
 
 
 def test_rejects_missing_bar_pixels() -> None:
@@ -228,6 +234,7 @@ def main() -> int:
         test_rejects_missing_bridge_pixel_match,
         test_rejects_missing_loading_visibility,
         test_rejects_missing_full_content_proof,
+        test_rejects_missing_zorder_lift,
         test_rejects_missing_bar_pixels,
         test_rejects_any_bar_pixel_missing_frame,
         test_rejects_bridge_still_visible_at_world_ready,
