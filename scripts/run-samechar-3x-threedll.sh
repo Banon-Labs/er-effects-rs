@@ -73,8 +73,18 @@ steam_running || fail "Steam is not running. Start Steam (interactive login) fir
 [[ "${RENDERDOC:-0}" != "1" || -f "$RDOC_DLL" ]] || fail "RENDERDOC=1 but renderdoc.dll not found at '$RDOC_DLL' (set RENDERDOC_DLL=<path to Windows renderdoc.dll>)."
 [[ -f "$BOOT_FILE" ]] || fail "boot save not found: $BOOT_FILE"
 
-ME3="${ME3:-/mnt/c/Users/$USER/AppData/Local/garyttierney/me3/bin/me3.exe}"
-[[ -f "$ME3" ]] || fail "Windows me3.exe not found at $ME3 (set ME3=<path to me3.exe>)"
+if [[ -z "${ME3:-}" ]]; then
+	if command -v me3 >/dev/null 2>&1; then
+		ME3="$(command -v me3)"
+	else
+		ME3="/mnt/c/Users/$USER/AppData/Local/garyttierney/me3/bin/me3.exe"
+	fi
+fi
+if [[ "$ME3" = */* ]]; then
+	[[ -f "$ME3" ]] || fail "me3 executable not found at $ME3 (set ME3=<path to me3>)"
+else
+	command -v "$ME3" >/dev/null 2>&1 || fail "me3 executable not found on PATH: $ME3 (set ME3=<path to me3>)"
+fi
 
 mkdir -p "$ARTIFACT_DIR"
 win_path() { python3 -c "import sys;p=sys.argv[1];print((p[5].upper()+':\\\\'+p[7:].replace('/','\\\\')) if p.startswith('/mnt/') and len(p)>6 and p[6]=='/' else p)" "$1"; }
@@ -144,13 +154,19 @@ PROFILE="$ARTIFACT_DIR/samechar-3x-threedll.me3"
 	echo "path = '$(win_path "$TELEM_GAMEDIR")'"
 } >"$PROFILE"
 
-# --- boot TOML (in-memory read-only redirect) for load1 ---
+# --- boot request for load1 ---
+# Use the current title/product direct-menu request path for the initial autoload, not the old
+# save_requested TOML route. The latter is now a known blocker for this proof: it sits at the hidden
+# title/fake-loading surface with requestCode=0 and never gets to a drawable/movable load1.
 [[ -f "$GAME_DIR/er-effects.toml" ]] && cp -f "$GAME_DIR/er-effects.toml" "$ARTIFACT_DIR/er-effects.toml.bak"
+cp -f "$GAME_DIR/er-effects.toml" "$ARTIFACT_DIR/er-effects.toml.effective" 2>/dev/null || true
 {
-	echo "# staged by run-samechar-3x-threedll.sh"
-	echo "save_file = '$(win_path "$BOOT_FILE")'"
-	echo "slot = $BOOT_SLOT"
-} >"$GAME_DIR/er-effects.toml"
+	echo "slot=$BOOT_SLOT"
+	echo "method=direct_menu_load"
+	echo "require_title_bootstrap=false"
+} >"$GAME_DIR/er-effects-autoload.txt"
+cp -f "$GAME_DIR/er-effects-autoload.txt" "$ARTIFACT_DIR/autoload-request.txt"
+LAUNCH_ENV_VARS+=("ER_EFFECTS_EXPERIMENTAL_DIRECT_MENU_LOAD=1")
 
 # NO env/marker arming: the input-harness DLL is enabled purely by its PRESENCE in the profile above.
 # Sweep any stale legacy sq-repro/probe markers so a prior run cannot pollute this one.
@@ -224,7 +240,8 @@ cleanup() {
 	[[ -f "$ARTIFACT_DIR/er-effects.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-effects.toml.bak" "$GAME_DIR/er-effects.toml"
 	rm -f "$GAME_DIR/er-harness-drive-mode.txt" "$GAME_DIR/er-harness-force-drive.txt" \
 		"$GAME_DIR/er-effects-prove-movement.txt" "$GAME_DIR/er-effects-stay-active.txt" \
-		"$GAME_DIR/er-effects-probe-foreground.txt" "$GAME_DIR/er-effects-input-trace.txt" 2>/dev/null || true
+		"$GAME_DIR/er-effects-probe-foreground.txt" "$GAME_DIR/er-effects-input-trace.txt" \
+		"$GAME_DIR/er-effects-autoload.txt" 2>/dev/null || true
 }
 trap cleanup EXIT
 
