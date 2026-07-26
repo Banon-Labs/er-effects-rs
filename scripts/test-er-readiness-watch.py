@@ -41,6 +41,7 @@ def assert_timeout_edge_accepts_final_world_loaded_sample() -> None:
     )[0]
     assert "telemetry = read_json(args.telemetry)" in timeout_branch
     assert "telemetry_world_loaded(telemetry" in timeout_branch
+    assert "telemetry, expected_save_oracle, None" in timeout_branch
     assert "WORLD_STABLE" in timeout_branch
     assert timeout_branch.index("telemetry_world_loaded") < timeout_branch.index(
         "TIMEOUT_BUDGET_EXHAUSTED"

@@ -2278,11 +2278,15 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
             # sample right at the runtime budget boundary. Check the RAM oracle before returning a
             # timeout so the final good sample is not thrown in the trash like everything else alive.
             effective_expected_animation_id = None if appear_animation_seen else args.expected_animation_id
-            if (
-                args.target == TARGET_WORLD_STABLE
-                and process_exists(pid)
-                and telemetry_world_loaded(telemetry, expected_save_oracle, effective_expected_animation_id)
-            ):
+            timeout_world_loaded = telemetry_world_loaded(
+                telemetry, expected_save_oracle, effective_expected_animation_id
+            )
+            if not timeout_world_loaded and effective_expected_animation_id is not None:
+                # At the timeout edge the spawn/appear animation may already have ended before the
+                # final sample is read. If every non-transient world-loaded RAM oracle is true, accept
+                # the world instead of requiring a one-frame animation to still be current at teardown.
+                timeout_world_loaded = telemetry_world_loaded(telemetry, expected_save_oracle, None)
+            if args.target == TARGET_WORLD_STABLE and process_exists(pid) and timeout_world_loaded:
                 timing.mark("t_world_stable")
                 return with_runtime_module_info(
                     ReadinessResult(
