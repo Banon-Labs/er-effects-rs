@@ -58,11 +58,11 @@ pub(crate) fn crash_logger_enabled() -> bool {
 /// it must not turn semantic semaphore mismatches into crashes unless a run explicitly asks for
 /// release/fail-fast behavior.
 pub(crate) fn deliberate_fail_fast_enabled() -> bool {
-    matches!(std::env::var("ER_EFFECTS_FAIL_FAST").as_deref(), Ok("1"))
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-fail-fast.txt")
-            .exists()
+    // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): fail-fast changed control flow
+    // (turned semaphore mismatches into deliberate crashes) -- a behavioral proof-gate, not passive
+    // diagnostics. Env/marker feature gates are forbidden; retired (never fail-fast). A release/proof
+    // build wanting fail-fast should express it via a compile-time cfg, not an env/marker toggle.
+    false
 }
 
 pub(crate) fn log_process_exit(api: &str, code: u32, handle: usize) {
@@ -123,13 +123,10 @@ pub(crate) unsafe extern "system" fn nt_terminate_process_hook(
 /// failed FromSoft assertion does not crash -- the game continues past the check.
 /// Diagnostic only (may continue in a degraded state); off by default.
 pub(crate) fn assert_nonfatal() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_ASSERT_NONFATAL").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-assert-nonfatal.txt")
-        .exists()
+    // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): making a failed FromSoft assertion
+    // non-fatal (skip chaining the original -> game continues in a degraded state) is a control-flow
+    // BEHAVIORAL change, not passive diagnostics. Env/marker feature gates are forbidden; retired.
+    false
 }
 
 /// Hook on the FromSoft assert wrapper: log the failing assertion's args as RVAs
@@ -185,6 +182,9 @@ const AV_STACK_MAX_RETURNS: usize = 8;
 /// Raw stack qwords dumped from RSP regardless of value (a stack smash may leave no
 /// game `.text` return address at all — the raw window still shows the smashed frame).
 const AV_STACK_RAW_QWORDS: usize = 8;
+/// Max module-resolved backtrace frames emitted from the AV stack scan (consecutive duplicates
+/// collapsed). Names frames in ANY loaded module — game, me3_mod_host.dll, ntdll.dll, our er_*.dll.
+const AV_MODULE_BT_MAX_FRAMES: usize = 24;
 
 /// Scan the crashing thread's stack (from `rsp` upward) for values inside the game
 /// module's `.text` (return addresses of the game-side frames) AND dump the raw head of
@@ -253,6 +253,43 @@ fn av_stack_game_returns(rsp: usize, base: usize) -> String {
     }
     game.push(']');
     game
+}
+
+/// Module-resolved backtrace for an access violation: scan the crashing thread's stack (from `rsp`,
+/// reusing [`AV_STACK_SCAN_SLOTS`]) and, for each qword that lands inside ANY loaded module, emit
+/// `module_name+0xoffset`. Consecutive identical frames are collapsed; capped at
+/// [`AV_MODULE_BT_MAX_FRAMES`]. This names the non-game frames the game-only `av_stack_game_returns`
+/// scan leaves raw (me3_mod_host.dll, ntdll.dll, kernelbase.dll, our own er_*.dll), producing the
+/// same shape as `scripts/parse-crash-dump.py` off a minidump so a crash that emits no minidump is
+/// still deep-traced in-process. Reads are `safe_read_usize`-guarded; panic-free.
+fn av_module_backtrace(rsp: usize, modules: &[(usize, usize, String)]) -> String {
+    let mut out = String::from("modbt=[");
+    if rsp < 0x10000 || modules.is_empty() {
+        out.push(']');
+        return out;
+    }
+    let mut emitted = 0usize;
+    let mut last = String::new();
+    let mut slot = 0usize;
+    while slot < AV_STACK_SCAN_SLOTS && emitted < AV_MODULE_BT_MAX_FRAMES {
+        let addr = rsp + slot * std::mem::size_of::<usize>();
+        if let Some(val) = unsafe { safe_read_usize(addr) } {
+            if let Some((name, offset)) = module_for_addr(val, modules) {
+                let frame = format!("{name}+0x{offset:x}");
+                if frame != last {
+                    if emitted != 0 {
+                        out.push(',');
+                    }
+                    out.push_str(&frame);
+                    emitted += 1;
+                    last = frame;
+                }
+            }
+        }
+        slot += 1;
+    }
+    out.push(']');
+    out
 }
 
 /// Probe a candidate object pointer: read its first qword (a C++ vtable pointer for a
@@ -521,6 +558,8 @@ pub(crate) unsafe extern "system" fn crash_vectored_handler(
             };
             let base = game_module_base().unwrap_or(NULL_MODULE_BASE);
             let stack = av_stack_game_returns(rsp, base);
+            let modules = loaded_modules();
+            let modbt = av_module_backtrace(rsp, &modules);
             let rcx_probe = av_object_probe("rcx", rcx, base);
             // For a hijacked control transfer (access=8, RIP jumped to non-code), the value
             // at [rsp] is the smashed/popped return candidate; probe it as an object too.
@@ -541,11 +580,11 @@ pub(crate) unsafe extern "system" fn crash_vectored_handler(
             });
             match rva {
                 Some(rva) => append_crash_log(format_args!(
-                    "access-violation rva=0x{rva:x} addr=0x{address:x}{rip_tag} access={access_kind:x} fault_addr=0x{fault_addr:x} rcx=0x{rcx:x} rdx=0x{rdx:x} r8=0x{r8:x} rsp=0x{rsp:x} self_base=0x{self_base:x} {rcx_probe} {ret0_probe} ret0_code=0x{ret0:x}{ret0_tag} {stack} {}",
+                    "access-violation rva=0x{rva:x} addr=0x{address:x}{rip_tag} access={access_kind:x} fault_addr=0x{fault_addr:x} rcx=0x{rcx:x} rdx=0x{rdx:x} r8=0x{r8:x} rsp=0x{rsp:x} self_base=0x{self_base:x} {rcx_probe} {ret0_probe} ret0_code=0x{ret0:x}{ret0_tag} {modbt} {stack} {}",
                     trace_callers_summary()
                 )),
                 None => append_crash_log(format_args!(
-                    "access-violation addr=0x{address:x}{rip_tag} (RIP outside .text) access={access_kind:x} fault_addr=0x{fault_addr:x} rcx=0x{rcx:x} rdx=0x{rdx:x} r8=0x{r8:x} rsp=0x{rsp:x} self_base=0x{self_base:x} {rcx_probe} {ret0_probe} ret0_code=0x{ret0:x}{ret0_tag} {stack} {}",
+                    "access-violation addr=0x{address:x}{rip_tag} (RIP outside .text) access={access_kind:x} fault_addr=0x{fault_addr:x} rcx=0x{rcx:x} rdx=0x{rdx:x} r8=0x{r8:x} rsp=0x{rsp:x} self_base=0x{self_base:x} {rcx_probe} {ret0_probe} ret0_code=0x{ret0:x}{ret0_tag} {modbt} {stack} {}",
                     trace_callers_summary()
                 )),
             }

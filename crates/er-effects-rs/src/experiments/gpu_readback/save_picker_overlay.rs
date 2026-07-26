@@ -18,33 +18,33 @@ use windows::Win32::System::LibraryLoader::GetProcAddress;
 
 /// 1 once the startup overlay picker has opened its model for this pending no-save boot. Distinct
 /// from `SAVE_PICKER_MODE_ACTIVE` (the in-world System>Quit native-window picker).
-pub(crate) static SAVE_PICKER_OVERLAY_ARMED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SAVE_PICKER_OVERLAY_ARMED;
 /// Previous frame's pressed-action bitmask (edge detection; see `PickerAction`).
-static SAVE_PICKER_OVERLAY_PREV_ACTIONS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SAVE_PICKER_OVERLAY_PREV_ACTIONS;
 /// Cached `user32!GetAsyncKeyState` / `xinput!XInputGetState` resolutions (0 = unresolved, !0 = tried-and-absent).
-static GET_ASYNC_KEY_STATE_PROC: AtomicUsize = AtomicUsize::new(0);
-static XINPUT_GET_STATE_PROC: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::GET_ASYNC_KEY_STATE_PROC;
+pub(crate) use er_telemetry::counters::XINPUT_GET_STATE_PROC;
 /// Telemetry oracles.
-pub(crate) static SAVE_PICKER_OVERLAY_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SAVE_PICKER_OVERLAY_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SAVE_PICKER_OVERLAY_INPUT_HITS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SAVE_PICKER_OVERLAY_PICK_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SAVE_PICKER_OVERLAY_PICK_REJECT_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SAVE_PICKER_OVERLAY_OPEN_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_OVERLAY_DRAW_HITS;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_OVERLAY_INPUT_HITS;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_OVERLAY_PICK_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_OVERLAY_PICK_REJECT_COUNT;
 /// Diagnostics for the "inputs eaten during load" report: total input polls the dedicated thread ran
 /// (proves the thread is alive and at cadence, independent of the ~4 fps Present redraw), and polls
 /// where ANY navigation key/button was down (proves the background thread can actually READ OS input
 /// under Wine/Proton -- if this stays ~0 while the user mashes, a background thread cannot see the
 /// keys and input must move back to a pumped thread).
-pub(crate) static SAVE_PICKER_OVERLAY_POLL_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SAVE_PICKER_OVERLAY_HELD_POLLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SAVE_PICKER_OVERLAY_POLL_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_OVERLAY_HELD_POLLS;
 
 /// Overlay stage: 0 = browsing files, 1 = choosing a character (save slot) from the picked file.
-static SAVE_PICKER_STAGE_CHARS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SAVE_PICKER_STAGE_CHARS;
 /// Highlighted row in the character sub-picker.
-static SAVE_PICKER_CHAR_CURSOR: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SAVE_PICKER_CHAR_CURSOR;
 /// The autoload slot the character sub-picker chose (`usize::MAX` = none yet). The product-core
 /// callsite reads this as the load target when no slot is configured.
-pub(crate) static MISSING_SAVE_PICKER_SELECTED_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) use er_telemetry::counters::MISSING_SAVE_PICKER_SELECTED_SLOT;
 
 /// The picked save awaiting a character selection: its path and the active character slots parsed
 /// from its bytes.
@@ -393,7 +393,7 @@ static SAVE_PICKER_KBD_HOOK_ACTIVE: std::sync::atomic::AtomicBool =
 static SAVE_PICKER_KBD_HOOK_STARTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 /// Telemetry: key-down events the LL hook applied (proves event-driven capture fires under Wine).
-pub(crate) static SAVE_PICKER_KBD_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::SAVE_PICKER_KBD_HOOK_HITS;
 
 /// WH_KEYBOARD_LL callback: every keystroke arrives here as an OS event, independent of the game's
 /// ~4fps boot Present/task rate, so no press is lost or collapsed. Applies one action per physical

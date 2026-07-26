@@ -27,6 +27,11 @@ push-state.json
 # Local version tracking (prevents upgrade notification spam after git ops)
 .local_version
 
+# Bounded `bd prime` override, regenerated per-machine by scripts/beads-prime.sh
+# (titles-only memory index). Local-only; every clone regenerates its own.
+PRIME.md
+PRIME.md.tmp
+
 # Worktree redirect file (contains relative path to main repo's .beads/)
 # Must not be committed as paths would be wrong in other clones
 redirect

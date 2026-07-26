@@ -5,4 +5,4 @@
 rustflags = ["-Awarnings"]
 
 [target.x86_64-pc-windows-msvc]
-rustflags = ["-Awarnings"]
+rustflags = ["-Awarnings", "-C", "target-feature=+crt-static"]

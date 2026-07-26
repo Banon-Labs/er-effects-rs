@@ -32,7 +32,7 @@ pub(crate) const OVERLAY_INITIAL_SIZE: [f32; 2] = [420.0, 420.0];
 pub(crate) const INVALID_ANIMATION_ID_FLOOR: i32 = 0;
 /// Current local-player TimeAct animation id, or 0 when none/player unavailable. This is the product
 /// semaphore for "player animations are going" and is later than bare world/player-present readiness.
-pub(crate) static PLAYER_CURRENT_ANIMATION_ID: AtomicI32 = AtomicI32::new(0);
+pub(crate) use er_telemetry::counters::PLAYER_CURRENT_ANIMATION_ID;
 pub(crate) const ANIM_QUEUE_SLOT_STEP: u32 = 1;
 pub(crate) const ANIM_QUEUE_SCAN_FLOOR: u32 = 0;
 pub(crate) const CUSTOM_CALL_DEFAULT_ID: i32 = 0;
@@ -64,8 +64,10 @@ pub(crate) const EXCEPTION_ACCESS_VIOLATION_CODE: u32 = 0xC000_0005;
 pub(crate) const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
 /// Run our VEH first so it logs before Arxan's handlers consume the exception.
 pub(crate) const VECTORED_FIRST_HANDLER: u32 = 1;
-/// Cap access-violation log lines so an Arxan exception storm cannot fill disk.
-pub(crate) const MAX_AV_LOG_LINES: usize = 32;
+/// Cap access-violation log lines so an Arxan exception storm cannot fill disk. Raised 32->256
+/// (2026-07-15) so the late 2nd-in-process character-reload AV is not silenced by earlier Arxan
+/// first-chance AVs hitting the cap before the real faulting RIP is logged.
+pub(crate) const MAX_AV_LOG_LINES: usize = 256;
 pub(crate) const AV_LOG_LINE_INCREMENT: usize = 1;
 /// Number of process-exit paths hooked (ExitProcess, TerminateProcess,
 /// RtlExitUserProcess, NtTerminateProcess).
@@ -110,7 +112,7 @@ pub(crate) const C30_WATCH_REARM_INTERVAL: usize = 64;
 pub(crate) const C30_WATCH_TICK_BIAS: usize = 1;
 pub(crate) const C30_WATCH_ARM_COUNT_NONE: i32 = 0;
 pub(crate) static C30_WATCH_LAST_ARM_TICK: AtomicUsize = AtomicUsize::new(C30_WATCH_NEVER_ARMED);
-pub(crate) static C30_WATCH_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::C30_WATCH_HITS;
 /// 16-byte alignment for the stack CONTEXT buffer (Get/SetThreadContext require it);
 /// mask = align-1. Over-allocate by CONTEXT_ALIGN then round the pointer up.
 pub(crate) const CONTEXT_ALIGN: usize = 16;
@@ -121,7 +123,7 @@ pub(crate) const C30_WATCH_ARM_INCREMENT: i32 = 1;
 pub(crate) const INHERIT_HANDLE_FALSE: i32 = 0;
 /// Monotonic per-frame counter that paces the watchpoint re-arm cadence without
 /// taking the EffectsState lock before the player check.
-pub(crate) static C30_WATCH_FRAME_COUNTER: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::C30_WATCH_FRAME_COUNTER;
 
 include!("constants/software_breakpoints.rs");
 include!("constants/anti_debug.rs");
@@ -140,5 +142,5 @@ include!("constants/profile_render.rs");
 include!("constants/return_title.rs");
 include!("constants/switch_liveness.rs");
 include!("constants/loading_cover.rs");
+include!("constants/render_handoff.rs");
 include!("constants/system_quit.rs");
-include!("constants/menu_sort.rs");

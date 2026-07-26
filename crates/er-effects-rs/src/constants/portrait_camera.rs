@@ -11,7 +11,7 @@
 // (it re-reads the param and clobbers the orbit fields).
 //
 // All offsets are BYTE offsets from the renderer (CSMenuProfModelRend) base.
-/// Orbit look-at point, `Vec3` (x@+0x9b4, y@+0x9b8, z@+0x9bc); `w`@+0x9c0 is 1.0.
+/// Orbit target point, `Vec3` (x@+0x9b4, y@+0x9b8, z@+0x9bc); `w`@+0x9c0 is 1.0.
 pub(crate) const PROFILE_CAM_TARGET_OFFSET: usize = 0x9b4;
 pub(crate) const PROFILE_CAM_TARGET_W_OFFSET: usize = 0x9c0;
 /// Orbit distance (f32). Consumed sign-flipped by the matrix builder (camera sits behind the target);
@@ -77,11 +77,11 @@ pub(crate) static PROFILE_CAM_BASELINE: std::sync::Mutex<[Option<ProfileCamBasel
     std::sync::Mutex::new([None; 10]);
 /// Camera-override telemetry (RAM semaphores): total applies (matrix build + push), bit-per-slot
 /// latched-baseline mask, last applied slot, and whether the last built view matrix was all-finite.
-pub(crate) static PROFILE_CAM_APPLY_CALLS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static PROFILE_CAM_LATCHED_MASK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::PROFILE_CAM_APPLY_CALLS;
+pub(crate) use er_telemetry::counters::PROFILE_CAM_LATCHED_MASK;
 pub(crate) static PROFILE_CAM_LAST_SLOT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static PROFILE_CAM_LAST_MATRIX_OK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::PROFILE_CAM_LAST_MATRIX_OK;
 /// Offscreen render camera-params POD (the ~0xc4-byte block `FUN_140cca450` blits, dump 0x140cca450).
 /// VERIFIED RE 2026-06-29. Reached via the camera push: `FUN_140bba550` -> `FUN_140bb7da0` ->
 /// `FUN_141ad94e0` -> `FUN_140cca450(dst = *(offscreenRend+0x20) + 0xd0, src = *(offscreenRend+0x28))`.

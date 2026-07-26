@@ -12,20 +12,20 @@
 // its before/after proof. Pure passthrough: nothing is modified, reordered, or suppressed.
 
 /// Trampolines (0 = hook not installed).
-pub(crate) static WINRECONFIG_CREATE_WINDOW_ORIG: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static WINRECONFIG_SET_WINDOW_POS_ORIG: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static WINRECONFIG_SET_WINDOW_LONG_ORIG: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static WINRECONFIG_MOVE_WINDOW_ORIG: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static WINRECONFIG_CHANGE_DISPLAY_ORIG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::WINRECONFIG_CREATE_WINDOW_ORIG;
+pub(crate) use er_telemetry::counters::WINRECONFIG_SET_WINDOW_POS_ORIG;
+pub(crate) use er_telemetry::counters::WINRECONFIG_SET_WINDOW_LONG_ORIG;
+pub(crate) use er_telemetry::counters::WINRECONFIG_MOVE_WINDOW_ORIG;
+pub(crate) use er_telemetry::counters::WINRECONFIG_CHANGE_DISPLAY_ORIG;
 
 /// Total call counts (telemetry: the reconfig timeline's RAM counters).
-pub(crate) static WINRECONFIG_CREATE_WINDOW_CALLS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static WINRECONFIG_SET_WINDOW_POS_CALLS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static WINRECONFIG_SET_WINDOW_LONG_CALLS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static WINRECONFIG_MOVE_WINDOW_CALLS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static WINRECONFIG_CHANGE_DISPLAY_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::WINRECONFIG_CREATE_WINDOW_CALLS;
+pub(crate) use er_telemetry::counters::WINRECONFIG_SET_WINDOW_POS_CALLS;
+pub(crate) use er_telemetry::counters::WINRECONFIG_SET_WINDOW_LONG_CALLS;
+pub(crate) use er_telemetry::counters::WINRECONFIG_MOVE_WINDOW_CALLS;
+pub(crate) use er_telemetry::counters::WINRECONFIG_CHANGE_DISPLAY_CALLS;
 /// Last SetWindowPos geometry, packed (cx << 32 | cy) and (x << 32 | y as u32) for telemetry.
-pub(crate) static WINRECONFIG_LAST_SET_POS_SIZE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::WINRECONFIG_LAST_SET_POS_SIZE;
 
 /// Per-hook log cap: the first calls carry the whole startup story; later calls only count.
 const WINRECONFIG_LOG_CAP: usize = 48;
@@ -288,10 +288,10 @@ pub(crate) fn install_window_reconfig_observer_hooks() {
 
 /// Result latch: 0 = not finished, 1 = applied, 2 = skipped (WINDOWED), 3 = window never found,
 /// 4 = monitor info failed, 5 = config unreadable (skipped), 6 = already at final geometry.
-pub(crate) static WINRECONFIG_EARLY_APPLY_RESULT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::WINRECONFIG_EARLY_APPLY_RESULT;
 /// Attach-relative ms when the early apply finished, and the applied (w<<16|h) pack.
-pub(crate) static WINRECONFIG_EARLY_APPLY_MS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static WINRECONFIG_EARLY_APPLY_RECT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::WINRECONFIG_EARLY_APPLY_MS;
+pub(crate) use er_telemetry::counters::WINRECONFIG_EARLY_APPLY_RECT;
 
 const WINRECONFIG_EARLY_APPLY_MAX_MS: u128 = 20_000;
 const WINRECONFIG_EARLY_APPLY_POLL_MS: u64 = 20;
@@ -359,7 +359,8 @@ fn apply_startup_window_final_geometry() {
         GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowRect, MoveWindow, SWP_FRAMECHANGED, SWP_NOZORDER, SetWindowPos,
+        GetWindowRect, MoveWindow, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER,
+        SetWindowPos,
     };
 
     let start = std::time::Instant::now();
@@ -439,6 +440,10 @@ fn apply_startup_window_final_geometry() {
     }
 
     // Mirror the game's own +11s sequence exactly (resize + FRAMECHANGED reposition), just early.
+    // SWP_NOACTIVATE | SWP_NOOWNERZORDER: our EARLY reposition must NOT activate/foreground the game window.
+    // Without SWP_NOACTIVATE, Windows activates the target as a side effect of SetWindowPos, so this early
+    // apply (which fires up to a few times during boot) yanked focus to the game -- user-reported 2026-07-15
+    // "the DLL is changing focus". We only relocate the window; the game's own launch activation is untouched.
     let move_ok = unsafe { MoveWindow(hwnd, target.left, target.top, width, height, true) }.is_ok();
     let pos_ok = unsafe {
         SetWindowPos(
@@ -448,7 +453,7 @@ fn apply_startup_window_final_geometry() {
             target.top,
             width,
             height,
-            SWP_NOZORDER | SWP_FRAMECHANGED,
+            SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
         )
     }
     .is_ok();

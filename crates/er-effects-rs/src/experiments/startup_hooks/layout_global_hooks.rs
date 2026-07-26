@@ -81,7 +81,14 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     // overflow corrupts the render -- c2794d9): never alters queue behavior, only names which
     // producer's submissions grow per switch so the 0x1aeaf05 overflow can be fixed at its source.
     install_gx_cmd_queue_telemetry();
-    install_system_quit_menu_window_job_run_hook();
+    // DISABLED 2026-07-15: this detour targets 0x7ad1c0, the SAME RVA as the default-on PAB detour
+    // (PAB_NODE_UPDATE_RVA == MENU_WINDOW_JOB_RUN_RVA). MinHook binds only ONE detour per address, and on
+    // native Windows the inline/early PAB install always wins, so this background-thread install fails
+    // ALREADY_CREATED and its post-original work never ran (ghosting + non-interactive ProfileSelect). Its
+    // post-original body (system_quit_menu_window_run_post) is now called directly from the guaranteed
+    // winner, pab_node_update_detour, so this contender is removed to keep PAB the deterministic sole owner
+    // (otherwise a rare System->Quit win would starve pab_advance_try, the autoload driver). See that detour.
+    // install_system_quit_menu_window_job_run_hook();
     install_system_quit_window_list_push_hook();
     install_system_quit_save_game_text_hook();
     install_system_quit_noop_action_hook();

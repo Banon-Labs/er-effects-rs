@@ -277,54 +277,103 @@ unsafe fn lookat_apply_realtime(holder: usize, slot_idx: usize, yaw: f32, pitch:
     true
 }
 
-/// REALTIME LOOK-AT DRAW TICK -- registered as a recurring task in a DRAW phase
+/// The native offscreen command path (`FUN_141a853a0` -> `FUN_141a02de0`) only checks the four wrapper
+/// pointers at `off+0x40..0x58`; `FUN_141a02de0` then blindly loads each wrapper's underlying GX resource
+/// from `wrapper+0x40` and passes it to the GX state classifier. On the Windows crash report from
+/// 2026-07-14, the second wrapper existed but `wrapper+0x40 == 0`, so the classifier saw rcx=0x20 and
+/// faulted reading `[rcx+0x10]`. Match the native wrapper-presence check AND add the missing inner-resource
+/// readiness check before we enqueue our extra profile draw.
+/// SETTLE-FRAMES the four inner GX resources must be non-null AND pointer-STABLE before we trust them
+/// enough to drive (deep-RE 2026-07-15, bd portrait-drive-crash-mechanism-re). The 2026-07-14 crash is a
+/// CROSS-THREAD TOCTOU that a point-in-time non-null check cannot close: the engine's async build WORKER
+/// (a different thread than our render-thread drive) seeds `wrapper` first and its inner `wrapper+0x40`
+/// later, and re-seeds them on every rebuild. Our old per-frame REFRESH kept triggering rebuilds, so the
+/// worker was perpetually mid-build and `wrapper+0x40` could go null between our readiness check and the
+/// submit. Requiring the SAME four inner pointers for K consecutive frames proves the worker is NOT
+/// mid-rebuild right now (any rebuild churns the pointers -> resets the counter), which is the missing
+/// serialization the bare non-null guard lacked.
+const PROFILE_OFFSCREEN_SETTLE_FRAMES: usize = 8;
+static PROFILE_OFFSCREEN_SETTLE_INNERS: [AtomicUsize; 4] = [
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+];
+pub(crate) use er_telemetry::counters::PROFILE_OFFSCREEN_SETTLE_COUNT;
+
+unsafe fn profile_offscreen_gx_resources_ready(off: usize) -> bool {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if off == 0 || off == null {
+        PROFILE_OFFSCREEN_SETTLE_COUNT.store(0, Ordering::SeqCst);
+        return false;
+    }
+    let mut inners = [0usize; 4];
+    for (i, field) in [0x40usize, 0x48, 0x50, 0x58].into_iter().enumerate() {
+        let wrapper = unsafe { safe_read_usize(off + field) }.unwrap_or(0);
+        if wrapper == 0 || wrapper == null {
+            PROFILE_OFFSCREEN_SETTLE_COUNT.store(0, Ordering::SeqCst);
+            return false;
+        }
+        let resource = unsafe { safe_read_usize(wrapper + 0x40) }.unwrap_or(0);
+        if resource == 0 || resource == null {
+            PROFILE_OFFSCREEN_SETTLE_COUNT.store(0, Ordering::SeqCst);
+            return false;
+        }
+        inners[i] = resource;
+    }
+    // Cross-thread settle gate: the four inner resource pointers must be IDENTICAL to last frame's. A
+    // change means the async build worker re-seeded them (mid-rebuild) -> reset the settle counter and
+    // withhold the drive. Only after K identical frames do we treat the offscreen as settled/worker-idle.
+    let mut changed = false;
+    for (i, &inner) in inners.iter().enumerate() {
+        if PROFILE_OFFSCREEN_SETTLE_INNERS[i].swap(inner, Ordering::SeqCst) != inner {
+            changed = true;
+        }
+    }
+    if changed {
+        PROFILE_OFFSCREEN_SETTLE_COUNT.store(0, Ordering::SeqCst);
+        return false;
+    }
+    PROFILE_OFFSCREEN_SETTLE_COUNT.fetch_add(1, Ordering::SeqCst) + 1 >= PROFILE_OFFSCREEN_SETTLE_FRAMES
+}
+
+/// LIVE LOADING PORTRAIT DRAW TICK -- registered as a recurring task in a DRAW phase
 /// (`CSTaskGroupIndex::GameSceneDraw`), so it runs on the render thread INSIDE an actively-recording GX
 /// frame (unlike the FrameBegin game task, where the GX subcontext pool is still empty -> a black no-op).
-/// Each frame: read the live cursor, drive every registered profile holder's Head/Neck/Spine2 toward it
-/// (drift-free `base ⊗ delta`) + recompute model-space, then call the profile draw step to rasterize ALL
-/// portraits' offscreen RTs with the fresh pose. The engine only redraws thumbnails on profile
-/// data-change, so without this they track the cursor only at the ~4s model-rebuild cadence; here they
-/// track every frame. The draw step fail-closes (the GX pool pop returns 0 -> no-op) if a phase ever
-/// lacks a live frame, so it can never crash from being driven off a recording frame.
+/// Each frame: keep the loaded-character portrait renderer alive, run the safe draw/publish pump, and
+/// deliberately publish a neutral pose. Cursor/head tracking is retired; this path never reads or warps
+/// the OS cursor for portrait motion.
 pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4TaskData) {
-    if !portrait_lookat_enabled() {
+    if !portrait_overlay_enabled() {
         return;
     }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if base == 0 || base == null {
         return;
     }
+    // FPS PARITY (bd FPS-BISECT-present-composite-NOT-killer-next-is-lookat-drawphase-pipeline-2026-07-21):
+    // the portrait look-at is a LOADING-screen feature. Once the CURRENT fresh_deser epoch is genuinely
+    // in-world (world-clock live for it), stop ALL its per-frame work (cursor read, pose publish,
+    // draw_step) AND clear PROFILE_LOOKAT_REALTIME so the per-frame push hook detour (`per_frame_push_hook`,
+    // whose work is gated on it) becomes a cheap passthrough. Per-epoch stop (BOOT_VIEW_EPOCH_WORLD_LIVE
+    // == cur), not the stale one-shot IN_WORLD_REACHED latch that never fires for load2.
+    {
+        let cur =
+            crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+        if crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur {
+            PROFILE_LOOKAT_REALTIME.store(false, Ordering::SeqCst);
+            return;
+        }
+    }
     // The 0x1653350 detour stays a passthrough (the per-frame PUSH hook owns the pose write now).
     PROFILE_LOOKAT_REALTIME.store(true, Ordering::SeqCst);
     // Ensure the per-frame push hook is installed -- it writes our pose into the importer + lets the
     // engine propagate it to the GPU-skinned submodels each frame (the actual head movement).
     install_per_frame_push_hook();
-    let frame = PROFILE_LOOKAT_DRAW_FRAME.fetch_add(1, Ordering::SeqCst);
-    // PUBLISH the drive angle for the per-frame push hook to consume: a deterministic SINUSOID in selftest
-    // (zero-input, reproducible -> the pixel oracle proves the head moves with the driven angle), else the
-    // live cursor (the product input). The pose WRITE happens in the push hook; here we only publish + draw.
-    let (yaw, pitch) = if PROFILE_CURSOR_SWEEP_ON.load(Ordering::SeqCst) {
-        // CURSOR-TRACKING PROOF: deterministically warp the OS cursor to a held L/C/R position over the ER
-        // window, THEN read it back through the SAME GetCursorPos path the product uses, and drive the head
-        // from that read cursor (no sinusoid). Zero foreign input: the DLL self-drives the cursor at the
-        // exact stage the look-at polls it. The yaw lands in a left/center/right bucket -> the bucket dump
-        // below captures the head at each real cursor position.
-        let hold = (frame / CURSOR_SWEEP_HOLD_FRAMES) % CURSOR_SWEEP_TARGETS_X.len();
-        drive_cursor_to_window_fraction(CURSOR_SWEEP_TARGETS_X[hold], 0.5);
-        let (cx, cy) = read_cursor_normalized().unwrap_or((0.0, 0.0));
-        PROFILE_LOOKAT_LAST_CURSOR.store(pack_cursor(cx, cy), Ordering::SeqCst);
-        (cx * LOOKAT_YAW_SIGN, cy * LOOKAT_PITCH_SIGN)
-    } else if PROFILE_LOOKAT_SELFTEST_ON.load(Ordering::SeqCst) {
-        let t = frame as f32 * LOOKAT_SELFTEST_W;
-        (
-            t.sin() * LOOKAT_SELFTEST_YAW_AMP * LOOKAT_YAW_SIGN,
-            (t * 0.7).sin() * LOOKAT_SELFTEST_PITCH_AMP * LOOKAT_PITCH_SIGN,
-        )
-    } else {
-        let (cx, cy) = read_cursor_normalized().unwrap_or((0.0, 0.0));
-        PROFILE_LOOKAT_LAST_CURSOR.store(pack_cursor(cx, cy), Ordering::SeqCst);
-        (cx * LOOKAT_YAW_SIGN, cy * LOOKAT_PITCH_SIGN)
-    };
+    let _frame = PROFILE_LOOKAT_DRAW_FRAME.fetch_add(1, Ordering::SeqCst);
+    // Cursor/head tracking is retired. Keep the portrait render/readback/publish pump alive, but publish
+    // a neutral pose drive and never read or warp the OS cursor for portrait motion.
+    let (yaw, pitch) = (0.0f32, 0.0f32);
     PROFILE_LOOKAT_YAW_BITS.store(yaw.to_bits() as usize, Ordering::SeqCst);
     PROFILE_LOOKAT_PITCH_BITS.store(pitch.to_bits() as usize, Ordering::SeqCst);
     // Rasterize all profile offscreen RTs on the render thread inside the live GX frame, so the pose the
@@ -410,6 +459,17 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
             if off != 0 && off != null && live_models > 1 {
                 PORTRAIT_PUMP_BLOCK_MULTI.fetch_add(1, Ordering::SeqCst);
             }
+            let off_resources_ready = off != 0
+                && off != null
+                && unsafe { profile_offscreen_gx_resources_ready(off) };
+            if off != 0 && off != null && !off_resources_ready {
+                let n = PORTRAIT_PUMP_BLOCK_OFF_RESOURCE.fetch_add(1, Ordering::SeqCst) + 1;
+                if n <= 4 || n.is_power_of_two() {
+                    append_autoload_debug(format_args!(
+                        "profile-drive-resource-skip #{n}: offscreen=0x{off:x} has a null native GX resource wrapper(+0x40/+0x48/+0x50/+0x58 or wrapper+0x40); skipping extra profile draw to avoid FUN_141e90290 rcx=0x20 AV"
+                    ));
+                }
+            }
             // STATE-MACHINE PUMP -- runs even with the model DEAD (run anim-bind6 deadlock fix,
             // 2026-07-03). The update task is the renderer's engine-designed per-frame tick (state
             // machine + anim step + transforms); ResMan runs it continuously in the menu era but
@@ -433,14 +493,19 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
             // SeqCst -- one side always yields; see profile_renderer_teardown_spare_hook). The
             // PROFILE_BAKE_RGBA_CAPTURED latch itself is unchanged: publish/overlay/readback
             // consumers still key on "first capture landed"; it just no longer stops the drive.
-            if portrait_render_drive_enabled() && off != 0 && off != null && live_models <= 1 {
+            if portrait_render_drive_enabled()
+                && off != 0
+                && off != null
+                && off_resources_ready
+                && live_models <= 1
+            {
                 // BUILD-DURATION semaphore: one log line on the null->valid model transition. Run
                 // #9 implies the mid-load async build takes ~13s (kick +16.8s -> stable gate first
                 // passes ~+29.5s) from world-streaming contention -- vs the boot-era 133ms build on
                 // an idle title screen. This stamps the exact completion so the theory is measured,
                 // not inferred.
                 {
-                    static MODEL_WAS_LIVE: AtomicUsize = AtomicUsize::new(0);
+                    pub(crate) use er_telemetry::counters::MODEL_WAS_LIVE;
                     let m = unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
                         .unwrap_or(0);
                     let live_now = (m != 0 && m != null) as usize;
@@ -730,7 +795,7 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                             PROFILE_CONTENT_EXCL_DUMPED.store(0, Ordering::SeqCst);
                         }
                     }
-                    // LIVE TRACKING -- EVERY FRAME. FIX (2026-06-30): use readback_offscreen_fast, which
+                    // LIVE PORTRAIT PUBLISH -- EVERY FRAME. FIX (2026-06-30): use readback_offscreen_fast, which
                     // RE-RESOLVES the live content RT fresh each frame (find_d3d12_resource(off)) -- the exact
                     // path the in-process RT sample uses (proven nonblack ~63% with the clear disabled) -- but
                     // copies via the cached RB_FAST_* objects so it still succeeds every frame. The previous
@@ -843,7 +908,6 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                                 color_from_bundle: staged.color_from_bundle,
                                 incarnation,
                                 pipeline_gen,
-                                yaw,
                                 anim_t,
                                 dt_cap,
                                 dt_own,

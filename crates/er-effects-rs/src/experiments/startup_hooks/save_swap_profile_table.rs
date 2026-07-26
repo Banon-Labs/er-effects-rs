@@ -348,6 +348,26 @@ pub(crate) fn system_quit_save_swap_recommit_after_return_title_save() {
     }
 }
 
+/// The game-owned save file a Load-Save-Profiles pick has COMMITTED foreign character bytes into this
+/// switch, or `None` when no runtime foreign pick is active (normal boot / config-only autoload).
+///
+/// When the human-driven "Load Save Profiles" path activates a foreign slot,
+/// `system_quit_save_swap_prepare_selected_slot` overwrites the ACTIVE `%APPDATA%/EldenRing/<steamid>/
+/// ER0000.{sl2,co2}` file (`st.path` -- the game-owned default, NEVER the read-only picked source or
+/// the configured `save_file`) with the picked slot's candidate bytes and sets `committed = true`. The
+/// own-load feed uses this to read the COMMITTED file instead of the configured `save_file` for that
+/// pick's load (drive.rs `own_load_read_sl2_bytes`): a runtime pick overrides the config default for
+/// exactly one load. Returns `None` unless the commit actually landed AND the path/candidate are still
+/// present, so a normal boot autoload (no pick) still reads the configured `save_file` unchanged.
+pub(crate) fn system_quit_committed_foreign_save_path() -> Option<String> {
+    let st = system_quit_save_swap_lock();
+    if st.committed && !st.path.is_empty() && !st.candidate_bytes.is_empty() {
+        Some(st.path.clone())
+    } else {
+        None
+    }
+}
+
 /// Patch the loaded slot's profile offscreen RT size BEFORE any post-Continue profile renderer is
 /// constructed. The constructor snapshots this table; patching after `PROFILE_TABLE_BUILDER_RVA` runs is
 /// too late and produces the 256x256 loading-screen portrait (Bug A). Returns true only when the loaded
@@ -403,13 +423,18 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     // RE-ENGAGE on every loading screen (subsequent-character-load fix): pause the build pipeline ONLY
     // during active gameplay, not permanently after the first world -- so a System Quit character switch's
     // loading screen re-builds + re-captures the NEW character's portrait.
-    if unsafe { portrait_pipeline_idle_in_gameplay(base) } {
+    // NATIVE PORTRAIT (2026-07-15): but keep running while the native NOW-LOADING screen is actively
+    // rendering, even after PlayerIns resolves -- IN_WORLD_REACHED flips ~1.7s early on a fast load, so
+    // portrait_pipeline_idle_in_gameplay went true mid-load and this tick returned before building the table
+    // (run32: force_profile_render_tick never reached maybe_build). The model must build + render DURING the
+    // loading screen we own, so gate the idle return on the native loading screen being gone.
+    if unsafe { portrait_pipeline_idle_in_gameplay(base) } && !native_loading_screen_active() {
         return;
     }
     let valid = |p: usize| p != 0 && p != null;
     // POST-CONTINUE PORTRAIT: before the table-ready guard below (which would early-return on the
     // torn-down post-Continue table), repopulate the table during now-loading so the rest of this tick
-    // (mark+refresh feed) and the look-at/draw/oracle run on the loading screen.
+    // (mark+refresh feed) and the draw/oracle run on the loading screen.
     unsafe { maybe_build_profile_table_for_loading(base) };
     // VISIBILITY: once our built renderer's offscreen RT is live, swap it into the now-loading background
     // container the forge already injected (the background binds BEFORE our renderer exists and never
@@ -417,12 +442,12 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     unsafe { refresh_loading_bg_live_gx(base) };
     // Once the real IBL-lit menu portrait has been baked into LOADING_BG_PORTRAIT_RGBA, drive the loading
     // screen to show it. Two paths, mutually exclusive:
-    //  * lookat path (product default): CANDIDATE A (er-effects-rs-jsm) -- copy the live head INTO the
+    //  * live-portrait overlay path (product default): CANDIDATE A (er-effects-rs-jsm) -- copy the live head INTO the
     //    DISPLAYED now-loading GFx texture so the movie's own tips + Gauge_3 bar render ABOVE it. This
     //    demotes the Present-overlay while it succeeds; on any miss the overlay keeps showing the head.
-    //  * non-lookat path: the legacy in-place re-forge of the CS-side texture (single static head, no
+    //  * native-forge path: the legacy in-place re-forge of the CS-side texture (single static head, no
     //    live tracking; the overlay is not running there).
-    if portrait_lookat_enabled() {
+    if portrait_overlay_enabled() {
         unsafe { maybe_update_gfx_loading_portrait(base) };
         // PIVOT (er-effects-rs-jsm): build the player-stats text bitmap (game menu font) once the stats +
         // font are readable, for the overlay to composite on top of the head in place of the native tips.
@@ -677,43 +702,29 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
             }
         }
     }
-    // LOOK-AT LEVER: every tick, rotate each live renderer's Head/Neck/Spine2 bones toward the mouse
-    // cursor so the portrait's gaze follows it (eyes are welded to the Head bone). Separate gate from
-    // the camera/dump so the riskier bone-write path can be toggled on its own.
-    if portrait_lookat_enabled() {
-        for s in 0..TITLE_PROFILE_SLOT_COUNT as i32 {
-            let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s)) }.unwrap_or(0);
-            if valid(r)
-                && unsafe { safe_read_usize(r) }.unwrap_or(0)
-                    == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+    // Cursor/head tracking is intentionally retired. Keep the loading portrait renderer alive and
+    // refreshed, but do not rotate character bones toward the mouse. Still pre-record the target
+    // renderer as the teardown spare once its model is built so the loading portrait survives Continue.
+    for s in 0..TITLE_PROFILE_SLOT_COUNT as i32 {
+        let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s)) }.unwrap_or(0);
+        if valid(r)
+            && unsafe { safe_read_usize(r) }.unwrap_or(0)
+                == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+        {
+            let target = portrait_target_slot();
+            if s == target
+                && PROFILE_SPARE_CANDIDATE.load(Ordering::SeqCst) == 0
+                && unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
+                    .map(|m| valid(m))
+                    .unwrap_or(false)
             {
-                // FrameBegin role (this task): REGISTER the holder + resolve Head/Neck/Spine2 indices +
-                // publish the cursor. The per-frame write+recompute+DRAW that makes the head track the
-                // cursor in realtime now happens in `profile_lookat_realtime_draw_tick`, a separate
-                // recurring task in the GameSceneDraw phase (render thread, inside a live GX frame). The
-                // old per-tick game-task offscreen drive rendered black (FrameBegin = before the GX frame
-                // records); the draw-phase task is the fix.
-                unsafe { apply_profile_lookat(r, s) };
-                // SPARE PRE-RECORD: capture the target slot's renderer as the spare candidate on a frame
-                // where its model is actually BUILT (+0x778 valid), so the teardown-spare hook can protect
-                // this exact renderer through Continue even though the menu cycles model_ins. Uses
-                // portrait_target_slot() so that once the user confirms a switch (SELECTED_SLOT set), the
-                // candidate re-records for the NEWLY-selected character, not the still-resident old ac0.
-                let target = portrait_target_slot();
-                if s == target
-                    && PROFILE_SPARE_CANDIDATE.load(Ordering::SeqCst) == 0
-                    && unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
-                        .map(|m| valid(m))
-                        .unwrap_or(false)
-                {
-                    PROFILE_SPARE_CANDIDATE.store(r, Ordering::SeqCst);
-                    let model = unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
-                        .unwrap_or(0);
-                    PROFILE_SPARE_CANDIDATE_MODEL.store(model, Ordering::SeqCst);
-                    append_autoload_debug(format_args!(
-                        "loading-portrait: pre-recorded spare candidate renderer=0x{r:x} slot={s} model_ins=0x{model:x} (loading-screen-owned renderer)"
-                    ));
-                }
+                PROFILE_SPARE_CANDIDATE.store(r, Ordering::SeqCst);
+                let model = unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
+                    .unwrap_or(0);
+                PROFILE_SPARE_CANDIDATE_MODEL.store(model, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "loading-portrait: pre-recorded spare candidate renderer=0x{r:x} slot={s} model_ins=0x{model:x} (loading-screen-owned renderer)"
+                ));
             }
         }
     }
@@ -856,10 +867,20 @@ pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
         PROFILE_RENDERER_TEARDOWN_FENCE.store(0, Ordering::SeqCst);
         return;
     }
-    // Gate on the look-at/portrait feature OR product autoload -- the native-continue path does NOT set
+    // Gate on the live-portrait overlay feature OR product autoload -- the native-continue path does NOT set
     // PRODUCT_AUTOLOAD_ARMED, so gating on product_autoload alone never spared anything there.
     if LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) == 0
-        && (product_autoload_enabled() || portrait_lookat_enabled())
+        && (product_autoload_enabled() || portrait_overlay_enabled())
+        // DISABLE-ON-RELOAD FALLBACK (user 2026-07-23): do NOT spare the portrait renderer on a
+        // System->Quit->Load SWITCH reload. A spared renderer whose GX resource goes stale across the
+        // reload crashed load2 near completion (null native GX resource wrapper -> FUN_141e90290 rcx=0x20
+        // AV; spared[model_ok=0]; lookat off_resource_bad climbing 68->128). Skipping the spare lets the
+        // native teardown free it with the world -- no stale spared renderer, so the per-frame profile-draw
+        // never runs against a dead resource. LOAD1/first-load is UNAFFECTED (switch_reload_active()==false
+        // there), so the loading-portrait still shows on the initial load, just not on reloads. This is the
+        // user-chosen fallback ahead of the full Root A teardown fix (unregister the ResMan draw task +
+        // free per reload). bd rootB-fd4io-fix-works-load2-resubmits-but-exposes-rootA-spared-renderer-crash-2026-07-23.
+        && !crate::experiments::gating::switch_reload_active()
     {
         if let Ok(base) = game_module_base() {
             // The slot we render (er-effects-rs-j3r): the newly-selected character on a switch

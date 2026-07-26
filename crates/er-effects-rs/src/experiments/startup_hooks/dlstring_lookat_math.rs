@@ -213,9 +213,16 @@ unsafe fn sample_loading_screen_bar(this: usize) {
         }
     }
     if finish_sent != 0 && prev_finish_sent == 0 {
+        let now_ms = crate::experiments::gpu_readback::boot_view_epoch_ms().max(1) as usize;
         let hits = LOADING_SCREEN_CLOSE_SENT_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+        let _ = LOADING_SCREEN_CLOSE_SENT_FIRST_MS.compare_exchange(
+            0,
+            now_ms,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
         append_autoload_debug(format_args!(
-            "loading-bar: native LoadingScreen finish/result sent (hits={hits}, frame={current}/{max}, progress={progress_pm}permille, this=0x{this:x})"
+            "loading-bar: native LoadingScreen finish/result sent (hits={hits}, frame={current}/{max}, progress={progress_pm}permille, this=0x{this:x}, now_ms={now_ms})"
         ));
     }
 }
@@ -232,6 +239,8 @@ pub(crate) unsafe extern "system" fn loading_screen_update_hook(
             unsafe { std::mem::transmute(orig) };
         unsafe { original(this, dt, param3) };
     }
+    let now_ms = crate::experiments::gpu_readback::boot_view_epoch_ms().max(1) as usize;
+    LOADING_SCREEN_UPDATE_LAST_MS.store(now_ms, Ordering::SeqCst);
     let hits = LOADING_SCREEN_UPDATE_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
         + OWN_STEPPER_CALL_INC;
     unsafe { sample_loading_screen_bar(this) };
@@ -243,6 +252,49 @@ pub(crate) unsafe extern "system" fn loading_screen_update_hook(
             LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst),
             LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst),
         ));
+    }
+}
+
+fn stamp_loading_gfx_fadeout(source: &str, this: usize, label: usize) {
+    let now_ms = crate::experiments::gpu_readback::boot_view_epoch_ms().max(1) as usize;
+    let hits = LOADING_SCREEN_GFX_FADEOUT_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+    LOADING_SCREEN_GFX_FADEOUT_LAST_MS.store(now_ms, Ordering::SeqCst);
+    let first = LOADING_SCREEN_GFX_FADEOUT_FIRST_MS.load(Ordering::SeqCst);
+    if first == 0 {
+        let _ = LOADING_SCREEN_GFX_FADEOUT_FIRST_MS.compare_exchange(
+            0,
+            now_ms,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+    }
+    if hits <= 8 || hits.is_power_of_two() {
+        append_autoload_debug(format_args!(
+            "loading-bar: observed Scaleform FadeOut label via {source} (hits={hits}, this=0x{this:x}, label=0x{label:x}, now_ms={now_ms}, close_hits={})",
+            LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst),
+        ));
+    }
+}
+
+pub(crate) unsafe extern "system" fn scaleform_label_goto_hook(this: usize, label: usize) {
+    if unsafe { bounded_ascii_contains(label, b"fadeout") } {
+        stamp_loading_gfx_fadeout("label-goto", this, label);
+    }
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let orig = SCALEFORM_LABEL_GOTO_ORIG.load(Ordering::SeqCst);
+    if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        let original: unsafe extern "system" fn(usize, usize) = unsafe { std::mem::transmute(orig) };
+        unsafe { original(this, label) };
+    }
+}
+
+pub(crate) unsafe extern "system" fn loading_screen_gfx_fadeout_hook(this: usize) {
+    stamp_loading_gfx_fadeout("knowledge-method", this, 0);
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let orig = LOADING_SCREEN_GFX_FADEOUT_ORIG.load(Ordering::SeqCst);
+    if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        let original: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(orig) };
+        unsafe { original(this) };
     }
 }
 
@@ -270,6 +322,24 @@ pub(crate) fn install_now_loading_helper_observer_hooks() {
         Err(_) => {
             append_autoload_debug(format_args!(
                 "loading-bar: failed to resolve CS::LoadingScreen update rva 0x{LOADING_SCREEN_UPDATE_RVA:x}"
+            ));
+            None
+        }
+    };
+    let scaleform_label_goto = match game_rva(SCALEFORM_LABEL_GOTO_RVA as u32) {
+        Ok(addr) => Some(addr),
+        Err(_) => {
+            append_autoload_debug(format_args!(
+                "loading-bar: failed to resolve Scaleform label goto rva 0x{SCALEFORM_LABEL_GOTO_RVA:x}"
+            ));
+            None
+        }
+    };
+    let loading_gfx_fadeout = match game_rva(LOADING_SCREEN_GFX_FADEOUT_RVA as u32) {
+        Ok(addr) => Some(addr),
+        Err(_) => {
+            append_autoload_debug(format_args!(
+                "loading-bar: failed to resolve KnowledgeLoadingScreen GFx FadeOut rva 0x{LOADING_SCREEN_GFX_FADEOUT_RVA:x}"
             ));
             None
         }
@@ -331,6 +401,41 @@ pub(crate) fn install_now_loading_helper_observer_hooks() {
             }
         }
     }
+    if let Some(addr) = scaleform_label_goto {
+        match unsafe { MhHook::new(addr as *mut c_void, scaleform_label_goto_hook as *mut c_void) } {
+            Ok(hook) => {
+                SCALEFORM_LABEL_GOTO_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+                ok &= unsafe { hook.queue_enable() }.is_ok();
+                std::mem::forget(hook);
+            }
+            Err(status) => {
+                append_autoload_debug(format_args!(
+                    "loading-bar: Scaleform label goto hook failed: {status:?}"
+                ));
+                ok = false;
+            }
+        }
+    }
+    if let Some(addr) = loading_gfx_fadeout {
+        match unsafe {
+            MhHook::new(
+                addr as *mut c_void,
+                loading_screen_gfx_fadeout_hook as *mut c_void,
+            )
+        } {
+            Ok(hook) => {
+                LOADING_SCREEN_GFX_FADEOUT_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+                ok &= unsafe { hook.queue_enable() }.is_ok();
+                std::mem::forget(hook);
+            }
+            Err(status) => {
+                append_autoload_debug(format_args!(
+                    "loading-bar: KnowledgeLoadingScreen GFx FadeOut hook failed: {status:?}"
+                ));
+                ok = false;
+            }
+        }
+    }
     if !ok {
         return;
     }
@@ -340,9 +445,14 @@ pub(crate) fn install_now_loading_helper_observer_hooks() {
             if loading_update.is_some() {
                 LOADING_SCREEN_UPDATE_HOOK_INSTALLED.store(1, Ordering::SeqCst);
             }
+            if scaleform_label_goto.is_some() || loading_gfx_fadeout.is_some() {
+                LOADING_SCREEN_GFX_FADEOUT_HOOK_INSTALLED.store(1, Ordering::SeqCst);
+            }
             append_autoload_debug(format_args!(
-                "title-cover-part-b: hooked CSNowLoadingHelperImp observer ctor=0x{ctor:x} update=0x{update:x}; loading-bar-update={}; observe-only",
-                loading_update.unwrap_or(0)
+                "title-cover-part-b: hooked CSNowLoadingHelperImp observer ctor=0x{ctor:x} update=0x{update:x}; loading-bar-update={} scaleform-label-goto={} loading-gfx-fadeout={}; observe-only",
+                loading_update.unwrap_or(0),
+                scaleform_label_goto.unwrap_or(0),
+                loading_gfx_fadeout.unwrap_or(0)
             ));
         }
         status => append_autoload_debug(format_args!(
@@ -755,7 +865,7 @@ pub(crate) fn maybe_capture_portrait_gxtexture(base: usize, slot: i32) {
 /// Read the OS mouse cursor -- which IS the menu cursor ER drives via `GetCursorPos` -- normalized to
 /// the ER window client space: returns `(nx, ny)` where `(0,0)` is the window CENTER, `nx`/`ny` in
 /// roughly `[-1, 1]` (left/up negative, right/down positive). `None` if the window or cursor can't be
-/// resolved. Used to aim the portrait look-at at the cursor. (Cheap pure Win32; no game state touched.)
+/// resolved. Used by menu/input handlers only; portrait cursor tracking is retired. (Cheap pure Win32; no game state touched.)
 fn read_cursor_normalized() -> Option<(f32, f32)> {
     use windows::Win32::Foundation::POINT;
     use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetWindowRect};
@@ -781,38 +891,6 @@ fn read_cursor_normalized() -> Option<(f32, f32)> {
     let ny = ((pt.y - rect.top) as f32 / h) * 2.0 - 1.0;
     // Clamp a little beyond the edges so an off-window cursor saturates rather than flailing.
     Some((nx.clamp(-1.5, 1.5), ny.clamp(-1.5, 1.5)))
-}
-
-/// CURSOR-SWEEP PROOF helper: warp the OS cursor to `(fx, fy)` as a fraction of the Elden Ring window's
-/// client rect (`fx=0.10` left .. `0.90` right; `fy=0.5` mid-height), via `SetCursorPos`. This runs INSIDE
-/// the game process, so it sets the same Wine cursor that [`read_cursor_normalized`]'s `GetCursorPos` reads
-/// back -- a zero-foreign-input self-drive at the exact stage the look-at polls. Logs the first warp +
-/// result. Best-effort: `None` if the window/SetCursorPos is unavailable (the proof then visibly fails:
-/// the head won't move and the buckets won't fill).
-fn drive_cursor_to_window_fraction(fx: f32, fy: f32) -> Option<()> {
-    use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, SetCursorPos};
-    let hwnd = own_window()?;
-    let mut rect = RECT {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
-    };
-    if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
-        return None;
-    }
-    let w = (rect.right - rect.left).max(1) as f32;
-    let h = (rect.bottom - rect.top).max(1) as f32;
-    let x = rect.left + (fx * w) as i32;
-    let y = rect.top + (fy * h) as i32;
-    let ok = unsafe { SetCursorPos(x, y) }.is_ok();
-    if PROFILE_CURSOR_SWEEP_FIRST_WARP.swap(true, Ordering::SeqCst) != true {
-        append_autoload_debug(format_args!(
-            "cursor-sweep: first SetCursorPos({x},{y}) ok={ok} window=[{},{} {}x{}] frac=({fx},{fy})",
-            rect.left, rect.top, w as i32, h as i32
-        ));
-    }
-    ok.then_some(())
 }
 
 /// Hamilton product `a * b` of two `(x, y, z, w)` quaternions (w = scalar, matching `BoneData.q`).
@@ -912,19 +990,8 @@ unsafe fn dump_and_resolve_lookat_bones(bones: usize, count: usize, slot: i32) -
     (head, neck, spine2)
 }
 
-/// Pack a normalized cursor `(cx, cy)` into a usize as two i16 milli-units for telemetry.
-fn pack_cursor(cx: f32, cy: f32) -> usize {
-    let xi = (cx.clamp(-2.0, 2.0) * 1000.0) as i16 as u16 as usize;
-    let yi = (cy.clamp(-2.0, 2.0) * 1000.0) as i16 as u16 as usize;
-    (xi << 16) | yi
-}
-
-/// LOOK-AT LEVER: rotate the loaded character's Head/Neck/Spine2 bones toward the mouse cursor so the
-/// portrait's gaze (eyes welded to the Head bone) follows it. Per tick: reach the pose holder, resolve
-/// + latch the base pose ONCE, read the cursor, write each bone's LOCAL quaternion = `base ⊗ delta`,
-/// then mark every bone's model-space dirty + `isUpdated=false` so the render's `updateBoneModelSpace`
-/// rebuilds the chain (and the head's children) before the offscreen draw. `renderer` must be a
-/// validated live CSMenuProfModelRend. Returns true once a rotation was written.
+/// Retired look-at internals: resolve and cache the loaded character's Head/Neck/Spine2 pose-holder
+/// metadata for diagnostics. Product portrait rendering now publishes a neutral pose and does not use cursor input.
 unsafe fn apply_profile_lookat(renderer: usize, slot: i32) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null;
@@ -939,8 +1006,8 @@ unsafe fn apply_profile_lookat(renderer: usize, slot: i32) -> bool {
             // `profile_pose_holder` returns None on ~89% of frames even though the model + its PoseHolder
             // persist. The caller only invokes us for a still-valid (vtable-checked) renderer, so a
             // transient None here is just the throttle -- KEEP the last resolved holder registered so the
-            // draw-phase task can drive + recompute + redraw it EVERY frame (60 Hz tracking), decoupled
-            // from the engine's throttled pose update. A genuinely stale holder (model rebuilt/torn down)
+            // draw-phase task can keep the renderer metadata available, decoupled from the engine's
+            // throttled pose update. A genuinely stale holder (model rebuilt/torn down)
             // is dropped explicitly: the force-rebuild path clears PROFILE_LOOKAT_HOLDERS, and the
             // teardown spare hook owns post-Continue lifetime. Do NOT unregister on transient None.
             return false;
@@ -993,11 +1060,8 @@ unsafe fn apply_profile_lookat(renderer: usize, slot: i32) -> bool {
             );
         }
     }
-    // FrameBegin role: resolve + cache the Head/Neck/Spine2 indices (above) and register the holder. The
-    // drive ANGLE is published by the draw-phase task (cursor or selftest sinusoid) -- do NOT publish it
-    // here too, or this FrameBegin cursor value would race/override the draw task's value within a frame
-    // and the per-frame push hook would read the wrong angle. The pose WRITE happens in the per-frame push
-    // hook (which propagates to the GPU-skinned submodels); install it here so it is live once a renderer is.
+    // FrameBegin role: resolve + cache the Head/Neck/Spine2 indices (above) and register the holder.
+    // Product portrait rendering now publishes a neutral pose; the old cursor/selftest drive is retired.
     PROFILE_LOOKAT_HOLDERS[idx].store(holder, Ordering::SeqCst);
     install_lookat_hook();
     install_per_frame_push_hook();

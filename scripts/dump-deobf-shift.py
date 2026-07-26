@@ -56,20 +56,22 @@ USAGE
 
 capstone is auto-provisioned via `uv run --with capstone` if not importable.
 """
-import argparse, json, os, sys
+import argparse, importlib.util, json, os, re, sys
+from collections import Counter
 
 # --- capstone bootstrap via uv (no persistent install needed) ----------------
-try:
-    import capstone  # noqa: F401
-except ImportError:
+# capstone is provisioned at runtime by `uv run --with capstone`; it is NOT in the base
+# interpreter Pyright resolves against, so probe with find_spec (a bare import would be an
+# unresolved-import error) and the two `from capstone` imports below carry a documented ignore.
+if importlib.util.find_spec("capstone") is None:
     if os.environ.get("_DDS_BOOTSTRAPPED") != "1":
         os.environ["_DDS_BOOTSTRAPPED"] = "1"
         os.execvp("uv", ["uv", "run", "--with", "capstone", "python3",
                          os.path.abspath(__file__)] + sys.argv[1:])
     sys.exit("capstone unavailable and `uv run --with capstone` bootstrap failed")
 
-from capstone import Cs, CS_ARCH_X86, CS_MODE_64
-from capstone import x86 as cs_x86
+from capstone import Cs, CS_ARCH_X86, CS_MODE_64  # pyright: ignore[reportMissingImports]
+from capstone import x86 as cs_x86  # pyright: ignore[reportMissingImports]
 
 BASE = 0x140000000
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -188,6 +190,149 @@ def verify(hay, pat, mask, cand):
     return True
 
 
+# --- post-match reliability validation ---------------------------------------
+# These guards exist because a region-table-assisted pick (method "content+region"
+# or "region-estimate") can be silently WRONG: the region table can be stale, and a
+# genuine byte-content chunk of one image can appear at a MID-INSTRUCTION offset in
+# the other (functions differ by a single-byte encoding upstream). A consumer that
+# treats such a VA as a MinHook/patch site writes a jmp over live mid-instruction
+# bytes and crashes the game. So region-assisted results are never a clean confident
+# answer: they are flagged UNRELIABLE and the process exits non-zero. A "content-unique"
+# match (a unique relocation-masked skeleton match in a bounded window) is ground
+# truth and is left untouched.
+#
+# NOTE: a plain linear-decode "is this an instruction boundary?" test is NOT usable as
+# a gate on content-unique matches -- the deobf image has overlapping-instruction /
+# thunk artifacts before ~60% of real function starts (e.g. an `e8` byte one before the
+# prologue makes a linear `call` straddle the true start), so such a gate false-alarms
+# on the majority of correct matches. The straddle signal is therefore used ONLY to
+# ENRICH the warning on results that are already flagged region-tier, never to reclassify
+# a content-unique match.
+
+_HEX = re.compile(r"0x[0-9a-fA-F]+")
+
+
+def _norm_insn(insn):
+    """(mnemonic, operand-shape) with relocation-sensitive fields wildcarded, so two
+    instructions that differ only by a RIP-relative displacement or a relative-branch
+    target compare EQUAL (they are the "same" instruction across the two images)."""
+    ops = insn.op_str
+    ops = re.sub(r"rip [+-] 0x[0-9a-fA-F]+", "rip+X", ops)
+    if is_rel_branch(insn):
+        ops = _HEX.sub("TGT", ops)
+    return (insn.mnemonic, ops)
+
+
+def _decode_norm(img, off, n):
+    out = []
+    for insn in _md.disasm(bytes(img[off:off + n * 16 + 16]), BASE + off):
+        out.append(_norm_insn(insn))
+        if len(out) >= n:
+            break
+    return out
+
+
+def leading_agreement(src_img, src_off, dst_img, dst_off, n=4):
+    """How many leading instructions (relocation-normalized) match between the source
+    VA and the candidate. Returns 'k/total'. For a genuine content match this is total;
+    for a bad region-ESTIMATE (pointing at unrelated code) it is typically 0."""
+    s = _decode_norm(src_img, src_off, n)
+    d = _decode_norm(dst_img, dst_off, n)
+    tot = min(len(s), len(d))
+    if tot == 0:
+        return "0/0"
+    k = 0
+    for a, b in zip(s, d):
+        if a == b:
+            k += 1
+        else:
+            break
+    return "%d/%d" % (k, tot)
+
+
+def _frac(s):
+    try:
+        a, b = s.split("/")
+        return int(a), int(b)
+    except Exception:
+        return 0, 0
+
+
+def linear_straddle(img, off, lookback=24):
+    """Return the VA of an instruction that STRADDLES `off` (starts strictly before,
+    ends strictly after) according to a strong, consistent backward linear-decode
+    consensus, else None. A hit means `off` is NOT on a clean instruction boundary in
+    this image -- do not blindly patch there. (Fires on true mid-instruction landings
+    AND on real function starts preceded by overlapping-thunk artifacts; both are worth
+    warning about on an already-unreliable region-tier result.)"""
+    boundary = 0
+    straddlers = Counter()
+    for k in range(1, lookback + 1):
+        start = off - k
+        if start < 0:
+            continue
+        for insn in _md.disasm(bytes(img[start:off + 16]), BASE + start):
+            ia = insn.address - BASE
+            ie = ia + insn.size
+            if ia == off:
+                boundary += 1
+                break
+            if ia < off < ie:
+                straddlers[ia] += 1
+                break
+            if ia > off:
+                break
+    if not straddlers:
+        return None
+    strad = sum(straddlers.values())
+    dom_ia, dom_cnt = straddlers.most_common(1)[0]
+    if strad >= 6 and strad >= 3 * boundary and dom_cnt >= max(4, strad * 0.5):
+        return dom_ia
+    return None
+
+
+def finalize(r, src_img, dst_img, src_off):
+    """Attach reliability metadata to a successful map result. content-unique stays a
+    clean, verified, reliable answer. Every region-assisted method is downgraded to
+    UNRELIABLE (reliable=False) with loud flags so a patch-site consumer cannot be
+    silently misled; main() turns any unreliable/failed result into a non-zero exit."""
+    if not r.get("ok"):
+        return r
+    method = r.get("method", "content-unique")
+    if method == "content-unique":
+        r["reliable"] = True
+        return r
+
+    # Region-assisted: NOT a clean confident patch target.
+    r["reliable"] = False
+    r["verified"] = False
+    flags = []
+    dst_off = r["dst_va"] - BASE
+    if method == "content+region":
+        flags.append("UNVERIFIED-region")
+        r.setdefault("note", "region-table-assisted pick among multiple content "
+                             "matches (region table can be stale) -- VERIFY with disasm")
+    elif method == "region-estimate":
+        flags.append("UNRELIABLE-estimate")
+    else:
+        flags.append("UNVERIFIED")
+
+    la = leading_agreement(src_img, src_off, dst_img, dst_off)
+    r["leading_match"] = la
+    k, tot = _frac(la)
+    if tot and k == 0:
+        flags.append("UNRELIABLE-nomatch")
+
+    strad = linear_straddle(dst_img, dst_off)
+    if strad is not None:
+        flags.append("UNRELIABLE-midinsn")
+        r["boundary_straddle"] = "0x%x" % (strad + BASE)
+        r["note"] = ("candidate is NOT on a clean instruction boundary (linear decode "
+                     "straddles it at 0x%x) -- do NOT patch here without disasm" % (strad + BASE))
+    r["flags"] = flags
+    return r
+
+
 # --- region shift table (assist): dump_va -> shift, piecewise per region --------
 import bisect
 
@@ -247,24 +392,28 @@ def map_va(src_img, dst_img, src_va, want_bytes, window, reverse=False, use_regi
             hi = min(len(dst_img), off + win + len(pat))
             hits = masked_find(dst_img, pat, mask, lo, hi)
             if len(hits) == 1:
-                return _ok(src_va, hits[0], pat, mask, win, "content-unique")
+                return finalize(_ok(src_va, hits[0], pat, mask, win, "content-unique"),
+                                src_img, dst_img, off)
             if len(hits) > 1:
                 # Region-disambiguate: keep the hit whose shift equals the predicted
                 # regional shift (the shift is locally constant, so the true match
-                # sits exactly on it; spurious skeleton matches do not).
+                # sits exactly on it; spurious skeleton matches do not). This pick is
+                # only as good as the region table -- finalize() marks it UNRELIABLE.
                 if exp is not None:
                     onreg = [h for h in hits if (h - off) == exp]
                     if len(onreg) == 1:
-                        return _ok(src_va, onreg[0], pat, mask, win, "content+region")
+                        return finalize(_ok(src_va, onreg[0], pat, mask, win, "content+region"),
+                                        src_img, dst_img, off)
                 best_ambig = hits
                 break  # grow signature
     # No unique content match. Last resort: region estimate (clearly flagged).
     if use_region and exp is not None:
         dst_va = src_va + exp
         why = "no src bytes (dump page zeroed/non-resident)" if decode_failed else "no content match"
-        return {"src_va": src_va, "dst_va": dst_va, "shift": exp, "ok": True,
-                "method": "region-estimate", "verified": False,
-                "note": "%s; shift from region table -- VERIFY with disasm" % why}
+        return finalize({"src_va": src_va, "dst_va": dst_va, "shift": exp, "ok": True,
+                         "method": "region-estimate", "verified": False,
+                         "note": "%s; shift from region table -- VERIFY with disasm" % why},
+                        src_img, dst_img, off)
     if decode_failed:
         err = "could not decode instructions at src (no region table for estimate)"
     elif best_ambig:
@@ -312,19 +461,43 @@ def main():
         r["direction"] = "%s->%s" % (sn, dn)
         out.append(r)
 
+    # A result is a clean, patch-safe answer ONLY if it resolved AND is reliable
+    # (content-unique). Anything else (region-assisted or FAILED) forces a non-zero
+    # exit so a programmatic patch-site consumer cannot treat it as confident.
+    unreliable = [r for r in out if (not r.get("ok")) or (not r.get("reliable"))]
+
     if args.json:
         print(json.dumps(out, indent=2))
+        if unreliable:
+            sys.exit(3)
         return
+
     for r in out:
         if not r["ok"]:
             print("%s 0x%x -> FAILED: %s" % (sn, r["src_va"], r["error"]))
-        elif r.get("verified", True):
+        elif r.get("reliable"):
+            # genuine content-unique match -- unchanged output format
             print("%s 0x%x -> %s 0x%x   shift=%+#x   [%s]" % (
                 sn, r["src_va"], dn, r["dst_va"], r["shift"], r.get("method", "content")))
         else:
-            print("%s 0x%x -> %s 0x%x   shift=%+#x   [%s] %s" % (
+            flags = " ".join(r.get("flags", ["UNRELIABLE"]))
+            print("%s 0x%x -> %s 0x%x   shift=%+#x   [%s | %s] %s" % (
                 sn, r["src_va"], dn, r["dst_va"], r["shift"],
-                r.get("method", "estimate"), r.get("note", "")))
+                r.get("method", "estimate"), flags, r.get("note", "")))
+
+    # Loud stderr warning so the hazard is impossible to miss even when stdout is parsed.
+    for r in unreliable:
+        if not r.get("ok"):
+            print("WARNING: %s 0x%x did NOT resolve (%s) -- do NOT patch." % (
+                sn, r["src_va"], r.get("error", "")), file=sys.stderr)
+        else:
+            print("WARNING: %s 0x%x -> %s 0x%x is UNRELIABLE [%s]: %s "
+                  "VERIFY with scripts/disas-deobf.sh before patching/hooking." % (
+                      sn, r["src_va"], dn, r["dst_va"],
+                      " ".join(r.get("flags", ["UNRELIABLE"])), r.get("note", "")),
+                  file=sys.stderr)
+    if unreliable:
+        sys.exit(3)
 
 
 if __name__ == "__main__":

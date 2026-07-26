@@ -88,6 +88,41 @@ path = '$dll_path'
 EOF
 }
 
+# me3_write_telemetry_only_profile PROFILE_PATH TELEMETRY_DLL_PATH
+# Writes a v1 ModProfile that loads ONLY the standalone er_telemetry_dll.dll (the
+# read-side telemetry-only DLL from crates/er-telemetry-dll). Runs alone -- no
+# product DLL, no hooks -- so it emits er-telemetry-standalone.json from RAM/PE
+# reads only. Build the DLL with:
+#   cargo xwin build --release --target x86_64-pc-windows-msvc -p er-telemetry-dll
+# -> target/x86_64-pc-windows-msvc/release/er_telemetry_dll.dll
+me3_write_telemetry_only_profile() {
+  local profile_path="$1" telemetry_dll="$2"
+  cat > "$profile_path" <<EOF
+profileVersion = "v1"
+
+[[supports]]
+game = "eldenring"
+
+[[natives]]
+path = '$telemetry_dll'
+EOF
+}
+
+# me3_append_native PROFILE_PATH DLL_PATH
+# Appends one additional [[natives]] block to an existing profile. Used to add the
+# standalone er_telemetry_dll.dll as a 4th native alongside the product +
+# reload-trace + input-harness DLLs (companion DLLs are enabled purely by presence
+# in the profile; product must be listed FIRST so its er_effects_union_register
+# export is mapped before companions resolve it).
+me3_append_native() {
+  local profile_path="$1" dll_path="$2"
+  cat >> "$profile_path" <<EOF
+
+[[natives]]
+path = '$dll_path'
+EOF
+}
+
 # me3_launch PROFILE_PATH -- runs me3 launch in the foreground of the caller's shell.
 # The caller decides env, redirection, and backgrounding; the me3 CLI stays alive as
 # the launch owner for the lifetime of the game.

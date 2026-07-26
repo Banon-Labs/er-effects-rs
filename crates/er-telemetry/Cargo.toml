@@ -1,0 +1,22 @@
+[package]
+name = "er-telemetry"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_telemetry"
+
+# er-telemetry is the telemetry subsystem lifted out of the product DLL. It
+# depends ONLY on er-game-base + upstream/sibling game libs, NEVER on product
+# (er-effects-rs) code. Product depends on THIS crate, not the reverse.
+[target.'cfg(windows)'.dependencies]
+er-game-base = { path = "../er-game-base", features = ["game-types"] }
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+er-save-loader = { path = "../er-save-loader" }
+
+[dependencies]
+# Host/tool-side (non-windows) still resolves the base crate (tier A only) so the
+# shared log/mem primitives + RVA table are available for offline unit work.
+er-game-base = { path = "../er-game-base" }

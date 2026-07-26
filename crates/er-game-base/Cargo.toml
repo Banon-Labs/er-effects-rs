@@ -1,0 +1,25 @@
+[package]
+name = "er-game-base"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_game_base"
+
+# Tier A (default) is ZERO external deps: fault-safe RAM readers, game base/rva
+# resolution, and the stable singleton RVA/offset table are all implemented over
+# raw `#[link(name = "kernel32")]` externs (mirroring the zero-dep mini-DLLs
+# er-reload-trace-dll / er-input-harness-dll) so the cross-compile stays lean.
+#
+# Tier B (`game-types`) re-exports the typed eldenring / fromsoftware-shared
+# accessors. It is cfg(windows)-gated so host-only tool crates and cargo
+# resolution never drag the game bindings / `windows` crate in. Only the heavy
+# product DLL + er-telemetry enable it; the mini-DLLs stay on tier A only.
+[features]
+default = []
+game-types = ["dep:eldenring", "dep:fromsoftware-shared"]
+
+[target.'cfg(windows)'.dependencies]
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring", optional = true }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared", optional = true }

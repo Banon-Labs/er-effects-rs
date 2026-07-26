@@ -81,76 +81,6 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         "  \"expected_animation_seen\": {},\n",
         state.expected_animation_seen
     ));
-    body.push_str(&format!("  \"network_sync\": {},\n", state.network_sync));
-    let selected_catalog = state
-        .selected_catalog_index
-        .and_then(|index| state.catalogs.get(index));
-    let selected_catalog_position = state.selected_effect_index.and_then(|selected| {
-        selected_catalog.and_then(|catalog| {
-            catalog
-                .call_indices
-                .iter()
-                .position(|call_index| *call_index == selected)
-        })
-    });
-    body.push_str(&format!(
-        "  \"effect_hotkey_hook_active\": {},\n  \"effect_hotkey_hook_hits\": {},\n  \"effect_hotkey_applied_actions\": {},\n  \"effect_input_suppressed_keys\": {},\n  \"effect_input_suppressed_arrow_keys\": {},\n  \"effect_dinput_suppressed_arrow_keys\": {},\n  \"effect_selector_overlay_draw_hits\": {},\n  \"effect_selector_overlay_visible\": {},\n  \"effect_selector_overlay_text\": \"{}\",\n  \"effect_application_allowed\": {},\n  \"effect_hotkeys_effects_on\": {},\n  \"effect_trigger_hotkey_count\": {},\n  \"effect_trigger_hotkeys_load_error\": {},\n  \"pending_effect_trigger_count\": {},\n  \"effect_trigger_fire_count\": {},\n  \"effect_trigger_last_key\": {},\n  \"effect_trigger_last_id\": {},\n  \"effect_trigger_last_count\": {},\n  \"effect_catalog_count\": {},\n  \"effect_catalog_live_updates\": {},\n  \"selected_effect_catalog_index\": {},\n  \"selected_effect_catalog_file\": {},\n  \"selected_effect_catalog_name\": {},\n  \"selected_effect_catalog_size\": {},\n  \"selected_effect_catalog_position\": {},\n  \"selected_effect_index\": {},\n  \"effect_setting_last_id\": {},\n  \"effect_setting_live_updates\": {},\n  \"effect_reapply_count\": {},\n  \"effect_reapply_last_index\": {},\n",
-        effect_hotkey_hook_active(),
-        EFFECT_HOTKEY_HOOK_HITS.load(Ordering::SeqCst),
-        EFFECT_HOTKEY_APPLIED_ACTIONS.load(Ordering::SeqCst),
-        EFFECT_INPUT_SUPPRESSED_KEYS.load(Ordering::SeqCst),
-        EFFECT_INPUT_SUPPRESSED_ARROW_KEYS.load(Ordering::SeqCst),
-        crate::input_blocker::DINPUT_SUPPRESSED_ARROW_KEYS.load(Ordering::SeqCst),
-        EFFECT_SELECTOR_OVERLAY_DRAW_HITS.load(Ordering::SeqCst),
-        state.effect_selector_overlay_visible,
-        json_escape(&effect_selector_overlay_text()),
-        player_available && effect_application_allowed(state),
-        state.effect_hotkeys_effects_on,
-        state.effect_trigger_hotkeys.len(),
-        state.effect_trigger_hotkeys_load_error.as_ref().map_or_else(
-            || "null".to_owned(),
-            |error| format!("\"{}\"", json_escape(error))
-        ),
-        state.pending_effect_triggers.len(),
-        state.effect_trigger_fire_count,
-        state.effect_trigger_last_key.as_ref().map_or_else(
-            || "null".to_owned(),
-            |key| format!("\"{}\"", json_escape(key))
-        ),
-        state
-            .effect_trigger_last_id
-            .map_or_else(|| "null".to_owned(), |id| id.to_string()),
-        state.effect_trigger_last_count,
-        state.catalogs.len(),
-        state.effect_catalog_live_updates,
-        state
-            .selected_catalog_index
-            .map_or_else(|| "null".to_owned(), |index| index.to_string()),
-        selected_catalog.map_or_else(
-            || "null".to_owned(),
-            |catalog| format!("\"{}\"", json_escape(&catalog.file_name))
-        ),
-        selected_catalog.map_or_else(
-            || "null".to_owned(),
-            |catalog| format!("\"{}\"", json_escape(&catalog.name))
-        ),
-        selected_catalog.map_or_else(
-            || "null".to_owned(),
-            |catalog| catalog.call_indices.len().to_string()
-        ),
-        selected_catalog_position.map_or_else(|| "null".to_owned(), |index| index.to_string()),
-        state
-            .selected_effect_index
-            .map_or_else(|| "null".to_owned(), |index| index.to_string()),
-        state
-            .effect_setting_last_id
-            .map_or_else(|| "null".to_owned(), |id| id.to_string()),
-        state.effect_setting_live_updates,
-        state.effect_reapply_count,
-        state
-            .effect_reapply_last_index
-            .map_or_else(|| "null".to_owned(), |index| index.to_string())
-    ));
     body.push_str(&format!(
         "  \"autoload_save_extension\": {},\n",
         state.autoload.save_extension().map_or_else(
@@ -205,10 +135,12 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         }
     };
     body.push_str(&format!(
-        "  \"oracle_own_load_stream_frames\": {},\n  \"oracle_own_load_stream_recur_frames\": {},\n  \"oracle_own_load_continue_fired\": {},\n  \"oracle_own_load_stream_owner_state\": {},\n  \"oracle_own_load_stream_owner_req_state\": {},\n  \"oracle_own_load_stream_mms_state\": {},\n  \"oracle_own_load_stream_block_count\": {},\n  \"oracle_own_load_stream_req_coord\": {},\n  \"oracle_own_load_stream_io_inflight\": {},\n  \"oracle_own_load_stream_io_reqhandle\": {},\n  \"oracle_own_load_stream_c30\": {},\n  \"oracle_own_load_stream_player_present\": {},\n  \"oracle_own_load_ingame_phase\": {},\n  \"oracle_own_load_req_blockid\": {},\n  \"oracle_own_load_target_block_present\": {},\n  \"oracle_own_load_wbr_update_calls\": {},\n  \"oracle_own_load_wbr_max_phase\": {},\n  \"oracle_own_load_wbr_any_gate_set\": {},\n  \"oracle_own_m28_dispatch_fired\": {},\n  \"oracle_own_load_install_job_fired\": {},\n  \"oracle_own_load_pump_fired\": {},\n  \"oracle_own_load_pump_state\": {},\n  \"oracle_own_load_pump_subcode\": {},\n  \"oracle_own_load_pump_done\": {},\n",
+        "  \"oracle_own_load_stream_frames\": {},\n  \"oracle_own_load_stream_recur_frames\": {},\n  \"oracle_own_load_continue_fired\": {},\n  \"oracle_own_load_forced_continue_handoff_ms\": {},\n  \"oracle_tfc_forced_continue_handoff_ms\": {},\n  \"oracle_own_load_stream_owner_state\": {},\n  \"oracle_own_load_stream_owner_req_state\": {},\n  \"oracle_own_load_stream_mms_state\": {},\n  \"oracle_own_load_stream_block_count\": {},\n  \"oracle_own_load_stream_req_coord\": {},\n  \"oracle_own_load_stream_io_inflight\": {},\n  \"oracle_own_load_stream_io_reqhandle\": {},\n  \"oracle_own_load_stream_c30\": {},\n  \"oracle_own_load_stream_player_present\": {},\n  \"oracle_own_load_ingame_phase\": {},\n  \"oracle_own_load_req_blockid\": {},\n  \"oracle_own_load_target_block_present\": {},\n  \"oracle_own_load_wbr_update_calls\": {},\n  \"oracle_own_load_wbr_max_phase\": {},\n  \"oracle_own_load_wbr_any_gate_set\": {},\n  \"oracle_own_m28_dispatch_fired\": {},\n  \"oracle_own_load_install_job_fired\": {},\n  \"oracle_own_load_pump_fired\": {},\n  \"oracle_own_load_pump_state\": {},\n  \"oracle_own_load_pump_subcode\": {},\n  \"oracle_own_load_pump_done\": {},\n",
         crate::experiments::OWN_LOAD_STREAM_FRAMES.load(Ordering::SeqCst),
         crate::experiments::OWN_LOAD_STREAM_RECUR_FRAMES.load(Ordering::SeqCst),
         crate::experiments::OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst),
+        crate::experiments::OWN_LOAD_FORCED_CONTINUE_HANDOFF_MS.load(Ordering::SeqCst),
+        crate::experiments::TFC_FORCED_CONTINUE_HANDOFF_MS.load(Ordering::SeqCst),
         fmt_stream(
             crate::experiments::OWN_LOAD_STREAM_OWNER_STATE.load(Ordering::SeqCst),
             false
@@ -275,6 +207,21 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
             false
         ),
         crate::experiments::OWN_LOAD_PUMP_DONE.load(Ordering::SeqCst),
+    ));
+    // RequestMoveMap BlockId fix (bd er-effects-rs-um9g): fixups>=1 == the render-handoff fix fired on
+    // this load (substituted last_c30 for the invalid last_before target BlockId).
+    body.push_str(&format!(
+        "  \"oracle_request_move_map_hook_calls\": {},\n  \"oracle_request_move_map_hook_fixups\": {},\n  \"oracle_request_move_map_last_before\": \"0x{:x}\",\n  \"oracle_request_move_map_last_c30\": \"0x{:x}\",\n",
+        crate::experiments::REQUEST_MOVE_MAP_HOOK_CALLS.load(Ordering::SeqCst),
+        crate::experiments::REQUEST_MOVE_MAP_FIXUPS.load(Ordering::SeqCst),
+        crate::experiments::REQUEST_MOVE_MAP_LAST_BEFORE.load(Ordering::SeqCst),
+        crate::experiments::REQUEST_MOVE_MAP_LAST_C30.load(Ordering::SeqCst),
+    ));
+    body.push_str(&format!(
+        "  \"oracle_testnet_ff_stuck_frames\": {},\n  \"oracle_testnet_ff_last_mms\": \"0x{:x}\",\n  \"oracle_testnet_ff_fired_epoch\": {},\n",
+        crate::experiments::TESTNET_FF_STUCK_FRAMES.load(Ordering::SeqCst),
+        crate::experiments::TESTNET_FF_LAST_MMS.load(Ordering::SeqCst),
+        crate::experiments::TESTNET_FF_FIRED_EPOCH.load(Ordering::SeqCst),
     ));
     let product_core_blocker = PRODUCT_CORE_LAST_BLOCKER.load(Ordering::SeqCst);
     let format_scan_ptr = |value: usize| -> String {
@@ -510,40 +457,16 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     write_save_redirect_telemetry(&mut body);
     write_save_data_snapshot_telemetry(&mut body);
     body.push_str(&format!(
-        "  \"last_driver_command\": {},\n",
+        "  \"last_driver_command\": {}\n",
         state.last_driver_command.as_ref().map_or_else(
             || "null".to_owned(),
             |command| format!("\"{}\"", json_escape(command))
         )
     ));
-    body.push_str("  \"calls\": [\n");
-    let telemetry_call_indices = selected_catalog
-        .map(|catalog| catalog.call_indices.clone())
-        .unwrap_or_else(|| (0..state.calls.len()).collect());
-    for (position, index) in telemetry_call_indices.iter().copied().enumerate() {
-        let Some(call) = state.calls.get(index) else {
-            continue;
-        };
-        let comma = if position + NEXT_INDEX_OFFSET == telemetry_call_indices.len() {
-            ""
-        } else {
-            ","
-        };
-        body.push_str(&format!(
-            "    {{\"index\": {index}, \"catalog_position\": {position}, \"name\": \"{}\", \"kind\": \"{}\", \"enabled\": {}, \"active\": {}, \"active_seen_since_enable\": {}, \"apply_failed\": {}}}{comma}\n",
-            json_escape(&call.name),
-            json_escape(&call.kind.label()),
-            call.enabled,
-            call.active,
-            call.active_seen_since_enable,
-            call.apply_failed,
-        ));
-    }
-    body.push_str("  ]\n}\n");
+    body.push_str("}\n");
 
     let tmp_path = path.with_extension("json.tmp");
     if fs::write(&tmp_path, body).is_ok() {
         let _ = fs::rename(tmp_path, path);
     }
 }
-

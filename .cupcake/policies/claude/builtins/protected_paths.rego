@@ -344,12 +344,37 @@ safe_mktemp_file_parent_overapprox(cmd, affected_dir) if {
 	safe_mktemp_file_cleanup(cmd)
 	not destructive_command_mentions_absolute_path(cmd)
 	not regex.match(`(^|[[:space:];|&])rm[[:space:]]+-[[:alnum:]]*r`, cmd)
+	not unsafe_parent_destructive_segment(cmd)
 }
 
 safe_mktemp_file_cleanup(cmd) if {
 	some var in {"tmp", "tmp_body", "tmp_file"}
 	contains(cmd, concat("", [var, "=$(mktemp)"]))
 	contains(cmd, concat("", ["rm -f \"$", var, "\""]))
+}
+
+unsafe_parent_destructive_segment(cmd) if {
+	some segment in shell_command_segments(cmd)
+	destructive_parent_verbs := {"rm", "rmdir", "mv", "cp", "chmod", "chown", "chgrp", "rsync", "install", "truncate", "shred"}
+	some verb in destructive_parent_verbs
+	commands.has_verb(segment, verb)
+	not safe_mktemp_rm_segment(segment)
+}
+
+safe_mktemp_rm_segment(segment) if {
+	some var in {"tmp", "tmp_body", "tmp_file"}
+	regex.match(concat("", [`^rm[[:space:]]+-f[[:space:]]+"\$`, var, `"$`]), segment)
+}
+
+shell_command_segments(cmd) := segments if {
+	pipe_split := replace(cmd, "|", "\n")
+	and_split := replace(pipe_split, "&&", "\n")
+	or_split := replace(and_split, "||", "\n")
+	semicolon_split := replace(or_split, ";", "\n")
+	segments := [trim_space(segment) |
+		some segment in split(semicolon_split, "\n")
+		trim_space(segment) != ""
+	]
 }
 
 destructive_command_mentions_absolute_path(cmd) if {

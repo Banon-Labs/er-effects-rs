@@ -139,6 +139,280 @@ pub(crate) unsafe fn own_load_feed_deserialize(base: usize, gm: usize, want_slot
     ok
 }
 
+// FD4-IO residency for the menu-free switch reload (bd er-effects-rs-9fmm, 2026-07-19) is now DEFAULT
+// behavior in own_load_switch_reload_fire (the boot native-fullread SUBMIT -> DRAIN(b80==RESIDENT) ->
+// COMMIT sequence), replacing the old resource-less one-shot. No marker/env gate.
+
+/// Phase machine state for the reload FD4-IO SUBMIT/DRAIN (own_load_switch_reload_fire), persisted
+/// across the caller's per-frame retries. 0=IDLE (do SUBMIT once), 1=DRAIN (tick until b80==3),
+/// 2=COMMIT (fall through to feed+continue_confirm).
+pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_PHASE;
+pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_DRAIN_WAITS;
+pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_COMMITTED;
+const SWITCH_RELOAD_FD4IO_IDLE: usize = 0;
+const SWITCH_RELOAD_FD4IO_DRAIN: usize = 1;
+const SWITCH_RELOAD_FD4IO_COMMIT: usize = 2;
+/// Bound the reload drain far below the boot's FULLREAD_DRAIN_MAX (1200): the b80 2->3 save-file read
+/// residency is fast (~17 ticks at boot); if it does not resident within this many frames the read is
+/// not draining at the clean-title timing -> fall through to COMMIT without residency (fail-soft to the
+/// old behavior) rather than hang the switch.
+const SWITCH_RELOAD_FD4IO_DRAIN_MAX: usize = 600;
+
+/// PHASE-3 (bd PHASE3-render-release-is-CommonFinalize): max frames `own_load_switch_reload_fire` holds the
+/// reload's continue_confirm waiting for the OUTGOING world's `_Common_Finalize`. In the success path the
+/// outgoing world is released in-world (before the title owner even appears -- the scoped menuData+0x5d
+/// ending-drive walks its MoveMapStep 18->19->20) so this wait is ~0. The bound only matters when the
+/// native teardown never completes -> fail-soft to the OLD in-place reload (the two holds re-engage), so a
+/// stalled outgoing teardown can never softlock the switch. ~15s at 60fps, well under the runtime cap.
+const OUTGOING_TEARDOWN_WAIT_MAX: usize = 900;
+
+/// Reset the switch-reload FD4-IO phase machine so a NEW switch re-runs SUBMIT -> DRAIN -> COMMIT.
+/// Without this the one-shot stays claimed after the FIRST switch (PHASE stuck at COMMIT +
+/// SWITCH_RELOAD_FD4IO_COMMITTED=1), so the SECOND switch's own_load_switch_reload_fire hits the
+/// already-committed guard and returns immediately WITHOUT loading -> the 2nd reload (load3) never
+/// initiates and the game sits at a clean/PRESS-ANY-BUTTON title (run 110005: switch #1 loaded load2
+/// via SUBMIT/DRAIN/COMMIT; switch #2 armed + tore the world down but emitted NO reload-fd4io SUBMIT,
+/// so load3 stalled at bar step 1). switch_slot_arm_programmatic calls this on every switch arm so each
+/// switch gets a fresh phase machine.
+pub(crate) fn reset_switch_reload_fd4io_phase() {
+    SWITCH_RELOAD_FD4IO_PHASE.store(SWITCH_RELOAD_FD4IO_IDLE, Ordering::SeqCst);
+    SWITCH_RELOAD_FD4IO_COMMITTED.store(0, Ordering::SeqCst);
+    SWITCH_RELOAD_FD4IO_DRAIN_WAITS.store(0, Ordering::SeqCst);
+}
+
+/// Full per-switch latch reset for an ARMED switch reload: the FD4-IO phase machine AND the Phase-3
+/// outgoing-world teardown latches (baseline snapshot + DONE/WAIT_TICKS/FAILSOFT). BOTH arm paths --
+/// the programmatic `switch_slot_arm_programmatic` (agent/control-file drive) AND the USER ProfileSelect
+/// `system_quit_arm_quickload_autoload` -- MUST call this or the two drift. That drift was the load3
+/// softlock: the user path reset only FRESH_DESER_DONE/MENU_FREE_RELOAD_FIRED, leaving
+/// `SWITCH_RELOAD_FD4IO_COMMITTED=1` stale from load2, so a user-driven load3 hit the already-committed
+/// guard in `own_load_switch_reload_fire`, emitted NO SUBMIT, left FRESH_DESER_DONE=0, and the b78 guard
+/// wrote GameMan requestedSaveSlotLoad=-1 every frame -> native pump gate false -> world torn down at
+/// ENTERING WORLD (bd compounding-reload-two-roots-...-chainB-stale-fd4io-latch-b78-2026-07-23).
+pub(crate) fn reset_switch_reload_latches() {
+    reset_switch_reload_fd4io_phase();
+    // Snapshot the finalize baseline for THIS switch + clear the per-switch teardown latches, so the reload
+    // gate detects the OUTGOING world's `_Common_Finalize` (COMMON_FINALIZE_CALLS crossing the baseline).
+    er_telemetry::counters::OUTGOING_TEARDOWN_BASELINE.store(
+        er_telemetry::counters::COMMON_FINALIZE_CALLS.load(Ordering::SeqCst),
+        Ordering::SeqCst,
+    );
+    er_telemetry::counters::OUTGOING_TEARDOWN_DONE.store(0, Ordering::SeqCst);
+    er_telemetry::counters::OUTGOING_TEARDOWN_WAIT_TICKS.store(0, Ordering::SeqCst);
+    er_telemetry::counters::OUTGOING_TEARDOWN_FAILSOFT.store(0, Ordering::SeqCst);
+    // Per-switch WorldResWait defer-release hold latches: clear ARMED + residency/hold state so each
+    // switch gets a fresh hold and a stale ARMED can never leak into a later load (bd reload-overlap-fix-
+    // design-worldreswait-defer-release-on-streaming-settle-2026-07-24).
+    reset_worldreswait_hold_latches();
+}
+
+/// SUBMIT the native full-save-read for `picked` so the FD4 IO worker pool loads it resident, exactly
+/// as the boot native-fullread SUBMIT phase (slot_resolution.rs). Mirrors its calls/RVAs. Sets
+/// GameMan+0xb80=2 (the deserialize arm); the DRAIN tick then advances it to RESIDENT(3).
+unsafe fn own_load_fd4io_submit(base: usize, gm: usize, picked: i32) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    // Mark the slot occupied so the native save-load gate accepts it (idempotent, no other effect).
+    let gdm = game_data_man_ptr_or_null();
+    let summary = if gdm != null {
+        unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(null)
+    } else {
+        null
+    };
+    if summary != null {
+        let mark: unsafe extern "system" fn(usize, i32) -> u8 =
+            unsafe { std::mem::transmute(base + PROFILE_MARK_SLOT_USED_RVA) };
+        let _ = unsafe { mark(summary, picked) };
+    }
+    // Resolve OUR slot + submit the full read (type-0xa; sets b80=2).
+    unsafe { *((gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) as *mut i32) = picked };
+    let set_save_slot: unsafe extern "system" fn(i32) =
+        unsafe { std::mem::transmute(base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+    unsafe { set_save_slot(picked) };
+    let submit: unsafe extern "system" fn(i32) -> i32 =
+        unsafe { std::mem::transmute(base + B80_FULL_LOAD_INITIATOR_RVA) };
+    let sret = unsafe { submit(picked) };
+    let b80 = unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }.unwrap_or(-1);
+    append_autoload_debug(format_args!(
+        "reload-fd4io: SUBMIT slot={picked} submit 0x{:x} ret={sret} b80={b80} -> DRAIN (replicating boot native-fullread residency before feed+continue_confirm)",
+        base + B80_FULL_LOAD_INITIATOR_RVA
+    ));
+}
+
+/// One DRAIN tick: pump the b80 IO lane + poll (exact boot native-fullread calls) and return the
+/// current GameMan+0xb80 so the caller can detect RESIDENT(3).
+unsafe fn own_load_fd4io_drain_tick(base: usize, gm: usize) -> i32 {
+    let lane: unsafe extern "system" fn() -> i32 =
+        unsafe { std::mem::transmute(base + B80_LANE1_DRIVER_RVA) };
+    let _ = unsafe { lane() };
+    let poll: unsafe extern "system" fn(u8, u8) -> i32 =
+        unsafe { std::mem::transmute(base + B80_POLL_RVA) };
+    let _ = unsafe { poll(FULLREAD_POLL_ARG, FULLREAD_POLL_ARG) };
+    unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }.unwrap_or(-1)
+}
+
+/// MENU-FREE clean-title reload of the PICKED slot for a genuine System->Quit->Load-Profile switch.
+/// The warm-rebuilt TitleTopDialog never reaches Loop post-return-title (press-start SceneObjProxy at
+/// dialog+0xb78 unbound), so the title accept-byte/open-menu path deadlocks; native_fullread_tick also
+/// stands down for a switch. Drive the picked slot through the same native-ownership commit the boot
+/// autoload uses, exactly like the (now-dead) native-fullread DESER switch_feed_case
+/// (slot_resolution.rs:275-296): reset the gaitem singleton -> feed the picked slot's on-disk bytes
+/// through the native parser (real c30 + PGD) -> latch FRESH_DESER_DONE -> native continue_confirm
+/// (intercepted by system_quit_continue_confirm_hook -> SetState5 streams the world + performs the
+/// switch cleanup). ONE-SHOT per switch (SYSTEM_QUIT_SWITCH_MENU_FREE_RELOAD_FIRED). Returns true only
+/// when it fired continue_confirm; false = "not yet / could not" (nothing consumed unless the one-shot
+/// was legitimately claimed) and the caller keeps waiting. Caller MUST have proven the old world is
+/// torn down (player absent) so the gaitem reset + deserialize never touch a live world.
+/// See bd live-switch-teardown-fixed-now-menu-open-stall-2026-07-18 + the RE workflow.
+pub(crate) unsafe fn own_load_switch_reload_fire(
+    base: usize,
+    gm: usize,
+    owner: usize,
+    picked: i32,
+    n: u64,
+) -> bool {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    // (a) Validate the title owner FIRST -- it flickers during the warm rebuild. No state consumed:
+    // a bad-owner frame returns false and the caller retries next frame. Must be a live owner with the
+    // new-game flag clear (continue_confirm's LOAD branch; nonzero = NewGame path / mid-rebuild).
+    if owner == null {
+        return false;
+    }
+    let new_game_flag = match unsafe { safe_read_usize(owner + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) }
+    {
+        Some(v) => v as u8,
+        None => return false,
+    };
+    if new_game_flag != FULLREAD_OWNER_NEW_GAME_OK {
+        return false;
+    }
+    // (a.5) PHASE-3 OUTGOING-WORLD TEARDOWN GATE (bd PHASE3-render-release-is-CommonFinalize). Hold the
+    // reload's continue_confirm until the OUTGOING (pre-quit) world's native render-release has run
+    // (COMMON_FINALIZE_CALLS crossed the per-switch baseline captured at arm), so the reload rebuilds a
+    // FRESH world instead of loading in-place over the still-live WorldChrMan/CSDistViewManager/
+    // g_GxDrawContext (the ~5x-heavier-render / 5-vblank bug). The outgoing world is driven to
+    // _Common_Finalize in-world by the scoped menuData+0x5d ending-drive (title_tick_cover), which runs
+    // BEFORE the title owner appears, so in the success path the finalize is already observed the first
+    // time we reach here. Bounded + fail-soft: on timeout, latch FAILSOFT (the two in-place holds
+    // re-engage via outgoing_teardown_suppresses_holds) and fall through to the OLD in-place reload, so a
+    // stalled teardown can never softlock. Once DONE/FAILSOFT latches, this gate is skipped for the switch.
+    if crate::experiments::gating::outgoing_teardown_enabled()
+        && crate::experiments::gating::switch_reload_active()
+        && er_telemetry::counters::OUTGOING_TEARDOWN_DONE.load(Ordering::SeqCst) == 0
+        && er_telemetry::counters::OUTGOING_TEARDOWN_FAILSOFT.load(Ordering::SeqCst) == 0
+    {
+        let baseline = er_telemetry::counters::OUTGOING_TEARDOWN_BASELINE.load(Ordering::SeqCst);
+        let calls = er_telemetry::counters::COMMON_FINALIZE_CALLS.load(Ordering::SeqCst);
+        if calls > baseline {
+            er_telemetry::counters::OUTGOING_TEARDOWN_DONE.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "outgoing-teardown: OBSERVED _Common_Finalize (calls={calls} > baseline={baseline}) -- OUTGOING world released; reload rebuilds FRESH (in-place holds stay disabled) (#{n})"
+            ));
+        } else {
+            let waited =
+                er_telemetry::counters::OUTGOING_TEARDOWN_WAIT_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
+            if waited >= OUTGOING_TEARDOWN_WAIT_MAX {
+                er_telemetry::counters::OUTGOING_TEARDOWN_FAILSOFT.store(1, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "outgoing-teardown: FAIL-SOFT after {waited} frames without _Common_Finalize (calls={calls} baseline={baseline}) -- falling back to OLD in-place reload; the two holds re-engage (#{n})"
+                ));
+                // fall through this frame to the normal reload path (old behavior; no softlock)
+            } else {
+                if waited == 1 || waited % 120 == 0 {
+                    append_autoload_debug(format_args!(
+                        "outgoing-teardown: waiting for OUTGOING _Common_Finalize (calls={calls} baseline={baseline} waited={waited}/{OUTGOING_TEARDOWN_WAIT_MAX}) -- holding continue_confirm so the reload rebuilds fresh (#{n})"
+                    ));
+                }
+                return false;
+            }
+        }
+    }
+    // (b) FD4-IO residency phase machine (DEFAULT behavior -- no marker/env toggle; bd er-effects-rs-9fmm):
+    // SUBMIT the full read, DRAIN until GameMan+0xb80==RESIDENT(3), THEN fall through to
+    // feed+continue_confirm -- so the reload's streamed world has the resources natively resident (the
+    // boot path's behavior) instead of entering resource-less and reverting to title. Owner is already
+    // validated, so a flickering frame never burns the one-shot (claimed by SWITCH_RELOAD_FD4IO_COMMITTED).
+    {
+        let phase = SWITCH_RELOAD_FD4IO_PHASE.load(Ordering::SeqCst);
+        if phase == SWITCH_RELOAD_FD4IO_IDLE {
+            if SWITCH_RELOAD_FD4IO_PHASE
+                .compare_exchange(
+                    SWITCH_RELOAD_FD4IO_IDLE,
+                    SWITCH_RELOAD_FD4IO_DRAIN,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_ok()
+            {
+                SWITCH_RELOAD_FD4IO_DRAIN_WAITS.store(0, Ordering::SeqCst);
+                unsafe { own_load_fd4io_submit(base, gm, picked) };
+            }
+            return false;
+        }
+        if phase == SWITCH_RELOAD_FD4IO_DRAIN {
+            let b80 = unsafe { own_load_fd4io_drain_tick(base, gm) };
+            let w = SWITCH_RELOAD_FD4IO_DRAIN_WAITS.fetch_add(1, Ordering::SeqCst);
+            let resident = b80 == FULLREAD_B80_RESIDENT;
+            if resident || w >= SWITCH_RELOAD_FD4IO_DRAIN_MAX {
+                // Do NOT disarm b78 here. Unlike the boot native-fullread (which disarms on commit),
+                // the System->Quit SWITCH path MUST keep GameMan+0xb78 armed (= picked slot) through
+                // SetState5/MoveMap finalize: it is the warp target that MoveMapStep finalize case 8
+                // consumes to warp the character and autoclear warpRequested before advancing mms18
+                // (system_quit_repro_guards.rs:1720-1754). Clearing it early leaves the load with no
+                // warp target -> warp_requested stuck at 1 and STEP_MoveMap self-loops at 18 (observed
+                // in the b78-disarm build: world resident, real char, but mms18 next=18/done50=0
+                // warp=1 forever). The continue_confirm hook's post-resident proof point clears b78.
+                append_autoload_debug(format_args!(
+                    "reload-fd4io: DRAIN done b80={b80} waits={w} resident={resident}{} -> COMMIT (feed+continue_confirm); b78 kept armed (warp target) through finalize",
+                    if resident { "" } else { " (TIMEOUT -- committing without residency, fail-soft to old behavior)" }
+                ));
+                SWITCH_RELOAD_FD4IO_PHASE.store(SWITCH_RELOAD_FD4IO_COMMIT, Ordering::SeqCst);
+                // fall through to feed+continue_confirm this frame
+            } else {
+                return false; // keep draining
+            }
+        }
+        // phase == COMMIT (reached this frame or a prior one): commit exactly once.
+        if SWITCH_RELOAD_FD4IO_COMMITTED
+            .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return false;
+        }
+    }
+    // (c) Defuse the CSGaitemImp free-queue exhaustion AV (live 0x67141a): char#1's leaked gaitem
+    // entries still populate the gaitem singleton at the clean title (the lightweight return-title
+    // chain skips the native inventory teardown). Safe now because the old world is torn down.
+    let _ = unsafe { own_load_reset_gaitem_singleton(base) };
+    // (d) Feed the picked slot's on-disk bytes through the native parser -> GameMan+0xc30 becomes the
+    // picked character's REAL map + a real PGD fingerprint. No FD4 IO SUBMIT/DRAIN, no b80==3 needed.
+    if !unsafe { own_load_feed_deserialize(base, gm, picked) } {
+        append_autoload_debug(format_args!(
+            "own-load-switch-reload: feed-deserialize of picked slot {picked} FAILED -- NOT firing continue_confirm; switch fails closed (one-shot claimed, no re-attempt)"
+        ));
+        return false;
+    }
+    // (e) Latch native_slot_proven BEFORE firing: the continue_confirm hook reads FRESH_DESER_DONE==1
+    // to take the forward->SetState5 path (not the no-proof forward) and to prevent any double-feed.
+    SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(1, Ordering::SeqCst);
+    // (f) Re-read the freshly-mounted c30 + fingerprint and fire the GUARDED native continue_confirm
+    // (own_load_continue_fire re-guards c30_real && fp_real && owner+0x284==0 internally -- the only
+    // save-writing SetState5 is behind that hard guard).
+    let c30 = unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }.unwrap_or(GAME_MAN_C30_UNSET);
+    let c30_real = c30 != GAME_MAN_C30_UNSET && c30 != 0 && c30 != FULLREAD_C30_M10_DEFAULT;
+    let (fp_real, fp_level, _nl) = unsafe { char_fingerprint(base) };
+    append_autoload_debug(format_args!(
+        "own-load-switch-reload: picked slot {picked} mounted (c30=0x{c30:x} c30_real={c30_real} fp_real={fp_real} level={fp_level}); firing native continue_confirm owner=0x{owner:x} (hook forwards -> SetState5 streams + performs switch cleanup) presses=0 (#{n})"
+    ));
+    // ARM the STEP_WorldResWait streaming-settle HOLD for THIS switch (bd reload-overlap-fix-design-
+    // worldreswait-defer-release-on-streaming-settle-2026-07-24), at the SetState5/continue point -- the
+    // same site as arm_request_move_map_fixup -- so the hold covers the upcoming RequestMoveMap -> MoveMap
+    // -> STEP_WorldResWait. No-op unless the default-OFF opt-in marker is present AND this is a genuine
+    // in-world switch (switch_reload_active && player was present at arm), so load1/boot are never touched.
+    arm_worldreswait_hold();
+    unsafe { own_load_continue_fire(base, owner, c30, c30_real, fp_real, fp_level, n) };
+    true
+}
+
 /// SAVE-SAFE verify-only OWN-LOAD buffer-feed drive (one-shot, phased). Reads the .sl2 from disk,
 /// slices slot `want_slot`'s plaintext body, installs+arms the gated 0x67b100 hook, calls the native
 /// parser 0x67b290(slot) in-process so it parses OUR body, then reads back GameMan+0xc30 + the
@@ -308,6 +582,14 @@ unsafe fn own_load_continue_fire(
     fp_level: u32,
     n: u64,
 ) {
+    // CALLER-TRACE DIAG (2026-07-23, bd trace own_load arming): log the FULL runtime caller chain each
+    // time the continue actually fires, so the ACTUAL entry/arming path is captured from evidence (static
+    // tracing was repeatedly wrong -- own_load fired in run71 despite no autoload file + DIAG_NO_AUTOLOAD).
+    append_autoload_debug(format_args!(
+        "OWN_LOAD_CONTINUE_FIRE ENTRY c30_real={c30_real} fp_real={fp_real} own_load_continue_enabled={} CALLERS: {}",
+        own_load_continue_enabled(),
+        crate::crashlog::trace_callers_summary(),
+    ));
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     // Hard c30 + fingerprint guard (absolute save-safety backstop). NOTE: unlike the native-fullread
     // COMMIT path (which needs a level>=10 floor to reject the level-9 NEW-GAME PREVIEW), OWN-LOAD has
@@ -373,7 +655,7 @@ unsafe fn own_load_continue_fire(
         .filter(|&v| v != null)
         .unwrap_or(0);
     OWN_LOAD_INGAMESTEP_CACHED.store(ingame_cached, Ordering::SeqCst);
-    OWN_LOAD_CONTINUE_FIRED.store(true, Ordering::SeqCst);
+    mark_own_load_forced_continue_handoff();
     append_autoload_debug(format_args!(
         "own-load-continue: continue_confirm returned -- native pump now streams the real world (#{n}); recurring world-stream observer ARMED (owner=0x{title_owner:x} ingame=0x{ingame_cached:x}) -> DONE"
     ));
@@ -517,7 +799,7 @@ unsafe fn own_load_install_job_fire(
         .filter(|&v| v != null)
         .unwrap_or(0);
     OWN_LOAD_INGAMESTEP_CACHED.store(ingame_cached, Ordering::SeqCst);
-    OWN_LOAD_CONTINUE_FIRED.store(true, Ordering::SeqCst);
+    mark_own_load_forced_continue_handoff();
     timeline_event(
         "T_own_load_install_job",
         n,
@@ -705,7 +987,7 @@ unsafe fn own_load_pump_fire(
         .filter(|&v| v != null)
         .unwrap_or(0);
     OWN_LOAD_INGAMESTEP_CACHED.store(ingame_cached, Ordering::SeqCst);
-    OWN_LOAD_CONTINUE_FIRED.store(true, Ordering::SeqCst);
+    mark_own_load_forced_continue_handoff();
     timeline_event(
         "T_own_load_pump_build",
         n,

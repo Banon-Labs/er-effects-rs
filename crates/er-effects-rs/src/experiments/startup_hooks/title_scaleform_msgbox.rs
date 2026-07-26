@@ -37,7 +37,7 @@ use windows::{
                 OFN_HIDEREADONLY, OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST, OPENFILENAMEW,
             },
             WindowsAndMessaging::{
-                ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
+                EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
                 WM_KEYDOWN, WM_KEYUP,
             },
         },
@@ -68,13 +68,16 @@ static PROFILE_05_010_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::new();
 /// for later opens. This keeps the DLL self-contained: no shipped GFx, only in-memory edits
 /// against the game's own loaded bytes.
 static OPTIONS_02_040_QUIT4_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::new();
-static OPTIONS_02_040_QUIT4_RUNTIME_SERVES: AtomicUsize = AtomicUsize::new(0);
-static OPTIONS_02_040_QUIT4_RUNTIME_FAILURES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OPTIONS_02_040_QUIT4_RUNTIME_SERVES;
+pub(crate) use er_telemetry::counters::OPTIONS_02_040_QUIT4_RUNTIME_FAILURES;
 
 fn load_memory_gfx_from_env(var: &str, slot: &OnceLock<Vec<u8>>, label: &str) {
-    let Ok(path) = std::env::var(var) else {
-        return;
-    };
+    // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): the env-driven memory-GFX override
+    // (`var` named a custom-movie path / embedded selector) is removed -- env feature gates are
+    // forbidden. Inert no-op now: with no env source `path` is empty and the loader does nothing, so
+    // the product-default runtime 05_000 strip is the sole title-resource path.
+    let _ = var;
+    let path = String::new();
     let trimmed = path.trim();
     if trimmed.is_empty() || slot.get().is_some() {
         return;
@@ -131,37 +134,11 @@ fn load_title_scaleform_memory_gfx() {
         &TITLE_SCALEFORM_MEMORY_GFX,
         "05_001_title_logo GFX",
     );
-    // `vanilla`/`off`/`0` force the native on-disk 05_000 movie (diagnostic escape while autoload
-    // stays on); checked before the env loader so the literal is never treated as a file path.
-    // `embedded:title-05-000-suppressed` is the legacy selector for the product strip asset: it
-    // now arms the same runtime derivation as the product default (the asset is no longer
-    // embedded; it is derived from the game's own vanilla bytes at file-open).
-    let env_05_000 = std::env::var("ER_EFFECTS_TITLE_05_000_MEMORY_GFX")
-        .map(|value| value.trim().to_ascii_lowercase())
-        .unwrap_or_default();
-    match env_05_000.as_str() {
-        "vanilla" | "off" | "0" => {
-            append_autoload_debug(format_args!(
-                "title-resource-observer: 05_000_title strip forced vanilla via ER_EFFECTS_TITLE_05_000_MEMORY_GFX"
-            ));
-            return;
-        }
-        "embedded:title-05-000-suppressed" => {
-            TITLE_05_000_RUNTIME_STRIP_ARMED.store(1, Ordering::SeqCst);
-            append_autoload_debug(format_args!(
-                "title-resource-observer: 05_000_title runtime strip armed via legacy embedded selector (derived at file-open, {} edits)",
-                er_gfx::title_05_000::TITLE_05_000_STRIP_EDITS.len()
-            ));
-            return;
-        }
-        _ => {}
-    }
-    load_memory_gfx_from_env(
-        "ER_EFFECTS_TITLE_05_000_MEMORY_GFX",
-        &TITLE_SCALEFORM_05_000_MEMORY_GFX,
-        "05_000_title GFX",
-    );
-    // Product default (er-effects-rs-dl0/h7x): no env override -> arm the RUNTIME strip whenever
+    // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): the ER_EFFECTS_TITLE_05_000_MEMORY_GFX
+    // env override (force-vanilla `vanilla`/`off`/`0`, legacy embedded selector, or custom-movie path)
+    // is removed -- env feature gates are forbidden. Only the product-default runtime 05_000 strip
+    // remains (armed whenever the product autoload owns the title flow).
+    // Product default (er-effects-rs-dl0/h7x): arm the RUNTIME strip whenever
     // the product autoload owns the title flow. No embedded movie: the file-open hook derives the
     // stripped 05_000_title from the native MemoryFile's own vanilla payload via er-gfx.
     if TITLE_SCALEFORM_05_000_MEMORY_GFX.get().is_some() || !title_05_000_strip_default_enabled() {
@@ -211,15 +188,11 @@ unsafe fn policy_tos_record_fields(record: usize) -> (usize, usize, usize) {
 /// build time (~+16.9s), so it does not depend on the early-DllMain Seamless false-negative. This is
 /// tied to existing autoload state (no new env/file gate); the env/file switch remains for diagnostics.
 pub(crate) fn policy_tos_suppress_enabled() -> bool {
-    (product_autoload_enabled() && crate::telemetry::seamless_coop_loaded())
-        || matches!(
-            std::env::var("ER_EFFECTS_POLICY_TOS_SUPPRESS").as_deref(),
-            Ok("1")
-        )
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-policy-tos-suppress.txt")
-            .exists()
+    // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): the env/marker force-on override
+    // is removed (env/marker feature gates forbidden). Suppression is tied ONLY to the genuine
+    // runtime condition -- product autoload armed AND Seamless Co-op present -- exactly as the
+    // product path already used it.
+    product_autoload_enabled() && crate::telemetry::seamless_coop_loaded()
 }
 
 pub(crate) unsafe extern "system" fn policy_tos_title_ctor_wrapper_hook(
@@ -839,7 +812,11 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
     let in_world = IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
     let switch_active = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
         != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
-        || SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) != 0;
+        || SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) != 0
+        // Covers the gap before the MenuWindowJob::Run hook sets PROFILE_SELECT_WINDOW: the own_stepper
+        // self-pump can build the load-confirm MessageBox first, and without this flag it escapes
+        // suppression and crashes (2026-07-15). Set at the Load-Profile click, cleared on ProfileSelect reset.
+        || SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.load(Ordering::SeqCst) != 0;
     if product_autoload_enabled() && (!in_world || switch_active) {
         MSGBOX_LAST_ARG_RCX.store(a, Ordering::SeqCst);
         MSGBOX_LAST_ARG_RDX.store(b, Ordering::SeqCst);

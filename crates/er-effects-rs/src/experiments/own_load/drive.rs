@@ -30,7 +30,7 @@ use windows::{
             Threading::GetCurrentProcessId,
         },
         UI::WindowsAndMessaging::{
-            ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
             WM_KEYDOWN, WM_KEYUP,
         },
     },
@@ -67,13 +67,13 @@ static OWN_LOAD_GATE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicB
 /// Trampoline to the original 0x67b100 (set on hook install).
 static READ_67B100_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 /// One-shot install guard for the 0x67b100 detour.
-static OWN_LOAD_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OWN_LOAD_HOOK_INSTALLED;
 /// The sliced plaintext slot body the hook feeds: a leaked `&'static [u8]`, exposed to the detour
 /// as (ptr, len) atomics so the game-thread detour reads it lock-free. Set BEFORE arming the gate.
-static OWN_LOAD_BODY_PTR: AtomicUsize = AtomicUsize::new(0);
-static OWN_LOAD_BODY_LEN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OWN_LOAD_BODY_PTR;
+pub(crate) use er_telemetry::counters::OWN_LOAD_BODY_LEN;
 /// Count of bytes the gated hook fed into the engine buffer on the latched call (verify telemetry).
-static OWN_LOAD_FED_BYTES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OWN_LOAD_FED_BYTES;
 
 /// Gated detour for 0x67b100. While `OWN_LOAD_GATE` is set, copies our sliced plaintext slot body
 /// into the engine-allocated out_buf (`rcx`) for `min(size, body.len())` bytes and returns al=1 --
@@ -178,17 +178,17 @@ const WBR_GATE_2F_OFFSET: usize = 0x2f;
 
 /// Total calls to `WorldBlockRes::Update` observed via the detour (per-block-per-frame; 0 == the
 /// FieldArea update loop never ticked our block on this path).
-pub(crate) static OWN_LOAD_WBR_UPDATE_CALLS: AtomicU64 = AtomicU64::new(0);
+pub(crate) use er_telemetry::counters::OWN_LOAD_WBR_UPDATE_CALLS;
 /// Max phase byte ([this+0x35]) seen across all observed calls. <0xa across the stall == the block's
 /// resource-stream never reached residency.
-pub(crate) static OWN_LOAD_WBR_MAX_PHASE: AtomicU64 = AtomicU64::new(0);
+pub(crate) use er_telemetry::counters::OWN_LOAD_WBR_MAX_PHASE;
 /// Whether ANY observed block had its FD4 completion gate ([this+0x2f]) set non-zero. false across the
 /// stall == the FD4 file-load never completed for any block (the IO/CSFile gap).
 pub(crate) static OWN_LOAD_WBR_ANY_GATE_SET: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 /// Count of successful OWN-LOAD m28 `AddDefaultFileLoadProcess` dispatch calls (one per cap, one-shot
 /// per cap pointer). 0 == the lever never fired. Exposed as telemetry `oracle_own_m28_dispatch_fired`.
-pub(crate) static OWN_LOAD_M28_DISPATCH_FIRED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OWN_LOAD_M28_DISPATCH_FIRED;
 /// One-shot guard: FD4FileCap pointers we already dispatched `AddDefaultFileLoadProcess` for.
 /// `AppendFileLoadProcessor` does NOT early-out on an already-present processor, so a double-call
 /// would append a second processor -- this set makes each cap fire exactly once. Const-constructible
@@ -200,11 +200,11 @@ static WBR_UPDATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 /// from the engine) is at the stuck phase 2, dump its candidate cap fields READ-ONLY so we locate the
 /// FD4FileCap on the authoritative object instead of reconstructing it from the resmgr container.
 /// Throttled to the first few sightings (the hook fires ~500k times).
-static WBR_PHASE2_DIAG_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::WBR_PHASE2_DIAG_CALLS;
 const WBR_PHASE2_DIAG_MAX: usize = 24;
 const WBR_STUCK_PHASE: u8 = 2;
 /// One-shot install guard for the `WorldBlockRes::Update` diagnostic detour.
-static WBR_UPDATE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::WBR_UPDATE_HOOK_INSTALLED;
 
 /// `__fastcall WorldBlockRes::Update(this)` diagnostic detour. `rcx` = WorldBlockRes* (`this`).
 /// OBSERVE-ONLY: increments the call counter, fault-tolerantly reads [this+0x35] (phase) and
@@ -353,11 +353,554 @@ pub(crate) fn install_wbr_update_hook() -> bool {
     }
 }
 
+// ===== _Common_Finalize OBSERVE-ONLY teardown oracle (Phase-3, bd PHASE3-render-release-is-CommonFinalize)
+//
+// `CS::InGameStep::_Common_Finalize` is at live/dump/deobf 0x140aed380 == RVA 0xaed380, byte-identical
+// across the 1.16.2 dump, the deobf image, and the live module (shift 0). Ghidra-MCP ground-truthed on the
+// 1.16.2 dump: STEP_MoveMap_Finish (0x140aec050) lists callee `_Common_Finalize@140aed380`, whose body
+// frees GLOBAL_WorldChrMan, GLOBAL_CSDistViewManager (LOD), g_GxDrawContext (FUN_1419eaf90),
+// GLOBAL_CSBulletManager/DmgMan/MapItemMan, WorldRes::ResetAreaInfoLists, unloads the loadlistlist
+// FileCaps, and sets CSHavokMan+0x90+0x74; it uses the literal EventFlagCaller name
+// "CS::InGameStep::_Common_Finalize". It DLPanics on null world singletons, so it is called ONLY when a
+// live world exists -> it never fires on the boot autoload (load1) and increments once per SWITCH reload.
+//
+// DO NOT trust scripts/dump-deobf-shift.py for this VA: it FALSELY reports 0x140aed380 -> 0x140aed290
+// (shift -0xf0), a content-region mismatch that lands 0xaed290 MID-INSTRUCTION inside the ADJACENT
+// step-setter FUN_140aed270 (the "移動先ステップ未定義" MoveMap step-index helper, also called by
+// STEP_MoveMap_Finish). The prior RVA 0xaed290 made MinHook write a 5-byte jmp over FUN_140aed270's live
+// body, so when load1's MoveMap-finish executed it the corrupted stream CRASHED (bd
+// phase3-v2-load1-crash-is-wrong-hook-rva-mid-instruction-not-env-2026-07-23). The 0xaed380 entry's first
+// instruction is `mov [rsp+0x10],rbx` (a clean 5 bytes), so the trampoline relocation is safe.
+//
+// This detour is OBSERVE-ONLY: it bumps COMMON_FINALIZE_CALLS then ALWAYS calls the original. The counter
+// is the Phase-3 teardown oracle -- flat across a broken in-place switch reload (0 finalizes), incrementing
+// once per switch once the OUTGOING world is routed through the release. Never alters teardown behavior.
+/// `_Common_Finalize` real entry (Ghidra-MCP-grounded on the 1.16.2 dump; base 0x140000000). NOT 0xaed290:
+/// that was a false dump-deobf-shift match, mid-instruction in the neighbor FUN_140aed270 -- it crashed
+/// load1's MoveMap-finish on 2026-07-23.
+const COMMON_FINALIZE_RVA: usize = 0xaed380;
+/// Trampoline to the original `_Common_Finalize` (set on hook install).
+static COMMON_FINALIZE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+
+/// `__fastcall _Common_Finalize(rcx=InGameStep*)` observe-only detour. Increments the teardown oracle,
+/// then calls the original UNCHANGED (void return). Nothing in `param_1` is read or written by us.
+pub(crate) unsafe extern "system" fn common_finalize_hook(ingame: usize) {
+    er_telemetry::counters::COMMON_FINALIZE_CALLS.fetch_add(1, Ordering::SeqCst);
+    let orig = COMMON_FINALIZE_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        return;
+    }
+    let orig: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(orig) };
+    unsafe { orig(ingame) };
+}
+
+/// Install the OBSERVE-ONLY `_Common_Finalize` teardown-oracle detour (MhHook + MH_Initialize +
+/// queue_enable + MH_ApplyQueued), mirroring `install_wbr_update_hook`. Idempotent. Pure pass-through, so
+/// installing it unconditionally at attach never changes teardown behavior and works on any run (A/B safe).
+pub(crate) fn install_common_finalize_hook() -> bool {
+    if er_telemetry::counters::COMMON_FINALIZE_HOOK_INSTALLED.load(Ordering::SeqCst)
+        == OWN_STEPPER_CALL_INC
+    {
+        return true;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "common-finalize: MH_Initialize failed: {status:?}"
+            ));
+            return false;
+        }
+    }
+    let Ok(addr) = game_rva(COMMON_FINALIZE_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "common-finalize: failed to resolve 0x{COMMON_FINALIZE_RVA:x} rva"
+        ));
+        return false;
+    };
+    match unsafe { MhHook::new(addr as *mut c_void, common_finalize_hook as *mut c_void) } {
+        Ok(hook) => {
+            COMMON_FINALIZE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!("common-finalize: queue_enable failed: {status:?}"));
+                return false;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    er_telemetry::counters::COMMON_FINALIZE_HOOK_INSTALLED
+                        .store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "common-finalize: hooked 0x{addr:x} (OBSERVE-ONLY teardown oracle; pure pass-through)"
+                    ));
+                    true
+                }
+                status => {
+                    append_autoload_debug(format_args!(
+                        "common-finalize: MH_ApplyQueued failed: {status:?}"
+                    ));
+                    false
+                }
+            }
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!("common-finalize: MhHook::new failed: {status:?}"));
+            false
+        }
+    }
+}
+
+// ===== RequestMoveMap BlockId fix (render-handoff freeze root fix, bd er-effects-rs-um9g) ==========
+//
+// ROOT (RE render-handoff-freeze-worldreswait-loadlist-root-2026-07-18): our in-memory redirect load
+// reaches STEP_PlayGame with a stale/`-1` target BlockId (GameMan+0xc30 was set too late for the
+// Continue-confirm capture into TitleStep.field10_0xbc), so `InGameStep::RequestMoveMap` skips its
+// `FormatV` that builds the world-res loadlist virtual path -> the dest WorldBlockRes is never created
+// -> STEP_WorldResWait (mms_step 3) stalls forever -> the world never resumes, draw_group never
+// re-enables, the loading cover never lifts (present-but-frozen). FIX (native-ownership, no field
+// poking): hook RequestMoveMap and, when ARMED by our own load trigger, if its target BlockId `*param_2`
+// is invalid, substitute the freshly-deserialized saved-map BlockId from GameMan+0xc30 (a valid BlockId
+// as-is; same encoding, area byte = c30>>24). The game's own FormatV -> LoadlistInit ->
+// ProcessMsbLoadLists -> world-stream -> STEP_Finish chain then runs natively and re-enables render.
+/// Trampoline to the original `InGameStep::RequestMoveMap` (set on hook install).
+static REQUEST_MOVE_MAP_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+/// One-shot install guard.
+pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_HOOK_INSTALLED;
+/// ARM countdown: our load trigger sets this to `REQUEST_MOVE_MAP_ARM_WINDOW` right before it drives
+/// SetState5/PlayGame. Each RequestMoveMap call while armed decrements it; the fixup fires on the FIRST
+/// call whose target BlockId is actually invalid (disarming immediately), and a valid intervening call
+/// merely decrements without consuming the arm. This is a WINDOW, not a one-shot: the earlier
+/// disarm-on-first-call consumed the arm on a benign valid call (title/early RequestMoveMap) and missed
+/// the actual load's stale `-1` call a few calls later, leaving WorldResWait stuck (bug found runtime
+/// 2026-07-18, run boot-fix-validate-155035: calls=2 fixups=0, boot stuck at mms 3 for 66s).
+pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_ARM_COUNTDOWN;
+/// How many RequestMoveMap calls after a load trigger stay eligible for the fixup. Generous enough to
+/// skip benign intervening calls but bounded so the arm never leaks into unrelated later transitions.
+const REQUEST_MOVE_MAP_ARM_WINDOW: usize = 8;
+/// Total RequestMoveMap calls seen (telemetry oracle_request_move_map_hook_calls).
+pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_HOOK_CALLS;
+/// Times we substituted a valid c30 BlockId into an invalid `*param_2`
+/// (telemetry oracle_request_move_map_hook_fixups). >=1 == the fix fired.
+pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_FIXUPS;
+/// Last (param_2-before, c30-substituted) pair, for telemetry/diagnosis.
+pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_LAST_BEFORE;
+pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_LAST_C30;
+
+/// Arm the RequestMoveMap BlockId fixup for the next load. Call this at a load trigger (own-load
+/// continue / boot autoload SetState5) AFTER the saved map is deserialized into GameMan+0xc30, so the
+/// upcoming STEP_PlayGame -> RequestMoveMap gets a valid target BlockId even if the confirm handler
+/// captured a stale one.
+pub(crate) fn arm_request_move_map_fixup() {
+    REQUEST_MOVE_MAP_ARM_COUNTDOWN.store(REQUEST_MOVE_MAP_ARM_WINDOW, Ordering::SeqCst);
+}
+
+/// `__fastcall InGameStep::RequestMoveMap(rcx=InGameStep*, rdx=BlockId* param_2, r8d, r9)` fix detour.
+/// When armed, corrects an invalid target BlockId so FormatV builds the loadlist path. `param_2` points
+/// to a writable caller-stack int in every caller (RE-verified), so `*param_2` is safe to write.
+pub(crate) unsafe extern "system" fn request_move_map_fix_hook(
+    ingame: usize,
+    param2: usize,
+    arg3: usize,
+    arg4: usize,
+) -> usize {
+    REQUEST_MOVE_MAP_HOOK_CALLS.fetch_add(1, Ordering::SeqCst);
+    let armed = REQUEST_MOVE_MAP_ARM_COUNTDOWN.load(Ordering::SeqCst);
+    if armed > 0 && param2 != TITLE_OWNER_SCAN_START_ADDRESS {
+        if let Some(before) = unsafe { safe_read_i32(param2) } {
+            let before_u = before as u32;
+            let before_area = (before_u >> 24) & 0xff;
+            let invalid =
+                before_u == u32::MAX || before_area >= REQUEST_MOVE_MAP_NONDEBUG_AREA_CEIL;
+            let gm = game_man_ptr_or_null();
+            let c30 = if gm != TITLE_OWNER_SCAN_START_ADDRESS {
+                unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }.unwrap_or(-1)
+            } else {
+                -1
+            };
+            let c30_u = c30 as u32;
+            let c30_area = (c30_u >> 24) & 0xff;
+            let c30_valid = c30_u != u32::MAX
+                && c30 != 0
+                && c30_area < REQUEST_MOVE_MAP_NONDEBUG_AREA_CEIL;
+            if invalid && c30_valid {
+                // The actual load's stale/-1 target -- fix it and disarm (done for this load).
+                unsafe {
+                    *(param2 as *mut i32) = c30;
+                }
+                REQUEST_MOVE_MAP_ARM_COUNTDOWN.store(0, Ordering::SeqCst);
+                REQUEST_MOVE_MAP_FIXUPS.fetch_add(1, Ordering::SeqCst);
+                REQUEST_MOVE_MAP_LAST_BEFORE.store(u64::from(before_u), Ordering::SeqCst);
+                REQUEST_MOVE_MAP_LAST_C30.store(u64::from(c30_u), Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "request-move-map-fix: FIXED *param_2 0x{before_u:x}(area=0x{before_area:x} invalid) -> c30 0x{c30_u:x}(area=0x{c30_area:x}) ingame=0x{ingame:x} armed_left={armed} -- FormatV will now build the loadlist path"
+                ));
+            } else {
+                // Benign intervening call (valid BlockId, or c30 not yet mounted): DO NOT consume the
+                // arm -- just decrement the window so the real stale load call a few calls later is
+                // still caught. (The earlier one-shot consumed the arm here and missed the load call.)
+                REQUEST_MOVE_MAP_ARM_COUNTDOWN.store(armed - 1, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "request-move-map-fix: armed passthrough param_2=0x{before_u:x}(area=0x{before_area:x} invalid={invalid}) c30=0x{c30_u:x}(valid={c30_valid}) ingame=0x{ingame:x} armed_left={} -- window decremented, arm kept",
+                    armed - 1
+                ));
+            }
+        }
+    }
+    let orig = REQUEST_MOVE_MAP_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        return TITLE_OWNER_SCAN_START_ADDRESS;
+    }
+    let orig: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    unsafe { orig(ingame, param2, arg3, arg4) }
+}
+
+/// Install the RequestMoveMap BlockId fix detour (MhHook + MH_Initialize + queue_enable +
+/// MH_ApplyQueued), mirroring `install_wbr_update_hook`. Idempotent. Passthrough unless ARMED by our
+/// own load trigger, so installing it unconditionally (product default) never affects normal play.
+pub(crate) fn install_request_move_map_fix_hook() -> bool {
+    if REQUEST_MOVE_MAP_HOOK_INSTALLED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC {
+        return true;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "request-move-map-fix: MH_Initialize failed: {status:?}"
+            ));
+            return false;
+        }
+    }
+    let Ok(addr) = game_rva(REQUEST_MOVE_MAP_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "request-move-map-fix: failed to resolve 0x{REQUEST_MOVE_MAP_RVA:x} rva"
+        ));
+        return false;
+    };
+    match unsafe { MhHook::new(addr as *mut c_void, request_move_map_fix_hook as *mut c_void) } {
+        Ok(hook) => {
+            REQUEST_MOVE_MAP_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "request-move-map-fix: queue_enable failed: {status:?}"
+                ));
+                return false;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    REQUEST_MOVE_MAP_HOOK_INSTALLED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "request-move-map-fix: hooked 0x{addr:x} (armed-only BlockId fixup; passthrough otherwise)"
+                    ));
+                    true
+                }
+                status => {
+                    append_autoload_debug(format_args!(
+                        "request-move-map-fix: MH_ApplyQueued failed: {status:?}"
+                    ));
+                    false
+                }
+            }
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!(
+                "request-move-map-fix: MhHook::new failed: {status:?}"
+            ));
+            false
+        }
+    }
+}
+
+// ===== STEP_WorldResWait streaming-settle DEFER-RELEASE hook (armed switch-reload dip fix) ==========
+//
+// ROOT (bd reload-overlap-fix-design-worldreswait-defer-release-on-streaming-settle-2026-07-24, RE
+// synthesis Candidate A, ermaporch 1.16.2): the armed in-place switch reload releases movability at
+// CS::MoveMapStep::STEP_WorldResWait (dump 0x140af9cf0) the instant the target WorldBlockRes reaches
+// residency phase 0xa -- which does NOT wait on CS::CSWorldGeomMan geometry streaming. Because the mod's
+// lightweight return-title SKIPS _Common_Finalize (persistent world), the geometry re-stream is deferred
+// PAST that residency release, so the player becomes movable WHILE CSWorldGeomMan is still streaming =
+// the ~20fps movable-while-streaming dip (stream_overlap oracle: epoch2 5/5 overlap @20fps).
+//
+// FIX LEVER: STEP_WorldResWait gates its ENTIRE ready branch (player warp FUN_140622d20 +0xb7b0/b7b8=pos
+// +0xb7c0=1, and step advance FUN_140af9d90 requestedState++) on `FUN_140624bd0(fieldArea) != 0`. That
+// gate (deobf 0x624bd0, byte-identical to the dump; the shift tool's -0xe0/-0xf0 is a FALSE match in this
+// low-.text region -- resolved instead by unique prologue byte-search) is called EXCLUSIVELY from
+// STEP_WorldResWait (xrefs: 1 code caller + 1 table ref), so hooking it affects ONLY the WorldResWait
+// release and nothing else. While a switch reload is ARMED and geometry has not settled, we return AL=0
+// (not-ready) so STEP_WorldResWait takes its OWN not-ready branch (native _CheckEternityLoading pumps the
+// loading cover; no warp, no advance), then release with AL=1 once CSWorldGeomMan settles for K frames.
+//
+// SAFETY / why this is the safe hook point (vs faking the inner residency predicate FUN_14066d3e0, which
+// has 3 callers, or hooking STEP_WorldResWait itself, whose true deobf entry the shift tool mis-resolves):
+//   * We NEVER write WorldBlockRes phase/gate bytes (+0x35/+0x2f/+0x2d) -- the block reaches genuine
+//     residency in its real object; we only defer the STEP transition the game keys on the gate's return.
+//   * BEFORE residency we call the original every frame (identical to native: maintenance runs, residency
+//     progresses), so the fix can never PREVENT residency from being reached.
+//   * The original's ready path calls FUN_14066d610 (a NON-idempotent worldres pending-vector erase +
+//     block+0x2c clear) exactly ONCE, on the first residency frame -- so once residency is SEEN we STOP
+//     calling the original (returning our own hold value) to avoid repeat-popping/corrupting that vector.
+//   * SCOPE (all three, else pure passthrough): worldreswait_hold_enabled() (default-OFF opt-in marker,
+//     evaluated at arm) && switch_reload_active() (phase >= RETURN_TITLE_REQUESTED; IDLE on boot/load1) &&
+//     SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT==0 (in-world switch, not a boot self-reload) && a per-switch ARM
+//     latch set only from own_load_switch_reload_fire. On boot/load1 nothing arms -> pure passthrough (the
+//     PHASE3 load1-softlock trap is avoided: we do NOT key on FRESH_DESER_COUNT, which fires on load1).
+//   * BOUNDED FAIL-SOFT: if CSWorldGeomMan never settles within WORLDRESWAIT_HOLD_WAIT_MAX frames, release
+//     anyway (today's in-place behavior) and latch RELEASED_ON_FAILSOFT -- a stalled settle can never
+//     softlock the switch.
+
+/// `FUN_140624bd0` real entry -- STEP_WorldResWait's residency gate. DEOBF RVA (base 0x140000000),
+/// byte-identical to the 1.16.2 dump (shift 0). NOT the shift tool's 0x624af0 (-0xe0 mid-instruction
+/// false match in this low-.text staircase region); resolved by unique prologue byte-search
+/// (`48 89 5c 24 08 57 48 83 ec 30 48 8b d9 0f 29 74 24 20 48 8d 51 2c 0f 28 f1 48 8b 49 10`, 1 hit) and
+/// disasm-verified (first insn `mov %rbx,0x8(%rsp)` = a clean 5-byte MinHook boundary).
+const WORLDRESWAIT_GATE_RVA: usize = 0x624bd0;
+/// Consecutive settled frames required before releasing the hold (the design's K~8-16; mirrors the game's
+/// own FieldArea stabilization countdown). Filters a one-frame settle blip on the persistent world.
+const WORLDRESWAIT_HOLD_SETTLE_FRAMES: usize = 12;
+/// Bounded fail-soft cap: max frames to hold waiting for CSWorldGeomMan to settle before releasing anyway
+/// (fall back to today's in-place release; no softlock). Mirrors OUTGOING_TEARDOWN_WAIT_MAX (loaders.rs)
+/// and stays far under the runtime cap (`.auto/runtime_timeout_cap_seconds`).
+const WORLDRESWAIT_HOLD_WAIT_MAX: usize = 900;
+/// Lowest plausible heap pointer -- filters null / freed CSWorldGeomMan singleton slots.
+const WORLDRESWAIT_GEOM_HEAP_LO: usize = 0x10000;
+/// CS::CSWorldGeomMan::Update field offsets (GHIDRA-CONFIRMED @0x1406d31f0; version-stable dump==live;
+/// the exact fields crates/er-telemetry stream_overlap.rs samples). `+0xd0`(u8)=did-work-this-frame,
+/// `+0xf0/0xf4/0xf8/0x100`(i32)=per-frame work accumulators, `+0x108/0x109`(u8)=all-blocks-ready flags.
+/// (`+0x104` registered-block count is NONZERO at rest -- deliberately NOT gated on.)
+const GEOM_DID_WORK_D0_OFFSET: usize = 0xd0;
+const GEOM_WORK_ACC_F0_OFFSET: usize = 0xf0;
+const GEOM_WORK_ACC_F4_OFFSET: usize = 0xf4;
+const GEOM_WORK_ACC_F8_OFFSET: usize = 0xf8;
+const GEOM_WORK_ACC_100_OFFSET: usize = 0x100;
+const GEOM_ALL_READY_A_108_OFFSET: usize = 0x108;
+const GEOM_ALL_READY_B_109_OFFSET: usize = 0x109;
+/// Trampoline to the original `FUN_140624bd0` (set on hook install).
+static WORLDRESWAIT_GATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+
+/// True iff CS::CSWorldGeomMan reports geometry streaming SETTLED THIS frame: no work done this frame,
+/// both all-blocks-ready flags set, and all per-frame work accumulators zero. Passive: resolves the
+/// singleton via the eldenring reflection lookup (no vtable call, no D3D12) and fault-safe raw reads; a
+/// faulted read or a torn-down singleton -> false (never a spurious settle).
+fn worldreswait_geom_settled_once() -> bool {
+    let geom = eldenring::cs::CSWorldGeomMan::instance_ptr()
+        .map(|p| p as usize)
+        .unwrap_or(0);
+    if geom < WORLDRESWAIT_GEOM_HEAP_LO {
+        return false;
+    }
+    let did_work = unsafe { safe_read_u8(geom + GEOM_DID_WORK_D0_OFFSET) };
+    let ready_a = unsafe { safe_read_u8(geom + GEOM_ALL_READY_A_108_OFFSET) };
+    let ready_b = unsafe { safe_read_u8(geom + GEOM_ALL_READY_B_109_OFFSET) };
+    let f0 = unsafe { safe_read_i32(geom + GEOM_WORK_ACC_F0_OFFSET) };
+    let f4 = unsafe { safe_read_i32(geom + GEOM_WORK_ACC_F4_OFFSET) };
+    let f8 = unsafe { safe_read_i32(geom + GEOM_WORK_ACC_F8_OFFSET) };
+    let f100 = unsafe { safe_read_i32(geom + GEOM_WORK_ACC_100_OFFSET) };
+    matches!(did_work, Some(0))
+        && matches!(ready_a, Some(1))
+        && matches!(ready_b, Some(1))
+        && matches!(f0, Some(0))
+        && matches!(f4, Some(0))
+        && matches!(f8, Some(0))
+        && matches!(f100, Some(0))
+}
+
+/// The full switch-reload scope for the WorldResWait hold: this switch's release is ARMED to hold AND we
+/// are inside a genuine in-world System->Quit switch reload. On boot/load1 (phase IDLE, nothing armed) or
+/// a spurious title-phase self-reload (player was absent at arm) this is false -> pure passthrough.
+fn worldreswait_hold_armed_and_scoped() -> bool {
+    er_telemetry::counters::WORLDRESWAIT_HOLD_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
+        && crate::experiments::gating::switch_reload_active()
+        && er_telemetry::counters::SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT.load(Ordering::SeqCst) == 0
+}
+
+/// Call the original `FUN_140624bd0(rcx=FieldArea*, xmm1=f32) -> AL` (residency gate). Returns 0 if the
+/// trampoline is not yet set (fail-safe not-ready). NOTE the second argument is the xmm1 FLOAT
+/// STEP_WorldResWait passes in (`MOVSS XMM1,[param2+8]`), NOT an integer -- the gate saves it to xmm6 and
+/// forwards it to FUN_14066da60. On Win64 an `f32` at argument position 1 is placed in xmm1 by the ABI,
+/// so this signature forwards the float verbatim (the incoming rdx is unused by the gate, which recomputes
+/// `&currentBlockId` = fieldArea+0x2c). Declaring it `f32` is what keeps the float from being clobbered
+/// across our atomic/logging work before we call the original.
+unsafe fn worldreswait_gate_call_orig(field_area: usize, load_delta: f32) -> u8 {
+    let orig = WORLDRESWAIT_GATE_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        return 0;
+    }
+    let orig: unsafe extern "system" fn(usize, f32) -> u8 = unsafe { std::mem::transmute(orig) };
+    unsafe { orig(field_area, load_delta) }
+}
+
+/// `__fastcall FUN_140624bd0(rcx=FieldArea*, xmm1=f32 load_delta) -> AL` defer-release detour. Pure
+/// passthrough unless a switch reload is ARMED + scoped. While held it returns AL=0 so STEP_WorldResWait
+/// keeps looping in its native not-ready branch (loading cover pumped, no warp, no advance); it releases
+/// with AL=1 once CSWorldGeomMan settles for K frames or the fail-soft cap expires. See the section
+/// header. `load_delta` is the xmm1 float the caller passes in -- declared as a real `f32` param so the
+/// ABI keeps it in xmm1 and we forward it to the original untouched.
+pub(crate) unsafe extern "system" fn worldreswait_gate_hook(field_area: usize, load_delta: f32) -> u8 {
+    er_telemetry::counters::WORLDRESWAIT_GATE_HOOK_CALLS.fetch_add(1, Ordering::SeqCst);
+    // Fast path: not an armed/scoped switch reload -> behave EXACTLY as the original (load1/boot safe).
+    if !worldreswait_hold_armed_and_scoped() {
+        return unsafe { worldreswait_gate_call_orig(field_area, load_delta) };
+    }
+    // Armed. Until residency is SEEN, run the real gate every frame so maintenance runs + residency
+    // progresses (native-identical), and the gate's one-shot FUN_14066d610 residency-pop fires exactly
+    // once (on the frame residency is first reached).
+    if er_telemetry::counters::WORLDRESWAIT_RESIDENCY_SEEN.load(Ordering::SeqCst) == 0 {
+        let real = unsafe { worldreswait_gate_call_orig(field_area, load_delta) };
+        if real == 0 {
+            return 0; // not resident yet -- identical to native (STEP keeps loading)
+        }
+        // Residency just reached (the ONE legit pop happened inside the original). Begin the hold; do NOT
+        // call the original again on subsequent frames (that would repeat the non-idempotent pop).
+        er_telemetry::counters::WORLDRESWAIT_RESIDENCY_SEEN.store(1, Ordering::SeqCst);
+        er_telemetry::counters::WORLDRESWAIT_HOLD_ENGAGED.store(1, Ordering::SeqCst);
+        er_telemetry::counters::WORLDRESWAIT_HOLD_WAIT_TICKS.store(0, Ordering::SeqCst);
+        er_telemetry::counters::WORLDRESWAIT_SETTLE_STREAK.store(0, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "worldreswait-hold: RESIDENCY reached while armed -- deferring STEP_WorldResWait warp+advance until CSWorldGeomMan settles (fieldArea=0x{field_area:x}); loading cover held (native _CheckEternityLoading pumps)"
+        ));
+        // fall through to the hold decision this same frame (defer immediately)
+    }
+    // Holding: decide release-on-settle / fail-soft / keep-holding. Never call the original here.
+    let waited = er_telemetry::counters::WORLDRESWAIT_HOLD_WAIT_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
+    if worldreswait_geom_settled_once() {
+        let streak =
+            er_telemetry::counters::WORLDRESWAIT_SETTLE_STREAK.fetch_add(1, Ordering::SeqCst) + 1;
+        if streak >= WORLDRESWAIT_HOLD_SETTLE_FRAMES {
+            er_telemetry::counters::WORLDRESWAIT_HOLD_ARMED.store(0, Ordering::SeqCst);
+            er_telemetry::counters::WORLDRESWAIT_RELEASED_ON_SETTLE.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "worldreswait-hold: RELEASE on settle (streak={streak} held_frames_total={} waited={waited}) -- CSWorldGeomMan settled; STEP_WorldResWait warps+advances now (movability begins at genuine world-stable)",
+                er_telemetry::counters::WORLDRESWAIT_HELD_FRAMES.load(Ordering::SeqCst)
+            ));
+            return 1; // release: STEP_WorldResWait ready branch (warp + advance) runs once
+        }
+    } else {
+        er_telemetry::counters::WORLDRESWAIT_SETTLE_STREAK.store(0, Ordering::SeqCst);
+    }
+    if waited >= WORLDRESWAIT_HOLD_WAIT_MAX {
+        er_telemetry::counters::WORLDRESWAIT_HOLD_ARMED.store(0, Ordering::SeqCst);
+        er_telemetry::counters::WORLDRESWAIT_RELEASED_ON_FAILSOFT.store(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "worldreswait-hold: FAIL-SOFT release after {waited} frames without CSWorldGeomMan settle (held_frames_total={}) -- falling back to today's in-place release; no softlock, no regression",
+            er_telemetry::counters::WORLDRESWAIT_HELD_FRAMES.load(Ordering::SeqCst)
+        ));
+        return 1; // fail-soft release (today's behavior; STEP warps+advances)
+    }
+    er_telemetry::counters::WORLDRESWAIT_HELD_FRAMES.fetch_add(1, Ordering::SeqCst);
+    0 // hold: STEP_WorldResWait takes its native not-ready branch (_CheckEternityLoading; no warp/advance)
+}
+
+/// Arm the WorldResWait defer-release hold for THIS switch reload. Call from `own_load_switch_reload_fire`
+/// at the SetState5/continue point (the same site as `arm_request_move_map_fixup`), so the hold covers the
+/// upcoming STEP_WorldResWait. Gated by the default-OFF opt-in marker + the switch scope, so on load1/boot
+/// or when the marker is absent it is a no-op and the gate hook stays a pure passthrough.
+pub(crate) fn arm_worldreswait_hold() {
+    if !crate::experiments::gating::worldreswait_hold_enabled() {
+        return;
+    }
+    if !crate::experiments::gating::switch_reload_active() {
+        return;
+    }
+    if er_telemetry::counters::SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    er_telemetry::counters::WORLDRESWAIT_RESIDENCY_SEEN.store(0, Ordering::SeqCst);
+    er_telemetry::counters::WORLDRESWAIT_HOLD_WAIT_TICKS.store(0, Ordering::SeqCst);
+    er_telemetry::counters::WORLDRESWAIT_SETTLE_STREAK.store(0, Ordering::SeqCst);
+    er_telemetry::counters::WORLDRESWAIT_HOLD_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "worldreswait-hold: ARMED for switch reload (marker on, in-world switch) -- STEP_WorldResWait release will defer until CSWorldGeomMan settles (cap {WORLDRESWAIT_HOLD_WAIT_MAX} frames, K={WORLDRESWAIT_HOLD_SETTLE_FRAMES})"
+    ));
+}
+
+/// Clear the per-switch WorldResWait hold latches so each new switch gets a fresh hold. Called from
+/// `reset_switch_reload_latches` on every switch arm. The run-cumulative outcome counters (ENGAGED,
+/// HELD_FRAMES, RELEASED_ON_*) are deliberately NOT reset here so a run's outcome stays attributable.
+pub(crate) fn reset_worldreswait_hold_latches() {
+    er_telemetry::counters::WORLDRESWAIT_HOLD_ARMED.store(0, Ordering::SeqCst);
+    er_telemetry::counters::WORLDRESWAIT_RESIDENCY_SEEN.store(0, Ordering::SeqCst);
+    er_telemetry::counters::WORLDRESWAIT_HOLD_WAIT_TICKS.store(0, Ordering::SeqCst);
+    er_telemetry::counters::WORLDRESWAIT_SETTLE_STREAK.store(0, Ordering::SeqCst);
+}
+
+/// Install the STEP_WorldResWait gate defer-release detour (MhHook + MH_Initialize + queue_enable +
+/// MH_ApplyQueued), mirroring `install_request_move_map_fix_hook`. Idempotent. Pure passthrough unless a
+/// switch reload is ARMED + scoped, so installing it unconditionally (product default) never affects
+/// normal gameplay map transitions, boot, or load1.
+pub(crate) fn install_worldreswait_gate_hook() -> bool {
+    if er_telemetry::counters::WORLDRESWAIT_GATE_HOOK_INSTALLED.load(Ordering::SeqCst)
+        == OWN_STEPPER_CALL_INC
+    {
+        return true;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!("worldreswait-gate: MH_Initialize failed: {status:?}"));
+            return false;
+        }
+    }
+    let Ok(addr) = game_rva(WORLDRESWAIT_GATE_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "worldreswait-gate: failed to resolve 0x{WORLDRESWAIT_GATE_RVA:x} rva"
+        ));
+        return false;
+    };
+    match unsafe { MhHook::new(addr as *mut c_void, worldreswait_gate_hook as *mut c_void) } {
+        Ok(hook) => {
+            WORLDRESWAIT_GATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "worldreswait-gate: queue_enable failed: {status:?}"
+                ));
+                return false;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    er_telemetry::counters::WORLDRESWAIT_GATE_HOOK_INSTALLED
+                        .store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "worldreswait-gate: hooked 0x{addr:x} (armed-only STEP_WorldResWait defer-release; passthrough otherwise)"
+                    ));
+                    true
+                }
+                status => {
+                    append_autoload_debug(format_args!(
+                        "worldreswait-gate: MH_ApplyQueued failed: {status:?}"
+                    ));
+                    false
+                }
+            }
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!("worldreswait-gate: MhHook::new failed: {status:?}"));
+            false
+        }
+    }
+}
+
 /// Locate the on-disk save file (`.../EldenRing/<steamid>/ER0000.sl2` or `.co2`) and read its bytes.
 /// The directory is built by the NATIVE builder 0x140e0e680 (`SAVE_DIR_BUILDER_RVA`) -- the same
 /// path the engine uses -- so we never hardcode the user-data/steamid prefix. Inside that directory
 /// we pick the save file by extension (`.sl2`/`.co2`) rather than assuming an exact filename, so the
 /// probe works for vanilla and Seamless without a hardcoded name (bd dont-hardcode-savefile-tied).
+/// Optional per-switch cross-file save-source override for the programmatic (file,slot) switch. Reads a
+/// game-dir control file (`er-effects-switch-save-file.txt`) whose contents are a single save path the
+/// game can open (a Windows path, e.g. `A:\...\150-Banon\ER0000.sl2`). None when absent/empty. The
+/// harness writes the target FILE here before writing the slot; own_load_read_sl2_bytes reads it FIRST.
+fn switch_save_file_override() -> Option<String> {
+    let path = game_directory_path()?.join("er-effects-switch-save-file.txt");
+    let contents = std::fs::read_to_string(path).ok()?;
+    let trimmed = contents.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
+}
+
 pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
     const REQ_DIR_SANE_MAX_CU: usize = 320;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -376,6 +919,84 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
     // Same std::fs access the redirect enforcer already uses successfully from this DLL under Proton
     // (save_redirect::save_override_redirect_root_w). The full multi-slot save is returned; the
     // caller slices the picked slot exactly as it does for the native-builder bytes.
+    //
+    // RUNTIME FOREIGN PICK OVERRIDE (Load-Save-Profiles pick-override fix, er-effects-rs, 2026-07-15):
+    // When the human-driven "Load Save Profiles" path has COMMITTED a foreign slot this switch,
+    // `system_quit_save_swap_prepare_selected_slot` has already overwritten the game-owned ACTIVE
+    // `%APPDATA%/EldenRing/<steamid>/ER0000.{sl2,co2}` file with the picked slot's bytes (and re-committed
+    // it after the return-title save). Those committed bytes -- NOT the configured `save_file` -- are what
+    // the user just picked, so the feed MUST read the committed file here. The configured `save_file`
+    // stays the INITIAL boot autoload default (it wins only when no runtime pick is committed): reading it
+    // over a fresh foreign commit is exactly the pick-override bug (preview showed the picked character but
+    // the game loaded the config default). Read the committed path DIRECTLY -- same std::fs source as the
+    // configured-direct branch below -- because in direct mode the CreateFileW redirect does not cover the
+    // native builder's `read_dir` enumeration (see the native-builder note below), so relying on the dir
+    // walk to observe the just-committed bytes is timing/redirect fragile.
+    // RUNTIME CROSS-FILE OVERRIDE (programmatic (file,slot) switch, 2026-07-18). The harness sets the
+    // target save FILE for THIS switch via a game-dir control file (er-effects-switch-save-file.txt = a
+    // Windows path the game can open, e.g. A:\...\150-Banon\ER0000.sl2). Read it FIRST so a programmatic
+    // cross-file switch loads an ARBITRARY vanilla file READ-ONLY, in-memory (the source is only read;
+    // the caller slices the picked slot exactly like the boot TOML save_file path). Absent/empty -> fall
+    // through to the existing committed-foreign / configured precedence (within-file switches leave it
+    // unset). Same std::fs read the redirect enforcer + configured-direct branch already use.
+    if let Some(override_path) = switch_save_file_override() {
+        match std::fs::read(&override_path) {
+            Ok(mut bytes)
+                if bytes.len() as u64 >= crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES =>
+            {
+                normalize_save_bytes_to_active_steam_id(base, &mut bytes, "own-load-switch-file-override");
+                append_autoload_debug(format_args!(
+                    "own-load: read SWITCH FILE OVERRIDE \"{}\" ({} bytes) for slicing (programmatic cross-file (file,slot) switch overrides configured save_file for this load)",
+                    override_path,
+                    bytes.len()
+                ));
+                return Some(bytes);
+            }
+            Ok(bytes) => {
+                append_autoload_debug(format_args!(
+                    "own-load: switch file override \"{}\" too small ({} bytes < {}) -- falling back to committed/configured",
+                    override_path,
+                    bytes.len(),
+                    crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES
+                ));
+            }
+            Err(e) => {
+                append_autoload_debug(format_args!(
+                    "own-load: switch file override \"{}\" read failed ({e}) -- falling back to committed/configured",
+                    override_path
+                ));
+            }
+        }
+    }
+    if let Some(committed_path) = system_quit_committed_foreign_save_path() {
+        match std::fs::read(&committed_path) {
+            Ok(mut bytes)
+                if bytes.len() as u64 >= crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES =>
+            {
+                normalize_save_bytes_to_active_steam_id(base, &mut bytes, "own-load-committed-foreign");
+                append_autoload_debug(format_args!(
+                    "own-load: read COMMITTED FOREIGN save \"{}\" ({} bytes) for slicing (Load-Save-Profiles pick overrides configured save_file for this load)",
+                    committed_path,
+                    bytes.len()
+                ));
+                return Some(bytes);
+            }
+            Ok(bytes) => {
+                append_autoload_debug(format_args!(
+                    "own-load: committed foreign save \"{}\" too small ({} bytes < {}) -- falling back to configured/native save-dir",
+                    committed_path,
+                    bytes.len(),
+                    crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES
+                ));
+            }
+            Err(e) => {
+                append_autoload_debug(format_args!(
+                    "own-load: committed foreign save \"{}\" read failed ({e}) -- falling back to configured/native save-dir",
+                    committed_path
+                ));
+            }
+        }
+    }
     if let Some(path) = configured_or_default_save_file() {
         match std::fs::read(&path) {
             Ok(mut bytes)
@@ -620,7 +1241,7 @@ pub(crate) unsafe fn own_load_stream_telemetry(base: usize, gm: usize, title_own
 }
 
 /// Diagnostic throttle for `own_load_m28_dispatch`: log the first HEAD entries, then every INTERVALth.
-static OWN_LOAD_M28_DISPATCH_DIAG_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OWN_LOAD_M28_DISPATCH_DIAG_CALLS;
 const OWN_LOAD_M28_DISPATCH_DIAG_HEAD: usize = 8;
 const OWN_LOAD_M28_DISPATCH_DIAG_INTERVAL: usize = 600;
 

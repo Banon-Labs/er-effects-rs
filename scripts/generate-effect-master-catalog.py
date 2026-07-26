@@ -9,27 +9,104 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
-import textwrap
+import sys
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+HOME = Path.home()
+
+
+def first_existing_path(candidates: list[Path], fallback: Path | None = None) -> Path:
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return fallback if fallback is not None else candidates[0]
+
+
+def ancestor_candidates(relative: Path) -> list[Path]:
+    return [ancestor / relative for ancestor in (REPO_ROOT, *REPO_ROOT.parents)]
+
+
 DEFAULT_GAME_DIR = Path(
-    "/home/banon/.local/share/Steam/steamapps/common/ELDEN RING/Game"
+    os.environ.get(
+        "ER_GAME_DIR",
+        first_existing_path(
+            [
+                Path("/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game"),
+                HOME / ".local/share/Steam/steamapps/common/ELDEN RING/Game",
+                Path("/home/banon/.local/share/Steam/steamapps/common/ELDEN RING/Game"),
+            ],
+        ),
+    )
 )
-DEFAULT_REGULATION = DEFAULT_GAME_DIR / "regulation.bin"
+DEFAULT_REGULATION = Path(
+    os.environ.get("ER_REGULATION_BIN", DEFAULT_GAME_DIR / "regulation.bin")
+)
 DEFAULT_PARAMDEF = Path(
-    "/home/banon/projects/WitchyBND/WitchyBND/Assets/Paramdex/ER/Defs/SpEffect.xml"
+    os.environ.get(
+        "ER_SPEFFECT_PARAMDEF",
+        first_existing_path(
+            [
+                REPO_ROOT / "resources" / "SpEffect.xml",
+                HOME
+                / "projects/fromsoftware-rs/tools/param-generator/params/eldenring/SpEffect.xml",
+                *ancestor_candidates(
+                    Path(
+                        "../fromsoftware-rs/tools/param-generator/params/eldenring/SpEffect.xml"
+                    )
+                ),
+                Path(
+                    "/home/banon/projects/WitchyBND/WitchyBND/Assets/Paramdex/ER/Defs/SpEffect.xml"
+                ),
+            ],
+        ),
+    )
 )
 DEFAULT_NAMES = Path(
-    "/home/banon/projects/WitchyBND/WitchyBND/Assets/Paramdex/ER/Names/SpEffectParam.txt"
+    os.environ.get(
+        "ER_SPEFFECT_NAMES",
+        first_existing_path(
+            [
+                HOME
+                / "projects/WitchyBND/WitchyBND/Assets/Paramdex/ER/Names/SpEffectParam.txt",
+                Path(
+                    "/home/banon/projects/WitchyBND/WitchyBND/Assets/Paramdex/ER/Names/SpEffectParam.txt"
+                ),
+            ],
+            fallback=HOME
+            / "projects/WitchyBND/WitchyBND/Assets/Paramdex/ER/Names/SpEffectParam.txt",
+        ),
+    )
 )
-DEFAULT_OUTPUT = DEFAULT_GAME_DIR / "effect-master-catalog.json"
-DEFAULT_SMITHBOX_BINARY_DIR = Path("/home/banon/.local/share/smithbox/app")
+DEFAULT_OUTPUT = DEFAULT_GAME_DIR / "er-net-effect-master-catalog.json"
+DEFAULT_SMITHBOX_BINARY_DIR = Path(
+    os.environ.get(
+        "SMITHBOX_BINARY_DIR",
+        first_existing_path(
+            [
+                *ancestor_candidates(
+                    Path("target/soulsformats-bridge/bin/Release/net9.0")
+                ),
+                HOME / ".local/share/smithbox/app",
+                Path("/home/banon/.local/share/smithbox/app"),
+            ],
+        ),
+    )
+)
+DEFAULT_DOTNET = os.environ.get("DOTNET_BIN", "dotnet")
+DEFAULT_WINDOWS_DOTNET = first_existing_path(
+    [
+        Path("/mnt/c/Program Files/dotnet/dotnet.exe"),
+        Path("C:/Program Files/dotnet/dotnet.exe"),
+    ],
+    fallback=Path("/mnt/c/Program Files/dotnet/dotnet.exe"),
+)
 
 
-PROGRAM = r'''
+PROGRAM = r"""
 using System.Globalization;
 using System.Runtime.Loader;
 using System.Text.Json;
@@ -295,10 +372,10 @@ record MasterCatalog(int schema_version, string kind, MasterCatalogSource source
 record MasterCatalogSource(string param, string binder_version, int row_count, string regulation_file, string paramdef_file, string names_file);
 record FieldIndexEntry(string type, string? display_name, string[] tags);
 record MasterEffect(int id, string name, string? row_name, string? community_name, string? curated_name, int[] vfx, string[] tags, SortedDictionary<string, object?> fields);
-'''
+"""
 
 
-CSPROJ = r'''
+CSPROJ = r"""
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -317,7 +394,7 @@ CSPROJ = r'''
     </Reference>
   </ItemGroup>
 </Project>
-'''
+"""
 
 
 def parse_args() -> argparse.Namespace:
@@ -325,12 +402,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--regulation", type=Path, default=DEFAULT_REGULATION)
     parser.add_argument("--paramdef", type=Path, default=DEFAULT_PARAMDEF)
     parser.add_argument("--names", type=Path, default=DEFAULT_NAMES)
-    parser.add_argument("--effects", type=Path, default=REPO_ROOT / "data" / "effects.json")
+    parser.add_argument(
+        "--effects", type=Path, default=REPO_ROOT / "data" / "effects.json"
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--dotnet-bin", default=DEFAULT_DOTNET)
     parser.add_argument(
         "--smithbox-binary-dir",
         type=Path,
-        default=Path(os.environ.get("SMITHBOX_BINARY_DIR", DEFAULT_SMITHBOX_BINARY_DIR)),
+        default=Path(
+            os.environ.get("SMITHBOX_BINARY_DIR", DEFAULT_SMITHBOX_BINARY_DIR)
+        ),
     )
     return parser.parse_args()
 
@@ -340,38 +422,110 @@ def require_file(path: Path, label: str) -> None:
         raise SystemExit(f"missing {label}: {path}")
 
 
+def command_is_available(command: str) -> bool:
+    return Path(command).is_file() or shutil.which(command) is not None
+
+
+def use_windows_powershell(dotnet_bin: str) -> bool:
+    if Path(dotnet_bin).suffix.lower() == ".exe":
+        return True
+    return not command_is_available(dotnet_bin) and DEFAULT_WINDOWS_DOTNET.is_file()
+
+
+def wslpath_windows(path: Path) -> str:
+    result = subprocess.run(
+        ["wslpath", "-w", str(path)],
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise SystemExit((result.stderr or result.stdout).strip())
+    return result.stdout.strip()
+
+
+def powershell_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def windows_dotnet_bin(dotnet_bin: str) -> str:
+    dotnet_path = Path(dotnet_bin)
+    if dotnet_path.is_file():
+        return wslpath_windows(dotnet_path)
+    if DEFAULT_WINDOWS_DOTNET.is_file():
+        return wslpath_windows(DEFAULT_WINDOWS_DOTNET)
+    return dotnet_bin
+
+
 def main() -> int:
     args = parse_args()
     require_file(args.regulation, "regulation.bin")
     require_file(args.paramdef, "SpEffect paramdef")
     require_file(args.effects, "effects catalog")
     require_file(args.smithbox_binary_dir / "Andre.Formats.dll", "Andre.Formats.dll")
-    require_file(args.smithbox_binary_dir / "Andre.SoulsFormats.dll", "Andre.SoulsFormats.dll")
+    require_file(
+        args.smithbox_binary_dir / "Andre.SoulsFormats.dll", "Andre.SoulsFormats.dll"
+    )
 
     work_dir = REPO_ROOT / "target" / "effect-master-catalog-generator"
     work_dir.mkdir(parents=True, exist_ok=True)
+    windows_powershell = use_windows_powershell(args.dotnet_bin)
+    smithbox_host_path = (
+        wslpath_windows(args.smithbox_binary_dir)
+        if windows_powershell
+        else str(args.smithbox_binary_dir)
+    )
     (work_dir / "Program.cs").write_text(PROGRAM, encoding="utf-8")
     (work_dir / "effect-master-catalog-generator.csproj").write_text(
-        CSPROJ.format(smithbox=args.smithbox_binary_dir), encoding="utf-8"
+        CSPROJ.format(smithbox=smithbox_host_path), encoding="utf-8"
     )
 
     env = os.environ.copy()
     env["DOTNET_ROLL_FORWARD"] = env.get("DOTNET_ROLL_FORWARD", "Major")
-    env["SMITHBOX_BINARY_DIR"] = str(args.smithbox_binary_dir)
-    command = [
-        "dotnet",
-        "run",
-        "--project",
-        str(work_dir / "effect-master-catalog-generator.csproj"),
-        "-v",
-        "quiet",
-        "--",
-        str(args.regulation),
-        str(args.paramdef),
-        str(args.names),
-        str(args.effects),
-        str(args.output),
-    ]
+    env["SMITHBOX_BINARY_DIR"] = smithbox_host_path
+    project_path = work_dir / "effect-master-catalog-generator.csproj"
+    if windows_powershell:
+        dotnet_bin = windows_dotnet_bin(args.dotnet_bin)
+        run_args = [
+            "run",
+            "--project",
+            wslpath_windows(project_path),
+            "-v",
+            "quiet",
+            "--",
+            wslpath_windows(args.regulation),
+            wslpath_windows(args.paramdef),
+            wslpath_windows(args.names),
+            wslpath_windows(args.effects),
+            wslpath_windows(args.output),
+        ]
+        command_text = "".join(
+            [
+                "$ErrorActionPreference = 'Stop';",
+                f" $env:DOTNET_ROLL_FORWARD = {powershell_quote(env['DOTNET_ROLL_FORWARD'])};",
+                f" $env:SMITHBOX_BINARY_DIR = {powershell_quote(smithbox_host_path)};",
+                f" Set-Location -LiteralPath {powershell_quote(wslpath_windows(REPO_ROOT))};",
+                f" & {powershell_quote(dotnet_bin)} ",
+                " ".join(powershell_quote(arg) for arg in run_args),
+            ]
+        )
+        command = ["powershell.exe", "-NoProfile", "-Command", command_text]
+    else:
+        command = [
+            args.dotnet_bin,
+            "run",
+            "--project",
+            str(project_path),
+            "-v",
+            "quiet",
+            "--",
+            str(args.regulation),
+            str(args.paramdef),
+            str(args.names),
+            str(args.effects),
+            str(args.output),
+        ]
     try:
         result = subprocess.run(
             command,
@@ -384,7 +538,7 @@ def main() -> int:
     except subprocess.TimeoutExpired as error:
         print(error.stdout or "", end="")
         print(error.stderr or "", end="")
-        print("effect master catalog generation timed out", file=os.sys.stderr)
+        print("effect master catalog generation timed out", file=sys.stderr)
         return 124
     if result.returncode != 0:
         print(result.stdout, end="")

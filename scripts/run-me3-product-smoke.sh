@@ -81,7 +81,6 @@ done
 
 fatal() { echo "run-me3-product-smoke: $*" >&2; exit 2; }
 require_file() { [[ -f "$1" ]] || fatal "missing file: $1"; }
-require_executable() { [[ -x "$1" ]] || fatal "missing executable: $1"; }
 
 wipe_appdata_saves() {
   [[ "${RUNTIME_SKIP_APPDATA_WIPE:-0}" == "1" ]] && return 0
@@ -142,6 +141,7 @@ stage_lazyloader_away() {
   done
 }
 
+# shellcheck disable=SC2317 # reached only via the cleanup EXIT/INT/TERM/HUP trap; shellcheck 0.9 flow analysis can't see the indirect invocation.
 restore_lazyloader() {
   local f
   for f in "$LAZYLOADER_PROXY" "$LAZYLOADER_INI"; do
@@ -172,6 +172,7 @@ stage_autoload_request() {
   cp -f "$AUTOLOAD_PATH" "$ARTIFACT_DIR/autoload-request.txt"
 }
 
+# shellcheck disable=SC2317 # reached only via the cleanup EXIT/INT/TERM/HUP trap; shellcheck 0.9 flow analysis can't see the indirect invocation.
 restore_autoload_request() {
   [[ -n "$FLAG_BACKUP_DIR" ]] || return 0
   if [[ "$AUTOLOAD_HAD_ORIGINAL" == "1" ]]; then
@@ -181,6 +182,7 @@ restore_autoload_request() {
   fi
 }
 
+# shellcheck disable=SC2317 # reached only via the cleanup EXIT/INT/TERM/HUP trap; shellcheck 0.9 flow analysis can't see the indirect invocation.
 terminate_runtime_pids() {
   local pid
   local -a pids=()
@@ -209,6 +211,7 @@ collect_me3_logs() {
     -exec cp -f {} "$ARTIFACT_DIR/" \; 2>/dev/null || true
 }
 
+# shellcheck disable=SC2317 # registered as the EXIT/INT/TERM/HUP trap handler below; shellcheck 0.9 flow analysis can't see the indirect invocation.
 cleanup() {
   local pid
   collect_me3_logs

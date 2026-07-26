@@ -44,23 +44,23 @@ pub(crate) const ER_TPF_COVER_ERR_PANIC: usize = 4;
 pub(crate) const ER_TPF_COVER_ERR_RESCAP_NULL: usize = 5;
 pub(crate) const ER_TPF_COVER_ERR_BASE_UNRESOLVED: usize = 6;
 /// 1 once the er-tpf TPF003 byte blob was built (pure CPU, no native call).
-pub(crate) static ER_TPF_COVER_TEXTURE_BUILT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::ER_TPF_COVER_TEXTURE_BUILT;
 /// Built TPF003 blob length in bytes (0 until built).
-pub(crate) static ER_TPF_COVER_BLOB_LEN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::ER_TPF_COVER_BLOB_LEN;
 /// 1 once the native CreateTpfResCap call has been ATTEMPTED (success or failure). Latched the moment a
 /// real call is made so the register fires exactly ONCE; precondition-not-ready bails (repos still null
 /// during boot) do NOT set this and keep retrying until graphics is up.
-pub(crate) static ER_TPF_COVER_REGISTER_ATTEMPTED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::ER_TPF_COVER_REGISTER_ATTEMPTED;
 /// 1 once CreateTpfResCap returned a non-null TpfResCap (the GPU texture registered into the repos).
-pub(crate) static ER_TPF_COVER_REGISTERED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::ER_TPF_COVER_REGISTERED;
 /// The TpfResCap* CreateTpfResCap returned (0 until registered).
-pub(crate) static ER_TPF_COVER_LAST_RESCAP: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::ER_TPF_COVER_LAST_RESCAP;
 /// Count of bind-observer target rewrites that pointed the visible profile surface at our key.
-pub(crate) static ER_TPF_COVER_BOUND: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::ER_TPF_COVER_BOUND;
 /// Number of failed/abandoned register attempts (precondition miss or caught panic).
-pub(crate) static ER_TPF_COVER_FAILURES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::ER_TPF_COVER_FAILURES;
 /// Last error code (see `ER_TPF_COVER_ERR_*`).
 pub(crate) static ER_TPF_COVER_LAST_ERROR: AtomicUsize = AtomicUsize::new(ER_TPF_COVER_ERR_NONE);
 /// One-shot latch for the bind-observer target rewrite (fires once after registration).
-pub(crate) static ER_TPF_COVER_TARGET_REWRITE_FIRED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::ER_TPF_COVER_TARGET_REWRITE_FIRED;
 

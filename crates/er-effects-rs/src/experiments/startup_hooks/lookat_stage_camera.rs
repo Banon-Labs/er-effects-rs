@@ -272,7 +272,7 @@ unsafe fn profile_lookat_stage_probe(base: usize) {
 }
 
 pub(crate) fn profile_lookat_phase_diag_tick() {
-    if !portrait_lookat_enabled() {
+    if !portrait_overlay_enabled() {
         return;
     }
     if let Ok(base) = game_module_base() {
@@ -291,9 +291,8 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
                 }
             }
         }
-        // Refresh the cached selftest flag here (throttled) so the draw task never does a per-frame stat.
-        PROFILE_LOOKAT_SELFTEST_ON.store(portrait_lookat_selftest_enabled(), Ordering::SeqCst);
-        PROFILE_CURSOR_SWEEP_ON.store(portrait_cursor_sweep_enabled(), Ordering::SeqCst);
+        // Cursor/head tracking self-tests are retired; keep the cached toggles false.
+        PROFILE_LOOKAT_SELFTEST_ON.store(false, Ordering::SeqCst);
     }
     if n % 240 == 0 {
         let ticks: Vec<String> = (0..LOOKAT_DRAW_PHASE_COUNT)
@@ -453,11 +452,12 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
             PROFILE_BOUND_GX_ALPHA_MAX.load(Ordering::SeqCst),
         ));
         append_autoload_debug(format_args!(
-            "lookat-pump-blocks: draws={} r_bad={} vt_bad={} off_bad={} multi={}",
+            "lookat-pump-blocks: draws={} r_bad={} vt_bad={} off_bad={} off_resource_bad={} multi={}",
             PROFILE_PERFRAME_MODEL_DRAWS.load(Ordering::SeqCst),
             PORTRAIT_PUMP_BLOCK_R.load(Ordering::SeqCst),
             PORTRAIT_PUMP_BLOCK_VTABLE.load(Ordering::SeqCst),
             PORTRAIT_PUMP_BLOCK_OFF.load(Ordering::SeqCst),
+            PORTRAIT_PUMP_BLOCK_OFF_RESOURCE.load(Ordering::SeqCst),
             PORTRAIT_PUMP_BLOCK_MULTI.load(Ordering::SeqCst),
         ));
         append_autoload_debug(format_args!(
@@ -520,7 +520,7 @@ pub(crate) unsafe extern "system" fn per_frame_push_hook(renderer: usize, frame:
             ));
         }
     }
-    if portrait_lookat_enabled() && renderer != 0 && renderer != null {
+    if portrait_overlay_enabled() && renderer != 0 && renderer != null {
         if let Ok(base) = game_module_base() {
             let vt_ok = unsafe { safe_read_usize(renderer) }.unwrap_or(0)
                 == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA;

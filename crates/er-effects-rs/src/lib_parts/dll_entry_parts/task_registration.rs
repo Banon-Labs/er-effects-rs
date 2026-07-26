@@ -1,3 +1,111 @@
+pub(crate) use er_telemetry::counters::AUTOLOAD_HANDOFF_PARENT_STATE_FIX_COUNT;
+
+fn poll_cached_mms18_ending_request_advancer() {
+    // Native full deserialize owns GameMan::warp_requested and MoveMapStep::CheckReturnToTitle
+    // consumes/autoclears it at finalize case 8. Agent-side 0x5d or warp pulses finalize by tearing
+    // down the loaded world. The only post-finalize cleanup we own is menuData+0x5e: native sets it
+    // while walking 12a->case8, but leaves it true after mms leaves 18; if it remains true into the
+    // resident world, the player is torn down about a second later.
+    let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    if quickload_phase < SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED {
+        return;
+    }
+    let Ok(base) = game_module_base() else {
+        return;
+    };
+    let Some(md) = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
+        .filter(|m| *m > 0x10000)
+        .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) })
+        .filter(|d| *d > 0x10000)
+    else {
+        return;
+    };
+    let md_5d = unsafe { safe_read_u8(md + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) }
+        .map(|b| b as i32)
+        .unwrap_or(-1);
+    let md_5e = unsafe { safe_read_u8(md + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) }
+        .map(|b| b as i32)
+        .unwrap_or(-1);
+    if md_5e != 1 || md_5d != 0 {
+        return;
+    }
+    let owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
+    let ingame = if owner != TITLE_OWNER_SCAN_START_ADDRESS && owner > 0x10000 {
+        unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) }
+            .filter(|ig| *ig != TITLE_OWNER_SCAN_START_ADDRESS && *ig > 0x10000)
+    } else {
+        None
+    };
+    let request_code = ingame
+        .and_then(|ig| unsafe { safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) })
+        .unwrap_or(-1);
+    let mms_step = ingame
+        .and_then(|ig| unsafe { safe_read_usize(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) })
+        .filter(|mms| *mms != TITLE_OWNER_SCAN_START_ADDRESS && *mms > 0x10000)
+        .and_then(|mms| unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET) })
+        .unwrap_or(-1);
+    if mms_step == -1 && request_code == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING {
+        unsafe {
+            *((md + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) as *mut u8) = 0;
+        }
+        let n = ENDING_REQUEST_SET_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        append_autoload_debug(format_args!(
+            "ENDING-FLAG POST-FINALIZE CLEAR #{n}: cleared menuData+0x5e after mms left 18 (phase={quickload_phase} requestCode={request_code} mms={mms_step}); native warp already autocleared"
+        ));
+    }
+}
+
+fn poll_autoload_handoff_parent_state_guard() {
+    // TITLE_STEP_END_FLOW (7) / TITLE_STEP_END_FLOW_WAIT (8): enum-backed teardown-state constants
+    // (constants::stats_panel_background), shared with the product-core parent-fix.
+    if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
+        || SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) == 0
+    {
+        return;
+    }
+    let owner = PRODUCT_CORE_LAST_OWNER.load(Ordering::SeqCst);
+    if owner == TITLE_OWNER_SCAN_START_ADDRESS || owner <= 0x10000 {
+        return;
+    }
+    let Some(ingame) = (unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) })
+        .filter(|ig| *ig != TITLE_OWNER_SCAN_START_ADDRESS && *ig > 0x10000)
+    else {
+        return;
+    };
+    let committed =
+        unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }.unwrap_or(-1);
+    let requested = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_OFFSET) }.unwrap_or(-1);
+    let parent_is_ending = matches!(committed, TITLE_STEP_END_FLOW | TITLE_STEP_END_FLOW_WAIT)
+        || matches!(requested, TITLE_STEP_END_FLOW | TITLE_STEP_END_FLOW_WAIT);
+    if !parent_is_ending {
+        return;
+    }
+    let request_code =
+        unsafe { safe_read_i32(ingame + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) }.unwrap_or(-1);
+    let mms_step = unsafe { safe_read_usize(ingame + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) }
+        .filter(|mms| *mms != TITLE_OWNER_SCAN_START_ADDRESS && *mms > 0x10000)
+        .and_then(|mms| unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET) })
+        .unwrap_or(-1);
+    unsafe {
+        *((owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *mut i32) = TITLE_STEP_GAME_STEP_WAIT;
+        *((owner + TITLE_OWNER_STATE_OFFSET) as *mut i32) = TITLE_STEP_GAME_STEP_WAIT;
+    }
+    let n = AUTOLOAD_HANDOFF_PARENT_STATE_FIX_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+    append_autoload_debug(format_args!(
+        "AUTOLOAD-HANDOFF PARENT STATE FIX #{n}: TitleStep {committed}/{requested} -> GameStepWait(6) during handoff (InGameStep=0x{ingame:x} requestCode={request_code} mms={mms_step}); prevents EndFlow/EndFlowWait returning the loaded world to title"
+    ));
+}
+
+/// RAII timer: records the DLL main game-task body duration (any return path) into GAME_TASK_LAST_US,
+/// to split a DLL per-frame CODE cost from a game-side loop cost for the playable-window fps.
+struct GameTaskTimer(std::time::Instant);
+impl Drop for GameTaskTimer {
+    fn drop(&mut self) {
+        er_telemetry::counters::GAME_TASK_LAST_US
+            .store(self.0.elapsed().as_micros() as usize, Ordering::SeqCst);
+    }
+}
 
 pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
     std::thread::spawn(move || {
@@ -18,6 +126,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
 
         cs_task.run_recurring(
             move |task_data: &FD4TaskData| {
+                let _gt = GameTaskTimer(std::time::Instant::now());
                 // Boot-phase marker: first frame our recurring task actually ticks.
                 if profiler_enabled()
                     && BOOT_FIRST_FRAME_LOGGED
@@ -32,6 +141,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     return;
                 }
                 tick_before_player_lookup(task_data);
+                poll_autoload_handoff_parent_state_guard();
                 // Startup save-picker: input/navigation runs on the render thread (the Present hook),
                 // the only thread that reads OS keys under Wine. Only the one-shot pick COMPLETION
                 // (redirect + MinHook install) runs here on the game task -- it is alive at pick time
@@ -61,13 +171,6 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     if lite_mode() {
                         return;
                     }
-                    let discarded_effect_triggers = discard_pending_effect_trigger_keys();
-                    if discarded_effect_triggers != 0 {
-                        state.last_driver_command = Some(format!(
-                            "effect-trigger: discarded {discarded_effect_triggers} pre-load keypresses"
-                        ));
-                    }
-                    publish_effect_selector_overlay_text(&mut state);
                     unsafe { system_quit_profile_select_top_menu_tick() };
                     // Product autoload: run the native title open-menu predicate + minimal
                     // native save-load core from the recurring game task, before the idx10
@@ -251,6 +354,155 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // choices), optionally clean stale title-dialog render resources, then run the
                 // one-shot correctness dump.
                 IN_WORLD_REACHED.store(IN_WORLD_REACHED_YES, Ordering::SeqCst);
+                // CAN-MOVE PROBE (2026-07-18, user-directed): in-world, inject a forward stick and prove
+                // the character actually MOVES for >=60 consecutive frames. Movement is the ONLY signal
+                // that distinguished a playable load from a frozen one (the render/draw_group oracles read
+                // FALSE even for a visibly-rendered, controllable load). Frozen loads never accumulate.
+                // Game-thread only, so driving input here is safe.
+                // Run the move-probe whenever in-world EXCEPT during active MENU-NAV (OPEN_MENU..CONFIRM),
+                // where an injected forward stick would move the menu cursor. WAIT_WORLD(0) / WAIT_RELOAD(7)
+                // / DONE(6) are in-world settle states -- the probe MUST run there (that is where load1 and
+                // each reload prove movement). NB: sq_repro_actively_driving() returns TRUE for WAIT_WORLD
+                // (it blocks during boot), which wrongly skipped load1's proof -- so gate on the STATE range
+                // directly, not that.
+                let sq_menu_nav = system_quit_repro_enabled() && {
+                    let st = SQ_REPRO_STATE.load(Ordering::SeqCst);
+                    (SQ_REPRO_STATE_OPEN_MENU..=SQ_REPRO_STATE_CONFIRM).contains(&st)
+                };
+                // Only inject once the char is actually RENDERED in-world (render_group 1c4 + enable_render
+                // 1c5), NOT merely present. `player present` goes true mid-load (mms=13, ~14s before
+                // render_group), and injecting there latched an invalid DISPROVEN before the char could be
+                // controllable -- then the verdict was frozen and never re-tested (run 092119: verdict at
+                // t=79.9s during loading; render_group did not fire until t=86s). Gating on the rendered
+                // state makes the probe test movability at the stable in-world point, so a DISPROVEN verdict
+                // means the char genuinely did not move, not that we injected before the world was up.
+                let char_rendered = player.chr_ins.chr_flags1c4.is_render_group_enabled()
+                    && player.chr_ins.chr_flags1c5.enable_render();
+                if !sq_menu_nav && char_rendered {
+                    let p = player.chr_ins.modules.physics.position;
+                    crate::experiments::can_move_probe::tick((p.0, p.1, p.2));
+                }
+                // PROGRAMMATIC SWITCH TRIGGER (2026-07-18): poll the harness switch-slot control file and,
+                // when a new (in-world, resident) request appears with no switch in flight, arm a menu-free
+                // switch (menuData+0x5d=1 teardown -> own_load_switch_reload_fire). Replaces the brittle
+                // simulated-input autopilot for repeatable multi-character loading. Self-gates (phase IDLE +
+                // world resident @ step 18 + mtime change), so an every-frame call is cheap and safe.
+                poll_cached_mms18_ending_request_advancer();
+                if let Ok(base) = game_module_base() {
+                    unsafe { poll_switch_slot_control_file(base) };
+                }
+                // SPURIOUS RETURN-TITLE ARM DISARM (2026-07-18, bd angre-reload-full-causal-chain-and-fix,
+                // refined by repeatable-multi-save-consolidated-plan-2026-07-18).
+                // Root cause of the angrE repeated-load crash: the boot autoload navigates the ProfileSelect
+                // LOAD flow, which trips `system_quit_arm_quickload_autoload` and arms a post-load return-title
+                // reload (QUICKLOAD_PHASE = RETURN_TITLE_REQUESTED) of the character we JUST loaded. Load #1 then
+                // completes and is stable in-world, but because the phase stays armed the in-world branch below
+                // keeps driving product_core_autoload_tick until the return-title chain submits, tears down the
+                // good load, and the reload sticks at MoveMapStep 18 and crashes (game assert AV 0x1eb9999).
+                // DISCRIMINATOR: the earlier pure time-based gate (disarm after N continuous armed in-world
+                // frames) also cancelled GENUINE cross-slot/cross-file switches whose old world lingers past
+                // the threshold (the switch-regression). The correct, index-space-free discriminator is the
+                // player-presence AT ARM TIME: the spurious boot self-reload arms from the title/menu (player
+                // ABSENT); a genuine switch arms in-world (player PRESENT). So the time-based disarm now fires
+                // only when SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT==1 -- it kills the spurious boot self-reload
+                // (latching load #1 DONE via phase IDLE, which gates OFF both this destructive branch and the
+                // return-title chain submit) and never touches a real switch. Reset the counter whenever
+                // nothing is armed so only *continuous* armed presence counts. The completed-switch success
+                // latch (recognising a genuine switch's NEW stable world so the DLL stops re-driving) is
+                // handled separately by the in-world stable-load proof, not by this disarm.
+                // SLOT-AWARE-BY-CAUSE discriminator (2026-07-18, supersedes the pure time-based gate).
+                // Only the SPURIOUS boot self-reload is disarmed: it is armed while the player is ABSENT
+                // (the boot autoload's own ProfileSelect navigation queuing a post-load reload of the very
+                // character it is loading). A GENUINE in-world switch arms with the player PRESENT and must
+                // be left to run its return-title teardown+reload -- disarming it by elapsed time is the
+                // switch-regression (bd angre-4loads-goal-met-but-switch-regression-2026-07-18), where the
+                // old world lingers past the threshold and the switch gets cancelled ("world resolves and
+                // I'm still on the old character"). Gating on SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT keeps load #1
+                // stable (kills the spurious arm) without touching real switches. See
+                // bd repeatable-multi-save-consolidated-plan-2026-07-18.
+                if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+                    >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+                    && SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT.load(Ordering::SeqCst) == 1
+                {
+                    let armed = SYSTEM_QUIT_INWORLD_ARMED_STABLE_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
+                    if armed == SYSTEM_QUIT_INWORLD_ARMED_DISARM_TICKS {
+                        SYSTEM_QUIT_QUICKLOAD_PHASE
+                            .store(SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE, Ordering::SeqCst);
+                        SYSTEM_QUIT_INWORLD_ARMED_DISARM_COUNT.fetch_add(1, Ordering::SeqCst);
+                        append_autoload_debug(format_args!(
+                            "system-quit-quickload: SPURIOUS boot self-reload arm (armed while player absent) DISARMED after {armed} continuous in-world frames -> phase IDLE; destructive reload suppressed (genuine in-world switches are NOT disarmed)"
+                        ));
+                    }
+                } else {
+                    SYSTEM_QUIT_INWORLD_ARMED_STABLE_TICKS.store(0, Ordering::SeqCst);
+                }
+                // MENU-FREE RELOAD COMPLETION LATCH (2026-07-18, repeatability fix, bd
+                // repeatability-menu-free-phase-reset-fix-2026-07-18). own_load_switch_reload_fire committed
+                // the picked slot (FRESH_DESER_DONE=1) and its native SetState5 began streaming the new
+                // character, but the switch phase is still armed. Left armed after the load is genuinely
+                // playable, the return-title branch can keep re-driving state that belongs to the next switch.
+                // FRESH_DESER_DONE is only a deserialize/SetState5 handoff proof, NOT a playable-world
+                // proof. The driver now owns the stricter per-epoch movement/native-settle gate before it may
+                // start another switch. This latch has a different job: disarm product_core_autoload_tick as
+                // soon as the native MoveMap child is done so title-loop ownership does not take the loaded
+                // player back down during AUTOLOAD_HANDOFF. For strict repro probes, however, native MoveMap
+                // completion alone is not enough: the known bug is exactly "MoveMap finished, then requestCode
+                // drains and the player disappears before movement." Keep handoff armed until the current reload
+                // epoch has epoch-scoped movement proof too. Normal user sessions keep the original non-input
+                // player-present latch and are not forced to walk the character.
+                // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): marker feature gates are
+                // forbidden; the movement-proof harness marker is retired, so no epoch is ever forced
+                // to walk the character (proof-only behavior, never product).
+                let movement_proof_required = false;
+                let current_epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+                let movement_proven_for_epoch = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
+                    && MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == current_epoch;
+                let native_movemap_child_done = if movement_proof_required {
+                    let owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
+                    let ingame = if owner != TITLE_OWNER_SCAN_START_ADDRESS && owner > 0x10000 {
+                        unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) }
+                            .filter(|ig| *ig != TITLE_OWNER_SCAN_START_ADDRESS && *ig > 0x10000)
+                    } else {
+                        None
+                    };
+                    ingame
+                        .and_then(|ig| unsafe { safe_read_usize(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) })
+                        .filter(|mms| *mms != TITLE_OWNER_SCAN_START_ADDRESS && *mms > 0x10000)
+                        .and_then(|mms| unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET) })
+                        .unwrap_or(-1)
+                        == -1
+                } else {
+                    true
+                };
+                let menu_free_reload_ready = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE
+                    .load(Ordering::SeqCst)
+                    == 1
+                    && (!movement_proof_required
+                        || (native_movemap_child_done && movement_proven_for_epoch));
+                if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+                    >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+                    && menu_free_reload_ready
+                {
+                    let stable =
+                        SYSTEM_QUIT_MENU_FREE_STABLE_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
+                    let required_stable = if movement_proof_required {
+                        1
+                    } else {
+                        SYSTEM_QUIT_MENU_FREE_STABLE_TICKS_THRESHOLD
+                    };
+                    if stable == required_stable {
+                        SYSTEM_QUIT_QUICKLOAD_PHASE
+                            .store(SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE, Ordering::SeqCst);
+                        if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
+                            er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
+                        }
+                        append_autoload_debug(format_args!(
+                            "menu-free reload COMPLETION: picked char stable in-world {stable} frames (FRESH_DESER_DONE=1 movement_required={movement_proof_required} movement_proven={movement_proven_for_epoch} native_movemap_child_done={native_movemap_child_done}) -> phase IDLE, cleared save_requested; native owns warp_requested autoclear; return-title chain disarmed so the loaded world persists for the next switch"
+                        ));
+                    }
+                } else {
+                    SYSTEM_QUIT_MENU_FREE_STABLE_TICKS.store(0, Ordering::SeqCst);
+                }
                 if product_autoload_enabled()
                     && SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
                         >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
@@ -318,36 +570,8 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     state.expected_animation_seen = true;
                 }
                 state.last_write_idx = Some(observation.write_idx);
-                apply_pending_effect_work(player, &mut state);
-
-                remove_requested_calls(player, &mut state);
-                process_driver_command(player, &mut state);
-                poll_live_effect_catalogs(player, &mut state);
-                poll_live_effect_setting(player, &mut state);
-                consume_effect_hotkeys(player, &mut state);
-                publish_effect_selector_overlay_text(&mut state);
-
-                let appear_playing = observation.current_animation_id == Some(APPEAR_ANIMATION_ID);
-                if !appear_playing {
-                    state.applied_for_current_appear = false;
-                }
-
-                let should_apply_for_appear = (observation.appear_newly_queued || appear_playing)
-                    && !state.applied_for_current_appear;
-                let should_apply = should_apply_for_appear || state.manual_apply_requested;
-                state.manual_apply_requested = false;
-
-                if should_apply_for_appear {
-                    state.applied_for_current_appear = true;
-                }
-
-                if should_apply {
-                    apply_selected_calls(player, &mut state);
-                }
 
                 process_global_driver_command(&mut state);
-                refresh_call_status(player, &mut state);
-                reapply_expired_enabled_calls(player, &mut state);
                 write_telemetry_throttled(&mut state, true);
             },
             CSTaskGroupIndex::FrameBegin,
@@ -356,17 +580,10 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
             BOOTSTRAP_EVENT_GAME_TASK_RECURRING_REGISTERED,
             BOOTSTRAP_DETAIL_DONE,
         );
-        // REALTIME PORTRAIT LOOK-AT draw-phase SWEEP: register the realtime draw task in EACH candidate
-        // DRAW phase, so it runs on the render thread inside an actively-recording GX frame (where the
-        // profile draw step's GX subcontext-pool pop succeeds -- FrameBegin, above, is before the frame
-        // records, so a draw there is a black no-op). Each registration bumps its own per-frame tick
-        // counter; only the phase whose index == PROFILE_LOOKAT_SELECTED_PHASE actually rasterizes, so
-        // exactly one phase draws per frame. The active phase is switchable live via
-        // er-effects-lookat-phase.txt (no recompile), to find one that ticks per-frame at the menu
-        // (GameSceneDraw measured ~11% -- world-gated). We own these tasks (cancel() is a fromsoftware-rs
-        // no-op + self-leaked Arc), so the chosen one persists past Continue = the loading-screen port.
-        // Order MUST match constants::LOOKAT_DRAW_PHASE_NAMES.
-        let lookat_phases = [
+        // LIVE LOADING PORTRAIT render/publish pump: register in each candidate DRAW phase so exactly
+        // one active phase can run on the render thread inside a live GX frame. This keeps the portrait
+        // visible/refreshing during loading; cursor/head tracking remains retired.
+        let portrait_phases = [
             CSTaskGroupIndex::Draw_Pre,
             CSTaskGroupIndex::GraphicsStep,
             CSTaskGroupIndex::DrawStep,
@@ -376,7 +593,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
             CSTaskGroupIndex::DrawEnd,
             CSTaskGroupIndex::Draw_Post,
         ];
-        for (i, phase) in lookat_phases.into_iter().enumerate() {
+        for (i, phase) in portrait_phases.into_iter().enumerate() {
             cs_task.run_recurring(
                 move |task_data: &FD4TaskData| unsafe {
                     profile_lookat_phase_draw_tick(i, task_data)
@@ -384,7 +601,6 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 phase,
             );
         }
-        // Sweep diagnostic + live selector re-read, paced by a FrameBegin task (ticks every frame).
         cs_task.run_recurring(
             move |_task_data: &FD4TaskData| profile_lookat_phase_diag_tick(),
             CSTaskGroupIndex::FrameBegin,
@@ -400,6 +616,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
         // Gated by portrait_render_drive_enabled so it can be A/B'd against the safe checker baseline.
         cs_task.run_recurring(
             move |_task_data: &FD4TaskData| {
+                let _bt = std::time::Instant::now();
                 if let Ok(base) = game_module_base() {
                     // Stats-panel neutral-bg register: runs on EVERY frame regardless of the autoload
                     // path (the `save_requested` product path never enters product_core_autoload_tick,
@@ -413,6 +630,8 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         };
                     }
                 }
+                er_telemetry::counters::BUILD_DRIVER_LAST_US
+                    .store(_bt.elapsed().as_micros() as usize, Ordering::SeqCst);
             },
             CSTaskGroupIndex::FrameBegin,
         );

@@ -301,8 +301,9 @@ pub(crate) fn crash_log_path() -> PathBuf {
 static PROCESS_LOG_EPOCH: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// Elapsed milliseconds since the process-log epoch (lazily anchored on first call). Cheap: a single
-/// short-lived lock, poison-tolerant, no file IO under the lock.
-fn process_log_elapsed_ms() -> u128 {
+/// short-lived lock, poison-tolerant, no file IO under the lock. `pub(crate)` so the input-trace
+/// JSONL stamps its rows on the SAME clock as the `[+Nms]` debug-log prefixes (cross-correlation).
+pub(crate) fn process_log_elapsed_ms() -> u128 {
     let mut guard = match PROCESS_LOG_EPOCH.lock() {
         Ok(g) => g,
         Err(p) => p.into_inner(),
@@ -503,16 +504,57 @@ pub(crate) fn note_ls_portrait_capture(w: u32, h: u32, px: &[u8]) -> bool {
     publishable
 }
 
+/// DEFAULT-OFF marker gate for the `append_autoload_debug` firehose (Phase B decoupled diagnostics,
+/// bd decoupled-diagnostics-architecture-buildplan-2026-07-24). Env vars do NOT cross me3/Proton, so
+/// the enable is a game-dir marker file `er-effects-autoload-debug.txt` checked via `.exists()` and
+/// cached once. This is a PURELY DIAGNOSTIC logging toggle -- it changes NO game behavior, only whether
+/// the passive debug-log lines are written -- so the armed-vs-disarmed A/B baseline pays zero per-frame
+/// log-file cost in both arms. Registered in `.auto/marker_file_gate_baseline.json` diagnostic_gates.
+fn autoload_debug_log_enabled() -> bool {
+    static CACHED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *CACHED.get_or_init(|| {
+        game_directory_path()
+            .map(|dir| dir.join("er-effects-autoload-debug.txt").exists())
+            .unwrap_or(false)
+    })
+}
+
 // ENV-GATE RATIONALE: ER_EFFECTS_AUTOLOAD_DEBUG_PATH is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
+    // PHASE B DECOUPLED DIAGNOSTICS: this per-frame firehose is DEFAULT-OFF. Return before ANY file I/O
+    // unless the `er-effects-autoload-debug.txt` marker is present, so the armed-vs-disarmed A/B baseline
+    // has a ZERO-LOG cost in both arms (no per-frame log-file-I/O confound). Cached; no game behavior.
+    if !autoload_debug_log_enabled() {
+        return;
+    }
     use std::io::Write;
-    static HEADER: std::sync::Once = std::sync::Once::new();
+    // FPS FIX (bd fps-fix-not-confirmed-new-suspect-perframe-debug-logging): the old path did a full file
+    // OPEN + write + CLOSE on EVERY call (3 syscalls/line). The DLL logs heavily during loads/transitions
+    // (per-frame WORLDRES-GETTER phase changes, oracles, etc.), so that per-call open/close tanked the
+    // framerate exactly when the user sees it. Keep ONE persistent handle: open+truncate+header once, then
+    // only writeln thereafter -- no per-call open/close. Same output, a fraction of the syscalls.
+    static LOG: std::sync::Mutex<Option<std::fs::File>> = std::sync::Mutex::new(None);
     let prefix = log_line_prefix();
-    let path = std::env::var("ER_EFFECTS_AUTOLOAD_DEBUG_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("er-effects-autoload-debug.log"));
-    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
-        HEADER.call_once(|| write_log_header(&mut file));
+    let mut guard = match LOG.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    if guard.is_none() {
+        // TRUNCATE ONCE per process so each run starts a CLEAN log (matches the trace DLL's reset-on-attach).
+        let path = std::env::var("ER_EFFECTS_AUTOLOAD_DEBUG_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("er-effects-autoload-debug.log"));
+        if let Ok(mut file) = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)
+        {
+            write_log_header(&mut file);
+            *guard = Some(file);
+        }
+    }
+    if let Some(file) = guard.as_mut() {
         let _ = writeln!(file, "{prefix} {args}");
     }
 }

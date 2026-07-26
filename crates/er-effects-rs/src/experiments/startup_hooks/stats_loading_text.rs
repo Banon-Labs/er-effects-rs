@@ -383,10 +383,10 @@ struct StatsTextScreenCache {
 }
 static STATS_TEXT_SCREEN_CACHE: std::sync::Mutex<Option<StatsTextScreenCache>> =
     std::sync::Mutex::new(None);
-static STATS_TEXT_SCREEN_VERSION: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::STATS_TEXT_SCREEN_VERSION;
 
 /// Cumulative stats-bitmap build count (telemetry oracle `oracle_stats_text_built`; never reset).
-pub(crate) static STATS_TEXT_BUILT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::STATS_TEXT_BUILT;
 /// `(name, level, live)` of the last logged build -- gates the debug log so per-second playtime rebuilds
 /// don't spam it, while identity changes (new character, record->live upgrade) still log.
 static STATS_TEXT_LOGGED: std::sync::Mutex<Option<(String, i32, bool)>> =
@@ -503,6 +503,17 @@ pub(crate) fn stats_text_screen_bitmap(screen_max_dim: u32) -> Option<(u32, u32,
         });
     }
     Some((w, h, rgba, version))
+}
+
+/// Cheap presence check: true once the game-thread build (`maybe_build_stats_text`) has produced
+/// loading-screen stats lines. The native isolated overlay uses this as a full-frame/composite gate so
+/// it never pays the screen-scale raster (`stats_text_screen_bitmap`) just to decide whether to show
+/// anything. Only the `lines` matter -- the screen bitmap is re-rastered from them at screen scale.
+pub(crate) fn stats_text_available() -> bool {
+    STATS_TEXT_CACHE
+        .lock()
+        .ok()
+        .is_some_and(|g| g.as_ref().is_some_and(|c| !c.lines.is_empty()))
 }
 
 /// Reset the per-load stats-text cache so the next load starts from a clean (no-text) frame and its

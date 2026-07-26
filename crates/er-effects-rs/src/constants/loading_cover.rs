@@ -9,15 +9,15 @@
 // ============================================================================================
 /// Probe frame counter (per own_stepper idx10 call, starting when the probe first runs after the
 /// menu opens). Schedule below is in these frames.
-pub(crate) static INPUT_PROBE_FRAME: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::INPUT_PROBE_FRAME;
 /// Set to 1 once the probe is active so the hot menu hooks can cheaply enable the extra
 /// leaf-tick accounting (MENU_D180_LEAF_TICKED) without a per-frame file-exists check.
-pub(crate) static INPUT_PROBE_ACTIVE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::INPUT_PROBE_ACTIVE;
 /// One-shot latch: set when the d180 leaf tick is observed during the HIGHLIGHT window (decisive).
-pub(crate) static INPUT_PROBE_D180_PRECONFIRM: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::INPUT_PROBE_D180_PRECONFIRM;
 /// Snapshot of MENU_D180_LEAF_TICKED captured at the Down-inject frame; HIGHLIGHT growth is
 /// measured strictly above this baseline.
-pub(crate) static INPUT_PROBE_DOWN_LEAF_BASELINE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::INPUT_PROBE_DOWN_LEAF_BASELINE;
 /// Count of genuine d180 leaf-Update ticks (bumped ONLY by cap_menu_item_update_hook when the
 /// ticked item classifies to dialog_factory). Distinct from MENU_LOAD_GAME_ITEM, which the static
 /// sequence-iter walk can also set without d180 actually ticking.

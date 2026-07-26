@@ -1,96 +1,51 @@
-//! Thin FFI wrapper around MinHook.
+//! MinHook FFI + hook union for this DLL.
+//!
+//! The generic implementation (the `MH_*` externs, `MH_STATUS`, the `MhHook` wrapper, and the union:
+//! `register_union_hook` + the cross-DLL chaining) moved to the shared `er-hook` crate so all three
+//! game cdylibs share one copy and MinHook's C source is compiled once. This module re-exports it, so
+//! every existing `crate::mh::{MhHook, MH_*, MH_STATUS, register_union_hook, ...}` reference is
+//! unchanged.
+//!
+//! The `#[no_mangle] er_effects_union_register` C export stays HERE (not in `er-hook`): it is a
+//! cross-DLL contract other DLLs resolve by name, and keeping it in this crate ensures ONLY
+//! `er_effects_rs.dll` exports it -- exactly as before the extraction.
 #![allow(dead_code, non_snake_case, non_camel_case_types, missing_docs)]
 
-use std::ffi::c_void;
-use std::ptr::null_mut;
+use std::sync::atomic::AtomicUsize;
 
-#[allow(non_camel_case_types)]
-#[must_use]
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MH_STATUS {
-    MH_UNKNOWN = -1,
-    MH_OK = 0,
-    MH_ERROR_ALREADY_INITIALIZED,
-    MH_ERROR_NOT_INITIALIZED,
-    MH_ERROR_ALREADY_CREATED,
-    MH_ERROR_NOT_CREATED,
-    MH_ERROR_ENABLED,
-    MH_ERROR_DISABLED,
-    MH_ERROR_NOT_EXECUTABLE,
-    MH_ERROR_UNSUPPORTED_FUNCTION,
-    MH_ERROR_MEMORY_ALLOC,
-    MH_ERROR_MEMORY_PROTECT,
-    MH_ERROR_MODULE_NOT_FOUND,
-    MH_ERROR_FUNCTION_NOT_FOUND,
-}
+pub use er_hook::*;
 
-unsafe extern "system" {
-    pub fn MH_Initialize() -> MH_STATUS;
-    pub fn MH_Uninitialize() -> MH_STATUS;
-    pub fn MH_CreateHook(
-        pTarget: *mut c_void,
-        pDetour: *mut c_void,
-        ppOriginal: *mut *mut c_void,
-    ) -> MH_STATUS;
-    pub fn MH_EnableHook(pTarget: *mut c_void) -> MH_STATUS;
-    pub fn MH_QueueEnableHook(pTarget: *mut c_void) -> MH_STATUS;
-    pub fn MH_DisableHook(pTarget: *mut c_void) -> MH_STATUS;
-    pub fn MH_QueueDisableHook(pTarget: *mut c_void) -> MH_STATUS;
-    pub fn MH_ApplyQueued() -> MH_STATUS;
-}
-
-impl MH_STATUS {
-    pub fn ok_context(self, _context: &str) -> Result<(), MH_STATUS> {
-        self.ok()
+/// C-ABI export (2026-07-18, user-directed cross-DLL union). A COMPANION DLL loaded into the same
+/// process (the log-only `er-reload-trace-dll`) hooks ~40 native load/menu functions that OVERLAP
+/// this DLL's own hooks (e.g. `0xb0e180` continue-confirm, `0xb0d960` title-SetState). If the
+/// companion drove its OWN MinHook instance, two instances patching the same address would corrupt
+/// each other's trampolines (the exact silent race the internal union was built to fix, now across
+/// DLLs). So the companion calls THIS export instead: every shared address is owned by this DLL's
+/// single MinHook instance + union, and the companion's handler is CHAINED like any internal one.
+///
+/// `orig_slot_ptr` points at a `usize`-sized cell (an `AtomicUsize`) that lives in the COMPANION's
+/// image; the union stores the trampoline (or next chained handler) there for the companion handler
+/// to call. The companion image stays loaded for the process lifetime, so treating it as `'static`
+/// is sound. Returns `0` on success, `-1` for a null `orig_slot_ptr`, or the `MH_STATUS` code as a
+/// positive `i32` on MinHook failure.
+///
+/// # Safety
+/// `handler` must be a valid `UnionFn` matching `target`'s ABI (≤4 integer/pointer args); `target`
+/// must be a real code address in this process; `orig_slot_ptr` must point at a live, aligned
+/// `usize` cell that outlives every dispatch (a companion `'static`).
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn er_effects_union_register(
+    target: usize,
+    handler: UnionFn,
+    orig_slot_ptr: *mut usize,
+) -> i32 {
+    if orig_slot_ptr.is_null() {
+        return -1;
     }
-
-    pub fn ok(self) -> Result<(), MH_STATUS> {
-        if self == MH_STATUS::MH_OK {
-            Ok(())
-        } else {
-            Err(self)
-        }
-    }
-}
-
-/// Original address, hook function address, and trampoline for a given hook.
-pub struct MhHook {
-    addr: *mut c_void,
-    hook_impl: *mut c_void,
-    trampoline: *mut c_void,
-}
-
-impl MhHook {
-    /// # Safety
-    ///
-    /// Installs native code detours; caller must ensure ABI and lifetime are valid.
-    pub unsafe fn new(addr: *mut c_void, hook_impl: *mut c_void) -> Result<Self, MH_STATUS> {
-        let mut trampoline = null_mut();
-        unsafe { MH_CreateHook(addr, hook_impl, &mut trampoline) }.ok_context("MH_CreateHook")?;
-
-        Ok(Self {
-            addr,
-            hook_impl,
-            trampoline,
-        })
-    }
-
-    pub fn trampoline(&self) -> *mut c_void {
-        self.trampoline
-    }
-
-    /// # Safety
-    ///
-    /// Enables a native detour through MinHook's queued API.
-    pub unsafe fn queue_enable(&self) -> Result<(), MH_STATUS> {
-        unsafe { MH_QueueEnableHook(self.addr) }.ok_context("MH_QueueEnableHook")
-    }
-
-    /// # Safety
-    ///
-    /// Disables a native detour through MinHook's queued API.
-    pub unsafe fn queue_disable(&self) -> Result<(), MH_STATUS> {
-        unsafe { MH_QueueDisableHook(self.addr) }.ok_context("MH_QueueDisableHook")
+    // AtomicUsize is a repr(transparent) wrapper over usize, so a *mut usize aliases it soundly.
+    let orig_slot: &'static AtomicUsize = unsafe { &*(orig_slot_ptr as *const AtomicUsize) };
+    match unsafe { register_union_hook(target, handler, orig_slot) } {
+        Ok(()) => 0,
+        Err(status) => status as i32,
     }
 }

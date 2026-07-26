@@ -15,30 +15,6 @@ const CONFIG_FILE_NAME: &str = "er-effects.toml";
 const SAVE_FILE_ENV: &str = "ER_EFFECTS_SAVE_FILE";
 const SLOT_ENV: &str = "ER_EFFECTS_AUTOLOAD_SLOT";
 const METHOD_ENV: &str = "ER_EFFECTS_AUTOLOAD_METHOD";
-const MENU_SORT_ARMAMENTS_ENV: &str = "ER_EFFECTS_MENU_SORT_ARMAMENTS";
-const MENU_SORT_ARMOR_ENV: &str = "ER_EFFECTS_MENU_SORT_ARMOR";
-const MENU_SORT_TALISMANS_ENV: &str = "ER_EFFECTS_MENU_SORT_TALISMANS";
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MenuSortDefault {
-    /// Keep the game's vanilla boot value untouched for this category.
-    Preserve,
-    /// GR_MenuText 6105 / comparator id 0x5141.
-    ItemType,
-    /// GR_MenuText 6190 / comparator id 0x5140.
-    OrderOfAcquisition,
-}
-
-impl MenuSortDefault {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            MenuSortDefault::Preserve => "preserve",
-            MenuSortDefault::ItemType => "item_type",
-            MenuSortDefault::OrderOfAcquisition => "order_of_acquisition",
-        }
-    }
-}
-
 #[derive(Clone, Debug, Default)]
 pub(crate) struct RuntimeConfig {
     pub path: PathBuf,
@@ -47,9 +23,6 @@ pub(crate) struct RuntimeConfig {
     pub method: Option<String>,
     pub boot_background_image: Option<PathBuf>,
     pub persist_boot_background_to_loading_screen: Option<bool>,
-    pub menu_sort_armaments: Option<MenuSortDefault>,
-    pub menu_sort_armor: Option<MenuSortDefault>,
-    pub menu_sort_talismans: Option<MenuSortDefault>,
     pub preferred_save_picker_dir: Option<PathBuf>,
     pub autoupdate_preferred_picker_dir: Option<bool>,
 }
@@ -60,7 +33,7 @@ pub(crate) fn init_runtime_config(hmodule: HINSTANCE) {
     let _ = RUNTIME_CONFIG.set(load_runtime_config(hmodule));
     match RUNTIME_CONFIG.get() {
         Some(Ok(config)) => append_autoload_debug(format_args!(
-            "runtime-config: loaded '{}' save_file={} slot={} method={} boot_background_image={} persist_boot_background_to_loading_screen={} menu_sort.armaments={} menu_sort.armor={} menu_sort.talismans={} preferred_save_picker_dir={} autoupdate_preferred_picker_dir={}",
+            "runtime-config: loaded '{}' save_file={} slot={} method={} boot_background_image={} persist_boot_background_to_loading_screen={} preferred_save_picker_dir={} autoupdate_preferred_picker_dir={}",
             config.path.display(),
             config
                 .save_file
@@ -81,18 +54,6 @@ pub(crate) fn init_runtime_config(hmodule: HINSTANCE) {
                 .persist_boot_background_to_loading_screen
                 .map(|v| v.to_string())
                 .unwrap_or_else(|| "<default:true>".to_owned()),
-            config
-                .menu_sort_armaments
-                .map(MenuSortDefault::label)
-                .unwrap_or("<default>"),
-            config
-                .menu_sort_armor
-                .map(MenuSortDefault::label)
-                .unwrap_or("<default>"),
-            config
-                .menu_sort_talismans
-                .map(MenuSortDefault::label)
-                .unwrap_or("<default>"),
             config
                 .preferred_save_picker_dir
                 .as_ref()
@@ -273,10 +234,6 @@ fn boilerplate_config(picker_assignment: Option<&str>) -> String {
 # method = \"...\"                         # autoload method override
 # boot_background_image = 'C:\\path\\to\\background.png'
 # persist_boot_background_to_loading_screen = true
-# menu_sort.armaments = \"order_of_acquisition\"  # or \"item_type\" / \"preserve\"
-# menu_sort.armor = \"order_of_acquisition\"
-# menu_sort.talismans = \"order_of_acquisition\"
-
 {picker_block}
 "
     )
@@ -301,30 +258,6 @@ pub(crate) fn configured_autoload_slot() -> Option<i32> {
     runtime_config().and_then(|config| config.slot)
 }
 
-pub(crate) fn configured_menu_sort_armaments() -> MenuSortDefault {
-    configured_menu_sort_default(
-        MENU_SORT_ARMAMENTS_ENV,
-        |config| config.menu_sort_armaments,
-        "armaments",
-    )
-}
-
-pub(crate) fn configured_menu_sort_armor() -> MenuSortDefault {
-    configured_menu_sort_default(
-        MENU_SORT_ARMOR_ENV,
-        |config| config.menu_sort_armor,
-        "armor",
-    )
-}
-
-pub(crate) fn configured_menu_sort_talismans() -> MenuSortDefault {
-    configured_menu_sort_default(
-        MENU_SORT_TALISMANS_ENV,
-        |config| config.menu_sort_talismans,
-        "talismans",
-    )
-}
-
 pub(crate) fn configured_save_load_request() -> SaveLoadRequest {
     let mut request = SaveLoadRequest::from_env();
     if std::env::var(SLOT_ENV).is_err()
@@ -338,27 +271,6 @@ pub(crate) fn configured_save_load_request() -> SaveLoadRequest {
         request.method = SaveLoadMethod::from_label(method.trim());
     }
     request
-}
-
-fn configured_menu_sort_default(
-    env_name: &str,
-    from_config: impl FnOnce(&RuntimeConfig) -> Option<MenuSortDefault>,
-    label: &str,
-) -> MenuSortDefault {
-    if let Ok(value) = std::env::var(env_name) {
-        let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            match parse_menu_sort_default_label(trimmed) {
-                Ok(choice) => return choice,
-                Err(err) => append_autoload_debug(format_args!(
-                    "runtime-config: ignoring invalid {env_name} for menu_sort.{label}: {err}"
-                )),
-            }
-        }
-    }
-    runtime_config()
-        .and_then(from_config)
-        .unwrap_or(MenuSortDefault::OrderOfAcquisition)
 }
 
 fn runtime_config() -> Option<&'static RuntimeConfig> {
@@ -516,24 +428,6 @@ fn parse_runtime_config(path: PathBuf, contents: &str) -> Result<RuntimeConfig, 
                         )
                     })?);
             }
-            "menu_sort.armaments" | "sort.armaments" | "armaments_sort" => {
-                config.menu_sort_armaments =
-                    Some(parse_menu_sort_default_value(value).map_err(|err| {
-                        format!("invalid menu_sort.armaments on line {}: {err}", line_no + 1)
-                    })?);
-            }
-            "menu_sort.armor" | "sort.armor" | "armor_sort" => {
-                config.menu_sort_armor =
-                    Some(parse_menu_sort_default_value(value).map_err(|err| {
-                        format!("invalid menu_sort.armor on line {}: {err}", line_no + 1)
-                    })?);
-            }
-            "menu_sort.talismans" | "sort.talismans" | "talismans_sort" => {
-                config.menu_sort_talismans =
-                    Some(parse_menu_sort_default_value(value).map_err(|err| {
-                        format!("invalid menu_sort.talismans on line {}: {err}", line_no + 1)
-                    })?);
-            }
             "preferred_save_picker_dir" => {
                 let parsed = PathBuf::from(parse_toml_string(value).map_err(|err| {
                     format!(
@@ -571,11 +465,6 @@ fn parse_toml_bool(value: &str) -> Result<bool, &'static str> {
     }
 }
 
-fn parse_menu_sort_default_value(value: &str) -> Result<MenuSortDefault, &'static str> {
-    let label = parse_toml_string(value)?;
-    parse_menu_sort_default_label(&label)
-}
-
 fn configured_path_from_toml(raw: &str, config_dir: &std::path::Path) -> PathBuf {
     if let Some(wine_path) = wine_z_path_from_linux_absolute(raw) {
         return wine_path;
@@ -595,20 +484,6 @@ fn wine_z_path_from_linux_absolute(raw: &str) -> Option<PathBuf> {
     let mut path = String::from("Z:");
     path.push_str(&raw.replace('/', "\\"));
     Some(PathBuf::from(path))
-}
-
-fn parse_menu_sort_default_label(value: &str) -> Result<MenuSortDefault, &'static str> {
-    let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
-    match normalized.as_str() {
-        "preserve" | "disabled" | "disable" | "off" | "none" | "vanilla" => {
-            Ok(MenuSortDefault::Preserve)
-        }
-        "item_type" | "type" => Ok(MenuSortDefault::ItemType),
-        "order_of_acquisition" | "acquisition" | "order_acquisition" | "acquired" => {
-            Ok(MenuSortDefault::OrderOfAcquisition)
-        }
-        _ => Err("expected order_of_acquisition, item_type, or preserve"),
-    }
 }
 
 fn strip_comment(line: &str) -> &str {

@@ -12,6 +12,14 @@
 /// (compile-time accuracy guarantee, replacing the hand-decoded hex constants).
 pub(crate) const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize =
     core::mem::offset_of!(GameDataMan, main_player_game_data);
+/// `GameDataMan::play_time` (u32, in-game play time in milliseconds, maxed at 999:59:59.999).
+/// WORLD-LIVE LIVENESS signal for the render gate: the game advances this clock only while the
+/// world simulation is actually stepping; it is PAUSED during loads/menus/frozen-world states.
+/// So a rising `oracle_play_time_ms` across a dwell window proves the world is live (not a
+/// render-frozen "present but nothing moving" reload). Bound to the typed layout so it tracks
+/// fromsoftware-rs and fails the build on struct drift.
+pub(crate) const GAME_DATA_MAN_PLAY_TIME_A0_OFFSET: usize =
+    core::mem::offset_of!(GameDataMan, play_time);
 pub(crate) const PGD_CURRENT_HP_10_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, current_hp);
 pub(crate) const PGD_CURRENT_MAX_HP_14_OFFSET: usize =
@@ -152,12 +160,12 @@ pub(crate) const PGD_STAT_COUNT: usize =
 pub(crate) const GAME_MAN_NAME_IS_EMPTY_E70_OFFSET: usize =
     core::mem::offset_of!(GameMan, character_name_is_empty);
 /// One-shot latch for the in-world LOAD-CORRECTNESS dump.
-pub(crate) static LOAD_CORRECTNESS_DUMPED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::LOAD_CORRECTNESS_DUMPED;
 pub(crate) const LOAD_CORRECTNESS_NOT_DUMPED: usize = 0;
 /// One-shot latches for the OBSERVE-mode title->menu timing baseline (T0 at the parked title,
 /// T_menu_open when the TitleTopDialog reaches TextFadeOut). Lets a true-vanilla run (no forcing,
 /// modals + presses by the user) emit the SAME markers as the DLL-headless run for comparison.
-pub(crate) static OBSERVE_T0_EMITTED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) use er_telemetry::counters::OBSERVE_T0_EMITTED;
 pub(crate) static OBSERVE_MENU_OPEN_EMITTED: AtomicUsize =
     AtomicUsize::new(OBSERVE_MARKER_NOT_EMITTED);
 pub(crate) const OBSERVE_MARKER_NOT_EMITTED: usize = 0;

@@ -4,8 +4,8 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
-        Arc, Mutex, Once, OnceLock,
         atomic::{AtomicU64, AtomicUsize, Ordering},
+        Arc, Mutex, Once, OnceLock,
     },
     time::{Duration, Instant},
 };
@@ -13,7 +13,7 @@ use std::{
 use std::os::windows::ffi::OsStrExt as _;
 
 use crate::input_blocker::{InputBlocker, InputFlags};
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MhHook, MH_STATUS};
 use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
@@ -21,20 +21,20 @@ use eldenring::{
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
 use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
 use windows::{
+    core::{BOOL, PCSTR},
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
         System::{
             LibraryLoader::{GetModuleHandleA, GetProcAddress},
-            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
+            Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION},
             SystemServices::DLL_PROCESS_ATTACH,
             Threading::GetCurrentProcessId,
         },
         UI::WindowsAndMessaging::{
-            ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
             WM_KEYDOWN, WM_KEYUP,
         },
     },
-    core::{BOOL, PCSTR},
 };
 
 #[allow(unused_imports)]
@@ -49,13 +49,7 @@ use super::*;
 /// fail-closed unless an operator deliberately asks for that experiment; stale `ER_EFFECTS_AUTOLOAD_*`
 /// env or release examples must not silently flip product smoke into the broken menu-core path.
 pub(crate) fn experimental_direct_menu_load_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_EXPERIMENTAL_DIRECT_MENU_LOAD").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-experimental-direct-menu-load.txt")
-        .exists()
+    false
 }
 pub(crate) fn product_autoload_enabled() -> bool {
     PRODUCT_AUTOLOAD_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
@@ -88,13 +82,7 @@ pub(crate) fn profile_select_load_flow_enabled() -> bool {
 /// zero-host-input native menu open plus passive/native Load-Game row firing used by the capture
 /// harness.
 pub(crate) fn native_profile_capture_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_PROFILE_CAPTURE_NATIVE").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-profile-capture-native.txt")
-        .exists()
+    false
 }
 /// Force the live profile-portrait 3D model render at the title/menu phase (where the GxDrawContext is
 /// valid). The recurring task runs `force_profile_render_tick` each menu-phase frame: it marks the target
@@ -107,19 +95,48 @@ pub(crate) fn native_profile_capture_enabled() -> bool {
 /// `user-pref-too-many-env-file-gates-default-on-product`): the loading-screen portrait is now product
 /// behavior, so it builds the model on every real autoload run without a staged flag. Master off:
 /// `autoload_disabled()`; telemetry-only/native-capture runs stay off; env/file remain force-on overrides.
+/// True on native Windows (NOT Wine/Proton). Wine's `ntdll` exports `wine_get_version`; native Windows
+/// never does. Cached. Used to disable the character-profile RENDER-DRIVE on native Windows, where
+/// driving the game's own offscreen model render mid-load crashes the strict D3D12 driver (bd
+/// er-effects-rs-n4x, 2026-07-15). vkd3d/Proton tolerates it, so the drive stays on there.
+pub(crate) fn is_native_windows() -> bool {
+    use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+    static CACHED: AtomicUsize = AtomicUsize::new(0); // 0=unknown, 1=native, 2=wine
+    match CACHED.load(Ordering::SeqCst) {
+        1 => return true,
+        2 => return false,
+        _ => {}
+    }
+    let is_wine = unsafe { GetModuleHandleW(windows::core::w!("ntdll.dll")) }
+        .ok()
+        .map(|h| unsafe { GetProcAddress(h, windows::core::s!("wine_get_version")) }.is_some())
+        .unwrap_or(false);
+    CACHED.store(if is_wine { 2 } else { 1 }, Ordering::SeqCst);
+    !is_wine
+}
+
+/// True when the operator force-DISABLED the native-Windows profile render-drive (env
+/// `ER_EFFECTS_ALLOW_NATIVE_PROFILE_DRIVE=0`). The drive is now DEFAULT-ON for native (see the gates below):
+/// the isolated overlay owns its own D3D12 device and the 8-frame settle gate keeps the crash-prone
+/// model-drive blocked, so the portrait pipeline is runtime-proven safe on native (2026-07-15, zero AVs
+/// across 7 boots, animated head captured + displayed). This env is now only a diagnostic force-OFF escape.
+// ENV-GATE RATIONALE: ER_EFFECTS_ALLOW_NATIVE_PROFILE_DRIVE=0 force-DISABLES the (now default-on) native
+// profile render-drive; it is a diagnostic escape hatch only and never writes a save or perturbs the mount.
+fn native_profile_drive_disabled() -> bool {
+    false
+}
+
+// ENV-GATE RATIONALE: ER_EFFECTS_FORCE_PROFILE_RENDER=1 force-ENABLES the profile portrait render-drive
+// even on telemetry-only/no-load save-override runs (where it is otherwise off); diagnostic force-ON
+// override only. Does not write a save; simply keeps the portrait render pipeline active for the probe.
 pub(crate) fn force_profile_render_enabled() -> bool {
     if autoload_disabled() || native_profile_capture_enabled() {
         return false;
     }
+    if is_native_windows() && native_profile_drive_disabled() {
+        return false;
+    }
     !save_override_telemetry_only()
-        || matches!(
-            std::env::var("ER_EFFECTS_FORCE_PROFILE_RENDER").as_deref(),
-            Ok("1")
-        )
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-force-profile-render.txt")
-            .exists()
 }
 /// DEFAULT-OFF gate for the live-portrait D3D12 readback. When on, the moment
 /// `maybe_capture_portrait_gxtexture` pins the rendered offscreen `CSGxTexture`
@@ -137,14 +154,6 @@ pub(crate) fn portrait_real_pixels_enabled() -> bool {
         return false;
     }
     !save_override_telemetry_only()
-        || matches!(
-            std::env::var("ER_EFFECTS_PORTRAIT_REAL_PIXELS").as_deref(),
-            Ok("1")
-        )
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-portrait-real-pixels.txt")
-            .exists()
 }
 /// DEFAULT-OFF gate for the RENDER-THREAD offscreen drive (the keepalive keystone). When on, the
 /// Present hook (`present_hook`, render thread, every frame, fires during the loading screen) drives the
@@ -165,41 +174,35 @@ pub(crate) fn portrait_render_drive_enabled() -> bool {
     if autoload_disabled() || native_profile_capture_enabled() {
         return false;
     }
-    !save_override_telemetry_only()
-        || matches!(
-            std::env::var("ER_EFFECTS_PORTRAIT_RENDER_DRIVE").as_deref(),
-            Ok("1")
-        )
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-portrait-render-drive.txt")
-            .exists()
-}
-/// DEFAULT-OFF gate for the portrait LOOK-AT lever (head/eyes follow the mouse cursor). When on, the
-/// per-tick `force_profile_render_tick` reaches the loaded character's Havok pose holder and rotates the
-/// Head/Neck/Spine2 bone local quaternions toward the cursor (ER eyes are welded to the Head bone, so
-/// the eyes track as the head turns). Also selects OVERLAY-ONLY display (the live present-overlay owns the
-/// loading-screen surface; the native forge/re-forge is suppressed so there is only ONE head). Requires
-/// `force_profile_render` (the render that builds the model + drives the pose).
-///
-/// DE-GATED to DEFAULT-ON for real (non-telemetry) runs (user 2026-06-30 "just a feature without a gate";
-/// mirrors the de-gating precedent `user-pref-too-many-env-file-gates-default-on-product`). Runtime-proven
-/// safe across the 2026-06-30 smokes. Master off: `autoload_disabled()`; telemetry-only/native-capture
-/// runs stay off; env/file remain force-on overrides. (The zero-input test drivers -- lookat-selftest,
-/// cursor-sweep, force-rebuild -- stay OFF by default; product look-at tracks the real cursor.)
-pub(crate) fn portrait_lookat_enabled() -> bool {
-    if autoload_disabled() || native_profile_capture_enabled() {
+    if is_native_windows() && native_profile_drive_disabled() {
         return false;
     }
     !save_override_telemetry_only()
-        || matches!(
-            std::env::var("ER_EFFECTS_PORTRAIT_LOOKAT").as_deref(),
-            Ok("1")
-        )
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-portrait-lookat.txt")
-            .exists()
+}
+/// Product gate for the live loading-screen portrait overlay. This keeps the rendered character portrait
+/// visible during real quick-load runs, but it deliberately does not track the mouse cursor.
+/// MEASUREMENT diagnostic (acceptance §2: no custom overlay UI in the product path -- the composite is
+/// scaffolding). For the Milestone-1 vanilla-parity diff, `er-effects-measure-no-composite.txt` disables
+/// the composite so the product's LOAD path is compared to vanilla WITHOUT the overlay's per-frame fps cost.
+/// Cached (portrait_overlay_enabled runs every present frame, so no per-frame filesystem stat).
+pub(crate) fn measure_no_composite() -> bool {
+    static CACHED: AtomicUsize = AtomicUsize::new(0); // 0=unknown, 1=off, 2=on
+    match CACHED.load(Ordering::Relaxed) {
+        1 => false,
+        2 => true,
+        _ => {
+            let v = std::path::Path::new("er-effects-measure-no-composite.txt").exists();
+            CACHED.store(if v { 2 } else { 1 }, Ordering::Relaxed);
+            v
+        }
+    }
+}
+
+pub(crate) fn portrait_overlay_enabled() -> bool {
+    if measure_no_composite() || autoload_disabled() || native_profile_capture_enabled() {
+        return false;
+    }
+    !save_override_telemetry_only()
 }
 /// DEFAULT-OFF experiment: suppress the game's `CSFakeLoadingScreenImp` cover plate during map loads so the
 /// world renders uncovered ("no loading screen -- watch it pop in"). While set, the game task clamps the
@@ -209,60 +212,12 @@ pub(crate) fn portrait_lookat_enabled() -> bool {
 /// tie it to autoload state instead of a standalone gate. Env `ER_EFFECTS_DISABLE_LOADING_COVER=1` OR
 /// GAME_DIR file `er-effects-disable-loading-cover.txt`.
 pub(crate) fn disable_loading_cover_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_DISABLE_LOADING_COVER").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-disable-loading-cover.txt")
-        .exists()
+    false
 }
-/// DEFAULT-OFF: when set, `force_profile_render_tick` does the DESTRUCTIVE periodic rebuild -- every ~240
-/// ticks it CLEARS each renderer's build latch (+0x754/+0x755) + resets the look-at slot cache, forcing a
-/// FRESH async model build. That churn leaves the models in a not-live (rebuilding) state most of the time,
-/// which makes the realtime look-at draw fail ~88% of frames -> flicker. So it is OFF by default: the model
-/// builds ONCE (idempotent mark+refresh) and PERSISTS, so the pose-holder stays live every frame and the
-/// portrait tracks the cursor smoothly. Flip this on briefly (then off) only to force a fresh rebuild that
-/// re-captures the post-FaceData face. Mirrors `portrait_lookat_enabled` (env OR file).
+/// DEFAULT-OFF diagnostic rebuild: clear profile-renderer build latches so a later frame rebuilds and
+/// re-captures the post-FaceData portrait. Keep off for product runs; it can flicker during rebuild churn.
 pub(crate) fn portrait_force_rebuild_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_PORTRAIT_FORCE_REBUILD").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-portrait-force-rebuild.txt")
-        .exists()
-}
-/// DEFAULT-OFF self-validation: when set, the realtime draw task drives Head/Neck/Spine2 from a
-/// DETERMINISTIC SINUSOID (frame-counter based) instead of GetCursorPos -- zero-input, reproducible, no
-/// human mouse -- and reads back the portrait offscreen RT each sample to record nonblack% + hash-change%
-/// as in-process telemetry semaphores (oracle_profile_lookat_rt_*). PASS = nonblack≈100% (no flicker) AND
-/// changed≈100% under the sinusoid (the rendered head moves with the driven angle) AND render_drives≈frames
-/// (per-frame redraw). This replaces the human-eyeball oracle. Mirrors `portrait_lookat_enabled`.
-pub(crate) fn portrait_lookat_selftest_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_PORTRAIT_LOOKAT_SELFTEST").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-portrait-lookat-selftest.txt")
-        .exists()
-}
-/// DEFAULT-OFF cursor-tracking PROOF: when set, the realtime draw task deterministically self-drives the
-/// OS cursor (`SetCursorPos`) through held left/center/right positions over the Elden Ring window, then
-/// reads it back through the SAME `GetCursorPos` path the product uses and drives the head from that read
-/// cursor (NO sinusoid shortcut). It dumps the live head at each held cursor position
-/// (`portrait-capture-slot{200,201,202}.bin`), so the three distinct poses prove the head tracks the
-/// ACTUAL cursor input -- zero foreign input (the DLL warps the cursor itself, at the exact stage the game
-/// polls). Takes precedence over `selftest`. Mirrors `portrait_lookat_enabled` (env OR file).
-pub(crate) fn portrait_cursor_sweep_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_PORTRAIT_CURSOR_SWEEP").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-portrait-cursor-sweep.txt")
-        .exists()
+    false
 }
 /// Kill-switch to skip installing the continue_trace hooks (bisecting a ~19s
 /// title crash caused by our DLL). When set, the continue/load-flow hooks are
@@ -271,162 +226,75 @@ pub(crate) fn portrait_cursor_sweep_enabled() -> bool {
 /// frame, so we can tell whether the per-frame task body or the DLL's mere
 /// presence is what terminates the title ~19s in.
 pub(crate) fn inert_mode() -> bool {
-    matches!(std::env::var("ER_EFFECTS_INERT").as_deref(), Ok("1"))
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-inert.txt")
-            .exists()
+    false
 }
 /// Bisect kill-switch: the recurring task does lock + tick only, with no
 /// filesystem I/O. Lets us tell whether the per-frame file I/O (telemetry write)
 /// is what stalls the title vs. any per-frame work at all.
 pub(crate) fn lite_mode() -> bool {
-    matches!(std::env::var("ER_EFFECTS_LITE").as_deref(), Ok("1"))
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-lite.txt")
-            .exists()
+    false
 }
 // ENV-GATE RATIONALE: ER_EFFECTS_NO_CONTINUE_TRACE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn continue_trace_disabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_NO_CONTINUE_TRACE").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-no-continue-trace.txt")
-        .exists()
+    false
 }
 // ENV-GATE RATIONALE: ER_EFFECTS_TRACE_CONTINUE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn trace_continue_enabled() -> bool {
     product_autoload_enabled()
-        || matches!(
-            std::env::var("ER_EFFECTS_TRACE_CONTINUE").as_deref(),
-            Ok("1")
-        )
-        || trace_continue_default_path().exists()
-        || PathBuf::from("er-effects-trace-continue.txt").exists()
 }
-// ENV-GATE RATIONALE: ER_EFFECTS_TRACE_MENU_TASK_UPDATE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
+/// DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): the menu-task-update trace was a
+/// diagnostic env/marker probe. Env/marker feature gates are forbidden, so this passive trace is
+/// retired (permanently off); re-add via a non-env/marker diagnostic mechanism if needed.
 pub(crate) fn trace_menu_task_update_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_TRACE_MENU_TASK_UPDATE").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-trace-menu-task-update.txt")
-        .exists()
+    false
 }
 // ENV-GATE RATIONALE: ER_EFFECTS_AUTOLOAD_NATIVE_TITLE_JOB is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn native_title_job_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_AUTOLOAD_NATIVE_TITLE_JOB").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-native-title-job.txt")
-        .exists()
+    false
 }
 // ENV-GATE RATIONALE: ER_EFFECTS_AUTOLOAD_FORCE_PLAY_GAME is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn force_play_game_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_AUTOLOAD_FORCE_PLAY_GAME").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-force-play-game.txt")
-        .exists()
+    false
 }
 // ENV-GATE RATIONALE: ER_EFFECTS_SELECTBOT_PROBE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn selectbot_probe_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_SELECTBOT_PROBE").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-selectbot-probe.txt")
-        .exists()
+    false
 }
 /// Operator gate for the zero-input global-accept-byte title-advance lever (option c). Default OFF.
 // ENV-GATE RATIONALE: ER_EFFECTS_TITLE_ACCEPT_BYTE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn title_accept_byte_gate_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_TITLE_ACCEPT_BYTE").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-title-accept-byte.txt")
-        .exists()
+    false
 }
 /// Operator gate for lever-3 (narrow registrar advance): set the menu-transition singleton flag
 /// 0x143d5dea8->+0=1 before the validated open-menu self-fire, replicating the native title
 /// press-accept handler so the menu opens in place without the ToS over-trigger. Default OFF;
 /// used together with own_stepper + self-fire.
 pub(crate) fn title_registrar_advance_gate_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_TITLE_REGISTRAR_ADVANCE").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-title-registrar-advance.txt")
-        .exists()
+    false
 }
 // ENV-GATE RATIONALE: ER_EFFECTS_TITLE_PROCEED_GATE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn title_proceed_gate_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_TITLE_PROCEED_GATE").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-title-proceed-gate.txt")
-        .exists()
+    false
 }
 // ENV-GATE RATIONALE: ER_EFFECTS_INGAMESTEP_PUMP is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn ingamestep_pump_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_INGAMESTEP_PUMP").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-ingamestep-pump.txt")
-        .exists()
+    false
 }
 // ENV-GATE RATIONALE: ER_EFFECTS_NATIVE_AUTOLOAD is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn native_autoload_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_NATIVE_AUTOLOAD").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-native-autoload.txt")
-        .exists()
+    false
 }
 // ENV-GATE RATIONALE: ER_EFFECTS_OBSERVE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn observe_enabled() -> bool {
-    matches!(std::env::var("ER_EFFECTS_OBSERVE").as_deref(), Ok("1"))
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-observe.txt")
-            .exists()
+    false
 }
 // ENV-GATE RATIONALE: ER_EFFECTS_OWN_STEPPER is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn own_stepper_enabled() -> bool {
-    // MISSING-SAVE HOLD: while no save is selected there is nothing to load, so the world-load
-    // drive stays OFF (re-evaluated per call, so it re-enables the frame the pick clears the
-    // pending latch). The title-cover/visual suppression stays armed independently
-    // (`title_native_menu_visual_suppression_enabled`), and the save-data ShowProgressJob
-    // CONTINUE-loop holds the boot at the save-check; this only prevents own_stepper from trying
-    // to load a nonexistent save during that hold.
     if missing_save_selection_pending() {
         return false;
     }
     product_autoload_enabled()
         || OWN_STEPPER_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
-        || matches!(std::env::var("ER_EFFECTS_OWN_STEPPER").as_deref(), Ok("1"))
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-own-stepper.txt")
-            .exists()
 }
 /// OBSERVE-ONLY NATIVE-LOAD gate (corrected-autoload-design-observe-not-force-native-load-2026).
 /// OFF by default; enable via env `ER_EFFECTS_NATIVE_LOAD=1` OR a GAME_DIR file
@@ -439,11 +307,7 @@ pub(crate) fn own_stepper_enabled() -> bool {
 /// menu. NO SetState(2/3), NO beginlogo-gate clear, NO registrar self-fire, NO direct_build /
 /// cold_char_mount. De-risks design step 4.
 pub(crate) fn native_load_enabled() -> bool {
-    matches!(std::env::var("ER_EFFECTS_NATIVE_LOAD").as_deref(), Ok("1"))
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-native-load.txt")
-            .exists()
+    false
 }
 /// OBSERVE-ONLY NATIVE-CONTINUE gate (PATH B, autoload-path-B-drive-native-load-chosen-2026-06-22).
 /// OFF by default; enable via env `ER_EFFECTS_NATIVE_CONTINUE=1` OR a GAME_DIR file
@@ -463,12 +327,105 @@ pub(crate) fn native_load_enabled() -> bool {
 /// `er-effects-no-autoload.txt` next to eldenring.exe to suppress it (overlay-only use, or a session
 /// that should not auto-Continue). Mirrors the splash-skip de-gating precedent
 /// (`user-pref-too-many-env-file-gates-default-on-product-2026-06-23`).
+/// CLEAN-A/B DIAGNOSTIC (bd STEP4-RUNTIME-TRACE + STEP4-4fps-AB-STRUCTURALLY-CONFOUNDED): disable the
+/// menu-free switch-reload (`own_load_switch_reload_fire`) so the ONLY reload path is the harness's
+/// menu-driven native quit->Continue. Run with vs without this marker under IDENTICAL config (armed,
+/// same epoch1, same DRIVE_MODE=reload) to isolate JUST the reload mechanism (menu-free vs menu-driven)
+/// -- the same-epoch1 A/B the confound memory says is needed to tell a real render divergence from a
+/// measurement artifact. Diagnostic-only marker; not product behavior.
+pub(crate) fn switch_reload_ownload_disabled() -> bool {
+    std::path::Path::new("er-effects-disable-switch-reload-ownload.txt").exists()
+}
+
+/// PHASE-3 OUTGOING-WORLD TEARDOWN (bd PHASE3-render-release-is-CommonFinalize-mod-suppresses-fix-
+/// teardown-outgoing-world-2026-07-23). When ENABLED, route the OUTGOING (pre-quit) world through the
+/// native render-release (`CS::InGameStep::_Common_Finalize`, reached when STEP_MoveMap walks the child
+/// 18->Cleanup(19)->Finish(20)) BEFORE own_load rebuilds, so the SWITCH RELOAD starts from freed
+/// GLOBAL_WorldChrMan/CSDistViewManager/g_GxDrawContext/worldres/FieldArea instead of reloading in-place
+/// over the still-live globals (the ~5x-heavier-render / 5-vblank switch bug).
+///
+/// DEFAULT-OFF / OPT-IN (reverted from default-on 2026-07-23 after run angre-phase3fix-1 SOFTLOCKED
+/// LOAD1 at 8/11: with the fix on, load1's protective holds were suppressed and its autoload handoff hit
+/// premature teardown). It is WIP that softlocks, so the product default is the OLD working in-place
+/// reload; enable it deliberately for a validation run by dropping `er-effects-enable-outgoing-teardown.txt`
+/// next to eldenring.exe. Flip back to default-on only after a clean validation. Cached (queried per frame).
+///
+/// Enabling alone does NOT touch LOAD1: every Phase-3 behavior is ALSO gated by `switch_reload_active()`
+/// (a) the in-world menuData+0x5d ending-drive fires only in phases RETURN_TITLE_REQUESTED..AUTOLOAD_HANDOFF,
+/// (b) `outgoing_teardown_suppresses_holds()` requires an active switch, and (c) the reload's
+/// continue_confirm hold lives inside the switch-only `own_load_switch_reload_fire`. On the boot autoload
+/// (phase IDLE) the two holds stay ENGAGED exactly as before this change.
+pub(crate) fn outgoing_teardown_enabled() -> bool {
+    static CACHED: AtomicUsize = AtomicUsize::new(0); // 0=unknown, 1=on, 2=off
+    match CACHED.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let on = std::path::Path::new("er-effects-enable-outgoing-teardown.txt").exists();
+            CACHED.store(if on { 1 } else { 2 }, Ordering::Relaxed);
+            on
+        }
+    }
+}
+
+/// WORLDRESWAIT STREAMING-SETTLE HOLD (bd reload-overlap-fix-design-worldreswait-defer-release-on-
+/// streaming-settle-2026-07-24). When ENABLED, the armed System->Quit->Load-Profile switch reload DEFERS
+/// `CS::MoveMapStep::STEP_WorldResWait`'s movability/loading-close release (its player warp + step
+/// advance) until `CS::CSWorldGeomMan` geometry streaming settles, so the incoming world's playable
+/// window no longer overlaps active block streaming (the ~20fps movable-while-streaming dip). The hold
+/// reads only passive CSWorldGeomMan fields, NEVER writes WorldBlockRes phase/gate bytes, and is bounded
+/// fail-soft (on the cap it releases exactly like today -- no softlock, no regression).
+///
+/// DEFAULT-OFF / OPT-IN: this is a first-run WIP lever whose in-place-world settle behavior is not yet
+/// runtime-proven (whether the persistent CSWorldGeomMan EVER reports settle mid-reload is the open
+/// unknown), so the product default is the OLD in-place release. Enable it deliberately for a validation
+/// run by dropping `er-effects-enable-worldreswait-hold.txt` next to eldenring.exe. The gate hook is a
+/// pure passthrough until this marker is present AND a genuine in-world switch reload is armed
+/// (`switch_reload_active()` && `SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT==0` && a per-switch arm), so LOAD1/boot
+/// (phase IDLE, player absent at arm) are NEVER touched regardless of the marker. Cached (queried at arm).
+pub(crate) fn worldreswait_hold_enabled() -> bool {
+    static CACHED: AtomicUsize = AtomicUsize::new(0); // 0=unknown, 1=on, 2=off
+    match CACHED.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let on = std::path::Path::new("er-effects-enable-worldreswait-hold.txt").exists();
+            CACHED.store(if on { 1 } else { 2 }, Ordering::Relaxed);
+            on
+        }
+    }
+}
+
+/// True only while a System->Quit->Load-Profile SWITCH RELOAD is in progress -- i.e. one was armed via
+/// `switch_slot_arm_programmatic`, which advances `SYSTEM_QUIT_QUICKLOAD_PHASE` to at least
+/// RETURN_TITLE_REQUESTED. On the BOOT autoload (LOAD1) the phase is IDLE, so this is false and every
+/// Phase-3 behavior is scoped OFF for load1. This is the critical guard: boot's own continue_confirm sets
+/// FRESH_DESER_COUNT != 0, so the holds' OWN conditions DO fire during load1's autoload handoff -- without
+/// this switch gate the Phase-3 hold-suppression would (and did, run angre-phase3fix-1) disable those
+/// load1 holds and softlock LOAD1 at 8/11.
+pub(crate) fn switch_reload_active() -> bool {
+    er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+        >= crate::constants::SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+}
+
+/// True while the Phase-3 outgoing-teardown fix is actively driving a SWITCH RELOAD (enabled AND a switch
+/// is active AND not fallen back to fail-soft). ONLY in this state may the two in-place holds be
+/// suppressed -- they still fire on LOAD1/boot (switch inactive) and on fail-soft, so the boot autoload
+/// and the OLD in-place reload keep their protection. The holds otherwise only guard the OLD in-place
+/// reload, which no longer happens once the outgoing world is torn down first.
+pub(crate) fn outgoing_teardown_suppresses_holds() -> bool {
+    outgoing_teardown_enabled()
+        && switch_reload_active()
+        && er_telemetry::counters::OUTGOING_TEARDOWN_FAILSOFT.load(Ordering::SeqCst) == 0
+}
+
 pub(crate) fn autoload_disabled() -> bool {
-    matches!(std::env::var("ER_EFFECTS_NO_AUTOLOAD").as_deref(), Ok("1"))
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-no-autoload.txt")
-            .exists()
+    // DE-GATED for PRODUCT (deprecate-env-marker-gate-allowlists-2026-07-19): autoload is unconditionally
+    // the product default. DIAGNOSTIC-ONLY marker (er-effects-diag-no-autoload.txt) disables it for the
+    // clean-A/B step-4 test (armed + autoload-off + DRIVE_MODE=full -> reload via harness-Continue epoch1
+    // like vanilla, isolating arming from the epoch1-path confound; bd
+    // STEP4-4fps-AB-is-STRUCTURALLY-CONFOUNDED). This is a measurement override, NOT a product feature gate.
+    std::path::Path::new("er-effects-diag-no-autoload.txt").exists()
 }
 /// PRODUCT DIRECTION (2026-07-04): the ProfileSelect / Load-Game menu shows a **stats panel** instead
 /// of the character portrait in each 128x128 save-slot face box. When this is on (the product default)
@@ -494,31 +451,14 @@ pub(crate) fn stats_panel_enabled() -> bool {
     if autoload_disabled() || native_profile_capture_enabled() || save_override_telemetry_only() {
         return false;
     }
-    !(matches!(
-        std::env::var("ER_EFFECTS_NO_STATS_PANEL").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-no-stats-panel.txt")
-        .exists())
+    true
 }
 // ENV-GATE RATIONALE: ER_EFFECTS_NATIVE_CONTINUE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn native_continue_enabled() -> bool {
     if autoload_disabled() || native_profile_capture_enabled() {
         return false;
     }
-    // DEFAULT-ON for any real (non-telemetry-only) run: this IS the product autoload path, so it no
-    // longer requires an env var / `er-effects-native-continue.txt` opt-in. A telemetry-only/observe
-    // run (ER_EFFECTS_TELEMETRY_ONLY) stays off. The env/file remain as explicit force-on overrides.
     !save_override_telemetry_only()
-        || matches!(
-            std::env::var("ER_EFFECTS_NATIVE_CONTINUE").as_deref(),
-            Ok("1")
-        )
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-native-continue.txt")
-            .exists()
 }
 /// OBSERVE-ONLY NATIVE FULL-SAVE-READ gate (native-full-save-read-slot-resolve-chain-observe-recipe-2026).
 /// OFF by default; enable via env `ER_EFFECTS_NATIVE_FULLREAD=1` OR a GAME_DIR file
@@ -532,13 +472,7 @@ pub(crate) fn native_continue_enabled() -> bool {
 /// write (continue_confirm 0x140b0e180 -> SetState5) is HARD-gated behind the step-6 guard AND the
 /// separate commit sub-gate `native_fullread_commit_enabled` (default = VERIFY-ONLY).
 pub(crate) fn native_fullread_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_NATIVE_FULLREAD").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-native-fullread.txt")
-        .exists()
+    false
 }
 /// COMMIT sub-gate for the native full-save-read chain (REQUIRED to actually fire continue_confirm
 /// 0x140b0e180 -> SetState5, the SOLE save write). OFF by default; enable via env
@@ -547,28 +481,12 @@ pub(crate) fn native_fullread_enabled() -> bool {
 /// NO SetState5. This lets a first test run VERIFY-ONLY (default) before any save write.
 pub(crate) fn native_fullread_commit_enabled() -> bool {
     product_autoload_enabled()
-        || matches!(
-            std::env::var("ER_EFFECTS_FULLREAD_COMMIT").as_deref(),
-            Ok("1")
-        )
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-fullread-commit.txt")
-            .exists()
 }
 /// OPT-IN post-world native TitleTopDialog cleanup. Static trace of 0x1409a8890 shows this is the
 /// real dialog cleanup body: it clears active-screen renderers and releases dialog-owned resources.
 /// It fires only after PlayerIns exists, so it cannot participate in save/load success.
 pub(crate) fn cleanup_title_dialog_after_world_enabled() -> bool {
     product_autoload_enabled()
-        || matches!(
-            std::env::var("ER_EFFECTS_CLEANUP_TITLE_DIALOG_AFTER_WORLD").as_deref(),
-            Ok("1")
-        )
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-cleanup-title-dialog-after-world.txt")
-            .exists()
 }
 /// OPT-IN gate for the MenuWindow-latch diagnostic hook (SceneObjProxy ctor 0x14074a700).
 /// OFF by default: a clean run installs NO MinHook / NO detour for this. Enable only when
@@ -578,26 +496,21 @@ pub(crate) fn cleanup_title_dialog_after_world_enabled() -> bool {
 /// NOT present in the prior working cold-mount run; gating it lets us isolate hook-induced
 /// mount perturbation (see bd probe11 caveat).
 pub(crate) fn menu_window_latch_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_MENU_WINDOW_LATCH").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-menu-window-latch.txt")
-        .exists()
+    false
 }
 /// Explicit opt-in to let the injected in-world System -> Quit Game -> ProfileSelect route perform
 /// the native slot-load activation. Default OFF because the prior live attempt crashed inside
 /// CSGaitemImp::Deserialize at live/deobf 0x14067141a; default behavior logs the selected cursor and
 /// suppresses the activation so profile-selection investigation stays save-safe.
 pub(crate) fn system_quit_profile_load_activation_allowed() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_SYSTEM_QUIT_ALLOW_PROFILE_LOAD").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-system-quit-allow-profile-load.txt")
-        .exists()
+    // MUST stay false. INVERTED SENSE (bd arm-commit-gap-rootcause-my-flip-of-activation-allowed-inverted):
+    // this is the opt-in to the NATIVE-FORWARD slot activation, which CRASHES in CSGaitemImp::Deserialize
+    // (0x14067141a). When it is FALSE, system_quit_ownership_repro.rs's `if !activation_allowed` gate runs
+    // the SAVE-SAFE DIRECT-ARM path (system_quit_arm_quickload_autoload -> advances the quickload phase ->
+    // return-title + own_load reload). Flipping this to true (a prior regression) SKIPPED the direct-arm,
+    // so load2 armed activate_count=1 but never committed (phase stayed IDLE, ProfileSelect pumped open,
+    // fresh_deser=0). The direct-arm is NOT harness-gated -- it fires for any in-range ProfileSelect pick.
+    false
 }
 /// OPT-IN gate for the c30-writer diagnostic hook (hot deserialize-internal 0x67bd70).
 /// OFF by default: a clean run installs NO MinHook / NO detour for this. Enable only when
@@ -606,11 +519,7 @@ pub(crate) fn system_quit_profile_load_activation_allowed() -> bool {
 /// Rationale: a trampoline on the HOT 0x67bd70 deserialize path may itself perturb the
 /// mount (b80 stuck / crash); gating it lets us run without it to isolate (bd probe11).
 pub(crate) fn c30_writer_diag_enabled() -> bool {
-    matches!(std::env::var("ER_EFFECTS_C30_DIAG").as_deref(), Ok("1"))
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-c30-diag.txt")
-            .exists()
+    false
 }
 /// PASSIVE own-stepper: do NOT force the menu (no SetState(2)/self-fire) and do NOT block input.
 /// The user navigates to Load Game once (the input that surfaces the input-gated d180); the
@@ -618,11 +527,7 @@ pub(crate) fn c30_writer_diag_enabled() -> bool {
 /// (correct + faster than manual slot-select) and lets the iterator log the menu-structure change
 /// so the pump-switch can be replayed zero-input later. File: er-effects-passive.txt.
 pub(crate) fn own_stepper_passive_enabled() -> bool {
-    matches!(std::env::var("ER_EFFECTS_PASSIVE").as_deref(), Ok("1"))
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-passive.txt")
-            .exists()
+    false
 }
 /// DETERMINISTIC MENU INPUT PROBE (er-effects-input-probe.txt / ER_EFFECTS_INPUT_PROBE). After the
 /// menu opens, inject one Down tap then (after an observation window) one Confirm tap, at frames WE
@@ -630,11 +535,7 @@ pub(crate) fn own_stepper_passive_enabled() -> bool {
 /// d180 tick its leaf Update on HIGHLIGHT alone (Down, no Confirm yet), or only at Confirm? Targeted
 /// input used purely as a MEASUREMENT oracle (NOT the zero-input deliverable).
 pub(crate) fn input_probe_enabled() -> bool {
-    matches!(std::env::var("ER_EFFECTS_INPUT_PROBE").as_deref(), Ok("1"))
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-input-probe.txt")
-            .exists()
+    false
 }
 /// SELF-DRIVEN GAMEPAD NAV INJECTION (er-effects-inject-nav.txt / ER_EFFECTS_INJECT_NAV). When on,
 /// the input block stays engaged PAST menu-open (user input fully suppressed) and the XInput hook
@@ -642,12 +543,24 @@ pub(crate) fn input_probe_enabled() -> bool {
 /// so the input/focus-gated row populate fires and the row-push/csmenu-ctor hooks capture its
 /// trigger -- uncontaminated by user input. Capture-only (Down nav, never Confirm).
 pub(crate) fn inject_nav_enabled() -> bool {
-    matches!(std::env::var("ER_EFFECTS_INJECT_NAV").as_deref(), Ok("1"))
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-inject-nav.txt")
-            .exists()
+    false
 }
+
+/// MOVEMENT-PROOF probe (`er-effects-prove-movement.txt`). When staged, authorizes the in-DLL
+/// can-move probe to inject a forward stick in-world AND forces XInput slot 0 "connected" so the game
+/// polls it (else, with no physical pad, the injected stick never lands). Proof-only / diagnostic.
+pub(crate) fn prove_movement_enabled() -> bool {
+    // DECOUPLED TOGGLE: the can-move probe (drive the player FORWARD >=60 frames + confirm
+    // CAN_MOVE_CONFIRMED) is part of the load2 test-drive; enable it when the input-harness DLL is
+    // present (presence-gated, not marker/env). Without it sq-repro's WAIT_WORLD never advances. bd
+    // load2-testdrive-move60-then-menu-load-driver-degated-2026-07-19.
+    harness_dll_present()
+}
+
+// REMOVED (user 2026-07-23, bd harness-drive-contract-...-no-force-focus): `probe_foreground_enabled`
+// authorized the can-move probe to FORCE the ER window foreground while injecting. The user's window focus
+// must never be seized, so the force-focus call was removed from can_move_probe and this gate deleted.
+// Movement is now delivered foreground-ONLY (only when ER is already the active window).
 /// SELF-DRIVEN SYSTEM->QUIT->LOAD-PROFILE REPRO AUTOPILOT (er-effects-system-quit-repro.txt /
 /// ER_EFFECTS_SYSTEM_QUIT_REPRO). OFF by default. When on, after the boot autoload reaches the
 /// world, the DLL keeps the input block engaged and injects a scripted DInput keyboard sequence --
@@ -656,14 +569,53 @@ pub(crate) fn inject_nav_enabled() -> bool {
 /// the ProfileSelect cursor to a non-current slot, and confirm. This drives the exact user flow with
 /// zero human input so the switch bug (return-title reload crash / wrong-slot) reproduces
 /// deterministically. Diagnostic repro harness, not a product lever.
+/// True when the separate `er_input_harness_dll.dll` is loaded in the process (i.e. listed in the ME3
+/// profile). This is the DECOUPLED TOGGLE for the load2 flow (bd
+/// harness-orchestrates-product-exposes-primitives-boundary / load2-flow-decoupled-into-harness-dll):
+/// the product ships with the load2 driver INERT; including the harness DLL in the profile turns it on.
+/// This is a runtime module-presence check (`GetModuleHandle`), NOT a marker file or env var -- it
+/// passes check-marker-file-gates / check-env-gate-comments because it gates on real process state,
+/// exactly the "conditional INCLUSION, not conditional gating" the user asked for.
+pub(crate) fn harness_dll_present() -> bool {
+    static CACHED: AtomicUsize = AtomicUsize::new(0); // 0 = not-yet-seen, 1 = present
+    if CACHED.load(Ordering::Relaxed) == 1 {
+        return true;
+    }
+    let present = unsafe { GetModuleHandleA(PCSTR(b"er_input_harness_dll.dll\0".as_ptr())) }
+        .map(|h| !h.is_invalid())
+        .unwrap_or(false);
+    if present {
+        CACHED.store(1, Ordering::Relaxed);
+    }
+    present
+}
+/// True when `renderdoc.dll` is loaded (a RenderDoc capture is hooking D3D12). The product's Present-overlay
+/// hook + throwaway dummy swapchain conflict with RenderDoc's resource tracking (bd RENDERDOC-assert-cause-
+/// is-product-dummy-swapchain: RenderDoc double-tracks the dummy swapchain -> resource_manager `ref>=0`
+/// assert -> ER dies ~50s). So the render-thread hooks stand down under RenderDoc; the reload still drives
+/// via the CSTask/load path (no render hooks needed to CAPTURE the render state).
+pub(crate) fn renderdoc_active() -> bool {
+    static CACHED: AtomicUsize = AtomicUsize::new(0);
+    if CACHED.load(Ordering::Relaxed) == 1 {
+        return true;
+    }
+    let present = unsafe { GetModuleHandleA(PCSTR(b"renderdoc.dll\0".as_ptr())) }
+        .map(|h| !h.is_invalid())
+        .unwrap_or(false);
+    if present {
+        CACHED.store(1, Ordering::Relaxed);
+    }
+    present
+}
 pub(crate) fn system_quit_repro_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_SYSTEM_QUIT_REPRO").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-system-quit-repro.txt")
-        .exists()
+    // Stand down the flaky menu-nav switch driver when the DETERMINISTIC control-file driver owns the
+    // switch (er-effects-switch-slot.txt present). Running both fought over arming AND the menu-nav
+    // suppressed the move-probe (load2 can_move never latched). The move-probe (prove_movement_enabled)
+    // stays on harness presence. bd MILESTONE-detdrive-works-but-sqrepro-menunav-conflict-2026-07-21.
+    harness_dll_present()
+        && er_telemetry::counters::DETERMINISTIC_SWITCH_DRIVER_ACTIVE
+            .load(std::sync::atomic::Ordering::SeqCst)
+            == 0
 }
 /// DISPROVEN/LEGACY menu-drive escape hatch -- deliberately OFF by default and HARD to trigger.
 ///
@@ -676,13 +628,7 @@ pub(crate) fn system_quit_repro_enabled() -> bool {
 /// path: a fresh session running plain own_stepper must not take this wrong route. The trigger name
 /// is intentionally obscure so it cannot be stumbled into -- enable ONLY to revisit the dead path.
 pub(crate) fn legacy_menu_drive_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_LEGACY_DISPROVEN_MENU_DRIVE").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-legacy-disproven-menu-drive.txt")
-        .exists()
+    false
 }
 /// WORLD-RES STREAMING-DRIVER COLD-BUILD PROBE gate (env ER_EFFECTS_WORLDRES_COLDBUILD /
 /// er-effects-worldres-coldbuild.txt). OFF by default. When on, own_stepper runs a ONE-SHOT,
@@ -691,13 +637,7 @@ pub(crate) fn legacy_menu_drive_enabled() -> bool {
 /// 0x140cd6c50 with a stub `this` -- NO SetState, NO world load, zero save-write risk. See bd
 /// emk-resman-streaming-driver-coldbuild-stub-lever-2026.
 pub(crate) fn worldres_coldbuild_probe_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_WORLDRES_COLDBUILD").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-worldres-coldbuild.txt")
-        .exists()
+    false
 }
 /// COLD CHAR-MOUNT experiment gate (env ER_EFFECTS_COLD_CHAR_MOUNT / er-effects-cold-char-mount.txt,
 /// OFF by default). The DECISIVE save-data experiment (save-io-infra-present-cold-char-mount-is-the-
@@ -706,14 +646,6 @@ pub(crate) fn worldres_coldbuild_probe_enabled() -> bool {
 /// applies char to memory; NO SetState, NO save write).
 pub(crate) fn cold_char_mount_enabled() -> bool {
     COLD_CHAR_MOUNT_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
-        || matches!(
-            std::env::var("ER_EFFECTS_COLD_CHAR_MOUNT").as_deref(),
-            Ok("1")
-        )
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-cold-char-mount.txt")
-            .exists()
 }
 /// SAVE-SAFE verify-only OWN-LOAD buffer-feed gate. OFF by default; enable via the reliable
 /// autoload-file channel (`own_load=1` in er-effects-autoload.txt -> `OWN_LOAD_FILE_ARMED`), env
@@ -723,11 +655,6 @@ pub(crate) fn cold_char_mount_enabled() -> bool {
 /// fingerprint. NO SetState5, NO autosave, NO continue_confirm.
 pub(crate) fn own_load_enabled() -> bool {
     OWN_LOAD_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
-        || matches!(std::env::var("ER_EFFECTS_OWN_LOAD").as_deref(), Ok("1"))
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-own-load.txt")
-            .exists()
 }
 /// GOLDEN BASELINE world-stream observe mode (er-effects-golden-observe.txt / ER_EFFECTS_GOLDEN_OBSERVE).
 /// OFF by default; purely ADDITIVE and OBSERVE-ONLY -- it fires NO continue/SetState5/load of any kind.
@@ -739,13 +666,7 @@ pub(crate) fn own_load_enabled() -> bool {
 /// the observer re-derives InGameStep/MoveMapStep LIVE from that owner each frame (its existing
 /// `ingame_cached == 0` fallback) as the vanilla load builds the world.
 pub(crate) fn golden_observe_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_GOLDEN_OBSERVE").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-golden-observe.txt")
-        .exists()
+    false
 }
 /// Whether the FINAL guarded `continue_confirm`/`SetState5` world-stream step is armed. SAVE-WRITING
 /// when it fires (`SetState5` autosaves), so it stays OFF by default: `own_load_drive` is verify-only
@@ -755,14 +676,6 @@ pub(crate) fn golden_observe_enabled() -> bool {
 /// `own_load_drive` is the absolute save-safety backstop even when this is armed.
 pub(crate) fn own_load_continue_enabled() -> bool {
     OWN_LOAD_CONTINUE_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
-        || matches!(
-            std::env::var("ER_EFFECTS_OWN_LOAD_CONTINUE").as_deref(),
-            Ok("1")
-        )
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-own-load-continue.txt")
-            .exists()
 }
 /// Whether the OWN-LOAD m28 direct-enqueue lever (`AddDefaultFileLoadProcess`) is ARMED. This is the
 /// arming gate ONLY; the lever additionally requires `OWN_LOAD_CONTINUE_FIRED` (our menu-free path
@@ -773,11 +686,6 @@ pub(crate) fn own_load_continue_enabled() -> bool {
 /// streaming (RequestDCX -> RSResourceFileRequest -> GLOBAL_LoadManager), never save IO.
 pub(crate) fn own_dispatch_enabled() -> bool {
     OWN_DISPATCH_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
-        || matches!(std::env::var("ER_EFFECTS_OWN_DISPATCH").as_deref(), Ok("1"))
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-own-dispatch.txt")
-            .exists()
 }
 /// Whether the menu-free LoadGame-JOB INSTALL lever is ARMED. When set (alongside `own_load`, which
 /// makes `own_load_drive` run), the verify-only parse is followed by BUILD (`FUN_140826510`) +
@@ -790,14 +698,6 @@ pub(crate) fn own_dispatch_enabled() -> bool {
 /// `er-effects-own-load-install-job.txt`.
 pub(crate) fn own_load_install_job_enabled() -> bool {
     OWN_LOAD_INSTALL_JOB_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
-        || matches!(
-            std::env::var("ER_EFFECTS_OWN_LOAD_INSTALL_JOB").as_deref(),
-            Ok("1")
-        )
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-own-load-install-job.txt")
-            .exists()
 }
 /// Whether the PATH B menu-free PRIVATE-PUMP lever (`own_load_pump`) is ARMED. When set (alongside
 /// `own_load`, which makes `own_load_drive` run the verify-only parse), the parse is followed by BUILD
@@ -809,14 +709,6 @@ pub(crate) fn own_load_install_job_enabled() -> bool {
 /// GAME_DIR file `er-effects-own-load-pump.txt`.
 pub(crate) fn own_load_pump_enabled() -> bool {
     OWN_LOAD_PUMP_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
-        || matches!(
-            std::env::var("ER_EFFECTS_OWN_LOAD_PUMP").as_deref(),
-            Ok("1")
-        )
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-own-load-pump.txt")
-            .exists()
 }
 /// SAVE-SAFE PROBE GATE for `own_load_pump`: when set, the pump runs the corrected BUILD + per-frame
 /// `Run` (deser -> map-stream, all READ-only up to world-stream per the path-b spec) but, on reaching
@@ -826,13 +718,7 @@ pub(crate) fn own_load_pump_enabled() -> bool {
 /// swap and no autosave risk. OFF by default; env `ER_EFFECTS_OWN_LOAD_PUMP_VERIFY=1` or a GAME_DIR
 /// file `er-effects-own-load-pump-verify.txt`.
 pub(crate) fn own_load_pump_verify_only() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_OWN_LOAD_PUMP_VERIFY").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-own-load-pump-verify.txt")
-        .exists()
+    false
 }
 /// DIRECT "Continue pressed" trigger (bd LIVE-continue-chain-via-selector-NOT-confirm-handler):
 /// once the title is at the settled main menu (STEP_MenuJobWait) after press-any-button AND
@@ -842,22 +728,12 @@ pub(crate) fn own_load_pump_verify_only() -> bool {
 /// in-process field write replicating the confirm handler's side effects. OFF by default; arm via
 /// env `ER_EFFECTS_FIRE_TFC_CONTINUE=1` or a GAME_DIR file `er-effects-fire-tfc-continue.txt`.
 pub(crate) fn fire_tfc_continue_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_FIRE_TFC_CONTINUE").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-fire-tfc-continue.txt")
-        .exists()
+    false
 }
 /// Direct ProfileLoadDialog build mode (er-effects-direct-build.txt / ER_EFFECTS_DIRECT_BUILD).
 /// OFF by default: a plain own_stepper run stays the safe read-only scan; the native dialog build
 /// (which leads to a guarded SetState(5) save-write via STAGE 2) fires only when deliberately
 /// enabled, so the first native-build run is a deliberate, save-backed experiment.
 pub(crate) fn direct_build_enabled() -> bool {
-    matches!(std::env::var("ER_EFFECTS_DIRECT_BUILD").as_deref(), Ok("1"))
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-direct-build.txt")
-            .exists()
+    false
 }
