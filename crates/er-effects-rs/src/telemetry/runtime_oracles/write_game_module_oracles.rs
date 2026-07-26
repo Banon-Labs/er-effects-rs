@@ -1658,6 +1658,21 @@ fn write_game_module_oracles(body: &mut String) {
         );
         push_json_usize(
             body,
+            "oracle_native_overlay_bar_pixel_frames",
+            NATIVE_OVERLAY_BAR_PIXEL_FRAMES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_bar_pixel_missing_frames",
+            NATIVE_OVERLAY_BAR_PIXEL_MISSING_FRAMES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_bar_pixel_last_count",
+            NATIVE_OVERLAY_BAR_PIXEL_LAST_COUNT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
             "oracle_native_overlay_parent_hwnd",
             NATIVE_OVERLAY_PARENT_HWND.load(Ordering::SeqCst),
         );

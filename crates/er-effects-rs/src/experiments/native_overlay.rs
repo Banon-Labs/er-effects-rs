@@ -79,6 +79,12 @@ pub(crate) static NATIVE_OVERLAY_HANDOFF_READY_HITS: AtomicUsize = AtomicUsize::
 pub(crate) static NATIVE_OVERLAY_COVERING_LOADING_HITS: AtomicUsize = AtomicUsize::new(0);
 /// Counts frames where the bridge rendered real full-frame/content coverage, not just the 1px marker.
 pub(crate) static NATIVE_OVERLAY_CONTENT_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// Shown bridge frames whose CPU-rasterized content contained exact progress-bar/text pixels.
+pub(crate) static NATIVE_OVERLAY_BAR_PIXEL_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// Shown bridge frames whose CPU-rasterized content had no identifiable progress-bar/text pixels.
+pub(crate) static NATIVE_OVERLAY_BAR_PIXEL_MISSING_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// Last exact progress-bar/text pixel count in the CPU-rasterized bridge frame.
+pub(crate) static NATIVE_OVERLAY_BAR_PIXEL_LAST_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// One-shot objective pixel readback attempts against the bridge backbuffer.
 pub(crate) static NATIVE_OVERLAY_PIXEL_PROBE_HITS: AtomicUsize = AtomicUsize::new(0);
 /// One-shot bridge pixel readback matches against the unique clear color.
@@ -464,6 +470,21 @@ unsafe fn create_bridge_upload(
     out
 }
 
+fn bridge_progress_pixel_count(rgba: &[u8]) -> usize {
+    // Exact colors written by boot_progress.rs for the fill and text. This makes the oracle cheap and
+    // deterministic: it proves the CPU bridge frame contains the loading bar/text, not merely a black
+    // clear or unrelated screenshot pixels.
+    const FILL: [u8; 3] = [226, 223, 214];
+    const TEXT: [u8; 3] = [150, 147, 138];
+    rgba.chunks_exact(4)
+        .filter(|px| {
+            px[3] == 255
+                && ((px[0] == FILL[0] && px[1] == FILL[1] && px[2] == FILL[2])
+                    || (px[0] == TEXT[0] && px[1] == TEXT[1] && px[2] == TEXT[2]))
+        })
+        .count()
+}
+
 unsafe fn copy_bridge_content_frame(
     device: &ID3D12Device,
     list: &ID3D12GraphicsCommandList,
@@ -478,6 +499,13 @@ unsafe fn copy_bridge_content_frame(
         || frame.rgba.len() < frame.w.saturating_mul(frame.h).saturating_mul(4)
     {
         return false;
+    }
+    let progress_pixels = bridge_progress_pixel_count(&frame.rgba);
+    NATIVE_OVERLAY_BAR_PIXEL_LAST_COUNT.store(progress_pixels, Ordering::SeqCst);
+    if progress_pixels != 0 {
+        NATIVE_OVERLAY_BAR_PIXEL_FRAMES.fetch_add(1, Ordering::SeqCst);
+    } else {
+        NATIVE_OVERLAY_BAR_PIXEL_MISSING_FRAMES.fetch_add(1, Ordering::SeqCst);
     }
     let region_desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,

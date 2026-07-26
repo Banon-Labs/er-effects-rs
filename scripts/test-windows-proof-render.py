@@ -108,6 +108,8 @@ def test_native_overlay_child_covers_parent_without_visible_resize() -> None:
     assert ".is_ok()" in native_overlay
     assert "NATIVE_OVERLAY_CHILD_COVER_MATCH" in native_overlay
     assert "child_w >= parent_w && child_h >= parent_h" in native_overlay
+    assert "fn bridge_progress_pixel_count" in native_overlay
+    assert "NATIVE_OVERLAY_BAR_PIXEL_MISSING_FRAMES" in native_overlay
     loop_block = native_overlay.split("loop {", 1)[1].split("if want_show != shown", 1)[0]
     assert "if !want_show" in loop_block
     assert "sync_child_to_parent_client(parent_hwnd, hwnd)" in loop_block
@@ -127,6 +129,8 @@ def test_native_overlay_child_covers_parent_without_visible_resize() -> None:
     ).read_text(encoding="utf-8", errors="replace")
     assert "oracle_native_overlay_child_resize_hits" in telemetry
     assert "oracle_native_overlay_child_cover_match" in telemetry
+    assert "oracle_native_overlay_bar_pixel_frames" in telemetry
+    assert "oracle_native_overlay_bar_pixel_missing_frames" in telemetry
 
 
 def test_native_overlay_release_uses_semantic_render_ready() -> None:
