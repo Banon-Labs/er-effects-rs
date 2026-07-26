@@ -1356,8 +1356,8 @@ unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, source: &str) {
     PRODUCT_AUTOLOAD_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_MENU, Ordering::SeqCst);
     TFC_CONTINUE_FIRED.store(0, Ordering::SeqCst);
-    TFC_CONTINUE_FIRED_MS.store(0, Ordering::SeqCst);
-    OWN_LOAD_CONTINUE_FIRED_MS.store(0, Ordering::SeqCst);
+    TFC_FORCED_CONTINUE_HANDOFF_MS.store(0, Ordering::SeqCst);
+    OWN_LOAD_FORCED_CONTINUE_HANDOFF_MS.store(0, Ordering::SeqCst);
     TFC_LOAD_VEC_WAIT_TICKS.store(0, Ordering::SeqCst);
     OWN_STEPPER_MENU_OPENED.store(OWN_STEPPER_MENU_OPENED_NO, Ordering::SeqCst);
     TITLE_ACCEPT_BYTE_GATE_FIRED.store(false, Ordering::SeqCst);

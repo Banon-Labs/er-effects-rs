@@ -33,14 +33,14 @@ def test_input_harness_manifest_names_actual_hook_layer() -> None:
 def test_continue_and_boot_view_timing_oracles_exist() -> None:
     counters = (REPO_ROOT / "crates/er-telemetry/src/counters.rs").read_text()
     assert "pub static BOOT_VIEW_PUMP_STOP_MS" in counters
-    assert "pub static OWN_LOAD_CONTINUE_FIRED_MS" in counters
-    assert "pub static TFC_CONTINUE_FIRED_MS" in counters
+    assert "pub static OWN_LOAD_FORCED_CONTINUE_HANDOFF_MS" in counters
+    assert "pub static TFC_FORCED_CONTINUE_HANDOFF_MS" in counters
 
     product_core = (REPO_ROOT / "crates/er-effects-rs/src/experiments/mod/product_core_own_stepper.rs").read_text()
-    assert "pub(crate) fn mark_own_load_continue_fired()" in product_core
-    assert "OWN_LOAD_CONTINUE_FIRED_MS.compare_exchange" in product_core
-    assert "pub(crate) fn mark_tfc_continue_fired()" in product_core
-    assert "TFC_CONTINUE_FIRED_MS.compare_exchange" in product_core
+    assert "pub(crate) fn mark_own_load_forced_continue_handoff()" in product_core
+    assert "OWN_LOAD_FORCED_CONTINUE_HANDOFF_MS.compare_exchange" in product_core
+    assert "pub(crate) fn mark_tfc_forced_continue_handoff()" in product_core
+    assert "TFC_FORCED_CONTINUE_HANDOFF_MS.compare_exchange" in product_core
 
     present = (REPO_ROOT / "crates/er-effects-rs/src/experiments/present_overlay.rs").read_text()
     assert "fn set_boot_view_pump_stop_reason" in present
@@ -49,8 +49,8 @@ def test_continue_and_boot_view_timing_oracles_exist() -> None:
     game_oracles = (REPO_ROOT / "crates/er-effects-rs/src/telemetry/runtime_oracles/write_game_module_oracles.rs").read_text()
     assert '"oracle_boot_view_pump_stop_ms"' in game_oracles
     telemetry = (REPO_ROOT / "crates/er-effects-rs/src/telemetry/runtime_oracles/write_telemetry.rs").read_text()
-    assert 'oracle_own_load_continue_fired_ms' in telemetry
-    assert 'oracle_tfc_continue_fired_ms' in telemetry
+    assert 'oracle_own_load_forced_continue_handoff_ms' in telemetry
+    assert 'oracle_tfc_forced_continue_handoff_ms' in telemetry
 
 
 def main() -> int:

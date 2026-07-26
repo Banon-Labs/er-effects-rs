@@ -655,7 +655,7 @@ unsafe fn own_load_continue_fire(
         .filter(|&v| v != null)
         .unwrap_or(0);
     OWN_LOAD_INGAMESTEP_CACHED.store(ingame_cached, Ordering::SeqCst);
-    mark_own_load_continue_fired();
+    mark_own_load_forced_continue_handoff();
     append_autoload_debug(format_args!(
         "own-load-continue: continue_confirm returned -- native pump now streams the real world (#{n}); recurring world-stream observer ARMED (owner=0x{title_owner:x} ingame=0x{ingame_cached:x}) -> DONE"
     ));
@@ -799,7 +799,7 @@ unsafe fn own_load_install_job_fire(
         .filter(|&v| v != null)
         .unwrap_or(0);
     OWN_LOAD_INGAMESTEP_CACHED.store(ingame_cached, Ordering::SeqCst);
-    mark_own_load_continue_fired();
+    mark_own_load_forced_continue_handoff();
     timeline_event(
         "T_own_load_install_job",
         n,
@@ -987,7 +987,7 @@ unsafe fn own_load_pump_fire(
         .filter(|&v| v != null)
         .unwrap_or(0);
     OWN_LOAD_INGAMESTEP_CACHED.store(ingame_cached, Ordering::SeqCst);
-    mark_own_load_continue_fired();
+    mark_own_load_forced_continue_handoff();
     timeline_event(
         "T_own_load_pump_build",
         n,

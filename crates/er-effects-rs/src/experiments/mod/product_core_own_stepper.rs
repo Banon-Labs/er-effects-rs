@@ -32,11 +32,11 @@ pub(crate) use er_telemetry::counters::OWN_DISPATCH_FILE_ARMED;
 /// `own_load_drive` parse) runs without depending on env-var propagation through Proton.
 /// SAVE-WRITING when it fires -- gated hard on a REAL c30 + char fingerprint inside `own_load_drive`.
 pub(crate) use er_telemetry::counters::OWN_LOAD_CONTINUE_FILE_ARMED;
-pub(crate) use er_telemetry::counters::OWN_LOAD_CONTINUE_FIRED_MS;
 /// Armed from the reliable autoload-file channel (`own_load=1` in er-effects-autoload.txt) so the
 /// SAVE-SAFE verify-only OWN-LOAD buffer-feed probe (`own_load_drive`) runs without depending on
 /// env-var propagation through Proton.
 pub(crate) use er_telemetry::counters::OWN_LOAD_FILE_ARMED;
+pub(crate) use er_telemetry::counters::OWN_LOAD_FORCED_CONTINUE_HANDOFF_MS;
 /// Armed from the reliable autoload-file channel (`own_load_install_job=1` in er-effects-autoload.txt)
 /// so the menu-free LoadGame-JOB INSTALL lever runs without depending on env-var propagation through
 /// Proton. Defaults OFF. When armed (and `own_load` is armed so `own_load_drive` runs), the verify-only
@@ -57,7 +57,7 @@ pub(crate) use er_telemetry::counters::OWN_LOAD_PHASE_PUB;
 /// without depending on env-var propagation through Proton or game_directory_path() trigger files.
 pub(crate) use er_telemetry::counters::OWN_STEPPER_FILE_ARMED;
 pub(crate) use er_telemetry::counters::PRODUCT_AUTOLOAD_ARMED;
-pub(crate) use er_telemetry::counters::TFC_CONTINUE_FIRED_MS;
+pub(crate) use er_telemetry::counters::TFC_FORCED_CONTINUE_HANDOFF_MS;
 /// Sentinel for an unreadable / not-yet-sampled world-load telemetry field (distinguishes
 /// "the chain pointer was null / RPM faulted" from a genuine 0). Chosen well outside any real
 /// state/count value so the readiness watcher and the agent can tell "frozen at a real value"
@@ -133,9 +133,9 @@ pub(crate) static OWN_LOAD_STREAM_TARGET_BLOCK_PRESENT: std::sync::atomic::Atomi
 pub(crate) static OWN_LOAD_CONTINUE_FIRED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-pub(crate) fn mark_own_load_continue_fired() {
+pub(crate) fn mark_own_load_forced_continue_handoff() {
     OWN_LOAD_CONTINUE_FIRED.store(true, Ordering::SeqCst);
-    let _ = OWN_LOAD_CONTINUE_FIRED_MS.compare_exchange(
+    let _ = OWN_LOAD_FORCED_CONTINUE_HANDOFF_MS.compare_exchange(
         0,
         crate::experiments::boot_view_epoch_ms(),
         Ordering::SeqCst,
@@ -143,15 +143,15 @@ pub(crate) fn mark_own_load_continue_fired() {
     );
 }
 
-pub(crate) fn mark_tfc_continue_fired() {
+pub(crate) fn mark_tfc_forced_continue_handoff() {
     TFC_CONTINUE_FIRED.store(1, Ordering::SeqCst);
-    let _ = TFC_CONTINUE_FIRED_MS.compare_exchange(
+    let _ = TFC_FORCED_CONTINUE_HANDOFF_MS.compare_exchange(
         0,
         crate::experiments::boot_view_epoch_ms(),
         Ordering::SeqCst,
         Ordering::SeqCst,
     );
-    mark_own_load_continue_fired();
+    mark_own_load_forced_continue_handoff();
 }
 /// InGameStep = *(owner+TITLE_OWNER_JOB_OFFSET), cached at fire time. It was already non-null at
 /// frame 0 (observed 0x7fff21e09a40) so caching it then captures a stable handle the recurring
