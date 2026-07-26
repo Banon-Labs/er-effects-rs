@@ -10,12 +10,15 @@
 # Same tmpdir gotcha as the other helpers: force java.io.tmpdir onto /home (the /tmp tmpfs is a
 # near-full 32G and overflows when Ghidra unpacks the ~1.5GB gzf).
 set -euo pipefail
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=scripts/ghidra/resolve-ghidra.sh
+source "$REPO/scripts/ghidra/resolve-ghidra.sh"
 
 GZF=${GZF:-/home/banon/projects/reverse/ghidra-projects/pc_eldenring_runtime.1.16.1.exe.gzf}
-PROJ=${PROJ:-/home/banon/ghidra_maporch/proj}
+PROJ=${PROJ:-$HOME/ghidra_maporch/proj}
 PROJ_NAME=${PROJ_NAME:-ermaporch}
-TMP=/home/banon/ghidra_maporch/tmp
-HEADLESS=/home/banon/tools/ghidra_12.1_PUBLIC/support/analyzeHeadless
+TMP="${GHIDRA_TMPDIR:-$HOME/ghidra_maporch/tmp}"
+HEADLESS="$(resolve_ghidra_headless)" || { echo "no executable Ghidra analyzeHeadless found; set GHIDRA_INSTALL_DIR or GHIDRA_HEADLESS" >&2; exit 3; }
 
 if [[ ! -f "$GZF" ]]; then
   echo "dump gzf not found: $GZF  (set GZF=/path/to/runtime.gzf)" >&2

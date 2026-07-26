@@ -13,14 +13,17 @@
 # Same tmpdir gotcha as the other Ghidra helpers: force java.io.tmpdir onto /home (the /tmp
 # tmpfs is a near-full 32G and overflows when Ghidra unpacks/analyzes a large program).
 set -euo pipefail
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=scripts/ghidra/resolve-ghidra.sh
+source "$REPO/scripts/ghidra/resolve-ghidra.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 IMG="$REPO_DIR/eldenring-deobf.bin"
-PROJ=/home/banon/ghidra_maporch/proj-deobf
+PROJ=${PROJ:-$HOME/ghidra_maporch/proj-deobf}
 PROJ_NAME=erdeobf
-TMP=/home/banon/ghidra_maporch/tmp
-HEADLESS=/home/banon/tools/ghidra_12.1_PUBLIC/support/analyzeHeadless
+TMP="${GHIDRA_TMPDIR:-$HOME/ghidra_maporch/tmp}"
+HEADLESS="$(resolve_ghidra_headless)" || { echo "no executable Ghidra analyzeHeadless found; set GHIDRA_INSTALL_DIR or GHIDRA_HEADLESS" >&2; exit 3; }
 
 if [[ ! -f "$IMG" ]]; then
   echo "deobf image not found: $IMG" >&2

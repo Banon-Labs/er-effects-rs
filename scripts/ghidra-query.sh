@@ -12,12 +12,17 @@
 # Env gotchas baked in:
 #   - java.io.tmpdir is forced to /home (the /tmp tmpfs is a near-full 32G and overflows).
 #   - project dir is dotless on /home (Ghidra rejects dot-prefixed project dirs).
+#   - newest installed Ghidra is used by default; set GHIDRA_INSTALL_DIR/GHIDRA_HEADLESS to override.
 set -euo pipefail
 
-PROJ_DIR=/home/banon/ghidra_maporch/proj
-PROJ_NAME=ermaporch
-TMP=/home/banon/ghidra_maporch/tmp
-HEADLESS=/home/banon/tools/ghidra_12.1_PUBLIC/support/analyzeHeadless
+SCRIPT_DIR_SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Pick the newest installed Ghidra by default; explicit GHIDRA_* overrides still win.
+# shellcheck source=scripts/ghidra/resolve-ghidra.sh
+source "$SCRIPT_DIR_SELF/ghidra/resolve-ghidra.sh"
+PROJ_DIR="${GHIDRA_PROJ_DIR:-$HOME/ghidra_maporch/proj}"
+PROJ_NAME="${GHIDRA_PROJ_NAME:-ermaporch}"
+TMP="${GHIDRA_TMPDIR:-$HOME/ghidra_maporch/tmp}"
+HEADLESS="$(resolve_ghidra_headless)" || { echo "no executable Ghidra analyzeHeadless found; set GHIDRA_INSTALL_DIR or GHIDRA_HEADLESS" >&2; exit 3; }
 
 if [[ $# -lt 1 ]]; then
   echo "Usage: scripts/ghidra-query.sh <postScript.java> [scriptArg ...]" >&2

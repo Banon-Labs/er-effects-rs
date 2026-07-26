@@ -10,12 +10,16 @@
 # Prereqs (all local, no sudo): go, the cloned repo, a local gradle 8.14 and JDK 21.
 # Adjust the paths below if those move.
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/ghidra/resolve-ghidra.sh
+source "$SCRIPT_DIR/resolve-ghidra.sh"
 
 MCP_SRC=${MCP_SRC:-/home/banon/tools/GhidraMCP-13bm}
 export JAVA_HOME=${JAVA_HOME:-/home/banon/tools/jdk-21.0.11+10}
-export GHIDRA_INSTALL_DIR=${GHIDRA_INSTALL_DIR:-/home/banon/tools/ghidra_12.1_PUBLIC}
+GHIDRA_INSTALL_DIR="$(resolve_ghidra_install_dir)"
+export GHIDRA_INSTALL_DIR
 GRADLE=${GRADLE:-/home/banon/tools/gradle-8.14/bin/gradle}
-PATCH=${PATCH:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ghidramcp-localfmt.patch"}
+PATCH=${PATCH:-"$SCRIPT_DIR/ghidramcp-localfmt.patch"}
 export PATH="$JAVA_HOME/bin:$PATH"
 
 cd "$MCP_SRC"

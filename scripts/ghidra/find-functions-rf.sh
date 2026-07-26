@@ -16,7 +16,7 @@ set -euo pipefail
 
 # Default to the deobf-native project (erdeobf): RF is only useful for call/patch-able VAs, and
 # the dump (ermaporch) is both slow to classify and exclusively locked by a running MCP daemon.
-PROJ_DIR=/home/banon/ghidra_maporch/proj-deobf
+PROJ_DIR="${GHIDRA_PROJ_DIR:-$HOME/ghidra_maporch/proj-deobf}"
 PROJ_NAME=erdeobf
 THRESHOLD=0.80
 MAX_STARTS=1000
@@ -41,8 +41,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HEADLESS=/home/banon/tools/ghidra_12.1_PUBLIC/support/analyzeHeadless
-TMP=/home/banon/ghidra_maporch/tmp
+# shellcheck source=scripts/ghidra/resolve-ghidra.sh
+source "$SCRIPT_DIR/resolve-ghidra.sh"
+HEADLESS="$(resolve_ghidra_headless)" || { echo "no executable Ghidra analyzeHeadless found; set GHIDRA_INSTALL_DIR or GHIDRA_HEADLESS" >&2; exit 3; }
+TMP="${GHIDRA_TMPDIR:-$HOME/ghidra_maporch/tmp}"
 
 mkdir -p "$TMP"
 export TMPDIR="$TMP"

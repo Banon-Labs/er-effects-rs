@@ -17,16 +17,21 @@
 #   ... start --proj-dir /home/banon/ghidra_maporch/proj-deobf --proj-name erdeobf
 set -euo pipefail
 
-HEADLESS=/home/banon/tools/ghidra_12.1_PUBLIC/support/analyzeHeadless
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RUN_DIR=/home/banon/ghidra_maporch/mcp
-TMP=/home/banon/ghidra_maporch/tmp
+# Pick the newest installed Ghidra by default; explicit GHIDRA_* overrides still win.
+# shellcheck source=scripts/ghidra/resolve-ghidra.sh
+source "$SCRIPT_DIR/resolve-ghidra.sh"
+GHIDRA_INSTALL_DIR="$(resolve_ghidra_install_dir)" || { echo "no executable Ghidra install found; set GHIDRA_INSTALL_DIR or GHIDRA_HEADLESS" >&2; exit 3; }
+HEADLESS="$(resolve_ghidra_headless)" || { echo "no executable Ghidra analyzeHeadless found; set GHIDRA_INSTALL_DIR or GHIDRA_HEADLESS" >&2; exit 3; }
+MCP_SCRIPT_DIR="${GHIDRA_MCP_SCRIPT_DIR:-$SCRIPT_DIR/mcp}"
+RUN_DIR="${GHIDRA_MCP_RUN_DIR:-$HOME/ghidra_maporch/mcp}"
+TMP="${GHIDRA_TMPDIR:-$HOME/ghidra_maporch/tmp}"
 LOG="$RUN_DIR/daemon.log"
 STOPFILE="$RUN_DIR/STOP"
 PIDFILE="$RUN_DIR/daemon.pid"
 
-PROJ_DIR=/home/banon/ghidra_maporch/proj
-PROJ_NAME=ermaporch
+PROJ_DIR="${GHIDRA_PROJ_DIR:-$HOME/ghidra_maporch/proj}"
+PROJ_NAME="${GHIDRA_PROJ_NAME:-ermaporch}"
 PORT=8765
 RO=""        # default writable; edits persist via the daemon's periodic save. --readonly to opt out.
 SAVE_SEC=60  # periodic auto-save interval (seconds); 0 disables. Edits also flush on clean stop.
@@ -56,7 +61,7 @@ do_start() {
   echo "starting MCP daemon: $PROJ_NAME on port $PORT ${RO:-(writable)}"
   # Fully detach so the daemon outlives this shell/session; the stop-file is the clean exit.
   setsid bash -c "exec '$HEADLESS' '$PROJ_DIR' '$PROJ_NAME' -process -noanalysis $RO \
-    -scriptPath '$SCRIPT_DIR' -postScript MCPServeHeadless.java '$PORT' '$STOPFILE' '$SAVE_SEC'" \
+    -scriptPath '$MCP_SCRIPT_DIR' -postScript MCPServeHeadless.java '$PORT' '$STOPFILE' '$SAVE_SEC'" \
     >"$LOG" 2>&1 < /dev/null &
   echo $! > "$PIDFILE"
   # Event-driven readiness: block on the daemon's own READY/FAILED heartbeat line via `tail -F`

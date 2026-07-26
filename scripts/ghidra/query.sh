@@ -19,25 +19,24 @@
 # gzf unpack); plain TMPDIR is ignored for java.io.tmpdir, so GHIDRA_JAVA_OPTIONS sets it explicitly.
 set -euo pipefail
 
-PROJ_NAME=ermaporch
-PROJ_DIR=""
-HEADLESS=""
-TMP=""
-# "<maporch dir>|<ghidra install dir>"
-for cand in \
-  "/home/choza/ghidra_maporch|/mnt/d/ghidra/ghidra_12.1_PUBLIC" \
-  "/home/banon/ghidra_maporch|/home/banon/tools/ghidra_12.1_PUBLIC" \
-  "${ER_GHIDRA_MAPORCH:-/nonexistent}|${ER_GHIDRA_INSTALL:-/nonexistent}"; do
-  m="${cand%%|*}"; g="${cand##*|}"
-  if [[ -d "$m/proj" && -x "$g/support/analyzeHeadless" ]]; then
-    PROJ_DIR="$m/proj"; TMP="$m/tmp"; HEADLESS="$g/support/analyzeHeadless"; break
-  fi
-done
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+PROJ_NAME="${GHIDRA_PROJ_NAME:-ermaporch}"
+MAPORCH="${ER_GHIDRA_MAPORCH:-$HOME/ghidra_maporch}"
+PROJ_DIR="${GHIDRA_PROJ_DIR:-$MAPORCH/proj}"
+TMP="${GHIDRA_TMPDIR:-$MAPORCH/tmp}"
+# Pick the newest installed Ghidra by default; explicit GHIDRA_* overrides still win.
+# shellcheck source=scripts/ghidra/resolve-ghidra.sh
+source "$REPO/scripts/ghidra/resolve-ghidra.sh"
+HEADLESS="$(resolve_ghidra_headless)" || {
+  echo "ghidra query: no executable Ghidra analyzeHeadless found (set GHIDRA_INSTALL_DIR or GHIDRA_HEADLESS)" >&2
+  exit 3
+}
 
-if [[ -z "$PROJ_DIR" ]]; then
-  echo "ghidra query: no persistent project + ghidra install found (set ER_GHIDRA_MAPORCH / ER_GHIDRA_INSTALL, or import the gzf into <maporch>/proj as program '$PROJ_NAME')" >&2
+if [[ ! -d "$PROJ_DIR" ]]; then
+  echo "ghidra query: persistent project not found at $PROJ_DIR (set GHIDRA_PROJ_DIR / ER_GHIDRA_MAPORCH, or import the gzf into that project as program '$PROJ_NAME')" >&2
   exit 3
 fi
+
 if [[ $# -lt 1 ]]; then
   echo "Usage: bash scripts/ghidra/query.sh <postScript.java> [scriptArg ...]" >&2
   exit 2

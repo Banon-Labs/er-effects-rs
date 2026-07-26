@@ -12,7 +12,7 @@
 # Results stream to the JSONL out file; a deduped/sorted summary prints at the end.
 set -uo pipefail
 
-PROJ_DIR=/home/banon/ghidra_maporch/proj-deobf
+PROJ_DIR="${GHIDRA_PROJ_DIR:-$HOME/ghidra_maporch/proj-deobf}"
 PROJ_NAME=erdeobf
 THRESHOLD=0.80
 # Training fits in ~2G regardless (it was never the OOM -- only the monolithic classify was), so
@@ -40,8 +40,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HEADLESS=/home/banon/tools/ghidra_12.1_PUBLIC/support/analyzeHeadless
-TMP=/home/banon/ghidra_maporch/tmp
+# shellcheck source=scripts/ghidra/resolve-ghidra.sh
+source "$SCRIPT_DIR/resolve-ghidra.sh"
+HEADLESS="$(resolve_ghidra_headless)" || { echo "no executable Ghidra analyzeHeadless found; set GHIDRA_INSTALL_DIR or GHIDRA_HEADLESS" >&2; exit 3; }
+TMP="${GHIDRA_TMPDIR:-$HOME/ghidra_maporch/tmp}"
 STATE="$OUT.state"
 LOG="$TMP/$(basename "$OUT").run.log"
 

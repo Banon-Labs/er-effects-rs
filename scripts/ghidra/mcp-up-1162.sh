@@ -13,6 +13,8 @@
 #   scripts/ghidra/mcp-up-1162.sh --port 8766
 set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=scripts/ghidra/resolve-ghidra.sh
+source "$REPO/scripts/ghidra/resolve-ghidra.sh"
 
 IMPORT_FIRST=0
 EXTRA_ARGS=()
@@ -37,7 +39,8 @@ done
 
 # Current-user defaults; env overrides remain authoritative for other machines.
 DEFAULT_GZF="/mnt/net/terra-Documents/pc_eldenring_runtime.1.16.2.exe.gzf"
-export GHIDRA_INSTALL_DIR="${GHIDRA_INSTALL_DIR:-${HOME}/tools/ghidra_12.1.2_PUBLIC}"
+GHIDRA_INSTALL_DIR="$(resolve_ghidra_install_dir)" || { echo "no executable Ghidra install found; set GHIDRA_INSTALL_DIR" >&2; exit 2; }
+export GHIDRA_INSTALL_DIR
 export JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-21-openjdk-amd64}"
 GZF="${GHIDRA_1162_GZF:-${GZF:-$DEFAULT_GZF}}"
 PROJ_DIR="${GHIDRA_PROJ_DIR:-$HOME/ghidra_maporch/proj1162}"
@@ -46,10 +49,14 @@ PORT="${PORT:-${GHIDRA_MCP_PORT:-8765}}"
 TMP="${GHIDRA_TMPDIR:-$HOME/ghidra_maporch/tmp1162}"
 
 [[ -x "$GHIDRA_INSTALL_DIR/support/analyzeHeadless" ]] || {
-	echo "Ghidra 12.1.2 analyzeHeadless not found under $GHIDRA_INSTALL_DIR" >&2
-	echo "Install/unpack Ghidra 12.1.2 there or set GHIDRA_INSTALL_DIR=/path/to/ghidra_12.1.2_PUBLIC" >&2
+	echo "Ghidra analyzeHeadless not found under $GHIDRA_INSTALL_DIR" >&2
+	echo "Install/unpack the newest Ghidra under ~/tools or set GHIDRA_INSTALL_DIR=/path/to/ghidra_X_PUBLIC" >&2
 	exit 2
 }
+if ! resolve_ghidra_version_at_least "$GHIDRA_INSTALL_DIR" "12.1.2"; then
+	echo "Ghidra 1.16.2 dump support requires >= 12.1.2; newest resolved install is $GHIDRA_INSTALL_DIR ($(resolve_ghidra_version "$GHIDRA_INSTALL_DIR"))" >&2
+	exit 2
+fi
 [[ -f "$GZF" ]] || {
 	echo "1.16.2 dump gzf not found: $GZF (set GHIDRA_1162_GZF=/path/to/pc_eldenring_runtime.1.16.2.exe.gzf)" >&2
 	exit 2
@@ -86,7 +93,7 @@ for _ in 1 2 3 4 5 6 7 8; do
 done
 if python3 "$REPO/scripts/ghidra/mcp_query.py" ping --port "$PORT" >/dev/null 2>&1; then
 	echo "== MCP daemon READY on :$PORT =="
-	python3 "$REPO/scripts/ghidra/mcp_query.py" get_program_info --port "$PORT"
+	python3 "$REPO/scripts/ghidra/mcp_query.py" getContext --port "$PORT"
 	exit 0
 fi
 echo "== daemon did not answer ping on :$PORT; see $LOG ==" >&2

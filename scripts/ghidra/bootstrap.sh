@@ -20,7 +20,9 @@
 set -uo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-GHIDRA_INSTALL_DIR=${GHIDRA_INSTALL_DIR:-/home/banon/tools/ghidra_12.1_PUBLIC}
+# shellcheck source=scripts/ghidra/resolve-ghidra.sh
+source "$REPO_DIR/scripts/ghidra/resolve-ghidra.sh"
+GHIDRA_INSTALL_DIR="$(resolve_ghidra_install_dir)" || die "no executable Ghidra install found; set GHIDRA_INSTALL_DIR"
 MCP_SRC=${MCP_SRC:-/home/banon/tools/GhidraMCP-13bm}
 GHIDRA_MAPORCH=${GHIDRA_MAPORCH:-/home/banon/ghidra_maporch}
 DEOBF_BIN="$REPO_DIR/eldenring-deobf.bin"
@@ -41,7 +43,7 @@ echo "== 1/4 Ghidra MachineLearning extension =="
 if [[ -d "$GHIDRA_INSTALL_DIR/Ghidra/Extensions/MachineLearning" ]]; then
   ok "already installed"
 else
-  ML_ZIP=$(ls "$GHIDRA_INSTALL_DIR"/Extensions/Ghidra/*MachineLearning*.zip 2>/dev/null | head -1)
+  ML_ZIP=$(find "$GHIDRA_INSTALL_DIR/Extensions/Ghidra" -maxdepth 1 -name "*MachineLearning*.zip" -print -quit 2>/dev/null || true)
   [[ -n "$ML_ZIP" ]] || die "MachineLearning extension zip not found under $GHIDRA_INSTALL_DIR/Extensions/Ghidra"
   unzip -oq "$ML_ZIP" -d "$GHIDRA_INSTALL_DIR/Ghidra/Extensions/" && ok "installed from $ML_ZIP"
 fi
@@ -50,13 +52,17 @@ echo "== 2/4 clone 13bm GhidraMCP =="
 if [[ -d "$MCP_SRC/.git" ]]; then
   ok "already cloned at $MCP_SRC"
 else
-  git clone --depth 1 https://github.com/13bm/GhidraMCP "$MCP_SRC" && ok "cloned" || die "clone failed"
+  if git clone --depth 1 https://github.com/13bm/GhidraMCP "$MCP_SRC"; then
+    ok "cloned"
+  else
+    die "clone failed"
+  fi
 fi
 
 echo "== 3/4 build + install MCP (bridge + extension) =="
 MCP_SRC="$MCP_SRC" GHIDRA_INSTALL_DIR="$GHIDRA_INSTALL_DIR" bash "$REPO_DIR/scripts/ghidra/build-ghidramcp.sh" \
   || die "build-ghidramcp.sh failed"
-EXT_ZIP=$(ls "$MCP_SRC"/dist/*GhidraMCP*.zip 2>/dev/null | head -1)
+EXT_ZIP=$(find "$MCP_SRC/dist" -maxdepth 1 -name "*GhidraMCP*.zip" -print -quit 2>/dev/null || true)
 if [[ -n "$EXT_ZIP" ]]; then
   unzip -oq "$EXT_ZIP" -d "$GHIDRA_INSTALL_DIR/Ghidra/Extensions/" && ok "installed MCP extension from $EXT_ZIP"
 else
