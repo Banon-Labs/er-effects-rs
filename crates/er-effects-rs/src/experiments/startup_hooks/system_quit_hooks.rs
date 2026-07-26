@@ -165,23 +165,29 @@ pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
     if owner == null {
         owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
     }
-    if owner == null {
-        return;
-    }
-    let Some(ig) = (unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) })
-        .filter(|v| *v >= 0x10000)
-    else {
-        return;
+    let ig = if owner != null {
+        unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) }
+            .filter(|v| *v >= 0x10000)
+    } else {
+        None
     };
     // requestCode must be 1 (world loading, not latched to 2 = done). Any other value: reset + bail.
-    let request_code = unsafe { safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) }.unwrap_or(-1);
+    // Fall back to the same oracle path the report uses; the fresh title-owner scan can be stale during
+    // the boot-autoload handoff while write_oracle has already resolved the live MoveMapStep.
+    let request_code = ig
+        .map(|ig| unsafe { safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) }.unwrap_or(-1))
+        .unwrap_or_else(|| SWITCH_ORACLE_REQUEST_CODE.load(Ordering::SeqCst));
     if request_code != 1 {
         TESTNET_FF_STUCK_FRAMES.store(0, Ordering::Relaxed);
         return;
     }
-    let Some(mms) = (unsafe { safe_read_usize(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) })
-        .filter(|v| *v >= 0x10000)
-    else {
+    let mms_from_ingame = ig.and_then(|ig| {
+        unsafe { safe_read_usize(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) }
+            .filter(|v| *v >= 0x10000)
+    });
+    let mms_from_oracle = ORACLE_RELIABLE_MMS_PTR.load(Ordering::SeqCst);
+    let mms = mms_from_ingame.or_else(|| (mms_from_oracle >= 0x10000).then_some(mms_from_oracle));
+    let Some(mms) = mms else {
         return;
     };
     // FINALIZE SUBSTATE force-advance (bd load2-real-blocker-finalize-advancer-stuck-substate7): the

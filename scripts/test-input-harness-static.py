@@ -52,7 +52,12 @@ def test_boot_autoload_mms18_can_force_stuck_testnet_step() -> None:
     assert "MOVEMAPSTEP_TESTNETSTEP_WRAPPER_108_OFFSET" in hooks
     assert "EZ_CHILD_STEP_REQUEST_FINISH_RVA" in hooks
     assert "request_finish(wrapper)" in hooks
+    assert "ORACLE_RELIABLE_MMS_PTR.load(Ordering::SeqCst)" in hooks
+    assert "SWITCH_ORACLE_REQUEST_CODE.load(Ordering::SeqCst)" in hooks
     assert "No reload committed yet -> this is load1; never force" not in hooks
+    telemetry = (REPO_ROOT / "crates/er-effects-rs/src/telemetry/runtime_oracles/write_telemetry.rs").read_text()
+    assert 'oracle_testnet_ff_stuck_frames' in telemetry
+    assert 'oracle_testnet_ff_fired_epoch' in telemetry
 
 
 def test_continue_and_boot_view_timing_oracles_exist() -> None:
