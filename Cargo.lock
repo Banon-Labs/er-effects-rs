@@ -2812,6 +2812,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-menu-sort"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "fromsoftware-shared",
+]
+
+[[package]]
 name = "er-net-effects-dll"
 version = "0.1.0"
 dependencies = [
@@ -2821,14 +2829,6 @@ dependencies = [
  "fromsoftware-shared",
  "hudhook",
  "windows 0.62.2",
-]
-
-[[package]]
-name = "er-menu-sort"
-version = "0.1.0"
-dependencies = [
- "eldenring",
- "fromsoftware-shared",
 ]
 
 [[package]]
