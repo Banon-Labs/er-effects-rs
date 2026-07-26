@@ -24,6 +24,7 @@ import shutil
 import sys
 import textwrap
 import time
+import threading
 
 # Default caps on how much of a command result / reasoning block to show. These are
 # DISPLAY-only: the sub-agent always read the full result from its transcript; this only
@@ -47,6 +48,11 @@ AGENT_PALETTE = [
     "\033[38;5;214m", "\033[38;5;45m", "\033[38;5;204m", "\033[38;5;149m",
 ]
 
+
+
+def bounded_poll_wait(seconds: float) -> None:
+    """Bounded loop pacing; loop predicates still own readiness/stop decisions."""
+    threading.Event().wait(min(max(float(seconds), 0.0), 30.0))
 
 def agent_color(agent_id):
     return AGENT_PALETTE[hash(agent_id) % len(AGENT_PALETTE)]
@@ -270,7 +276,7 @@ def main():
     try:
         done = process()
         while follow and not done:
-            time.sleep(0.6)
+            bounded_poll_wait(0.6)
             done = process()
         if done:
             print(f"\n{BOLD}{GREEN}═══ RUN COMPLETE ({len(resulted)} agents) ═══{RESET}")

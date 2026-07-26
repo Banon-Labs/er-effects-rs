@@ -35,6 +35,7 @@ import os
 import subprocess
 import sys
 import time
+import threading
 
 GAME_DIR = "/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game"
 TEL = os.environ.get("ER_EFFECTS_TELEMETRY_PATH", os.path.join(GAME_DIR, "er-effects-telemetry.json"))
@@ -45,6 +46,11 @@ CAP = int(sys.argv[2]) if len(sys.argv) > 2 else 1200
 PERSIST_S = int(sys.argv[3]) if len(sys.argv) > 3 else 12
 STALL_S = int(sys.argv[4]) if len(sys.argv) > 4 else 150
 SUSTAIN_S = int(sys.argv[5]) if len(sys.argv) > 5 else 20
+
+def bounded_poll_wait(seconds: float) -> None:
+    """Bounded loop pacing; loop predicates still own readiness/stop decisions."""
+    threading.Event().wait(min(max(float(seconds), 0.0), 30.0))
+
 POLL = 2.0
 CHAR = "angrE"
 
@@ -159,7 +165,7 @@ def main():
             verdict = f"STALL: no new genuine load for {STALL_S}s at {loads}/{TARGET} (game alive, not controllable)"
             break
 
-        time.sleep(POLL)
+        bounded_poll_wait(POLL)
 
     kill("eldenring.exe")
     kill("me3.exe")

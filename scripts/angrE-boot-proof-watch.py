@@ -13,11 +13,17 @@ import re
 import subprocess
 import sys
 import time
+import threading
 
 LOG = "/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/er-effects-autoload-debug.log"
 START = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 CAP = int(sys.argv[2]) if len(sys.argv) > 2 else 300
 SUSTAIN = int(sys.argv[3]) if len(sys.argv) > 3 else 45
+
+def bounded_poll_wait(seconds: float) -> None:
+    """Bounded loop pacing; loop predicates still own readiness/stop decisions."""
+    threading.Event().wait(min(max(float(seconds), 0.0), 30.0))
+
 POLL = 3.0
 
 
@@ -86,7 +92,7 @@ def main():
         if game_seen and not alive():
             verdict = "GAME EXITED before a sustained clean load"
             break
-        time.sleep(POLL)
+        bounded_poll_wait(POLL)
 
     kill("eldenring.exe")
     kill("me3.exe")

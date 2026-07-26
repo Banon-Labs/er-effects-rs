@@ -49,6 +49,7 @@ import shutil
 import subprocess
 import sys
 import time
+import threading
 
 TITLE_FILE = "er-oracle-title-binding.jsonl"
 STREAM_FILE = "er-oracle-stream-overlap.jsonl"
@@ -61,6 +62,11 @@ HARNESS_LOG_FILE = "er-input-harness.log"
 # drive.rs quit-to-title phases: advancing any of these means the native world teardown completed.
 QUIT_PHASE_NAMES = ("quit_teardown", "native_quit", "quit")
 
+
+
+def bounded_poll_wait(seconds: float) -> None:
+    """Bounded loop pacing; loop predicates still own readiness/stop decisions."""
+    threading.Event().wait(min(max(float(seconds), 0.0), 30.0))
 
 def read_jsonl(path: str) -> list[dict]:
     """Parse a JSONL file, skipping blank/partial lines. Missing file -> []."""
@@ -244,7 +250,7 @@ def main() -> int:
                     break
             else:
                 dip_movable_since = None
-            time.sleep(args.poll_seconds)
+            bounded_poll_wait(args.poll_seconds)
             continue
 
         # (a2) MSGBOX BLOCKED -- a boot/title dialog (session-warning / save-retry) stuck on screen that the
@@ -340,7 +346,7 @@ def main() -> int:
                 )
                 break
 
-        time.sleep(args.poll_seconds)
+        bounded_poll_wait(args.poll_seconds)
 
     copy_artifacts(args.game_dir, args.artifact_dir)
     elapsed = time.monotonic() - start

@@ -13,6 +13,11 @@ LOG = os.environ.get("ER_EFFECTS_AUTOLOAD_DEBUG_PATH", os.path.join(GD, "er-effe
 CAP = int(sys.argv[1]) if len(sys.argv) > 1 else 200
 
 
+
+def bounded_poll_wait(seconds: float) -> None:
+    """Bounded loop pacing; loop predicates still own readiness/stop decisions."""
+    threading.Event().wait(min(max(float(seconds), 0.0), 30.0))
+
 def alive():
     try:
         return "eldenring.exe" in subprocess.run(
@@ -78,7 +83,7 @@ def main():
         if not a and el > 30:
             print("== GAME EXITED ==", flush=True)
             break
-        time.sleep(4)
+        bounded_poll_wait(4)
     print(f"SUMMARY: render_ready_first_true_at={rr_true_at} present_froze_at={froze_at}", flush=True)
 
 

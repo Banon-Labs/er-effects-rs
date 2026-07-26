@@ -46,8 +46,14 @@ import json
 import os
 import sys
 import time
+import threading
 from pathlib import Path
 
+
+
+def bounded_poll_wait(seconds: float) -> None:
+    """Bounded loop pacing; loop predicates still own readiness/stop decisions."""
+    threading.Event().wait(min(max(float(seconds), 0.0), 30.0))
 
 def _repo_root() -> Path:
     # This file lives in <repo>/scripts/. Root is its parent's parent.
@@ -189,7 +195,7 @@ def main(argv=None) -> int:
             snap["timed_out"] = True
             _emit(snap)
             return 0
-        time.sleep(interval)
+        bounded_poll_wait(interval)
 
 
 if __name__ == "__main__":

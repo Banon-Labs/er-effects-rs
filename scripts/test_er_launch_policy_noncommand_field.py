@@ -13,7 +13,7 @@ QUERY = "count(data.cupcake.policies.claude.er_launch_requires_session_auth.deny
 def run(event):
     p = subprocess.run(
         ["opa", "eval", "-d", POLICY, "-I", "--format", "raw", QUERY],
-        input=json.dumps(event), capture_output=True, text=True,
+        input=json.dumps(event), capture_output=True, text=True, timeout=30,
     )
     out = (p.stdout or "").strip()
     if p.returncode != 0 and not out:

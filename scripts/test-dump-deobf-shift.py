@@ -98,13 +98,13 @@ def main():
     # 3) CLI exit codes: bad -> non-zero, good -> 0 ----------------------------
     env = dict(os.environ)
     bad = subprocess.run([sys.executable, SCRIPT, hex(CRASH_VA)],
-                         capture_output=True, text=True, env=env)
+                         capture_output=True, text=True, env=env, timeout=30)
     if bad.returncode == 0:
         _fail("CLI exit for crash input was 0 (must be non-zero)")
     if ("0x%x" % CRASH_BAD_ANSWER) in bad.stdout and "UNRELIABLE" not in bad.stdout:
         _fail("CLI printed 0x%x without an UNRELIABLE flag" % CRASH_BAD_ANSWER)
     good = subprocess.run([sys.executable, SCRIPT, hex(GOOD_VA)],
-                          capture_output=True, text=True, env=env)
+                          capture_output=True, text=True, env=env, timeout=30)
     if good.returncode != 0:
         _fail("CLI exit for known-good input was %d (must be 0):\n%s%s" % (
             good.returncode, good.stdout, good.stderr))
