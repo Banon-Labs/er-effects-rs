@@ -2162,41 +2162,51 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_winreconfig_early_apply_rect",
             WINRECONFIG_EARLY_APPLY_RECT.load(Ordering::SeqCst),
         );
-        // Early self-present pump: frames WE presented before the game's first own present, the
-        // pump-relative ms the swapchain was found, and why the pump stopped (1 = game took over,
-        // the success terminal state; 2 = budget; 3 = Present HRESULT failure).
-        push_json_usize(
-            body,
-            "oracle_boot_view_self_presents",
-            BOOT_VIEW_SELF_PRESENTS.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_boot_view_swapchain_found_ms",
-            BOOT_VIEW_SWAPCHAIN_FOUND_MS.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_boot_view_pump_stop_reason",
-            BOOT_VIEW_PUMP_STOP_REASON.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_boot_view_pump_stop_ms",
-            BOOT_VIEW_PUMP_STOP_MS.load(Ordering::SeqCst) as usize,
-        );
-        // DEPTH-KEY transparent-background semaphores: frames where the depth key actually cut out a
-        // background (clean bg/head depth separation + >0 pixels alpha'd to 0), and the last frame's
-        // background-masked fraction in whole percent. A RAM/pixel oracle for the transparent bg cutout.
+        let self_presents = BOOT_VIEW_SELF_PRESENTS.load(Ordering::SeqCst);
+        let present_full_clears = BOOT_VIEW_PRESENT_FULL_CLEAR_HITS.load(Ordering::SeqCst);
+        push_json_usize(body, "oracle_boot_view_self_presents", self_presents);
+        push_json_usize(body, "oracle_boot_view_self_full_clear_hits", BOOT_VIEW_SELF_FULL_CLEAR_HITS.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_present_full_clear_hits", present_full_clears);
+        if BOOT_VIEW_PUMP_STOP_REASON.load(Ordering::SeqCst) == 1
+            && BOOT_VIEW_STOPPED.load(Ordering::SeqCst) == 0
+            && BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst) > self_presents
+            && present_full_clears == 0
+        {
+            BOOT_VIEW_PRESENT_COVER_FAILURES.store(1, Ordering::SeqCst);
+        }
+        let cur_deser = crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+        let can_move = crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
+            && crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == cur_deser;
+        let render_ready = match unsafe { PlayerIns::local_player_mut() } {
+            Ok(p) => {
+                let m = p.chr_ins.chr_model_ins.as_ptr() as usize;
+                let c = p.chr_ins.chr_ctrl.as_ptr() as usize;
+                m != TITLE_OWNER_SCAN_START_ADDRESS && c != TITLE_OWNER_SCAN_START_ADDRESS
+                    && p.chr_ins.chr_flags1c4.is_render_group_enabled()
+                    && p.chr_ins.chr_flags1c5.enable_render()
+            }
+            Err(_) => false,
+        };
+        let pre_world_stop_failure = (BOOT_VIEW_STOPPED.load(Ordering::SeqCst) != 0
+            && !(can_move || render_ready)) as usize;
+        if pre_world_stop_failure != 0 { BOOT_VIEW_PRE_WORLD_STOP_FAILURES.store(1, Ordering::SeqCst); }
+        push_json_usize(body, "oracle_boot_view_present_cover_failures", BOOT_VIEW_PRESENT_COVER_FAILURES.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_pre_world_stop_failures", BOOT_VIEW_PRE_WORLD_STOP_FAILURES.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_swapchain_found_ms", BOOT_VIEW_SWAPCHAIN_FOUND_MS.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_fade_start_ms", BOOT_VIEW_FADE_START_MS.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_fade_complete_ms", BOOT_VIEW_FADE_COMPLETE_MS.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_fade_hits", BOOT_VIEW_FADE_HITS.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_fade_last_alpha", BOOT_VIEW_FADE_LAST_ALPHA.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_fade_failures", BOOT_VIEW_FADE_FAILURES.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_native_gfx_fade_hold_hits", BOOT_VIEW_NATIVE_GFX_FADE_HOLD_HITS.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_native_gfx_fade_hold_complete_ms", BOOT_VIEW_NATIVE_GFX_FADE_HOLD_COMPLETE_MS.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_pump_stop_reason", BOOT_VIEW_PUMP_STOP_REASON.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_pump_stop_ms", BOOT_VIEW_PUMP_STOP_MS.load(Ordering::SeqCst) as usize);
         push_json_usize(
             body,
             "oracle_depth_key_applied",
             DEPTH_KEY_APPLIED.load(Ordering::SeqCst),
         );
-        // Coherent color+depth readback engagement (bug #3): _ok = draw ticks the single-fence path
-        // captured color+depth together (from the deterministic bundle-paired depth); _fallback = ticks
-        // it degraded to the separate color/depth reads. A high _ok:_fallback ratio proves the coherent
-        // path is actually running (the first pass had no way to tell).
         push_json_usize(
             body,
             "oracle_portrait_coherent_read_ok",
@@ -2207,18 +2217,11 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_portrait_coherent_read_fallback",
             COHERENT_READ_FALLBACK.load(Ordering::SeqCst),
         );
-        // FAIL-FAST 2nd-character desync semaphore: >0 means a frame reused a depth mask computed for a
-        // DIFFERENT character incarnation (prior character's silhouette on the new head). During the
-        // System-Quit repro this also abort()s the process on first trip, so the run stops in ~40s.
         push_json_usize(
             body,
             "oracle_portrait_mask_stale_reuse",
             PROFILE_MASK_STALE_REUSE.load(Ordering::SeqCst),
         );
-        // FAIL-FAST mask/head coherence (2nd-character desync): _iou_last = last frame's IoU of the kept
-        // cutout vs the colour head (100=perfect match, low=the cutout doesn't match this head);
-        // _mismatch_total = frames below the gross threshold. Lets the 1st-char (correct) vs 2nd-char
-        // (desync) IoU be compared and the abort threshold calibrated.
         push_json_usize(
             body,
             "oracle_portrait_mask_head_iou_last",
@@ -2239,9 +2242,6 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_depth_key_fresh",
             DEPTH_KEY_FRESH.load(Ordering::SeqCst),
         );
-        // The draw-tick readback's per-frame republish count (==RGBA version). If ~= render_drive_hits the
-        // readback publishes per-frame (so a low overlay_reuploads means the composite upload is the
-        // bottleneck); if this is itself ~4 the per-frame readback/publish is.
         push_json_usize(
             body,
             "oracle_loading_bg_portrait_rgba_version",
@@ -3033,19 +3033,19 @@ fn write_game_module_oracles(body: &mut String) {
         push_json_usize(
             body,
             "oracle_loading_screen_close_sent",
-            // Same live-state reset as loading_bar_enabled: a stale during-load latch, reported 0 once the
-            // world is genuinely live (loading screen logically closed) so vanilla+mod are comparable.
             if play_time_live {
                 0
             } else {
                 LOADING_SCREEN_CLOSE_SENT.load(Ordering::SeqCst)
             },
         );
-        push_json_usize(
-            body,
-            "oracle_loading_screen_close_sent_hits",
-            LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst),
-        );
+        push_json_usize(body, "oracle_loading_screen_close_sent_hits", LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_loading_screen_gfx_fadeout_hook_installed", LOADING_SCREEN_GFX_FADEOUT_HOOK_INSTALLED.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_loading_screen_gfx_fadeout_hits", LOADING_SCREEN_GFX_FADEOUT_HITS.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_loading_screen_gfx_fadeout_first_ms", LOADING_SCREEN_GFX_FADEOUT_FIRST_MS.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_loading_screen_gfx_fadeout_last_ms", LOADING_SCREEN_GFX_FADEOUT_LAST_MS.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_loading_screen_update_last_ms", LOADING_SCREEN_UPDATE_LAST_MS.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_loading_screen_close_sent_first_ms", LOADING_SCREEN_CLOSE_SENT_FIRST_MS.load(Ordering::SeqCst));
         // CANDIDATE A (er-effects-rs-jsm): live head copied INTO the displayed now-loading GFx texture so
         // the native tips/bar render above it. `uploads > 0` == the head is in the movie; `overlay_yields`
         // proves the Present-overlay demoted (stopped drawing over the tips); `demote_credit` is the live

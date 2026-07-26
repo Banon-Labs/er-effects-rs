@@ -574,18 +574,10 @@ def main() -> int:
         ),
     ]
 
-    # --- ER launch per-session authorization gate (er_launch_requires_session_auth) --------------
-    # The deny/allow-by-SIGNAL matrix is covered by the OPA unit tests
-    # (.cupcake/tests/er_launch_requires_session_auth_test.rego) and the signal behavioral test
-    # (scripts/test-er-launch-auth-signal.py) -- NOT re-tested end-to-end here, because cupcake
-    # RE-RUNS the er_launch_authorized signal with a SANITIZED env and the signal reads the CURRENT
-    # session's real transcript (getcwd() project root); neither event-injected signals nor env
-    # (ER_LAUNCH_AUTH_TRANSCRIPT_FILE / CLAUDE_PROJECT_DIR) reach it through cupcake, so an engine case
-    # cannot deterministically make it authorized/unauthorized (bd
-    # cupcake-policy-authoring-signals-rerun-no-sprintf-2026-07-23). These two cases are
-    # signal-INDEPENDENT (a launcher name as an ARGUMENT is never a launch -> ALLOWED regardless of
-    # authorization) and guard against a command-position regression that would block committing or
-    # linting the launcher scripts.
+    # --- ER launcher-name non-execution cases ------------------------------------------------------
+    # A launcher script path passed as an argument to a non-executing command must remain allowed.
+    # The separate forbidden-form launch guard still blocks Steam/EAC/start_protected_game/ersc.dll
+    # paths; the removed per-prompt launch-clearance gate is intentionally no longer tested here.
     cases.extend([
         PolicyCase("allow-git-add-launcher-name", "git add scripts/run-vanilla-reload-agentdriven.sh", True),
         PolicyCase("allow-shellcheck-launcher-name", "shellcheck scripts/run-camera-smoke.sh", True),

@@ -525,6 +525,20 @@ pub(crate) const LOADING_SCREEN_UPDATE_RVA: usize = 0x90a6b0;
 pub(crate) static LOADING_SCREEN_UPDATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::LOADING_SCREEN_UPDATE_HOOK_INSTALLED;
 pub(crate) use er_telemetry::counters::LOADING_SCREEN_UPDATE_HITS;
+pub(crate) use er_telemetry::counters::LOADING_SCREEN_UPDATE_LAST_MS;
+/// Generic Scaleform label transition wrapper (deobf/live `0x1407499e0`, RVA `0x7499e0`).
+/// Loading GFx RE (2026-07-25) proved the final native loading fadeout is authored as a
+/// top-level black-plate alpha ramp in the movie timeline. Hook the generic label transition and
+/// stamp `FadeOut` labels because the narrow KnowledgeLoadingScreen vtable method was installed but
+/// did not fire on the user-launch product path.
+pub(crate) const SCALEFORM_LABEL_GOTO_RVA: usize = 0x7499e0;
+pub(crate) static SCALEFORM_LABEL_GOTO_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) const LOADING_SCREEN_GFX_FADEOUT_RVA: usize = 0x90a0a0;
+pub(crate) static LOADING_SCREEN_GFX_FADEOUT_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) use er_telemetry::counters::LOADING_SCREEN_GFX_FADEOUT_FIRST_MS;
+pub(crate) use er_telemetry::counters::LOADING_SCREEN_GFX_FADEOUT_HITS;
+pub(crate) use er_telemetry::counters::LOADING_SCREEN_GFX_FADEOUT_HOOK_INSTALLED;
+pub(crate) use er_telemetry::counters::LOADING_SCREEN_GFX_FADEOUT_LAST_MS;
 /// `CS::KnowledgeLoadingScreen` tip-refresh (dump `FUN_14090a3f0` -> deobf/live `0x14090a300`, RVA
 /// 0x90a300). `fn(this)` -- picks the next tip msg id and SetTexts the title (`this+0xb28`) + body
 /// (`this+0xb88`). er-effects-rs-jsm PIVOT: we NO-OP it (skip the original) so the native tip title/body
@@ -584,6 +598,7 @@ pub(crate) use er_telemetry::counters::LOADING_SCREEN_BAR_FINAL_HITS;
 /// owning MenuWindow result callback, and resets the `LoadingScreenData`. This is later than Gauge_3's
 /// terminal frame and matches the native loading-screen close handoff more closely than "bar is full".
 pub(crate) use er_telemetry::counters::LOADING_SCREEN_CLOSE_SENT;
+pub(crate) use er_telemetry::counters::LOADING_SCREEN_CLOSE_SENT_FIRST_MS;
 pub(crate) use er_telemetry::counters::LOADING_SCREEN_CLOSE_SENT_HITS;
 pub(crate) const LOADING_SCREEN_DATA_OFFSET: usize = 0xa38;
 pub(crate) const LOADING_SCREEN_FINISH_SENT_OFFSET: usize = 0xa44;

@@ -85,6 +85,13 @@ pub(crate) use er_telemetry::counters::BOOT_VIEW_TELEMETRY_HANDOFF_STAMPS;
 /// Epoch-ms (never 0 once set) when the real loading/world handoff was first detected; the hold
 /// clock for the seamless cut. Early profile/keyed-frame semaphores must not start this clock.
 pub(crate) use er_telemetry::counters::BOOT_VIEW_HANDOFF_SEEN_MS;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_COMPLETE_MS;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_FAILURES;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_HITS;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_LAST_ALPHA;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_START_MS;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_NATIVE_GFX_FADE_HOLD_COMPLETE_MS;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_NATIVE_GFX_FADE_HOLD_HITS;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_LIST;
 /// Why the self-present pump stopped: 0 = still running/never ran, 1 = game started presenting
 /// (the goal), 2 = timeout budget, 3 = Present returned a failure HRESULT.
@@ -94,8 +101,12 @@ pub(crate) use er_telemetry::counters::BOOT_VIEW_QUEUE;
 /// 1-descriptor RTV heap for the self-present full-clear (the engine has never rendered the
 /// backbuffer before its first own present, so un-cleared regions would show garbage).
 pub(crate) use er_telemetry::counters::BOOT_VIEW_RTV_HEAP;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_PRE_WORLD_STOP_FAILURES;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_PRESENT_COVER_FAILURES;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_PRESENT_FULL_CLEAR_HITS;
 /// Frames WE presented on the game's swapchain before its render loop produced its first frame.
 pub(crate) use er_telemetry::counters::BOOT_VIEW_SELF_PRESENTS;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_SELF_FULL_CLEAR_HITS;
 /// CS::LoadingScreen update hits at the moment the cover stopped (telemetry: proves the cut
 /// happened on a lit loading screen, not into the black gap).
 pub(crate) use er_telemetry::counters::BOOT_VIEW_STOP_NATIVE_HITS;
@@ -185,6 +196,29 @@ const BOOT_VIEW_NATIVE_LIT_UPDATE_HITS: usize = 12;
 /// If the CS::LoadingScreen update semaphore never advances (hook missing/regressed), stop this
 /// long after the handoff anyway so the cover can never mask the live loading screen indefinitely.
 const BOOT_VIEW_HANDOFF_HOLD_BAIL_MS: u64 = 5_000;
+/// After the native loading close/result and a render-ready player, keep a black overlay and fade it
+/// away over the live world. This covers the final native loading fade/black edge without popping from
+/// a full loading-cover frame straight into gameplay.
+const BOOT_VIEW_RELEASE_FADE_MS: u64 = 640;
+/// The native now-loading GFx movie plays its own `FadeOut` label over ~15 frames at 30fps
+/// (root black-plate alpha 239 -> 0, frames 105..119). Then the game may still have the loading
+/// movie/background as the last presented backbuffer. Hold opaque until both the authored fade window
+/// and the native loading update stream have been quiet long enough that our later alpha fade reveals
+/// gameplay instead of the loading art.
+const BOOT_VIEW_NATIVE_GFX_FADEOUT_HOLD_MS: u64 = 600;
+const BOOT_VIEW_NATIVE_LOADING_QUIET_HOLD_MS: u64 = 900;
+
+static BOOT_VIEW_FADE_ROOT_SIGNATURE: AtomicUsize = AtomicUsize::new(0);
+static BOOT_VIEW_FADE_PSO: AtomicUsize = AtomicUsize::new(0);
+static BOOT_VIEW_FADE_PSO_FORMAT: AtomicUsize = AtomicUsize::new(0);
+static BOOT_VIEW_FADE_SRV_HEAP: AtomicUsize = AtomicUsize::new(0);
+static BOOT_VIEW_FADE_TEXTURE: AtomicUsize = AtomicUsize::new(0);
+static BOOT_VIEW_FADE_UPLOAD: AtomicUsize = AtomicUsize::new(0);
+static BOOT_VIEW_FADE_UPLOAD_SIZE: AtomicU64 = AtomicU64::new(0);
+static BOOT_VIEW_FADE_TEX_W: AtomicUsize = AtomicUsize::new(0);
+static BOOT_VIEW_FADE_TEX_H: AtomicUsize = AtomicUsize::new(0);
+static BOOT_VIEW_FADE_TEX_STATE: AtomicUsize = AtomicUsize::new(0);
+static BOOT_VIEW_FADE_TEX_VERSION: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 // Strip geometry (pixels; text is the 5x7 font at 2x = 10x14). ER-idiomatic minimal presentation
 // (user 2026-07-05: the panel/border/percent styling clashed with the game): a hairline bar on a
@@ -328,6 +362,25 @@ fn boot_world_phase_reached(idx: usize) -> bool {
         _ => false,
     }
 }
+fn boot_view_player_render_ready() -> bool {
+    let Ok(player) = (unsafe { PlayerIns::local_player_mut() }) else {
+        return false;
+    };
+    let chr_model_ins = player.chr_ins.chr_model_ins.as_ptr() as usize;
+    let chr_ctrl = player.chr_ins.chr_ctrl.as_ptr() as usize;
+    chr_model_ins != TITLE_OWNER_SCAN_START_ADDRESS
+        && chr_ctrl != TITLE_OWNER_SCAN_START_ADDRESS
+        && player.chr_ins.chr_flags1c4.is_render_group_enabled()
+        && player.chr_ins.chr_flags1c5.enable_render()
+}
+
+fn boot_view_cover_release_ready(can_move_handoff: bool) -> bool {
+    can_move_handoff
+        || (boot_view_player_render_ready()
+            && (LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst) != 0
+                || LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst) >= 998))
+}
+
 
 /// Compute the current (milestone idx, displayed permille). Latches newly reached milestones into the
 /// monotonic mask, stamps idx-change time for the creep, and never lets the displayed value decrease.
@@ -350,6 +403,18 @@ pub(crate) fn rearm_boot_progress_for_own_menu_load(selected_slot: i32, source: 
     BOOT_VIEW_PUMP_STOP_REASON.store(0, Ordering::SeqCst);
     BOOT_VIEW_HANDOFF_SEEN_MS.store(0, Ordering::SeqCst);
     BOOT_VIEW_STOP_NATIVE_HITS.store(0, Ordering::SeqCst);
+    BOOT_VIEW_FADE_START_MS.store(0, Ordering::SeqCst);
+    BOOT_VIEW_FADE_COMPLETE_MS.store(0, Ordering::SeqCst);
+    BOOT_VIEW_FADE_HITS.store(0, Ordering::SeqCst);
+    BOOT_VIEW_FADE_LAST_ALPHA.store(0, Ordering::SeqCst);
+    BOOT_VIEW_FADE_FAILURES.store(0, Ordering::SeqCst);
+    BOOT_VIEW_NATIVE_GFX_FADE_HOLD_HITS.store(0, Ordering::SeqCst);
+    BOOT_VIEW_NATIVE_GFX_FADE_HOLD_COMPLETE_MS.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_UPDATE_LAST_MS.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_CLOSE_SENT_FIRST_MS.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_GFX_FADEOUT_HITS.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_GFX_FADEOUT_FIRST_MS.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_GFX_FADEOUT_LAST_MS.store(0, Ordering::SeqCst);
     BOOT_VIEW_DARK_GAP_FAILURES.store(0, Ordering::SeqCst);
     BOOT_VIEW_DARK_GAP_LAST_HELD_MS.store(0, Ordering::SeqCst);
     BOOT_VIEW_DARK_GAP_LAST_NATIVE_HITS.store(0, Ordering::SeqCst);
@@ -419,17 +484,18 @@ fn boot_view_progress() -> (usize, usize) {
     } else {
         pm
     };
-    // WORLD-LOAD tail (native Windows): from BUILDING WORLD onward (idx >= 8) drive the fill from the game's
-    // REAL Gauge_3 world-load progress (LOADING_SCREEN_BAR_PROGRESS_PERMILLE) mapped onto
-    // [BUILDING WORLD permille .. 100%], so the bar shows genuine progress across the long streaming stretch
-    // and reaches 100% exactly as the gauge completes -- the moment the game switches the character in-game
-    // (user 2026-07-15). Native-only so the Wine composite's native-Gauge_3 handoff is untouched; the
-    // fetch_max below keeps it monotonic.
-    let pm = if crate::experiments::is_native_windows() && idx >= 8 {
+    // WORLD-LOAD tail: once forced Continue/native CS::LoadingScreen handoff has happened, drive the
+    // product bar from the game's real Gauge_3 progress on ALL runtimes. The previous native-Windows-only
+    // gate made Wine/user-launch keep showing the stale pre-handoff milestone (~46%) while the real
+    // loading gauge reached 100%.
+    let native = LOADING_SCREEN_BAR_PROGRESS_PERMILLE
+        .load(Ordering::SeqCst)
+        .min(1000);
+    let loading_progress_live = native > 0
+        || LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst) != 0
+        || BOOT_VIEW_HANDOFF_SEEN_MS.load(Ordering::SeqCst) != 0;
+    let pm = if loading_progress_live {
         let floor = BOOT_VIEW_MILESTONE_PERMILLE[8];
-        let native = LOADING_SCREEN_BAR_PROGRESS_PERMILLE
-            .load(Ordering::SeqCst)
-            .min(1000);
         pm.max(floor + native * (1000 - floor) / 1000)
     } else {
         pm
@@ -1585,15 +1651,238 @@ unsafe fn boot_view_init(backbuffer: &ID3D12Resource) -> bool {
     true
 }
 
+unsafe fn boot_view_fade_init(device: &ID3D12Device, format: DXGI_FORMAT, w: u32, h: u32) -> bool {
+    let fmt = format.0 as usize;
+    if BOOT_VIEW_FADE_ROOT_SIGNATURE.load(Ordering::SeqCst) != 0
+        && BOOT_VIEW_FADE_PSO.load(Ordering::SeqCst) != 0
+        && BOOT_VIEW_FADE_SRV_HEAP.load(Ordering::SeqCst) != 0
+        && BOOT_VIEW_FADE_PSO_FORMAT.load(Ordering::SeqCst) == fmt
+        && BOOT_VIEW_FADE_TEX_W.load(Ordering::SeqCst) == w as usize
+        && BOOT_VIEW_FADE_TEX_H.load(Ordering::SeqCst) == h as usize
+    {
+        return true;
+    }
+    let Some(root_sig) = (unsafe { create_overlay_root_signature(device) }) else { return false };
+    let Some(pso) = (unsafe { create_overlay_pso(device, &root_sig, format) }) else { return false };
+    let srv_desc = D3D12_DESCRIPTOR_HEAP_DESC {
+        Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
+        NumDescriptors: 1,
+        Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
+        NodeMask: 0,
+    };
+    let Ok(srv_heap) = (unsafe { device.CreateDescriptorHeap::<ID3D12DescriptorHeap>(&srv_desc) }) else { return false };
+    if !unsafe {
+        ensure_overlay_gpu_texture_slot(
+            device,
+            &srv_heap,
+            w,
+            h,
+            0,
+            &BOOT_VIEW_FADE_TEXTURE,
+            &BOOT_VIEW_FADE_UPLOAD,
+            &BOOT_VIEW_FADE_UPLOAD_SIZE,
+            &BOOT_VIEW_FADE_TEX_W,
+            &BOOT_VIEW_FADE_TEX_H,
+            &BOOT_VIEW_FADE_TEX_STATE,
+            &BOOT_VIEW_FADE_TEX_VERSION,
+        )
+    } {
+        return false;
+    }
+    BOOT_VIEW_FADE_ROOT_SIGNATURE.store(root_sig.into_raw() as usize, Ordering::SeqCst);
+    BOOT_VIEW_FADE_PSO.store(pso.into_raw() as usize, Ordering::SeqCst);
+    BOOT_VIEW_FADE_SRV_HEAP.store(srv_heap.into_raw() as usize, Ordering::SeqCst);
+    BOOT_VIEW_FADE_PSO_FORMAT.store(fmt, Ordering::SeqCst);
+    true
+}
+
+unsafe fn fill_boot_view_fade_upload(
+    upload: &ID3D12Resource,
+    alpha: u8,
+    row_pitch: usize,
+    w: usize,
+    h: usize,
+) -> bool {
+    let total = BOOT_VIEW_FADE_UPLOAD_SIZE.load(Ordering::SeqCst) as usize;
+    if total < row_pitch.saturating_mul(h) || row_pitch < w.saturating_mul(RGBA8_BPP) {
+        return false;
+    }
+    let text_scale = boot_view_text_scale(h as u32);
+    let strip_w = ((w as u32 * BOOT_VIEW_STRIP_W_NUM / BOOT_VIEW_STRIP_W_DEN)
+        .max(BOOT_VIEW_STRIP_MIN_W)
+        .min(w as u32)) as usize;
+    let strip_h = boot_view_strip_height(text_scale).min(h);
+    let strip_x = (w - strip_w) / 2;
+    let strip_y = ((h as u32 * BOOT_VIEW_STRIP_Y_NUM / BOOT_VIEW_STRIP_Y_DEN) as usize)
+        .min(h.saturating_sub(strip_h));
+    let (ms_idx, permille) = boot_view_progress();
+    let mut tight = boot_view_rasterize(
+        w,
+        h,
+        ms_idx,
+        permille,
+        strip_x,
+        strip_y,
+        strip_w,
+        None,
+        text_scale,
+        false,
+    );
+    for px in tight.chunks_exact_mut(RGBA8_BPP) {
+        px[3] = alpha;
+    }
+    let mut map: *mut c_void = std::ptr::null_mut();
+    if unsafe { upload.Map(0, None, Some(&mut map)) }.is_err() || map.is_null() {
+        return false;
+    }
+    let dst = unsafe { std::slice::from_raw_parts_mut(map as *mut u8, total) };
+    dst.fill(0);
+    let src_row = w * RGBA8_BPP;
+    for y in 0..h {
+        let so = y * src_row;
+        let dofs = y * row_pitch;
+        if so + src_row > tight.len() || dofs + src_row > dst.len() {
+            break;
+        }
+        dst[dofs..dofs + src_row].copy_from_slice(&tight[so..so + src_row]);
+    }
+    unsafe { upload.Unmap(0, None) };
+    true
+}
+
+unsafe fn composite_boot_release_fade_frame(swapchain_raw: usize, alpha: u8) -> bool {
+    if BOOT_VIEW_DRAW_BUSY.swap(1, Ordering::SeqCst) != 0 {
+        return false;
+    }
+    let _busy = BootViewBusyGuard;
+    let sc_raw = swapchain_raw as *mut c_void;
+    let Some(sc) = (unsafe { IDXGISwapChain3::from_raw_borrowed(&sc_raw) }) else { return false };
+    let idx = unsafe { sc.GetCurrentBackBufferIndex() };
+    let Ok(backbuffer) = (unsafe { sc.GetBuffer::<ID3D12Resource>(idx) }) else { return false };
+    if BOOT_VIEW_DRAW_STATE.load(Ordering::SeqCst) == 0 {
+        if unsafe { boot_view_init(&backbuffer) } {
+            BOOT_VIEW_DRAW_STATE.store(1, Ordering::SeqCst);
+        } else {
+            BOOT_VIEW_DRAW_STATE.store(2, Ordering::SeqCst);
+            return false;
+        }
+    }
+    if BOOT_VIEW_DRAW_STATE.load(Ordering::SeqCst) == 2 {
+        return false;
+    }
+    let bb_desc = unsafe { backbuffer.GetDesc() };
+    let cw = bb_desc.Width as u32;
+    let ch = bb_desc.Height;
+    if cw == 0 || ch == 0 || cw > MAX_RT_DIM || ch > MAX_RT_DIM {
+        return false;
+    }
+    let mut device_opt: Option<ID3D12Device> = None;
+    if unsafe { backbuffer.GetDevice(&mut device_opt) }.is_err() {
+        return false;
+    }
+    let Some(device) = device_opt else { return false };
+    if !unsafe { boot_view_fade_init(&device, bb_desc.Format, cw, ch) } {
+        return false;
+    }
+
+    let tex_raw = BOOT_VIEW_FADE_TEXTURE.load(Ordering::SeqCst) as *mut c_void;
+    let upload_raw = BOOT_VIEW_FADE_UPLOAD.load(Ordering::SeqCst) as *mut c_void;
+    let root_raw = BOOT_VIEW_FADE_ROOT_SIGNATURE.load(Ordering::SeqCst) as *mut c_void;
+    let pso_raw = BOOT_VIEW_FADE_PSO.load(Ordering::SeqCst) as *mut c_void;
+    let srv_heap_raw = BOOT_VIEW_FADE_SRV_HEAP.load(Ordering::SeqCst) as *mut c_void;
+    let alloc_raw = BOOT_VIEW_ALLOCATOR.load(Ordering::SeqCst) as *mut c_void;
+    let list_raw = BOOT_VIEW_LIST.load(Ordering::SeqCst) as *mut c_void;
+    let fence_raw = BOOT_VIEW_FENCE.load(Ordering::SeqCst) as *mut c_void;
+    let queue_raw = BOOT_VIEW_QUEUE.load(Ordering::SeqCst) as *mut c_void;
+    let rtv_heap_raw = BOOT_VIEW_RTV_HEAP.load(Ordering::SeqCst) as *mut c_void;
+    let (Some(texture), Some(upload), Some(root_sig), Some(pso), Some(srv_heap), Some(allocator), Some(list), Some(fence), Some(queue), Some(rtv_heap)) = (unsafe {
+        (
+            ID3D12Resource::from_raw_borrowed(&tex_raw),
+            ID3D12Resource::from_raw_borrowed(&upload_raw),
+            ID3D12RootSignature::from_raw_borrowed(&root_raw),
+            ID3D12PipelineState::from_raw_borrowed(&pso_raw),
+            ID3D12DescriptorHeap::from_raw_borrowed(&srv_heap_raw),
+            ID3D12CommandAllocator::from_raw_borrowed(&alloc_raw),
+            ID3D12GraphicsCommandList::from_raw_borrowed(&list_raw),
+            ID3D12Fence::from_raw_borrowed(&fence_raw),
+            ID3D12CommandQueue::from_raw_borrowed(&queue_raw),
+            ID3D12DescriptorHeap::from_raw_borrowed(&rtv_heap_raw),
+        )
+    }) else { return false };
+
+    let desc = unsafe { texture.GetDesc() };
+    let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+    unsafe { device.GetCopyableFootprints(&desc, 0, 1, 0, Some(&mut footprint), None, None, None) };
+    if !unsafe {
+        fill_boot_view_fade_upload(
+            &upload,
+            alpha,
+            footprint.Footprint.RowPitch as usize,
+            cw as usize,
+            ch as usize,
+        )
+    } {
+        return false;
+    }
+    let rtv_cpu = unsafe { rtv_heap.GetCPUDescriptorHandleForHeapStart() };
+    unsafe { device.CreateRenderTargetView(&backbuffer, None, rtv_cpu) };
+    if unsafe { allocator.Reset() }.is_err() || unsafe { list.Reset(allocator, None) }.is_err() {
+        return false;
+    }
+    if BOOT_VIEW_FADE_TEX_STATE.load(Ordering::SeqCst) == 1 {
+        unsafe { record_transition(list, &texture, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST) };
+        BOOT_VIEW_FADE_TEX_STATE.store(0, Ordering::SeqCst);
+    }
+    let mut src = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(upload.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { PlacedFootprint: footprint },
+    };
+    let mut dst = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(texture.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 },
+    };
+    unsafe { list.CopyTextureRegion(&dst, 0, 0, 0, &src, None) };
+    unsafe { ManuallyDrop::drop(&mut src.pResource) };
+    unsafe { ManuallyDrop::drop(&mut dst.pResource) };
+    unsafe { record_transition(list, &texture, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE) };
+    BOOT_VIEW_FADE_TEX_STATE.store(1, Ordering::SeqCst);
+    unsafe { record_transition(list, &backbuffer, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET) };
+    let viewport = D3D12_VIEWPORT { TopLeftX: 0.0, TopLeftY: 0.0, Width: cw as f32, Height: ch as f32, MinDepth: 0.0, MaxDepth: 1.0 };
+    let scissor = RECT { left: 0, top: 0, right: cw as i32, bottom: ch as i32 };
+    let constants = [1.0f32.to_bits(), 1.0f32.to_bits(), 0.0f32.to_bits(), 0.0f32.to_bits()];
+    unsafe {
+        list.SetGraphicsRootSignature(root_sig);
+        list.SetPipelineState(pso);
+        list.SetDescriptorHeaps(&[Some(srv_heap.clone())]);
+        list.SetGraphicsRootDescriptorTable(0, srv_gpu_handle_at(&device, &srv_heap, 0));
+        list.SetGraphicsRoot32BitConstants(1, constants.len() as u32, constants.as_ptr() as *const c_void, 0);
+        list.RSSetViewports(std::slice::from_ref(&viewport));
+        list.RSSetScissorRects(std::slice::from_ref(&scissor));
+        list.OMSetRenderTargets(1, Some(&rtv_cpu), true, None);
+        list.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        list.DrawInstanced(3, 1, 0, 0);
+        record_transition(list, &backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+    }
+    if !unsafe { execute_and_wait(&queue, &list, &fence) } {
+        return false;
+    }
+    BOOT_VIEW_FADE_HITS.fetch_add(1, Ordering::SeqCst);
+    true
+}
+
 /// Composite the boot-progress strip onto the swapchain backbuffer. Called from the Present detour
-/// for every pre-loading-window frame (the portrait composite declined). `catch_unwind` + every COM
-/// call checked -> never panics on the game's render thread; any failure skips the frame.
+/// for every pre-loading-window frame. This path MUST full-clear the backbuffer first: after the
+/// self-present pump yields to Elden Ring's render loop, a strip-only copy lets the title/menu/world
+/// render around the loading bar. Full-clear + strip copy keeps the bar persistent and tells the rest
+/// of the frame, politely, to die in a fire.
 pub(crate) unsafe fn composite_boot_progress_on_swapchain(
     _base: usize,
     swapchain_raw: usize,
 ) -> bool {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        composite_boot_progress_inner(swapchain_raw, false)
+        composite_boot_progress_inner(swapchain_raw, true, false)
     }))
     .unwrap_or(false)
 }
@@ -1603,7 +1892,7 @@ pub(crate) unsafe fn composite_boot_progress_on_swapchain(
 /// copy so no init-garbage flashes on screen.
 pub(crate) unsafe fn composite_boot_progress_self_frame(swapchain_raw: usize) -> bool {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        composite_boot_progress_inner(swapchain_raw, true)
+        composite_boot_progress_inner(swapchain_raw, true, true)
     }))
     .unwrap_or(false)
 }
@@ -1616,7 +1905,11 @@ impl Drop for BootViewBusyGuard {
     }
 }
 
-unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool) -> bool {
+unsafe fn composite_boot_progress_inner(
+    swapchain_raw: usize,
+    clear_first: bool,
+    self_present_frame: bool,
+) -> bool {
     if BOOT_VIEW_STOPPED.load(Ordering::SeqCst) != 0 {
         return false;
     }
@@ -1639,18 +1932,16 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
     // per-frame GPU readback in-world -- the compositor kept readback-stalling the pipeline (~20-40fps).
     // Use the PER-EPOCH world-live signal instead: play_time advancing for the CURRENT fresh_deser epoch
     // means THIS switch's world is genuinely playable, so stop compositing (the loading cover is done).
-    let epoch_world_handoff = own_menu_active && {
-        let cur =
-            crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
-        cur >= 1 && crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur
-    };
-    let world_handoff = (!own_menu_active
-        && IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES)
-        || epoch_world_handoff;
-    // DIAGNOSTIC (bd ab-portrait-disabled-load2-fps-still-low-boot-view-composite-is-killer-2026-07-20):
-    // the per-frame GPU readback-with-wait below tanks load2 FPS because neither stop path fires. Log
-    // the actual gate values (~1/s) so we can see WHICH one is stuck: own_menu, the two handoffs, the
-    // per-epoch world-live tag, permille, and the fresh_deser epoch vs the tagged live epoch.
+    let cur_load_epoch =
+        crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+    let can_move_handoff = crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
+        && crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == cur_load_epoch;
+    let render_release_handoff = boot_view_cover_release_ready(can_move_handoff);
+    let epoch_world_handoff = render_release_handoff;
+    let world_handoff = render_release_handoff;
+    // DIAGNOSTIC (bd ab-portrait-disabled-load2-fps-still-low-boot-view-not-stopping): log the actual
+    // stop gates. The product cover must not stop at player-present/native-loading; only the same
+    // can_move epoch-gated proof used by the watcher is allowed to uncover the game.
     {
         let now_log = boot_view_epoch_ms();
         let last_log = BOOT_VIEW_DECISION_LOG_MS.load(Ordering::SeqCst);
@@ -1661,19 +1952,19 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
         {
             let fresh_deser = crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
                 .load(Ordering::SeqCst);
-            let epoch_world_live =
-                crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst);
+            let move_epoch = crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "boot-view DECISION: own_menu={} loading_handoff={} world_handoff={} epoch_world_handoff={} permille={} draw_state={} in_world={} fresh_deser={} epoch_world_live={} loadscreen_builds={} table_baseline={} now_ms={}",
+                "boot-view DECISION: own_menu={} loading_handoff={} world_handoff={} can_move_handoff={} render_ready={} permille={} draw_state={} in_world={} fresh_deser={} move_epoch={} loadscreen_builds={} table_baseline={} now_ms={}",
                 own_menu_active,
                 loading_handoff,
                 world_handoff,
-                epoch_world_handoff,
+                can_move_handoff,
+                boot_view_player_render_ready(),
                 BOOT_VIEW_LAST_PERMILLE.load(Ordering::SeqCst),
                 BOOT_VIEW_DRAW_STATE.load(Ordering::SeqCst),
                 IN_WORLD_REACHED.load(Ordering::SeqCst),
                 fresh_deser,
-                epoch_world_live,
+                move_epoch,
                 loadscreen_builds,
                 table_baseline,
                 now_log,
@@ -1698,12 +1989,10 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
         // Fall through and keep compositing.
     }
     if real_loading_handoff || world_handoff {
-        // SEAMLESS CUT (user 2026-07-06): the REAL handoff (forced Continue or native loading-screen
-        // updates) starts the game's black gap + the loading screen's own fade-in-from-black. HOLD the
-        // cover fully lit and stop in one frame only once the native loading screen is itself fully lit
-        // (CS::LoadingScreen update hits reach the measured luminance plateau), or immediately on world
-        // takeover, or on the bail clock if the update semaphore regressed. Lit-to-lit; never a black
-        // frame between the scenes.
+        // PRODUCT COVER (user 2026-07-25): native CS::LoadingScreen becoming lit is NOT a stop
+        // condition. The product loading bar owns the full backbuffer until the game is actually
+        // world/playable-ready. Native loading updates only prove the handoff happened and drive the
+        // bar; the rest of the frame stays black-cleared.
         let now_ms = boot_view_epoch_ms().max(1) as usize;
         let mut seen_ms = BOOT_VIEW_HANDOFF_SEEN_MS.load(Ordering::SeqCst);
         if seen_ms == 0 {
@@ -1737,26 +2026,100 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
             .saturating_sub(BOOT_VIEW_HANDOFF_NATIVE_HITS_BASELINE.load(Ordering::SeqCst));
         let held_ms = (now_ms as u64).saturating_sub(seen_ms as u64);
         let native_lit = native_hits >= BOOT_VIEW_NATIVE_LIT_UPDATE_HITS;
-        let hold_bail = held_ms >= BOOT_VIEW_HANDOFF_HOLD_BAIL_MS;
-        let dark_gap_failure = hold_bail && !native_lit && !world_handoff;
-        if native_lit || world_handoff || hold_bail {
-            if BOOT_VIEW_STOPPED.swap(1, Ordering::SeqCst) == 0 {
-                BOOT_VIEW_STOP_NATIVE_HITS.store(native_hits, Ordering::SeqCst);
-                if dark_gap_failure {
-                    BOOT_VIEW_DARK_GAP_FAILURES.fetch_add(1, Ordering::SeqCst);
-                    BOOT_VIEW_DARK_GAP_LAST_HELD_MS.store(held_ms as usize, Ordering::SeqCst);
-                    BOOT_VIEW_DARK_GAP_LAST_NATIVE_HITS.store(native_hits, Ordering::SeqCst);
+        if world_handoff {
+            let native_gfx_fadeout_start = LOADING_SCREEN_GFX_FADEOUT_FIRST_MS.load(Ordering::SeqCst);
+            let native_gfx_fadeout_last = LOADING_SCREEN_GFX_FADEOUT_LAST_MS.load(Ordering::SeqCst);
+            let loading_update_last = LOADING_SCREEN_UPDATE_LAST_MS.load(Ordering::SeqCst);
+            let loading_close_ms = LOADING_SCREEN_CLOSE_SENT_FIRST_MS.load(Ordering::SeqCst);
+            let fadeout_anchor = native_gfx_fadeout_last.max(loading_close_ms);
+            let fadeout_pending = fadeout_anchor != 0
+                && (now_ms as u64).saturating_sub(fadeout_anchor as u64)
+                    < BOOT_VIEW_NATIVE_GFX_FADEOUT_HOLD_MS;
+            let update_quiet_pending = loading_update_last != 0
+                && (now_ms as u64).saturating_sub(loading_update_last as u64)
+                    < BOOT_VIEW_NATIVE_LOADING_QUIET_HOLD_MS;
+            let native_gfx_hold_pending = fadeout_pending || update_quiet_pending;
+            if native_gfx_hold_pending {
+                let hold_hits = BOOT_VIEW_NATIVE_GFX_FADE_HOLD_HITS
+                    .fetch_add(1, Ordering::SeqCst)
+                    + 1;
+                if hold_hits <= 8 || hold_hits.is_power_of_two() {
+                    append_autoload_debug(format_args!(
+                        "boot-view: holding opaque cover through native loading fade/quiet window (fadeout_elapsed={}ms/{}, update_quiet={}ms/{}, native_hits={native_hits}, held_ms={held_ms}, render_ready={}, fadeout_hits={}, first_fadeout_ms={}, close_ms={}, draws={} permille={})",
+                        (now_ms as u64).saturating_sub(fadeout_anchor as u64),
+                        BOOT_VIEW_NATIVE_GFX_FADEOUT_HOLD_MS,
+                        (now_ms as u64).saturating_sub(loading_update_last as u64),
+                        BOOT_VIEW_NATIVE_LOADING_QUIET_HOLD_MS,
+                        boot_view_player_render_ready(),
+                        LOADING_SCREEN_GFX_FADEOUT_HITS.load(Ordering::SeqCst),
+                        native_gfx_fadeout_start,
+                        loading_close_ms,
+                        BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst),
+                        BOOT_VIEW_LAST_PERMILLE.load(Ordering::SeqCst),
+                    ));
                 }
+                // Fall through to the normal full-clear + boot-bar path. The custom alpha fade is
+                // deliberately delayed until native loading has both started its authored fade and stopped
+                // updating long enough that the backbuffer behind our fade is gameplay, not loading art.
+            } else if BOOT_VIEW_NATIVE_GFX_FADE_HOLD_COMPLETE_MS
+                .compare_exchange(0, now_ms, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
                 append_autoload_debug(format_args!(
-                    "boot-view: handoff -> loading window (seamless cut; native_hits={native_hits} held_ms={held_ms} world={world_handoff} bail={hold_bail} dark_gap_failure={dark_gap_failure} forced_continue={forced_continue_handoff} draws={} permille={})",
-                    BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst),
-                    BOOT_VIEW_LAST_PERMILLE.load(Ordering::SeqCst),
+                    "boot-view: native loading fade/quiet hold complete (hold_hits={}, fadeout_hits={}, first_fadeout_ms={}, last_fadeout_ms={}, update_last_ms={}, close_ms={})",
+                    BOOT_VIEW_NATIVE_GFX_FADE_HOLD_HITS.load(Ordering::SeqCst),
+                    LOADING_SCREEN_GFX_FADEOUT_HITS.load(Ordering::SeqCst),
+                    native_gfx_fadeout_start,
+                    native_gfx_fadeout_last,
+                    loading_update_last,
+                    loading_close_ms,
                 ));
             }
-            BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.store(0, Ordering::SeqCst);
-            return false;
+            if !native_gfx_hold_pending {
+                let fade_start = match BOOT_VIEW_FADE_START_MS.compare_exchange(
+                    0,
+                    now_ms,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                ) {
+                    Ok(_) => {
+                        BOOT_VIEW_STOP_NATIVE_HITS.store(native_hits, Ordering::SeqCst);
+                        append_autoload_debug(format_args!(
+                            "boot-view: world/playable handoff -> start release fade (native_hits={native_hits} held_ms={held_ms} native_lit={native_lit} native_gfx_fadeout_start_ms={native_gfx_fadeout_start} forced_continue={forced_continue_handoff} draws={} permille={})",
+                            BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst),
+                            BOOT_VIEW_LAST_PERMILLE.load(Ordering::SeqCst),
+                        ));
+                        now_ms
+                    }
+                    Err(start) => start,
+                };
+                let fade_elapsed = (now_ms as u64).saturating_sub(fade_start as u64);
+                if fade_elapsed >= BOOT_VIEW_RELEASE_FADE_MS {
+                    if BOOT_VIEW_STOPPED.swap(1, Ordering::SeqCst) == 0 {
+                        BOOT_VIEW_FADE_COMPLETE_MS.store(now_ms, Ordering::SeqCst);
+                        append_autoload_debug(format_args!(
+                            "boot-view: release fade complete -> stop cover (fade_ms={fade_elapsed} fade_hits={})",
+                            BOOT_VIEW_FADE_HITS.load(Ordering::SeqCst),
+                        ));
+                    }
+                    BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.store(0, Ordering::SeqCst);
+                    return false;
+                }
+                let remaining = BOOT_VIEW_RELEASE_FADE_MS.saturating_sub(fade_elapsed);
+                let alpha = ((remaining * 255 + BOOT_VIEW_RELEASE_FADE_MS / 2)
+                    / BOOT_VIEW_RELEASE_FADE_MS)
+                    .clamp(1, 255) as u8;
+                BOOT_VIEW_FADE_LAST_ALPHA.store(alpha as usize, Ordering::SeqCst);
+                if unsafe { composite_boot_release_fade_frame(swapchain_raw, alpha) } {
+                    return true;
+                }
+                BOOT_VIEW_FADE_FAILURES.fetch_add(1, Ordering::SeqCst);
+                return false;
+            }
         }
-        // else: fall through and keep compositing the fully-lit cover over the native fade-in.
+        // Native loading exists; that is not permission to reveal the game. Fall through and keep
+        // full-clearing + drawing the bar until the character render path is ready (or can-move proves
+        // control on probe runs). If this stops early, the pre-world-stop/full-clear oracles fail.
     }
     // FPS BAIL (bd fps-killer-rootcaused-per-frame-gpu-readback-boot-view-not-stopping-inworld-load2):
     // when an own-menu reload STALLS at the finalize (frozen load2), it builds no new loadscreen table
@@ -2081,6 +2444,11 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
             )
         };
         unsafe { list.ClearRenderTargetView(handle, &[0.0, 0.0, 0.0, 1.0], None) };
+        if self_present_frame {
+            BOOT_VIEW_SELF_FULL_CLEAR_HITS.fetch_add(1, Ordering::SeqCst);
+        } else {
+            BOOT_VIEW_PRESENT_FULL_CLEAR_HITS.fetch_add(1, Ordering::SeqCst);
+        }
         unsafe {
             record_transition(
                 list,

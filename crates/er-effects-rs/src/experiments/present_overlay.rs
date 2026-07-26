@@ -353,7 +353,10 @@ unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) {
     {
         let cur =
             crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
-        if crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur {
+        if cur != 0
+            && crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur
+            && crate::experiments::BOOT_VIEW_STOPPED.load(Ordering::SeqCst) != 0
+        {
             PRESENT_COMPOSITE_EARLY_SKIPS.fetch_add(1, Ordering::SeqCst);
             return;
         }
