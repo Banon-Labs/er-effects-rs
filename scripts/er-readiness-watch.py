@@ -2271,14 +2271,42 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
     loading_screen_portrait_capture_done = False
     for poll in range(args.readiness_poll_budget):
         if time.monotonic() >= deadline:
+            bootstrap = read_bootstrap(args.bootstrap, args.bootstrap_state)
+            telemetry = read_json(args.telemetry)
+            windows = hypr_windows(args.window_class)
+            # Timeout-edge success: a progressing load can produce the first world-loaded telemetry
+            # sample right at the runtime budget boundary. Check the RAM oracle before returning a
+            # timeout so the final good sample is not thrown in the trash like everything else alive.
+            effective_expected_animation_id = None if appear_animation_seen else args.expected_animation_id
+            if (
+                args.target == TARGET_WORLD_STABLE
+                and process_exists(pid)
+                and telemetry_world_loaded(telemetry, expected_save_oracle, effective_expected_animation_id)
+            ):
+                timing.mark("t_world_stable")
+                return with_runtime_module_info(
+                    ReadinessResult(
+                        True,
+                        WORLD_STABLE,
+                        pid,
+                        bootstrap,
+                        telemetry,
+                        windows,
+                        spawn_polls + poll,
+                        float(args.max_runtime_seconds),
+                        world_stable_samples=max(world_stable_samples, 1),
+                        expected_save_oracle=expected_save_oracle,
+                        expected_animation_id=args.expected_animation_id,
+                    )
+                )
             return with_runtime_module_info(
                 ReadinessResult(
                     False,
                     TIMEOUT_BUDGET_EXHAUSTED,
                     pid,
-                    read_bootstrap(args.bootstrap, args.bootstrap_state),
-                    read_json(args.telemetry),
-                    hypr_windows(args.window_class),
+                    bootstrap,
+                    telemetry,
+                    windows,
                     spawn_polls + poll,
                     float(args.max_runtime_seconds),
                     expected_save_oracle=expected_save_oracle,

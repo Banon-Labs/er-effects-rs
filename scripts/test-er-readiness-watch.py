@@ -33,8 +33,24 @@ def load_watcher():
     return module
 
 
+def assert_timeout_edge_accepts_final_world_loaded_sample() -> None:
+    source = WATCH_PATH.read_text(encoding="utf-8", errors="replace")
+    wait_readiness_body = source.split("def wait_readiness(", 1)[1]
+    timeout_branch = wait_readiness_body.split("if time.monotonic() >= deadline:", 1)[1].split(
+        "module_base, module_mappings = runtime_module_base(pid)", 1
+    )[0]
+    assert "telemetry = read_json(args.telemetry)" in timeout_branch
+    assert "telemetry_world_loaded(telemetry" in timeout_branch
+    assert "WORLD_STABLE" in timeout_branch
+    assert timeout_branch.index("telemetry_world_loaded") < timeout_branch.index(
+        "TIMEOUT_BUDGET_EXHAUSTED"
+    )
+
+
 def main() -> int:
     watcher = load_watcher()
+
+    assert_timeout_edge_accepts_final_world_loaded_sample()
 
     assert watcher.client_is_game_window(TEST_WINDOW, watcher.DEFAULT_WINDOW_CLASS)
     assert watcher.window_capture_safe(TEST_WINDOW, watcher.DEFAULT_WINDOW_CLASS)
