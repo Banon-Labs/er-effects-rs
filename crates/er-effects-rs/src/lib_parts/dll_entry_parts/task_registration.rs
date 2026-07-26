@@ -246,10 +246,13 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     return;
                 };
 
+                // Same semantic render predicate as `oracle_player_render_ready` /
+                // `telemetry_render_semantic_ready`: draw_group_enabled is diagnostic only on
+                // 1.16.2 because it can remain false after the player is onscreen and rendered.
                 let native_overlay_release_ready = player.chr_ins.chr_model_ins.as_ptr() as usize
                     != TITLE_OWNER_SCAN_START_ADDRESS
                     && player.chr_ins.chr_ctrl.as_ptr() as usize != TITLE_OWNER_SCAN_START_ADDRESS
-                    && player.chr_ins.load_state.draw_group_enabled()
+                    && player.chr_ins.chr_flags1c4.is_onscreen()
                     && player.chr_ins.chr_flags1c4.is_render_group_enabled()
                     && player.chr_ins.chr_flags1c5.enable_render();
                 native_overlay_release_tick(native_overlay_release_ready);

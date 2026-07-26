@@ -169,9 +169,13 @@ fn write_player_presence_oracle(body: &mut String) {
         let chr_render_group_enabled = player.chr_ins.chr_flags1c4.is_render_group_enabled();
         let chr_onscreen = player.chr_ins.chr_flags1c4.is_onscreen();
         let chr_enable_render = player.chr_ins.chr_flags1c5.enable_render();
+        // Match the watcher's render-semantic readiness: the draw-group bit can remain false
+        // on a visibly loaded/player-controllable 1.16.2 world, while onscreen + render-group +
+        // enable-render are the runtime proof that the character has a rendered surface. Keep
+        // draw_group_enabled as telemetry, but do not let that stale bit hold the native bridge up.
         let player_render_ready = chr_model_ins_ptr != TITLE_OWNER_SCAN_START_ADDRESS
             && chr_ctrl_ptr != TITLE_OWNER_SCAN_START_ADDRESS
-            && chr_draw_group_enabled
+            && chr_onscreen
             && chr_render_group_enabled
             && chr_enable_render;
         body.push_str(&format!(
