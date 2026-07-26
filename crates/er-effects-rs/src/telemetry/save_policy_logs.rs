@@ -166,9 +166,10 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
     }
     // AUDIO SEMAPHORE: actual Wwise PostEvent submissions. This catches audible-only regressions
     // (for example startup/title-logo music) that can block the later title/load flow without a useful
-    // screenshot oracle. The hook is observe-only and forwards every event unchanged.
+    // screenshot oracle. The product hook mutes pre-world/quickload/no-player events by returning 0;
+    // telemetry records both muted and forwarded paths so a run shows whether Wwise could be heard.
     body.push_str(&format!(
-        "  \"oracle_sound_post_event_hook_installed\": {},\n  \"oracle_sound_post_event_hits\": {},\n  \"oracle_sound_post_event_muted_hits\": {},\n  \"oracle_sound_post_event_forwarded_hits\": {},\n  \"oracle_sound_post_event_first_id\": {},\n  \"oracle_sound_post_event_last_id\": {},\n  \"oracle_sound_post_event_first_muted_id\": {},\n  \"oracle_sound_post_event_last_muted_id\": {},\n  \"oracle_sound_post_event_last_playing_id\": {},\n  \"oracle_sound_post_event_last_game_object\": \"{:#x}\",\n  \"oracle_sound_post_event_last_flags\": \"{:#x}\",\n  \"oracle_sound_post_event_last_caller_rva\": \"{:#x}\",\n",
+        "  \"oracle_sound_post_event_hook_installed\": {},\n  \"oracle_sound_post_event_hits\": {},\n  \"oracle_sound_post_event_muted_hits\": {},\n  \"oracle_sound_post_event_forwarded_hits\": {},\n  \"oracle_sound_post_event_first_id\": {},\n  \"oracle_sound_post_event_last_id\": {},\n  \"oracle_sound_post_event_first_muted_id\": {},\n  \"oracle_sound_post_event_last_muted_id\": {},\n  \"oracle_sound_post_event_last_muted\": {},\n  \"oracle_sound_post_event_last_playing_id\": {},\n  \"oracle_sound_post_event_last_game_object\": \"{:#x}\",\n  \"oracle_sound_post_event_last_flags\": \"{:#x}\",\n  \"oracle_sound_post_event_last_caller_rva\": \"{:#x}\",\n",
         crate::SOUND_POST_EVENT_CORE_INSTALLED.load(Ordering::SeqCst) != 0,
         crate::SOUND_POST_EVENT_HITS.load(Ordering::SeqCst),
         crate::SOUND_POST_EVENT_MUTED_HITS.load(Ordering::SeqCst),
@@ -177,6 +178,7 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
         crate::SOUND_POST_EVENT_LAST_ID.load(Ordering::SeqCst),
         crate::SOUND_POST_EVENT_FIRST_MUTED_ID.load(Ordering::SeqCst),
         crate::SOUND_POST_EVENT_LAST_MUTED_ID.load(Ordering::SeqCst),
+        crate::SOUND_POST_EVENT_LAST_MUTED.load(Ordering::SeqCst) != 0,
         crate::SOUND_POST_EVENT_LAST_PLAYING_ID.load(Ordering::SeqCst),
         crate::SOUND_POST_EVENT_LAST_GAME_OBJECT.load(Ordering::SeqCst),
         crate::SOUND_POST_EVENT_LAST_FLAGS.load(Ordering::SeqCst),

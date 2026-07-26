@@ -346,6 +346,7 @@ unsafe extern "system" fn sound_post_event_core_hook(
             .ok();
         SOUND_POST_EVENT_LAST_MUTED_ID.store(event_id as usize, Ordering::SeqCst);
     }
+    SOUND_POST_EVENT_LAST_MUTED.store(usize::from(muted), Ordering::SeqCst);
     SOUND_POST_EVENT_LAST_PLAYING_ID.store(ret as usize, Ordering::SeqCst);
     SOUND_POST_EVENT_LAST_GAME_OBJECT.store(game_object as usize, Ordering::SeqCst);
     SOUND_POST_EVENT_LAST_FLAGS.store(flags as usize, Ordering::SeqCst);

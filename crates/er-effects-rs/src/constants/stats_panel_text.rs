@@ -236,6 +236,8 @@ pub(crate) static SOUND_POST_EVENT_FIRST_ID: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SOUND_POST_EVENT_LAST_ID: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SOUND_POST_EVENT_FIRST_MUTED_ID: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SOUND_POST_EVENT_LAST_MUTED_ID: AtomicUsize = AtomicUsize::new(0);
+/// 1 when the most recent Wwise PostEvent call was muted by the product hook; 0 when forwarded.
+pub(crate) static SOUND_POST_EVENT_LAST_MUTED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SOUND_POST_EVENT_LAST_PLAYING_ID: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SOUND_POST_EVENT_LAST_GAME_OBJECT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
