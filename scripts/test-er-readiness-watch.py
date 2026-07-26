@@ -48,10 +48,23 @@ def assert_timeout_edge_accepts_final_world_loaded_sample() -> None:
     )
 
 
+def assert_normal_loop_drops_transient_animation_after_semantic_world_ready() -> None:
+    source = WATCH_PATH.read_text(encoding="utf-8", errors="replace")
+    wait_readiness_body = source.split("def wait_readiness(", 1)[1]
+    world_branch = wait_readiness_body.split("if args.target == TARGET_WORLD_STABLE:", 1)[1].split(
+        "if windows:", 1
+    )[0]
+    assert "telemetry_world_loaded(telemetry, expected_save_oracle, None)" in world_branch
+    assert world_branch.index("telemetry_world_loaded(telemetry, expected_save_oracle, None)") < world_branch.index(
+        "effective_expected_animation_id"
+    )
+
+
 def main() -> int:
     watcher = load_watcher()
 
     assert_timeout_edge_accepts_final_world_loaded_sample()
+    assert_normal_loop_drops_transient_animation_after_semantic_world_ready()
 
     assert watcher.client_is_game_window(TEST_WINDOW, watcher.DEFAULT_WINDOW_CLASS)
     assert watcher.window_capture_safe(TEST_WINDOW, watcher.DEFAULT_WINDOW_CLASS)
@@ -345,6 +358,18 @@ def main() -> int:
     assert not watcher.telemetry_world_loaded({**world_loaded_telemetry, "oracle_char_name": "   ", "oracle_char_name_len": 3}, expected_save_oracle, watcher.DEFAULT_EXPECTED_ANIMATION_ID)
     assert not watcher.telemetry_world_loaded({**world_loaded_telemetry, "current_animation_id": 999}, expected_save_oracle, watcher.DEFAULT_EXPECTED_ANIMATION_ID)
     assert not watcher.telemetry_world_loaded({**world_loaded_telemetry, "oracle_msgbox_postload_builds": 1}, expected_save_oracle, watcher.DEFAULT_EXPECTED_ANIMATION_ID)
+    windows_proof_bridge_visible = {
+        **world_loaded_telemetry,
+        "oracle_windows_proof_mode": 1,
+        "oracle_native_overlay_show": 1,
+        "oracle_native_overlay_handoff_ready_hits": 4,
+    }
+    assert not watcher.telemetry_world_loaded(windows_proof_bridge_visible, expected_save_oracle, watcher.DEFAULT_EXPECTED_ANIMATION_ID)
+    assert watcher.telemetry_world_loaded(
+        {**windows_proof_bridge_visible, "oracle_native_overlay_show": 0},
+        expected_save_oracle,
+        watcher.DEFAULT_EXPECTED_ANIMATION_ID,
+    )
     assert watcher.telemetry_world_tick(world_loaded_telemetry, 0) == TEST_POLLS
     selector_loaded_telemetry = {
         **world_loaded_telemetry,

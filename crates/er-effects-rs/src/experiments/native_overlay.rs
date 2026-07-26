@@ -44,10 +44,10 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetClientRect, GetParent,
-    GetWindowThreadProcessId, HWND_TOP, IsWindowVisible, MSG, MoveWindow, PM_REMOVE, PeekMessageW,
-    RegisterClassW, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_SHOWWINDOW, SetWindowPos, ShowWindow, TranslateMessage, WNDCLASSW, WS_CHILD,
-    WS_EX_NOACTIVATE, WS_VISIBLE,
+    GetWindowRect, GetWindowThreadProcessId, HWND_TOP, IsWindow, IsWindowVisible, MSG, MoveWindow,
+    PM_REMOVE, PeekMessageW, RegisterClassW, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SetWindowPos, ShowWindow, TranslateMessage, WNDCLASSW,
+    WS_CHILD, WS_EX_NOACTIVATE, WS_VISIBLE,
 };
 use windows::core::{BOOL, Error, HRESULT, Interface, PCSTR, w};
 
@@ -88,6 +88,24 @@ pub(crate) static NATIVE_OVERLAY_BAR_PIXEL_MISSING_FRAMES: AtomicUsize = AtomicU
 pub(crate) static NATIVE_OVERLAY_BAR_PIXEL_LAST_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Successful child z-order lifts while the bridge is visible.
 pub(crate) static NATIVE_OVERLAY_ZORDER_LIFT_HITS: AtomicUsize = AtomicUsize::new(0);
+/// Successful swapchain Presents while the bridge is visible.
+pub(crate) static NATIVE_OVERLAY_PRESENT_OK_HITS: AtomicUsize = AtomicUsize::new(0);
+/// Failed swapchain Presents while the bridge is visible.
+pub(crate) static NATIVE_OVERLAY_PRESENT_FAIL_HITS: AtomicUsize = AtomicUsize::new(0);
+/// Last bridge Present HRESULT, as unsigned u32 bits; 0 means S_OK/no observed failure.
+pub(crate) static NATIVE_OVERLAY_PRESENT_LAST_HRESULT: AtomicUsize = AtomicUsize::new(0);
+/// 1 if the parent HWND still satisfies IsWindow.
+pub(crate) static NATIVE_OVERLAY_PARENT_IS_WINDOW: AtomicUsize = AtomicUsize::new(0);
+/// 1 if the child HWND still satisfies IsWindow.
+pub(crate) static NATIVE_OVERLAY_CHILD_IS_WINDOW: AtomicUsize = AtomicUsize::new(0);
+/// 1 if the child HWND is currently visible according to user32.
+pub(crate) static NATIVE_OVERLAY_CHILD_IS_VISIBLE: AtomicUsize = AtomicUsize::new(0);
+/// Last parent outer window rectangle width/height in screen coordinates.
+pub(crate) static NATIVE_OVERLAY_PARENT_WINDOW_W: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static NATIVE_OVERLAY_PARENT_WINDOW_H: AtomicUsize = AtomicUsize::new(0);
+/// Last child outer window rectangle width/height in screen coordinates.
+pub(crate) static NATIVE_OVERLAY_CHILD_WINDOW_W: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static NATIVE_OVERLAY_CHILD_WINDOW_H: AtomicUsize = AtomicUsize::new(0);
 /// One-shot objective pixel readback attempts against the bridge backbuffer.
 pub(crate) static NATIVE_OVERLAY_PIXEL_PROBE_HITS: AtomicUsize = AtomicUsize::new(0);
 /// One-shot bridge pixel readback matches against the unique clear color.
@@ -203,6 +221,30 @@ fn rect_size(rect: RECT) -> (usize, usize) {
         (rect.right - rect.left).max(0) as usize,
         (rect.bottom - rect.top).max(0) as usize,
     )
+}
+
+fn rect_outer_size(hwnd: HWND) -> (usize, usize) {
+    let mut rect = RECT::default();
+    if unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok() {
+        rect_size(rect)
+    } else {
+        (0, 0)
+    }
+}
+
+fn record_window_lifecycle_oracle(parent: HWND, child: HWND) {
+    let parent_is_window = unsafe { IsWindow(Some(parent)).as_bool() };
+    let child_is_window = unsafe { IsWindow(Some(child)).as_bool() };
+    let child_is_visible = unsafe { IsWindowVisible(child).as_bool() };
+    NATIVE_OVERLAY_PARENT_IS_WINDOW.store(usize::from(parent_is_window), Ordering::SeqCst);
+    NATIVE_OVERLAY_CHILD_IS_WINDOW.store(usize::from(child_is_window), Ordering::SeqCst);
+    NATIVE_OVERLAY_CHILD_IS_VISIBLE.store(usize::from(child_is_visible), Ordering::SeqCst);
+    let (parent_w, parent_h) = rect_outer_size(parent);
+    let (child_w, child_h) = rect_outer_size(child);
+    NATIVE_OVERLAY_PARENT_WINDOW_W.store(parent_w, Ordering::SeqCst);
+    NATIVE_OVERLAY_PARENT_WINDOW_H.store(parent_h, Ordering::SeqCst);
+    NATIVE_OVERLAY_CHILD_WINDOW_W.store(child_w, Ordering::SeqCst);
+    NATIVE_OVERLAY_CHILD_WINDOW_H.store(child_h, Ordering::SeqCst);
 }
 
 fn keep_child_on_top(child: HWND) {
@@ -991,6 +1033,7 @@ unsafe fn native_overlay_run() {
             let _ = tick_rx.recv_timeout(hidden_poll);
             continue;
         }
+        record_window_lifecycle_oracle(parent_hwnd, hwnd);
         keep_child_on_top(hwnd);
 
         let idx = unsafe { swapchain.GetCurrentBackBufferIndex() } as usize;
@@ -1082,8 +1125,13 @@ unsafe fn native_overlay_run() {
         let list_any = list.cast().ok();
         unsafe { queue.ExecuteCommandLists(&[list_any]) };
 
-        if unsafe { swapchain.Present(1, DXGI_PRESENT(0)) }.is_ok() {
+        let present_hr = unsafe { swapchain.Present(1, DXGI_PRESENT(0)) };
+        NATIVE_OVERLAY_PRESENT_LAST_HRESULT.store(present_hr.0 as u32 as usize, Ordering::SeqCst);
+        if present_hr.is_ok() {
+            NATIVE_OVERLAY_PRESENT_OK_HITS.fetch_add(1, Ordering::SeqCst);
             NATIVE_OVERLAY_FRAMES.fetch_add(1, Ordering::SeqCst);
+        } else {
+            NATIVE_OVERLAY_PRESENT_FAIL_HITS.fetch_add(1, Ordering::SeqCst);
         }
 
         fence_val += 1;

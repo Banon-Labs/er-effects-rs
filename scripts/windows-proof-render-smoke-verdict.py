@@ -79,6 +79,22 @@ def build_verdict(
         telemetry.get("oracle_native_overlay_zorder_lift_hits") if isinstance(telemetry, dict) else None,
         -1,
     )
+    native_overlay_present_ok_hits = as_int(
+        telemetry.get("oracle_native_overlay_present_ok_hits") if isinstance(telemetry, dict) else None,
+        -1,
+    )
+    native_overlay_present_fail_hits = as_int(
+        telemetry.get("oracle_native_overlay_present_fail_hits") if isinstance(telemetry, dict) else None,
+        -1,
+    )
+    native_overlay_child_is_window = as_int(
+        telemetry.get("oracle_native_overlay_child_is_window") if isinstance(telemetry, dict) else None,
+        -1,
+    )
+    native_overlay_child_is_visible = as_int(
+        telemetry.get("oracle_native_overlay_child_is_visible") if isinstance(telemetry, dict) else None,
+        -1,
+    )
     native_overlay_child_window = as_int(
         telemetry.get("oracle_native_overlay_child_window") if isinstance(telemetry, dict) else None,
         -1,
@@ -130,6 +146,8 @@ def build_verdict(
     native_overlay_full_content_proven = native_overlay_content_frames > 0
     native_overlay_bar_pixels_proven = native_overlay_bar_pixel_frames > 0 and native_overlay_bar_pixel_missing_frames == 0
     native_overlay_zorder_proven = native_overlay_zorder_lift_hits > 0
+    native_overlay_present_proven = native_overlay_present_ok_hits > 0 and native_overlay_present_fail_hits == 0
+    native_overlay_window_live = native_overlay_child_is_window == 1 and native_overlay_child_is_visible == 1
     native_overlay_covered_loading = (
         native_overlay_visible_during_loading and native_overlay_full_content_proven and native_overlay_bar_pixels_proven
     )
@@ -141,6 +159,8 @@ def build_verdict(
         and native_overlay_child_attached
         and native_overlay_proven
         and native_overlay_zorder_proven
+        and native_overlay_present_proven
+        and native_overlay_window_live
         and (
             not require_world_ready
             or (
@@ -168,6 +188,10 @@ def build_verdict(
         "oracle_native_overlay_bar_pixel_missing_frames": native_overlay_bar_pixel_missing_frames,
         "oracle_native_overlay_bar_pixel_last_count": native_overlay_bar_pixel_last_count,
         "oracle_native_overlay_zorder_lift_hits": native_overlay_zorder_lift_hits,
+        "oracle_native_overlay_present_ok_hits": native_overlay_present_ok_hits,
+        "oracle_native_overlay_present_fail_hits": native_overlay_present_fail_hits,
+        "oracle_native_overlay_child_is_window": native_overlay_child_is_window,
+        "oracle_native_overlay_child_is_visible": native_overlay_child_is_visible,
         "oracle_native_overlay_child_window": native_overlay_child_window,
         "oracle_native_overlay_child_parent_match": native_overlay_child_parent_match,
         "oracle_native_overlay_child_client_match": native_overlay_child_client_match,
@@ -184,6 +208,8 @@ def build_verdict(
         "native_overlay_full_content_proven": native_overlay_full_content_proven,
         "native_overlay_bar_pixels_proven": native_overlay_bar_pixels_proven,
         "native_overlay_zorder_proven": native_overlay_zorder_proven,
+        "native_overlay_present_proven": native_overlay_present_proven,
+        "native_overlay_window_live": native_overlay_window_live,
         "native_overlay_covered_loading": native_overlay_covered_loading,
         "native_overlay_hidden_at_world_ready": native_overlay_hidden_at_world_ready,
         "scaleform_memoryfile_custom_asset_observed": scaleform_memoryfile_custom_asset_observed,

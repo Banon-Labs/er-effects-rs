@@ -1772,6 +1772,15 @@ def telemetry_render_semantic_ready(telemetry: dict[str, Any]) -> bool:
     )
 
 
+def telemetry_windows_proof_overlay_released(telemetry: dict[str, Any]) -> bool:
+    if as_int(telemetry.get("oracle_windows_proof_mode"), 0) != 1:
+        return True
+    return bool(
+        as_int(telemetry.get("oracle_native_overlay_show"), -1) == 0
+        and as_int(telemetry.get("oracle_native_overlay_handoff_ready_hits"), 0) > 0
+    )
+
+
 def telemetry_world_loaded(
     telemetry: dict[str, Any] | None,
     expected_save_oracle: dict[str, Any] | None = None,
@@ -1795,6 +1804,7 @@ def telemetry_world_loaded(
         and real_character_loaded
         and telemetry_expected_save_match(telemetry, expected_save_oracle)
         and telemetry_expected_animation_match(telemetry, expected_animation_id)
+        and telemetry_windows_proof_overlay_released(telemetry)
         and (canonical_world_clear or semantic_world_clear)
     )
 
@@ -2781,14 +2791,18 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
                     )
                 )
         if args.target == TARGET_WORLD_STABLE:
-            if (
-                not appear_animation_seen
-                and telemetry is not None
-                and telemetry_expected_animation_match(telemetry, args.expected_animation_id)
-            ):
-                appear_animation_seen = True
-            # Once the appear animation has been confirmed once, drop it from the per-poll world-loaded
-            # gate so the dwell measures sustained in-world stability, not the transient spawn animation.
+            if not appear_animation_seen and telemetry is not None:
+                if telemetry_expected_animation_match(telemetry, args.expected_animation_id):
+                    appear_animation_seen = True
+                elif telemetry_world_loaded(telemetry, expected_save_oracle, None):
+                    # The spawn/appear animation is a transient edge and can be missed by the watcher
+                    # while every non-transient RAM/render world-ready oracle is already true. Do not
+                    # wait until timeout to apply that fallback; otherwise the probe can sit in a ready
+                    # world long enough for unrelated in-world UI to contaminate the run.
+                    appear_animation_seen = True
+            # Once the appear animation has been confirmed once -- or the non-transient world-ready
+            # fallback has proven the same playable state -- drop it from the per-poll world-loaded
+            # gate so the dwell measures sustained in-world stability, not a one-frame animation.
             effective_expected_animation_id = None if appear_animation_seen else args.expected_animation_id
             if process_running and telemetry_world_loaded(telemetry, expected_save_oracle, effective_expected_animation_id):
                 # The world-loaded semaphore is reached HERE (first true), so this is the headline

@@ -41,6 +41,10 @@ def good_telemetry() -> dict[str, Any]:
         "oracle_native_overlay_bar_pixel_missing_frames": 0,
         "oracle_native_overlay_bar_pixel_last_count": 1024,
         "oracle_native_overlay_zorder_lift_hits": 2,
+        "oracle_native_overlay_present_ok_hits": 2,
+        "oracle_native_overlay_present_fail_hits": 0,
+        "oracle_native_overlay_child_is_window": 1,
+        "oracle_native_overlay_child_is_visible": 1,
         "oracle_native_overlay_child_window": 1,
         "oracle_native_overlay_child_parent_match": 1,
         "oracle_native_overlay_child_client_match": 1,
@@ -86,6 +90,8 @@ def test_require_world_ready_accepts_full_positive_contract() -> None:
     assert got["native_overlay_full_content_proven"] is True
     assert got["native_overlay_bar_pixels_proven"] is True
     assert got["native_overlay_zorder_proven"] is True
+    assert got["native_overlay_present_proven"] is True
+    assert got["native_overlay_window_live"] is True
     assert got["native_overlay_covered_loading"] is True
     assert got["native_overlay_hidden_at_world_ready"] is True
     assert got["scaleform_memoryfile_custom_asset_observed"] is False
@@ -145,6 +151,26 @@ def test_rejects_missing_full_content_proof() -> None:
 
 def test_rejects_missing_zorder_lift() -> None:
     assert_rejects_missing("oracle_native_overlay_zorder_lift_hits")
+
+
+def test_rejects_missing_present_success() -> None:
+    assert_rejects_missing("oracle_native_overlay_present_ok_hits")
+
+
+def test_rejects_failed_present() -> None:
+    telemetry = good_telemetry()
+    telemetry["oracle_native_overlay_present_fail_hits"] = 1
+    got = verdict(telemetry)
+    assert got["native_overlay_present_proven"] is False
+    assert not got["windows_proof_render_runtime"]
+
+
+def test_rejects_dead_child_window() -> None:
+    assert_rejects_missing("oracle_native_overlay_child_is_window")
+
+
+def test_rejects_hidden_child_window() -> None:
+    assert_rejects_missing("oracle_native_overlay_child_is_visible")
 
 
 def test_rejects_missing_bar_pixels() -> None:
@@ -235,6 +261,10 @@ def main() -> int:
         test_rejects_missing_loading_visibility,
         test_rejects_missing_full_content_proof,
         test_rejects_missing_zorder_lift,
+        test_rejects_missing_present_success,
+        test_rejects_failed_present,
+        test_rejects_dead_child_window,
+        test_rejects_hidden_child_window,
         test_rejects_missing_bar_pixels,
         test_rejects_any_bar_pixel_missing_frame,
         test_rejects_bridge_still_visible_at_world_ready,

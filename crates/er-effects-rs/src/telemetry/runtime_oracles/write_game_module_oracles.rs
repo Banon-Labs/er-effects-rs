@@ -1678,6 +1678,36 @@ fn write_game_module_oracles(body: &mut String) {
         );
         push_json_usize(
             body,
+            "oracle_native_overlay_present_ok_hits",
+            NATIVE_OVERLAY_PRESENT_OK_HITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_present_fail_hits",
+            NATIVE_OVERLAY_PRESENT_FAIL_HITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_present_last_hresult",
+            NATIVE_OVERLAY_PRESENT_LAST_HRESULT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_parent_is_window",
+            NATIVE_OVERLAY_PARENT_IS_WINDOW.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_child_is_window",
+            NATIVE_OVERLAY_CHILD_IS_WINDOW.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_child_is_visible",
+            NATIVE_OVERLAY_CHILD_IS_VISIBLE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
             "oracle_native_overlay_parent_hwnd",
             NATIVE_OVERLAY_PARENT_HWND.load(Ordering::SeqCst),
         );
@@ -1710,6 +1740,26 @@ fn write_game_module_oracles(body: &mut String) {
             body,
             "oracle_native_overlay_child_resize_hits",
             NATIVE_OVERLAY_CHILD_RESIZE_HITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_parent_window_w",
+            NATIVE_OVERLAY_PARENT_WINDOW_W.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_parent_window_h",
+            NATIVE_OVERLAY_PARENT_WINDOW_H.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_child_window_w",
+            NATIVE_OVERLAY_CHILD_WINDOW_W.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_child_window_h",
+            NATIVE_OVERLAY_CHILD_WINDOW_H.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,

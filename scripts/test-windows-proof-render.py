@@ -111,6 +111,10 @@ def test_native_overlay_child_covers_parent_without_visible_resize() -> None:
     assert "fn bridge_progress_pixel_count" in native_overlay
     assert "fn bridge_progress_fill_probe" in native_overlay
     assert "fn keep_child_on_top" in native_overlay
+    assert "fn record_window_lifecycle_oracle" in native_overlay
+    assert "IsWindow(Some(child))" in native_overlay
+    assert "IsWindowVisible(child)" in native_overlay
+    assert "NATIVE_OVERLAY_PRESENT_OK_HITS" in native_overlay
     assert "SetWindowPos" in native_overlay
     assert "SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW" in native_overlay
     assert "record_bridge_pixel_copy(&list, bb, readback, *footprint, probe_x, probe_y)" in native_overlay
@@ -139,6 +143,10 @@ def test_native_overlay_child_covers_parent_without_visible_resize() -> None:
     assert "oracle_native_overlay_bar_pixel_frames" in telemetry
     assert "oracle_native_overlay_bar_pixel_missing_frames" in telemetry
     assert "oracle_native_overlay_zorder_lift_hits" in telemetry
+    assert "oracle_native_overlay_present_ok_hits" in telemetry
+    assert "oracle_native_overlay_present_fail_hits" in telemetry
+    assert "oracle_native_overlay_child_is_window" in telemetry
+    assert "oracle_native_overlay_child_is_visible" in telemetry
 
 
 def test_native_overlay_release_uses_semantic_render_ready() -> None:
