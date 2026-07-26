@@ -11,7 +11,7 @@
       "env": {
         "GHIDRA_JP_DICT": "/home/banon/projects/er-effects-rs/scripts/ghidra/jp-en-dict.json"
       },
-      "directTools": true
+      "directTools": false
     }
   }
 }
