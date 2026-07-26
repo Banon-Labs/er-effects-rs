@@ -1866,6 +1866,16 @@ fn write_game_module_oracles(body: &mut String) {
         );
         push_json_usize(
             body,
+            "oracle_boot_view_label_hash",
+            BOOT_VIEW_LAST_LABEL_HASH.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_label_ord",
+            BOOT_VIEW_MONO_ORD.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
             "oracle_boot_view_own_menu_load_active",
             BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst),
         );

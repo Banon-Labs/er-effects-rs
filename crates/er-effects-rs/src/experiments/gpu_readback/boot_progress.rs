@@ -45,6 +45,12 @@ pub(crate) static BOOT_VIEW_LAST_PERMILLE: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static BOOT_VIEW_REACHED_MASK: AtomicUsize = AtomicUsize::new(0);
 /// Highest reached milestone index (drives the label).
 pub(crate) static BOOT_VIEW_MILESTONE_IDX: AtomicUsize = AtomicUsize::new(0);
+/// Hash of the last displayed phase/subphase label.
+pub(crate) static BOOT_VIEW_LAST_LABEL_HASH: AtomicUsize = AtomicUsize::new(0);
+/// Current load epoch for monotonic phase/subphase label numbering.
+pub(crate) static BOOT_VIEW_MONO_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Last displayed label ordinal (`phase * scale + substep`) in the current epoch.
+pub(crate) static BOOT_VIEW_MONO_ORD: AtomicUsize = AtomicUsize::new(0);
 
 // Our OWN persistent command objects (leaked raw pointers, same pattern as the portrait overlay --
 // windows-rs COM types are !Send). Deliberately SEPARATE from the OVERLAY_* objects so the boot view
@@ -107,43 +113,43 @@ const BOOT_BG_MAX_DIM: usize = 4096;
 const BOOT_BG_MAX_PIXELS: usize = BOOT_BG_MAX_DIM * BOOT_BG_MAX_DIM;
 
 /// Milestone labels (5x7 font glyph coverage: A-Z subset + digits + '%'; see `boot_glyph_5x7`).
-const BOOT_VIEW_MILESTONE_LABELS: [&str; 7] = [
-    "BOOT", "GAME", "OFFLINE", "TITLE", "MENU", "CONTINUE", "LOADING",
+/// Split the old coarse `LOADING` tail into phase-relevant world-load labels so the visible text
+/// matches the RAM/native semaphore currently advancing.
+const BOOT_VIEW_MILESTONE_COUNT: usize = 12;
+const BOOT_VIEW_MILESTONE_LABELS: [&str; BOOT_VIEW_MILESTONE_COUNT] = [
+    "BOOT",
+    "GAME",
+    "RESOURCES",
+    "MENU FILES",
+    "UI FILES",
+    "TITLE MENU",
+    "PREPARING SAVE",
+    "LOADING SAVE",
+    "BUILDING WORLD",
+    "STREAMING WORLD",
+    "FINALIZING WORLD",
+    "ENTERING WORLD",
 ];
-/// Progress targets per milestone, in permille. Spacing follows the measured product-run timeline
-/// (first present +3.5s, offline +8.5s, title/menu ~+10s, continue ~+15s, table builds ~+15.5s) so
-/// the bar's pace roughly matches wall-clock without ever depending on it. The final pre-loading-view
-/// milestone deliberately stops at the native-handoff marker instead of 100%: the remaining gap is owned
-/// by the game's real now-loading Gauge_3 bar, whose terminal frame is the true all-loading-complete
-/// semaphore.
+/// Progress target per phase, in permille. The two long stretches -- title/resource load and world
+/// stream -- get wider spans. The world tail is also driven by the game's real Gauge_3 progress.
+const BOOT_VIEW_MILESTONE_PERMILLE: [usize; BOOT_VIEW_MILESTONE_COUNT] =
+    [30, 80, 150, 220, 290, 360, 440, 520, 610, 730, 860, 950];
+/// Monotonic display clamp for the `(phase idx, substep)` label numbers. Ordinal = idx*scale + sub.
+const BOOT_VIEW_MONO_ORD_SCALE: usize = 1000;
+/// Asymptotic creep time-constant: keeps the bar visibly inching during long phases without
+/// reaching the next semantic milestone before its RAM/native semaphore asserts.
+const BOOT_VIEW_CREEP_K_MS: u64 = 2600;
 // SAVE CHECK sits at the fill edge where the bar actually PAUSES while the missing-save overlay
-// picker is up. The native title menu-open is now HELD until the pick (title_open_menu_suppress_hook),
-// so the MENU milestone (490) cannot latch while the picker is pending -- the bar stalls at the TITLE
-// milestone (385) and its inter-milestone creep tops out at 385 + 7/10*(490-385) = 458. The clamp in
-// `boot_view_progress` pins the fill edge exactly here while the pick is pending; it lifts the frame the
-// pick clears the latch, so the bar resumes MENU -> CONTINUE -> SAVE LOAD / NATIVE. (Was 570, which
-// matched the OLD flow where the menu opened before the pick and the bar paused at the MENU milestone.)
-const BOOT_VIEW_SAVE_CHECK_PERMILLE: usize = 458;
+// picker is up. The clamp in `boot_view_progress` pins the fill edge here while the pick is pending;
+// it lifts the frame the pick clears the latch, so the bar resumes toward LOADING SAVE / world phases.
+const BOOT_VIEW_SAVE_CHECK_PERMILLE: usize = 470;
 const BOOT_VIEW_SAVE_CHECK_LABEL: &str = "SAVE CHECK";
-const BOOT_VIEW_SAVE_LOAD_PERMILLE: usize = 615;
+const BOOT_VIEW_SAVE_LOAD_PERMILLE: usize = 520;
 const BOOT_VIEW_SAVE_LOAD_LABEL: &str = "SAVE LOAD";
-const BOOT_VIEW_NATIVE_HANDOFF_PERMILLE: usize = 700;
-const BOOT_VIEW_NATIVE_HANDOFF_LABEL: &str = "NATIVE";
+const BOOT_VIEW_NATIVE_HANDOFF_PERMILLE: usize = 610;
+const BOOT_VIEW_NATIVE_HANDOFF_LABEL: &str = "WORLD";
 const BOOT_VIEW_HANDOFF_MARKER_W: usize = 3;
 const BOOT_VIEW_HANDOFF_GAP_W: usize = 9;
-const BOOT_VIEW_MILESTONE_PERMILLE: [usize; 7] = [
-    45,
-    140,
-    245,
-    385,
-    490,
-    615,
-    BOOT_VIEW_NATIVE_HANDOFF_PERMILLE,
-];
-/// Inter-milestone creep: over this window the bar moves up to 7/10 of the gap to the next target.
-const BOOT_VIEW_CREEP_FULL_MS: u64 = 6000;
-const BOOT_VIEW_CREEP_NUM: usize = 7;
-const BOOT_VIEW_CREEP_DEN: usize = 10;
 /// Seamless handoff (user 2026-07-06, replacing the earlier fade-out design): at the loading
 /// handoff the cover HOLDS fully lit over the game's black gap and the loading screen's own
 /// fade-in-from-black, then stops in a single cut once the native loading screen is fully lit --
@@ -209,49 +215,67 @@ fn boot_milestone_reached(idx: usize) -> bool {
     if BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0 {
         let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
         return match idx {
-            // Drawing at all proves the present hook + game swapchain are live.
             0 => true,
             1 => game_man_ptr_or_null() != 0,
-            // Offline bytes are already cleared by the first boot in the same process.
             2 => FORCE_OFFLINE_BYTES_CLEARED.load(Ordering::SeqCst) != 0,
-            // Own-menu switch phases replace stale first-boot title/menu latches.
-            3 => phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED,
-            4 => phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN,
-            5 => phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
-                || SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
-                || TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0,
-            6 => {
-                PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst)
-                    > BOOT_VIEW_LOADSCREEN_TABLE_BASELINE.load(Ordering::SeqCst)
+            3 => TITLE_MENU_RESOURCE_ACQUIRE_HITS.load(Ordering::SeqCst) != 0
+                || phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED,
+            4 => TITLE_SCALEFORM_FILE_OPEN_HITS.load(Ordering::SeqCst) != 0,
+            5 => phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN,
+            6 => phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
+                || PRODUCT_CORE_LAST_MENU_OPENED_LATCH.load(Ordering::SeqCst) != 0,
+            7 => {
+                SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
+                    || TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0
+                    || LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) != 0
+                    || PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst)
+                        > BOOT_VIEW_LOADSCREEN_TABLE_BASELINE.load(Ordering::SeqCst)
             }
+            8 | 9 | 10 | 11 => boot_world_phase_reached(idx),
             _ => false,
         };
     }
     match idx {
-        // Drawing at all proves the present hook + game swapchain are live.
         0 => true,
         1 => game_man_ptr_or_null() != 0,
         2 => FORCE_OFFLINE_BYTES_CLEARED.load(Ordering::SeqCst) != 0,
-        3 => TITLE_FADEIN_SKIP_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS,
-        // Menu-open era: the own-stepper latch when that task runs, OR'd with the network-check
-        // shortcircuit which fires ~10ms after the title-accept-byte natural menu-open on the
-        // product path (runtime-proven 2026-07-05: latch stayed 0, shortcircuit fired at +12.8s).
-        4 => {
+        3 => TITLE_MENU_RESOURCE_ACQUIRE_HITS.load(Ordering::SeqCst) != 0,
+        4 => TITLE_SCALEFORM_FILE_OPEN_HITS.load(Ordering::SeqCst) != 0,
+        5 => {
+            TITLE_FADEIN_SKIP_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS
+                || PRODUCT_CORE_LAST_MENU_OPENED_LATCH.load(Ordering::SeqCst) != 0
+                || NETWORK_CHECK_SHORTCIRCUIT_COUNT.load(Ordering::SeqCst) != 0
+        }
+        6 => {
             PRODUCT_CORE_LAST_MENU_OPENED_LATCH.load(Ordering::SeqCst) != 0
                 || NETWORK_CHECK_SHORTCIRCUIT_COUNT.load(Ordering::SeqCst) != 0
         }
-        // Continue committed: the confirm/TFC counters on their paths, OR'd with the portrait
-        // teardown-SPARE which lands in the same millisecond as the Continue SetState5 on the
-        // portrait-lookat product path (runtime-proven 2026-07-05: counters stayed 0, spare fired).
-        5 => {
+        7 => {
             SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
                 || TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0
                 || LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) != 0
+                || PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst)
+                    > BOOT_VIEW_LOADSCREEN_TABLE_BASELINE.load(Ordering::SeqCst)
         }
-        6 => {
-            PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst)
-                > BOOT_VIEW_LOADSCREEN_TABLE_BASELINE.load(Ordering::SeqCst)
-        }
+        8 | 9 | 10 | 11 => boot_world_phase_reached(idx),
+        _ => false,
+    }
+}
+
+fn boot_world_phase_reached(idx: usize) -> bool {
+    let update_hits = LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst);
+    let progress = LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst);
+    let close_hits = LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst)
+        + LOADING_SCREEN_CLOSE_SENT.load(Ordering::SeqCst);
+    match idx {
+        // BUILDING WORLD: the native loading screen has appeared -> the world build has begun.
+        8 => update_hits != 0,
+        // STREAMING WORLD: the native world-load gauge is actively streaming.
+        9 => progress > 0,
+        // FINALIZING WORLD: split the long stream after the midpoint.
+        10 => progress >= 500,
+        // ENTERING WORLD: gauge near-complete or the loading screen is closing.
+        11 => progress >= 900 || close_hits != 0,
         _ => false,
     }
 }
@@ -277,6 +301,9 @@ pub(crate) fn rearm_boot_progress_for_own_menu_load(selected_slot: i32, source: 
     BOOT_VIEW_STOP_NATIVE_HITS.store(0, Ordering::SeqCst);
     BOOT_VIEW_REACHED_MASK.store(1, Ordering::SeqCst);
     BOOT_VIEW_MILESTONE_IDX.store(0, Ordering::SeqCst);
+    BOOT_VIEW_LAST_LABEL_HASH.store(0, Ordering::SeqCst);
+    BOOT_VIEW_MONO_EPOCH.store(slot_key, Ordering::SeqCst);
+    BOOT_VIEW_MONO_ORD.store(0, Ordering::SeqCst);
     BOOT_VIEW_LAST_PERMILLE.store(0, Ordering::SeqCst);
     BOOT_VIEW_DRAWN_PERMILLE.store(usize::MAX, Ordering::SeqCst);
     BOOT_VIEW_DRAWN_IDX.store(usize::MAX, Ordering::SeqCst);
@@ -312,22 +339,204 @@ fn boot_view_progress() -> (usize, usize) {
         base
     };
     let since = now_ms.saturating_sub(BOOT_VIEW_IDX_CHANGED_MS.load(Ordering::SeqCst));
-    let creep = (next.saturating_sub(base) * (since.min(BOOT_VIEW_CREEP_FULL_MS) as usize)
-        * BOOT_VIEW_CREEP_NUM)
-        / (BOOT_VIEW_CREEP_FULL_MS as usize * BOOT_VIEW_CREEP_DEN);
+    // Asymptotic creep toward (never reaching) the next milestone, so a long phase keeps inching
+    // without fabricating the next semantic checkpoint.
+    let gap = next.saturating_sub(base) as u64;
+    let creep = (gap * since / (since + BOOT_VIEW_CREEP_K_MS)) as usize;
     let pm = (base + creep).min(1000);
-    // While the overlay picker holds the boot, clamp the fill so its edge stops EXACTLY at the
-    // SAVE CHECK tick (the MENU milestone + creep would otherwise creep ~7 permille past it, leaving
-    // the tick sitting behind the fill edge). The clamp lifts the frame the pick clears the latch,
-    // so the bar resumes past SAVE CHECK toward SAVE LOAD / NATIVE.
+    // While the overlay picker holds the boot, clamp the fill so it PAUSES at the PREPARING SAVE edge.
     let pm = if missing_save_selection_pending() {
         pm.min(BOOT_VIEW_SAVE_CHECK_PERMILLE)
+    } else {
+        pm
+    };
+    // WORLD-LOAD tail: from BUILDING WORLD onward (idx >= 8), drive the fill from the game's real
+    // Gauge_3 progress mapped onto [BUILDING WORLD permille .. 100%]. This is a native/RAM oracle,
+    // not a screenshot guess.
+    let pm = if idx >= 8 {
+        let floor = BOOT_VIEW_MILESTONE_PERMILLE[8];
+        let native = LOADING_SCREEN_BAR_PROGRESS_PERMILLE
+            .load(Ordering::SeqCst)
+            .min(1000);
+        pm.max(floor + native * (1000 - floor) / 1000)
     } else {
         pm
     };
     // Monotonic display: an idx re-latch or timer wobble must never walk the bar backwards.
     let shown = BOOT_VIEW_LAST_PERMILLE.fetch_max(pm, Ordering::SeqCst).max(pm);
     (idx, shown)
+}
+
+fn boot_view_label_hash(text: &str) -> usize {
+    let mut h = 14_695_981_039_346_656_037usize;
+    for b in text.bytes() {
+        h ^= b as usize;
+        h = h.wrapping_mul(1_099_511_628_211usize);
+    }
+    h
+}
+
+fn boot_view_single_submilestone(label: &'static str) -> (&'static str, usize, usize) {
+    (label, 1, 1)
+}
+
+fn boot_view_counter_submilestone(
+    label: &'static str,
+    current: usize,
+    max: usize,
+    fallback: &'static str,
+) -> (&'static str, usize, usize) {
+    if current == 0 || max == 0 {
+        boot_view_single_submilestone(fallback)
+    } else {
+        (label, current.min(max), max)
+    }
+}
+
+fn boot_view_first_pending_substep(
+    substeps: &[(bool, &'static str)],
+) -> (&'static str, usize, usize) {
+    let total = substeps.len().max(1);
+    for (idx, (ok, label)) in substeps.iter().enumerate() {
+        if !*ok {
+            return (*label, idx + 1, total);
+        }
+    }
+    ("COMPLETE", total, total)
+}
+
+fn boot_view_world_gauge_submilestone(fallback: &'static str) -> (&'static str, usize, usize) {
+    let current = LOADING_SCREEN_BAR_CURRENT_FRAME.load(Ordering::SeqCst);
+    let max = LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst);
+    if LOADING_SCREEN_BAR_ENABLED.load(Ordering::SeqCst) != 0 && max != 0 {
+        ("WORLD LOADING", current.min(max), max)
+    } else {
+        boot_view_single_submilestone(fallback)
+    }
+}
+
+fn boot_view_load_save_submilestone() -> (&'static str, usize, usize) {
+    let table_seen = PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst)
+        > BOOT_VIEW_LOADSCREEN_TABLE_BASELINE.load(Ordering::SeqCst);
+    boot_view_first_pending_substep(&[
+        (
+            PRODUCT_CORE_LAST_MENU_OPENED_LATCH.load(Ordering::SeqCst) != 0
+                || NETWORK_CHECK_SHORTCIRCUIT_COUNT.load(Ordering::SeqCst) != 0,
+            "MENU READY",
+        ),
+        (
+            SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
+                || TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0
+                || LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) != 0,
+            "LOAD CONFIRMED",
+        ),
+        (table_seen, "SCREEN DATA READY"),
+    ])
+}
+
+fn boot_view_entering_world_submilestone() -> (&'static str, usize, usize) {
+    let bar_terminal = LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst) >= 998
+        || (LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst) != 0
+            && LOADING_SCREEN_BAR_CURRENT_FRAME.load(Ordering::SeqCst)
+                >= LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst));
+    let loading_close_sent = LOADING_SCREEN_CLOSE_SENT.load(Ordering::SeqCst) != 0
+        || LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst) != 0;
+    boot_view_first_pending_substep(&[
+        (bar_terminal, "LOAD BAR FULL"),
+        (loading_close_sent, "CLOSING SCREEN"),
+    ])
+}
+
+fn boot_view_phase_submilestone(idx: usize) -> (&'static str, usize, usize) {
+    match idx.min(BOOT_VIEW_MILESTONE_LABELS.len() - 1) {
+        0 => boot_view_single_submilestone("DISPLAY PATH"),
+        1 => boot_view_first_pending_substep(&[
+            (game_man_ptr_or_null() != 0, "GAME MAN"),
+            (
+                FORCE_OFFLINE_BYTES_CLEARED.load(Ordering::SeqCst) != 0,
+                "OFFLINE BYTES",
+            ),
+        ]),
+        2 => boot_view_counter_submilestone(
+            "MENU FILES",
+            TITLE_MENU_RESOURCE_ACQUIRE_HITS.load(Ordering::SeqCst),
+            38,
+            "MENU FILES",
+        ),
+        3 => boot_view_counter_submilestone(
+            "UI FILES",
+            TITLE_SCALEFORM_FILE_OPEN_HITS.load(Ordering::SeqCst),
+            113,
+            "UI FILES",
+        ),
+        4 => boot_view_counter_submilestone(
+            "UI BUILD",
+            TITLE_SCALEFORM_RESOURCE_CTOR_HITS.load(Ordering::SeqCst),
+            112,
+            "UI BUILD",
+        ),
+        5 => boot_view_first_pending_substep(&[
+            (
+                TITLE_FADEIN_SKIP_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS,
+                "TITLE UP",
+            ),
+            (
+                PRODUCT_CORE_LAST_MENU_OPENED_LATCH.load(Ordering::SeqCst) != 0
+                    || NETWORK_CHECK_SHORTCIRCUIT_COUNT.load(Ordering::SeqCst) != 0,
+                "MENU OPEN",
+            ),
+        ]),
+        6 => boot_view_first_pending_substep(&[
+            (
+                PRODUCT_CORE_LAST_MENU_OPENED_LATCH.load(Ordering::SeqCst) != 0,
+                "MENU OPEN",
+            ),
+            (
+                NETWORK_CHECK_SHORTCIRCUIT_COUNT.load(Ordering::SeqCst) != 0,
+                "NETWORK CHECK",
+            ),
+        ]),
+        7 => boot_view_load_save_submilestone(),
+        8 => boot_view_world_gauge_submilestone("LOAD SCREEN"),
+        9 | 10 => boot_view_world_gauge_submilestone("WORLD LOADING"),
+        11 => boot_view_entering_world_submilestone(),
+        i => boot_view_single_submilestone(BOOT_VIEW_MILESTONE_LABELS[i]),
+    }
+}
+
+fn boot_view_label_text(idx: usize) -> String {
+    let phase_idx = idx.min(BOOT_VIEW_MILESTONE_LABELS.len() - 1);
+    let (mut sub_label, mut sub_cur, mut sub_total) = boot_view_phase_submilestone(phase_idx);
+    sub_total = sub_total.max(1);
+    sub_cur = sub_cur.clamp(1, sub_total);
+
+    let epoch = BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst).max(1);
+    if BOOT_VIEW_MONO_EPOCH.swap(epoch, Ordering::SeqCst) != epoch {
+        BOOT_VIEW_MONO_ORD.store(0, Ordering::SeqCst);
+    }
+    let ord = phase_idx * BOOT_VIEW_MONO_ORD_SCALE + sub_cur;
+    let prev = BOOT_VIEW_MONO_ORD.fetch_max(ord, Ordering::SeqCst).max(ord);
+    if prev > ord {
+        let held_phase = (prev / BOOT_VIEW_MONO_ORD_SCALE).min(BOOT_VIEW_MILESTONE_LABELS.len() - 1);
+        if held_phase == phase_idx {
+            sub_cur = (prev % BOOT_VIEW_MONO_ORD_SCALE).clamp(1, sub_total);
+        } else {
+            sub_label = "COMPLETE";
+            sub_cur = sub_total;
+        }
+    }
+
+    let text = format!(
+        "{} {}/{} ({} {}/{})",
+        BOOT_VIEW_MILESTONE_LABELS[phase_idx],
+        phase_idx + 1,
+        BOOT_VIEW_MILESTONE_COUNT,
+        sub_label,
+        sub_cur,
+        sub_total
+    );
+    BOOT_VIEW_LAST_LABEL_HASH.store(boot_view_label_hash(&text), Ordering::SeqCst);
+    text
 }
 
 /// 5x7 glyphs for the milestone labels + percent readout. Each row byte uses bit 4 as the LEFTMOST
@@ -820,7 +1029,8 @@ fn boot_view_rasterize(
     } else {
         boot_fill_rect(&mut buf, w, h, 0, 0, w, h, BOOT_VIEW_RGB_BLACK);
     }
-    let label = BOOT_VIEW_MILESTONE_LABELS[idx.min(BOOT_VIEW_MILESTONE_LABELS.len() - 1)];
+    let label = boot_view_label_text(idx);
+    let label = label.as_str();
     let strip_h = boot_view_strip_height(text_scale);
     let bar_y = content_y + BOOT_VIEW_GLYPH_H * text_scale + BOOT_VIEW_TEXT_BAR_GAP;
     if has_bg {
