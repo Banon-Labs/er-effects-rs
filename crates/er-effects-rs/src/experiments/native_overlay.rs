@@ -44,8 +44,8 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetClientRect, GetParent,
-    GetWindowThreadProcessId, IsWindowVisible, MSG, PM_REMOVE, PeekMessageW, RegisterClassW,
-    SW_HIDE, SW_SHOWNOACTIVATE, ShowWindow, TranslateMessage, WNDCLASSW, WS_CHILD,
+    GetWindowThreadProcessId, IsWindowVisible, MSG, MoveWindow, PM_REMOVE, PeekMessageW,
+    RegisterClassW, SW_HIDE, SW_SHOWNOACTIVATE, ShowWindow, TranslateMessage, WNDCLASSW, WS_CHILD,
     WS_EX_NOACTIVATE, WS_VISIBLE,
 };
 use windows::core::{BOOL, Error, HRESULT, Interface, PCSTR, w};
@@ -95,6 +95,8 @@ pub(crate) static NATIVE_OVERLAY_CHILD_PARENT_MATCH: AtomicUsize = AtomicUsize::
 pub(crate) static NATIVE_OVERLAY_CHILD_CLIENT_MATCH: AtomicUsize = AtomicUsize::new(0);
 /// Counts frames where parent/child relation or client-size match failed.
 pub(crate) static NATIVE_OVERLAY_CHILD_GEOMETRY_MISMATCH_HITS: AtomicUsize = AtomicUsize::new(0);
+/// Counts child-window resizes performed to follow game-window client/fullscreen reconfiguration.
+pub(crate) static NATIVE_OVERLAY_CHILD_RESIZE_HITS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static NATIVE_OVERLAY_PARENT_CLIENT_W: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static NATIVE_OVERLAY_PARENT_CLIENT_H: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static NATIVE_OVERLAY_CHILD_CLIENT_W: AtomicUsize = AtomicUsize::new(0);
@@ -189,6 +191,24 @@ fn rect_size(rect: RECT) -> (usize, usize) {
         (rect.right - rect.left).max(0) as usize,
         (rect.bottom - rect.top).max(0) as usize,
     )
+}
+
+fn sync_child_to_parent_client(parent: HWND, child: HWND) {
+    let mut parent_rect = RECT::default();
+    let mut child_rect = RECT::default();
+    if unsafe { GetClientRect(parent, &mut parent_rect) }.is_err()
+        || unsafe { GetClientRect(child, &mut child_rect) }.is_err()
+    {
+        return;
+    }
+    let (parent_w, parent_h) = rect_size(parent_rect);
+    let (child_w, child_h) = rect_size(child_rect);
+    if parent_w == 0 || parent_h == 0 || (parent_w == child_w && parent_h == child_h) {
+        return;
+    }
+    if unsafe { MoveWindow(child, 0, 0, parent_w as i32, parent_h as i32, true) }.is_ok() {
+        NATIVE_OVERLAY_CHILD_RESIZE_HITS.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 fn record_child_geometry_oracle(parent: HWND, child: HWND) {
@@ -873,6 +893,7 @@ unsafe fn native_overlay_run() {
             unsafe { DispatchMessageW(&msg) };
         }
 
+        sync_child_to_parent_client(parent_hwnd, hwnd);
         record_child_geometry_oracle(parent_hwnd, hwnd);
 
         let want_show = NATIVE_OVERLAY_SHOW.load(Ordering::SeqCst) != 0;
