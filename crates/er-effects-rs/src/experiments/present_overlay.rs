@@ -556,6 +556,15 @@ const BOOT_PUMP_EARLY_APPLY_WAIT_MAX_MS: u128 = 8_000;
 /// Self-present cadence (~30 fps -- Present(sync=1) additionally paces on vsync).
 const BOOT_PUMP_FRAME_SLEEP_MS: u64 = 16;
 
+fn set_boot_view_pump_stop_reason(reason: usize) {
+    if BOOT_VIEW_PUMP_STOP_REASON
+        .compare_exchange(0, reason, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        BOOT_VIEW_PUMP_STOP_MS.store(crate::experiments::boot_view_epoch_ms(), Ordering::SeqCst);
+    }
+}
+
 /// Body of the `er-effects-boot-present-pump` thread. See the spawn comment for the contract.
 fn boot_present_pump() {
     // Same gate as the install: the boot view + its swapchain hook are the portrait-path feature. Also
@@ -578,7 +587,7 @@ fn boot_present_pump() {
     loop {
         // The game presenting is the SUCCESS terminal state: the detour path draws from here on.
         if PRESENT_HOOK_HITS.load(Ordering::SeqCst) > 0 {
-            BOOT_VIEW_PUMP_STOP_REASON.store(1, Ordering::SeqCst);
+            set_boot_view_pump_stop_reason(1);
             append_autoload_debug(format_args!(
                 "boot-pump: game presenting -- handed over after {} self-presents",
                 BOOT_VIEW_SELF_PRESENTS.load(Ordering::SeqCst)
@@ -586,7 +595,7 @@ fn boot_present_pump() {
             return;
         }
         if start.elapsed().as_millis() > BOOT_PUMP_MAX_MS {
-            BOOT_VIEW_PUMP_STOP_REASON.store(2, Ordering::SeqCst);
+            set_boot_view_pump_stop_reason(2);
             append_autoload_debug(format_args!(
                 "boot-pump: budget exhausted with no game present -- stopping (self_presents={})",
                 BOOT_VIEW_SELF_PRESENTS.load(Ordering::SeqCst)
@@ -616,7 +625,7 @@ fn boot_present_pump() {
             let self_present_safe =
                 running_under_wine() && PRESENT_ACCEPT_PATH.load(Ordering::SeqCst) != 2;
             if !self_present_safe {
-                BOOT_VIEW_PUMP_STOP_REASON.store(4, Ordering::SeqCst);
+                set_boot_view_pump_stop_reason(4);
                 append_autoload_debug(format_args!(
                     "boot-pump: swapchain hooked at pump+{found_ms}ms -- native/wrapped (wine={}, accept_path={}); handing off to the Present detour without self-presenting",
                     running_under_wine(),
@@ -654,7 +663,7 @@ fn boot_present_pump() {
             let f: PresentFn = unsafe { std::mem::transmute(orig) };
             let hr = unsafe { f(sc as *mut c_void, 1, 0) };
             if hr < 0 {
-                BOOT_VIEW_PUMP_STOP_REASON.store(3, Ordering::SeqCst);
+                set_boot_view_pump_stop_reason(3);
                 append_autoload_debug(format_args!(
                     "boot-pump: Present failed hr=0x{hr:x} -- stopping (self_presents={})",
                     BOOT_VIEW_SELF_PRESENTS.load(Ordering::SeqCst)

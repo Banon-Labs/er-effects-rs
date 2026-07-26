@@ -32,14 +32,18 @@ HARNESS_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_input_harness_d
 # oracle_tick_ms, so a product load2/load3 run can be tested for single-core contention (bd NEXT-telemetry
 # -capture-per-core-cpu). Shipped alongside the product per the goal (product + semaphore/oracle DLLs).
 TELEM_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_telemetry_dll.dll"
+LAUNCH_ENV_VARS=()
 # RENDERDOC=1: the Windows RenderDoc DLL, loaded as a me3 native to hook ER's D3D12 device.
 RDOC_DLL="${RENDERDOC_DLL:-/mnt/c/Program Files/RenderDoc/renderdoc.dll}"
-CAP_SECONDS="$(cat "$REPO_ROOT/.auto/runtime_timeout_cap_seconds" 2>/dev/null || echo 180)"
+CAP_SECONDS="${CAP_SECONDS:-$(cat "$REPO_ROOT/.auto/runtime_timeout_cap_seconds" 2>/dev/null || echo 180)}"
+DRIVE_RELOAD_SLOTS="${DRIVE_RELOAD_SLOTS-0,0}"
 
 fail() {
 	echo "run-samechar-3x-threedll: $*" >&2
 	exit 2
 }
+
+ME3_STEAM_DIR="${ME3_STEAM_DIR:-$HOME/.local/share/Steam}"
 
 # --- GAME_DIR resolution (current-user-aware; never hard-code /home/<user>) ---
 if [[ -z "${GAME_DIR:-}" ]]; then
@@ -72,6 +76,18 @@ ME3="${ME3:-/mnt/c/Users/$USER/AppData/Local/garyttierney/me3/bin/me3.exe}"
 
 mkdir -p "$ARTIFACT_DIR"
 win_path() { python3 -c "import sys;p=sys.argv[1];print((p[5].upper()+':\\\\'+p[7:].replace('/','\\\\')) if p.startswith('/mnt/') and len(p)>6 and p[6]=='/' else p)" "$1"; }
+me3_path_arg() {
+	case "$ME3" in
+		*.exe) win_path "$1" ;;
+		*) printf '%s\n' "$1" ;;
+	esac
+}
+me3_profile_arg() {
+	case "$ME3" in
+		*.exe) wslpath -w "$1" ;;
+		*) printf '%s\n' "$1" ;;
+	esac
+}
 
 # --- stage ALL THREE DLLs to GAME_DIR + a THREE-native me3 profile (product FIRST) ---
 PRODUCT_GAMEDIR="$GAME_DIR/er_effects_rs.dll"
@@ -85,7 +101,12 @@ cp -f "$TELEM_DLL" "$TELEM_GAMEDIR"
 rm -f "$GAME_DIR/er-telemetry-timeseries.jsonl" # fresh per-run core/fps timeseries
 # COMPANION: the harness auto-detects the product DLL is loaded and stands down (passive) on its own -- a
 # real runtime condition, not a marker file. Clear any stale standalone-run mode flag so nothing leaks in.
-rm -f "$GAME_DIR/er-harness-drive-mode.txt"
+rm -f "$GAME_DIR/er-harness-drive-mode.txt" "$GAME_DIR/er-harness-force-drive.txt"
+if [[ -z "$DRIVE_RELOAD_SLOTS" || "${FORCE_HARNESS_DRIVE:-0}" == "1" ]]; then
+	printf '%s\n' "${HARNESS_DRIVE_MODE:-full}" >"$GAME_DIR/er-harness-drive-mode.txt"
+	printf '1\n' >"$GAME_DIR/er-harness-force-drive.txt"
+	LAUNCH_ENV_VARS+=("ER_HARNESS_FORCE_DRIVE=1")
+fi
 PROFILE="$ARTIFACT_DIR/samechar-3x-threedll.me3"
 # Product FIRST so its er_effects_union_register export is mapped before the companions' install
 # threads resolve it (union chaining is load-order-safe either way; this just avoids the resolve poll).
@@ -149,7 +170,7 @@ win_pids_for() {
 PRE_ER_PIDS=" $(win_pids_for eldenring.exe) "
 PRE_ME3_PIDS=" $(win_pids_for me3.exe) $(win_pids_for me3-launcher.exe) "
 
-# shellcheck disable=SC2317
+# shellcheck disable=SC2317,SC2329
 cleanup() {
 	# Kill ONLY the eldenring.exe/me3 PIDs THIS run spawned (current set minus the pre-launch set).
 	# NEVER a blanket /IM -- that killed a user's live game (bd never-blanket-kill-eldenring-killed-user-game).
@@ -161,6 +182,7 @@ cleanup() {
 		[[ "$PRE_ME3_PIDS" == *" $pid "* ]] || taskkill.exe /F /PID "$pid" >/dev/null 2>&1
 	done
 	[[ -f "$ARTIFACT_DIR/er-effects.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-effects.toml.bak" "$GAME_DIR/er-effects.toml"
+	rm -f "$GAME_DIR/er-harness-drive-mode.txt" "$GAME_DIR/er-harness-force-drive.txt" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -178,11 +200,10 @@ echo "======================================================================"
 # playable window (bd RENDERDOC-inject-via-me3-native). ER is NATIVE WINDOWS -> Windows RenderDoc. The
 # .rdc must land on a Windows-accessible path (GAME_DIR under /mnt/c), NOT the WSL artifact dir; copied
 # back after the run. ER_RENDERDOC_CAPFILE (a Windows path) is read inside ER by the telemetry DLL.
-RDOC_LAUNCH_ENV=()
 if [[ "${RENDERDOC:-0}" == "1" ]]; then
 	RDOC_CAP_WSL="$GAME_DIR/er_cap"
 	rm -f "$GAME_DIR"/er_cap_frame*.rdc # fresh captures this run
-	RDOC_LAUNCH_ENV=(env "ER_RENDERDOC_CAPFILE=$(win_path "$RDOC_CAP_WSL")")
+	LAUNCH_ENV_VARS+=("ER_RENDERDOC_CAPFILE=$(win_path "$RDOC_CAP_WSL")")
 	# RenderDoc BLOCKS ER's OLD amd_ags_x64.dll ("Blocked attempt to initialise old version of AGS") ->
 	# ER's AMD device setup falls over -> DXGI_DEVICE_REMOVED (2026-07-22). ER REQUIRES AGS (removing it =
 	# ER won't start), so SWAP in a newer RenderDoc-compatible amd_ags_x64.dll for the capture and RESTORE
@@ -202,7 +223,14 @@ if [[ "${RENDERDOC:-0}" == "1" ]]; then
 	fi
 	echo "==   RENDERDOC=1: renderdoc.dll first me3 native; telemetry auto-TriggerCapture at the reload window -> $GAME_DIR/er_cap_frameN.rdc (copied to artifacts)"
 fi
-"${RDOC_LAUNCH_ENV[@]}" "$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
+(
+	cd "$GAME_DIR" &&
+		env "${LAUNCH_ENV_VARS[@]}" "$ME3" --steam-dir "$(me3_path_arg "$ME3_STEAM_DIR")" launch \
+			-g eldenring \
+			-e "$(me3_path_arg "$GAME_DIR/eldenring.exe")" \
+			--online false \
+			-p "$(me3_profile_arg "$PROFILE")"
+) >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
 
 CAPTURE_ARGS=()
 if [[ "${OBSERVE_ONLY:-0}" == "1" ]]; then
@@ -218,7 +246,6 @@ else
 	# back to the legacy menu-nav. DRIVE_CROSS_SAVE_FILE (Windows path to a NON-angrE .sl2/.co2) +
 	# DRIVE_CROSS_SAVE_SLOT add the final cross-save load. The input-harness DLL still drives the 3s
 	# forward-movement proof; only the SWITCH trigger moves to the control file.
-	DRIVE_RELOAD_SLOTS="${DRIVE_RELOAD_SLOTS-0,0}"
 	if [[ -n "$DRIVE_RELOAD_SLOTS" ]]; then
 		CAPTURE_ARGS+=(--drive-reload-slots "$DRIVE_RELOAD_SLOTS")
 	fi

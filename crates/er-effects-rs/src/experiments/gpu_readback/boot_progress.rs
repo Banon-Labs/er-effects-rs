@@ -84,6 +84,7 @@ pub(crate) use er_telemetry::counters::BOOT_VIEW_HANDOFF_SEEN_MS;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_LIST;
 /// Why the self-present pump stopped: 0 = still running/never ran, 1 = game started presenting
 /// (the goal), 2 = timeout budget, 3 = Present returned a failure HRESULT.
+pub(crate) use er_telemetry::counters::BOOT_VIEW_PUMP_STOP_MS;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_PUMP_STOP_REASON;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_QUEUE;
 /// 1-descriptor RTV heap for the self-present full-clear (the engine has never rendered the
@@ -326,7 +327,7 @@ fn boot_world_phase_reached(idx: usize) -> bool {
 
 /// Compute the current (milestone idx, displayed permille). Latches newly reached milestones into the
 /// monotonic mask, stamps idx-change time for the creep, and never lets the displayed value decrease.
-fn boot_view_epoch_ms() -> u64 {
+pub(crate) fn boot_view_epoch_ms() -> u64 {
     let epoch = *BOOT_VIEW_EPOCH.get_or_init(std::time::Instant::now);
     epoch.elapsed().as_millis().min(u64::MAX as u128) as u64
 }
@@ -341,6 +342,8 @@ pub(crate) fn rearm_boot_progress_for_own_menu_load(selected_slot: i32, source: 
     BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.store(slot_key, Ordering::SeqCst);
     BOOT_VIEW_LOADSCREEN_TABLE_BASELINE.store(table_baseline, Ordering::SeqCst);
     BOOT_VIEW_STOPPED.store(0, Ordering::SeqCst);
+    BOOT_VIEW_PUMP_STOP_MS.store(0, Ordering::SeqCst);
+    BOOT_VIEW_PUMP_STOP_REASON.store(0, Ordering::SeqCst);
     BOOT_VIEW_HANDOFF_SEEN_MS.store(0, Ordering::SeqCst);
     BOOT_VIEW_STOP_NATIVE_HITS.store(0, Ordering::SeqCst);
     BOOT_VIEW_REACHED_MASK.store(1, Ordering::SeqCst);

@@ -38,9 +38,10 @@ const CS_INGAME_PAD_ACCESSOR_RVA: usize = 0x2413f0;
 /// padMaps[dev] is a std::map keyed by TypeID; the CSInGamePad entry is found by TypeID.
 const PADMAPS_88_OFFSET: usize = 0x48;
 const PADMAPS_COUNT: usize = 4;
-/// The TypeID key of the CSInGamePad entry in each padMaps map (dump const 0x143d5df27, RVA 0x3d5df27;
-/// runtime = base + this). A wrong value just fails the BST search safely (returns no pad, no crash).
-const CS_INGAME_PAD_TYPEID_RVA: usize = 0x3d5df27;
+/// The TypeID keys of the CSInGamePad entries in each padMaps map. The two real builders use adjacent
+/// keys in the deobf image: FUN_140240e70 searches `base+0x3d5df27`, while FUN_140241130 searches
+/// `base+0x3d5df28`. Search both; a wrong/missing value fails the BST search safely.
+const CS_INGAME_PAD_TYPEID_RVAS: [usize; 2] = [0x3d5df27, 0x3d5df28];
 const PAD_MGR_DEVICES_18_OFFSET: usize = 0x18;
 const VK_ARRAY_88_OFFSET: usize = 0x88;
 const VK_ID_MIN: u32 = 1000;
@@ -135,7 +136,7 @@ unsafe fn inject_vk(manager: usize, dev: usize) {
         return;
     }
     // SAFETY: `source` is the live CSInGamePad "source"; +0x88+(id-1000)*2 is the per-key byte the
-    // builder itself writes (RE-verified writer 0x1426634b0).
+    // builder itself writes (RE-verified writer 0x1426634a0).
     unsafe {
         *((source + VK_ARRAY_88_OFFSET + ((id - VK_ID_MIN) as usize) * 2) as *mut u8) = 1;
     }
@@ -169,16 +170,15 @@ pub unsafe fn stamp_vk_direct(base: usize, id: u32, val: u8) {
     // node: _Left+0, _Right+0x10, _Isnil+0x19, key+0x20, value+0x28; _Myhead at map+8, root at _Myhead+8.
     let _ = (CS_INGAME_PAD_ACCESSOR_RVA, PAD_MGR_DEVICES_18_OFFSET);
     let off = VK_ARRAY_88_OFFSET + ((id - VK_ID_MIN) as usize) * 2;
-    let target = base + CS_INGAME_PAD_TYPEID_RVA;
+    let targets = CS_INGAME_PAD_TYPEID_RVAS.map(|rva| base + rva);
     // CACHE the resolved pad (bd BISECT-stamp_vk_direct-stops-drive): the per-frame RPM tree-walk
     // (~10-20 syscalls/frame) stalls the CSTaskImp task and STOPS the drive. Resolve the CSInGamePad ONCE
     // via the tree-walk, then per-frame do ONE fault-safe write to the cached pad -- no per-frame RPM.
     let cached = CACHED_PAD.load(Ordering::SeqCst);
     if cached >= HEAP_LO {
         unsafe {
-            let _ = crate::win32::write_u8;
-            let _ = (cached, off);
-        } // BISECT: write disabled
+            let _ = crate::win32::write_u8(cached + off, val);
+        }
         return;
     }
     let ndev = rd(manager + PADMAPS_88_OFFSET + PADMAPS_COUNT * 8)
@@ -188,7 +188,9 @@ pub unsafe fn stamp_vk_direct(base: usize, id: u32, val: u8) {
     let diag = false; // BISECT: DIAG logging disabled (test if the 6-line burst breaks the log)
     if diag {
         harness_log!(
-            "treewalk DIAG: manager=0x{manager:x} padmaps_count={ndev} target=0x{target:x}"
+            "treewalk DIAG: manager=0x{manager:x} padmaps_count={ndev} targets=0x{:x}/0x{:x}",
+            targets[0],
+            targets[1]
         );
     }
     for dev in 0..ndev {
@@ -209,41 +211,48 @@ pub unsafe fn stamp_vk_direct(base: usize, id: u32, val: u8) {
                 n0val
             );
         }
-        let Some(mut node) = root.filter(|r| *r >= HEAP_LO) else {
-            continue;
-        };
-        let mut guard = 0;
-        loop {
-            guard += 1;
-            if guard > 64 || node < HEAP_LO {
-                break;
-            }
-            match unsafe { crate::win32::read_u8(node + 0x19) } {
-                Some(0) => {}
-                _ => break, // nil node / unreadable -- not found
-            }
-            let Some(key) = rd(node + 0x20) else { break };
-            if key == target {
-                if let Some(pad) = rd(node + 0x28).filter(|p| *p >= HEAP_LO) {
-                    MY_SOURCE.store(pad, Ordering::SeqCst);
-                    CACHED_PAD.store(pad, Ordering::SeqCst); // cache: subsequent frames skip the tree-walk
-                    unsafe {
-                        let _ = (pad, off);
-                    } // BISECT: write disabled (keep tree-walk + cache)
-                    if diag {
-                        harness_log!("treewalk DIAG dev{dev}: FOUND pad=0x{pad:x}");
-                    }
-                }
-                break;
-            }
-            node = match if key < target {
-                rd(node + 0x10)
-            } else {
-                rd(node)
-            } {
-                Some(n) => n,
-                None => break,
+        for target in targets {
+            let Some(mut node) = root.filter(|r| *r >= HEAP_LO) else {
+                continue;
             };
+            let mut guard = 0;
+            loop {
+                guard += 1;
+                if guard > 64 || node < HEAP_LO {
+                    break;
+                }
+                match unsafe { crate::win32::read_u8(node + 0x19) } {
+                    Some(0) => {}
+                    _ => break, // nil node / unreadable -- not found
+                }
+                let Some(key) = rd(node + 0x20) else { break };
+                if key == target {
+                    if let Some(pad) = rd(node + 0x28).filter(|p| *p >= HEAP_LO) {
+                        MY_SOURCE.store(pad, Ordering::SeqCst);
+                        CACHED_PAD.store(pad, Ordering::SeqCst); // cache: subsequent frames skip the tree-walk
+                        unsafe {
+                            let _ = crate::win32::write_u8(pad + off, val);
+                        }
+                        if diag {
+                            harness_log!(
+                                "treewalk DIAG dev{dev}: FOUND pad=0x{pad:x} target=0x{target:x}"
+                            );
+                        }
+                    }
+                    break;
+                }
+                node = match if key < target {
+                    rd(node + 0x10)
+                } else {
+                    rd(node)
+                } {
+                    Some(n) => n,
+                    None => break,
+                };
+            }
+            if CACHED_PAD.load(Ordering::SeqCst) >= HEAP_LO {
+                break;
+            }
         }
     }
 }

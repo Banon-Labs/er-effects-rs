@@ -2133,6 +2133,11 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_boot_view_pump_stop_reason",
             BOOT_VIEW_PUMP_STOP_REASON.load(Ordering::SeqCst),
         );
+        push_json_usize(
+            body,
+            "oracle_boot_view_pump_stop_ms",
+            BOOT_VIEW_PUMP_STOP_MS.load(Ordering::SeqCst) as usize,
+        );
         // DEPTH-KEY transparent-background semaphores: frames where the depth key actually cut out a
         // background (clean bg/head depth separation + >0 pixels alpha'd to 0), and the last frame's
         // background-masked fraction in whole percent. A RAM/pixel oracle for the transparent bg cutout.

@@ -8,10 +8,10 @@ publish = false
 name = "er_input_harness_dll"
 crate-type = ["cdylib"]
 
-# The self-drive runs from a CSTaskImp FrameBegin task (title accept byte, Continue), PLUS a MinHook on
-# FD4PadDevice::poll (0x1f6bad0) to inject the raw pad button/dpad snapshot the IN-WORLD menu reads
-# (inputmgr+0x90 is OUTPUT, not input -- bd ROOTCAUSE-plus90-is-OUTPUT-not-input). er-hook provides the
-# shared MinHook FFI for that pad-poll hook.
+# The self-drive runs from a CSTaskImp FrameBegin task (title accept byte, Continue), PLUS MinHooks on
+# the DLUID virtual-key builders/writer (0x240e70/0x241130/0x26634a0) and a fault-safe per-frame stamp
+# into the CSInGamePad source+0x88 array for IN-WORLD menu drive. inputmgr+0x90 is OUTPUT, not input
+# (bd ROOTCAUSE-plus90-is-OUTPUT-not-input). er-hook provides the shared MinHook FFI.
 [dependencies]
 er-hook = { path = "../er-hook" }
 
