@@ -383,10 +383,12 @@ unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) {
         }
         false
     };
-    if !drew_portrait {
-        // Loading bar + save picker (the native-Windows display path; also the boot/black-gap path on Wine).
-        let _ = unsafe { composite_boot_progress_on_swapchain(base, this_u) };
-    }
+    // Loading bar + save picker + boot-cover handoff oracle. Run this even when the portrait bridge drew:
+    // the portrait path returning `true` used to suppress the boot-progress compositor, which made the
+    // bar/handoff oracle vanish exactly at the forced-Continue/native-loading transition. The boot
+    // compositor is internally gated by BOOT_VIEW_STOPPED and draw-state, so this is a cheap no-op after
+    // the seamless cut.
+    let _ = unsafe { composite_boot_progress_on_swapchain(base, this_u) };
     // Keyboard input runs on an event-driven WH_KEYBOARD_LL hook (spawned once) so every press registers
     // regardless of the ~4fps boot Present rate; the render-thread poll handles gamepad (and is the
     // keyboard fallback if the hook fails to install).

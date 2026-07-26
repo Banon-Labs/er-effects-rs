@@ -2072,6 +2072,53 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_boot_view_stop_native_hits",
             BOOT_VIEW_STOP_NATIVE_HITS.load(Ordering::SeqCst),
         );
+        push_json_usize(
+            body,
+            "oracle_boot_view_dark_gap_failures",
+            BOOT_VIEW_DARK_GAP_FAILURES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_dark_gap_last_held_ms",
+            BOOT_VIEW_DARK_GAP_LAST_HELD_MS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_dark_gap_last_native_hits",
+            BOOT_VIEW_DARK_GAP_LAST_NATIVE_HITS.load(Ordering::SeqCst),
+        );
+        let native_loading_updates = LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst);
+        let forced_continue_observed = SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
+            || TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0
+            || OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst);
+        let real_handoff_observed = forced_continue_observed || native_loading_updates != 0;
+        if BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst) != 0
+            && real_handoff_observed
+            && BOOT_VIEW_HANDOFF_SEEN_MS.load(Ordering::SeqCst) == 0
+        {
+            let now_ms = crate::experiments::boot_view_epoch_ms().max(1) as usize;
+            if BOOT_VIEW_HANDOFF_SEEN_MS
+                .compare_exchange(0, now_ms, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                BOOT_VIEW_HANDOFF_NATIVE_HITS_BASELINE.store(native_loading_updates, Ordering::SeqCst);
+                BOOT_VIEW_TELEMETRY_HANDOFF_STAMPS.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        push_json_usize(
+            body,
+            "oracle_boot_view_telemetry_handoff_stamps",
+            BOOT_VIEW_TELEMETRY_HANDOFF_STAMPS.load(Ordering::SeqCst),
+        );
+        let boot_view_missed_handoff = (BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst) != 0
+            && real_handoff_observed
+            && BOOT_VIEW_HANDOFF_SEEN_MS.load(Ordering::SeqCst) == 0)
+            as usize;
+        push_json_usize(
+            body,
+            "oracle_boot_view_missed_handoff_failures",
+            boot_view_missed_handoff,
+        );
         // Window-reconfiguration timeline semaphores (bd er-effects-rs-rzow): user32 call counts
         // from the observe-only hooks, plus the early final-geometry apply result (1 = applied,
         // 2 = skipped WINDOWED, 3 = no window, 4 = no monitor, 5 = no config, 6 = already final).

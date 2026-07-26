@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+READINESS_WATCH = REPO_ROOT / "scripts/er-readiness-watch.py"
 
 
 def test_pad_inject_uses_both_cs_ingame_pad_typeids() -> None:
@@ -33,6 +34,8 @@ def test_input_harness_manifest_names_actual_hook_layer() -> None:
 def test_continue_and_boot_view_timing_oracles_exist() -> None:
     counters = (REPO_ROOT / "crates/er-telemetry/src/counters.rs").read_text()
     assert "pub static BOOT_VIEW_PUMP_STOP_MS" in counters
+    assert "pub static BOOT_VIEW_DARK_GAP_FAILURES" in counters
+    assert "pub static BOOT_VIEW_TELEMETRY_HANDOFF_STAMPS" in counters
     assert "pub static OWN_LOAD_FORCED_CONTINUE_HANDOFF_MS" in counters
     assert "pub static TFC_FORCED_CONTINUE_HANDOFF_MS" in counters
 
@@ -48,6 +51,15 @@ def test_continue_and_boot_view_timing_oracles_exist() -> None:
 
     game_oracles = (REPO_ROOT / "crates/er-effects-rs/src/telemetry/runtime_oracles/write_game_module_oracles.rs").read_text()
     assert '"oracle_boot_view_pump_stop_ms"' in game_oracles
+    assert '"oracle_boot_view_dark_gap_failures"' in game_oracles
+    assert '"oracle_boot_view_missed_handoff_failures"' in game_oracles
+    assert '"oracle_boot_view_telemetry_handoff_stamps"' in game_oracles
+    assert "BOOT_VIEW_HANDOFF_SEEN_MS" in game_oracles
+    assert ".compare_exchange(0, now_ms" in game_oracles
+    readiness_watch = READINESS_WATCH.read_text()
+    assert "BOOT_VIEW_DARK_GAP_FAILURE" in readiness_watch
+    assert "telemetry_boot_view_dark_gap_failure_detected" in readiness_watch
+    assert "oracle_boot_view_missed_handoff_failures" in readiness_watch
     telemetry = (REPO_ROOT / "crates/er-effects-rs/src/telemetry/runtime_oracles/write_telemetry.rs").read_text()
     assert 'oracle_own_load_forced_continue_handoff_ms' in telemetry
     assert 'oracle_tfc_forced_continue_handoff_ms' in telemetry

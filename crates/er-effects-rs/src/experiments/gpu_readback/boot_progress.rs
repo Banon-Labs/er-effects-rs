@@ -16,8 +16,8 @@
 //   MENU     -- `PRODUCT_CORE_LAST_MENU_OPENED_LATCH` (title menu natural-open latch)
 //   CONTINUE -- `SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT` / `TFC_CONTINUE_FIRED`
 //               (the visible SAVE LOAD tick marks the save-data pause immediately after this)
-//   LOADING  -- `PROFILE_LOADSCREEN_TABLE_BUILDS > 0` -> HANDOFF (stop; the loading-portrait
-//               overlay/native Gauge_3 window owns the remaining progress from here)
+//   LOADING  -- forced Continue/native CS::LoadingScreen update -> HANDOFF. Early profile/keyed
+//               semaphores only keep the cover drawing; they do not start the bail clock.
 //
 // Reached milestones are latched into a monotonic bitmask (a latch that later reads 0 cannot walk
 // the bar backwards), and the displayed value creeps part-way toward the next milestone over time so
@@ -77,9 +77,13 @@ pub(crate) use er_telemetry::counters::BOOT_VIEW_DRAW_BUSY;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_FENCE;
 /// LOADING_SCREEN_UPDATE_HITS baseline latched at handoff detection: the counter is cumulative
 /// across loads, so an own-menu second load must measure only ITS loading screen's ticks.
+pub(crate) use er_telemetry::counters::BOOT_VIEW_DARK_GAP_FAILURES;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_DARK_GAP_LAST_HELD_MS;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_DARK_GAP_LAST_NATIVE_HITS;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_HANDOFF_NATIVE_HITS_BASELINE;
-/// Epoch-ms (never 0 once set) when the loading/world handoff was first detected; the hold clock
-/// for the seamless cut. Reset by an own-menu rearm.
+pub(crate) use er_telemetry::counters::BOOT_VIEW_TELEMETRY_HANDOFF_STAMPS;
+/// Epoch-ms (never 0 once set) when the real loading/world handoff was first detected; the hold
+/// clock for the seamless cut. Early profile/keyed-frame semaphores must not start this clock.
 pub(crate) use er_telemetry::counters::BOOT_VIEW_HANDOFF_SEEN_MS;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_LIST;
 /// Why the self-present pump stopped: 0 = still running/never ran, 1 = game started presenting
@@ -346,6 +350,9 @@ pub(crate) fn rearm_boot_progress_for_own_menu_load(selected_slot: i32, source: 
     BOOT_VIEW_PUMP_STOP_REASON.store(0, Ordering::SeqCst);
     BOOT_VIEW_HANDOFF_SEEN_MS.store(0, Ordering::SeqCst);
     BOOT_VIEW_STOP_NATIVE_HITS.store(0, Ordering::SeqCst);
+    BOOT_VIEW_DARK_GAP_FAILURES.store(0, Ordering::SeqCst);
+    BOOT_VIEW_DARK_GAP_LAST_HELD_MS.store(0, Ordering::SeqCst);
+    BOOT_VIEW_DARK_GAP_LAST_NATIVE_HITS.store(0, Ordering::SeqCst);
     BOOT_VIEW_REACHED_MASK.store(1, Ordering::SeqCst);
     BOOT_VIEW_MILESTONE_IDX.store(0, Ordering::SeqCst);
     BOOT_VIEW_LAST_PERMILLE.store(0, Ordering::SeqCst);
@@ -1673,13 +1680,30 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
             ));
         }
     }
-    if loading_handoff || world_handoff {
-        // SEAMLESS CUT (user 2026-07-06): the handoff (loading table build) starts the game's
-        // black gap + the loading screen's own fade-in-from-black, so stopping here would cut a
-        // lit cover into black. Instead HOLD the cover fully lit and stop in one frame only once
-        // the native loading screen is itself fully lit (CS::LoadingScreen update hits reach the
-        // measured luminance plateau), or immediately on world takeover, or on the bail clock if
-        // the update semaphore regressed. Lit-to-lit; never a black frame between the scenes.
+    let forced_continue_handoff = SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
+        || TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0
+        || OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst)
+        || OWN_LOAD_FORCED_CONTINUE_HANDOFF_MS.load(Ordering::SeqCst) != 0
+        || TFC_FORCED_CONTINUE_HANDOFF_MS.load(Ordering::SeqCst) != 0;
+    let native_loading_seen = LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst)
+        > BOOT_VIEW_HANDOFF_NATIVE_HITS_BASELINE.load(Ordering::SeqCst);
+    let real_loading_handoff = forced_continue_handoff || native_loading_seen;
+    if (loading_handoff || real_loading_handoff || world_handoff)
+        && !(real_loading_handoff || world_handoff)
+    {
+        // Early profile/keyed-frame semaphores can assert while the game is still between title/menu
+        // work and the forced Continue transition. They mean "keep covering", not "start the
+        // handoff bail clock"; starting the clock here caused the cover to bail before CS::LoadingScreen
+        // appeared, producing the user-visible black/loading gap.
+        // Fall through and keep compositing.
+    }
+    if real_loading_handoff || world_handoff {
+        // SEAMLESS CUT (user 2026-07-06): the REAL handoff (forced Continue or native loading-screen
+        // updates) starts the game's black gap + the loading screen's own fade-in-from-black. HOLD the
+        // cover fully lit and stop in one frame only once the native loading screen is itself fully lit
+        // (CS::LoadingScreen update hits reach the measured luminance plateau), or immediately on world
+        // takeover, or on the bail clock if the update semaphore regressed. Lit-to-lit; never a black
+        // frame between the scenes.
         let now_ms = boot_view_epoch_ms().max(1) as usize;
         let mut seen_ms = BOOT_VIEW_HANDOFF_SEEN_MS.load(Ordering::SeqCst);
         if seen_ms == 0 {
@@ -1714,11 +1738,17 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
         let held_ms = (now_ms as u64).saturating_sub(seen_ms as u64);
         let native_lit = native_hits >= BOOT_VIEW_NATIVE_LIT_UPDATE_HITS;
         let hold_bail = held_ms >= BOOT_VIEW_HANDOFF_HOLD_BAIL_MS;
+        let dark_gap_failure = hold_bail && !native_lit && !world_handoff;
         if native_lit || world_handoff || hold_bail {
             if BOOT_VIEW_STOPPED.swap(1, Ordering::SeqCst) == 0 {
                 BOOT_VIEW_STOP_NATIVE_HITS.store(native_hits, Ordering::SeqCst);
+                if dark_gap_failure {
+                    BOOT_VIEW_DARK_GAP_FAILURES.fetch_add(1, Ordering::SeqCst);
+                    BOOT_VIEW_DARK_GAP_LAST_HELD_MS.store(held_ms as usize, Ordering::SeqCst);
+                    BOOT_VIEW_DARK_GAP_LAST_NATIVE_HITS.store(native_hits, Ordering::SeqCst);
+                }
                 append_autoload_debug(format_args!(
-                    "boot-view: handoff -> loading window (seamless cut; native_hits={native_hits} held_ms={held_ms} world={world_handoff} bail={hold_bail} draws={} permille={})",
+                    "boot-view: handoff -> loading window (seamless cut; native_hits={native_hits} held_ms={held_ms} world={world_handoff} bail={hold_bail} dark_gap_failure={dark_gap_failure} forced_continue={forced_continue_handoff} draws={} permille={})",
                     BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst),
                     BOOT_VIEW_LAST_PERMILLE.load(Ordering::SeqCst),
                 ));

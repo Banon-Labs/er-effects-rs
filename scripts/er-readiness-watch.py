@@ -142,6 +142,7 @@ SERVER_STATUS_SEMAPHORE_DETECTED = "native_server_status_semaphore_detected"
 TITLE_NATIVE_VISUAL_UNSUPPRESSED = "native_title_visual_render_unsuppressed"
 STARTUP_SOUND_EVENT_DETECTED = "startup_sound_event_detected"
 TITLE_PROFILE_RENDER_REFRESH_MISSING = "title_profile_render_refresh_missing"
+BOOT_VIEW_DARK_GAP_FAILURE = "boot_view_dark_gap_failure"
 PLACEHOLDER_CHARACTER_DETECTED = "placeholder_character_detected"
 TARGET_WINDOW_CAPTURE_UNSAFE = "target_window_capture_unsafe"
 VISUAL_CHECK_SUBPROCESS_TIMEOUT_SECONDS = 10.0
@@ -1227,6 +1228,15 @@ def telemetry_portrait_publish_failure_detected(telemetry: dict[str, Any] | None
     if not isinstance(telemetry, dict):
         return False
     return as_int(telemetry.get("oracle_portrait_window_publish_failures"), 0) > 0
+
+
+def telemetry_boot_view_dark_gap_failure_detected(telemetry: dict[str, Any] | None) -> bool:
+    if not isinstance(telemetry, dict):
+        return False
+    return (
+        as_int(telemetry.get("oracle_boot_view_dark_gap_failures"), 0) > 0
+        or as_int(telemetry.get("oracle_boot_view_missed_handoff_failures"), 0) > 0
+    )
 
 
 def telemetry_native_load_save_data_corrupted_detected(telemetry: dict[str, Any] | None) -> bool:
@@ -2483,6 +2493,21 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
                 ReadinessResult(
                     False,
                     STARTUP_SOUND_EVENT_DETECTED,
+                    pid,
+                    bootstrap,
+                    telemetry,
+                    [],
+                    spawn_polls + poll,
+                    float(args.max_runtime_seconds),
+                    expected_save_oracle=expected_save_oracle,
+                    expected_animation_id=args.expected_animation_id,
+                )
+            )
+        if telemetry_boot_view_dark_gap_failure_detected(telemetry):
+            return with_runtime_module_info(
+                ReadinessResult(
+                    False,
+                    BOOT_VIEW_DARK_GAP_FAILURE,
                     pid,
                     bootstrap,
                     telemetry,
