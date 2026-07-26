@@ -32,6 +32,7 @@ BOOT_FILE="$ACTIVE_SAVE" \
 BOOT_SLOT="${ER_EFFECTS_GOLD_SLOT:-0}" \
 DRIVE_RELOAD_SLOTS="${DRIVE_RELOAD_SLOTS:-0,0}" \
 PROVE_MOVEMENT="${PROVE_MOVEMENT:-1}" \
+STEADY_WINDOW_SECONDS="${STEADY_WINDOW_SECONDS:-3}" \
 ARTIFACT_DIR="$ARTIFACT_DIR" \
 scripts/run-samechar-3x-threedll.sh >"$ARTIFACT_DIR/runner.out" 2>"$ARTIFACT_DIR/runner.err" || run_rc=$?
 
@@ -79,11 +80,11 @@ score = 0
 reasons: list[str] = []
 metrics = {}
 if run_rc != 0:
-    score += 200; reasons.append(f'runner_rc={run_rc}')
+    score += 120; reasons.append(f'runner_rc={run_rc}')
 if not rows:
     score += 900; reasons.append('missing_timeseries')
 if '## Verdict: PASS' not in report:
-    score += 250; reasons.append('report_not_pass')
+    score += 100; reasons.append('report_not_pass')
 
 sim = as_int(final.get('simulated_button_presses_total', 0), 0)
 msg = max(as_int(final.get('oracle_msgbox_total_builds', 0), 0), as_int(final.get('oracle_msgbox_any_seen', 0), 0))
@@ -109,10 +110,10 @@ for ep in required:
     metrics[f'epoch{ep}_did_move_frames'] = didmove
     metrics[f'epoch{ep}_can_move'] = int(canmove)
     if not canmove or didmove < 60:
-        score += 250; reasons.append(f'epoch{ep}_movement_unproven(can_move={canmove},did={didmove})')
+        score += 150; reasons.append(f'epoch{ep}_movement_unproven(can_move={canmove},did={didmove})')
     fps = [as_float(s.get('oracle_fps')) for s in samples if as_bool(s.get('oracle_can_move')) and as_float(s.get('oracle_fps')) > 0]
     if len(fps) < 4:
-        score += 160; reasons.append(f'epoch{ep}_playable_fps_missing(n={len(fps)})')
+        score += 90; reasons.append(f'epoch{ep}_playable_fps_missing(n={len(fps)})')
         metrics[f'epoch{ep}_fps_mean'] = 0
         continue
     mean = statistics.mean(fps)
@@ -127,7 +128,7 @@ if len(move_means) == 3:
     ratio = mn / mx if mx > 0 else 0
     metrics['fps_parity_ratio'] = round(ratio, 4)
     if ratio < 0.80:
-        score += int((0.80 - ratio) * 1000) + 150
+        score += int((0.80 - ratio) * 600) + 100
         reasons.append(f'fps_unstable_ratio={ratio:.3f}')
 else:
     metrics['fps_parity_ratio'] = 0

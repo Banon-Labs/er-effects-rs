@@ -32,7 +32,10 @@ HARNESS_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_input_harness_d
 # oracle_tick_ms, so a product load2/load3 run can be tested for single-core contention (bd NEXT-telemetry
 # -capture-per-core-cpu). Shipped alongside the product per the goal (product + semaphore/oracle DLLs).
 TELEM_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_telemetry_dll.dll"
-LAUNCH_ENV_VARS=()
+LAUNCH_ENV_VARS=(
+	"ER_EFFECTS_AUTOLOAD_DEBUG_PATH=$ARTIFACT_DIR/er-effects-autoload-debug.log"
+	"ER_EFFECTS_CRASH_LOG_PATH=$ARTIFACT_DIR/er-effects-crash.log"
+)
 # RENDERDOC=1: the Windows RenderDoc DLL, loaded as a me3 native to hook ER's D3D12 device.
 RDOC_DLL="${RENDERDOC_DLL:-/mnt/c/Program Files/RenderDoc/renderdoc.dll}"
 CAP_SECONDS="${CAP_SECONDS:-$(cat "$REPO_ROOT/.auto/runtime_timeout_cap_seconds" 2>/dev/null || echo 180)}"
