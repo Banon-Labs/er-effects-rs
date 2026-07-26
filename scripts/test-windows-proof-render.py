@@ -94,7 +94,7 @@ def test_source_scan_allows_dynamic_wrapper_names() -> None:
     assert not findings
 
 
-def test_native_overlay_child_tracks_parent_client_resize() -> None:
+def test_native_overlay_child_covers_parent_without_visible_resize() -> None:
     native_overlay = (
         REPO_ROOT
         / "crates"
@@ -106,8 +106,13 @@ def test_native_overlay_child_tracks_parent_client_resize() -> None:
     assert "fn sync_child_to_parent_client" in native_overlay
     assert "MoveWindow(child, 0, 0, parent_w as i32, parent_h as i32, true)" in native_overlay
     assert ".is_ok()" in native_overlay
-    loop_block = native_overlay.split("loop {", 1)[1].split("let want_show =", 1)[0]
+    assert "NATIVE_OVERLAY_CHILD_COVER_MATCH" in native_overlay
+    assert "child_w >= parent_w && child_h >= parent_h" in native_overlay
+    loop_block = native_overlay.split("loop {", 1)[1].split("if want_show != shown", 1)[0]
+    assert "if !want_show" in loop_block
     assert "sync_child_to_parent_client(parent_hwnd, hwnd)" in loop_block
+    assert "record_child_geometry_oracle(parent_hwnd, hwnd)" in loop_block
+    assert loop_block.index("if !want_show") < loop_block.index("sync_child_to_parent_client")
     assert loop_block.index("sync_child_to_parent_client") < loop_block.index(
         "record_child_geometry_oracle"
     )
@@ -121,6 +126,7 @@ def test_native_overlay_child_tracks_parent_client_resize() -> None:
         / "write_game_module_oracles.rs"
     ).read_text(encoding="utf-8", errors="replace")
     assert "oracle_native_overlay_child_resize_hits" in telemetry
+    assert "oracle_native_overlay_child_cover_match" in telemetry
 
 
 def test_native_overlay_release_uses_semantic_render_ready() -> None:
@@ -165,7 +171,7 @@ def main() -> int:
         test_source_scan_rejects_hard_linked_graphics_entrypoint,
         test_source_scan_rejects_top_level_native_bridge_window,
         test_source_scan_allows_dynamic_wrapper_names,
-        test_native_overlay_child_tracks_parent_client_resize,
+        test_native_overlay_child_covers_parent_without_visible_resize,
         test_native_overlay_release_uses_semantic_render_ready,
     ]
     for test in tests:

@@ -1678,6 +1678,11 @@ fn write_game_module_oracles(body: &mut String) {
         );
         push_json_usize(
             body,
+            "oracle_native_overlay_child_cover_match",
+            NATIVE_OVERLAY_CHILD_COVER_MATCH.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
             "oracle_native_overlay_child_geometry_mismatch_hits",
             NATIVE_OVERLAY_CHILD_GEOMETRY_MISMATCH_HITS.load(Ordering::SeqCst),
         );

@@ -75,6 +75,10 @@ def build_verdict(
         telemetry.get("oracle_native_overlay_child_client_match") if isinstance(telemetry, dict) else None,
         -1,
     )
+    native_overlay_child_cover_match = as_int(
+        telemetry.get("oracle_native_overlay_child_cover_match") if isinstance(telemetry, dict) else None,
+        -1,
+    )
     native_overlay_child_geometry_mismatch_hits = as_int(
         telemetry.get("oracle_native_overlay_child_geometry_mismatch_hits")
         if isinstance(telemetry, dict)
@@ -101,7 +105,7 @@ def build_verdict(
         native_overlay_child_window == 1
         and native_overlay_parent_hwnd > 0
         and native_overlay_child_parent_match == 1
-        and native_overlay_child_client_match == 1
+        and native_overlay_child_cover_match == 1
         and native_overlay_child_geometry_mismatch_hits == 0
     )
     native_overlay_proven = native_overlay_frames > 0 and native_overlay_pixel_probe_matches > 0
@@ -142,6 +146,7 @@ def build_verdict(
         "oracle_native_overlay_child_window": native_overlay_child_window,
         "oracle_native_overlay_child_parent_match": native_overlay_child_parent_match,
         "oracle_native_overlay_child_client_match": native_overlay_child_client_match,
+        "oracle_native_overlay_child_cover_match": native_overlay_child_cover_match,
         "oracle_native_overlay_child_geometry_mismatch_hits": native_overlay_child_geometry_mismatch_hits,
         "oracle_native_overlay_parent_hwnd": native_overlay_parent_hwnd,
         "oracle_native_overlay_pixel_probe_matches": native_overlay_pixel_probe_matches,

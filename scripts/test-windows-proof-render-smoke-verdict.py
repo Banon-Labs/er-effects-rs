@@ -40,6 +40,7 @@ def good_telemetry() -> dict[str, Any]:
         "oracle_native_overlay_child_window": 1,
         "oracle_native_overlay_child_parent_match": 1,
         "oracle_native_overlay_child_client_match": 1,
+        "oracle_native_overlay_child_cover_match": 1,
         "oracle_native_overlay_child_geometry_mismatch_hits": 0,
         "oracle_native_overlay_parent_hwnd": 0x1234,
         "oracle_native_overlay_pixel_probe_matches": 1,
@@ -103,8 +104,17 @@ def test_rejects_parent_mismatch() -> None:
     assert_rejects_missing("oracle_native_overlay_child_parent_match")
 
 
-def test_rejects_client_size_mismatch() -> None:
-    assert_rejects_missing("oracle_native_overlay_child_client_match")
+def test_allows_oversized_stable_child_when_cover_matches() -> None:
+    telemetry = good_telemetry()
+    telemetry["oracle_native_overlay_child_client_match"] = 0
+    telemetry["oracle_native_overlay_child_cover_match"] = 1
+    got = verdict(telemetry)
+    assert got["native_overlay_child_attached"] is True
+    assert got["windows_proof_render_runtime"] is True
+
+
+def test_rejects_missing_child_cover() -> None:
+    assert_rejects_missing("oracle_native_overlay_child_cover_match")
 
 
 def test_rejects_geometry_mismatch_hits() -> None:
@@ -196,7 +206,8 @@ def main() -> int:
         test_rejects_missing_child_window_attachment,
         test_rejects_missing_parent_hwnd,
         test_rejects_parent_mismatch,
-        test_rejects_client_size_mismatch,
+        test_allows_oversized_stable_child_when_cover_matches,
+        test_rejects_missing_child_cover,
         test_rejects_geometry_mismatch_hits,
         test_rejects_missing_bridge_pixel_match,
         test_rejects_missing_loading_visibility,

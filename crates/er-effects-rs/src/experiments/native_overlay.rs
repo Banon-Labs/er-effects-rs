@@ -91,9 +91,12 @@ pub(crate) static NATIVE_OVERLAY_PARENT_HWND: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static NATIVE_OVERLAY_CHILD_WINDOW: AtomicUsize = AtomicUsize::new(0);
 /// 1 when GetParent(child) still equals the game HWND.
 pub(crate) static NATIVE_OVERLAY_CHILD_PARENT_MATCH: AtomicUsize = AtomicUsize::new(0);
-/// 1 when the child overlay client size matches the parent game client size.
+/// 1 when the child overlay client size exactly matches the parent game client size.
 pub(crate) static NATIVE_OVERLAY_CHILD_CLIENT_MATCH: AtomicUsize = AtomicUsize::new(0);
-/// Counts frames where parent/child relation or client-size match failed.
+/// 1 when the child overlay client covers the parent game client. This is the product property:
+/// an oversized stable bridge is better than resizing the visible cover and dropping to black.
+pub(crate) static NATIVE_OVERLAY_CHILD_COVER_MATCH: AtomicUsize = AtomicUsize::new(0);
+/// Counts frames where parent/child relation or cover guarantee failed.
 pub(crate) static NATIVE_OVERLAY_CHILD_GEOMETRY_MISMATCH_HITS: AtomicUsize = AtomicUsize::new(0);
 /// Counts child-window resizes performed to follow game-window client/fullscreen reconfiguration.
 pub(crate) static NATIVE_OVERLAY_CHILD_RESIZE_HITS: AtomicUsize = AtomicUsize::new(0);
@@ -235,8 +238,10 @@ fn record_child_geometry_oracle(parent: HWND, child: HWND) {
     NATIVE_OVERLAY_CHILD_CLIENT_H.store(child_h, Ordering::SeqCst);
 
     let client_match = parent_ok && child_ok && parent_w == child_w && parent_h == child_h;
+    let cover_match = parent_ok && child_ok && child_w >= parent_w && child_h >= parent_h;
     NATIVE_OVERLAY_CHILD_CLIENT_MATCH.store(usize::from(client_match), Ordering::SeqCst);
-    if !parent_match || !client_match {
+    NATIVE_OVERLAY_CHILD_COVER_MATCH.store(usize::from(cover_match), Ordering::SeqCst);
+    if !parent_match || !cover_match {
         NATIVE_OVERLAY_CHILD_GEOMETRY_MISMATCH_HITS.fetch_add(1, Ordering::SeqCst);
     }
 }
@@ -893,10 +898,16 @@ unsafe fn native_overlay_run() {
             unsafe { DispatchMessageW(&msg) };
         }
 
-        sync_child_to_parent_client(parent_hwnd, hwnd);
+        let want_show = NATIVE_OVERLAY_SHOW.load(Ordering::SeqCst) != 0;
+        // Do not resize the visible bridge during title/load. The user-visible symptom was a black
+        // gap after the game fullscreen/reconfig step until the native loading screen took over.
+        // Keep the cover surface stable while it is visible; exact child/client reconciliation is
+        // only safe once the bridge is hidden.
+        if !want_show {
+            sync_child_to_parent_client(parent_hwnd, hwnd);
+        }
         record_child_geometry_oracle(parent_hwnd, hwnd);
 
-        let want_show = NATIVE_OVERLAY_SHOW.load(Ordering::SeqCst) != 0;
         if want_show != shown {
             let _ = unsafe {
                 ShowWindow(
