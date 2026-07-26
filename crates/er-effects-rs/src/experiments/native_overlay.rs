@@ -328,7 +328,9 @@ fn bridge_marker_rect() -> RECT {
 }
 
 fn bridge_marker_color_expected_rgba() -> [u8; 4] {
-    [46, 184, 237, 255]
+    // Actual boot/loading bar fill color from boot_progress.rs. The backbuffer readback must prove
+    // the loading bar itself was copied into the presented bridge, not just a debug marker/clear.
+    [226, 223, 214, 255]
 }
 
 fn bridge_pixel_matches_expected(rgba: [u8; 4]) -> bool {
@@ -485,6 +487,17 @@ fn bridge_progress_pixel_count(rgba: &[u8]) -> usize {
         .count()
 }
 
+fn bridge_progress_fill_probe(rgba: &[u8], w: usize) -> Option<(usize, usize)> {
+    const FILL: [u8; 3] = [226, 223, 214];
+    if w == 0 {
+        return None;
+    }
+    rgba.chunks_exact(4).enumerate().find_map(|(idx, px)| {
+        (px[3] == 255 && px[0] == FILL[0] && px[1] == FILL[1] && px[2] == FILL[2])
+            .then_some((idx % w, idx / w))
+    })
+}
+
 unsafe fn copy_bridge_content_frame(
     device: &ID3D12Device,
     list: &ID3D12GraphicsCommandList,
@@ -492,15 +505,17 @@ unsafe fn copy_bridge_content_frame(
     upload: &ID3D12Resource,
     backbuffer_width: usize,
     backbuffer_height: usize,
-) -> bool {
+) -> (bool, Option<(u32, u32)>) {
     let frame = boot_view_render_frame(backbuffer_width, backbuffer_height);
     if frame.w == 0
         || frame.h == 0
         || frame.rgba.len() < frame.w.saturating_mul(frame.h).saturating_mul(4)
     {
-        return false;
+        return (false, None);
     }
     let progress_pixels = bridge_progress_pixel_count(&frame.rgba);
+    let progress_probe = bridge_progress_fill_probe(&frame.rgba, frame.w)
+        .map(|(x, y)| ((frame.dx + x) as u32, (frame.dy + y) as u32));
     NATIVE_OVERLAY_BAR_PIXEL_LAST_COUNT.store(progress_pixels, Ordering::SeqCst);
     if progress_pixels != 0 {
         NATIVE_OVERLAY_BAR_PIXEL_FRAMES.fetch_add(1, Ordering::SeqCst);
@@ -539,11 +554,11 @@ unsafe fn copy_bridge_content_frame(
     let row_pitch = footprint.Footprint.RowPitch as usize;
     let src_row = frame.w * 4;
     if total_bytes == 0 || row_pitch < src_row {
-        return false;
+        return (false, None);
     }
     let mut mapped: *mut c_void = std::ptr::null_mut();
     if unsafe { upload.Map(0, None, Some(&mut mapped)) }.is_err() || mapped.is_null() {
-        return false;
+        return (false, None);
     }
     {
         let dst =
@@ -601,7 +616,7 @@ unsafe fn copy_bridge_content_frame(
             D3D12_RESOURCE_STATE_RENDER_TARGET,
         )
     };
-    true
+    (true, progress_probe)
 }
 
 unsafe fn record_bridge_pixel_copy(
@@ -609,6 +624,8 @@ unsafe fn record_bridge_pixel_copy(
     backbuffer: &ID3D12Resource,
     readback: &ID3D12Resource,
     footprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT,
+    x: u32,
+    y: u32,
 ) {
     let mut dst = D3D12_TEXTURE_COPY_LOCATION {
         pResource: ManuallyDrop::new(Some(readback.clone())),
@@ -625,11 +642,11 @@ unsafe fn record_bridge_pixel_copy(
         },
     };
     let read_box = D3D12_BOX {
-        left: 32,
-        top: 32,
+        left: x,
+        top: y,
         front: 0,
-        right: 33,
-        bottom: 33,
+        right: x.saturating_add(1),
+        bottom: y.saturating_add(1),
         back: 1,
     };
     unsafe { list.CopyTextureRegion(&dst, 0, 0, 0, &src, Some(&read_box)) };
@@ -973,8 +990,9 @@ unsafe fn native_overlay_run() {
             ptr: rtv_base.ptr + idx * rtv_size,
         };
         unsafe { list.ClearRenderTargetView(handle, &bridge_clear_color(), None) };
-        if let Some(upload) = bridge_upload.as_ref()
-            && unsafe {
+        let mut bar_probe = None;
+        if let Some(upload) = bridge_upload.as_ref() {
+            let (copied, probe) = unsafe {
                 copy_bridge_content_frame(
                     &device,
                     &list,
@@ -983,15 +1001,19 @@ unsafe fn native_overlay_run() {
                     win_w as usize,
                     win_h as usize,
                 )
+            };
+            if copied {
+                NATIVE_OVERLAY_CONTENT_FRAMES.fetch_add(1, Ordering::SeqCst);
+                bar_probe = probe;
             }
-        {
-            NATIVE_OVERLAY_CONTENT_FRAMES.fetch_add(1, Ordering::SeqCst);
         }
         let marker_rect = bridge_marker_rect();
         unsafe { list.ClearRenderTargetView(handle, &bridge_marker_color(), Some(&[marker_rect])) };
         NATIVE_OVERLAY_DRAW_HITS.fetch_add(1, Ordering::SeqCst);
         if NATIVE_OVERLAY_PIXEL_PROBE_HITS.load(Ordering::SeqCst) == 0 {
-            if let Some((readback, footprint, _total_bytes)) = bridge_pixel_readback.as_ref() {
+            if let (Some((readback, footprint, _total_bytes)), Some((probe_x, probe_y))) =
+                (bridge_pixel_readback.as_ref(), bar_probe)
+            {
                 unsafe {
                     overlay_transition(
                         &list,
@@ -1000,7 +1022,9 @@ unsafe fn native_overlay_run() {
                         D3D12_RESOURCE_STATE_COPY_SOURCE,
                     )
                 };
-                unsafe { record_bridge_pixel_copy(&list, bb, readback, *footprint) };
+                unsafe {
+                    record_bridge_pixel_copy(&list, bb, readback, *footprint, probe_x, probe_y)
+                };
                 unsafe {
                     overlay_transition(
                         &list,

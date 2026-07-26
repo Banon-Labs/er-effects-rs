@@ -47,7 +47,7 @@ def good_telemetry() -> dict[str, Any]:
         "oracle_native_overlay_child_geometry_mismatch_hits": 0,
         "oracle_native_overlay_parent_hwnd": 0x1234,
         "oracle_native_overlay_pixel_probe_matches": 1,
-        "oracle_native_overlay_pixel_probe_rgba": 0x2EB8EDFF,
+        "oracle_native_overlay_pixel_probe_rgba": 0xE2DFD6FF,
         "oracle_scaleform_memoryfile_custom_asset_hits": 0,
     }
 
