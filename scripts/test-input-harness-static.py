@@ -58,6 +58,11 @@ def test_boot_autoload_mms18_can_force_stuck_testnet_step() -> None:
     telemetry = (REPO_ROOT / "crates/er-effects-rs/src/telemetry/runtime_oracles/write_telemetry.rs").read_text()
     assert 'oracle_testnet_ff_stuck_frames' in telemetry
     assert 'oracle_testnet_ff_fired_epoch' in telemetry
+    oracle = (REPO_ROOT / "crates/er-effects-rs/src/telemetry/runtime_oracles/write_oracle.rs").read_text()
+    assert 'oracle_mms_next_step_4c' in oracle
+    assert 'oracle_mms_done_flag_50' in oracle
+    assert 'oracle_mms_advance_gate_lo_4b8' in oracle
+    assert 'oracle_mms_advance_gate_hi_4b9' in oracle
 
 
 def test_continue_and_boot_view_timing_oracles_exist() -> None:
