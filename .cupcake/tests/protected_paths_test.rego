@@ -55,3 +55,14 @@ test_deny_literal_etc_delete_even_with_mktemp_cleanup if {
 	denials := protected.halt with input as bash_event(cmd, ["/"])
 	"BUILTIN-PROTECTED-PATHS-PARENT" in rule_ids(denials)
 }
+
+test_deny_extra_relative_delete_even_with_mktemp_cleanup if {
+	cmd := concat("\n", [
+		"tmp=$(mktemp)",
+		"/home/banon/.local/bin/bd comment er-effects-rs-22h --file \"$tmp\" --json",
+		"rm -f \"$tmp\"",
+		"rm -f relative-file",
+	])
+	denials := protected.halt with input as bash_event(cmd, ["/"])
+	"BUILTIN-PROTECTED-PATHS-PARENT" in rule_ids(denials)
+}

@@ -43,6 +43,18 @@ def test_samechar_runner_arms_product_movement_for_deterministic_reload_driver()
     assert 'if [[ "${OBSERVE_ONLY:-0}" != "1" ]]; then\n\tprintf \'%s\\n\' "${HARNESS_DRIVE_MODE:-full}"' not in runner
 
 
+def test_boot_autoload_mms18_can_force_stuck_testnet_step() -> None:
+    hooks = (REPO_ROOT / "crates/er-effects-rs/src/experiments/startup_hooks/system_quit_hooks.rs").read_text()
+    assert "let boot_epoch = epoch == 0;" in hooks
+    assert "if boot_epoch {" in hooks
+    assert "mms_state == MOVEMAPSTEP_STEP_MOVEMAP_INDEX" in hooks
+    assert "fin == 0" in hooks
+    assert "MOVEMAPSTEP_TESTNETSTEP_WRAPPER_108_OFFSET" in hooks
+    assert "EZ_CHILD_STEP_REQUEST_FINISH_RVA" in hooks
+    assert "request_finish(wrapper)" in hooks
+    assert "No reload committed yet -> this is load1; never force" not in hooks
+
+
 def test_continue_and_boot_view_timing_oracles_exist() -> None:
     counters = (REPO_ROOT / "crates/er-telemetry/src/counters.rs").read_text()
     assert "pub static BOOT_VIEW_PUMP_STOP_MS" in counters
@@ -128,6 +140,7 @@ def main() -> int:
         test_pad_inject_direct_stamp_writes_are_enabled,
         test_input_harness_manifest_names_actual_hook_layer,
         test_samechar_runner_arms_product_movement_for_deterministic_reload_driver,
+        test_boot_autoload_mms18_can_force_stuck_testnet_step,
         test_continue_and_boot_view_timing_oracles_exist,
     ]
     for test in tests:

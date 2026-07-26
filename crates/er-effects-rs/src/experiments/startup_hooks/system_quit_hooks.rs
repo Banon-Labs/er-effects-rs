@@ -141,10 +141,11 @@ pub(crate) fn install_system_quit_child_finish_trace_hook() {
     }
 }
 
-/// Stuck-frame + one-shot state for the load2 testNetStep force-finish below.
+/// Stuck-frame + one-shot state for the load2/boot testNetStep force-finish below.
 pub(crate) use er_telemetry::counters::TESTNET_FF_STUCK_FRAMES;
 pub(crate) use er_telemetry::counters::TESTNET_FF_LAST_MMS;
 pub(crate) use er_telemetry::counters::TESTNET_FF_FIRED_EPOCH;
+const TESTNET_FF_STUCK_FRAME_THRESHOLD: usize = 120;
 
 /// LOAD2 WORLD-COMPLETION FIX (bd load2-fires-but-stalls-at-mms18-world-completion-2026-07-19). A
 /// DRIVEN reload (`fresh_deser>=1`) reaches MoveMapStep STEP_Finish but its testNetStep child never
@@ -159,11 +160,7 @@ pub(crate) use er_telemetry::counters::TESTNET_FF_FIRED_EPOCH;
 pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
-    if epoch == 0 {
-        // No reload committed yet -> this is load1; never force its (healthy) testNetStep.
-        TESTNET_FF_STUCK_FRAMES.store(0, Ordering::Relaxed);
-        return;
-    }
+    let boot_epoch = epoch == 0;
     let mut owner = TITLE_OWNER_PTR.load(Ordering::SeqCst);
     if owner == null {
         owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
@@ -177,7 +174,8 @@ pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
         return;
     };
     // requestCode must be 1 (world loading, not latched to 2 = done). Any other value: reset + bail.
-    if unsafe { safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) }.unwrap_or(-1) != 1 {
+    let request_code = unsafe { safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) }.unwrap_or(-1);
+    if request_code != 1 {
         TESTNET_FF_STUCK_FRAMES.store(0, Ordering::Relaxed);
         return;
     }
@@ -196,7 +194,46 @@ pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
         .map(i32::from)
         .unwrap_or(-1);
     let mms_state = unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET) }.unwrap_or(-1);
-    let _ = (&TESTNET_FF_LAST_MMS, &TESTNET_FF_STUCK_FRAMES);
+    if boot_epoch {
+        let testnet_stepper = unsafe {
+            safe_read_usize(mms + MOVEMAPSTEP_TESTNETSTEP_STEPPER_110_OFFSET)
+        }
+        .unwrap_or(0);
+        let boot_stuck_signature = request_code == 1
+            && mms_state == MOVEMAPSTEP_STEP_MOVEMAP_INDEX
+            && fin == 0
+            && testnet_stepper >= 0x10000;
+        if !boot_stuck_signature {
+            TESTNET_FF_STUCK_FRAMES.store(0, Ordering::Relaxed);
+            TESTNET_FF_LAST_MMS.store(usize::MAX, Ordering::Relaxed);
+            return;
+        }
+        let stuck_frames = if TESTNET_FF_LAST_MMS.swap(mms, Ordering::SeqCst) == mms {
+            TESTNET_FF_STUCK_FRAMES.fetch_add(1, Ordering::SeqCst) + 1
+        } else {
+            TESTNET_FF_STUCK_FRAMES.store(1, Ordering::SeqCst);
+            1
+        };
+        if stuck_frames >= TESTNET_FF_STUCK_FRAME_THRESHOLD
+            && TESTNET_FF_FIRED_EPOCH.swap(epoch, Ordering::SeqCst) != epoch
+        {
+            let wrapper = mms + MOVEMAPSTEP_TESTNETSTEP_WRAPPER_108_OFFSET;
+            match game_rva(EZ_CHILD_STEP_REQUEST_FINISH_RVA) {
+                Ok(addr) => {
+                    let request_finish: unsafe extern "system" fn(usize) =
+                        unsafe { std::mem::transmute(addr) };
+                    unsafe { request_finish(wrapper) };
+                    append_autoload_debug(format_args!(
+                        "testnet-ff: boot epoch {epoch} stuck {stuck_frames} frames at requestCode={request_code} mms={mms_state} fin={fin} testnet=0x{testnet_stepper:x} -> RequestFinish(wrapper=0x{wrapper:x})"
+                    ));
+                }
+                Err(_) => append_autoload_debug(format_args!(
+                    "testnet-ff: boot epoch {epoch} stuck {stuck_frames} frames but failed to resolve RequestFinish rva 0x{EZ_CHILD_STEP_REQUEST_FINISH_RVA:x}"
+                )),
+            }
+        }
+        return;
+    }
     // FRAMERATE FIX (2026-07-21, case 7 gate decompiled from FUN_140afa6d0 via the ghidra MCP): the
     // finalize walk (fin 5->9) is a cleanup that runs AFTER the fin=0 movable window; load1 becomes
     // movable, THEN walks and settles (mms 18->-1) -> exits loading mode -> fps recovers. Holding fin=0
