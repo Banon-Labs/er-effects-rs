@@ -19,6 +19,8 @@ import argparse
 import contextlib
 import json
 import os
+import signal
+import shutil
 import statistics
 import subprocess
 import sys
@@ -689,15 +691,48 @@ def write_semaphore_diff(
     return json_out, md_out
 
 
+def _native_pids_by_comm(name: str) -> set[int]:
+    pids: set[int] = set()
+    proc = Path("/proc")
+    if not proc.exists():
+        return pids
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            comm = (entry / "comm").read_text(errors="replace").strip()
+        except OSError:
+            continue
+        if comm == name:
+            pids.add(int(entry.name))
+    return pids
+
+
+def _env_pid_set(name: str) -> set[int]:
+    return {int(tok) for tok in os.environ.get(name, "").split() if tok.isdigit()}
+
+
 def teardown() -> None:
-    for image in ("eldenring.exe", "me3.exe"):
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            subprocess.run(
-                ["taskkill.exe", "/F", "/IM", image],
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
+    if shutil.which("taskkill.exe"):
+        for image in ("eldenring.exe", "me3.exe"):
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                subprocess.run(
+                    ["taskkill.exe", "/F", "/IM", image],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+        return
+
+    pre_er = _env_pid_set("PRE_NATIVE_ER_PIDS")
+    pre_me3 = _env_pid_set("PRE_NATIVE_ME3_PIDS")
+    targets = (_native_pids_by_comm("eldenring.exe") - pre_er) | (_native_pids_by_comm("me3") - pre_me3)
+    for pid in targets:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.kill(pid, signal.SIGTERM)
+    for pid in targets:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.kill(pid, signal.SIGKILL)
 
 
 def write_switch_trigger(game_dir: Path, slot: int, save_file: str | None) -> None:

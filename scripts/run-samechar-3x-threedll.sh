@@ -99,10 +99,11 @@ cp -f "$TRACE_DLL" "$TRACE_GAMEDIR"
 cp -f "$HARNESS_DLL" "$HARNESS_GAMEDIR"
 cp -f "$TELEM_DLL" "$TELEM_GAMEDIR"
 rm -f "$GAME_DIR/er-telemetry-timeseries.jsonl" # fresh per-run core/fps timeseries
-# COMPANION: the harness auto-detects the product DLL is loaded and stands down (passive) on its own -- a
-# real runtime condition, not a marker file. Clear any stale standalone-run mode flag so nothing leaks in.
+# COMPANION: in the deterministic control-file path the product owns movement proof + slot switching;
+# the input-harness DLL should stay passive so the old menu-driven quit flow cannot fight it. Force-drive
+# is only for the legacy menu-nav path or an explicit diagnostic override.
 rm -f "$GAME_DIR/er-harness-drive-mode.txt" "$GAME_DIR/er-harness-force-drive.txt"
-if [[ -z "$DRIVE_RELOAD_SLOTS" || "${FORCE_HARNESS_DRIVE:-0}" == "1" ]]; then
+if [[ "${OBSERVE_ONLY:-0}" != "1" && ( -z "$DRIVE_RELOAD_SLOTS" || "${FORCE_HARNESS_DRIVE:-0}" == "1" ) ]]; then
 	printf '%s\n' "${HARNESS_DRIVE_MODE:-full}" >"$GAME_DIR/er-harness-drive-mode.txt"
 	printf '1\n' >"$GAME_DIR/er-harness-force-drive.txt"
 	LAUNCH_ENV_VARS+=("ER_HARNESS_FORCE_DRIVE=1")
@@ -154,7 +155,19 @@ PROFILE="$ARTIFACT_DIR/samechar-3x-threedll.me3"
 rm -f "$GAME_DIR"/er-effects-system-quit-repro.txt "$GAME_DIR"/er-effects-system-quit-load-switch.txt \
 	"$GAME_DIR"/er-effects-sq-target-switches.txt "$GAME_DIR"/er-effects-sq-target-slots.txt \
 	"$GAME_DIR"/er-effects-prove-movement.txt "$GAME_DIR"/er-effects-stay-active.txt \
-	"$GAME_DIR"/er-effects-probe-foreground.txt 2>/dev/null
+	"$GAME_DIR"/er-effects-probe-foreground.txt "$GAME_DIR"/er-effects-input-trace.txt 2>/dev/null
+
+# Movement-proof gate: deterministic control-file reloads still wait for the product's in-DLL
+# can-move probe to inject a forward stick and prove Havok movement in each load epoch. This is proof-only
+# and absent from normal user sessions. Observe-only runs intentionally do not drive movement.
+if [[ "${OBSERVE_ONLY:-0}" != "1" && "${PROVE_MOVEMENT:-1}" == "1" ]]; then
+	printf '1\n' >"$GAME_DIR/er-effects-prove-movement.txt"
+	printf '1\n' >"$GAME_DIR/er-effects-stay-active.txt"
+	printf '1\n' >"$GAME_DIR/er-effects-input-trace.txt"
+	[[ "${PROBE_FOREGROUND:-0}" == "1" ]] && printf '1\n' >"$GAME_DIR/er-effects-probe-foreground.txt"
+elif [[ "${PROVE_MOVEMENT:-1}" != "1" ]]; then
+	rm -f "$GAME_DIR/er-effects-prove-movement.txt" 2>/dev/null
+fi
 
 # --- CLEAN SLATE: recreate every log so no PRIOR run pollutes this one. ---
 rm -f "$GAME_DIR"/er-effects-*.log "$GAME_DIR"/er-reload-trace.log "$GAME_DIR"/er-input-harness.log \
@@ -167,8 +180,27 @@ win_pids_for() {
 	tasklist.exe /FI "IMAGENAME eq $1" /FO CSV /NH 2>/dev/null |
 		python3 -c "import sys,csv; print(' '.join(r[1] for r in csv.reader(sys.stdin) if len(r)>1 and r[1].isdigit()))"
 }
+native_pids_for() {
+	python3 - "$1" <<'PY'
+import os, sys
+name = sys.argv[1]
+out = []
+for pid in filter(str.isdigit, os.listdir('/proc')):
+    try:
+        comm = open(f'/proc/{pid}/comm', encoding='utf-8', errors='replace').read().strip()
+    except OSError:
+        continue
+    if comm == name:
+        out.append(pid)
+print(' '.join(out))
+PY
+}
+
 PRE_ER_PIDS=" $(win_pids_for eldenring.exe) "
 PRE_ME3_PIDS=" $(win_pids_for me3.exe) $(win_pids_for me3-launcher.exe) "
+PRE_NATIVE_ER_PIDS="$(native_pids_for eldenring.exe)"
+PRE_NATIVE_ME3_PIDS="$(native_pids_for me3)"
+export PRE_NATIVE_ER_PIDS PRE_NATIVE_ME3_PIDS
 
 # shellcheck disable=SC2317,SC2329
 cleanup() {
@@ -181,8 +213,16 @@ cleanup() {
 	for pid in $(win_pids_for me3.exe) $(win_pids_for me3-launcher.exe); do
 		[[ "$PRE_ME3_PIDS" == *" $pid "* ]] || taskkill.exe /F /PID "$pid" >/dev/null 2>&1
 	done
+	for pid in $(native_pids_for eldenring.exe); do
+		[[ " $PRE_NATIVE_ER_PIDS " == *" $pid "* ]] || kill -TERM "$pid" >/dev/null 2>&1 || true
+	done
+	for pid in $(native_pids_for me3); do
+		[[ " $PRE_NATIVE_ME3_PIDS " == *" $pid "* ]] || kill -TERM "$pid" >/dev/null 2>&1 || true
+	done
 	[[ -f "$ARTIFACT_DIR/er-effects.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-effects.toml.bak" "$GAME_DIR/er-effects.toml"
-	rm -f "$GAME_DIR/er-harness-drive-mode.txt" "$GAME_DIR/er-harness-force-drive.txt" 2>/dev/null || true
+	rm -f "$GAME_DIR/er-harness-drive-mode.txt" "$GAME_DIR/er-harness-force-drive.txt" \
+		"$GAME_DIR/er-effects-prove-movement.txt" "$GAME_DIR/er-effects-stay-active.txt" \
+		"$GAME_DIR/er-effects-probe-foreground.txt" "$GAME_DIR/er-effects-input-trace.txt" 2>/dev/null || true
 }
 trap cleanup EXIT
 

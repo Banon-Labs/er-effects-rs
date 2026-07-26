@@ -31,6 +31,16 @@ def test_input_harness_manifest_names_actual_hook_layer() -> None:
     assert "0x240e70/0x241130/0x26634a0" in manifest
 
 
+def test_samechar_runner_arms_product_movement_for_deterministic_reload_driver() -> None:
+    runner = (REPO_ROOT / "scripts/run-samechar-3x-threedll.sh").read_text()
+    assert 'DRIVE_RELOAD_SLOTS="${DRIVE_RELOAD_SLOTS-0,0}"' in runner
+    assert 'printf \'1\\n\' >"$GAME_DIR/er-effects-prove-movement.txt"' in runner
+    assert 'printf \'1\\n\' >"$GAME_DIR/er-effects-stay-active.txt"' in runner
+    assert 'printf \'1\\n\' >"$GAME_DIR/er-effects-input-trace.txt"' in runner
+    assert 'if [[ "${OBSERVE_ONLY:-0}" != "1" && ( -z "$DRIVE_RELOAD_SLOTS" || "${FORCE_HARNESS_DRIVE:-0}" == "1" ) ]]; then' in runner
+    assert 'if [[ "${OBSERVE_ONLY:-0}" != "1" ]]; then\n\tprintf \'%s\\n\' "${HARNESS_DRIVE_MODE:-full}"' not in runner
+
+
 def test_continue_and_boot_view_timing_oracles_exist() -> None:
     counters = (REPO_ROOT / "crates/er-telemetry/src/counters.rs").read_text()
     assert "pub static BOOT_VIEW_PUMP_STOP_MS" in counters
@@ -115,6 +125,7 @@ def main() -> int:
         test_pad_inject_uses_both_cs_ingame_pad_typeids,
         test_pad_inject_direct_stamp_writes_are_enabled,
         test_input_harness_manifest_names_actual_hook_layer,
+        test_samechar_runner_arms_product_movement_for_deterministic_reload_driver,
         test_continue_and_boot_view_timing_oracles_exist,
     ]
     for test in tests:
