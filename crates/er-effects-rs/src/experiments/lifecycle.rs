@@ -546,15 +546,9 @@ pub(crate) fn install_boot_diagnostics_and_trace_hooks() {
                 .spawn(install_safe_input_hooks);
         });
     }
-    // Observe-only user32 window-reconfiguration timeline (bd er-effects-rs-rzow): installed at
-    // attach so CreateWindowExW is covered before the game builds its startup window. Pure
-    // passthrough logging/counting; the RAM semaphore for the mid-boot fullscreen transition
-    // whose XWayland servicing blacks the presented surface for a few frames.
-    START_WINDOW_RECONFIG_OBSERVER.call_once(|| {
-        let _ = std::thread::Builder::new()
-            .name("er-effects-winreconfig-observer".to_owned())
-            .spawn(install_window_reconfig_observer_hooks);
-    });
+    // Window-reconfiguration hooks are owned by er-telemetry-dll when that native is present in
+    // the ME3 profile. Keep product DLL out of diagnostic/logging hooks so rendering behavior does
+    // not depend on product-owned observer side effects.
     if trace_continue_enabled() && !continue_trace_disabled() {
         write_bootstrap_event(
             BOOTSTRAP_EVENT_CONTINUE_TRACE_REQUESTED,
