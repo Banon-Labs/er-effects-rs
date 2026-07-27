@@ -237,13 +237,19 @@ impl SoulsFormats {
         let project = match self.layout {
             SmithboxLayout::Source => {
                 let andre_formats_project = andre_formats_project_path(&self.smithbox_root);
+                let tfm = tfm_from_csproj_file(&andre_formats_project)
+                    .unwrap_or_else(|| shaders::DEFAULT_TFM.to_owned());
                 let andre_formats_project = self.host_path_for(&andre_formats_project, host)?;
-                BRIDGE_PROJECT_TEMPLATE.replace(
-                    "{{ANDRE_FORMATS_PROJECT}}",
-                    &escape_xml(&andre_formats_project),
-                )
+                BRIDGE_PROJECT_TEMPLATE
+                    .replace(
+                        "{{ANDRE_FORMATS_PROJECT}}",
+                        &escape_xml(&andre_formats_project),
+                    )
+                    .replace("{{TFM}}", &tfm)
             }
             SmithboxLayout::Binary => {
+                let tfm = shaders::detect_dotnet_tfm(&self.smithbox_root)
+                    .unwrap_or_else(|| shaders::DEFAULT_TFM.to_owned());
                 let formats_dll = self.smithbox_root.join(ANDRE_FORMATS_DLL_FILE);
                 let formats_dll = self.host_path_for(&formats_dll, host)?;
                 let soulsformats_dll = self.smithbox_root.join(ANDRE_SOULSFORMATS_DLL_FILE);
@@ -251,6 +257,7 @@ impl SoulsFormats {
                 BRIDGE_BINARY_PROJECT_TEMPLATE
                     .replace("{{ANDRE_FORMATS_DLL}}", &escape_xml(&formats_dll))
                     .replace("{{ANDRE_SOULSFORMATS_DLL}}", &escape_xml(&soulsformats_dll))
+                    .replace("{{TFM}}", &tfm)
             }
         };
 
@@ -350,6 +357,21 @@ fn current_repo_root() -> Result<PathBuf, SoulsFormatsError> {
 
 fn andre_formats_project_path(smithbox_root: &Path) -> PathBuf {
     smithbox_root.join(ANDRE_FORMATS_PROJECT_PATH)
+}
+
+/// Read the `<TargetFramework>` value (e.g. `net10.0`) from a csproj so the
+/// bridge project targets the same .NET as the Andre.Formats source it
+/// references; a mismatched pin fails the build with NU1201.
+fn tfm_from_csproj_file(csproj: &Path) -> Option<String> {
+    let contents = fs::read_to_string(csproj).ok()?;
+    tfm_from_csproj(&contents)
+}
+
+fn tfm_from_csproj(contents: &str) -> Option<String> {
+    let (_, rest) = contents.split_once("<TargetFramework>")?;
+    let (tfm, _) = rest.split_once("</TargetFramework>")?;
+    let tfm = tfm.trim();
+    (!tfm.is_empty()).then(|| tfm.to_owned())
 }
 
 fn detect_smithbox_layout(smithbox_root: &Path) -> Option<SmithboxLayout> {
@@ -514,11 +536,29 @@ mod tests {
 
     #[test]
     fn bridge_template_substitution_produces_no_placeholder() {
-        let project =
-            BRIDGE_PROJECT_TEMPLATE.replace("{{ANDRE_FORMATS_PROJECT}}", &escape_xml("a&b"));
+        let project = BRIDGE_PROJECT_TEMPLATE
+            .replace("{{ANDRE_FORMATS_PROJECT}}", &escape_xml("a&b"))
+            .replace("{{TFM}}", "net10.0");
 
         assert!(!project.contains("{{ANDRE_FORMATS_PROJECT}}"));
+        assert!(!project.contains("{{TFM}}"));
         assert!(project.contains("a&amp;b"));
+        assert!(project.contains("<TargetFramework>net10.0</TargetFramework>"));
+    }
+
+    #[test]
+    fn tfm_from_csproj_reads_target_framework() {
+        assert_eq!(
+            tfm_from_csproj(
+                "<Project><PropertyGroup>\n  \
+                 <TargetFramework> net10.0 </TargetFramework>\n\
+                 </PropertyGroup></Project>"
+            )
+            .as_deref(),
+            Some("net10.0")
+        );
+        assert_eq!(tfm_from_csproj("<Project />"), None);
+        assert_eq!(tfm_from_csproj("<TargetFramework></TargetFramework>"), None);
     }
 
     #[test]
@@ -559,10 +599,12 @@ mod tests {
             .replace(
                 "{{ANDRE_SOULSFORMATS_DLL}}",
                 &escape_xml(r"D:\Smithbox\Andre.SoulsFormats.dll"),
-            );
+            )
+            .replace("{{TFM}}", "net9.0");
 
         assert!(!project.contains("{{ANDRE_FORMATS_DLL}}"));
         assert!(!project.contains("{{ANDRE_SOULSFORMATS_DLL}}"));
+        assert!(!project.contains("{{TFM}}"));
         assert!(project.contains(r"D:\Smithbox\Andre.Formats.dll"));
         assert!(project.contains(r"D:\Smithbox\Andre.SoulsFormats.dll"));
     }

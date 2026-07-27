@@ -1,7 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net9.0</TargetFramework>
+    <!-- TFM is auto-detected from the installed Andre.SoulsFormats.dll so the
+         bridge builds against whichever .NET the Smithbox install targets. -->
+    <TargetFramework>{{TFM}}</TargetFramework>
+    <RollForward>Major</RollForward>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <LangVersion>12</LangVersion>
