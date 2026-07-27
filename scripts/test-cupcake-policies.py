@@ -43,6 +43,23 @@ def run_case(case: PolicyCase) -> None:
     }
     if case.extra_event:
         event.update(case.extra_event)
+    env = {**os.environ}
+    # CI checks out detached commits, making `git branch --show-current` empty.
+    # Policy-regression allow-cases should model a normal feature branch by default, but
+    # cases that explicitly set or remove the current_branch signal must control the
+    # override too; otherwise live Cupcake eval cannot exercise main/missing-branch guards.
+    signals = event.get("signals")
+    if isinstance(signals, dict) and "current_branch" in signals:
+        branch_signal = signals["current_branch"]
+        if isinstance(branch_signal, dict):
+            env["CUPCAKE_CURRENT_BRANCH_OVERRIDE"] = str(branch_signal.get("output", ""))
+        else:
+            env["CUPCAKE_CURRENT_BRANCH_OVERRIDE"] = str(branch_signal)
+    elif isinstance(signals, dict):
+        env["CUPCAKE_CURRENT_BRANCH_OVERRIDE"] = ""
+    else:
+        env["CUPCAKE_CURRENT_BRANCH_OVERRIDE"] = "feature/policy-regression"
+
     result = subprocess.run(
         ["cupcake", "eval", "--harness", "claude", "--strict", "--log-level", "error"],
         cwd=REPO_ROOT,
@@ -51,13 +68,7 @@ def run_case(case: PolicyCase) -> None:
         capture_output=True,
         check=False,
         timeout=30,
-        env={
-            **os.environ,
-            # CI checks out detached commits, making `git branch --show-current` empty.
-            # Policy-regression allow-cases should model a normal feature branch; direct
-            # OPA tests cover missing/empty branch signal fail-closed behavior.
-            "CUPCAKE_CURRENT_BRANCH_OVERRIDE": "feature/policy-regression",
-        },
+        env=env,
     )
     output = result.stdout + result.stderr
     allowed = result.returncode == 0
@@ -132,6 +143,24 @@ def main() -> int:
         PolicyCase(
             "allow-repo-cupcake-system-path-not-absolute-system",
             "opa check .cupcake/system .cupcake/policies/claude/builtins/protected_paths.rego",
+            True,
+        ),
+        PolicyCase(
+            "deny-git-push-on-main",
+            "git push",
+            False,
+            "Do not push directly to main",
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        PolicyCase(
+            "deny-git-push-main-from-feature",
+            "git push origin HEAD:main",
+            False,
+            "Do not push directly to main",
+        ),
+        PolicyCase(
+            "allow-git-push-feature-branch",
+            "git push -u origin guard/no-direct-main-push",
             True,
         ),
         PolicyCase(

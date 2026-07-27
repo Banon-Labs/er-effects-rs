@@ -263,29 +263,29 @@ run. See bd commit-immediately-after-runtime-validation-2026-07-17 (revised).
 
 ## Session Completion
 
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until the agent-owned branch is pushed. Do **not** push directly to `main`.
 
 **MANDATORY WORKFLOW:**
 
 1. **File issues for remaining work** - Create issues for anything that needs follow-up
 2. **Run quality gates** (if code changed) - Tests, linters, builds
 3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
+4. **PUSH THE WORK BRANCH TO REMOTE** - This is MANDATORY, but direct pushes to `main` are forbidden:
    ```bash
-   git pull --rebase
-   /home/choza/.local/bin/bd dolt push
-   git push
-   git status  # MUST show "up to date with origin"
+   git pull --rebase origin main
+   "$HOME/.local/bin/bd" dolt push
+   git push -u origin <feature-or-tooling-branch>
+   git status  # MUST show the branch is clean and tracking its remote
    ```
 5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
+6. **Verify** - All changes committed AND the work branch pushed
+7. **Hand off** - Provide context for next session / review path
 
 **CRITICAL RULES:**
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
+- Work is NOT complete until the work branch is pushed
+- NEVER push directly to `main` from an agent session
+- NEVER say "ready to push when you are" - push the work branch yourself
+- If branch push fails, resolve and retry until it succeeds
 <!-- END BEADS INTEGRATION -->
 
 ## Runtime-Affecting Refactor Feasibility
