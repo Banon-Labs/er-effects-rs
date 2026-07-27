@@ -14,13 +14,14 @@ crate-type = ["cdylib"]
 # product DLL). All reusable logic lives in the er-telemetry LIB; a cdylib
 # cannot be depended on as a lib, which is why this is a separate shell.
 #
-# Read-only telemetry installs no MinHook trampolines, so (unlike the product
-# DLL / er-reload-trace-dll) there is no build.rs / cc dependency.
+# Owns standalone telemetry hooks; product DLL should not need diagnostic/logging hooks.
 [target.'cfg(windows)'.dependencies]
+er-hook = { path = "../er-hook" }
 er-telemetry = { path = "../er-telemetry" }
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 windows = { version = "0.62", features = [
   "Win32_Foundation",
+  "Win32_System_LibraryLoader",
   "Win32_System_SystemServices",
 ] }
