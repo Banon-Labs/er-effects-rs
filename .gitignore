@@ -28,6 +28,9 @@ dump-exec.bin
 # Local hidden git worktrees / sandboxes (for example Bevy shader tinkering).
 /.worktrees/
 
+# Local dependency checkouts the param bridge resolves (e.g. .deps/Smithbox).
+/.deps/
+
 ProDebug.dll
 offline-launcher.exe
 
