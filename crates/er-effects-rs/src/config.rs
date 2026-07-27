@@ -131,6 +131,15 @@ pub(crate) fn preferred_save_picker_dir_now() -> Option<PathBuf> {
     session.or_else(configured_preferred_save_picker_dir)
 }
 
+/// Prefer this directory for the next in-session picker open without rewriting `er-effects.toml`.
+/// Used when a configured autoload source is rejected before the picker exists (for example a
+/// read-only save source that cannot safely receive game writes).
+pub(crate) fn set_session_preferred_save_picker_dir(dir: &std::path::Path) {
+    *SESSION_PREFERRED_PICKER_DIR
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(PathBuf::from(dir));
+}
+
 /// Whether a validated missing-save pick rewrites `preferred_save_picker_dir` in the user's
 /// `er-effects.toml`. Defaults to true when the key is absent.
 pub(crate) fn autoupdate_preferred_picker_dir_enabled() -> bool {

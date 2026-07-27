@@ -35,6 +35,7 @@ fn write_stepfinish_gate_oracle(body: &mut String) {
         None
     };
     let request_code = ingame.map_or(-1, |ig| rdi(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET));
+    ORACLE_RELIABLE_INGAME_PTR.store(ingame.unwrap_or(0), Ordering::SeqCst);
     let mms =
         ingame.and_then(|ig| rd(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET).filter(|v| *v != null));
     // Publish the reliably-resolved MoveMapStep pointer for the in-world finalize drive to consume:

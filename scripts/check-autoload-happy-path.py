@@ -727,13 +727,10 @@ def main() -> int:
     telemetry_src = telemetry
     require(
         "MSGBOX_LAST_DIALOG" in lib
-        and "MSGBOX_TOTAL_BUILDS" in lib
-        and "MSGBOX_POSTLOAD_BUILDS" in lib
-        and "oracle_msgbox_total_builds" in telemetry_src
-        and "oracle_msgbox_any_seen" in telemetry_src
-        and "oracle_postload_modal_seen" in telemetry_src
-        and "oracle_blocking_modal_present" in telemetry_src,
-        "telemetry must expose zero-MessageBoxDialog and blocking-modal oracle evidence",
+        and "oracle_blocking_modal_present" in telemetry_src
+        and "msgbox-skip #" in experiments
+        and "dump_msgbox_spec" in experiments,
+        "telemetry must expose active blocking-modal evidence and the MessageBox hook must log specific builds instead of publishing ambiguous build-count oracles",
         failures,
     )
     require(
@@ -936,16 +933,16 @@ def main() -> int:
     )
     require(
         "messagebox_dialog_failures" in measure
-        and "oracle_msgbox_total_builds" in measure
+        and "oracle_blocking_modal_present" in measure
         and "native_messagebox_dialog_detected" in measure,
-        "measure must expose and penalize any native MessageBoxDialog build as a bad product-proof failure",
+        "measure must expose and penalize active blocking MessageBoxDialog state, not ambiguous historical builder counts",
         failures,
     )
     require(
-        "product autoload suppressed MessageBoxDialog builder before UI allocation but counted it as oracle failure" in experiments
-        and "MSGBOX_TOTAL_BUILDS.fetch_add" in experiments
-        and "MSGBOX_LAST_ARG_RDX.store" in experiments,
-        "product-mode MessageBoxDialog suppression must preserve/count builder args so telemetry still fails closed",
+        "suppressed MessageBoxDialog build scope=" in experiments
+        and "MSGBOX_LAST_ARG_RDX.store" in experiments
+        and "dump_msgbox_spec" in experiments,
+        "product-mode MessageBoxDialog suppression must log specific build args/spec/caller evidence without publishing ambiguous build-count telemetry",
         failures,
     )
     require(

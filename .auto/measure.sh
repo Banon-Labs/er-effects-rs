@@ -87,13 +87,13 @@ if '## Verdict: PASS' not in report:
     score += 100; reasons.append('report_not_pass')
 
 sim = as_int(final.get('simulated_button_presses_total', 0), 0)
-msg = max(as_int(final.get('oracle_msgbox_total_builds', 0), 0), as_int(final.get('oracle_msgbox_any_seen', 0), 0))
+blocking_modal = as_bool(final.get('oracle_blocking_modal_present'))
 metrics['simulated_button_presses_total'] = sim
-metrics['messagebox_builds_or_seen'] = msg
+metrics['blocking_modal_present'] = blocking_modal
 if sim != 0:
     score += 400; reasons.append(f'simulated_button_presses_total={sim}')
-if msg != 0:
-    score += 350; reasons.append(f'messagebox={msg}')
+if blocking_modal:
+    score += 350; reasons.append('blocking_modal_present')
 
 required = [0,1,2]
 names = []

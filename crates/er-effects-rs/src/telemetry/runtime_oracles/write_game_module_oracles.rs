@@ -617,19 +617,11 @@ fn write_game_module_oracles(body: &mut String) {
         } else {
             MSGBOX_CLOSING_YES
         };
-        const NO_MSGBOX_BUILDS: usize = MENU_TRACE_UNSEEN_SEQ;
-        let msgbox_total_builds = MSGBOX_TOTAL_BUILDS.load(Ordering::SeqCst);
-        let msgbox_postload_builds = MSGBOX_POSTLOAD_BUILDS.load(Ordering::SeqCst);
-        let msgbox_any_seen = msgbox_total_builds != NO_MSGBOX_BUILDS;
-        let postload_modal_seen = msgbox_postload_builds != NO_MSGBOX_BUILDS;
         let blocking_modal_present = msgbox_vtable == base + MSGBOX_DIALOG_VTABLE_RVA
             && msgbox_closing_latch != MSGBOX_CLOSING_YES;
-        let msgbox_arg_rcx = MSGBOX_LAST_ARG_RCX.load(Ordering::SeqCst);
-        let msgbox_arg_rdx = MSGBOX_LAST_ARG_RDX.load(Ordering::SeqCst);
-        let msgbox_arg_r8 = MSGBOX_LAST_ARG_R8.load(Ordering::SeqCst);
-        let msgbox_arg_r9 = MSGBOX_LAST_ARG_R9.load(Ordering::SeqCst);
+        const NO_POLICY_BUILDS: usize = MENU_TRACE_UNSEEN_SEQ;
         let policy_total_builds = POLICY_TOS_TITLE_TOTAL_BUILDS.load(Ordering::SeqCst);
-        let policy_any_seen = policy_total_builds != NO_MSGBOX_BUILDS;
+        let policy_any_seen = policy_total_builds != NO_POLICY_BUILDS;
         let policy_ptr = POLICY_TOS_TITLE_LAST_THIS.load(Ordering::SeqCst);
         let policy_vtable = POLICY_TOS_TITLE_LAST_VTABLE.load(Ordering::SeqCst);
         let policy_arg_rdx = POLICY_TOS_TITLE_LAST_ARG_RDX.load(Ordering::SeqCst);
@@ -707,7 +699,7 @@ fn write_game_module_oracles(body: &mut String) {
         let policy_flag_setter_caller_rva =
             POLICY_TOS_FLAG_SETTER_LAST_CALLER_RVA.load(Ordering::SeqCst);
         let server_status_total_seen = SERVER_STATUS_TOTAL_SEEN.load(Ordering::SeqCst);
-        let server_status_any_seen = server_status_total_seen != NO_MSGBOX_BUILDS;
+        let server_status_any_seen = server_status_total_seen != NO_POLICY_BUILDS;
         let server_status_state = SERVER_STATUS_LAST_STATE.load(Ordering::SeqCst);
         let server_status_text_id = SERVER_STATUS_LAST_TEXT_ID.load(Ordering::SeqCst);
         let title_visual_suppress_installed = TITLE_NATIVE_MENU_VISUAL_SUPPRESS_INSTALLED
@@ -1094,12 +1086,9 @@ fn write_game_module_oracles(body: &mut String) {
             && title_custom_cover_black_cover_draw_bit_set
             && !title_visual_current_draw_bit_set
             && !title_pab_information_visual_current_draw_bit_set;
-        // Latched peak-load proof + derived load-time msgbox count (bd er-effects-rs-ns4n follow-up).
-        // `oracle_load_correctness_seen > 0` proves a REAL character reached the world this run, latched
-        // so a quit-to-title (which resets the live oracle_char_* fields) cannot erase it.
-        // `oracle_msgbox_loadtime_builds` = total - postload isolates the load-time msgbox count (the
-        // hard crash/investigation trigger) from benign in-world/quit-confirm dialogs, which the total
-        // alone conflates.
+        // Latched peak-load proof. `oracle_load_correctness_seen > 0` proves a REAL character
+        // reached the world this run, latched so a quit-to-title (which resets the live
+        // oracle_char_* fields) cannot erase it.
         let loaded_peak_seen = LOADED_PEAK_SEEN_COUNT.load(Ordering::SeqCst);
         let loaded_peak_level = LOADED_PEAK_LEVEL.load(Ordering::SeqCst);
         let loaded_peak_c30 = LOADED_PEAK_C30.load(Ordering::SeqCst) as u32;
@@ -1108,26 +1097,16 @@ fn write_game_module_oracles(body: &mut String) {
             .lock()
             .map(|latched| latched.clone())
             .unwrap_or_default();
-        let msgbox_loadtime_builds = msgbox_total_builds.saturating_sub(msgbox_postload_builds);
         body.push_str(&format!(
-            "  \"oracle_load_correctness_seen\": {loaded_peak_seen},\n  \"oracle_loaded_peak_level\": {loaded_peak_level},\n  \"oracle_loaded_peak_c30\": \"0x{loaded_peak_c30:x}\",\n  \"oracle_loaded_peak_name\": \"{}\",\n  \"oracle_loaded_peak_name_len\": {loaded_peak_name_len},\n  \"oracle_msgbox_loadtime_builds\": {msgbox_loadtime_builds},\n  \"oracle_msgbox_loadtime_seen\": {},\n",
-            json_escape(&loaded_peak_name),
-            msgbox_loadtime_builds != 0
+            "  \"oracle_load_correctness_seen\": {loaded_peak_seen},\n  \"oracle_loaded_peak_level\": {loaded_peak_level},\n  \"oracle_loaded_peak_c30\": \"0x{loaded_peak_c30:x}\",\n  \"oracle_loaded_peak_name\": \"{}\",\n  \"oracle_loaded_peak_name_len\": {loaded_peak_name_len},\n",
+            json_escape(&loaded_peak_name)
         ));
         body.push_str(&format!(
-            "  \"oracle_msgbox_total_builds\": {},\n  \"oracle_msgbox_any_seen\": {},\n  \"oracle_msgbox_postload_builds\": {},\n  \"oracle_postload_modal_seen\": {},\n  \"oracle_blocking_modal_present\": {},\n  \"oracle_blocking_modal_ptr\": {},\n  \"oracle_blocking_modal_vtable\": {},\n  \"oracle_blocking_modal_closing_latch\": {},\n  \"oracle_msgbox_builder_args\": [{}, {}, {}, {}],\n  \"oracle_policy_window_total_builds\": {},\n  \"oracle_policy_window_any_seen\": {},\n  \"oracle_policy_window_ptr\": {},\n  \"oracle_policy_window_vtable\": {},\n  \"oracle_policy_window_args\": [{}, {}, {}, {}, {}],\n  \"oracle_policy_window_stack_arg0\": {},\n  \"oracle_policy_window_backing_flag_ptr\": {},\n  \"oracle_policy_window_stored_backing_flag_ptr\": {},\n  \"oracle_policy_window_backing_flag_value\": {},\n  \"oracle_policy_window_requested_flag_value\": {},\n  \"oracle_policy_window_caller_rva\": {},\n  \"oracle_policy_ctor_wrapper_hits\": {},\n  \"oracle_policy_ctor_wrapper_record\": {},\n  \"oracle_policy_ctor_wrapper_original_this\": {},\n  \"oracle_policy_ctor_wrapper_original_vtable\": {},\n  \"oracle_policy_ctor_wrapper_record_id\": {},\n  \"oracle_policy_ctor_wrapper_stack_arg0\": {},\n  \"oracle_policy_ctor_wrapper_backing_flag_ptr\": {},\n  \"oracle_policy_ctor_wrapper_ret\": {},\n  \"oracle_policy_ctor_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_wrapper_hits\": {},\n  \"oracle_policy_selector_wrapper_record\": {},\n  \"oracle_policy_selector_wrapper_original_this\": {},\n  \"oracle_policy_selector_wrapper_original_vtable\": {},\n  \"oracle_policy_selector_wrapper_owner\": {},\n  \"oracle_policy_selector_wrapper_requested_flag\": {},\n  \"oracle_policy_selector_wrapper_selector_arg\": {},\n  \"oracle_policy_selector_wrapper_ret\": {},\n  \"oracle_policy_selector_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_ctor_hits\": {},\n  \"oracle_policy_selector_ctor_this\": {},\n  \"oracle_policy_selector_ctor_vtable\": {},\n  \"oracle_policy_selector_ctor_owner\": {},\n  \"oracle_policy_selector_ctor_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_requested_flag_value\": {},\n  \"oracle_policy_selector_ctor_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_ret\": {},\n  \"oracle_policy_selector_ctor_caller_rva\": {},\n  \"oracle_policy_status_predicate_hits\": {},\n  \"oracle_policy_status_predicate_this\": {},\n  \"oracle_policy_status_predicate_owner\": {},\n  \"oracle_policy_status_predicate_flag_ptr\": {},\n  \"oracle_policy_status_predicate_flag_value\": {},\n  \"oracle_policy_status_predicate_ret\": {},\n  \"oracle_policy_status_predicate_caller_rva\": {},\n  \"oracle_policy_flag_setter_hits\": {},\n  \"oracle_policy_flag_setter_owner\": {},\n  \"oracle_policy_flag_setter_value\": {},\n  \"oracle_policy_flag_setter_force\": {},\n  \"oracle_policy_flag_setter_before\": {},\n  \"oracle_policy_flag_setter_after\": {},\n  \"oracle_policy_flag_setter_caller_rva\": {},\n  \"oracle_server_status_total_seen\": {},\n  \"oracle_server_status_any_seen\": {},\n  \"oracle_server_status_state\": {},\n  \"oracle_server_status_text_id\": {},\n",
-            msgbox_total_builds,
-            msgbox_any_seen,
-            msgbox_postload_builds,
-            postload_modal_seen,
+            "  \"oracle_blocking_modal_present\": {},\n  \"oracle_blocking_modal_ptr\": {},\n  \"oracle_blocking_modal_vtable\": {},\n  \"oracle_blocking_modal_closing_latch\": {},\n  \"oracle_policy_window_total_builds\": {},\n  \"oracle_policy_window_any_seen\": {},\n  \"oracle_policy_window_ptr\": {},\n  \"oracle_policy_window_vtable\": {},\n  \"oracle_policy_window_args\": [{}, {}, {}, {}, {}],\n  \"oracle_policy_window_stack_arg0\": {},\n  \"oracle_policy_window_backing_flag_ptr\": {},\n  \"oracle_policy_window_stored_backing_flag_ptr\": {},\n  \"oracle_policy_window_backing_flag_value\": {},\n  \"oracle_policy_window_requested_flag_value\": {},\n  \"oracle_policy_window_caller_rva\": {},\n  \"oracle_policy_ctor_wrapper_hits\": {},\n  \"oracle_policy_ctor_wrapper_record\": {},\n  \"oracle_policy_ctor_wrapper_original_this\": {},\n  \"oracle_policy_ctor_wrapper_original_vtable\": {},\n  \"oracle_policy_ctor_wrapper_record_id\": {},\n  \"oracle_policy_ctor_wrapper_stack_arg0\": {},\n  \"oracle_policy_ctor_wrapper_backing_flag_ptr\": {},\n  \"oracle_policy_ctor_wrapper_ret\": {},\n  \"oracle_policy_ctor_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_wrapper_hits\": {},\n  \"oracle_policy_selector_wrapper_record\": {},\n  \"oracle_policy_selector_wrapper_original_this\": {},\n  \"oracle_policy_selector_wrapper_original_vtable\": {},\n  \"oracle_policy_selector_wrapper_owner\": {},\n  \"oracle_policy_selector_wrapper_requested_flag\": {},\n  \"oracle_policy_selector_wrapper_selector_arg\": {},\n  \"oracle_policy_selector_wrapper_ret\": {},\n  \"oracle_policy_selector_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_ctor_hits\": {},\n  \"oracle_policy_selector_ctor_this\": {},\n  \"oracle_policy_selector_ctor_vtable\": {},\n  \"oracle_policy_selector_ctor_owner\": {},\n  \"oracle_policy_selector_ctor_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_requested_flag_value\": {},\n  \"oracle_policy_selector_ctor_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_ret\": {},\n  \"oracle_policy_selector_ctor_caller_rva\": {},\n  \"oracle_policy_status_predicate_hits\": {},\n  \"oracle_policy_status_predicate_this\": {},\n  \"oracle_policy_status_predicate_owner\": {},\n  \"oracle_policy_status_predicate_flag_ptr\": {},\n  \"oracle_policy_status_predicate_flag_value\": {},\n  \"oracle_policy_status_predicate_ret\": {},\n  \"oracle_policy_status_predicate_caller_rva\": {},\n  \"oracle_policy_flag_setter_hits\": {},\n  \"oracle_policy_flag_setter_owner\": {},\n  \"oracle_policy_flag_setter_value\": {},\n  \"oracle_policy_flag_setter_force\": {},\n  \"oracle_policy_flag_setter_before\": {},\n  \"oracle_policy_flag_setter_after\": {},\n  \"oracle_policy_flag_setter_caller_rva\": {},\n  \"oracle_server_status_total_seen\": {},\n  \"oracle_server_status_any_seen\": {},\n  \"oracle_server_status_state\": {},\n  \"oracle_server_status_text_id\": {},\n",
             blocking_modal_present,
             msgbox_dialog,
             msgbox_vtable,
             msgbox_closing_latch,
-            msgbox_arg_rcx,
-            msgbox_arg_rdx,
-            msgbox_arg_r8,
-            msgbox_arg_r9,
             policy_total_builds,
             policy_any_seen,
             policy_ptr,

@@ -331,6 +331,7 @@ pub(crate) use er_telemetry::counters::INWORLD_FINALIZE_DRIVE_WHYNOT_COUNT;
 /// load2's in-world step; the game-task's fresh title_owner scan reads a stale owner -> stale step).
 /// Published each telemetry write; the in-world finalize drive consumes it instead of re-resolving.
 /// 0 == not currently resolved.
+pub(crate) use er_telemetry::counters::ORACLE_RELIABLE_INGAME_PTR;
 pub(crate) use er_telemetry::counters::ORACLE_RELIABLE_MMS_PTR;
 /// Child-done-query override (FUN_140eb5550, deobf 0x140eb5530). STEP_MoveMap_Update tears the
 /// MoveMapStep child down when this returns done; for load2 it returns done PREMATURELY (field25=0),

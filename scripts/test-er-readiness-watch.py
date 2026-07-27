@@ -290,8 +290,6 @@ def main() -> int:
         "oracle_char_current_hp": 522,
         "oracle_char_stats": [15, 10, 11, 14, 13, 9, 9, 7],
         "current_animation_id": watcher.DEFAULT_EXPECTED_ANIMATION_ID,
-        "oracle_msgbox_postload_builds": 0,
-        "oracle_postload_modal_seen": False,
         "oracle_blocking_modal_present": False,
         "game_task_ticks": TEST_POLLS,
     }
@@ -327,7 +325,7 @@ def main() -> int:
     assert not watcher.telemetry_world_loaded({**world_loaded_telemetry, "oracle_char_name": "_", "oracle_char_name_len": 1}, expected_save_oracle, watcher.DEFAULT_EXPECTED_ANIMATION_ID)
     assert not watcher.telemetry_world_loaded({**world_loaded_telemetry, "oracle_char_name": "   ", "oracle_char_name_len": 3}, expected_save_oracle, watcher.DEFAULT_EXPECTED_ANIMATION_ID)
     assert not watcher.telemetry_world_loaded({**world_loaded_telemetry, "current_animation_id": 999}, expected_save_oracle, watcher.DEFAULT_EXPECTED_ANIMATION_ID)
-    assert not watcher.telemetry_world_loaded({**world_loaded_telemetry, "oracle_msgbox_postload_builds": 1}, expected_save_oracle, watcher.DEFAULT_EXPECTED_ANIMATION_ID)
+    assert not watcher.telemetry_world_loaded({**world_loaded_telemetry, "oracle_blocking_modal_present": True}, expected_save_oracle, watcher.DEFAULT_EXPECTED_ANIMATION_ID)
     assert watcher.telemetry_world_tick(world_loaded_telemetry, 0) == TEST_POLLS
     selector_loaded_telemetry = {
         **world_loaded_telemetry,
@@ -377,10 +375,9 @@ def main() -> int:
     assert watcher.native_legal_text_id(607200) == 607200
     assert watcher.native_legal_text_id(607301) == 607301
     assert watcher.native_legal_text_id(606300) is None
-    assert watcher.telemetry_native_legal_popup_detected({"oracle_msgbox_builder_args": [1, 607200, 3, 4]})
     assert watcher.telemetry_native_legal_popup_detected({"oracle_policy_window_total_builds": 1})
     assert watcher.telemetry_native_legal_popup_detected({"oracle_policy_window_any_seen": True})
-    assert not watcher.telemetry_native_legal_popup_detected({"oracle_msgbox_builder_args": [1, 2, 3, 4]})
+    assert not watcher.telemetry_native_legal_popup_detected({"oracle_blocking_modal_present": True})
     assert 401120 in watcher.SERVER_STATUS_TEXT_IDS
     assert 401150 in watcher.SERVER_STATUS_TEXT_IDS
     assert 401160 in watcher.SERVER_STATUS_TEXT_IDS

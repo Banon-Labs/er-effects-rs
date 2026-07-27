@@ -3,8 +3,8 @@
 //! time (including the boot "session not ended / loss of progress" warning that
 //! appears before the product hook installs and in telemetry-only mode).
 //!
-//! WHY THIS EXISTS: the product's `oracle_msgbox_total_builds` is a build COUNTER
-//! fed by a MinHook trampoline on the MessageBoxDialog builder (0x1409275b0),
+//! WHY THIS EXISTS: historical build-counter telemetry could not prove a visible dialog was
+//! currently blocking the product path. This reader inspects live dialog objects directly,
 //! installed late (from the recurring game task, gated by online-disable/product
 //! autoload). Any dialog built before that install -- or in a run where the product
 //! hook never arms (telemetry-only, or the standalone er-telemetry-dll which has no

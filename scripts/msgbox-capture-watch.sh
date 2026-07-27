@@ -52,14 +52,14 @@ while (( SECONDS - start < DEADLINE_S )); do
   if (( t >= BURST_START && t <= BURST_END )); then
     f=$(printf "%s/frame-%02d-t%03ds.jpg" "$OUT" "$n" "$t")
     python3 "$CAP" "$f" >/dev/null 2>&1
-    mbox=$(tf oracle_msgbox_total_builds)
-    echo "[cap +${t}s] burst frame $n -> $(basename "$f")  msgbox_builds=$mbox"
+    modal=$(tf oracle_blocking_modal_present)
+    echo "[cap +${t}s] burst frame $n -> $(basename "$f")  blocking_modal_present=$modal"
     n=$((n+1))
     continue   # tight loop during burst (no long sleep)
   fi
   deser=$(tf system_quit_continue_confirm_fresh_deser_count)
-  mbox=$(tf oracle_msgbox_total_builds)
-  echo "[cap +${t}s] alive=$alive deser_ok=$deser msgbox_builds=$mbox"
+  modal=$(tf oracle_blocking_modal_present)
+  echo "[cap +${t}s] alive=$alive deser_ok=$deser blocking_modal_present=$modal"
   # After the reload commits + a moment to stream, grab the final world then tear down.
   if [[ "${deser:-0}" -ge 1 && "$final_done" == "0" && "$t" -ge "$((BURST_END+3))" ]]; then
     python3 "$CAP" "$OUT/final-loaded-world.jpg" >/dev/null 2>&1

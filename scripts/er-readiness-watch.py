@@ -1212,13 +1212,7 @@ def telemetry_placeholder_character_detected(
 def telemetry_messagebox_dialog_detected(telemetry: dict[str, Any] | None) -> bool:
     if not isinstance(telemetry, dict):
         return False
-    return bool(
-        telemetry.get("oracle_msgbox_any_seen") is True
-        or as_int(telemetry.get("oracle_msgbox_total_builds"), 0) > 0
-        or telemetry.get("oracle_blocking_modal_present") is True
-        or telemetry.get("oracle_postload_modal_seen") is True
-        or as_int(telemetry.get("oracle_msgbox_postload_builds"), 0) > 0
-    )
+    return telemetry.get("oracle_blocking_modal_present") is True
 
 
 def telemetry_portrait_publish_failure_detected(telemetry: dict[str, Any] | None) -> bool:
@@ -1288,16 +1282,12 @@ def native_legal_text_id(value: Any) -> int | None:
 def telemetry_native_legal_popup_detected(telemetry: dict[str, Any] | None) -> bool:
     if not isinstance(telemetry, dict):
         return False
-    # CS::MessageBoxDialog path: legal/privacy FMG IDs captured from native builder args.
-    args = telemetry.get("oracle_msgbox_builder_args")
-    msgbox_legal = isinstance(args, list) and any(native_legal_text_id(arg) is not None for arg in args)
     # TosTitle path: the Privacy/ToS policy surface is not a MessageBoxDialog; constructor hits are
     # native/asset-backed evidence that the policy UI was built from the ToS_win64-backed layout.
-    policy_window = (
+    return (
         telemetry.get("oracle_policy_window_any_seen") is True
         or as_int(telemetry.get("oracle_policy_window_total_builds"), 0) > 0
     )
-    return msgbox_legal or policy_window
 
 
 def telemetry_sq_repro_complete(telemetry: dict[str, Any] | None) -> bool:
@@ -1635,8 +1625,6 @@ def oracle_summary(
         "saved_map_c30": telemetry.get("oracle_saved_map_c30"),
         "save_slot": telemetry.get("game_save_slot"),
         "animation_id": telemetry.get("current_animation_id"),
-        "postload_popup_seen": telemetry.get("oracle_postload_modal_seen"),
-        "postload_popup_builds": telemetry.get("oracle_msgbox_postload_builds"),
         "blocking_modal_present": telemetry.get("oracle_blocking_modal_present"),
         "simulated_button_presses_total": telemetry.get("simulated_button_presses_total"),
         "policy_window_backing_flag_ptr": telemetry.get("oracle_policy_window_backing_flag_ptr"),

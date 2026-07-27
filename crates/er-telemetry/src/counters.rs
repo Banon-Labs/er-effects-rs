@@ -745,6 +745,7 @@ pub static INWORLD_FINALIZE_DRIVE_STREAK: AtomicUsize = AtomicUsize::new(0);
 pub static INWORLD_FINALIZE_DRIVE_SET: AtomicUsize = AtomicUsize::new(0);
 pub static INWORLD_FINALIZE_DRIVE_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static INWORLD_FINALIZE_DRIVE_WHYNOT_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub static ORACLE_RELIABLE_INGAME_PTR: AtomicUsize = AtomicUsize::new(0);
 pub static ORACLE_RELIABLE_MMS_PTR: AtomicUsize = AtomicUsize::new(0);
 pub static CHILD_DONE_QUERY_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub static CHILD_DONE_QUERY_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);

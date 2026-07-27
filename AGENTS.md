@@ -1,15 +1,15 @@
 # Agent Instructions
 
-This project uses **bd** (beads) for issue tracking. **Invoke the real binary directly at `/home/choza/.local/bin/bd`** -- do NOT use the bare `bd` command. The bare `bd` is a shell guard *function* (from the interactive shell snapshot) that errors with `bd guard error: unable to locate real bd binary` unless `BD_REAL_BIN` is exported, and non-interactive/agent shells do not get that function or env var. The local-bin path is the same ELF binary the guard would exec, so calling it directly always works. Run `/home/choza/.local/bin/bd prime` for full workflow context.
+This project uses **bd** (beads) for issue tracking. **Invoke the real binary directly at `$HOME/.local/bin/bd`** -- do NOT use the bare `bd` command. The bare `bd` is a shell guard *function* (from the interactive shell snapshot) that errors with `bd guard error: unable to locate real bd binary` unless `BD_REAL_BIN` is exported, and non-interactive/agent shells do not get that function or env var. The local-bin path is the same ELF binary the guard would exec, so calling it directly works across current-user home directories. Run `$HOME/.local/bin/bd prime` for full workflow context.
 
 ## Quick Reference
 
 ```bash
-/home/choza/.local/bin/bd ready              # Find available work
-/home/choza/.local/bin/bd show <id>          # View issue details
-/home/choza/.local/bin/bd update <id> --claim  # Claim work atomically
-/home/choza/.local/bin/bd close <id>         # Complete work
-/home/choza/.local/bin/bd dolt push          # Push beads data to remote
+$HOME/.local/bin/bd ready              # Find available work
+$HOME/.local/bin/bd show <id>          # View issue details
+$HOME/.local/bin/bd update <id> --claim  # Claim work atomically
+$HOME/.local/bin/bd close <id>         # Complete work
+$HOME/.local/bin/bd dolt push          # Push beads data to remote
 ```
 
 ## Offline Game-Asset Investigation Boundary
@@ -30,7 +30,7 @@ When user feedback shows that offline slider changes are not producing the inten
 
 When the issue becomes visual/material-specific (for example texture placement, UVs, seams, normals, or lighting), do not continue blind exporter changes from verbal descriptions alone. Ask for a focused, non-desktop visual artifact/crop as the fastest evidence path, while respecting screenshot sensitivity: request the smallest crop that shows the defect and avoid full-desktop capture unless the user explicitly permits it.
 
-For task startup in this repo, read relevant `bd` memories (`/home/choza/.local/bin/bd memories <topic>` and `/home/choza/.local/bin/bd recall <key>`) before broad source inspection or implementation. Treat memories as the first-pass continuation context; do not discover them midstream after choosing an approach.
+For task startup in this repo, read relevant `bd` memories (`$HOME/.local/bin/bd memories <topic>` and `$HOME/.local/bin/bd recall <key>`) before broad source inspection or implementation. Treat memories as the first-pass continuation context; do not discover them midstream after choosing an approach.
 
 ## Elden Ring Runtime Probe Hygiene
 
