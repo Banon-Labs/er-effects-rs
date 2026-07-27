@@ -11,10 +11,27 @@
 //! carry the transformation across death. Persistence lives in each
 //! character's own saved-effects table, so characters that never used a heart
 //! are unaffected and saves stay vanilla-compatible.
+//!
+//! The visible transformation is the root effect's VFX: each heart's
+//! `vfxId` points at a SpEffectVfxParam row carrying a full-body
+//! `transformProtectorId` (Rock 21201000 -> 5040000, Priestess 21202000 ->
+//! 5050000, Lamenter 21203000 -> 5170000), and those rows ship with
+//! `isVisibleDeadChr = 0` -- FromSoft's own "hide this VFX on a corpse"
+//! switch. That is what strips the dragon body the instant death registers
+//! even though the root effect survives the death purge. Setting
+//! `isVisibleDeadChr` on the roots' VFX rows keeps the transformation shown
+//! through the death window.
+//!
+//! The chains of short-lived effects each heart respawns through
+//! `cycleOccurrenceSpEffectId` (2s duration, no save category,
+//! `dontDeleteOnDead = 0`) are also flagged `dontDeleteOnDead` so their
+//! transformation states (477/478/479/508) ride out `ChrIns::_Dead`'s purge,
+//! which removes exactly finite, unsaved, unflagged entries at death.
 
 #![cfg(windows)]
 
 use std::{
+    collections::{BTreeSet, HashMap},
     env,
     ffi::c_void,
     fs::{self, OpenOptions},
@@ -25,7 +42,10 @@ use std::{
 };
 
 use eldenring::{
-    cs::{CSTaskGroupIndex, CSTaskImp, SoloParam, SoloParamRepository, SpEffectParam},
+    cs::{
+        CSTaskGroupIndex, CSTaskImp, SoloParam, SoloParamRepository, SpEffectParam,
+        SpEffectVfxParam,
+    },
     fd4::FD4TaskData,
     param::SP_EFFECT_PARAM_ST,
 };
@@ -48,6 +68,8 @@ const TRANSFORM_SAVE_CATEGORY: i8 = 5;
 /// (persists through death). No row in the shipped regulation uses it, so the
 /// per-category save slot cannot collide with another effect.
 const PERSIST_THROUGH_DEATH_SAVE_CATEGORY: i8 = 3;
+/// `cycleOccurrenceSpEffectId` value marking the end of a cycle chain.
+const NO_CYCLE_OCCURRENCE: i32 = -1;
 
 static START_PATCH_TASK: AtomicBool = AtomicBool::new(false);
 static PATCH_APPLIED: AtomicBool = AtomicBool::new(false);
@@ -102,13 +124,18 @@ fn spawn_param_patch_task() {
                 return;
             }
 
-            let Some(patched_rows) = try_patch_transform_save_categories() else {
+            let Some(outcome) = try_patch_transform_save_categories() else {
                 return;
             };
 
             write_runtime_log(&format!(
                 "moved SpEffectParam saveCategory {TRANSFORM_SAVE_CATEGORY} -> \
-                 {PERSIST_THROUGH_DEATH_SAVE_CATEGORY} for rows: {patched_rows:?}"
+                 {PERSIST_THROUGH_DEATH_SAVE_CATEGORY} for rows: {roots:?}; set \
+                 dontDeleteOnDead on cycle-chain rows: {chain:?}; set \
+                 isVisibleDeadChr on SpEffectVfxParam rows: {vfx:?}",
+                roots = outcome.roots,
+                chain = outcome.chain_rows,
+                vfx = outcome.vfx_rows,
             ));
             PATCH_APPLIED.store(true, Ordering::Release);
         },
@@ -116,7 +143,7 @@ fn spawn_param_patch_task() {
     );
 }
 
-fn try_patch_transform_save_categories() -> Option<Vec<u32>> {
+fn try_patch_transform_save_categories() -> Option<PatchOutcome> {
     // SAFETY: This recurring task runs on the game's task/main thread. That is
     // the same exclusivity boundary fromsoftware-rs documents for mutating
     // singleton game objects.
@@ -124,22 +151,88 @@ fn try_patch_transform_save_categories() -> Option<Vec<u32>> {
     let holder = repository.solo_param_holders.get(SP_EFFECT_PARAM_INDEX)?;
     holder.get_res_cap(PRIMARY_RES_CAP_INDEX)?;
 
-    let mut patched_rows = Vec::new();
+    let mut cycle_by_id = HashMap::new();
+    let mut roots = Vec::new();
+    let mut root_vfx_rows = BTreeSet::new();
+    for (row_id, row) in repository.rows::<SpEffectParam>() {
+        cycle_by_id.insert(row_id, row.cycle_occurrence_sp_effect_id());
+        if row.save_category() == TRANSFORM_SAVE_CATEGORY {
+            roots.push(row_id);
+            root_vfx_rows.extend(vfx_row_ids(row));
+        }
+    }
+    if roots.is_empty() {
+        return None;
+    }
+    let chain_rows = collect_cycle_chain_rows(&roots, &cycle_by_id);
+
+    let mut outcome = PatchOutcome::default();
     for (row_id, row) in repository.rows_mut::<SpEffectParam>() {
-        if patch_speffect_row(row) {
-            patched_rows.push(row_id);
+        if row.save_category() == TRANSFORM_SAVE_CATEGORY {
+            row.set_save_category(PERSIST_THROUGH_DEATH_SAVE_CATEGORY);
+            outcome.roots.push(row_id);
+        }
+        if chain_rows.contains(&row_id) && !row.dont_delete_on_dead() {
+            row.set_dont_delete_on_dead(true);
+            outcome.chain_rows.push(row_id);
+        }
+    }
+    for (row_id, row) in repository.rows_mut::<SpEffectVfxParam>() {
+        if root_vfx_rows.contains(&row_id) && !row.is_visible_dead_chr() {
+            row.set_is_visible_dead_chr(true);
+            outcome.vfx_rows.push(row_id);
         }
     }
 
-    (!patched_rows.is_empty()).then_some(patched_rows)
+    (!outcome.roots.is_empty()).then_some(outcome)
 }
 
-fn patch_speffect_row(row: &mut SP_EFFECT_PARAM_ST) -> bool {
-    if row.save_category() != TRANSFORM_SAVE_CATEGORY {
-        return false;
+/// All SpEffectVfxParam row ids a SpEffectParam row references.
+fn vfx_row_ids(row: &SP_EFFECT_PARAM_ST) -> impl Iterator<Item = u32> {
+    [
+        row.vfx_id(),
+        row.vfx_id1(),
+        row.vfx_id2(),
+        row.vfx_id3(),
+        row.vfx_id4(),
+        row.vfx_id5(),
+        row.vfx_id6(),
+        row.vfx_id7(),
+    ]
+    .into_iter()
+    .filter_map(|id| u32::try_from(id).ok())
+}
+
+/// Every row reachable from a root through `cycleOccurrenceSpEffectId` links.
+/// The visited set doubles as a guard against cyclic chains.
+fn collect_cycle_chain_rows(roots: &[u32], cycle_by_id: &HashMap<u32, i32>) -> BTreeSet<u32> {
+    let mut chain_rows = BTreeSet::new();
+    for root in roots {
+        let mut next = cycle_by_id
+            .get(root)
+            .copied()
+            .unwrap_or(NO_CYCLE_OCCURRENCE);
+        while next != NO_CYCLE_OCCURRENCE {
+            let Ok(row_id) = u32::try_from(next) else {
+                break;
+            };
+            if !chain_rows.insert(row_id) {
+                break;
+            }
+            next = cycle_by_id
+                .get(&row_id)
+                .copied()
+                .unwrap_or(NO_CYCLE_OCCURRENCE);
+        }
     }
-    row.set_save_category(PERSIST_THROUGH_DEATH_SAVE_CATEGORY);
-    true
+    chain_rows
+}
+
+#[derive(Default)]
+struct PatchOutcome {
+    roots: Vec<u32>,
+    chain_rows: Vec<u32>,
+    vfx_rows: Vec<u32>,
 }
 
 fn write_runtime_log(message: &str) {
