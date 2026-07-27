@@ -535,6 +535,30 @@ pub fn standalone_tick() {
     let (core_max_busy, cores_saturated, ncores, proc_cpu_cores) = cpu::sample();
     // RenderDoc: capture the reload's playable frame when running under the capture layer (no-op else).
     let renderdoc_captures = maybe_trigger_renderdoc(play_time_ms, flip_task_delta, n);
+    let winreconfig_create_window_calls =
+        counters::WINRECONFIG_CREATE_WINDOW_CALLS.load(Ordering::SeqCst);
+    let winreconfig_set_window_pos_calls =
+        counters::WINRECONFIG_SET_WINDOW_POS_CALLS.load(Ordering::SeqCst);
+    let winreconfig_set_window_long_calls =
+        counters::WINRECONFIG_SET_WINDOW_LONG_CALLS.load(Ordering::SeqCst);
+    let winreconfig_move_window_calls =
+        counters::WINRECONFIG_MOVE_WINDOW_CALLS.load(Ordering::SeqCst);
+    let winreconfig_change_display_calls =
+        counters::WINRECONFIG_CHANGE_DISPLAY_CALLS.load(Ordering::SeqCst);
+    let winreconfig_last_set_pos_size =
+        counters::WINRECONFIG_LAST_SET_POS_SIZE.load(Ordering::SeqCst);
+    let winreconfig_last_set_pos_flags =
+        counters::WINRECONFIG_LAST_SET_POS_FLAGS.load(Ordering::SeqCst);
+    let winreconfig_last_move_size = counters::WINRECONFIG_LAST_MOVE_SIZE.load(Ordering::SeqCst);
+    let winreconfig_last_change_display_size =
+        counters::WINRECONFIG_LAST_CHANGE_DISPLAY_SIZE.load(Ordering::SeqCst);
+    let winreconfig_last_change_display_flags =
+        counters::WINRECONFIG_LAST_CHANGE_DISPLAY_FLAGS.load(Ordering::SeqCst);
+    let winreconfig_early_apply_result =
+        counters::WINRECONFIG_EARLY_APPLY_RESULT.load(Ordering::SeqCst);
+    let winreconfig_early_apply_ms = counters::WINRECONFIG_EARLY_APPLY_MS.load(Ordering::SeqCst);
+    let winreconfig_early_apply_rect =
+        counters::WINRECONFIG_EARLY_APPLY_RECT.load(Ordering::SeqCst);
     let body = format!(
         "{{\"oracle_standalone_ticks\":{n},\
 \"oracle_game_module_base\":\"0x{base:x}\",\
@@ -549,7 +573,20 @@ pub fn standalone_tick() {
 \"oracle_cores_saturated\":{cores_saturated},\
 \"oracle_ncores\":{ncores},\
 \"oracle_proc_cpu_cores\":{proc_cpu_cores:.3},\
-\"oracle_renderdoc_captures\":{renderdoc_captures}}}\n",
+\"oracle_renderdoc_captures\":{renderdoc_captures},\
+\"oracle_winreconfig_create_window_calls\":{winreconfig_create_window_calls},\
+\"oracle_winreconfig_set_window_pos_calls\":{winreconfig_set_window_pos_calls},\
+\"oracle_winreconfig_set_window_long_calls\":{winreconfig_set_window_long_calls},\
+\"oracle_winreconfig_move_window_calls\":{winreconfig_move_window_calls},\
+\"oracle_winreconfig_change_display_calls\":{winreconfig_change_display_calls},\
+\"oracle_winreconfig_last_set_pos_size\":{winreconfig_last_set_pos_size},\
+\"oracle_winreconfig_last_set_pos_flags\":{winreconfig_last_set_pos_flags},\
+\"oracle_winreconfig_last_move_size\":{winreconfig_last_move_size},\
+\"oracle_winreconfig_last_change_display_size\":{winreconfig_last_change_display_size},\
+\"oracle_winreconfig_last_change_display_flags\":{winreconfig_last_change_display_flags},\
+\"oracle_winreconfig_early_apply_result\":{winreconfig_early_apply_result},\
+\"oracle_winreconfig_early_apply_ms\":{winreconfig_early_apply_ms},\
+\"oracle_winreconfig_early_apply_rect\":{winreconfig_early_apply_rect}}}\n",
         tick_ms = tick_ms()
     );
     // APPEND one JSON line per write -> a timeseries jsonl the agent reads AFTER the run (no polling,
