@@ -11,6 +11,7 @@ members = [
   "crates/er-inventory-sort-dll",
   "crates/er-net-effects-dll",
   "crates/mushroom-man-runtime",
+  "crates/er-death-persist-dll",
   "crates/er-menu-sort",
   "crates/effects-data",
   "crates/er-gfx",
