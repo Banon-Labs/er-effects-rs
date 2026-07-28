@@ -2155,328 +2155,68 @@ unsafe fn composite_boot_progress_inner(
     if bw == 0 || bh == 0 || bw > MAX_RT_DIM || bh > MAX_RT_DIM {
         return false;
     }
-    // Backbuffer pixel encoding for the raw-copy path: 8-bit BGRA (swap R/B), 8-bit RGBA (straight),
-    // or 10-bit R10G10B10A2 (pack) -- the last is the native-Windows HDR/10-bit swapchain (format 24),
-    // where a byte copy would garble every pixel, so the map loop must pack instead.
-    let Some(bb_encoding) = boot_view_backbuffer_encoding(bb_desc.Format) else {
-        return false;
-    };
 
-    // Progress-bar geometry follows the backbuffer. When a cached screenshot background exists, copy a
-    // full-screen region; otherwise preserve the original tiny strip copy over black boot frames.
-    let text_scale = boot_view_text_scale(bh);
-    let strip_w = (bw * BOOT_VIEW_STRIP_W_NUM / BOOT_VIEW_STRIP_W_DEN)
-        .max(BOOT_VIEW_STRIP_MIN_W)
-        .min(bw);
-    let strip_h = (boot_view_strip_height(text_scale) as u32).min(bh);
-    let strip_dx = (bw - strip_w) / 2;
-    let strip_dy = (bh * BOOT_VIEW_STRIP_Y_NUM / BOOT_VIEW_STRIP_Y_DEN).min(bh - strip_h);
-    let bg = boot_bg_image();
-    let bg_active = bg.is_some();
-    // The DLL-drawn startup save picker owns the whole screen while the no-save boot is held: a
-    // full-frame copy of the browser, driven by the shared picker model (input handled on the game
-    // task thread). Falls back to the bar if the model vanished mid-frame.
     let picker_active = save_picker_overlay_active();
-    let full_frame = bg_active || picker_active;
-    let (region_w, region_h, dx, dy, content_x, content_y, content_w) = if full_frame {
-        (
-            bw,
-            bh,
-            0,
-            0,
-            strip_dx as usize,
-            strip_dy as usize,
-            strip_w as usize,
+    let full_frame = boot_bg_image().is_some()
+        || picker_active
+        || stats_overlay_active()
+        || portrait_overlay_active();
+    let frame = boot_view_render_frame(bw as usize, bh as usize);
+    let ms_idx = BOOT_VIEW_MILESTONE_IDX.load(Ordering::SeqCst);
+    let permille = BOOT_VIEW_LAST_PERMILLE.load(Ordering::SeqCst);
+    let geom_changed = BOOT_VIEW_STRIP_W.swap(frame.w, Ordering::SeqCst) != frame.w
+        || BOOT_VIEW_STRIP_H.swap(frame.h, Ordering::SeqCst) != frame.h;
+    if picker_active {
+        SAVE_PICKER_OVERLAY_DRAW_HITS.fetch_add(1, Ordering::SeqCst);
+    }
+    BOOT_VIEW_DRAWN_PERMILLE.store(permille, Ordering::SeqCst);
+    BOOT_VIEW_DRAWN_IDX.store(ms_idx, Ordering::SeqCst);
+    BOOT_VIEW_DRAWN_BG_ACTIVE.store(full_frame as usize, Ordering::SeqCst);
+
+    let rgba = er_loading_bar::RgbaFrame {
+        width: frame.w,
+        height: frame.h,
+        pixels: frame.rgba,
+    };
+    if !unsafe {
+        er_d3d12_compositor::copy_rgba_frame_to_swapchain(
+            swapchain_raw,
+            &rgba,
+            frame.dx,
+            frame.dy,
+            clear_first,
         )
-    } else {
-        (strip_w, strip_h, strip_dx, strip_dy, 0, 0, strip_w as usize)
-    };
-
-    let (ms_idx, permille) = boot_view_progress();
-
-    // Copyable footprint for the selected region in the backbuffer's format.
-    let mut device_opt: Option<ID3D12Device> = None;
-    if unsafe { backbuffer.GetDevice(&mut device_opt) }.is_err() {
+    } {
+        if geom_changed {
+            append_autoload_debug(format_args!(
+                "boot-view: shared compositor copy failed after geometry change (region {}x{} at {},{} clear_first={})",
+                rgba.width,
+                rgba.height,
+                frame.dx,
+                frame.dy,
+                clear_first as usize,
+            ));
+        }
         return false;
-    }
-    let Some(device) = device_opt else {
-        return false;
-    };
-    let region_desc = D3D12_RESOURCE_DESC {
-        Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-        Alignment: 0,
-        Width: region_w as u64,
-        Height: region_h,
-        DepthOrArraySize: 1,
-        MipLevels: 1,
-        Format: bb_desc.Format,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
-        Flags: D3D12_RESOURCE_FLAG_NONE,
-    };
-    let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
-    let mut total_bytes: u64 = 0;
-    unsafe {
-        device.GetCopyableFootprints(
-            &region_desc,
-            0,
-            1,
-            0,
-            Some(&mut footprint),
-            None,
-            None,
-            Some(&mut total_bytes),
-        )
-    };
-    if total_bytes == 0 || footprint.Footprint.RowPitch == 0 {
-        return false;
-    }
-    // (Re)create the persistent upload buffer when the footprint size changes (bb resize).
-    let mut upload_fresh = false;
-    if BOOT_VIEW_UPLOAD_SIZE.load(Ordering::SeqCst) != total_bytes {
-        let up_heap = D3D12_HEAP_PROPERTIES {
-            Type: D3D12_HEAP_TYPE_UPLOAD,
-            CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
-            MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
-            CreationNodeMask: 1,
-            VisibleNodeMask: 1,
-        };
-        let buf_desc = D3D12_RESOURCE_DESC {
-            Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
-            Alignment: 0,
-            Width: total_bytes,
-            Height: 1,
-            DepthOrArraySize: 1,
-            MipLevels: 1,
-            Format: DXGI_FORMAT_UNKNOWN,
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
-            Flags: D3D12_RESOURCE_FLAG_NONE,
-        };
-        let mut up_opt: Option<ID3D12Resource> = None;
-        if unsafe {
-            device.CreateCommittedResource(
-                &up_heap,
-                D3D12_HEAP_FLAG_NONE,
-                &buf_desc,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-                None,
-                &mut up_opt,
-            )
-        }
-        .is_err()
-        {
-            return false;
-        }
-        let Some(up) = up_opt else {
-            return false;
-        };
-        let old = BOOT_VIEW_UPLOAD.swap(up.into_raw() as usize, Ordering::SeqCst);
-        if old != 0 {
-            drop(unsafe { ID3D12Resource::from_raw(old as *mut c_void) });
-        }
-        BOOT_VIEW_UPLOAD_SIZE.store(total_bytes, Ordering::SeqCst);
-        upload_fresh = true;
-    }
-    let up_raw = BOOT_VIEW_UPLOAD.load(Ordering::SeqCst) as *mut c_void;
-    let Some(upload) = (unsafe { ID3D12Resource::from_raw_borrowed(&up_raw) }) else {
-        return false;
-    };
-
-    // Re-rasterize + rewrite the upload only when the visible content changed (or a fresh buffer).
-    let geom_changed = BOOT_VIEW_STRIP_W.swap(strip_w as usize, Ordering::SeqCst)
-        != strip_w as usize
-        || BOOT_VIEW_STRIP_H.swap(region_h as usize, Ordering::SeqCst) != region_h as usize;
-    // The picker content changes with cursor/dir/page (not captured by permille/idx), so re-raster
-    // every frame while it owns the screen.
-    if picker_active
-        || upload_fresh
-        || geom_changed
-        || BOOT_VIEW_DRAWN_PERMILLE.load(Ordering::SeqCst) != permille
-        || BOOT_VIEW_DRAWN_IDX.load(Ordering::SeqCst) != ms_idx
-        || BOOT_VIEW_DRAWN_BG_ACTIVE.load(Ordering::SeqCst) != bg_active as usize
-    {
-        // Base frame is always the boot loading bar (full-frame black + the bottom strip bar). When
-        // the startup picker is active it composites its browser panel ON TOP, in the upper region,
-        // leaving the bar visible below -- so the bar keeps showing the boot held at SAVE_CHECK while
-        // the user browses. When the picker disarms (pick resolved), the bar frame remains and the
-        // boot resumes past SAVE_CHECK.
-        let mut tight = boot_view_rasterize(
-            region_w as usize,
-            region_h as usize,
-            ms_idx,
-            permille,
-            content_x,
-            content_y,
-            content_w,
-            bg,
-            text_scale,
-            false,
-        );
-        if picker_active
-            && overlay_save_picker_onto(&mut tight, region_w as usize, region_h as usize)
-        {
-            SAVE_PICKER_OVERLAY_DRAW_HITS.fetch_add(1, Ordering::SeqCst);
-        }
-        let row_pitch = footprint.Footprint.RowPitch as usize;
-        let total = total_bytes as usize;
-        let mut umap: *mut c_void = std::ptr::null_mut();
-        if unsafe { upload.Map(0, None, Some(&mut umap)) }.is_err() || umap.is_null() {
-            return false;
-        }
-        {
-            let dst = unsafe { std::slice::from_raw_parts_mut(umap as *mut u8, total) };
-            let src_row = region_w as usize * RGBA8_BPP;
-            for y in 0..region_h as usize {
-                let so = y * src_row;
-                let dofs = y * row_pitch;
-                if dofs + src_row > total || so + src_row > tight.len() {
-                    break;
-                }
-                let srow = &tight[so..so + src_row];
-                let drow = &mut dst[dofs..dofs + src_row];
-                match bb_encoding {
-                    BackbufferEncoding::Straight => drow.copy_from_slice(srow),
-                    BackbufferEncoding::SwapRb => {
-                        drow.copy_from_slice(srow);
-                        for t in 0..region_w as usize {
-                            drow.swap(t * RGBA8_BPP, t * RGBA8_BPP + 2);
-                        }
-                    }
-                    BackbufferEncoding::Pack10 => {
-                        for t in 0..region_w as usize {
-                            let s = t * RGBA8_BPP;
-                            let packed = pack_rgba8_to_r10g10b10a2(
-                                srow[s],
-                                srow[s + 1],
-                                srow[s + 2],
-                                srow[s + 3],
-                            );
-                            drow[s..s + 4].copy_from_slice(&packed.to_le_bytes());
-                        }
-                    }
-                }
-            }
-        }
-        unsafe { upload.Unmap(0, None) };
-        BOOT_VIEW_DRAWN_PERMILLE.store(permille, Ordering::SeqCst);
-        BOOT_VIEW_DRAWN_IDX.store(ms_idx, Ordering::SeqCst);
-        BOOT_VIEW_DRAWN_BG_ACTIVE.store(bg_active as usize, Ordering::SeqCst);
     }
 
-    // Single submit on our OWN queue: PRESENT -> COPY_DEST, strip copy, COPY_DEST -> PRESENT.
-    let alloc_raw = BOOT_VIEW_ALLOCATOR.load(Ordering::SeqCst) as *mut c_void;
-    let list_raw = BOOT_VIEW_LIST.load(Ordering::SeqCst) as *mut c_void;
-    let fence_raw = BOOT_VIEW_FENCE.load(Ordering::SeqCst) as *mut c_void;
-    let queue_raw = BOOT_VIEW_QUEUE.load(Ordering::SeqCst) as *mut c_void;
-    let (Some(allocator), Some(list), Some(fence), Some(queue)) = (unsafe {
-        (
-            ID3D12CommandAllocator::from_raw_borrowed(&alloc_raw),
-            ID3D12GraphicsCommandList::from_raw_borrowed(&list_raw),
-            ID3D12Fence::from_raw_borrowed(&fence_raw),
-            ID3D12CommandQueue::from_raw_borrowed(&queue_raw),
-        )
-    }) else {
-        return false;
-    };
-    // Resolve the RTV heap + descriptor BEFORE opening the list: everything recorded between
-    // Reset and Close below is infallible, so the list can never be left dangling open (an open
-    // list would fail every subsequent Reset and silently kill the view).
-    let rtv_heap_raw = BOOT_VIEW_RTV_HEAP.load(Ordering::SeqCst) as *mut c_void;
-    let rtv_handle = if clear_first {
-        let Some(heap) = (unsafe { ID3D12DescriptorHeap::from_raw_borrowed(&rtv_heap_raw) }) else {
-            return false;
-        };
-        let handle = unsafe { heap.GetCPUDescriptorHandleForHeapStart() };
-        unsafe { device.CreateRenderTargetView(&backbuffer, None, handle) };
-        Some(handle)
-    } else {
-        None
-    };
-    if unsafe { allocator.Reset() }.is_err() || unsafe { list.Reset(allocator, None) }.is_err() {
-        return false;
-    }
-    if let Some(handle) = rtv_handle {
-        unsafe {
-            record_transition(
-                list,
-                &backbuffer,
-                D3D12_RESOURCE_STATE_PRESENT,
-                D3D12_RESOURCE_STATE_RENDER_TARGET,
-            )
-        };
-        unsafe { list.ClearRenderTargetView(handle, &[0.0, 0.0, 0.0, 1.0], None) };
+    if clear_first {
         if self_present_frame {
             BOOT_VIEW_SELF_FULL_CLEAR_HITS.fetch_add(1, Ordering::SeqCst);
         } else {
             BOOT_VIEW_PRESENT_FULL_CLEAR_HITS.fetch_add(1, Ordering::SeqCst);
         }
-        unsafe {
-            record_transition(
-                list,
-                &backbuffer,
-                D3D12_RESOURCE_STATE_RENDER_TARGET,
-                D3D12_RESOURCE_STATE_COPY_DEST,
-            )
-        };
-    } else {
-        unsafe {
-            record_transition(
-                list,
-                &backbuffer,
-                D3D12_RESOURCE_STATE_PRESENT,
-                D3D12_RESOURCE_STATE_COPY_DEST,
-            )
-        };
-    }
-    let mut up_src = D3D12_TEXTURE_COPY_LOCATION {
-        pResource: ManuallyDrop::new(Some(upload.clone())),
-        Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
-        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-            PlacedFootprint: footprint,
-        },
-    };
-    let mut bb_dst = D3D12_TEXTURE_COPY_LOCATION {
-        pResource: ManuallyDrop::new(Some(backbuffer.clone())),
-        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-            SubresourceIndex: 0,
-        },
-    };
-    let up_box = D3D12_BOX {
-        left: 0,
-        top: 0,
-        front: 0,
-        right: region_w,
-        bottom: region_h,
-        back: 1,
-    };
-    unsafe { list.CopyTextureRegion(&bb_dst, dx, dy, 0, &up_src, Some(&up_box)) };
-    unsafe { ManuallyDrop::drop(&mut up_src.pResource) };
-    unsafe { ManuallyDrop::drop(&mut bb_dst.pResource) };
-    unsafe {
-        record_transition(
-            list,
-            &backbuffer,
-            D3D12_RESOURCE_STATE_COPY_DEST,
-            D3D12_RESOURCE_STATE_PRESENT,
-        )
-    };
-    if !unsafe { execute_and_wait(queue, list, fence) } {
-        return false;
     }
 
     let hits = BOOT_VIEW_DRAW_HITS.fetch_add(1, Ordering::SeqCst) + 1;
     if hits == 1 {
         append_autoload_debug(format_args!(
-            "boot-view: first draw onto backbuffer {bw}x{bh} (region {region_w}x{region_h} at {dx},{dy}, bg={}, permille={permille})",
-            bg_active as usize
+            "boot-view: first draw onto backbuffer {bw}x{bh} (region {}x{} at {},{}, bg={}, permille={permille})",
+            rgba.width,
+            rgba.height,
+            frame.dx,
+            frame.dy,
+            full_frame as usize,
         ));
     }
     true

@@ -49,6 +49,8 @@ static CRASH_LOGGER_INSTALLED: std::sync::Once = std::sync::Once::new();
 #[cfg(windows)]
 static SELF_MODULE_BASE: AtomicUsize = AtomicUsize::new(0);
 #[cfg(windows)]
+static STANDALONE_FRAME_LOGS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(windows)]
 static CRASH_LOG_LINES: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(windows)]
@@ -148,16 +150,34 @@ fn append_compositor_log(args: std::fmt::Arguments<'_>) {
 fn standalone_validation_frame(
     backbuffer_width: usize,
     backbuffer_height: usize,
-    _present_frame_index: usize,
+    present_frame_index: usize,
 ) -> er_d3d12_compositor::CompositorFrame {
+    // This standalone DLL is a compositor/runtime packaging proof, not a real load oracle. Keep the
+    // demo visibly non-terminal at startup so it cannot masquerade as the product stale-full bug.
+    const PHASE_FRAMES: usize = 180;
+    const LOOP_FRAMES: usize = 1_800;
+    const MIN_PERMILLE: usize = 40;
+    const MAX_PERMILLE: usize = 900;
+
+    let loop_frame = present_frame_index % LOOP_FRAMES;
+    let progress = MIN_PERMILLE + loop_frame * (MAX_PERMILLE - MIN_PERMILLE) / LOOP_FRAMES;
+    let phase = (present_frame_index / PHASE_FRAMES) % er_loading_bar::PHASE_COUNT;
+    let log_index = STANDALONE_FRAME_LOGS.fetch_add(1, Ordering::SeqCst);
+    if log_index < 8 || log_index.is_power_of_two() {
+        append_compositor_log(format_args!(
+            "standalone-frame: present_frame={} progress_permille={} phase={} loop_frame={}",
+            present_frame_index, progress, phase, loop_frame
+        ));
+    }
+
     let mut text = String::new();
     er_loading_bar::LoadingLabel::new(
-        "ENTERING WORLD",
+        er_loading_bar::phase_label(phase),
+        phase + 1,
         er_loading_bar::PHASE_COUNT,
-        er_loading_bar::PHASE_COUNT,
-        "PRESENT COPY",
-        1,
-        1,
+        "STANDALONE D3D12 SMOKE",
+        loop_frame + 1,
+        LOOP_FRAMES,
     )
     .write_text(&mut text);
     let frame_width = (backbuffer_width.saturating_mul(9) / 10).max(1);
@@ -165,7 +185,7 @@ fn standalone_validation_frame(
         frame_width,
         2,
         &text,
-        1000,
+        progress,
         er_loading_bar::BarStyle::default(),
     );
     let bottom_margin = (backbuffer_height / 24).clamp(12, 48);

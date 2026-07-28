@@ -20,17 +20,18 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::{
     D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC, D3D12_COMMAND_QUEUE_FLAG_NONE,
-    D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_FENCE_FLAG_NONE, D3D12_HEAP_FLAG_NONE,
+    D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_DESCRIPTOR_HEAP_DESC, D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
+    D3D12_DESCRIPTOR_HEAP_TYPE_RTV, D3D12_FENCE_FLAG_NONE, D3D12_HEAP_FLAG_NONE,
     D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_UPLOAD, D3D12_MEMORY_POOL_UNKNOWN,
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT, D3D12_RESOURCE_BARRIER, D3D12_RESOURCE_BARRIER_0,
     D3D12_RESOURCE_BARRIER_FLAG_NONE, D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, D3D12_RESOURCE_DESC,
     D3D12_RESOURCE_DIMENSION_BUFFER, D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_FLAG_NONE,
     D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_GENERIC_READ,
-    D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATES, D3D12_RESOURCE_TRANSITION_BARRIER,
-    D3D12_TEXTURE_COPY_LOCATION, D3D12_TEXTURE_COPY_LOCATION_0,
+    D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES,
+    D3D12_RESOURCE_TRANSITION_BARRIER, D3D12_TEXTURE_COPY_LOCATION, D3D12_TEXTURE_COPY_LOCATION_0,
     D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
     D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_TEXTURE_LAYOUT_UNKNOWN, D3D12CreateDevice,
-    ID3D12CommandAllocator, ID3D12CommandQueue, ID3D12Device, ID3D12Fence,
+    ID3D12CommandAllocator, ID3D12CommandQueue, ID3D12DescriptorHeap, ID3D12Device, ID3D12Fence,
     ID3D12GraphicsCommandList, ID3D12Resource,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
@@ -140,6 +141,63 @@ pub fn install_loading_bar_present_compositor() {
                 INSTALLED.store(0, Ordering::SeqCst);
             }
         });
+}
+
+/// Copy a CPU-rendered RGBA frame onto the current backbuffer of an existing swapchain.
+///
+/// Product callers use this when they already own the Present hook / stop gates but want the same
+/// upload + copy implementation as the standalone loading-bar compositor. When `clear_first` is set,
+/// the helper clears the full backbuffer to opaque black before copying the frame.
+///
+/// # Safety
+///
+/// `swapchain_raw` must be a live `IDXGISwapChain` pointer whose current backbuffer is in PRESENT
+/// state, and the caller must ensure no other command list is simultaneously transitioning that
+/// backbuffer.
+pub unsafe fn copy_rgba_frame_to_swapchain(
+    swapchain_raw: usize,
+    frame: &RgbaFrame,
+    dst_x: usize,
+    dst_y: usize,
+    clear_first: bool,
+) -> bool {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        let this = swapchain_raw as *mut c_void;
+        let Some(swapchain) = IDXGISwapChain::from_raw_borrowed(&this) else {
+            LAST_FAIL_CODE.store(1, Ordering::SeqCst);
+            return false;
+        };
+        let idx = swapchain
+            .cast::<IDXGISwapChain3>()
+            .ok()
+            .map(|sc3| sc3.GetCurrentBackBufferIndex())
+            .unwrap_or(0);
+        let Ok(backbuffer) = swapchain.GetBuffer::<ID3D12Resource>(idx) else {
+            LAST_FAIL_CODE.store(5, Ordering::SeqCst);
+            return false;
+        };
+        let bb_desc = backbuffer.GetDesc();
+        let bb_w = bb_desc.Width.min(u64::from(MAX_BACKBUFFER_DIM)) as usize;
+        let bb_h = bb_desc.Height.min(MAX_BACKBUFFER_DIM) as usize;
+        if bb_w == 0
+            || bb_h == 0
+            || bb_desc.Width > u64::from(MAX_BACKBUFFER_DIM)
+            || bb_desc.Height > MAX_BACKBUFFER_DIM
+        {
+            LAST_FAIL_CODE.store(6, Ordering::SeqCst);
+            return false;
+        }
+        if dst_x > bb_w
+            || dst_y > bb_h
+            || frame.width > bb_w.saturating_sub(dst_x)
+            || frame.height > bb_h.saturating_sub(dst_y)
+        {
+            LAST_FAIL_CODE.store(7, Ordering::SeqCst);
+            return false;
+        }
+        copy_frame_to_backbuffer(&backbuffer, frame, dst_x, dst_y, clear_first)
+    }))
+    .unwrap_or(false)
 }
 
 /// Snapshot of the compositor's process-local counters.
@@ -439,7 +497,7 @@ unsafe fn draw_loading_bar_on_swapchain_inner(this: *mut c_void, frame_index: us
         LAST_FAIL_CODE.store(7, Ordering::SeqCst);
         return false;
     }
-    unsafe { copy_frame_to_backbuffer(&backbuffer, &frame.rgba, frame.dst_x, frame.dst_y) }
+    unsafe { copy_frame_to_backbuffer(&backbuffer, &frame.rgba, frame.dst_x, frame.dst_y, false) }
 }
 
 fn note_backbuffer_size(width: usize, height: usize) {
@@ -464,18 +522,28 @@ fn provider_frame(width: usize, height: usize, frame_index: usize) -> Compositor
 }
 
 fn smoke_frame(width: usize, height: usize, frame_index: usize) -> CompositorFrame {
-    let phase = (frame_index / 90) % PHASE_COUNT;
+    // Standalone validation has no Elden Ring load semaphore provider, so this is deliberately a
+    // slow, looping, non-terminal demo. A fast clamp to 1000 makes a human-observed startup look
+    // indistinguishable from the stale-full product bug this DLL exists to diagnose.
+    const PHASE_FRAMES: usize = 180;
+    const LOOP_FRAMES: usize = 1_800;
+    const SMOKE_MIN_PERMILLE: usize = 40;
+    const SMOKE_MAX_PERMILLE: usize = 900;
+
+    let phase = (frame_index / PHASE_FRAMES) % PHASE_COUNT;
+    let loop_frame = frame_index % LOOP_FRAMES;
+    let progress =
+        SMOKE_MIN_PERMILLE + loop_frame * (SMOKE_MAX_PERMILLE - SMOKE_MIN_PERMILLE) / LOOP_FRAMES;
     let mut text = String::new();
     LoadingLabel::new(
         er_loading_bar::phase_label(phase),
         phase + 1,
         PHASE_COUNT,
-        "D3D12 PRESENT",
-        1,
-        1,
+        "STANDALONE D3D12 SMOKE",
+        loop_frame + 1,
+        LOOP_FRAMES,
     )
     .write_text(&mut text);
-    let progress = (frame_index * 7).min(1000);
     let frame_width = (width.saturating_mul(9) / 10).max(1);
     let rgba = render_label_bar_frame(frame_width, 2, &text, progress, BarStyle::default());
     let bottom_margin = (height / 24).clamp(12, 48);
@@ -489,6 +557,7 @@ unsafe fn copy_frame_to_backbuffer(
     frame: &RgbaFrame,
     dst_x: usize,
     dst_y: usize,
+    clear_first: bool,
 ) -> bool {
     if frame.width == 0 || frame.height == 0 || frame.pixels.is_empty() {
         LAST_FAIL_CODE.store(10, Ordering::SeqCst);
@@ -625,14 +694,47 @@ unsafe fn copy_frame_to_backbuffer(
     }
     unsafe { upload.Unmap(0, None) };
 
-    unsafe {
-        transition(
-            &list,
-            backbuffer,
-            D3D12_RESOURCE_STATE_PRESENT,
-            D3D12_RESOURCE_STATE_COPY_DEST,
-        )
-    };
+    if clear_first {
+        let Ok(rtv_heap) = (unsafe {
+            device.CreateDescriptorHeap::<ID3D12DescriptorHeap>(&D3D12_DESCRIPTOR_HEAP_DESC {
+                Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
+                NumDescriptors: 1,
+                Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
+                NodeMask: 0,
+            })
+        }) else {
+            LAST_FAIL_CODE.store(23, Ordering::SeqCst);
+            return false;
+        };
+        let rtv = unsafe { rtv_heap.GetCPUDescriptorHandleForHeapStart() };
+        unsafe { device.CreateRenderTargetView(backbuffer, None, rtv) };
+        unsafe {
+            transition(
+                &list,
+                backbuffer,
+                D3D12_RESOURCE_STATE_PRESENT,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+            )
+        };
+        unsafe { list.ClearRenderTargetView(rtv, &[0.0, 0.0, 0.0, 1.0], None) };
+        unsafe {
+            transition(
+                &list,
+                backbuffer,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+            )
+        };
+    } else {
+        unsafe {
+            transition(
+                &list,
+                backbuffer,
+                D3D12_RESOURCE_STATE_PRESENT,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+            )
+        };
+    }
     let mut dst_loc = D3D12_TEXTURE_COPY_LOCATION {
         pResource: ManuallyDrop::new(Some(backbuffer.clone())),
         Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
