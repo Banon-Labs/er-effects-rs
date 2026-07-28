@@ -37,6 +37,10 @@ er-gfx = { path = "../er-gfx" }
 # ERPX portrait-dump container (encode side): single source of truth for the debug RGBA dump format
 # portrait/debug proof tooling writes. Core-only (default-features off) so the DLL never pulls the host `png` dep.
 erpx-rs = { path = "../erpx-rs", default-features = false }
+# Backend-neutral loading-bar labels/font/raster primitives. Runtime adapters in this crate still own
+# Elden Ring semaphores, D3D12 swapchains, and ME3/product integration.
+er-loading-bar = { path = "../er-loading-bar" }
+er-d3d12-compositor = { path = "../er-d3d12-compositor" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 pelite = "0.10"
 bitflags = "2"
