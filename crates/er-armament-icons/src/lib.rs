@@ -79,6 +79,11 @@ const PROXY_LOCAL_RECT_RVA: usize = 0xd81fb0;
 /// `MenuGaitem.itemId` (+0x4c): top nibble = category (0 = weapon), low 28 bits =
 /// EquipParamWeapon id. Identifies the weapon in a tile for deterministic slot picking.
 const MENU_GAITEM_ITEM_ID_OFFSET: usize = 0x4c;
+/// Bit position of `MenuGaitem.itemId`'s category nibble.
+const MENU_GAITEM_CATEGORY_SHIFT: u32 = 28;
+/// Category nibble for EquipParamWeapon -- every armament (melee, shield, bow/crossbow,
+/// staff, seal). The armament-only gate for the badge.
+const MENU_GAITEM_CATEGORY_WEAPON: u32 = 0;
 /// `GetEquipParamGem(EquipParamGemLookupResult* out, uint id)` -- out.paramId@0, out.paramRow@8
 /// (0 on miss). dump 0x140d2a420 -> deobf 0x140d2a360 (-0xc0; prologue disasm-confirmed:
 /// id<0 js + SoloParamRepository load). CALL target.
@@ -86,6 +91,10 @@ const GET_EQUIP_PARAM_GEM_RVA: usize = 0xd2a360;
 /// `EquipParamGem.iconId` = u16 at row+0x4 (Ghidra get_structure _EQUIP_PARAM_GEM_ST). The
 /// applied ash's inventory item icon = the crescent icon shown in the detail panel.
 const EQUIP_PARAM_GEM_ICON_ID_OFFSET: usize = 0x4;
+/// `EquipParamGem.swordArtsParamId` = s32 at row+0x18 (stride 96; verified against the raw
+/// decrypted param bytes for every row). Used to confirm a gem row really carries the ash we
+/// looked it up for -- see `resolve_gem_icon_id`.
+const EQUIP_PARAM_GEM_SWORD_ARTS_ID_OFFSET: usize = 0x18;
 /// SwordArtsParam row: skill iconId is the u16 at row +0x1A. Ground-truthed to the
 /// game's OWN HUD skill-icon builder CS::CSFeManImp::UpdatePlayerComponents (dump
 /// 0x140772b70): it reads `*(u16*)(swordArtsRow + offsetof(_EQUIP_PARAM_GOODS_ST,
@@ -140,6 +149,10 @@ static BADGE_NOT_WEAPON: AtomicU64 = AtomicU64::new(0);
 static BADGE_NO_ROW: AtomicU64 = AtomicU64::new(0);
 /// Tiles where "ArtsIcon/IconImage" failed to bind in the tile template.
 static BADGE_UNBOUND: AtomicU64 = AtomicU64::new(0);
+/// Tiles skipped because the item has no Ash of War (arts/gem icon both 0) -- e.g. ammo.
+static BADGE_NO_ICON: AtomicU64 = AtomicU64::new(0);
+/// Tiles whose badge slot was explicitly hidden (no ash, or an unusable slot).
+static BADGE_HIDDEN: AtomicU64 = AtomicU64::new(0);
 /// Weapon tiles that reached the icon stage (badge-draw attempts). Sampling ordinal --
 /// the raw TilePopulate fire count is dominated by early non-weapon/empty tiles.
 static BADGE_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
@@ -154,19 +167,44 @@ static FORCE_ICON_ID: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(FORCE_ICON_NONE);
 
 /// Approach-B target child (ER_ARMAMENT_ICONS_TARGET): the named tile child the badge icon
-/// is drawn INTO. The product default is the vanilla bottom-left replenishment slot,
-/// `AutoReplenish/IconImage`. Weapons are never autorefillable, so the DLL may use that
-/// slot for weapon Ash-of-War badges while leaving vanilla autorefillable material tiles
-/// alone. The runtime GFX edit adds this missing subtree to 02_011 weapon tiles.
+/// is drawn INTO. The product default is `ArtsIcon` -- the tile's VANILLA bottom-left slot
+/// (sprite 71 places it at (-32, +37); `AttributeIcon` is bottom-RIGHT and `ItemIcon` is
+/// centred). It is the game's own Ash-of-War slot, so driving it shows the AoW where the
+/// game already intended to, rather than hijacking an unrelated child.
+///
+/// `AutoReplenish` is NOT usable here: a whole-corpus scan found that name in exactly one
+/// movie, `03_050_itembox.gfx` (the sort chest), and never in `02_011_equip`/`02_020_inventory`
+/// -- so on armament tiles there is no refill child to reuse, and injecting one is dropped
+/// at instantiation. The runtime GFX edit instead re-points `ArtsIcon`'s existing
+/// `IconImage` at the clip `ItemIcon` uses, giving `SetIcon` a real rect to scale by.
 static TARGET_CHILD: std::sync::OnceLock<std::ffi::CString> = std::sync::OnceLock::new();
 
-/// Resolve the configured approach-B draw-target child name.
+/// Where the badge clip can live, in priority order.
+///
+/// Most tiles carry the game's own `ArtsIcon` child and the GFX edit re-points it. The
+/// Equipment loadout grid (`02_010_equiptop` sprite 59) has NO arts slot, so the edit nests
+/// the badge inside that tile's `ItemIcon` container instead and it resolves one level down.
+/// Both are tried because a single hooked function populates every menu's tiles.
 #[cfg(windows)]
-fn target_child() -> &'static std::ffi::CStr {
-    TARGET_CHILD
-        .get()
-        .map(|c| c.as_c_str())
-        .unwrap_or(c"AutoReplenish/IconImage")
+const BADGE_TARGET_PATHS: [&std::ffi::CStr; 2] = [c"ArtsIcon", c"ItemIcon/ArtsIcon"];
+
+/// Resolve the configured approach-B draw-target child name, or `None` for "try each of
+/// [`BADGE_TARGET_PATHS`]" (the product default).
+#[cfg(windows)]
+fn target_child_override() -> Option<&'static std::ffi::CStr> {
+    TARGET_CHILD.get().map(|c| c.as_c_str())
+}
+
+/// The target paths to try on a tile: the diagnostic override alone when set, else all of
+/// [`BADGE_TARGET_PATHS`].
+#[cfg(windows)]
+fn badge_target_paths() -> impl Iterator<Item = &'static std::ffi::CStr> {
+    let override_path = target_child_override();
+    override_path.into_iter().chain(
+        BADGE_TARGET_PATHS
+            .into_iter()
+            .filter(move |_| override_path.is_none()),
+    )
 }
 
 /// Read a diagnostic override, preferring a game-dir FILE marker over the env var of the
@@ -235,9 +273,10 @@ fn spawn_install_thread() {
             // access violation writes a deep trace (faulting RVA + backtrace) to the log.
             crash_trace::install();
 
-            if let Some(v) =
-                diag_override("ER_ARMAMENT_ICONS_FORCE_ICON", "er-armament-icons-force-icon.txt")
-            {
+            if let Some(v) = diag_override(
+                "ER_ARMAMENT_ICONS_FORCE_ICON",
+                "er-armament-icons-force-icon.txt",
+            ) {
                 if v.eq_ignore_ascii_case("mirror") {
                     FORCE_ICON_ID.store(FORCE_ICON_MIRROR, Ordering::Relaxed);
                 } else if let Ok(id) = v.parse::<u32>() {
@@ -255,10 +294,14 @@ fn spawn_install_thread() {
             }
             let forced = FORCE_ICON_ID.load(Ordering::Relaxed);
             log_message(format_args!(
-                "attach: milestone-2 badge draw (TilePopulate hook -> AutoReplenish/IconImage + icon set); \
+                "attach: milestone-2 badge draw (TilePopulate hook -> {} + icon set); \
                  force_icon={} icon_setter_rva=0x{ICON_SETTER_RVA:x} \
                  resolver_rva=0x{MENU_GAITEM_SWORD_ARTS_RESOLVER_RVA:x} \
                  lookup_sword_arts_param_rva=0x{LOOKUP_SWORD_ARTS_PARAM_RVA:x}",
+                badge_target_paths()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join("|"),
                 match forced {
                     FORCE_ICON_NONE => "off".to_owned(),
                     FORCE_ICON_MIRROR => "mirror".to_owned(),
@@ -364,7 +407,17 @@ unsafe extern "system" fn tile_populate_hook(tile: usize, gaitem: usize) -> usiz
         ));
     }
     const HEAP_LO: usize = 0x10000;
-    if tile < HEAP_LO || gaitem < HEAP_LO {
+    if tile < HEAP_LO {
+        return ret;
+    }
+    if gaitem < HEAP_LO {
+        // An EMPTY slot ("equip to nothing" rows, unfilled grid cells). The badge clip is part
+        // of the movie and tiles are RECYCLED as the list scrolls, so simply not drawing leaves
+        // whatever the previous occupant showed -- which is how the backing plate ended up on
+        // every empty row. Hide it explicitly.
+        if let Ok(base) = er_game_base::mem::game_module_base() {
+            unsafe { hide_badge_slot(base, tile) };
+        }
         return ret;
     }
     unsafe { draw_arts_badge(tile, gaitem, fires) };
@@ -404,6 +457,20 @@ unsafe fn resolve_gem_icon_id(base: usize, arts_id: i32) -> u32 {
     };
     unsafe { get_gem(&mut res, gem_id) };
     if res.row == 0 {
+        return 0;
+    }
+    // VERIFY the row actually belongs to this ash. `arts_id * 100` is a heuristic that holds
+    // for 113 of 116 icon-bearing gems but silently lands on an UNRELATED row for the rest,
+    // which then paints that row's icon (or a 21xxx dev/HUD id) onto the wrong weapon:
+    //   arts 10  "No Skill"          -> gem 1000   = a dev row, iconId 21000
+    //   arts 309 "Thops's Barrier"   -> gem 30900  = "No Skill", iconId 8367
+    //   arts 5480 "Roaring Bash"     -> gem 548000 = "Igon's Drake Hunt", iconId 8523
+    // Requiring the gem's own swordArtsParamId to match turns each of those into "no gem",
+    // which is the correct outcome for a unique ash. Known gap: Igon's Drake Hunt (arts 4210,
+    // gem 548000) is missed by the heuristic entirely; a reverse swordArtsParamId -> gem index
+    // built once from the gem table would recover it.
+    let gem_arts_id = unsafe { *((res.row + EQUIP_PARAM_GEM_SWORD_ARTS_ID_OFFSET) as *const i32) };
+    if gem_arts_id != arts_id {
         return 0;
     }
     unsafe { *((res.row + EQUIP_PARAM_GEM_ICON_ID_OFFSET) as *const u16) as u32 }
@@ -535,11 +602,27 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
         row: usize,
     }
 
+    // ARMAMENT-ONLY GATE. `MenuGaitem.itemId` (+0x4c) carries the item category in its top
+    // nibble; category 0 is EquipParamWeapon, which is every armament -- melee weapons,
+    // shields, bows/crossbows, staves and seals. Anything else (consumables, materials,
+    // armour, talismans) can never carry an Ash of War and must never show a badge.
+    //
+    // Checked FIRST and explicitly, rather than relying on the arts resolver returning -1,
+    // because "only ever target armaments" is a product requirement and deserves its own
+    // named gate rather than being an emergent property of another function's return value.
+    let item_id = unsafe { *((gaitem + MENU_GAITEM_ITEM_ID_OFFSET) as *const u32) };
+    if (item_id >> MENU_GAITEM_CATEGORY_SHIFT) != MENU_GAITEM_CATEGORY_WEAPON {
+        BADGE_NOT_WEAPON.fetch_add(1, Ordering::SeqCst);
+        unsafe { hide_badge_slot(base, tile) };
+        return;
+    }
+
     let resolver: ResolverFn =
         unsafe { std::mem::transmute(base + MENU_GAITEM_SWORD_ARTS_RESOLVER_RVA) };
     let arts_id = unsafe { resolver(gaitem) };
     if arts_id < 0 {
         BADGE_NOT_WEAPON.fetch_add(1, Ordering::SeqCst);
+        unsafe { hide_badge_slot(base, tile) };
         return;
     }
 
@@ -557,6 +640,7 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
                 "badge sample #{fires}: arts_id={arts_id} has no SwordArtsParam row"
             ));
         }
+        unsafe { hide_badge_slot(base, tile) };
         return;
     }
     let arts_icon_id =
@@ -566,11 +650,18 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
     // (Stormcaller/Sword Dance/...), so the skill-param icon is blank; the real crescent icon is
     // EquipParamGem.iconId (row+0x4), e.g. gem 12300 "Ash of War: Stormcaller" iconId=8320.
     let gem_icon_id = unsafe { resolve_gem_icon_id(base, arts_id) };
-    let real_icon_id = if gem_icon_id != 0 {
-        gem_icon_id
-    } else {
-        arts_icon_id
-    };
+    // ONLY the gem item icon is a valid badge. The two sources are different icon FAMILIES,
+    // not interchangeable fallbacks (run 20260727-223344): gem icons are 83xx-85xx Ash-of-War
+    // ITEM art, drawn on the ornate backing the UI shows everywhere; `SwordArtsParam.iconId`
+    // is a 21xxx bare skill glyph with no backing, which rendered as an icon floating on
+    // nothing.
+    //
+    // Gem presence is also the discriminator for "this ash should show no badge at all": an
+    // ash with no purchasable/transferable gem is a weapon-unique ash (Reduvia, Flowerstone
+    // Gavel, Putrescent Cleaver), and vanilla shows no icon or backplate for those. Ripple
+    // Blade is likewise a unique weapon but carries Wild Strikes, a normal ash WITH a gem, so
+    // it keeps its badge -- uniqueness of the WEAPON is not the test, gem existence is.
+    let real_icon_id = gem_icon_id;
     // DIAGNOSTIC-ONLY override (ER_ARMAMENT_ICONS_FORCE_ICON=<u16 menu icon id>): draw a fixed,
     // guaranteed-visible icon into every badge instead of the skill icon. Used to (a) locate the
     // badge's on-screen rect via a locator-vs-vanilla pixel diff and (b) prove the pixel path flips
@@ -667,16 +758,17 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
     // hands approach B (GFX template edit) its exact geometry target.
     let trace = attempt <= SAMPLE_LOG_CALLS;
     if trace {
-        // Probe the bottom-left target and occupied vanilla badge controls.
+        // Probe the bottom-left ArtsIcon target against the two known-drawable controls.
+        // ArtsIcon/IconImage is the decisive one: after the GFX re-point it must report a
+        // real extent like ItemIcon/IconImage, not the vanilla zero rect.
         log_message(format_args!(
-            "rect trace #{attempt}: ItemIcon={} | AttributeIcon={} AttributeIcon/IconImage={} | \
-             AutoReplenish={} AutoReplenish/IconImage={} ArtsIcon={}",
+            "rect trace #{attempt}: ItemIcon={} ItemIcon/IconImage={} | AttributeIcon/IconImage={} | \
+             ArtsIcon={} ArtsIcon/IconImage={}",
             fmt_rects(unsafe { probe_child_rects(base, tile, c"ItemIcon") }),
-            fmt_rects(unsafe { probe_child_rects(base, tile, c"AttributeIcon") }),
+            fmt_rects(unsafe { probe_child_rects(base, tile, c"ItemIcon/IconImage") }),
             fmt_rects(unsafe { probe_child_rects(base, tile, c"AttributeIcon/IconImage") }),
-            fmt_rects(unsafe { probe_child_rects(base, tile, c"AutoReplenish") }),
-            fmt_rects(unsafe { probe_child_rects(base, tile, c"AutoReplenish/IconImage") }),
             fmt_rects(unsafe { probe_child_rects(base, tile, c"ArtsIcon") }),
+            fmt_rects(unsafe { probe_child_rects(base, tile, c"ArtsIcon/IconImage") }),
         ));
         log_message(format_args!(
             "gfx-equip counters: {}",
@@ -684,14 +776,80 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
         ));
     }
 
-    // Approach B: draw the badge icon into the bottom-left AutoReplenish/IconImage child. The
-    // icon setter reads the target's LOCAL rect to scale the drawn quad, so the target must be a
-    // bound, real-extent clip (ItemIcon-like:
-    // container + IconImage). If the target is unbound or zero-extent we skip rather than paint an
-    // invisible/wrong badge, and the rect trace above records why.
-    let target = target_child();
-    unsafe { assign(tile, proxy.as_mut_ptr(), target.as_ptr().cast()) };
-    if unsafe { is_bound(proxy.as_ptr()) } {
+    // Nothing to badge when the tile's item has no Ash of War: ammunition, "equip to nothing"
+    // rows and similar resolve arts_id=0 -> icon_id=0.
+    //
+    // Skipping the DRAW is not enough: the badge slot is part of the movie, so it renders
+    // whatever its clip contains whether or not we paint into it. Tiles are also RECYCLED as
+    // the list scrolls, so a slot left visible by a previous weapon would linger on an empty
+    // row. Explicitly HIDE the slot on every non-badged tile.
+    if icon_id == 0 {
+        BADGE_NO_ICON.fetch_add(1, Ordering::SeqCst);
+        unsafe { hide_badge_slot(base, tile) };
+        return;
+    }
+
+    // Draw the badge icon into the tile's bottom-left ArtsIcon slot. The icon setter reads the
+    // target's LOCAL rect to scale the drawn quad, so a bound-but-ZERO-extent target yields a
+    // degenerate scale and paints an oversized/mispositioned glyph rather than a corner badge
+    // (observed run 20260727-213757: 16 DRAWN, every one with ArtsIcon_post rect [0,0,0,0]).
+    // Require a real extent, not merely a bound proxy; the rect trace above records the skip.
+    // Try each mount point in turn: the tile's own `ArtsIcon`, then the nested
+    // `ItemIcon/ArtsIcon` used by tiles that have no arts slot of their own.
+    let mut target = BADGE_TARGET_PATHS[0];
+    let mut bound_with_extent = false;
+    for candidate in badge_target_paths() {
+        unsafe { assign(tile, proxy.as_mut_ptr(), candidate.as_ptr().cast()) };
+        let has_extent = unsafe { probe_child_rects(base, tile, candidate) }
+            .map(|(local, _global)| {
+                (local[2] - local[0]).abs() > 1.0 && (local[3] - local[1]).abs() > 1.0
+            })
+            .unwrap_or(false);
+        if unsafe { is_bound(proxy.as_ptr()) } && has_extent {
+            target = candidate;
+            bound_with_extent = true;
+            break;
+        }
+        unsafe { value_dtor(proxy.as_mut_ptr().add(PROXY_SCALEFORM_VALUE_OFFSET)) };
+    }
+    if !bound_with_extent {
+        // Unusable slot: make sure a recycled tile is not left showing a previous badge.
+        // NO dtor here -- the loop above already released every candidate it tried, and the
+        // CSScaleformValue is ref-counted, so a second release would corrupt the refcount.
+        unsafe { hide_badge_slot(base, tile) };
+        let unbound_total = BADGE_UNBOUND.fetch_add(1, Ordering::SeqCst) + 1;
+        if unbound_total <= SAMPLE_LOG_CALLS {
+            // Which child names DID bind on this tile: the template signature is what tells a
+            // "movie not covered yet" tile apart from a genuinely empty slot.
+            let mut inv = String::new();
+            for name in [
+                c"ItemIcon",
+                c"AttributeIcon",
+                c"ArtsIcon",
+                c"ItemIcon/ArtsIcon",
+                c"inadequacy",
+                c"StockNum",
+                c"AutoReplenish",
+            ] {
+                if let Some((l, _g)) = unsafe { probe_child_rects(base, tile, name) } {
+                    inv.push_str(&format!(
+                        "{}=L[{:.0},{:.0},{:.0},{:.0}] ",
+                        name.to_str().unwrap_or("?"),
+                        l[0],
+                        l[1],
+                        l[2],
+                        l[3]
+                    ));
+                }
+            }
+            log_message(format_args!(
+                "badge sample: UNBOUND #{unbound_total} arts_id={arts_id} icon_id={icon_id} \
+                 tile=0x{tile:x} children=[{inv}]"
+            ));
+        }
+        return;
+    }
+    {
         unsafe {
             icon_setter(proxy.as_mut_ptr(), icon_info.as_ptr());
             set_visible(proxy.as_mut_ptr(), 1);
@@ -707,7 +865,7 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
     }
     unsafe { value_dtor(proxy.as_mut_ptr().add(PROXY_SCALEFORM_VALUE_OFFSET)) };
 
-    if drawn {
+    {
         let drawn_total = BADGE_DRAWN.fetch_add(1, Ordering::SeqCst) + 1;
         if drawn_total <= SAMPLE_LOG_CALLS {
             // MenuGaitem.itemId (+0x4c): identifies the weapon in this tile (top nibble =
@@ -721,12 +879,37 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
                 item_id & 0x0fff_ffff
             ));
         }
-    } else {
-        let unbound_total = BADGE_UNBOUND.fetch_add(1, Ordering::SeqCst) + 1;
-        if unbound_total <= SAMPLE_LOG_CALLS {
-            log_message(format_args!(
-                "badge sample: UNBOUND #{unbound_total} arts_id={arts_id} icon_id={icon_id} tile=0x{tile:x}"
-            ));
+    }
+}
+
+/// Hide the tile's badge slot.
+///
+/// The badge clip lives in the movie, so it renders whenever the tile does -- independently
+/// of whether we painted an icon into it. Tiles are recycled as the list scrolls, so a slot
+/// left visible by a previously drawn weapon would otherwise linger on an "equip to nothing"
+/// row. Best-effort and fault-safe: an unresolvable slot is simply left alone.
+#[cfg(windows)]
+unsafe fn hide_badge_slot(base: usize, tile: usize) {
+    type AssignFn = unsafe extern "system" fn(usize, *mut u8, *const u8) -> *mut u8;
+    type IsBoundFn = unsafe extern "system" fn(*const u8) -> bool;
+    type SetVisibleFn = unsafe extern "system" fn(*mut u8, u8);
+    type ScaleformValueDtorFn = unsafe extern "system" fn(*mut u8);
+
+    let assign: AssignFn = unsafe { std::mem::transmute(base + ASSIGN_COMPONENT_WITH_NAME_RVA) };
+    let is_bound: IsBoundFn = unsafe { std::mem::transmute(base + PROXY_IS_BOUND_RVA) };
+    let set_visible: SetVisibleFn = unsafe { std::mem::transmute(base + PROXY_SET_VISIBLE_RVA) };
+    let value_dtor: ScaleformValueDtorFn =
+        unsafe { std::mem::transmute(base + SCALEFORM_VALUE_DTOR_RVA) };
+
+    // Hide EVERY mount point, not just the first that binds: one hooked function populates
+    // every menu's tiles, and which mount a given tile uses depends on its movie.
+    for candidate in badge_target_paths() {
+        let mut proxy = [0u8; PROXY_SIZE];
+        unsafe { assign(tile, proxy.as_mut_ptr(), candidate.as_ptr().cast()) };
+        if unsafe { is_bound(proxy.as_ptr()) } {
+            unsafe { set_visible(proxy.as_mut_ptr(), 0) };
+            BADGE_HIDDEN.fetch_add(1, Ordering::SeqCst);
         }
+        unsafe { value_dtor(proxy.as_mut_ptr().add(PROXY_SCALEFORM_VALUE_OFFSET)) };
     }
 }

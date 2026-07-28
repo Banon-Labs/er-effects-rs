@@ -1,7 +1,8 @@
-//! Runtime GFX ArtsBadge edit for the equip menu, reaching the parse of the
-//! BOOT-PRELOADED movie (bd armament-icons-reach-fix-hook-parse-fn-1411cf180).
+//! Runtime GFX ArtsBadge edit for every item-tile menu, reaching the parse of the
+//! BOOT-PRELOADED movies (bd armament-icons-reach-fix-hook-parse-fn-1411cf180).
 //!
-//! `02_011_equip.gfx` is preloaded+parsed ONCE at boot into a cached MovieDataDef, so
+//! The movies are `er_gfx::arts_badge::TARGETS` -- the equip menu, the inventory and the
+//! sort chest. Each is preloaded+parsed ONCE at boot into a cached MovieDataDef, so
 //! the file-open MemoryFile swap that works for ON-DEMAND menus (title/options, which
 //! reparse on display) never reaches it -- at equip display CreateMovie is a cache HIT
 //! with no reopen, so a post-open field swap has no read to intercept (proven: an
@@ -12,10 +13,10 @@
 //! File* /*rdx*/)`. Every menu movie -- preload or on-demand -- funnels through it to
 //! build its MovieDataDef, and its 2nd arg is the File the tag reader (`FUN_141162800`)
 //! consumes via the MemoryFile vtable Read (which memcpy's from File+0x18 using the
-//! +0x24 cursor, clamped to +0x20 len). When that File fingerprints as the vanilla
-//! 02_011 movie we derive the ArtsBadge-edited movie and swap the File's
-//! data/len/cursor, so the parser builds the EDITED MovieDataDef that the equip screen
-//! then binds. Since our hooks install before the boot preload, this catches 02_011's
+//! +0x24 cursor, clamped to +0x20 len). When that File fingerprints as one of the vanilla
+//! target movies we derive the ArtsBadge-edited movie and swap the File's
+//! data/len/cursor, so the parser builds the EDITED MovieDataDef that the menu then
+//! binds. Since our hooks install before the boot preload, this catches each movie's
 //! boot parse -- no forced reparse needed.
 //!
 //! The parse fn is located by a UNIQUE `.text` AOB scan (version-agnostic; hardcoded
@@ -49,8 +50,12 @@ const PARSE_SIG: &str =
 /// FileOpener::OpenFile from). Known-good hardcoded 1.16.2 RVA.
 const FILE_OPEN_RVA: usize = 0x11ced80;
 
-/// URL fragment identifying the equip movie (matched on FileOpener::OpenFile's url arg).
-const EQUIP_URL_NEEDLE: &[u8] = b"02_011_equip";
+/// Does this open URL name one of the badge movies (equip / inventory / sort chest)?
+unsafe fn is_badge_movie_url(url: usize) -> bool {
+    er_gfx::arts_badge::TARGETS
+        .iter()
+        .any(|t| unsafe { bounded_ascii_contains(url, t.url_needle) })
+}
 
 /// Sentinel for "trampoline not installed yet".
 const ORIG_UNSET: usize = 0;
@@ -81,9 +86,16 @@ static GFX_OPEN_TOTAL: AtomicU64 = AtomicU64::new(0);
 /// How many `.gfx` open URLs to log before going quiet.
 const DIAG_LOG_LIMIT: u64 = 80;
 
-/// Process-lifetime cache of the derived edited movie. The swapped File data ptr
-/// aliases this buffer, so it must never move or free.
-static EQUIP_EDITED: OnceLock<Vec<u8>> = OnceLock::new();
+/// Process-lifetime cache of each derived edited movie, indexed by position in
+/// `er_gfx::arts_badge::TARGETS`. The swapped File data ptr aliases these buffers, so they
+/// must never move or free.
+static EDITED: [OnceLock<Vec<u8>>; MAX_TARGETS] = [const { OnceLock::new() }; MAX_TARGETS];
+/// Capacity of [`EDITED`]; asserted to cover every target at compile time.
+const MAX_TARGETS: usize = 4;
+const _: () = assert!(
+    er_gfx::arts_badge::TARGETS.len() <= MAX_TARGETS,
+    "grow MAX_TARGETS to cover every badge target"
+);
 
 /// Bounded diagnostic budget for vanilla-LENGTH candidate files that reach
 /// [`maybe_swap_equip_file`]: the reject gates below are otherwise silent, which made a
@@ -230,8 +242,8 @@ unsafe fn bounded_ascii_contains(url: usize, needle: &[u8]) -> bool {
     buf[..n].windows(needle.len()).any(|w| w == needle)
 }
 
-/// If `file` is a MemoryFile holding the vanilla 02_011 movie, derive the ArtsBadge edit
-/// and swap the File's data/len/cursor so the reader consumes the edited stream. `via`
+/// If `file` is a MemoryFile holding one of the vanilla badge movies, derive the ArtsBadge
+/// edit and swap the File's data/len/cursor so the reader consumes the edited stream. `via`
 /// labels the caller (parse header path vs FileOpener::OpenFile async path). Content-
 /// matched (GFX magic + the header's own declared length + FNV fingerprint) -- no
 /// URL/string dependency. Fail-closed: anything unexpected leaves the movie untouched.
@@ -266,7 +278,12 @@ unsafe fn maybe_swap_equip_file(base: usize, file: usize, via: &str) {
             core::array::from_fn(|i| unsafe { safe_read_u8(data + 4 + i) }.unwrap_or(0));
         u32::from_le_bytes(b) as usize
     };
-    if declared != er_gfx::equip_02_011::VANILLA_LEN || declared > buf_len {
+    // Cheap pre-filter on the declared length, then confirm by fingerprint. A movie whose
+    // length matches no target is not ours.
+    let Some((slot, target)) = er_gfx::arts_badge::target_for_declared_len(declared) else {
+        return;
+    };
+    if declared > buf_len {
         return;
     }
     let len = declared;
@@ -274,40 +291,60 @@ unsafe fn maybe_swap_equip_file(base: usize, file: usize, via: &str) {
     if !unsafe { read_bytes(data, &mut vanilla) } {
         return;
     }
-    if !er_gfx::equip_02_011::is_known_vanilla(&vanilla) {
+    if er_gfx::arts_badge::target_for_vanilla(&vanilla).is_none() {
         // Right length + GFX magic but a different movie, or a drifted asset: log once
         // (bounded) so a fingerprint miss is attributable rather than silent.
         let n = DIAG_CANDIDATE_LOGS.fetch_add(1, Ordering::SeqCst) + 1;
         if n <= 4 {
             log_message(format_args!(
-                "gfx-equip: 02_011-length candidate #{n} via {via} FINGERPRINT MISS: \
+                "gfx-equip: {}-length candidate #{n} via {via} FINGERPRINT MISS: \
                  declared={len} buf_len={buf_len} fnv=0x{:016x} (want 0x{:016x})",
+                target.file_name,
                 er_gfx::title_05_000::fnv1a64(&vanilla),
-                er_gfx::equip_02_011::VANILLA_FNV1A64,
+                target.vanilla_fnv1a64,
             ));
         }
         return;
     }
-    // Derive once (cached for the process lifetime), then swap the File to it.
-    let edited = match EQUIP_EDITED.get() {
+    // Derive once per movie (cached for the process lifetime), then swap the File to it.
+    // `slot` comes from the lookup itself: keying this cache on anything derived from the
+    // target's ADDRESS collapsed all three movies onto one entry (see `TARGETS`).
+    let edited = match EDITED[slot].get() {
         Some(cached) => cached,
-        None => match er_gfx::equip_02_011::arts_badge(&vanilla) {
+        None => match er_gfx::arts_badge::derive(target, &vanilla) {
             Ok(out) => {
                 log_message(format_args!(
-                    "gfx-equip: 02_011 derived badge movie in={len} out={} (via {via})",
+                    "gfx-equip: {} derived badge movie in={len} out={} (via {via})",
+                    target.file_name,
                     out.len()
                 ));
-                EQUIP_EDITED.get_or_init(|| out)
+                EDITED[slot].get_or_init(|| out)
             }
             Err(err) => {
                 EQUIP_SWAP_FAILURES.fetch_add(1, Ordering::SeqCst);
                 log_message(format_args!(
-                    "gfx-equip: 02_011 arts_badge derive FAILED (serving native): {err}"
+                    "gfx-equip: {} arts_badge derive FAILED (serving native): {err}",
+                    target.file_name
                 ));
                 return;
             }
         },
     };
+    // Cross-check the buffer we are about to serve against the target we identified. The
+    // derive path already fingerprints its output, but the CACHE path bypasses that -- which
+    // is precisely how a mis-keyed cache served one movie's bytes under another movie's
+    // identity without a single failure line (run 20260727-231706). Fail closed instead.
+    if target.edited_len != 0 && edited.len() != target.edited_len {
+        EQUIP_SWAP_FAILURES.fetch_add(1, Ordering::SeqCst);
+        log_message(format_args!(
+            "gfx-equip: {} REFUSING swap -- cached movie is {} bytes, expected {} \
+             (per-movie cache mis-keyed)",
+            target.file_name,
+            edited.len(),
+            target.edited_len
+        ));
+        return;
+    }
     unsafe {
         core::ptr::write(
             (file + MEMORY_FILE_DATA_OFFSET) as *mut usize,
@@ -321,7 +358,8 @@ unsafe fn maybe_swap_equip_file(base: usize, file: usize, via: &str) {
     }
     let n = EQUIP_PARSE_SWAPS.fetch_add(1, Ordering::SeqCst) + 1;
     log_message(format_args!(
-        "gfx-equip: 02_011 swap #{n} via {via} -- served edited {} bytes (ArtsBadge should bind)",
+        "gfx-equip: {} swap #{n} via {via} -- served edited {} bytes (ArtsBadge should bind)",
+        target.file_name,
         edited.len()
     ));
 }
@@ -366,11 +404,11 @@ unsafe extern "system" fn openfile_hook(
     } else {
         0
     };
-    if unsafe { bounded_ascii_contains(url, EQUIP_URL_NEEDLE) } {
+    if unsafe { is_badge_movie_url(url) } {
         let n = EQUIP_OPENFILE_SWAPS.fetch_add(1, Ordering::SeqCst) + 1;
-        if n <= 4 {
+        if n <= 8 {
             log_message(format_args!(
-                "gfx-equip: openfile equip-url match #{n} -> file=0x{file:x}"
+                "gfx-equip: openfile badge-url match #{n} -> file=0x{file:x}"
             ));
         }
         let base = GAME_BASE.load(Ordering::SeqCst);
@@ -570,7 +608,7 @@ pub(crate) fn install(base: usize) {
                 "gfx-equip: hooks ACTIVE -- file_open@0x{:x} (diag); parse reach {}",
                 base + FILE_OPEN_RVA,
                 if parse_armed {
-                    "ARMED (02_011_equip ArtsBadge reaches the parse)"
+                    "ARMED (equip/inventory/itembox ArtsBadge reaches the parse)"
                 } else {
                     "DISABLED (fail-closed; no badge, no crash)"
                 },
