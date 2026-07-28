@@ -184,45 +184,68 @@ def diff_entries(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
 
 
 def diff_snapshots(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
+    """Diff two snapshots.
+
+    Settings files are reported but never gate the verdict. GraphicsConfig.xml is
+    graphics/display configuration, not character or profile data, and a save-disable
+    feature is supposed to leave the game writing it exactly as vanilla does. Counting
+    it as a violation made a clean run read as a failure.
+    """
     b, a = index_by_path(before), index_by_path(after)
     content_changes: list[dict[str, Any]] = []
     mtime_only: list[dict[str, Any]] = []
+    settings_changes: list[dict[str, Any]] = []
 
     for path in sorted(set(b) | set(a)):
         rb, ra = b.get(path), a.get(path)
+        kind = (ra or rb or {}).get("kind")
+        gates_verdict = kind in ("save-data", "save-companion")
+
         if rb is None:
-            content_changes.append({"path": path, "reason": "file created", "slots": []})
-            continue
-        if ra is None:
-            content_changes.append({"path": path, "reason": "file deleted", "slots": []})
-            continue
-        if rb.get("sha256") != ra.get("sha256") or rb.get("size") != ra.get("size"):
-            content_changes.append(
-                {
-                    "path": path,
-                    "reason": f"contents changed ({rb.get('size')}B -> {ra.get('size')}B)",
-                    "slots": diff_entries(rb, ra),
-                }
-            )
+            change = {"path": path, "reason": "file created", "slots": []}
+        elif ra is None:
+            change = {"path": path, "reason": "file deleted", "slots": []}
+        elif rb.get("sha256") != ra.get("sha256") or rb.get("size") != ra.get("size"):
+            change = {
+                "path": path,
+                "reason": f"contents changed ({rb.get('size')}B -> {ra.get('size')}B)",
+                "slots": diff_entries(rb, ra),
+            }
         elif rb.get("mtime_ns") != ra.get("mtime_ns"):
-            mtime_only.append(
-                {
-                    "path": path,
-                    "reason": "identical bytes rewritten (mtime moved)",
-                    "slots": [],
-                }
-            )
+            change = {"path": path, "reason": "identical bytes rewritten (mtime moved)", "slots": []}
+            if gates_verdict:
+                mtime_only.append(change)
+            else:
+                settings_changes.append(change)
+            continue
+        else:
+            continue
+
+        (content_changes if gates_verdict else settings_changes).append(change)
 
     return {
         "content_changes": content_changes,
         "mtime_only_changes": mtime_only,
+        "settings_changes": settings_changes,
         "clean": not content_changes and not mtime_only,
     }
 
 
+def render_settings(result: dict[str, Any]) -> list[str]:
+    """Settings churn is expected vanilla behaviour; show it, never fail on it."""
+    if not result.get("settings_changes"):
+        return []
+    lines = ["", "Settings files changed (expected, not save data):"]
+    lines += [f"  {c['path']}: {c['reason']}" for c in result["settings_changes"]]
+    return lines
+
+
 def render_diff(result: dict[str, Any]) -> str:
     if result["clean"]:
-        return "CLEAN: no save file was written (no content or mtime change)"
+        return "\n".join(
+            ["CLEAN: no save file was written (no content or mtime change)"]
+            + render_settings(result)
+        )
     lines: list[str] = []
     if result["content_changes"]:
         lines.append("SAVE WRITE DETECTED -- contents changed:")
@@ -233,7 +256,7 @@ def render_diff(result: dict[str, Any]) -> str:
         lines.append("SAVE WRITE DETECTED -- file rewritten with identical bytes:")
         for change in result["mtime_only_changes"]:
             lines.append(f"  {change['path']}: {change['reason']}")
-    return "\n".join(lines)
+    return "\n".join(lines + render_settings(result))
 
 
 def selftest() -> int:
@@ -295,6 +318,20 @@ def selftest() -> int:
         save.unlink()
         if diff_snapshots(before, take_snapshot())["clean"]:
             failures.append("file deletion NOT detected")
+
+        # (5) a settings-only change must stay CLEAN. GraphicsConfig.xml is graphics
+        # configuration the game is supposed to keep writing; failing a run over it
+        # would mark a perfectly working save-disable as broken.
+        save.write_bytes(bytes(blob))
+        settings = root / "GraphicsConfig.xml"
+        settings.write_text("<config/>", encoding="utf-8")
+        settings_before = take_snapshot()
+        settings.write_text("<config changed=\"1\"/>", encoding="utf-8")
+        result = diff_snapshots(settings_before, take_snapshot())
+        if not result["clean"]:
+            failures.append(f"a settings-only change failed the verdict: {result}")
+        if not result.get("settings_changes"):
+            failures.append("the settings change was not reported at all")
 
     if failures:
         for failure in failures:

@@ -53,6 +53,8 @@ static COPY_CALLS: AtomicU64 = AtomicU64::new(0);
 static COPY_BYTES: AtomicU64 = AtomicU64::new(0);
 static DELETE_CALLS: AtomicU64 = AtomicU64::new(0);
 static DIVERTED_OPENS: AtomicU64 = AtomicU64::new(0);
+/// Copies/deletes/renames of save data that were pointed at the diverted namespace.
+static DIVERTED_OPS: AtomicU64 = AtomicU64::new(0);
 /// A diverted open that FAILED. Non-zero means the game tried to save, we sent it
 /// somewhere it could not write, and it will see a genuine save failure -- the one
 /// outcome this design is supposed to avoid. Surfaced so it can never pass silently.
@@ -455,6 +457,15 @@ pub(crate) fn note_diverted_open(path: &str, handle: usize) {
     let _ = path;
 }
 
+/// A save-data operation that was successfully sent somewhere harmless.
+///
+/// Deliberately NOT recorded as an escaped write site. `escaped_write_sites` answers
+/// "what reached the real save file", so a redirect that worked must not appear there --
+/// listing it made a correct run report two escapes.
+pub(crate) fn note_diverted_op(_api: &'static str) {
+    DIVERTED_OPS.fetch_add(1, Ordering::SeqCst);
+}
+
 /// A copy whose source or destination is save data.
 ///
 /// This is how the game builds `ER0000.sl2.bak`, and it is the route that escaped the
@@ -528,9 +539,10 @@ pub(crate) fn escaped_write_sites() -> Vec<WriteSite> {
         .collect()
 }
 
-pub(crate) fn counters() -> [(&'static str, u64); 16] {
+pub(crate) fn counters() -> [(&'static str, u64); 17] {
     [
         ("diverted_opens", DIVERTED_OPENS.load(Ordering::SeqCst)),
+        ("diverted_ops", DIVERTED_OPS.load(Ordering::SeqCst)),
         (
             "diverted_open_failures",
             DIVERT_OPEN_FAILURES.load(Ordering::SeqCst),

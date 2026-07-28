@@ -308,7 +308,6 @@ unsafe extern "system" fn move_file_ex_w_hook(
 }
 
 unsafe extern "system" fn delete_file_w_hook(file_name: *const u16) -> i32 {
-    unsafe { witness::note_delete_file(file_name) };
     let orig = ORIG_DELETE_FILE_W.load(Ordering::SeqCst);
     if orig == 0 {
         return 0;
@@ -320,11 +319,15 @@ unsafe extern "system" fn delete_file_w_hook(file_name: *const u16) -> i32 {
     // diverted file was not there -- the game only needs the name to be free.
     match unsafe { save_path_string(file_name) }.and_then(|p| redirect::diverted_path(&p)) {
         Some(path) => {
+            witness::note_diverted_op("DeleteFileW");
             let wide = redirect::to_wide(&path);
             unsafe { original(wide.as_ptr()) };
             1
         }
-        None => unsafe { original(file_name) },
+        None => {
+            unsafe { witness::note_delete_file(file_name) };
+            unsafe { original(file_name) }
+        }
     }
 }
 
@@ -333,7 +336,6 @@ unsafe extern "system" fn copy_file_w_hook(
     new: *const u16,
     fail_if_exists: i32,
 ) -> i32 {
-    unsafe { witness::note_copy_file(existing, new) };
     let orig = ORIG_COPY_FILE_W.load(Ordering::SeqCst);
     if orig == 0 {
         return 0;
@@ -346,12 +348,19 @@ unsafe extern "system" fn copy_file_w_hook(
     let diverted = unsafe { save_path_string(new) }.and_then(|path| redirect::diverted_path(&path));
     match diverted {
         Some(path) => {
+            // Counted as diverted, NOT as an escape. Censusing the original path here
+            // would list every successful redirect as a save that got away, which is
+            // exactly backwards.
+            witness::note_diverted_op("CopyFileW");
             let wide = redirect::to_wide(&path);
             // fail_if_exists must be cleared: the diverted backup survives between saves,
             // and the game passes 1, which would fail every save after the first.
             unsafe { original(existing, wide.as_ptr(), 0) }
         }
-        None => unsafe { original(existing, new, fail_if_exists) },
+        None => {
+            unsafe { witness::note_copy_file(existing, new) };
+            unsafe { original(existing, new, fail_if_exists) }
+        }
     }
 }
 
