@@ -9,12 +9,40 @@
 # and teardown. me3 launches Game/eldenring.exe directly through the Steam compat tool
 # (waitforexitandrun verb) -- never a Steam AppID/URL form, never the EAC launcher.
 
-ME3_BIN="${ME3_BIN:-$HOME/.local/bin/me3}"
+me3_default_bin() {
+	local candidate
+	for candidate in \
+		"$HOME/.local/bin/me3" \
+		"$HOME/.cargo/bin/me3" \
+		"/mnt/c/Users/$USER/AppData/Local/garyttierney/me3/bin/me3.exe"; do
+		[[ -x "$candidate" ]] && {
+			printf '%s\n' "$candidate"
+			return 0
+		}
+	done
+	command -v me3 2>/dev/null || printf '%s\n' "$HOME/.local/bin/me3"
+}
+
+me3_uses_windows_paths() {
+	[[ "$ME3_BIN" == *.exe || "$ME3_BIN" == /mnt/?/* ]]
+}
+
+me3_to_host_path() {
+	local path="$1"
+	if me3_uses_windows_paths && command -v wslpath >/dev/null 2>&1; then
+		wslpath -w "$path"
+	else
+		printf '%s\n' "$path"
+	fi
+}
+
+ME3_BIN="${ME3_BIN:-$(me3_default_bin)}"
 # me3 auto-detects the flatpak Steam on this machine but Elden Ring lives in the host
-# library -- always pin the host Steam dir.
-ME3_STEAM_DIR="${ME3_STEAM_DIR:-$HOME/.local/share/Steam}"
-ME3_WINDOWS_BIN_DIR="${ME3_WINDOWS_BIN_DIR:-$HOME/.local/share/me3/windows-bin}"
-ME3_LOG_DIR="${ME3_LOG_DIR:-$HOME/.local/share/me3/logs}"
+# library -- always pin the host Steam dir. When using the installed Windows me3.exe,
+# store the WSL view here and translate it at the process boundary.
+ME3_STEAM_DIR="${ME3_STEAM_DIR:-$(if me3_uses_windows_paths && [[ -d /mnt/d/Steam ]]; then printf '%s\n' /mnt/d/Steam; else printf '%s\n' "$HOME/.local/share/Steam"; fi)}"
+ME3_WINDOWS_BIN_DIR="${ME3_WINDOWS_BIN_DIR:-$(if me3_uses_windows_paths; then dirname "$ME3_BIN"; else printf '%s\n' "$HOME/.local/share/me3/windows-bin"; fi)}"
+ME3_LOG_DIR="${ME3_LOG_DIR:-$(if me3_uses_windows_paths && [[ -d /mnt/c/Users/$USER/AppData/Local/garyttierney/me3/data/logs ]]; then printf '%s\n' "/mnt/c/Users/$USER/AppData/Local/garyttierney/me3/data/logs"; else printf '%s\n' "$HOME/.local/share/me3/logs"; fi)}"
 
 # Validate the me3 installation and that me3 can resolve a Proton compat tool for
 # Elden Ring. me3 resolves strictly: per-app CompatToolMapping (config.vdf) -> global
@@ -22,10 +50,22 @@ ME3_LOG_DIR="${ME3_LOG_DIR:-$HOME/.local/share/me3/logs}"
 # crates/mod-protocol/src/game.rs); there is NO me3-side override. Returns non-zero
 # with guidance on stderr instead of burning a launch.
 me3_preflight() {
-  [[ -x "$ME3_BIN" ]] || { echo "me3-launch-lib: missing me3 binary: $ME3_BIN" >&2; return 2; }
-  [[ -f "$ME3_WINDOWS_BIN_DIR/me3-launcher.exe" ]] || { echo "me3-launch-lib: missing $ME3_WINDOWS_BIN_DIR/me3-launcher.exe" >&2; return 2; }
-  [[ -f "$ME3_WINDOWS_BIN_DIR/me3_mod_host.dll" ]] || { echo "me3-launch-lib: missing $ME3_WINDOWS_BIN_DIR/me3_mod_host.dll" >&2; return 2; }
-  python3 - "$ME3_STEAM_DIR" <<'PY'
+	[[ -x "$ME3_BIN" ]] || {
+		echo "me3-launch-lib: missing me3 binary: $ME3_BIN" >&2
+		return 2
+	}
+	[[ -f "$ME3_WINDOWS_BIN_DIR/me3-launcher.exe" ]] || {
+		echo "me3-launch-lib: missing $ME3_WINDOWS_BIN_DIR/me3-launcher.exe" >&2
+		return 2
+	}
+	[[ -f "$ME3_WINDOWS_BIN_DIR/me3_mod_host.dll" ]] || {
+		echo "me3-launch-lib: missing $ME3_WINDOWS_BIN_DIR/me3_mod_host.dll" >&2
+		return 2
+	}
+	if me3_uses_windows_paths; then
+		return 0
+	fi
+	python3 - "$ME3_STEAM_DIR" <<'PY'
 import os
 import re
 import sys
@@ -67,24 +107,30 @@ PY
 # file is never copied, moved, or staged (Do-not-bundle-ersc rule): only this per-run
 # profile TOML mentions it.
 me3_write_profile() {
-  local profile_path="$1" dll_path="$2" extra_native="${3:-}"
-  cat > "$profile_path" <<EOF
+	local profile_path="$1" dll_path="$2" extra_native="${3:-}"
+	local profile_dll_path profile_extra_native
+	profile_dll_path=$(me3_to_host_path "$dll_path")
+	profile_extra_native=""
+	if [[ -n "$extra_native" ]]; then
+		profile_extra_native=$(me3_to_host_path "$extra_native")
+	fi
+	cat >"$profile_path" <<EOF
 profileVersion = "v1"
 
 [[supports]]
 game = "eldenring"
 EOF
-  if [[ -n "$extra_native" ]]; then
-    cat >> "$profile_path" <<EOF
+	if [[ -n "$extra_native" ]]; then
+		cat >>"$profile_path" <<EOF
 
 [[natives]]
-path = '$extra_native'
+path = '$profile_extra_native'
 EOF
-  fi
-  cat >> "$profile_path" <<EOF
+	fi
+	cat >>"$profile_path" <<EOF
 
 [[natives]]
-path = '$dll_path'
+path = '$profile_dll_path'
 EOF
 }
 
@@ -96,15 +142,17 @@ EOF
 #   cargo xwin build --release --target x86_64-pc-windows-msvc -p er-telemetry-dll
 # -> target/x86_64-pc-windows-msvc/release/er_telemetry_dll.dll
 me3_write_telemetry_only_profile() {
-  local profile_path="$1" telemetry_dll="$2"
-  cat > "$profile_path" <<EOF
+	local profile_path="$1" telemetry_dll="$2"
+	local profile_telemetry_dll
+	profile_telemetry_dll=$(me3_to_host_path "$telemetry_dll")
+	cat >"$profile_path" <<EOF
 profileVersion = "v1"
 
 [[supports]]
 game = "eldenring"
 
 [[natives]]
-path = '$telemetry_dll'
+path = '$profile_telemetry_dll'
 EOF
 }
 
@@ -115,11 +163,13 @@ EOF
 # in the profile; product must be listed FIRST so its er_effects_union_register
 # export is mapped before companions resolve it).
 me3_append_native() {
-  local profile_path="$1" dll_path="$2"
-  cat >> "$profile_path" <<EOF
+	local profile_path="$1" dll_path="$2"
+	local profile_dll_path
+	profile_dll_path=$(me3_to_host_path "$dll_path")
+	cat >>"$profile_path" <<EOF
 
 [[natives]]
-path = '$dll_path'
+path = '$profile_dll_path'
 EOF
 }
 
@@ -127,17 +177,20 @@ EOF
 # The caller decides env, redirection, and backgrounding; the me3 CLI stays alive as
 # the launch owner for the lifetime of the game.
 me3_launch() {
-  local profile_path="$1"
-  "$ME3_BIN" --steam-dir "$ME3_STEAM_DIR" launch -g eldenring -p "$profile_path"
+	local profile_path="$1"
+	local launch_steam_dir launch_profile_path
+	launch_steam_dir=$(me3_to_host_path "$ME3_STEAM_DIR")
+	launch_profile_path=$(me3_to_host_path "$profile_path")
+	"$ME3_BIN" --steam-dir "$launch_steam_dir" launch -g eldenring -p "$launch_profile_path"
 }
 
 # Fail closed if a leftover LazyLoader proxy is still active in GAME_DIR: an me3 native
 # plus a dinput8 chainload would DOUBLE-LOAD the DLL (two modules, two DllMains).
 me3_require_no_lazyloader() {
-  local game_dir="$1"
-  if [[ -f "$game_dir/dinput8.dll" ]]; then
-    echo "me3-launch-lib: $game_dir/dinput8.dll is present (LazyLoader proxy) -- refusing the double-load run; LazyLoader was removed 2026-07-04, delete or stage away the proxy" >&2
-    return 2
-  fi
-  return 0
+	local game_dir="$1"
+	if [[ -f "$game_dir/dinput8.dll" ]]; then
+		echo "me3-launch-lib: $game_dir/dinput8.dll is present (LazyLoader proxy) -- refusing the double-load run; LazyLoader was removed 2026-07-04, delete or stage away the proxy" >&2
+		return 2
+	fi
+	return 0
 }
