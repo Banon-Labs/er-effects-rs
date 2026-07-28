@@ -1,0 +1,138 @@
+name: release
+
+# Automated releases via release-please: every push to main updates (or opens)
+# a Release PR that accumulates changes; merging that PR creates the version
+# tag + GitHub Release, and the build job below then attaches all
+# distributable DLLs, a SHA256SUMS manifest, and GitHub artifact attestations
+# (SLSA build provenance, verifiable with
+# `gh attestation verify <dll> --repo Banon-Labs/er-effects-rs`).
+#
+# Only feat/fix (and feat!/BREAKING) conventional commits drive the version;
+# plain-prose commits still ship in the release but do not appear in the
+# changelog. See docs/artifact-attestations.md for the verification story.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Serialize runs on main so two merges cannot race the release PR bookkeeping.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Keep in lockstep with .github/workflows/check.yml.
+  FROMSOFTWARE_RS_REV: 902851865d05069eda7dcfd6385c8881eadf29bf
+  CARGO_XWIN_VERSION: 0.23.0
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push release branch, create tags/releases
+      pull-requests: write # open/update the release PR
+      issues: write # apply autorelease labels
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          release-type: simple
+
+  # Build every distributable DLL, attest, and attach to the release that
+  # release-please just created. Deliberately excluded: amd_ags_x64.dll (the
+  # er-ags-stub crate impersonates AMD's vendor DLL filename and is a local
+  # RenderDoc-capture swap-in, never a release artifact).
+  build-attest-upload:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # upload release assets
+      id-token: write # sign attestations (Sigstore OIDC)
+      attestations: write # persist attestations
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out fromsoftware-rs as sibling
+        run: |
+          git clone https://github.com/vswarte/fromsoftware-rs.git "$GITHUB_WORKSPACE/../fromsoftware-rs"
+          git -C "$GITHUB_WORKSPACE/../fromsoftware-rs" checkout "$FROMSOFTWARE_RS_REV"
+
+      - name: Check out MinHook vendor source
+        run: git clone --depth 1 --branch v1.3.4 https://github.com/TsudaKageyu/minhook.git vendor/minhook
+
+      - name: Install Rust (stable + windows target)
+        run: |
+          sudo apt-get install -y --no-install-recommends clang lld llvm \
+            || { sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld llvm; }
+          rustup toolchain install stable --profile minimal
+          rustup target add x86_64-pc-windows-msvc
+
+      - name: Install cargo-xwin
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-xwin@${{ env.CARGO_XWIN_VERSION }}
+
+      # Same cache key as check.yml so this job rides the already-warmed
+      # main-scoped CRT/SDK cache instead of re-downloading ~1 GB.
+      - name: Cache xwin Windows CRT/SDK
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/cargo-xwin
+          key: xwin-sdk-${{ runner.os }}-cargo-xwin-${{ env.CARGO_XWIN_VERSION }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The exact 10-package set validated by local cargo-xwin release builds
+      # (2026-07-28): the product DLL plus every standalone companion.
+      - name: Build distributable DLLs
+        run: |
+          cargo xwin build --release --target x86_64-pc-windows-msvc \
+            -p er-effects-rs \
+            -p er-net-effects-dll \
+            -p mushroom-man-runtime \
+            -p er-armament-icons \
+            -p er-better-refills-dll \
+            -p er-inventory-sort-dll \
+            -p er-save-disable-dll \
+            -p er-input-harness-dll \
+            -p er-reload-trace-dll \
+            -p er-telemetry-dll
+
+      - name: Stage release assets
+        run: |
+          mkdir dist
+          for dll in \
+            er_effects_rs \
+            er_net_effects_dll \
+            mushroom_man \
+            er_armament_icons \
+            er_better_refills \
+            er_inventory_sort \
+            er_save_disable \
+            er_input_harness_dll \
+            er_reload_trace_dll \
+            er_telemetry_dll; do
+            cp "target/x86_64-pc-windows-msvc/release/${dll}.dll" dist/
+          done
+          (cd dist && sha256sum -- *.dll > SHA256SUMS)
+
+      # actions/attest with no predicate inputs emits SLSA build provenance
+      # (v4 of attest-build-provenance is officially just a wrapper over it;
+      # GitHub's docs now show actions/attest directly). One attestation
+      # covers all matched subjects; per-file `gh attestation verify` works.
+      - name: Attest build provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            dist/*.dll
+            dist/SHA256SUMS
+
+      - name: Upload assets to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ needs.release-please.outputs.tag_name }}" dist/* --clobber
