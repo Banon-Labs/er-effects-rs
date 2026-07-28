@@ -2728,6 +2728,17 @@ name = "er-ags-stub"
 version = "0.1.0"
 
 [[package]]
+name = "er-armament-icons"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-game-base",
+ "er-gfx",
+ "er-hook",
+ "fromsoftware-shared",
+]
+
+[[package]]
 name = "er-better-refills-dll"
 version = "0.1.0"
 dependencies = [

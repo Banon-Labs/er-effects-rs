@@ -47,6 +47,7 @@
 use bitflags::bitflags;
 use std::fmt;
 
+pub mod arts_badge;
 pub mod edit;
 pub mod options_02_040;
 pub mod raster;
