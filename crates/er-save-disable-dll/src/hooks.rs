@@ -243,6 +243,10 @@ unsafe extern "system" fn create_file_w_hook(
     if diverted.is_none() {
         unsafe { witness::note_create_file(file_name, desired_access, handle) };
     }
+    // Keep the quit-phase reading alive. This fires far more often than the save status
+    // poll and, crucially, keeps firing after a save settles -- which is when the
+    // 2 -> 3 transition actually happens.
+    crate::suppress::sample_quit_phase_from_census();
     handle
 }
 

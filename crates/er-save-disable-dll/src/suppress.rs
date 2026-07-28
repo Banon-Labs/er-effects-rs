@@ -426,6 +426,55 @@ unsafe extern "system" fn poll_save_status_hook(iodev: usize) -> u32 {
     decided
 }
 
+/// Sample `GameMan+0xbc4`, the return-to-title phase, from the game thread.
+///
+/// This exists because deadlock-freedom was previously only *inferred*. The quit-to-title
+/// MenuJob chain contains a wait job that spins until `bc4 == 3`, so if suppression ever
+/// stops that transition the game hangs on quit forever. A file-IO census cannot see that
+/// -- it would report a perfectly clean run while the player stared at a frozen screen.
+///
+/// The states, from the exhaustive writer scan: `1` = return-to-title requested, `2` =
+/// save submitted, `3` = save settled and the wait job may proceed. Recording the highest
+/// value observed turns "no deadlock" from an argument into a reading.
+/// Public sampling entry so callers OTHER than the status poll can drive it.
+///
+/// Sampling only inside the poll detour was not enough to prove anything. `bc4` goes
+/// 2 -> 3 inside `DoSaveStuff` *after* the poll returns, and once a save settles the
+/// poll stops being called -- so a run can end with the maximum observed value at 2
+/// whether the quit deadlocked or completed perfectly. Those are opposite outcomes and
+/// the instrument could not tell them apart. The census `CreateFileW` detour fires
+/// constantly while the game streams assets and sits at the title, so sampling there
+/// too keeps the reading live long after the save is done.
+#[cfg(windows)]
+pub(crate) fn sample_quit_phase_from_census() {
+    sample_quit_phase();
+}
+
+#[cfg(windows)]
+fn sample_quit_phase() {
+    use er_game_base::{mem::safe_read_usize, rva::GAME_MAN_SINGLETON_RVA};
+
+    const GAME_MAN_QUIT_PHASE_BC4_OFFSET: usize = 0xbc4;
+
+    let Ok(base) = er_game_base::mem::game_module_base() else {
+        return;
+    };
+    let Some(game_man) = (unsafe { safe_read_usize(base + GAME_MAN_SINGLETON_RVA) }) else {
+        return;
+    };
+    if game_man < 0x10000 {
+        return;
+    }
+    let Some(raw) = (unsafe { safe_read_usize(game_man + GAME_MAN_QUIT_PHASE_BC4_OFFSET) }) else {
+        return;
+    };
+    let phase = (raw & 0xff) as usize;
+    QUIT_PHASE_MAX_SEEN.fetch_max(phase, Ordering::SeqCst);
+    if phase == QUIT_PHASE_SETTLED {
+        QUIT_PHASE_SETTLED_OBSERVATIONS.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
