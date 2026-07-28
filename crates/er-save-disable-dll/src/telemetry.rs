@@ -1,14 +1,30 @@
-//! Machine-readable census output.
+//! Machine-readable census output -- the semaphore surface.
 //!
-//! Written event-driven -- once at install and again after each newly observed save
-//! write -- rather than on a polling timer. Save writes are rare, so a poll loop
-//! would be pure overhead, and this repo treats sleeps as a synchronization smell.
+//! This file, not the text log, is what a harness reads. It is RAM-derived in-process
+//! telemetry, never a screenshot, and it is the run-stopping oracle for a
+//! save-suppression proof: `escaped_write_sites` must be empty.
 //!
-//! The file is the run-stopping oracle for a save-suppression proof: a harness reads
-//! `escaped_write_sites` and fails the run if it is non-empty. It is RAM-derived
-//! in-process telemetry, never a screenshot.
+//! Written event-driven rather than on a polling timer (this repo treats sleeps as a
+//! synchronization smell), on a schedule chosen so the file is always current *where a
+//! verdict is drawn from it*:
+//!
+//! - at install, so an absent file means "the DLL never loaded" rather than "nothing
+//!   happened";
+//! - on each newly discovered write site, the census's only interesting event;
+//! - on the first swallowed save and at exponentially spaced milestones after it;
+//! - on every quit-to-title settle, the moment the acceptance test is about.
+//!
+//! Publishing once per swallowed save was the earlier behaviour and was wrong: saves
+//! are requested on every rune-total change, so it re-serialized and rewrote this file
+//! on the save worker thread continuously. Nothing was gained, because every counter a
+//! harness gates on is a *threshold*, and a threshold is crossed at a first occurrence
+//! that is always published.
 
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use er_game_base::log::game_directory_path;
 
@@ -24,10 +40,12 @@ fn telemetry_path() -> PathBuf {
 
 /// Serialize the current census and replace the telemetry file atomically.
 ///
-/// The write goes through the same file APIs this DLL hooks. That is safe because
-/// every caller reaches here from inside the witness reentrancy guard, so the
-/// detours' record paths short-circuit; the telemetry path also fails the save-path
-/// filter, giving a second, independent reason it cannot pollute its own census.
+/// The write goes through the same file APIs this DLL hooks. That is safe because every
+/// caller reaches here from inside the witness reentrancy guard, so the detours' record
+/// paths short-circuit -- census callers arrive already guarded, and the suppression
+/// hooks go through `suppress::publish_snapshot`, which takes the guard for them. The
+/// telemetry path also fails the save-path filter, giving a second, independent reason
+/// it cannot pollute its own census.
 pub(crate) fn write_snapshot() {
     let mut body = String::new();
     body.push_str("{\n");
@@ -53,7 +71,27 @@ pub(crate) fn write_snapshot() {
         "  \"suppression_hooks_installed\": {},\n",
         crate::suppress::installed_hooks()
     ));
-    body.push_str("  \"suppression_hooks_expected\": 2,\n");
+    body.push_str(&format!(
+        "  \"suppression_hooks_expected\": {},\n",
+        crate::suppress::SUPPRESSOR_HOOKS
+    ));
+    // Reported separately from the suppressor count: a missing observer means
+    // `quit_phase_settle_events` is structurally 0, which must not be read as a deadlock.
+    body.push_str(&format!(
+        "  \"quit_settle_observer_installed\": {},\n",
+        crate::suppress::settle_observer_installed()
+    ));
+    // Reported because it is the OTHER layer that can hide a save write. A run with
+    // redirect armed and suppression off is a different experiment from a pure census,
+    // and the telemetry has to be able to say which one it was.
+    body.push_str(&format!(
+        "  \"redirect_armed\": {},\n",
+        crate::redirect::is_armed()
+    ));
+    body.push_str(&format!(
+        "  \"publish_failures\": {},\n",
+        PUBLISH_FAILURES.load(Ordering::Relaxed)
+    ));
     for (name, value) in crate::suppress::counters() {
         body.push_str(&format!("  \"{name}\": {value},\n"));
     }
@@ -90,11 +128,25 @@ pub(crate) fn write_snapshot() {
     body.push_str("  ]\n}\n");
 
     let path = telemetry_path();
-    let tmp = path.with_extension("json.tmp");
-    if fs::write(&tmp, body).is_ok() {
-        let _ = fs::rename(&tmp, &path);
+    // Unique tmp name per publish. There are publishers on three threads -- the install
+    // thread, the game thread (`enqueue_save_job_hook`, `quit_phase_settle_hook`) and the
+    // SL worker (`record`) -- and a shared fixed tmp name lets one `fs::write` truncate
+    // the file another is about to rename. The result is a torn JSON that the checker
+    // cannot parse, which it reports as the hard and completely wrong verdict "the DLL
+    // never installed". A counter costs nothing and removes the race without a lock held
+    // across file I/O inside a detour.
+    let serial = PUBLISH_SERIAL.fetch_add(1, Ordering::Relaxed);
+    let tmp = path.with_extension(format!("json.tmp.{serial}"));
+    if fs::write(&tmp, body).is_ok() && fs::rename(&tmp, &path).is_err() {
+        // The rename is what makes the snapshot visible; a failure here means the
+        // on-disk file is stale, which must not pass silently.
+        PUBLISH_FAILURES.fetch_add(1, Ordering::Relaxed);
+        let _ = fs::remove_file(&tmp);
     }
 }
+
+static PUBLISH_SERIAL: AtomicU64 = AtomicU64::new(0);
+static PUBLISH_FAILURES: AtomicU64 = AtomicU64::new(0);
 
 fn hex_list(values: &[usize]) -> String {
     values

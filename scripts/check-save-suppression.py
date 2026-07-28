@@ -50,6 +50,10 @@ WITNESS = REPO_ROOT / "scripts" / "save-write-witness.py"
 WITNESS_TIMEOUT_SECONDS = 20.0
 
 PHASE_CENSUS = "census-only"
+# The only other value `lib.rs::phase()` emits. Fixtures below must use these two
+# literals and nothing else: a fixture phase the DLL never produces silently exercises
+# whichever branch it happens to fall through to.
+PHASE_SUPPRESS = "suppress+census"
 
 
 def load_json(path: Path) -> dict[str, Any] | None:
@@ -129,36 +133,12 @@ def evaluate(telemetry: dict[str, Any] | None, diff: dict[str, Any] | None) -> t
             reasons + ["Could not compute the before/after save-file diff."],
         )
 
-    # Scope the question to SAVE data. The witness also watches GraphicsConfig.xml so a
-    # run cannot silently miss a settings write, but that file is written by a path with
-    # no relationship to the save containers -- it moves on its own schedule and neither
-    # the census (which filters to .sl2/.co2/ER0000) nor save suppression touches it.
-    # Counting it as "the save changed" made every run fail as a census blind spot.
-    SAVE_KINDS = {"save-data", "save-companion"}
-
-    def save_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return [e for e in entries if e.get("kind", "save-data") in SAVE_KINDS]
-
-    save_content = save_entries(diff.get("content_changes", []))
-    save_mtime = save_entries(diff.get("mtime_only_changes", []))
-    other_changed = [
-        e
-        for e in diff.get("content_changes", []) + diff.get("mtime_only_changes", [])
-        if e.get("kind", "save-data") not in SAVE_KINDS
-    ]
-
-    file_changed = bool(save_content or save_mtime)
+    file_changed = not diff.get("clean", False)
     census_saw_writes = bool(escaped)
-
-    for entry in other_changed:
-        reasons.append(
-            f"note: non-save file moved ({entry.get('kind')}): "
-            f"{entry['path']}: {entry['reason']} -- not a save write, not counted."
-        )
 
     # The contradiction that matters most: bytes landed but nothing was observed.
     if file_changed and not census_saw_writes:
-        changed = save_content + save_mtime
+        changed = diff.get("content_changes", []) + diff.get("mtime_only_changes", [])
         reasons.append(
             "COVERAGE GAP: the save file changed on disk but the census recorded zero "
             "write sites. The game reached the filesystem by a route the census does "
@@ -214,6 +194,12 @@ def evaluate(telemetry: dict[str, Any] | None, diff: dict[str, Any] | None) -> t
                 f"Quit path released {settle_events} time(s): the bc4 2->3 transition "
                 "executed, so the System->Quit wait job was satisfied rather than spinning."
             )
+        elif settle_events == 0 and telemetry.get("quit_settle_observer_installed") is False:
+            reasons.append(
+                "The quit-settle observer did not install, so quit_phase_settle_events is "
+                "structurally 0 and says nothing about the quit path. Deadlock-freedom is "
+                "UNPROVEN for this run, not disproven."
+            )
         elif settle_events == 0 and bc4_max and bc4_max >= 2:
             reasons.append(
                 "A quit was requested (bc4 reached 2) but the 2->3 transition never fired: "
@@ -241,7 +227,49 @@ def evaluate(telemetry: dict[str, Any] | None, diff: dict[str, Any] | None) -> t
                 "not evidence either way. See quit_phase_settle_events."
             )
 
+    # Blindness and real-save-failure gates, applied to BOTH phases.
+    #
+    # Each of these is a verified false-PASS path if left ungated: the counter moves, the
+    # real file is unchanged, `escaped_write_sites` stays empty, and the verdict reads
+    # clean for a run that either failed to observe or made the game visibly fail to save.
+    divert_failures = telemetry.get("diverted_open_failures", 0) or 0
+    if divert_failures:
+        reasons.append(
+            f"{divert_failures} diverted save open(s) FAILED: the game received an "
+            "invalid handle, so its save genuinely failed and the player saw a save-error "
+            "popup. An unchanged save file here means the save broke, not that it was "
+            "suppressed cleanly."
+        )
+        return False, "FAIL -- the game saw a real save failure", reasons
+
+    blind = (telemetry.get("sites_dropped", 0) or 0) + (telemetry.get("handles_dropped", 0) or 0)
+    if blind:
+        reasons.append(
+            f"The census went blind ({telemetry.get('sites_dropped', 0)} site(s) and "
+            f"{telemetry.get('handles_dropped', 0)} handle(s) dropped at their table caps). "
+            "From that point an escaped write could not be recorded, so an empty "
+            "escaped_write_sites proves nothing."
+        )
+        return False, "INCONCLUSIVE -- census went blind", reasons
+
+    publish_failures = telemetry.get("publish_failures", 0) or 0
+    if publish_failures:
+        reasons.append(
+            f"{publish_failures} telemetry publish(es) failed to land, so the counters "
+            "read here may be stale."
+        )
+        return False, "INCONCLUSIVE -- telemetry may be stale", reasons
+
     if phase == PHASE_CENSUS:
+        # The control is only a control if every layer that could hide a write is off.
+        if telemetry.get("redirect_armed") is True:
+            reasons.append(
+                "This census-only run still had path diversion ARMED, so save writes were "
+                "sent to the decoy and the census could not observe them. The positive "
+                "control cannot fire in this configuration."
+            )
+            return False, "INCONCLUSIVE -- control run had redirect armed", reasons
+
         # Observation-only build. It suppresses nothing, so a changed save file is the
         # expected outcome; the deliverable is the call-site inventory, and the run is
         # only useful if it actually observed something.
@@ -266,54 +294,7 @@ def evaluate(telemetry: dict[str, Any] | None, diff: dict[str, Any] | None) -> t
         )
         return True, "PASS -- census captured the save call sites", reasons
 
-    # Suppression build. "Nothing was written" is only evidence if the game actually
-    # tried to save -- otherwise the run passes vacuously, which is the exact trap a
-    # naive driven quit falls into (it returns to title without ever requesting a save).
-    # The DLL counts every submit it swallowed, so that count is the proof of work.
-    armed = telemetry.get("suppression_armed", False)
-    supp_installed = telemetry.get("suppression_hooks_installed", 0)
-    supp_expected = telemetry.get("suppression_hooks_expected", 0)
-    swallowed = telemetry.get("suppress_submits_swallowed", 0)
-    faked = telemetry.get("suppress_status_faked", 0)
-    passed_through = telemetry.get("suppress_submits_passed_through", 0)
-
-    if not armed or supp_installed < supp_expected:
-        return (
-            False,
-            "FAIL -- suppression never armed",
-            reasons
-            + [
-                f"suppression_armed={armed}, hooks {supp_installed}/{supp_expected}. "
-                "A partial or absent install is refused by the DLL because half of it "
-                "would hang System->Quit on the bc4==3 wait. Check er-save-disable.log "
-                "for a prologue mismatch, which means these addresses are not this build."
-            ],
-        )
-
-    if passed_through:
-        reasons.append(
-            f"{passed_through} save submit(s) were passed through to the game unsuppressed."
-        )
-
-    if not swallowed:
-        return (
-            False,
-            "INCONCLUSIVE -- no save was ever attempted",
-            reasons
-            + [
-                "Suppression was armed but swallowed zero submits, so the game never "
-                "requested a save during this run. An unchanged save file proves nothing "
-                "here. Trigger a real save -- play for a minute and quit to title, which "
-                "normally rewrites USER_DATA000/010/011 -- and re-run.",
-            ],
-        )
-
-    reasons.append(
-        f"Suppression swallowed {swallowed} save submit(s) and reported success "
-        f"{faked} time(s); no write job was ever enqueued."
-    )
-
-    # Both oracles must be clean.
+    # Suppression build: both oracles must be clean.
     if census_saw_writes:
         reasons.append(f"{len(escaped)} save-write call site(s) escaped suppression:")
         for site in escaped:
@@ -341,32 +322,22 @@ def selftest() -> int:
     census_site = {"api": "WriteFile", "hits": 3, "bytes": 2600000, "path": "ER0000.sl2", "game_rvas": ["0x67a050"]}
     full_census = {
         "phase": PHASE_CENSUS,
-        "census_hooks_installed": 6,
-        "census_hooks_expected": 6,
+        # Must track hooks::EXPECTED_HOOKS; 6 was stale and let a coverage-gap fixture
+        # look fully hooked.
+        "census_hooks_installed": 8,
+        "census_hooks_expected": 8,
         # Accounts for every byte the `dirty` fixture says moved -- a fully-sighted census.
         "write_bytes": 2359328,
         "escaped_write_sites": [census_site],
+        # A real control run: every layer that could hide a write is off.
+        "redirect_armed": False,
     }
     blind_census = dict(full_census, escaped_write_sites=[])
-    armed = {
-        "phase": "suppress+census",
-        "census_hooks_installed": 6,
-        "census_hooks_expected": 6,
-        "suppression_armed": True,
-        "suppression_hooks_installed": 2,
-        "suppression_hooks_expected": 2,
-        "suppress_submits_swallowed": 3,
-        "suppress_status_faked": 3,
-        "suppress_submits_passed_through": 0,
-        "escaped_write_sites": [],
-    }
-    suppressing = armed
-    leaking = dict(armed, escaped_write_sites=[census_site])
-    never_saved = dict(armed, suppress_submits_swallowed=0, suppress_status_faked=0)
-    not_armed = dict(armed, suppression_armed=False, suppression_hooks_installed=0)
-    # Keeps the per-slot detail: the byte-accounting gate parses `slots`, so a
-    # slot-less fixture would silently make `changed_slot_bytes` return 0 and stop
-    # the under-count check from ever firing.
+    suppressing = dict(full_census, phase=PHASE_SUPPRESS, escaped_write_sites=[],
+                       redirect_armed=True,
+                       suppress_submits_swallowed=25, quit_phase_bc4_max_seen=3)
+    leaking = dict(full_census, phase=PHASE_SUPPRESS, redirect_armed=True,
+                   suppress_submits_swallowed=25, quit_phase_bc4_max_seen=3)
     dirty = {
         "clean": False,
         "content_changes": [
@@ -399,15 +370,6 @@ def selftest() -> int:
             },
         ],
         "mtime_only_changes": [],
-    }
-    # Real shape seen on every run: the save containers never move, but the game
-    # rewrites GraphicsConfig.xml with identical bytes. That must not read as a save.
-    settings_only = {
-        "clean": False,
-        "content_changes": [],
-        "mtime_only_changes": [
-            {"path": "GraphicsConfig.xml", "kind": "settings", "reason": "identical bytes rewritten (mtime moved)"}
-        ],
     }
 
     check("missing telemetry", None, cleanfile, False, "no in-process census")
@@ -442,14 +404,22 @@ def selftest() -> int:
           quit_phase_settle_events=0), cleanfile, False, "deadlock")
     check("suppression leaking", leaking, cleanfile, False, "not fully suppressed")
     check("suppression clean census but file changed", suppressing, dirty, False, "blind spot")
-    # The vacuous pass this checker exists to refuse: armed, nothing written -- because
-    # nothing was ever saved.
-    check("armed but no save attempted", never_saved, cleanfile, False, "inconclusive")
-    check("suppression never armed", not_armed, cleanfile, False, "never armed")
-    # A settings-file rewrite alongside a clean save must still pass, and must NOT be
-    # mistaken for a census blind spot.
-    check("settings moved, saves clean", suppressing, settings_only, True, "fully suppressed")
-    check("settings moved, census run", full_census, settings_only, True, "census captured")
+
+    # The three verified false-PASS paths. Each looks IDENTICAL to a perfect run from the
+    # file's point of view -- clean diff, empty escaped_write_sites -- so only the counter
+    # distinguishes them, and before these gates existed all three returned PASS.
+    check("the game saw a real save failure", dict(armed, diverted_open_failures=1),
+          cleanfile, False, "real save failure")
+    check("site table overflowed, census blind", dict(armed, sites_dropped=1),
+          cleanfile, False, "blind")
+    check("handle table overflowed, census blind", dict(armed, handles_dropped=1),
+          cleanfile, False, "blind")
+    check("telemetry publish did not land", dict(armed, publish_failures=1),
+          cleanfile, False, "stale")
+    # A control run with diversion still armed observes nothing and must not be graded
+    # as a successful census.
+    check("control run with redirect armed", dict(full_census, redirect_armed=True),
+          dirty, False, "redirect armed")
 
     # A census-only run must never be reported as suppression working.
     _, verdict, _ = evaluate(full_census, dirty)

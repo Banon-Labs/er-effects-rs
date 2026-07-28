@@ -134,14 +134,6 @@ const SL_RELEASE_REQUEST_SIG: &[u8] = &[
     0xED, 0x48, 0x8B, 0xF9, 0x48, 0x39, 0x69, 0x28,
 ];
 
-/// Diagnostic disarm. Present only so the proof plan's mandatory positive control can
-/// be run: the identical build, identical census, suppression off, to show that the
-/// detectors do fire and the save file does change when nothing is suppressed. Product
-/// behaviour is the default (armed); a disarmed run is self-identifying in telemetry
-/// via `suppression_armed`, so a control run can never be mistaken for a clean one.
-#[cfg(windows)]
-const CENSUS_ONLY_ENV: &str = "ER_SAVE_DISABLE_CENSUS_ONLY";
-
 #[cfg(windows)]
 type EnqueueSaveJobFn = unsafe extern "system" fn(usize, u32) -> u8;
 #[cfg(windows)]
@@ -156,8 +148,14 @@ static ORIG_POLL_SAVE_STATUS: AtomicUsize = AtomicUsize::new(0);
 #[cfg(windows)]
 static SL_RELEASE_REQUEST: AtomicUsize = AtomicUsize::new(0);
 
+/// The two detours that actually suppress: the submit swallow and the status rewrite.
+/// The quit-settle observer is deliberately NOT one of them -- it changes nothing and a
+/// failure to install it must not read as a partial suppression.
+pub(crate) const SUPPRESSOR_HOOKS: usize = 2;
+
 static ARMED: AtomicUsize = AtomicUsize::new(0);
 static INSTALLED: AtomicUsize = AtomicUsize::new(0);
+static SETTLE_OBSERVER_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 static PROLOGUE_MISMATCHES: AtomicUsize = AtomicUsize::new(0);
 
 static SUBMITS_SWALLOWED: AtomicU64 = AtomicU64::new(0);
@@ -166,12 +164,14 @@ static STATUS_FAKED: AtomicU64 = AtomicU64::new(0);
 static STATUS_PASSED_THROUGH: AtomicU64 = AtomicU64::new(0);
 static RELEASE_UNAVAILABLE: AtomicU64 = AtomicU64::new(0);
 
-/// `GameMan+0xbc4 == 3`: the save settled and the quit-to-title wait job may proceed.
-const QUIT_PHASE_SETTLED: usize = 3;
-/// Highest return-to-title phase ever observed. Reaching 3 is the hard evidence that
-/// suppression does not deadlock the quit path; staying at 1 or 2 is the hang.
+/// `GameMan+0xbc4 == 2`: the return-to-title save was submitted and the wait job is
+/// still spinning. This is the ONLY state from which `FUN_14067a980` does anything.
+#[cfg(windows)]
+const QUIT_PHASE_SAVE_SUBMITTED: usize = 2;
+/// Highest return-to-title phase ever observed. A secondary diagnostic only: it says
+/// how FAR the quit got (1 = requested, 2 = save submitted), which is useful for
+/// locating a hang, but it cannot certify success -- see `QUIT_PHASE_SETTLE_EVENTS`.
 static QUIT_PHASE_MAX_SEEN: AtomicUsize = AtomicUsize::new(0);
-static QUIT_PHASE_SETTLED_OBSERVATIONS: AtomicU64 = AtomicU64::new(0);
 /// Times the 2 -> 3 transition actually executed, counted as an EVENT at the only
 /// function that performs it.
 ///
@@ -192,7 +192,13 @@ pub(crate) fn is_armed() -> bool {
     ARMED.load(Ordering::SeqCst) != 0
 }
 
-pub(crate) fn counters() -> [(&'static str, u64); 9] {
+/// Whether the quit-settle observer bound. When false, `quit_phase_settle_events` can
+/// only ever be 0, and a harness must not read that as a deadlock.
+pub(crate) fn settle_observer_installed() -> bool {
+    SETTLE_OBSERVER_INSTALLED.load(Ordering::SeqCst) != 0
+}
+
+pub(crate) fn counters() -> [(&'static str, u64); 8] {
     [
         (
             "suppress_submits_swallowed",
@@ -215,19 +221,14 @@ pub(crate) fn counters() -> [(&'static str, u64); 9] {
             "suppress_prologue_mismatches",
             PROLOGUE_MISMATCHES.load(Ordering::SeqCst) as u64,
         ),
-        // The deadlock semaphore. `3` means the quit-to-title wait job was released;
-        // a run that quits and never gets above 2 is the hang, and no file-IO counter
-        // can tell you that.
+        // How far the quit got. NOT a success oracle: a healthy quit ends here at 2,
+        // because 3 is transient. Read it only to locate a hang.
         (
             "quit_phase_bc4_max_seen",
             QUIT_PHASE_MAX_SEEN.load(Ordering::SeqCst) as u64,
         ),
-        (
-            "quit_phase_bc4_settled_observations",
-            QUIT_PHASE_SETTLED_OBSERVATIONS.load(Ordering::SeqCst),
-        ),
-        // The real deadlock proof: non-zero means the quit-to-title wait job was
-        // released. Unlike the sampled maximum, this cannot be missed.
+        // The deadlock oracle: non-zero means the quit-to-title wait job was released.
+        // Unlike the sampled maximum, an event cannot be missed.
         (
             "quit_phase_settle_events",
             QUIT_PHASE_SETTLE_EVENTS.load(Ordering::SeqCst),
@@ -256,12 +257,41 @@ pub(crate) fn prologue_matches(actual: &[u8], expected: &[u8]) -> bool {
     actual.len() >= expected.len() && &actual[..expected.len()] == expected
 }
 
-#[cfg(windows)]
-fn census_only_requested() -> bool {
-    matches!(
-        std::env::var(CENSUS_ONLY_ENV).ok().as_deref(),
-        Some("1") | Some("true") | Some("TRUE")
-    )
+/// Whether occurrence `count` of a repeating event earns a log line.
+///
+/// The justification is that a repeat carries no information, NOT that saves are
+/// enormously frequent. Measured rate is 7-25 swallowed submits per session, so the
+/// throttle saves tens of lines, not thousands. (An earlier version of this comment
+/// claimed the rune-counter widget drives a save on every rune change and implied
+/// thousands per session. The save site is real -- `FUN_1408d4a30` calls
+/// `CSMenuManImp::RequestSave(.., 7)` when the rune total changes -- but it is gated by
+/// the widget's own state machine at `+0x2a0` and the requests coalesce through the
+/// `GameMan+0xb72`/`+0xb73` flags, so the rate is nothing like that.)
+///
+/// What stands on its own: the 2nd and the 400th line are character-for-character
+/// identical apart from the counter, each costs an open/append/close, and the count is
+/// already in the JSON where a harness actually reads it.
+///
+/// The rule keeps the first occurrence, then only exponentially spaced milestones, so N
+/// repeats cost O(log N) lines while the magnitude stays visible. `novel` overrides it --
+/// a genuinely new *kind* of event is always worth a line however late it shows up.
+pub(crate) fn should_report(count: u64, novel: bool) -> bool {
+    novel || count.is_power_of_two()
+}
+
+/// Opcodes already seen at the choke point, as a bitmask.
+///
+/// A save opcode never seen before means a different *kind* of save funnelled through,
+/// which is exactly the sort of thing this DLL exists to discover -- so it is reported
+/// however many identical saves preceded it. Bit 63 is a catch-all for opcode >= 63:
+/// every opcode observed so far is 0, and a dense high opcode space would otherwise
+/// need a wider structure for no benefit.
+static SEEN_OPCODES: AtomicU64 = AtomicU64::new(0);
+
+/// Record `opcode` and report whether it had never been seen before.
+fn note_opcode(opcode: u32) -> bool {
+    let bit = 1_u64 << opcode.min(63);
+    SEEN_OPCODES.fetch_or(bit, Ordering::SeqCst) & bit == 0
 }
 
 #[cfg(windows)]
@@ -303,10 +333,12 @@ fn verify(rva: usize, expected: &[u8], name: &str) -> Option<usize> {
 /// partial install is worse than none, so a failure of either backs the whole thing out.
 #[cfg(windows)]
 pub(crate) fn install() -> usize {
-    if census_only_requested() {
+    if crate::census_only_requested() {
         log_message(format_args!(
-            "suppress: DISARMED by {CENSUS_ONLY_ENV} -- census-only positive-control run; \
-             saves will be written normally"
+            "suppress: DISARMED by {} -- census-only positive-control run; saves will be \
+             written normally and path diversion is off too, so the census must observe \
+             them",
+            crate::CENSUS_ONLY_ENV
         ));
         return 0;
     }
@@ -407,12 +439,19 @@ pub(crate) fn install() -> usize {
 
     match unsafe { MH_ApplyQueued() } {
         MH_STATUS::MH_OK => {
-            INSTALLED.store(hooks.len(), Ordering::SeqCst);
+            // Count the SUPPRESSORS only. Folding the optional observer into this total
+            // made a healthy install report "suppression hooks=3/2", which reads like a
+            // broken invariant on a run where everything worked. The observer is a
+            // separate, independently-optional fact and is reported as one.
+            INSTALLED.store(SUPPRESSOR_HOOKS, Ordering::SeqCst);
+            SETTLE_OBSERVER_INSTALLED.store(usize::from(settle.is_some()), Ordering::SeqCst);
             ARMED.store(1, Ordering::SeqCst);
             log_message(format_args!(
                 "suppress: ARMED -- SL_EnqueueSaveJob @0x{enqueue:x}, \
                  SL_PollSaveStatus @0x{poll:x}, SL_ReleaseRequest @0x{release:x}; \
-                 no save write job will be enqueued and every save will report success"
+                 quit-settle observer={}; no save write job will be enqueued and every \
+                 save will report success",
+                if settle.is_some() { "yes" } else { "NO" }
             ));
             hooks.len()
         }
@@ -436,7 +475,18 @@ pub(crate) fn install() -> usize {
 #[cfg(windows)]
 unsafe extern "system" fn enqueue_save_job_hook(iodev: usize, opcode: u32) -> u8 {
     if !is_armed() {
-        SUBMITS_PASSED_THROUGH.fetch_add(1, Ordering::SeqCst);
+        // Expected in a disarmed positive-control run, and a hard failure in any other:
+        // this submit writes a real save. Reported on the same throttle as a swallow --
+        // loudly on the first, then at milestones -- because the first occurrence is
+        // what flips `suppress_submits_passed_through` off zero, and that is the gate.
+        let count = SUBMITS_PASSED_THROUGH.fetch_add(1, Ordering::SeqCst) + 1;
+        if should_report(count, false) {
+            log_message(format_args!(
+                "suppress: save submit #{count} PASSED THROUGH (opcode={opcode}) -- \
+                 suppression is not armed, this save is being written for real"
+            ));
+            publish_snapshot();
+        }
         let orig = ORIG_ENQUEUE_SAVE_JOB.load(Ordering::SeqCst);
         if orig == 0 {
             return 0;
@@ -450,7 +500,15 @@ unsafe extern "system" fn enqueue_save_job_hook(iodev: usize, opcode: u32) -> u8
         // Never reachable via `install`, which refuses to arm without the release
         // address. Counted rather than assumed away: passing the submit through here
         // writes the save, which is a louder failure than a silent leak.
-        RELEASE_UNAVAILABLE.fetch_add(1, Ordering::SeqCst);
+        // Unthrottled: this writes a real save, and `install` refuses to arm without the
+        // release address so it is unreachable anyway. Throttling a bug path is the wrong
+        // default even when the throttle would never engage.
+        let count = RELEASE_UNAVAILABLE.fetch_add(1, Ordering::SeqCst) + 1;
+        log_message(format_args!(
+            "suppress: BUG -- armed with no release address, save submit #{count} \
+             passed through and will be written"
+        ));
+        publish_snapshot();
         let orig = ORIG_ENQUEUE_SAVE_JOB.load(Ordering::SeqCst);
         if orig == 0 {
             return 0;
@@ -463,12 +521,37 @@ unsafe extern "system" fn enqueue_save_job_hook(iodev: usize, opcode: u32) -> u8
     unsafe { released(iodev) };
 
     let count = SUBMITS_SWALLOWED.fetch_add(1, Ordering::SeqCst) + 1;
-    log_message(format_args!(
-        "suppress: swallowed save submit #{count} (iodev=0x{iodev:x}, opcode={opcode}) \
-         -- no job enqueued, request released, reporting submitted"
-    ));
-    crate::telemetry::write_snapshot();
+    // Swallowing is the EXPECTED steady state, not an event. It is counted in telemetry
+    // (`suppress_submits_swallowed`), which is what a harness reads; the log only needs
+    // to show that it started, that it kept happening, and any new kind of save.
+    let novel = note_opcode(opcode);
+    if should_report(count, novel) {
+        log_message(format_args!(
+            "suppress: swallowed save submit #{count} (iodev=0x{iodev:x}, opcode={opcode}) \
+             -- no job enqueued, request released, reporting submitted"
+        ));
+        // Publish on the same schedule. A snapshot per swallow meant a full JSON
+        // re-serialize, `fs::write` and `fs::rename` on the GAME thread for every save
+        // request -- this detours `FUN_140e6fb50`, whose callers are the per-frame
+        // dispatchers, strictly above the `FUN_14240ae10` worker boundary -- and each of
+        // those re-enters this DLL's own CreateFileW/MoveFileW detours. Every counter a
+        // harness gates on is a threshold, and a threshold is crossed on the first
+        // occurrence, which is always published.
+        publish_snapshot();
+    }
     1
+}
+
+/// Write the telemetry snapshot from a caller that is NOT already inside the census
+/// reentrancy guard.
+///
+/// The suppression hooks are not observation paths, so they enter with the guard clear;
+/// taking it here keeps `telemetry::write_snapshot`'s documented invariant -- that its
+/// own file I/O cannot recurse into the census -- true for every caller rather than
+/// true for some and merely-harmless for the rest.
+#[cfg(windows)]
+fn publish_snapshot() {
+    let _ = crate::witness::with_guard(crate::telemetry::write_snapshot);
 }
 
 /// Detour on `FUN_140e6e430`.
@@ -493,70 +576,91 @@ unsafe extern "system" fn poll_save_status_hook(iodev: usize) -> u32 {
     } else {
         STATUS_FAKED.fetch_add(1, Ordering::SeqCst);
     }
+    sample_quit_phase();
     decided
 }
 
-/// Sample `GameMan+0xbc4`, the return-to-title phase, from the game thread.
-///
-/// This exists because deadlock-freedom was previously only *inferred*. The quit-to-title
-/// MenuJob chain contains a wait job that spins until `bc4 == 3`, so if suppression ever
-/// stops that transition the game hangs on quit forever. A file-IO census cannot see that
-/// -- it would report a perfectly clean run while the player stared at a frozen screen.
-///
-/// The states, from the exhaustive writer scan: `1` = return-to-title requested, `2` =
-/// save submitted, `3` = save settled and the wait job may proceed. Recording the highest
-/// value observed turns "no deadlock" from an argument into a reading.
 /// Observer on `FUN_14067a980`, the sole performer of the `bc4` 2 -> 3 transition.
 ///
-/// Counts the event rather than sampling the field. Pure observation: the original runs
-/// unmodified and its effect is untouched.
+/// Pure observation: the original runs unmodified and its effect is untouched. Verified
+/// against the 1.16.2 dump -- `undefined FUN_14067a980(void)`, 27 bytes, no parameters,
+/// body exactly `if (bc4 == 2) bc4 = 3;` -- so the zero-argument detour signature is
+/// correct and the original is called before any of our code can clobber a register.
+///
+/// It counts the TRANSITION, not the call, and that distinction is the whole value of
+/// the instrument. `DoSaveStuff` calls this function from case 0 and from cases 3, 7 and
+/// 9 of its switch on the *save status* -- nothing there tests `bc4` -- and the menu job
+/// `FUN_1407ecf20` calls it from *its own* state 3. So it runs on every ordinary save
+/// completion, when `bc4` is 0 and the body is a no-op.
+///
+/// Counting entries would therefore make `quit_phase_settle_events` non-zero from the
+/// first rune the player picked up, on a run where no quit ever happened -- a FALSE PASS
+/// on the one oracle that exists to catch the quit deadlock. That is the same "the
+/// instrument does not measure what it claims" failure as sampling the transient value,
+/// one level further in, and in the more dangerous direction.
+///
+/// A failed read fails CLOSED (no count): under-counting yields a loud false FAIL that
+/// gets investigated, while over-counting would ship a hang as a pass.
 #[cfg(windows)]
 unsafe extern "system" fn quit_phase_settle_hook() {
-    QUIT_PHASE_SETTLE_EVENTS.fetch_add(1, Ordering::SeqCst);
+    // Read BEFORE the original runs: afterwards the 2 is gone and the transition is
+    // indistinguishable from having arrived already-3.
+    let settles = read_quit_phase() == Some(QUIT_PHASE_SAVE_SUBMITTED);
     let orig = ORIG_QUIT_PHASE_SETTLE.load(Ordering::SeqCst);
     if orig != 0 {
         let original: unsafe extern "system" fn() = unsafe { core::mem::transmute(orig) };
         unsafe { original() };
     }
+    if !settles {
+        return;
+    }
+    let count = QUIT_PHASE_SETTLE_EVENTS.fetch_add(1, Ordering::SeqCst) + 1;
+    if should_report(count, false) {
+        log_message(format_args!(
+            "suppress: quit-to-title wait job released (bc4 2 -> 3), settle event #{count}"
+        ));
+    }
+    // Flush on every settle, not on the milestone schedule. This is the moment the
+    // acceptance test is about -- the player quit to title and the game did not hang --
+    // so the on-disk telemetry must be current here even if the process is killed
+    // immediately afterwards. It is inherently rare: once per quit, not once per save.
+    publish_snapshot();
 }
 
-/// Public sampling entry so callers OTHER than the status poll can drive it.
+/// Sample `GameMan+0xbc4` from the save-status poll detour.
 ///
-/// Sampling only inside the poll detour was not enough to prove anything. `bc4` goes
-/// 2 -> 3 inside `DoSaveStuff` *after* the poll returns, and once a save settles the
-/// poll stops being called -- so a run can end with the maximum observed value at 2
-/// whether the quit deadlocked or completed perfectly. Those are opposite outcomes and
-/// the instrument could not tell them apart. The census `CreateFileW` detour fires
-/// constantly while the game streams assets and sits at the title, so sampling there
-/// too keeps the reading live long after the save is done.
-#[cfg(windows)]
-pub(crate) fn sample_quit_phase_from_census() {
-    sample_quit_phase();
-}
-
+/// Driven ONLY from the poll, which is rare and already save-related. It was once
+/// driven from the census `CreateFileW` detour as well, on the theory that sampling
+/// more often would eventually catch `bc4 == 3`. That was wrong twice over: each call
+/// costs a `GetModuleHandleA` plus two `ReadProcessMemory` syscalls, paid on *every
+/// file open in the process*, and it still could not catch the transition, because
+/// `FUN_14067a980` sets 3 and the quit chain consumes and resets it within the same
+/// sequence. The transition is counted as an event instead.
 #[cfg(windows)]
 fn sample_quit_phase() {
+    if let Some(phase) = read_quit_phase() {
+        QUIT_PHASE_MAX_SEEN.fetch_max(phase, Ordering::SeqCst);
+    }
+}
+
+/// Read `GameMan+0xbc4`, the return-to-title phase, or `None` if it is not reachable.
+///
+/// Split out from `sample_quit_phase` because the settle observer needs the *value*
+/// rather than the running maximum: it has to know whether the call it is intercepting
+/// will actually perform the 2 -> 3 transition.
+#[cfg(windows)]
+fn read_quit_phase() -> Option<usize> {
     use er_game_base::{mem::safe_read_usize, rva::GAME_MAN_SINGLETON_RVA};
 
     const GAME_MAN_QUIT_PHASE_BC4_OFFSET: usize = 0xbc4;
 
-    let Ok(base) = er_game_base::mem::game_module_base() else {
-        return;
-    };
-    let Some(game_man) = (unsafe { safe_read_usize(base + GAME_MAN_SINGLETON_RVA) }) else {
-        return;
-    };
+    let base = er_game_base::mem::game_module_base().ok()?;
+    let game_man = unsafe { safe_read_usize(base + GAME_MAN_SINGLETON_RVA) }?;
     if game_man < 0x10000 {
-        return;
+        return None;
     }
-    let Some(raw) = (unsafe { safe_read_usize(game_man + GAME_MAN_QUIT_PHASE_BC4_OFFSET) }) else {
-        return;
-    };
-    let phase = (raw & 0xff) as usize;
-    QUIT_PHASE_MAX_SEEN.fetch_max(phase, Ordering::SeqCst);
-    if phase == QUIT_PHASE_SETTLED {
-        QUIT_PHASE_SETTLED_OBSERVATIONS.fetch_add(1, Ordering::SeqCst);
-    }
+    let raw = unsafe { safe_read_usize(game_man + GAME_MAN_QUIT_PHASE_BC4_OFFSET) }?;
+    Some((raw & 0xff) as usize)
 }
 
 #[cfg(test)]
@@ -616,6 +720,58 @@ mod tests {
     fn prologue_guard_rejects_drift_and_short_reads() {
         assert!(!prologue_matches(&[0x40, 0x53, 0x99], &[0x40, 0x53, 0x56]));
         assert!(!prologue_matches(&[0x40, 0x53], &[0x40, 0x53, 0x56]));
+    }
+
+    #[test]
+    fn the_first_occurrence_is_always_reported() {
+        // The threshold every harness gate depends on: a counter crossing 0 -> 1 must
+        // reach both the log and a published snapshot, or a gate could read a stale
+        // zero for something that did happen.
+        assert!(should_report(1, false));
+    }
+
+    #[test]
+    fn repeats_collapse_to_exponential_milestones() {
+        let reported: Vec<u64> = (1..=64).filter(|n| should_report(*n, false)).collect();
+        assert_eq!(reported, vec![1, 2, 4, 8, 16, 32, 64]);
+    }
+
+    #[test]
+    fn a_novel_event_is_reported_however_late_it_appears() {
+        // A save opcode never seen before is a different KIND of save reaching the
+        // choke point -- exactly what this DLL exists to discover. Throttling must
+        // never be able to hide one.
+        assert!(should_report(9_999, true));
+        assert!(!should_report(9_999, false));
+    }
+
+    #[test]
+    fn throttling_stays_sublinear_at_measured_save_volumes() {
+        // Calibrated on the MEASURED rate: live runs report 7-25 swallowed submits per
+        // session. Anchored at the top of that range rather than an invented one.
+        let lines = (1..=25_u64).filter(|n| should_report(*n, false)).count();
+        assert_eq!(lines, 5, "25 swallows should cost 5 lines, not 25");
+        // Still sublinear if a session ever runs far longer than any measured so far.
+        let far = (1..=10_000_u64)
+            .filter(|n| should_report(*n, false))
+            .count();
+        assert_eq!(far, 14);
+    }
+
+    #[test]
+    fn each_opcode_is_novel_exactly_once() {
+        // Uses opcodes no other test touches: SEEN_OPCODES is process-global state.
+        assert!(note_opcode(11));
+        assert!(!note_opcode(11));
+        assert!(note_opcode(12));
+        assert!(!note_opcode(12));
+    }
+
+    #[test]
+    fn opcodes_past_the_mask_share_the_catch_all_bit() {
+        // Documented collapse: >= 63 is reported novel once, not once per opcode.
+        assert!(note_opcode(64));
+        assert!(!note_opcode(9_999));
     }
 
     #[test]

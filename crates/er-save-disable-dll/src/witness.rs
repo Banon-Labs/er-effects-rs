@@ -289,7 +289,17 @@ fn record(api: &'static str, path: &str, bytes: u64) {
         return;
     }
     if census.sites.len() >= MAX_RECORDED_SITES {
-        SITES_DROPPED.fetch_add(1, Ordering::SeqCst);
+        // The escape oracle just went blind: from here on, an escaped write can happen
+        // and `escaped_write_sites` will not grow. Unthrottled and unconditional --
+        // a detector that stops detecting must never do so quietly.
+        let dropped = SITES_DROPPED.fetch_add(1, Ordering::SeqCst) + 1;
+        #[cfg(windows)]
+        if dropped == 1 {
+            crate::log_message(format_args!(
+                "census: BLIND -- site table full at {MAX_RECORDED_SITES}; escaped writes \
+                 from here on will NOT be recorded (sites_dropped={dropped})"
+            ));
+        }
         return;
     }
     census.sites.push(WriteSite {
@@ -305,9 +315,19 @@ fn record(api: &'static str, path: &str, bytes: u64) {
     // rather than on a timer. Callers are already inside the reentrancy guard, so
     // the telemetry write's own file I/O cannot recurse back into the census.
     // Host builds skip it: there is no game directory to publish into and a unit
-    // test must not drop a telemetry file in the working tree.
+    // test must not drop a telemetry file in the working tree -- which is also why
+    // the log line below is gated, since `record` is called directly from host tests.
     #[cfg(windows)]
-    crate::telemetry::write_snapshot();
+    {
+        // The loudest thing this DLL can detect: a write reached save data through a
+        // path suppression did not cover. Bounded by `MAX_RECORDED_SITES` and deduped
+        // by (api, game_rvas), so it cannot stream.
+        crate::log_message(format_args!(
+            "census: ESCAPED WRITE -- {api} reached {path} ({bytes} bytes); \
+             suppression did not cover this path"
+        ));
+        crate::telemetry::write_snapshot();
+    }
 }
 
 /// Mirror of `census.handles.len()`, readable without taking the lock.
@@ -327,7 +347,18 @@ fn track_handle(handle: usize, path: &str) {
         return;
     };
     if census.handles.len() >= MAX_TRACKED_HANDLES {
-        HANDLES_DROPPED.fetch_add(1, Ordering::SeqCst);
+        // An untracked save handle makes its writes invisible to BOTH
+        // `escaped_write_sites` and `total_bytes_to_disk` -- the census under-reports
+        // and reads clean. Same rule as a full site table: say so once, loudly.
+        let dropped = HANDLES_DROPPED.fetch_add(1, Ordering::SeqCst) + 1;
+        #[cfg(windows)]
+        if dropped == 1 {
+            crate::log_message(format_args!(
+                "census: BLIND -- handle table full at {MAX_TRACKED_HANDLES}; writes \
+                 through untracked save handles will NOT be counted \
+                 (handles_dropped={dropped})"
+            ));
+        }
         return;
     }
     census.handles.push((handle, path.to_owned()));
@@ -348,6 +379,22 @@ fn forget_handle(handle: usize) {
         census.handles.retain(|(tracked, _)| *tracked != handle);
         TRACKED_HANDLE_COUNT.store(census.handles.len(), Ordering::Relaxed);
     }
+}
+
+/// Run `body` under the census reentrancy guard, for callers outside the observation
+/// paths.
+///
+/// The suppression detours are not observers, so they reach the telemetry writer with
+/// the guard clear. Routing them through here means the writer's own file I/O
+/// short-circuits the detours' record paths for every caller, instead of relying on the
+/// save-path filter to make it merely harmless.
+///
+/// Returns `None` without running `body` if this thread is already inside the guard --
+/// callers that are already observers (see `record`) must NOT use this, or their
+/// snapshot would be silently skipped.
+#[cfg(windows)]
+pub(crate) fn with_guard<T>(body: impl FnOnce() -> T) -> Option<T> {
+    guarded(body)
 }
 
 /// Run `body` unless we are already inside the witness on this thread.
@@ -450,7 +497,22 @@ pub(crate) unsafe fn note_move_file(existing: *const u16, new: *const u16) {
 pub(crate) fn note_diverted_open(path: &str, handle: usize) {
     const INVALID_HANDLE_VALUE: usize = usize::MAX;
     if handle == INVALID_HANDLE_VALUE || handle == 0 {
-        DIVERT_OPEN_FAILURES.fetch_add(1, Ordering::SeqCst);
+        // A VERIFIED FALSE-PASS PATH if left silent. The game just got an invalid handle
+        // for its save: its save genuinely failed and it showed the player a save-error
+        // popup. But the real file is unchanged and no site escaped, so the offline diff
+        // is clean and the verdict reads "saving fully suppressed" -- a pass for a run in
+        // which the user watched the game fail to save. Unthrottled, and published
+        // through the guard because this runs from `create_file_w_hook`, outside it.
+        let failures = DIVERT_OPEN_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
+        #[cfg(windows)]
+        {
+            crate::log_message(format_args!(
+                "census: DIVERT OPEN FAILED for {path} -- the game saw a REAL save \
+                 failure (diverted_open_failures={failures})"
+            ));
+            let _ = with_guard(crate::telemetry::write_snapshot);
+        }
+        let _ = failures;
         return;
     }
     DIVERTED_OPENS.fetch_add(1, Ordering::SeqCst);

@@ -86,7 +86,11 @@ cmd_start() {
 	if [[ "$carried_any" == "1" ]]; then
 		echo "NOTE: a previous run left un-finished artifacts; archived to $carried" >&2
 	fi
-	rm -f "$game_dir/$TELEMETRY_NAME" "$game_dir/$TELEMETRY_NAME.tmp" "$game_dir/$DLL_LOG_NAME"
+	# Glob the tmp files: each publish now uses a unique suffix
+	# (er-save-disable-telemetry.json.tmp.<serial>) so concurrent publishers on the
+	# install/game/worker threads cannot truncate each other's file mid-rename. The old
+	# single-name sweep would leave every one of them behind.
+	rm -f "$game_dir/$TELEMETRY_NAME" "$game_dir/$TELEMETRY_NAME".tmp* "$game_dir/$DLL_LOG_NAME"
 	rm -f "$game_dir/$HARNESS_LOG_NAME" "$game_dir/$HARNESS_PHASES_NAME"
 
 	# The harness reads its drive mode from a CWD-relative flag file in the game dir.

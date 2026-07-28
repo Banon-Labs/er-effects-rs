@@ -49,17 +49,35 @@ const DLL_MAIN_SUCCESS: i32 = 1;
 
 const LOG_FILE_NAME: &str = "er-save-disable.log";
 
-/// Surfaced in telemetry so a harness can never mistake an observation-only run for
-/// a run in which saving was actually suppressed. The value is derived from what
-/// actually installed at runtime, not from a compile-time claim -- which is why this
-/// replaced the old `PHASE` constant: a build that intended to suppress but failed to
-/// arm must not report itself as suppressing.
+/// What the run is actually doing, derived from what installed at RUNTIME rather than
+/// from a compile-time claim -- a build that intended to suppress but failed to arm must
+/// not report itself as suppressing.
 pub(crate) fn phase() -> &'static str {
     if suppress::is_armed() {
         "suppress+census"
     } else {
         "census-only"
     }
+}
+
+/// Diagnostic disarm for the MANDATORY positive control: the identical build with every
+/// interception layer off, to show that the detectors do fire and the save file does
+/// change when nothing is suppressed.
+///
+/// It must disarm *both* layers. It used to gate suppression only, which silently broke
+/// the control: `redirect::diverted_path` returns `Some` for every save path (the config
+/// refuses an empty suffix), so a census-only run diverted the write, skipped
+/// `note_create_file`, tracked no handle, recorded no site, and left the real file
+/// unchanged -- reporting "census observed nothing" for a run whose entire purpose was to
+/// observe something. An oracle whose negative control cannot fire is not falsifiable,
+/// and an unfalsifiable oracle is not evidence.
+pub(crate) const CENSUS_ONLY_ENV: &str = "ER_SAVE_DISABLE_CENSUS_ONLY";
+
+pub(crate) fn census_only_requested() -> bool {
+    matches!(
+        std::env::var(CENSUS_ONLY_ENV).ok().as_deref(),
+        Some("1") | Some("true") | Some("TRUE")
+    )
 }
 
 static LOG_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -124,12 +142,9 @@ fn spawn_census_task() {
                 }
             };
             witness::set_game_base(base);
-            // Both layers, in this order. Redirect's destination directory must exist
-            // before any write is diverted into it, and the census must be watching
-            // before suppression arms, so a write that escapes during the arming window
-            // is still recorded.
             config::init_runtime_config();
-            redirect::ensure_destination_directory();
+            // Census first: it must be watching before suppression arms, so a write
+            // that escapes suppression during the arming window is still recorded.
             let installed = hooks::install();
             HOOKS_INSTALLED.store(installed, Ordering::SeqCst);
             let suppressing = suppress::install();
@@ -143,6 +158,10 @@ fn spawn_census_task() {
             // from "the DLL never installed" -- an absent telemetry file means the
             // latter, and treating those as the same would let a dead DLL read as a
             // clean run.
-            telemetry::write_snapshot();
+            //
+            // Through the guard: `hooks::install()` armed the detours above, so this is
+            // the DLL's first re-entry into its own hooks. Without it the save-path
+            // filter is the ONLY thing keeping the census from observing its own output.
+            let _ = witness::with_guard(telemetry::write_snapshot);
         });
 }

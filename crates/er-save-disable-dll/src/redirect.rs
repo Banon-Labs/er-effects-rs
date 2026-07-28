@@ -4,8 +4,9 @@
 //! runs its whole save state machine exactly as it would unmodified, and every one of
 //! those operations genuinely succeeds. The only thing that changes is which path the
 //! bytes land on. That is why this needs no knowledge of *why* a save happened: the five
-//! request sites, the inline periodic autosave, the rune-counter save that fires on every
-//! rune change, and the boot system-slot save all converge on the same file open.
+//! request sites, the inline periodic autosave, the rune-counter save (`FUN_1408d4a30`
+//! -> `CSMenuManImp::RequestSave(.., 7)`) and the boot system-slot save all converge on
+//! the same file open.
 //!
 //! Reads are deliberately untouched, so the game still loads the player's real save and
 //! the load menu still shows the playtime from their last genuine save.
@@ -16,6 +17,12 @@ use crate::config::runtime_config;
 
 static REDIRECTS: AtomicU64 = AtomicU64::new(0);
 static REDIRECT_REFUSALS: AtomicU64 = AtomicU64::new(0);
+
+/// Whether path diversion is active. Off in a census-only positive-control run, where
+/// every layer that could hide a write must be disabled.
+pub(crate) fn is_armed() -> bool {
+    !crate::census_only_requested()
+}
 
 pub(crate) fn redirect_count() -> u64 {
     REDIRECTS.load(Ordering::SeqCst)
@@ -42,7 +49,19 @@ fn split_parent(path: &str) -> (&str, &str) {
 /// census still records whatever happens, so a missed redirect shows up as an escaped
 /// write rather than as silence.
 pub(crate) fn diverted_path(original: &str) -> Option<String> {
+    diverted_path_when(is_armed(), original)
+}
+
+/// The arming decision split out so the control-restoring rule is unit-testable without
+/// mutating process environment from a test thread.
+fn diverted_path_when(armed: bool, original: &str) -> Option<String> {
     if original.is_empty() {
+        return None;
+    }
+    // The positive control must see the game write its save for real. Diverting here
+    // would make the control observe nothing and report itself clean, which is the one
+    // reading it exists to make impossible.
+    if !armed {
         return None;
     }
     let config = runtime_config();
@@ -126,6 +145,19 @@ mod tests {
                 assert_ne!(out.to_ascii_lowercase(), path.to_ascii_lowercase());
             }
         }
+    }
+
+    #[test]
+    fn a_disarmed_run_diverts_nothing() {
+        // The positive control depends on this. With diversion active, a census-only run
+        // sends the save write to the decoy, `note_create_file` is skipped, no handle is
+        // tracked and no site is recorded -- so the control reports "census observed
+        // nothing" and the escape oracle can never be shown to fire at all.
+        for path in [SAVE, &format!("{SAVE}.bak"), "ER0000.co2"] {
+            assert_eq!(diverted_path_when(false, path), None);
+        }
+        // ...and still diverts when armed, so the check above is not vacuous.
+        assert!(diverted_path_when(true, SAVE).is_some());
     }
 
     #[test]
