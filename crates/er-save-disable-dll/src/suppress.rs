@@ -167,7 +167,10 @@ pub(crate) fn is_armed() -> bool {
 
 pub(crate) fn counters() -> [(&'static str, u64); 6] {
     [
-        ("suppress_submits_swallowed", SUBMITS_SWALLOWED.load(Ordering::SeqCst)),
+        (
+            "suppress_submits_swallowed",
+            SUBMITS_SWALLOWED.load(Ordering::SeqCst),
+        ),
         (
             "suppress_submits_passed_through",
             SUBMITS_PASSED_THROUGH.load(Ordering::SeqCst),
@@ -414,11 +417,7 @@ unsafe extern "system" fn poll_save_status_hook(iodev: usize) -> u32 {
     let original: PollSaveStatusFn = unsafe { core::mem::transmute(orig) };
     let raw = unsafe { original(iodev) };
 
-    let decided = decide_status(
-        raw,
-        is_armed(),
-        SUBMITS_SWALLOWED.load(Ordering::SeqCst),
-    );
+    let decided = decide_status(raw, is_armed(), SUBMITS_SWALLOWED.load(Ordering::SeqCst));
     if decided == raw {
         STATUS_PASSED_THROUGH.fetch_add(1, Ordering::SeqCst);
     } else {
@@ -433,7 +432,10 @@ mod tests {
 
     #[test]
     fn no_request_becomes_success_once_a_submit_was_swallowed() {
-        assert_eq!(decide_status(SL_STATUS_NO_REQUEST, true, 1), SL_STATUS_SUCCESS);
+        assert_eq!(
+            decide_status(SL_STATUS_NO_REQUEST, true, 1),
+            SL_STATUS_SUCCESS
+        );
     }
 
     #[test]
@@ -460,14 +462,21 @@ mod tests {
         // Rewriting any of these would either mask a real in-flight job or invent an
         // outcome the game did not reach.
         for raw in [0_u32, 1, 2, 3, 5, 6, 7, 8, 9, 10, 0xffff_ffff] {
-            assert_eq!(decide_status(raw, true, 99), raw, "status {raw} was rewritten");
+            assert_eq!(
+                decide_status(raw, true, 99),
+                raw,
+                "status {raw} was rewritten"
+            );
         }
     }
 
     #[test]
     fn prologue_guard_accepts_exact_and_longer_reads() {
         assert!(prologue_matches(&[0x40, 0x53, 0x56], &[0x40, 0x53, 0x56]));
-        assert!(prologue_matches(&[0x40, 0x53, 0x56, 0x57], &[0x40, 0x53, 0x56]));
+        assert!(prologue_matches(
+            &[0x40, 0x53, 0x56, 0x57],
+            &[0x40, 0x53, 0x56]
+        ));
     }
 
     #[test]

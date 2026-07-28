@@ -190,16 +190,25 @@ def diff_snapshots(before: dict[str, Any], after: dict[str, Any]) -> dict[str, A
 
     for path in sorted(set(b) | set(a)):
         rb, ra = b.get(path), a.get(path)
+        # Carry the file's classification into the diff. A consumer asking "did saving
+        # happen?" must be able to tell a save container from GraphicsConfig.xml, which
+        # the game rewrites on its own schedule and which no save-suppression touches.
+        kind = (ra or rb or {}).get("kind", "unknown")
         if rb is None:
-            content_changes.append({"path": path, "reason": "file created", "slots": []})
+            content_changes.append(
+                {"path": path, "kind": kind, "reason": "file created", "slots": []}
+            )
             continue
         if ra is None:
-            content_changes.append({"path": path, "reason": "file deleted", "slots": []})
+            content_changes.append(
+                {"path": path, "kind": kind, "reason": "file deleted", "slots": []}
+            )
             continue
         if rb.get("sha256") != ra.get("sha256") or rb.get("size") != ra.get("size"):
             content_changes.append(
                 {
                     "path": path,
+                    "kind": kind,
                     "reason": f"contents changed ({rb.get('size')}B -> {ra.get('size')}B)",
                     "slots": diff_entries(rb, ra),
                 }
@@ -208,6 +217,7 @@ def diff_snapshots(before: dict[str, Any], after: dict[str, Any]) -> dict[str, A
             mtime_only.append(
                 {
                     "path": path,
+                    "kind": kind,
                     "reason": "identical bytes rewritten (mtime moved)",
                     "slots": [],
                 }
