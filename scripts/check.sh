@@ -54,3 +54,9 @@ shellcheck "$repo_root/scripts/check-rust-build.sh"
 # cargo-xwin). A real build (not just `cargo check`) so codegen/link regressions -- including
 # any pre-existing rust breakage -- are caught here, producing the linked er_effects_rs.dll.
 bash "$repo_root/scripts/check-rust-build.sh"
+
+# Dead/unused code in the save-disable DLL, on its shipping target. Scoped to that one
+# crate on purpose: the repo builds with a global `-Awarnings`, so this is the narrow
+# place where warning-freedom is both achievable today and load-bearing -- the crate's
+# whole job is to stop saves, and two dead helpers already survived a refactor unseen.
+python3 "$repo_root/scripts/check-save-disable-warnings.py"

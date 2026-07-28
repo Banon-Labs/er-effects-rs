@@ -55,10 +55,28 @@ static DELETE_CALLS: AtomicU64 = AtomicU64::new(0);
 static SITES_DROPPED: AtomicU64 = AtomicU64::new(0);
 static HANDLES_DROPPED: AtomicU64 = AtomicU64::new(0);
 
-/// Reentrancy guard. Our own logging and telemetry writes go through the very APIs
-/// we hook; without this, recording a save write could recurse into the recorder.
+// Reentrancy guard. Our own logging and telemetry writes go through the very APIs
+// we hook; without this, recording a save write could recurse into the recorder.
+//
+// A plain comment, not a doc comment: `///` on a macro invocation attaches to nothing
+// and rustc reports it as an unused doc comment, so the explanation was invisible in
+// both the docs and (under this repo's `-Awarnings`) the build output.
 thread_local! {
     static IN_WITNESS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Report that the census has gone blind.
+///
+/// Exists so the blindness call sites read the same on both targets. Inlining
+/// `#[cfg(windows)] if ...` at each site left the `dropped` binding unused on host
+/// builds -- a warning nobody saw, because this repo builds with `-Awarnings`.
+/// On host there is no game directory to log into, so the message is dropped; the
+/// counter still moves and `check-save-suppression.py` still gates on it.
+fn log_blind(args: std::fmt::Arguments<'_>) {
+    #[cfg(windows)]
+    crate::log_message(args);
+    #[cfg(not(windows))]
+    let _ = args;
 }
 
 /// One distinct call site that reached save data on disk.
@@ -286,9 +304,8 @@ fn record(api: &'static str, path: &str, bytes: u64) {
         // and `escaped_write_sites` will not grow. Unthrottled and unconditional --
         // a detector that stops detecting must never do so quietly.
         let dropped = SITES_DROPPED.fetch_add(1, Ordering::SeqCst) + 1;
-        #[cfg(windows)]
         if dropped == 1 {
-            crate::log_message(format_args!(
+            log_blind(format_args!(
                 "census: BLIND -- site table full at {MAX_RECORDED_SITES}; escaped writes \
                  from here on will NOT be recorded (sites_dropped={dropped})"
             ));
@@ -344,9 +361,8 @@ fn track_handle(handle: usize, path: &str) {
         // `escaped_write_sites` and `total_bytes_to_disk` -- the census under-reports
         // and reads clean. Same rule as a full site table: say so once, loudly.
         let dropped = HANDLES_DROPPED.fetch_add(1, Ordering::SeqCst) + 1;
-        #[cfg(windows)]
         if dropped == 1 {
-            crate::log_message(format_args!(
+            log_blind(format_args!(
                 "census: BLIND -- handle table full at {MAX_TRACKED_HANDLES}; writes \
                  through untracked save handles will NOT be counted \
                  (handles_dropped={dropped})"

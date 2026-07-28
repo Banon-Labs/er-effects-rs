@@ -56,23 +56,21 @@ static ORIG_MOVE_FILE_W: AtomicUsize = AtomicUsize::new(0);
 static ORIG_COPY_FILE_W: AtomicUsize = AtomicUsize::new(0);
 static ORIG_DELETE_FILE_W: AtomicUsize = AtomicUsize::new(0);
 
-static INSTALLED_HOOKS: AtomicUsize = AtomicUsize::new(0);
-
 /// How many file APIs this module tries to hook. Derived from the target table rather
 /// than written as a literal, because a stale literal reported "8/6 hooked" and would
 /// have let a partial-coverage run read as complete.
 pub(crate) const EXPECTED_HOOKS: usize = 8;
 
-pub(crate) fn installed_hooks() -> usize {
-    INSTALLED_HOOKS.load(Ordering::SeqCst)
-}
-
 /// Install the census detours. Returns the number of APIs successfully hooked.
 ///
-/// A failure to hook one API is logged and skipped rather than aborting the set:
-/// a partial census is still evidence, and it is honestly reported through
-/// `installed_hooks` so a run with incomplete coverage cannot be mistaken for a
-/// clean one.
+/// A failure to hook one API is logged and skipped rather than aborting the set: a
+/// partial census is still evidence, and the caller records this return value, which
+/// telemetry publishes as `census_hooks_installed` against `census_hooks_expected`, so
+/// a run with incomplete coverage cannot be mistaken for a clean one.
+///
+/// The count is deliberately stored in ONE place -- `lib.rs`'s `HOOKS_INSTALLED`. This
+/// module used to keep a second copy plus an `installed_hooks()` accessor that nothing
+/// read; two stores of the same fact can only ever drift apart.
 pub(crate) fn install() -> usize {
     match unsafe { MH_Initialize() } {
         MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
@@ -164,7 +162,6 @@ pub(crate) fn install() -> usize {
             // Deliberately silent on success: `lib.rs` logs one install summary line
             // that already carries `census hooks=N/M`. Only the failures above, which
             // that summary cannot explain, get their own line.
-            INSTALLED_HOOKS.store(queued, Ordering::SeqCst);
             queued
         }
         status => {
