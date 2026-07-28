@@ -2770,6 +2770,7 @@ dependencies = [
  "er-game-base",
  "er-gfx",
  "er-hook",
+ "er-loading-bar",
  "er-save-loader",
  "er-telemetry",
  "er-tpf",
@@ -2828,6 +2829,21 @@ dependencies = [
  "eldenring",
  "er-game-base",
  "fromsoftware-shared",
+]
+
+[[package]]
+name = "er-loading-bar"
+version = "0.1.0"
+dependencies = [
+ "er-hook",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "er-loading-bar-dll"
+version = "0.1.0"
+dependencies = [
+ "er-loading-bar",
 ]
 
 [[package]]

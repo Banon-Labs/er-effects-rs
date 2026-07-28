@@ -141,31 +141,18 @@ const BOOT_BG_MAX_PIXELS: usize = BOOT_BG_MAX_DIM * BOOT_BG_MAX_DIM;
 /// Number of loading phases. Higher granularity than the old 7 (user 2026-07-15: "we need higher
 /// granularity and specificity to the label ... It gets stuck on some of these phases for longer
 /// segments"), especially across the world-load, which is the long stuck stretch.
-const BOOT_VIEW_MILESTONE_COUNT: usize = 12;
-/// Left-aligned phase labels (5x7 font: A-Z + space; see `boot_glyph_5x7`). Specific + multi-word -- this
-/// single label above the bar now carries the whole phase story (all tick markers removed), so it is
-/// left-aligned in the reserved text space and can be more than one word. Ordered; each idx is asserted by
-/// `boot_milestone_reached(idx)` and latched monotonic by the caller.
-const BOOT_VIEW_MILESTONE_LABELS: [&str; BOOT_VIEW_MILESTONE_COUNT] = [
-    "STARTING UP", // 0: our present hook + the game swapchain are live (engine still initializing)
-    "GAME SYSTEMS", // 1: GameMan/global systems constructed
-    "ACQUIRING ASSETS", // 2: title menu resource acquisition begins (start of the long ~32s asset load)
-    "OPENING MENU UI", // 3: Scaleform (.gfx) menu-UI files opening -- ramps through the middle of the asset load
-    "BUILDING MENU UI", // 4: Scaleform menu-UI resource ctors -- ramps late in the asset load
-    "TITLE READY", // 5: engine interactive internally (PRESS START bound); we cover the title itself
-    "PREPARING SAVE", // 6: menu opened internally / offline committed; autoload about to commit the save
-    "LOADING SAVE",   // 7: Continue committed (SetState5)
-    "BUILDING WORLD", // 8: the native loading screen appeared (world build begun)
-    "STREAMING WORLD", // 9: the game's world-load gauge is actively streaming
-    "FINALIZING WORLD", // 10: the world-load gauge is past the midpoint, nearing complete
-    "ENTERING WORLD", // 11: the gauge is near-complete / the loading screen is closing
-];
-/// Progress target per phase, in permille. The two long stretches -- the title-asset load (2..5) and the
-/// world stream (8..11) -- get the widest spans. The world tail is ALSO driven by the game's real Gauge_3
-/// progress and forced to 1000 at the in-game handoff (see `boot_view_progress`), so our bar owns the whole
-/// 0..100% and reaches 100% right as the character switches in.
+const BOOT_VIEW_MILESTONE_COUNT: usize = er_loading_bar::PHASE_COUNT;
+/// Left-aligned phase labels. Specific + multi-word -- this single label above the bar now carries
+/// the whole phase story (all tick markers removed), so it is left-aligned in the reserved text
+/// space and can be more than one word. Ordered; each idx is asserted by `boot_milestone_reached`
+/// and latched monotonic by the caller.
+const BOOT_VIEW_MILESTONE_LABELS: [&str; BOOT_VIEW_MILESTONE_COUNT] = er_loading_bar::PHASE_LABELS;
+/// Progress target per phase, in permille. The two long stretches -- the title-asset load and the
+/// world stream -- get the widest spans. The world tail is ALSO driven by the game's real Gauge_3
+/// progress and forced to 1000 at the in-game handoff (see `boot_view_progress`), so our bar owns
+/// the whole 0..100% and reaches 100% right as the character switches in.
 const BOOT_VIEW_MILESTONE_PERMILLE: [usize; BOOT_VIEW_MILESTONE_COUNT] =
-    [30, 80, 150, 220, 290, 360, 440, 520, 610, 730, 860, 950];
+    er_loading_bar::PHASE_PERMILLE;
 /// SWITCH STEP-NAME LABELS (2026-07-16, user-requested). Once the MoveMapStep child is live during an
 /// own-menu switch, the bar shows the REAL engine step (`movemapstep_step_name`) as its label and
 /// drives the fill from the child step index, so a softlock FREEZES the bar on the exact stuck step by
@@ -231,10 +218,10 @@ const BOOT_VIEW_TEXT_BASE_SCALE: usize = 2;
 const BOOT_VIEW_TEXT_REFERENCE_H: u32 = 1080;
 const BOOT_VIEW_TEXT_MIN_SCALE: usize = 1;
 const BOOT_VIEW_TEXT_MAX_SCALE: usize = 4;
-pub(crate) const BOOT_VIEW_GLYPH_W: usize = 5;
-pub(crate) const BOOT_VIEW_GLYPH_H: usize = 7;
+pub(crate) const BOOT_VIEW_GLYPH_W: usize = er_loading_bar::GLYPH_W;
+pub(crate) const BOOT_VIEW_GLYPH_H: usize = er_loading_bar::GLYPH_H;
 /// Advance per character (5px glyph + 1px gap, pre-scale).
-pub(crate) const BOOT_VIEW_GLYPH_ADV: usize = 6;
+pub(crate) const BOOT_VIEW_GLYPH_ADV: usize = er_loading_bar::GLYPH_ADV;
 /// Hairline bar, like the game's own loading bar.
 const BOOT_VIEW_BAR_H: usize = 3;
 /// Gap between the text row and the bar track.
@@ -889,64 +876,8 @@ fn boot_view_phase_submilestone(idx: usize) -> (&'static str, usize, usize) {
 /// 5x7 glyphs for the milestone labels + percent readout. Each row byte uses bit 4 as the LEFTMOST
 /// pixel. Hand-authored for this module (our own asset; nothing game-derived). Unknown chars render
 /// as blanks rather than failing.
-fn boot_glyph_5x7(c: char) -> [u8; 7] {
-    match c {
-        'A' => [0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11],
-        'B' => [0x1e, 0x11, 0x11, 0x1e, 0x11, 0x11, 0x1e],
-        'C' => [0x0e, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0e],
-        'D' => [0x1e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1e],
-        'E' => [0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x1f],
-        'F' => [0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x10],
-        'G' => [0x0e, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0e],
-        'H' => [0x11, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11],
-        'I' => [0x0e, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0e],
-        'K' => [0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11],
-        'L' => [0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1f],
-        'M' => [0x11, 0x1b, 0x15, 0x15, 0x11, 0x11, 0x11],
-        'N' => [0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11],
-        'O' => [0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e],
-        'J' => [0x01, 0x01, 0x01, 0x01, 0x11, 0x11, 0x0e],
-        'P' => [0x1e, 0x11, 0x11, 0x1e, 0x10, 0x10, 0x10],
-        'Q' => [0x0e, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0d],
-        'R' => [0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11],
-        'S' => [0x0f, 0x10, 0x10, 0x0e, 0x01, 0x01, 0x1e],
-        'T' => [0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
-        'U' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e],
-        'V' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x0a, 0x04],
-        'W' => [0x11, 0x11, 0x11, 0x15, 0x15, 0x1b, 0x11],
-        'X' => [0x11, 0x11, 0x0a, 0x04, 0x0a, 0x11, 0x11],
-        'Y' => [0x11, 0x11, 0x0a, 0x04, 0x04, 0x04, 0x04],
-        'Z' => [0x1f, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1f],
-        '.' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x0c],
-        '-' => [0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00],
-        '_' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1f],
-        '/' => [0x01, 0x02, 0x02, 0x04, 0x08, 0x08, 0x10],
-        '\\' => [0x10, 0x08, 0x08, 0x04, 0x02, 0x02, 0x01],
-        ':' => [0x00, 0x0c, 0x0c, 0x00, 0x0c, 0x0c, 0x00],
-        '[' => [0x0e, 0x08, 0x08, 0x08, 0x08, 0x08, 0x0e],
-        ']' => [0x0e, 0x02, 0x02, 0x02, 0x02, 0x02, 0x0e],
-        '(' => [0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02],
-        ')' => [0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08],
-        '>' => [0x08, 0x04, 0x02, 0x01, 0x02, 0x04, 0x08],
-        '?' => [0x0e, 0x11, 0x01, 0x02, 0x04, 0x00, 0x04],
-        '!' => [0x04, 0x04, 0x04, 0x04, 0x04, 0x00, 0x04],
-        '0' => [0x0e, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0e],
-        '1' => [0x04, 0x0c, 0x04, 0x04, 0x04, 0x04, 0x0e],
-        '2' => [0x0e, 0x11, 0x01, 0x06, 0x08, 0x10, 0x1f],
-        '3' => [0x0e, 0x11, 0x01, 0x06, 0x01, 0x11, 0x0e],
-        '4' => [0x02, 0x06, 0x0a, 0x12, 0x1f, 0x02, 0x02],
-        '5' => [0x1f, 0x10, 0x1e, 0x01, 0x01, 0x11, 0x0e],
-        '6' => [0x06, 0x08, 0x10, 0x1e, 0x11, 0x11, 0x0e],
-        '7' => [0x1f, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
-        '8' => [0x0e, 0x11, 0x11, 0x0e, 0x11, 0x11, 0x0e],
-        '9' => [0x0e, 0x11, 0x11, 0x0f, 0x01, 0x02, 0x0c],
-        '%' => [0x19, 0x19, 0x02, 0x04, 0x08, 0x13, 0x13],
-        _ => [0; 7],
-    }
-}
-
 pub(crate) fn boot_text_width(text: &str, scale: usize) -> usize {
-    text.chars().count() * BOOT_VIEW_GLYPH_ADV * scale
+    er_loading_bar::text_width(text, scale)
 }
 
 /// Blit `text` into the tight RGBA buffer at (x, y), scaled by `scale`.
@@ -960,31 +891,7 @@ pub(crate) fn boot_draw_text_rgb(
     rgb: [u8; 3],
     scale: usize,
 ) {
-    let mut cx = x;
-    for c in text.chars() {
-        let rows = boot_glyph_5x7(c);
-        for (gy, row) in rows.iter().enumerate() {
-            for gx in 0..BOOT_VIEW_GLYPH_W {
-                if row & (1 << (BOOT_VIEW_GLYPH_W - 1 - gx)) == 0 {
-                    continue;
-                }
-                for sy in 0..scale {
-                    for sx in 0..scale {
-                        let px = cx + gx * scale + sx;
-                        let py = y + gy * scale + sy;
-                        if px < w && py < h {
-                            let o = (py * w + px) * RGBA8_BPP;
-                            buf[o] = rgb[0];
-                            buf[o + 1] = rgb[1];
-                            buf[o + 2] = rgb[2];
-                            buf[o + 3] = 255;
-                        }
-                    }
-                }
-            }
-        }
-        cx += BOOT_VIEW_GLYPH_ADV * scale;
-    }
+    er_loading_bar::draw_text_rgb(buf, w, h, x, y, text, rgb, scale);
 }
 
 fn boot_draw_text(
@@ -1032,15 +939,7 @@ fn boot_fill_rect(
     rh: usize,
     rgb: [u8; 3],
 ) {
-    for y in y0..(y0 + rh).min(h) {
-        for x in x0..(x0 + rw).min(w) {
-            let o = (y * w + x) * RGBA8_BPP;
-            buf[o] = rgb[0];
-            buf[o + 1] = rgb[1];
-            buf[o + 2] = rgb[2];
-            buf[o + 3] = 255;
-        }
-    }
+    er_loading_bar::fill_rect_rgb(buf, w, h, x0, y0, rw, rh, rgb);
 }
 
 pub(crate) fn boot_bg_image_rgba_clone() -> Option<(usize, usize, Vec<u8>)> {
@@ -1451,6 +1350,23 @@ pub(crate) fn boot_view_render_frame(bw: usize, bh: usize) -> BootViewFrame {
     }
 }
 
+pub(crate) fn boot_view_d3d12_compositor_frame(
+    bw: usize,
+    bh: usize,
+    _present_frame_index: usize,
+) -> er_loading_bar::d3d12_compositor::CompositorFrame {
+    let frame = boot_view_render_frame(bw, bh);
+    er_loading_bar::d3d12_compositor::CompositorFrame {
+        rgba: er_loading_bar::RgbaFrame {
+            width: frame.w,
+            height: frame.h,
+            pixels: frame.rgba,
+        },
+        dst_x: frame.dx,
+        dst_y: frame.dy,
+    }
+}
+
 /// Rasterize either the original tight black progress strip, or a full-screen cached screenshot
 /// background with the same understated bar/label geometry overlaid near the bottom.
 fn boot_view_rasterize(
@@ -1529,26 +1445,30 @@ fn boot_view_rasterize(
     } else {
         String::new()
     };
-    let label_buf: String = if idx >= MMS_LABEL_IDX_BASE {
+    let label_model = if idx >= MMS_LABEL_IDX_BASE {
         let step = idx - MMS_LABEL_IDX_BASE;
-        let max = BOOT_LOAD_STEP_MAX;
-        format!(
-            "{} {}/{} ({} {}/{}{load_suffix})",
+        er_loading_bar::LoadingLabel::new(
             boot_load_step_name(step),
             step,
-            max,
+            BOOT_LOAD_STEP_MAX,
             sub_label,
             sub_i,
-            sub_max
+            sub_max,
         )
     } else {
         let max = BOOT_VIEW_MILESTONE_LABELS.len() - 1;
         let i = idx.min(max);
-        format!(
-            "{} {}/{} ({} {}/{}{load_suffix})",
-            BOOT_VIEW_MILESTONE_LABELS[i], i, max, sub_label, sub_i, sub_max
+        er_loading_bar::LoadingLabel::new(
+            BOOT_VIEW_MILESTONE_LABELS[i],
+            i,
+            max,
+            sub_label,
+            sub_i,
+            sub_max,
         )
     };
+    let mut label_buf = String::new();
+    label_model.write_text_with_sub_suffix(&mut label_buf, &load_suffix);
     let label: &str = &label_buf;
     let label_hash = boot_view_label_hash(label);
     if BOOT_VIEW_LAST_LABEL_HASH.swap(label_hash, Ordering::SeqCst) != label_hash {

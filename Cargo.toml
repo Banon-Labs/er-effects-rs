@@ -16,6 +16,8 @@ members = [
   "crates/mushroom-man-runtime",
   "crates/effects-data",
   "crates/er-gfx",
+  "crates/er-loading-bar",
+  "crates/er-loading-bar-dll",
   "crates/er-safe-input",
   "crates/er-save-loader",
   "crates/er-tpf",

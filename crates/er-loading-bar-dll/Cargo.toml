@@ -1,0 +1,14 @@
+[package]
+name = "er-loading-bar-dll"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_loading_bar_dll"
+# `cdylib` is the ME3-loadable artifact; `rlib` keeps the tiny DLL shell
+# testable on the host without pulling the main product DLL into the graph.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+er-loading-bar = { path = "../er-loading-bar" }
