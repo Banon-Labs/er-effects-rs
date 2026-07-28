@@ -98,9 +98,9 @@ pub unsafe extern "system" fn DllMain(
         let module_base = module as usize;
         START.call_once(|| {
             install_crash_logger(module_base);
-            er_loading_bar::d3d12_compositor::set_log_sink(append_compositor_log);
-            er_loading_bar::d3d12_compositor::set_frame_provider(standalone_validation_frame);
-            er_loading_bar::d3d12_compositor::install_loading_bar_present_compositor();
+            er_d3d12_compositor::set_log_sink(append_compositor_log);
+            er_d3d12_compositor::set_frame_provider(standalone_validation_frame);
+            er_d3d12_compositor::install_loading_bar_present_compositor();
             spawn_loading_bar_task(module_base);
         });
     }
@@ -149,7 +149,7 @@ fn standalone_validation_frame(
     backbuffer_width: usize,
     backbuffer_height: usize,
     _present_frame_index: usize,
-) -> er_loading_bar::d3d12_compositor::CompositorFrame {
+) -> er_d3d12_compositor::CompositorFrame {
     let mut text = String::new();
     er_loading_bar::LoadingLabel::new(
         "ENTERING WORLD",
@@ -171,7 +171,7 @@ fn standalone_validation_frame(
     let bottom_margin = (backbuffer_height / 24).clamp(12, 48);
     let dst_x = backbuffer_width.saturating_sub(rgba.width) / 2;
     let dst_y = backbuffer_height.saturating_sub(rgba.height.saturating_add(bottom_margin));
-    er_loading_bar::d3d12_compositor::CompositorFrame { rgba, dst_x, dst_y }
+    er_d3d12_compositor::CompositorFrame { rgba, dst_x, dst_y }
 }
 
 fn append_named_log(dir: &std::path::Path, name: &str, args: std::fmt::Arguments<'_>) {

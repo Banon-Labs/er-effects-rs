@@ -17,6 +17,7 @@ members = [
   "crates/effects-data",
   "crates/er-gfx",
   "crates/er-loading-bar",
+  "crates/er-d3d12-compositor",
   "crates/er-loading-bar-dll",
   "crates/er-safe-input",
   "crates/er-save-loader",

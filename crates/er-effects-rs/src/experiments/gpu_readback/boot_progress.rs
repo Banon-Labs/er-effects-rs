@@ -1354,9 +1354,9 @@ pub(crate) fn boot_view_d3d12_compositor_frame(
     bw: usize,
     bh: usize,
     _present_frame_index: usize,
-) -> er_loading_bar::d3d12_compositor::CompositorFrame {
+) -> er_d3d12_compositor::CompositorFrame {
     let frame = boot_view_render_frame(bw, bh);
-    er_loading_bar::d3d12_compositor::CompositorFrame {
+    er_d3d12_compositor::CompositorFrame {
         rgba: er_loading_bar::RgbaFrame {
             width: frame.w,
             height: frame.h,

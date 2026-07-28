@@ -5,10 +5,7 @@
 //! autoload state: phase labels, the uppercase 5x7 font, text measurement, and
 //! tight RGBA8 raster helpers. Runtime adapters decide when and where to draw.
 
-#![cfg_attr(not(windows), forbid(unsafe_code))]
-
-#[cfg(windows)]
-pub mod d3d12_compositor;
+#![forbid(unsafe_code)]
 
 /// Tight RGBA8 byte stride used by this crate's CPU-side frame helpers.
 pub const RGBA8_BPP: usize = 4;

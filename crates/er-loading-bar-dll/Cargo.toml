@@ -11,4 +11,5 @@ name = "er_loading_bar_dll"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+er-d3d12-compositor = { path = "../er-d3d12-compositor" }
 er-loading-bar = { path = "../er-loading-bar" }

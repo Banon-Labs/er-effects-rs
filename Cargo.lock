@@ -2754,6 +2754,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-d3d12-compositor"
+version = "0.1.0"
+dependencies = [
+ "er-hook",
+ "er-loading-bar",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "er-effects-data"
 version = "0.1.0"
 dependencies = [
@@ -2767,6 +2776,7 @@ version = "0.1.0"
 dependencies = [
  "bitflags 2.13.1",
  "eldenring",
+ "er-d3d12-compositor",
  "er-game-base",
  "er-gfx",
  "er-hook",
@@ -2834,15 +2844,12 @@ dependencies = [
 [[package]]
 name = "er-loading-bar"
 version = "0.1.0"
-dependencies = [
- "er-hook",
- "windows 0.62.2",
-]
 
 [[package]]
 name = "er-loading-bar-dll"
 version = "0.1.0"
 dependencies = [
+ "er-d3d12-compositor",
  "er-loading-bar",
 ]
 
