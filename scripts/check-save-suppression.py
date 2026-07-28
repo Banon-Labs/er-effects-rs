@@ -185,6 +185,62 @@ def evaluate(telemetry: dict[str, Any] | None, diff: dict[str, Any] | None) -> t
         )
         return False, "FAIL -- census under-counted the writes", reasons
 
+    # Suppression-specific gates. A file-IO census cannot answer either of these, and
+    # letting it imply them is how a run gets called PASS on evidence it does not have.
+    if phase != PHASE_CENSUS:
+        swallowed = telemetry.get("suppress_submits_swallowed", 0) or 0
+        passed = telemetry.get("suppress_submits_passed_through", 0) or 0
+        mismatches = telemetry.get("suppress_prologue_mismatches", 0) or 0
+        bc4_max = telemetry.get("quit_phase_bc4_max_seen")
+
+        if mismatches:
+            reasons.append(
+                f"{mismatches} hooked address(es) failed their prologue byte check -- the "
+                "suppression was installed against code that is not what it claims to be."
+            )
+            return False, "FAIL -- hook target drift", reasons
+        if passed:
+            reasons.append(f"{passed} save submit(s) were NOT swallowed and reached the IO queue.")
+            return False, "FAIL -- suppression leaked", reasons
+        if not swallowed:
+            reasons.append(
+                "Suppression was armed but swallowed zero submits, so an unchanged save file "
+                "proves nothing -- nothing tried to save. Trigger a save and re-run."
+            )
+            return False, "INCONCLUSIVE -- nothing was suppressed", reasons
+        settle_events = telemetry.get("quit_phase_settle_events")
+        if settle_events:
+            reasons.append(
+                f"Quit path released {settle_events} time(s): the bc4 2->3 transition "
+                "executed, so the System->Quit wait job was satisfied rather than spinning."
+            )
+        elif settle_events == 0 and bc4_max and bc4_max >= 2:
+            reasons.append(
+                "A quit was requested (bc4 reached 2) but the 2->3 transition never fired: "
+                "the System->Quit wait job would spin forever."
+            )
+            return False, "FAIL -- quit path deadlocked", reasons
+        elif bc4_max is None:
+            reasons.append(
+                "No quit-phase reading. This build cannot show that quit-to-title survives "
+                "suppression; deadlock-freedom is UNPROVEN, not proven."
+            )
+        elif bc4_max >= 3:
+            reasons.append(
+                f"Quit phase reached {bc4_max}: GameMan+0xbc4 settled, so the System->Quit "
+                "wait job was released rather than spinning."
+            )
+        elif bc4_max > 0:
+            # NOT a failure on its own. bc4 == 3 is transient: it is set, consumed by the
+            # wait job, and reset to 0 within the same quit sequence, so a sampled maximum
+            # of 2 is the NORMAL reading even on a quit that worked perfectly. Two runs
+            # with a user-confirmed working quit both read 2 here. The event counter above
+            # is the authority.
+            reasons.append(
+                f"Sampled quit phase peaked at {bc4_max}; bc4 == 3 is transient so this is "
+                "not evidence either way. See quit_phase_settle_events."
+            )
+
     if phase == PHASE_CENSUS:
         # Observation-only build. It suppresses nothing, so a changed save file is the
         # expected outcome; the deliverable is the call-site inventory, and the run is
@@ -367,6 +423,23 @@ def selftest() -> int:
         failures.append(f"changed_slot_bytes miscounted: {counted} {names}")
     check("census saw nothing, file clean", blind_census, cleanfile, False, "inconclusive")
     check("suppression holding", suppressing, cleanfile, True, "fully suppressed")
+    # Suppression-specific gates: each must fail on its own evidence, not on file IO.
+    armed = dict(suppressing, suppress_submits_swallowed=25, quit_phase_bc4_max_seen=3)
+    check("armed, saves swallowed, quit settled", armed, cleanfile, True, "fully suppressed")
+    check("armed but nothing swallowed", dict(armed, suppress_submits_swallowed=0),
+          cleanfile, False, "inconclusive")
+    check("a submit leaked past suppression", dict(armed, suppress_submits_passed_through=1),
+          cleanfile, False, "leaked")
+    check("hook target drift", dict(armed, suppress_prologue_mismatches=1),
+          cleanfile, False, "drift")
+    # The one a file-IO census can never catch: everything on disk is clean and the
+    # quit path is wedged.
+    # The transient-value trap: a sampled max of 2 with the settle event present is a
+    # PASS, because bc4 == 3 never survives long enough to be sampled.
+    check("sampled 2 but settle event fired", dict(armed, quit_phase_bc4_max_seen=2,
+          quit_phase_settle_events=1), cleanfile, True, "fully suppressed")
+    check("quit requested but never settled", dict(armed, quit_phase_bc4_max_seen=2,
+          quit_phase_settle_events=0), cleanfile, False, "deadlock")
     check("suppression leaking", leaking, cleanfile, False, "not fully suppressed")
     check("suppression clean census but file changed", suppressing, dirty, False, "blind spot")
     # The vacuous pass this checker exists to refuse: armed, nothing written -- because

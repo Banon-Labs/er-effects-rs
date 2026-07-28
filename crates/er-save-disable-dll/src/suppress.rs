@@ -119,6 +119,16 @@ const SL_POLL_SAVE_STATUS_SIG: &[u8] = &[
     0x40, 0x57, 0x48, 0x83, 0xEC, 0x70, 0x48, 0xC7, 0x44, 0x24, 0x28, 0xFE, 0xFF, 0xFF, 0xFF, 0x48,
     0x89, 0x9C, 0x24, 0x88, 0x00, 0x00, 0x00,
 ];
+/// `FUN_14067a980` -- the ONLY code that moves `GameMan+0xbc4` from 2 to 3, i.e. the
+/// moment the quit-to-title wait job is released. Its whole body is
+/// `if (bc4 == 2) bc4 = 3;`.
+#[cfg(windows)]
+const QUIT_PHASE_SETTLE_RVA: usize = 0x67a980;
+/// `mov rax,[rip+..]; cmp dword [rax+0xbc4],2; jne`.
+const QUIT_PHASE_SETTLE_SIG: &[u8] = &[
+    0x48, 0x8B, 0x05, 0x91, 0xEF, 0x6E, 0x03, 0x83, 0xB8, 0xC4, 0x0B, 0x00, 0x00, 0x02, 0x75, 0x0A,
+];
+
 const SL_RELEASE_REQUEST_SIG: &[u8] = &[
     0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x33,
     0xED, 0x48, 0x8B, 0xF9, 0x48, 0x39, 0x69, 0x28,
@@ -156,6 +166,23 @@ static STATUS_FAKED: AtomicU64 = AtomicU64::new(0);
 static STATUS_PASSED_THROUGH: AtomicU64 = AtomicU64::new(0);
 static RELEASE_UNAVAILABLE: AtomicU64 = AtomicU64::new(0);
 
+/// `GameMan+0xbc4 == 3`: the save settled and the quit-to-title wait job may proceed.
+const QUIT_PHASE_SETTLED: usize = 3;
+/// Highest return-to-title phase ever observed. Reaching 3 is the hard evidence that
+/// suppression does not deadlock the quit path; staying at 1 or 2 is the hang.
+static QUIT_PHASE_MAX_SEEN: AtomicUsize = AtomicUsize::new(0);
+static QUIT_PHASE_SETTLED_OBSERVATIONS: AtomicU64 = AtomicU64::new(0);
+/// Times the 2 -> 3 transition actually executed, counted as an EVENT at the only
+/// function that performs it.
+///
+/// Sampling the field could never prove this. `bc4 == 3` is TRANSIENT: `FUN_14067a980`
+/// sets it, the quit chain's wait job consumes it, and `FUN_14067a970(0)` resets it to
+/// 0. Two runs with a user-confirmed working quit both ended with the sampled maximum
+/// at 2, because the value simply never existed at a moment anything sampled it.
+static QUIT_PHASE_SETTLE_EVENTS: AtomicU64 = AtomicU64::new(0);
+#[cfg(windows)]
+static ORIG_QUIT_PHASE_SETTLE: AtomicUsize = AtomicUsize::new(0);
+
 /// Number of detours actually bound (0 or 2).
 pub(crate) fn installed_hooks() -> usize {
     INSTALLED.load(Ordering::SeqCst)
@@ -165,7 +192,7 @@ pub(crate) fn is_armed() -> bool {
     ARMED.load(Ordering::SeqCst) != 0
 }
 
-pub(crate) fn counters() -> [(&'static str, u64); 6] {
+pub(crate) fn counters() -> [(&'static str, u64); 9] {
     [
         (
             "suppress_submits_swallowed",
@@ -187,6 +214,23 @@ pub(crate) fn counters() -> [(&'static str, u64); 6] {
         (
             "suppress_prologue_mismatches",
             PROLOGUE_MISMATCHES.load(Ordering::SeqCst) as u64,
+        ),
+        // The deadlock semaphore. `3` means the quit-to-title wait job was released;
+        // a run that quits and never gets above 2 is the hang, and no file-IO counter
+        // can tell you that.
+        (
+            "quit_phase_bc4_max_seen",
+            QUIT_PHASE_MAX_SEEN.load(Ordering::SeqCst) as u64,
+        ),
+        (
+            "quit_phase_bc4_settled_observations",
+            QUIT_PHASE_SETTLED_OBSERVATIONS.load(Ordering::SeqCst),
+        ),
+        // The real deadlock proof: non-zero means the quit-to-title wait job was
+        // released. Unlike the sampled maximum, this cannot be missed.
+        (
+            "quit_phase_settle_events",
+            QUIT_PHASE_SETTLE_EVENTS.load(Ordering::SeqCst),
         ),
     ]
 }
@@ -298,6 +342,15 @@ pub(crate) fn install() -> usize {
     };
     SL_RELEASE_REQUEST.store(release, Ordering::SeqCst);
 
+    // The quit-settle observer. Not a suppressor -- it calls the original and only
+    // counts. It exists because sampling GameMan+0xbc4 provably cannot see the 2 -> 3
+    // transition: the value is consumed and reset within the same quit sequence.
+    let settle = verify(
+        QUIT_PHASE_SETTLE_RVA,
+        QUIT_PHASE_SETTLE_SIG,
+        "QuitPhaseSettle",
+    );
+
     let targets: [(&str, usize, *mut c_void, &AtomicUsize); 2] = [
         (
             "SL_EnqueueSaveJob",
@@ -312,6 +365,23 @@ pub(crate) fn install() -> usize {
             &ORIG_POLL_SAVE_STATUS,
         ),
     ];
+    // Appended separately: it is an OBSERVER, and unlike the two suppressors a failure
+    // to install it must not abort the install. Losing the deadlock counter costs
+    // evidence; losing a suppressor would hang System->Quit.
+    let mut targets: Vec<(&str, usize, *mut c_void, &AtomicUsize)> = targets.to_vec();
+    if let Some(settle) = settle {
+        targets.push((
+            "QuitPhaseSettle",
+            settle,
+            quit_phase_settle_hook as *mut c_void,
+            &ORIG_QUIT_PHASE_SETTLE,
+        ));
+    } else {
+        log_message(format_args!(
+            "suppress: quit-settle observer NOT installed -- suppression still active, but \
+             this run cannot prove the quit path was released"
+        ));
+    }
 
     let mut hooks = Vec::new();
     for (name, address, detour, orig_slot) in targets {
@@ -436,6 +506,20 @@ unsafe extern "system" fn poll_save_status_hook(iodev: usize) -> u32 {
 /// The states, from the exhaustive writer scan: `1` = return-to-title requested, `2` =
 /// save submitted, `3` = save settled and the wait job may proceed. Recording the highest
 /// value observed turns "no deadlock" from an argument into a reading.
+/// Observer on `FUN_14067a980`, the sole performer of the `bc4` 2 -> 3 transition.
+///
+/// Counts the event rather than sampling the field. Pure observation: the original runs
+/// unmodified and its effect is untouched.
+#[cfg(windows)]
+unsafe extern "system" fn quit_phase_settle_hook() {
+    QUIT_PHASE_SETTLE_EVENTS.fetch_add(1, Ordering::SeqCst);
+    let orig = ORIG_QUIT_PHASE_SETTLE.load(Ordering::SeqCst);
+    if orig != 0 {
+        let original: unsafe extern "system" fn() = unsafe { core::mem::transmute(orig) };
+        unsafe { original() };
+    }
+}
+
 /// Public sampling entry so callers OTHER than the status poll can drive it.
 ///
 /// Sampling only inside the poll detour was not enough to prove anything. `bc4` goes
