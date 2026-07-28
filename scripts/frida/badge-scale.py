@@ -23,7 +23,8 @@ target/frida-gadget/frida-gadget.dll).
 from __future__ import annotations
 
 import argparse
-import time
+import sys
+import threading
 
 import frida
 
@@ -82,9 +83,23 @@ def main() -> int:
     )
     script.on("message", lambda msg, _data: print(msg.get("payload", msg), flush=True))
     script.load()
-    print(f"badge-scale: resident, factor={args.factor}", flush=True)
-    while True:
-        time.sleep(5)
+    print(
+        f"badge-scale: resident, factor={args.factor} -- close stdin (Ctrl-D) or stop the "
+        "game to detach",
+        flush=True,
+    )
+    # Stay resident on OBSERVABLE events only: the gadget script being destroyed (game gone)
+    # or stdin reaching EOF (the operator detaching). A polling sleep loop here was both a
+    # banned pattern and strictly worse -- it woke up to do nothing and detached up to five
+    # seconds after the game had already died.
+    detached = threading.Event()
+    script.on("destroyed", detached.set)
+    try:
+        sys.stdin.read()
+    except KeyboardInterrupt:
+        pass
+    detached.set()
+    return 0
 
 
 if __name__ == "__main__":

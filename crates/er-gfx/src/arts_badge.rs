@@ -181,6 +181,16 @@ pub enum BadgeError {
         want_len: usize,
         want_fnv1a64: u64,
     },
+    /// We could not reproduce the INPUT movie byte-for-byte, so we do not model every tag it
+    /// contains and must not re-serialise it. Only reachable on the unknown-input path: a
+    /// movie some other mod supplied through ME3 that we have no baked fingerprint for.
+    NotReproducible {
+        in_len: usize,
+        out_len: usize,
+        first_diff: Option<usize>,
+    },
+    /// The edit changed something it was never supposed to touch.
+    NotAdditive(&'static str),
 }
 
 impl core::fmt::Display for BadgeError {
@@ -200,6 +210,17 @@ impl core::fmt::Display for BadgeError {
                 "{file_name}: known vanilla input but output len={out_len} \
                  fnv=0x{out_fnv1a64:016x} != expected len={want_len} fnv=0x{want_fnv1a64:016x}"
             ),
+            BadgeError::NotReproducible {
+                in_len,
+                out_len,
+                first_diff,
+            } => write!(
+                f,
+                "cannot reproduce input byte-for-byte (in={in_len} out={out_len} \
+                 first_diff={first_diff:?}); refusing to re-serialise a movie we do not \
+                 fully model"
+            ),
+            BadgeError::NotAdditive(w) => write!(f, "edit was not additive: {w}"),
         }
     }
 }
@@ -729,6 +750,148 @@ pub fn arts_badge(vanilla: &[u8]) -> Result<Vec<u8>, BadgeError> {
     }
 
     movie.write().map_err(BadgeError::Write)
+}
+
+/// Character ids defined by a movie, in stream order.
+fn character_ids(movie: &Movie) -> Vec<u16> {
+    movie
+        .tags
+        .iter()
+        .filter_map(|t| match t {
+            Tag::DefineSprite { id, .. } => Some(*id),
+            Tag::DefineShape { shape_id, .. } => Some(*shape_id),
+            Tag::DefineEditText { character_id, .. } => Some(*character_id),
+            Tag::DefineFont3 { font_id, .. } => Some(*font_id),
+            Tag::Unknown { code, raw, .. }
+                if *code == GFX_DEFINE_EXTERNAL_IMAGE2 && raw.len() >= 4 =>
+            {
+                Some(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]) as u16)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Every `AttributeIcon` placement in the movie, keyed by the sprite that holds it.
+fn attribute_placements(movie: &Movie) -> Vec<(u16, Vec<String>)> {
+    movie
+        .tags
+        .iter()
+        .filter_map(|t| match t {
+            Tag::DefineSprite { id, tags, .. } => Some((
+                *id,
+                tags.iter()
+                    .filter(|t| {
+                        matches!(t, Tag::PlaceObject2 { name: Some(n), .. } if n == ATTRIBUTE_INSTANCE_NAME)
+                            || matches!(t, Tag::PlaceObject3 { name: Some(n), .. } if n == ATTRIBUTE_INSTANCE_NAME)
+                    })
+                    .map(|t| format!("{t:?}"))
+                    .collect(),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The runtime form of the `arts_badge_diff` test invariant: prove the edit only ADDED, and
+/// only re-pointed placements named [`BADGE_INSTANCE_NAME`].
+///
+/// For a movie we have baked fingerprints for this is redundant with [`derive`]'s exact-bytes
+/// check. For a movie we do NOT know -- one another mod supplied through ME3 -- it is the only
+/// thing standing between a structural derivation and a corrupted HUD, so it is checked
+/// against the parsed output rather than trusted from the code that produced it.
+pub fn validate_additive(vanilla: &[u8], edited: &[u8]) -> Result<(), BadgeError> {
+    let v = Movie::parse(vanilla).map_err(BadgeError::Parse)?;
+    let e = Movie::parse(edited).map_err(BadgeError::Parse)?;
+    if v.header != e.header {
+        return Err(BadgeError::NotAdditive("movie header changed"));
+    }
+    let (v_ids, e_ids) = (character_ids(&v), character_ids(&e));
+    if let Some(missing) = v_ids.iter().find(|id| !e_ids.contains(id)) {
+        let _ = missing;
+        return Err(BadgeError::NotAdditive("a character was removed"));
+    }
+    if e_ids.len() <= v_ids.len() {
+        return Err(BadgeError::NotAdditive("no character was added"));
+    }
+    // The vanilla infusion badge is the badge's POSITION reference and is only ever read.
+    // Compare per PRE-EXISTING sprite: the edit legitimately adds sprites of its own, so the
+    // two whole-movie lists are expected to differ in length.
+    let e_attrs = attribute_placements(&e);
+    for (id, want) in attribute_placements(&v) {
+        let got = e_attrs.iter().find(|(sid, _)| *sid == id).map(|(_, p)| p);
+        if got != Some(&want) {
+            return Err(BadgeError::NotAdditive(
+                "an AttributeIcon placement changed",
+            ));
+        }
+    }
+    // Every pre-existing sprite that changed may differ ONLY by placements named `ArtsIcon`.
+    for vt in &v.tags {
+        let Tag::DefineSprite { id, tags: vs, .. } = vt else {
+            continue;
+        };
+        let Some(Tag::DefineSprite { tags: es, .. }) = e
+            .tags
+            .iter()
+            .find(|t| matches!(t, Tag::DefineSprite { id: sid, .. } if sid == id))
+        else {
+            return Err(BadgeError::NotAdditive("a sprite lost its definition"));
+        };
+        if vs == es {
+            continue;
+        }
+        let strip = |tags: &Vec<Tag>| -> Vec<Tag> {
+            tags.iter()
+                .filter(|t| {
+                    !(matches!(t, Tag::PlaceObject2 { name: Some(n), .. } if n == BADGE_INSTANCE_NAME)
+                        || matches!(t, Tag::PlaceObject3 { name: Some(n), .. } if n == BADGE_INSTANCE_NAME))
+                })
+                .cloned()
+                .collect()
+        };
+        if strip(vs) != strip(es) {
+            return Err(BadgeError::NotAdditive(
+                "a sprite changed outside its ArtsIcon placement",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Derive the badge for a movie we have NO baked fingerprint for -- i.e. one another mod
+/// supplied through ME3.
+///
+/// The edit itself is already movie-agnostic: it locates tiles by their named children,
+/// mirrors the tile's own `AttributeIcon` for position (so a mod that moved or rescaled the
+/// tile is followed automatically), reads the atlas cell off the tile's own placeholder shape,
+/// and allocates character ids above whatever the movie already uses. What it cannot assume is
+/// that we UNDERSTAND the whole file, so two gates bracket it:
+///
+/// 1. `parse -> write` must reproduce the input byte-for-byte. If a tag we do not model is in
+///    there, re-serialising would silently reshape it, so we refuse to touch the movie at all.
+///    (All 106 vanilla menu movies pass this, so it is a real gate rather than a rejection.)
+/// 2. The output must satisfy [`validate_additive`].
+///
+/// Either gate failing is a clean no-op: the caller serves the user's own bytes untouched.
+pub fn derive_unknown(input: &[u8]) -> Result<Vec<u8>, BadgeError> {
+    let reproduced = Movie::parse(input)
+        .map_err(BadgeError::Parse)?
+        .write()
+        .map_err(BadgeError::Write)?;
+    if reproduced != input {
+        return Err(BadgeError::NotReproducible {
+            in_len: input.len(),
+            out_len: reproduced.len(),
+            first_diff: reproduced
+                .iter()
+                .zip(input.iter())
+                .position(|(a, b)| a != b),
+        });
+    }
+    let out = arts_badge(input)?;
+    validate_additive(input, &out)?;
+    Ok(out)
 }
 
 /// [`arts_badge`] plus the known-input self-consistency gate: for a movie we have baked

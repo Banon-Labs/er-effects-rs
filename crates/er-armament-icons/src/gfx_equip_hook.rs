@@ -50,11 +50,20 @@ const PARSE_SIG: &str =
 /// FileOpener::OpenFile from). Known-good hardcoded 1.16.2 RVA.
 const FILE_OPEN_RVA: usize = 0x11ced80;
 
-/// Does this open URL name one of the badge movies (equip / inventory / sort chest)?
-unsafe fn is_badge_movie_url(url: usize) -> bool {
+/// Which badge movie does this open URL name, if any?
+///
+/// The FILENAME is the identity, deliberately: a user running another menu mod through ME3
+/// has `02_020_inventory.gfx` with different BYTES, and byte identity would lock every one of
+/// them out of the feature. Fingerprints still gate WHICH derivation path runs (see
+/// [`maybe_swap_equip_file`]), not whether the movie is ours.
+unsafe fn badge_movie_slot(url: usize) -> Option<usize> {
     er_gfx::arts_badge::TARGETS
         .iter()
-        .any(|t| unsafe { bounded_ascii_contains(url, t.url_needle) })
+        .position(|t| unsafe { bounded_ascii_contains(url, t.url_needle) })
+}
+
+unsafe fn is_badge_movie_url(url: usize) -> bool {
+    unsafe { badge_movie_slot(url) }.is_some()
 }
 
 /// Sentinel for "trampoline not installed yet".
@@ -86,10 +95,22 @@ static GFX_OPEN_TOTAL: AtomicU64 = AtomicU64::new(0);
 /// How many `.gfx` open URLs to log before going quiet.
 const DIAG_LOG_LIMIT: u64 = 80;
 
+/// One derived movie, tagged with the EXACT input it was derived from.
+///
+/// The tag is the whole point: a cache keyed only by slot served one movie's bytes under
+/// another movie's identity with no failure line (run 20260727-231706), and the length-based
+/// guard that fixed it cannot work for a user's modded movie, whose edited length we have no
+/// baked expectation for. Verifying the input fingerprint instead is exact in both cases.
+struct EditedMovie {
+    input_len: usize,
+    input_fnv1a64: u64,
+    bytes: Vec<u8>,
+}
+
 /// Process-lifetime cache of each derived edited movie, indexed by position in
 /// `er_gfx::arts_badge::TARGETS`. The swapped File data ptr aliases these buffers, so they
 /// must never move or free.
-static EDITED: [OnceLock<Vec<u8>>; MAX_TARGETS] = [const { OnceLock::new() }; MAX_TARGETS];
+static EDITED: [OnceLock<EditedMovie>; MAX_TARGETS] = [const { OnceLock::new() }; MAX_TARGETS];
 /// Capacity of [`EDITED`]; asserted to cover every target at compile time.
 const MAX_TARGETS: usize = 4;
 const _: () = assert!(
@@ -247,7 +268,7 @@ unsafe fn bounded_ascii_contains(url: usize, needle: &[u8]) -> bool {
 /// labels the caller (parse header path vs FileOpener::OpenFile async path). Content-
 /// matched (GFX magic + the header's own declared length + FNV fingerprint) -- no
 /// URL/string dependency. Fail-closed: anything unexpected leaves the movie untouched.
-unsafe fn maybe_swap_equip_file(base: usize, file: usize, via: &str) {
+unsafe fn maybe_swap_equip_file(base: usize, file: usize, via: &str, url_slot: Option<usize>) {
     if file == 0 {
         return;
     }
@@ -278,73 +299,87 @@ unsafe fn maybe_swap_equip_file(base: usize, file: usize, via: &str) {
             core::array::from_fn(|i| unsafe { safe_read_u8(data + 4 + i) }.unwrap_or(0));
         u32::from_le_bytes(b) as usize
     };
-    // Cheap pre-filter on the declared length, then confirm by fingerprint. A movie whose
-    // length matches no target is not ours.
-    let Some((slot, target)) = er_gfx::arts_badge::target_for_declared_len(declared) else {
+    // Identify the movie. The URL is authoritative when the caller has one (the FileOpener
+    // path), because a user's modded movie keeps the FILENAME but not the bytes. The parse
+    // path has no URL, so it falls back to the vanilla length pre-filter -- which only ever
+    // recognises unmodified movies, by construction.
+    let Some((slot, target)) = url_slot
+        .and_then(|s| er_gfx::arts_badge::TARGETS.get(s).map(|t| (s, t)))
+        .or_else(|| er_gfx::arts_badge::target_for_declared_len(declared))
+    else {
         return;
     };
     if declared > buf_len {
         return;
     }
     let len = declared;
-    let mut vanilla = vec![0u8; len];
-    if !unsafe { read_bytes(data, &mut vanilla) } {
+    let mut input = vec![0u8; len];
+    if !unsafe { read_bytes(data, &mut input) } {
         return;
     }
-    if er_gfx::arts_badge::target_for_vanilla(&vanilla).is_none() {
-        // Right length + GFX magic but a different movie, or a drifted asset: log once
-        // (bounded) so a fingerprint miss is attributable rather than silent.
-        let n = DIAG_CANDIDATE_LOGS.fetch_add(1, Ordering::SeqCst) + 1;
-        if n <= 4 {
-            log_message(format_args!(
-                "gfx-equip: {}-length candidate #{n} via {via} FINGERPRINT MISS: \
-                 declared={len} buf_len={buf_len} fnv=0x{:016x} (want 0x{:016x})",
-                target.file_name,
-                er_gfx::title_05_000::fnv1a64(&vanilla),
-                target.vanilla_fnv1a64,
-            ));
-        }
-        return;
-    }
+    let input_fnv = er_gfx::title_05_000::fnv1a64(&input);
+
     // Derive once per movie (cached for the process lifetime), then swap the File to it.
     // `slot` comes from the lookup itself: keying this cache on anything derived from the
     // target's ADDRESS collapsed all three movies onto one entry (see `TARGETS`).
     let edited = match EDITED[slot].get() {
         Some(cached) => cached,
-        None => match er_gfx::arts_badge::derive(target, &vanilla) {
-            Ok(out) => {
-                log_message(format_args!(
-                    "gfx-equip: {} derived badge movie in={len} out={} (via {via})",
-                    target.file_name,
-                    out.len()
-                ));
-                EDITED[slot].get_or_init(|| out)
+        None => {
+            // Vanilla bytes take the PROVEN path: derive and require the exact baked output
+            // fingerprint. Anything else is a movie some other mod supplied through ME3 --
+            // very common, and explicitly supported -- so it takes the structural path, which
+            // brackets the same derivation with a byte-exact input-reproducibility gate and an
+            // additive-diff check on the output. Either gate failing serves their bytes
+            // untouched.
+            let known_vanilla =
+                er_gfx::arts_badge::target_for_vanilla(&input).is_some_and(|(s, _)| s == slot);
+            let how = if known_vanilla { "vanilla" } else { "modded" };
+            let derived = if known_vanilla {
+                er_gfx::arts_badge::derive(target, &input)
+            } else {
+                er_gfx::arts_badge::derive_unknown(&input)
+            };
+            match derived {
+                Ok(out) => {
+                    log_message(format_args!(
+                        "gfx-equip: {} derived badge movie ({how}) in={len} \
+                         in_fnv=0x{input_fnv:016x} out={} (via {via})",
+                        target.file_name,
+                        out.len()
+                    ));
+                    EDITED[slot].get_or_init(|| EditedMovie {
+                        input_len: len,
+                        input_fnv1a64: input_fnv,
+                        bytes: out,
+                    })
+                }
+                Err(err) => {
+                    EQUIP_SWAP_FAILURES.fetch_add(1, Ordering::SeqCst);
+                    log_message(format_args!(
+                        "gfx-equip: {} arts_badge derive FAILED ({how}, serving native \
+                         untouched): {err}",
+                        target.file_name
+                    ));
+                    return;
+                }
             }
-            Err(err) => {
-                EQUIP_SWAP_FAILURES.fetch_add(1, Ordering::SeqCst);
-                log_message(format_args!(
-                    "gfx-equip: {} arts_badge derive FAILED (serving native): {err}",
-                    target.file_name
-                ));
-                return;
-            }
-        },
+        }
     };
-    // Cross-check the buffer we are about to serve against the target we identified. The
-    // derive path already fingerprints its output, but the CACHE path bypasses that -- which
-    // is precisely how a mis-keyed cache served one movie's bytes under another movie's
-    // identity without a single failure line (run 20260727-231706). Fail closed instead.
-    if target.edited_len != 0 && edited.len() != target.edited_len {
+    // Cross-check the buffer we are about to serve against the bytes actually in this File.
+    // The derive path validates its own output, but the CACHE path bypasses that -- which is
+    // precisely how a mis-keyed cache served one movie's bytes under another movie's identity
+    // without a single failure line (run 20260727-231706). Matching the INPUT fingerprint is
+    // exact for a modded movie too, where there is no expected output length to check.
+    if edited.input_len != len || edited.input_fnv1a64 != input_fnv {
         EQUIP_SWAP_FAILURES.fetch_add(1, Ordering::SeqCst);
         log_message(format_args!(
-            "gfx-equip: {} REFUSING swap -- cached movie is {} bytes, expected {} \
-             (per-movie cache mis-keyed)",
-            target.file_name,
-            edited.len(),
-            target.edited_len
+            "gfx-equip: {} REFUSING swap -- cached movie was derived from len={} \
+             fnv=0x{:016x}, this File holds len={len} fnv=0x{input_fnv:016x}",
+            target.file_name, edited.input_len, edited.input_fnv1a64
         ));
         return;
     }
+    let edited = &edited.bytes;
     unsafe {
         core::ptr::write(
             (file + MEMORY_FILE_DATA_OFFSET) as *mut usize,
@@ -374,7 +409,14 @@ unsafe extern "system" fn parse_hook(load_process: usize, file: usize) -> usize 
         if pn <= 3 {
             unsafe { dump_file_object(base, file, "parse") };
         }
-        unsafe { maybe_swap_equip_file(base, file, "parse") };
+        // No URL here, so this path can only recognise a movie by its VANILLA fingerprint --
+        // i.e. it never fires for a user's modded movie. That is correct rather than a gap:
+        // both the header open and the async tag-dict re-open funnel through
+        // `FileOpener::OpenFile` (bd armament-icons-reach-root-async-reopen-hook-fileopener-openfile),
+        // which does have the URL, so a modded movie is swapped consistently on BOTH opens and
+        // this hook simply sees the already-swapped File and no-ops. A File that somehow
+        // reached parse without passing OpenFile is left untouched -- no badge, no mismatch.
+        unsafe { maybe_swap_equip_file(base, file, "parse", None) };
     }
     let orig = PARSE_ORIG.load(Ordering::SeqCst);
     if orig != ORIG_UNSET {
@@ -404,17 +446,18 @@ unsafe extern "system" fn openfile_hook(
     } else {
         0
     };
-    if unsafe { is_badge_movie_url(url) } {
+    if let Some(slot) = unsafe { badge_movie_slot(url) } {
         let n = EQUIP_OPENFILE_SWAPS.fetch_add(1, Ordering::SeqCst) + 1;
         if n <= 8 {
             log_message(format_args!(
-                "gfx-equip: openfile badge-url match #{n} -> file=0x{file:x}"
+                "gfx-equip: openfile badge-url match #{n} ({}) -> file=0x{file:x}",
+                er_gfx::arts_badge::TARGETS[slot].file_name
             ));
         }
         let base = GAME_BASE.load(Ordering::SeqCst);
         if base != 0 {
             unsafe { dump_file_object(base, file, "openfile") };
-            unsafe { maybe_swap_equip_file(base, file, "openfile") };
+            unsafe { maybe_swap_equip_file(base, file, "openfile", Some(slot)) };
         }
     }
     file

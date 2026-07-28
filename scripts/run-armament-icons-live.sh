@@ -14,6 +14,13 @@
 #   FRIDA=0 bash scripts/run-armament-icons-live.sh         # no frida gadget
 #   ARTIFACT_DIR=... bash scripts/run-armament-icons-live.sh
 #
+# MOD_PACKAGE=<dir>[:<dir>...] adds third-party me3 asset-override packages (a directory
+# holding `menu/*.gfx` etc.) ALONGSIDE the badge DLL. That is the side-by-side compatibility
+# smoke: the DLL must derive the badge from whatever menu movies the other mod supplies
+# rather than only from vanilla bytes.
+#
+#   MOD_PACKAGE=/path/to/minimal-hud bash scripts/run-armament-icons-live.sh
+#
 # Teardown is the user's (or a later agent turn's) call: the launcher PID and the artifact
 # dir are printed on exit.
 set -uo pipefail
@@ -79,6 +86,22 @@ PROFILE="$ARTIFACT_DIR/armament-icons-live.me3"
 	echo
 	echo '[[supports]]'
 	echo 'game = "eldenring"'
+	# Third-party asset-override packages (schema verified against `me3 profile create
+	# --package`, me3 0.11.0). Listed BEFORE the natives so the movies they override are the
+	# ones our DLL sees when it derives the badge.
+	if [[ -n "${MOD_PACKAGE:-}" ]]; then
+		IFS=':' read -r -a _pkgs <<<"$MOD_PACKAGE"
+		for _pkg in "${_pkgs[@]}"; do
+			[[ -n "$_pkg" ]] || continue
+			[[ -d "$_pkg" ]] || fail "MOD_PACKAGE entry is not a directory: $_pkg"
+			echo
+			echo '[[packages]]'
+			echo 'enabled = true'
+			echo "path = '$_pkg'"
+			echo 'load_after = []'
+			echo 'load_before = []'
+		done
+	fi
 	if [[ -n "$TELEM_GAMEDIR" ]]; then
 		echo
 		echo '[[natives]]'
@@ -106,6 +129,7 @@ echo "==  LAUNCHING ELDEN RING (offline, me3) -- LIVE, USER-DRIVEN         =="
 echo "==  A GAME WINDOW WILL OPEN ON YOUR DESKTOP AND STAY OPEN.           =="
 echo "==  No autopilot, no injected input, no input blocking: you drive.   =="
 echo "==  Badge movies: equip menu, inventory tabs, sort chest.            =="
+[[ -n "${MOD_PACKAGE:-}" ]] && echo "==  Third-party packages: $MOD_PACKAGE"
 echo "==  profile   -> $PROFILE"
 echo "==  artifacts -> $ARTIFACT_DIR"
 echo "==  DLL log   -> $GAME_DIR/er-armament-icons.log"

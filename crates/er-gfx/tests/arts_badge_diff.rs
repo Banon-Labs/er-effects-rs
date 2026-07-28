@@ -18,9 +18,9 @@ fn char_id(t: &Tag) -> Option<u16> {
         Tag::DefineShape { shape_id, .. } => Some(*shape_id),
         Tag::DefineEditText { character_id, .. } => Some(*character_id),
         Tag::DefineFont3 { font_id, .. } => Some(*font_id),
-        Tag::Unknown { code: 1009, raw, .. } if raw.len() >= 4 => {
-            Some(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]) as u16)
-        }
+        Tag::Unknown {
+            code: 1009, raw, ..
+        } if raw.len() >= 4 => Some(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]) as u16),
         _ => None,
     }
 }
