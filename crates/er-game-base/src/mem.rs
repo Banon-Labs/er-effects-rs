@@ -136,6 +136,73 @@ pub unsafe fn safe_read_u8(addr: usize) -> Option<u8> {
     }
 }
 
+/// Fault-tolerant bulk read into `out`. Returns true only if the whole slice was
+/// read (None-equivalent for byte buffers). Used by the `.text` AOB scanner so a
+/// drifted/unmapped region fails closed instead of faulting.
+pub unsafe fn read_bytes(addr: usize, out: &mut [u8]) -> bool {
+    if out.is_empty() {
+        return true;
+    }
+    let mut read: usize = ZERO;
+    let ok = unsafe {
+        ReadProcessMemory(
+            CURRENT_PROCESS_PSEUDO_HANDLE,
+            addr as *const c_void,
+            out.as_mut_ptr() as *mut c_void,
+            out.len(),
+            &mut read,
+        )
+    };
+    ok != RPM_FALSE && read == out.len()
+}
+
+/// Resolve the running game image's `.text` section as `(start_va, len)` by parsing
+/// the in-memory PE headers. Returns `None` if the headers are unreadable or no
+/// `.text` section is found. This is the bound for a fault-safe AOB scan; it makes
+/// signature-based function discovery version-agnostic (no hardcoded RVAs).
+pub fn module_text_range() -> Option<(usize, usize)> {
+    let base = game_module_base().ok()?;
+    unsafe {
+        // DOS header: e_lfanew (u32) at +0x3C -> PE header offset.
+        let mut w4 = [0u8; 4];
+        if !read_bytes(base + 0x3C, &mut w4) {
+            return None;
+        }
+        let pe = base + u32::from_le_bytes(w4) as usize;
+        let mut sig = [0u8; 4];
+        if !read_bytes(pe, &mut sig) || &sig != b"PE\0\0" {
+            return None;
+        }
+        // COFF file header at pe+4: NumberOfSections (u16) at +2, SizeOfOptionalHeader (u16) at +16.
+        let mut nsec = [0u8; 2];
+        let mut optsz = [0u8; 2];
+        if !read_bytes(pe + 6, &mut nsec) || !read_bytes(pe + 20, &mut optsz) {
+            return None;
+        }
+        let num_sections = u16::from_le_bytes(nsec) as usize;
+        let opt_size = u16::from_le_bytes(optsz) as usize;
+        // Section headers (40 bytes each) begin after the optional header.
+        let mut sec = pe + 24 + opt_size;
+        for _ in 0..num_sections.min(96) {
+            let mut hdr = [0u8; 40];
+            if !read_bytes(sec, &mut hdr) {
+                return None;
+            }
+            // name[0..8], VirtualSize[8..12], VirtualAddress[12..16].
+            if &hdr[0..8] == b".text\0\0\0" {
+                let vsize = u32::from_le_bytes([hdr[8], hdr[9], hdr[10], hdr[11]]) as usize;
+                let vaddr = u32::from_le_bytes([hdr[12], hdr[13], hdr[14], hdr[15]]) as usize;
+                if vaddr == 0 || vsize == 0 {
+                    return None;
+                }
+                return Some((base + vaddr, vsize));
+            }
+            sec += 40;
+        }
+        None
+    }
+}
+
 /// Fault-tolerant u16 read (None on unmapped memory).
 pub unsafe fn safe_read_u16(addr: usize) -> Option<u16> {
     let mut value: u16 = 0;
