@@ -130,22 +130,116 @@ start_protected_launch_detected if {
 	not start_protected_process_detection_only
 }
 
+# ---------------------------------------------------------------------------
+# Seamless Co-op DLL bundling detection.
+#
+# The repo rule is about MOVING/PACKAGING the file (copy, move, archive, stage
+# into a me3 profile / target bundle / release artifact) -- NOT about naming it.
+# Documentation, issue text, commit messages and knowledge-base memories that
+# merely MENTION `ersc.dll` while describing Seamless compatibility are exactly
+# what AGENTS.md asks agents to record, so every arm below requires a real
+# file-moving/packaging VERB acting on the path:
+#
+#   (a) a copy/archive/interpreter command word at command position with the
+#       path as an operand, in the quote-scrubbed command;
+#   (b) a redirect whose write TARGET is the file;
+#   (c) a library copy/archive CALL (shutil.copy2, tarfile, ...) -- code-shaped
+#       tokens that do not occur in English prose; or
+#   (d) a copy/archive verb heading the very statement that names the path,
+#       which catches quoted operands (`cp 'SeamlessCoop/ersc.dll' dist/`) that
+#       the quote scrub removes from (a).
+#
+# False positive fixed 2026-07-28: `$HOME/.local/bin/bd remember "... works
+# identically under Seamless Co-op (ersc.dll redirects paths ...)" --key ...`
+# was denied. Two independent defects: the bd text exemption below matched only
+# a hard-coded `/home/banon/...` path (never the `$HOME/...` form AGENTS.md
+# actually documents), and the old fallback denied on `ersc.dll` appearing
+# anywhere together with ANY of the substrings "stage"/"bundle"/"archive"/
+# "tar"/"rar"/"zip" -- which match inside ordinary words like "target",
+# "startup", "library" and "staged". That made every doc/memory/commit/PR body
+# about Seamless compatibility unwritable.
+# ---------------------------------------------------------------------------
+
+# (a) copy/archive/interpreter command word + unquoted path operand.
 ersc_bundle_detected if {
-	regex.match(`(?i)(^|[[:space:];|&()])(cp|mv|install|rsync|zip|tar|7z|rar|python|python3|bash|sh)[^;|&()]*ersc\.dll([[:space:];|&()]|$)`, scrubbed_command)
+	regex.match(`(?i)(^|[[:space:];|&()])(cp|copy|mv|move|install|rsync|scp|ln|dd|tee|zip|unzip|tar|7z|7za|rar|unrar|cpio|gzip|xz|xcopy|robocopy|python|python3|bash|sh)[^;|&()]*ersc\.dll([[:space:];|&()]|$)`, scrubbed_command)
+}
+
+# (b) redirect whose write target is the DLL (`cat ... > profile/ersc.dll`).
+# `[^-=]` in front keeps prose arrows (`SeamlessCoop -> ersc.dll`) out.
+ersc_bundle_detected if {
+	regex.match(`(^|[^-=])>{1,2}[[:space:]]*['"]?[^[:space:];|&()'"]*ersc\.dll`, marker_scan_text)
+}
+
+# (c) library copy/archive calls. These tokens are code, not prose, so they are
+# scanned across the whole payload (covers multi-line ctx_execute code fields).
+ersc_bundle_detected if {
+	contains(marker_scan_text, "ersc.dll")
+	some marker in {
+		"shutil.copy", "shutil.move", "copyfile", "copy2", "copytree",
+		"write_bytes", "zipfile", "tarfile", "os.rename", "os.replace",
+		"make_archive",
+	}
+	contains(marker_scan_text, marker)
+}
+
+# (d) copy/archive verb heading the statement that names the DLL.
+ersc_bundle_detected if {
+	some tokens in ersc_naming_statement_tokens
+	tokens[0] in ersc_bundle_verbs
 }
 
 ersc_bundle_detected if {
-	contains(marker_scan_text, "ersc.dll")
-	bundle_source_marker
+	some tokens in ersc_naming_statement_tokens
+	tokens[0] in ersc_command_wrappers
+	tokens[1] in ersc_bundle_verbs
+}
+
+ersc_bundle_detected if {
+	some tokens in ersc_naming_statement_tokens
+	tokens[0] in ersc_command_wrappers
+	tokens[1] in ersc_command_wrappers
+	tokens[2] in ersc_bundle_verbs
+}
+
+ersc_bundle_verbs := {
+	"cp", "copy", "mv", "move", "install", "rsync", "scp", "ln", "dd", "tee",
+	"zip", "unzip", "tar", "7z", "7za", "rar", "unrar", "cpio", "gzip", "xz",
+	"xcopy", "robocopy",
+}
+
+# Words that may precede the real verb without changing what the statement does.
+ersc_command_wrappers := {
+	"sudo", "env", "nohup", "setsid", "time", "xargs", "command",
+	"subprocess.run", "subprocess.call", "subprocess.check_call",
+	"subprocess.check_output", "subprocess.popen", "os.system",
+}
+
+# Statement separators normalized to `;` so the statement that NAMES the DLL can
+# be isolated. `$(` counts as a separator: a command substitution starts a fresh
+# command context (`git commit -m "$(cp SeamlessCoop/ersc.dll dist/)"`).
+ersc_scan_separated := replace(replace(replace(replace(replace(replace(marker_scan_text, "$(", ";"), "\n", ";"), "\r", ";"), "|", ";"), "&", ";"), "`", ";")
+
+ersc_scan_pieces := split(ersc_scan_separated, "ersc.dll")
+
+# One entry per occurrence: the tokens of the statement naming the DLL. Quote,
+# bracket and comma punctuation becomes whitespace so an argv-list operand
+# (`subprocess.run(["cp", "SeamlessCoop/ersc.dll", ...])`) tokenizes like a
+# shell command line.
+ersc_naming_statement_tokens contains tokens if {
+	some idx, piece in ersc_scan_pieces
+	idx < count(ersc_scan_pieces) - 1
+	statements := split(piece, ";")
+	statement := statements[count(statements) - 1]
+	cleaned := replace(replace(replace(replace(replace(replace(statement, "\t", " "), `"`, " "), "'", " "), "(", " "), "[", " "), ",", " ")
+	tokens := [token |
+		some token in split(cleaned, " ")
+		token != ""
+	]
 }
 
 executable_source_marker if {
 	some marker in {"subprocess", "popen", "exec", "system(", "os.system", "spawn", "command::new", "process::command", "shell", "bash", "python", "ctx_execute", "run_experiment"}
-	contains(lower_source_text, marker)
-}
-
-bundle_source_marker if {
-	some marker in {"cp ", "mv ", "install ", "rsync", "zip", "tar", "7z", "rar", "shutil.copy", "copy2", "copyfile", "write_bytes", "zipfile", "tarfile", "archive", "bundle", "stage"}
 	contains(lower_source_text, marker)
 }
 
@@ -187,7 +281,11 @@ scrubbed_command := concat(" ", [launch_single_parts[idx] |
 #
 # The exemption is deliberately narrow:
 #   * Bash tool only, command starting with the real bd binary path and a
-#     text-recording subcommand;
+#     text-recording subcommand. The path is matched CURRENT-USER-AGNOSTICALLY
+#     (`$HOME`/`${HOME}`/`~`/`/home/<user>`/`/root`/`/Users/<user>`, or a bare
+#     `bd`): AGENTS.md documents the invocation as `$HOME/.local/bin/bd`, and a
+#     hard-coded `/home/banon/...` literal silently disabled this exemption for
+#     the documented form and for every other user's home (2026-07-28);
 #   * the quote-scrubbed command must contain no separators, subshells,
 #     redirects, or backticks (so no second command rides along); and
 #   * the raw command must contain no `$(` or backtick anywhere (command
@@ -199,7 +297,7 @@ scrubbed_command := concat(" ", [launch_single_parts[idx] |
 
 bd_text_command if {
 	tool_name == "Bash"
-	regex.match(`^[[:space:]]*/home/banon/\.local/bin/bd[[:space:]]+(create|update|comment|comments|remember|close)([[:space:]]|$)`, command)
+	regex.match(`^[[:space:]]*((\$HOME|\$\{HOME\}|~|/home/[[:alnum:]._-]+|/root|/Users/[[:alnum:]._-]+)/\.local/bin/)?bd[[:space:]]+(create|update|comment|comments|remember|close)([[:space:]]|$)`, command)
 	not regex.match(`[;|&()<>\x60\n\r]`, scrubbed_command)
 	not contains(command, "$(")
 	not contains(command, "`")

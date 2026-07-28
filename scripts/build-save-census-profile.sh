@@ -20,16 +20,35 @@ cd "$REPO" || exit 2
 TARGET_TRIPLE="${TARGET_TRIPLE:-x86_64-pc-windows-msvc}"
 OUT_DIR="${OUT_DIR:-$REPO/target/save-census}"
 DLL="$REPO/target/$TARGET_TRIPLE/release/er_save_disable.dll"
+HARNESS_DLL="$REPO/target/$TARGET_TRIPLE/release/er_input_harness_dll.dll"
 PROFILE="$OUT_DIR/save-census.me3"
 
-echo "== building er-save-disable-dll (release, $TARGET_TRIPLE) =="
-if ! cargo xwin build --release -p er-save-disable-dll --target "$TARGET_TRIPLE"; then
+# WITH_INPUT_HARNESS=1 adds the self-drive harness so the run reaches save moments the
+# title screen never does. Booting alone only exercises the system-slot save; driving
+# Continue -> in-world -> System->Quit is what exercises the return-to-title save, and a
+# census that never reached those moments cannot claim trigger coverage.
+# The product DLL is still deliberately absent either way.
+WITH_INPUT_HARNESS="${WITH_INPUT_HARNESS:-0}"
+
+PACKAGES=(-p er-save-disable-dll)
+[[ "$WITH_INPUT_HARNESS" == "1" ]] && PACKAGES+=(-p er-input-harness-dll)
+
+if [[ "$WITH_INPUT_HARNESS" == "1" ]]; then
+	echo "== building save-disable + input-harness (release, $TARGET_TRIPLE) =="
+else
+	echo "== building save-disable (release, $TARGET_TRIPLE) =="
+fi
+if ! cargo xwin build --release "${PACKAGES[@]}" --target "$TARGET_TRIPLE"; then
 	echo "BUILD FAILED -- no profile written" >&2
 	exit 1
 fi
 
 if [[ ! -f "$DLL" ]]; then
 	echo "build reported success but $DLL is missing" >&2
+	exit 1
+fi
+if [[ "$WITH_INPUT_HARNESS" == "1" && ! -f "$HARNESS_DLL" ]]; then
+	echo "build reported success but $HARNESS_DLL is missing" >&2
 	exit 1
 fi
 
@@ -46,6 +65,17 @@ game = "eldenring"
 [[natives]]
 path = '$DLL'
 EOF
+
+if [[ "$WITH_INPUT_HARNESS" == "1" ]]; then
+	cat >>"$PROFILE" <<EOF
+
+# Self-drive harness. Enabled by its mere presence in the profile; it re-derives all
+# state from game memory, so it needs no product DLL. Drive mode comes from
+# er-harness-drive-mode.txt in the game directory.
+[[natives]]
+path = '$HARNESS_DLL'
+EOF
+fi
 
 echo "== profile: $PROFILE =="
 echo "== dll:     $DLL =="

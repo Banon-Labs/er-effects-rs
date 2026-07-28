@@ -24,6 +24,8 @@ LATEST_LINK="$PROBE_ROOT/save-census-latest"
 
 TELEMETRY_NAME="er-save-disable-telemetry.json"
 DLL_LOG_NAME="er-save-disable.log"
+HARNESS_LOG_NAME="er-input-harness.log"
+HARNESS_PHASES_NAME="er-input-harness-phases.jsonl"
 
 resolve_artifact_dir() {
 	if [[ -n "${ARTIFACT_DIR:-}" ]]; then
@@ -69,8 +71,39 @@ cmd_start() {
 	fi
 	profile="$REPO/target/save-census/save-census.me3"
 
-	# Stale artifacts from a previous run would be read as this run's evidence.
+	# Stale artifacts from a previous run must not be read as this run's evidence -- but they
+	# must not be DESTROYED either. A previous run whose `finish` never ran (killed, crashed, or
+	# still being driven by hand) has its only in-process census sitting in the game directory;
+	# deleting it silently threw away real measurements. Archive, then clear.
+	local carried="$artifact/carried-over-from-previous-run"
+	local carried_any=0
+	for stale in "$TELEMETRY_NAME" "$DLL_LOG_NAME" "$HARNESS_LOG_NAME" "$HARNESS_PHASES_NAME"; do
+		if [[ -s "$game_dir/$stale" ]]; then
+			mkdir -p "$carried"
+			cp -f "$game_dir/$stale" "$carried/$stale" 2>/dev/null && carried_any=1
+		fi
+	done
+	if [[ "$carried_any" == "1" ]]; then
+		echo "NOTE: a previous run left un-finished artifacts; archived to $carried" >&2
+	fi
 	rm -f "$game_dir/$TELEMETRY_NAME" "$game_dir/$TELEMETRY_NAME.tmp" "$game_dir/$DLL_LOG_NAME"
+	rm -f "$game_dir/$HARNESS_LOG_NAME" "$game_dir/$HARNESS_PHASES_NAME"
+
+	# The harness reads its drive mode from a CWD-relative flag file in the game dir.
+	# `full` is boot -> PRESS ANY BUTTON -> Continue -> in-world -> System->Quit, which is
+	# what reaches the return-to-title save; booting alone only ever shows the system-slot save.
+	if [[ "${WITH_INPUT_HARNESS:-0}" == "1" ]]; then
+		printf '%s\n' "${HARNESS_DRIVE_MODE:-full}" >"$game_dir/er-harness-drive-mode.txt"
+		# Take the NativeQuit branch of `full`: Startup -> PressAnyButton -> Continue ->
+		# WaitLoadIn -> NativeQuit -> QuitTeardown -> PressAnyButton -> Continue -> WaitLoadIn.
+		# The menu-driven default would navigate the in-world pause menu with injected input,
+		# which does not reliably reach the Scaleform menu; the native path invokes the quit
+		# job's two slots directly instead (save request, then return-to-title).
+		printf 'save-census: drive System->Quit natively, not by menu input\n' \
+			>"$game_dir/er-harness-native-quit.txt"
+	else
+		rm -f "$game_dir/er-harness-drive-mode.txt" "$game_dir/er-harness-native-quit.txt"
+	fi
 
 	python3 "$REPO/scripts/save-write-witness.py" snapshot --out "$artifact/before.json" \
 		>"$artifact/before.log" 2>&1 || exit 1
@@ -116,6 +149,8 @@ cmd_finish() {
 	# directory, which a later run clears.
 	cp -f "$game_dir/$TELEMETRY_NAME" "$artifact/$TELEMETRY_NAME" 2>/dev/null
 	cp -f "$game_dir/$DLL_LOG_NAME" "$artifact/$DLL_LOG_NAME" 2>/dev/null
+	cp -f "$game_dir/$HARNESS_LOG_NAME" "$artifact/$HARNESS_LOG_NAME" 2>/dev/null
+	cp -f "$game_dir/$HARNESS_PHASES_NAME" "$artifact/$HARNESS_PHASES_NAME" 2>/dev/null
 
 	python3 "$REPO/scripts/save-write-witness.py" snapshot --out "$artifact/after.json" \
 		>"$artifact/after.log" 2>&1

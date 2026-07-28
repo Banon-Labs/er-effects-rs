@@ -460,6 +460,55 @@ def main() -> int:
             False,
             "blocked this Seamless Co-op DLL bundling command",
         ),
+        # 2026-07-28 false positive: the bundling rule denied a `bd remember`
+        # whose quoted memory body merely MENTIONS ersc.dll while documenting
+        # Seamless compatibility. Two defects: the bd text exemption matched only
+        # a hard-coded /home/banon path (not the `$HOME/.local/bin/bd` form
+        # AGENTS.md documents), and the fallback fired on "ersc.dll" plus any of
+        # the substrings stage/bundle/archive/tar/rar -- which hide inside
+        # "target"/"startup"/"library"/"staged". Deny now needs a real verb.
+        PolicyCase(
+            "allow-bd-remember-home-var-mentioning-ersc-dll",
+            "$HOME/.local/bin/bd remember \"SAVE-DISABLE INTERCEPTION STRATEGY:"
+            " swallow the SL submit and fake the status poll. Also above any path"
+            " redirection so it works identically under Seamless Co-op (ersc.dll"
+            " redirects paths, not the SL submit). Nothing is staged into the"
+            ' target/ bundle." --key'
+            " save-disable-strategy-swallow-SL-submit-fake-status-poll-2026-07-28",
+            True,
+        ),
+        PolicyCase(
+            "allow-git-commit-message-mentioning-ersc-dll-seamless-compat",
+            'git commit -m "docs: record that ersc.dll redirects save paths under'
+            ' Seamless Co-op; nothing is staged into target/"',
+            True,
+        ),
+        PolicyCase(
+            "allow-echo-prose-mentioning-ersc-dll",
+            "echo 'ersc.dll is a compatibility target; it is never archived into"
+            " the target/ bundle'",
+            True,
+        ),
+        # ... while real staging/packaging stays denied.
+        PolicyCase(
+            "deny-cp-ersc-dll-into-me3-profile",
+            'cp -f "/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll"'
+            " /home/banon/Elden/profile/ersc.dll",
+            False,
+            "blocked this Seamless Co-op DLL bundling command",
+        ),
+        PolicyCase(
+            "deny-mv-quoted-ersc-dll-into-target-bundle",
+            "mv 'SeamlessCoop/ersc.dll' target/release-bundle/",
+            False,
+            "blocked this Seamless Co-op DLL bundling command",
+        ),
+        PolicyCase(
+            "deny-redirect-write-target-ersc-dll",
+            "cat vendor/seamless-coop-v1.9.9/SeamlessCoop/ersc.dll > target/release/ersc.dll",
+            False,
+            "blocked this Seamless Co-op DLL bundling command",
+        ),
         PolicyCase(
             "allow-quoted-forbidden-launch-note",
             "echo 'do not run steam -applaunch 1245620'",
