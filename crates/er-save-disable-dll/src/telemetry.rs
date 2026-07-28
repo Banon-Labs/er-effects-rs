@@ -39,7 +39,11 @@ pub(crate) fn write_snapshot() {
         "  \"census_hooks_installed\": {},\n",
         crate::hooks_installed()
     ));
-    body.push_str("  \"census_hooks_expected\": 6,\n");
+    #[cfg(windows)]
+    let expected = crate::hooks::EXPECTED_HOOKS;
+    #[cfg(not(windows))]
+    let expected = 0;
+    body.push_str(&format!("  \"census_hooks_expected\": {expected},\n"));
 
     let (game_base, text_start, text_size) = witness::attribution_context();
     body.push_str(&format!("  \"game_base\": \"0x{game_base:x}\",\n"));

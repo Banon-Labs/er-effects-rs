@@ -117,9 +117,16 @@ fn spawn_census_task() {
             redirect::ensure_destination_directory();
             let installed = hooks::install();
             HOOKS_INSTALLED.store(installed, Ordering::SeqCst);
+            let config = config::runtime_config();
             log_message(format_args!(
-                "install: census active (base=0x{base:x}, hooks={installed}/6); \
-                 PHASE 1 -- observing save writes, suppressing nothing"
+                "install: active (base=0x{base:x}, hooks={installed}/{}); phase={PHASE} -- save \
+                 WRITES divert to {} with suffix {}; reads are untouched so the real save still loads",
+                hooks::EXPECTED_HOOKS,
+                config
+                    .save_directory
+                    .as_ref()
+                    .map_or_else(|| "the original directory".to_owned(), |d| d.display().to_string()),
+                config.suffix,
             ));
             // Publish immediately so a harness can distinguish "no saves happened"
             // from "the DLL never installed" -- an absent telemetry file means the

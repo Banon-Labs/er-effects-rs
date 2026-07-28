@@ -58,6 +58,11 @@ static ORIG_DELETE_FILE_W: AtomicUsize = AtomicUsize::new(0);
 
 static INSTALLED_HOOKS: AtomicUsize = AtomicUsize::new(0);
 
+/// How many file APIs this module tries to hook. Derived from the target table rather
+/// than written as a literal, because a stale literal reported "8/6 hooked" and would
+/// have let a partial-coverage run read as complete.
+pub(crate) const EXPECTED_HOOKS: usize = 8;
+
 pub(crate) fn installed_hooks() -> usize {
     INSTALLED_HOOKS.load(Ordering::SeqCst)
 }
@@ -85,7 +90,7 @@ pub(crate) fn install() -> usize {
         }
     };
 
-    let targets: [(&str, *mut c_void, &AtomicUsize); 8] = [
+    let targets: [(&str, *mut c_void, &AtomicUsize); EXPECTED_HOOKS] = [
         (
             "CreateFileW",
             create_file_w_hook as *mut c_void,
@@ -157,7 +162,9 @@ pub(crate) fn install() -> usize {
     match unsafe { MH_ApplyQueued() } {
         MH_STATUS::MH_OK => {
             INSTALLED_HOOKS.store(queued, Ordering::SeqCst);
-            log_message(format_args!("census: {queued}/6 file APIs hooked"));
+            log_message(format_args!(
+                "census: {queued}/{EXPECTED_HOOKS} file APIs hooked"
+            ));
             queued
         }
         status => {
