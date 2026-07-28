@@ -52,13 +52,6 @@ static COPY_CALLS: AtomicU64 = AtomicU64::new(0);
 /// copies as the writes they effectively are.
 static COPY_BYTES: AtomicU64 = AtomicU64::new(0);
 static DELETE_CALLS: AtomicU64 = AtomicU64::new(0);
-static DIVERTED_OPENS: AtomicU64 = AtomicU64::new(0);
-/// Copies/deletes/renames of save data that were pointed at the diverted namespace.
-static DIVERTED_OPS: AtomicU64 = AtomicU64::new(0);
-/// A diverted open that FAILED. Non-zero means the game tried to save, we sent it
-/// somewhere it could not write, and it will see a genuine save failure -- the one
-/// outcome this design is supposed to avoid. Surfaced so it can never pass silently.
-static DIVERT_OPEN_FAILURES: AtomicU64 = AtomicU64::new(0);
 static SITES_DROPPED: AtomicU64 = AtomicU64::new(0);
 static HANDLES_DROPPED: AtomicU64 = AtomicU64::new(0);
 
@@ -488,46 +481,6 @@ pub(crate) unsafe fn note_move_file(existing: *const u16, new: *const u16) {
     });
 }
 
-/// A save write that was diverted to a harmless path.
-///
-/// Tracked separately from [`note_create_file`] and NOT added to the escaped-write
-/// census: these bytes deliberately did not reach the real save, so counting them as
-/// escapes would make a working redirect look like a failure. The handle is left
-/// untracked for the same reason -- writes through it are expected and uninteresting.
-pub(crate) fn note_diverted_open(path: &str, handle: usize) {
-    const INVALID_HANDLE_VALUE: usize = usize::MAX;
-    if handle == INVALID_HANDLE_VALUE || handle == 0 {
-        // A VERIFIED FALSE-PASS PATH if left silent. The game just got an invalid handle
-        // for its save: its save genuinely failed and it showed the player a save-error
-        // popup. But the real file is unchanged and no site escaped, so the offline diff
-        // is clean and the verdict reads "saving fully suppressed" -- a pass for a run in
-        // which the user watched the game fail to save. Unthrottled, and published
-        // through the guard because this runs from `create_file_w_hook`, outside it.
-        let failures = DIVERT_OPEN_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
-        #[cfg(windows)]
-        {
-            crate::log_message(format_args!(
-                "census: DIVERT OPEN FAILED for {path} -- the game saw a REAL save \
-                 failure (diverted_open_failures={failures})"
-            ));
-            let _ = with_guard(crate::telemetry::write_snapshot);
-        }
-        let _ = failures;
-        return;
-    }
-    DIVERTED_OPENS.fetch_add(1, Ordering::SeqCst);
-    let _ = path;
-}
-
-/// A save-data operation that was successfully sent somewhere harmless.
-///
-/// Deliberately NOT recorded as an escaped write site. `escaped_write_sites` answers
-/// "what reached the real save file", so a redirect that worked must not appear there --
-/// listing it made a correct run report two escapes.
-pub(crate) fn note_diverted_op(_api: &'static str) {
-    DIVERTED_OPS.fetch_add(1, Ordering::SeqCst);
-}
-
 /// A copy whose source or destination is save data.
 ///
 /// This is how the game builds `ER0000.sl2.bak`, and it is the route that escaped the
@@ -601,16 +554,8 @@ pub(crate) fn escaped_write_sites() -> Vec<WriteSite> {
         .collect()
 }
 
-pub(crate) fn counters() -> [(&'static str, u64); 17] {
+pub(crate) fn counters() -> [(&'static str, u64); 12] {
     [
-        ("diverted_opens", DIVERTED_OPENS.load(Ordering::SeqCst)),
-        ("diverted_ops", DIVERTED_OPS.load(Ordering::SeqCst)),
-        (
-            "diverted_open_failures",
-            DIVERT_OPEN_FAILURES.load(Ordering::SeqCst),
-        ),
-        ("redirects", crate::redirect::redirect_count()),
-        ("redirect_refusals", crate::redirect::refusal_count()),
         (
             "create_save_opens",
             CREATE_SAVE_OPENS.load(Ordering::SeqCst),

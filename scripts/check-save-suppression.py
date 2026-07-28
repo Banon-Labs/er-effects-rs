@@ -227,21 +227,16 @@ def evaluate(telemetry: dict[str, Any] | None, diff: dict[str, Any] | None) -> t
                 "not evidence either way. See quit_phase_settle_events."
             )
 
-    # Blindness and real-save-failure gates, applied to BOTH phases.
+    # Blindness gates, applied to BOTH phases.
     #
-    # Each of these is a verified false-PASS path if left ungated: the counter moves, the
-    # real file is unchanged, `escaped_write_sites` stays empty, and the verdict reads
-    # clean for a run that either failed to observe or made the game visibly fail to save.
-    divert_failures = telemetry.get("diverted_open_failures", 0) or 0
-    if divert_failures:
-        reasons.append(
-            f"{divert_failures} diverted save open(s) FAILED: the game received an "
-            "invalid handle, so its save genuinely failed and the player saw a save-error "
-            "popup. An unchanged save file here means the save broke, not that it was "
-            "suppressed cleanly."
-        )
-        return False, "FAIL -- the game saw a real save failure", reasons
-
+    # Each is a verified false-PASS path if left ungated: the counter moves, the real file
+    # is unchanged, `escaped_write_sites` stays empty, and the verdict reads clean for a
+    # run that never actually observed anything.
+    #
+    # A `diverted_open_failures` gate used to sit here too, for a path-diversion layer that
+    # could hand the game an invalid handle and make its save genuinely fail while the
+    # verdict read clean. That layer was deleted rather than gated: suppression never opens
+    # a save file at all, so the failure it guarded cannot occur.
     blind = (telemetry.get("sites_dropped", 0) or 0) + (telemetry.get("handles_dropped", 0) or 0)
     if blind:
         reasons.append(
@@ -261,15 +256,6 @@ def evaluate(telemetry: dict[str, Any] | None, diff: dict[str, Any] | None) -> t
         return False, "INCONCLUSIVE -- telemetry may be stale", reasons
 
     if phase == PHASE_CENSUS:
-        # The control is only a control if every layer that could hide a write is off.
-        if telemetry.get("redirect_armed") is True:
-            reasons.append(
-                "This census-only run still had path diversion ARMED, so save writes were "
-                "sent to the decoy and the census could not observe them. The positive "
-                "control cannot fire in this configuration."
-            )
-            return False, "INCONCLUSIVE -- control run had redirect armed", reasons
-
         # Observation-only build. It suppresses nothing, so a changed save file is the
         # expected outcome; the deliverable is the call-site inventory, and the run is
         # only useful if it actually observed something.
@@ -329,14 +315,11 @@ def selftest() -> int:
         # Accounts for every byte the `dirty` fixture says moved -- a fully-sighted census.
         "write_bytes": 2359328,
         "escaped_write_sites": [census_site],
-        # A real control run: every layer that could hide a write is off.
-        "redirect_armed": False,
     }
     blind_census = dict(full_census, escaped_write_sites=[])
     suppressing = dict(full_census, phase=PHASE_SUPPRESS, escaped_write_sites=[],
-                       redirect_armed=True,
                        suppress_submits_swallowed=25, quit_phase_bc4_max_seen=3)
-    leaking = dict(full_census, phase=PHASE_SUPPRESS, redirect_armed=True,
+    leaking = dict(full_census, phase=PHASE_SUPPRESS,
                    suppress_submits_swallowed=25, quit_phase_bc4_max_seen=3)
     dirty = {
         "clean": False,
@@ -405,21 +388,15 @@ def selftest() -> int:
     check("suppression leaking", leaking, cleanfile, False, "not fully suppressed")
     check("suppression clean census but file changed", suppressing, dirty, False, "blind spot")
 
-    # The three verified false-PASS paths. Each looks IDENTICAL to a perfect run from the
-    # file's point of view -- clean diff, empty escaped_write_sites -- so only the counter
-    # distinguishes them, and before these gates existed all three returned PASS.
-    check("the game saw a real save failure", dict(armed, diverted_open_failures=1),
-          cleanfile, False, "real save failure")
+    # Verified false-PASS paths. Each looks IDENTICAL to a perfect run from the file's
+    # point of view -- clean diff, empty escaped_write_sites -- so only the counter
+    # distinguishes them, and before these gates existed all of them returned PASS.
     check("site table overflowed, census blind", dict(armed, sites_dropped=1),
           cleanfile, False, "blind")
     check("handle table overflowed, census blind", dict(armed, handles_dropped=1),
           cleanfile, False, "blind")
     check("telemetry publish did not land", dict(armed, publish_failures=1),
           cleanfile, False, "stale")
-    # A control run with diversion still armed observes nothing and must not be graded
-    # as a successful census.
-    check("control run with redirect armed", dict(full_census, redirect_armed=True),
-          dirty, False, "redirect armed")
 
     # A census-only run must never be reported as suppression working.
     _, verdict, _ = evaluate(full_census, dirty)

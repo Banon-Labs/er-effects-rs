@@ -8,6 +8,8 @@
 //!
 //! # What it does
 //!
+//! It BLOCKS saving. No byte of the player's save is written while it is loaded.
+//!
 //! Two cooperating layers, and it matters that they are separate:
 //!
 //! **Suppression** (`suppress`) stops the game ever enqueueing a save-write job, at the
@@ -28,10 +30,8 @@
 
 #![allow(non_snake_case)]
 
-mod config;
 #[cfg(windows)]
 mod hooks;
-mod redirect;
 mod suppress;
 mod telemetry;
 mod witness;
@@ -60,17 +60,16 @@ pub(crate) fn phase() -> &'static str {
     }
 }
 
-/// Diagnostic disarm for the MANDATORY positive control: the identical build with every
-/// interception layer off, to show that the detectors do fire and the save file does
-/// change when nothing is suppressed.
+/// Diagnostic disarm for the MANDATORY positive control: the identical build with
+/// interception off, to show that the detectors do fire and the save file does change
+/// when nothing is suppressed.
 ///
-/// It must disarm *both* layers. It used to gate suppression only, which silently broke
-/// the control: `redirect::diverted_path` returns `Some` for every save path (the config
-/// refuses an empty suffix), so a census-only run diverted the write, skipped
-/// `note_create_file`, tracked no handle, recorded no site, and left the real file
-/// unchanged -- reporting "census observed nothing" for a run whose entire purpose was to
-/// observe something. An oracle whose negative control cannot fire is not falsifiable,
-/// and an unfalsifiable oracle is not evidence.
+/// Suppression is now the only layer that can hide a write, so disarming it leaves a
+/// genuinely pure census. That used not to be true: a path-diversion layer stayed armed
+/// through the control, sent the write to a decoy, and left the census with nothing to
+/// observe -- an oracle whose negative control cannot fire is not falsifiable, and an
+/// unfalsifiable oracle is not evidence. Deleting that layer makes the failure
+/// structurally impossible rather than merely fixed.
 pub(crate) const CENSUS_ONLY_ENV: &str = "ER_SAVE_DISABLE_CENSUS_ONLY";
 
 pub(crate) fn census_only_requested() -> bool {
@@ -142,7 +141,6 @@ fn spawn_census_task() {
                 }
             };
             witness::set_game_base(base);
-            config::init_runtime_config();
             // Census first: it must be watching before suppression arms, so a write
             // that escapes suppression during the arming window is still recorded.
             let installed = hooks::install();
@@ -150,8 +148,9 @@ fn spawn_census_task() {
             let suppressing = suppress::install();
             log_message(format_args!(
                 "install: base=0x{base:x}, census hooks={installed}/{}, \
-                 suppression hooks={suppressing}/2, phase={}",
+                 suppression hooks={suppressing}/{}, phase={}",
                 hooks::EXPECTED_HOOKS,
+                suppress::SUPPRESSOR_HOOKS,
                 phase()
             ));
             // Publish immediately so a harness can distinguish "no saves happened"

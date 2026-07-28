@@ -81,13 +81,6 @@ pub(crate) fn write_snapshot() {
         "  \"quit_settle_observer_installed\": {},\n",
         crate::suppress::settle_observer_installed()
     ));
-    // Reported because it is the OTHER layer that can hide a save write. A run with
-    // redirect armed and suppression off is a different experiment from a pure census,
-    // and the telemetry has to be able to say which one it was.
-    body.push_str(&format!(
-        "  \"redirect_armed\": {},\n",
-        crate::redirect::is_armed()
-    ));
     body.push_str(&format!(
         "  \"publish_failures\": {},\n",
         PUBLISH_FAILURES.load(Ordering::Relaxed)

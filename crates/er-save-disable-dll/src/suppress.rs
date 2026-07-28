@@ -453,7 +453,9 @@ pub(crate) fn install() -> usize {
                  save will report success",
                 if settle.is_some() { "yes" } else { "NO" }
             ));
-            hooks.len()
+            // The SUPPRESSOR count, not `hooks.len()`. Returning the vector length folded
+            // the optional observer in and made a healthy install log "3/2".
+            SUPPRESSOR_HOOKS
         }
         status => {
             log_message(format_args!("suppress: MH_ApplyQueued failed: {status:?}"));

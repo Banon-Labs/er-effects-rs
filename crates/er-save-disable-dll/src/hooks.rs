@@ -34,7 +34,7 @@ use std::{
 
 use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 
-use crate::{log_message, redirect, witness};
+use crate::{log_message, witness};
 
 type CreateFileWFn =
     unsafe extern "system" fn(*const u16, u32, u32, *mut c_void, u32, u32, *mut c_void) -> usize;
@@ -174,15 +174,6 @@ pub(crate) fn install() -> usize {
     }
 }
 
-/// Access bits that mean the caller intends to modify the file.
-const GENERIC_WRITE: u32 = 0x4000_0000;
-const FILE_WRITE_DATA: u32 = 0x0000_0002;
-const FILE_APPEND_DATA: u32 = 0x0000_0004;
-
-fn is_write_open(desired_access: u32) -> bool {
-    desired_access & (GENERIC_WRITE | FILE_WRITE_DATA | FILE_APPEND_DATA) != 0
-}
-
 unsafe extern "system" fn create_file_w_hook(
     file_name: *const u16,
     desired_access: u32,
@@ -198,61 +189,23 @@ unsafe extern "system" fn create_file_w_hook(
     }
     let original: CreateFileWFn = unsafe { core::mem::transmute(orig) };
 
-    // Divert ONLY write opens. The load path shares this function, so redirecting reads
-    // would make the game load the diverted file instead of the player's real save --
-    // and the game's own `OpenFile` uses OPEN_EXISTING to read and OPEN_ALWAYS to write,
-    // so the access bits are a reliable discriminator.
-    let diverted = if is_write_open(desired_access) {
-        unsafe { save_path_string(file_name) }.and_then(|path| redirect::diverted_path(&path))
-    } else {
-        None
+    // Pure observation. This detour used to divert save write opens to a decoy path;
+    // that layer is gone, so every call reaches the real file and the census records
+    // what happened. Suppression is what stops the write, and it acts far above here --
+    // the job is never queued, so a save write open never occurs at all.
+    let handle = unsafe {
+        original(
+            file_name,
+            desired_access,
+            share_mode,
+            security_attributes,
+            creation_disposition,
+            flags_and_attributes,
+            template_file,
+        )
     };
-
-    let handle = match &diverted {
-        Some(path) => {
-            let wide = redirect::to_wide(path);
-            let handle = unsafe {
-                original(
-                    wide.as_ptr(),
-                    desired_access,
-                    share_mode,
-                    security_attributes,
-                    creation_disposition,
-                    flags_and_attributes,
-                    template_file,
-                )
-            };
-            witness::note_diverted_open(path, handle);
-            handle
-        }
-        None => unsafe {
-            original(
-                file_name,
-                desired_access,
-                share_mode,
-                security_attributes,
-                creation_disposition,
-                flags_and_attributes,
-                template_file,
-            )
-        },
-    };
-
-    // Census the ORIGINAL path either way: what matters is that the game asked to write
-    // a save, and whether any byte reached the real file.
-    if diverted.is_none() {
-        unsafe { witness::note_create_file(file_name, desired_access, handle) };
-    }
+    unsafe { witness::note_create_file(file_name, desired_access, handle) };
     handle
-}
-
-/// Read a wide path and return it only when it names save data.
-///
-/// # Safety
-/// `ptr` must be a valid wide string pointer or null.
-unsafe fn save_path_string(ptr: *const u16) -> Option<String> {
-    let path = unsafe { witness::read_wide_path(ptr) }?;
-    witness::is_save_path(&path).then_some(path)
 }
 
 unsafe extern "system" fn write_file_hook(
@@ -314,21 +267,8 @@ unsafe extern "system" fn delete_file_w_hook(file_name: *const u16) -> i32 {
     }
     let original: DeleteFileWFn = unsafe { core::mem::transmute(orig) };
 
-    // The game deletes the stale backup before recreating it. Point that at the diverted
-    // backup so the player's real .bak is never removed. Report success even if the
-    // diverted file was not there -- the game only needs the name to be free.
-    match unsafe { save_path_string(file_name) }.and_then(|p| redirect::diverted_path(&p)) {
-        Some(path) => {
-            witness::note_diverted_op("DeleteFileW");
-            let wide = redirect::to_wide(&path);
-            unsafe { original(wide.as_ptr()) };
-            1
-        }
-        None => {
-            unsafe { witness::note_delete_file(file_name) };
-            unsafe { original(file_name) }
-        }
-    }
+    unsafe { witness::note_delete_file(file_name) };
+    unsafe { original(file_name) }
 }
 
 unsafe extern "system" fn copy_file_w_hook(
@@ -342,26 +282,11 @@ unsafe extern "system" fn copy_file_w_hook(
     }
     let original: CopyFileWFn = unsafe { core::mem::transmute(orig) };
 
-    // Divert only the DESTINATION. The source stays real so the copy always has something
-    // to read (a diverted source would not exist on the first save and the copy would
-    // fail); the player's real .bak is never the target.
-    let diverted = unsafe { save_path_string(new) }.and_then(|path| redirect::diverted_path(&path));
-    match diverted {
-        Some(path) => {
-            // Counted as diverted, NOT as an escape. Censusing the original path here
-            // would list every successful redirect as a save that got away, which is
-            // exactly backwards.
-            witness::note_diverted_op("CopyFileW");
-            let wide = redirect::to_wide(&path);
-            // fail_if_exists must be cleared: the diverted backup survives between saves,
-            // and the game passes 1, which would fail every save after the first.
-            unsafe { original(existing, wide.as_ptr(), 0) }
-        }
-        None => {
-            unsafe { witness::note_copy_file(existing, new) };
-            unsafe { original(existing, new, fail_if_exists) }
-        }
-    }
+    // Hooked because it was a proven ESCAPE, not because it is intercepted: the `.bak`
+    // is built by copy, not by write, and 3,014,688 bytes once reached disk through it
+    // while the census reported clean. It is observed here and stopped upstream.
+    unsafe { witness::note_copy_file(existing, new) };
+    unsafe { original(existing, new, fail_if_exists) }
 }
 
 unsafe extern "system" fn move_file_w_hook(existing: *const u16, new: *const u16) -> i32 {
@@ -372,21 +297,7 @@ unsafe extern "system" fn move_file_w_hook(existing: *const u16, new: *const u16
     }
     let original: MoveFileWFn = unsafe { core::mem::transmute(orig) };
 
-    // A rename touching save data moves BOTH ends into the diverted namespace, so a
-    // rename-swap can never clobber the real file with, or replace it by, anything.
-    let from = unsafe { save_path_string(existing) }.and_then(|p| redirect::diverted_path(&p));
-    let to = unsafe { save_path_string(new) }.and_then(|p| redirect::diverted_path(&p));
-    if from.is_none() && to.is_none() {
-        return unsafe { original(existing, new) };
-    }
-    let from_wide = from.as_deref().map(redirect::to_wide);
-    let to_wide = to.as_deref().map(redirect::to_wide);
-    unsafe {
-        original(
-            from_wide.as_ref().map_or(existing, |w| w.as_ptr()),
-            to_wide.as_ref().map_or(new, |w| w.as_ptr()),
-        )
-    }
+    unsafe { original(existing, new) }
 }
 
 fn kernel32_module() -> Option<usize> {
