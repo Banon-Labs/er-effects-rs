@@ -446,6 +446,35 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_BEFORE.load(Ordering::SeqCst),
         SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_AFTER.load(Ordering::SeqCst)
     ));
+    // SAVE-FLOW / SAVE-SUPPRESS oracles (save-game-flow WP1): suppression state and the
+    // one-shot bypass counters come straight from the er-save-suppress crate accessors
+    // (the product wires that crate's publish sink to a no-op because THIS writer is the
+    // export path); the flow stage/counters are the product-side state machine. Probes
+    // must key on oracle_save_flow_stage, NOT on msgbox/modal oracles, for save-flow
+    // progress. oracle_save_bypass_final_status is null until the first bypassed save
+    // reports a terminal status, then latched (0 = success).
+    let bypass_final_status = er_save_suppress::bypass_final_status_raw();
+    body.push_str(&format!(
+        "  \"oracle_save_suppress_armed\": {},\n  \"oracle_save_suppress_submits_swallowed\": {},\n  \"oracle_save_suppress_submits_passed_through\": {},\n  \"oracle_save_suppress_status_faked\": {},\n  \"oracle_save_suppress_prologue_mismatches\": {},\n  \"oracle_save_suppress_settle_events\": {},\n  \"oracle_save_bypass_armed_total\": {},\n  \"oracle_save_bypass_allowed_total\": {},\n  \"oracle_save_bypass_allowed_failed_total\": {},\n  \"oracle_save_bypass_expired_total\": {},\n  \"oracle_save_bypass_final_status\": {},\n  \"oracle_save_flow_stage\": {},\n  \"oracle_save_flow_gate_latch_blocked\": {},\n  \"oracle_save_flow_commit_complete_count\": {},\n",
+        er_save_suppress::is_armed(),
+        er_save_suppress::submits_swallowed(),
+        er_save_suppress::submits_passed_through(),
+        er_save_suppress::status_faked(),
+        er_save_suppress::prologue_mismatches(),
+        er_save_suppress::settle_events(),
+        er_save_suppress::bypass_armed_total(),
+        er_save_suppress::bypass_allowed_total(),
+        er_save_suppress::bypass_allowed_failed_total(),
+        er_save_suppress::bypass_expired_total(),
+        if bypass_final_status == er_save_suppress::BYPASS_FINAL_STATUS_NONE {
+            "null".to_owned()
+        } else {
+            bypass_final_status.to_string()
+        },
+        SAVE_FLOW_STAGE.load(Ordering::SeqCst),
+        SAVE_FLOW_GATE_LATCH_BLOCKED_COUNT.load(Ordering::SeqCst),
+        SAVE_FLOW_COMMIT_COMPLETE_COUNT.load(Ordering::SeqCst),
+    ));
     body.push_str(&format!(
         "  \"autoload_last_status\": {},\n",
         state.autoload.last_status().map_or_else(

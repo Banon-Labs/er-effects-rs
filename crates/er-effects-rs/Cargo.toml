@@ -21,6 +21,12 @@ er-hook = { path = "../er-hook" }
 # defined in experiments/mem.rs. game-types re-exports the typed game bindings.
 er-game-base = { path = "../er-game-base", features = ["game-types"] }
 er-save-loader = { path = "../er-save-loader" }
+# Save-write suppression core, shared with the standalone er-save-disable-dll (save-game-flow
+# WP1): swallow every SL save enqueue + rewrite the status poll from boot, plus the one-shot
+# bypass token that makes the System->Quit "Save Game" row the ONLY path that really writes.
+# NEVER load er_save_disable.dll alongside this DLL in one me3 profile (two MinHook instances
+# would double-detour 0xe6fb50/0xe6e430).
+er-save-suppress = { path = "../er-save-suppress" }
 # In-memory texture-payload builder: portrait pixels -> uncompressed R8G8B8A8 DDS -> TPF003 blob,
 # fed to the game's in-memory TPF factory to replace the now-loading background. Pure-Rust, std-only.
 er-tpf = { path = "../er-tpf" }

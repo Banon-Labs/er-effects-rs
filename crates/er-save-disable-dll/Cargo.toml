@@ -21,6 +21,10 @@ crate-type = ["cdylib", "rlib"]
 # the game module range, so it needs no typed game bindings and stays a lean cross-compile.
 [dependencies]
 er-game-base = { path = "../er-game-base" }
+# Shared save-write suppression core (moved out of this crate's `suppress` module so the
+# product DLL integrates the identical hooks). This DLL wires the core's log/publish
+# sinks to its own er-save-disable.log / census telemetry snapshot in `spawn_census_task`.
+er-save-suppress = { path = "../er-save-suppress" }
 
 [target.'cfg(windows)'.dependencies]
 er-hook = { path = "../er-hook" }

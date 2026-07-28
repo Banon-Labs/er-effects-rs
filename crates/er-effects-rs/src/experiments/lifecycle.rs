@@ -98,6 +98,191 @@ pub(crate) unsafe fn switch_harness_discovery_tick() {
     }
 }
 
+// === SAVE-FLOW state machine (save-game-flow WP1, 2026-07-28) ===
+// Drives the System->Quit "Save Game" row's CLOSE-THEN-FIRE commit. Stage map lives on
+// `er_telemetry::counters::SAVE_FLOW_STAGE` (oracle_save_flow_stage): 0 IDLE,
+// 1 BOX1_WAIT / 2 BOX2_WAIT (WP2), 3 DEST_BROWSE / 4 BOX3_WAIT (WP3), 5 CLOSING_ABORT
+// (WP2), 6 CLOSING_COMMIT, 7 FIRE_GATE_WAIT, 8 COMMIT_WAIT. WP1 implements 0/6/7/8:
+// the row press stages the commit and runs the proven close sequence (OptionSetting
+// immediately, IngameTop deferred 2 frames), and only once the menus are closed AND
+// the RAM gates are green does the tick arm the one-shot er-save-suppress bypass and
+// fire the FORCED (throttle-skipping) native save request pair. The tick only reads
+// and decides; all menu mutation stays on the paths that already own it.
+
+/// Transition helper: swap the stage, reset the per-stage tick counter, log the edge.
+fn save_flow_enter_stage(stage: usize, reason: &str) {
+    let prev = SAVE_FLOW_STAGE.swap(stage, Ordering::SeqCst);
+    SAVE_FLOW_STAGE_TICKS.store(0, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "save-flow: stage {prev} -> {stage} ({reason})"
+    ));
+}
+
+/// Per-frame save-flow driver. Called from the game task immediately AFTER
+/// `system_quit_save_game_deferred_close_tick`, so the frame the deferred IngameTop
+/// close drains is the same frame stage 6 observes "menus closed".
+pub(crate) unsafe fn save_flow_tick() {
+    let stage = SAVE_FLOW_STAGE.load(Ordering::SeqCst);
+    if stage == SAVE_FLOW_STAGE_IDLE {
+        return;
+    }
+    let ticks = SAVE_FLOW_STAGE_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
+    match stage {
+        SAVE_FLOW_STAGE_CLOSING_COMMIT => {
+            // The close sequence itself is owned by system_quit_save_game_fire_save_and_close
+            // (OptionSetting now) + the deferred-close tick (IngameTop, 2 frames). Menus are
+            // closed once the deferral countdown has drained; when no top window was deferred
+            // the countdown was never armed and this advances on the first tick.
+            if SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_FRAMES.load(Ordering::SeqCst) == 0 {
+                save_flow_enter_stage(SAVE_FLOW_STAGE_FIRE_GATE_WAIT, "menus closed");
+            }
+        }
+        SAVE_FLOW_STAGE_FIRE_GATE_WAIT => unsafe { save_flow_fire_gate_tick(ticks) },
+        SAVE_FLOW_STAGE_COMMIT_WAIT => save_flow_commit_wait_tick(ticks),
+        _ => {
+            // Stages 1-5 are the WP2/WP3 confirm-box and destination-browser stages; nothing
+            // sets them yet, so a value here is state corruption. Reset loudly, never wedge.
+            append_autoload_debug(format_args!(
+                "save-flow: tick saw unimplemented stage {stage}; resetting to IDLE"
+            ));
+            save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "unimplemented stage");
+        }
+    }
+}
+
+/// Stage 7 FIRE_GATE_WAIT: menus are closed; wait for the RAM gates proving the native
+/// save orchestrator will accept and dispatch the request as ONE combined `b72 && b73`
+/// submit, then arm the one-shot bypass and fire the forced request pair.
+unsafe fn save_flow_fire_gate_tick(ticks: usize) {
+    const HEAP_LO: usize = 0x10000;
+    let Ok(base) = game_module_base() else {
+        return;
+    };
+    let csm = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }.unwrap_or(0);
+    // Failure latch first: `CSMenuMan->[0x80]+0x290` (byte) / `+0x298` (qword). Latched
+    // means SaveRequest_Profile's gate FUN_14080d570 fails PERMANENTLY for the session --
+    // waiting cannot help, so abort loudly instead of timing out (noise rule 3: failure
+    // paths log on first occurrence; the counter is exported every telemetry cadence).
+    if csm >= HEAP_LO {
+        let sub =
+            unsafe { safe_read_usize(csm + CS_MENU_MAN_SAVE_GATE_SUB_80_OFFSET) }.unwrap_or(0);
+        if sub >= HEAP_LO {
+            let l290 =
+                unsafe { safe_read_u8(sub + CS_MENU_MAN_SAVE_GATE_LATCH_290_OFFSET) }.unwrap_or(0);
+            let l298 = unsafe { safe_read_usize(sub + CS_MENU_MAN_SAVE_GATE_LATCH_298_OFFSET) }
+                .unwrap_or(0);
+            if l290 != 0 || l298 != 0 {
+                SAVE_FLOW_GATE_LATCH_BLOCKED_COUNT.fetch_add(1, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "save-flow: FIRE-GATE ABORT -- CSMenuMan[+0x80] failure latch set (+0x290=0x{l290:x} +0x298=0x{l298:x}); saves are dead for this session, NOT firing; the user's save did NOT happen"
+                ));
+                save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "gate latch blocked");
+                return;
+            }
+        }
+    }
+    let dsm = if csm >= HEAP_LO {
+        unsafe { safe_read_u8(csm + CS_MENU_MAN_DISABLE_SAVE_MENU_OFFSET) }.unwrap_or(u8::MAX)
+    } else {
+        u8::MAX
+    };
+    let gm = game_man_ptr_or_null();
+    let (b80, bc4) = if gm >= HEAP_LO {
+        (
+            unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }.unwrap_or(-1),
+            unsafe { safe_read_i32(gm + GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET) }
+                .unwrap_or(-1),
+        )
+    } else {
+        (-1, -1)
+    };
+    // Green = ShouldSave's menu gate open (disableSaveMenu 0), no save/load in flight
+    // (b80 == 0), and the quit chain not parked at READY (bc4 != 3, where the b72
+    // effective-getter zeroes the request).
+    let gates_green =
+        dsm == 0 && b80 == 0 && bc4 != GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY as i32;
+    if gates_green {
+        if !er_save_suppress::is_armed() {
+            // Degraded fail-open (prologue mismatch / install failure): suppression never
+            // armed, so every native save already writes normally. Fire the forced request
+            // natively so the user's explicit Save Game press still saves; log once.
+            append_autoload_debug(format_args!(
+                "save-flow: suppression NOT armed (oracle_save_suppress_armed=0) -- degraded fail-open: firing forced native save request without a bypass token"
+            ));
+            unsafe { system_quit_save_game_request_save_forced() };
+            save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "degraded fail-open fire");
+            return;
+        }
+        if !er_save_suppress::arm_one_save_bypass() {
+            // Refusal here means a token is already pending -- some earlier commit's
+            // watchdog has not run yet. Abort rather than fire into an ambiguous token.
+            append_autoload_debug(format_args!(
+                "save-flow: FIRE ABORT -- arm_one_save_bypass refused (token already pending); the user's save did NOT happen"
+            ));
+            save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "bypass arm refused");
+            return;
+        }
+        unsafe { system_quit_save_game_request_save_forced() };
+        // Read back the request flags the forced pair must have set: b73 (system lane)
+        // unconditionally, b72 (char-slot lane) iff saveSlot != -1. Both 1 => the next
+        // pump dispatches ONE combined submit that consumes the token.
+        let b72 = if gm >= HEAP_LO {
+            unsafe { safe_read_u8(gm + GAME_MAN_ARM_FLAG_B72_OFFSET) }.map_or(-1, i32::from)
+        } else {
+            -1
+        };
+        let b73 = if gm >= HEAP_LO {
+            unsafe { safe_read_u8(gm + GAME_MAN_FLAG_B73_PROBE_OFFSET) }.map_or(-1, i32::from)
+        } else {
+            -1
+        };
+        append_autoload_debug(format_args!(
+            "save-flow: FIRED forced save request (throttle skipped) after {ticks} gate ticks; readback b72={b72} b73={b73}"
+        ));
+        save_flow_enter_stage(SAVE_FLOW_STAGE_COMMIT_WAIT, "forced request fired");
+        return;
+    }
+    if ticks >= SAVE_FLOW_FIRE_GATE_TIMEOUT_TICKS {
+        append_autoload_debug(format_args!(
+            "save-flow: FIRE-GATE TIMEOUT after {ticks} ticks (disableSaveMenu={dsm} b80={b80} bc4={bc4}); aborting without firing -- the user's save did NOT happen"
+        ));
+        save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "fire-gate timeout");
+    }
+}
+
+/// Stage 8 COMMIT_WAIT: the forced request is in flight through the native pump with the
+/// bypass token armed. Completion = the er-save-suppress poll watch captured the first
+/// post-allow terminal status (0 = success). The watchdog expires a stranded token so a
+/// failed fire can never leave a one-shot bypass armed for some later native save.
+fn save_flow_commit_wait_tick(ticks: usize) {
+    if let Some(status) = er_save_suppress::take_bypass_final_status() {
+        if status == 0 {
+            SAVE_FLOW_COMMIT_COMPLETE_COUNT.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "save-flow: COMMIT COMPLETE -- bypassed save reported terminal status 0 (success) after {ticks} commit ticks"
+            ));
+        } else {
+            append_autoload_debug(format_args!(
+                "save-flow: COMMIT FAILED -- bypassed save reported terminal status {status} (0=success); the user's save did NOT complete"
+            ));
+        }
+        save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "commit terminal status");
+        return;
+    }
+    if ticks >= SAVE_BYPASS_WATCHDOG_TICKS {
+        let expired = er_save_suppress::expire_bypass_if_pending();
+        append_autoload_debug(format_args!(
+            "save-flow: COMMIT WATCHDOG after {ticks} ticks -- {}; the user's save did NOT happen",
+            if expired {
+                "one-shot bypass token was still pending and has been expired"
+            } else {
+                "token was consumed but no terminal status was observed"
+            }
+        ));
+        save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "commit watchdog");
+    }
+}
+
 pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     unsafe { switch_harness_discovery_tick() };
     // LOAD2 WORLD-COMPLETION (bd load2-sole-failing-gate-is-shouldsave-save_requested-b72): when a
@@ -245,6 +430,10 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // Save Game row close-all: finishes the root menu close on a later game-task tick,
     // after the active System submenu has consumed its native close result.
     unsafe { system_quit_save_game_deferred_close_tick() };
+    // Save-flow state machine (WP1): after the deferred close, so the frame the close
+    // drains is the frame stage 6 -> 7 advances; fires the forced save request once the
+    // RAM gates are green and watches the bypassed commit to completion.
+    unsafe { save_flow_tick() };
     // SELF-DRIVEN System->Quit->Load-Profile repro autopilot: stamps this frame's
     // scripted DInput key (no-op unless system_quit_repro_enabled + in-world). Runs
     // every frame so the injected key is fresh for the game's keyboard poll, and only

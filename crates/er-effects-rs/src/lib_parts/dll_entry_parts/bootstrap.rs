@@ -101,6 +101,18 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // addresses the game-base resolver cannot decode. Pure PE-header read, no API/loader lock.
     record_self_dll_base(hmodule.0 as usize);
 
+    // SAVE-DISABLE SUPPRESSION (save-game-flow WP1): swallow every native SL save enqueue and
+    // answer the status poll with success, from boot, so the System->Quit "Save Game" row's
+    // scoped one-shot bypass is the ONLY path that really writes a save. Spawned on its own
+    // thread (no hook work inside DllMain); the attach-time spawn beats the boot-time
+    // system-slot save (proven by the standalone er-save-disable-dll's validated run). No
+    // product code hooks 0xe6fb50/0xe6e430/0x67a980 elsewhere, so there is no ordering
+    // constraint; the product only *calls* 0xe6f200 as a finalizer, which is compatible.
+    // GraphicsConfig.xml is untouched: suppression sits on the SL container funnel only.
+    // NEVER load er_save_disable.dll together with this DLL in one me3 profile -- two MinHook
+    // instances would double-detour the same prologues.
+    START_SAVE_SUPPRESS.call_once(spawn_save_suppress_install);
+
     // Boot profiler: spawn the independent CPU sampler FIRST so it captures the engine-init threads
     // during the pre-CSTaskImp-instance gap (the largest uninstrumented boot window). Read-only by
     // default (QueryThreadCycleTime/GetThreadTimes, no thread suspension); RIP sampling is a separate
@@ -222,6 +234,51 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     );
     DLL_MAIN_SUCCESS
 }
+
+/// Wire the er-save-suppress seams to the product sinks and install the suppression hooks
+/// off the loader lock. Log sink -> the autoload debug log; publish sink -> deliberate
+/// no-op, because the product's periodic telemetry writer already exports the suppress and
+/// bypass counters as `oracle_save_*` fields on its own 250 ms cadence (a second snapshot
+/// writer would just double the file traffic).
+fn spawn_save_suppress_install() {
+    let _ = std::thread::Builder::new()
+        .name("er-effects-save-suppress".to_owned())
+        .spawn(|| {
+            er_save_suppress::set_log_sink(crate::telemetry::append_autoload_debug);
+            er_save_suppress::set_publish_sink(|| {});
+            // Spin until the game module resolves (same loop shape as the standalone
+            // er-save-disable-dll installer): MinHook and the prologue verification need
+            // the image mapped before install can bind anything.
+            let mut attempts = 0_u64;
+            loop {
+                match er_game_base::mem::game_module_base() {
+                    Ok(_) => break,
+                    Err(err) => {
+                        if attempts == 0 || attempts % SAVE_SUPPRESS_WAIT_LOG_INTERVAL == 0 {
+                            crate::telemetry::append_autoload_debug(format_args!(
+                                "save-suppress: waiting for game module base: {err}"
+                            ));
+                        }
+                        attempts = attempts.saturating_add(1);
+                        std::thread::yield_now();
+                    }
+                }
+            }
+            // Product behavior consults NO env vars here: `false` = never disarm. The
+            // census-only positive-control lever belongs to the standalone DLL alone.
+            let installed = er_save_suppress::install(false);
+            crate::telemetry::append_autoload_debug(format_args!(
+                "save-suppress: install done hooks={installed}/{} armed={} -- all native \
+                 saves suppressed; the Save Game row's one-shot bypass is the only real writer",
+                er_save_suppress::SUPPRESSOR_HOOKS,
+                er_save_suppress::is_armed()
+            ));
+        });
+}
+
+/// Throttle for the (in practice never-taken) module-base wait log in
+/// `spawn_save_suppress_install`.
+const SAVE_SUPPRESS_WAIT_LOG_INTERVAL: u64 = 4096;
 
 pub(crate) fn wait_for_task_instance() -> &'static CSTaskImp {
     let mut wait_attempts = 0_u64;

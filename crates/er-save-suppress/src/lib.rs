@@ -7,6 +7,31 @@
 //! byte is ever written, no backup is copied or deleted, and every native observer of
 //! the save lifecycle sees exactly the state a real successful save leaves behind.
 //!
+//! # Shared core, one host DLL per process
+//!
+//! This crate is the suppression core linked by BOTH the standalone
+//! `er-save-disable-dll` (census/proof DLL) and the product `er-effects-rs` cdylib
+//! (save-game-flow WP1). The host DLL wires the seams before `install`:
+//!
+//! - [`set_log_sink`]: where human-readable lines go (the standalone's
+//!   `er-save-disable.log`, the product's autoload debug log).
+//! - [`set_publish_sink`]: called on the telemetry-publish schedule (install,
+//!   first-of-each-counter, milestones, every failure path). The standalone wires its
+//!   census snapshot writer through the witness reentrancy guard; the product wires a
+//!   no-op because its periodic telemetry writer exports the counters on its own cadence.
+//!
+//! NEVER load `er_save_disable.dll` alongside `er_effects_rs.dll` in one me3 profile:
+//! each carries its own MinHook instance and both would detour `0x140e6fb50` /
+//! `0x140e6e430`, corrupting each other's trampolines.
+//!
+//! # The one-shot bypass (save-game-flow WP1)
+//!
+//! With suppression global, the product needs exactly one sanctioned writer: the
+//! System->Quit "Save Game" row. [`arm_one_save_bypass`] arms a single-use token; the
+//! next SL save enqueue consumes it and is forwarded to the real trampoline (real
+//! submit, real write), and the status poll then latches the first terminal status for
+//! the caller ([`take_bypass_final_status`]). Everything else keeps being swallowed.
+//!
 //! # Why this layer and not another (1.16.2, all addresses byte-verified)
 //!
 //! Every save in the game is request-based and asynchronous. A trigger sets
@@ -69,7 +94,7 @@
 //! "saving..." MenuJob reads `0` and reports Success, and the autosave spinner retires
 //! within one `CSFeManImp::Update`. No field is forged and no state is poked.
 
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 #[cfg(windows)]
 use std::ffi::c_void;
@@ -79,8 +104,54 @@ use er_game_base::mem::{game_rva, read_bytes};
 #[cfg(windows)]
 use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 
-#[cfg(windows)]
-use crate::log_message;
+// ============================================================================
+// HOST-DLL SEAMS. The core has no log file and no telemetry file of its own; the one
+// DLL that links it installs both sinks before `install`. Same fn-pointer-in-atomic
+// pattern as `er_hook::set_hook_logger`. Uninstalled sinks are silent no-ops so the
+// pure decision logic stays host-testable with no wiring.
+// ============================================================================
+
+/// Signature of the human-log sink: receives `format_args!` output, one line per call.
+pub type LogSinkFn = fn(std::fmt::Arguments<'_>);
+/// Signature of the telemetry-publish sink: called on the publish schedule (install,
+/// first-of-each-counter, milestones, every failure path). The sink owns snapshot
+/// serialization and any reentrancy guard it needs.
+pub type PublishSinkFn = fn();
+
+static LOG_SINK: AtomicUsize = AtomicUsize::new(0);
+static PUBLISH_SINK: AtomicUsize = AtomicUsize::new(0);
+
+/// Install the human-log sink. Call once, before [`install`], so no install/verify line
+/// is ever dropped.
+pub fn set_log_sink(sink: LogSinkFn) {
+    LOG_SINK.store(sink as usize, Ordering::Release);
+}
+
+/// Install the telemetry-publish sink. Call once, before [`install`]. A host whose own
+/// telemetry writer already exports the counters on a periodic cadence may install a
+/// no-op.
+pub fn set_publish_sink(sink: PublishSinkFn) {
+    PUBLISH_SINK.store(sink as usize, Ordering::Release);
+}
+
+fn log_message(args: std::fmt::Arguments<'_>) {
+    let raw = LOG_SINK.load(Ordering::Acquire);
+    if raw != 0 {
+        // SAFETY: `raw` is only ever a `LogSinkFn` stored by `set_log_sink`.
+        let sink: LogSinkFn = unsafe { std::mem::transmute::<usize, LogSinkFn>(raw) };
+        sink(args);
+    }
+}
+
+/// Publish a telemetry snapshot through the host sink (no-op until one is installed).
+fn publish_snapshot() {
+    let raw = PUBLISH_SINK.load(Ordering::Acquire);
+    if raw != 0 {
+        // SAFETY: `raw` is only ever a `PublishSinkFn` stored by `set_publish_sink`.
+        let sink: PublishSinkFn = unsafe { std::mem::transmute::<usize, PublishSinkFn>(raw) };
+        sink();
+    }
+}
 
 /// `FUN_140e6fb50` -- allocates the SL job wrapper and pushes it onto the save-IO
 /// worker queue. Returns `bool` in AL: true = submitted.
@@ -102,6 +173,10 @@ const SL_STATUS_NO_REQUEST: u32 = 4;
 /// The status code that means "the save completed successfully". `DoSaveStuff` maps it
 /// to the only arm that advances `GameMan+0xbc4` 2 -> 3.
 const SL_STATUS_SUCCESS: u32 = 0;
+/// The status code for a still-running save job. The bypass completion watch skips it:
+/// the first post-allow poll result that is NOT this value is the terminal outcome.
+#[cfg(windows)]
+const SL_STATUS_IN_FLIGHT: u32 = 1;
 
 /// Opening bytes of each target as they appear in the 1.16.2 image. Verified identical
 /// in the Ghidra 1.16.2 runtime dump and in `eldenring-deobf.bin` at the same VA
@@ -151,7 +226,7 @@ static SL_RELEASE_REQUEST: AtomicUsize = AtomicUsize::new(0);
 /// The two detours that actually suppress: the submit swallow and the status rewrite.
 /// The quit-settle observer is deliberately NOT one of them -- it changes nothing and a
 /// failure to install it must not read as a partial suppression.
-pub(crate) const SUPPRESSOR_HOOKS: usize = 2;
+pub const SUPPRESSOR_HOOKS: usize = 2;
 
 static ARMED: AtomicUsize = AtomicUsize::new(0);
 static INSTALLED: AtomicUsize = AtomicUsize::new(0);
@@ -163,6 +238,158 @@ static SUBMITS_PASSED_THROUGH: AtomicU64 = AtomicU64::new(0);
 static STATUS_FAKED: AtomicU64 = AtomicU64::new(0);
 static STATUS_PASSED_THROUGH: AtomicU64 = AtomicU64::new(0);
 static RELEASE_UNAVAILABLE: AtomicU64 = AtomicU64::new(0);
+
+// ============================================================================
+// ONE-SHOT BYPASS (save-game-flow WP1). A single-use token that lets exactly one SL
+// save enqueue through to the real trampoline. Armed by the product's Save Game commit
+// path immediately before it fires the forced native request pair; consumed by the
+// FIRST enqueue that arrives afterwards; expired by the product's watchdog if that
+// enqueue never comes, so a stranded token can never leak onto some later native save.
+// ============================================================================
+
+/// 0 = no token, 1 = armed. CAS-only transitions.
+static BYPASS_TOKEN: AtomicUsize = AtomicUsize::new(0);
+/// Set when the token is consumed; tells the status-poll detour to latch the first
+/// terminal (non-in-flight) status of the real, bypassed save.
+static BYPASS_COMPLETION_WATCH: AtomicUsize = AtomicUsize::new(0);
+static BYPASS_ARMED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static BYPASS_ALLOWED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static BYPASS_ALLOWED_FAILED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static BYPASS_EXPIRED_TOTAL: AtomicU64 = AtomicU64::new(0);
+/// Latched terminal status of the last bypassed save (0 = success; see the poll's
+/// jump-table codes). Holds [`BYPASS_FINAL_STATUS_NONE`] until the first capture and is
+/// re-sentineled on every arm, so telemetry always shows the CURRENT commit's outcome.
+static BYPASS_FINAL_STATUS: AtomicU32 = AtomicU32::new(BYPASS_FINAL_STATUS_NONE);
+/// Handshake flag: set with each fresh [`BYPASS_FINAL_STATUS`] capture, consumed by
+/// [`take_bypass_final_status`] so the caller's state machine sees each outcome once
+/// while the latched value itself stays readable for telemetry.
+static BYPASS_FINAL_STATUS_FRESH: AtomicUsize = AtomicUsize::new(0);
+
+/// Sentinel for "no terminal status captured yet".
+pub const BYPASS_FINAL_STATUS_NONE: u32 = 0xffff_ffff;
+
+/// Arm the one-shot bypass: the NEXT SL save enqueue is forwarded for real instead of
+/// swallowed. Returns false (and arms nothing) when suppression is not armed -- with no
+/// swallow in place every save already writes, so a token would be meaningless -- or
+/// when a token is already pending. Logged and published unconditionally: arming is a
+/// rare, user-initiated event.
+pub fn arm_one_save_bypass() -> bool {
+    if !is_armed() {
+        log_message(format_args!(
+            "suppress: bypass arm REFUSED -- suppression is not armed, saves already write natively"
+        ));
+        return false;
+    }
+    match BYPASS_TOKEN.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst) {
+        Ok(_) => {
+            BYPASS_FINAL_STATUS.store(BYPASS_FINAL_STATUS_NONE, Ordering::SeqCst);
+            BYPASS_FINAL_STATUS_FRESH.store(0, Ordering::SeqCst);
+            BYPASS_COMPLETION_WATCH.store(0, Ordering::SeqCst);
+            let count = BYPASS_ARMED_TOTAL.fetch_add(1, Ordering::SeqCst) + 1;
+            log_message(format_args!(
+                "suppress: one-shot bypass ARMED (#{count}) -- the next SL save enqueue will be forwarded for real"
+            ));
+            publish_snapshot();
+            true
+        }
+        Err(_) => {
+            log_message(format_args!(
+                "suppress: bypass arm REFUSED -- a token is already pending"
+            ));
+            false
+        }
+    }
+}
+
+/// True while an armed token has not yet been consumed by an enqueue.
+pub fn bypass_pending() -> bool {
+    BYPASS_TOKEN.load(Ordering::SeqCst) != 0
+}
+
+/// Expire a still-pending token (watchdog path). True if a token was actually revoked.
+/// This is a FAILURE: the user's explicit save request never produced an enqueue, so it
+/// is logged and published unconditionally (noise rule 3).
+pub fn expire_bypass_if_pending() -> bool {
+    if BYPASS_TOKEN
+        .compare_exchange(1, 0, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        BYPASS_COMPLETION_WATCH.store(0, Ordering::SeqCst);
+        let count = BYPASS_EXPIRED_TOTAL.fetch_add(1, Ordering::SeqCst) + 1;
+        log_message(format_args!(
+            "suppress: one-shot bypass EXPIRED unconsumed (#{count}) -- no SL save enqueue arrived; the user's save did NOT happen"
+        ));
+        publish_snapshot();
+        true
+    } else {
+        false
+    }
+}
+
+/// Consume the freshly-captured terminal status of the last bypassed save, if one has
+/// been captured since the last arm. The latched value itself is NOT cleared (telemetry
+/// keeps reporting it); only the freshness handshake is consumed, so a state machine
+/// polling this sees each outcome exactly once.
+pub fn take_bypass_final_status() -> Option<u32> {
+    if BYPASS_FINAL_STATUS_FRESH.swap(0, Ordering::SeqCst) != 0 {
+        Some(BYPASS_FINAL_STATUS.load(Ordering::SeqCst))
+    } else {
+        None
+    }
+}
+
+/// The latched terminal status of the last bypassed save, or
+/// [`BYPASS_FINAL_STATUS_NONE`] when none has been captured. Telemetry accessor.
+pub fn bypass_final_status_raw() -> u32 {
+    BYPASS_FINAL_STATUS.load(Ordering::SeqCst)
+}
+
+/// Bypass counters as (name, value) pairs, for hosts that serialize by iteration.
+pub fn bypass_counters() -> [(&'static str, u64); 5] {
+    [
+        (
+            "save_bypass_armed_total",
+            BYPASS_ARMED_TOTAL.load(Ordering::SeqCst),
+        ),
+        (
+            "save_bypass_allowed_total",
+            BYPASS_ALLOWED_TOTAL.load(Ordering::SeqCst),
+        ),
+        (
+            "save_bypass_allowed_failed_total",
+            BYPASS_ALLOWED_FAILED_TOTAL.load(Ordering::SeqCst),
+        ),
+        (
+            "save_bypass_expired_total",
+            BYPASS_EXPIRED_TOTAL.load(Ordering::SeqCst),
+        ),
+        (
+            "save_bypass_final_status",
+            u64::from(BYPASS_FINAL_STATUS.load(Ordering::SeqCst)),
+        ),
+    ]
+}
+
+/// Times a bypass token was armed.
+pub fn bypass_armed_total() -> u64 {
+    BYPASS_ARMED_TOTAL.load(Ordering::SeqCst)
+}
+
+/// Times a token was consumed and the enqueue forwarded for real.
+pub fn bypass_allowed_total() -> u64 {
+    BYPASS_ALLOWED_TOTAL.load(Ordering::SeqCst)
+}
+
+/// Times a forwarded enqueue could not be submitted (trampoline unset or the native
+/// enqueue itself returned failure).
+pub fn bypass_allowed_failed_total() -> u64 {
+    BYPASS_ALLOWED_FAILED_TOTAL.load(Ordering::SeqCst)
+}
+
+/// Times a pending token was expired unconsumed by the watchdog.
+pub fn bypass_expired_total() -> u64 {
+    BYPASS_EXPIRED_TOTAL.load(Ordering::SeqCst)
+}
 
 /// `GameMan+0xbc4 == 2`: the return-to-title save was submitted and the wait job is
 /// still spinning. This is the ONLY state from which `FUN_14067a980` does anything.
@@ -184,21 +411,23 @@ static QUIT_PHASE_SETTLE_EVENTS: AtomicU64 = AtomicU64::new(0);
 static ORIG_QUIT_PHASE_SETTLE: AtomicUsize = AtomicUsize::new(0);
 
 /// Number of detours actually bound (0 or 2).
-pub(crate) fn installed_hooks() -> usize {
+pub fn installed_hooks() -> usize {
     INSTALLED.load(Ordering::SeqCst)
 }
 
-pub(crate) fn is_armed() -> bool {
+/// True once both suppressor detours are bound and swallowing is active.
+pub fn is_armed() -> bool {
     ARMED.load(Ordering::SeqCst) != 0
 }
 
 /// Whether the quit-settle observer bound. When false, `quit_phase_settle_events` can
 /// only ever be 0, and a harness must not read that as a deadlock.
-pub(crate) fn settle_observer_installed() -> bool {
+pub fn settle_observer_installed() -> bool {
     SETTLE_OBSERVER_INSTALLED.load(Ordering::SeqCst) != 0
 }
 
-pub(crate) fn counters() -> [(&'static str, u64); 8] {
+/// Suppression counters as (name, value) pairs, for hosts that serialize by iteration.
+pub fn counters() -> [(&'static str, u64); 8] {
     [
         (
             "suppress_submits_swallowed",
@@ -236,12 +465,38 @@ pub(crate) fn counters() -> [(&'static str, u64); 8] {
     ]
 }
 
+/// Named accessors for the counters the product telemetry exports individually.
+pub fn submits_swallowed() -> u64 {
+    SUBMITS_SWALLOWED.load(Ordering::SeqCst)
+}
+
+/// Submits that reached the real enqueue while suppression was DISARMED (positive
+/// control) -- distinct from bypass allows, which happen while armed.
+pub fn submits_passed_through() -> u64 {
+    SUBMITS_PASSED_THROUGH.load(Ordering::SeqCst)
+}
+
+/// Polls whose "no request" answer was rewritten to success.
+pub fn status_faked() -> u64 {
+    STATUS_FAKED.load(Ordering::SeqCst)
+}
+
+/// Install-time prologue verification failures (nonzero = wrong game build).
+pub fn prologue_mismatches() -> u64 {
+    PROLOGUE_MISMATCHES.load(Ordering::SeqCst) as u64
+}
+
+/// Quit-to-title settle events observed (the bc4 2 -> 3 transition).
+pub fn settle_events() -> u64 {
+    QUIT_PHASE_SETTLE_EVENTS.load(Ordering::SeqCst)
+}
+
 /// Decide what a poll should report.
 ///
 /// Split out as a pure function so the one rule that matters -- *only ever rewrite the
 /// "no request" code, and only after we have actually swallowed something* -- is unit
 /// testable on the host, with no game and no hooking involved.
-pub(crate) fn decide_status(raw: u32, armed: bool, swallowed: u64) -> u32 {
+fn decide_status(raw: u32, armed: bool, swallowed: u64) -> u32 {
     if armed && swallowed > 0 && raw == SL_STATUS_NO_REQUEST {
         SL_STATUS_SUCCESS
     } else {
@@ -253,7 +508,7 @@ pub(crate) fn decide_status(raw: u32, armed: bool, swallowed: u64) -> u32 {
 ///
 /// Kept separate from the hooking code for the same reason: an address guard that is
 /// itself unverified would be decoration.
-pub(crate) fn prologue_matches(actual: &[u8], expected: &[u8]) -> bool {
+fn prologue_matches(actual: &[u8], expected: &[u8]) -> bool {
     actual.len() >= expected.len() && &actual[..expected.len()] == expected
 }
 
@@ -275,14 +530,14 @@ pub(crate) fn prologue_matches(actual: &[u8], expected: &[u8]) -> bool {
 /// The rule keeps the first occurrence, then only exponentially spaced milestones, so N
 /// repeats cost O(log N) lines while the magnitude stays visible. `novel` overrides it --
 /// a genuinely new *kind* of event is always worth a line however late it shows up.
-pub(crate) fn should_report(count: u64, novel: bool) -> bool {
+fn should_report(count: u64, novel: bool) -> bool {
     novel || count.is_power_of_two()
 }
 
 /// Opcodes already seen at the choke point, as a bitmask.
 ///
 /// A save opcode never seen before means a different *kind* of save funnelled through,
-/// which is exactly the sort of thing this DLL exists to discover -- so it is reported
+/// which is exactly the sort of thing this crate exists to discover -- so it is reported
 /// however many identical saves preceded it. Bit 63 is a catch-all for opcode >= 63:
 /// every opcode observed so far is 0, and a dense high opcode space would otherwise
 /// need a wider structure for no benefit.
@@ -327,18 +582,21 @@ fn verify(rva: usize, expected: &[u8], name: &str) -> Option<usize> {
 
 /// Install the suppression detours. Returns the number bound.
 ///
+/// `disarm_for_census` is the standalone DLL's positive-control lever: true skips the
+/// install entirely (saves write normally so the census can observe them). The env-var
+/// consultation that used to live here moved OUT to that caller -- the product passes
+/// `false` unconditionally, so no env var can alter product behavior.
+///
 /// All-or-nothing on purpose. Binding only the submit detour would leave every save
 /// stuck reporting "no request" and hang System->Quit on the `bc4 == 3` wait; binding
 /// only the status detour would rewrite statuses for saves that really happened. A
 /// partial install is worse than none, so a failure of either backs the whole thing out.
 #[cfg(windows)]
-pub(crate) fn install() -> usize {
-    if crate::census_only_requested() {
+pub fn install(disarm_for_census: bool) -> usize {
+    if disarm_for_census {
         log_message(format_args!(
-            "suppress: DISARMED by {} -- census-only positive-control run; saves will be \
-             written normally and path diversion is off too, so the census must observe \
-             them",
-            crate::CENSUS_ONLY_ENV
+            "suppress: DISARMED by caller -- census-only positive-control run; saves will \
+             be written normally so the census must observe them"
         ));
         return 0;
     }
@@ -467,13 +725,17 @@ pub(crate) fn install() -> usize {
 /// Detour on `FUN_140e6fb50`.
 ///
 /// The caller has already allocated an `SLSaveContent` into `iodev+0x10` and filled it
-/// with the serialized blocks. We do not enqueue it. We hand it straight to the game's
-/// own teardown -- the exact call the native code makes when the enqueue fails -- and
-/// then report success, which is the one thing the native failure path does not do.
+/// with the serialized blocks. Default (no token): we do not enqueue it. We hand it
+/// straight to the game's own teardown -- the exact call the native code makes when the
+/// enqueue fails -- and then report success, which is the one thing the native failure
+/// path does not do. With a bypass token armed: the FIRST enqueue consumes the token
+/// and is forwarded to the real trampoline, so the game performs a genuine submit and a
+/// genuine write; the completion watch then tells the poll detour to latch the outcome.
 ///
-/// Releasing through `FUN_140e6f200` is not optional: leaving `iodev+0x10` populated
-/// would permanently fail the `iodev+0x10 == 0 && iodev+0x20 == 0` precondition on
-/// every later submit, and would leave the status poll dereferencing a null job.
+/// Releasing through `FUN_140e6f200` is not optional on the swallow path: leaving
+/// `iodev+0x10` populated would permanently fail the `iodev+0x10 == 0 && iodev+0x20 == 0`
+/// precondition on every later submit, and would leave the status poll dereferencing a
+/// null job.
 #[cfg(windows)]
 unsafe extern "system" fn enqueue_save_job_hook(iodev: usize, opcode: u32) -> u8 {
     if !is_armed() {
@@ -495,6 +757,45 @@ unsafe extern "system" fn enqueue_save_job_hook(iodev: usize, opcode: u32) -> u8
         }
         let original: EnqueueSaveJobFn = unsafe { core::mem::transmute(orig) };
         return unsafe { original(iodev, opcode) };
+    }
+
+    // ONE-SHOT BYPASS: consume a pending token and forward this submit for REAL. This
+    // is the sanctioned Save Game write -- the only save that is allowed to reach disk.
+    // Logged and published unconditionally: it is a rare, user-initiated event, and
+    // its failure modes must never be quieter than its success (noise rule 3).
+    if BYPASS_TOKEN
+        .compare_exchange(1, 0, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        BYPASS_COMPLETION_WATCH.store(1, Ordering::SeqCst);
+        let count = BYPASS_ALLOWED_TOTAL.fetch_add(1, Ordering::SeqCst) + 1;
+        let orig = ORIG_ENQUEUE_SAVE_JOB.load(Ordering::SeqCst);
+        if orig == 0 {
+            // Unreachable via `install` (armed implies the trampoline bound); kept loud
+            // because this exact path failing silently would eat the user's one save.
+            BYPASS_ALLOWED_FAILED_TOTAL.fetch_add(1, Ordering::SeqCst);
+            log_message(format_args!(
+                "suppress: BUG -- bypass allow #{count} with enqueue trampoline unset; \
+                 the user's save was NOT submitted"
+            ));
+            publish_snapshot();
+            return 0;
+        }
+        log_message(format_args!(
+            "suppress: bypass ALLOW #{count} -- forwarding save submit for real \
+             (iodev=0x{iodev:x}, opcode={opcode}); this is the user's explicit Save Game write"
+        ));
+        let original: EnqueueSaveJobFn = unsafe { core::mem::transmute(orig) };
+        let submitted = unsafe { original(iodev, opcode) };
+        if submitted == 0 {
+            let failed = BYPASS_ALLOWED_FAILED_TOTAL.fetch_add(1, Ordering::SeqCst) + 1;
+            log_message(format_args!(
+                "suppress: bypass allow #{count} FAILED -- native enqueue returned 0 \
+                 (failure #{failed}); the user's save was NOT submitted"
+            ));
+        }
+        publish_snapshot();
+        return submitted;
     }
 
     let release = SL_RELEASE_REQUEST.load(Ordering::SeqCst);
@@ -536,24 +837,12 @@ unsafe extern "system" fn enqueue_save_job_hook(iodev: usize, opcode: u32) -> u8
         // re-serialize, `fs::write` and `fs::rename` on the GAME thread for every save
         // request -- this detours `FUN_140e6fb50`, whose callers are the per-frame
         // dispatchers, strictly above the `FUN_14240ae10` worker boundary -- and each of
-        // those re-enters this DLL's own CreateFileW/MoveFileW detours. Every counter a
+        // those can re-enter the host DLL's own file-API detours. Every counter a
         // harness gates on is a threshold, and a threshold is crossed on the first
         // occurrence, which is always published.
         publish_snapshot();
     }
     1
-}
-
-/// Write the telemetry snapshot from a caller that is NOT already inside the census
-/// reentrancy guard.
-///
-/// The suppression hooks are not observation paths, so they enter with the guard clear;
-/// taking it here keeps `telemetry::write_snapshot`'s documented invariant -- that its
-/// own file I/O cannot recurse into the census -- true for every caller rather than
-/// true for some and merely-harmless for the rest.
-#[cfg(windows)]
-fn publish_snapshot() {
-    let _ = crate::witness::with_guard(crate::telemetry::write_snapshot);
 }
 
 /// Detour on `FUN_140e6e430`.
@@ -563,6 +852,11 @@ fn publish_snapshot() {
 /// the `iodev+0x10 == 0` early-out. Any genuinely outstanding IO -- a save we did not
 /// swallow, or a load, which lives in `iodev+0x18` -- cannot produce it, so it cannot
 /// be lied about.
+///
+/// Bypass completion watch: after a token-forwarded submit, the first poll answer that
+/// is not "in flight" is the real save's terminal outcome; latch it for the caller.
+/// `decide_status` itself is untouched -- a real in-flight save returns 0/1/2/7/8/9,
+/// none of which the structural 4-only rewrite ever touches.
 #[cfg(windows)]
 unsafe extern "system" fn poll_save_status_hook(iodev: usize) -> u32 {
     let orig = ORIG_POLL_SAVE_STATUS.load(Ordering::SeqCst);
@@ -571,6 +865,16 @@ unsafe extern "system" fn poll_save_status_hook(iodev: usize) -> u32 {
     }
     let original: PollSaveStatusFn = unsafe { core::mem::transmute(orig) };
     let raw = unsafe { original(iodev) };
+
+    if BYPASS_COMPLETION_WATCH.load(Ordering::SeqCst) != 0 && raw != SL_STATUS_IN_FLIGHT {
+        BYPASS_COMPLETION_WATCH.store(0, Ordering::SeqCst);
+        BYPASS_FINAL_STATUS.store(raw, Ordering::SeqCst);
+        BYPASS_FINAL_STATUS_FRESH.store(1, Ordering::SeqCst);
+        log_message(format_args!(
+            "suppress: bypassed save terminal status={raw} (0=success)"
+        ));
+        publish_snapshot();
+    }
 
     let decided = decide_status(raw, is_armed(), SUBMITS_SWALLOWED.load(Ordering::SeqCst));
     if decided == raw {
@@ -680,7 +984,7 @@ mod tests {
     #[test]
     fn nothing_is_rewritten_before_the_first_swallow() {
         // Until we have actually suppressed something there is no fake success to
-        // report, and the DLL must be inert.
+        // report, and the suppression must be inert.
         assert_eq!(
             decide_status(SL_STATUS_NO_REQUEST, true, 0),
             SL_STATUS_NO_REQUEST
@@ -741,7 +1045,7 @@ mod tests {
     #[test]
     fn a_novel_event_is_reported_however_late_it_appears() {
         // A save opcode never seen before is a different KIND of save reaching the
-        // choke point -- exactly what this DLL exists to discover. Throttling must
+        // choke point -- exactly what the census exists to discover. Throttling must
         // never be able to hide one.
         assert!(should_report(9_999, true));
         assert!(!should_report(9_999, false));
@@ -786,5 +1090,50 @@ mod tests {
         assert!(SL_ENQUEUE_SAVE_JOB_SIG.len() >= 16);
         assert!(SL_POLL_SAVE_STATUS_SIG.len() >= 16);
         assert!(SL_RELEASE_REQUEST_SIG.len() >= 16);
+    }
+
+    #[test]
+    fn bypass_token_lifecycle() {
+        // ONE serial test on purpose: the bypass statics are process-global and the
+        // test harness runs tests concurrently; splitting these assertions across
+        // tests would race. No other test touches ARMED or the bypass statics.
+        ARMED.store(1, Ordering::SeqCst);
+        assert!(!bypass_pending());
+
+        // Arm; a second arm while pending is refused.
+        assert!(arm_one_save_bypass());
+        assert!(bypass_pending());
+        assert!(!arm_one_save_bypass());
+        assert_eq!(BYPASS_ARMED_TOTAL.load(Ordering::SeqCst), 1);
+        // Arming re-sentinels the final status for the new commit cycle.
+        assert_eq!(bypass_final_status_raw(), BYPASS_FINAL_STATUS_NONE);
+        assert_eq!(take_bypass_final_status(), None);
+
+        // Consume as the enqueue hook does; then expiring finds nothing pending.
+        assert!(
+            BYPASS_TOKEN
+                .compare_exchange(1, 0, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        );
+        assert!(!bypass_pending());
+        assert!(!expire_bypass_if_pending());
+
+        // Terminal-status handshake: fresh exactly once, latched value persists.
+        BYPASS_FINAL_STATUS.store(0, Ordering::SeqCst);
+        BYPASS_FINAL_STATUS_FRESH.store(1, Ordering::SeqCst);
+        assert_eq!(take_bypass_final_status(), Some(0));
+        assert_eq!(take_bypass_final_status(), None);
+        assert_eq!(bypass_final_status_raw(), 0);
+
+        // A stranded token is expired by the watchdog path.
+        assert!(arm_one_save_bypass());
+        assert!(expire_bypass_if_pending());
+        assert!(!bypass_pending());
+        assert_eq!(BYPASS_EXPIRED_TOTAL.load(Ordering::SeqCst), 1);
+
+        // Disarmed suppression refuses to arm a token at all.
+        ARMED.store(0, Ordering::SeqCst);
+        assert!(!arm_one_save_bypass());
+        assert_eq!(BYPASS_ARMED_TOTAL.load(Ordering::SeqCst), 2);
     }
 }

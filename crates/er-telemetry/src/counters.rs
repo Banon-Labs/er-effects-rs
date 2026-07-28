@@ -1299,3 +1299,21 @@ pub static DINPUT_MOUSE_GET_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub static DINPUT_KB_ALSO_MOUSE: AtomicBool = AtomicBool::new(false);
 pub static SIMULATED_INPUT_PRESSES_TOTAL: AtomicUsize = AtomicUsize::new(0);
 pub static AUTOLOAD_HANDOFF_PARENT_STATE_FIX_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+// ---- save-flow (System->Quit "Save Game" close-then-fire commit; save-game-flow WP1) ----
+/// Save-flow stage machine value, exported as `oracle_save_flow_stage`. Stage map:
+/// 0 IDLE, 1 BOX1_WAIT (WP2), 2 BOX2_WAIT (WP2), 3 DEST_BROWSE (WP3), 4 BOX3_WAIT (WP3),
+/// 5 CLOSING_ABORT (WP2), 6 CLOSING_COMMIT, 7 FIRE_GATE_WAIT, 8 COMMIT_WAIT.
+pub static SAVE_FLOW_STAGE: AtomicUsize = AtomicUsize::new(0);
+/// Game-task ticks spent in the CURRENT save-flow stage (reset on every transition; drives
+/// the stage-7 fire-gate timeout and the stage-8 commit watchdog).
+pub static SAVE_FLOW_STAGE_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// The System/Quit tab PropertyEditDialog captured at the Save Game row press (diagnostic
+/// correlation pointer; WP2/WP3 reuse it as the confirm-box submit context).
+pub static SAVE_FLOW_DIALOG: AtomicUsize = AtomicUsize::new(0);
+/// Times the stage-7 fire gate found the CSMenuMan[+0x80] +0x290/+0x298 failure latch set.
+/// Latched means SaveRequest_Profile's gate fails PERMANENTLY for the session, so the flow
+/// aborts instead of firing (exported as `oracle_save_flow_gate_latch_blocked`).
+pub static SAVE_FLOW_GATE_LATCH_BLOCKED_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Completed Save Game commits: the bypassed save reported terminal status 0 (success).
+pub static SAVE_FLOW_COMMIT_COMPLETE_COUNT: AtomicUsize = AtomicUsize::new(0);

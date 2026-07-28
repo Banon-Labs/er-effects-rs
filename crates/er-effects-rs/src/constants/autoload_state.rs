@@ -689,10 +689,49 @@ pub(crate) const SYSTEM_QUIT_FIRST_ROW_LINEHELP_ID: i32 = 110500;
 pub(crate) const SYSTEM_QUIT_SECOND_ROW_MENU_TEXT_ID: i32 = 110511;
 pub(crate) const SYSTEM_QUIT_SECOND_ROW_LINEHELP_ID: i32 = 110501;
 pub(crate) const SYSTEM_QUIT_SAVE_GAME_DIALOG_ID: i32 = 110000;
-/// Native save-only routines: `SaveRequest_Profile(true)` and `RequestSave(true)`. Distinct from
+/// Native save-only routines: `SaveRequest_Profile(bool)` and `RequestSave(bool)`. Distinct from
 /// `FUN_14067a490`, which requests save AND sets return-title teardown state.
+///
+/// Bool PINNED via the 1.16.2 Ghidra decompile (2026-07-28): the parameter is `throttled`.
+/// `RequestSave(true)` runs a 60-second throttle against `GameMan+0xb98` (last game-save
+/// DLDateTime, +60 window) with an early `return` that sets NOTHING; `false` skips the throttle
+/// and always sets `+0xb73` (plus `+0xb72` iff `saveSlot != -1`), gated only on the suppression
+/// global. `SaveRequest_Profile` has the same shape (gate `FUN_14080d570` first, throttle vs
+/// `+0xb88` `SetSeconds(0x3c)`).
 pub(crate) const SYSTEM_QUIT_SAVE_REQUEST_PROFILE_RVA: u32 = 0x67a420;
 pub(crate) const SYSTEM_QUIT_REQUEST_SAVE_RVA: u32 = 0x67a520;
+// ---- SAVE-FLOW state machine (save-game-flow WP1, 2026-07-28) ----
+// The Save Game row is CLOSE-THEN-FIRE: the row press stages a commit (stage 6), the proven
+// close sequence runs, and only with menus closed + RAM gates green does the tick arm the
+// one-shot er-save-suppress bypass and fire the FORCED (throttle-skipping) request pair.
+// Full stage map lives on `er_telemetry::counters::SAVE_FLOW_STAGE`; stages 1-5 are the
+// WP2/WP3 confirm-box and destination-browser stages, not yet reachable.
+pub(crate) const SAVE_FLOW_STAGE_IDLE: usize = 0;
+pub(crate) const SAVE_FLOW_STAGE_CLOSING_COMMIT: usize = 6;
+pub(crate) const SAVE_FLOW_STAGE_FIRE_GATE_WAIT: usize = 7;
+pub(crate) const SAVE_FLOW_STAGE_COMMIT_WAIT: usize = 8;
+/// Stage-7 fire-gate timeout (~10 s at 60 game-task ticks/s): if the RAM gates never go
+/// green the flow aborts WITHOUT firing (the bypass token is only armed at the green edge,
+/// so nothing is left armed).
+pub(crate) const SAVE_FLOW_FIRE_GATE_TIMEOUT_TICKS: usize = 600;
+/// Stage-8 commit watchdog (~15 s): a fired request whose enqueue/terminal status never
+/// arrives expires the still-pending bypass token so it can never leak onto a later
+/// native save.
+pub(crate) const SAVE_BYPASS_WATCHDOG_TICKS: usize = 900;
+/// `CSMenuMan+0x80` -> the save-gate sub-object read by `FUN_14080d660` /
+/// `SaveRequest_Profile`'s gate `FUN_14080d570`: the gate fails PERMANENTLY for the session
+/// while the `+0x290` byte or `+0x298` qword is latched nonzero (same fields the switch-2
+/// save-freeze diagnostic `system_quit_log_save_gates` reads inline).
+pub(crate) const CS_MENU_MAN_SAVE_GATE_SUB_80_OFFSET: usize = 0x80;
+pub(crate) const CS_MENU_MAN_SAVE_GATE_LATCH_290_OFFSET: usize = 0x290;
+pub(crate) const CS_MENU_MAN_SAVE_GATE_LATCH_298_OFFSET: usize = 0x298;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_COMMIT_COMPLETE_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_DIALOG;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_GATE_LATCH_BLOCKED_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_STAGE;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_STAGE_TICKS;
+/// One-shot spawn guard for the boot-time er-save-suppress install thread (bootstrap.rs).
+pub(crate) static START_SAVE_SUPPRESS: Once = Once::new();
 /// `MenuHelpLabelComponent` contains two `MenuString` objects: visible label at +0, help at +0x38.
 pub(crate) const MENU_HELP_LABEL_HELP_OFFSET: usize = 0x38;
 pub(crate) const MENU_HELP_LABEL_SIZE: usize = 0x70;
