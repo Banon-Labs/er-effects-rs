@@ -147,7 +147,54 @@ def evaluate(telemetry: dict[str, Any] | None, diff: dict[str, Any] | None) -> t
         )
         return True, "PASS -- census captured the save call sites", reasons
 
-    # Suppression build: both oracles must be clean.
+    # Suppression build. "Nothing was written" is only evidence if the game actually
+    # tried to save -- otherwise the run passes vacuously, which is the exact trap a
+    # naive driven quit falls into (it returns to title without ever requesting a save).
+    # The DLL counts every submit it swallowed, so that count is the proof of work.
+    armed = telemetry.get("suppression_armed", False)
+    supp_installed = telemetry.get("suppression_hooks_installed", 0)
+    supp_expected = telemetry.get("suppression_hooks_expected", 0)
+    swallowed = telemetry.get("suppress_submits_swallowed", 0)
+    faked = telemetry.get("suppress_status_faked", 0)
+    passed_through = telemetry.get("suppress_submits_passed_through", 0)
+
+    if not armed or supp_installed < supp_expected:
+        return (
+            False,
+            "FAIL -- suppression never armed",
+            reasons
+            + [
+                f"suppression_armed={armed}, hooks {supp_installed}/{supp_expected}. "
+                "A partial or absent install is refused by the DLL because half of it "
+                "would hang System->Quit on the bc4==3 wait. Check er-save-disable.log "
+                "for a prologue mismatch, which means these addresses are not this build."
+            ],
+        )
+
+    if passed_through:
+        reasons.append(
+            f"{passed_through} save submit(s) were passed through to the game unsuppressed."
+        )
+
+    if not swallowed:
+        return (
+            False,
+            "INCONCLUSIVE -- no save was ever attempted",
+            reasons
+            + [
+                "Suppression was armed but swallowed zero submits, so the game never "
+                "requested a save during this run. An unchanged save file proves nothing "
+                "here. Trigger a real save -- play for a minute and quit to title, which "
+                "normally rewrites USER_DATA000/010/011 -- and re-run.",
+            ],
+        )
+
+    reasons.append(
+        f"Suppression swallowed {swallowed} save submit(s) and reported success "
+        f"{faked} time(s); no write job was ever enqueued."
+    )
+
+    # Both oracles must be clean.
     if census_saw_writes:
         reasons.append(f"{len(escaped)} save-write call site(s) escaped suppression:")
         for site in escaped:
@@ -180,8 +227,22 @@ def selftest() -> int:
         "escaped_write_sites": [census_site],
     }
     blind_census = dict(full_census, escaped_write_sites=[])
-    suppressing = dict(full_census, phase="suppress", escaped_write_sites=[])
-    leaking = dict(full_census, phase="suppress")
+    armed = {
+        "phase": "suppress+census",
+        "census_hooks_installed": 6,
+        "census_hooks_expected": 6,
+        "suppression_armed": True,
+        "suppression_hooks_installed": 2,
+        "suppression_hooks_expected": 2,
+        "suppress_submits_swallowed": 3,
+        "suppress_status_faked": 3,
+        "suppress_submits_passed_through": 0,
+        "escaped_write_sites": [],
+    }
+    suppressing = armed
+    leaking = dict(armed, escaped_write_sites=[census_site])
+    never_saved = dict(armed, suppress_submits_swallowed=0, suppress_status_faked=0)
+    not_armed = dict(armed, suppression_armed=False, suppression_hooks_installed=0)
     dirty = {"clean": False, "content_changes": [{"path": "ER0000.sl2", "reason": "contents changed"}], "mtime_only_changes": []}
     cleanfile = {"clean": True, "content_changes": [], "mtime_only_changes": []}
 
@@ -194,6 +255,10 @@ def selftest() -> int:
     check("suppression holding", suppressing, cleanfile, True, "fully suppressed")
     check("suppression leaking", leaking, cleanfile, False, "not fully suppressed")
     check("suppression clean census but file changed", suppressing, dirty, False, "blind spot")
+    # The vacuous pass this checker exists to refuse: armed, nothing written -- because
+    # nothing was ever saved.
+    check("armed but no save attempted", never_saved, cleanfile, False, "inconclusive")
+    check("suppression never armed", not_armed, cleanfile, False, "never armed")
 
     # A census-only run must never be reported as suppression working.
     _, verdict, _ = evaluate(full_census, dirty)
