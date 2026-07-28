@@ -129,12 +129,36 @@ def evaluate(telemetry: dict[str, Any] | None, diff: dict[str, Any] | None) -> t
             reasons + ["Could not compute the before/after save-file diff."],
         )
 
-    file_changed = not diff.get("clean", False)
+    # Scope the question to SAVE data. The witness also watches GraphicsConfig.xml so a
+    # run cannot silently miss a settings write, but that file is written by a path with
+    # no relationship to the save containers -- it moves on its own schedule and neither
+    # the census (which filters to .sl2/.co2/ER0000) nor save suppression touches it.
+    # Counting it as "the save changed" made every run fail as a census blind spot.
+    SAVE_KINDS = {"save-data", "save-companion"}
+
+    def save_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [e for e in entries if e.get("kind", "save-data") in SAVE_KINDS]
+
+    save_content = save_entries(diff.get("content_changes", []))
+    save_mtime = save_entries(diff.get("mtime_only_changes", []))
+    other_changed = [
+        e
+        for e in diff.get("content_changes", []) + diff.get("mtime_only_changes", [])
+        if e.get("kind", "save-data") not in SAVE_KINDS
+    ]
+
+    file_changed = bool(save_content or save_mtime)
     census_saw_writes = bool(escaped)
+
+    for entry in other_changed:
+        reasons.append(
+            f"note: non-save file moved ({entry.get('kind')}): "
+            f"{entry['path']}: {entry['reason']} -- not a save write, not counted."
+        )
 
     # The contradiction that matters most: bytes landed but nothing was observed.
     if file_changed and not census_saw_writes:
-        changed = diff.get("content_changes", []) + diff.get("mtime_only_changes", [])
+        changed = save_content + save_mtime
         reasons.append(
             "COVERAGE GAP: the save file changed on disk but the census recorded zero "
             "write sites. The game reached the filesystem by a route the census does "
@@ -320,6 +344,15 @@ def selftest() -> int:
         ],
         "mtime_only_changes": [],
     }
+    # Real shape seen on every run: the save containers never move, but the game
+    # rewrites GraphicsConfig.xml with identical bytes. That must not read as a save.
+    settings_only = {
+        "clean": False,
+        "content_changes": [],
+        "mtime_only_changes": [
+            {"path": "GraphicsConfig.xml", "kind": "settings", "reason": "identical bytes rewritten (mtime moved)"}
+        ],
+    }
 
     check("missing telemetry", None, cleanfile, False, "no in-process census")
     check("missing diff", full_census, None, False, "no offline witness")
@@ -340,6 +373,10 @@ def selftest() -> int:
     # nothing was ever saved.
     check("armed but no save attempted", never_saved, cleanfile, False, "inconclusive")
     check("suppression never armed", not_armed, cleanfile, False, "never armed")
+    # A settings-file rewrite alongside a clean save must still pass, and must NOT be
+    # mistaken for a census blind spot.
+    check("settings moved, saves clean", suppressing, settings_only, True, "fully suppressed")
+    check("settings moved, census run", full_census, settings_only, True, "census captured")
 
     # A census-only run must never be reported as suppression working.
     _, verdict, _ = evaluate(full_census, dirty)
