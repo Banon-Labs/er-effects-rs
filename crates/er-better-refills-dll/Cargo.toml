@@ -1,0 +1,18 @@
+[package]
+name = "er-better-refills-dll"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_better_refills"
+crate-type = ["cdylib"]
+
+# Standalone storage-box refill improvement DLL. It intentionally delegates item
+# eligibility, stack limits, destination capacity, and storage mutation to the
+# game's own 1.16.2 refill code instead of reimplementing inventory math.
+[dependencies]
+er-game-base = { path = "../er-game-base" }
+
+[target.'cfg(windows)'.dependencies]
+er-hook = { path = "../er-hook" }
