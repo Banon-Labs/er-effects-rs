@@ -9,7 +9,23 @@
 set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-GAME_DIR="${GAME_DIR:-/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game}"
+
+default_game_dir() {
+	local candidate
+	for candidate in \
+		"$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game" \
+		"/mnt/d/Steam/steamapps/common/ELDEN RING/Game" \
+		"/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game" \
+		"/mnt/c/Program Files (x86)/Steam/steamapps/common/ELDEN RING/Game"; do
+		[[ -f "$candidate/eldenring.exe" ]] && {
+			printf '%s\n' "$candidate"
+			return 0
+		}
+	done
+	printf '%s\n' "$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game"
+}
+
+GAME_DIR="${GAME_DIR:-$(default_game_dir)}"
 # shellcheck source=scripts/me3-launch-lib.sh
 # shellcheck disable=SC1091
 source "$REPO_ROOT/scripts/me3-launch-lib.sh"
