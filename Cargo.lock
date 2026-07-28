@@ -2831,14 +2831,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "er-menu-sort"
-version = "0.1.0"
-dependencies = [
- "eldenring",
- "fromsoftware-shared",
-]
-
-[[package]]
 name = "er-net-effects-dll"
 version = "0.1.0"
 dependencies = [
