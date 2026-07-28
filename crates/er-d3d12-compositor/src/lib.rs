@@ -62,6 +62,26 @@ pub struct CompositorFrame {
     pub dst_y: usize,
 }
 
+impl CompositorFrame {
+    /// Explicit no-draw frame. Providers use this before their semantic
+    /// on-screen gate opens; it is not a compositor failure.
+    pub fn hidden() -> Self {
+        Self {
+            rgba: RgbaFrame {
+                width: 0,
+                height: 0,
+                pixels: Vec::new(),
+            },
+            dst_x: 0,
+            dst_y: 0,
+        }
+    }
+
+    fn is_hidden(&self) -> bool {
+        self.rgba.width == 0 || self.rgba.height == 0 || self.rgba.pixels.is_empty()
+    }
+}
+
 /// Render a frame for the current backbuffer.
 ///
 /// Arguments are `(backbuffer_width, backbuffer_height, present_frame_index)`.
@@ -362,12 +382,14 @@ unsafe fn draw_loading_bar_on_swapchain(this: *mut c_void, frame_index: usize) {
             ));
         }
     } else {
-        let n = DRAW_FAILS.fetch_add(1, Ordering::SeqCst) + 1;
-        if n <= 8 || n.is_power_of_two() {
-            log(format_args!(
-                "loading-bar-present: draw failed count={n} code={}",
-                LAST_FAIL_CODE.load(Ordering::SeqCst)
-            ));
+        let code = LAST_FAIL_CODE.load(Ordering::SeqCst);
+        if code != 0 {
+            let n = DRAW_FAILS.fetch_add(1, Ordering::SeqCst) + 1;
+            if n <= 8 || n.is_power_of_two() {
+                log(format_args!(
+                    "loading-bar-present: draw failed count={n} code={code}"
+                ));
+            }
         }
     }
 }
@@ -405,6 +427,10 @@ unsafe fn draw_loading_bar_on_swapchain_inner(this: *mut c_void, frame_index: us
     }
     note_backbuffer_size(bb_w, bb_h);
     let frame = provider_frame(bb_w, bb_h, frame_index);
+    if frame.is_hidden() {
+        LAST_FAIL_CODE.store(0, Ordering::SeqCst);
+        return false;
+    }
     if frame.dst_x > bb_w
         || frame.dst_y > bb_h
         || frame.rgba.width > bb_w.saturating_sub(frame.dst_x)

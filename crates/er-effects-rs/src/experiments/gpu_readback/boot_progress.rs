@@ -120,6 +120,10 @@ pub(crate) use er_telemetry::counters::BOOT_VIEW_UPLOAD;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_UPLOAD_SIZE;
 /// Creep timing epoch + the epoch-ms when the milestone index last advanced.
 static BOOT_VIEW_EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+/// First-load latch: the initial game boot-to-title native loading-screen counters are sticky. Do not
+/// let those stale "already reached 100%" semaphores drive the user-started load bar.
+static BOOT_VIEW_FIRST_LOAD_REQUEST_REARMED: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 pub(crate) use er_telemetry::counters::BOOT_VIEW_IDX_CHANGED_MS;
 
 /// Optional, pre-decoded local screenshot background. This is intentionally disk-only: the DLL never
@@ -323,9 +327,10 @@ fn boot_milestone_reached(idx: usize) -> bool {
                 || TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0
                 || LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) != 0
         }
-        // World-load phases: the native loading screen carries these (see boot_world_phase_reached), so
-        // they assert even on the menu-free autoload where the profile table never builds.
-        8 | 9 | 10 | 11 => boot_world_phase_reached(idx),
+        // World-load phases: the native loading screen carries these (see boot_world_phase_reached), but
+        // the initial boot-to-title loading screen is not the user-started save-load flow. Gate these on a
+        // real Continue/load request so the bar cannot sit at 100% before the user starts loading.
+        8 | 9 | 10 | 11 => boot_view_load_flow_requested() && boot_world_phase_reached(idx),
         _ => false,
     }
 }
@@ -368,6 +373,48 @@ fn boot_view_cover_release_ready(can_move_handoff: bool) -> bool {
                 || LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst) >= 998))
 }
 
+fn boot_view_load_flow_requested() -> bool {
+    BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0
+        || SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
+        || TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0
+        || OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst)
+        || OWN_LOAD_FORCED_CONTINUE_HANDOFF_MS.load(Ordering::SeqCst) != 0
+        || TFC_FORCED_CONTINUE_HANDOFF_MS.load(Ordering::SeqCst) != 0
+        || SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) != 0
+        || LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) != 0
+}
+
+fn boot_view_rearm_for_first_load_request_if_needed() {
+    if BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0
+        || !boot_view_load_flow_requested()
+        || BOOT_VIEW_FIRST_LOAD_REQUEST_REARMED
+            .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+    {
+        return;
+    }
+    BOOT_VIEW_STOPPED.store(0, Ordering::SeqCst);
+    BOOT_VIEW_REACHED_MASK.store(1, Ordering::SeqCst);
+    BOOT_VIEW_MILESTONE_IDX.store(0, Ordering::SeqCst);
+    BOOT_VIEW_LAST_PERMILLE.store(0, Ordering::SeqCst);
+    BOOT_VIEW_DRAWN_PERMILLE.store(usize::MAX, Ordering::SeqCst);
+    BOOT_VIEW_DRAWN_IDX.store(usize::MAX, Ordering::SeqCst);
+    BOOT_VIEW_DRAWN_BG_ACTIVE.store(usize::MAX, Ordering::SeqCst);
+    BOOT_VIEW_IDX_CHANGED_MS.store(boot_view_epoch_ms(), Ordering::SeqCst);
+    BOOT_VIEW_HANDOFF_SEEN_MS.store(0, Ordering::SeqCst);
+    BOOT_VIEW_HANDOFF_NATIVE_HITS_BASELINE.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_UPDATE_HITS.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_BAR_PROGRESS_PERMILLE.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_BAR_CURRENT_FRAME.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_BAR_MAX_FRAME.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_CLOSE_SENT_HITS.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_CLOSE_SENT.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_UPDATE_LAST_MS.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_CLOSE_SENT_FIRST_MS.store(0, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "boot-view: first load request rearmed; cleared boot-to-title native loading semaphores"
+    ));
+}
 
 /// Compute the current (milestone idx, displayed permille). Latches newly reached milestones into the
 /// monotonic mask, stamps idx-change time for the creep, and never lets the displayed value decrease.
@@ -434,6 +481,7 @@ pub(crate) fn rearm_boot_progress_for_own_menu_load(selected_slot: i32, source: 
 }
 
 fn boot_view_progress() -> (usize, usize) {
+    boot_view_rearm_for_first_load_request_if_needed();
     let mut mask = BOOT_VIEW_REACHED_MASK.load(Ordering::SeqCst);
     for i in 0..BOOT_VIEW_MILESTONE_LABELS.len() {
         if mask & (1 << i) == 0 && boot_milestone_reached(i) {
