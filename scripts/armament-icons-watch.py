@@ -18,31 +18,60 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import shutil
+import signal
 import subprocess
 import threading
 import time
 from pathlib import Path
 
 POLL_SECONDS = 2.0
+
+# Process boundary for this box (same philosophy as scripts/detect-proc.py): WSL interop
+# sees the game via tasklist.exe; native Linux (CachyOS + Linux Steam/Proton) sees it in
+# /proc. me3 image names differ per platform too (Windows me3.exe/me3-launcher.exe vs the
+# native Linux `me3` binary).
+IS_WSL = shutil.which("tasklist.exe") is not None
+ME3_IMAGES = ("me3.exe", "me3-launcher.exe") if IS_WSL else ("me3",)
 KILL_VERIFY_SECONDS = 2.0
 # Never set: `.wait(n)` paces the poll loop as an interruptible bounded wait (the repo's
 # watcher idiom, e.g. capture-samechar-3x.py), not a raw time.sleep.
 _POLL_WAIT = threading.Event()
 
 
-def win_pids_for(image: str) -> set[int]:
-    try:
-        out = subprocess.run(
-            ["tasklist.exe", "/FI", f"IMAGENAME eq {image}", "/FO", "CSV", "/NH"],
-            text=True, capture_output=True, timeout=15,
-        ).stdout
-    except Exception:
-        return set()
-    pids: set[int] = set()
-    for row in csv.reader(out.splitlines()):
-        if len(row) > 1 and row[1].isdigit():
-            pids.add(int(row[1]))
+def pids_for(image: str) -> set[int]:
+    """PIDs whose image/executable basename equals `image` on this box's boundary."""
+    if IS_WSL:
+        try:
+            out = subprocess.run(
+                ["tasklist.exe", "/FI", f"IMAGENAME eq {image}", "/FO", "CSV", "/NH"],
+                text=True, capture_output=True, timeout=15,
+            ).stdout
+        except Exception:
+            return set()
+        pids: set[int] = set()
+        for row in csv.reader(out.splitlines()):
+            if len(row) > 1 and row[1].isdigit():
+                pids.add(int(row[1]))
+        return pids
+    pids = set()
+    want = image.lower()
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/comm", encoding="utf-8", errors="replace") as fh:
+                comm = fh.read().strip()
+            with open(f"/proc/{entry}/cmdline", "rb") as fh:
+                argv0 = fh.read().split(b"\x00", 1)[0].decode("utf-8", "replace")
+        except OSError:
+            continue
+        # Proton argv0 can be a Windows-style path (Z:\...\eldenring.exe); normalize both
+        # separators before taking the basename. comm catches wine-reparented processes.
+        base = argv0.replace("\\", "/").rsplit("/", 1)[-1].lower()
+        if base == want or comm.lower() == want:
+            pids.add(int(entry))
     return pids
 
 
@@ -54,20 +83,26 @@ def contains(path: Path, needle: str) -> bool:
 
 
 def capture_window(repo_root: Path, artifact_dir: Path) -> str:
-    """Capture the live ER window to a PNG via the Windows-native PowerShell helper.
-    Returns a status line. Best-effort: never raises."""
-    ps1 = repo_root / "scripts" / "capture-er-window-win.ps1"
+    """Capture the live ER window (WSL: PowerShell helper; native Linux: the fail-closed
+    Hyprland helper scripts/capture-er-window.py). Returns a status line. Never raises."""
     out = artifact_dir / "armament-icons-equip.png"
     try:
-        win_out = subprocess.run(["wslpath", "-w", str(out)], text=True,
-                                 capture_output=True, timeout=15).stdout.strip()
-        win_ps1 = subprocess.run(["wslpath", "-w", str(ps1)], text=True,
-                                 capture_output=True, timeout=15).stdout.strip()
-        subprocess.run(
-            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
-             "-File", win_ps1, win_out],
-            capture_output=True, timeout=25,
-        )
+        if IS_WSL:
+            ps1 = repo_root / "scripts" / "capture-er-window-win.ps1"
+            win_out = subprocess.run(["wslpath", "-w", str(out)], text=True,
+                                     capture_output=True, timeout=15).stdout.strip()
+            win_ps1 = subprocess.run(["wslpath", "-w", str(ps1)], text=True,
+                                     capture_output=True, timeout=15).stdout.strip()
+            subprocess.run(
+                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                 "-File", win_ps1, win_out],
+                capture_output=True, timeout=25,
+            )
+        else:
+            subprocess.run(
+                ["python3", str(repo_root / "scripts" / "capture-er-window.py"), str(out)],
+                capture_output=True, timeout=25,
+            )
     except Exception as exc:
         return f"capture error: {exc}"
     note = out.with_suffix(".txt")
@@ -75,22 +110,31 @@ def capture_window(repo_root: Path, artifact_dir: Path) -> str:
     return f"capture: {'PNG ' + str(out) if out.exists() else 'FAILED'} ({detail})"
 
 
+def kill_pid(pid: int) -> None:
+    if IS_WSL:
+        subprocess.run(["taskkill.exe", "/F", "/PID", str(pid)],
+                       capture_output=True, timeout=15)
+    else:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
 def teardown(pre_er: set[int], pre_me3: set[int]) -> str:
     """Kill only this run's PIDs; two passes with a verify wait. Returns a status line."""
     attempt = 0
     for attempt in (1, 2):
-        for pid in win_pids_for("eldenring.exe") - pre_er:
-            subprocess.run(["taskkill.exe", "/F", "/PID", str(pid)],
-                           capture_output=True, timeout=15)
-        for image in ("me3.exe", "me3-launcher.exe"):
-            base = pre_me3 if image == "me3.exe" else set()
-            for pid in win_pids_for(image) - base:
-                subprocess.run(["taskkill.exe", "/F", "/PID", str(pid)],
-                               capture_output=True, timeout=15)
+        for pid in pids_for("eldenring.exe") - pre_er:
+            kill_pid(pid)
+        for image in ME3_IMAGES:
+            base = pre_me3 if image == ME3_IMAGES[0] else set()
+            for pid in pids_for(image) - base:
+                kill_pid(pid)
         _POLL_WAIT.wait(KILL_VERIFY_SECONDS)
-        if not (win_pids_for("eldenring.exe") - pre_er):
+        if not (pids_for("eldenring.exe") - pre_er):
             break
-    remaining = win_pids_for("eldenring.exe") - pre_er
+    remaining = pids_for("eldenring.exe") - pre_er
     return f"post-cleanup attempt={attempt} eldenring_remaining={sorted(remaining)}"
 
 

@@ -85,6 +85,45 @@ const DIAG_LOG_LIMIT: u64 = 80;
 /// aliases this buffer, so it must never move or free.
 static EQUIP_EDITED: OnceLock<Vec<u8>> = OnceLock::new();
 
+/// Bounded diagnostic budget for vanilla-LENGTH candidate files that reach
+/// [`maybe_swap_equip_file`]: the reject gates below are otherwise silent, which made a
+/// swap miss unattributable (run 20260727-201106: 02_011 opened at boot, zero swap or
+/// failure lines).
+static DIAG_CANDIDATE_LOGS: AtomicU64 = AtomicU64::new(0);
+
+/// Bounded budget for raw File-object dumps (layout attribution: run 20260727-201851 had
+/// 112 parses with ZERO vanilla-length candidates, so the File reaching these hooks may
+/// not have the assumed MemoryFile layout under the native-Linux me3 asset layer).
+static DIAG_FILE_DUMPS: AtomicU64 = AtomicU64::new(0);
+
+/// Log the File's vtable (module-relative when possible) and first 8 qwords so the actual
+/// class/layout is attributable from one run. Bounded; fault-safe reads.
+unsafe fn dump_file_object(base: usize, file: usize, via: &str) {
+    let n = DIAG_FILE_DUMPS.fetch_add(1, Ordering::SeqCst) + 1;
+    if n > 6 || file == 0 {
+        return;
+    }
+    let words: [usize; 8] =
+        core::array::from_fn(|i| unsafe { safe_read_usize(file + i * 8) }.unwrap_or(0));
+    log_message(format_args!(
+        "gfx-equip: file-dump #{n} via {via}: file=0x{file:x} vt_rva=0x{:x} words={words:x?}",
+        words[0].wrapping_sub(base),
+    ));
+}
+
+/// One-line machine-readable snapshot of the swap oracle counters (for the tile-populate
+/// rect trace, so every equip-menu run reports whether the parse/openfile swaps landed).
+pub(crate) fn counters_line() -> String {
+    format!(
+        "parse_total={} parse_swaps={} openfile_matches={} swap_failures={} gfx_opens={}",
+        PARSE_TOTAL.load(Ordering::SeqCst),
+        EQUIP_PARSE_SWAPS.load(Ordering::SeqCst),
+        EQUIP_OPENFILE_SWAPS.load(Ordering::SeqCst),
+        EQUIP_SWAP_FAILURES.load(Ordering::SeqCst),
+        GFX_OPEN_TOTAL.load(Ordering::SeqCst),
+    )
+}
+
 // ---- AOB scanner (version-agnostic function discovery) ----
 
 /// Parse an IDA-style AOB signature ("48 89 ?? 24 10") into `(bytes, mask)`; `mask[i]`
@@ -194,8 +233,8 @@ unsafe fn bounded_ascii_contains(url: usize, needle: &[u8]) -> bool {
 /// If `file` is a MemoryFile holding the vanilla 02_011 movie, derive the ArtsBadge edit
 /// and swap the File's data/len/cursor so the reader consumes the edited stream. `via`
 /// labels the caller (parse header path vs FileOpener::OpenFile async path). Content-
-/// matched (length pre-filter + GFX magic + FNV fingerprint) -- no URL/string dependency.
-/// Fail-closed: anything unexpected leaves the native movie untouched.
+/// matched (GFX magic + the header's own declared length + FNV fingerprint) -- no
+/// URL/string dependency. Fail-closed: anything unexpected leaves the movie untouched.
 unsafe fn maybe_swap_equip_file(base: usize, file: usize, via: &str) {
     if file == 0 {
         return;
@@ -205,25 +244,49 @@ unsafe fn maybe_swap_equip_file(base: usize, file: usize, via: &str) {
         return; // not a MemoryFile (e.g. an image/font stream)
     }
     let data = unsafe { safe_read_usize(file + MEMORY_FILE_DATA_OFFSET) }.unwrap_or(0);
-    let len = unsafe { safe_read_i32(file + MEMORY_FILE_LEN_OFFSET) }.unwrap_or(0);
-    // Cheap length pre-filter: only a vanilla-length movie can BE vanilla 02_011.
-    if data == 0 || len as usize != er_gfx::equip_02_011::VANILLA_LEN {
+    let buf_len = unsafe { safe_read_i32(file + MEMORY_FILE_LEN_OFFSET) }.unwrap_or(0);
+    if data == 0 || buf_len <= 0 {
         return;
     }
-    let len = len as usize;
-    // GFX magic through the guarded reader before the bulk read + fingerprint.
+    let buf_len = buf_len as usize;
+    // GFX magic through the guarded reader before any bulk read.
     let magic_ok = unsafe { safe_read_u8(data) } == Some(b'G')
         && unsafe { safe_read_u8(data + 1) } == Some(b'F')
         && unsafe { safe_read_u8(data + 2) } == Some(b'X');
     if !magic_ok {
         return;
     }
+    // The File's +0x20 length is the ALLOCATION size, which the loader rounds UP (32-byte
+    // aligned: the equip movie's 18393 bytes live in an 0x47e0 = 18400 buffer). Gating on
+    // `buf_len == VANILLA_LEN` therefore rejected every real candidate and the swap never
+    // fired (parse_swaps=0 across runs 20260727-201106/201851/211251). Use the movie's own
+    // declared length from the GFX/SWF header (u32 at +4) as the content length instead.
+    let declared = {
+        let b: [u8; 4] =
+            core::array::from_fn(|i| unsafe { safe_read_u8(data + 4 + i) }.unwrap_or(0));
+        u32::from_le_bytes(b) as usize
+    };
+    if declared != er_gfx::equip_02_011::VANILLA_LEN || declared > buf_len {
+        return;
+    }
+    let len = declared;
     let mut vanilla = vec![0u8; len];
     if !unsafe { read_bytes(data, &mut vanilla) } {
         return;
     }
     if !er_gfx::equip_02_011::is_known_vanilla(&vanilla) {
-        return; // a different 18400-byte movie, not 02_011
+        // Right length + GFX magic but a different movie, or a drifted asset: log once
+        // (bounded) so a fingerprint miss is attributable rather than silent.
+        let n = DIAG_CANDIDATE_LOGS.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 4 {
+            log_message(format_args!(
+                "gfx-equip: 02_011-length candidate #{n} via {via} FINGERPRINT MISS: \
+                 declared={len} buf_len={buf_len} fnv=0x{:016x} (want 0x{:016x})",
+                er_gfx::title_05_000::fnv1a64(&vanilla),
+                er_gfx::equip_02_011::VANILLA_FNV1A64,
+            ));
+        }
+        return;
     }
     // Derive once (cached for the process lifetime), then swap the File to it.
     let edited = match EQUIP_EDITED.get() {
@@ -267,9 +330,12 @@ unsafe fn maybe_swap_equip_file(base: usize, file: usize, via: &str) {
 /// header; the tag dictionary is covered by the FileOpener::OpenFile hook). `file` (rdx) is
 /// the MemoryFile the header reader reads.
 unsafe extern "system" fn parse_hook(load_process: usize, file: usize) -> usize {
-    PARSE_TOTAL.fetch_add(1, Ordering::SeqCst);
+    let pn = PARSE_TOTAL.fetch_add(1, Ordering::SeqCst) + 1;
     let base = GAME_BASE.load(Ordering::SeqCst);
     if base != 0 {
+        if pn <= 3 {
+            unsafe { dump_file_object(base, file, "parse") };
+        }
         unsafe { maybe_swap_equip_file(base, file, "parse") };
     }
     let orig = PARSE_ORIG.load(Ordering::SeqCst);
@@ -301,9 +367,15 @@ unsafe extern "system" fn openfile_hook(
         0
     };
     if unsafe { bounded_ascii_contains(url, EQUIP_URL_NEEDLE) } {
-        EQUIP_OPENFILE_SWAPS.fetch_add(1, Ordering::SeqCst);
+        let n = EQUIP_OPENFILE_SWAPS.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 4 {
+            log_message(format_args!(
+                "gfx-equip: openfile equip-url match #{n} -> file=0x{file:x}"
+            ));
+        }
         let base = GAME_BASE.load(Ordering::SeqCst);
         if base != 0 {
+            unsafe { dump_file_object(base, file, "openfile") };
             unsafe { maybe_swap_equip_file(base, file, "openfile") };
         }
     }

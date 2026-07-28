@@ -154,22 +154,19 @@ static FORCE_ICON_ID: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(FORCE_ICON_NONE);
 
 /// Approach-B target child (ER_ARMAMENT_ICONS_TARGET): the named tile child the badge icon
-/// is drawn INTO. The file-swap approach (default `ArtsBadge`, a GFX-injected clip) is proven
-/// unreachable -- the equip movie is boot-preloaded/cached so no parse-time swap lands, and
-/// `ArtsBadge`/`ZReachProbe` never bind (bd armament-icons-fileswap-paradigm-exhausted). The
-/// live bind probe shows the grid tile already has a real, drawable, structurally-ItemIcon-like
-/// corner clip -- `AttributeIcon` (binds with an `/IconImage` child) -- so approach B draws into
-/// an EXISTING clip instead of an injected one. Configurable so one approved run can prove which
-/// clip renders the badge visibly and where. Default keeps the historical `ArtsBadge`.
+/// is drawn INTO. The product default is the vanilla bottom-left replenishment slot,
+/// `AutoReplenish/IconImage`. Weapons are never autorefillable, so the DLL may use that
+/// slot for weapon Ash-of-War badges while leaving vanilla autorefillable material tiles
+/// alone. The runtime GFX edit adds this missing subtree to 02_011 weapon tiles.
 static TARGET_CHILD: std::sync::OnceLock<std::ffi::CString> = std::sync::OnceLock::new();
 
-/// Resolve the configured approach-B draw-target child name (default `ArtsBadge`).
+/// Resolve the configured approach-B draw-target child name.
 #[cfg(windows)]
 fn target_child() -> &'static std::ffi::CStr {
     TARGET_CHILD
         .get()
         .map(|c| c.as_c_str())
-        .unwrap_or(c"ArtsBadge")
+        .unwrap_or(c"AutoReplenish/IconImage")
 }
 
 /// Read a diagnostic override, preferring a game-dir FILE marker over the env var of the
@@ -247,8 +244,8 @@ fn spawn_install_thread() {
                     FORCE_ICON_ID.store(id, Ordering::Relaxed);
                 }
             }
-            // Approach-B draw target (default ArtsBadge): the existing grid-tile clip to draw the
-            // badge INTO, e.g. ER_ARMAMENT_ICONS_TARGET=AttributeIcon.
+            // Approach-B draw target (default AutoReplenish/IconImage): the tile clip to draw the
+            // badge INTO. Diagnostic override examples: AttributeIcon, ItemIcon/IconImage.
             if let Some(v) =
                 diag_override("ER_ARMAMENT_ICONS_TARGET", "er-armament-icons-target.txt")
             {
@@ -258,7 +255,7 @@ fn spawn_install_thread() {
             }
             let forced = FORCE_ICON_ID.load(Ordering::Relaxed);
             log_message(format_args!(
-                "attach: milestone-2 badge draw (TilePopulate hook -> ArtsIcon un-hide + icon set); \
+                "attach: milestone-2 badge draw (TilePopulate hook -> AutoReplenish/IconImage + icon set); \
                  force_icon={} icon_setter_rva=0x{ICON_SETTER_RVA:x} \
                  resolver_rva=0x{MENU_GAITEM_SWORD_ARTS_RESOLVER_RVA:x} \
                  lookup_sword_arts_param_rva=0x{LOOKUP_SWORD_ARTS_PARAM_RVA:x}",
@@ -277,8 +274,8 @@ fn spawn_install_thread() {
                 ));
                 return;
             };
-            // Runtime GFX template edit: inject the sized "ArtsBadge" child into the equip tile so
-            // the badge draw target has a real rect (the tile-populate hook draws the icon into it).
+            // Runtime GFX template edit: inject the sized AutoReplenish/IconImage subtree into the
+            // equip tile so the bottom-left badge target has a real rect.
             gfx_equip_hook::install(base);
             // Wait for the game's task manager the way the sibling DLLs do (yield, no sleep):
             // its readiness implies the game image and its statics are mapped, before the
@@ -641,6 +638,7 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
             c"ItemName",
             c"ItemCost",
             c"AutoReplenish",
+            c"AutoReplenish/IconImage",
             c"ItemBreakMark",
             c"ItemBreakMark2",
             c"Dish/Root",
@@ -669,26 +667,26 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
     // hands approach B (GFX template edit) its exact geometry target.
     let trace = attempt <= SAMPLE_LOG_CALLS;
     if trace {
-        // Probe the nested IconImage children too: after the GFX re-point (char52->44),
-        // ArtsIcon/IconImage should now BIND (edit reached the instance) -- if it binds but
-        // is zero while the ItemIcon/IconImage control is non-zero, the re-pointed clip is
-        // free-running past its frame-0 placeholder shape (needs a single-frame target).
+        // Probe the bottom-left target and occupied vanilla badge controls.
         log_message(format_args!(
             "rect trace #{attempt}: ItemIcon={} | AttributeIcon={} AttributeIcon/IconImage={} | \
-             ArtsBadge={} ZReachProbe={} ArtsIcon={}",
+             AutoReplenish={} AutoReplenish/IconImage={} ArtsIcon={}",
             fmt_rects(unsafe { probe_child_rects(base, tile, c"ItemIcon") }),
             fmt_rects(unsafe { probe_child_rects(base, tile, c"AttributeIcon") }),
             fmt_rects(unsafe { probe_child_rects(base, tile, c"AttributeIcon/IconImage") }),
-            fmt_rects(unsafe { probe_child_rects(base, tile, c"ArtsBadge") }),
-            fmt_rects(unsafe { probe_child_rects(base, tile, c"ZReachProbe") }),
+            fmt_rects(unsafe { probe_child_rects(base, tile, c"AutoReplenish") }),
+            fmt_rects(unsafe { probe_child_rects(base, tile, c"AutoReplenish/IconImage") }),
             fmt_rects(unsafe { probe_child_rects(base, tile, c"ArtsIcon") }),
+        ));
+        log_message(format_args!(
+            "gfx-equip counters: {}",
+            crate::gfx_equip_hook::counters_line()
         ));
     }
 
-    // Approach B: draw the badge icon into an EXISTING tile child (default `ArtsBadge`, the
-    // now-unreachable GFX-injected clip; set ER_ARMAMENT_ICONS_TARGET=AttributeIcon to draw into
-    // the real, already-bound corner clip instead). The icon setter reads the target's LOCAL rect
-    // to scale the drawn quad, so the target must be a bound, real-extent clip (ItemIcon-like:
+    // Approach B: draw the badge icon into the bottom-left AutoReplenish/IconImage child. The
+    // icon setter reads the target's LOCAL rect to scale the drawn quad, so the target must be a
+    // bound, real-extent clip (ItemIcon-like:
     // container + IconImage). If the target is unbound or zero-extent we skip rather than paint an
     // invisible/wrong badge, and the rect trace above records why.
     let target = target_child();

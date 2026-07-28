@@ -50,12 +50,40 @@ steam_running || fail "Steam is not running. Start Steam (interactive login) fir
 for d in "$HARNESS_DLL" "$TELEM_DLL" "$BADGE_DLL"; do
 	[[ -f "$d" ]] || fail "DLL not built: $d (cargo xwin build --release --target x86_64-pc-windows-msvc)"
 done
-if tasklist.exe 2>/dev/null | grep -qiE 'eldenring\.exe|start_protected_game\.exe'; then
+if python3 "$REPO_ROOT/scripts/detect-proc.py" 'eldenring\.exe|start_protected_game\.exe' >/dev/null 2>&1; then
 	fail "An Elden Ring process is already running. Tear it down before launching (never a blanket kill)."
 fi
 
-ME3="${ME3:-/mnt/c/Users/$USER/AppData/Local/garyttierney/me3/bin/me3.exe}"
-[[ -f "$ME3" ]] || fail "Windows me3.exe not found at $ME3 (set ME3=<path to me3.exe>)"
+# --- me3 resolution: platform-aware, never a hard-coded Windows-user path.
+#     Native Linux box (Linux Steam/Proton): the `me3` binary on PATH, invoked the same
+#     way as the known-good ~/Elden/launch.sh (me3 --steam-dir <root> launch -p ... -e ...).
+#     WSL box (Windows Steam): the Windows me3.exe, discovered across /mnt/c/Users/*.
+if [[ -z "${ME3:-}" ]]; then
+	if command -v me3 >/dev/null 2>&1; then
+		ME3="$(command -v me3)"
+	else
+		for c in /mnt/c/Users/*/AppData/Local/garyttierney/me3/bin/me3.exe; do
+			[[ -f "$c" ]] && {
+				ME3="$c"
+				break
+			}
+		done
+	fi
+fi
+[[ -n "${ME3:-}" ]] || fail "me3 not found: no 'me3' on PATH and no /mnt/c/Users/*/AppData/Local/garyttierney/me3/bin/me3.exe (set ME3=<path>)"
+case "$ME3" in
+*.exe) ME3_NATIVE=0 ;;
+*) ME3_NATIVE=1 ;;
+esac
+# Process boundary flag (same test as armament-icons-watch.py / detect-proc.py).
+if command -v tasklist.exe >/dev/null 2>&1; then IS_WSL=1; else IS_WSL=0; fi
+if [[ "$ME3_NATIVE" == 1 ]]; then
+	# Steam root that owns the game dir: .../<root>/steamapps/common/ELDEN RING/Game
+	ME3_STEAM_DIR="${ME3_STEAM_DIR:-$(cd "$GAME_DIR/../../../.." && pwd)}"
+	ME3_IMAGES=(me3)
+else
+	ME3_IMAGES=(me3.exe me3-launcher.exe)
+fi
 
 mkdir -p "$ARTIFACT_DIR"
 win_path() { python3 -c "import sys;p=sys.argv[1];print((p[5].upper()+':\\\\'+p[7:].replace('/','\\\\')) if p.startswith('/mnt/') and len(p)>6 and p[6]=='/' else p)" "$1"; }
@@ -71,6 +99,7 @@ cp -f "$BADGE_DLL" "$BADGE_GAMEDIR"
 PROFILE="$ARTIFACT_DIR/armament-icons-smoke.me3"
 {
 	echo 'profileVersion = "v1"'
+	echo 'start_online = false'
 	echo
 	echo '[[supports]]'
 	echo 'game = "eldenring"'
@@ -92,11 +121,14 @@ PROFILE="$ARTIFACT_DIR/armament-icons-smoke.me3"
 # --- wiring markers: harness drive mode (MODE=equip|inv, default inv -- the Inventory tabs
 #     are the user's primary target and their cells carry the bottom-left ArtsIcon child) ---
 echo -n "${MODE:-inv}" >"$GAME_DIR/er-harness-drive-mode.txt"
+# Snapshot what the marker actually contained at launch time (attribution evidence if the
+# in-game flag read misses, e.g. launcher CWD drift).
+cp -f "$GAME_DIR/er-harness-drive-mode.txt" "$ARTIFACT_DIR/er-harness-drive-mode.txt.staged"
 # Diagnostic overrides reach the Windows game via FILE markers, NOT env: WSL bash env vars do
 # not cross the WSL->Windows boundary unless in WSLENV (bd wslenv-env-not-propagating-to-windows-game).
 # The DLL reads er-armament-icons-force-icon.txt / -target.txt from the game dir (env is fallback).
 #   FORCE_ICON=<u16>|mirror : draw a fixed visible icon into every badge (locator / oracle proof).
-#   TARGET=<childName>      : approach-B draw target clip (e.g. AttributeIcon; default ArtsBadge).
+#   TARGET=<childName>      : approach-B draw target clip (e.g. AttributeIcon; default AutoReplenish/IconImage).
 export ER_ARMAMENT_ICONS_FORCE_ICON="${FORCE_ICON:-}"
 export ER_ARMAMENT_ICONS_TARGET="${TARGET:-}"
 # NO save redirect: pure APPDATA vanilla save (whatever character is last-active).
@@ -112,24 +144,55 @@ rm -f "$GAME_DIR"/er-armament-icons.log "$GAME_DIR"/er-input-harness.log \
 [[ -n "${TARGET:-}" ]] && printf '%s' "$TARGET" >"$GAME_DIR/er-armament-icons-target.txt"
 
 # SAFETY (bd never-blanket-kill-eldenring): only tear down the PIDs THIS run spawns.
-win_pids_for() {
-	tasklist.exe /FI "IMAGENAME eq $1" /FO CSV /NH 2>/dev/null |
-		python3 -c "import sys,csv; print(' '.join(r[1] for r in csv.reader(sys.stdin) if len(r)>1 and r[1].isdigit()))"
+pids_for() {
+	if [[ "$IS_WSL" == 1 ]]; then
+		tasklist.exe /FI "IMAGENAME eq $1" /FO CSV /NH 2>/dev/null |
+			python3 -c "import sys,csv; print(' '.join(r[1] for r in csv.reader(sys.stdin) if len(r)>1 and r[1].isdigit()))"
+	else
+		python3 - "$1" <<'PY'
+import os, sys
+want = sys.argv[1].lower()
+hits = []
+for e in os.listdir('/proc'):
+    if not e.isdigit():
+        continue
+    try:
+        comm = open(f'/proc/{e}/comm', encoding='utf-8', errors='replace').read().strip()
+        argv0 = open(f'/proc/{e}/cmdline', 'rb').read().split(b'\x00', 1)[0].decode('utf-8', 'replace')
+    except OSError:
+        continue
+    base = argv0.replace('\\', '/').rsplit('/', 1)[-1].lower()
+    if base == want or comm.lower() == want:
+        hits.append(e)
+print(' '.join(hits))
+PY
+	fi
 }
-PRE_ER_PIDS=" $(win_pids_for eldenring.exe) "
-PRE_ME3_PIDS=" $(win_pids_for me3.exe) $(win_pids_for me3-launcher.exe) "
+# Invoked only from the cleanup trap path.
+# shellcheck disable=SC2317,SC2329
+kill_one() {
+	if [[ "$IS_WSL" == 1 ]]; then
+		taskkill.exe /F /PID "$1" >/dev/null 2>&1
+	else
+		kill -9 "$1" 2>/dev/null
+	fi
+}
+PRE_ER_PIDS=" $(pids_for eldenring.exe) "
+PRE_ME3_PIDS=" $(for img in "${ME3_IMAGES[@]}"; do pids_for "$img"; done | tr '\n' ' ') "
 
 # Last-resort safety-net trap: a SINGLE kill pass for this run's PIDs (no sleep -- the
 # Python watcher owns the graceful two-pass teardown + verify). Runs only if the watcher
 # is interrupted before it tears down.
 # shellcheck disable=SC2317,SC2329
 cleanup() {
-	local pid
-	for pid in $(win_pids_for eldenring.exe); do
-		[[ "$PRE_ER_PIDS" == *" $pid "* ]] || taskkill.exe /F /PID "$pid" >/dev/null 2>&1
+	local pid img
+	for pid in $(pids_for eldenring.exe); do
+		[[ "$PRE_ER_PIDS" == *" $pid "* ]] || kill_one "$pid"
 	done
-	for pid in $(win_pids_for me3.exe) $(win_pids_for me3-launcher.exe); do
-		[[ "$PRE_ME3_PIDS" == *" $pid "* ]] || taskkill.exe /F /PID "$pid" >/dev/null 2>&1
+	for img in "${ME3_IMAGES[@]}"; do
+		for pid in $(pids_for "$img"); do
+			[[ "$PRE_ME3_PIDS" == *" $pid "* ]] || kill_one "$pid"
+		done
 	done
 	rm -f "$GAME_DIR/er-harness-drive-mode.txt" "$GAME_DIR/er-armament-icons-force-icon.txt" "$GAME_DIR/er-armament-icons-target.txt" 2>/dev/null
 	[[ -f "$ARTIFACT_DIR/er-effects.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-effects.toml.bak" "$GAME_DIR/er-effects.toml"
@@ -145,7 +208,13 @@ echo "==   INPUT WILL BE DRIVEN (raw-pad taps) -- agent-owned bounded run    =="
 echo "==   artifacts -> $ARTIFACT_DIR"
 echo "======================================================================"
 
-"$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
+if [[ "$ME3_NATIVE" == 1 ]]; then
+	# Same invocation shape as the known-good ~/Elden/launch.sh (offline comes from the
+	# profile's start_online=false; me3 runs from the game dir).
+	(cd "$GAME_DIR" && "$ME3" --steam-dir "$ME3_STEAM_DIR" launch -p "$PROFILE" -g eldenring -e "$GAME_DIR/eldenring.exe") >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
+else
+	"$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
+fi
 
 # --- delegate the timed watch + teardown to the Python watcher (no shell sleep;
 #     scripts/check-no-timeouts.py bans shell sleeps, Python time.sleep is fine). ---

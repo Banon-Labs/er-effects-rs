@@ -497,7 +497,19 @@ enum DriveMode {
 
 impl DriveMode {
     fn from_flag() -> Self {
-        match read_drive_mode_flag().as_str() {
+        let flag = read_drive_mode_flag();
+        // Diagnostic for cross-platform launcher drift: the flag file is CWD-relative, and a
+        // launcher that spawns the game with an unexpected CWD silently degrades every run to
+        // the `full` fallback (native-me3 run 20260727-201106 resolved 'full' despite an
+        // 'equip' marker in the game dir). Log the raw read + CWD so the miss is attributable.
+        harness_log!(
+            "drive: mode flag read -> {:?} (cwd={})",
+            flag,
+            std::env::current_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|e| format!("<err {e}>"))
+        );
+        match flag.as_str() {
             "boot" => DriveMode::BootContinueOnly,
             "reload" => DriveMode::NativeReloadOnly,
             "reload2" => DriveMode::NativeReloadTwice,

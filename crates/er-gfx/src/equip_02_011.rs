@@ -4,24 +4,25 @@
 //! Scaleform MemoryFile for the equip menu, applies the structural edit below in
 //! memory, and serves the derived movie for that process (bd er-effects-rs-pe98).
 //!
-//! WHY A SIBLING, NOT ArtsIcon: the equip tile (`DefineSprite 71`) already places a
-//! bottom-left `ArtsIcon` container (`char 53`), but the game never instantiates its
-//! subtree -- `ArtsIcon/IconImage` does not bind at runtime and `ArtsIcon`'s rect is
-//! [0,0,0,0] (runtime rect trace 20260723-162855), so editing inside `ArtsIcon` is
-//! futile. Instead we ADD our own child to the tile: a single-frame clip `ArtsBadge`
-//! placed at `ArtsIcon`'s exact matrix (scale 0.65, bottom-left) whose sole content is
-//! the same sized 160px placeholder shape (`char 43`) that makes `ItemIcon` render.
-//! The badge DLL binds `ArtsBadge` and drives the ash icon into it with the game's own
-//! icon setter, additive to the vanilla infusion/can't-wield/qty badges.
+//! WHY AUTO-REPLENISH: the equip tile (`DefineSprite 71`) already places a bottom-left
+//! `ArtsIcon` container, but the game never instantiates its subtree on grid tiles.
+//! The native tile binder already has a bottom-left `AutoReplenish/IconImage` slot for
+//! the same visual real estate used by replenishable materials in storage/sort views.
+//! Weapons are never autorefillable, so this edit adds that missing named subtree to
+//! weapon tiles: `AutoReplenish` at `ArtsIcon`'s matrix, containing an `IconImage`
+//! clip with a real 160px placeholder rect. The DLL then drives that native-style slot
+//! only for weapon/armament tiles; vanilla autorefillable material tiles keep it.
 
 use crate::title_05_000::fnv1a64;
-use crate::{GfxError, Movie, Tag};
+use crate::{GfxError, Movie, PO2_HAS_CHARACTER, PO2_HAS_NAME, Tag};
 
-/// Fresh (unused) character id for the injected single-frame badge clip. Max id in
+/// Fresh (unused) character id for the injected AutoReplenish parent clip. Max id in
 /// vanilla `02_011` is 110; 250 is safely free (verified).
 pub const BADGE_CLIP_ID: u16 = 250;
 /// Instance name of the injected tile child the badge DLL binds and draws into.
-pub const BADGE_INSTANCE_NAME: &str = "ArtsBadge";
+pub const BADGE_INSTANCE_NAME: &str = "AutoReplenish";
+/// Nested instance name the native slot binder and icon setter target.
+pub const BADGE_ICONIMAGE_INSTANCE_NAME: &str = "IconImage";
 /// The equip tile sprite that places `ItemIcon`/`AttributeIcon`/`ArtsIcon`.
 const TILE_SPRITE_ID: u16 = 71;
 /// `ItemIcon`'s `IconImage` clip; its frame-0 child is the 160px placeholder shape we reuse.
@@ -34,8 +35,8 @@ pub const VANILLA_LEN: usize = 18393;
 pub const VANILLA_FNV1A64: u64 = 0xf40f_9505_3a6e_f33c;
 /// Edited length + fingerprint (self-consistency gate for the known vanilla input).
 /// Derived and verified by `tests/equip_02_011.rs`.
-pub const EDITED_LEN: usize = 18473;
-pub const EDITED_FNV1A64: u64 = 0xdf8b_273d_509b_515e;
+pub const EDITED_LEN: usize = 18455;
+pub const EDITED_FNV1A64: u64 = 0x6507_db92_c60d_6ffd;
 
 pub fn is_known_vanilla(bytes: &[u8]) -> bool {
     bytes.len() == VANILLA_LEN && fnv1a64(bytes) == VANILLA_FNV1A64
@@ -87,27 +88,50 @@ fn placement_named<'t>(tags: &'t [Tag], want: &str) -> Option<&'t Tag> {
 }
 
 /// Derive the badge-enabled equip movie from the game's own vanilla `02_011` payload.
-/// Adds a single-frame `ArtsBadge` clip child to the tile sprite. All-or-nothing: any
-/// missing structure fails cleanly and the caller serves the untouched vanilla movie.
+/// Adds a single-frame `AutoReplenish/IconImage` subtree to the tile sprite. All-or-
+/// nothing: any missing structure fails cleanly and the caller serves the untouched
+/// vanilla movie.
 pub fn arts_badge(vanilla: &[u8]) -> Result<Vec<u8>, EquipBadgeError> {
     let mut movie = Movie::parse(vanilla).map_err(EquipBadgeError::Parse)?;
 
-    // 1. Reuse ItemIcon/IconImage's frame-0 placement of the 160px placeholder shape as
-    //    the badge clip's content (proven to give a real, stable rect).
-    let placeholder_place = sprite_tags(&movie, ITEM_ICONIMAGE_SPRITE_ID)
+    // 1. Reuse ItemIcon/IconImage's frame-0 placement transform as an identity-ish
+    //    template for the nested IconImage child. We place the existing IconImage clip
+    //    (char44) inside our parent so native `AutoReplenish/IconImage` binding has a
+    //    real MovieClip with the same stable placeholder rect the icon setter expects.
+    let mut iconimage_place = sprite_tags(&movie, ITEM_ICONIMAGE_SPRITE_ID)
         .and_then(|tags| {
             tags.iter()
                 .find(|t| matches!(t, Tag::PlaceObject2 { character_id: Some(c), .. } if *c == PLACEHOLDER_SHAPE_ID))
                 .cloned()
         })
         .ok_or(EquipBadgeError::Structure("char44 placeholder-shape placement"))?;
+    if let Tag::PlaceObject2 {
+        flags,
+        character_id,
+        name,
+        depth,
+        ..
+    } = &mut iconimage_place
+    {
+        *character_id = Some(ITEM_ICONIMAGE_SPRITE_ID);
+        *name = Some(BADGE_ICONIMAGE_INSTANCE_NAME.to_owned());
+        *depth = 1;
+        // The flags byte governs field presence on write; the vanilla char43
+        // placement is 0x06 (no HasName), so the injected name is silently
+        // dropped unless its bit is set here.
+        *flags |= PO2_HAS_CHARACTER | PO2_HAS_NAME;
+    } else {
+        return Err(EquipBadgeError::Structure(
+            "char44 placeholder placement is not PlaceObject2",
+        ));
+    }
 
-    // 2. Build a SINGLE-FRAME clip that always shows the placeholder shape (no free-run).
+    // 2. Build a SINGLE-FRAME AutoReplenish parent containing the IconImage child.
     let badge_clip = Tag::DefineSprite {
         id: BADGE_CLIP_ID,
         frame_count: 1,
         tags: vec![
-            placeholder_place,
+            iconimage_place,
             Tag::ShowFrame { force_long: false },
             Tag::End,
         ],
@@ -115,7 +139,7 @@ pub fn arts_badge(vanilla: &[u8]) -> Result<Vec<u8>, EquipBadgeError> {
     };
 
     // 3. Clone the tile's ArtsIcon placement (its bottom-left matrix is the intended badge
-    //    slot) into a sibling named `ArtsBadge` that places the new clip at a fresh depth.
+    //    slot) into a sibling named `AutoReplenish` that places the new clip at a fresh depth.
     let tile_idx = movie
         .tags
         .iter()
@@ -147,6 +171,7 @@ pub fn arts_badge(vanilla: &[u8]) -> Result<Vec<u8>, EquipBadgeError> {
         )
     };
     if let Tag::PlaceObject2 {
+        flags,
         character_id,
         name,
         depth,
@@ -156,33 +181,15 @@ pub fn arts_badge(vanilla: &[u8]) -> Result<Vec<u8>, EquipBadgeError> {
         *character_id = Some(BADGE_CLIP_ID);
         *name = Some(BADGE_INSTANCE_NAME.to_owned());
         *depth = max_depth + 1;
+        *flags |= PO2_HAS_CHARACTER | PO2_HAS_NAME;
     } else {
         return Err(EquipBadgeError::Structure(
             "ArtsIcon clone is not PlaceObject2",
         ));
     }
 
-    // DIAGNOSTIC sibling: a second placement of an EXISTING dictionary clip (ItemIcon's
-    // IconImage char 44) named "ZReachProbe". Comparing its runtime bind to ArtsBadge's
-    // (which places the NEW char 250) isolates whether the swap fails to reach the parse
-    // (both unbound) vs the new char id not being instantiated by this AS3 movie
-    // (ZReachProbe binds, ArtsBadge does not).
-    let mut probe_place = badge_place.clone();
-    if let Tag::PlaceObject2 {
-        character_id,
-        name,
-        depth,
-        ..
-    } = &mut probe_place
-    {
-        *character_id = Some(ITEM_ICONIMAGE_SPRITE_ID);
-        *name = Some("ZReachProbe".to_owned());
-        *depth = max_depth + 2;
-    }
-
-    // 4a. Insert the sibling placements right after the ArtsIcon placement in tile 71.
+    // 4a. Insert the sibling placement right after the ArtsIcon placement in tile 71.
     if let Tag::DefineSprite { tags, .. } = &mut movie.tags[tile_idx] {
-        tags.insert(arts_pos + 1, probe_place);
         tags.insert(arts_pos + 1, badge_place);
     }
     // 4b. Define the new clip before the tile that places it (dictionary order).

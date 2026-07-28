@@ -6,7 +6,8 @@
 mod common;
 
 use er_gfx::equip_02_011::{
-    BADGE_CLIP_ID, BADGE_INSTANCE_NAME, VANILLA_FNV1A64, VANILLA_LEN, arts_badge, is_known_vanilla,
+    BADGE_CLIP_ID, BADGE_ICONIMAGE_INSTANCE_NAME, BADGE_INSTANCE_NAME, VANILLA_FNV1A64,
+    VANILLA_LEN, arts_badge, is_known_vanilla,
 };
 use er_gfx::title_05_000::fnv1a64;
 use er_gfx::{Movie, Tag};
@@ -31,14 +32,25 @@ fn arts_badge_edit_applies_and_roundtrips() {
     let rewritten = movie.write().expect("edited movie re-serializes");
     assert_eq!(rewritten, out, "edited movie round-trips");
 
-    // The new single-frame badge clip must exist...
-    let has_clip = movie
+    // The new single-frame badge clip must exist and contain the nested IconImage child.
+    let badge_clip = movie
         .tags
         .iter()
-        .any(|t| matches!(t, Tag::DefineSprite { id, .. } if *id == BADGE_CLIP_ID));
-    assert!(has_clip, "badge clip {BADGE_CLIP_ID} present");
+        .find_map(|t| match t {
+            Tag::DefineSprite { id, tags, .. } if *id == BADGE_CLIP_ID => Some(tags),
+            _ => None,
+        })
+        .expect("badge clip present");
+    let places_iconimage = badge_clip.iter().any(|t| {
+        matches!(
+            t,
+            Tag::PlaceObject2 { name: Some(n), character_id: Some(44), .. }
+                if n == BADGE_ICONIMAGE_INSTANCE_NAME
+        )
+    });
+    assert!(places_iconimage, "badge clip places nested IconImage");
 
-    // ...and the tile sprite 71 must place it under the ArtsBadge instance name.
+    // ...and the tile sprite 71 must place it under the AutoReplenish instance name.
     let tile = movie
         .tags
         .iter()
