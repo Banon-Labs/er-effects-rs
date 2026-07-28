@@ -6,21 +6,25 @@
 //! (it clears `CSMenuMan->disableSaveMenu` at +0x13c); keeping this DLL independent
 //! means the two can be run separately and their effects told apart.
 //!
-//! # Where this is in its lifecycle
+//! # What it does
 //!
-//! Phase 1 (current): **census only**. It suppresses nothing. It hooks the Win32
-//! file APIs, filters to save containers, and records the game-module RVAs of every
-//! call site that reaches save data on disk. That establishes, from the bottom up
-//! and by measurement rather than by reading disassembly, the complete set of paths
-//! by which ELDEN RING actually writes a save.
+//! Two cooperating layers, and it matters that they are separate:
 //!
-//! Phase 2: game-side interception plus the fake-success contract, informed by the
-//! static reverse engineering of the save orchestrator. When that lands, the census
-//! stays -- it inverts into the completeness oracle, because any call site still
-//! appearing in it is a save path the interception missed.
+//! **Suppression** (`suppress`) stops the game ever enqueueing a save-write job, at the
+//! single choke point every save funnels through, and answers the game's own completion
+//! poll with the code that means success. No save byte is written, no `.bak` is copied
+//! or deleted, and every native observer sees the state a real successful save leaves.
+//! Loads are untouched, so Continue and Load Game still read the real file.
 //!
-//! Being explicit about the phase matters: a DLL named "save disable" that currently
-//! disables nothing would otherwise be easy to mistake for a working feature.
+//! **Census** (`hooks` + `witness`) hooks the Win32 file APIs *below* every FromSoft
+//! abstraction and records the game-module RVA of any call site that still reaches save
+//! data on disk. It was built to discover the write paths from the bottom up; with
+//! suppression armed it inverts into the completeness oracle. `escaped_write_sites`
+//! must be empty, and any entry in it names a save path the suppression missed.
+//!
+//! Keeping the census when suppression works is the whole point: the static call graph
+//! proves the SL submit is the only *known* write path, and the census is what would
+//! catch an unknown one.
 
 #![allow(non_snake_case)]
 
@@ -28,6 +32,7 @@ mod config;
 #[cfg(windows)]
 mod hooks;
 mod redirect;
+mod suppress;
 mod telemetry;
 mod witness;
 
@@ -44,12 +49,18 @@ const DLL_MAIN_SUCCESS: i32 = 1;
 
 const LOG_FILE_NAME: &str = "er-save-disable.log";
 
-/// Surfaced in telemetry so a harness knows what the run was actually doing.
-///
-/// `redirect` means save WRITES were diverted to a harmless path while reads were left
-/// alone. The game's own save machinery runs unmodified and genuinely succeeds, so no
-/// state is forged and no waiter can deadlock -- see `redirect.rs` for why that matters.
-pub(crate) const PHASE: &str = "redirect";
+/// Surfaced in telemetry so a harness can never mistake an observation-only run for
+/// a run in which saving was actually suppressed. The value is derived from what
+/// actually installed at runtime, not from a compile-time claim -- which is why this
+/// replaced the old `PHASE` constant: a build that intended to suppress but failed to
+/// arm must not report itself as suppressing.
+pub(crate) fn phase() -> &'static str {
+    if suppress::is_armed() {
+        "suppress+census"
+    } else {
+        "census-only"
+    }
+}
 
 static LOG_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static HOOKS_INSTALLED: AtomicUsize = AtomicUsize::new(0);
@@ -113,20 +124,20 @@ fn spawn_census_task() {
                 }
             };
             witness::set_game_base(base);
+            // Both layers, in this order. Redirect's destination directory must exist
+            // before any write is diverted into it, and the census must be watching
+            // before suppression arms, so a write that escapes during the arming window
+            // is still recorded.
             config::init_runtime_config();
             redirect::ensure_destination_directory();
             let installed = hooks::install();
             HOOKS_INSTALLED.store(installed, Ordering::SeqCst);
-            let config = config::runtime_config();
+            let suppressing = suppress::install();
             log_message(format_args!(
-                "install: active (base=0x{base:x}, hooks={installed}/{}); phase={PHASE} -- save \
-                 WRITES divert to {} with suffix {}; reads are untouched so the real save still loads",
+                "install: base=0x{base:x}, census hooks={installed}/{}, \
+                 suppression hooks={suppressing}/2, phase={}",
                 hooks::EXPECTED_HOOKS,
-                config
-                    .save_directory
-                    .as_ref()
-                    .map_or_else(|| "the original directory".to_owned(), |d| d.display().to_string()),
-                config.suffix,
+                phase()
             ));
             // Publish immediately so a harness can distinguish "no saves happened"
             // from "the DLL never installed" -- an absent telemetry file means the

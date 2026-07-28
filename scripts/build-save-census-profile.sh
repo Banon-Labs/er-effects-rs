@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Build the standalone save-disable DLL and emit an ME3 profile that loads ONLY it.
 #
-# The profile is deliberately minimal -- no product DLL, no Seamless Co-op -- because
-# the census is meant to establish where a near-vanilla ELDEN RING writes save data.
+# The profile is deliberately minimal -- no product DLL, no Seamless Co-op -- so the
+# run measures the game plus this DLL and nothing else.
 # Loading the product alongside it would confound the result: the product manipulates
 # save-adjacent state during System->Quit (it clears CSMenuMan->disableSaveMenu at
 # +0x13c), so any census taken with it loaded measures the pair, not the game.
@@ -60,8 +60,11 @@ start_online = false
 [[supports]]
 game = "eldenring"
 
-# Census-only build: this DLL observes save writes and suppresses nothing.
-# See crates/er-save-disable-dll/src/lib.rs for the phase contract.
+# Save-disable DLL: suppresses every save WRITE at the SL submit choke point and
+# reports success to the game, while the Win32 file-API census keeps watching for any
+# write that escapes. Loads are untouched. Set ER_SAVE_DISABLE_CENSUS_ONLY=1 to disarm
+# suppression for the positive-control run.
+# See crates/er-save-disable-dll/src/suppress.rs for the interception contract.
 [[natives]]
 path = '$DLL'
 EOF

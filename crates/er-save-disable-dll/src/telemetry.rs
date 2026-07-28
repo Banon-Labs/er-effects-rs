@@ -33,7 +33,7 @@ pub(crate) fn write_snapshot() {
     body.push_str("{\n");
     body.push_str(&format!(
         "  \"phase\": \"{}\",\n",
-        json_escape(crate::PHASE)
+        json_escape(crate::phase())
     ));
     body.push_str(&format!(
         "  \"census_hooks_installed\": {},\n",
@@ -44,6 +44,19 @@ pub(crate) fn write_snapshot() {
     #[cfg(not(windows))]
     let expected = 0;
     body.push_str(&format!("  \"census_hooks_expected\": {expected},\n"));
+
+    body.push_str(&format!(
+        "  \"suppression_armed\": {},\n",
+        crate::suppress::is_armed()
+    ));
+    body.push_str(&format!(
+        "  \"suppression_hooks_installed\": {},\n",
+        crate::suppress::installed_hooks()
+    ));
+    body.push_str("  \"suppression_hooks_expected\": 2,\n");
+    for (name, value) in crate::suppress::counters() {
+        body.push_str(&format!("  \"{name}\": {value},\n"));
+    }
 
     let (game_base, text_start, text_size) = witness::attribution_context();
     body.push_str(&format!("  \"game_base\": \"0x{game_base:x}\",\n"));
