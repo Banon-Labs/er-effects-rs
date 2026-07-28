@@ -65,7 +65,23 @@ export GHIDRA_JAVA_OPTIONS="-Djava.io.tmpdir=$TMP"
 is_running() { pgrep -f "MCPServeHeadless.java" >/dev/null 2>&1; }
 port_up()    { ss -ltn 2>/dev/null | grep -q ":$PORT "; }
 
+# Self-heal exec bits on the install's native helper binaries (decompile, sleigh, demanglers,
+# lzfse). A Ghidra install copied off a Windows/drvfs mount silently loses +x on these; Ghidra's
+# Java side still works, but DecompInterface cannot spawn `decompile`, so EVERY MCP decompile
+# returns "Decompilation failed" while disasm/xref/symbol queries keep working (root-caused
+# 2026-07-28: ~/tools/ghidra_12.1.2_PUBLIC had decompile/sleigh at 0664). chmod is idempotent
+# and cheap; run it every start so a re-copied install can never regress decompilation.
+fix_native_exec_bits() {
+  local root="${HEADLESS%/support/analyzeHeadless}"
+  [[ -d "$root" ]] || return 0
+  find "$root" -type f -path '*/os/linux_x86_64/*' ! -name '*.txt' ! -perm -u+x \
+    -exec chmod a+x {} + 2>/dev/null || true
+}
+
 do_start() {
+  # Heal exec bits even when the daemon is already live: the decompile process is spawned
+  # per-request, so restoring +x fixes decompilation WITHOUT a restart (verified 2026-07-28).
+  fix_native_exec_bits
   if is_running; then echo "already running (pid $(pgrep -f MCPServeHeadless.java | tr '\n' ' '))"; return 0; fi
   rm -f "$STOPFILE"
   echo "starting MCP daemon: $PROJ_NAME on port $PORT ${RO:-(writable)}"

@@ -2878,6 +2878,14 @@ name = "er-safe-input"
 version = "0.1.0"
 
 [[package]]
+name = "er-save-disable-dll"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "er-hook",
+]
+
+[[package]]
 name = "er-save-loader"
 version = "0.1.0"
 dependencies = [

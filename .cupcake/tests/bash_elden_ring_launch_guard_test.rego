@@ -530,3 +530,196 @@ test_deny_git_commit_heredoc_then_quoted_ersc_copy if {
 	denials := guard.deny with input as bash_event(cmd)
 	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
 }
+
+# ---------------------------------------------------------------------------
+# 2026-07-28 false positive: the bundling rule fired on TEXT that only mentions
+# the filename. Two defects: the bd text exemption matched only a hard-coded
+# `/home/banon/...` path (not the `$HOME/.local/bin/bd` form AGENTS.md
+# documents), and the fallback denied on `ersc.dll` plus ANY of the substrings
+# "stage"/"bundle"/"archive"/"tar"/"rar" -- which hide inside "target",
+# "startup", "library", "staged". Deny now requires a real file-moving verb.
+# ---------------------------------------------------------------------------
+
+ctx_execute_event(code) := {
+	"hook_event_name": "PreToolUse",
+	"tool_name": "ctx_execute",
+	"tool_input": {"language": "python", "code": code},
+}
+
+write_event(path, content) := {
+	"hook_event_name": "PreToolUse",
+	"tool_name": "Write",
+	"tool_input": {"file_path": path, "content": content},
+}
+
+# --- (i) TEXT that merely mentions the DLL is ALLOWED -----------------------
+
+# The exact denied command (abridged prose, same shape): `$HOME`-relative bd
+# binary, quoted memory body naming the DLL, `target/` and `stage` prose.
+test_allow_bd_remember_home_var_mentioning_ersc_dll if {
+	cmd := `$HOME/.local/bin/bd remember "SAVE-DISABLE INTERCEPTION STRATEGY: swallow the SL submit and fake the status poll. Also above any path redirection so it works identically under Seamless Co-op (ersc.dll redirects paths, not the SL submit). Nothing is staged into the target/ bundle." --key save-disable-strategy-swallow-SL-submit-fake-status-poll-2026-07-28`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+test_allow_bd_create_home_var_mentioning_ersc_dll if {
+	cmd := `${HOME}/.local/bin/bd create "seamless compat" -d "ersc.dll must never be staged into a me3 profile or the target/ release bundle" -t task`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+test_allow_bd_update_tilde_path_mentioning_ersc_dll if {
+	cmd := `~/.local/bin/bd update er-effects-rs-1 --notes "profile references the game-installed ersc.dll; no archive step"`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# Another user's home must work too (no hard-coded /home/banon).
+test_allow_bd_remember_other_user_home_mentioning_ersc_dll if {
+	cmd := `/home/choza/.local/bin/bd remember --key k "ersc.dll stays a compatibility target, never staged"`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+test_allow_bare_bd_remember_mentioning_ersc_dll if {
+	cmd := `bd remember --key k "ersc.dll is referenced from the me3 profile, not bundled"`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+test_allow_git_commit_message_mentioning_ersc_dll_seamless_compat if {
+	cmd := `git commit -m "docs: record that ersc.dll redirects save paths under Seamless Co-op; nothing is staged into target/"`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+test_allow_echo_prose_mentioning_ersc_dll if {
+	cmd := `echo 'ersc.dll is a compatibility target; it is never archived into the target/ bundle'`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+test_allow_printf_prose_mentioning_ersc_dll if {
+	cmd := `printf '%s\n' 'the me3 profile references the installed ersc.dll; do not stage it'`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+test_allow_gh_pr_create_body_file_mentioning_ersc_dll if {
+	cmd := concat("\n", [
+		"tmp_body=$(mktemp)",
+		"cat > \"$tmp_body\" <<'EOF'",
+		"Policy note: ersc.dll is never staged into the target/ release bundle.",
+		"EOF",
+		"gh pr create --base main --head branch --title t --body-file \"$tmp_body\"",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# Read-only inspection of the game-installed DLL is not bundling.
+test_allow_sha256sum_of_installed_ersc_dll if {
+	denials := guard.deny with input as bash_event(`sha256sum 'SeamlessCoop/ersc.dll'`)
+	count(denials) == 0
+}
+
+# Arrow notation in a doc heredoc is prose, not a redirect into the DLL.
+test_allow_heredoc_doc_arrow_notation_mentioning_ersc_dll if {
+	cmd := concat("\n", [
+		"cat > docs/seamless-compat.md <<'EOF'",
+		"load order: me3 profile -> ersc.dll -> er_effects_rs.dll",
+		"EOF",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# Writing documentation that names the DLL is not an executable payload at all.
+test_allow_write_markdown_doc_mentioning_ersc_dll if {
+	event := write_event("docs/seamless-compat.md", "The me3 profile references the game-installed ersc.dll; it is never bundled.")
+	denials := guard.deny with input as event
+	count(denials) == 0
+}
+
+# --- (ii) Real bundling stays DENIED ----------------------------------------
+
+# Staging into a me3 profile directory.
+test_deny_cp_ersc_dll_into_me3_profile if {
+	cmd := `cp -f "/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll" /home/banon/Elden/profile/ersc.dll`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
+}
+
+test_deny_install_ersc_dll_into_me3_profile if {
+	cmd := `install -Dm755 SeamlessCoop/ersc.dll target/me3-profile/ersc.dll`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
+}
+
+# Quoted operands survive the quote scrub via the statement-head verb check.
+test_deny_mv_quoted_ersc_dll_into_target_bundle if {
+	cmd := `mv 'SeamlessCoop/ersc.dll' target/release-bundle/`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
+}
+
+test_deny_zip_quoted_ersc_dll_into_release_artifact if {
+	cmd := `zip -j target/release/er-net-effects.zip 'SeamlessCoop/ersc.dll'`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
+}
+
+test_deny_tar_ersc_dll_into_release_artifact if {
+	cmd := `tar -czf target/er-net-effects-release.tgz me3/profile SeamlessCoop/ersc.dll`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
+}
+
+# A redirect whose write TARGET is the DLL is staging, even with a read-only
+# command word in front.
+test_deny_redirect_write_target_ersc_dll if {
+	cmd := `cat vendor/seamless-coop-v1.9.9/SeamlessCoop/ersc.dll > target/release/ersc.dll`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
+}
+
+# A staging script handed the DLL path.
+test_deny_staging_script_with_ersc_dll_argument if {
+	cmd := `bash scripts/stage-net-effects-release.sh --dll SeamlessCoop/ersc.dll`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
+}
+
+# argv-list copy inside an interpreter payload.
+test_deny_subprocess_argv_cp_ersc_dll if {
+	cmd := `python3 -c 'import subprocess; subprocess.run(["cp", "SeamlessCoop/ersc.dll", "target/release/ersc.dll"])'`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
+}
+
+# Multi-line library copy call in a non-command tool field.
+test_deny_ctx_execute_multiline_shutil_copy_ersc_dll if {
+	code := concat("\n", [
+		"import shutil",
+		"shutil.copy2(",
+		"    'SeamlessCoop/ersc.dll',",
+		"    'target/release/ersc.dll',",
+		")",
+	])
+	denials := guard.deny with input as ctx_execute_event(code)
+	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
+}
+
+# The widened bd path match must not leak the exemption to a chained copy.
+test_deny_bd_home_var_chained_ersc_copy if {
+	cmd := `$HOME/.local/bin/bd remember --key k "note" && cp 'SeamlessCoop/ersc.dll' target/release/`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
+}
+
+# ... nor to a command substitution that really copies.
+test_deny_bd_home_var_substitution_ersc_copy if {
+	cmd := `$HOME/.local/bin/bd remember --key k "$(cp SeamlessCoop/ersc.dll target/release/)"`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
+}
