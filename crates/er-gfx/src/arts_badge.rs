@@ -38,7 +38,10 @@
 //! serves all three (and tracks the vanilla layout if an asset ever shifts).
 
 use crate::title_05_000::fnv1a64;
-use crate::{GfxError, Matrix, Movie, PO2_HAS_CHARACTER, PO2_HAS_MATRIX, PO2_HAS_NAME, Rect, Tag};
+use crate::{
+    GfxError, Matrix, Movie, PO2_HAS_CHARACTER, PO2_HAS_MATRIX, PO2_HAS_NAME, PO3_HAS_VISIBLE,
+    Rect, Tag,
+};
 
 /// Instance name of the tile child the badge DLL binds and draws into. This is a VANILLA
 /// child, not an injected one.
@@ -101,6 +104,29 @@ pub struct BadgeTarget {
     /// Derived and verified by `tests/arts_badge.rs`.
     pub edited_len: usize,
     pub edited_fnv1a64: u64,
+    /// Extra named children a tile must ALSO place to be badge-able in this movie.
+    ///
+    /// Empty for the menu movies, where every `ItemIcon`+`AttributeIcon` tile is a real item
+    /// slot. The HUD movie needs it: `01_000_fe` holds the quick-slot strip AND both
+    /// item-acquisition banners, and the banners are populated by a path we do not hook -- a
+    /// badge there would be a bare plate nothing ever fills. The quick-slots are the only
+    /// tiles that also place `Dish` (their round backing), so that is the discriminator.
+    ///
+    /// Structural on purpose: a character-id allow-list would be wrong the moment a user's
+    /// menu mod renumbers the movie, which is the whole case [`derive_unknown`] exists for.
+    pub require_children: &'static [&'static str],
+    /// Emit the injected (nested) badge placement with `visible = 0`.
+    ///
+    /// ONLY the HUD movie. There, every quick-slot shares one `ItemIcon` container, so the
+    /// badge necessarily exists on slots nothing populates and must not show its un-set
+    /// placeholder (run 20260728-082544: green squares on the quick-item previews, which no
+    /// hook of ours binds and therefore cannot hide natively).
+    ///
+    /// The menus must stay VISIBLE-by-default: `02_010_equiptop` is the one menu using the
+    /// nested mount, and making it hidden removed its badges outright while the three
+    /// re-pointed menus kept theirs (reported 2026-07-28). Their populate path shows and hides
+    /// per tile already, so they need no help and tolerate no interference.
+    pub default_hidden: bool,
 }
 
 /// Every movie the badge is applied to. Fingerprints are UXM-unpacked 1.16.2.
@@ -111,7 +137,22 @@ pub struct BadgeTarget {
 /// per-movie derived-movie cache keyed on `ptr::eq` never matched, fell back to slot 0, and
 /// served the inventory movie's bytes for the equip AND sort-chest movies). The lookups
 /// below therefore return an INDEX, and nothing depends on pointer identity.
-pub static TARGETS: [BadgeTarget; 4] = [
+pub static TARGETS: [BadgeTarget; 5] = [
+    // The in-game HUD armament quick-slot strip. Its tiles are AS3 class-bound and place no
+    // `ArtsIcon`, so the badge nests in the `ItemIcon` container they all share. Scoped by
+    // `Dish` because this movie ALSO holds both item-acquisition banners, which no hook of
+    // ours populates -- a badge there would be a plate that never fills. Populated by the
+    // dedicated HUD hooks in `er-armament-icons::hud_badge`, NOT by the menu tile-populate.
+    BadgeTarget {
+        file_name: "01_000_fe.gfx",
+        url_needle: b"01_000_fe",
+        vanilla_len: 1634757,
+        vanilla_fnv1a64: 0x71f7_ecb9_79e7_8040,
+        edited_len: 1634920,
+        edited_fnv1a64: 0x71d1_337b_b6ef_fde5,
+        require_children: &["Dish"],
+        default_hidden: true,
+    },
     // The Equipment screen's loadout grid. Its tile (sprite 59) places NO `ArtsIcon`, so the
     // badge is nested inside the `ItemIcon` container instead -- see `BadgeMount`.
     BadgeTarget {
@@ -121,6 +162,8 @@ pub static TARGETS: [BadgeTarget; 4] = [
         vanilla_fnv1a64: 0xc454_e159_e4cd_63a2,
         edited_len: 15758,
         edited_fnv1a64: 0x73da_027e_dafb_b70d,
+        require_children: &[],
+        default_hidden: false,
     },
     BadgeTarget {
         file_name: "02_011_equip.gfx",
@@ -129,6 +172,8 @@ pub static TARGETS: [BadgeTarget; 4] = [
         vanilla_fnv1a64: 0xf40f_9505_3a6e_f33c,
         edited_len: 18525,
         edited_fnv1a64: 0xea36_0352_1b69_3519,
+        require_children: &[],
+        default_hidden: false,
     },
     BadgeTarget {
         file_name: "02_020_inventory.gfx",
@@ -137,6 +182,8 @@ pub static TARGETS: [BadgeTarget; 4] = [
         vanilla_fnv1a64: 0x9f3a_47d3_38bd_2ea0,
         edited_len: 35350,
         edited_fnv1a64: 0xc3fd_2a6e_fa59_2b5a,
+        require_children: &[],
+        default_hidden: false,
     },
     BadgeTarget {
         file_name: "03_050_itembox.gfx",
@@ -145,6 +192,8 @@ pub static TARGETS: [BadgeTarget; 4] = [
         vanilla_fnv1a64: 0x17a0_fa52_78fb_400f,
         edited_len: 79399,
         edited_fnv1a64: 0x2b6b_e60e_9d1f_1dc2,
+        require_children: &[],
+        default_hidden: false,
     },
 ];
 
@@ -317,6 +366,54 @@ fn place(character_id: u16, depth: u16, name: Option<&str>, scale: f32, x: f32, 
     }
 }
 
+/// The same placement as [`place`], but emitted as `PlaceObject3` with `visible = 0`.
+///
+/// Used for every INJECTED (nested) badge, because a badge that nothing populates must be
+/// invisible rather than showing its un-set placeholder. The HUD movie makes this mandatory:
+/// sprite 343 is the `ItemIcon` container for the left weapon, the right weapon, the quick-item
+/// slot AND its two small cycle previews (see `tests/hud_tree_probe.rs`), so injecting there
+/// necessarily gives all of them a badge while only the two weapon slots are ever populated.
+///
+/// Hiding from the NATIVE side cannot cover them: it only reaches clips something binds, and the
+/// cycle previews are bound by a path that resolves `ItemIcon/IconImage` alone -- which is why
+/// run 20260728-082544 left green placeholder squares on exactly those two tiles and nowhere
+/// else. Default-hidden in the movie needs no binder at all: the slot stays invisible until code
+/// explicitly shows it.
+///
+/// Safe for the menus too -- their draw path already calls `SetVisible(true)` before drawing
+/// and `SetVisible(false)` on every non-draw path.
+fn place_hidden(
+    character_id: u16,
+    depth: u16,
+    name: Option<&str>,
+    scale: f32,
+    x: f32,
+    y: f32,
+) -> Tag {
+    let mut flags1 = PO2_HAS_CHARACTER | PO2_HAS_MATRIX;
+    if name.is_some() {
+        flags1 |= PO2_HAS_NAME;
+    }
+    Tag::PlaceObject3 {
+        flags1,
+        flags2: PO3_HAS_VISIBLE,
+        depth,
+        class_name: None,
+        character_id: Some(character_id),
+        matrix: Some(placed_matrix(scale, x, y)),
+        color_transform: None,
+        ratio: None,
+        name: name.map(str::to_owned),
+        clip_depth: None,
+        filters: None,
+        blend_mode: None,
+        bitmap_cache: None,
+        // (visible = 0, background RGBA unused when hidden)
+        visible: Some((0, [0, 0, 0, 0])),
+        force_long: false,
+    }
+}
+
 /// `GFX_DefineExternalImage2` body: `characterId u32`, `bitmapFormat u16`,
 /// `targetWidth u16`, `targetHeight u16`, then length-prefixed export and file names.
 /// Byte layout read off the vanilla tags in `01_000_fe.gfx`.
@@ -413,13 +510,25 @@ fn sprite_index(movie: &Movie, id: u16) -> Option<usize> {
 /// Every badge-able tile in the movie: a sprite placing `ItemIcon` AND `AttributeIcon` (the
 /// mirror reference the badge's position is derived from). Tiles WITH `ArtsIcon` are
 /// re-pointed; tiles without get the nested mount.
-fn resolve_layouts(movie: &Movie) -> Result<Vec<TileLayout>, BadgeError> {
+fn resolve_layouts(
+    movie: &Movie,
+    require_children: &[&str],
+) -> Result<Vec<TileLayout>, BadgeError> {
     let mut out = Vec::new();
     for idx in 0..movie.tags.len() {
         let Tag::DefineSprite { tags: tile, .. } = &movie.tags[idx] else {
             continue;
         };
         if placement_named(tile, ITEM_INSTANCE_NAME).is_none() {
+            continue;
+        }
+        // Movie-specific narrowing (see `BadgeTarget::require_children`): in the HUD movie
+        // this keeps the badge on the quick-slot strip and off the item-acquisition banners,
+        // which no hook of ours populates.
+        if require_children
+            .iter()
+            .any(|c| placement_named(tile, c).is_none())
+        {
             continue;
         }
         // The badge mirrors `AttributeIcon`; a tile without one gives us no authoritative
@@ -560,8 +669,17 @@ fn first_free_id(movie: &Movie) -> Result<u16, BadgeError> {
 /// All-or-nothing: any missing structure fails cleanly and the caller serves the untouched
 /// vanilla movie.
 pub fn arts_badge(vanilla: &[u8]) -> Result<Vec<u8>, BadgeError> {
+    arts_badge_scoped(vanilla, &[], false)
+}
+
+/// [`arts_badge`], narrowed to tiles that also place every name in `require_children`.
+pub fn arts_badge_scoped(
+    vanilla: &[u8],
+    require_children: &[&str],
+    default_hidden: bool,
+) -> Result<Vec<u8>, BadgeError> {
     let mut movie = Movie::parse(vanilla).map_err(BadgeError::Parse)?;
-    let layouts = resolve_layouts(&movie)?;
+    let layouts = resolve_layouts(&movie, require_children)?;
     let mut next_id = first_free_id(&movie)?;
     let plate_id = next_id;
     next_id += 1;
@@ -730,7 +848,7 @@ pub fn arts_badge(vanilla: &[u8]) -> Result<Vec<u8>, BadgeError> {
                     .unwrap_or(tags.len().saturating_sub(1));
                 tags.insert(
                     at,
-                    place(
+                    (if default_hidden { place_hidden } else { place })(
                         badge_clip_id,
                         depth,
                         Some(BADGE_INSTANCE_NAME),
@@ -875,6 +993,15 @@ pub fn validate_additive(vanilla: &[u8], edited: &[u8]) -> Result<(), BadgeError
 ///
 /// Either gate failing is a clean no-op: the caller serves the user's own bytes untouched.
 pub fn derive_unknown(input: &[u8]) -> Result<Vec<u8>, BadgeError> {
+    derive_unknown_scoped(input, &[], false)
+}
+
+/// [`derive_unknown`], narrowed to the target's `require_children`.
+pub fn derive_unknown_scoped(
+    input: &[u8],
+    require_children: &[&str],
+    default_hidden: bool,
+) -> Result<Vec<u8>, BadgeError> {
     let reproduced = Movie::parse(input)
         .map_err(BadgeError::Parse)?
         .write()
@@ -889,7 +1016,7 @@ pub fn derive_unknown(input: &[u8]) -> Result<Vec<u8>, BadgeError> {
                 .position(|(a, b)| a != b),
         });
     }
-    let out = arts_badge(input)?;
+    let out = arts_badge_scoped(input, require_children, default_hidden)?;
     validate_additive(input, &out)?;
     Ok(out)
 }
@@ -897,7 +1024,7 @@ pub fn derive_unknown(input: &[u8]) -> Result<Vec<u8>, BadgeError> {
 /// [`arts_badge`] plus the known-input self-consistency gate: for a movie we have baked
 /// fingerprints for, the derived bytes must match exactly.
 pub fn derive(target: &BadgeTarget, vanilla: &[u8]) -> Result<Vec<u8>, BadgeError> {
-    let out = arts_badge(vanilla)?;
+    let out = arts_badge_scoped(vanilla, target.require_children, target.default_hidden)?;
     if target.edited_len != 0
         && target.edited_fnv1a64 != 0
         && (out.len() != target.edited_len || fnv1a64(&out) != target.edited_fnv1a64)

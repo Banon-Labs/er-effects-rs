@@ -31,6 +31,7 @@ use er_game_base::log::{append_line, game_directory_path};
 /// Runtime GFX template edit (equip menu ArtsIcon/IconImage) -- windows-only.
 #[cfg(windows)]
 mod gfx_equip_hook;
+mod hud_badge;
 
 /// In-DLL crash tracer (VEH deep traces on access violations) -- windows-only.
 #[cfg(windows)]
@@ -330,6 +331,7 @@ fn spawn_install_thread() {
                 }
             }
             install_tile_populate_hook(base);
+            hud_badge::install(base);
         });
 }
 

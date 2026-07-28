@@ -112,7 +112,7 @@ struct EditedMovie {
 /// must never move or free.
 static EDITED: [OnceLock<EditedMovie>; MAX_TARGETS] = [const { OnceLock::new() }; MAX_TARGETS];
 /// Capacity of [`EDITED`]; asserted to cover every target at compile time.
-const MAX_TARGETS: usize = 4;
+const MAX_TARGETS: usize = 8;
 const _: () = assert!(
     er_gfx::arts_badge::TARGETS.len() <= MAX_TARGETS,
     "grow MAX_TARGETS to cover every badge target"
@@ -337,7 +337,14 @@ unsafe fn maybe_swap_equip_file(base: usize, file: usize, via: &str, url_slot: O
             let derived = if known_vanilla {
                 er_gfx::arts_badge::derive(target, &input)
             } else {
-                er_gfx::arts_badge::derive_unknown(&input)
+                // Scoping and the hidden-by-default flag are per-MOVIE properties, so a
+                // user's modded movie must get the same treatment as vanilla -- otherwise a
+                // modded HUD would be edited unscoped and visible.
+                er_gfx::arts_badge::derive_unknown_scoped(
+                    &input,
+                    target.require_children,
+                    target.default_hidden,
+                )
             };
             match derived {
                 Ok(out) => {

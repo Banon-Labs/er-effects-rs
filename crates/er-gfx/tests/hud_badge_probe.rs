@@ -1,9 +1,10 @@
 //! Probe: does the movie-agnostic badge edit resolve the HUD movie's quick-slot tiles?
 //!
-//! `01_000_fe.gfx` holds the in-game armament quick-slot strip (sprites 353/386 = the big
-//! left/right slots, 355/357 = the small cycle previews). None of them place `ArtsIcon`, so
-//! they take [`BadgeMount::NestInItemIcon`] -- and all four SHARE one `ItemIcon` container
-//! (sprite 343), so one nested injection must cover the whole strip.
+//! `01_000_fe.gfx` holds the in-game equip strip. Sprite 353 is the tile behind `LeftWep`,
+//! `RightWep` AND the quick-item slot; 386 is the spell tile; 355/357 are the small quick-item
+//! cycle previews. None of them place `ArtsIcon`, so they take [`BadgeMount::NestInItemIcon`] --
+//! and all of them SHARE one `ItemIcon` container (sprite 343), so a single nested injection
+//! necessarily covers the whole strip and the runtime decides which slots show it.
 //!
 //! This is a structural probe, not a product gate: the HUD movie is deliberately NOT in
 //! `TARGETS` until the HUD populate hook exists, because the badge clip carries the plate and
@@ -66,6 +67,39 @@ fn hud_movie_badge_edit_derives() {
             return;
         }
     };
+    // SCOPED to the quick-slot strip: `Dish` is placed by the HUD equip slots and by nothing
+    // else in this movie, so it separates them from the two item-acquisition banners, which
+    // no hook of ours populates and which would therefore show a bare plate.
+    let scoped =
+        er_gfx::arts_badge::arts_badge_scoped(&vanilla, &["Dish"], true).expect("scoped edit");
+    {
+        let v = Movie::parse(&vanilla).expect("parse");
+        let e = Movie::parse(&scoped).expect("parse");
+        let mut changed = Vec::new();
+        for vt in &v.tags {
+            let Tag::DefineSprite { id, tags: vs, .. } = vt else {
+                continue;
+            };
+            if let Some(Tag::DefineSprite { tags: es, .. }) = e
+                .tags
+                .iter()
+                .find(|t| matches!(t, Tag::DefineSprite { id: sid, .. } if sid == id))
+                && vs != es
+            {
+                changed.push(*id);
+            }
+        }
+        println!(
+            "scoped(Dish): changed sprites {changed:?}  ({} bytes)",
+            scoped.len()
+        );
+        assert_eq!(
+            changed,
+            vec![343],
+            "the Dish-scoped edit must touch ONLY the shared quick-slot ItemIcon container, \
+             not the item-acquisition banners (563/594)"
+        );
+    }
     println!(
         "edited: {} bytes  fnv=0x{:016x}",
         edited.len(),
