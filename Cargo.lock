@@ -2831,6 +2831,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-menu-sort"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "fromsoftware-shared",
+]
+
+[[package]]
 name = "er-net-effects-dll"
 version = "0.1.0"
 dependencies = [
@@ -2938,6 +2946,7 @@ name = "er-telemetry-dll"
 version = "0.1.0"
 dependencies = [
  "eldenring",
+ "er-hook",
  "er-telemetry",
  "fromsoftware-shared",
  "windows 0.62.2",

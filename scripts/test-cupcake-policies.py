@@ -43,6 +43,23 @@ def run_case(case: PolicyCase) -> None:
     }
     if case.extra_event:
         event.update(case.extra_event)
+    env = {**os.environ}
+    # CI checks out detached commits, making `git branch --show-current` empty.
+    # Policy-regression allow-cases should model a normal feature branch by default, but
+    # cases that explicitly set or remove the current_branch signal must control the
+    # override too; otherwise live Cupcake eval cannot exercise main/missing-branch guards.
+    signals = event.get("signals")
+    if isinstance(signals, dict) and "current_branch" in signals:
+        branch_signal = signals["current_branch"]
+        if isinstance(branch_signal, dict):
+            env["CUPCAKE_CURRENT_BRANCH_OVERRIDE"] = str(branch_signal.get("output", ""))
+        else:
+            env["CUPCAKE_CURRENT_BRANCH_OVERRIDE"] = str(branch_signal)
+    elif isinstance(signals, dict):
+        env["CUPCAKE_CURRENT_BRANCH_OVERRIDE"] = ""
+    else:
+        env["CUPCAKE_CURRENT_BRANCH_OVERRIDE"] = "feature/policy-regression"
+
     result = subprocess.run(
         ["cupcake", "eval", "--harness", "claude", "--strict", "--log-level", "error"],
         cwd=REPO_ROOT,
@@ -51,13 +68,7 @@ def run_case(case: PolicyCase) -> None:
         capture_output=True,
         check=False,
         timeout=30,
-        env={
-            **os.environ,
-            # CI checks out detached commits, making `git branch --show-current` empty.
-            # Policy-regression allow-cases should model a normal feature branch; direct
-            # OPA tests cover missing/empty branch signal fail-closed behavior.
-            "CUPCAKE_CURRENT_BRANCH_OVERRIDE": "feature/policy-regression",
-        },
+        env=env,
     )
     output = result.stdout + result.stderr
     allowed = result.returncode == 0
@@ -132,6 +143,24 @@ def main() -> int:
         PolicyCase(
             "allow-repo-cupcake-system-path-not-absolute-system",
             "opa check .cupcake/system .cupcake/policies/claude/builtins/protected_paths.rego",
+            True,
+        ),
+        PolicyCase(
+            "deny-git-push-on-main",
+            "git push",
+            False,
+            "Do not push directly to main",
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        PolicyCase(
+            "deny-git-push-main-from-feature",
+            "git push origin HEAD:main",
+            False,
+            "Do not push directly to main",
+        ),
+        PolicyCase(
+            "allow-git-push-feature-branch",
+            "git push -u origin guard/no-direct-main-push",
             True,
         ),
         PolicyCase(
@@ -558,7 +587,31 @@ def main() -> int:
             include_timeout=False,
             tool_name="Write",
         ),
+        # AskUserQuestion (the multiple-choice questionnaire tool) is HARD-BLOCKED
+        # unconditionally (block_askuserquestion): the user does not want
+        # questionnaire prompts surfaced during /goal work -- the agent must
+        # proceed autonomously and state blockers/recommendations in prose. There
+        # is no reliable goal-active signal to gate on, so the block is always-on.
+        PolicyCase(
+            "deny-askuserquestion-questionnaire",
+            "",
+            False,
+            "blocked the AskUserQuestion questionnaire tool",
+            {"questions": [{"question": "Which?", "header": "H", "options": [{"label": "A"}, {"label": "B"}]}]},
+            include_timeout=False,
+            tool_name="AskUserQuestion",
+        ),
     ]
+
+    # --- ER launcher-name non-execution cases ------------------------------------------------------
+    # A launcher script path passed as an argument to a non-executing command must remain allowed.
+    # The separate forbidden-form launch guard still blocks Steam/EAC/start_protected_game/ersc.dll
+    # paths; the removed per-prompt launch-clearance gate is intentionally no longer tested here.
+    cases.extend([
+        PolicyCase("allow-git-add-launcher-name", "git add scripts/run-vanilla-reload-agentdriven.sh", True),
+        PolicyCase("allow-shellcheck-launcher-name", "shellcheck scripts/run-camera-smoke.sh", True),
+    ])
+
     # The GitHub attribution guard is MACHINE-GLOBAL (XDG config, Banon-Labs/cupcake-config), not
     # repo-local, so CI checkouts do not have it and a footerless gh body is (correctly) allowed
     # there. Exercise its heredoc-substitution fallback only where that policy is installed.

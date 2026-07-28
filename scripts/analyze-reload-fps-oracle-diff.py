@@ -131,6 +131,18 @@ def analyze(path: Path, settle: int) -> None:
             qpc_s = f"{qpc['median']:.0f}us" if qpc else "n/a"
             print(f"   --- present cadence ---")
             print(f"   sync_interval(requested)={dict(si)}  refresh/present(observed)={rpp_s}  qpc_delta={qpc_s}")
+        # GPU-BUSY per frame (goal §3.3 gpu_frame_us, bd er-effects-rs-03ma): injected D3D12 timestamp
+        # pair on the game queue, EXCLUDING the vsync/present-wait. Splits the residual(flip/gpu) bucket:
+        # gpu_frame ~= residual => render-bound; gpu_frame << residual => the residual is present-wait.
+        # Drop 0s (pre-production frames). samples/state make an empty window attributable.
+        gpu = _stats([_f(r.get("oracle_gpu_frame_us")) for r in settled if _f(r.get("oracle_gpu_frame_us"))])
+        gpu_samp = settled[-1].get("oracle_gpu_frame_samples") if settled else None
+        gpu_state = settled[-1].get("oracle_gpu_frame_state") if settled else None
+        if gpu:
+            print(f"   --- gpu-busy (D3D12 timestamp, excl. present-wait) ---")
+            print(f"   gpu_frame  median={gpu['median']/1000:7.3f}ms p95={gpu['p95']/1000:7.3f}ms max={gpu['max']/1000:7.3f}ms n={gpu['n']} samples={gpu_samp} state={gpu_state}")
+        else:
+            print(f"   gpu-busy: NO samples (state={gpu_state} samples={gpu_samp}) -- oracle not live this window")
         # context (last value in window)
         ctx = {k: settled[-1].get(k) for k in CONTEXT if k in settled[-1]}
         print(f"   ctx: {ctx}\n")
@@ -150,6 +162,16 @@ def analyze(path: Path, settle: int) -> None:
                 continue
             dframe = cur_frame["median"] - base_frame["median"]
             print(f"   load{ep+1}: frame_ms {base_frame['median']:.2f} -> {cur_frame['median']:.2f}  (+{dframe:.2f}ms)")
+            # gpu_frame_us delta (goal §4.2): D = median(reload gpu_frame) - median(load1 gpu_frame), ms.
+            # This is the render-cost component of dframe; the confound-controlled Δ = D_mod - D_van
+            # (computed across two runs) attributes the reload divergence to GPU render vs present-wait.
+            gb = _stats([_f(r.get("oracle_gpu_frame_us")) for r in base if _f(r.get("oracle_gpu_frame_us"))])
+            gc = _stats([_f(r.get("oracle_gpu_frame_us")) for r in cur if _f(r.get("oracle_gpu_frame_us"))])
+            if gb and gc:
+                dg = (gc["median"] - gb["median"]) / 1000.0
+                print(f"        {'gpu_frame(render)':18s} {gb['median']/1000:6.3f} -> {gc['median']/1000:6.3f}  ({'+' if dg>=0 else ''}{dg:.3f}ms)")
+            else:
+                print(f"        gpu_frame(render): base_samples={'y' if gb else 'n'} reload_samples={'y' if gc else 'n'} -- gpu oracle not live in one/both epochs")
             for k in COMPONENTS_US:
                 b = _stats([_f(r.get(k)) for r in base])
                 c = _stats([_f(r.get(k)) for r in cur])

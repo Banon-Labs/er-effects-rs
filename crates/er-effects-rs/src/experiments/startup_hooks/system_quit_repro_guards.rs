@@ -1286,6 +1286,15 @@ unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, source: &str) {
     // Re-arm the menu-free clean-title switch reload one-shot so every switch (not just the first) can
     // drive its own picked-slot feed-deserialize -> continue_confirm (own_load_switch_reload_fire).
     SYSTEM_QUIT_SWITCH_MENU_FREE_RELOAD_FIRED.store(0, Ordering::SeqCst);
+    // Reset the switch-reload FD4-IO phase + Phase-3 outgoing-teardown latches. The USER ProfileSelect arm
+    // was MISSING these (only switch_slot_arm_programmatic had them), so a user-driven CONSECUTIVE load
+    // inherited SWITCH_RELOAD_FD4IO_COMMITTED=1 stale from the prior load -> own_load_switch_reload_fire
+    // short-circuited at the already-committed guard -> no SUBMIT -> FRESH_DESER_DONE stuck 0 -> the b78
+    // guard wrote GameMan requestedSaveSlotLoad=-1 every frame -> native pump gate false -> world torn down
+    // at ENTERING WORLD = the load3 softlock (bd compounding-reload-two-roots-...-chainB-stale-fd4io-latch-b78-2026-07-23).
+    // These are the FD4IO/OUTGOING latches that switch_slot_arm_programmatic already resets safely -- NOT
+    // the RETURN_TITLE/FINAL_FUNCTOR counters that the 2026-07-02 bisect below found regressive.
+    crate::experiments::own_load::reset_switch_reload_latches();
     // Re-arm the return-title one-shots so EVERY switch (not just the first) tears the world down.
     // Both are consumed by the first switch and never reset otherwise, so a second switch in the same
     // session would skip the native return-title REQUEST (`== 0` gate, sets saveRequested+bc4=1) and
@@ -1347,6 +1356,8 @@ unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, source: &str) {
     PRODUCT_AUTOLOAD_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_MENU, Ordering::SeqCst);
     TFC_CONTINUE_FIRED.store(0, Ordering::SeqCst);
+    TFC_FORCED_CONTINUE_HANDOFF_MS.store(0, Ordering::SeqCst);
+    OWN_LOAD_FORCED_CONTINUE_HANDOFF_MS.store(0, Ordering::SeqCst);
     TFC_LOAD_VEC_WAIT_TICKS.store(0, Ordering::SeqCst);
     OWN_STEPPER_MENU_OPENED.store(OWN_STEPPER_MENU_OPENED_NO, Ordering::SeqCst);
     TITLE_ACCEPT_BYTE_GATE_FIRED.store(false, Ordering::SeqCst);

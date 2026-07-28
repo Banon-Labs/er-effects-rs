@@ -9,11 +9,14 @@ use windows::core::{GUID, s};
 use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 
 static INPUT_BLOCKER: OnceLock<&'static InputBlocker> = OnceLock::new();
-/// DIAGNOSTIC: how many times the game actually CALLS the DInput keyboard/mouse `GetDeviceState`
-/// (i.e. whether native ER reads input via DInput at all). If the keyboard counter stays 0 while the
-/// harness holds, ER does NOT read keyboard via DInput on native -> our `set_injected_key` stamp never
-/// reaches the game and a different injection path (WM_KEYDOWN / RawInput) is required.
+/// DIAGNOSTIC: how many times the game actually CALLS the DInput keyboard `GetDeviceState`
+/// (i.e. whether native ER reads keyboard input via DInput at all). If the keyboard counter stays 0
+/// while the harness holds, ER does NOT read keyboard via DInput on native -> our `set_injected_key`
+/// stamp never reaches the game and a different injection path (WM_KEYDOWN / RawInput) is required.
 pub use er_telemetry::counters::DINPUT_KB_HOOK_FIRES;
+/// LEGACY telemetry field, retained for the emitted `oracle`/`effect_dinput_mouse_hook_fires` schema.
+/// The DInput MOUSE `GetDeviceState` hook was REMOVED (user 2026-07-23: the user's real mouse must
+/// behave as normal player input, never blocked), so this counter is no longer incremented and stays 0.
 pub use er_telemetry::counters::DINPUT_MOUSE_HOOK_FIRES;
 pub(crate) use er_telemetry::counters::DINPUT_SUPPRESSED_ARROW_KEYS;
 pub(crate) use er_telemetry::counters::INJECTED_KEY;
@@ -89,7 +92,6 @@ bitflags! {
     pub struct InputFlags: u8 {
         const GamePad  = 0b001;
         const Keyboard = 0b010;
-        const Mouse    = 0b100;
     }
 }
 
@@ -108,12 +110,6 @@ const IID_IDIRECTINPUT8W: GUID = GUID::from_values(
 );
 const GUID_SYS_KEYBOARD: GUID = GUID::from_values(
     0x6F1D2B61,
-    0xD5A0,
-    0x11CF,
-    [0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00],
-);
-const GUID_SYS_MOUSE: GUID = GUID::from_values(
-    0x6F1D2B60,
     0xD5A0,
     0x11CF,
     [0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00],
@@ -170,9 +166,7 @@ unsafe fn with_probe_device(
 
 type GetDeviceStateFn = unsafe extern "system" fn(usize, u32, *mut u8) -> i32;
 
-pub(crate) use er_telemetry::counters::DINPUT_KB_ALSO_MOUSE;
 pub(crate) use er_telemetry::counters::DINPUT_KB_GET_STATE_ORIG;
-pub(crate) use er_telemetry::counters::DINPUT_MOUSE_GET_STATE_ORIG;
 
 unsafe extern "system" fn dinput_kb_get_state_hook(device: usize, size: u32, data: *mut u8) -> i32 {
     DINPUT_KB_HOOK_FIRES.fetch_add(1, Ordering::Relaxed);
@@ -182,28 +176,7 @@ unsafe extern "system" fn dinput_kb_get_state_hook(device: usize, size: u32, dat
     }
     let original: GetDeviceStateFn = unsafe { std::mem::transmute(original_addr) };
     let hr = unsafe { original(device, size, data) };
-    let flags = if DINPUT_KB_ALSO_MOUSE.load(Ordering::Relaxed) {
-        InputFlags::Keyboard | InputFlags::Mouse
-    } else {
-        InputFlags::Keyboard
-    };
-    zero_blocked_dinput_state(hr, size, data, flags);
-    hr
-}
-
-unsafe extern "system" fn dinput_mouse_get_state_hook(
-    device: usize,
-    size: u32,
-    data: *mut u8,
-) -> i32 {
-    DINPUT_MOUSE_HOOK_FIRES.fetch_add(1, Ordering::Relaxed);
-    let original_addr = DINPUT_MOUSE_GET_STATE_ORIG.load(Ordering::Relaxed);
-    if original_addr == 0 {
-        return 0;
-    }
-    let original: GetDeviceStateFn = unsafe { std::mem::transmute(original_addr) };
-    let hr = unsafe { original(device, size, data) };
-    zero_blocked_dinput_state(hr, size, data, InputFlags::Mouse);
+    zero_blocked_dinput_state(hr, size, data, InputFlags::Keyboard);
     hr
 }
 
@@ -271,14 +244,12 @@ unsafe fn install_dinput_hooks() -> Result<(), MH_STATUS> {
     let hinstance = unsafe { GetModuleHandleA(None).expect("GetModuleHandle failed").0 as usize };
 
     let mut keyboard_addr = 0usize;
-    let mut mouse_addr = 0usize;
 
     unsafe {
         with_probe_device(di8_create, hinstance, &GUID_SYS_KEYBOARD, |a| {
             keyboard_addr = a
         })
     };
-    unsafe { with_probe_device(di8_create, hinstance, &GUID_SYS_MOUSE, |a| mouse_addr = a) };
 
     let kb_hook = unsafe {
         MhHook::new(
@@ -288,20 +259,6 @@ unsafe fn install_dinput_hooks() -> Result<(), MH_STATUS> {
     };
     DINPUT_KB_GET_STATE_ORIG.store(kb_hook.trampoline() as usize, Ordering::Relaxed);
     unsafe { kb_hook.queue_enable()? };
-
-    if keyboard_addr == mouse_addr {
-        DINPUT_KB_ALSO_MOUSE.store(true, Ordering::Relaxed);
-    } else {
-        let mouse_hook = unsafe {
-            MhHook::new(
-                mouse_addr as *mut c_void,
-                dinput_mouse_get_state_hook as *mut c_void,
-            )?
-        };
-        DINPUT_MOUSE_GET_STATE_ORIG.store(mouse_hook.trampoline() as usize, Ordering::Relaxed);
-        unsafe { mouse_hook.queue_enable()? };
-        std::mem::forget(mouse_hook);
-    }
 
     unsafe { MH_ApplyQueued() }.ok_context("DInput MH_ApplyQueued")?;
     std::mem::forget(kb_hook);

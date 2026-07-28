@@ -41,12 +41,10 @@ TELEMETRY_FIXTURES = [
     {},                                             # present but empty
     {"oracle_policy_window_total_builds": 0},       # benign early title
     {"oracle_policy_window_total_builds": 1, "oracle_policy_window_any_seen": True},
-    {"oracle_msgbox_total_builds": 1, "oracle_msgbox_any_seen": True},
+    {"oracle_blocking_modal_present": True},
     {"oracle_cold_char_mount_phase": 0},
     {"oracle_cold_char_mount_phase": 5},
     {"oracle_server_status_text_id": 401120},
-    {"oracle_msgbox_builder_args": [0, 0, 0, 0]},
-    {"oracle_msgbox_builder_args": "not-a-list"},   # malformed
 ]
 
 

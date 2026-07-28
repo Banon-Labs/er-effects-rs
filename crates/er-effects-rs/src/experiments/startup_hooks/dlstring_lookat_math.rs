@@ -213,9 +213,16 @@ unsafe fn sample_loading_screen_bar(this: usize) {
         }
     }
     if finish_sent != 0 && prev_finish_sent == 0 {
+        let now_ms = crate::experiments::gpu_readback::boot_view_epoch_ms().max(1) as usize;
         let hits = LOADING_SCREEN_CLOSE_SENT_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+        let _ = LOADING_SCREEN_CLOSE_SENT_FIRST_MS.compare_exchange(
+            0,
+            now_ms,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
         append_autoload_debug(format_args!(
-            "loading-bar: native LoadingScreen finish/result sent (hits={hits}, frame={current}/{max}, progress={progress_pm}permille, this=0x{this:x})"
+            "loading-bar: native LoadingScreen finish/result sent (hits={hits}, frame={current}/{max}, progress={progress_pm}permille, this=0x{this:x}, now_ms={now_ms})"
         ));
     }
 }
@@ -232,6 +239,8 @@ pub(crate) unsafe extern "system" fn loading_screen_update_hook(
             unsafe { std::mem::transmute(orig) };
         unsafe { original(this, dt, param3) };
     }
+    let now_ms = crate::experiments::gpu_readback::boot_view_epoch_ms().max(1) as usize;
+    LOADING_SCREEN_UPDATE_LAST_MS.store(now_ms, Ordering::SeqCst);
     let hits = LOADING_SCREEN_UPDATE_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
         + OWN_STEPPER_CALL_INC;
     unsafe { sample_loading_screen_bar(this) };
@@ -243,6 +252,49 @@ pub(crate) unsafe extern "system" fn loading_screen_update_hook(
             LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst),
             LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst),
         ));
+    }
+}
+
+fn stamp_loading_gfx_fadeout(source: &str, this: usize, label: usize) {
+    let now_ms = crate::experiments::gpu_readback::boot_view_epoch_ms().max(1) as usize;
+    let hits = LOADING_SCREEN_GFX_FADEOUT_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+    LOADING_SCREEN_GFX_FADEOUT_LAST_MS.store(now_ms, Ordering::SeqCst);
+    let first = LOADING_SCREEN_GFX_FADEOUT_FIRST_MS.load(Ordering::SeqCst);
+    if first == 0 {
+        let _ = LOADING_SCREEN_GFX_FADEOUT_FIRST_MS.compare_exchange(
+            0,
+            now_ms,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+    }
+    if hits <= 8 || hits.is_power_of_two() {
+        append_autoload_debug(format_args!(
+            "loading-bar: observed Scaleform FadeOut label via {source} (hits={hits}, this=0x{this:x}, label=0x{label:x}, now_ms={now_ms}, close_hits={})",
+            LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst),
+        ));
+    }
+}
+
+pub(crate) unsafe extern "system" fn scaleform_label_goto_hook(this: usize, label: usize) {
+    if unsafe { bounded_ascii_contains(label, b"fadeout") } {
+        stamp_loading_gfx_fadeout("label-goto", this, label);
+    }
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let orig = SCALEFORM_LABEL_GOTO_ORIG.load(Ordering::SeqCst);
+    if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        let original: unsafe extern "system" fn(usize, usize) = unsafe { std::mem::transmute(orig) };
+        unsafe { original(this, label) };
+    }
+}
+
+pub(crate) unsafe extern "system" fn loading_screen_gfx_fadeout_hook(this: usize) {
+    stamp_loading_gfx_fadeout("knowledge-method", this, 0);
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let orig = LOADING_SCREEN_GFX_FADEOUT_ORIG.load(Ordering::SeqCst);
+    if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        let original: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(orig) };
+        unsafe { original(this) };
     }
 }
 
@@ -270,6 +322,24 @@ pub(crate) fn install_now_loading_helper_observer_hooks() {
         Err(_) => {
             append_autoload_debug(format_args!(
                 "loading-bar: failed to resolve CS::LoadingScreen update rva 0x{LOADING_SCREEN_UPDATE_RVA:x}"
+            ));
+            None
+        }
+    };
+    let scaleform_label_goto = match game_rva(SCALEFORM_LABEL_GOTO_RVA as u32) {
+        Ok(addr) => Some(addr),
+        Err(_) => {
+            append_autoload_debug(format_args!(
+                "loading-bar: failed to resolve Scaleform label goto rva 0x{SCALEFORM_LABEL_GOTO_RVA:x}"
+            ));
+            None
+        }
+    };
+    let loading_gfx_fadeout = match game_rva(LOADING_SCREEN_GFX_FADEOUT_RVA as u32) {
+        Ok(addr) => Some(addr),
+        Err(_) => {
+            append_autoload_debug(format_args!(
+                "loading-bar: failed to resolve KnowledgeLoadingScreen GFx FadeOut rva 0x{LOADING_SCREEN_GFX_FADEOUT_RVA:x}"
             ));
             None
         }
@@ -331,6 +401,41 @@ pub(crate) fn install_now_loading_helper_observer_hooks() {
             }
         }
     }
+    if let Some(addr) = scaleform_label_goto {
+        match unsafe { MhHook::new(addr as *mut c_void, scaleform_label_goto_hook as *mut c_void) } {
+            Ok(hook) => {
+                SCALEFORM_LABEL_GOTO_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+                ok &= unsafe { hook.queue_enable() }.is_ok();
+                std::mem::forget(hook);
+            }
+            Err(status) => {
+                append_autoload_debug(format_args!(
+                    "loading-bar: Scaleform label goto hook failed: {status:?}"
+                ));
+                ok = false;
+            }
+        }
+    }
+    if let Some(addr) = loading_gfx_fadeout {
+        match unsafe {
+            MhHook::new(
+                addr as *mut c_void,
+                loading_screen_gfx_fadeout_hook as *mut c_void,
+            )
+        } {
+            Ok(hook) => {
+                LOADING_SCREEN_GFX_FADEOUT_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+                ok &= unsafe { hook.queue_enable() }.is_ok();
+                std::mem::forget(hook);
+            }
+            Err(status) => {
+                append_autoload_debug(format_args!(
+                    "loading-bar: KnowledgeLoadingScreen GFx FadeOut hook failed: {status:?}"
+                ));
+                ok = false;
+            }
+        }
+    }
     if !ok {
         return;
     }
@@ -340,9 +445,14 @@ pub(crate) fn install_now_loading_helper_observer_hooks() {
             if loading_update.is_some() {
                 LOADING_SCREEN_UPDATE_HOOK_INSTALLED.store(1, Ordering::SeqCst);
             }
+            if scaleform_label_goto.is_some() || loading_gfx_fadeout.is_some() {
+                LOADING_SCREEN_GFX_FADEOUT_HOOK_INSTALLED.store(1, Ordering::SeqCst);
+            }
             append_autoload_debug(format_args!(
-                "title-cover-part-b: hooked CSNowLoadingHelperImp observer ctor=0x{ctor:x} update=0x{update:x}; loading-bar-update={}; observe-only",
-                loading_update.unwrap_or(0)
+                "title-cover-part-b: hooked CSNowLoadingHelperImp observer ctor=0x{ctor:x} update=0x{update:x}; loading-bar-update={} scaleform-label-goto={} loading-gfx-fadeout={}; observe-only",
+                loading_update.unwrap_or(0),
+                scaleform_label_goto.unwrap_or(0),
+                loading_gfx_fadeout.unwrap_or(0)
             ));
         }
         status => append_autoload_debug(format_args!(

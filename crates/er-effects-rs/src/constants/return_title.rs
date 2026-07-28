@@ -199,7 +199,7 @@ pub(crate) fn load_in_progress_b80_name(v: i32) -> &'static str {
         GAME_MAN_SAVE_STATE_IDLE => "IDLE",
         GAME_MAN_SAVE_STATE_OPENING => "OPENING",
         GAME_MAN_SAVE_STATE_READING => "READING",
-        FULLREAD_B80_RESIDENT => "RESIDENT",
+        FULLREAD_B80_RESIDENT => "LOADED",
         _ => "?",
     }
 }
@@ -217,27 +217,27 @@ pub(crate) static SWITCH_ORACLE_MMS_BLOCKS: AtomicI32 = AtomicI32::new(-1);
 /// Indices >8 are best-effort (label order); the RAW index in the log is authoritative.
 /// UPPERCASE (the boot-bar 5x7 font is A-Z + space only, and it doubles as the bar's phase label).
 pub(crate) const MOVEMAPSTEP_STEP_NAMES: [&str; 21] = [
-    "BEGIN INIT",         // 0
-    "MSB LOAD",           // 1
-    "MSB LOAD WAIT",      // 2
-    "WORLD RES WAIT",     // 3  <- classic streaming-completion wait (resmgr+0xb7c1 gate)
-    "CURRENT LOD BLOCK",  // 4
-    "LEAVE SESSION WAIT", // 5  <- network/session step (stale session state suspect on a switch)
-    "SIGN IN",            // 6
-    "SIGN IN WAIT LOAD",  // 7
-    "WAIT CHR TYPE SYNC", // 8
-    "CREATE DRAW PLAN",   // 9
-    "INIT ANIM",          // 10
-    "FIXED GRID INIT",    // 11
-    "ESCAPE DEATH LOOP",  // 12
-    "HIT STABILIZE WAIT", // 13
-    "HIT STABILIZE WAIT", // 14
-    "HIT STABILIZE WAIT", // 15
-    "TEX STABILIZE WAIT", // 16
-    "HORSE WAIT",         // 17
-    "MOVE MAP",           // 18
+    "MAP LOAD START",     // 0  (BeginInit)
+    "LOADING MAP LAYOUT", // 1  (MSB = map-layout file load)
+    "MAP LAYOUT WAIT",    // 2  (MSB load wait)
+    "STREAMING ASSETS",   // 3  <- classic world-resource streaming wait (resmgr+0xb7c1 gate)
+    "LOADING DETAIL",     // 4  (current LOD block)
+    "ENDING SESSION",     // 5  <- network/session step (stale session state suspect on a switch)
+    "NETWORK SIGN IN",    // 6
+    "SIGN IN WAIT",       // 7  (sign-in wait load)
+    "CHARACTER SYNC",     // 8  (wait chr type sync)  [best-effort >8]
+    "BUILDING RENDER",    // 9  (create draw plan)    [best-effort >8]
+    "INIT ANIMATION",     // 10                        [best-effort >8]
+    "PHYSICS GRID",       // 11 (fixed grid init)      [best-effort >8]
+    "DEATH CHECK",        // 12 (escape death loop)    [best-effort >8]
+    "COLLISION SETTLE",   // 13 (hit stabilize wait)   [best-effort >8]
+    "COLLISION SETTLE",   // 14 (hit stabilize wait)   [best-effort >8]
+    "COLLISION SETTLE",   // 15 (hit stabilize wait)   [best-effort >8]
+    "TEXTURE SETTLE",     // 16 (tex stabilize wait)   [best-effort >8]
+    "MOUNT LOAD",         // 17 (horse/Torrent wait)   [best-effort >8]
+    "PLACING IN WORLD",   // 18 (MoveMap)
     "CLEANUP",            // 19
-    "FINISH",             // 20
+    "MAP LOAD DONE",      // 20 (Finish)
 ];
 /// Name a MoveMapStep child step index (out-of-range -> "?").
 pub(crate) fn movemapstep_step_name(idx: i32) -> &'static str {
@@ -268,7 +268,7 @@ pub(crate) const BOOT_LOAD_STEP_MAX: usize = INGAMESTEP_INWORLD_STEP_INDEX;
 pub(crate) fn boot_load_step_name(step: usize) -> &'static str {
     match step {
         s if s < MOVEMAPSTEP_STEP_NAMES.len() => MOVEMAPSTEP_STEP_NAMES[s],
-        INGAMESTEP_MAP_FINISH_STEP_INDEX => "MAP FINISH HANDOFF", // InGameStep STEP_MoveMap_Finish
+        INGAMESTEP_MAP_FINISH_STEP_INDEX => "MAP HANDOFF", // InGameStep STEP_MoveMap_Finish
         INGAMESTEP_INWORLD_STEP_INDEX => "IN WORLD", // InGameStep in-world: player resident + control
         _ => "?",
     }
@@ -288,16 +288,16 @@ pub(crate) const MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET: usize = 0x12a;
 ///   FUN_14067a170() && !ShouldSave() && !FUN_140679460() && FUN_140a9ceb0(CSRemo) -- never passes),
 ///   so 0x12a stays != 0 and the orchestrator never marks the world ready.
 pub(crate) const MOVEMAPSTEP_FINALIZE_SUBSTATE_NAMES: [&str; 10] = [
-    "IDLE/DONE",              // 0
-    "FADE-OUT WAIT",          // 1
-    "DEATH/RETRY CHECK",      // 2
-    "RETRY-MENU+MAPBLOCK",    // 3
-    "MAPBLOCK/SESSION WAIT",  // 4
-    "FADE-IN WAIT",           // 5
-    "FADE-IN WAIT (SFX)",     // 6
-    "REMO/SAVE-DRAIN WAIT",   // 7  <- warm-reload softlock parks here
-    "WARP/SERVER FINALIZE",   // 8
-    "POST-FINALIZE",          // 9
+    "IDLE/DONE",             // 0
+    "FADE-OUT WAIT",         // 1
+    "DEATH/RETRY CHECK",     // 2
+    "RETRY MENU SETUP",      // 3  (retry-menu + map-block setup; '+' is not in the 5x7 font)
+    "MAP/SESSION WAIT",      // 4  (map-block/session wait)
+    "FADE-IN WAIT",          // 5
+    "FADE-IN WAIT (SFX)",    // 6
+    "CUTSCENE/SAVE WAIT",    // 7  <- warm-reload softlock parks here (REMO = cutscene system)
+    "WARP/SERVER FINALIZE",  // 8
+    "POST-FINALIZE",         // 9
 ];
 /// Name a MoveMapStep finalize substate value (out-of-range -> "?").
 pub(crate) fn movemapstep_finalize_substate_name(v: i32) -> &'static str {

@@ -31,17 +31,16 @@ use windows::{
             LibraryLoader::{GetModuleHandleA, GetProcAddress},
             Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
             SystemServices::DLL_PROCESS_ATTACH,
-            Threading::{AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId},
+            Threading::GetCurrentProcessId,
         },
         UI::{
             Input::KeyboardAndMouse::{
                 INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP,
-                SendInput, SetFocus, VIRTUAL_KEY,
+                SendInput, VIRTUAL_KEY,
             },
             WindowsAndMessaging::{
-                BringWindowToTop, ClipCursor, EnumWindows, GetClassNameW, GetForegroundWindow,
-                GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
-                PostMessageW, SetForegroundWindow, WM_KEYDOWN, WM_KEYUP,
+                EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowRect, GetWindowTextW,
+                GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN, WM_KEYUP,
             },
         },
     },
@@ -60,10 +59,10 @@ use super::*;
 /// title->menu phase transition stops the title CSTask. Distinguishes "the title
 /// advanced (render alive + CSFeMan builds)" from "the game hung (render frozen)".
 #[allow(dead_code)]
-/// When set, ALL game input is hard-blocked at the API layer (see `enforce_input_block`):
-/// DInput8 keyboard+mouse (state zeroed by the `InputBlocker` hook) AND XInput
-/// gamepad (this module's hook). Read by `xinput_get_state_hook` each poll so the block is
-/// authoritative regardless of window focus.
+/// When set, foreign KEYBOARD + GAMEPAD game input is blocked at the API layer (see
+/// `enforce_input_block`): DInput8 keyboard (state zeroed by the `InputBlocker` hook) AND XInput
+/// gamepad (this module's hook). The MOUSE is never blocked and the cursor is never confined. Read by
+/// `xinput_get_state_hook` each poll so the block is authoritative regardless of window focus.
 pub(crate) use er_telemetry::counters::BLOCK_INPUT_ACTIVE;
 const BLOCK_INPUT_ON: usize = 1;
 /// Cached ER main window HWND for WM keyboard injection (0 = not found yet). Native ER does NOT read
@@ -166,9 +165,6 @@ fn sq_repro_er_hwnd() -> HWND {
 pub(crate) use er_telemetry::counters::SQ_REPRO_FOREGROUND_FORCES;
 pub(crate) use er_telemetry::counters::SQ_REPRO_IS_FOREGROUND;
 
-/// Force the ER window to the foreground (headless me3 launches often leave it non-foreground, and
-/// native ER only processes RawInput menu input for the FOREGROUND window). Uses the AttachThreadInput
-/// trick so `SetForegroundWindow` is not silently refused. Records whether it ended up foreground.
 /// FOCUS SEMAPHORE (2026-07-21, focus-controlled A/B): is the OS foreground window owned by THIS (the
 /// game) process? Computed FRESH each call (independent of the sq-repro forcing, which stands down in
 /// deterministic mode). Under Proton/Wine this reflects Wine's foreground window; we emit it as
@@ -187,55 +183,18 @@ pub(crate) fn game_window_is_foreground() -> bool {
     }
 }
 
+/// Record whether the ER window is currently the OS foreground window (FOCUS SEMAPHORE) WITHOUT ever
+/// forcing focus. The force-focus path (SetForegroundWindow / BringWindowToTop / SetFocus /
+/// AttachThreadInput) was REMOVED (user 2026-07-23, bd harness-drive-contract-...-no-force-focus): the
+/// user's window focus must never be seized. This is now OBSERVE-ONLY -- it updates SQ_REPRO_IS_FOREGROUND
+/// so diagnostics can report whether ER happened to be focused, but it never brings ER to the front. The
+/// legacy sq-repro SendInput menu-nav that relied on forced focus is dead-pathed (nothing transitions into
+/// SQ_REPRO_STATE_OPEN_MENU; the live sq-repro flow uses the menu-free programmatic switch arm), and the
+/// can-move probe now delivers movement foreground-only, so no live path forces focus.
 fn sq_repro_ensure_foreground(hwnd: HWND) {
-    unsafe {
-        let fg = GetForegroundWindow();
-        let already = fg == hwnd;
-        SQ_REPRO_IS_FOREGROUND.store(already as usize, Ordering::SeqCst);
-        if already {
-            return;
-        }
-        let cur_tid = GetCurrentThreadId();
-        let fg_tid = if fg.0.is_null() {
-            0
-        } else {
-            GetWindowThreadProcessId(fg, None)
-        };
-        let attached =
-            fg_tid != 0 && fg_tid != cur_tid && AttachThreadInput(cur_tid, fg_tid, true).as_bool();
-        let _ = BringWindowToTop(hwnd);
-        let ok = SetForegroundWindow(hwnd).as_bool();
-        let _ = SetFocus(Some(hwnd));
-        if attached {
-            let _ = AttachThreadInput(cur_tid, fg_tid, false);
-        }
-        SQ_REPRO_FOREGROUND_FORCES.fetch_add(1, Ordering::SeqCst);
-        SQ_REPRO_IS_FOREGROUND.store(
-            (ok || GetForegroundWindow() == hwnd) as usize,
-            Ordering::SeqCst,
-        );
-    }
+    let already = unsafe { GetForegroundWindow() } == hwnd;
+    SQ_REPRO_IS_FOREGROUND.store(already as usize, Ordering::SeqCst);
 }
-
-/// Force the ER game window to the foreground NOW (find + focus), mimicking the user's first
-/// interaction: clicking the game in the taskbar at world-readiness to make it the active window
-/// before pressing START. Native ER only routes RawInput menu keys to the FOREGROUND window, so the
-/// self-drive must own focus before its first key. Idempotent + logged once.
-pub(crate) fn sq_repro_force_foreground_now() {
-    let hwnd = sq_repro_er_hwnd();
-    if hwnd.0.is_null() {
-        return;
-    }
-    sq_repro_ensure_foreground(hwnd);
-    if SQ_REPRO_INITIAL_FOREGROUND_LOGGED.swap(1, Ordering::SeqCst) == 0 {
-        append_autoload_debug(format_args!(
-            "sq-repro: INITIAL FOREGROUND FORCE at world-readiness (mimics the user's taskbar click) hwnd=0x{:x} is_foreground={}",
-            hwnd.0 as usize,
-            SQ_REPRO_IS_FOREGROUND.load(Ordering::SeqCst)
-        ));
-    }
-}
-pub(crate) use er_telemetry::counters::SQ_REPRO_INITIAL_FOREGROUND_LOGGED;
 
 /// SendInput one VK keyboard event (down or up) at the OS level -> delivered as RawInput to the
 /// foreground window. Native ER reads keyboard via RawInput (proven: not DInput, ignores posted
@@ -310,14 +269,16 @@ pub(crate) fn move_probe_drive_key_foreground_only(vk: u32) {
         return;
     }
     let prev = SQ_REPRO_HELD_VK.swap(vk as usize, Ordering::SeqCst) as u32;
-    if prev == vk {
-        return;
-    }
-    if prev != 0 {
+    if prev != 0 && prev != vk {
         sq_repro_send_vk(prev, true);
     }
     if vk != 0 {
+        // Movement proof is sampled per frame. Send a foreground-gated key-down every ON frame instead
+        // of only on the first transition so a lost/filtered single event cannot make the proof falsely
+        // report "no supplied input". This path never forces focus; if ER is not already foreground it
+        // returned above. Count keyboard delivery as supplied movement input, distinct from actual motion.
         sq_repro_send_vk(vk, false);
+        crate::constants::SUPPLIED_MOVEMENT_INPUT_FRAMES.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -354,6 +315,19 @@ pub(crate) fn sq_repro_actively_driving() -> bool {
     state != SQ_REPRO_STATE_DONE && state != SQ_REPRO_STATE_WAIT_RELOAD
 }
 
+/// TRUE only while the harness is ACTIVELY INJECTING input THIS frame -- the can-move probe's ON burst
+/// (`MOVE_PROBE_ACTIVE`) or the System->Quit repro autopilot actively driving menus
+/// (`sq_repro_actively_driving`). This is the ONLY window in which the product may fabricate a device or
+/// otherwise touch input state on the harness's behalf (bd input-blocking-only-in-harness-during-driving-
+/// never-in-product-never-outside-window-2026-07-23). Outside it -- boot, the post-load in-world DWELL,
+/// between move-probe intervals -- the harness is not injecting, so the user's keyboard and mouse must be
+/// fully live and nothing here may present a phantom pad or suppress input. FALSE the instant injection
+/// stops (MOVE_PROBE_ACTIVE latches false the moment the move-probe verdict is reached), so the dwell has
+/// full control.
+pub(crate) fn harness_injection_active() -> bool {
+    MOVE_PROBE_ACTIVE.load(Ordering::SeqCst) || sq_repro_actively_driving()
+}
+
 // ENV-GATE RATIONALE: ER_EFFECTS_BLOCK_INPUT is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn block_input_enabled() -> bool {
     // SYSTEM-QUIT REPRO AUTOPILOT: keep the block engaged in-world (past the normal in-world
@@ -375,13 +349,14 @@ pub(crate) fn block_input_enabled() -> bool {
         return true;
     }
     // NATIVE-WINDOWS PRODUCT is USER-INTERACTIVE (user drives the startup save picker, then plays). The
-    // DEFAULT zero-input autoload block below -- DInput/XInput state-zeroing + a 1x1 ClipCursor cursor
-    // confinement -- is a Wine-probe PROOF feature (prove the autoload needs no foreign input), NOT product
-    // behavior: on the user's machine it TRAPS the mouse to the top-left and eats keyboard/mouse/gamepad from
-    // boot until in-world (user-reported 2026-07-15: "the DLL is moving my mouse / clicking / changing focus").
-    // So the DEFAULT product path must never confine or suppress the user's input on native Windows. The
-    // EXPLICIT probe opt-ins above (sq_repro, ER_EFFECTS_BLOCK_INPUT env/file, inject_nav) are checked first
-    // and still engage the block when a real probe wants it, on native Windows or Wine.
+    // DEFAULT zero-input autoload block below -- DInput keyboard + XInput gamepad state-zeroing -- is a
+    // Wine-probe PROOF feature (prove the autoload needs no foreign keyboard/gamepad input), NOT product
+    // behavior: on the user's machine it would eat the user's keyboard/gamepad from boot until in-world
+    // (user-reported 2026-07-15: "the DLL is moving my mouse / clicking / changing focus"; the mouse
+    // forcing/blocking + cursor confinement are now fully removed, so the mouse is always live). So the
+    // DEFAULT product path must never suppress the user's input on native Windows. The EXPLICIT probe
+    // opt-ins above (sq_repro, ER_EFFECTS_BLOCK_INPUT env/file, inject_nav) are checked first and still
+    // engage the keyboard/gamepad block when a real probe wants it, on native Windows or Wine.
     if is_native_windows() {
         return false;
     }
@@ -432,10 +407,8 @@ pub(crate) fn block_input_enabled() -> bool {
 pub(crate) fn release_input_block_now() {
     if BLOCK_INPUT_ACTIVE.swap(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst) == BLOCK_INPUT_ON {
         InputBlocker::get_instance().block_only(InputFlags::empty());
-        // Release the cursor confinement (paired with the ClipCursor lockdown in enforce).
-        let _ = unsafe { ClipCursor(None) };
         append_autoload_debug(format_args!(
-            "input-block: RELEASED (in-world / abort) -- keyboard/mouse/gamepad + cursor live"
+            "input-block: RELEASED (in-world / abort) -- keyboard + gamepad live (mouse + cursor never touched)"
         ));
     }
 }
@@ -513,15 +486,22 @@ pub(crate) unsafe extern "system" fn xinput_get_state_hook(user_index: u32, stat
     if user_index == XINPUT_PRIMARY_USER_INDEX && hr == XINPUT_SUCCESS && !state.is_null() {
         input_trace_record_real_poll(state as *const u8);
     }
-    // KEEP SLOT 0 "CONNECTED" while an XInput harness is armed, even when no physical pad exists and
-    // even before the block flag flips ON -- ER's connection scan can sample the slot on any frame,
-    // and if it ever sees DEVICE_NOT_CONNECTED it can stop polling slot 0 (killing the fabrication
-    // below). Present a connected idle pad with a fresh packet so the slot stays live. Gated behind
-    // the diagnostic harness opt-ins only; never runs on the default/product path.
+    // KEEP SLOT 0 "CONNECTED" while the harness is ACTIVELY INJECTING (only) -- when no physical pad
+    // exists, present a connected idle pad with a fresh packet so ER keeps polling slot 0 and the
+    // fabrication below can land. Gated STRICTLY to `harness_injection_active()` (the move-probe ON burst
+    // / sq-repro driving), NOT to the whole run (bd input-blocking-only-in-harness-during-driving-never-in-
+    // product-never-outside-window-2026-07-23). MOUSE-ATTACK FIX: this used to be gated on
+    // `prove_movement_enabled()` (== harness DLL present), so a phantom "connected" pad with a FRESH packet
+    // EVERY poll was presented for the ENTIRE run, including the in-world dwell. ER's active-input-device
+    // arbitration then treated that constantly-changing phantom gamepad as the active device, so the user's
+    // mouse-CLICK attacks were routed to the (idle) gamepad and ignored -- while mouse-LOOK (camera, read
+    // straight off the mouse delta) still worked. Outside the injection window we now let slot 0 read its
+    // real DEVICE_NOT_CONNECTED, so ER keeps mouse+keyboard as the active device and mouse-click attacks
+    // work throughout the dwell. Never runs on the default/product-without-harness path.
     if user_index == XINPUT_PRIMARY_USER_INDEX
         && hr == XINPUT_ERROR_DEVICE_NOT_CONNECTED
         && !state.is_null()
-        && (system_quit_repro_enabled() || inject_nav_enabled() || prove_movement_enabled())
+        && harness_injection_active()
     {
         // Advance a private keepalive counter (NOT INJECT_NAV_FRAME, whose cadence drives the
         // fabrication schedule) so the "connected" pad always presents a fresh, changing packet.
@@ -753,7 +733,7 @@ unsafe fn install_xinput_block() {
 /// `BLOCK_INPUT_ACTIVE` clear and no harness gate armed the detour is a pure pass-through (one
 /// Relaxed poll counter + the trace capture), so installing it early fabricates nothing and blocks
 /// nothing. Same retry-until-hooked idiom as `enforce_input_block_now` (xinput DLL may load late).
-/// Deliberately does NOT install the DInput hooks or touch ClipCursor.
+/// Deliberately does NOT install the DInput keyboard hook, and never blocks the mouse or cursor.
 pub(crate) fn ensure_xinput_hook_installed_for_trace() {
     if XINPUT_GET_STATE_ORIG.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS {
         unsafe { install_xinput_block() };
@@ -771,10 +751,11 @@ pub(crate) fn ensure_rawinput_counter_installed() {
     }
 }
 
-/// User input events that arrived while the game was UNFOCUSED (agent-owned run): these are DROPPED
-/// (zeroed) so they have no effect, and counted here -- NOT as contamination. The user may press
-/// buttons freely during a run; while unfocused those presses are neutralized and harmless (user
-/// 2026-07-20: "only cares about when inputs are being sent AND you're not blocking them").
+/// LEGACY telemetry field, retained for the emitted oracle schema (write_oracle reads it). It is NO
+/// LONGER incremented: the RawInput hook used to DROP the user's keyboard for the whole agent-owned run
+/// (the camera-only-control bug), but that drop was removed (bd input-blocking-only-in-harness-during-
+/// driving-never-in-product-never-outside-window-2026-07-23) -- the user's keyboard is never dropped, so
+/// this stays 0. MOUSE events were never dropped either.
 pub(crate) use er_telemetry::counters::RAWINPUT_BLOCKED_UNFOCUSED_EVENTS;
 /// Total GetRawInputData calls the game made (any command). If this is 0 the game is NOT routing input
 /// through GetRawInputData -> the reception oracle is BLIND and a 0 event count means nothing. If >0 the
@@ -790,23 +771,11 @@ pub(crate) use er_telemetry::counters::RAWINPUT_MOUSE_BUTTON_EVENTS;
 pub(crate) use er_telemetry::counters::RAWINPUT_MOUSE_MOVE_EVENTS;
 static GET_RAW_INPUT_DATA_ORIG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
-/// Whether an AGENT-OWNED RUN is active, detected by the input-harness DLL being loaded (the approved
-/// agent-run signal per product-nav-presence-gated-on-harness-dll, NOT a marker/env gate). During such
-/// a run all user RawInput is blocked so only the harness's direct-memory injection is effective. Cached
-/// once present (the DLL does not unload mid-run); cheap GetModuleHandleA until then.
-fn harness_run_active() -> bool {
-    pub(crate) use er_telemetry::counters::PRESENT;
-    if PRESENT.load(Ordering::Relaxed) == 1 {
-        return true;
-    }
-    let present = unsafe { GetModuleHandleA(PCSTR(b"er_input_harness_dll.dll\0".as_ptr())) }
-        .map(|h| !h.is_invalid())
-        .unwrap_or(false);
-    if present {
-        PRESENT.store(1, Ordering::Relaxed);
-    }
-    present
-}
+// REMOVED (bd input-blocking-only-in-harness-during-driving-never-in-product-never-outside-window-
+// 2026-07-23): `harness_run_active()` (harness DLL present, whole run) was the gate for the whole-run
+// RawInput keyboard DROP. That drop was removed (recording-only hook), so this predicate is gone. The
+// active-injection window is now expressed by `harness_injection_active()`, which is TRUE only while the
+// harness is actually injecting THIS frame -- never for the whole run.
 
 /// GetRawInputData(hRawInput, uiCommand, pData, pcbSize, cbSizeHeader) pass-through detour: call the
 /// original, then if it returned a RID_INPUT record, classify it and bump the reception counter. Never
@@ -826,55 +795,40 @@ unsafe extern "system" fn get_raw_input_data_hook(
     let ret = unsafe { orig(h_raw_input, ui_command, p_data, pcb_size, cb_size_header) };
     const RID_INPUT: u32 = 0x1000_0003;
     if !p_data.is_null() && ui_command == RID_INPUT && ret != u32::MAX && ret >= 0x30 {
-        // EFFECTIVENESS GATE (user 2026-07-20, corrected): user input is EFFECTIVE only when this is NOT
-        // an agent-owned run. Focus is NOT reliable -- the ER window is foreground while the user WATCHES
-        // it, so GetForegroundWindow==game even though the user's presses have no effect during a load.
-        // The reliable agent-run signal is the input-harness DLL being loaded. During an agent-owned run
-        // ALL user RawInput is DROPPED (zeroed) + counted as BLOCKED (harmless); the harness injects via
-        // the direct-memory inputmgr (not RawInput) so it stays effective. Harness absent (normal play):
-        // input passes through and counts as effective.
-        let effective = !harness_run_active();
+        // RECORDING ONLY (bd input-blocking-only-in-harness-during-driving-never-in-product-never-outside-
+        // window-2026-07-23): this hook NEVER drops the user's input. It used to zero (drop) every user
+        // KEYBOARD RawInput event for the WHOLE agent-owned run (whenever the harness DLL was loaded), which
+        // killed W-move + Escape-menu for the entire in-world dwell -- the camera-only-control bug.
+        // Disabling the user's input is valid ONLY inside the harness during its active driving window, never
+        // in the product. And a keyboard DROP fundamentally cannot live here anyway: the can-move probe
+        // injects 'W' via SendInput -> RawInput -> this SAME hook, and RawInput carries no injected-vs-user
+        // flag, so dropping keyboard here would also drop the harness's own injected key and break movement
+        // injection. So classify + count only (contamination oracle) and pass every event through untouched.
+        // The MOUSE was never dropped either. Any user contamination of the movement proof is DETECTED (not
+        // blocked) by the can-move probe's OFF-tail verdict.
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let base = p_data as usize;
             let dwtype = unsafe { (base as *const u32).read_unaligned() };
             let d = base + 0x18; // past RAWINPUTHEADER
             if dwtype == 0 {
-                // RIM_TYPEMOUSE: usButtonFlags @ +0x04, lLastX @ +0x0C, lLastY @ +0x10
+                // RIM_TYPEMOUSE: usButtonFlags @ +0x04, lLastX @ +0x0C, lLastY @ +0x10. The MOUSE is
+                // NEVER dropped -- the user's real mouse (movement, buttons, camera) is always live player
+                // input. Recording only; the event passes through untouched.
                 let btn = unsafe { ((d + 0x04) as *const u16).read_unaligned() };
                 let lx = unsafe { ((d + 0x0C) as *const i32).read_unaligned() };
                 let ly = unsafe { ((d + 0x10) as *const i32).read_unaligned() };
-                if lx != 0 || ly != 0 || btn != 0 {
-                    if effective {
-                        if lx != 0 || ly != 0 {
-                            RAWINPUT_MOUSE_MOVE_EVENTS.fetch_add(1, Ordering::Relaxed);
-                        }
-                        if btn != 0 {
-                            RAWINPUT_MOUSE_BUTTON_EVENTS.fetch_add(1, Ordering::Relaxed);
-                        }
-                    } else {
-                        // DROP: zero movement + buttons so the game reads a no-op mouse event.
-                        unsafe {
-                            ((d + 0x0C) as *mut i32).write_unaligned(0);
-                            ((d + 0x10) as *mut i32).write_unaligned(0);
-                            ((d + 0x04) as *mut u16).write_unaligned(0);
-                        }
-                        RAWINPUT_BLOCKED_UNFOCUSED_EVENTS.fetch_add(1, Ordering::Relaxed);
-                    }
+                if lx != 0 || ly != 0 {
+                    RAWINPUT_MOUSE_MOVE_EVENTS.fetch_add(1, Ordering::Relaxed);
+                }
+                if btn != 0 {
+                    RAWINPUT_MOUSE_BUTTON_EVENTS.fetch_add(1, Ordering::Relaxed);
                 }
             } else if dwtype == 1 {
-                // RIM_TYPEKEYBOARD: MakeCode @ +0x00, VKey @ +0x06, Message @ +0x08 (WM_KEYDOWN 0x100)
+                // RIM_TYPEKEYBOARD: MakeCode @ +0x00, VKey @ +0x06, Message @ +0x08 (WM_KEYDOWN 0x100).
+                // Count the user's key as received (contamination oracle) and pass it through untouched.
                 let msg = unsafe { ((d + 0x08) as *const u32).read_unaligned() };
                 if msg == 0x100 || msg == 0x104 {
-                    if effective {
-                        RAWINPUT_KEY_EVENTS.fetch_add(1, Ordering::Relaxed);
-                    } else {
-                        // DROP: neutralize the key (VKey=0xFF, MakeCode=0) so it is a no-op.
-                        unsafe {
-                            ((d + 0x06) as *mut u16).write_unaligned(0x00FF);
-                            (d as *mut u16).write_unaligned(0);
-                        }
-                        RAWINPUT_BLOCKED_UNFOCUSED_EVENTS.fetch_add(1, Ordering::Relaxed);
-                    }
+                    RAWINPUT_KEY_EVENTS.fetch_add(1, Ordering::Relaxed);
                 }
             }
         }));
@@ -939,17 +893,17 @@ pub(crate) use er_telemetry::counters::MISSING_SAVE_INPUT_RELEASE_LOGGED;
 /// launcher no render callback executes at the title, so the render-loop call
 /// alone never engaged the block (that was the contamination hole). Driven every frame from
 /// the game task while `block_input_enabled()`:
-///   1. ONCE: install the DInput8 keyboard+mouse `GetDeviceState` block (panics on probe
+///   1. ONCE: install the DInput8 keyboard `GetDeviceState` block (panics on probe
 ///      failure -> contained with catch_unwind so the FD4 task never unwinds into C++).
-///   2. EVERY frame: assert the block-all flag (sticky, overriding any overlay want-capture
+///   2. EVERY frame: assert the block flag (sticky, overriding any overlay want-capture
 ///      clear) and install/retry the XInput gamepad hook until the xinput DLL is present.
-/// Genuinely zero-input: it only SUPPRESSES device reads -- it never synthesizes any input.
+/// Genuinely zero-input: it only SUPPRESSES keyboard + gamepad device reads -- it never synthesizes any
+/// input, never blocks the mouse, and never confines the cursor.
 pub(crate) fn enforce_input_block_now() {
     let blocker = InputBlocker::get_instance();
     if missing_save_selection_pending() {
         BLOCK_INPUT_ACTIVE.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
         blocker.block_only(InputFlags::empty());
-        let _ = unsafe { ClipCursor(None) };
         if MISSING_SAVE_INPUT_RELEASE_LOGGED.swap(1, Ordering::SeqCst) == 0 {
             append_autoload_debug(format_args!(
                 "input-block: BYPASSED/RELEASED while missing-save picker is pending -- user must be able to click OK and choose a file"
@@ -981,36 +935,21 @@ pub(crate) fn enforce_input_block_now() {
         // Not yet hooked (xinput DLL may load late): retry each frame until it sticks.
         unsafe { install_xinput_block() };
     }
-    // CURSOR CONFINEMENT REMOVED (user 2026-07-22, bd input-block-1x1-clipcursor-traps-user-native-
-    // windows-no-failsafe-release): the per-frame `ClipCursor(Some(1x1 rect))` that used to confine the
-    // OS cursor is gone. It re-applied every frame while the block was active, and because it has no
-    // fail-safe release it TRAPPED the user's mouse whenever the harness failed/stalled (an external
-    // ClipCursor(None) was instantly overwritten by the next frame). The DInput/XInput zeroing above
-    // still suppresses keyboard + mouse buttons + gamepad; the OS cursor is left free. If a future probe
-    // genuinely needs cursor confinement it must be paired with a stall watchdog + DllMain-detach release.
+    // MOUSE + CURSOR NEVER TOUCHED (user 2026-07-22 + 2026-07-23, bd input-block-1x1-clipcursor-traps-
+    // user-native-windows-no-failsafe-release): there is NO cursor confinement here -- the per-frame 1x1
+    // `ClipCursor` that used to trap the OS cursor was removed, and the DInput MOUSE `GetDeviceState` block
+    // was removed too, so the user's real mouse (movement, buttons, camera) is always live player input.
+    // The DInput/XInput zeroing above suppresses ONLY keyboard + gamepad; it never forces, confines, or
+    // blocks the mouse.
 }
 
-/// USER SUGGESTION 2026-07-20: disable KEYBOARD+MOUSE as GAME inputs during an agent-owned run, leaving
-/// the GAMEPAD/XInput path OPEN for the harness. Zeroes DInput kb+mouse GetDeviceState (the user's
-/// WSAD / mouse buttons / DInput mouse deltas) but does NOT block the gamepad and does NOT ClipCursor
-/// (no mouse-trap). The RawInput mouse drop (harness-gated, get_raw_input_data_hook) covers the
-/// RawInput/camera path DInput misses. Net: the ONLY effective game input is the harness's pad-poll
-/// injection, so any character movement is unambiguously the harness (clean 60-frame proof). Idempotent;
-/// safe to call every frame. Distinct from enforce_input_block_now (which blocks ALL + ClipCursor).
-pub(crate) fn enforce_kbmouse_game_input_disable() {
-    let blocker = InputBlocker::get_instance();
-    if DINPUT_BLOCK_INSTALLED.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS {
-        let res = std::panic::catch_unwind(|| unsafe { blocker.install_hooks() });
-        if let Ok(Ok(())) = res {
-            DINPUT_BLOCK_INSTALLED.store(BLOCK_INPUT_ON, Ordering::SeqCst);
-            append_autoload_debug(format_args!(
-                "kbmouse-disable: DInput kb+mouse hooks installed (gamepad/xinput left OPEN for harness; no ClipCursor)"
-            ));
-        }
-    }
-    // Block ONLY keyboard + mouse -- NOT GamePad (harness pad-poll stays live), NOT XInput. No ClipCursor.
-    blocker.block_only(InputFlags::Keyboard | InputFlags::Mouse);
-}
+// REMOVED (bd input-blocking-only-in-harness-during-driving-never-in-product-never-outside-window-
+// 2026-07-23): `enforce_keyboard_game_input_disable()` zeroed the user's DInput keyboard for the WHOLE
+// in-world dwell (called every frame the harness DLL was present + the player was in-world). Disabling the
+// user's input is only valid inside the harness during its active driving window, never in the product
+// during normal play, so this whole-in-world keyboard disable is gone. The DInput keyboard block is now
+// driven ONLY by enforce_input_block_now()/release_input_block_now() (boot/reload driving windows), which
+// release the block on world entry -- so the dwell keeps full keyboard control.
 
 pub(crate) fn render_liveness_probe() {
     if !title_accept_enabled() {

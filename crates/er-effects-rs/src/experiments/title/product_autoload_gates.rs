@@ -32,7 +32,7 @@ use windows::{
             Threading::GetCurrentProcessId,
         },
         UI::WindowsAndMessaging::{
-            ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
             WM_KEYDOWN, WM_KEYUP,
         },
     },
@@ -684,9 +684,8 @@ pub(crate) unsafe fn maybe_fire_tfc_continue(base: usize) {
         .map(|v| (v & 0xff) as u8)
         .unwrap_or(0xff);
     unsafe { *((tfc + TFC_NOT_RELEASE_FLAG_18C_OFFSET) as *mut u8) = TFC_NOT_RELEASE_FLAG_CLEAR };
-    TFC_CONTINUE_FIRED.store(1, Ordering::SeqCst);
+    mark_tfc_forced_continue_handoff();
     // Let the recurring world-stream observer log THROUGH the loading screen.
-    OWN_LOAD_CONTINUE_FIRED.store(true, Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "fire-tfc-continue: SET *(tfc+0x{:x})=1 (was {before}) + mss+0x{:x}=slot {want_slot} (tfc=0x{tfc:x} dialog=0x{dialog:x} owner=0x{owner:x} mss={mss:?} gm_singleton=0x{gm_singleton:x}) -- now INVOKING selector 0x{:x} (NO input)",
         TFC_DISPATCH_STATE_14C_OFFSET,

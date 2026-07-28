@@ -30,7 +30,7 @@ use windows::{
             Threading::GetCurrentProcessId,
         },
         UI::WindowsAndMessaging::{
-            ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
             WM_KEYDOWN, WM_KEYUP,
         },
     },
@@ -760,8 +760,31 @@ fn validated_save_file_path(path: PathBuf) -> Option<PathBuf> {
     Some(path)
 }
 
+fn save_file_is_readonly(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|meta| meta.permissions().readonly())
+}
+
+fn remember_rejected_save_parent_for_picker(path: &Path) {
+    if let Some(parent) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+        crate::config::set_session_preferred_save_picker_dir(parent);
+    }
+}
+
+fn validated_writable_autoload_save_file(path: PathBuf, source_label: &str) -> Option<PathBuf> {
+    let validated = validated_save_file_path(path)?;
+    if save_file_is_readonly(&validated) {
+        remember_rejected_save_parent_for_picker(&validated);
+        append_autoload_debug(format_args!(
+            "save-override: rejected read-only autoload save '{}' source={source_label}; arming in-game picker and leaving world-entry paused until the user chooses a writable save",
+            validated.display()
+        ));
+        return None;
+    }
+    Some(validated)
+}
+
 fn validated_configured_save_file() -> Option<PathBuf> {
-    validated_save_file_path(env_save_file_path()?)
+    validated_writable_autoload_save_file(env_save_file_path()?, "configured-save-file")
 }
 
 fn plausible_steam_id64(value: u64) -> Option<u64> {
@@ -861,8 +884,11 @@ fn default_save_with_character(path: PathBuf) -> Option<PathBuf> {
 
 fn default_save_file_for_steam_id64(steam_id: u64) -> Option<PathBuf> {
     let dir = default_save_root()?.join(steam_id.to_string());
-    validated_save_file_path(dir.join(active_default_save_file_name()))
-        .and_then(default_save_with_character)
+    validated_writable_autoload_save_file(
+        dir.join(active_default_save_file_name()),
+        "active-default-save",
+    )
+    .and_then(default_save_with_character)
 }
 
 fn default_save_file_candidates() -> Vec<(PathBuf, u64)> {
@@ -883,9 +909,12 @@ fn default_save_file_candidates() -> Vec<(PathBuf, u64)> {
                 .and_then(|name| name.parse::<u64>().ok())
                 .and_then(plausible_steam_id64)?;
             let dir = entry.path();
-            validated_save_file_path(dir.join(active_default_save_file_name()))
-                .and_then(default_save_with_character)
-                .map(|path| (path, steam_id))
+            validated_writable_autoload_save_file(
+                dir.join(active_default_save_file_name()),
+                "default-save-candidate",
+            )
+            .and_then(default_save_with_character)
+            .map(|path| (path, steam_id))
         })
         .collect()
 }
@@ -1082,7 +1111,7 @@ pub(crate) fn enforce_save_override_or_abort() -> SaveOverrideMode {
         return activate_save_redirect_source(source, "early-enforced-configured-save");
     }
     append_autoload_debug(format_args!(
-        "save-override: no explicit save_file/ER_EFFECTS_SAVE_FILE and no readable active default {} (>= {} bytes). config_error={}. Arming the IN-GAME missing-save picker: the title boots to its native no-save menu and the 05_010 file browser presents itself (save_picker_menu.rs); world entry stays denied until a save is picked.",
+        "save-override: no usable autoload save (configured save missing/invalid/read-only, or no readable+writable active default {} >= {} bytes). config_error={}. Arming the IN-GAME missing-save picker: the title boots to its native no-save menu and the 05_010 file browser presents itself (save_picker_menu.rs); world entry stays denied until a save is picked.",
         active_default_save_file_name(),
         SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES,
         runtime_config_error().unwrap_or_else(|| "none".to_owned())
@@ -1118,9 +1147,11 @@ pub(crate) fn save_picker_seamless_mode_after_settle(reason: &str) -> bool {
 /// hooks synchronously (idempotent -- the install is Once-guarded), and releases every waiter on
 /// the missing-save gate. Returns false (state unchanged, picker stays up) on an invalid pick.
 pub(crate) fn complete_missing_save_selection_from_picker(path: &Path) -> bool {
-    let Some(validated) = validated_save_file_path(path.to_path_buf()) else {
+    let Some(validated) =
+        validated_writable_autoload_save_file(path.to_path_buf(), "title-picker-selection")
+    else {
         append_autoload_debug(format_args!(
-            "save-override: title picker rejected non-plausible save '{}' (missing or under {} bytes)",
+            "save-override: title picker rejected non-plausible/read-only save '{}' (missing, under {} bytes, or not writable)",
             path.display(),
             SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES
         ));

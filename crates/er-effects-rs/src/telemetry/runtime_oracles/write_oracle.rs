@@ -35,6 +35,7 @@ fn write_stepfinish_gate_oracle(body: &mut String) {
         None
     };
     let request_code = ingame.map_or(-1, |ig| rdi(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET));
+    ORACLE_RELIABLE_INGAME_PTR.store(ingame.unwrap_or(0), Ordering::SeqCst);
     let mms =
         ingame.and_then(|ig| rd(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET).filter(|v| *v != null));
     // Publish the reliably-resolved MoveMapStep pointer for the in-world finalize drive to consume:
@@ -106,8 +107,19 @@ fn write_stepfinish_gate_oracle(body: &mut String) {
             None => "null".to_owned(),
         }
     };
+    let mms_u8 = |off: usize| -> i64 {
+        mms.and_then(|m| unsafe { crate::experiments::safe_read_u8(m + off) })
+            .map_or(-1, i64::from)
+    };
+    let mms_i32 = |off: usize| -> i64 { mms.map_or(-1, |m| rdi(m + off)) };
+    let mms_u32_hex = |off: usize| -> String {
+        match mms.and_then(|m| unsafe { crate::experiments::safe_read_usize(m + off) }) {
+            Some(v) => format!("\"0x{:x}\"", (v as u32)),
+            None => "null".to_owned(),
+        }
+    };
     body.push_str(&format!(
-        "  \"oracle_mms_child_ez08_step\": {},\n  \"oracle_mms_child_ez10\": {},\n  \"oracle_mms_child_ez18\": {},\n  \"oracle_mms_child_ez20\": {},\n  \"oracle_mms_child_ez28\": {},\n  \"oracle_mms_child_step10\": {},\n  \"oracle_mms_child_step18\": {},\n  \"oracle_mms_child_step40\": {},\n  \"oracle_mms_child_step48\": {},\n",
+        "  \"oracle_mms_child_ez08_step\": {},\n  \"oracle_mms_child_ez10\": {},\n  \"oracle_mms_child_ez18\": {},\n  \"oracle_mms_child_ez20\": {},\n  \"oracle_mms_child_ez28\": {},\n  \"oracle_mms_child_step10\": {},\n  \"oracle_mms_child_step18\": {},\n  \"oracle_mms_child_step40\": {},\n  \"oracle_mms_child_step48\": {},\n  \"oracle_mms_next_step_4c\": {},\n  \"oracle_mms_done_flag_50\": {},\n  \"oracle_mms_countdown_100\": {},\n  \"oracle_mms_hold_timer_270_bits\": {},\n  \"oracle_mms_advance_gate_lo_4b8\": {},\n  \"oracle_mms_advance_gate_hi_4b9\": {},\n",
         cb(0x08),
         cb(0x10),
         cb(0x18),
@@ -117,6 +129,12 @@ fn write_stepfinish_gate_oracle(body: &mut String) {
         sb(0x18),
         sb(0x40),
         sb(0x48),
+        mms_i32(MOVEMAPSTEP_NEXT_STEP_4C_OFFSET),
+        mms_i32(MOVEMAPSTEP_DONE_FLAG_50_OFFSET),
+        mms_i32(MOVEMAPSTEP_COUNTDOWN_100_OFFSET),
+        mms_u32_hex(MOVEMAPSTEP_HOLD_TIMER_270_OFFSET),
+        mms_u8(MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET),
+        mms_u8(MOVEMAPSTEP_ADVANCE_GATE_HI_4B9_OFFSET),
     ));
     // LOAD2 BLOCK-STREAMING discriminator (bd menu-open-works-real-blocker-is-load2-mms18-completion-
     // block-streaming-0x35): the loadlist is POPULATED yet load2 stalls at WorldResWait, so scan the

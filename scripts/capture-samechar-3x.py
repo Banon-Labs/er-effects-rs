@@ -19,6 +19,8 @@ import argparse
 import contextlib
 import json
 import os
+import signal
+import shutil
 import statistics
 import subprocess
 import sys
@@ -160,6 +162,12 @@ def snap(t: dict) -> dict:
         # stable_frames = the arm-eligibility gate (needs a live in-world menu job).
         "oracle_switch_arm_count",
         "oracle_switch_teardown_count",
+        # Phase-3 outgoing-world-teardown fix (2026-07-23): the render-release metric + drive state.
+        "oracle_common_finalize_count",
+        "oracle_outgoing_teardown_baseline",
+        "oracle_outgoing_teardown_done",
+        "oracle_outgoing_teardown_wait_ticks",
+        "oracle_outgoing_teardown_failsoft",
         "oracle_switch_deferred_count",
         "oracle_switch_last_slot",
         "oracle_switch_reload_phase",
@@ -198,6 +206,15 @@ def snap(t: dict) -> dict:
         "oracle_present_sync_interval",
         "oracle_present_refresh_per_present_x100",
         "oracle_present_qpc_delta_us",
+        # GPU-BUSY per frame (goal §3.3 gpu_frame_us oracle, bd er-effects-rs-03ma): injected D3D12
+        # timestamp pair on the GAME queue -- START on the first ExecuteCommandLists after a present,
+        # END at the top of the Present detour (before the original Present), so it EXCLUDES the
+        # vsync/flip present-wait. Large => render-bound (GPU genuinely busy); small while qpc_delta_us
+        # stays ~50ms => present/vblank throttle. samples/state make a 0 attributable (oracle not live
+        # vs GPU instant): samples==0 => oracle never produced, state names where setup stopped.
+        "oracle_gpu_frame_us",
+        "oracle_gpu_frame_samples",
+        "oracle_gpu_frame_state",
         # GX COMMAND-QUEUE submission volume (2026-07-22): reserves = cumulative GX cmd-queue slot
         # reservations (per-submission hook, fires every frame in-world). Reserve RATE (delta/frame)
         # boot-vs-reload measures whether the reload frame submits MORE draw work (render-bound cause).
@@ -214,6 +231,20 @@ def snap(t: dict) -> dict:
         "oracle_boot_view_self_presents",
         "oracle_boot_view_pump_stop_reason",
         "oracle_boot_view_stop_native_hits",
+        # RENDER-RESIDENCY (bd AC-2-ANSWERED-native-reload-no-dip-mod-ownload-dips +
+        # PHASE3-render-release-is-CommonFinalize): the live GxDrawContext render-output vector
+        # (span/count/capacity + ptr) plus the render managers CS::InGameStep::_Common_Finalize frees
+        # (CSDistViewManager, MapItemMan). own_load_switch_reload_fire SKIPS that native teardown, so a
+        # heavier reload epoch shows extra render outputs / leftover managers vs a clean native reload.
+        # These already exist in the product SNAPSHOT (write_game_module_oracles.rs, passive base+safe_read,
+        # no hooks); pulling them into the per-frame timeseries lets the analyzer diff render residency per
+        # load epoch (mod reload vs vanilla reload). Phase-1 = pinpoint WHICH render resource stays resident.
+        "oracle_gxdc_ptr",
+        "oracle_gxdc_output_span_bytes",
+        "oracle_gxdc_output_count",
+        "oracle_gxdc_output_capacity",
+        "oracle_render_distview_mgr_ptr",
+        "oracle_render_mapitem_mgr_ptr",
         "oracle_current_load_epoch",
         # DLL MAIN GAME-TASK duration (2026-07-22): large on reloads => DLL per-frame code cost; fast =>
         # game-side loop (playable-window 50ms not the DLL).
@@ -660,15 +691,48 @@ def write_semaphore_diff(
     return json_out, md_out
 
 
+def _native_pids_by_comm(name: str) -> set[int]:
+    pids: set[int] = set()
+    proc = Path("/proc")
+    if not proc.exists():
+        return pids
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            comm = (entry / "comm").read_text(errors="replace").strip()
+        except OSError:
+            continue
+        if comm == name:
+            pids.add(int(entry.name))
+    return pids
+
+
+def _env_pid_set(name: str) -> set[int]:
+    return {int(tok) for tok in os.environ.get(name, "").split() if tok.isdigit()}
+
+
 def teardown() -> None:
-    for image in ("eldenring.exe", "me3.exe"):
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            subprocess.run(
-                ["taskkill.exe", "/F", "/IM", image],
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
+    if shutil.which("taskkill.exe"):
+        for image in ("eldenring.exe", "me3.exe"):
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                subprocess.run(
+                    ["taskkill.exe", "/F", "/IM", image],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+        return
+
+    pre_er = _env_pid_set("PRE_NATIVE_ER_PIDS")
+    pre_me3 = _env_pid_set("PRE_NATIVE_ME3_PIDS")
+    targets = (_native_pids_by_comm("eldenring.exe") - pre_er) | (_native_pids_by_comm("me3") - pre_me3)
+    for pid in targets:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.kill(pid, signal.SIGTERM)
+    for pid in targets:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.kill(pid, signal.SIGKILL)
 
 
 def write_switch_trigger(game_dir: Path, slot: int, save_file: str | None) -> None:
@@ -689,6 +753,36 @@ def write_switch_trigger(game_dir: Path, slot: int, save_file: str | None) -> No
                 save_ctl.write_text("", encoding="utf-8")
     # The slot file's fresh mtime is the trigger; write it LAST (after the source override is in place).
     (game_dir / "er-effects-switch-slot.txt").write_text(str(slot), encoding="utf-8")
+
+
+def _try_parse_crash_dump(artifact_dir: Path, since_epoch: float) -> str | None:
+    """Best-effort: auto-parse any Windows minidump written during this run into a deep crash trace.
+
+    The in-process VEH (crates/er-effects-rs/src/crashlog/) cannot see a fault that happens BEFORE our
+    DLL loads -- e.g. a me3-loader boot crash (observed 2026-07-24: eldenring.exe crashed ~3s after
+    launch in me3_mod_host/ntdll heap code, our DLL never initialised). The Windows minidump is then the
+    only record. This shells scripts/parse-crash-dump.py to auto-find the newest eldenring.exe.<pid>.dmp
+    created after the run started and write <artifact_dir>/crash-trace.txt. Never raises: a missing dump,
+    missing parser, or missing `minidump` package is a silent no-op so it can never break the run report.
+    """
+    parser = Path(__file__).resolve().parent / "parse-crash-dump.py"
+    if not parser.exists():
+        return None
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(parser), "--auto", "--since", f"{since_epoch:.0f}", "--out", str(artifact_dir)],
+            capture_output=True,
+            text=True,
+            timeout=25,
+        )
+    except Exception:  # noqa: BLE001 - crash-trace capture must never break the run report
+        return None
+    trace = artifact_dir / "crash-trace.txt"
+    if trace.exists():
+        head = "\n".join(trace.read_text(encoding="utf-8", errors="replace").splitlines()[:12])
+        return f"- wrote crash-trace.txt (deep trace of a minidump from this run):\n\n```\n{head}\n```"
+    first = (proc.stdout or proc.stderr or "").strip().splitlines()
+    return f"- no crash minidump for this run ({first[0] if first else 'no dump'})"
 
 
 def main() -> int:
@@ -807,6 +901,7 @@ def main() -> int:
             (args.game_dir / "er-effects-switch-slot.txt").write_text("-1", encoding="utf-8")
 
     args.artifact_dir.mkdir(parents=True, exist_ok=True)
+    run_start_epoch = time.time()  # crash-dump filter: only parse minidumps written after the run began
     telemetry_path = args.game_dir / "er-effects-telemetry.json"
 
     # Per-epoch record: first-seen ts, the max/settled snapshot, whether render-ready was ever held.
@@ -816,6 +911,19 @@ def main() -> int:
     final_epoch = len(switch_plan) if switch_plan else FINAL_RELOAD_EPOCH
     # Per-epoch time the playable+moving window opened (first can_move), to enforce the 3s hold.
     epoch_canmove_start: dict[int, float] = {}
+    # DECOUPLE (user 2026-07-23): the harness cycle + steady-window dwell gate on WORLD-STABLE (in-world:
+    # player_present + draw_group_enabled + play_time_live), NOT on the movement walk-proof. The only
+    # walk-injection that works is foreground-only SendInput 'W'; with force-focus removed it disproves on
+    # EVERY load, so gating the cycle on the move verdict flashed in-world then advanced (regression). The
+    # frame_ms measurement + a visible dwell only need world-stable; movement is RECORDED, non-gating.
+    epoch_worldstable_start: dict[int, float] = {}  # first world-stable ts per epoch (dwell anchor)
+    epoch_first_seen_ts: dict[int, float] = {}  # first-seen ts per epoch (world-stable stall-timeout anchor)
+    # Optional per-epoch ceiling on reaching world-stable before declaring a load STALL (e.g. Bonky
+    # mms=18 / draw-group never enabled). USER-CONSULTED via env -- no baked-in duration (rule
+    # no-fixed-durations-without-consulting-user-first-2026-07-23). 0/unset = OFF: rely on the existing
+    # stall guards + the user-set .auto/runtime_timeout_cap_seconds cap. If set, must exceed the longest
+    # legit load-to-world-stable time (~66s for angrE load1).
+    WORLD_STABLE_TIMEOUT_S = float(os.environ.get("WORLD_STABLE_TIMEOUT_S", "0") or "0")
     if switch_plan:
         print(
             f"[drive-switch] plan: {len(switch_plan)} triggered load(s) after load1; "
@@ -1045,39 +1153,78 @@ def main() -> int:
                     fps_dip_polls = 0
             else:
                 fps_dip_polls = 0
-            # DETERMINISTIC SWITCH DRIVER: once the CURRENT load proves movement AND has sustained a 3s
-            # playable+moving window, write the control file to trigger the NEXT load (replaces the flaky
-            # menu-nav). Plan entry i fires after epoch i (epoch 0 = boot load1 -> plan[0] triggers load2).
-            # SINGLE-PRESS DRIVE (user 2026-07-22): the instant control is confirmed for this epoch
-            # (harness_verdict==1 = one forward-press moved the char), trigger the NEXT load. Do NOT
-            # require a sustained 3s move window / repeat the movement burst -- one press = go.
-            # PARITY-MEASUREMENT hold (goal 3c): in steady mode, do not advance to the next load until
-            # THIS epoch has held can_move for --steady-window-seconds (a sustained post-readiness window
-            # is now in the telemetry). Off (<=0) preserves the legacy single-press-advances behavior.
-            steady_held = args.steady_window_seconds <= 0 or (
-                cur_ep in epoch_canmove_start
-                and (now - epoch_canmove_start[cur_ep]) >= args.steady_window_seconds
+            # DETERMINISTIC SWITCH DRIVER -- ONE MOVE INTERVAL PER LOAD (user 2026-07-23, bd harness-drive-
+            # contract-one-move-interval-per-load-no-force-focus-no-move-loop-2026-07-23): the DLL move-probe
+            # now runs EXACTLY ONE forward-movement interval per load and always latches a TERMINAL verdict
+            # (1 proven / 2 disproven / 3 contaminated) -- it never loops waiting for a clean proof. So the
+            # instant that ONE interval completes (harness_verdict != 0), trigger the NEXT same-character load
+            # REGARDLESS of the result: sample movement, record it, then advance load -> reload -> load. The
+            # old `harness_verdict == 1` gate hung FOREVER on a load whose movement never cleanly proved
+            # (Bonky) -- the harness re-drove movement (and previously re-forced focus) on the same load and
+            # never reached the reload. The telemetry epoch-gates the verdict (probe_epoch == cur_deser in
+            # write_oracle), so a nonzero value always belongs to the CURRENT load: no stale cross-epoch
+            # verdict can leak and skip an interval. Plan entry i fires after epoch i (epoch 0 = boot load1).
+            # WORLD-STABLE dwell gate (decoupled from the walk-proof; see epoch_worldstable_start above).
+            # world_stable = genuinely in-world: player present + render-group + enable-render + world clock
+            # live. Do NOT require draw_group: telemetry and prior vanilla comparisons show draw_group can
+            # stay false during valid playable reloads, while render_group/enable_render are the stable
+            # rendered-world semaphores. Movement remains scored separately via oracle_can_move/did_move.
+            epoch_first_seen_ts.setdefault(cur_ep, now)
+            world_stable = (
+                bool(s.get("oracle_player_present"))
+                and bool(s.get("oracle_chr_render_group_enabled"))
+                and bool(s.get("oracle_chr_enable_render"))
+                and bool(s.get("oracle_play_time_live"))
+            )
+            if world_stable and cur_ep not in epoch_worldstable_start:
+                epoch_worldstable_start[cur_ep] = now
+                print(
+                    f"[drive-switch] epoch {cur_ep}: WORLD-STABLE reached (in-world, render enabled) -- "
+                    f"dwelling {max(args.steady_window_seconds, 0):.0f}s",
+                    flush=True,
+                )
+            # Dwell held once world-stable has been in effect for the steady window (0 => advance on the
+            # first world-stable sample). Independent of the movement verdict (recorded, non-gating).
+            dwell_held = cur_ep in epoch_worldstable_start and (
+                args.steady_window_seconds <= 0
+                or (now - epoch_worldstable_start[cur_ep]) >= args.steady_window_seconds
+            )
+            # STALL: world-stable never reached within the timeout for this epoch -> the load did not
+            # finalize (Bonky mms=18 / draw-group never enabled). Tear down naming it, don't ride to the cap.
+            if (
+                WORLD_STABLE_TIMEOUT_S > 0
+                and cur_ep not in epoch_worldstable_start
+                and (now - epoch_first_seen_ts[cur_ep]) >= WORLD_STABLE_TIMEOUT_S
+            ):
+                result = f"WORLD_STABLE_STALL_epoch{cur_ep}_no_drawgroup"
+                print(
+                    f"[{elapsed:6.1f}s] WORLD-STABLE STALL epoch{cur_ep}: never reached "
+                    f"draw-group/simulating in {WORLD_STABLE_TIMEOUT_S:.0f}s (load did not finalize) -> teardown",
+                    flush=True,
+                )
+                break
+            _verdict_label = {1: "proven", 2: "disproven", 3: "contaminated"}.get(
+                harness_verdict, str(harness_verdict)
             )
             if (
                 switch_plan
                 and next_switch_idx < len(switch_plan)
                 and cur_ep == next_switch_idx
-                and harness_verdict == 1
-                and steady_held
+                and dwell_held
             ):
                 _slot, _save_file = switch_plan[next_switch_idx]
                 write_switch_trigger(args.game_dir, _slot, _save_file)
                 print(
-                    f"[drive-switch] load{next_switch_idx + 2}: epoch {next_switch_idx} proved movement + "
-                    f"held {MOVE_WINDOW_SECONDS:.0f}s window; wrote trigger slot={_slot} "
-                    f"cross_save={_save_file or 'no (active angrE save)'}",
+                    f"[drive-switch] load{next_switch_idx + 2}: epoch {next_switch_idx} dwelled world-stable "
+                    f"(move verdict={_verdict_label}, non-gating) -- wrote trigger "
+                    f"slot={_slot} cross_save={_save_file or 'no (active save)'}",
                     flush=True,
                 )
                 next_switch_idx += 1
-            # Success = the FINAL planned load proves movement AND holds the 3s window (final_epoch =
-            # len(plan) when driving, else the legacy FINAL_RELOAD_EPOCH).
-            if harness_verdict == 1 and cur_ep >= final_epoch and steady_held:
-                result = f"HARNESS_MOVE_PROVEN_harness_moved_char_epoch{deser}"
+            # Success = the FINAL planned load dwelled world-stable for the window (movement recorded, not a
+            # gate). final_epoch = len(plan) when driving, else the legacy FINAL_RELOAD_EPOCH.
+            if dwell_held and cur_ep >= final_epoch:
+                result = f"HARNESS_WORLDSTABLE_DWELL_DONE_epoch{deser}_verdict_{_verdict_label}"
                 break
             # IMPRINT CAPTURE (boot_to_control phase): end the boot imprint the INSTANT control is
             # available, marked by the USER pressing forward = the char's first real havok displacement.
@@ -1362,6 +1509,10 @@ def main() -> int:
                 "",
             ]
         )
+
+    crash_note = _try_parse_crash_dump(args.artifact_dir, run_start_epoch)
+    if crash_note:
+        lines.extend(["## Crash trace", crash_note, ""])
 
     epoch_names = {
         0: "load1 (boot autoload)",

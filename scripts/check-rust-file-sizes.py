@@ -15,6 +15,10 @@ DEFAULT_FAIL_LINES = 3200
 SKIP_DIRS = {
     ".git",
     ".worktrees",
+    # `.claude/worktrees` holds transient agent worktree COPIES of the repo (gitignored); scanning them
+    # double-counts the real files. `.worktrees` above only matches the dot-prefixed top-level dir, so the
+    # part here is the bare `.claude` segment (also covers `.claude/skills` etc. -- none are product source).
+    ".claude",
     "target",
     "save-files",
     "docs",

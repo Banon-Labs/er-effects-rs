@@ -63,7 +63,7 @@ fn write_game_module_oracles(body: &mut String) {
                 sw_last_slot as i64
             };
             body.push_str(&format!(
-                "  \"oracle_switch_arm_count\": {},\n  \"oracle_switch_teardown_count\": {},\n  \"oracle_switch_deferred_count\": {},\n  \"oracle_switch_last_slot\": {sw_last_slot_i},\n  \"oracle_switch_reload_phase\": {},\n  \"oracle_switch_reload_drain_waits\": {},\n  \"oracle_switch_reload_committed\": {},\n  \"oracle_switch_slot_control_mtime\": {},\n  \"oracle_switch_slot_control_primed\": {},\n  \"oracle_switch_player_present\": {},\n  \"oracle_switch_menu_job_present\": {},\n  \"oracle_switch_stable_frames\": {},\n",
+                "  \"oracle_switch_arm_count\": {},\n  \"oracle_switch_teardown_count\": {},\n  \"oracle_switch_deferred_count\": {},\n  \"oracle_switch_last_slot\": {sw_last_slot_i},\n  \"oracle_switch_reload_phase\": {},\n  \"oracle_switch_reload_drain_waits\": {},\n  \"oracle_switch_reload_committed\": {},\n  \"oracle_switch_slot_control_mtime\": {},\n  \"oracle_switch_slot_control_primed\": {},\n  \"oracle_switch_player_present\": {},\n  \"oracle_switch_menu_job_present\": {},\n  \"oracle_switch_stable_frames\": {},\n  \"oracle_common_finalize_count\": {},\n  \"oracle_outgoing_teardown_baseline\": {},\n  \"oracle_outgoing_teardown_done\": {},\n  \"oracle_outgoing_teardown_wait_ticks\": {},\n  \"oracle_outgoing_teardown_failsoft\": {},\n  \"oracle_worldreswait_gate_calls\": {},\n  \"oracle_worldreswait_hold_armed\": {},\n  \"oracle_worldreswait_hold_engaged\": {},\n  \"oracle_worldreswait_held_frames\": {},\n  \"oracle_worldreswait_released_on_settle\": {},\n  \"oracle_worldreswait_released_on_failsoft\": {},\n",
                 swctr::SWITCH_TRIGGER_ARM_COUNT.load(SwOrd::SeqCst),
                 swctr::SWITCH_TRIGGER_TEARDOWN_COUNT.load(SwOrd::SeqCst),
                 swctr::SWITCH_TRIGGER_DEFERRED_COUNT.load(SwOrd::SeqCst),
@@ -75,6 +75,24 @@ fn write_game_module_oracles(body: &mut String) {
                 swctr::SWITCH_ORACLE_PLAYER_PRESENT.load(SwOrd::SeqCst),
                 swctr::SWITCH_ORACLE_MENU_JOB_PRESENT.load(SwOrd::SeqCst),
                 swctr::SWITCH_ORACLE_STABLE_FRAMES.load(SwOrd::SeqCst),
+                // PHASE-3 outgoing-world teardown oracles (bd PHASE3-render-release-is-CommonFinalize):
+                // common_finalize_count is THE render-release oracle (flat=in-place bug, +1/switch=fixed).
+                swctr::COMMON_FINALIZE_CALLS.load(SwOrd::SeqCst),
+                swctr::OUTGOING_TEARDOWN_BASELINE.load(SwOrd::SeqCst),
+                swctr::OUTGOING_TEARDOWN_DONE.load(SwOrd::SeqCst),
+                swctr::OUTGOING_TEARDOWN_WAIT_TICKS.load(SwOrd::SeqCst),
+                swctr::OUTGOING_TEARDOWN_FAILSOFT.load(SwOrd::SeqCst),
+                // WORLDRESWAIT streaming-settle HOLD oracles (bd reload-overlap-fix-design-worldreswait-
+                // defer-release-on-streaming-settle-2026-07-24): engaged==1 means residency was reached
+                // while armed and the release was deferred; released_on_settle==1 is the good outcome
+                // (geometry settled), released_on_failsoft==1 means the bounded cap fell back to today's
+                // in-place release; held_frames is the deferral length.
+                swctr::WORLDRESWAIT_GATE_HOOK_CALLS.load(SwOrd::SeqCst),
+                swctr::WORLDRESWAIT_HOLD_ARMED.load(SwOrd::SeqCst),
+                swctr::WORLDRESWAIT_HOLD_ENGAGED.load(SwOrd::SeqCst),
+                swctr::WORLDRESWAIT_HELD_FRAMES.load(SwOrd::SeqCst),
+                swctr::WORLDRESWAIT_RELEASED_ON_SETTLE.load(SwOrd::SeqCst),
+                swctr::WORLDRESWAIT_RELEASED_ON_FAILSOFT.load(SwOrd::SeqCst),
             ));
         }
         // LOADING SUBSTEP oracle (bd user-loading-bar-labels-stuck + WIP fromsoftware-rs
@@ -202,8 +220,14 @@ fn write_game_module_oracles(body: &mut String) {
             let refresh_x100 =
                 er_telemetry::counters::PRESENT_REFRESH_PER_PRESENT_X100.load(PcOrd::SeqCst);
             let qpc_delta_us = er_telemetry::counters::PRESENT_QPC_DELTA_US.load(PcOrd::SeqCst);
+            // gpu_frame_us (goal §3.3): per-frame GPU-busy time from the injected D3D12 timestamp pair on
+            // the game queue. Large => render-bound; small with a big qpc_delta_us => present/vblank wait.
+            // samples/state make a 0 attributable (oracle not live vs GPU instant). bd er-effects-rs-03ma.
+            let gpu_frame_us = er_telemetry::counters::GPU_FRAME_US_LAST.load(PcOrd::SeqCst);
+            let gpu_frame_samples = er_telemetry::counters::GPU_FRAME_ORACLE_SAMPLES.load(PcOrd::SeqCst);
+            let gpu_frame_state = er_telemetry::counters::GPU_FRAME_ORACLE_STATE.load(PcOrd::SeqCst);
             body.push_str(&format!(
-                "  \"oracle_present_sync_interval\": {sync_interval},\n  \"oracle_present_refresh_per_present_x100\": {refresh_x100},\n  \"oracle_present_qpc_delta_us\": {qpc_delta_us},\n"
+                "  \"oracle_present_sync_interval\": {sync_interval},\n  \"oracle_present_refresh_per_present_x100\": {refresh_x100},\n  \"oracle_present_qpc_delta_us\": {qpc_delta_us},\n  \"oracle_gpu_frame_us\": {gpu_frame_us},\n  \"oracle_gpu_frame_samples\": {gpu_frame_samples},\n  \"oracle_gpu_frame_state\": {gpu_frame_state},\n"
             ));
         }
         // COMPOSITE-DURATION + BOOT-VIEW EPOCH: is the DLL boot-view composite still running in-world on
@@ -593,19 +617,11 @@ fn write_game_module_oracles(body: &mut String) {
         } else {
             MSGBOX_CLOSING_YES
         };
-        const NO_MSGBOX_BUILDS: usize = MENU_TRACE_UNSEEN_SEQ;
-        let msgbox_total_builds = MSGBOX_TOTAL_BUILDS.load(Ordering::SeqCst);
-        let msgbox_postload_builds = MSGBOX_POSTLOAD_BUILDS.load(Ordering::SeqCst);
-        let msgbox_any_seen = msgbox_total_builds != NO_MSGBOX_BUILDS;
-        let postload_modal_seen = msgbox_postload_builds != NO_MSGBOX_BUILDS;
         let blocking_modal_present = msgbox_vtable == base + MSGBOX_DIALOG_VTABLE_RVA
             && msgbox_closing_latch != MSGBOX_CLOSING_YES;
-        let msgbox_arg_rcx = MSGBOX_LAST_ARG_RCX.load(Ordering::SeqCst);
-        let msgbox_arg_rdx = MSGBOX_LAST_ARG_RDX.load(Ordering::SeqCst);
-        let msgbox_arg_r8 = MSGBOX_LAST_ARG_R8.load(Ordering::SeqCst);
-        let msgbox_arg_r9 = MSGBOX_LAST_ARG_R9.load(Ordering::SeqCst);
+        const NO_POLICY_BUILDS: usize = MENU_TRACE_UNSEEN_SEQ;
         let policy_total_builds = POLICY_TOS_TITLE_TOTAL_BUILDS.load(Ordering::SeqCst);
-        let policy_any_seen = policy_total_builds != NO_MSGBOX_BUILDS;
+        let policy_any_seen = policy_total_builds != NO_POLICY_BUILDS;
         let policy_ptr = POLICY_TOS_TITLE_LAST_THIS.load(Ordering::SeqCst);
         let policy_vtable = POLICY_TOS_TITLE_LAST_VTABLE.load(Ordering::SeqCst);
         let policy_arg_rdx = POLICY_TOS_TITLE_LAST_ARG_RDX.load(Ordering::SeqCst);
@@ -683,7 +699,7 @@ fn write_game_module_oracles(body: &mut String) {
         let policy_flag_setter_caller_rva =
             POLICY_TOS_FLAG_SETTER_LAST_CALLER_RVA.load(Ordering::SeqCst);
         let server_status_total_seen = SERVER_STATUS_TOTAL_SEEN.load(Ordering::SeqCst);
-        let server_status_any_seen = server_status_total_seen != NO_MSGBOX_BUILDS;
+        let server_status_any_seen = server_status_total_seen != NO_POLICY_BUILDS;
         let server_status_state = SERVER_STATUS_LAST_STATE.load(Ordering::SeqCst);
         let server_status_text_id = SERVER_STATUS_LAST_TEXT_ID.load(Ordering::SeqCst);
         let title_visual_suppress_installed = TITLE_NATIVE_MENU_VISUAL_SUPPRESS_INSTALLED
@@ -1070,12 +1086,9 @@ fn write_game_module_oracles(body: &mut String) {
             && title_custom_cover_black_cover_draw_bit_set
             && !title_visual_current_draw_bit_set
             && !title_pab_information_visual_current_draw_bit_set;
-        // Latched peak-load proof + derived load-time msgbox count (bd er-effects-rs-ns4n follow-up).
-        // `oracle_load_correctness_seen > 0` proves a REAL character reached the world this run, latched
-        // so a quit-to-title (which resets the live oracle_char_* fields) cannot erase it.
-        // `oracle_msgbox_loadtime_builds` = total - postload isolates the load-time msgbox count (the
-        // hard crash/investigation trigger) from benign in-world/quit-confirm dialogs, which the total
-        // alone conflates.
+        // Latched peak-load proof. `oracle_load_correctness_seen > 0` proves a REAL character
+        // reached the world this run, latched so a quit-to-title (which resets the live
+        // oracle_char_* fields) cannot erase it.
         let loaded_peak_seen = LOADED_PEAK_SEEN_COUNT.load(Ordering::SeqCst);
         let loaded_peak_level = LOADED_PEAK_LEVEL.load(Ordering::SeqCst);
         let loaded_peak_c30 = LOADED_PEAK_C30.load(Ordering::SeqCst) as u32;
@@ -1084,26 +1097,16 @@ fn write_game_module_oracles(body: &mut String) {
             .lock()
             .map(|latched| latched.clone())
             .unwrap_or_default();
-        let msgbox_loadtime_builds = msgbox_total_builds.saturating_sub(msgbox_postload_builds);
         body.push_str(&format!(
-            "  \"oracle_load_correctness_seen\": {loaded_peak_seen},\n  \"oracle_loaded_peak_level\": {loaded_peak_level},\n  \"oracle_loaded_peak_c30\": \"0x{loaded_peak_c30:x}\",\n  \"oracle_loaded_peak_name\": \"{}\",\n  \"oracle_loaded_peak_name_len\": {loaded_peak_name_len},\n  \"oracle_msgbox_loadtime_builds\": {msgbox_loadtime_builds},\n  \"oracle_msgbox_loadtime_seen\": {},\n",
-            json_escape(&loaded_peak_name),
-            msgbox_loadtime_builds != 0
+            "  \"oracle_load_correctness_seen\": {loaded_peak_seen},\n  \"oracle_loaded_peak_level\": {loaded_peak_level},\n  \"oracle_loaded_peak_c30\": \"0x{loaded_peak_c30:x}\",\n  \"oracle_loaded_peak_name\": \"{}\",\n  \"oracle_loaded_peak_name_len\": {loaded_peak_name_len},\n",
+            json_escape(&loaded_peak_name)
         ));
         body.push_str(&format!(
-            "  \"oracle_msgbox_total_builds\": {},\n  \"oracle_msgbox_any_seen\": {},\n  \"oracle_msgbox_postload_builds\": {},\n  \"oracle_postload_modal_seen\": {},\n  \"oracle_blocking_modal_present\": {},\n  \"oracle_blocking_modal_ptr\": {},\n  \"oracle_blocking_modal_vtable\": {},\n  \"oracle_blocking_modal_closing_latch\": {},\n  \"oracle_msgbox_builder_args\": [{}, {}, {}, {}],\n  \"oracle_policy_window_total_builds\": {},\n  \"oracle_policy_window_any_seen\": {},\n  \"oracle_policy_window_ptr\": {},\n  \"oracle_policy_window_vtable\": {},\n  \"oracle_policy_window_args\": [{}, {}, {}, {}, {}],\n  \"oracle_policy_window_stack_arg0\": {},\n  \"oracle_policy_window_backing_flag_ptr\": {},\n  \"oracle_policy_window_stored_backing_flag_ptr\": {},\n  \"oracle_policy_window_backing_flag_value\": {},\n  \"oracle_policy_window_requested_flag_value\": {},\n  \"oracle_policy_window_caller_rva\": {},\n  \"oracle_policy_ctor_wrapper_hits\": {},\n  \"oracle_policy_ctor_wrapper_record\": {},\n  \"oracle_policy_ctor_wrapper_original_this\": {},\n  \"oracle_policy_ctor_wrapper_original_vtable\": {},\n  \"oracle_policy_ctor_wrapper_record_id\": {},\n  \"oracle_policy_ctor_wrapper_stack_arg0\": {},\n  \"oracle_policy_ctor_wrapper_backing_flag_ptr\": {},\n  \"oracle_policy_ctor_wrapper_ret\": {},\n  \"oracle_policy_ctor_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_wrapper_hits\": {},\n  \"oracle_policy_selector_wrapper_record\": {},\n  \"oracle_policy_selector_wrapper_original_this\": {},\n  \"oracle_policy_selector_wrapper_original_vtable\": {},\n  \"oracle_policy_selector_wrapper_owner\": {},\n  \"oracle_policy_selector_wrapper_requested_flag\": {},\n  \"oracle_policy_selector_wrapper_selector_arg\": {},\n  \"oracle_policy_selector_wrapper_ret\": {},\n  \"oracle_policy_selector_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_ctor_hits\": {},\n  \"oracle_policy_selector_ctor_this\": {},\n  \"oracle_policy_selector_ctor_vtable\": {},\n  \"oracle_policy_selector_ctor_owner\": {},\n  \"oracle_policy_selector_ctor_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_requested_flag_value\": {},\n  \"oracle_policy_selector_ctor_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_ret\": {},\n  \"oracle_policy_selector_ctor_caller_rva\": {},\n  \"oracle_policy_status_predicate_hits\": {},\n  \"oracle_policy_status_predicate_this\": {},\n  \"oracle_policy_status_predicate_owner\": {},\n  \"oracle_policy_status_predicate_flag_ptr\": {},\n  \"oracle_policy_status_predicate_flag_value\": {},\n  \"oracle_policy_status_predicate_ret\": {},\n  \"oracle_policy_status_predicate_caller_rva\": {},\n  \"oracle_policy_flag_setter_hits\": {},\n  \"oracle_policy_flag_setter_owner\": {},\n  \"oracle_policy_flag_setter_value\": {},\n  \"oracle_policy_flag_setter_force\": {},\n  \"oracle_policy_flag_setter_before\": {},\n  \"oracle_policy_flag_setter_after\": {},\n  \"oracle_policy_flag_setter_caller_rva\": {},\n  \"oracle_server_status_total_seen\": {},\n  \"oracle_server_status_any_seen\": {},\n  \"oracle_server_status_state\": {},\n  \"oracle_server_status_text_id\": {},\n",
-            msgbox_total_builds,
-            msgbox_any_seen,
-            msgbox_postload_builds,
-            postload_modal_seen,
+            "  \"oracle_blocking_modal_present\": {},\n  \"oracle_blocking_modal_ptr\": {},\n  \"oracle_blocking_modal_vtable\": {},\n  \"oracle_blocking_modal_closing_latch\": {},\n  \"oracle_policy_window_total_builds\": {},\n  \"oracle_policy_window_any_seen\": {},\n  \"oracle_policy_window_ptr\": {},\n  \"oracle_policy_window_vtable\": {},\n  \"oracle_policy_window_args\": [{}, {}, {}, {}, {}],\n  \"oracle_policy_window_stack_arg0\": {},\n  \"oracle_policy_window_backing_flag_ptr\": {},\n  \"oracle_policy_window_stored_backing_flag_ptr\": {},\n  \"oracle_policy_window_backing_flag_value\": {},\n  \"oracle_policy_window_requested_flag_value\": {},\n  \"oracle_policy_window_caller_rva\": {},\n  \"oracle_policy_ctor_wrapper_hits\": {},\n  \"oracle_policy_ctor_wrapper_record\": {},\n  \"oracle_policy_ctor_wrapper_original_this\": {},\n  \"oracle_policy_ctor_wrapper_original_vtable\": {},\n  \"oracle_policy_ctor_wrapper_record_id\": {},\n  \"oracle_policy_ctor_wrapper_stack_arg0\": {},\n  \"oracle_policy_ctor_wrapper_backing_flag_ptr\": {},\n  \"oracle_policy_ctor_wrapper_ret\": {},\n  \"oracle_policy_ctor_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_wrapper_hits\": {},\n  \"oracle_policy_selector_wrapper_record\": {},\n  \"oracle_policy_selector_wrapper_original_this\": {},\n  \"oracle_policy_selector_wrapper_original_vtable\": {},\n  \"oracle_policy_selector_wrapper_owner\": {},\n  \"oracle_policy_selector_wrapper_requested_flag\": {},\n  \"oracle_policy_selector_wrapper_selector_arg\": {},\n  \"oracle_policy_selector_wrapper_ret\": {},\n  \"oracle_policy_selector_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_ctor_hits\": {},\n  \"oracle_policy_selector_ctor_this\": {},\n  \"oracle_policy_selector_ctor_vtable\": {},\n  \"oracle_policy_selector_ctor_owner\": {},\n  \"oracle_policy_selector_ctor_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_requested_flag_value\": {},\n  \"oracle_policy_selector_ctor_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_ret\": {},\n  \"oracle_policy_selector_ctor_caller_rva\": {},\n  \"oracle_policy_status_predicate_hits\": {},\n  \"oracle_policy_status_predicate_this\": {},\n  \"oracle_policy_status_predicate_owner\": {},\n  \"oracle_policy_status_predicate_flag_ptr\": {},\n  \"oracle_policy_status_predicate_flag_value\": {},\n  \"oracle_policy_status_predicate_ret\": {},\n  \"oracle_policy_status_predicate_caller_rva\": {},\n  \"oracle_policy_flag_setter_hits\": {},\n  \"oracle_policy_flag_setter_owner\": {},\n  \"oracle_policy_flag_setter_value\": {},\n  \"oracle_policy_flag_setter_force\": {},\n  \"oracle_policy_flag_setter_before\": {},\n  \"oracle_policy_flag_setter_after\": {},\n  \"oracle_policy_flag_setter_caller_rva\": {},\n  \"oracle_server_status_total_seen\": {},\n  \"oracle_server_status_any_seen\": {},\n  \"oracle_server_status_state\": {},\n  \"oracle_server_status_text_id\": {},\n",
             blocking_modal_present,
             msgbox_dialog,
             msgbox_vtable,
             msgbox_closing_latch,
-            msgbox_arg_rcx,
-            msgbox_arg_rdx,
-            msgbox_arg_r8,
-            msgbox_arg_r9,
             policy_total_builds,
             policy_any_seen,
             policy_ptr,
@@ -2048,6 +2051,53 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_boot_view_stop_native_hits",
             BOOT_VIEW_STOP_NATIVE_HITS.load(Ordering::SeqCst),
         );
+        push_json_usize(
+            body,
+            "oracle_boot_view_dark_gap_failures",
+            BOOT_VIEW_DARK_GAP_FAILURES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_dark_gap_last_held_ms",
+            BOOT_VIEW_DARK_GAP_LAST_HELD_MS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_dark_gap_last_native_hits",
+            BOOT_VIEW_DARK_GAP_LAST_NATIVE_HITS.load(Ordering::SeqCst),
+        );
+        let native_loading_updates = LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst);
+        let forced_continue_observed = SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
+            || TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0
+            || OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst);
+        let real_handoff_observed = forced_continue_observed || native_loading_updates != 0;
+        if BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst) != 0
+            && real_handoff_observed
+            && BOOT_VIEW_HANDOFF_SEEN_MS.load(Ordering::SeqCst) == 0
+        {
+            let now_ms = crate::experiments::boot_view_epoch_ms().max(1) as usize;
+            if BOOT_VIEW_HANDOFF_SEEN_MS
+                .compare_exchange(0, now_ms, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                BOOT_VIEW_HANDOFF_NATIVE_HITS_BASELINE.store(native_loading_updates, Ordering::SeqCst);
+                BOOT_VIEW_TELEMETRY_HANDOFF_STAMPS.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        push_json_usize(
+            body,
+            "oracle_boot_view_telemetry_handoff_stamps",
+            BOOT_VIEW_TELEMETRY_HANDOFF_STAMPS.load(Ordering::SeqCst),
+        );
+        let boot_view_missed_handoff = (BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst) != 0
+            && real_handoff_observed
+            && BOOT_VIEW_HANDOFF_SEEN_MS.load(Ordering::SeqCst) == 0)
+            as usize;
+        push_json_usize(
+            body,
+            "oracle_boot_view_missed_handoff_failures",
+            boot_view_missed_handoff,
+        );
         // Window-reconfiguration timeline semaphores (bd er-effects-rs-rzow): user32 call counts
         // from the observe-only hooks, plus the early final-geometry apply result (1 = applied,
         // 2 = skipped WINDOWED, 3 = no window, 4 = no monitor, 5 = no config, 6 = already final).
@@ -2091,36 +2141,51 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_winreconfig_early_apply_rect",
             WINRECONFIG_EARLY_APPLY_RECT.load(Ordering::SeqCst),
         );
-        // Early self-present pump: frames WE presented before the game's first own present, the
-        // pump-relative ms the swapchain was found, and why the pump stopped (1 = game took over,
-        // the success terminal state; 2 = budget; 3 = Present HRESULT failure).
-        push_json_usize(
-            body,
-            "oracle_boot_view_self_presents",
-            BOOT_VIEW_SELF_PRESENTS.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_boot_view_swapchain_found_ms",
-            BOOT_VIEW_SWAPCHAIN_FOUND_MS.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_boot_view_pump_stop_reason",
-            BOOT_VIEW_PUMP_STOP_REASON.load(Ordering::SeqCst),
-        );
-        // DEPTH-KEY transparent-background semaphores: frames where the depth key actually cut out a
-        // background (clean bg/head depth separation + >0 pixels alpha'd to 0), and the last frame's
-        // background-masked fraction in whole percent. A RAM/pixel oracle for the transparent bg cutout.
+        let self_presents = BOOT_VIEW_SELF_PRESENTS.load(Ordering::SeqCst);
+        let present_full_clears = BOOT_VIEW_PRESENT_FULL_CLEAR_HITS.load(Ordering::SeqCst);
+        push_json_usize(body, "oracle_boot_view_self_presents", self_presents);
+        push_json_usize(body, "oracle_boot_view_self_full_clear_hits", BOOT_VIEW_SELF_FULL_CLEAR_HITS.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_present_full_clear_hits", present_full_clears);
+        if BOOT_VIEW_PUMP_STOP_REASON.load(Ordering::SeqCst) == 1
+            && BOOT_VIEW_STOPPED.load(Ordering::SeqCst) == 0
+            && BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst) > self_presents
+            && present_full_clears == 0
+        {
+            BOOT_VIEW_PRESENT_COVER_FAILURES.store(1, Ordering::SeqCst);
+        }
+        let cur_deser = crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+        let can_move = crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
+            && crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == cur_deser;
+        let render_ready = match unsafe { PlayerIns::local_player_mut() } {
+            Ok(p) => {
+                let m = p.chr_ins.chr_model_ins.as_ptr() as usize;
+                let c = p.chr_ins.chr_ctrl.as_ptr() as usize;
+                m != TITLE_OWNER_SCAN_START_ADDRESS && c != TITLE_OWNER_SCAN_START_ADDRESS
+                    && p.chr_ins.chr_flags1c4.is_render_group_enabled()
+                    && p.chr_ins.chr_flags1c5.enable_render()
+            }
+            Err(_) => false,
+        };
+        let pre_world_stop_failure = (BOOT_VIEW_STOPPED.load(Ordering::SeqCst) != 0
+            && !(can_move || render_ready)) as usize;
+        if pre_world_stop_failure != 0 { BOOT_VIEW_PRE_WORLD_STOP_FAILURES.store(1, Ordering::SeqCst); }
+        push_json_usize(body, "oracle_boot_view_present_cover_failures", BOOT_VIEW_PRESENT_COVER_FAILURES.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_pre_world_stop_failures", BOOT_VIEW_PRE_WORLD_STOP_FAILURES.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_swapchain_found_ms", BOOT_VIEW_SWAPCHAIN_FOUND_MS.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_fade_start_ms", BOOT_VIEW_FADE_START_MS.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_fade_complete_ms", BOOT_VIEW_FADE_COMPLETE_MS.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_fade_hits", BOOT_VIEW_FADE_HITS.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_fade_last_alpha", BOOT_VIEW_FADE_LAST_ALPHA.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_fade_failures", BOOT_VIEW_FADE_FAILURES.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_native_gfx_fade_hold_hits", BOOT_VIEW_NATIVE_GFX_FADE_HOLD_HITS.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_native_gfx_fade_hold_complete_ms", BOOT_VIEW_NATIVE_GFX_FADE_HOLD_COMPLETE_MS.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_pump_stop_reason", BOOT_VIEW_PUMP_STOP_REASON.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_pump_stop_ms", BOOT_VIEW_PUMP_STOP_MS.load(Ordering::SeqCst) as usize);
         push_json_usize(
             body,
             "oracle_depth_key_applied",
             DEPTH_KEY_APPLIED.load(Ordering::SeqCst),
         );
-        // Coherent color+depth readback engagement (bug #3): _ok = draw ticks the single-fence path
-        // captured color+depth together (from the deterministic bundle-paired depth); _fallback = ticks
-        // it degraded to the separate color/depth reads. A high _ok:_fallback ratio proves the coherent
-        // path is actually running (the first pass had no way to tell).
         push_json_usize(
             body,
             "oracle_portrait_coherent_read_ok",
@@ -2131,18 +2196,11 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_portrait_coherent_read_fallback",
             COHERENT_READ_FALLBACK.load(Ordering::SeqCst),
         );
-        // FAIL-FAST 2nd-character desync semaphore: >0 means a frame reused a depth mask computed for a
-        // DIFFERENT character incarnation (prior character's silhouette on the new head). During the
-        // System-Quit repro this also abort()s the process on first trip, so the run stops in ~40s.
         push_json_usize(
             body,
             "oracle_portrait_mask_stale_reuse",
             PROFILE_MASK_STALE_REUSE.load(Ordering::SeqCst),
         );
-        // FAIL-FAST mask/head coherence (2nd-character desync): _iou_last = last frame's IoU of the kept
-        // cutout vs the colour head (100=perfect match, low=the cutout doesn't match this head);
-        // _mismatch_total = frames below the gross threshold. Lets the 1st-char (correct) vs 2nd-char
-        // (desync) IoU be compared and the abort threshold calibrated.
         push_json_usize(
             body,
             "oracle_portrait_mask_head_iou_last",
@@ -2163,9 +2221,6 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_depth_key_fresh",
             DEPTH_KEY_FRESH.load(Ordering::SeqCst),
         );
-        // The draw-tick readback's per-frame republish count (==RGBA version). If ~= render_drive_hits the
-        // readback publishes per-frame (so a low overlay_reuploads means the composite upload is the
-        // bottleneck); if this is itself ~4 the per-frame readback/publish is.
         push_json_usize(
             body,
             "oracle_loading_bg_portrait_rgba_version",
@@ -2685,6 +2740,83 @@ fn write_game_module_oracles(body: &mut String) {
                 "  \"oracle_delaydelete_highwater\": {dd_highwater},\n"
             ));
         }
+        // RENDER-RESOURCE-RELEASE oracles (bd AC-2-ANSWERED-native-reload-no-dip-mod-ownload-dips-real-
+        // divergence-phase3 + PHASE3-render-release-is-CommonFinalize). The switch reload renders ~+40ms/
+        // frame heavier than firstload at IDLE with FLAT GX cmdqueue fill and FLAT entity counts, so the
+        // extra cost is render EXECUTION the reload leaves live: own_load_switch_reload_fire SKIPS the native
+        // return-title render-resource release that `CS::InGameStep::_Common_Finalize` (RVA 0xaed380)
+        // performs -- that teardown resets g_GxDrawContext's per-window render outputs (FUN_1419eaf90) and
+        // frees GLOBAL_CSDistViewManager / GLOBAL_WorldChrMan / GLOBAL_MapItemMan / bullet+dmg managers.
+        // These are PASSIVE reads (no hooks -- per bd gpu-frame-us-ecl-piggyback-oracle-crashes-native-path
+        // NO per-ECL/per-draw hooks) that expose the live render-output vector plus the render managers the
+        // skipped teardown would have freed, so a heavier reload frame can be told apart from a clean control
+        // by STRUCTURE (extra render outputs / leftover managers) rather than only the _Common_Finalize hook
+        // counter (oracle_common_finalize_count). RE grounding (dump pc_eldenring_runtime.1.16.2.exe, base
+        // 0x140000000): the 0xaed380 disasm loads these exact GLOBAL_* data globals; the GxDrawContext
+        // render-output container layout is confirmed by its ctor GXSR::GxDrawContext::GxDrawContext
+        // (0x1419e4740 -> FUN_1419e3dc0), a DLKR container = {allocator@+0x120, begin@+0x128, end@+0x130,
+        // cap@+0x138}, and +0x128==begin matches the production swapchain-find chain
+        // (present_overlay::find_game_swapchain, runtime-proven). NOTE: WorldChrMan entity list-counts are
+        // already emitted (oracle_wcm_*/oracle_worldchrman_* in write_player_presence_oracle) and are flat
+        // per AC-2, so they are not duplicated here.
+        {
+            const G_GX_DRAW_CONTEXT_RVA: usize = 0x47ef360;
+            const GXDC_OUTPUT_VEC_BEGIN_OFFSET: usize = 0x128;
+            const GXDC_OUTPUT_VEC_END_OFFSET: usize = 0x130;
+            const GXDC_OUTPUT_VEC_CAP_OFFSET: usize = 0x138;
+            // Per-window render-output entry stride (prior RE, present_overlay: each inline entry is 0x170
+            // bytes, first qword = the per-window output object). Used ONLY to derive a human-readable count;
+            // the raw byte span is emitted alongside so the signal survives if the stride is ever corrected.
+            const GXDC_OUTPUT_ENTRY_STRIDE: usize = 0x170;
+            // GLOBAL_* render managers _Common_Finalize frees (data RVAs read straight off the 0xaed380
+            // disasm; 0-shift data-global convention, same 0x143d_xxxx block as GameDataMan/CSSystemStep).
+            const GLOBAL_CS_DIST_VIEW_MANAGER_RVA: usize = 0x3d675c0;
+            const GLOBAL_MAP_ITEM_MAN_RVA: usize = 0x3d67a50;
+            const RENDER_READ_FAIL: i64 = -1;
+            const MIN_VALID_PTR: usize = 0x10000;
+            let gxdc = unsafe { crate::experiments::safe_read_usize(base + G_GX_DRAW_CONTEXT_RVA) }
+                .filter(|p| *p >= MIN_VALID_PTR)
+                .unwrap_or(NULL_PTR);
+            let (out_span_bytes, out_count, out_capacity) = if gxdc == NULL_PTR {
+                (RENDER_READ_FAIL, RENDER_READ_FAIL, RENDER_READ_FAIL)
+            } else {
+                let begin = unsafe {
+                    crate::experiments::safe_read_usize(gxdc + GXDC_OUTPUT_VEC_BEGIN_OFFSET)
+                };
+                let end = unsafe {
+                    crate::experiments::safe_read_usize(gxdc + GXDC_OUTPUT_VEC_END_OFFSET)
+                };
+                let cap = unsafe {
+                    crate::experiments::safe_read_usize(gxdc + GXDC_OUTPUT_VEC_CAP_OFFSET)
+                };
+                match (begin, end, cap) {
+                    (Some(b), Some(e), Some(c)) if e >= b && c >= b => {
+                        let span = e - b;
+                        let cap_span = c - b;
+                        (
+                            span as i64,
+                            (span / GXDC_OUTPUT_ENTRY_STRIDE) as i64,
+                            (cap_span / GXDC_OUTPUT_ENTRY_STRIDE) as i64,
+                        )
+                    }
+                    _ => (RENDER_READ_FAIL, RENDER_READ_FAIL, RENDER_READ_FAIL),
+                }
+            };
+            let distview =
+                unsafe { crate::experiments::safe_read_usize(base + GLOBAL_CS_DIST_VIEW_MANAGER_RVA) }
+                    .filter(|p| *p >= MIN_VALID_PTR)
+                    .unwrap_or(NULL_PTR);
+            let mapitemman =
+                unsafe { crate::experiments::safe_read_usize(base + GLOBAL_MAP_ITEM_MAN_RVA) }
+                    .filter(|p| *p >= MIN_VALID_PTR)
+                    .unwrap_or(NULL_PTR);
+            body.push_str(&format!(
+                "  \"oracle_gxdc_ptr\": {},\n  \"oracle_gxdc_output_span_bytes\": {out_span_bytes},\n  \"oracle_gxdc_output_count\": {out_count},\n  \"oracle_gxdc_output_capacity\": {out_capacity},\n  \"oracle_render_distview_mgr_ptr\": {},\n  \"oracle_render_mapitem_mgr_ptr\": {},\n",
+                format_optional_ptr(gxdc),
+                format_optional_ptr(distview),
+                format_optional_ptr(mapitemman),
+            ));
+        }
         push_json_usize(
             body,
             "oracle_portrait_multi_model_publish_skips",
@@ -2880,19 +3012,19 @@ fn write_game_module_oracles(body: &mut String) {
         push_json_usize(
             body,
             "oracle_loading_screen_close_sent",
-            // Same live-state reset as loading_bar_enabled: a stale during-load latch, reported 0 once the
-            // world is genuinely live (loading screen logically closed) so vanilla+mod are comparable.
             if play_time_live {
                 0
             } else {
                 LOADING_SCREEN_CLOSE_SENT.load(Ordering::SeqCst)
             },
         );
-        push_json_usize(
-            body,
-            "oracle_loading_screen_close_sent_hits",
-            LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst),
-        );
+        push_json_usize(body, "oracle_loading_screen_close_sent_hits", LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_loading_screen_gfx_fadeout_hook_installed", LOADING_SCREEN_GFX_FADEOUT_HOOK_INSTALLED.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_loading_screen_gfx_fadeout_hits", LOADING_SCREEN_GFX_FADEOUT_HITS.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_loading_screen_gfx_fadeout_first_ms", LOADING_SCREEN_GFX_FADEOUT_FIRST_MS.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_loading_screen_gfx_fadeout_last_ms", LOADING_SCREEN_GFX_FADEOUT_LAST_MS.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_loading_screen_update_last_ms", LOADING_SCREEN_UPDATE_LAST_MS.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_loading_screen_close_sent_first_ms", LOADING_SCREEN_CLOSE_SENT_FIRST_MS.load(Ordering::SeqCst));
         // CANDIDATE A (er-effects-rs-jsm): live head copied INTO the displayed now-loading GFx texture so
         // the native tips/bar render above it. `uploads > 0` == the head is in the movie; `overlay_yields`
         // proves the Present-overlay demoted (stopped drawing over the tips); `demote_credit` is the live

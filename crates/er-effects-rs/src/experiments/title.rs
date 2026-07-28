@@ -4,5 +4,6 @@
 
 include!("title/product_autoload_gates.rs");
 include!("title/title_tick_cover.rs");
+include!("title/switch_slot_control.rs");
 include!("title/profile_select_flow.rs");
 include!("title/native_title_job.rs");

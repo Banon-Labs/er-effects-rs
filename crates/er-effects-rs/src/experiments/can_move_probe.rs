@@ -131,17 +131,44 @@ unsafe fn inject_all_pad_devices() {
 /// locomotion WITHOUT the window being active -- the missing half of an autonomous, focus-free proof.
 const IS_ENABLE_CONTROL_ON_DISACTIVE_RVA: u32 = 0xe53220;
 
+/// Original `IsEnableControlOnDisactiveWindow` (minhook trampoline). 0 until the hook installs. The
+/// detour calls this to return the game's REAL value whenever the harness is NOT actively injecting.
+static ORIG_IS_ENABLE_CONTROL_ON_DISACTIVE: AtomicUsize = AtomicUsize::new(0);
+
+/// Detour for `IsEnableControlOnDisactiveWindow`. LEAK FIX (bd input-blocking-only-in-harness-during-
+/// driving-never-in-product-never-outside-window-2026-07-23): the override that forces "accept control
+/// on a disactive/unfocused window" to 1 must exist ONLY while the harness is ACTIVELY INJECTING this
+/// frame (the move-probe ON burst / sq-repro driving -- `harness_injection_active()`). Left permanently
+/// forced to 1 (the old `-> 1` body, installed for the whole run via `mem::forget`), it made ER process
+/// the USER's real mouse/keyboard while the ER window was UNFOCUSED for the ENTIRE run -- the reported
+/// live input-lock (run bonky-bean-2: oracle_rawinput_mouse_move_events ~5717 flowed while
+/// oracle_window_foreground=False for 459/480 samples). Outside the injection window we now return the
+/// game's REAL value (retail: false) via the retained trampoline, so ER accepts control only when
+/// focused and the user's input in another window never reaches ER. During the injection window this
+/// still returns 1 so the injected forward stick reaches locomotion (injection preserved).
 unsafe extern "system" fn is_enable_control_on_disactive_hook(
-    _a: usize,
-    _b: usize,
-    _c: usize,
-    _d: usize,
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
 ) -> usize {
-    1
+    if crate::experiments::harness_injection_active() {
+        return 1;
+    }
+    let orig = ORIG_IS_ENABLE_CONTROL_ON_DISACTIVE.load(Ordering::SeqCst);
+    if orig != 0 {
+        let f: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+            unsafe { std::mem::transmute(orig) };
+        unsafe { f(a, b, c, d) }
+    } else {
+        0 // trampoline unavailable -> conservative retail value (control disabled while unfocused)
+    }
 }
 
-/// Install the "enable control on inactive window" override once (proof runs only). We never call the
-/// original (it just returns a debug bool), so no trampoline is retained.
+/// Install the "enable control on inactive window" override once (proof runs only). The detour is gated
+/// to `harness_injection_active()` and calls the ORIGINAL for the game's real value otherwise, so we
+/// MUST retain the trampoline (unlike before, when the detour unconditionally returned 1 and never
+/// called through).
 fn install_focus_override_hook() {
     static INSTALLED: std::sync::Once = std::sync::Once::new();
     INSTALLED.call_once(|| {
@@ -165,12 +192,15 @@ fn install_focus_override_hook() {
             )
         } {
             Ok(hook) => {
+                // Store the trampoline BEFORE enabling so the detour never transmutes an unset sentinel.
+                ORIG_IS_ENABLE_CONTROL_ON_DISACTIVE
+                    .store(hook.trampoline() as usize, Ordering::SeqCst);
                 if unsafe { hook.queue_enable() }.is_ok()
                     && matches!(unsafe { MH_ApplyQueued() }, MH_STATUS::MH_OK)
                 {
                     std::mem::forget(hook);
                     append_autoload_debug(format_args!(
-                        "can-move: focus-override installed at 0x{addr:x} (IsEnableControlOnDisactiveWindow->1: gameplay input applies while unfocused)"
+                        "can-move: focus-override installed at 0x{addr:x} (IsEnableControlOnDisactiveWindow->1 ONLY while harness injecting; real value otherwise -- user input never reaches ER while unfocused)"
                     ));
                 } else {
                     append_autoload_debug(format_args!("can-move: focus-override enable failed"));
@@ -302,12 +332,10 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
     // leave it false so the real (neutral, unless a user pushes) stick flows through -> the OFF tail
     // measures movement we are NOT causing.
     MOVE_PROBE_ACTIVE.store(is_on, Ordering::SeqCst);
-    // Force ER genuinely focused ONCE at the START of each injection burst (user 2026-07-20: "just when
-    // you need to move", not constantly). Gameplay locomotion applies the injected stick only when the
-    // window is truly active; kb+mouse are disabled as game inputs so this brief grab is uncontaminated.
-    if is_on && pf == 0 && crate::experiments::probe_foreground_enabled() {
-        crate::experiments::sq_repro_force_foreground_now();
-    }
+    // NEVER force the window foreground (user 2026-07-23, bd harness-drive-contract-...-no-force-focus):
+    // seizing the user's focus is forbidden. Movement is delivered ONLY while ER is ALREADY the foreground
+    // window -- the pad-poll/`inject_all_pad_devices` stick and the foreground-only keyboard-W driver below
+    // both no-op or auto-release when ER is not focused, so the probe can never steal the user's focus.
     // Also write full-forward to EVERY registered pad device's CONCRETE pointer -- covers the case where
     // the poll hook's `this` is the FD4PadDevice (so `this+0x8a0` is 8 bytes off the real stick) or the
     // player reads a device the poll hook did not fire for this frame.
@@ -317,9 +345,9 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
     // KEYBOARD-W movement injection -- THE PROVEN path (bd SWITCH-movement-proof-to-keyboard-W-sendinput):
     // pad-stick / synthetic-xinput never walk the char, but SendInput 'W' via RawInput does, and ER reads
     // gameplay keyboard via RawInput (NOT DInput) so the kb+mouse-disable does not block it. Foreground-
-    // only: delivers W only while ER is the foreground window (made so by the scoped burst-start grab
-    // above), auto-releases the moment it loses focus, and releases on OFF/verdict so it cannot drive the
-    // char to death. Faithful real-input path (not a RAM move-vector cheat). VK 'W' = 0x57.
+    // only: delivers W only while ER is ALREADY the foreground window (focus is NEVER forced), auto-releases
+    // the moment it loses focus, and releases on OFF/verdict so it cannot drive the char to death. Faithful
+    // real-input path (not a RAM move-vector cheat). VK 'W' = 0x57.
     crate::experiments::move_probe_drive_key_foreground_only(if is_on { 0x57 } else { 0 });
 
     let mut prev = lock_prev();
@@ -341,17 +369,31 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
             }
         }
 
-        // Latch the first clear verdict from cumulative counters.
+        // ONE INTERVAL PER LOAD (user 2026-07-23, bd harness-drive-contract-one-move-interval-per-load-...):
+        // measure movement across a SINGLE ON burst + OFF tail, then FORCE a terminal verdict at the END of
+        // that one cycle -- never loop more intervals waiting for a clean proof. The old cumulative
+        // thresholds needed 2-4 cycles to reach a verdict (PROVEN ot>=40, DISPROVEN ot>=90), so a load whose
+        // movement never cleanly proved (Bonky) stayed at verdict 0 FOREVER: the probe kept re-injecting
+        // (and previously re-forcing focus) and the driver -- gated on the verdict -- never triggered the
+        // reload. Now the result (proven/disproven/contaminated) is still RECORDED in telemetry, but after
+        // exactly ONE interval a verdict always latches, so the probe stops injecting and the driver advances
+        // to the next same-character load REGARDLESS of the result (load -> one interval -> reload -> ...).
         let ot = ON_TOTAL.load(Ordering::Relaxed);
         let om = ON_MOVED.load(Ordering::Relaxed);
         let ft = OFF_TAIL_TOTAL.load(Ordering::Relaxed);
         let fm = OFF_TAIL_MOVED.load(Ordering::Relaxed);
+        // The single interval is complete once one full ON+OFF cycle has elapsed (this is its last frame).
+        let interval_done = pf + 1 >= CYCLE;
         let verdict = if ft >= OFF_TAIL && fm * 100 > 40 * ft {
-            3 // CONTAMINATED: char moves while we are NOT injecting -> external input present
-        } else if ot >= 40 && om * 100 >= 70 * ot && (ft == 0 || fm * 100 <= 15 * ft) {
-            1 // PROVEN: moved under our stick, still (mostly) in the OFF tail when released
-        } else if ot >= 90 && om * 100 <= 10 * ot {
-            2 // DISPROVEN: many ON frames injected, char barely moved -> injection ineffective
+            3 // CONTAMINATED: char moved while we were NOT injecting -> external input present
+        } else if interval_done {
+            // Terminal decision after the one interval: PROVEN if the char moved under our stick for most
+            // of the ON burst with a clean OFF tail, else DISPROVEN. Either way this interval is over.
+            if ot > 0 && om * 100 >= 70 * ot && (ft == 0 || fm * 100 <= 15 * ft) {
+                1 // PROVEN
+            } else {
+                2 // DISPROVEN (injection ineffective / char did not clearly move this interval)
+            }
         } else {
             0
         };

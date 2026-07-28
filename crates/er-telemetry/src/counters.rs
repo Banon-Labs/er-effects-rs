@@ -45,6 +45,24 @@ pub static PRESENT_REFRESH_PER_PRESENT_X100: AtomicUsize = AtomicUsize::new(0);
 /// Wall-clock microseconds between the last two GetFrameStatistics SyncQPCTime samples (present-to-present
 /// spacing straight from DXGI, independent of our Instant timing). ~49920 on the pinned reload frame.
 pub static PRESENT_QPC_DELTA_US: AtomicUsize = AtomicUsize::new(0);
+/// Per-frame GPU-busy time in MICROSECONDS: the median-of-recent span between two D3D12 TIMESTAMP
+/// queries the DLL injects onto the GAME's ID3D12CommandQueue -- START on the first ExecuteCommandLists
+/// after a present, END at the top of the Present detour (before the original Present). Excludes the
+/// vsync/flip present-wait (that happens INSIDE the original Present, after the END stamp), so a large
+/// value == render-bound (GPU genuinely busy ~50ms) while a small value with a 50ms frame == a
+/// present/vblank throttle. This is the goal-doc §3.3 `gpu_frame_us` oracle, splitting the reload-20fps
+/// residual into GPU-render vs present-wait. bd er-effects-rs-03ma /
+/// switch-reload-framerate-parity-acceptance.md.
+pub static GPU_FRAME_US_LAST: AtomicUsize = AtomicUsize::new(0);
+/// Count of successful GPU-timestamp readbacks (each = one resolved START/END pair). Emitted as
+/// `oracle_gpu_frame_samples` so a `gpu_frame_us == 0` is attributable: 0 samples == the oracle never
+/// produced (queue not latched / D3D12 setup failed / not under Wine), NOT "GPU is instant".
+pub static GPU_FRAME_ORACLE_SAMPLES: AtomicUsize = AtomicUsize::new(0);
+/// GPU-timestamp oracle lifecycle state (emitted `oracle_gpu_frame_state`): 0=not started,
+/// 1=game device + query heap/list/readback created, 2=game ExecuteCommandLists hooked + queue latched,
+/// 3=producing (at least one full START..END pair resolved). Distinguishes WHERE setup stopped when
+/// `gpu_frame_us` stays 0.
+pub static GPU_FRAME_ORACLE_STATE: AtomicUsize = AtomicUsize::new(0);
 /// Internal previous-sample state for the GetFrameStatistics deltas (not emitted): last PresentCount,
 /// last SyncRefreshCount, last SyncQPCTime (QPC ticks, low bits).
 pub static PRESENT_STATS_PREV_PRESENT_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -355,6 +373,11 @@ pub static NOW_LOADING_HELPER_CTOR_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static NOW_LOADING_HELPER_UPDATE_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_SCREEN_UPDATE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_SCREEN_UPDATE_HITS: AtomicUsize = AtomicUsize::new(0);
+pub static LOADING_SCREEN_UPDATE_LAST_MS: AtomicUsize = AtomicUsize::new(0);
+pub static LOADING_SCREEN_GFX_FADEOUT_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub static LOADING_SCREEN_GFX_FADEOUT_HITS: AtomicUsize = AtomicUsize::new(0);
+pub static LOADING_SCREEN_GFX_FADEOUT_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
+pub static LOADING_SCREEN_GFX_FADEOUT_LAST_MS: AtomicUsize = AtomicUsize::new(0);
 pub static KNOWLEDGE_TIP_REFRESH_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static KNOWLEDGE_TIP_SUPPRESSED_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static KNOWLEDGE_TIP_ADVANCE_ENABLED_INSTALLED: AtomicUsize = AtomicUsize::new(0);
@@ -368,6 +391,7 @@ pub static LOADING_SCREEN_BAR_PROGRESS_PERMILLE: AtomicUsize = AtomicUsize::new(
 pub static LOADING_SCREEN_BAR_FINAL_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_SCREEN_CLOSE_SENT: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_SCREEN_CLOSE_SENT_HITS: AtomicUsize = AtomicUsize::new(0);
+pub static LOADING_SCREEN_CLOSE_SENT_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
 pub static FAKE_LOADING_SCREEN_SAMPLE_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static FAKE_LOADING_SCREEN_VISIBLE_SAMPLES: AtomicUsize = AtomicUsize::new(0);
 pub static RENDER_LOADING_LAYER_SAMPLE_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -500,6 +524,58 @@ pub static BOOT_VIEW_EPOCH_WORLD_LIVE: AtomicUsize = AtomicUsize::new(usize::MAX
 /// it strands the child alive forever = the ez10-set + ~4fps steady-state divergence). bd
 /// CORRECTION-STEP4-finalize-substate-is-0.
 pub static WORLD_LIVE_STABLE_FRAMES: AtomicUsize = AtomicUsize::new(0);
+// ---- PHASE-3 OUTGOING-WORLD TEARDOWN (bd PHASE3-render-release-is-CommonFinalize-...-2026-07-23) ----
+/// One-shot install guard for the observe-only `CS::InGameStep::_Common_Finalize` hook.
+pub static COMMON_FINALIZE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Count of native `_Common_Finalize` invocations (the world render-release that frees GLOBAL_WorldChrMan,
+/// CSDistViewManager, g_GxDrawContext, WorldRes area lists, FieldArea, ...). This is THE teardown oracle:
+/// on the broken in-place switch it stays flat across a reload (0 finalizes); the Phase-3 fix routes the
+/// OUTGOING world through this release so it increments once per switch (like a native quit->Continue).
+/// Exposed as `oracle_common_finalize_count` (distinct from `oracle_switch_teardown_count`, which merely
+/// counts our menuData+0x5d ARM writes).
+pub static COMMON_FINALIZE_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// `COMMON_FINALIZE_CALLS` captured at switch-arm, so the reload gate can detect the OUTGOING finalize.
+pub static OUTGOING_TEARDOWN_BASELINE: AtomicUsize = AtomicUsize::new(0);
+/// Latched 1 once the OUTGOING world's `_Common_Finalize` was observed for the current switch (before the
+/// reload's continue_confirm), i.e. the pre-quit world was released so the rebuild starts fresh.
+pub static OUTGOING_TEARDOWN_DONE: AtomicUsize = AtomicUsize::new(0);
+/// Frames own_load_switch_reload_fire has held continue_confirm waiting for the OUTGOING finalize.
+pub static OUTGOING_TEARDOWN_WAIT_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// Latched 1 when the bounded wait for the OUTGOING finalize expired -> fail-soft to the OLD in-place
+/// reload (the two holds re-engage to protect the reused world). Keeps the fix from ever softlocking.
+pub static OUTGOING_TEARDOWN_FAILSOFT: AtomicUsize = AtomicUsize::new(0);
+// ---- WORLDRESWAIT streaming-settle HOLD (bd reload-overlap-fix-design-worldreswait-defer-release-on-
+//      streaming-settle-2026-07-24) -- the armed switch-reload movable-while-streaming dip fix. A hook on
+//      CS::MoveMapStep::STEP_WorldResWait's residency predicate FUN_140624bd0 (deobf 0x624bd0; that step
+//      is its SOLE code caller) defers STEP_WorldResWait's player warp + step advance (i.e. the coupled
+//      movability/loading-close release) until CS::CSWorldGeomMan geometry streaming settles, scoped to
+//      the System-Quit switch reload ONLY. Bounded fail-soft; never writes WorldBlockRes phase/gate bytes. ----
+/// One-shot install guard for the STEP_WorldResWait gate (FUN_140624bd0) defer-release hook.
+pub static WORLDRESWAIT_GATE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Total gate-hook invocations (per-frame during any world load). Telemetry oracle_worldreswait_gate_calls.
+pub static WORLDRESWAIT_GATE_HOOK_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// Per-switch ARM latch (1 == this switch reload's WorldResWait release should be held). Set by
+/// `arm_worldreswait_hold()` from `own_load_switch_reload_fire` (switch-only, marker-gated), cleared per
+/// switch by `reset_worldreswait_hold_latches()` and on release. On boot/load1 it is never set, so the
+/// gate hook is a pure passthrough there (the anti-softlock crux).
+pub static WORLDRESWAIT_HOLD_ARMED: AtomicUsize = AtomicUsize::new(0);
+/// Per-switch latch: WorldBlockRes residency was reached while armed (so the gate's ONE legit
+/// `FUN_14066d610` residency-pop already ran). Once set, the hook stops calling the original (no repeat
+/// pop / no repeat pending-vector erase) and holds on geometry-settle instead.
+pub static WORLDRESWAIT_RESIDENCY_SEEN: AtomicUsize = AtomicUsize::new(0);
+/// Frames since residency was reached (the hold window length); bounds the fail-soft cap.
+pub static WORLDRESWAIT_HOLD_WAIT_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// Consecutive frames CS::CSWorldGeomMan reported settled (for the K-frame sustain before release).
+pub static WORLDRESWAIT_SETTLE_STREAK: AtomicUsize = AtomicUsize::new(0);
+/// Run-cumulative outcome telemetry: 1 == the hold engaged (residency seen while armed) at least once.
+pub static WORLDRESWAIT_HOLD_ENGAGED: AtomicUsize = AtomicUsize::new(0);
+/// Run-cumulative: total frames the gate hook returned not-ready to DEFER the release (hold length).
+pub static WORLDRESWAIT_HELD_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// Run-cumulative: 1 == a hold released because geometry settled (the good outcome).
+pub static WORLDRESWAIT_RELEASED_ON_SETTLE: AtomicUsize = AtomicUsize::new(0);
+/// Run-cumulative: 1 == a hold released on the bounded fail-soft cap (geometry never settled -> fall
+/// back to today's in-place release; no softlock, no regression).
+pub static WORLDRESWAIT_RELEASED_ON_FAILSOFT: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_COMPOSITE_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static BOOT_VIEW_COMPOSITE_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
 pub static POLICY_TOS_TITLE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
@@ -669,6 +745,7 @@ pub static INWORLD_FINALIZE_DRIVE_STREAK: AtomicUsize = AtomicUsize::new(0);
 pub static INWORLD_FINALIZE_DRIVE_SET: AtomicUsize = AtomicUsize::new(0);
 pub static INWORLD_FINALIZE_DRIVE_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static INWORLD_FINALIZE_DRIVE_WHYNOT_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub static ORACLE_RELIABLE_INGAME_PTR: AtomicUsize = AtomicUsize::new(0);
 pub static ORACLE_RELIABLE_MMS_PTR: AtomicUsize = AtomicUsize::new(0);
 pub static CHILD_DONE_QUERY_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub static CHILD_DONE_QUERY_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
@@ -800,16 +877,42 @@ pub static BOOT_VIEW_UPLOAD_SIZE: AtomicU64 = AtomicU64::new(0);
 pub static BOOT_VIEW_RTV_HEAP: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_DRAW_BUSY: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_SELF_PRESENTS: AtomicUsize = AtomicUsize::new(0);
+// Full-backbuffer black clears before copying the boot bar. `_PRESENT_` is the important product
+// oracle: after the self-present pump yields to the game's render loop, every boot-view Present frame
+// must still cover the rest of the game instead of leaving whatever Elden Ring rendered under/around
+// the loading bar.
+pub static BOOT_VIEW_SELF_FULL_CLEAR_HITS: AtomicUsize = AtomicUsize::new(0);
+pub static BOOT_VIEW_PRESENT_FULL_CLEAR_HITS: AtomicUsize = AtomicUsize::new(0);
+pub static BOOT_VIEW_PRESENT_COVER_FAILURES: AtomicUsize = AtomicUsize::new(0);
+// Nonzero means the cover stopped before a world/playable handoff. Native loading becoming visible is
+// not enough; the product owns the full backbuffer until the game can safely show.
+pub static BOOT_VIEW_PRE_WORLD_STOP_FAILURES: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_SWAPCHAIN_FOUND_MS: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_PUMP_STOP_REASON: AtomicUsize = AtomicUsize::new(0);
+pub static BOOT_VIEW_PUMP_STOP_MS: AtomicU64 = AtomicU64::new(0);
 pub static BOOT_VIEW_STRIP_W: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_STRIP_H: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_DRAWN_PERMILLE: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static BOOT_VIEW_DRAWN_IDX: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static BOOT_VIEW_DRAWN_BG_ACTIVE: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static BOOT_VIEW_HANDOFF_SEEN_MS: AtomicUsize = AtomicUsize::new(0);
+pub static BOOT_VIEW_FADE_START_MS: AtomicUsize = AtomicUsize::new(0);
+pub static BOOT_VIEW_FADE_COMPLETE_MS: AtomicUsize = AtomicUsize::new(0);
+pub static BOOT_VIEW_FADE_HITS: AtomicUsize = AtomicUsize::new(0);
+pub static BOOT_VIEW_FADE_LAST_ALPHA: AtomicUsize = AtomicUsize::new(0);
+pub static BOOT_VIEW_FADE_FAILURES: AtomicUsize = AtomicUsize::new(0);
+pub static BOOT_VIEW_NATIVE_GFX_FADE_HOLD_HITS: AtomicUsize = AtomicUsize::new(0);
+pub static BOOT_VIEW_NATIVE_GFX_FADE_HOLD_COMPLETE_MS: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_STOP_NATIVE_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_HANDOFF_NATIVE_HITS_BASELINE: AtomicUsize = AtomicUsize::new(0);
+// Loud gap oracle: nonzero means the boot cover stopped from the bail clock before
+// the native loading screen produced enough update ticks to be visibly lit.
+pub static BOOT_VIEW_DARK_GAP_FAILURES: AtomicUsize = AtomicUsize::new(0);
+pub static BOOT_VIEW_DARK_GAP_LAST_HELD_MS: AtomicUsize = AtomicUsize::new(0);
+pub static BOOT_VIEW_DARK_GAP_LAST_NATIVE_HITS: AtomicUsize = AtomicUsize::new(0);
+// Handoff stamps made from telemetry/update context because the draw path may already be yielded or
+// skipped on the exact frame the native loading screen first appears.
+pub static BOOT_VIEW_TELEMETRY_HANDOFF_STAMPS: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_IDX_CHANGED_MS: AtomicU64 = AtomicU64::new(0);
 pub static EFFECT_SELECTOR_VIEW_BUSY: AtomicUsize = AtomicUsize::new(0);
 pub static EFFECT_SELECTOR_VIEW_ALLOCATOR: AtomicUsize = AtomicUsize::new(0);
@@ -964,6 +1067,8 @@ pub static TITLE_NATIVE_READY_PREDICATE_LAST_FLAGS: AtomicUsize = AtomicUsize::n
 pub static TITLE_NATIVE_READY_PREDICATE_LAST_MASKED: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_NATIVE_READY_PREDICATE_LAST_RET: AtomicUsize = AtomicUsize::new(0);
 pub static TFC_CONTINUE_FIRED: AtomicUsize = AtomicUsize::new(0);
+pub static TFC_FORCED_CONTINUE_HANDOFF_MS: AtomicU64 = AtomicU64::new(0);
+pub static OWN_LOAD_FORCED_CONTINUE_HANDOFF_MS: AtomicU64 = AtomicU64::new(0);
 pub static TFC_DRAIN_DIALOG: AtomicUsize = AtomicUsize::new(0);
 pub static TFC_AUTO_MENU_OPENED: AtomicUsize = AtomicUsize::new(0);
 pub static TFC_LOAD_VEC_WAIT_TICKS: AtomicUsize = AtomicUsize::new(0);
@@ -1116,6 +1221,10 @@ pub static WINRECONFIG_SET_WINDOW_LONG_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub static WINRECONFIG_MOVE_WINDOW_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub static WINRECONFIG_CHANGE_DISPLAY_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub static WINRECONFIG_LAST_SET_POS_SIZE: AtomicUsize = AtomicUsize::new(0);
+pub static WINRECONFIG_LAST_SET_POS_FLAGS: AtomicUsize = AtomicUsize::new(0);
+pub static WINRECONFIG_LAST_MOVE_SIZE: AtomicUsize = AtomicUsize::new(0);
+pub static WINRECONFIG_LAST_CHANGE_DISPLAY_SIZE: AtomicUsize = AtomicUsize::new(0);
+pub static WINRECONFIG_LAST_CHANGE_DISPLAY_FLAGS: AtomicUsize = AtomicUsize::new(0);
 pub static WINRECONFIG_EARLY_APPLY_RESULT: AtomicUsize = AtomicUsize::new(0);
 pub static WINRECONFIG_EARLY_APPLY_MS: AtomicUsize = AtomicUsize::new(0);
 pub static WINRECONFIG_EARLY_APPLY_RECT: AtomicUsize = AtomicUsize::new(0);

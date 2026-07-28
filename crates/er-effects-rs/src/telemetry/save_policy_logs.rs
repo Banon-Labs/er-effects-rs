@@ -202,12 +202,10 @@ pub(crate) fn write_policy_oracle_snapshot(reason: &str) {
     let seamless_loaded = seamless_coop_loaded();
     let policy_total_builds = POLICY_TOS_TITLE_TOTAL_BUILDS.load(Ordering::SeqCst);
     let policy_any_seen = policy_total_builds != MENU_TRACE_UNSEEN_SEQ;
-    let msgbox_total_builds = MSGBOX_TOTAL_BUILDS.load(Ordering::SeqCst);
-    let msgbox_any_seen = msgbox_total_builds != MENU_TRACE_UNSEEN_SEQ;
     let server_status_total_seen = SERVER_STATUS_TOTAL_SEEN.load(Ordering::SeqCst);
     let server_status_any_seen = server_status_total_seen != MENU_TRACE_UNSEEN_SEQ;
     let body = format!(
-        "{{\n  \"player_available\": false,\n  \"player_seen\": false,\n  \"runtime_mode\": \"{}\",\n  \"seamless_coop_loaded\": {},\n  \"telemetry_source\": \"policy_oracle_snapshot\",\n  \"telemetry_snapshot_reason\": \"{}\",\n  \"simulated_button_presses_total\": 0,\n  \"oracle_msgbox_total_builds\": {},\n  \"oracle_msgbox_any_seen\": {},\n  \"oracle_msgbox_builder_args\": [{}, {}, {}, {}],\n  \"oracle_policy_window_total_builds\": {},\n  \"oracle_policy_window_any_seen\": {},\n  \"oracle_policy_window_ptr\": {},\n  \"oracle_policy_window_vtable\": {},\n  \"oracle_policy_window_stack_arg0\": {},\n  \"oracle_policy_window_backing_flag_ptr\": {},\n  \"oracle_policy_window_stored_backing_flag_ptr\": {},\n  \"oracle_policy_window_backing_flag_value\": {},\n  \"oracle_policy_window_requested_flag_value\": {},\n  \"oracle_policy_window_caller_rva\": {},\n  \"oracle_policy_ctor_wrapper_hits\": {},\n  \"oracle_policy_ctor_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_wrapper_hits\": {},\n  \"oracle_policy_selector_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_ctor_hits\": {},\n  \"oracle_policy_selector_ctor_requested_flag_value\": {},\n  \"oracle_policy_selector_ctor_caller_rva\": {},\n  \"oracle_policy_status_predicate_hits\": {},\n  \"oracle_policy_status_predicate_caller_rva\": {},\n  \"oracle_policy_flag_setter_hits\": {},\n  \"oracle_policy_flag_setter_caller_rva\": {},\n  \"oracle_server_status_total_seen\": {},\n  \"oracle_server_status_any_seen\": {},\n  \"oracle_server_status_state\": {},\n  \"oracle_server_status_text_id\": {}\n}}\n",
+        "{{\n  \"player_available\": false,\n  \"player_seen\": false,\n  \"runtime_mode\": \"{}\",\n  \"seamless_coop_loaded\": {},\n  \"telemetry_source\": \"policy_oracle_snapshot\",\n  \"telemetry_snapshot_reason\": \"{}\",\n  \"simulated_button_presses_total\": 0,\n  \"oracle_policy_window_total_builds\": {},\n  \"oracle_policy_window_any_seen\": {},\n  \"oracle_policy_window_ptr\": {},\n  \"oracle_policy_window_vtable\": {},\n  \"oracle_policy_window_stack_arg0\": {},\n  \"oracle_policy_window_backing_flag_ptr\": {},\n  \"oracle_policy_window_stored_backing_flag_ptr\": {},\n  \"oracle_policy_window_backing_flag_value\": {},\n  \"oracle_policy_window_requested_flag_value\": {},\n  \"oracle_policy_window_caller_rva\": {},\n  \"oracle_policy_ctor_wrapper_hits\": {},\n  \"oracle_policy_ctor_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_wrapper_hits\": {},\n  \"oracle_policy_selector_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_ctor_hits\": {},\n  \"oracle_policy_selector_ctor_requested_flag_value\": {},\n  \"oracle_policy_selector_ctor_caller_rva\": {},\n  \"oracle_policy_status_predicate_hits\": {},\n  \"oracle_policy_status_predicate_caller_rva\": {},\n  \"oracle_policy_flag_setter_hits\": {},\n  \"oracle_policy_flag_setter_caller_rva\": {},\n  \"oracle_server_status_total_seen\": {},\n  \"oracle_server_status_any_seen\": {},\n  \"oracle_server_status_state\": {},\n  \"oracle_server_status_text_id\": {}\n}}\n",
         if seamless_loaded {
             RUNTIME_MODE_SEAMLESS
         } else {
@@ -215,12 +213,6 @@ pub(crate) fn write_policy_oracle_snapshot(reason: &str) {
         },
         seamless_loaded,
         json_escape(reason),
-        msgbox_total_builds,
-        msgbox_any_seen,
-        MSGBOX_LAST_ARG_RCX.load(Ordering::SeqCst),
-        MSGBOX_LAST_ARG_RDX.load(Ordering::SeqCst),
-        MSGBOX_LAST_ARG_R8.load(Ordering::SeqCst),
-        MSGBOX_LAST_ARG_R9.load(Ordering::SeqCst),
         policy_total_builds,
         policy_any_seen,
         POLICY_TOS_TITLE_LAST_THIS.load(Ordering::SeqCst),
@@ -504,8 +496,29 @@ pub(crate) fn note_ls_portrait_capture(w: u32, h: u32, px: &[u8]) -> bool {
     publishable
 }
 
+/// DEFAULT-OFF marker gate for the `append_autoload_debug` firehose (Phase B decoupled diagnostics,
+/// bd decoupled-diagnostics-architecture-buildplan-2026-07-24). Env vars do NOT cross me3/Proton, so
+/// the enable is a game-dir marker file `er-effects-autoload-debug.txt` checked via `.exists()` and
+/// cached once. This is a PURELY DIAGNOSTIC logging toggle -- it changes NO game behavior, only whether
+/// the passive debug-log lines are written -- so the armed-vs-disarmed A/B baseline pays zero per-frame
+/// log-file cost in both arms. Registered in `.auto/marker_file_gate_baseline.json` diagnostic_gates.
+fn autoload_debug_log_enabled() -> bool {
+    static CACHED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *CACHED.get_or_init(|| {
+        game_directory_path()
+            .map(|dir| dir.join("er-effects-autoload-debug.txt").exists())
+            .unwrap_or(false)
+    })
+}
+
 // ENV-GATE RATIONALE: ER_EFFECTS_AUTOLOAD_DEBUG_PATH is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
+    // PHASE B DECOUPLED DIAGNOSTICS: this per-frame firehose is DEFAULT-OFF. Return before ANY file I/O
+    // unless the `er-effects-autoload-debug.txt` marker is present, so the armed-vs-disarmed A/B baseline
+    // has a ZERO-LOG cost in both arms (no per-frame log-file-I/O confound). Cached; no game behavior.
+    if !autoload_debug_log_enabled() {
+        return;
+    }
     use std::io::Write;
     // FPS FIX (bd fps-fix-not-confirmed-new-suspect-perframe-debug-logging): the old path did a full file
     // OPEN + write + CLOSE on EVERY call (3 syscalls/line). The DLL logs heavily during loads/transitions

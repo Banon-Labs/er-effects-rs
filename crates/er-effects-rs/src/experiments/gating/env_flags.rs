@@ -31,7 +31,7 @@ use windows::{
             Threading::GetCurrentProcessId,
         },
         UI::WindowsAndMessaging::{
-            ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
             WM_KEYDOWN, WM_KEYUP,
         },
     },
@@ -327,6 +327,98 @@ pub(crate) fn native_load_enabled() -> bool {
 /// `er-effects-no-autoload.txt` next to eldenring.exe to suppress it (overlay-only use, or a session
 /// that should not auto-Continue). Mirrors the splash-skip de-gating precedent
 /// (`user-pref-too-many-env-file-gates-default-on-product-2026-06-23`).
+/// CLEAN-A/B DIAGNOSTIC (bd STEP4-RUNTIME-TRACE + STEP4-4fps-AB-STRUCTURALLY-CONFOUNDED): disable the
+/// menu-free switch-reload (`own_load_switch_reload_fire`) so the ONLY reload path is the harness's
+/// menu-driven native quit->Continue. Run with vs without this marker under IDENTICAL config (armed,
+/// same epoch1, same DRIVE_MODE=reload) to isolate JUST the reload mechanism (menu-free vs menu-driven)
+/// -- the same-epoch1 A/B the confound memory says is needed to tell a real render divergence from a
+/// measurement artifact. Diagnostic-only marker; not product behavior.
+pub(crate) fn switch_reload_ownload_disabled() -> bool {
+    std::path::Path::new("er-effects-disable-switch-reload-ownload.txt").exists()
+}
+
+/// PHASE-3 OUTGOING-WORLD TEARDOWN (bd PHASE3-render-release-is-CommonFinalize-mod-suppresses-fix-
+/// teardown-outgoing-world-2026-07-23). When ENABLED, route the OUTGOING (pre-quit) world through the
+/// native render-release (`CS::InGameStep::_Common_Finalize`, reached when STEP_MoveMap walks the child
+/// 18->Cleanup(19)->Finish(20)) BEFORE own_load rebuilds, so the SWITCH RELOAD starts from freed
+/// GLOBAL_WorldChrMan/CSDistViewManager/g_GxDrawContext/worldres/FieldArea instead of reloading in-place
+/// over the still-live globals (the ~5x-heavier-render / 5-vblank switch bug).
+///
+/// DEFAULT-OFF / OPT-IN (reverted from default-on 2026-07-23 after run angre-phase3fix-1 SOFTLOCKED
+/// LOAD1 at 8/11: with the fix on, load1's protective holds were suppressed and its autoload handoff hit
+/// premature teardown). It is WIP that softlocks, so the product default is the OLD working in-place
+/// reload; enable it deliberately for a validation run by dropping `er-effects-enable-outgoing-teardown.txt`
+/// next to eldenring.exe. Flip back to default-on only after a clean validation. Cached (queried per frame).
+///
+/// Enabling alone does NOT touch LOAD1: every Phase-3 behavior is ALSO gated by `switch_reload_active()`
+/// (a) the in-world menuData+0x5d ending-drive fires only in phases RETURN_TITLE_REQUESTED..AUTOLOAD_HANDOFF,
+/// (b) `outgoing_teardown_suppresses_holds()` requires an active switch, and (c) the reload's
+/// continue_confirm hold lives inside the switch-only `own_load_switch_reload_fire`. On the boot autoload
+/// (phase IDLE) the two holds stay ENGAGED exactly as before this change.
+pub(crate) fn outgoing_teardown_enabled() -> bool {
+    static CACHED: AtomicUsize = AtomicUsize::new(0); // 0=unknown, 1=on, 2=off
+    match CACHED.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let on = std::path::Path::new("er-effects-enable-outgoing-teardown.txt").exists();
+            CACHED.store(if on { 1 } else { 2 }, Ordering::Relaxed);
+            on
+        }
+    }
+}
+
+/// WORLDRESWAIT STREAMING-SETTLE HOLD (bd reload-overlap-fix-design-worldreswait-defer-release-on-
+/// streaming-settle-2026-07-24). When ENABLED, the armed System->Quit->Load-Profile switch reload DEFERS
+/// `CS::MoveMapStep::STEP_WorldResWait`'s movability/loading-close release (its player warp + step
+/// advance) until `CS::CSWorldGeomMan` geometry streaming settles, so the incoming world's playable
+/// window no longer overlaps active block streaming (the ~20fps movable-while-streaming dip). The hold
+/// reads only passive CSWorldGeomMan fields, NEVER writes WorldBlockRes phase/gate bytes, and is bounded
+/// fail-soft (on the cap it releases exactly like today -- no softlock, no regression).
+///
+/// DEFAULT-OFF / OPT-IN: this is a first-run WIP lever whose in-place-world settle behavior is not yet
+/// runtime-proven (whether the persistent CSWorldGeomMan EVER reports settle mid-reload is the open
+/// unknown), so the product default is the OLD in-place release. Enable it deliberately for a validation
+/// run by dropping `er-effects-enable-worldreswait-hold.txt` next to eldenring.exe. The gate hook is a
+/// pure passthrough until this marker is present AND a genuine in-world switch reload is armed
+/// (`switch_reload_active()` && `SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT==0` && a per-switch arm), so LOAD1/boot
+/// (phase IDLE, player absent at arm) are NEVER touched regardless of the marker. Cached (queried at arm).
+pub(crate) fn worldreswait_hold_enabled() -> bool {
+    static CACHED: AtomicUsize = AtomicUsize::new(0); // 0=unknown, 1=on, 2=off
+    match CACHED.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let on = std::path::Path::new("er-effects-enable-worldreswait-hold.txt").exists();
+            CACHED.store(if on { 1 } else { 2 }, Ordering::Relaxed);
+            on
+        }
+    }
+}
+
+/// True only while a System->Quit->Load-Profile SWITCH RELOAD is in progress -- i.e. one was armed via
+/// `switch_slot_arm_programmatic`, which advances `SYSTEM_QUIT_QUICKLOAD_PHASE` to at least
+/// RETURN_TITLE_REQUESTED. On the BOOT autoload (LOAD1) the phase is IDLE, so this is false and every
+/// Phase-3 behavior is scoped OFF for load1. This is the critical guard: boot's own continue_confirm sets
+/// FRESH_DESER_COUNT != 0, so the holds' OWN conditions DO fire during load1's autoload handoff -- without
+/// this switch gate the Phase-3 hold-suppression would (and did, run angre-phase3fix-1) disable those
+/// load1 holds and softlock LOAD1 at 8/11.
+pub(crate) fn switch_reload_active() -> bool {
+    er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+        >= crate::constants::SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+}
+
+/// True while the Phase-3 outgoing-teardown fix is actively driving a SWITCH RELOAD (enabled AND a switch
+/// is active AND not fallen back to fail-soft). ONLY in this state may the two in-place holds be
+/// suppressed -- they still fire on LOAD1/boot (switch inactive) and on fail-soft, so the boot autoload
+/// and the OLD in-place reload keep their protection. The holds otherwise only guard the OLD in-place
+/// reload, which no longer happens once the outgoing world is torn down first.
+pub(crate) fn outgoing_teardown_suppresses_holds() -> bool {
+    outgoing_teardown_enabled()
+        && switch_reload_active()
+        && er_telemetry::counters::OUTGOING_TEARDOWN_FAILSOFT.load(Ordering::SeqCst) == 0
+}
+
 pub(crate) fn autoload_disabled() -> bool {
     // DE-GATED for PRODUCT (deprecate-env-marker-gate-allowlists-2026-07-19): autoload is unconditionally
     // the product default. DIAGNOSTIC-ONLY marker (er-effects-diag-no-autoload.txt) disables it for the
@@ -465,21 +557,10 @@ pub(crate) fn prove_movement_enabled() -> bool {
     harness_dll_present()
 }
 
-/// AUTONOMOUS-PROOF FOREGROUND (`er-effects-probe-foreground.txt`). Gameplay MOVEMENT input is only
-/// processed while the ER window is FOCUSED (stay-active/DLUID+0x88d covers menus, not locomotion). For
-/// an unattended proof (user away, ER can own the foreground) this authorizes the can-move probe to
-/// force ER foreground while injecting so the walk actually registers. OFF by default so it NEVER
-/// steals focus in a user-present session. Cached.
-pub(crate) fn probe_foreground_enabled() -> bool {
-    // SCOPED (user 2026-07-20): force ER foreground ONLY at the start of each movement-injection burst
-    // ("just when you need to move"), NOT constantly -- the caller (can_move_probe) gates this on the ON
-    // burst so the mouse is grabbed once per cycle, not every frame across the whole movable window.
-    // Gameplay locomotion applies the injected stick only when the window is genuinely active (the
-    // focus-override alone is insufficient: run 205055 unfocused -> did_move=0). kb+mouse are disabled as
-    // game inputs during the run, so this brief grab cannot be contaminated by the user. bd
-    // user-stop-forcing-foreground-focus-override-makes-it-unneeded-disable-probe-foreground-2026-07-20.
-    harness_dll_present()
-}
+// REMOVED (user 2026-07-23, bd harness-drive-contract-...-no-force-focus): `probe_foreground_enabled`
+// authorized the can-move probe to FORCE the ER window foreground while injecting. The user's window focus
+// must never be seized, so the force-focus call was removed from can_move_probe and this gate deleted.
+// Movement is now delivered foreground-ONLY (only when ER is already the active window).
 /// SELF-DRIVEN SYSTEM->QUIT->LOAD-PROFILE REPRO AUTOPILOT (er-effects-system-quit-repro.txt /
 /// ER_EFFECTS_SYSTEM_QUIT_REPRO). OFF by default. When on, after the boot autoload reaches the
 /// world, the DLL keeps the input block engaged and injects a scripted DInput keyboard sequence --

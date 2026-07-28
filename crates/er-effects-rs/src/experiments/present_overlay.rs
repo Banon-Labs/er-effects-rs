@@ -199,6 +199,12 @@ unsafe extern "system" fn present_hook(this: *mut c_void, sync: u32, flags: u32)
         ));
         unsafe { log_backbuffer_desc(this) };
     }
+    // GPU-frame oracle: a present is the frame boundary -- the next ExecuteCommandLists on the game
+    // queue is the new frame's first ECL. Game swapchain only (the shared dxgi vtable fires the detour
+    // for the dummy swapchain too).
+    if this as usize == GAME_SWAPCHAIN.load(Ordering::SeqCst) {
+        gpu_frame_oracle_on_present();
+    }
     // Composite the captured portrait onto the backbuffer (gated; never panics). Only on the GAME's
     // swapchain -- the shared dxgi vtable means this detour also fires for our throwaway dummy swapchain.
     let this_u = this as usize;
@@ -246,6 +252,12 @@ unsafe extern "system" fn present1_hook(
             this as usize
         ));
         unsafe { log_backbuffer_desc(this) };
+    }
+    // GPU-frame oracle: a present is the frame boundary -- the next ExecuteCommandLists on the game
+    // queue is the new frame's first ECL. Game swapchain only (the shared dxgi vtable fires the detour
+    // for the dummy swapchain too).
+    if this as usize == GAME_SWAPCHAIN.load(Ordering::SeqCst) {
+        gpu_frame_oracle_on_present();
     }
     // Composite the captured portrait onto the backbuffer (gated; never panics). Only on the GAME's
     // swapchain -- the shared dxgi vtable means this detour also fires for our throwaway dummy swapchain.
@@ -341,7 +353,10 @@ unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) {
     {
         let cur =
             crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
-        if crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur {
+        if cur != 0
+            && crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur
+            && crate::experiments::BOOT_VIEW_STOPPED.load(Ordering::SeqCst) != 0
+        {
             PRESENT_COMPOSITE_EARLY_SKIPS.fetch_add(1, Ordering::SeqCst);
             return;
         }
@@ -371,10 +386,12 @@ unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) {
         }
         false
     };
-    if !drew_portrait {
-        // Loading bar + save picker (the native-Windows display path; also the boot/black-gap path on Wine).
-        let _ = unsafe { composite_boot_progress_on_swapchain(base, this_u) };
-    }
+    // Loading bar + save picker + boot-cover handoff oracle. Run this even when the portrait bridge drew:
+    // the portrait path returning `true` used to suppress the boot-progress compositor, which made the
+    // bar/handoff oracle vanish exactly at the forced-Continue/native-loading transition. The boot
+    // compositor is internally gated by BOOT_VIEW_STOPPED and draw-state, so this is a cheap no-op after
+    // the seamless cut.
+    let _ = unsafe { composite_boot_progress_on_swapchain(base, this_u) };
     // Keyboard input runs on an event-driven WH_KEYBOARD_LL hook (spawned once) so every press registers
     // regardless of the ~4fps boot Present rate; the render-thread poll handles gamepad (and is the
     // keyboard fallback if the hook fails to install).
@@ -505,7 +522,7 @@ pub(crate) fn install_present_overlay_hook() {
 /// True when running under Wine/Proton (vkd3d), detected by the `wine_get_version` export that Wine's
 /// `ntdll` exposes and native Windows never does. Cached after the first probe. Used to gate the boot
 /// self-present, which is only barrier-safe under vkd3d's tolerant translation layer.
-fn running_under_wine() -> bool {
+pub(crate) fn running_under_wine() -> bool {
     static CACHED: AtomicUsize = AtomicUsize::new(0); // 0=unknown, 1=native, 2=wine
     match CACHED.load(Ordering::SeqCst) {
         1 => return false,
@@ -544,6 +561,15 @@ const BOOT_PUMP_EARLY_APPLY_WAIT_MAX_MS: u128 = 8_000;
 /// Self-present cadence (~30 fps -- Present(sync=1) additionally paces on vsync).
 const BOOT_PUMP_FRAME_SLEEP_MS: u64 = 16;
 
+fn set_boot_view_pump_stop_reason(reason: usize) {
+    if BOOT_VIEW_PUMP_STOP_REASON
+        .compare_exchange(0, reason, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        BOOT_VIEW_PUMP_STOP_MS.store(crate::experiments::boot_view_epoch_ms(), Ordering::SeqCst);
+    }
+}
+
 /// Body of the `er-effects-boot-present-pump` thread. See the spawn comment for the contract.
 fn boot_present_pump() {
     // Same gate as the install: the boot view + its swapchain hook are the portrait-path feature. Also
@@ -566,7 +592,7 @@ fn boot_present_pump() {
     loop {
         // The game presenting is the SUCCESS terminal state: the detour path draws from here on.
         if PRESENT_HOOK_HITS.load(Ordering::SeqCst) > 0 {
-            BOOT_VIEW_PUMP_STOP_REASON.store(1, Ordering::SeqCst);
+            set_boot_view_pump_stop_reason(1);
             append_autoload_debug(format_args!(
                 "boot-pump: game presenting -- handed over after {} self-presents",
                 BOOT_VIEW_SELF_PRESENTS.load(Ordering::SeqCst)
@@ -574,7 +600,7 @@ fn boot_present_pump() {
             return;
         }
         if start.elapsed().as_millis() > BOOT_PUMP_MAX_MS {
-            BOOT_VIEW_PUMP_STOP_REASON.store(2, Ordering::SeqCst);
+            set_boot_view_pump_stop_reason(2);
             append_autoload_debug(format_args!(
                 "boot-pump: budget exhausted with no game present -- stopping (self_presents={})",
                 BOOT_VIEW_SELF_PRESENTS.load(Ordering::SeqCst)
@@ -604,7 +630,7 @@ fn boot_present_pump() {
             let self_present_safe =
                 running_under_wine() && PRESENT_ACCEPT_PATH.load(Ordering::SeqCst) != 2;
             if !self_present_safe {
-                BOOT_VIEW_PUMP_STOP_REASON.store(4, Ordering::SeqCst);
+                set_boot_view_pump_stop_reason(4);
                 append_autoload_debug(format_args!(
                     "boot-pump: swapchain hooked at pump+{found_ms}ms -- native/wrapped (wine={}, accept_path={}); handing off to the Present detour without self-presenting",
                     running_under_wine(),
@@ -642,7 +668,7 @@ fn boot_present_pump() {
             let f: PresentFn = unsafe { std::mem::transmute(orig) };
             let hr = unsafe { f(sc as *mut c_void, 1, 0) };
             if hr < 0 {
-                BOOT_VIEW_PUMP_STOP_REASON.store(3, Ordering::SeqCst);
+                set_boot_view_pump_stop_reason(3);
                 append_autoload_debug(format_args!(
                     "boot-pump: Present failed hr=0x{hr:x} -- stopping (self_presents={})",
                     BOOT_VIEW_SELF_PRESENTS.load(Ordering::SeqCst)
@@ -1053,7 +1079,7 @@ fn log_find_miss(stage: usize) {
 /// pointer in the dxgi vtable -- NOT the function body -- so it sidesteps the W^X code-page patch that
 /// MinHook cannot apply on Wine's dxgi.dll (it reports MH_OK yet the detour never fires). `VirtualProtect`
 /// the 8-byte slot to RW, swap the pointer, then restore the original page protection.
-unsafe fn vtable_swap_slot(slot_addr: usize, new_fn: usize) -> Option<usize> {
+pub(crate) unsafe fn vtable_swap_slot(slot_addr: usize, new_fn: usize) -> Option<usize> {
     use windows::Win32::System::Memory::{PAGE_PROTECTION_FLAGS, PAGE_READWRITE, VirtualProtect};
     let slot = slot_addr as *mut usize;
     let mut old_prot = PAGE_PROTECTION_FLAGS(0);

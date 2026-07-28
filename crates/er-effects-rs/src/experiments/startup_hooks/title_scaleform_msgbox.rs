@@ -37,7 +37,7 @@ use windows::{
                 OFN_HIDEREADONLY, OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST, OPENFILENAMEW,
             },
             WindowsAndMessaging::{
-                ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
+                EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
                 WM_KEYDOWN, WM_KEYUP,
             },
         },
@@ -822,16 +822,20 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
         MSGBOX_LAST_ARG_RDX.store(b, Ordering::SeqCst);
         MSGBOX_LAST_ARG_R8.store(c, Ordering::SeqCst);
         MSGBOX_LAST_ARG_R9.store(d, Ordering::SeqCst);
-        MSGBOX_TOTAL_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
-        if IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES {
-            MSGBOX_POSTLOAD_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
-        }
         let n = MSGBOX_BUILDER_LOG.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
         if n < MSGBOX_BUILDER_LOG_MAX {
+            let scope = if switch_active {
+                "switch-active"
+            } else if in_world {
+                "in-world"
+            } else {
+                "pre-world"
+            };
             append_autoload_debug(format_args!(
-                "msgbox-skip #{n}: product autoload suppressed MessageBoxDialog builder before UI allocation but counted it as oracle failure args(rcx=0x{a:x} rdx=0x{b:x} r8=0x{c:x} r9=0x{d:x}) {}",
+                "msgbox-skip #{n}: suppressed MessageBoxDialog build scope={scope} args(rcx=0x{a:x} rdx=0x{b:x} r8=0x{c:x} r9=0x{d:x}) {}",
                 trace_callers_summary()
             ));
+            unsafe { dump_msgbox_spec(c, n) };
         }
         // SEAMLESS post-PAB popup: the box is nulled (never shown), but the MenuWindowJob whose Run is
         // building it would then sit on MenuJobResult(Continue) forever (ERSC's post-PAB MessageBox
@@ -876,10 +880,7 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
             MSGBOX_LAST_ARG_RDX.store(b, Ordering::SeqCst);
             MSGBOX_LAST_ARG_R8.store(c, Ordering::SeqCst);
             MSGBOX_LAST_ARG_R9.store(d, Ordering::SeqCst);
-            MSGBOX_TOTAL_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
-            if in_world {
-                MSGBOX_POSTLOAD_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
-            } else {
+            if !in_world {
                 CONNECTION_ERROR_DIALOG.store(ret, Ordering::SeqCst);
             }
         }
