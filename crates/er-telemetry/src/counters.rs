@@ -1317,3 +1317,39 @@ pub static SAVE_FLOW_DIALOG: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_FLOW_GATE_LATCH_BLOCKED_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Completed Save Game commits: the bypassed save reported terminal status 0 (success).
 pub static SAVE_FLOW_COMMIT_COMPLETE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+// ---- save-flow confirm chain (save-game-flow WP2) ----
+/// Number of confirm boxes the save flow can build (Box1 "are you sure", Box2 "overwrite
+/// the loaded save", Box3 "overwrite this file"). Indexes the per-box counters below;
+/// box ids are 1-based so 0 stays the "no box" sentinel.
+pub const SAVE_FLOW_BOX_COUNT: usize = 3;
+/// Box id (1..=SAVE_FLOW_BOX_COUNT) the NEXT `CS::MessageBoxDialog` build belongs to, set
+/// immediately before the confirm-box MenuJob is submitted and cleared by the builder hook
+/// that captures the dialog. Non-zero makes the builder hook forward the build and capture
+/// it into `SAVE_FLOW_BOX_DIALOG` instead of applying the product msgbox suppression.
+pub static SAVE_FLOW_BOX_EXPECTED: AtomicUsize = AtomicUsize::new(0);
+/// The captured confirm-box `CS::MessageBoxDialog` (0 = none live). Deliberately a DEDICATED
+/// slot: `MSGBOX_LAST_DIALOG` / `CONNECTION_ERROR_DIALOG` feed the startup auto-accept, which
+/// must never touch a user-facing save confirm.
+pub static SAVE_FLOW_BOX_DIALOG: AtomicUsize = AtomicUsize::new(0);
+/// Menu-pump pending: build+submit this confirm box id from `system_quit_menu_window_run_post`
+/// (the proven menu-job submit context). 0 = nothing pending.
+pub static SAVE_FLOW_SUBMIT_BOX_PENDING: AtomicUsize = AtomicUsize::new(0);
+/// Confirm boxes whose dialog was captured, per box id - 1.
+pub static SAVE_FLOW_BOX_OPEN_COUNTS: [AtomicUsize; SAVE_FLOW_BOX_COUNT] =
+    [const { AtomicUsize::new(0) }; SAVE_FLOW_BOX_COUNT];
+/// Affirmative decisions per box id - 1.
+pub static SAVE_FLOW_BOX_YES_COUNTS: [AtomicUsize; SAVE_FLOW_BOX_COUNT] =
+    [const { AtomicUsize::new(0) }; SAVE_FLOW_BOX_COUNT];
+/// Negative/cancel decisions per box id - 1.
+pub static SAVE_FLOW_BOX_NO_COUNTS: [AtomicUsize; SAVE_FLOW_BOX_COUNT] =
+    [const { AtomicUsize::new(0) }; SAVE_FLOW_BOX_COUNT];
+/// Save flows that ended back in the world with NOTHING written (user said No/cancel, or a
+/// recipe failure aborted the chain).
+pub static SAVE_FLOW_ABORT_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Submitted confirm boxes whose `CS::MessageBoxDialog` build was never captured within
+/// `SAVE_FLOW_BOX_BUILD_TIMEOUT_TICKS` -- the recipe produced no visible box (failure path).
+pub static SAVE_FLOW_BOX_BUILD_TIMEOUT_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// 1 once a MessageBoxBuilder recipe RVA failed its prologue byte check: the confirm chain is
+/// unavailable on this build and Save Game degrades to the WP1 immediate bypass commit.
+pub static SAVE_FLOW_RECIPE_UNAVAILABLE: AtomicUsize = AtomicUsize::new(0);

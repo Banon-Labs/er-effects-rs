@@ -1754,6 +1754,16 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
             }
         }
     }
+    // MENU-PUMP-OWNED save-flow confirm box (save-game-flow WP2): the game-task tick decides
+    // which box comes next but must not build/submit a MenuJob, so it stages the box id here
+    // and this -- the game's own menu pump executing a MenuWindowJob, the same context the
+    // save-picker resubmit and the return-title chain use -- performs the submit. A failed
+    // submit keeps the pending latch set so the next pump retries (the common cause is the
+    // dialog's job queue still owning the previous box's job).
+    let pending_box = SAVE_FLOW_SUBMIT_BOX_PENDING.load(Ordering::SeqCst);
+    if pending_box != SAVE_FLOW_BOX_NONE && unsafe { save_flow_submit_box(pending_box) } {
+        SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_NONE, Ordering::SeqCst);
+    }
     // MENU-PUMP-OWNED save-picker maintenance: in-place row rebuild after a navigation, and
     // window resubmit after a navigation/pick close (same submit-context rule as the
     // return-title chain below).

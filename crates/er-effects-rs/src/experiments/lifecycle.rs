@@ -98,16 +98,22 @@ pub(crate) unsafe fn switch_harness_discovery_tick() {
     }
 }
 
-// === SAVE-FLOW state machine (save-game-flow WP1, 2026-07-28) ===
-// Drives the System->Quit "Save Game" row's CLOSE-THEN-FIRE commit. Stage map lives on
-// `er_telemetry::counters::SAVE_FLOW_STAGE` (oracle_save_flow_stage): 0 IDLE,
-// 1 BOX1_WAIT / 2 BOX2_WAIT (WP2), 3 DEST_BROWSE / 4 BOX3_WAIT (WP3), 5 CLOSING_ABORT
-// (WP2), 6 CLOSING_COMMIT, 7 FIRE_GATE_WAIT, 8 COMMIT_WAIT. WP1 implements 0/6/7/8:
-// the row press stages the commit and runs the proven close sequence (OptionSetting
-// immediately, IngameTop deferred 2 frames), and only once the menus are closed AND
-// the RAM gates are green does the tick arm the one-shot er-save-suppress bypass and
-// fire the FORCED (throttle-skipping) native save request pair. The tick only reads
-// and decides; all menu mutation stays on the paths that already own it.
+// === SAVE-FLOW state machine (save-game-flow WP1 + WP2, 2026-07-28) ===
+// Drives the System->Quit "Save Game" row's confirm chain and CLOSE-THEN-FIRE commit.
+// Stage map lives on `er_telemetry::counters::SAVE_FLOW_STAGE` (oracle_save_flow_stage):
+// 0 IDLE, 1 BOX1_WAIT, 2 BOX2_WAIT, 3 DEST_BROWSE / 4 BOX3_WAIT (WP3), 5 CLOSING_ABORT,
+// 6 CLOSING_COMMIT, 7 FIRE_GATE_WAIT, 8 COMMIT_WAIT.
+//
+// WP2 added the confirm chain: the row press submits Box1 ("Are you sure you want to
+// save?", default No) inline on the menu thread; the tick POLLS the box result (pure
+// reads) and, on Yes, stages Box2 ("Overwrite your loaded save?", default Yes) for the
+// menu pump to submit. Box2 Yes stages the commit, anything else aborts. Both terminal
+// paths run the proven close sequence (OptionSetting immediately, IngameTop deferred 2
+// frames), and only once the menus are closed AND the RAM gates are green does the tick
+// arm the one-shot er-save-suppress bypass and fire the FORCED (throttle-skipping)
+// native save request pair. The tick only reads and decides; all menu mutation stays on
+// the paths that already own it, except the window CLOSE, which the shipping deferred
+// IngameTop close already performs from this same game task.
 
 /// Transition helper: swap the stage, reset the per-stage tick counter, log the edge.
 fn save_flow_enter_stage(stage: usize, reason: &str) {
@@ -128,26 +134,123 @@ pub(crate) unsafe fn save_flow_tick() {
     }
     let ticks = SAVE_FLOW_STAGE_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
     match stage {
-        SAVE_FLOW_STAGE_CLOSING_COMMIT => {
-            // The close sequence itself is owned by system_quit_save_game_fire_save_and_close
+        SAVE_FLOW_STAGE_BOX1_WAIT => unsafe {
+            save_flow_box_wait_tick(SAVE_FLOW_BOX_CONFIRM_SAVE, ticks)
+        },
+        SAVE_FLOW_STAGE_BOX2_WAIT => unsafe {
+            save_flow_box_wait_tick(SAVE_FLOW_BOX_OVERWRITE_LOADED, ticks)
+        },
+        SAVE_FLOW_STAGE_CLOSING_ABORT | SAVE_FLOW_STAGE_CLOSING_COMMIT => {
+            // The close sequence itself is owned by system_quit_save_game_close_menus
             // (OptionSetting now) + the deferred-close tick (IngameTop, 2 frames). Menus are
             // closed once the deferral countdown has drained; when no top window was deferred
             // the countdown was never armed and this advances on the first tick.
             if SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_FRAMES.load(Ordering::SeqCst) == 0 {
-                save_flow_enter_stage(SAVE_FLOW_STAGE_FIRE_GATE_WAIT, "menus closed");
+                if stage == SAVE_FLOW_STAGE_CLOSING_COMMIT {
+                    save_flow_enter_stage(SAVE_FLOW_STAGE_FIRE_GATE_WAIT, "menus closed");
+                } else {
+                    SAVE_FLOW_ABORT_COUNT.fetch_add(1, Ordering::SeqCst);
+                    save_flow_box_clear();
+                    save_flow_enter_stage(
+                        SAVE_FLOW_STAGE_IDLE,
+                        "menus closed; aborted without writing",
+                    );
+                }
             }
         }
         SAVE_FLOW_STAGE_FIRE_GATE_WAIT => unsafe { save_flow_fire_gate_tick(ticks) },
         SAVE_FLOW_STAGE_COMMIT_WAIT => save_flow_commit_wait_tick(ticks),
         _ => {
-            // Stages 1-5 are the WP2/WP3 confirm-box and destination-browser stages; nothing
-            // sets them yet, so a value here is state corruption. Reset loudly, never wedge.
+            // Stages 3/4 are the WP3 destination-browser stages; nothing sets them yet, so a
+            // value here is state corruption. Reset loudly, never wedge.
             append_autoload_debug(format_args!(
                 "save-flow: tick saw unimplemented stage {stage}; resetting to IDLE"
             ));
+            save_flow_box_clear();
             save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "unimplemented stage");
         }
     }
+}
+
+/// Stages 1/2 BOX*_WAIT: the confirm box is (or is becoming) visible. PURE READS -- every
+/// menu mutation this decides is staged for the owning thread (`SAVE_FLOW_SUBMIT_BOX_PENDING`
+/// for the next box) or runs through the proven close sequence.
+///
+/// There is deliberately NO timeout on the user's decision; the only timeout is on the BUILD,
+/// i.e. the box never appearing at all, which means the recipe failed and waiting is pointless.
+unsafe fn save_flow_box_wait_tick(box_id: usize, ticks: usize) {
+    let Some(decision) = (unsafe { save_flow_box_decision(box_id) }) else {
+        // The ONLY timeout in this stage covers the box never BECOMING visible: either the
+        // menu pump never consumed the submit pending, or the submitted job never reached the
+        // MessageBoxDialog builder. Both mean waiting longer cannot help.
+        if SAVE_FLOW_BOX_DIALOG.load(Ordering::SeqCst) == 0
+            && ticks >= SAVE_FLOW_BOX_BUILD_TIMEOUT_TICKS
+        {
+            let pending = SAVE_FLOW_SUBMIT_BOX_PENDING.load(Ordering::SeqCst);
+            SAVE_FLOW_BOX_BUILD_TIMEOUT_COUNT.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "save-flow: {} BUILD TIMEOUT after {ticks} ticks (submit_pending={pending}) -- the confirm box never became visible; closing back to the world, the user's save did NOT happen",
+                save_flow_box_label(box_id)
+            ));
+            save_flow_box_clear();
+            unsafe { save_flow_close_menus_from_tick("box_build_timeout", false) };
+        }
+        return;
+    };
+    match (box_id, decision) {
+        (SAVE_FLOW_BOX_CONFIRM_SAVE, SaveFlowDecision::Yes) => {
+            // Menu-pump owns the submit; the tick only stages it.
+            SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_OVERWRITE_LOADED, Ordering::SeqCst);
+            save_flow_enter_stage(SAVE_FLOW_STAGE_BOX2_WAIT, "box1 Yes -> overwrite confirm");
+        }
+        (SAVE_FLOW_BOX_OVERWRITE_LOADED, SaveFlowDecision::Yes) => {
+            // WP2 commit plan: overwrite the loaded save. WP3 replaces the No branch below
+            // with the destination browser.
+            unsafe { save_flow_close_menus_from_tick("box2_overwrite_loaded", true) };
+        }
+        (_, SaveFlowDecision::No) => {
+            append_autoload_debug(format_args!(
+                "save-flow: {} answered No/cancel -- closing back to the world, nothing will be written",
+                save_flow_box_label(box_id)
+            ));
+            unsafe { save_flow_close_menus_from_tick("box_declined", false) };
+        }
+        (other, _) => {
+            append_autoload_debug(format_args!(
+                "save-flow: decision for unexpected box id {other}; aborting without writing"
+            ));
+            unsafe { save_flow_close_menus_from_tick("box_unexpected_id", false) };
+        }
+    }
+}
+
+/// Run the close-all sequence for a decision reached on the game task. The native
+/// MenuWindow close this performs is the same primitive `system_quit_save_game_deferred_close_tick`
+/// already calls from this task every time the shipping Save Game row runs, so the context is
+/// proven. `system_quit_save_game_close_menus` sets the destination stage itself.
+unsafe fn save_flow_close_menus_from_tick(source: &str, commit: bool) {
+    save_flow_box_clear();
+    let dialog = SAVE_FLOW_DIALOG.load(Ordering::SeqCst);
+    let closed = unsafe { system_quit_save_game_close_menus(dialog, source, commit) };
+    let stage = SAVE_FLOW_STAGE.load(Ordering::SeqCst);
+    if stage == SAVE_FLOW_STAGE_CLOSING_ABORT || stage == SAVE_FLOW_STAGE_CLOSING_COMMIT {
+        if !closed {
+            // Staged, but no owning window was latched to close. The stage still advances on
+            // the drained deferral counter; log it because a Save Game flow that closes no
+            // menu is not the shape this flow expects.
+            append_autoload_debug(format_args!(
+                "save-flow: close-all from tick source={source} commit={commit} closed no window (dialog=0x{dialog:x})"
+            ));
+        }
+        return;
+    }
+    // The captured dialog went stale, so the close helper bailed before staging anything.
+    // End the flow here instead of looping on a stage that can no longer advance.
+    SAVE_FLOW_ABORT_COUNT.fetch_add(1, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "save-flow: close-all from tick source={source} commit={commit} could not stage (dialog=0x{dialog:x} stale) -- ending the flow; the user's save did NOT happen"
+    ));
+    save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "close-all could not stage");
 }
 
 /// Stage 7 FIRE_GATE_WAIT: menus are closed; wait for the RAM gates proving the native

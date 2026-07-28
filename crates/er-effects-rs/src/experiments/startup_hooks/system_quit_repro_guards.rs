@@ -673,22 +673,22 @@ pub(crate) unsafe fn system_quit_repro_tick() {
         }
         SQ_REPRO_STATE_TO_PROFILE => {
             if sq_repro_save_game_only() {
-                let action_count = SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT.load(Ordering::SeqCst);
-                let save_count = SYSTEM_QUIT_SAVE_GAME_CONFIRM_COUNT.load(Ordering::SeqCst);
-                let close_count = SYSTEM_QUIT_SAVE_GAME_CLOSE_COUNT.load(Ordering::SeqCst);
-                if action_count != 0 && save_count != 0 && close_count >= 2 {
+                // WP2: the row press no longer commits -- it opens the confirm chain. Hand off
+                // to SAVE_CONFIRM as soon as the save-flow stage machine reports Box1 is up.
+                let stage = SAVE_FLOW_STAGE.load(Ordering::SeqCst);
+                if stage == SAVE_FLOW_STAGE_BOX1_WAIT {
                     append_autoload_debug(format_args!(
-                        "sq-repro: Save Game row completed action_count={action_count} save_count={save_count} close_count={close_count}; SELF-DRIVE COMPLETE; releasing block"
+                        "sq-repro: Save Game row opened the confirm chain (save_flow_stage={stage}) -> SAVE_CONFIRM (walk the boxes to Yes)"
                     ));
                     set_pad(0);
-                    SQ_REPRO_STATE.store(SQ_REPRO_STATE_DONE, Ordering::SeqCst);
+                    sq_repro_transition(SQ_REPRO_STATE_SAVE_CONFIRM);
                     return;
                 }
                 let (btn, holding) =
                     sq_repro_edges(tick, &[XINPUT_GAMEPAD_LEFT_SHOULDER, XINPUT_GAMEPAD_A]);
                 if holding {
                     sq_repro_waiting_once(
-                        "TO_SAVE_GAME: LB+A issued, waiting for Save Game action/save/close telemetry",
+                        "TO_SAVE_GAME: LB+A issued, waiting for the Save Game row to open Box1 (oracle_save_flow_stage=1)",
                     );
                 }
                 set_pad(btn);
@@ -848,6 +848,97 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                 );
             }
             set_pad(btn);
+        }
+        SQ_REPRO_STATE_SAVE_CONFIRM => {
+            // Walk the Save Game confirm chain the way a user does: move the live dialog
+            // cursor onto the box's affirmative button, then press confirm. Checkpointed on
+            // `oracle_save_flow_stage` and the dialog's own cursor -- never on timers, and no
+            // guessed button layout (`sq_repro_box_nav_button` discovers the working axis by
+            // observing the cursor move).
+            let stage = SAVE_FLOW_STAGE.load(Ordering::SeqCst);
+            let commits = SAVE_FLOW_COMMIT_COMPLETE_COUNT.load(Ordering::SeqCst);
+            let aborts = SAVE_FLOW_ABORT_COUNT.load(Ordering::SeqCst);
+            if stage == SAVE_FLOW_STAGE_IDLE && (commits != 0 || aborts != 0) {
+                append_autoload_debug(format_args!(
+                    "sq-repro: SAVE_CONFIRM finished save_flow_stage={stage} commit_complete={commits} abort={aborts}; SELF-DRIVE COMPLETE; releasing block (read oracle_save_bypass_* for the write itself)"
+                ));
+                set_pad(0);
+                SQ_REPRO_STATE.store(SQ_REPRO_STATE_DONE, Ordering::SeqCst);
+                return;
+            }
+            let box_id = match stage {
+                SAVE_FLOW_STAGE_BOX1_WAIT => SAVE_FLOW_BOX_CONFIRM_SAVE,
+                SAVE_FLOW_STAGE_BOX2_WAIT => SAVE_FLOW_BOX_OVERWRITE_LOADED,
+                // Between boxes (close/commit/fire stages): hold neutral and let the product
+                // state machine run; the completion check above ends the drive.
+                _ => {
+                    set_pad(0);
+                    SQ_REPRO_BOX_NAV_BASELINE.store(usize::MAX, Ordering::SeqCst);
+                    return;
+                }
+            };
+            let dialog = SAVE_FLOW_BOX_DIALOG.load(Ordering::SeqCst);
+            let Some(target) = save_flow_box_yes_index(box_id) else {
+                set_pad(0);
+                return;
+            };
+            if dialog < OPTIONSETTING_WINDOW_MIN_PTR {
+                // Between boxes: the next one has been staged but not built yet. Re-arm the
+                // nav discovery baseline so it measures THIS box's cursor, not the last one's.
+                SQ_REPRO_BOX_NAV_BASELINE.store(usize::MAX, Ordering::SeqCst);
+                sq_repro_waiting_once(
+                    "SAVE_CONFIRM: waiting for the confirm box's MessageBoxDialog to be captured",
+                );
+                set_pad(0);
+                return;
+            }
+            let Some(cursor) = (unsafe { safe_read_i32(dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) })
+            else {
+                set_pad(0);
+                return;
+            };
+            let pulse = |button: u16| {
+                if (tick % INJECT_NAV_CYCLE) < INJECT_NAV_TAP_LEN {
+                    button
+                } else {
+                    0
+                }
+            };
+            if cursor == target {
+                // On the affirmative button: pulse confirm until the product stage machine
+                // moves off this box (an edge-triggered menu needs the tap+gap cycle, and
+                // re-pulsing is the harness's own retry for a dropped edge).
+                set_pad(pulse(XINPUT_GAMEPAD_A));
+                return;
+            }
+            // Not on the affirmative button yet. Pulse the latched nav direction, or discover
+            // one: a two-button box wraps, so whichever candidate moves the cursor works.
+            let latched = SQ_REPRO_BOX_NAV_BUTTON.load(Ordering::SeqCst) as u16;
+            if latched == 0 {
+                let idx = SQ_REPRO_BOX_NAV_CANDIDATE.load(Ordering::SeqCst)
+                    % SQ_REPRO_BOX_NAV_CANDIDATES.len();
+                let baseline = SQ_REPRO_BOX_NAV_BASELINE.load(Ordering::SeqCst);
+                if baseline == usize::MAX {
+                    SQ_REPRO_BOX_NAV_BASELINE.store(cursor as usize, Ordering::SeqCst);
+                } else if baseline != cursor as usize {
+                    let winner = SQ_REPRO_BOX_NAV_CANDIDATES[idx];
+                    SQ_REPRO_BOX_NAV_BUTTON.store(winner as usize, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "sq-repro: SAVE_CONFIRM discovered confirm-box nav button 0x{winner:x} (cursor {baseline} -> {cursor})"
+                    ));
+                } else if tick != 0 && tick % INJECT_NAV_CYCLE == 0 {
+                    // This candidate's pulse cycle moved nothing; try the next one.
+                    SQ_REPRO_BOX_NAV_CANDIDATE.store(idx + 1, Ordering::SeqCst);
+                    SQ_REPRO_BOX_NAV_BASELINE.store(cursor as usize, Ordering::SeqCst);
+                }
+            }
+            let button = if latched != 0 {
+                latched
+            } else {
+                SQ_REPRO_BOX_NAV_CANDIDATES[SQ_REPRO_BOX_NAV_CANDIDATE.load(Ordering::SeqCst)
+                    % SQ_REPRO_BOX_NAV_CANDIDATES.len()]
+            };
+            set_pad(pulse(button));
         }
         SQ_REPRO_STATE_PROFILE_BACK => {
             let profile = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);

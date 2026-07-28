@@ -800,6 +800,42 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
     d: usize,
 ) -> usize {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    // SAVE-FLOW CONFIRM BOX (save-game-flow WP2) -- checked FIRST, before any suppression.
+    // `save_flow_submit_box` tags the box id here immediately before submitting its MenuJob,
+    // so this build is the dialog the user must answer. Forward it unconditionally and stash
+    // the pointer in the flow's OWN slot: `MSGBOX_LAST_DIALOG`/`CONNECTION_ERROR_DIALOG` feed
+    // the startup auto-accept, which must never reach a user-facing save confirm. Running
+    // ahead of the suppression branch is what keeps a latched
+    // `SYSTEM_QUIT_PROFILE_SELECT_WINDOW`/`PROFILE_LOAD_FLOW_ACTIVE` from eating our box.
+    let expected_box = SAVE_FLOW_BOX_EXPECTED.load(Ordering::SeqCst);
+    if expected_box != SAVE_FLOW_BOX_NONE {
+        let orig = MSGBOX_BUILDER_ORIG.load(Ordering::SeqCst);
+        let ret = if orig != null {
+            let f: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+                unsafe { std::mem::transmute(orig) };
+            unsafe { f(a, b, c, d) }
+        } else {
+            null
+        };
+        let base = game_module_base().unwrap_or(null);
+        let vt = if ret != null {
+            unsafe { safe_read_usize(ret) }.unwrap_or(null)
+        } else {
+            null
+        };
+        if ret != null && base != null && vt == base + MSGBOX_DIALOG_VTABLE_RVA {
+            save_flow_box_note_build(expected_box, ret);
+        } else {
+            // Failure path: log + publish on first occurrence (log-noise rule 3). The stage
+            // machine's build timeout turns this into an abort so the flow never wedges.
+            append_autoload_debug(format_args!(
+                "save-flow-box: expected build for {} produced dialog=0x{ret:x} vt=0x{vt:x} (want 0x{:x}) -- NOT captured",
+                save_flow_box_label(expected_box),
+                base.wrapping_add(MSGBOX_DIALOG_VTABLE_RVA)
+            ));
+        }
+        return ret;
+    }
     // Scope the blanket product msgbox suppression to the SENSITIVE windows only (er-effects-rs-qwj):
     // boot autoload (pre-world -- connection-error / EULA / warning popups) and an ACTIVE
     // System->Quit->Load-Profile switch (any stray ProfileSelect load-confirm). Do NOT suppress during

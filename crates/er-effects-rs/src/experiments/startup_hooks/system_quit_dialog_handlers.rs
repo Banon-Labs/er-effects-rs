@@ -250,9 +250,10 @@ unsafe fn system_quit_route_button_action_or_forward(
             }
             SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.store(0, Ordering::SeqCst);
             SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
-            let closed = unsafe { system_quit_save_game_fire_save_and_close(dialog, "row_action") };
+            let started = unsafe { system_quit_save_game_start_flow(dialog) };
             append_autoload_debug(format_args!(
-                "system-quit-save: Save Game native row selected action=0x{action_obj:x} dialog=0x{dialog:x}; staged close-then-fire commit closed={closed}; suppressed native Quit Game/return-title action"
+                "system-quit-save: Save Game native row selected action=0x{action_obj:x} dialog=0x{dialog:x}; opened confirm chain started={started} stage={}; suppressed native Quit Game/return-title action",
+                SAVE_FLOW_STAGE.load(Ordering::SeqCst)
             ));
             return 0;
         }
@@ -1019,21 +1020,27 @@ pub(crate) unsafe fn system_quit_save_game_request_save_forced() {
     }
 }
 
-/// Save Game commit entry: CLOSE-THEN-FIRE (save-game-flow WP1, 2026-07-28).
+/// Run the proven Save Game close-all sequence and hand the flow to `save_flow_tick`.
 ///
-/// The save request is NOT fired here anymore. Firing while menus are open is a
-/// dispatch-split hazard: `ShouldSave` (the b72 lane) requires `!CanShowSaveMenu()`
-/// (`CSMenuMan+0x13c == 0`) but the b73 gate `FUN_140679370` does NOT, so an open-menu
-/// fire lets the b73-only lane dispatch a system-only submit first -- that submit would
-/// consume the one-shot suppression-bypass token and the later char-slot submit would be
-/// swallowed. Instead this stages the commit (stage 6 CLOSING_COMMIT) and runs the
-/// proven close sequence; `save_flow_tick` (lifecycle.rs) fires the FORCED request pair
-/// at stage 7 once the menus are closed and the RAM gates are green, producing a single
-/// combined `b72 && b73` -> `FUN_14067b940` -> one `FUN_140e6ef60` submit -> one enqueue
-/// -> one token.
+/// `commit` selects the destination stage: `true` = stage 6 CLOSING_COMMIT (the tick fires
+/// the forced save request once the menus are closed and the RAM gates are green), `false` =
+/// stage 5 CLOSING_ABORT (the user declined; the tick returns to the world having written
+/// nothing).
 ///
-/// WP1 commit plan: overwrite the loaded save (WP3 adds a destination target).
-unsafe fn system_quit_save_game_fire_save_and_close(dialog: usize, source: &str) -> bool {
+/// CLOSE-THEN-FIRE (save-game-flow WP1, 2026-07-28): the save request is never fired here.
+/// Firing while menus are open is a dispatch-split hazard -- `ShouldSave` (the b72 lane)
+/// requires `!CanShowSaveMenu()` (`CSMenuMan+0x13c == 0`) but the b73 gate `FUN_140679370`
+/// does NOT, so an open-menu fire lets the b73-only lane dispatch a system-only submit first,
+/// that submit consumes the one-shot suppression-bypass token, and the later char-slot submit
+/// is swallowed. Staging the commit and firing at stage 7 produces a single combined
+/// `b72 && b73` -> `FUN_14067b940` -> one `FUN_140e6ef60` submit -> one enqueue -> one token.
+///
+/// WP1/WP2 commit plan: overwrite the loaded save (WP3 adds a destination target).
+pub(crate) unsafe fn system_quit_save_game_close_menus(
+    dialog: usize,
+    source: &str,
+    commit: bool,
+) -> bool {
     if dialog < 0x10000 || dialog == TITLE_OWNER_SCAN_START_ADDRESS {
         append_autoload_debug(format_args!(
             "system-quit-save: {source} abort -- dialog=0x{dialog:x} is not heap-like"
@@ -1042,12 +1049,21 @@ unsafe fn system_quit_save_game_fire_save_and_close(dialog: usize, source: &str)
     }
     let option = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
     let top = SYSTEM_QUIT_INGAME_TOP_WINDOW.load(Ordering::SeqCst);
-    // Stage the commit BEFORE the close sequence so the save-flow tick owns the flow
+    // Stage the outcome BEFORE the close sequence so the save-flow tick owns the flow
     // from the next game-task frame onward.
     SAVE_FLOW_DIALOG.store(dialog, Ordering::SeqCst);
     SAVE_FLOW_STAGE_TICKS.store(0, Ordering::SeqCst);
-    SAVE_FLOW_STAGE.store(SAVE_FLOW_STAGE_CLOSING_COMMIT, Ordering::SeqCst);
-    SYSTEM_QUIT_SAVE_GAME_CONFIRM_COUNT.fetch_add(1, Ordering::SeqCst);
+    SAVE_FLOW_STAGE.store(
+        if commit {
+            SAVE_FLOW_STAGE_CLOSING_COMMIT
+        } else {
+            SAVE_FLOW_STAGE_CLOSING_ABORT
+        },
+        Ordering::SeqCst,
+    );
+    if commit {
+        SYSTEM_QUIT_SAVE_GAME_CONFIRM_COUNT.fetch_add(1, Ordering::SeqCst);
+    }
     // `dialog` is the System/Quit tab's PropertyEditDialog, not a `MenuWindow`; calling the
     // MenuWindow cancel-close primitive on it dispatches the wrong vfunc. Close the owning menu
     // windows only, matching the Escape/back stack semantics instead of treating the row dialog as a
@@ -1068,9 +1084,61 @@ unsafe fn system_quit_save_game_fire_save_and_close(dialog: usize, source: &str)
         SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_FRAMES.store(2, Ordering::SeqCst);
     }
     append_autoload_debug(format_args!(
-        "system-quit-save: {source} -> staged CLOSING_COMMIT (close-then-fire) + native menu-window close-all dialog=0x{dialog:x} option=0x{option:x} top=0x{top:x} closed_dialog={closed_dialog} closed_option={closed_option} closed_top={closed_top}"
+        "system-quit-save: {source} -> staged {} + native menu-window close-all dialog=0x{dialog:x} option=0x{option:x} top=0x{top:x} closed_dialog={closed_dialog} closed_option={closed_option} closed_top={closed_top}",
+        if commit {
+            "CLOSING_COMMIT (close-then-fire)"
+        } else {
+            "CLOSING_ABORT (nothing will be written)"
+        }
     ));
     closed_option || closed_top
+}
+
+/// Enter the Save Game confirm chain from the row press (save-game-flow WP2).
+///
+/// Captures the System/Quit dialog the whole flow is anchored on, then submits Box1 INLINE:
+/// this runs from the row-action hook, i.e. the same menu-thread ownership context the native
+/// quit confirm submits from. Later boxes go through `SAVE_FLOW_SUBMIT_BOX_PENDING` because
+/// the tick that decides them is on the game task, not the menu pump.
+///
+/// On a build where the MessageBoxBuilder recipe failed verification the chain is unavailable;
+/// rather than leave a dead button, Save Game degrades to the WP1 behavior (close-then-fire
+/// straight to the commit) and says so once.
+unsafe fn system_quit_save_game_start_flow(dialog: usize) -> bool {
+    if dialog < 0x10000 || dialog == TITLE_OWNER_SCAN_START_ADDRESS {
+        append_autoload_debug(format_args!(
+            "save-flow: row press abort -- dialog=0x{dialog:x} is not heap-like"
+        ));
+        return false;
+    }
+    save_flow_box_clear();
+    SAVE_FLOW_DIALOG.store(dialog, Ordering::SeqCst);
+    SAVE_FLOW_STAGE_TICKS.store(0, Ordering::SeqCst);
+    // The confirm boxes are only answerable if the MessageBoxDialog BUILDER hook is live --
+    // that detour is what captures the dialog pointer the stage machine polls. It is normally
+    // installed at boot (`online_disable_enabled()` path in the game task), but make sure:
+    // this call is idempotent, and the row press is the menu thread, i.e. the one context in
+    // which no other thread can be executing the builder while MinHook patches it.
+    install_auto_accept_hook();
+    let capture_live = MSGBOX_BUILDER_ORIG.load(Ordering::SeqCst) != HOOK_ORIGINAL_UNSET;
+    if !save_flow_box_recipe_available() || !capture_live {
+        append_autoload_debug(format_args!(
+            "save-flow: confirm chain unavailable on this build (recipe_ok={} builder_capture_live={capture_live}) -- Save Game degrades to the immediate close-then-fire commit",
+            save_flow_box_recipe_available()
+        ));
+        return unsafe { system_quit_save_game_close_menus(dialog, "row_action_no_recipe", true) };
+    }
+    SAVE_FLOW_STAGE.store(SAVE_FLOW_STAGE_BOX1_WAIT, Ordering::SeqCst);
+    if unsafe { save_flow_submit_box(SAVE_FLOW_BOX_CONFIRM_SAVE) } {
+        return true;
+    }
+    append_autoload_debug(format_args!(
+        "save-flow: Box1 submit failed at the row press -- aborting back to the world without writing"
+    ));
+    SAVE_FLOW_ABORT_COUNT.fetch_add(1, Ordering::SeqCst);
+    save_flow_box_clear();
+    SAVE_FLOW_STAGE.store(SAVE_FLOW_STAGE_IDLE, Ordering::SeqCst);
+    false
 }
 
 pub(crate) unsafe fn system_quit_save_game_deferred_close_tick() {
@@ -1095,7 +1163,9 @@ pub(crate) unsafe fn system_quit_save_game_deferred_close_tick() {
 pub(crate) unsafe extern "system" fn system_quit_save_game_return_title_request_hook() {
     let dialog = SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.swap(0, Ordering::SeqCst);
     if dialog >= 0x10000 && callstack_contains_game_rva(0x7a3000, 0x7a4000) {
-        unsafe { system_quit_save_game_fire_save_and_close(dialog, "legacy_confirm") };
+        // Dormant safety net (the product row path clears the arming latch). It keeps the
+        // WP1 semantics -- close-then-fire straight to the commit, no confirm chain.
+        unsafe { system_quit_save_game_close_menus(dialog, "legacy_confirm", true) };
         append_autoload_debug(format_args!(
             "system-quit-save: legacy confirmation path suppressed native return-title request dialog=0x{dialog:x}"
         ));

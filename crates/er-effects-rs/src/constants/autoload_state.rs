@@ -704,9 +704,16 @@ pub(crate) const SYSTEM_QUIT_REQUEST_SAVE_RVA: u32 = 0x67a520;
 // The Save Game row is CLOSE-THEN-FIRE: the row press stages a commit (stage 6), the proven
 // close sequence runs, and only with menus closed + RAM gates green does the tick arm the
 // one-shot er-save-suppress bypass and fire the FORCED (throttle-skipping) request pair.
-// Full stage map lives on `er_telemetry::counters::SAVE_FLOW_STAGE`; stages 1-5 are the
-// WP2/WP3 confirm-box and destination-browser stages, not yet reachable.
+// Full stage map lives on `er_telemetry::counters::SAVE_FLOW_STAGE`; stages 3/4 are the
+// WP3 destination-browser stages, not yet reachable.
 pub(crate) const SAVE_FLOW_STAGE_IDLE: usize = 0;
+/// WP2: the "Are you sure you want to save?" confirm is up (default No).
+pub(crate) const SAVE_FLOW_STAGE_BOX1_WAIT: usize = 1;
+/// WP2: the "Overwrite your loaded save?" confirm is up (default Yes).
+pub(crate) const SAVE_FLOW_STAGE_BOX2_WAIT: usize = 2;
+/// WP2: the user declined (or a recipe failure aborted); the close sequence is running and
+/// NOTHING will be written.
+pub(crate) const SAVE_FLOW_STAGE_CLOSING_ABORT: usize = 5;
 pub(crate) const SAVE_FLOW_STAGE_CLOSING_COMMIT: usize = 6;
 pub(crate) const SAVE_FLOW_STAGE_FIRE_GATE_WAIT: usize = 7;
 pub(crate) const SAVE_FLOW_STAGE_COMMIT_WAIT: usize = 8;
@@ -730,6 +737,83 @@ pub(crate) use er_telemetry::counters::SAVE_FLOW_DIALOG;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_GATE_LATCH_BLOCKED_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_STAGE;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_STAGE_TICKS;
+// ---- SAVE-FLOW confirm chain (save-game-flow WP2, 2026-07-28) ----
+// The Save Game row no longer commits on press: it opens Box1 ("Are you sure you want to
+// save?", default No) and, on Yes, Box2 ("Overwrite your loaded save?", default Yes). Both
+// are built through the GAME's own `CS::MessageBoxBuilder` recipe (RVAs below) and submitted
+// to the System dialog's own MenuJob queue, so they are localized, skinned and input-routed
+// exactly like the native quit confirm. See `save_flow_boxes.rs` for the recipe.
+pub(crate) use er_telemetry::counters::SAVE_FLOW_ABORT_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_BUILD_TIMEOUT_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_DIALOG;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_EXPECTED;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_NO_COUNTS;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_OPEN_COUNTS;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_YES_COUNTS;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_RECIPE_UNAVAILABLE;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_SUBMIT_BOX_PENDING;
+/// Game-task ticks a submitted confirm box may go without its `CS::MessageBoxDialog` build
+/// reaching the builder hook (~3 s at 60 ticks/s). Exceeding it means the recipe produced no
+/// visible box, so the flow aborts back to the world instead of waiting on a box that will
+/// never appear. There is deliberately NO timeout on the user's DECISION.
+pub(crate) const SAVE_FLOW_BOX_BUILD_TIMEOUT_TICKS: usize = 180;
+/// `CS::MessageBoxBuilder` recipe, byte-verified against `eldenring-deobf.bin` on 2026-07-28
+/// and lifted verbatim from the native Yes/No confirm wrapper `FUN_1407b73d0` (whose own
+/// disassembly is the source for the call order and argument registers). Every address is
+/// re-checked against its prologue at first use; a mismatch disarms the whole chain rather
+/// than calling into a drifted build.
+///
+/// `ctor(rcx=builder, rdx=ctx, r8=prompt MenuString*, r9=&mode_i32, [rsp+0x28]=0u8)`
+pub(crate) const SYSTEM_QUIT_MSGBOX_BUILDER_CTOR_RVA: u32 = 0x7af730;
+pub(crate) const SYSTEM_QUIT_MSGBOX_BUILDER_CTOR_SIG: &[u8] =
+    &[0x40, 0x55, 0x56, 0x57, 0x48, 0x81, 0xec, 0x80, 0x00, 0x00, 0x00];
+/// `add_yes(rcx=builder, rdx=&SaveFlowYesButtonDesc) -> builder` (localized Yes label).
+pub(crate) const SYSTEM_QUIT_MSGBOX_ADD_YES_RVA: u32 = 0x7b1c70;
+pub(crate) const SYSTEM_QUIT_MSGBOX_ADD_YES_SIG: &[u8] =
+    &[0x4c, 0x8b, 0xdc, 0x57, 0x48, 0x81, 0xec, 0x90, 0x00, 0x00, 0x00];
+/// `add_no(rcx=builder) -> builder` (localized No/Cancel label; builds its own descriptor).
+pub(crate) const SYSTEM_QUIT_MSGBOX_ADD_NO_RVA: u32 = 0x7b1900;
+pub(crate) const SYSTEM_QUIT_MSGBOX_ADD_NO_SIG: &[u8] =
+    &[0x40, 0x57, 0x48, 0x81, 0xec, 0xa0, 0x00, 0x00, 0x00];
+/// `default_last(rcx=builder) -> builder`; whole body is
+/// `*(i32*)(builder+0x28) = *(i32*)(builder+0x10f0) - 1`, i.e. the default choice is the
+/// LAST button added. That is why add order encodes the default.
+pub(crate) const SYSTEM_QUIT_MSGBOX_DEFAULT_LAST_RVA: u32 = 0x7b1b60;
+pub(crate) const SYSTEM_QUIT_MSGBOX_DEFAULT_LAST_SIG: &[u8] = &[
+    0x8b, 0x81, 0xf0, 0x10, 0x00, 0x00, 0xff, 0xc8, 0x89, 0x41, 0x28, 0x48, 0x8b, 0xc1, 0xc3,
+];
+/// `finalize(rcx=builder, rdx=&job_slot, r8b=0) -> &job_slot`: writes the built MenuJob
+/// reference into the caller's slot.
+pub(crate) const SYSTEM_QUIT_MSGBOX_FINALIZE_RVA: u32 = 0x7b10f0;
+pub(crate) const SYSTEM_QUIT_MSGBOX_FINALIZE_SIG: &[u8] = &[
+    0x4c, 0x8b, 0xdc, 0x56, 0x57, 0x41, 0x56, 0x48, 0x81, 0xec, 0x30, 0x01, 0x00, 0x00,
+];
+/// `dtor(rcx=builder)`: tears down the stack builder once the job is built.
+pub(crate) const SYSTEM_QUIT_MSGBOX_DTOR_RVA: u32 = 0x7b0140;
+pub(crate) const SYSTEM_QUIT_MSGBOX_DTOR_SIG: &[u8] =
+    &[0x48, 0x89, 0x4c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x30];
+/// Stack footprint of `CS::MessageBoxBuilder` (`sub $0x11b8,%rsp` frame in `FUN_1407b73d0`
+/// hands `lea 0x60(%rsp)` to the ctor and `finalize` reads up to `builder+0x1138`).
+pub(crate) const MSGBOX_BUILDER_SIZE: usize = 0x1140;
+/// Builder mode dword every native Yes/No confirm passes (`movl $0x17`). Only ONE dword is
+/// read from the pointer (`mov (%rdx),%eax` in the sub-ctor `FUN_14078c950`).
+pub(crate) const MSGBOX_BUILDER_MODE_CONFIRM: i32 = 0x17;
+/// Builder trailing byte argument (5th stack arg) every native confirm passes.
+pub(crate) const MSGBOX_BUILDER_CTOR_TRAILING_ARG: u8 = 0;
+/// Buttons added so far (`builder+0x10f0`), incremented by each adder.
+pub(crate) const MSGBOX_BUILDER_BUTTON_COUNT_OFF: usize = 0x10f0;
+/// Default/initial cursor index (`builder+0x28`), written by `default_last`.
+pub(crate) const MSGBOX_BUILDER_DEFAULT_IDX_OFF: usize = 0x28;
+/// `PropertyEditDialog+0x10` is the MenuJob queue our confirm boxes submit to, and
+/// `+0x50` the owning MenuWindow list passed as the builder's context -- the same two
+/// derivations `system_quit_open_profile_load_dialog` /
+/// `system_quit_submit_direct_return_title_chain` already make from the System dialog.
+pub(crate) const SYSTEM_QUIT_DIALOG_MENU_JOB_QUEUE_10_OFFSET: usize = 0x10;
+pub(crate) const SYSTEM_QUIT_DIALOG_MENU_WINDOW_LIST_50_OFFSET: usize = 0x50;
+/// `CS::MenuString` is 0x38 bytes: `MenuHelpLabelComponent` stores its second MenuString at
+/// `MENU_HELP_LABEL_HELP_OFFSET`.
+pub(crate) const MENU_STRING_SIZE: usize = MENU_HELP_LABEL_HELP_OFFSET;
 /// One-shot spawn guard for the boot-time er-save-suppress install thread (bootstrap.rs).
 pub(crate) static START_SAVE_SUPPRESS: Once = Once::new();
 /// `MenuHelpLabelComponent` contains two `MenuString` objects: visible label at +0, help at +0x38.

@@ -7,6 +7,11 @@ pub(crate) const XINPUT_GAMEPAD_DPAD_DOWN: u16 = 0x0002;
 /// XINPUT_GAMEPAD.wButtons bits for the System->Quit repro autopilot's controller sequence
 /// (D-pad Up, Start, Left-Shoulder/LB, A). D-pad Down is XINPUT_GAMEPAD_DPAD_DOWN above.
 pub(crate) const XINPUT_GAMEPAD_DPAD_UP: u16 = 0x0001;
+/// D-pad Left/Right bits. Used only by the Save Game confirm-chain drive, which does not know
+/// (and must not guess) which axis a two-button `CS::MessageBoxDialog` lays its buttons out on:
+/// it pulses candidates and latches whichever one actually moves the dialog cursor.
+pub(crate) const XINPUT_GAMEPAD_DPAD_LEFT: u16 = 0x0004;
+pub(crate) const XINPUT_GAMEPAD_DPAD_RIGHT: u16 = 0x0008;
 pub(crate) const XINPUT_GAMEPAD_START: u16 = 0x0010;
 pub(crate) const XINPUT_GAMEPAD_LEFT_SHOULDER: u16 = 0x0100;
 pub(crate) const XINPUT_GAMEPAD_RIGHT_SHOULDER: u16 = 0x0200;
@@ -136,6 +141,25 @@ pub(crate) const SQ_REPRO_STATE_PROFILE_BACK_BASELINE: usize = 9;
 pub(crate) const SQ_REPRO_STATE_PROFILE_BACK_OPEN: usize = 10;
 pub(crate) const SQ_REPRO_STATE_PROFILE_BACK: usize = 11;
 pub(crate) const SQ_REPRO_STATE_PROFILE_BACK_TO_GAME_TAB: usize = 12;
+/// SAVE-GAME CONFIRM CHAIN drive (save-game-flow WP2): once the Save Game row has opened Box1,
+/// walk the confirm boxes the way a user does -- move the dialog cursor onto the affirmative
+/// button, then press confirm -- checkpointed on `oracle_save_flow_stage`, never on timers.
+pub(crate) const SQ_REPRO_STATE_SAVE_CONFIRM: usize = 13;
+/// Nav directions the confirm-chain drive tries, in order, until one moves the dialog cursor.
+/// The winning direction is latched in `SQ_REPRO_BOX_NAV_BUTTON` for the rest of the run; a
+/// two-button box wraps, so any working axis converges on the target index.
+pub(crate) const SQ_REPRO_BOX_NAV_CANDIDATES: [u16; 4] = [
+    XINPUT_GAMEPAD_DPAD_LEFT,
+    XINPUT_GAMEPAD_DPAD_RIGHT,
+    XINPUT_GAMEPAD_DPAD_UP,
+    XINPUT_GAMEPAD_DPAD_DOWN,
+];
+/// Latched working nav button for the confirm boxes (0 = not discovered yet).
+pub(crate) static SQ_REPRO_BOX_NAV_BUTTON: AtomicUsize = AtomicUsize::new(0);
+/// Dialog cursor observed when the current nav candidate began its pulse (usize::MAX = none).
+pub(crate) static SQ_REPRO_BOX_NAV_BASELINE: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Candidate index currently being pulsed while the nav direction is still unknown.
+pub(crate) static SQ_REPRO_BOX_NAV_CANDIDATE: AtomicUsize = AtomicUsize::new(0);
 /// TAB_RETURN sub-phase: 0 = drive RIGHT to the last tab, 1 = drive LEFT back to tab 0, 2 = dwell.
 pub(crate) use er_telemetry::counters::SQ_REPRO_TAB_RETURN_PHASE;
 /// Highest tab index seen while driving right (end-of-strip detection) and the tick the dwell began.

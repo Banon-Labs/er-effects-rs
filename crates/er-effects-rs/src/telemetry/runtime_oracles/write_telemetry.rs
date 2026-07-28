@@ -475,6 +475,28 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SAVE_FLOW_GATE_LATCH_BLOCKED_COUNT.load(Ordering::SeqCst),
         SAVE_FLOW_COMMIT_COMPLETE_COUNT.load(Ordering::SeqCst),
     ));
+    // SAVE-FLOW CONFIRM CHAIN oracles (save-game-flow WP2): Box1 "are you sure" and Box2
+    // "overwrite your loaded save". Box3 belongs to the WP3 destination browser and is NOT
+    // exported here -- stage 4 is unreachable in this build, and a permanently-zero field in
+    // a semaphore surface can only mislead (log-noise rule 4).
+    //
+    // A save-flow probe must key on `oracle_save_flow_stage` + these counters, NOT on the
+    // msgbox oracles: the confirm boxes are captured into the flow's OWN dialog slot and
+    // deliberately do not feed `MSGBOX_LAST_DIALOG` / `oracle_blocking_modal_present`, so the
+    // startup auto-accept can never reach a user-facing save confirm and an expected, wanted
+    // confirm never reads as a blocking-modal failure.
+    body.push_str(&format!(
+        "  \"oracle_save_flow_box1_open_count\": {},\n  \"oracle_save_flow_box1_yes_count\": {},\n  \"oracle_save_flow_box1_no_count\": {},\n  \"oracle_save_flow_box2_open_count\": {},\n  \"oracle_save_flow_box2_yes_count\": {},\n  \"oracle_save_flow_box2_no_count\": {},\n  \"oracle_save_flow_abort_count\": {},\n  \"oracle_save_flow_box_build_timeout_count\": {},\n  \"oracle_save_flow_recipe_unavailable\": {},\n",
+        SAVE_FLOW_BOX_OPEN_COUNTS[0].load(Ordering::SeqCst),
+        SAVE_FLOW_BOX_YES_COUNTS[0].load(Ordering::SeqCst),
+        SAVE_FLOW_BOX_NO_COUNTS[0].load(Ordering::SeqCst),
+        SAVE_FLOW_BOX_OPEN_COUNTS[1].load(Ordering::SeqCst),
+        SAVE_FLOW_BOX_YES_COUNTS[1].load(Ordering::SeqCst),
+        SAVE_FLOW_BOX_NO_COUNTS[1].load(Ordering::SeqCst),
+        SAVE_FLOW_ABORT_COUNT.load(Ordering::SeqCst),
+        SAVE_FLOW_BOX_BUILD_TIMEOUT_COUNT.load(Ordering::SeqCst),
+        SAVE_FLOW_RECIPE_UNAVAILABLE.load(Ordering::SeqCst),
+    ));
     body.push_str(&format!(
         "  \"autoload_last_status\": {},\n",
         state.autoload.last_status().map_or_else(
