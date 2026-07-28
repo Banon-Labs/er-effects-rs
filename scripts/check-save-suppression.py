@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -74,6 +75,26 @@ def offline_diff(before: Path, after: Path) -> dict[str, Any] | None:
         return json.loads(completed.stdout)
     except json.JSONDecodeError:
         return None
+
+
+def changed_slot_bytes(diff: dict[str, Any]) -> tuple[int, list[str]]:
+    """Total bytes of BND4 entries the offline diff says changed, and their names.
+
+    Slot sizes are parsed out of the witness's per-slot lines ("slot USER_DATA000:
+    contents changed (2621456B -> 2621456B)"). Only the primary container is counted;
+    a `.bak` mirrors it and would double the total.
+    """
+    total = 0
+    names: list[str] = []
+    for change in diff.get("content_changes", []):
+        if ".bak" in change.get("path", ""):
+            continue
+        for slot in change.get("slots", []):
+            match = re.search(r"slot (\S+): contents changed \((\d+)B", slot)
+            if match:
+                names.append(match.group(1))
+                total += int(match.group(2))
+    return total, names
 
 
 def evaluate(telemetry: dict[str, Any] | None, diff: dict[str, Any] | None) -> tuple[bool, str, list[str]]:
@@ -121,6 +142,24 @@ def evaluate(telemetry: dict[str, Any] | None, diff: dict[str, Any] | None) -> t
         )
         reasons.extend(f"  changed: {entry['path']}: {entry['reason']}" for entry in changed)
         return False, "FAIL -- census blind spot", reasons
+
+    # The census seeing SOMETHING is not the same as it seeing EVERYTHING. Compare how many
+    # bytes the census accounts for against how many actually moved on disk. This check exists
+    # because the presence/absence test below reported PASS on a run where the census logged a
+    # single 2359328-byte write while the offline diff found three changed slots totalling ~5.4MB
+    # -- the missing bytes went out through CopyFileW, which was not hooked.
+    changed_bytes, changed_names = changed_slot_bytes(diff)
+    # Prefer the total that includes copies; fall back for telemetry from an older build
+    # (which under-counts, so the gap check simply fires more readily there).
+    census_bytes = telemetry.get("total_bytes_to_disk") or telemetry.get("write_bytes", 0) or 0
+    if changed_bytes > census_bytes:
+        reasons.append(
+            f"COVERAGE GAP: {changed_bytes} bytes changed on disk across slots "
+            f"{', '.join(changed_names)}, but the census only accounts for {census_bytes} bytes. "
+            f"{changed_bytes - census_bytes} bytes reached the filesystem by a route the census "
+            "does not hook."
+        )
+        return False, "FAIL -- census under-counted the writes", reasons
 
     if phase == PHASE_CENSUS:
         # Observation-only build. It suppresses nothing, so a changed save file is the
@@ -177,19 +216,58 @@ def selftest() -> int:
         "phase": PHASE_CENSUS,
         "census_hooks_installed": 6,
         "census_hooks_expected": 6,
+        # Accounts for every byte the `dirty` fixture says moved -- a fully-sighted census.
+        "write_bytes": 2359328,
         "escaped_write_sites": [census_site],
     }
     blind_census = dict(full_census, escaped_write_sites=[])
     suppressing = dict(full_census, phase="suppress", escaped_write_sites=[])
     leaking = dict(full_census, phase="suppress")
-    dirty = {"clean": False, "content_changes": [{"path": "ER0000.sl2", "reason": "contents changed"}], "mtime_only_changes": []}
+    dirty = {
+        "clean": False,
+        "content_changes": [
+            {
+                "path": "ER0000.sl2",
+                "reason": "contents changed",
+                "slots": ["slot USER_DATA011: contents changed (2359328B -> 2359328B)"],
+            }
+        ],
+        "mtime_only_changes": [],
+    }
     cleanfile = {"clean": True, "content_changes": [], "mtime_only_changes": []}
+    # The real regression: three slots moved, the census logged only the smallest of them.
+    under_counted = {
+        "clean": False,
+        "content_changes": [
+            {
+                "path": "ER0000.sl2",
+                "reason": "contents changed",
+                "slots": [
+                    "slot USER_DATA000: contents changed (2621456B -> 2621456B)",
+                    "slot USER_DATA010: contents changed (393232B -> 393232B)",
+                    "slot USER_DATA011: contents changed (2359328B -> 2359328B)",
+                ],
+            },
+            {
+                "path": "ER0000.sl2.bak",
+                "reason": "contents changed",
+                "slots": ["slot USER_DATA000: contents changed (2621456B -> 2621456B)"],
+            },
+        ],
+        "mtime_only_changes": [],
+    }
 
     check("missing telemetry", None, cleanfile, False, "no in-process census")
     check("missing diff", full_census, None, False, "no offline witness")
     # The critical one: bytes landed, census saw nothing. Must never pass.
     check("blind census", blind_census, dirty, False, "blind spot")
     check("census observed writes", full_census, dirty, True, "census captured")
+    # Seeing SOME writes must not excuse missing most of them.
+    check("census under-counted", full_census, under_counted, False, "under-counted")
+    # The .bak mirror must not be double-counted into a false shortfall.
+    counted, names = changed_slot_bytes(under_counted)
+    if counted != 2621456 + 393232 + 2359328 or "USER_DATA000" not in names:
+        failures.append(f"changed_slot_bytes miscounted: {counted} {names}")
     check("census saw nothing, file clean", blind_census, cleanfile, False, "inconclusive")
     check("suppression holding", suppressing, cleanfile, True, "fully suppressed")
     check("suppression leaking", leaking, cleanfile, False, "not fully suppressed")

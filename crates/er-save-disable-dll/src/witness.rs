@@ -46,7 +46,17 @@ static WRITE_CALLS: AtomicU64 = AtomicU64::new(0);
 static WRITE_BYTES: AtomicU64 = AtomicU64::new(0);
 static SET_END_OF_FILE_CALLS: AtomicU64 = AtomicU64::new(0);
 static MOVE_CALLS: AtomicU64 = AtomicU64::new(0);
+static COPY_CALLS: AtomicU64 = AtomicU64::new(0);
+/// Bytes moved by copies. Counted separately from `WRITE_BYTES` but summed into the
+/// reported total, so a byte-for-byte reconciliation against an offline save diff sees
+/// copies as the writes they effectively are.
+static COPY_BYTES: AtomicU64 = AtomicU64::new(0);
 static DELETE_CALLS: AtomicU64 = AtomicU64::new(0);
+static DIVERTED_OPENS: AtomicU64 = AtomicU64::new(0);
+/// A diverted open that FAILED. Non-zero means the game tried to save, we sent it
+/// somewhere it could not write, and it will see a genuine save failure -- the one
+/// outcome this design is supposed to avoid. Surfaced so it can never pass silently.
+static DIVERT_OPEN_FAILURES: AtomicU64 = AtomicU64::new(0);
 static SITES_DROPPED: AtomicU64 = AtomicU64::new(0);
 static HANDLES_DROPPED: AtomicU64 = AtomicU64::new(0);
 
@@ -429,6 +439,59 @@ pub(crate) unsafe fn note_move_file(existing: *const u16, new: *const u16) {
     });
 }
 
+/// A save write that was diverted to a harmless path.
+///
+/// Tracked separately from [`note_create_file`] and NOT added to the escaped-write
+/// census: these bytes deliberately did not reach the real save, so counting them as
+/// escapes would make a working redirect look like a failure. The handle is left
+/// untracked for the same reason -- writes through it are expected and uninteresting.
+pub(crate) fn note_diverted_open(path: &str, handle: usize) {
+    const INVALID_HANDLE_VALUE: usize = usize::MAX;
+    if handle == INVALID_HANDLE_VALUE || handle == 0 {
+        DIVERT_OPEN_FAILURES.fetch_add(1, Ordering::SeqCst);
+        return;
+    }
+    DIVERTED_OPENS.fetch_add(1, Ordering::SeqCst);
+    let _ = path;
+}
+
+/// A copy whose source or destination is save data.
+///
+/// This is how the game builds `ER0000.sl2.bak`, and it is the route that escaped the
+/// original hook set: bytes reach disk without a single `WriteFile`. `bytes` is charged
+/// from the source file's size so the census byte total can be reconciled against an
+/// offline diff -- an escape that shows up as zero bytes would be invisible to that check.
+///
+/// # Safety
+/// Both pointers must be valid wide string pointers or null.
+pub(crate) unsafe fn note_copy_file(existing: *const u16, new: *const u16) {
+    guarded(|| {
+        let from = unsafe { read_wide_path(existing) }.unwrap_or_default();
+        let to = unsafe { read_wide_path(new) }.unwrap_or_default();
+        if !is_save_path(&from) && !is_save_path(&to) {
+            return;
+        }
+        COPY_CALLS.fetch_add(1, Ordering::SeqCst);
+        let bytes = std::fs::metadata(&from).map(|m| m.len()).unwrap_or(0);
+        COPY_BYTES.fetch_add(bytes, Ordering::SeqCst);
+        record("CopyFileW", &format!("{from} -> {to}"), bytes);
+    });
+}
+
+/// # Safety
+/// Both pointers must be valid wide string pointers or null.
+pub(crate) unsafe fn note_move_file_plain(existing: *const u16, new: *const u16) {
+    guarded(|| {
+        let from = unsafe { read_wide_path(existing) }.unwrap_or_default();
+        let to = unsafe { read_wide_path(new) }.unwrap_or_default();
+        if !is_save_path(&from) && !is_save_path(&to) {
+            return;
+        }
+        MOVE_CALLS.fetch_add(1, Ordering::SeqCst);
+        record("MoveFileW", &format!("{from} -> {to}"), 0);
+    });
+}
+
 /// # Safety
 /// `path` must be a valid wide string pointer or null.
 pub(crate) unsafe fn note_delete_file(path: *const u16) {
@@ -465,11 +528,27 @@ pub(crate) fn escaped_write_sites() -> Vec<WriteSite> {
         .collect()
 }
 
-pub(crate) fn counters() -> [(&'static str, u64); 9] {
+pub(crate) fn counters() -> [(&'static str, u64); 16] {
     [
+        ("diverted_opens", DIVERTED_OPENS.load(Ordering::SeqCst)),
+        (
+            "diverted_open_failures",
+            DIVERT_OPEN_FAILURES.load(Ordering::SeqCst),
+        ),
+        ("redirects", crate::redirect::redirect_count()),
+        ("redirect_refusals", crate::redirect::refusal_count()),
         (
             "create_save_opens",
             CREATE_SAVE_OPENS.load(Ordering::SeqCst),
+        ),
+        ("copy_calls", COPY_CALLS.load(Ordering::SeqCst)),
+        ("copy_bytes", COPY_BYTES.load(Ordering::SeqCst)),
+        // The figure to reconcile against an offline byte diff: everything that reached
+        // disk, however it got there. Reporting write_bytes alone under-counted a real run
+        // by 3014688 bytes because the backup was produced by CopyFileW.
+        (
+            "total_bytes_to_disk",
+            WRITE_BYTES.load(Ordering::SeqCst) + COPY_BYTES.load(Ordering::SeqCst),
         ),
         (
             "create_save_write_opens",

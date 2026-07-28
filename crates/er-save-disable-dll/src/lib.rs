@@ -24,8 +24,10 @@
 
 #![allow(non_snake_case)]
 
+mod config;
 #[cfg(windows)]
 mod hooks;
+mod redirect;
 mod telemetry;
 mod witness;
 
@@ -42,9 +44,12 @@ const DLL_MAIN_SUCCESS: i32 = 1;
 
 const LOG_FILE_NAME: &str = "er-save-disable.log";
 
-/// Surfaced in telemetry so a harness can never mistake an observation-only run for
-/// a run in which saving was actually suppressed.
-pub(crate) const PHASE: &str = "census-only";
+/// Surfaced in telemetry so a harness knows what the run was actually doing.
+///
+/// `redirect` means save WRITES were diverted to a harmless path while reads were left
+/// alone. The game's own save machinery runs unmodified and genuinely succeeds, so no
+/// state is forged and no waiter can deadlock -- see `redirect.rs` for why that matters.
+pub(crate) const PHASE: &str = "redirect";
 
 static LOG_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static HOOKS_INSTALLED: AtomicUsize = AtomicUsize::new(0);
@@ -108,6 +113,8 @@ fn spawn_census_task() {
                 }
             };
             witness::set_game_base(base);
+            config::init_runtime_config();
+            redirect::ensure_destination_directory();
             let installed = hooks::install();
             HOOKS_INSTALLED.store(installed, Ordering::SeqCst);
             log_message(format_args!(

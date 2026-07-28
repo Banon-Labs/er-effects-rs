@@ -8,11 +8,24 @@
 //! Under Proton these resolve to Wine's `kernel32`, which is the module the game
 //! actually calls, so the detours observe the real write path.
 //!
-//! Known blind spot, recorded rather than papered over: a caller that reaches the
-//! filesystem through `CreateFile2`, `NtCreateFile`/`NtWriteFile`, or a memory-mapped
-//! section bypasses these detours. If the runtime census reports zero writes while
-//! the save file provably changed on disk (see `scripts/save-write-witness.py`), that
-//! discrepancy is the signature of this blind spot and the next place to look.
+//! Those blind spots do NOT exist in this binary. An exhaustive parse of
+//! `eldenring-deobf.bin`'s import directory (RVA 0x4c09000, 23 DLLs) plus its delay-import
+//! directory (0x3b03bec, EOSSDK only) shows the game imports none of `NtWriteFile`,
+//! `NtCreateFile`, `ZwWriteFile`, `CreateFile2`, `WriteFileEx`, `WriteFileGather`,
+//! `ReplaceFileW/A`, `CreateFileMapping*` or `MapViewOfFile*`. `WriteFile` has exactly five
+//! xref sites image-wide and `SetEndOfFile` exactly one.
+//!
+//! What DID escape, found by measurement rather than reasoning: `CopyFileW`. A census run
+//! logged one `WriteFile` of 2359328 bytes while the offline BND4 witness found three changed
+//! slots totalling 5374016 bytes in `ER0000.sl2` and a mirrored `ER0000.sl2.bak` -- 3014688
+//! bytes reached disk through APIs this module did not hook. The game builds the backup with
+//! `CopyFileW` and renames through `MoveFileW`, neither of which is a "write" in the obvious
+//! sense. They are hooked now.
+//!
+//! The residual hole, stated rather than hidden: `GetProcAddress`/`LoadLibraryW` are imported
+//! and every call site has not been audited, so a dynamically-resolved file API would still be
+//! invisible. `escaped_write_sites`, cross-checked against the offline byte diff by
+//! `scripts/check-save-suppression.py`, is the standing detector for that remainder.
 
 use std::{
     ffi::c_void,
@@ -21,7 +34,7 @@ use std::{
 
 use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 
-use crate::{log_message, witness};
+use crate::{log_message, redirect, witness};
 
 type CreateFileWFn =
     unsafe extern "system" fn(*const u16, u32, u32, *mut c_void, u32, u32, *mut c_void) -> usize;
@@ -30,6 +43,8 @@ type WriteFileFn =
 type SetEndOfFileFn = unsafe extern "system" fn(usize) -> i32;
 type CloseHandleFn = unsafe extern "system" fn(usize) -> i32;
 type MoveFileExWFn = unsafe extern "system" fn(*const u16, *const u16, u32) -> i32;
+type MoveFileWFn = unsafe extern "system" fn(*const u16, *const u16) -> i32;
+type CopyFileWFn = unsafe extern "system" fn(*const u16, *const u16, i32) -> i32;
 type DeleteFileWFn = unsafe extern "system" fn(*const u16) -> i32;
 
 static ORIG_CREATE_FILE_W: AtomicUsize = AtomicUsize::new(0);
@@ -37,6 +52,8 @@ static ORIG_WRITE_FILE: AtomicUsize = AtomicUsize::new(0);
 static ORIG_SET_END_OF_FILE: AtomicUsize = AtomicUsize::new(0);
 static ORIG_CLOSE_HANDLE: AtomicUsize = AtomicUsize::new(0);
 static ORIG_MOVE_FILE_EX_W: AtomicUsize = AtomicUsize::new(0);
+static ORIG_MOVE_FILE_W: AtomicUsize = AtomicUsize::new(0);
+static ORIG_COPY_FILE_W: AtomicUsize = AtomicUsize::new(0);
 static ORIG_DELETE_FILE_W: AtomicUsize = AtomicUsize::new(0);
 
 static INSTALLED_HOOKS: AtomicUsize = AtomicUsize::new(0);
@@ -68,7 +85,7 @@ pub(crate) fn install() -> usize {
         }
     };
 
-    let targets: [(&str, *mut c_void, &AtomicUsize); 6] = [
+    let targets: [(&str, *mut c_void, &AtomicUsize); 8] = [
         (
             "CreateFileW",
             create_file_w_hook as *mut c_void,
@@ -98,6 +115,17 @@ pub(crate) fn install() -> usize {
             "DeleteFileW",
             delete_file_w_hook as *mut c_void,
             &ORIG_DELETE_FILE_W,
+        ),
+        // The proven escapes: the backup is built by copy, not by write.
+        (
+            "CopyFileW",
+            copy_file_w_hook as *mut c_void,
+            &ORIG_COPY_FILE_W,
+        ),
+        (
+            "MoveFileW",
+            move_file_w_hook as *mut c_void,
+            &ORIG_MOVE_FILE_W,
         ),
     ];
 
@@ -139,6 +167,15 @@ pub(crate) fn install() -> usize {
     }
 }
 
+/// Access bits that mean the caller intends to modify the file.
+const GENERIC_WRITE: u32 = 0x4000_0000;
+const FILE_WRITE_DATA: u32 = 0x0000_0002;
+const FILE_APPEND_DATA: u32 = 0x0000_0004;
+
+fn is_write_open(desired_access: u32) -> bool {
+    desired_access & (GENERIC_WRITE | FILE_WRITE_DATA | FILE_APPEND_DATA) != 0
+}
+
 unsafe extern "system" fn create_file_w_hook(
     file_name: *const u16,
     desired_access: u32,
@@ -153,19 +190,62 @@ unsafe extern "system" fn create_file_w_hook(
         return usize::MAX;
     }
     let original: CreateFileWFn = unsafe { core::mem::transmute(orig) };
-    let handle = unsafe {
-        original(
-            file_name,
-            desired_access,
-            share_mode,
-            security_attributes,
-            creation_disposition,
-            flags_and_attributes,
-            template_file,
-        )
+
+    // Divert ONLY write opens. The load path shares this function, so redirecting reads
+    // would make the game load the diverted file instead of the player's real save --
+    // and the game's own `OpenFile` uses OPEN_EXISTING to read and OPEN_ALWAYS to write,
+    // so the access bits are a reliable discriminator.
+    let diverted = if is_write_open(desired_access) {
+        unsafe { save_path_string(file_name) }.and_then(|path| redirect::diverted_path(&path))
+    } else {
+        None
     };
-    unsafe { witness::note_create_file(file_name, desired_access, handle) };
+
+    let handle = match &diverted {
+        Some(path) => {
+            let wide = redirect::to_wide(path);
+            let handle = unsafe {
+                original(
+                    wide.as_ptr(),
+                    desired_access,
+                    share_mode,
+                    security_attributes,
+                    creation_disposition,
+                    flags_and_attributes,
+                    template_file,
+                )
+            };
+            witness::note_diverted_open(path, handle);
+            handle
+        }
+        None => unsafe {
+            original(
+                file_name,
+                desired_access,
+                share_mode,
+                security_attributes,
+                creation_disposition,
+                flags_and_attributes,
+                template_file,
+            )
+        },
+    };
+
+    // Census the ORIGINAL path either way: what matters is that the game asked to write
+    // a save, and whether any byte reached the real file.
+    if diverted.is_none() {
+        unsafe { witness::note_create_file(file_name, desired_access, handle) };
+    }
     handle
+}
+
+/// Read a wide path and return it only when it names save data.
+///
+/// # Safety
+/// `ptr` must be a valid wide string pointer or null.
+unsafe fn save_path_string(ptr: *const u16) -> Option<String> {
+    let path = unsafe { witness::read_wide_path(ptr) }?;
+    witness::is_save_path(&path).then_some(path)
 }
 
 unsafe extern "system" fn write_file_hook(
@@ -227,7 +307,70 @@ unsafe extern "system" fn delete_file_w_hook(file_name: *const u16) -> i32 {
         return 0;
     }
     let original: DeleteFileWFn = unsafe { core::mem::transmute(orig) };
-    unsafe { original(file_name) }
+
+    // The game deletes the stale backup before recreating it. Point that at the diverted
+    // backup so the player's real .bak is never removed. Report success even if the
+    // diverted file was not there -- the game only needs the name to be free.
+    match unsafe { save_path_string(file_name) }.and_then(|p| redirect::diverted_path(&p)) {
+        Some(path) => {
+            let wide = redirect::to_wide(&path);
+            unsafe { original(wide.as_ptr()) };
+            1
+        }
+        None => unsafe { original(file_name) },
+    }
+}
+
+unsafe extern "system" fn copy_file_w_hook(
+    existing: *const u16,
+    new: *const u16,
+    fail_if_exists: i32,
+) -> i32 {
+    unsafe { witness::note_copy_file(existing, new) };
+    let orig = ORIG_COPY_FILE_W.load(Ordering::SeqCst);
+    if orig == 0 {
+        return 0;
+    }
+    let original: CopyFileWFn = unsafe { core::mem::transmute(orig) };
+
+    // Divert only the DESTINATION. The source stays real so the copy always has something
+    // to read (a diverted source would not exist on the first save and the copy would
+    // fail); the player's real .bak is never the target.
+    let diverted = unsafe { save_path_string(new) }.and_then(|path| redirect::diverted_path(&path));
+    match diverted {
+        Some(path) => {
+            let wide = redirect::to_wide(&path);
+            // fail_if_exists must be cleared: the diverted backup survives between saves,
+            // and the game passes 1, which would fail every save after the first.
+            unsafe { original(existing, wide.as_ptr(), 0) }
+        }
+        None => unsafe { original(existing, new, fail_if_exists) },
+    }
+}
+
+unsafe extern "system" fn move_file_w_hook(existing: *const u16, new: *const u16) -> i32 {
+    unsafe { witness::note_move_file_plain(existing, new) };
+    let orig = ORIG_MOVE_FILE_W.load(Ordering::SeqCst);
+    if orig == 0 {
+        return 0;
+    }
+    let original: MoveFileWFn = unsafe { core::mem::transmute(orig) };
+
+    // A rename touching save data moves BOTH ends into the diverted namespace, so a
+    // rename-swap can never clobber the real file with, or replace it by, anything.
+    let from = unsafe { save_path_string(existing) }.and_then(|p| redirect::diverted_path(&p));
+    let to = unsafe { save_path_string(new) }.and_then(|p| redirect::diverted_path(&p));
+    if from.is_none() && to.is_none() {
+        return unsafe { original(existing, new) };
+    }
+    let from_wide = from.as_deref().map(redirect::to_wide);
+    let to_wide = to.as_deref().map(redirect::to_wide);
+    unsafe {
+        original(
+            from_wide.as_ref().map_or(existing, |w| w.as_ptr()),
+            to_wide.as_ref().map_or(new, |w| w.as_ptr()),
+        )
+    }
 }
 
 fn kernel32_module() -> Option<usize> {
