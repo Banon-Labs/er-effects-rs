@@ -12,6 +12,14 @@
 set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
+# Resolve the 12.1.2 install: env override first, then bounded known locations. Prefer the local
+# copy under $HOME/tools (native FS, fast) over the Windows drvfs mount, which may be unmounted
+# (observed 2026-07-28: /mnt/d absent; the live daemon runs from ~/tools/ghidra_12.1.2_PUBLIC).
+if [[ -z "${GHIDRA_INSTALL_DIR:-}" ]]; then
+	for c in "$HOME/tools/ghidra_12.1.2_PUBLIC" /mnt/d/ghidra/ghidra_12.1.2_PUBLIC /opt/ghidra_12.1.2_PUBLIC; do
+		[[ -x "$c/support/analyzeHeadless" ]] && { GHIDRA_INSTALL_DIR="$c"; break; }
+	done
+fi
 export GHIDRA_INSTALL_DIR="${GHIDRA_INSTALL_DIR:-/mnt/d/ghidra/ghidra_12.1.2_PUBLIC}"
 export JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-21-openjdk-amd64}"
 PROJ_DIR="${GHIDRA_PROJ_DIR:-$HOME/ghidra_maporch/proj1162}"
@@ -38,7 +46,18 @@ for _ in 1 2 3 4 5 6 7 8; do
 done
 if python3 "$REPO/scripts/ghidra/mcp_query.py" ping --port "$PORT" >/dev/null 2>&1; then
 	echo "== MCP daemon READY on :$PORT =="
-	python3 "$REPO/scripts/ghidra/mcp_query.py" get_program_info --port "$PORT"
+	# Daemon methods are camelCase (get_program_info is not a method). getContext names the program.
+	python3 "$REPO/scripts/ghidra/mcp_query.py" getContext --port "$PORT"
+	# Decompiler smoke: a fresh/copied install can lose +x on the native `decompile` binary, which
+	# fails ALL decompiles while other queries work. The daemon start self-heals the bits
+	# (fix_native_exec_bits in mcp-ghidra-daemon.sh); this proves end-to-end decompiled C.
+	if python3 "$REPO/scripts/ghidra/mcp_query.py" getDecompiledCode \
+			--params '{"address":"1406793d0"}' --port "$PORT" 2>/dev/null \
+			| python3 -c 'import sys,json; r=json.load(sys.stdin).get("result",""); sys.exit(0 if isinstance(r,str) and "{" in r and "failed" not in r.lower() else 1)'; then
+		echo "== decompiler OK =="
+	else
+		echo "== WARNING: decompiler smoke FAILED (check exec bits on Ghidra/Features/Decompiler/os/linux_x86_64/decompile) ==" >&2
+	fi
 	exit 0
 fi
 echo "== daemon did not answer ping on :$PORT; see $LOG ==" >&2

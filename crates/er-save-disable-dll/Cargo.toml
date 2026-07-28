@@ -1,0 +1,26 @@
+[package]
+name = "er-save-disable-dll"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_save_disable"
+# `rlib` alongside `cdylib` so the save-path classifier and census bookkeeping are
+# unit-testable on the host. Those decide whether a write is even seen, so they are
+# exactly the parts that must not rely on a game run to be verified.
+crate-type = ["cdylib", "rlib"]
+
+# Standalone save-disable DLL. Deliberately DECOUPLED from the product `er-effects-rs`
+# cdylib: it shares no state with the product's System->Quit save handling (which clears
+# CSMenuMan->disableSaveMenu +0x13c) and is loaded through its own ME3 `[[natives]]` entry.
+# Before it suppresses anything it must first PROVE, from the bottom up, every call site
+# that writes save data -- that is what the `witness` module does.
+#
+# Tier A `er-game-base` only (no `game-types`): the census works off the Win32 file APIs and
+# the game module range, so it needs no typed game bindings and stays a lean cross-compile.
+[dependencies]
+er-game-base = { path = "../er-game-base" }
+
+[target.'cfg(windows)'.dependencies]
+er-hook = { path = "../er-hook" }
