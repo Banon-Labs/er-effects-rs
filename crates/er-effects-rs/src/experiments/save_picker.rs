@@ -65,6 +65,10 @@ pub(crate) enum PickerEntry {
         name: String,
         path: PathBuf,
         modified: Option<SystemTime>,
+        /// The container's active loadable characters (slot/name/level), parsed ONCE at
+        /// listing-build time from the same bytes the active-slot filter reads. Never empty --
+        /// files with no loadable character are hidden from the listing.
+        chars: Vec<crate::experiments::SaveSlotInfo>,
     },
 }
 
@@ -146,35 +150,31 @@ fn enumerate_drives() -> Vec<PathBuf> {
         .collect()
 }
 
-/// Save-file rows are only useful if the selected container can offer at least one ACTIVE
-/// character slot. Deleted/inactive slots can leave stale `USER_DATA00N` character bodies behind;
-/// the authoritative occupancy source is `USER_DATA010.active_slot`, so filter by that before the
-/// file ever appears in either custom load menu.
-fn save_file_has_active_slots(path: &Path) -> bool {
+/// Save-file rows are only useful if the selected container can offer at least one LOADABLE
+/// character slot, and the browse rows display per-file character info -- so parse the active
+/// character slots (slot/name/level; `USER_DATA010.active_slot` occupancy + PlayerGameData locate,
+/// the same `parse_save_character_slots` pass the character sub-picker runs on pick) in ONE read of
+/// the file bytes at listing-build time and cache the result in the entry. Files with no loadable
+/// character (no active slot, or only empty-like leftovers the autoload's real-character
+/// fingerprint would reject anyway) are hidden; these multi-MB containers are read exactly once
+/// per listing build, never per frame.
+fn save_file_character_slots(path: &Path) -> Option<Vec<crate::experiments::SaveSlotInfo>> {
     let Ok(bytes) = std::fs::read(path) else {
         append_autoload_debug(format_args!(
-            "save-picker: hiding '{}' -- failed to read save while checking active slots",
+            "save-picker: hiding '{}' -- failed to read save while parsing character slots",
             path.display()
         ));
-        return false;
+        return None;
     };
-    match er_save_loader::bnd4::has_active_slot(&bytes) {
-        Ok(true) => true,
-        Ok(false) => {
-            append_autoload_debug(format_args!(
-                "save-picker: hiding '{}' -- save has no active character slots",
-                path.display()
-            ));
-            false
-        }
-        Err(err) => {
-            append_autoload_debug(format_args!(
-                "save-picker: hiding '{}' -- active-slot bitmap unreadable ({err:?})",
-                path.display()
-            ));
-            false
-        }
+    let chars = crate::experiments::parse_save_character_slots(&bytes);
+    if chars.is_empty() {
+        append_autoload_debug(format_args!(
+            "save-picker: hiding '{}' -- save has no loadable character slots",
+            path.display()
+        ));
+        return None;
     }
+    Some(chars)
 }
 
 impl SavePickerModel {
@@ -377,15 +377,22 @@ impl SavePickerModel {
                             .any(|allowed| ext.eq_ignore_ascii_case(allowed))
                     })
                 // Occupancy filtering is a LOAD-source concern only. A destination row is an
-                // overwrite target, so it needs no active character slot -- and hiding a slotless
-                // existing file would let `[ new ]` silently clobber it. It also avoids a ~28 MB
-                // read per candidate on a folder full of saves.
-                && (self.is_destination() || save_file_has_active_slots(&path))
+                // overwrite target, so it needs no active character slot -- hiding a slotless or
+                // unreadable existing file would let `[ new ]` silently clobber it. Destination
+                // listings still run the same single-read parse so their file rows can show who
+                // lives in the file, but a container the parse rejects stays LISTED, with no
+                // characters, instead of disappearing.
+                && let Some(chars) = (if self.is_destination() {
+                    Some(save_file_character_slots(&path).unwrap_or_default())
+                } else {
+                    save_file_character_slots(&path)
+                })
             {
                 files.push(PickerEntry::File {
                     name: name.to_owned(),
                     path: path.clone(),
                     modified: entry.metadata().ok().and_then(|meta| meta.modified().ok()),
+                    chars,
                 });
             }
         }
@@ -451,6 +458,22 @@ impl SavePickerModel {
                 Some(PickerEntry::File { path, .. }) => PickerRow::File(path.clone()),
                 None => PickerRow::Empty,
             },
+        }
+    }
+
+    /// The cached character summaries behind `row` when it is a save-file row on the current page
+    /// (the file's active loadable characters, parsed once at listing build). `None` for every
+    /// non-file row (up/drive, directory, page cycle, placeholder).
+    pub(crate) fn row_file_characters(
+        &self,
+        row: usize,
+    ) -> Option<&[crate::experiments::SaveSlotInfo]> {
+        if row == PICKER_ROW_PARENT || row >= PICKER_ROW_NEXT_PAGE {
+            return None;
+        }
+        match self.page_entries().get(row - 1) {
+            Some(PickerEntry::File { chars, .. }) => Some(chars),
+            _ => None,
         }
     }
 

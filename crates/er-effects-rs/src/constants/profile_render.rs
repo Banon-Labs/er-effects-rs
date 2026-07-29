@@ -92,6 +92,21 @@ pub(crate) const SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA: u32 = 0x7ac890;
 /// reads per-row SNAPSHOTS, so bare record writes are invisible without this rebuild). RE 2026-07-07,
 /// adversarially verified (see bd save-picker RE notes).
 pub(crate) const PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA: u32 = 0x9a4ed0;
+/// Native ProfileSelect item-list builder `FUN_140875590` (1.16.2 dump VA == deobf/live VA, shift 0;
+/// entry bytes `48 8b c4 56 57 41 56 48 81 ec d0 0b 00 00` byte-verified in `eldenring-deobf.bin`).
+/// `fn(rcx = out BasicViewItemList<MenuSaveDataSummary,10>*) -> out`. Builds the visible 10-row list
+/// STRAIGHT from the live ProfileSummary: occupancy via `FUN_140261cd0` (`saveSlotsStates[slot]`,
+/// summary+0x8+slot) and record pointer via `FUN_140261b80` (summary+0x18+slot*0x2a0). Every point
+/// where records become visible rows funnels through this one function: the ProfileLoadDialog
+/// ctor/bind paths AND the delete-flow in-place rebuild (`PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA`)
+/// all call it, so the save-picker re-stage hook at its entry covers every build site.
+pub(crate) const PROFILE_SELECT_LIST_BUILDER_RVA: u32 = 0x875590;
+pub(crate) static SAVE_PICKER_LIST_BUILDER_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) use er_telemetry::counters::SAVE_PICKER_LIST_BUILDER_INSTALLED;
+/// Times the list-builder hook re-staged the browse rows before a native list build (oracle; each
+/// re-stage repairs any game-save record stomp that landed since the previous staging).
+pub(crate) use er_telemetry::counters::SAVE_PICKER_LIST_BUILDER_RESTAGE_COUNT;
 /// One-shot latch: set when we have invoked the native ProfileSelect close during a return-title
 /// transition, so the per-tick handler closes it exactly once. Reset with the ProfileSelect state.
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_FIRED;

@@ -740,8 +740,8 @@ unsafe fn profile_slot_has_character(slot: i32) -> bool {
 
 /// One active character slot parsed straight from a picked save's bytes (no dependency on the game
 /// having built its ProfileSummary yet): the slot index, character name, and level. Feeds the
-/// missing-save picker's character sub-picker.
-#[derive(Clone, Debug)]
+/// missing-save picker's character sub-picker and the browse pickers' per-file character info.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SaveSlotInfo {
     pub(crate) slot: usize,
     pub(crate) name: String,

@@ -77,6 +77,41 @@ fn save_picker_start_dir() -> Option<PathBuf> {
         .filter(|root| root.is_dir())
 }
 
+/// Write the model's 10 visible browse rows into the live ProfileSummary records (record zeroed,
+/// name field = row label, slot marked occupied). Pure record transport -- no snapshot bookkeeping
+/// and no renderer refresh -- shared by the staging path below and the list-builder re-stage hook.
+/// Returns the number of rows written.
+unsafe fn save_picker_write_row_records(
+    model: &crate::experiments::save_picker::SavePickerModel,
+    summary: usize,
+) -> usize {
+    let mut staged = 0usize;
+    unsafe {
+        for slot in 0..TITLE_PROFILE_SLOT_COUNT {
+            let record =
+                summary + PROFILE_SUMMARY_RECORD_BASE + slot * PROFILE_SUMMARY_RECORD_STRIDE;
+            core::ptr::write_bytes(record as *mut u8, 0, PROFILE_SUMMARY_RECORD_STRIDE);
+            PROFILE_PREVIEW_FACE_HASH[slot].store(0, Ordering::SeqCst);
+            let mut label = model.row_label_utf16(slot);
+            if label.is_empty() {
+                // The native list builder appends a row ONLY for slots whose
+                // `saveSlotsStates[slot]` byte is set (RE-verified: occupancy predicate live
+                // 0x140261cd0 reads summary+0x8+slot; bound at dialog+0xb08 = occupied count).
+                // Keep ALL 10 slots occupied with a placeholder so row index == slot index ==
+                // model row, and cursor math never has to translate sparse row ids.
+                label = "-".encode_utf16().collect();
+            }
+            // Name field is 0x22 bytes (16 UTF-16 units + NUL); the record was zeroed above so
+            // truncated copies stay terminated.
+            let units = label.len().min(PROFILE_SUMMARY_NAME_BYTES / 2 - 1);
+            core::ptr::copy_nonoverlapping(label.as_ptr(), record as *mut u16, units);
+            *((summary + PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot) as *mut u8) = 1;
+            staged += 1;
+        }
+    }
+    staged
+}
+
 /// Stage the model's 10 visible rows as synthetic ProfileSummary records (name field = row
 /// label; everything else zeroed). Snapshots the live summary first via the save-swap state, so
 /// every existing backout path restores the user's real rows. Menu-thread only (record writes +
@@ -105,30 +140,7 @@ unsafe fn save_picker_stage_row_records(
         // restores the user's real rows on any backout path.
         st.preview_applied = true;
     }
-    let mut staged = 0usize;
-    unsafe {
-        for slot in 0..TITLE_PROFILE_SLOT_COUNT {
-            let record =
-                summary + PROFILE_SUMMARY_RECORD_BASE + slot * PROFILE_SUMMARY_RECORD_STRIDE;
-            core::ptr::write_bytes(record as *mut u8, 0, PROFILE_SUMMARY_RECORD_STRIDE);
-            PROFILE_PREVIEW_FACE_HASH[slot].store(0, Ordering::SeqCst);
-            let mut label = model.row_label_utf16(slot);
-            if label.is_empty() {
-                // The native list builder appends a row ONLY for slots whose
-                // `saveSlotsStates[slot]` byte is set (RE-verified: occupancy predicate live
-                // 0x140261cd0 reads summary+0x8+slot; bound at dialog+0xb08 = occupied count).
-                // Keep ALL 10 slots occupied with a placeholder so row index == slot index ==
-                // model row, and cursor math never has to translate sparse row ids.
-                label = "-".encode_utf16().collect();
-            }
-            // Name field is 0x22 bytes (16 UTF-16 units + NUL); the record was zeroed above so
-            // truncated copies stay terminated.
-            let units = label.len().min(PROFILE_SUMMARY_NAME_BYTES / 2 - 1);
-            core::ptr::copy_nonoverlapping(label.as_ptr(), record as *mut u16, units);
-            *((summary + PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot) as *mut u8) = 1;
-            staged += 1;
-        }
-    }
+    let staged = unsafe { save_picker_write_row_records(model, summary) };
     SAVE_PICKER_STAGED_ROW_COUNT.store(staged, Ordering::SeqCst);
     if let Ok(base) = game_module_base() {
         let refresh: unsafe extern "system" fn() =
@@ -535,6 +547,193 @@ pub(crate) unsafe fn save_picker_menu_pump_resubmit() -> bool {
         SAVE_PICKER_MODE_ACTIVE.store(0, Ordering::SeqCst);
     }
     false
+}
+
+/// Escape text for the Scaleform-HTML SetText path (the `ErStats` row fields parse with bHTML=1,
+/// so a character/file name containing `&`, `<` or `>` must not be interpreted as markup).
+fn save_picker_html_escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// One dim Scaleform-HTML line for the browse rows' `ErStats` fields (same size/color language as
+/// the stats panel's attribute lines), NUL-terminated UTF-16 for the native SetText wrapper. An
+/// empty `text` yields a bare NUL so the field renders blank.
+fn save_picker_browse_html_utf16(text: &str) -> Vec<u16> {
+    // Matches the stats panel's font size so browse info and attribute lines read identically.
+    const SIZE: &str = "19";
+    // The stats panel's dim label color -- browse info is secondary to the row name.
+    const COLOR: &str = "#8f887a";
+    if text.is_empty() {
+        return vec![0];
+    }
+    let mut s = String::from("<p align=\"left\"><font size=\"");
+    s.push_str(SIZE);
+    s.push_str("\" color=\"");
+    s.push_str(COLOR);
+    s.push_str("\">");
+    s.push_str(&save_picker_html_escape(text));
+    s.push_str("</font></p>");
+    s.encode_utf16().chain(core::iter::once(0)).collect()
+}
+
+/// Character budget for the per-file character list line (the four-attribute stats line occupies
+/// roughly this width at the same font size, so the list clips no earlier than the stats did).
+const SAVE_PICKER_BROWSE_LINE_CHAR_BUDGET: usize = 44;
+
+/// The two `ErStats` lines for ProfileSelect row `row` while the browse picker owns the window.
+/// File rows show the file's REAL character info: active-slot count on the top line and the
+/// characters' names + levels on the bottom line (as many as fit the budget, then a `+k` overflow
+/// marker). Every other row (up/drive, directory, page cycle, placeholder) gets EMPTY lines so
+/// neither leftover row text nor per-slot attribute stats render as junk there. `None` when the
+/// picker does not own the rows (the normal character-slot view keeps the attribute stats panel).
+/// Generated text uses `/` separators and never inserts commas (comma-safe labels,
+/// er-effects-rs-dly6); names pass through with HTML escaping only.
+pub(crate) fn save_picker_browse_stats_lines(row: usize) -> Option<(Vec<u16>, Vec<u16>)> {
+    if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 && !missing_save_selection_pending() {
+        return None;
+    }
+    let guard = crate::experiments::save_picker::active_save_picker_lock();
+    let model = guard.as_ref()?;
+    let Some(chars) = model.row_file_characters(row) else {
+        // Non-file row: blank both lines.
+        return Some((vec![0], vec![0]));
+    };
+    let top = if chars.len() == 1 {
+        "1 CHARACTER".to_owned()
+    } else {
+        format!("{} CHARACTERS", chars.len())
+    };
+    let mut bottom = String::new();
+    let mut shown = 0usize;
+    for info in chars {
+        let seg = format!("{} LV {}", info.name, info.level);
+        let sep = if bottom.is_empty() { "" } else { " / " };
+        if !bottom.is_empty()
+            && bottom.chars().count() + sep.chars().count() + seg.chars().count()
+                > SAVE_PICKER_BROWSE_LINE_CHAR_BUDGET
+        {
+            break;
+        }
+        bottom.push_str(sep);
+        bottom.push_str(&seg);
+        shown += 1;
+    }
+    if shown < chars.len() {
+        bottom.push_str(&format!(" +{}", chars.len() - shown));
+    }
+    Some((
+        save_picker_browse_html_utf16(&top),
+        save_picker_browse_html_utf16(&bottom),
+    ))
+}
+
+/// Entry hook on the native ProfileSelect item-list builder (`PROFILE_SELECT_LIST_BUILDER_RVA`,
+/// FUN_140875590): while the browse picker owns the `05_010` rows, RE-STAGE the browse-row records
+/// immediately before the native builder turns ProfileSummary records into visible list rows.
+///
+/// Root cause of the stray current-character row (er-effects-rs-xlqh): the ProfileSummary records
+/// are GAME-OWNED and volatile in-world. Every save the game performs runs the save-write path
+/// `FUN_14067b940`, which calls `CS::ProfileSummary::MarkProfileIndexAsUsed(summary, saveSlot)`
+/// and then `FUN_140262270(summary, saveSlot)` -- and `FUN_140262270` rewrites the ACTIVE slot's
+/// record from the LIVE `mainPlayerGameData` (`wcsncpy(record.name, pgd.name, 0x10)` + level +
+/// playtime + rune memory + map + face data; static RE, 1.16.2 dump). A save landing between our
+/// row staging and the builder's record read left that slot's record holding the LOADED character,
+/// which then rendered as a stray browse row (user report: `[ up .. ]`, <current character name>,
+/// <save file name>). Rewriting the records here, on the same menu thread that immediately reads
+/// them, closes that window for EVERY build site with one seam -- the dialog ctor/bind paths and
+/// the delete-flow in-place rebuild (`PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA`) all call this builder.
+pub(crate) unsafe extern "system" fn save_picker_profile_list_builder_hook(
+    out_list: usize,
+) -> usize {
+    if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0 || missing_save_selection_pending() {
+        let summary = unsafe { system_quit_profile_summary_ptr() };
+        if summary != TITLE_OWNER_SCAN_START_ADDRESS {
+            let staged = {
+                let guard = crate::experiments::save_picker::active_save_picker_lock();
+                guard
+                    .as_ref()
+                    .map(|model| unsafe { save_picker_write_row_records(model, summary) })
+            };
+            if let Some(staged) = staged {
+                let n = SAVE_PICKER_LIST_BUILDER_RESTAGE_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+                if n <= 8 || n.is_power_of_two() {
+                    append_autoload_debug(format_args!(
+                        "save-picker: re-staged {staged} browse rows at native list build #{n} (game-save record-stomp guard)"
+                    ));
+                }
+            }
+        }
+    }
+    let orig = SAVE_PICKER_LIST_BUILDER_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        // Unreachable in practice (the trampoline is stored before the hook is enabled); mirror
+        // the native return (the out-list pointer) rather than crash.
+        return out_list;
+    }
+    let f: unsafe extern "system" fn(usize) -> usize = unsafe { std::mem::transmute(orig) };
+    unsafe { f(out_list) }
+}
+
+/// Install the list-builder re-stage hook (idempotent; mirrors the row-populate install idiom).
+pub(crate) fn install_save_picker_list_builder_hook() {
+    if SAVE_PICKER_LIST_BUILDER_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "save-picker: list-builder MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(PROFILE_SELECT_LIST_BUILDER_RVA) else {
+        append_autoload_debug(format_args!(
+            "save-picker: failed to resolve list-builder rva 0x{PROFILE_SELECT_LIST_BUILDER_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            save_picker_profile_list_builder_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SAVE_PICKER_LIST_BUILDER_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "save-picker: queue_enable list-builder failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SAVE_PICKER_LIST_BUILDER_INSTALLED.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "save-picker: hooked ProfileSelect list builder FUN_140875590 0x{addr:x}; browse rows re-stage at every native list build"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "save-picker: list-builder MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "save-picker: MhHook::new list-builder failed: {status:?}"
+        )),
+    }
 }
 
 /// Clear picker state on any full reset of the ProfileSelect hide machinery (backout/restore).
