@@ -31,15 +31,12 @@ use windows::{
             SystemServices::DLL_PROCESS_ATTACH,
             Threading::GetCurrentProcessId,
         },
-        UI::{
-            Controls::Dialogs::{
-                GetOpenFileNameW, OFN_DONTADDTORECENT, OFN_EXPLORER, OFN_FILEMUSTEXIST,
-                OFN_HIDEREADONLY, OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST, OPENFILENAMEW,
-            },
-            WindowsAndMessaging::{
-                EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-                WM_KEYDOWN, WM_KEYUP,
-            },
+        // The comdlg32 imports this block used to carry now live in `save_picker_os_dialog.rs`,
+        // where they are actually used; `startup_hooks` is one flat module built from `include!`s,
+        // so importing the same names twice would collide.
+        UI::WindowsAndMessaging::{
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
+            WM_KEYUP,
         },
     },
     core::{BOOL, PCSTR, PCWSTR},

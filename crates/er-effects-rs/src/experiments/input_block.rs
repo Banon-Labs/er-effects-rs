@@ -133,8 +133,16 @@ unsafe extern "system" fn sq_repro_find_hwnd_cb(hwnd: HWND, _l: LPARAM) -> BOOL 
 }
 
 /// Return (and cache) the ER main game window HWND: the LARGEST visible top-level window owned by this
-/// process. Logs the chosen window's class/title/rect once so it can be confirmed as the game window.
-fn sq_repro_er_hwnd() -> HWND {
+/// process, EXCLUDING our own overlay/helper classes. Logs the chosen window's class/title/rect once
+/// so it can be confirmed as the game window. `HWND(null)` when no candidate was found.
+///
+/// Use this and never `hooks::own_window()`, which returns the FIRST visible window of the process
+/// and does not exclude our own surfaces: the fullscreen D3D12 present-overlay
+/// (`ErEffectsLoadingOverlay`) is the largest visible window we own, the naive finder picked it, and
+/// that was the root cause of "no key opens the menu" (runtime-proven 2026-07-17). Anything that
+/// needs the game window -- input targeting, or an `hwndOwner` for a common dialog so a window
+/// manager keeps it in front of the game -- must come through here.
+pub(crate) fn game_main_window() -> HWND {
     let cached = SQ_REPRO_ER_HWND.load(Ordering::SeqCst);
     if cached != 0 {
         return HWND(cached as *mut core::ffi::c_void);
@@ -227,7 +235,7 @@ fn sq_repro_send_vk(vk: u32, keyup: bool) {
 /// RawInput). Posts a clean key-down on press and key-up on release when the VK transitions. Gated by
 /// the caller (only the sq-repro autopilot calls it) so it never touches the product path.
 pub(crate) fn sq_repro_drive_wm_key(vk: u32) {
-    let hwnd = sq_repro_er_hwnd();
+    let hwnd = game_main_window();
     if hwnd.0.is_null() {
         return;
     }
@@ -255,7 +263,7 @@ pub(crate) fn sq_repro_drive_wm_key(vk: u32) {
 /// the front and trapped the user's keyboard). If the user alt-tabs away, the probe stops injecting.
 #[allow(dead_code)] // kept: fallback OS-keyboard driver; the can-move probe now uses the pad-poll hook
 pub(crate) fn move_probe_drive_key_foreground_only(vk: u32) {
-    let hwnd = sq_repro_er_hwnd();
+    let hwnd = game_main_window();
     if hwnd.0.is_null() {
         return;
     }

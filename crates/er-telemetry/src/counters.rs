@@ -1330,6 +1330,32 @@ pub static SAVE_PICKER_OS_DIALOG_OPEN: AtomicUsize = AtomicUsize::new(0);
 /// expired under a browsing user, and the freeze is what saved the flow. `== 0` with a dialog
 /// demonstrably open instead says the whole frame stalled with the pump.
 pub static SAVE_PICKER_OS_TICKS_FROZEN: AtomicUsize = AtomicUsize::new(0);
+/// OS common file dialogs opened this session.
+pub static SAVE_PICKER_OS_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// OS dialogs that closed returning a path we accepted.
+pub static SAVE_PICKER_OS_CLOSED_WITH_PATH: AtomicUsize = AtomicUsize::new(0);
+/// OS dialogs the user cancelled (`FALSE` with `CommDlgExtendedError() == 0`).
+pub static SAVE_PICKER_OS_CANCEL_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// OS dialogs comdlg32 FAILED (`FALSE` with a non-zero extended error), and the last such error.
+/// Distinguished from a cancel because only a failure is a bug of ours, and neither reopens.
+pub static SAVE_PICKER_OS_ERROR_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_OS_LAST_ERROR: AtomicUsize = AtomicUsize::new(0);
+/// Picks the shared save-validity predicate rejected, and the last `PickRejection as usize`.
+pub static SAVE_PICKER_OS_REJECT_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_OS_LAST_REJECT_REASON: AtomicUsize = AtomicUsize::new(0);
+/// Dialog reopens after an invalid pick, and 1 if the bound was ever hit.
+///
+/// The bound is not about user patience: a comdlg32 that fails INSTANTLY (Wine's is a
+/// reimplementation) would spin the reopen loop at full speed on the thread that owns the menu
+/// pump, an unbreakable hang. Exhaustion takes the cancel path.
+pub static SAVE_PICKER_OS_REOPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_OS_REOPEN_EXHAUSTED: AtomicUsize = AtomicUsize::new(0);
+/// The `hwndOwner` handed to comdlg32 (0 = none found). Non-zero plus a logged class that is the
+/// game window -- not `ErEffectsLoadingOverlay` -- is what says we owned the dialog correctly.
+pub static SAVE_PICKER_OS_OWNER_HWND: AtomicUsize = AtomicUsize::new(0);
+/// Save-like `CreateFileW` opens observed while a dialog was open. Attribution for the shell
+/// browsing traffic that otherwise pollutes the save CreateFileW diagnostics.
+pub static SAVE_PICKER_OS_SAVELIKE_OPENS: AtomicUsize = AtomicUsize::new(0);
 /// 1 = an OS Save-As returned an EXISTING file, so the Box3 overwrite confirm is owed.
 ///
 /// A latch rather than a direct `SAVE_FLOW_STAGE` write: the menu thread must not become a second

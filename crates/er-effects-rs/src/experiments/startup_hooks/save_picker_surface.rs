@@ -55,9 +55,12 @@ pub(crate) unsafe fn open_picker_for_intent(request: PickerOpenRequest) -> bool 
         (PickerSurface::InGame, PickerOpenRequest::SaveDestination { system_dialog }) => unsafe {
             system_quit_open_save_dest_picker_in_game(system_dialog)
         },
-        (PickerSurface::OsNative, request) => {
+        (PickerSurface::OsNative, PickerOpenRequest::LoadSource { action_obj }) => unsafe {
+            os_open_save_picker_load(action_obj)
+        },
+        (PickerSurface::OsNative, request @ PickerOpenRequest::SaveDestination { .. }) => {
             append_autoload_debug(format_args!(
-                "save-picker-os: refusing {request:?} -- the OS dialog is not built on this commit; nothing was staged"
+                "save-picker-os: refusing {request:?} -- the Save-As arm is not built on this commit; nothing was staged"
             ));
             false
         }
