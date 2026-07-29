@@ -115,17 +115,23 @@ pub(crate) enum QuitRowLabel {
 /// `PropertyNewButtonController`'s should-invoke predicate `FUN_140974b00` itself runs).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum QuitInputKind {
-    PadConfirm,
+    /// A confirm press from EITHER a pad button OR the keyboard: `FUN_140758a10` is one predicate
+    /// covering both, so there is deliberately no separate keyboard variant. Do NOT add one, and do
+    /// NOT test a key code here -- confirm is user-rebindable (`E` by default), and asking the game's
+    /// own predicate is exactly what makes a rebind work without this DLL knowing any key codes.
+    Confirm,
     MouseClick,
     /// Neither predicate answered (unresolvable RVA, or an event the game classifies as neither).
     Unknown,
 }
 
 impl QuitInputKind {
+    /// These codes are the wire format of `oracle_system_quit_row_last_input_kind`. Keep them stable:
+    /// a measured run's telemetry already uses them, and changing one silently rewrites old logs.
     pub(crate) fn code(self) -> usize {
         match self {
             QuitInputKind::Unknown => 0,
-            QuitInputKind::PadConfirm => 1,
+            QuitInputKind::Confirm => 1,
             QuitInputKind::MouseClick => 2,
         }
     }
@@ -514,7 +520,7 @@ unsafe fn system_quit_classify_activation_input(event: usize) -> QuitInputKind {
         let predicate: unsafe extern "system" fn(usize) -> u8 =
             unsafe { std::mem::transmute(addr) };
         if unsafe { predicate(event) } != 0 {
-            return QuitInputKind::PadConfirm;
+            return QuitInputKind::Confirm;
         }
     }
     if let Some(addr) = mouse {
@@ -688,7 +694,7 @@ mod system_quit_row_identity_tests {
             cursor: 1,
             row_count: 4,
             cursor_row_label: Some(QuitRowLabel::Foreign),
-            input_kind: QuitInputKind::PadConfirm,
+            input_kind: QuitInputKind::Confirm,
         }
     }
 
@@ -712,7 +718,7 @@ mod system_quit_row_identity_tests {
     fn every_input_kind_resolves_the_same_row_by_the_same_discriminator() {
         for kind in [
             QuitInputKind::Unknown,
-            QuitInputKind::PadConfirm,
+            QuitInputKind::Confirm,
             QuitInputKind::MouseClick,
         ] {
             for (cursor, row, label) in [
