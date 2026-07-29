@@ -1530,3 +1530,58 @@ pub static SAVE_DEST_COMMIT_FAIL: AtomicUsize = AtomicUsize::new(0);
 /// 1 if the LIVE save file changed during a destination commit -- the redirect leaked and the
 /// loaded save was overwritten anyway. Hard failure: the pre-fire snapshot is restored over it.
 pub static SAVE_DEST_LIVE_FILE_MUTATED: AtomicUsize = AtomicUsize::new(0);
+// ---- DESTINATION-COMMIT SAFETY ORACLES (2026-07-29) ----
+// Every counter below names a refusal, a deferral, or a fact the commit could not establish.
+// They exist because the previous shape of this flow could destroy the loaded save while its
+// log read "restored pre-fire snapshot ok=true": a decision it got wrong had no name, so no
+// run could report it. Each of these is that missing name.
+/// Commits refused because the destination could not be PROVEN either identical to, or distinct
+/// from, the loaded save (a handle-identity probe that neither succeeded nor said "absent").
+/// Firing on an unproven answer is what turns a save into a self-redirect that restores the
+/// pre-save snapshot over the save that just succeeded, so the commit refuses instead.
+pub static SAVE_DEST_IDENTITY_UNKNOWN_ABORT: AtomicUsize = AtomicUsize::new(0);
+/// Browsed destinations PROVEN to be the loaded save by handle identity while their path strings
+/// differed (the Wine `C:\users\steamuser\...` vs `Z:\...\pfx\drive_c\users\steamuser\...`
+/// spelling of one file). Non-zero means a self-redirect was blocked and the commit took the
+/// sanctioned overwrite-the-loaded-save path instead.
+pub static SAVE_DEST_SELF_REDIRECT_BLOCKED: AtomicUsize = AtomicUsize::new(0);
+/// Destination commits refused because the SL save-job body observer is not installed. Without
+/// it the writer's completion is unobservable, and the redirect window would have to be torn
+/// down on a tick count -- which can close it between two of the in-place writer's per-block
+/// opens and patch the rest into the loaded save.
+pub static SAVE_DEST_NO_WRITER_OBSERVER_ABORT: AtomicUsize = AtomicUsize::new(0);
+/// Write-opens of a save-container leaf that were NOT diverted because their directory is not
+/// the loaded save's. Every one of these would previously have been rewritten into the user's
+/// chosen destination purely because its file name matched.
+pub static SAVE_DEST_FOREIGN_OPEN_PASSED: AtomicUsize = AtomicUsize::new(0);
+/// Teardown attempts deferred because the native writer was still inside a save-job body. The
+/// redirect window must span every one of the in-place writer's per-block opens.
+pub static SAVE_DEST_DISARM_DEFERRED: AtomicUsize = AtomicUsize::new(0);
+/// Redirect windows torn down WITHOUT positive evidence that the writer ever ran (the enqueue
+/// was forwarded, no job body ever started, and the extended teardown bound elapsed). A failure
+/// oracle: the commit is over and nothing can say whether the writer will still appear.
+pub static SAVE_DEST_DISARM_UNPROVEN: AtomicUsize = AtomicUsize::new(0);
+/// 1 if the loaded save's stat could not be READ at verification time. Distinct from
+/// [`SAVE_DEST_LIVE_FILE_MUTATED`]: unreadable is not changed, and treating it as changed is
+/// what triggered a blind whole-container overwrite of the live save on a transient stat error.
+pub static SAVE_DEST_LIVE_STAT_UNREADABLE: AtomicUsize = AtomicUsize::new(0);
+/// Restores of the pre-fire snapshot that were DECLINED: the loaded save's stamp moved but its
+/// bytes are unchanged, its stat is unreadable, or the destination turned out to be the same
+/// file. Writing the snapshot in any of those cases destroys rather than protects.
+pub static SAVE_DEST_RESTORE_SUPPRESSED: AtomicUsize = AtomicUsize::new(0);
+/// Restores that were attempted and FAILED. The restore is temp-file + rename, so a failure
+/// leaves the loaded save byte-for-byte as the writer left it rather than truncated.
+pub static SAVE_DEST_RESTORE_FAILED: AtomicUsize = AtomicUsize::new(0);
+/// 1 when the CURRENT commit was fired on the degraded fail-open path (suppression never armed,
+/// so no bypass token exists). These are real native saves; they are completed on the writer's
+/// own job-completion signal, never on the token-consumption test, which can never move here.
+/// Rewritten at every fire, so it always describes the commit stage 8 is waiting on.
+pub static SAVE_FLOW_DEGRADED_FIRE: AtomicUsize = AtomicUsize::new(0);
+/// Degraded-path commits that reached a verdict on the writer's job-completion signal.
+pub static SAVE_FLOW_DEGRADED_COMPLETE_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Degraded-path commits that ended with the write UNOBSERVED (no job-completion observer, or
+/// none arrived inside the watchdog). Reported as degraded, never as "the save did not happen".
+pub static SAVE_FLOW_DEGRADED_UNOBSERVED_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// [`er_save_suppress::save_job_completions`] sampled immediately before the forced request was
+/// fired. The teardown gate and the degraded completion test are both relative to this.
+pub static SAVE_FLOW_SAVE_JOB_COMPLETIONS_AT_FIRE: AtomicUsize = AtomicUsize::new(0);

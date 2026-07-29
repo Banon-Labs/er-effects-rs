@@ -918,6 +918,35 @@ pub(crate) use er_telemetry::counters::SAVE_PICKER_SYSTEM_DIALOG;
 /// open was staged for the menu pump (~3 s at 60 ticks/s, same budget as a confirm-box build).
 /// Exceeding it aborts back to the world with nothing written.
 pub(crate) const SAVE_DEST_PICKER_OPEN_TIMEOUT_TICKS: usize = 180;
+// ---- DESTINATION-COMMIT SAFETY ORACLES (2026-07-29) ----
+// Each one names a decision the commit refused to guess at, a wait it had to take, or a fact it
+// could not establish. They exist because the previous shape of this flow could destroy the loaded
+// save while its log read "restored pre-fire snapshot ok=true": a decision it got wrong had no
+// name, so no run could report it.
+pub(crate) use er_telemetry::counters::SAVE_DEST_DISARM_DEFERRED;
+pub(crate) use er_telemetry::counters::SAVE_DEST_DISARM_UNPROVEN;
+pub(crate) use er_telemetry::counters::SAVE_DEST_FOREIGN_OPEN_PASSED;
+pub(crate) use er_telemetry::counters::SAVE_DEST_IDENTITY_UNKNOWN_ABORT;
+pub(crate) use er_telemetry::counters::SAVE_DEST_LIVE_STAT_UNREADABLE;
+pub(crate) use er_telemetry::counters::SAVE_DEST_NO_WRITER_OBSERVER_ABORT;
+pub(crate) use er_telemetry::counters::SAVE_DEST_RESTORE_FAILED;
+pub(crate) use er_telemetry::counters::SAVE_DEST_RESTORE_SUPPRESSED;
+pub(crate) use er_telemetry::counters::SAVE_DEST_SELF_REDIRECT_BLOCKED;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_DEGRADED_COMPLETE_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_DEGRADED_FIRE;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_DEGRADED_UNOBSERVED_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_SAVE_JOB_COMPLETIONS_AT_FIRE;
+/// Extra game-task ticks past `SAVE_BYPASS_WATCHDOG_TICKS` that a destination commit will hold its
+/// redirect window open when the bypass token was CONSUMED but no save-job body ever started
+/// (~60 s at 60 ticks/s).
+///
+/// The window cannot be closed on the watchdog alone: an enqueue that the worker has not picked up
+/// yet is a write that has not happened, and disarming in front of it sends the native writer's
+/// per-block opens to the loaded save. Waiting is the safe side, so the extension exists purely so
+/// a permanently stalled SL queue cannot disable the Save Game row for the rest of the session --
+/// and reaching it is a named failure (`oracle_save_dest_disarm_unproven`), never a quiet timeout.
+/// A writer that is genuinely INSIDE a body is never cut off by this; that case waits it out.
+pub(crate) const SAVE_DEST_TEARDOWN_UNPROVEN_EXTRA_TICKS: usize = 3600;
 /// `PropertyEditDialog` pointer stored at `action_object + 0x8` -- how every System>Quit row
 /// action reaches its owning dialog.
 pub(crate) const SYSTEM_QUIT_ACTION_OBJECT_DIALOG_08_OFFSET: usize = 0x8;

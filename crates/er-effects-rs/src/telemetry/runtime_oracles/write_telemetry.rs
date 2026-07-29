@@ -693,6 +693,35 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SAVE_DEST_LIVE_BAK_MUTATED.load(Ordering::SeqCst),
         SAVE_DEST_LIVE_OVERWRITE_COUNT.load(Ordering::SeqCst),
     ));
+    // DESTINATION-COMMIT SAFETY ORACLES (2026-07-29). Every one names a decision the commit
+    // refused to guess at, or a fact it could not establish, so a run can report it instead of
+    // leaving it to be inferred from a file that changed when it should not have:
+    //   * `identity_unknown_abort` / `no_writer_observer_abort` -- commits that did NOT fire;
+    //   * `self_redirect_blocked` -- a destination proven to BE the loaded save under a different
+    //     spelling, which the old string compare would have redirected onto itself;
+    //   * `foreign_open_passed` -- write-opens of a same-named save container elsewhere on the
+    //     machine that were left alone instead of rerouted into the user's destination;
+    //   * `disarm_deferred` / `disarm_unproven` -- the redirect window waiting for the writer, and
+    //     the one case where it had to be dropped without proof the writer ever ran;
+    //   * `live_stat_unreadable` / `restore_suppressed` / `restore_failed` -- the loaded save's
+    //     read-only guarantee, and every time the snapshot restore was declined or failed.
+    // `degraded_*` describe a commit fired with suppression unarmed, whose completion comes from
+    // the SL writer's own job signal because no bypass token exists to watch.
+    body.push_str(&format!(
+        "  \"oracle_save_dest_identity_unknown_abort\": {},\n  \"oracle_save_dest_self_redirect_blocked\": {},\n  \"oracle_save_dest_no_writer_observer_abort\": {},\n  \"oracle_save_dest_foreign_open_passed\": {},\n  \"oracle_save_dest_disarm_deferred\": {},\n  \"oracle_save_dest_disarm_unproven\": {},\n  \"oracle_save_dest_live_stat_unreadable\": {},\n  \"oracle_save_dest_restore_suppressed\": {},\n  \"oracle_save_dest_restore_failed\": {},\n  \"oracle_save_flow_degraded_fire\": {},\n  \"oracle_save_flow_degraded_complete_count\": {},\n  \"oracle_save_flow_degraded_unobserved_count\": {},\n",
+        SAVE_DEST_IDENTITY_UNKNOWN_ABORT.load(Ordering::SeqCst),
+        SAVE_DEST_SELF_REDIRECT_BLOCKED.load(Ordering::SeqCst),
+        SAVE_DEST_NO_WRITER_OBSERVER_ABORT.load(Ordering::SeqCst),
+        SAVE_DEST_FOREIGN_OPEN_PASSED.load(Ordering::SeqCst),
+        SAVE_DEST_DISARM_DEFERRED.load(Ordering::SeqCst),
+        SAVE_DEST_DISARM_UNPROVEN.load(Ordering::SeqCst),
+        SAVE_DEST_LIVE_STAT_UNREADABLE.load(Ordering::SeqCst),
+        SAVE_DEST_RESTORE_SUPPRESSED.load(Ordering::SeqCst),
+        SAVE_DEST_RESTORE_FAILED.load(Ordering::SeqCst),
+        SAVE_FLOW_DEGRADED_FIRE.load(Ordering::SeqCst),
+        SAVE_FLOW_DEGRADED_COMPLETE_COUNT.load(Ordering::SeqCst),
+        SAVE_FLOW_DEGRADED_UNOBSERVED_COUNT.load(Ordering::SeqCst),
+    ));
     body.push_str(&format!(
         "  \"autoload_last_status\": {},\n",
         state.autoload.last_status().map_or_else(
