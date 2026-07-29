@@ -96,6 +96,12 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     install_system_quit_profile_load_activate_hook();
     install_system_quit_profile_load_confirmed_hook();
     install_system_quit_profile_load_job_run_hook();
+    // Save-picker browse-row integrity (er-effects-rs-xlqh): re-stage the picker's browse rows at
+    // the entry of the native ProfileSelect list builder, so an in-world game save that rewrote the
+    // active slot's ProfileSummary record (MarkProfileIndexAsUsed + FUN_140262270 stomping the
+    // LOADED character's name over a staged row) can never leak a stray character-name row into the
+    // browse list.
+    install_save_picker_list_builder_hook();
     if SYSTEM_QUIT_DUPLICATE_INSTALLED.load(Ordering::SeqCst) != SYSTEM_QUIT_DUPLICATE_NOT_INSTALLED
     {
         return;
