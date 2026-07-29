@@ -53,6 +53,40 @@
 // unnamed in telemetry, which is how run 4's 20:43:51 live-file rewrite read as an anonymous
 // mutation. `save_dest_arm_live_overwrite` records that intent BEFORE the fire and verifies it
 // afterwards, so every save this flow performs names the file it is about to rewrite.
+//
+// # The four rules that keep this from eating a save (2026-07-29)
+//
+// Each replaces a decision that used to be made on evidence too weak to carry it.
+//
+// 1. **"Is the destination the loaded save?" is a HANDLE question, never a string question.**
+//    `save_dest_commit_identity` compares `BY_HANDLE_FILE_INFORMATION` (see
+//    `save_dest_identity.rs`), because the same file is reachable as
+//    `C:\users\steamuser\...\ER0000.sl2` and as
+//    `Z:\...\pfx\drive_c\users\steamuser\...\ER0000.sl2`, and the destination browser really does
+//    produce the second spelling. Answering "different" there seeds and redirects the loaded save
+//    onto ITSELF: the write lands, the live stamp moves because it IS the destination, the safety
+//    net calls that a leak, and it restores the pre-fire snapshot over the save that just
+//    succeeded. Identity that cannot be established is `Unknown`, and `Unknown` refuses to fire.
+//
+// 2. **A write-open is matched by its FULL path.** The leaf alone (`er0000.sl2`) belongs to every
+//    Steam account folder, every backup tool, every other mod and our own staged tree, and any of
+//    them opening one during the armed window used to have its bytes rerouted into the user's
+//    chosen destination. The match is now the normalized full path, its `.sl2`/`.co2` twin, or a
+//    directory PROVEN to be the loaded save's by handle identity.
+//
+// 3. **Nothing is written until the commit is committed to firing, and the seed is all-or-
+//    nothing.** The seed is ~29 MB over a file the user may have picked out of their own save
+//    collection; `fs::write` truncates first, so a failure part way through leaves that file
+//    unloadable -- and the old ordering could still abort AFTER seeding, reporting that the save
+//    did not happen having already overwritten the destination. It is now a sibling temp file
+//    plus a rename, run after the last abort gate.
+//
+// 4. **Teardown waits for the writer, and the restore waits for proof.** The in-place writer
+//    opens the container once per dirty block, so a window closed on a tick count can close
+//    between block k and k+1 and patch the remainder into the live save, after the leak check has
+//    already run. Teardown is gated on `er_save_suppress::save_job_writer_idle`. And the restore
+//    -- itself a whole-container write over the user's loaded save -- now requires positive
+//    evidence of a CONTENT change: an unreadable stat is reported as unreadable, not as mutation.
 
 /// 1 while the scoped write-open redirect is armed. Read by the `CreateFileW` detour BEFORE it
 /// touches any lock, so an unarmed process pays one relaxed-ordering atomic load per open.
@@ -76,6 +110,9 @@ pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_EXISTING_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_NEW_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_STRUCTURE_OK;
 pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_WRITTEN_OK;
+// The destination-commit SAFETY oracles this file raises -- every refusal, deferral and
+// undecidable fact -- are re-exported with the rest of the save-flow counters in
+// `constants::autoload_state`, which is in scope here.
 
 /// BND4 container magic: the first four bytes of every ER save the game writes.
 const SAVE_DEST_BND4_MAGIC: [u8; 4] = *b"BND4";
@@ -111,8 +148,15 @@ struct SaveDestRedirect {
     /// explicitly chose NOT to overwrite it.
     live_bytes: Vec<u8>,
     /// Accepted leaf names (ASCII-lowercased UTF-16): the live save's own leaf plus its
-    /// `.sl2`/`.co2` counterpart twin.
+    /// `.sl2`/`.co2` counterpart twin. A cheap PREFILTER only -- matching on it alone is what
+    /// let any process's `ER0000.sl2` write-open be rerouted into the user's destination.
     accepted_leaves: Vec<Vec<u16>>,
+    /// Normalized full paths a write-open must equal to be the loaded save's container: the live
+    /// path and its `.sl2`/`.co2` twin, in every accepted directory.
+    accepted_paths: Vec<String>,
+    /// Directories that resolve to the loaded save's folder, for the handle-identity fallback
+    /// when an incoming path is spelled differently than any accepted path.
+    accepted_dirs: Vec<PathBuf>,
 }
 
 static SAVE_DEST_REDIRECT: Mutex<Option<SaveDestRedirect>> = Mutex::new(None);
@@ -245,6 +289,68 @@ fn save_dest_accepted_leaves(live_path: &Path) -> Vec<Vec<u16>> {
         .collect()
 }
 
+/// Leaf names of the live save and its counterpart twin, ASCII-lowercased UTF-8.
+fn save_dest_accepted_leaf_names(live_path: &Path) -> Vec<String> {
+    let Some(leaf) = live_path.file_name().and_then(|name| name.to_str()) else {
+        return Vec::new();
+    };
+    let mut names = vec![leaf.to_ascii_lowercase()];
+    if let Some((stem, extension)) = leaf.rsplit_once('.') {
+        let twin = if extension.eq_ignore_ascii_case(SAVE_DEST_SEAMLESS_EXTENSION) {
+            Some(SAVE_DEST_VANILLA_EXTENSION)
+        } else if extension.eq_ignore_ascii_case(SAVE_DEST_VANILLA_EXTENSION) {
+            Some(SAVE_DEST_SEAMLESS_EXTENSION)
+        } else {
+            None
+        };
+        if let Some(twin) = twin {
+            names.push(format!("{}.{twin}", stem.to_ascii_lowercase()));
+        }
+    }
+    names
+}
+
+/// Every directory whose `ER0000.{sl2,co2}` write-open IS the loaded save's.
+///
+/// Normally exactly one: the live save's own folder. In staged / direct-file mode the loaded save
+/// lives under the private staged root while the native writer still opens
+/// `...\Roaming\EldenRing\<steamid>\ER0000.sl2` -- the general save redirect rewrites that open a
+/// moment after this one declines it -- so that game-side folder counts too. Leaf-only matching
+/// used to cover this case by accident; a full-path match has to name it.
+fn save_dest_accepted_dirs(live_path: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(parent) = live_path.parent() {
+        dirs.push(parent.to_path_buf());
+    }
+    if let Some(native) = save_redirect_native_source_dir()
+        && !dirs.contains(&native)
+    {
+        dirs.push(native);
+    }
+    dirs
+}
+
+/// Normalized full paths that ARE the loaded save's container: every accepted leaf in every
+/// accepted directory.
+fn save_dest_accepted_paths(live_path: &Path) -> Vec<String> {
+    let leaves = save_dest_accepted_leaf_names(live_path);
+    let mut paths = Vec::new();
+    for dir in save_dest_accepted_dirs(live_path) {
+        let Some(dir_text) = dir.to_str() else {
+            continue;
+        };
+        for leaf in &leaves {
+            let joined = format!("{dir_text}/{leaf}");
+            if let Some(normalized) = save_dest_normalize_path(&joined)
+                && !paths.contains(&normalized)
+            {
+                paths.push(normalized);
+            }
+        }
+    }
+    paths
+}
+
 fn save_dest_file_stamp(path: &Path) -> Option<(u64, u128)> {
     let meta = fs::metadata(path).ok()?;
     let modified_ns = meta
@@ -290,6 +396,7 @@ pub(crate) fn save_dest_arm_live_overwrite(live_path: &Path, reason: &'static st
     let before = save_dest_file_stamp(live_path);
     let bak_before = save_dest_file_stamp(&save_dest_bak_path(live_path));
     SAVE_DEST_LIVE_OVERWRITE_COUNT.fetch_add(1, Ordering::SeqCst);
+    save_dest_reset_defer_report();
     append_autoload_debug(format_args!(
         "save-dest: this commit's destination IS THE LOADED SAVE '{}' (reason={reason} len={}) -- the native writer will REWRITE it and copy it over its .bak; this is the sanctioned overwrite the user confirmed, and it is the ONLY way this flow writes the loaded save",
         live_path.display(),
@@ -323,6 +430,18 @@ pub(crate) fn save_dest_arm_redirect(live_path: &Path, target_path: &Path) -> bo
         ));
         return false;
     }
+    // FULL-PATH match set. Without it the window diverts ANY process's write-open of a file
+    // merely NAMED `ER0000.sl2` -- another Steam account's folder, a backup tool, another mod --
+    // into the destination the user picked for their own character.
+    let accepted_paths = save_dest_accepted_paths(live_path);
+    if accepted_paths.is_empty() {
+        append_autoload_debug(format_args!(
+            "save-dest: ARM FAILED -- live save '{}' produced no matchable full path, so a write-open could only be recognized by its file name",
+            live_path.display()
+        ));
+        return false;
+    }
+    let accepted_dirs = save_dest_accepted_dirs(live_path);
     let Some(target_text) = target_path.to_str() else {
         append_autoload_debug(format_args!(
             "save-dest: ARM FAILED -- destination '{}' is not representable as UTF-8",
@@ -350,10 +469,16 @@ pub(crate) fn save_dest_arm_redirect(live_path: &Path, target_path: &Path) -> bo
     // container's index and opens with OPEN_ALWAYS (no truncate), so the destination must be that
     // container before the first write-open. Written from the same buffer that is the live-file
     // safety snapshot, so the seed and the "did it change" baseline can never disagree.
-    if let Err(err) = fs::write(target_path, &live_bytes) {
+    //
+    // ALL-OR-NOTHING. A destination the user picked is very often one of their OWN saves, and a
+    // truncate-then-write of ~29 MB that fails half way through leaves it unloadable -- while the
+    // very next line of this function reports that the save must not be treated as landed. The
+    // sibling-temp-plus-rename in `save_dest_write_atomic` makes every failure here leave the
+    // destination byte-for-byte as the user left it.
+    if let Err(err) = save_dest_write_atomic(target_path, &live_bytes, "seed") {
         SAVE_DEST_SEED_FAIL_COUNT.fetch_add(1, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "save-dest: ARM FAILED -- could not seed destination '{}' with the live container ({} bytes): {err}; NOT firing, because a save that cannot land must not be reported as one",
+            "save-dest: ARM FAILED -- could not seed destination '{}' with the live container ({} bytes): {err}; the destination is UNCHANGED and nothing is fired, because a save that cannot land must not be reported as one",
             target_path.display(),
             live_bytes.len()
         ));
@@ -361,7 +486,9 @@ pub(crate) fn save_dest_arm_redirect(live_path: &Path, target_path: &Path) -> bo
     }
     SAVE_DEST_SEEDED_COUNT.fetch_add(1, Ordering::SeqCst);
     SAVE_DEST_REDIRECT_HITS.store(0, Ordering::SeqCst);
+    save_dest_reset_defer_report();
     let live_bak_before = save_dest_file_stamp(&save_dest_bak_path(live_path));
+    let matched = accepted_paths.join(", ");
     *save_dest_redirect_lock() = Some(SaveDestRedirect {
         target_path: target_path.to_path_buf(),
         target_w,
@@ -372,10 +499,12 @@ pub(crate) fn save_dest_arm_redirect(live_path: &Path, target_path: &Path) -> bo
         live_bak_before,
         live_bytes,
         accepted_leaves,
+        accepted_paths,
+        accepted_dirs,
     });
     SAVE_DEST_REDIRECT_ARMED.store(1, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "save-dest: redirect ARMED live='{}' (len={live_len}) -> target='{}' (existing={target_existed}); destination SEEDED with a byte copy of the live container, save-container write-opens now land on it, reads pass through",
+        "save-dest: redirect ARMED live='{}' (len={live_len}) -> target='{}' (existing={target_existed}); destination SEEDED with a byte copy of the live container; write-opens of [{matched}] land on it, every other path -- including another folder's save of the same name -- passes through, and reads pass through",
         live_path.display(),
         target_path.display()
     ));
@@ -398,25 +527,130 @@ pub(crate) fn save_dest_is_write_access(access: u32) -> bool {
     access & SAVE_DEST_WRITE_ACCESS_MASK != 0
 }
 
+/// One "the teardown is waiting for the writer" line per commit, not one per tick.
+static SAVE_DEST_DEFER_REPORTED: AtomicUsize = AtomicUsize::new(0);
+
+/// Where the native SL writer is, relative to the commit that armed this window.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SaveDestWriterState {
+    /// A save-job body ran and RETURNED after the fire, and none is executing now. The container
+    /// will not be opened again for this commit.
+    Settled,
+    /// A save-job body is executing right now. The in-place writer (`FUN_1424142e0`) opens the
+    /// container ONCE PER DIRTY BLOCK, so the window must stay armed across all of them: closing
+    /// it between block k and k+1 sends blocks k+1..N to whatever the unredirected path resolves
+    /// to, which is the loaded save the user chose NOT to overwrite -- and it happens after the
+    /// leak check has already run, so nothing detects or undoes it.
+    InBody,
+    /// Nothing has started since the fire. Safe to tear down only when it is also known that
+    /// nothing CAN start (the bypass token was revoked, or the submit itself failed).
+    NotStarted,
+}
+
+/// Read the writer's position from the SL job-body observer's own counters.
+pub(crate) fn save_dest_writer_state(completions_at_fire: u64) -> SaveDestWriterState {
+    if !er_save_suppress::save_job_writer_idle() {
+        return SaveDestWriterState::InBody;
+    }
+    if er_save_suppress::save_job_completions() > completions_at_fire {
+        SaveDestWriterState::Settled
+    } else {
+        SaveDestWriterState::NotStarted
+    }
+}
+
+/// Clear the per-commit "waiting for the writer" report latch. Called at every arm.
+pub(crate) fn save_dest_reset_defer_report() {
+    SAVE_DEST_DEFER_REPORTED.store(0, Ordering::SeqCst);
+}
+
+/// May the commit window be torn down right now?
+///
+/// `false` means a save-job body is executing and the redirect must stay armed until it returns.
+/// Counted every time and logged once per commit, so a commit that took an unusually long time to
+/// tear down says why rather than looking like a hang.
+pub(crate) fn save_dest_teardown_allowed(completions_at_fire: u64, context: &str) -> bool {
+    if !save_dest_commit_window_armed() {
+        return true;
+    }
+    if save_dest_writer_state(completions_at_fire) != SaveDestWriterState::InBody {
+        return true;
+    }
+    SAVE_DEST_DISARM_DEFERRED.fetch_add(1, Ordering::SeqCst);
+    if SAVE_DEST_DEFER_REPORTED.swap(1, Ordering::SeqCst) == 0 {
+        append_autoload_debug(format_args!(
+            "save-dest: teardown ({context}) is WAITING -- the SL writer is inside a save-job body (starts={} completions={}). The in-place writer opens the container once per dirty block, so disarming now would send the remaining blocks to the loaded save",
+            er_save_suppress::save_job_starts(),
+            er_save_suppress::save_job_completions()
+        ));
+    }
+    false
+}
+
 /// Destination path for a `CreateFileW` write-open of `path`, or `None` to pass it through.
 ///
-/// NEVER logs while holding the redirect lock: the debug log itself opens a file, which re-enters
-/// this detour on the same thread, and a second lock acquisition would deadlock the save worker.
+/// # What may be diverted
+///
+/// Exactly the loaded save's own container, by FULL path. The leaf test is only a prefilter:
+/// `ER0000.sl2` is the name of every Elden Ring save on the machine, and matching on it alone
+/// meant that during the armed window ANY process's write-open of any file with that name --
+/// another Steam account's folder, a backup tool, Seamless, another mod, our own staged tree --
+/// had its bytes rerouted into the destination the user chose for this character.
+///
+/// A path that clears the leaf prefilter but is not an accepted full path gets one more chance:
+/// its parent directory is compared to the loaded save's by HANDLE IDENTITY, which is what
+/// recognizes the same folder reached through the other Wine drive spelling. Anything else passes
+/// through and is counted.
+///
+/// NEVER logs while holding the redirect lock, and never performs I/O while holding it either:
+/// the debug log and the directory probe both open files, which re-enters this detour on the same
+/// thread, and a second lock acquisition would deadlock the save worker. Everything the decision
+/// needs is cloned out and the guard dropped first.
 pub(crate) fn save_dest_redirect_for_open(path: &[u16], access: u32) -> Option<Vec<u16>> {
     if !save_dest_redirect_armed() || !save_dest_is_write_access(access) {
         return None;
     }
     let leaf = save_dest_wide_leaf_lower(path)?;
-    let guard = save_dest_redirect_lock();
-    let state = guard.as_ref()?;
-    if !state
-        .accepted_leaves
-        .iter()
-        .any(|accepted| accepted.as_slice() == leaf.as_slice())
-    {
+    let (target_w, accepted_paths, accepted_dirs) = {
+        let guard = save_dest_redirect_lock();
+        let state = guard.as_ref()?;
+        if !state
+            .accepted_leaves
+            .iter()
+            .any(|accepted| accepted.as_slice() == leaf.as_slice())
+        {
+            return None;
+        }
+        (
+            state.target_w.clone(),
+            state.accepted_paths.clone(),
+            state.accepted_dirs.clone(),
+        )
+    };
+    // An undecodable path cannot be shown to be the loaded save, and the rule for "cannot be
+    // shown" is to leave it alone.
+    let Some(normalized) = save_dest_normalize_wide(path) else {
+        SAVE_DEST_FOREIGN_OPEN_PASSED.fetch_add(1, Ordering::SeqCst);
         return None;
+    };
+    if accepted_paths.iter().any(|accepted| *accepted == normalized) {
+        return Some(target_w);
     }
-    Some(state.target_w.clone())
+    // Different spelling, possibly the same folder. This costs one directory open, and only for
+    // opens that already carry a save container's name during an armed commit.
+    if let Some(parent) = save_dest_normalized_parent(&normalized) {
+        let parent_path = Path::new(parent);
+        for dir in &accepted_dirs {
+            if matches!(
+                save_dest_dir_identity(parent_path, dir),
+                SaveDestIdentity::SameFile
+            ) {
+                return Some(target_w);
+            }
+        }
+    }
+    SAVE_DEST_FOREIGN_OPEN_PASSED.fetch_add(1, Ordering::SeqCst);
+    None
 }
 
 /// Record a diverted write-open. First occurrence plus power-of-two milestones. A commit produces
@@ -447,7 +681,24 @@ pub(crate) fn save_dest_note_redirect_hit(handle_ok: bool) {
 ///
 /// Loaded-save overwrites: the live container must still be a complete `BND4` and its stamp must
 /// have moved, which is what proves the rewrite the flow announced actually happened.
+///
+/// HARD INTERLOCK, applied to EVERY caller: while the SL worker is inside a save-job body the
+/// window is not taken away from it, and this returns `None` having disarmed nothing. The flow's
+/// own stage 8 never reaches that state (it gates on the same signal a step earlier), so this
+/// covers the opportunistic resets -- a corrupted stage, a fresh row press -- that would otherwise
+/// close the redirect between two of the in-place writer's per-block opens and send the remainder
+/// to the loaded save. The IDLE-tick sweep in `save_flow_tick` closes a window left behind here as
+/// soon as the writer returns.
 pub(crate) fn save_dest_verify_and_disarm(reason: &str) -> Option<SaveDestVerdict> {
+    if save_dest_commit_window_armed() && !er_save_suppress::save_job_writer_idle() {
+        SAVE_DEST_DISARM_DEFERRED.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "save-dest: REFUSING to disarm the commit window (reason={reason}) -- the SL writer is inside a save-job body (starts={} completions={}); it will be closed and scored once the writer returns",
+            er_save_suppress::save_job_starts(),
+            er_save_suppress::save_job_completions()
+        ));
+        return None;
+    }
     if let Some(state) = save_dest_redirect_lock().take() {
         SAVE_DEST_REDIRECT_ARMED.store(0, Ordering::SeqCst);
         return Some(save_dest_verify_destination(&state, reason));
@@ -487,18 +738,8 @@ fn save_dest_verify_destination(state: &SaveDestRedirect, reason: &str) -> SaveD
             "save-dest: destination NOT VERIFIED reason={reason} {summary}; the user's save did NOT land where they asked"
         ));
     }
-    let live_after = save_dest_file_stamp(&state.live_path);
-    let live_mutated =
-        live_after.is_none_or(|(len, ns)| len != state.live_len || ns != state.live_modified_ns);
-    if live_mutated {
-        SAVE_DEST_LIVE_FILE_MUTATED.store(1, Ordering::SeqCst);
-        let restored = fs::write(&state.live_path, &state.live_bytes).is_ok();
-        append_autoload_debug(format_args!(
-            "save-dest: LIVE SAVE MUTATED during a destination commit reason={reason} live='{}' -- the redirect leaked; restored pre-fire snapshot ok={restored} ({} bytes)",
-            state.live_path.display(),
-            state.live_bytes.len()
-        ));
-    }
+    let live_state = save_dest_score_live_file(state, reason);
+    let live_mutated = matches!(live_state, SaveDestLiveState::Changed);
     // The native `.bak` copy (`FUN_142410830`) is not redirected, so it is the one remaining way a
     // "save somewhere else" commit can still touch the loaded save's folder. Named rather than
     // scored: it can only ever copy the untouched live container over its own backup.
@@ -514,8 +755,116 @@ fn save_dest_verify_destination(state: &SaveDestRedirect, reason: &str) -> SaveD
     }
     SaveDestVerdict {
         ok: written_ok && !live_mutated,
-        summary,
+        summary: format!("{summary} loaded_save={}", live_state.label()),
     }
+}
+
+/// What became of the LOADED save across a destination commit. Three states, not two: the old
+/// code folded "cannot read it" into "it changed" with `is_none_or`, and a transient stat failure
+/// -- a restrictive share mode while the game or the native `.bak` `CopyFileW` holds the file is
+/// enough -- then triggered a whole-container overwrite of the user's live save with a snapshot,
+/// on no evidence at all that anything had happened to it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SaveDestLiveState {
+    /// Stamp and content match the pre-fire snapshot. The commit kept its promise.
+    Untouched,
+    /// The stamp moved but the bytes are identical to the snapshot. Nothing was lost, so nothing
+    /// needs restoring; a rewrite here would be pure risk.
+    StampOnly,
+    /// The CONTENT differs from the pre-fire snapshot: the redirect leaked and the loaded save
+    /// the user chose not to overwrite was written anyway.
+    Changed,
+    /// The loaded save could not be read. Not evidence of change, and not evidence of safety.
+    Unreadable,
+}
+
+impl SaveDestLiveState {
+    fn label(self) -> &'static str {
+        match self {
+            SaveDestLiveState::Untouched => "untouched",
+            SaveDestLiveState::StampOnly => "stamp-moved-bytes-identical",
+            SaveDestLiveState::Changed => "MUTATED",
+            SaveDestLiveState::Unreadable => "UNREADABLE",
+        }
+    }
+}
+
+/// Score the loaded save after a destination commit, and restore it only on proof that it needs
+/// restoring.
+///
+/// The restore is itself a whole-container write over the user's save file, so it is held to the
+/// same standard as any other write in this flow:
+///
+///   * the stamp must have moved AND the bytes must actually differ from the snapshot -- a stamp
+///     that moved with identical content is not a lost save;
+///   * the destination must not turn out to BE this file (the case that made a successful save
+///     get overwritten by its own pre-save snapshot), re-checked here by handle identity rather
+///     than trusted from the arm;
+///   * and the write goes through the same temp-plus-rename as the seed, so a restore that fails
+///     leaves the container the writer produced instead of a truncated one. There is deliberately
+///     no in-place fallback: a valid save of the wrong vintage beats an unloadable file.
+fn save_dest_score_live_file(state: &SaveDestRedirect, reason: &str) -> SaveDestLiveState {
+    let Some((len, modified_ns)) = save_dest_file_stamp(&state.live_path) else {
+        SAVE_DEST_LIVE_STAT_UNREADABLE.store(1, Ordering::SeqCst);
+        SAVE_DEST_RESTORE_SUPPRESSED.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "save-dest: the loaded save '{}' could NOT BE READ at verification reason={reason} -- that is not evidence it changed, so nothing is written over it; treat the read-only guarantee for this commit as UNVERIFIED",
+            state.live_path.display()
+        ));
+        return SaveDestLiveState::Unreadable;
+    };
+    if len == state.live_len && modified_ns == state.live_modified_ns {
+        return SaveDestLiveState::Untouched;
+    }
+    let Ok(live_now) = fs::read(&state.live_path) else {
+        SAVE_DEST_LIVE_STAT_UNREADABLE.store(1, Ordering::SeqCst);
+        SAVE_DEST_RESTORE_SUPPRESSED.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "save-dest: the loaded save '{}' stamp moved (len {}->{len}) but its bytes could not be read back reason={reason}; nothing is written over it on an unread comparison",
+            state.live_path.display(),
+            state.live_len
+        ));
+        return SaveDestLiveState::Unreadable;
+    };
+    if live_now == state.live_bytes {
+        append_autoload_debug(format_args!(
+            "save-dest: the loaded save '{}' has a NEW STAMP but IDENTICAL BYTES reason={reason} -- nothing was lost, so the pre-fire snapshot is NOT written back",
+            state.live_path.display()
+        ));
+        SAVE_DEST_RESTORE_SUPPRESSED.fetch_add(1, Ordering::SeqCst);
+        return SaveDestLiveState::StampOnly;
+    }
+    SAVE_DEST_LIVE_FILE_MUTATED.store(1, Ordering::SeqCst);
+    // Defence in depth for the self-redirect: if the destination IS this file, its new content is
+    // the user's save, and the "leaked write" is the save itself. Writing the snapshot back would
+    // destroy exactly what the commit just achieved.
+    if matches!(
+        save_dest_file_identity(&state.target_path, &state.live_path),
+        SaveDestIdentity::SameFile | SaveDestIdentity::Unknown
+    ) {
+        SAVE_DEST_RESTORE_SUPPRESSED.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "save-dest: the loaded save '{}' changed, but it cannot be shown to be a DIFFERENT file from the destination '{}' reason={reason} -- the change may be the user's own save landing, so the pre-fire snapshot is NOT written back",
+            state.live_path.display(),
+            state.target_path.display()
+        ));
+        return SaveDestLiveState::Changed;
+    }
+    match save_dest_write_atomic(&state.live_path, &state.live_bytes, "restore") {
+        Ok(()) => append_autoload_debug(format_args!(
+            "save-dest: LIVE SAVE MUTATED during a destination commit reason={reason} live='{}' -- the redirect leaked; the pre-fire snapshot ({} bytes) has been restored over it",
+            state.live_path.display(),
+            state.live_bytes.len()
+        )),
+        Err(err) => {
+            SAVE_DEST_RESTORE_FAILED.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "save-dest: LIVE SAVE MUTATED during a destination commit reason={reason} live='{}' -- the redirect leaked AND the restore FAILED: {err}. The file is left exactly as the native writer produced it (a complete container of a newer state), NOT half-written",
+                state.live_path.display()
+            ));
+        }
+    }
+    SaveDestLiveState::Changed
 }
 
 fn save_dest_verify_live_overwrite(state: &SaveDestLiveOverwrite, reason: &str) -> SaveDestVerdict {
@@ -562,26 +911,25 @@ pub(crate) fn save_dest_live_save_path() -> Option<PathBuf> {
     }
 }
 
-/// True when `target` IS the loaded save: the commit is then the plain overwrite path and no
-/// redirect is armed.
+/// Is the browsed `target` the loaded save, a different file, or unprovable?
 ///
-/// Both sides go through the SAME Windows-form transform the redirect hands to `CreateFileW`
-/// (`Z:`-prefixing a Linux-form path, separator normalization), so a live path in one form and a
-/// browsed target in the other still compare equal. Getting this wrong would arm a redirect from
-/// the live save onto itself and then score the resulting write as a "live file mutated" failure,
-/// restoring the pre-save snapshot over the save the user just made.
-pub(crate) fn save_dest_target_is_live(target: &Path, live: &Path) -> bool {
-    let normalize = |path: &Path| -> Option<String> {
-        let wide = system_quit_path_for_windows(path.to_str()?);
-        let end = wide.iter().position(|unit| *unit == 0).unwrap_or(wide.len());
-        String::from_utf16(&wide[..end])
-            .ok()
-            .map(|text| text.to_ascii_lowercase())
-    };
-    match (normalize(target), normalize(live)) {
-        (Some(target), Some(live)) => target == live,
-        _ => false,
-    }
+/// The whole destructive failure mode of this flow hangs off this answer. A `target` that IS the
+/// loaded save must take the plain overwrite path; arming a redirect from the live save onto
+/// ITSELF makes the write land correctly, moves the live file's stamp because it IS the
+/// destination, and then trips the leak check into writing the pre-fire snapshot back over the
+/// save the user just made.
+///
+/// A string compare cannot answer it. Under Wine one save file is reachable as
+/// `C:\users\steamuser\AppData\Roaming\EldenRing\<id>\ER0000.sl2` AND as
+/// `Z:\home\<user>\...\pfx\drive_c\users\steamuser\AppData\Roaming\EldenRing\<id>\ER0000.sl2`,
+/// and the destination browser produces the second form whenever its start directory came from a
+/// remembered Linux-form path -- so the two spellings meet in exactly the flow that matters. On
+/// top of that, no amount of text handling resolves a symlinked folder or a junction.
+///
+/// So this is a handle-identity question ([`save_dest_file_identity`]), with a third answer.
+/// `Unknown` is not "probably different": the caller refuses to fire on it.
+pub(crate) fn save_dest_commit_identity(target: &Path, live: &Path) -> SaveDestIdentity {
+    save_dest_file_identity(target, live)
 }
 
 #[cfg(test)]
@@ -661,5 +1009,163 @@ mod save_dest_commit_tests {
             save_dest_bak_path(live),
             Path::new(r"C:\users\steamuser\AppData\Roaming\EldenRing\1234\ER0000.sl2.bak")
         );
+    }
+
+    /// The redirect must recognize the loaded save's container by its FULL path. `ER0000.sl2` is
+    /// the name of every Elden Ring save on the machine; matching the leaf alone diverted any
+    /// process's write-open of that name -- another Steam account's folder included -- into the
+    /// destination the user picked for this character.
+    #[test]
+    fn another_accounts_save_of_the_same_name_is_not_an_accepted_path() {
+        let live = Path::new(r"C:\users\steamuser\AppData\Roaming\EldenRing\7656\ER0000.sl2");
+        let accepted = save_dest_accepted_paths(live);
+        let own = r"c:\users\steamuser\appdata\roaming\eldenring\7656\er0000.sl2".to_owned();
+        let twin = r"c:\users\steamuser\appdata\roaming\eldenring\7656\er0000.co2".to_owned();
+        let other_account =
+            r"c:\users\steamuser\appdata\roaming\eldenring\9999\er0000.sl2".to_owned();
+        let backup_folder = r"c:\backups\er0000.sl2".to_owned();
+        assert!(accepted.contains(&own));
+        assert!(accepted.contains(&twin));
+        assert!(!accepted.contains(&other_account));
+        assert!(!accepted.contains(&backup_folder));
+    }
+
+    /// The incoming `CreateFileW` path is matched after the same normalization, so case and
+    /// separator differences still hit while a different folder still misses.
+    #[test]
+    fn an_incoming_write_open_matches_only_through_normalization() {
+        let live = Path::new(r"C:\users\steamuser\AppData\Roaming\EldenRing\7656\ER0000.sl2");
+        let accepted = save_dest_accepted_paths(live);
+        let wide = |text: &str| -> Vec<u16> {
+            let mut out: Vec<u16> = text.encode_utf16().collect();
+            out.push(0);
+            out
+        };
+        let same_file_other_case =
+            save_dest_normalize_wide(&wide(r"C:\Users\SteamUser\AppData\Roaming\EldenRing\7656\ER0000.SL2"))
+                .expect("normalizes");
+        let different_folder = save_dest_normalize_wide(&wide(
+            r"C:\SteamLibrary\ELDEN RING\Game\SeamlessCoop\ER0000.sl2",
+        ))
+        .expect("normalizes");
+        assert!(accepted.contains(&same_file_other_case));
+        assert!(!accepted.contains(&different_folder));
+    }
+
+    fn save_dest_test_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("er-save-dest-{name}"));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("test dir");
+        dir
+    }
+
+    /// The seed and the restore both replace a whole ~29 MB save container. A truncate-then-write
+    /// that fails part way through leaves the user's file neither old nor new; this one either
+    /// lands completely or leaves the previous bytes untouched, and never leaves its staging file
+    /// behind for the destination browser to list.
+    #[test]
+    fn an_atomic_write_replaces_the_file_and_leaves_no_staging_copy() {
+        let dir = save_dest_test_dir("atomic-write");
+        let target = dir.join("ER0000.sl2");
+        fs::write(&target, b"old contents").expect("seed the target");
+        save_dest_write_atomic(&target, b"new contents", "seed").expect("atomic write");
+        assert_eq!(fs::read(&target).expect("read back"), b"new contents");
+        let leftovers: Vec<_> = fs::read_dir(&dir)
+            .expect("list")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .filter(|name| name.to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "staging file left behind: {leftovers:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A destination whose folder has gone away must fail with the destination untouched rather
+    /// than after emptying it.
+    #[test]
+    fn an_atomic_write_that_cannot_stage_leaves_the_destination_alone() {
+        let dir = save_dest_test_dir("atomic-write-fail");
+        let target = dir.join("missing").join("ER0000.sl2");
+        assert!(save_dest_write_atomic(&target, b"payload", "seed").is_err());
+        assert!(!target.exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn save_dest_test_redirect(live: &Path, target: &Path, bytes: Vec<u8>) -> SaveDestRedirect {
+        let (live_len, live_modified_ns) = save_dest_file_stamp(live).unwrap_or((0, 0));
+        SaveDestRedirect {
+            target_path: target.to_path_buf(),
+            target_w: Vec::new(),
+            target_existed: false,
+            live_path: live.to_path_buf(),
+            live_len,
+            live_modified_ns,
+            live_bak_before: None,
+            live_bytes: bytes,
+            accepted_leaves: Vec::new(),
+            accepted_paths: Vec::new(),
+            accepted_dirs: Vec::new(),
+        }
+    }
+
+    /// A loaded save whose stat cannot be read is UNREADABLE, not MUTATED. The old `is_none_or`
+    /// folded the two together, so one transient stat failure -- a restrictive share mode while
+    /// the game or the native `.bak` copy holds the file is enough -- triggered a blind whole-
+    /// container overwrite of the user's live save.
+    #[test]
+    fn an_unreadable_loaded_save_is_not_restored_over() {
+        let dir = save_dest_test_dir("live-unreadable");
+        let live = dir.join("ER0000.sl2");
+        let target = dir.join("elsewhere.sl2");
+        let state = save_dest_test_redirect(&live, &target, b"pre-fire snapshot".to_vec());
+        assert!(!live.exists());
+        assert!(matches!(
+            save_dest_score_live_file(&state, "test"),
+            SaveDestLiveState::Unreadable
+        ));
+        assert!(
+            !live.exists(),
+            "an unreadable loaded save must not be written to"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A stamp that moved while the bytes stayed identical is not a lost save, so the pre-fire
+    /// snapshot must not be written back over it.
+    #[test]
+    fn a_stamp_that_moved_with_identical_bytes_is_not_a_mutation() {
+        let dir = save_dest_test_dir("live-stamp-only");
+        let live = dir.join("ER0000.sl2");
+        let target = dir.join("elsewhere.sl2");
+        fs::write(&live, b"identical").expect("write live");
+        let mut state = save_dest_test_redirect(&live, &target, b"identical".to_vec());
+        // Force the "stamp moved" branch without changing a byte.
+        state.live_modified_ns = state.live_modified_ns.wrapping_add(1);
+        assert!(matches!(
+            save_dest_score_live_file(&state, "test"),
+            SaveDestLiveState::StampOnly
+        ));
+        assert_eq!(fs::read(&live).expect("read live"), b"identical");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A loaded save whose CONTENT differs from the pre-fire snapshot is the leak this mechanism
+    /// exists to catch, and the snapshot goes back over it.
+    #[test]
+    fn a_genuinely_mutated_loaded_save_is_restored_from_the_snapshot() {
+        let dir = save_dest_test_dir("live-mutated");
+        let live = dir.join("ER0000.sl2");
+        let target = dir.join("elsewhere.sl2");
+        fs::write(&live, b"snapshot").expect("write live");
+        let mut state = save_dest_test_redirect(&live, &target, b"snapshot".to_vec());
+        fs::write(&target, b"destination").expect("write target");
+        fs::write(&live, b"leaked write").expect("leak onto live");
+        state.live_len = b"snapshot".len() as u64;
+        assert!(matches!(
+            save_dest_score_live_file(&state, "test"),
+            SaveDestLiveState::Changed
+        ));
+        assert_eq!(fs::read(&live).expect("read live"), b"snapshot");
+        let _ = fs::remove_dir_all(&dir);
     }
 }

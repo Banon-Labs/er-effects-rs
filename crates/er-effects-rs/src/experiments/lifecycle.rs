@@ -135,6 +135,15 @@ fn save_flow_enter_stage(stage: usize, reason: &str) {
 pub(crate) unsafe fn save_flow_tick() {
     let stage = SAVE_FLOW_STAGE.load(Ordering::SeqCst);
     if stage == SAVE_FLOW_STAGE_IDLE {
+        // DEFERRED TEARDOWN SWEEP. A commit window is never taken out from under an executing
+        // writer -- `save_dest_verify_and_disarm` refuses -- so a flow that returned to IDLE while
+        // the SL worker was still inside a save-job body leaves the window behind on purpose. It
+        // has to be closed the moment the writer finishes: an armed redirect that outlives its
+        // commit would divert a LATER save of the loaded container to a destination nobody chose.
+        if save_dest_commit_window_armed() && er_save_suppress::save_job_writer_idle() {
+            let _ = save_dest_verify_and_disarm("deferred teardown after the writer finished");
+            save_dest_reset("deferred teardown after the writer finished");
+        }
         return;
     }
     let ticks = SAVE_FLOW_STAGE_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
@@ -394,6 +403,104 @@ unsafe fn save_flow_close_menus_from_tick(source: &str, commit: bool) {
     save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "close-all could not stage");
 }
 
+/// What a Save Game commit is about to write, decided before anything is written.
+enum SaveFlowCommitPlan {
+    /// The loaded save is the target: Box2 answered "Yes", or a browsed pick that the filesystem
+    /// says IS the loaded save. The native writer rewrites it in place and nothing is redirected.
+    LiveOverwrite { live: PathBuf, reason: &'static str },
+    /// A browsed destination PROVEN to be a different file from the loaded save.
+    Redirect { live: PathBuf, target: PathBuf },
+    /// No destination was chosen and no loaded-save path could be resolved, so there is no file
+    /// to name or protect. The request still fires; nothing is armed.
+    Unnamed,
+}
+
+/// Decide what this commit will write, and refuse rather than guess.
+///
+/// PERFORMS NO WRITES. Everything that can turn this commit down happens here, while the
+/// destination is still exactly as the user left it. Two refusals are new, and both exist because
+/// the alternative was a save written over the wrong file:
+///
+/// * **Identity that cannot be established.** `Unknown` from the handle probe means the commit
+///   cannot tell whether the destination is the loaded save. Guessing "different" seeds and
+///   redirects the loaded save onto itself, and the leak check then restores the pre-fire
+///   snapshot over the save that just succeeded. A refused save is recoverable; that is not.
+/// * **No writer-completion observer.** Without the SL save-job-body observer, nothing can say
+///   when the native writer has finished, so the redirect window would have to close on a tick
+///   count -- and the in-place writer opens the container once per dirty block, so a window that
+///   closes early patches the remaining blocks into the loaded save. A redirected commit is not
+///   safe to fire without that signal. (The loaded-save overwrite has no window to leak and is
+///   unaffected.)
+fn save_flow_resolve_commit_plan() -> Result<SaveFlowCommitPlan, String> {
+    let Some(target) = save_dest_target() else {
+        // Box2 answered "Yes": no destination was ever chosen because the destination IS the
+        // loaded save.
+        return Ok(match save_dest_live_save_path() {
+            Some(live) => SaveFlowCommitPlan::LiveOverwrite {
+                live,
+                reason: "box2 overwrite-the-loaded-save",
+            },
+            None => SaveFlowCommitPlan::Unnamed,
+        });
+    };
+    let Some(live) = save_dest_live_save_path() else {
+        SAVE_DEST_COMMIT_FAIL.fetch_add(1, Ordering::SeqCst);
+        return Err(format!(
+            "destination '{}' was chosen but the loaded save path is unavailable, so the commit cannot tell whether they are the same file",
+            target.display()
+        ));
+    };
+    match save_dest_commit_identity(&target, &live) {
+        SaveDestIdentity::SameFile => {
+            let spelled_differently = save_dest_normalize_path_of(&target)
+                != save_dest_normalize_path_of(&live)
+                || save_dest_normalize_path_of(&target).is_none();
+            if spelled_differently {
+                SAVE_DEST_SELF_REDIRECT_BLOCKED.fetch_add(1, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "save-dest: the browsed destination '{}' and the loaded save '{}' are spelled differently but are THE SAME FILE (handle identity) -- taking the overwrite path. Redirecting a file onto itself makes the save land and then look like a leak, and the safety net would write the pre-fire snapshot over it",
+                    target.display(),
+                    live.display()
+                ));
+            }
+            Ok(SaveFlowCommitPlan::LiveOverwrite {
+                live,
+                reason: "browsed destination is the loaded save",
+            })
+        }
+        SaveDestIdentity::Distinct => {
+            if !er_save_suppress::save_job_observer_installed() {
+                SAVE_DEST_NO_WRITER_OBSERVER_ABORT.fetch_add(1, Ordering::SeqCst);
+                SAVE_DEST_COMMIT_FAIL.fetch_add(1, Ordering::SeqCst);
+                return Err(format!(
+                    "destination '{}' needs the write-open redirect, but the SL save-job-body observer is not installed, so nothing can tell when the native writer has finished. The redirect window would have to close on a tick count, and the in-place writer opens the container once per dirty block -- closing early would patch the rest into the loaded save",
+                    target.display()
+                ));
+            }
+            Ok(SaveFlowCommitPlan::Redirect { live, target })
+        }
+        SaveDestIdentity::Unknown => {
+            SAVE_DEST_IDENTITY_UNKNOWN_ABORT.fetch_add(1, Ordering::SeqCst);
+            SAVE_DEST_COMMIT_FAIL.fetch_add(1, Ordering::SeqCst);
+            Err(format!(
+                "the destination '{}' could not be PROVEN either identical to, or distinct from, the loaded save '{}' (the filesystem gave no usable identity for one of them)",
+                target.display(),
+                live.display()
+            ))
+        }
+    }
+}
+
+/// Stand-in status for "the freshness handshake said an outcome was waiting and it was gone by
+/// the time it was taken". Structurally unreachable -- both run on the game thread within a few
+/// statements -- and deliberately NOT zero, so it can never be mistaken for a success.
+const SAVE_FLOW_STATUS_LOST: u32 = u32::MAX;
+
+/// Normalized text form of a path, for the "were these two spelled differently?" report only.
+fn save_dest_normalize_path_of(path: &std::path::Path) -> Option<String> {
+    path.to_str().and_then(save_dest_normalize_path)
+}
+
 /// Stage 7 FIRE_GATE_WAIT: menus are closed; wait for the RAM gates proving the native
 /// save orchestrator will accept and dispatch the request as ONE combined `b72 && b73`
 /// submit, then arm the one-shot bypass and fire the forced request pair.
@@ -446,75 +553,67 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
     let gates_green =
         dsm == 0 && b80 == 0 && bc4 != GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY as i32;
     if gates_green {
-        // DESTINATION COMMIT (save-game-flow WP3): with a chosen destination that is not the
-        // loaded save, arm the scoped write-open redirect (which seeds the destination with the
-        // live container and snapshots it so a leak can be undone) BEFORE the request is fired.
-        // Arming failure is terminal -- firing without it would overwrite the very file the user
-        // chose not to overwrite. Every commit names the file it is about to write BEFORE writing
-        // it, the overwrite-the-loaded-save case included: a rewrite of the live `ER0000.sl2` that
-        // nothing in the log claims is indistinguishable after the fact from a suppression leak.
-        if let Some(target) = save_dest_target() {
-            let Some(live) = save_dest_live_save_path() else {
-                SAVE_DEST_COMMIT_FAIL.fetch_add(1, Ordering::SeqCst);
+        // DESTINATION COMMIT (save-game-flow WP3). DECIDE FIRST, WRITE LAST (2026-07-29): the plan
+        // below performs no I/O on the destination, so every refusal -- an unprovable identity, a
+        // missing writer observer, a token already pending -- happens while the user's chosen file
+        // is still untouched. The seed, which is the first byte this flow writes anywhere, is only
+        // laid down afterwards, once nothing is left that can abort. The old order seeded ~29 MB
+        // over the destination and could then still bail out and report that the save did not
+        // happen, having already overwritten the file it was reporting about.
+        let plan = match save_flow_resolve_commit_plan() {
+            Ok(plan) => plan,
+            Err(why) => {
                 append_autoload_debug(format_args!(
-                    "save-flow: FIRE ABORT -- destination '{}' chosen but the loaded save path is unavailable; NOT firing",
-                    target.display()
+                    "save-flow: FIRE ABORT -- {why}. NOT firing; nothing has been written and the user's save did NOT happen"
                 ));
-                save_dest_reset("live save path unavailable");
-                save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "destination live path unavailable");
-                return;
-            };
-            if save_dest_target_is_live(&target, &live) {
-                save_dest_arm_live_overwrite(&live, "browsed destination is the loaded save");
-            } else if !save_dest_arm_redirect(&live, &target) {
-                SAVE_DEST_COMMIT_FAIL.fetch_add(1, Ordering::SeqCst);
-                append_autoload_debug(format_args!(
-                    "save-flow: FIRE ABORT -- could not arm the destination redirect for '{}'; NOT firing, the user's save did NOT happen",
-                    target.display()
-                ));
-                save_dest_reset("redirect arm failed");
-                save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "destination arm failed");
+                save_dest_reset("commit plan refused");
+                save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "commit plan refused");
                 return;
             }
-        } else if let Some(live) = save_dest_live_save_path() {
-            // Box2 answered "Yes": no destination was ever chosen because the destination IS the
-            // loaded save. Naming it is not optional -- this is the only path in the product that
-            // rewrites the user's live save, and it must never look anonymous.
-            save_dest_arm_live_overwrite(&live, "box2 overwrite-the-loaded-save");
-        }
-        if !er_save_suppress::is_armed() {
-            // Degraded fail-open (prologue mismatch / install failure): suppression never
-            // armed, so every native save already writes normally. Fire the forced request
-            // natively so the user's explicit Save Game press still saves; log once.
-            append_autoload_debug(format_args!(
-                "save-flow: suppression NOT armed (oracle_save_suppress_armed=0) -- degraded fail-open: firing forced native save request without a bypass token"
-            ));
-            unsafe { system_quit_save_game_request_save_forced() };
-            if save_dest_commit_window_armed() {
-                // A write is now in flight with no bypass token to watch, so the stage-8 watchdog
-                // owns the wait and the verification. This covers the loaded-save overwrite too:
-                // resetting here would score the file in the same frame the request was fired,
-                // before the writer has touched it, and report a spurious failure.
-                save_flow_enter_stage(
-                    SAVE_FLOW_STAGE_COMMIT_WAIT,
-                    "degraded fail-open fire with a commit window armed",
-                );
-            } else {
-                save_dest_reset("degraded fail-open fire");
-                save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "degraded fail-open fire");
-            }
-            return;
-        }
-        if !er_save_suppress::arm_one_save_bypass() {
+        };
+        // Degraded fail-open (prologue mismatch / install failure): suppression never armed, so
+        // every native save already writes normally and there is no token to arm or watch.
+        let degraded = !er_save_suppress::is_armed();
+        if !degraded && !er_save_suppress::arm_one_save_bypass() {
             // Refusal here means a token is already pending -- some earlier commit's
             // watchdog has not run yet. Abort rather than fire into an ambiguous token.
             append_autoload_debug(format_args!(
-                "save-flow: FIRE ABORT -- arm_one_save_bypass refused (token already pending); the user's save did NOT happen"
+                "save-flow: FIRE ABORT -- arm_one_save_bypass refused (token already pending); nothing has been written and the user's save did NOT happen"
             ));
-            let _ = save_dest_verify_and_disarm("bypass arm refused");
             save_dest_reset("bypass arm refused");
             save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "bypass arm refused");
             return;
+        }
+        // THE FIRST WRITE. Naming the file is not optional either: a rewrite of the live
+        // `ER0000.sl2` that nothing in the log claims is indistinguishable after the fact from a
+        // suppression leak or a staging copy.
+        match &plan {
+            SaveFlowCommitPlan::LiveOverwrite { live, reason } => {
+                save_dest_arm_live_overwrite(live, reason);
+            }
+            SaveFlowCommitPlan::Redirect { live, target } => {
+                if !save_dest_arm_redirect(live, target) {
+                    SAVE_DEST_COMMIT_FAIL.fetch_add(1, Ordering::SeqCst);
+                    if !degraded {
+                        // The token was armed a moment ago and nothing will consume it now.
+                        // Leaving it pending would let the NEXT native save through for real.
+                        let _ = er_save_suppress::expire_bypass_if_pending();
+                    }
+                    append_autoload_debug(format_args!(
+                        "save-flow: FIRE ABORT -- could not arm the destination redirect for '{}'; NOT firing, the user's save did NOT happen",
+                        target.display()
+                    ));
+                    save_dest_reset("redirect arm failed");
+                    save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "destination arm failed");
+                    return;
+                }
+            }
+            SaveFlowCommitPlan::Unnamed => {}
+        }
+        if degraded {
+            append_autoload_debug(format_args!(
+                "save-flow: suppression NOT armed (oracle_save_suppress_armed=0) -- degraded fail-open: firing the forced native save request without a bypass token. Completion for this commit comes from the SL writer's own job-body signal, NOT from token consumption, which can never move on this path"
+            ));
         }
         // Sample the request flags BEFORE the fire. This is the whole basis of the scoped
         // retraction below: a flag already set here belongs to the game, a flag that goes
@@ -574,16 +673,23 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
             usize::try_from(er_save_suppress::submits_swallowed()).unwrap_or(usize::MAX),
             Ordering::SeqCst,
         );
-        // The SL worker's own start counter, plus a cleared start-tick, so stage 8 can say
-        // WHEN the native write began and separate "the write is slow" from "we were slow
-        // to notice it finished".
+        // The SL worker's own start and completion counters, plus a cleared start-tick, so stage 8
+        // can say WHEN the native write began and separate "the write is slow" from "we were slow
+        // to notice it finished". The COMPLETION baseline is also the teardown interlock: the
+        // redirect window may only be dropped once a job body has returned past this value, or
+        // once it is known no body can start.
         SAVE_FLOW_SAVE_JOB_STARTS_AT_FIRE.store(
             usize::try_from(er_save_suppress::save_job_starts()).unwrap_or(usize::MAX),
             Ordering::SeqCst,
         );
+        SAVE_FLOW_SAVE_JOB_COMPLETIONS_AT_FIRE.store(
+            usize::try_from(er_save_suppress::save_job_completions()).unwrap_or(usize::MAX),
+            Ordering::SeqCst,
+        );
+        SAVE_FLOW_DEGRADED_FIRE.store(usize::from(degraded), Ordering::SeqCst);
         SAVE_FLOW_COMMIT_JOB_START_TICK.store(0, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "save-flow: FIRED forced save request (throttle skipped) after {ticks} gate ticks; readback b72={b72} b73={b73}"
+            "save-flow: FIRED forced save request (throttle skipped) after {ticks} gate ticks; readback b72={b72} b73={b73} degraded={degraded}"
         ));
         save_flow_enter_stage(SAVE_FLOW_STAGE_COMMIT_WAIT, "forced request fired");
         return;
@@ -856,12 +962,18 @@ fn save_flow_retract_stuck_request(reason: &str) {
 ///
 ///   1. adopt the SL worker's job-body completion, if one has arrived -- the event that
 ///      says the write finished, produced by the game on its own writer thread;
-///   2. consume any terminal status (from step 1, from a native poll consumer, or from a
+///   2. hold everything while a save-job body is EXECUTING, because tearing the redirect
+///      window down mid-body sends the writer's remaining per-block opens to the loaded save;
+///   3. consume any terminal status (from step 1, from a native poll consumer, or from a
 ///      submit the native enqueue refused) and issue the ONE verdict, file check included;
-///   3. only then consider the enqueue-grace bailout, and only when the one-shot token can
+///   4. only then consider the enqueue-grace bailout, and only when the one-shot token can
 ///      be revoked, which is what proves nothing is in flight;
-///   4. the watchdog last, as a backstop that is counted as a DEGRADED outcome.
+///   5. the watchdog last, as a backstop that is counted as a DEGRADED outcome.
+///
+/// The degraded fail-open path has no token at all and is handled separately -- see
+/// [`save_flow_degraded_commit_wait_tick`].
 fn save_flow_commit_wait_tick(ticks: usize) {
+    let completions_at_fire = SAVE_FLOW_SAVE_JOB_COMPLETIONS_AT_FIRE.load(Ordering::SeqCst) as u64;
     // Timestamp the moment the SL worker picked the job up. Cheap, and it is the number
     // that says whether a long commit was a slow WRITE or a slow OBSERVATION.
     if SAVE_FLOW_COMMIT_JOB_START_TICK.load(Ordering::SeqCst) == 0
@@ -870,17 +982,39 @@ fn save_flow_commit_wait_tick(ticks: usize) {
     {
         SAVE_FLOW_COMMIT_JOB_START_TICK.store(ticks, Ordering::SeqCst);
     }
+    if SAVE_FLOW_DEGRADED_FIRE.load(Ordering::SeqCst) != 0 {
+        save_flow_degraded_commit_wait_tick(ticks, completions_at_fire);
+        return;
+    }
     // POSITIVE EVIDENCE ONLY: this latches a status when, and only when, a save job that
     // started after our own submit has RETURNED from its body, and it reports whatever
     // result the game itself recorded for it. It cannot fire on "no failure seen yet".
     let _ = er_save_suppress::adopt_completed_save_job_as_final_status();
-    if let Some(status) = er_save_suppress::take_bypass_final_status() {
+    // NOTHING BELOW MAY RUN WHILE THE WRITER IS INSIDE A JOB BODY. Every exit from this stage
+    // disarms the commit window, and the native in-place writer opens the save container ONCE
+    // PER DIRTY BLOCK: a window closed between block k and k+1 sends blocks k+1..N to the
+    // loaded save with `OPEN_ALWAYS` (no truncate), after the leak check has already run, so
+    // nothing detects or undoes it. A latched terminal status keeps its freshness flag and is
+    // taken on a later tick instead.
+    if !save_dest_teardown_allowed(completions_at_fire, "commit wait") {
+        return;
+    }
+    if er_save_suppress::bypass_final_status_fresh() {
         // THE FILE CHECK RUNS FIRST AND HAS THE LAST WORD (2026-07-28). `status` is the game's SL
         // job result -- its opinion of its own bookkeeping, which run 4 reported as 0 (success) for
         // a commit that produced a sparse, headerless fragment. Announcing that status and then
         // contradicting it a line later made the log say "COMMIT COMPLETE" above "the user's save
         // did NOT land". Score the bytes, then emit ONE verdict that folds both in.
+        //
+        // The status is PEEKED, not taken, until the file check has actually run: the disarm has
+        // its own hard interlock against an executing writer, and a status consumed and then
+        // dropped on that deferral would be an outcome nobody ever reports.
+        let window_was_armed = save_dest_commit_window_armed();
         let verdict = save_dest_verify_and_disarm("commit terminal status");
+        if window_was_armed && verdict.is_none() {
+            return;
+        }
+        let status = er_save_suppress::take_bypass_final_status().unwrap_or(SAVE_FLOW_STATUS_LOST);
         let status_ok = status == 0;
         // `None` = no commit window was armed (degraded paths). Nothing to contradict.
         let file_ok = verdict.as_ref().is_none_or(|verdict| verdict.ok);
@@ -971,6 +1105,29 @@ fn save_flow_commit_wait_tick(ticks: usize) {
         return;
     }
     if ticks >= SAVE_BYPASS_WATCHDOG_TICKS {
+        // A CONSUMED TOKEN WITH NO JOB YET IS A WRITE THAT HAS NOT HAPPENED. The enqueue was
+        // forwarded for real, so the SL worker may still pick the job up; disarming the redirect
+        // in front of it points the writer's per-block opens at the loaded save. Waiting is the
+        // safe side, so the window is held past the watchdog -- bounded only so a permanently
+        // stalled queue cannot disable the Save Game row for the rest of the session, and the
+        // moment that bound is reached is a NAMED failure rather than a quiet timeout.
+        if consumed
+            && save_dest_commit_window_armed()
+            && save_dest_writer_state(completions_at_fire) == SaveDestWriterState::NotStarted
+        {
+            if ticks == SAVE_BYPASS_WATCHDOG_TICKS {
+                append_autoload_debug(format_args!(
+                    "save-flow: commit watchdog reached at {ticks} ticks but the one-shot token WAS consumed and the SL worker has not started the job yet -- holding the destination redirect open for up to {SAVE_DEST_TEARDOWN_UNPROVEN_EXTRA_TICKS} more ticks, because disarming in front of a queued write sends it to the loaded save"
+                ));
+            }
+            if ticks < SAVE_BYPASS_WATCHDOG_TICKS + SAVE_DEST_TEARDOWN_UNPROVEN_EXTRA_TICKS {
+                return;
+            }
+            SAVE_DEST_DISARM_UNPROVEN.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "save-flow: the destination redirect is being disarmed WITHOUT PROOF the writer ran -- the enqueue was forwarded {ticks} ticks ago and no save-job body ever started. If the SL queue delivers it later it will write the loaded save, and nothing here can stop that"
+            ));
+        }
         let expired = er_save_suppress::expire_bypass_if_pending();
         // A BACKSTOP REACHED IS A DEGRADED OUTCOME, AND IT IS COUNTED. Every other exit from
         // this stage knows what happened; this one is defined by never having found out, and
@@ -1000,6 +1157,89 @@ fn save_flow_commit_wait_tick(ticks: usize) {
         save_flow_retract_stuck_request("commit watchdog");
         save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "commit watchdog");
     }
+}
+
+/// Stage 8 for a commit fired on the DEGRADED fail-open path: suppression never armed, so no
+/// bypass token exists and the save the request produces is an ordinary native write.
+///
+/// This exists because the token-based stage 8 cannot describe this path at all. Its
+/// completion test reads `bypass_allowed_total`, which only moves when a token is CONSUMED;
+/// with no token armed it is frozen by construction, so the "was the fire dead?" predicate was
+/// permanently true. Every degraded commit therefore ran to the 3 s enqueue-grace bailout,
+/// disarmed the commit window and reported "the user's save did NOT happen" -- including the
+/// ones where the native write had already succeeded. And `take_bypass_final_status` can never
+/// return `Some` here either, so that bailout was the only exit the path had.
+///
+/// The signal that DOES exist on this path is the writer's own: `FUN_14240fd70`, the SL save-job
+/// body, runs for every save the worker performs, bypassed or not. A completion past the value
+/// sampled at the fire is positive evidence that a save finished writing, and its result code is
+/// the game's own verdict on it. When the observer is not installed there is no such evidence,
+/// and the outcome is reported as UNOBSERVED -- which is the truth -- rather than as a failure.
+fn save_flow_degraded_commit_wait_tick(ticks: usize, completions_at_fire: u64) {
+    let completed = er_save_suppress::save_job_completions() > completions_at_fire;
+    if !completed && ticks < SAVE_BYPASS_WATCHDOG_TICKS {
+        return;
+    }
+    // Same interlock as the armed path: never score, and never disarm, while a body is running.
+    // Nothing has been consumed at this point, so a deferral simply retries on the next tick.
+    if !save_dest_teardown_allowed(completions_at_fire, "degraded commit wait") {
+        return;
+    }
+    let window_was_armed = save_dest_commit_window_armed();
+    let verdict = save_dest_verify_and_disarm("degraded commit");
+    if window_was_armed && verdict.is_none() {
+        return;
+    }
+    let file_ok = verdict.as_ref().is_none_or(|verdict| verdict.ok);
+    let file_state = match verdict.as_ref() {
+        Some(verdict) if verdict.ok => "VERIFIED",
+        Some(_) => "FAILED",
+        None => "not armed",
+    };
+    let detail = verdict.as_ref().map_or_else(
+        || "no commit window was armed, so no file could be checked".to_owned(),
+        |verdict| verdict.summary.clone(),
+    );
+    if completed {
+        let result = er_save_suppress::save_job_last_result();
+        let status = er_save_suppress::save_job_result_to_status(result);
+        let status_ok = status == 0;
+        if status_ok && file_ok {
+            SAVE_FLOW_DEGRADED_COMPLETE_COUNT.fetch_add(1, Ordering::SeqCst);
+            SAVE_FLOW_COMMIT_COMPLETE_COUNT.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "save-flow: DEGRADED COMMIT COMPLETE after {ticks} commit ticks -- suppression was never armed, so this was an ordinary native save; the SL writer's job body returned with result={result} -> terminal status 0 AND the file VERIFIED on disk: {detail}"
+            ));
+        } else {
+            if status_ok {
+                SAVE_FLOW_COMMIT_VERIFY_FAIL_COUNT.fetch_add(1, Ordering::SeqCst);
+            }
+            append_autoload_debug(format_args!(
+                "save-flow: DEGRADED COMMIT FAILED after {ticks} commit ticks -- the SL writer's job body returned with result={result} -> terminal status {status} (0=success), file check {file_state}: {detail}. The user's save did NOT land"
+            ));
+        }
+    } else {
+        // No completion inside the watchdog. Say exactly that. A degraded build whose writer
+        // observer is absent has no way to see a save finish, and calling that "the save did
+        // not happen" would be a claim nothing here can support.
+        SAVE_FLOW_DEGRADED_UNOBSERVED_COUNT.fetch_add(1, Ordering::SeqCst);
+        SAVE_FLOW_COMMIT_WATCHDOG_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "save-flow: DEGRADED COMMIT UNOBSERVED after {ticks} commit ticks -- suppression was never armed and no SL save-job completion arrived (observer installed={}, jobs started/completed since boot={}/{}). Whether the native write happened is UNKNOWN from here; the file check says {file_state}: {detail}",
+            er_save_suppress::save_job_observer_installed(),
+            er_save_suppress::save_job_starts(),
+            er_save_suppress::save_job_completions()
+        ));
+    }
+    save_dest_reset("degraded commit");
+    save_flow_enter_stage(
+        SAVE_FLOW_STAGE_IDLE,
+        if completed && file_ok {
+            "degraded commit verified"
+        } else {
+            "degraded commit unverified"
+        },
+    );
 }
 
 pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {

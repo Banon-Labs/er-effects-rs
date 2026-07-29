@@ -858,6 +858,21 @@ fn configured_active_steam_id64() -> Option<(u64, &'static str)> {
         })
 }
 
+/// The GAME-SIDE save directory whose write-opens this crate's general save redirect maps into
+/// the staged tree, or `None` when no general redirect is installed (the default game-owned
+/// APPDATA mode, where the game already opens the live save directly).
+///
+/// The save-destination commit needs this to match write-opens by their FULL path. In staged /
+/// direct-file mode the loaded save lives under the staged root, but the native writer still
+/// opens `...\Roaming\EldenRing\<steamid>\ER0000.sl2`, and that open IS the loaded save's --
+/// `save_redirect_path` rewrites it a moment later. Matching only the leaf caught it by
+/// accident; matching the full path has to know about the mapping.
+pub(crate) fn save_redirect_native_source_dir() -> Option<PathBuf> {
+    SAVE_REDIRECT_DIR_W.get()?;
+    let steam_id = plausible_steam_id64(OBSERVED_ACTIVE_STEAM_ID64.load(Ordering::SeqCst))?;
+    Some(default_save_root()?.join(steam_id.to_string()))
+}
+
 pub(crate) fn default_save_root() -> Option<PathBuf> {
     std::env::var_os("APPDATA")
         .map(PathBuf::from)
