@@ -47,11 +47,11 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	cargo xwin check --tests --manifest-path "$repo_root/Cargo.toml" --target "$target"
 fi
 
-# RUN them when a Windows-binary runner is available. The tests are pure logic (config parsing,
-# path mapping) with no game dependency, so wine executes them fine; skip cleanly where wine is
-# absent rather than failing a gate on an optional tool. Running them on the real target matters:
-# the first run of this step found a config-path assertion that only held under HOST `std::path`
-# separator semantics, never under the windows target the crate actually ships to.
+# RUN them when a Windows-binary runner is available. The tests are pure logic (row math, config
+# parsing, path mapping) with no game dependency, so wine executes them fine; skip cleanly where
+# wine is absent rather than failing a gate on an optional tool. Running them on the real target
+# matters: the first run of this step found a config-path assertion that only held under HOST
+# `std::path` separator semantics, never under the windows target the crate actually ships to.
 if command -v cargo-xwin >/dev/null 2>&1 && command -v wine >/dev/null 2>&1; then
 	echo "[check-rust-build] cargo xwin test --lib --target $target (via wine)"
 	CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER=wine WINEDEBUG="${WINEDEBUG:--all}" \
