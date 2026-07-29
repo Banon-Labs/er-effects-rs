@@ -162,10 +162,29 @@ The *observer* surface identifies `CSMenuMan->[0x80]+0x290` as **the exact byte 
 
 **`FUN_142413860` -- the choke point of the whole write path.** 657 instructions. It **opens the existing `ER0000.sl2` and reads back every block the current request did not supply** (`DLFileInputStream` @`0x142413b93`, `GetFileSize@0x141edd3d0`) -- a **read-modify-write**; the full ~2.5 MB image is rebuilt from old + new blocks on every save. It writes the `BND4` magic (read from `.rdata` at deobf `0x1431fd6cc`), 12 entry headers (0x20 stride, `rawFlags |= 0x50`, UTF-16 names), computes **MD5 over `entryData+0x10` for the payload length and stores the 16-byte digest at `entryData+0x0`**, asserts via `DLPanic` with strings `"wrong file size"`, `"wrong file alignment."`, `"encryptedSize+paddingSize must be same value as buffer size"` from `..\..\Source\win32\Operation\SLBindOperation_win32.cpp`, then does **one whole-buffer write** through `DLFileOutputStream`. Returns **0 = full success, 6 = open/write/short-write failure, 7 = buffer alloc failure**.
 
-**`FUN_142413860` IS NOT THE ONLY WRITER, AND IT IS NOT THE COMMON ONE (corrected 2026-07-28).** The job body `FUN_14240fd70` picks between two write paths using `FUN_142413230`, which mounts the container **already on disk at the save path** and checks whether every block the request supplies still fits its existing entry (`entry.size + entry.padding >= needed`):
+**`FUN_142413860` IS NOT THE ONLY WRITER, AND IT IS NOT THE COMMON ONE (corrected 2026-07-28).**
 
-* any block does not fit, or there is no usable container -> `FUN_142413860`, the full rebuild described above (one whole-buffer write from offset 0).
-* every block fits -- **the steady state for a save over an existing `ER0000.sl2`** -> `FUN_1424142e0`, called **once per supplied block**: `DLFileOutputStream::OpenFile` -> `Seek(entry.dataOffset)` -> `WriteBytes(block)` -> (if the size changed) `Seek(entryHeaderOffset)` + `WriteBytes(0x20)` -> `Seek(0, END)` -> `CloseStream`. It writes **only the changed blocks** and never the header, the entry table, or any untouched block.
+> **Attribution corrected 2026-07-29.** An earlier revision of this section (and the body of PR #94) said the job body "picks between two write paths **using** `FUN_142413230`", which reads as though `FUN_142413230` is the function that chooses. It is not. **`FUN_14240fd70` itself is the chooser** -- the `if`/`else` is its own code -- and `FUN_142413230` is a **third, separate call** it makes first (decompile line 114) whose *result code* the branch tests. The mechanism below was re-derived from the decompile at the same time and stands; only the attribution was wrong.
+
+`FUN_14240fd70` formats the container path, calls the probe, publishes the probe's result into the job and reads it straight back out, and branches on that:
+
+```c
+uVar4 = FUN_142413230(job+0x280, session, path);  // line 114 -- probe
+FUN_14240dbf0(job, uVar4);                        // publish into job+0x9c
+iVar5 = FUN_14240d8d0(job);                       // read it back out
+if (iVar5 == 0) { FUN_142413860(job+0x281, ..); } // line 132 -> FULL REBUILD
+else            { FUN_1424142b0(job+0x282, ..);   // line 204
+                  FUN_1424142e0(job+0x283, ..); } // line 229 -> IN-PLACE, per block
+```
+
+`FUN_142413230` mounts the container **already on disk at the save path** and walks every block the request supplies, testing `entry.size + entry.padding >= needed`. It returns **`6`** when the mount succeeded *and* every block still fits, and **`0`** when the mount failed or any block outgrew its entry. **That polarity is the inverse of the writers' own convention** (both writers return 0 = success, 6 = failure), which is why the branch superficially reads as though it picks the rebuild on success. It does not -- `0` from the probe means "in-place is not viable":
+
+* probe returns `0` (any block does not fit, or there is no usable container) -> `FUN_142413860`, the full rebuild described above (one whole-buffer write from offset 0).
+* probe returns `6` (every block fits) -- **the steady state for a save over an existing `ER0000.sl2`** -> `FUN_1424142b0` and then `FUN_1424142e0`, called **once per supplied block**: `DLFileOutputStream::OpenFile` -> `Seek(entry.dataOffset)` -> `WriteBytes(block)` -> (if the size changed) `Seek(entryHeaderOffset)` + `WriteBytes(0x20)` -> `Seek(0, END)` -> `CloseStream`. It writes **only the changed blocks** and never the header, the entry table, or any untouched block.
+
+Because the probe mounts the **original** save path, the branch decision does not depend on where the bytes eventually land -- a write-open redirect diverts the writers, not the probe. **That whole paragraph is CODE-DERIVED, not measured.** As of 2026-07-29 the two branches are instrumented (`oracle_save_write_full_rebuild_calls` / `oracle_save_write_in_place_calls`, see the oracle list below), so the "steady state is in-place" claim is finally testable rather than asserted; nothing has yet been read off a run.
+
+**ABI note for anyone hooking these.** `FUN_142413860` takes four register arguments and nothing on the stack. `FUN_1424142e0` takes **five**: its call site `0x1424102d6` writes the fifth with `mov [rsp+0x20], r12` between the `lea rcx` and the `call`, and the callee keeps it (`local_1a8 = param_5`) and, when it is non-null, **dereferences and writes two qwords through it** as an out-parameter. A four-argument detour on that function does not merely lose an argument, it corrupts memory. Both have exactly one direct caller (`FUN_14240fd70`); their other xrefs are `.pdata`/unwind metadata (`0x144aa0ab0` is the 12-byte `RUNTIME_FUNCTION{0x2413860, 0x2414283, 0x3aadfa8}`), **not** vtable slots, so no indirect call path exists.
 
 Two consequences for anything that diverts save opens. First, `MicrosoftDiskFileOperator::OpenFile` builds write-mode handles with `dwCreationDisposition = OPEN_ALWAYS` (`local_res20 = 4` at `0x141fc13f0`): a missing file is created and an existing file is **not truncated**. Second, every offset the in-place writer seeks to comes from the container it read at the ORIGINAL path. Redirecting only the write-opens to an empty file therefore yields a sparse fragment, not a save -- measured 2026-07-28 on the live `ER0000.sl2` (12 entries, 28,967,888 bytes): the diverted commit produced a 26,608,560-byte file, zero from byte 0 with no `BND4` magic, whose length is exactly `USER_DATA010.dataOffset + USER_DATA010.size` -- the highest block written -- with `USER_DATA011` (2,359,328 bytes) simply never touched. A redirect target must be seeded with a byte copy of the source container first.
 
@@ -355,7 +374,8 @@ Per repo rules the run-stopping oracle must be an **in-process RAM/telemetry sem
 ### (i) Prove no bytes reached the real save file
 
 **In-process tripwires (must all read ZERO):**
-- `oracle_bnd4_writer_entries` -- passive detour counter on `FUN_142413860` (`0x142413860`). Zero proves the BND4 assembly path never ran.
+- `oracle_save_write_full_rebuild_calls` -- passive detour counter on `FUN_142413860` (`0x142413860`). **Implemented 2026-07-29** (planned here as `oracle_bnd4_writer_entries`; use the real name, do not add a second counter on the same address). Zero proves the full-rebuild path never ran -- **and nothing more than that**. Because the rebuild is the *uncommon* branch, zero on this counter alone does NOT prove no save was written; it must be read together with `oracle_save_write_in_place_calls`, and both are only meaningful when `oracle_save_write_branch_observers_installed == 2`.
+- `oracle_save_write_in_place_calls` -- the same for `FUN_1424142e0` (`0x24142e0`), the branch a save over an existing container actually takes. Counts once per supplied BLOCK, not once per save, so treat it as zero/non-zero rather than as a save count.
 - `oracle_bak_copy_entries` -- passive counter on `FUN_142410830` (`0x142410830`). Zero proves `ER0000.sl2.bak` was not touched.
 - `oracle_savefile_open_writes` -- counter on `MicrosoftDiskFileOperator::OpenFile` (`0x141fc13f0`), **filtered by path suffix** (`.sl2` / `.co2` / `.bak`) since this function serves every file open in the game. Log the resolved path for each hit.
 - `oracle_sl_submit_swallowed_total` / `oracle_sl_status_faked_total` -- the hooks' own counters. `swallowed` must equal the number of dispatcher calls; `faked` must equal `swallowed`.
