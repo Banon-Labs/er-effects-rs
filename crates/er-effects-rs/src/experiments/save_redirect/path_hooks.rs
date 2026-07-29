@@ -292,6 +292,9 @@ fn normalize_env_save_file_to_known_steam_id(path: &Path, steam_id: u64, reason:
     }
 }
 
+/// One-shot latch for the "no configured save file" line above (see its comment).
+static SAVE_STEAM_ID_NORMALIZE_NO_SOURCE_LOGGED: AtomicUsize = AtomicUsize::new(0);
+
 pub(crate) fn normalize_env_save_file_to_active_steam_id_once(base: usize, reason: &str) {
     if SAVE_STEAM_ID_ENV_NORMALIZE_DONE.load(Ordering::SeqCst) != 0
         || OBSERVED_ACTIVE_STEAM_ID64.load(Ordering::SeqCst) == 0
@@ -299,9 +302,15 @@ pub(crate) fn normalize_env_save_file_to_active_steam_id_once(base: usize, reaso
         return;
     }
     let Some(path) = configured_save_file() else {
-        append_autoload_debug(format_args!(
-            "save-steamid-normalize: no configured save file for one-shot disk normalize reason={reason}"
-        ));
+        // FIRST OCCURRENCE ONLY. There is no configured save file in default (game-owned APPDATA)
+        // mode, and since save-game-flow WP3 the CreateFileW detour is installed in EVERY mode --
+        // so this call site now runs on every save-container open. One line says everything; a
+        // line per open is the unbounded-repetition noise the log policy forbids.
+        if SAVE_STEAM_ID_NORMALIZE_NO_SOURCE_LOGGED.swap(1, Ordering::SeqCst) == 0 {
+            append_autoload_debug(format_args!(
+                "save-steamid-normalize: no configured save file for one-shot disk normalize reason={reason} (logged once)"
+            ));
+        }
         return;
     };
     let Ok(mut bytes) = fs::read(&path) else {
@@ -629,6 +638,13 @@ pub(crate) use er_telemetry::counters::SAVE_DISKFREE_LOGGED;
 static SAVE_REDIRECT_ORIG_NTQUERYVOLINFO: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::SAVE_VOLINFO_LOGGED;
 static SAVE_REDIRECT_INSTALL_ONCE: Once = Once::new();
+/// One-shot guard for the CORE file-ops install (CreateFileW alone, every save mode; the
+/// save-destination commit rides that detour). Separate from the redirect installer above, which
+/// stays gated on an actual redirect source.
+static SAVE_FILE_OPS_CORE_ONCE: Once = Once::new();
+/// 1 once the core CreateFileW detour is live. The redirect installer reads it instead of creating
+/// a second MinHook on the same prologue (`MH_ERROR_ALREADY_CREATED`).
+static SAVE_FILE_OPS_CORE_CREATEFILEW_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) use er_telemetry::counters::SAVE_STEAM_ID_ENV_NORMALIZE_DONE;
 pub(crate) use er_telemetry::counters::SAVE_STEAM_API_STEAM_ID_LOGGED;
 /// Count of save-path opens we have redirected, logged for the first few so a probe can CONFIRM the
@@ -840,6 +856,21 @@ fn configured_active_steam_id64() -> Option<(u64, &'static str)> {
             steam_api_active_steam_id64()
                 .map(|steam_id| (steam_id, "early-steamapi-active-steamid"))
         })
+}
+
+/// The GAME-SIDE save directory whose write-opens this crate's general save redirect maps into
+/// the staged tree, or `None` when no general redirect is installed (the default game-owned
+/// APPDATA mode, where the game already opens the live save directly).
+///
+/// The save-destination commit needs this to match write-opens by their FULL path. In staged /
+/// direct-file mode the loaded save lives under the staged root, but the native writer still
+/// opens `...\Roaming\EldenRing\<steamid>\ER0000.sl2`, and that open IS the loaded save's --
+/// `save_redirect_path` rewrites it a moment later. Matching only the leaf caught it by
+/// accident; matching the full path has to know about the mapping.
+pub(crate) fn save_redirect_native_source_dir() -> Option<PathBuf> {
+    SAVE_REDIRECT_DIR_W.get()?;
+    let steam_id = plausible_steam_id64(OBSERVED_ACTIVE_STEAM_ID64.load(Ordering::SeqCst))?;
+    Some(default_save_root()?.join(steam_id.to_string()))
 }
 
 pub(crate) fn default_save_root() -> Option<PathBuf> {
@@ -1548,6 +1579,26 @@ unsafe extern "system" fn save_redirect_createfilew_hook(
     let calls = SAVE_CREATEFILEW_CALLS.fetch_add(1, Ordering::SeqCst);
     if len != 0 {
         let path = unsafe { std::slice::from_raw_parts(lp_file_name, len) };
+        // SAVE-DESTINATION WRITE-OPEN REDIRECT (save-game-flow WP3), checked FIRST and only inside
+        // the armed commit window: the native BND4 writer emits the whole rebuilt container in one
+        // write-open, so diverting exactly that open writes the current save state to the folder
+        // the user chose while the loaded save is never opened for write. Read-opens (the writer's
+        // own read-modify-write base) and the `.bak` CopyFileW deliberately pass through.
+        if let Some(destination) = save_dest_redirect_for_open(path, access) {
+            let ret = unsafe {
+                call(
+                    destination.as_ptr(),
+                    access,
+                    share,
+                    security,
+                    disposition,
+                    flags,
+                    template,
+                )
+            };
+            save_dest_note_redirect_hit(ret != -1);
+            return ret;
+        }
         // Observe/stage before any redirect decision. Direct-file mode needs the native path builder's
         // `<steamid>` component to populate the private discovery tree, and some paths are diagnostic
         // only (not redirected) but still carry the account id.

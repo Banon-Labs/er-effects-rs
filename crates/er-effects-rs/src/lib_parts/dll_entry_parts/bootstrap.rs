@@ -102,6 +102,18 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // addresses the game-base resolver cannot decode. Pure PE-header read, no API/loader lock.
     record_self_dll_base(hmodule.0 as usize);
 
+    // SAVE-DESTINATION WRITE-OPEN REDIRECT CORE (save-game-flow WP3): the "save somewhere else"
+    // path diverts the native writer's single container write-open, which means the CreateFileW
+    // detour must exist in EVERY save mode -- including the default game-owned APPDATA mode, where
+    // `install_save_redirect_hooks` deliberately installs nothing. The detour body is
+    // pass-through-safe without a redirect dir (it only observes), and the Wine-only free-space
+    // overrides stay behind their own gate. Own thread: no hook work inside DllMain.
+    START_SAVE_FILE_OPS_CORE.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("er-effects-save-file-core".to_owned())
+            .spawn(install_save_file_core_hooks);
+    });
+
     // Boot profiler: spawn the independent CPU sampler FIRST so it captures the engine-init threads
     // during the pre-CSTaskImp-instance gap (the largest uninstrumented boot window). Read-only by
     // default (QueryThreadCycleTime/GetThreadTimes, no thread suspension); RIP sampling is a separate

@@ -75,16 +75,99 @@ pub(crate) use er_telemetry::counters::OWN_LOAD_BODY_LEN;
 /// Count of bytes the gated hook fed into the engine buffer on the latched call (verify telemetry).
 pub(crate) use er_telemetry::counters::OWN_LOAD_FED_BYTES;
 
-/// Gated detour for 0x67b100. While `OWN_LOAD_GATE` is set, copies our sliced plaintext slot body
-/// into the engine-allocated out_buf (`rcx`) for `min(size, body.len())` bytes and returns al=1 --
-/// the engine then parses OUR bytes instead of reading the FSM-gated iodev resident. Otherwise it
-/// is a pure pass-through to the original (the native menu loader's reads are never disturbed).
+/// Destination handed to the pass-through consumer call in [`run_native_load_consumer`].
+///
+/// `FUN_140e6e380` copies `min(dest_size, content_size)` bytes and then calls
+/// `FUN_140e6f200` UNCONDITIONALLY, so the release does not depend on the destination being
+/// big enough to hold the payload -- and the payload is discarded here regardless, because
+/// the whole point of the feed is that the engine parses our bytes instead. Sized only to
+/// keep the copy trivially bounded and stack-resident.
+const CONSUMER_SCRATCH_BYTES: usize = 64;
+
+/// Run the ORIGINAL `0x67b100` against a scratch destination, purely for the device side
+/// effect the feed would otherwise swallow, and measure what it did to the shared job slot.
+///
+/// WHY THIS EXISTS. `0x67b100` is not just a read -- it is the CONSUMER of a completed
+/// load, and the only unconditional caller of the device's request teardown:
+///
+/// ```text
+///   FUN_14067b100(out, size)              gate: saveState == 3 && GameMan+0xdf0 == 0
+///     -> FUN_140e6e380(iodev, out, size)  gate: +0x18 && +0x20
+///                                               && FUN_14240a180(job) == 0
+///                                               && FUN_14240a1f0(job) == 0x14
+///          memcpy(out, content, n)
+///          FUN_140e6f200(iodev)           <-- releases +0x10/+0x18/+0x20/+0x28
+/// ```
+///
+/// The load side never releases itself: `FUN_140e6e080` case 0x14 with a zero `param_2` --
+/// exactly the shape the b80 poll `0x679180(0, 0)` produces -- returns 0 having called
+/// nothing, and it is that return which drives `GameMan+0xb80` to RESIDENT(3). So the
+/// switch reload's SUBMIT -> DRAIN(b80 == 3) sequence ends with a COMPLETED load still
+/// holding `iodev+0x18`/`+0x20`, and the release is owed by the very call this detour was
+/// substituting. Swallowing it outright left that job in the slot forever, and the submit
+/// builders gate on `iodev+0x10 == 0 && iodev+0x20 == 0` -- so after one profile switch NO
+/// save in the process could be built again: not autosave, not rest, not quit-save, not the
+/// Save Game row. The measured signature was `oracle_save_dispatch_last_decline_reason =
+/// "load-job-latched-0x18+0x20"` repeating without end.
+///
+/// WHY IT CANNOT RACE A LIVE LOAD. Nothing here decides anything. The game's own guard
+/// decides, on the game's own thread, at the same instant it would have run natively: the
+/// release happens only when `FUN_14240a1f0(job) == 0x14` (terminal COMPLETE) and
+/// `FUN_14240a180(job) == 0` (success). A job that is still in flight reports any other
+/// state, `FUN_140e6e380` returns 0, and NOTHING is touched -- no timer, no frame count, no
+/// re-derived predicate of ours that could disagree with the engine about whether a load
+/// has finished. The outcome is measured either way and published, so a request left in
+/// place is visible rather than assumed.
+///
+/// WHY A SCRATCH DESTINATION. The consumer's payload copy is a side effect we do not want:
+/// the engine buffer must end up holding OUR bytes, byte for byte as before this change,
+/// including whatever lies past `body.len()`. Pointing the copy at 64 bytes of stack leaves
+/// the engine's allocation untouched while still paying the device debt.
+unsafe fn run_native_load_consumer(origin: &str) {
+    let orig = READ_67B100_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        // Only reachable if the detour ran before `install_own_load_hook` bound the
+        // trampoline, which the install order rules out. Left silent rather than logged:
+        // the feed below still works, and the stranded-request oracle would report it.
+        return;
+    }
+    let before = er_save_suppress::sample_sl_request_slot();
+    let mut scratch = [0_u8; CONSUMER_SCRATCH_BYTES];
+    let consumer: unsafe extern "system" fn(usize, u32) -> u8 =
+        unsafe { std::mem::transmute(orig) };
+    let consumed = unsafe {
+        consumer(
+            scratch.as_mut_ptr() as usize,
+            CONSUMER_SCRATCH_BYTES as u32,
+        )
+    };
+    let after = er_save_suppress::sample_sl_request_slot();
+    let outcome = er_save_suppress::note_load_consumer(before, after, origin, true);
+    if outcome == er_save_suppress::LOAD_CONSUMER_RELEASED {
+        append_autoload_debug(format_args!(
+            "own-load: native load consumer 0x67b100 ran before the feed (ret={consumed}) and \
+             RELEASED the shared iodev job -- saves stay buildable across this load"
+        ));
+    }
+}
+
+/// Gated detour for 0x67b100. While `OWN_LOAD_GATE` is set, runs the ORIGINAL against a
+/// scratch destination so the native load consumer performs its device teardown, then copies
+/// our sliced plaintext slot body into the engine-allocated out_buf (`rcx`) for
+/// `min(size, body.len())` bytes and returns al=1 -- the engine parses OUR bytes while the
+/// device is left in the state the native read would have left it. Otherwise it is a pure
+/// pass-through to the original (the native menu loader's reads are never disturbed).
 pub(crate) unsafe extern "system" fn read_67b100_hook(out_buf: usize, size: u32) -> u8 {
     const FEED_SUCCESS_RET: u8 = 1;
     if OWN_LOAD_GATE.load(Ordering::SeqCst) {
         let body_ptr = OWN_LOAD_BODY_PTR.load(Ordering::SeqCst);
         let body_len = OWN_LOAD_BODY_LEN.load(Ordering::SeqCst);
         if out_buf != TITLE_OWNER_SCAN_START_ADDRESS && body_ptr != 0 && body_len != 0 {
+            // Pay the substituted call's debt to the SL device FIRST, on the game's own
+            // terms. Ordering matters only for readability -- the consumer writes to its own
+            // scratch, never to `out_buf` -- but it puts the release where the native body
+            // would have run it, before the payload the engine actually parses is decided.
+            unsafe { run_native_load_consumer("own-load 0x67b100 feed") };
             // Data-driven length: copy the smaller of the engine's requested size (its own edx) and
             // our body length -- never assume the 0x280000 literal (bd dont-hardcode-savefile-tied).
             let n = core::cmp::min(size as usize, body_len);
