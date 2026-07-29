@@ -62,6 +62,11 @@ windows = { version = "0.62", features = [
   "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_Diagnostics_Debug",
   "Win32_System_SystemInformation",
+  # SystemTimeToTzSpecificLocalTime: the save picker's file rows show when each file was last
+  # written, and a user-facing timestamp is local time. This applies the zone's DST rules for the
+  # instant being rendered, so a save from the other side of a boundary keeps the wall-clock time it
+  # was written at (comparing GetLocalTime to GetSystemTime would only give the offset for NOW).
+  "Win32_System_Time",
   "Win32_Devices_HumanInterfaceDevice",
   "Win32_System_Com",
   "Win32_System_LibraryLoader",

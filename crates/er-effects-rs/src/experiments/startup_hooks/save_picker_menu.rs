@@ -673,30 +673,105 @@ pub(crate) fn save_picker_browse_stats_lines(row: usize) -> Option<(Vec<u16>, Ve
     ))
 }
 
-/// Whether ProfileSelect row `row` keeps the native per-slot info fields (`Level` caption, `Level`
-/// value, `PlayTime`) while the browse picker owns the window -- true only for save-FILE rows.
+/// What a browse row does with the three native per-slot info fields.
+///
+/// The `Level` caption and value are not represented here because there is nothing to decide: no
+/// browse row is a profile slot, so a level is meaningless on every one of them and they are hidden
+/// on all rows the picker owns.
+pub(crate) struct RowSlotInfo {
+    /// Replacement text for the `PlayTime` field (when the file was last written), or `None` to hide
+    /// the field -- which is what every non-file row gets, and what a file whose timestamp is
+    /// unreadable gets rather than a fabricated date.
+    pub(crate) play_time: Option<String>,
+}
+
+/// What the browse picker wants done with ProfileSelect row `row`'s per-slot info fields.
 ///
 /// `None` when the picker does NOT own the rows. That is the load-bearing half of the scope: the
 /// vanilla character-slot views, the title-screen Load Game list first among them, render from the
 /// game's own records and must be left exactly as the game draws them. Same ownership gate as
 /// [`save_picker_browse_stats_lines`], so the two cannot disagree about who owns a row.
-pub(crate) fn save_picker_row_shows_native_slot_info(row: usize) -> Option<bool> {
+pub(crate) fn save_picker_row_slot_info(row: usize) -> Option<RowSlotInfo> {
     if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 && !missing_save_selection_pending() {
         return None;
     }
-    let guard = crate::experiments::save_picker::active_save_picker_lock();
-    Some(guard.as_ref()?.row_shows_native_slot_info(row))
+    let last_saved = {
+        let guard = crate::experiments::save_picker::active_save_picker_lock();
+        guard.as_ref()?.row_last_saved(row)
+    };
+    Some(RowSlotInfo {
+        play_time: last_saved.and_then(save_picker_last_saved_text),
+    })
+}
+
+/// Render one file's modification time as the row's last-saved text, in local time.
+/// `None` when the stamp predates the epoch or the OS cannot give a local offset for it -- the row
+/// then hides the field rather than showing a date we cannot stand behind.
+fn save_picker_last_saved_text(modified: std::time::SystemTime) -> Option<String> {
+    let secs = modified
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    let secs = i64::try_from(secs).ok()?;
+    crate::experiments::save_picker::format_last_saved(secs, unsafe {
+        local_utc_offset_seconds(secs)
+    }?)
+}
+
+/// The local zone's offset from UTC at the instant `utc_secs`, in seconds.
+///
+/// Asks WINDOWS rather than assuming, and asks about THAT INSTANT rather than about now:
+/// `SystemTimeToTzSpecificLocalTime` applies the zone's DST rules for the given date, so a save
+/// written on the other side of a DST boundary still renders the wall-clock time it was written at.
+/// (Comparing `GetLocalTime` to `GetSystemTime` would give only the CURRENT offset and misdate every
+/// file from the other side of the boundary by an hour.) The offset comes back as a number, which is
+/// all the pure formatter needs -- that is what keeps the rendering unit-testable.
+unsafe fn local_utc_offset_seconds(utc_secs: i64) -> Option<i64> {
+    use windows::Win32::Foundation::{FILETIME, SYSTEMTIME};
+    use windows::Win32::System::Time::{
+        FileTimeToSystemTime, SystemTimeToFileTime, SystemTimeToTzSpecificLocalTime,
+    };
+
+    /// 100ns ticks per second, and the seconds between the FILETIME (1601) and Unix (1970) epochs.
+    const TICKS_PER_SECOND: i64 = 10_000_000;
+    const FILETIME_EPOCH_TO_UNIX_SECONDS: i64 = 11_644_473_600;
+
+    fn to_filetime(secs: i64) -> Option<FILETIME> {
+        let ticks = secs
+            .checked_add(FILETIME_EPOCH_TO_UNIX_SECONDS)?
+            .checked_mul(TICKS_PER_SECOND)
+            .and_then(|t| u64::try_from(t).ok())?;
+        Some(FILETIME {
+            dwLowDateTime: ticks as u32,
+            dwHighDateTime: (ticks >> 32) as u32,
+        })
+    }
+
+    let utc_ft = to_filetime(utc_secs)?;
+    let mut utc_st = SYSTEMTIME::default();
+    unsafe { FileTimeToSystemTime(&utc_ft, &mut utc_st) }.ok()?;
+    let mut local_st = SYSTEMTIME::default();
+    unsafe { SystemTimeToTzSpecificLocalTime(None, &utc_st, &mut local_st) }.ok()?;
+    // Reading the local wall clock back as if it were UTC turns it into "unix seconds shifted by the
+    // offset", so the difference IS the offset the zone applied at that instant.
+    let mut local_ft = FILETIME::default();
+    unsafe { SystemTimeToFileTime(&local_st, &mut local_ft) }.ok()?;
+    let local_ticks =
+        (u64::from(local_ft.dwHighDateTime) << 32) | u64::from(local_ft.dwLowDateTime);
+    let local_secs = i64::try_from(local_ticks / TICKS_PER_SECOND as u64).ok()?
+        - FILETIME_EPOCH_TO_UNIX_SECONDS;
+    Some(local_secs - utc_secs)
 }
 
 #[cfg(test)]
 mod save_picker_row_slot_info_tests {
     use super::*;
 
-    /// SCOPE PROOF for the non-file-row Level/PlayTime suppression: with no picker owning the rows
-    /// -- the state the vanilla character-slot views run in, the title-screen Load Game list among
-    /// them -- the gate answers `None` for every row, and `None` is the only answer the populate
-    /// hook treats as "leave this row exactly as the game drew it". A regression that made the
-    /// suppression global would have to make this return `Some` here first.
+    /// SCOPE PROOF for the row Level/PlayTime rework: with no picker owning the rows -- the state
+    /// the vanilla character-slot views run in, the title-screen Load Game list among them -- the
+    /// gate answers `None` for every row, and `None` is the only answer the populate hook treats as
+    /// "leave this row exactly as the game drew it". A regression that made the suppression or the
+    /// last-saved text global would have to make this return `Some` here first.
     #[test]
     fn no_picker_means_no_row_is_ever_classified() {
         assert_eq!(
@@ -705,9 +780,8 @@ mod save_picker_row_slot_info_tests {
             "no picker session may be active in a unit test"
         );
         for row in 0..crate::experiments::save_picker::PICKER_ROW_COUNT {
-            assert_eq!(
-                save_picker_row_shows_native_slot_info(row),
-                None,
+            assert!(
+                save_picker_row_slot_info(row).is_none(),
                 "row {row} was classified without a picker owning the rows"
             );
         }

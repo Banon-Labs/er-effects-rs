@@ -1321,6 +1321,11 @@ pub static PROFILE_ROW_SLOT_INFO_VIS_SKIPS: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_ROW_SLOT_INFO_NON_DISPLAY: AtomicUsize = AtomicUsize::new(0);
 /// Last GFx value type seen by the row-field visibility path.
 pub static PROFILE_ROW_SLOT_INFO_LAST_DATATYPE: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Browse rows whose `PlayTime` was replaced with the file's last-saved timestamp.
+pub static PROFILE_ROW_LAST_SAVED_ROWS: AtomicUsize = AtomicUsize::new(0);
+/// Rows where the last-saved text could not be staged into the row model (field unreadable), so the
+/// native playtime string stood.
+pub static PROFILE_ROW_LAST_SAVED_STAGE_FAILURES: AtomicUsize = AtomicUsize::new(0);
 pub static LAST_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_FACE_IDENTITY_CHECKS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_FACE_IDENTITY_MISMATCHES: AtomicUsize = AtomicUsize::new(0);

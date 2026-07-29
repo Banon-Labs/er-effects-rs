@@ -87,21 +87,31 @@ pub(crate) const PROFILE_ROW_MODEL_SLOT_08_OFFSET: usize = 0x8;
 //   * `PlayTime` -- `FUN_14074a000(&proxy->comp, playtime)`, the string being the row model's own
 //     `CS::MenuSaveDataSummary` playtime (+0xc8 literal, else the DLString at +0xd0), formatted from
 //     seconds by `FUN_140875be0` inside the row-model builder `FUN_1408759e0`.
-// LEVER: none of the three can be emptied through the record, and a post-populate re-resolve is
+// LEVER, LEVEL FIELDS: neither can be emptied through the record, and a post-populate re-resolve is
 // impossible (the named-child ctor 0x14074a7c0 resolves out of the PARENT proxy's embedded value at
-// +0x28, which the populate destroys at its end). So the rows that have no character hide the fields
-// instead, per row, through the game's own visibility wrapper
-// (`TITLE_PRESS_START_SET_VISIBLE_RVA`) -- content-free in both directions, which is what makes the
-// restore as exact as the hide.
+// +0x28, which the populate destroys at its end). So a browse row HIDES them, per row, through the
+// game's own visibility wrapper (`TITLE_PRESS_START_SET_VISIBLE_RVA`) -- content-free in both
+// directions, which is what makes the restore as exact as the hide.
+// LEVER, PLAYTIME: the string comes from the row model, so a browse row can simply give the populate
+// a different one (see `PROFILE_ROW_MODEL_PLAY_TIME_MENUSTRING_C8_OFFSET`) and a save-FILE row shows
+// when the file was last written instead of a playtime it does not have.
 pub(crate) const PROFILE_ROW_LEVEL_CAPTION_FIELD_NAME: &str = "StaticText_110502\0";
 pub(crate) const PROFILE_ROW_LEVEL_VALUE_FIELD_NAME: &str = "Level\0";
 pub(crate) const PROFILE_ROW_PLAYTIME_FIELD_NAME: &str = "PlayTime\0";
-/// The three fields together: what a row shows about a save slot's character beyond its name.
-pub(crate) const PROFILE_ROW_SLOT_INFO_FIELD_NAMES: [&str; 3] = [
-    PROFILE_ROW_LEVEL_CAPTION_FIELD_NAME,
-    PROFILE_ROW_LEVEL_VALUE_FIELD_NAME,
-    PROFILE_ROW_PLAYTIME_FIELD_NAME,
-];
+/// Offset of the row model's `PlayTime` `CS::MenuString` inside `CS::MenuSaveDataSummary`. The
+/// struct is `{ wchar_t* rawString; DLString<wchar_t> dLString; }` (Ghidra `CS::MenuString`, 0x38
+/// bytes) and every reader takes `rawString` when it is non-NULL, else the DLString's buffer -- the
+/// row-populate `FUN_1408757e0` and the FMG static pass `FUN_14074c540` both spell that same
+/// accessor inline. So pointing `rawString` at our own UTF-16 for the duration of ONE native
+/// populate makes the game's own `FUN_14074a000` write our text, with no second SetText and nothing
+/// left behind: `~MenuString` (0x1401bcc60) frees only the DLString, never `rawString`, and we
+/// restore the displaced pointer as soon as the populate returns.
+pub(crate) const PROFILE_ROW_MODEL_PLAY_TIME_MENUSTRING_C8_OFFSET: usize = 0xc8;
+/// Count of rows whose `PlayTime` was replaced with the file's last-saved timestamp (oracle).
+pub(crate) use er_telemetry::counters::PROFILE_ROW_LAST_SAVED_ROWS;
+/// Count of rows where the last-saved text could not be staged into the row model (the model field
+/// was unreadable), so the row kept the native playtime string (oracle).
+pub(crate) use er_telemetry::counters::PROFILE_ROW_LAST_SAVED_STAGE_FAILURES;
 /// GFx value type (`CSScaleformValue+0x20 & 0x8f`) the visibility setter `FUN_140d844d0` requires:
 /// it returns without doing anything unless the resolved value is a DISPLAY OBJECT (10). Recorded
 /// per call as an oracle so "the fields are still visible in game" is diagnosable from telemetry

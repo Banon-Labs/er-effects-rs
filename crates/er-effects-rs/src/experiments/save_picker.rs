@@ -129,14 +129,14 @@ pub(crate) enum PickerRow {
     Empty,
 }
 
-/// Whether the native ProfileSelect row's per-slot info fields -- the `Level` FMG caption, the
-/// `Level` value and `PlayTime` -- describe anything on a row of this kind.
+/// Whether a row of this kind has a LAST-SAVED time to show where the native row shows a playtime.
 ///
-/// Those three fields exist to describe ONE save slot's character. Only a [`PickerRow::File`] row
-/// has a character behind it; every other browse row is navigation or intent, so the fields render
-/// the staged record's zeroed defaults ("Level 0", "0:00:00") -- not wrong values but meaningless
-/// ones. The match is exhaustive on purpose: a new row kind must state which side it is on.
-pub(crate) fn picker_row_shows_native_slot_info(row: &PickerRow) -> bool {
+/// Only a [`PickerRow::File`] row is backed by a file on disk, so only it has a modification time.
+/// Everything else is navigation or intent. (The native `Level` caption and value are a different
+/// story: NO browse row is a profile slot, so a level is meaningless on every one of them and they
+/// are hidden across the board -- there is nothing row-kind-dependent left to decide.) The match is
+/// exhaustive on purpose: a new row kind must state which side it is on.
+pub(crate) fn picker_row_has_last_saved_time(row: &PickerRow) -> bool {
     match row {
         PickerRow::File(_) => true,
         PickerRow::ParentDir
@@ -147,6 +147,71 @@ pub(crate) fn picker_row_shows_native_slot_info(row: &PickerRow) -> bool {
         | PickerRow::NextPage
         | PickerRow::Empty => false,
     }
+}
+
+/// Civil date-time fields, already in whatever zone the caller shifted into.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CivilDateTime {
+    pub(crate) year: i64,
+    pub(crate) month: u32,
+    pub(crate) day: u32,
+    pub(crate) hour: u32,
+    pub(crate) minute: u32,
+}
+
+/// Seconds in a day.
+const SECONDS_PER_DAY: i64 = 86_400;
+
+/// Split `secs` (seconds since the Unix epoch) into civil date-time fields.
+///
+/// PURE, and the zone shift is the caller's business: add the UTC offset first and this same
+/// function yields local time, which is what makes the local rendering testable without a machine
+/// timezone. Days-to-civil is Hinnant's era-based algorithm (proleptic Gregorian, exact well past
+/// any timestamp a filesystem can hold). `None` before the epoch -- a save file dated before 1970 is
+/// a broken clock, not a date worth rendering.
+pub(crate) fn civil_from_unix_seconds(secs: i64) -> Option<CivilDateTime> {
+    if secs < 0 {
+        return None;
+    }
+    let days = secs.div_euclid(SECONDS_PER_DAY);
+    let secs_of_day = secs.rem_euclid(SECONDS_PER_DAY);
+    // Shift the epoch to 0000-03-01 so leap days land at the end of the 400-year era.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097); // day of era, [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // day of (March-based) year, [0, 365]
+    let mp = (5 * doy + 2) / 153; // March-based month, [0, 11]
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    Some(CivilDateTime {
+        year,
+        month,
+        day,
+        hour: (secs_of_day / 3_600) as u32,
+        minute: (secs_of_day % 3_600 / 60) as u32,
+    })
+}
+
+/// The text a save-file row shows where the native row shows a playtime: when that file was last
+/// written, `YYYY-MM-DD HH:MM`, in the local zone `utc_offset_seconds` describes.
+///
+/// PURE -- the OS supplies only the offset -- so the rendering is testable across a DST boundary by
+/// passing the two offsets that boundary switches between.
+///
+/// NO "Last saved: " PREFIX, and that is measured rather than assumed: in the 05_010 row template
+/// the `PlayTime` field is 200px wide (bounds -40..3960 twips) at a 24px `MenuFont_01`, and
+/// `scripts/gfx_text_width.py` sums that font's own advance table to 268.0px for
+/// `Last saved: 2026-07-29 08:03` against 163.1px for the bare timestamp. The field is
+/// wordwrap+multiline inside 40px, so an overflow does not truncate -- it wraps to a second line the
+/// box clips, which would hide the date and leave only the prefix.
+pub(crate) fn format_last_saved(secs: i64, utc_offset_seconds: i64) -> Option<String> {
+    let local = civil_from_unix_seconds(secs.checked_add(utc_offset_seconds)?)?;
+    Some(format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}",
+        local.year, local.month, local.day, local.hour, local.minute
+    ))
 }
 
 /// Outcome of activating a row. `Repopulate` means the listing changed (new directory, new drive or
@@ -644,12 +709,26 @@ impl SavePickerModel {
         }
     }
 
-    /// Whether the native per-slot info fields (`Level` caption, `Level` value, `PlayTime`) belong
-    /// on `row` of the current page. Same single decision point as the label and the character
-    /// info: [`row_meaning`](Self::row_meaning) classifies the row,
-    /// [`picker_row_shows_native_slot_info`] decides.
-    pub(crate) fn row_shows_native_slot_info(&self, row: usize) -> bool {
-        picker_row_shows_native_slot_info(&self.row_meaning(row))
+    /// When the file behind `row` was last written -- the timestamp the row shows in place of the
+    /// native playtime -- or `None` for every other row kind, and for a file whose metadata the
+    /// listing build could not read.
+    ///
+    /// Cross-checked exactly like [`row_file_characters`](Self::row_file_characters), and for the
+    /// same reason: the entry read at the page index must be the very file the label named, or the
+    /// row would date itself from a neighbour. Reads only what the listing build already collected
+    /// (`PickerEntry::File::modified`, the dirent metadata the sort order is derived from), so no
+    /// row query ever touches the filesystem.
+    pub(crate) fn row_last_saved(&self, row: usize) -> Option<SystemTime> {
+        let PickerRow::File(labelled) = self.row_meaning(row) else {
+            return None;
+        };
+        match self
+            .page_entries()
+            .get(row.checked_sub(self.entry_row_base())?)
+        {
+            Some(PickerEntry::File { path, modified, .. }) if *path == labelled => *modified,
+            _ => None,
+        }
     }
 
     /// Apply the effect of activating `row`.
@@ -893,13 +972,16 @@ pub(crate) fn truncate_utf16(text: &str, max: usize) -> Vec<u16> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     /// Build a model with a fixed listing, bypassing the filesystem enumeration `open` does.
     ///
-    /// Each file carries ONE character whose name encodes the file's own index (`char{idx}`), so a
-    /// test can assert that the character info a row renders belongs to that row's OWN file rather
-    /// than a neighbour's -- the exact confusion `row_file_characters` had.
+    /// Each file carries ONE character whose name encodes the file's own index (`char{idx}`), and a
+    /// modification time of epoch + `idx` minutes, so a test can assert that the character info AND
+    /// the timestamp a row renders belong to that row's OWN file rather than a neighbour's -- the
+    /// exact confusion `row_file_characters` had.
     ///
     /// `drives` is left EMPTY, so these models have no drive cycler row: the drive-row tests opt
     /// in explicitly via `with_drives`, and every other test keeps the no-drive-row layout.
@@ -912,7 +994,7 @@ mod tests {
                 .map(|idx| PickerEntry::File {
                     name: format!("save{idx}.sl2"),
                     path: PathBuf::from(dir).join(format!("save{idx}.sl2")),
-                    modified: None,
+                    modified: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(idx as u64 * 60)),
                     chars: vec![crate::experiments::SaveSlotInfo {
                         slot: 0,
                         name: format!("char{idx}"),
@@ -1055,12 +1137,12 @@ mod tests {
         }
     }
 
-    /// Only a save-FILE row has a character, so only a File row keeps the native per-slot info
-    /// fields. Enumerated per kind so the decision is pinned independently of any layout.
+    /// Only a save-FILE row is backed by a file, so only a File row has a last-saved time to show.
+    /// Enumerated per kind so the decision is pinned independently of any layout.
     #[test]
-    fn only_file_rows_show_the_native_slot_info_fields() {
+    fn only_file_rows_have_a_last_saved_time() {
         let path = PathBuf::from("Z:\\saves\\save0.sl2");
-        assert!(picker_row_shows_native_slot_info(&PickerRow::File(
+        assert!(picker_row_has_last_saved_time(&PickerRow::File(
             path.clone()
         )));
         for row in [
@@ -1073,16 +1155,17 @@ mod tests {
             PickerRow::Empty,
         ] {
             assert!(
-                !picker_row_shows_native_slot_info(&row),
-                "{row:?} has no character behind it, so Level/PlayTime must be suppressed"
+                !picker_row_has_last_saved_time(&row),
+                "{row:?} is backed by no file, so it has no last-saved time"
             );
         }
     }
 
-    /// On a real layout the suppression decision must agree with the row's own label/character info,
-    /// across both intents and with the drive row present: exactly the file rows keep the fields.
+    /// On a real layout the timestamp decision must agree with the row's own label and character
+    /// info, across both intents and with the drive row present: exactly the file rows carry one,
+    /// and each carries ITS OWN file's stamp rather than a neighbour's.
     #[test]
-    fn slot_info_visibility_agrees_with_the_rows_character_info() {
+    fn last_saved_time_agrees_with_the_rows_own_file() {
         for model in [
             model_with(PickerIntent::LoadSource, "Z:\\saves", 3),
             destination("Z:\\saves", 3),
@@ -1091,28 +1174,128 @@ mod tests {
                 &["C:\\", "Z:\\"],
             ),
             with_drives(destination("Z:\\", 3), &["C:\\", "Z:\\"]),
-            // Long enough to need the page cycler, whose row must also be suppressed.
+            // Long enough to need the page cycler, which carries no timestamp either.
             model_with(PickerIntent::LoadSource, "Z:\\saves", PICKER_ROW_COUNT + 4),
         ] {
-            let mut kept = 0;
+            let mut dated = 0;
             for row in 0..PICKER_ROW_COUNT {
-                let shows = model.row_shows_native_slot_info(row);
+                let is_file = row_label_file(&model, row).is_some();
                 assert_eq!(
-                    shows,
-                    row_label_file(&model, row).is_some(),
+                    picker_row_has_last_saved_time(&model.row_meaning(row)),
+                    is_file,
                     "row {row} ({:?}) disagrees with its label about being a save file",
                     model.row_meaning(row)
                 );
                 assert_eq!(
-                    shows,
+                    is_file,
                     model.row_file_characters(row).is_some(),
                     "row {row} ({:?}) disagrees with its character info",
                     model.row_meaning(row)
                 );
-                kept += usize::from(shows);
+                // `model_with` stamps file `idx` at epoch + idx minutes, so the stamp a row renders
+                // proves WHICH file it read -- the same own-file property the character info has.
+                match (row_label_file(&model, row), model.row_last_saved(row)) {
+                    (Some(file), Some(stamp)) => {
+                        let idx: u64 = file
+                            .trim_start_matches("save")
+                            .trim_end_matches(".sl2")
+                            .parse()
+                            .expect("test file names carry their index");
+                        assert_eq!(
+                            stamp,
+                            SystemTime::UNIX_EPOCH + Duration::from_secs(idx * 60),
+                            "row {row} labelled {file} rendered another file's timestamp"
+                        );
+                        dated += 1;
+                    }
+                    (Some(file), None) => panic!("file row {row} ({file}) lost its timestamp"),
+                    (None, Some(_)) => panic!("non-file row {row} produced a timestamp"),
+                    (None, None) => {}
+                }
             }
-            assert!(kept > 0, "at least one file row must keep its slot info");
+            assert!(dated > 0, "at least one file row must carry a timestamp");
         }
+    }
+
+    /// A file whose metadata the listing build could not read renders NOTHING -- never a fabricated
+    /// or epoch-zero date.
+    #[test]
+    fn a_file_without_metadata_has_no_last_saved_time() {
+        let mut model = model_with(PickerIntent::LoadSource, "Z:\\saves", 2);
+        for entry in &mut model.entries {
+            if let PickerEntry::File { modified, .. } = entry {
+                *modified = None;
+            }
+        }
+        let base = model.entry_row_base();
+        assert!(matches!(model.row_meaning(base), PickerRow::File(_)));
+        assert_eq!(model.row_last_saved(base), None);
+    }
+
+    /// Known epochs, including the leap-year cases an off-by-one in the era algorithm breaks first.
+    #[test]
+    fn civil_time_matches_known_epochs() {
+        let cases: [(i64, (i64, u32, u32, u32, u32)); 8] = [
+            (0, (1970, 1, 1, 0, 0)),
+            (86_399, (1970, 1, 1, 23, 59)),
+            (86_400, (1970, 1, 2, 0, 0)),
+            // 2000-02-29 12:00: leap year by the 400-rule.
+            (951_825_600, (2000, 2, 29, 12, 0)),
+            // 2100-02-28 then 2100-03-01, one day apart: 2100 is NOT a leap year (100-rule), so a
+            // date the 4-rule alone would place on 2100-02-29 must not exist.
+            (4_107_456_000, (2100, 2, 28, 0, 0)),
+            (4_107_542_400, (2100, 3, 1, 0, 0)),
+            (1_785_312_180, (2026, 7, 29, 8, 3)),
+            // Just under the signed-32-bit epoch limit, which this i64 arithmetic must not care
+            // about.
+            (2_147_483_640, (2038, 1, 19, 3, 14)),
+        ];
+        for (secs, (year, month, day, hour, minute)) in cases {
+            assert_eq!(
+                civil_from_unix_seconds(secs),
+                Some(CivilDateTime {
+                    year,
+                    month,
+                    day,
+                    hour,
+                    minute
+                }),
+                "epoch {secs}"
+            );
+        }
+        assert_eq!(civil_from_unix_seconds(-1), None, "pre-epoch is not a date");
+    }
+
+    /// The rendered text, and the DST boundary the offset has to carry: US Pacific springs forward
+    /// at 2026-03-08 10:00 UTC, so one minute of real time crosses from -08:00 to -07:00 and the
+    /// local clock jumps 01:59 -> 03:00. Passing the two offsets that boundary switches between is
+    /// exactly how the OS-supplied offset behaves, so this pins the arithmetic without a machine
+    /// timezone.
+    #[test]
+    fn last_saved_renders_local_time_across_a_dst_boundary() {
+        const PST: i64 = -8 * 3_600;
+        const PDT: i64 = -7 * 3_600;
+        // 2026-03-08 09:59:00 UTC, still PST.
+        assert_eq!(
+            format_last_saved(1_772_963_940, PST).as_deref(),
+            Some("2026-03-08 01:59")
+        );
+        // 2026-03-08 10:00:00 UTC, one minute later, now PDT: the wall clock skips 02:00.
+        assert_eq!(
+            format_last_saved(1_772_964_000, PDT).as_deref(),
+            Some("2026-03-08 03:00")
+        );
+        // The same instant in UTC and east of Greenwich, to pin the sign of the offset.
+        assert_eq!(
+            format_last_saved(1_772_964_000, 0).as_deref(),
+            Some("2026-03-08 10:00")
+        );
+        assert_eq!(
+            format_last_saved(1_772_964_000, 2 * 3_600).as_deref(),
+            Some("2026-03-08 12:00")
+        );
+        // An offset that would push the instant before the epoch renders nothing.
+        assert_eq!(format_last_saved(60, -3_600), None);
     }
 
     /// The drive cycler must be excluded from entry indexing in BOTH intents: it shifts the entry

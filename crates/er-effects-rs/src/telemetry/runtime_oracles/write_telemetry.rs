@@ -444,6 +444,14 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         PROFILE_ROW_SLOT_INFO_NON_DISPLAY.load(Ordering::SeqCst),
         PROFILE_ROW_SLOT_INFO_LAST_DATATYPE.load(Ordering::SeqCst) as isize
     ));
+    // Save-file rows showing when the file was last written in place of the native playtime.
+    // `_rows` > 0 proves the row model carried our text into the native populate; `_stage_failures`
+    // > 0 means the model field was unreadable and the row kept the game's own playtime string.
+    body.push_str(&format!(
+        "  \"oracle_profile_row_last_saved_rows\": {},\n  \"oracle_profile_row_last_saved_stage_failures\": {},\n",
+        PROFILE_ROW_LAST_SAVED_ROWS.load(Ordering::SeqCst),
+        PROFILE_ROW_LAST_SAVED_STAGE_FAILURES.load(Ordering::SeqCst)
+    ));
     body.push_str(&format!(
         "  \"oracle_save_picker_overlay_armed\": {},\n  \"oracle_save_picker_overlay_open_count\": {},\n  \"oracle_save_picker_overlay_draw_hits\": {},\n  \"oracle_save_picker_overlay_input_hits\": {},\n  \"oracle_save_picker_overlay_poll_count\": {},\n  \"oracle_save_picker_overlay_held_polls\": {},\n  \"oracle_save_picker_kbd_hook_hits\": {},\n  \"oracle_save_picker_overlay_pick_count\": {},\n  \"oracle_save_picker_overlay_pick_reject_count\": {},\n",
         SAVE_PICKER_OVERLAY_ARMED.load(Ordering::SeqCst),
