@@ -455,11 +455,12 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // reports a terminal status, then latched (0 = success).
     let bypass_final_status = er_save_suppress::bypass_final_status_raw();
     body.push_str(&format!(
-        "  \"oracle_save_suppress_armed\": {},\n  \"oracle_save_suppress_submits_swallowed\": {},\n  \"oracle_save_suppress_submits_passed_through\": {},\n  \"oracle_save_suppress_status_faked\": {},\n  \"oracle_save_suppress_prologue_mismatches\": {},\n  \"oracle_save_suppress_settle_events\": {},\n  \"oracle_save_bypass_armed_total\": {},\n  \"oracle_save_bypass_allowed_total\": {},\n  \"oracle_save_bypass_allowed_failed_total\": {},\n  \"oracle_save_bypass_expired_total\": {},\n  \"oracle_save_bypass_final_status\": {},\n  \"oracle_save_flow_stage\": {},\n  \"oracle_save_flow_gate_latch_blocked\": {},\n  \"oracle_save_flow_commit_complete_count\": {},\n",
+        "  \"oracle_save_suppress_armed\": {},\n  \"oracle_save_suppress_submits_swallowed\": {},\n  \"oracle_save_suppress_submits_passed_through\": {},\n  \"oracle_save_suppress_status_faked\": {},\n  \"oracle_save_suppress_status_faked_idle\": {},\n  \"oracle_save_suppress_prologue_mismatches\": {},\n  \"oracle_save_suppress_settle_events\": {},\n  \"oracle_save_bypass_armed_total\": {},\n  \"oracle_save_bypass_allowed_total\": {},\n  \"oracle_save_bypass_allowed_failed_total\": {},\n  \"oracle_save_bypass_expired_total\": {},\n  \"oracle_save_bypass_final_status\": {},\n  \"oracle_save_flow_stage\": {},\n  \"oracle_save_flow_gate_latch_blocked\": {},\n  \"oracle_save_flow_commit_complete_count\": {},\n",
         er_save_suppress::is_armed(),
         er_save_suppress::submits_swallowed(),
         er_save_suppress::submits_passed_through(),
         er_save_suppress::status_faked(),
+        er_save_suppress::status_faked_idle(),
         er_save_suppress::prologue_mismatches(),
         er_save_suppress::settle_events(),
         er_save_suppress::bypass_armed_total(),
@@ -474,6 +475,28 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SAVE_FLOW_STAGE.load(Ordering::SeqCst),
         SAVE_FLOW_GATE_LATCH_BLOCKED_COUNT.load(Ordering::SeqCst),
         SAVE_FLOW_COMMIT_COMPLETE_COUNT.load(Ordering::SeqCst),
+    ));
+    // SAVE-DISPATCH ATTRIBUTION. These read the native chain BETWEEN "the request flags are
+    // set" and "an SL enqueue arrives", which the enqueue-side counters above cannot see: a
+    // save lane that returns 0 touches nothing, so the request stays latched, the dispatcher
+    // re-enters it every frame, and `oracle_save_bypass_expired_total` is the only trace --
+    // identical to the case where nothing consumed the request at all.
+    //
+    // Read them as: observers_installed == 0 -> the rest are meaningless (not "no dispatch");
+    // dispatch_calls == 0 -> the dispatcher never ran; declines > 0 -> it ran and refused;
+    // serialize_failures > 0 -> the character serializer FUN_14067dc00 is what refused, and
+    // serialize_last_fail_bytes says whether it was rejected at its first gate (u64::MAX =
+    // the byte counter did not move) or aborted that many bytes into the chain.
+    body.push_str(&format!(
+        "  \"oracle_save_dispatch_observers_installed\": {},\n  \"oracle_save_dispatch_calls\": {},\n  \"oracle_save_dispatch_declines\": {},\n  \"oracle_save_dispatch_declines_with_bypass\": {},\n  \"oracle_save_dispatch_last_lane\": {},\n  \"oracle_save_serialize_calls\": {},\n  \"oracle_save_serialize_failures\": {},\n  \"oracle_save_serialize_last_fail_bytes\": {},\n",
+        er_save_suppress::dispatch_observers_installed(),
+        er_save_suppress::dispatch_calls(),
+        er_save_suppress::dispatch_declines(),
+        er_save_suppress::dispatch_declines_with_bypass(),
+        er_save_suppress::dispatch_last_lane(),
+        er_save_suppress::serialize_calls(),
+        er_save_suppress::serialize_failures(),
+        er_save_suppress::serialize_last_fail_bytes(),
     ));
     // SAVE-FLOW CONFIRM CHAIN oracles (save-game-flow WP2 + WP3): Box1 "are you sure", Box2
     // "overwrite your loaded save", Box3 "overwrite this file" (the destination browser's final

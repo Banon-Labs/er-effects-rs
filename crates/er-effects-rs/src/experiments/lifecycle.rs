@@ -520,9 +520,27 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
             -1
         };
         // Snapshot the consumed-token counter so stage 8 can tell a save that actually reached
-        // the writer from a fire that silently went nowhere.
+        // the writer from a fire that silently went nowhere -- and, alongside it, the
+        // native-side attribution counters so a failure can name WHICH link broke instead of
+        // only reporting that the enqueue never arrived (see `save_flow_fire_failure_reason`).
         SAVE_FLOW_BYPASS_ALLOWED_AT_FIRE.store(
             usize::try_from(er_save_suppress::bypass_allowed_total()).unwrap_or(usize::MAX),
+            Ordering::SeqCst,
+        );
+        SAVE_FLOW_DISPATCH_CALLS_AT_FIRE.store(
+            usize::try_from(er_save_suppress::dispatch_calls()).unwrap_or(usize::MAX),
+            Ordering::SeqCst,
+        );
+        SAVE_FLOW_DISPATCH_DECLINES_AT_FIRE.store(
+            usize::try_from(er_save_suppress::dispatch_declines()).unwrap_or(usize::MAX),
+            Ordering::SeqCst,
+        );
+        SAVE_FLOW_SERIALIZE_FAILURES_AT_FIRE.store(
+            usize::try_from(er_save_suppress::serialize_failures()).unwrap_or(usize::MAX),
+            Ordering::SeqCst,
+        );
+        SAVE_FLOW_SUBMITS_SWALLOWED_AT_FIRE.store(
+            usize::try_from(er_save_suppress::submits_swallowed()).unwrap_or(usize::MAX),
             Ordering::SeqCst,
         );
         append_autoload_debug(format_args!(
@@ -538,6 +556,89 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
         save_dest_reset("fire-gate timeout");
         save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "fire-gate timeout");
     }
+}
+
+/// Name the link that broke when a fired Save Game commit produced no write.
+///
+/// This exists because "no save enqueue arrived" is the SAME observation for four different
+/// failures, and telling them apart used to take a run each. The native chain a fired
+/// request has to walk (1.16.2 decompile) is:
+///
+/// ```text
+///   RequestSave/SaveRequest_Profile   set GameMan+0xb72 / +0xb73
+///     -> FUN_140afb880                 the per-frame dispatcher in MoveMapStep step 18
+///          gate: saveState == 0, ShouldSave()/b73 getter, !BOOL_143d856a0
+///     -> FUN_14067b940 / b750 / b570   the lane
+///     -> FUN_14067dc00                 the character serializer (character lanes only)
+///     -> FUN_140e6ef60 / FUN_140e6ec70 the submit builder
+///     -> FUN_140e6fb50                 the SL enqueue -- where the one-shot bypass lives
+/// ```
+///
+/// Only the last link is ours. A lane that returns 0 touches NOTHING (the request flags stay
+/// set, `saveState` stays 0), so the dispatcher re-enters it every frame and the failure is
+/// invisible from the enqueue: exactly the shape that made a real run read as "the fire went
+/// nowhere" with no way to tell whether anything downstream had even been attempted.
+///
+/// Deltas, not totals: the counters are process-lifetime and a session has already swallowed
+/// boot saves before the user ever presses the row.
+fn save_flow_fire_failure_reason() -> String {
+    if er_save_suppress::dispatch_observers_installed() == 0 {
+        return "attribution unavailable: the save-dispatch observers are not installed on this \
+                build, so the native chain between the request flags and the enqueue cannot be \
+                read"
+            .to_owned();
+    }
+    let since = |now: u64, at_fire: &core::sync::atomic::AtomicUsize| -> u64 {
+        now.saturating_sub(at_fire.load(Ordering::SeqCst) as u64)
+    };
+    let dispatch = since(
+        er_save_suppress::dispatch_calls(),
+        &SAVE_FLOW_DISPATCH_CALLS_AT_FIRE,
+    );
+    let declines = since(
+        er_save_suppress::dispatch_declines(),
+        &SAVE_FLOW_DISPATCH_DECLINES_AT_FIRE,
+    );
+    let serialize_fails = since(
+        er_save_suppress::serialize_failures(),
+        &SAVE_FLOW_SERIALIZE_FAILURES_AT_FIRE,
+    );
+    let swallowed = since(
+        er_save_suppress::submits_swallowed(),
+        &SAVE_FLOW_SUBMITS_SWALLOWED_AT_FIRE,
+    );
+    let facts = format!(
+        "since the fire: dispatch_entries={dispatch} declines={declines} \
+         declines_with_bypass={} serializer_failures={serialize_fails} \
+         serializer_last_fail_bytes={} submits_swallowed={swallowed} last_lane={}",
+        er_save_suppress::dispatch_declines_with_bypass(),
+        er_save_suppress::serialize_last_fail_bytes(),
+        er_save_suppress::dispatch_last_lane()
+    );
+    let verdict = if swallowed > 0 {
+        "WE SWALLOWED IT: a submit was built after the fire and this DLL's suppressor ate it \
+         instead of letting the bypass token through -- the fault is ours, in the bypass \
+         token/enqueue handshake"
+    } else if serialize_fails > 0 {
+        "THE CHARACTER SERIALIZER REFUSED: FUN_14067dc00 returned 0, so the lane skipped the \
+         submit builder entirely. Nothing downstream (submit, enqueue, bypass) was ever \
+         reachable -- read serializer_last_fail_bytes to see whether it was rejected at the \
+         first gate or aborted mid-chain"
+    } else if declines > 0 {
+        "THE DISPATCHER RAN AND REFUSED: a save lane was entered and returned 0 without \
+         serializing, so the request flags stay latched and no submit is built. The refusal \
+         is upstream of the serializer -- the remaining exits in that lane are the 0x280000 / \
+         0x60000 main-heap allocations"
+    } else if dispatch > 0 {
+        "THE DISPATCHER RAN AND SUCCEEDED BUT NO ENQUEUE ARRIVED: a lane returned non-zero \
+         yet FUN_140e6fb50 was never reached, which contradicts the decompiled chain -- treat \
+         the hook set as suspect"
+    } else {
+        "THE DISPATCHER NEVER RAN: no save lane was entered at all after the request flags \
+         were set, so FUN_140afb880's own gate refused (saveState != 0, ShouldSave()/b73 \
+         getter false, or the global save-suppress byte 0x143d856a0 set)"
+    };
+    format!("{verdict} [{facts}]")
 }
 
 /// Stage 8 COMMIT_WAIT: the forced request is in flight through the native pump with the
@@ -578,7 +679,8 @@ fn save_flow_commit_wait_tick(ticks: usize) {
         let expired = er_save_suppress::expire_bypass_if_pending();
         SAVE_FLOW_ENQUEUE_MISSING_COUNT.fetch_add(1, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "save-flow: FIRE WENT NOWHERE -- no save enqueue reached the writer within {ticks} ticks (token_expired={expired}); the user's save did NOT happen. Ending the flow now so the Save Game row is usable again instead of blocking for the full {SAVE_BYPASS_WATCHDOG_TICKS}-tick watchdog"
+            "save-flow: FIRE WENT NOWHERE -- no save enqueue reached the writer within {ticks} ticks (token_expired={expired}); the user's save did NOT happen. {}. Ending the flow now so the Save Game row is usable again instead of blocking for the full {SAVE_BYPASS_WATCHDOG_TICKS}-tick watchdog",
+            save_flow_fire_failure_reason()
         ));
         save_dest_verify_and_disarm("fire went nowhere");
         save_dest_reset("fire went nowhere");
@@ -588,12 +690,13 @@ fn save_flow_commit_wait_tick(ticks: usize) {
     if ticks >= SAVE_BYPASS_WATCHDOG_TICKS {
         let expired = er_save_suppress::expire_bypass_if_pending();
         append_autoload_debug(format_args!(
-            "save-flow: COMMIT WATCHDOG after {ticks} ticks -- {}; the user's save did NOT happen",
+            "save-flow: COMMIT WATCHDOG after {ticks} ticks -- {}; the user's save did NOT happen. {}",
             if expired {
                 "one-shot bypass token was still pending and has been expired"
             } else {
                 "token was consumed but no terminal status was observed"
-            }
+            },
+            save_flow_fire_failure_reason()
         ));
         // A destination write may still have landed (the degraded fail-open path has no token to
         // watch at all), so score it before dropping the window rather than assuming failure.

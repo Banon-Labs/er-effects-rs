@@ -83,6 +83,19 @@
 //! *spins forever waiting for `bc4 == 3`*. Rewriting it to `0` is what closes that
 //! deadlock: `0` is the full-success arm.
 //!
+//! # What the status lie can and cannot do (a hypothesis this file had to kill)
+//!
+//! It is tempting to blame a Save Game that never wrote on the lie -- "we told the game a
+//! save is in progress, so it declined to start another". The decompile rules that out.
+//! The lie only ever rewrites `4` (no request) to `0` (SUCCESS); it never produces `1`
+//! (in flight). The gate that decides whether a new save may be dispatched is
+//! `FUN_14067a080`, which is exactly `GameMan.saveState == 0` -- and the only writers of
+//! `saveState` on the poll path, `FUN_140679510` and `FUN_1406794b0`, set it to **0**
+//! whenever the status is not `1`. So the lie can only ever OPEN that gate, never close
+//! it. When a fired request sits latched with `saveState == 0` and no submit appears, the
+//! refusal is downstream of the gate and upstream of the enqueue -- see the save-dispatch
+//! observers below, which exist to name which link it was.
+//!
 //! # The state a swallowed save leaves behind
 //!
 //! Because the detour returns "submitted OK", the dispatcher runs its real commit tail:
@@ -102,7 +115,7 @@ use std::ffi::c_void;
 #[cfg(windows)]
 use er_game_base::mem::{game_rva, read_bytes};
 #[cfg(windows)]
-use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
+use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook, UnionFn, register_union_hook};
 
 // ============================================================================
 // HOST-DLL SEAMS. The core has no log file and no telemetry file of its own; the one
@@ -209,6 +222,99 @@ const SL_RELEASE_REQUEST_SIG: &[u8] = &[
     0xED, 0x48, 0x8B, 0xF9, 0x48, 0x39, 0x69, 0x28,
 ];
 
+// ============================================================================
+// SAVE-DISPATCH OBSERVERS. Pure observation of the three native save-dispatch lanes and
+// the character serializer that gates two of them. They change nothing; they exist so a
+// save that never reaches the enqueue can be attributed in ONE run instead of three.
+//
+// Why they are needed (1.16.2 decompile, `FUN_140aff640` = MoveMapStep step 18, the
+// steady in-world step -- its step-table entry sits at MoveMapStep+0x378, and the table
+// base 0xa8 with 0x28-byte entries puts that at index 18, the `STEP_MoveMap` index this
+// repo already tracks; the array ends at +0x4b8, which the same function reads):
+//
+//   FUN_140aff640 (every in-world frame)
+//     -> DoSaveStuff              polls the SL status while GameMan.saveState == 1
+//     -> FUN_140afb880            the save DISPATCHER
+//          gate: !BOOL_143d856a0, (ShouldSave() || b73 || slotLoad != -1),
+//                and FUN_14067a080() == (GameMan.saveState == 0)
+//          lane: b72 && b73 -> FUN_14067b940   (combined: char slot + system)
+//                b72        -> FUN_14067b750   (char slot only)
+//                       b73 -> FUN_14067b570   (system only)
+//
+// The two CHARACTER lanes only build a submit when `FUN_14067dc00` (the character
+// serializer) returns non-zero:
+//
+//   cVar2 = FUN_14067dc00(GameMan, buf, 0x280000, 0);
+//   ...
+//   if (cVar2 != '\0') { cVar3 = FUN_140e6ef60(iodev, buf, slot, ...); }   // -> the enqueue
+//   if (cVar3 != '\0') { bc4 1->2; bb8 = 1; saveState = 1; b72 = b73 = 0; }
+//
+// So a serializer that returns 0 makes the lane return 0 having touched NOTHING: b72/b73
+// stay set, saveState stays 0, the dispatcher re-enters next frame, and no SL enqueue is
+// ever created. From the outside that is indistinguishable from "the dispatcher never
+// ran" -- and both look identical to a one-shot bypass token, which simply expires.
+// These observers make the three cases distinguishable.
+//
+// The serializer's own first gate is
+//   `buf == 0 || GameMan+0xcb1 != 0 || GameMan+0xcb2 != 0 || [0x143d68078] == 0`
+// and it returns BEFORE writing the byte counter `_DAT_143d69920`, which every later exit
+// does write (`total - bytesLeft`, i.e. how far the chain got). Sampling that global
+// around the call therefore separates "rejected at the first gate" from "aborted N bytes
+// into the chain", which pins the failing sub-serializer without another hook.
+// ============================================================================
+
+/// `FUN_14067b940` -- combined save dispatcher, taken when b72 AND b73 are set. This is
+/// the lane the Save Game commit deliberately produces (it fires both request setters).
+#[cfg(windows)]
+const SAVE_DISPATCH_COMBINED_RVA: usize = 0x67b940;
+/// `FUN_14067b750` -- character-slot-only dispatcher (b72 set, b73 clear).
+#[cfg(windows)]
+const SAVE_DISPATCH_CHAR_RVA: usize = 0x67b750;
+/// `FUN_14067b570` -- system-slot-only dispatcher (b73 set, b72 clear). Unlike the two
+/// character lanes it does NOT consult `FUN_14067dc00`; it always submits.
+#[cfg(windows)]
+const SAVE_DISPATCH_SYSTEM_RVA: usize = 0x67b570;
+/// `FUN_14067dc00` -- the character serializer. Its return value is the SOLE gate on the
+/// submit call in both character lanes.
+#[cfg(windows)]
+const SAVE_SERIALIZE_CHAR_RVA: usize = 0x67dc00;
+/// `_DAT_143d69920` -- bytes the character serializer produced on its last call, written
+/// on every exit except the first-gate rejection.
+#[cfg(windows)]
+const SAVE_SERIALIZE_BYTES_RVA: usize = 0x3d69920;
+
+const SAVE_DISPATCH_COMBINED_SIG: &[u8] = &[
+    0x48, 0x8B, 0xC4, 0x44, 0x88, 0x40, 0x18, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+    0x48, 0x81, 0xEC, 0xB0, 0x00, 0x00, 0x00,
+];
+const SAVE_DISPATCH_CHAR_SIG: &[u8] = &[
+    0x48, 0x89, 0x5C, 0x24, 0x20, 0x57, 0x41, 0x54, 0x41, 0x57, 0x48, 0x83, 0xEC, 0x30, 0x45, 0x0F,
+    0xB6, 0xF8, 0x44, 0x0F, 0xB6, 0xE2, 0x8B, 0xF9,
+];
+const SAVE_DISPATCH_SYSTEM_SIG: &[u8] = &[
+    0x48, 0x8B, 0xC4, 0x57, 0x48, 0x81, 0xEC, 0xA0, 0x00, 0x00, 0x00, 0x48, 0xC7, 0x44, 0x24, 0x20,
+    0xFE, 0xFF, 0xFF, 0xFF, 0x48, 0x89, 0x58, 0x08,
+];
+const SAVE_SERIALIZE_CHAR_SIG: &[u8] = &[
+    0x40, 0x55, 0x53, 0x56, 0x57, 0x48, 0x8D, 0x6C, 0x24, 0xA8, 0x48, 0x81, 0xEC, 0x58, 0x01, 0x00,
+    0x00, 0x48, 0xC7, 0x45, 0xA0, 0xFE, 0xFF, 0xFF,
+];
+
+/// Lane codes for [`dispatch_last_lane`]. Not an enum: it crosses an atomic and lands in
+/// telemetry JSON as a number.
+pub const SAVE_LANE_NONE: usize = 0;
+/// `FUN_14067b750`, the character-slot-only lane.
+pub const SAVE_LANE_CHAR: usize = 1;
+/// `FUN_14067b570`, the system-slot-only lane.
+pub const SAVE_LANE_SYSTEM: usize = 2;
+/// `FUN_14067b940`, the combined lane the Save Game commit fires.
+pub const SAVE_LANE_COMBINED: usize = 3;
+
+/// [`serialize_last_fail_bytes`] when the serializer's byte counter did not move across a
+/// failing call -- i.e. it was rejected by the first gate (`GameMan+0xcb1`/`+0xcb2` set, or
+/// the save-data subsystem global `0x143d68078` null) before any stream work happened.
+pub const SAVE_SERIALIZE_BYTES_UNMOVED: u64 = u64::MAX;
+
 #[cfg(windows)]
 type EnqueueSaveJobFn = unsafe extern "system" fn(usize, u32) -> u8;
 #[cfg(windows)]
@@ -223,6 +329,15 @@ static ORIG_POLL_SAVE_STATUS: AtomicUsize = AtomicUsize::new(0);
 #[cfg(windows)]
 static SL_RELEASE_REQUEST: AtomicUsize = AtomicUsize::new(0);
 
+#[cfg(windows)]
+static ORIG_SAVE_DISPATCH_COMBINED: AtomicUsize = AtomicUsize::new(0);
+#[cfg(windows)]
+static ORIG_SAVE_DISPATCH_CHAR: AtomicUsize = AtomicUsize::new(0);
+#[cfg(windows)]
+static ORIG_SAVE_DISPATCH_SYSTEM: AtomicUsize = AtomicUsize::new(0);
+#[cfg(windows)]
+static ORIG_SAVE_SERIALIZE_CHAR: AtomicUsize = AtomicUsize::new(0);
+
 /// The two detours that actually suppress: the submit swallow and the status rewrite.
 /// The quit-settle observer is deliberately NOT one of them -- it changes nothing and a
 /// failure to install it must not read as a partial suppression.
@@ -236,8 +351,30 @@ static PROLOGUE_MISMATCHES: AtomicUsize = AtomicUsize::new(0);
 static SUBMITS_SWALLOWED: AtomicU64 = AtomicU64::new(0);
 static SUBMITS_PASSED_THROUGH: AtomicU64 = AtomicU64::new(0);
 static STATUS_FAKED: AtomicU64 = AtomicU64::new(0);
+/// Of [`STATUS_FAKED`], the rewrites issued while `GameMan.saveState == 0` -- i.e. the game
+/// had NO save in flight, so the rewrite retired nothing. See [`status_faked_idle`].
+static STATUS_FAKED_IDLE: AtomicU64 = AtomicU64::new(0);
 static STATUS_PASSED_THROUGH: AtomicU64 = AtomicU64::new(0);
 static RELEASE_UNAVAILABLE: AtomicU64 = AtomicU64::new(0);
+
+// ---- save-dispatch observers (see the block comment on the RVAs above) ----
+static DISPATCH_CALLS: AtomicU64 = AtomicU64::new(0);
+static DISPATCH_DECLINES: AtomicU64 = AtomicU64::new(0);
+static DISPATCH_LAST_LANE: AtomicUsize = AtomicUsize::new(SAVE_LANE_NONE);
+/// Declines observed while a one-shot bypass token was pending. Non-zero is the decisive
+/// answer to "did the dispatcher never run, or did it run and refuse?" -- it ran and
+/// refused, and no amount of waiting at the enqueue will change that.
+static DISPATCH_DECLINES_WITH_BYPASS: AtomicU64 = AtomicU64::new(0);
+static SERIALIZE_CALLS: AtomicU64 = AtomicU64::new(0);
+static SERIALIZE_FAILURES: AtomicU64 = AtomicU64::new(0);
+static SERIALIZE_LAST_FAIL_BYTES: AtomicU64 = AtomicU64::new(SAVE_SERIALIZE_BYTES_UNMOVED);
+static DISPATCH_OBSERVERS_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Resolved address of the serializer's byte counter (0 = unresolved).
+#[cfg(windows)]
+static SERIALIZE_BYTES_ADDR: AtomicUsize = AtomicUsize::new(0);
+/// One "the dispatcher refused the user's save" line per arm, not per frame: the lane is
+/// re-entered every frame while the request stays latched.
+static BYPASS_DECLINE_REPORTED: AtomicUsize = AtomicUsize::new(0);
 
 // ============================================================================
 // ONE-SHOT BYPASS (save-game-flow WP1). A single-use token that lets exactly one SL
@@ -285,6 +422,7 @@ pub fn arm_one_save_bypass() -> bool {
             BYPASS_FINAL_STATUS.store(BYPASS_FINAL_STATUS_NONE, Ordering::SeqCst);
             BYPASS_FINAL_STATUS_FRESH.store(0, Ordering::SeqCst);
             BYPASS_COMPLETION_WATCH.store(0, Ordering::SeqCst);
+            BYPASS_DECLINE_REPORTED.store(0, Ordering::SeqCst);
             let count = BYPASS_ARMED_TOTAL.fetch_add(1, Ordering::SeqCst) + 1;
             log_message(format_args!(
                 "suppress: one-shot bypass ARMED (#{count}) -- the next SL save enqueue will be forwarded for real"
@@ -427,7 +565,7 @@ pub fn settle_observer_installed() -> bool {
 }
 
 /// Suppression counters as (name, value) pairs, for hosts that serialize by iteration.
-pub fn counters() -> [(&'static str, u64); 8] {
+pub fn counters() -> [(&'static str, u64); 16] {
     [
         (
             "suppress_submits_swallowed",
@@ -438,6 +576,35 @@ pub fn counters() -> [(&'static str, u64); 8] {
             SUBMITS_PASSED_THROUGH.load(Ordering::SeqCst),
         ),
         ("suppress_status_faked", STATUS_FAKED.load(Ordering::SeqCst)),
+        (
+            "suppress_status_faked_idle",
+            STATUS_FAKED_IDLE.load(Ordering::SeqCst),
+        ),
+        ("save_dispatch_calls", DISPATCH_CALLS.load(Ordering::SeqCst)),
+        (
+            "save_dispatch_declines",
+            DISPATCH_DECLINES.load(Ordering::SeqCst),
+        ),
+        (
+            "save_dispatch_declines_with_bypass",
+            DISPATCH_DECLINES_WITH_BYPASS.load(Ordering::SeqCst),
+        ),
+        (
+            "save_dispatch_last_lane",
+            DISPATCH_LAST_LANE.load(Ordering::SeqCst) as u64,
+        ),
+        (
+            "save_serialize_calls",
+            SERIALIZE_CALLS.load(Ordering::SeqCst),
+        ),
+        (
+            "save_serialize_failures",
+            SERIALIZE_FAILURES.load(Ordering::SeqCst),
+        ),
+        (
+            "save_serialize_last_fail_bytes",
+            SERIALIZE_LAST_FAIL_BYTES.load(Ordering::SeqCst),
+        ),
         (
             "suppress_status_passed_through",
             STATUS_PASSED_THROUGH.load(Ordering::SeqCst),
@@ -479,6 +646,77 @@ pub fn submits_passed_through() -> u64 {
 /// Polls whose "no request" answer was rewritten to success.
 pub fn status_faked() -> u64 {
     STATUS_FAKED.load(Ordering::SeqCst)
+}
+
+/// Of [`status_faked`], the rewrites that answered a poll made while the game had NO save
+/// in flight (`GameMan.saveState == 0`).
+///
+/// Read the pair, never `status_faked` alone. The rewrite is what retires a SWALLOWED save
+/// (`saveState == 1`), and only those rewrites did anything; an idle rewrite is a no-op for
+/// every consumer that matters, because `FUN_140679510`/`FUN_1406794b0` treat 4 and 0
+/// identically (both are "not 1") and the only callers that distinguish them --
+/// `DoSaveStuff` and the "saving..." MenuJob `FUN_14082a0f0` -- are not running when there
+/// is nothing to retire. A large `status_faked` with `status_faked_idle` almost equal to it
+/// therefore says the suppressor did NOTHING that run, which is exactly the reading a bare
+/// `status_faked = 207` against 2 swallows failed to give.
+///
+/// The lie itself is deliberately NOT narrowed to an outstanding swallow. Narrowing it
+/// risks answering a poll with the raw 4, and 4 is catastrophic in the other direction:
+/// `FUN_14082a0f0` maps it to `MenuJobResult::Failed` and `DoSaveStuff` maps it to a silent
+/// no-op that never calls `FUN_14067a980`, so `GameMan+0xbc4` never reaches 3 and
+/// System->Quit spins forever. Two different pollers can run in the same frame, so any
+/// consume-once scheme under-lies on the second one. Over-lying is inert; under-lying
+/// deadlocks the quit.
+pub fn status_faked_idle() -> u64 {
+    STATUS_FAKED_IDLE.load(Ordering::SeqCst)
+}
+
+/// Entries into any of the three native save-dispatch lanes.
+pub fn dispatch_calls() -> u64 {
+    DISPATCH_CALLS.load(Ordering::SeqCst)
+}
+
+/// Dispatch-lane entries that returned 0 -- the lane refused and touched nothing, so the
+/// request flags stay latched and no SL enqueue is created.
+pub fn dispatch_declines() -> u64 {
+    DISPATCH_DECLINES.load(Ordering::SeqCst)
+}
+
+/// Dispatch declines observed while a one-shot bypass token was pending. Non-zero means
+/// the user's Save Game request DID reach the native dispatcher and the dispatcher refused
+/// it -- the failure is upstream of the enqueue and upstream of this crate.
+pub fn dispatch_declines_with_bypass() -> u64 {
+    DISPATCH_DECLINES_WITH_BYPASS.load(Ordering::SeqCst)
+}
+
+/// Lane of the most recent dispatch entry (`SAVE_LANE_*`).
+pub fn dispatch_last_lane() -> usize {
+    DISPATCH_LAST_LANE.load(Ordering::SeqCst)
+}
+
+/// Entries into the character serializer `FUN_14067dc00`.
+pub fn serialize_calls() -> u64 {
+    SERIALIZE_CALLS.load(Ordering::SeqCst)
+}
+
+/// Character-serializer calls that returned 0. Each one is a character save that produced
+/// no submit at all.
+pub fn serialize_failures() -> u64 {
+    SERIALIZE_FAILURES.load(Ordering::SeqCst)
+}
+
+/// Bytes the character serializer had produced when it last failed, or
+/// [`SAVE_SERIALIZE_BYTES_UNMOVED`] when its byte counter did not move across the failing
+/// call (rejected by the first gate, before any stream work). A moved, non-zero value names
+/// how far into the sub-serializer chain the abort happened.
+pub fn serialize_last_fail_bytes() -> u64 {
+    SERIALIZE_LAST_FAIL_BYTES.load(Ordering::SeqCst)
+}
+
+/// Number of dispatch/serializer observers bound (0..=4). Zero means the attribution
+/// counters above can only ever read 0 and a harness must NOT read that as "no dispatch".
+pub fn dispatch_observers_installed() -> usize {
+    DISPATCH_OBSERVERS_INSTALLED.load(Ordering::SeqCst)
 }
 
 /// Install-time prologue verification failures (nonzero = wrong game build).
@@ -655,23 +893,6 @@ pub fn install(disarm_for_census: bool) -> usize {
             &ORIG_POLL_SAVE_STATUS,
         ),
     ];
-    // Appended separately: it is an OBSERVER, and unlike the two suppressors a failure
-    // to install it must not abort the install. Losing the deadlock counter costs
-    // evidence; losing a suppressor would hang System->Quit.
-    let mut targets: Vec<(&str, usize, *mut c_void, &AtomicUsize)> = targets.to_vec();
-    if let Some(settle) = settle {
-        targets.push((
-            "QuitPhaseSettle",
-            settle,
-            quit_phase_settle_hook as *mut c_void,
-            &ORIG_QUIT_PHASE_SETTLE,
-        ));
-    } else {
-        log_message(format_args!(
-            "suppress: quit-settle observer NOT installed -- suppression still active, but \
-             this run cannot prove the quit path was released"
-        ));
-    }
 
     let mut hooks = Vec::new();
     for (name, address, detour, orig_slot) in targets {
@@ -697,29 +918,152 @@ pub fn install(disarm_for_census: bool) -> usize {
 
     match unsafe { MH_ApplyQueued() } {
         MH_STATUS::MH_OK => {
-            // Count the SUPPRESSORS only. Folding the optional observer into this total
+            // Count the SUPPRESSORS only. Folding the optional observers into this total
             // made a healthy install report "suppression hooks=3/2", which reads like a
-            // broken invariant on a run where everything worked. The observer is a
-            // separate, independently-optional fact and is reported as one.
+            // broken invariant on a run where everything worked. The observers are a
+            // separate, independently-optional fact and are reported as such.
             INSTALLED.store(SUPPRESSOR_HOOKS, Ordering::SeqCst);
-            SETTLE_OBSERVER_INSTALLED.store(usize::from(settle.is_some()), Ordering::SeqCst);
             ARMED.store(1, Ordering::SeqCst);
             log_message(format_args!(
                 "suppress: ARMED -- SL_EnqueueSaveJob @0x{enqueue:x}, \
                  SL_PollSaveStatus @0x{poll:x}, SL_ReleaseRequest @0x{release:x}; \
-                 quit-settle observer={}; no save write job will be enqueued and every \
-                 save will report success",
-                if settle.is_some() { "yes" } else { "NO" }
+                 no save write job will be enqueued and every save will report success"
             ));
-            // The SUPPRESSOR count, not `hooks.len()`. Returning the vector length folded
-            // the optional observer in and made a healthy install log "3/2".
-            SUPPRESSOR_HOOKS
         }
         status => {
             log_message(format_args!("suppress: MH_ApplyQueued failed: {status:?}"));
-            0
+            return 0;
         }
     }
+
+    // OBSERVERS, applied as a SECOND batch so none of them can abort suppression. They
+    // call their originals and only count; losing one costs evidence, whereas losing a
+    // suppressor would hang System->Quit. (The quit-settle observer used to ride the
+    // suppressor batch, where an `MhHook::new` failure on it returned 0 and disarmed
+    // everything -- the opposite of what its own comment promised.)
+    install_observers(settle);
+    SUPPRESSOR_HOOKS
+}
+
+/// Bind the optional observers. Never aborts, never disarms: each is attempted
+/// independently and a failure is logged and counted out.
+#[cfg(windows)]
+fn install_observers(settle: Option<usize>) {
+    // The quit-settle observer keeps its private `MhHook` (nothing else contends on
+    // `FUN_14067a980`, and it is a zero-argument target the union's 4-argument shape does
+    // not describe). Every failure path here is non-fatal.
+    let settle_queued = match settle {
+        Some(address) => match unsafe {
+            MhHook::new(
+                address as *mut c_void,
+                quit_phase_settle_hook as *mut c_void,
+            )
+        } {
+            Ok(hook) => {
+                ORIG_QUIT_PHASE_SETTLE.store(hook.trampoline() as usize, Ordering::SeqCst);
+                match unsafe { hook.queue_enable() } {
+                    Ok(()) => match unsafe { MH_ApplyQueued() } {
+                        MH_STATUS::MH_OK => true,
+                        status => {
+                            ORIG_QUIT_PHASE_SETTLE.store(0, Ordering::SeqCst);
+                            log_message(format_args!(
+                                "suppress: quit-settle observer MH_ApplyQueued failed: {status:?} \
+                                 -- suppression stays armed, but this run cannot prove the quit \
+                                 path was released"
+                            ));
+                            false
+                        }
+                    },
+                    Err(status) => {
+                        ORIG_QUIT_PHASE_SETTLE.store(0, Ordering::SeqCst);
+                        log_message(format_args!(
+                            "suppress: quit-settle observer queue_enable failed: {status:?} -- \
+                             suppression stays armed, but this run cannot prove the quit path \
+                             was released"
+                        ));
+                        false
+                    }
+                }
+            }
+            Err(status) => {
+                log_message(format_args!(
+                    "suppress: quit-settle observer MhHook::new @0x{address:x} failed: {status:?} \
+                     -- suppression stays armed, but this run cannot prove the quit path was \
+                     released"
+                ));
+                false
+            }
+        },
+        None => {
+            log_message(format_args!(
+                "suppress: quit-settle observer NOT installed -- suppression still active, but \
+                 this run cannot prove the quit path was released"
+            ));
+            false
+        }
+    };
+    SETTLE_OBSERVER_INSTALLED.store(usize::from(settle_queued), Ordering::SeqCst);
+
+    // Dispatch attribution goes through the SHARED HOOK UNION, not a private `MhHook`.
+    // The product DLL already detours all three lanes for its menu/continue trace, and a
+    // second `MhHook::new` on an address the same MinHook instance already owns returns
+    // ALREADY_CREATED -- whichever install thread lost the race would silently have no
+    // hook. The union chains handlers on one dispatcher per address, which is exactly the
+    // contract that exists for this. `FUN_14067dc00` currently has no other registrant;
+    // going through the union anyway costs nothing and makes a future one safe.
+    let mut dispatch_bound = 0_usize;
+    for (name, rva, sig, handler, orig_slot) in [
+        (
+            "SaveDispatchCombined",
+            SAVE_DISPATCH_COMBINED_RVA,
+            SAVE_DISPATCH_COMBINED_SIG,
+            save_dispatch_combined_hook as UnionFn,
+            &ORIG_SAVE_DISPATCH_COMBINED,
+        ),
+        (
+            "SaveDispatchChar",
+            SAVE_DISPATCH_CHAR_RVA,
+            SAVE_DISPATCH_CHAR_SIG,
+            save_dispatch_char_hook as UnionFn,
+            &ORIG_SAVE_DISPATCH_CHAR,
+        ),
+        (
+            "SaveDispatchSystem",
+            SAVE_DISPATCH_SYSTEM_RVA,
+            SAVE_DISPATCH_SYSTEM_SIG,
+            save_dispatch_system_hook as UnionFn,
+            &ORIG_SAVE_DISPATCH_SYSTEM,
+        ),
+        (
+            "SaveSerializeChar",
+            SAVE_SERIALIZE_CHAR_RVA,
+            SAVE_SERIALIZE_CHAR_SIG,
+            save_serialize_char_hook as UnionFn,
+            &ORIG_SAVE_SERIALIZE_CHAR,
+        ),
+    ] {
+        let Some(address) = verify(rva, sig, name) else {
+            continue;
+        };
+        match unsafe { register_union_hook(address, handler, orig_slot) } {
+            Ok(()) => dispatch_bound += 1,
+            Err(status) => log_message(format_args!(
+                "suppress: observer {name} union registration @0x{address:x} failed: {status:?} \
+                 -- suppression stays armed, this run just cannot attribute that link"
+            )),
+        }
+    }
+    if let Ok(bytes) = game_rva(SAVE_SERIALIZE_BYTES_RVA as u32) {
+        SERIALIZE_BYTES_ADDR.store(bytes, Ordering::SeqCst);
+    }
+    DISPATCH_OBSERVERS_INSTALLED.store(dispatch_bound, Ordering::SeqCst);
+    log_message(format_args!(
+        "suppress: observers bound -- quit-settle={}, save-dispatch attribution={dispatch_bound}/4 \
+         (lanes FUN_14067b940/b750/b570 + serializer FUN_14067dc00, byte counter @0x{:x}); these \
+         only count, they change nothing",
+        if settle_queued { "yes" } else { "NO" },
+        SERIALIZE_BYTES_ADDR.load(Ordering::SeqCst)
+    ));
 }
 
 /// Detour on `FUN_140e6fb50`.
@@ -881,9 +1225,198 @@ unsafe extern "system" fn poll_save_status_hook(iodev: usize) -> u32 {
         STATUS_PASSED_THROUGH.fetch_add(1, Ordering::SeqCst);
     } else {
         STATUS_FAKED.fetch_add(1, Ordering::SeqCst);
+        // Split off the rewrites that retired nothing. The rewrite only DOES something
+        // when the game believes a save is in flight (`saveState != 0`, which only the
+        // dispatcher's commit tail sets, i.e. only after a swallow); every other rewrite
+        // answers an idle poll where 4 and 0 are equivalent to the caller. Without this
+        // split `suppress_status_faked` is dominated by idle polls and reads as activity
+        // when there was none. Failing to read the field counts as idle: it is the
+        // conservative side (it never inflates the "this mattered" number).
+        if read_save_state().unwrap_or(0) == 0 {
+            STATUS_FAKED_IDLE.fetch_add(1, Ordering::SeqCst);
+        }
     }
     sample_quit_phase();
     decided
+}
+
+/// Observer on `FUN_14067b940`, the COMBINED (b72 && b73) save dispatch lane -- the lane the
+/// Save Game commit deliberately produces by firing both native request setters.
+#[cfg(windows)]
+unsafe extern "system" fn save_dispatch_combined_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    unsafe { observe_dispatch(&ORIG_SAVE_DISPATCH_COMBINED, SAVE_LANE_COMBINED, a, b, c, d) }
+}
+
+/// Observer on `FUN_14067b750`, the character-slot-only (b72, !b73) lane.
+#[cfg(windows)]
+unsafe extern "system" fn save_dispatch_char_hook(a: usize, b: usize, c: usize, d: usize) -> usize {
+    unsafe { observe_dispatch(&ORIG_SAVE_DISPATCH_CHAR, SAVE_LANE_CHAR, a, b, c, d) }
+}
+
+/// Observer on `FUN_14067b570`, the system-slot-only (!b72, b73) lane.
+#[cfg(windows)]
+unsafe extern "system" fn save_dispatch_system_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    unsafe { observe_dispatch(&ORIG_SAVE_DISPATCH_SYSTEM, SAVE_LANE_SYSTEM, a, b, c, d) }
+}
+
+/// Shared body of the three dispatch observers: forward verbatim, count, and say ONCE per
+/// armed bypass when the lane refuses.
+///
+/// A refusal (`AL == 0`) is the failure this instrument exists for. The lane touches
+/// nothing on that path -- `GameMan+0xb72`/`+0xb73` stay set and `saveState` stays 0 -- so
+/// the dispatcher re-enters it on the very next frame and the refusal repeats for as long
+/// as the request is latched. That is why the "the dispatcher refused the user's save" line
+/// is emitted once per arm rather than per call, and why the aggregate uses `should_report`.
+///
+/// All four register arguments are forwarded verbatim (the lanes take three; the fourth is
+/// the union's shared shape and the callee ignores it), and the return is forwarded whole:
+/// the game only tests AL, but preserving RAX keeps the detour a true no-op.
+#[cfg(windows)]
+unsafe fn observe_dispatch(
+    orig_slot: &AtomicUsize,
+    lane: usize,
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let orig = orig_slot.load(Ordering::SeqCst);
+    if orig == 0 {
+        // Unreachable once bound. Refusing here would silently kill every save in the
+        // game, so say so rather than inventing a return value.
+        log_message(format_args!(
+            "suppress: BUG -- save dispatch lane {lane} observer ran with no trampoline; \
+             reporting 'not dispatched' to the game"
+        ));
+        return 0;
+    }
+    let original: UnionFn = unsafe { core::mem::transmute(orig) };
+    let ret = unsafe { original(a, b, c, d) };
+    let calls = DISPATCH_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
+    DISPATCH_LAST_LANE.store(lane, Ordering::SeqCst);
+    if ret & 0xff != 0 {
+        return ret;
+    }
+    let declines = DISPATCH_DECLINES.fetch_add(1, Ordering::SeqCst) + 1;
+    if bypass_pending() {
+        DISPATCH_DECLINES_WITH_BYPASS.fetch_add(1, Ordering::SeqCst);
+        if BYPASS_DECLINE_REPORTED.swap(1, Ordering::SeqCst) == 0 {
+            log_message(format_args!(
+                "suppress: the native save dispatcher REFUSED the user's Save Game request \
+                 (lane={lane}, decline #{declines} of {calls} dispatch entries) -- the request \
+                 flags reached the dispatcher and it returned 0 without building a submit, so \
+                 no SL enqueue can ever arrive and the one-shot bypass will expire. The failure \
+                 is UPSTREAM of the enqueue; serializer calls={} failures={} last_fail_bytes={}",
+                SERIALIZE_CALLS.load(Ordering::SeqCst),
+                SERIALIZE_FAILURES.load(Ordering::SeqCst),
+                SERIALIZE_LAST_FAIL_BYTES.load(Ordering::SeqCst)
+            ));
+            publish_snapshot();
+        }
+    } else if should_report(declines, false) {
+        log_message(format_args!(
+            "suppress: save dispatch lane {lane} declined (#{declines} of {calls} entries) -- \
+             request flags stay latched, no submit built"
+        ));
+    }
+    ret
+}
+
+/// Observer on `FUN_14067dc00`, the character serializer.
+///
+/// Its return value is the SOLE gate on the submit call in both character lanes, so a zero
+/// here is a character save that produced no submit at all. The byte counter
+/// `_DAT_143d69920` is sampled around the call because the serializer's first gate
+/// (`buf == 0`, `GameMan+0xcb1`, `GameMan+0xcb2`, the save-data subsystem global) returns
+/// BEFORE writing it while every later exit writes it: unmoved means "rejected at the
+/// gate", moved means "aborted this many bytes into the sub-serializer chain".
+#[cfg(windows)]
+unsafe extern "system" fn save_serialize_char_hook(
+    game_man: usize,
+    buffer: usize,
+    size: usize,
+    out_bytes: usize,
+) -> usize {
+    let orig = ORIG_SAVE_SERIALIZE_CHAR.load(Ordering::SeqCst);
+    if orig == 0 {
+        log_message(format_args!(
+            "suppress: BUG -- character-serializer observer ran with no trampoline; \
+             reporting 'serialize failed' to the game"
+        ));
+        return 0;
+    }
+    let before = read_serialize_bytes();
+    let original: UnionFn = unsafe { core::mem::transmute(orig) };
+    let ret = unsafe { original(game_man, buffer, size, out_bytes) };
+    let calls = SERIALIZE_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
+    if ret & 0xff != 0 {
+        return ret;
+    }
+    let failures = SERIALIZE_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
+    let after = read_serialize_bytes();
+    // Equal values are read as "unmoved". Two consecutive failures that abort at the exact
+    // same byte count are indistinguishable from a gate rejection here; the log prints both
+    // samples so that case is visible rather than silently mislabelled.
+    let recorded = match (before, after) {
+        (Some(before), Some(after)) if after != before => after as u64,
+        _ => SAVE_SERIALIZE_BYTES_UNMOVED,
+    };
+    SERIALIZE_LAST_FAIL_BYTES.store(recorded, Ordering::SeqCst);
+    if should_report(failures, false) {
+        log_message(format_args!(
+            "suppress: character serializer FUN_14067dc00 returned 0 (failure #{failures} of \
+             {calls} calls); byte counter {:?} -> {:?} ({}). No submit is built for this save, \
+             so the request flags stay latched and no SL enqueue is created",
+            before,
+            after,
+            if recorded == SAVE_SERIALIZE_BYTES_UNMOVED {
+                "unmoved: rejected by the first gate -- buffer null, GameMan+0xcb1/+0xcb2 set, \
+                 or the save-data subsystem global 0x143d68078 null"
+            } else {
+                "moved: the sub-serializer chain ran and aborted after this many bytes"
+            }
+        ));
+        publish_snapshot();
+    }
+    ret
+}
+
+/// Read the character serializer's byte counter, or `None` when it is not resolvable.
+#[cfg(windows)]
+fn read_serialize_bytes() -> Option<usize> {
+    use er_game_base::mem::safe_read_usize;
+
+    let addr = SERIALIZE_BYTES_ADDR.load(Ordering::SeqCst);
+    if addr == 0 {
+        return None;
+    }
+    unsafe { safe_read_usize(addr) }
+}
+
+/// Read `GameMan+0xb80` (`saveState`), or `None` when it is not reachable.
+#[cfg(windows)]
+fn read_save_state() -> Option<u32> {
+    use er_game_base::{mem::safe_read_usize, rva::GAME_MAN_SINGLETON_RVA};
+
+    const GAME_MAN_SAVE_STATE_B80_OFFSET: usize = 0xb80;
+
+    let base = er_game_base::mem::game_module_base().ok()?;
+    let game_man = unsafe { safe_read_usize(base + GAME_MAN_SINGLETON_RVA) }?;
+    if game_man < 0x10000 {
+        return None;
+    }
+    let raw = unsafe { safe_read_usize(game_man + GAME_MAN_SAVE_STATE_B80_OFFSET) }?;
+    Some((raw & 0xffff_ffff) as u32)
 }
 
 /// Observer on `FUN_14067a980`, the sole performer of the `bc4` 2 -> 3 transition.
@@ -1090,6 +1623,45 @@ mod tests {
         assert!(SL_ENQUEUE_SAVE_JOB_SIG.len() >= 16);
         assert!(SL_POLL_SAVE_STATUS_SIG.len() >= 16);
         assert!(SL_RELEASE_REQUEST_SIG.len() >= 16);
+    }
+
+    #[test]
+    fn dispatch_observer_signatures_are_the_verified_1162_prologues() {
+        // Read out of `eldenring-deobf.bin` at 0x14067b940 / b750 / b570 / dc00 and
+        // cross-checked against the 1.16.2 Ghidra dump at the same VAs (shift 0).
+        assert_eq!(&SAVE_DISPATCH_COMBINED_SIG[..3], &[0x48, 0x8B, 0xC4]);
+        assert_eq!(
+            &SAVE_DISPATCH_CHAR_SIG[..5],
+            &[0x48, 0x89, 0x5C, 0x24, 0x20]
+        );
+        assert_eq!(&SAVE_DISPATCH_SYSTEM_SIG[..4], &[0x48, 0x8B, 0xC4, 0x57]);
+        assert_eq!(
+            &SAVE_SERIALIZE_CHAR_SIG[..5],
+            &[0x40, 0x55, 0x53, 0x56, 0x57]
+        );
+        // MinHook relocates the first 5 bytes; each of these decodes to whole instructions
+        // across at least that window and contains no relative branch.
+        for sig in [
+            SAVE_DISPATCH_COMBINED_SIG,
+            SAVE_DISPATCH_CHAR_SIG,
+            SAVE_DISPATCH_SYSTEM_SIG,
+            SAVE_SERIALIZE_CHAR_SIG,
+        ] {
+            assert!(sig.len() >= 16);
+        }
+    }
+
+    #[test]
+    fn the_lanes_have_distinct_codes_and_none_is_the_zero_sentinel() {
+        // The lane code lands in telemetry as a number, so a collision would silently
+        // misattribute which dispatcher the game last entered.
+        let lanes = [SAVE_LANE_CHAR, SAVE_LANE_SYSTEM, SAVE_LANE_COMBINED];
+        for (i, a) in lanes.iter().enumerate() {
+            assert_ne!(*a, SAVE_LANE_NONE);
+            for b in &lanes[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
     }
 
     #[test]

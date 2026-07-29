@@ -1330,6 +1330,21 @@ pub static SAVE_FLOW_BYPASS_ALLOWED_AT_FIRE: AtomicUsize = AtomicUsize::new(0);
 /// request flags but no SL save arrived at the suppressor inside the grace window. The user's
 /// save did NOT happen -- a hard failure oracle, distinct from a user-declined abort.
 pub static SAVE_FLOW_ENQUEUE_MISSING_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// `er_save_suppress::dispatch_calls()` sampled at the fire. A stage-8 failure compares
+/// against it to say whether the native save dispatcher ran AT ALL after the request flags
+/// were set -- the difference between "nothing consumed the request" and "the dispatcher
+/// consumed it and refused", which the enqueue-side counters alone cannot distinguish.
+pub static SAVE_FLOW_DISPATCH_CALLS_AT_FIRE: AtomicUsize = AtomicUsize::new(0);
+/// `er_save_suppress::dispatch_declines()` sampled at the fire.
+pub static SAVE_FLOW_DISPATCH_DECLINES_AT_FIRE: AtomicUsize = AtomicUsize::new(0);
+/// `er_save_suppress::serialize_failures()` sampled at the fire. A post-fire increase means
+/// the character serializer `FUN_14067dc00` is what refused, which is upstream of both the
+/// submit builder and the suppressor.
+pub static SAVE_FLOW_SERIALIZE_FAILURES_AT_FIRE: AtomicUsize = AtomicUsize::new(0);
+/// `er_save_suppress::submits_swallowed()` sampled at the fire. A post-fire increase with no
+/// bypass allow means a submit WAS built and this DLL swallowed it by mistake -- the one
+/// failure mode where the fault is ours rather than the game's.
+pub static SAVE_FLOW_SUBMITS_SWALLOWED_AT_FIRE: AtomicUsize = AtomicUsize::new(0);
 
 // ---- save-flow confirm chain (save-game-flow WP2) ----
 /// Number of confirm boxes the save flow can build (Box1 "are you sure", Box2 "overwrite

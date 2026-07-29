@@ -813,7 +813,11 @@ pub(crate) const CS_MENU_MAN_SAVE_GATE_LATCH_298_OFFSET: usize = 0x298;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_BYPASS_ALLOWED_AT_FIRE;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_COMMIT_COMPLETE_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_DIALOG;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_DISPATCH_CALLS_AT_FIRE;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_DISPATCH_DECLINES_AT_FIRE;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_ENQUEUE_MISSING_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_SERIALIZE_FAILURES_AT_FIRE;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_SUBMITS_SWALLOWED_AT_FIRE;
 /// Game-task ticks stage 8 waits for the fired save request to actually REACH the writer (an SL
 /// save enqueue arriving at the suppressor) before declaring the fire failed. ~3 s at 60 ticks/s,
 /// the same budget the confirm-box build and destination-browser open timeouts use.
