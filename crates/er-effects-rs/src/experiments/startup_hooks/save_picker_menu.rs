@@ -372,6 +372,93 @@ pub(crate) unsafe fn save_picker_menu_pump_resubmit() -> bool {
     false
 }
 
+/// Escape text for the Scaleform-HTML SetText path (the `ErStats` row fields parse with bHTML=1,
+/// so a character/file name containing `&`, `<` or `>` must not be interpreted as markup).
+fn save_picker_html_escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// One dim Scaleform-HTML line for the browse rows' `ErStats` fields (same size/color language as
+/// the stats panel's attribute lines), NUL-terminated UTF-16 for the native SetText wrapper. An
+/// empty `text` yields a bare NUL so the field renders blank.
+fn save_picker_browse_html_utf16(text: &str) -> Vec<u16> {
+    // Matches the stats panel's font size so browse info and attribute lines read identically.
+    const SIZE: &str = "19";
+    // The stats panel's dim label color -- browse info is secondary to the row name.
+    const COLOR: &str = "#8f887a";
+    if text.is_empty() {
+        return vec![0];
+    }
+    let mut s = String::from("<p align=\"left\"><font size=\"");
+    s.push_str(SIZE);
+    s.push_str("\" color=\"");
+    s.push_str(COLOR);
+    s.push_str("\">");
+    s.push_str(&save_picker_html_escape(text));
+    s.push_str("</font></p>");
+    s.encode_utf16().chain(core::iter::once(0)).collect()
+}
+
+/// Character budget for the per-file character list line (the four-attribute stats line occupies
+/// roughly this width at the same font size, so the list clips no earlier than the stats did).
+const SAVE_PICKER_BROWSE_LINE_CHAR_BUDGET: usize = 44;
+
+/// The two `ErStats` lines for ProfileSelect row `row` while the browse picker owns the window.
+/// File rows show the file's REAL character info: active-slot count on the top line and the
+/// characters' names + levels on the bottom line (as many as fit the budget, then a `+k` overflow
+/// marker). Every other row (up/drive, directory, page cycle, placeholder) gets EMPTY lines so
+/// neither leftover row text nor per-slot attribute stats render as junk there. `None` when the
+/// picker does not own the rows (the normal character-slot view keeps the attribute stats panel).
+/// Generated text uses `/` separators and never inserts commas (comma-safe labels,
+/// er-effects-rs-dly6); names pass through with HTML escaping only.
+pub(crate) fn save_picker_browse_stats_lines(row: usize) -> Option<(Vec<u16>, Vec<u16>)> {
+    if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 && !missing_save_selection_pending() {
+        return None;
+    }
+    let guard = crate::experiments::save_picker::active_save_picker_lock();
+    let model = guard.as_ref()?;
+    let Some(chars) = model.row_file_characters(row) else {
+        // Non-file row: blank both lines.
+        return Some((vec![0], vec![0]));
+    };
+    let top = if chars.len() == 1 {
+        "1 CHARACTER".to_owned()
+    } else {
+        format!("{} CHARACTERS", chars.len())
+    };
+    let mut bottom = String::new();
+    let mut shown = 0usize;
+    for info in chars {
+        let seg = format!("{} LV {}", info.name, info.level);
+        let sep = if bottom.is_empty() { "" } else { " / " };
+        if !bottom.is_empty()
+            && bottom.chars().count() + sep.chars().count() + seg.chars().count()
+                > SAVE_PICKER_BROWSE_LINE_CHAR_BUDGET
+        {
+            break;
+        }
+        bottom.push_str(sep);
+        bottom.push_str(&seg);
+        shown += 1;
+    }
+    if shown < chars.len() {
+        bottom.push_str(&format!(" +{}", chars.len() - shown));
+    }
+    Some((
+        save_picker_browse_html_utf16(&top),
+        save_picker_browse_html_utf16(&bottom),
+    ))
+}
+
 /// Entry hook on the native ProfileSelect item-list builder (`PROFILE_SELECT_LIST_BUILDER_RVA`,
 /// FUN_140875590): while the browse picker owns the `05_010` rows, RE-STAGE the browse-row records
 /// immediately before the native builder turns ProfileSummary records into visible list rows.

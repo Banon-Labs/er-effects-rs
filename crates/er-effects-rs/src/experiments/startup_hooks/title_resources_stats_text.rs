@@ -797,8 +797,7 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
     }
     let f: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(orig) };
-    if stats_panel_enabled()
-        && row_model != 0
+    if row_model != 0
         && row_model != null
         && row_proxy != 0
         && row_proxy != null
@@ -808,7 +807,44 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
         if base != null {
             let slot = unsafe { safe_read_i32(row_model + PROFILE_ROW_MODEL_SLOT_08_OFFSET) }
                 .unwrap_or(-1);
-            let cache_loaded = unsafe { ensure_profile_slot_stats_cached(base) };
+            // BROWSE PICKER ROWS (er-effects-rs-dly6): while the save-file picker owns the 05_010
+            // window the rows are directories/files, not save slots, so the per-slot character
+            // attributes are meaningless there (they rendered the ACTIVE save's characters' stats
+            // onto browse rows). Push the browse info instead: file rows show the file's real
+            // character slots (count + names/levels, parsed once per listing build and cached in
+            // the picker model); every other row pushes EMPTY lines so no attribute junk renders.
+            // Deliberately not gated on `stats_panel_enabled` -- if the 05_010 GFX edit (which
+            // adds the ErStats fields) is not live, the push fails closed and is counted, exactly
+            // like the stats push.
+            let browse_lines =
+                if (0..crate::experiments::save_picker::PICKER_ROW_COUNT as i32).contains(&slot) {
+                    save_picker_browse_stats_lines(slot as usize)
+                } else {
+                    None
+                };
+            if let Some((top, bottom)) = browse_lines {
+                let seen = PROFILE_STATS_ROW_POPULATES.fetch_add(1, Ordering::SeqCst) + 1;
+                let pushed_top =
+                    unsafe { push_stats_text_on_row(base, row_proxy, "ErStatsTop\0", &top) };
+                let pushed_bottom =
+                    unsafe { push_stats_text_on_row(base, row_proxy, "ErStatsBottom\0", &bottom) };
+                if pushed_top && pushed_bottom {
+                    let subs = PROFILE_STATS_SETTEXT_SUBS.fetch_add(1, Ordering::SeqCst) + 1;
+                    if subs <= 4 {
+                        append_autoload_debug(format_args!(
+                            "save-picker: pushed browse-row info slot={slot} on row=0x{row_proxy:x} (row_triggers={seen} subs={subs})"
+                        ));
+                    }
+                } else {
+                    let fails = PROFILE_STATS_PUSH_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
+                    if fails <= 4 {
+                        append_autoload_debug(format_args!(
+                            "save-picker: browse-row info push REJECTED slot={slot} on row=0x{row_proxy:x} top={pushed_top} bottom={pushed_bottom} (05_010 GFX edit not live?) (fails={fails})"
+                        ));
+                    }
+                }
+            } else if stats_panel_enabled() {
+                let cache_loaded = unsafe { ensure_profile_slot_stats_cached(base) };
             // Per-slot attributes from the save; if the whole cache failed to load, degrade to the
             // loaded character so a row still shows real values (rather than nothing).
             let attrs = profile_slot_attributes(slot).or_else(|| {
@@ -849,6 +885,7 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
                         ));
                     }
                 }
+            }
             }
         }
         PROFILE_STATS_PUSH_IN_PROGRESS.store(0, Ordering::SeqCst);
