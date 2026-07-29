@@ -57,6 +57,14 @@ shellcheck "$repo_root/scripts/check-rust-build.sh"
 # extraction corpus is absent, so this is safe on a machine without it.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-gfx
 
+# er-telemetry's host-portable logic. The workspace pins `default-members` to the DLL crate, so the
+# windows-target `cargo xwin test --lib` below selects er-effects-rs ONLY and never ran these -- a
+# telemetry-crate test module could be added and silently never execute in any gate. The load-count
+# consistency logic is pure integer arithmetic with no platform semantics, so the host run is the
+# real coverage; the cross-compile check in check-rust-build.sh keeps it building for the shipping
+# target too.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry --lib
+
 # Rust format + Windows-target BUILD of the injectable DLL (cross-compiled from Linux via
 # cargo-xwin). A real build (not just `cargo check`) so codegen/link regressions -- including
 # any pre-existing rust breakage -- are caught here, producing the linked er_effects_rs.dll.

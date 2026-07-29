@@ -45,6 +45,12 @@ fi
 if command -v cargo-xwin >/dev/null 2>&1; then
 	echo "[check-rust-build] cargo xwin check --tests --target $target"
 	cargo xwin check --tests --manifest-path "$repo_root/Cargo.toml" --target "$target"
+	# er-telemetry is a workspace member but NOT a default-member, so the line above (which
+	# honours default-members = er-effects-rs) never compiles its test modules. It owns the
+	# load-count consistency logic, so keep its tests building for the shipping target; check.sh
+	# RUNS them on the host.
+	echo "[check-rust-build] cargo xwin check --tests -p er-telemetry --target $target"
+	cargo xwin check --tests -p er-telemetry --manifest-path "$repo_root/Cargo.toml" --target "$target"
 fi
 
 # RUN them when a Windows-binary runner is available. The tests are pure logic (row math, config
