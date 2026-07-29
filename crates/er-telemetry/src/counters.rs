@@ -653,6 +653,9 @@ pub static SYSTEM_QUIT_QUIT_AUTHORIZED_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Activations where the action-object alias claimed the Return-to-Desktop row while the resolved
 /// row was one of the two cloned rows -- i.e. the exact false identity that terminated the process.
 pub static SYSTEM_QUIT_ACTION_ALIAS_FALSE_QUIT_CLAIMS: AtomicUsize = AtomicUsize::new(0);
+/// Activations REFUSED because two independent row discriminators named DIFFERENT rows. Two sources
+/// disagreeing is an ambiguity, not a tie to break by preference: the row runs nothing at all.
+pub static SYSTEM_QUIT_ROW_REFUSED_DISAGREEMENT_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SCALEFORM_HANDLER_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static SCALEFORM_HANDLER_CTORS: AtomicUsize = AtomicUsize::new(0);
 pub static SCALEFORM_HANDLER_DTORS: AtomicUsize = AtomicUsize::new(0);

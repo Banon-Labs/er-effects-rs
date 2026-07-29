@@ -379,8 +379,10 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // `oracle_system_quit_row_last_discriminator` records WHICH evidence resolved the row
     // (1 cursor-row-our-label, 2 cursor-row-native-index, 3 pointer-band, 4 activated-row-controller)
     // and `oracle_system_quit_row_last_ambiguity` why it could not be.
+    // `oracle_system_quit_row_refused_disagreement_count` counts activations refused because two
+    // discriminators named DIFFERENT rows -- the row ran nothing rather than another row's action.
     body.push_str(&format!(
-        "  \"oracle_system_quit_row_table_dialog\": {},\n  \"oracle_system_quit_row_index_save_game\": {},\n  \"oracle_system_quit_row_index_return_desktop\": {},\n  \"oracle_system_quit_row_index_load_profile\": {},\n  \"oracle_system_quit_row_index_load_save_profiles\": {},\n  \"oracle_system_quit_row_resolve_count\": {},\n  \"oracle_system_quit_row_resolved_by_cursor_our_label_count\": {},\n  \"oracle_system_quit_row_resolved_by_cursor_native_index_count\": {},\n  \"oracle_system_quit_row_resolved_by_pointer_band_count\": {},\n  \"oracle_system_quit_row_resolved_by_activated_controller_count\": {},\n  \"oracle_system_quit_row_ambiguous_count\": {},\n  \"oracle_system_quit_row_last_discriminator\": {},\n  \"oracle_system_quit_row_last_resolved_row\": {},\n  \"oracle_system_quit_row_last_ambiguity\": {},\n  \"oracle_system_quit_row_last_cursor\": {},\n  \"oracle_system_quit_row_last_cursor_label_kind\": {},\n  \"oracle_system_quit_row_last_input_kind\": {},\n  \"oracle_system_quit_quit_refused_ambiguous_row_count\": {},\n  \"oracle_system_quit_quit_authorized_count\": {},\n  \"oracle_system_quit_action_alias_false_quit_claims\": {},\n",
+        "  \"oracle_system_quit_row_table_dialog\": {},\n  \"oracle_system_quit_row_index_save_game\": {},\n  \"oracle_system_quit_row_index_return_desktop\": {},\n  \"oracle_system_quit_row_index_load_profile\": {},\n  \"oracle_system_quit_row_index_load_save_profiles\": {},\n  \"oracle_system_quit_row_resolve_count\": {},\n  \"oracle_system_quit_row_resolved_by_cursor_our_label_count\": {},\n  \"oracle_system_quit_row_resolved_by_cursor_native_index_count\": {},\n  \"oracle_system_quit_row_resolved_by_pointer_band_count\": {},\n  \"oracle_system_quit_row_resolved_by_activated_controller_count\": {},\n  \"oracle_system_quit_row_ambiguous_count\": {},\n  \"oracle_system_quit_row_refused_disagreement_count\": {},\n  \"oracle_system_quit_row_last_discriminator\": {},\n  \"oracle_system_quit_row_last_resolved_row\": {},\n  \"oracle_system_quit_row_last_ambiguity\": {},\n  \"oracle_system_quit_row_last_cursor\": {},\n  \"oracle_system_quit_row_last_cursor_label_kind\": {},\n  \"oracle_system_quit_row_last_input_kind\": {},\n  \"oracle_system_quit_quit_refused_ambiguous_row_count\": {},\n  \"oracle_system_quit_quit_authorized_count\": {},\n  \"oracle_system_quit_action_alias_false_quit_claims\": {},\n",
         format_scan_ptr(SYSTEM_QUIT_ROW_TABLE_DIALOG.load(Ordering::SeqCst)),
         SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_PLUS1
             .load(Ordering::SeqCst)
@@ -400,6 +402,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SYSTEM_QUIT_ROW_RESOLVED_BY_POINTER_BAND_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_ROW_RESOLVED_BY_ACTIVATED_CONTROLLER_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_ROW_AMBIGUOUS_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_ROW_REFUSED_DISAGREEMENT_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_ROW_LAST_DISCRIMINATOR.load(Ordering::SeqCst),
         SYSTEM_QUIT_ROW_LAST_RESOLVED_ROW.load(Ordering::SeqCst),
         SYSTEM_QUIT_ROW_LAST_AMBIGUITY.load(Ordering::SeqCst),
