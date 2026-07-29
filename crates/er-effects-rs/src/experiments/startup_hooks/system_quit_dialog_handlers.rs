@@ -2,18 +2,34 @@
 unsafe fn system_quit_open_profile_load_dialog(action_obj: usize) -> bool {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const HEAP_LO: usize = 0x10000;
-    let Ok(base) = game_module_base() else {
-        append_autoload_debug(format_args!(
-            "system-quit-dup: profile-load route abort -- module base unavailable"
-        ));
-        return false;
-    };
     let system_dialog =
         unsafe { safe_read_usize(action_obj + SYSTEM_QUIT_ACTION_OBJECT_DIALOG_08_OFFSET) }
             .unwrap_or(NULL);
     if system_dialog < HEAP_LO {
         append_autoload_debug(format_args!(
             "system-quit-dup: profile-load route abort -- action=0x{action_obj:x} dialog=0x{system_dialog:x} is not heap-like"
+        ));
+        return false;
+    }
+    unsafe { system_quit_open_profile_load_dialog_on(system_dialog) }
+}
+
+/// Submit the native `05_010_ProfileSelect` window against an already-resolved System/Quit
+/// PropertyEditDialog. Split out of the action-object form (save-game-flow WP3) because the save
+/// flow opens the destination browser from the dialog it captured at the row press -- it never has
+/// a row action object of its own.
+unsafe fn system_quit_open_profile_load_dialog_on(system_dialog: usize) -> bool {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const HEAP_LO: usize = 0x10000;
+    let Ok(base) = game_module_base() else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: profile-load route abort -- module base unavailable"
+        ));
+        return false;
+    };
+    if system_dialog < HEAP_LO {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: profile-load route abort -- dialog=0x{system_dialog:x} is not heap-like"
         ));
         return false;
     }
@@ -218,11 +234,23 @@ unsafe fn system_quit_route_button_action_or_forward(
                 ));
                 return 0;
             }
+            // SAVE-FLOW re-entry guard (WP1): one commit at a time, and never while a profile
+            // switch owns the quit machinery -- both flows drive the same close sequence and
+            // GameMan save fields.
+            let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+            let stage = SAVE_FLOW_STAGE.load(Ordering::SeqCst);
+            if phase != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE || stage != SAVE_FLOW_STAGE_IDLE {
+                append_autoload_debug(format_args!(
+                    "system-quit-save: Save Game row press IGNORED action_alias=0x{action_obj:x} quickload_phase={phase} save_flow_stage={stage}; a switch or save commit is already in flight"
+                ));
+                return 0;
+            }
             SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.store(0, Ordering::SeqCst);
             SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
-            let closed = unsafe { system_quit_save_game_fire_save_and_close(dialog, "row_action") };
+            let started = unsafe { system_quit_save_game_start_flow(dialog) };
             append_autoload_debug(format_args!(
-                "system-quit-save: Save Game native row selected {hook_name} action_alias=0x{action_obj:x} dialog=0x{dialog:x} cursor={cursor} {verdict_text}; requested save + close-all closed={closed}; suppressed native Quit Game/return-title action"
+                "system-quit-save: Save Game native row selected {hook_name} action_alias=0x{action_obj:x} dialog=0x{dialog:x} cursor={cursor} {verdict_text}; opened confirm chain started={started} stage={}; suppressed native Quit Game/return-title action",
+                SAVE_FLOW_STAGE.load(Ordering::SeqCst)
             ));
             0
         }
@@ -232,14 +260,20 @@ unsafe fn system_quit_route_button_action_or_forward(
             // teardown renders a loading screen. The old clean-kill (system_quit_ownership_repro)
             // fired mid-teardown, so the loading cover was already visible.
             //
-            // One further refusal guards this irreversible step: the activated controller must not
-            // be the Save Game row's -- a Save Game press can never quit the game.
+            // Two further refusals guard this irreversible step (save-safety hardening, kept):
+            //   * the activated controller must not be the Save Game row's -- a Save Game press can
+            //     never quit the game;
+            //   * `save_flow_stage == IDLE` -- never exit mid save-flow, where a commit may be armed
+            //     or in flight and a process exit would tear it in half.
+            let save_flow_stage = SAVE_FLOW_STAGE.load(Ordering::SeqCst);
             let save_game_controller =
                 SYSTEM_QUIT_NATIVE_SAVE_GAME_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst);
-            if save_game_controller != 0 && controller == save_game_controller {
+            if (save_game_controller != 0 && controller == save_game_controller)
+                || save_flow_stage != SAVE_FLOW_STAGE_IDLE
+            {
                 SYSTEM_QUIT_QUIT_REFUSED_AMBIGUOUS_ROW_COUNT.fetch_add(1, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
-                    "quit-to-desktop: REFUSING the instant quit at {hook_name} for controller=0x{controller:x} cursor={cursor} -- save_game_controller=0x{save_game_controller:x}; a Save Game press must never quit the game"
+                    "quit-to-desktop: REFUSING the instant quit at {hook_name} for controller=0x{controller:x} cursor={cursor} -- save_game_controller=0x{save_game_controller:x} save_flow_stage={save_flow_stage}; a Save Game press must never quit the game and a save flow must never be torn in half"
                 ));
                 return 0;
             }
@@ -374,15 +408,17 @@ pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hoo
             //
             // Require that NO profile switch is in flight: the native return-desktop controller is
             // dispatched again from ProfileSelect (observed: 12 activations carried it during one
-            // switch), so without this gate a switch's activation would ExitProcess mid-switch.
+            // switch), so without this gate a switch's activation would ExitProcess mid-switch. And
+            // never exit mid save-flow, where a commit may be armed or in flight.
             let switch_in_flight = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
                 != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
                 || SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) != 0
                 || SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.load(Ordering::SeqCst) != 0;
-            if switch_in_flight {
+            let save_flow_in_flight = SAVE_FLOW_STAGE.load(Ordering::SeqCst) != SAVE_FLOW_STAGE_IDLE;
+            if switch_in_flight || save_flow_in_flight {
                 SYSTEM_QUIT_QUIT_REFUSED_AMBIGUOUS_ROW_COUNT.fetch_add(1, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
-                    "quit-to-desktop: REFUSING the instant quit at controller=0x{controller:x} -- switch_in_flight={switch_in_flight}; forwarding the native activation instead"
+                    "quit-to-desktop: REFUSING the instant quit at controller=0x{controller:x} -- switch_in_flight={switch_in_flight} save_flow_in_flight={save_flow_in_flight}; forwarding the native activation instead"
                 ));
                 unsafe {
                     system_quit_forward_button_controller_activation(
@@ -409,7 +445,7 @@ pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hoo
             unsafe { ExitProcess(0) };
         }
         // Save Game keeps flowing through its own native action thunk, which the action-route hook
-        // owns.
+        // owns (that is where the confirm chain and its re-entry guards live).
         Some(QuitRow::SaveGame) | None => {
             if verdict.resolved_row().is_none() {
                 append_autoload_debug(format_args!(
@@ -949,7 +985,9 @@ pub(crate) unsafe extern "system" fn system_quit_save_game_get_and_format_hook(
     unsafe { original(out, getter, text_id, fmg_name, abbrev) }
 }
 
-unsafe fn system_quit_save_game_close_window(window: usize, label: &str) -> bool {
+/// Native cancel-close of one menu window. `pub(crate)` because the save-flow tick closes the
+/// destination browser through the same primitive the deferred IngameTop close uses.
+pub(crate) unsafe fn system_quit_save_game_close_window(window: usize, label: &str) -> bool {
     if window < 0x10000 || window == TITLE_OWNER_SCAN_START_ADDRESS {
         return false;
     }
@@ -997,17 +1035,123 @@ unsafe fn system_quit_save_game_request_save_only() {
     }
 }
 
-unsafe fn system_quit_save_game_fire_save_and_close(dialog: usize, source: &str) -> bool {
+/// Fire the native save request pair FORCED: `throttled = false` for both calls.
+///
+/// The bool is PINNED (1.16.2 Ghidra decompile, 2026-07-28; see the RVA consts):
+/// `RequestSave(true)` runs a 60-second throttle against `GameMan+0xb98` whose early
+/// return sets NO flags, and `SaveRequest_Profile(true)` the same against `+0xb88`
+/// (`SetSeconds(0x3c)`). Under boot-time global suppression the dispatchers still run
+/// their commit tails for swallowed autosaves, so those throttle timestamps stay warm --
+/// a throttled user press within 60 s of any swallowed autosave would silently set
+/// nothing and strand the armed one-shot bypass token. The Save Game commit therefore
+/// always fires with `false`. The quit-to-desktop sites deliberately keep
+/// `system_quit_save_game_request_save_only` (true/true): under suppression those become
+/// intentional no-op saves -- the Save Game row is the ONLY path that really writes.
+pub(crate) unsafe fn system_quit_save_game_request_save_forced() {
+    const FORCED_NOT_THROTTLED: u8 = false as u8;
+    let Ok(request_save_addr) = game_rva(SYSTEM_QUIT_REQUEST_SAVE_RVA) else {
+        append_autoload_debug(format_args!(
+            "save-flow: failed to resolve RequestSave rva 0x{SYSTEM_QUIT_REQUEST_SAVE_RVA:x}; forced save NOT fired"
+        ));
+        return;
+    };
+    let request_save: unsafe extern "system" fn(u8) =
+        unsafe { std::mem::transmute(request_save_addr) };
+    unsafe { request_save(FORCED_NOT_THROTTLED) };
+    match game_rva(SYSTEM_QUIT_SAVE_REQUEST_PROFILE_RVA) {
+        Ok(profile_addr) => {
+            let save_request_profile: unsafe extern "system" fn(u8) =
+                unsafe { std::mem::transmute(profile_addr) };
+            unsafe { save_request_profile(FORCED_NOT_THROTTLED) };
+        }
+        Err(_) => append_autoload_debug(format_args!(
+            "save-flow: failed to resolve SaveRequest_Profile rva 0x{SYSTEM_QUIT_SAVE_REQUEST_PROFILE_RVA:x}; forced RequestSave already issued"
+        )),
+    }
+}
+
+/// Call one of the game's own save-request retractions after verifying its whole body.
+///
+/// Fails CLOSED through `save_flow_verify_rva`: an unresolvable address or a single drifted
+/// byte skips the call and reports it. Not retracting costs CPU; calling unknown code costs
+/// the process.
+unsafe fn call_verified_retract(rva: u32, expected: &[u8], name: &str) -> bool {
+    let Some(address) = save_flow_verify_rva(rva, expected, name) else {
+        return false;
+    };
+    let retract: unsafe extern "system" fn() = unsafe { std::mem::transmute(address) };
+    unsafe { retract() };
+    true
+}
+
+/// Retract the two native save-request flags through the game's own setters.
+///
+/// `b72` / `b73` select which flags to clear -- the caller decides ownership; this only
+/// performs it. Returns the pair of "actually cleared" results.
+pub(crate) unsafe fn system_quit_save_request_retract(b72: bool, b73: bool) -> (bool, bool) {
+    let cleared_b72 = b72
+        && unsafe {
+            call_verified_retract(
+                SAVE_REQUEST_RETRACT_B72_RVA,
+                SAVE_REQUEST_RETRACT_B72_SIG,
+                "b72",
+            )
+        };
+    let cleared_b73 = b73
+        && unsafe {
+            call_verified_retract(
+                SAVE_REQUEST_RETRACT_B73_RVA,
+                SAVE_REQUEST_RETRACT_B73_SIG,
+                "b73",
+            )
+        };
+    (cleared_b72, cleared_b73)
+}
+
+/// Run the proven Save Game close-all sequence and hand the flow to `save_flow_tick`.
+///
+/// `commit` selects the destination stage: `true` = stage 6 CLOSING_COMMIT (the tick fires
+/// the forced save request once the menus are closed and the RAM gates are green), `false` =
+/// stage 5 CLOSING_ABORT (the user declined; the tick returns to the world having written
+/// nothing).
+///
+/// CLOSE-THEN-FIRE (save-game-flow WP1, 2026-07-28): the save request is never fired here.
+/// Firing while menus are open is a dispatch-split hazard -- `ShouldSave` (the b72 lane)
+/// requires `!CanShowSaveMenu()` (`CSMenuMan+0x13c == 0`) but the b73 gate `FUN_140679370`
+/// does NOT, so an open-menu fire lets the b73-only lane dispatch a system-only submit first,
+/// that submit consumes the one-shot suppression-bypass token, and the later char-slot submit
+/// is swallowed. Staging the commit and firing at stage 7 produces a single combined
+/// `b72 && b73` -> `FUN_14067b940` -> one `FUN_140e6ef60` submit -> one enqueue -> one token.
+///
+/// WP1/WP2 commit plan: overwrite the loaded save (WP3 adds a destination target).
+pub(crate) unsafe fn system_quit_save_game_close_menus(
+    dialog: usize,
+    source: &str,
+    commit: bool,
+) -> bool {
     if dialog < 0x10000 || dialog == TITLE_OWNER_SCAN_START_ADDRESS {
         append_autoload_debug(format_args!(
             "system-quit-save: {source} abort -- dialog=0x{dialog:x} is not heap-like"
         ));
         return false;
     }
-    unsafe { system_quit_save_game_request_save_only() };
-    SYSTEM_QUIT_SAVE_GAME_CONFIRM_COUNT.fetch_add(1, Ordering::SeqCst);
     let option = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
     let top = SYSTEM_QUIT_INGAME_TOP_WINDOW.load(Ordering::SeqCst);
+    // Stage the outcome BEFORE the close sequence so the save-flow tick owns the flow
+    // from the next game-task frame onward.
+    SAVE_FLOW_DIALOG.store(dialog, Ordering::SeqCst);
+    SAVE_FLOW_STAGE_TICKS.store(0, Ordering::SeqCst);
+    SAVE_FLOW_STAGE.store(
+        if commit {
+            SAVE_FLOW_STAGE_CLOSING_COMMIT
+        } else {
+            SAVE_FLOW_STAGE_CLOSING_ABORT
+        },
+        Ordering::SeqCst,
+    );
+    if commit {
+        SYSTEM_QUIT_SAVE_GAME_CONFIRM_COUNT.fetch_add(1, Ordering::SeqCst);
+    }
     // `dialog` is the System/Quit tab's PropertyEditDialog, not a `MenuWindow`; calling the
     // MenuWindow cancel-close primitive on it dispatches the wrong vfunc. Close the owning menu
     // windows only, matching the Escape/back stack semantics instead of treating the row dialog as a
@@ -1028,9 +1172,78 @@ unsafe fn system_quit_save_game_fire_save_and_close(dialog: usize, source: &str)
         SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_FRAMES.store(2, Ordering::SeqCst);
     }
     append_autoload_debug(format_args!(
-        "system-quit-save: {source} -> save-only + native menu-window close-all dialog=0x{dialog:x} option=0x{option:x} top=0x{top:x} closed_dialog={closed_dialog} closed_option={closed_option} closed_top={closed_top}"
+        "system-quit-save: {source} -> staged {} + native menu-window close-all dialog=0x{dialog:x} option=0x{option:x} top=0x{top:x} closed_dialog={closed_dialog} closed_option={closed_option} closed_top={closed_top}",
+        if commit {
+            "CLOSING_COMMIT (close-then-fire)"
+        } else {
+            "CLOSING_ABORT (nothing will be written)"
+        }
     ));
     closed_option || closed_top
+}
+
+/// Enter the Save Game confirm chain from the row press (save-game-flow WP2).
+///
+/// Captures the System/Quit dialog the whole flow is anchored on, then submits Box1 INLINE:
+/// this runs from the row-action hook, i.e. the same menu-thread ownership context the native
+/// quit confirm submits from. Later boxes go through `SAVE_FLOW_SUBMIT_BOX_PENDING` because
+/// the tick that decides them is on the game task, not the menu pump.
+///
+/// On a build where the MessageBoxBuilder recipe failed verification the chain is unavailable;
+/// rather than leave a dead button, Save Game degrades to the WP1 behavior (close-then-fire
+/// straight to the commit) and says so once.
+unsafe fn system_quit_save_game_start_flow(dialog: usize) -> bool {
+    if dialog < 0x10000 || dialog == TITLE_OWNER_SCAN_START_ADDRESS {
+        append_autoload_debug(format_args!(
+            "save-flow: row press abort -- dialog=0x{dialog:x} is not heap-like"
+        ));
+        return false;
+    }
+    save_flow_box_clear();
+    // Defensive: no destination state may survive from an earlier flow (a stale target would send
+    // this save to the wrong file).
+    save_dest_reset("save game row press");
+    SAVE_FLOW_DIALOG.store(dialog, Ordering::SeqCst);
+    SAVE_FLOW_STAGE_TICKS.store(0, Ordering::SeqCst);
+    // The confirm boxes are only answerable if the MessageBoxDialog BUILDER hook is live --
+    // that detour is what captures the dialog pointer the stage machine polls. It is normally
+    // installed at boot (`online_disable_enabled()` path in the game task), but make sure:
+    // this call is idempotent, and the row press is the menu thread, i.e. the one context in
+    // which no other thread can be executing the builder while MinHook patches it.
+    install_auto_accept_hook();
+    // Same reasoning for the answer observer: `CS::MenuJob::EmitResult` is what tells us WHICH
+    // button the user pressed on the branch where the dialog never stores its result. Install
+    // is idempotent; if it is not live the poll falls back to `dialog+0x1e8` and reports
+    // UNDECIDABLE rather than guessing, so log the state here where the run can see it.
+    install_menu_job_emit_result_hook();
+    let capture_live = MSGBOX_BUILDER_ORIG.load(Ordering::SeqCst) != HOOK_ORIGINAL_UNSET;
+    // One press = one bypass arm = one commit. Counting presses is what makes
+    // `oracle_save_bypass_allowed_total = 2` readable as "two presses" instead of "a double-arm
+    // bug"; without it the two are indistinguishable from telemetry alone.
+    let press = SAVE_FLOW_ROW_PRESS_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+    append_autoload_debug(format_args!(
+        "save-flow: row press #{press} dialog=0x{dialog:x} recipe_ok={} builder_capture_live={capture_live} emit_observer_installed={}",
+        save_flow_box_recipe_available(),
+        MENU_JOB_EMIT_RESULT_INSTALLED.load(Ordering::SeqCst)
+    ));
+    if !save_flow_box_recipe_available() || !capture_live {
+        append_autoload_debug(format_args!(
+            "save-flow: confirm chain unavailable on this build (recipe_ok={} builder_capture_live={capture_live}) -- Save Game degrades to the immediate close-then-fire commit",
+            save_flow_box_recipe_available()
+        ));
+        return unsafe { system_quit_save_game_close_menus(dialog, "row_action_no_recipe", true) };
+    }
+    SAVE_FLOW_STAGE.store(SAVE_FLOW_STAGE_BOX1_WAIT, Ordering::SeqCst);
+    if unsafe { save_flow_submit_box(SAVE_FLOW_BOX_CONFIRM_SAVE) } {
+        return true;
+    }
+    append_autoload_debug(format_args!(
+        "save-flow: Box1 submit failed at the row press -- aborting back to the world without writing"
+    ));
+    SAVE_FLOW_ABORT_COUNT.fetch_add(1, Ordering::SeqCst);
+    save_flow_box_clear();
+    SAVE_FLOW_STAGE.store(SAVE_FLOW_STAGE_IDLE, Ordering::SeqCst);
+    false
 }
 
 pub(crate) unsafe fn system_quit_save_game_deferred_close_tick() {
@@ -1055,7 +1268,9 @@ pub(crate) unsafe fn system_quit_save_game_deferred_close_tick() {
 pub(crate) unsafe extern "system" fn system_quit_save_game_return_title_request_hook() {
     let dialog = SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.swap(0, Ordering::SeqCst);
     if dialog >= 0x10000 && callstack_contains_game_rva(0x7a3000, 0x7a4000) {
-        unsafe { system_quit_save_game_fire_save_and_close(dialog, "legacy_confirm") };
+        // Dormant safety net (the product row path clears the arming latch). It keeps the
+        // WP1 semantics -- close-then-fire straight to the commit, no confirm chain.
+        unsafe { system_quit_save_game_close_menus(dialog, "legacy_confirm", true) };
         append_autoload_debug(format_args!(
             "system-quit-save: legacy confirmation path suppressed native return-title request dialog=0x{dialog:x}"
         ));

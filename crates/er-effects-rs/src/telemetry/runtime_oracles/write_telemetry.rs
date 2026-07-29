@@ -514,6 +514,290 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_BEFORE.load(Ordering::SeqCst),
         SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_AFTER.load(Ordering::SeqCst)
     ));
+    // SAVE-FLOW / SAVE-SUPPRESS oracles (save-game-flow WP1): suppression state and the
+    // one-shot bypass counters come straight from the er-save-suppress crate accessors
+    // (the product wires that crate's publish sink to a no-op because THIS writer is the
+    // export path); the flow stage/counters are the product-side state machine. Probes
+    // must key on oracle_save_flow_stage, NOT on msgbox/modal oracles, for save-flow
+    // progress. oracle_save_bypass_final_status is null until the first bypassed save
+    // reports a terminal status, then latched (0 = success).
+    let bypass_final_status = er_save_suppress::bypass_final_status_raw();
+    body.push_str(&format!(
+        "  \"oracle_save_suppress_armed\": {},\n  \"oracle_save_suppress_submits_swallowed\": {},\n  \"oracle_save_suppress_submits_passed_through\": {},\n  \"oracle_save_suppress_status_faked\": {},\n  \"oracle_save_suppress_status_faked_idle\": {},\n  \"oracle_save_suppress_prologue_mismatches\": {},\n  \"oracle_save_suppress_settle_events\": {},\n  \"oracle_save_bypass_armed_total\": {},\n  \"oracle_save_bypass_allowed_total\": {},\n  \"oracle_save_bypass_allowed_failed_total\": {},\n  \"oracle_save_bypass_expired_total\": {},\n  \"oracle_save_bypass_final_status\": {},\n  \"oracle_save_flow_stage\": {},\n  \"oracle_save_flow_gate_latch_blocked\": {},\n  \"oracle_save_flow_commit_complete_count\": {},\n  \"oracle_save_flow_row_press_count\": {},\n  \"oracle_save_flow_commit_verify_fail_count\": {},\n",
+        er_save_suppress::is_armed(),
+        er_save_suppress::submits_swallowed(),
+        er_save_suppress::submits_passed_through(),
+        er_save_suppress::status_faked(),
+        er_save_suppress::status_faked_idle(),
+        er_save_suppress::prologue_mismatches(),
+        er_save_suppress::settle_events(),
+        er_save_suppress::bypass_armed_total(),
+        er_save_suppress::bypass_allowed_total(),
+        er_save_suppress::bypass_allowed_failed_total(),
+        er_save_suppress::bypass_expired_total(),
+        if bypass_final_status == er_save_suppress::BYPASS_FINAL_STATUS_NONE {
+            "null".to_owned()
+        } else {
+            bypass_final_status.to_string()
+        },
+        SAVE_FLOW_STAGE.load(Ordering::SeqCst),
+        SAVE_FLOW_GATE_LATCH_BLOCKED_COUNT.load(Ordering::SeqCst),
+        SAVE_FLOW_COMMIT_COMPLETE_COUNT.load(Ordering::SeqCst),
+        // One arm + one commit per press: this is what separates "the user pressed Save Game
+        // twice" from "the flow armed the bypass twice for one press".
+        SAVE_FLOW_ROW_PRESS_COUNT.load(Ordering::SeqCst),
+        // The game said the save succeeded and the file check disagreed. Hard product failure.
+        SAVE_FLOW_COMMIT_VERIFY_FAIL_COUNT.load(Ordering::SeqCst),
+    ));
+    // WRITE-COMPLETION oracles (2026-07-28). `oracle_save_job_*` come from the observer on
+    // `SaveLoad2::SLSaveSession`'s job body: the SL worker picking a save up (`starts`),
+    // putting it down (`completions`) and the result the game recorded for it
+    // (`last_result`, 0 = success, 4294967295 = the result object was unreadable). They are
+    // the reason a successful commit no longer has to wait for a poll consumer that may not
+    // exist. Read them like this:
+    //
+    //   * `observer_installed == false` -> completion detection is back to the watchdog for
+    //     the whole session; treat every commit in that run as degraded.
+    //   * `final_status_source` names WHICH observation ended the last commit
+    //     ("worker-job-completion", "native-poll", "native-enqueue-failed", or "none").
+    //   * `commit_watchdog_count > 0` -> that many commits ended without ever being
+    //     observed. That is a FAILURE of this instrumentation even when the file is fine,
+    //     and `commit_job_start_tick` (the tick the writer began, 0 = never seen to start)
+    //     is the first thing to look at.
+    body.push_str(&format!(
+        "  \"oracle_save_job_observer_installed\": {},\n  \"oracle_save_job_starts\": {},\n  \"oracle_save_job_completions\": {},\n  \"oracle_save_job_last_result\": {},\n  \"oracle_save_job_no_trampoline\": {},\n  \"oracle_save_bypass_final_status_source\": \"{}\",\n  \"oracle_save_bypass_completed_via_job\": {},\n  \"oracle_save_bypass_completed_via_poll\": {},\n  \"oracle_save_flow_commit_watchdog_count\": {},\n  \"oracle_save_flow_commit_job_start_tick\": {},\n",
+        er_save_suppress::save_job_observer_installed(),
+        er_save_suppress::save_job_starts(),
+        er_save_suppress::save_job_completions(),
+        er_save_suppress::save_job_last_result(),
+        er_save_suppress::save_job_no_trampoline(),
+        er_save_suppress::bypass_final_status_source_label(
+            er_save_suppress::bypass_final_status_source()
+        ),
+        er_save_suppress::bypass_completed_via_job_total(),
+        er_save_suppress::bypass_completed_via_poll_total(),
+        SAVE_FLOW_COMMIT_WATCHDOG_COUNT.load(Ordering::SeqCst),
+        SAVE_FLOW_COMMIT_JOB_START_TICK.load(Ordering::SeqCst),
+    ));
+    // SAVE-DISPATCH ATTRIBUTION. These read the native chain BETWEEN "the request flags are
+    // set" and "an SL enqueue arrives", which the enqueue-side counters above cannot see: a
+    // save lane that returns 0 touches nothing, so the request stays latched, the dispatcher
+    // re-enters it every frame, and `oracle_save_bypass_expired_total` is the only trace --
+    // identical to the case where nothing consumed the request at all.
+    //
+    // Read them as: observers_installed == 0 -> the rest are meaningless (not "no dispatch");
+    // dispatch_calls == 0 -> the dispatcher never ran; declines > 0 -> it ran and refused.
+    //
+    // serialize_calls is the alloc/serializer discriminator. A lane only calls
+    // FUN_14067dc00 after its MainHeap buffer allocations have been null-checked, so
+    // serialize_calls climbing PROVES the 0x280000 (and, on the combined lane, 0x60000)
+    // allocations succeeded; declines climbing while serialize_calls stands still means the
+    // lane bailed before the serializer.
+    //
+    // serialize_failures > 0 -> the character serializer is what refused, and
+    // serialize_last_fail_step NAMES the step it refused at (decoded from
+    // serialize_last_fail_bytes = _DAT_143d69920, the stream position where the cascade
+    // stopped). The raw byte count is kept beside it. The step name is "byte-counter-
+    // unreadable" only when the counter could not be read -- it is NOT a game outcome, and
+    // in particular it does NOT mean the serializer's first gate rejected the call: that
+    // gate is unreachable here (see SAVE_SERIALIZE_BYTES_RVA in er-save-suppress).
+    body.push_str(&format!(
+        "  \"oracle_save_dispatch_observers_installed\": {},\n  \"oracle_save_dispatch_calls\": {},\n  \"oracle_save_dispatch_declines\": {},\n  \"oracle_save_dispatch_declines_with_bypass\": {},\n  \"oracle_save_dispatch_last_lane\": {},\n  \"oracle_save_serialize_calls\": {},\n  \"oracle_save_serialize_failures\": {},\n  \"oracle_save_serialize_last_fail_bytes\": {},\n  \"oracle_save_serialize_last_fail_step\": \"{}\",\n",
+        er_save_suppress::dispatch_observers_installed(),
+        er_save_suppress::dispatch_calls(),
+        er_save_suppress::dispatch_declines(),
+        er_save_suppress::dispatch_declines_with_bypass(),
+        er_save_suppress::dispatch_last_lane(),
+        er_save_suppress::serialize_calls(),
+        er_save_suppress::serialize_failures(),
+        er_save_suppress::serialize_last_fail_bytes(),
+        er_save_suppress::serialize_last_fail_step(),
+    ));
+    // THE SL REQUEST SLOT -- the operands of the submit builders' own precondition,
+    // `iodev+0x10 == 0 && iodev+0x20 == 0` (`FUN_140e6ef60` / `FUN_140e6ec70`, 1.16.2).
+    //
+    // Read them ONLY when `oracle_save_dispatch_declines_with_bypass` is non-zero: that is
+    // the case they were built for, a lane that allocated, serialized successfully, and
+    // still returned 0 -- where the builder's other four operands are statically guaranteed
+    // by the call site, so the guard can ONLY have failed on these two fields.
+    //
+    //   save-content-latched-0x10               a previous SAVE request was never released
+    //   load-job-latched-0x18+0x20              a completed LOAD still owns the shared job slot
+    //   orphan-job-latched-0x20                 a job whose poll never reached a terminal case
+    //   precondition-clear-builder-alloc-refused the guard PASSED; the NetworkHeap alloc refused
+    //
+    // `oracle_save_swallow_release_left_dirty` is the self-incrimination oracle and is
+    // decisive on its own: non-zero means THIS DLL's swallow left the precondition failing,
+    // and `oracle_save_swallow_slot_after_*` names the field it left populated. Zero, with
+    // swallows recorded, clears the swallow and points the finger at the load side.
+    let slot_hex = |field: Option<usize>| -> String {
+        field.map_or_else(|| "null".to_owned(), |value| format!("\"0x{value:x}\""))
+    };
+    let decline_slot = er_save_suppress::decline_slot();
+    let swallow_after = er_save_suppress::swallow_slot_after();
+    let swallow_before = er_save_suppress::swallow_slot_before();
+    body.push_str(&format!(
+        "  \"oracle_save_suppress_release_unavailable\": {},\n  \"oracle_save_swallow_release_left_dirty\": {},\n  \"oracle_save_swallow_iodev_mismatch\": {},\n  \"oracle_save_iodev_slot_read_failures\": {},\n  \"oracle_save_dispatch_last_decline_reason\": \"{}\",\n  \"oracle_save_decline_iodev_save_content\": {},\n  \"oracle_save_decline_iodev_load_content\": {},\n  \"oracle_save_decline_iodev_job\": {},\n  \"oracle_save_decline_iodev_file_cap\": {},\n  \"oracle_save_swallow_before_iodev_save_content\": {},\n  \"oracle_save_swallow_before_iodev_job\": {},\n  \"oracle_save_swallow_after_iodev_save_content\": {},\n  \"oracle_save_swallow_after_iodev_load_content\": {},\n  \"oracle_save_swallow_after_iodev_job\": {},\n  \"oracle_save_swallow_after_iodev_file_cap\": {},\n  \"oracle_save_flow_request_retractions\": {},\n  \"oracle_save_flow_retract_declined\": {},\n",
+        er_save_suppress::release_unavailable(),
+        er_save_suppress::swallow_release_left_dirty(),
+        er_save_suppress::swallow_iodev_mismatch(),
+        er_save_suppress::slot_read_failures(),
+        er_save_suppress::decline_bail_reason_label(),
+        slot_hex(decline_slot.map(|slot| slot.save_content)),
+        slot_hex(decline_slot.map(|slot| slot.load_content)),
+        slot_hex(decline_slot.map(|slot| slot.job)),
+        slot_hex(decline_slot.map(|slot| slot.file_cap)),
+        slot_hex(swallow_before.map(|slot| slot.save_content)),
+        slot_hex(swallow_before.map(|slot| slot.job)),
+        slot_hex(swallow_after.map(|slot| slot.save_content)),
+        slot_hex(swallow_after.map(|slot| slot.load_content)),
+        slot_hex(swallow_after.map(|slot| slot.job)),
+        slot_hex(swallow_after.map(|slot| slot.file_cap)),
+        SAVE_FLOW_REQUEST_RETRACTIONS.load(Ordering::SeqCst),
+        SAVE_FLOW_RETRACT_DECLINED.load(Ordering::SeqCst),
+    ));
+    // THE LOAD CONSUMER -- the other owner of the shared `iodev+0x20` job, and the reason a
+    // save can be refused by something that is not a save.
+    //
+    // A completed load is released only by its CONSUMER (`FUN_14067b100` ->
+    // `FUN_140e6e380` -> `FUN_140e6f200`); `FUN_140e6e080` case 0x14 deliberately returns
+    // success without releasing, and that same return is what drives `GameMan+0xb80` to
+    // RESIDENT(3). The switch reload substitutes that consumer to feed the engine its own
+    // sliced `.sl2` body, so it must run the native consumer for the device side effect --
+    // these oracles say whether it did.
+    //
+    //   oracle_save_load_consumer_stranded > 0  DECISIVE FAILURE. A completed load kept the
+    //                                           shared job and the payload was substituted
+    //                                           anyway: from that moment no save in the
+    //                                           process can be built, and
+    //                                           oracle_save_dispatch_last_decline_reason
+    //                                           latches at "load-job-latched-0x18+0x20".
+    //   oracle_save_load_consumer_releases > 0  the slot was FREED, by the native consumer,
+    //                                           at the substitution site.
+    //   oracle_save_load_consumer_still_held    times the native guard kept a load that had
+    //                                           not finished. This is the race oracle: the
+    //                                           release is the game's own, so a live load is
+    //                                           never taken -- a non-zero value here with a
+    //                                           zero `stranded` means we asked early and
+    //                                           correctly got nothing.
+    let consumer_after = er_save_suppress::load_consumer_slot_after();
+    body.push_str(&format!(
+        "  \"oracle_save_load_consumer_calls\": {},\n  \"oracle_save_load_consumer_releases\": {},\n  \"oracle_save_load_consumer_still_held\": {},\n  \"oracle_save_load_consumer_stranded\": {},\n  \"oracle_save_load_consumer_last_outcome\": \"{}\",\n  \"oracle_save_load_consumer_after_iodev_load_content\": {},\n  \"oracle_save_load_consumer_after_iodev_job\": {},\n",
+        er_save_suppress::load_consumer_calls(),
+        er_save_suppress::load_consumer_releases(),
+        er_save_suppress::load_consumer_still_held(),
+        er_save_suppress::load_consumer_stranded(),
+        er_save_suppress::load_consumer_last_outcome_label(),
+        slot_hex(consumer_after.map(|slot| slot.load_content)),
+        slot_hex(consumer_after.map(|slot| slot.job)),
+    ));
+    // SAVE-FLOW CONFIRM CHAIN oracles (save-game-flow WP2 + WP3): Box1 "are you sure", Box2
+    // "overwrite your loaded save", Box3 "overwrite this file" (the destination browser's final
+    // gate).
+    //
+    // A save-flow probe must key on `oracle_save_flow_stage` + these counters, NOT on the
+    // msgbox oracles: the confirm boxes are captured into the flow's OWN dialog slot and
+    // deliberately do not feed `MSGBOX_LAST_DIALOG` / `oracle_blocking_modal_present`, so the
+    // startup auto-accept can never reach a user-facing save confirm and an expected, wanted
+    // confirm never reads as a blocking-modal failure.
+    body.push_str(&format!(
+        "  \"oracle_save_flow_box1_open_count\": {},\n  \"oracle_save_flow_box1_yes_count\": {},\n  \"oracle_save_flow_box1_no_count\": {},\n  \"oracle_save_flow_box2_open_count\": {},\n  \"oracle_save_flow_box2_yes_count\": {},\n  \"oracle_save_flow_box2_no_count\": {},\n  \"oracle_save_flow_box3_open_count\": {},\n  \"oracle_save_flow_box3_yes_count\": {},\n  \"oracle_save_flow_box3_no_count\": {},\n  \"oracle_save_flow_abort_count\": {},\n  \"oracle_save_flow_box_build_timeout_count\": {},\n  \"oracle_save_flow_recipe_unavailable\": {},\n",
+        SAVE_FLOW_BOX_OPEN_COUNTS[0].load(Ordering::SeqCst),
+        SAVE_FLOW_BOX_YES_COUNTS[0].load(Ordering::SeqCst),
+        SAVE_FLOW_BOX_NO_COUNTS[0].load(Ordering::SeqCst),
+        SAVE_FLOW_BOX_OPEN_COUNTS[1].load(Ordering::SeqCst),
+        SAVE_FLOW_BOX_YES_COUNTS[1].load(Ordering::SeqCst),
+        SAVE_FLOW_BOX_NO_COUNTS[1].load(Ordering::SeqCst),
+        SAVE_FLOW_BOX_OPEN_COUNTS[2].load(Ordering::SeqCst),
+        SAVE_FLOW_BOX_YES_COUNTS[2].load(Ordering::SeqCst),
+        SAVE_FLOW_BOX_NO_COUNTS[2].load(Ordering::SeqCst),
+        SAVE_FLOW_ABORT_COUNT.load(Ordering::SeqCst),
+        SAVE_FLOW_BOX_BUILD_TIMEOUT_COUNT.load(Ordering::SeqCst),
+        SAVE_FLOW_RECIPE_UNAVAILABLE.load(Ordering::SeqCst),
+    ));
+    // CONFIRM-BOX FAILURE oracles (2026-07-28). `..._undecidable_count` is the box the DLL
+    // could not read an answer out of; it is deliberately NOT folded into the No counts, so a
+    // run can always tell "the user declined" from "we failed to read the user's answer".
+    // Non-zero is a FAILURE even though nothing was written. `..._emit_count` is how many times
+    // the `CS::MenuJob::EmitResult` observer attributed a native verdict to a live confirm box
+    // (>= 1 per answered box once the hook is installed), and `..._emit_installed` says whether
+    // that observer is live at all.
+    body.push_str(&format!(
+        "  \"oracle_save_flow_box1_undecidable_count\": {},\n  \"oracle_save_flow_box2_undecidable_count\": {},\n  \"oracle_save_flow_box3_undecidable_count\": {},\n  \"oracle_save_flow_box_identity_lost_count\": {},\n  \"oracle_save_flow_box_emit_count\": {},\n  \"oracle_save_flow_box_emit_installed\": {},\n  \"oracle_save_flow_enqueue_missing_count\": {},\n",
+        SAVE_FLOW_BOX_UNDECIDABLE_COUNTS[0].load(Ordering::SeqCst),
+        SAVE_FLOW_BOX_UNDECIDABLE_COUNTS[1].load(Ordering::SeqCst),
+        SAVE_FLOW_BOX_UNDECIDABLE_COUNTS[2].load(Ordering::SeqCst),
+        SAVE_FLOW_BOX_IDENTITY_LOST_COUNT.load(Ordering::SeqCst),
+        SAVE_FLOW_BOX_EMIT_COUNT.load(Ordering::SeqCst),
+        MENU_JOB_EMIT_RESULT_INSTALLED.load(Ordering::SeqCst),
+        // Non-zero = a Save Game press fired but the save never reached the writer. A hard
+        // failure: the user believes they saved and nothing was written.
+        SAVE_FLOW_ENQUEUE_MISSING_COUNT.load(Ordering::SeqCst),
+    ));
+    // SAVE-DESTINATION oracles (save-game-flow WP3): the Box2-"No" browser and the scoped
+    // write-open redirect that makes the chosen destination -- not the loaded save -- receive the
+    // container the native writer emits. `redirect_hits` is one PER DIRTY BLOCK (the native
+    // in-place writer opens the container once per block), so any positive count is normal and
+    // zero is the failure. `seeded_count` is the fix that makes those block writes land in a real
+    // container; `target_structure_ok` is the proof the result is a complete BND4, not merely a
+    // file of the right length. `live_file_mutated` is the hard failure oracle that says the
+    // redirect leaked and the loaded save was overwritten anyway, and `live_overwrite_count` names
+    // the OPPOSITE case: a commit that was SUPPOSED to rewrite the loaded save.
+    //
+    // PER-COMMIT vs CUMULATIVE, because reading one as the other is how a failed save reads as a
+    // successful one. `redirect_hits`, `target_written_ok`, `target_structure_ok`,
+    // `live_file_mutated`, `live_bak_mutated` and `live_stat_unreadable` describe THE COMMIT THAT
+    // ARMED LAST and nothing before it -- `er_telemetry::counters::save_dest_reset_commit_verdicts`
+    // clears all six at every arm. The process-wide history is in the `*_count` /`commit_fail` /
+    // `restore_*` counters and in `live_file_mutated_total`, none of which are ever cleared.
+    body.push_str(&format!(
+        "  \"oracle_save_dest_picker_open_count\": {},\n  \"oracle_save_dest_target_existing_count\": {},\n  \"oracle_save_dest_target_new_count\": {},\n  \"oracle_save_dest_commit_count\": {},\n  \"oracle_save_dest_cancel_count\": {},\n  \"oracle_save_dest_redirect_armed\": {},\n  \"oracle_save_dest_redirect_hits\": {},\n  \"oracle_save_dest_seeded_count\": {},\n  \"oracle_save_dest_seed_fail_count\": {},\n  \"oracle_save_dest_target_written_ok\": {},\n  \"oracle_save_dest_target_structure_ok\": {},\n  \"oracle_save_dest_commit_fail\": {},\n  \"oracle_save_dest_live_file_mutated\": {},\n  \"oracle_save_dest_live_file_mutated_total\": {},\n  \"oracle_save_dest_live_bak_mutated\": {},\n  \"oracle_save_dest_live_overwrite_count\": {},\n",
+        SAVE_DEST_PICKER_OPEN_COUNT.load(Ordering::SeqCst),
+        SAVE_DEST_TARGET_EXISTING_COUNT.load(Ordering::SeqCst),
+        SAVE_DEST_TARGET_NEW_COUNT.load(Ordering::SeqCst),
+        SAVE_DEST_COMMIT_COUNT.load(Ordering::SeqCst),
+        SAVE_DEST_CANCEL_COUNT.load(Ordering::SeqCst),
+        SAVE_DEST_REDIRECT_ARMED.load(Ordering::SeqCst),
+        SAVE_DEST_REDIRECT_HITS.load(Ordering::SeqCst),
+        SAVE_DEST_SEEDED_COUNT.load(Ordering::SeqCst),
+        SAVE_DEST_SEED_FAIL_COUNT.load(Ordering::SeqCst),
+        SAVE_DEST_TARGET_WRITTEN_OK.load(Ordering::SeqCst),
+        SAVE_DEST_TARGET_STRUCTURE_OK.load(Ordering::SeqCst),
+        SAVE_DEST_COMMIT_FAIL.load(Ordering::SeqCst),
+        SAVE_DEST_LIVE_FILE_MUTATED.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_DEST_LIVE_FILE_MUTATED_TOTAL.load(Ordering::SeqCst),
+        SAVE_DEST_LIVE_BAK_MUTATED.load(Ordering::SeqCst),
+        SAVE_DEST_LIVE_OVERWRITE_COUNT.load(Ordering::SeqCst),
+    ));
+    // DESTINATION-COMMIT SAFETY ORACLES (2026-07-29). Every one names a decision the commit
+    // refused to guess at, or a fact it could not establish, so a run can report it instead of
+    // leaving it to be inferred from a file that changed when it should not have:
+    //   * `identity_unknown_abort` / `no_writer_observer_abort` -- commits that did NOT fire;
+    //   * `self_redirect_blocked` -- a destination proven to BE the loaded save under a different
+    //     spelling, which the old string compare would have redirected onto itself;
+    //   * `foreign_open_passed` -- write-opens of a same-named save container elsewhere on the
+    //     machine that were left alone instead of rerouted into the user's destination;
+    //   * `disarm_deferred` / `disarm_unproven` -- the redirect window waiting for the writer, and
+    //     the one case where it had to be dropped without proof the writer ever ran;
+    //   * `live_stat_unreadable` / `restore_suppressed` / `restore_failed` -- the loaded save's
+    //     read-only guarantee, and every time the snapshot restore was declined or failed.
+    // `degraded_*` describe a commit fired with suppression unarmed, whose completion comes from
+    // the SL writer's own job signal because no bypass token exists to watch.
+    body.push_str(&format!(
+        "  \"oracle_save_dest_identity_unknown_abort\": {},\n  \"oracle_save_dest_self_redirect_blocked\": {},\n  \"oracle_save_dest_no_writer_observer_abort\": {},\n  \"oracle_save_dest_foreign_open_passed\": {},\n  \"oracle_save_dest_disarm_deferred\": {},\n  \"oracle_save_dest_disarm_unproven\": {},\n  \"oracle_save_dest_live_stat_unreadable\": {},\n  \"oracle_save_dest_restore_suppressed\": {},\n  \"oracle_save_dest_restore_failed\": {},\n  \"oracle_save_flow_degraded_fire\": {},\n  \"oracle_save_flow_degraded_complete_count\": {},\n  \"oracle_save_flow_degraded_unobserved_count\": {},\n",
+        SAVE_DEST_IDENTITY_UNKNOWN_ABORT.load(Ordering::SeqCst),
+        SAVE_DEST_SELF_REDIRECT_BLOCKED.load(Ordering::SeqCst),
+        SAVE_DEST_NO_WRITER_OBSERVER_ABORT.load(Ordering::SeqCst),
+        SAVE_DEST_FOREIGN_OPEN_PASSED.load(Ordering::SeqCst),
+        SAVE_DEST_DISARM_DEFERRED.load(Ordering::SeqCst),
+        SAVE_DEST_DISARM_UNPROVEN.load(Ordering::SeqCst),
+        SAVE_DEST_LIVE_STAT_UNREADABLE.load(Ordering::SeqCst),
+        SAVE_DEST_RESTORE_SUPPRESSED.load(Ordering::SeqCst),
+        SAVE_DEST_RESTORE_FAILED.load(Ordering::SeqCst),
+        SAVE_FLOW_DEGRADED_FIRE.load(Ordering::SeqCst),
+        SAVE_FLOW_DEGRADED_COMPLETE_COUNT.load(Ordering::SeqCst),
+        SAVE_FLOW_DEGRADED_UNOBSERVED_COUNT.load(Ordering::SeqCst),
+    ));
     body.push_str(&format!(
         "  \"autoload_last_status\": {},\n",
         state.autoload.last_status().map_or_else(

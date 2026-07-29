@@ -10,7 +10,7 @@
 //! both `.co2` and vanilla `.sl2` sources so users can import/load a vanilla save while ERSC owns
 //! the session.
 //!
-//! The same model serves two INTENTS. [`PickerIntent::LoadSource`] browses for
+//! The same model serves two INTENTS (save-game-flow WP3). [`PickerIntent::LoadSource`] browses for
 //! a save to LOAD (the shipping behavior). [`PickerIntent::SaveDestination`] browses for a folder to
 //! SAVE INTO: a pinned `[ new ]` row writes the loaded save's own filename into the browsed folder,
 //! and occupancy filtering is dropped -- an overwrite target needs no active character slot, and
@@ -301,14 +301,8 @@ impl SavePickerModel {
         Self::open_with_intent(dir, extensions, PickerIntent::LoadSource)
     }
 
-    /// Build a save-DESTINATION browser rooted at `dir`. `loaded_file_name` is the leaf the
-    /// `[ new ]` row writes into the browsed folder.
-    ///
-    /// NO MENU OPENS ONE YET -- the save flow that browses for a destination is a separate piece of
-    /// work. The intent is modelled here regardless, because [`Self::entry_row_base`] is ONE layout
-    /// decision serving both intents: excising the destination case would leave two row-index
-    /// arithmetics to keep in agreement, and disagreement between them is precisely the defect
-    /// `row_character_info_belongs_to_that_rows_own_file` exists to pin.
+    /// Build a save-DESTINATION browser rooted at `dir` (save-game-flow WP3). `loaded_file_name` is
+    /// the leaf the `[ new ]` row writes into the browsed folder.
     pub(crate) fn open_destination(
         dir: &Path,
         extensions: &[&str],

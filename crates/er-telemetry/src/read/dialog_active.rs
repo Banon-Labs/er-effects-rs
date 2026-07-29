@@ -53,12 +53,27 @@ const SAVE_RETRY_DIALOG_VTABLE_RVA: usize = 0x2aaabf8;
 /// this is exactly the field write_game_module_oracles' `blocking_modal_present`
 /// reads.
 const MSGBOX_CLOSING_LATCH_3B0_OFFSET: usize = 0x3b0;
-/// `state` (i32, `dialog+0x25e8`): >= 2 == decided (result chosen / closing). A
-/// live, on-screen, un-decided dialog reads 0 or 1. Source: product
-/// constants/autoload_state.rs `MsgBoxDialogLayout.state` (0x25e8) / `MsgBoxState`.
-const MSGBOX_STATE_25E8_OFFSET: usize = 0x25e8;
-/// `state >= this` == decided. Source: product `MsgBoxState::Decided`.
-const MSGBOX_STATE_DECIDED: i32 = 2;
+/// `button_count` (i32, `dialog+0x25e8`). CORRECTED 2026-07-28: this is NOT a
+/// "decided" state. The ctor (`FUN_1409275b0`) writes it as
+/// `(*(i64*)(cfg+0x38) - *(i64*)(cfg+0x30)) / 0x210`, the length of the button
+/// descriptor vector, so a Yes/No confirm reads 2 here from the frame it is built.
+/// The old `state >= 2 == decided` test therefore REJECTED every two-button confirm
+/// as "not active" (false negative). Kept as a shape check only: a real dialog has
+/// at least one button. Source: product constants/autoload_state.rs
+/// `MSGBOX_BUTTON_COUNT_25E8_OFFSET`.
+const MSGBOX_BUTTON_COUNT_25E8_OFFSET: usize = 0x25e8;
+/// Plausible button-count range for a live dialog (1 = OK notice, 2 = Yes/No, and
+/// the widest native command dialogs stay well under this ceiling). Outside it the
+/// candidate is garbage that merely happens to hold the vtable value.
+const MSGBOX_BUTTON_COUNT_MIN: i32 = 1;
+const MSGBOX_BUTTON_COUNT_MAX: i32 = 16;
+/// `job_result.state` (i32, `dialog+0x1e8`): the dialog's own `MenuJobResult`. <= 1
+/// (`Continue`) == no answer yet; 2 (`Success`) / 3 (`Failed`) == the user's button
+/// already resolved it. Source: product constants/autoload_state.rs
+/// `MSGBOX_JOB_RESULT_STATE_1E8_OFFSET`.
+const MSGBOX_JOB_RESULT_STATE_1E8_OFFSET: usize = 0x1e8;
+/// `MenuJobResult::ShouldContinue` (0x1407a9200) is `cmp [rcx],1; seta al`.
+const MENU_JOB_RESULT_STATE_CONTINUE_MAX: i32 = 1;
 
 // --- CSMenuMan singleton diagnostics (SUPPORTING evidence only, NOT the
 // authoritative msgbox_active signal). The builder sets a build-time "dialog mode"
@@ -182,11 +197,18 @@ fn validate_active(obj: usize, base: usize) -> Option<ActiveDialog> {
     if latch != 0 {
         return None;
     }
-    // A live, on-screen, un-decided dialog reads state 0 or 1 (< decided). This
-    // second field discriminator also rejects a stray slot that merely holds the
-    // vtable value (freed/garbage blocks almost never satisfy both fields).
-    let state = unsafe { safe_read_i32(obj + MSGBOX_STATE_25E8_OFFSET) }?;
-    if state >= MSGBOX_STATE_DECIDED {
+    // A live, un-answered dialog still carries its `MenuJobResult` at Continue
+    // (<= 1); once the user picks a button the emit path leaves Success/Failed
+    // there. This is the real "already answered" discriminator.
+    let state = unsafe { safe_read_i32(obj + MSGBOX_JOB_RESULT_STATE_1E8_OFFSET) }?;
+    if state > MENU_JOB_RESULT_STATE_CONTINUE_MAX {
+        return None;
+    }
+    // Shape check: a real dialog has a plausible button count. This rejects a stray
+    // slot that merely holds the vtable value (freed/garbage blocks almost never
+    // satisfy every field).
+    let buttons = unsafe { safe_read_i32(obj + MSGBOX_BUTTON_COUNT_25E8_OFFSET) }?;
+    if !(MSGBOX_BUTTON_COUNT_MIN..=MSGBOX_BUTTON_COUNT_MAX).contains(&buttons) {
         return None;
     }
     Some(ActiveDialog {
@@ -261,8 +283,8 @@ fn scan_for_dialog(base: usize) -> Option<ActiveDialog> {
         let size = info.region_size;
         let next = region_base.saturating_add(size);
         let readable = info.state == MEM_COMMIT && info.protect & (PAGE_NOACCESS | PAGE_GUARD) == 0;
-        // The object must be large enough to hold the state field we cross-check.
-        if readable && size >= MSGBOX_STATE_25E8_OFFSET + core::mem::size_of::<i32>() {
+        // The object must be large enough to hold the fields we cross-check.
+        if readable && size >= MSGBOX_BUTTON_COUNT_25E8_OFFSET + core::mem::size_of::<i32>() {
             let mut region_off = 0usize;
             while region_off < size {
                 let chunk = (size - region_off).min(SCAN_CHUNK);

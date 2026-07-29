@@ -2,12 +2,12 @@
 //
 // Replaces the System>Quit "Load Save Profiles" `GetOpenFileNameW` OS dialog (context switch out
 // of the game) with the same native 10-row window the character switcher already drives. The rows
-// are a browsable directory listing -- up, drive cycler, dirs + mode-locked save files, page
-// cycler -- staged as synthetic ProfileSummary records; the shared model lives in
-// `experiments::save_picker` and owns the row layout (see its module docs for the order and why
-// nothing sits at a fixed index). Directory/drive/page navigation rebuilds the row list in place
-// via the game's own records-changed rebuild (close + menu-pump resubmit as fallback). Picking a
-// file feeds the exact validation/preview pipeline the OS picker used
+// are a browsable directory listing -- up, drive cycler, `[ new ]` in destination intent, dirs +
+// mode-locked save files, page cycler -- staged as synthetic ProfileSummary records; the shared
+// model lives in `experiments::save_picker` and owns the row layout (see its module docs for the
+// order and why nothing sits at a fixed index). Directory/drive/page navigation rebuilds the row
+// list in place via the game's own records-changed rebuild (close + menu-pump resubmit as
+// fallback). Picking a file feeds the exact validation/preview pipeline the OS picker used
 // (`system_quit_ingest_picked_save`) and then reopens the window as the normal slot view, so
 // the "pick file -> pick character slot" flow never leaves the game's visual system.
 //
@@ -28,6 +28,12 @@ pub(crate) use er_telemetry::counters::SAVE_PICKER_OPEN_SLOTS_PENDING;
 /// Action object of the "Load Save Profiles" row; `system_quit_open_profile_load_dialog` derives
 /// the System dialog (action+0x8), submit queue and window list from it on every (re)submit.
 pub(crate) use er_telemetry::counters::SAVE_PICKER_ACTION_OBJ;
+/// 1 while the live picker is the save-DESTINATION chooser (save-game-flow WP3) instead of the
+/// load-source browser: row 1 is a pinned `[ new ]`, and activation feeds the save flow.
+pub(crate) use er_telemetry::counters::SAVE_PICKER_DEST_MODE;
+/// System/Quit dialog the live picker window was submitted from; the menu-pump resubmit reopens
+/// through it (the destination picker is opened by the save flow, which has no row action object).
+pub(crate) use er_telemetry::counters::SAVE_PICKER_SYSTEM_DIALOG;
 /// Diagnostics / telemetry oracles.
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OPEN_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_REPOPULATE_COUNT;
@@ -228,6 +234,11 @@ pub(crate) unsafe fn system_quit_open_save_picker_menu(action_obj: usize) -> boo
     *crate::experiments::save_picker::active_save_picker_lock() = Some(model);
     SAVE_PICKER_MODE_ACTIVE.store(1, Ordering::SeqCst);
     SAVE_PICKER_ACTION_OBJ.store(action_obj, Ordering::SeqCst);
+    SAVE_PICKER_SYSTEM_DIALOG.store(
+        unsafe { safe_read_usize(action_obj + SYSTEM_QUIT_ACTION_OBJECT_DIALOG_08_OFFSET) }
+            .unwrap_or(0),
+        Ordering::SeqCst,
+    );
     SAVE_PICKER_REOPEN_PENDING.store(0, Ordering::SeqCst);
     SAVE_PICKER_OPEN_SLOTS_PENDING.store(0, Ordering::SeqCst);
     let opened = unsafe { system_quit_open_profile_load_dialog(action_obj) };
@@ -237,6 +248,7 @@ pub(crate) unsafe fn system_quit_open_save_picker_menu(action_obj: usize) -> boo
         *crate::experiments::save_picker::active_save_picker_lock() = None;
         SAVE_PICKER_MODE_ACTIVE.store(0, Ordering::SeqCst);
         SAVE_PICKER_ACTION_OBJ.store(0, Ordering::SeqCst);
+        SAVE_PICKER_SYSTEM_DIALOG.store(0, Ordering::SeqCst);
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
         return false;
     }
@@ -252,12 +264,159 @@ pub(crate) unsafe fn system_quit_open_save_picker_menu(action_obj: usize) -> boo
     true
 }
 
+/// Open the `05_010` picker as the save-DESTINATION chooser for the Save Game flow (save-game-flow
+/// WP3). Menu-pump owned: called from `system_quit_menu_window_run_post` after the tick stages
+/// `SAVE_DEST_OPEN_PICKER_PENDING`, i.e. the same submit context the load picker's resubmit uses.
+///
+/// Differences from the load-source picker, all deliberate:
+///   * start dir = the LOADED save's own directory, not the remembered preferred dir -- "save
+///     next to the save you loaded" is the expected default and the remembered dir belongs to the
+///     load flow;
+///   * NO save-swap byte preview is armed: nothing foreign is previewed here, and the safety
+///     snapshot of the live save is taken later, at the fire gate, by `save_dest_arm_redirect`;
+///   * the model carries the loaded save's filename so the `[ new ]` row writes that leaf.
+pub(crate) unsafe fn system_quit_open_save_dest_picker(system_dialog: usize) -> bool {
+    const HEAP_LO: usize = 0x10000;
+    if system_dialog < HEAP_LO || system_dialog == TITLE_OWNER_SCAN_START_ADDRESS {
+        append_autoload_debug(format_args!(
+            "save-dest-picker: refused to open -- System dialog=0x{system_dialog:x} is not heap-like"
+        ));
+        return false;
+    }
+    let save_path = match system_quit_env_save_path() {
+        Ok(path) => path,
+        Err(reason) => {
+            append_autoload_debug(format_args!(
+                "save-dest-picker: refused to open -- {reason}"
+            ));
+            return false;
+        }
+    };
+    let loaded_file_name = match Path::new(&save_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+    {
+        Some(name) => name.to_owned(),
+        None => {
+            append_autoload_debug(format_args!(
+                "save-dest-picker: refused to open -- loaded save '{save_path}' has no file name"
+            ));
+            return false;
+        }
+    };
+    // Start where the loaded save lives; fall back to the default save root only if that directory
+    // is gone.
+    let start_dir = system_quit_env_save_dir()
+        .ok()
+        .map(|dir| PathBuf::from(save_picker_windows_path_string(&dir)))
+        .filter(|dir| dir.is_dir())
+        .or_else(|| {
+            default_save_root()
+                .and_then(|root| root.to_str().map(save_picker_windows_path_string))
+                .map(PathBuf::from)
+                .filter(|root| root.is_dir())
+        });
+    let Some(start_dir) = start_dir else {
+        append_autoload_debug(format_args!(
+            "save-dest-picker: refused to open -- neither the loaded save's directory nor the default save root is readable"
+        ));
+        return false;
+    };
+    unsafe { system_quit_save_swap_restore_profile_summary("save-dest-picker-open") };
+    // Same mode-locked filter as the load picker: the destination list shows the containers the
+    // active runtime flavor understands.
+    let seamless = save_picker_seamless_mode_after_settle("system-quit-save-dest-picker-open");
+    let extensions: &[&str] = if seamless {
+        &["co2", "sl2"]
+    } else {
+        &["sl2"]
+    };
+    let model = crate::experiments::save_picker::SavePickerModel::open_destination(
+        &start_dir,
+        extensions,
+        &loaded_file_name,
+    );
+    if !unsafe { save_picker_stage_row_records(&model) } {
+        return false;
+    }
+    *crate::experiments::save_picker::active_save_picker_lock() = Some(model);
+    SAVE_PICKER_MODE_ACTIVE.store(1, Ordering::SeqCst);
+    SAVE_PICKER_DEST_MODE.store(1, Ordering::SeqCst);
+    SAVE_PICKER_ACTION_OBJ.store(0, Ordering::SeqCst);
+    SAVE_PICKER_SYSTEM_DIALOG.store(system_dialog, Ordering::SeqCst);
+    SAVE_PICKER_REOPEN_PENDING.store(0, Ordering::SeqCst);
+    SAVE_PICKER_OPEN_SLOTS_PENDING.store(0, Ordering::SeqCst);
+    if !unsafe { system_quit_open_profile_load_dialog_on(system_dialog) } {
+        unsafe { system_quit_save_swap_restore_profile_summary("save-dest-picker-open-failed") };
+        *crate::experiments::save_picker::active_save_picker_lock() = None;
+        SAVE_PICKER_MODE_ACTIVE.store(0, Ordering::SeqCst);
+        SAVE_PICKER_DEST_MODE.store(0, Ordering::SeqCst);
+        SAVE_PICKER_SYSTEM_DIALOG.store(0, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "save-dest-picker: 05_010 submit FAILED for dialog=0x{system_dialog:x}"
+        ));
+        return false;
+    }
+    SAVE_DEST_PICKER_OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
+    SAVE_PICKER_OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "save-dest-picker: opened destination browser dialog=0x{system_dialog:x} dir='{}' new_file='{loaded_file_name}' seamless={seamless}",
+        start_dir.display()
+    ));
+    true
+}
+
+/// Handle a destination-browser activation (menu thread, from `save_picker_handle_activation`).
+/// `target` already exists -> the Box3 overwrite confirm; otherwise the commit is staged and the
+/// picker closes so the save-flow tick can close the menus and fire.
+unsafe fn save_dest_handle_picked_target(dialog: usize, target: PathBuf, from_new_row: bool) {
+    let exists = target.is_file();
+    if exists {
+        SAVE_DEST_TARGET_EXISTING_COUNT.fetch_add(1, Ordering::SeqCst);
+        save_dest_set_target(target, if from_new_row { "new-row-existing" } else { "picked-file" });
+        // Box3 is hosted by the PICKER dialog (the game raises its own confirms over 05_010 the
+        // same way), so it does not contend with the System dialog queue that owns the picker
+        // window job. Submitted inline here (menu thread); a not-ready queue leaves the pending
+        // latch for the next menu pump.
+        save_flow_box_set_host_dialog(dialog);
+        SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_OVERWRITE_FILE, Ordering::SeqCst);
+        SAVE_FLOW_STAGE_TICKS.store(0, Ordering::SeqCst);
+        SAVE_FLOW_STAGE.store(SAVE_FLOW_STAGE_BOX3_WAIT, Ordering::SeqCst);
+        if unsafe { save_flow_submit_box(SAVE_FLOW_BOX_OVERWRITE_FILE) } {
+            SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_NONE, Ordering::SeqCst);
+        }
+        return;
+    }
+    SAVE_DEST_TARGET_NEW_COUNT.fetch_add(1, Ordering::SeqCst);
+    save_dest_set_target(target, "new-row");
+    save_dest_stage_commit_and_close_picker(dialog, "new-file");
+}
+
+/// Stage the destination commit and close the browser. The save-flow tick takes over once the
+/// picker window has finished tearing down (the native close also restores the user's real
+/// ProfileSummary rows and re-shows the System windows, which is exactly the state the close-all
+/// sequence expects).
+unsafe fn save_dest_stage_commit_and_close_picker(dialog: usize, reason: &str) {
+    SAVE_DEST_COMMIT_COUNT.fetch_add(1, Ordering::SeqCst);
+    SAVE_DEST_COMMIT_PENDING.store(1, Ordering::SeqCst);
+    SAVE_FLOW_STAGE_TICKS.store(0, Ordering::SeqCst);
+    SAVE_FLOW_STAGE.store(SAVE_FLOW_STAGE_DEST_BROWSE, Ordering::SeqCst);
+    save_flow_box_clear();
+    unsafe { save_picker_native_close(dialog, reason) };
+    append_autoload_debug(format_args!(
+        "save-dest: commit staged (reason={reason}) target='{}'; picker closing, the save-flow tick will close the menus and fire",
+        save_dest_target()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "<unset>".to_owned())
+    ));
+}
+
 /// Route a `05_010` slot activation while the picker owns the window (menu thread, called from
 /// the activate hook BEFORE any character-switch logic). Returns the hook's return value.
 ///
 /// This is the ONLY signal the native window hands us, so it carries every browse action: up,
-/// enter directory, switch drive, page, pick file. The model decides which from the row index; a
-/// listing change of any kind comes back as `Repopulate` and is serviced identically.
+/// enter directory, switch drive, page, pick file, `[ new ]`. The model decides which from the row
+/// index; a listing change of any kind comes back as `Repopulate` and is serviced identically.
 pub(crate) unsafe fn save_picker_handle_activation(dialog: usize, cursor: i32) -> usize {
     use crate::experiments::save_picker::PickerActivation;
     if cursor < 0 || cursor as usize >= crate::experiments::save_picker::PICKER_ROW_COUNT {
@@ -295,6 +454,21 @@ pub(crate) unsafe fn save_picker_handle_activation(dialog: usize, cursor: i32) -
             }
             0
         }
+        PickerActivation::PickedFile(path)
+            if SAVE_PICKER_DEST_MODE.load(Ordering::SeqCst) != 0 =>
+        {
+            // DESTINATION browser: an existing container was picked as the save target, so the
+            // final overwrite confirm decides. No ingest/preview -- nothing is being loaded.
+            unsafe { save_dest_handle_picked_target(dialog, path, false) };
+            0
+        }
+        PickerActivation::PickedNewFile(path) => {
+            // `[ new ]`: save into the browsed folder under the loaded save's own filename. If
+            // that file already exists there, fall into the Box3 overwrite confirm rather than
+            // silently clobbering it.
+            unsafe { save_dest_handle_picked_target(dialog, path, true) };
+            0
+        }
         PickerActivation::PickedFile(path) => {
             // IN-GAME (System>Quit) site only: the pick feeds the existing preview/candidate
             // pipeline and reopens the window as the slot view. The STARTUP no-save site does NOT
@@ -319,11 +493,7 @@ pub(crate) unsafe fn save_picker_handle_activation(dialog: usize, cursor: i32) -
             }
             0
         }
-        // `[ new ]` is a save-DESTINATION row and no menu opens a destination browser, so the model
-        // never produces this activation here. Grouped with `Ignored` rather than made unreachable:
-        // the row-index arithmetic that would serve it is the same arithmetic the load-source rows
-        // use, and it is promoted intact rather than re-derived (see `SavePickerModel`).
-        PickerActivation::PickedNewFile(_) | PickerActivation::Ignored => 0,
+        PickerActivation::Ignored => 0,
     }
 }
 
@@ -382,10 +552,13 @@ pub(crate) unsafe fn save_picker_menu_pump_resubmit() -> bool {
         // Old window still live; wait for its close to finish.
         return true;
     }
-    let action_obj = SAVE_PICKER_ACTION_OBJ.load(Ordering::SeqCst);
-    if action_obj == 0 {
+    // Reopen through the System dialog the window was submitted from. The destination browser has
+    // no row action object at all (the save flow opens it), so the dialog -- not the action -- is
+    // the identity that survives both paths.
+    let system_dialog = SAVE_PICKER_SYSTEM_DIALOG.load(Ordering::SeqCst);
+    if system_dialog == 0 {
         append_autoload_debug(format_args!(
-            "save-picker: resubmit pending but action object lost; abandoning reopen"
+            "save-picker: resubmit pending but the owning System dialog was lost; abandoning reopen"
         ));
         SAVE_PICKER_REOPEN_PENDING.store(0, Ordering::SeqCst);
         SAVE_PICKER_OPEN_SLOTS_PENDING.store(0, Ordering::SeqCst);
@@ -394,17 +567,17 @@ pub(crate) unsafe fn save_picker_menu_pump_resubmit() -> bool {
     let reopen_as_picker = SAVE_PICKER_REOPEN_PENDING.load(Ordering::SeqCst) != 0;
     SAVE_PICKER_REOPEN_PENDING.store(0, Ordering::SeqCst);
     SAVE_PICKER_OPEN_SLOTS_PENDING.store(0, Ordering::SeqCst);
-    let opened = unsafe { system_quit_open_profile_load_dialog(action_obj) };
+    let opened = unsafe { system_quit_open_profile_load_dialog_on(system_dialog) };
     if opened {
         SAVE_PICKER_RESUBMIT_COUNT.fetch_add(1, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "save-picker: menu-pump resubmitted 05_010 window as {} (action=0x{action_obj:x})",
+            "save-picker: menu-pump resubmitted 05_010 window as {} (dialog=0x{system_dialog:x})",
             if reopen_as_picker { "picker page" } else { "slot view" }
         ));
         return true;
     }
     append_autoload_debug(format_args!(
-        "save-picker: menu-pump resubmit FAILED (action=0x{action_obj:x}); falling back to System-UI restore"
+        "save-picker: menu-pump resubmit FAILED (dialog=0x{system_dialog:x}); falling back to System-UI restore"
     ));
     if reopen_as_picker {
         *crate::experiments::save_picker::active_save_picker_lock() = None;
@@ -734,10 +907,15 @@ pub(crate) fn save_picker_reset(source: &str) {
     SAVE_PICKER_REOPEN_PENDING.store(0, Ordering::SeqCst);
     SAVE_PICKER_OPEN_SLOTS_PENDING.store(0, Ordering::SeqCst);
     SAVE_PICKER_ACTION_OBJ.store(0, Ordering::SeqCst);
+    SAVE_PICKER_SYSTEM_DIALOG.store(0, Ordering::SeqCst);
+    // The DEST-mode latch dies with the window, but the chosen destination and the commit latch
+    // deliberately do NOT: closing the picker is exactly how a confirmed destination commit
+    // proceeds, and the save-flow tick still needs the target after this reset runs.
+    let was_destination = SAVE_PICKER_DEST_MODE.swap(0, Ordering::SeqCst) != 0;
     if was_active || had_model {
         SAVE_PICKER_CANCEL_COUNT.fetch_add(1, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "save-picker: reset (source={source}, was_active={was_active}, had_model={had_model})"
+            "save-picker: reset (source={source}, was_active={was_active}, had_model={had_model}, destination={was_destination})"
         ));
     }
 }

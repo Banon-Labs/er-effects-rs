@@ -21,6 +21,12 @@ er-hook = { path = "../er-hook" }
 # defined in experiments/mem.rs. game-types re-exports the typed game bindings.
 er-game-base = { path = "../er-game-base", features = ["game-types"] }
 er-save-loader = { path = "../er-save-loader" }
+# Save-write suppression core, shared with the standalone er-save-disable-dll (save-game-flow
+# WP1): swallow every SL save enqueue + rewrite the status poll from boot, plus the one-shot
+# bypass token that makes the System->Quit "Save Game" row the ONLY path that really writes.
+# NEVER load er_save_disable.dll alongside this DLL in one me3 profile (two MinHook instances
+# would double-detour 0xe6fb50/0xe6e430).
+er-save-suppress = { path = "../er-save-suppress" }
 # In-memory texture-payload builder: portrait pixels -> uncompressed R8G8B8A8 DDS -> TPF003 blob,
 # fed to the game's in-memory TPF factory to replace the now-loading background. Pure-Rust, std-only.
 er-tpf = { path = "../er-tpf" }
@@ -83,6 +89,12 @@ windows = { version = "0.62", features = [
   "Win32_UI_Controls_Dialogs",
   # CreateEventW (fence-completion event for the D3D12 readback wait) is gated behind Win32_Security.
   "Win32_Security",
+  # GetFileInformationByHandle: SAME-FILE identity (volume serial + file index) for the save
+  # destination commit. Two spellings of one file -- `C:\users\steamuser\...` and
+  # `Z:\...\pfx\drive_c\users\steamuser\...` under Wine -- must not read as two files, because
+  # redirecting the loaded save onto itself makes the safety net restore a pre-save snapshot over
+  # the save that just succeeded.
+  "Win32_Storage_FileSystem",
   # D3D12 readback of the live profile-portrait offscreen render target, so the now-loading
   # forge can display the real rendered character head instead of the placeholder checker.
   "Win32_Graphics_Direct3D12",

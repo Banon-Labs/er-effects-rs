@@ -1160,7 +1160,9 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
 
     // SAVE-FILE PICKER: while the live 05_010 window is our directory browser (in-game System
     // menu picker OR the startup title picker), every slot activation is a browse action (up /
-    // enter dir / page / pick file) -- never a character load. Routed before ALL other logic:
+    // switch drive / enter dir / page / pick file) -- never a character load. This hook is also
+    // the ONLY picker input the DLL receives from this window, which is why drive switching is a
+    // row rather than a left/right axis. Routed before ALL other logic:
     // at the title the in-game predicate below is false (nothing hidden), but the picker still
     // owns the dialog. Never forwards the native activation (which would arm a world load).
     if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0 && vt == expected_vt {

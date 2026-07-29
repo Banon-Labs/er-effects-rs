@@ -328,6 +328,68 @@ unsafe fn queue_save_redirect_hook(
     }
 }
 
+/// Install the CreateFileW detour ALONE, unconditionally, in every save mode (save-game-flow WP3).
+///
+/// The detour body is pass-through-safe on its own: every redirect decision it makes needs either
+/// `SAVE_REDIRECT_DIR_W` (unset in default game-owned-APPDATA mode) or the save-flow's armed
+/// destination window, so without those it only observes. The save-destination commit rides THIS
+/// hook, which is why it can no longer be gated on the redirect mode. Everything else in
+/// `install_save_redirect_hooks` -- and especially the Wine-only free-space overrides -- stays
+/// behind its own gate. Idempotent; safe to call from both installers.
+pub(crate) fn install_save_file_core_hooks() {
+    SAVE_FILE_OPS_CORE_ONCE.call_once(|| {
+        match unsafe { MH_Initialize() } {
+            MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+            status => {
+                append_autoload_debug(format_args!(
+                    "save-override: core MH_Initialize failed: {status:?}"
+                ));
+                return;
+            }
+        }
+        let create_addr = unsafe { kernel32_proc(b"CreateFileW\0") };
+        if create_addr == HOOK_ORIGINAL_UNSET {
+            append_autoload_debug(format_args!(
+                "save-override: core could not resolve kernel32!CreateFileW -- save-destination commits cannot redirect their write-open"
+            ));
+            return;
+        }
+        let hook = match unsafe {
+            MhHook::new(
+                create_addr as *mut c_void,
+                save_redirect_createfilew_hook as *mut c_void,
+            )
+        } {
+            Ok(hook) => hook,
+            Err(status) => {
+                append_autoload_debug(format_args!(
+                    "save-override: core MhHook::new CreateFileW failed at 0x{create_addr:x}: {status:?}"
+                ));
+                return;
+            }
+        };
+        SAVE_REDIRECT_ORIG_CREATEFILEW.store(hook.trampoline() as usize, Ordering::SeqCst);
+        if let Err(status) = unsafe { hook.queue_enable() } {
+            append_autoload_debug(format_args!(
+                "save-override: core CreateFileW queue_enable failed: {status:?}"
+            ));
+            return;
+        }
+        match unsafe { MH_ApplyQueued() } {
+            MH_STATUS::MH_OK => {
+                SAVE_FILE_OPS_CORE_CREATEFILEW_INSTALLED.store(1, Ordering::SeqCst);
+                std::mem::forget(hook);
+                append_autoload_debug(format_args!(
+                    "save-override: core INSTALLED CreateFileW(0x{create_addr:x}) -- pass-through until a redirect dir or a save destination is armed"
+                ));
+            }
+            status => append_autoload_debug(format_args!(
+                "save-override: core CreateFileW MH_ApplyQueued failed: {status:?}"
+            )),
+        }
+    });
+}
+
 pub(crate) fn install_save_redirect_hooks() {
     // While the in-game missing-save picker is pending the hooks stay UNINSTALLED on purpose:
     // native save IO must flow so the title completes its no-save boot and the 05_010 file
@@ -355,34 +417,19 @@ pub(crate) fn install_save_redirect_hooks() {
             if running_under_wine() { "ARMED" } else { "SKIPPED" }
         ));
         let mut hooks = Vec::new();
-        let create_addr = unsafe { kernel32_proc(b"CreateFileW\0") };
-        if create_addr != HOOK_ORIGINAL_UNSET {
-            match unsafe {
-                MhHook::new(
-                    create_addr as *mut c_void,
-                    save_redirect_createfilew_hook as *mut c_void,
-                )
-            } {
-                Ok(hook) => {
-                    SAVE_REDIRECT_ORIG_CREATEFILEW
-                        .store(hook.trampoline() as usize, Ordering::SeqCst);
-                    if let Err(status) = unsafe { hook.queue_enable() } {
-                        append_autoload_debug(format_args!(
-                            "save-override: CreateFileW queue_enable failed: {status:?}"
-                        ));
-                    } else {
-                        hooks.push(hook);
-                    }
-                }
-                Err(status) => append_autoload_debug(format_args!(
-                    "save-override: MhHook::new CreateFileW failed at 0x{create_addr:x}: {status:?}"
-                )),
-            }
+        // CreateFileW belongs to the CORE installer now (it must exist in every save mode so a
+        // save-destination commit can divert its write-open). Creating a second MinHook on the
+        // same prologue would fail `MH_ERROR_ALREADY_CREATED` and clobber the trampoline, so this
+        // installer only makes sure the core ran.
+        install_save_file_core_hooks();
+        let create_addr = if SAVE_FILE_OPS_CORE_CREATEFILEW_INSTALLED.load(Ordering::SeqCst) != 0 {
+            unsafe { kernel32_proc(b"CreateFileW\0") }
         } else {
             append_autoload_debug(format_args!(
-                "save-override: could not resolve kernel32!CreateFileW"
+                "save-override: CreateFileW detour is NOT live (core install failed) -- save-path redirection cannot work"
             ));
-        }
+            HOOK_ORIGINAL_UNSET
+        };
         let copy_addr = unsafe { kernel32_proc(b"CopyFileW\0") };
         if copy_addr != HOOK_ORIGINAL_UNSET {
             match unsafe {

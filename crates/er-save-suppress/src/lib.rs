@@ -9,36 +9,27 @@
 //!
 //! # Shared core, one host DLL per process
 //!
-//! This code used to be `er-save-disable-dll`'s private `suppress` module. It is a crate of
-//! its own so the standalone census/proof DLL and the product `er-effects-rs` cdylib can
-//! link ONE implementation of these detours rather than keeping two copies in step. The
-//! host DLL wires the seams before `install`:
+//! This crate is the suppression core linked by BOTH the standalone
+//! `er-save-disable-dll` (census/proof DLL) and the product `er-effects-rs` cdylib
+//! (save-game-flow WP1). The host DLL wires the seams before `install`:
 //!
 //! - [`set_log_sink`]: where human-readable lines go (the standalone's
-//!   `er-save-disable.log`; a product host would use its own debug log).
+//!   `er-save-disable.log`, the product's autoload debug log).
 //! - [`set_publish_sink`]: called on the telemetry-publish schedule (install,
 //!   first-of-each-counter, milestones, every failure path). The standalone wires its
-//!   census snapshot writer through the witness reentrancy guard; a host whose periodic
-//!   telemetry writer already exports these counters can wire a no-op.
+//!   census snapshot writer through the witness reentrancy guard; the product wires a
+//!   no-op because its periodic telemetry writer exports the counters on its own cadence.
 //!
-//! `er-save-disable-dll` is currently the only host DLL that links this crate. Once the
-//! product DLL links it too, NEVER load `er_save_disable.dll` alongside `er_effects_rs.dll`
-//! in one me3 profile: each carries its own MinHook instance and both would detour
-//! `0x140e6fb50` / `0x140e6e430`, corrupting each other's trampolines.
+//! NEVER load `er_save_disable.dll` alongside `er_effects_rs.dll` in one me3 profile:
+//! each carries its own MinHook instance and both would detour `0x140e6fb50` /
+//! `0x140e6e430`, corrupting each other's trampolines.
 //!
-//! # The one-shot bypass
+//! # The one-shot bypass (save-game-flow WP1)
 //!
-//! With suppression global, a product host needs exactly one sanctioned writer: the
+//! With suppression global, the product needs exactly one sanctioned writer: the
 //! System->Quit "Save Game" row. [`arm_one_save_bypass`] arms a single-use token; the
 //! next SL save enqueue consumes it and is forwarded to the real trampoline (real
 //! submit, real write). Everything else keeps being swallowed.
-//!
-//! **No caller arms it yet.** The bypass, the save-dispatch attribution observers and the
-//! worker-job completion observer are all here because they are part of this one
-//! reverse-engineered mechanism and splitting them out would mean hand-cutting code that was
-//! never written apart. Until the product DLL's Save Game path is wired up, the token is
-//! never armed, so `enqueue_save_job_hook`'s bypass arm is a compare-exchange that always
-//! fails and every save is swallowed exactly as before.
 //!
 //! That bypassed save then has to be OBSERVED to completion, and there are three ways it
 //! can end, all of them funnelled into the one latch [`take_bypass_final_status`] reads:
@@ -1024,15 +1015,11 @@ static SERIALIZE_BYTES_ADDR: AtomicUsize = AtomicUsize::new(0);
 static BYPASS_DECLINE_REPORTED: AtomicUsize = AtomicUsize::new(0);
 
 // ============================================================================
-// ONE-SHOT BYPASS. A single-use token that lets exactly one SL save enqueue through to
-// the real trampoline. To be armed by a product host's Save Game commit path immediately
-// before it fires the forced native request pair; consumed by the FIRST enqueue that
-// arrives afterwards; expired by that host's watchdog if the enqueue never comes, so a
-// stranded token can never leak onto some later native save.
-//
-// NOTHING ARMS IT TODAY. `er-save-disable-dll`, the only host linking this crate, never
-// calls `arm_one_save_bypass`, so `BYPASS_TOKEN` stays 0 and the bypass arm in
-// `enqueue_save_job_hook` is a compare-exchange that always fails.
+// ONE-SHOT BYPASS (save-game-flow WP1). A single-use token that lets exactly one SL
+// save enqueue through to the real trampoline. Armed by the product's Save Game commit
+// path immediately before it fires the forced native request pair; consumed by the
+// FIRST enqueue that arrives afterwards; expired by the product's watchdog if that
+// enqueue never comes, so a stranded token can never leak onto some later native save.
 // ============================================================================
 
 /// 0 = no token, 1 = armed. CAS-only transitions.

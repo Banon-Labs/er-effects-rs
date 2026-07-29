@@ -2,9 +2,9 @@
 """Fail if the save-suppression crates compile with warnings on their SHIPPING target.
 
 Covers the standalone `er-save-disable-dll` AND the shared `er-save-suppress` core it
-links -- the suppression logic moved into that rlib so a second DLL can integrate the
-identical hooks, and it is exactly the "crate whose job is stopping saves" this gate
-exists for. Auditing only the DLL after the move would have left the moved code ungated.
+(and the product DLL) link -- the suppression logic moved into that rlib for the
+save-game-flow integration, and it is exactly the "crate whose job is stopping saves"
+this gate exists for.
 
 This repo builds with `-Awarnings` globally (`.cargo/config.toml`), for a stated
 reason: the workspace warning backlog is large and drowns runtime-probe evidence.
