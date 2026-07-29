@@ -776,6 +776,171 @@ unsafe fn push_stats_text_on_row(base: usize, row_proxy: usize, name: &str, utf1
     accepted
 }
 
+/// Show or hide ONE native row field with the game's own machinery: resolve the named child
+/// (`assignComponentWithName`, through the installed hook's trampoline so the resolve is not
+/// double-instrumented), call the SceneObjProxy visibility wrapper `FUN_140733340`, then release the
+/// resolved value with `~CSScaleformValue` on the proxy's EMBEDDED value (+0x28) exactly as the
+/// native populate does per field. Returns whether the wrapper was called.
+///
+/// Why visibility and not text for the level fields: their contents come from writers that cannot
+/// emit nothing (an FMG static pass and a `"%d"` format -- see the field-name constants), while a
+/// re-resolve after the populate is impossible (it destroys the row proxy's embedded value).
+/// Visibility is also the only lever that RESTORES exactly -- `visible = true` needs no knowledge of
+/// the text, so a row clip reused by a save-file row (or by a vanilla view) comes back unchanged.
+///
+/// Fail-closed in every direction: the wrapper itself does nothing unless the resolved value is a
+/// display object, and we skip the call unless the out proxy carries the game's own
+/// `CS::SceneObjProxy` vtable (the wrapper's first act is an unvalidated
+/// `(*proxy->vfptr->GetScaleformValue2)(proxy)` dispatch -- the er-effects-rs-7e7 class of hazard).
+unsafe fn set_row_field_visible(base: usize, row_proxy: usize, name: &str, visible: bool) -> bool {
+    debug_assert!(name.ends_with('\0'), "field name must be NUL-terminated");
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let assign = match TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG.load(Ordering::SeqCst) {
+        orig if orig != null && orig != HOOK_ORIGINAL_UNSET => orig,
+        _ => base + TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
+    };
+    let assign: unsafe extern "system" fn(usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(assign) };
+    let set_visible: unsafe extern "system" fn(usize, u8) =
+        unsafe { std::mem::transmute(base + TITLE_PRESS_START_SET_VISIBLE_RVA) };
+    let dtor: unsafe extern "system" fn(usize) =
+        unsafe { std::mem::transmute(base + CSSCALEFORMVALUE_DTOR_RVA) };
+    let mut proxy_buf = [0u8; SCENE_OBJ_PROXY_STACK_BYTES];
+    let out = unsafe {
+        assign(
+            row_proxy,
+            proxy_buf.as_mut_ptr() as usize,
+            name.as_ptr() as usize,
+        )
+    };
+    if out == 0 || out == null {
+        PROFILE_ROW_SLOT_INFO_VIS_SKIPS.fetch_add(1, Ordering::SeqCst);
+        return false;
+    }
+    let proxy_vt = unsafe { safe_read_usize(out) }.unwrap_or(0);
+    // The resolved value the wrapper will act on, so its GFx type is observable as telemetry: the
+    // named-child ctor writes the child straight into the proxy's embedded CSScaleformValue and
+    // links no foreign component, so this is the value `GetScaleformValue2` returns.
+    let datatype = unsafe {
+        safe_read_i32(
+            out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET + CSSCALEFORMVALUE_DATATYPE_20_OFFSET,
+        )
+    }
+    .map(|raw| (raw as u32 & 0x8f) as usize);
+    if let Some(datatype) = datatype {
+        PROFILE_ROW_SLOT_INFO_LAST_DATATYPE.store(datatype, Ordering::SeqCst);
+        if datatype != GFX_VALUE_TYPE_DISPLAY_OBJECT {
+            let n = PROFILE_ROW_SLOT_INFO_NON_DISPLAY.fetch_add(1, Ordering::SeqCst) + 1;
+            if n <= 4 {
+                append_autoload_debug(format_args!(
+                    "save-picker: row field {} resolved GFx type {datatype} (not display object {GFX_VALUE_TYPE_DISPLAY_OBJECT}) -- native visibility setter will ignore it (n={n})",
+                    name.trim_end_matches('\0')
+                ));
+            }
+        }
+    }
+    let vtable_ok = proxy_vt == base + SCENE_OBJ_PROXY_VTABLE_RVA;
+    if vtable_ok {
+        unsafe { set_visible(out, u8::from(visible)) };
+    } else {
+        let n = PROFILE_ROW_SLOT_INFO_VIS_SKIPS.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 4 {
+            append_autoload_debug(format_args!(
+                "save-picker: row field {} visibility SKIPPED fail-closed -- out proxy 0x{out:x} vtable 0x{proxy_vt:x} is not CS::SceneObjProxy 0x{:x} (n={n})",
+                name.trim_end_matches('\0'),
+                base + SCENE_OBJ_PROXY_VTABLE_RVA
+            ));
+        }
+    }
+    unsafe { dtor(out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET) };
+    vtable_ok
+}
+
+/// Which of a row's per-slot info fields should be on screen.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct RowSlotFieldVisibility {
+    /// The `Level` FMG caption and the level value, which live and die together -- a caption with no
+    /// number reads as a broken row, so nothing ever shows one without the other.
+    level: bool,
+    /// The `PlayTime` field, which a browse row keeps only when it has a last-saved time to put
+    /// there.
+    play_time: bool,
+}
+
+impl RowSlotFieldVisibility {
+    /// What a row the picker does NOT own gets: exactly what the game drew.
+    const NATIVE: Self = Self {
+        level: true,
+        play_time: true,
+    };
+}
+
+/// Apply a row's field visibility through the game's own wrapper.
+///
+/// Both directions matter equally. Hiding is the point; SHOWING is what makes hiding safe, because
+/// the seven native row clips are REUSED -- a clip that showed `[ up .. ]` renders a save file two
+/// scrolls later, and the same movie can outlive the picker window -- so every row states the full
+/// answer for all three fields rather than only touching the ones it wants gone.
+unsafe fn apply_row_slot_info_visibility(
+    base: usize,
+    row_proxy: usize,
+    want: RowSlotFieldVisibility,
+) {
+    let fields = [
+        (PROFILE_ROW_LEVEL_CAPTION_FIELD_NAME, want.level),
+        (PROFILE_ROW_LEVEL_VALUE_FIELD_NAME, want.level),
+        (PROFILE_ROW_PLAYTIME_FIELD_NAME, want.play_time),
+    ];
+    let (mut hidden, mut shown) = (0usize, 0usize);
+    for (name, visible) in fields {
+        if unsafe { set_row_field_visible(base, row_proxy, name, visible) } {
+            if visible {
+                shown += 1;
+            } else {
+                hidden += 1;
+            }
+        }
+    }
+    if hidden > 0 {
+        let rows = PROFILE_ROW_SLOT_INFO_HIDDEN_ROWS.fetch_add(1, Ordering::SeqCst) + 1;
+        if rows <= 4 || rows.is_power_of_two() {
+            append_autoload_debug(format_args!(
+                "save-picker: hid {hidden} per-slot field(s) on row=0x{row_proxy:x} (level={} play_time={} rows={rows})",
+                want.level, want.play_time
+            ));
+        }
+    }
+    if shown > 0 {
+        PROFILE_ROW_SLOT_INFO_SHOWN_ROWS.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// Point the row model's `PlayTime` `CS::MenuString` at `text` and return the pointer it displaced,
+/// so the caller can put it back the moment the native populate returns.
+///
+/// This is the write path for the last-saved line, and it is the NATIVE one: the populate reads
+/// `rawString` first and SetTexts whatever it finds, so the row's own draw writes our text. That
+/// matters more than convenience. A row clip is recycled across different files, so text pushed
+/// out-of-band could survive onto a row it does not describe; here there is nothing to survive --
+/// the text is read once, during the populate of the row it belongs to, from a pointer that exists
+/// only across that call. A row that stages nothing gets the native string, not a stale one.
+///
+/// `None` when the field is unreadable, in which case nothing is written and the row keeps the
+/// game's own playtime.
+unsafe fn stage_row_model_play_time(row_model: usize, text: *const u16) -> Option<usize> {
+    let field = row_model + PROFILE_ROW_MODEL_PLAY_TIME_MENUSTRING_C8_OFFSET;
+    let displaced = unsafe { safe_read_usize(field) }?;
+    unsafe { (field as *mut usize).write_volatile(text as usize) };
+    Some(displaced)
+}
+
+/// Put back whatever [`stage_row_model_play_time`] displaced, so the game's structure is untouched
+/// outside the one native call we borrowed it for.
+unsafe fn restore_row_model_play_time(row_model: usize, displaced: usize) {
+    let field = row_model + PROFILE_ROW_MODEL_PLAY_TIME_MENUSTRING_C8_OFFSET;
+    unsafe { (field as *mut usize).write_volatile(displaced) };
+}
+
 /// Hook of the ProfileSelect row-populate template `FUN_1408758d0(rowModel, rowProxy, ...)`. Runs once
 /// per visible list row with a PER-SLOT row model, so it can push the CORRECT slot's attributes (unlike
 /// the per-field named-child binder, which has no slot). The push happens BEFORE the original runs: the
@@ -797,6 +962,10 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
     }
     let f: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(orig) };
+    // The last-saved text and the row-model pointer it displaced, held across the native call: the
+    // populate reads the pointer, so the buffer has to outlive it and the field has to go back
+    // afterwards.
+    let mut staged_play_time: Option<(usize, Vec<u16>)> = None;
     if row_model != 0
         && row_model != null
         && row_proxy != 0
@@ -807,6 +976,62 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
         if base != null {
             let slot = unsafe { safe_read_i32(row_model + PROFILE_ROW_MODEL_SLOT_08_OFFSET) }
                 .unwrap_or(-1);
+            let picker_row = (0..crate::experiments::save_picker::PICKER_ROW_COUNT as i32)
+                .contains(&slot)
+                .then_some(slot as usize);
+            // PER-SLOT INFO FIELDS ON A BROWSE ROW. A browse row is a file or a navigation entry,
+            // never a profile slot, so the record behind it is staged and its numbers are zeros: the
+            // native fields render "Level 0" and "0:00:00" about a character that does not exist. So
+            // while the picker owns a row, the Level caption and value are always hidden -- there is
+            // no browse row they could be true of -- and the playtime slot is repurposed: a
+            // save-FILE row shows when that file was last written, and every row with no such time
+            // (navigation rows, and a file whose metadata was unreadable) hides the field instead of
+            // showing a fabricated date.
+            //
+            // `None` (the vanilla character-slot views, title-screen Load Game list included) always
+            // means "exactly what the game drew", and until a row was actually hidden the re-assert
+            // does not run at all, so the vanilla path stays untouched.
+            let slot_info = picker_row.and_then(save_picker_row_slot_info);
+            let (want_visibility, play_time) = match slot_info {
+                Some(info) => (
+                    RowSlotFieldVisibility {
+                        level: false,
+                        play_time: info.play_time.is_some(),
+                    },
+                    info.play_time,
+                ),
+                None => (RowSlotFieldVisibility::NATIVE, None),
+            };
+            if want_visibility != RowSlotFieldVisibility::NATIVE
+                || PROFILE_ROW_SLOT_INFO_HIDDEN_ROWS.load(Ordering::SeqCst) != 0
+            {
+                unsafe { apply_row_slot_info_visibility(base, row_proxy, want_visibility) };
+            }
+            if let Some(text) = play_time {
+                // NUL-terminated UTF-16 for the native SetText, kept alive past the populate call.
+                let utf16: Vec<u16> = text.encode_utf16().chain(core::iter::once(0)).collect();
+                match unsafe { stage_row_model_play_time(row_model, utf16.as_ptr()) } {
+                    Some(displaced) => {
+                        let rows = PROFILE_ROW_LAST_SAVED_ROWS.fetch_add(1, Ordering::SeqCst) + 1;
+                        if rows <= 4 || rows.is_power_of_two() {
+                            append_autoload_debug(format_args!(
+                                "save-picker: row slot={slot} shows last-saved '{text}' in place of the native playtime (rows={rows})"
+                            ));
+                        }
+                        staged_play_time = Some((displaced, utf16));
+                    }
+                    None => {
+                        let fails = PROFILE_ROW_LAST_SAVED_STAGE_FAILURES
+                            .fetch_add(1, Ordering::SeqCst)
+                            + 1;
+                        if fails <= 4 {
+                            append_autoload_debug(format_args!(
+                                "save-picker: last-saved '{text}' NOT staged on slot={slot} -- row model 0x{row_model:x} playtime field unreadable (fails={fails})"
+                            ));
+                        }
+                    }
+                }
+            }
             // BROWSE PICKER ROWS (er-effects-rs-dly6): while the save-file picker owns the 05_010
             // window the rows are directories/files, not save slots, so the per-slot character
             // attributes are meaningless there (they rendered the ACTIVE save's characters' stats
@@ -816,12 +1041,7 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
             // Deliberately not gated on `stats_panel_enabled` -- if the 05_010 GFX edit (which
             // adds the ErStats fields) is not live, the push fails closed and is counted, exactly
             // like the stats push.
-            let browse_lines =
-                if (0..crate::experiments::save_picker::PICKER_ROW_COUNT as i32).contains(&slot) {
-                    save_picker_browse_stats_lines(slot as usize)
-                } else {
-                    None
-                };
+            let browse_lines = picker_row.and_then(save_picker_browse_stats_lines);
             if let Some((top, bottom)) = browse_lines {
                 let seen = PROFILE_STATS_ROW_POPULATES.fetch_add(1, Ordering::SeqCst) + 1;
                 let pushed_top =
@@ -890,5 +1110,11 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
         }
         PROFILE_STATS_PUSH_IN_PROGRESS.store(0, Ordering::SeqCst);
     }
-    unsafe { f(row_model, row_proxy, arg3, arg4) }
+    let ret = unsafe { f(row_model, row_proxy, arg3, arg4) };
+    // The populate has read the string; give the row model its own pointer back so our borrow does
+    // not outlive the call that needed it. `utf16` drops here, after the read, never before.
+    if let Some((displaced, _utf16)) = staged_play_time {
+        unsafe { restore_row_model_play_time(row_model, displaced) };
+    }
+    ret
 }

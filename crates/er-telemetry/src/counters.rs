@@ -610,6 +610,60 @@ pub static SYSTEM_QUIT_OPEN_SAVE_DIR_SUCCESS_COUNT: AtomicUsize = AtomicUsize::n
 pub static SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT: AtomicUsize = AtomicUsize::new(0);
+// ---- System->Quit ROW IDENTITY table + resolution oracles ----------------------------------
+// The four rows of the patched Quit tab share only TWO dispatchable `PropertyNewButtonController`
+// objects, and each row's "action object" is nothing but `controller + 0x70` (that controller's own
+// inline std::function storage). So neither pointer is a row identity. These record the row TABLE
+// captured at build time and, per activation, which evidence actually resolved the row -- so a run
+// shows the gate working instead of merely not crashing.
+/// `PropertyNewButtonController` of the native FIRST Quit row (relabelled Save Game).
+pub static SYSTEM_QUIT_NATIVE_SAVE_GAME_CONTROLLER_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
+/// `PropertyNewButtonController` of the native SECOND Quit row (Return to Desktop).
+pub static SYSTEM_QUIT_NATIVE_RETURN_DESKTOP_CONTROLLER_LAST_OBJECT: AtomicUsize =
+    AtomicUsize::new(0);
+/// The `PropertyEditDialog` the row table below was captured from. An activation whose dialog does
+/// not match this makes every captured pointer/index stale, so the row is treated as ambiguous.
+pub static SYSTEM_QUIT_ROW_TABLE_DIALOG: AtomicUsize = AtomicUsize::new(0);
+/// Property-list index of each row, stored as `index + 1` so 0 means "not captured".
+pub static SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_PLUS1: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_ROW_INDEX_RETURN_DESKTOP_PLUS1: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_ROW_INDEX_LOAD_PROFILE_PLUS1: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_ROW_INDEX_LOAD_SAVE_PROFILES_PLUS1: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_ROW_RESOLVE_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Resolutions that came from the dialog's own list cursor -- the ONLY row identity, shared by mouse,
+/// keyboard and pad. Equal to `RESOLVE_COUNT - AMBIGUOUS_COUNT` by construction; a divergence would
+/// mean a second identity source was reintroduced.
+pub static SYSTEM_QUIT_ROW_RESOLVED_BY_CURSOR_ROW_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_ROW_AMBIGUOUS_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Last resolution: discriminator code (`QuitRowDiscriminator`), resolved row (`QuitRow` + 1),
+/// ambiguity reason code (`QuitRowAmbiguity`), live list cursor (`cursor + 1`), and the label kind
+/// read live at that cursor row.
+pub static SYSTEM_QUIT_ROW_LAST_DISCRIMINATOR: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_ROW_LAST_RESOLVED_ROW: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_ROW_LAST_AMBIGUITY: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_ROW_LAST_CURSOR_PLUS1: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_ROW_LAST_CURSOR_LABEL_KIND: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_ROW_LAST_INPUT_KIND: AtomicUsize = AtomicUsize::new(0);
+/// The P0 oracle: an instant-quit that was REFUSED because the activated row could not be
+/// positively identified as the Return-to-Desktop row. Any nonzero value means the gate fired.
+pub static SYSTEM_QUIT_QUIT_REFUSED_AMBIGUOUS_ROW_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Instant-quits AUTHORIZED by positive row evidence.
+pub static SYSTEM_QUIT_QUIT_AUTHORIZED_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Activations where the action-object alias claimed the Return-to-Desktop row while the resolved
+/// row was one of the two cloned rows -- i.e. the exact false identity that terminated the process.
+pub static SYSTEM_QUIT_ACTION_ALIAS_FALSE_QUIT_CLAIMS: AtomicUsize = AtomicUsize::new(0);
+/// Activations REFUSED because two independent row discriminators named DIFFERENT rows. Two sources
+/// disagreeing is an ambiguity, not a tie to break by preference: the row runs nothing at all.
+pub static SYSTEM_QUIT_ROW_REFUSED_DISAGREEMENT_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// The patched Quit tab's `CS::GridControl` geometry, read live right after the rows are appended.
+/// `COLS`/`ROWS` are what `GridControl::MeasureGridFromMovie` derived from the served movie's
+/// `Item_<row>_<col>` components; `NAVIGABLE_CELLS` is `cols * rows` (the exact bound of the mouse
+/// hit-test loop) and `ITEM_COUNT` is the cursor bound. All four rows are reachable by mouse,
+/// keyboard and pad only when `NAVIGABLE_CELLS >= 4`, `ITEM_COUNT == 4` and `ROWS >= 2`.
+pub static SYSTEM_QUIT_GRID_COLS: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_GRID_ROWS: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_GRID_NAVIGABLE_CELLS: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_GRID_ITEM_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SCALEFORM_HANDLER_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static SCALEFORM_HANDLER_CTORS: AtomicUsize = AtomicUsize::new(0);
 pub static SCALEFORM_HANDLER_DTORS: AtomicUsize = AtomicUsize::new(0);
@@ -1254,6 +1308,24 @@ pub static SAVE_PICKER_STAGED_ROW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_REBUILD_PENDING_DIALOG: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_LIST_BUILDER_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_LIST_BUILDER_RESTAGE_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Browse rows with no character on which the hide of the per-slot info fields (`Level`
+/// caption/value, `PlayTime`) was DRIVEN -- the native setter was called; pair with
+/// `PROFILE_ROW_SLOT_INFO_NON_DISPLAY` to know it took effect. Doubles as the latch that arms the
+/// symmetric re-show.
+pub static PROFILE_ROW_SLOT_INFO_HIDDEN_ROWS: AtomicUsize = AtomicUsize::new(0);
+/// Rows on which the re-show of the per-slot info fields was driven (row clips are reused).
+pub static PROFILE_ROW_SLOT_INFO_SHOWN_ROWS: AtomicUsize = AtomicUsize::new(0);
+/// Per-field visibility calls skipped fail-closed (child unresolved, or unexpected proxy vtable).
+pub static PROFILE_ROW_SLOT_INFO_VIS_SKIPS: AtomicUsize = AtomicUsize::new(0);
+/// Per-field visibility calls whose resolved GFx value was not a display object (setter no-ops).
+pub static PROFILE_ROW_SLOT_INFO_NON_DISPLAY: AtomicUsize = AtomicUsize::new(0);
+/// Last GFx value type seen by the row-field visibility path.
+pub static PROFILE_ROW_SLOT_INFO_LAST_DATATYPE: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Browse rows whose `PlayTime` was replaced with the file's last-saved timestamp.
+pub static PROFILE_ROW_LAST_SAVED_ROWS: AtomicUsize = AtomicUsize::new(0);
+/// Rows where the last-saved text could not be staged into the row model (field unreadable), so the
+/// native playtime string stood.
+pub static PROFILE_ROW_LAST_SAVED_STAGE_FAILURES: AtomicUsize = AtomicUsize::new(0);
 pub static LAST_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_FACE_IDENTITY_CHECKS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_FACE_IDENTITY_MISMATCHES: AtomicUsize = AtomicUsize::new(0);

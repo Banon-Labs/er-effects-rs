@@ -8,7 +8,9 @@ unsafe fn system_quit_open_profile_load_dialog(action_obj: usize) -> bool {
         ));
         return false;
     };
-    let system_dialog = unsafe { safe_read_usize(action_obj + 0x8) }.unwrap_or(NULL);
+    let system_dialog =
+        unsafe { safe_read_usize(action_obj + SYSTEM_QUIT_ACTION_OBJECT_DIALOG_08_OFFSET) }
+            .unwrap_or(NULL);
     if system_dialog < HEAP_LO {
         append_autoload_debug(format_args!(
             "system-quit-dup: profile-load route abort -- action=0x{action_obj:x} dialog=0x{system_dialog:x} is not heap-like"
@@ -141,122 +143,129 @@ pub(crate) unsafe extern "system" fn system_quit_menu_window_list_push_hook(
     ret
 }
 
-fn system_quit_native_return_visual_fallback_row(cursor: i32) -> Option<i32> {
-    if cursor == 2 || cursor == 3 {
-        return Some(cursor);
-    }
-    // The patched native GameEnd movie has four visible buttons, but its original click dispatcher can
-    // still report the native Return-to-Desktop action/cursor for the lower cloned visuals. For mouse
-    // use, disambiguate by the same OS cursor position the game polls: bottom-left is Load Profile,
-    // bottom-right is Load Save Profiles. Top row and unknown cursor stay native Return to Desktop.
-    let Some((nx, ny)) = read_cursor_normalized() else {
-        return None;
-    };
-    if ny > 0.12 {
-        if nx < 0.0 { Some(2) } else { Some(3) }
-    } else {
-        None
-    }
-}
-
+/// Route one Quit-tab row ACTION thunk (`FUN_140961640` for the first native row, `FUN_1409610d0`
+/// for the second and every row cloned from it).
+///
+/// `action_obj` is the thunk's `this`, and it is ONLY `controller + 0x70` -- the controller's own
+/// inline `std::function` storage (see `system_quit_row_identity.rs`). It therefore cannot name a
+/// row, so the row is resolved positively from the row table + the live label at the dialog's list
+/// cursor. An unresolvable row is SUPPRESSED rather than forwarded, because the native action behind
+/// the second row is the irreversible Return to Desktop.
 unsafe fn system_quit_route_button_action_or_forward(
     action_obj: usize,
     orig: usize,
     hook_name: &str,
 ) -> usize {
-    let open_save_dir_action = SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
-    if action_obj != 0 && action_obj == open_save_dir_action {
-        SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
-        let opened = unsafe { system_quit_open_save_picker_menu(action_obj) };
-        append_autoload_debug(format_args!(
-            "system-quit-open-save-dir: cloned action selected action=0x{action_obj:x} opened={opened} (in-game save picker); suppressing native Quit Game row action"
-        ));
+    if action_obj == 0 {
         return 0;
     }
-    let recorded_action = SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
-    let native_return_desktop_action =
-        SYSTEM_QUIT_NATIVE_RETURN_DESKTOP_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
-    let dialog = unsafe { safe_read_usize(action_obj + 0x8) }.unwrap_or(0);
+    let controller = system_quit_controller_of_action_alias(action_obj);
+    let dialog =
+        unsafe { safe_read_usize(action_obj + SYSTEM_QUIT_ACTION_OBJECT_DIALOG_08_OFFSET) }
+            .unwrap_or(0);
     let cursor = if dialog >= 0x10000 {
         unsafe { safe_read_i32(dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) }.unwrap_or(-1)
     } else {
         -1
     };
-    let native_return_visual_row = if action_obj != 0 && action_obj == native_return_desktop_action {
-        system_quit_native_return_visual_fallback_row(cursor)
-    } else {
-        None
-    };
-    if action_obj != 0
-        && (action_obj == recorded_action || native_return_visual_row == Some(2))
-    {
-        let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
-        if phase != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE {
+    // This `_Func_impl` thunk vtable (dump 0x142b125d0 slot +0x10) is shared by several construction
+    // sites, so the hook also sees cancel/confirm rows of dialogs that are NOT the patched Quit tab.
+    // Forward those untouched -- and before resolving, so foreign dialogs never pollute the row
+    // oracles.
+    let table_dialog = SYSTEM_QUIT_ROW_TABLE_DIALOG.load(Ordering::SeqCst);
+    if dialog == 0 || table_dialog == 0 || dialog != table_dialog {
+        if orig == HOOK_ORIGINAL_UNSET {
             append_autoload_debug(format_args!(
-                "system-quit-dup: cloned quick-load action re-entry ignored action=0x{action_obj:x} phase={phase}; native handoff already armed"
+                "system-quit-save: {hook_name} action trampoline is unset for action_alias=0x{action_obj:x} dialog=0x{dialog:x} table_dialog=0x{table_dialog:x}; fail-open return 0"
             ));
             return 0;
         }
-        SYSTEM_QUIT_NOOP_SELECTION_COUNT.fetch_add(1, Ordering::SeqCst);
-        let opened = unsafe { system_quit_open_profile_load_dialog(action_obj) };
-        let mouse = read_cursor_normalized();
-        append_autoload_debug(format_args!(
-            "system-quit-dup: Load Profile action selected action=0x{action_obj:x} cursor={cursor} native_visual_row={:?} mouse={:?} recorded_action=0x{recorded_action:x} native_return_action=0x{native_return_desktop_action:x} opened={opened}; suppressing native Quit Game row action until ProfileSelect confirms slot",
-            native_return_visual_row, mouse
-        ));
-        return 0;
+        let original: unsafe extern "system" fn(usize) -> usize = unsafe { std::mem::transmute(orig) };
+        return unsafe { original(action_obj) };
     }
-    if action_obj != 0 && native_return_visual_row == Some(3) {
-        SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
-        let opened = unsafe { system_quit_open_save_picker_menu(action_obj) };
-        let mouse = read_cursor_normalized();
-        append_autoload_debug(format_args!(
-            "system-quit-load-save-profiles: Load Save Profiles action selected via native-return action=0x{action_obj:x} cursor={cursor} native_visual_row={:?} mouse={:?} opened={opened} (in-game save picker); suppressing native Quit Game row action",
-            native_return_visual_row, mouse
-        ));
-        return 0;
-    }
-    // REAL Return-to-Desktop confirm (the cloned Load Profile / Load Save Profiles rows were already routed
-    // and returned above, so reaching here with the native return-desktop action + no visual-row match is
-    // the genuine "Return to Desktop"). Make quit an INSTANT ALT+F4: persist the save, release the cursor
-    // clip, and ExitProcess(0) BEFORE the world teardown renders a loading screen (user 2026-07-15). The old
-    // clean-kill (system_quit_ownership_repro) fired mid-teardown, so the loading cover was already visible.
-    if action_obj != 0
-        && native_return_desktop_action != 0
-        && action_obj == native_return_desktop_action
-        && native_return_visual_row.is_none()
-    {
-        unsafe { system_quit_save_game_request_save_only() };
-        release_input_block_now();
-        append_autoload_debug(format_args!(
-            "quit-to-desktop: Return-to-Desktop confirmed action=0x{action_obj:x} cursor={cursor}; requested save + released cursor clip; INSTANT ExitProcess(0) before world teardown (no loading screen)"
-        ));
-        unsafe { ExitProcess(0) };
-    }
-    let save_game_action = SYSTEM_QUIT_NATIVE_SAVE_GAME_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
-    if action_obj != 0 && action_obj == save_game_action {
-        let dialog = unsafe { safe_read_usize(action_obj + 0x8) }.unwrap_or(0);
-        if dialog >= 0x10000 {
+    // No event object reaches an action thunk, so the input kind is unclassifiable here -- which
+    // costs nothing, because the list cursor names the row for every input kind alike.
+    let verdict = unsafe { system_quit_resolve_row_now(dialog, 0) };
+    let verdict_text = system_quit_row_verdict_text(verdict);
+    match verdict.resolved_row() {
+        Some(QuitRow::LoadProfile) => {
+            let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+            if phase != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: cloned quick-load action re-entry ignored action_alias=0x{action_obj:x} phase={phase}; native handoff already armed"
+                ));
+                return 0;
+            }
+            SYSTEM_QUIT_NOOP_SELECTION_COUNT.fetch_add(1, Ordering::SeqCst);
+            let opened = unsafe { system_quit_open_profile_load_dialog(action_obj) };
+            append_autoload_debug(format_args!(
+                "system-quit-dup: Load Profile action selected {hook_name} action_alias=0x{action_obj:x} controller=0x{controller:x} cursor={cursor} {verdict_text} opened={opened}; suppressing native Quit Game row action until ProfileSelect confirms slot"
+            ));
+            0
+        }
+        Some(QuitRow::LoadSaveProfiles) => {
+            SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
+            let opened = unsafe { system_quit_open_save_picker_menu(action_obj) };
+            append_autoload_debug(format_args!(
+                "system-quit-load-save-profiles: Load Save Profiles action selected {hook_name} action_alias=0x{action_obj:x} controller=0x{controller:x} cursor={cursor} {verdict_text} opened={opened} (in-game save picker); suppressing native Quit Game row action"
+            ));
+            0
+        }
+        Some(QuitRow::SaveGame) => {
+            if dialog < 0x10000 {
+                append_autoload_debug(format_args!(
+                    "system-quit-save: Save Game row press IGNORED action_alias=0x{action_obj:x}; dialog=0x{dialog:x} is not heap-like"
+                ));
+                return 0;
+            }
             SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.store(0, Ordering::SeqCst);
             SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
             let closed = unsafe { system_quit_save_game_fire_save_and_close(dialog, "row_action") };
             append_autoload_debug(format_args!(
-                "system-quit-save: Save Game native row selected action=0x{action_obj:x} dialog=0x{dialog:x}; requested save + close-all closed={closed}; suppressed native Quit Game/return-title action"
+                "system-quit-save: Save Game native row selected {hook_name} action_alias=0x{action_obj:x} dialog=0x{dialog:x} cursor={cursor} {verdict_text}; requested save + close-all closed={closed}; suppressed native Quit Game/return-title action"
             ));
-            return 0;
+            0
+        }
+        Some(QuitRow::ReturnToDesktop) => {
+            // The genuine Return to Desktop, positively identified. Make quit an INSTANT ALT+F4:
+            // persist the save, release the cursor clip, and ExitProcess(0) BEFORE the world
+            // teardown renders a loading screen. The old clean-kill (system_quit_ownership_repro)
+            // fired mid-teardown, so the loading cover was already visible.
+            //
+            // One further refusal guards this irreversible step: the activated controller must not
+            // be the Save Game row's -- a Save Game press can never quit the game.
+            let save_game_controller =
+                SYSTEM_QUIT_NATIVE_SAVE_GAME_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst);
+            if save_game_controller != 0 && controller == save_game_controller {
+                SYSTEM_QUIT_QUIT_REFUSED_AMBIGUOUS_ROW_COUNT.fetch_add(1, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "quit-to-desktop: REFUSING the instant quit at {hook_name} for controller=0x{controller:x} cursor={cursor} -- save_game_controller=0x{save_game_controller:x}; a Save Game press must never quit the game"
+                ));
+                return 0;
+            }
+            if !system_quit_row_gate_instant_quit(verdict, hook_name) {
+                return 0;
+            }
+            unsafe { system_quit_save_game_request_save_only() };
+            release_input_block_now();
+            append_autoload_debug(format_args!(
+                "quit-to-desktop: Return-to-Desktop confirmed at {hook_name} controller=0x{controller:x} action_alias=0x{action_obj:x} cursor={cursor} {verdict_text}; requested save + released cursor clip; INSTANT ExitProcess(0) before world teardown (no loading screen)"
+            ));
+            unsafe { ExitProcess(0) };
+            0
+        }
+        None => {
+            // The patched Quit dialog, row NOT identified. Suppress instead of forwarding:
+            // forwarding this thunk runs the native action, and for the second Quit row that action
+            // IS Return to Desktop. A row press that does nothing is a nuisance; a row press that
+            // terminates the process is not shippable.
+            system_quit_row_gate_instant_quit(verdict, hook_name);
+            append_autoload_debug(format_args!(
+                "system-quit-save: {hook_name} row press SUPPRESSED action_alias=0x{action_obj:x} controller=0x{controller:x} dialog=0x{dialog:x} cursor={cursor} {verdict_text}; the native action behind this thunk is the irreversible Return to Desktop, so an unidentified row of the patched Quit tab must not reach it"
+            ));
+            0
         }
     }
-    if orig == HOOK_ORIGINAL_UNSET {
-        append_autoload_debug(format_args!(
-            "system-quit-save: {hook_name} action trampoline is unset for action=0x{action_obj:x} dialog=0x{dialog:x}; fail-open return 0"
-        ));
-        return 0;
-    }
-    append_autoload_debug(format_args!(
-        "system-quit-save: {hook_name} original native row selected action=0x{action_obj:x} dialog=0x{dialog:x}; forwarding native action"
-    ));
-    let original: unsafe extern "system" fn(usize) -> usize = unsafe { std::mem::transmute(orig) };
-    unsafe { original(action_obj) }
 }
 
 pub(crate) unsafe extern "system" fn system_quit_noop_desktop_action_hook(
@@ -301,104 +310,119 @@ unsafe fn system_quit_controller_should_invoke_action(controller: usize, event_a
     unsafe { predicate(controller, event_a) != 0 }
 }
 
+/// `PropertyNewButtonController::Activate` (dump `FUN_1409749f0`, vtable slot 2). Called once per
+/// frame per DISPATCHED row with the live event; the controller's own should-invoke predicate decides
+/// whether that event is a real confirm.
+///
+/// The controller is used ONLY to scope the hook to the patched Quit tab. It cannot name a row: the
+/// dispatch collapses cloned buttons onto the native Return-to-Desktop controller, and the pointer at
+/// `controller + 0xa8` is merely `controller + 0x70`. Row identity comes from
+/// `system_quit_resolve_row_now`, i.e. the dialog's own list cursor.
 pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hook(
     controller: usize,
     event_kind: u32,
     event_a: usize,
     event_b: usize,
 ) {
-    let load_controller = SYSTEM_QUIT_LOAD_PROFILE_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst);
-    let open_controller = SYSTEM_QUIT_OPEN_SAVE_DIR_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst);
-    let custom_controller = controller != 0 && (controller == load_controller || controller == open_controller);
-    if custom_controller
-        && !unsafe { system_quit_controller_should_invoke_action(controller, event_a) }
-    {
+    if !system_quit_controller_is_a_quit_row(controller) {
+        // Not a row of the patched Quit tab: vanilla behaviour, untouched.
         unsafe {
             system_quit_forward_button_controller_activation(controller, event_kind, event_a, event_b)
         };
         return;
     }
-    if controller != 0 && controller == load_controller {
-        let action = unsafe {
-            safe_read_usize(controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET)
-        }
-        .unwrap_or(0);
-        let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
-        if phase != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE {
-            append_autoload_debug(format_args!(
-                "system-quit-dup: controller quick-load activation ignored controller=0x{controller:x} action=0x{action:x} phase={phase}; native handoff already armed"
-            ));
-            return;
-        }
-        SYSTEM_QUIT_NOOP_SELECTION_COUNT.fetch_add(1, Ordering::SeqCst);
-        let opened = if action != 0 {
-            unsafe { system_quit_open_profile_load_dialog(action) }
-        } else {
-            false
+    // Focus / per-frame update rather than a confirm: never routes, never quits.
+    if !unsafe { system_quit_controller_should_invoke_action(controller, event_a) } {
+        unsafe {
+            system_quit_forward_button_controller_activation(controller, event_kind, event_a, event_b)
         };
-        append_autoload_debug(format_args!(
-            "system-quit-dup: Load Profile controller selected controller=0x{controller:x} action=0x{action:x} event_kind={event_kind} event_a=0x{event_a:x} event_b=0x{event_b:x} opened={opened}; suppressing native button activation"
-        ));
         return;
     }
-    if controller != 0 && controller == open_controller {
-        let action = unsafe {
-            safe_read_usize(controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET)
-        }
-        .unwrap_or(0);
-        SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
-        let opened = if action != 0 {
-            unsafe { system_quit_open_save_picker_menu(action) }
-        } else {
-            false
-        };
-        append_autoload_debug(format_args!(
-            "system-quit-load-save-profiles: Load Save Profiles controller selected controller=0x{controller:x} action=0x{action:x} event_kind={event_kind} event_a=0x{event_a:x} event_b=0x{event_b:x} opened={opened} (in-game save picker); suppressing native button activation"
-        ));
-        return;
-    }
-    // REAL Return-to-Desktop click: the native GameEnd button is NOT one of our cloned controllers, so it
-    // falls through here. The action-route hook never sees it (the native dispatch bypasses it), so intercept
-    // at the CONTROLLER level. If this controller carries the captured native return-desktop action, make quit
-    // an INSTANT ALT+F4: persist the save, release the cursor, and ExitProcess(0) BEFORE the world teardown
-    // renders any loading screen / our isolated overlay (user 2026-07-15).
-    let native_return_action = SYSTEM_QUIT_NATIVE_RETURN_DESKTOP_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
-    if native_return_action != 0 && controller != 0 {
-        let action = unsafe {
-            safe_read_usize(controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET)
-        }
-        .unwrap_or(0);
-        // Diagnostic (throttled): surface every non-cloned controller activation so the real Return-to-Desktop
-        // dispatch is visible even when the action does not match, instead of guessing the path again.
-        pub(crate) use er_telemetry::counters::RETURN_DESKTOP_CONTROLLER_DIAG;
-        let dn = RETURN_DESKTOP_CONTROLLER_DIAG.fetch_add(1, Ordering::SeqCst);
-        if dn < 24 {
+    let action_alias =
+        controller.saturating_add(PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_STORAGE_OFFSET);
+    let dialog =
+        unsafe { safe_read_usize(action_alias + SYSTEM_QUIT_ACTION_OBJECT_DIALOG_08_OFFSET) }
+            .unwrap_or(0);
+    let verdict = unsafe { system_quit_resolve_row_now(dialog, event_a) };
+    let verdict_text = system_quit_row_verdict_text(verdict);
+    match verdict.resolved_row() {
+        Some(QuitRow::LoadProfile) => {
+            let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+            if phase != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: controller quick-load activation ignored controller=0x{controller:x} phase={phase}; native handoff already armed"
+                ));
+                return;
+            }
+            SYSTEM_QUIT_NOOP_SELECTION_COUNT.fetch_add(1, Ordering::SeqCst);
+            let opened = unsafe { system_quit_open_profile_load_dialog(action_alias) };
             append_autoload_debug(format_args!(
-                "quit-to-desktop: non-cloned controller activation #{dn} controller=0x{controller:x} action=0x{action:x} native_return_action=0x{native_return_action:x} event_kind={event_kind}"
+                "system-quit-dup: Load Profile controller selected controller=0x{controller:x} {verdict_text} event_kind={event_kind} opened={opened}; suppressing native button activation"
             ));
         }
-        // Gate on the native should-invoke predicate (real CLICK, not navigation/focus). ALSO require that NO
-        // profile-switch is in flight: the native return-desktop ACTION is reused across ProfileSelect
-        // controllers (observed: 12 activations carried it during one switch), so without this gate a switch's
-        // ProfileSelect activation would ExitProcess mid-switch (2026-07-15). Only the genuine top-level Quit
-        // menu (no switch phase, no ProfileSelect window) may quit to desktop.
-        let switch_in_flight = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
-            != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
-            || SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) != 0
-            || SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.load(Ordering::SeqCst) != 0;
-        if action == native_return_action
-            && !switch_in_flight
-            && unsafe { system_quit_controller_should_invoke_action(controller, event_a) }
-        {
+        Some(QuitRow::LoadSaveProfiles) => {
+            SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
+            let opened = unsafe { system_quit_open_save_picker_menu(action_alias) };
+            append_autoload_debug(format_args!(
+                "system-quit-load-save-profiles: Load Save Profiles controller selected controller=0x{controller:x} {verdict_text} event_kind={event_kind} opened={opened} (in-game save picker); suppressing native button activation"
+            ));
+        }
+        Some(QuitRow::ReturnToDesktop) => {
+            // Positively the genuine Return to Desktop. Make quit an INSTANT ALT+F4: persist the
+            // save, release the cursor, and ExitProcess(0) BEFORE the world teardown renders any
+            // loading screen / our isolated overlay.
+            //
+            // Require that NO profile switch is in flight: the native return-desktop controller is
+            // dispatched again from ProfileSelect (observed: 12 activations carried it during one
+            // switch), so without this gate a switch's activation would ExitProcess mid-switch.
+            let switch_in_flight = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+                != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
+                || SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) != 0
+                || SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.load(Ordering::SeqCst) != 0;
+            if switch_in_flight {
+                SYSTEM_QUIT_QUIT_REFUSED_AMBIGUOUS_ROW_COUNT.fetch_add(1, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "quit-to-desktop: REFUSING the instant quit at controller=0x{controller:x} -- switch_in_flight={switch_in_flight}; forwarding the native activation instead"
+                ));
+                unsafe {
+                    system_quit_forward_button_controller_activation(
+                        controller, event_kind, event_a, event_b,
+                    )
+                };
+                return;
+            }
+            if !system_quit_row_gate_instant_quit(verdict, "return-desktop/controller") {
+                // Unreachable while `resolved_row()` says Return to Desktop, but the gate stays the
+                // single authority over the irreversible step.
+                unsafe {
+                    system_quit_forward_button_controller_activation(
+                        controller, event_kind, event_a, event_b,
+                    )
+                };
+                return;
+            }
             unsafe { system_quit_save_game_request_save_only() };
             release_input_block_now();
             append_autoload_debug(format_args!(
-                "quit-to-desktop: Return-to-Desktop controller CLICK controller=0x{controller:x} action=0x{action:x}; requested save + released cursor; INSTANT ExitProcess(0) (no teardown/loading screen)"
+                "quit-to-desktop: Return-to-Desktop controller CLICK controller=0x{controller:x} action_alias=0x{action_alias:x} {verdict_text} event_kind={event_kind}; requested save + released cursor; INSTANT ExitProcess(0) (no teardown/loading screen)"
             ));
             unsafe { ExitProcess(0) };
         }
+        // Save Game keeps flowing through its own native action thunk, which the action-route hook
+        // owns.
+        Some(QuitRow::SaveGame) | None => {
+            if verdict.resolved_row().is_none() {
+                append_autoload_debug(format_args!(
+                    "quit-to-desktop: controller confirm NOT routed controller=0x{controller:x} dialog=0x{dialog:x} {verdict_text} event_kind={event_kind}; forwarding the native activation, which the action-route hook gates again"
+                ));
+            }
+            unsafe {
+                system_quit_forward_button_controller_activation(
+                    controller, event_kind, event_a, event_b,
+                )
+            };
+        }
     }
-    unsafe { system_quit_forward_button_controller_activation(controller, event_kind, event_a, event_b) };
 }
 
 fn wide_z(text: &str) -> Vec<u16> {
@@ -1120,14 +1144,25 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
             0
         };
         if native_action != 0 && first_row_call {
+            // The FIRST native row starts a fresh row table: this is the Quit tab building its
+            // dialog, and every index/controller from an earlier build is now stale (a heap address
+            // may even have been reused by this build).
+            system_quit_row_table_reset(dialog);
             SYSTEM_QUIT_NATIVE_SAVE_GAME_ACTION_LAST_OBJECT.store(native_action, Ordering::SeqCst);
+            SYSTEM_QUIT_NATIVE_SAVE_GAME_CONTROLLER_LAST_OBJECT
+                .store(native_controller, Ordering::SeqCst);
+            system_quit_row_table_record_index(QuitRow::SaveGame, native_row_index);
             append_autoload_debug(format_args!(
-                "system-quit-dup: captured native first Quit row action=0x{native_action:x}; routing this in-place button to Save Game"
+                "system-quit-dup: captured native first Quit row index={native_row_index} controller=0x{native_controller:x} action_alias=0x{native_action:x} (== controller+0x{PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_STORAGE_OFFSET:x}); routing this in-place button to Save Game"
             ));
         } else if native_action != 0 && second_row_call {
-            SYSTEM_QUIT_NATIVE_RETURN_DESKTOP_ACTION_LAST_OBJECT.store(native_action, Ordering::SeqCst);
+            SYSTEM_QUIT_NATIVE_RETURN_DESKTOP_ACTION_LAST_OBJECT
+                .store(native_action, Ordering::SeqCst);
+            SYSTEM_QUIT_NATIVE_RETURN_DESKTOP_CONTROLLER_LAST_OBJECT
+                .store(native_controller, Ordering::SeqCst);
+            system_quit_row_table_record_index(QuitRow::ReturnToDesktop, native_row_index);
             append_autoload_debug(format_args!(
-                "system-quit-dup: captured native second Quit row action=0x{native_action:x}; leaving cursor=1 Return to Desktop native, cursor=2/3 route to custom rows if GameEnd dispatch collapses"
+                "system-quit-dup: captured native second Quit row index={native_row_index} controller=0x{native_controller:x} action_alias=0x{native_action:x}; Return to Desktop is now identified by ROW (index + live label), never by this pointer"
             ));
         }
     }
@@ -1177,6 +1212,7 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
             }
             if controller != 0 {
                 SYSTEM_QUIT_LOAD_PROFILE_CONTROLLER_LAST_OBJECT.store(controller, Ordering::SeqCst);
+                system_quit_row_table_record_index(QuitRow::LoadProfile, row_index);
             }
             (r, row, controller, action)
         } else {
@@ -1221,6 +1257,7 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
             }
             if controller != 0 {
                 SYSTEM_QUIT_OPEN_SAVE_DIR_CONTROLLER_LAST_OBJECT.store(controller, Ordering::SeqCst);
+                system_quit_row_table_record_index(QuitRow::LoadSaveProfiles, row_index);
             }
             (r, row, controller, action)
         } else {
@@ -1229,14 +1266,40 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
         if load_label_ok || open_label_ok {
             SYSTEM_QUIT_DUPLICATE_COUNT.fetch_add(1, Ordering::SeqCst);
         }
+        // Raise the list widget's item count through the NATIVE setter, not by poking the field.
+        // `GridControl::SetItemCount` writes `+0xd0` AND recomputes the scroll/page row count on the
+        // embedded scroll control at `+0x1a8` -- exactly what the native rebuild `FUN_140975040`
+        // calls. A raw field write left that scroll control still describing the two-row list, which
+        // is the state the vertical movement clamp reads.
         let prior_bound = unsafe { safe_read_i32(dialog + DIALOG_SLOT_BOUND_B08_OFFSET) }.unwrap_or(-1);
         let new_bound = (after_final.min(i32::MAX as usize)) as i32;
+        let set_item_count = game_rva(GRID_CONTROL_SET_ITEM_COUNT_RVA).ok();
         if new_bound > prior_bound {
-            unsafe { *((dialog + DIALOG_SLOT_BOUND_B08_OFFSET) as *mut i32) = new_bound };
+            match set_item_count {
+                Some(addr) => {
+                    let set_count: unsafe extern "system" fn(usize, u32) =
+                        unsafe { std::mem::transmute(addr) };
+                    unsafe { set_count(dialog + DIALOG_GRID_CONTROL_A38_OFFSET, new_bound as u32) };
+                }
+                None => append_autoload_debug(format_args!(
+                    "system-quit-dup: failed to resolve GridControl::SetItemCount rva 0x{GRID_CONTROL_SET_ITEM_COUNT_RVA:x}; the added rows stay outside the list cursor's range"
+                )),
+            }
         }
         let bound_after = unsafe { safe_read_i32(dialog + DIALOG_SLOT_BOUND_B08_OFFSET) }.unwrap_or(-1);
+        unsafe { system_quit_record_grid_geometry(dialog) };
+        // The row TABLE is the identity from here on: index + live label per row. Log it, and log the
+        // label actually readable at each captured index so a run shows the table agreeing with
+        // memory rather than being trusted.
+        let table = SYSTEM_QUIT_ROW_TABLE_ROWS
+            .map(|row| {
+                let index = system_quit_row_table_index(row);
+                let label = unsafe { system_quit_row_label_at(dialog, index) };
+                format!("{}=#{index}:{label:?}", row.label())
+            })
+            .join(" ");
         append_autoload_debug(format_args!(
-            "system-quit-dup: added native GameEnd rows Load Profile + Load Save Profiles dialog=0x{dialog:x} count {before}->{after_native}->{after_final} cursor_bound {prior_bound}->{bound_after} ret=0x{ret:x} load_ok={load_label_ok} load_ret=0x{load_ret:x} load_row=0x{load_row:x} load_controller=0x{load_controller:x} load_action=0x{load_action:x} open_ok={open_label_ok} open_ret=0x{open_ret:x} open_row=0x{open_row:x} open_controller=0x{open_controller:x} open_action=0x{open_action:x}"
+            "system-quit-dup: added native GameEnd rows Load Profile + Load Save Profiles dialog=0x{dialog:x} count {before}->{after_native}->{after_final} cursor_bound {prior_bound}->{bound_after} ret=0x{ret:x} load_ok={load_label_ok} load_ret=0x{load_ret:x} load_row=0x{load_row:x} load_controller=0x{load_controller:x} load_action_alias=0x{load_action:x} open_ok={open_label_ok} open_ret=0x{open_ret:x} open_row=0x{open_row:x} open_controller=0x{open_controller:x} open_action_alias=0x{open_action:x}; row table [{table}]"
         ));
     }
 
