@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Fail if the save-disable DLL compiles with warnings on its SHIPPING target.
+"""Fail if the save-suppression crates compile with warnings on their SHIPPING target.
+
+Covers the standalone `er-save-disable-dll` AND the shared `er-save-suppress` core it
+links -- the suppression logic moved into that rlib so a second DLL can integrate the
+identical hooks, and it is exactly the "crate whose job is stopping saves" this gate
+exists for. Auditing only the DLL after the move would have left the moved code ungated.
 
 This repo builds with `-Awarnings` globally (`.cargo/config.toml`), for a stated
 reason: the workspace warning backlog is large and drowns runtime-probe evidence.
@@ -40,7 +45,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CRATE = "er-save-disable-dll"
+CRATES = ["er-save-disable-dll", "er-save-suppress"]
 TARGET = "x86_64-pc-windows-msvc"
 
 # Lints that indicate rot in a crate whose job is to suppress saving.
@@ -51,8 +56,8 @@ FORCED_LINTS = ["dead_code", "unused"]
 TIMEOUT_SECONDS = 25.0
 
 
-def main() -> int:
-    command = ["cargo", "xwin", "rustc", "-p", CRATE, "--target", TARGET, "--"]
+def audit_crate(crate: str) -> int:
+    command = ["cargo", "xwin", "rustc", "-p", crate, "--target", TARGET, "--"]
     for lint in FORCED_LINTS:
         command += ["--force-warn", lint]
     try:
@@ -69,7 +74,8 @@ def main() -> int:
         return 127
     except subprocess.TimeoutExpired:
         print(
-            f"check-save-disable-warnings: cargo did not finish in {TIMEOUT_SECONDS}s",
+            f"check-save-disable-warnings: cargo did not finish in {TIMEOUT_SECONDS}s "
+            f"for {crate}",
             file=sys.stderr,
         )
         return 1
@@ -90,7 +96,7 @@ def main() -> int:
     if completed.returncode != 0 and not findings:
         print(
             "check-save-disable-warnings: cargo failed and produced no crate warnings; "
-            "the crate did not compile, so warning-freedom is UNPROVEN",
+            f"{crate} did not compile, so warning-freedom is UNPROVEN",
             file=sys.stderr,
         )
         print(completed.stderr[-2000:], file=sys.stderr)
@@ -98,7 +104,7 @@ def main() -> int:
 
     if findings:
         print(
-            f"check-save-disable-warnings: {len(findings)} warning(s) in {CRATE} "
+            f"check-save-disable-warnings: {len(findings)} warning(s) in {crate} "
             f"on {TARGET}:",
             file=sys.stderr,
         )
@@ -111,7 +117,15 @@ def main() -> int:
         )
         return 1
 
-    print(f"save-disable warning audit passed ({CRATE}, {TARGET}, 0 warnings)")
+    print(f"save-disable warning audit passed ({crate}, {TARGET}, 0 warnings)")
+    return 0
+
+
+def main() -> int:
+    for crate in CRATES:
+        status = audit_crate(crate)
+        if status != 0:
+            return status
     return 0
 
 

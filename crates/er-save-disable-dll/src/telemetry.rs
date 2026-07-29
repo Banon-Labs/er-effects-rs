@@ -43,9 +43,10 @@ fn telemetry_path() -> PathBuf {
 /// The write goes through the same file APIs this DLL hooks. That is safe because every
 /// caller reaches here from inside the witness reentrancy guard, so the detours' record
 /// paths short-circuit -- census callers arrive already guarded, and the suppression
-/// hooks go through `suppress::publish_snapshot`, which takes the guard for them. The
-/// telemetry path also fails the save-path filter, giving a second, independent reason
-/// it cannot pollute its own census.
+/// hooks publish through the `er_save_suppress` publish sink, which this DLL wires to
+/// take the guard for them (`spawn_census_task`). The telemetry path also fails the
+/// save-path filter, giving a second, independent reason it cannot pollute its own
+/// census.
 pub(crate) fn write_snapshot() {
     let mut body = String::new();
     body.push_str("{\n");
@@ -65,27 +66,27 @@ pub(crate) fn write_snapshot() {
 
     body.push_str(&format!(
         "  \"suppression_armed\": {},\n",
-        crate::suppress::is_armed()
+        er_save_suppress::is_armed()
     ));
     body.push_str(&format!(
         "  \"suppression_hooks_installed\": {},\n",
-        crate::suppress::installed_hooks()
+        er_save_suppress::installed_hooks()
     ));
     body.push_str(&format!(
         "  \"suppression_hooks_expected\": {},\n",
-        crate::suppress::SUPPRESSOR_HOOKS
+        er_save_suppress::SUPPRESSOR_HOOKS
     ));
     // Reported separately from the suppressor count: a missing observer means
     // `quit_phase_settle_events` is structurally 0, which must not be read as a deadlock.
     body.push_str(&format!(
         "  \"quit_settle_observer_installed\": {},\n",
-        crate::suppress::settle_observer_installed()
+        er_save_suppress::settle_observer_installed()
     ));
     body.push_str(&format!(
         "  \"publish_failures\": {},\n",
         PUBLISH_FAILURES.load(Ordering::Relaxed)
     ));
-    for (name, value) in crate::suppress::counters() {
+    for (name, value) in er_save_suppress::counters() {
         body.push_str(&format!("  \"{name}\": {value},\n"));
     }
 

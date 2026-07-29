@@ -1,0 +1,26 @@
+[package]
+name = "er-save-suppress"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Save-write suppression CORE. Lifted out of `er-save-disable-dll`, where it lived as
+# `suppress.rs`, so that the standalone census DLL and the product `er-effects-rs` cdylib can
+# link ONE implementation of the SL submit/status detours instead of keeping two copies in
+# step. Plain rlib: it never ships as its own DLL -- exactly one host DLL links it per
+# process, wires the log/publish sinks, and calls `install`.
+#
+# `er-save-disable-dll` is currently the only host DLL that links it. Once the product DLL
+# links it too, NEVER load `er_save_disable.dll` and `er_effects_rs.dll` together in one me3
+# profile: each DLL carries its own MinHook instance, so both would detour the same game
+# prologues (`0x140e6fb50` / `0x140e6e430`) and corrupt each other's trampolines.
+#
+# Tier A `er-game-base` only (no `game-types`): suppression works off two byte-verified
+# game RVAs plus fault-safe RAM reads, so it needs no typed game bindings and stays a lean
+# cross-compile. Host builds (for the unit tests of the pure decision logic) compile the
+# same crate with all hook code cfg'd out.
+[dependencies]
+er-game-base = { path = "../er-game-base" }
+
+[target.'cfg(windows)'.dependencies]
+er-hook = { path = "../er-hook" }
