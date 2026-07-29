@@ -7,15 +7,25 @@
 // # What the native writer actually does (1.16.2 decompile, corrected 2026-07-28)
 //
 // The save job body `FUN_14240fd70` formats the container path (`L"%s\\%s%s"`) and then picks ONE
-// OF TWO write paths from `FUN_142413230`, which mounts the container ALREADY ON DISK at that path
-// and checks whether every block the request supplies still fits its existing entry:
+// OF TWO write paths ITSELF -- the `if`/`else` is its own code. (Attribution corrected 2026-07-29:
+// this comment used to say the choice came "from `FUN_142413230`". That function is a THIRD,
+// separate call the body makes first, and the branch tests its RESULT CODE, read back out of the
+// job via `FUN_14240dbf0`/`FUN_14240d8d0`.) `FUN_142413230` mounts the container ALREADY ON DISK at
+// that path and checks whether every block the request supplies still fits its existing entry,
+// returning 6 when everything fits and 0 when it does not -- the inverse of the writers' own
+// 0 = success convention:
 //
-//   * no usable container / a block outgrew its entry -> `FUN_142413860`, the FULL REBUILD: it
-//     rebuilds the whole image in memory and emits it as one `WriteBytes` from offset 0.
-//   * every block fits (the steady state for a save over an existing container) ->
-//     `FUN_1424142e0`, the PER-BLOCK IN-PLACE WRITER, called once per supplied block:
+//   * probe returns 0: no usable container / a block outgrew its entry -> `FUN_142413860`, the
+//     FULL REBUILD: it rebuilds the whole image in memory and emits it as one `WriteBytes` from
+//     offset 0.
+//   * probe returns 6: every block fits (the steady state for a save over an existing container)
+//     -> `FUN_1424142e0`, the PER-BLOCK IN-PLACE WRITER, called once per supplied block:
 //     `OpenFile` -> `Seek(entry.dataOffset)` -> `WriteBytes(block)` -> optionally
 //     `Seek(entryHeaderOffset)` + `WriteBytes(0x20)` -> `Seek(0, END)` -> `CloseStream`.
+//
+// Which branch a given save actually took is now measurable rather than inferred: see
+// `oracle_save_write_full_rebuild_calls` / `oracle_save_write_in_place_calls`, the passive
+// observers in `er-save-suppress`.
 //
 // The in-place writer NEVER writes the bytes it did not change, and
 // `MicrosoftDiskFileOperator::OpenFile` opens write-mode handles with `OPEN_ALWAYS` (`dwCreation
