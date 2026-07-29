@@ -395,28 +395,55 @@ fn log_line_prefix() -> String {
 
 /// One-time self-describing header written the first time a given log file is opened this run: the
 /// full DLL md5 + path + wall-clock, so the build and start time are unambiguous even when many runs
-/// accumulate in the same file.
-fn write_log_header(file: &mut std::fs::File) {
+/// accumulate in the same file. `resolved_path` is the ABSOLUTE path this handle actually opened, so
+/// a log found on disk states where it came from and no reader has to guess the process CWD.
+fn write_log_header(file: &mut std::fs::File, resolved_path: &std::path::Path) {
     use std::io::Write;
     let _ = writeln!(
         file,
-        "===== er-effects log opened {} dll_md5={} (per-line tag `dll:{}`); [+Nms] = elapsed since this process's first log line =====",
+        "===== er-effects log opened {} dll_md5={} (per-line tag `dll:{}`) path={}; [+Nms] = elapsed since this process's first log line =====",
         wall_clock_stamp(),
         dll_md5_hex(),
-        dll_md5_short()
+        dll_md5_short(),
+        resolved_path.display()
     );
 }
+
+/// Deterministic location for the autoload debug log.
+///
+/// FIXED 2026-07-28: the old default was the RELATIVE `er-effects-autoload-debug.log`, so under
+/// me3/Proton the trace landed in whatever the process CWD happened to be -- measured, that was the
+/// APPDATA SAVE directory, nowhere near the game dir. A diagnosis run whose log cannot be found is a
+/// wasted user press, so the default now resolves next to the marker file that ENABLES the log
+/// (`game_directory_path()`, the same directory `autoload_debug_log_enabled` probes). The explicit
+/// `ER_EFFECTS_AUTOLOAD_DEBUG_PATH` override still wins, and the bare relative name survives only as
+/// a last resort for the case where the game directory cannot be resolved at all.
+fn autoload_debug_log_path() -> PathBuf {
+    if let Ok(explicit) = std::env::var("ER_EFFECTS_AUTOLOAD_DEBUG_PATH") {
+        let trimmed = explicit.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+    game_directory_path()
+        .map(|dir| dir.join(AUTOLOAD_DEBUG_LOG_FILE_NAME))
+        .unwrap_or_else(|| PathBuf::from(AUTOLOAD_DEBUG_LOG_FILE_NAME))
+}
+
+/// File name of the autoload debug log; the marker that enables it is the `.txt` sibling.
+const AUTOLOAD_DEBUG_LOG_FILE_NAME: &str = "er-effects-autoload-debug.log";
 
 pub(crate) fn append_crash_log(args: std::fmt::Arguments<'_>) {
     use std::io::Write;
     static HEADER: std::sync::Once = std::sync::Once::new();
     let prefix = log_line_prefix();
+    let path = crash_log_path();
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(crash_log_path())
+        .open(&path)
     {
-        HEADER.call_once(|| write_log_header(&mut file));
+        HEADER.call_once(|| write_log_header(&mut file, &path));
         let _ = writeln!(file, "{prefix} {args}");
     }
 }
@@ -505,6 +532,10 @@ pub(crate) fn note_ls_portrait_capture(w: u32, h: u32, px: &[u8]) -> bool {
 fn autoload_debug_log_enabled() -> bool {
     static CACHED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *CACHED.get_or_init(|| {
+        // Literal on purpose: `scripts/check-marker-file-gates.py` matches this exact
+        // `.join("er-effects-*.txt")` shape to hold the gate to its registered
+        // `diagnostic_gates` entry. Hiding the name behind a const would evade that checker.
+        // The LOG itself is written next to this marker -- see `autoload_debug_log_path`.
         game_directory_path()
             .map(|dir| dir.join("er-effects-autoload-debug.txt").exists())
             .unwrap_or(false)
@@ -533,16 +564,14 @@ pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
     };
     if guard.is_none() {
         // TRUNCATE ONCE per process so each run starts a CLEAN log (matches the trace DLL's reset-on-attach).
-        let path = std::env::var("ER_EFFECTS_AUTOLOAD_DEBUG_PATH")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("er-effects-autoload-debug.log"));
+        let path = autoload_debug_log_path();
         if let Ok(mut file) = fs::OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
             .open(&path)
         {
-            write_log_header(&mut file);
+            write_log_header(&mut file, &path);
             *guard = Some(file);
         }
     }

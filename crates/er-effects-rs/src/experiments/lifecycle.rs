@@ -218,6 +218,26 @@ unsafe fn save_flow_box_wait_tick(box_id: usize, ticks: usize) {
         }
         return;
     };
+    // UNDECIDABLE outranks the per-box routing: the box was freed/reused, or it reported an
+    // answer we could not map. That is a FAILURE of ours, not a user "No" -- it never advances
+    // toward a write, and it is reported as a failure so a run can tell the two apart.
+    if decision == SaveFlowDecision::Undecidable {
+        append_autoload_debug(format_args!(
+            "save-flow: {} could NOT be resolved (undecidable) -- closing back to the world with NOTHING written. This is a save-flow FAILURE, not the user declining; see the preceding save-flow-box line for the fields that were read",
+            save_flow_box_label(box_id)
+        ));
+        if box_id == SAVE_FLOW_BOX_OVERWRITE_FILE {
+            // Box3 sits over the destination browser: tear the picker down first, exactly like
+            // its build-timeout path, so the abort does not close menus under a live window.
+            let picker = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
+            save_dest_clear_target("box3 undecidable");
+            unsafe { save_flow_close_dest_picker_from_tick(picker, "box3_undecidable") };
+            save_flow_enter_stage(SAVE_FLOW_STAGE_DEST_BROWSE, "box3 undecidable");
+        } else {
+            unsafe { save_flow_close_menus_from_tick("box_undecidable", false) };
+        }
+        return;
+    }
     match (box_id, decision) {
         (SAVE_FLOW_BOX_CONFIRM_SAVE, SaveFlowDecision::Yes) => {
             // Menu-pump owns the submit; the tick only stages it.

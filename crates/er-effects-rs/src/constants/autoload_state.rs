@@ -351,39 +351,112 @@ pub(crate) const MENU_ONLINE_MODE_EXPECTED_FIRST: u8 = 0x40;
 #[repr(usize)]
 pub(crate) enum MsgBoxRva {
     ForceStop = 0x78dfd0,
-    FinishedGetter = 0x7b0cf0,
+    MultiChoiceGetter = 0x7b0cf0,
     Builder = 0x9275b0,
     OnDecide = 0x927ba0,
+    Update = 0x927d30,
     DialogVtable = 0x2b03550,
 }
 
-pub(crate) const MSGBOX_FINISHED_GETTER_RVA: u32 = MsgBoxRva::FinishedGetter as u32;
+/// `FUN_1407b0cf0` -- vtable slot 14 of every MessageBoxDialog-family vtable. Whole body is
+/// `return 1 < *(i32*)(this+0x25e8)`, i.e. "this box has MORE THAN ONE button" (a Yes/No
+/// confirm rather than a single-OK notice). It is NOT a finished/decided poll: `+0x25e8` is
+/// the BUTTON COUNT the ctor writes at construction (see `MSGBOX_BUTTON_COUNT_25E8_OFFSET`).
+/// The old name (`MSGBOX_FINISHED_GETTER_RVA`) was wrong and is what made the save-flow poll
+/// resolve a freshly built two-button confirm on its first frame (2026-07-28).
+pub(crate) const MSGBOX_MULTI_CHOICE_GETTER_RVA: u32 = MsgBoxRva::MultiChoiceGetter as u32;
 pub(crate) const MSGBOX_DIALOG_VTABLE_RVA: usize = MsgBoxRva::DialogVtable as usize;
+/// `CS::MessageBoxDialog::Update` (`FUN_140927d30`), vtable slot 2. STRUCTURAL IDENTITY: all
+/// five MessageBoxDialog-family vtables in `eldenring-deobf.bin` carry this exact function in
+/// slot 2 -- base `CS::MessageBoxDialog` (rva 0x2b03550), `CS::SaveRetryDialog` (0x2aaabf8),
+/// and the subclasses at 0x2ae5ae0 / 0x2b06780 / 0x2b220d0 (byte-read from the deobf image
+/// 2026-07-28). Comparing `vtable[2]` therefore recognises EVERY legitimate subclass -- and a
+/// wrapper that swaps the vtable after the builder runs -- while still rejecting a freed or
+/// reused object, which a single hard-coded vtable equality cannot do.
+pub(crate) const MSGBOX_DIALOG_UPDATE_RVA: usize = MsgBoxRva::Update as usize;
+/// Index of the `Update` entry in a MessageBoxDialog vtable (slot 2 == byte offset 0x10).
+pub(crate) const MSGBOX_DIALOG_VTABLE_UPDATE_SLOT: usize = 2;
 
 #[repr(C)]
 pub(crate) struct MsgBoxDialogLayout {
-    pub(crate) unknown_000: [u8; 0x3b0],
+    pub(crate) unknown_000: [u8; 0x1e8],
+    pub(crate) job_result_state: i32,
+    pub(crate) job_result_subcode: i32,
+    pub(crate) unknown_1f0: [u8; 0x1c0],
     pub(crate) closing_latch: u8,
     pub(crate) unknown_3b1: [u8; 0x180f],
     pub(crate) confirm_latch: u8,
     pub(crate) unknown_1bc1: [u8; 0xa1f],
-    pub(crate) result_button: i32,
+    pub(crate) default_cursor_index: i32,
     pub(crate) unknown_25e4: [u8; 0x04],
-    pub(crate) state: i32,
+    pub(crate) button_count: i32,
 }
 
-pub(crate) const MSGBOX_RESULT_BUTTON_25E0_OFFSET: usize =
-    core::mem::offset_of!(MsgBoxDialogLayout, result_button);
-pub(crate) const MSGBOX_STATE_25E8_OFFSET: usize = core::mem::offset_of!(MsgBoxDialogLayout, state);
-/// Affirmative/OK button index (the consumer treats -1 as "none yet").
-pub(crate) const MSGBOX_OK_BUTTON: i32 = false as i32;
-/// Dialog state >= 2 satisfies the finished-poll.
-#[repr(i32)]
-pub(crate) enum MsgBoxState {
-    Decided = 2,
-}
-
-pub(crate) const MSGBOX_STATE_DECIDED: i32 = MsgBoxState::Decided as i32;
+/// `dialog+0x25e0` -- the DEFAULT/INITIAL CURSOR INDEX, written once by the ctor
+/// (`FUN_1409275b0`: `*(u32*)(param_1+0x4bc) = param_5`, and `0x4bc*8 == 0x25e0`) from the
+/// MenuJob config the builder's `finalize` filled in. `OnDecide` (`FUN_140927ba0`) reads it
+/// and either moves the list cursor there (`FUN_140738d40(dialog+0xa38, idx, 0)`) or, when it
+/// is -1, takes the cancel arm. It is NOT the button the user chose: it never changes after
+/// construction, so for a `[Yes, No]` + `default_last` confirm it reads 1 ("No") from the very
+/// first frame the box exists.
+pub(crate) const MSGBOX_DEFAULT_CURSOR_25E0_OFFSET: usize =
+    core::mem::offset_of!(MsgBoxDialogLayout, default_cursor_index);
+/// `dialog+0x25e8` -- the BUTTON COUNT, written by the ctor as
+/// `(*(i64*)(cfg+0x38) - *(i64*)(cfg+0x30)) / 0x210` (the size of the button-descriptor
+/// vector). A Yes/No confirm therefore reads 2 here at construction; a single-OK notice reads
+/// 1. Never a state machine.
+pub(crate) const MSGBOX_BUTTON_COUNT_25E8_OFFSET: usize =
+    core::mem::offset_of!(MsgBoxDialogLayout, button_count);
+/// First button index -- what the deprecated startup auto-accept pokes into the default-cursor
+/// field so `OnDecide` dispatches button 0 instead of taking the cancel arm.
+pub(crate) const MSGBOX_FIRST_BUTTON_INDEX: i32 = false as i32;
+/// The button count that makes `MSGBOX_MULTI_CHOICE_GETTER_RVA` (`1 < count`) return true.
+/// The deprecated auto-accept writes this over the real count so the title flow's modal poll
+/// treats the box as resolved -- a deliberate corruption of a real field, kept only because
+/// that historical path depends on it.
+pub(crate) const MSGBOX_BUTTON_COUNT_MULTI_CHOICE: i32 = 2;
+/// `dialog+0x1e8` -- the dialog's own `MenuJobResult` (state i32, subcode i32 at +0x1ec).
+/// THIS is where a pressed button's answer lands. RE (1.16.2, 2026-07-28):
+///   * `add_yes` (`FUN_1407b1c70`) attaches `MenuJobResult::SetResult(Success=2, 0)` to its
+///     button; `add_no` (`FUN_1407b1900`) attaches `SetResult(Failed=3, 0)`.
+///   * pressing a button runs the OK handler `FUN_14078e030` -> `FUN_14078ef20`, which reads
+///     that button's `MenuJobResult` out of the 0x210-byte command struct at `+0x180` and
+///     hands it to the lambda `FUN_14078ee20`, whose whole body is:
+///       `if (*(u8*)(dialog+0x127c)) dialog->vtable[0x60](dialog, result);`
+///       `else                       *(MenuJobResult*)(dialog+0x1e8) = result;`
+///     -- i.e. either EMIT the result (which sets the `+0x3b0` latch) or store it here.
+///   * the dialog's own `Update` (`FUN_140927d30`) reads `+0x1e8` and only auto-cancels
+///     (`FUN_1407ac890` -> emit `Failed`) when it is still non-terminal.
+pub(crate) const MSGBOX_JOB_RESULT_STATE_1E8_OFFSET: usize =
+    core::mem::offset_of!(MsgBoxDialogLayout, job_result_state);
+pub(crate) const MSGBOX_JOB_RESULT_SUBCODE_1EC_OFFSET: usize =
+    core::mem::offset_of!(MsgBoxDialogLayout, job_result_subcode);
+/// `MenuJobResult` state values, read straight out of the callers' immediates:
+/// `MenuJobResult::SetResult` (0x1407a91e0) is `[rcx]=edx; [rcx+4]=r8d`, `add_yes` passes
+/// `edx=2`, `add_no` passes `edx=3`, and `ShouldContinue` (0x1407a9200) is `cmp [rcx],1;
+/// seta al` -- so state <= 1 means "no answer yet" and anything above is terminal.
+pub(crate) const MENU_JOB_RESULT_STATE_CONTINUE_MAX: i32 = 1;
+pub(crate) const MENU_JOB_RESULT_STATE_SUCCESS: i32 = 2;
+pub(crate) const MENU_JOB_RESULT_STATE_FAILED: i32 = 3;
+/// "No source has produced a state" sentinel for the save-flow poll. Deliberately inside the
+/// `Continue` band so it can never be mistaken for a terminal answer.
+pub(crate) const MENU_JOB_RESULT_STATE_NONE: i32 = 0;
+/// `CS::MenuJob::EmitResult` -- vtable slot 12 (`+0x60`) of every MessageBoxDialog-family
+/// vtable, `void f(rcx=this, rdx=MenuJobResult by value, r8, r9)`. Guards on the `+0x3b0`
+/// latch (`cmpb $0x0,0x3b0(%rcx)`), picks the confirm/cancel sound by
+/// `MenuJobResult::IsSuccess`, hands the result to the parent, then SETS `+0x3b0`. It is the
+/// single choke point every answer passes through -- a pressed Yes, a pressed No, and the
+/// cancel/auto-close path (`FUN_1407ac890`, which emits `Failed`) -- which is why the
+/// save-flow observes it instead of guessing from dialog fields.
+pub(crate) const MENU_JOB_EMIT_RESULT_RVA: u32 = 0x746e80;
+/// Prologue of `MENU_JOB_EMIT_RESULT_RVA` (`mov %rdx,0x10(%rsp); push %rbx; sub $0x80,%rsp`),
+/// byte-verified against `eldenring-deobf.bin` 2026-07-28.
+pub(crate) const MENU_JOB_EMIT_RESULT_SIG: &[u8] =
+    &[0x48, 0x89, 0x54, 0x24, 0x10, 0x53, 0x48, 0x81, 0xec, 0x80, 0x00, 0x00, 0x00];
+pub(crate) static MENU_JOB_EMIT_RESULT_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) const MENU_JOB_EMIT_RESULT_NOT_INSTALLED: usize = 0;
+pub(crate) const MENU_JOB_EMIT_RESULT_INSTALLED_YES: usize = 1;
+pub(crate) use er_telemetry::counters::MENU_JOB_EMIT_RESULT_INSTALLED;
 /// CS::SaveRetryDialog vtable (RVA). A MessageBoxDialog SUBCLASS: the wrapper 0x1407af9a0 overrides
 /// the base vtable to this AFTER the builder 0x1409275b0 runs. It is the "save/load failed -- Retry?"
 /// prompt the offline title flow builds (save-data/profile read error in a degraded/offline env). The
@@ -753,8 +826,14 @@ pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_BUILD_TIMEOUT_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_DIALOG;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_EXPECTED;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_EMIT_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_EMIT_DIALOG;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_EMIT_STATE;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_IDENTITY_LOST_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_NO_COUNTS;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_OPEN_COUNTS;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_RESULT_BASELINE;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_UNDECIDABLE_COUNTS;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_YES_COUNTS;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_RECIPE_UNAVAILABLE;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_SUBMIT_BOX_PENDING;

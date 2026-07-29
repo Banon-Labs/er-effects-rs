@@ -234,23 +234,13 @@ unsafe fn system_quit_route_button_action_or_forward(
         ));
         return 0;
     }
-    // REAL Return-to-Desktop confirm (the cloned Load Profile / Load Save Profiles rows were already routed
-    // and returned above, so reaching here with the native return-desktop action + no visual-row match is
-    // the genuine "Return to Desktop"). Make quit an INSTANT ALT+F4: persist the save, release the cursor
-    // clip, and ExitProcess(0) BEFORE the world teardown renders a loading screen (user 2026-07-15). The old
-    // clean-kill (system_quit_ownership_repro) fired mid-teardown, so the loading cover was already visible.
-    if action_obj != 0
-        && native_return_desktop_action != 0
-        && action_obj == native_return_desktop_action
-        && native_return_visual_row.is_none()
-    {
-        unsafe { system_quit_save_game_request_save_only() };
-        release_input_block_now();
-        append_autoload_debug(format_args!(
-            "quit-to-desktop: Return-to-Desktop confirmed action=0x{action_obj:x} cursor={cursor}; requested save + released cursor clip; INSTANT ExitProcess(0) before world teardown (no loading screen)"
-        ));
-        unsafe { ExitProcess(0) };
-    }
+    // SAVE GAME is routed BEFORE the Return-to-Desktop quit (order is load-bearing, 2026-07-28).
+    // The two rows are recognised by two SEPARATELY captured native action objects (first Quit row
+    // -> Save Game, second -> Return to Desktop). If the native GameEnd dispatcher ever collapses
+    // them onto one object -- which it demonstrably does for the cloned rows, hence
+    // `system_quit_native_return_visual_fallback_row` -- then with the quit branch first, pressing
+    // Save Game would fall into it and ExitProcess the game. Checking Save Game first makes that
+    // impossible: the non-destructive row always wins a tie over an irreversible process exit.
     let save_game_action = SYSTEM_QUIT_NATIVE_SAVE_GAME_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
     if action_obj != 0 && action_obj == save_game_action {
         let dialog = unsafe { safe_read_usize(action_obj + 0x8) }.unwrap_or(0);
@@ -275,6 +265,37 @@ unsafe fn system_quit_route_button_action_or_forward(
             ));
             return 0;
         }
+    }
+    // REAL Return-to-Desktop confirm (the cloned Load Profile / Load Save Profiles rows and the
+    // Save Game row were already routed and returned above, so reaching here with the native
+    // return-desktop action + no visual-row match is the genuine "Return to Desktop"). Make quit
+    // an INSTANT ALT+F4: persist the save, release the cursor clip, and ExitProcess(0) BEFORE the
+    // world teardown renders a loading screen (user 2026-07-15). The old clean-kill
+    // (system_quit_ownership_repro) fired mid-teardown, so the loading cover was already visible.
+    //
+    // Two explicit refusals guard this irreversible step (2026-07-28):
+    //   * `action_obj != save_game_action` -- a Save Game press can NEVER quit the game, even if
+    //     the native dispatcher collapses both rows onto one action object;
+    //   * `save_flow_stage == IDLE` -- never exit mid save-flow, where a commit may be armed or
+    //     in flight and a process exit would tear it in half.
+    let save_flow_stage = SAVE_FLOW_STAGE.load(Ordering::SeqCst);
+    if action_obj != 0
+        && native_return_desktop_action != 0
+        && action_obj == native_return_desktop_action
+        && native_return_visual_row.is_none()
+    {
+        if action_obj == save_game_action || save_flow_stage != SAVE_FLOW_STAGE_IDLE {
+            append_autoload_debug(format_args!(
+                "quit-to-desktop: REFUSING the instant quit for action=0x{action_obj:x} cursor={cursor} -- save_game_action=0x{save_game_action:x} save_flow_stage={save_flow_stage}; a Save Game press must never quit the game and a save flow must never be torn in half"
+            ));
+            return 0;
+        }
+        unsafe { system_quit_save_game_request_save_only() };
+        release_input_block_now();
+        append_autoload_debug(format_args!(
+            "quit-to-desktop: Return-to-Desktop confirmed action=0x{action_obj:x} cursor={cursor}; requested save + released cursor clip; INSTANT ExitProcess(0) before world teardown (no loading screen)"
+        ));
+        unsafe { ExitProcess(0) };
     }
     if orig == HOOK_ORIGINAL_UNSET {
         append_autoload_debug(format_args!(
@@ -416,8 +437,15 @@ pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hoo
             != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
             || SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) != 0
             || SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.load(Ordering::SeqCst) != 0;
+        // Same two refusals as the action-route path (2026-07-28): the Save Game row's action can
+        // never reach the instant quit, and no save flow may be torn in half by a process exit.
+        let save_game_action = SYSTEM_QUIT_NATIVE_SAVE_GAME_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
+        let save_flow_in_flight = SAVE_FLOW_STAGE.load(Ordering::SeqCst) != SAVE_FLOW_STAGE_IDLE;
+        let save_row_action = save_game_action != 0 && action == save_game_action;
         if action == native_return_action
             && !switch_in_flight
+            && !save_flow_in_flight
+            && !save_row_action
             && unsafe { system_quit_controller_should_invoke_action(controller, event_a) }
         {
             unsafe { system_quit_save_game_request_save_only() };
@@ -1143,7 +1171,17 @@ unsafe fn system_quit_save_game_start_flow(dialog: usize) -> bool {
     // this call is idempotent, and the row press is the menu thread, i.e. the one context in
     // which no other thread can be executing the builder while MinHook patches it.
     install_auto_accept_hook();
+    // Same reasoning for the answer observer: `CS::MenuJob::EmitResult` is what tells us WHICH
+    // button the user pressed on the branch where the dialog never stores its result. Install
+    // is idempotent; if it is not live the poll falls back to `dialog+0x1e8` and reports
+    // UNDECIDABLE rather than guessing, so log the state here where the run can see it.
+    install_menu_job_emit_result_hook();
     let capture_live = MSGBOX_BUILDER_ORIG.load(Ordering::SeqCst) != HOOK_ORIGINAL_UNSET;
+    append_autoload_debug(format_args!(
+        "save-flow: row press dialog=0x{dialog:x} recipe_ok={} builder_capture_live={capture_live} emit_observer_installed={}",
+        save_flow_box_recipe_available(),
+        MENU_JOB_EMIT_RESULT_INSTALLED.load(Ordering::SeqCst)
+    ));
     if !save_flow_box_recipe_available() || !capture_live {
         append_autoload_debug(format_args!(
             "save-flow: confirm chain unavailable on this build (recipe_ok={} builder_capture_live={capture_live}) -- Save Game degrades to the immediate close-then-fire commit",

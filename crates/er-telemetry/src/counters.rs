@@ -1349,6 +1349,32 @@ pub static SAVE_FLOW_BOX_NO_COUNTS: [AtomicUsize; SAVE_FLOW_BOX_COUNT] =
 /// Save flows that ended back in the world with NOTHING written (user said No/cancel, or a
 /// recipe failure aborted the chain).
 pub static SAVE_FLOW_ABORT_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// UNDECIDABLE confirm boxes, per box id - 1: the dialog stopped being a MessageBoxDialog
+/// (freed/reused) or reported that it had emitted a result we could not map to a button. These
+/// are FAILURES, deliberately kept OUT of the No counters: a box we could not read is not the
+/// user pressing No, and conflating the two makes an agent-invented answer indistinguishable
+/// from a real one. An undecidable box always ends the flow WITHOUT writing.
+pub static SAVE_FLOW_BOX_UNDECIDABLE_COUNTS: [AtomicUsize; SAVE_FLOW_BOX_COUNT] =
+    [const { AtomicUsize::new(0) }; SAVE_FLOW_BOX_COUNT];
+/// Times a captured confirm-box dialog failed its structural identity check (its vtable no
+/// longer carries `CS::MessageBoxDialog::Update` in slot 2) -- the object was freed or reused
+/// while we were polling it. Subset of `SAVE_FLOW_BOX_UNDECIDABLE_COUNTS`.
+pub static SAVE_FLOW_BOX_IDENTITY_LOST_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// `CS::MenuJob::EmitResult` observations attributed to the live confirm box: the emitted
+/// `MenuJobResult` state (2 = Success/Yes, 3 = Failed/No or cancel) plus the dialog it came
+/// from, latched by the emit hook for the save-flow poll. `..._DIALOG` 0 = nothing captured.
+pub static SAVE_FLOW_BOX_EMIT_DIALOG: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_FLOW_BOX_EMIT_STATE: AtomicUsize = AtomicUsize::new(0);
+/// Emitted-result observations for the live confirm box (diagnostic count).
+pub static SAVE_FLOW_BOX_EMIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// The confirm box's `MenuJobResult` state AS BUILT, sampled the moment the builder hook
+/// captures the dialog (stored as a `u32` bit pattern). The poll only believes that field
+/// once it has CHANGED away from this baseline, and refuses to use it at all when the
+/// baseline is already terminal -- the discipline that the 2026-07-28 defect was missing,
+/// where a value present at construction was mistaken for the user's answer.
+pub static SAVE_FLOW_BOX_RESULT_BASELINE: AtomicUsize = AtomicUsize::new(0);
+/// Install flag for the `CS::MenuJob::EmitResult` observer hook (0 = not installed).
+pub static MENU_JOB_EMIT_RESULT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 /// Submitted confirm boxes whose `CS::MessageBoxDialog` build was never captured within
 /// `SAVE_FLOW_BOX_BUILD_TIMEOUT_TICKS` -- the recipe produced no visible box (failure path).
 pub static SAVE_FLOW_BOX_BUILD_TIMEOUT_COUNT: AtomicUsize = AtomicUsize::new(0);

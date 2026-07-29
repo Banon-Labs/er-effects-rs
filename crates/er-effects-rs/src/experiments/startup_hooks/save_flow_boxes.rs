@@ -112,12 +112,22 @@ pub(crate) enum SaveFlowButton {
     No,
 }
 
-/// A resolved confirm-box decision. Cancel (B/escape, result index -1) maps to `No`: every
-/// box in this chain is a gate, so "no answer" must never advance toward a write.
+/// A resolved confirm-box outcome.
+///
+/// `No` means the GAME told us the user chose the negative button or cancelled -- the native
+/// `MenuJobResult` came back `Failed`, which is what `add_no` attaches to its button and what
+/// the cancel/auto-close path (`FUN_1407ac890`) emits.
+///
+/// `Undecidable` is a FAILURE, not an answer: the dialog stopped being a MessageBoxDialog, or
+/// it reported that it had emitted a result we could not map. It ends the flow without writing
+/// (the safe direction) but is counted and logged separately, because a box we could not read
+/// is not the user pressing No, and folding the two together would make an answer we invented
+/// indistinguishable from one the user gave.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SaveFlowDecision {
     Yes,
     No,
+    Undecidable,
 }
 
 /// Add order per box. `default_last` makes the LAST entry the default choice.
@@ -329,8 +339,17 @@ pub(crate) unsafe fn save_flow_submit_box(box_id: usize) -> bool {
         unsafe { std::mem::transmute(recipe.queue_ready) };
     if unsafe { queue_ready(queue) } == 0 {
         // Retryable: the queue still owns a job. The caller leaves the pending latch set.
+        // Log the FIRST deferral per box so a trace shows the submit was attempted and is
+        // waiting, instead of this being an invisible branch between the stage entry and a
+        // build timeout. Subsequent retries are silent (this runs per menu pump).
+        if SAVE_FLOW_BOX_SUBMIT_DEFERRED.swap(box_id, Ordering::SeqCst) != box_id {
+            append_autoload_debug(format_args!(
+                "save-flow-box: {label} submit DEFERRED -- host dialog=0x{dialog:x} queue=0x{queue:x} still owns a job; retrying on the next menu pump"
+            ));
+        }
         return false;
     }
+    SAVE_FLOW_BOX_SUBMIT_DEFERRED.store(SAVE_FLOW_BOX_NONE, Ordering::SeqCst);
 
     // Prompt MenuString: zero the scratch first so the ctor's DLString init writes into a
     // known-clean object, exactly like `system_quit_build_static_label_component`.
@@ -414,60 +433,318 @@ pub(crate) unsafe fn save_flow_submit_box(box_id: usize) -> bool {
     true
 }
 
+/// Structural identity of a captured confirm box: is `dialog` STILL a live
+/// `CS::MessageBoxDialog` (or any of its subclasses)?
+///
+/// Checks the vtable's `Update` slot rather than the vtable pointer itself. RE (1.16.2,
+/// 2026-07-28): all five MessageBoxDialog-family vtables in `eldenring-deobf.bin` carry
+/// `FUN_140927d30` in slot 2 -- the base class (rva 0x2b03550), `CS::SaveRetryDialog`
+/// (0x2aaabf8, whose wrapper `FUN_1407af9a0` swaps the vtable AFTER the builder runs) and the
+/// three subclasses at 0x2ae5ae0 / 0x2b06780 / 0x2b220d0. A single hard-coded vtable equality
+/// rejects every one of those but the base, which is exactly the failure mode this project has
+/// already hit once (bd offline-title-modal-is-saveretrydialog). Comparing the slot accepts
+/// every legitimate class while still rejecting a freed or reused block, because a stale
+/// object's first qword almost never points at a game-image vtable whose slot 2 is this one
+/// function.
+fn save_flow_box_identity(dialog: usize, base: usize) -> (usize, usize, bool) {
+    let vtable = unsafe { safe_read_usize(dialog) }.unwrap_or(0);
+    let update_slot = unsafe {
+        safe_read_usize(
+            vtable + MSGBOX_DIALOG_VTABLE_UPDATE_SLOT * core::mem::size_of::<usize>(),
+        )
+    }
+    .unwrap_or(0);
+    let ok = vtable != 0 && update_slot == base + MSGBOX_DIALOG_UPDATE_RVA;
+    (vtable, update_slot, ok)
+}
+
+/// Everything one poll reads out of the live dialog. Kept as a struct so the trace line and
+/// the decision are derived from the SAME snapshot.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct SaveFlowBoxSnapshot {
+    vtable: usize,
+    update_slot: usize,
+    result_state: i32,
+    result_subcode: i32,
+    closing: u8,
+    button_count: i32,
+    default_cursor: i32,
+    emit_state: i32,
+}
+
 /// Poll the captured confirm-box dialog. PURE READS -- safe from the game task.
 ///
-/// A decision is available once the dialog reports finished (`+0x25e8 >= 2`, the same field
-/// the native finished-getter tests) or has begun teardown (`+0x3b0`). The chosen button is
-/// the ADD-ORDER index at `+0x25e0`; `-1` (cancel/B) and any index we cannot map both resolve
-/// to `No`, so an ambiguous answer can never advance toward a write.
+/// THE ANSWER IS THE NATIVE `MenuJobResult`, NOT A CURSOR INDEX (defect fixed 2026-07-28).
+/// The previous implementation read `+0x25e8` as a "decided" state and `+0x25e0` as the chosen
+/// button. RE of the 1.16.2 ctor `FUN_1409275b0` shows both are written at CONSTRUCTION:
+/// `+0x25e8` is the BUTTON COUNT (2 for a Yes/No confirm) and `+0x25e0` is the DEFAULT CURSOR
+/// INDEX (1 for Box1's `[Yes, No]` + `default_last`). So the old poll saw "state 2 >= decided"
+/// on its very first frame and mapped index 1 to `No` -- it answered the user's own dialog for
+/// them, with no input, and aborted their save. That exactly reproduces the measured
+/// `box1_open=1, box1_no=1, abort=1` with the box never touched.
 ///
-/// Returns `None` while the box is still up. Clears the capture slot on decision so a freed
-/// dialog is never re-read.
+/// What actually carries the answer:
+///   * each button gets a `MenuJobResult` from the builder -- `add_yes` -> `Success` (2),
+///     `add_no` -> `Failed` (3);
+///   * a press runs `FUN_14078e030` -> `FUN_14078ef20`, which pulls that result out of the
+///     button's command struct (`+0x180`) and either EMITS it through
+///     `CS::MenuJob::EmitResult` (vtable `+0x60`, which then sets the `+0x3b0` latch) or
+///     stores it at `dialog+0x1e8`, depending on `*(u8*)(dialog+0x127c)`;
+///   * cancel/auto-close (`FUN_1407ac890`) emits `Failed` through the same slot.
+/// So we read `+0x1e8` AND latch what the emit hook saw for this exact dialog. Both are the
+/// game's own verdict; neither exists until the user answers.
+///
+/// AND WE DO NOT TRUST A VALUE THAT WAS ALREADY THERE. `+0x1e8` is only believed once it has
+/// CHANGED away from the baseline sampled when the box was built, and it is refused outright
+/// if that baseline was already terminal. That is precisely the discipline the old code
+/// lacked: it read fields that a freshly constructed dialog already carried and called them
+/// the user's answer.
+///
+/// Returns `None` while the box is still up -- with no decision timeout, because there is no
+/// legitimate way to guess an answer the user has not given.
 pub(crate) unsafe fn save_flow_box_decision(box_id: usize) -> Option<SaveFlowDecision> {
     const HEAP_LO: usize = 0x10000;
+    let label = save_flow_box_label(box_id);
     let dialog = SAVE_FLOW_BOX_DIALOG.load(Ordering::SeqCst);
     if dialog < HEAP_LO {
         return None;
     }
-    let base = game_module_base().ok()?;
-    let vtable = unsafe { safe_read_usize(dialog) }.unwrap_or(0);
-    if vtable != base + MSGBOX_DIALOG_VTABLE_RVA {
-        // Freed / reused before it reported: treat as a refusal rather than reading garbage.
-        SAVE_FLOW_BOX_DIALOG.store(0, Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "save-flow-box: {} dialog=0x{dialog:x} vtable=0x{vtable:x} is no longer a MessageBoxDialog -- treating as No",
-            save_flow_box_label(box_id)
-        ));
-        save_flow_box_counter_bump(&SAVE_FLOW_BOX_NO_COUNTS, box_id);
-        return Some(SaveFlowDecision::No);
-    }
-    let state = unsafe { safe_read_i32(dialog + MSGBOX_STATE_25E8_OFFSET) }.unwrap_or(0);
-    let closing = unsafe { safe_read_u8(dialog + MSGBOX_CLOSING_LATCH_3B0_OFFSET) }.unwrap_or(0);
-    if state < MSGBOX_STATE_DECIDED && closing == 0 {
+    let Ok(base) = game_module_base() else {
+        // Cannot even resolve the module: read nothing, decide nothing, poll again next tick.
         return None;
+    };
+    let (vtable, update_slot, identity_ok) = save_flow_box_identity(dialog, base);
+    if !identity_ok {
+        SAVE_FLOW_BOX_IDENTITY_LOST_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "save-flow-box: {label} IDENTITY LOST dialog=0x{dialog:x} vtable=0x{vtable:x} vtable[2]=0x{update_slot:x} (want 0x{:x}) -- the box was freed or reused before it reported; UNDECIDABLE, ending the flow WITHOUT writing (this is NOT the user pressing No)",
+            base + MSGBOX_DIALOG_UPDATE_RVA
+        ));
+        return Some(save_flow_box_finish(box_id, SaveFlowDecision::Undecidable));
     }
-    let chosen = unsafe { safe_read_i32(dialog + MSGBOX_RESULT_BUTTON_25E0_OFFSET) }.unwrap_or(-1);
-    let decision = save_flow_box_add_order(box_id)
-        .and_then(|order| usize::try_from(chosen).ok().and_then(|idx| order.get(idx)))
-        .map_or(SaveFlowDecision::No, |button| match button {
-            SaveFlowButton::Yes => SaveFlowDecision::Yes,
-            SaveFlowButton::No => SaveFlowDecision::No,
-        });
+    let snapshot = SaveFlowBoxSnapshot {
+        vtable,
+        update_slot,
+        result_state: unsafe { safe_read_i32(dialog + MSGBOX_JOB_RESULT_STATE_1E8_OFFSET) }
+            .unwrap_or(0),
+        result_subcode: unsafe { safe_read_i32(dialog + MSGBOX_JOB_RESULT_SUBCODE_1EC_OFFSET) }
+            .unwrap_or(0),
+        closing: unsafe { safe_read_u8(dialog + MSGBOX_CLOSING_LATCH_3B0_OFFSET) }.unwrap_or(0),
+        button_count: unsafe { safe_read_i32(dialog + MSGBOX_BUTTON_COUNT_25E8_OFFSET) }
+            .unwrap_or(-1),
+        default_cursor: unsafe { safe_read_i32(dialog + MSGBOX_DEFAULT_CURSOR_25E0_OFFSET) }
+            .unwrap_or(-1),
+        emit_state: save_flow_box_emitted_state(dialog),
+    };
+    save_flow_box_trace_poll(box_id, dialog, &snapshot);
+
+    // Which source, if any, is allowed to answer.
+    //   * The emit hook is the strongest evidence: it saw the exact `MenuJobResult` the game
+    //     handed the parent for THIS dialog, and it cannot fire before an answer exists.
+    //   * `+0x1e8` is the same verdict on the store-instead-of-emit branch, but only once it
+    //     has moved off its as-built baseline, and never when that baseline was already
+    //     terminal (then the field cannot distinguish "as built" from "answered", so it is
+    //     not evidence at all).
+    let baseline = save_flow_box_result_baseline();
+    let field_usable = baseline <= MENU_JOB_RESULT_STATE_CONTINUE_MAX;
+    let (answered_state, source) = if snapshot.emit_state > MENU_JOB_RESULT_STATE_CONTINUE_MAX {
+        (snapshot.emit_state, "EmitResult")
+    } else if field_usable
+        && snapshot.result_state != baseline
+        && snapshot.result_state > MENU_JOB_RESULT_STATE_CONTINUE_MAX
+    {
+        (snapshot.result_state, "dialog+0x1e8")
+    } else {
+        (MENU_JOB_RESULT_STATE_NONE, "none")
+    };
+    if answered_state <= MENU_JOB_RESULT_STATE_CONTINUE_MAX {
+        if snapshot.closing == 0 {
+            // Still up and un-answered: keep polling. This is the ONLY non-terminal path.
+            return None;
+        }
+        // The box emitted its result (the +0x3b0 latch is the last thing EmitResult does) yet
+        // no source carries a state we may believe. Report the failure; never guess, and never
+        // advance toward a write.
+        append_autoload_debug(format_args!(
+            "save-flow-box: {label} UNDECIDABLE dialog=0x{dialog:x} closing_latch={} but result_state={} (baseline={baseline}, usable={field_usable}) emit_state={} subcode={} emit_hook_installed={} -- the box reported an answer we could not map; ending the flow WITHOUT writing (this is NOT the user pressing No)",
+            snapshot.closing,
+            snapshot.result_state,
+            snapshot.emit_state,
+            snapshot.result_subcode,
+            MENU_JOB_EMIT_RESULT_INSTALLED.load(Ordering::SeqCst)
+        ));
+        return Some(save_flow_box_finish(box_id, SaveFlowDecision::Undecidable));
+    }
+    let decision = match answered_state {
+        MENU_JOB_RESULT_STATE_SUCCESS => SaveFlowDecision::Yes,
+        MENU_JOB_RESULT_STATE_FAILED => SaveFlowDecision::No,
+        _ => SaveFlowDecision::Undecidable,
+    };
+    append_autoload_debug(format_args!(
+        "save-flow-box: {label} DECIDED dialog=0x{dialog:x} via={source} state={answered_state} result_state={} baseline={baseline} subcode={} emit_state={} closing={} buttons={} default_cursor={} -> {}",
+        snapshot.result_state,
+        snapshot.result_subcode,
+        snapshot.emit_state,
+        snapshot.closing,
+        snapshot.button_count,
+        snapshot.default_cursor,
+        save_flow_decision_label(decision)
+    ));
+    Some(save_flow_box_finish(box_id, decision))
+}
+
+/// The `MenuJobResult` state the captured box carried AS BUILT (see
+/// `SAVE_FLOW_BOX_RESULT_BASELINE`).
+fn save_flow_box_result_baseline() -> i32 {
+    (SAVE_FLOW_BOX_RESULT_BASELINE.load(Ordering::SeqCst) as u32) as i32
+}
+
+pub(crate) fn save_flow_decision_label(decision: SaveFlowDecision) -> &'static str {
+    match decision {
+        SaveFlowDecision::Yes => "Yes",
+        SaveFlowDecision::No => "No",
+        SaveFlowDecision::Undecidable => "UNDECIDABLE",
+    }
+}
+
+/// Retire the capture slot and bump the counter that matches `decision`. Undecidable gets its
+/// OWN counter so a box we could not read never inflates the "user said No" tally.
+fn save_flow_box_finish(box_id: usize, decision: SaveFlowDecision) -> SaveFlowDecision {
     SAVE_FLOW_BOX_DIALOG.store(0, Ordering::SeqCst);
     SAVE_FLOW_BOX_EXPECTED.store(SAVE_FLOW_BOX_NONE, Ordering::SeqCst);
+    SAVE_FLOW_BOX_EMIT_DIALOG.store(0, Ordering::SeqCst);
+    SAVE_FLOW_BOX_EMIT_STATE.store(0, Ordering::SeqCst);
+    SAVE_FLOW_BOX_LAST_POLL.store(0, Ordering::SeqCst);
+    SAVE_FLOW_BOX_RESULT_BASELINE.store(0, Ordering::SeqCst);
     match decision {
         SaveFlowDecision::Yes => save_flow_box_counter_bump(&SAVE_FLOW_BOX_YES_COUNTS, box_id),
         SaveFlowDecision::No => save_flow_box_counter_bump(&SAVE_FLOW_BOX_NO_COUNTS, box_id),
+        SaveFlowDecision::Undecidable => {
+            save_flow_box_counter_bump(&SAVE_FLOW_BOX_UNDECIDABLE_COUNTS, box_id)
+        }
+    }
+    decision
+}
+
+/// The `MenuJobResult` state the emit hook observed for `dialog`, or 0 when it has not fired
+/// for this dialog. Read-only.
+fn save_flow_box_emitted_state(dialog: usize) -> i32 {
+    if SAVE_FLOW_BOX_EMIT_DIALOG.load(Ordering::SeqCst) != dialog {
+        return 0;
+    }
+    i32::try_from(SAVE_FLOW_BOX_EMIT_STATE.load(Ordering::SeqCst)).unwrap_or(0)
+}
+
+/// Fingerprint of the last logged poll, so the per-frame poll leaves a COMPLETE trace of every
+/// state the box passed through without becoming a per-frame firehose: one line when the box
+/// is first polled and one line every time any observed field changes.
+fn save_flow_box_poll_fingerprint(dialog: usize, snapshot: &SaveFlowBoxSnapshot) -> usize {
+    let mut hash = dialog;
+    for value in [
+        snapshot.result_state as usize,
+        snapshot.result_subcode as usize,
+        snapshot.closing as usize,
+        snapshot.button_count as usize,
+        snapshot.default_cursor as usize,
+        snapshot.emit_state as usize,
+    ] {
+        // FNV-1a-ish mix; any change in any field changes the fingerprint.
+        hash = (hash ^ value).wrapping_mul(0x0100_0000_01b3);
+    }
+    // 0 is the "nothing logged yet" sentinel.
+    hash | 1
+}
+
+fn save_flow_box_trace_poll(box_id: usize, dialog: usize, snapshot: &SaveFlowBoxSnapshot) {
+    let fingerprint = save_flow_box_poll_fingerprint(dialog, snapshot);
+    if SAVE_FLOW_BOX_LAST_POLL.swap(fingerprint, Ordering::SeqCst) == fingerprint {
+        return;
     }
     append_autoload_debug(format_args!(
-        "save-flow-box: {} DECIDED dialog=0x{dialog:x} state={state} closing={closing} result_index={chosen} -> {}",
+        "save-flow-box: {} POLL dialog=0x{dialog:x} vtable=0x{:x} vtable[2]=0x{:x} result_state={} subcode={} emit_state={} closing={} buttons={} default_cursor={}",
         save_flow_box_label(box_id),
-        match decision {
-            SaveFlowDecision::Yes => "Yes",
-            SaveFlowDecision::No => "No",
-        }
+        snapshot.vtable,
+        snapshot.update_slot,
+        snapshot.result_state,
+        snapshot.result_subcode,
+        snapshot.emit_state,
+        snapshot.closing,
+        snapshot.button_count,
+        snapshot.default_cursor
     ));
-    Some(decision)
+}
+
+/// Fingerprint of the last logged confirm-box poll (see `save_flow_box_trace_poll`).
+static SAVE_FLOW_BOX_LAST_POLL: AtomicUsize = AtomicUsize::new(0);
+
+/// Box id whose submit is currently waiting on a busy MenuJob queue; keeps the retry log to
+/// one line per deferral rather than one per menu pump.
+static SAVE_FLOW_BOX_SUBMIT_DEFERRED: AtomicUsize = AtomicUsize::new(SAVE_FLOW_BOX_NONE);
+
+/// Observer detour on `CS::MenuJob::EmitResult` (`MENU_JOB_EMIT_RESULT_RVA`, vtable slot
+/// `+0x60`). PURE OBSERVATION: it records the emitted `MenuJobResult` when `this` is the live
+/// confirm box and always forwards, so no other MenuJob in the game is affected.
+///
+/// Why it exists: `FUN_14078ee20` -- the lambda a pressed button runs -- branches on
+/// `*(u8*)(dialog+0x127c)`. On one branch the button's result is stored at `dialog+0x1e8`
+/// (pollable); on the other it goes STRAIGHT into this emit and the field is never written.
+/// Nothing in the whole image writes `+0x127c` with an immediate, so which branch a given
+/// dialog takes cannot be settled statically -- observing the emit makes the answer
+/// deterministic either way instead of leaving half the presses unreadable.
+pub(crate) unsafe extern "system" fn menu_job_emit_result_hook(
+    this: usize,
+    result: usize,
+    arg3: usize,
+    arg4: usize,
+) -> usize {
+    let watched = SAVE_FLOW_BOX_DIALOG.load(Ordering::SeqCst);
+    if watched != 0 && this == watched {
+        // MenuJobResult is 8 bytes passed by value in rdx: state in the low dword.
+        let state = (result & u32::MAX as usize) as u32 as i32;
+        SAVE_FLOW_BOX_EMIT_DIALOG.store(this, Ordering::SeqCst);
+        SAVE_FLOW_BOX_EMIT_STATE.store(state.max(0) as usize, Ordering::SeqCst);
+        let n = SAVE_FLOW_BOX_EMIT_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "save-flow-box: EMIT #{n} dialog=0x{this:x} MenuJobResult(state={state}, subcode={}) -- the game's own verdict for the live confirm box",
+            ((result >> 32) & u32::MAX as usize) as u32 as i32
+        ));
+    }
+    let orig = MENU_JOB_EMIT_RESULT_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        return 0;
+    }
+    let original: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    unsafe { original(this, result, arg3, arg4) }
+}
+
+/// Install the `CS::MenuJob::EmitResult` observer once. Byte-verifies the prologue first, so a
+/// drifted build leaves the hook uninstalled (the poll then relies on `dialog+0x1e8` alone and
+/// reports UNDECIDABLE rather than guessing) instead of detouring the wrong bytes.
+pub(crate) fn install_menu_job_emit_result_hook() {
+    // Fast idempotent exit BEFORE any byte reading or MinHook work. This runs from the
+    // per-tick install driver and again at the Save Game row press, and the target is a busy
+    // generic MenuJob method: once it is installed, later calls must touch nothing.
+    if MENU_JOB_EMIT_RESULT_INSTALLED.load(Ordering::SeqCst) != MENU_JOB_EMIT_RESULT_NOT_INSTALLED
+    {
+        return;
+    }
+    let Some(addr) = save_flow_verify_rva(
+        MENU_JOB_EMIT_RESULT_RVA,
+        MENU_JOB_EMIT_RESULT_SIG,
+        "MenuJob::EmitResult",
+    ) else {
+        return;
+    };
+    mh_install_hook_once(
+        &MENU_JOB_EMIT_RESULT_INSTALLED,
+        MENU_JOB_EMIT_RESULT_NOT_INSTALLED,
+        MENU_JOB_EMIT_RESULT_INSTALLED_YES,
+        addr,
+        menu_job_emit_result_hook as *mut c_void,
+        &MENU_JOB_EMIT_RESULT_ORIG,
+        "MenuJob::EmitResult save-flow observer",
+    );
 }
 
 /// Drop any live confirm-box capture/expectation (flow end, abort, re-entry guard).
@@ -476,15 +753,38 @@ pub(crate) fn save_flow_box_clear() {
     SAVE_FLOW_BOX_DIALOG.store(0, Ordering::SeqCst);
     SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_NONE, Ordering::SeqCst);
     SAVE_FLOW_BOX_HOST_DIALOG.store(0, Ordering::SeqCst);
+    // Drop the emit observation with the capture: a latched result must never be read against
+    // a LATER box (that would be one dialog answering for another).
+    SAVE_FLOW_BOX_EMIT_DIALOG.store(0, Ordering::SeqCst);
+    SAVE_FLOW_BOX_EMIT_STATE.store(0, Ordering::SeqCst);
+    SAVE_FLOW_BOX_LAST_POLL.store(0, Ordering::SeqCst);
+    SAVE_FLOW_BOX_RESULT_BASELINE.store(0, Ordering::SeqCst);
 }
 
 /// Record a captured confirm-box dialog (called from the MessageBoxDialog builder hook).
+///
+/// Samples the AS-BUILT `MenuJobResult` state here, at the one moment we know for certain the
+/// user has not answered yet, so the poll can require a CHANGE rather than trusting a value
+/// that construction left behind. Also logs the two construction-time fields the old poll
+/// mistook for an answer (button count, default cursor), so a trace shows them being what they
+/// are instead of what they were read as.
 pub(crate) fn save_flow_box_note_build(box_id: usize, dialog: usize) {
+    let baseline =
+        unsafe { safe_read_i32(dialog + MSGBOX_JOB_RESULT_STATE_1E8_OFFSET) }.unwrap_or(0);
+    let button_count =
+        unsafe { safe_read_i32(dialog + MSGBOX_BUTTON_COUNT_25E8_OFFSET) }.unwrap_or(-1);
+    let default_cursor =
+        unsafe { safe_read_i32(dialog + MSGBOX_DEFAULT_CURSOR_25E0_OFFSET) }.unwrap_or(-1);
+    SAVE_FLOW_BOX_RESULT_BASELINE.store(baseline as u32 as usize, Ordering::SeqCst);
+    SAVE_FLOW_BOX_EMIT_DIALOG.store(0, Ordering::SeqCst);
+    SAVE_FLOW_BOX_EMIT_STATE.store(0, Ordering::SeqCst);
+    SAVE_FLOW_BOX_LAST_POLL.store(0, Ordering::SeqCst);
     SAVE_FLOW_BOX_DIALOG.store(dialog, Ordering::SeqCst);
     SAVE_FLOW_BOX_EXPECTED.store(SAVE_FLOW_BOX_NONE, Ordering::SeqCst);
     save_flow_box_counter_bump(&SAVE_FLOW_BOX_OPEN_COUNTS, box_id);
     append_autoload_debug(format_args!(
-        "save-flow-box: {} OPEN dialog=0x{dialog:x} (builder forwarded; product msgbox suppression bypassed for this build)",
-        save_flow_box_label(box_id)
+        "save-flow-box: {} OPEN dialog=0x{dialog:x} as_built(result_state={baseline} buttons={button_count} default_cursor={default_cursor}) emit_hook_installed={} (builder forwarded; product msgbox suppression bypassed for this build)",
+        save_flow_box_label(box_id),
+        MENU_JOB_EMIT_RESULT_INSTALLED.load(Ordering::SeqCst)
     ));
 }
