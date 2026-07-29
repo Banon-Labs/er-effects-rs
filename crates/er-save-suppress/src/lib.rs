@@ -835,7 +835,6 @@ const SAVE_SERIALIZE_CHAR_SIG: &[u8] = &[
     0x40, 0x55, 0x53, 0x56, 0x57, 0x48, 0x8D, 0x6C, 0x24, 0xA8, 0x48, 0x81, 0xEC, 0x58, 0x01, 0x00,
     0x00, 0x48, 0xC7, 0x45, 0xA0, 0xFE, 0xFF, 0xFF,
 ];
-
 /// Lane codes for [`dispatch_last_lane`]. Not an enum: it crosses an atomic and lands in
 /// telemetry JSON as a number.
 pub const SAVE_LANE_NONE: usize = 0;
@@ -959,7 +958,6 @@ type EnqueueSaveJobFn = unsafe extern "system" fn(usize, u32) -> u8;
 type PollSaveStatusFn = unsafe extern "system" fn(usize) -> u32;
 #[cfg(windows)]
 type ReleaseRequestFn = unsafe extern "system" fn(usize);
-
 #[cfg(windows)]
 static ORIG_ENQUEUE_SAVE_JOB: AtomicUsize = AtomicUsize::new(0);
 #[cfg(windows)]
@@ -1007,6 +1005,7 @@ static SERIALIZE_CALLS: AtomicU64 = AtomicU64::new(0);
 static SERIALIZE_FAILURES: AtomicU64 = AtomicU64::new(0);
 static SERIALIZE_LAST_FAIL_BYTES: AtomicU64 = AtomicU64::new(SAVE_SERIALIZE_BYTES_UNREADABLE);
 static DISPATCH_OBSERVERS_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+
 /// Resolved address of the serializer's byte counter (0 = unresolved).
 #[cfg(windows)]
 static SERIALIZE_BYTES_ADDR: AtomicUsize = AtomicUsize::new(0);
@@ -1214,7 +1213,7 @@ pub fn settle_observer_installed() -> bool {
 }
 
 /// Suppression counters as (name, value) pairs, for hosts that serialize by iteration.
-pub fn counters() -> [(&'static str, u64); 32] {
+pub fn counters() -> [(&'static str, u64); 36] {
     [
         (
             "suppress_submits_swallowed",
@@ -1354,6 +1353,25 @@ pub fn counters() -> [(&'static str, u64); 32] {
         (
             "save_bypass_completed_via_poll",
             BYPASS_COMPLETED_VIA_POLL_TOTAL.load(Ordering::SeqCst),
+        ),
+        // WHICH WRITE BRANCH RAN. Read the installed count FIRST: at 0 the two call counters
+        // can only be 0 and that is "nothing was watching", not "nothing was written". At 2,
+        // both reading 0 means no save was written at all during the run.
+        (
+            "save_write_branch_observers_installed",
+            WRITE_BRANCH_OBSERVERS_INSTALLED.load(Ordering::SeqCst) as u64,
+        ),
+        (
+            "save_write_full_rebuild_calls",
+            WRITE_FULL_REBUILD_CALLS.load(Ordering::SeqCst),
+        ),
+        (
+            "save_write_in_place_calls",
+            WRITE_IN_PLACE_CALLS.load(Ordering::SeqCst),
+        ),
+        (
+            "save_write_branch_no_trampoline",
+            WRITE_BRANCH_NO_TRAMPOLINE.load(Ordering::SeqCst),
         ),
     ]
 }
@@ -1861,10 +1879,16 @@ fn install_observers(settle: Option<usize>) {
     // bypassed save finished writing, without anything having to poll for it.
     let job_body_bound = install_save_job_body_observer();
 
+    // WHICH WRITE BRANCH RAN. Deliberately NOT folded into `dispatch_bound` above: that
+    // count is exported as `dispatch_observers_installed()` and documented as 0..=4, and
+    // widening it would silently change what an existing oracle means.
+    let write_branch_bound = install_write_branch_observers();
+
     log_message(format_args!(
         "suppress: observers bound -- quit-settle={}, save-dispatch attribution={dispatch_bound}/4 \
          (lanes FUN_14067b940/b750/b570 + serializer FUN_14067dc00, byte counter @0x{:x}), \
-         save-job-body completion={}; these only count, they change nothing",
+         save-job-body completion={}, write-branch attribution={write_branch_bound}/2 \
+         (rebuild FUN_142413860 + in-place FUN_1424142e0); these only count, they change nothing",
         if settle_queued { "yes" } else { "NO" },
         SERIALIZE_BYTES_ADDR.load(Ordering::SeqCst),
         if job_body_bound { "yes" } else { "NO" }
@@ -2410,6 +2434,7 @@ fn read_quit_phase() -> Option<usize> {
 }
 
 include!("save_job_completion.rs");
+include!("save_write_branch.rs");
 
 #[cfg(test)]
 mod tests {
@@ -2617,6 +2642,44 @@ mod tests {
         ] {
             assert!(sig.len() >= 16);
         }
+    }
+
+    #[test]
+    fn write_branch_observer_signatures_are_the_verified_1162_prologues() {
+        // Read out of `eldenring-deobf.bin` at 0x142413860 / 0x1424142e0 (file offset == RVA)
+        // and cross-checked against the 1.16.2 Ghidra dump at the same VAs (shift 0). Both
+        // open with the same seven-instruction multi-push prologue.
+        const SHARED_PUSHES: &[u8] = &[
+            0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+        ];
+        assert_eq!(&SAVE_WRITE_FULL_REBUILD_SIG[..12], SHARED_PUSHES);
+        assert_eq!(&SAVE_WRITE_IN_PLACE_SIG[..12], SHARED_PUSHES);
+        // ...and diverge at byte 14, where the frame pointer is set up: the rebuild takes
+        // `lea rbp,[rsp-0x60]` (8d 6c 24 a0) and the patcher `lea rbp,[rsp-0xd0]`
+        // (8d ac 24 30 ff ff ff). A signature that lost this would match both functions.
+        assert_eq!(
+            &SAVE_WRITE_FULL_REBUILD_SIG[12..17],
+            &[0x48, 0x8D, 0x6C, 0x24, 0xA0]
+        );
+        assert_eq!(
+            &SAVE_WRITE_IN_PLACE_SIG[12..17],
+            &[0x48, 0x8D, 0xAC, 0x24, 0x30]
+        );
+        assert_ne!(SAVE_WRITE_FULL_REBUILD_SIG, SAVE_WRITE_IN_PLACE_SIG);
+        // MinHook relocates the first 5 bytes; each of these decodes to whole instructions
+        // across at least that window and contains no relative branch.
+        for sig in [SAVE_WRITE_FULL_REBUILD_SIG, SAVE_WRITE_IN_PLACE_SIG] {
+            assert!(sig.len() >= 16);
+        }
+    }
+
+    #[test]
+    fn a_missing_write_trampoline_reports_failure_not_success() {
+        // The whole point of `SAVE_WRITE_FAILED_RESULT`: the job body treats 0 as SUCCESS
+        // (`FUN_14240d8d0(job) == 0` is its continue condition), so a degraded observer must
+        // never return 0 -- that would certify a write that never happened.
+        assert_ne!(SAVE_WRITE_FAILED_RESULT, 0);
+        assert_eq!(SAVE_WRITE_FAILED_RESULT, 6);
     }
 
     #[test]

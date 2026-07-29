@@ -579,6 +579,35 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SAVE_FLOW_COMMIT_WATCHDOG_COUNT.load(Ordering::SeqCst),
         SAVE_FLOW_COMMIT_JOB_START_TICK.load(Ordering::SeqCst),
     ));
+    // WHICH WRITE BRANCH RAN (2026-07-29). `SaveLoad2::SLSaveSession`'s job body
+    // `FUN_14240fd70` has two mutually exclusive write paths and picks between them on the
+    // result of a probe (`FUN_142413230`) that mounts the container already on disk and asks
+    // whether every supplied block still fits its existing entry:
+    //
+    //   * `oracle_save_write_in_place_calls` -- `FUN_1424142e0`, the per-block patcher, the
+    //     branch taken when everything fits. Counts ONCE PER SUPPLIED BLOCK, so it normally
+    //     climbs by more than one per save and its magnitude is not a save count.
+    //   * `oracle_save_write_full_rebuild_calls` -- `FUN_142413860`, one whole-buffer write
+    //     from offset 0, taken when a block outgrew its entry or no usable container existed.
+    //     The decompile says this should be rare in the steady state; nothing had ever
+    //     measured it, and a non-zero value on an ordinary repeat save falsifies that.
+    //
+    // Read `oracle_save_write_branch_observers_installed` FIRST. At 0 (or 1) the missing
+    // observer's counter can only read 0, and that is the absence of an observation, NOT the
+    // absence of a write. At 2, both counters reading 0 means NO SAVE WAS WRITTEN during the
+    // run -- a third outcome, distinct from either branch having fired.
+    //
+    // `oracle_save_write_branch_no_trampoline` must stay 0. Non-zero means an observer ran
+    // before its own trampoline was stored and reported the writers' failure code (6) rather
+    // than falsely reporting success (0) -- the file is untouched, but that save was refused
+    // by this instrument.
+    body.push_str(&format!(
+        "  \"oracle_save_write_branch_observers_installed\": {},\n  \"oracle_save_write_full_rebuild_calls\": {},\n  \"oracle_save_write_in_place_calls\": {},\n  \"oracle_save_write_branch_no_trampoline\": {},\n",
+        er_save_suppress::write_branch_observers_installed(),
+        er_save_suppress::write_full_rebuild_calls(),
+        er_save_suppress::write_in_place_calls(),
+        er_save_suppress::write_branch_no_trampoline(),
+    ));
     // SAVE-DISPATCH ATTRIBUTION. These read the native chain BETWEEN "the request flags are
     // set" and "an SL enqueue arrives", which the enqueue-side counters above cannot see: a
     // save lane that returns 0 touches nothing, so the request stays latched, the dispatcher
