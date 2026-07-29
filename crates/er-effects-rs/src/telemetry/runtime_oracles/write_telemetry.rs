@@ -493,12 +493,58 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SAVE_PICKER_OVERLAY_PICK_REJECT_COUNT.load(Ordering::SeqCst)
     ));
     body.push_str(&format!(
-        "  \"system_quit_continue_confirm_fresh_deser_done\": {},\n  \"system_quit_continue_confirm_fresh_deser_count\": {},\n  \"system_quit_continue_confirm_block_count\": {},\n  \"system_quit_continue_confirm_allow_count\": {},\n",
+        "  \"system_quit_continue_confirm_fresh_deser_done\": {},\n  \"system_quit_continue_confirm_fresh_deser_count\": {},\n  \"system_quit_continue_confirm_block_count\": {},\n  \"system_quit_continue_confirm_allow_count\": {},\n  \"system_quit_continue_confirm_non_switch_count\": {},\n  \"system_quit_continue_confirm_world_up_count\": {},\n  \"system_quit_continue_confirm_unproven_forward_count\": {},\n",
         SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst),
         SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT.load(Ordering::SeqCst),
-        SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst)
+        SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_CONTINUE_CONFIRM_NON_SWITCH_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_CONTINUE_CONFIRM_WORLD_UP_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_CONTINUE_CONFIRM_UNPROVEN_FORWARD_COUNT.load(Ordering::SeqCst)
     ));
+    // LOAD COUNT, STATED RATHER THAN IMPLIED. Six existing counters describe "loads" with four
+    // different values because each counts a different event class; a reader who picks one and
+    // divides gets a wrong total (a captured 3-load session reads activate=4, allow=3, epoch=2,
+    // pick=2). `oracle_total_world_loads` is the answer; `oracle_load_count_witness_signature` shows
+    // every witness side by side so the composition never has to be reconstructed by hand again; and
+    // `oracle_load_count_mismatches` is nonzero the moment those witnesses contradict each other, so
+    // a future run reports the contradiction itself instead of waiting to be noticed.
+    // See er_telemetry::load_count for the decomposition and why the epoch is an INDEX, not a count.
+    {
+        let witnesses = er_telemetry::load_count::LoadCountWitnesses {
+            continue_confirm_forwards: SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT
+                .load(Ordering::SeqCst),
+            switch_reload_commits: SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
+                .load(Ordering::SeqCst),
+            non_switch_forwards: SYSTEM_QUIT_CONTINUE_CONFIRM_NON_SWITCH_COUNT
+                .load(Ordering::SeqCst),
+            world_up_forwards: SYSTEM_QUIT_CONTINUE_CONFIRM_WORLD_UP_COUNT.load(Ordering::SeqCst),
+            continue_confirm_blocks: SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT
+                .load(Ordering::SeqCst),
+            picker_activations: SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_PICKER_COUNT
+                .load(Ordering::SeqCst),
+            slot_activations: SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_SLOT_COUNT.load(Ordering::SeqCst),
+            total_activations: SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.load(Ordering::SeqCst),
+            picker_picks: SAVE_PICKER_PICK_COUNT.load(Ordering::SeqCst),
+            picker_pick_rejects: SAVE_PICKER_PICK_REJECT_COUNT.load(Ordering::SeqCst),
+            picker_repopulates: SAVE_PICKER_REPOPULATE_COUNT.load(Ordering::SeqCst),
+        };
+        let mismatches = witnesses.mismatches();
+        er_telemetry::counters::LOAD_COUNT_MISMATCH_BITS
+            .store(mismatches.bits() as usize, Ordering::SeqCst);
+        body.push_str(&format!(
+            "  \"oracle_total_world_loads\": {},\n  \"oracle_current_load_index\": {},\n  \"oracle_load_count_mismatches\": {},\n  \"oracle_load_count_mismatch_bits\": {},\n  \"oracle_load_count_mismatch_names\": \"{}\",\n  \"oracle_load_count_witness_signature\": \"{}\",\n",
+            witnesses.total_world_loads(),
+            witnesses
+                .current_load_index()
+                .map(|index| index as isize)
+                .unwrap_or(-1),
+            mismatches.count(),
+            mismatches.bits(),
+            mismatches.names(),
+            witnesses.signature()
+        ));
+    }
     // Full-read chain terminal disarm (bd er-effects-rs-ns4n): count > 0 proves a non-commit exit
     // cleared the pending native slot request, so the in-game save manager cannot service a stale
     // request into the live world (the gaitem free-queue AV at 0x67141a). `_last_prev_slot` is the
@@ -606,6 +652,35 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         er_save_suppress::bypass_completed_via_poll_total(),
         SAVE_FLOW_COMMIT_WATCHDOG_COUNT.load(Ordering::SeqCst),
         SAVE_FLOW_COMMIT_JOB_START_TICK.load(Ordering::SeqCst),
+    ));
+    // WHICH WRITE BRANCH RAN (2026-07-29). `SaveLoad2::SLSaveSession`'s job body
+    // `FUN_14240fd70` has two mutually exclusive write paths and picks between them on the
+    // result of a probe (`FUN_142413230`) that mounts the container already on disk and asks
+    // whether every supplied block still fits its existing entry:
+    //
+    //   * `oracle_save_write_in_place_calls` -- `FUN_1424142e0`, the per-block patcher, the
+    //     branch taken when everything fits. Counts ONCE PER SUPPLIED BLOCK, so it normally
+    //     climbs by more than one per save and its magnitude is not a save count.
+    //   * `oracle_save_write_full_rebuild_calls` -- `FUN_142413860`, one whole-buffer write
+    //     from offset 0, taken when a block outgrew its entry or no usable container existed.
+    //     The decompile says this should be rare in the steady state; nothing had ever
+    //     measured it, and a non-zero value on an ordinary repeat save falsifies that.
+    //
+    // Read `oracle_save_write_branch_observers_installed` FIRST. At 0 (or 1) the missing
+    // observer's counter can only read 0, and that is the absence of an observation, NOT the
+    // absence of a write. At 2, both counters reading 0 means NO SAVE WAS WRITTEN during the
+    // run -- a third outcome, distinct from either branch having fired.
+    //
+    // `oracle_save_write_branch_no_trampoline` must stay 0. Non-zero means an observer ran
+    // before its own trampoline was stored and reported the writers' failure code (6) rather
+    // than falsely reporting success (0) -- the file is untouched, but that save was refused
+    // by this instrument.
+    body.push_str(&format!(
+        "  \"oracle_save_write_branch_observers_installed\": {},\n  \"oracle_save_write_full_rebuild_calls\": {},\n  \"oracle_save_write_in_place_calls\": {},\n  \"oracle_save_write_branch_no_trampoline\": {},\n",
+        er_save_suppress::write_branch_observers_installed(),
+        er_save_suppress::write_full_rebuild_calls(),
+        er_save_suppress::write_in_place_calls(),
+        er_save_suppress::write_branch_no_trampoline(),
     ));
     // SAVE-DISPATCH ATTRIBUTION. These read the native chain BETWEEN "the request flags are
     // set" and "an SL enqueue arrives", which the enqueue-side counters above cannot see: a

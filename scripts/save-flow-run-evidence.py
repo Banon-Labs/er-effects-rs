@@ -189,7 +189,79 @@ def report(baseline: str) -> int:
         print("  no matching oracle keys. Keys present:")
         for key in list(telemetry)[:25]:
             print("   ", key)
+
+    print()
+    print("=" * 78)
+    print("4. WHICH WRITE BRANCH RAN")
+    print("=" * 78)
+    report_write_branch(telemetry)
     return 0
+
+
+WRITE_BRANCH_INSTALLED_KEY = "oracle_save_write_branch_observers_installed"
+WRITE_BRANCH_REBUILD_KEY = "oracle_save_write_full_rebuild_calls"
+WRITE_BRANCH_IN_PLACE_KEY = "oracle_save_write_in_place_calls"
+WRITE_BRANCH_NO_TRAMPOLINE_KEY = "oracle_save_write_branch_no_trampoline"
+WRITE_BRANCH_OBSERVER_COUNT = 2
+
+
+def report_write_branch(telemetry: dict) -> None:
+    """Name which of `FUN_14240fd70`'s two write paths executed.
+
+    A bare pair of numbers is not the answer here, because zero/zero is a THIRD outcome --
+    no save was written at all -- and it is indistinguishable from "nothing was watching"
+    unless the installed count is read first. So this reports the verdict, not the counters.
+    """
+    installed = telemetry.get(WRITE_BRANCH_INSTALLED_KEY)
+    rebuild = telemetry.get(WRITE_BRANCH_REBUILD_KEY)
+    in_place = telemetry.get(WRITE_BRANCH_IN_PLACE_KEY)
+    no_trampoline = telemetry.get(WRITE_BRANCH_NO_TRAMPOLINE_KEY)
+
+    if installed is None or rebuild is None or in_place is None:
+        print("  oracle absent -- this telemetry predates the write-branch observers.")
+        print("  Nothing can be said about which write path ran.")
+        return
+
+    print("  observers installed : %s of %d" % (installed, WRITE_BRANCH_OBSERVER_COUNT))
+    print("  full rebuild  (FUN_142413860) : %s   [1 per save that took it]" % rebuild)
+    print("  in-place      (FUN_1424142e0) : %s   [1 per BLOCK, not per save]" % in_place)
+
+    if installed != WRITE_BRANCH_OBSERVER_COUNT:
+        print(
+            "  VERDICT: UNKNOWN -- only %s of %d observers bound, so a 0 above is a missing\n"
+            "           observation, NOT proof that branch did not run."
+            % (installed, WRITE_BRANCH_OBSERVER_COUNT)
+        )
+    elif rebuild == 0 and in_place == 0:
+        print(
+            "  VERDICT: NO SAVE OBSERVED -- both observers were bound and neither branch was\n"
+            "           entered, so no save was written during this run. This is NOT the same\n"
+            "           as 'no branch was taken': there was no write to take a branch for."
+        )
+    elif rebuild and in_place:
+        print(
+            "  VERDICT: BOTH BRANCHES RAN -- more than one save, or one save whose probe\n"
+            "           verdict changed between commits. Attribute per-save from the log."
+        )
+    elif in_place:
+        print(
+            "  VERDICT: IN-PLACE PATCH -- every supplied block still fit its existing entry.\n"
+            "           This is the expected steady state for a save over an existing container,\n"
+            "           and it is now measured rather than inferred."
+        )
+    else:
+        print(
+            "  VERDICT: FULL CONTAINER REBUILD -- a block outgrew its entry, or there was no\n"
+            "           usable container on disk. The decompile predicts this is rare; seeing it\n"
+            "           on an ordinary repeat save contradicts that and is worth chasing."
+        )
+
+    if no_trampoline:
+        print(
+            "  *** oracle_save_write_branch_no_trampoline = %s -- an observer ran before its\n"
+            "      trampoline was stored and REFUSED that write (returned 6). Nothing was\n"
+            "      corrupted, but that save did not happen." % no_trampoline
+        )
 
 
 def main() -> int:

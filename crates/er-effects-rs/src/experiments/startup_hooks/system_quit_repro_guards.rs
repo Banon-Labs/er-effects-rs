@@ -1839,6 +1839,11 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
             // A title-flow confirm while the old world is still up is not a state we ever drive;
             // never deserialize into a live world (that is the crash the whole switch avoids).
             // Forward and log loudly -- the in-world load guards protect the load paths.
+            // Counted, not just logged: this forward reaches the unconditional ALLOW increment
+            // below, so without its own bucket it would break the load-count decomposition
+            // (`allow == fresh_deser + non_switch + world_up`) with no way to tell which bucket lost
+            // it. See er_telemetry::load_count.
+            SYSTEM_QUIT_CONTINUE_CONFIRM_WORLD_UP_COUNT.fetch_add(1, Ordering::SeqCst);
             append_autoload_debug(format_args!(
                 "system-quit-quickload: continue_confirm called while OLD WORLD STILL UP phase={phase} selected={selected} shim=0x{shim:x} -- forwarding WITHOUT fresh deserialize (unexpected caller)"
             ));
@@ -1866,7 +1871,14 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                             OWN_STEPPER_SLOT_NONE;
                     }
                 }
-                let n = SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+                // The `#n` label comes from this branch's OWN counter. It used to come from
+                // ALLOW_COUNT, which also increments unconditionally at the tail of this hook -- so
+                // one call incremented the total-load witness TWICE and inflated it by one per
+                // unproven reload. Both captured runs had native_slot_proven=true throughout, which
+                // is the only reason their allow counts were exact.
+                let n = SYSTEM_QUIT_CONTINUE_CONFIRM_UNPROVEN_FORWARD_COUNT
+                    .fetch_add(1, Ordering::SeqCst)
+                    + 1;
                 SYSTEM_QUIT_QUICKLOAD_PHASE.store(
                     SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF,
                     Ordering::SeqCst,
@@ -1972,6 +1984,15 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                 ));
             }
         }
+    }
+    // TOTAL WORLD LOADS, boot included: exactly one increment per forwarded confirm. Every forward
+    // is classified into exactly one bucket -- switch reload (FRESH_DESER_COUNT, == the load epoch),
+    // old-world-up (WORLD_UP_COUNT), or neither, i.e. the boot/title Continue (NON_SWITCH_COUNT) --
+    // so `allow == fresh_deser + non_switch + world_up` holds by construction and any drift is a
+    // real telemetry fault. That identity is what `er_telemetry::load_count` audits, and the missing
+    // boot bucket is exactly why a 3-load session reports oracle_current_load_epoch = 2.
+    if !switch_active {
+        SYSTEM_QUIT_CONTINUE_CONFIRM_NON_SWITCH_COUNT.fetch_add(1, Ordering::SeqCst);
     }
     SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
     let orig = SYSTEM_QUIT_CONTINUE_CONFIRM_ORIG.load(Ordering::SeqCst);

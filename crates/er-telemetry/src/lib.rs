@@ -12,6 +12,7 @@
 //! telemetry never needs the product lock type.
 
 pub mod counters;
+pub mod load_count;
 pub mod log_channels;
 mod read;
 

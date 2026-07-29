@@ -753,7 +753,15 @@ pub static SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED: AtomicUsize = AtomicUsize::new(0
 pub static SYSTEM_QUIT_GAITEM_LOOKUP_ADDR: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAITEM_FINALIZE_ADDR: AtomicUsize = AtomicUsize::new(0);
+/// ProfileLoadDialog activations, BOTH kinds summed: save-file browse/pick steps plus character-slot
+/// arms. Do NOT read this as a load count -- it is per browse step and per slot arm, so
+/// `activations / 2` matches the load count only in a session that never navigated a directory. The
+/// split below is what a load-count reader wants.
 pub static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Activations routed to the DLL's save-file browser (browse steps AND file picks).
+pub static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_PICKER_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Activations that armed a character-slot load -- one per user pick of a slot.
+pub static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_SLOT_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -786,7 +794,28 @@ pub static SWITCH_SLOT_CONTROL_PRIMED: AtomicUsize = AtomicUsize::new(0);
 /// drivers never fight (which was arming extra switches AND suppressing the move-probe). 0 = not seen.
 pub static DETERMINISTIC_SWITCH_DRIVER_ACTIVE: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Forwarded `continue_confirm` calls == world loads this session, BOOT INCLUDED. The authoritative
+/// total-load witness; see [`crate::load_count`] for why the epoch is not.
+///
+/// Exactly one increment per forwarded call. It used to increment twice on the `!native_slot_proven`
+/// branch (once for that branch's `FORWARD #n` label, once at the unconditional tail), inflating the
+/// only honest total by one per unproven reload; that branch now labels itself from
+/// [`SYSTEM_QUIT_CONTINUE_CONFIRM_UNPROVEN_FORWARD_COUNT`] instead. Blocked confirms return early
+/// and never reach here.
 pub static SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Forwards from OUTSIDE the switch machine -- in practice the boot/title Continue. The gap between
+/// `SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT` and the load epoch, and the reason a 3-load session
+/// reports `oracle_current_load_epoch = 2`.
+pub static SYSTEM_QUIT_CONTINUE_CONFIRM_NON_SWITCH_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Forwards that arrived while the PREVIOUS world was still up -- a state we never drive. Logged
+/// loudly since forever but counted by nothing, so it was invisible to every load-count audit.
+pub static SYSTEM_QUIT_CONTINUE_CONFIRM_WORLD_UP_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Switch-machine forwards whose native requested-slot proof did NOT fire. Carries the `FORWARD #n`
+/// log label that used to be taken from the allow counter.
+pub static SYSTEM_QUIT_CONTINUE_CONFIRM_UNPROVEN_FORWARD_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Load-count invariant failures, as the [`crate::load_count::LoadCountMismatch`] bit set. Nonzero
+/// means the run's own load counters contradict each other and none of them should be quoted.
+pub static LOAD_COUNT_MISMATCH_BITS: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_QUICKLOAD_PHASE: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_INWORLD_ARMED_STABLE_TICKS: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_INWORLD_ARMED_DISARM_COUNT: AtomicUsize = AtomicUsize::new(0);
