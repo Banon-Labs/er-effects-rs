@@ -1338,6 +1338,19 @@ pub static SAVE_FLOW_BYPASS_ALLOWED_AT_FIRE: AtomicUsize = AtomicUsize::new(0);
 /// request flags but no SL save arrived at the suppressor inside the grace window. The user's
 /// save did NOT happen -- a hard failure oracle, distinct from a user-declined abort.
 pub static SAVE_FLOW_ENQUEUE_MISSING_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Commits that ended on the stage-8 watchdog instead of on an observed outcome. The
+/// watchdog is a BACKSTOP: it expires a stranded token and frees the UI, but it never learns
+/// what happened, so every one of these is a DEGRADED commit even when the file turns out to
+/// be fine. Non-zero means the write-completion signal did not reach the flow and the reason
+/// has to be found -- silence here used to be indistinguishable from success.
+pub static SAVE_FLOW_COMMIT_WATCHDOG_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// `er_save_suppress::save_job_starts()` sampled at the fire. Stage 8 compares against it to
+/// timestamp the tick the SL worker actually began writing.
+pub static SAVE_FLOW_SAVE_JOB_STARTS_AT_FIRE: AtomicUsize = AtomicUsize::new(0);
+/// Commit tick on which the SL worker was first seen to have STARTED writing (0 = not yet /
+/// never). Read beside the tick count in the completion line: the difference between them is
+/// how long the native write itself took, and the rest is how long the flow took to notice.
+pub static SAVE_FLOW_COMMIT_JOB_START_TICK: AtomicUsize = AtomicUsize::new(0);
 /// `er_save_suppress::dispatch_calls()` sampled at the fire. A stage-8 failure compares
 /// against it to say whether the native save dispatcher ran AT ALL after the request flags
 /// were set -- the difference between "nothing consumed the request" and "the dispatcher

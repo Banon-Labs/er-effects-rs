@@ -29,8 +29,18 @@
 //! With suppression global, the product needs exactly one sanctioned writer: the
 //! System->Quit "Save Game" row. [`arm_one_save_bypass`] arms a single-use token; the
 //! next SL save enqueue consumes it and is forwarded to the real trampoline (real
-//! submit, real write), and the status poll then latches the first terminal status for
-//! the caller ([`take_bypass_final_status`]). Everything else keeps being swallowed.
+//! submit, real write). Everything else keeps being swallowed.
+//!
+//! That bypassed save then has to be OBSERVED to completion, and there are three ways it
+//! can end, all of them funnelled into the one latch [`take_bypass_final_status`] reads:
+//!
+//!   * the SL worker's job body returns -- [`adopt_completed_save_job_as_final_status`],
+//!     the signal that needs nobody to poll and therefore always exists;
+//!   * a native poll consumer answers first (`DoSaveStuff` / the "saving..." MenuJob);
+//!   * the native enqueue refuses the submit, which is terminal on the spot.
+//!
+//! [`bypass_final_status_source`] says which of them it was, so a commit that only ended
+//! because the caller's watchdog expired stays distinguishable from one that was observed.
 //!
 //! # Why this layer and not another (1.16.2, all addresses byte-verified)
 //!
@@ -1048,6 +1058,7 @@ pub fn arm_one_save_bypass() -> bool {
     match BYPASS_TOKEN.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst) {
         Ok(_) => {
             BYPASS_FINAL_STATUS.store(BYPASS_FINAL_STATUS_NONE, Ordering::SeqCst);
+            BYPASS_FINAL_STATUS_SOURCE.store(BYPASS_STATUS_SOURCE_NONE, Ordering::SeqCst);
             BYPASS_FINAL_STATUS_FRESH.store(0, Ordering::SeqCst);
             BYPASS_COMPLETION_WATCH.store(0, Ordering::SeqCst);
             BYPASS_DECLINE_REPORTED.store(0, Ordering::SeqCst);
@@ -1193,7 +1204,7 @@ pub fn settle_observer_installed() -> bool {
 }
 
 /// Suppression counters as (name, value) pairs, for hosts that serialize by iteration.
-pub fn counters() -> [(&'static str, u64); 25] {
+pub fn counters() -> [(&'static str, u64); 32] {
     [
         (
             "suppress_submits_swallowed",
@@ -1302,6 +1313,37 @@ pub fn counters() -> [(&'static str, u64); 25] {
         (
             "save_load_consumer_last_outcome",
             LOAD_CONSUMER_LAST_OUTCOME.load(Ordering::SeqCst) as u64,
+        ),
+        // THE WRITE-COMPLETION EVENT. `save_job_starts`/`save_job_completions` are the SL
+        // worker actually picking up and finishing a save; `save_job_last_result` is the
+        // game's own verdict on it (0 = success). `save_job_observer_installed == 0` means
+        // none of the three can be trusted as absence-of-write, because nothing is watching.
+        (
+            "save_job_observer_installed",
+            SAVE_JOB_OBSERVER_INSTALLED.load(Ordering::SeqCst) as u64,
+        ),
+        ("save_job_starts", SAVE_JOB_STARTS.load(Ordering::SeqCst)),
+        (
+            "save_job_completions",
+            SAVE_JOB_COMPLETIONS.load(Ordering::SeqCst),
+        ),
+        (
+            "save_job_last_result",
+            u64::from(SAVE_JOB_LAST_RESULT.load(Ordering::SeqCst)),
+        ),
+        (
+            "save_job_no_trampoline",
+            SAVE_JOB_NO_TRAMPOLINE.load(Ordering::SeqCst),
+        ),
+        // WHICH observation completed each commit. Their sum should equal the number of
+        // successful commits; a shortfall is commits that only the watchdog ended.
+        (
+            "save_bypass_completed_via_job",
+            BYPASS_COMPLETED_VIA_JOB_TOTAL.load(Ordering::SeqCst),
+        ),
+        (
+            "save_bypass_completed_via_poll",
+            BYPASS_COMPLETED_VIA_POLL_TOTAL.load(Ordering::SeqCst),
         ),
     ]
 }
@@ -1804,12 +1846,18 @@ fn install_observers(settle: Option<usize>) {
         SERIALIZE_BYTES_ADDR.store(bytes, Ordering::SeqCst);
     }
     DISPATCH_OBSERVERS_INSTALLED.store(dispatch_bound, Ordering::SeqCst);
+
+    // THE WRITE-COMPLETION OBSERVER (see `save_job_completion.rs`): the event that says a
+    // bypassed save finished writing, without anything having to poll for it.
+    let job_body_bound = install_save_job_body_observer();
+
     log_message(format_args!(
         "suppress: observers bound -- quit-settle={}, save-dispatch attribution={dispatch_bound}/4 \
-         (lanes FUN_14067b940/b750/b570 + serializer FUN_14067dc00, byte counter @0x{:x}); these \
-         only count, they change nothing",
+         (lanes FUN_14067b940/b750/b570 + serializer FUN_14067dc00, byte counter @0x{:x}), \
+         save-job-body completion={}; these only count, they change nothing",
         if settle_queued { "yes" } else { "NO" },
-        SERIALIZE_BYTES_ADDR.load(Ordering::SeqCst)
+        SERIALIZE_BYTES_ADDR.load(Ordering::SeqCst),
+        if job_body_bound { "yes" } else { "NO" }
     ));
 }
 
@@ -1858,6 +1906,9 @@ unsafe extern "system" fn enqueue_save_job_hook(iodev: usize, opcode: u32) -> u8
         .compare_exchange(1, 0, Ordering::SeqCst, Ordering::SeqCst)
         .is_ok()
     {
+        // Baseline the worker's completion counter BEFORE the submit, so the adopter can
+        // only ever accept a job that finished after this call.
+        arm_save_job_completion_watch();
         BYPASS_COMPLETION_WATCH.store(1, Ordering::SeqCst);
         let count = BYPASS_ALLOWED_TOTAL.fetch_add(1, Ordering::SeqCst) + 1;
         let orig = ORIG_ENQUEUE_SAVE_JOB.load(Ordering::SeqCst);
@@ -1865,6 +1916,7 @@ unsafe extern "system" fn enqueue_save_job_hook(iodev: usize, opcode: u32) -> u8
             // Unreachable via `install` (armed implies the trampoline bound); kept loud
             // because this exact path failing silently would eat the user's one save.
             BYPASS_ALLOWED_FAILED_TOTAL.fetch_add(1, Ordering::SeqCst);
+            latch_submit_failure_as_final_status("enqueue trampoline unset");
             log_message(format_args!(
                 "suppress: BUG -- bypass allow #{count} with enqueue trampoline unset; \
                  the user's save was NOT submitted"
@@ -1880,6 +1932,11 @@ unsafe extern "system" fn enqueue_save_job_hook(iodev: usize, opcode: u32) -> u8
         let submitted = unsafe { original(iodev, opcode) };
         if submitted == 0 {
             let failed = BYPASS_ALLOWED_FAILED_TOTAL.fetch_add(1, Ordering::SeqCst) + 1;
+            // No job was queued, so no body will ever run and no poll will ever go
+            // terminal: this commit's outcome is already decided and waiting out a watchdog
+            // would only delay reporting it. Latch the failure here, at the one place that
+            // saw it, instead of inferring it later from silence.
+            latch_submit_failure_as_final_status("native enqueue returned 0");
             log_message(format_args!(
                 "suppress: bypass allow #{count} FAILED -- native enqueue returned 0 \
                  (failure #{failed}); the user's save was NOT submitted"
@@ -1998,12 +2055,21 @@ unsafe extern "system" fn poll_save_status_hook(iodev: usize) -> u32 {
     let original: PollSaveStatusFn = unsafe { core::mem::transmute(orig) };
     let raw = unsafe { original(iodev) };
 
-    if BYPASS_COMPLETION_WATCH.load(Ordering::SeqCst) != 0 && raw != SL_STATUS_IN_FLIGHT {
-        BYPASS_COMPLETION_WATCH.store(0, Ordering::SeqCst);
+    if BYPASS_COMPLETION_WATCH.load(Ordering::SeqCst) != 0
+        && raw != SL_STATUS_IN_FLIGHT
+        && BYPASS_COMPLETION_WATCH
+            .compare_exchange(1, 0, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    {
+        // RAW, never the rewritten value: `decide_status` turns a 4 ("no request") into a
+        // 0 ("success") for the game's benefit, and adopting that here would report a
+        // commit whose request had already vanished as a successful save.
         BYPASS_FINAL_STATUS.store(raw, Ordering::SeqCst);
+        BYPASS_FINAL_STATUS_SOURCE.store(BYPASS_STATUS_SOURCE_POLL, Ordering::SeqCst);
         BYPASS_FINAL_STATUS_FRESH.store(1, Ordering::SeqCst);
+        BYPASS_COMPLETED_VIA_POLL_TOTAL.fetch_add(1, Ordering::SeqCst);
         log_message(format_args!(
-            "suppress: bypassed save terminal status={raw} (0=success)"
+            "suppress: bypassed save terminal status={raw} (0=success), observed by a native poll consumer"
         ));
         publish_snapshot();
     }
@@ -2333,6 +2399,8 @@ fn read_quit_phase() -> Option<usize> {
     Some((raw & 0xff) as usize)
 }
 
+include!("save_job_completion.rs");
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2375,6 +2443,55 @@ mod tests {
                 "status {raw} was rewritten"
             );
         }
+    }
+
+    #[test]
+    fn a_job_result_only_maps_to_success_when_it_is_literally_zero() {
+        // 0 is the value `FUN_14240ebd0` writes at construction and no failure path
+        // overwrites. Everything else -- including the "we could not read it" stand-in --
+        // has to come out as a non-success status, or a save that did not land could be
+        // reported as one that did.
+        assert_eq!(save_job_result_to_status(0), SL_STATUS_SUCCESS);
+        for result in [
+            1_u32,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            0x14,
+            SAVE_JOB_RESULT_UNREADABLE,
+        ] {
+            assert_ne!(
+                save_job_result_to_status(result),
+                SL_STATUS_SUCCESS,
+                "job result {result} was mapped to success"
+            );
+        }
+    }
+
+    #[test]
+    fn job_results_map_through_the_polls_own_terminal_table() {
+        // `FUN_140e6e430` case 0x14, verbatim.
+        assert_eq!(save_job_result_to_status(3), 7);
+        assert_eq!(save_job_result_to_status(4), 8);
+        assert_eq!(save_job_result_to_status(2), 8);
+        assert_eq!(save_job_result_to_status(7), 2);
+        assert_eq!(save_job_result_to_status(5), 9);
+    }
+
+    #[test]
+    fn adoption_does_nothing_without_a_live_completion_watch() {
+        // The watch is only set when our one-shot token was consumed by a real enqueue.
+        // Without it there is no commit to complete, so a job completion from anywhere
+        // else must not be able to latch a status.
+        BYPASS_COMPLETION_WATCH.store(0, Ordering::SeqCst);
+        SAVE_JOB_COMPLETIONS.store(99, Ordering::SeqCst);
+        SAVE_JOB_COMPLETIONS_AT_ALLOW.store(0, Ordering::SeqCst);
+        assert_eq!(adopt_completed_save_job_as_final_status(), None);
     }
 
     #[test]
@@ -2454,6 +2571,16 @@ mod tests {
         assert!(SL_ENQUEUE_SAVE_JOB_SIG.len() >= 16);
         assert!(SL_POLL_SAVE_STATUS_SIG.len() >= 16);
         assert!(SL_RELEASE_REQUEST_SIG.len() >= 16);
+        // `SaveLoad2::SLSaveSession`'s job body at 0x14240fd70, read the same way:
+        // `mov rax,rsp; push rbp; push rdi; push r12; push r14; push r15`. Six whole
+        // instructions before MinHook's 5-byte window closes, and no relative branch.
+        assert_eq!(
+            &SL_SAVE_JOB_BODY_SIG[..11],
+            &[
+                0x48, 0x8B, 0xC4, 0x55, 0x57, 0x41, 0x54, 0x41, 0x56, 0x41, 0x57
+            ]
+        );
+        assert!(SL_SAVE_JOB_BODY_SIG.len() >= 16);
     }
 
     #[test]

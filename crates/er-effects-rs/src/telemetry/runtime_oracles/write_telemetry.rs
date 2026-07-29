@@ -481,6 +481,36 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         // The game said the save succeeded and the file check disagreed. Hard product failure.
         SAVE_FLOW_COMMIT_VERIFY_FAIL_COUNT.load(Ordering::SeqCst),
     ));
+    // WRITE-COMPLETION oracles (2026-07-28). `oracle_save_job_*` come from the observer on
+    // `SaveLoad2::SLSaveSession`'s job body: the SL worker picking a save up (`starts`),
+    // putting it down (`completions`) and the result the game recorded for it
+    // (`last_result`, 0 = success, 4294967295 = the result object was unreadable). They are
+    // the reason a successful commit no longer has to wait for a poll consumer that may not
+    // exist. Read them like this:
+    //
+    //   * `observer_installed == false` -> completion detection is back to the watchdog for
+    //     the whole session; treat every commit in that run as degraded.
+    //   * `final_status_source` names WHICH observation ended the last commit
+    //     ("worker-job-completion", "native-poll", "native-enqueue-failed", or "none").
+    //   * `commit_watchdog_count > 0` -> that many commits ended without ever being
+    //     observed. That is a FAILURE of this instrumentation even when the file is fine,
+    //     and `commit_job_start_tick` (the tick the writer began, 0 = never seen to start)
+    //     is the first thing to look at.
+    body.push_str(&format!(
+        "  \"oracle_save_job_observer_installed\": {},\n  \"oracle_save_job_starts\": {},\n  \"oracle_save_job_completions\": {},\n  \"oracle_save_job_last_result\": {},\n  \"oracle_save_job_no_trampoline\": {},\n  \"oracle_save_bypass_final_status_source\": \"{}\",\n  \"oracle_save_bypass_completed_via_job\": {},\n  \"oracle_save_bypass_completed_via_poll\": {},\n  \"oracle_save_flow_commit_watchdog_count\": {},\n  \"oracle_save_flow_commit_job_start_tick\": {},\n",
+        er_save_suppress::save_job_observer_installed(),
+        er_save_suppress::save_job_starts(),
+        er_save_suppress::save_job_completions(),
+        er_save_suppress::save_job_last_result(),
+        er_save_suppress::save_job_no_trampoline(),
+        er_save_suppress::bypass_final_status_source_label(
+            er_save_suppress::bypass_final_status_source()
+        ),
+        er_save_suppress::bypass_completed_via_job_total(),
+        er_save_suppress::bypass_completed_via_poll_total(),
+        SAVE_FLOW_COMMIT_WATCHDOG_COUNT.load(Ordering::SeqCst),
+        SAVE_FLOW_COMMIT_JOB_START_TICK.load(Ordering::SeqCst),
+    ));
     // SAVE-DISPATCH ATTRIBUTION. These read the native chain BETWEEN "the request flags are
     // set" and "an SL enqueue arrives", which the enqueue-side counters above cannot see: a
     // save lane that returns 0 touches nothing, so the request stays latched, the dispatcher

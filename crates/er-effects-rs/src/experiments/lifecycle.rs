@@ -574,6 +574,14 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
             usize::try_from(er_save_suppress::submits_swallowed()).unwrap_or(usize::MAX),
             Ordering::SeqCst,
         );
+        // The SL worker's own start counter, plus a cleared start-tick, so stage 8 can say
+        // WHEN the native write began and separate "the write is slow" from "we were slow
+        // to notice it finished".
+        SAVE_FLOW_SAVE_JOB_STARTS_AT_FIRE.store(
+            usize::try_from(er_save_suppress::save_job_starts()).unwrap_or(usize::MAX),
+            Ordering::SeqCst,
+        );
+        SAVE_FLOW_COMMIT_JOB_START_TICK.store(0, Ordering::SeqCst);
         append_autoload_debug(format_args!(
             "save-flow: FIRED forced save request (throttle skipped) after {ticks} gate ticks; readback b72={b72} b73={b73}"
         ));
@@ -832,10 +840,40 @@ fn save_flow_retract_stuck_request(reason: &str) {
 }
 
 /// Stage 8 COMMIT_WAIT: the forced request is in flight through the native pump with the
-/// bypass token armed. Completion = the er-save-suppress poll watch captured the first
-/// post-allow terminal status (0 = success). The watchdog expires a stranded token so a
-/// failed fire can never leave a one-shot bypass armed for some later native save.
+/// bypass token armed.
+///
+/// COMPLETION IS AN EVENT, NOT A TIMEOUT (2026-07-28). This used to wait exclusively on the
+/// status poll's terminal answer, and a measured commit that wrote and verified the user's
+/// save reported `bypass_final_status = null` and `commit_complete = 0` twenty-one seconds
+/// later, ending on the watchdog: the Save Game row is gated on the flow being IDLE, so a
+/// successful save froze the row for the whole watchdog AND under-reported itself as a
+/// non-completion. The poll cannot be the primary signal here -- see the write-completion
+/// section in `er-save-suppress` for why (its "terminal" needs the worker to have DEQUEUED
+/// the job, and its only two consumers are a MenuJob this flow deliberately closes before
+/// firing and a `MoveMapStep` branch gated on the game still thinking a save is in flight).
+///
+/// The ordering below is deliberate and load-bearing:
+///
+///   1. adopt the SL worker's job-body completion, if one has arrived -- the event that
+///      says the write finished, produced by the game on its own writer thread;
+///   2. consume any terminal status (from step 1, from a native poll consumer, or from a
+///      submit the native enqueue refused) and issue the ONE verdict, file check included;
+///   3. only then consider the enqueue-grace bailout, and only when the one-shot token can
+///      be revoked, which is what proves nothing is in flight;
+///   4. the watchdog last, as a backstop that is counted as a DEGRADED outcome.
 fn save_flow_commit_wait_tick(ticks: usize) {
+    // Timestamp the moment the SL worker picked the job up. Cheap, and it is the number
+    // that says whether a long commit was a slow WRITE or a slow OBSERVATION.
+    if SAVE_FLOW_COMMIT_JOB_START_TICK.load(Ordering::SeqCst) == 0
+        && usize::try_from(er_save_suppress::save_job_starts()).unwrap_or(usize::MAX)
+            > SAVE_FLOW_SAVE_JOB_STARTS_AT_FIRE.load(Ordering::SeqCst)
+    {
+        SAVE_FLOW_COMMIT_JOB_START_TICK.store(ticks, Ordering::SeqCst);
+    }
+    // POSITIVE EVIDENCE ONLY: this latches a status when, and only when, a save job that
+    // started after our own submit has RETURNED from its body, and it reports whatever
+    // result the game itself recorded for it. It cannot fire on "no failure seen yet".
+    let _ = er_save_suppress::adopt_completed_save_job_as_final_status();
     if let Some(status) = er_save_suppress::take_bypass_final_status() {
         // THE FILE CHECK RUNS FIRST AND HAS THE LAST WORD (2026-07-28). `status` is the game's SL
         // job result -- its opinion of its own bookkeeping, which run 4 reported as 0 (success) for
@@ -855,17 +893,28 @@ fn save_flow_commit_wait_tick(ticks: usize) {
             || "no commit window was armed, so no file could be checked".to_owned(),
             |verdict| verdict.summary.clone(),
         );
+        // Name the observation that ended the commit and when the writer started, so a slow
+        // commit can be attributed without another run: `write started tick N of M` is the
+        // native write's own duration, and the remainder is detection latency.
+        let source = er_save_suppress::bypass_final_status_source();
+        let source_label = er_save_suppress::bypass_final_status_source_label(source);
+        let started = SAVE_FLOW_COMMIT_JOB_START_TICK.load(Ordering::SeqCst);
+        let timing = if started == 0 {
+            "the SL worker was never seen to start writing".to_owned()
+        } else {
+            format!("the SL worker started writing on commit tick {started} of {ticks}")
+        };
         if status_ok && file_ok {
             SAVE_FLOW_COMMIT_COMPLETE_COUNT.fetch_add(1, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "save-flow: COMMIT COMPLETE after {ticks} commit ticks -- the bypassed save reported terminal status 0 AND the file VERIFIED on disk: {detail}"
+                "save-flow: COMMIT COMPLETE after {ticks} commit ticks -- the bypassed save reported terminal status 0 (observed via {source_label}) AND the file VERIFIED on disk; {timing}: {detail}"
             ));
         } else {
             if status_ok {
                 SAVE_FLOW_COMMIT_VERIFY_FAIL_COUNT.fetch_add(1, Ordering::SeqCst);
             }
             append_autoload_debug(format_args!(
-                "save-flow: COMMIT FAILED after {ticks} commit ticks -- terminal status {status} (0=success), file check {file_state}: {detail}. The user's save did NOT land"
+                "save-flow: COMMIT FAILED after {ticks} commit ticks -- terminal status {status} (0=success, observed via {source_label}), file check {file_state}; {timing}: {detail}. The user's save did NOT land"
             ));
         }
         save_dest_reset("commit terminal status");
@@ -887,10 +936,26 @@ fn save_flow_commit_wait_tick(ticks: usize) {
     //   * unconsumed -> the fire set the native request flags but no save enqueue ever reached the
     //     suppressor, so nothing is in flight, the flow is already dead, and holding the row
     //     hostage protects nothing. Report the failure and free the UI immediately.
-    let consumed = usize::try_from(er_save_suppress::bypass_allowed_total()).unwrap_or(usize::MAX)
-        > SAVE_FLOW_BYPASS_ALLOWED_AT_FIRE.load(Ordering::SeqCst);
+    let allowed_since_fire = || {
+        usize::try_from(er_save_suppress::bypass_allowed_total()).unwrap_or(usize::MAX)
+            > SAVE_FLOW_BYPASS_ALLOWED_AT_FIRE.load(Ordering::SeqCst)
+    };
+    let consumed = allowed_since_fire();
     if !consumed && ticks >= SAVE_FLOW_ENQUEUE_GRACE_TICKS {
+        // THE TOKEN IS THE INTERLOCK (2026-07-28). The read above and this call are not
+        // atomic together: an enqueue can arrive between them and take the token, and this
+        // branch would then retract the request flags and free the row while a genuine write
+        // was starting -- the one outcome worse than waiting. Both sides take the token with
+        // the same CAS, so exactly one can win, and only winning it proves nothing is or will
+        // be in flight. A false here with the token now consumed means the enqueue won: keep
+        // waiting for the write it started.
         let expired = er_save_suppress::expire_bypass_if_pending();
+        if !expired && allowed_since_fire() {
+            append_autoload_debug(format_args!(
+                "save-flow: enqueue-grace bailout STOOD DOWN at {ticks} ticks -- a save enqueue took the one-shot token while the bailout was deciding, so a real write is now in flight; waiting for it instead of retracting it"
+            ));
+            return;
+        }
         SAVE_FLOW_ENQUEUE_MISSING_COUNT.fetch_add(1, Ordering::SeqCst);
         append_autoload_debug(format_args!(
             "save-flow: FIRE WENT NOWHERE -- no save enqueue reached the writer within {ticks} ticks (token_expired={expired}); the user's save did NOT happen. {}. Ending the flow now so the Save Game row is usable again instead of blocking for the full {SAVE_BYPASS_WATCHDOG_TICKS}-tick watchdog",
@@ -907,13 +972,22 @@ fn save_flow_commit_wait_tick(ticks: usize) {
     }
     if ticks >= SAVE_BYPASS_WATCHDOG_TICKS {
         let expired = er_save_suppress::expire_bypass_if_pending();
+        // A BACKSTOP REACHED IS A DEGRADED OUTCOME, AND IT IS COUNTED. Every other exit from
+        // this stage knows what happened; this one is defined by never having found out, and
+        // the file check below cannot repair that (it scores bytes, not the write's own
+        // verdict). Counting it is what stops "we never observed the save" from looking like
+        // silence in the telemetry.
+        SAVE_FLOW_COMMIT_WATCHDOG_COUNT.fetch_add(1, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "save-flow: COMMIT WATCHDOG after {ticks} ticks -- {}; the user's save did NOT happen. {}",
+            "save-flow: COMMIT WATCHDOG after {ticks} ticks -- {}; the user's save did NOT happen. Write-completion observer installed={}, save jobs started/completed since boot={}/{}. {}",
             if expired {
                 "one-shot bypass token was still pending and has been expired"
             } else {
                 "token was consumed but no terminal status was observed"
             },
+            er_save_suppress::save_job_observer_installed(),
+            er_save_suppress::save_job_starts(),
+            er_save_suppress::save_job_completions(),
             save_flow_fire_failure_reason()
         ));
         // A destination write may still have landed (the degraded fail-open path has no token to
