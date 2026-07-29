@@ -196,6 +196,8 @@ pub(crate) const SYSTEM_QUIT_GAITEM_FINALIZE_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED_YES: usize = 1;
 pub(crate) const SYSTEM_QUIT_GAITEM_FINALIZE_DISABLED: usize = 2;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_PICKER_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_SLOT_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_BLOCK_COUNT;
@@ -286,7 +288,15 @@ pub(crate) use er_telemetry::counters::SWITCH_SLOT_CONTROL_PRIMED;
 /// character and the post-load autosave would then write it back to the picked slot.
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT;
 /// Count of confirms forwarded to the native original (boot autoload, normal play, or post-deser).
+/// This is the AUTHORITATIVE total world-load count for a session, boot included -- unlike the load
+/// epoch, which skips the boot load. See `er_telemetry::load_count`.
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT;
+/// Bucket: forwards from outside the switch machine (the boot/title Continue).
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_NON_SWITCH_COUNT;
+/// Bucket: forwards that arrived while the previous world was still up.
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_WORLD_UP_COUNT;
+/// Switch forwards whose native requested-slot proof did not fire (carries the `FORWARD #n` label).
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_UNPROVEN_FORWARD_COUNT;
 pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE: usize = 0;
 pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED: usize = 1;
 pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED: usize = 2;
