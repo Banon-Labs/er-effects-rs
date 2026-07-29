@@ -546,11 +546,13 @@ unsafe fn system_quit_ingest_picked_save(selected_path: &str) -> bool {
         ));
         return false;
     }
-    let ext_ok = Path::new(selected_path).extension().is_some_and(|ext| {
-        allowed_exts
-            .iter()
-            .any(|allowed| ext.eq_ignore_ascii_case(allowed))
-    });
+    // THE shared extension filter (`save_picker.rs`), not a second copy: the in-game listing, the
+    // OS dialog's post-return check and this ingest gate must not be able to disagree about which
+    // container flavors the active runtime accepts.
+    let ext_ok = crate::experiments::save_picker::save_picker_extension_accepted(
+        Path::new(selected_path),
+        allowed_exts,
+    );
     if !ext_ok {
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
         append_autoload_debug(format_args!(

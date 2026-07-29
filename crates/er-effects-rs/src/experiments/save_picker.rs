@@ -262,31 +262,100 @@ fn enumerate_drives() -> Vec<PathBuf> {
         .collect()
 }
 
-/// Save-file rows are only useful if the selected container can offer at least one LOADABLE
-/// character slot, and the browse rows display per-file character info -- so parse the active
-/// character slots (slot/name/level; `USER_DATA010.active_slot` occupancy + PlayerGameData locate,
-/// the same `parse_save_character_slots` pass the character sub-picker runs on pick) in ONE read of
-/// the file bytes at listing-build time and cache the result in the entry. Files with no loadable
-/// character (no active slot, or only empty-like leftovers the autoload's real-character
-/// fingerprint would reject anyway) are hidden; these multi-MB containers are read exactly once
-/// per listing build, never per frame.
-fn save_file_character_slots(path: &Path) -> Option<Vec<crate::experiments::SaveSlotInfo>> {
+/// Why a candidate path is not something this picker would offer for a given intent.
+///
+/// Discriminants are explicit and start at 1 so `as usize` can be exported as a telemetry
+/// oracle where 0 means "no rejection recorded".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PickRejection {
+    /// A directory, or (load intent) a path that is not a file at all.
+    NotAFile = 1,
+    /// Extension outside the active runtime flavor's filter.
+    WrongExtension = 2,
+    /// The bytes could not be read.
+    Unreadable = 3,
+    /// Read, but not a BND4 save container.
+    NotBnd4 = 4,
+    /// A BND4 container with no slot the autoload would accept as a real character.
+    NoLoadableCharacter = 5,
+    /// The path did not round-trip through UTF-8, so nothing downstream can name it.
+    PathNotUtf8 = 6,
+    /// (Destination intent) the folder the file would live in does not exist.
+    ParentMissing = 7,
+}
+
+/// True when `path`'s extension is one the active runtime flavor accepts. THE extension filter --
+/// the in-game listing, the OS dialog's post-return check and the ingest pipeline all call this,
+/// so a cross-flavor container cannot be accepted by one surface and refused by another.
+pub(crate) fn save_picker_extension_accepted(path: &Path, extensions: &[&str]) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            extensions
+                .iter()
+                .any(|allowed| ext.eq_ignore_ascii_case(allowed))
+        })
+}
+
+/// THE picker's notion of "this path is offerable", parameterised by intent. There is deliberately
+/// only one: the in-game listing predicate and the OS dialog's post-return check are this same
+/// function, so a container one surface hides cannot be a container the other loads.
+///
+/// On success the container's active characters come back, so the caller pays ONE read.
+///
+/// **`LoadSource`** -- file, extension, BND4, and at least one LOADABLE character slot
+/// (`USER_DATA010.active_slot` occupancy + PlayerGameData locate + `level >= 1`, the same
+/// `parse_save_character_slots` pass the character sub-picker runs on pick). Containers with no
+/// loadable character -- no active slot, or only empty-like leftovers the autoload's real-character
+/// fingerprint would reject anyway -- are rejected, which for the in-game listing means "not
+/// listed" and for the OS dialog means "reopen".
+///
+/// **`SaveDestination`** -- extension plus an existing parent directory, and NOT the slot parse.
+/// Three reasons, each load-bearing: `[ new ]` and Save-As both name a file that does not exist
+/// yet; an overwrite target needs no active character slot; and hiding a slotless or unreadable
+/// existing file would let `[ new ]` silently clobber it. A destination whose bytes do parse still
+/// returns its characters so a row can show who lives in the file. This asymmetry is what keeps
+/// "keep a bogus container out of the LOAD path" from also making saving to a new file impossible.
+pub(crate) fn save_picker_accepts(
+    path: &Path,
+    intent: &PickerIntent,
+    extensions: &[&str],
+) -> Result<Vec<crate::experiments::SaveSlotInfo>, PickRejection> {
+    if path.to_str().is_none() {
+        return Err(PickRejection::PathNotUtf8);
+    }
+    if path.is_dir() {
+        return Err(PickRejection::NotAFile);
+    }
+    if !save_picker_extension_accepted(path, extensions) {
+        return Err(PickRejection::WrongExtension);
+    }
+    if matches!(intent, PickerIntent::SaveDestination { .. }) {
+        if !path
+            .parent()
+            .is_some_and(|parent| !parent.as_os_str().is_empty() && parent.is_dir())
+        {
+            return Err(PickRejection::ParentMissing);
+        }
+        // Best effort only: an unreadable or unparseable destination is still a legal destination.
+        return Ok(std::fs::read(path)
+            .map(|bytes| crate::experiments::parse_save_character_slots(&bytes))
+            .unwrap_or_default());
+    }
+    if !path.is_file() {
+        return Err(PickRejection::NotAFile);
+    }
     let Ok(bytes) = std::fs::read(path) else {
-        append_autoload_debug(format_args!(
-            "save-picker: hiding '{}' -- failed to read save while parsing character slots",
-            path.display()
-        ));
-        return None;
+        return Err(PickRejection::Unreadable);
     };
+    if er_save_loader::bnd4::parse_entries(&bytes).is_err() {
+        return Err(PickRejection::NotBnd4);
+    }
     let chars = crate::experiments::parse_save_character_slots(&bytes);
     if chars.is_empty() {
-        append_autoload_debug(format_args!(
-            "save-picker: hiding '{}' -- save has no loadable character slots",
-            path.display()
-        ));
-        return None;
+        return Err(PickRejection::NoLoadableCharacter);
     }
-    Some(chars)
+    Ok(chars)
 }
 
 impl SavePickerModel {
@@ -550,6 +619,12 @@ impl SavePickerModel {
     pub(crate) fn refresh(&mut self) {
         self.entries.clear();
         self.page = 0;
+        // Owned copies so the per-entry predicate borrows nothing from `self` while the listing is
+        // being built. `save_picker_accepts` is the SAME function the OS dialog's post-return check
+        // calls, which is what keeps the two surfaces from disagreeing about what a save is.
+        let intent = self.intent.clone();
+        let filters = self.extensions.clone();
+        let filter_refs: Vec<&str> = filters.iter().map(String::as_str).collect();
         let read = match std::fs::read_dir(&self.current_dir) {
             Ok(read) => read,
             Err(err) => {
@@ -583,33 +658,22 @@ impl SavePickerModel {
                     name: name.to_owned(),
                     path: path.clone(),
                 });
-            } else if path.is_file()
-                && path
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .is_some_and(|ext| {
-                        self.extensions
-                            .iter()
-                            .any(|allowed| ext.eq_ignore_ascii_case(allowed))
-                    })
-                // Occupancy filtering is a LOAD-source concern only. A destination row is an
-                // overwrite target, so it needs no active character slot -- hiding a slotless or
-                // unreadable existing file would let `[ new ]` silently clobber it. Destination
-                // listings still run the same single-read parse so their file rows can show who
-                // lives in the file, but a container the parse rejects stays LISTED, with no
-                // characters, instead of disappearing.
-                && let Some(chars) = (if self.is_destination() {
-                    Some(save_file_character_slots(&path).unwrap_or_default())
-                } else {
-                    save_file_character_slots(&path)
-                })
-            {
-                files.push(PickerEntry::File {
+                continue;
+            }
+            match save_picker_accepts(&path, &intent, &filter_refs) {
+                Ok(chars) => files.push(PickerEntry::File {
                     name: name.to_owned(),
                     path: path.clone(),
                     modified: entry.metadata().ok().and_then(|meta| meta.modified().ok()),
                     chars,
-                });
+                }),
+                // The overwhelmingly common case: an ordinary file that is not a save container at
+                // all. Logging it would drown the listing diagnostic in every folder's contents.
+                Err(PickRejection::WrongExtension) => {}
+                Err(reason) => append_autoload_debug(format_args!(
+                    "save-picker: hiding '{}' -- {reason:?}",
+                    path.display()
+                )),
             }
         }
         dirs.sort_by(|a, b| {
@@ -1049,6 +1113,293 @@ mod tests {
             dir,
             files,
         )
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // SYNTHETIC SAVE CONTAINERS. Deterministic generators, never captured game bytes (repo rule:
+    // no game-derived binaries in tree, test fixtures included). They reproduce only the fields
+    // the readers under test actually parse: the BND4 header/entry index, `USER_DATA010`'s
+    // active-slot bytes, and a PlayerGameData block placed where the FACE-anchored locator scans.
+    // -----------------------------------------------------------------------------------------
+
+    /// PlayerGameData field offsets the plausibility core reads (`loading_cover_save_slot.rs`).
+    const PGD_HEALTH: usize = 0x08;
+    const PGD_MAX_HEALTH: usize = 0x0c;
+    const PGD_BASE_MAX_HEALTH: usize = 0x10;
+    const PGD_STAT_BASE: usize = 0x34;
+    const PGD_STAT_COUNT: usize = 8;
+    const PGD_LEVEL: usize = 0x60;
+    const PGD_NAME: usize = 0x94;
+    const PGD_GENDER: usize = 0xb6;
+    const PGD_MAX_CRIMSON: usize = 0xf9;
+    const PGD_MAX_CERULEAN: usize = 0xfa;
+    /// The locator finds `FACE` and scans back over `[face-0xa600, face-0xa000]`; putting the
+    /// block at exactly `face - 0xa000` makes the accepted offset the only plausible one, because
+    /// every other candidate reads zeros and fails the name/level checks.
+    const PGD_AT: usize = 0x100;
+    const FACE_AT: usize = PGD_AT + 0xa000;
+    const SLOT_BODY_BYTES: usize = FACE_AT + 0x10;
+    /// `USER_DATA010` body: a zero-length `CSMenuSystemSaveLoad` blob at `0x150`, so the 10
+    /// active-slot bytes sit at `0x154`.
+    const SYSTEM_BODY_BYTES: usize = 0x200;
+    const SYSTEM_MENU_SAVE_LOAD_LEN: usize = 0x150;
+    const SYSTEM_ACTIVE_SLOTS: usize = 0x154;
+
+    /// One character slot's plaintext body carrying a locatable, plausible character.
+    fn synthetic_slot_body(name: &str, level: u32) -> Vec<u8> {
+        let mut body = vec![0_u8; SLOT_BODY_BYTES];
+        body[FACE_AT..FACE_AT + 4].copy_from_slice(b"FACE");
+        let put32 = |body: &mut Vec<u8>, at: usize, v: u32| {
+            body[PGD_AT + at..PGD_AT + at + 4].copy_from_slice(&v.to_le_bytes());
+        };
+        put32(&mut body, PGD_HEALTH, 1000);
+        put32(&mut body, PGD_MAX_HEALTH, 1000);
+        put32(&mut body, PGD_BASE_MAX_HEALTH, 1000);
+        for index in 0..PGD_STAT_COUNT {
+            put32(&mut body, PGD_STAT_BASE + index * 4, 10);
+        }
+        put32(&mut body, PGD_LEVEL, level);
+        body[PGD_AT + PGD_GENDER] = 0;
+        body[PGD_AT + PGD_MAX_CRIMSON] = 4;
+        body[PGD_AT + PGD_MAX_CERULEAN] = 3;
+        for (index, unit) in name.encode_utf16().take(15).enumerate() {
+            let at = PGD_AT + PGD_NAME + index * 2;
+            body[at..at + 2].copy_from_slice(&unit.to_le_bytes());
+        }
+        body
+    }
+
+    /// A structurally complete BND4 save container. `slots[i]` is `Some((name, level))` for an
+    /// ACTIVE character slot and `None` for an inactive one; a `USER_DATA010` entry always carries
+    /// the resulting active-slot bytes.
+    fn synthetic_save_container(slots: &[Option<(&str, u32)>]) -> Vec<u8> {
+        const HEADER_LEN: usize = 0x40;
+        const ENTRY_STRIDE: usize = 0x20;
+        const MD5_LEN: usize = 0x10;
+        let mut bodies: Vec<(String, Vec<u8>)> = slots
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, present)| {
+                present.map(|(name, level)| {
+                    (
+                        format!("USER_DATA{slot:03}"),
+                        synthetic_slot_body(name, level),
+                    )
+                })
+            })
+            .collect();
+        let mut system = vec![0_u8; SYSTEM_BODY_BYTES];
+        system[SYSTEM_MENU_SAVE_LOAD_LEN..SYSTEM_MENU_SAVE_LOAD_LEN + 4]
+            .copy_from_slice(&0_u32.to_le_bytes());
+        for (slot, present) in slots.iter().enumerate().take(PICKER_ROW_COUNT) {
+            system[SYSTEM_ACTIVE_SLOTS + slot] = u8::from(present.is_some());
+        }
+        bodies.push(("USER_DATA010".to_owned(), system));
+
+        let names_at = HEADER_LEN + bodies.len() * ENTRY_STRIDE;
+        let name_blobs: Vec<Vec<u8>> = bodies
+            .iter()
+            .map(|(name, _)| {
+                let mut out: Vec<u8> = name.encode_utf16().flat_map(u16::to_le_bytes).collect();
+                out.extend_from_slice(&[0, 0]);
+                out
+            })
+            .collect();
+        let data_at = names_at + name_blobs.iter().map(Vec::len).sum::<usize>();
+        let total = data_at
+            + bodies
+                .iter()
+                .map(|(_, body)| MD5_LEN + body.len())
+                .sum::<usize>();
+        let mut out = vec![0_u8; total];
+        out[..4].copy_from_slice(b"BND4");
+        out[0x0c..0x10].copy_from_slice(&(bodies.len() as i32).to_le_bytes());
+        out[0x10..0x18].copy_from_slice(&(HEADER_LEN as i64).to_le_bytes());
+        out[0x20..0x28].copy_from_slice(&(ENTRY_STRIDE as i64).to_le_bytes());
+        let mut name_cursor = names_at;
+        let mut data_cursor = data_at;
+        for (index, ((_, body), name_blob)) in bodies.iter().zip(&name_blobs).enumerate() {
+            let entry = HEADER_LEN + index * ENTRY_STRIDE;
+            let entry_size = MD5_LEN + body.len();
+            out[entry + 0x08..entry + 0x10].copy_from_slice(&(entry_size as i64).to_le_bytes());
+            out[entry + 0x10..entry + 0x14].copy_from_slice(&(data_cursor as i32).to_le_bytes());
+            out[entry + 0x14..entry + 0x18].copy_from_slice(&(name_cursor as i32).to_le_bytes());
+            out[name_cursor..name_cursor + name_blob.len()].copy_from_slice(name_blob);
+            name_cursor += name_blob.len();
+            let body_at = data_cursor + MD5_LEN;
+            out[body_at..body_at + body.len()].copy_from_slice(body);
+            data_cursor += entry_size;
+        }
+        out
+    }
+
+    /// An empty temp directory of our own, so a listing test sees exactly the files it wrote.
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("er-save-picker-accepts-{tag}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir must be creatable");
+        dir
+    }
+
+    fn write_file(dir: &Path, leaf: &str, bytes: &[u8]) -> PathBuf {
+        let path = dir.join(leaf);
+        std::fs::write(&path, bytes).expect("temp file must be writable");
+        path
+    }
+
+    const SL2: &[&str] = &["sl2"];
+
+    fn load(path: &Path) -> Result<Vec<crate::experiments::SaveSlotInfo>, PickRejection> {
+        save_picker_accepts(path, &PickerIntent::LoadSource, SL2)
+    }
+
+    fn dest(path: &Path) -> Result<Vec<crate::experiments::SaveSlotInfo>, PickRejection> {
+        save_picker_accepts(
+            path,
+            &PickerIntent::SaveDestination {
+                loaded_file_name: "ER0000.sl2".to_owned(),
+            },
+            SL2,
+        )
+    }
+
+    /// The generator has to actually produce a container the shipping reader accepts, or every
+    /// assertion built on it is vacuous.
+    #[test]
+    fn the_synthetic_container_parses_as_a_real_loadable_save() {
+        let bytes = synthetic_save_container(&[Some(("Tarnished", 42)), None, Some(("Second", 7))]);
+        assert!(er_save_loader::bnd4::parse_entries(&bytes).is_ok());
+        let chars = crate::experiments::parse_save_character_slots(&bytes);
+        assert_eq!(
+            chars
+                .iter()
+                .map(|info| (info.slot, info.name.as_str(), info.level))
+                .collect::<Vec<_>>(),
+            vec![(0, "Tarnished", 42), (2, "Second", 7)]
+        );
+    }
+
+    #[test]
+    fn the_load_intent_rejects_everything_that_is_not_a_loadable_container() {
+        let dir = scratch_dir("load-rejects");
+        assert_eq!(load(&dir), Err(PickRejection::NotAFile));
+        assert_eq!(
+            load(&write_file(&dir, "notes.txt", b"not a save")),
+            Err(PickRejection::WrongExtension)
+        );
+        assert_eq!(
+            load(&write_file(&dir, "ER0000.bak", b"right name, wrong flavor")),
+            Err(PickRejection::WrongExtension)
+        );
+        assert_eq!(
+            load(&dir.join("absent.sl2")),
+            Err(PickRejection::NotAFile),
+            "a path that does not exist is not a load source"
+        );
+        let mut truncated = synthetic_save_container(&[Some(("Tarnished", 42))]);
+        truncated.truncate(0x20);
+        assert_eq!(
+            load(&write_file(&dir, "truncated.sl2", &truncated)),
+            Err(PickRejection::NotBnd4)
+        );
+        let slotless = synthetic_save_container(&[None, None]);
+        assert_eq!(
+            load(&write_file(&dir, "slotless.sl2", &slotless)),
+            Err(PickRejection::NoLoadableCharacter)
+        );
+        let level_zero = synthetic_save_container(&[Some(("Deleted", 0))]);
+        assert_eq!(
+            load(&write_file(&dir, "level0.sl2", &level_zero)),
+            Err(PickRejection::NoLoadableCharacter),
+            "a level-0 leftover fails the autoload's own real-character fingerprint"
+        );
+        let real = synthetic_save_container(&[Some(("Tarnished", 42))]);
+        let chars =
+            load(&write_file(&dir, "real.sl2", &real)).expect("a real save is a load source");
+        assert_eq!(chars.len(), 1);
+        assert_eq!(chars[0].name, "Tarnished");
+    }
+
+    /// THE INTENT ASYMMETRY, pinned. A destination is an overwrite target: it needs no loadable
+    /// character (hiding a slotless file would let `[ new ]` clobber it silently) and it need not
+    /// exist at all (`[ new ]` and Save-As both name a file that does not). Its FOLDER must exist.
+    #[test]
+    fn the_destination_intent_accepts_what_the_load_intent_refuses() {
+        let dir = scratch_dir("dest-accepts");
+        let slotless = write_file(
+            &dir,
+            "slotless.sl2",
+            &synthetic_save_container(&[None, None]),
+        );
+        assert_eq!(load(&slotless), Err(PickRejection::NoLoadableCharacter));
+        assert_eq!(
+            dest(&slotless),
+            Ok(Vec::new()),
+            "a slotless existing container is a legal overwrite target"
+        );
+        assert_eq!(
+            dest(&dir.join("brand-new.sl2")),
+            Ok(Vec::new()),
+            "a leaf that does not exist yet in an existing folder is a legal destination"
+        );
+        assert_eq!(
+            dest(&dir.join("gone").join("brand-new.sl2")),
+            Err(PickRejection::ParentMissing)
+        );
+        assert_eq!(
+            dest(&dir.join("wrong.co2")),
+            Err(PickRejection::WrongExtension),
+            "the flavor filter still applies to a destination"
+        );
+        assert_eq!(dest(&dir), Err(PickRejection::NotAFile));
+    }
+
+    /// CONTRACT 7: there is not a second notion of "valid save". Whatever the in-game listing shows
+    /// is exactly what the predicate accepts, in both intents -- so the OS dialog, which calls the
+    /// same predicate, cannot load a container the browser would have hidden.
+    #[test]
+    fn the_listing_and_the_predicate_agree_file_for_file() {
+        let dir = scratch_dir("listing-agreement");
+        let candidates = [
+            write_file(
+                &dir,
+                "real.sl2",
+                &synthetic_save_container(&[Some(("Ranni", 5))]),
+            ),
+            write_file(&dir, "slotless.sl2", &synthetic_save_container(&[None])),
+            write_file(&dir, "garbage.sl2", b"not bnd4 at all"),
+            write_file(&dir, "notes.txt", b"ignored"),
+        ];
+        for (intent, model) in [
+            (
+                PickerIntent::LoadSource,
+                SavePickerModel::open_with_extensions(&dir, SL2),
+            ),
+            (
+                PickerIntent::SaveDestination {
+                    loaded_file_name: "ER0000.sl2".to_owned(),
+                },
+                SavePickerModel::open_destination(&dir, SL2, "ER0000.sl2"),
+            ),
+        ] {
+            let mut listed: Vec<PathBuf> = model
+                .entries
+                .iter()
+                .filter(|entry| matches!(entry, PickerEntry::File { .. }))
+                .map(|entry| entry.path().to_path_buf())
+                .collect();
+            let mut accepted: Vec<PathBuf> = candidates
+                .iter()
+                .filter(|path| save_picker_accepts(path, &intent, SL2).is_ok())
+                .cloned()
+                .collect();
+            listed.sort();
+            accepted.sort();
+            assert_eq!(
+                listed, accepted,
+                "the {intent:?} listing and the predicate disagree about which files are saves"
+            );
+        }
     }
 
     /// A directory that genuinely exists, so the drive-resume tests exercise the real existence
