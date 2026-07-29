@@ -1254,6 +1254,24 @@ pub static SAVE_PICKER_STAGED_ROW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_REBUILD_PENDING_DIALOG: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_LIST_BUILDER_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_LIST_BUILDER_RESTAGE_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Browse rows with no character on which the hide of the per-slot info fields (`Level`
+/// caption/value, `PlayTime`) was DRIVEN -- the native setter was called; pair with
+/// `PROFILE_ROW_SLOT_INFO_NON_DISPLAY` to know it took effect. Doubles as the latch that arms the
+/// symmetric re-show.
+pub static PROFILE_ROW_SLOT_INFO_HIDDEN_ROWS: AtomicUsize = AtomicUsize::new(0);
+/// Rows on which the re-show of the per-slot info fields was driven (row clips are reused).
+pub static PROFILE_ROW_SLOT_INFO_SHOWN_ROWS: AtomicUsize = AtomicUsize::new(0);
+/// Per-field visibility calls skipped fail-closed (child unresolved, or unexpected proxy vtable).
+pub static PROFILE_ROW_SLOT_INFO_VIS_SKIPS: AtomicUsize = AtomicUsize::new(0);
+/// Per-field visibility calls whose resolved GFx value was not a display object (setter no-ops).
+pub static PROFILE_ROW_SLOT_INFO_NON_DISPLAY: AtomicUsize = AtomicUsize::new(0);
+/// Last GFx value type seen by the row-field visibility path.
+pub static PROFILE_ROW_SLOT_INFO_LAST_DATATYPE: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Browse rows whose `PlayTime` was replaced with the file's last-saved timestamp.
+pub static PROFILE_ROW_LAST_SAVED_ROWS: AtomicUsize = AtomicUsize::new(0);
+/// Rows where the last-saved text could not be staged into the row model (field unreadable), so the
+/// native playtime string stood.
+pub static PROFILE_ROW_LAST_SAVED_STAGE_FAILURES: AtomicUsize = AtomicUsize::new(0);
 pub static LAST_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_FACE_IDENTITY_CHECKS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_FACE_IDENTITY_MISMATCHES: AtomicUsize = AtomicUsize::new(0);
