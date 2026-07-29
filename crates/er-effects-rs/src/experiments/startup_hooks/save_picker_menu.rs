@@ -193,10 +193,17 @@ unsafe fn save_picker_stage_row_records(
     true
 }
 
-/// Open the in-game file picker from the "Load Save Profiles" row action (menu thread).
-/// Mirrors the old OS-picker preflight (restore stale preview, arm the active save snapshot),
-/// then stages the browse rows and submits the `05_010_ProfileSelect` window.
+/// Open the LOAD-source picker from the "Load Save Profiles" row action (menu thread). Which
+/// surface that is -- this in-game browser or the OS file dialog -- is decided in one place,
+/// [`open_picker_for_intent`]; the signature and the four call sites are unchanged.
 pub(crate) unsafe fn system_quit_open_save_picker_menu(action_obj: usize) -> bool {
+    unsafe { open_picker_for_intent(PickerOpenRequest::LoadSource { action_obj }) }
+}
+
+/// Open the IN-GAME file picker (menu thread). Mirrors the old OS-picker preflight (restore stale
+/// preview, arm the active save snapshot), then stages the browse rows and submits the
+/// `05_010_ProfileSelect` window.
+pub(crate) unsafe fn system_quit_open_save_picker_menu_in_game(action_obj: usize) -> bool {
     let save_path = match system_quit_env_save_path() {
         Ok(path) => path,
         Err(reason) => {
@@ -267,9 +274,16 @@ pub(crate) unsafe fn system_quit_open_save_picker_menu(action_obj: usize) -> boo
     true
 }
 
-/// Open the `05_010` picker as the save-DESTINATION chooser for the Save Game flow (save-game-flow
-/// WP3). Menu-pump owned: called from `system_quit_menu_window_run_post` after the tick stages
-/// `SAVE_DEST_OPEN_PICKER_PENDING`, i.e. the same submit context the load picker's resubmit uses.
+/// Open the save-DESTINATION chooser for the Save Game flow (save-game-flow WP3). Menu-pump
+/// owned: called from `system_quit_menu_window_run_post` after the tick stages
+/// `SAVE_DEST_OPEN_PICKER_PENDING`. Which surface opens is decided in one place,
+/// [`open_picker_for_intent`]; the signature and the call site are unchanged.
+pub(crate) unsafe fn system_quit_open_save_dest_picker(system_dialog: usize) -> bool {
+    unsafe { open_picker_for_intent(PickerOpenRequest::SaveDestination { system_dialog }) }
+}
+
+/// Open the IN-GAME `05_010` picker as the save-destination chooser -- the same submit context
+/// the load picker's resubmit uses.
 ///
 /// Differences from the load-source picker, all deliberate:
 ///   * start dir = the LOADED save's own directory, not the remembered preferred dir -- "save
@@ -278,7 +292,7 @@ pub(crate) unsafe fn system_quit_open_save_picker_menu(action_obj: usize) -> boo
 ///   * NO save-swap byte preview is armed: nothing foreign is previewed here, and the safety
 ///     snapshot of the live save is taken later, at the fire gate, by `save_dest_arm_redirect`;
 ///   * the model carries the loaded save's filename so the `[ new ]` row writes that leaf.
-pub(crate) unsafe fn system_quit_open_save_dest_picker(system_dialog: usize) -> bool {
+pub(crate) unsafe fn system_quit_open_save_dest_picker_in_game(system_dialog: usize) -> bool {
     const HEAP_LO: usize = 0x10000;
     if system_dialog < HEAP_LO || system_dialog == TITLE_OWNER_SCAN_START_ADDRESS {
         append_autoload_debug(format_args!(
