@@ -810,8 +810,19 @@ pub(crate) const SAVE_BYPASS_WATCHDOG_TICKS: usize = 900;
 pub(crate) const CS_MENU_MAN_SAVE_GATE_SUB_80_OFFSET: usize = 0x80;
 pub(crate) const CS_MENU_MAN_SAVE_GATE_LATCH_290_OFFSET: usize = 0x290;
 pub(crate) const CS_MENU_MAN_SAVE_GATE_LATCH_298_OFFSET: usize = 0x298;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BYPASS_ALLOWED_AT_FIRE;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_COMMIT_COMPLETE_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_DIALOG;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_ENQUEUE_MISSING_COUNT;
+/// Game-task ticks stage 8 waits for the fired save request to actually REACH the writer (an SL
+/// save enqueue arriving at the suppressor) before declaring the fire failed. ~3 s at 60 ticks/s,
+/// the same budget the confirm-box build and destination-browser open timeouts use.
+///
+/// This exists because the full `SAVE_BYPASS_WATCHDOG_TICKS` (900) is the wrong bound for a fire
+/// that never dispatched: the Save Game row is gated on the flow being IDLE, so a dead stage 8
+/// froze every subsequent press for ~15-30 s (user-reported 2026-07-28). A write that IS in
+/// flight still gets the full watchdog -- only the never-enqueued case bails early.
+pub(crate) const SAVE_FLOW_ENQUEUE_GRACE_TICKS: usize = 180;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_GATE_LATCH_BLOCKED_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_STAGE;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_STAGE_TICKS;

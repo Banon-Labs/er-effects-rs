@@ -1319,6 +1319,17 @@ pub static SAVE_FLOW_DIALOG: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_FLOW_GATE_LATCH_BLOCKED_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Completed Save Game commits: the bypassed save reported terminal status 0 (success).
 pub static SAVE_FLOW_COMMIT_COMPLETE_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// `er_save_suppress::bypass_allowed_total()` sampled at the instant the forced save request was
+/// fired. Stage 8 compares against it to tell "the save enqueue ARRIVED and is being written"
+/// (total advanced -> a real write is in flight, protect it) from "the enqueue never arrived"
+/// (total unchanged -> nothing is in flight and the flow is already dead). Without that
+/// distinction stage 8 held the Save Game row hostage for the full watchdog even when the fire
+/// had silently failed.
+pub static SAVE_FLOW_BYPASS_ALLOWED_AT_FIRE: AtomicUsize = AtomicUsize::new(0);
+/// Save flows whose forced request never produced a save enqueue: the fire reached the native
+/// request flags but no SL save arrived at the suppressor inside the grace window. The user's
+/// save did NOT happen -- a hard failure oracle, distinct from a user-declined abort.
+pub static SAVE_FLOW_ENQUEUE_MISSING_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 // ---- save-flow confirm chain (save-game-flow WP2) ----
 /// Number of confirm boxes the save flow can build (Box1 "are you sure", Box2 "overwrite

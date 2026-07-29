@@ -507,13 +507,16 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // (>= 1 per answered box once the hook is installed), and `..._emit_installed` says whether
     // that observer is live at all.
     body.push_str(&format!(
-        "  \"oracle_save_flow_box1_undecidable_count\": {},\n  \"oracle_save_flow_box2_undecidable_count\": {},\n  \"oracle_save_flow_box3_undecidable_count\": {},\n  \"oracle_save_flow_box_identity_lost_count\": {},\n  \"oracle_save_flow_box_emit_count\": {},\n  \"oracle_save_flow_box_emit_installed\": {},\n",
+        "  \"oracle_save_flow_box1_undecidable_count\": {},\n  \"oracle_save_flow_box2_undecidable_count\": {},\n  \"oracle_save_flow_box3_undecidable_count\": {},\n  \"oracle_save_flow_box_identity_lost_count\": {},\n  \"oracle_save_flow_box_emit_count\": {},\n  \"oracle_save_flow_box_emit_installed\": {},\n  \"oracle_save_flow_enqueue_missing_count\": {},\n",
         SAVE_FLOW_BOX_UNDECIDABLE_COUNTS[0].load(Ordering::SeqCst),
         SAVE_FLOW_BOX_UNDECIDABLE_COUNTS[1].load(Ordering::SeqCst),
         SAVE_FLOW_BOX_UNDECIDABLE_COUNTS[2].load(Ordering::SeqCst),
         SAVE_FLOW_BOX_IDENTITY_LOST_COUNT.load(Ordering::SeqCst),
         SAVE_FLOW_BOX_EMIT_COUNT.load(Ordering::SeqCst),
         MENU_JOB_EMIT_RESULT_INSTALLED.load(Ordering::SeqCst),
+        // Non-zero = a Save Game press fired but the save never reached the writer. A hard
+        // failure: the user believes they saved and nothing was written.
+        SAVE_FLOW_ENQUEUE_MISSING_COUNT.load(Ordering::SeqCst),
     ));
     // SAVE-DESTINATION oracles (save-game-flow WP3): the Box2-"No" browser and the scoped
     // write-open redirect that makes the chosen destination -- not the loaded save -- receive the

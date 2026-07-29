@@ -519,6 +519,12 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
         } else {
             -1
         };
+        // Snapshot the consumed-token counter so stage 8 can tell a save that actually reached
+        // the writer from a fire that silently went nowhere.
+        SAVE_FLOW_BYPASS_ALLOWED_AT_FIRE.store(
+            usize::try_from(er_save_suppress::bypass_allowed_total()).unwrap_or(usize::MAX),
+            Ordering::SeqCst,
+        );
         append_autoload_debug(format_args!(
             "save-flow: FIRED forced save request (throttle skipped) after {ticks} gate ticks; readback b72={b72} b73={b73}"
         ));
@@ -556,6 +562,27 @@ fn save_flow_commit_wait_tick(ticks: usize) {
         save_dest_verify_and_disarm("commit terminal status");
         save_dest_reset("commit terminal status");
         save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "commit terminal status");
+        return;
+    }
+    // DEAD-FIRE BAILOUT (user-reported 2026-07-28): the Save Game row is gated on the flow being
+    // IDLE, so a stage 8 that can never complete freezes the row for the whole watchdog -- ~15-30 s
+    // of "the menus don't work any more" after a single save. Distinguish the two cases by whether
+    // the one-shot token was ever CONSUMED:
+    //   * consumed  -> a real write is in flight; keep the full watchdog and protect it.
+    //   * unconsumed -> the fire set the native request flags but no save enqueue ever reached the
+    //     suppressor, so nothing is in flight, the flow is already dead, and holding the row
+    //     hostage protects nothing. Report the failure and free the UI immediately.
+    let consumed = usize::try_from(er_save_suppress::bypass_allowed_total()).unwrap_or(usize::MAX)
+        > SAVE_FLOW_BYPASS_ALLOWED_AT_FIRE.load(Ordering::SeqCst);
+    if !consumed && ticks >= SAVE_FLOW_ENQUEUE_GRACE_TICKS {
+        let expired = er_save_suppress::expire_bypass_if_pending();
+        SAVE_FLOW_ENQUEUE_MISSING_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "save-flow: FIRE WENT NOWHERE -- no save enqueue reached the writer within {ticks} ticks (token_expired={expired}); the user's save did NOT happen. Ending the flow now so the Save Game row is usable again instead of blocking for the full {SAVE_BYPASS_WATCHDOG_TICKS}-tick watchdog"
+        ));
+        save_dest_verify_and_disarm("fire went nowhere");
+        save_dest_reset("fire went nowhere");
+        save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "fire went nowhere");
         return;
     }
     if ticks >= SAVE_BYPASS_WATCHDOG_TICKS {
