@@ -45,9 +45,17 @@ pub(crate) fn force_dismiss_startup_dialog() {
     // frame -> instant commit/close, no fade-in render = no flash (vs the ~20 OnDecide frames before).
     // The dialog is vtable-validated above (base MessageBoxDialog OR SaveRetryDialog). bd
     // press-any-button-golden-lever-job1e8-readiness-2026-06-23 + offline-title-modal-is-saveretrydialog.
+    // FIELD SEMANTICS CORRECTED 2026-07-28 (RE of the 1.16.2 ctor `FUN_1409275b0`; the writes
+    // themselves are byte-for-byte unchanged so this deprecated path keeps behaving as it did):
+    //   * `+0x25e8` is the BUTTON COUNT, not a state. Writing 2 makes the multi-choice getter
+    //     `1 < count` (0x1407b0cf0) -- which the title flow's modal poll at 0x1407b04f5 reads --
+    //     report the box as resolved. It CORRUPTS the real count; acceptable only here, on a
+    //     startup notice this path is about to force closed.
+    //   * `+0x25e0` is the DEFAULT CURSOR INDEX. Writing 0 makes `OnDecide` dispatch button 0
+    //     instead of taking its `index == -1` cancel arm.
     unsafe {
-        *((dialog + MSGBOX_STATE_25E8_OFFSET) as *mut i32) = MSGBOX_STATE_DECIDED;
-        *((dialog + MSGBOX_RESULT_BUTTON_25E0_OFFSET) as *mut i32) = MSGBOX_OK_BUTTON;
+        *((dialog + MSGBOX_BUTTON_COUNT_25E8_OFFSET) as *mut i32) = MSGBOX_BUTTON_COUNT_MULTI_CHOICE;
+        *((dialog + MSGBOX_DEFAULT_CURSOR_25E0_OFFSET) as *mut i32) = MSGBOX_FIRST_BUTTON_INDEX;
     }
     if let Some(fade_target_bits) =
         unsafe { safe_read_i32(dialog + MSGBOX_FADE_TARGET_2300_OFFSET) }
@@ -81,8 +89,8 @@ pub(crate) fn force_dismiss_startup_dialog() {
     }
     let _ = (
         &LAST_ONDECIDE_DIALOG,
-        MSGBOX_RESULT_BUTTON_25E0_OFFSET,
-        MSGBOX_OK_BUTTON,
+        MSGBOX_DEFAULT_CURSOR_25E0_OFFSET,
+        MSGBOX_FIRST_BUTTON_INDEX,
         MSGBOX_CONFIRM_LATCH_1BC0_OFFSET,
         MSGBOX_CONFIRM_LATCH_SET,
         MSGBOX_ONDECIDE_RVA,
