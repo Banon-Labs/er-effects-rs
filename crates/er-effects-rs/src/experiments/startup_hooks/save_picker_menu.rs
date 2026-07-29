@@ -1,14 +1,20 @@
 // In-game save-file picker rendered through the native `05_010_ProfileSelect` window.
 //
 // Replaces the System>Quit "Load Save Profiles" `GetOpenFileNameW` OS dialog (context switch out
-// of the game; user goal 2026-07-07) with the same native 10-row window the character switcher
-// already drives. The rows are a browsable directory listing (row 0 = up, rows 1..=8 = dirs +
-// mode-locked save files, row 9 = page cycle) staged as synthetic ProfileSummary records; the
-// shared model lives in `experiments::save_picker`. Directory/page navigation rebuilds the row
-// list in place via the game's own records-changed rebuild (close + menu-pump resubmit as
-// fallback). Picking a file feeds the exact validation/preview pipeline the OS picker used
+// of the game) with the same native 10-row window the character switcher already drives. The rows
+// are a browsable directory listing -- up, drive cycler, dirs + mode-locked save files, page
+// cycler -- staged as synthetic ProfileSummary records; the shared model lives in
+// `experiments::save_picker` and owns the row layout (see its module docs for the order and why
+// nothing sits at a fixed index). Directory/drive/page navigation rebuilds the row list in place
+// via the game's own records-changed rebuild (close + menu-pump resubmit as fallback). Picking a
+// file feeds the exact validation/preview pipeline the OS picker used
 // (`system_quit_ingest_picked_save`) and then reopens the window as the normal slot view, so
 // the "pick file -> pick character slot" flow never leaves the game's visual system.
+//
+// The only input this window gives the DLL is ROW ACTIVATION: `system_quit_profile_load_activate_hook`
+// intercepts `CS::ProfileLoadDialog` vtable slot 20 (`0x9a4670`) and reads the highlighted list
+// index out of `dialog+0xb0c`. Cursor movement, back and every other press stay inside the game's
+// own list widget. So every browse action -- including switching drives -- has to BE a row.
 
 /// 1 while the live `05_010_ProfileSelect` window is OUR file-picker (rows = directory listing).
 /// 0 when it is the normal character-slot view.
@@ -71,28 +77,53 @@ fn save_picker_start_dir() -> Option<PathBuf> {
         .filter(|root| root.is_dir())
 }
 
-/// Write the model's 10 visible browse rows into the live ProfileSummary records (record zeroed,
-/// name field = row label, slot marked occupied). Pure record transport -- no snapshot bookkeeping
-/// and no renderer refresh -- shared by the staging path below and the list-builder re-stage hook.
-/// Returns the number of rows written.
+/// Write the model's visible browse rows into the live ProfileSummary records (record zeroed, name
+/// field = row label, slot marked occupied) and mark every slot BEYOND them unoccupied. Pure record
+/// transport -- no snapshot bookkeeping and no renderer refresh -- shared by the staging path below
+/// and the list-builder re-stage hook. Returns the number of OCCUPIED (visible) rows.
+///
+/// Occupancy is the row's existence, not a decoration. The native list builder `FUN_140875590`
+/// (1.16.2) walks slots 0..10 and appends a row only when the occupancy predicate `FUN_140261cd0`
+/// -- literally `ProfileSummary::saveSlotsStates[slot]`, summary+0x8+slot -- returns true, taking
+/// the row's name/level/playtime from the record at summary+0x18+slot*0x2a0. Two consequences:
+///
+///   * a slot marked unoccupied produces NO row at all. That is the only way to make a short
+///     listing render nothing below the last entry: a zeroed record still renders as a name plus
+///     `Level 0` and `0:00:00`, because those fields exist and are simply zero.
+///   * the appended rows are COMPACTED in slot order, so `slot index == visible list index` holds
+///     only while the occupied slots are a contiguous PREFIX. They are: the model's visible rows
+///     are dense by construction (`visible_row_count`), so the list index the activation hook reads
+///     from `dialog+0xb0c`, the slot the row-populate hook reads back from `rowModel+0x8`, and the
+///     model row are all the same number.
 unsafe fn save_picker_write_row_records(
     model: &crate::experiments::save_picker::SavePickerModel,
     summary: usize,
 ) -> usize {
-    let mut staged = 0usize;
+    let visible = model
+        .visible_row_count()
+        .min(TITLE_PROFILE_SLOT_COUNT)
+        .min(crate::experiments::save_picker::PICKER_ROW_COUNT);
     unsafe {
         for slot in 0..TITLE_PROFILE_SLOT_COUNT {
             let record =
                 summary + PROFILE_SUMMARY_RECORD_BASE + slot * PROFILE_SUMMARY_RECORD_STRIDE;
             core::ptr::write_bytes(record as *mut u8, 0, PROFILE_SUMMARY_RECORD_STRIDE);
             PROFILE_PREVIEW_FACE_HASH[slot].store(0, Ordering::SeqCst);
+            if slot >= visible {
+                // Beyond the listing: no row. The record is already zeroed above, so nothing stale
+                // survives if the game's own save path (`FUN_140262270`, which also runs
+                // `MarkProfileIndexAsUsed`) flips this slot back to occupied between here and the
+                // native build -- and the list-builder re-stage hook re-runs this whole pass at
+                // every build site precisely to close that window.
+                *((summary + PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot) as *mut u8) = 0;
+                continue;
+            }
             let mut label = model.row_label_utf16(slot);
             if label.is_empty() {
-                // The native list builder appends a row ONLY for slots whose
-                // `saveSlotsStates[slot]` byte is set (RE-verified: occupancy predicate live
-                // 0x140261cd0 reads summary+0x8+slot; bound at dialog+0xb08 = occupied count).
-                // Keep ALL 10 slots occupied with a placeholder so row index == slot index ==
-                // model row, and cursor math never has to translate sparse row ids.
+                // Unreachable: every visible row's label is non-empty by construction (pinned by
+                // the model's `every_visible_row_has_a_non_empty_label` test). Kept because an
+                // occupied slot with an empty name would fail the empty-slot activation guard, and
+                // dropping the row instead would break the prefix and misalign every row below it.
                 label = "-".encode_utf16().collect();
             }
             // Name field is 0x22 bytes (16 UTF-16 units + NUL); the record was zeroed above so
@@ -100,16 +131,16 @@ unsafe fn save_picker_write_row_records(
             let units = label.len().min(PROFILE_SUMMARY_NAME_BYTES / 2 - 1);
             core::ptr::copy_nonoverlapping(label.as_ptr(), record as *mut u16, units);
             *((summary + PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot) as *mut u8) = 1;
-            staged += 1;
         }
     }
-    staged
+    visible
 }
 
-/// Stage the model's 10 visible rows as synthetic ProfileSummary records (name field = row
-/// label; everything else zeroed). Snapshots the live summary first via the save-swap state, so
-/// every existing backout path restores the user's real rows. Menu-thread only (record writes +
-/// renderer refresh -- same context the foreign-save preview uses).
+/// Stage the model's visible rows as synthetic ProfileSummary records (name field = row label;
+/// everything else zeroed) and leave the slots beyond them unoccupied. Snapshots the live summary
+/// first via the save-swap state -- occupancy bytes included -- so every existing backout path
+/// restores the user's real rows. Menu-thread only (record writes + renderer refresh -- same
+/// context the foreign-save preview uses).
 unsafe fn save_picker_stage_row_records(
     model: &crate::experiments::save_picker::SavePickerModel,
 ) -> bool {
@@ -142,11 +173,13 @@ unsafe fn save_picker_stage_row_records(
         unsafe { refresh() };
     }
     append_autoload_debug(format_args!(
-        "save-picker: staged {staged} row records dir='{}' page={}/{} entries={}",
+        "save-picker: staged {staged} occupied row records ({} slots left unoccupied) dir='{}' page={}/{} entries={} drives={}",
+        TITLE_PROFILE_SLOT_COUNT.saturating_sub(staged),
         model.current_dir().display(),
         model.page() + 1,
         model.page_count(),
-        model.entry_count()
+        model.entry_count(),
+        model.drive_count()
     ));
     true
 }
@@ -221,6 +254,10 @@ pub(crate) unsafe fn system_quit_open_save_picker_menu(action_obj: usize) -> boo
 
 /// Route a `05_010` slot activation while the picker owns the window (menu thread, called from
 /// the activate hook BEFORE any character-switch logic). Returns the hook's return value.
+///
+/// This is the ONLY signal the native window hands us, so it carries every browse action: up,
+/// enter directory, switch drive, page, pick file. The model decides which from the row index; a
+/// listing change of any kind comes back as `Repopulate` and is serviced identically.
 pub(crate) unsafe fn save_picker_handle_activation(dialog: usize, cursor: i32) -> usize {
     use crate::experiments::save_picker::PickerActivation;
     if cursor < 0 || cursor as usize >= crate::experiments::save_picker::PICKER_ROW_COUNT {
@@ -282,7 +319,11 @@ pub(crate) unsafe fn save_picker_handle_activation(dialog: usize, cursor: i32) -
             }
             0
         }
-        PickerActivation::Ignored => 0,
+        // `[ new ]` is a save-DESTINATION row and no menu opens a destination browser, so the model
+        // never produces this activation here. Grouped with `Ignored` rather than made unreachable:
+        // the row-index arithmetic that would serve it is the same arithmetic the load-source rows
+        // use, and it is promoted intact rather than re-derived (see `SavePickerModel`).
+        PickerActivation::PickedNewFile(_) | PickerActivation::Ignored => 0,
     }
 }
 
