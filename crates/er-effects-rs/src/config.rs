@@ -566,9 +566,13 @@ mod tests {
             "backgrounds/load.png",
             std::path::Path::new("C:\\Games\\ELDEN RING\\Game"),
         );
+        // `Path::join` inserts the separator of the platform the test is COMPILED for, so the
+        // raw string differs between this crate's real windows target (`\`) and a host build
+        // (`/`). Both spell the same file to every Win32 path API, so normalise the separator
+        // and keep the assertion on the whole resolved path.
         assert_eq!(
-            path.to_string_lossy(),
-            "C:\\Games\\ELDEN RING\\Game/backgrounds/load.png"
+            path.to_string_lossy().replace('/', "\\"),
+            "C:\\Games\\ELDEN RING\\Game\\backgrounds\\load.png"
         );
     }
 }
