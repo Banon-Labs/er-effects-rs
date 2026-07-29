@@ -905,6 +905,9 @@ pub(crate) use er_telemetry::counters::SAVE_DEST_CANCEL_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_DEST_COMMIT_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_DEST_COMMIT_FAIL;
 pub(crate) use er_telemetry::counters::SAVE_DEST_COMMIT_PENDING;
+/// 1 = an OS Save-As chose an existing file and the Box3 overwrite confirm is owed. Consumed by
+/// the save-flow tick, which owns every `SAVE_FLOW_STAGE` transition on the OS path.
+pub(crate) use er_telemetry::counters::SAVE_DEST_CONFIRM_PENDING;
 pub(crate) use er_telemetry::counters::SAVE_DEST_LIVE_FILE_MUTATED;
 pub(crate) use er_telemetry::counters::SAVE_DEST_OPEN_PICKER_PENDING;
 pub(crate) use er_telemetry::counters::SAVE_DEST_PICKER_OPEN_COUNT;

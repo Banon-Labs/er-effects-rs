@@ -37,6 +37,11 @@ pub(crate) use er_telemetry::counters::SAVE_PICKER_SYSTEM_DIALOG;
 /// Which picker surface this session runs (0 = this in-game browser, 1 = the OS file dialog).
 /// Latched once in `init_runtime_config`; exported as `oracle_save_picker_surface`.
 pub(crate) use er_telemetry::counters::SAVE_PICKER_SURFACE;
+/// 1 while a modal OS file dialog is blocking the menu pump. Freeze predicate, re-entrancy claim
+/// and stage-3 liveness term, all one word.
+pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_DIALOG_OPEN;
+/// Game-task ticks whose save-flow deadline accrual was suppressed while a dialog was open.
+pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_TICKS_FROZEN;
 /// Diagnostics / telemetry oracles.
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OPEN_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_REPOPULATE_COUNT;

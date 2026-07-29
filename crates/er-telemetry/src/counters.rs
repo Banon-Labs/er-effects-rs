@@ -1315,6 +1315,27 @@ pub static SAVE_PICKER_LIST_BUILDER_RESTAGE_COUNT: AtomicUsize = AtomicUsize::ne
 /// session where no picker ever opens. Every other `SAVE_PICKER_OS_*` counter is only meaningful
 /// once this reads 1, and a report can state the mode without the reporter knowing the config.
 pub static SAVE_PICKER_SURFACE: AtomicUsize = AtomicUsize::new(0);
+/// 1 while an OS common file dialog is up and BLOCKING the thread that owns the menu pump.
+///
+/// One word of state doing triple duty: the re-entrancy claim (taken by compare-exchange, so only
+/// the first caller proceeds and a message comdlg32 dispatches back into our own row-action detour
+/// cannot open a second dialog), the freeze predicate for `SAVE_FLOW_STAGE_TICKS`, and the stage-3
+/// "a browser is live" term. Released by a guard whose `Drop` clears it, so an unwind cannot leave
+/// it stuck.
+pub static SAVE_PICKER_OS_DIALOG_OPEN: AtomicUsize = AtomicUsize::new(0);
+/// Game-task ticks whose `SAVE_FLOW_STAGE_TICKS` accrual was SUPPRESSED because a dialog was open.
+///
+/// Load-bearing, and the only thing that answers a question nothing static can: `> 0` proves the
+/// game task kept ticking while the menu pump was blocked -- so every save-flow deadline WOULD have
+/// expired under a browsing user, and the freeze is what saved the flow. `== 0` with a dialog
+/// demonstrably open instead says the whole frame stalled with the pump.
+pub static SAVE_PICKER_OS_TICKS_FROZEN: AtomicUsize = AtomicUsize::new(0);
+/// 1 = an OS Save-As returned an EXISTING file, so the Box3 overwrite confirm is owed.
+///
+/// A latch rather than a direct `SAVE_FLOW_STAGE` write: the menu thread must not become a second
+/// writer of the stage (a filed defect the in-game arm already has). The save-flow tick consumes
+/// this and performs the transition through `save_flow_enter_stage`, staying the sole owner.
+pub static SAVE_DEST_CONFIRM_PENDING: AtomicUsize = AtomicUsize::new(0);
 /// Browse rows with no character on which the hide of the per-slot info fields (`Level`
 /// caption/value, `PlayTime`) was DRIVEN -- the native setter was called; pair with
 /// `PROFILE_ROW_SLOT_INFO_NON_DISPLAY` to know it took effect. Doubles as the latch that arms the
