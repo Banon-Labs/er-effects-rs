@@ -2,16 +2,34 @@
 unsafe fn system_quit_open_profile_load_dialog(action_obj: usize) -> bool {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const HEAP_LO: usize = 0x10000;
+    let system_dialog =
+        unsafe { safe_read_usize(action_obj + SYSTEM_QUIT_ACTION_OBJECT_DIALOG_08_OFFSET) }
+            .unwrap_or(NULL);
+    if system_dialog < HEAP_LO {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: profile-load route abort -- action=0x{action_obj:x} dialog=0x{system_dialog:x} is not heap-like"
+        ));
+        return false;
+    }
+    unsafe { system_quit_open_profile_load_dialog_on(system_dialog) }
+}
+
+/// Submit the native `05_010_ProfileSelect` window against an already-resolved System/Quit
+/// PropertyEditDialog. Split out of the action-object form (save-game-flow WP3) because the save
+/// flow opens the destination browser from the dialog it captured at the row press -- it never has
+/// a row action object of its own.
+unsafe fn system_quit_open_profile_load_dialog_on(system_dialog: usize) -> bool {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const HEAP_LO: usize = 0x10000;
     let Ok(base) = game_module_base() else {
         append_autoload_debug(format_args!(
             "system-quit-dup: profile-load route abort -- module base unavailable"
         ));
         return false;
     };
-    let system_dialog = unsafe { safe_read_usize(action_obj + 0x8) }.unwrap_or(NULL);
     if system_dialog < HEAP_LO {
         append_autoload_debug(format_args!(
-            "system-quit-dup: profile-load route abort -- action=0x{action_obj:x} dialog=0x{system_dialog:x} is not heap-like"
+            "system-quit-dup: profile-load route abort -- dialog=0x{system_dialog:x} is not heap-like"
         ));
         return false;
     }
@@ -937,7 +955,9 @@ pub(crate) unsafe extern "system" fn system_quit_save_game_get_and_format_hook(
     unsafe { original(out, getter, text_id, fmg_name, abbrev) }
 }
 
-unsafe fn system_quit_save_game_close_window(window: usize, label: &str) -> bool {
+/// Native cancel-close of one menu window. `pub(crate)` because the save-flow tick closes the
+/// destination browser through the same primitive the deferred IngameTop close uses.
+pub(crate) unsafe fn system_quit_save_game_close_window(window: usize, label: &str) -> bool {
     if window < 0x10000 || window == TITLE_OWNER_SCAN_START_ADDRESS {
         return false;
     }
@@ -1112,6 +1132,9 @@ unsafe fn system_quit_save_game_start_flow(dialog: usize) -> bool {
         return false;
     }
     save_flow_box_clear();
+    // Defensive: no destination state may survive from an earlier flow (a stale target would send
+    // this save to the wrong file).
+    save_dest_reset("save game row press");
     SAVE_FLOW_DIALOG.store(dialog, Ordering::SeqCst);
     SAVE_FLOW_STAGE_TICKS.store(0, Ordering::SeqCst);
     // The confirm boxes are only answerable if the MessageBoxDialog BUILDER hook is live --

@@ -711,6 +711,11 @@ pub(crate) const SAVE_FLOW_STAGE_IDLE: usize = 0;
 pub(crate) const SAVE_FLOW_STAGE_BOX1_WAIT: usize = 1;
 /// WP2: the "Overwrite your loaded save?" confirm is up (default Yes).
 pub(crate) const SAVE_FLOW_STAGE_BOX2_WAIT: usize = 2;
+/// WP3: the destination browser owns the screen -- opening, being browsed, or tearing down after a
+/// destination was chosen (`SAVE_DEST_COMMIT_PENDING`).
+pub(crate) const SAVE_FLOW_STAGE_DEST_BROWSE: usize = 3;
+/// WP3: the "Overwrite this file?" confirm is up over the destination browser (default No).
+pub(crate) const SAVE_FLOW_STAGE_BOX3_WAIT: usize = 4;
 /// WP2: the user declined (or a recipe failure aborted); the close sequence is running and
 /// NOTHING will be written.
 pub(crate) const SAVE_FLOW_STAGE_CLOSING_ABORT: usize = 5;
@@ -758,6 +763,32 @@ pub(crate) use er_telemetry::counters::SAVE_FLOW_SUBMIT_BOX_PENDING;
 /// visible box, so the flow aborts back to the world instead of waiting on a box that will
 /// never appear. There is deliberately NO timeout on the user's DECISION.
 pub(crate) const SAVE_FLOW_BOX_BUILD_TIMEOUT_TICKS: usize = 180;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_HOST_DIALOG;
+// ---- SAVE-DESTINATION browser (save-game-flow WP3, 2026-07-28) ----
+// Box2 "No" opens the shipping `05_010` picker REPURPOSED as a save-destination chooser (row 1 is
+// a pinned `[ new ]`), and the commit writes there instead of the loaded save by diverting the
+// native writer's single container write-open. See `save_dest_commit.rs`.
+pub(crate) use er_telemetry::counters::SAVE_DEST_CANCEL_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_DEST_COMMIT_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_DEST_COMMIT_FAIL;
+pub(crate) use er_telemetry::counters::SAVE_DEST_COMMIT_PENDING;
+pub(crate) use er_telemetry::counters::SAVE_DEST_LIVE_FILE_MUTATED;
+pub(crate) use er_telemetry::counters::SAVE_DEST_OPEN_PICKER_PENDING;
+pub(crate) use er_telemetry::counters::SAVE_DEST_PICKER_OPEN_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_DEST_REDIRECT_ARMED;
+pub(crate) use er_telemetry::counters::SAVE_DEST_REDIRECT_HITS;
+pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_EXISTING_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_NEW_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_WRITTEN_OK;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_DEST_MODE;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_SYSTEM_DIALOG;
+/// Game-task ticks the save flow waits for the destination browser to actually appear after the
+/// open was staged for the menu pump (~3 s at 60 ticks/s, same budget as a confirm-box build).
+/// Exceeding it aborts back to the world with nothing written.
+pub(crate) const SAVE_DEST_PICKER_OPEN_TIMEOUT_TICKS: usize = 180;
+/// `PropertyEditDialog` pointer stored at `action_object + 0x8` -- how every System>Quit row
+/// action reaches its owning dialog.
+pub(crate) const SYSTEM_QUIT_ACTION_OBJECT_DIALOG_08_OFFSET: usize = 0x8;
 /// `CS::MessageBoxBuilder` recipe, byte-verified against `eldenring-deobf.bin` on 2026-07-28
 /// and lifted verbatim from the native Yes/No confirm wrapper `FUN_1407b73d0` (whose own
 /// disassembly is the source for the call order and argument registers). Every address is
@@ -816,6 +847,9 @@ pub(crate) const SYSTEM_QUIT_DIALOG_MENU_WINDOW_LIST_50_OFFSET: usize = 0x50;
 pub(crate) const MENU_STRING_SIZE: usize = MENU_HELP_LABEL_HELP_OFFSET;
 /// One-shot spawn guard for the boot-time er-save-suppress install thread (bootstrap.rs).
 pub(crate) static START_SAVE_SUPPRESS: Once = Once::new();
+/// One-shot spawn guard for the boot-time CORE file-ops install thread (CreateFileW in every save
+/// mode; the save-destination commit rides that detour).
+pub(crate) static START_SAVE_FILE_OPS_CORE: Once = Once::new();
 /// `MenuHelpLabelComponent` contains two `MenuString` objects: visible label at +0, help at +0x38.
 pub(crate) const MENU_HELP_LABEL_HELP_OFFSET: usize = 0x38;
 pub(crate) const MENU_HELP_LABEL_SIZE: usize = 0x70;

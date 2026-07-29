@@ -1353,3 +1353,50 @@ pub static SAVE_FLOW_BOX_BUILD_TIMEOUT_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// 1 once a MessageBoxBuilder recipe RVA failed its prologue byte check: the confirm chain is
 /// unavailable on this build and Save Game degrades to the WP1 immediate bypass commit.
 pub static SAVE_FLOW_RECIPE_UNAVAILABLE: AtomicUsize = AtomicUsize::new(0);
+/// Dialog the NEXT confirm box is built against and submitted to (its MenuJob queue at +0x10 and
+/// MenuWindow list at +0x50). 0 = the System/Quit dialog captured at the row press. Box3 sets the
+/// live `05_010` ProfileLoadDialog instead, exactly like the game's own load-confirm
+/// (`FUN_1409a4670` submits its confirm to `profile_load_dialog+0x10`), so the confirm never
+/// contends with the System dialog queue that still owns the open picker window job.
+pub static SAVE_FLOW_BOX_HOST_DIALOG: AtomicUsize = AtomicUsize::new(0);
+
+// ---- save destination browser (save-game-flow WP3) ----
+/// 1 while the live `05_010` picker is the save-DESTINATION chooser (Box2 "No" path) rather than
+/// the load-source browser. Cleared by `save_picker_reset` like the rest of the picker latches.
+pub static SAVE_PICKER_DEST_MODE: AtomicUsize = AtomicUsize::new(0);
+/// System/Quit PropertyEditDialog the live picker window was submitted from. The load-source
+/// picker resolves it from its row action object; the destination picker is opened by the save
+/// flow, which has the dialog but no action object. The menu-pump resubmit reopens through it.
+pub static SAVE_PICKER_SYSTEM_DIALOG: AtomicUsize = AtomicUsize::new(0);
+/// Menu-pump pending: open the destination browser from `system_quit_menu_window_run_post` (the
+/// proven menu-job submit context). Set by the save-flow tick on Box2 "No".
+pub static SAVE_DEST_OPEN_PICKER_PENDING: AtomicUsize = AtomicUsize::new(0);
+/// 1 once a destination has been chosen and confirmed: the save-flow tick closes the menus with
+/// the commit staged as soon as the picker window has finished tearing down.
+pub static SAVE_DEST_COMMIT_PENDING: AtomicUsize = AtomicUsize::new(0);
+/// 1 while the scoped write-open redirect window is armed (`oracle_save_dest_redirect_armed`):
+/// a `CreateFileW` write-open of the live save leaf is diverted to the chosen destination.
+pub static SAVE_DEST_REDIRECT_ARMED: AtomicUsize = AtomicUsize::new(0);
+/// Write-opens diverted to the destination during the armed window. Exactly 1 is expected per
+/// commit (the native BND4 writer emits one whole-buffer write through one open).
+pub static SAVE_DEST_REDIRECT_HITS: AtomicUsize = AtomicUsize::new(0);
+/// Destination browsers opened (Box2 answered "No").
+pub static SAVE_DEST_PICKER_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Destination picks that landed on an EXISTING file (a pre-existing row, or `[ new ]` whose
+/// filename already exists in the browsed folder) -- these go through the Box3 overwrite confirm.
+pub static SAVE_DEST_TARGET_EXISTING_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Destination picks that created a NEW file via `[ new ]` (no Box3; nothing is overwritten).
+pub static SAVE_DEST_TARGET_NEW_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Destination commits staged (a target was chosen and confirmed; the menus are closing).
+pub static SAVE_DEST_COMMIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Destination browsers abandoned (backed out / closed without choosing) -- nothing is written.
+pub static SAVE_DEST_CANCEL_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// 1 once a destination commit verified: the target exists, starts with `BND4`, matches the live
+/// container size, and changed on disk during the armed window.
+pub static SAVE_DEST_TARGET_WRITTEN_OK: AtomicUsize = AtomicUsize::new(0);
+/// Destination commits whose target verification FAILED (missing/short/unchanged target, or zero
+/// redirect hits): the user's save did not land where they asked.
+pub static SAVE_DEST_COMMIT_FAIL: AtomicUsize = AtomicUsize::new(0);
+/// 1 if the LIVE save file changed during a destination commit -- the redirect leaked and the
+/// loaded save was overwritten anyway. Hard failure: the pre-fire snapshot is restored over it.
+pub static SAVE_DEST_LIVE_FILE_MUTATED: AtomicUsize = AtomicUsize::new(0);

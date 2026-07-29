@@ -475,10 +475,9 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SAVE_FLOW_GATE_LATCH_BLOCKED_COUNT.load(Ordering::SeqCst),
         SAVE_FLOW_COMMIT_COMPLETE_COUNT.load(Ordering::SeqCst),
     ));
-    // SAVE-FLOW CONFIRM CHAIN oracles (save-game-flow WP2): Box1 "are you sure" and Box2
-    // "overwrite your loaded save". Box3 belongs to the WP3 destination browser and is NOT
-    // exported here -- stage 4 is unreachable in this build, and a permanently-zero field in
-    // a semaphore surface can only mislead (log-noise rule 4).
+    // SAVE-FLOW CONFIRM CHAIN oracles (save-game-flow WP2 + WP3): Box1 "are you sure", Box2
+    // "overwrite your loaded save", Box3 "overwrite this file" (the destination browser's final
+    // gate).
     //
     // A save-flow probe must key on `oracle_save_flow_stage` + these counters, NOT on the
     // msgbox oracles: the confirm boxes are captured into the flow's OWN dialog slot and
@@ -486,16 +485,37 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // startup auto-accept can never reach a user-facing save confirm and an expected, wanted
     // confirm never reads as a blocking-modal failure.
     body.push_str(&format!(
-        "  \"oracle_save_flow_box1_open_count\": {},\n  \"oracle_save_flow_box1_yes_count\": {},\n  \"oracle_save_flow_box1_no_count\": {},\n  \"oracle_save_flow_box2_open_count\": {},\n  \"oracle_save_flow_box2_yes_count\": {},\n  \"oracle_save_flow_box2_no_count\": {},\n  \"oracle_save_flow_abort_count\": {},\n  \"oracle_save_flow_box_build_timeout_count\": {},\n  \"oracle_save_flow_recipe_unavailable\": {},\n",
+        "  \"oracle_save_flow_box1_open_count\": {},\n  \"oracle_save_flow_box1_yes_count\": {},\n  \"oracle_save_flow_box1_no_count\": {},\n  \"oracle_save_flow_box2_open_count\": {},\n  \"oracle_save_flow_box2_yes_count\": {},\n  \"oracle_save_flow_box2_no_count\": {},\n  \"oracle_save_flow_box3_open_count\": {},\n  \"oracle_save_flow_box3_yes_count\": {},\n  \"oracle_save_flow_box3_no_count\": {},\n  \"oracle_save_flow_abort_count\": {},\n  \"oracle_save_flow_box_build_timeout_count\": {},\n  \"oracle_save_flow_recipe_unavailable\": {},\n",
         SAVE_FLOW_BOX_OPEN_COUNTS[0].load(Ordering::SeqCst),
         SAVE_FLOW_BOX_YES_COUNTS[0].load(Ordering::SeqCst),
         SAVE_FLOW_BOX_NO_COUNTS[0].load(Ordering::SeqCst),
         SAVE_FLOW_BOX_OPEN_COUNTS[1].load(Ordering::SeqCst),
         SAVE_FLOW_BOX_YES_COUNTS[1].load(Ordering::SeqCst),
         SAVE_FLOW_BOX_NO_COUNTS[1].load(Ordering::SeqCst),
+        SAVE_FLOW_BOX_OPEN_COUNTS[2].load(Ordering::SeqCst),
+        SAVE_FLOW_BOX_YES_COUNTS[2].load(Ordering::SeqCst),
+        SAVE_FLOW_BOX_NO_COUNTS[2].load(Ordering::SeqCst),
         SAVE_FLOW_ABORT_COUNT.load(Ordering::SeqCst),
         SAVE_FLOW_BOX_BUILD_TIMEOUT_COUNT.load(Ordering::SeqCst),
         SAVE_FLOW_RECIPE_UNAVAILABLE.load(Ordering::SeqCst),
+    ));
+    // SAVE-DESTINATION oracles (save-game-flow WP3): the Box2-"No" browser and the scoped
+    // write-open redirect that makes the chosen destination -- not the loaded save -- receive the
+    // container the native writer emits. `redirect_hits` is expected to be exactly 1 per commit
+    // (one whole-buffer write through one open); `live_file_mutated` is the hard failure oracle
+    // that says the redirect leaked and the loaded save was overwritten anyway.
+    body.push_str(&format!(
+        "  \"oracle_save_dest_picker_open_count\": {},\n  \"oracle_save_dest_target_existing_count\": {},\n  \"oracle_save_dest_target_new_count\": {},\n  \"oracle_save_dest_commit_count\": {},\n  \"oracle_save_dest_cancel_count\": {},\n  \"oracle_save_dest_redirect_armed\": {},\n  \"oracle_save_dest_redirect_hits\": {},\n  \"oracle_save_dest_target_written_ok\": {},\n  \"oracle_save_dest_commit_fail\": {},\n  \"oracle_save_dest_live_file_mutated\": {},\n",
+        SAVE_DEST_PICKER_OPEN_COUNT.load(Ordering::SeqCst),
+        SAVE_DEST_TARGET_EXISTING_COUNT.load(Ordering::SeqCst),
+        SAVE_DEST_TARGET_NEW_COUNT.load(Ordering::SeqCst),
+        SAVE_DEST_COMMIT_COUNT.load(Ordering::SeqCst),
+        SAVE_DEST_CANCEL_COUNT.load(Ordering::SeqCst),
+        SAVE_DEST_REDIRECT_ARMED.load(Ordering::SeqCst),
+        SAVE_DEST_REDIRECT_HITS.load(Ordering::SeqCst),
+        SAVE_DEST_TARGET_WRITTEN_OK.load(Ordering::SeqCst),
+        SAVE_DEST_COMMIT_FAIL.load(Ordering::SeqCst),
+        SAVE_DEST_LIVE_FILE_MUTATED.load(Ordering::SeqCst),
     ));
     body.push_str(&format!(
         "  \"autoload_last_status\": {},\n",

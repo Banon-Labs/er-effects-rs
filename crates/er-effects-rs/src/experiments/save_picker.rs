@@ -11,6 +11,13 @@
 //! Extension filtering follows the active runtime flavor: vanilla offers `.sl2`; Seamless offers
 //! both `.co2` and vanilla `.sl2` sources so users can import/load a vanilla save while ERSC owns
 //! the session.
+//!
+//! The same model serves two INTENTS (save-game-flow WP3). [`PickerIntent::LoadSource`] browses for
+//! a save to LOAD (the shipping behavior). [`PickerIntent::SaveDestination`] browses for a folder to
+//! SAVE INTO: row 1 becomes a pinned `[ new ]` row that writes the loaded save's own filename into
+//! the browsed folder, entries shift down one row, and occupancy filtering is dropped -- an
+//! overwrite target needs no active character slot, and hiding a slotless existing file would let
+//! `[ new ]` clobber it silently.
 
 use std::{
     path::{Path, PathBuf},
@@ -28,8 +35,26 @@ pub(crate) const PICKER_ROW_PARENT: usize = 0;
 pub(crate) const PICKER_ROW_NEXT_PAGE: usize = PICKER_ROW_COUNT - 1;
 /// Directory/file entries shown per page (rows 1..=8).
 pub(crate) const PICKER_ENTRIES_PER_PAGE: usize = PICKER_ROW_COUNT - 2;
+/// Row index reserved for `[ new ]` in destination intent (directly under `[ .. up ]`).
+pub(crate) const PICKER_ROW_NEW_FILE: usize = 1;
+/// Directory/file entries shown per page in destination intent (rows 2..=8): `[ new ]` takes one.
+pub(crate) const PICKER_ENTRIES_PER_PAGE_DEST: usize = PICKER_ENTRIES_PER_PAGE - 1;
 /// ProfileSummary name field capacity: 16 UTF-16 units + NUL (0x22 bytes).
 pub(crate) const PICKER_ROW_NAME_UTF16_MAX: usize = 16;
+/// Label of the destination-intent `[ new ]` row (7 UTF-16 units, inside the name budget).
+pub(crate) const PICKER_NEW_FILE_LABEL: &str = "[ new ]";
+
+/// What the browsing session is FOR. Fixed at construction; it selects the row layout, the
+/// occupancy filter, and what activating a row means.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum PickerIntent {
+    /// Browse for a save container to LOAD (startup missing-save picker, System>Quit load picker).
+    #[default]
+    LoadSource,
+    /// Browse for a folder to SAVE INTO. `loaded_file_name` is the leaf the `[ new ]` row writes
+    /// (always the loaded save's own filename, so the destination keeps its save flavor).
+    SaveDestination { loaded_file_name: String },
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PickerEntry {
@@ -69,6 +94,8 @@ pub(crate) enum PickerRow {
     Dir(PathBuf),
     /// Pick this save file.
     File(PathBuf),
+    /// Destination intent only: save into the browsed folder under the loaded save's own filename.
+    NewFile(PathBuf),
     /// Advance to the next page (wraps to the first page after the last).
     NextPage,
     /// Row beyond the listing on this page; activation is a no-op.
@@ -80,6 +107,9 @@ pub(crate) enum PickerRow {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PickerActivation {
     PickedFile(PathBuf),
+    /// Destination intent only: the `[ new ]` row resolved to this target path in the browsed
+    /// directory. The UI layer decides whether it already exists (overwrite confirm) or not.
+    PickedNewFile(PathBuf),
     Repopulate,
     Ignored,
 }
@@ -100,6 +130,8 @@ pub(crate) struct SavePickerModel {
     /// Mounted drives that browse as folders (cached at open); the top row cycles through these
     /// with left/right.
     drives: Vec<PathBuf>,
+    /// What this browsing session is for; locked at open time.
+    intent: PickerIntent,
 }
 
 /// Mounted drives that browse as folders: probe `A:\`..`Z:\` and keep the ones that are real
@@ -154,6 +186,26 @@ impl SavePickerModel {
     /// Build a model rooted at `dir`, listing subdirectories plus files whose extension matches any
     /// entry in `extensions`.
     pub(crate) fn open_with_extensions(dir: &Path, extensions: &[&str]) -> Self {
+        Self::open_with_intent(dir, extensions, PickerIntent::LoadSource)
+    }
+
+    /// Build a save-DESTINATION browser rooted at `dir` (save-game-flow WP3). `loaded_file_name` is
+    /// the leaf the `[ new ]` row writes into the browsed folder.
+    pub(crate) fn open_destination(
+        dir: &Path,
+        extensions: &[&str],
+        loaded_file_name: &str,
+    ) -> Self {
+        Self::open_with_intent(
+            dir,
+            extensions,
+            PickerIntent::SaveDestination {
+                loaded_file_name: loaded_file_name.to_owned(),
+            },
+        )
+    }
+
+    fn open_with_intent(dir: &Path, extensions: &[&str], intent: PickerIntent) -> Self {
         let mut filters: Vec<String> = extensions
             .iter()
             .map(|ext| ext.trim().trim_start_matches('.').to_ascii_lowercase())
@@ -172,10 +224,45 @@ impl SavePickerModel {
             page: 0,
             cursor: 0,
             drives: enumerate_drives(),
+            intent,
         };
         model.refresh();
         model.cursor = model.first_selectable_row();
         model
+    }
+
+    /// True when this browser is choosing a save DESTINATION rather than a load source.
+    pub(crate) fn is_destination(&self) -> bool {
+        matches!(self.intent, PickerIntent::SaveDestination { .. })
+    }
+
+    /// Row index of the first directory/file entry: 1 normally, 2 in destination intent (row 1 is
+    /// the pinned `[ new ]` row).
+    fn entry_row_base(&self) -> usize {
+        if self.is_destination() {
+            PICKER_ROW_NEW_FILE + 1
+        } else {
+            PICKER_ROW_PARENT + 1
+        }
+    }
+
+    fn entries_per_page(&self) -> usize {
+        if self.is_destination() {
+            PICKER_ENTRIES_PER_PAGE_DEST
+        } else {
+            PICKER_ENTRIES_PER_PAGE
+        }
+    }
+
+    /// Destination target for the `[ new ]` row: the loaded save's own filename in the browsed
+    /// directory. `None` outside destination intent.
+    fn new_file_target(&self) -> Option<PathBuf> {
+        match &self.intent {
+            PickerIntent::SaveDestination { loaded_file_name } => {
+                Some(self.current_dir.join(loaded_file_name))
+            }
+            PickerIntent::LoadSource => None,
+        }
     }
 
     /// Header line: the current directory path.
@@ -234,7 +321,7 @@ impl SavePickerModel {
     }
 
     pub(crate) fn page_count(&self) -> usize {
-        self.entries.len().div_ceil(PICKER_ENTRIES_PER_PAGE).max(1)
+        self.entries.len().div_ceil(self.entries_per_page()).max(1)
     }
 
     pub(crate) fn entry_count(&self) -> usize {
@@ -289,7 +376,11 @@ impl SavePickerModel {
                             .iter()
                             .any(|allowed| ext.eq_ignore_ascii_case(allowed))
                     })
-                && save_file_has_active_slots(&path)
+                // Occupancy filtering is a LOAD-source concern only. A destination row is an
+                // overwrite target, so it needs no active character slot -- and hiding a slotless
+                // existing file would let `[ new ]` silently clobber it. It also avoids a ~28 MB
+                // read per candidate on a folder full of saves.
+                && (self.is_destination() || save_file_has_active_slots(&path))
             {
                 files.push(PickerEntry::File {
                     name: name.to_owned(),
@@ -332,8 +423,9 @@ impl SavePickerModel {
     }
 
     fn page_entries(&self) -> &[PickerEntry] {
-        let start = self.page * PICKER_ENTRIES_PER_PAGE;
-        let end = (start + PICKER_ENTRIES_PER_PAGE).min(self.entries.len());
+        let per_page = self.entries_per_page();
+        let start = self.page * per_page;
+        let end = (start + per_page).min(self.entries.len());
         self.entries.get(start..end).unwrap_or(&[])
     }
 
@@ -346,9 +438,15 @@ impl SavePickerModel {
                 // drives (handled by the overlay), so this is not a dead end.
                 _ => PickerRow::AtRoot,
             },
+            PICKER_ROW_NEW_FILE if self.is_destination() => self
+                .new_file_target()
+                .map_or(PickerRow::Empty, PickerRow::NewFile),
             PICKER_ROW_NEXT_PAGE if self.page_count() > 1 => PickerRow::NextPage,
             PICKER_ROW_NEXT_PAGE => PickerRow::Empty,
-            row => match self.page_entries().get(row - 1) {
+            row => match row
+                .checked_sub(self.entry_row_base())
+                .and_then(|idx| self.page_entries().get(idx))
+            {
                 Some(PickerEntry::Dir { path, .. }) => PickerRow::Dir(path.clone()),
                 Some(PickerEntry::File { path, .. }) => PickerRow::File(path.clone()),
                 None => PickerRow::Empty,
@@ -375,6 +473,7 @@ impl SavePickerModel {
                 PickerActivation::Repopulate
             }
             PickerRow::File(path) => PickerActivation::PickedFile(path),
+            PickerRow::NewFile(path) => PickerActivation::PickedNewFile(path),
             PickerRow::NextPage => {
                 self.page = (self.page + 1) % self.page_count();
                 PickerActivation::Repopulate
@@ -396,6 +495,7 @@ impl SavePickerModel {
                 .and_then(|name| name.to_str())
                 .unwrap_or("?")
                 .to_owned(),
+            PickerRow::NewFile(_) => PICKER_NEW_FILE_LABEL.to_owned(),
             PickerRow::NextPage => {
                 format!("[ page {}/{} ]", self.page + 1, self.page_count())
             }
@@ -430,6 +530,12 @@ impl SavePickerModel {
                 .and_then(|name| name.to_str())
                 .unwrap_or("?")
                 .to_owned(),
+            PickerRow::NewFile(path) => format!(
+                "{PICKER_NEW_FILE_LABEL}  {}",
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("?")
+            ),
             PickerRow::NextPage => format!("[PAGE {}/{}]", self.page + 1, self.page_count()),
             PickerRow::Empty => String::new(),
         };
@@ -443,7 +549,8 @@ impl SavePickerModel {
 
     fn first_selectable_row(&self) -> usize {
         // Prefer the first ENTRY row (1) over the parent nav row so a fresh listing lands on a
-        // file/dir; fall back to any selectable row, else 0.
+        // file/dir; fall back to any selectable row, else 0. In destination intent row 1 is the
+        // pinned `[ new ]` row, so an empty folder still lands on a usable action.
         (1..PICKER_ROW_COUNT)
             .find(|&r| self.row_selectable(r))
             .or_else(|| (0..PICKER_ROW_COUNT).find(|&r| self.row_selectable(r)))
@@ -527,6 +634,114 @@ impl SavePickerModel {
 /// UTF-16 encode with truncation to `max` units (no NUL appended).
 pub(crate) fn truncate_utf16(text: &str, max: usize) -> Vec<u16> {
     text.encode_utf16().take(max).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a model with a fixed listing, bypassing the filesystem enumeration `open` does.
+    fn model_with(intent: PickerIntent, dir: &str, files: usize) -> SavePickerModel {
+        SavePickerModel {
+            current_dir: PathBuf::from(dir),
+            extension: "sl2".to_owned(),
+            extensions: vec!["sl2".to_owned()],
+            entries: (0..files)
+                .map(|idx| PickerEntry::File {
+                    name: format!("save{idx}.sl2"),
+                    path: PathBuf::from(dir).join(format!("save{idx}.sl2")),
+                    modified: None,
+                })
+                .collect(),
+            page: 0,
+            cursor: 0,
+            drives: Vec::new(),
+            intent,
+        }
+    }
+
+    fn destination(dir: &str, files: usize) -> SavePickerModel {
+        model_with(
+            PickerIntent::SaveDestination {
+                loaded_file_name: "ER0000.sl2".to_owned(),
+            },
+            dir,
+            files,
+        )
+    }
+
+    #[test]
+    fn destination_pins_new_file_to_row_one_and_shifts_entries_down() {
+        let model = destination("Z:\\saves", 3);
+        assert_eq!(
+            model.row_meaning(PICKER_ROW_NEW_FILE),
+            PickerRow::NewFile(PathBuf::from("Z:\\saves").join("ER0000.sl2"))
+        );
+        for (offset, expected) in (0..3).enumerate() {
+            assert_eq!(
+                model.row_meaning(PICKER_ROW_NEW_FILE + 1 + offset),
+                PickerRow::File(PathBuf::from("Z:\\saves").join(format!("save{expected}.sl2")))
+            );
+        }
+        assert_eq!(model.row_meaning(PICKER_ROW_NEW_FILE + 4), PickerRow::Empty);
+    }
+
+    #[test]
+    fn destination_pages_seven_entries_per_page() {
+        let model = destination("Z:\\saves", PICKER_ENTRIES_PER_PAGE_DEST + 1);
+        assert_eq!(model.page_count(), 2);
+        assert_eq!(model.row_meaning(PICKER_ROW_NEXT_PAGE), PickerRow::NextPage);
+        // Last entry row of page 0 is the 7th entry; the 8th only appears on page 1.
+        assert_eq!(
+            model.row_meaning(PICKER_ROW_COUNT - 2),
+            PickerRow::File(PathBuf::from("Z:\\saves").join("save6.sl2"))
+        );
+        let mut model = model;
+        model.cycle_page(true);
+        assert_eq!(
+            model.row_meaning(PICKER_ROW_NEW_FILE + 1),
+            PickerRow::File(PathBuf::from("Z:\\saves").join("save7.sl2"))
+        );
+        assert_eq!(model.row_meaning(PICKER_ROW_NEW_FILE + 2), PickerRow::Empty);
+    }
+
+    #[test]
+    fn load_source_layout_is_unchanged_by_the_destination_intent() {
+        let model = model_with(
+            PickerIntent::LoadSource,
+            "Z:\\saves",
+            PICKER_ENTRIES_PER_PAGE,
+        );
+        assert_eq!(model.page_count(), 1);
+        assert_eq!(
+            model.row_meaning(1),
+            PickerRow::File(PathBuf::from("Z:\\saves").join("save0.sl2"))
+        );
+        assert_eq!(
+            model.row_meaning(PICKER_ROW_COUNT - 2),
+            PickerRow::File(PathBuf::from("Z:\\saves").join("save7.sl2"))
+        );
+        assert_eq!(model.row_meaning(PICKER_ROW_NEXT_PAGE), PickerRow::Empty);
+    }
+
+    #[test]
+    fn empty_destination_folder_still_lands_the_cursor_on_new_file() {
+        let mut model = destination("Z:\\saves", 0);
+        model.cursor = model.first_selectable_row();
+        assert_eq!(model.cursor, PICKER_ROW_NEW_FILE);
+        assert_eq!(
+            model.activate_cursor(),
+            PickerActivation::PickedNewFile(PathBuf::from("Z:\\saves").join("ER0000.sl2"))
+        );
+    }
+
+    #[test]
+    fn new_file_row_label_fits_the_profile_summary_name_budget() {
+        let model = destination("Z:\\saves", 0);
+        let label = model.row_label_utf16(PICKER_ROW_NEW_FILE);
+        assert!(!label.is_empty() && label.len() <= PICKER_ROW_NAME_UTF16_MAX);
+        assert_eq!(String::from_utf16(&label).unwrap(), PICKER_NEW_FILE_LABEL);
+    }
 }
 
 /// The active picker instance, shared between the open path (menu action) and the activation

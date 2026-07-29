@@ -98,22 +98,27 @@ pub(crate) unsafe fn switch_harness_discovery_tick() {
     }
 }
 
-// === SAVE-FLOW state machine (save-game-flow WP1 + WP2, 2026-07-28) ===
+// === SAVE-FLOW state machine (save-game-flow WP1 + WP2 + WP3, 2026-07-28) ===
 // Drives the System->Quit "Save Game" row's confirm chain and CLOSE-THEN-FIRE commit.
 // Stage map lives on `er_telemetry::counters::SAVE_FLOW_STAGE` (oracle_save_flow_stage):
-// 0 IDLE, 1 BOX1_WAIT, 2 BOX2_WAIT, 3 DEST_BROWSE / 4 BOX3_WAIT (WP3), 5 CLOSING_ABORT,
+// 0 IDLE, 1 BOX1_WAIT, 2 BOX2_WAIT, 3 DEST_BROWSE, 4 BOX3_WAIT, 5 CLOSING_ABORT,
 // 6 CLOSING_COMMIT, 7 FIRE_GATE_WAIT, 8 COMMIT_WAIT.
 //
 // WP2 added the confirm chain: the row press submits Box1 ("Are you sure you want to
 // save?", default No) inline on the menu thread; the tick POLLS the box result (pure
 // reads) and, on Yes, stages Box2 ("Overwrite your loaded save?", default Yes) for the
-// menu pump to submit. Box2 Yes stages the commit, anything else aborts. Both terminal
-// paths run the proven close sequence (OptionSetting immediately, IngameTop deferred 2
-// frames), and only once the menus are closed AND the RAM gates are green does the tick
-// arm the one-shot er-save-suppress bypass and fire the FORCED (throttle-skipping)
-// native save request pair. The tick only reads and decides; all menu mutation stays on
-// the paths that already own it, except the window CLOSE, which the shipping deferred
-// IngameTop close already performs from this same game task.
+// menu pump to submit. Box2 Yes stages the commit, No opens the WP3 destination browser,
+// cancel aborts. Both terminal paths run the proven close sequence (OptionSetting
+// immediately, IngameTop deferred 2 frames), and only once the menus are closed AND the
+// RAM gates are green does the tick arm the one-shot er-save-suppress bypass and fire the
+// FORCED (throttle-skipping) native save request pair. The tick only reads and decides;
+// all menu mutation stays on the paths that already own it, except the window CLOSE,
+// which the shipping deferred IngameTop close already performs from this same game task.
+//
+// WP3 added the destination browser (stage 3) and its overwrite confirm (stage 4). A
+// chosen destination is committed by ARMING a scoped write-open redirect just before the
+// fire, so the native writer's own container write lands on the destination while the
+// loaded save is only read; stage 8 verifies both files before returning to IDLE.
 
 /// Transition helper: swap the stage, reset the per-stage tick counter, log the edge.
 fn save_flow_enter_stage(stage: usize, reason: &str) {
@@ -140,6 +145,10 @@ pub(crate) unsafe fn save_flow_tick() {
         SAVE_FLOW_STAGE_BOX2_WAIT => unsafe {
             save_flow_box_wait_tick(SAVE_FLOW_BOX_OVERWRITE_LOADED, ticks)
         },
+        SAVE_FLOW_STAGE_DEST_BROWSE => unsafe { save_flow_dest_browse_tick(ticks) },
+        SAVE_FLOW_STAGE_BOX3_WAIT => unsafe {
+            save_flow_box_wait_tick(SAVE_FLOW_BOX_OVERWRITE_FILE, ticks)
+        },
         SAVE_FLOW_STAGE_CLOSING_ABORT | SAVE_FLOW_STAGE_CLOSING_COMMIT => {
             // The close sequence itself is owned by system_quit_save_game_close_menus
             // (OptionSetting now) + the deferred-close tick (IngameTop, 2 frames). Menus are
@@ -151,6 +160,7 @@ pub(crate) unsafe fn save_flow_tick() {
                 } else {
                     SAVE_FLOW_ABORT_COUNT.fetch_add(1, Ordering::SeqCst);
                     save_flow_box_clear();
+                    save_dest_reset("aborted without writing");
                     save_flow_enter_stage(
                         SAVE_FLOW_STAGE_IDLE,
                         "menus closed; aborted without writing",
@@ -161,13 +171,14 @@ pub(crate) unsafe fn save_flow_tick() {
         SAVE_FLOW_STAGE_FIRE_GATE_WAIT => unsafe { save_flow_fire_gate_tick(ticks) },
         SAVE_FLOW_STAGE_COMMIT_WAIT => save_flow_commit_wait_tick(ticks),
         _ => {
-            // Stages 3/4 are the WP3 destination-browser stages; nothing sets them yet, so a
-            // value here is state corruption. Reset loudly, never wedge.
+            // Every stage id in the map is handled above, so a value here is state corruption.
+            // Reset loudly, never wedge.
             append_autoload_debug(format_args!(
-                "save-flow: tick saw unimplemented stage {stage}; resetting to IDLE"
+                "save-flow: tick saw unknown stage {stage}; resetting to IDLE"
             ));
             save_flow_box_clear();
-            save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "unimplemented stage");
+            save_dest_reset("unknown stage");
+            save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "unknown stage");
         }
     }
 }
@@ -189,11 +200,21 @@ unsafe fn save_flow_box_wait_tick(box_id: usize, ticks: usize) {
             let pending = SAVE_FLOW_SUBMIT_BOX_PENDING.load(Ordering::SeqCst);
             SAVE_FLOW_BOX_BUILD_TIMEOUT_COUNT.fetch_add(1, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "save-flow: {} BUILD TIMEOUT after {ticks} ticks (submit_pending={pending}) -- the confirm box never became visible; closing back to the world, the user's save did NOT happen",
+                "save-flow: {} BUILD TIMEOUT after {ticks} ticks (submit_pending={pending}) -- the confirm box never became visible; ending the flow, the user's save did NOT happen",
                 save_flow_box_label(box_id)
             ));
             save_flow_box_clear();
-            unsafe { save_flow_close_menus_from_tick("box_build_timeout", false) };
+            if box_id == SAVE_FLOW_BOX_OVERWRITE_FILE {
+                // Box3 sits OVER the destination browser: tear the picker down first (its close
+                // restores the user's rows and re-shows the System windows) and let the stage-3
+                // abort path close the menus once the window is gone.
+                let picker = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
+                save_dest_clear_target("box3 build timeout");
+                unsafe { save_flow_close_dest_picker_from_tick(picker, "box3_build_timeout") };
+                save_flow_enter_stage(SAVE_FLOW_STAGE_DEST_BROWSE, "box3 build timeout");
+            } else {
+                unsafe { save_flow_close_menus_from_tick("box_build_timeout", false) };
+            }
         }
         return;
     };
@@ -204,9 +225,39 @@ unsafe fn save_flow_box_wait_tick(box_id: usize, ticks: usize) {
             save_flow_enter_stage(SAVE_FLOW_STAGE_BOX2_WAIT, "box1 Yes -> overwrite confirm");
         }
         (SAVE_FLOW_BOX_OVERWRITE_LOADED, SaveFlowDecision::Yes) => {
-            // WP2 commit plan: overwrite the loaded save. WP3 replaces the No branch below
-            // with the destination browser.
+            // Commit plan: overwrite the loaded save. No destination target is set, so the fire
+            // gate arms no redirect and the native writer hits its normal path.
             unsafe { save_flow_close_menus_from_tick("box2_overwrite_loaded", true) };
+        }
+        (SAVE_FLOW_BOX_OVERWRITE_LOADED, SaveFlowDecision::No) => {
+            // "Save somewhere else": hand the destination browser open to the menu pump (staging
+            // records + submitting the 05_010 job is menu-pump work) and wait in stage 3.
+            SAVE_DEST_OPEN_PICKER_PENDING.store(1, Ordering::SeqCst);
+            save_flow_enter_stage(
+                SAVE_FLOW_STAGE_DEST_BROWSE,
+                "box2 No -> choose a save destination",
+            );
+        }
+        (SAVE_FLOW_BOX_OVERWRITE_FILE, SaveFlowDecision::Yes) => {
+            // Final overwrite confirm for an existing destination file. The picker close is the
+            // same native primitive the deferred IngameTop close already calls from this task.
+            let picker = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
+            SAVE_DEST_COMMIT_COUNT.fetch_add(1, Ordering::SeqCst);
+            SAVE_DEST_COMMIT_PENDING.store(1, Ordering::SeqCst);
+            unsafe { save_flow_close_dest_picker_from_tick(picker, "box3_overwrite_confirmed") };
+            save_flow_enter_stage(
+                SAVE_FLOW_STAGE_DEST_BROWSE,
+                "box3 Yes -> commit to the chosen file",
+            );
+        }
+        (SAVE_FLOW_BOX_OVERWRITE_FILE, SaveFlowDecision::No) => {
+            // Declining the overwrite drops only the target: the browser is untouched, so the
+            // user can pick a different destination.
+            save_dest_clear_target("box3 declined");
+            save_flow_enter_stage(
+                SAVE_FLOW_STAGE_DEST_BROWSE,
+                "box3 No -> back to the destination browser",
+            );
         }
         (_, SaveFlowDecision::No) => {
             append_autoload_debug(format_args!(
@@ -222,6 +273,75 @@ unsafe fn save_flow_box_wait_tick(box_id: usize, ticks: usize) {
             unsafe { save_flow_close_menus_from_tick("box_unexpected_id", false) };
         }
     }
+}
+
+/// Stage 3 DEST_BROWSE: the destination browser is opening, being browsed, or tearing down after
+/// a destination was confirmed. PURE READS plus the two hand-offs the tick owns (closing the menus
+/// once the picker is gone, and ending a flow whose browser never appeared).
+///
+/// The picker itself drives the interesting transitions from its own activation hook (menu
+/// thread): a chosen destination sets `SAVE_DEST_COMMIT_PENDING` and closes the window, an
+/// existing file goes to stage 4 first. Backing out of the browser clears the picker latches with
+/// no commit pending, which is what this reads as "the user abandoned the save".
+unsafe fn save_flow_dest_browse_tick(ticks: usize) {
+    // A confirmed destination outranks every other latch: once the commit is staged the browser is
+    // on its way out and only its teardown is being waited on.
+    if SAVE_DEST_COMMIT_PENDING.load(Ordering::SeqCst) != 0 {
+        if SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) == 0 {
+            // Gone: its close already restored the user's ProfileSummary rows and re-showed the
+            // System windows, which is the state the close-all sequence expects.
+            SAVE_DEST_COMMIT_PENDING.store(0, Ordering::SeqCst);
+            unsafe { save_flow_close_menus_from_tick("dest_commit", true) };
+        } else if ticks >= SAVE_DEST_PICKER_OPEN_TIMEOUT_TICKS {
+            // The browser will not go away. Nothing has been armed or fired yet, so abort rather
+            // than close the root menus out from under a live window.
+            SAVE_DEST_COMMIT_PENDING.store(0, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "save-flow: destination browser did not tear down after {ticks} ticks -- abandoning the commit, the user's save did NOT happen"
+            ));
+            unsafe { save_flow_close_menus_from_tick("dest_teardown_timeout", false) };
+        }
+        return;
+    }
+    if SAVE_PICKER_DEST_MODE.load(Ordering::SeqCst) != 0 {
+        // Browser is live and owns the screen; the user's decision has no timeout.
+        return;
+    }
+    if SAVE_DEST_OPEN_PICKER_PENDING.load(Ordering::SeqCst) != 0 {
+        // Staged for the menu pump but not open yet.
+        if ticks >= SAVE_DEST_PICKER_OPEN_TIMEOUT_TICKS {
+            SAVE_DEST_OPEN_PICKER_PENDING.store(0, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "save-flow: destination browser never opened after {ticks} ticks -- ending the flow, the user's save did NOT happen"
+            ));
+            unsafe { save_flow_close_menus_from_tick("dest_picker_open_timeout", false) };
+        }
+        return;
+    }
+    // No browser, no pending open, no commit: the user backed out of the destination browser.
+    SAVE_DEST_CANCEL_COUNT.fetch_add(1, Ordering::SeqCst);
+    save_dest_clear_target("destination browser abandoned");
+    append_autoload_debug(format_args!(
+        "save-flow: destination browser closed without choosing after {ticks} ticks -- returning to the world with nothing written"
+    ));
+    unsafe { save_flow_close_menus_from_tick("dest_abandoned", false) };
+}
+
+/// Native cancel-close of the destination browser from the game task. Same primitive (and same
+/// task) as the shipping deferred IngameTop close; a stale/absent window is not fatal -- stage 3
+/// then simply observes the picker latches already cleared.
+unsafe fn save_flow_close_dest_picker_from_tick(picker_window: usize, reason: &str) {
+    save_flow_box_clear();
+    if picker_window < 0x10000 {
+        append_autoload_debug(format_args!(
+            "save-flow: destination browser close skipped (reason={reason}) -- window=0x{picker_window:x} is not live"
+        ));
+        return;
+    }
+    let closed = unsafe { system_quit_save_game_close_window(picker_window, "dest_picker_window") };
+    append_autoload_debug(format_args!(
+        "save-flow: destination browser close (reason={reason}) window=0x{picker_window:x} closed={closed}"
+    ));
 }
 
 /// Run the close-all sequence for a decision reached on the game task. The native
@@ -250,6 +370,7 @@ unsafe fn save_flow_close_menus_from_tick(source: &str, commit: bool) {
     append_autoload_debug(format_args!(
         "save-flow: close-all from tick source={source} commit={commit} could not stage (dialog=0x{dialog:x} stale) -- ending the flow; the user's save did NOT happen"
     ));
+    save_dest_reset("close-all could not stage");
     save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "close-all could not stage");
 }
 
@@ -305,6 +426,33 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
     let gates_green =
         dsm == 0 && b80 == 0 && bc4 != GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY as i32;
     if gates_green {
+        // DESTINATION COMMIT (save-game-flow WP3): with a chosen destination that is not the
+        // loaded save, arm the scoped write-open redirect (and the live-file snapshot that undoes
+        // a leak) BEFORE the request is fired. Arming failure is terminal -- firing without it
+        // would overwrite the very file the user chose not to overwrite.
+        if let Some(target) = save_dest_target() {
+            let Some(live) = save_dest_live_save_path() else {
+                SAVE_DEST_COMMIT_FAIL.fetch_add(1, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "save-flow: FIRE ABORT -- destination '{}' chosen but the loaded save path is unavailable; NOT firing",
+                    target.display()
+                ));
+                save_dest_reset("live save path unavailable");
+                save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "destination live path unavailable");
+                return;
+            };
+            if !save_dest_target_is_live(&target, &live) && !save_dest_arm_redirect(&live, &target)
+            {
+                SAVE_DEST_COMMIT_FAIL.fetch_add(1, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "save-flow: FIRE ABORT -- could not arm the destination redirect for '{}'; NOT firing, the user's save did NOT happen",
+                    target.display()
+                ));
+                save_dest_reset("redirect arm failed");
+                save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "destination arm failed");
+                return;
+            }
+        }
         if !er_save_suppress::is_armed() {
             // Degraded fail-open (prologue mismatch / install failure): suppression never
             // armed, so every native save already writes normally. Fire the forced request
@@ -313,7 +461,17 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
                 "save-flow: suppression NOT armed (oracle_save_suppress_armed=0) -- degraded fail-open: firing forced native save request without a bypass token"
             ));
             unsafe { system_quit_save_game_request_save_forced() };
-            save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "degraded fail-open fire");
+            if save_dest_redirect_armed() {
+                // A destination write is now in flight with no bypass token to watch, so the
+                // stage-8 watchdog owns the wait and the verification.
+                save_flow_enter_stage(
+                    SAVE_FLOW_STAGE_COMMIT_WAIT,
+                    "degraded fail-open fire with a destination redirect armed",
+                );
+            } else {
+                save_dest_reset("degraded fail-open fire");
+                save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "degraded fail-open fire");
+            }
             return;
         }
         if !er_save_suppress::arm_one_save_bypass() {
@@ -322,6 +480,8 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
             append_autoload_debug(format_args!(
                 "save-flow: FIRE ABORT -- arm_one_save_bypass refused (token already pending); the user's save did NOT happen"
             ));
+            save_dest_verify_and_disarm("bypass arm refused");
+            save_dest_reset("bypass arm refused");
             save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "bypass arm refused");
             return;
         }
@@ -349,6 +509,7 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
         append_autoload_debug(format_args!(
             "save-flow: FIRE-GATE TIMEOUT after {ticks} ticks (disableSaveMenu={dsm} b80={b80} bc4={bc4}); aborting without firing -- the user's save did NOT happen"
         ));
+        save_dest_reset("fire-gate timeout");
         save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "fire-gate timeout");
     }
 }
@@ -369,6 +530,11 @@ fn save_flow_commit_wait_tick(ticks: usize) {
                 "save-flow: COMMIT FAILED -- bypassed save reported terminal status {status} (0=success); the user's save did NOT complete"
             ));
         }
+        // Destination commits are scored HERE (WP3): the write-open redirect is disarmed and both
+        // files are checked -- the destination must be a fresh BND4 container of the live save's
+        // size, and the live save must be byte-identical to its pre-fire snapshot.
+        save_dest_verify_and_disarm("commit terminal status");
+        save_dest_reset("commit terminal status");
         save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "commit terminal status");
         return;
     }
@@ -382,6 +548,10 @@ fn save_flow_commit_wait_tick(ticks: usize) {
                 "token was consumed but no terminal status was observed"
             }
         ));
+        // A destination write may still have landed (the degraded fail-open path has no token to
+        // watch at all), so score it before dropping the window rather than assuming failure.
+        save_dest_verify_and_disarm("commit watchdog");
+        save_dest_reset("commit watchdog");
         save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "commit watchdog");
     }
 }

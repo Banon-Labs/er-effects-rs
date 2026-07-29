@@ -1764,6 +1764,16 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     if pending_box != SAVE_FLOW_BOX_NONE && unsafe { save_flow_submit_box(pending_box) } {
         SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_NONE, Ordering::SeqCst);
     }
+    // MENU-PUMP-OWNED destination browser open (save-game-flow WP3): Box2 "No" means "save
+    // somewhere else", which the tick stages here because opening the picker stages records and
+    // submits a MenuJob -- menu-pump work, not game-task work. A failed open keeps the latch so
+    // the next pump retries; the tick's own timeout ends the flow if it never succeeds.
+    if SAVE_DEST_OPEN_PICKER_PENDING.load(Ordering::SeqCst) != 0 {
+        let system_dialog = SAVE_FLOW_DIALOG.load(Ordering::SeqCst);
+        if unsafe { system_quit_open_save_dest_picker(system_dialog) } {
+            SAVE_DEST_OPEN_PICKER_PENDING.store(0, Ordering::SeqCst);
+        }
+    }
     // MENU-PUMP-OWNED save-picker maintenance: in-place row rebuild after a navigation, and
     // window resubmit after a navigation/pick close (same submit-context rule as the
     // return-title chain below).

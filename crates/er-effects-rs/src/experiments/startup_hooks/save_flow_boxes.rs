@@ -6,7 +6,10 @@
 //
 //   Box1 "Are you sure you want to save?"   choices Yes / No, default No
 //   Box2 "Overwrite your loaded save?"      choices Yes / No, default Yes
-//   Box3 "Overwrite this file?"             choices Yes / No, default No   (WP3 only)
+//   Box3 "Overwrite this file?"             choices Yes / No, default No
+//
+// Box1/Box2 are hosted by the System/Quit dialog; Box3 is raised over the destination browser and
+// is hosted by the picker's own dialog (see `save_flow_box_host_dialog`).
 //
 // RECIPE (disassembled from `eldenring-deobf.bin` 2026-07-28; the native Yes/No confirm
 // wrapper `FUN_1407b73d0`, which is what the quit confirm at `FUN_14079d700` calls):
@@ -270,8 +273,27 @@ pub(crate) fn save_flow_box_recipe_available() -> bool {
     save_flow_box_recipe().is_some()
 }
 
-/// Build and submit one confirm box against the System/Quit dialog captured at the Save Game
-/// row press.
+/// Dialog the next box is built against and submitted to. Defaults to the System/Quit dialog
+/// captured at the Save Game row press; Box3 overrides it with the live `05_010` picker dialog.
+///
+/// Why the override exists (RE, 1.16.2 `FUN_1409a4670`, the native ProfileLoadDialog slot
+/// activation): the game submits its OWN "load this profile?" confirm to
+/// `profile_load_dialog + 0x10` with the context `profile_load_dialog + 0x50` -- i.e. a confirm
+/// raised over the picker belongs to the PICKER's job queue, not the System dialog's, whose queue
+/// is still busy with the open picker window job.
+fn save_flow_box_host_dialog() -> usize {
+    match SAVE_FLOW_BOX_HOST_DIALOG.load(Ordering::SeqCst) {
+        0 => SAVE_FLOW_DIALOG.load(Ordering::SeqCst),
+        host => host,
+    }
+}
+
+/// Point the next box submit at a specific host dialog (0 restores the System/Quit dialog).
+pub(crate) fn save_flow_box_set_host_dialog(dialog: usize) {
+    SAVE_FLOW_BOX_HOST_DIALOG.store(dialog, Ordering::SeqCst);
+}
+
+/// Build and submit one confirm box against the flow's current host dialog.
 ///
 /// MENU-THREAD ONLY: this calls the native MessageBoxBuilder + MenuJob submit helpers, so it
 /// must run in the same ownership context `system_quit_open_profile_load_dialog` does -- the
@@ -283,10 +305,10 @@ pub(crate) fn save_flow_box_recipe_available() -> bool {
 pub(crate) unsafe fn save_flow_submit_box(box_id: usize) -> bool {
     const HEAP_LO: usize = 0x10000;
     let label = save_flow_box_label(box_id);
-    let dialog = SAVE_FLOW_DIALOG.load(Ordering::SeqCst);
+    let dialog = save_flow_box_host_dialog();
     if dialog < HEAP_LO || dialog == TITLE_OWNER_SCAN_START_ADDRESS {
         append_autoload_debug(format_args!(
-            "save-flow-box: {label} submit abort -- captured System dialog=0x{dialog:x} is not heap-like"
+            "save-flow-box: {label} submit abort -- host dialog=0x{dialog:x} is not heap-like"
         ));
         return false;
     }
@@ -453,6 +475,7 @@ pub(crate) fn save_flow_box_clear() {
     SAVE_FLOW_BOX_EXPECTED.store(SAVE_FLOW_BOX_NONE, Ordering::SeqCst);
     SAVE_FLOW_BOX_DIALOG.store(0, Ordering::SeqCst);
     SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_NONE, Ordering::SeqCst);
+    SAVE_FLOW_BOX_HOST_DIALOG.store(0, Ordering::SeqCst);
 }
 
 /// Record a captured confirm-box dialog (called from the MessageBoxDialog builder hook).
