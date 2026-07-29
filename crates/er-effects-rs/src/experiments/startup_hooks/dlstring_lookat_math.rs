@@ -862,36 +862,12 @@ pub(crate) fn maybe_capture_portrait_gxtexture(base: usize, slot: i32) {
 /// path -- this validates P1 (the model build) in isolation. Targets slot 0 (the staged single-profile
 /// gold save's character). `slot` is the target save slot (0 for the staged single-profile gold
 /// save; the autoload path passes its own target slot).
-/// Read the OS mouse cursor -- which IS the menu cursor ER drives via `GetCursorPos` -- normalized to
-/// the ER window client space: returns `(nx, ny)` where `(0,0)` is the window CENTER, `nx`/`ny` in
-/// roughly `[-1, 1]` (left/up negative, right/down positive). `None` if the window or cursor can't be
-/// resolved. Used by menu/input handlers only; portrait cursor tracking is retired. (Cheap pure Win32; no game state touched.)
-fn read_cursor_normalized() -> Option<(f32, f32)> {
-    use windows::Win32::Foundation::POINT;
-    use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetWindowRect};
-    let hwnd = own_window()?;
-    let mut pt = POINT { x: 0, y: 0 };
-    if unsafe { GetCursorPos(&mut pt) }.is_err() {
-        return None;
-    }
-    // Window rect is screen-space; ER's borderless window == its client area, so normalizing the
-    // screen cursor against it gives the cursor position relative to the rendered image.
-    let mut rect = RECT {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
-    };
-    if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
-        return None;
-    }
-    let w = (rect.right - rect.left).max(1) as f32;
-    let h = (rect.bottom - rect.top).max(1) as f32;
-    let nx = ((pt.x - rect.left) as f32 / w) * 2.0 - 1.0;
-    let ny = ((pt.y - rect.top) as f32 / h) * 2.0 - 1.0;
-    // Clamp a little beyond the edges so an off-window cursor saturates rather than flailing.
-    Some((nx.clamp(-1.5, 1.5), ny.clamp(-1.5, 1.5)))
-}
+// `read_cursor_normalized` lived here: an OS `GetCursorPos` reading normalized against the ER window
+// rect. Its last consumer was the System->Quit pointer band, a guessed screen rectangle that mapped
+// the lower half of the WINDOW onto the two added rows -- which is how a click on Return to Desktop
+// came to open the save picker. The row is now identified by the native grid's own cursor, which the
+// game itself writes from its hit test against each cell's display object, so there is no reason to
+// reimplement hit-testing from window geometry.
 
 /// Hamilton product `a * b` of two `(x, y, z, w)` quaternions (w = scalar, matching `BoneData.q`).
 fn quat_mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {

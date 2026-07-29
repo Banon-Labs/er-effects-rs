@@ -1330,9 +1330,28 @@ unsafe fn sample_optionsetting_active_row_table(
     .min(MAX_ROWS);
     let properties = current_dialog + PROPERTY_EDIT_DIALOG_PROPERTIES_1268_OFFSET;
     let aligned_properties = (properties + 0x7) & !0x7;
-    let quickload_action = SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
-    let open_profiles_action = SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
-    let native_save_action = SYSTEM_QUIT_NATIVE_SAVE_GAME_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
+    // Compare CONTROLLERS, not the `+0xa8` "action object": that field is only `controller + 0x70`
+    // (the controller's own inline std::function storage), so an action comparison is a controller
+    // comparison in disguise -- and a captured controller from a DEAD dialog can be matched by a
+    // reused heap address. Requiring the row table's dialog removes that stale-match class; the mask
+    // stays purely diagnostic either way.
+    let table_dialog = SYSTEM_QUIT_ROW_TABLE_DIALOG.load(Ordering::SeqCst);
+    let table_live = table_dialog != 0 && table_dialog == current_dialog;
+    let quickload_controller = if table_live {
+        SYSTEM_QUIT_LOAD_PROFILE_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst)
+    } else {
+        0
+    };
+    let open_profiles_controller = if table_live {
+        SYSTEM_QUIT_OPEN_SAVE_DIR_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst)
+    } else {
+        0
+    };
+    let native_save_controller = if table_live {
+        SYSTEM_QUIT_NATIVE_SAVE_GAME_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst)
+    } else {
+        0
+    };
     let mut cloned_mask = 0usize;
     let mut native_save_mask = 0usize;
     let mut quit_label_mask = 0usize;
@@ -1357,10 +1376,12 @@ unsafe fn sample_optionsetting_active_row_table(
         if optionsetting_quit_label_kind(label_ptr) != 0 {
             quit_label_mask |= 1usize << row_idx;
         }
-        if action != 0 && (action == quickload_action || action == open_profiles_action) {
+        if controller != 0
+            && (controller == quickload_controller || controller == open_profiles_controller)
+        {
             cloned_mask |= 1usize << row_idx;
         }
-        if action != 0 && action == native_save_action {
+        if controller != 0 && controller == native_save_controller {
             native_save_mask |= 1usize << row_idx;
         }
     }
@@ -1389,7 +1410,7 @@ unsafe fn sample_optionsetting_active_row_table(
         || (current_tab == 0 && (cloned_mask != 0 || quit_label_mask != 0))
     {
         append_autoload_debug(format_args!(
-            "optionsetting-rows: active tab={current_tab} dialog=0x{current_dialog:x} count={count} cloned_mask=0x{cloned_mask:x} native_save_mask=0x{native_save_mask:x} quit_label_mask=0x{quit_label_mask:x} action_hash=0x{action_hash:x} label_hash=0x{label_hash:x} quickload_action=0x{quickload_action:x} open_profiles_action=0x{open_profiles_action:x} native_save_action=0x{native_save_action:x}"
+            "optionsetting-rows: active tab={current_tab} dialog=0x{current_dialog:x} count={count} cloned_mask=0x{cloned_mask:x} native_save_mask=0x{native_save_mask:x} quit_label_mask=0x{quit_label_mask:x} action_hash=0x{action_hash:x} label_hash=0x{label_hash:x} table_live={table_live} quickload_controller=0x{quickload_controller:x} open_profiles_controller=0x{open_profiles_controller:x} native_save_controller=0x{native_save_controller:x}"
         ));
     }
 }
