@@ -1341,6 +1341,14 @@ pub static SAVE_FLOW_DISPATCH_DECLINES_AT_FIRE: AtomicUsize = AtomicUsize::new(0
 /// the character serializer `FUN_14067dc00` is what refused, which is upstream of both the
 /// submit builder and the suppressor.
 pub static SAVE_FLOW_SERIALIZE_FAILURES_AT_FIRE: AtomicUsize = AtomicUsize::new(0);
+/// `er_save_suppress::serialize_calls()` sampled at the fire. This is the ALLOCATION oracle:
+/// both character lanes allocate their MainHeap buffers (`0x280000`, plus `0x60000` on the
+/// combined lane) and null-check them BEFORE calling `FUN_14067dc00`, so a post-fire
+/// increase proves the allocations succeeded and the lane got as far as the serializer. No
+/// increase, with declines climbing, means the lane bailed earlier -- an allocation
+/// returned null, or one of the pre-allocation gates (`CanShowSaveMenu()`, `saveState != 0`,
+/// slot index >= 10) turned it away.
+pub static SAVE_FLOW_SERIALIZE_CALLS_AT_FIRE: AtomicUsize = AtomicUsize::new(0);
 /// `er_save_suppress::submits_swallowed()` sampled at the fire. A post-fire increase with no
 /// bypass allow means a submit WAS built and this DLL swallowed it by mistake -- the one
 /// failure mode where the fault is ours rather than the game's.

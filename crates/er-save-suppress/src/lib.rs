@@ -257,10 +257,10 @@ const SL_RELEASE_REQUEST_SIG: &[u8] = &[
 //
 // The serializer's own first gate is
 //   `buf == 0 || GameMan+0xcb1 != 0 || GameMan+0xcb2 != 0 || [0x143d68078] == 0`
-// and it returns BEFORE writing the byte counter `_DAT_143d69920`, which every later exit
-// does write (`total - bytesLeft`, i.e. how far the chain got). Sampling that global
-// around the call therefore separates "rejected at the first gate" from "aborted N bytes
-// into the chain", which pins the failing sub-serializer without another hook.
+// and it is the ONE exit that returns without writing the byte counter `_DAT_143d69920`.
+// That gate is PROVEN UNREACHABLE in this scenario, so the byte counter is written on
+// every exit we can actually observe -- see `SAVE_SERIALIZE_BYTES_RVA` for the proof and
+// `serialize_fail_step_label` for the decode.
 // ============================================================================
 
 /// `FUN_14067b940` -- combined save dispatcher, taken when b72 AND b73 are set. This is
@@ -278,8 +278,29 @@ const SAVE_DISPATCH_SYSTEM_RVA: usize = 0x67b570;
 /// submit call in both character lanes.
 #[cfg(windows)]
 const SAVE_SERIALIZE_CHAR_RVA: usize = 0x67dc00;
-/// `_DAT_143d69920` -- bytes the character serializer produced on its last call, written
-/// on every exit except the first-gate rejection.
+/// `_DAT_143d69920` -- bytes the character serializer produced on its last call.
+///
+/// Written exactly ONCE per call, at the merge point after the sub-serializer cascade:
+///
+/// ```text
+///   14067e0aa  CALL 0x141ede890        ; RAX = stream->capacity   (`return *(u64*)(this+0x18)`)
+///   14067e0af  MOV  RDI,RAX
+///   14067e0b7  CALL 0x141ede7d0        ; RAX = GetBytesLeft()
+///   14067e0bc  SUB  RDI,RAX            ; RDI = bytes written
+///   14067e0c6  MOV  qword ptr [0x143d69920],RDI
+/// ```
+///
+/// So the stored value is the stream position at the moment the cascade stopped. The only
+/// exit that skips the store is the first gate (`0x14067dc30`/`dc3d`/`dc4a`/`dc58` all jump
+/// to `0x14067e12f: XOR AL,AL`), and that gate is proven unreachable here: `buf` is
+/// null-checked by both calling lanes, `GameMan+0xcb1`/`+0xcb2` are zeroed by
+/// `CS::GameMan::GameMan` and have no other writer in the whole image, and `[0x143d68078]`
+/// (`GLOBAL_CSEventState`) is a process-lifetime singleton allocated once at save-subsystem
+/// boot. Every exit this instrument can observe therefore leaves a fresh count.
+///
+/// The 12 identical `CALL 0x141ede890; CALL 0x141ede7d0` pairs sprinkled between the steps
+/// discard both results (no `MOV`/`SUB` follows them) -- they are vestigial, not a per-step
+/// counter, so there is no finer-grained global to read.
 #[cfg(windows)]
 const SAVE_SERIALIZE_BYTES_RVA: usize = 0x3d69920;
 
@@ -310,10 +331,112 @@ pub const SAVE_LANE_SYSTEM: usize = 2;
 /// `FUN_14067b940`, the combined lane the Save Game commit fires.
 pub const SAVE_LANE_COMBINED: usize = 3;
 
-/// [`serialize_last_fail_bytes`] when the serializer's byte counter did not move across a
-/// failing call -- i.e. it was rejected by the first gate (`GameMan+0xcb1`/`+0xcb2` set, or
-/// the save-data subsystem global `0x143d68078` null) before any stream work happened.
-pub const SAVE_SERIALIZE_BYTES_UNMOVED: u64 = u64::MAX;
+/// [`serialize_last_fail_bytes`] when the byte counter could not be READ -- its address
+/// never resolved, or the read faulted. It is NOT a game-state outcome.
+///
+/// This used to mean "the counter did not move across the failing call, so the serializer
+/// was rejected by its first gate". That reading was wrong twice over. The gate is
+/// unreachable (see `SAVE_SERIALIZE_BYTES_RVA`), so it was a predicted-impossible outcome;
+/// and the before/after comparison that produced it fired on the ordinary case instead --
+/// a serializer that aborts at the SAME step every frame stores the SAME count every
+/// frame, so "unmoved" was the reading for nearly every real failure. The counter is now
+/// read once, after the call, and decoded by [`serialize_fail_step_label`].
+pub const SAVE_SERIALIZE_BYTES_UNREADABLE: u64 = u64::MAX;
+
+/// Short, telemetry-facing labels for [`serialize_fail_step_label`]. Kept as constants so
+/// a harness can match on them and a test can assert them without restating a literal.
+pub const SAVE_SERIALIZE_STEP_UNREADABLE: &str = "byte-counter-unreadable";
+/// Step 1 -- the 0x10-byte header write produced nothing.
+pub const SAVE_SERIALIZE_STEP_HEADER_NONE: &str = "step1-header-write-nothing";
+/// Step 1 -- the 0x10-byte header write was short.
+pub const SAVE_SERIALIZE_STEP_HEADER_SHORT: &str = "step1-header-write-short";
+/// Step 2 -- the 0x10-byte xorshift-seed write produced nothing.
+pub const SAVE_SERIALIZE_STEP_RANDSEED_NONE: &str = "step2-randseed-write-nothing";
+/// Step 2 -- the 0x10-byte xorshift-seed write was short.
+pub const SAVE_SERIALIZE_STEP_RANDSEED_SHORT: &str = "step2-randseed-write-short";
+/// Step 3 -- `FUN_140257f20` (the GameDataMan chain) refused having written nothing.
+pub const SAVE_SERIALIZE_STEP_GAMEDATAMAN_NONE: &str = "step3-gamedataman-no-output";
+/// Step 3 or later -- output was produced past the last statically fixed boundary.
+pub const SAVE_SERIALIZE_STEP_AFTER_OUTPUT: &str = "step3plus-after-output";
+
+/// Decode `_DAT_143d69920` into the name of the `FUN_14067dc00` step that refused.
+///
+/// The serializer is a straight-line cascade -- each step runs only if the previous one
+/// returned true -- and the byte counter is stored once, at the merge point, so the count
+/// IS the stream position where the cascade stopped. Cumulative boundaries therefore name
+/// the failing step, but only as far as the steps have statically fixed sizes:
+///
+/// | bytes | exit |
+/// |-------|------|
+/// | `0x00` | step 1 `Write(header,0x10)` @`0x14067dd3d` wrote nothing |
+/// | `0x01..=0x0f` | step 1 short write |
+/// | `0x10` | step 2 `Write(4 x CS::CSRandXorshift::NextInt, 0x10)` @`0x14067ddcc` wrote nothing |
+/// | `0x11..=0x1f` | step 2 short write |
+/// | `0x20` | step 3 `FUN_140257f20` refused with no output |
+/// | `> 0x20` | inside step 3 after output, or any later step |
+///
+/// Only steps 1 and 2 are fixed-size (0x10 each), which is why the map stops at `0x20`.
+/// Step 3 (`FUN_140257f20`) opens with `PlayerGameData::Serialize` and then writes an
+/// optional 0x40-byte bloodstain block plus a 4-byte entity id, so its length is decided by
+/// game state and no later cumulative boundary is a constant. Separating the twelve steps
+/// past that point needs a hook per sub-serializer, not more arithmetic on this count.
+///
+/// `0x20` is the interesting one: `FUN_140257f20`'s first act is
+/// `if (GLOBAL_GameDataMan->mainPlayerGameData == 0) return false`, so a count of exactly
+/// `0x20` is the signature of "the character has no serializable player data".
+pub fn serialize_fail_step_label(bytes: u64) -> &'static str {
+    match bytes {
+        SAVE_SERIALIZE_BYTES_UNREADABLE => SAVE_SERIALIZE_STEP_UNREADABLE,
+        0 => SAVE_SERIALIZE_STEP_HEADER_NONE,
+        0x01..=0x0f => SAVE_SERIALIZE_STEP_HEADER_SHORT,
+        0x10 => SAVE_SERIALIZE_STEP_RANDSEED_NONE,
+        0x11..=0x1f => SAVE_SERIALIZE_STEP_RANDSEED_SHORT,
+        0x20 => SAVE_SERIALIZE_STEP_GAMEDATAMAN_NONE,
+        _ => SAVE_SERIALIZE_STEP_AFTER_OUTPUT,
+    }
+}
+
+/// The long-form reading of [`serialize_fail_step_label`], for a log line that has to be
+/// actionable on its own. Same input, same partition -- this one names the native function
+/// and says what to do next.
+pub fn serialize_fail_step_detail(bytes: u64) -> &'static str {
+    match bytes {
+        SAVE_SERIALIZE_BYTES_UNREADABLE => {
+            "the byte counter 0x143d69920 could not be read, so the failing step is unknown; \
+             the counter address never resolved"
+        }
+        0 => {
+            "step 1 of FUN_14067dc00 -- the 0x10-byte header Write returned short having \
+             written nothing, so the 0x280000 output stream refused its very first write"
+        }
+        0x01..=0x0f => {
+            "step 1 of FUN_14067dc00 -- the 0x10-byte header Write was cut short mid-write"
+        }
+        0x10 => {
+            "step 2 of FUN_14067dc00 -- the 0x10-byte xorshift-seed Write returned short \
+             having written nothing; the header went out but the stream then refused"
+        }
+        0x11..=0x1f => {
+            "step 2 of FUN_14067dc00 -- the 0x10-byte xorshift-seed Write was cut short \
+             mid-write"
+        }
+        0x20 => {
+            "step 3 of FUN_14067dc00 -- FUN_140257f20, the GameDataMan chain, refused having \
+             written NOTHING. Its first act is `if (GLOBAL_GameDataMan->mainPlayerGameData \
+             == 0) return false`, so this count is the signature of a character with no \
+             serializable player data"
+        }
+        _ => {
+            "past the last statically fixed boundary of FUN_14067dc00: the abort is inside \
+             FUN_140257f20 after it produced output, or in one of the later steps \
+             (FUN_1405b5c60 event flags, FUN_14067e290, FUN_14067eaa0, FUN_14067e9a0, \
+             FUN_1401cd510 CSNetMan, FUN_140647420, FUN_140643560, FUN_140258640, \
+             FUN_1402586f0, FUN_1402585e0, FUN_1402586a0, FUN_14067c590 + the 0x80-byte \
+             tail). Step 3 is variable-length, so no later boundary is a constant and this \
+             count cannot separate them -- naming one needs a hook per sub-serializer"
+        }
+    }
+}
 
 #[cfg(windows)]
 type EnqueueSaveJobFn = unsafe extern "system" fn(usize, u32) -> u8;
@@ -367,7 +490,7 @@ static DISPATCH_LAST_LANE: AtomicUsize = AtomicUsize::new(SAVE_LANE_NONE);
 static DISPATCH_DECLINES_WITH_BYPASS: AtomicU64 = AtomicU64::new(0);
 static SERIALIZE_CALLS: AtomicU64 = AtomicU64::new(0);
 static SERIALIZE_FAILURES: AtomicU64 = AtomicU64::new(0);
-static SERIALIZE_LAST_FAIL_BYTES: AtomicU64 = AtomicU64::new(SAVE_SERIALIZE_BYTES_UNMOVED);
+static SERIALIZE_LAST_FAIL_BYTES: AtomicU64 = AtomicU64::new(SAVE_SERIALIZE_BYTES_UNREADABLE);
 static DISPATCH_OBSERVERS_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 /// Resolved address of the serializer's byte counter (0 = unresolved).
 #[cfg(windows)]
@@ -705,12 +828,22 @@ pub fn serialize_failures() -> u64 {
     SERIALIZE_FAILURES.load(Ordering::SeqCst)
 }
 
-/// Bytes the character serializer had produced when it last failed, or
-/// [`SAVE_SERIALIZE_BYTES_UNMOVED`] when its byte counter did not move across the failing
-/// call (rejected by the first gate, before any stream work). A moved, non-zero value names
-/// how far into the sub-serializer chain the abort happened.
+/// Bytes the character serializer had produced when it last failed -- `_DAT_143d69920` read
+/// straight after the failing call -- or [`SAVE_SERIALIZE_BYTES_UNREADABLE`] when the
+/// counter could not be read at all.
+///
+/// Raw on purpose; [`serialize_last_fail_step`] turns it into a step name. Note the count
+/// repeats across frames: the serializer aborts at the same step on every re-entry while
+/// the request stays latched, so an unchanging value is the expected shape of a stuck save,
+/// not a sign the instrument stopped working.
 pub fn serialize_last_fail_bytes() -> u64 {
     SERIALIZE_LAST_FAIL_BYTES.load(Ordering::SeqCst)
+}
+
+/// The `FUN_14067dc00` step that refused on the last failing call, decoded from
+/// [`serialize_last_fail_bytes`] by [`serialize_fail_step_label`].
+pub fn serialize_last_fail_step() -> &'static str {
+    serialize_fail_step_label(SERIALIZE_LAST_FAIL_BYTES.load(Ordering::SeqCst))
 }
 
 /// Number of dispatch/serializer observers bound (0..=4). Zero means the attribution
@@ -1316,10 +1449,12 @@ unsafe fn observe_dispatch(
                  (lane={lane}, decline #{declines} of {calls} dispatch entries) -- the request \
                  flags reached the dispatcher and it returned 0 without building a submit, so \
                  no SL enqueue can ever arrive and the one-shot bypass will expire. The failure \
-                 is UPSTREAM of the enqueue; serializer calls={} failures={} last_fail_bytes={}",
+                 is UPSTREAM of the enqueue; serializer calls={} failures={} \
+                 last_fail_bytes={} last_fail_step={}",
                 SERIALIZE_CALLS.load(Ordering::SeqCst),
                 SERIALIZE_FAILURES.load(Ordering::SeqCst),
-                SERIALIZE_LAST_FAIL_BYTES.load(Ordering::SeqCst)
+                SERIALIZE_LAST_FAIL_BYTES.load(Ordering::SeqCst),
+                serialize_last_fail_step()
             ));
             publish_snapshot();
         }
@@ -1335,11 +1470,14 @@ unsafe fn observe_dispatch(
 /// Observer on `FUN_14067dc00`, the character serializer.
 ///
 /// Its return value is the SOLE gate on the submit call in both character lanes, so a zero
-/// here is a character save that produced no submit at all. The byte counter
-/// `_DAT_143d69920` is sampled around the call because the serializer's first gate
-/// (`buf == 0`, `GameMan+0xcb1`, `GameMan+0xcb2`, the save-data subsystem global) returns
-/// BEFORE writing it while every later exit writes it: unmoved means "rejected at the
-/// gate", moved means "aborted this many bytes into the sub-serializer chain".
+/// here is a character save that produced no submit at all.
+///
+/// The byte counter `_DAT_143d69920` is read ONCE, after the call, and decoded into a step
+/// name. It is not compared against a pre-call sample: the serializer's only exit that
+/// leaves the counter untouched is a first gate proven unreachable here, and a pre/post
+/// comparison actively misreads the normal case -- the lane is re-entered every frame while
+/// the request stays latched, aborts at the same step each time, and therefore stores an
+/// identical count, which a delta test reports as "did not move".
 #[cfg(windows)]
 unsafe extern "system" fn save_serialize_char_hook(
     game_man: usize,
@@ -1355,7 +1493,6 @@ unsafe extern "system" fn save_serialize_char_hook(
         ));
         return 0;
     }
-    let before = read_serialize_bytes();
     let original: UnionFn = unsafe { core::mem::transmute(orig) };
     let ret = unsafe { original(game_man, buffer, size, out_bytes) };
     let calls = SERIALIZE_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
@@ -1363,28 +1500,18 @@ unsafe extern "system" fn save_serialize_char_hook(
         return ret;
     }
     let failures = SERIALIZE_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
-    let after = read_serialize_bytes();
-    // Equal values are read as "unmoved". Two consecutive failures that abort at the exact
-    // same byte count are indistinguishable from a gate rejection here; the log prints both
-    // samples so that case is visible rather than silently mislabelled.
-    let recorded = match (before, after) {
-        (Some(before), Some(after)) if after != before => after as u64,
-        _ => SAVE_SERIALIZE_BYTES_UNMOVED,
-    };
+    let recorded = read_serialize_bytes()
+        .map(|bytes| bytes as u64)
+        .unwrap_or(SAVE_SERIALIZE_BYTES_UNREADABLE);
     SERIALIZE_LAST_FAIL_BYTES.store(recorded, Ordering::SeqCst);
     if should_report(failures, false) {
         log_message(format_args!(
             "suppress: character serializer FUN_14067dc00 returned 0 (failure #{failures} of \
-             {calls} calls); byte counter {:?} -> {:?} ({}). No submit is built for this save, \
-             so the request flags stay latched and no SL enqueue is created",
-            before,
-            after,
-            if recorded == SAVE_SERIALIZE_BYTES_UNMOVED {
-                "unmoved: rejected by the first gate -- buffer null, GameMan+0xcb1/+0xcb2 set, \
-                 or the save-data subsystem global 0x143d68078 null"
-            } else {
-                "moved: the sub-serializer chain ran and aborted after this many bytes"
-            }
+             {calls} calls) at {} -- {recorded} (0x{recorded:x}) bytes produced: {}. No submit \
+             is built for this save, so the request flags stay latched and no SL enqueue is \
+             created",
+            serialize_fail_step_label(recorded),
+            serialize_fail_step_detail(recorded)
         ));
         publish_snapshot();
     }
@@ -1648,6 +1775,68 @@ mod tests {
             SAVE_SERIALIZE_CHAR_SIG,
         ] {
             assert!(sig.len() >= 16);
+        }
+    }
+
+    #[test]
+    fn the_serializer_exit_map_matches_the_1162_decompile() {
+        // Boundaries read out of FUN_14067dc00: two fixed 0x10-byte writes
+        // (0x14067dd3d header, 0x14067ddcc xorshift seeds) then FUN_140257f20, whose
+        // length is game-state dependent. Anything past 0x20 is deliberately one bucket;
+        // widening it would be a claim the decompile does not support.
+        assert_eq!(
+            serialize_fail_step_label(0),
+            SAVE_SERIALIZE_STEP_HEADER_NONE
+        );
+        assert_eq!(
+            serialize_fail_step_label(0x0f),
+            SAVE_SERIALIZE_STEP_HEADER_SHORT
+        );
+        assert_eq!(
+            serialize_fail_step_label(0x10),
+            SAVE_SERIALIZE_STEP_RANDSEED_NONE
+        );
+        assert_eq!(
+            serialize_fail_step_label(0x1f),
+            SAVE_SERIALIZE_STEP_RANDSEED_SHORT
+        );
+        assert_eq!(
+            serialize_fail_step_label(0x20),
+            SAVE_SERIALIZE_STEP_GAMEDATAMAN_NONE
+        );
+        assert_eq!(
+            serialize_fail_step_label(0x21),
+            SAVE_SERIALIZE_STEP_AFTER_OUTPUT
+        );
+        assert_eq!(
+            serialize_fail_step_label(0x280000),
+            SAVE_SERIALIZE_STEP_AFTER_OUTPUT
+        );
+        // The sentinel is a read failure, NOT the largest byte count.
+        assert_eq!(
+            serialize_fail_step_label(SAVE_SERIALIZE_BYTES_UNREADABLE),
+            SAVE_SERIALIZE_STEP_UNREADABLE
+        );
+        // Every bucket has its own long form, and none of them can break the hand-built
+        // telemetry JSON.
+        let labels = [
+            SAVE_SERIALIZE_BYTES_UNREADABLE,
+            0,
+            0x08,
+            0x10,
+            0x18,
+            0x20,
+            0x100,
+        ];
+        for bytes in labels {
+            let label = serialize_fail_step_label(bytes);
+            let detail = serialize_fail_step_detail(bytes);
+            assert!(!label.is_empty() && !detail.is_empty());
+            for s in [label, detail] {
+                assert!(!s.contains('"'), "{s} would break the telemetry JSON");
+                assert!(!s.contains('\\'), "{s} would break the telemetry JSON");
+                assert!(!s.contains('\n'), "{s} would break the telemetry JSON");
+            }
         }
     }
 

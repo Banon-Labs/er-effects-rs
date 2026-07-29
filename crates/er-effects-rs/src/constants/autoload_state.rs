@@ -816,6 +816,7 @@ pub(crate) use er_telemetry::counters::SAVE_FLOW_DIALOG;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_DISPATCH_CALLS_AT_FIRE;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_DISPATCH_DECLINES_AT_FIRE;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_ENQUEUE_MISSING_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_SERIALIZE_CALLS_AT_FIRE;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_SERIALIZE_FAILURES_AT_FIRE;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_SUBMITS_SWALLOWED_AT_FIRE;
 /// Game-task ticks stage 8 waits for the fired save request to actually REACH the writer (an SL

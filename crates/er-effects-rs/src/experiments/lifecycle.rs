@@ -535,6 +535,10 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
             usize::try_from(er_save_suppress::dispatch_declines()).unwrap_or(usize::MAX),
             Ordering::SeqCst,
         );
+        SAVE_FLOW_SERIALIZE_CALLS_AT_FIRE.store(
+            usize::try_from(er_save_suppress::serialize_calls()).unwrap_or(usize::MAX),
+            Ordering::SeqCst,
+        );
         SAVE_FLOW_SERIALIZE_FAILURES_AT_FIRE.store(
             usize::try_from(er_save_suppress::serialize_failures()).unwrap_or(usize::MAX),
             Ordering::SeqCst,
@@ -560,8 +564,8 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
 
 /// Name the link that broke when a fired Save Game commit produced no write.
 ///
-/// This exists because "no save enqueue arrived" is the SAME observation for four different
-/// failures, and telling them apart used to take a run each. The native chain a fired
+/// This exists because "no save enqueue arrived" is the SAME observation for every failure
+/// along the chain, and telling them apart used to take a run each. The native chain a fired
 /// request has to walk (1.16.2 decompile) is:
 ///
 /// ```text
@@ -580,7 +584,22 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
 /// nowhere" with no way to tell whether anything downstream had even been attempted.
 ///
 /// Deltas, not totals: the counters are process-lifetime and a session has already swallowed
-/// boot saves before the user ever presses the row.
+/// boot saves before the row is ever pressed.
+///
+/// The lane's own refusal splits three ways, and `serializer_calls` is what splits it. Both
+/// character lanes allocate their MainHeap buffers and null-check them BEFORE calling
+/// `FUN_14067dc00` (`FUN_14067b940`: `0x280000` then `0x60000`, both checked;
+/// `FUN_14067b750`: `0x280000`), so:
+///
+/// * declines up, `serializer_calls` FLAT -> the lane never reached the serializer: an
+///   allocation returned null, or a pre-allocation gate refused.
+/// * `serializer_failures` up -> allocations fine, serializer entered and refused; the
+///   step decoder names where.
+/// * declines up, `serializer_calls` up, `serializer_failures` FLAT -> allocations fine,
+///   serialization fine, and the submit builder is what refused.
+///
+/// Each arm says which of those it was in words, so the verdict does not have to be
+/// reconstructed from two counters after the fact.
 fn save_flow_fire_failure_reason() -> String {
     if er_save_suppress::dispatch_observers_installed() == 0 {
         return "attribution unavailable: the save-dispatch observers are not installed on this \
@@ -599,6 +618,10 @@ fn save_flow_fire_failure_reason() -> String {
         er_save_suppress::dispatch_declines(),
         &SAVE_FLOW_DISPATCH_DECLINES_AT_FIRE,
     );
+    let serialize_calls = since(
+        er_save_suppress::serialize_calls(),
+        &SAVE_FLOW_SERIALIZE_CALLS_AT_FIRE,
+    );
     let serialize_fails = since(
         er_save_suppress::serialize_failures(),
         &SAVE_FLOW_SERIALIZE_FAILURES_AT_FIRE,
@@ -609,34 +632,57 @@ fn save_flow_fire_failure_reason() -> String {
     );
     let facts = format!(
         "since the fire: dispatch_entries={dispatch} declines={declines} \
-         declines_with_bypass={} serializer_failures={serialize_fails} \
-         serializer_last_fail_bytes={} submits_swallowed={swallowed} last_lane={}",
+         declines_with_bypass={} serializer_calls={serialize_calls} \
+         serializer_failures={serialize_fails} serializer_last_fail_bytes={} \
+         serializer_last_fail_step={} submits_swallowed={swallowed} last_lane={}",
         er_save_suppress::dispatch_declines_with_bypass(),
         er_save_suppress::serialize_last_fail_bytes(),
+        er_save_suppress::serialize_last_fail_step(),
         er_save_suppress::dispatch_last_lane()
     );
-    let verdict = if swallowed > 0 {
+    // Owned, because the serializer arm names the failing sub-serializer inline.
+    let verdict: String = if swallowed > 0 {
         "WE SWALLOWED IT: a submit was built after the fire and this DLL's suppressor ate it \
          instead of letting the bypass token through -- the fault is ours, in the bypass \
          token/enqueue handshake"
+            .to_owned()
     } else if serialize_fails > 0 {
-        "THE CHARACTER SERIALIZER REFUSED: FUN_14067dc00 returned 0, so the lane skipped the \
-         submit builder entirely. Nothing downstream (submit, enqueue, bypass) was ever \
-         reachable -- read serializer_last_fail_bytes to see whether it was rejected at the \
-         first gate or aborted mid-chain"
+        // The allocations are NOT in question on this path: the lane null-checks its
+        // MainHeap buffers before it can reach FUN_14067dc00 at all, so entering the
+        // serializer is proof they succeeded.
+        format!(
+            "THE CHARACTER SERIALIZER REFUSED: the lane's MainHeap buffers allocated fine and \
+             FUN_14067dc00 was entered, but it returned 0, so the lane skipped the submit \
+             builder entirely. Nothing downstream (submit, enqueue, bypass) was ever \
+             reachable. It refused at: {}",
+            er_save_suppress::serialize_fail_step_detail(
+                er_save_suppress::serialize_last_fail_bytes()
+            )
+        )
+    } else if declines > 0 && serialize_calls == 0 {
+        "THE LANE BAILED BEFORE THE SERIALIZER: a save lane was entered and returned 0 without \
+         ever calling FUN_14067dc00, so the request flags stay latched and no submit is built. \
+         Every exit ahead of the serializer is pre-serialization: the 0x280000 (and, on the \
+         combined lane, 0x60000) MainHeap allocations returned null, or one of the gates in \
+         front of them turned the lane away -- CanShowSaveMenu() true, GameMan.saveState != 0, \
+         or a slot index >= 10"
+            .to_owned()
     } else if declines > 0 {
-        "THE DISPATCHER RAN AND REFUSED: a save lane was entered and returned 0 without \
-         serializing, so the request flags stay latched and no submit is built. The refusal \
-         is upstream of the serializer -- the remaining exits in that lane are the 0x280000 / \
-         0x60000 main-heap allocations"
+        "THE SUBMIT BUILDER REFUSED: the lane allocated its buffers, FUN_14067dc00 SUCCEEDED, \
+         and the lane still returned 0 -- so the refusal is FUN_140e6ef60 / FUN_140e6ec70, \
+         between a good serialization and the SL enqueue. Serialization and allocation are \
+         both ruled out"
+            .to_owned()
     } else if dispatch > 0 {
         "THE DISPATCHER RAN AND SUCCEEDED BUT NO ENQUEUE ARRIVED: a lane returned non-zero \
          yet FUN_140e6fb50 was never reached, which contradicts the decompiled chain -- treat \
          the hook set as suspect"
+            .to_owned()
     } else {
         "THE DISPATCHER NEVER RAN: no save lane was entered at all after the request flags \
          were set, so FUN_140afb880's own gate refused (saveState != 0, ShouldSave()/b73 \
          getter false, or the global save-suppress byte 0x143d856a0 set)"
+            .to_owned()
     };
     format!("{verdict} [{facts}]")
 }

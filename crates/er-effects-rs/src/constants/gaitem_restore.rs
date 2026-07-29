@@ -37,10 +37,18 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_BEFOR
 pub(crate) static SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_AFTER: AtomicUsize =
     AtomicUsize::new(usize::MAX);
 /// The save-data subsystem gate the c30-writer 0x67bd70 checks before it writes
-/// GameMan+0xc30: `[0x143d68078]` (RVA 0x3d68078). It is a 0x270-byte heap object
-/// built by the save-load boot 0x6798d0..0x679904 and zeroed on teardown 0x6789bf.
-/// If null at the writer's entry, 0x67bd70 returns without writing c30 (gate (a) in
-/// the c30-stays-default diagnosis). The save-safe c30-writer probe logs this.
+/// GameMan+0xc30: `[0x143d68078]` (RVA 0x3d68078). If null at the writer's entry,
+/// 0x67bd70 returns without writing c30 (gate (a) in the c30-stays-default
+/// diagnosis). The save-safe c30-writer probe logs this.
+///
+/// It is `GLOBAL_CSEventState`: a THREE-byte singleton, `HeapAlloc(3, 1, MainHeap)` at
+/// 0x1406798e8 -> `CS::CSEventState::CSEventState` -> stored at 0x140679904, and zeroed by
+/// `~GameMan` at 0x1406789f0. Those are its only two writers image-wide, so after
+/// save-subsystem boot it is non-null for the rest of the process.
+///
+/// It is NOT a 0x270-byte heap object -- that is `GLOBAL_CSEventFlagMan`, a different
+/// global at 0x143d68448, allocated `HeapAlloc(0x270, 8, MainHeap)` twenty instructions
+/// later in the same boot function.
 pub(crate) const SAVE_DATA_SUBSYSTEM_GATE_RVA: usize = 0x3d68078;
 /// World-resource streaming lever (worldres-loadstate-creator-and-streaming-enable-
 /// gate-2026). Gap 1: the block-load request is built from the InGameStep target

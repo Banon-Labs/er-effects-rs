@@ -483,12 +483,23 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // identical to the case where nothing consumed the request at all.
     //
     // Read them as: observers_installed == 0 -> the rest are meaningless (not "no dispatch");
-    // dispatch_calls == 0 -> the dispatcher never ran; declines > 0 -> it ran and refused;
-    // serialize_failures > 0 -> the character serializer FUN_14067dc00 is what refused, and
-    // serialize_last_fail_bytes says whether it was rejected at its first gate (u64::MAX =
-    // the byte counter did not move) or aborted that many bytes into the chain.
+    // dispatch_calls == 0 -> the dispatcher never ran; declines > 0 -> it ran and refused.
+    //
+    // serialize_calls is the alloc/serializer discriminator. A lane only calls
+    // FUN_14067dc00 after its MainHeap buffer allocations have been null-checked, so
+    // serialize_calls climbing PROVES the 0x280000 (and, on the combined lane, 0x60000)
+    // allocations succeeded; declines climbing while serialize_calls stands still means the
+    // lane bailed before the serializer.
+    //
+    // serialize_failures > 0 -> the character serializer is what refused, and
+    // serialize_last_fail_step NAMES the step it refused at (decoded from
+    // serialize_last_fail_bytes = _DAT_143d69920, the stream position where the cascade
+    // stopped). The raw byte count is kept beside it. The step name is "byte-counter-
+    // unreadable" only when the counter could not be read -- it is NOT a game outcome, and
+    // in particular it does NOT mean the serializer's first gate rejected the call: that
+    // gate is unreachable here (see SAVE_SERIALIZE_BYTES_RVA in er-save-suppress).
     body.push_str(&format!(
-        "  \"oracle_save_dispatch_observers_installed\": {},\n  \"oracle_save_dispatch_calls\": {},\n  \"oracle_save_dispatch_declines\": {},\n  \"oracle_save_dispatch_declines_with_bypass\": {},\n  \"oracle_save_dispatch_last_lane\": {},\n  \"oracle_save_serialize_calls\": {},\n  \"oracle_save_serialize_failures\": {},\n  \"oracle_save_serialize_last_fail_bytes\": {},\n",
+        "  \"oracle_save_dispatch_observers_installed\": {},\n  \"oracle_save_dispatch_calls\": {},\n  \"oracle_save_dispatch_declines\": {},\n  \"oracle_save_dispatch_declines_with_bypass\": {},\n  \"oracle_save_dispatch_last_lane\": {},\n  \"oracle_save_serialize_calls\": {},\n  \"oracle_save_serialize_failures\": {},\n  \"oracle_save_serialize_last_fail_bytes\": {},\n  \"oracle_save_serialize_last_fail_step\": \"{}\",\n",
         er_save_suppress::dispatch_observers_installed(),
         er_save_suppress::dispatch_calls(),
         er_save_suppress::dispatch_declines(),
@@ -497,6 +508,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         er_save_suppress::serialize_calls(),
         er_save_suppress::serialize_failures(),
         er_save_suppress::serialize_last_fail_bytes(),
+        er_save_suppress::serialize_last_fail_step(),
     ));
     // SAVE-FLOW CONFIRM CHAIN oracles (save-game-flow WP2 + WP3): Box1 "are you sure", Box2
     // "overwrite your loaded save", Box3 "overwrite this file" (the destination browser's final
