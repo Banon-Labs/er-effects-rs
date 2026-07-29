@@ -316,6 +316,104 @@ test_allow_proc_comm_scan_sigterm_sigkill_cleanup_naming_eac_launcher if {
 	count(denials) == 0
 }
 
+# ---------------------------------------------------------------------------
+# 2026-07-28 false positive: the sanctioned Steam preflight followed by the
+# sanctioned /proc process check was denied. Nothing launches -- the launcher
+# name is a python string literal in a membership test -- but the exemptions
+# whitelist whole-command SHAPES, so the extra read-only statement dropped the
+# payload into the raw substring fallback. Deny now requires the name to occur
+# somewhere a shell/interpreter could actually exec it.
+# ---------------------------------------------------------------------------
+
+# The exact denied command.
+test_allow_steam_helper_then_proc_comm_scan_exact_false_positive if {
+	cmd := concat("\n", [
+		`cd /home/banon/projects/er-effects-rs; bash -c 'source scripts/steam-running.sh && if steam_running; then echo "STEAM: running"; else echo "STEAM: NOT running"; fi'`,
+		`python3 -c "`,
+		"import os,glob",
+		"hits=[]",
+		"for p in glob.glob('/proc/[0-9]*'):",
+		"    try: comm=open(os.path.join(p,'comm')).read().strip()",
+		"    except Exception: continue",
+		"    if comm in ('eldenring.exe','me3','start_protected_game.exe'): hits.append(comm)",
+		"print('game running:', hits if hits else 'none')",
+		`"`,
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# The same /proc scan on its own.
+test_allow_proc_comm_scan_python_c_double_quoted_program if {
+	cmd := concat("\n", [
+		`python3 -c "`,
+		"import os,glob",
+		"hits=[]",
+		"for p in glob.glob('/proc/[0-9]*'):",
+		"    try: comm=open(os.path.join(p,'comm')).read().strip()",
+		"    except Exception: continue",
+		"    if comm in ('eldenring.exe','me3','start_protected_game.exe'): hits.append(comm)",
+		"print('game running:', hits if hits else 'none')",
+		`"`,
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# The live engine delivers the command whitespace-flattened; same verdict.
+test_allow_steam_helper_then_proc_comm_scan_flattened if {
+	cmd := `cd /home/banon/projects/er-effects-rs; bash -c 'source scripts/steam-running.sh && if steam_running; then echo "STEAM: running"; else echo "STEAM: NOT running"; fi' python3 -c " import os,glob hits=[] for p in glob.glob('/proc/[0-9]*'): try: comm=open(os.path.join(p,'comm')).read().strip() except Exception: continue if comm in ('eldenring.exe','me3','start_protected_game.exe'): hits.append(comm) print('game running:', hits if hits else 'none') "`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# Read-only shell work may also follow the scan.
+test_allow_proc_comm_scan_then_read_only_shell_statements if {
+	cmd := `python3 -c "print([p for p in __builtins__.__dict__ if 'start_protected_game.exe' in '/proc'])"; echo done`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# --- (b'') ... and the nested-literal exemption must not become a bypass ----
+
+# Shell quoting does NOT make a shell word data: a bare quoted launcher name in
+# command position still execs, so it stays denied even next to a /proc read.
+test_deny_proc_scan_then_setsid_bare_quoted_launcher if {
+	cmd := `python3 -c "print(open('/proc/1/comm').read())"; setsid 'start_protected_game.exe'`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+test_deny_proc_scan_then_nohup_quoted_launcher_path if {
+	cmd := `python3 -c "print(open('/proc/1/comm').read())"; nohup '/opt/er/start_protected_game.exe' &`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# A nested literal inside a program that also holds an exec mechanism is an
+# argv element, not data.
+test_deny_proc_scan_program_with_nested_literal_and_subprocess if {
+	cmd := `python3 -c "import subprocess; print(open('/proc/1/comm').read()); subprocess.run(['start_protected_game.exe'])"`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# A command substitution inside the quoted program is expanded by the SHELL
+# before python sees it, so a nested-looking literal there would really exec.
+test_deny_proc_scan_program_with_command_substitution_launcher if {
+	cmd := `python3 -c "print(open('/proc/1/comm').read()); $( 'start_protected_game.exe' )"`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# The exemption is for process-state readers; a payload that merely quotes the
+# name without reading /proc is not covered.
+test_deny_quoted_launcher_without_proc_read if {
+	cmd := `python3 -c "import os; os.execvp('start_protected_game.exe', ['start_protected_game.exe'])"`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
 # --- (b') ... but the /proc mention must never become a launch bypass -------
 
 # A /proc-scanning heredoc that ALSO launches stays denied (exec mechanism
@@ -391,6 +489,38 @@ test_deny_relative_dot_slash_launcher if {
 test_deny_steam_rungameid_url if {
 	denials := guard.deny with input as bash_event("steam steam://rungameid/1245620")
 	"ER-EFFECTS-ELDEN-RING-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# Every genuine launch form stays denied after the 2026-07-28 narrowing.
+
+test_deny_steam_run_url if {
+	denials := guard.deny with input as bash_event("steam steam://run/1245620")
+	"ER-EFFECTS-ELDEN-RING-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+test_deny_xdg_open_steam_run_url if {
+	denials := guard.deny with input as bash_event("xdg-open steam://run/1245620")
+	"ER-EFFECTS-ELDEN-RING-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+test_deny_xdg_open_steam_rungameid_url if {
+	denials := guard.deny with input as bash_event("xdg-open steam://rungameid/1245620")
+	"ER-EFFECTS-ELDEN-RING-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+test_deny_steam_wrapping_launcher_binary if {
+	denials := guard.deny with input as bash_event(`steam "/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/start_protected_game.exe"`)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+test_deny_bare_launcher_binary_in_command_position if {
+	denials := guard.deny with input as bash_event("start_protected_game.exe --offline")
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+test_deny_env_wrapped_launcher_binary if {
+	denials := guard.deny with input as bash_event("env WINEPREFIX=/tmp/pfx /opt/er/start_protected_game.exe")
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
 }
 
 # --- (c) bash -c indirection stays DENIED ------------------------------------
@@ -494,6 +624,57 @@ test_allow_git_commit_heredoc_message_mentioning_ersc_dll if {
 	])
 	denials := guard.deny with input as bash_event(cmd)
 	count(denials) == 0
+}
+
+# The OTHER canonical commit form: `git commit -F -` reads the message from
+# STDIN, so the message arrives as a plain heredoc with no `$(cat ...)`
+# substitution. Regression 2026-07-29: a commit DESCRIBING this guard's own
+# launcher fix was denied, because the message necessarily names the launcher and
+# guard prose is full of executable marker words ("shell", "bash", "python"), so
+# the marker fallback fired on documentation. The `-m` and `-m "$(cat <<'TAG'`
+# forms were both exempt; this one was not.
+test_allow_git_commit_stdin_heredoc_message_mentioning_eac_launcher if {
+	cmd := concat("\n", [
+		"git add .cupcake/policies/claude/bash_elden_ring_launch_guard.rego && git commit -q -F - <<'EOF'",
+		"guard: close two EAC launcher gaps",
+		"",
+		`A quoted path (steam "/mnt/c/SteamLibrary/.../start_protected_game.exe") was`,
+		"invisible because scrubbed_command deletes quoted spans wholesale, and the",
+		"bare form fell between the wrapper and path clauses. Both deny now.",
+		"EOF",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# `git -C <path>` is the form AGENTS.md mandates for worktree-scoped work, so the
+# exemption has to recognise it. A hard-coded assumption about the invocation
+# shape silently disabled this exemption for the documented form once before
+# (2026-07-28, the `/home/banon/...` literal in bd_text_command).
+test_allow_git_commit_stdin_heredoc_with_dash_c_worktree_path if {
+	cmd := concat("\n", [
+		"git -C /home/banon/projects/er-effects-rs add .cupcake/policies/claude/bash_elden_ring_launch_guard.rego && git -C /home/banon/projects/er-effects-rs commit -q -F - <<'EOF'",
+		"guard: close two EAC launcher gaps",
+		"",
+		"The bare start_protected_game.exe form fell between two clauses.",
+		"EOF",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# The exemption is shape-bound, not keyword-bound: anything riding after the
+# heredoc terminator turns it back off, so a real launch cannot hide behind a
+# commit message.
+test_deny_git_commit_stdin_heredoc_then_quoted_launcher if {
+	cmd := concat("\n", [
+		"git commit -q -F - <<'EOF'",
+		"guard: a perfectly ordinary commit message",
+		"EOF",
+		`steam "/opt/er/start_protected_game.exe"`,
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
 }
 
 # Real bundling stays denied: cp with an ersc.dll path operand.
