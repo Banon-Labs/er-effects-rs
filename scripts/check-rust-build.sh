@@ -35,4 +35,25 @@ else
 	cargo build "${profile_flag[@]}" --manifest-path "$repo_root/Cargo.toml" --target "$target"
 fi
 
+# The DLL crate's own unit tests are NOT built by the step above (a lib/cdylib build never
+# compiles `#[cfg(test)]`), so they rotted silently: `save_picker`'s test module had been
+# uncompilable for some time (E0063, a `PickerEntry::File` field added without updating the test
+# helper) and no gate noticed. Compile them every run so a test module can never drift out of
+# the build again.
+if command -v cargo-xwin >/dev/null 2>&1; then
+	echo "[check-rust-build] cargo xwin check --tests --target $target"
+	cargo xwin check --tests --manifest-path "$repo_root/Cargo.toml" --target "$target"
+fi
+
+# RUN them when a Windows-binary runner is available. The tests are pure logic (row math, path
+# mapping) with no game dependency, so wine executes them fine; skip cleanly where wine is absent
+# rather than failing a gate on an optional tool.
+if command -v cargo-xwin >/dev/null 2>&1 && command -v wine >/dev/null 2>&1; then
+	echo "[check-rust-build] cargo xwin test --lib --target $target (via wine)"
+	CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER=wine WINEDEBUG="${WINEDEBUG:--all}" \
+		cargo xwin test --lib --manifest-path "$repo_root/Cargo.toml" --target "$target"
+else
+	echo "[check-rust-build] wine not found; skipping the windows-target unit-test RUN (compile check above still ran)" >&2
+fi
+
 echo "[check-rust-build] ok"

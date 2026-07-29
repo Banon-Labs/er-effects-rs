@@ -463,7 +463,16 @@ impl SavePickerModel {
 
     /// The cached character summaries behind `row` when it is a save-file row on the current page
     /// (the file's active loadable characters, parsed once at listing build). `None` for every
-    /// non-file row (up/drive, directory, page cycle, placeholder).
+    /// non-file row (up/drive, `[ new ]`, directory, page cycle, placeholder).
+    ///
+    /// Indexes through `entry_row_base()` -- the SAME base `row_meaning` uses -- so the stats text
+    /// and the row label can never describe different entries. This used to hard-code `row - 1`,
+    /// which is only correct in load-source intent: in DESTINATION intent the base is 2 (row 1 is
+    /// the pinned `[ new ]` row), so every row rendered the character info of the file one entry
+    /// further down the page, and the `[ new ]` row rendered the first file's info (user-reported
+    /// 2026-07-28). `checked_sub` is what excludes the `[ new ]` row -- in destination intent
+    /// `row 1 - base 2` underflows to `None`, and in load-source intent row 1 is a real entry row,
+    /// so one expression is correct for both and there is no mode special-case to get wrong.
     pub(crate) fn row_file_characters(
         &self,
         row: usize,
@@ -471,7 +480,10 @@ impl SavePickerModel {
         if row == PICKER_ROW_PARENT || row >= PICKER_ROW_NEXT_PAGE {
             return None;
         }
-        match self.page_entries().get(row - 1) {
+        match self
+            .page_entries()
+            .get(row.checked_sub(self.entry_row_base())?)
+        {
             Some(PickerEntry::File { chars, .. }) => Some(chars),
             _ => None,
         }
@@ -664,6 +676,10 @@ mod tests {
     use super::*;
 
     /// Build a model with a fixed listing, bypassing the filesystem enumeration `open` does.
+    ///
+    /// Each file carries ONE character whose name encodes the file's own index (`char{idx}`), so a
+    /// test can assert that the character info a row renders belongs to that row's OWN file rather
+    /// than a neighbour's -- the exact confusion `row_file_characters` had.
     fn model_with(intent: PickerIntent, dir: &str, files: usize) -> SavePickerModel {
         SavePickerModel {
             current_dir: PathBuf::from(dir),
@@ -674,12 +690,38 @@ mod tests {
                     name: format!("save{idx}.sl2"),
                     path: PathBuf::from(dir).join(format!("save{idx}.sl2")),
                     modified: None,
+                    chars: vec![crate::experiments::SaveSlotInfo {
+                        slot: 0,
+                        name: format!("char{idx}"),
+                        level: 10 + idx as i32,
+                    }],
                 })
                 .collect(),
             page: 0,
             cursor: 0,
             drives: Vec::new(),
             intent,
+        }
+    }
+
+    /// The character name a row's stats text would render, or `None` for a non-file row.
+    fn row_char_name(model: &SavePickerModel, row: usize) -> Option<String> {
+        model
+            .row_file_characters(row)
+            .and_then(|chars| chars.first())
+            .map(|info| info.name.clone())
+    }
+
+    /// The file stem a row's LABEL would render, or `None` for a non-file row.
+    fn row_label_file(model: &SavePickerModel, row: usize) -> Option<String> {
+        match model.row_meaning(row) {
+            PickerRow::File(path) => Some(
+                path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default()
+                    .to_owned(),
+            ),
+            _ => None,
         }
     }
 
@@ -707,6 +749,46 @@ mod tests {
             );
         }
         assert_eq!(model.row_meaning(PICKER_ROW_NEW_FILE + 4), PickerRow::Empty);
+    }
+
+    /// REGRESSION (user-reported 2026-07-28): in the DESTINATION browser the per-row character
+    /// info was read at `row - 1` while the row LABEL came from `entry_row_base()` = 2, so every
+    /// row showed the character info of the file one entry further down, and the pinned `[ new ]`
+    /// row showed the first file's info. Pin the invariant that matters -- the text a row renders
+    /// describes that row's OWN file -- in BOTH intents, so no future base change can split them.
+    #[test]
+    fn row_character_info_belongs_to_that_rows_own_file() {
+        for model in [
+            destination("Z:\\saves", 3),
+            model_with(PickerIntent::LoadSource, "Z:\\saves", 3),
+        ] {
+            let mut file_rows = 0;
+            for row in 0..PICKER_ROW_COUNT {
+                match row_label_file(&model, row) {
+                    Some(file) => {
+                        // "save2.sl2" must render "char2", never a neighbour's character.
+                        let idx = file
+                            .trim_start_matches("save")
+                            .trim_end_matches(".sl2")
+                            .to_owned();
+                        assert_eq!(
+                            row_char_name(&model, row),
+                            Some(format!("char{idx}")),
+                            "row {row} labelled {file} rendered another file's character"
+                        );
+                        file_rows += 1;
+                    }
+                    // Every non-file row (up, [ new ], page cycle, placeholder) must render no
+                    // character info at all, or it shows junk borrowed from a real file.
+                    None => assert_eq!(
+                        row_char_name(&model, row),
+                        None,
+                        "non-file row {row} rendered character info"
+                    ),
+                }
+            }
+            assert_eq!(file_rows, 3, "expected all three files to occupy rows");
+        }
     }
 
     #[test]
