@@ -318,6 +318,18 @@ impl SlRequestSlot {
     pub fn admits_a_save(&self) -> bool {
         self.save_content == 0 && self.job == 0
     }
+
+    /// True when the LOAD builders' `iodev+0x18 == 0 && iodev+0x20 == 0` precondition holds
+    /// -- i.e. no load request occupies the device. `FUN_140e6f430` opens with
+    /// `if (param_1[3] != 0 || param_1[4] != 0) return 0;` and `FUN_140e6f5b0` with
+    /// `if (param_1[3] == 0 && param_1[4] == 0) { ...build... }`; `param_1[3]`/`[4]` are
+    /// `iodev+0x18`/`+0x20`.
+    ///
+    /// The save side needs this too, because `+0x20` is SHARED: a load that holds the job
+    /// fails the save builders' second operand just as surely as a stale save would.
+    pub fn admits_a_load(&self) -> bool {
+        self.load_content == 0 && self.job == 0
+    }
 }
 
 /// No decline has been classified yet.
@@ -504,6 +516,216 @@ static SWALLOW_RELEASE_LEFT_DIRTY: AtomicU64 = AtomicU64::new(0);
 static SWALLOW_IODEV_MISMATCH: AtomicU64 = AtomicU64::new(0);
 /// Slot samples that could not be read at all.
 static SLOT_READ_FAILURES: AtomicU64 = AtomicU64::new(0);
+
+// ============================================================================
+// THE LOAD CONSUMER. The other half of the shared `iodev+0x20` job slot, and the reason a
+// save can be refused forever by something that is not a save at all.
+//
+// A completed LOAD is NOT released where it completes. `FUN_140e6e080` case 0x14 with a
+// zero `param_2` reads the job's result, finds success, and returns 0 having called
+// nothing -- deliberately, because the payload has not been handed to anyone yet. The
+// release is owed by the CONSUMER:
+//
+// ```text
+//   FUN_14067b100(out_buf, size)          // gate: saveState == 3 && GameMan+0xdf0 == 0
+//     -> FUN_140e6e380(iodev, out, size)  // gate: +0x18 && +0x20 && result==0 && state==0x14
+//          memcpy(out, content, n)
+//          FUN_140e6f200(iodev)           // <-- the release, and its ONLY unconditional site
+// ```
+//
+// So the load's job survives exactly as long as its consumer is not run. And the submit
+// builders gate on `iodev+0x10 == 0 && iodev+0x20 == 0`, which the surviving job fails --
+// permanently, for every save in the process. That is the shape of a save refusal whose
+// cause is a load: [`SL_BAIL_LOAD_JOB_LATCHED`].
+//
+// Anything that stands in for `FUN_14067b100` therefore inherits its debt to the device.
+// The helpers below let such a substitution PROVE that the debt was paid, by sampling the
+// slot on both sides of whatever it did and classifying the transition. They deliberately
+// do not release anything themselves: releasing from here would mean re-deriving the
+// native guard (`FUN_14240a180`/`FUN_14240a1f0` on the job) in our own code, and a guard
+// we re-derive is a guard that can disagree with the game about whether a load is still
+// in flight. Running the game's own consumer and MEASURING it cannot disagree.
+// ============================================================================
+
+/// No load-consumer call has been classified yet.
+pub const LOAD_CONSUMER_UNSAMPLED: usize = 0;
+/// The device could not be read on one or both sides; the samples prove nothing.
+pub const LOAD_CONSUMER_UNREADABLE: usize = 1;
+/// The device held no load request going in, so there was no release to owe.
+pub const LOAD_CONSUMER_NOTHING_HELD: usize = 2;
+/// A load request was held and the slot came back clear: the consumer ran and released it.
+pub const LOAD_CONSUMER_RELEASED: usize = 3;
+/// A load request was held and is STILL held: the native guard declined, which is what it
+/// does while the job has not reached its terminal state. Nothing was taken from a live
+/// load -- but if the caller now swallows the read, this request is stranded.
+pub const LOAD_CONSUMER_STILL_HELD: usize = 4;
+
+/// Name a [`classify_load_consumer`] outcome.
+pub fn load_consumer_outcome_label(code: usize) -> &'static str {
+    match code {
+        LOAD_CONSUMER_UNREADABLE => "iodev-unreadable",
+        LOAD_CONSUMER_NOTHING_HELD => "no-load-request-held",
+        LOAD_CONSUMER_RELEASED => "load-request-released",
+        LOAD_CONSUMER_STILL_HELD => "load-request-still-held",
+        _ => "unsampled",
+    }
+}
+
+/// Classify what a load-consumer call did to the device, from the slot on each side.
+///
+/// Pure and total so the mapping is unit-testable on the host: this is the oracle that
+/// says whether the shared job slot was freed, and an oracle only exercised at runtime
+/// cannot be trusted to say so.
+pub fn classify_load_consumer(
+    before: Option<SlRequestSlot>,
+    after: Option<SlRequestSlot>,
+) -> usize {
+    let (Some(before), Some(after)) = (before, after) else {
+        return LOAD_CONSUMER_UNREADABLE;
+    };
+    if before.admits_a_load() {
+        return LOAD_CONSUMER_NOTHING_HELD;
+    }
+    if after.admits_a_load() {
+        LOAD_CONSUMER_RELEASED
+    } else {
+        LOAD_CONSUMER_STILL_HELD
+    }
+}
+
+/// Load-consumer calls observed (one per substituted `FUN_14067b100`).
+static LOAD_CONSUMER_CALLS: AtomicU64 = AtomicU64::new(0);
+/// Calls after which the shared job slot was free. This is the "the slot was freed, and by
+/// the native consumer we invoked" oracle.
+static LOAD_CONSUMER_RELEASES: AtomicU64 = AtomicU64::new(0);
+/// Calls where the native guard kept the request because the load had not finished. This
+/// is the race oracle: it counts the times the guard refused to take a live load away.
+static LOAD_CONSUMER_STILL_HELD_COUNT: AtomicU64 = AtomicU64::new(0);
+/// Calls where the device could not be sampled.
+static LOAD_CONSUMER_UNREADABLE_COUNT: AtomicU64 = AtomicU64::new(0);
+/// Calls that ended with a load request still latched AND the caller going on to substitute
+/// the payload -- i.e. a request this process has now stranded. Non-zero is the regression
+/// signature of the post-switch save refusal: every later save fails `iodev+0x20 == 0`.
+static LOAD_CONSUMER_STRANDED: AtomicU64 = AtomicU64::new(0);
+/// Outcome code of the most recent load-consumer call.
+static LOAD_CONSUMER_LAST_OUTCOME: AtomicUsize = AtomicUsize::new(LOAD_CONSUMER_UNSAMPLED);
+/// The slot as it stood immediately BEFORE the last load-consumer call.
+static LOAD_CONSUMER_SLOT_BEFORE: SlotSampleCell = SlotSampleCell::new();
+/// The slot as it stood immediately AFTER it.
+static LOAD_CONSUMER_SLOT_AFTER: SlotSampleCell = SlotSampleCell::new();
+
+/// Sample the SL device's request slot for a caller outside this crate.
+///
+/// Exposed so the one place that substitutes `FUN_14067b100` can bracket its call without
+/// re-deriving the device pointer, the field offsets, or the fault-safe read.
+#[cfg(windows)]
+pub fn sample_sl_request_slot() -> Option<SlRequestSlot> {
+    read_sl_slot()
+}
+
+/// Record what running the native load consumer did to the device, and return the outcome.
+///
+/// `origin` names the substitution site for the log. `payload_substituted` says whether the
+/// caller is about to hand the engine different bytes -- when it is, an outcome of
+/// [`LOAD_CONSUMER_STILL_HELD`] means a request has just been stranded, which is worth a
+/// line every time because from that point on no save in the process can be built.
+#[cfg(windows)]
+pub fn note_load_consumer(
+    before: Option<SlRequestSlot>,
+    after: Option<SlRequestSlot>,
+    origin: &str,
+    payload_substituted: bool,
+) -> usize {
+    store_slot_sample(before, &LOAD_CONSUMER_SLOT_BEFORE);
+    store_slot_sample(after, &LOAD_CONSUMER_SLOT_AFTER);
+    let outcome = classify_load_consumer(before, after);
+    LOAD_CONSUMER_LAST_OUTCOME.store(outcome, Ordering::SeqCst);
+    let calls = LOAD_CONSUMER_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
+    match outcome {
+        LOAD_CONSUMER_RELEASED => {
+            let releases = LOAD_CONSUMER_RELEASES.fetch_add(1, Ordering::SeqCst) + 1;
+            if should_report(releases, false) {
+                log_message(format_args!(
+                    "suppress: load consumer at {origin} released the shared job slot \
+                     (release #{releases} of {calls} calls) -- before {}, after {}; the save \
+                     builders' `iodev+0x10 == 0 && iodev+0x20 == 0` precondition is open again",
+                    describe_slot(before),
+                    describe_slot(after)
+                ));
+                publish_snapshot();
+            }
+        }
+        LOAD_CONSUMER_STILL_HELD => {
+            LOAD_CONSUMER_STILL_HELD_COUNT.fetch_add(1, Ordering::SeqCst);
+            if payload_substituted {
+                // Unthrottled: this is a latch, not a rate. From here on every save in the
+                // process is refused by a job WE left in the shared slot.
+                let stranded = LOAD_CONSUMER_STRANDED.fetch_add(1, Ordering::SeqCst) + 1;
+                log_message(format_args!(
+                    "suppress: BUG -- load consumer at {origin} did NOT release the shared job \
+                     slot (#{stranded}) and the payload was substituted anyway; before {}, \
+                     after {}. Every later save now fails the submit builders' \
+                     `iodev+0x20 == 0` operand",
+                    describe_slot(before),
+                    describe_slot(after)
+                ));
+                publish_snapshot();
+            } else {
+                log_message(format_args!(
+                    "suppress: load consumer at {origin} left the request in place -- the \
+                     native guard says the job has not finished; slot {}",
+                    describe_slot(before)
+                ));
+            }
+        }
+        LOAD_CONSUMER_UNREADABLE => {
+            LOAD_CONSUMER_UNREADABLE_COUNT.fetch_add(1, Ordering::SeqCst);
+        }
+        _ => {}
+    }
+    outcome
+}
+
+/// Load-consumer calls observed.
+pub fn load_consumer_calls() -> u64 {
+    LOAD_CONSUMER_CALLS.load(Ordering::SeqCst)
+}
+
+/// Calls that left the shared job slot free.
+pub fn load_consumer_releases() -> u64 {
+    LOAD_CONSUMER_RELEASES.load(Ordering::SeqCst)
+}
+
+/// Calls where the native guard kept a not-yet-finished load. Non-zero proves the guard is
+/// load-bearing rather than vacuous; it is the signal to check whether a release raced one.
+pub fn load_consumer_still_held() -> u64 {
+    LOAD_CONSUMER_STILL_HELD_COUNT.load(Ordering::SeqCst)
+}
+
+/// Calls that stranded a load request. Any non-zero value is a permanent save refusal.
+pub fn load_consumer_stranded() -> u64 {
+    LOAD_CONSUMER_STRANDED.load(Ordering::SeqCst)
+}
+
+/// Outcome code of the most recent load-consumer call.
+pub fn load_consumer_last_outcome() -> usize {
+    LOAD_CONSUMER_LAST_OUTCOME.load(Ordering::SeqCst)
+}
+
+/// Name the most recent load-consumer outcome.
+pub fn load_consumer_last_outcome_label() -> &'static str {
+    load_consumer_outcome_label(LOAD_CONSUMER_LAST_OUTCOME.load(Ordering::SeqCst))
+}
+
+/// The slot as it stood before the last load-consumer call.
+pub fn load_consumer_slot_before() -> Option<SlRequestSlot> {
+    LOAD_CONSUMER_SLOT_BEFORE.snapshot()
+}
+
+/// The slot as it stood after the last load-consumer call.
+pub fn load_consumer_slot_after() -> Option<SlRequestSlot> {
+    LOAD_CONSUMER_SLOT_AFTER.snapshot()
+}
 
 // ============================================================================
 // SAVE-DISPATCH OBSERVERS. Pure observation of the three native save-dispatch lanes and
@@ -971,7 +1193,7 @@ pub fn settle_observer_installed() -> bool {
 }
 
 /// Suppression counters as (name, value) pairs, for hosts that serialize by iteration.
-pub fn counters() -> [(&'static str, u64); 20] {
+pub fn counters() -> [(&'static str, u64); 25] {
     [
         (
             "suppress_submits_swallowed",
@@ -1053,6 +1275,33 @@ pub fn counters() -> [(&'static str, u64); 20] {
         (
             "save_dispatch_last_decline_bail_reason",
             DECLINE_BAIL_REASON.load(Ordering::SeqCst) as u64,
+        ),
+        // THE LOAD CONSUMER. `load_consumer_stranded` is the regression oracle for the
+        // post-switch save refusal: non-zero means a completed load kept the shared
+        // `iodev+0x20` job and no save can be built again. `load_consumer_releases` is its
+        // positive counterpart -- proof the slot was freed, by the native consumer, at the
+        // substitution site. `load_consumer_still_held` counts the times the native guard
+        // refused to take a load that had not finished, which is what makes the release
+        // incapable of racing one.
+        (
+            "save_load_consumer_calls",
+            LOAD_CONSUMER_CALLS.load(Ordering::SeqCst),
+        ),
+        (
+            "save_load_consumer_releases",
+            LOAD_CONSUMER_RELEASES.load(Ordering::SeqCst),
+        ),
+        (
+            "save_load_consumer_still_held",
+            LOAD_CONSUMER_STILL_HELD_COUNT.load(Ordering::SeqCst),
+        ),
+        (
+            "save_load_consumer_stranded",
+            LOAD_CONSUMER_STRANDED.load(Ordering::SeqCst),
+        ),
+        (
+            "save_load_consumer_last_outcome",
+            LOAD_CONSUMER_LAST_OUTCOME.load(Ordering::SeqCst) as u64,
         ),
     ]
 }
@@ -2461,5 +2710,94 @@ mod tests {
         }
         assert!(text.contains("save-content-and-job-latched-0x10+0x20"));
         assert_eq!(describe_slot(None), "iodev UNREADABLE");
+    }
+
+    /// `iodev+0x20` is shared, so "a load may be built" and "a save may be built" are the
+    /// same question asked of different content fields. The load builders test `+0x18` and
+    /// `+0x20`; `+0x10` is none of their business.
+    #[test]
+    fn a_load_is_admitted_by_exactly_the_two_load_operands() {
+        let clear = SlRequestSlot::default();
+        assert!(clear.admits_a_load());
+        assert!(
+            SlRequestSlot {
+                save_content: 0xdead,
+                file_cap: 0xbeef,
+                deferred_opcode: 7,
+                ..clear
+            }
+            .admits_a_load(),
+            "+0x10/+0x28/+0x30 are not operands of the load builders' precondition"
+        );
+        assert!(
+            !SlRequestSlot {
+                load_content: 0x1,
+                ..clear
+            }
+            .admits_a_load()
+        );
+        assert!(!SlRequestSlot { job: 0x1, ..clear }.admits_a_load());
+    }
+
+    /// The load-consumer oracle has to tell three things apart that look alike from a
+    /// counter: nothing was owed, the debt was paid, and the debt is still outstanding.
+    /// Only the third one refuses every later save.
+    #[test]
+    fn the_load_consumer_outcomes_are_distinct_and_named() {
+        let clear = SlRequestSlot::default();
+        let held = SlRequestSlot {
+            load_content: 0x4000,
+            job: 0x3000,
+            ..clear
+        };
+        let cases = [
+            (None, Some(clear), LOAD_CONSUMER_UNREADABLE),
+            (Some(held), None, LOAD_CONSUMER_UNREADABLE),
+            (Some(clear), Some(clear), LOAD_CONSUMER_NOTHING_HELD),
+            (Some(held), Some(clear), LOAD_CONSUMER_RELEASED),
+            (Some(held), Some(held), LOAD_CONSUMER_STILL_HELD),
+        ];
+        let mut seen = Vec::new();
+        for (before, after, expected) in cases {
+            let code = classify_load_consumer(before, after);
+            assert_eq!(code, expected, "misclassified {before:?} -> {after:?}");
+            assert!(!load_consumer_outcome_label(code).is_empty());
+            if !seen.contains(&code) {
+                seen.push(code);
+            }
+        }
+        assert_eq!(seen.len(), 4, "each outcome needs its own code");
+        assert!(!seen.contains(&LOAD_CONSUMER_UNSAMPLED));
+        assert_eq!(
+            load_consumer_outcome_label(LOAD_CONSUMER_UNSAMPLED),
+            "unsampled"
+        );
+    }
+
+    /// A save-side request left behind is a DIFFERENT bug from a load-side one, and the
+    /// load-consumer oracle must not claim credit for clearing `+0x10`. Only `+0x18`/`+0x20`
+    /// are its debt; a lingering `+0x10` still fails the save builders and is reported by
+    /// `classify_sl_bail`, not by this one.
+    #[test]
+    fn the_load_consumer_only_speaks_for_the_load_side() {
+        let before = SlRequestSlot {
+            save_content: 0x1000,
+            load_content: 0x4000,
+            job: 0x3000,
+            ..SlRequestSlot::default()
+        };
+        let after = SlRequestSlot {
+            save_content: 0x1000,
+            ..SlRequestSlot::default()
+        };
+        assert_eq!(
+            classify_load_consumer(Some(before), Some(after)),
+            LOAD_CONSUMER_RELEASED
+        );
+        assert_eq!(
+            classify_sl_bail(Some(after)),
+            SL_BAIL_SAVE_CONTENT_LATCHED,
+            "the save side is still latched and must still be reported as such"
+        );
     }
 }

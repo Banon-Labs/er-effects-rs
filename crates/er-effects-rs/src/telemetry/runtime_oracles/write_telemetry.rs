@@ -558,6 +558,41 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SAVE_FLOW_REQUEST_RETRACTIONS.load(Ordering::SeqCst),
         SAVE_FLOW_RETRACT_DECLINED.load(Ordering::SeqCst),
     ));
+    // THE LOAD CONSUMER -- the other owner of the shared `iodev+0x20` job, and the reason a
+    // save can be refused by something that is not a save.
+    //
+    // A completed load is released only by its CONSUMER (`FUN_14067b100` ->
+    // `FUN_140e6e380` -> `FUN_140e6f200`); `FUN_140e6e080` case 0x14 deliberately returns
+    // success without releasing, and that same return is what drives `GameMan+0xb80` to
+    // RESIDENT(3). The switch reload substitutes that consumer to feed the engine its own
+    // sliced `.sl2` body, so it must run the native consumer for the device side effect --
+    // these oracles say whether it did.
+    //
+    //   oracle_save_load_consumer_stranded > 0  DECISIVE FAILURE. A completed load kept the
+    //                                           shared job and the payload was substituted
+    //                                           anyway: from that moment no save in the
+    //                                           process can be built, and
+    //                                           oracle_save_dispatch_last_decline_reason
+    //                                           latches at "load-job-latched-0x18+0x20".
+    //   oracle_save_load_consumer_releases > 0  the slot was FREED, by the native consumer,
+    //                                           at the substitution site.
+    //   oracle_save_load_consumer_still_held    times the native guard kept a load that had
+    //                                           not finished. This is the race oracle: the
+    //                                           release is the game's own, so a live load is
+    //                                           never taken -- a non-zero value here with a
+    //                                           zero `stranded` means we asked early and
+    //                                           correctly got nothing.
+    let consumer_after = er_save_suppress::load_consumer_slot_after();
+    body.push_str(&format!(
+        "  \"oracle_save_load_consumer_calls\": {},\n  \"oracle_save_load_consumer_releases\": {},\n  \"oracle_save_load_consumer_still_held\": {},\n  \"oracle_save_load_consumer_stranded\": {},\n  \"oracle_save_load_consumer_last_outcome\": \"{}\",\n  \"oracle_save_load_consumer_after_iodev_load_content\": {},\n  \"oracle_save_load_consumer_after_iodev_job\": {},\n",
+        er_save_suppress::load_consumer_calls(),
+        er_save_suppress::load_consumer_releases(),
+        er_save_suppress::load_consumer_still_held(),
+        er_save_suppress::load_consumer_stranded(),
+        er_save_suppress::load_consumer_last_outcome_label(),
+        slot_hex(consumer_after.map(|slot| slot.load_content)),
+        slot_hex(consumer_after.map(|slot| slot.job)),
+    ));
     // SAVE-FLOW CONFIRM CHAIN oracles (save-game-flow WP2 + WP3): Box1 "are you sure", Box2
     // "overwrite your loaded save", Box3 "overwrite this file" (the destination browser's final
     // gate).
