@@ -630,11 +630,10 @@ pub static SYSTEM_QUIT_ROW_INDEX_RETURN_DESKTOP_PLUS1: AtomicUsize = AtomicUsize
 pub static SYSTEM_QUIT_ROW_INDEX_LOAD_PROFILE_PLUS1: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_ROW_INDEX_LOAD_SAVE_PROFILES_PLUS1: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_ROW_RESOLVE_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub static SYSTEM_QUIT_ROW_RESOLVED_BY_CURSOR_OUR_LABEL_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub static SYSTEM_QUIT_ROW_RESOLVED_BY_CURSOR_NATIVE_INDEX_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub static SYSTEM_QUIT_ROW_RESOLVED_BY_POINTER_BAND_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub static SYSTEM_QUIT_ROW_RESOLVED_BY_ACTIVATED_CONTROLLER_COUNT: AtomicUsize =
-    AtomicUsize::new(0);
+/// Resolutions that came from the dialog's own list cursor -- the ONLY row identity, shared by mouse,
+/// keyboard and pad. Equal to `RESOLVE_COUNT - AMBIGUOUS_COUNT` by construction; a divergence would
+/// mean a second identity source was reintroduced.
+pub static SYSTEM_QUIT_ROW_RESOLVED_BY_CURSOR_ROW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_ROW_AMBIGUOUS_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Last resolution: discriminator code (`QuitRowDiscriminator`), resolved row (`QuitRow` + 1),
 /// ambiguity reason code (`QuitRowAmbiguity`), live list cursor (`cursor + 1`), and the label kind
@@ -656,6 +655,15 @@ pub static SYSTEM_QUIT_ACTION_ALIAS_FALSE_QUIT_CLAIMS: AtomicUsize = AtomicUsize
 /// Activations REFUSED because two independent row discriminators named DIFFERENT rows. Two sources
 /// disagreeing is an ambiguity, not a tie to break by preference: the row runs nothing at all.
 pub static SYSTEM_QUIT_ROW_REFUSED_DISAGREEMENT_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// The patched Quit tab's `CS::GridControl` geometry, read live right after the rows are appended.
+/// `COLS`/`ROWS` are what `GridControl::MeasureGridFromMovie` derived from the served movie's
+/// `Item_<row>_<col>` components; `NAVIGABLE_CELLS` is `cols * rows` (the exact bound of the mouse
+/// hit-test loop) and `ITEM_COUNT` is the cursor bound. All four rows are reachable by mouse,
+/// keyboard and pad only when `NAVIGABLE_CELLS >= 4`, `ITEM_COUNT == 4` and `ROWS >= 2`.
+pub static SYSTEM_QUIT_GRID_COLS: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_GRID_ROWS: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_GRID_NAVIGABLE_CELLS: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_GRID_ITEM_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SCALEFORM_HANDLER_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static SCALEFORM_HANDLER_CTORS: AtomicUsize = AtomicUsize::new(0);
 pub static SCALEFORM_HANDLER_DTORS: AtomicUsize = AtomicUsize::new(0);

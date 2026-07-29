@@ -199,9 +199,9 @@ unsafe fn system_quit_route_button_action_or_forward(
         let original: unsafe extern "system" fn(usize) -> usize = unsafe { std::mem::transmute(orig) };
         return unsafe { original(action_obj) };
     }
-    // No event object reaches an action thunk, so the input kind is Unknown here: the list cursor
-    // names the row and a pointer parked on a cloned visual still vetoes the quit.
-    let verdict = unsafe { system_quit_resolve_row_now(dialog, controller, 0) };
+    // No event object reaches an action thunk, so the input kind is unclassifiable here -- which
+    // costs nothing, because the list cursor names the row for every input kind alike.
+    let verdict = unsafe { system_quit_resolve_row_now(dialog, 0) };
     let verdict_text = system_quit_row_verdict_text(verdict);
     match verdict.resolved_row() {
         Some(QuitRow::LoadProfile) => {
@@ -348,19 +348,17 @@ unsafe fn system_quit_controller_should_invoke_action(controller: usize, event_a
 /// frame per DISPATCHED row with the live event; the controller's own should-invoke predicate decides
 /// whether that event is a real confirm.
 ///
-/// The 4-row Quit tab dispatches only TWO controllers here -- measured: the two NATIVE row
-/// controllers, never the cloned rows' -- so the controller pointer resolves at most {row 0, row 1}
-/// and the pointer at `controller + 0xa8` is just `controller + 0x70`. Neither can tell a click on
-/// the fourth visible button from a confirm on Return to Desktop, which is why this hook now defers
-/// row identity to `system_quit_resolve_row_now`.
+/// The controller is used ONLY to scope the hook to the patched Quit tab. It cannot name a row: the
+/// dispatch collapses cloned buttons onto the native Return-to-Desktop controller, and the pointer at
+/// `controller + 0xa8` is merely `controller + 0x70`. Row identity comes from
+/// `system_quit_resolve_row_now`, i.e. the dialog's own list cursor.
 pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hook(
     controller: usize,
     event_kind: u32,
     event_a: usize,
     event_b: usize,
 ) {
-    let table_row = system_quit_row_by_controller(controller);
-    if table_row.is_none() {
+    if !system_quit_controller_is_a_quit_row(controller) {
         // Not a row of the patched Quit tab: vanilla behaviour, untouched.
         unsafe {
             system_quit_forward_button_controller_activation(controller, event_kind, event_a, event_b)
@@ -379,7 +377,7 @@ pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hoo
     let dialog =
         unsafe { safe_read_usize(action_alias + SYSTEM_QUIT_ACTION_OBJECT_DIALOG_08_OFFSET) }
             .unwrap_or(0);
-    let verdict = unsafe { system_quit_resolve_row_now(dialog, controller, event_a) };
+    let verdict = unsafe { system_quit_resolve_row_now(dialog, event_a) };
     let verdict_text = system_quit_row_verdict_text(verdict);
     match verdict.resolved_row() {
         Some(QuitRow::LoadProfile) => {
@@ -393,14 +391,14 @@ pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hoo
             SYSTEM_QUIT_NOOP_SELECTION_COUNT.fetch_add(1, Ordering::SeqCst);
             let opened = unsafe { system_quit_open_profile_load_dialog(action_alias) };
             append_autoload_debug(format_args!(
-                "system-quit-dup: Load Profile controller selected controller=0x{controller:x} dispatch_row={table_row:?} {verdict_text} event_kind={event_kind} opened={opened}; suppressing native button activation"
+                "system-quit-dup: Load Profile controller selected controller=0x{controller:x} {verdict_text} event_kind={event_kind} opened={opened}; suppressing native button activation"
             ));
         }
         Some(QuitRow::LoadSaveProfiles) => {
             SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
             let opened = unsafe { system_quit_open_save_picker_menu(action_alias) };
             append_autoload_debug(format_args!(
-                "system-quit-load-save-profiles: Load Save Profiles controller selected controller=0x{controller:x} dispatch_row={table_row:?} {verdict_text} event_kind={event_kind} opened={opened} (in-game save picker); suppressing native button activation"
+                "system-quit-load-save-profiles: Load Save Profiles controller selected controller=0x{controller:x} {verdict_text} event_kind={event_kind} opened={opened} (in-game save picker); suppressing native button activation"
             ));
         }
         Some(QuitRow::ReturnToDesktop) => {
@@ -451,7 +449,7 @@ pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hoo
         Some(QuitRow::SaveGame) | None => {
             if verdict.resolved_row().is_none() {
                 append_autoload_debug(format_args!(
-                    "quit-to-desktop: controller confirm NOT routed controller=0x{controller:x} dispatch_row={table_row:?} dialog=0x{dialog:x} {verdict_text} event_kind={event_kind}; forwarding the native activation, which the action-route hook gates again"
+                    "quit-to-desktop: controller confirm NOT routed controller=0x{controller:x} dialog=0x{dialog:x} {verdict_text} event_kind={event_kind}; forwarding the native activation, which the action-route hook gates again"
                 ));
             }
             unsafe {
@@ -1483,12 +1481,28 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
         if load_label_ok || open_label_ok {
             SYSTEM_QUIT_DUPLICATE_COUNT.fetch_add(1, Ordering::SeqCst);
         }
+        // Raise the list widget's item count through the NATIVE setter, not by poking the field.
+        // `GridControl::SetItemCount` writes `+0xd0` AND recomputes the scroll/page row count on the
+        // embedded scroll control at `+0x1a8` -- exactly what the native rebuild `FUN_140975040`
+        // calls. A raw field write left that scroll control still describing the two-row list, which
+        // is the state the vertical movement clamp reads.
         let prior_bound = unsafe { safe_read_i32(dialog + DIALOG_SLOT_BOUND_B08_OFFSET) }.unwrap_or(-1);
         let new_bound = (after_final.min(i32::MAX as usize)) as i32;
+        let set_item_count = game_rva(GRID_CONTROL_SET_ITEM_COUNT_RVA).ok();
         if new_bound > prior_bound {
-            unsafe { *((dialog + DIALOG_SLOT_BOUND_B08_OFFSET) as *mut i32) = new_bound };
+            match set_item_count {
+                Some(addr) => {
+                    let set_count: unsafe extern "system" fn(usize, u32) =
+                        unsafe { std::mem::transmute(addr) };
+                    unsafe { set_count(dialog + DIALOG_GRID_CONTROL_A38_OFFSET, new_bound as u32) };
+                }
+                None => append_autoload_debug(format_args!(
+                    "system-quit-dup: failed to resolve GridControl::SetItemCount rva 0x{GRID_CONTROL_SET_ITEM_COUNT_RVA:x}; the added rows stay outside the list cursor's range"
+                )),
+            }
         }
         let bound_after = unsafe { safe_read_i32(dialog + DIALOG_SLOT_BOUND_B08_OFFSET) }.unwrap_or(-1);
+        unsafe { system_quit_record_grid_geometry(dialog) };
         // The row TABLE is the identity from here on: index + live label per row. Log it, and log the
         // label actually readable at each captured index so a run shows the table agreeing with
         // memory rather than being trusted.

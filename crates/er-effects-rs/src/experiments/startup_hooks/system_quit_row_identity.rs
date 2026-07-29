@@ -38,14 +38,33 @@
 // click came from. `cloned_mask = 12` and `native_save_mask = 1` pin the order: row 0 Save Game,
 // row 1 Return to Desktop, row 2 Load Profile, row 3 Load Save Profiles.
 //
-// Which row was ACTIVATED then comes from the dialog's own list cursor -- `dialog + 0xb0c`, the
-// cursor of the `GenericListSelectDialog` item-list widget embedded at `dialog + 0xa38`
-// (`FUN_140739e20` returns `widget + 0xd4`; the widget's count is `widget + 0xd0 == dialog + 0xb08`,
-// the field the row-clone hook raises to 4) -- and, for a mouse click, from the OS pointer band the
-// cloned visuals occupy. The pointer band may only name a CLONED row or veto a quit; it can never
-// authorize one, because it is guessed screen geometry rather than the game's own hit test.
+// Which row was ACTIVATED comes from ONE source for all three input kinds: the dialog's own list
+// cursor, `dialog + 0xb0c` -- field `+0xd4` of the `CS::GridControl` embedded at `dialog + 0xa38`
+// (`FUN_140739e20` returns it; the widget's item count is `+0xd0 == dialog + 0xb08`).
 //
-// Anything that does not resolve positively is `Ambiguous`, and an ambiguous row NEVER quits.
+// # Why the cursor is authoritative for the mouse too
+//
+// `GridControl::Update` (vtable `+0x10`, 1.16.2 `FUN_1407392f0`) is the single writer of that field:
+//
+//   * MOUSE -- `GridControl::HandleMouse` (`FUN_14073a5c0`) ends by asking, when the cursor is live
+//     (`FUN_140758050`: `CSMenuManImp::disableMouseCursor == false`) and the mouse is the active
+//     pointer (`FUN_1407588a0`: `CSMouseMan + 0x30`) and no drag/wheel/direction input is in flight,
+//     `FUN_140736c90(this, FUN_140757af0(pad))`. That hit-tests each of the `cols * rows` grid CELL
+//     proxies via `FUN_14074b0d0`, converts the hit cell's `(row, col)` into an item index, and calls
+//     `FUN_14073bc10(this, index)` -- which writes `+0xd4`. Hover moves the native cursor.
+//   * PAD / KEYBOARD -- the direction branches of the same `Update` (`FUN_14073b0c0` /
+//     `FUN_14073b4d0` / `FUN_14073a250`) land on the same `FUN_14073bc10`, and `Update` then diffs
+//     `+0xd4` against its pre-update value to fire the selection-changed callbacks.
+//
+// There is no separate focus field. So once the two rows this DLL adds are real grid cells, the
+// cursor identifies the row for mouse, keyboard and pad alike -- see `er_gfx::options_02_040` for the
+// movie-side half (the cells are named `Item_1_0`/`Item_1_1` so the grid measures 2x2, which is what
+// makes them hit-testable AND puts the vertical axis in play).
+//
+// The cursor's two halves are cross-checked and must agree: the captured build-time row TABLE
+// (index -> row) and the LIVE label read at that index. A mismatch, an unreadable label, an
+// out-of-range cursor or a stale dialog are all `Ambiguous`, and an ambiguous row NEVER quits and
+// never runs anything.
 
 /// The four rows of the patched System -> Quit dialog, in property-list order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -112,45 +131,33 @@ impl QuitInputKind {
     }
 }
 
-/// Which evidence resolved the row. Recorded per activation so a run can show WHY the gate decided
-/// what it decided.
+/// Which evidence resolved the row. Exactly ONE variant on purpose: the dialog's own list cursor is
+/// the single row identity for mouse, keyboard and pad, so every resolution reports the same
+/// discriminator regardless of input kind (`oracle_system_quit_row_last_discriminator == 1`).
+/// Adding a second variant means a second identity source was reintroduced -- which is the defect
+/// this type exists to prevent, not an extension point.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum QuitRowDiscriminator {
-    /// The live label at the list cursor's row is one of OUR labels, and the captured table agrees
-    /// that this row index owns that label. Strongest form: exact pointer/text identity.
-    CursorRowOurLabel,
-    /// The live label at the list cursor's row is foreign (native FMG) AND the cursor equals the
-    /// captured index of a native row. The only discriminator that may authorize the quit.
-    CursorRowNativeIndex,
-    /// A mouse click landed in the band the two cloned visuals occupy. Names a cloned row only.
-    PointerBand,
-    /// The dispatched controller is a row's OWN captured controller and that row is not the
-    /// irreversible one. Deliberately never applied to Return to Desktop, because the measured
-    /// dispatch collapses the two cloned buttons onto exactly that controller.
-    ActivatedRowController,
+    /// The row at the live list cursor, cross-checked between the captured build-time row table and
+    /// the label read live at that index.
+    CursorRow,
 }
 
 impl QuitRowDiscriminator {
     pub(crate) fn code(self) -> usize {
         match self {
-            QuitRowDiscriminator::CursorRowOurLabel => 1,
-            QuitRowDiscriminator::CursorRowNativeIndex => 2,
-            QuitRowDiscriminator::PointerBand => 3,
-            QuitRowDiscriminator::ActivatedRowController => 4,
+            QuitRowDiscriminator::CursorRow => 1,
         }
     }
 
     pub(crate) fn label(self) -> &'static str {
         match self {
-            QuitRowDiscriminator::CursorRowOurLabel => "cursor-row-our-label",
-            QuitRowDiscriminator::CursorRowNativeIndex => "cursor-row-native-index",
-            QuitRowDiscriminator::PointerBand => "pointer-band",
-            QuitRowDiscriminator::ActivatedRowController => "activated-row-controller",
+            QuitRowDiscriminator::CursorRow => "cursor-row",
         }
     }
 }
 
-/// Why the row could not be identified. Every one of these refuses the quit.
+/// Why the row could not be identified. Every one of these refuses the quit AND runs nothing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum QuitRowAmbiguity {
     /// One or more of the four row indices was never captured, or two captured the same index.
@@ -161,21 +168,13 @@ pub(crate) enum QuitRowAmbiguity {
     /// `dialog + 0xb0c` was unreadable or outside the row table.
     CursorOutOfRange,
     /// The label read live at the cursor row is one of ours but sits at a different index than the
-    /// captured table says -- the table and live memory disagree, so trust neither.
+    /// captured table says -- the table and live memory DISAGREE, so trust neither.
     CursorRowLabelMismatch,
     /// The cursor row's label pointer could not be read at all.
     CursorRowLabelUnreadable,
-    /// The cursor row's label is foreign but the cursor matches neither captured native row index.
+    /// The cursor row's label is foreign but the cursor matches neither captured native row index --
+    /// again the table and the live label DISAGREE about what sits at that index.
     CursorRowUnclaimed,
-    /// The event was a mouse click but the OS pointer could not be resolved, so the position that
-    /// the game's own hit test used is unknown.
-    MouseClickWithoutPointer,
-    /// Two independent discriminators resolved, and they named DIFFERENT rows. Two sources
-    /// disagreeing is an ambiguity, never a tie to break by preference: pick neither. This is the
-    /// exact shape of the measured mouse defect (the pointer band claimed a cloned row while the
-    /// dispatched controller said Return to Desktop), and it subsumes the older
-    /// "pointer on a cloned visual vetoes a quit" special case by naming the real condition.
-    DiscriminatorDisagreement,
 }
 
 impl QuitRowAmbiguity {
@@ -187,9 +186,9 @@ impl QuitRowAmbiguity {
             QuitRowAmbiguity::CursorRowLabelMismatch => 4,
             QuitRowAmbiguity::CursorRowLabelUnreadable => 5,
             QuitRowAmbiguity::CursorRowUnclaimed => 6,
-            QuitRowAmbiguity::MouseClickWithoutPointer => 7,
-            // 8 was `pointer-band-vetoed-quit`, now generalised into 9.
-            QuitRowAmbiguity::DiscriminatorDisagreement => 9,
+            // 7 was `mouse-click-without-pointer` and 8 `pointer-band-vetoed-quit`; both belonged to
+            // the deleted per-input-kind discriminators. 9 was the generic disagreement, which is now
+            // codes 4/6 (the only two sources left are the cursor's own halves).
         }
     }
 
@@ -201,9 +200,17 @@ impl QuitRowAmbiguity {
             QuitRowAmbiguity::CursorRowLabelMismatch => "cursor-row-label-mismatch",
             QuitRowAmbiguity::CursorRowLabelUnreadable => "cursor-row-label-unreadable",
             QuitRowAmbiguity::CursorRowUnclaimed => "cursor-row-unclaimed",
-            QuitRowAmbiguity::MouseClickWithoutPointer => "mouse-click-without-pointer",
-            QuitRowAmbiguity::DiscriminatorDisagreement => "discriminator-disagreement",
         }
+    }
+
+    /// `true` when the refusal is the two halves of the cursor identity CONTRADICTING each other --
+    /// the captured build-time row table versus the label read live at that index. This is the
+    /// refusal-on-disagreement backstop; the other reasons are simply absence of evidence.
+    pub(crate) fn is_disagreement(self) -> bool {
+        matches!(
+            self,
+            QuitRowAmbiguity::CursorRowLabelMismatch | QuitRowAmbiguity::CursorRowUnclaimed
+        )
     }
 }
 
@@ -250,26 +257,17 @@ pub(crate) struct QuitRowFacts {
     /// The dialog the table above was captured from, and the dialog this activation belongs to.
     pub(crate) table_dialog: usize,
     pub(crate) activation_dialog: usize,
-    /// The activated controller mapped back onto a captured row, when it is one of the four.
-    /// Only ever used to REFUSE a quit; the measured dispatch collapses rows 2/3 onto row 1's
-    /// controller, so it can never be used to authorize one.
-    pub(crate) activated_row_by_controller: Option<QuitRow>,
-    /// Live list cursor `dialog + 0xb0c`; `-1` when unreadable.
+    /// Live list cursor `dialog + 0xb0c` (`GridControl + 0xd4`); `-1` when unreadable. THE row
+    /// identity: the native grid writes it from mouse hover, keyboard and pad alike.
     pub(crate) cursor: i32,
     /// Number of rows in the table (always 4 once complete); the cursor must be inside it.
     pub(crate) row_count: i32,
     /// Label read live at the cursor row; `None` when the pointer was unreadable.
     pub(crate) cursor_row_label: Option<QuitRowLabel>,
-    /// How the game classified the dispatched event.
+    /// How the game classified the dispatched event. RECORDED, never branched on -- it is the
+    /// evidence that one discriminator serves every input kind, not an input to the decision.
     pub(crate) input_kind: QuitInputKind,
-    /// Normalised OS pointer: window-centre origin, `+x` right, `+y` down.
-    pub(crate) pointer: Option<(f32, f32)>,
 }
-
-/// Normalised `y` below which the pointer is still on the top (native) button row. The two cloned
-/// visuals were inserted below the native pair (`Item_0_2` / `Item_0_3`, depths 16/17 of sprite 138
-/// in the runtime `02_040_optionsetting` edit), so a pointer past this line is on a cloned button.
-pub(crate) const SYSTEM_QUIT_CLONE_BAND_MIN_NY: f32 = 0.12;
 
 impl QuitRowFacts {
     fn index_of(&self, row: QuitRow) -> i32 {
@@ -301,8 +299,9 @@ impl QuitRowFacts {
         true
     }
 
-    /// The row the list cursor is sitting on, with the evidence that named it.
-    fn cursor_candidate(&self) -> Result<(QuitRow, QuitRowDiscriminator), QuitRowAmbiguity> {
+    /// The row the list cursor is sitting on. Both halves of the identity must agree: the captured
+    /// build-time row TABLE (index -> row) and the LABEL read live at that index.
+    fn cursor_candidate(&self) -> Result<QuitRow, QuitRowAmbiguity> {
         if self.cursor < 0 || self.cursor >= self.row_count {
             return Err(QuitRowAmbiguity::CursorOutOfRange);
         }
@@ -310,91 +309,34 @@ impl QuitRowFacts {
             None => Err(QuitRowAmbiguity::CursorRowLabelUnreadable),
             Some(QuitRowLabel::Ours(row)) => {
                 if self.index_of(row) == self.cursor {
-                    Ok((row, QuitRowDiscriminator::CursorRowOurLabel))
+                    Ok(row)
                 } else {
                     Err(QuitRowAmbiguity::CursorRowLabelMismatch)
                 }
             }
+            // A native FMG label -- the table's native indices are the only thing that can claim it.
+            // Locale independent: no English text is ever required to authorize the quit.
             Some(QuitRowLabel::Foreign) => {
                 if self.cursor == self.return_desktop_index {
-                    Ok((
-                        QuitRow::ReturnToDesktop,
-                        QuitRowDiscriminator::CursorRowNativeIndex,
-                    ))
+                    Ok(QuitRow::ReturnToDesktop)
                 } else if self.cursor == self.save_game_index {
-                    Ok((QuitRow::SaveGame, QuitRowDiscriminator::CursorRowNativeIndex))
+                    Ok(QuitRow::SaveGame)
                 } else {
                     Err(QuitRowAmbiguity::CursorRowUnclaimed)
                 }
             }
         }
     }
-
-    /// Why NO discriminator could name the row. The cursor's own reason, except for a mouse click
-    /// whose OS pointer could not be read at all -- then the position the game's hit test used is
-    /// unknown, which is the more precise fact.
-    fn unresolved_reason(&self) -> QuitRowAmbiguity {
-        if self.input_kind == QuitInputKind::MouseClick && self.pointer.is_none() {
-            return QuitRowAmbiguity::MouseClickWithoutPointer;
-        }
-        self.cursor_candidate()
-            .err()
-            .unwrap_or(QuitRowAmbiguity::CursorOutOfRange)
-    }
-
-    /// The cloned row the OS pointer is over, if it is in the cloned band at all. Deliberately
-    /// cannot return a native row: screen geometry is not the game's hit test and must never be
-    /// allowed to authorize the irreversible quit.
-    fn pointer_clone_candidate(&self) -> Option<QuitRow> {
-        let (nx, ny) = self.pointer?;
-        if ny <= SYSTEM_QUIT_CLONE_BAND_MIN_NY {
-            return None;
-        }
-        Some(if nx < 0.0 {
-            QuitRow::LoadProfile
-        } else {
-            QuitRow::LoadSaveProfiles
-        })
-    }
 }
 
-/// One independently-derived candidate row plus the evidence that named it.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct QuitRowCandidate {
-    pub(crate) row: QuitRow,
-    pub(crate) by: QuitRowDiscriminator,
-}
-
-/// Every candidate this activation produced, strongest evidence first: the list cursor, then the
-/// dispatched controller, then the OS pointer band. `None` where that source could not name a row.
-pub(crate) fn quit_row_candidates(facts: &QuitRowFacts) -> [Option<QuitRowCandidate>; 3] {
-    [
-        facts
-            .cursor_candidate()
-            .ok()
-            .map(|(row, by)| QuitRowCandidate { row, by }),
-        facts
-            .activated_row_by_controller
-            .map(|row| QuitRowCandidate {
-                row,
-                by: QuitRowDiscriminator::ActivatedRowController,
-            }),
-        facts
-            .pointer_clone_candidate()
-            .map(|row| QuitRowCandidate {
-                row,
-                by: QuitRowDiscriminator::PointerBand,
-            }),
-    ]
-}
-
-/// Resolve which System -> Quit row an activation belongs to, using only positive evidence.
+/// Resolve which System -> Quit row an activation belongs to, from the ONE identity the native grid
+/// maintains for every input kind: its list cursor.
 ///
-/// Every discriminator that can name a row is consulted, and they must AGREE. A disagreement is an
-/// ambiguity -- the activation runs nothing at all -- because there is no principled way to pick a
-/// winner between two sources that each claim to identify the row, and the cost of guessing wrong is
-/// a menu row that performs another row's action (measured: a mouse click on Return to Desktop
-/// opened the save picker because the pointer band overrode an already-correct dispatch).
+/// There is deliberately no per-input-kind branch, no screen-geometry rectangle and no controller /
+/// action-object comparison. Those were three parallel interpretations beside the game's own model,
+/// and preferring one over another is how a mouse click on Return to Desktop came to open the save
+/// picker. The cursor's two halves (captured row table, live label) must still agree; anything else
+/// is `Ambiguous`, which runs nothing and never quits.
 pub(crate) fn resolve_quit_row(facts: &QuitRowFacts) -> QuitRowVerdict {
     if !facts.table_complete_and_distinct() {
         return QuitRowVerdict::Ambiguous(QuitRowAmbiguity::RowTableIncomplete);
@@ -405,27 +347,12 @@ pub(crate) fn resolve_quit_row(facts: &QuitRowFacts) -> QuitRowVerdict {
     {
         return QuitRowVerdict::Ambiguous(QuitRowAmbiguity::DialogMismatch);
     }
-
-    let candidates = quit_row_candidates(facts);
-    let mut resolved = candidates.iter().flatten();
-    let Some(first) = resolved.next().copied() else {
-        return QuitRowVerdict::Ambiguous(facts.unresolved_reason());
-    };
-    if resolved.any(|other| other.row != first.row) {
-        return QuitRowVerdict::Ambiguous(QuitRowAmbiguity::DiscriminatorDisagreement);
-    }
-
-    // The dispatched controller may never be the ONLY evidence for Return to Desktop: the measured
-    // dispatch collapses the cloned buttons onto that controller, so on its own it cannot separate a
-    // confirm on the quit row from a click on a cloned one. Everything else it names is fine.
-    if first.by == QuitRowDiscriminator::ActivatedRowController
-        && first.row == QuitRow::ReturnToDesktop
-    {
-        return QuitRowVerdict::Ambiguous(facts.unresolved_reason());
-    }
-    QuitRowVerdict::Resolved {
-        row: first.row,
-        by: first.by,
+    match facts.cursor_candidate() {
+        Ok(row) => QuitRowVerdict::Resolved {
+            row,
+            by: QuitRowDiscriminator::CursorRow,
+        },
+        Err(reason) => QuitRowVerdict::Ambiguous(reason),
     }
 }
 
@@ -502,15 +429,18 @@ pub(crate) const SYSTEM_QUIT_ROW_TABLE_ROWS: [QuitRow; 4] = [
     QuitRow::LoadSaveProfiles,
 ];
 
-/// Map a dispatched controller back onto a captured row. Never used to authorize a quit: the
-/// measured dispatch collapses the two cloned rows onto the second native row's controller.
-pub(crate) fn system_quit_row_by_controller(controller: usize) -> Option<QuitRow> {
-    if controller == 0 {
-        return None;
-    }
-    SYSTEM_QUIT_ROW_TABLE_ROWS
-        .into_iter()
-        .find(|row| system_quit_row_controller(*row) == controller)
+/// Is this dispatched controller one of the patched Quit tab's four? A pure SCOPE test: the
+/// activation hook shares its `_Func_impl` thunk vtable and `Activate` slot with other dialogs, so it
+/// must forward foreign controllers untouched.
+///
+/// It deliberately returns a bool rather than a row. The dispatch collapses the cloned buttons onto
+/// the native Return-to-Desktop controller, so a controller cannot name a row -- and returning
+/// `Option<QuitRow>` invited exactly that misuse.
+pub(crate) fn system_quit_controller_is_a_quit_row(controller: usize) -> bool {
+    controller != 0
+        && SYSTEM_QUIT_ROW_TABLE_ROWS
+            .into_iter()
+            .any(|row| system_quit_row_controller(row) == controller)
 }
 
 /// The `std::function` storage inside a controller that the action thunks receive as their `this`.
@@ -600,12 +530,10 @@ unsafe fn system_quit_classify_activation_input(event: usize) -> QuitInputKind {
 /// Resolve which Quit row an activation belongs to, from live memory, and record the outcome.
 ///
 /// `activation_dialog` is the dialog the activation reached us with (`action_obj + 0x8`, i.e. the
-/// dialog captured inside the action lambda), `controller` the dispatched controller (0 when the
-/// caller only has the action alias), and `event` the native event object (0 to skip input
-/// classification).
+/// dialog captured inside the action lambda) and `event` the native event object (0 to skip input
+/// classification, which is telemetry only).
 pub(crate) unsafe fn system_quit_resolve_row_now(
     activation_dialog: usize,
-    controller: usize,
     event: usize,
 ) -> QuitRowVerdict {
     let cursor = if activation_dialog >= 0x10000 {
@@ -620,16 +548,37 @@ pub(crate) unsafe fn system_quit_resolve_row_now(
         load_save_profiles_index: system_quit_row_table_index(QuitRow::LoadSaveProfiles),
         table_dialog: SYSTEM_QUIT_ROW_TABLE_DIALOG.load(Ordering::SeqCst),
         activation_dialog,
-        activated_row_by_controller: system_quit_row_by_controller(controller),
         cursor,
         row_count: SYSTEM_QUIT_ROW_TABLE_ROWS.len() as i32,
         cursor_row_label: unsafe { system_quit_row_label_at(activation_dialog, cursor) },
         input_kind: unsafe { system_quit_classify_activation_input(event) },
-        pointer: read_cursor_normalized(),
     };
     let verdict = resolve_quit_row(&facts);
     system_quit_row_record_resolution(&facts, verdict);
     verdict
+}
+
+/// Read the live `CS::GridControl` geometry of the patched Quit dialog into the navigability oracles.
+/// Called right after the rows are appended, so a run can show whether all four rows are reachable
+/// without inspecting the movie: `NAVIGABLE_CELLS = cols * rows` is the exact bound of the native
+/// mouse hit-test loop, `ROWS >= 2` is what enables up/down, and `ITEM_COUNT` is the cursor bound.
+pub(crate) unsafe fn system_quit_record_grid_geometry(dialog: usize) {
+    if dialog < 0x10000 {
+        return;
+    }
+    let grid = dialog + DIALOG_GRID_CONTROL_A38_OFFSET;
+    let cols = unsafe { safe_read_i32(grid + GRID_CONTROL_COLS_D8_OFFSET) }.unwrap_or(-1);
+    let rows = unsafe { safe_read_i32(grid + GRID_CONTROL_ROWS_DC_OFFSET) }.unwrap_or(-1);
+    let count = unsafe { safe_read_i32(dialog + DIALOG_SLOT_BOUND_B08_OFFSET) }.unwrap_or(-1);
+    let nonneg = |v: i32| if v < 0 { 0 } else { v as usize };
+    SYSTEM_QUIT_GRID_COLS.store(nonneg(cols), Ordering::SeqCst);
+    SYSTEM_QUIT_GRID_ROWS.store(nonneg(rows), Ordering::SeqCst);
+    SYSTEM_QUIT_GRID_NAVIGABLE_CELLS.store(nonneg(cols) * nonneg(rows), Ordering::SeqCst);
+    SYSTEM_QUIT_GRID_ITEM_COUNT.store(nonneg(count), Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "system-quit-dup: Quit grid geometry dialog=0x{dialog:x} cols={cols} rows={rows} navigable_cells={} item_count={count}; up/down needs rows>=2, the mouse hit test walks cols*rows cells",
+        nonneg(cols) * nonneg(rows)
+    ));
 }
 
 fn system_quit_row_record_resolution(facts: &QuitRowFacts, verdict: QuitRowVerdict) {
@@ -656,54 +605,35 @@ fn system_quit_row_record_resolution(facts: &QuitRowFacts, verdict: QuitRowVerdi
             SYSTEM_QUIT_ROW_LAST_RESOLVED_ROW.store(row.code(), Ordering::SeqCst);
             SYSTEM_QUIT_ROW_LAST_DISCRIMINATOR.store(by.code(), Ordering::SeqCst);
             SYSTEM_QUIT_ROW_LAST_AMBIGUITY.store(0, Ordering::SeqCst);
-            match by {
-                QuitRowDiscriminator::CursorRowOurLabel => {
-                    SYSTEM_QUIT_ROW_RESOLVED_BY_CURSOR_OUR_LABEL_COUNT.fetch_add(1, Ordering::SeqCst)
-                }
-                QuitRowDiscriminator::CursorRowNativeIndex => {
-                    SYSTEM_QUIT_ROW_RESOLVED_BY_CURSOR_NATIVE_INDEX_COUNT
-                        .fetch_add(1, Ordering::SeqCst)
-                }
-                QuitRowDiscriminator::PointerBand => {
-                    SYSTEM_QUIT_ROW_RESOLVED_BY_POINTER_BAND_COUNT.fetch_add(1, Ordering::SeqCst)
-                }
-                QuitRowDiscriminator::ActivatedRowController => {
-                    SYSTEM_QUIT_ROW_RESOLVED_BY_ACTIVATED_CONTROLLER_COUNT
-                        .fetch_add(1, Ordering::SeqCst)
-                }
-            };
+            SYSTEM_QUIT_ROW_RESOLVED_BY_CURSOR_ROW_COUNT.fetch_add(1, Ordering::SeqCst);
         }
         QuitRowVerdict::Ambiguous(reason) => {
             SYSTEM_QUIT_ROW_LAST_RESOLVED_ROW.store(0, Ordering::SeqCst);
             SYSTEM_QUIT_ROW_LAST_DISCRIMINATOR.store(0, Ordering::SeqCst);
             SYSTEM_QUIT_ROW_LAST_AMBIGUITY.store(reason.code(), Ordering::SeqCst);
             SYSTEM_QUIT_ROW_AMBIGUOUS_COUNT.fetch_add(1, Ordering::SeqCst);
-            if reason == QuitRowAmbiguity::DiscriminatorDisagreement {
+            if reason.is_disagreement() {
                 SYSTEM_QUIT_ROW_REFUSED_DISAGREEMENT_COUNT.fetch_add(1, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
-                    "system-quit-row: REFUSED -- discriminators disagree, so the activation runs nothing: {}",
-                    quit_row_candidates_text(facts)
+                    "system-quit-row: REFUSED -- the row table and the live label disagree, so the activation runs nothing: {}",
+                    quit_row_facts_text(facts)
                 ));
             }
         }
     }
 }
 
-/// Every candidate this activation produced, for the debug log. Named per source so a disagreement
-/// line shows both values rather than only the one that would have won.
-pub(crate) fn quit_row_candidates_text(facts: &QuitRowFacts) -> String {
-    let named = |candidate: Option<QuitRowCandidate>| match candidate {
-        Some(c) => c.row.label(),
-        None => "-",
-    };
-    let candidates = quit_row_candidates(facts);
+/// Both halves of the cursor identity, for the debug log: what the captured table says sits at each
+/// index, and what the label read live at the cursor actually is.
+pub(crate) fn quit_row_facts_text(facts: &QuitRowFacts) -> String {
     format!(
-        "cursor={} (index={} label={:?}) controller={} pointer-band={} input_kind={:?}",
-        named(candidates[0]),
+        "cursor={} table=[save_game=#{} return_desktop=#{} load_profile=#{} load_save_profiles=#{}] live_label={:?} input_kind={:?}",
         facts.cursor,
+        facts.save_game_index,
+        facts.return_desktop_index,
+        facts.load_profile_index,
+        facts.load_save_profiles_index,
         facts.cursor_row_label,
-        named(candidates[1]),
-        named(candidates[2]),
         facts.input_kind,
     )
 }
@@ -746,7 +676,7 @@ mod system_quit_row_identity_tests {
     use super::*;
 
     /// The measured table from the fatal run: dialog 0x175842080, rows 0..3 =
-    /// Save Game / Return to Desktop / Load Profile / Load Save Profiles.
+    /// Save Game / Return to Desktop / Load Profile / Load Save Profiles, cursor parked on row 1.
     fn facts() -> QuitRowFacts {
         QuitRowFacts {
             save_game_index: 0,
@@ -755,171 +685,94 @@ mod system_quit_row_identity_tests {
             load_save_profiles_index: 3,
             table_dialog: 0x1758_4208_0,
             activation_dialog: 0x1758_4208_0,
-            activated_row_by_controller: Some(QuitRow::ReturnToDesktop),
             cursor: 1,
             row_count: 4,
             cursor_row_label: Some(QuitRowLabel::Foreign),
             input_kind: QuitInputKind::PadConfirm,
-            pointer: None,
         }
     }
 
     #[test]
-    fn pad_confirm_on_the_native_quit_row_authorizes_the_quit() {
+    fn the_cursor_on_the_native_quit_row_authorizes_the_quit() {
         let verdict = resolve_quit_row(&facts());
         assert_eq!(
             verdict,
             QuitRowVerdict::Resolved {
                 row: QuitRow::ReturnToDesktop,
-                by: QuitRowDiscriminator::CursorRowNativeIndex,
+                by: QuitRowDiscriminator::CursorRow,
             }
         );
         assert!(verdict.authorizes_quit());
     }
 
+    /// The acceptance property: the SAME cursor resolves the SAME row with the SAME discriminator no
+    /// matter which input kind the game classified the event as. Nothing branches on input kind, so a
+    /// mouse click on the row under the pointer and a pad confirm on the focused row are one path.
     #[test]
-    fn pad_confirm_on_a_cloned_row_resolves_that_row_and_never_quits() {
-        for (cursor, row) in [(2, QuitRow::LoadProfile), (3, QuitRow::LoadSaveProfiles)] {
-            let mut f = facts();
-            f.cursor = cursor;
-            f.cursor_row_label = Some(QuitRowLabel::Ours(row));
-            f.activated_row_by_controller = Some(row);
-            let verdict = resolve_quit_row(&f);
-            assert_eq!(
-                verdict,
-                QuitRowVerdict::Resolved {
-                    row,
-                    by: QuitRowDiscriminator::CursorRowOurLabel,
-                }
-            );
-            assert!(!verdict.authorizes_quit());
-        }
-    }
-
-    /// The dispatch collapse the old build measured -- a cloned row's press arriving on the native
-    /// Return-to-Desktop controller -- now contradicts the cursor, so it runs nothing rather than
-    /// letting either side win.
-    #[test]
-    fn a_collapsed_controller_that_contradicts_the_cursor_runs_nothing() {
-        for (cursor, row) in [(2, QuitRow::LoadProfile), (3, QuitRow::LoadSaveProfiles)] {
-            let mut f = facts();
-            f.cursor = cursor;
-            f.cursor_row_label = Some(QuitRowLabel::Ours(row));
-            f.activated_row_by_controller = Some(QuitRow::ReturnToDesktop);
-            let verdict = resolve_quit_row(&f);
-            assert_eq!(
-                verdict,
-                QuitRowVerdict::Ambiguous(QuitRowAmbiguity::DiscriminatorDisagreement)
-            );
-            assert!(!verdict.authorizes_quit());
-        }
-    }
-
-    /// The measured mouse defect: the dispatch carried the native Return-to-Desktop controller AND
-    /// the cursor named that row, while the pointer band claimed the bottom-right cloned row. The old
-    /// resolver preferred the band and opened the save picker; now the two sources disagree, so the
-    /// activation runs NOTHING -- neither the picker nor the quit.
-    #[test]
-    fn a_pointer_band_that_contradicts_the_cursor_and_controller_runs_nothing() {
-        let mut f = facts();
-        f.input_kind = QuitInputKind::MouseClick;
-        f.pointer = Some((0.42, 0.31));
-        f.cursor = 1;
-        f.cursor_row_label = Some(QuitRowLabel::Foreign);
-        let verdict = resolve_quit_row(&f);
-        assert_eq!(
-            verdict,
-            QuitRowVerdict::Ambiguous(QuitRowAmbiguity::DiscriminatorDisagreement)
-        );
-        assert!(!verdict.authorizes_quit());
-        assert_eq!(verdict.resolved_row(), None);
-    }
-
-    /// Agreement is what resolves: the same click with the CURSOR also on the cloned row opens that
-    /// row, and names the cursor (not the band) as the discriminator.
-    #[test]
-    fn a_mouse_click_whose_cursor_and_band_agree_resolves_by_the_cursor() {
-        let mut f = facts();
-        f.input_kind = QuitInputKind::MouseClick;
-        f.pointer = Some((0.42, 0.31));
-        f.cursor = 3;
-        f.cursor_row_label = Some(QuitRowLabel::Ours(QuitRow::LoadSaveProfiles));
-        f.activated_row_by_controller = Some(QuitRow::LoadSaveProfiles);
-        assert_eq!(
-            resolve_quit_row(&f),
-            QuitRowVerdict::Resolved {
-                row: QuitRow::LoadSaveProfiles,
-                by: QuitRowDiscriminator::CursorRowOurLabel,
-            }
-        );
-    }
-
-    #[test]
-    fn the_pointer_band_alone_still_names_a_cloned_row() {
-        let mut f = facts();
-        f.input_kind = QuitInputKind::MouseClick;
-        f.pointer = Some((-0.42, 0.31));
-        f.cursor = -1;
-        f.activated_row_by_controller = None;
-        let verdict = resolve_quit_row(&f);
-        assert_eq!(verdict.resolved_row(), Some(QuitRow::LoadProfile));
-        assert!(!verdict.authorizes_quit());
-    }
-
-    #[test]
-    fn mouse_click_on_the_top_band_still_needs_the_cursor_to_name_the_row() {
-        let mut f = facts();
-        f.input_kind = QuitInputKind::MouseClick;
-        f.pointer = Some((0.42, -0.30));
-        assert!(resolve_quit_row(&f).authorizes_quit());
-
-        f.cursor = -1;
-        assert_eq!(
-            resolve_quit_row(&f),
-            QuitRowVerdict::Ambiguous(QuitRowAmbiguity::CursorOutOfRange)
-        );
-    }
-
-    #[test]
-    fn mouse_click_without_a_readable_pointer_is_ambiguous() {
-        let mut f = facts();
-        f.input_kind = QuitInputKind::MouseClick;
-        f.pointer = None;
-        f.cursor = -1;
-        assert_eq!(
-            resolve_quit_row(&f),
-            QuitRowVerdict::Ambiguous(QuitRowAmbiguity::MouseClickWithoutPointer)
-        );
-    }
-
-    /// The refusal holds for EVERY input kind, so an inverted input classification still cannot let a
-    /// click on a cloned button reach `ExitProcess`.
-    #[test]
-    fn a_contradicting_pointer_refuses_the_quit_for_every_input_kind() {
+    fn every_input_kind_resolves_the_same_row_by_the_same_discriminator() {
         for kind in [
             QuitInputKind::Unknown,
             QuitInputKind::PadConfirm,
             QuitInputKind::MouseClick,
         ] {
+            for (cursor, row, label) in [
+                (0, QuitRow::SaveGame, Some(QuitRowLabel::Foreign)),
+                (1, QuitRow::ReturnToDesktop, Some(QuitRowLabel::Foreign)),
+                (
+                    2,
+                    QuitRow::LoadProfile,
+                    Some(QuitRowLabel::Ours(QuitRow::LoadProfile)),
+                ),
+                (
+                    3,
+                    QuitRow::LoadSaveProfiles,
+                    Some(QuitRowLabel::Ours(QuitRow::LoadSaveProfiles)),
+                ),
+            ] {
+                let mut f = facts();
+                f.input_kind = kind;
+                f.cursor = cursor;
+                f.cursor_row_label = label;
+                assert_eq!(
+                    resolve_quit_row(&f),
+                    QuitRowVerdict::Resolved {
+                        row,
+                        by: QuitRowDiscriminator::CursorRow,
+                    },
+                    "{kind:?} cursor={cursor}"
+                );
+            }
+        }
+    }
+
+    /// Only the Return-to-Desktop row may quit; the other three are resolved and harmless.
+    #[test]
+    fn no_row_but_return_to_desktop_can_quit() {
+        for (cursor, label) in [
+            (0, Some(QuitRowLabel::Foreign)),
+            (2, Some(QuitRowLabel::Ours(QuitRow::LoadProfile))),
+            (3, Some(QuitRowLabel::Ours(QuitRow::LoadSaveProfiles))),
+        ] {
             let mut f = facts();
-            f.input_kind = kind;
-            f.pointer = Some((0.42, 0.31));
+            f.cursor = cursor;
+            f.cursor_row_label = label;
             let verdict = resolve_quit_row(&f);
-            assert!(!verdict.authorizes_quit(), "{kind:?} authorized a quit");
-            assert_eq!(
-                verdict,
-                QuitRowVerdict::Ambiguous(QuitRowAmbiguity::DiscriminatorDisagreement),
-                "{kind:?}"
-            );
+            assert!(verdict.resolved_row().is_some(), "cursor={cursor}");
+            assert!(!verdict.authorizes_quit(), "cursor={cursor} authorized a quit");
         }
     }
 
     #[test]
-    fn unknown_input_kind_with_the_pointer_on_the_top_band_uses_the_cursor() {
-        let mut f = facts();
-        f.input_kind = QuitInputKind::Unknown;
-        f.pointer = Some((0.42, -0.31));
-        assert!(resolve_quit_row(&f).authorizes_quit());
+    fn an_out_of_range_cursor_runs_nothing() {
+        for cursor in [-1, 4, 99] {
+            let mut f = facts();
+            f.cursor = cursor;
+            assert_eq!(
+                resolve_quit_row(&f),
+                QuitRowVerdict::Ambiguous(QuitRowAmbiguity::CursorOutOfRange),
+                "cursor={cursor}"
+            );
+        }
     }
 
     #[test]
@@ -963,15 +816,43 @@ mod system_quit_row_identity_tests {
         );
     }
 
+    /// The surviving refusal-on-disagreement backstop: the captured table and the label read live at
+    /// the cursor contradict each other, so neither is trusted.
     #[test]
-    fn a_label_that_contradicts_the_captured_index_never_quits() {
+    fn the_table_and_the_live_label_disagreeing_runs_nothing() {
         let mut f = facts();
         f.cursor = 1;
         f.cursor_row_label = Some(QuitRowLabel::Ours(QuitRow::LoadSaveProfiles));
+        let verdict = resolve_quit_row(&f);
         assert_eq!(
-            resolve_quit_row(&f),
+            verdict,
             QuitRowVerdict::Ambiguous(QuitRowAmbiguity::CursorRowLabelMismatch)
         );
+        assert!(!verdict.authorizes_quit());
+
+        // A native FMG label at an index the table says is one of ours: the same contradiction seen
+        // from the other side.
+        let mut f = facts();
+        f.cursor = 3;
+        f.cursor_row_label = Some(QuitRowLabel::Foreign);
+        assert_eq!(
+            resolve_quit_row(&f),
+            QuitRowVerdict::Ambiguous(QuitRowAmbiguity::CursorRowUnclaimed)
+        );
+    }
+
+    #[test]
+    fn both_disagreement_reasons_are_counted_as_disagreements() {
+        assert!(QuitRowAmbiguity::CursorRowLabelMismatch.is_disagreement());
+        assert!(QuitRowAmbiguity::CursorRowUnclaimed.is_disagreement());
+        for absence in [
+            QuitRowAmbiguity::RowTableIncomplete,
+            QuitRowAmbiguity::DialogMismatch,
+            QuitRowAmbiguity::CursorOutOfRange,
+            QuitRowAmbiguity::CursorRowLabelUnreadable,
+        ] {
+            assert!(!absence.is_disagreement(), "{absence:?}");
+        }
     }
 
     #[test]
@@ -985,61 +866,9 @@ mod system_quit_row_identity_tests {
     }
 
     #[test]
-    fn a_foreign_label_on_a_cloned_index_never_quits() {
-        let mut f = facts();
-        f.cursor = 3;
-        f.cursor_row_label = Some(QuitRowLabel::Foreign);
-        assert_eq!(
-            resolve_quit_row(&f),
-            QuitRowVerdict::Ambiguous(QuitRowAmbiguity::CursorRowUnclaimed)
-        );
-    }
-
-    /// A cloned row's OWN controller positively names that row when nothing else can, and can never
-    /// authorize the quit.
-    #[test]
-    fn a_cloned_controller_names_its_own_row_and_never_quits() {
-        for row in [QuitRow::LoadProfile, QuitRow::LoadSaveProfiles] {
-            let mut f = facts();
-            f.activated_row_by_controller = Some(row);
-            f.cursor = -1;
-            let verdict = resolve_quit_row(&f);
-            assert_eq!(
-                verdict,
-                QuitRowVerdict::Resolved {
-                    row,
-                    by: QuitRowDiscriminator::ActivatedRowController,
-                }
-            );
-            assert!(!verdict.authorizes_quit());
-        }
-    }
-
-    /// The Return-to-Desktop controller is explicitly NOT allowed to name its row, because the
-    /// measured dispatch routes clicks on both cloned buttons through it.
-    #[test]
-    fn the_return_desktop_controller_alone_does_not_name_the_row() {
-        let mut f = facts();
-        f.activated_row_by_controller = Some(QuitRow::ReturnToDesktop);
-        f.cursor = -1;
-        assert_eq!(
-            resolve_quit_row(&f),
-            QuitRowVerdict::Ambiguous(QuitRowAmbiguity::CursorOutOfRange)
-        );
-    }
-
-    #[test]
-    fn an_unmapped_controller_does_not_block_a_positively_identified_quit() {
-        let mut f = facts();
-        f.activated_row_by_controller = None;
-        assert!(resolve_quit_row(&f).authorizes_quit());
-    }
-
-    #[test]
     fn the_save_game_row_is_reachable_by_both_label_forms() {
         let mut f = facts();
         f.cursor = 0;
-        f.activated_row_by_controller = Some(QuitRow::SaveGame);
         f.cursor_row_label = Some(QuitRowLabel::Ours(QuitRow::SaveGame));
         assert_eq!(resolve_quit_row(&f).resolved_row(), Some(QuitRow::SaveGame));
 
@@ -1071,8 +900,6 @@ mod system_quit_row_identity_tests {
             QuitRowAmbiguity::CursorRowLabelMismatch,
             QuitRowAmbiguity::CursorRowLabelUnreadable,
             QuitRowAmbiguity::CursorRowUnclaimed,
-            QuitRowAmbiguity::MouseClickWithoutPointer,
-            QuitRowAmbiguity::DiscriminatorDisagreement,
         ];
         for (a, first) in reasons.iter().enumerate() {
             assert_ne!(first.code(), 0);
@@ -1080,5 +907,9 @@ mod system_quit_row_identity_tests {
                 assert_ne!(first.code(), second.code());
             }
         }
+        // A resolved verdict must be distinguishable from an ambiguous one in the oracle, and there
+        // is exactly ONE discriminator: `oracle_system_quit_row_last_discriminator` reads 1 for every
+        // resolution, whatever the input kind.
+        assert_eq!(QuitRowDiscriminator::CursorRow.code(), 1);
     }
 }
