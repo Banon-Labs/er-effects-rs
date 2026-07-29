@@ -465,12 +465,58 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SAVE_PICKER_OVERLAY_PICK_REJECT_COUNT.load(Ordering::SeqCst)
     ));
     body.push_str(&format!(
-        "  \"system_quit_continue_confirm_fresh_deser_done\": {},\n  \"system_quit_continue_confirm_fresh_deser_count\": {},\n  \"system_quit_continue_confirm_block_count\": {},\n  \"system_quit_continue_confirm_allow_count\": {},\n",
+        "  \"system_quit_continue_confirm_fresh_deser_done\": {},\n  \"system_quit_continue_confirm_fresh_deser_count\": {},\n  \"system_quit_continue_confirm_block_count\": {},\n  \"system_quit_continue_confirm_allow_count\": {},\n  \"system_quit_continue_confirm_non_switch_count\": {},\n  \"system_quit_continue_confirm_world_up_count\": {},\n  \"system_quit_continue_confirm_unproven_forward_count\": {},\n",
         SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst),
         SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT.load(Ordering::SeqCst),
-        SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst)
+        SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_CONTINUE_CONFIRM_NON_SWITCH_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_CONTINUE_CONFIRM_WORLD_UP_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_CONTINUE_CONFIRM_UNPROVEN_FORWARD_COUNT.load(Ordering::SeqCst)
     ));
+    // LOAD COUNT, STATED RATHER THAN IMPLIED. Six existing counters describe "loads" with four
+    // different values because each counts a different event class; a reader who picks one and
+    // divides gets a wrong total (a captured 3-load session reads activate=4, allow=3, epoch=2,
+    // pick=2). `oracle_total_world_loads` is the answer; `oracle_load_count_witness_signature` shows
+    // every witness side by side so the composition never has to be reconstructed by hand again; and
+    // `oracle_load_count_mismatches` is nonzero the moment those witnesses contradict each other, so
+    // a future run reports the contradiction itself instead of waiting to be noticed.
+    // See er_telemetry::load_count for the decomposition and why the epoch is an INDEX, not a count.
+    {
+        let witnesses = er_telemetry::load_count::LoadCountWitnesses {
+            continue_confirm_forwards: SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT
+                .load(Ordering::SeqCst),
+            switch_reload_commits: SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
+                .load(Ordering::SeqCst),
+            non_switch_forwards: SYSTEM_QUIT_CONTINUE_CONFIRM_NON_SWITCH_COUNT
+                .load(Ordering::SeqCst),
+            world_up_forwards: SYSTEM_QUIT_CONTINUE_CONFIRM_WORLD_UP_COUNT.load(Ordering::SeqCst),
+            continue_confirm_blocks: SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT
+                .load(Ordering::SeqCst),
+            picker_activations: SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_PICKER_COUNT
+                .load(Ordering::SeqCst),
+            slot_activations: SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_SLOT_COUNT.load(Ordering::SeqCst),
+            total_activations: SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.load(Ordering::SeqCst),
+            picker_picks: SAVE_PICKER_PICK_COUNT.load(Ordering::SeqCst),
+            picker_pick_rejects: SAVE_PICKER_PICK_REJECT_COUNT.load(Ordering::SeqCst),
+            picker_repopulates: SAVE_PICKER_REPOPULATE_COUNT.load(Ordering::SeqCst),
+        };
+        let mismatches = witnesses.mismatches();
+        er_telemetry::counters::LOAD_COUNT_MISMATCH_BITS
+            .store(mismatches.bits() as usize, Ordering::SeqCst);
+        body.push_str(&format!(
+            "  \"oracle_total_world_loads\": {},\n  \"oracle_current_load_index\": {},\n  \"oracle_load_count_mismatches\": {},\n  \"oracle_load_count_mismatch_bits\": {},\n  \"oracle_load_count_mismatch_names\": \"{}\",\n  \"oracle_load_count_witness_signature\": \"{}\",\n",
+            witnesses.total_world_loads(),
+            witnesses
+                .current_load_index()
+                .map(|index| index as isize)
+                .unwrap_or(-1),
+            mismatches.count(),
+            mismatches.bits(),
+            mismatches.names(),
+            witnesses.signature()
+        ));
+    }
     // Full-read chain terminal disarm (bd er-effects-rs-ns4n): count > 0 proves a non-commit exit
     // cleared the pending native slot request, so the in-game save manager cannot service a stale
     // request into the live world (the gaitem free-queue AV at 0x67141a). `_last_prev_slot` is the

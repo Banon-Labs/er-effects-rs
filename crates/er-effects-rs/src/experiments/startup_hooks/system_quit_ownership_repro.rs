@@ -1170,6 +1170,11 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
             unsafe { safe_read_i32(dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) }.unwrap_or(-1);
         SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_DIALOG.store(dialog, Ordering::SeqCst);
         SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_CURSOR.store(cursor as usize, Ordering::SeqCst);
+        // Split out from the shared total: a picker activation is a BROWSE step (up, enter dir,
+        // page, pick file), never a load. Summing both kinds into one counter is what let a reader
+        // divide the activation count by 2 and call the result a load count -- true only in a session
+        // with zero directory navigation. See er_telemetry::load_count.
+        SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_PICKER_COUNT.fetch_add(1, Ordering::SeqCst);
         SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.fetch_add(1, Ordering::SeqCst);
         return unsafe { save_picker_handle_activation(dialog, cursor) };
     }
@@ -1192,6 +1197,8 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
     SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_CURSOR.store(cursor as usize, Ordering::SeqCst);
     SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_BOUND.store(bound as usize, Ordering::SeqCst);
 
+    // A SLOT arm -- the activation that actually confirms a character load, one per user pick.
+    SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_SLOT_COUNT.fetch_add(1, Ordering::SeqCst);
     SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.fetch_add(1, Ordering::SeqCst);
 
     // PRODUCT PATH (human-driven pick): the slot activation IS the load confirmation. A human's A on

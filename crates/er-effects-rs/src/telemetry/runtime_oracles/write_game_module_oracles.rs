@@ -237,6 +237,14 @@ fn write_game_module_oracles(body: &mut String) {
             use std::sync::atomic::Ordering as CoOrd;
             let composite_us = er_telemetry::counters::COMPOSITE_LAST_US.load(CoOrd::SeqCst);
             let bv_epoch = crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(CoOrd::Relaxed);
+            // `oracle_current_load_epoch` IS NOT A LOAD COUNT. It counts fresh deserializes committed
+            // INSIDE the switch machine, so the boot load never increments it: a session that loaded
+            // three worlds (boot + two reloads) reports 2. It is fine as a within-run slicing key
+            // (what every analyze-* script uses it for) and as a zero-based load index while exactly
+            // one non-switch load occurred -- and it says NOTHING about whether those loads
+            // succeeded: two captured runs both read 2, one reaching world residency three times and
+            // the other once before a softlock. For the total, read `oracle_total_world_loads`; for
+            // agreement across every load witness, read `oracle_load_count_mismatches`.
             let cur_epoch =
                 crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(CoOrd::SeqCst);
             body.push_str(&format!(
