@@ -804,8 +804,9 @@ pub(crate) const SAVE_REQUEST_RETRACT_B73_SIG: &[u8] = &[
 // The Save Game row is CLOSE-THEN-FIRE: the row press stages a commit (stage 6), the proven
 // close sequence runs, and only with menus closed + RAM gates green does the tick arm the
 // one-shot er-save-suppress bypass and fire the FORCED (throttle-skipping) request pair.
-// Full stage map lives on `er_telemetry::counters::SAVE_FLOW_STAGE`; stages 3/4 are the
-// WP3 destination-browser stages, not yet reachable.
+// The row press does not go straight to stage 6, though: it opens the confirm chain (stages
+// 1/2), and Box2 "No" routes through the destination browser (stages 3/4) before a commit is
+// staged. Full stage map lives on `er_telemetry::counters::SAVE_FLOW_STAGE`.
 pub(crate) const SAVE_FLOW_STAGE_IDLE: usize = 0;
 /// WP2: the "Are you sure you want to save?" confirm is up (default No).
 pub(crate) const SAVE_FLOW_STAGE_BOX1_WAIT: usize = 1;

@@ -233,8 +233,7 @@ fn arm_save_job_completion_watch() {
 
 /// Adopt a completed SL save job as the current commit's terminal status.
 ///
-/// Meant to be called from a product host's commit tick (no host calls it yet -- see the
-/// bypass section in `lib.rs`). Does nothing unless ALL of these hold, which is
+/// Called from the product's commit tick. Does nothing unless ALL of these hold, which is
 /// what makes it positive evidence rather than an absence of failure:
 ///
 ///   1. a completion watch is live -- our one-shot token was CONSUMED by an enqueue, so a
