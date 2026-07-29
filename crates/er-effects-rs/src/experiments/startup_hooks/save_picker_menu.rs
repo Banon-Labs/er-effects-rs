@@ -673,6 +673,47 @@ pub(crate) fn save_picker_browse_stats_lines(row: usize) -> Option<(Vec<u16>, Ve
     ))
 }
 
+/// Whether ProfileSelect row `row` keeps the native per-slot info fields (`Level` caption, `Level`
+/// value, `PlayTime`) while the browse picker owns the window -- true only for save-FILE rows.
+///
+/// `None` when the picker does NOT own the rows. That is the load-bearing half of the scope: the
+/// vanilla character-slot views, the title-screen Load Game list first among them, render from the
+/// game's own records and must be left exactly as the game draws them. Same ownership gate as
+/// [`save_picker_browse_stats_lines`], so the two cannot disagree about who owns a row.
+pub(crate) fn save_picker_row_shows_native_slot_info(row: usize) -> Option<bool> {
+    if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 && !missing_save_selection_pending() {
+        return None;
+    }
+    let guard = crate::experiments::save_picker::active_save_picker_lock();
+    Some(guard.as_ref()?.row_shows_native_slot_info(row))
+}
+
+#[cfg(test)]
+mod save_picker_row_slot_info_tests {
+    use super::*;
+
+    /// SCOPE PROOF for the non-file-row Level/PlayTime suppression: with no picker owning the rows
+    /// -- the state the vanilla character-slot views run in, the title-screen Load Game list among
+    /// them -- the gate answers `None` for every row, and `None` is the only answer the populate
+    /// hook treats as "leave this row exactly as the game drew it". A regression that made the
+    /// suppression global would have to make this return `Some` here first.
+    #[test]
+    fn no_picker_means_no_row_is_ever_classified() {
+        assert_eq!(
+            SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst),
+            0,
+            "no picker session may be active in a unit test"
+        );
+        for row in 0..crate::experiments::save_picker::PICKER_ROW_COUNT {
+            assert_eq!(
+                save_picker_row_shows_native_slot_info(row),
+                None,
+                "row {row} was classified without a picker owning the rows"
+            );
+        }
+    }
+}
+
 /// Entry hook on the native ProfileSelect item-list builder (`PROFILE_SELECT_LIST_BUILDER_RVA`,
 /// FUN_140875590): while the browse picker owns the `05_010` rows, RE-STAGE the browse-row records
 /// immediately before the native builder turns ProfileSummary records into visible list rows.

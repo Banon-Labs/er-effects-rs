@@ -129,6 +129,26 @@ pub(crate) enum PickerRow {
     Empty,
 }
 
+/// Whether the native ProfileSelect row's per-slot info fields -- the `Level` FMG caption, the
+/// `Level` value and `PlayTime` -- describe anything on a row of this kind.
+///
+/// Those three fields exist to describe ONE save slot's character. Only a [`PickerRow::File`] row
+/// has a character behind it; every other browse row is navigation or intent, so the fields render
+/// the staged record's zeroed defaults ("Level 0", "0:00:00") -- not wrong values but meaningless
+/// ones. The match is exhaustive on purpose: a new row kind must state which side it is on.
+pub(crate) fn picker_row_shows_native_slot_info(row: &PickerRow) -> bool {
+    match row {
+        PickerRow::File(_) => true,
+        PickerRow::ParentDir
+        | PickerRow::DriveCycle
+        | PickerRow::AtRoot
+        | PickerRow::Dir(_)
+        | PickerRow::NewFile(_)
+        | PickerRow::NextPage
+        | PickerRow::Empty => false,
+    }
+}
+
 /// Outcome of activating a row. `Repopulate` means the listing changed (new directory, new drive or
 /// new page) and the UI must re-stage row records and re-present the window.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -624,6 +644,14 @@ impl SavePickerModel {
         }
     }
 
+    /// Whether the native per-slot info fields (`Level` caption, `Level` value, `PlayTime`) belong
+    /// on `row` of the current page. Same single decision point as the label and the character
+    /// info: [`row_meaning`](Self::row_meaning) classifies the row,
+    /// [`picker_row_shows_native_slot_info`] decides.
+    pub(crate) fn row_shows_native_slot_info(&self, row: usize) -> bool {
+        picker_row_shows_native_slot_info(&self.row_meaning(row))
+    }
+
     /// Apply the effect of activating `row`.
     pub(crate) fn activate(&mut self, row: usize) -> PickerActivation {
         match self.row_meaning(row) {
@@ -1024,6 +1052,66 @@ mod tests {
                 }
             }
             assert_eq!(file_rows, 3, "expected all three files to occupy rows");
+        }
+    }
+
+    /// Only a save-FILE row has a character, so only a File row keeps the native per-slot info
+    /// fields. Enumerated per kind so the decision is pinned independently of any layout.
+    #[test]
+    fn only_file_rows_show_the_native_slot_info_fields() {
+        let path = PathBuf::from("Z:\\saves\\save0.sl2");
+        assert!(picker_row_shows_native_slot_info(&PickerRow::File(
+            path.clone()
+        )));
+        for row in [
+            PickerRow::ParentDir,
+            PickerRow::DriveCycle,
+            PickerRow::AtRoot,
+            PickerRow::Dir(PathBuf::from("Z:\\saves\\sub")),
+            PickerRow::NewFile(path),
+            PickerRow::NextPage,
+            PickerRow::Empty,
+        ] {
+            assert!(
+                !picker_row_shows_native_slot_info(&row),
+                "{row:?} has no character behind it, so Level/PlayTime must be suppressed"
+            );
+        }
+    }
+
+    /// On a real layout the suppression decision must agree with the row's own label/character info,
+    /// across both intents and with the drive row present: exactly the file rows keep the fields.
+    #[test]
+    fn slot_info_visibility_agrees_with_the_rows_character_info() {
+        for model in [
+            model_with(PickerIntent::LoadSource, "Z:\\saves", 3),
+            destination("Z:\\saves", 3),
+            with_drives(
+                model_with(PickerIntent::LoadSource, "Z:\\saves", 3),
+                &["C:\\", "Z:\\"],
+            ),
+            with_drives(destination("Z:\\", 3), &["C:\\", "Z:\\"]),
+            // Long enough to need the page cycler, whose row must also be suppressed.
+            model_with(PickerIntent::LoadSource, "Z:\\saves", PICKER_ROW_COUNT + 4),
+        ] {
+            let mut kept = 0;
+            for row in 0..PICKER_ROW_COUNT {
+                let shows = model.row_shows_native_slot_info(row);
+                assert_eq!(
+                    shows,
+                    row_label_file(&model, row).is_some(),
+                    "row {row} ({:?}) disagrees with its label about being a save file",
+                    model.row_meaning(row)
+                );
+                assert_eq!(
+                    shows,
+                    model.row_file_characters(row).is_some(),
+                    "row {row} ({:?}) disagrees with its character info",
+                    model.row_meaning(row)
+                );
+                kept += usize::from(shows);
+            }
+            assert!(kept > 0, "at least one file row must keep its slot info");
         }
     }
 

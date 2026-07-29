@@ -71,6 +71,61 @@ pub(crate) const PROFILE_ROW_POPULATE_RVA: usize = 0x8757e0;
 /// `*(int*)(rowModel + 0x8) + 1` as the `Icon_0` face-sprite frame, i.e. the slot; we read the same
 /// field to index the per-slot stats cache so each row shows ITS OWN character's attributes.
 pub(crate) const PROFILE_ROW_MODEL_SLOT_08_OFFSET: usize = 0x8;
+
+// === PER-SLOT INFO FIELDS ON A PROFILESELECT ROW (2026-07-29, er-effects-rs-flkm) ================
+// WHAT PRODUCES "Level 0" AND "0:00:00" ON A ROW, and therefore why zeroing the staged record could
+// never blank them (static RE of the 1.16.2 dump, which is the live image -- shift 0; row template
+// = sprite 76 of `05_010_profileselect.gfx`, names read off the movie the DLL actually serves):
+//   * `StaticText_110502` -- the "Level" CAPTION, an ENGINE-populated static field. The named-child
+//     binder hands every child's name to the FMG static-text pass `FUN_14074c540`, which matches the
+//     `StaticText_` prefix from the table at `PTR_s_StaticText__142a94aa0`, `atoi`s the trailing id
+//     (110502) and calls the SetText CORE `FUN_140d842a0` DIRECTLY. The row-populate never writes
+//     it, so it is written once per bind and survives row-clip reuse.
+//   * `Level` -- the level VALUE. `FUN_140749ed0(&proxy->comp, *(u32*)(rowModel + 0x88))`, which
+//     `DLTX::DLString::FormatW(L"%d")`s the int and SetTexts the digits. No int formats to nothing,
+//     so a zeroed (or NULL, `FUN_140875790`) record still renders "0".
+//   * `PlayTime` -- `FUN_14074a000(&proxy->comp, playtime)`, the string being the row model's own
+//     `CS::MenuSaveDataSummary` playtime (+0xc8 literal, else the DLString at +0xd0), formatted from
+//     seconds by `FUN_140875be0` inside the row-model builder `FUN_1408759e0`.
+// LEVER: none of the three can be emptied through the record, and a post-populate re-resolve is
+// impossible (the named-child ctor 0x14074a7c0 resolves out of the PARENT proxy's embedded value at
+// +0x28, which the populate destroys at its end). So the rows that have no character hide the fields
+// instead, per row, through the game's own visibility wrapper
+// (`TITLE_PRESS_START_SET_VISIBLE_RVA`) -- content-free in both directions, which is what makes the
+// restore as exact as the hide.
+pub(crate) const PROFILE_ROW_LEVEL_CAPTION_FIELD_NAME: &str = "StaticText_110502\0";
+pub(crate) const PROFILE_ROW_LEVEL_VALUE_FIELD_NAME: &str = "Level\0";
+pub(crate) const PROFILE_ROW_PLAYTIME_FIELD_NAME: &str = "PlayTime\0";
+/// The three fields together: what a row shows about a save slot's character beyond its name.
+pub(crate) const PROFILE_ROW_SLOT_INFO_FIELD_NAMES: [&str; 3] = [
+    PROFILE_ROW_LEVEL_CAPTION_FIELD_NAME,
+    PROFILE_ROW_LEVEL_VALUE_FIELD_NAME,
+    PROFILE_ROW_PLAYTIME_FIELD_NAME,
+];
+/// GFx value type (`CSScaleformValue+0x20 & 0x8f`) the visibility setter `FUN_140d844d0` requires:
+/// it returns without doing anything unless the resolved value is a DISPLAY OBJECT (10). Recorded
+/// per call as an oracle so "the fields are still visible in game" is diagnosable from telemetry
+/// instead of guesswork -- a non-10 type means the hide silently no-ops.
+pub(crate) const GFX_VALUE_TYPE_DISPLAY_OBJECT: usize = 10;
+/// Offset of the GFx value's type word inside a `CSScaleformValue` (the `lVar+0x20` every setter
+/// guards on: `CSScaleformValue` = vfptr + `GFx::Value`, whose `dataType` lands at +0x20).
+pub(crate) const CSSCALEFORMVALUE_DATATYPE_20_OFFSET: usize = 0x20;
+/// Count of rows the hide was DRIVEN on because the row has no character -- i.e. the native setter
+/// was called for at least one of the three fields; pair it with `_NON_DISPLAY` below to know the
+/// call took effect (oracle). Also the latch that arms the symmetric re-show: until it is non-zero
+/// nothing was ever driven, so the vanilla path stays completely untouched.
+pub(crate) use er_telemetry::counters::PROFILE_ROW_SLOT_INFO_HIDDEN_ROWS;
+/// Count of rows the re-show was driven on (oracle). Row clips are reused across rows and across
+/// windows, so every row that KEEPS its slot info re-asserts visibility.
+pub(crate) use er_telemetry::counters::PROFILE_ROW_SLOT_INFO_SHOWN_ROWS;
+/// Count of per-field visibility calls skipped fail-closed: the child did not resolve, or the out
+/// proxy did not carry the game's own `CS::SceneObjProxy` vtable (oracle).
+pub(crate) use er_telemetry::counters::PROFILE_ROW_SLOT_INFO_VIS_SKIPS;
+/// Count of per-field visibility calls whose resolved value was NOT a display object, i.e. calls the
+/// native setter ignored (oracle). Non-zero means this lever does not reach that field.
+pub(crate) use er_telemetry::counters::PROFILE_ROW_SLOT_INFO_NON_DISPLAY;
+/// Last GFx value type observed by the visibility path (diagnostic companion to the counter above).
+pub(crate) use er_telemetry::counters::PROFILE_ROW_SLOT_INFO_LAST_DATATYPE;
 pub(crate) static PROFILE_ROW_POPULATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::PROFILE_ROW_POPULATE_INSTALLED;
 /// Per-slot stats cache state (oracle): 0 = not attempted, 1 = loaded (`.sl2` read + parsed), 2 =

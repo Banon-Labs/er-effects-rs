@@ -433,6 +433,17 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SAVE_PICKER_CANCEL_COUNT.load(Ordering::SeqCst),
         SAVE_PICKER_STAGED_ROW_COUNT.load(Ordering::SeqCst)
     ));
+    // Per-slot info fields (Level caption/value, PlayTime) on browse rows with no character. `_hidden`
+    // > 0 proves the suppression reached real rows; `_non_display` > 0 or a `_last_datatype` other
+    // than 10 says the native visibility setter ignored the field, i.e. the text is still on screen.
+    body.push_str(&format!(
+        "  \"oracle_profile_row_slot_info_hidden_rows\": {},\n  \"oracle_profile_row_slot_info_shown_rows\": {},\n  \"oracle_profile_row_slot_info_vis_skips\": {},\n  \"oracle_profile_row_slot_info_non_display\": {},\n  \"oracle_profile_row_slot_info_last_datatype\": {},\n",
+        PROFILE_ROW_SLOT_INFO_HIDDEN_ROWS.load(Ordering::SeqCst),
+        PROFILE_ROW_SLOT_INFO_SHOWN_ROWS.load(Ordering::SeqCst),
+        PROFILE_ROW_SLOT_INFO_VIS_SKIPS.load(Ordering::SeqCst),
+        PROFILE_ROW_SLOT_INFO_NON_DISPLAY.load(Ordering::SeqCst),
+        PROFILE_ROW_SLOT_INFO_LAST_DATATYPE.load(Ordering::SeqCst) as isize
+    ));
     body.push_str(&format!(
         "  \"oracle_save_picker_overlay_armed\": {},\n  \"oracle_save_picker_overlay_open_count\": {},\n  \"oracle_save_picker_overlay_draw_hits\": {},\n  \"oracle_save_picker_overlay_input_hits\": {},\n  \"oracle_save_picker_overlay_poll_count\": {},\n  \"oracle_save_picker_overlay_held_polls\": {},\n  \"oracle_save_picker_kbd_hook_hits\": {},\n  \"oracle_save_picker_overlay_pick_count\": {},\n  \"oracle_save_picker_overlay_pick_reject_count\": {},\n",
         SAVE_PICKER_OVERLAY_ARMED.load(Ordering::SeqCst),

@@ -776,6 +776,116 @@ unsafe fn push_stats_text_on_row(base: usize, row_proxy: usize, name: &str, utf1
     accepted
 }
 
+/// Show or hide ONE native row field with the game's own machinery: resolve the named child
+/// (`assignComponentWithName`, through the installed hook's trampoline so the resolve is not
+/// double-instrumented), call the SceneObjProxy visibility wrapper `FUN_140733340`, then release the
+/// resolved value with `~CSScaleformValue` on the proxy's EMBEDDED value (+0x28) exactly as the
+/// native populate does per field. Returns whether the wrapper was called.
+///
+/// Why visibility and not text: the field contents are produced by three different writers (see
+/// `PROFILE_ROW_SLOT_INFO_FIELD_NAMES`) and none of them can be made to emit nothing, while a
+/// re-resolve after the populate is impossible (it destroys the row proxy's embedded value).
+/// Visibility is also the only lever that RESTORES exactly -- `visible = true` needs no knowledge of
+/// the text, so a row clip reused by a save-file row (or by a vanilla view) comes back unchanged.
+///
+/// Fail-closed in every direction: the wrapper itself does nothing unless the resolved value is a
+/// display object, and we skip the call unless the out proxy carries the game's own
+/// `CS::SceneObjProxy` vtable (the wrapper's first act is an unvalidated
+/// `(*proxy->vfptr->GetScaleformValue2)(proxy)` dispatch -- the er-effects-rs-7e7 class of hazard).
+unsafe fn set_row_field_visible(base: usize, row_proxy: usize, name: &str, visible: bool) -> bool {
+    debug_assert!(name.ends_with('\0'), "field name must be NUL-terminated");
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let assign = match TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG.load(Ordering::SeqCst) {
+        orig if orig != null && orig != HOOK_ORIGINAL_UNSET => orig,
+        _ => base + TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
+    };
+    let assign: unsafe extern "system" fn(usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(assign) };
+    let set_visible: unsafe extern "system" fn(usize, u8) =
+        unsafe { std::mem::transmute(base + TITLE_PRESS_START_SET_VISIBLE_RVA) };
+    let dtor: unsafe extern "system" fn(usize) =
+        unsafe { std::mem::transmute(base + CSSCALEFORMVALUE_DTOR_RVA) };
+    let mut proxy_buf = [0u8; SCENE_OBJ_PROXY_STACK_BYTES];
+    let out = unsafe {
+        assign(
+            row_proxy,
+            proxy_buf.as_mut_ptr() as usize,
+            name.as_ptr() as usize,
+        )
+    };
+    if out == 0 || out == null {
+        PROFILE_ROW_SLOT_INFO_VIS_SKIPS.fetch_add(1, Ordering::SeqCst);
+        return false;
+    }
+    let proxy_vt = unsafe { safe_read_usize(out) }.unwrap_or(0);
+    // The resolved value the wrapper will act on, so its GFx type is observable as telemetry: the
+    // named-child ctor writes the child straight into the proxy's embedded CSScaleformValue and
+    // links no foreign component, so this is the value `GetScaleformValue2` returns.
+    let datatype = unsafe {
+        safe_read_i32(
+            out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET + CSSCALEFORMVALUE_DATATYPE_20_OFFSET,
+        )
+    }
+    .map(|raw| (raw as u32 & 0x8f) as usize);
+    if let Some(datatype) = datatype {
+        PROFILE_ROW_SLOT_INFO_LAST_DATATYPE.store(datatype, Ordering::SeqCst);
+        if datatype != GFX_VALUE_TYPE_DISPLAY_OBJECT {
+            let n = PROFILE_ROW_SLOT_INFO_NON_DISPLAY.fetch_add(1, Ordering::SeqCst) + 1;
+            if n <= 4 {
+                append_autoload_debug(format_args!(
+                    "save-picker: row field {} resolved GFx type {datatype} (not display object {GFX_VALUE_TYPE_DISPLAY_OBJECT}) -- native visibility setter will ignore it (n={n})",
+                    name.trim_end_matches('\0')
+                ));
+            }
+        }
+    }
+    let vtable_ok = proxy_vt == base + SCENE_OBJ_PROXY_VTABLE_RVA;
+    if vtable_ok {
+        unsafe { set_visible(out, u8::from(visible)) };
+    } else {
+        let n = PROFILE_ROW_SLOT_INFO_VIS_SKIPS.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 4 {
+            append_autoload_debug(format_args!(
+                "save-picker: row field {} visibility SKIPPED fail-closed -- out proxy 0x{out:x} vtable 0x{proxy_vt:x} is not CS::SceneObjProxy 0x{:x} (n={n})",
+                name.trim_end_matches('\0'),
+                base + SCENE_OBJ_PROXY_VTABLE_RVA
+            ));
+        }
+    }
+    unsafe { dtor(out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET) };
+    vtable_ok
+}
+
+/// Apply the row-kind decision to all three per-slot info fields of one ProfileSelect row.
+/// `visible == false` is the suppression the browse picker's non-file rows need; `true` is the
+/// re-assertion every other row makes, because the seven native row clips are REUSED (a clip that
+/// showed `[ up .. ]` renders a save file two scrolls later, and the same movie may outlive the
+/// picker window). Both directions run through the same per-field call, so they cannot drift.
+unsafe fn apply_row_slot_info_visibility(base: usize, row_proxy: usize, visible: bool) {
+    let mut applied = 0usize;
+    for name in PROFILE_ROW_SLOT_INFO_FIELD_NAMES {
+        if unsafe { set_row_field_visible(base, row_proxy, name, visible) } {
+            applied += 1;
+        }
+    }
+    if applied == 0 {
+        return;
+    }
+    let counter = if visible {
+        &PROFILE_ROW_SLOT_INFO_SHOWN_ROWS
+    } else {
+        &PROFILE_ROW_SLOT_INFO_HIDDEN_ROWS
+    };
+    let rows = counter.fetch_add(1, Ordering::SeqCst) + 1;
+    if rows <= 4 || rows.is_power_of_two() {
+        append_autoload_debug(format_args!(
+            "save-picker: {} Level caption/value + PlayTime on row=0x{row_proxy:x} ({applied}/{} fields, rows={rows})",
+            if visible { "re-showed" } else { "hid" },
+            PROFILE_ROW_SLOT_INFO_FIELD_NAMES.len()
+        ));
+    }
+}
+
 /// Hook of the ProfileSelect row-populate template `FUN_1408758d0(rowModel, rowProxy, ...)`. Runs once
 /// per visible list row with a PER-SLOT row model, so it can push the CORRECT slot's attributes (unlike
 /// the per-field named-child binder, which has no slot). The push happens BEFORE the original runs: the
@@ -807,6 +917,22 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
         if base != null {
             let slot = unsafe { safe_read_i32(row_model + PROFILE_ROW_MODEL_SLOT_08_OFFSET) }
                 .unwrap_or(-1);
+            let picker_row = (0..crate::experiments::save_picker::PICKER_ROW_COUNT as i32)
+                .contains(&slot)
+                .then_some(slot as usize);
+            // NON-FILE BROWSE ROWS (er-effects-rs-flkm): the native per-slot info fields describe a
+            // save slot's character, so on `[ up .. ]`, the drive cycler, `[ new ]`, a directory or
+            // the page cycler they render the staged record's zeroed defaults -- "Level 0" and
+            // "0:00:00" on a row that has no character at all. Hide them for exactly those rows and
+            // re-assert them everywhere else; `None` (the vanilla character-slot views, title-screen
+            // Load Game list included) always means "visible", and until something was actually
+            // hidden the re-assert does not run at all, so the vanilla path is untouched.
+            let hide_slot_info = picker_row
+                .and_then(save_picker_row_shows_native_slot_info)
+                .is_some_and(|shows| !shows);
+            if hide_slot_info || PROFILE_ROW_SLOT_INFO_HIDDEN_ROWS.load(Ordering::SeqCst) != 0 {
+                unsafe { apply_row_slot_info_visibility(base, row_proxy, !hide_slot_info) };
+            }
             // BROWSE PICKER ROWS (er-effects-rs-dly6): while the save-file picker owns the 05_010
             // window the rows are directories/files, not save slots, so the per-slot character
             // attributes are meaningless there (they rendered the ACTIVE save's characters' stats
@@ -816,12 +942,7 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
             // Deliberately not gated on `stats_panel_enabled` -- if the 05_010 GFX edit (which
             // adds the ErStats fields) is not live, the push fails closed and is counted, exactly
             // like the stats push.
-            let browse_lines =
-                if (0..crate::experiments::save_picker::PICKER_ROW_COUNT as i32).contains(&slot) {
-                    save_picker_browse_stats_lines(slot as usize)
-                } else {
-                    None
-                };
+            let browse_lines = picker_row.and_then(save_picker_browse_stats_lines);
             if let Some((top, bottom)) = browse_lines {
                 let seen = PROFILE_STATS_ROW_POPULATES.fetch_add(1, Ordering::SeqCst) + 1;
                 let pushed_top =
