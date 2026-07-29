@@ -773,6 +773,33 @@ pub(crate) const SYSTEM_QUIT_SAVE_GAME_DIALOG_ID: i32 = 110000;
 /// `+0xb88` `SetSeconds(0x3c)`).
 pub(crate) const SYSTEM_QUIT_SAVE_REQUEST_PROFILE_RVA: u32 = 0x67a420;
 pub(crate) const SYSTEM_QUIT_REQUEST_SAVE_RVA: u32 = 0x67a520;
+/// The game's OWN retractions of the two save-request flags: `FUN_140678740` clears
+/// `GameMan+0xb72` and `FUN_140678710` clears `GameMan+0xb73`. Each is a whole function of
+/// three instructions -- load the GameMan singleton from `0x143d69918`, store 0 into the
+/// flag byte, return -- so calling them is exactly the game's own retract semantics with
+/// no offset of ours in the loop.
+///
+/// They exist because a refused save lane touches NOTHING: the flags stay latched, the
+/// per-frame dispatcher `FUN_140afb880` re-enters the refusing lane every frame, and each
+/// entry serializes the whole character into a 0x280000 buffer and throws it away. Measured
+/// on a run whose submit builder was refusing: 27,824 declines with 0 serializer failures
+/// over 854 s -- ~33 full character serializations per second, indefinitely, on the game
+/// thread. Retracting a request that provably cannot be serviced is not a dropped save; it
+/// is the end of a spin.
+pub(crate) const SAVE_REQUEST_RETRACT_B72_RVA: u32 = 0x678740;
+pub(crate) const SAVE_REQUEST_RETRACT_B73_RVA: u32 = 0x678710;
+/// Whole-body bytes of the two retractions, byte-verified in `eldenring-deobf.bin` at the
+/// same VA (1.16.2, shift 0). `48 8B 05 <disp32>` is the RIP-relative GameMan load whose
+/// target resolves to `0x143d69918`; `C6 80 <off32> 00` is the flag store, and the offset
+/// immediates (`0xb72` / `0xb73`) are visible in the signature itself. Verified before the
+/// call: if the bytes ever differ, the address means something else in that build and the
+/// retraction is skipped rather than fired blind at unknown code.
+pub(crate) const SAVE_REQUEST_RETRACT_B72_SIG: &[u8] = &[
+    0x48, 0x8B, 0x05, 0xD1, 0x11, 0x6F, 0x03, 0xC6, 0x80, 0x72, 0x0B, 0x00, 0x00, 0x00, 0xC3,
+];
+pub(crate) const SAVE_REQUEST_RETRACT_B73_SIG: &[u8] = &[
+    0x48, 0x8B, 0x05, 0x01, 0x12, 0x6F, 0x03, 0xC6, 0x80, 0x73, 0x0B, 0x00, 0x00, 0x00, 0xC3,
+];
 // ---- SAVE-FLOW state machine (save-game-flow WP1, 2026-07-28) ----
 // The Save Game row is CLOSE-THEN-FIRE: the row press stages a commit (stage 6), the proven
 // close sequence runs, and only with menus closed + RAM gates green does the tick arm the
@@ -821,6 +848,11 @@ pub(crate) use er_telemetry::counters::SAVE_FLOW_ENQUEUE_MISSING_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_SERIALIZE_CALLS_AT_FIRE;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_SERIALIZE_FAILURES_AT_FIRE;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_SUBMITS_SWALLOWED_AT_FIRE;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_B72_BEFORE_FIRE;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_B73_BEFORE_FIRE;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_FLAG_UNREAD;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_REQUEST_RETRACTIONS;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_RETRACT_DECLINED;
 /// Game-task ticks stage 8 waits for the fired save request to actually REACH the writer (an SL
 /// save enqueue arriving at the suppressor) before declaring the fire failed. ~3 s at 60 ticks/s,
 /// the same budget the confirm-box build and destination-browser open timeouts use.

@@ -1068,6 +1068,44 @@ pub(crate) unsafe fn system_quit_save_game_request_save_forced() {
     }
 }
 
+/// Call one of the game's own save-request retractions after verifying its whole body.
+///
+/// Fails CLOSED through `save_flow_verify_rva`: an unresolvable address or a single drifted
+/// byte skips the call and reports it. Not retracting costs CPU; calling unknown code costs
+/// the process.
+unsafe fn call_verified_retract(rva: u32, expected: &[u8], name: &str) -> bool {
+    let Some(address) = save_flow_verify_rva(rva, expected, name) else {
+        return false;
+    };
+    let retract: unsafe extern "system" fn() = unsafe { std::mem::transmute(address) };
+    unsafe { retract() };
+    true
+}
+
+/// Retract the two native save-request flags through the game's own setters.
+///
+/// `b72` / `b73` select which flags to clear -- the caller decides ownership; this only
+/// performs it. Returns the pair of "actually cleared" results.
+pub(crate) unsafe fn system_quit_save_request_retract(b72: bool, b73: bool) -> (bool, bool) {
+    let cleared_b72 = b72
+        && unsafe {
+            call_verified_retract(
+                SAVE_REQUEST_RETRACT_B72_RVA,
+                SAVE_REQUEST_RETRACT_B72_SIG,
+                "b72",
+            )
+        };
+    let cleared_b73 = b73
+        && unsafe {
+            call_verified_retract(
+                SAVE_REQUEST_RETRACT_B73_RVA,
+                SAVE_REQUEST_RETRACT_B73_SIG,
+                "b73",
+            )
+        };
+    (cleared_b72, cleared_b73)
+}
+
 /// Run the proven Save Game close-all sequence and hand the flow to `save_flow_tick`.
 ///
 /// `commit` selects the destination stage: `true` = stage 6 CLOSING_COMMIT (the tick fires

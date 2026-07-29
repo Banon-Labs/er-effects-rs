@@ -1361,6 +1361,31 @@ pub static SAVE_FLOW_SERIALIZE_CALLS_AT_FIRE: AtomicUsize = AtomicUsize::new(0);
 /// bypass allow means a submit WAS built and this DLL swallowed it by mistake -- the one
 /// failure mode where the fault is ours rather than the game's.
 pub static SAVE_FLOW_SUBMITS_SWALLOWED_AT_FIRE: AtomicUsize = AtomicUsize::new(0);
+/// `GameMan+0xb72` / `+0xb73` sampled immediately BEFORE the forced request pair is fired.
+///
+/// This is what makes a retraction scoped rather than a broad clear. A flag that was
+/// ALREADY set before our fire belongs to the game and is left alone; only a flag that went
+/// 0 -> 1 across our own call is ours to take back. Stored as the raw byte, or
+/// [`SAVE_FLOW_FLAG_UNREAD`] when GameMan was not readable at the fire -- which disqualifies
+/// the retraction for that flag, because "we could not see it" is not "it was clear".
+pub static SAVE_FLOW_B72_BEFORE_FIRE: AtomicUsize = AtomicUsize::new(SAVE_FLOW_FLAG_UNREAD);
+/// `GameMan+0xb73` sampled immediately before the forced request pair. See
+/// [`SAVE_FLOW_B72_BEFORE_FIRE`].
+pub static SAVE_FLOW_B73_BEFORE_FIRE: AtomicUsize = AtomicUsize::new(SAVE_FLOW_FLAG_UNREAD);
+/// Sentinel for a request flag that could not be read at the fire.
+pub const SAVE_FLOW_FLAG_UNREAD: usize = usize::MAX;
+/// Save-request flags this DLL retracted after its own fire provably went nowhere.
+///
+/// Each retraction ends a per-frame spin: a refused save lane touches nothing, so the
+/// dispatcher re-enters it every frame and re-serializes the whole character (0x280000
+/// bytes) forever. Measured at ~33 serializations/second on a stuck run. Non-zero here is
+/// the flow cleaning up after itself, not an error.
+pub static SAVE_FLOW_REQUEST_RETRACTIONS: AtomicUsize = AtomicUsize::new(0);
+/// Retractions the flow declined to perform because it could not prove the latched flags
+/// were its own (or because a return-title sequence was in flight and needs the request to
+/// survive). Non-zero means a spin was left running on purpose; read it beside
+/// `oracle_save_dispatch_declines` to see the cost.
+pub static SAVE_FLOW_RETRACT_DECLINED: AtomicUsize = AtomicUsize::new(0);
 
 // ---- save-flow confirm chain (save-game-flow WP2) ----
 /// Number of confirm boxes the save flow can build (Box1 "are you sure", Box2 "overwrite

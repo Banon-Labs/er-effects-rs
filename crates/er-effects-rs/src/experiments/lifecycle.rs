@@ -516,6 +516,22 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
             save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "bypass arm refused");
             return;
         }
+        // Sample the request flags BEFORE the fire. This is the whole basis of the scoped
+        // retraction below: a flag already set here belongs to the game, a flag that goes
+        // 0 -> 1 across our own call is ours. An unreadable GameMan disqualifies that flag
+        // from retraction rather than defaulting it to "was clear".
+        let flag_before = |offset: usize| -> usize {
+            if gm < HEAP_LO {
+                return SAVE_FLOW_FLAG_UNREAD;
+            }
+            unsafe { safe_read_u8(gm + offset) }.map_or(SAVE_FLOW_FLAG_UNREAD, usize::from)
+        };
+        SAVE_FLOW_B72_BEFORE_FIRE
+            .store(flag_before(GAME_MAN_ARM_FLAG_B72_OFFSET), Ordering::SeqCst);
+        SAVE_FLOW_B73_BEFORE_FIRE.store(
+            flag_before(GAME_MAN_FLAG_B73_PROBE_OFFSET),
+            Ordering::SeqCst,
+        );
         unsafe { system_quit_save_game_request_save_forced() };
         // Read back the request flags the forced pair must have set: b73 (system lane)
         // unconditionally, b72 (char-slot lane) iff saveSlot != -1. Both 1 => the next
@@ -698,6 +714,123 @@ fn save_flow_fire_failure_reason() -> String {
     format!("{verdict} [{facts}]")
 }
 
+/// Take back the save-request flags OUR fire set, once that fire has provably gone nowhere.
+///
+/// # Why this is not optional
+///
+/// A save lane that refuses touches nothing: `GameMan+0xb72`/`+0xb73` stay set, `saveState`
+/// stays 0, so `FUN_140afb880` re-enters the refusing lane on the very next frame and does
+/// it again forever. Every entry runs the full character serializer into a 0x280000 (2.6 MB)
+/// buffer and throws the result away. Measured on a stuck run: 27,824 declines with ZERO
+/// serializer failures over 854 s -- about 33 complete character serializations per second,
+/// ~73 GB produced and discarded in fourteen minutes, on the game thread, for the rest of
+/// the session. That is not a stalled UI row; it is a permanent CPU burn in a build someone
+/// is playing.
+///
+/// # Why it is safe, and how it stays scoped
+///
+/// Four conditions, all of which must hold. Any one failing leaves the flags alone and
+/// counts `SAVE_FLOW_RETRACT_DECLINED`:
+///
+/// 1. **Suppression is armed.** With `er_save_suppress` armed, NO save reaches disk except
+///    a bypassed one, so a native request we drop would have been swallowed anyway -- the
+///    retraction cannot lose a byte that would otherwise have been written. On the degraded
+///    fail-open path (suppression not armed) native saves are real, so we never retract.
+/// 2. **No return-title sequence is in flight** (`GameMan+0xbc4 == 0`). The quit chain
+///    advances `bc4` 1 -> 2 -> 3 *through* a dispatched save; retracting a request during
+///    that window is exactly how System->Quit would hang. `bc4 != 0` means hands off.
+/// 3. **The flag was clear before our own fire.** Sampled into
+///    `SAVE_FLOW_B72_BEFORE_FIRE`/`_B73_` immediately before the forced pair. A flag the
+///    game had already set is not ours and is left set; an unreadable pre-sample is treated
+///    as "not ours" too.
+/// 4. **No submit was built.** The caller only reaches here after the enqueue grace window
+///    expired with the one-shot token unconsumed -- i.e. the dispatcher ran, refused, and
+///    nothing downstream ever happened.
+///
+/// The residual case this cannot separate is a request the game raised *inside* our own
+/// fire-to-bailout window: it and ours are one shared byte, and no read can tell them
+/// apart. Condition 1 is what makes that acceptable -- that request could not have written
+/// anything either -- and the game re-raises its own autosave requests from its own
+/// triggers on the next event.
+fn save_flow_retract_stuck_request(reason: &str) {
+    const HEAP_LO: usize = 0x10000;
+    const FLAG_SET: usize = 1;
+    const RETURN_TITLE_IDLE: u8 = 0;
+
+    let decline = |why: &str| {
+        SAVE_FLOW_RETRACT_DECLINED.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "save-flow: NOT retracting the latched save request after '{reason}' -- {why}. The \
+             native dispatcher will keep re-entering the refusing lane every frame (each entry \
+             is a full 0x280000 character serialization) until something else clears the flags"
+        ));
+    };
+    if !er_save_suppress::is_armed() {
+        decline(
+            "suppression is not armed, so native saves are real and a dropped request would be \
+             a dropped save",
+        );
+        return;
+    }
+    let Ok(base) = game_module_base() else {
+        decline("the game module base is unavailable");
+        return;
+    };
+    let Some(gm) = (unsafe { safe_read_usize(base + er_game_base::rva::GAME_MAN_SINGLETON_RVA) })
+    else {
+        decline("GameMan is unreadable");
+        return;
+    };
+    if gm < HEAP_LO {
+        decline("GameMan is not heap-like");
+        return;
+    }
+    let quit_phase = unsafe { safe_read_u8(gm + GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET) };
+    match quit_phase {
+        Some(RETURN_TITLE_IDLE) => {}
+        Some(phase) => {
+            decline(&format!(
+                "a return-title sequence is in flight (GameMan+0xbc4={phase}); its 1 -> 2 -> 3 \
+                 advance runs THROUGH a dispatched save, so retracting here is how the quit hangs"
+            ));
+            return;
+        }
+        None => {
+            decline("GameMan+0xbc4 is unreadable, so a quit sequence cannot be ruled out");
+            return;
+        }
+    }
+    // Ours only: clear a flag exactly when it was 0 before our fire and is 1 now.
+    let ours = |offset: usize, before: &core::sync::atomic::AtomicUsize| -> bool {
+        if before.load(Ordering::SeqCst) != 0 {
+            return false;
+        }
+        unsafe { safe_read_u8(gm + offset) }.is_some_and(|now| usize::from(now) == FLAG_SET)
+    };
+    let take_b72 = ours(GAME_MAN_ARM_FLAG_B72_OFFSET, &SAVE_FLOW_B72_BEFORE_FIRE);
+    let take_b73 = ours(GAME_MAN_FLAG_B73_PROBE_OFFSET, &SAVE_FLOW_B73_BEFORE_FIRE);
+    if !take_b72 && !take_b73 {
+        decline(
+            "neither flag went 0 -> 1 across our own fire, so whatever is latched now is not \
+             ours to take back",
+        );
+        return;
+    }
+    let (cleared_b72, cleared_b73) =
+        unsafe { system_quit_save_request_retract(take_b72, take_b73) };
+    let cleared = usize::from(cleared_b72) + usize::from(cleared_b73);
+    if cleared == 0 {
+        decline("both native retractions failed their byte verification");
+        return;
+    }
+    SAVE_FLOW_REQUEST_RETRACTIONS.fetch_add(cleared, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "save-flow: RETRACTED the latched save request after '{reason}' (b72={cleared_b72} \
+         b73={cleared_b73}) through the game's own FUN_140678740/FUN_140678710 -- the fire went \
+         nowhere and the flags were ours, so the per-frame re-serialization spin stops here"
+    ));
+}
+
 /// Stage 8 COMMIT_WAIT: the forced request is in flight through the native pump with the
 /// bypass token armed. Completion = the er-save-suppress poll watch captured the first
 /// post-allow terminal status (0 = success). The watchdog expires a stranded token so a
@@ -765,6 +898,10 @@ fn save_flow_commit_wait_tick(ticks: usize) {
         ));
         let _ = save_dest_verify_and_disarm("fire went nowhere");
         save_dest_reset("fire went nowhere");
+        // The flags our fire set are still latched and the lane refuses them every frame.
+        // Freeing the UI without taking them back leaves a full character serialization
+        // running ~33 times a second for the rest of the session.
+        save_flow_retract_stuck_request("fire went nowhere");
         save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "fire went nowhere");
         return;
     }
@@ -783,6 +920,10 @@ fn save_flow_commit_wait_tick(ticks: usize) {
         // watch at all), so score it before dropping the window rather than assuming failure.
         let _ = save_dest_verify_and_disarm("commit watchdog");
         save_dest_reset("commit watchdog");
+        // Same spin, reached the slow way: the token was consumed but no terminal status
+        // ever arrived, or the grace path did not fire. `save_flow_retract_stuck_request`
+        // re-checks ownership itself, so a request that already retired is a no-op here.
+        save_flow_retract_stuck_request("commit watchdog");
         save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "commit watchdog");
     }
 }

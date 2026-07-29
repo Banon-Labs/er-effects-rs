@@ -515,6 +515,49 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         er_save_suppress::serialize_last_fail_bytes(),
         er_save_suppress::serialize_last_fail_step(),
     ));
+    // THE SL REQUEST SLOT -- the operands of the submit builders' own precondition,
+    // `iodev+0x10 == 0 && iodev+0x20 == 0` (`FUN_140e6ef60` / `FUN_140e6ec70`, 1.16.2).
+    //
+    // Read them ONLY when `oracle_save_dispatch_declines_with_bypass` is non-zero: that is
+    // the case they were built for, a lane that allocated, serialized successfully, and
+    // still returned 0 -- where the builder's other four operands are statically guaranteed
+    // by the call site, so the guard can ONLY have failed on these two fields.
+    //
+    //   save-content-latched-0x10               a previous SAVE request was never released
+    //   load-job-latched-0x18+0x20              a completed LOAD still owns the shared job slot
+    //   orphan-job-latched-0x20                 a job whose poll never reached a terminal case
+    //   precondition-clear-builder-alloc-refused the guard PASSED; the NetworkHeap alloc refused
+    //
+    // `oracle_save_swallow_release_left_dirty` is the self-incrimination oracle and is
+    // decisive on its own: non-zero means THIS DLL's swallow left the precondition failing,
+    // and `oracle_save_swallow_slot_after_*` names the field it left populated. Zero, with
+    // swallows recorded, clears the swallow and points the finger at the load side.
+    let slot_hex = |field: Option<usize>| -> String {
+        field.map_or_else(|| "null".to_owned(), |value| format!("\"0x{value:x}\""))
+    };
+    let decline_slot = er_save_suppress::decline_slot();
+    let swallow_after = er_save_suppress::swallow_slot_after();
+    let swallow_before = er_save_suppress::swallow_slot_before();
+    body.push_str(&format!(
+        "  \"oracle_save_suppress_release_unavailable\": {},\n  \"oracle_save_swallow_release_left_dirty\": {},\n  \"oracle_save_swallow_iodev_mismatch\": {},\n  \"oracle_save_iodev_slot_read_failures\": {},\n  \"oracle_save_dispatch_last_decline_reason\": \"{}\",\n  \"oracle_save_decline_iodev_save_content\": {},\n  \"oracle_save_decline_iodev_load_content\": {},\n  \"oracle_save_decline_iodev_job\": {},\n  \"oracle_save_decline_iodev_file_cap\": {},\n  \"oracle_save_swallow_before_iodev_save_content\": {},\n  \"oracle_save_swallow_before_iodev_job\": {},\n  \"oracle_save_swallow_after_iodev_save_content\": {},\n  \"oracle_save_swallow_after_iodev_load_content\": {},\n  \"oracle_save_swallow_after_iodev_job\": {},\n  \"oracle_save_swallow_after_iodev_file_cap\": {},\n  \"oracle_save_flow_request_retractions\": {},\n  \"oracle_save_flow_retract_declined\": {},\n",
+        er_save_suppress::release_unavailable(),
+        er_save_suppress::swallow_release_left_dirty(),
+        er_save_suppress::swallow_iodev_mismatch(),
+        er_save_suppress::slot_read_failures(),
+        er_save_suppress::decline_bail_reason_label(),
+        slot_hex(decline_slot.map(|slot| slot.save_content)),
+        slot_hex(decline_slot.map(|slot| slot.load_content)),
+        slot_hex(decline_slot.map(|slot| slot.job)),
+        slot_hex(decline_slot.map(|slot| slot.file_cap)),
+        slot_hex(swallow_before.map(|slot| slot.save_content)),
+        slot_hex(swallow_before.map(|slot| slot.job)),
+        slot_hex(swallow_after.map(|slot| slot.save_content)),
+        slot_hex(swallow_after.map(|slot| slot.load_content)),
+        slot_hex(swallow_after.map(|slot| slot.job)),
+        slot_hex(swallow_after.map(|slot| slot.file_cap)),
+        SAVE_FLOW_REQUEST_RETRACTIONS.load(Ordering::SeqCst),
+        SAVE_FLOW_RETRACT_DECLINED.load(Ordering::SeqCst),
+    ));
     // SAVE-FLOW CONFIRM CHAIN oracles (save-game-flow WP2 + WP3): Box1 "are you sure", Box2
     // "overwrite your loaded save", Box3 "overwrite this file" (the destination browser's final
     // gate).

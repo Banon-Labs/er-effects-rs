@@ -223,6 +223,289 @@ const SL_RELEASE_REQUEST_SIG: &[u8] = &[
 ];
 
 // ============================================================================
+// THE SL REQUEST SLOT. The one set of numbers that decides whether a save that never
+// reached the enqueue was refused by the submit builder's precondition, and if so by
+// which operand.
+//
+// `FUN_140e6ef60` -- the submit builder the COMBINED lane `FUN_14067b940` calls -- opens
+// with a single conjunction (1.16.2 decompile, shift 0):
+//
+// ```text
+//   if (iodev+0x10 == 0 && iodev+0x20 == 0 && buf != 0 && tail != 0
+//       && slot < 10 && kind == 10) { ...build... }
+//   return 0;                                   // AL = 0: "no submit"
+// ```
+//
+// Its ONLY caller passes `FUN_140e6ef60(FUN_140e6e060(), pvVar4, param_1, buffer, 10, ..)`
+// and has already proven four of those six operands:
+//
+//   * `buf`  (`pvVar4`, the 0x280000 MainHeap block) -- `if (pvVar4 == 0) return 0;`
+//   * `tail` (`buffer`, the 0x60000 block)           -- `if (buffer == 0) return 0;`
+//   * `slot` (`param_1`)                             -- `if (9 < param_1 || CanShowSaveMenu())`
+//                                                       diverts to the system-only lane,
+//                                                       so the builder only ever sees < 10
+//   * `kind`                                         -- the literal 10 at the call site
+//
+// So when that lane declines AFTER a successful serialization, the guard can only have
+// failed on `iodev+0x10` or `iodev+0x20`. There is no third possibility, and the two are
+// different bugs. `FUN_140e6ec70` (the char-only and system-only lanes' builder) gates on
+// the same two fields plus `buf != 0`.
+//
+// The remaining non-guard exit is the `HeapAlloc(0x298)`/`SLSaveContent::SLSaveContent`
+// pair; it stores its result into `iodev+0x10` before testing it, so a failure there
+// leaves the slot CLEAR and is distinguishable from a guard bail by exactly this sample.
+//
+// WHY BOTH FIELDS AND NOT JUST `+0x10`: `iodev+0x20` is a SHARED job slot. The LOAD
+// builders `FUN_140e6f430`/`FUN_140e6f5b0` write `param_1[4]`, which is `iodev+0x20`, and
+// gate on `iodev+0x18 == 0 && iodev+0x20 == 0`. A load that completed but was never
+// consumed therefore blocks every subsequent save through the same conjunction -- and
+// `FUN_140e6e080` case 0x14 deliberately does NOT release on a successful load, deferring
+// that to the consumer `FUN_14067b100` -> `FUN_140e6e380` -> `FUN_140e6f200`. Sampling
+// `+0x18` alongside `+0x20` separates "a stale save request" from "a stale load request",
+// which the guard itself cannot.
+// ============================================================================
+
+/// `DAT_144589390` -- the process-wide SL IO device singleton, the `iodev` every save and
+/// load request lives in.
+///
+/// Read directly rather than by calling `FUN_140e6e060`: the getter lazily constructs the
+/// device under a global mutex, and an instrument must never be able to allocate. Proven
+/// to be the whole story by xref -- the global has exactly five references image-wide, all
+/// inside `FUN_140e6e060` (the getter) and `FUN_140e6f6f0` (the destructor), so every
+/// consumer in the game reaches the same object through the getter.
+#[cfg(windows)]
+const SL_IODEV_GLOBAL_RVA: usize = 0x4589390;
+
+/// Bytes of the device sampled in one `ReadProcessMemory`: enough to cover `+0x30`.
+#[cfg(windows)]
+const SL_IODEV_SAMPLE_BYTES: usize = 0x38;
+
+/// `iodev+0x10` -- the `SLSaveContent` of an outstanding SAVE request. First operand of
+/// the submit builders' precondition.
+const SL_IODEV_SAVE_CONTENT_OFFSET: usize = 0x10;
+/// `iodev+0x18` -- the load-side content object. Not a save-guard operand, but a non-zero
+/// value beside a non-zero `+0x20` identifies the job as a LOAD's.
+const SL_IODEV_LOAD_CONTENT_OFFSET: usize = 0x18;
+/// `iodev+0x20` -- the in-flight job, SHARED by the save and load lanes. Second operand of
+/// the submit builders' precondition.
+const SL_IODEV_JOB_OFFSET: usize = 0x20;
+/// `iodev+0x28` -- an `FD4FileCap` still loading. Not a guard operand: when it is set the
+/// builders DEFER (store the opcode at `+0x30`, return 1) instead of declining, and
+/// `FUN_140e6e430` routes the poll to `FUN_140e6f370`.
+const SL_IODEV_FILE_CAP_OFFSET: usize = 0x28;
+/// `iodev+0x30` -- the opcode parked by a deferred build, replayed by `FUN_140e6f370`.
+const SL_IODEV_DEFERRED_OPCODE_OFFSET: usize = 0x30;
+
+/// A sample of the SL device's request slot: the submit builders' precondition operands
+/// plus the two fields that say who owns them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SlRequestSlot {
+    /// `iodev+0x10`, the outstanding save request's content.
+    pub save_content: usize,
+    /// `iodev+0x18`, the outstanding load request's content.
+    pub load_content: usize,
+    /// `iodev+0x20`, the in-flight job (save OR load).
+    pub job: usize,
+    /// `iodev+0x28`, a file capability still being loaded.
+    pub file_cap: usize,
+    /// `iodev+0x30`, the opcode a deferred build parked for `FUN_140e6f370`.
+    pub deferred_opcode: usize,
+}
+
+impl SlRequestSlot {
+    /// True when the submit builders' `iodev+0x10 == 0 && iodev+0x20 == 0` precondition
+    /// holds -- i.e. a save COULD be built from this slot.
+    pub fn admits_a_save(&self) -> bool {
+        self.save_content == 0 && self.job == 0
+    }
+}
+
+/// No decline has been classified yet.
+pub const SL_BAIL_UNSAMPLED: usize = 0;
+/// The device pointer or its fields could not be read; the sample proves nothing.
+pub const SL_BAIL_IODEV_UNREADABLE: usize = 1;
+/// `iodev+0x10` still holds an `SLSaveContent`: a previous SAVE request was never released.
+pub const SL_BAIL_SAVE_CONTENT_LATCHED: usize = 2;
+/// `iodev+0x20` holds a job and `iodev+0x18` holds load content: a completed LOAD was never
+/// consumed, and it is occupying the shared job slot the save needs.
+pub const SL_BAIL_LOAD_JOB_LATCHED: usize = 3;
+/// `iodev+0x20` holds a job with no content on either side -- an orphaned job.
+pub const SL_BAIL_JOB_LATCHED: usize = 4;
+/// Both guard operands are populated.
+pub const SL_BAIL_SAVE_CONTENT_AND_JOB_LATCHED: usize = 5;
+/// The precondition HOLDS, so the builder got past its guard: the refusal is the
+/// NetworkHeap `SLSaveContent` allocation, or the lane bailed before calling the builder.
+pub const SL_BAIL_PRECONDITION_CLEAR: usize = 6;
+
+/// Name the reason code produced by [`classify_sl_bail`].
+pub fn sl_bail_reason_label(code: usize) -> &'static str {
+    match code {
+        SL_BAIL_IODEV_UNREADABLE => "iodev-unreadable",
+        SL_BAIL_SAVE_CONTENT_LATCHED => "save-content-latched-0x10",
+        SL_BAIL_LOAD_JOB_LATCHED => "load-job-latched-0x18+0x20",
+        SL_BAIL_JOB_LATCHED => "orphan-job-latched-0x20",
+        SL_BAIL_SAVE_CONTENT_AND_JOB_LATCHED => "save-content-and-job-latched-0x10+0x20",
+        SL_BAIL_PRECONDITION_CLEAR => "precondition-clear-builder-alloc-refused",
+        _ => "unsampled",
+    }
+}
+
+/// Say WHICH operand of the submit builders' precondition failed, from one slot sample.
+///
+/// Pure and total so the mapping is unit-testable on the host with no game attached: the
+/// whole point of the instrument is that a single decline names the culprit, and a
+/// classifier that is only exercised at runtime cannot be trusted to do that.
+pub fn classify_sl_bail(slot: Option<SlRequestSlot>) -> usize {
+    let Some(slot) = slot else {
+        return SL_BAIL_IODEV_UNREADABLE;
+    };
+    match (slot.save_content != 0, slot.job != 0) {
+        (true, true) => SL_BAIL_SAVE_CONTENT_AND_JOB_LATCHED,
+        (true, false) => SL_BAIL_SAVE_CONTENT_LATCHED,
+        (false, true) if slot.load_content != 0 => SL_BAIL_LOAD_JOB_LATCHED,
+        (false, true) => SL_BAIL_JOB_LATCHED,
+        (false, false) => SL_BAIL_PRECONDITION_CLEAR,
+    }
+}
+
+/// Render a slot sample for a log line: every guard operand, by name, with its value.
+///
+/// The values matter as much as the verdict. "The precondition failed" is a conclusion; a
+/// reader needs the pointers to tell a stale save request from a stale load request, and
+/// to compare the same address across two lines.
+pub fn describe_slot(slot: Option<SlRequestSlot>) -> String {
+    match slot {
+        None => "iodev UNREADABLE".to_owned(),
+        Some(slot) => format!(
+            "+0x10 save_content=0x{:x} +0x18 load_content=0x{:x} +0x20 job=0x{:x} \
+             +0x28 file_cap=0x{:x} +0x30 deferred_opcode={} [{}]",
+            slot.save_content,
+            slot.load_content,
+            slot.job,
+            slot.file_cap,
+            slot.deferred_opcode,
+            sl_bail_reason_label(classify_sl_bail(Some(slot)))
+        ),
+    }
+}
+
+/// Read the SL device's request slot, or `None` when the device is not resolvable.
+///
+/// Two `ReadProcessMemory` calls total (the singleton pointer, then one window over the
+/// fields) so it is cheap enough to run on every decline, which repeats every frame while
+/// a request stays latched.
+#[cfg(windows)]
+fn read_sl_slot() -> Option<SlRequestSlot> {
+    use er_game_base::mem::safe_read_usize;
+
+    const MIN_PLAUSIBLE_POINTER: usize = 0x10000;
+
+    let global = game_rva(SL_IODEV_GLOBAL_RVA as u32).ok()?;
+    let iodev = unsafe { safe_read_usize(global) }?;
+    if iodev < MIN_PLAUSIBLE_POINTER {
+        return None;
+    }
+    let mut window = [0_u8; SL_IODEV_SAMPLE_BYTES];
+    if !unsafe { read_bytes(iodev, &mut window) } {
+        return None;
+    }
+    let field = |offset: usize| -> usize {
+        let mut bytes = [0_u8; core::mem::size_of::<usize>()];
+        bytes.copy_from_slice(&window[offset..offset + core::mem::size_of::<usize>()]);
+        usize::from_le_bytes(bytes)
+    };
+    Some(SlRequestSlot {
+        save_content: field(SL_IODEV_SAVE_CONTENT_OFFSET),
+        load_content: field(SL_IODEV_LOAD_CONTENT_OFFSET),
+        job: field(SL_IODEV_JOB_OFFSET),
+        file_cap: field(SL_IODEV_FILE_CAP_OFFSET),
+        deferred_opcode: field(SL_IODEV_DEFERRED_OPCODE_OFFSET) & 0xffff_ffff,
+    })
+}
+
+/// Read the SL device pointer alone, for comparing against a detour's `iodev` argument.
+#[cfg(windows)]
+fn read_sl_iodev() -> Option<usize> {
+    use er_game_base::mem::safe_read_usize;
+
+    const MIN_PLAUSIBLE_POINTER: usize = 0x10000;
+
+    let global = game_rva(SL_IODEV_GLOBAL_RVA as u32).ok()?;
+    let iodev = unsafe { safe_read_usize(global) }?;
+    (iodev >= MIN_PLAUSIBLE_POINTER).then_some(iodev)
+}
+
+/// Latch a slot sample into the reporting statics.
+#[cfg(windows)]
+fn store_slot_sample(slot: Option<SlRequestSlot>, into: &SlotSampleCell) {
+    match slot {
+        Some(slot) => {
+            into.save_content.store(slot.save_content, Ordering::SeqCst);
+            into.load_content.store(slot.load_content, Ordering::SeqCst);
+            into.job.store(slot.job, Ordering::SeqCst);
+            into.file_cap.store(slot.file_cap, Ordering::SeqCst);
+            into.readable.store(1, Ordering::SeqCst);
+        }
+        None => {
+            into.readable.store(0, Ordering::SeqCst);
+            SLOT_READ_FAILURES.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
+
+/// Storage for one latched slot sample. Four fields plus a readability flag, so a zero
+/// can never be mistaken for "we could not read it".
+struct SlotSampleCell {
+    save_content: AtomicUsize,
+    load_content: AtomicUsize,
+    job: AtomicUsize,
+    file_cap: AtomicUsize,
+    readable: AtomicUsize,
+}
+
+impl SlotSampleCell {
+    const fn new() -> Self {
+        Self {
+            save_content: AtomicUsize::new(0),
+            load_content: AtomicUsize::new(0),
+            job: AtomicUsize::new(0),
+            file_cap: AtomicUsize::new(0),
+            readable: AtomicUsize::new(0),
+        }
+    }
+
+    fn snapshot(&self) -> Option<SlRequestSlot> {
+        if self.readable.load(Ordering::SeqCst) == 0 {
+            return None;
+        }
+        Some(SlRequestSlot {
+            save_content: self.save_content.load(Ordering::SeqCst),
+            load_content: self.load_content.load(Ordering::SeqCst),
+            job: self.job.load(Ordering::SeqCst),
+            file_cap: self.file_cap.load(Ordering::SeqCst),
+            deferred_opcode: 0,
+        })
+    }
+}
+
+/// The slot as it stood when the lane last DECLINED -- the sample that names the culprit.
+static DECLINE_SLOT: SlotSampleCell = SlotSampleCell::new();
+/// The slot as it stood immediately BEFORE the last swallow's `FUN_140e6f200` call.
+static SWALLOW_SLOT_BEFORE: SlotSampleCell = SlotSampleCell::new();
+/// The slot as it stood immediately AFTER it. If this is not clear, our release is the bug.
+static SWALLOW_SLOT_AFTER: SlotSampleCell = SlotSampleCell::new();
+/// Reason code (`SL_BAIL_*`) for the most recent decline.
+static DECLINE_BAIL_REASON: AtomicUsize = AtomicUsize::new(SL_BAIL_UNSAMPLED);
+/// Swallows whose release left the builders' precondition still failing. Any non-zero
+/// value is a self-inflicted permanent save refusal.
+static SWALLOW_RELEASE_LEFT_DIRTY: AtomicU64 = AtomicU64::new(0);
+/// Swallows where the `iodev` we were handed was not the singleton we release against.
+/// Non-zero would mean the release is being applied to the wrong object.
+static SWALLOW_IODEV_MISMATCH: AtomicU64 = AtomicU64::new(0);
+/// Slot samples that could not be read at all.
+static SLOT_READ_FAILURES: AtomicU64 = AtomicU64::new(0);
+
+// ============================================================================
 // SAVE-DISPATCH OBSERVERS. Pure observation of the three native save-dispatch lanes and
 // the character serializer that gates two of them. They change nothing; they exist so a
 // save that never reaches the enqueue can be attributed in ONE run instead of three.
@@ -688,7 +971,7 @@ pub fn settle_observer_installed() -> bool {
 }
 
 /// Suppression counters as (name, value) pairs, for hosts that serialize by iteration.
-pub fn counters() -> [(&'static str, u64); 16] {
+pub fn counters() -> [(&'static str, u64); 20] {
     [
         (
             "suppress_submits_swallowed",
@@ -751,6 +1034,25 @@ pub fn counters() -> [(&'static str, u64); 16] {
         (
             "quit_phase_settle_events",
             QUIT_PHASE_SETTLE_EVENTS.load(Ordering::SeqCst),
+        ),
+        // SL REQUEST SLOT. `swallow_release_left_dirty` is the self-incrimination oracle:
+        // non-zero means our own swallow left the submit precondition failing and every
+        // later save in the process is refused because of us.
+        (
+            "save_swallow_release_left_dirty",
+            SWALLOW_RELEASE_LEFT_DIRTY.load(Ordering::SeqCst),
+        ),
+        (
+            "save_swallow_iodev_mismatch",
+            SWALLOW_IODEV_MISMATCH.load(Ordering::SeqCst),
+        ),
+        (
+            "save_iodev_slot_read_failures",
+            SLOT_READ_FAILURES.load(Ordering::SeqCst),
+        ),
+        (
+            "save_dispatch_last_decline_bail_reason",
+            DECLINE_BAIL_REASON.load(Ordering::SeqCst) as u64,
         ),
     ]
 }
@@ -860,6 +1162,69 @@ pub fn prologue_mismatches() -> u64 {
 /// Quit-to-title settle events observed (the bc4 2 -> 3 transition).
 pub fn settle_events() -> u64 {
     QUIT_PHASE_SETTLE_EVENTS.load(Ordering::SeqCst)
+}
+
+/// Swallows that ran with no resolved `FUN_140e6f200` address and were therefore passed
+/// through to the real enqueue -- each one is a save that was WRITTEN.
+///
+/// `install` refuses to arm without that address, so this should be structurally
+/// unreachable; it is exported because "unreachable" is a claim about code that has never
+/// been measured, and the failure it would represent (a real write plus a leaked request)
+/// is the exact shape of the bug this instrument exists to find.
+pub fn release_unavailable() -> u64 {
+    RELEASE_UNAVAILABLE.load(Ordering::SeqCst)
+}
+
+/// Swallows whose `FUN_140e6f200` release did NOT restore the submit builders'
+/// `iodev+0x10 == 0 && iodev+0x20 == 0` precondition.
+///
+/// This is the direct test of "does our swallow leave the request slot dirty". Zero with
+/// a non-zero swallow count DISPROVES it; any non-zero value proves it, and
+/// [`swallow_slot_after`] names the field that stayed populated.
+pub fn swallow_release_left_dirty() -> u64 {
+    SWALLOW_RELEASE_LEFT_DIRTY.load(Ordering::SeqCst)
+}
+
+/// Swallows where the `iodev` argument differed from the `DAT_144589390` singleton, i.e.
+/// the release would have been applied to a different object than the one the builders
+/// check. Structurally impossible (every caller reaches the device through
+/// `FUN_140e6e060`), and measured anyway.
+pub fn swallow_iodev_mismatch() -> u64 {
+    SWALLOW_IODEV_MISMATCH.load(Ordering::SeqCst)
+}
+
+/// Slot samples that could not be read. Non-zero means the `iodev_*` oracles are stale and
+/// a decline classified as `iodev-unreadable` proves nothing either way.
+pub fn slot_read_failures() -> u64 {
+    SLOT_READ_FAILURES.load(Ordering::SeqCst)
+}
+
+/// The SL request slot as it stood at the most recent dispatch decline, or `None` if no
+/// decline has been sampled (or the sample failed).
+pub fn decline_slot() -> Option<SlRequestSlot> {
+    DECLINE_SLOT.snapshot()
+}
+
+/// The SL request slot immediately BEFORE the last swallow's release call.
+pub fn swallow_slot_before() -> Option<SlRequestSlot> {
+    SWALLOW_SLOT_BEFORE.snapshot()
+}
+
+/// The SL request slot immediately AFTER the last swallow's release call. Every field
+/// should be zero; `save_content` or `job` non-zero is a self-inflicted stuck slot.
+pub fn swallow_slot_after() -> Option<SlRequestSlot> {
+    SWALLOW_SLOT_AFTER.snapshot()
+}
+
+/// Reason code (`SL_BAIL_*`) for the most recent dispatch decline. Pair it with
+/// [`sl_bail_reason_label`] for the name.
+pub fn decline_bail_reason() -> usize {
+    DECLINE_BAIL_REASON.load(Ordering::SeqCst)
+}
+
+/// Name of the most recent dispatch decline's bail reason.
+pub fn decline_bail_reason_label() -> &'static str {
+    sl_bail_reason_label(DECLINE_BAIL_REASON.load(Ordering::SeqCst))
 }
 
 /// Decide what a poll should report.
@@ -1297,8 +1662,44 @@ unsafe extern "system" fn enqueue_save_job_hook(iodev: usize, opcode: u32) -> u8
         return unsafe { original(iodev, opcode) };
     }
 
+    // Sample the request slot on BOTH sides of the release. The swallow's whole contract
+    // is "leave the device exactly as the native enqueue-failure path would", and the
+    // consequence of getting that wrong is not a lost save but a PERMANENT one: the submit
+    // builders gate on `iodev+0x10 == 0 && iodev+0x20 == 0`, so a field left populated
+    // refuses every later save forever. Measuring it is two `ReadProcessMemory` calls per
+    // swallow, and swallows are rare.
+    let before = read_sl_slot();
+    store_slot_sample(before, &SWALLOW_SLOT_BEFORE);
+    if let Some(singleton) = read_sl_iodev()
+        && singleton != iodev
+    {
+        SWALLOW_IODEV_MISMATCH.fetch_add(1, Ordering::SeqCst);
+        log_message(format_args!(
+            "suppress: BUG -- swallow handed iodev=0x{iodev:x} but the SL singleton is \
+             0x{singleton:x}; the release is being applied to a different object than the \
+             submit builders check"
+        ));
+    }
+
     let released: ReleaseRequestFn = unsafe { core::mem::transmute(release) };
     unsafe { released(iodev) };
+
+    let after = read_sl_slot();
+    store_slot_sample(after, &SWALLOW_SLOT_AFTER);
+    let left_dirty = after.is_some_and(|slot| !slot.admits_a_save());
+    if left_dirty {
+        let dirty = SWALLOW_RELEASE_LEFT_DIRTY.fetch_add(1, Ordering::SeqCst) + 1;
+        // Unthrottled on purpose. This is not a rate, it is a latch: from here on every
+        // save in the process is refused by a precondition WE left failing.
+        log_message(format_args!(
+            "suppress: BUG -- FUN_140e6f200 did not clear the request slot (#{dirty}); \
+             before {}, after {} -- the submit precondition `iodev+0x10 == 0 && \
+             iodev+0x20 == 0` now fails for every later save",
+            describe_slot(before),
+            describe_slot(after)
+        ));
+        publish_snapshot();
+    }
 
     let count = SUBMITS_SWALLOWED.fetch_add(1, Ordering::SeqCst) + 1;
     // Swallowing is the EXPECTED steady state, not an event. It is counted in telemetry
@@ -1306,9 +1707,14 @@ unsafe extern "system" fn enqueue_save_job_hook(iodev: usize, opcode: u32) -> u8
     // to show that it started, that it kept happening, and any new kind of save.
     let novel = note_opcode(opcode);
     if should_report(count, novel) {
+        // The old form of this line asserted "request released" as a fixed string, which
+        // read like evidence and was not: it printed identically whether the slot had been
+        // cleared or left populated. Print the MEASURED post-release state instead -- a
+        // reader chasing a permanently-refusing save needs to know which it was.
         log_message(format_args!(
             "suppress: swallowed save submit #{count} (iodev=0x{iodev:x}, opcode={opcode}) \
-             -- no job enqueued, request released, reporting submitted"
+             -- no job enqueued, reporting submitted; slot after release: {}",
+            describe_slot(after)
         ));
         // Publish on the same schedule. A snapshot per swallow meant a full JSON
         // re-serialize, `fs::write` and `fs::rename` on the GAME thread for every save
@@ -1441,6 +1847,15 @@ unsafe fn observe_dispatch(
         return ret;
     }
     let declines = DISPATCH_DECLINES.fetch_add(1, Ordering::SeqCst) + 1;
+    // Sample the SL request slot at the decline. The lane touched nothing on this path, so
+    // what we read here IS what the submit builder's precondition saw -- and since the
+    // builder's other four operands are statically guaranteed by the call site (see the
+    // SL REQUEST SLOT block), `iodev+0x10` and `iodev+0x20` are the only two operands that
+    // can have failed. One decline therefore names the culprit outright.
+    let slot = read_sl_slot();
+    store_slot_sample(slot, &DECLINE_SLOT);
+    let reason = classify_sl_bail(slot);
+    DECLINE_BAIL_REASON.store(reason, Ordering::SeqCst);
     if bypass_pending() {
         DISPATCH_DECLINES_WITH_BYPASS.fetch_add(1, Ordering::SeqCst);
         if BYPASS_DECLINE_REPORTED.swap(1, Ordering::SeqCst) == 0 {
@@ -1450,21 +1865,61 @@ unsafe fn observe_dispatch(
                  flags reached the dispatcher and it returned 0 without building a submit, so \
                  no SL enqueue can ever arrive and the one-shot bypass will expire. The failure \
                  is UPSTREAM of the enqueue; serializer calls={} failures={} \
-                 last_fail_bytes={} last_fail_step={}",
+                 last_fail_bytes={} last_fail_step={}. SL request slot: {}. Verdict: {}",
                 SERIALIZE_CALLS.load(Ordering::SeqCst),
                 SERIALIZE_FAILURES.load(Ordering::SeqCst),
                 SERIALIZE_LAST_FAIL_BYTES.load(Ordering::SeqCst),
-                serialize_last_fail_step()
+                serialize_last_fail_step(),
+                describe_slot(slot),
+                bail_verdict(reason)
             ));
             publish_snapshot();
         }
     } else if should_report(declines, false) {
         log_message(format_args!(
             "suppress: save dispatch lane {lane} declined (#{declines} of {calls} entries) -- \
-             request flags stay latched, no submit built"
+             request flags stay latched, no submit built. SL request slot: {}",
+            describe_slot(slot)
         ));
     }
     ret
+}
+
+/// Turn a `SL_BAIL_*` code into the sentence that says what to do about it.
+///
+/// Kept beside the classifier rather than in the caller so the decline log line and the
+/// telemetry oracle can never drift apart on what a code means.
+pub fn bail_verdict(reason: usize) -> &'static str {
+    match reason {
+        SL_BAIL_IODEV_UNREADABLE => {
+            "the SL device could not be read, so this decline attributes nothing -- check \
+             slot_read_failures before believing any iodev oracle in this run"
+        }
+        SL_BAIL_SAVE_CONTENT_LATCHED | SL_BAIL_SAVE_CONTENT_AND_JOB_LATCHED => {
+            "a previous SAVE request is still latched at iodev+0x10. Only FUN_140e6f200 \
+             clears it, so either a swallow's release did not run (check \
+             swallow_release_left_dirty and release_unavailable) or a builder took the \
+             iodev+0x28 DEFERRED branch, which returns success without ever calling \
+             FUN_140e6fb50 and leaves +0x10 populated for FUN_140e6f370 to replay"
+        }
+        SL_BAIL_LOAD_JOB_LATCHED => {
+            "a completed LOAD is still occupying the shared job slot. FUN_140e6e080 case \
+             0x14 deliberately does not release on success; the consumer FUN_14067b100 -> \
+             FUN_140e6e380 -> FUN_140e6f200 does. This is NOT the swallow's doing -- the \
+             load was never consumed, so every save is blocked by the load's job"
+        }
+        SL_BAIL_JOB_LATCHED => {
+            "a job is latched at iodev+0x20 with no content on either side -- an enqueue \
+             whose poll never reached a terminal case, so nothing ever called \
+             FUN_140e6f200"
+        }
+        SL_BAIL_PRECONDITION_CLEAR => {
+            "the precondition HOLDS, so the builder passed its guard: the refusal is the \
+             NetworkHeap HeapAlloc(0x298)/SLSaveContent construction, or the lane bailed \
+             before reaching the builder at all"
+        }
+        _ => "no decline has been classified yet",
+    }
 }
 
 /// Observer on `FUN_14067dc00`, the character serializer.
@@ -1896,5 +2351,115 @@ mod tests {
         ARMED.store(0, Ordering::SeqCst);
         assert!(!arm_one_save_bypass());
         assert_eq!(BYPASS_ARMED_TOTAL.load(Ordering::SeqCst), 2);
+    }
+
+    /// The submit builders' precondition, transcribed from the 1.16.2 decompile of
+    /// `FUN_140e6ef60`: `iodev+0x10 == 0 && iodev+0x20 == 0`. Neither `+0x18` nor `+0x28`
+    /// is an operand of it -- `+0x18` only tells us WHO owns a latched `+0x20`, and a
+    /// non-zero `+0x28` makes the builder DEFER (return 1) rather than decline.
+    #[test]
+    fn a_save_is_admitted_by_exactly_the_two_guard_operands() {
+        let clear = SlRequestSlot::default();
+        assert!(clear.admits_a_save());
+
+        assert!(
+            SlRequestSlot {
+                load_content: 0xdead,
+                file_cap: 0xbeef,
+                deferred_opcode: 7,
+                ..clear
+            }
+            .admits_a_save(),
+            "+0x18/+0x28/+0x30 are not operands of the submit precondition"
+        );
+        assert!(
+            !SlRequestSlot {
+                save_content: 0x1,
+                ..clear
+            }
+            .admits_a_save()
+        );
+        assert!(!SlRequestSlot { job: 0x1, ..clear }.admits_a_save());
+    }
+
+    #[test]
+    fn every_bail_classification_is_distinct_and_named() {
+        let cases = [
+            (None, SL_BAIL_IODEV_UNREADABLE, "iodev-unreadable"),
+            (
+                Some(SlRequestSlot::default()),
+                SL_BAIL_PRECONDITION_CLEAR,
+                "precondition-clear-builder-alloc-refused",
+            ),
+            (
+                Some(SlRequestSlot {
+                    save_content: 0x2000,
+                    ..SlRequestSlot::default()
+                }),
+                SL_BAIL_SAVE_CONTENT_LATCHED,
+                "save-content-latched-0x10",
+            ),
+            (
+                Some(SlRequestSlot {
+                    save_content: 0x2000,
+                    job: 0x3000,
+                    ..SlRequestSlot::default()
+                }),
+                SL_BAIL_SAVE_CONTENT_AND_JOB_LATCHED,
+                "save-content-and-job-latched-0x10+0x20",
+            ),
+            (
+                Some(SlRequestSlot {
+                    load_content: 0x4000,
+                    job: 0x3000,
+                    ..SlRequestSlot::default()
+                }),
+                SL_BAIL_LOAD_JOB_LATCHED,
+                "load-job-latched-0x18+0x20",
+            ),
+            (
+                Some(SlRequestSlot {
+                    job: 0x3000,
+                    ..SlRequestSlot::default()
+                }),
+                SL_BAIL_JOB_LATCHED,
+                "orphan-job-latched-0x20",
+            ),
+        ];
+        let mut seen = Vec::new();
+        for (slot, expected_code, expected_label) in cases {
+            let code = classify_sl_bail(slot);
+            assert_eq!(code, expected_code, "misclassified {slot:?}");
+            assert_eq!(sl_bail_reason_label(code), expected_label);
+            assert!(
+                !bail_verdict(code).is_empty(),
+                "every reachable code needs a verdict a reader can act on"
+            );
+            assert!(!seen.contains(&code), "reason codes must be distinct");
+            seen.push(code);
+        }
+        // The sentinel must never be produced by a real sample, or "no decline yet" and
+        // "a decline we could not explain" would read identically.
+        assert!(!seen.contains(&SL_BAIL_UNSAMPLED));
+        assert_eq!(sl_bail_reason_label(SL_BAIL_UNSAMPLED), "unsampled");
+    }
+
+    /// A classification is only useful if a reader can see the operand behind it, and the
+    /// operands are the whole point: `+0x10` non-zero and `+0x20` non-zero are the same
+    /// verdict from the guard's point of view but different bugs.
+    #[test]
+    fn the_slot_description_carries_every_operand_value() {
+        let text = describe_slot(Some(SlRequestSlot {
+            save_content: 0xaa,
+            load_content: 0xbb,
+            job: 0xcc,
+            file_cap: 0xdd,
+            deferred_opcode: 9,
+        }));
+        for needle in ["0xaa", "0xbb", "0xcc", "0xdd", "deferred_opcode=9"] {
+            assert!(text.contains(needle), "{needle} missing from {text}");
+        }
+        assert!(text.contains("save-content-and-job-latched-0x10+0x20"));
+        assert_eq!(describe_slot(None), "iodev UNREADABLE");
     }
 }
