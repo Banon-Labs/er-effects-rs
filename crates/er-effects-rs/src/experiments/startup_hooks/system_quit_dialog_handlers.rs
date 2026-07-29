@@ -1177,8 +1177,12 @@ unsafe fn system_quit_save_game_start_flow(dialog: usize) -> bool {
     // UNDECIDABLE rather than guessing, so log the state here where the run can see it.
     install_menu_job_emit_result_hook();
     let capture_live = MSGBOX_BUILDER_ORIG.load(Ordering::SeqCst) != HOOK_ORIGINAL_UNSET;
+    // One press = one bypass arm = one commit. Counting presses is what makes
+    // `oracle_save_bypass_allowed_total = 2` readable as "two presses" instead of "a double-arm
+    // bug"; without it the two are indistinguishable from telemetry alone.
+    let press = SAVE_FLOW_ROW_PRESS_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
     append_autoload_debug(format_args!(
-        "save-flow: row press dialog=0x{dialog:x} recipe_ok={} builder_capture_live={capture_live} emit_observer_installed={}",
+        "save-flow: row press #{press} dialog=0x{dialog:x} recipe_ok={} builder_capture_live={capture_live} emit_observer_installed={}",
         save_flow_box_recipe_available(),
         MENU_JOB_EMIT_RESULT_INSTALLED.load(Ordering::SeqCst)
     ));

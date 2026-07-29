@@ -455,7 +455,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // reports a terminal status, then latched (0 = success).
     let bypass_final_status = er_save_suppress::bypass_final_status_raw();
     body.push_str(&format!(
-        "  \"oracle_save_suppress_armed\": {},\n  \"oracle_save_suppress_submits_swallowed\": {},\n  \"oracle_save_suppress_submits_passed_through\": {},\n  \"oracle_save_suppress_status_faked\": {},\n  \"oracle_save_suppress_status_faked_idle\": {},\n  \"oracle_save_suppress_prologue_mismatches\": {},\n  \"oracle_save_suppress_settle_events\": {},\n  \"oracle_save_bypass_armed_total\": {},\n  \"oracle_save_bypass_allowed_total\": {},\n  \"oracle_save_bypass_allowed_failed_total\": {},\n  \"oracle_save_bypass_expired_total\": {},\n  \"oracle_save_bypass_final_status\": {},\n  \"oracle_save_flow_stage\": {},\n  \"oracle_save_flow_gate_latch_blocked\": {},\n  \"oracle_save_flow_commit_complete_count\": {},\n",
+        "  \"oracle_save_suppress_armed\": {},\n  \"oracle_save_suppress_submits_swallowed\": {},\n  \"oracle_save_suppress_submits_passed_through\": {},\n  \"oracle_save_suppress_status_faked\": {},\n  \"oracle_save_suppress_status_faked_idle\": {},\n  \"oracle_save_suppress_prologue_mismatches\": {},\n  \"oracle_save_suppress_settle_events\": {},\n  \"oracle_save_bypass_armed_total\": {},\n  \"oracle_save_bypass_allowed_total\": {},\n  \"oracle_save_bypass_allowed_failed_total\": {},\n  \"oracle_save_bypass_expired_total\": {},\n  \"oracle_save_bypass_final_status\": {},\n  \"oracle_save_flow_stage\": {},\n  \"oracle_save_flow_gate_latch_blocked\": {},\n  \"oracle_save_flow_commit_complete_count\": {},\n  \"oracle_save_flow_row_press_count\": {},\n  \"oracle_save_flow_commit_verify_fail_count\": {},\n",
         er_save_suppress::is_armed(),
         er_save_suppress::submits_swallowed(),
         er_save_suppress::submits_passed_through(),
@@ -475,6 +475,11 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SAVE_FLOW_STAGE.load(Ordering::SeqCst),
         SAVE_FLOW_GATE_LATCH_BLOCKED_COUNT.load(Ordering::SeqCst),
         SAVE_FLOW_COMMIT_COMPLETE_COUNT.load(Ordering::SeqCst),
+        // One arm + one commit per press: this is what separates "the user pressed Save Game
+        // twice" from "the flow armed the bypass twice for one press".
+        SAVE_FLOW_ROW_PRESS_COUNT.load(Ordering::SeqCst),
+        // The game said the save succeeded and the file check disagreed. Hard product failure.
+        SAVE_FLOW_COMMIT_VERIFY_FAIL_COUNT.load(Ordering::SeqCst),
     ));
     // SAVE-DISPATCH ATTRIBUTION. These read the native chain BETWEEN "the request flags are
     // set" and "an SL enqueue arrives", which the enqueue-side counters above cannot see: a
@@ -555,11 +560,15 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     ));
     // SAVE-DESTINATION oracles (save-game-flow WP3): the Box2-"No" browser and the scoped
     // write-open redirect that makes the chosen destination -- not the loaded save -- receive the
-    // container the native writer emits. `redirect_hits` is expected to be exactly 1 per commit
-    // (one whole-buffer write through one open); `live_file_mutated` is the hard failure oracle
-    // that says the redirect leaked and the loaded save was overwritten anyway.
+    // container the native writer emits. `redirect_hits` is one PER DIRTY BLOCK (the native
+    // in-place writer opens the container once per block), so any positive count is normal and
+    // zero is the failure. `seeded_count` is the fix that makes those block writes land in a real
+    // container; `target_structure_ok` is the proof the result is a complete BND4, not merely a
+    // file of the right length. `live_file_mutated` is the hard failure oracle that says the
+    // redirect leaked and the loaded save was overwritten anyway, and `live_overwrite_count` names
+    // the OPPOSITE case: a commit that was SUPPOSED to rewrite the loaded save.
     body.push_str(&format!(
-        "  \"oracle_save_dest_picker_open_count\": {},\n  \"oracle_save_dest_target_existing_count\": {},\n  \"oracle_save_dest_target_new_count\": {},\n  \"oracle_save_dest_commit_count\": {},\n  \"oracle_save_dest_cancel_count\": {},\n  \"oracle_save_dest_redirect_armed\": {},\n  \"oracle_save_dest_redirect_hits\": {},\n  \"oracle_save_dest_target_written_ok\": {},\n  \"oracle_save_dest_commit_fail\": {},\n  \"oracle_save_dest_live_file_mutated\": {},\n",
+        "  \"oracle_save_dest_picker_open_count\": {},\n  \"oracle_save_dest_target_existing_count\": {},\n  \"oracle_save_dest_target_new_count\": {},\n  \"oracle_save_dest_commit_count\": {},\n  \"oracle_save_dest_cancel_count\": {},\n  \"oracle_save_dest_redirect_armed\": {},\n  \"oracle_save_dest_redirect_hits\": {},\n  \"oracle_save_dest_seeded_count\": {},\n  \"oracle_save_dest_seed_fail_count\": {},\n  \"oracle_save_dest_target_written_ok\": {},\n  \"oracle_save_dest_target_structure_ok\": {},\n  \"oracle_save_dest_commit_fail\": {},\n  \"oracle_save_dest_live_file_mutated\": {},\n  \"oracle_save_dest_live_bak_mutated\": {},\n  \"oracle_save_dest_live_overwrite_count\": {},\n",
         SAVE_DEST_PICKER_OPEN_COUNT.load(Ordering::SeqCst),
         SAVE_DEST_TARGET_EXISTING_COUNT.load(Ordering::SeqCst),
         SAVE_DEST_TARGET_NEW_COUNT.load(Ordering::SeqCst),
@@ -567,9 +576,14 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SAVE_DEST_CANCEL_COUNT.load(Ordering::SeqCst),
         SAVE_DEST_REDIRECT_ARMED.load(Ordering::SeqCst),
         SAVE_DEST_REDIRECT_HITS.load(Ordering::SeqCst),
+        SAVE_DEST_SEEDED_COUNT.load(Ordering::SeqCst),
+        SAVE_DEST_SEED_FAIL_COUNT.load(Ordering::SeqCst),
         SAVE_DEST_TARGET_WRITTEN_OK.load(Ordering::SeqCst),
+        SAVE_DEST_TARGET_STRUCTURE_OK.load(Ordering::SeqCst),
         SAVE_DEST_COMMIT_FAIL.load(Ordering::SeqCst),
         SAVE_DEST_LIVE_FILE_MUTATED.load(Ordering::SeqCst),
+        SAVE_DEST_LIVE_BAK_MUTATED.load(Ordering::SeqCst),
+        SAVE_DEST_LIVE_OVERWRITE_COUNT.load(Ordering::SeqCst),
     ));
     body.push_str(&format!(
         "  \"autoload_last_status\": {},\n",

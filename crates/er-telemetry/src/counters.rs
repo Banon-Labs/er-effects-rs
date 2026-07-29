@@ -1317,8 +1317,16 @@ pub static SAVE_FLOW_DIALOG: AtomicUsize = AtomicUsize::new(0);
 /// Latched means SaveRequest_Profile's gate fails PERMANENTLY for the session, so the flow
 /// aborts instead of firing (exported as `oracle_save_flow_gate_latch_blocked`).
 pub static SAVE_FLOW_GATE_LATCH_BLOCKED_COUNT: AtomicUsize = AtomicUsize::new(0);
-/// Completed Save Game commits: the bypassed save reported terminal status 0 (success).
+/// Completed Save Game commits: the bypassed save reported terminal status 0 (success) AND the
+/// file it was supposed to produce verified on disk. The file check is part of the condition on
+/// purpose -- the SL status is the game's opinion of its own job and says nothing about bytes.
 pub static SAVE_FLOW_COMMIT_COMPLETE_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Save Game row presses. One bypass arm and one commit are expected PER PRESS, so this is what
+/// tells a double-arm bug from a user who simply pressed the row twice.
+pub static SAVE_FLOW_ROW_PRESS_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Commits where the game reported terminal status 0 but the on-disk check FAILED: the save was
+/// announced as successful and no usable file exists. Non-zero is a hard product failure.
+pub static SAVE_FLOW_COMMIT_VERIFY_FAIL_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// `er_save_suppress::bypass_allowed_total()` sampled at the instant the forced save request was
 /// fired. Stage 8 compares against it to tell "the save enqueue ARRIVED and is being written"
 /// (total advanced -> a real write is in flight, protect it) from "the enqueue never arrived"
@@ -1439,9 +1447,31 @@ pub static SAVE_DEST_COMMIT_PENDING: AtomicUsize = AtomicUsize::new(0);
 /// 1 while the scoped write-open redirect window is armed (`oracle_save_dest_redirect_armed`):
 /// a `CreateFileW` write-open of the live save leaf is diverted to the chosen destination.
 pub static SAVE_DEST_REDIRECT_ARMED: AtomicUsize = AtomicUsize::new(0);
-/// Write-opens diverted to the destination during the armed window. Exactly 1 is expected per
-/// commit (the native BND4 writer emits one whole-buffer write through one open).
+/// Write-opens diverted to the destination during the armed window. One PER DIRTY BLOCK, not one
+/// per commit: the native save takes the in-place path (`FUN_1424142e0`) whenever every supplied
+/// block still fits its existing entry, and that opens the container once per block. Only the full
+/// rebuild (`FUN_142413860`) is a single whole-buffer write. Measured 2026-07-28: 2 hits for one
+/// Save Game commit. Zero hits is the failure -- any positive count is normal.
 pub static SAVE_DEST_REDIRECT_HITS: AtomicUsize = AtomicUsize::new(0);
+/// Destinations pre-seeded with a byte copy of the live container before the fire. The in-place
+/// block writer seeks to offsets read from the live index, so an unseeded destination receives a
+/// sparse fragment instead of a save.
+pub static SAVE_DEST_SEEDED_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Commits aborted because the destination seed could not be written. The request is NOT fired.
+pub static SAVE_DEST_SEED_FAIL_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// 1 once a verified destination parsed as a structurally COMPLETE BND4 container: its own entry
+/// index accounts for every byte up to EOF. This is the check that separates a loadable container
+/// from a file that merely has the right length.
+pub static SAVE_DEST_TARGET_STRUCTURE_OK: AtomicUsize = AtomicUsize::new(0);
+/// Commits whose destination IS the loaded save (Box2 "Yes", or a browsed pick that resolves back
+/// to it). Non-zero means this flow deliberately rewrote the user's live save file -- the ONLY
+/// sanctioned way that happens, and the counter that keeps such a rewrite from reading as an
+/// anonymous mutation or a suppression leak.
+pub static SAVE_DEST_LIVE_OVERWRITE_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// 1 if the loaded save's `.bak` twin moved during a DESTINATION commit. Not a failure: the native
+/// backup step (`FUN_142410830`) is not redirected and can only copy the untouched live container
+/// over its own backup. Named so the movement is never unattributed.
+pub static SAVE_DEST_LIVE_BAK_MUTATED: AtomicUsize = AtomicUsize::new(0);
 /// Destination browsers opened (Box2 answered "No").
 pub static SAVE_DEST_PICKER_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Destination picks that landed on an EXISTING file (a pre-existing row, or `[ new ]` whose

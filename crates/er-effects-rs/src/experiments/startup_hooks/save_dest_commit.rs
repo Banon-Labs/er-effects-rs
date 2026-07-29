@@ -1,12 +1,39 @@
 // Save-to-a-chosen-destination commit state (save-game-flow WP3).
 //
 // The System->Quit "Save Game" flow can end on a destination the user browsed to instead of the
-// loaded save. Nothing about the native save is re-implemented: the game's own BND4 writer
-// (`FUN_142413860`) is a READ-MODIFY-WRITE -- it reads back every block the request did not supply
-// from the live container, rebuilds the whole image with its own headers + per-entry MD5, and
-// emits it as ONE whole-buffer write through the single `CreateFileW` funnel every FromSoft file
-// open uses. So diverting exactly that write-open produces a complete, game-authored, MD5-correct
-// container at the destination while the loaded save is only ever READ.
+// loaded save. Nothing about the native save is re-implemented: the game's own writer is diverted
+// at the `CreateFileW` funnel every FromSoft file open uses.
+//
+// # What the native writer actually does (1.16.2 decompile, corrected 2026-07-28)
+//
+// The save job body `FUN_14240fd70` formats the container path (`L"%s\\%s%s"`) and then picks ONE
+// OF TWO write paths from `FUN_142413230`, which mounts the container ALREADY ON DISK at that path
+// and checks whether every block the request supplies still fits its existing entry:
+//
+//   * no usable container / a block outgrew its entry -> `FUN_142413860`, the FULL REBUILD: it
+//     rebuilds the whole image in memory and emits it as one `WriteBytes` from offset 0.
+//   * every block fits (the steady state for a save over an existing container) ->
+//     `FUN_1424142e0`, the PER-BLOCK IN-PLACE WRITER, called once per supplied block:
+//     `OpenFile` -> `Seek(entry.dataOffset)` -> `WriteBytes(block)` -> optionally
+//     `Seek(entryHeaderOffset)` + `WriteBytes(0x20)` -> `Seek(0, END)` -> `CloseStream`.
+//
+// The in-place writer NEVER writes the bytes it did not change, and
+// `MicrosoftDiskFileOperator::OpenFile` opens write-mode handles with `OPEN_ALWAYS` (`dwCreation
+// Disposition = 4`, `0x141fc13f0`) -- it creates a missing file and does NOT truncate. So diverting
+// only the write-opens onto an EMPTY destination produced exactly what run 4 measured: a sparse
+// file, zero from byte 0, ending at the highest written block (`USER_DATA010`'s end, 26,608,560 of
+// the live container's 28,967,888), with no `BND4` magic. Catching the opens was never enough.
+//
+// # Why this seeds the destination
+//
+// The branch decision and every entry offset the in-place writer seeks to are read from the LIVE
+// container (read-opens pass through untouched), so the destination must already BE that container
+// for those offsets to mean anything. The redirect therefore writes a byte-exact copy of the live
+// save to the destination BEFORE firing, and the native writer then patches its changed blocks into
+// it. Both native paths land correctly on a seeded destination: the in-place writer patches blocks
+// at valid offsets, and the full rebuild overwrites from 0 (its `Seek(0,END)`/close sets the length
+// either way). Seeding is also the arming gate -- if the copy cannot be written the request is NOT
+// fired, because a save that cannot land must never be reported as one.
 //
 // The window is armed at the fire gate and disarmed at completion (never one-shot: a writer retry
 // must not be able to leak onto the live file). Read-opens pass through -- the read side IS the
@@ -14,10 +41,18 @@
 // which is normal save behavior against a file we never write.
 //
 // Safety net: the live file's bytes/stat are snapshotted before the fire, and completion verifies
-// (a) the destination exists, starts with `BND4`, matches the live container size and changed on
-// disk, and (b) the live file did NOT change. A mutated live file is a hard failure oracle
-// (`oracle_save_dest_live_file_mutated`): the snapshot is restored over it and the failure is
-// logged and published.
+// (a) the destination is a STRUCTURALLY COMPLETE `BND4` container of the live save's size whose
+// bytes differ from the seed, and (b) the live file did NOT change. A mutated live file is a hard
+// failure oracle (`oracle_save_dest_live_file_mutated`): the snapshot is restored over it and the
+// failure is logged and published.
+//
+// # The other destination: the loaded save itself
+//
+// Box2 answered "Yes" (and a browsed pick that resolves back to the loaded save) means the native
+// writer rewrites the live container in place -- correct, sanctioned, and until now completely
+// unnamed in telemetry, which is how run 4's 20:43:51 live-file rewrite read as an anonymous
+// mutation. `save_dest_arm_live_overwrite` records that intent BEFORE the fire and verifies it
+// afterwards, so every save this flow performs names the file it is about to rewrite.
 
 /// 1 while the scoped write-open redirect is armed. Read by the `CreateFileW` detour BEFORE it
 /// touches any lock, so an unarmed process pays one relaxed-ordering atomic load per open.
@@ -31,10 +66,15 @@ pub(crate) use er_telemetry::counters::SAVE_DEST_OPEN_PICKER_PENDING;
 pub(crate) use er_telemetry::counters::SAVE_DEST_CANCEL_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_DEST_COMMIT_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_DEST_COMMIT_FAIL;
+pub(crate) use er_telemetry::counters::SAVE_DEST_LIVE_BAK_MUTATED;
 pub(crate) use er_telemetry::counters::SAVE_DEST_LIVE_FILE_MUTATED;
+pub(crate) use er_telemetry::counters::SAVE_DEST_LIVE_OVERWRITE_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_DEST_PICKER_OPEN_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_DEST_SEED_FAIL_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_DEST_SEEDED_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_EXISTING_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_NEW_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_STRUCTURE_OK;
 pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_WRITTEN_OK;
 
 /// BND4 container magic: the first four bytes of every ER save the game writes.
@@ -56,13 +96,19 @@ struct SaveDestRedirect {
     target_path: PathBuf,
     /// NUL-terminated Windows-form destination handed to the original `CreateFileW`.
     target_w: Vec<u16>,
-    /// `(len, modified_ns)` of the destination before the commit; `None` if it did not exist.
-    target_before: Option<(u64, u128)>,
+    /// Did the destination already exist before the seed overwrote it? Reporting only.
+    target_existed: bool,
     live_path: PathBuf,
     live_len: u64,
     live_modified_ns: u128,
-    /// Pre-fire bytes of the LIVE save, restored if the redirect leaks and the loaded save is
-    /// mutated anyway -- the user explicitly chose NOT to overwrite it.
+    /// `(len, modified_ns)` of the live save's `.bak` twin before the fire. The native backup step
+    /// (`FUN_142410830`, `CopyFileW` live -> live.bak) is not redirected, so this is how a commit
+    /// that was supposed to leave the loaded save's folder alone reports that it did not.
+    live_bak_before: Option<(u64, u128)>,
+    /// Pre-fire bytes of the LIVE save. Doubles as the destination SEED (written to the target
+    /// before the fire so the native in-place writer has a real container to patch) and as the
+    /// snapshot restored if the redirect leaks and the loaded save is mutated anyway -- the user
+    /// explicitly chose NOT to overwrite it.
     live_bytes: Vec<u8>,
     /// Accepted leaf names (ASCII-lowercased UTF-16): the live save's own leaf plus its
     /// `.sl2`/`.co2` counterpart twin.
@@ -70,6 +116,27 @@ struct SaveDestRedirect {
 }
 
 static SAVE_DEST_REDIRECT: Mutex<Option<SaveDestRedirect>> = Mutex::new(None);
+
+/// A commit whose destination IS the loaded save: Box2 answered "Yes", or a browsed pick that
+/// resolves back to the loaded save. Nothing is redirected -- the native writer rewrites the live
+/// container in place, which is exactly what the user asked for. Recorded anyway so the rewrite is
+/// NAMED before it happens and scored after it, instead of surfacing later as an unattributed
+/// change to the user's save file.
+struct SaveDestLiveOverwrite {
+    live_path: PathBuf,
+    before: Option<(u64, u128)>,
+    bak_before: Option<(u64, u128)>,
+    reason: &'static str,
+}
+
+static SAVE_DEST_LIVE_OVERWRITE: Mutex<Option<SaveDestLiveOverwrite>> = Mutex::new(None);
+
+/// Outcome of scoring one commit's file(s). Returned so the flow's FINAL log line can state the
+/// file result rather than announcing the game's SL status and being contradicted a line later.
+pub(crate) struct SaveDestVerdict {
+    pub(crate) ok: bool,
+    pub(crate) summary: String,
+}
 
 fn save_dest_target_lock() -> std::sync::MutexGuard<'static, Option<PathBuf>> {
     SAVE_DEST_TARGET_PATH
@@ -79,6 +146,12 @@ fn save_dest_target_lock() -> std::sync::MutexGuard<'static, Option<PathBuf>> {
 
 fn save_dest_redirect_lock() -> std::sync::MutexGuard<'static, Option<SaveDestRedirect>> {
     SAVE_DEST_REDIRECT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn save_dest_live_overwrite_lock() -> std::sync::MutexGuard<'static, Option<SaveDestLiveOverwrite>> {
+    SAVE_DEST_LIVE_OVERWRITE
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
@@ -118,7 +191,11 @@ pub(crate) fn save_dest_reset(reason: &str) {
         append_autoload_debug(format_args!(
             "save-dest: redirect was STILL ARMED at flow reset (reason={reason}) -- disarming; the destination write was never verified"
         ));
-        save_dest_verify_and_disarm(reason);
+        let _ = save_dest_verify_and_disarm(reason);
+    } else if save_dest_live_overwrite_lock().is_some() {
+        // Same shape for the overwrite-the-loaded-save commit: a record left behind means the
+        // rewrite this flow announced was never scored, so score it now rather than dropping it.
+        let _ = save_dest_verify_and_disarm(reason);
     }
 }
 
@@ -179,9 +256,64 @@ fn save_dest_file_stamp(path: &Path) -> Option<(u64, u128)> {
     Some((meta.len(), modified_ns))
 }
 
+/// The `.bak` twin the native backup step (`FUN_142410830`) copies a saved container to.
+fn save_dest_bak_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".bak");
+    PathBuf::from(name)
+}
+
+/// End offset of the last BND4 entry, i.e. the length a STRUCTURALLY COMPLETE container must have.
+///
+/// This is the check that would have caught run 4's garbage file for what it was: the sparse file
+/// the in-place writer left had no `BND4` header at all, and even a container that parses is only
+/// complete when its own index accounts for every byte up to EOF.
+fn save_dest_container_end(bytes: &[u8]) -> Option<usize> {
+    let entries = er_save_loader::bnd4::parse_entries(bytes).ok()?;
+    if entries.is_empty() {
+        return None;
+    }
+    let mut end = 0_usize;
+    for entry in &entries {
+        end = end.max(entry.data_offset.checked_add(entry.entry_size)?);
+    }
+    Some(end)
+}
+
+/// Record that this commit's destination IS the loaded save, and say so BEFORE the write happens.
+///
+/// The native writer is left completely alone here -- this is the overwrite the user confirmed.
+/// The point is attribution: without this line a rewrite of `ER0000.sl2` (and, through the native
+/// `.bak` copy, its backup) is indistinguishable in the log from a suppression leak or a staging
+/// copy, which is exactly the ambiguity run 4's 20:43:51 live-file change created.
+pub(crate) fn save_dest_arm_live_overwrite(live_path: &Path, reason: &'static str) {
+    let before = save_dest_file_stamp(live_path);
+    let bak_before = save_dest_file_stamp(&save_dest_bak_path(live_path));
+    SAVE_DEST_LIVE_OVERWRITE_COUNT.fetch_add(1, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "save-dest: this commit's destination IS THE LOADED SAVE '{}' (reason={reason} len={}) -- the native writer will REWRITE it and copy it over its .bak; this is the sanctioned overwrite the user confirmed, and it is the ONLY way this flow writes the loaded save",
+        live_path.display(),
+        before.map_or(0, |(len, _)| len)
+    ));
+    *save_dest_live_overwrite_lock() = Some(SaveDestLiveOverwrite {
+        live_path: live_path.to_path_buf(),
+        before,
+        bak_before,
+        reason,
+    });
+}
+
 /// Arm the scoped write-open redirect for one commit. Snapshots the live save first so a leaked
-/// write can be undone. Returns false when the live save is unreadable or the destination path is
-/// unusable -- the caller must then abort WITHOUT firing rather than save to the wrong file.
+/// write can be undone, then SEEDS the destination with that snapshot: the native in-place block
+/// writer seeks to offsets read from the live container's index, so the destination has to already
+/// be that container or the seeks land in empty space (measured run 4: a sparse 26,608,560-byte
+/// file with no `BND4` magic).
+///
+/// Returns false when the live save is unreadable, the destination path is unusable, or the seed
+/// cannot be written -- the caller must then abort WITHOUT firing rather than report a save that
+/// cannot land. A destination the user confirmed overwriting is left holding the seed if the native
+/// write then fails: a complete, loadable container of the current character, which is a far better
+/// failure mode than the truncated garbage the un-seeded redirect produced.
 pub(crate) fn save_dest_arm_redirect(live_path: &Path, target_path: &Path) -> bool {
     let accepted_leaves = save_dest_accepted_leaves(live_path);
     if accepted_leaves.is_empty() {
@@ -213,30 +345,52 @@ pub(crate) fn save_dest_arm_redirect(live_path: &Path, target_path: &Path) -> bo
         ));
         return false;
     };
-    let target_before = save_dest_file_stamp(target_path);
+    let target_existed = save_dest_file_stamp(target_path).is_some();
+    // SEED (the fix for run 4): the native writer patches BLOCKS at offsets it read from the live
+    // container's index and opens with OPEN_ALWAYS (no truncate), so the destination must be that
+    // container before the first write-open. Written from the same buffer that is the live-file
+    // safety snapshot, so the seed and the "did it change" baseline can never disagree.
+    if let Err(err) = fs::write(target_path, &live_bytes) {
+        SAVE_DEST_SEED_FAIL_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "save-dest: ARM FAILED -- could not seed destination '{}' with the live container ({} bytes): {err}; NOT firing, because a save that cannot land must not be reported as one",
+            target_path.display(),
+            live_bytes.len()
+        ));
+        return false;
+    }
+    SAVE_DEST_SEEDED_COUNT.fetch_add(1, Ordering::SeqCst);
     SAVE_DEST_REDIRECT_HITS.store(0, Ordering::SeqCst);
+    let live_bak_before = save_dest_file_stamp(&save_dest_bak_path(live_path));
     *save_dest_redirect_lock() = Some(SaveDestRedirect {
         target_path: target_path.to_path_buf(),
         target_w,
-        target_before,
+        target_existed,
         live_path: live_path.to_path_buf(),
         live_len,
         live_modified_ns,
+        live_bak_before,
         live_bytes,
         accepted_leaves,
     });
     SAVE_DEST_REDIRECT_ARMED.store(1, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "save-dest: redirect ARMED live='{}' (len={live_len}) -> target='{}' (existing={}); save-container write-opens now land on the destination, reads pass through",
+        "save-dest: redirect ARMED live='{}' (len={live_len}) -> target='{}' (existing={target_existed}); destination SEEDED with a byte copy of the live container, save-container write-opens now land on it, reads pass through",
         live_path.display(),
-        target_path.display(),
-        target_before.is_some()
+        target_path.display()
     ));
     true
 }
 
 pub(crate) fn save_dest_redirect_armed() -> bool {
     SAVE_DEST_REDIRECT_ARMED.load(Ordering::SeqCst) != 0
+}
+
+/// True while EITHER commit window is open: a destination redirect, or a recorded
+/// overwrite-the-loaded-save. Both mean a write is in flight that stage 8 must wait for and score
+/// -- scoring either one at the moment of firing would read the file before the writer touched it.
+pub(crate) fn save_dest_commit_window_armed() -> bool {
+    save_dest_redirect_armed() || save_dest_live_overwrite_lock().is_some()
 }
 
 /// True when `access` is a write open (the only opens the redirect may divert).
@@ -265,8 +419,10 @@ pub(crate) fn save_dest_redirect_for_open(path: &[u16], access: u32) -> Option<V
     Some(state.target_w.clone())
 }
 
-/// Record a diverted write-open. First occurrence plus power-of-two milestones (a save writes
-/// exactly one container, so anything past the first is already an anomaly worth seeing).
+/// Record a diverted write-open. First occurrence plus power-of-two milestones. A commit produces
+/// ONE open per dirty block on the native in-place path (`FUN_1424142e0`) and one for a full
+/// rebuild, so several hits are normal -- ZERO is the anomaly, and the commit verification is what
+/// catches that.
 pub(crate) fn save_dest_note_redirect_hit(handle_ok: bool) {
     let hits = SAVE_DEST_REDIRECT_HITS.fetch_add(1, Ordering::SeqCst) + 1;
     if hits == 1 || hits.is_power_of_two() {
@@ -280,49 +436,60 @@ pub(crate) fn save_dest_note_redirect_hit(handle_ok: bool) {
     }
 }
 
-/// Disarm the redirect and score the commit: the destination must exist, be a BND4 container of
-/// the live save's size, and have changed on disk; the live save must NOT have changed.
+/// Disarm the commit window and score the file(s) it was responsible for. Returns `None` when no
+/// window was armed at all, so the caller can tell "nothing to check" from "checked and failed".
 ///
-/// A mutated live file is the hard failure this whole mechanism exists to prevent, so the
-/// pre-fire snapshot is written back over it and the failure is logged.
-pub(crate) fn save_dest_verify_and_disarm(reason: &str) {
-    let Some(state) = save_dest_redirect_lock().take() else {
+/// Destination commits: the target must be a STRUCTURALLY COMPLETE `BND4` container (its own index
+/// accounts for every byte up to EOF) of the live save's size whose bytes DIFFER from the seed --
+/// an unchanged file means the native writer never reached it. The live save must NOT have changed;
+/// a mutated live file is the hard failure this whole mechanism exists to prevent, so the pre-fire
+/// snapshot is written back over it and the failure is logged.
+///
+/// Loaded-save overwrites: the live container must still be a complete `BND4` and its stamp must
+/// have moved, which is what proves the rewrite the flow announced actually happened.
+pub(crate) fn save_dest_verify_and_disarm(reason: &str) -> Option<SaveDestVerdict> {
+    if let Some(state) = save_dest_redirect_lock().take() {
         SAVE_DEST_REDIRECT_ARMED.store(0, Ordering::SeqCst);
-        return;
-    };
+        return Some(save_dest_verify_destination(&state, reason));
+    }
     SAVE_DEST_REDIRECT_ARMED.store(0, Ordering::SeqCst);
+    let state = save_dest_live_overwrite_lock().take()?;
+    Some(save_dest_verify_live_overwrite(&state, reason))
+}
+
+fn save_dest_verify_destination(state: &SaveDestRedirect, reason: &str) -> SaveDestVerdict {
     let hits = SAVE_DEST_REDIRECT_HITS.load(Ordering::SeqCst);
-    let target_after = save_dest_file_stamp(&state.target_path);
-    let magic_ok = match fs::File::open(&state.target_path) {
-        Ok(mut file) => {
-            let mut magic = [0_u8; SAVE_DEST_BND4_MAGIC.len()];
-            std::io::Read::read_exact(&mut file, &mut magic).is_ok() && magic == SAVE_DEST_BND4_MAGIC
-        }
-        Err(_) => false,
-    };
-    let size_ok = target_after.is_some_and(|(len, _)| len == state.live_len);
-    let changed_ok = match (state.target_before, target_after) {
-        (None, Some(_)) => true,
-        (Some(before), Some(after)) => before != after,
-        _ => false,
-    };
-    let written_ok = hits >= 1 && magic_ok && size_ok && changed_ok;
-    let live_after = save_dest_file_stamp(&state.live_path);
-    let live_mutated =
-        live_after.is_none_or(|(len, ns)| len != state.live_len || ns != state.live_modified_ns);
+    let target_bytes = fs::read(&state.target_path).unwrap_or_default();
+    let magic_ok = target_bytes
+        .get(..SAVE_DEST_BND4_MAGIC.len())
+        .is_some_and(|magic| magic == SAVE_DEST_BND4_MAGIC);
+    let size_ok = target_bytes.len() as u64 == state.live_len;
+    let structure_ok = save_dest_container_end(&target_bytes) == Some(target_bytes.len());
+    // Compared against the SEED, not against a pre-arm stat: the seed is what the destination held
+    // when the native writer opened it, so "identical to the seed" is precisely "the writer wrote
+    // nothing here".
+    let changed_ok = target_bytes != state.live_bytes;
+    let written_ok = hits >= 1 && magic_ok && size_ok && structure_ok && changed_ok;
+    let summary = format!(
+        "target='{}' (pre-existing={}) hits={hits} bnd4={magic_ok} len_ok={size_ok} structure_ok={structure_ok} changed_from_seed={changed_ok}",
+        state.target_path.display(),
+        state.target_existed
+    );
     if written_ok {
         SAVE_DEST_TARGET_WRITTEN_OK.store(1, Ordering::SeqCst);
+        SAVE_DEST_TARGET_STRUCTURE_OK.store(1, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "save-dest: destination VERIFIED reason={reason} target='{}' hits={hits} len_ok={size_ok} bnd4={magic_ok} changed={changed_ok}",
-            state.target_path.display()
+            "save-dest: destination VERIFIED reason={reason} {summary}"
         ));
     } else {
         SAVE_DEST_COMMIT_FAIL.fetch_add(1, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "save-dest: destination NOT VERIFIED reason={reason} target='{}' hits={hits} bnd4={magic_ok} len_ok={size_ok} changed={changed_ok}; the user's save did NOT land where they asked",
-            state.target_path.display()
+            "save-dest: destination NOT VERIFIED reason={reason} {summary}; the user's save did NOT land where they asked"
         ));
     }
+    let live_after = save_dest_file_stamp(&state.live_path);
+    let live_mutated =
+        live_after.is_none_or(|(len, ns)| len != state.live_len || ns != state.live_modified_ns);
     if live_mutated {
         SAVE_DEST_LIVE_FILE_MUTATED.store(1, Ordering::SeqCst);
         let restored = fs::write(&state.live_path, &state.live_bytes).is_ok();
@@ -332,6 +499,54 @@ pub(crate) fn save_dest_verify_and_disarm(reason: &str) {
             state.live_bytes.len()
         ));
     }
+    // The native `.bak` copy (`FUN_142410830`) is not redirected, so it is the one remaining way a
+    // "save somewhere else" commit can still touch the loaded save's folder. Named rather than
+    // scored: it can only ever copy the untouched live container over its own backup.
+    let bak_path = save_dest_bak_path(&state.live_path);
+    let bak_after = save_dest_file_stamp(&bak_path);
+    if bak_after != state.live_bak_before {
+        SAVE_DEST_LIVE_BAK_MUTATED.store(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "save-dest: the loaded save's .bak twin '{}' moved during a destination commit reason={reason} -- the native backup step ran against the (unmodified) live container; the loaded save itself is unchanged={}",
+            bak_path.display(),
+            !live_mutated
+        ));
+    }
+    SaveDestVerdict {
+        ok: written_ok && !live_mutated,
+        summary,
+    }
+}
+
+fn save_dest_verify_live_overwrite(state: &SaveDestLiveOverwrite, reason: &str) -> SaveDestVerdict {
+    let after = save_dest_file_stamp(&state.live_path);
+    let changed_ok = after.is_some() && after != state.before;
+    let bytes = fs::read(&state.live_path).unwrap_or_default();
+    let magic_ok = bytes
+        .get(..SAVE_DEST_BND4_MAGIC.len())
+        .is_some_and(|magic| magic == SAVE_DEST_BND4_MAGIC);
+    let structure_ok = save_dest_container_end(&bytes) == Some(bytes.len());
+    let bak_after = save_dest_file_stamp(&save_dest_bak_path(&state.live_path));
+    let ok = changed_ok && magic_ok && structure_ok;
+    let summary = format!(
+        "loaded save '{}' rewritten in place (reason={}) bnd4={magic_ok} structure_ok={structure_ok} changed={changed_ok} len={}->{} bak_moved={}",
+        state.live_path.display(),
+        state.reason,
+        state.before.map_or(0, |(len, _)| len),
+        after.map_or(0, |(len, _)| len),
+        bak_after != state.bak_before
+    );
+    if ok {
+        append_autoload_debug(format_args!(
+            "save-dest: LOADED SAVE OVERWRITE VERIFIED reason={reason} {summary}"
+        ));
+    } else {
+        SAVE_DEST_COMMIT_FAIL.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "save-dest: LOADED SAVE OVERWRITE NOT VERIFIED reason={reason} {summary}; the user's save did NOT land"
+        ));
+    }
+    SaveDestVerdict { ok, summary }
 }
 
 /// Loaded-save path the destination flow works against (write target of the native save).
@@ -366,5 +581,85 @@ pub(crate) fn save_dest_target_is_live(target: &Path, live: &Path) -> bool {
     match (normalize(target), normalize(live)) {
         (Some(target), Some(live)) => target == live,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod save_dest_commit_tests {
+    use super::*;
+
+    /// Build a minimal, structurally complete BND4 container: header, `names.len()` entry headers
+    /// of `entry_len` bytes each, a UTF-16 name table, then the data blobs back to back.
+    ///
+    /// Deterministic generator, not captured game bytes (repo rule: no game-derived binaries in
+    /// tree). It reproduces only the four header/entry fields `parse_entries` reads.
+    fn synthetic_container(names: &[&str], entry_len: usize) -> Vec<u8> {
+        const HEADER_LEN: usize = 0x40;
+        const ENTRY_STRIDE: usize = 0x20;
+        let names_at = HEADER_LEN + names.len() * ENTRY_STRIDE;
+        let name_bytes: Vec<Vec<u8>> = names
+            .iter()
+            .map(|name| {
+                let mut out: Vec<u8> = name.encode_utf16().flat_map(u16::to_le_bytes).collect();
+                out.extend_from_slice(&[0, 0]);
+                out
+            })
+            .collect();
+        let names_len: usize = name_bytes.iter().map(Vec::len).sum();
+        let data_at = names_at + names_len;
+        let mut out = vec![0_u8; data_at + names.len() * entry_len];
+        out[..4].copy_from_slice(&SAVE_DEST_BND4_MAGIC);
+        out[0x0c..0x10].copy_from_slice(&(names.len() as i32).to_le_bytes());
+        out[0x10..0x18].copy_from_slice(&(HEADER_LEN as i64).to_le_bytes());
+        out[0x20..0x28].copy_from_slice(&(ENTRY_STRIDE as i64).to_le_bytes());
+        let mut name_cursor = names_at;
+        for (index, name) in name_bytes.iter().enumerate() {
+            let entry = HEADER_LEN + index * ENTRY_STRIDE;
+            out[entry + 0x08..entry + 0x10].copy_from_slice(&(entry_len as i64).to_le_bytes());
+            out[entry + 0x10..entry + 0x14]
+                .copy_from_slice(&((data_at + index * entry_len) as i32).to_le_bytes());
+            out[entry + 0x14..entry + 0x18].copy_from_slice(&(name_cursor as i32).to_le_bytes());
+            out[name_cursor..name_cursor + name.len()].copy_from_slice(name);
+            name_cursor += name.len();
+        }
+        out
+    }
+
+    #[test]
+    fn a_complete_container_ends_exactly_where_its_index_says() {
+        let bytes = synthetic_container(&["USER_DATA000", "USER_DATA001", "USER_DATA010"], 0x200);
+        assert_eq!(save_dest_container_end(&bytes), Some(bytes.len()));
+    }
+
+    /// The exact shape run 4 produced: the native in-place writer seeked past the start of an empty
+    /// destination and wrote one block, leaving a sparse file with no header at all. Length alone
+    /// cannot catch this -- the structure check must.
+    #[test]
+    fn a_sparse_fragment_with_no_header_is_not_a_container() {
+        let complete = synthetic_container(&["USER_DATA000", "USER_DATA010"], 0x200);
+        let mut sparse = vec![0_u8; complete.len()];
+        let tail = sparse.len() - 0x200;
+        sparse[tail..].copy_from_slice(&complete[tail..]);
+        assert_eq!(save_dest_container_end(&sparse), None);
+    }
+
+    /// A container whose index describes more bytes than the file holds is incomplete even though
+    /// it parses and carries the magic.
+    #[test]
+    fn a_truncated_container_does_not_account_for_its_own_index() {
+        let mut bytes = synthetic_container(&["USER_DATA000", "USER_DATA001"], 0x200);
+        let full = bytes.len();
+        bytes.truncate(full - 0x100);
+        assert_eq!(save_dest_container_end(&bytes), Some(full));
+        assert_ne!(save_dest_container_end(&bytes), Some(bytes.len()));
+    }
+
+    #[test]
+    fn the_bak_twin_is_the_container_path_plus_bak() {
+        let live = Path::new(r"C:\users\steamuser\AppData\Roaming\EldenRing\1234\ER0000.sl2");
+        assert_eq!(
+            save_dest_bak_path(live),
+            Path::new(r"C:\users\steamuser\AppData\Roaming\EldenRing\1234\ER0000.sl2.bak")
+        );
     }
 }

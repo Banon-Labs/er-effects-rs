@@ -447,9 +447,12 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
         dsm == 0 && b80 == 0 && bc4 != GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY as i32;
     if gates_green {
         // DESTINATION COMMIT (save-game-flow WP3): with a chosen destination that is not the
-        // loaded save, arm the scoped write-open redirect (and the live-file snapshot that undoes
-        // a leak) BEFORE the request is fired. Arming failure is terminal -- firing without it
-        // would overwrite the very file the user chose not to overwrite.
+        // loaded save, arm the scoped write-open redirect (which seeds the destination with the
+        // live container and snapshots it so a leak can be undone) BEFORE the request is fired.
+        // Arming failure is terminal -- firing without it would overwrite the very file the user
+        // chose not to overwrite. Every commit names the file it is about to write BEFORE writing
+        // it, the overwrite-the-loaded-save case included: a rewrite of the live `ER0000.sl2` that
+        // nothing in the log claims is indistinguishable after the fact from a suppression leak.
         if let Some(target) = save_dest_target() {
             let Some(live) = save_dest_live_save_path() else {
                 SAVE_DEST_COMMIT_FAIL.fetch_add(1, Ordering::SeqCst);
@@ -461,8 +464,9 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
                 save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "destination live path unavailable");
                 return;
             };
-            if !save_dest_target_is_live(&target, &live) && !save_dest_arm_redirect(&live, &target)
-            {
+            if save_dest_target_is_live(&target, &live) {
+                save_dest_arm_live_overwrite(&live, "browsed destination is the loaded save");
+            } else if !save_dest_arm_redirect(&live, &target) {
                 SAVE_DEST_COMMIT_FAIL.fetch_add(1, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
                     "save-flow: FIRE ABORT -- could not arm the destination redirect for '{}'; NOT firing, the user's save did NOT happen",
@@ -472,6 +476,11 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
                 save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "destination arm failed");
                 return;
             }
+        } else if let Some(live) = save_dest_live_save_path() {
+            // Box2 answered "Yes": no destination was ever chosen because the destination IS the
+            // loaded save. Naming it is not optional -- this is the only path in the product that
+            // rewrites the user's live save, and it must never look anonymous.
+            save_dest_arm_live_overwrite(&live, "box2 overwrite-the-loaded-save");
         }
         if !er_save_suppress::is_armed() {
             // Degraded fail-open (prologue mismatch / install failure): suppression never
@@ -481,12 +490,14 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
                 "save-flow: suppression NOT armed (oracle_save_suppress_armed=0) -- degraded fail-open: firing forced native save request without a bypass token"
             ));
             unsafe { system_quit_save_game_request_save_forced() };
-            if save_dest_redirect_armed() {
-                // A destination write is now in flight with no bypass token to watch, so the
-                // stage-8 watchdog owns the wait and the verification.
+            if save_dest_commit_window_armed() {
+                // A write is now in flight with no bypass token to watch, so the stage-8 watchdog
+                // owns the wait and the verification. This covers the loaded-save overwrite too:
+                // resetting here would score the file in the same frame the request was fired,
+                // before the writer has touched it, and report a spurious failure.
                 save_flow_enter_stage(
                     SAVE_FLOW_STAGE_COMMIT_WAIT,
-                    "degraded fail-open fire with a destination redirect armed",
+                    "degraded fail-open fire with a commit window armed",
                 );
             } else {
                 save_dest_reset("degraded fail-open fire");
@@ -500,7 +511,7 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
             append_autoload_debug(format_args!(
                 "save-flow: FIRE ABORT -- arm_one_save_bypass refused (token already pending); the user's save did NOT happen"
             ));
-            save_dest_verify_and_disarm("bypass arm refused");
+            let _ = save_dest_verify_and_disarm("bypass arm refused");
             save_dest_reset("bypass arm refused");
             save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "bypass arm refused");
             return;
@@ -693,22 +704,46 @@ fn save_flow_fire_failure_reason() -> String {
 /// failed fire can never leave a one-shot bypass armed for some later native save.
 fn save_flow_commit_wait_tick(ticks: usize) {
     if let Some(status) = er_save_suppress::take_bypass_final_status() {
-        if status == 0 {
+        // THE FILE CHECK RUNS FIRST AND HAS THE LAST WORD (2026-07-28). `status` is the game's SL
+        // job result -- its opinion of its own bookkeeping, which run 4 reported as 0 (success) for
+        // a commit that produced a sparse, headerless fragment. Announcing that status and then
+        // contradicting it a line later made the log say "COMMIT COMPLETE" above "the user's save
+        // did NOT land". Score the bytes, then emit ONE verdict that folds both in.
+        let verdict = save_dest_verify_and_disarm("commit terminal status");
+        let status_ok = status == 0;
+        // `None` = no commit window was armed (degraded paths). Nothing to contradict.
+        let file_ok = verdict.as_ref().is_none_or(|verdict| verdict.ok);
+        let file_state = match verdict.as_ref() {
+            Some(verdict) if verdict.ok => "VERIFIED",
+            Some(_) => "FAILED",
+            None => "not armed",
+        };
+        let detail = verdict.as_ref().map_or_else(
+            || "no commit window was armed, so no file could be checked".to_owned(),
+            |verdict| verdict.summary.clone(),
+        );
+        if status_ok && file_ok {
             SAVE_FLOW_COMMIT_COMPLETE_COUNT.fetch_add(1, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "save-flow: COMMIT COMPLETE -- bypassed save reported terminal status 0 (success) after {ticks} commit ticks"
+                "save-flow: COMMIT COMPLETE after {ticks} commit ticks -- the bypassed save reported terminal status 0 AND the file VERIFIED on disk: {detail}"
             ));
         } else {
+            if status_ok {
+                SAVE_FLOW_COMMIT_VERIFY_FAIL_COUNT.fetch_add(1, Ordering::SeqCst);
+            }
             append_autoload_debug(format_args!(
-                "save-flow: COMMIT FAILED -- bypassed save reported terminal status {status} (0=success); the user's save did NOT complete"
+                "save-flow: COMMIT FAILED after {ticks} commit ticks -- terminal status {status} (0=success), file check {file_state}: {detail}. The user's save did NOT land"
             ));
         }
-        // Destination commits are scored HERE (WP3): the write-open redirect is disarmed and both
-        // files are checked -- the destination must be a fresh BND4 container of the live save's
-        // size, and the live save must be byte-identical to its pre-fire snapshot.
-        save_dest_verify_and_disarm("commit terminal status");
         save_dest_reset("commit terminal status");
-        save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "commit terminal status");
+        save_flow_enter_stage(
+            SAVE_FLOW_STAGE_IDLE,
+            if status_ok && file_ok {
+                "commit verified"
+            } else {
+                "commit FAILED -- nothing usable was written"
+            },
+        );
         return;
     }
     // DEAD-FIRE BAILOUT (user-reported 2026-07-28): the Save Game row is gated on the flow being
@@ -728,7 +763,7 @@ fn save_flow_commit_wait_tick(ticks: usize) {
             "save-flow: FIRE WENT NOWHERE -- no save enqueue reached the writer within {ticks} ticks (token_expired={expired}); the user's save did NOT happen. {}. Ending the flow now so the Save Game row is usable again instead of blocking for the full {SAVE_BYPASS_WATCHDOG_TICKS}-tick watchdog",
             save_flow_fire_failure_reason()
         ));
-        save_dest_verify_and_disarm("fire went nowhere");
+        let _ = save_dest_verify_and_disarm("fire went nowhere");
         save_dest_reset("fire went nowhere");
         save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "fire went nowhere");
         return;
@@ -746,7 +781,7 @@ fn save_flow_commit_wait_tick(ticks: usize) {
         ));
         // A destination write may still have landed (the degraded fail-open path has no token to
         // watch at all), so score it before dropping the window rather than assuming failure.
-        save_dest_verify_and_disarm("commit watchdog");
+        let _ = save_dest_verify_and_disarm("commit watchdog");
         save_dest_reset("commit watchdog");
         save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "commit watchdog");
     }
