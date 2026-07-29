@@ -84,6 +84,12 @@ windows = { version = "0.62", features = [
   "Win32_UI_Controls_Dialogs",
   # CreateEventW (fence-completion event for the D3D12 readback wait) is gated behind Win32_Security.
   "Win32_Security",
+  # GetFileInformationByHandle: SAME-FILE identity (volume serial + file index) for the save
+  # destination commit. Two spellings of one file -- `C:\users\steamuser\...` and
+  # `Z:\...\pfx\drive_c\users\steamuser\...` under Wine -- must not read as two files, because
+  # redirecting the loaded save onto itself makes the safety net restore a pre-save snapshot over
+  # the save that just succeeded.
+  "Win32_Storage_FileSystem",
   # D3D12 readback of the live profile-portrait offscreen render target, so the now-loading
   # forge can display the real rendered character head instead of the placeholder checker.
   "Win32_Graphics_Direct3D12",

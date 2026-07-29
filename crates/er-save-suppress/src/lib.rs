@@ -1103,6 +1103,16 @@ pub fn expire_bypass_if_pending() -> bool {
     }
 }
 
+/// Peek at the freshness handshake without consuming it.
+///
+/// A caller that must do something fallible BEFORE it may consume the outcome -- the save flow
+/// has to score the destination file first, and that scoring can be deferred while the native
+/// writer is still inside a job body -- needs to know a status is waiting without taking it. A
+/// consumed status that is then dropped on a deferral would be an outcome nobody ever reports.
+pub fn bypass_final_status_fresh() -> bool {
+    BYPASS_FINAL_STATUS_FRESH.load(Ordering::SeqCst) != 0
+}
+
 /// Consume the freshly-captured terminal status of the last bypassed save, if one has
 /// been captured since the last arm. The latched value itself is NOT cleared (telemetry
 /// keeps reporting it); only the freshness handshake is consumed, so a state machine

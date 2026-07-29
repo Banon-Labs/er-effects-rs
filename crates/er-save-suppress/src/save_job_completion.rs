@@ -142,6 +142,25 @@ pub fn save_job_completions() -> u64 {
     SAVE_JOB_COMPLETIONS.load(Ordering::SeqCst)
 }
 
+/// True when no SL save job body is executing at this instant.
+///
+/// The read order is load-bearing. The observer increments `STARTS` before the body and
+/// `COMPLETIONS` after it, so `starts >= completions` always. Sampling COMPLETIONS first and
+/// STARTS second means that if the two are equal, they were equal at the later of the two
+/// reads: `completions` can only have grown since its read, and it is bounded above by
+/// `starts`, which we read afterwards. Sampling in the other order admits a job that started
+/// between the reads and reports it as quiescent.
+///
+/// This is the writer-side interlock the destination redirect needs. The native in-place
+/// writer `FUN_1424142e0` opens the container ONCE PER DIRTY BLOCK, so a redirect window that
+/// closes mid-body patches the remaining blocks into whatever the unredirected path resolves
+/// to -- the very file the user chose not to overwrite.
+pub fn save_job_writer_idle() -> bool {
+    let completions = SAVE_JOB_COMPLETIONS.load(Ordering::SeqCst);
+    let starts = SAVE_JOB_STARTS.load(Ordering::SeqCst);
+    starts == completions
+}
+
 /// The result code read out of the last completed job, or [`SAVE_JOB_RESULT_UNREADABLE`].
 pub fn save_job_last_result() -> u32 {
     SAVE_JOB_LAST_RESULT.load(Ordering::SeqCst)
