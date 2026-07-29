@@ -180,6 +180,13 @@ def write_package_files(stage_dir: Path, package_name: str, commit: str) -> None
             # save_file = '/absolute/path/to/ER0000.sl2'
             # boot_background_image = '/absolute/path/to/background.png'
             persist_boot_background_to_loading_screen = true
+
+            # Open the OS file dialog instead of the in-game 05_010 browser, for BOTH the
+            # "Load Save Profiles" row and the Save Game destination step. One key governs both.
+            # Default false = the in-game browser. The OS dialog is NOT covered by the build gate
+            # and can land behind an exclusive-fullscreen game; the in-game browser exists for that
+            # case.
+            # os_native_save_picker = false
             """
         ).lstrip(),
         encoding="utf-8",

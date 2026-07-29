@@ -422,8 +422,11 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SYSTEM_QUIT_QUIT_AUTHORIZED_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_ACTION_ALIAS_FALSE_QUIT_CLAIMS.load(Ordering::SeqCst)
     ));
+    // `oracle_save_picker_surface` states which picker this session runs (0 in-game, 1 OS dialog)
+    // regardless of whether one ever opened, so a report never has to guess the mode.
     body.push_str(&format!(
-        "  \"oracle_save_picker_mode_active\": {},\n  \"oracle_save_picker_open_count\": {},\n  \"oracle_save_picker_repopulate_count\": {},\n  \"oracle_save_picker_pick_count\": {},\n  \"oracle_save_picker_pick_reject_count\": {},\n  \"oracle_save_picker_resubmit_count\": {},\n  \"oracle_save_picker_cancel_count\": {},\n  \"oracle_save_picker_staged_row_count\": {},\n",
+        "  \"oracle_save_picker_surface\": {},\n  \"oracle_save_picker_mode_active\": {},\n  \"oracle_save_picker_open_count\": {},\n  \"oracle_save_picker_repopulate_count\": {},\n  \"oracle_save_picker_pick_count\": {},\n  \"oracle_save_picker_pick_reject_count\": {},\n  \"oracle_save_picker_resubmit_count\": {},\n  \"oracle_save_picker_cancel_count\": {},\n  \"oracle_save_picker_staged_row_count\": {},\n",
+        SAVE_PICKER_SURFACE.load(Ordering::SeqCst),
         SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst),
         SAVE_PICKER_OPEN_COUNT.load(Ordering::SeqCst),
         SAVE_PICKER_REPOPULATE_COUNT.load(Ordering::SeqCst),

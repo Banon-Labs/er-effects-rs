@@ -34,6 +34,9 @@ pub(crate) use er_telemetry::counters::SAVE_PICKER_DEST_MODE;
 /// System/Quit dialog the live picker window was submitted from; the menu-pump resubmit reopens
 /// through it (the destination picker is opened by the save flow, which has no row action object).
 pub(crate) use er_telemetry::counters::SAVE_PICKER_SYSTEM_DIALOG;
+/// Which picker surface this session runs (0 = this in-game browser, 1 = the OS file dialog).
+/// Latched once in `init_runtime_config`; exported as `oracle_save_picker_surface`.
+pub(crate) use er_telemetry::counters::SAVE_PICKER_SURFACE;
 /// Diagnostics / telemetry oracles.
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OPEN_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_REPOPULATE_COUNT;

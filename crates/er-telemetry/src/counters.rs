@@ -1308,6 +1308,13 @@ pub static SAVE_PICKER_STAGED_ROW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_REBUILD_PENDING_DIALOG: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_LIST_BUILDER_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_LIST_BUILDER_RESTAGE_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Which file-picker surface this session runs: 0 = the in-game `05_010` browser (default),
+/// 1 = the OS common file dialog (`er-effects.toml os_native_save_picker = true`).
+///
+/// A LATCH set once from `init_runtime_config`, not a lazy read, so it is exported even in a
+/// session where no picker ever opens. Every other `SAVE_PICKER_OS_*` counter is only meaningful
+/// once this reads 1, and a report can state the mode without the reporter knowing the config.
+pub static SAVE_PICKER_SURFACE: AtomicUsize = AtomicUsize::new(0);
 /// Browse rows with no character on which the hide of the per-slot info fields (`Level`
 /// caption/value, `PlayTime`) was DRIVEN -- the native setter was called; pair with
 /// `PROFILE_ROW_SLOT_INFO_NON_DISPLAY` to know it took effect. Doubles as the latch that arms the
