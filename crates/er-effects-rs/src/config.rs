@@ -566,9 +566,16 @@ mod tests {
             "backgrounds/load.png",
             std::path::Path::new("C:\\Games\\ELDEN RING\\Game"),
         );
+        // The join separator is the TARGET's, and this crate only ever builds for Windows -- the
+        // old literal `/` expectation was written against a host build and fails on the real
+        // target (verified 2026-07-28 by running the test exe). Separators INSIDE the configured
+        // relative path are deliberately left alone; Windows accepts both.
         assert_eq!(
             path.to_string_lossy(),
-            "C:\\Games\\ELDEN RING\\Game/backgrounds/load.png"
+            format!(
+                "C:\\Games\\ELDEN RING\\Game{}backgrounds/load.png",
+                std::path::MAIN_SEPARATOR
+            )
         );
     }
 }
