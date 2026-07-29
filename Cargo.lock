@@ -2906,6 +2906,7 @@ version = "0.1.0"
 dependencies = [
  "er-game-base",
  "er-hook",
+ "er-save-suppress",
 ]
 
 [[package]]
@@ -2914,6 +2915,14 @@ version = "0.1.0"
 dependencies = [
  "eldenring",
  "er-safe-input",
+]
+
+[[package]]
+name = "er-save-suppress"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "er-hook",
 ]
 
 [[package]]

@@ -13,6 +13,7 @@ members = [
   "crates/er-armament-icons",
   "crates/er-net-effects-dll",
   "crates/er-save-disable-dll",
+  "crates/er-save-suppress",
   "crates/mushroom-man-runtime",
   "crates/effects-data",
   "crates/er-gfx",

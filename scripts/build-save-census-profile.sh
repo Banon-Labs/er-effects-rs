@@ -64,7 +64,7 @@ game = "eldenring"
 # reports success to the game, while the Win32 file-API census keeps watching for any
 # write that escapes. Loads are untouched. Set ER_SAVE_DISABLE_CENSUS_ONLY=1 to disarm
 # suppression for the positive-control run.
-# See crates/er-save-disable-dll/src/suppress.rs for the interception contract.
+# See crates/er-save-suppress/src/lib.rs for the interception contract.
 [[natives]]
 path = '$DLL'
 EOF

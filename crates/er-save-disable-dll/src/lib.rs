@@ -12,11 +12,18 @@
 //!
 //! Two cooperating layers, and it matters that they are separate:
 //!
-//! **Suppression** (`suppress`) stops the game ever enqueueing a save-write job, at the
-//! single choke point every save funnels through, and answers the game's own completion
-//! poll with the code that means success. No save byte is written, no `.bak` is copied
-//! or deleted, and every native observer sees the state a real successful save leaves.
-//! Loads are untouched, so Continue and Load Game still read the real file.
+//! **Suppression** (the shared `er-save-suppress` crate; it lived here as `suppress.rs`
+//! until it was lifted out so a second DLL could link the identical hooks) stops the game
+//! ever enqueueing a save-write job, at the single choke point every save funnels through,
+//! and answers the game's own completion poll with the code that means success. No save
+//! byte is written, no `.bak` is copied or deleted, and every native observer sees the
+//! state a real successful save leaves. Loads are untouched, so Continue and Load Game
+//! still read the real file.
+//!
+//! Once the product DLL links that core too, **do not load this DLL together with
+//! `er_effects_rs.dll` in one me3 profile**: each carries its own MinHook instance, so both
+//! would double-detour `0x140e6fb50` / `0x140e6e430` and corrupt each other's trampolines.
+//! The census probe profile stays product-DLL-free (`scripts/build-save-census-profile.sh`).
 //!
 //! **Census** (`hooks` + `witness`) hooks the Win32 file APIs *below* every FromSoft
 //! abstraction and records the game-module RVA of any call site that still reaches save
@@ -32,7 +39,6 @@
 
 #[cfg(windows)]
 mod hooks;
-mod suppress;
 mod telemetry;
 mod witness;
 
@@ -53,7 +59,7 @@ const LOG_FILE_NAME: &str = "er-save-disable.log";
 /// from a compile-time claim -- a build that intended to suppress but failed to arm must
 /// not report itself as suppressing.
 pub(crate) fn phase() -> &'static str {
-    if suppress::is_armed() {
+    if er_save_suppress::is_armed() {
         "suppress+census"
     } else {
         "census-only"
@@ -141,16 +147,36 @@ fn spawn_census_task() {
                 }
             };
             witness::set_game_base(base);
+            // Wire the shared suppression core's seams to THIS DLL's surfaces before
+            // anything can install: human lines to er-save-disable.log, publishes to the
+            // census telemetry snapshot THROUGH the witness reentrancy guard (the
+            // suppression hooks are not observation paths, so they enter with the guard
+            // clear; taking it in the sink keeps `telemetry::write_snapshot`'s documented
+            // invariant true for every caller).
+            er_save_suppress::set_log_sink(log_message);
+            er_save_suppress::set_publish_sink(|| {
+                let _ = witness::with_guard(telemetry::write_snapshot);
+            });
             // Census first: it must be watching before suppression arms, so a write
             // that escapes suppression during the arming window is still recorded.
             let installed = hooks::install();
             HOOKS_INSTALLED.store(installed, Ordering::SeqCst);
-            let suppressing = suppress::install();
+            // The census-only env check moved OUT of the core (`install` takes a plain
+            // bool): only this standalone diagnostic DLL consults the env var, so no
+            // env var can alter a product host's behavior.
+            let census_only = census_only_requested();
+            if census_only {
+                log_message(format_args!(
+                    "install: {CENSUS_ONLY_ENV} requested census-only positive control; \
+                     suppression will be disarmed and saves observed for real"
+                ));
+            }
+            let suppressing = er_save_suppress::install(census_only);
             log_message(format_args!(
                 "install: base=0x{base:x}, census hooks={installed}/{}, \
                  suppression hooks={suppressing}/{}, phase={}",
                 hooks::EXPECTED_HOOKS,
-                suppress::SUPPRESSOR_HOOKS,
+                er_save_suppress::SUPPRESSOR_HOOKS,
                 phase()
             ));
             // Publish immediately so a harness can distinguish "no saves happened"
