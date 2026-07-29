@@ -35,7 +35,8 @@ if ! BD="$(resolve_bd)"; then
 fi
 
 # Regeneration is best-effort: a failure must never break the hook / prime.
-python3 "$DIR/scripts/gen-beads-prime.py" > "$DIR/.beads/PRIME.md.tmp" 2>/dev/null \
+# Pass the already-resolved bd so the generator never falls back to path guessing.
+BD_REAL_BIN="$BD" python3 "$DIR/scripts/gen-beads-prime.py" > "$DIR/.beads/PRIME.md.tmp" 2>/dev/null \
   && mv -f "$DIR/.beads/PRIME.md.tmp" "$DIR/.beads/PRIME.md" \
   || rm -f "$DIR/.beads/PRIME.md.tmp"
 
