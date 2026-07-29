@@ -50,6 +50,13 @@ shellcheck "$repo_root/scripts/run-me3-product-smoke.sh"
 shellcheck "$repo_root/scripts/run-windows-proof-render-smoke.sh"
 shellcheck "$repo_root/scripts/check-rust-build.sh"
 
+# Host-buildable GFx codec + derived-movie proof gates. These are the only place the runtime GFx
+# transforms are checked (the Windows-target `cargo xwin test --lib` below cannot reach an integration
+# test), and they carry the System->Quit grid-geometry gate: the two added rows are navigable only
+# because the derived movie names them `Item_1_0`/`Item_1_1`. Movie-reading tests SKIP when the local
+# extraction corpus is absent, so this is safe on a machine without it.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-gfx
+
 # Rust format + Windows-target BUILD of the injectable DLL (cross-compiled from Linux via
 # cargo-xwin). A real build (not just `cargo check`) so codegen/link regressions -- including
 # any pre-existing rust breakage -- are caught here, producing the linked er_effects_rs.dll.

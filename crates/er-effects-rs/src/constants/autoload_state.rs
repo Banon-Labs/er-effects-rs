@@ -725,8 +725,53 @@ pub(crate) const PROPERTY_EDIT_DIALOG_PROPERTIES_1268_OFFSET: usize = 0x1268;
 pub(crate) const PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET: usize = 0x1af0;
 pub(crate) const EDIT_PROPERTY_SIZE: usize = 0x88;
 pub(crate) const EDIT_PROPERTY_CONTROLLER_OFFSET: usize = 0x78;
-/// In `PropertyNewButtonController`, first cloned action std::function stores its impl ptr at +0xa8.
+/// `CS::EditProperty.label` (a `CS::MenuHelpLabelComponent`, 0x70 bytes) whose FIRST field is the
+/// `MenuString`'s raw UTF-16 pointer -- `CS::MenuString::MenuString` stores the pointer it is handed,
+/// so a row built from this DLL's static label arrays is identifiable by pointer equality, and every
+/// row is identifiable by its text. This is the only per-row identity in the Quit dialog that the
+/// engine does not alias or share (1.16.2 `EditProperty`: super_MenuViewItem +0, label +8,
+/// propertyController +0x78, size 0x88).
+pub(crate) const EDIT_PROPERTY_LABEL_OFFSET: usize = 0x8;
+/// In `PropertyNewButtonController`, the action `std::function`'s `_Getter()` slot.
+///
+/// NOT an object identity. `CS::PropertyNewButtonController` is a 0x300-byte allocation
+/// (`HeapAlloc(0x300, 8, ...)` in 1.16.2 `FUN_14086a950`) whose ctor `FUN_14086a2a0`
+/// copy-constructs the caller's action `std::function` into `this + 0x70` (`param_1 + 0xe`) and
+/// stores the resulting getter pointer here (`param_1[0x15]`). MSVC keeps that getter at
+/// `storage + 0x38`, and for a small (inline) callable it points at the storage itself -- so this
+/// field always reads back `controller + 0x70`. Comparing it is comparing the controller, and a
+/// controller is NOT a row: the patched 4-row Quit tab dispatches all four visible buttons through
+/// only the two NATIVE row controllers. Use `system_quit_resolve_row_now` for row identity.
 pub(crate) const PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET: usize = 0xa8;
+/// `PropertyEditDialog` pointer stored at `action_object + 0x8` -- how every System>Quit row
+/// action reaches its owning dialog.
+pub(crate) const SYSTEM_QUIT_ACTION_OBJECT_DIALOG_08_OFFSET: usize = 0x8;
+/// `CS::CSEzMenuViewerPad` predicates that `PropertyNewButtonController`'s should-invoke predicate
+/// (`FUN_140974b00`, deobf 0x974b00) itself calls to classify the dispatched event. The first
+/// short-circuits the predicate with NO positional test (pad/keyboard confirm); the second is the one
+/// whose result the native code then hit-tests against the row's display object (mouse click).
+pub(crate) const MENU_VIEWER_PAD_CONFIRM_PRESSED_RVA: u32 = 0x758a10;
+pub(crate) const MENU_VIEWER_PAD_MOUSE_CLICKED_RVA: u32 = 0x758a70;
+/// `CS::GridControl::SetItemCount(this, count)` (1.16.2 `FUN_140738dc0`; byte-verified against
+/// `eldenring-deobf.bin`: `48 89 5c 24 08 57 48 83 ec 20 8b fa 48 8b d9 85 d2 75 0d`).
+///
+/// The list widget's item count is NOT a plain field to poke. This setter writes `this + 0xd0` AND
+/// recomputes the scroll/page row count on the embedded scroll control at `this + 0x1a8`
+/// (`FUN_14074dad0(this + 0x1a8, (count - 1 + cols) / cols)`), which is what the native rebuild
+/// (`FUN_140975040`) calls. Writing the raw field leaves the scroll control describing the old,
+/// shorter list.
+pub(crate) const GRID_CONTROL_SET_ITEM_COUNT_RVA: u32 = 0x738dc0;
+/// The `CS::GridControl` (0x7c8 bytes, vtable dump `0x142a913b8`) embedded in every
+/// `GenericListSelectDialog` at `+0xa38`. Its geometry fields, measured once at dialog construction
+/// by `GridControl::MeasureGridFromMovie` (vtable `+0x18`, `FUN_140737c60`) from which
+/// `Item_<row>_<col>` components the movie actually contains:
+///   `+0xd0` item count, `+0xd4` cursor, `+0xd8` COLUMNS, `+0xdc` ROWS.
+/// `GridControl::Update` (`FUN_1407392f0`) enables up/down only at `rows >= 2` and left/right only at
+/// `cols != 1 || rows < 2`, and the mouse hit test (`FUN_140736c90`) walks exactly `cols * rows`
+/// cells -- so these two numbers are the whole navigation and hover model of the dialog.
+pub(crate) const DIALOG_GRID_CONTROL_A38_OFFSET: usize = 0xa38;
+pub(crate) const GRID_CONTROL_COLS_D8_OFFSET: usize = 0xd8;
+pub(crate) const GRID_CONTROL_ROWS_DC_OFFSET: usize = 0xdc;
 pub(crate) static SYSTEM_QUIT_DUPLICATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SYSTEM_QUIT_NOOP_ACTION_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SYSTEM_QUIT_RETURN_DESKTOP_ACTION_ORIG: AtomicUsize =
@@ -786,6 +831,24 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_CONTROLLER_LAST
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_SUCCESS_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT;
+// ---- System->Quit ROW IDENTITY table + resolution oracles (see system_quit_row_identity.rs) ----
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_NATIVE_RETURN_DESKTOP_CONTROLLER_LAST_OBJECT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_NATIVE_SAVE_GAME_CONTROLLER_LAST_OBJECT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_INDEX_LOAD_PROFILE_PLUS1;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_INDEX_LOAD_SAVE_PROFILES_PLUS1;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_INDEX_RETURN_DESKTOP_PLUS1;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_PLUS1;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_TABLE_DIALOG;
+pub(crate) use er_telemetry::counters::{
+    SYSTEM_QUIT_ACTION_ALIAS_FALSE_QUIT_CLAIMS, SYSTEM_QUIT_QUIT_AUTHORIZED_COUNT,
+    SYSTEM_QUIT_QUIT_REFUSED_AMBIGUOUS_ROW_COUNT, SYSTEM_QUIT_ROW_AMBIGUOUS_COUNT,
+    SYSTEM_QUIT_ROW_LAST_AMBIGUITY, SYSTEM_QUIT_ROW_LAST_CURSOR_LABEL_KIND,
+    SYSTEM_QUIT_ROW_LAST_CURSOR_PLUS1, SYSTEM_QUIT_ROW_LAST_DISCRIMINATOR,
+    SYSTEM_QUIT_GRID_COLS, SYSTEM_QUIT_GRID_ITEM_COUNT, SYSTEM_QUIT_GRID_NAVIGABLE_CELLS,
+    SYSTEM_QUIT_GRID_ROWS, SYSTEM_QUIT_ROW_LAST_INPUT_KIND, SYSTEM_QUIT_ROW_LAST_RESOLVED_ROW,
+    SYSTEM_QUIT_ROW_REFUSED_DISAGREEMENT_COUNT, SYSTEM_QUIT_ROW_RESOLVED_BY_CURSOR_ROW_COUNT,
+    SYSTEM_QUIT_ROW_RESOLVE_COUNT,
+};
 /// Legacy fallback latch for older confirmation-based Save Game routing. The product Save Game row
 /// now requests save + closes menus directly and clears this latch so it never reaches the native
 /// Quit Game / return-title action.

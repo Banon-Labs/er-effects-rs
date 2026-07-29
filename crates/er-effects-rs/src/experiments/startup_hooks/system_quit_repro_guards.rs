@@ -733,7 +733,25 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             // 05_010_ProfileSelect AND stores SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG (the arm
             // precondition) -- byte-identical to a real click. One-shot per switch; on success the
             // `profile != 0` branch above advances to TO_SLOT next frame.
+            // The captured value is only `controller + 0x70` (see system_quit_row_identity.rs), so it
+            // is used here purely as the handle whose `+0x8` reaches the dialog -- never as a row
+            // identity. Require the row table to still describe THAT dialog, so the autopilot cannot
+            // fire the route through an alias left over from a destroyed Quit pane.
             let route_action = SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
+            let route_action = if route_action != 0 {
+                let route_dialog = unsafe {
+                    safe_read_usize(route_action + SYSTEM_QUIT_ACTION_OBJECT_DIALOG_08_OFFSET)
+                }
+                .unwrap_or(0);
+                let table_dialog = SYSTEM_QUIT_ROW_TABLE_DIALOG.load(Ordering::SeqCst);
+                if route_dialog != 0 && route_dialog == table_dialog {
+                    route_action
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
             // If the Load-Profile action was never captured (its row is only cloned when the Quit-tab
             // pane BUILDS, which needs the mouse-only tab visit), force-build that pane once via the
             // game's own tab-select FUN_14093b850(composite, quit_pane_index). Quit visual tab

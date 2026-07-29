@@ -373,6 +373,55 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SYSTEM_QUIT_REQUEST_LOAD_SLOT_ALLOW_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_INWORLD_LOAD_SKIP_COUNT.load(Ordering::SeqCst)
     ));
+    // System->Quit ROW IDENTITY oracles. `oracle_system_quit_quit_refused_ambiguous_row_count` is the
+    // P0 gate firing (an instant ExitProcess refused because the activated row could not be
+    // positively identified as Return to Desktop);
+    // `oracle_system_quit_row_last_discriminator` records WHICH evidence resolved the row. There is
+    // exactly ONE source -- the dialog's list cursor -- so it reads 1 for every resolution regardless
+    // of input kind (`..._last_input_kind`: 1 pad/keyboard, 2 mouse), and
+    // `oracle_system_quit_row_resolved_by_cursor_row_count` must equal
+    // `resolve_count - ambiguous_count`. `oracle_system_quit_row_last_ambiguity` says why a row could
+    // not be named; `..._refused_disagreement_count` counts the subset where the captured row table
+    // and the label read live at the cursor CONTRADICTED each other, so the row ran nothing.
+    // `oracle_system_quit_grid_*` is the navigability evidence read live off the dialog's
+    // `CS::GridControl`: all four rows are reachable only when `navigable_cells >= 4` (the bound of
+    // the native mouse hit-test loop), `item_count == 4` (the cursor bound) and `rows >= 2` (what
+    // enables the up/down axis at all).
+    body.push_str(&format!(
+        "  \"oracle_system_quit_row_table_dialog\": {},\n  \"oracle_system_quit_row_index_save_game\": {},\n  \"oracle_system_quit_row_index_return_desktop\": {},\n  \"oracle_system_quit_row_index_load_profile\": {},\n  \"oracle_system_quit_row_index_load_save_profiles\": {},\n  \"oracle_system_quit_row_resolve_count\": {},\n  \"oracle_system_quit_row_resolved_by_cursor_row_count\": {},\n  \"oracle_system_quit_row_ambiguous_count\": {},\n  \"oracle_system_quit_row_refused_disagreement_count\": {},\n  \"oracle_system_quit_grid_cols\": {},\n  \"oracle_system_quit_grid_rows\": {},\n  \"oracle_system_quit_grid_navigable_cells\": {},\n  \"oracle_system_quit_grid_item_count\": {},\n  \"oracle_system_quit_row_last_discriminator\": {},\n  \"oracle_system_quit_row_last_resolved_row\": {},\n  \"oracle_system_quit_row_last_ambiguity\": {},\n  \"oracle_system_quit_row_last_cursor\": {},\n  \"oracle_system_quit_row_last_cursor_label_kind\": {},\n  \"oracle_system_quit_row_last_input_kind\": {},\n  \"oracle_system_quit_quit_refused_ambiguous_row_count\": {},\n  \"oracle_system_quit_quit_authorized_count\": {},\n  \"oracle_system_quit_action_alias_false_quit_claims\": {},\n",
+        format_scan_ptr(SYSTEM_QUIT_ROW_TABLE_DIALOG.load(Ordering::SeqCst)),
+        SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_PLUS1
+            .load(Ordering::SeqCst)
+            .wrapping_sub(1) as isize,
+        SYSTEM_QUIT_ROW_INDEX_RETURN_DESKTOP_PLUS1
+            .load(Ordering::SeqCst)
+            .wrapping_sub(1) as isize,
+        SYSTEM_QUIT_ROW_INDEX_LOAD_PROFILE_PLUS1
+            .load(Ordering::SeqCst)
+            .wrapping_sub(1) as isize,
+        SYSTEM_QUIT_ROW_INDEX_LOAD_SAVE_PROFILES_PLUS1
+            .load(Ordering::SeqCst)
+            .wrapping_sub(1) as isize,
+        SYSTEM_QUIT_ROW_RESOLVE_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_ROW_RESOLVED_BY_CURSOR_ROW_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_ROW_AMBIGUOUS_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_ROW_REFUSED_DISAGREEMENT_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_GRID_COLS.load(Ordering::SeqCst),
+        SYSTEM_QUIT_GRID_ROWS.load(Ordering::SeqCst),
+        SYSTEM_QUIT_GRID_NAVIGABLE_CELLS.load(Ordering::SeqCst),
+        SYSTEM_QUIT_GRID_ITEM_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_ROW_LAST_DISCRIMINATOR.load(Ordering::SeqCst),
+        SYSTEM_QUIT_ROW_LAST_RESOLVED_ROW.load(Ordering::SeqCst),
+        SYSTEM_QUIT_ROW_LAST_AMBIGUITY.load(Ordering::SeqCst),
+        SYSTEM_QUIT_ROW_LAST_CURSOR_PLUS1
+            .load(Ordering::SeqCst)
+            .wrapping_sub(1) as isize,
+        SYSTEM_QUIT_ROW_LAST_CURSOR_LABEL_KIND.load(Ordering::SeqCst),
+        SYSTEM_QUIT_ROW_LAST_INPUT_KIND.load(Ordering::SeqCst),
+        SYSTEM_QUIT_QUIT_REFUSED_AMBIGUOUS_ROW_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_QUIT_AUTHORIZED_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_ACTION_ALIAS_FALSE_QUIT_CLAIMS.load(Ordering::SeqCst)
+    ));
     body.push_str(&format!(
         "  \"oracle_save_picker_mode_active\": {},\n  \"oracle_save_picker_open_count\": {},\n  \"oracle_save_picker_repopulate_count\": {},\n  \"oracle_save_picker_pick_count\": {},\n  \"oracle_save_picker_pick_reject_count\": {},\n  \"oracle_save_picker_resubmit_count\": {},\n  \"oracle_save_picker_cancel_count\": {},\n  \"oracle_save_picker_staged_row_count\": {},\n",
         SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst),
