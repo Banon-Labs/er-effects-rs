@@ -542,8 +542,72 @@ fn autoload_debug_log_enabled() -> bool {
     })
 }
 
+/// Nested `append_autoload_debug` calls the re-entrancy guard refused. Non-zero proves the
+/// recursion described on [`AutoloadDebugReentryGuard`] is live in this process -- the logger's own
+/// file open came back through the logger -- and that the guard, not luck, is what stopped it.
+static AUTOLOAD_DEBUG_REENTRANT_DROPS: AtomicUsize = AtomicUsize::new(0);
+
+std::thread_local! {
+    /// True while THIS thread is somewhere inside `append_autoload_debug`.
+    static AUTOLOAD_DEBUG_IN_PROGRESS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Marks a thread as being inside `append_autoload_debug` for as long as the guard is alive.
+///
+/// # Why a logger of all things needs a re-entrancy guard
+///
+/// Both file operations `append_autoload_debug` performs reach the OS through
+/// `kernel32!CreateFileW`: the marker gate's `.exists()` probe (`std::fs::metadata` opens the path
+/// with `FILE_FLAG_BACKUP_SEMANTICS` before it will answer), and the log handle's own
+/// `OpenOptions::open`. `install_save_file_core_hooks` detours that export in EVERY save mode, and
+/// the detour LOGS -- its very first call, and every save-like path -- so the logger's own open
+/// arrives straight back in the logger ON THE SAME THREAD.
+///
+/// Neither primitive the outer call holds at that moment is re-entrant:
+///
+///   * the marker gate is a `OnceLock` whose initializer is what performs the `.exists()` probe, and
+///     re-entering `get_or_init` from inside its own initializer never returns;
+///   * the log handle lives behind a `std::sync::Mutex`, and a second `lock()` on one thread never
+///     returns either.
+///
+/// The thread that hits this is the one installing the hook, during DLL attach, and every other
+/// thread that logs afterwards queues behind it -- so the symptom is the game hanging at boot having
+/// written nothing. Nested lines are DROPPED and counted: a line describing the opening of the log
+/// is worth nothing, and the outer line it interrupted is still written normally.
+struct AutoloadDebugReentryGuard;
+
+impl AutoloadDebugReentryGuard {
+    /// `None` when this thread is already inside `append_autoload_debug`, or when the thread-local
+    /// flag cannot be reached at all (thread teardown). An unanswerable "am I nested?" counts as
+    /// nested: dropping a diagnostic line costs nothing, and guessing wrong hangs the game.
+    fn enter() -> Option<Self> {
+        let entered = AUTOLOAD_DEBUG_IN_PROGRESS
+            .try_with(|in_progress| !in_progress.replace(true))
+            .unwrap_or(false);
+        if entered {
+            Some(Self)
+        } else {
+            AUTOLOAD_DEBUG_REENTRANT_DROPS.fetch_add(1, Ordering::SeqCst);
+            None
+        }
+    }
+}
+
+impl Drop for AutoloadDebugReentryGuard {
+    fn drop(&mut self) {
+        let _ = AUTOLOAD_DEBUG_IN_PROGRESS.try_with(|in_progress| in_progress.set(false));
+    }
+}
+
 // ENV-GATE RATIONALE: ER_EFFECTS_AUTOLOAD_DEBUG_PATH is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
+    // RE-ENTRANCY, checked BEFORE the marker gate: the gate's own `.exists()` probe is a
+    // `CreateFileW` and therefore re-enters the save-destination detour, so the recursion is
+    // reachable before the gate has even decided whether logging is on. See
+    // `AutoloadDebugReentryGuard`.
+    let Some(_not_nested) = AutoloadDebugReentryGuard::enter() else {
+        return;
+    };
     // PHASE B DECOUPLED DIAGNOSTICS: this per-frame firehose is DEFAULT-OFF. Return before ANY file I/O
     // unless the `er-effects-autoload-debug.txt` marker is present, so the armed-vs-disarmed A/B baseline
     // has a ZERO-LOG cost in both arms (no per-frame log-file-I/O confound). Cached; no game behavior.
@@ -557,26 +621,110 @@ pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
     // framerate exactly when the user sees it. Keep ONE persistent handle: open+truncate+header once, then
     // only writeln thereafter -- no per-call open/close. Same output, a fraction of the syscalls.
     static LOG: std::sync::Mutex<Option<std::fs::File>> = std::sync::Mutex::new(None);
+    // Serializes the ONE truncating open so `LOG` is never held across file I/O and two threads can
+    // never both truncate the file. Taken only after `LOG` was found empty.
+    static LOG_OPEN: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let prefix = log_line_prefix();
-    let mut guard = match LOG.lock() {
-        Ok(g) => g,
-        Err(p) => p.into_inner(),
-    };
-    if guard.is_none() {
-        // TRUNCATE ONCE per process so each run starts a CLEAN log (matches the trace DLL's reset-on-attach).
-        let path = autoload_debug_log_path();
-        if let Ok(mut file) = fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&path)
-        {
-            write_log_header(&mut file, &path);
-            *guard = Some(file);
+    let write_through_open_handle = || -> bool {
+        let mut guard = LOG.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        match guard.as_mut() {
+            Some(file) => {
+                let _ = writeln!(file, "{prefix} {args}");
+                true
+            }
+            None => false,
         }
+    };
+    if write_through_open_handle() {
+        return;
     }
-    if let Some(file) = guard.as_mut() {
-        let _ = writeln!(file, "{prefix} {args}");
+    // NO FILE I/O UNDER `LOG` -- the same discipline `save_dest_redirect_for_open` documents for the
+    // redirect lock, for the same reason. The open below re-enters the `CreateFileW` detour, which
+    // takes locks of its own (the redirect lock, during an armed commit), so holding `LOG` across it
+    // invites the reverse lock order from any thread that logs while holding one of them. The guard
+    // above stops the same-thread recursion; keeping the open outside `LOG` stops that inversion.
+    let _opening = LOG_OPEN
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Another thread may have opened the log while this one waited for the gate.
+    if write_through_open_handle() {
+        return;
+    }
+    // TRUNCATE ONCE per process so each run starts a CLEAN log (matches the trace DLL's reset-on-attach).
+    let path = autoload_debug_log_path();
+    let Ok(mut file) = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&path)
+    else {
+        // Deliberately not latched: a directory that is not writable yet may be later, and the next
+        // line retries. Nothing is published, so no reader sees a half-opened log.
+        return;
+    };
+    write_log_header(&mut file, &path);
+    let _ = writeln!(file, "{prefix} {args}");
+    *LOG.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(file);
+}
+
+#[cfg(test)]
+mod autoload_debug_log_tests {
+    use super::*;
+
+    /// The drop counter and the thread-local flag are process-global, so these tests take turns.
+    static AUTOLOAD_DEBUG_GUARD_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn serialize() -> std::sync::MutexGuard<'static, ()> {
+        AUTOLOAD_DEBUG_GUARD_TESTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn nested_drops() -> usize {
+        AUTOLOAD_DEBUG_REENTRANT_DROPS.load(Ordering::SeqCst)
+    }
+
+    /// One entry per thread at a time, and the flag must clear when the guard dies -- a guard that
+    /// leaked its flag would silence every later line on that thread instead of deadlocking, which
+    /// is a quieter version of the same bug.
+    #[test]
+    fn a_second_entry_on_the_same_thread_is_refused_until_the_first_is_dropped() {
+        let _serialized = serialize();
+        let before = nested_drops();
+        let outer = AutoloadDebugReentryGuard::enter().expect("a fresh thread is not nested");
+        assert!(AutoloadDebugReentryGuard::enter().is_none());
+        assert_eq!(nested_drops(), before + 1);
+        drop(outer);
+        assert!(AutoloadDebugReentryGuard::enter().is_some());
+        assert_eq!(nested_drops(), before + 1);
+    }
+
+    /// The guard must be per THREAD: the game logs from the task thread, the save worker and the
+    /// hook installer at once, and a process-wide flag would drop most of the log.
+    #[test]
+    fn the_guard_is_per_thread_not_per_process() {
+        let _serialized = serialize();
+        let outer = AutoloadDebugReentryGuard::enter().expect("a fresh thread is not nested");
+        let other_thread_entered =
+            std::thread::spawn(|| AutoloadDebugReentryGuard::enter().is_some())
+                .join()
+                .expect("thread joins");
+        assert!(other_thread_entered);
+        drop(outer);
+    }
+
+    /// The real logger's FIRST action is the guard, so a line arriving from inside itself -- which is
+    /// what the `CreateFileW` detour does when the log's own open re-enters it -- returns without
+    /// reaching the marker gate's `OnceLock` or the log `Mutex`. Before this, that call re-locked
+    /// both and hung the calling thread.
+    #[test]
+    fn append_autoload_debug_drops_a_line_that_arrives_from_inside_itself() {
+        let _serialized = serialize();
+        let before = nested_drops();
+        let outer = AutoloadDebugReentryGuard::enter().expect("stand in for the outer log call");
+        append_autoload_debug(format_args!("nested line from inside the logger"));
+        assert_eq!(nested_drops(), before + 1);
+        drop(outer);
     }
 }
 
