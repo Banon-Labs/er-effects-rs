@@ -305,43 +305,7 @@ pub(crate) unsafe fn system_quit_open_save_dest_picker_in_game(system_dialog: us
         ));
         return false;
     }
-    let save_path = match system_quit_env_save_path() {
-        Ok(path) => path,
-        Err(reason) => {
-            append_autoload_debug(format_args!(
-                "save-dest-picker: refused to open -- {reason}"
-            ));
-            return false;
-        }
-    };
-    let loaded_file_name = match Path::new(&save_path)
-        .file_name()
-        .and_then(|name| name.to_str())
-    {
-        Some(name) => name.to_owned(),
-        None => {
-            append_autoload_debug(format_args!(
-                "save-dest-picker: refused to open -- loaded save '{save_path}' has no file name"
-            ));
-            return false;
-        }
-    };
-    // Start where the loaded save lives; fall back to the default save root only if that directory
-    // is gone.
-    let start_dir = system_quit_env_save_dir()
-        .ok()
-        .map(|dir| PathBuf::from(save_picker_windows_path_string(&dir)))
-        .filter(|dir| dir.is_dir())
-        .or_else(|| {
-            default_save_root()
-                .and_then(|root| root.to_str().map(save_picker_windows_path_string))
-                .map(PathBuf::from)
-                .filter(|root| root.is_dir())
-        });
-    let Some(start_dir) = start_dir else {
-        append_autoload_debug(format_args!(
-            "save-dest-picker: refused to open -- neither the loaded save's directory nor the default save root is readable"
-        ));
+    let Some((start_dir, loaded_file_name)) = save_dest_start_dir() else {
         return false;
     };
     unsafe { system_quit_save_swap_restore_profile_summary("save-dest-picker-open") };
@@ -391,27 +355,29 @@ pub(crate) unsafe fn system_quit_open_save_dest_picker_in_game(system_dialog: us
 /// Handle a destination-browser activation (menu thread, from `save_picker_handle_activation`).
 /// `target` already exists -> the Box3 overwrite confirm; otherwise the commit is staged and the
 /// picker closes so the save-flow tick can close the menus and fire.
-unsafe fn save_dest_handle_picked_target(dialog: usize, target: PathBuf, from_new_row: bool) {
-    let exists = target.is_file();
-    if exists {
-        SAVE_DEST_TARGET_EXISTING_COUNT.fetch_add(1, Ordering::SeqCst);
-        save_dest_set_target(target, if from_new_row { "new-row-existing" } else { "picked-file" });
-        // Box3 is hosted by the PICKER dialog (the game raises its own confirms over 05_010 the
-        // same way), so it does not contend with the System dialog queue that owns the picker
-        // window job. Submitted inline here (menu thread); a not-ready queue leaves the pending
-        // latch for the next menu pump.
-        save_flow_box_set_host_dialog(dialog);
-        SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_OVERWRITE_FILE, Ordering::SeqCst);
-        SAVE_FLOW_STAGE_TICKS.store(0, Ordering::SeqCst);
-        SAVE_FLOW_STAGE.store(SAVE_FLOW_STAGE_BOX3_WAIT, Ordering::SeqCst);
-        if unsafe { save_flow_submit_box(SAVE_FLOW_BOX_OVERWRITE_FILE) } {
-            SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_NONE, Ordering::SeqCst);
+unsafe fn save_dest_handle_picked_target(dialog: usize, target: PathBuf, source: &'static str) {
+    match save_dest_route_picked_target(&target) {
+        DestRoute::ConfirmOverwrite => {
+            SAVE_DEST_TARGET_EXISTING_COUNT.fetch_add(1, Ordering::SeqCst);
+            save_dest_set_target(target, source);
+            // Box3 is hosted by the PICKER dialog (the game raises its own confirms over 05_010 the
+            // same way), so it does not contend with the System dialog queue that owns the picker
+            // window job. Submitted inline here (menu thread); a not-ready queue leaves the pending
+            // latch for the next menu pump.
+            save_flow_box_set_host_dialog(dialog);
+            SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_OVERWRITE_FILE, Ordering::SeqCst);
+            SAVE_FLOW_STAGE_TICKS.store(0, Ordering::SeqCst);
+            SAVE_FLOW_STAGE.store(SAVE_FLOW_STAGE_BOX3_WAIT, Ordering::SeqCst);
+            if unsafe { save_flow_submit_box(SAVE_FLOW_BOX_OVERWRITE_FILE) } {
+                SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_NONE, Ordering::SeqCst);
+            }
         }
-        return;
+        DestRoute::CommitDirect => {
+            SAVE_DEST_TARGET_NEW_COUNT.fetch_add(1, Ordering::SeqCst);
+            save_dest_set_target(target, source);
+            save_dest_stage_commit_and_close_picker(dialog, "new-file");
+        }
     }
-    SAVE_DEST_TARGET_NEW_COUNT.fetch_add(1, Ordering::SeqCst);
-    save_dest_set_target(target, "new-row");
-    save_dest_stage_commit_and_close_picker(dialog, "new-file");
 }
 
 /// Stage the destination commit and close the browser. The save-flow tick takes over once the
@@ -481,14 +447,14 @@ pub(crate) unsafe fn save_picker_handle_activation(dialog: usize, cursor: i32) -
         {
             // DESTINATION browser: an existing container was picked as the save target, so the
             // final overwrite confirm decides. No ingest/preview -- nothing is being loaded.
-            unsafe { save_dest_handle_picked_target(dialog, path, false) };
+            unsafe { save_dest_handle_picked_target(dialog, path, "picked-file") };
             0
         }
         PickerActivation::PickedNewFile(path) => {
             // `[ new ]`: save into the browsed folder under the loaded save's own filename. If
             // that file already exists there, fall into the Box3 overwrite confirm rather than
             // silently clobbering it.
-            unsafe { save_dest_handle_picked_target(dialog, path, true) };
+            unsafe { save_dest_handle_picked_target(dialog, path, "new-row") };
             0
         }
         PickerActivation::PickedFile(path) => {

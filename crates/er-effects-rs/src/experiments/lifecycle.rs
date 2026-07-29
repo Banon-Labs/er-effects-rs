@@ -377,12 +377,18 @@ unsafe fn save_flow_box_wait_tick(box_id: usize, ticks: usize) {
             );
         }
         (SAVE_FLOW_BOX_OVERWRITE_FILE, SaveFlowDecision::No) => {
-            // Declining the overwrite drops only the target: the browser is untouched, so the
-            // user can pick a different destination.
+            // Declining the overwrite drops only the target. In-game the browser window was never
+            // closed, so the user is simply back in it and nothing else is needed. In OS mode the
+            // dialog is gone by the time Box3 is answered, so "back to the picker" means RE-OPEN
+            // it -- which is exactly what Box2-No already does to open it in the first place, and
+            // the menu pump's existing consumer now routes through `open_picker_for_intent`.
             save_dest_clear_target("box3 declined");
+            if os_native_picker_active() {
+                SAVE_DEST_OPEN_PICKER_PENDING.store(1, Ordering::SeqCst);
+            }
             save_flow_enter_stage(
                 SAVE_FLOW_STAGE_DEST_BROWSE,
-                "box3 No -> back to the destination browser",
+                "box3 No -> back to the destination picker",
             );
         }
         (_, SaveFlowDecision::No) => {

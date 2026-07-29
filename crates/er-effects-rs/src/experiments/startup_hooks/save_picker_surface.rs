@@ -10,6 +10,10 @@
 // The mode is read ONCE PER OPEN, here. It cannot change mid-session anyway (`RUNTIME_CONFIG` is
 // a parse-once `OnceLock`), but reading it in one place means a future caching change has one
 // place to touch.
+//
+// The rest of the file is the decisions BOTH surfaces must share, for the same reason: where a
+// destination browser starts (`save_dest_start_dir`) and what a chosen destination becomes
+// (`save_dest_route_picked_target`). A copy of either in the OS arm is how the modes would drift.
 
 /// Which System>Quit surface is asking for a picker, and the native handle that surface owns.
 ///
@@ -43,11 +47,21 @@ fn picker_surface_for(os_enabled: bool) -> PickerSurface {
     }
 }
 
+/// True when this session's picker surface is the OS dialog.
+///
+/// Reads the latch `init_runtime_config` set from `os_native_save_picker_enabled()`, so the config
+/// is walked once at attach and every runtime decision is a single load. It also inherits the same
+/// fail-safe direction: a session where the config never loaded leaves the latch at 0, the in-game
+/// browser.
+pub(crate) fn os_native_picker_active() -> bool {
+    SAVE_PICKER_SURFACE.load(Ordering::SeqCst) != 0
+}
+
 /// Open the picker this request's surface calls for. Returns whatever the chosen surface returns:
 /// true when a picker is up (in-game) or a path was accepted (OS), false when nothing was staged
 /// and the caller must leave the System menu alone.
 pub(crate) unsafe fn open_picker_for_intent(request: PickerOpenRequest) -> bool {
-    let surface = picker_surface_for(crate::config::os_native_save_picker_enabled());
+    let surface = picker_surface_for(os_native_picker_active());
     match (surface, request) {
         (PickerSurface::InGame, PickerOpenRequest::LoadSource { action_obj }) => unsafe {
             system_quit_open_save_picker_menu_in_game(action_obj)
@@ -58,12 +72,84 @@ pub(crate) unsafe fn open_picker_for_intent(request: PickerOpenRequest) -> bool 
         (PickerSurface::OsNative, PickerOpenRequest::LoadSource { action_obj }) => unsafe {
             os_open_save_picker_load(action_obj)
         },
-        (PickerSurface::OsNative, request @ PickerOpenRequest::SaveDestination { .. }) => {
+        (PickerSurface::OsNative, PickerOpenRequest::SaveDestination { system_dialog }) => unsafe {
+            os_open_save_dest_picker(system_dialog)
+        },
+    }
+}
+
+/// Where a save-DESTINATION browser starts, and the leaf a new file there is given. `None` (with a
+/// logged reason) when the loaded save cannot be resolved or no readable folder exists.
+///
+/// BOTH surfaces call this, so they cannot drift. Contract 8 read per surface: a destination starts
+/// at the LOADED SAVE'S OWN folder, deliberately NOT at the remembered `preferred_save_picker_dir`
+/// -- "save next to the save you loaded" is the expected default and the remembered dir belongs to
+/// the LOAD flow, which is where `save_picker_start_dir` consults it. If that reading is ever
+/// changed, it changes here, for both modes at once.
+fn save_dest_start_dir() -> Option<(PathBuf, String)> {
+    let save_path = match system_quit_env_save_path() {
+        Ok(path) => path,
+        Err(reason) => {
             append_autoload_debug(format_args!(
-                "save-picker-os: refusing {request:?} -- the Save-As arm is not built on this commit; nothing was staged"
+                "save-dest-picker: refused to open -- {reason}"
             ));
-            false
+            return None;
         }
+    };
+    let loaded_file_name = match Path::new(&save_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+    {
+        Some(name) => name.to_owned(),
+        None => {
+            append_autoload_debug(format_args!(
+                "save-dest-picker: refused to open -- loaded save '{save_path}' has no file name"
+            ));
+            return None;
+        }
+    };
+    // Start where the loaded save lives; fall back to the default save root only if that directory
+    // is gone.
+    let start_dir = system_quit_env_save_dir()
+        .ok()
+        .map(|dir| PathBuf::from(save_picker_windows_path_string(&dir)))
+        .filter(|dir| dir.is_dir())
+        .or_else(|| {
+            default_save_root()
+                .and_then(|root| root.to_str().map(save_picker_windows_path_string))
+                .map(PathBuf::from)
+                .filter(|root| root.is_dir())
+        });
+    let Some(start_dir) = start_dir else {
+        append_autoload_debug(format_args!(
+            "save-dest-picker: refused to open -- neither the loaded save's directory nor the default save root is readable"
+        ));
+        return None;
+    };
+    Some((start_dir, loaded_file_name))
+}
+
+/// What a chosen destination becomes. Mode-free on purpose: a `[ new ]` row, a picked existing file
+/// in the in-game browser and an OS Save-As all route through the same decision, so the overwrite
+/// gate cannot differ between surfaces.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DestRoute {
+    /// The file is already there: Box3 decides, and Box3 is the SINGLE overwrite gate (which is why
+    /// the OS Save-As does not set `OFN_OVERWRITEPROMPT`).
+    ConfirmOverwrite,
+    /// A name nobody is using: stage the commit.
+    CommitDirect,
+}
+
+/// Route a chosen destination. Known and unfixed (bd `er-effects-rs-8tq4` item 16): this existence
+/// check runs on the menu thread while the seed runs frames later on the game thread, and Save-As
+/// WIDENS that window because the user may sit in the dialog for a minute. The fix belongs to that
+/// issue -- a re-check at arm time in `save_dest_arm_redirect`.
+pub(crate) fn save_dest_route_picked_target(target: &Path) -> DestRoute {
+    if target.is_file() {
+        DestRoute::ConfirmOverwrite
+    } else {
+        DestRoute::CommitDirect
     }
 }
 
@@ -97,9 +183,40 @@ mod save_picker_surface_tests {
     }
 
     /// THE DEFAULT MUST NOT MOVE: absent/failed config resolves to `false` (pinned in
-    /// `config::tests`), and `false` is the in-game browser.
+    /// `config::tests`), and `false` is the in-game browser. `os_native_picker_active` reads the
+    /// latch, which is 0 until `init_runtime_config` says otherwise -- so a process where the
+    /// config never loaded also lands here.
     #[test]
     fn the_default_surface_is_the_in_game_browser() {
         assert_eq!(picker_surface_for(false), PickerSurface::InGame);
+        assert!(
+            !os_native_picker_active(),
+            "an uninitialized surface latch must read as the in-game browser"
+        );
+    }
+
+    /// The overwrite gate is a property of the TARGET, not of the surface that chose it. `[ new ]`,
+    /// a picked existing file and an OS Save-As all ask this one question, which is what keeps Box3
+    /// the single overwrite gate in both modes.
+    #[test]
+    fn an_existing_target_confirms_and_a_free_name_commits() {
+        let dir = std::env::temp_dir().join("er-save-dest-route");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir must be creatable");
+        let existing = dir.join("ER0000.sl2");
+        std::fs::write(&existing, b"already here").expect("temp file must be writable");
+        assert_eq!(
+            save_dest_route_picked_target(&existing),
+            DestRoute::ConfirmOverwrite
+        );
+        assert_eq!(
+            save_dest_route_picked_target(&dir.join("brand-new.sl2")),
+            DestRoute::CommitDirect
+        );
+        assert_eq!(
+            save_dest_route_picked_target(&dir),
+            DestRoute::CommitDirect,
+            "a directory is not a file, so it never routes to the overwrite confirm"
+        );
     }
 }

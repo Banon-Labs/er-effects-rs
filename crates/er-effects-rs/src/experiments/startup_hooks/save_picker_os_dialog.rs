@@ -302,15 +302,24 @@ fn os_dialog_run(
 /// the in-game LISTING applies -- rejecting is the OS-mode analogue of "the file simply is not
 /// listed", which is why there is no error UI. The reopened dialog IS the feedback.
 ///
-/// Returns the accepted Windows-form path, or `None` for cancel / comdlg32 failure / reopen
-/// exhaustion. The caller stages nothing in those cases.
-fn os_pick_validated(
+/// `stage` runs on the accepted path WHILE THE DIALOG CLAIM IS STILL HELD, and that ordering is
+/// load-bearing rather than incidental. The save-flow tick runs concurrently and reads
+/// `SAVE_PICKER_OS_DIALOG_OPEN` as its "a browser is live" term; if the claim dropped first, a tick
+/// landing in the gap would see no dialog, no browser and no latch and end the flow as abandoned
+/// before the caller could stage anything. Taking the staging as a closure makes that window
+/// impossible to open by accident.
+///
+/// Returns `Some(stage(path))`, or `None` for cancel / comdlg32 failure / reopen exhaustion -- in
+/// which case `stage` never ran and nothing was staged, which is exactly what stage 3 already reads
+/// as "the user abandoned the save".
+fn os_pick_validated<T>(
     save_as: bool,
     mut start_dir: String,
     leaf: &str,
     extensions: &[&str],
     intent: &crate::experiments::save_picker::PickerIntent,
-) -> Option<String> {
+    stage: impl FnOnce(&str) -> T,
+) -> Option<T> {
     // H4: refuse while the core CreateFileW detour is still settling. Installing a MinHook suspends
     // every other thread and allocates while they are frozen, and a thread parked in comdlg32
     // holding a heap or shell critical section is the one deadlock candidate. Every installer in
@@ -341,7 +350,9 @@ fn os_pick_validated(
                 extensions,
             );
         let Err(reason) = verdict else {
-            return Some(picked);
+            // `_claim` outlives this expression and drops on return, so every latch `stage` sets is
+            // visible to the tick before the dialog term clears.
+            return Some(stage(&picked));
         };
         SAVE_PICKER_PICK_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
         SAVE_PICKER_OS_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
@@ -414,41 +425,132 @@ pub(crate) unsafe fn os_open_save_picker_load(action_obj: usize) -> bool {
         Ordering::SeqCst,
     );
     SAVE_PICKER_OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
-    let picked = os_pick_validated(
+    let staged = os_pick_validated(
         false,
         start_dir,
         "",
         extensions,
         &crate::experiments::save_picker::PickerIntent::LoadSource,
+        |picked| {
+            // The SECOND gate, unchanged: BND4 parse, SteamID normalization, ProfileSummary
+            // preview, candidate staging, picked-dir memory. The predicate above only added the
+            // listing gate the dialog bypassed; nothing here is weakened.
+            if !unsafe { system_quit_ingest_picked_save(picked) } {
+                SAVE_PICKER_PICK_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "save-picker-os: ingest refused '{}' after the listing predicate accepted it; nothing staged",
+                    system_quit_windows_path_for_log(picked)
+                ));
+                return false;
+            }
+            SAVE_PICKER_PICK_COUNT.fetch_add(1, Ordering::SeqCst);
+            // Hand off to the SAME menu-pump resubmit the in-game pick uses, which reopens `05_010`
+            // as the normal slot view. Contract 5: the slot view is always ours.
+            SAVE_PICKER_OPEN_SLOTS_PENDING.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "save-picker-os: accepted '{}'; slot view staged for the menu pump (dialog=0x{:x})",
+                system_quit_windows_path_for_log(picked),
+                SAVE_PICKER_SYSTEM_DIALOG.load(Ordering::SeqCst)
+            ));
+            true
+        },
     );
-    let Some(picked) = picked else {
+    if staged != Some(true) {
         // Nothing staged, the System menu untouched. Restore the preview we armed above so the
         // user's real rows are what the System UI shows.
         unsafe { system_quit_save_swap_restore_profile_summary("save-picker-os-no-pick") };
-        SAVE_PICKER_CANCEL_COUNT.fetch_add(1, Ordering::SeqCst);
+        if staged.is_none() {
+            SAVE_PICKER_CANCEL_COUNT.fetch_add(1, Ordering::SeqCst);
+        }
         return false;
-    };
-    // The SECOND gate, unchanged: BND4 parse, SteamID normalization, ProfileSummary preview,
-    // candidate staging, picked-dir memory. The predicate above only added the listing gate the
-    // dialog bypassed; nothing here is weakened.
-    if !unsafe { system_quit_ingest_picked_save(&picked) } {
-        unsafe { system_quit_save_swap_restore_profile_summary("save-picker-os-ingest-failed") };
-        SAVE_PICKER_PICK_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
+    }
+    true
+}
+
+/// OS-mode SAVE DESTINATION: the Save-As dialog IS the destination browser.
+///
+/// Menu-pump owned, exactly like the in-game destination open: called from
+/// `system_quit_menu_window_run_post` after the save-flow tick stages
+/// `SAVE_DEST_OPEN_PICKER_PENDING`.
+///
+/// Three things this deliberately does NOT do, each of which would be a bug:
+///
+///  * it never calls `save_picker_native_close`. There is no picker window in OS mode, and handing
+///    the System dialog to that helper would dispatch the MenuWindow cancel-close vfunc on a
+///    `PropertyEditDialog` -- the exact mistake `system_quit_dialog_handlers` warns about. It stages
+///    `SAVE_DEST_COMMIT_PENDING` and stops; stage 3 then sees no picker window and proceeds.
+///  * it never writes `SAVE_FLOW_STAGE`. The in-game arm does, from the menu thread, bypassing
+///    `save_flow_enter_stage` -- a filed defect (bd `er-effects-rs-8tq4` item 15). Adding a second
+///    instance of a known defect is not "keeping the modes symmetric". It sets
+///    `SAVE_DEST_CONFIRM_PENDING` and the TICK performs the transition.
+///  * it does nothing at all on cancel. Dropping the dialog claim with no latch set is precisely
+///    what stage 3 already reads as "the user abandoned the save", so the cancel path needs no code.
+pub(crate) unsafe fn os_open_save_dest_picker(system_dialog: usize) -> bool {
+    const HEAP_LO: usize = 0x10000;
+    if system_dialog < HEAP_LO || system_dialog == TITLE_OWNER_SCAN_START_ADDRESS {
         append_autoload_debug(format_args!(
-            "save-picker-os: ingest refused '{}' after the listing predicate accepted it; nothing staged",
-            system_quit_windows_path_for_log(&picked)
+            "save-picker-os: refused save-as -- System dialog=0x{system_dialog:x} is not heap-like"
         ));
         return false;
     }
-    SAVE_PICKER_PICK_COUNT.fetch_add(1, Ordering::SeqCst);
-    // Hand off to the SAME menu-pump resubmit the in-game pick uses, which reopens `05_010` as the
-    // normal slot view. Contract 5: the slot view is always ours.
-    SAVE_PICKER_OPEN_SLOTS_PENDING.store(1, Ordering::SeqCst);
-    append_autoload_debug(format_args!(
-        "save-picker-os: accepted '{}'; slot view staged for the menu pump (dialog=0x{:x})",
-        system_quit_windows_path_for_log(&picked),
-        SAVE_PICKER_SYSTEM_DIALOG.load(Ordering::SeqCst)
-    ));
+    // The SAME start-dir/leaf resolution the in-game destination browser uses, so the two modes
+    // cannot open in different places.
+    let Some((start_dir, loaded_file_name)) = save_dest_start_dir() else {
+        return false;
+    };
+    let Some(start_dir) = start_dir.to_str().map(str::to_owned) else {
+        append_autoload_debug(format_args!(
+            "save-picker-os: refused save-as -- the loaded save's folder is not representable as text"
+        ));
+        return false;
+    };
+    let seamless = save_picker_seamless_mode_after_settle("system-quit-os-save-dest-picker-open");
+    let extensions: &[&str] = if seamless { &["co2", "sl2"] } else { &["sl2"] };
+    let intent = crate::experiments::save_picker::PickerIntent::SaveDestination {
+        loaded_file_name: loaded_file_name.clone(),
+    };
+    SAVE_DEST_PICKER_OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
+    SAVE_PICKER_OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
+    let staged = os_pick_validated(
+        true,
+        start_dir,
+        &loaded_file_name,
+        extensions,
+        &intent,
+        |picked| {
+            let target = PathBuf::from(picked);
+            // The SAME mode-free routing decision the in-game browser's activation makes, so the
+            // overwrite gate cannot differ between surfaces.
+            match save_dest_route_picked_target(&target) {
+                DestRoute::ConfirmOverwrite => {
+                    SAVE_DEST_TARGET_EXISTING_COUNT.fetch_add(1, Ordering::SeqCst);
+                    save_dest_set_target(target, "os-save-as");
+                    SAVE_DEST_CONFIRM_PENDING.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "save-picker-os: save-as chose the existing '{}'; the overwrite confirm is owed to the tick",
+                        system_quit_windows_path_for_log(picked)
+                    ));
+                }
+                DestRoute::CommitDirect => {
+                    SAVE_DEST_TARGET_NEW_COUNT.fetch_add(1, Ordering::SeqCst);
+                    save_dest_set_target(target, "os-save-as");
+                    SAVE_DEST_COMMIT_COUNT.fetch_add(1, Ordering::SeqCst);
+                    save_flow_box_clear();
+                    SAVE_DEST_COMMIT_PENDING.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "save-picker-os: save-as named the new '{}'; commit staged, no window to close",
+                        system_quit_windows_path_for_log(picked)
+                    ));
+                }
+            }
+        },
+    );
+    if staged.is_none() {
+        append_autoload_debug(format_args!(
+            "save-picker-os: save-as closed without choosing; nothing staged -- the save-flow tick will end the flow with nothing written"
+        ));
+        return false;
+    }
     true
 }
 
