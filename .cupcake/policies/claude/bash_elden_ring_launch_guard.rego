@@ -130,6 +130,84 @@ start_protected_launch_detected if {
 	not start_protected_process_detection_only
 }
 
+# The launcher in COMMAND POSITION with no path at all: `start_protected_game.exe
+# --offline`.  The path-prefixed clause above requires a `./`, `/` or `dir/`
+# prefix, and the wrapper clause requires an executor verb, so a bare invocation
+# resolved through PATH or a Wine working directory slipped between them.
+# Anchored to command position, so prose (`echo start_protected_game.exe ...`)
+# still does not match.
+start_protected_launch_detected if {
+	regex.match(`(?i)(^|[;|&()][[:space:]]*)start_protected_game\.exe([[:space:];|&()]|$)`, scrubbed_command)
+}
+
+# An executor verb in COMMAND POSITION whose operand is a QUOTED path to the
+# launcher: `steam "/mnt/c/.../start_protected_game.exe"`.
+#
+# `scrubbed_command` deliberately deletes quoted spans so that prose like
+# `echo 'do not run steam -applaunch 1245620'` is not blocked -- but that also
+# deleted the launcher path out of a real quoted invocation, which is why this
+# form went undetected.  Matching a quote-DELETED variant recovers it, and the
+# command-position anchor is what keeps the prose exemption intact: in
+# `echo "wine start_protected_game.exe"` the command is `echo`, not `wine`.
+start_protected_launch_detected if {
+	regex.match(
+		`(?i)(^|[;|&()][[:space:]]*)(steam|wine|wine64|proton|env|bash|sh|python|python3)[[:space:]][^;|&()]*start_protected_game\.exe`,
+		launch_quotes_deleted,
+	)
+	not start_protected_process_detection_only
+
+	# Deleting quotes exposes issue-tracker PROSE to a command-position match:
+	# `bd create -d "... forbidden forms (steam -applaunch / start_protected_game.exe)"`
+	# puts a literal `(` before `steam`, which reads as a subshell opener. bd only
+	# records text, so reuse the same narrow exemption the substring fallbacks use.
+	not bd_text_command
+}
+
+# Quotes removed rather than quoted SPANS removed, so a quoted operand survives
+# for the command-position checks above.  Heredoc payload is already trimmed off
+# upstream, so an interpreter heredoc that merely scans for the launcher name is
+# unaffected.
+launch_quotes_deleted := replace(replace(launch_escapes_stripped, `"`, ""), "'", "")
+
+# ---------------------------------------------------------------------------
+# Shell AFTER a heredoc terminator.
+#
+# `launch_heredoc_trimmed` keeps only `split(command, "<<")[0]`, which drops the
+# payload -- and everything past the terminator with it.  So a real launch chained
+# after a heredoc was invisible to EVERY check built on the scrub chain:
+#
+#     git commit -q -F - <<'EOF'
+#     ... message ...
+#     EOF
+#     steam "/opt/er/start_protected_game.exe"
+#
+# The payload must stay excluded (it is data), but post-terminator text is genuine
+# shell and has to be scanned.  `protected_paths.rego` draws exactly this
+# distinction with `command_operand_region`; this is the launch-guard half.
+# ---------------------------------------------------------------------------
+launch_post_heredoc_region := region if {
+	count(proc_scan_heredoc_parts) == 2
+	parts := split(proc_scan_norm_command, concat("", [" ", proc_scan_heredoc_tag]))
+	count(parts) == 2
+	region := replace(replace(parts[1], `"`, ""), "'", "")
+}
+
+# Executor verb plus the launcher, after the terminator.
+start_protected_launch_detected if {
+	regex.match(
+		`(?i)(^|[[:space:];|&()])(steam|wine|wine64|proton|env|bash|sh|python|python3)[[:space:]][^;|&()]*start_protected_game\.exe`,
+		launch_post_heredoc_region,
+	)
+}
+
+# The launcher itself, bare or path-prefixed, after the terminator.
+start_protected_launch_detected if {
+	regex.match(
+		`(?i)(^|[[:space:];|&()])(\./|/|[[:alnum:]_.-]+/)*start_protected_game\.exe([[:space:];|&()]|$)`,
+		launch_post_heredoc_region,
+	)
+}
+
 # ---------------------------------------------------------------------------
 # Seamless Co-op DLL bundling detection.
 #
@@ -370,6 +448,37 @@ git_commit_text_command if {
 	terminator_parts[1] == ` )"`
 }
 
+# Third form: `git commit -F -` reads the message from STDIN, so the message is a
+# plain heredoc with no `$(cat ...)` substitution at all.
+#
+# False positive fixed 2026-07-29: a commit DESCRIBING this guard's own launcher
+# fix was denied. Such a message necessarily names the launcher, and guard prose
+# is dense with executable marker words ("shell", "bash", "python"), so the
+# marker fallback fired on pure documentation. The `-m` and `-m "$(cat <<'TAG'`
+# forms were already exempt; this one was simply never written.
+#
+# Same fail-closed shape as the sibling clauses: exactly one heredoc, the region
+# before it must be nothing but git add/commit ending in `-F -`, the terminator
+# must be the LAST thing in the normalized command (so no trailing shell rides
+# along), no command substitution or backtick anywhere, and no dangerous unquoted
+# token. `git` only reads stdin here -- it never executes the message.
+git_commit_text_command if {
+	tool_name == "Bash"
+	not contains(command, "$(")
+	not contains(command, "`")
+	count(proc_scan_heredoc_parts) == 2
+
+	# `git -C <path>` is accepted because AGENTS.md mandates it for worktree-scoped
+	# work; requiring a bare `git add`/`git commit` would disable this exemption for
+	# the documented invocation, the same way a hard-coded home-directory literal
+	# disabled bd_text_command for the documented `$HOME/.local/bin/bd` form.
+	regex.match(`^(git( -C [^[:space:];|&()<>]+)? add [^;|&()<>]*&& )?git( -C [^[:space:];|&()<>]+)? commit [^;|&()<>]*-F - $`, proc_scan_heredoc_parts[0])
+	terminator_parts := split(proc_scan_norm_command, concat("", [" ", proc_scan_heredoc_tag]))
+	count(terminator_parts) == 2
+	terminator_parts[1] == ""
+	not git_commit_smuggled_word
+}
+
 # Unquoted command words that could copy/stage/launch if a second command is
 # smuggled into the git-only shape (e.g. a newline-chained payload after the
 # engine collapses whitespace). Scanned as whole tokens of the quote-scrubbed
@@ -444,6 +553,10 @@ start_protected_process_detection_only if {
 
 start_protected_process_detection_only if {
 	pgrep_subprocess_detection_command
+}
+
+start_protected_process_detection_only if {
+	launcher_named_only_as_nested_string_literal
 }
 
 proc_scan_detection_or_teardown_command if {
@@ -543,19 +656,121 @@ detection_unquoted_command := lower(concat(" ", [detection_single_parts[idx] |
 	idx % 2 == 0
 ]))
 
-# Process-execution mechanisms scanned against the RAW lowercased command, so
-# quoting cannot hide them. Without one of these, a pure-python /proc reader
-# has no way to launch the named executable; with one, the exemption stays
-# off and the raw marker fallback denies as before.
+# Process-execution mechanisms. Without one of these, a pure-python /proc
+# reader has no way to launch the named executable; with one, the exemption
+# stays off and the raw marker fallback denies as before.
+proc_scan_exec_markers := {
+	"subprocess", "os.system", "system(", "popen", "spawn",
+	"exec(", "execv", "execl", "eval(", "__import__", "importlib",
+	"ctypes", "pexpect", "shell=", "startfile", "runpy",
+	"multiprocessing", "sh -c", "wine", "proton",
+	"steam -applaunch", "steam://", "xdg-open",
+}
+
+# Scanned against the RAW lowercased command, so quoting cannot hide them.
 proc_scan_exec_marker if {
-	some marker in {
-		"subprocess", "os.system", "system(", "popen", "spawn",
-		"exec(", "execv", "execl", "eval(", "__import__", "importlib",
-		"ctypes", "pexpect", "shell=", "startfile", "runpy",
-		"multiprocessing", "sh -c", "wine", "proton",
-		"steam -applaunch", "steam://", "xdg-open",
-	}
+	some marker in proc_scan_exec_markers
 	contains(lower(proc_scan_norm_command), marker)
+}
+
+# ---------------------------------------------------------------------------
+# Structural "named only as data" exemption for read-only process detection.
+#
+# False positive fixed 2026-07-28. The denied command was the sanctioned Steam
+# preflight followed by the sanctioned /proc process check:
+#
+#   cd <repo>; bash -c 'source scripts/steam-running.sh && if steam_running; ...'
+#   python3 -c "
+#   import os,glob
+#   ...
+#   if comm in ('eldenring.exe','me3','start_protected_game.exe'): hits.append(comm)
+#   print('game running:', hits if hits else 'none')
+#   "
+#
+# Nothing is launched: the launcher name is a python string literal in a
+# membership test, and AGENTS.md explicitly allows "process detection of stale
+# start_protected_game.exe". It was denied because the exemptions above
+# whitelist whole-command SHAPES -- `[cd X &&] python3 -c '...'` plus three
+# fixed heredoc prefixes -- so ANY additional statement, even a read-only one,
+# drops the payload into the raw substring fallback, which denies on the bare
+# name plus a generic marker word ("python", "bash", ...). That made the
+# sanctioned detection idiom unwritable in a preflight.
+#
+# This arm asks a structural question instead of matching whole-command shapes:
+# WHERE does the name occur? A launch needs the name to reach an exec as a
+# SHELL WORD (`./start_protected_game.exe`, `wine /opt/er/...`, `setsid
+# 'start_protected_game.exe'` -- shell quoting does not make a word data) or as
+# an argv element of an exec call inside a program. So the exemption requires
+# every occurrence to be a NESTED string literal: quote-wrapped at one level
+# AND inside a shell-quoted region at another (`'name'` inside "..." or "name"
+# inside '...'), which is only reachable as an inline interpreter program's own
+# literal, never as a shell word. Splitting the command on a quote character
+# puts quoted content at ODD indices, so the nested forms can be counted
+# exactly and compared against the total occurrence count: if even one
+# occurrence sits anywhere else, the counts differ and the fallback denies.
+#
+# Fail-closed companions, each closing a specific escape:
+#   * no `$(` / backtick anywhere -- a command substitution INSIDE the quoted
+#     program is expanded by the shell before the interpreter sees it, so
+#     `python3 -c "... $( 'start_protected_game.exe' ) ..."` would otherwise
+#     execute a nested-looking literal;
+#   * the quoted text must mention `/proc` -- this exemption is for the
+#     sanctioned process-state reader, not for arbitrary payloads that happen
+#     to quote the name;
+#   * no exec mechanism inside the QUOTED text (subprocess, os.system, exec*,
+#     wine/proton/steam://, ...) -- scoped to the quoted regions so an
+#     unrelated read-only `bash -c` statement elsewhere in the preflight no
+#     longer poisons the whole payload, while any exec mechanism in the program
+#     that actually names the launcher keeps the exemption off; and
+#   * the name must not appear in non-command tool fields.
+# Heredoc bodies have no enclosing shell quotes, so they never satisfy this arm
+# and keep relying on the explicit heredoc shapes above.
+# ---------------------------------------------------------------------------
+
+launcher_named_only_as_nested_string_literal if {
+	tool_name == "Bash"
+	not contains(command, "$(")
+	not contains(command, "`")
+	not contains(lower(other_text), "start_protected_game.exe")
+	launcher_mention_total > 0
+	launcher_mention_nested == launcher_mention_total
+	contains(mention_quoted_text, "/proc")
+	not mention_quoted_exec_marker
+}
+
+# Whitespace-normalized, lowercased command with escaped quotes removed, so the
+# quote-index parity below cannot be desynced by `\"` / `\'`.
+mention_scan_text := lower(replace(replace(proc_scan_norm_command, `\"`, ""), `\'`, ""))
+
+# Content of shell double-quoted regions (odd indices of a split on `"`).
+# Joined with a newline so two separate regions cannot form a match across the
+# seam between them.
+mention_double_quoted_text := concat("\n", [segment |
+	some idx, segment in split(mention_scan_text, `"`)
+	idx % 2 == 1
+])
+
+# Content of shell single-quoted regions (odd indices of a split on `'`).
+mention_single_quoted_text := concat("\n", [segment |
+	some idx, segment in split(mention_scan_text, "'")
+	idx % 2 == 1
+])
+
+mention_quoted_text := concat("\n", [mention_double_quoted_text, mention_single_quoted_text])
+
+launcher_mention_total := count(split(mention_scan_text, "start_protected_game.exe")) - 1
+
+# `'name'` inside a double-quoted region, or `"name"` inside a single-quoted
+# region. A path-prefixed operand (`'/opt/er/start_protected_game.exe'`) is not
+# one of these forms and therefore never counts as a nested literal.
+launcher_mention_nested := nested_in_double + nested_in_single if {
+	nested_in_double := count(split(mention_double_quoted_text, `'start_protected_game.exe'`)) - 1
+	nested_in_single := count(split(mention_single_quoted_text, `"start_protected_game.exe"`)) - 1
+}
+
+mention_quoted_exec_marker if {
+	some marker in proc_scan_exec_markers
+	contains(mention_quoted_text, marker)
 }
 
 # Read-only process checks that shell out to exact `pgrep -x` from Python are

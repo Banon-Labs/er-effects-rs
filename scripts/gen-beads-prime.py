@@ -18,12 +18,28 @@ The base context is taken from `bd prime --export`, which emits the default
 content while *ignoring* any existing PRIME.md override (so regeneration never
 feeds on its own bounded output).
 """
+import glob
 import json
 import os
 import subprocess
 import sys
 
-BD = os.environ.get("BD_REAL_BIN", "/home/choza/.local/bin/bd")
+
+def resolve_bd():
+    """Mirror beads-prime.sh's resolve_bd: env override, current user, any user, system."""
+    candidates = [
+        os.environ.get("BD_REAL_BIN", ""),
+        os.path.join(os.path.expanduser("~"), ".local/bin/bd"),
+        *sorted(glob.glob("/home/*/.local/bin/bd")),
+        "/usr/local/bin/bd",
+    ]
+    for c in candidates:
+        if c and os.access(c, os.X_OK):
+            return c
+    sys.exit("gen-beads-prime: no bd binary found (set BD_REAL_BIN to override)")
+
+
+BD = resolve_bd()
 MEM_CHARS = int(os.environ.get("BEADS_PRIME_MEM_CHARS", "0") or "0")
 MEMORY_MARKERS = ("## Persistent Memories", "## Memories")
 
