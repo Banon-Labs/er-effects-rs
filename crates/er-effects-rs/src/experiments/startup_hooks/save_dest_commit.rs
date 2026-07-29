@@ -396,6 +396,9 @@ pub(crate) fn save_dest_arm_live_overwrite(live_path: &Path, reason: &'static st
     let before = save_dest_file_stamp(live_path);
     let bak_before = save_dest_file_stamp(&save_dest_bak_path(live_path));
     SAVE_DEST_LIVE_OVERWRITE_COUNT.fetch_add(1, Ordering::SeqCst);
+    // THIS commit's verdict starts blank. Without it the previous commit's `target_written_ok` is
+    // still 1 while this one is scored, so a failure exports as the success that came before it.
+    er_telemetry::counters::save_dest_reset_commit_verdicts();
     save_dest_reset_defer_report();
     append_autoload_debug(format_args!(
         "save-dest: this commit's destination IS THE LOADED SAVE '{}' (reason={reason} len={}) -- the native writer will REWRITE it and copy it over its .bak; this is the sanctioned overwrite the user confirmed, and it is the ONLY way this flow writes the loaded save",
@@ -485,7 +488,10 @@ pub(crate) fn save_dest_arm_redirect(live_path: &Path, target_path: &Path) -> bo
         return false;
     }
     SAVE_DEST_SEEDED_COUNT.fetch_add(1, Ordering::SeqCst);
-    SAVE_DEST_REDIRECT_HITS.store(0, Ordering::SeqCst);
+    // THIS commit's verdict starts blank -- the redirect hit count and every 0/1 verdict oracle
+    // together, from one list, so the reset can never drift out of step with what is exported as
+    // this commit's result.
+    er_telemetry::counters::save_dest_reset_commit_verdicts();
     save_dest_reset_defer_report();
     let live_bak_before = save_dest_file_stamp(&save_dest_bak_path(live_path));
     let matched = accepted_paths.join(", ");
@@ -835,6 +841,9 @@ fn save_dest_score_live_file(state: &SaveDestRedirect, reason: &str) -> SaveDest
         return SaveDestLiveState::StampOnly;
     }
     SAVE_DEST_LIVE_FILE_MUTATED.store(1, Ordering::SeqCst);
+    // The per-commit flag above is cleared at the next arm; this count is not, so the worst thing
+    // this flow can do to a save cannot be erased by the commit that follows it.
+    er_telemetry::counters::SAVE_DEST_LIVE_FILE_MUTATED_TOTAL.fetch_add(1, Ordering::SeqCst);
     // Defence in depth for the self-redirect: if the destination IS this file, its new content is
     // the user's save, and the "leaked write" is the save itself. Writing the snapshot back would
     // destroy exactly what the commit just achieved.
@@ -1052,8 +1061,19 @@ mod save_dest_commit_tests {
         assert!(!accepted.contains(&different_folder));
     }
 
+    /// Scratch directory for one test, keyed by PROCESS as well as by name.
+    ///
+    /// The pid matters: this suite wipes the directory on entry, `%TEMP%` is shared by every
+    /// process in the wine prefix, and two test binaries running at once (two checkouts, or the
+    /// gate run twice over) then delete each other's files mid-test. Measured that way -- a
+    /// `rename` onto a target whose parent had just been removed came back
+    /// `File not found (os error 2)` and the atomic-write and restore tests failed with nothing
+    /// wrong in the code they cover.
     fn save_dest_test_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("er-save-dest-{name}"));
+        let dir = std::env::temp_dir().join(format!(
+            "er-save-dest-{name}-p{pid}",
+            pid = std::process::id()
+        ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("test dir");
         dir
@@ -1166,6 +1186,91 @@ mod save_dest_commit_tests {
             SaveDestLiveState::Changed
         ));
         assert_eq!(fs::read(&live).expect("read live"), b"snapshot");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Arming a commit must WIPE the previous commit's verdict.
+    ///
+    /// Each verdict oracle is stored only on the branch that observes it, so an unreset flag stays
+    /// at 1 for the life of the process: after one verified commit, `target_written_ok` was still
+    /// published as 1 while a LATER commit failed, which reports a save that never landed as one
+    /// that did. Only the oracles no other test in this crate writes are read back here -- the
+    /// tests share one process and `save_dest_score_live_file`'s own tests legitimately raise
+    /// `LIVE_FILE_MUTATED` / `LIVE_STAT_UNREADABLE`. Those two are covered by the membership test
+    /// below, which nothing concurrent can perturb.
+    #[test]
+    fn arming_a_commit_clears_the_previous_commits_verdict() {
+        SAVE_DEST_TARGET_WRITTEN_OK.store(1, Ordering::SeqCst);
+        SAVE_DEST_TARGET_STRUCTURE_OK.store(1, Ordering::SeqCst);
+        SAVE_DEST_LIVE_BAK_MUTATED.store(1, Ordering::SeqCst);
+        SAVE_DEST_REDIRECT_HITS.store(7, Ordering::SeqCst);
+        // The live-overwrite arm needs no file to exist: it stats the path (None is fine), names
+        // the intent and records it. Nothing is written.
+        save_dest_arm_live_overwrite(
+            Path::new(r"C:\users\steamuser\AppData\Roaming\EldenRing\7656\ER0000.sl2"),
+            "verdict-reset-test",
+        );
+        assert_eq!(SAVE_DEST_TARGET_WRITTEN_OK.load(Ordering::SeqCst), 0);
+        assert_eq!(SAVE_DEST_TARGET_STRUCTURE_OK.load(Ordering::SeqCst), 0);
+        assert_eq!(SAVE_DEST_LIVE_BAK_MUTATED.load(Ordering::SeqCst), 0);
+        assert_eq!(SAVE_DEST_REDIRECT_HITS.load(Ordering::SeqCst), 0);
+        // Leave no armed window behind for the rest of the process.
+        save_dest_live_overwrite_lock().take();
+    }
+
+    /// Every 0/1 oracle this file publishes as one commit's verdict has to be IN the arm-time reset
+    /// set. A new verdict oracle added without its reset is exactly the original defect again, so
+    /// this compares by address rather than by value and cannot be perturbed by a parallel test.
+    #[test]
+    fn every_per_commit_verdict_oracle_is_reset_at_arm_time() {
+        let reset_set = er_telemetry::counters::save_dest_commit_verdict_oracles();
+        let address = |oracle: &'static AtomicUsize| oracle as *const AtomicUsize as usize;
+        for verdict in [
+            &SAVE_DEST_REDIRECT_HITS,
+            &SAVE_DEST_TARGET_WRITTEN_OK,
+            &SAVE_DEST_TARGET_STRUCTURE_OK,
+            &SAVE_DEST_LIVE_FILE_MUTATED,
+            &SAVE_DEST_LIVE_BAK_MUTATED,
+            &SAVE_DEST_LIVE_STAT_UNREADABLE,
+        ] {
+            assert!(
+                reset_set
+                    .iter()
+                    .any(|resettable| address(resettable) == address(verdict)),
+                "a per-commit verdict oracle is missing from the arm-time reset set"
+            );
+        }
+    }
+
+    /// The cumulative leak count must survive the reset: a leak the snapshot restore then repaired
+    /// increments no other process-wide counter, so clearing the per-commit flag without it would
+    /// leave the worst outcome this flow can produce with no trace at all.
+    #[test]
+    fn the_cumulative_leak_count_outlives_the_per_commit_reset() {
+        let before =
+            er_telemetry::counters::SAVE_DEST_LIVE_FILE_MUTATED_TOTAL.load(Ordering::SeqCst);
+        let dir = save_dest_test_dir("leak-total");
+        let live = dir.join("ER0000.sl2");
+        let target = dir.join("elsewhere.sl2");
+        fs::write(&live, b"snapshot").expect("write live");
+        let mut state = save_dest_test_redirect(&live, &target, b"snapshot".to_vec());
+        fs::write(&target, b"destination").expect("write target");
+        fs::write(&live, b"leaked write").expect("leak onto live");
+        state.live_len = b"snapshot".len() as u64;
+        assert!(matches!(
+            save_dest_score_live_file(&state, "test"),
+            SaveDestLiveState::Changed
+        ));
+        assert!(
+            er_telemetry::counters::SAVE_DEST_LIVE_FILE_MUTATED_TOTAL.load(Ordering::SeqCst)
+                > before
+        );
+        er_telemetry::counters::save_dest_reset_commit_verdicts();
+        assert_eq!(SAVE_DEST_LIVE_FILE_MUTATED.load(Ordering::SeqCst), 0);
+        assert!(
+            er_telemetry::counters::SAVE_DEST_LIVE_FILE_MUTATED_TOTAL.load(Ordering::SeqCst)
+                > before
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 }

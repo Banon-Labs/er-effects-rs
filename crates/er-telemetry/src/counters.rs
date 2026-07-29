@@ -13,7 +13,7 @@
 
 use std::sync::atomic::{
     AtomicBool, AtomicI8, AtomicI16, AtomicI32, AtomicI64, AtomicIsize, AtomicU8, AtomicU16,
-    AtomicU32, AtomicU64, AtomicUsize,
+    AtomicU32, AtomicU64, AtomicUsize, Ordering,
 };
 
 /// Number of standalone read-side ticks that have executed (proves the game-thread
@@ -1497,18 +1497,20 @@ pub static SAVE_DEST_REDIRECT_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_DEST_SEEDED_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Commits aborted because the destination seed could not be written. The request is NOT fired.
 pub static SAVE_DEST_SEED_FAIL_COUNT: AtomicUsize = AtomicUsize::new(0);
-/// 1 once a verified destination parsed as a structurally COMPLETE BND4 container: its own entry
-/// index accounts for every byte up to EOF. This is the check that separates a loadable container
-/// from a file that merely has the right length.
+/// 1 once THIS commit's verified destination parsed as a structurally COMPLETE BND4 container: its
+/// own entry index accounts for every byte up to EOF. This is the check that separates a loadable
+/// container from a file that merely has the right length. Per-commit: cleared by
+/// [`save_dest_reset_commit_verdicts`] at every arm.
 pub static SAVE_DEST_TARGET_STRUCTURE_OK: AtomicUsize = AtomicUsize::new(0);
 /// Commits whose destination IS the loaded save (Box2 "Yes", or a browsed pick that resolves back
 /// to it). Non-zero means this flow deliberately rewrote the user's live save file -- the ONLY
 /// sanctioned way that happens, and the counter that keeps such a rewrite from reading as an
 /// anonymous mutation or a suppression leak.
 pub static SAVE_DEST_LIVE_OVERWRITE_COUNT: AtomicUsize = AtomicUsize::new(0);
-/// 1 if the loaded save's `.bak` twin moved during a DESTINATION commit. Not a failure: the native
-/// backup step (`FUN_142410830`) is not redirected and can only copy the untouched live container
-/// over its own backup. Named so the movement is never unattributed.
+/// 1 if the loaded save's `.bak` twin moved during THIS DESTINATION commit. Not a failure: the
+/// native backup step (`FUN_142410830`) is not redirected and can only copy the untouched live
+/// container over its own backup. Named so the movement is never unattributed. Per-commit: cleared
+/// by [`save_dest_reset_commit_verdicts`] at every arm.
 pub static SAVE_DEST_LIVE_BAK_MUTATED: AtomicUsize = AtomicUsize::new(0);
 /// Destination browsers opened (Box2 answered "No").
 pub static SAVE_DEST_PICKER_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -1521,15 +1523,25 @@ pub static SAVE_DEST_TARGET_NEW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_DEST_COMMIT_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Destination browsers abandoned (backed out / closed without choosing) -- nothing is written.
 pub static SAVE_DEST_CANCEL_COUNT: AtomicUsize = AtomicUsize::new(0);
-/// 1 once a destination commit verified: the target exists, starts with `BND4`, matches the live
-/// container size, and changed on disk during the armed window.
+/// 1 once THIS destination commit verified: the target exists, starts with `BND4`, matches the live
+/// container size, and changed on disk during the armed window. Per-commit: cleared by
+/// [`save_dest_reset_commit_verdicts`] at every arm. Cumulative failure history lives in
+/// [`SAVE_DEST_COMMIT_FAIL`].
 pub static SAVE_DEST_TARGET_WRITTEN_OK: AtomicUsize = AtomicUsize::new(0);
 /// Destination commits whose target verification FAILED (missing/short/unchanged target, or zero
-/// redirect hits): the user's save did not land where they asked.
+/// redirect hits): the user's save did not land where they asked. Cumulative for the process.
 pub static SAVE_DEST_COMMIT_FAIL: AtomicUsize = AtomicUsize::new(0);
-/// 1 if the LIVE save file changed during a destination commit -- the redirect leaked and the
+/// 1 if the LIVE save file changed during THIS destination commit -- the redirect leaked and the
 /// loaded save was overwritten anyway. Hard failure: the pre-fire snapshot is restored over it.
+/// Per-commit: cleared by [`save_dest_reset_commit_verdicts`] at every arm, with the process-wide
+/// count kept in [`SAVE_DEST_LIVE_FILE_MUTATED_TOTAL`].
 pub static SAVE_DEST_LIVE_FILE_MUTATED: AtomicUsize = AtomicUsize::new(0);
+/// Every leak this process ever saw: incremented, never cleared, wherever
+/// [`SAVE_DEST_LIVE_FILE_MUTATED`] is raised. The per-commit flag has to be cleared at arm time or
+/// one leak condemns every later commit, and a leak that the snapshot restore then repaired
+/// increments no other cumulative counter -- so without this the worst event the flow can produce
+/// would be erasable by the next arm.
+pub static SAVE_DEST_LIVE_FILE_MUTATED_TOTAL: AtomicUsize = AtomicUsize::new(0);
 // ---- DESTINATION-COMMIT SAFETY ORACLES (2026-07-29) ----
 // Every counter below names a refusal, a deferral, or a fact the commit could not establish.
 // They exist because the previous shape of this flow could destroy the loaded save while its
@@ -1561,9 +1573,11 @@ pub static SAVE_DEST_DISARM_DEFERRED: AtomicUsize = AtomicUsize::new(0);
 /// was forwarded, no job body ever started, and the extended teardown bound elapsed). A failure
 /// oracle: the commit is over and nothing can say whether the writer will still appear.
 pub static SAVE_DEST_DISARM_UNPROVEN: AtomicUsize = AtomicUsize::new(0);
-/// 1 if the loaded save's stat could not be READ at verification time. Distinct from
+/// 1 if the loaded save's stat could not be READ at THIS commit's verification. Distinct from
 /// [`SAVE_DEST_LIVE_FILE_MUTATED`]: unreadable is not changed, and treating it as changed is
 /// what triggered a blind whole-container overwrite of the live save on a transient stat error.
+/// Per-commit: cleared by [`save_dest_reset_commit_verdicts`] at every arm; every occurrence also
+/// increments the cumulative [`SAVE_DEST_RESTORE_SUPPRESSED`].
 pub static SAVE_DEST_LIVE_STAT_UNREADABLE: AtomicUsize = AtomicUsize::new(0);
 /// Restores of the pre-fire snapshot that were DECLINED: the loaded save's stamp moved but its
 /// bytes are unchanged, its stat is unreadable, or the destination turned out to be the same
@@ -1572,6 +1586,38 @@ pub static SAVE_DEST_RESTORE_SUPPRESSED: AtomicUsize = AtomicUsize::new(0);
 /// Restores that were attempted and FAILED. The restore is temp-file + rename, so a failure
 /// leaves the loaded save byte-for-byte as the writer left it rather than truncated.
 pub static SAVE_DEST_RESTORE_FAILED: AtomicUsize = AtomicUsize::new(0);
+/// Every 0/1 oracle that describes ONE destination commit, in a single list so the arm-time reset
+/// and the per-commit export can never disagree about which oracles those are.
+///
+/// Each is STORED only on the branch that observes it and left untouched otherwise, so nothing
+/// clears them by itself: after one verified commit `oracle_save_dest_target_written_ok` and
+/// `..._structure_ok` stayed 1 for the life of the process, and every LATER failed commit
+/// published a save that did not land as a save that did -- the one direction a proof oracle must
+/// never fail in. The mutation/unreadable oracles latch the same way in reverse and condemn a good
+/// commit for an earlier one's leak.
+pub fn save_dest_commit_verdict_oracles() -> [&'static AtomicUsize; 6] {
+    [
+        &SAVE_DEST_REDIRECT_HITS,
+        &SAVE_DEST_TARGET_WRITTEN_OK,
+        &SAVE_DEST_TARGET_STRUCTURE_OK,
+        &SAVE_DEST_LIVE_FILE_MUTATED,
+        &SAVE_DEST_LIVE_BAK_MUTATED,
+        &SAVE_DEST_LIVE_STAT_UNREADABLE,
+    ]
+}
+
+/// Clear the previous commit's verdict, so what is exported is always THIS commit's result.
+///
+/// Called from every arm site (`save_dest_arm_redirect`, `save_dest_arm_live_overwrite`) -- the
+/// point at which a commit becomes the one being scored. Cumulative history is deliberately NOT
+/// reset with it: [`SAVE_DEST_COMMIT_FAIL`], [`SAVE_DEST_RESTORE_SUPPRESSED`],
+/// [`SAVE_DEST_RESTORE_FAILED`] and [`SAVE_DEST_LIVE_FILE_MUTATED_TOTAL`] span the whole process,
+/// so a run still reports every failure it ever had alongside the current verdict.
+pub fn save_dest_reset_commit_verdicts() {
+    for oracle in save_dest_commit_verdict_oracles() {
+        oracle.store(0, Ordering::SeqCst);
+    }
+}
 /// 1 when the CURRENT commit was fired on the degraded fail-open path (suppression never armed,
 /// so no bypass token exists). These are real native saves; they are completed on the writer's
 /// own job-completion signal, never on the token-consumption test, which can never move here.
