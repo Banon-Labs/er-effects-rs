@@ -878,6 +878,12 @@ pub static SYNTHETIC_OUTER_PTR: AtomicUsize = AtomicUsize::new(0);
 pub static ASSERT_LOG_LINES_WRITTEN: AtomicUsize = AtomicUsize::new(0);
 pub static RENDER_FRAME_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static AV_LOG_LINES_WRITTEN: AtomicUsize = AtomicUsize::new(0);
+/// Crash-log lines spent on the process-FATAL exception codes (stack overflow, fastfail, heap
+/// corruption, illegal instruction). Separate from the general budget below so a first-chance
+/// C++/Rust throw storm cannot consume the line that names the actual kill.
+pub static FATAL_EXCEPTION_LOG_LINES_WRITTEN: AtomicUsize = AtomicUsize::new(0);
+/// Crash-log lines spent on the remaining ERROR-severity exception codes.
+pub static OTHER_EXCEPTION_LOG_LINES_WRITTEN: AtomicUsize = AtomicUsize::new(0);
 pub static SELF_DLL_SIZE: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_FLOW_CONTEXT_RECORD_REGULATION_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_FLOW_CONTEXT_RECORD_REGULATION_FIXUPS: AtomicUsize = AtomicUsize::new(0);

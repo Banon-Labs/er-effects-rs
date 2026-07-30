@@ -589,8 +589,71 @@ pub(crate) unsafe extern "system" fn crash_vectored_handler(
                 )),
             }
         }
+        // CATCH-ALL for every OTHER error-severity exception. Until 2026-07-30 this handler logged
+        // access violations and nothing else, so an empty crash log was read as "no crash" when it
+        // only ever meant "no ACCESS VIOLATION". Everything a fault in this DLL actually produces --
+        // `STATUS_STACK_OVERFLOW` from unbounded recursion, a Rust panic (`_CxxThrowException`), a
+        // `panic=abort`/`unreachable` `ud2`, `__fastfail`, heap corruption -- died silently. The
+        // save-redirect recursion cost an afternoon of `/proc` sampling for exactly that reason.
+        if !record.is_null() {
+            let code = unsafe { (*record).exception_code };
+            let fatal = matches!(
+                code,
+                EXCEPTION_STACK_OVERFLOW_CODE
+                    | EXCEPTION_FAIL_FAST_CODE
+                    | EXCEPTION_HEAP_CORRUPTION_CODE
+                    | EXCEPTION_ILLEGAL_INSTRUCTION_CODE
+            );
+            let (budget_used, budget) = if fatal {
+                (&FATAL_EXCEPTION_LOG_LINES_WRITTEN, MAX_FATAL_EXCEPTION_LOG_LINES)
+            } else {
+                (&OTHER_EXCEPTION_LOG_LINES_WRITTEN, MAX_OTHER_EXCEPTION_LOG_LINES)
+            };
+            if code != EXCEPTION_ACCESS_VIOLATION_CODE
+                && (code & EXCEPTION_SEVERITY_MASK) == EXCEPTION_SEVERITY_ERROR
+                && budget_used.fetch_add(AV_LOG_LINE_INCREMENT, Ordering::SeqCst) < budget
+            {
+                let address = unsafe { (*record).exception_address } as usize;
+                let label = exception_code_label(code);
+                if code == EXCEPTION_STACK_OVERFLOW_CODE {
+                    // The guard page is already gone and this handler is running on whatever is
+                    // left of the dying thread's stack, so take NOTHING that walks or allocates
+                    // against it -- no `trace_callers_summary`, no module resolution. A raw RIP is
+                    // enough to name the recursing detour, and a line that might not make it out is
+                    // still infinitely better than the silence this replaced.
+                    append_crash_log(format_args!(
+                        "exception code=0x{code:x} ({label}) addr=0x{address:x} -- stack exhausted; no backtrace taken (thread dies here; check oracle_save_redirect_createfilew_max_depth)"
+                    ));
+                } else {
+                    let base = game_module_base().unwrap_or(NULL_MODULE_BASE);
+                    let rip_tag = annotate_addr(address, base);
+                    let self_base = SELF_DLL_BASE.load(Ordering::SeqCst);
+                    append_crash_log(format_args!(
+                        "exception code=0x{code:x} ({label}) addr=0x{address:x}{rip_tag} self_base=0x{self_base:x} {}",
+                        trace_callers_summary()
+                    ));
+                }
+            }
+        }
     }
     EXCEPTION_CONTINUE_SEARCH
+}
+
+/// Human name for the exception codes the catch-all above admits. Unknown codes still log with
+/// their raw value; the label only saves a lookup for the ones this DLL can actually produce.
+fn exception_code_label(code: u32) -> &'static str {
+    match code {
+        EXCEPTION_STACK_OVERFLOW_CODE => "STATUS_STACK_OVERFLOW",
+        EXCEPTION_ILLEGAL_INSTRUCTION_CODE => "STATUS_ILLEGAL_INSTRUCTION (ud2/panic-abort)",
+        EXCEPTION_HEAP_CORRUPTION_CODE => "STATUS_HEAP_CORRUPTION",
+        EXCEPTION_FAIL_FAST_CODE => "STATUS_STACK_BUFFER_OVERRUN (__fastfail)",
+        EXCEPTION_CPP_THROW_CODE => "C++/Rust throw",
+        EXCEPTION_IN_PAGE_ERROR_CODE => "STATUS_IN_PAGE_ERROR",
+        EXCEPTION_INT_DIVIDE_BY_ZERO_CODE => "STATUS_INTEGER_DIVIDE_BY_ZERO",
+        EXCEPTION_PRIVILEGED_INSTRUCTION_CODE => "STATUS_PRIVILEGED_INSTRUCTION",
+        EXCEPTION_NONCONTINUABLE_CODE => "STATUS_NONCONTINUABLE_EXCEPTION",
+        _ => "unclassified",
+    }
 }
 
 /// Opt-in: arm a hardware write-watchpoint on GameMan+0xc30 (the save-mount map
