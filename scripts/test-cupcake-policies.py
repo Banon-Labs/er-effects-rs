@@ -387,6 +387,33 @@ def main() -> int:
             "bash scripts/steam-running.sh",
             True,
         ),
+        # bd only records text: a single, non-chained bd invocation whose pgrep
+        # token sits entirely inside quoted issue-tracker text is exempt
+        # (2026-07-29 false positive, bd er-effects-rs-uxyz: a bd close --reason
+        # describing launch-guard allow-tests was denied).
+        PolicyCase(
+            "allow-bd-close-reason-mentioning-pgrep",
+            '$HOME/.local/bin/bd close er-effects-rs-aaa --reason "launch-guard'
+            ' allow-test keeps pgrep -x start_protected_game.exe detection green"',
+            True,
+        ),
+        # The ORIGINAL denied shape -- a chained bash -c batch of bd closes --
+        # stays denied by design (not a single bd invocation).
+        PolicyCase(
+            "deny-chained-bash-c-bd-close-batch-mentioning-pgrep",
+            "bash -c '\"$HOME/.local/bin/bd\" close er-effects-rs-aaa --reason"
+            ' "keeps pgrep -x start_protected_game.exe detection green" &&'
+            " \"$HOME/.local/bin/bd\" close er-effects-rs-bbb --reason \"second\"'",
+            False,
+            "manual pgrep is blocked",
+        ),
+        # ... and a bd text command chained with a REAL pgrep still denies.
+        PolicyCase(
+            "deny-bd-close-then-chained-pgrep",
+            '$HOME/.local/bin/bd close er-effects-rs-aaa --reason "done" && pgrep -x steam',
+            False,
+            "manual pgrep is blocked",
+        ),
         # Word-boundary: a filename/word merely CONTAINING "pgrep" is not a pgrep
         # command token and must not be denied.
         PolicyCase(
@@ -579,6 +606,39 @@ def main() -> int:
         PolicyCase(
             "deny-redirect-write-target-ersc-dll",
             "cat vendor/seamless-coop-v1.9.9/SeamlessCoop/ersc.dll > target/release/ersc.dll",
+            False,
+            "blocked this Seamless Co-op DLL bundling command",
+        ),
+        # Restoring the USER's game-installed co-op DLL (same-path rename that
+        # only strips the repo's .er-effects-staged suffix) is the opposite of
+        # bundling and is allowed (bd er-effects-rs-gkqa).
+        PolicyCase(
+            "allow-mv-restore-staged-ersc-dll-same-gameinstall-path",
+            "mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-effects-staged'"
+            " '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll'",
+            True,
+        ),
+        # ... but the same staged source moved to any OTHER destination denies.
+        PolicyCase(
+            "deny-mv-staged-ersc-dll-into-target-bundle",
+            "mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-effects-staged'"
+            " 'target/release-bundle/ersc.dll'",
+            False,
+            "blocked this Seamless Co-op DLL bundling command",
+        ),
+        # A read-only interpreter scan of the INSTALLED DLL with the path as an
+        # unquoted operand is allowed (bd er-effects-rs-gkqa: arm (a) counted
+        # python/bash as bundling verbs).
+        PolicyCase(
+            "allow-python-scan-gameinstall-ersc-dll-unquoted-operand",
+            "python3 scripts/pe_export_dump.py"
+            " /mnt/c/SteamLibrary/steamapps/common/ELDEN\\ RING/Game/SeamlessCoop/ersc.dll",
+            True,
+        ),
+        # ... while a repo-relative operand (the staging-script shape) denies.
+        PolicyCase(
+            "deny-python-script-repo-relative-ersc-dll-operand",
+            "python3 scripts/pe_export_dump.py SeamlessCoop/ersc.dll",
             False,
             "blocked this Seamless Co-op DLL bundling command",
         ),
