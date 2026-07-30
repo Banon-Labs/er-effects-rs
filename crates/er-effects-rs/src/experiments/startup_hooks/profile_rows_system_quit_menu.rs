@@ -1787,12 +1787,22 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     }
     // MENU-PUMP-OWNED destination browser open (save-game-flow WP3): Box2 "No" means "save
     // somewhere else", which the tick stages here because opening the picker stages records and
-    // submits a MenuJob -- menu-pump work, not game-task work. A failed open keeps the latch so
-    // the next pump retries; the tick's own timeout ends the flow if it never succeeds.
+    // submits a MenuJob -- menu-pump work, not game-task work.
+    //
+    // WHAT CLEARS THE LATCH IS "A PICKER RAN", NOT "A PICKER IS UP". Retrying only makes sense for
+    // an open that never happened -- a MenuJob the dialog's queue deferred. A picker that ran and
+    // came back with no destination has ANSWERED this request, and re-arming it re-asks a question
+    // the user just declined: with the OS surface that reopened comdlg32 ~57 ms after every Cancel,
+    // forever, with no way out of the flow (bd `er-effects-rs-rsxi`). The tick's OpenTimeout could
+    // not save it either, because each reopen blocks the whole frame, so the budget never accrued.
     if SAVE_DEST_OPEN_PICKER_PENDING.load(Ordering::SeqCst) != 0 {
         let system_dialog = SAVE_FLOW_DIALOG.load(Ordering::SeqCst);
-        if unsafe { system_quit_open_save_dest_picker(system_dialog) } {
+        if unsafe { system_quit_open_save_dest_picker(system_dialog) }.request_discharged() {
             SAVE_DEST_OPEN_PICKER_PENDING.store(0, Ordering::SeqCst);
+        } else {
+            // The one path that legitimately re-arms. Counted so a run can prove which one it took:
+            // in OS mode this must stay 0, and any positive value is the reopen loop returning.
+            SAVE_DEST_PICKER_OPEN_RETRY_COUNT.fetch_add(1, Ordering::SeqCst);
         }
     }
     // MENU-PUMP-OWNED save-picker maintenance: in-place row rebuild after a navigation, and

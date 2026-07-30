@@ -67,6 +67,30 @@ pub(crate) const VECTORED_FIRST_HANDLER: u32 = 1;
 /// first-chance AVs hitting the cap before the real faulting RIP is logged.
 pub(crate) const MAX_AV_LOG_LINES: usize = 256;
 pub(crate) const AV_LOG_LINE_INCREMENT: usize = 1;
+/// NTSTATUS severity field (bits 30-31) and its "error" value. The VEH's catch-all arm logs only
+/// ERROR-severity exceptions: that admits the whole crash family (stack overflow, fastfail, heap
+/// corruption, illegal instruction, C++/Rust throw) while excluding the codes the process raises as
+/// routine control flow -- `DBG_PRINTEXCEPTION_C` (0x40010006), the MSVC thread-name exception
+/// (0x406D1388, both severity `informational`) and our own #BP/single-step traps (severity
+/// `warning`), which earlier arms of the handler own anyway.
+pub(crate) const EXCEPTION_SEVERITY_MASK: u32 = 0xC000_0000;
+pub(crate) const EXCEPTION_SEVERITY_ERROR: u32 = 0xC000_0000;
+/// The exception codes this DLL's own failures arrive as, none of which were logged before
+/// 2026-07-30 because the VEH gated ALL logging on `EXCEPTION_ACCESS_VIOLATION_CODE`.
+pub(crate) const EXCEPTION_STACK_OVERFLOW_CODE: u32 = 0xC000_00FD;
+pub(crate) const EXCEPTION_ILLEGAL_INSTRUCTION_CODE: u32 = 0xC000_001D;
+pub(crate) const EXCEPTION_HEAP_CORRUPTION_CODE: u32 = 0xC000_0374;
+pub(crate) const EXCEPTION_FAIL_FAST_CODE: u32 = 0xC000_0409;
+pub(crate) const EXCEPTION_CPP_THROW_CODE: u32 = 0xE06D_7363;
+pub(crate) const EXCEPTION_IN_PAGE_ERROR_CODE: u32 = 0xC000_0006;
+pub(crate) const EXCEPTION_INT_DIVIDE_BY_ZERO_CODE: u32 = 0xC000_0094;
+pub(crate) const EXCEPTION_PRIVILEGED_INSTRUCTION_CODE: u32 = 0xC000_0096;
+pub(crate) const EXCEPTION_NONCONTINUABLE_CODE: u32 = 0xC000_0025;
+/// Dedicated budget for the process-fatal codes, kept separate from the general one so a C++/Rust
+/// throw storm can never spend the budget that has to be there for the single stack-overflow line.
+pub(crate) const MAX_FATAL_EXCEPTION_LOG_LINES: usize = 4;
+/// Shared budget for every other ERROR-severity code (first-chance C++ throws are frequent).
+pub(crate) const MAX_OTHER_EXCEPTION_LOG_LINES: usize = 24;
 /// Number of process-exit paths hooked (ExitProcess, TerminateProcess,
 /// RtlExitUserProcess, NtTerminateProcess).
 pub(crate) const CRASH_EXIT_TARGET_COUNT: usize = 4;

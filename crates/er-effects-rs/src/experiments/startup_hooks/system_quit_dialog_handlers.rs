@@ -223,7 +223,7 @@ unsafe fn system_quit_route_button_action_or_forward(
             SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
             let opened = unsafe { system_quit_open_save_picker_menu(action_obj) };
             append_autoload_debug(format_args!(
-                "system-quit-load-save-profiles: Load Save Profiles action selected {hook_name} action_alias=0x{action_obj:x} controller=0x{controller:x} cursor={cursor} {verdict_text} opened={opened} (in-game save picker); suppressing native Quit Game row action"
+                "system-quit-load-save-profiles: Load Save Profiles action selected {hook_name} action_alias=0x{action_obj:x} controller=0x{controller:x} cursor={cursor} {verdict_text} opened={opened:?} (in-game save picker); suppressing native Quit Game row action"
             ));
             0
         }
@@ -398,7 +398,7 @@ pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hoo
             SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
             let opened = unsafe { system_quit_open_save_picker_menu(action_alias) };
             append_autoload_debug(format_args!(
-                "system-quit-load-save-profiles: Load Save Profiles controller selected controller=0x{controller:x} {verdict_text} event_kind={event_kind} opened={opened} (in-game save picker); suppressing native button activation"
+                "system-quit-load-save-profiles: Load Save Profiles controller selected controller=0x{controller:x} {verdict_text} event_kind={event_kind} opened={opened:?} (in-game save picker); suppressing native button activation"
             ));
         }
         Some(QuitRow::ReturnToDesktop) => {

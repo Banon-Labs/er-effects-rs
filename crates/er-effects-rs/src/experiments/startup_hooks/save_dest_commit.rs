@@ -114,6 +114,7 @@ pub(crate) use er_telemetry::counters::SAVE_DEST_LIVE_BAK_MUTATED;
 pub(crate) use er_telemetry::counters::SAVE_DEST_LIVE_FILE_MUTATED;
 pub(crate) use er_telemetry::counters::SAVE_DEST_LIVE_OVERWRITE_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_DEST_PICKER_OPEN_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_DEST_PICKER_OPEN_RETRY_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_DEST_SEED_FAIL_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_DEST_SEEDED_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_EXISTING_COUNT;

@@ -748,6 +748,8 @@ pub(crate) use er_telemetry::counters::RENDER_FRAME_COUNT;
 pub(crate) static PROCESS_EXIT_LOGGED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 pub(crate) use er_telemetry::counters::AV_LOG_LINES_WRITTEN;
+pub(crate) use er_telemetry::counters::FATAL_EXCEPTION_LOG_LINES_WRITTEN;
+pub(crate) use er_telemetry::counters::OTHER_EXCEPTION_LOG_LINES_WRITTEN;
 /// Base address (HINSTANCE) of THIS injected DLL, captured from `DllMain`'s hmodule at
 /// `DLL_PROCESS_ATTACH`. Under Wine/Proton the DLL is relocated far from the game module
 /// (observed ~0x6ffe_xxxx_xxxx), so a crash whose faulting RIP / return addresses land in

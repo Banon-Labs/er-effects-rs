@@ -201,7 +201,7 @@ unsafe fn save_picker_stage_row_records(
 /// Open the LOAD-source picker from the "Load Save Profiles" row action (menu thread). Which
 /// surface that is -- this in-game browser or the OS file dialog -- is decided in one place,
 /// [`open_picker_for_intent`]; the signature and the four call sites are unchanged.
-pub(crate) unsafe fn system_quit_open_save_picker_menu(action_obj: usize) -> bool {
+pub(crate) unsafe fn system_quit_open_save_picker_menu(action_obj: usize) -> PickerOpenOutcome {
     unsafe { open_picker_for_intent(PickerOpenRequest::LoadSource { action_obj }) }
 }
 
@@ -283,7 +283,7 @@ pub(crate) unsafe fn system_quit_open_save_picker_menu_in_game(action_obj: usize
 /// owned: called from `system_quit_menu_window_run_post` after the tick stages
 /// `SAVE_DEST_OPEN_PICKER_PENDING`. Which surface opens is decided in one place,
 /// [`open_picker_for_intent`]; the signature and the call site are unchanged.
-pub(crate) unsafe fn system_quit_open_save_dest_picker(system_dialog: usize) -> bool {
+pub(crate) unsafe fn system_quit_open_save_dest_picker(system_dialog: usize) -> PickerOpenOutcome {
     unsafe { open_picker_for_intent(PickerOpenRequest::SaveDestination { system_dialog }) }
 }
 
