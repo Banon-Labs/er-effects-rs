@@ -56,6 +56,14 @@ use super::*;
 // instead of drifting into a no-character menu. Pure telemetry/observe-only mode
 // remains the only no-load exemption.
 //
+// WHICH PICKER that is comes from `er-effects.toml`'s `os_native_save_picker`, resolved -- like
+// every other picker open -- in `save_picker_surface.rs`. Default off: the DLL-drawn overlay
+// browser (`gpu_readback/save_picker_overlay.rs`), which has NO cancel; BACK is navigation and the
+// user chooses a save or closes the game themselves. On: the OS common file dialog, opened by
+// `startup_hooks/save_picker_boot.rs` on a thread of ours, whose Cancel button is where the
+// "Cancel -> exit" half of the contract above is actually implemented (`ExitProcess(0)`, the same
+// clean kill the in-world Return to Desktop performs).
+//
 // Explicit-source mechanism: a scoped MinHook on the Win32 `CreateFileW` (and `CopyFileW`) chokepoint
 // through which the game opens EVERY save artifact (verified RE: vanilla `.sl2`,
 // Seamless `.co2`, `.bak`, all funnel `MicrosoftDiskFileOperator::OpenFile` ->
@@ -142,6 +150,13 @@ fn steam_id64_from_wide_save_path(path: &[u16]) -> Option<u64> {
 fn observe_steam_id64_from_save_path(path: &[u16]) {
     if let Some(steam_id) = steam_id64_from_wide_save_path(path) {
         OBSERVED_ACTIVE_STEAM_ID64.store(steam_id, Ordering::SeqCst);
+        // Latching the observed id is a pure store and always safe. The two calls below are NOT:
+        // both open files, which re-enters the detour this observation was made from. They are
+        // individually guarded (`save_detour_disk_io_allowed`), so a nested observation records
+        // the id and does nothing else -- and the outer one, once it unwinds, still performs the
+        // work. This is the SEED half of the 2026-07-30 recursion: this call site is reached from
+        // the CreateFileW detour before its own diagnostics, which is why the seeding open never
+        // appeared in the log.
         if let Ok(base) = game_module_base() {
             normalize_env_save_file_to_active_steam_id_once(base, "observed-steamid-before-stage");
         }
@@ -301,6 +316,12 @@ pub(crate) fn normalize_env_save_file_to_active_steam_id_once(base: usize, reaso
     {
         return;
     }
+    // This one-shot reads a save container off disk, and both of its call sites are inside a
+    // `CreateFileW`/`NtCreateFile` detour -- so the read re-enters the caller. Refuse from a nested
+    // context; the outer detour entry performs it once its own I/O has unwound.
+    if !save_detour_disk_io_allowed() {
+        return;
+    }
     let Some(path) = configured_save_file() else {
         // FIRST OCCURRENCE ONLY. There is no configured save file in default (game-owned APPDATA)
         // mode, and since save-game-flow WP3 the CreateFileW detour is installed in EVERY mode --
@@ -313,9 +334,22 @@ pub(crate) fn normalize_env_save_file_to_active_steam_id_once(base: usize, reaso
         }
         return;
     };
+    // CLAIM the one-shot BEFORE the read, not after it succeeds. The old order left the latch at 0
+    // for the whole duration of `fs::read`, so the open that read re-entered this function with the
+    // one-shot still unclaimed -- the recursion edge itself. Claiming first also means a read that
+    // FAILS disables the normalize permanently, which is the honest semantic: the configured path is
+    // fixed for the process (env/TOML, never rewritten at runtime), so a path that cannot be read now
+    // cannot be read later, and retrying it on every save-container open is pure re-entrant waste.
+    // `compare_exchange` rather than a store so two threads cannot both run the body.
+    if SAVE_STEAM_ID_ENV_NORMALIZE_DONE
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
     let Ok(mut bytes) = fs::read(&path) else {
         append_autoload_debug(format_args!(
-            "save-steamid-normalize: failed to read configured save file for one-shot disk normalize reason={reason} path='{}'",
+            "save-steamid-normalize: failed to read configured save file for one-shot disk normalize reason={reason} path='{}' (one-shot consumed; not retried)",
             path.display()
         ));
         return;
@@ -324,7 +358,6 @@ pub(crate) fn normalize_env_save_file_to_active_steam_id_once(base: usize, reaso
     let Some(report) = normalize_save_bytes_to_active_steam_id(base, &mut bytes, reason) else {
         return;
     };
-    SAVE_STEAM_ID_ENV_NORMALIZE_DONE.store(1, Ordering::SeqCst);
     if !report.changed() || !save_file_writeback_allowed(&path) {
         append_autoload_debug(format_args!(
             "save-steamid-normalize: one-shot source normalize reason={reason} path='{}' changed={} writeback_allowed={}",
@@ -412,11 +445,16 @@ pub(crate) fn write_save_redirect_telemetry(body: &mut String) {
     let last_save_like_kind =
         save_path_kind_label(SAVE_CREATEFILEW_LAST_SAVE_LIKE_KIND.load(Ordering::SeqCst));
     body.push_str(&format!(
-        "  \"oracle_save_redirect_mode\": \"{mode}\",\n  \"oracle_save_redirect_observed_steam_id64\": {observed_steam_id},\n  \"oracle_save_redirect_env_normalize_done\": {},\n  \"oracle_save_redirect_first_load_done\": {},\n  \"oracle_save_redirect_shgetfolderpath_decision\": \"{shgfp_decision}\",\n  \"oracle_save_redirect_shgetfolderpath_appdata_requests\": {shgfp_requests},\n  \"oracle_save_redirect_shgetfolderpath_hits\": {shgfp_hits},\n  \"oracle_save_redirect_shgetfolderpath_direct_file_blocks\": {shgfp_direct_blocks},\n  \"oracle_save_redirect_shgetfolderpath_first_load_done_blocks\": {shgfp_first_load_blocks},\n  \"oracle_save_redirect_shgetfolderpath_no_root_blocks\": {shgfp_no_root_blocks},\n  \"oracle_save_redirect_createfilew_calls\": {},\n  \"oracle_save_redirect_createfilew_diag_hits\": {},\n  \"oracle_save_redirect_createfilew_last_save_like_kind\": \"{last_save_like_kind}\",\n  \"oracle_save_redirect_createfilew_stage_steamid_dir_hits\": {},\n  \"oracle_save_redirect_createfilew_stage_save_file_hits\": {},\n  \"oracle_save_redirect_createfilew_configured_file_hits\": {},\n  \"oracle_save_redirect_query_last_save_like_kind\": \"{}\",\n  \"oracle_save_redirect_query_stage_steamid_dir_hits\": {},\n  \"oracle_save_redirect_query_stage_save_file_hits\": {},\n  \"oracle_save_redirect_query_configured_file_hits\": {},\n  \"oracle_save_redirect_redir_hits\": {},\n  \"oracle_save_redirect_sl2_query_hits\": {},\n  \"oracle_save_redirect_ntcreate_diag_hits\": {},\n  \"oracle_save_redirect_direct_source_set\": {direct_source_set},\n  \"oracle_save_redirect_direct_stage_root_set\": {direct_stage_root_set},\n  \"oracle_save_redirect_direct_stage_done_steam_id64\": {done_steam_id},\n  \"oracle_save_redirect_direct_stage_in_progress_steam_id64\": {in_progress_steam_id},\n  \"oracle_save_redirect_direct_stage_diag_hits\": {},\n  \"oracle_save_redirect_direct_stage_no_steamid_hits\": {},\n  \"oracle_save_redirect_direct_stage_last_no_steamid_kind\": \"{no_steamid_kind}\",\n  \"oracle_save_redirect_direct_stage_file_exists\": {direct_stage_file_exists},\n  \"oracle_save_redirect_direct_stage_file_bytes\": {},\n",
+        "  \"oracle_save_redirect_mode\": \"{mode}\",\n  \"oracle_save_redirect_observed_steam_id64\": {observed_steam_id},\n  \"oracle_save_redirect_env_normalize_done\": {},\n  \"oracle_save_redirect_first_load_done\": {},\n  \"oracle_save_redirect_shgetfolderpath_decision\": \"{shgfp_decision}\",\n  \"oracle_save_redirect_shgetfolderpath_appdata_requests\": {shgfp_requests},\n  \"oracle_save_redirect_shgetfolderpath_hits\": {shgfp_hits},\n  \"oracle_save_redirect_shgetfolderpath_direct_file_blocks\": {shgfp_direct_blocks},\n  \"oracle_save_redirect_shgetfolderpath_first_load_done_blocks\": {shgfp_first_load_blocks},\n  \"oracle_save_redirect_shgetfolderpath_no_root_blocks\": {shgfp_no_root_blocks},\n  \"oracle_save_redirect_createfilew_calls\": {},\n  \"oracle_save_redirect_createfilew_diag_hits\": {},\n  \"oracle_save_redirect_createfilew_max_depth\": {},\n  \"oracle_save_redirect_createfilew_reentrant_passthroughs\": {},\n  \"oracle_save_redirect_createfilew_last_save_like_kind\": \"{last_save_like_kind}\",\n  \"oracle_save_redirect_createfilew_stage_steamid_dir_hits\": {},\n  \"oracle_save_redirect_createfilew_stage_save_file_hits\": {},\n  \"oracle_save_redirect_createfilew_configured_file_hits\": {},\n  \"oracle_save_redirect_query_last_save_like_kind\": \"{}\",\n  \"oracle_save_redirect_query_stage_steamid_dir_hits\": {},\n  \"oracle_save_redirect_query_stage_save_file_hits\": {},\n  \"oracle_save_redirect_query_configured_file_hits\": {},\n  \"oracle_save_redirect_redir_hits\": {},\n  \"oracle_save_redirect_sl2_query_hits\": {},\n  \"oracle_save_redirect_ntcreate_diag_hits\": {},\n  \"oracle_save_redirect_direct_source_set\": {direct_source_set},\n  \"oracle_save_redirect_direct_stage_root_set\": {direct_stage_root_set},\n  \"oracle_save_redirect_direct_stage_done_steam_id64\": {done_steam_id},\n  \"oracle_save_redirect_direct_stage_in_progress_steam_id64\": {in_progress_steam_id},\n  \"oracle_save_redirect_direct_stage_diag_hits\": {},\n  \"oracle_save_redirect_direct_stage_no_steamid_hits\": {},\n  \"oracle_save_redirect_direct_stage_last_no_steamid_kind\": \"{no_steamid_kind}\",\n  \"oracle_save_redirect_direct_stage_file_exists\": {direct_stage_file_exists},\n  \"oracle_save_redirect_direct_stage_file_bytes\": {},\n",
         SAVE_STEAM_ID_ENV_NORMALIZE_DONE.load(Ordering::SeqCst),
         SAVE_FIRST_LOAD_DONE.load(Ordering::SeqCst),
         SAVE_CREATEFILEW_CALLS.load(Ordering::SeqCst),
         SAVE_CREATEFILEW_DIAG_HITS.load(Ordering::SeqCst),
+        // THE stack-overflow semaphore. > 2 means a save-redirect detour re-entered itself without
+        // being passed through -- the unbounded recursion of 2026-07-30, which manifests as the
+        // game's main thread simply exiting with an empty crash log. See `reentry.rs`.
+        SAVE_REDIRECT_DETOUR_MAX_DEPTH.load(Ordering::SeqCst),
+        SAVE_REDIRECT_DETOUR_REENTRANT_PASSTHROUGHS.load(Ordering::SeqCst),
         SAVE_CREATEFILEW_STAGE_STEAMID_DIR_HITS.load(Ordering::SeqCst),
         SAVE_CREATEFILEW_STAGE_SAVE_FILE_HITS.load(Ordering::SeqCst),
         SAVE_CREATEFILEW_CONFIGURED_FILE_HITS.load(Ordering::SeqCst),
@@ -1387,6 +1425,14 @@ fn copy_save_for_overwrite(source: &Path, target: &Path, steam_id: u64) -> std::
 }
 
 fn ensure_direct_stage_for_steam_id(steam_id: u64) {
+    // Staging is a read of the source plus two writes of the staged copies -- three opens that
+    // re-enter whichever detour asked for the staging. The `SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID`
+    // latch below happens to swallow a re-entry for the SAME id, but not for a different one, and
+    // relying on that accident is how this file grew a stack overflow. Refuse outright from a
+    // nested context: the outer detour entry stages it once its own I/O has unwound.
+    if !save_detour_disk_io_allowed() {
+        return;
+    }
     let Some(source) = SAVE_DIRECT_SOURCE_FILE.get() else {
         let hit = SAVE_DIRECT_STAGE_DIAG_HITS.fetch_add(1, Ordering::SeqCst);
         if hit < 8 {
@@ -1575,8 +1621,30 @@ unsafe extern "system" fn save_redirect_createfilew_hook(
 ) -> isize {
     let orig = SAVE_REDIRECT_ORIG_CREATEFILEW.load(Ordering::SeqCst);
     let call: CreateFileWFn = unsafe { std::mem::transmute::<usize, CreateFileWFn>(orig) };
-    let len = unsafe { wide_len(lp_file_name) };
+    // RE-ENTRANCY (see `reentry.rs`): this detour body does its own file I/O -- the SteamID
+    // normalize's `fs::read`, direct-file staging's read+writes, the debug log's own open -- and
+    // every one of those comes back through `CreateFileW`, i.e. right back here on this thread.
+    // A nested entry is OUR open of a path WE computed, so it wants the original API untouched and
+    // none of the observation/redirect/staging/diagnostic work. Doing that work again is what
+    // recursed 510 frames deep into the guard page on 2026-07-30.
+    // `SAVE_CREATEFILEW_CALLS` counts every entry, nested ones included: its job is to prove the
+    // hook is live at all, and a run whose nested count runs away is itself evidence.
     let calls = SAVE_CREATEFILEW_CALLS.fetch_add(1, Ordering::SeqCst);
+    let depth = SaveDetourDepth::enter();
+    if depth.is_reentrant() {
+        return unsafe {
+            call(
+                lp_file_name,
+                access,
+                share,
+                security,
+                disposition,
+                flags,
+                template,
+            )
+        };
+    }
+    let len = unsafe { wide_len(lp_file_name) };
     if len != 0 {
         let path = unsafe { std::slice::from_raw_parts(lp_file_name, len) };
         // SAVE-DESTINATION WRITE-OPEN REDIRECT (save-game-flow WP3), checked FIRST and only inside
@@ -1714,6 +1782,12 @@ unsafe extern "system" fn save_redirect_copyfilew_hook(
 ) -> i32 {
     let orig = SAVE_REDIRECT_ORIG_COPYFILEW.load(Ordering::SeqCst);
     let call: CopyFileWFn = unsafe { std::mem::transmute::<usize, CopyFileWFn>(orig) };
+    // RE-ENTRANCY (see `reentry.rs`): `save_redirect_path` observes, stages and normalizes, all of
+    // which open files. Nested entries pass straight through with the caller's own endpoints.
+    let depth = SaveDetourDepth::enter();
+    if depth.is_reentrant() {
+        return unsafe { call(existing, new_file, fail_if_exists) };
+    }
     let existing_red = {
         let len = unsafe { wide_len(existing) };
         (len != 0)
@@ -1807,8 +1881,11 @@ unsafe extern "system" fn save_redirect_getattrw_hook(lp_file_name: *const u16) 
     let orig = SAVE_REDIRECT_ORIG_GETATTRW.load(Ordering::SeqCst);
     let call: unsafe extern "system" fn(*const u16) -> u32 =
         unsafe { std::mem::transmute::<usize, unsafe extern "system" fn(*const u16) -> u32>(orig) };
+    // RE-ENTRANCY (see `reentry.rs`): `save_path_api_redirect` -> `save_redirect_path` observes,
+    // stages and normalizes, all of which open files and land back in this detour family.
+    let depth = SaveDetourDepth::enter();
     let len = unsafe { wide_len(lp_file_name) };
-    if len != 0 {
+    if len != 0 && !depth.is_reentrant() {
         let path = unsafe { std::slice::from_raw_parts(lp_file_name, len) };
         if let Some(red) = save_path_api_redirect("GetFileAttributesW", path) {
             return unsafe { call(red.as_ptr()) };
@@ -1829,8 +1906,10 @@ unsafe extern "system" fn save_redirect_getattrexw_hook(
             orig,
         )
     };
+    // RE-ENTRANCY (see `reentry.rs`): same hazard as `GetFileAttributesW` above.
+    let depth = SaveDetourDepth::enter();
     let len = unsafe { wide_len(lp_file_name) };
-    if len != 0 {
+    if len != 0 && !depth.is_reentrant() {
         let path = unsafe { std::slice::from_raw_parts(lp_file_name, len) };
         if let Some(red) = save_path_api_redirect("GetFileAttributesExW", path) {
             return unsafe { call(red.as_ptr(), info_level, info) };
@@ -1850,8 +1929,10 @@ unsafe extern "system" fn save_redirect_findfirstw_hook(
             orig,
         )
     };
+    // RE-ENTRANCY (see `reentry.rs`): same hazard as `GetFileAttributesW` above.
+    let depth = SaveDetourDepth::enter();
     let len = unsafe { wide_len(lp_file_name) };
-    if len != 0 {
+    if len != 0 && !depth.is_reentrant() {
         let path = unsafe { std::slice::from_raw_parts(lp_file_name, len) };
         if let Some(red) = save_path_api_redirect("FindFirstFileW", path) {
             return unsafe { call(red.as_ptr(), find_data) };

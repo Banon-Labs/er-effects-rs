@@ -4,3 +4,4 @@
 
 include!("save_redirect/path_hooks.rs");
 include!("save_redirect/file_ops.rs");
+include!("save_redirect/reentry.rs");

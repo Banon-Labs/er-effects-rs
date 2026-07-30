@@ -127,6 +127,12 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
         cs_task.run_recurring(
             move |task_data: &FD4TaskData| {
                 let _gt = GameTaskTimer(std::time::Instant::now());
+                // Free-running, lock-free liveness beat. `EffectsState::game_task_ticks` counts the
+                // same thing but only a telemetry write this task performs can publish it, so it
+                // cannot answer "is this task still running" for anyone else. Any thread can read
+                // this one, which is what lets the boot picker record whether the game was alive
+                // across a dialog that blocked for half a minute.
+                er_telemetry::counters::GAME_TASK_TICKS_TOTAL.fetch_add(1, Ordering::SeqCst);
                 // Boot-phase marker: first frame our recurring task actually ticks.
                 if profiler_enabled()
                     && BOOT_FIRST_FRAME_LOGGED
