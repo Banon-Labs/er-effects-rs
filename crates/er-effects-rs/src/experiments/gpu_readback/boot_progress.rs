@@ -75,6 +75,16 @@ pub(crate) use er_telemetry::counters::BOOT_VIEW_LAST_LABEL_HASH;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_MILESTONE_IDX;
 /// Monotonic bitmask of reached milestones (bit i = milestone i seen reached at least once).
 pub(crate) use er_telemetry::counters::BOOT_VIEW_REACHED_MASK;
+/// Load-epoch identity + the per-epoch baselines for process-sticky counters (bd er-effects-rs-ok8d).
+pub(crate) use er_telemetry::counters::BOOT_VIEW_CONTINUE_ALLOW_BASELINE;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_EPOCH_KIND;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_EPOCH_SEQ;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_FRESH_DESER_BASELINE;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_PORTRAIT_SPARED_BASELINE;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_TFC_CONTINUE_BASELINE;
+/// `BOOT_VIEW_EPOCH_KIND` values.
+const BOOT_VIEW_EPOCH_KIND_BOOT: usize = 0;
+const BOOT_VIEW_EPOCH_KIND_RELOAD: usize = 1;
 
 // Our OWN persistent command objects (leaked raw pointers, same pattern as the portrait overlay --
 // windows-rs COM types are !Send). Deliberately SEPARATE from the OVERLAY_* objects so the boot view
@@ -156,33 +166,16 @@ const BOOT_BG_STEAM_APPID: &str = "1245620";
 const BOOT_BG_MAX_DIM: usize = 4096;
 const BOOT_BG_MAX_PIXELS: usize = BOOT_BG_MAX_DIM * BOOT_BG_MAX_DIM;
 
-/// Number of loading phases. Higher granularity than the old 7 (user 2026-07-15: "we need higher
-/// granularity and specificity to the label ... It gets stuck on some of these phases for longer
-/// segments"), especially across the world-load, which is the long stuck stretch.
-const BOOT_VIEW_MILESTONE_COUNT: usize = er_loading_bar::PHASE_COUNT;
-/// Left-aligned phase labels. Specific + multi-word -- this single label above the bar now carries
-/// the whole phase story (all tick markers removed), so it is left-aligned in the reserved text
-/// space and can be more than one word. Ordered; each idx is asserted by `boot_milestone_reached`
-/// and latched monotonic by the caller.
-const BOOT_VIEW_MILESTONE_LABELS: [&str; BOOT_VIEW_MILESTONE_COUNT] = er_loading_bar::PHASE_LABELS;
-/// Progress target per phase, in permille. The two long stretches -- the title-asset load and the
-/// world stream -- get the widest spans. The world tail is ALSO driven by the game's real Gauge_3
-/// progress and forced to 1000 at the in-game handoff (see `boot_view_progress`), so our bar owns
-/// the whole 0..100% and reaches 100% right as the character switches in.
-const BOOT_VIEW_MILESTONE_PERMILLE: [usize; BOOT_VIEW_MILESTONE_COUNT] =
-    er_loading_bar::PHASE_PERMILLE;
-/// SWITCH STEP-NAME LABELS (2026-07-16, user-requested). Once the MoveMapStep child is live during an
-/// own-menu switch, the bar shows the REAL engine step (`movemapstep_step_name`) as its label and
-/// drives the fill from the child step index, so a softlock FREEZES the bar on the exact stuck step by
-/// name (WORLD RES WAIT, LEAVE SESSION WAIT, ...) -- the label becomes the RAM semaphore, not an
-/// eyeballed "stuck at LOADING SAVE". `boot_view_progress` returns `idx >= MMS_LABEL_IDX_BASE` to signal
-/// the rasterizer to name the step instead of using the heuristic milestone label; the child step is
-/// `idx - MMS_LABEL_IDX_BASE`. The `(permille, idx)` draw cache invalidates naturally on a step change.
-const MMS_LABEL_IDX_BASE: usize = 100;
-/// Fill (permille) the child steps span: step 0 starts just past LOADING SAVE (520), the last step
-/// approaches 100%. Keeps the bar monotonic across the heuristic->step-name handoff.
-const MMS_STEP_FILL_BASE: usize = 540;
-const MMS_STEP_FILL_SPAN: usize = 440;
+/// The phase sequence THIS load epoch publishes. Boot walks engine bring-up through the first world;
+/// a character reload cannot replay any of that, so it publishes a strictly smaller sequence and its
+/// visible `N/M` denominator shrinks accordingly (bd er-effects-rs-ok8d).
+fn boot_view_phase_set() -> &'static er_loading_bar::PhaseSet {
+    if BOOT_VIEW_EPOCH_KIND.load(Ordering::SeqCst) == BOOT_VIEW_EPOCH_KIND_RELOAD {
+        &er_loading_bar::RELOAD_PHASE_SET
+    } else {
+        &er_loading_bar::BOOT_PHASE_SET
+    }
+}
 /// Fill edge the bar pauses at while the startup save picker holds the boot (the MAIN MENU phase, whose
 /// creep tops out near here). `boot_view_progress` clamps the fill here while a pick is pending, then
 /// lifts it the frame the pick clears the latch.
@@ -272,102 +265,126 @@ const BOOT_VIEW_RGB_TRACK: [u8; 3] = [26, 26, 26];
 const BOOT_VIEW_RGB_FILL: [u8; 3] = [226, 223, 214];
 const BOOT_VIEW_RGB_TEXT: [u8; 3] = [150, 147, 138];
 
-/// True once milestone `idx`'s semaphore has asserted. Every predicate is a pure atomic/pointer read
-/// that is safe from the render thread; ordering mistakes degrade to a stalled bar, never a lie about
-/// sequence (the reached MASK is latched monotonic by the caller).
-fn boot_milestone_reached(idx: usize) -> bool {
-    if BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0 {
-        let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
-        return match idx {
-            // Drawing at all proves the present hook + game swapchain are live.
-            0 => true,
-            1 => game_man_ptr_or_null() != 0,
-            // Offline bytes are already cleared by the first boot in the same process. The own-menu switch
-            // reuses the title pipeline, so the three title-asset ramps assert here too; fall back to the
-            // quickload-phase ordinal when they don't (older/other switch paths).
-            2 => FORCE_OFFLINE_BYTES_CLEARED.load(Ordering::SeqCst) != 0,
-            3 => {
-                TITLE_SCALEFORM_FILE_OPEN_HITS.load(Ordering::SeqCst) != 0
-                    || phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
-            }
-            4 => {
-                TITLE_SCALEFORM_RESOURCE_CTOR_HITS.load(Ordering::SeqCst) != 0
-                    || phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
-            }
-            5 => phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN,
-            6 => phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF,
-            7 => {
-                phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
-                    || SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
-                    || TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0
-            }
-            // World-load phases 8..11, keyed off the game's native loading screen (shared with the normal
-            // path so both flows get the same BUILDING/STREAMING/FINALIZING/ENTERING WORLD granularity).
-            8 | 9 | 10 | 11 => boot_world_phase_reached(idx),
-            _ => false,
-        };
-    }
-    match idx {
+/// Delta of a process-STICKY counter since this epoch's baseline. A reload epoch must never assert a
+/// phase from `!= 0` on a counter a previous load already moved.
+fn boot_view_epoch_delta(
+    counter: &'static std::sync::atomic::AtomicUsize,
+    baseline: &'static std::sync::atomic::AtomicUsize,
+) -> bool {
+    counter.load(Ordering::SeqCst) != baseline.load(Ordering::SeqCst)
+}
+
+/// True once THIS epoch's load request has been committed. All four sources are sticky for the whole
+/// process, so each is measured against its rearm-time baseline (bd er-effects-rs-ok8d: the unbaselined
+/// `!= 0` form re-latched LOADING SAVE on the reload's very first frame).
+fn boot_view_load_confirmed_this_epoch() -> bool {
+    boot_view_epoch_delta(
+        &SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT,
+        &BOOT_VIEW_CONTINUE_ALLOW_BASELINE,
+    ) || boot_view_epoch_delta(&TFC_CONTINUE_FIRED, &BOOT_VIEW_TFC_CONTINUE_BASELINE)
+        || boot_view_epoch_delta(
+            &LOADING_BG_PORTRAIT_SPARED_RENDERER,
+            &BOOT_VIEW_PORTRAIT_SPARED_BASELINE,
+        )
+        || boot_view_epoch_delta(
+            &SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT,
+            &BOOT_VIEW_FRESH_DESER_BASELINE,
+        )
+}
+
+/// True once `phase`'s semaphore has asserted FOR THE CURRENT EPOCH. Every predicate is a pure
+/// atomic/pointer read that is safe from the render thread. Keyed on the phase IDENTITY rather than a
+/// table index so the boot and reload sequences cannot drift apart: a phase means the same thing in
+/// both, it just occupies a different slot.
+fn boot_phase_reached(phase: er_loading_bar::LoadPhase) -> bool {
+    use er_loading_bar::LoadPhase as P;
+    let reload = BOOT_VIEW_EPOCH_KIND.load(Ordering::SeqCst) == BOOT_VIEW_EPOCH_KIND_RELOAD;
+    let quick_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    match phase {
         // Drawing at all proves the present hook + game swapchain are live.
-        0 => true,
-        1 => game_man_ptr_or_null() != 0,
-        // ACQUIRING ASSETS: the title menu starts acquiring its Scaleform resources (~12.7s), right after
-        // GameMan. First of three title-asset ramps; splitting the old single ~32s "asset load" label into
-        // three keeps the bar/label advancing across that long stretch.
-        2 => TITLE_MENU_RESOURCE_ACQUIRE_HITS.load(Ordering::SeqCst) != 0,
-        // OPENING SCALEFORM / BUILDING SCALEFORM: the .gfx file-open counter climbs to ~113 across the load,
-        // so keying these off ASCENDING COUNT thresholds (not `!= 0`) spreads the two labels through the
-        // stretch instead of both flipping the instant the first file opens (they all go nonzero together).
-        3 => TITLE_SCALEFORM_FILE_OPEN_HITS.load(Ordering::SeqCst) >= 30,
-        4 => TITLE_SCALEFORM_FILE_OPEN_HITS.load(Ordering::SeqCst) >= 70,
-        // TITLE READY: PRESS START is bound (~40s, the title is actually up internally) -- OR the fade-in
-        // skip fired (backstop). We cover the title itself; this only reflects the engine reaching it.
-        5 => {
-            TITLE_PRESS_START_BIND_HITS.load(Ordering::SeqCst) != 0
-                || TITLE_FADEIN_SKIP_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS
+        P::StartingUp => true,
+        // A reload epoch exists BECAUSE a slot was confirmed; the rearm is that confirmation.
+        P::SwitchConfirmed => true,
+        P::GameSystems => game_man_ptr_or_null() != 0,
+        // ACQUIRING ASSETS: the title menu starts acquiring its Scaleform resources (~12.7s), right
+        // after GameMan. First of three title-asset ramps; splitting the old single ~32s "asset load"
+        // label into three keeps the bar/label advancing across that long stretch.
+        P::AcquiringAssets => TITLE_MENU_RESOURCE_ACQUIRE_HITS.load(Ordering::SeqCst) != 0,
+        // OPENING / BUILDING MENU UI: the .gfx file-open counter climbs to ~113 across the load, so
+        // keying these off ASCENDING COUNT thresholds (not `!= 0`) spreads the two labels through the
+        // stretch instead of both flipping the instant the first file opens.
+        P::OpeningMenuUi => TITLE_SCALEFORM_FILE_OPEN_HITS.load(Ordering::SeqCst) >= 30,
+        P::BuildingMenuUi => TITLE_SCALEFORM_FILE_OPEN_HITS.load(Ordering::SeqCst) >= 70,
+        // RETURNING TO TITLE: the switch wrote menuData+0x5d and the quickload FSM left the confirm.
+        P::ReturningToTitle => quick_phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED,
+        P::TitleReady => {
+            if reload {
+                // The switch FSM owns this on a reload. The boot-only PRESS START / fade-in-skip
+                // latches below are sticky for the whole process and would assert instantly.
+                quick_phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN
+            } else {
+                // PRESS START is bound (~40s, the title is actually up internally) -- OR the fade-in
+                // skip fired (backstop). We cover the title itself; this only reflects the engine
+                // reaching it.
+                TITLE_PRESS_START_BIND_HITS.load(Ordering::SeqCst) != 0
+                    || TITLE_FADEIN_SKIP_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS
+            }
         }
-        // PREPARING SAVE: menu opened internally -- the own-stepper latch when that task runs, OR'd with the
-        // network-check shortcircuit which fires ~10ms after the title-accept-byte natural menu-open on the
-        // product path (runtime-proven 2026-07-05: latch stayed 0, shortcircuit fired at +12.8s).
-        6 => {
-            PRODUCT_CORE_LAST_MENU_OPENED_LATCH.load(Ordering::SeqCst) != 0
-                || NETWORK_CHECK_SHORTCIRCUIT_COUNT.load(Ordering::SeqCst) != 0
+        P::PreparingSave => {
+            if reload {
+                quick_phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
+            } else {
+                // Menu opened internally -- the own-stepper latch when that task runs, OR'd with the
+                // network-check shortcircuit which fires ~10ms after the title-accept-byte natural
+                // menu-open on the product path.
+                PRODUCT_CORE_LAST_MENU_OPENED_LATCH.load(Ordering::SeqCst) != 0
+                    || NETWORK_CHECK_SHORTCIRCUIT_COUNT.load(Ordering::SeqCst) != 0
+            }
         }
-        // LOADING SAVE: Continue committed -- the confirm/TFC counters on their paths, OR'd with the portrait
-        // teardown-SPARE which lands in the same millisecond as the Continue SetState5 on the portrait-lookat
-        // product path (runtime-proven 2026-07-05: counters stayed 0, spare fired).
-        7 => {
-            SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
-                || TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0
-                || LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) != 0
+        P::LoadingSave => boot_view_load_confirmed_this_epoch(),
+        // World-load phases, keyed off the game's native CS::LoadingScreen so they assert on every
+        // load path. The counters behind them are cleared by the epoch reset, so they are already
+        // epoch-relative. The boot epoch additionally gates on a real load request so the bar cannot
+        // sit at 100% from the boot-to-title loading screen before the user starts loading.
+        P::BuildingWorld | P::StreamingWorld | P::FinalizingWorld | P::EnteringWorld => {
+            (reload || boot_view_load_flow_requested()) && boot_world_phase_reached(phase)
         }
-        // World-load phases: the native loading screen carries these (see boot_world_phase_reached), but
-        // the initial boot-to-title loading screen is not the user-started save-load flow. Gate these on a
-        // real Continue/load request so the bar cannot sit at 100% before the user starts loading.
-        8 | 9 | 10 | 11 => boot_view_load_flow_requested() && boot_world_phase_reached(idx),
+    }
+}
+
+/// The world-load phases, keyed off the game's native CS::LoadingScreen so they assert on every load
+/// path (normal autoload AND own-menu switch), independent of the profile-table build. Pure atomic
+/// reads; safe from the render thread.
+fn boot_world_phase_reached(phase: er_loading_bar::LoadPhase) -> bool {
+    use er_loading_bar::LoadPhase as P;
+    let update_hits = LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst);
+    let progress = LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst);
+    let close_hits = LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst);
+    match phase {
+        // BUILDING WORLD: the native loading screen has appeared -> the world build has begun.
+        P::BuildingWorld => update_hits != 0,
+        // STREAMING WORLD: the native world-load gauge is actively streaming.
+        P::StreamingWorld => progress > 0,
+        // FINALIZING WORLD: the gauge is past the midpoint, splitting the long stream into two labels.
+        P::FinalizingWorld => progress >= 500,
+        // ENTERING WORLD: the gauge is near-complete, or a close arrived on a gauge that is finished
+        // (or that never existed).
+        //
+        // A bare `close_hits != 0` is NOT enough. A reload's loading screen sends a close while its
+        // gauge is still at frame 1/500 -- a transient screen closing, not the world handing off -- and
+        // trusting it fired ENTERING WORLD ~1s into the reload, jumping the fill from 48% to 91% and
+        // collapsing STREAMING/FINALIZING WORLD into the same instant (measured run
+        // samechar-3x-threedll-20260730-082930, bd er-effects-rs-ok8d).
+        P::EnteringWorld => {
+            let max_frame = LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst);
+            let cur_frame = LOADING_SCREEN_BAR_CURRENT_FRAME.load(Ordering::SeqCst);
+            let gauge_done = max_frame == 0 || cur_frame >= max_frame;
+            progress >= 900 || (close_hits != 0 && gauge_done)
+        }
         _ => false,
     }
 }
 
-/// The three world-load phases (6=BUILDING, 7=STREAMING, 8=ENTERING WORLD), keyed off the game's native
-/// CS::LoadingScreen so they assert on every load path (normal autoload AND own-menu switch), independent
-/// of the profile-table build. Pure atomic reads; safe from the render thread.
-fn boot_world_phase_reached(idx: usize) -> bool {
-    let update_hits = LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst);
-    let progress = LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst);
-    let close_hits = LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst);
-    match idx {
-        // BUILDING WORLD: the native loading screen has appeared -> the world build has begun.
-        8 => update_hits != 0,
-        // STREAMING WORLD: the native world-load gauge is actively streaming.
-        9 => progress > 0,
-        // FINALIZING WORLD: the gauge is past the midpoint, splitting the long stream into two labels.
-        10 => progress >= 500,
-        // ENTERING WORLD: the gauge is near-complete or the loading screen sent its close -> switch in-game.
-        11 => progress >= 900 || close_hits != 0,
-        _ => false,
-    }
-}
 fn boot_view_player_render_ready() -> bool {
     let Ok(player) = (unsafe { PlayerIns::local_player_mut() }) else {
         return false;
@@ -398,6 +415,101 @@ fn boot_view_load_flow_requested() -> bool {
         || LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) != 0
 }
 
+/// Clear the native CS::LoadingScreen counters so the NEXT loading window is measured on its own.
+/// These are cumulative for the whole process: without this the world phases inherit the previous
+/// screen's finished state and the bar stays full with a frozen label for the entire next load
+/// (user-reported 2026-07-16: "I don't know what's going on for 30s").
+fn boot_view_reset_native_loading_semaphores() {
+    LOADING_SCREEN_UPDATE_HITS.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_BAR_PROGRESS_PERMILLE.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_BAR_CURRENT_FRAME.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_BAR_MAX_FRAME.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_CLOSE_SENT_HITS.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_CLOSE_SENT.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_UPDATE_LAST_MS.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_CLOSE_SENT_FIRST_MS.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_GFX_FADEOUT_HITS.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_GFX_FADEOUT_FIRST_MS.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_GFX_FADEOUT_LAST_MS.store(0, Ordering::SeqCst);
+}
+
+/// Re-arm the cover DRAWING WINDOW: stop latch, window clock, handoff/fade/dark-gap state, draw cache.
+/// This is "start covering again", independent of whether the phase walk is also starting over.
+fn boot_view_reset_cover_window() {
+    BOOT_VIEW_STOPPED.store(0, Ordering::SeqCst);
+    BOOT_VIEW_STOP_REASON.store(0, Ordering::SeqCst);
+    BOOT_VIEW_WINDOW_ARM_MS.store(boot_view_epoch_ms().max(1) as usize, Ordering::SeqCst);
+    BOOT_VIEW_FPS_BAIL_RESUMED.store(0, Ordering::SeqCst);
+    BOOT_VIEW_HANDOFF_SEEN_MS.store(0, Ordering::SeqCst);
+    BOOT_VIEW_HANDOFF_NATIVE_HITS_BASELINE.store(0, Ordering::SeqCst);
+    BOOT_VIEW_STOP_NATIVE_HITS.store(0, Ordering::SeqCst);
+    BOOT_VIEW_FADE_START_MS.store(0, Ordering::SeqCst);
+    BOOT_VIEW_FADE_COMPLETE_MS.store(0, Ordering::SeqCst);
+    BOOT_VIEW_FADE_HITS.store(0, Ordering::SeqCst);
+    BOOT_VIEW_FADE_LAST_ALPHA.store(0, Ordering::SeqCst);
+    BOOT_VIEW_FADE_FAILURES.store(0, Ordering::SeqCst);
+    BOOT_VIEW_NATIVE_GFX_FADE_HOLD_HITS.store(0, Ordering::SeqCst);
+    BOOT_VIEW_NATIVE_GFX_FADE_HOLD_COMPLETE_MS.store(0, Ordering::SeqCst);
+    BOOT_VIEW_DARK_GAP_FAILURES.store(0, Ordering::SeqCst);
+    BOOT_VIEW_DARK_GAP_LAST_HELD_MS.store(0, Ordering::SeqCst);
+    BOOT_VIEW_DARK_GAP_LAST_NATIVE_HITS.store(0, Ordering::SeqCst);
+    // Draw cache: force a re-rasterize on the first frame of the new window.
+    BOOT_VIEW_DRAWN_PERMILLE.store(usize::MAX, Ordering::SeqCst);
+    BOOT_VIEW_DRAWN_IDX.store(usize::MAX, Ordering::SeqCst);
+    BOOT_VIEW_DRAWN_BG_ACTIVE.store(usize::MAX, Ordering::SeqCst);
+}
+
+/// Start a NEW LOAD EPOCH: everything `boot_view_reset_cover_window` does, plus the state that only a
+/// genuinely new load may reset -- the phase walk, the displayed fill, the label high-water, and the
+/// baselines for counters that are sticky for the whole process.
+///
+/// THE EPOCH BOUNDARY IS THE REARM, NOT THE TEARDOWN (bd er-effects-rs-ok8d). A teardown-side clear
+/// only runs on the path that actually tore down, and the cover has several exits (release fade, FPS
+/// bail, world handoff, and a load abandoned mid-flight), so clearing there leaves half-cleared state
+/// behind whenever an epoch ends by a path that was not carrying the clear. The rearm is the single
+/// mandatory gate every drawing epoch passes through, so resetting here makes an epoch start from a
+/// known-zero state no matter how -- or whether -- the previous one finished.
+fn boot_view_reset_epoch_state(kind: usize) {
+    let seq = BOOT_VIEW_EPOCH_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+    BOOT_VIEW_EPOCH_KIND.store(kind, Ordering::SeqCst);
+    boot_view_reset_cover_window();
+    boot_view_reset_native_loading_semaphores();
+    // Phase walk + displayed fill. The mask starts at literally zero: phase 0 latches on this epoch's
+    // first sample and is REPORTED, instead of being pre-seeded and silently skipped.
+    BOOT_VIEW_REACHED_MASK.store(0, Ordering::SeqCst);
+    BOOT_VIEW_MILESTONE_IDX.store(0, Ordering::SeqCst);
+    BOOT_VIEW_LAST_PERMILLE.store(0, Ordering::SeqCst);
+    BOOT_VIEW_IDX_CHANGED_MS.store(boot_view_epoch_ms(), Ordering::SeqCst);
+    // Label monotonic high-water, stamped with the epoch SEQ so a new epoch drops it wholesale. It used
+    // to be keyed on the fresh-deser counter, which only bumps at the reload's DESERIALIZE -- seconds
+    // into the load -- so the previous epoch's high-water was still clamping the new one and the visible
+    // label bounced between two different denominators mid-load.
+    BOOT_VIEW_MONO_EPOCH.store(seq, Ordering::SeqCst);
+    BOOT_VIEW_MONO_ORD.store(0, Ordering::SeqCst);
+    BOOT_VIEW_MONO_LABEL_PTR.store(0, Ordering::SeqCst);
+    BOOT_VIEW_MONO_LABEL_LEN.store(0, Ordering::SeqCst);
+    BOOT_VIEW_LAST_LABEL_HASH.store(0, Ordering::SeqCst);
+    // BASELINES for counters that stay set for the whole process, so this epoch's phases assert from
+    // what happens NEXT rather than from what a previous load left behind.
+    BOOT_VIEW_CONTINUE_ALLOW_BASELINE.store(
+        SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst),
+        Ordering::SeqCst,
+    );
+    BOOT_VIEW_TFC_CONTINUE_BASELINE.store(TFC_CONTINUE_FIRED.load(Ordering::SeqCst), Ordering::SeqCst);
+    BOOT_VIEW_PORTRAIT_SPARED_BASELINE.store(
+        LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst),
+        Ordering::SeqCst,
+    );
+    BOOT_VIEW_FRESH_DESER_BASELINE.store(
+        SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst),
+        Ordering::SeqCst,
+    );
+}
+
+/// The boot epoch's user-started load begins mid-sequence, NOT at a new epoch: the same walk that
+/// started at STARTING UP continues into LOADING SAVE and the world phases. So this re-arms the cover
+/// WINDOW and drops the stale boot-to-title native loading counters, and deliberately leaves the phase
+/// walk alone -- resetting it here would re-report every phase the boot already passed.
 fn boot_view_rearm_for_first_load_request_if_needed() {
     if BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0
         || !boot_view_load_flow_requested()
@@ -407,29 +519,12 @@ fn boot_view_rearm_for_first_load_request_if_needed() {
     {
         return;
     }
-    BOOT_VIEW_STOPPED.store(0, Ordering::SeqCst);
-    BOOT_VIEW_STOP_REASON.store(0, Ordering::SeqCst);
-    BOOT_VIEW_WINDOW_ARM_MS.store(boot_view_epoch_ms().max(1) as usize, Ordering::SeqCst);
-    BOOT_VIEW_FPS_BAIL_RESUMED.store(0, Ordering::SeqCst);
-    BOOT_VIEW_REACHED_MASK.store(1, Ordering::SeqCst);
-    BOOT_VIEW_MILESTONE_IDX.store(0, Ordering::SeqCst);
-    BOOT_VIEW_LAST_PERMILLE.store(0, Ordering::SeqCst);
-    BOOT_VIEW_DRAWN_PERMILLE.store(usize::MAX, Ordering::SeqCst);
-    BOOT_VIEW_DRAWN_IDX.store(usize::MAX, Ordering::SeqCst);
-    BOOT_VIEW_DRAWN_BG_ACTIVE.store(usize::MAX, Ordering::SeqCst);
-    BOOT_VIEW_IDX_CHANGED_MS.store(boot_view_epoch_ms(), Ordering::SeqCst);
-    BOOT_VIEW_HANDOFF_SEEN_MS.store(0, Ordering::SeqCst);
-    BOOT_VIEW_HANDOFF_NATIVE_HITS_BASELINE.store(0, Ordering::SeqCst);
-    LOADING_SCREEN_UPDATE_HITS.store(0, Ordering::SeqCst);
-    LOADING_SCREEN_BAR_PROGRESS_PERMILLE.store(0, Ordering::SeqCst);
-    LOADING_SCREEN_BAR_CURRENT_FRAME.store(0, Ordering::SeqCst);
-    LOADING_SCREEN_BAR_MAX_FRAME.store(0, Ordering::SeqCst);
-    LOADING_SCREEN_CLOSE_SENT_HITS.store(0, Ordering::SeqCst);
-    LOADING_SCREEN_CLOSE_SENT.store(0, Ordering::SeqCst);
-    LOADING_SCREEN_UPDATE_LAST_MS.store(0, Ordering::SeqCst);
-    LOADING_SCREEN_CLOSE_SENT_FIRST_MS.store(0, Ordering::SeqCst);
+    boot_view_reset_cover_window();
+    boot_view_reset_native_loading_semaphores();
     append_autoload_debug(format_args!(
-        "boot-view: first load request rearmed; cleared boot-to-title native loading semaphores"
+        "boot-view: first load request rearmed; cleared boot-to-title native loading semaphores (epoch {} kind=boot phases={})",
+        BOOT_VIEW_EPOCH_SEQ.load(Ordering::SeqCst),
+        boot_view_phase_set().len(),
     ));
 }
 
@@ -449,10 +544,7 @@ pub(crate) fn rearm_boot_progress_for_own_menu_load(selected_slot: i32, source: 
     let table_baseline = PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst);
     BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.store(slot_key, Ordering::SeqCst);
     BOOT_VIEW_LOADSCREEN_TABLE_BASELINE.store(table_baseline, Ordering::SeqCst);
-    BOOT_VIEW_STOPPED.store(0, Ordering::SeqCst);
-    BOOT_VIEW_STOP_REASON.store(0, Ordering::SeqCst);
-    BOOT_VIEW_WINDOW_ARM_MS.store(boot_view_epoch_ms().max(1) as usize, Ordering::SeqCst);
-    BOOT_VIEW_FPS_BAIL_RESUMED.store(0, Ordering::SeqCst);
+    boot_view_reset_epoch_state(BOOT_VIEW_EPOCH_KIND_RELOAD);
     // FPS-bail composite clock: force re-init at the first composite of THIS window. The clock is
     // keyed on the fresh-deser epoch, which has NOT incremented yet at rearm time (it bumps at the
     // reload's deserialize), so switch #2+ inherited the PREVIOUS window's first-composite timestamp
@@ -462,40 +554,6 @@ pub(crate) fn rearm_boot_progress_for_own_menu_load(selected_slot: i32, source: 
     crate::constants::BOOT_VIEW_COMPOSITE_EPOCH.store(usize::MAX, Ordering::SeqCst);
     BOOT_VIEW_PUMP_STOP_MS.store(0, Ordering::SeqCst);
     BOOT_VIEW_PUMP_STOP_REASON.store(0, Ordering::SeqCst);
-    BOOT_VIEW_HANDOFF_SEEN_MS.store(0, Ordering::SeqCst);
-    BOOT_VIEW_STOP_NATIVE_HITS.store(0, Ordering::SeqCst);
-    BOOT_VIEW_FADE_START_MS.store(0, Ordering::SeqCst);
-    BOOT_VIEW_FADE_COMPLETE_MS.store(0, Ordering::SeqCst);
-    BOOT_VIEW_FADE_HITS.store(0, Ordering::SeqCst);
-    BOOT_VIEW_FADE_LAST_ALPHA.store(0, Ordering::SeqCst);
-    BOOT_VIEW_FADE_FAILURES.store(0, Ordering::SeqCst);
-    BOOT_VIEW_NATIVE_GFX_FADE_HOLD_HITS.store(0, Ordering::SeqCst);
-    BOOT_VIEW_NATIVE_GFX_FADE_HOLD_COMPLETE_MS.store(0, Ordering::SeqCst);
-    LOADING_SCREEN_UPDATE_LAST_MS.store(0, Ordering::SeqCst);
-    LOADING_SCREEN_CLOSE_SENT_FIRST_MS.store(0, Ordering::SeqCst);
-    LOADING_SCREEN_GFX_FADEOUT_HITS.store(0, Ordering::SeqCst);
-    LOADING_SCREEN_GFX_FADEOUT_FIRST_MS.store(0, Ordering::SeqCst);
-    LOADING_SCREEN_GFX_FADEOUT_LAST_MS.store(0, Ordering::SeqCst);
-    BOOT_VIEW_DARK_GAP_FAILURES.store(0, Ordering::SeqCst);
-    BOOT_VIEW_DARK_GAP_LAST_HELD_MS.store(0, Ordering::SeqCst);
-    BOOT_VIEW_DARK_GAP_LAST_NATIVE_HITS.store(0, Ordering::SeqCst);
-    BOOT_VIEW_REACHED_MASK.store(1, Ordering::SeqCst);
-    BOOT_VIEW_MILESTONE_IDX.store(0, Ordering::SeqCst);
-    BOOT_VIEW_LAST_PERMILLE.store(0, Ordering::SeqCst);
-    BOOT_VIEW_DRAWN_PERMILLE.store(usize::MAX, Ordering::SeqCst);
-    BOOT_VIEW_DRAWN_IDX.store(usize::MAX, Ordering::SeqCst);
-    BOOT_VIEW_DRAWN_BG_ACTIVE.store(usize::MAX, Ordering::SeqCst);
-    BOOT_VIEW_IDX_CHANGED_MS.store(boot_view_epoch_ms(), Ordering::SeqCst);
-    // Reset the WORLD-PHASE semaphores (native loading-screen counters read by boot_world_phase_reached)
-    // so this switch's bar markers 8..11 start UNREACHED instead of inheriting the PREVIOUS load's finished
-    // state (user-reported 2026-07-16: the bar stays FULL and the label never updates for the whole 2nd/3rd
-    // load = "I don't know what's going on for 30s"). Markers 3-4 already re-assert from the switch's phase,
-    // 5-7 from phase advance; only the world-tail counters were sticky. The switch's own native loading
-    // screen re-increments these as its world streams, so 8..11 (BUILDING/STREAMING/FINALIZING/ENTERING
-    // WORLD) advance with the real load and the bar/label move again (and STALL at the true stuck marker).
-    LOADING_SCREEN_UPDATE_HITS.store(0, Ordering::SeqCst);
-    LOADING_SCREEN_BAR_PROGRESS_PERMILLE.store(0, Ordering::SeqCst);
-    LOADING_SCREEN_CLOSE_SENT_HITS.store(0, Ordering::SeqCst);
     // Clear the PREVIOUS character's portrait/render state IMMEDIATELY when a new load arms (2026-07-16,
     // user-reported: the old character lingered on the new load screen). The portrait window is otherwise
     // only reset on load COMPLETION, so the just-loaded character carried into the NEXT switch's cover.
@@ -507,41 +565,68 @@ pub(crate) fn rearm_boot_progress_for_own_menu_load(selected_slot: i32, source: 
     // (confirm-press hook), so the summary-record identity read is safe here.
     unsafe { loading_portrait_window_reset_for_switch(selected_slot, "own-menu-switch-rearm") };
     append_autoload_debug(format_args!(
-        "boot-view: rearmed for own-menu character load selected_slot={selected_slot} source={source} table_baseline={table_baseline}"
+        "boot-view: rearmed for own-menu character load selected_slot={selected_slot} source={source} table_baseline={table_baseline} epoch={} kind=reload phases={}",
+        BOOT_VIEW_EPOCH_SEQ.load(Ordering::SeqCst),
+        boot_view_phase_set().len(),
     ));
 }
 
 fn boot_view_progress() -> (usize, usize) {
     boot_view_rearm_for_first_load_request_if_needed();
-    let mut mask = BOOT_VIEW_REACHED_MASK.load(Ordering::SeqCst);
-    for i in 0..BOOT_VIEW_MILESTONE_LABELS.len() {
-        if mask & (1 << i) == 0 && boot_milestone_reached(i) {
-            mask |= 1 << i;
+    let set = boot_view_phase_set();
+    // Highest phase this epoch has evidence for, then DOWNWARD CLOSURE over 0..=highest.
+    //
+    // The sequence is strictly ordered, so reaching phase k proves the load passed through every phase
+    // before it -- whether or not that phase's own detector ever published. Closing the run is what
+    // makes the reported walk hole-free: the old "set bit i iff predicate i" form left gaps whenever a
+    // later detector fired first, and the bar reported 7 -> 8 -> 11, never naming STREAMING WORLD or
+    // FINALIZING WORLD even though the load plainly went through them (bd er-effects-rs-ok8d).
+    let mut highest = 0usize;
+    for i in 0..set.len() {
+        if boot_phase_reached(set.phase(i)) {
+            highest = i;
         }
     }
-    BOOT_VIEW_REACHED_MASK.store(mask, Ordering::SeqCst);
-    let idx = (usize::BITS - 1 - mask.max(1).leading_zeros()) as usize;
+    // The epoch reset runs on the GAME thread while this samples on the RENDER thread, so a single
+    // frame can straddle the swap and read a wider epoch's mask against a narrower epoch's phase set.
+    // Masking to the active set's width keeps `idx` inside the set instead of resolving a phase this
+    // epoch does not have; the next frame is consistent either way.
+    let set_mask = (1usize << set.len()) - 1;
+    let prev_mask = BOOT_VIEW_REACHED_MASK.load(Ordering::SeqCst) & set_mask;
+    let mask = prev_mask | ((1usize << (highest + 1)) - 1);
+    let idx = ((usize::BITS - 1 - mask.max(1).leading_zeros()) as usize).min(set.main_total());
     let now_ms = boot_view_epoch_ms();
-    let prev_idx = BOOT_VIEW_MILESTONE_IDX.swap(idx, Ordering::SeqCst);
-    if prev_idx != idx {
-        BOOT_VIEW_IDX_CHANGED_MS.store(now_ms, Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "boot-view: milestone -> {} (idx {idx}, mask 0x{mask:x})",
-            BOOT_VIEW_MILESTONE_LABELS[idx]
-        ));
+    if mask != prev_mask {
+        BOOT_VIEW_REACHED_MASK.store(mask, Ordering::SeqCst);
+        // Report EVERY phase that just became reached, in order -- not only the new top one.
+        for i in 0..set.len() {
+            if mask & (1 << i) != 0 && prev_mask & (1 << i) == 0 {
+                append_autoload_debug(format_args!(
+                    "boot-view: milestone -> {} (idx {i}/{}, mask 0x{mask:x})",
+                    set.label(i),
+                    set.main_total(),
+                ));
+            }
+        }
     }
-    let base = BOOT_VIEW_MILESTONE_PERMILLE[idx.min(BOOT_VIEW_MILESTONE_PERMILLE.len() - 1)];
-    let next = if idx + 1 < BOOT_VIEW_MILESTONE_PERMILLE.len() {
-        BOOT_VIEW_MILESTONE_PERMILLE[idx + 1]
-    } else {
-        base
-    };
+    if BOOT_VIEW_MILESTONE_IDX.swap(idx, Ordering::SeqCst) != idx {
+        BOOT_VIEW_IDX_CHANGED_MS.store(now_ms, Ordering::SeqCst);
+    }
+    let base = set.base_permille(idx);
+    let next = set.next_permille(idx);
+    let gap = next.saturating_sub(base);
+    // SUBSTEP-DRIVEN FILL: the active phase's own parenthesized sub-progression paces the bar across
+    // its span. This is the real pacing source -- the phase's substeps are concrete RAM semaphores, so
+    // the fill tracks actual work instead of a clock. `sub_i` is 1-based (the substep IN PROGRESS), so
+    // `sub_i - 1` is the count COMPLETED and the fill can never reach the next phase's target early.
+    let (_, sub_i, sub_max) = boot_view_phase_submilestone(set.phase(idx));
+    let done = sub_i.saturating_sub(1).min(sub_max);
+    let sub_fill = base + gap * done / sub_max.max(1);
+    // Asymptotic creep toward (never reaching) the next milestone, so a phase with no finer RAM
+    // granularity still inches forward instead of freezing -- the "is it stuck?" fix.
     let since = now_ms.saturating_sub(BOOT_VIEW_IDX_CHANGED_MS.load(Ordering::SeqCst));
-    // Asymptotic creep toward (never reaching) the next milestone, so a long phase's bar keeps inching
-    // forward instead of freezing at a fixed cap -- the "is it stuck?" fix.
-    let gap = next.saturating_sub(base) as u64;
-    let creep = (gap * since / (since + BOOT_VIEW_CREEP_K_MS)) as usize;
-    let pm = (base + creep).min(1000);
+    let creep = (gap as u64 * since / (since + BOOT_VIEW_CREEP_K_MS)) as usize;
+    let pm = sub_fill.max(base + creep).min(next).min(1000);
     // While the startup save picker holds the boot, clamp the fill so it PAUSES at the PREPARING SAVE edge
     // (the phase creep would otherwise drift past it); the clamp lifts the frame the pick clears the latch,
     // so the bar resumes toward LOADING SAVE / the world phases.
@@ -550,63 +635,27 @@ fn boot_view_progress() -> (usize, usize) {
     } else {
         pm
     };
-    // WORLD-LOAD tail: once forced Continue/native CS::LoadingScreen handoff has happened, drive the
-    // product bar from the game's real Gauge_3 progress on ALL runtimes. The previous native-Windows-only
-    // gate made Wine/user-launch keep showing the stale pre-handoff milestone (~46%) while the real
-    // loading gauge reached 100%.
+    // WORLD-LOAD tail: once the world phases are the active region, drive the product bar from the
+    // game's real Gauge_3 progress on ALL runtimes. The previous native-Windows-only gate made
+    // Wine/user-launch keep showing the stale pre-handoff milestone (~46%) while the real loading gauge
+    // reached 100%. The floor is THIS epoch's BUILDING WORLD target, so the gauge maps onto whichever
+    // slice of the bar the world tail owns in this epoch's phase sequence.
+    //
+    // The trigger is the PHASE WALK reaching BUILDING WORLD (whose own predicate is the native loading
+    // screen appearing), NOT the cover's separate handoff latch. That latch can assert within a frame
+    // of a reload arming -- long before any world work starts -- and using it here yanked the fill up
+    // to the world floor before the bar had reported a single pre-world phase.
     let native = LOADING_SCREEN_BAR_PROGRESS_PERMILLE
         .load(Ordering::SeqCst)
         .min(1000);
-    let loading_progress_live = native > 0
-        || LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst) != 0
-        || BOOT_VIEW_HANDOFF_SEEN_MS.load(Ordering::SeqCst) != 0;
-    let pm = if loading_progress_live {
-        let floor = BOOT_VIEW_MILESTONE_PERMILLE[8];
+    let world_idx = set
+        .index_of(er_loading_bar::LoadPhase::BuildingWorld)
+        .unwrap_or(0);
+    let pm = if idx >= world_idx || native > 0 {
+        let floor = set.base_permille_of(er_loading_bar::LoadPhase::BuildingWorld);
         pm.max(floor + native * (1000 - floor) / 1000)
     } else {
         pm
-    };
-    // SWITCH STEP-NAME OVERRIDE (user-requested 2026-07-16): once the MoveMapStep child is live during
-    // an own-menu switch, encode the child's real step into idx (>= MMS_LABEL_IDX_BASE) and drive the
-    // fill from it, so the label shows the engine step (MSB LOAD -> WORLD RES WAIT -> ... -> FINISH) and
-    // the bar FREEZES on the exact stuck step during a softlock. Double-gated on OWN_MENU_LOAD_ACTIVE so
-    // first-boot is untouched. SWITCH_ORACLE_MMS_STEP is published by the game-thread SWITCH-ORACLE.
-    let (idx, pm) = if BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0 {
-        let s = SWITCH_ORACLE_MMS_STEP.load(Ordering::SeqCst);
-        // MoveMapStep child step (0..=20) while its child object is live.
-        let child_step = if s != usize::MAX && s <= MOVEMAPSTEP_STEP_FINISH_INDEX {
-            Some(s)
-        } else {
-            None
-        };
-        // InGameStep-level "N+1" step after the child's FINISH (20): the child runs inside the
-        // InGameStep's STEP_MoveMap_Update, so FINISH is NOT genuine readiness -- the InGameStep still
-        // advances STEP_MoveMap_Update -> STEP_MoveMap_Finish (request code +0xd8 draining 1 -> 2) and
-        // then to the resident in-world step. Surface those from the request code (user 2026-07-19:
-        // "the Nth step is really N+1 -- add the step") so the bar shows the true post-FINISH handoff
-        // and FREEZES on it during the render-handoff stall, instead of resting at FINISH 20/20.
-        let rc = SWITCH_ORACLE_REQUEST_CODE.load(Ordering::SeqCst);
-        let ingame_step = if rc >= 2 {
-            Some(INGAMESTEP_INWORLD_STEP_INDEX)
-        } else if rc >= 1 {
-            Some(INGAMESTEP_MAP_FINISH_STEP_INDEX)
-        } else {
-            None
-        };
-        // Furthest-advanced step wins so the bar never regresses across the child -> InGameStep handoff.
-        let step = match (child_step, ingame_step) {
-            (Some(c), Some(g)) => Some(c.max(g)),
-            (Some(c), None) => Some(c),
-            (None, g) => g,
-        };
-        if let Some(step) = step {
-            let step_pm = MMS_STEP_FILL_BASE + step * MMS_STEP_FILL_SPAN / (BOOT_LOAD_STEP_MAX + 1);
-            (MMS_LABEL_IDX_BASE + step, pm.max(step_pm))
-        } else {
-            (idx, pm)
-        }
-    } else {
-        (idx, pm)
     };
     // Monotonic display: an idx re-latch or timer wobble must never walk the bar backwards.
     let shown = BOOT_VIEW_LAST_PERMILLE
@@ -675,14 +724,15 @@ fn boot_view_entering_world_submilestone() -> (&'static str, usize, usize) {
     let ls731_clear = SWITCH_ORACLE_LOADING_FIELD11.load(Ordering::SeqCst) == 0;
     let loading_close_sent = LOADING_SCREEN_CLOSE_SENT.load(Ordering::SeqCst) != 0
         || SWITCH_ORACLE_LOADING_FIELD11.load(Ordering::SeqCst) != 0;
-    let request_started = request_code >= 1;
-    let request_stable = request_code >= 2;
+    // The two post-FINISH InGameStep stages ride here, as substeps of the phase they belong to.
+    let request_started = request_code >= INGAMESTEP_REQUEST_CODE_MAP_FINISH;
+    let request_stable = request_code >= INGAMESTEP_REQUEST_CODE_IN_WORLD;
     let menu_job_present = SWITCH_ORACLE_MENU_JOB_PRESENT.load(Ordering::SeqCst) != 0;
     let player_present = SWITCH_ORACLE_PLAYER_PRESENT.load(Ordering::SeqCst) != 0;
-    let movemap_done = request_code >= 2 || mms_step >= MOVEMAPSTEP_STEP_NAMES.len() - 1;
+    let movemap_done = request_stable || mms_step >= MOVEMAPSTEP_STEP_FINISH_INDEX;
     let movement_proven = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
         && MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == current_epoch;
-    if BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0 || current_epoch != 0 {
+    if BOOT_VIEW_EPOCH_KIND.load(Ordering::SeqCst) == BOOT_VIEW_EPOCH_KIND_RELOAD {
         boot_view_first_pending_substep(&[
             (bar_terminal, "LOAD BAR FULL"),
             (ls730_held, "LOAD SCREEN UP"),
@@ -708,18 +758,26 @@ fn boot_view_entering_world_submilestone() -> (&'static str, usize, usize) {
 }
 
 fn boot_view_load_save_submilestone() -> (&'static str, usize, usize) {
-    if BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0 {
+    if BOOT_VIEW_EPOCH_KIND.load(Ordering::SeqCst) == BOOT_VIEW_EPOCH_KIND_RELOAD {
+        // All three counters are sticky for the process, so a reload reads them as deltas since this
+        // epoch's rearm -- otherwise every substep reports COMPLETE on the reload's first frame.
         boot_view_first_pending_substep(&[
             (
                 SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.load(Ordering::SeqCst) != 0,
                 "SAVE SELECTED",
             ),
             (
-                SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) != 0,
+                boot_view_epoch_delta(
+                    &SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT,
+                    &BOOT_VIEW_FRESH_DESER_BASELINE,
+                ),
                 "READING SAVE",
             ),
             (
-                SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0,
+                boot_view_epoch_delta(
+                    &SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT,
+                    &BOOT_VIEW_CONTINUE_ALLOW_BASELINE,
+                ),
                 "LOAD CONFIRMED",
             ),
         ])
@@ -736,65 +794,6 @@ fn boot_view_load_save_submilestone() -> (&'static str, usize, usize) {
             (table_seen, "SCREEN DATA READY"),
         ])
     }
-}
-
-fn boot_view_movemap_submilestone(step: usize) -> (&'static str, usize, usize) {
-    let request_code = SWITCH_ORACLE_REQUEST_CODE.load(Ordering::SeqCst);
-    let mms_step = SWITCH_ORACLE_MMS_STEP.load(Ordering::SeqCst);
-    let current_epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
-    // InGameStep-level "N+1" handoff steps AFTER the MoveMapStep child FINISH (20). Phase-relevant
-    // substeps only (user 2026-07-19 loading-bar rule): step 21 is the STEP_MoveMap_Finish request-code
-    // drain (+0xd8 1 -> 2); step 22 is the resident in-world step (player + control).
-    if step >= INGAMESTEP_MAP_FINISH_STEP_INDEX {
-        let child_done = mms_step == usize::MAX || mms_step >= MOVEMAPSTEP_STEP_FINISH_INDEX;
-        let request_started = request_code >= 1;
-        let request_stable = request_code >= 2;
-        let menu_job_present = SWITCH_ORACLE_MENU_JOB_PRESENT.load(Ordering::SeqCst) != 0;
-        let player_present = SWITCH_ORACLE_PLAYER_PRESENT.load(Ordering::SeqCst) != 0;
-        let movement_proven = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
-            && MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == current_epoch;
-        if step >= INGAMESTEP_INWORLD_STEP_INDEX {
-            return boot_view_first_pending_substep(&[
-                (player_present, "PLAYER IN WORLD"),
-                (menu_job_present, "GAME UI LIVE"),
-                (movement_proven, "CAN MOVE"),
-            ]);
-        }
-        return boot_view_first_pending_substep(&[
-            (child_done, "MAP STEP DONE"),
-            (request_started, "MAP LOAD SENT"),
-            (request_stable, "WORLD HANDOFF"),
-        ]);
-    }
-    if step < MOVEMAPSTEP_STEP_MOVEMAP_INDEX as usize {
-        return boot_view_single_submilestone(movemapstep_step_name(step as i32));
-    }
-    // MOVE MAP (18) has a KNOWN native sub-progression: the finalize substate (+0x12a, advancer
-    // FUN_140afa7c0) walks 1..9 then back to 0 (done). Expose it as the parenthesized sub-milestone
-    // with real per-substate labels (the warm-reload softlock parks at 7 = REMO/SAVE-DRAIN WAIT),
-    // per the loading-bar sub-milestone order. Falls back to the coarse handoff proxies only when no
-    // live MoveMapStep finalize substate is readable (-1).
-    let finalize = SWITCH_ORACLE_FINALIZE_12A.load(Ordering::SeqCst);
-    if mms_step == step && finalize >= 0 {
-        let total = MOVEMAPSTEP_FINALIZE_SUBSTATE_NAMES.len() - 1; // 9
-        let cur = (finalize as usize).min(total);
-        return (movemapstep_finalize_substate_name(finalize), cur, total);
-    }
-    let step_active = mms_step == step;
-    let title_done = request_code >= 2 || mms_step >= MOVEMAPSTEP_STEP_NAMES.len() - 1;
-    let session_request = request_code >= 2;
-    let menu_job_present = SWITCH_ORACLE_MENU_JOB_PRESENT.load(Ordering::SeqCst) != 0;
-    let player_present = SWITCH_ORACLE_PLAYER_PRESENT.load(Ordering::SeqCst) != 0;
-    let movement_proven = CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
-        && MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == current_epoch;
-    boot_view_first_pending_substep(&[
-        (step_active, movemapstep_step_name(step as i32)),
-        (title_done, "MAP STEP DONE"),
-        (session_request, "WORLD HANDOFF"),
-        (menu_job_present, "GAME UI LIVE"),
-        (player_present, "PLAYER IN WORLD"),
-        (movement_proven, "CAN MOVE"),
-    ])
 }
 
 /// STARTING UP (phase 0) sub-progression: the render/display bring-up chain, every step a concrete
@@ -898,57 +897,100 @@ fn boot_view_game_systems_submilestone() -> (&'static str, usize, usize) {
     }
 }
 
-fn boot_view_phase_submilestone(idx: usize) -> (&'static str, usize, usize) {
-    if idx >= MMS_LABEL_IDX_BASE {
-        return boot_view_movemap_submilestone(idx - MMS_LABEL_IDX_BASE);
-    }
-    match idx.min(BOOT_VIEW_MILESTONE_LABELS.len() - 1) {
-        0 => boot_view_starting_up_submilestone(),
-        1 => boot_view_game_systems_submilestone(),
-        2 => boot_view_counter_submilestone(
+/// SWITCHING SAVE (reload phase 0) sub-progression. Between the confirm press and the return-title
+/// request there is no finer RAM granularity we can honestly claim, so this phase declares that
+/// ignorance with a single explicit substep rather than borrowing a label from a neighbouring phase.
+fn boot_view_switch_confirmed_submilestone() -> (&'static str, usize, usize) {
+    boot_view_single_submilestone("SLOT CONFIRMED")
+}
+
+/// RETURNING TO TITLE (reload) sub-progression: the two switch-teardown semaphores that actually gate
+/// this phase -- the menuData+0x5d teardown request we write, then the quickload FSM observing the
+/// title owner. Both are phase-relevant: nothing about the incoming save can be true yet.
+fn boot_view_returning_to_title_submilestone() -> (&'static str, usize, usize) {
+    let quick_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    boot_view_first_pending_substep(&[
+        (
+            ENDING_REQUEST_SET.load(Ordering::SeqCst) != 0,
+            "TEARDOWN REQUEST",
+        ),
+        (
+            quick_phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN,
+            "WORLD RELEASED",
+        ),
+    ])
+}
+
+/// Sub-progression for the ACTIVE phase, keyed on the phase identity so both epochs' sequences resolve
+/// through the same table. Every returned label is a substep OF THAT PHASE: a phase with known RAM
+/// granularity exposes its real substeps, and a phase without any exposes exactly one explicit
+/// phase-specific substep (`<label> 1/1`) instead of borrowing an unrelated one.
+fn boot_view_phase_submilestone(phase: er_loading_bar::LoadPhase) -> (&'static str, usize, usize) {
+    use er_loading_bar::LoadPhase as P;
+    match phase {
+        P::StartingUp => boot_view_starting_up_submilestone(),
+        P::GameSystems => boot_view_game_systems_submilestone(),
+        P::AcquiringAssets => boot_view_counter_submilestone(
             "MENU FILES",
             TITLE_MENU_RESOURCE_ACQUIRE_HITS.load(Ordering::SeqCst),
             38,
             "MENU FILES",
         ),
-        3 => boot_view_counter_submilestone(
+        P::OpeningMenuUi => boot_view_counter_submilestone(
             "UI FILES",
             TITLE_SCALEFORM_FILE_OPEN_HITS.load(Ordering::SeqCst),
             113,
             "UI FILES",
         ),
-        4 => boot_view_counter_submilestone(
+        P::BuildingMenuUi => boot_view_counter_submilestone(
             "UI BUILD",
             TITLE_SCALEFORM_RESOURCE_CTOR_HITS.load(Ordering::SeqCst),
             112,
             "UI BUILD",
         ),
-        5 => boot_view_first_pending_substep(&[
-            (
-                TITLE_PRESS_START_BIND_HITS.load(Ordering::SeqCst) != 0,
-                "PRESS START",
-            ),
-            (
-                TITLE_FADEIN_SKIP_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS,
-                "TITLE UP",
-            ),
-        ]),
-        6 => boot_view_first_pending_substep(&[
-            (
-                PRODUCT_CORE_LAST_MENU_OPENED_LATCH.load(Ordering::SeqCst) != 0,
-                "MENU OPEN",
-            ),
-            (
-                NETWORK_CHECK_SHORTCIRCUIT_COUNT.load(Ordering::SeqCst) != 0,
-                "NETWORK CHECK",
-            ),
-        ]),
-        7 => boot_view_load_save_submilestone(),
-        8 => boot_view_world_gauge_submilestone("LOAD SCREEN"),
-        9 => boot_view_world_gauge_submilestone("WORLD LOADING"),
-        10 => boot_view_world_gauge_submilestone("WORLD LOADING"),
-        11 => boot_view_entering_world_submilestone(),
-        i => boot_view_single_submilestone(BOOT_VIEW_MILESTONE_LABELS[i]),
+        P::SwitchConfirmed => boot_view_switch_confirmed_submilestone(),
+        P::ReturningToTitle => boot_view_returning_to_title_submilestone(),
+        P::TitleReady => {
+            if BOOT_VIEW_EPOCH_KIND.load(Ordering::SeqCst) == BOOT_VIEW_EPOCH_KIND_RELOAD {
+                // The boot latches below are sticky; on a reload the switch FSM is the only honest
+                // evidence that the title has come back up for THIS epoch.
+                boot_view_single_submilestone("TITLE OWNER UP")
+            } else {
+                boot_view_first_pending_substep(&[
+                    (
+                        TITLE_PRESS_START_BIND_HITS.load(Ordering::SeqCst) != 0,
+                        "PRESS START",
+                    ),
+                    (
+                        TITLE_FADEIN_SKIP_FIRED.load(Ordering::SeqCst)
+                            != TITLE_OWNER_SCAN_START_ADDRESS,
+                        "TITLE UP",
+                    ),
+                ])
+            }
+        }
+        P::PreparingSave => {
+            if BOOT_VIEW_EPOCH_KIND.load(Ordering::SeqCst) == BOOT_VIEW_EPOCH_KIND_RELOAD {
+                boot_view_single_submilestone("AUTOLOAD HANDOFF")
+            } else {
+                boot_view_first_pending_substep(&[
+                    (
+                        PRODUCT_CORE_LAST_MENU_OPENED_LATCH.load(Ordering::SeqCst) != 0,
+                        "MENU OPEN",
+                    ),
+                    (
+                        NETWORK_CHECK_SHORTCIRCUIT_COUNT.load(Ordering::SeqCst) != 0,
+                        "NETWORK CHECK",
+                    ),
+                ])
+            }
+        }
+        P::LoadingSave => boot_view_load_save_submilestone(),
+        P::BuildingWorld => boot_view_world_gauge_submilestone("LOAD SCREEN"),
+        P::StreamingWorld | P::FinalizingWorld => {
+            boot_view_world_gauge_submilestone("WORLD LOADING")
+        }
+        P::EnteringWorld => boot_view_entering_world_submilestone(),
     }
 }
 
@@ -1467,16 +1509,17 @@ fn boot_view_rasterize(
     if draw_portrait {
         let _ = portrait_onto(&mut buf, w, h);
     }
-    // Label = "<PHASE NAME> <i>/<N> (<SUBMILESTONE> <x>/<y>)". The parenthesized subprogression is
-    // phase-scoped: early phases with no known finer RAM granularity say so with a 1/1 substep, world-gauge
-    // phases use the native Gauge_3 frame, and entering-world / MoveMap phases use only the semaphores that
-    // are relevant to those phases.
-    let (raw_sub_label, raw_sub_i, sub_max) = boot_view_phase_submilestone(idx);
+    // Label = "<PHASE NAME> <i>/<N> (<SUBMILESTONE> <x>/<y>)". The main `i/N` is THIS epoch's phase
+    // sequence, and the parenthesized subprogression belongs to the active phase: a phase with no known
+    // finer RAM granularity says so with its own 1/1 substep, world-gauge phases use the native Gauge_3
+    // frame, and entering-world uses only the handoff semaphores that are relevant once the world exists.
+    let set = boot_view_phase_set();
+    let (raw_sub_label, raw_sub_i, sub_max) = boot_view_phase_submilestone(set.phase(idx));
     // MONOTONIC display clamp (user 2026-07-19): within one load epoch the visible substep number must
     // only advance -- never repeat a passed value nor decrement. idx (main phase) is already monotonic;
     // clamp the substep to a per-phase high-water and hold the last-advanced label on a regression.
     let (sub_label, sub_i) = {
-        let epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+        let epoch = BOOT_VIEW_EPOCH_SEQ.load(Ordering::SeqCst);
         if BOOT_VIEW_MONO_EPOCH.swap(epoch, Ordering::SeqCst) != epoch {
             BOOT_VIEW_MONO_ORD.store(0, Ordering::SeqCst);
             BOOT_VIEW_MONO_LABEL_PTR.store(0, Ordering::SeqCst);
@@ -1514,33 +1557,44 @@ fn boot_view_rasterize(
     // READING/RESIDENT. It stays visible through streaming and, notably, exposes the finalize-time
     // b80=RESIDENT stall (the case-7 blocker) directly on the bar. Hidden when idle (b80 <= 0).
     let b80 = SWITCH_ORACLE_B80.load(Ordering::SeqCst);
+    let mms_step = SWITCH_ORACLE_MMS_STEP.load(Ordering::SeqCst);
+    let finalize = SWITCH_ORACLE_FINALIZE_12A.load(Ordering::SeqCst);
+    // The engine's live MoveMapStep step/finalize-substate name rides in the suffix, NOT in the main
+    // `N/M`. It used to REPLACE the main phase label with a second, 22-long step sequence -- which both
+    // changed the visible denominator mid-load and let a STALE in-world step from the previous epoch
+    // read as 96% progress the instant a reload armed (bd er-effects-rs-ok8d). As a suffix it keeps its
+    // whole diagnostic value (the bar still freezes on the exact stuck step by name during a softlock)
+    // without pretending to be the phase sequence.
+    // The MoveMapStep detail only means something once the world phases are running. Before then the
+    // switch oracle still holds the PREVIOUS epoch's values, and showing them decorated an early reload
+    // phase with a stale substate (`TITLE READY 2/8 (TITLE OWNER UP 1/1 - IDLE/DONE)`, measured run
+    // samechar-3x-threedll-20260730-082930) -- the same stale-oracle leak this issue is about.
+    let world_phase = matches!(
+        set.phase(idx),
+        er_loading_bar::LoadPhase::BuildingWorld
+            | er_loading_bar::LoadPhase::StreamingWorld
+            | er_loading_bar::LoadPhase::FinalizingWorld
+            | er_loading_bar::LoadPhase::EnteringWorld
+    );
     let load_suffix = if b80 > 0 {
         format!(" - SAVE {}", load_in_progress_b80_name(b80))
+    } else if !world_phase {
+        String::new()
+    } else if finalize >= 0 {
+        format!(" - {}", movemapstep_finalize_substate_name(finalize))
+    } else if mms_step != usize::MAX && mms_step < MOVEMAPSTEP_STEP_NAMES.len() {
+        format!(" - {}", movemapstep_step_name(mms_step as i32))
     } else {
         String::new()
     };
-    let label_model = if idx >= MMS_LABEL_IDX_BASE {
-        let step = idx - MMS_LABEL_IDX_BASE;
-        er_loading_bar::LoadingLabel::new(
-            boot_load_step_name(step),
-            step,
-            BOOT_LOAD_STEP_MAX,
-            sub_label,
-            sub_i,
-            sub_max,
-        )
-    } else {
-        let max = BOOT_VIEW_MILESTONE_LABELS.len() - 1;
-        let i = idx.min(max);
-        er_loading_bar::LoadingLabel::new(
-            BOOT_VIEW_MILESTONE_LABELS[i],
-            i,
-            max,
-            sub_label,
-            sub_i,
-            sub_max,
-        )
-    };
+    let label_model = er_loading_bar::LoadingLabel::new(
+        set.label(idx),
+        idx.min(set.main_total()),
+        set.main_total(),
+        sub_label,
+        sub_i,
+        sub_max,
+    );
     let mut label_buf = String::new();
     label_model.write_text_with_sub_suffix(&mut label_buf, &load_suffix);
     let label: &str = &label_buf;

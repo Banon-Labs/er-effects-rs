@@ -248,31 +248,24 @@ pub(crate) fn movemapstep_step_name(idx: i32) -> &'static str {
     }
 }
 
-/// InGameStep-level load steps that run AFTER the MoveMapStep child's own FINISH (20). RE grounding
-/// (2026-07-19, InGameStep step table 0x143d70190: STEP_MoveMap_Init -> STEP_MoveMap_Update ->
-/// STEP_MoveMap_Finish): the MoveMapStep child (steps 0..20) runs entirely INSIDE the InGameStep's
-/// STEP_MoveMap_Update. So the child reaching FINISH (20) is NOT genuine world readiness -- the
-/// InGameStep must still advance STEP_MoveMap_Update -> STEP_MoveMap_Finish (the request code at
-/// InGameStep+0xd8 draining 1 -> 2) and then hand off to the resident in-world step. Those are two
-/// real "N+1" load steps the loading bar previously collapsed into "FINISH 20/20" (user 2026-07-19:
-/// "when we are at the Nth step, it is really N+1 -- add an Nth loading step"). Surface them as
-/// synthetic main steps 21/22 driven by the request code so the bar shows the true post-FINISH state
-/// (and FREEZES on the exact handoff substep during the render-handoff stall) instead of falsely
-/// resting at FINISH or dropping to the coarse ENTERING WORLD heuristic.
+/// Terminal step of the MoveMapStep child's own sequence.
 pub(crate) const MOVEMAPSTEP_STEP_FINISH_INDEX: usize = 20;
-pub(crate) const INGAMESTEP_MAP_FINISH_STEP_INDEX: usize = 21;
-pub(crate) const INGAMESTEP_INWORLD_STEP_INDEX: usize = 22;
-/// Highest load-step index for the extended (MoveMapStep child + InGameStep handoff) N/M display.
-pub(crate) const BOOT_LOAD_STEP_MAX: usize = INGAMESTEP_INWORLD_STEP_INDEX;
-/// Name any load step in the extended space (MoveMapStep child 0..20 + InGameStep handoff 21/22).
-pub(crate) fn boot_load_step_name(step: usize) -> &'static str {
-    match step {
-        s if s < MOVEMAPSTEP_STEP_NAMES.len() => MOVEMAPSTEP_STEP_NAMES[s],
-        INGAMESTEP_MAP_FINISH_STEP_INDEX => "MAP HANDOFF", // InGameStep STEP_MoveMap_Finish
-        INGAMESTEP_INWORLD_STEP_INDEX => "IN WORLD", // InGameStep in-world: player resident + control
-        _ => "?",
-    }
-}
+
+/// The InGameStep request code at `InGameStep+0xd8`, which gates the load AFTER the MoveMapStep
+/// child's own FINISH (20). RE grounding (2026-07-19, InGameStep step table 0x143d70190:
+/// STEP_MoveMap_Init -> STEP_MoveMap_Update -> STEP_MoveMap_Finish): the MoveMapStep child (steps
+/// 0..20) runs entirely INSIDE the InGameStep's STEP_MoveMap_Update, so the child reaching FINISH is
+/// NOT genuine world readiness -- the InGameStep must still advance STEP_MoveMap_Update ->
+/// STEP_MoveMap_Finish (this code draining 1 -> 2) and then hand off to the resident in-world step.
+///
+/// Those two post-FINISH stages are real load progress the bar must show (user 2026-07-19: "when we
+/// are at the Nth step, it is really N+1 -- add an Nth loading step"). They are SUBSTEPS of the
+/// ENTERING WORLD phase (`MAP STEP DONE` -> `WORLD HANDOFF` -> `PLAYER IN WORLD` -> `CAN MOVE`), not
+/// main phases: promoting them to main steps gave the bar a second, longer `N/M` denominator that
+/// swapped in mid-load and let a STALE previous-epoch request code read as near-complete progress the
+/// instant a reload armed (bd er-effects-rs-ok8d).
+pub(crate) const INGAMESTEP_REQUEST_CODE_MAP_FINISH: i32 = 1;
+pub(crate) const INGAMESTEP_REQUEST_CODE_IN_WORLD: i32 = 2;
 
 /// Byte offset of the MoveMapStep finalize SUBSTATE within the STEP_MoveMap (step 18) phase. The
 /// native advancer `FUN_140afa7c0` (dump VA) drives this `switch`-based sub-state 0..9; the load
