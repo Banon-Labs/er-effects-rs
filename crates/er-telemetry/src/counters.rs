@@ -878,6 +878,12 @@ pub static SYNTHETIC_OUTER_PTR: AtomicUsize = AtomicUsize::new(0);
 pub static ASSERT_LOG_LINES_WRITTEN: AtomicUsize = AtomicUsize::new(0);
 pub static RENDER_FRAME_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static AV_LOG_LINES_WRITTEN: AtomicUsize = AtomicUsize::new(0);
+/// Crash-log lines spent on the process-FATAL exception codes (stack overflow, fastfail, heap
+/// corruption, illegal instruction). Separate from the general budget below so a first-chance
+/// C++/Rust throw storm cannot consume the line that names the actual kill.
+pub static FATAL_EXCEPTION_LOG_LINES_WRITTEN: AtomicUsize = AtomicUsize::new(0);
+/// Crash-log lines spent on the remaining ERROR-severity exception codes.
+pub static OTHER_EXCEPTION_LOG_LINES_WRITTEN: AtomicUsize = AtomicUsize::new(0);
 pub static SELF_DLL_SIZE: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_FLOW_CONTEXT_RECORD_REGULATION_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_FLOW_CONTEXT_RECORD_REGULATION_FIXUPS: AtomicUsize = AtomicUsize::new(0);
@@ -1165,6 +1171,20 @@ pub static SAVE_CREATEFILEW_DIAG_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_CREATEFILEW_STAGE_STEAMID_DIR_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_CREATEFILEW_STAGE_SAVE_FILE_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_CREATEFILEW_CONFIGURED_FILE_HITS: AtomicUsize = AtomicUsize::new(0);
+/// Deepest nesting ever reached in the WIN32 save-redirect file detours (CreateFileW / CopyFileW /
+/// GetFileAttributes(Ex)W / FindFirstFileW), counted per thread by `SaveDetourDepth`. 1 = no detour
+/// ever re-entered; 2 = a detour's own `fs::read`/`fs::write` re-entered once and was passed
+/// through, the expected steady state. ANY value above 2 means a pass-through decision was lost and
+/// the unbounded-recursion stack overflow of 2026-07-30 is back.
+///
+/// The ntdll `NtCreateFile` detour deliberately does NOT count here: it is the layer BENEATH these,
+/// firing again under every Win32 open, so including it would put a healthy open at 2 and a healthy
+/// normalize-triggering open at 3 -- an alarm that fires on a working game is an alarm nobody reads.
+pub static SAVE_REDIRECT_DETOUR_MAX_DEPTH: AtomicUsize = AtomicUsize::new(0);
+/// Nested save-redirect detour entries that were degraded to a pure pass-through. Nonzero is
+/// normal (the detours do their own file I/O); it is the DEPTH above, not this count, that
+/// distinguishes a healthy re-entry from a recursion.
+pub static SAVE_REDIRECT_DETOUR_REENTRANT_PASSTHROUGHS: AtomicUsize = AtomicUsize::new(0);
 pub static MISSING_SAVE_BLOCKED_IO_LOGGED: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_QUERY_STAGE_STEAMID_DIR_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_QUERY_STAGE_SAVE_FILE_HITS: AtomicUsize = AtomicUsize::new(0);
