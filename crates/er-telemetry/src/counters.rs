@@ -1352,6 +1352,40 @@ pub static SAVE_PICKER_OS_OWNER_HWND: AtomicUsize = AtomicUsize::new(0);
 /// browsing traffic that otherwise pollutes the save CreateFileW diagnostics.
 pub static SAVE_PICKER_OS_SAVELIKE_OPENS: AtomicUsize = AtomicUsize::new(0);
 
+// ---- OS picker at the MISSING-SAVE BOOT (startup_hooks/save_picker_boot_os.rs) ----
+//
+// The `SAVE_PICKER_OS_*` family above counts DIALOGS and is shared by all three intents. This
+// family counts the BOOT intent's OUTCOMES, which the shared family cannot express: at a
+// missing-save boot a cancel is not "the user backed out of a menu", it QUITS THE GAME, and that
+// terminal step has to be provable from telemetry rather than from watching the screen.
+
+/// Where the boot missing-save pick stands. `0` idle (nothing opened, or not a missing-save boot),
+/// `1` a surface owns the pick, `2` a file was accepted and the character sub-picker owns it,
+/// `3` the user cancelled the OS dialog and the game is quitting, `4` comdlg32 was unusable and the
+/// in-game browser took the pick over.
+pub static SAVE_PICKER_OS_BOOT_STATE: AtomicUsize = AtomicUsize::new(0);
+/// Boot OS dialogs this session. At a missing-save boot exactly one open is ever started, so `> 1`
+/// means the one-shot latch leaked and the reopen loop this design exists to prevent came back.
+pub static SAVE_PICKER_OS_BOOT_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Boot OS picks that cleared the shared validity predicate and reached the character sub-picker.
+pub static SAVE_PICKER_OS_BOOT_PICK_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// THE ACCEPTANCE ORACLE for the boot cancel path: the user pressed Cancel on the boot OS dialog
+/// and the game was told to quit. Paired with `SAVE_PICKER_OS_BOOT_EXIT_PENDING`, which the game
+/// task clears as it performs the exit -- so `cancel_exit == 1` with `exit_pending == 0` in the
+/// LAST telemetry write is the proof the quit was reached, not merely requested.
+pub static SAVE_PICKER_OS_BOOT_CANCEL_EXIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// 1 while a boot cancel-exit has been requested and the game task has not yet performed it.
+pub static SAVE_PICKER_OS_BOOT_EXIT_PENDING: AtomicUsize = AtomicUsize::new(0);
+/// 1 once the game task has flushed telemetry and is calling `ExitProcess(0)`.
+pub static SAVE_PICKER_OS_BOOT_EXIT_PERFORMED: AtomicUsize = AtomicUsize::new(0);
+/// Times the boot OS surface gave up and handed the pick to the in-game browser (comdlg32 failed,
+/// the reopen bound was exhausted, or the core `CreateFileW` detour never went live). Non-zero says
+/// the user still got a picker, which is why this is a fallback and not a failure.
+pub static SAVE_PICKER_OS_BOOT_FALLBACK_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Ticks the boot OS open was deferred waiting for the core `CreateFileW` detour to go live. The
+/// wait is bounded; on exhaustion the in-game browser takes over rather than the boot stranding.
+pub static SAVE_PICKER_OS_BOOT_DEFER_TICKS: AtomicUsize = AtomicUsize::new(0);
+
 // ---- OS-picker DIM OVERLAY (save_picker_dim_overlay.rs) ----
 //
 // These are DELIBERATELY a new family rather than a reuse of `SAVE_PICKER_OVERLAY_*`. That older

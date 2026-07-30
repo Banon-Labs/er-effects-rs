@@ -147,6 +147,18 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // (redirect + MinHook install) runs here on the game task -- it is alive at pick time
                 // (loading starts only after the pick releases the hold).
                 save_picker_overlay_process_completion();
+                // Boot missing-save OS picker CANCEL: at a missing-save boot a cancel means quit
+                // (`save_picker_boot.rs`). The picker thread requests it here rather than calling
+                // `ExitProcess` itself for one reason -- this task holds `EffectsState`, so the
+                // telemetry carrying the cancel-exit oracle can be flushed BEFORE the process ends.
+                // A counter set and then abandoned by an immediate exit proves nothing.
+                if boot_os_cancel_exit_requested() {
+                    {
+                        let state = state_or_return(&state);
+                        write_telemetry(&state, false);
+                    }
+                    boot_os_perform_cancel_exit();
+                }
                 let Ok(player) = (unsafe { PlayerIns::local_player_mut() }) else {
                     let mut state = state_or_return(&state);
                     state.game_task_ticks += GAME_TASK_TICK_INCREMENT;

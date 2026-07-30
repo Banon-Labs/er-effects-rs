@@ -56,6 +56,14 @@ use super::*;
 // instead of drifting into a no-character menu. Pure telemetry/observe-only mode
 // remains the only no-load exemption.
 //
+// WHICH PICKER that is comes from `er-effects.toml`'s `os_native_save_picker`, resolved -- like
+// every other picker open -- in `save_picker_surface.rs`. Default off: the DLL-drawn overlay
+// browser (`gpu_readback/save_picker_overlay.rs`), which has NO cancel; BACK is navigation and the
+// user chooses a save or closes the game themselves. On: the OS common file dialog, opened by
+// `startup_hooks/save_picker_boot.rs` on a thread of ours, whose Cancel button is where the
+// "Cancel -> exit" half of the contract above is actually implemented (`ExitProcess(0)`, the same
+// clean kill the in-world Return to Desktop performs).
+//
 // Explicit-source mechanism: a scoped MinHook on the Win32 `CreateFileW` (and `CopyFileW`) chokepoint
 // through which the game opens EVERY save artifact (verified RE: vanilla `.sl2`,
 // Seamless `.co2`, `.bak`, all funnel `MicrosoftDiskFileOperator::OpenFile` ->

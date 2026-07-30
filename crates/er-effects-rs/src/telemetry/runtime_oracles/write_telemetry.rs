@@ -461,6 +461,27 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SAVE_PICKER_OS_SAVELIKE_OPENS.load(Ordering::SeqCst),
         SAVE_DEST_CONFIRM_PENDING.load(Ordering::SeqCst)
     ));
+    // The OS dialog at the MISSING-SAVE BOOT. Separate from the fields above because that intent's
+    // outcomes are not the System>Quit ones: a cancel there QUITS THE GAME, and a terminal step has
+    // to be readable from a file rather than from watching the screen.
+    //
+    // `_boot_cancel_exit_count == 1` with `_boot_exit_pending == 0` and `_boot_exit_performed == 1`
+    // in the LAST write is the acceptance proof for the cancel path -- the game task flushes this
+    // very file and then calls `ExitProcess(0)`, so those three fields ARE the record that the quit
+    // was reached rather than merely requested. `_boot_open_count > 1` means the one-shot open latch
+    // leaked and the reopen loop came back. `_boot_fallback_count > 0` says comdlg32 could not be
+    // used and the in-game browser took over, which is a degraded surface, not a failed boot.
+    body.push_str(&format!(
+        "  \"oracle_save_picker_os_boot_state\": {},\n  \"oracle_save_picker_os_boot_open_count\": {},\n  \"oracle_save_picker_os_boot_pick_count\": {},\n  \"oracle_save_picker_os_boot_cancel_exit_count\": {},\n  \"oracle_save_picker_os_boot_exit_pending\": {},\n  \"oracle_save_picker_os_boot_exit_performed\": {},\n  \"oracle_save_picker_os_boot_fallback_count\": {},\n  \"oracle_save_picker_os_boot_defer_ticks\": {},\n",
+        er_telemetry::counters::SAVE_PICKER_OS_BOOT_STATE.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OS_BOOT_OPEN_COUNT.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OS_BOOT_PICK_COUNT.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OS_BOOT_CANCEL_EXIT_COUNT.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OS_BOOT_EXIT_PENDING.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OS_BOOT_EXIT_PERFORMED.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OS_BOOT_FALLBACK_COUNT.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OS_BOOT_DEFER_TICKS.load(Ordering::SeqCst)
+    ));
     // The screen dim raised over the game while an OS dialog is blocking the menu thread.
     //
     // `_frames` IS THE PRODUCT PROOF and nothing else in this file can stand in for it. The game
