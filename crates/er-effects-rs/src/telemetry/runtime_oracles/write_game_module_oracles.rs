@@ -309,11 +309,19 @@ fn write_game_module_oracles(body: &mut String) {
         let pt_epoch = crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
             .load(std::sync::atomic::Ordering::SeqCst);
         if PT_ORACLE_EPOCH.swap(pt_epoch, std::sync::atomic::Ordering::Relaxed) != pt_epoch {
-            // New load epoch -> reset the baseline to this load's first-seen play_time.
-            PT_ORACLE_FIRST.store(play_time_ms, std::sync::atomic::Ordering::Relaxed);
-        } else if PT_ORACLE_FIRST.load(std::sync::atomic::Ordering::Relaxed) < 0
-            && play_time_ms >= 0
-        {
+            // New load epoch -> re-arm; the baseline re-latches on the epoch's first REAL reading below.
+            PT_ORACLE_FIRST.store(PLAY_TIME_READ_FAIL, std::sync::atomic::Ordering::Relaxed);
+        }
+        // Baseline only on a LOADED-character playtime (> 0), mirroring the input-trace fix
+        // (`PLAY_TIME_TRACE_FIRST` in input_trace.rs). On the BOOT epoch GameDataMan exists with
+        // play_time == 0 long before the Continue deserialize, so baselining at 0 made the first
+        // post-deserialize sample report the save's ENTIRE stored playtime as "advance" (measured run
+        // product-continue-direct-20260729-205115: oracle_play_time_advanced_ms == oracle_play_time_ms
+        // == 388876164, ~108h) -> play_time_live falsely latched BOOT_VIEW_EPOCH_WORLD_LIVE for epoch 0
+        // at ~+16s, mid boot loading screen, freezing the loading-portrait drive tick (bd
+        // er-effects-rs-io53). Requiring > 0 latches the baseline at the character's real loaded
+        // playtime, so `advanced` measures only genuine world-sim stepping.
+        if PT_ORACLE_FIRST.load(std::sync::atomic::Ordering::Relaxed) < 0 && play_time_ms > 0 {
             PT_ORACLE_FIRST.store(play_time_ms, std::sync::atomic::Ordering::Relaxed);
         }
         let pt_first = PT_ORACLE_FIRST.load(std::sync::atomic::Ordering::Relaxed);
