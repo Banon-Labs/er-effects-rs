@@ -73,6 +73,9 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     // vfptr[3] call and, if the window is freed/reused or its event index is out of range, null
     // owningMenuWindow so the finalize skips the block entirely.
     install_menu_window_job_dtor_guard();
+    // The dtor guard covers only the finalize's 0x7ac720 caller; the switch crash arrives via
+    // MenuWindowJob::Run. Hook the finalize itself so every caller is covered.
+    install_menu_window_job_finalize_guard();
     // Quit-to-desktop clean kill: on a quit the world teardown unloads the MenuOffscrRendParam param
     // table and the rebuilt title's model renderer DLPanics on the missing table. Turn that exact
     // condition into a fast clean ExitProcess(0) (save-then-kill) instead of the crash.

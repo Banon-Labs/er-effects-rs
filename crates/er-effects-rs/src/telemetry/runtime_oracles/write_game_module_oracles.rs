@@ -63,7 +63,7 @@ fn write_game_module_oracles(body: &mut String) {
                 sw_last_slot as i64
             };
             body.push_str(&format!(
-                "  \"oracle_switch_arm_count\": {},\n  \"oracle_switch_teardown_count\": {},\n  \"oracle_switch_deferred_count\": {},\n  \"oracle_switch_last_slot\": {sw_last_slot_i},\n  \"oracle_switch_reload_phase\": {},\n  \"oracle_switch_reload_drain_waits\": {},\n  \"oracle_switch_reload_committed\": {},\n  \"oracle_switch_slot_control_mtime\": {},\n  \"oracle_switch_slot_control_primed\": {},\n  \"oracle_switch_player_present\": {},\n  \"oracle_switch_menu_job_present\": {},\n  \"oracle_switch_stable_frames\": {},\n  \"oracle_common_finalize_count\": {},\n  \"oracle_outgoing_teardown_baseline\": {},\n  \"oracle_outgoing_teardown_done\": {},\n  \"oracle_outgoing_teardown_wait_ticks\": {},\n  \"oracle_outgoing_teardown_failsoft\": {},\n  \"oracle_worldreswait_gate_calls\": {},\n  \"oracle_worldreswait_hold_armed\": {},\n  \"oracle_worldreswait_hold_engaged\": {},\n  \"oracle_worldreswait_held_frames\": {},\n  \"oracle_worldreswait_released_on_settle\": {},\n  \"oracle_worldreswait_released_on_failsoft\": {},\n",
+                "  \"oracle_switch_arm_count\": {},\n  \"oracle_switch_teardown_count\": {},\n  \"oracle_switch_deferred_count\": {},\n  \"oracle_switch_last_slot\": {sw_last_slot_i},\n  \"oracle_switch_reload_phase\": {},\n  \"oracle_switch_reload_drain_waits\": {},\n  \"oracle_switch_reload_committed\": {},\n  \"oracle_switch_slot_control_mtime\": {},\n  \"oracle_switch_slot_control_primed\": {},\n  \"oracle_switch_player_present\": {},\n  \"oracle_switch_menu_job_present\": {},\n  \"oracle_switch_stable_frames\": {},\n  \"oracle_common_finalize_count\": {},\n  \"oracle_menu_window_finalize_guards\": {},\n  \"oracle_menu_window_finalize_last_window\": \"0x{:x}\",\n  \"oracle_outgoing_teardown_baseline\": {},\n  \"oracle_outgoing_teardown_done\": {},\n  \"oracle_outgoing_teardown_wait_ticks\": {},\n  \"oracle_outgoing_teardown_failsoft\": {},\n  \"oracle_worldreswait_gate_calls\": {},\n  \"oracle_worldreswait_hold_armed\": {},\n  \"oracle_worldreswait_hold_engaged\": {},\n  \"oracle_worldreswait_held_frames\": {},\n  \"oracle_worldreswait_released_on_settle\": {},\n  \"oracle_worldreswait_released_on_failsoft\": {},\n",
                 swctr::SWITCH_TRIGGER_ARM_COUNT.load(SwOrd::SeqCst),
                 swctr::SWITCH_TRIGGER_TEARDOWN_COUNT.load(SwOrd::SeqCst),
                 swctr::SWITCH_TRIGGER_DEFERRED_COUNT.load(SwOrd::SeqCst),
@@ -78,6 +78,8 @@ fn write_game_module_oracles(body: &mut String) {
                 // PHASE-3 outgoing-world teardown oracles (bd PHASE3-render-release-is-CommonFinalize):
                 // common_finalize_count is THE render-release oracle (flat=in-place bug, +1/switch=fixed).
                 swctr::COMMON_FINALIZE_CALLS.load(SwOrd::SeqCst),
+                swctr::MENU_WINDOW_JOB_FINALIZE_GUARDS.load(SwOrd::SeqCst),
+                swctr::MENU_WINDOW_JOB_FINALIZE_LAST_WINDOW.load(SwOrd::SeqCst),
                 swctr::OUTGOING_TEARDOWN_BASELINE.load(SwOrd::SeqCst),
                 swctr::OUTGOING_TEARDOWN_DONE.load(SwOrd::SeqCst),
                 swctr::OUTGOING_TEARDOWN_WAIT_TICKS.load(SwOrd::SeqCst),

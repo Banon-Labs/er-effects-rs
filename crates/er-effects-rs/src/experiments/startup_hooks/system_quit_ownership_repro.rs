@@ -616,6 +616,19 @@ pub(crate) fn masquerade_preserved_job_note(job: usize) {
 
 /// Remove `job` from the masquerade-preserved identity set, returning whether it was present. Called
 /// exactly once per destructor entry so the set self-cleans across title rebuilds.
+/// Non-consuming membership test for the masquerade-preserved identity set. The FINALIZE hook needs
+/// this instead of `masquerade_preserved_job_take`: the finalize runs repeatedly over a job's life
+/// (three call sites in `MenuWindowJob::Run` alone), whereas the destructor runs exactly once, so
+/// consuming the entry there would disarm the strict predicate for every later call on the same job.
+fn masquerade_preserved_job_contains(job: usize) -> bool {
+    if job == 0 {
+        return false;
+    }
+    MASQUERADE_PRESERVED_JOBS
+        .iter()
+        .any(|slot| slot.load(Ordering::SeqCst) == job)
+}
+
 fn masquerade_preserved_job_take(job: usize) -> bool {
     if job == 0 {
         return false;
@@ -660,6 +673,95 @@ unsafe fn menu_window_remove_from_push_target(job: usize, window: usize, base: u
 }
 
 /// Install the ~MenuWindowJob doomed-window guard (er-effects-rs-j74t). Idempotent.
+/// `MenuWindowJob` FINALIZE hook (deobf 0x1407ada40) -- the CALL-PATH-COMPLETE counterpart to
+/// `menu_window_job_dtor_hook`.
+///
+/// The destructor guard only covers the finalize's caller at 0x7ac720. The finalize has five callers,
+/// and the profile-switch crash reproduced twice on 2026-07-30 (agent run 15:27:41, user run
+/// 15:45:14, both `access-violation rva=0x7ada7c ... NtTerminateProcess code=0xc0000005`) arrives via
+/// `MenuWindowJob::Run`, which the destructor hook never sees. Hooking the finalize itself closes
+/// every caller at once.
+///
+/// Identical neutralization to the destructor guard: reuse `menu_window_doomed_event_index`, and when
+/// the window is doomed null `owningMenuWindow` so the native code's own `if (owningMenuWindow != 0)`
+/// check skips the block instead of virtual-calling freed memory. A healthy window is untouched, so
+/// the non-crashing path stays byte-identical.
+pub(crate) unsafe extern "system" fn menu_window_job_finalize_hook(
+    job: usize,
+    rdx: usize,
+    r8: usize,
+    r9: usize,
+) {
+    if job != 0
+        && let Some(base) = game_module_base().ok().filter(|&b| b != 0)
+    {
+        // PEEK, never take: unlike the destructor this is not the job's lifecycle end.
+        let preserved_stale = masquerade_preserved_job_contains(job);
+        let owning_addr = job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET;
+        if let Some(window) = unsafe { safe_read_usize(owning_addr) }
+            && window != 0
+            && let Some((doomed, index)) =
+                unsafe { menu_window_doomed_event_index(window, base, preserved_stale) }
+            && doomed
+        {
+            let removed = unsafe { menu_window_remove_from_push_target(job, window, base) };
+            unsafe { (owning_addr as *mut usize).write_volatile(0) };
+            let n = MENU_WINDOW_JOB_FINALIZE_GUARDS.fetch_add(1, Ordering::SeqCst) + 1;
+            MENU_WINDOW_JOB_FINALIZE_LAST_WINDOW.store(window, Ordering::SeqCst);
+            if n <= 32 {
+                append_crash_log(format_args!(
+                    "menu-window-finalize-guard: DOOMED owningMenuWindow #{n} on FINALIZE job=0x{job:x} window=0x{window:x} event_index={index:?} list_removed={removed} preserved_stale={preserved_stale} -- nulled job+0x130 so the native block skips it (prevents the AV at rva 0x7ada7c reached via MenuWindowJob::Run, which the ~MenuWindowJob guard cannot see)"
+                ));
+            }
+        }
+    }
+    let orig = MENU_WINDOW_JOB_FINALIZE_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET || orig == 0 {
+        return;
+    }
+    let f: unsafe extern "system" fn(usize, usize, usize, usize) =
+        unsafe { std::mem::transmute(orig) };
+    unsafe { f(job, rdx, r8, r9) };
+}
+
+/// Install the finalize guard. Idempotent. 0x7ada40 carries no other detour (MinHook allows one per
+/// address, and the collision that killed a previous hook was at `MenuWindowJob::Run` 0x7ad1c0).
+pub(crate) fn install_menu_window_job_finalize_guard() {
+    if MENU_WINDOW_JOB_FINALIZE_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
+        return;
+    }
+    let Ok(addr) = game_rva(MENU_WINDOW_JOB_FINALIZE_RVA as u32) else {
+        append_crash_log(format_args!(
+            "menu-window-finalize-guard: failed to resolve finalize rva 0x{MENU_WINDOW_JOB_FINALIZE_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            menu_window_job_finalize_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            MENU_WINDOW_JOB_FINALIZE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_crash_log(format_args!(
+                    "menu-window-finalize-guard: queue_enable failed: {status:?}"
+                ));
+                return;
+            }
+            append_crash_log(format_args!(
+                "menu-window-finalize-guard: hooked MenuWindowJob finalize 0x{addr:x} -- covers all five callers incl. MenuWindowJob::Run (the ~MenuWindowJob guard covers only 0x7ac720)"
+            ));
+        }
+        Err(status) => {
+            append_crash_log(format_args!(
+                "menu-window-finalize-guard: MhHook::new(finalize) failed: {status:?}"
+            ));
+        }
+    }
+}
+
 fn install_menu_window_job_dtor_guard() {
     if MENU_WINDOW_JOB_DTOR_TRACE_INSTALLED.load(Ordering::SeqCst) != 0 {
         return;
