@@ -461,6 +461,36 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SAVE_PICKER_OS_SAVELIKE_OPENS.load(Ordering::SeqCst),
         SAVE_DEST_CONFIRM_PENDING.load(Ordering::SeqCst)
     ));
+    // The screen dim raised over the game while an OS dialog is blocking the menu thread.
+    //
+    // `_frames` IS THE PRODUCT PROOF and nothing else in this file can stand in for it. The game
+    // renders nothing for the dialog's whole life, so a frame count that ADVANCED across the
+    // interval bracketed by the dialog's own OPENED/CLOSED log lines is the only evidence that the
+    // animation actually ran -- on a thread we own, which is the entire reason this feature has its
+    // own window. `_arm_count == _disarm_count` with `_armed == 0` is the teardown proof; the
+    // opposite means a fullscreen dim is stranded over a game the user can still play. `_z_self`
+    // must land BETWEEN `_z_foreign` (comdlg32) and `_z_game`, which is how the stacking is checked
+    // without anyone looking at a screenshot.
+    body.push_str(&format!(
+        "  \"oracle_save_picker_dim_armed\": {},\n  \"oracle_save_picker_dim_arm_count\": {},\n  \"oracle_save_picker_dim_disarm_count\": {},\n  \"oracle_save_picker_dim_frames\": {},\n  \"oracle_save_picker_dim_alive_ms\": {},\n  \"oracle_save_picker_dim_teardown_reason\": {},\n  \"oracle_save_picker_dim_stage\": {},\n  \"oracle_save_picker_dim_selftest\": {},\n  \"oracle_save_picker_dim_hwnd\": {},\n  \"oracle_save_picker_dim_game_hwnd\": {},\n  \"oracle_save_picker_dim_update_fails\": {},\n  \"oracle_save_picker_dim_z_self\": {},\n  \"oracle_save_picker_dim_z_game\": {},\n  \"oracle_save_picker_dim_z_foreign\": {},\n  \"oracle_save_picker_dim_z_violations\": {},\n  \"oracle_save_picker_dim_full_pushes\": {},\n  \"oracle_save_picker_dim_foreign_fg_hwnd\": {},\n",
+        er_telemetry::counters::SAVE_PICKER_DIM_ARMED.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_DIM_ARM_COUNT.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_DIM_DISARM_COUNT.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_DIM_FRAMES.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_DIM_ALIVE_MS.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_DIM_TEARDOWN_REASON.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_DIM_STAGE.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_DIM_SELFTEST.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_DIM_HWND.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_DIM_GAME_HWND.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_DIM_UPDATE_FAILS.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_DIM_Z_SELF.load(Ordering::SeqCst) as isize,
+        er_telemetry::counters::SAVE_PICKER_DIM_Z_GAME.load(Ordering::SeqCst) as isize,
+        er_telemetry::counters::SAVE_PICKER_DIM_Z_FOREIGN.load(Ordering::SeqCst) as isize,
+        er_telemetry::counters::SAVE_PICKER_DIM_Z_VIOLATIONS.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_DIM_FULL_PUSHES.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_DIM_FOREIGN_FG_HWND.load(Ordering::SeqCst)
+    ));
     // Per-slot info fields (Level caption/value, PlayTime) on browse rows with no character. `_hidden`
     // > 0 proves the suppression reached real rows; `_non_display` > 0 or a `_last_datatype` other
     // than 10 says the native visibility setter ignored the field, i.e. the text is still on screen.

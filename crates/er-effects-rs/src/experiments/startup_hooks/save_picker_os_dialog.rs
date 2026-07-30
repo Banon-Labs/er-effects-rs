@@ -335,6 +335,17 @@ fn os_pick_validated<T>(
     let Some(_claim) = OsDialogClaim::claim() else {
         return None;
     };
+    // COVER THE GAME FOR EXACTLY AS LONG AS IT IS FROZEN. Everything below this line runs with the
+    // menu thread parked inside comdlg32, so the game renders nothing and a user with no cover sees
+    // a still frame that is indistinguishable from a hang. `_dim` is declared AFTER `_claim`, so it
+    // drops FIRST and the screen is released the instant the dialog is gone, while the claim still
+    // covers the staging closure below.
+    //
+    // The bracket is the whole `os_pick_validated`, not each `os_dialog_run`, ON PURPOSE: an invalid
+    // pick REOPENS the dialog, and a per-call bracket would flash the game back at full brightness
+    // between the two dialogs. From the user's side the reopen is one continuous "pick a save",
+    // which is what the cover should track.
+    let _dim = picker_dim_arm(if save_as { "save-as" } else { "load" });
     let commit_window_armed = save_dest_commit_window_armed();
     let mut attempts = 0usize;
     loop {
