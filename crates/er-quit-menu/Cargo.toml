@@ -1,0 +1,62 @@
+# Product (B): the CUSTOMIZED POST-AUTOLOAD VANILLA MENU -- everything we add to the
+# game's own System>Quit tab, as one product:
+#   * the AddCancelButton row cloning that CREATES the two rows, and the routing that puts
+#     them ahead of the native Return-to-Desktop confirm;
+#   * the "Load Profile" row (character-slot switch);
+#   * the "Load Save Profiles" row (browse for a different save container), its in-game
+#     `05_010_ProfileSelect` browse surface, and the ProfileSummary preview/save-swap it
+#     drives;
+#   * the "Save Game" row: label substitution, the native confirm chain, the destination
+#     browser and the commit;
+#   * the "Quit to Desktop" row and its clean-kill path;
+#   * the dim overlay that covers the game while an OS dialog is up -- the IN-GAME
+#     quit-menu case ONLY (user decision 2026-07-30).
+#
+# DEPENDENCY DIRECTION IS ONE-WAY: er-quit-menu -> er-save-picker. This crate borrows the
+# shared row model and the comdlg32 mechanism from (A) and supplies its own dim as the
+# cover. (A) never references the dim, which is what keeps the direction acyclic.
+#
+# Product state crosses the seam as injected function pointers: see `host::install_host`.
+# This crate must NOT depend on the root crate.
+[package]
+name = "er-quit-menu"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_quit_menu"
+
+[dependencies]
+# The shared row model, the picker config keys and the comdlg32 dialog mechanism
+# (product A). `default-features = false` + an explicit `os-dialog`: a standalone
+# product-(B) DLL links (A)'s SURFACES but never (A)'s boot missing-save behavior. Note
+# that cargo unifies features across a build graph, so this isolation is real only in a
+# build where (A)'s own DLL / the product are absent -- the runtime guarantee is that (A)'s
+# boot flow arms only from an explicit entry point that this crate never calls.
+er-save-picker = { path = "../er-save-picker", default-features = false, features = [
+  "os-dialog",
+] }
+# BND4 slot walk + PlayerGameData reads for the ProfileSummary preview of a foreign save.
+er-save-loader = { path = "../er-save-loader" }
+# Shared cross-platform telemetry counters (the oracle_system_quit_* / save_flow_* /
+# save_dest_* / save_picker_* fields).
+er-telemetry = { path = "../er-telemetry" }
+
+[target.'cfg(windows)'.dependencies]
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+# Shared MinHook FFI + hook union. This crate contends with the product DLL on real game
+# addresses (0x920c90 AddCancelButton, 0x9a4670 ProfileLoad activate, 0x875590 the
+# ProfileSelect list builder, ...), so EVERY detour it installs must go through
+# `register_union_hook` -- never a bare `MhHook::new`.
+er-hook = { path = "../er-hook" }
+# Fault-safe RAM readers, game base/rva resolution, typed game bindings.
+er-game-base = { path = "../er-game-base", features = ["game-types"] }
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Memory",
+  "Win32_UI_WindowsAndMessaging",
+] }

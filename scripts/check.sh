@@ -71,6 +71,14 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-save-loader
 # extracted menu font (ER_FONT_GFX_PATH overridable) and skips when absent.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-loading-portrait
 
+# The save-picker crate split (docs/plans/save-picker-crate-extraction.md). The row model
+# and the quit-row resolver are pure logic, so the HOST run is their real coverage -- the
+# whole point of the extraction is that state machines which today need a game launch
+# become `cargo test`-able. The DLL shells' tests prove the host seam installs exactly
+# once. `check-rust-build.sh` keeps all four building for the shipping target.
+cargo test --manifest-path "$repo_root/Cargo.toml" \
+	-p er-save-picker -p er-save-picker-dll -p er-quit-menu -p er-quit-menu-dll
+
 # er-telemetry's host-portable logic. The workspace pins `default-members` to the DLL crate, so the
 # windows-target `cargo xwin test --lib` below selects er-effects-rs ONLY and never ran these -- a
 # telemetry-crate test module could be added and silently never execute in any gate. The load-count

@@ -2916,6 +2916,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-quit-menu"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-game-base",
+ "er-hook",
+ "er-save-loader",
+ "er-save-picker",
+ "er-telemetry",
+ "fromsoftware-shared",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "er-quit-menu-dll"
+version = "0.1.0"
+dependencies = [
+ "er-quit-menu",
+]
+
+[[package]]
 name = "er-reload-trace-dll"
 version = "0.1.0"
 dependencies = [
@@ -2941,6 +2962,23 @@ version = "0.1.0"
 dependencies = [
  "eldenring",
  "er-safe-input",
+]
+
+[[package]]
+name = "er-save-picker"
+version = "0.1.0"
+dependencies = [
+ "er-loading-bar",
+ "er-save-loader",
+ "er-telemetry",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "er-save-picker-dll"
+version = "0.1.0"
+dependencies = [
+ "er-save-picker",
 ]
 
 [[package]]
