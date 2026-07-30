@@ -896,6 +896,9 @@ pub(crate) unsafe extern "system" fn title_pab_information_visual_hook(
     TITLE_PAB_INFORMATION_VISUAL_LAST_JOB.store(native_job, Ordering::SeqCst);
     TITLE_PAB_INFORMATION_VISUAL_LAST_WINDOW.store(native_window, Ordering::SeqCst);
     TITLE_PAB_INFORMATION_VISUAL_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+    // Identity layer (er-effects-rs-j74t): this job is now masquerade-preserved; its destructor
+    // must apply the strict owningMenuWindow lifetime predicate instead of the state heuristic.
+    masquerade_preserved_job_note(native_job);
     append_autoload_debug(format_args!(
         "title-cover-part-a: PRESERVED native {TITLE_PAB_INFORMATION_VISUAL_NAME} wrapper 0x{:x}; latched job=0x{native_job:x} window=0x{native_window:x} for PAB cover (out_slot=0x{out_slot:x} rdx=0x{rdx:x} r8=0x{r8:x} caller_rva=0x{caller_rva:x})",
         base + TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA,
@@ -948,6 +951,12 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_begin_title_hook(
     };
     TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB.store(native_job, Ordering::SeqCst);
     TITLE_NATIVE_MENU_VISUAL_NATIVE_WINDOW.store(native_window, Ordering::SeqCst);
+    // Identity layer (er-effects-rs-j74t): this job is now masquerade-preserved; its destructor
+    // must apply the strict owningMenuWindow lifetime predicate instead of the state heuristic.
+    // (On the return-to-title rebuild this latch is overwritten with the NEW job ~1ms before the
+    // STALE job's ~MenuWindowJob runs, so the single-latch atomics cannot identify the stale job --
+    // the set can.)
+    masquerade_preserved_job_note(native_job);
     append_autoload_debug(format_args!(
         "title-cover-part-b: independent 01_900_Black build disabled; prior pump proof stalled title flow (no completion epilogue)"
     ));

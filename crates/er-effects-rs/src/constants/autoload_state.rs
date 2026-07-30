@@ -1239,6 +1239,24 @@ pub(crate) use er_telemetry::counters::SCALEFORM_HANDLER_LAST_DOUBLE_FREE_OBJ;
 /// skips the block entirely (and correctly does NOT unref a dead window). Gated to `menu_id == 0xffff`
 /// so healthy mapped windows are untouched (byte-identical, no extra virtual call). The dtor forwards
 /// rdx/r8/r9 to the finalize untouched, so all four argument registers are forwarded verbatim.
+///
+/// IDENTITY LAYER (2026-07-29, closes the 2026-07-23 false-negative at rva 0x7ada7c): the state
+/// heuristic above forwards whenever `menu_id != 0xffff` -- but a freed-and-REUSED window can carry an
+/// in-module vtable and arbitrary non-0xffff bytes at +0x180, so the native finalize then virtual-
+/// calls the reused object and crashes at its FIRST `vfptr[3]` call (rva 0x7ada7c; observed
+/// 2026-07-23 with the guard armed). No memory-state probe can identify that case. What CAN identify
+/// it is OWNERSHIP: the only producer of stale jobs is our own title-cover masquerade, which latches
+/// every job it preserves (`title_native_menu_visual_begin_title_hook` /
+/// `title_pab_information_visual_hook`). Those latches now also record the job pointer in
+/// `MASQUERADE_PRESERVED_JOBS`; at `~MenuWindowJob` a preserved job gets the STRICT lifetime
+/// predicate: forward natively only when the window is verifiably still in the state the finalize's
+/// contract requires (in-module vtable AND `menu_id < 0x47` mapped, i.e. the native deregistration is
+/// valid), probe `vfptr[3]` for the `0xffff` never/de-registered state, and DETACH (native
+/// vector-remove `FUN_140733d70` + null `job+0x130`) on every unverifiable state (unreadable window,
+/// out-of-module vtable, unreadable or garbage `menu_id`, garbage descriptor index). The 1.16.2
+/// finalize (0x1407ada40) and dtor both gate every window access on `owningMenuWindow != 0`, so the
+/// detached state is native-tolerated by construction. Non-preserved (native-owned) jobs keep the
+/// legacy heuristic byte-identically.
 pub(crate) const MENU_WINDOW_JOB_DTOR_RVA: usize = 0x7ac720;
 pub(crate) const MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET: usize = 0x130;
 /// The window's cached menu id (`field246_0x180`). `0xffff` is the unmapped sentinel and the state
@@ -1278,6 +1296,25 @@ pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_DOOMED_GUARDS;
 pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_LIST_REMOVALS;
 pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_LAST_GUARDED_WINDOW;
 pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_LAST_GUARDED_INDEX;
+pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_PRESERVED_STALE_DETACHES;
+/// Upper bound (exclusive) of a MAPPED menu id: the 1.16.2 finalize's own flag-clear guard is
+/// `if (*menu_id < 0x47) GLOBAL_CSMenuMan->field99_0x90[*menu_id] = 0;` and the sibling
+/// `MenuWindowJob::Run` bounds the same index identically, so `< 0x47` is the game's own definition
+/// of "registered in the CSMenuMan window-flag table".
+pub(crate) const MENU_WINDOW_MAPPED_MENU_ID_MAX: u16 = 0x47;
+/// Identity set of `MenuWindowJob*` values preserved by OUR title-cover masquerade (er-effects-rs-
+/// j74t identity layer; see `MENU_WINDOW_JOB_DTOR_RVA`). The part-a latches insert
+/// (`masquerade_preserved_job_note`); `menu_window_job_dtor_hook` removes at destruction
+/// (`masquerade_preserved_job_take`), so the set self-cleans and 4 slots comfortably cover the at
+/// most two preserved jobs (05_000_Title + 05_020_TitleInformation) live per title build. On
+/// overflow the job simply falls back to the legacy state heuristic (logged).
+pub(crate) const MASQUERADE_PRESERVED_JOB_SLOTS: usize = 4;
+pub(crate) static MASQUERADE_PRESERVED_JOBS: [AtomicUsize; MASQUERADE_PRESERVED_JOB_SLOTS] = [
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+];
 
 /// QUIT-TO-DESKTOP CLEAN KILL (user directive 2026-07-08): the native quit saves the character then
 /// tears the world down and rebuilds the title -- slow, and with our flow the rebuilt title's

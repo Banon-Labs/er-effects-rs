@@ -477,13 +477,17 @@ pub(crate) unsafe extern "system" fn menu_window_job_dtor_hook(
     r9: usize,
 ) {
     if job != 0 {
+        // Identity first (er-effects-rs-j74t identity layer): if OUR masquerade preserved this job,
+        // take it out of the set unconditionally -- this destructor is the job's lifecycle end --
+        // and apply the STRICT lifetime predicate below instead of the legacy state heuristic.
+        let preserved_stale = masquerade_preserved_job_take(job);
         if let Some(base) = game_module_base().ok().filter(|&b| b != 0) {
             let owning_addr = job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET;
             if let Some(window) = unsafe { safe_read_usize(owning_addr) } {
                 if window != 0 {
-                    if let Some((doomed, index)) =
-                        unsafe { menu_window_doomed_event_index(window, base) }
-                    {
+                    if let Some((doomed, index)) = unsafe {
+                        menu_window_doomed_event_index(window, base, preserved_stale)
+                    } {
                         if doomed {
                             // The finalize would remove the window from its push-target vector, but
                             // it crashes at the getter first, leaving the window dangling in the
@@ -499,9 +503,13 @@ pub(crate) unsafe extern "system" fn menu_window_job_dtor_hook(
                             MENU_WINDOW_JOB_DTOR_LAST_GUARDED_WINDOW.store(window, Ordering::SeqCst);
                             MENU_WINDOW_JOB_DTOR_LAST_GUARDED_INDEX
                                 .store(index.map(|i| i as usize).unwrap_or(usize::MAX), Ordering::SeqCst);
+                            if preserved_stale {
+                                MENU_WINDOW_JOB_DTOR_PRESERVED_STALE_DETACHES
+                                    .fetch_add(1, Ordering::SeqCst);
+                            }
                             if n <= 32 {
                                 append_crash_log(format_args!(
-                                    "menu-window-job-guard: DOOMED owningMenuWindow #{n} on ~MenuWindowJob job=0x{job:x} window=0x{window:x} event_index={index:?} list_removed={removed} -- removed from push-target vector + nulled job+0x130 so the finalize skips its window block (prevents the return-to-title AV at rva 0x7ada87/0x7adb28/0x733f80)"
+                                    "menu-window-job-guard: DOOMED owningMenuWindow #{n} on ~MenuWindowJob job=0x{job:x} window=0x{window:x} event_index={index:?} list_removed={removed} preserved_stale={preserved_stale} -- removed from push-target vector + nulled job+0x130 so the finalize skips its window block (prevents the return-to-title AV at rva 0x7ada7c/0x7ada87/0x7adb28/0x733f80)"
                                 ));
                             }
                         }
@@ -520,13 +528,28 @@ pub(crate) unsafe extern "system" fn menu_window_job_dtor_hook(
 }
 
 /// Reproduce the finalize's `owningMenuWindow->vfptr[3](window, &scratch)` and return
-/// `(doomed, event_index)`, or `None` when the window is a healthy mapped window we must not touch
-/// (menu_id != 0xffff) so the caller leaves it untouched. `doomed` is true when the window is
-/// freed/reused (vtable or vfptr[3] not in the game module) or the descriptor's event index is out of
-/// range -- exactly the states that make the finalize dereference wild memory. Only ever calls the
-/// game's own getter method (which returned successfully in every observed run; the crash was always
-/// the caller's later deref), and only for unmapped (0xffff) windows.
-unsafe fn menu_window_doomed_event_index(window: usize, base: usize) -> Option<(bool, Option<i32>)> {
+/// `(doomed, event_index)`, or `None` when the window must be left untouched (the native finalize's
+/// lifetime contract verifiably holds). `doomed` is true when the window is freed/reused (vtable or
+/// vfptr[3] not in the game module) or the descriptor's event index is out of range -- exactly the
+/// states that make the finalize dereference wild memory. Only ever calls the game's own getter
+/// method (which returned successfully in every observed run; the crash was always the caller's
+/// later deref), and only for unmapped (0xffff) windows.
+///
+/// `preserved_stale` selects the predicate direction for the `menu_id != 0xffff` states:
+/// * `false` (native-owned job): legacy behavior, byte-identical -- any non-0xffff (or unreadable)
+///   menu_id forwards untouched. The game's own coupling of job destruction to window close is
+///   trusted for jobs we never touched.
+/// * `true` (a job OUR masquerade preserved past its window's native lifetime): the coupling is
+///   already known-broken, so only a VERIFIABLY healthy mapped window (`menu_id <
+///   MENU_WINDOW_MAPPED_MENU_ID_MAX`, the game's own bound) forwards; an unreadable or garbage
+///   menu_id means freed/reused memory and is doomed. This closes the 2026-07-23 false negative
+///   (crash at rva 0x7ada7c: reused window, in-module vtable, menu_id garbage != 0xffff, native
+///   finalize virtual-called the reused object).
+unsafe fn menu_window_doomed_event_index(
+    window: usize,
+    base: usize,
+    preserved_stale: bool,
+) -> Option<(bool, Option<i32>)> {
     let in_module = |p: usize| p >= base && p.wrapping_sub(base) < GAME_MODULE_VTABLE_SPAN;
     // Read the window's vtable. A freed+reused window's vtable is heap garbage (not in the module) ->
     // doomed; the finalize's virtual call would fault. Do NOT call through a non-module vtable.
@@ -536,10 +559,17 @@ unsafe fn menu_window_doomed_event_index(window: usize, base: usize) -> Option<(
     if !in_module(vtable) {
         return Some((true, None));
     }
-    // Only unmapped windows reach the crashing states; leave healthy mapped windows byte-identical.
     let menu_id = unsafe { safe_read_u16(window + MENU_WINDOW_MENU_ID_OFFSET) };
-    if menu_id != Some(MENU_WINDOW_MENU_ID_UNMAPPED_SENTINEL) {
-        return None;
+    match menu_id {
+        // Never/de-registered window: fall through to the vfptr[3] probe below (both paths).
+        Some(MENU_WINDOW_MENU_ID_UNMAPPED_SENTINEL) => {}
+        // Native-owned job: leave every non-0xffff state byte-identical (legacy behavior).
+        _ if !preserved_stale => return None,
+        // OUR stale job, verifiably mapped window: the native finalize's deregistration is valid
+        // (same `< 0x47` bound the game itself applies) -- forward so the native cleanup runs.
+        Some(id) if id < MENU_WINDOW_MAPPED_MENU_ID_MAX => return None,
+        // OUR stale job, unreadable or garbage menu_id: freed/reused window -> doomed.
+        _ => return Some((true, None)),
     }
     let Some(vf3) = (unsafe { safe_read_usize(vtable + MENU_WINDOW_INPUT_DESC_VTABLE_SLOT) }) else {
         return Some((true, None));
@@ -556,6 +586,49 @@ unsafe fn menu_window_doomed_event_index(window: usize, base: usize) -> Option<(
     let index = unsafe { safe_read_i32(descriptor) };
     let doomed = !matches!(index, Some(i) if (0..MENU_WINDOW_EVENT_INDEX_SANE_MAX).contains(&i));
     Some((doomed, index))
+}
+
+/// OWNERSHIP: record a `MenuWindowJob*` our title-cover masquerade preserved past its native
+/// replacement point (er-effects-rs-j74t identity layer; see `MENU_WINDOW_JOB_DTOR_RVA`). Called by
+/// the part-a latches. Idempotent per pointer; on a full set the job just falls back to the legacy
+/// state heuristic at `~MenuWindowJob` (logged so the fallback is visible in the run evidence).
+pub(crate) fn masquerade_preserved_job_note(job: usize) {
+    if job == 0 {
+        return;
+    }
+    for slot in MASQUERADE_PRESERVED_JOBS.iter() {
+        if slot.load(Ordering::SeqCst) == job {
+            return;
+        }
+    }
+    for slot in MASQUERADE_PRESERVED_JOBS.iter() {
+        if slot
+            .compare_exchange(0, job, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            return;
+        }
+    }
+    append_autoload_debug(format_args!(
+        "menu-window-job-guard: preserved-job identity set FULL ({MASQUERADE_PRESERVED_JOB_SLOTS} slots); job=0x{job:x} falls back to the state heuristic at ~MenuWindowJob"
+    ));
+}
+
+/// Remove `job` from the masquerade-preserved identity set, returning whether it was present. Called
+/// exactly once per destructor entry so the set self-cleans across title rebuilds.
+fn masquerade_preserved_job_take(job: usize) -> bool {
+    if job == 0 {
+        return false;
+    }
+    for slot in MASQUERADE_PRESERVED_JOBS.iter() {
+        if slot
+            .compare_exchange(job, 0, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Remove `window` from the job's push-target `DLFixedVector` (`*(job+0x50)`) via the game's own
