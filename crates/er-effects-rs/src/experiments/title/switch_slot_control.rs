@@ -101,6 +101,17 @@ pub(crate) unsafe fn switch_slot_arm_programmatic(base: usize, slot: i32) {
     append_autoload_debug(format_args!(
         "switch-trigger #{n}: PROGRAMMATIC arm slot {slot} (player present, world resident@mms18) -- menuData+0x5d=1 (teardown), phase=RETURN_TITLE_REQUESTED, ARM_PLAYER_WAS_ABSENT=0, FRESH_DESER_DONE=0, presses=0"
     ));
+    // PORTRAIT RETARGET + COVER REARM -- shared with the USER ProfileSelect arm so the two arm paths
+    // cannot drift (bd er-effects-rs-dpf6; same rule as reset_switch_reload_latches above). Without
+    // this the programmatic switch skipped the whole portrait window/cover lifecycle: no window reset,
+    // no boot-view rearm, no confirm timestamp -- so control-file switches showed the bare native
+    // loading screen and agent probes could never exercise the user path's publish-race machinery.
+    unsafe {
+        crate::experiments::portrait_retarget_and_rearm_for_switch(
+            slot,
+            "SwitchSlotProgrammaticArm",
+        )
+    };
 }
 
 /// Poll the harness switch-slot control file (mtime-gated) and, when a NEW request appears while the

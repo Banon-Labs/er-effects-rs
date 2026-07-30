@@ -5,13 +5,93 @@ use crate::prelude::*;
 // path-A overlay composite (bd er-effects-rs-f9mq) because path B and the shared capture
 // pipeline depend on them.
 
+/// FNV-1a 64 over a character name's UTF-16 units (LE bytes), truncated to usize. The portrait
+/// identity tag (bd er-effects-rs-dpf6 Phase 1): stamped at the game-thread build kick, copied next to
+/// the bridge at publish, compared at the own-menu-switch rearm. 0 is reserved for "unknown/empty".
+pub fn portrait_name_hash_utf16(units: &[u16]) -> usize {
+    if units.is_empty() {
+        return 0;
+    }
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for u in units {
+        for b in u.to_le_bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    // Reserve 0 for "unknown" (an actual 0 hash is astronomically unlikely; map it to 1).
+    (h as usize).max(1)
+}
+
+/// Name-hash of a ProfileSummary RECORD (name UTF-16 units at record+0). Game-thread only (guarded
+/// game-memory read through the host seam). 0 = empty/unreadable name.
+pub unsafe fn portrait_record_name_hash(record: usize) -> usize {
+    let (units, len) = unsafe { read_utf16_name_units(record) };
+    portrait_name_hash_utf16(&units[..len])
+}
+
+/// Name-hash of save `slot`'s ProfileSummary record (same record addressing as
+/// `read_loading_screen_stats`). Game-thread only. 0 = unknown (no gdm/summary, bad slot, empty name).
+pub unsafe fn portrait_slot_name_hash(slot: i32) -> usize {
+    if !(0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&slot) {
+        return 0;
+    }
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let valid = |p: usize| p != 0 && p != null;
+    let gdm = game_data_man_ptr_or_null();
+    if !valid(gdm) {
+        return 0;
+    }
+    let summary = unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(0);
+    if !valid(summary) {
+        return 0;
+    }
+    let rec = summary + PROFILE_SUMMARY_RECORD_BASE + slot as usize * PROFILE_SUMMARY_RECORD_STRIDE;
+    unsafe { portrait_record_name_hash(rec) }
+}
+
 /// Close the loading-portrait window: clear the published snapshot + the "have a head" gate so a later
 /// window cannot flash the PREVIOUS character, drop the RT/depth candidate pins (the next window's
 /// renderers are new objects), and clear the teardown-spared renderer so the NEXT load's teardown re-spares
 /// the new character (LOADING_BG_PORTRAIT_SPARED_RENDERER is gated `== 0` and was otherwise never reset --
 /// it stayed pinned to the first character's now-stale renderer, and driving that leaked renderer risks a
-/// use-after-free). Called from the overlay stop at load completion; idempotent.
+/// use-after-free). Idempotent. (Sole current caller: the own-menu-switch rearm, via
+/// `loading_portrait_window_reset_for_switch`.)
 pub fn loading_portrait_window_reset(reason: &str) {
+    loading_portrait_window_reset_inner(reason, false)
+}
+
+/// Own-menu-switch variant (bd er-effects-rs-dpf6 Phase 3): if the INCOMING target identity
+/// (slot + ProfileSummary name-hash) matches the currently-published head's identity tag, KEEP the
+/// bridge and the frozen crop envelope across the rearm -- a same-character reload's cover shows the
+/// held head from frame one instead of clearing it 0.1ms after RETARGET's make-before-break claimed it
+/// holds. An identity MISMATCH (or unknown identity on either side) keeps the full 2026-07-06
+/// wrong-character clear. Game-thread only (reads the incoming slot's summary record).
+pub unsafe fn loading_portrait_window_reset_for_switch(selected_slot: i32, reason: &str) {
+    let incoming_hash = unsafe { portrait_slot_name_hash(selected_slot) };
+    let incoming_slot_tag = if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&selected_slot) {
+        (selected_slot + 1) as usize
+    } else {
+        0
+    };
+    let published_slot = LS_PORTRAIT_PUBLISHED_SLOT.load(Ordering::SeqCst);
+    let published_hash = LS_PORTRAIT_PUBLISHED_NAME_HASH.load(Ordering::SeqCst);
+    let have_head = PROFILE_HAVE_KEYED_FRAME.load(Ordering::SeqCst) != 0;
+    let hold = have_head
+        && incoming_slot_tag != 0
+        && incoming_slot_tag == published_slot
+        && incoming_hash != 0
+        && incoming_hash == published_hash;
+    if hold {
+        let n = PORTRAIT_BRIDGE_SAME_IDENTITY_HOLDS.fetch_add(1, Ordering::SeqCst) + 1;
+        append_autoload_debug(format_args!(
+            "loading-portrait: same-identity bridge HOLD #{n} across switch rearm (slot_tag={incoming_slot_tag} name_hash=0x{incoming_hash:x}) -- keeping published head + crop envelope for the new window"
+        ));
+    }
+    loading_portrait_window_reset_inner(reason, hold);
+}
+
+fn loading_portrait_window_reset_inner(reason: &str, hold_bridge: bool) {
     // WORKER-OFFLOAD SWITCH SAFETY (2026-07-06). Bump the pipeline generation FIRST: any portrait consume
     // job still in flight on the worker thread snapshotted the PREVIOUS gen, so when it re-reads this before
     // it pins/publishes it will see the bump and DISCARD -- a head captured for the old window can never be
@@ -38,10 +118,29 @@ pub fn loading_portrait_window_reset(reason: &str) {
     // snapshot cleared here there is nothing stale to bake or bridge: the next window starts head-less
     // and shows the new character's first keyed frame. Costs a brief head-less loading screen
     // (~0.5s after the window's table build in both measured runs) -- preferred over a wrong head.
-    if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
-        *g = None;
+    //
+    // SAME-IDENTITY HOLD (bd er-effects-rs-dpf6 Phase 3): when the caller PROVED the incoming target
+    // is the SAME character as the published head (slot + name-hash tag match), keeping the bridge
+    // cannot show a wrong head -- it shows the right head a full publish-latency (~4s from confirm on
+    // the measured machine) earlier. Only the bridge, its identity tag, and the frozen crop envelope
+    // are kept; every per-window counter/pin below still resets.
+    if !hold_bridge {
+        if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
+            *g = None;
+        }
+        PROFILE_HAVE_KEYED_FRAME.store(0, Ordering::SeqCst);
+        // Identity tag lives-and-dies with the bridge content.
+        LS_PORTRAIT_PUBLISHED_SLOT.store(0, Ordering::SeqCst);
+        LS_PORTRAIT_PUBLISHED_NAME_HASH.store(0, Ordering::SeqCst);
+        // Crop envelope: re-seed for the NEW character's silhouette (it was frozen after the first
+        // PORTRAIT_CROP_SEED_N frames and previously never reset, so a different character inherited
+        // the prior head's rect). On a same-identity hold it stays frozen -- same silhouette.
+        PORTRAIT_CROP_MINX.store(usize::MAX, Ordering::SeqCst);
+        PORTRAIT_CROP_MINY.store(usize::MAX, Ordering::SeqCst);
+        PORTRAIT_CROP_MAXX.store(0, Ordering::SeqCst);
+        PORTRAIT_CROP_MAXY.store(0, Ordering::SeqCst);
+        PORTRAIT_CROP_SEED_FRAMES.store(0, Ordering::SeqCst);
     }
-    PROFILE_HAVE_KEYED_FRAME.store(0, Ordering::SeqCst);
     PROFILE_BAKE_RGBA_CAPTURED.store(0, Ordering::SeqCst);
     PROFILE_LOADSCREEN_TABLE_OWNED.store(0, Ordering::SeqCst);
     // Rebuild the stats text for the next load (a System-Quit character switch may load a different char).
@@ -68,6 +167,8 @@ pub fn loading_portrait_window_reset(reason: &str) {
     PORTRAIT_ANIM_BOUND_LOC.store(0, Ordering::SeqCst);
     PORTRAIT_KICK_SLOT_KEY.store(0, Ordering::SeqCst);
     PORTRAIT_KICK_RENDERER.store(0, Ordering::SeqCst);
+    // The kick-target name hash re-stamps at the next window's build kick (both modes).
+    PORTRAIT_TARGET_NAME_HASH.store(0, Ordering::SeqCst);
     if let Ok(mut g) = PORTRAIT_MOTION_PREV_PLANES.lock() {
         *g = None;
     }
@@ -237,7 +338,12 @@ pub fn loading_portrait_window_reset(reason: &str) {
     PORTRAIT_WINDOW_PUBLISH_FAIL_LATCHED.store(0, Ordering::SeqCst);
     PORTRAIT_LAST_SKIP_CLASS.store(0, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "present-overlay: loading-portrait window reset ({reason}) -- animated {drive} / displayed {display} frames (drive<<display == froze early); publish[clean={published} torn={torn} unkeyed={unkeyed} lowmask={lowmask} badiou={badiou} checker={checker} multi={multi} pin_moves={pin_moves} fence_skips={fence_skips} unpaired={unpaired} copies={copies} first_keyed={first_keyed_s}] share[pass_min={share_min_s} held_max={held_max}] src[color bundle={cb}/scan={cs} depth chain={dc}/bfs={db}] (clean=0 with drive>0 == PUBLISH FAILURE, see the failure line above; the dominant skip class is the cause); pins/spare cleared for the next load"
+        "present-overlay: loading-portrait window reset ({reason}{}) -- animated {drive} / displayed {display} frames (drive<<display == froze early); publish[clean={published} torn={torn} unkeyed={unkeyed} lowmask={lowmask} badiou={badiou} checker={checker} multi={multi} pin_moves={pin_moves} fence_skips={fence_skips} unpaired={unpaired} copies={copies} first_keyed={first_keyed_s}] share[pass_min={share_min_s} held_max={held_max}] src[color bundle={cb}/scan={cs} depth chain={dc}/bfs={db}] (clean=0 with drive>0 == PUBLISH FAILURE, see the failure line above; the dominant skip class is the cause); pins/spare cleared for the next load",
+        if hold_bridge {
+            ", same-identity bridge HELD"
+        } else {
+            ""
+        }
     ));
 }
 

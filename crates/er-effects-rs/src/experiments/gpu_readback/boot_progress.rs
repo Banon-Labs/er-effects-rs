@@ -54,6 +54,20 @@ pub(crate) use er_telemetry::counters::BOOT_VIEW_OWN_MENU_LOAD_ACTIVE;
 /// One-shot stop latch: the loading window / world took over; reset only for a deliberate own-menu
 /// character switch so the same custom progress bar can cover the return-title/autoload black gap.
 pub(crate) use er_telemetry::counters::BOOT_VIEW_STOPPED;
+/// Cover-window measurability + FPS-bail resume state (bd er-effects-rs-dpf6 Phases 1+2): why the
+/// cover last stopped, when the window armed, the last window's arm->stop duration, and the
+/// publish-version/slot-key snapshots + once-per-epoch latch behind the publish-triggered resume.
+pub(crate) use er_telemetry::counters::BOOT_VIEW_COVER_WINDOW_MS_LAST;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_FPS_BAIL_PUBLISH_VERSION;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_FPS_BAIL_RESUMED;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_FPS_BAIL_RESUMES;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_FPS_BAIL_SLOT_KEY;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_STOP_REASON;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_WINDOW_ARM_MS;
+/// `BOOT_VIEW_STOP_REASON` values (0 = armed/none).
+pub(crate) const BOOT_VIEW_STOP_REASON_RELEASE_FADE: usize = 1;
+pub(crate) const BOOT_VIEW_STOP_REASON_FPS_BAIL: usize = 2;
+pub(crate) const BOOT_VIEW_STOP_REASON_WORLD_HANDOFF: usize = 3;
 const BOOT_VIEW_MONO_ORD_SCALE: usize = 1000;
 /// Hash of the last composed visible loading label logged to the runtime debug log.
 pub(crate) use er_telemetry::counters::BOOT_VIEW_LAST_LABEL_HASH;
@@ -394,6 +408,9 @@ fn boot_view_rearm_for_first_load_request_if_needed() {
         return;
     }
     BOOT_VIEW_STOPPED.store(0, Ordering::SeqCst);
+    BOOT_VIEW_STOP_REASON.store(0, Ordering::SeqCst);
+    BOOT_VIEW_WINDOW_ARM_MS.store(boot_view_epoch_ms().max(1) as usize, Ordering::SeqCst);
+    BOOT_VIEW_FPS_BAIL_RESUMED.store(0, Ordering::SeqCst);
     BOOT_VIEW_REACHED_MASK.store(1, Ordering::SeqCst);
     BOOT_VIEW_MILESTONE_IDX.store(0, Ordering::SeqCst);
     BOOT_VIEW_LAST_PERMILLE.store(0, Ordering::SeqCst);
@@ -433,6 +450,16 @@ pub(crate) fn rearm_boot_progress_for_own_menu_load(selected_slot: i32, source: 
     BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.store(slot_key, Ordering::SeqCst);
     BOOT_VIEW_LOADSCREEN_TABLE_BASELINE.store(table_baseline, Ordering::SeqCst);
     BOOT_VIEW_STOPPED.store(0, Ordering::SeqCst);
+    BOOT_VIEW_STOP_REASON.store(0, Ordering::SeqCst);
+    BOOT_VIEW_WINDOW_ARM_MS.store(boot_view_epoch_ms().max(1) as usize, Ordering::SeqCst);
+    BOOT_VIEW_FPS_BAIL_RESUMED.store(0, Ordering::SeqCst);
+    // FPS-bail composite clock: force re-init at the first composite of THIS window. The clock is
+    // keyed on the fresh-deser epoch, which has NOT incremented yet at rearm time (it bumps at the
+    // reload's deserialize), so switch #2+ inherited the PREVIOUS window's first-composite timestamp
+    // and instantly tripped the 20s cap (measured run samechar-3x-threedll-20260729-203842: bail at
+    // cover_window_ms=36 with composite_ms=24582). The usize::MAX sentinel never equals a real epoch,
+    // so the next composite's swap re-stamps BOOT_VIEW_COMPOSITE_FIRST_MS.
+    crate::constants::BOOT_VIEW_COMPOSITE_EPOCH.store(usize::MAX, Ordering::SeqCst);
     BOOT_VIEW_PUMP_STOP_MS.store(0, Ordering::SeqCst);
     BOOT_VIEW_PUMP_STOP_REASON.store(0, Ordering::SeqCst);
     BOOT_VIEW_HANDOFF_SEEN_MS.store(0, Ordering::SeqCst);
@@ -473,8 +500,12 @@ pub(crate) fn rearm_boot_progress_for_own_menu_load(selected_slot: i32, source: 
     // user-reported: the old character lingered on the new load screen). The portrait window is otherwise
     // only reset on load COMPLETION, so the just-loaded character carried into the NEXT switch's cover.
     // Resetting here rebinds the portrait pipeline for the incoming slot so the cover shows the new
-    // character (or a clean black/bar) instead of the prior one.
-    loading_portrait_window_reset("own-menu-switch-rearm");
+    // character (or a clean black/bar) instead of the prior one. SAME-IDENTITY variant (bd
+    // er-effects-rs-dpf6 Phase 3): when the incoming slot+name-hash matches the published head's
+    // identity tag, the bridge + crop envelope are KEPT (a same-character reload cannot show a wrong
+    // head); an identity mismatch keeps the full 2026-07-16/2026-07-06 clear above. Game thread
+    // (confirm-press hook), so the summary-record identity read is safe here.
+    unsafe { loading_portrait_window_reset_for_switch(selected_slot, "own-menu-switch-rearm") };
     append_autoload_debug(format_args!(
         "boot-view: rearmed for own-menu character load selected_slot={selected_slot} source={source} table_baseline={table_baseline}"
     ));
@@ -1868,12 +1899,66 @@ impl Drop for BootViewBusyGuard {
     }
 }
 
+/// FPS-BAIL RESUME ON PUBLISH (bd er-effects-rs-dpf6 Phase 2). The permille arm of the FPS bail
+/// latches on a HEALTHY fast switch load ~2s after confirm (measured run product-continue-direct-
+/// 20260729-194759: bail at +136108 with permille=960, publish at +138063 -- the cover was dead 2.0s
+/// before the head arrived). When a NEW portrait publish (version bump past the bail-time snapshot)
+/// lands while the native loading screen is still active (update ticked / fadeout+close within the
+/// same hold windows the release path uses), clear the bail stop ONCE per cover window so the head
+/// composites for the remainder; the release fade / world handoff still owns the real end. Safe by
+/// the frozen-load2 insight: a genuinely frozen load never publishes a portrait, so this can never
+/// re-open the cover on the pathology the bail protects against. The 20s composite cap stays armed
+/// post-resume as the FPS backstop (only the permille re-bail is suppressed).
+fn boot_view_try_fps_bail_resume_on_publish() -> bool {
+    if BOOT_VIEW_STOP_REASON.load(Ordering::SeqCst) != BOOT_VIEW_STOP_REASON_FPS_BAIL
+        || BOOT_VIEW_FPS_BAIL_RESUMED.load(Ordering::SeqCst) != 0
+    {
+        return false;
+    }
+    let version = LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst);
+    let bail_version = BOOT_VIEW_FPS_BAIL_PUBLISH_VERSION.load(Ordering::SeqCst);
+    if version <= bail_version {
+        return false;
+    }
+    let now_ms = boot_view_epoch_ms().max(1);
+    let update_last = LOADING_SCREEN_UPDATE_LAST_MS.load(Ordering::SeqCst) as u64;
+    let fadeout_anchor = LOADING_SCREEN_GFX_FADEOUT_LAST_MS
+        .load(Ordering::SeqCst)
+        .max(LOADING_SCREEN_CLOSE_SENT_FIRST_MS.load(Ordering::SeqCst)) as u64;
+    let update_recent = update_last != 0
+        && now_ms.saturating_sub(update_last) < BOOT_VIEW_NATIVE_LOADING_QUIET_HOLD_MS;
+    let fadeout_recent = fadeout_anchor != 0
+        && now_ms.saturating_sub(fadeout_anchor) < BOOT_VIEW_NATIVE_GFX_FADEOUT_HOLD_MS;
+    if !(update_recent || fadeout_recent) {
+        return false;
+    }
+    // Once per cover window (swap guards a concurrent Present racing this check).
+    if BOOT_VIEW_FPS_BAIL_RESUMED.swap(1, Ordering::SeqCst) != 0 {
+        return false;
+    }
+    // The bail cleared BOOT_VIEW_OWN_MENU_LOAD_ACTIVE; restore it so the resumed cover keeps the
+    // own-menu stop semantics (table-baseline handoff + release fade) instead of first-boot ones.
+    BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.store(
+        BOOT_VIEW_FPS_BAIL_SLOT_KEY.load(Ordering::SeqCst),
+        Ordering::SeqCst,
+    );
+    BOOT_VIEW_STOP_REASON.store(0, Ordering::SeqCst);
+    BOOT_VIEW_STOPPED.store(0, Ordering::SeqCst);
+    let n = BOOT_VIEW_FPS_BAIL_RESUMES.fetch_add(1, Ordering::SeqCst) + 1;
+    append_autoload_debug(format_args!(
+        "boot-view: FPS-bail RESUME #{n} on portrait publish (version {bail_version} -> {version}, update_recent={update_recent} fadeout_recent={fadeout_recent}) -- compositing the published head for the rest of the window; release fade owns the end"
+    ));
+    true
+}
+
 unsafe fn composite_boot_progress_inner(
     swapchain_raw: usize,
     clear_first: bool,
     self_present_frame: bool,
 ) -> bool {
-    if BOOT_VIEW_STOPPED.load(Ordering::SeqCst) != 0 {
+    if BOOT_VIEW_STOPPED.load(Ordering::SeqCst) != 0
+        && !boot_view_try_fps_bail_resume_on_publish()
+    {
         return false;
     }
     // HANDOFF: first start stops when the loading window / published keyed head / world takes over.
@@ -2060,9 +2145,26 @@ unsafe fn composite_boot_progress_inner(
                 if fade_elapsed >= BOOT_VIEW_RELEASE_FADE_MS {
                     if BOOT_VIEW_STOPPED.swap(1, Ordering::SeqCst) == 0 {
                         BOOT_VIEW_FADE_COMPLETE_MS.store(now_ms, Ordering::SeqCst);
+                        // Cover-window measurability (bd er-effects-rs-dpf6 Phase 1): stop reason
+                        // (can-move world proof vs render-release) + arm->stop duration.
+                        BOOT_VIEW_STOP_REASON.store(
+                            if can_move_handoff {
+                                BOOT_VIEW_STOP_REASON_WORLD_HANDOFF
+                            } else {
+                                BOOT_VIEW_STOP_REASON_RELEASE_FADE
+                            },
+                            Ordering::SeqCst,
+                        );
+                        BOOT_VIEW_COVER_WINDOW_MS_LAST.store(
+                            now_ms
+                                .saturating_sub(BOOT_VIEW_WINDOW_ARM_MS.load(Ordering::SeqCst)),
+                            Ordering::SeqCst,
+                        );
                         append_autoload_debug(format_args!(
-                            "boot-view: release fade complete -> stop cover (fade_ms={fade_elapsed} fade_hits={})",
+                            "boot-view: release fade complete -> stop cover (fade_ms={fade_elapsed} fade_hits={} cover_window_ms={} reason={})",
                             BOOT_VIEW_FADE_HITS.load(Ordering::SeqCst),
+                            BOOT_VIEW_COVER_WINDOW_MS_LAST.load(Ordering::SeqCst),
+                            BOOT_VIEW_STOP_REASON.load(Ordering::SeqCst),
                         ));
                     }
                     BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.store(0, Ordering::SeqCst);
@@ -2102,12 +2204,34 @@ unsafe fn composite_boot_progress_inner(
         let first_ms = crate::constants::BOOT_VIEW_COMPOSITE_FIRST_MS.load(Ordering::SeqCst) as u64;
         let composite_ms = now_ms.saturating_sub(first_ms);
         let permille = BOOT_VIEW_LAST_PERMILLE.load(Ordering::SeqCst);
-        if permille >= crate::constants::BOOT_VIEW_EPOCH_BAIL_PERMILLE as usize
+        // Post-resume (bd er-effects-rs-dpf6 Phase 2): the permille arm re-fires instantly on a
+        // resumed window (the bar is already ~full on the healthy fast load that tripped it), so it
+        // is suppressed after the once-per-window publish resume. The composite-time cap stays armed
+        // -- it is the FPS backstop the bail exists for.
+        let resumed = BOOT_VIEW_FPS_BAIL_RESUMED.load(Ordering::SeqCst) != 0;
+        if (!resumed && permille >= crate::constants::BOOT_VIEW_EPOCH_BAIL_PERMILLE as usize)
             || composite_ms >= crate::constants::BOOT_VIEW_EPOCH_COMPOSITE_CAP_MS
         {
             if BOOT_VIEW_STOPPED.swap(1, Ordering::SeqCst) == 0 {
+                // Phase-1/2 measurability: stop reason + window duration + the publish-version and
+                // slot-key snapshots the publish-triggered resume compares/restores against.
+                BOOT_VIEW_STOP_REASON.store(BOOT_VIEW_STOP_REASON_FPS_BAIL, Ordering::SeqCst);
+                BOOT_VIEW_COVER_WINDOW_MS_LAST.store(
+                    (now_ms as usize)
+                        .saturating_sub(BOOT_VIEW_WINDOW_ARM_MS.load(Ordering::SeqCst)),
+                    Ordering::SeqCst,
+                );
+                BOOT_VIEW_FPS_BAIL_PUBLISH_VERSION.store(
+                    LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst),
+                    Ordering::SeqCst,
+                );
+                BOOT_VIEW_FPS_BAIL_SLOT_KEY.store(
+                    BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst),
+                    Ordering::SeqCst,
+                );
                 append_autoload_debug(format_args!(
-                    "boot-view: FPS BAIL stop (own-menu reload epoch={cur_epoch} permille={permille} composite_ms={composite_ms}) -- handoff signals never fired (frozen load2); stopping per-frame GPU readback"
+                    "boot-view: FPS BAIL stop (own-menu reload epoch={cur_epoch} permille={permille} composite_ms={composite_ms} resumed={resumed} cover_window_ms={}) -- handoff signals never fired (frozen load2); stopping per-frame GPU readback (resumable once on a fresh portrait publish while native loading is active)",
+                    BOOT_VIEW_COVER_WINDOW_MS_LAST.load(Ordering::SeqCst),
                 ));
             }
             BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.store(0, Ordering::SeqCst);

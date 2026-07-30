@@ -237,6 +237,24 @@ pub static LS_PORTRAIT_LAST_NEUTRAL_PCT: AtomicUsize = AtomicUsize::new(0);
 pub static LS_PORTRAIT_TOO_SMALL_SEEN_VERSION: AtomicUsize = AtomicUsize::new(0);
 pub static LS_PORTRAIT_NEUTRAL_LEAK_SEEN_VERSION: AtomicUsize = AtomicUsize::new(0);
 pub static LS_PORTRAIT_REJECTED_PUBLISHES: AtomicUsize = AtomicUsize::new(0);
+/// Identity tag of the currently-published loading-portrait head (bd er-effects-rs-dpf6 Phase 1):
+/// slot+1 (0 = no published head) and the FNV-1a64 hash of the slot's ProfileSummary character name
+/// UTF-16 units (0 = unknown). Written next to the bridge on every publish; cleared with the bridge.
+pub static LS_PORTRAIT_PUBLISHED_SLOT: AtomicUsize = AtomicUsize::new(0);
+pub static LS_PORTRAIT_PUBLISHED_NAME_HASH: AtomicUsize = AtomicUsize::new(0);
+/// Name-hash of the slot the portrait pipeline currently TARGETS, stamped on the game thread at the
+/// per-slot build kick (the consume worker may not read game memory, so it copies this atomic into
+/// `LS_PORTRAIT_PUBLISHED_NAME_HASH` at publish). 0 = unknown/never kicked this window.
+pub static PORTRAIT_TARGET_NAME_HASH: AtomicUsize = AtomicUsize::new(0);
+/// Boot-view-epoch ms of the last switch confirm (RETARGET); consumed (swap 0) by the first publish
+/// after it to compute `PORTRAIT_CONFIRM_TO_PUBLISH_MS_LAST`. 0 = no confirm pending.
+pub static PORTRAIT_CONFIRM_MS: AtomicUsize = AtomicUsize::new(0);
+/// ms from the last switch confirm (RETARGET) to the NEXT portrait publish (version bump); keeps the
+/// last measured value (oracle_portrait_confirm_to_publish_ms). 0 = never measured.
+pub static PORTRAIT_CONFIRM_TO_PUBLISH_MS_LAST: AtomicUsize = AtomicUsize::new(0);
+/// Same-identity bridge holds across an own-menu-switch rearm (bd er-effects-rs-dpf6 Phase 3): the
+/// incoming slot+name-hash matched the published head, so the window reset KEPT the bridge.
+pub static PORTRAIT_BRIDGE_SAME_IDENTITY_HOLDS: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_BG_PORTRAIT_IS_CHECKER: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_BG_PORTRAIT_DIMS: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_BG_PORTRAIT_FORMAT: AtomicUsize = AtomicUsize::new(0);
@@ -902,6 +920,26 @@ pub static COHERENT_READ_OK: AtomicUsize = AtomicUsize::new(0);
 pub static COHERENT_READ_FALLBACK: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_DRAW_STATE: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_STOPPED: AtomicUsize = AtomicUsize::new(0);
+/// WHY the boot-view cover last stopped (bd er-effects-rs-dpf6 Phase 1; 0 = armed/none,
+/// 1 = release-fade after render-release, 2 = FPS bail, 3 = release-fade after can-move world proof).
+/// Values are the `BOOT_VIEW_STOP_REASON_*` consts in boot_progress.rs. Reset to 0 on every rearm.
+pub static BOOT_VIEW_STOP_REASON: AtomicUsize = AtomicUsize::new(0);
+/// Boot-view-epoch ms when the current cover window was (re)armed (0 = initial boot window).
+pub static BOOT_VIEW_WINDOW_ARM_MS: AtomicUsize = AtomicUsize::new(0);
+/// Rearm -> stop duration (ms) of the LAST completed cover window (oracle_boot_view_cover_window_ms).
+pub static BOOT_VIEW_COVER_WINDOW_MS_LAST: AtomicUsize = AtomicUsize::new(0);
+/// `LOADING_BG_PORTRAIT_RGBA_VERSION` snapshotted at the FPS-bail stop; a LATER version bump while the
+/// native loading screen is still active is the Phase-2 resume trigger (bd er-effects-rs-dpf6).
+pub static BOOT_VIEW_FPS_BAIL_PUBLISH_VERSION: AtomicUsize = AtomicUsize::new(0);
+/// `BOOT_VIEW_OWN_MENU_LOAD_ACTIVE` slot key at the FPS-bail stop (the bail clears the live one; the
+/// resume restores it so the own-menu stop semantics survive the resume).
+pub static BOOT_VIEW_FPS_BAIL_SLOT_KEY: AtomicUsize = AtomicUsize::new(0);
+/// Once-per-epoch resume latch: 1 after a publish-triggered FPS-bail resume in the current cover
+/// window; also suppresses the permille re-bail for the rest of the window (the 20s composite cap
+/// stays armed as the FPS backstop). Reset on every rearm.
+pub static BOOT_VIEW_FPS_BAIL_RESUMED: AtomicUsize = AtomicUsize::new(0);
+/// Cumulative count of publish-triggered FPS-bail resumes (oracle_boot_view_fps_bail_resumes).
+pub static BOOT_VIEW_FPS_BAIL_RESUMES: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_OWN_MENU_LOAD_ACTIVE: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_LOADSCREEN_TABLE_BASELINE: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);

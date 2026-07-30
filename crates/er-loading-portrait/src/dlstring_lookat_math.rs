@@ -715,6 +715,14 @@ pub fn maybe_capture_portrait_gxtexture(base: usize, slot: i32) {
                 if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
                     *g = Some((w, h, px));
                 }
+                // Identity tag rides with every bridge write (bd er-effects-rs-dpf6 Phase 1). This
+                // diagnostic-gated path runs on the game thread, so hash the slot record directly.
+                LS_PORTRAIT_PUBLISHED_SLOT.store(
+                    if slot >= 0 { (slot + 1) as usize } else { 0 },
+                    Ordering::SeqCst,
+                );
+                LS_PORTRAIT_PUBLISHED_NAME_HASH
+                    .store(unsafe { portrait_slot_name_hash(slot) }, Ordering::SeqCst);
             }
             append_autoload_debug(format_args!(
                 "portrait-readback: dims={w}x{h} format={} nonblack={} is_checker={} (real-face proof = nonblack && !is_checker) bytes={bytes}",

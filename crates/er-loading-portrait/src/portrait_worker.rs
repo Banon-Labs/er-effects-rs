@@ -511,6 +511,32 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
                     *g = Some((cw, ch, cpx));
                 }
                 LOADING_BG_PORTRAIT_RGBA_VERSION.fetch_add(1, Ordering::SeqCst);
+                // PUBLISH IDENTITY TAG (bd er-effects-rs-dpf6 Phase 1): record which character this
+                // head belongs to next to the bridge. The worker may not read game memory, so it
+                // copies the atomics the game thread stamped at the build kick (slot+1 key + the
+                // ProfileSummary name hash); the pipeline-gen guard above keeps them window-coherent.
+                LS_PORTRAIT_PUBLISHED_SLOT.store(
+                    PORTRAIT_KICK_SLOT_KEY.load(Ordering::SeqCst),
+                    Ordering::SeqCst,
+                );
+                LS_PORTRAIT_PUBLISHED_NAME_HASH.store(
+                    PORTRAIT_TARGET_NAME_HASH.load(Ordering::SeqCst),
+                    Ordering::SeqCst,
+                );
+                // CONFIRM->PUBLISH LATENCY (Phase 1): first publish after a switch confirm consumes
+                // the RETARGET timestamp; the value persists as the last-measured latency oracle.
+                let confirm_ms = PORTRAIT_CONFIRM_MS.swap(0, Ordering::SeqCst);
+                if confirm_ms != 0 {
+                    let now_ms = boot_view_epoch_ms().max(1) as usize;
+                    let latency_ms = now_ms.saturating_sub(confirm_ms);
+                    PORTRAIT_CONFIRM_TO_PUBLISH_MS_LAST.store(latency_ms, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "loading-portrait: confirm->publish latency {latency_ms}ms (version={}, slot_tag={}, name_hash=0x{:x})",
+                        LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst),
+                        LS_PORTRAIT_PUBLISHED_SLOT.load(Ordering::SeqCst),
+                        LS_PORTRAIT_PUBLISHED_NAME_HASH.load(Ordering::SeqCst),
+                    ));
+                }
                 // Freeze the per-frame drive for this window (UAF fix) ...
                 PROFILE_BAKE_RGBA_CAPTURED.store(1, Ordering::SeqCst);
                 // ... and mark a keyed frame available for display (persists across the
