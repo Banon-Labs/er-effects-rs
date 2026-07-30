@@ -23,6 +23,7 @@ include!("startup_hooks/save_flow_boxes.rs");
 include!("startup_hooks/save_dest_identity.rs");
 include!("startup_hooks/save_dest_commit.rs");
 include!("startup_hooks/save_picker_menu.rs");
+include!("startup_hooks/save_picker_dim_overlay.rs");
 include!("startup_hooks/save_picker_os_dialog.rs");
 include!("startup_hooks/save_picker_surface.rs");
 include!("startup_hooks/system_quit_ownership_repro.rs");

@@ -1351,6 +1351,77 @@ pub static SAVE_PICKER_OS_OWNER_HWND: AtomicUsize = AtomicUsize::new(0);
 /// Save-like `CreateFileW` opens observed while a dialog was open. Attribution for the shell
 /// browsing traffic that otherwise pollutes the save CreateFileW diagnostics.
 pub static SAVE_PICKER_OS_SAVELIKE_OPENS: AtomicUsize = AtomicUsize::new(0);
+
+// ---- OS-picker DIM OVERLAY (save_picker_dim_overlay.rs) ----
+//
+// These are DELIBERATELY a new family rather than a reuse of `SAVE_PICKER_OVERLAY_*`. That older
+// family belongs to the DLL-DRAWN STARTUP picker (`gpu_readback/save_picker_overlay.rs`, the
+// no-save-boot browser) and is live; borrowing its counters would make two unrelated surfaces
+// indistinguishable in one telemetry field.
+//
+/// 1 while the dim overlay is armed (a blocking OS dialog is up and we are covering the game).
+/// Cleared by the arming guard's `Drop`, so an unwind through the dialog cannot strand it.
+pub static SAVE_PICKER_DIM_ARMED: AtomicUsize = AtomicUsize::new(0);
+/// Arms and disarms. They must END equal; `arm - disarm == 1` with the process alive is a stranded
+/// fullscreen dim, which is worse than not having the feature at all.
+pub static SAVE_PICKER_DIM_ARM_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_DIM_DISARM_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Frames pushed to the compositor via `UpdateLayeredWindow` while armed.
+///
+/// THE CORE ORACLE. The game/menu thread is BLOCKED inside comdlg32 for the dialog's whole life, so
+/// the game logs nothing and presents nothing during that window. This counter advancing across the
+/// same interval is the objective proof that the animation ticked on a thread we own -- something no
+/// game-render-path overlay could produce.
+pub static SAVE_PICKER_DIM_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// Wall-clock milliseconds of the LAST completed armed interval (arm -> disarm). Pairs with the
+/// dialog's own `after=Nms` log line: the two must agree, or the dim did not bracket the call.
+pub static SAVE_PICKER_DIM_ALIVE_MS: AtomicUsize = AtomicUsize::new(0);
+/// Why the last disarm happened: 1 = the dialog returned (normal), 2 = arming failed and rolled
+/// back, 3 = the overlay thread bailed out and hid the window itself.
+pub static SAVE_PICKER_DIM_TEARDOWN_REASON: AtomicUsize = AtomicUsize::new(0);
+/// Furthest overlay-thread init stage reached: 1 = thread, 2 = class, 3 = window, 4 = DIB,
+/// 5 = render loop entered. Anything below 5 says where bring-up died.
+pub static SAVE_PICKER_DIM_STAGE: AtomicUsize = AtomicUsize::new(0);
+/// Our overlay window, and the ER window we sized/stacked against.
+pub static SAVE_PICKER_DIM_HWND: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_DIM_GAME_HWND: AtomicUsize = AtomicUsize::new(0);
+/// `UpdateLayeredWindow` calls that returned an error while armed.
+pub static SAVE_PICKER_DIM_UPDATE_FAILS: AtomicUsize = AtomicUsize::new(0);
+/// Z-ORDER ORACLE, sampled while armed: the top-down z-order ordinal of our overlay, of the ER
+/// window, and of the foreign foreground window (the OS dialog). `usize::MAX` = not found.
+///
+/// This is what settles the ordering requirement WITHOUT a screenshot. The contract is
+/// `foreign < self < game`: the dialog above us, us above the game. `self > game` means the dim is
+/// behind the game and invisible; `self < foreign` means the dim is covering the dialog the user
+/// has to interact with.
+pub static SAVE_PICKER_DIM_Z_SELF: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub static SAVE_PICKER_DIM_Z_GAME: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub static SAVE_PICKER_DIM_Z_FOREIGN: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// The foreground window seen while armed that is neither ours nor the game's -- i.e. comdlg32's.
+/// 0 means no foreign foreground window was ever observed while the dim was up.
+pub static SAVE_PICKER_DIM_FOREIGN_FG_HWND: AtomicUsize = AtomicUsize::new(0);
+/// Times the sampled z-order VIOLATED the contract while armed: the dim at or behind the game (it
+/// would be invisible), or the dim in front of the foreign foreground window (it would be covering
+/// the very dialog the user has to click).
+///
+/// A COUNTER, not a last-sample snapshot, because `SAVE_PICKER_DIM_Z_*` only carry the most recent
+/// frame -- and the most recent frame is the one taken as the dialog is already tearing down, which
+/// is exactly when the ordering is least representative. `0` across a run where frames were pushed
+/// is the real proof the stacking held for the whole dialog, not just at the end.
+pub static SAVE_PICKER_DIM_Z_VIOLATIONS: AtomicUsize = AtomicUsize::new(0);
+/// Frames whose push had to fall back to a FULL-surface upload because the dirty-rectangle path was
+/// refused. The cover is a mostly-static image with a small animating mark, so pushing only the
+/// mark's rectangle is what keeps the pulse smooth; a run where this equals the frame count is a run
+/// whose animation is paying a full-screen upload per frame (measured: ~9fps on a 3846x2172 window).
+pub static SAVE_PICKER_DIM_FULL_PUSHES: AtomicUsize = AtomicUsize::new(0);
+/// Result of the ONE bring-up push of `UpdateLayeredWindow`, done at attach on a hidden,
+/// fully-transparent 1x1 layer: 0 = not attempted, 1 = accepted, 2 = rejected.
+///
+/// `UpdateLayeredWindow` is the single API in this feature that Wine could plausibly not implement
+/// the way we need. Proving it at ATTACH -- when nothing is waiting -- rather than at the instant a
+/// user's dialog opens means a broken environment is visible in telemetry from a run that never even
+/// opened a picker, instead of surfacing as a missing cover at the worst moment.
+pub static SAVE_PICKER_DIM_SELFTEST: AtomicUsize = AtomicUsize::new(0);
 /// 1 = an OS Save-As returned an EXISTING file, so the Box3 overwrite confirm is owed.
 ///
 /// A latch rather than a direct `SAVE_FLOW_STAGE` write: the menu thread must not become a second

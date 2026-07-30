@@ -1988,6 +1988,11 @@ pub(crate) fn install_title_visual_startup_hooks() {
     if is_native_windows() {
         install_native_overlay();
     }
+    // OS-PICKER DIM: stand the cover's window up NOW, while nothing is waiting on it. The dialog it
+    // covers blocks the menu thread, so the moment it opens is the moment we can no longer afford to
+    // be creating a window and a full-screen DIB. Self-gated to sessions that actually run the OS
+    // picker (`os_native_save_picker = true`); the in-game browser needs no cover.
+    install_picker_dim_overlay();
 }
 
 pub(crate) fn install_profile_and_system_quit_hooks() {
