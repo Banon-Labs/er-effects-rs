@@ -81,6 +81,13 @@ unsafe extern "system" fn save_ntcreatefile_diag_hook(
     // UNICODE_STRING (x64): +0x00 Length(u16 bytes), +0x08 Buffer(PWSTR).
     // Captured pre-call (path, is_sl2); logged with the NTSTATUS result after the original returns so
     // a FAILING save-commit open is unambiguous (the prior diag logged only the request, never ret).
+    // RE-ENTRANCY (see `reentry.rs`): this is the LOWEST layer of the family -- every `fs::read` the
+    // detours above perform reaches ntdll here, so a nested entry is guaranteed. Unlike the Win32
+    // detours this one is pure diagnostics, so it keeps LOGGING at any depth (the log line is the
+    // reason the hook exists) and only its two disk-touching side effects below are depth-gated;
+    // both of those refuse on their own via `save_detour_disk_io_allowed`. The token is still taken
+    // so the depth oracle sees the real nesting.
+    let _depth = SaveDetourDepth::enter();
     let mut save_diag: Option<(String, bool)> = None;
     if !object_attributes.is_null() {
         let objname = unsafe { *(object_attributes.add(0x10) as *const usize) } as *const u8;
