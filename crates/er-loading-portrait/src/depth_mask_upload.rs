@@ -1,3 +1,4 @@
+use crate::prelude::*;
 
 /// DEPTH-KEYED TRANSPARENT BACKGROUND: read back the offscreen scene's depth plane and set the color
 /// buffer's per-pixel alpha to 0 for every BACKGROUND pixel. The portrait depth is BIMODAL -- the model
@@ -12,7 +13,7 @@
 /// opaque, exactly the pre-existing display, so this can only ADD the cutout, never regress the head. Emits
 /// a one-shot `depth-key` diagnostic and drives the `oracle_depth_key_*` RAM semaphores. `cpx` is the
 /// tightly-packed RGBA8 the caller is about to publish (mutated in place).
-pub(crate) fn apply_depth_alpha_key(
+pub fn apply_depth_alpha_key(
     depth: &[f32],
     dw: usize,
     dh: usize,
@@ -188,8 +189,9 @@ fn color_head_median_depth(depth: &[f32], cpx: &[u8], w: usize, h: usize) -> Opt
         return None;
     }
     let mid = head_depths.len() / 2;
-    let (_, med, _) = head_depths
-        .select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let (_, med, _) = head_depths.select_nth_unstable_by(mid, |a, b| {
+        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+    });
     Some(*med)
 }
 
@@ -537,7 +539,7 @@ fn compute_depth_mask(
 /// stays black), so we do the copy ourselves every render-thread frame. Returns true on a completed copy
 /// (or when src==dst so no copy is needed). Same safety contract as the readback: our OWN
 /// queue/allocator/list/fence, game resources borrowed (never Released), never panics/crashes.
-pub(crate) unsafe fn copy_offscreen_rt_to_srv(src_gpu_child: usize, dst_gpu_child: usize) -> bool {
+pub unsafe fn copy_offscreen_rt_to_srv(src_gpu_child: usize, dst_gpu_child: usize) -> bool {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         copy_offscreen_rt_to_srv_inner(src_gpu_child, dst_gpu_child)
     }))

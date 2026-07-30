@@ -598,16 +598,10 @@ unsafe fn portrait_render_slot_semaphore(base: usize, render_target_slot: i32) {
     }
 }
 
-/// ProfileSummary save-record layout (bd native-full-save-read-slot-resolve-chain-observe-recipe):
-/// per-slot records start at `summary+0x18`, stride `0x2a0`; character NAME at record+0.
-const PROFILE_SUMMARY_RECORD_BASE: usize = 0x18;
-const PROFILE_SUMMARY_RECORD_STRIDE: usize = 0x2a0;
 const PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET: usize = 0x8;
 const PROFILE_SUMMARY_TOTAL_BYTES: usize =
     PROFILE_SUMMARY_RECORD_BASE + PROFILE_SUMMARY_RECORD_STRIDE * TITLE_PROFILE_SLOT_COUNT;
 const PROFILE_SUMMARY_NAME_BYTES: usize = 0x22;
-const PROFILE_SUMMARY_LEVEL_OFFSET: usize = 0x24;
-const PROFILE_SUMMARY_PLAYTIME_OFFSET: usize = 0x28;
 const PROFILE_SUMMARY_RUNE_MEMORY_OFFSET: usize = 0x2c;
 const PROFILE_SUMMARY_MAP_OFFSET: usize = 0x30;
 const PROFILE_SUMMARY_FACE_DATA_OFFSET: usize = 0x38;

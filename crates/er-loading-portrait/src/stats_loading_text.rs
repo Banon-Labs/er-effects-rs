@@ -1,3 +1,5 @@
+use crate::prelude::*;
+
 // === Loading-screen player-stats text (er-effects-rs-jsm) =========================================
 //
 // PIVOT (user 2026-07-06): rather than fight to layer the head UNDER the native tips, we CONTROL the
@@ -11,7 +13,7 @@
 /// alpha = coverage * color.a / 255), so the result composites straight over the head. Returns
 /// `(width, height, rgba)` sized to the glyphs' bounding box plus a 1px pad, or `(0,0,vec![])` if nothing
 /// rendered. Pure CPU, no game state; safe to call from any thread.
-pub(crate) fn render_lines_to_rgba(
+pub fn render_lines_to_rgba(
     font: &er_gfx::raster::RasterFont,
     lines: &[String],
     em_px: f32,
@@ -47,11 +49,7 @@ pub(crate) fn render_lines_to_rgba(
                 min_y = min_y.min(gy);
                 max_x = max_x.max(gx + bmp.width as f32);
                 max_y = max_y.max(gy + bmp.height as f32);
-                placed.push(Placed {
-                    bmp,
-                    x: gx,
-                    y: gy,
-                });
+                placed.push(Placed { bmp, x: gx, y: gy });
             }
             pen_x += adv;
         }
@@ -108,7 +106,13 @@ pub(crate) fn render_lines_to_rgba(
     for p in &placed {
         let dx0 = (p.x - min_x + pad).round() as i32;
         let dy0 = (p.y - min_y + pad).round() as i32;
-        blit(&mut rgba, p, dx0 + SHADOW, dy0 + SHADOW, [0, 0, 0, color[3]]);
+        blit(
+            &mut rgba,
+            p,
+            dx0 + SHADOW,
+            dy0 + SHADOW,
+            [0, 0, 0, color[3]],
+        );
     }
     for p in &placed {
         let dx0 = (p.x - min_x + pad).round() as i32;
@@ -123,14 +127,19 @@ pub(crate) fn render_lines_to_rgba(
 /// Raw captured `font.gfx` bytes (copied out of the game's Scaleform MemoryFile in the file-open hook).
 static MENU_FONT_GFX_CAPTURED: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
 /// The parsed, cached menu font (built once from the captured `font.gfx` bytes).
-static MENU_FONT_RASTER: std::sync::OnceLock<er_gfx::raster::RasterFont> = std::sync::OnceLock::new();
+static MENU_FONT_RASTER: std::sync::OnceLock<er_gfx::raster::RasterFont> =
+    std::sync::OnceLock::new();
 
 /// Capture the game's menu font from the Scaleform file-open hook. Reads the returned MemoryFile's raw
 /// GFX payload (same guarded read `title_05_000_swap_to_stripped` uses) and stores a COPY (never retains
 /// the game pointer). Called for any file-open whose URL looks like the menu font; one-shot.
-pub(crate) unsafe fn capture_menu_font_gfx(base: usize, file: usize) {
+pub unsafe fn capture_menu_font_gfx(base: usize, file: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    if MENU_FONT_GFX_CAPTURED.get().is_some() || base == 0 || base == null || file == 0 || file == null
+    if MENU_FONT_GFX_CAPTURED.get().is_some()
+        || base == 0
+        || base == null
+        || file == 0
+        || file == null
     {
         return;
     }
@@ -164,7 +173,11 @@ pub(crate) unsafe fn capture_menu_font_gfx(base: usize, file: usize) {
 /// coverage), recursing into DefineSprite. `None` if no font tag decodes.
 fn build_menu_font_from_gfx(bytes: &[u8]) -> Option<er_gfx::raster::RasterFont> {
     let movie = er_gfx::Movie::parse(bytes).ok()?;
-    fn best_font<'a>(tags: &'a [er_gfx::Tag], best: &mut Option<&'a er_gfx::Tag>, best_n: &mut usize) {
+    fn best_font<'a>(
+        tags: &'a [er_gfx::Tag],
+        best: &mut Option<&'a er_gfx::Tag>,
+        best_n: &mut usize,
+    ) {
         for t in tags {
             if let er_gfx::Tag::DefineFont3 { glyphs, codes, .. } = t {
                 if glyphs.len() == codes.len() && glyphs.len() > *best_n {
@@ -185,7 +198,7 @@ fn build_menu_font_from_gfx(bytes: &[u8]) -> Option<er_gfx::raster::RasterFont> 
 
 /// The game's menu font, parsed + cached from the runtime file-open capture of `font.gfx`. `None` until
 /// the capture has happened and the font parses (product path only -- no env crutch).
-pub(crate) fn menu_font() -> Option<&'static er_gfx::raster::RasterFont> {
+pub fn menu_font() -> Option<&'static er_gfx::raster::RasterFont> {
     if let Some(f) = MENU_FONT_RASTER.get() {
         return Some(f);
     }
@@ -202,7 +215,7 @@ pub(crate) fn menu_font() -> Option<&'static er_gfx::raster::RasterFont> {
 /// The local character's loading-screen stats (er-effects-rs-jsm). Read from the loading-screen-safe
 /// ProfileSummary record (name/level/playtime) + live PlayerGameData when up (attributes, HP/FP/Stamina),
 /// falling back to the `.sl2` for attributes pre-load.
-pub(crate) struct LoadingScreenStats {
+pub struct LoadingScreenStats {
     pub name: String,
     pub level: i32,
     pub attributes: [i32; 8], // VIG,MND,END,STR,DEX,INT,FAI,ARC
@@ -215,7 +228,7 @@ pub(crate) struct LoadingScreenStats {
 
 /// Read the local character's stats for the loading screen. `None` if GameDataMan is not up. Prefers
 /// sources valid pre-load; guards every read.
-pub(crate) unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
+pub unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null;
     let gdm = game_data_man_ptr_or_null();
@@ -267,33 +280,30 @@ pub(crate) unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
     let pgd_validated = pgd.filter(|&pgd| {
         let (ln, ll) = unsafe { read_utf16_name_units(pgd + PGD_NAME_9C_OFFSET) };
         let pgd_level = unsafe { safe_read_i32(pgd + PGD_LEVEL_68_OFFSET) }.unwrap_or(0);
-        ll > 0
-            && pgd_level > 0
-            && pgd_level == level
-            && String::from_utf16_lossy(&ln[..ll]) == name
+        ll > 0 && pgd_level > 0 && pgd_level == level && String::from_utf16_lossy(&ln[..ll]) == name
     });
-    let (attributes, max_hp, max_fp, max_stamina, attr_source_live) =
-        if let Some(pgd) = pgd_validated {
-            let mut a = [0i32; 8];
-            for (i, v) in a.iter_mut().enumerate() {
-                *v = unsafe { safe_read_i32(pgd + PGD_STAT_BASE_3C_OFFSET + i * 4) }.unwrap_or(0);
-            }
-            (
-                a,
-                unsafe { safe_read_i32(pgd + PGD_CURRENT_MAX_HP_14_OFFSET) }.unwrap_or(0) as u32,
-                unsafe { safe_read_i32(pgd + PGD_CURRENT_MAX_FP_20_OFFSET) }.unwrap_or(0) as u32,
-                unsafe { safe_read_i32(pgd + PGD_CURRENT_MAX_STAMINA_30_OFFSET) }.unwrap_or(0)
-                    as u32,
-                true,
-            )
-        } else {
-            let base = game_module_base().unwrap_or(null);
-            if valid(base) {
-                let _ = ensure_profile_slot_stats_cached(base);
-            }
-            let attrs = profile_slot_attributes(slot).unwrap_or([0; 8]);
-            (attrs, 0, 0, 0, false)
-        };
+    let (attributes, max_hp, max_fp, max_stamina, attr_source_live) = if let Some(pgd) =
+        pgd_validated
+    {
+        let mut a = [0i32; 8];
+        for (i, v) in a.iter_mut().enumerate() {
+            *v = unsafe { safe_read_i32(pgd + PGD_STAT_BASE_3C_OFFSET + i * 4) }.unwrap_or(0);
+        }
+        (
+            a,
+            unsafe { safe_read_i32(pgd + PGD_CURRENT_MAX_HP_14_OFFSET) }.unwrap_or(0) as u32,
+            unsafe { safe_read_i32(pgd + PGD_CURRENT_MAX_FP_20_OFFSET) }.unwrap_or(0) as u32,
+            unsafe { safe_read_i32(pgd + PGD_CURRENT_MAX_STAMINA_30_OFFSET) }.unwrap_or(0) as u32,
+            true,
+        )
+    } else {
+        let base = game_module_base().unwrap_or(null);
+        if valid(base) {
+            let _ = ensure_profile_slot_stats_cached(base);
+        }
+        let attrs = profile_slot_attributes(slot).unwrap_or([0; 8]);
+        (attrs, 0, 0, 0, false)
+    };
     // Playtime is slot-scoped from the record; the global GDM counter only reflects the loaded
     // character after deserialize, so it is trusted only alongside a validated PGD.
     let play_time_ms = if attr_source_live {
@@ -327,7 +337,7 @@ fn fmt_playtime(ms: u32) -> String {
 }
 
 /// Lay the stats out as display lines (user pick: name/level/playtime + 8 attributes + derived HP/FP/Stm).
-pub(crate) fn format_stats_lines(st: &LoadingScreenStats) -> Vec<String> {
+pub fn format_stats_lines(st: &LoadingScreenStats) -> Vec<String> {
     let a = &st.attributes;
     let name = if st.name.trim().is_empty() {
         "Tarnished".to_string()
@@ -336,7 +346,11 @@ pub(crate) fn format_stats_lines(st: &LoadingScreenStats) -> Vec<String> {
     };
     let mut lines = vec![
         name,
-        format!("Level {}    Time  {}", st.level, fmt_playtime(st.play_time_ms)),
+        format!(
+            "Level {}    Time  {}",
+            st.level,
+            fmt_playtime(st.play_time_ms)
+        ),
     ];
     if st.max_hp > 0 || st.max_fp > 0 || st.max_stamina > 0 {
         lines.push(format!(
@@ -360,15 +374,14 @@ pub(crate) fn format_stats_lines(st: &LoadingScreenStats) -> Vec<String> {
 /// playtime tick); the render thread composites it. ONE mutex guards bitmap + key together so a window
 /// reset racing a build can never strand a key without its bitmap (which would suppress rebuilds and
 /// blank the text for the whole window).
-pub(crate) struct StatsTextCache {
+pub struct StatsTextCache {
     pub w: u32,
     pub h: u32,
     pub rgba: Vec<u8>,
     /// The exact lines the bitmap renders -- the rebuild key.
     pub lines: Vec<String>,
 }
-pub(crate) static STATS_TEXT_CACHE: std::sync::Mutex<Option<StatsTextCache>> =
-    std::sync::Mutex::new(None);
+pub static STATS_TEXT_CACHE: std::sync::Mutex<Option<StatsTextCache>> = std::sync::Mutex::new(None);
 
 /// Screen-resolution text bitmap cache for the Present overlay. The stats lines still come from the
 /// game thread (safe slot/stat reads), but the final bitmap is sized from the actual backbuffer so the
@@ -383,10 +396,10 @@ struct StatsTextScreenCache {
 }
 static STATS_TEXT_SCREEN_CACHE: std::sync::Mutex<Option<StatsTextScreenCache>> =
     std::sync::Mutex::new(None);
-pub(crate) use er_telemetry::counters::STATS_TEXT_SCREEN_VERSION;
+pub use er_telemetry::counters::STATS_TEXT_SCREEN_VERSION;
 
 /// Cumulative stats-bitmap build count (telemetry oracle `oracle_stats_text_built`; never reset).
-pub(crate) use er_telemetry::counters::STATS_TEXT_BUILT;
+pub use er_telemetry::counters::STATS_TEXT_BUILT;
 /// `(name, level, live)` of the last logged build -- gates the debug log so per-second playtime rebuilds
 /// don't spam it, while identity changes (new character, record->live upgrade) still log.
 static STATS_TEXT_LOGGED: std::sync::Mutex<Option<(String, i32, bool)>> =
@@ -401,7 +414,7 @@ static STATS_TEXT_LOGGED: std::sync::Mutex<Option<(String, i32, bool)>> =
 /// content keying a stale bitmap self-heals the moment the new slot's record reads differently, and
 /// identical ticks stay cheap no-ops. Called on the loading screen from the game thread; silently waits
 /// until both the captured font and readable stats exist.
-pub(crate) unsafe fn maybe_build_stats_text() {
+pub unsafe fn maybe_build_stats_text() {
     let Some(font) = menu_font() else {
         return;
     };
@@ -465,7 +478,7 @@ pub(crate) unsafe fn maybe_build_stats_text() {
 /// at screen scale and drawn as a second Present-overlay texture. The returned `version` is stable while
 /// both the display lines and requested backbuffer scale are unchanged, so the D3D texture uploads only on
 /// content/size changes.
-pub(crate) fn stats_text_screen_bitmap(screen_max_dim: u32) -> Option<(u32, u32, Vec<u8>, usize)> {
+pub fn stats_text_screen_bitmap(screen_max_dim: u32) -> Option<(u32, u32, Vec<u8>, usize)> {
     if screen_max_dim == 0 {
         return None;
     }
@@ -509,7 +522,7 @@ pub(crate) fn stats_text_screen_bitmap(screen_max_dim: u32) -> Option<(u32, u32,
 /// loading-screen stats lines. The native isolated overlay uses this as a full-frame/composite gate so
 /// it never pays the screen-scale raster (`stats_text_screen_bitmap`) just to decide whether to show
 /// anything. Only the `lines` matter -- the screen bitmap is re-rastered from them at screen scale.
-pub(crate) fn stats_text_available() -> bool {
+pub fn stats_text_available() -> bool {
     STATS_TEXT_CACHE
         .lock()
         .ok()
@@ -520,7 +533,7 @@ pub(crate) fn stats_text_available() -> bool {
 /// first build logs. Correctness does NOT depend on this reset: the content key in
 /// `maybe_build_stats_text` rebuilds on any line change even if a post-reset tick re-caches the old
 /// character. `STATS_TEXT_BUILT` is a cumulative oracle and is deliberately not reset.
-pub(crate) fn stats_text_window_reset() {
+pub fn stats_text_window_reset() {
     if let Ok(mut g) = STATS_TEXT_CACHE.lock() {
         *g = None;
     }
@@ -535,7 +548,7 @@ pub(crate) fn stats_text_window_reset() {
 /// Tip-refresh detour: NO-OP the original (er-effects-rs-jsm PIVOT) so the native tip title/body are never
 /// set and the `Main` tip clip stays faded out -- our overlay player-stats text owns the tip region. Only
 /// active while our loading portrait path is enabled; otherwise it calls through so vanilla tips render.
-pub(crate) unsafe extern "system" fn knowledge_tip_refresh_hook(this: usize) {
+pub unsafe extern "system" fn knowledge_tip_refresh_hook(this: usize) {
     let orig = KNOWLEDGE_TIP_REFRESH_ORIG.load(Ordering::SeqCst);
     if orig != TITLE_OWNER_SCAN_START_ADDRESS && orig != HOOK_ORIGINAL_UNSET {
         let f: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(orig) };
@@ -559,8 +572,14 @@ pub(crate) unsafe extern "system" fn knowledge_tip_refresh_hook(this: usize) {
             unsafe { std::mem::transmute(base + PROFILE_SETTEXT_RVA) };
         let empty = [0u16; 1];
         unsafe {
-            settext(this + KNOWLEDGE_TIP_TITLE_HANDLE_OFFSET, empty.as_ptr() as usize);
-            settext(this + KNOWLEDGE_TIP_BODY_HANDLE_OFFSET, empty.as_ptr() as usize);
+            settext(
+                this + KNOWLEDGE_TIP_TITLE_HANDLE_OFFSET,
+                empty.as_ptr() as usize,
+            );
+            settext(
+                this + KNOWLEDGE_TIP_BODY_HANDLE_OFFSET,
+                empty.as_ptr() as usize,
+            );
         }
     }));
     KNOWLEDGE_TIP_SUPPRESSED_HITS.fetch_add(1, Ordering::SeqCst);
@@ -572,7 +591,7 @@ pub(crate) unsafe extern "system" fn knowledge_tip_refresh_hook(this: usize) {
 /// is `gotoAndPlay('FadeOut')`, whose downstream tip-refresh we already blank), and the per-update
 /// keyguide composer drops the action from the keyguide list, so the "press [button] to advance" prompt
 /// never renders. Calls through when the portrait path is off so vanilla tips keep keyguide + press.
-pub(crate) unsafe extern "system" fn knowledge_tip_advance_enabled_hook(functor: usize) -> u8 {
+pub unsafe extern "system" fn knowledge_tip_advance_enabled_hook(functor: usize) -> u8 {
     if portrait_overlay_enabled() {
         KNOWLEDGE_TIP_ADVANCE_SUPPRESSED_HITS.fetch_add(1, Ordering::SeqCst);
         return 0;
@@ -589,7 +608,7 @@ pub(crate) unsafe extern "system" fn knowledge_tip_advance_enabled_hook(functor:
 /// tip title/body stay blank) and the tip-advance enabled-predicate force-false (keyguide hidden + the
 /// advance press inert). One-shot; installed alongside the now-loading observer hooks, before the
 /// widget ctor runs.
-pub(crate) fn install_tip_suppression_hook() {
+pub fn install_tip_suppression_hook() {
     if KNOWLEDGE_TIP_REFRESH_INSTALLED.load(Ordering::SeqCst) != 0 {
         return;
     }
@@ -676,7 +695,7 @@ pub(crate) fn install_tip_suppression_hook() {
 /// Alpha-blend tightly-packed RGBA8 `src` (`sw`x`sh`) OVER `dst` (`dw`x`dh`) at top-left `(x0, y0)`
 /// (`src.a`/`1-src.a`). Clips to `dst`. Used to lay the rendered stats text over the head/backbuffer.
 #[allow(dead_code)]
-pub(crate) fn blend_rgba_over(
+pub fn blend_rgba_over(
     dst: &mut [u8],
     dw: u32,
     dh: u32,

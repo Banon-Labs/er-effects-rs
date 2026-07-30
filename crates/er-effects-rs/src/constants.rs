@@ -123,11 +123,14 @@ pub(crate) const INHERIT_HANDLE_FALSE: i32 = 0;
 /// taking the EffectsState lock before the player check.
 pub(crate) use er_telemetry::counters::C30_WATCH_FRAME_COUNTER;
 
+// The portrait constants files (portrait_semaphores.rs, portrait_camera.rs,
+// portrait_lookat.rs) and several anti_debug.rs/stats_panel_text.rs/gaitem_restore.rs
+// blocks moved to the er-loading-portrait crate (portrait crate split); the glob shim
+// re-exports them so every remaining flat-namespace reference keeps compiling unchanged.
+pub(crate) use er_loading_portrait::*;
+
 include!("constants/software_breakpoints.rs");
 include!("constants/anti_debug.rs");
-include!("constants/portrait_semaphores.rs");
-include!("constants/portrait_camera.rs");
-include!("constants/portrait_lookat.rs");
 include!("constants/tpf_textures.rs");
 include!("constants/stats_panel_background.rs");
 include!("constants/stats_panel_text.rs");

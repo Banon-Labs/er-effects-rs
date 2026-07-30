@@ -40,6 +40,10 @@ erpx-rs = { path = "../erpx-rs", default-features = false }
 # Backend-neutral loading-bar labels/font/raster primitives. Runtime adapters in this crate still own
 # Elden Ring semaphores, D3D12 swapchains, and ME3/product integration.
 er-loading-bar = { path = "../er-loading-bar" }
+# Loading-screen portrait + stats feature (path B capture pipeline + compositors + native
+# overlay host), extracted in the portrait crate split. The product keeps bundling it;
+# product state crosses the seam via `er_loading_portrait::install_host` in bootstrap.rs.
+er-loading-portrait = { path = "../er-loading-portrait" }
 er-d3d12-compositor = { path = "../er-d3d12-compositor" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 pelite = "0.10"

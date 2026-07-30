@@ -20,6 +20,8 @@ members = [
   "crates/er-loading-bar",
   "crates/er-d3d12-compositor",
   "crates/er-loading-bar-dll",
+  "crates/er-loading-portrait",
+  "crates/er-loading-portrait-dll",
   "crates/er-safe-input",
   "crates/er-save-loader",
   "crates/er-tpf",

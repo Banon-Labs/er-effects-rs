@@ -566,7 +566,7 @@ pub(crate) fn install_title_scene_obj_proxy_named_child_bind_hook() {
 /// is unreadable. This is the PER-SLOT source (bd er-effects-rs-l90): the attributes exist in no live
 /// struct at ProfileSelect time, so they are read straight from the on-disk `.sl2` (see
 /// [`ensure_profile_slot_stats_cached`]).
-fn profile_slot_attributes(slot: i32) -> Option<[i32; STATS_ATTR_COUNT]> {
+pub(crate) fn profile_slot_attributes(slot: i32) -> Option<[i32; STATS_ATTR_COUNT]> {
     if !(0..PROFILE_SLOT_COUNT).contains(&slot) {
         return None;
     }
@@ -650,7 +650,6 @@ fn build_stats_html_utf16(
 }
 
 /// Number of character attributes (Vig..Arc).
-const STATS_ATTR_COUNT: usize = 8;
 /// Profile/save slot count on the ProfileSelect screen.
 const PROFILE_SLOT_COUNT: i32 = 10;
 
@@ -664,7 +663,7 @@ static PROFILE_SLOT_STATS_CACHE: std::sync::Mutex<Option<[Option<[i32; STATS_ATT
 /// then parses each `USER_DATA` slot's `PlayerGameData` attributes with `er_save_loader::stats`. Heavy
 /// work (a ~26 MB read + parse) happens at most once per session; subsequent rows hit the cache.
 /// Returns whether the cache is loaded (true even if some/all slots are empty).
-unsafe fn ensure_profile_slot_stats_cached(base: usize) -> bool {
+pub(crate) unsafe fn ensure_profile_slot_stats_cached(base: usize) -> bool {
     let mut guard = match PROFILE_SLOT_STATS_CACHE.lock() {
         Ok(g) => g,
         Err(poison) => poison.into_inner(),

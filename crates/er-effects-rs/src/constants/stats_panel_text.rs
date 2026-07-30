@@ -10,9 +10,6 @@
 // (RE: bd profileselect-native-settext-RE-2026-07-04 + Ghidra dump FUN_1408758d0/FUN_14074c630;
 // ARM/CONSUME SetText substitution was rejected because the FMG-static populate pass calls the SetText
 // CORE directly, so no wrapper-level routing can target a field the row-populate never writes.)
-/// SetText wrapper `FUN_14074a0f0` (deobf/live 0x74a000). fastcall(rcx=CSScaleformValue*, rdx=wchar_t*).
-/// Not hooked -- called directly for the stats push (null-guards text and checks the field dataType).
-pub(crate) const PROFILE_SETTEXT_RVA: usize = 0x74a000;
 /// `CS::CSScaleformValue::~CSScaleformValue` (dump 0x140d7f900) = deobf/live 0xd7f850
 /// (`scripts/dump-deobf-shift.py` -> content-unique). fastcall(rcx=CSScaleformValue*). Releases the
 /// GFx::Value handle a resolved child proxy holds; the stats push calls it exactly like the native
@@ -260,13 +257,10 @@ pub(crate) static TITLE_SCALEFORM_FILE_OPEN_LAST_CALLER_RVA: AtomicUsize =
 /// MemoryFile-backed replacement state for `ER_EFFECTS_TITLE_RESOURCE_MEMORY_GFX`. The replacement
 /// is deliberately opt-in: default file-open observer mode still calls the original loader.
 pub(crate) const SCALEFORM_MEMORY_GLOBAL_RVA: usize = 0x4593250;
-pub(crate) const SCALEFORM_MEMORY_FILE_VTABLE_RVA: usize = 0x2ba4c80;
 pub(crate) const SCALEFORM_DLSTRING_CHAR_COPY_RVA: usize = 0x1140ec0;
 pub(crate) const SCALEFORM_MEMORY_FILE_SIZE: usize = 0x30;
 pub(crate) const SCALEFORM_MEMORY_FILE_REFCOUNT_OFFSET: usize = 0x8;
 pub(crate) const SCALEFORM_MEMORY_FILE_NAME_OFFSET: usize = 0x10;
-pub(crate) const SCALEFORM_MEMORY_FILE_DATA_OFFSET: usize = 0x18;
-pub(crate) const SCALEFORM_MEMORY_FILE_LEN_OFFSET: usize = 0x20;
 pub(crate) const SCALEFORM_MEMORY_FILE_CURSOR_OFFSET: usize = 0x24;
 pub(crate) const SCALEFORM_MEMORY_FILE_VALID_OFFSET: usize = 0x28;
 pub(crate) use er_telemetry::counters::TITLE_SCALEFORM_MEMORY_GFX_BYTES;

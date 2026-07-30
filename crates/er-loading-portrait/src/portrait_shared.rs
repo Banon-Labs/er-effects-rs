@@ -1,3 +1,5 @@
+use crate::prelude::*;
+
 // Shared portrait helpers used by the capture pipeline and its hosts: the per-window reset,
 // the depth-mask invalidation, and the publish-acceptance classifiers. Relocated out of the
 // path-A overlay composite (bd er-effects-rs-f9mq) because path B and the shared capture
@@ -9,7 +11,7 @@
 /// the new character (LOADING_BG_PORTRAIT_SPARED_RENDERER is gated `== 0` and was otherwise never reset --
 /// it stayed pinned to the first character's now-stale renderer, and driving that leaked renderer risks a
 /// use-after-free). Called from the overlay stop at load completion; idempotent.
-pub(crate) fn loading_portrait_window_reset(reason: &str) {
+pub fn loading_portrait_window_reset(reason: &str) {
     // WORKER-OFFLOAD SWITCH SAFETY (2026-07-06). Bump the pipeline generation FIRST: any portrait consume
     // job still in flight on the worker thread snapshotted the PREVIOUS gen, so when it re-reads this before
     // it pins/publishes it will see the bump and DISCARD -- a head captured for the old window can never be
@@ -211,8 +213,23 @@ pub(crate) fn loading_portrait_window_reset(reason: &str) {
         };
         append_autoload_debug(format_args!(
             "present-overlay: PORTRAIT PUBLISH FAILURE #{n}{} -- window drove {drive} frames but published 0 (dominant cause={} torn={torn} unkeyed={unkeyed} badiou={badiou} lowmask={lowmask} checker={checker} multi={multi} unpaired={unpaired} copies={copies} cb={cb} cs={cs} dc={dc} db={db}); HARNESS MUST FAIL until the root render is fixed",
-            if already { " (already fast-failed)" } else { "" },
-            match cause { 1 => "torn", 2 => "unkeyed", 3 => "badiou", 4 => "lowmask", 5 => "checker", 6 => "multi", 7 => "unpaired", 8 => "no-copy", 9 => "no-provenance", _ => "unknown" }
+            if already {
+                " (already fast-failed)"
+            } else {
+                ""
+            },
+            match cause {
+                1 => "torn",
+                2 => "unkeyed",
+                3 => "badiou",
+                4 => "lowmask",
+                5 => "checker",
+                6 => "multi",
+                7 => "unpaired",
+                8 => "no-copy",
+                9 => "no-provenance",
+                _ => "unknown",
+            }
         ));
     }
     // Re-arm the per-window fast-fail state for the next window.
@@ -229,7 +246,7 @@ pub(crate) fn loading_portrait_window_reset(reason: &str) {
 /// buffer instead of reusing the previous character's cached mask. Without this, a System Quit -> Load
 /// Profile character switch would cut the OLD character's silhouette out of the NEW head until fresh depth
 /// happened to land. Fail-open in the gap (leaves the head opaque) -- never a stale wrong-shape cutout.
-pub(crate) fn invalidate_portrait_depth_mask() {
+pub fn invalidate_portrait_depth_mask() {
     PROFILE_DEPTH_PIN.store(0, Ordering::SeqCst);
     if let Ok(mut g) = LAST_DEPTH_MASK.lock() {
         *g = None;
@@ -241,7 +258,7 @@ pub(crate) fn invalidate_portrait_depth_mask() {
 /// True if the read-back RGBA8 image has any non-black texel (`max(R,G,B) > 24`) inside a center
 /// 64x64 region. Used to set `LOADING_BG_PORTRAIT_NONBLACK` -- a quick "did we capture a real head
 /// vs a blank/black offscreen" oracle.
-pub(crate) fn portrait_center_nonblack(width: u32, height: u32, pixels: &[u8]) -> bool {
+pub fn portrait_center_nonblack(width: u32, height: u32, pixels: &[u8]) -> bool {
     let w = width as usize;
     let h = height as usize;
     if w == 0 || h == 0 || pixels.len() < w * h * RGBA8_BPP {
@@ -280,7 +297,7 @@ pub(crate) fn portrait_center_nonblack(width: u32, height: u32, pixels: &[u8]) -
 /// saturated "pure" texels; a checker is ~2 colors, each with channels pinned to 0/255. Heuristic over the
 /// center region: sample texels, quantize to 5 bits/channel, and call it a checker if (a) the 2 most-common
 /// quantized colors cover >= 85% of samples AND (b) >= 70% of samples are "pure" (every channel <16 or >239).
-pub(crate) fn portrait_looks_like_checker(width: u32, height: u32, pixels: &[u8]) -> bool {
+pub fn portrait_looks_like_checker(width: u32, height: u32, pixels: &[u8]) -> bool {
     let w = width as usize;
     let h = height as usize;
     if w == 0 || h == 0 || pixels.len() < w * h * RGBA8_BPP {

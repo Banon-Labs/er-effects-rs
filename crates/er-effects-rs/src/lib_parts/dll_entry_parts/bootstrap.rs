@@ -93,6 +93,34 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // the exact sink the union used before it moved into the er-hook crate. Installed here, before any
     // hook is registered, so no union-chain or collision line is ever missed.
     er_hook::set_hook_logger(crate::telemetry::append_autoload_debug);
+    // Portrait crate split: wire the er-loading-portrait seam to the real product fns
+    // BEFORE any hook install or task spawn can execute moved code (the crate's neutral
+    // defaults would otherwise gate the whole pipeline off). Pure fn-pointer writes.
+    er_loading_portrait::install_host(er_loading_portrait::PortraitHost {
+        append_autoload_debug: crate::telemetry::append_autoload_debug,
+        note_ls_portrait_capture: crate::telemetry::note_ls_portrait_capture,
+        game_directory_path: crate::telemetry::game_directory_path,
+        portrait_overlay_enabled: crate::experiments::portrait_overlay_enabled,
+        portrait_render_drive_enabled: crate::experiments::portrait_render_drive_enabled,
+        portrait_real_pixels_enabled: crate::experiments::portrait_real_pixels_enabled,
+        system_quit_repro_enabled: crate::experiments::system_quit_repro_enabled,
+        renderdoc_active: crate::experiments::renderdoc_active,
+        portrait_loaded_slot: crate::experiments::portrait_loaded_slot,
+        portrait_loaded_slot_confirmed: crate::experiments::portrait_loaded_slot_confirmed,
+        portrait_target_slot: crate::experiments::portrait_target_slot,
+        portrait_tear_score: crate::experiments::portrait_tear_score,
+        count_live_profile_models: crate::experiments::count_live_profile_models,
+        now_loading_active: crate::experiments::now_loading_active,
+        portrait_pipeline_idle_in_gameplay: crate::experiments::portrait_pipeline_idle_in_gameplay,
+        save_picker_overlay_active: crate::experiments::save_picker_overlay_active,
+        boot_view_epoch_ms: crate::experiments::boot_view_epoch_ms,
+        best_active_slot: crate::experiments::best_active_slot,
+        ensure_profile_slot_stats_cached: crate::experiments::ensure_profile_slot_stats_cached,
+        profile_slot_attributes: crate::experiments::profile_slot_attributes,
+        game_data_man_ptr_or_null: crate::constants::game_data_man_ptr_or_null,
+        read_utf16_name_units: crate::experiments::read_utf16_name_units,
+        boot_view_render_frame: crate::experiments::boot_view_render_frame,
+    });
     er_d3d12_compositor::set_frame_provider(boot_view_d3d12_compositor_frame);
     write_bootstrap_event(BOOTSTRAP_EVENT_DLL_MAIN_ATTACH, BOOTSTRAP_DETAIL_START);
     init_runtime_config(hmodule);

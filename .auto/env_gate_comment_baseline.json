@@ -17,7 +17,7 @@
     "ER_EFFECTS_PROFILE_MAX_S@crates/er-effects-rs/src/experiments/profiler.rs": "Profiler hard-stop (s) bound. Diagnostic-only; no game behavior change.",
     "ER_EFFECTS_TELEMETRY_ONLY@crates/er-effects-rs/src/experiments/save_redirect/path_hooks.rs": "Sanctioned save-source exemption (AGENTS.md 'ER_EFFECTS_TELEMETRY_ONLY save-source exemption'): selects a telemetry-only/no-load observe mode for diagnostic runs. Diagnostic save-source selection, explicitly allowed by project policy.",
     "ER_EFFECTS_SAVE_TRACE@crates/er-effects-rs/src/experiments/save_redirect/path_hooks.rs": "Passive save-IO trace hook: logs save-path activity. Observe-only; no game behavior change.",
-    "ER_EFFECTS_AUTOLOAD_DEBUG_PATH@crates/er-effects-rs/src/experiments/startup_hooks/dlstring_lookat_math.rs": "Diagnostic OUTPUT-PATH override for the autoload debug log. Path only; no game behavior change.",
+    "ER_EFFECTS_AUTOLOAD_DEBUG_PATH@crates/er-loading-portrait/src/dlstring_lookat_math.rs": "Diagnostic OUTPUT-PATH override for the autoload debug log. Path only; no game behavior change.",
     "ER_EFFECTS_AUTOLOAD_DEBUG_PATH@crates/er-effects-rs/src/telemetry/save_policy_logs.rs": "Diagnostic OUTPUT-PATH override for the autoload debug log (canonical resolver). Path only; no game behavior change.",
     "ER_EFFECTS_GRSYSMSG_LOG@crates/er-effects-rs/src/experiments/startup_hooks/startup_modals_menu_cover.rs": "Diagnostic log of the GR_System_Message ids seen at startup. Observe-only; no game behavior change.",
     "ER_EFFECTS_CRASH_LOG_PATH@crates/er-effects-rs/src/telemetry/save_policy_logs.rs": "Diagnostic OUTPUT-PATH override for the crash log. Path only; no game behavior change.",

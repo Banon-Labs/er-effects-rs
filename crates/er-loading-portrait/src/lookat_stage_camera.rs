@@ -1,9 +1,10 @@
+use crate::prelude::*;
 
 /// Q4 keepalive oracle: read the GX render-pass queue head/tail (non-destructively -- NO pop) to detect
 /// whether a GX pass is queued this frame (the precondition the offscreen draw checks via FUN_1419e5850).
 /// g_GxDrawContext may be a pointer-global (heap ctx) or the struct itself; resolve defensively and fall
 /// back to the global address. All reads fault-guarded.
-unsafe fn profile_gx_queue_sample(base: usize) {
+pub unsafe fn profile_gx_queue_sample(base: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null;
     let global = base + GX_DRAW_CONTEXT_RVA;
@@ -62,7 +63,7 @@ unsafe fn profile_gx_queue_sample(base: usize) {
 /// engine keeps barely one menu model built at a time (cycling); "changed" is gated to same-slot so a
 /// slot switch (different character) is not mistaken for head motion. Only does the (costly) readback when
 /// a live model exists, so it is free when none is present. Read-only + fault-guarded.
-unsafe fn profile_lookat_rt_sample(base: usize) {
+pub unsafe fn profile_lookat_rt_sample(base: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null;
     let mut chosen = usize::MAX;
@@ -219,7 +220,7 @@ unsafe fn profile_lookat_stage_probe(base: usize) {
     }
 }
 
-pub(crate) fn profile_lookat_phase_diag_tick() {
+pub fn profile_lookat_phase_diag_tick() {
     if !portrait_overlay_enabled() {
         return;
     }
@@ -406,7 +407,7 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
 /// One candidate draw-phase task tick (registered once per phase index). Always bumps that phase's
 /// per-frame tick counter (for the sweep), and drives the realtime look-at draw ONLY when this phase is
 /// the selected active one -- so exactly one phase rasterizes per frame regardless of how many are registered.
-pub(crate) unsafe fn profile_lookat_phase_draw_tick(phase_index: usize, task_data: &FD4TaskData) {
+pub unsafe fn profile_lookat_phase_draw_tick(phase_index: usize, task_data: &FD4TaskData) {
     if phase_index < LOOKAT_DRAW_PHASE_COUNT {
         PROFILE_LOOKAT_PHASE_TICKS[phase_index].fetch_add(1, Ordering::SeqCst);
     }
@@ -430,7 +431,7 @@ pub(crate) unsafe fn profile_lookat_phase_draw_tick(phase_index: usize, task_dat
 /// own (correct) `frame` arg. This is the fix for "head doesn't move": our prior code wrote the importer
 /// PoseHolder but never propagated to the submodels. Fires per model per frame (only when the model is
 /// live), so it naturally tracks the engine's model build/teardown cycling.
-pub(crate) unsafe extern "system" fn per_frame_push_hook(renderer: usize, frame: usize) {
+pub unsafe extern "system" fn per_frame_push_hook(renderer: usize, frame: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     // CAPTURE the engine's live render context (param_2/frame) on its OWN calls only (not our re-drives),
     // so our per-frame draw can enqueue the model into the SAME offscreen pass the engine routes to. Our
@@ -492,7 +493,7 @@ pub(crate) unsafe extern "system" fn per_frame_push_hook(renderer: usize, frame:
     }
 }
 
-fn install_per_frame_push_hook() {
+pub fn install_per_frame_push_hook() {
     if PROFILE_PERFRAME_HOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
         return;
     }
@@ -674,7 +675,7 @@ unsafe fn latched_profile_model_facing_yaw(renderer: usize, idx: usize) -> f32 {
 /// offscreen render. Re-applied every tick so a refresh that re-runs the engine setup can't win.
 /// `renderer` must already be a validated live CSMenuProfModelRend (vtable checked by the caller).
 /// Returns true once the camera was pushed. See bd `camera-lever-RE-VERIFIED-offsets-and-call-addrs-2026-06-29`.
-unsafe fn apply_profile_camera_override(base: usize, renderer: usize, slot: i32) -> bool {
+pub unsafe fn apply_profile_camera_override(base: usize, renderer: usize, slot: i32) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if renderer == 0 || renderer == null {
         return false;

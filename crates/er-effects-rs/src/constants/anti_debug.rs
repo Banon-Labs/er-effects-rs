@@ -405,7 +405,6 @@ pub(crate) const TITLE_CUSTOM_COVER_BLACK_NAME: &str = "01_900_Black";
 pub(crate) const TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL: &str = "MENU_DummyProfileFace_01";
 pub(crate) const TITLE_CUSTOM_COVER_SYSTEX_TARGET: &str = "SYSTEX_Menu_Profile00";
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS: &str = "CSMenuProfModelRend";
-pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA: usize = 0x2b80128;
 /// Profile renderer table initializer: live 0x1409af3a0 (dump 0x1409af4f0) allocates the ten
 /// CSMenuProfModelRend instances and writes DAT_143d6d8d0 before the refresh/feed pass below.
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA: usize = 0x9af3a0;
@@ -422,13 +421,6 @@ pub(crate) static TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_CALLER_PHASE: A
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_754: usize = 0x754;
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_755: usize = 0x755;
-/// Live table of the ten CSMenuProfModelRend pointers filled by the title/profile renderer setup.
-pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA: usize = 0x3d6d8d0;
-pub(crate) const TITLE_PROFILE_SLOT_COUNT: usize = 10;
-/// CSMenuAsmModelRend base stores CSEzOffscreenRend* at +0xa8; CSEzOffscreenRend stores
-/// CSRuntimeTexResCap* registered under SYSTEX_Menu_ProfileNN at +0x10.
-pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET: usize = 0xa8;
-pub(crate) const TITLE_CUSTOM_COVER_PROFILE_OFFSCREEN_TEX_RESCAP_OFFSET: usize = 0x10;
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_TEX_INDEX_OFFSET: usize = 0x9a8;
 pub(crate) use er_telemetry::counters::TITLE_CUSTOM_COVER_PROFILE_SOURCE_SAMPLE_CALLS;
 pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_SLOT: AtomicUsize =
@@ -486,88 +478,10 @@ pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_RET: AtomicUsize =
 pub(crate) use er_telemetry::counters::TITLE_OVERLAY_COVER_RENDER_CALLS;
 pub(crate) use er_telemetry::counters::TITLE_OVERLAY_COVER_LAST_DISPLAY_W;
 pub(crate) use er_telemetry::counters::TITLE_OVERLAY_COVER_LAST_DISPLAY_H;
-/// `CS::TexResCap` embeds the draw-usable `CSGxTexture*` at +0x78, and that wrapper keeps
-/// the backing graphics texture/reference at +0x10. The overlay cannot safely reinterpret this as
-/// a generic texture ID yet, but observing these handles during a native draw would be a concrete
-/// draw-side consumption oracle for the RAM-backed profile portrait source rather than generic scaffolding.
-pub(crate) const TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET: usize = 0x78;
 pub(crate) const TITLE_CUSTOM_COVER_GX_TEXTURE_RESOURCE_OFFSET: usize = 0x10;
 pub(crate) use er_telemetry::counters::TITLE_OVERLAY_COVER_TEXTURE_BOUND;
 pub(crate) use er_telemetry::counters::TITLE_OVERLAY_COVER_LAST_GX_TEXTURE;
 pub(crate) use er_telemetry::counters::TITLE_OVERLAY_COVER_LAST_TEXTURE_RESOURCE;
-/// Observe the native now-loading helper visible during the black/progress-bar loading surface.
-/// This is the first-pass target for a separate custom loading/masquerade surface after live title-logo
-/// remaps proved crash-prone.
-pub(crate) const NOW_LOADING_HELPER_CTOR_RVA: usize = 0x2a20e0;
-pub(crate) const NOW_LOADING_HELPER_UPDATE_RVA: usize = 0x2a2c40;
-pub(crate) static NOW_LOADING_HELPER_CTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static NOW_LOADING_HELPER_UPDATE_ORIG: AtomicUsize =
-    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::NOW_LOADING_HELPER_HOOKS_INSTALLED;
-pub(crate) use er_telemetry::counters::NOW_LOADING_HELPER_CTOR_HITS;
-pub(crate) use er_telemetry::counters::NOW_LOADING_HELPER_UPDATE_HITS;
-pub(crate) static NOW_LOADING_HELPER_LAST_THIS: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static NOW_LOADING_HELPER_LAST_MENU_INDEX: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static NOW_LOADING_HELPER_LAST_REPLACE_TEX_INFO: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static NOW_LOADING_HELPER_LAST_REQUESTED_REPLACE_TEX_INFO: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static NOW_LOADING_HELPER_LAST_FLAGS: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-/// Native `CS::LoadingScreen` update path that drives the now-loading Gauge/Gauge_3 movieclip frame.
-/// Static RE (2026-07-05): dump `FUN_14090a7a0` -> deobf `0x14090a6b0`; it computes
-/// `frame = progress01 * max_frame + 1`, clamps to max at progress >= 1.0, then calls
-/// `CSMenuFrameComponent::SetFrame(&this->gauge, frame)`. This is the product semaphore for the
-/// visible loading bar reaching 100%, later and more exact than TimeAct/world-ready.
-pub(crate) const LOADING_SCREEN_UPDATE_RVA: usize = 0x90a6b0;
-pub(crate) static LOADING_SCREEN_UPDATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::LOADING_SCREEN_UPDATE_HOOK_INSTALLED;
-pub(crate) use er_telemetry::counters::LOADING_SCREEN_UPDATE_HITS;
-pub(crate) use er_telemetry::counters::LOADING_SCREEN_UPDATE_LAST_MS;
-/// Generic Scaleform label transition wrapper (deobf/live `0x1407499e0`, RVA `0x7499e0`).
-/// Loading GFx RE (2026-07-25) proved the final native loading fadeout is authored as a
-/// top-level black-plate alpha ramp in the movie timeline. Hook the generic label transition and
-/// stamp `FadeOut` labels because the narrow KnowledgeLoadingScreen vtable method was installed but
-/// did not fire on the user-launch product path.
-pub(crate) const SCALEFORM_LABEL_GOTO_RVA: usize = 0x7499e0;
-pub(crate) static SCALEFORM_LABEL_GOTO_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) const LOADING_SCREEN_GFX_FADEOUT_RVA: usize = 0x90a0a0;
-pub(crate) static LOADING_SCREEN_GFX_FADEOUT_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::LOADING_SCREEN_GFX_FADEOUT_FIRST_MS;
-pub(crate) use er_telemetry::counters::LOADING_SCREEN_GFX_FADEOUT_HITS;
-pub(crate) use er_telemetry::counters::LOADING_SCREEN_GFX_FADEOUT_HOOK_INSTALLED;
-pub(crate) use er_telemetry::counters::LOADING_SCREEN_GFX_FADEOUT_LAST_MS;
-/// `CS::KnowledgeLoadingScreen` tip-refresh (dump `FUN_14090a3f0` -> deobf/live `0x14090a300`, RVA
-/// 0x90a300). `fn(this)` -- picks the next tip msg id and SetTexts the title (`this+0xb28`) + body
-/// (`this+0xb88`). er-effects-rs-jsm PIVOT: we NO-OP it (skip the original) so the native tip title/body
-/// are never set -- our own player-stats text (overlay) shows in the tip region instead. Installed before
-/// the widget ctor so even the ctor's one-shot initial tip is suppressed.
-pub(crate) const KNOWLEDGE_TIP_REFRESH_RVA: usize = 0x90a300;
-pub(crate) static KNOWLEDGE_TIP_REFRESH_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::KNOWLEDGE_TIP_REFRESH_INSTALLED;
-pub(crate) use er_telemetry::counters::KNOWLEDGE_TIP_SUPPRESSED_HITS;
-/// `CS::KnowledgeLoadingScreen` tip-text SetText handles (CSScaleformValue): title `this+0xb28`
-/// ('Main/Knowledge/IetmName/Text_0'), body `this+0xb88` ('Main/Knowledge/ItemInfo/Text_0'). The
-/// suppression detour SetTexts both to empty after the original runs. (bd loading-tip-text-pipeline-RE.)
-pub(crate) const KNOWLEDGE_TIP_TITLE_HANDLE_OFFSET: usize = 0xb28;
-pub(crate) const KNOWLEDGE_TIP_BODY_HANDLE_OFFSET: usize = 0xb88;
-/// `CS::KnowledgeLoadingScreen` tip-advance "enabled" predicate lambda (dump `FUN_14090a1b0` ->
-/// deobf/live `0x14090a0c0`, content-matched shift -0xf0). `fn(functor) -> bool`; true only while the
-/// Main clip label == "Normal". The ctor registers ONE native menu action (input id 0x186be -- the
-/// keyguide's "press to advance the tip"): the base `MenuWindow::Update` trigger loop fires the action
-/// only when this predicate returns true, AND the per-update keyguide composer (vtable slot 7 -> slot 4)
-/// lists an action in the keyguide only while its enabled predicate is true. Forcing false therefore
-/// BOTH no-ops the advance press and durably hides the keyguide prompt (a one-shot SetText blank on the
-/// keyguide handle `this+0x380` would be overwritten by the per-update re-composition). The lambda is
-/// reached only through this screen's `_Func_impl` vftable, so no other menu is affected.
-/// (bd loading-keyguide-and-tip-advance-RE-2026-07-06.)
-pub(crate) const KNOWLEDGE_TIP_ADVANCE_ENABLED_RVA: usize = 0x90a0c0;
-pub(crate) static KNOWLEDGE_TIP_ADVANCE_ENABLED_ORIG: AtomicUsize =
-    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::KNOWLEDGE_TIP_ADVANCE_ENABLED_INSTALLED;
-pub(crate) use er_telemetry::counters::KNOWLEDGE_TIP_ADVANCE_SUPPRESSED_HITS;
 
 /// Scaleform (GFx) D3D12 `CBV_SRV_UAV` descriptor-heap ring/sub-allocator advance
 /// (deobf entry `0x140ec9530`; `f(this /rcx/, count /edx/)`). Verified disasm: the new-page branch
@@ -585,32 +499,6 @@ pub(crate) const SCALEFORM_DESC_PROVIDER_OFFSET: usize = 0x38;
 pub(crate) static SCALEFORM_DESC_ADVANCE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::SCALEFORM_DESC_ADVANCE_INSTALLED;
 pub(crate) use er_telemetry::counters::SCALEFORM_DESC_PROVIDER_NULL_HITS;
-pub(crate) static LOADING_SCREEN_LAST_THIS: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static LOADING_SCREEN_LAST_DATA: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) use er_telemetry::counters::LOADING_SCREEN_BAR_ENABLED;
-pub(crate) use er_telemetry::counters::LOADING_SCREEN_BAR_CURRENT_FRAME;
-pub(crate) use er_telemetry::counters::LOADING_SCREEN_BAR_MAX_FRAME;
-pub(crate) use er_telemetry::counters::LOADING_SCREEN_BAR_PROGRESS_PERMILLE;
-pub(crate) use er_telemetry::counters::LOADING_SCREEN_BAR_FINAL_HITS;
-/// `CS::LoadingScreen::Update` sets this byte after the post-100%-bar countdown elapses, calls the
-/// owning MenuWindow result callback, and resets the `LoadingScreenData`. This is later than Gauge_3's
-/// terminal frame and matches the native loading-screen close handoff more closely than "bar is full".
-pub(crate) use er_telemetry::counters::LOADING_SCREEN_CLOSE_SENT;
-pub(crate) use er_telemetry::counters::LOADING_SCREEN_CLOSE_SENT_FIRST_MS;
-pub(crate) use er_telemetry::counters::LOADING_SCREEN_CLOSE_SENT_HITS;
-pub(crate) const LOADING_SCREEN_DATA_OFFSET: usize = 0xa38;
-pub(crate) const LOADING_SCREEN_FINISH_SENT_OFFSET: usize = 0xa44;
-pub(crate) const LOADING_SCREEN_GAUGE_COMPONENT_OFFSET: usize = 0xa48;
-pub(crate) const LOADING_SCREEN_GAUGE_ENABLED_OFFSET: usize = 0xab0;
-pub(crate) const MENU_FRAME_COMPONENT_CURRENT_FRAME_OFFSET: usize = 0x70;
-pub(crate) const MENU_FRAME_COMPONENT_MAX_FRAME_OFFSET: usize = 0x74;
-pub(crate) const LOADING_SCREEN_DATA_ACTIVE_INDEX_OFFSET: usize = 0x14;
-pub(crate) const LOADING_SCREEN_DATA_START_PROGRESS_OFFSET: usize = 0x18;
-pub(crate) const LOADING_SCREEN_DATA_TARGET_PROGRESS_OFFSET: usize = 0x1c;
-pub(crate) const LOADING_SCREEN_DATA_INTERP_DURATION_OFFSET: usize = 0x20;
-pub(crate) const LOADING_SCREEN_DATA_INTERP_ELAPSED_OFFSET: usize = 0x24;
 /// Read-only latch of the native CSFakeLoadingScreen singleton visible during the black/progress
 /// loading UI. Sampled from telemetry writes; no hooks or native calls.
 pub(crate) use er_telemetry::counters::FAKE_LOADING_SCREEN_SAMPLE_COUNT;
@@ -656,42 +544,6 @@ pub(crate) struct CSFakeLoadingScreenImp {
 pub(crate) const FAKE_LOADING_SCREEN_VISIBLE_OFFSET: usize =
     core::mem::offset_of!(CSFakeLoadingScreenImp, visible);
 
-/// `CS::CSNowLoadingHelperImp` -- the controller behind the now-loading UI (the tips + rotating artwork,
-/// distinct from the `CSFakeLoadingScreenImp` cover and from the Scaleform movie that draws them). RE'd
-/// from the Ghidra dump's named layout (ctor deobf 0x1402a20e0, `Update` 0x1402a2c40). Key fields:
-/// `menu_load_entries` is a Fisher-Yates-shuffled 1..=34 array (the 34 loading-screen artwork/tip
-/// variants) and `current_menu_load_index` picks the active one; `replace_tex_info` /
-/// `requested_replace_tex_info` are the Scaleform texture-replacement handoff that swaps that artwork into
-/// the movie; `countdown` is the minimum-display timer. IMPORTANT: `load_done` (+0xed) is a load-COMPLETE
-/// latch (`Update` copies it from `request_load_done`, which the map-load system raises) -- it reads true
-/// AFTER the load finishes and lingers into gameplay, so it is NOT a "loading screen is visible" signal.
-/// Singleton = `*(base + RuntimeGlobalRva::NowLoadingSingleton)`.
-#[repr(C)]
-pub(crate) struct CSNowLoadingHelperImp {
-    pub(crate) vftable: usize,
-    pub(crate) rand_xorshift: usize,
-    pub(crate) update_task: [u8; 0x28],
-    pub(crate) field_38: usize,
-    pub(crate) field_40: usize,
-    pub(crate) menu_load_entries: [i32; 34],
-    pub(crate) current_menu_load_index: i32,
-    pub(crate) unknown_d4: [u8; 4],
-    pub(crate) replace_tex_info: usize,
-    pub(crate) requested_replace_tex_info: usize,
-    pub(crate) countdown: f32,
-    pub(crate) request_load_done: u8,
-    pub(crate) load_done: u8,
-    pub(crate) unknown_ee: [u8; 2],
-    pub(crate) field_f0: i32,
-    pub(crate) unknown_f4: [u8; 4],
-}
-
-// Layout guards: the RE'd offsets/size must match the Ghidra dump so a struct edit can't silently drift
-// the pointers our reads/writes use.
-const _: () = assert!(core::mem::size_of::<CSNowLoadingHelperImp>() == 0xf8);
-const _: () = assert!(core::mem::offset_of!(CSNowLoadingHelperImp, menu_load_entries) == 0x48);
-const _: () = assert!(core::mem::offset_of!(CSNowLoadingHelperImp, replace_tex_info) == 0xd8);
-const _: () = assert!(core::mem::offset_of!(CSNowLoadingHelperImp, load_done) == 0xed);
 const _: () = assert!(core::mem::offset_of!(CSFakeLoadingScreenImp, visible) == 0x8);
 /// Now-loading background portrait forge. The pseudorandom loading-screen background is
 /// `helper->replaceTexInfo` (a CSScaleformReplaceTexInfo*), PRODUCED for symbol `MENU_Load_%05d` by
@@ -736,32 +588,37 @@ pub(crate) const TPF_FILE_CAP_LOADED_STATE: u8 = 4;
 pub(crate) const TPF_FILE_CAP_READY_FLAG_BIT: u8 = 0x20;
 pub(crate) const TPF_FILE_CAP_ALLOC_SIZE: usize = 0x98;
 pub(crate) const TPF_FILE_CAP_ALLOC_ALIGN: usize = 8;
-/// Incoming symbol DLString<wchar_t> (rdx, standalone, size 0x30) field offsets.
-pub(crate) const DLSTRING_U16_INLINE_OFFSET: usize = 0x8; // inline buffer, or heap ptr if cap > 7
-pub(crate) const DLSTRING_U16_LENGTH_OFFSET: usize = 0x18; // code units
-pub(crate) const DLSTRING_U16_CAPACITY_OFFSET: usize = 0x20; // code units; SSO threshold > 7 -> heap
-pub(crate) const DLSTRING_U16_ENCODING_OFFSET: usize = 0x28; // u8 DLCharacterSet
-pub(crate) const DLSTRING_U16_SSO_THRESHOLD: usize = 7;
-/// The kept-alive portrait `CSGxTexture` captured during ProfileSelect (0 until captured). When set,
-/// the forge swaps it into its TpfResCap container's TexResCap so the loading screen shows the real
-/// rendered character portrait instead of the placeholder checker.
-pub(crate) use er_telemetry::counters::LOADING_BG_PORTRAIT_GX_KEPT;
-pub(crate) use er_telemetry::counters::LOADING_BG_PORTRAIT_GX_CAPTURE_HITS;
-/// The live profile-portrait offscreen render target, read back via D3D12 into CPU RGBA8 once the
-/// character head has rendered (`portrait_real_pixels_enabled()` gate). Tuple = (width, height,
-/// tightly-packed `width*height*4` RGBA8 pixels). `None` until a successful readback. When `Some`,
-/// the now-loading forge builds its TPF from these REAL pixels instead of the magenta/yellow checker.
-pub(crate) static LOADING_BG_PORTRAIT_RGBA: std::sync::Mutex<Option<(u32, u32, Vec<u8>)>> =
-    std::sync::Mutex::new(None);
-/// 1 if the read-back portrait has any non-black texel (max(R,G,B) > 24) inside a center 64x64
-/// region, else 0 (a black/blank capture). Exposed as `oracle_loading_bg_portrait_gx_nonblack`.
-pub(crate) use er_telemetry::counters::LOADING_BG_PORTRAIT_NONBLACK;
-/// Bumped every time LOADING_BG_PORTRAIT_RGBA is REPLACED with a fresh capture. The present-overlay
-/// composite watches this: when it changes, the overlay re-uploads its source texture from the new RGBA,
-/// so a LIVE per-frame (throttled) readback of the built renderer's offscreen makes the displayed head
-/// UPDATE (portrait refreshes) instead of freezing on the first captured frame.
-pub(crate) use er_telemetry::counters::LOADING_BG_PORTRAIT_RGBA_VERSION;
-/// One-shot log latch for the live-display-feed (built RT content -> overlay).
-pub(crate) use er_telemetry::counters::PROFILE_LIVE_FEED_LOGGED;
 
 
+
+// Relocated from constants/portrait_lookat.rs (portrait crate split): the title-cover
+// Scaleform bind-observer block is title-cover domain and stays product-side.
+/// Passive observer for native Scaleform image-symbol -> system texture bindings.
+/// Dump `FUN_1407452c0` maps to live/deobf `0x1407451c0`. It receives an owning resource/list field
+/// in rcx and a pair of DLString<char> values in rdx. Do not call it from product code; observe native
+/// calls to learn valid owner/resource contexts for SYSTEX-backed surfaces.
+pub(crate) const TITLE_SCALEFORM_BIND_OBSERVER_RVA: usize = 0x7451c0;
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) use er_telemetry::counters::TITLE_SCALEFORM_BIND_OBSERVER_INSTALLED;
+pub(crate) use er_telemetry::counters::TITLE_SCALEFORM_BIND_OBSERVER_HITS;
+pub(crate) use er_telemetry::counters::TITLE_SCALEFORM_BIND_OBSERVER_SYSTEX_HITS;
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_OWNER: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_PAIR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_SYMBOL_PTR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_TARGET_PTR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Experimental visible-surface bind rewrite for the replayed ProfileSelect cover: the native
+/// SYSTEX profile texture normally targets `MENU_DummyProfileFace_01`; rewrite slot0 to the
+/// visibly placed `MENU_FL_40135_Profile` surface and expose it as a distinct oracle.
+pub(crate) const TITLE_PROFILE_VISIBLE_SURFACE_SYMBOL: &str = "MENU_FL_40135_Profile";
+pub(crate) use er_telemetry::counters::TITLE_PROFILE_VISIBLE_SURFACE_BIND_REWRITES;
+pub(crate) static TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_OWNER: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_PAIR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_SYMBOL_PTR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);

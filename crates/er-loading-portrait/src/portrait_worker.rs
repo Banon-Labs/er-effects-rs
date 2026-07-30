@@ -1,3 +1,5 @@
+use crate::prelude::*;
+
 // Portrait consume WORKER (loading-screen readback-stall offload, step 1, 2026-07-06).
 // (This file is `include!`d into the gpu_readback module, so it uses `//` block comments, not `//!`.)
 //
@@ -17,34 +19,34 @@
 /// pointer and no D3D12 object crosses the thread boundary. Step 2: the render thread has already resolved
 /// + copied + WAITED (so the game RT is released), leaving the raw copy in ring `slot`'s staging buffers;
 /// the worker maps that slot and de-swizzles color + depth itself from the footprint metadata here.
-pub(crate) struct PortraitFrameJob {
+pub struct PortraitFrameJob {
     /// Ring slot the render thread copied into (the worker maps `RB_COH_CBUF[slot]`/`RB_COH_DBUF[slot]`,
     /// de-swizzles, then frees the slot).
-    pub(crate) slot: usize,
-    pub(crate) cw: u32,
-    pub(crate) ch: u32,
+    pub slot: usize,
+    pub cw: u32,
+    pub ch: u32,
     /// `DXGI_FORMAT.0` of the color RT (reconstructs the B/R-swap decision for the de-swizzle).
-    pub(crate) cformat: u32,
+    pub cformat: u32,
     /// Color staging footprint: 256-aligned row pitch + total byte size.
-    pub(crate) c_rowpitch: u32,
-    pub(crate) c_total: u64,
-    pub(crate) dw: u32,
-    pub(crate) dh: u32,
+    pub c_rowpitch: u32,
+    pub c_total: u64,
+    pub dw: u32,
+    pub dh: u32,
     /// Depth staging footprint: row pitch + total byte size.
-    pub(crate) d_rowpitch: u32,
-    pub(crate) d_total: u64,
-    pub(crate) rt_cand: usize,
-    pub(crate) color_from_bundle: bool,
-    pub(crate) incarnation: usize,
+    pub d_rowpitch: u32,
+    pub d_total: u64,
+    pub rt_cand: usize,
+    pub color_from_bundle: bool,
+    pub incarnation: usize,
     /// Pipeline generation snapshotted at submit; the consume DISCARDS (no pin/publish) if a window reset
     /// bumped `PORTRAIT_PIPELINE_GEN` while this frame was in flight.
-    pub(crate) pipeline_gen: usize,
+    pub pipeline_gen: usize,
     /// Motion-log diagnostic scalars snapshotted on the render thread (those are game reads; the worker
     /// cannot read game memory).
-    pub(crate) anim_t: f32,
-    pub(crate) dt_cap: f32,
-    pub(crate) dt_own: f32,
-    pub(crate) scene_reg: u8,
+    pub anim_t: f32,
+    pub dt_cap: f32,
+    pub dt_own: f32,
+    pub scene_reg: u8,
 }
 
 /// Bounded (capacity 2) job channel to the consume worker; lazily created on first submit.
@@ -55,17 +57,17 @@ static PORTRAIT_WORKER_SPAWN: std::sync::Once = std::sync::Once::new();
 /// In-flight consume jobs: incremented on a successful submit, decremented at the end of each consume
 /// (even on panic). `loading_portrait_window_reset` bounded-drains on this so late telemetry lands in the
 /// correct window. Exposed as telemetry.
-pub(crate) static PORTRAIT_JOB_INFLIGHT: std::sync::atomic::AtomicUsize =
+pub static PORTRAIT_JOB_INFLIGHT: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 /// Jobs DROPPED by backpressure (bounded channel full). This is intended -- the render thread must never
 /// block on the worker -- exposed as telemetry.
-pub(crate) static PORTRAIT_JOB_DROPPED: std::sync::atomic::AtomicUsize =
+pub static PORTRAIT_JOB_DROPPED: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
 /// Hand a portrait frame to the consume worker, spawning it lazily on first call (std::sync::Once, NOT in
 /// DllMain). Backpressure: if the bounded channel is full the job is DROPPED (the render thread never
 /// blocks) and the dropped counter is bumped.
-pub(crate) fn portrait_worker_submit(job: PortraitFrameJob) {
+pub fn portrait_worker_submit(job: PortraitFrameJob) {
     PORTRAIT_WORKER_SPAWN.call_once(|| {
         // Channel capacity == the ring size: a job only exists after its ring slot was claimed BUSY, and
         // at most RB_COH_RING slots are BUSY at once, so try_send below never actually fills up (the ring
@@ -223,8 +225,10 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
     let Some((mut cpx, depth)) = deswizzle_staged_slot(&job) else {
         return;
     };
-    PORTRAIT_RB_DESWIZZLE_US_SUM
-        .fetch_add(rb_deswizzle_t0.elapsed().as_micros() as usize, Ordering::SeqCst);
+    PORTRAIT_RB_DESWIZZLE_US_SUM.fetch_add(
+        rb_deswizzle_t0.elapsed().as_micros() as usize,
+        Ordering::SeqCst,
+    );
     PROFILE_READBACK_SOME.fetch_add(1, Ordering::SeqCst);
     let is_checker = portrait_looks_like_checker(cw, ch, &cpx);
     if is_checker {
@@ -275,8 +279,7 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
         let nb = portrait_center_nonblack(cw, ch, &cpx);
         LOADING_BG_PORTRAIT_NONBLACK.store(nb as usize, Ordering::SeqCst);
         LOADING_BG_PORTRAIT_IS_CHECKER.store(0, Ordering::SeqCst);
-        LOADING_BG_PORTRAIT_DIMS
-            .store(((cw as usize) << 16) | (ch as usize), Ordering::SeqCst);
+        LOADING_BG_PORTRAIT_DIMS.store(((cw as usize) << 16) | (ch as usize), Ordering::SeqCst);
         // ALPHA DIAGNOSTIC (one-shot, for the "full-alpha background" goal): sample
         // the RT (R8G8B8A8) at a BACKGROUND corner vs the HEAD center, plus the
         // alpha min/max across the frame. This decides the alpha path: if corner
@@ -285,7 +288,7 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
         // alpha is 255 everywhere the bg is opaque (need a chroma-key or engine-side
         // IBL/env suppression). Fires only on a confirmed non-checker head frame.
         {
-            pub(crate) use er_telemetry::counters::ALPHA_DIAG_LOGGED;
+            pub use er_telemetry::counters::ALPHA_DIAG_LOGGED;
             let w = cw as usize;
             let h = ch as usize;
             if w > 16
@@ -317,14 +320,7 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
                 }
                 append_autoload_debug(format_args!(
                     "alpha-diag: {w}x{h} corner(bg) RGBA=({},{},{},{}) center(head) RGBA=({},{},{},{}) frame-alpha[min={amin} max={amax}]",
-                    corner.0,
-                    corner.1,
-                    corner.2,
-                    corner.3,
-                    center.0,
-                    center.1,
-                    center.2,
-                    center.3
+                    corner.0, corner.1, corner.2, corner.3, center.0, center.1, center.2, center.3
                 ));
             }
         }
@@ -348,10 +344,8 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
             ch,
             &mut cpx,
         );
-        PORTRAIT_RB_MASK_US_SUM.fetch_add(
-            rb_mask_t0.elapsed().as_micros() as usize,
-            Ordering::SeqCst,
-        );
+        PORTRAIT_RB_MASK_US_SUM
+            .fetch_add(rb_mask_t0.elapsed().as_micros() as usize, Ordering::SeqCst);
         PORTRAIT_RB_MASK_COUNT.fetch_add(1, Ordering::SeqCst);
         // PIXEL-MOTION + FLICKER oracles (before the publish move). The
         // lighting changes every frame (user 2026-07-03), so MOTION is judged
@@ -369,10 +363,9 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
                 for gy in 0..GW {
                     for gx in 0..GW {
                         let p = ((gy * h / GW) * w + gx * w / GW) * 4;
-                        let l = (cpx[p] as u32 * 30
-                            + cpx[p + 1] as u32 * 59
-                            + cpx[p + 2] as u32 * 11)
-                            / 100;
+                        let l =
+                            (cpx[p] as u32 * 30 + cpx[p + 1] as u32 * 59 + cpx[p + 2] as u32 * 11)
+                                / 100;
                         luma[gy * GW + gx] = l as u8;
                         let a = cpx[p + 3];
                         alpha[gy * GW + gx] = a;
@@ -386,25 +379,19 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
                     let sum: u64 = a
                         .iter()
                         .zip(b.iter())
-                        .map(|(x, y)| {
-                            (*x as i32 - *y as i32).unsigned_abs() as u64
-                        })
+                        .map(|(x, y)| (*x as i32 - *y as i32).unsigned_abs() as u64)
                         .sum();
                     (sum * 1000 / a.len() as u64) as usize
                 };
                 if let Ok(mut prev) = PORTRAIT_MOTION_PREV_PLANES.lock() {
                     if let Some((pa, pl, pkeyed)) = prev.as_ref() {
                         let flicker = mad(pl, &luma);
-                        PORTRAIT_LUMA_FLICKER_LAST
-                            .store(flicker, Ordering::SeqCst);
-                        PORTRAIT_LUMA_FLICKER_MAX
-                            .fetch_max(flicker, Ordering::SeqCst);
+                        PORTRAIT_LUMA_FLICKER_LAST.store(flicker, Ordering::SeqCst);
+                        PORTRAIT_LUMA_FLICKER_MAX.fetch_max(flicker, Ordering::SeqCst);
                         if keyed && *pkeyed {
                             let motion = mad(pa, &alpha);
-                            PORTRAIT_MOTION_METRIC_LAST
-                                .store(motion, Ordering::SeqCst);
-                            PORTRAIT_MOTION_METRIC_MAX
-                                .fetch_max(motion, Ordering::SeqCst);
+                            PORTRAIT_MOTION_METRIC_LAST.store(motion, Ordering::SeqCst);
+                            PORTRAIT_MOTION_METRIC_MAX.fetch_max(motion, Ordering::SeqCst);
                         }
                     }
                     *prev = Some((alpha, luma, keyed));
@@ -417,7 +404,7 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
                 // the update task (*(td+8); 0 would freeze the anim
                 // silently), and the offscreen scene-registered bit
                 // (off+0x58; 1 == the engine re-renders the RT per frame).
-                pub(crate) use er_telemetry::counters::MOTION_LOG_TICKS;
+                pub use er_telemetry::counters::MOTION_LOG_TICKS;
                 let n = MOTION_LOG_TICKS.fetch_add(1, Ordering::SeqCst);
                 if n % 60 == 0 {
                     let anim_t = job.anim_t;
@@ -450,8 +437,7 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
         // share; the 0 < share < floor band is counted separately (lowmask)
         // to attribute partial-mask frames vs fully-unkeyed ones.
         let total_px = (cpx.len() / 4).max(1);
-        let transparent_px =
-            cpx.chunks_exact(4).filter(|px| px[3] < 128).count();
+        let transparent_px = cpx.chunks_exact(4).filter(|px| px[3] < 128).count();
         let share_pct = transparent_px * 100 / total_px;
         let keyed = share_pct >= PORTRAIT_MIN_TRANSPARENT_PCT;
         let partial_mask = !keyed && transparent_px > 0;
@@ -459,11 +445,9 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
         // published minimum share (was the boundary frame barely passing?)
         // and lowmask maximum (how close held frames came).
         if keyed {
-            PROFILE_PUBLISH_SHARE_MIN
-                .fetch_min(share_pct, Ordering::SeqCst);
+            PROFILE_PUBLISH_SHARE_MIN.fetch_min(share_pct, Ordering::SeqCst);
         } else if partial_mask {
-            PROFILE_LOWMASK_SHARE_MAX
-                .fetch_max(share_pct, Ordering::SeqCst);
+            PROFILE_LOWMASK_SHARE_MAX.fetch_max(share_pct, Ordering::SeqCst);
         }
         // TORN-READBACK gate (user 2026-07-03): the offscreen readback has no
         // cross-queue sync vs the game's render of the RT, so a per-frame capture
@@ -505,9 +489,7 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
         // frame (apply_depth_alpha_key ran just above) must clear the
         // gross-mismatch bar or the frame holds on the bridge.
         let iou_ok =
-            crate::experiments::gpu_readback::PROFILE_MASK_HEAD_IOU_LAST
-                .load(Ordering::SeqCst)
-                >= crate::experiments::gpu_readback::MASK_HEAD_IOU_MIN;
+            crate::PROFILE_MASK_HEAD_IOU_LAST.load(Ordering::SeqCst) >= crate::MASK_HEAD_IOU_MIN;
         if keyed && clean && iou_ok {
             PROFILE_TEAR_SCORE_CLEAN_MIN.fetch_min(tear, Ordering::SeqCst);
             PROFILE_PUBLISH_CLEAN.fetch_add(1, Ordering::SeqCst);
@@ -528,8 +510,7 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
                 if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
                     *g = Some((cw, ch, cpx));
                 }
-                LOADING_BG_PORTRAIT_RGBA_VERSION
-                    .fetch_add(1, Ordering::SeqCst);
+                LOADING_BG_PORTRAIT_RGBA_VERSION.fetch_add(1, Ordering::SeqCst);
                 // Freeze the per-frame drive for this window (UAF fix) ...
                 PROFILE_BAKE_RGBA_CAPTURED.store(1, Ordering::SeqCst);
                 // ... and mark a keyed frame available for display (persists across the
@@ -556,8 +537,7 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
             // (1957 published), torn frames are rare (one at tear=80) -- so the
             // skip catches them without ever starving the display. Regressions
             // surface as oracle_portrait_publish_skipped_torn climbing.
-            let n =
-                PROFILE_PUBLISH_SKIPPED_TORN.fetch_add(1, Ordering::SeqCst);
+            let n = PROFILE_PUBLISH_SKIPPED_TORN.fetch_add(1, Ordering::SeqCst);
             PORTRAIT_LAST_SKIP_CLASS.store(1, Ordering::SeqCst);
             if n % 64 == 0 {
                 append_autoload_debug(format_args!(

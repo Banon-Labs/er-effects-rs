@@ -1,6 +1,7 @@
+use crate::prelude::*;
 
 /// Read a `BoneData` quaternion (4 f32 at `addr`) with fault-guarded reads; `None` on unmapped memory.
-unsafe fn read_quat(addr: usize) -> Option<[f32; 4]> {
+pub unsafe fn read_quat(addr: usize) -> Option<[f32; 4]> {
     Some([
         f32::from_bits(unsafe { safe_read_i32(addr) }? as u32),
         f32::from_bits(unsafe { safe_read_i32(addr + 4) }? as u32),
@@ -90,7 +91,7 @@ unsafe fn lookat_write_local(holder: usize) {
 
 /// Hook on `updateBoneModelSpace`: for a registered profile holder, write the look-at into the local
 /// pose BEFORE the original recomputes model-space, so the rotation cascades into the rendered pose.
-pub(crate) unsafe extern "system" fn update_bone_model_space_hook(holder: usize) {
+pub unsafe extern "system" fn update_bone_model_space_hook(holder: usize) {
     if holder != 0 {
         let ours = PROFILE_LOOKAT_HOLDERS
             .iter()
@@ -106,7 +107,7 @@ pub(crate) unsafe extern "system" fn update_bone_model_space_hook(holder: usize)
     }
 }
 
-fn install_lookat_hook() {
+pub fn install_lookat_hook() {
     if PROFILE_LOOKAT_HOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
         return;
     }
@@ -171,7 +172,7 @@ unsafe fn lookat_recompute_fn() -> Option<unsafe extern "system" fn(usize)> {
 /// idle local quats once (drift-free base), write `base ⊗ delta(yaw,pitch)` into Head/Neck/Spine2 local
 /// quats, mark all bones model-space-dirty + `isUpdated=false`, then recompute model-space so the draw
 /// that follows skins from the rotated pose. Returns true if any bone was driven. Every read is bounded.
-unsafe fn lookat_apply_realtime(holder: usize, slot_idx: usize, yaw: f32, pitch: f32) -> bool {
+pub unsafe fn lookat_apply_realtime(holder: usize, slot_idx: usize, yaw: f32, pitch: f32) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null;
     let local = unsafe { safe_read_usize(holder + POSEHOLDER_LOCAL_BONE_DATA_OFFSET) }.unwrap_or(0);
@@ -299,7 +300,7 @@ static PROFILE_OFFSCREEN_SETTLE_INNERS: [AtomicUsize; 4] = [
     AtomicUsize::new(0),
     AtomicUsize::new(0),
 ];
-pub(crate) use er_telemetry::counters::PROFILE_OFFSCREEN_SETTLE_COUNT;
+pub use er_telemetry::counters::PROFILE_OFFSCREEN_SETTLE_COUNT;
 
 unsafe fn profile_offscreen_gx_resources_ready(off: usize) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -334,7 +335,8 @@ unsafe fn profile_offscreen_gx_resources_ready(off: usize) -> bool {
         PROFILE_OFFSCREEN_SETTLE_COUNT.store(0, Ordering::SeqCst);
         return false;
     }
-    PROFILE_OFFSCREEN_SETTLE_COUNT.fetch_add(1, Ordering::SeqCst) + 1 >= PROFILE_OFFSCREEN_SETTLE_FRAMES
+    PROFILE_OFFSCREEN_SETTLE_COUNT.fetch_add(1, Ordering::SeqCst) + 1
+        >= PROFILE_OFFSCREEN_SETTLE_FRAMES
 }
 
 /// LIVE LOADING PORTRAIT DRAW TICK -- registered as a recurring task in a DRAW phase
@@ -343,7 +345,7 @@ unsafe fn profile_offscreen_gx_resources_ready(off: usize) -> bool {
 /// Each frame: keep the loaded-character portrait renderer alive, run the safe draw/publish pump, and
 /// deliberately publish a neutral pose. Cursor/head tracking is retired; this path never reads or warps
 /// the OS cursor for portrait motion.
-pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4TaskData) {
+pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4TaskData) {
     if !portrait_overlay_enabled() {
         return;
     }
@@ -358,9 +360,9 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
     // whose work is gated on it) becomes a cheap passthrough. Per-epoch stop (BOOT_VIEW_EPOCH_WORLD_LIVE
     // == cur), not the stale one-shot IN_WORLD_REACHED latch that never fires for load2.
     {
-        let cur =
-            crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
-        if crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur {
+        let cur = er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
+            .load(Ordering::SeqCst);
+        if er_telemetry::counters::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur {
             PROFILE_LOOKAT_REALTIME.store(false, Ordering::SeqCst);
             return;
         }
@@ -419,7 +421,7 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
         // Tag the live portrait CHARACTER incarnation (slot + 1; 0 = unset) for the mask stale-reuse
         // desync semaphore: apply_depth_alpha_key records this on a fresh mask and trips
         // PROFILE_MASK_STALE_REUSE if a later frame reuses a mask computed for a different incarnation.
-        crate::experiments::gpu_readback::PROFILE_PORTRAIT_INCARNATION.store(
+        crate::PROFILE_PORTRAIT_INCARNATION.store(
             if slot >= 0 { slot as usize + 1 } else { 0 },
             Ordering::SeqCst,
         );
@@ -459,9 +461,8 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
             if off != 0 && off != null && live_models > 1 {
                 PORTRAIT_PUMP_BLOCK_MULTI.fetch_add(1, Ordering::SeqCst);
             }
-            let off_resources_ready = off != 0
-                && off != null
-                && unsafe { profile_offscreen_gx_resources_ready(off) };
+            let off_resources_ready =
+                off != 0 && off != null && unsafe { profile_offscreen_gx_resources_ready(off) };
             if off != 0 && off != null && !off_resources_ready {
                 let n = PORTRAIT_PUMP_BLOCK_OFF_RESOURCE.fetch_add(1, Ordering::SeqCst) + 1;
                 if n <= 4 || n.is_power_of_two() {
@@ -505,7 +506,7 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                 // an idle title screen. This stamps the exact completion so the theory is measured,
                 // not inferred.
                 {
-                    pub(crate) use er_telemetry::counters::MODEL_WAS_LIVE;
+                    pub use er_telemetry::counters::MODEL_WAS_LIVE;
                     let m = unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
                         .unwrap_or(0);
                     let live_now = (m != 0 && m != null) as usize;
@@ -571,7 +572,7 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                         // scene content redrawn each frame, so the clear alone keys nothing and
                         // starves the overlay. portrait_alpha0_clear + the GX RVAs stay for the
                         // next phase.)
-                        let _ = crate::experiments::gpu_readback::portrait_alpha0_clear;
+                        let _ = crate::portrait_alpha0_clear;
                         let _ = &PROFILE_ALPHA0_CLEARS;
                         let update: unsafe extern "system" fn(usize, usize) =
                             unsafe { core::mem::transmute(base + PROFILE_MODEL_UPDATE_TASK_RVA) };
@@ -809,9 +810,9 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                         // does NOT de-swizzle. It returns a ring-slot index + footprint metadata; the worker
                         // maps that slot and de-swizzles color + depth from the SAME frame. On a slot-busy
                         // or resolve failure it returns None and this frame's publish is simply skipped.
-                        if let Some(staged) = unsafe {
-                            crate::experiments::gpu_readback::readback_offscreen_color_depth_staged(off)
-                        } {
+                        if let Some(staged) =
+                            unsafe { crate::readback_offscreen_color_depth_staged(off) }
+                        {
                             // WORKER OFFLOAD (readback-stall step 2, 2026-07-06). The render thread did the
                             // D3D12 resolve + record-copy + WAIT synchronously inside the staged readback
                             // above (so the game RT is released HERE -- no async game-resource lifetime
@@ -820,8 +821,7 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                             // color + depth, then masks/classifies/publishes -- all off the render thread
                             // over OUR staging buffers + plain Vecs, never a game pointer.
                             let incarnation =
-                                crate::experiments::gpu_readback::PROFILE_PORTRAIT_INCARNATION
-                                    .load(Ordering::SeqCst);
+                                crate::PROFILE_PORTRAIT_INCARNATION.load(Ordering::SeqCst);
                             let pipeline_gen = PORTRAIT_PIPELINE_GEN.load(Ordering::SeqCst);
                             // Motion-log diagnostic scalars: snapshot the game-derived values HERE (the
                             // render thread owns base/renderer/task_data); the worker cannot read game
@@ -843,7 +843,8 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                                     .unwrap_or(0)
                                         & 0xffff;
                                     let anim_t = if x != 0 && x != null {
-                                        let entries = unsafe { safe_read_usize(x + 8) }.unwrap_or(0);
+                                        let entries =
+                                            unsafe { safe_read_usize(x + 8) }.unwrap_or(0);
                                         if entries != 0 && entries != null {
                                             f32::from_bits(
                                                 (unsafe {
@@ -893,7 +894,7 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                                 .unwrap_or(0)
                                     & 0xffff_ffff) as u32,
                             );
-                            let job = crate::experiments::gpu_readback::PortraitFrameJob {
+                            let job = crate::PortraitFrameJob {
                                 slot: staged.slot,
                                 cw: staged.cw,
                                 ch: staged.ch,
@@ -913,7 +914,7 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                                 dt_own,
                                 scene_reg,
                             };
-                            crate::experiments::gpu_readback::portrait_worker_submit(job);
+                            crate::portrait_worker_submit(job);
                         }
                     }
                 }
@@ -941,7 +942,13 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
         append_autoload_debug(format_args!(
             "present-overlay: PORTRAIT PUBLISH FAILURE #{n} (FAST-FAIL) -- drove {} frames, published 0 (cause={}); the render did not land the frame it was driven. HARNESS MUST FAIL until the root render is fixed",
             PROFILE_DRIVE_FRAMES_WINDOW.load(Ordering::SeqCst),
-            match cause { 1 => "torn", 2 => "unkeyed", 3 => "badiou", 4 => "lowmask", _ => "unknown" }
+            match cause {
+                1 => "torn",
+                2 => "unkeyed",
+                3 => "badiou",
+                4 => "lowmask",
+                _ => "unknown",
+            }
         ));
     }
     // SPARED-RENDERER DRIVE DISABLED (subsequent-load cascade fix, 2026-07-02). The spared renderer's model
