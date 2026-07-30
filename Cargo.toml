@@ -22,6 +22,14 @@ members = [
   "crates/er-loading-bar-dll",
   "crates/er-loading-portrait",
   "crates/er-loading-portrait-dll",
+  # Save-picker crate extraction (docs/plans/save-picker-crate-extraction.md).
+  # (A) the DLL-drawn boot picker + the shared row model + the OS-native dialog surface;
+  # (B) the customized System>Quit menu, which depends on (A) one way. Each ships as a
+  # feature crate plus a thin standalone ME3-loadable shell.
+  "crates/er-save-picker",
+  "crates/er-save-picker-dll",
+  "crates/er-quit-menu",
+  "crates/er-quit-menu-dll",
   "crates/er-safe-input",
   "crates/er-save-loader",
   "crates/er-tpf",

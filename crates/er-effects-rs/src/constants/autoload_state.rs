@@ -1258,6 +1258,19 @@ pub(crate) use er_telemetry::counters::SCALEFORM_HANDLER_LAST_DOUBLE_FREE_OBJ;
 /// detached state is native-tolerated by construction. Non-preserved (native-owned) jobs keep the
 /// legacy heuristic byte-identically.
 pub(crate) const MENU_WINDOW_JOB_DTOR_RVA: usize = 0x7ac720;
+
+/// `CS::MenuWindowJob` FINALIZE (deobf 0x1407ada40) -- the function whose `if (owningMenuWindow != 0)`
+/// block virtual-calls `owningMenuWindow->vfptr[3]`, faulting at rva 0x7ada7c when that window is
+/// freed/reused.
+///
+/// It has FIVE callers and `MENU_WINDOW_JOB_DTOR_RVA` (0x7ac720) is only ONE of them; the others are
+/// three sites inside `MenuWindowJob::Run` (0x7ad3fb / 0x7ad54d / 0x7ad66a) and 0x7bdee0. The
+/// destructor guard therefore cannot see the crash observed on the profile switch, which arrives via
+/// `Run` (proven twice 2026-07-30: agent + user runs, identical AV signature). Hooking the finalize
+/// itself covers every caller with one detour, and 0x7ada40 has no other detour -- unlike
+/// `MenuWindowJob::Run` (0x7ad1c0), where two detours already collided (MinHook allows one per
+/// address; see bd system-quit-menuwindowjob-run-dead-hook-rootcause-2026-07-15).
+pub(crate) const MENU_WINDOW_JOB_FINALIZE_RVA: usize = 0x7ada40;
 pub(crate) const MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET: usize = 0x130;
 /// The window's cached menu id (`field246_0x180`). `0xffff` is the unmapped sentinel and the state
 /// every observed crash was in; the finalize's second getter is itself gated on it.
@@ -1293,6 +1306,10 @@ pub(crate) const MENU_WINDOW_LIST_SANE_MAX_COUNT: i32 = 64;
 pub(crate) static MENU_WINDOW_JOB_DTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_TRACE_INSTALLED;
 pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_DOOMED_GUARDS;
+pub(crate) use er_telemetry::counters::{
+    MENU_WINDOW_JOB_FINALIZE_GUARDS, MENU_WINDOW_JOB_FINALIZE_INSTALLED,
+    MENU_WINDOW_JOB_FINALIZE_LAST_WINDOW, MENU_WINDOW_JOB_FINALIZE_ORIG,
+};
 pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_LIST_REMOVALS;
 pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_LAST_GUARDED_WINDOW;
 pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_LAST_GUARDED_INDEX;
