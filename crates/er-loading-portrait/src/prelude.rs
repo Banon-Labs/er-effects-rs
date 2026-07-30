@@ -39,6 +39,7 @@ pub(crate) use crate::portrait_shared::*;
 pub(crate) use crate::portrait_worker::*;
 #[cfg(windows)]
 pub(crate) use crate::resource_readback::*;
+pub(crate) use crate::stats_lines::*;
 #[cfg(windows)]
 pub(crate) use crate::stats_loading_text::*;
 #[cfg(windows)]

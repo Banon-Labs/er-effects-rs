@@ -24,6 +24,17 @@ const PGD_STAT_BASE: usize = 0x3c;
 /// check reads it without knowing the absolute PGD base.
 const LEVEL_FROM_STAT_BASE: usize = PGD_LEVEL - PGD_STAT_BASE;
 
+/// Stored effective max vitals, relative to the located `PlayerGameData` base.
+/// The save body mirrors the runtime layout (`scripts/save-slot-oracle.py`;
+/// SL2.bt's comment: the save `PlayerGameData` "mirrors `CS::PlayerGameData+0x8`"):
+/// runtime `current_max_hp` @ PGD+0x14 == SL2.bt `MaxHealth` @ +0x0c, `current_max_fp`
+/// @ +0x20 == `MaxFP` @ +0x18, `current_max_stamina` @ +0x30 == `MaxSP` @ +0x28.
+/// These are the *effective* maxima (base + talisman/buff modifiers) -- the exact
+/// values the live loading-screen stats read from PGD, stored, not derived.
+const PGD_MAX_HP: usize = 0x14;
+const PGD_MAX_FP: usize = 0x20;
+const PGD_MAX_STAMINA: usize = 0x30;
+
 /// Number of attributes: Vigor, Mind, Endurance, Strength, Dexterity,
 /// Intelligence, Faith, Arcane.
 pub const STAT_COUNT: usize = 8;
@@ -43,6 +54,15 @@ pub struct SlotStats {
     pub level: i32,
     /// The eight attributes in struct order (VIG, MND, END, STR, DEX, INT, FAI, ARC).
     pub attributes: [i32; STAT_COUNT],
+    /// Effective max HP as STORED in the save (SL2.bt `MaxHealth` == runtime
+    /// `current_max_hp`, incl. talisman/buff modifiers). 0 when unreadable.
+    pub max_hp: i32,
+    /// Effective max FP as stored (SL2.bt `MaxFP` == runtime `current_max_fp`).
+    /// 0 when unreadable.
+    pub max_fp: i32,
+    /// Effective max Stamina as stored (SL2.bt `MaxSP` == runtime
+    /// `current_max_stamina`). 0 when unreadable.
+    pub max_stamina: i32,
 }
 
 fn rd_i32(b: &[u8], off: usize) -> Option<i32> {
@@ -67,7 +87,22 @@ fn stat_block_at(body: &[u8], stat_base: usize) -> Option<SlotStats> {
     if level != sum - RUNE_LEVEL_BASE || !(MIN_ATTR..=MAX_RUNE_LEVEL).contains(&level) {
         return None;
     }
-    Some(SlotStats { level, attributes })
+    // Vitals are best-effort reads of STORED values: acceptance stays exactly the
+    // rune-level invariant above, and a missing/implausible vital decodes as 0
+    // ("unknown") rather than rejecting the located block or inventing a formula.
+    let pgd = stat_base.checked_sub(PGD_STAT_BASE);
+    let vital = |off: usize| {
+        pgd.and_then(|p| rd_i32(body, p + off))
+            .filter(|v| *v > 0)
+            .unwrap_or(0)
+    };
+    Some(SlotStats {
+        level,
+        attributes,
+        max_hp: vital(PGD_MAX_HP),
+        max_fp: vital(PGD_MAX_FP),
+        max_stamina: vital(PGD_MAX_STAMINA),
+    })
 }
 
 /// Locate the `PlayerGameData` stat block in a slot body and return the level +
@@ -125,6 +160,14 @@ mod tests {
         let s0 = stats[0].expect("slot 0 has a character");
         assert_eq!(s0.level, 9);
         assert_eq!(s0.attributes, [15, 10, 11, 14, 13, 9, 9, 7]);
+        // Stored effective max vitals, ground-truthed against the sanctioned
+        // decoder (`scripts/save-slot-oracle.py` decode_save_slot on this exact
+        // file, 2026-07-29): max_health=870, max_fp=121, max_stamina=115.
+        assert_eq!(
+            (s0.max_hp, s0.max_fp, s0.max_stamina),
+            (870, 121, 115),
+            "stored max vitals must match the save-slot-oracle ground truth"
+        );
         // Every decoded slot must satisfy the Rune Level identity.
         for slot in stats.into_iter().flatten() {
             assert_eq!(
@@ -152,6 +195,16 @@ mod tests {
         assert_ne!(
             s2.attributes, s9.attributes,
             "distinct characters must not decode to identical attributes"
+        );
+        // Oracle ground truth (decode_save_slot, 2026-07-29): slot 2 max vitals
+        // 769/95/130; slot 9 max vitals 396/95/94. Slot 9 is the offset
+        // discriminator: its CURRENT fp is 78 while MaxFP is 95, so an off-by-4
+        // read (current instead of max) would return 78 here and fail.
+        assert_eq!((s2.max_hp, s2.max_fp, s2.max_stamina), (769, 95, 130));
+        assert_eq!(
+            (s9.max_hp, s9.max_fp, s9.max_stamina),
+            (396, 95, 94),
+            "slot 9 MaxFP must be 95 (current fp is 78 -- catches an off-by-4)"
         );
     }
 

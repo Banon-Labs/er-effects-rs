@@ -571,7 +571,31 @@ pub(crate) fn profile_slot_attributes(slot: i32) -> Option<[i32; STATS_ATTR_COUN
         return None;
     }
     let guard = PROFILE_SLOT_STATS_CACHE.lock().ok()?;
-    guard.as_ref()?.get(slot as usize).copied().flatten()
+    guard
+        .as_ref()?
+        .get(slot as usize)
+        .copied()
+        .flatten()
+        .map(|s| s.attributes)
+}
+
+/// The STORED effective max vitals `[hp, fp, stamina]` of the character in save `slot`, or
+/// `None` when the slot is empty or the save is unreadable. Same `.sl2` source/cache as
+/// [`profile_slot_attributes`]; the values are the save's serialized `MaxHealth`/`MaxFP`/
+/// `MaxSP` (== runtime `current_max_hp/fp/stamina`, effective incl. talisman/buff mods),
+/// read -- never derived -- so the boot loading screen can render the SAME five-line stats
+/// panel as subsequent live loads (bd er-effects-rs-qic7).
+pub(crate) fn profile_slot_vitals(slot: i32) -> Option<[u32; 3]> {
+    if !(0..PROFILE_SLOT_COUNT).contains(&slot) {
+        return None;
+    }
+    let guard = PROFILE_SLOT_STATS_CACHE.lock().ok()?;
+    let stats = guard.as_ref()?.get(slot as usize).copied().flatten()?;
+    Some([
+        stats.max_hp.max(0) as u32,
+        stats.max_fp.max(0) as u32,
+        stats.max_stamina.max(0) as u32,
+    ])
 }
 
 /// Fallback attributes read live from `GameDataMan -> PlayerGameData` -- the CURRENTLY-LOADED
@@ -653,10 +677,12 @@ fn build_stats_html_utf16(
 /// Profile/save slot count on the ProfileSelect screen.
 const PROFILE_SLOT_COUNT: i32 = 10;
 
-/// Per-slot attribute cache, parsed once from the live `.sl2`, indexed by save slot (0-9). A per-slot
-/// `None` means an empty slot; the outer `Option` is the "have we tried to load it yet?" latch.
-static PROFILE_SLOT_STATS_CACHE: std::sync::Mutex<Option<[Option<[i32; STATS_ATTR_COUNT]>; 10]>> =
-    std::sync::Mutex::new(None);
+/// Per-slot stats cache (the 8 attributes + stored max vitals), parsed once from the live
+/// `.sl2`, indexed by save slot (0-9). A per-slot `None` means an empty slot; the outer
+/// `Option` is the "have we tried to load it yet?" latch.
+static PROFILE_SLOT_STATS_CACHE: std::sync::Mutex<
+    Option<[Option<er_save_loader::stats::SlotStats>; 10]>,
+> = std::sync::Mutex::new(None);
 
 /// Populate the per-slot stats cache from the live save file if not already loaded. Reads the on-disk
 /// `.sl2` (the exact file the game loads) via the native save-dir builder path (`own_load_read_sl2_bytes`),
@@ -679,15 +705,8 @@ pub(crate) unsafe fn ensure_profile_slot_stats_cached(base: usize) -> bool {
         return false;
     };
     let all = er_save_loader::stats::all_slot_stats(&sl2);
-    let mut cache: [Option<[i32; STATS_ATTR_COUNT]>; 10] = [None; 10];
-    let mut decoded = 0usize;
-    for (i, slot) in all.iter().enumerate() {
-        if let Some(stats) = slot {
-            cache[i] = Some(stats.attributes);
-            decoded += 1;
-        }
-    }
-    *guard = Some(cache);
+    let decoded = all.iter().flatten().count();
+    *guard = Some(all);
     PROFILE_SLOT_STATS_DECODED.store(decoded, Ordering::SeqCst);
     PROFILE_SLOT_STATS_CACHE_STATE.store(1, Ordering::SeqCst);
     append_autoload_debug(format_args!(

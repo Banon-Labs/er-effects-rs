@@ -117,6 +117,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         best_active_slot: crate::experiments::best_active_slot,
         ensure_profile_slot_stats_cached: crate::experiments::ensure_profile_slot_stats_cached,
         profile_slot_attributes: crate::experiments::profile_slot_attributes,
+        profile_slot_vitals: crate::experiments::profile_slot_vitals,
         game_data_man_ptr_or_null: crate::constants::game_data_man_ptr_or_null,
         read_utf16_name_units: crate::experiments::read_utf16_name_units,
         boot_view_render_frame: crate::experiments::boot_view_render_frame,
