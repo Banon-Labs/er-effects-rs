@@ -27,8 +27,9 @@ The two products, as the user named them:
    into one of the pairs (or becomes its own crate). A host-seam entry is only legitimate
    when a consumer OUTSIDE the extracted features genuinely still needs the thing.
 2. **`er-effects-rs` stays byte-for-byte behaviorally identical at every slice.** This is a
-   refactor, not a rewrite. The one deliberate exception is recorded in SS5.3 and was
-   directed by the user.
+   refactor, not a rewrite -- with **no exceptions**. An earlier draft carved out one, the
+   boot dialog's dim, but PR #109 has since landed that behavior on `main`, so every slice
+   including S5 is now pure motion. See SS5.3.
 3. **The OS-native picker is always available.** We never force a user onto an in-game
    picker we built. Both places that draw one -- (A)'s boot picker and (B)'s in-game browse
    rows -- must offer the OS dialog as a selectable surface.
@@ -44,16 +45,20 @@ The two products, as the user named them:
 
 ### 1.1 The seven files named in the epic
 
+**Counts are as of `4ae8c6d1`** (post #107/#109/#110/#111). They drift as main moves --
+re-measure before relying on them; three of these grew between the first draft of this plan
+and that commit, all in files the picker PRs touched.
+
 | File | Lines | Verdict |
 |---|---:|---|
 | `experiments/save_picker.rs` | 2002 | -> **A** (whole file; the shared row model) |
-| `experiments/gpu_readback/save_picker_overlay.rs` | 849 | -> **A** (whole file) |
-| `startup_hooks/save_picker_os_dialog.rs` | 676 | **SPLIT**: mechanism + tests (~500) -> A; the two System>Quit entry points (~175) -> B |
+| `experiments/gpu_readback/save_picker_overlay.rs` | 912 | -> **A** (whole file) |
+| `startup_hooks/save_picker_os_dialog.rs` | 792 | **SPLIT**: mechanism + tests (~590: 1-482, 684-792) -> A; the two System>Quit entry points (~200: 483-683) -> B |
 | `startup_hooks/save_picker_menu.rs` | 944 | -> **B** (whole file) |
-| `startup_hooks/save_picker_surface.rs` | 222 | -> **B** (whole file) |
+| `startup_hooks/save_picker_surface.rs` | 369 | -> **B** (whole file) |
 | `startup_hooks/save_picker_dim_overlay.rs` | 876 | -> **B** (whole file) |
 | `startup_hooks/save_swap_profile_table.rs` | 1050 | **SPLIT**: save-swap preview/restore/prepare/recommit (1-417) -> B; the profile-renderer drive + table hooks (418-1050) **STAY** |
-| **total** | **6619** | |
+| **total** | **6945** | |
 
 Structural fact that shapes everything below: five of the seven are **`include!`d** into
 `startup_hooks.rs` (lines 25-28) and `gpu_readback.rs` (line 55), not `mod`-declared. They
@@ -70,18 +75,19 @@ is tightly coupled to the OS-native file dialog, so the dialog implementation be
 |---|---|---:|
 | Row model: `SavePickerModel`, `PickerIntent`, `PickerRow`, `PickerEntry`, `PickerActivation`, `PickRejection`, `entry_row_base` and every derived index, drive/page cycling, `save_picker_accepts`, `save_picker_extension_accepted`, `civil_from_unix_seconds`, `format_last_saved`, `truncate_utf16`, `ACTIVE_SAVE_PICKER` | `experiments/save_picker.rs` | 2002 (of which ~960 are its own tests) |
 | `SaveSlotInfo`, `parse_save_character_slots` | `startup_hooks/loading_cover_save_slot.rs` 754-799 | 47 |
-| Boot overlay: arm/disarm, both input paths, file stage + character sub-stage, `overlay_save_picker_onto`, deferred pick completion | `gpu_readback/save_picker_overlay.rs` | 849 |
-| comdlg32 mechanism: `os_dialog_run`, `os_pick_validated`, `classify_os_outcome`, `should_reopen`, `os_dialog_filter`, `OsDialogClaim`, `os_dialog_owner`, `os_pick_path_from_buffer`, `OsPickOutcome` + its tests | `startup_hooks/save_picker_os_dialog.rs` 25-394, 569-676 | ~500 |
+| Boot overlay: arm/disarm, both input paths, file stage + character sub-stage, `overlay_save_picker_onto`, deferred pick completion | `gpu_readback/save_picker_overlay.rs` | 912 |
+| comdlg32 mechanism: `os_dialog_run`, `os_pick_validated`, `classify_os_outcome`, `should_reopen`, `os_dialog_filter`, `OsDialogClaim`, `os_dialog_owner`, `os_pick_path_from_buffer`, `OsPickOutcome` + its tests | `startup_hooks/save_picker_os_dialog.rs` 1-482, 684-792 | ~590 |
 | Config keys `preferred_save_picker_dir`, `autoupdate_preferred_picker_dir`, `os_native_save_picker` (+ `use_os_file_picker` / `save_picker.os_native` aliases): struct fields, accessors, parse + validation, generated boilerplate text, `remember_preferred_save_picker_dir`, their tests | `src/config.rs` (26-31, 116-200, 253-266, 463-495, 600-670) | ~120 |
-| **A total** | | ** 3520** |
+| **A total** | | ** 3671** |
 
 `SaveSlotInfo` / `parse_save_character_slots` move rather than staying because their only
 consumers anywhere in the crate are `save_picker.rs` (6 refs), `save_picker_overlay.rs`
 (1 ref) and their own definition site -- rule 0.1.
 
 **A installs zero game-address detours.** Its only OS hook is a per-DLL
-`SetWindowsHookExW(WH_KEYBOARD_LL)` at `save_picker_overlay.rs:458`. That single fact is
-why A can never collide with anything (SS6).
+`SetWindowsHookExW(WH_KEYBOARD_LL)` at `save_picker_overlay.rs:521`. That single fact is
+why A can never collide with anything (SS6). Re-verified at `4ae8c6d1`: none of A's three
+files contains a `MhHook::new` / `register_union_hook` / MinHook call site.
 
 ### 1.3 Product (B) -- the customized System>Quit menu
 
@@ -94,9 +100,9 @@ larger than "three buttons".
 | Quit-row resolver `QuitRow` / `QuitRowFacts` / `QuitRowVerdict`, `resolve_quit_row`, the row table, `system_quit_row_gate_instant_quit` (the single gate on the irreversible `ExitProcess(0)`) | `system_quit_row_identity.rs` (921 total, 242 tests) | 921 |
 | Row CLONER `system_quit_duplicate_add_cancel_button_hook` (:1295-1529), row ROUTER `system_quit_route_button_action_or_forward` (:170-354, whose `None => 0` arm is what suppresses the native Return-to-Desktop), Save Game label hook (:946-988), save calls (:990-1268), ProfileSelect submit (:2-110), PR-#103 Scaleform ctor/dtor double-free skip (:1535-1601) | `system_quit_dialog_handlers.rs` (1601) | 1577 |
 | In-game `05_010` browse surface: row staging, activation, menu-pump rebuild/resubmit, browse stats lines, list-builder re-stage hook | `save_picker_menu.rs` | 944 |
-| Surface router: `open_picker_for_intent`, `os_native_picker_active`, `save_dest_start_dir`, `save_dest_route_picked_target` | `save_picker_surface.rs` | 222 |
+| Surface router: `open_picker_for_intent`, `os_native_picker_active`, `save_dest_start_dir`, `save_dest_route_picked_target` | `save_picker_surface.rs` | 369 |
 | Dim overlay (layered GDI window, z-order sampling) | `save_picker_dim_overlay.rs` | 876 |
-| OS entry points `os_open_save_picker_load`, `os_open_save_dest_picker` | `save_picker_os_dialog.rs` 396-568 | ~175 |
+| OS entry points `os_open_save_picker_load`, `os_open_save_dest_picker` | `save_picker_os_dialog.rs` 483-683 | ~200 |
 | Save-flow confirm chain, `menu_job_emit_result_hook` | `save_flow_boxes.rs` (790) | 750 |
 | Destination identity (file-id probes, atomic write) | `save_dest_identity.rs` (465, 170 tests) | 465 |
 | Destination commit / redirect / verify | `save_dest_commit.rs` (1286, 333 tests) | 1286 |
@@ -107,7 +113,14 @@ larger than "three buttons".
 | Quit-tab pane restore, return-title chain, ProfileSelect top-menu tick, OptionSetting pane sampling, `system_quit_menu_window_run_post` | `profile_rows_system_quit_menu.rs` 510-1314, 1424-1581, 1663-1834 | ~1315 |
 | Continue-confirm installer, stuck-testnet-step force-finish, profile-load-job-run hook, the three profile-load installers | `system_quit_hooks.rs` 2-55, 160-310, 383-482, 982-1034 | ~480 |
 | `install_system_quit_duplicate_button_hook` -- the single entry point that installs the whole feature | `layout_global_hooks.rs` 61-160 | ~100 |
-| **B total** | | ** 11 930** |
+| **B total** | | **>= 12 102** |
+
+The B total is a floor, not a measurement. Only the surface-router and OS-entry-point rows
+were re-measured at `4ae8c6d1` (+147 and +25 against the original 11 930); several other
+rows -- `lifecycle.rs`, `save_dest_commit.rs`, `system_quit_dialog_handlers.rs`,
+`profile_rows_system_quit_menu.rs` -- also grew with #107/#110 and their line ranges are
+NOT re-derived here. Re-measure before using any of these for slice sizing. The conclusion
+they support is unaffected: B is several times A, and far more than "three buttons".
 
 ### 1.4 Product code vs agent-harness code
 
@@ -241,7 +254,8 @@ Each field is one measured outbound cross-call from A's files into the rest of t
 | `save_dest_commit_window_armed` | `save_dest_commit` | `false` (log-only) |
 
 Plus the caller-supplied cover: `os_pick_validated` takes a `PickerCoverFactory`
-(`fn(&str) -> Option<PickerCover>`), which is how the dim stops being A's business (SS5.3).
+(`fn(&str) -> Option<PickerCover>`), the cross-crate form of the `PickerDim` argument it
+already takes on main -- which is how the dim stays out of A's business (SS5.3).
 
 ### 2.4 `QuitMenuHost` (product B)
 
@@ -312,16 +326,20 @@ gate `er-effects-rs-k85t`) can rebase against it cleanly.
 
 What the code shows, as supporting evidence:
 
-* On `main` the OS dialog has exactly **two** callers, both System>Quit surfaces, reached
-  through `open_picker_for_intent` (`save_picker_surface.rs:63`):
-  `PickerOpenRequest::LoadSource { action_obj }` from the Load Save Profiles row, and
-  `PickerOpenRequest::SaveDestination { system_dialog }` from the Save Game flow. The boot
-  missing-save flow does **not** call it today -- it arms `SavePickerModel` directly in
-  `save_picker_overlay_arm_if_pending` (`save_picker_overlay.rs:281`) and draws itself.
-  So A owns the mechanism by decision; B is currently its only caller.
-* `picker_dim_arm` has exactly **one** call site: `save_picker_os_dialog.rs:348`, inside
-  `os_pick_validated`. Because both flows funnel through that function, the arm is
-  currently unconditional -- which is the behavior SS5.3 changes.
+* On `main` the OS dialog has **three** callers, all reached through
+  `open_picker_for_intent` (`save_picker_surface.rs:159`): `PickerOpenRequest::LoadSource
+  { action_obj }` from the Load Save Profiles row, `PickerOpenRequest::SaveDestination
+  { system_dialog }` from the Save Game flow, and -- since PR #109 --
+  `PickerOpenRequest::MissingSaveBoot` from the boot flow (`save_picker_boot.rs:222`,
+  dispatched at `save_picker_surface.rs:170`/`:179`). The boot flow no longer only draws
+  its own overlay: under `os_native_save_picker` it opens the OS dialog like the other two.
+  So A owns the mechanism by decision AND is already its own caller.
+* `picker_dim_arm` has exactly **one** call site --
+  `save_picker_os_dialog.rs:418`, inside `os_pick_validated` -- but it is **not**
+  unconditional: it is gated on the `dim: PickerDim` argument the caller passes
+  (`:389`). The two `PickerDim::CoverFrozenGame` sites (`:529`, `:643`) are the System>Quit
+  entry points; the boot flow passes `PickerDim::None` (`save_picker_boot.rs:295-301`).
+  The cover is therefore ALREADY the caller's decision on main -- see SS5.3.
 * The dialog file's own doc (rule H3) says it "reads no game pointers, calls no game
   function, and dereferences nothing from `game_module_base()`". That is exactly why the
   mechanism half is portable and the entry-point half is not.
@@ -330,7 +348,8 @@ What the code shows, as supporting evidence:
 
 **Not entangled. The branch is stale; its work is already on `main`.**
 
-* `origin/feature/save-game-flow` is 32 commits ahead / **80 behind** `origin/main`. Its
+* `origin/feature/save-game-flow` is 32 commits ahead / **95 behind** `origin/main` (80 when
+  this was first measured; the gap only widens as main moves). Its
   payload was squash-merged on 2026-07-29 as `6ba6f44a` (+ `b1533624`, `98b839f1`).
   `git cherry` lists the commits as unique only because the squash changed patch-ids;
   **blob hashes prove otherwise** -- `save_flow_boxes.rs`, `save_dest_identity.rs`,
@@ -346,6 +365,15 @@ What the code shows, as supporting evidence:
   `save_file_character_slots` with the public predicate trio `PickRejection` /
   `save_picker_extension_accepted` / `save_picker_accepts`, and split
   `system_quit_open_save_dest_picker` into OS-dialog and in-game variants.
+
+* **Merging it would revert a different extraction.** The branch predates the
+  `er-loading-portrait` split (PR #98) and still carries those sources under
+  `crates/er-effects-rs/src/` -- a `git diff origin/main origin/feature/save-game-flow`
+  shows them as renames BACK into the product
+  (`crates/{er-loading-portrait/src => er-effects-rs/src/constants}/portrait_lookat.rs`,
+  `.../stats_loading_text.rs`, `.../resource_readback.rs`, `.../portrait_semaphores.rs`)
+  plus a 2346-line `gpu_readback/overlay_composite.rs` main no longer has. This, not the
+  already-landed save-flow work, is the real hazard in merging it.
 
 **Consequence:** main is the baseline; do not merge that branch into the refactor. If
 anything on it is genuinely unlanded, cherry-pick the specific hunk.
@@ -492,7 +520,7 @@ Each slice keeps `er-effects-rs` behaviorally identical when bundled, ends green
 | S2 | Delete the ~640 dead lines from SS1.4 | none by construction (zero callers) -- but audit each before deleting | `check.sh` + one product smoke |
 | S3 | Move the row model + `SaveSlotInfo`/`parse_save_character_slots` + the three config keys -> `er-save-picker`. `er-effects-rs` re-exports under the old paths so no call site changes | none | ~960 lines of tests become host-runnable -- the biggest single win |
 | S4 | Move the boot overlay -> `er-save-picker`, behind `arm_boot_picker()` | low | boot-with-no-save smoke |
-| S5 | **After bd `er-effects-rs-rsxi` lands.** Split `save_picker_os_dialog.rs`: mechanism -> `er-save-picker`; entry points stay in the product for now; move the dim arm to the caller (SS5.3) | **deliberate change** (SS5.3) | both surfaces, load + save-as |
+| S5 | **After bd `er-effects-rs-rsxi` lands.** Split `save_picker_os_dialog.rs`: mechanism -> `er-save-picker`; entry points stay in the product for now; the caller-supplied cover becomes the `PickerCoverFactory` seam (SS5.3) | **none** -- the caller-decides shape is already on main (SS5.3) | all three surfaces: boot, load, save-as |
 | S6 | `er-save-picker-dll` becomes real + its standalone smoke script | none to the product | matrix rows 2, 4 |
 | S7 | Move B's decision core -> `er-quit-menu`: `system_quit_row_identity.rs`, `save_dest_identity.rs`, `save_dest_commit.rs`, `save_flow_boxes.rs` (~3400 lines, ~745 of them tests) | low (near-pure, heavily tested) | `check.sh` |
 | S8 | Move B's hooked surfaces -> `er-quit-menu`: `system_quit_dialog_handlers.rs`, `save_picker_menu.rs`, `save_picker_surface.rs`, `save_picker_dim_overlay.rs`, the OS entry points, `install_system_quit_duplicate_button_hook`. Every detour switches to `register_union_hook` | **high** -- this is the feature | full System>Quit smoke: all four rows |
@@ -503,19 +531,33 @@ Each slice keeps `er-effects-rs` behaviorally identical when bundled, ends green
 (everything needs the model). S5 strictly after `rsxi`. Convert the product's bare
 `MhHook::new` on `0x67b200`/`0x67b290` before S8 (SS4.4).
 
-### 5.3 The one deliberate behavior change
+### 5.3 The cover is already the caller's decision -- S5 preserves it, it does not change it
 
-Today `os_pick_validated` arms the dim unconditionally
-(`picker_dim_arm(if save_as { "save-as" } else { "load" })`, `save_picker_os_dialog.rs:348`),
-so the boot missing-save dialog is dimmed too. Under the 2026-07-30 user decision it must
-not be: the dim is the in-game quit-menu case ONLY. In S5 the arming moves out of the shared
-routine and becomes the caller's decision -- `os_pick_validated` takes a cover factory,
-`er-quit-menu`'s rows pass one that arms the dim, and A's boot flow passes none.
+An earlier draft of this plan said `os_pick_validated` arms the dim unconditionally, so the
+boot missing-save dialog was dimmed too, and listed un-dimming it as S5's one deliberate
+behavior change. **That is no longer true and S5 has no behavior change in it.** PR #109
+landed the caller-decides shape when it routed the boot flow through the OS dialog:
 
-**This is a user-directed change, not a regression.** The cover must keep its two current
-properties: it drops BEFORE the dialog claim, and it spans the WHOLE reopen loop rather than
-each individual dialog (so an invalid pick does not flash the game back at full brightness
-between two dialogs).
+* the arm at `save_picker_os_dialog.rs:418` is gated on the `dim: PickerDim` argument (`:389`);
+* the two `PickerDim::CoverFrozenGame` sites (`:529`, `:643`) are the System>Quit entry points;
+* the boot flow passes `PickerDim::None` (`save_picker_boot.rs:295-301`), and the file's own
+  comment (`:25-31`) explains why -- no game thread is blocked at a missing-save boot, so
+  Present keeps running and there is nothing frozen for a cover to explain.
+
+Measured, not only read: a live boot-picker run on `4ae8c6d1`
+(`product-continue-direct-20260730-124605`) recorded `oracle_save_picker_dim_arm_count = 0`
+while the overlay's bring-up self-test passed (`dim_selftest = 1`) -- the mechanism was
+healthy and simply was not asked to arm.
+
+S5's job is therefore to carry that shape across the crate boundary unchanged: the
+`PickerDim` enum becomes a `PickerCoverFactory` in A's host seam, B passes a factory that
+arms its dim, A's boot flow passes none. The cover must keep its two current properties: it
+drops BEFORE the dialog claim, and it spans the WHOLE reopen loop rather than each individual
+dialog (so an invalid pick does not flash the game back at full brightness between two
+dialogs).
+
+**Reviewer note:** do not "restore" dimming to the boot dialog while executing S5. The boot
+dialog being undimmed is current, intended, user-directed behavior.
 
 ---
 

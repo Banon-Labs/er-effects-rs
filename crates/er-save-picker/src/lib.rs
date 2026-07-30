@@ -42,12 +42,18 @@
 //!
 //! # The screen cover is the CALLER's decision, not this crate's
 //!
-//! On main the dim overlay is armed INSIDE `os_pick_validated`, so the boot missing-save
-//! dialog gets dimmed along with the quit-menu one. Under the 2026-07-30 user decision the
-//! dim belongs to product (B) and the boot dialog must NOT be dimmed, so the arming moves
-//! out to the caller: `os_pick_validated` takes a cover factory, `er-quit-menu` passes one
-//! that arms its dim, and this crate's own boot flow passes none. That is a deliberate,
-//! user-directed behavior change, not a regression.
+//! Under the 2026-07-30 user decision the dim belongs to product (B) and the boot dialog
+//! must NOT be dimmed. **Main already works this way** -- the arm inside `os_pick_validated`
+//! (`save_picker_os_dialog.rs:417-420`) is gated on a `PickerDim` the CALLER passes, the two
+//! `CoverFrozenGame` sites (`:529`, `:643`) are the System>Quit entry points, and the boot
+//! flow passes `PickerDim::None` (`save_picker_boot.rs:295-301`). Measured, not just read: a
+//! live boot-picker run recorded `oracle_save_picker_dim_arm_count = 0` with the overlay's
+//! own bring-up self-test passing.
+//!
+//! So the extraction PRESERVES that shape rather than introducing it: the `PickerDim` enum
+//! becomes the [`host::PickerCoverFactory`] seam, `er-quit-menu` passes a factory that arms
+//! its dim, and this crate's boot flow passes none. Same behavior, expressed across a crate
+//! boundary instead of an in-crate enum.
 //!
 //! # The OS-native surface is a REQUIREMENT, not an option
 //!
