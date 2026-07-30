@@ -100,6 +100,9 @@ pub mod dlstring_lookat_math;
 #[cfg(windows)]
 pub use dlstring_lookat_math::*;
 
+pub mod stats_lines;
+pub use stats_lines::*;
+
 #[cfg(windows)]
 pub mod stats_loading_text;
 #[cfg(windows)]

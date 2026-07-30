@@ -58,6 +58,18 @@ shellcheck "$repo_root/scripts/check-rust-build.sh"
 # extraction corpus is absent, so this is safe on a machine without it.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-gfx
 
+# er-save-loader's host-portable save decoding: BND4 slot bodies + the PlayerGameData
+# stats/vitals reads the loading-screen stats panel sources pre-mount. Save-byte tests are
+# corpus-gated (skip when local save-files/ fixtures are absent; game-derived bytes are
+# never versioned).
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-save-loader
+
+# er-loading-portrait's host-portable stats-line layer: proves the UNIFIED loading-screen
+# stats layout (one five-line panel whether the values came from the save slot or live
+# PlayerGameData, bd er-effects-rs-qic7). The bitmap-geometry test is corpus-gated on the
+# extracted menu font (ER_FONT_GFX_PATH overridable) and skips when absent.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-loading-portrait
+
 # er-telemetry's host-portable logic. The workspace pins `default-members` to the DLL crate, so the
 # windows-target `cargo xwin test --lib` below selects er-effects-rs ONLY and never ran these -- a
 # telemetry-crate test module could be added and silently never execute in any gate. The load-count

@@ -5,122 +5,10 @@ use crate::prelude::*;
 // PIVOT (user 2026-07-06): rather than fight to layer the head UNDER the native tips, we CONTROL the
 // surface -- suppress the native loading tips + "press to advance" key guide, and render OUR OWN text
 // (the local character's stats) on top of the head in the Present overlay, using the GAME'S OWN menu
-// font via `er_gfx::raster::RasterFont`. This section is the font-independent text-layout renderer; the
-// font source, the stats read, and the overlay composite are wired alongside it.
-
-/// Render a stack of left-aligned text `lines` to a tightly-packed RGBA8 bitmap using the parsed game
-/// menu font `font`, at `em_px` glyph height. Each glyph's coverage becomes `color` (RGB = color.rgb,
-/// alpha = coverage * color.a / 255), so the result composites straight over the head. Returns
-/// `(width, height, rgba)` sized to the glyphs' bounding box plus a 1px pad, or `(0,0,vec![])` if nothing
-/// rendered. Pure CPU, no game state; safe to call from any thread.
-pub fn render_lines_to_rgba(
-    font: &er_gfx::raster::RasterFont,
-    lines: &[String],
-    em_px: f32,
-    color: [u8; 4],
-) -> (u32, u32, Vec<u8>) {
-    if em_px < 1.0 || lines.is_empty() {
-        return (0, 0, Vec::new());
-    }
-    let scale = font.scale_for_em_px(em_px);
-    let line_h = font.line_height_px(scale).max(em_px);
-    let ascent = font.ascent_px(scale).max(em_px * 0.8);
-    // Placement pass: collect each glyph bitmap with its top-left destination position (in an unclamped
-    // coordinate space whose origin is the first line's pen origin), and track the bounding box.
-    struct Placed {
-        bmp: er_gfx::raster::GlyphBitmap,
-        x: f32,
-        y: f32,
-    }
-    let mut placed: Vec<Placed> = Vec::new();
-    let mut min_x = f32::MAX;
-    let mut min_y = f32::MAX;
-    let mut max_x = f32::MIN;
-    let mut max_y = f32::MIN;
-    for (li, line) in lines.iter().enumerate() {
-        let baseline = ascent + li as f32 * line_h;
-        let mut pen_x = 0.0f32;
-        for ch in line.chars() {
-            let adv = font.advance_px(ch, scale);
-            if let Some(bmp) = font.rasterize(ch, scale) {
-                let gx = pen_x + bmp.left as f32;
-                let gy = baseline + bmp.top as f32;
-                min_x = min_x.min(gx);
-                min_y = min_y.min(gy);
-                max_x = max_x.max(gx + bmp.width as f32);
-                max_y = max_y.max(gy + bmp.height as f32);
-                placed.push(Placed { bmp, x: gx, y: gy });
-            }
-            pen_x += adv;
-        }
-        // Ensure an empty/space-only line still advances the bounding box vertically.
-        min_y = min_y.min(baseline - ascent);
-        max_y = max_y.max(baseline - ascent + line_h);
-        min_x = min_x.min(0.0);
-    }
-    if placed.is_empty() || max_x <= min_x || max_y <= min_y {
-        return (0, 0, Vec::new());
-    }
-    // Drop shadow: same formula as the custom loading bar (`boot_draw_text_shadowed`) -- an opaque black
-    // copy offset by (+SHADOW, +SHADOW) rendered UNDER the text. Pad the bitmap by the shadow offset.
-    const SHADOW: i32 = 2;
-    let pad = 1.0f32;
-    let w = (max_x - min_x + 2.0 * pad).ceil() as u32 + SHADOW as u32;
-    let h = (max_y - min_y + 2.0 * pad).ceil() as u32 + SHADOW as u32;
-    if w == 0 || h == 0 || w > 8192 || h > 8192 {
-        return (0, 0, Vec::new());
-    }
-    let mut rgba = vec![0u8; (w as usize) * (h as usize) * 4];
-    // Alpha-OVER composite one glyph's coverage as `col`, at destination origin `(dx0, dy0)`.
-    let blit = |rgba: &mut [u8], p: &Placed, dx0: i32, dy0: i32, col: [u8; 4]| {
-        let (ca, cr, cg, cb) = (col[3] as u32, col[0] as u32, col[1] as u32, col[2] as u32);
-        for sy in 0..p.bmp.height as i32 {
-            let dy = dy0 + sy;
-            if dy < 0 || dy >= h as i32 {
-                continue;
-            }
-            for sx in 0..p.bmp.width as i32 {
-                let dx = dx0 + sx;
-                if dx < 0 || dx >= w as i32 {
-                    continue;
-                }
-                let cov =
-                    p.bmp.coverage[(sy as usize) * (p.bmp.width as usize) + sx as usize] as u32;
-                if cov == 0 {
-                    continue;
-                }
-                let a = cov * ca / 255;
-                if a == 0 {
-                    continue;
-                }
-                let o = ((dy as usize) * (w as usize) + dx as usize) * 4;
-                let ia = 255 - a;
-                rgba[o] = ((cr * a + rgba[o] as u32 * ia) / 255) as u8;
-                rgba[o + 1] = ((cg * a + rgba[o + 1] as u32 * ia) / 255) as u8;
-                rgba[o + 2] = ((cb * a + rgba[o + 2] as u32 * ia) / 255) as u8;
-                rgba[o + 3] = (a + rgba[o + 3] as u32 * ia / 255).min(255) as u8;
-            }
-        }
-    };
-    // Pass 1: black shadow (offset). Pass 2: the coloured text (over the shadow).
-    for p in &placed {
-        let dx0 = (p.x - min_x + pad).round() as i32;
-        let dy0 = (p.y - min_y + pad).round() as i32;
-        blit(
-            &mut rgba,
-            p,
-            dx0 + SHADOW,
-            dy0 + SHADOW,
-            [0, 0, 0, color[3]],
-        );
-    }
-    for p in &placed {
-        let dx0 = (p.x - min_x + pad).round() as i32;
-        let dy0 = (p.y - min_y + pad).round() as i32;
-        blit(&mut rgba, p, dx0, dy0, color);
-    }
-    (w, h, rgba)
-}
+// font via `er_gfx::raster::RasterFont`. The font-independent pieces (the unified line FORMAT and the
+// CPU text raster) live in the cross-platform `stats_lines` module so the one-layout-everywhere
+// guarantee is host-tested (bd er-effects-rs-qic7); this module wires the font capture, the stats
+// read, and the overlay composite around them.
 
 // --- Game menu font: captured at runtime from the game's own Scaleform file-open, or from an env
 // --- diagnostic .gfx on disk. NOTHING is embedded (per the no-game-derived-binaries rule).
@@ -169,33 +57,6 @@ pub unsafe fn capture_menu_font_gfx(base: usize, file: usize) {
     ));
 }
 
-/// Parse `.gfx` bytes and build a `RasterFont` from the DefineFont3 with the most glyphs (best ASCII
-/// coverage), recursing into DefineSprite. `None` if no font tag decodes.
-fn build_menu_font_from_gfx(bytes: &[u8]) -> Option<er_gfx::raster::RasterFont> {
-    let movie = er_gfx::Movie::parse(bytes).ok()?;
-    fn best_font<'a>(
-        tags: &'a [er_gfx::Tag],
-        best: &mut Option<&'a er_gfx::Tag>,
-        best_n: &mut usize,
-    ) {
-        for t in tags {
-            if let er_gfx::Tag::DefineFont3 { glyphs, codes, .. } = t {
-                if glyphs.len() == codes.len() && glyphs.len() > *best_n {
-                    *best_n = glyphs.len();
-                    *best = Some(t);
-                }
-            }
-            if let er_gfx::Tag::DefineSprite { tags, .. } = t {
-                best_font(tags, best, best_n);
-            }
-        }
-    }
-    let mut best = None;
-    let mut best_n = 0;
-    best_font(&movie.tags, &mut best, &mut best_n);
-    er_gfx::raster::RasterFont::from_define_font3(best?)
-}
-
 /// The game's menu font, parsed + cached from the runtime file-open capture of `font.gfx`. `None` until
 /// the capture has happened and the font parses (product path only -- no env crutch).
 pub fn menu_font() -> Option<&'static er_gfx::raster::RasterFont> {
@@ -210,20 +71,6 @@ pub fn menu_font() -> Option<&'static er_gfx::raster::RasterFont> {
         MENU_FONT_RASTER.get().map(|f| f.glyph_count()).unwrap_or(0)
     ));
     MENU_FONT_RASTER.get()
-}
-
-/// The local character's loading-screen stats (er-effects-rs-jsm). Read from the loading-screen-safe
-/// ProfileSummary record (name/level/playtime) + live PlayerGameData when up (attributes, HP/FP/Stamina),
-/// falling back to the `.sl2` for attributes pre-load.
-pub struct LoadingScreenStats {
-    pub name: String,
-    pub level: i32,
-    pub attributes: [i32; 8], // VIG,MND,END,STR,DEX,INT,FAI,ARC
-    pub max_hp: u32,
-    pub max_fp: u32,
-    pub max_stamina: u32,
-    pub play_time_ms: u32,
-    pub attr_source_live: bool,
 }
 
 /// Read the local character's stats for the loading screen. `None` if GameDataMan is not up. Prefers
@@ -302,7 +149,13 @@ pub unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
             let _ = ensure_profile_slot_stats_cached(base);
         }
         let attrs = profile_slot_attributes(slot).unwrap_or([0; 8]);
-        (attrs, 0, 0, 0, false)
+        // Unified layout (bd er-effects-rs-qic7): pre-mount, the effective max vitals come
+        // from the save slot's serialized PlayerGameData (STORED MaxHealth/MaxFP/MaxSP ==
+        // runtime current_max_*; located by the same rune-level-invariant scan as the
+        // attributes) so the boot loading screen renders the SAME five-line panel as
+        // subsequent live loads. [0,0,0] (rendered as `--`) only when the save is unreadable.
+        let [hp, fp, stam] = profile_slot_vitals(slot).unwrap_or([0; 3]);
+        (attrs, hp, fp, stam, false)
     };
     // Playtime is slot-scoped from the record; the global GDM counter only reflects the loaded
     // character after deserialize, so it is trusted only alongside a validated PGD.
@@ -329,45 +182,6 @@ pub unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
 /// `eldenring::cs::GameDataMan::play_time` (+0xa0, milliseconds) -- bound to the upstream struct so a
 /// layout drift fails the build rather than reading garbage.
 const GDM_PLAY_TIME_A0_OFFSET: usize = core::mem::offset_of!(eldenring::cs::GameDataMan, play_time);
-
-/// Format a play-time in ms as `H:MM:SS`.
-fn fmt_playtime(ms: u32) -> String {
-    let s = ms / 1000;
-    format!("{}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60)
-}
-
-/// Lay the stats out as display lines (user pick: name/level/playtime + 8 attributes + derived HP/FP/Stm).
-pub fn format_stats_lines(st: &LoadingScreenStats) -> Vec<String> {
-    let a = &st.attributes;
-    let name = if st.name.trim().is_empty() {
-        "Tarnished".to_string()
-    } else {
-        st.name.clone()
-    };
-    let mut lines = vec![
-        name,
-        format!(
-            "Level {}    Time  {}",
-            st.level,
-            fmt_playtime(st.play_time_ms)
-        ),
-    ];
-    if st.max_hp > 0 || st.max_fp > 0 || st.max_stamina > 0 {
-        lines.push(format!(
-            "HP {}    FP {}    Stamina {}",
-            st.max_hp, st.max_fp, st.max_stamina
-        ));
-    }
-    lines.push(format!(
-        "VIG {}   MND {}   END {}   STR {}",
-        a[0], a[1], a[2], a[3]
-    ));
-    lines.push(format!(
-        "DEX {}   INT {}   FTH {}   ARC {}",
-        a[4], a[5], a[6], a[7]
-    ));
-    lines
-}
 
 /// The rendered loading-screen stats text, keyed by the exact display `lines` it renders. The game
 /// thread rebuilds it whenever the loading slot's lines differ (character switch, record->live upgrade,
@@ -436,11 +250,9 @@ pub unsafe fn maybe_build_stats_text() {
     // PROPORTIONAL FONT SIZE (user 2026-07-06): the stats text is composited INTO the head render target,
     // which is then aspect-cover UPSCALED to the backbuffer -- so a FIXED-pixel em_px changes its on-screen
     // size whenever the render resolution changes (halving the RT 2056->1028 doubled the on-screen text).
-    // Size the font as a constant FRACTION of the RT height instead: 48px was tuned at the 2056 RT, so
-    // em_px = rt_dim * 48/2056 keeps the text the same on-screen size at ANY render resolution. rt_dim is
-    // the offscreen size we patch the portrait RT to (confirmed == oracle_ls_portrait_h).
-    const STATS_TEXT_EM_PX_AT_REF_RT: f32 = 48.0;
-    const STATS_TEXT_REF_RT_DIM: f32 = 2056.0;
+    // Size the font as a constant FRACTION of the RT height instead (shared consts in `stats_lines`, so
+    // every build path uses the SAME em sizing). rt_dim is the offscreen size we patch the portrait RT
+    // to (confirmed == oracle_ls_portrait_h).
     let rt_dim = (PROFILE_OFFSCREEN_SIZE_TARGET & 0xffff_ffff) as f32;
     let em_px = rt_dim * (STATS_TEXT_EM_PX_AT_REF_RT / STATS_TEXT_REF_RT_DIM);
     let (w, h, rgba) = render_lines_to_rgba(font, &lines, em_px, [238, 228, 202, 255]);
@@ -497,8 +309,7 @@ pub fn stats_text_screen_bitmap(screen_max_dim: u32) -> Option<(u32, u32, Vec<u8
         return Some(cached);
     }
     let font = menu_font()?;
-    const STATS_TEXT_EM_PX_AT_REF_RT: f32 = 48.0;
-    const STATS_TEXT_REF_RT_DIM: f32 = 2056.0;
+    // Same shared em-sizing consts as the RT build (`stats_lines`): one em everywhere.
     let em_px = screen_max_dim as f32 * (STATS_TEXT_EM_PX_AT_REF_RT / STATS_TEXT_REF_RT_DIM);
     let (w, h, rgba) = render_lines_to_rgba(font, &lines, em_px, [238, 228, 202, 255]);
     if w == 0 || h == 0 {
