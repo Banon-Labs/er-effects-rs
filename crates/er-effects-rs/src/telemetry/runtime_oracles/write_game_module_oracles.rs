@@ -1897,6 +1897,20 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_boot_view_milestone_idx",
             BOOT_VIEW_MILESTONE_IDX.load(Ordering::SeqCst),
         );
+        // LOAD EPOCH identity (bd er-effects-rs-ok8d): seq increments on every bar rearm, kind selects
+        // which phase sequence the bar publishes (0 = process boot, 1 = character reload). Together
+        // they make "did the bar actually start a fresh epoch, with the right phase set?" a RAM oracle
+        // instead of something only inferable from the debug log.
+        push_json_usize(
+            body,
+            "oracle_boot_view_epoch_seq",
+            BOOT_VIEW_EPOCH_SEQ.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_epoch_kind",
+            BOOT_VIEW_EPOCH_KIND.load(Ordering::SeqCst),
+        );
         push_json_usize(
             body,
             "oracle_boot_view_own_menu_load_active",
