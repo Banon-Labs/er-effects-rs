@@ -960,6 +960,11 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // redirect leaked and the loaded save was overwritten anyway, and `live_overwrite_count` names
     // the OPPOSITE case: a commit that was SUPPOSED to rewrite the loaded save.
     //
+    // `picker_open_retry_count` is the reopen-loop oracle (bd `er-effects-rs-rsxi`): opens where NO
+    // picker ran and the menu pump kept the request armed. A deferred in-game MenuJob submit is the
+    // only legitimate source, so with the OS surface active this must read 0 -- a positive value
+    // there means a terminal outcome (a Cancel) was retried, which reopens comdlg32 forever.
+    //
     // PER-COMMIT vs CUMULATIVE, because reading one as the other is how a failed save reads as a
     // successful one. `redirect_hits`, `target_written_ok`, `target_structure_ok`,
     // `live_file_mutated`, `live_bak_mutated` and `live_stat_unreadable` describe THE COMMIT THAT
@@ -967,8 +972,9 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // clears all six at every arm. The process-wide history is in the `*_count` /`commit_fail` /
     // `restore_*` counters and in `live_file_mutated_total`, none of which are ever cleared.
     body.push_str(&format!(
-        "  \"oracle_save_dest_picker_open_count\": {},\n  \"oracle_save_dest_target_existing_count\": {},\n  \"oracle_save_dest_target_new_count\": {},\n  \"oracle_save_dest_commit_count\": {},\n  \"oracle_save_dest_cancel_count\": {},\n  \"oracle_save_dest_redirect_armed\": {},\n  \"oracle_save_dest_redirect_hits\": {},\n  \"oracle_save_dest_seeded_count\": {},\n  \"oracle_save_dest_seed_fail_count\": {},\n  \"oracle_save_dest_target_written_ok\": {},\n  \"oracle_save_dest_target_structure_ok\": {},\n  \"oracle_save_dest_commit_fail\": {},\n  \"oracle_save_dest_live_file_mutated\": {},\n  \"oracle_save_dest_live_file_mutated_total\": {},\n  \"oracle_save_dest_live_bak_mutated\": {},\n  \"oracle_save_dest_live_overwrite_count\": {},\n",
+        "  \"oracle_save_dest_picker_open_count\": {},\n  \"oracle_save_dest_picker_open_retry_count\": {},\n  \"oracle_save_dest_target_existing_count\": {},\n  \"oracle_save_dest_target_new_count\": {},\n  \"oracle_save_dest_commit_count\": {},\n  \"oracle_save_dest_cancel_count\": {},\n  \"oracle_save_dest_redirect_armed\": {},\n  \"oracle_save_dest_redirect_hits\": {},\n  \"oracle_save_dest_seeded_count\": {},\n  \"oracle_save_dest_seed_fail_count\": {},\n  \"oracle_save_dest_target_written_ok\": {},\n  \"oracle_save_dest_target_structure_ok\": {},\n  \"oracle_save_dest_commit_fail\": {},\n  \"oracle_save_dest_live_file_mutated\": {},\n  \"oracle_save_dest_live_file_mutated_total\": {},\n  \"oracle_save_dest_live_bak_mutated\": {},\n  \"oracle_save_dest_live_overwrite_count\": {},\n",
         SAVE_DEST_PICKER_OPEN_COUNT.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_DEST_PICKER_OPEN_RETRY_COUNT.load(Ordering::SeqCst),
         SAVE_DEST_TARGET_EXISTING_COUNT.load(Ordering::SeqCst),
         SAVE_DEST_TARGET_NEW_COUNT.load(Ordering::SeqCst),
         SAVE_DEST_COMMIT_COUNT.load(Ordering::SeqCst),

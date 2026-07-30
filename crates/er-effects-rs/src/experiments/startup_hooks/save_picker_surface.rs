@@ -55,6 +55,72 @@ pub(crate) enum PickerSurface {
     OsNative,
 }
 
+/// What an "open a picker" REQUEST did -- which is NOT the same question as "is a picker up now".
+///
+/// These three used to be two spellings of one `bool`, and that collapse IS the reopen loop the OS
+/// dialog trapped users in (bd `er-effects-rs-rsxi`). The menu-pump consumer of
+/// `SAVE_DEST_OPEN_PICKER_PENDING` reads a `false` as "the open never happened, retry on the next
+/// pump" -- correct for a MenuJob submit the dialog's queue deferred, catastrophic for a user who
+/// just pressed Cancel: the request stayed armed and comdlg32 reopened ~57 ms later, forever.
+///
+/// The distinction that fixes it is OWNERSHIP OF THE REQUEST, not user intent: a picker that RAN
+/// has carried the request out whatever the user decided, and only a picker that never ran is still
+/// owed one. `Dismissed` is therefore a first-class terminal answer, not a failure to ask.
+///
+/// THREE HERE, FOUR ONE LAYER DOWN, AND THE COLLAPSE IS DELIBERATE. `os_pick_validated` reports
+/// FOUR states, because it splits `Dismissed` into a user's Cancel and an unusable dialog
+/// (`OsPickAbort::Cancelled` vs `OsPickAbort::Failed`). No consumer of THIS type discriminates
+/// them: every System>Quit caller asks exactly one question -- may I re-arm the request? -- and the
+/// answer is "no" for both, because both mean a dialog ran and came back with nothing. The ONE
+/// caller for which the difference decides whether a user's game is terminated is the missing-save
+/// boot arm, and it consumes `os_pick_validated` directly rather than through this router. Adding a
+/// fourth variant here would only manufacture a state no arm can produce and no caller would read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PickerOpenOutcome {
+    /// A picker is up (in-game) or a path was accepted and staged (OS).
+    Opened,
+    /// The picker RAN and produced no destination: the user cancelled, comdlg32 failed, the
+    /// invalid-pick reopen bound gave up, or the ingest refused the pick. Nothing is staged.
+    Dismissed,
+    /// NO picker ran: a refusal (unresolvable directory, non-heap dialog, detour not live yet, a
+    /// re-entrant open) or a submit the menu pump deferred. The request still stands.
+    NotOpened,
+}
+
+impl PickerOpenOutcome {
+    /// Whether the open request has been carried out and MUST NOT be re-armed.
+    ///
+    /// This is the single predicate the reopen loop got wrong. Re-arming on a `Dismissed` is the
+    /// loop; re-arming on a `NotOpened` is the deferred-submit retry the in-game surface needs.
+    pub(crate) fn request_discharged(self) -> bool {
+        !matches!(self, PickerOpenOutcome::NotOpened)
+    }
+}
+
+/// Lift the `bool` an arm returns when all it can report is "did a surface TAKE THIS OVER".
+///
+/// Four of the router's six arms are like that, and for the same structural reason: they hand the
+/// request to a surface and return before the user answers, so a dismissal is not theirs to report.
+///
+///  * the two IN-GAME System>Quit arms answer a strictly smaller question -- a window is up, or the
+///    submit did not happen and the caller may try again. Backing OUT of a live `05_010` browser is
+///    a LATER event with its own path (`save_picker_reset`), never this return value, which is
+///    exactly why the in-game surface never looped and the OS surface did.
+///  * the two BOOT arms return "this open was TAKEN OVER by a surface". A `false` there is not a
+///    failure and not a cancel -- it is "nothing owns the pick yet, ask again on the next tick" --
+///    which is what lets the OS boot arm wait for the core `CreateFileW` detour to go live without
+///    either spinning a dialog or stranding the boot.
+///
+/// So `true` is `Opened` and `false` is `NotOpened`, and NEITHER can be `Dismissed`: re-arming on a
+/// `false` here is the deferred-submit retry both surfaces need, not the reopen loop.
+fn open_taken_over_outcome(taken: bool) -> PickerOpenOutcome {
+    if taken {
+        PickerOpenOutcome::Opened
+    } else {
+        PickerOpenOutcome::NotOpened
+    }
+}
+
 /// Resolve the surface from the flag. Takes the bool as an ARGUMENT rather than reading the
 /// config, so the invariant the contract cares about -- one key value yields the same surface for
 /// BOTH intents -- is provable by a table test instead of by reviewer discipline.
@@ -76,25 +142,33 @@ pub(crate) fn os_native_picker_active() -> bool {
     SAVE_PICKER_SURFACE.load(Ordering::SeqCst) != 0
 }
 
-/// Open the picker this request's surface calls for. Returns whatever the chosen surface returns:
-/// true when a picker is up (in-game) or a path was accepted (OS), false when nothing was staged
-/// and the caller must leave the System menu alone.
+/// Open the picker this request's surface calls for, and report what the request DID -- see
+/// [`PickerOpenOutcome`], whose three states are what keep a dismissal from being retried.
 ///
-/// The boot arms return "this open was TAKEN OVER by a surface". A `false` there is not a failure
-/// and not a cancel -- it is "nothing owns the pick yet, ask again on the next tick" -- which is
-/// what lets the OS boot arm wait for the core `CreateFileW` detour to go live without either
-/// spinning a dialog or stranding the boot.
-pub(crate) unsafe fn open_picker_for_intent(request: PickerOpenRequest) -> bool {
+/// ONLY THE TWO OS System>Quit ARMS CAN SAY `Dismissed`, because they are the only arms that are
+/// still on the stack when the user answers: they block inside comdlg32 and return afterwards. The
+/// other four hand the request to a surface and return immediately, so all they can report is
+/// `Opened` / `NotOpened` -- see [`open_taken_over_outcome`].
+///
+/// A BOOT CANCEL THEREFORE NEVER COMES BACK THROUGH HERE, and that is the point rather than a gap.
+/// The boot OS arm runs its dialog on a thread of its own; by the time this function returns, the
+/// dialog has not been answered (usually not even opened), and the cancel is handled where it lands
+/// -- `save_picker_boot.rs` quits the game from that thread. Per-intent cancel semantics live in
+/// each intent's own arm, discriminated by an enum variant the compiler checks, and never by a flag
+/// read inside shared picker code.
+pub(crate) unsafe fn open_picker_for_intent(request: PickerOpenRequest) -> PickerOpenOutcome {
     let surface = picker_surface_for(os_native_picker_active());
     match (surface, request) {
-        (PickerSurface::InGame, PickerOpenRequest::LoadSource { action_obj }) => unsafe {
-            system_quit_open_save_picker_menu_in_game(action_obj)
-        },
-        (PickerSurface::InGame, PickerOpenRequest::SaveDestination { system_dialog }) => unsafe {
-            system_quit_open_save_dest_picker_in_game(system_dialog)
-        },
+        (PickerSurface::InGame, PickerOpenRequest::LoadSource { action_obj }) => {
+            open_taken_over_outcome(unsafe { system_quit_open_save_picker_menu_in_game(action_obj) })
+        }
+        (PickerSurface::InGame, PickerOpenRequest::SaveDestination { system_dialog }) => {
+            open_taken_over_outcome(unsafe {
+                system_quit_open_save_dest_picker_in_game(system_dialog)
+            })
+        }
         (PickerSurface::InGame, PickerOpenRequest::MissingSaveBoot) => {
-            crate::experiments::boot_arm_missing_save_picker_in_game()
+            open_taken_over_outcome(crate::experiments::boot_arm_missing_save_picker_in_game())
         }
         (PickerSurface::OsNative, PickerOpenRequest::LoadSource { action_obj }) => unsafe {
             os_open_save_picker_load(action_obj)
@@ -103,7 +177,7 @@ pub(crate) unsafe fn open_picker_for_intent(request: PickerOpenRequest) -> bool 
             os_open_save_dest_picker(system_dialog)
         },
         (PickerSurface::OsNative, PickerOpenRequest::MissingSaveBoot) => {
-            boot_os_open_missing_save_picker()
+            open_taken_over_outcome(boot_os_open_missing_save_picker())
         }
     }
 }
@@ -228,6 +302,43 @@ mod save_picker_surface_tests {
         assert!(
             !os_native_picker_active(),
             "an uninitialized surface latch must read as the in-game browser"
+        );
+    }
+
+    /// THE REOPEN-LOOP REGRESSION (bd `er-effects-rs-rsxi`). A picker that RAN discharges the open
+    /// request whatever the user decided; only a picker that never ran is still owed one. Collapsing
+    /// `Dismissed` into `NotOpened` -- which a `bool` return has no way not to do -- is precisely
+    /// what made the menu pump re-ask a question the user had just answered with Cancel, reopening
+    /// comdlg32 every ~57 ms with no way out of the save flow.
+    #[test]
+    fn a_dismissed_picker_discharges_the_open_request_and_only_a_never_opened_one_retries() {
+        assert!(
+            PickerOpenOutcome::Dismissed.request_discharged(),
+            "a user's Cancel is an ANSWER; re-arming the request re-asks it, which is the loop"
+        );
+        assert!(PickerOpenOutcome::Opened.request_discharged());
+        assert!(
+            !PickerOpenOutcome::NotOpened.request_discharged(),
+            "a deferred MenuJob submit is the ONE case that must still retry"
+        );
+    }
+
+    /// The `bool`-returning arms cannot express a dismissal, and that is not an oversight. The
+    /// in-game ones return before the user answers, because backing out of a live `05_010` browser
+    /// is a later event with its own path; the BOOT ones return before the user answers because
+    /// their `bool` says only whether a surface has taken the pick over. So `false` must stay a
+    /// retry on both, and neither may drift into the OS surface's terminal meaning -- a boot arm
+    /// that reported `Dismissed` would strand a missing-save boot with no picker and no way out.
+    #[test]
+    fn the_bool_returning_arms_map_only_to_opened_or_not_opened() {
+        assert_eq!(open_taken_over_outcome(true), PickerOpenOutcome::Opened);
+        assert_eq!(open_taken_over_outcome(false), PickerOpenOutcome::NotOpened);
+        assert!(open_taken_over_outcome(true).request_discharged());
+        assert!(
+            !open_taken_over_outcome(false).request_discharged(),
+            "'no surface owns the pick yet' must stay askable on the next tick, on every arm that \
+             reports it -- the in-game deferred submit AND the boot arm waiting for the core \
+             CreateFileW detour"
         );
     }
 

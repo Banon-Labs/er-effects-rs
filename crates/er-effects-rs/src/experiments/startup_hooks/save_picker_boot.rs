@@ -171,10 +171,20 @@ pub(crate) enum BootAbortAction {
 /// ONLY a genuine user cancel quits. A comdlg32 failure, a refused re-entrant open and an
 /// exhausted reopen bound all mean the dialog could not be used, and terminating a user's game
 /// over a defect in a file dialog is the opposite of what the cancel contract promises.
+///
+/// `NotOpened` IS A TERMINAL ANSWER HERE, unlike everywhere else in the picker code, and the
+/// asymmetry is a property of this caller rather than of the outcome. Elsewhere `NotOpened` means
+/// "ask again next tick" because the asker gets another tick; this thread is one-shot -- it is
+/// spawned once behind `BOOT_OS_THREAD_STARTED` with the boot state already latched `OPEN` -- so
+/// "try again later" is not one of its options. Its only remaining `NotOpened` source is a refused
+/// re-entrant open, which means some other dialog owns the screen, and handing the pick to the
+/// in-game browser is the same answer that would be right one tick later anyway. The retry that
+/// `NotOpened` normally buys is instead spent BEFORE the thread exists, by
+/// `boot_os_open_missing_save_picker`'s own detour wait.
 pub(crate) fn boot_abort_action(abort: OsPickAbort) -> BootAbortAction {
     match abort {
         OsPickAbort::Cancelled => BootAbortAction::QuitGame,
-        OsPickAbort::Unavailable => BootAbortAction::FallBackToInGame,
+        OsPickAbort::Failed | OsPickAbort::NotOpened => BootAbortAction::FallBackToInGame,
     }
 }
 
@@ -203,8 +213,13 @@ pub(crate) fn boot_open_missing_save_picker_if_pending() {
     {
         return;
     }
-    let taken = unsafe { open_picker_for_intent(PickerOpenRequest::MissingSaveBoot) };
-    if !taken {
+    // `request_discharged()` IS the "did a surface take this over" question, spelled the way the
+    // System>Quit menu pump spells it. The boot arms can only answer `Opened` or `NotOpened` (a
+    // boot cancel is handled on the picker's own thread and never returns through the router), so
+    // the only thing that releases the latch here is "nobody owns the pick yet" -- which is exactly
+    // the case that must be re-asked next tick, and is how the OS arm waits for the core
+    // `CreateFileW` detour without either spinning a dialog or stranding the boot.
+    if !unsafe { open_picker_for_intent(PickerOpenRequest::MissingSaveBoot) }.request_discharged() {
         SAVE_PICKER_OS_BOOT_STATE.store(BOOT_PICKER_IDLE, Ordering::SeqCst);
     }
 }
@@ -214,12 +229,12 @@ pub(crate) fn boot_open_missing_save_picker_if_pending() {
 /// Returns whether the pick has been taken over. `false` means "not yet" -- the core `CreateFileW`
 /// detour has not gone live -- and the caller retries on its next tick.
 pub(crate) fn boot_os_open_missing_save_picker() -> bool {
-    // H4, hoisted OUT of `os_pick_validated` on purpose. Inside, a not-yet-live detour is an
-    // `Unavailable` abort, and at boot that would fall straight through to the in-game browser the
-    // very first time the picker armed -- which is nearly always, because the boot picker arms
-    // within milliseconds of `DllMain` while the detour installs from a freshly spawned thread.
-    // Checking here makes the normal case a retry and keeps the fallback for a detour that never
-    // arrives at all.
+    // H4, hoisted OUT of `os_pick_validated` on purpose. Inside, a not-yet-live detour is a
+    // `NotOpened` abort -- and the dialog thread has no next tick to spend it on, so it would fall
+    // straight through to the in-game browser the very first time the picker armed, which is nearly
+    // always: the boot picker arms within milliseconds of `DllMain` while the detour installs from a
+    // freshly spawned thread. Checking HERE, on a caller that IS re-entered every tick, makes the
+    // normal case a retry and keeps the fallback for a detour that never arrives at all.
     if !crate::experiments::save_file_core_hooks_live() {
         let waited = BOOT_OS_CORE_HOOK_WAIT_STARTED.get_or_init(Instant::now).elapsed();
         SAVE_PICKER_OS_BOOT_DEFER_TICKS.fetch_add(1, Ordering::SeqCst);
@@ -301,7 +316,9 @@ fn boot_os_picker_thread() {
         Err(abort) => match boot_abort_action(abort) {
             BootAbortAction::QuitGame => boot_os_perform_cancel_exit(),
             BootAbortAction::FallBackToInGame => {
-                boot_os_fall_back_to_in_game(&format!("comdlg32 was unusable ({abort:?})"));
+                boot_os_fall_back_to_in_game(&format!(
+                    "the OS dialog produced no usable answer ({abort:?})"
+                ));
             }
         },
     }
@@ -417,6 +434,10 @@ mod save_picker_boot_tests {
     /// THE decision that can terminate a user's game, pinned. Only a cancel -- the one outcome
     /// that IS a user decision -- quits; every "we could not ask" outcome falls back to the
     /// in-game browser instead of acting on a choice nobody made.
+    ///
+    /// The table is exhaustive over [`OsPickAbort`] on purpose: a NEW way for an open to end with
+    /// nothing staged must be classified here before it compiles, because the default that a
+    /// catch-all would supply is "quit the user's game".
     #[test]
     fn only_a_user_cancel_quits_the_game() {
         assert_eq!(
@@ -424,9 +445,15 @@ mod save_picker_boot_tests {
             BootAbortAction::QuitGame
         );
         assert_eq!(
-            boot_abort_action(OsPickAbort::Unavailable),
+            boot_abort_action(OsPickAbort::Failed),
             BootAbortAction::FallBackToInGame,
-            "a comdlg32 defect must never terminate the process"
+            "a comdlg32 defect -- or an exhausted reopen bound -- must never terminate the process"
+        );
+        assert_eq!(
+            boot_abort_action(OsPickAbort::NotOpened),
+            BootAbortAction::FallBackToInGame,
+            "no dialog ever ran, so there is no user decision to act on; this thread cannot retry, \
+             so the in-game browser takes the pick instead"
         );
     }
 

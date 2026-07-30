@@ -1385,7 +1385,7 @@ pub static SAVE_PICKER_OS_OWNER_HWND: AtomicUsize = AtomicUsize::new(0);
 /// browsing traffic that otherwise pollutes the save CreateFileW diagnostics.
 pub static SAVE_PICKER_OS_SAVELIKE_OPENS: AtomicUsize = AtomicUsize::new(0);
 
-// ---- OS picker at the MISSING-SAVE BOOT (startup_hooks/save_picker_boot_os.rs) ----
+// ---- OS picker at the MISSING-SAVE BOOT (startup_hooks/save_picker_boot.rs) ----
 //
 // The `SAVE_PICKER_OS_*` family above counts DIALOGS and is shared by all three intents. This
 // family counts the BOOT intent's OUTCOMES, which the shared family cannot express: at a
@@ -1762,6 +1762,12 @@ pub static SAVE_PICKER_SYSTEM_DIALOG: AtomicUsize = AtomicUsize::new(0);
 /// Menu-pump pending: open the destination browser from `system_quit_menu_window_run_post` (the
 /// proven menu-job submit context). Set by the save-flow tick on Box2 "No".
 pub static SAVE_DEST_OPEN_PICKER_PENDING: AtomicUsize = AtomicUsize::new(0);
+/// Times the menu pump tried to open the destination browser and LEFT THE REQUEST ARMED because no
+/// picker ran (a MenuJob the dialog's queue deferred). The direct oracle for the reopen loop of bd
+/// `er-effects-rs-rsxi`: a picker that RAN -- including one the user cancelled -- discharges the
+/// request, so with the OS surface active this must read 0. Any positive value there means a
+/// terminal outcome was retried, which is the loop that trapped the user.
+pub static SAVE_DEST_PICKER_OPEN_RETRY_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// 1 once a destination has been chosen and confirmed: the save-flow tick closes the menus with
 /// the commit staged as soon as the picker window has finished tearing down.
 pub static SAVE_DEST_COMMIT_PENDING: AtomicUsize = AtomicUsize::new(0);
