@@ -1,0 +1,62 @@
+# Product (A): OUR OWN DRAWN save picker -- the boot-time "the game started with no save"
+# product, plus the OS-native common-file-dialog mechanism it is coupled to
+# (user decision 2026-07-30).
+#
+# The boot picker cannot be a native game menu: at a no-save boot the game's menu assets
+# are not ready and the title is deliberately suppressed, so it composites on the same
+# D3D12 Present layer as the boot loading bar and reads OS input directly (the game's own
+# input path is frozen behind the held save-check job).
+#
+# This crate also owns the SHARED row model, because the dependency direction is
+# `er-quit-menu -> er-save-picker`, one way. A must never reference the dim overlay: the
+# dim is for the in-game quit-menu case only, and that asymmetry is what keeps the
+# dependency acyclic.
+#
+# Product state crosses the seam as injected function pointers: see `host::install_host`.
+# This crate must NOT depend on the root crate, nor on `er-quit-menu`.
+[package]
+name = "er-save-picker"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_save_picker"
+
+[features]
+default = ["boot-flow", "os-dialog"]
+# The boot missing-save flow: the drawn overlay, its input threads, and the arm/disarm
+# lifecycle keyed off the missing-save hold. `er-quit-menu` takes this crate with
+# `default-features = false`, so a standalone product-(B) DLL links ONLY the shared row
+# model, the config keys and the comdlg32 surface -- never (A)'s boot behavior.
+#
+# The feature is a COMPILE-time convenience for that build, NOT the safety guarantee:
+# cargo unifies features across a build graph, so in the product DLL (which wants
+# `boot-flow`) `er-quit-menu` gets it too. The runtime guarantee is that nothing in the
+# boot flow arms unless a host explicitly calls the arm entry point -- see the crate docs.
+boot-flow = []
+# The comdlg32 common-file-dialog surface. On by default because the OS-native picker must
+# ALWAYS be available as a fallback: we never force a user onto an in-game picker we built
+# (user principle 2026-07-30). `er-quit-menu` depends on this feature explicitly.
+os-dialog = []
+
+[dependencies]
+# BND4 slot walk + PlayerGameData reads: a picked container's active character slots
+# (name + level) are parsed straight from bytes, with no live game state.
+er-save-loader = { path = "../er-save-loader" }
+# Shared cross-platform telemetry counters (the oracle_save_picker_* fields).
+er-telemetry = { path = "../er-telemetry" }
+# Backend-neutral glyph/raster primitives. The overlay's text and rects go through the
+# SAME `draw_text_rgb` / `fill_rect_rgb` the boot view uses, so the picker and the boot
+# bar cannot drift apart visually.
+er-loading-bar = { path = "../er-loading-bar" }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Time",
+  "Win32_UI_Controls_Dialogs",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+] }
