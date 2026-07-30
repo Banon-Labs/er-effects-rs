@@ -668,6 +668,18 @@ pub static SCALEFORM_HANDLER_DOUBLE_FREES: AtomicUsize = AtomicUsize::new(0);
 pub static SCALEFORM_HANDLER_LAST_DOUBLE_FREE_OBJ: AtomicUsize = AtomicUsize::new(0);
 pub static MENU_WINDOW_JOB_DTOR_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static MENU_WINDOW_JOB_DTOR_DOOMED_GUARDS: AtomicUsize = AtomicUsize::new(0);
+
+/// One-shot install guard for the `MenuWindowJob` FINALIZE hook (deobf 0x1407ada40).
+pub static MENU_WINDOW_JOB_FINALIZE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Trampoline for the finalize hook. 0 / `usize::MAX` = not hooked.
+pub static MENU_WINDOW_JOB_FINALIZE_ORIG: AtomicUsize = AtomicUsize::new(0);
+/// Times the finalize hook nulled a DOOMED `owningMenuWindow` before the native code virtual-called
+/// it. The `~MenuWindowJob` guard covers ONLY the destructor call site (0x7ac720); the finalize has
+/// five callers and the observed switch crash arrives via `MenuWindowJob::Run`, so this counter is
+/// the one that moves on the crashing path. Exposed as `oracle_menu_window_finalize_guards`.
+pub static MENU_WINDOW_JOB_FINALIZE_GUARDS: AtomicUsize = AtomicUsize::new(0);
+/// Last window pointer the finalize hook neutralized (diagnostic).
+pub static MENU_WINDOW_JOB_FINALIZE_LAST_WINDOW: AtomicUsize = AtomicUsize::new(0);
 pub static MENU_WINDOW_JOB_DTOR_LIST_REMOVALS: AtomicUsize = AtomicUsize::new(0);
 pub static MENU_WINDOW_JOB_DTOR_LAST_GUARDED_WINDOW: AtomicUsize = AtomicUsize::new(0);
 pub static MENU_WINDOW_JOB_DTOR_LAST_GUARDED_INDEX: AtomicUsize = AtomicUsize::new(0);
