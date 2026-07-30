@@ -8,7 +8,7 @@
 #   routing:
 #     required_events: ["PreToolUse"]
 #     required_tools: ["Bash"]
-#     required_signals: ["current_branch"]
+#     required_signals: ["current_branch", "worktree_branches"]
 package cupcake.policies.claude.git_block_main_push
 
 import rego.v1
@@ -17,11 +17,20 @@ import rego.v1
 # main is updated only through the user's preferred review/merge path. If the
 # branch signal is missing, fail closed for push commands because bare `git push`
 # inherits the current branch/refspec from Git config.
+#
+# Worktree-target exception (2026-07-30, bd
+# guard-blocks-worktree-commits-from-main-session-cwd-2026-07-29): the
+# current_branch signal reads the session checkout's branch, so a push issued as
+# `git -C <worktree> push` from a session whose primary checkout sits on main was
+# denied even when the worktree is on a feature branch. Such a push is allowed
+# when every push invocation targets a registered non-main worktree. Explicit
+# main refspecs (push_targets_main) stay denied unconditionally.
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
 	input.tool_name == "Bash"
-	is_git_push(lower(input.tool_input.command))
-	blocked_push_context(lower(input.tool_input.command))
+	cmd := input.tool_input.command
+	is_git_push(lower(cmd))
+	blocked_push_context(cmd)
 
 	decision := {
 		"rule_id": "ER-EFFECTS-BLOCK-MAIN-PUSH",
@@ -32,14 +41,16 @@ deny contains decision if {
 
 blocked_push_context(cmd) if {
 	current_branch == "main"
+	not pushes_target_only_nonmain_worktrees(cmd)
 }
 
 blocked_push_context(cmd) if {
 	current_branch == ""
+	not pushes_target_only_nonmain_worktrees(cmd)
 }
 
 blocked_push_context(cmd) if {
-	push_targets_main(cmd)
+	push_targets_main(lower(cmd))
 }
 
 # Match a real git push invocation, including common global-option forms such
@@ -66,6 +77,65 @@ current_branch := branch if {
 	branch := trim(input.signals.current_branch, " \t\r\n")
 } else := branch if {
 	branch := trim(input.signals.current_branch.output, " \t\r\n")
+} else := "" if {
+	true
+}
+
+# --- Worktree-target exception helpers ---------------------------------------
+
+# Case-insensitive find-all twin of git_push_command_pattern, applied to the
+# RAW (unlowered) command so worktree path capitalization survives extraction.
+git_push_findall_pattern := `(?i)(^|[;&|(\n])\s*(command\s+)?git([ \t]+((-c|--git-dir|--work-tree|--namespace|--config-env)(=|[ \t]+)("[^"\n]*"|'[^'\n]*'|[^ \t;&|()\n]+)|--(bare|no-pager|paginate|literal-pathspecs|no-replace-objects|exec-path)(=("[^"\n]*"|'[^'\n]*'|[^ \t;&|()\n]+))?))*[ \t]+push([ \t;&|)\n]|$)`
+
+# Strict single-target form the exception recognizes: `git -C <path> push`.
+# Group 2 captures the path token (optionally quoted).
+git_c_push_extract_pattern := `(?i)(^|[;&|(\n])\s*(?:command\s+)?git[ \t]+-C[ \t]+("[^"\n]*"|'[^'\n]*'|[^ \t;&|()\n]+)[ \t]+push(?:[ \t;&|)\n]|$)`
+
+# Every push invocation in the command must be the strict `git -C <path> push`
+# form and every extracted path must be a registered worktree on a non-main
+# branch. Explicit main refspecs are still denied by push_targets_main.
+pushes_target_only_nonmain_worktrees(cmd) if {
+	general := regex.find_all_string_submatch_n(git_push_findall_pattern, cmd, -1)
+	strict := regex.find_all_string_submatch_n(git_c_push_extract_pattern, cmd, -1)
+	count(general) > 0
+	count(strict) == count(general)
+	every m in strict {
+		worktree_target_ok(m[2])
+	}
+}
+
+worktree_target_ok(token) if {
+	path := trim_right(trim(token, "\"'"), "/")
+	branch := worktree_branch(path)
+	branch != "main"
+	branch != ""
+}
+
+# Resolve a worktree path to its branch from `git worktree list --porcelain`
+# output. Detached worktrees have no `branch ` line and resolve to nothing
+# (fail closed).
+worktree_branch(path) := branch if {
+	lines := split(worktree_branches_signal, "\n")
+	some i, j
+	lines[i] == concat("", ["worktree ", path])
+	j > i
+	startswith(lines[j], "branch refs/heads/")
+	not worktree_entry_between(lines, i, j)
+	branch := trim_space(trim_prefix(lines[j], "branch refs/heads/"))
+}
+
+worktree_entry_between(lines, i, j) if {
+	some k
+	k > i
+	k < j
+	startswith(lines[k], "worktree ")
+}
+
+worktree_branches_signal := out if {
+	out := input.signals.worktree_branches
+	is_string(out)
+} else := out if {
+	out := input.signals.worktree_branches.output
 } else := "" if {
 	true
 }

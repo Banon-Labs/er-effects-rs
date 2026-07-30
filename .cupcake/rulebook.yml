@@ -14,6 +14,15 @@ signals:
   current_branch:
     command: 'printf "%s" "${CUPCAKE_CURRENT_BRANCH_OVERRIDE:-$(git branch --show-current)}"'
     timeout_seconds: 2
+
+  # Registered worktrees and their branches (git worktree list --porcelain).
+  # Lets the main-commit/main-push guards recognize `git -C <worktree>` commands
+  # that explicitly target a registered non-main worktree even when the session
+  # checkout (which current_branch reads) sits on main. The override mirrors
+  # CUPCAKE_CURRENT_BRANCH_OVERRIDE and exists for the policy regression tests.
+  worktree_branches:
+    command: 'printf "%s" "${CUPCAKE_WORKTREE_BRANCHES_OVERRIDE:-$(git worktree list --porcelain)}"'
+    timeout_seconds: 2
   
   # Example: Structured JSON signal
   # system_info:
