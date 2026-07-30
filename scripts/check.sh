@@ -49,6 +49,7 @@ shellcheck "$repo_root/scripts/stage-autoload-release.sh"
 shellcheck "$repo_root/scripts/run-product-continue-direct-probe.sh"
 shellcheck "$repo_root/scripts/run-me3-product-smoke.sh"
 shellcheck "$repo_root/scripts/run-windows-proof-render-smoke.sh"
+shellcheck "$repo_root/scripts/run-portrait-dll-standalone-smoke.sh"
 shellcheck "$repo_root/scripts/check-rust-build.sh"
 
 # Host-buildable GFx codec + derived-movie proof gates. These are the only place the runtime GFx
