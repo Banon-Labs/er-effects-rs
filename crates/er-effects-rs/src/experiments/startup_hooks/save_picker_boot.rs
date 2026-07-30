@@ -32,13 +32,16 @@
 // the boot bar keeps animating, and `PickerDim::None` follows from that: there is no frozen game
 // for a cover to account for.
 //
-// UNPROVEN, AND SAID PLAINLY: no runtime evidence exists that comdlg32 renders and takes input
-// from a non-UI thread under this Wine/Proton build. The reasoning is that a common dialog is a
-// real window with its own message queue on its creating thread, which is a different mechanism
-// from the `GetAsyncKeyState` polling the bd memory above measured failing off the render thread.
-// If it turns out comdlg32 needs a specific thread here, the failure is visible without a
-// screenshot: `oracle_save_picker_os_open_count` advances with `oracle_save_picker_os_boot_state`
-// stuck at OPEN and no CLOSED line in the debug log.
+// PROVEN 2026-07-30 (run pr109-boot-oscancel-20260730-110704): comdlg32 DOES render and take input
+// from this thread under Wine/Proton. The dialog opened at +4277ms, the log records its real child
+// windows being created (`class=Button name=Cancel`, the file ListBox, the ComboBoxEx32 path bar),
+// the user browsed it for 24.5 seconds, and it returned `result=cancelled`. The thread choice was
+// the one thing this file was least sure of and it is now settled.
+//
+// The failure signature that used to be documented here -- "open_count advances, boot_state stuck at
+// OPEN, no CLOSED line" -- WAS WRONG and is deliberately not repeated: that same run matched its
+// telemetry half exactly while working perfectly, because the telemetry file had gone stale. See
+// `write_telemetry.rs`, where `oracle_save_picker_boot_telemetry_flushed` now discriminates the two.
 //
 // ============================================================================================
 // WHAT CANCEL MEANS HERE, AND WHY IT DIFFERS FROM SYSTEM>QUIT
@@ -67,9 +70,43 @@
 // `system_quit_dialog_handlers.rs` performs on a confirmed Return to Desktop and
 // `system_quit_ownership_repro.rs` performs on the quit teardown. The in-world path requests a
 // character save first; there is nothing to save here, which is the premise of the whole flow.
-// It runs on the GAME TASK rather than on this thread, for one reason: the task holds
-// `EffectsState`, so it can flush the telemetry file that carries the cancel-exit oracle before
-// the process ends. A counter set and then immediately abandoned by `ExitProcess` proves nothing.
+//
+// ============================================================================================
+// WHY THE PICKER THREAD PERFORMS THE EXIT ITSELF (corrected by run pr109-boot-oscancel-20260730-110704)
+// ============================================================================================
+//
+// The first version handed the exit to the GAME TASK, because that task holds `EffectsState` and
+// could therefore flush the telemetry carrying the cancel-exit oracle before the process ended --
+// "a counter set and then immediately abandoned by `ExitProcess` proves nothing". The reasoning was
+// sound and the mechanism was inapplicable, which the first live run showed in one line:
+//
+//     [+33804ms] the game task did not perform the cancel-exit within 5s -- quitting from the
+//                picker thread instead
+//
+// The hand-off did not merely lose a race; it never worked, and the 5s "backstop" was the only path
+// that ever ran. Measured from that run's artifacts:
+//
+//   * the game task WAS registered and ticking -- `bootstrap.jsonl` records
+//     `game_task_recurring_registered`, and the debug log shows it reaching tick 60 at +16806ms,
+//     12.5 seconds AFTER the dialog opened. So "the task never ticks at a missing-save boot" is
+//     FALSE and was not the cause.
+//   * it then stopped. The final telemetry reports `game_task_ticks = 58` and
+//     `savelike_opens = 0` while the dialog's own CLOSED line reports `savelike_opens = 898`: the
+//     file had gone stale at ~tick 58 / ~+16.8s. Between +16950ms and the cancel at +28790ms the
+//     debug log contains nothing but comdlg32's own window churn -- 11.8s with no game thread
+//     activity at all.
+//   * so by the time the user answered the dialog, the task had been silent for 12 seconds. It was
+//     never going to perform the exit, and waiting 5s for it only made the user watch a dead game.
+//
+// WHY the task stopped is NOT established and is deliberately not guessed at here: the game booted
+// normally for the first 12.7s with the dialog already open, so the dialog's mere existence is not
+// the cause. `SAVE_PICKER_BOOT_GAME_TICKS_AT_OPEN`/`_AT_ANSWER` were added to measure it directly on
+// the next run rather than to argue about it on this one.
+//
+// The correction: this thread -- the one that is demonstrably alive, because it just returned from
+// comdlg32 -- owns the whole path. It sets the counters, records the outcome on the lock-free
+// bootstrap-event channel, ATTEMPTS the telemetry flush with `try_lock` (a frozen task holding the
+// state mutex costs a stale file, never a hung quit), and exits. No hand-off, no 5s wait.
 
 /// Nothing has opened a boot picker (or this is not a missing-save boot).
 pub(crate) const BOOT_PICKER_IDLE: usize = 0;
@@ -82,14 +119,24 @@ pub(crate) const BOOT_PICKER_CANCEL_EXIT: usize = 3;
 /// comdlg32 was unusable; the in-game browser took the pick over.
 pub(crate) const BOOT_PICKER_FELL_BACK: usize = 4;
 
+pub(crate) use er_telemetry::counters::GAME_TASK_TICKS_TOTAL;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_BOOT_GAME_TICKS_AT_ANSWER;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_BOOT_GAME_TICKS_AT_OPEN;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_BOOT_TELEMETRY_FLUSHED;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_BOOT_CANCEL_EXIT_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_BOOT_DEFER_TICKS;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_BOOT_EXIT_PENDING;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_BOOT_EXIT_PERFORMED;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_BOOT_FALLBACK_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_BOOT_OPEN_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_BOOT_PICK_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_BOOT_STATE;
+
+/// Flush attempts the picker thread makes before quitting with a stale file.
+///
+/// Small on purpose. The ordinary case is the game task holding the state mutex for the microseconds
+/// of its own tick, which one or two tries cover; the pathological case is a task that has stopped
+/// giving the mutex back, and no number of retries fixes that -- it only delays the user's quit.
+const BOOT_EXIT_FLUSH_ATTEMPTS: usize = 4;
 
 /// How long the OS arm waits for the core `CreateFileW` detour before handing the pick to the
 /// in-game browser.
@@ -101,14 +148,6 @@ pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_BOOT_STATE;
 /// case where it never is, and its expiry is a FALLBACK rather than a failure, so the user still
 /// gets a picker.
 const BOOT_OS_CORE_HOOK_WAIT: Duration = Duration::from_secs(20);
-
-/// How long the picker thread waits for the game task to perform a requested cancel-exit before
-/// performing it itself.
-///
-/// The hand-off exists so the telemetry flush happens; it must not become a new way to strand the
-/// boot. If the game task is not ticking, quitting late beats not quitting -- the user pressed
-/// Cancel on a screen whose only other outcome is a title they cannot leave.
-const BOOT_OS_EXIT_HANDOFF_WAIT: Duration = Duration::from_secs(5);
 
 /// When the OS arm first found the core detour not yet live.
 static BOOT_OS_CORE_HOOK_WAIT_STARTED: OnceLock<Instant> = OnceLock::new();
@@ -227,6 +266,13 @@ fn boot_os_picker_thread() {
     };
     SAVE_PICKER_OS_BOOT_OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
     SAVE_PICKER_OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
+    // Sample the game task's free-running beat on BOTH sides of the blocking call. Taken here by a
+    // thread that is provably alive, so the pair measures the GAME's liveness across the dialog
+    // rather than our own -- the question the first live run could not answer.
+    SAVE_PICKER_BOOT_GAME_TICKS_AT_OPEN.store(
+        GAME_TASK_TICKS_TOTAL.load(Ordering::SeqCst),
+        Ordering::SeqCst,
+    );
     // The staging is done AFTER the claim drops, not inside the closure: it enumerates a directory
     // and reads every candidate container, and unlike the System>Quit arms there is no save-flow
     // tick reading `SAVE_PICKER_OS_DIALOG_OPEN` as a "browser is live" term at boot, so nothing
@@ -240,10 +286,20 @@ fn boot_os_picker_thread() {
         PickerDim::None,
         str::to_owned,
     );
+    SAVE_PICKER_BOOT_GAME_TICKS_AT_ANSWER.store(
+        GAME_TASK_TICKS_TOTAL.load(Ordering::SeqCst),
+        Ordering::SeqCst,
+    );
+    let ticks_at_open = SAVE_PICKER_BOOT_GAME_TICKS_AT_OPEN.load(Ordering::SeqCst);
+    let ticks_at_answer = SAVE_PICKER_BOOT_GAME_TICKS_AT_ANSWER.load(Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "save-picker-boot-os: game task ticked {} times while the dialog was up (open={ticks_at_open} answer={ticks_at_answer}); 0 means the game was frozen for the dialog's whole life",
+        ticks_at_answer.saturating_sub(ticks_at_open)
+    ));
     match picked {
         Ok(path) => boot_os_stage_pick(PathBuf::from(path)),
         Err(abort) => match boot_abort_action(abort) {
-            BootAbortAction::QuitGame => boot_os_request_cancel_exit(),
+            BootAbortAction::QuitGame => boot_os_perform_cancel_exit(),
             BootAbortAction::FallBackToInGame => {
                 boot_os_fall_back_to_in_game(&format!("comdlg32 was unusable ({abort:?})"));
             }
@@ -294,43 +350,19 @@ fn boot_os_fall_back_to_in_game(reason: &str) -> bool {
     crate::experiments::boot_arm_missing_save_picker_in_game()
 }
 
-/// Ask for the cancel-exit, then make sure it happens.
+/// Record the cancel durably, then quit. Runs entirely on the picker thread.
 ///
-/// The request goes to the game task so the telemetry that PROVES this outcome is written before
-/// the process ends. The bounded wait afterwards is a backstop, not synchronization: if the task
-/// is not ticking, this thread performs the exit itself rather than leaving the user on a title
-/// they cannot leave.
-fn boot_os_request_cancel_exit() {
-    SAVE_PICKER_OS_BOOT_CANCEL_EXIT_COUNT.fetch_add(1, Ordering::SeqCst);
-    SAVE_PICKER_OS_BOOT_STATE.store(BOOT_PICKER_CANCEL_EXIT, Ordering::SeqCst);
-    SAVE_PICKER_OS_BOOT_EXIT_PENDING.store(1, Ordering::SeqCst);
-    append_autoload_debug(format_args!(
-        "save-picker-boot-os: the user CANCELLED the boot save picker -- at a missing-save boot that means quit (OK -> choose a save, Cancel -> exit). Handing the exit to the game task so the telemetry flush lands first"
-    ));
-    // Held-but-never-sent channel: `recv_timeout` is this repo's sanctioned bounded wait (the dim
-    // overlay and the window observer pace themselves the same way) and is not a sleep used as
-    // synchronization -- the loop exits the moment the game task publishes the exit.
-    let (_pace_tx, pace_rx) = std::sync::mpsc::channel::<()>();
-    let deadline = Instant::now() + BOOT_OS_EXIT_HANDOFF_WAIT;
-    while Instant::now() < deadline {
-        if SAVE_PICKER_OS_BOOT_EXIT_PERFORMED.load(Ordering::SeqCst) != 0 {
-            return;
-        }
-        let _ = pace_rx.recv_timeout(Duration::from_millis(25));
-    }
-    append_autoload_debug(format_args!(
-        "save-picker-boot-os: the game task did not perform the cancel-exit within {}s -- quitting from the picker thread instead (the telemetry file will not carry the final flush)",
-        BOOT_OS_EXIT_HANDOFF_WAIT.as_secs()
-    ));
-    boot_os_perform_cancel_exit();
-}
-
-/// True while a boot cancel-exit is owed. Read by the game task, which owns the flush.
-pub(crate) fn boot_os_cancel_exit_requested() -> bool {
-    SAVE_PICKER_OS_BOOT_EXIT_PENDING.load(Ordering::SeqCst) != 0
-}
-
-/// Quit. Call ONLY after the telemetry flush (the game task's path) or from the backstop above.
+/// ORDER IS THE WHOLE DESIGN, because every step after the first has to survive the possibility
+/// that the game is already dead:
+///
+///  1. **counters** -- so any flush that does happen carries the outcome;
+///  2. **bootstrap event** -- append-only, lock-free, no game state touched. This is the record that
+///     CANNOT fail: it is the same channel `bootstrap.jsonl` already uses from `DllMain` and from
+///     spawned threads, and the harness preserves it alongside the telemetry;
+///  3. **telemetry flush, `try_lock`** -- the nice-to-have. Success makes the main oracle file
+///     describe the cancel; failure records itself as `boot_telemetry_flushed = 0` and costs
+///     nothing, because step 2 already told the story;
+///  4. **`ExitProcess(0)`**.
 ///
 /// `ExitProcess(0)` is the product's own quit: `system_quit_dialog_handlers.rs` uses it for a
 /// confirmed Return to Desktop and `system_quit_ownership_repro.rs` for the quit teardown, both
@@ -338,12 +370,40 @@ pub(crate) fn boot_os_cancel_exit_requested() -> bool {
 /// table the teardown has unloaded, and `DLPanic`s). The in-world path requests a character save
 /// first and releases the cursor clip; here there is no character to save -- that is the premise of
 /// a missing-save boot -- so only the input release carries over.
-pub(crate) fn boot_os_perform_cancel_exit() -> ! {
+fn boot_os_perform_cancel_exit() -> ! {
+    SAVE_PICKER_OS_BOOT_CANCEL_EXIT_COUNT.fetch_add(1, Ordering::SeqCst);
+    SAVE_PICKER_OS_BOOT_STATE.store(BOOT_PICKER_CANCEL_EXIT, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "save-picker-boot-os: the user CANCELLED the boot save picker -- at a missing-save boot that means quit (OK -> choose a save, Cancel -> exit)"
+    ));
+    // THE RECORD THAT CANNOT FAIL. Written before the flush is attempted, because the flush is the
+    // part that depends on a thread which may already be gone.
+    write_bootstrap_event(BOOTSTRAP_EVENT_BOOT_PICKER_CANCEL_EXIT, "cancelled");
+    let flushed = try_write_telemetry_off_game_task(false, BOOT_EXIT_FLUSH_ATTEMPTS);
+    SAVE_PICKER_BOOT_TELEMETRY_FLUSHED.store(usize::from(flushed), Ordering::SeqCst);
     SAVE_PICKER_OS_BOOT_EXIT_PERFORMED.store(1, Ordering::SeqCst);
-    SAVE_PICKER_OS_BOOT_EXIT_PENDING.store(0, Ordering::SeqCst);
+    // Flush once more when the first attempt worked, so the file also carries `exit_performed = 1`
+    // and `telemetry_flushed = 1` rather than the values from one step earlier. Skipped entirely
+    // when the lock was unavailable -- retrying a lock nobody is releasing only delays the quit.
+    if flushed {
+        let _ = try_write_telemetry_off_game_task(false, 1);
+    }
+    write_bootstrap_event(
+        BOOTSTRAP_EVENT_BOOT_PICKER_CANCEL_EXIT,
+        if flushed {
+            "exiting_telemetry_fresh"
+        } else {
+            "exiting_telemetry_stale"
+        },
+    );
     release_input_block_now();
     append_autoload_debug(format_args!(
-        "save-picker-boot-os: quitting -- released the input block and calling ExitProcess(0) (no character was ever loaded, so there is nothing to save and no world to tear down)"
+        "save-picker-boot-os: quitting -- released the input block and calling ExitProcess(0) (no character was ever loaded, so there is nothing to save and no world to tear down). telemetry_flushed={flushed}{}",
+        if flushed {
+            ""
+        } else {
+            " -- the state mutex was not available, so er-effects-telemetry.json predates this cancel; er-effects-bootstrap.jsonl carries the outcome"
+        }
     ));
     unsafe { windows::Win32::System::Threading::ExitProcess(0) };
     // ExitProcess never returns; this is unreachable and only satisfies the `!` return type.
@@ -393,13 +453,24 @@ mod save_picker_boot_tests {
         );
     }
 
-    /// The bounds are finite and ordered: the backstop that quits from the picker thread must be
-    /// shorter than the wait for a detour that may never arrive, or a user who cancelled during
-    /// the detour wait would sit through both.
+    /// The detour wait is finite, and the CANCEL PATH HAS NO WAIT AT ALL.
+    ///
+    /// The second half is the point. The first version of this file made the user's quit depend on
+    /// the game task performing it, with a 5s bound; the first live run showed the task had been
+    /// silent for 12 seconds by then, so the bound was not a backstop but the only path, and its
+    /// only effect was 5 seconds of dead game after the user pressed Cancel. The cancel path now
+    /// runs entirely on the thread that just returned from comdlg32, and the only bounded thing left
+    /// on it is a `try_lock` flush attempt whose failure is recorded rather than waited out.
     #[test]
-    fn both_boot_waits_are_finite() {
+    fn the_cancel_path_waits_for_nothing() {
         assert!(BOOT_OS_CORE_HOOK_WAIT > Duration::ZERO);
-        assert!(BOOT_OS_EXIT_HANDOFF_WAIT > Duration::ZERO);
-        assert!(BOOT_OS_EXIT_HANDOFF_WAIT < BOOT_OS_CORE_HOOK_WAIT);
+        assert!(
+            BOOT_EXIT_FLUSH_ATTEMPTS >= 1,
+            "at least one flush attempt, or a healthy run would never refresh the file"
+        );
+        assert!(
+            BOOT_EXIT_FLUSH_ATTEMPTS <= 8,
+            "the flush is best-effort; retrying a lock nobody releases only delays the user's quit"
+        );
     }
 }

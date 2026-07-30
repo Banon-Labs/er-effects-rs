@@ -1,3 +1,50 @@
+/// The shared `EffectsState`, published so a thread that is NOT the game task can attempt a
+/// telemetry flush.
+///
+/// Publishing shared mutable state as a global is a real cost and it is paid for one reason: the
+/// only writer of the telemetry file was the game task, so the file could only ever describe events
+/// the game task lived to see. When the terminal event of a feature is `ExitProcess`, that is not a
+/// theoretical limit -- run pr109-boot-oscancel-20260730-110704 shipped a telemetry file that was
+/// 12 seconds stale at the moment it became the only surviving record.
+///
+/// THE ONLY SANCTIONED ACCESS IS [`try_write_telemetry_off_game_task`], and it uses `try_lock`.
+/// Never add a blocking `lock()` on this handle: the thread that reaches for it is typically doing
+/// so BECAUSE the game task may be wedged, and a wedged task holding this mutex would convert a
+/// stale-file problem into a hung process.
+static PUBLISHED_EFFECTS_STATE: std::sync::OnceLock<Arc<Mutex<EffectsState>>> =
+    std::sync::OnceLock::new();
+
+/// Publish the shared state handle once, at bootstrap.
+pub(crate) fn publish_effects_state(state: &Arc<Mutex<EffectsState>>) {
+    let _ = PUBLISHED_EFFECTS_STATE.set(Arc::clone(state));
+}
+
+/// Flush the telemetry file from a thread that does not own `EffectsState`. Returns whether it
+/// actually wrote.
+///
+/// NON-BLOCKING BY CONSTRUCTION. `try_lock` fails rather than waits, so a game task frozen mid-tick
+/// costs a stale file (recorded as `oracle_save_picker_boot_telemetry_flushed = 0`) instead of
+/// costing the caller its ability to finish. A short bounded retry covers the ordinary case where
+/// the task merely holds the lock for the microseconds of its own tick.
+pub(crate) fn try_write_telemetry_off_game_task(player_available: bool, attempts: usize) -> bool {
+    let Some(handle) = PUBLISHED_EFFECTS_STATE.get() else {
+        return false;
+    };
+    // Held-but-never-sent channel: the repo's sanctioned bounded wait (see the dim overlay and the
+    // window observer). Not synchronization -- the loop exits the instant the lock is free.
+    let (_pace_tx, pace_rx) = std::sync::mpsc::channel::<()>();
+    for attempt in 0..attempts.max(1) {
+        if let Ok(state) = handle.try_lock() {
+            write_telemetry(&state, player_available);
+            return true;
+        }
+        if attempt + 1 < attempts.max(1) {
+            let _ = pace_rx.recv_timeout(Duration::from_millis(20));
+        }
+    }
+    false
+}
+
 pub(crate) fn write_telemetry_throttled(state: &mut EffectsState, player_available: bool) {
     const TELEMETRY_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -465,20 +512,35 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // outcomes are not the System>Quit ones: a cancel there QUITS THE GAME, and a terminal step has
     // to be readable from a file rather than from watching the screen.
     //
-    // `_boot_cancel_exit_count == 1` with `_boot_exit_pending == 0` and `_boot_exit_performed == 1`
-    // in the LAST write is the acceptance proof for the cancel path -- the game task flushes this
-    // very file and then calls `ExitProcess(0)`, so those three fields ARE the record that the quit
-    // was reached rather than merely requested. `_boot_open_count > 1` means the one-shot open latch
-    // leaked and the reopen loop came back. `_boot_fallback_count > 0` says comdlg32 could not be
-    // used and the in-game browser took over, which is a degraded surface, not a failed boot.
+    // READ `_boot_telemetry_flushed` FIRST. It is the field that tells you whether the rest of this
+    // file is about the run's end or about some earlier moment. `0` means the picker thread could
+    // not take the state mutex before quitting, so every field here predates the cancel and
+    // `er-effects-bootstrap.jsonl` (`boot_picker_cancel_exit`) is the authoritative record instead.
+    //
+    // That distinction is not hypothetical. Run pr109-boot-oscancel-20260730-110704 ended with
+    // `boot_state = OPEN`, `boot_cancel_exit_count = 0` on a run where the cancel WORKED -- byte for
+    // byte what a dialog that never returned would have left behind, because the game task had
+    // stopped writing this file 12s before the user answered. The old published signature ("open
+    // count advances while state stays OPEN") could not tell those apart, and reported a working
+    // feature as broken.
+    //
+    // `_boot_game_ticks_at_open` / `_at_answer` are sampled by the picker thread on both sides of
+    // the blocking dialog, so their DIFFERENCE is the game task's liveness across it: equal values
+    // mean the game did not tick once while the dialog was up. `_boot_open_count > 1` means the
+    // one-shot open latch leaked and the reopen loop came back. `_boot_fallback_count > 0` says
+    // comdlg32 could not be used and the in-game browser took over -- a degraded surface, not a
+    // failed boot.
     body.push_str(&format!(
-        "  \"oracle_save_picker_os_boot_state\": {},\n  \"oracle_save_picker_os_boot_open_count\": {},\n  \"oracle_save_picker_os_boot_pick_count\": {},\n  \"oracle_save_picker_os_boot_cancel_exit_count\": {},\n  \"oracle_save_picker_os_boot_exit_pending\": {},\n  \"oracle_save_picker_os_boot_exit_performed\": {},\n  \"oracle_save_picker_os_boot_fallback_count\": {},\n  \"oracle_save_picker_os_boot_defer_ticks\": {},\n",
+        "  \"oracle_save_picker_os_boot_state\": {},\n  \"oracle_save_picker_os_boot_open_count\": {},\n  \"oracle_save_picker_os_boot_pick_count\": {},\n  \"oracle_save_picker_os_boot_cancel_exit_count\": {},\n  \"oracle_save_picker_os_boot_exit_performed\": {},\n  \"oracle_save_picker_boot_telemetry_flushed\": {},\n  \"oracle_save_picker_boot_game_ticks_at_open\": {},\n  \"oracle_save_picker_boot_game_ticks_at_answer\": {},\n  \"oracle_game_task_ticks_total\": {},\n  \"oracle_save_picker_os_boot_fallback_count\": {},\n  \"oracle_save_picker_os_boot_defer_ticks\": {},\n",
         er_telemetry::counters::SAVE_PICKER_OS_BOOT_STATE.load(Ordering::SeqCst),
         er_telemetry::counters::SAVE_PICKER_OS_BOOT_OPEN_COUNT.load(Ordering::SeqCst),
         er_telemetry::counters::SAVE_PICKER_OS_BOOT_PICK_COUNT.load(Ordering::SeqCst),
         er_telemetry::counters::SAVE_PICKER_OS_BOOT_CANCEL_EXIT_COUNT.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_OS_BOOT_EXIT_PENDING.load(Ordering::SeqCst),
         er_telemetry::counters::SAVE_PICKER_OS_BOOT_EXIT_PERFORMED.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_BOOT_TELEMETRY_FLUSHED.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_BOOT_GAME_TICKS_AT_OPEN.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_BOOT_GAME_TICKS_AT_ANSWER.load(Ordering::SeqCst),
+        er_telemetry::counters::GAME_TASK_TICKS_TOTAL.load(Ordering::SeqCst),
         er_telemetry::counters::SAVE_PICKER_OS_BOOT_FALLBACK_COUNT.load(Ordering::SeqCst),
         er_telemetry::counters::SAVE_PICKER_OS_BOOT_DEFER_TICKS.load(Ordering::SeqCst)
     ));
