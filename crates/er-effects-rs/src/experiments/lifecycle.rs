@@ -465,10 +465,31 @@ unsafe fn save_flow_dest_browse_tick(ticks: usize) {
         }
         DestBrowseAction::Abandoned => {
             // No browser, no pending open, no commit, no confirm: the user backed out. In OS mode
-            // this is exactly what dropping the dialog latch with nothing chosen looks like, which
-            // is why an OS cancel needs no code of its own.
+            // this is exactly what dropping the dialog latch with nothing chosen looks like -- and
+            // reaching it at all took the menu pump learning to stop re-arming the open request it
+            // had already spent (bd `er-effects-rs-rsxi`).
             SAVE_DEST_CANCEL_COUNT.fetch_add(1, Ordering::SeqCst);
             save_dest_clear_target("destination browser abandoned");
+            if os_native_picker_active() {
+                // OS SURFACE: the destination browser was comdlg32, so NOTHING of ours was ever
+                // opened over the menus -- the System>Quit stack is bit-for-bit the stack the user
+                // pressed Save Game on, and there is nothing to unwind. Closing the menus here
+                // would take them out to the world, one level FURTHER than the Back they pressed.
+                // End the flow instead: control returns to the System>Quit rows, and returning to
+                // IDLE is what re-opens the row-press guard so Save Game can be pressed again.
+                // This is the same place the OS LOAD surface's cancel already leaves the user.
+                SAVE_FLOW_ABORT_COUNT.fetch_add(1, Ordering::SeqCst);
+                save_flow_box_clear();
+                save_dest_reset("os destination picker dismissed");
+                append_autoload_debug(format_args!(
+                    "save-flow: OS save-as dismissed after {ticks} ticks -- ending the flow at the System>Quit menu with NOTHING written, staged or loaded"
+                ));
+                save_flow_enter_stage(
+                    SAVE_FLOW_STAGE_IDLE,
+                    "os destination picker dismissed; back at System>Quit",
+                );
+                return;
+            }
             append_autoload_debug(format_args!(
                 "save-flow: destination browser closed without choosing after {ticks} ticks -- returning to the world with nothing written"
             ));
@@ -2173,6 +2194,64 @@ mod save_flow_deadline_tests {
             DestBrowseAction::Abandoned,
             "without the dialog term the very same state aborts on the next frame -- this is the \
              bug the tick freeze alone does not fix"
+        );
+    }
+
+    /// Game-task ticks that accrue between one destination dialog closing and the menu pump opening
+    /// the next. Measured from the loop in bd `er-effects-rs-rsxi`: CLOSED -> OPENED was 55-85 ms,
+    /// and `SAVE_FLOW_STAGE_TICKS` is frozen for the dialog's own lifetime, so only that gap counts.
+    const REOPEN_GAP_TICKS: usize = 3;
+
+    /// THE REOPEN LOOP, REPRODUCED (bd `er-effects-rs-rsxi`, measured 2026-07-30 on
+    /// `surface=save-as`: OPENED -> `result=cancelled` -> OPENED again 57 ms later, over and over,
+    /// each cancel logging "nothing staged" while the next pump re-asked).
+    ///
+    /// Nothing in the verdict function was wrong -- the defect sat one actor EARLIER, in who owns
+    /// `SAVE_DEST_OPEN_PICKER_PENDING`. So the model here is the TWO actors, not one predicate: the
+    /// menu pump opens a dialog whenever the request is armed, and the save-flow tick then judges
+    /// the latches. Counting the dialogs a cancelling user is shown is the whole bug report as a
+    /// number.
+    ///
+    /// The old behaviour is not literally infinite -- `OpenTimeout` fires once the stage has accrued
+    /// its budget -- but ~60 dialogs is indistinguishable from a trap, and it is a FLOOR, because
+    /// every Box3 round-trip re-enters stage 3 and resets the budget to zero.
+    #[test]
+    fn a_cancelling_user_is_shown_one_destination_dialog_not_a_reopen_loop() {
+        /// One run of the pump+tick pair against a user who cancels every dialog. Returns how many
+        /// dialogs were opened before the flow reached a terminal verdict.
+        fn dialogs_shown(discharge_on_dismissal: bool) -> usize {
+            let mut armed = true;
+            let mut shown = 0usize;
+            let mut ticks = 0usize;
+            loop {
+                if armed {
+                    // MENU PUMP: the request is armed, so comdlg32 opens. The user cancels it, and
+                    // the tick counter is frozen for the dialog's whole lifetime.
+                    shown += 1;
+                    assert!(shown < 1000, "neither behaviour may run away in this model");
+                    if discharge_on_dismissal && PickerOpenOutcome::Dismissed.request_discharged() {
+                        armed = false;
+                    }
+                }
+                ticks += REOPEN_GAP_TICKS;
+                // SAVE-FLOW TICK: no dialog is up by now, nothing is committed or confirmed.
+                match dest_browse_verdict(false, false, false, false, false, armed, ticks) {
+                    DestBrowseAction::WaitForUser => continue,
+                    DestBrowseAction::Abandoned | DestBrowseAction::OpenTimeout => return shown,
+                    other => panic!("a cancelling user cannot reach {other:?}"),
+                }
+            }
+        }
+        assert_eq!(
+            dialogs_shown(true),
+            1,
+            "one Cancel must produce exactly one dialog and then end the flow"
+        );
+        let trapped = dialogs_shown(false);
+        assert!(
+            trapped > 50,
+            "the shipped behaviour re-asked the cancelled request every pump; this model got out \
+             after only {trapped} dialogs, so it no longer reproduces the reported trap"
         );
     }
 
