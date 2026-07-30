@@ -14,15 +14,22 @@ we own composite above the fullscreen Proton game?"). Mean luminance over the ga
 sharply while the dim is up and return afterwards. The comparison is arithmetic, done here; no human
 and no model looks at the image to decide.
 
-PRIVACY. Only windows whose class is exactly `steam_app_1245620` are ever considered, and nothing but
-their geometry is read or written. The user's other windows are never enumerated, named, or captured.
-Wine gives every top-level window of the game process that same class, so the game, the dim overlay
-and comdlg32's dialog are all candidates; the LARGEST is taken, which is the fullscreen game region,
-and since all of them are captured as a screen region anyway the choice only affects the rectangle.
+PRIVACY. Only windows that identify as Elden Ring are ever considered, and nothing but their geometry
+is read or written. The user's other windows are never enumerated, named, or captured. Several
+top-level windows of the game process can match at once (the game, this overlay, comdlg32's dialog);
+the LARGEST is taken, which is the fullscreen game region, and since every capture is a screen region
+anyway the choice only affects the rectangle.
+
+WINDOW CLASS. `steam_app_1245620` is what a Steam-launched session reports, and every capture helper
+in `scripts/` hard-codes it. That is WRONG for the direct/offline me3 Proton launch the runtime probes
+actually use: in run `picker-dim-bringup` the Win32 class was `ELDEN RING(tm)` and Hyprland reported
+NO client of class `steam_app_1245620` at all, so a sample taken during a live dialog came back empty.
+Hence the candidate set below rather than one literal. `ER_WINDOW_CLASS` overrides it outright when a
+future launch path reports something new.
 
 Usage:
   picker-dim-luma-probe.py sample <out-dir> <label>   # one timestamped sample, appended to luma.jsonl
-  picker-dim-luma-probe.py watch <out-dir> <seconds> [period]  # sample until the deadline
+  picker-dim-luma-probe.py watch <out-dir> <seconds>  # sample until the deadline (no sleep; paces on grim)
   picker-dim-luma-probe.py verdict <out-dir> <dim-start-ms> <dim-end-ms>  # score an interval
   picker-dim-luma-probe.py --selftest                # no compositor needed
 """
@@ -30,13 +37,19 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-WINDOW_CLASS = "steam_app_1245620"
+# Exact classes accepted as "this is Elden Ring", plus a substring test for the Wine/Proton spellings.
+# Kept deliberately narrow: every entry can only ever match the game, never one of the user's own
+# applications. `ER_WINDOW_CLASS` (env) replaces the whole set when a launch path reports something
+# else again.
+WINDOW_CLASSES = ("steam_app_1245620", "eldenring.exe")
+WINDOW_CLASS_SUBSTRINGS = ("eldenring", "elden ring")
 # A dim at alpha 150/255 leaves ~41% of the original light through. Requiring the sampled mean to
 # fall to at most 75% of the undimmed baseline is far looser than that, so the threshold survives a
 # mostly-dark menu screen while still being impossible to pass by noise.
@@ -46,8 +59,27 @@ DIM_LUMA_CEILING = 0.75
 CALL_TIMEOUT_SECONDS = 8
 
 
+def is_er_window(client: dict) -> bool:
+    """Whether this Hyprland client is an Elden Ring window.
+
+    Checks `class` AND `initialClass`, because Wine can rewrite a window's class after mapping. An
+    explicit `ER_WINDOW_CLASS` wins outright.
+    """
+    override = os.environ.get("ER_WINDOW_CLASS")
+    names = [str(client.get(key) or "") for key in ("class", "initialClass")]
+    if override:
+        return any(name == override for name in names)
+    for name in names:
+        if name in WINDOW_CLASSES:
+            return True
+        folded = name.casefold()
+        if any(token in folded for token in WINDOW_CLASS_SUBSTRINGS):
+            return True
+    return False
+
+
 def er_region(hyprctl: str) -> tuple[int, int, int, int] | None:
-    """Largest exact-class game window's geometry as (x, y, w, h), or None."""
+    """Largest Elden Ring window's geometry as (x, y, w, h), or None."""
     try:
         out = subprocess.run(
             [hyprctl, "clients", "-j"], text=True, capture_output=True, timeout=CALL_TIMEOUT_SECONDS
@@ -57,7 +89,7 @@ def er_region(hyprctl: str) -> tuple[int, int, int, int] | None:
         return None
     best: tuple[int, int, int, int] | None = None
     for client in clients:
-        if not isinstance(client, dict) or str(client.get("class") or "") != WINDOW_CLASS:
+        if not isinstance(client, dict) or not is_er_window(client):
             continue
         if client.get("mapped") is False or client.get("hidden") is True:
             continue
@@ -147,7 +179,7 @@ def sample(out_dir: Path, label: str) -> int:
     else:
         region = er_region(hyprctl)
         if region is None:
-            record["error"] = f"no mapped window of class {WINDOW_CLASS}"
+            record["error"] = f"no mapped Elden Ring window (looked for {WINDOW_CLASSES} / {WINDOW_CLASS_SUBSTRINGS})"
         else:
             x, y, w, h = region
             record["geom"] = f"{x},{y} {w}x{h}"
@@ -172,18 +204,19 @@ def sample(out_dir: Path, label: str) -> int:
     return 0
 
 
-def watch(out_dir: Path, seconds: float, period: float) -> int:
-    """Sample until the deadline. The loop paces on the real cost of grim + imagemagick, and the
-    deadline is a hard backstop so this can never outlive the probe that started it."""
+def watch(out_dir: Path, seconds: float) -> int:
+    """Sample until the deadline.
+
+    NO SLEEP, deliberately -- the repo bans sleep as a synchronisation primitive, and none is needed
+    here. Each iteration already blocks on a full-resolution `grim` grab plus an imagemagick pass,
+    both synchronous with their own hard timeouts, so the loop paces itself on real work. `seconds`
+    is a safety backstop that bounds the watcher, not a schedule.
+    """
     deadline = time.monotonic() + seconds
     index = 0
     while time.monotonic() < deadline:
-        started = time.monotonic()
         sample(out_dir, f"watch{index:04d}")
         index += 1
-        remaining = period - (time.monotonic() - started)
-        if remaining > 0:
-            time.sleep(min(remaining, max(0.0, deadline - time.monotonic())))
     return 0
 
 
@@ -297,6 +330,18 @@ def selftest() -> int:
     # An already-black baseline cannot prove anything either way.
     black = [{"epoch_ms": now + 100, "mean_luma": 0.0}, {"epoch_ms": now - 500, "mean_luma": 0.0}]
     assert classify(black, now, now + 300)["result"] == "inconclusive"
+    # The class matcher is what silently broke the first live sample, so it is covered here.
+    assert is_er_window({"class": "steam_app_1245620"})
+    assert is_er_window({"class": "eldenring.exe"})
+    assert is_er_window({"class": "", "initialClass": "ELDEN RING\u2122"})
+    assert is_er_window({"class": "elden ring"})
+    assert not is_er_window({"class": "firefox"})
+    assert not is_er_window({"class": "kitty", "initialClass": "kitty"})
+    os.environ["ER_WINDOW_CLASS"] = "something-else"
+    assert is_er_window({"class": "something-else"})
+    assert not is_er_window({"class": "steam_app_1245620"}), "an explicit override must win outright"
+    del os.environ["ER_WINDOW_CLASS"]
+
     print("picker-dim-luma-probe selftest: OK")
     return 0
 
@@ -311,7 +356,7 @@ def main() -> int:
     if args[0] == "sample" and len(args) >= 3:
         return sample(Path(args[1]), args[2])
     if args[0] == "watch" and len(args) >= 3:
-        return watch(Path(args[1]), float(args[2]), float(args[3]) if len(args) > 3 else 0.5)
+        return watch(Path(args[1]), float(args[2]))
     if args[0] == "verdict" and len(args) >= 4:
         return verdict(Path(args[1]), int(args[2]), int(args[3]))
     print(__doc__)
