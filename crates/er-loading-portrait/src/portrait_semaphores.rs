@@ -35,6 +35,11 @@ pub use er_telemetry::counters::LS_PORTRAIT_LAST_W;
 /// Once-seen latch: a capture that is our neutral texture (Bug B). Stores the capture version at first
 /// detection (0 == never seen).
 pub use er_telemetry::counters::LS_PORTRAIT_NEUTRAL_LEAK_SEEN_VERSION;
+/// Identity tag of the currently-published head: slot+1 and the FNV-1a64 name hash, written next to the
+/// bridge on every publish, cleared with the bridge (bd er-effects-rs-dpf6 Phase 1). Exposed as
+/// `oracle_ls_portrait_slot` / `oracle_ls_portrait_name_hash`.
+pub use er_telemetry::counters::LS_PORTRAIT_PUBLISHED_NAME_HASH;
+pub use er_telemetry::counters::LS_PORTRAIT_PUBLISHED_SLOT;
 /// Count of portrait captures REJECTED by the readiness gate (neutral or too-small) -- i.e. transient
 /// wrong-source frames that were kept OFF the loading screen. >0 with both seen-versions set means the
 /// gate is actively suppressing the two bugs.
@@ -42,6 +47,13 @@ pub use er_telemetry::counters::LS_PORTRAIT_REJECTED_PUBLISHES;
 /// Once-seen latch: a capture with correct (non-neutral) content but too-small dims (Bug A). Stores the
 /// `LOADING_BG_PORTRAIT_RGBA_VERSION` at first detection (0 == never seen).
 pub use er_telemetry::counters::LS_PORTRAIT_TOO_SMALL_SEEN_VERSION;
+/// Same-identity bridge holds across own-menu-switch rearms (bd er-effects-rs-dpf6 Phase 3).
+pub use er_telemetry::counters::PORTRAIT_BRIDGE_SAME_IDENTITY_HOLDS;
+/// Confirm (RETARGET) timestamp + measured confirm->publish latency (bd er-effects-rs-dpf6 Phase 1).
+pub use er_telemetry::counters::PORTRAIT_CONFIRM_MS;
+pub use er_telemetry::counters::PORTRAIT_CONFIRM_TO_PUBLISH_MS_LAST;
+/// Name-hash of the pipeline's current TARGET slot, stamped at the game-thread build kick.
+pub use er_telemetry::counters::PORTRAIT_TARGET_NAME_HASH;
 /// CSMenuProfModelRend "marked-for-delete" byte (renderer+0x756) and the CSChrAsmModelIns* pointer
 /// (renderer+0x778) that is non-null only once the character model has finished async-loading -- the
 /// real "portrait is rendering" gate (the +0x754/+0x755 bytes are only a setup-submitted latch).
