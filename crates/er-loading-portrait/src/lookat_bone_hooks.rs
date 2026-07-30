@@ -359,10 +359,23 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
     // draw_step) AND clear PROFILE_LOOKAT_REALTIME so the per-frame push hook detour (`per_frame_push_hook`,
     // whose work is gated on it) becomes a cheap passthrough. Per-epoch stop (BOOT_VIEW_EPOCH_WORLD_LIVE
     // == cur), not the stale one-shot IN_WORLD_REACHED latch that never fires for load2.
+    //
+    // BOOT-EPOCH EXEMPTION (bd er-effects-rs-io53, `cur != 0` -- the same exemption
+    // composite_on_game_swapchain already carries): epoch 0 spans DLL attach -> title -> the boot
+    // loading screen, and the world clock can genuinely go live MID boot screen (the loading-screen
+    // playtime stat ticks while the cover is still up), which stopped this tick ~2s into the boot
+    // screen -- render_drives frozen, gx samples 0, zero publishes for the whole ~12.7s cover (run
+    // product-continue-direct-20260729-205115). The boot epoch's IN-WORLD idle is already enforced by
+    // `portrait_pipeline_idle_in_gameplay` (IN_WORLD_REACHED is reliable for the FIRST load; its known
+    // flaw is only subsequent loads), and load1 in-world was measured clean without this gate (bd
+    // FPS-ROOT-...-2026-07-22: portrait scan 8x on load1 vs ~3400x on reloads). Switch epochs
+    // (cur != 0) keep the per-epoch stop exactly as merged.
     {
         let cur = er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
             .load(Ordering::SeqCst);
-        if er_telemetry::counters::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur {
+        if cur != 0
+            && er_telemetry::counters::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur
+        {
             PROFILE_LOOKAT_REALTIME.store(false, Ordering::SeqCst);
             return;
         }
