@@ -122,13 +122,9 @@ def test_script_scan_rejects_proton_command_requirement() -> None:
 
 
 def test_native_overlay_is_top_level_isolated_d3d12_overlay() -> None:
+    # Portrait crate split (2026-07-29): native_overlay.rs lives in er-loading-portrait.
     native_overlay = (
-        REPO_ROOT
-        / "crates"
-        / "er-effects-rs"
-        / "src"
-        / "experiments"
-        / "native_overlay.rs"
+        REPO_ROOT / "crates" / "er-loading-portrait" / "src" / "native_overlay.rs"
     ).read_text(encoding="utf-8", errors="replace")
     assert "SEPARATE top-level window" in native_overlay
     assert "OWN D3D12 device" in native_overlay

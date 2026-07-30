@@ -25,8 +25,6 @@ pub(crate) const DIRECTINPUT_FORWARD_ERROR_MOD_NOT_FOUND: i32 = 0x8007_007e_u32 
 pub(crate) const DINPUT8_SYSTEM_DLL: &[u8] = b"C:\\windows\\system32\\dinput8.dll\0";
 pub(crate) const DIRECTINPUT8_CREATE_SYMBOL: &[u8] = b"DirectInput8Create\0";
 pub(crate) const APPEAR_ANIMATION_ID: i32 = 63010;
-pub(crate) const OVERLAY_INITIAL_POSITION: [f32; 2] = [24.0, 24.0];
-pub(crate) const OVERLAY_INITIAL_SIZE: [f32; 2] = [420.0, 420.0];
 /// TimeAct animation IDs at or below this value mark unused/cleared queue
 /// slots rather than a real animation.
 pub(crate) const INVALID_ANIMATION_ID_FLOOR: i32 = 0;
@@ -125,11 +123,14 @@ pub(crate) const INHERIT_HANDLE_FALSE: i32 = 0;
 /// taking the EffectsState lock before the player check.
 pub(crate) use er_telemetry::counters::C30_WATCH_FRAME_COUNTER;
 
+// The portrait constants files (portrait_semaphores.rs, portrait_camera.rs,
+// portrait_lookat.rs) and several anti_debug.rs/stats_panel_text.rs/gaitem_restore.rs
+// blocks moved to the er-loading-portrait crate (portrait crate split); the glob shim
+// re-exports them so every remaining flat-namespace reference keeps compiling unchanged.
+pub(crate) use er_loading_portrait::*;
+
 include!("constants/software_breakpoints.rs");
 include!("constants/anti_debug.rs");
-include!("constants/portrait_semaphores.rs");
-include!("constants/portrait_camera.rs");
-include!("constants/portrait_lookat.rs");
 include!("constants/tpf_textures.rs");
 include!("constants/stats_panel_background.rs");
 include!("constants/stats_panel_text.rs");

@@ -436,24 +436,10 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     // torn-down post-Continue table), repopulate the table during now-loading so the rest of this tick
     // (mark+refresh feed) and the draw/oracle run on the loading screen.
     unsafe { maybe_build_profile_table_for_loading(base) };
-    // VISIBILITY: once our built renderer's offscreen RT is live, swap it into the now-loading background
-    // container the forge already injected (the background binds BEFORE our renderer exists and never
-    // re-binds, so the live RT must be pushed into the displayed container after the fact).
-    unsafe { refresh_loading_bg_live_gx(base) };
-    // Once the real IBL-lit menu portrait has been baked into LOADING_BG_PORTRAIT_RGBA, drive the loading
-    // screen to show it. Two paths, mutually exclusive:
-    //  * live-portrait overlay path (product default): CANDIDATE A (er-effects-rs-jsm) -- copy the live head INTO the
-    //    DISPLAYED now-loading GFx texture so the movie's own tips + Gauge_3 bar render ABOVE it. This
-    //    demotes the Present-overlay while it succeeds; on any miss the overlay keeps showing the head.
-    //  * native-forge path: the legacy in-place re-forge of the CS-side texture (single static head, no
-    //    live tracking; the overlay is not running there).
+    // Build the player-stats text bitmap (game menu font) once the stats + font are readable, for the
+    // loading cover to composite alongside the portrait in place of the native tips.
     if portrait_overlay_enabled() {
-        unsafe { maybe_update_gfx_loading_portrait(base) };
-        // PIVOT (er-effects-rs-jsm): build the player-stats text bitmap (game menu font) once the stats +
-        // font are readable, for the overlay to composite on top of the head in place of the native tips.
         unsafe { maybe_build_stats_text() };
-    } else {
-        unsafe { maybe_reforge_loading_portrait(base) };
     }
     // Product source ownership: the pre-Continue/ProfileSelect renderer is not our loading portrait
     // source. Ignore it completely (no kick, no spare candidate, no bake-capture/dump) until the

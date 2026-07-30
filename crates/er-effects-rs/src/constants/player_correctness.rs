@@ -1,17 +1,4 @@
 // ---- CS::PlayerGameData correctness oracle (read at in-world) ----
-/// `[base+this]` -> CS::GameDataMan* (the singleton at 0x144588268). The all-player save data
-/// GameDataMan singleton slot: `GameDataMan* = *(base + 0x3d5df38)`; PlayerGameData hangs off it
-/// at +0x08. CORRECTED 2026-06-17: the prior value 0x4588268 was the WRONG global (read garbage:
-/// level=805829232, name="翿"). The real GameDataMan is 0x3d5df38 -- confirmed by fromsoftware-rs
-/// (`rva::game_data_man = 0x3d5df38`, `GameDataMan::main_player_game_data` at struct +0x08) and the
-/// on-disk binary (dozens of `mov reg,[rip->0x143d5df38]; mov reg,[rax+0x8]; test; je` accessor
-/// sites). Validated against the live char "a" (level 9, runes 0, stats [15,10,11,14,13,9,9,7]).
-/// GameDataMan -> PlayerGameData (the active/main player's save data) sub-object pointer.
-/// Offsets are bound to the upstream `eldenring` typed layout via `offset_of!` so they
-/// track `fromsoftware-rs` automatically and fail the build if the struct layout drifts
-/// (compile-time accuracy guarantee, replacing the hand-decoded hex constants).
-pub(crate) const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize =
-    core::mem::offset_of!(GameDataMan, main_player_game_data);
 /// `GameDataMan::play_time` (u32, in-game play time in milliseconds, maxed at 999:59:59.999).
 /// WORLD-LIVE LIVENESS signal for the render gate: the game advances this clock only while the
 /// world simulation is actually stepping; it is PAUSED during loads/menus/frozen-world states.
@@ -22,23 +9,16 @@ pub(crate) const GAME_DATA_MAN_PLAY_TIME_A0_OFFSET: usize =
     core::mem::offset_of!(GameDataMan, play_time);
 pub(crate) const PGD_CURRENT_HP_10_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, current_hp);
-pub(crate) const PGD_CURRENT_MAX_HP_14_OFFSET: usize =
-    core::mem::offset_of!(PlayerGameData, current_max_hp);
 pub(crate) const PGD_BASE_MAX_HP_18_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, base_max_hp);
 pub(crate) const PGD_CURRENT_FP_1C_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, current_fp);
-pub(crate) const PGD_CURRENT_MAX_FP_20_OFFSET: usize =
-    core::mem::offset_of!(PlayerGameData, current_max_fp);
 pub(crate) const PGD_BASE_MAX_FP_24_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, base_max_fp);
 pub(crate) const PGD_CURRENT_STAMINA_2C_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, current_stamina);
-pub(crate) const PGD_CURRENT_MAX_STAMINA_30_OFFSET: usize =
-    core::mem::offset_of!(PlayerGameData, current_max_stamina);
 pub(crate) const PGD_BASE_MAX_STAMINA_34_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, base_max_stamina);
-pub(crate) const PGD_LEVEL_68_OFFSET: usize = core::mem::offset_of!(PlayerGameData, level);
 pub(crate) const PGD_RUNE_COUNT_6C_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, rune_count);
 pub(crate) const PGD_RUNE_MEMORY_70_OFFSET: usize =
@@ -57,7 +37,6 @@ pub(crate) const CHR_ASM_GAITEM_HANDLES_OFFSET: usize =
     core::mem::offset_of!(ChrAsm, gaitem_handles);
 pub(crate) const CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET: usize =
     core::mem::offset_of!(ChrAsm, equipment_param_ids);
-pub(crate) const PGD_GENDER_BE_OFFSET: usize = core::mem::offset_of!(PlayerGameData, gender);
 pub(crate) const PGD_ARCHETYPE_BF_OFFSET: usize = core::mem::offset_of!(PlayerGameData, archetype);
 pub(crate) const PGD_VOICE_TYPE_C2_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, voice_type);
@@ -140,14 +119,7 @@ pub(crate) const FACE_BODY_FIELD_SKIN_COLOR_G_OFFSET: usize =
     FACE_BODY_FIELD_SKIN_COLOR_R_OFFSET + core::mem::size_of::<u8>();
 pub(crate) const FACE_BODY_FIELD_SKIN_COLOR_B_OFFSET: usize =
     FACE_BODY_FIELD_SKIN_COLOR_G_OFFSET + core::mem::size_of::<u8>();
-/// `character_name` is private upstream, so compute its start from the preceding public `chr_type`
-/// field and its length from the following public `gender` field.
-pub(crate) const PGD_NAME_9C_OFFSET: usize = core::mem::offset_of!(PlayerGameData, chr_type)
-    + core::mem::size_of::<eldenring::cs::ChrType>();
-pub(crate) const PGD_NAME_LEN_U16: usize =
-    (PGD_GENDER_BE_OFFSET - PGD_NAME_9C_OFFSET) / core::mem::size_of::<u16>();
 /// Base/end of the contiguous stat block; upstream's first post-stat field is `base_hero_point`.
-pub(crate) const PGD_STAT_BASE_3C_OFFSET: usize = core::mem::offset_of!(PlayerGameData, vigor);
 pub(crate) const PGD_STAT_END_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, base_hero_point);
 pub(crate) const PGD_STAT_COUNT: usize =

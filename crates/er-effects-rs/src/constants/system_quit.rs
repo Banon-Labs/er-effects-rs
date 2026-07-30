@@ -474,7 +474,6 @@ pub(crate) static START_TITLE_FLOW_CONTEXT_RECORD_REGULATION: Once = Once::new()
 /// One-shot install guard for the stats-panel native-text hooks (named-child capture + SetText).
 pub(crate) static START_PROFILE_STATS_TEXT: Once = Once::new();
 pub(crate) static START_NOW_LOADING_HELPER_OBSERVER: Once = Once::new();
-pub(crate) static START_LOADING_BG_REPLACE_BIND: Once = Once::new();
 /// One-shot install of the loading-tip suppression detour (er-effects-rs-jsm). Installed at DLL attach,
 /// BEFORE the KnowledgeLoadingScreen ctor sets the first tip (~15s), so no native tip is ever set.
 pub(crate) static START_TIP_SUPPRESSION: Once = Once::new();

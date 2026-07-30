@@ -64,8 +64,11 @@ pub(crate) use present_overlay::*;
 mod gpu_frame_timing;
 pub(crate) use gpu_frame_timing::*;
 
-mod native_overlay;
-pub(crate) use native_overlay::*;
+// native_overlay moved to the er-loading-portrait crate (portrait crate split); the
+// explicit re-exports keep the product call sites (lifecycle.rs, telemetry oracles)
+// compiling unchanged. The rest of the crate's surface flows in through the glob shims
+// at the top of gpu_readback.rs / startup_hooks.rs.
+pub(crate) use er_loading_portrait::{NATIVE_OVERLAY_SHOW, install_native_overlay};
 
 pub(crate) mod can_move_probe;
 mod input_block;

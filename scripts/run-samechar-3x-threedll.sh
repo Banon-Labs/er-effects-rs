@@ -20,8 +20,16 @@
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-CORPUS_ROOT="${ER_SAVE_CORPUS_ROOT:-/mnt/a/Code Projects/Elden Ring Save Manager/data/save-files}"
-BOOT_FILE="${BOOT_FILE:-$CORPUS_ROOT/100-Lilbro/ER0000.sl2}"
+# SAVE SOURCE IS ALWAYS THE GAME'S DEFAULT APPDATA SAVE (staged-save/ER_EFFECTS_SAVE_FILE was
+# deprecated 2026-07-08 and stripped from this harness). BOOT_FILE used to select a corpus save,
+# but nothing staged it anymore -- it was validated + echoed and silently ignored (observed
+# 2026-07-29: BOOT_FILE=100-Lilbro run mounted the APPDATA Banon save). Fail closed instead of lying.
+if [[ -n "${BOOT_FILE:-}" ]]; then
+	echo "run-samechar-3x-threedll: BOOT_FILE is not supported -- this harness always loads the" >&2
+	echo "game-owned default APPDATA save (deprecated staged-save path removed). To test a specific" >&2
+	echo "character, make it the active default save first. Refusing to run with a lying parameter." >&2
+	exit 2
+fi
 BOOT_SLOT="${BOOT_SLOT:-0}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/samechar-3x-threedll-$(date +%Y%m%d-%H%M%S)}"
 PRODUCT_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll"
@@ -74,7 +82,6 @@ steam_running || fail "Steam is not running. Start Steam (interactive login) fir
 [[ -f "$HARNESS_DLL" ]] || fail "input-harness DLL not built: $HARNESS_DLL (cargo xwin build --release --target x86_64-pc-windows-msvc -p er-input-harness-dll)"
 [[ -f "$TELEM_DLL" ]] || fail "telemetry DLL not built: $TELEM_DLL (cargo xwin build --release --target x86_64-pc-windows-msvc -p er-telemetry-dll)"
 [[ "${RENDERDOC:-0}" != "1" || -f "$RDOC_DLL" ]] || fail "RENDERDOC=1 but renderdoc.dll not found at '$RDOC_DLL' (set RENDERDOC_DLL=<path to Windows renderdoc.dll>)."
-[[ -f "$BOOT_FILE" ]] || fail "boot save not found: $BOOT_FILE"
 
 if [[ -z "${ME3:-}" ]]; then
 	if command -v me3 >/dev/null 2>&1; then
@@ -251,7 +258,7 @@ trap cleanup EXIT
 echo "======================================================================"
 echo "== LAUNCHING ELDEN RING (offline, me3) -- same-char-3x, THREE DLLs =="
 echo "==   product + trace + input-harness (direct input-memory self-drive)"
-echo "==   boot=$BOOT_FILE slot=$BOOT_SLOT  cap=${CAP_SECONDS}s"
+echo "==   save=default APPDATA (game-owned)  slot=$BOOT_SLOT  cap=${CAP_SECONDS}s"
 echo "==   INPUT WILL BE DRIVEN (direct keystate-bitmap injection) -- agent-owned bounded run"
 echo "==   tab-switch finish is a KNOWN GAP (mouse-only; see er-input-harness.log)"
 echo "==   artifacts -> $ARTIFACT_DIR"

@@ -2781,6 +2781,7 @@ dependencies = [
  "er-gfx",
  "er-hook",
  "er-loading-bar",
+ "er-loading-portrait",
  "er-save-loader",
  "er-save-suppress",
  "er-telemetry",
@@ -2852,6 +2853,30 @@ version = "0.1.0"
 dependencies = [
  "er-d3d12-compositor",
  "er-loading-bar",
+]
+
+[[package]]
+name = "er-loading-portrait"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.13.1",
+ "eldenring",
+ "er-game-base",
+ "er-gfx",
+ "er-hook",
+ "er-telemetry",
+ "erpx-rs",
+ "fromsoftware-shared",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "er-loading-portrait-dll"
+version = "0.1.0"
+dependencies = [
+ "er-d3d12-compositor",
+ "er-loading-bar",
+ "er-loading-portrait",
 ]
 
 [[package]]

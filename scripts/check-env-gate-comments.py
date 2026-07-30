@@ -35,6 +35,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = REPO_ROOT / "crates" / "er-effects-rs" / "src"
+# The er-loading-portrait feature crate is product DLL code (portrait crate split, 2026-07-29):
+# its env reads are policed exactly like the root crate's. Scanned only when SRC_DIR is the
+# real product tree, so the fixture-based regression tests stay hermetic.
+PRODUCT_SRC_DIR = SRC_DIR
+PORTRAIT_SRC_DIR = REPO_ROOT / "crates" / "er-loading-portrait" / "src"
 AUTO_DIR = REPO_ROOT / ".auto"
 BASELINE_PATH = AUTO_DIR / "env_gate_comment_baseline.json"
 POLICY_PATH = AUTO_DIR / "env_gate_comment_policy.rego"
@@ -108,11 +113,20 @@ def find_enclosing_fn(lines: list[str], read_index: int) -> str:
     return "<module>"
 
 
+def scan_dirs() -> list[Path]:
+    dirs = [SRC_DIR]
+    if SRC_DIR == PRODUCT_SRC_DIR and PORTRAIT_SRC_DIR.exists():
+        dirs.append(PORTRAIT_SRC_DIR)
+    return dirs
+
+
 def scan_gates() -> list[Gate]:
     gates: list[Gate] = []
-    if not SRC_DIR.exists():
-        return gates
-    for path in sorted(SRC_DIR.rglob("*.rs")):
+    rust_paths: list[Path] = []
+    for src_dir in scan_dirs():
+        if src_dir.exists():
+            rust_paths.extend(src_dir.rglob("*.rs"))
+    for path in sorted(rust_paths):
         text = path.read_text(encoding="utf-8", errors="replace")
         lines = text.splitlines()
         for read_index, line in enumerate(lines):

@@ -1,5 +1,6 @@
+use crate::prelude::*;
 
-unsafe fn read_native_dlstring_ascii_ptr(s: usize) -> usize {
+pub unsafe fn read_native_dlstring_ascii_ptr(s: usize) -> usize {
     if s == 0 || s == TITLE_OWNER_SCAN_START_ADDRESS {
         return TITLE_OWNER_SCAN_START_ADDRESS;
     }
@@ -11,7 +12,7 @@ unsafe fn read_native_dlstring_ascii_ptr(s: usize) -> usize {
     }
 }
 
-unsafe fn bounded_ascii_contains(ptr: usize, needle: &[u8]) -> bool {
+pub unsafe fn bounded_ascii_contains(ptr: usize, needle: &[u8]) -> bool {
     if ptr == 0 || ptr == TITLE_OWNER_SCAN_START_ADDRESS || needle.is_empty() {
         return false;
     }
@@ -39,7 +40,7 @@ unsafe fn bounded_ascii_contains(ptr: usize, needle: &[u8]) -> bool {
     false
 }
 
-unsafe fn copy_ascii_preview(ptr: usize, out: &mut [u8]) -> usize {
+pub unsafe fn copy_ascii_preview(ptr: usize, out: &mut [u8]) -> usize {
     if ptr == 0 || ptr == TITLE_OWNER_SCAN_START_ADDRESS || out.is_empty() {
         return 0;
     }
@@ -61,7 +62,7 @@ unsafe fn copy_ascii_preview(ptr: usize, out: &mut [u8]) -> usize {
     n
 }
 
-unsafe fn rewrite_native_dlstring_ascii(s: usize, value: &str) -> Option<usize> {
+pub unsafe fn rewrite_native_dlstring_ascii(s: usize, value: &str) -> Option<usize> {
     if s == 0 || s == TITLE_OWNER_SCAN_START_ADDRESS || !value.is_ascii() {
         return None;
     }
@@ -108,7 +109,7 @@ unsafe fn sample_now_loading_helper(this: usize) {
     NOW_LOADING_HELPER_LAST_FLAGS.store(request_done | (load_done << 8), Ordering::SeqCst);
 }
 
-pub(crate) unsafe extern "system" fn now_loading_helper_ctor_hook(this: usize) -> usize {
+pub unsafe extern "system" fn now_loading_helper_ctor_hook(this: usize) -> usize {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let orig = NOW_LOADING_HELPER_CTOR_ORIG.load(Ordering::SeqCst);
     let ret = if orig != null && orig != HOOK_ORIGINAL_UNSET {
@@ -129,7 +130,7 @@ pub(crate) unsafe extern "system" fn now_loading_helper_ctor_hook(this: usize) -
     ret
 }
 
-pub(crate) unsafe extern "system" fn now_loading_helper_update_hook(this: usize, time: usize) {
+pub unsafe extern "system" fn now_loading_helper_update_hook(this: usize, time: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let orig = NOW_LOADING_HELPER_UPDATE_ORIG.load(Ordering::SeqCst);
     if orig != null && orig != HOOK_ORIGINAL_UNSET {
@@ -155,19 +156,19 @@ unsafe fn loading_screen_progress_permille(data: usize) -> usize {
     if data == 0 || data == TITLE_OWNER_SCAN_START_ADDRESS {
         return 0;
     }
-    let active_idx = unsafe { safe_read_i32(data + LOADING_SCREEN_DATA_ACTIVE_INDEX_OFFSET) }
-        .unwrap_or(-1);
+    let active_idx =
+        unsafe { safe_read_i32(data + LOADING_SCREEN_DATA_ACTIVE_INDEX_OFFSET) }.unwrap_or(-1);
     if active_idx < 0 {
         return 0;
     }
-    let start = unsafe { safe_read_f32(data + LOADING_SCREEN_DATA_START_PROGRESS_OFFSET) }
-        .unwrap_or(0.0);
-    let target = unsafe { safe_read_f32(data + LOADING_SCREEN_DATA_TARGET_PROGRESS_OFFSET) }
-        .unwrap_or(0.0);
-    let duration = unsafe { safe_read_f32(data + LOADING_SCREEN_DATA_INTERP_DURATION_OFFSET) }
-        .unwrap_or(0.0);
-    let elapsed = unsafe { safe_read_f32(data + LOADING_SCREEN_DATA_INTERP_ELAPSED_OFFSET) }
-        .unwrap_or(0.0);
+    let start =
+        unsafe { safe_read_f32(data + LOADING_SCREEN_DATA_START_PROGRESS_OFFSET) }.unwrap_or(0.0);
+    let target =
+        unsafe { safe_read_f32(data + LOADING_SCREEN_DATA_TARGET_PROGRESS_OFFSET) }.unwrap_or(0.0);
+    let duration =
+        unsafe { safe_read_f32(data + LOADING_SCREEN_DATA_INTERP_DURATION_OFFSET) }.unwrap_or(0.0);
+    let elapsed =
+        unsafe { safe_read_f32(data + LOADING_SCREEN_DATA_INTERP_ELAPSED_OFFSET) }.unwrap_or(0.0);
     let progress = if duration <= 0.0 {
         start
     } else if duration < elapsed {
@@ -186,8 +187,8 @@ unsafe fn sample_loading_screen_bar(this: usize) {
     let data = unsafe { safe_read_usize(this + LOADING_SCREEN_DATA_OFFSET) }
         .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
     LOADING_SCREEN_LAST_DATA.store(data, Ordering::SeqCst);
-    let enabled = unsafe { safe_read_u8(this + LOADING_SCREEN_GAUGE_ENABLED_OFFSET) }
-        .unwrap_or(0) as usize;
+    let enabled =
+        unsafe { safe_read_u8(this + LOADING_SCREEN_GAUGE_ENABLED_OFFSET) }.unwrap_or(0) as usize;
     LOADING_SCREEN_BAR_ENABLED.store(enabled, Ordering::SeqCst);
     let component = this + LOADING_SCREEN_GAUGE_COMPONENT_OFFSET;
     let current = unsafe { safe_read_i32(component + MENU_FRAME_COMPONENT_CURRENT_FRAME_OFFSET) }
@@ -200,8 +201,8 @@ unsafe fn sample_loading_screen_bar(this: usize) {
     LOADING_SCREEN_BAR_MAX_FRAME.store(max, Ordering::SeqCst);
     let progress_pm = unsafe { loading_screen_progress_permille(data) };
     LOADING_SCREEN_BAR_PROGRESS_PERMILLE.store(progress_pm, Ordering::SeqCst);
-    let finish_sent = unsafe { safe_read_u8(this + LOADING_SCREEN_FINISH_SENT_OFFSET) }
-        .unwrap_or(0) as usize;
+    let finish_sent =
+        unsafe { safe_read_u8(this + LOADING_SCREEN_FINISH_SENT_OFFSET) }.unwrap_or(0) as usize;
     let prev_finish_sent = LOADING_SCREEN_CLOSE_SENT.swap(finish_sent, Ordering::SeqCst);
     if enabled != 0 && max != 0 && current >= max {
         let hits = LOADING_SCREEN_BAR_FINAL_HITS.fetch_add(1, Ordering::SeqCst) + 1;
@@ -213,7 +214,7 @@ unsafe fn sample_loading_screen_bar(this: usize) {
         }
     }
     if finish_sent != 0 && prev_finish_sent == 0 {
-        let now_ms = crate::experiments::gpu_readback::boot_view_epoch_ms().max(1) as usize;
+        let now_ms = crate::boot_view_epoch_ms().max(1) as usize;
         let hits = LOADING_SCREEN_CLOSE_SENT_HITS.fetch_add(1, Ordering::SeqCst) + 1;
         let _ = LOADING_SCREEN_CLOSE_SENT_FIRST_MS.compare_exchange(
             0,
@@ -227,11 +228,7 @@ unsafe fn sample_loading_screen_bar(this: usize) {
     }
 }
 
-pub(crate) unsafe extern "system" fn loading_screen_update_hook(
-    this: usize,
-    dt: f32,
-    param3: usize,
-) {
+pub unsafe extern "system" fn loading_screen_update_hook(this: usize, dt: f32, param3: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let orig = LOADING_SCREEN_UPDATE_ORIG.load(Ordering::SeqCst);
     if orig != null && orig != HOOK_ORIGINAL_UNSET {
@@ -239,7 +236,7 @@ pub(crate) unsafe extern "system" fn loading_screen_update_hook(
             unsafe { std::mem::transmute(orig) };
         unsafe { original(this, dt, param3) };
     }
-    let now_ms = crate::experiments::gpu_readback::boot_view_epoch_ms().max(1) as usize;
+    let now_ms = crate::boot_view_epoch_ms().max(1) as usize;
     LOADING_SCREEN_UPDATE_LAST_MS.store(now_ms, Ordering::SeqCst);
     let hits = LOADING_SCREEN_UPDATE_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
         + OWN_STEPPER_CALL_INC;
@@ -256,7 +253,7 @@ pub(crate) unsafe extern "system" fn loading_screen_update_hook(
 }
 
 fn stamp_loading_gfx_fadeout(source: &str, this: usize, label: usize) {
-    let now_ms = crate::experiments::gpu_readback::boot_view_epoch_ms().max(1) as usize;
+    let now_ms = crate::boot_view_epoch_ms().max(1) as usize;
     let hits = LOADING_SCREEN_GFX_FADEOUT_HITS.fetch_add(1, Ordering::SeqCst) + 1;
     LOADING_SCREEN_GFX_FADEOUT_LAST_MS.store(now_ms, Ordering::SeqCst);
     let first = LOADING_SCREEN_GFX_FADEOUT_FIRST_MS.load(Ordering::SeqCst);
@@ -276,19 +273,20 @@ fn stamp_loading_gfx_fadeout(source: &str, this: usize, label: usize) {
     }
 }
 
-pub(crate) unsafe extern "system" fn scaleform_label_goto_hook(this: usize, label: usize) {
+pub unsafe extern "system" fn scaleform_label_goto_hook(this: usize, label: usize) {
     if unsafe { bounded_ascii_contains(label, b"fadeout") } {
         stamp_loading_gfx_fadeout("label-goto", this, label);
     }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let orig = SCALEFORM_LABEL_GOTO_ORIG.load(Ordering::SeqCst);
     if orig != null && orig != HOOK_ORIGINAL_UNSET {
-        let original: unsafe extern "system" fn(usize, usize) = unsafe { std::mem::transmute(orig) };
+        let original: unsafe extern "system" fn(usize, usize) =
+            unsafe { std::mem::transmute(orig) };
         unsafe { original(this, label) };
     }
 }
 
-pub(crate) unsafe extern "system" fn loading_screen_gfx_fadeout_hook(this: usize) {
+pub unsafe extern "system" fn loading_screen_gfx_fadeout_hook(this: usize) {
     stamp_loading_gfx_fadeout("knowledge-method", this, 0);
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let orig = LOADING_SCREEN_GFX_FADEOUT_ORIG.load(Ordering::SeqCst);
@@ -298,7 +296,7 @@ pub(crate) unsafe extern "system" fn loading_screen_gfx_fadeout_hook(this: usize
     }
 }
 
-pub(crate) fn install_now_loading_helper_observer_hooks() {
+pub fn install_now_loading_helper_observer_hooks() {
     if NOW_LOADING_HELPER_HOOKS_INSTALLED.load(Ordering::SeqCst) != 0 {
         return;
     }
@@ -402,7 +400,12 @@ pub(crate) fn install_now_loading_helper_observer_hooks() {
         }
     }
     if let Some(addr) = scaleform_label_goto {
-        match unsafe { MhHook::new(addr as *mut c_void, scaleform_label_goto_hook as *mut c_void) } {
+        match unsafe {
+            MhHook::new(
+                addr as *mut c_void,
+                scaleform_label_goto_hook as *mut c_void,
+            )
+        } {
             Ok(hook) => {
                 SCALEFORM_LABEL_GOTO_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
                 ok &= unsafe { hook.queue_enable() }.is_ok();
@@ -461,7 +464,7 @@ pub(crate) fn install_now_loading_helper_observer_hooks() {
     }
 }
 
-unsafe fn wide_ascii_contains_ci(ptr: usize, needle: &[u8]) -> bool {
+pub unsafe fn wide_ascii_contains_ci(ptr: usize, needle: &[u8]) -> bool {
     if ptr == 0 || ptr == TITLE_OWNER_SCAN_START_ADDRESS || needle.is_empty() {
         return false;
     }
@@ -484,7 +487,7 @@ unsafe fn wide_ascii_contains_ci(ptr: usize, needle: &[u8]) -> bool {
     hay[..n].windows(needle.len()).any(|w| w == needle)
 }
 
-unsafe fn copy_wide_ascii_preview(ptr: usize, out: &mut [u8]) -> usize {
+pub unsafe fn copy_wide_ascii_preview(ptr: usize, out: &mut [u8]) -> usize {
     if ptr == 0 || ptr == TITLE_OWNER_SCAN_START_ADDRESS || out.is_empty() {
         return 0;
     }
@@ -534,42 +537,10 @@ unsafe fn read_dlstring_u16(s: usize) -> Option<(Vec<u16>, u8)> {
     Some((out, encoding))
 }
 
-/// Extract the bare GFx background texture symbol (e.g. `MENU_Load_00008`) from a now-loading TPF
-/// path symbol like `menutpfbnd:/00_Solo/MENU_Load_00008.tpf`. The pump registers this bare name into
-/// the Scaleform texture repository, so it must be exactly the symbol the loading GFx resolves.
-/// Returns None when the path has no `MENU_Load_` segment (i.e. not a now-loading background).
-fn extract_menu_load_tex_name(path: &str) -> Option<String> {
-    let lower = path.to_ascii_lowercase();
-    let idx = lower.find("menu_load_")?;
-    // Lowercasing ASCII preserves byte indices, so `idx` is valid in the original `path`.
-    let tail = path.get(idx..)?;
-    let name = tail.split('.').next().unwrap_or(tail);
-    if name.is_empty() {
-        None
-    } else {
-        Some(name.to_string())
-    }
-}
-
-/// Bounded ASCII preview of a UTF-16 buffer for debug logging.
-fn utf16_ascii_preview(units: &[u16]) -> String {
-    units
-        .iter()
-        .take(64)
-        .map(|&u| {
-            if (0x20..=0x7e).contains(&u) {
-                u as u8 as char
-            } else {
-                '?'
-            }
-        })
-        .collect()
-}
-
 /// Absolute address of the profile renderer table entry for `slot` (`DAT_143d6d8d0[slot]`, the
 /// `CSMenuProfModelRend*` for that ABSOLUTE save slot; offscreen tex index `slot*2`). Out-of-range
 /// slots fall back to entry 0, preserving the historical table[0] behavior for `slot == 0` or unknown.
-pub(crate) fn portrait_renderer_table_entry(base: usize, slot: i32) -> usize {
+pub fn portrait_renderer_table_entry(base: usize, slot: i32) -> usize {
     let idx = if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&slot) {
         slot as usize
     } else {
@@ -609,97 +580,6 @@ unsafe fn sample_portrait_gxtexture(base: usize, slot: i32) -> usize {
         .unwrap_or(0)
 }
 
-/// Re-bind the LIVE offscreen-RT CSGxTexture of our post-Continue built renderer into the now-loading
-/// background container that the forge already injected. The now-loading background binds ~15-17s (BEFORE
-/// our renderer's RT is live) and never re-binds, so the displayed container holds the forged checker; this
-/// swaps our live GX into that container's first TexResCap every tick once the RT is up, and GFx -- which
-/// re-samples the bound CSGxTexture each composite frame -- then shows the live animated portrait. The
-/// CSGxTexture identity is stable while our feed window keeps the renderer alive, so this is idempotent
-/// once latched. Read/validate-guarded; writes only the single GX pointer slot.
-unsafe fn refresh_loading_bg_live_gx(base: usize) {
-    let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let valid = |p: usize| p != 0 && p != null;
-    // DISABLED (crashes): binding the built-own renderer's LIVE offscreen SRV into the now-loading
-    // Scaleform container makes dxgi/vkd3d AV ~330ms later when the GFx sampler reads it (run 2026-06-30:
-    // RE-BOUND +18003ms -> 0xc0000005 in vkd3d at +18336ms). The offscreen SRV is a render-target resource,
-    // not valid as a Scaleform shader-resource (format/descriptor/state mismatch), so the container's
-    // sampler faults. Native Scaleform GX rebind is a dead end (the menu-renderer variant UAF'd; this
-    // built-own variant format-faults). The SAFE display path is the present-overlay D3D12 composite
-    // (CopyTextureRegion, not a sampler) fed by a per-frame READBACK of the live built SRV -- see bd
-    // portrait-live-render-reattach-crashes-build-own-2026-06-30. Kept gated-off here for reference.
-    if true || !portrait_render_drive_enabled() {
-        return;
-    }
-    if PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst) == 0 {
-        return;
-    }
-    let cap = LOADING_BG_TEXTURE_REDIRECT_LAST_PORTRAIT.load(Ordering::SeqCst);
-    if !valid(cap) {
-        return;
-    }
-    // Resolve the LIVE SRV from our built target-slot renderer: table[slot] -> +0xa8 (offscreen) -> +0x10
-    // (TexResCap) -> +GX = the sampleable CSGxTexture the engine re-renders each frame. Validate the vtable
-    // so a torn/rebuilding slot can't bind a bad pointer. Slot = the loaded character (er-effects-rs-j3r).
-    let slot = portrait_loaded_slot();
-    let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, slot)) }.unwrap_or(0);
-    if !valid(r)
-        || unsafe { safe_read_usize(r) }.unwrap_or(0)
-            != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
-    {
-        return;
-    }
-    let off =
-        unsafe { safe_read_usize(r + TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET) }
-            .unwrap_or(0);
-    if !valid(off) {
-        return;
-    }
-    let trc =
-        unsafe { safe_read_usize(off + TITLE_CUSTOM_COVER_PROFILE_OFFSCREEN_TEX_RESCAP_OFFSET) }
-            .unwrap_or(0);
-    if !valid(trc) {
-        return;
-    }
-    let bind_gx = unsafe { safe_read_usize(trc + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET) }
-        .unwrap_or(0);
-    if !valid(bind_gx) {
-        return;
-    }
-    let container = unsafe { safe_read_usize(cap + TPF_FILE_CAP_TEX_RESCAP_OFFSET) }.unwrap_or(0);
-    if !valid(container) {
-        return;
-    }
-    let count = unsafe { safe_read_usize(container + TPF_RESCAP_CONTAINER_COUNT_OFFSET) }
-        .unwrap_or(0)
-        & 0xffff_ffff;
-    let array =
-        unsafe { safe_read_usize(container + TPF_RESCAP_CONTAINER_ARRAY_OFFSET) }.unwrap_or(0);
-    if count < 1 || !valid(array) {
-        return;
-    }
-    let tex_rescap0 = unsafe { safe_read_usize(array) }.unwrap_or(0);
-    if !valid(tex_rescap0) {
-        return;
-    }
-    let cur =
-        unsafe { safe_read_usize(tex_rescap0 + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET) }
-            .unwrap_or(0);
-    if cur == bind_gx {
-        return; // already bound to the captured RT
-    }
-    unsafe {
-        ((tex_rescap0 + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET) as *mut usize)
-            .write_volatile(bind_gx)
-    };
-    LOADING_BG_LIVE_GX_BOUND.store(bind_gx, Ordering::SeqCst);
-    let n = LOADING_BG_LIVE_GX_REBINDS.fetch_add(1, Ordering::SeqCst) + 1;
-    if n == 1 {
-        append_autoload_debug(format_args!(
-            "loading-portrait: RE-BOUND captured (AddRef'd) portrait RT into the now-loading container -- bind_gx=0x{bind_gx:x} (was 0x{cur:x}) cap=0x{cap:x} container=0x{container:x}; loading screen samples the lifetime-safe portrait"
-        ));
-    }
-}
-
 /// Per-frame: keep the spared profile renderer drawing and capture the portrait once its model
 /// finishes loading. After Continue the menu-owned offscreen-draw MenuJob stops, so we drive the
 /// spared renderer's offscreen render ourselves each frame (`FUN_140bb8d90`); the global ResMan task
@@ -710,7 +590,7 @@ unsafe fn refresh_loading_bg_live_gx(base: usize) {
 /// (header: b"ERPX", u32 LE width, u32 LE height, then width*height*4 RGBA8) so the agent can
 /// convert it to a PNG offline and visually confirm it is the loaded character's head (not the
 /// depth buffer / garbage). Best-effort; gated by the same default-OFF readback path.
-pub(crate) fn dump_portrait_rgba(slot: i32, width: u32, height: u32, px: &[u8]) {
+pub fn dump_portrait_rgba(slot: i32, width: u32, height: u32, px: &[u8]) {
     let dir = std::env::var("ER_EFFECTS_AUTOLOAD_DEBUG_PATH")
         .ok()
         .and_then(|p| PathBuf::from(p).parent().map(|d| d.to_path_buf()))
@@ -732,7 +612,7 @@ pub(crate) fn dump_portrait_rgba(slot: i32, width: u32, height: u32, px: &[u8]) 
     }
 }
 
-pub(crate) fn maybe_capture_portrait_gxtexture(base: usize, slot: i32) {
+pub fn maybe_capture_portrait_gxtexture(base: usize, slot: i32) {
     if LOADING_BG_PORTRAIT_GX_KEPT.load(Ordering::SeqCst) != 0 {
         return;
     }
@@ -870,7 +750,7 @@ pub(crate) fn maybe_capture_portrait_gxtexture(base: usize, slot: i32) {
 // reimplement hit-testing from window geometry.
 
 /// Hamilton product `a * b` of two `(x, y, z, w)` quaternions (w = scalar, matching `BoneData.q`).
-fn quat_mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+pub fn quat_mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     let [ax, ay, az, aw] = a;
     let [bx, by, bz, bw] = b;
     [
@@ -884,7 +764,7 @@ fn quat_mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
 /// A small look rotation: `yaw` about the local Y axis then `pitch` about the local X axis, as a
 /// `(x, y, z, w)` quaternion. (Which local axis actually reads as horizontal/vertical for the head
 /// bone needs one runtime visual calibration; the `LOOKAT_*_SIGN` consts flip it without a code change.)
-fn quat_from_yaw_pitch(yaw: f32, pitch: f32) -> [f32; 4] {
+pub fn quat_from_yaw_pitch(yaw: f32, pitch: f32) -> [f32; 4] {
     let (sy, cy) = (yaw * 0.5).sin_cos();
     let (sp, cp) = (pitch * 0.5).sin_cos();
     let q_yaw = [0.0, sy, 0.0, cy];
@@ -894,7 +774,7 @@ fn quat_from_yaw_pitch(yaw: f32, pitch: f32) -> [f32; 4] {
 
 /// Read a bounded null-terminated ASCII bone name from an `hkStringPtr` (low bit is an ownership flag,
 /// masked by the caller). `None` on unmapped memory or non-UTF8 (bone names are ASCII; no lossy decode).
-unsafe fn read_bone_name(ptr: usize) -> Option<String> {
+pub unsafe fn read_bone_name(ptr: usize) -> Option<String> {
     if ptr == 0 || ptr == TITLE_OWNER_SCAN_START_ADDRESS {
         return None;
     }
@@ -914,7 +794,7 @@ unsafe fn read_bone_name(ptr: usize) -> Option<String> {
 
 /// Reach the live Havok `PoseHolder` from the renderer: `poseHolder = *(*(R+0x948)+0x20) + 0x48`,
 /// guarded on the built model (`R+0x778`). `None` until the model + animation location are live.
-unsafe fn profile_pose_holder(renderer: usize) -> Option<usize> {
+pub unsafe fn profile_pose_holder(renderer: usize) -> Option<usize> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null;
     let model = unsafe { safe_read_usize(renderer + PROFILE_RENDERER_MODEL_INS_OFFSET) }?;

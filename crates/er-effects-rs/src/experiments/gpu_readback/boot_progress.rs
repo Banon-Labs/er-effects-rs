@@ -1313,14 +1313,9 @@ fn boot_darken_bar_shadow(
     }
 }
 
-/// The rendered boot/loading frame: CPU RGBA plus where to place it on a `bw`x`bh` backbuffer.
-pub(crate) struct BootViewFrame {
-    pub(crate) rgba: Vec<u8>,
-    pub(crate) w: usize,
-    pub(crate) h: usize,
-    pub(crate) dx: usize,
-    pub(crate) dy: usize,
-}
+// BootViewFrame moved to er_loading_portrait::host (portrait crate split); the struct
+// flows back in through the glob shim at the top of gpu_readback.rs, so this shared
+// rasterizer still constructs the same type the crate's native overlay consumes.
 
 /// Render the boot/loading-screen frame ONCE, device-agnostically: the loading bar (milestone label,
 /// ticks, text scaling, progress creep) and -- when the startup save picker is armed -- its browser panel

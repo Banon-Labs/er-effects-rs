@@ -290,30 +290,6 @@ unsafe extern "system" fn present1_hook(
     }
 }
 
-/// `+0x754/+0x755` on a CSMenuProfModelRend are the engine's build-request latches -- the kick raises
-/// them and the engine clears them when the model+offscreen build lands (see kick_target_profile_slot's
-/// "kick only when BOTH read 0 = not already in flight" parity check, loading_cover_save_slot.rs:301-306).
-const PROFILE_RENDERER_REQ_754_OFFSET: usize = 0x754;
-const PROFILE_RENDERER_REQ_755_OFFSET: usize = 0x755;
-/// Presents skipped because a profile-model build was in flight (RAM oracle for the crash mitigation).
-pub(crate) use er_telemetry::counters::PRESENT_COMPOSITE_BUILD_SKIPS;
-
-/// True while the just-kicked profile renderer's build-request latches are still set -- i.e. the engine
-/// is mid-build of the profile model + its offscreen RT. During this window the engine's OWN
-/// ResMan-scheduled offscreen render can reach FUN_141e90290 with a half-seeded GX resource (rcx=0x20)
-/// and access-violate; adding our concurrent composite GPU submit to the game device in the same window
-/// is the ONLY behavioral delta between the crashing fix-run and the six clean control/guard runs
-/// (native-Windows 2026-07-15, bd er-effects-rs-n4x). Bounded: the latches clear when the build lands.
-fn profile_model_build_in_flight() -> bool {
-    let r = PORTRAIT_KICK_RENDERER.load(Ordering::SeqCst);
-    if r == 0 || r == TITLE_OWNER_SCAN_START_ADDRESS {
-        return false;
-    }
-    let l754 = unsafe { safe_read_u8(r + PROFILE_RENDERER_REQ_754_OFFSET) }.unwrap_or(0);
-    let l755 = unsafe { safe_read_u8(r + PROFILE_RENDERER_REQ_755_OFFSET) }.unwrap_or(0);
-    l754 != 0 || l755 != 0
-}
-
 /// Presents skipped because the now-loading display window has not opened yet (RAM oracle).
 pub(crate) use er_telemetry::counters::PRESENT_COMPOSITE_EARLY_SKIPS;
 
@@ -377,18 +353,7 @@ unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) {
         PRESENT_COMPOSITE_EARLY_SKIPS.fetch_add(1, Ordering::SeqCst);
         return;
     }
-    let portrait_path = running_under_wine();
-    let drew_portrait = if portrait_path && !profile_model_build_in_flight() {
-        unsafe { composite_portrait_on_swapchain(base, this_u) }
-    } else {
-        if portrait_path {
-            PRESENT_COMPOSITE_BUILD_SKIPS.fetch_add(1, Ordering::SeqCst);
-        }
-        false
-    };
-    // Loading bar + save picker + boot-cover handoff oracle. Run this even when the portrait bridge drew:
-    // the portrait path returning `true` used to suppress the boot-progress compositor, which made the
-    // bar/handoff oracle vanish exactly at the forced-Continue/native-loading transition. The boot
+    // Loading bar + save picker + portrait/stats cover + boot-cover handoff oracle. The boot
     // compositor is internally gated by BOOT_VIEW_STOPPED and draw-state, so this is a cheap no-op after
     // the seamless cut.
     let _ = unsafe { composite_boot_progress_on_swapchain(base, this_u) };

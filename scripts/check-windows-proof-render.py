@@ -20,6 +20,12 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "crates" / "er-effects-rs" / "src"
+# The er-loading-portrait feature crate is product render code linked into
+# er_effects_rs.dll (portrait crate split, 2026-07-29); it hosts native_overlay.rs and is
+# scanned with the same Vulkan/Proton bans. Only scanned when SRC_ROOT is the real product
+# tree, so the fixture-based regression tests stay hermetic.
+PRODUCT_SRC_ROOT = SRC_ROOT
+PORTRAIT_SRC_ROOT = REPO_ROOT / "crates" / "er-loading-portrait" / "src"
 SCRIPTS_ROOT = REPO_ROOT / "scripts"
 DEFAULT_DLL = REPO_ROOT / "target" / "x86_64-pc-windows-msvc" / "release" / "er_effects_rs.dll"
 
@@ -78,7 +84,10 @@ def script_banned_pattern(line: str) -> str | None:
 
 
 def rust_files() -> list[Path]:
-    return sorted(SRC_ROOT.rglob("*.rs"))
+    paths = list(SRC_ROOT.rglob("*.rs"))
+    if SRC_ROOT == PRODUCT_SRC_ROOT and PORTRAIT_SRC_ROOT.exists():
+        paths.extend(PORTRAIT_SRC_ROOT.rglob("*.rs"))
+    return sorted(paths)
 
 
 def source_findings() -> list[Finding]:
@@ -124,7 +133,12 @@ def script_findings() -> list[Finding]:
 
 
 def native_overlay_shape_findings() -> list[Finding]:
+    # Real tree: native_overlay.rs lives in the er-loading-portrait crate (portrait crate
+    # split). The SRC_ROOT-relative spelling is kept first so the monkeypatching
+    # regression-test fixtures (which predate the split) still exercise the shape rules.
     path = SRC_ROOT / "experiments" / "native_overlay.rs"
+    if not path.exists():
+        path = PORTRAIT_SRC_ROOT / "native_overlay.rs"
     if not path.exists():
         return [Finding(path, 0, "native Windows overlay implementation is missing", "")]
     text = path.read_text(encoding="utf-8", errors="replace")

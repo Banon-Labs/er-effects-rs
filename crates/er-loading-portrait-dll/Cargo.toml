@@ -1,0 +1,27 @@
+# Thin standalone ME3-loadable shell for the er-loading-portrait feature crate
+# (portrait crate split): own DllMain, VEH crash logger, own log file, individually
+# shippable. Modeled on er-loading-bar-dll.
+#
+# WARNING: NEVER load er_loading_portrait_dll.dll alongside er_effects_rs.dll in one
+# me3 profile. Both install a D3D12 Present detour and their own MinHook instance;
+# two instances patching the same prologues (Present, the now-loading observer RVAs,
+# the tip-suppression RVAs) would double-detour and corrupt each other's trampolines
+# -- the same class of silent race as the er-save-suppress warning in
+# er-effects-rs/Cargo.toml.
+[package]
+name = "er-loading-portrait-dll"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_loading_portrait_dll"
+# `cdylib` is the ME3-loadable artifact; `rlib` keeps the tiny DLL shell
+# testable on the host without pulling game deps into the test graph.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+er-loading-portrait = { path = "../er-loading-portrait" }
+er-d3d12-compositor = { path = "../er-d3d12-compositor" }
+# RgbaFrame is the pixel-carrier type er-d3d12-compositor's CompositorFrame wraps.
+er-loading-bar = { path = "../er-loading-bar" }

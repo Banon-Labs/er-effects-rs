@@ -1923,21 +1923,6 @@ pub(crate) fn install_title_visual_startup_hooks() {
         });
     }
 
-    // Now-loading background forge: install the replace-bind hook early (well before the ~17s
-    // now-loading-screen lifecycle) so it is resident when the first MENU_Load_ background is produced.
-    // It is fail-open (non-matching symbols/build failures tail-call original). Default behavior now keeps
-    // the selected boot background continuous through the native loading GFX background; users can opt out
-    // with `persist_boot_background_to_loading_screen = false` in DLL-adjacent er-effects.toml. On the
-    // live-portrait overlay path, only install when a real background source exists, so a no-image run does not
-    // accidentally forge the diagnostic checker behind the live portrait overlay.
-    let persist_loading_bg = crate::config::persist_boot_background_to_loading_screen_enabled();
-    if !portrait_overlay_enabled() || (persist_loading_bg && boot_bg_image_rgba_clone().is_some()) {
-        START_LOADING_BG_REPLACE_BIND.call_once(|| {
-            let _ = std::thread::Builder::new()
-                .name("er-effects-loading-bg-portrait".to_owned())
-                .spawn(install_loading_bg_replace_bind_hook);
-        });
-    }
     // er-effects-rs-jsm PIVOT: suppress the native loading tips (our overlay renders player-stats text
     // instead). Install at ATTACH -- BEFORE the KnowledgeLoadingScreen ctor's one-shot initial tip (~15s),
     // else the first tip is already set and only later cycles are suppressed. Live portrait overlay path only.

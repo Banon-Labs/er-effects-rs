@@ -1,8 +1,9 @@
+use crate::prelude::*;
 
 /// Readback the largest TEXTURE2D in `start`'s nest EXCLUDING whichever texture is found from
 /// `exclude_start` (e.g. read the content RT while excluding the SRV). For visual diagnosis of which
 /// texture holds the portrait when several same-/different-size textures share the offscreen nest.
-pub(crate) unsafe fn readback_excluding_rgba8(
+pub unsafe fn readback_excluding_rgba8(
     start: usize,
     exclude_start: usize,
 ) -> Option<(u32, u32, Vec<u8>)> {
@@ -17,87 +18,87 @@ pub(crate) unsafe fn readback_excluding_rgba8(
     .flatten()
 }
 
+/// Counter so the deterministic-resolve diagnostic logs only the first few attempts.
+pub use er_telemetry::counters::PROFILE_DET_RESOLVE_DIAG;
 /// Cached AddRef'd content-RT `ID3D12Resource` raw pointer (0 = not yet resolved). Set once by the first
 /// `readback_cached_content_rgba8` scan; re-copied every frame after without re-scanning.
-pub(crate) use er_telemetry::counters::PROFILE_LIVE_RT_RES;
+pub use er_telemetry::counters::PROFILE_LIVE_RT_RES;
+pub use er_telemetry::counters::RB_FAST_ALLOC;
+pub use er_telemetry::counters::RB_FAST_BUFFER;
+pub use er_telemetry::counters::RB_FAST_BUFSIZE;
+pub use er_telemetry::counters::RB_FAST_FENCE;
+pub use er_telemetry::counters::RB_FAST_FENCEVAL;
+pub use er_telemetry::counters::RB_FAST_LIST;
 /// PER-FRAME readback resource cache (created ONCE on the game device, reused every frame). The original
 /// per-call readback created a fresh command queue + allocator + list + fence + buffer EACH frame; under
 /// the loading screen that mostly failed at resource creation (command-queue creation is limited), so the
 /// readback published only ~4x and the displayed head froze. Caching them lets the per-frame readback be a
 /// cheap reset+copy+wait, so it publishes every frame and the overlay re-uploads the tracking head per
 /// frame. Raw COM pointers owned by these statics (released only on dims change).
-pub(crate) use er_telemetry::counters::RB_FAST_QUEUE;
-pub(crate) use er_telemetry::counters::RB_FAST_ALLOC;
-pub(crate) use er_telemetry::counters::RB_FAST_LIST;
-pub(crate) use er_telemetry::counters::RB_FAST_FENCE;
-pub(crate) use er_telemetry::counters::RB_FAST_BUFFER;
-pub(crate) use er_telemetry::counters::RB_FAST_BUFSIZE;
-pub(crate) use er_telemetry::counters::RB_FAST_FENCEVAL;
-/// Counter so the deterministic-resolve diagnostic logs only the first few attempts.
-pub(crate) use er_telemetry::counters::PROFILE_DET_RESOLVE_DIAG;
+pub use er_telemetry::counters::RB_FAST_QUEUE;
 
+/// RAM oracle: number of published frames where the depth key ACTUALLY cut out a background (i.e. the depth
+/// buffer read back with clean bg/head separation and `>0` pixels were set to alpha 0). `oracle_depth_key_
+/// applied` -- a pixel/native semaphore that the transparent-background cutout is live (not a screenshot).
+pub use er_telemetry::counters::DEPTH_KEY_APPLIED;
+/// RAM oracle: last frame's background-masked fraction, in whole percent (0..=100). `oracle_depth_key_bg_pct`.
+/// A plausible portrait cutout is a large minority/majority of the frame (bg dominates a centered head).
+pub use er_telemetry::counters::DEPTH_KEY_BG_PCT;
+/// Frames whose fresh depth was DEGENERATE for masking (no histogram gap, or a mask cutting under the
+/// publish floor). Throttles the recurring depth diagnostic (er-effects-rs-hi2: a whole window sat in
+/// the lowmask band and the one-shot diag from boot left it invisible). `oracle_depth_key_degenerate`.
+pub use er_telemetry::counters::DEPTH_KEY_DEGENERATE;
+/// One-shot `depth-key` diagnostic latch (logs corner/center/min/max depth + masked fraction once).
+pub use er_telemetry::counters::DEPTH_KEY_DIAG_LOGGED;
+/// RAM oracle: number of frames the mask was RECALCULATED fresh from a valid depth buffer (vs reused from
+/// cache). `oracle_depth_key_fresh`; `applied - fresh` = cached reuses. Proves the recalc-and-cache loop.
+pub use er_telemetry::counters::DEPTH_KEY_FRESH;
+/// One-shot latch for the interior-histogram ground-truth dump when even the valley pass fails.
+pub use er_telemetry::counters::DEPTH_KEY_HIST_DUMPED;
+/// One-shot latch for the no-gap / dims-mismatch `depth-key` skip diagnostic (separate from the success
+/// latch so both a good frame and a skipped frame are each visible once in the log).
+pub use er_telemetry::counters::DEPTH_KEY_NOGAP_LOGGED;
+/// Degenerate frames RECOVERED by the second-pass histogram (clear-plane extremes excluded) --
+/// the backdrop-geometry windows' masks. `oracle_depth_key_second_pass`.
+pub use er_telemetry::counters::DEPTH_KEY_SECOND_PASS;
+pub use er_telemetry::counters::PROFILE_LOWMASK_SHARE_MAX;
+/// Per-window MIN transparent share (percent) among PUBLISHED frames (usize::MAX = none published) and
+/// MAX share among lowmask-held frames -- the two sides of the floor, for setting it from evidence.
+pub use er_telemetry::counters::PROFILE_PUBLISH_SHARE_MIN;
+/// Keyed+clean frames HELD because their mask/head coherence (IoU) was below MASK_HEAD_IOU_MIN --
+/// the "cut the wrong 34%" frames (user 2026-07-03: displayed heads whose backdrop was not keyed
+/// out right; the share floor checks how MUCH is cut, IoU checks WHERE). Plus its window mark.
+pub use er_telemetry::counters::PROFILE_PUBLISH_SKIPPED_BADIOU;
+pub use er_telemetry::counters::PROFILE_PUBLISH_SKIPPED_BADIOU_WINDOW_MARK;
+pub use er_telemetry::counters::RB_DEPTH_ALLOC;
+pub use er_telemetry::counters::RB_DEPTH_BUFFER;
+pub use er_telemetry::counters::RB_DEPTH_BUFSIZE;
+pub use er_telemetry::counters::RB_DEPTH_FENCE;
+pub use er_telemetry::counters::RB_DEPTH_FENCEVAL;
+pub use er_telemetry::counters::RB_DEPTH_LIST;
 /// PER-FRAME DEPTH readback cache (separate from RB_FAST_* so the color and depth readbacks never share a
 /// command list / fence across the two calls in one draw tick). Same create-once + reset+copy+wait pattern.
 /// The depth sibling is `R32G8X24_TYPELESS` (fmt 19); we copy PLANE 0 (the R32 float depth) and reinterpret
 /// each 4-byte texel as `f32`. Raw COM pointers owned by these statics (released only on footprint change).
-pub(crate) use er_telemetry::counters::RB_DEPTH_QUEUE;
-pub(crate) use er_telemetry::counters::RB_DEPTH_ALLOC;
-pub(crate) use er_telemetry::counters::RB_DEPTH_LIST;
-pub(crate) use er_telemetry::counters::RB_DEPTH_FENCE;
-pub(crate) use er_telemetry::counters::RB_DEPTH_BUFFER;
-pub(crate) use er_telemetry::counters::RB_DEPTH_BUFSIZE;
-pub(crate) use er_telemetry::counters::RB_DEPTH_FENCEVAL;
-/// One-shot `depth-key` diagnostic latch (logs corner/center/min/max depth + masked fraction once).
-pub(crate) use er_telemetry::counters::DEPTH_KEY_DIAG_LOGGED;
-/// RAM oracle: number of published frames where the depth key ACTUALLY cut out a background (i.e. the depth
-/// buffer read back with clean bg/head separation and `>0` pixels were set to alpha 0). `oracle_depth_key_
-/// applied` -- a pixel/native semaphore that the transparent-background cutout is live (not a screenshot).
-pub(crate) use er_telemetry::counters::DEPTH_KEY_APPLIED;
-/// RAM oracle: last frame's background-masked fraction, in whole percent (0..=100). `oracle_depth_key_bg_pct`.
-/// A plausible portrait cutout is a large minority/majority of the frame (bg dominates a centered head).
-pub(crate) use er_telemetry::counters::DEPTH_KEY_BG_PCT;
-/// RAM oracle: number of frames the mask was RECALCULATED fresh from a valid depth buffer (vs reused from
-/// cache). `oracle_depth_key_fresh`; `applied - fresh` = cached reuses. Proves the recalc-and-cache loop.
-pub(crate) use er_telemetry::counters::DEPTH_KEY_FRESH;
-/// One-shot latch for the no-gap / dims-mismatch `depth-key` skip diagnostic (separate from the success
-/// latch so both a good frame and a skipped frame are each visible once in the log).
-pub(crate) use er_telemetry::counters::DEPTH_KEY_NOGAP_LOGGED;
-/// Frames whose fresh depth was DEGENERATE for masking (no histogram gap, or a mask cutting under the
-/// publish floor). Throttles the recurring depth diagnostic (er-effects-rs-hi2: a whole window sat in
-/// the lowmask band and the one-shot diag from boot left it invisible). `oracle_depth_key_degenerate`.
-pub(crate) use er_telemetry::counters::DEPTH_KEY_DEGENERATE;
-/// Degenerate frames RECOVERED by the second-pass histogram (clear-plane extremes excluded) --
-/// the backdrop-geometry windows' masks. `oracle_depth_key_second_pass`.
-pub(crate) use er_telemetry::counters::DEPTH_KEY_SECOND_PASS;
-/// Keyed+clean frames HELD because their mask/head coherence (IoU) was below MASK_HEAD_IOU_MIN --
-/// the "cut the wrong 34%" frames (user 2026-07-03: displayed heads whose backdrop was not keyed
-/// out right; the share floor checks how MUCH is cut, IoU checks WHERE). Plus its window mark.
-pub(crate) use er_telemetry::counters::PROFILE_PUBLISH_SKIPPED_BADIOU;
-pub(crate) use er_telemetry::counters::PROFILE_PUBLISH_SKIPPED_BADIOU_WINDOW_MARK;
-/// One-shot latch for the interior-histogram ground-truth dump when even the valley pass fails.
-pub(crate) use er_telemetry::counters::DEPTH_KEY_HIST_DUMPED;
-/// Per-window MIN transparent share (percent) among PUBLISHED frames (usize::MAX = none published) and
-/// MAX share among lowmask-held frames -- the two sides of the floor, for setting it from evidence.
-pub(crate) use er_telemetry::counters::PROFILE_PUBLISH_SHARE_MIN;
-pub(crate) use er_telemetry::counters::PROFILE_LOWMASK_SHARE_MAX;
+pub use er_telemetry::counters::RB_DEPTH_QUEUE;
 /// Last RECALCULATED depth-key mask (w, h, per-pixel: 1 = background/cut, 0 = keep). The offscreen depth
 /// buffer only carries real content on genuine re-render frames; on the many frames it reads back cleared,
 /// we re-apply this cached mask so the cutout stays stable. It is RECALCULATED whenever fresh depth is
 /// available (tracking a real re-render) and only cached for the dead frames in between -- never frozen.
-static LAST_DEPTH_MASK: Mutex<Option<(usize, usize, Vec<u8>)>> = Mutex::new(None);
-/// Current portrait character incarnation (drive slot + 1; 0 = unset), set by the per-frame drive so the
-/// mask cache can be tagged with the character it was computed for. A depth mask REUSED across a change
-/// of this value means the PREVIOUS character's silhouette is being applied to the NEW character's head
-/// -- the 2nd-character depth-mask desync (user 2026-07-03). See `PROFILE_MASK_STALE_REUSE`.
-pub(crate) use er_telemetry::counters::PROFILE_PORTRAIT_INCARNATION;
+pub static LAST_DEPTH_MASK: Mutex<Option<(usize, usize, Vec<u8>)>> = Mutex::new(None);
 /// Incarnation the currently-cached `LAST_DEPTH_MASK` was computed for (0 = none / cleared).
-pub(crate) use er_telemetry::counters::LAST_DEPTH_MASK_INCARNATION;
+pub use er_telemetry::counters::LAST_DEPTH_MASK_INCARNATION;
 /// FAIL-FAST desync semaphore: count of frames that REUSED the cached depth mask while the live portrait
 /// incarnation differs from the one the cache was computed for -- a prior character's mask on the new
 /// head. It trips early + deterministically (the 2nd character of a switch chain), so a run can stop in
 /// ~40s instead of six minutes. Exposed as `oracle_portrait_mask_stale_reuse`.
-pub(crate) use er_telemetry::counters::PROFILE_MASK_STALE_REUSE;
-pub(crate) use er_telemetry::counters::PROFILE_MASK_STALE_REUSE_LOGGED;
+pub use er_telemetry::counters::PROFILE_MASK_STALE_REUSE;
+pub use er_telemetry::counters::PROFILE_MASK_STALE_REUSE_LOGGED;
+/// Current portrait character incarnation (drive slot + 1; 0 = unset), set by the per-frame drive so the
+/// mask cache can be tagged with the character it was computed for. A depth mask REUSED across a change
+/// of this value means the PREVIOUS character's silhouette is being applied to the NEW character's head
+/// -- the 2nd-character depth-mask desync (user 2026-07-03). See `PROFILE_MASK_STALE_REUSE`.
+pub use er_telemetry::counters::PROFILE_PORTRAIT_INCARNATION;
 /// FAIL-FAST mask/head coherence semaphore (the 2nd-character desync is a FRESH-but-WRONG mask: masks are
 /// recomputed every frame, so it is not a cache reuse). Per published frame, IoU of the KEPT cutout region
 /// (mask==0) vs the colour's OWN head (pixels far from the background colour). A correct mask keeps the
@@ -106,12 +107,16 @@ pub(crate) use er_telemetry::counters::PROFILE_MASK_STALE_REUSE_LOGGED;
 /// sliver (Sacred Bean, er-effects-rs-y134) the score is head-COVERAGE instead of symmetric IoU -- see
 /// `mask_head_iou`. `_last` is an oracle; `_total` counts gross
 /// mismatches; a SUSTAINED gross mismatch (STREAK) abort()s during the repro so the run stops fast.
-pub(crate) const MASK_HEAD_IOU_MIN: usize = 25;
-const MASK_HEAD_ABORT_STREAK: usize = 20;
-pub(crate) static PROFILE_MASK_HEAD_IOU_LAST: AtomicUsize = AtomicUsize::new(100);
-pub(crate) use er_telemetry::counters::PROFILE_MASK_HEAD_MISMATCH_STREAK;
-pub(crate) use er_telemetry::counters::PROFILE_MASK_HEAD_MISMATCH_TOTAL;
+pub const MASK_HEAD_IOU_MIN: usize = 25;
+pub const MASK_HEAD_ABORT_STREAK: usize = 20;
+pub static PROFILE_MASK_HEAD_IOU_LAST: AtomicUsize = AtomicUsize::new(100);
+pub use er_telemetry::counters::PROFILE_MASK_HEAD_MISMATCH_STREAK;
+pub use er_telemetry::counters::PROFILE_MASK_HEAD_MISMATCH_TOTAL;
 
+pub use er_telemetry::counters::RB_COH_ALLOC;
+pub use er_telemetry::counters::RB_COH_FENCE;
+pub use er_telemetry::counters::RB_COH_FENCEVAL;
+pub use er_telemetry::counters::RB_COH_LIST;
 /// COHERENT color+depth readback cache (bug #3 fix). ONE queue/allocator/list/fence records BOTH the
 /// color and depth copies, so they are captured at the SAME GPU submission -- unlike the separate
 /// RB_FAST_* (color) and RB_DEPTH_* (depth) paths, between whose independent fences the game's async
@@ -121,34 +126,28 @@ pub(crate) use er_telemetry::counters::PROFILE_MASK_HEAD_MISMATCH_TOTAL;
 // so the GPU is idle before the next reuse and `allocator.Reset()` remains safe with one allocator. Only
 // the readback STAGING BUFFERS ring (Step 2 worker offload), because the worker maps + de-swizzles a slot
 // AFTER the wait while the render thread copies the NEXT frame into a DIFFERENT slot's buffers.
-pub(crate) use er_telemetry::counters::RB_COH_QUEUE;
-pub(crate) use er_telemetry::counters::RB_COH_ALLOC;
-pub(crate) use er_telemetry::counters::RB_COH_LIST;
-pub(crate) use er_telemetry::counters::RB_COH_FENCE;
-pub(crate) use er_telemetry::counters::RB_COH_FENCEVAL;
+pub use er_telemetry::counters::RB_COH_QUEUE;
 /// STAGING-BUFFER RING size (Step 2). 3 slots: one being copied-into by the render thread, one (or more)
 /// being de-swizzled/consumed by the worker, and headroom so the render thread rarely has to drop.
-pub(crate) const RB_COH_RING: usize = 3;
+pub const RB_COH_RING: usize = 3;
 /// Ring slot lifecycle state. FREE = available for the render thread to claim; BUSY = the render thread
 /// copied into it (or the worker is consuming it). The render thread claims FREE->BUSY with a CAS; the
 /// worker sets it back to FREE after it has finished de-swizzling + publishing (even on panic).
-pub(crate) const RB_SLOT_FREE: usize = 0;
-pub(crate) const RB_SLOT_BUSY: usize = 1;
-pub(crate) static RB_COH_SLOT_STATE: [AtomicUsize; RB_COH_RING] =
+pub const RB_SLOT_FREE: usize = 0;
+pub const RB_SLOT_BUSY: usize = 1;
+pub static RB_COH_SLOT_STATE: [AtomicUsize; RB_COH_RING] =
     [const { AtomicUsize::new(RB_SLOT_FREE) }; RB_COH_RING];
 /// Per-slot color/depth readback staging buffers + their footprint sizes (resized once per slot on the
 /// first frame; the RT size is fixed per run). Raw COM owned here (process-lifetime statics).
-pub(crate) static RB_COH_CBUF: [AtomicUsize; RB_COH_RING] =
-    [const { AtomicUsize::new(0) }; RB_COH_RING];
-static RB_COH_CBUFSIZE: [AtomicU64; RB_COH_RING] = [const { AtomicU64::new(0) }; RB_COH_RING];
-pub(crate) static RB_COH_DBUF: [AtomicUsize; RB_COH_RING] =
-    [const { AtomicUsize::new(0) }; RB_COH_RING];
-static RB_COH_DBUFSIZE: [AtomicU64; RB_COH_RING] = [const { AtomicU64::new(0) }; RB_COH_RING];
+pub static RB_COH_CBUF: [AtomicUsize; RB_COH_RING] = [const { AtomicUsize::new(0) }; RB_COH_RING];
+pub static RB_COH_CBUFSIZE: [AtomicU64; RB_COH_RING] = [const { AtomicU64::new(0) }; RB_COH_RING];
+pub static RB_COH_DBUF: [AtomicUsize; RB_COH_RING] = [const { AtomicUsize::new(0) }; RB_COH_RING];
+pub static RB_COH_DBUFSIZE: [AtomicU64; RB_COH_RING] = [const { AtomicU64::new(0) }; RB_COH_RING];
 /// Round-robin frame counter for choosing the next ring slot.
-pub(crate) use er_telemetry::counters::RB_COH_FRAME;
+pub use er_telemetry::counters::RB_COH_FRAME;
 /// Frames whose readback was DROPPED because the chosen ring slot was still BUSY (the worker had not
 /// finished consuming it). Intended backpressure -- the render thread never blocks. Telemetry.
-pub(crate) use er_telemetry::counters::RB_COH_SLOT_BUSY_DROPS;
+pub use er_telemetry::counters::RB_COH_SLOT_BUSY_DROPS;
 /// Depth captured COHERENTLY with the current color frame `(dw, dh, depth, depth_cand)`, stashed by
 /// `readback_offscreen_fast_coherent` for the SAME draw tick's `apply_depth_alpha_key` to consume via
 /// `take_coherent_depth`. Single render-thread producer/consumer within one tick; the producer always
@@ -156,29 +155,24 @@ pub(crate) use er_telemetry::counters::RB_COH_SLOT_BUSY_DROPS;
 /// depth. `None` -> the mask path reads depth fresh (the legacy separate read).
 /// (Step 2: bypassed -- the worker reads depth from the staging slot; left per the design note.)
 #[allow(dead_code)]
-static COHERENT_DEPTH: Mutex<Option<(u32, u32, Vec<f32>, usize)>> = Mutex::new(None);
+pub static COHERENT_DEPTH: Mutex<Option<(u32, u32, Vec<f32>, usize)>> = Mutex::new(None);
+pub use er_telemetry::counters::COHERENT_READ_FALLBACK;
 /// Instrumentation the first coherent pass lacked: how many draw ticks the COHERENT color+depth readback
 /// SUCCEEDED (`_OK`) vs fell back to the separate color+depth path (`_FALLBACK`). Exposed as oracles so a
 /// run PROVES whether the single-fence path is actually engaging (not silently degrading).
-pub(crate) use er_telemetry::counters::COHERENT_READ_OK;
-pub(crate) use er_telemetry::counters::COHERENT_READ_FALLBACK;
+pub use er_telemetry::counters::COHERENT_READ_OK;
 
 /// Cached backbuffer READBACK + UPLOAD buffers for the alpha-honoring CPU-blend composite (sized to the
 /// centered portrait region's copyable footprint in the backbuffer's format). The composite reads the live
 /// backbuffer region, blends the portrait over it honoring per-pixel alpha (bg alpha 0 => loading screen
 /// shows through), and writes the blended region back -- all with the existing COPY primitives, so NO new
 /// PSO/shader/RTV pipeline is needed. Owned raw COM pointers (released only on footprint change).
-pub(crate) use er_telemetry::counters::OVERLAY_BB_READBACK;
-pub(crate) use er_telemetry::counters::OVERLAY_BB_UPLOAD;
-pub(crate) use er_telemetry::counters::OVERLAY_BB_BUFSIZE;
 
 /// DETERMINISTICALLY resolve the content RT's vkd3d `ID3D12Resource` from a CSGxTexture by following the
 /// FIXED wrapper chain (bd live-portrait-d3d12-resource-buried-in-gx-wrapper-nest, RE'd from a live dump),
 /// validating each hop's vtable so a layout change fails closed instead of dereferencing garbage. NO
 /// memory scan / QI of arbitrary objects -> nothing to race the teardown free. Returns an AddRef'd ref.
-pub(crate) unsafe fn resolve_content_resource_deterministic(
-    srv_gx: usize,
-) -> Option<ID3D12Resource> {
+pub unsafe fn resolve_content_resource_deterministic(srv_gx: usize) -> Option<ID3D12Resource> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null && p > 0x10000;
     let base = game_module_base().ok()?;
@@ -256,7 +250,7 @@ pub(crate) unsafe fn resolve_content_resource_deterministic(
 /// re-copy is safe through the whole loading screen -> the portrait refreshes without crashing.
 /// `srv_gx` is the renderer offscreen's CSGxTexture; `start` is the offscreen nest (`renderer+0xa8`)
 /// that `readback_offscreen_rgba8` reads the real head from.
-pub(crate) unsafe fn readback_cached_content_rgba8(
+pub unsafe fn readback_cached_content_rgba8(
     start: usize,
     srv_gx: usize,
 ) -> Option<(u32, u32, Vec<u8>)> {
@@ -293,7 +287,7 @@ pub(crate) unsafe fn readback_cached_content_rgba8(
     .flatten()
 }
 
-unsafe fn readback_offscreen_rgba8_inner(gpu_child: usize) -> Option<(u32, u32, Vec<u8>)> {
+pub unsafe fn readback_offscreen_rgba8_inner(gpu_child: usize) -> Option<(u32, u32, Vec<u8>)> {
     // Scan the wrapper nest for the real VKD3D ID3D12Resource (validated TEXTURE2D, QI-owned ref;
     // its Drop balances the QI AddRef, so the game's object is left net-untouched).
     let resource = unsafe { find_d3d12_resource(gpu_child) }?;
@@ -508,7 +502,9 @@ unsafe fn readback_resource_rgba8_inner(resource: ID3D12Resource) -> Option<(u32
 /// but it does NOT create new D3D12 objects each call -- which is why the per-call version published only
 /// ~4x under loading (command-queue creation kept failing). With the cache the readback succeeds every
 /// frame so the displayed head follows the cursor. Returns `None` on any failure (draws the last frame).
-unsafe fn readback_resource_cached_fast(resource: ID3D12Resource) -> Option<(u32, u32, Vec<u8>)> {
+pub unsafe fn readback_resource_cached_fast(
+    resource: ID3D12Resource,
+) -> Option<(u32, u32, Vec<u8>)> {
     let mut device_opt: Option<ID3D12Device> = None;
     unsafe { resource.GetDevice(&mut device_opt) }.ok()?;
     let device = device_opt?;
@@ -729,7 +725,7 @@ unsafe fn readback_resource_cached_fast(resource: ID3D12Resource) -> Option<(u32
 /// with the color on one fence and the render thread hands it to the consume worker, so the separate-fence
 /// depth read is unused. Retained as the proven standalone depth-readback for reference.
 #[allow(dead_code)]
-pub(crate) unsafe fn readback_depth_fast(gpu_child: usize) -> Option<(u32, u32, Vec<f32>, usize)> {
+pub unsafe fn readback_depth_fast(gpu_child: usize) -> Option<(u32, u32, Vec<f32>, usize)> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         let (resource, cand) = find_depth_resource(gpu_child)?;
         readback_depth_resource_cached(resource).map(|(w, h, d)| (w, h, d, cand))

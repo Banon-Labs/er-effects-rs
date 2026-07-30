@@ -1,0 +1,49 @@
+# Loading-screen portrait + character-stats feature crate (path B + capture pipeline),
+# extracted from the root er-effects-rs DLL (portrait crate split, docs/plans/
+# portrait-stats-crate-split.md). Product state crosses the seam through
+# `host::install_host` function pointers (the `set_frame_provider` pattern); this crate
+# must NOT depend on the root crate, er-loading-bar, or er-d3d12-compositor.
+[package]
+name = "er-loading-portrait"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_loading_portrait"
+
+[dependencies]
+# Shared cross-platform telemetry counters (the oracle_* fields the pipeline writes).
+er-telemetry = { path = "../er-telemetry" }
+
+[target.'cfg(windows)'.dependencies]
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+# Shared MinHook FFI + hook union (single MinHook instance per final DLL).
+er-hook = { path = "../er-hook" }
+# Fault-safe RAM readers, game base/rva resolution. game-types re-exports typed bindings.
+er-game-base = { path = "../er-game-base", features = ["game-types"] }
+# GFX (Scaleform SWF-variant) parser + glyph raster: the stats text renders with the
+# game's own menu font captured at runtime from the Scaleform file-open.
+er-gfx = { path = "../er-gfx" }
+# ERPX portrait-dump container (encode side) for the debug RGBA dump format.
+# Core-only (default-features off) so the DLL never pulls the host `png` dep.
+erpx-rs = { path = "../erpx-rs", default-features = false }
+bitflags = "2"
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_Threading",
+  "Win32_System_Kernel",
+  "Win32_System_Com",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Memory",
+  "Win32_System_SystemServices",
+  "Win32_Graphics_Gdi",
+  "Win32_Graphics_Imaging",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_Security",
+  "Win32_Graphics_Direct3D12",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_Graphics_Direct3D",
+] }

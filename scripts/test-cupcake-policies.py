@@ -25,6 +25,18 @@ class PolicyCase:
 
 DEFAULT_BASH_TIMEOUT_MS = 30000
 
+# `git worktree list --porcelain`-shaped fixture for the worktree-target
+# exception cases in the main-commit/main-push guards.
+WORKTREE_FIXTURE = (
+    "worktree /home/banon/projects/er-effects-rs\n"
+    "HEAD 0000000000000000000000000000000000000000\n"
+    "branch refs/heads/main\n"
+    "\n"
+    "worktree /home/banon/projects/er-effects-rs/.worktrees/portrait-stats-crate\n"
+    "HEAD 1111111111111111111111111111111111111111\n"
+    "branch refs/heads/feature/portrait-stats-crate\n"
+)
+
 
 def run_case(case: PolicyCase) -> None:
     tool_input: dict[str, object] = {"command": case.command}
@@ -59,6 +71,18 @@ def run_case(case: PolicyCase) -> None:
         env["CUPCAKE_CURRENT_BRANCH_OVERRIDE"] = ""
     else:
         env["CUPCAKE_CURRENT_BRANCH_OVERRIDE"] = "feature/policy-regression"
+    # Same live-signal control for the worktree_branches signal (worktree-target
+    # exception in the main-commit/main-push guards): cases that model worktree
+    # state must pin it, everything else runs with an empty worktree list so the
+    # exception can never fire by accident.
+    if isinstance(signals, dict) and "worktree_branches" in signals:
+        wt_signal = signals["worktree_branches"]
+        if isinstance(wt_signal, dict):
+            env["CUPCAKE_WORKTREE_BRANCHES_OVERRIDE"] = str(wt_signal.get("output", ""))
+        else:
+            env["CUPCAKE_WORKTREE_BRANCHES_OVERRIDE"] = str(wt_signal)
+    else:
+        env["CUPCAKE_WORKTREE_BRANCHES_OVERRIDE"] = ""
 
     result = subprocess.run(
         ["cupcake", "eval", "--harness", "claude", "--strict", "--log-level", "error"],
@@ -162,6 +186,55 @@ def main() -> int:
             "allow-git-push-feature-branch",
             "git push -u origin guard/no-direct-main-push",
             True,
+        ),
+        # Worktree-target exception: `git -C <registered non-main worktree>`
+        # commit/push is allowed even when the session checkout sits on main
+        # (bd guard-blocks-worktree-commits-from-main-session-cwd-2026-07-29).
+        PolicyCase(
+            "allow-git-c-commit-nonmain-worktree-from-main-session",
+            'git -C /home/banon/projects/er-effects-rs/.worktrees/portrait-stats-crate commit -m "ok"',
+            True,
+            extra_event={
+                "signals": {
+                    "current_branch": "main\n",
+                    "worktree_branches": WORKTREE_FIXTURE,
+                }
+            },
+        ),
+        PolicyCase(
+            "deny-git-c-commit-unregistered-path-from-main-session",
+            'git -C /tmp/not-a-worktree commit -m "bad"',
+            False,
+            "Do not commit unless",
+            extra_event={
+                "signals": {
+                    "current_branch": "main\n",
+                    "worktree_branches": WORKTREE_FIXTURE,
+                }
+            },
+        ),
+        PolicyCase(
+            "allow-git-c-push-feature-from-nonmain-worktree-main-session",
+            "git -C /home/banon/projects/er-effects-rs/.worktrees/portrait-stats-crate push -u origin feature/portrait-stats-crate",
+            True,
+            extra_event={
+                "signals": {
+                    "current_branch": "main\n",
+                    "worktree_branches": WORKTREE_FIXTURE,
+                }
+            },
+        ),
+        PolicyCase(
+            "deny-git-c-push-main-refspec-from-nonmain-worktree",
+            "git -C /home/banon/projects/er-effects-rs/.worktrees/portrait-stats-crate push origin HEAD:main",
+            False,
+            "Do not push directly to main",
+            extra_event={
+                "signals": {
+                    "current_branch": "main\n",
+                    "worktree_branches": WORKTREE_FIXTURE,
+                }
+            },
         ),
         PolicyCase(
             "deny-destructive-parent-root",

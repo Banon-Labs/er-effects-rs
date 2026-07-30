@@ -1,3 +1,5 @@
+use crate::prelude::*;
+
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
 use std::sync::Mutex;
@@ -27,8 +29,8 @@ use windows::Win32::Graphics::Dxgi::Common::{
 };
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain3;
 use windows::Win32::Graphics::Imaging::{
-    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppRGBA, IWICBitmapSource,
-    IWICImagingFactory, WICConvertBitmapSource, WICDecodeMetadataCacheOnDemand,
+    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppRGBA, IWICBitmapSource, IWICImagingFactory,
+    WICConvertBitmapSource, WICDecodeMetadataCacheOnDemand,
 };
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
@@ -37,10 +39,8 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleA;
 use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 use windows::core::{IUnknown, Interface, PCSTR, PCWSTR};
 
-use super::*;
-
 /// Bytes per RGBA8 texel.
-const RGBA8_BPP: usize = 4;
+pub const RGBA8_BPP: usize = 4;
 
 /// Pack one straight (non-premultiplied) RGBA8 texel into a little-endian `DXGI_FORMAT_R10G10B10A2_UNORM`
 /// u32: bits 0-9 = R, 10-19 = G, 20-29 = B, 30-31 = A. Widens each 8-bit channel to 10 bits by
@@ -49,7 +49,7 @@ const RGBA8_BPP: usize = 4;
 /// but is fully VISIBLE (the accepted first step for the native-Windows 10-bit backbuffer; the composite
 /// paths that render through a GPU PSO don't need this because the ROP float-converts to the RTV format).
 #[inline]
-pub(crate) fn pack_rgba8_to_r10g10b10a2(r: u8, g: u8, b: u8, a: u8) -> u32 {
+pub fn pack_rgba8_to_r10g10b10a2(r: u8, g: u8, b: u8, a: u8) -> u32 {
     let w10 = |v: u8| ((v as u32 * 1023 + 127) / 255) & 0x3ff;
     let a2 = ((a as u32 * 3 + 127) / 255) & 0x3;
     w10(r) | (w10(g) << 10) | (w10(b) << 20) | (a2 << 30)
@@ -60,7 +60,7 @@ pub(crate) fn pack_rgba8_to_r10g10b10a2(r: u8, g: u8, b: u8, a: u8) -> u32 {
 /// copies; `Pack10` packs into `R10G10B10A2` (native-Windows HDR/10-bit swapchain). GPU-PSO composite
 /// paths do NOT use this -- the ROP float-converts to the RTV format for them.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BackbufferEncoding {
+pub enum BackbufferEncoding {
     /// 8-bit RGBA: copy the tight bytes unchanged.
     Straight,
     /// 8-bit BGRA: copy then swap R/B per texel.
@@ -70,7 +70,7 @@ pub(crate) enum BackbufferEncoding {
 }
 
 /// Classify a backbuffer format for the CPU raw-copy composite, or `None` if we cannot write it safely.
-pub(crate) fn boot_view_backbuffer_encoding(format: DXGI_FORMAT) -> Option<BackbufferEncoding> {
+pub fn boot_view_backbuffer_encoding(format: DXGI_FORMAT) -> Option<BackbufferEncoding> {
     match format {
         DXGI_FORMAT_B8G8R8A8_UNORM | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB => {
             Some(BackbufferEncoding::SwapRb)
@@ -84,12 +84,12 @@ pub(crate) fn boot_view_backbuffer_encoding(format: DXGI_FORMAT) -> Option<Backb
 }
 
 /// Reject absurd render-target dimensions (corrupt/unexpected desc -> bail).
-const MAX_RT_DIM: u32 = 16384;
+pub const MAX_RT_DIM: u32 = 16384;
 /// Bounded fence wait: a small offscreen-RT copy completes in well under this, and a finite wait
 /// guarantees we never hang the game thread if the GPU stalls (timeout -> `None`, no garbage read).
-const READBACK_FENCE_WAIT_MS: u32 = 2000;
+pub const READBACK_FENCE_WAIT_MS: u32 = 2000;
 /// The fence value our single command-list submission signals.
-const READBACK_FENCE_TARGET: u64 = 1;
+pub const READBACK_FENCE_TARGET: u64 = 1;
 
 /// GX swapchain command-queue global: deobf RVA of the qword holding the game's `ID3D12CommandQueue` (the
 /// `pDevice` arg the GX backend passes to `IDXGIFactory::CreateSwapChain` -- for a D3D12 swapchain that arg
@@ -99,88 +99,8 @@ const READBACK_FENCE_TARGET: u64 = 1;
 #[allow(dead_code)]
 const GX_COMMAND_QUEUE_RVA: usize = 0x8012a8;
 
-// Persistent portrait-overlay draw state. The COM objects are leaked (`into_raw`) for the process lifetime
-// and re-borrowed (`from_raw_borrowed`) each Present -- storing raw `usize` keeps them `Send` across the
-// `static` boundary (windows-rs COM types are `!Send`). State machine: 0=uninit, 1=ready, 2=failed/give-up.
-pub(crate) use er_telemetry::counters::OVERLAY_DRAW_STATE;
-static OVERLAY_PORTRAIT_VERSION: AtomicUsize = AtomicUsize::new(usize::MAX); // last LOADING_BG_PORTRAIT_RGBA_VERSION composited to the backbuffer
-static OVERLAY_ALLOCATOR: AtomicUsize = AtomicUsize::new(0); // ID3D12CommandAllocator (DIRECT)
-static OVERLAY_LIST: AtomicUsize = AtomicUsize::new(0); // ID3D12GraphicsCommandList (DIRECT, kept closed)
-static OVERLAY_FENCE: AtomicUsize = AtomicUsize::new(0); // ID3D12Fence
-static OVERLAY_QUEUE: AtomicUsize = AtomicUsize::new(0); // our OWN private DIRECT ID3D12CommandQueue (leaked)
-static OVERLAY_FENCE_VAL: AtomicU64 = AtomicU64::new(0); // monotonically incremented per submit
-pub(crate) use er_telemetry::counters::OVERLAY_PORTRAIT_W;
-pub(crate) use er_telemetry::counters::OVERLAY_PORTRAIT_H;
-/// Successful backbuffer composites submitted (RAM semaphore that the portrait is actually being drawn).
-pub(crate) use er_telemetry::counters::OVERLAY_DRAW_HITS;
-/// Timing window for successful overlay composites. These prove whether the portrait overlay itself is
-/// presenting below refresh rate (draw FPS), independent of whether the source portrait changed.
-pub(crate) use er_telemetry::counters::OVERLAY_DRAW_FIRST_MS;
-pub(crate) use er_telemetry::counters::OVERLAY_DRAW_LAST_MS;
-/// Count of LIVE RE-UPLOADS: each time the overlay source texture was rebuilt from a fresh
-/// (version-bumped) `LOADING_BG_PORTRAIT_RGBA` -> proves the DISPLAYED head updated per-frame (followed
-/// the cursor), not froze on the first captured frame. `oracle_overlay_reuploads`.
-pub(crate) use er_telemetry::counters::OVERLAY_REUPLOADS;
-/// Timing window for distinct source-frame updates that reached the overlay. These prove source playback
-/// FPS, and distinguish a slow source from a slow compositor.
-pub(crate) use er_telemetry::counters::OVERLAY_REUPLOAD_FIRST_MS;
-pub(crate) use er_telemetry::counters::OVERLAY_REUPLOAD_LAST_MS;
-/// Consecutive successful overlay presents that reused the same source version. High max == visible held
-/// frames/choppiness even if the overlay presents every frame.
-pub(crate) use er_telemetry::counters::OVERLAY_STALE_PRESENT_RUN;
-pub(crate) use er_telemetry::counters::OVERLAY_STALE_PRESENT_MAX;
-/// Per-stage timing for the CPU full-backbuffer composite. These answer whether the bottleneck is GPU
-/// readback synchronization, CPU per-pixel blending, or GPU upload synchronization.
-pub(crate) use er_telemetry::counters::OVERLAY_STAGE_READBACK_WAIT_COUNT;
-pub(crate) use er_telemetry::counters::OVERLAY_STAGE_READBACK_WAIT_MS_SUM;
-pub(crate) use er_telemetry::counters::OVERLAY_STAGE_READBACK_WAIT_MS_MAX;
-pub(crate) use er_telemetry::counters::OVERLAY_STAGE_BLEND_COUNT;
-pub(crate) use er_telemetry::counters::OVERLAY_STAGE_BLEND_MS_SUM;
-pub(crate) use er_telemetry::counters::OVERLAY_STAGE_BLEND_MS_MAX;
-pub(crate) use er_telemetry::counters::OVERLAY_STAGE_UPLOAD_WAIT_COUNT;
-pub(crate) use er_telemetry::counters::OVERLAY_STAGE_UPLOAD_WAIT_MS_SUM;
-pub(crate) use er_telemetry::counters::OVERLAY_STAGE_UPLOAD_WAIT_MS_MAX;
-static OVERLAY_TIMING_EPOCH: Mutex<Option<std::time::Instant>> = Mutex::new(None);
-/// Latches once the `now_loading` streaming screen (the tips+bar loading screen the portrait belongs on)
-/// has been seen this window. The correct STOP is this-seen-then-gone: the bar appeared, filled, and the
-/// game transitioned to gameplay. Reset per window on re-arm.
-pub(crate) use er_telemetry::counters::OVERLAY_NOW_LOADING_SEEN;
-/// One-shot diagnostic when the anti-runaway backstop disables the loading portrait overlay.
-pub(crate) use er_telemetry::counters::OVERLAY_WORLD_STOP_LOGGED;
-
-// LOADING-SCREEN WINDOW state machine. DECISIVE timeline (run portrait-swap-fix2-noteardown-20260702-213407):
-// the tips+bar loading screen the loaded character sits on is the `now_loading` streaming flag, TRUE from
-// +27.6s to +78s. IN_WORLD_REACHED (player becomes controllable) fires at +25.9s -- 1.7s BEFORE that screen
-// even appears -- because PlayerIns is live throughout the loading screen (the documented false positive).
-// So IN_WORLD is NOT a valid stop; using it (directly, or via the CSNowLoadingHelperImp update hook which
-// read 0 hits) popped the portrait ~2s before the bar was even up. The overlay now composites from the
-// moment we have a captured head, BRIDGES the pre-now_loading gap, then rides the now_loading window and
-// stops only when it has been seen and then drops (the game's own transition). A generous present-counted
-// backstop guards the (non-product) case where now_loading never appears, so we can't composite forever.
-/// 1 = stopped (window over); stays stopped until a NEW loading window re-arms it.
-pub(crate) use er_telemetry::counters::OVERLAY_STOPPED;
-/// `PROFILE_LOADSCREEN_TABLE_BUILDS` at the moment of the stop -- a later build = a new window (re-arm).
-pub(crate) use er_telemetry::counters::OVERLAY_STOP_TABLE_BUILDS;
-/// Presents counted while IN_WORLD but now_loading NOT yet seen -- the pre-loading-screen bridge gap. Reset
-/// to 0 the instant now_loading latches (then the seen-then-gone stop takes over) and on re-arm.
-pub(crate) use er_telemetry::counters::OVERLAY_BRIDGE_PRESENTS;
-/// `load_done && !fake_vis` can assert before the visible loading surface finishes its fade/hand-off. Keep
-/// compositing for a bounded bridge after that predicate so the portrait does not pop off while the user
-/// still sees the loading screen. The product stop is now the native LoadingScreen close/result semaphore;
-/// this bridge is only a fallback if that hook is absent or never reaches close.
-const OVERLAY_LOAD_DONE_VISIBLE_BRIDGE_PRESENTS: usize = 360;
-/// Anti-runaway backstop: max bridge presents before we stop even though now_loading was never seen. The
-/// real gap is ~1.7s; this is set FAR above any real present rate over that gap so it NEVER pre-empts a
-/// genuine load (which always shows now_loading) -- it only bounds a deeply-wrong state. Biased huge so the
-/// overlay errs toward holding the portrait (the product requirement) over popping early (the bug).
-const OVERLAY_NOWLOAD_BRIDGE_MAX_PRESENTS: usize = 60000;
-/// RAM oracle: number of overlay window stops (`oracle_overlay_window_stops`).
-pub(crate) use er_telemetry::counters::OVERLAY_WINDOW_STOPS;
-/// RAM oracle: last stop reason (`oracle_overlay_stop_reason`): 0=none yet, 1=load-done bridge elapsed,
-/// 3=anti-runaway backstop (loading never stopped cleanly), 4=legacy native now-loading Gauge_3 terminal
-/// frame, 5=native LoadingScreen close/result handoff (preferred product stop).
-pub(crate) use er_telemetry::counters::OVERLAY_STOP_REASON;
-
+// Monotonic fence value for the shared execute_and_wait submit helper (gpu_draw_shared.rs).
+pub static OVERLAY_FENCE_VAL: AtomicU64 = AtomicU64::new(0); // monotonically incremented per submit
 /// PE image range `[base, base+SizeOfImage)` read from the in-memory PE headers at `base`.
 unsafe fn pe_image_range(base: usize) -> Option<(usize, usize)> {
     if base == 0 {
@@ -195,7 +115,7 @@ unsafe fn pe_image_range(base: usize) -> Option<(usize, usize)> {
 }
 
 /// `[base, base+SizeOfImage)` for a loaded module by null-terminated ASCII name, or `None`.
-pub(crate) unsafe fn module_range(name: &[u8]) -> Option<(usize, usize)> {
+pub unsafe fn module_range(name: &[u8]) -> Option<(usize, usize)> {
     let h = unsafe { GetModuleHandleA(PCSTR(name.as_ptr())) }.ok()?;
     unsafe { pe_image_range(h.0 as usize) }
 }
@@ -239,93 +159,13 @@ unsafe fn try_texture2d(ptr: usize) -> Option<(ID3D12Resource, u64)> {
     }
 }
 
-/// Deterministically resolve the `ID3D12Resource` that GFx SAMPLES for a Scaleform HAL texture
-/// (candidate A, er-effects-rs-jsm). The generic `find_d3d12_resource` BFS cannot reach it: the HAL
-/// texture stores the resource past that BFS's 0x60 field window (runtime dump 2026-07-05: at hal+0x70)
-/// and behind a wrapper whose vtable is not in the EXE (hal+0x18 -> +0x40), which the BFS never enqueues.
-/// We scan the HAL texture's OWN fields first (direct d3d12 object = the bound texture), then one hop
-/// through each pointer field, and accept only a color TEXTURE2D whose dims EXACTLY match the forged
-/// texture (`want_w` x `want_h`) -- an unambiguous filter that also skips 1x1 dummies and the depth
-/// sibling. Read-only pointer walking; a QI runs only on a pointer whose vtable is confirmed to live in a
-/// d3d12 module (never a QI on a non-COM pointer). Returns the AddRef'd (owned) resource.
-pub(crate) unsafe fn resolve_gfx_hal_resource(
-    hal: usize,
-    want_w: u32,
-    want_h: u32,
-) -> Option<ID3D12Resource> {
-    let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    if hal == 0 || hal == null {
-        return None;
-    }
-    let d3d: Vec<(usize, usize)> = [
-        b"d3d12core.dll\0".as_slice(),
-        b"d3d12.dll\0".as_slice(),
-        b"dxgi.dll\0".as_slice(),
-    ]
-    .iter()
-    .filter_map(|n| unsafe { module_range(n) })
-    .collect();
-    if d3d.is_empty() {
-        return None;
-    }
-    // A real COM vtable sits >= 0x1000 into a d3d module and its QI slot points back into a d3d module
-    // (same hardening find_d3d12_resource_ex uses so a stray heap word can't be QI'd as a live object).
-    let d3d_vtable_ok = |vt: usize| {
-        d3d.iter().any(|&(lo, hi)| lo + 0x1000 <= vt && vt < hi)
-            && unsafe { safe_read_usize(vt) }
-                .is_some_and(|qi| d3d.iter().any(|&(lo, hi)| lo + 0x1000 <= qi && qi < hi))
-    };
-    let valid = |p: usize| p > 0x10000 && p < 0x8000_0000_0000;
-    let try_at = |cand: usize| -> Option<ID3D12Resource> {
-        if !valid(cand) {
-            return None;
-        }
-        let vt = unsafe { safe_read_usize(cand) }?;
-        if !d3d_vtable_ok(vt) {
-            return None;
-        }
-        let (res, _area) = unsafe { try_texture2d(cand) }?;
-        let desc = unsafe { res.GetDesc() };
-        if desc.Width as u32 == want_w && desc.Height == want_h {
-            Some(res)
-        } else {
-            None
-        }
-    };
-    // Pass 1: the HAL texture's OWN fields (the bound resource pointer, e.g. hal+0x70). Preferred -- the
-    // direct member is the sampled texture; a wrapper-reached one may be a staging/upload sibling.
-    let mut off = 0usize;
-    while off <= 0xb0 {
-        if let Some(r) = try_at(unsafe { safe_read_usize(hal + off) }.unwrap_or(0)) {
-            return Some(r);
-        }
-        off += 8;
-    }
-    // Pass 2: one hop through each pointer field (reaches resources behind a non-EXE-vtable wrapper).
-    let mut off = 0usize;
-    while off <= 0xb0 {
-        let p = unsafe { safe_read_usize(hal + off) }.unwrap_or(0);
-        if valid(p) {
-            let mut o2 = 0usize;
-            while o2 <= 0x48 {
-                if let Some(r) = try_at(unsafe { safe_read_usize(p + o2) }.unwrap_or(0)) {
-                    return Some(r);
-                }
-                o2 += 8;
-            }
-        }
-        off += 8;
-    }
-    None
-}
-
 /// Find the VKD3D `ID3D12Resource` (a TEXTURE2D whose vtable lives in d3d12core/d3d12/dxgi) by a
 /// bounded BFS over the eldenring-wrapper object nest reachable from `start` (the CSGxTexture's GPU
 /// child). The real resource is several wrappers deep and at run-varying offsets, so we scan by
 /// vtable-module rather than hard-code a fragile offset chain (see bd
 /// `live-portrait-d3d12-resource-buried-in-gx-wrapper-nest-2026-06-29`). Returns the validated,
 /// QI-owned resource. Pure read-only pointer-walking until the QI on a confirmed-d3d12 candidate.
-unsafe fn find_d3d12_resource(start: usize) -> Option<ID3D12Resource> {
+pub unsafe fn find_d3d12_resource(start: usize) -> Option<ID3D12Resource> {
     unsafe { find_d3d12_resource_ex(start, 0, false, 0) }.map(|(r, _)| r)
 }
 
@@ -337,31 +177,31 @@ unsafe fn find_d3d12_resource(start: usize) -> Option<ID3D12Resource> {
 // subsequent scan while it remains reachable; only its disappearance (RT recreation/teardown) falls back to
 // the largest-candidate heuristic. Pinning the CANDIDATE POINTER (re-QI'd each frame) -- not the resource
 // handle -- avoids the stale-cache dangling-handle bug that killed `readback_cached_content_rgba8`.
-/// Pinned content-RT candidate object pointer (0 = unpinned). `oracle_portrait_rt_pin`.
-pub(crate) use er_telemetry::counters::PROFILE_RT_PIN;
-/// Times the pin moved to a DIFFERENT candidate after first latch (`oracle_portrait_rt_pin_switches`).
-/// >0 on a single load window means the content source was unstable -- the swap-bug tripwire.
-pub(crate) use er_telemetry::counters::PROFILE_RT_PIN_SWITCHES;
 /// Pinned depth-sibling candidate pointer (0 = unpinned); latched when a depth readback yields a mask
 /// with clean bg/head separation, so the alpha cutout can't sample a foreign slot's depth buffer.
-pub(crate) use er_telemetry::counters::PROFILE_DEPTH_PIN;
+pub use er_telemetry::counters::PROFILE_DEPTH_PIN;
+/// Pinned content-RT candidate object pointer (0 = unpinned). `oracle_portrait_rt_pin`.
+pub use er_telemetry::counters::PROFILE_RT_PIN;
+/// Times the pin moved to a DIFFERENT candidate after first latch (`oracle_portrait_rt_pin_switches`).
+/// >0 on a single load window means the content source was unstable -- the swap-bug tripwire.
+pub use er_telemetry::counters::PROFILE_RT_PIN_SWITCHES;
 // COLOR/DEPTH SOURCE PROVENANCE (green-face wrong-buffer fix, 2026-07-03). The offscreen nest holds
 // same-size same-format non-final render targets (material/G-buffer: flat-green face, saturated
 // orange emissive -- user screenshot), and the whole-nest "largest texture" scan can pick one when
 // the deterministic scene-bundle chain misses; keyed+tear gates cannot tell buffers apart. Track
 // where each tick's color/depth came from; the strict publish gate displays ONLY bundle-provenance
 // color (identity-proven by construction), and scan-resolved frames hold the bridge instead.
+/// Cumulative ticks whose color resolved from the scene bundle vs the scan fallback.
+pub use er_telemetry::counters::PROFILE_COLOR_FROM_BUNDLE;
+pub use er_telemetry::counters::PROFILE_COLOR_FROM_SCAN;
 /// Per-tick color provenance: 1 = scene-bundle RTV (identity-proven), 0 = whole-nest scan fallback.
 /// Written by the readback, consumed immediately by the same-thread draw tick.
-pub(crate) use er_telemetry::counters::PROFILE_COLOR_SRC_BUNDLE_LAST;
-/// Cumulative ticks whose color resolved from the scene bundle vs the scan fallback.
-pub(crate) use er_telemetry::counters::PROFILE_COLOR_FROM_BUNDLE;
-pub(crate) use er_telemetry::counters::PROFILE_COLOR_FROM_SCAN;
+pub use er_telemetry::counters::PROFILE_COLOR_SRC_BUNDLE_LAST;
+pub use er_telemetry::counters::PROFILE_DEPTH_FROM_BFS;
 /// Cumulative depth resolutions via the deterministic bundle chain vs the heuristic BFS fallback.
-pub(crate) use er_telemetry::counters::PROFILE_DEPTH_FROM_CHAIN;
-pub(crate) use er_telemetry::counters::PROFILE_DEPTH_FROM_BFS;
+pub use er_telemetry::counters::PROFILE_DEPTH_FROM_CHAIN;
 /// Keyed+clean frames NOT displayed because their color was scan-resolved (no bundle provenance).
-pub(crate) use er_telemetry::counters::PROFILE_PUBLISH_SKIPPED_UNPAIRED;
+pub use er_telemetry::counters::PROFILE_PUBLISH_SKIPPED_UNPAIRED;
 
 // Static-RE'd offscreen scene-target member chain (Ghidra dump decompiles, 2026-07-03 -- the
 // black-background-on-reload root fix). The CSEzOffscreenRend stores its GXSgCompositeScene facade
@@ -382,7 +222,7 @@ const TARGET_BUNDLE_DSV_VIEW_OFFSET: usize = 0x40;
 /// resolving BOTH from one bundle guarantees the color and depth are the same render pass's siblings.
 const TARGET_BUNDLE_RTV_VIEW_OFFSET: usize = 0x30;
 /// One-shot diagnostic latch for the deterministic depth-view chain (first resolve + first miss).
-pub(crate) use er_telemetry::counters::DEPTH_CHAIN_DIAG;
+pub use er_telemetry::counters::DEPTH_CHAIN_DIAG;
 
 /// Find the offscreen scene's DEPTH-STENCIL resource (same-size sibling of the color RT, observed
 /// format 19 = R32G8X24_TYPELESS). Used for the depth-key transparent background: background =
@@ -395,7 +235,7 @@ pub(crate) use er_telemetry::counters::DEPTH_CHAIN_DIAG;
 /// frames). So: first walk the static-RE'd member chain straight to OUR scene's DSV view object
 /// and QI the resource out of that tiny nest (deterministic, slot-local by construction); only if
 /// a chain link is null/redirected fall back to the historical BFS from the offscreen object.
-pub(crate) unsafe fn find_depth_resource(start: usize) -> Option<(ID3D12Resource, usize)> {
+pub unsafe fn find_depth_resource(start: usize) -> Option<(ID3D12Resource, usize)> {
     // Deterministic bundle-paired DSV FIRST, walked with NO pin (prefer=0): the color RTV (bundle+0x30)
     // and depth DSV (bundle+0x40) are the SAME render-target bundle, so this view already points at the
     // scene's OWN depth sibling -- letting the drifting DEPTH_PIN win here would override that correct
@@ -437,7 +277,7 @@ pub(crate) unsafe fn find_depth_resource(start: usize) -> Option<(ID3D12Resource
 /// (missing bundle/RTV/frame -> no clear, the frame simply keeps its previous content); the
 /// redirect-to-global-target case fails closed inside `offscreen_target_bundle` so the swapchain
 /// can never be cleared by mistake.
-pub(crate) unsafe fn portrait_alpha0_clear(base: usize, off: usize) -> bool {
+pub unsafe fn portrait_alpha0_clear(base: usize, off: usize) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null;
     let Some(bundle) = (unsafe { offscreen_target_bundle(off) }) else {
@@ -550,7 +390,7 @@ unsafe fn try_depth_texture2d(ptr: usize) -> Option<(ID3D12Resource, u64)> {
 /// `prefer_v` (0 = none): a previously PINNED candidate -- if the scan reaches it and it still QIs as a
 /// valid texture, it wins immediately over the largest-candidate heuristic, so the resolved content source
 /// cannot flip between same-size RTs frame-to-frame (the cross-slot portrait-swap bug).
-unsafe fn find_d3d12_resource_ex(
+pub unsafe fn find_d3d12_resource_ex(
     start: usize,
     exclude_v: usize,
     want_depth: bool,
@@ -570,8 +410,9 @@ unsafe fn find_d3d12_resource_ex(
     // still run.
     {
         use std::sync::atomic::Ordering as RbOrd;
-        let cur = crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(RbOrd::SeqCst);
-        if crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(RbOrd::SeqCst) == cur {
+        let cur = er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
+            .load(RbOrd::SeqCst);
+        if er_telemetry::counters::BOOT_VIEW_EPOCH_WORLD_LIVE.load(RbOrd::SeqCst) == cur {
             return None;
         }
     }
@@ -685,7 +526,7 @@ unsafe fn find_d3d12_resource_ex(
 
 /// Record a one-subresource state transition into `list` for `res`, balancing the AddRef the
 /// `ManuallyDrop<Option<ID3D12Resource>>` field requires (clone + explicit drop = net zero on `res`).
-unsafe fn record_transition(
+pub unsafe fn record_transition(
     list: &ID3D12GraphicsCommandList,
     res: &ID3D12Resource,
     before: D3D12_RESOURCE_STATES,
@@ -714,7 +555,7 @@ unsafe fn record_transition(
 ///
 /// Returns `(width, height, rgba8)` on success, `None` on ANY failure. Never panics, never crashes,
 /// never Releases the game's resource, never touches the game's command queue.
-pub(crate) unsafe fn readback_offscreen_rgba8(gpu_child: usize) -> Option<(u32, u32, Vec<u8>)> {
+pub unsafe fn readback_offscreen_rgba8(gpu_child: usize) -> Option<(u32, u32, Vec<u8>)> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         readback_offscreen_rgba8_inner(gpu_child)
     }))
@@ -733,9 +574,7 @@ pub(crate) unsafe fn readback_offscreen_rgba8(gpu_child: usize) -> Option<(u32, 
 /// (Step 2: no longer called -- it was the coherent read's scan fallback, dropped with the staged split.
 /// Kept as the proven standalone color readback for reference.)
 #[allow(dead_code)]
-pub(crate) unsafe fn readback_offscreen_fast(
-    gpu_child: usize,
-) -> Option<(u32, u32, Vec<u8>, usize)> {
+pub unsafe fn readback_offscreen_fast(gpu_child: usize) -> Option<(u32, u32, Vec<u8>, usize)> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         let prefer = PROFILE_RT_PIN.load(Ordering::SeqCst);
         let (resource, cand) = find_d3d12_resource_ex(gpu_child, 0, false, prefer)?;
@@ -750,7 +589,7 @@ pub(crate) unsafe fn readback_offscreen_fast(
 /// (Step 2: no longer on the live path -- the worker reads depth from the staging slot directly. Left per
 /// the design note; the writer was removed with `readback_offscreen_fast_coherent`.)
 #[allow(dead_code)]
-pub(crate) fn take_coherent_depth() -> Option<(u32, u32, Vec<f32>, usize)> {
+pub fn take_coherent_depth() -> Option<(u32, u32, Vec<f32>, usize)> {
     COHERENT_DEPTH.lock().ok().and_then(|mut g| g.take())
 }
 
@@ -764,21 +603,21 @@ pub(crate) fn take_coherent_depth() -> Option<(u32, u32, Vec<f32>, usize)> {
 /// RT is released synchronously and the staging buffers hold the data), but did NOT map or de-swizzle. The
 /// worker maps `slot`'s staging buffers and de-swizzles from the footprint metadata below. Carries NO game
 /// pointer and NO D3D12 object -- only the ring `slot` index + plain scalars.
-pub(crate) struct StagedReadback {
-    pub(crate) slot: usize,
-    pub(crate) cw: u32,
-    pub(crate) ch: u32,
+pub struct StagedReadback {
+    pub slot: usize,
+    pub cw: u32,
+    pub ch: u32,
     /// `DXGI_FORMAT.0` of the color RT (the worker reconstructs the B/R-swap decision from it).
-    pub(crate) cformat: u32,
-    pub(crate) c_rowpitch: u32,
-    pub(crate) c_total: u64,
-    pub(crate) dw: u32,
-    pub(crate) dh: u32,
-    pub(crate) d_rowpitch: u32,
-    pub(crate) d_total: u64,
+    pub cformat: u32,
+    pub c_rowpitch: u32,
+    pub c_total: u64,
+    pub dw: u32,
+    pub dh: u32,
+    pub d_rowpitch: u32,
+    pub d_total: u64,
     /// The color RT candidate pointer (the job's `rt_cand`, used for the content-RT pin).
-    pub(crate) color_cand: usize,
-    pub(crate) color_from_bundle: bool,
+    pub color_cand: usize,
+    pub color_from_bundle: bool,
 }
 
 /// RAII guard for a claimed ring slot: on drop it frees the slot (state -> FREE) UNLESS committed. On the
@@ -803,16 +642,19 @@ impl Drop for SlotGuard {
 /// (KEEPING the wait on the render thread so the game RT is released here), and returns the slot + footprint
 /// metadata. Does NOT map or de-swizzle -- the worker does that from the staging buffers. `None` on any
 /// resolve/copy failure (caller skips). Never touches the game's queues; catch_unwind; fault-guarded.
-pub(crate) unsafe fn readback_offscreen_color_depth_staged(
-    gpu_child: usize,
-) -> Option<StagedReadback> {
+pub unsafe fn readback_offscreen_color_depth_staged(gpu_child: usize) -> Option<StagedReadback> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // Pick + CLAIM the next ring slot (round-robin). If it is still BUSY the worker has not finished
         // consuming it, so DROP this frame's readback (the render thread never blocks -- intended
         // backpressure).
         let slot = RB_COH_FRAME.fetch_add(1, Ordering::SeqCst) % RB_COH_RING;
         if RB_COH_SLOT_STATE[slot]
-            .compare_exchange(RB_SLOT_FREE, RB_SLOT_BUSY, Ordering::SeqCst, Ordering::SeqCst)
+            .compare_exchange(
+                RB_SLOT_FREE,
+                RB_SLOT_BUSY,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
             .is_err()
         {
             RB_COH_SLOT_BUSY_DROPS.fetch_add(1, Ordering::SeqCst);

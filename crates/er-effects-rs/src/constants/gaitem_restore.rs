@@ -227,16 +227,6 @@ pub(crate) fn game_data_man_ptr_or_null() -> usize {
 /// GameDataMan -> main player save data (compiler-verified equal to the upstream typed field).
 pub(crate) const SLOT_MANAGER_DATA_OFFSET: usize =
     core::mem::offset_of!(GameDataMan, main_player_game_data);
-/// GameDataMan private tail fields used by the save/profile probes.
-#[repr(C)]
-pub(crate) struct GameDataManProfileSummaryLayout {
-    pub(crate) unknown_000: [u8; 0x78],
-    pub(crate) profile_summary: usize,
-}
-
-/// GameDataMan -> `profile_summary`; private upstream, but documented locally as a typed layout.
-pub(crate) const SLOT_MANAGER_CONTAINER_OFFSET: usize =
-    core::mem::offset_of!(GameDataManProfileSummaryLayout, profile_summary);
 pub(crate) const CSFEMAN_SINGLETON_RVA: usize = 0x3d6b880;
 /// Session manager singleton (absolute 0x1447ef360; NULL at the title, built by
 /// the move-map/load path). RVA = 0x1447ef360 - 0x140000000 = 0x47ef360.

@@ -1,9 +1,10 @@
+use crate::prelude::*;
 
 /// Q4 keepalive oracle: read the GX render-pass queue head/tail (non-destructively -- NO pop) to detect
 /// whether a GX pass is queued this frame (the precondition the offscreen draw checks via FUN_1419e5850).
 /// g_GxDrawContext may be a pointer-global (heap ctx) or the struct itself; resolve defensively and fall
 /// back to the global address. All reads fault-guarded.
-unsafe fn profile_gx_queue_sample(base: usize) {
+pub unsafe fn profile_gx_queue_sample(base: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null;
     let global = base + GX_DRAW_CONTEXT_RVA;
@@ -62,7 +63,7 @@ unsafe fn profile_gx_queue_sample(base: usize) {
 /// engine keeps barely one menu model built at a time (cycling); "changed" is gated to same-slot so a
 /// slot switch (different character) is not mistaken for head motion. Only does the (costly) readback when
 /// a live model exists, so it is free when none is present. Read-only + fault-guarded.
-unsafe fn profile_lookat_rt_sample(base: usize) {
+pub unsafe fn profile_lookat_rt_sample(base: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null;
     let mut chosen = usize::MAX;
@@ -152,58 +153,6 @@ unsafe fn profile_lookat_rt_sample(base: usize) {
             }
         }
     }
-    // SAMPLEABLE-TEXTURE READBACK: read the texture actually BOUND into the now-loading container (what
-    // GFx samples) and compare to the render target above. Same render-thread context (safe). If the RT
-    // has content but this reads black, the bound CSGxTexture is a separate/unresolved resource.
-    {
-        let cap = LOADING_BG_TEXTURE_REDIRECT_LAST_PORTRAIT.load(Ordering::SeqCst);
-        let mut bgx = 0usize;
-        if valid(cap) {
-            let container =
-                unsafe { safe_read_usize(cap + TPF_FILE_CAP_TEX_RESCAP_OFFSET) }.unwrap_or(0);
-            if valid(container) {
-                let array =
-                    unsafe { safe_read_usize(container + TPF_RESCAP_CONTAINER_ARRAY_OFFSET) }
-                        .unwrap_or(0);
-                if valid(array) {
-                    let trc0 = unsafe { safe_read_usize(array) }.unwrap_or(0);
-                    if valid(trc0) {
-                        bgx = unsafe {
-                            safe_read_usize(trc0 + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET)
-                        }
-                        .unwrap_or(0);
-                    }
-                }
-            }
-        }
-        if valid(bgx) {
-            if let Some((bw, bh, bpx)) = unsafe { readback_offscreen_rgba8(bgx) } {
-                let (wq, hq) = (bw as usize, bh as usize);
-                if wq > 0 && hq > 0 && bpx.len() >= wq * hq * 4 {
-                    let (cx, cy) = (wq / 2, hq / 2);
-                    let (x0, x1) = (cx.saturating_sub(32), (cx + 32).min(wq));
-                    let (y0, y1) = (cy.saturating_sub(32), (cy + 32).min(hq));
-                    let (mut rgb_max, mut a_max) = (0u8, 0u8);
-                    for y in y0..y1 {
-                        for x in x0..x1 {
-                            let idx = (y * wq + x) * 4;
-                            rgb_max = rgb_max.max(bpx[idx]).max(bpx[idx + 1]).max(bpx[idx + 2]);
-                            a_max = a_max.max(bpx[idx + 3]);
-                        }
-                    }
-                    PROFILE_BOUND_GX_RGB_MAX.store(rgb_max as usize, Ordering::SeqCst);
-                    PROFILE_BOUND_GX_ALPHA_MAX.store(a_max as usize, Ordering::SeqCst);
-                    // One-shot dump of the bound SRV (slot 101) once we've also captured the content RT,
-                    // so the two can be compared side by side (is the SRV black? is the RT the portrait?).
-                    if PROFILE_RT_CONTENT_DUMPED.load(Ordering::SeqCst) != 0
-                        && PROFILE_SRV_DUMPED.swap(1, Ordering::SeqCst) == 0
-                    {
-                        dump_portrait_rgba(101, bw, bh, &bpx);
-                    }
-                }
-            }
-        }
-    }
     // Cheap strided FNV-1a hash of the RT to detect frame-to-frame content change without storing pixels.
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     let step = (px.len() / 4096).max(1);
@@ -271,7 +220,7 @@ unsafe fn profile_lookat_stage_probe(base: usize) {
     }
 }
 
-pub(crate) fn profile_lookat_phase_diag_tick() {
+pub fn profile_lookat_phase_diag_tick() {
     if !portrait_overlay_enabled() {
         return;
     }
@@ -420,28 +369,6 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
                     }
                 }
             }
-            // Bound container's first TexResCap GX (what the loading screen actually samples).
-            let cap = LOADING_BG_TEXTURE_REDIRECT_LAST_PORTRAIT.load(Ordering::SeqCst);
-            if cap != 0 && cap != null {
-                let container =
-                    unsafe { safe_read_usize(cap + TPF_FILE_CAP_TEX_RESCAP_OFFSET) }.unwrap_or(0);
-                if container != 0 && container != null {
-                    let array =
-                        unsafe { safe_read_usize(container + TPF_RESCAP_CONTAINER_ARRAY_OFFSET) }
-                            .unwrap_or(0);
-                    if array != 0 && array != null {
-                        let trc0 = unsafe { safe_read_usize(array) }.unwrap_or(0);
-                        if trc0 != 0 && trc0 != null {
-                            bound_gx = unsafe {
-                                safe_read_usize(
-                                    trc0 + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET,
-                                )
-                            }
-                            .unwrap_or(0);
-                        }
-                    }
-                }
-            }
         }
         append_autoload_debug(format_args!(
             "loading-portrait-chain: built_slot_r=0x{ch_r:x} off=0x{ch_off:x} trc=0x{ch_trc:x} chain_gx=0x{ch_gx:x} | bound_gx=0x{bound_gx:x} copies={} rt[rgb_max={} alpha_max={}] boundtex[rgb_max={} alpha_max={}]",
@@ -461,13 +388,11 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
             PORTRAIT_PUMP_BLOCK_MULTI.load(Ordering::SeqCst),
         ));
         append_autoload_debug(format_args!(
-            "lookat-spared-sweep: frame={n} nowload={} loadbuilds={} built[r={built_r} m={built_m}] rebind[n={} gx=0x{:x}] model_raw=0x{model_raw:x} cap_model=0x{cap_model:x} cap_vt=0x{cap_vt:x} spared[ptr=0x{:x} model_ok={} draws={} hits={}] rt[samples={} nonblack={} changed={}]",
+            "lookat-spared-sweep: frame={n} nowload={} loadbuilds={} built[r={built_r} m={built_m}] model_raw=0x{model_raw:x} cap_model=0x{cap_model:x} cap_vt=0x{cap_vt:x} spared[ptr=0x{:x} model_ok={} draws={} hits={}] rt[samples={} nonblack={} changed={}]",
             game_module_base()
                 .map(|b| unsafe { now_loading_active(b) } as u8)
                 .unwrap_or(0),
             PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst),
-            LOADING_BG_LIVE_GX_REBINDS.load(Ordering::SeqCst),
-            LOADING_BG_LIVE_GX_BOUND.load(Ordering::SeqCst),
             LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst),
             PROFILE_SPARED_MODEL_OK.load(Ordering::SeqCst),
             PROFILE_PERFRAME_SPARED_DRAWS.load(Ordering::SeqCst),
@@ -482,7 +407,7 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
 /// One candidate draw-phase task tick (registered once per phase index). Always bumps that phase's
 /// per-frame tick counter (for the sweep), and drives the realtime look-at draw ONLY when this phase is
 /// the selected active one -- so exactly one phase rasterizes per frame regardless of how many are registered.
-pub(crate) unsafe fn profile_lookat_phase_draw_tick(phase_index: usize, task_data: &FD4TaskData) {
+pub unsafe fn profile_lookat_phase_draw_tick(phase_index: usize, task_data: &FD4TaskData) {
     if phase_index < LOOKAT_DRAW_PHASE_COUNT {
         PROFILE_LOOKAT_PHASE_TICKS[phase_index].fetch_add(1, Ordering::SeqCst);
     }
@@ -506,7 +431,7 @@ pub(crate) unsafe fn profile_lookat_phase_draw_tick(phase_index: usize, task_dat
 /// own (correct) `frame` arg. This is the fix for "head doesn't move": our prior code wrote the importer
 /// PoseHolder but never propagated to the submodels. Fires per model per frame (only when the model is
 /// live), so it naturally tracks the engine's model build/teardown cycling.
-pub(crate) unsafe extern "system" fn per_frame_push_hook(renderer: usize, frame: usize) {
+pub unsafe extern "system" fn per_frame_push_hook(renderer: usize, frame: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     // CAPTURE the engine's live render context (param_2/frame) on its OWN calls only (not our re-drives),
     // so our per-frame draw can enqueue the model into the SAME offscreen pass the engine routes to. Our
@@ -568,7 +493,7 @@ pub(crate) unsafe extern "system" fn per_frame_push_hook(renderer: usize, frame:
     }
 }
 
-fn install_per_frame_push_hook() {
+pub fn install_per_frame_push_hook() {
     if PROFILE_PERFRAME_HOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
         return;
     }
@@ -750,7 +675,7 @@ unsafe fn latched_profile_model_facing_yaw(renderer: usize, idx: usize) -> f32 {
 /// offscreen render. Re-applied every tick so a refresh that re-runs the engine setup can't win.
 /// `renderer` must already be a validated live CSMenuProfModelRend (vtable checked by the caller).
 /// Returns true once the camera was pushed. See bd `camera-lever-RE-VERIFIED-offsets-and-call-addrs-2026-06-29`.
-unsafe fn apply_profile_camera_override(base: usize, renderer: usize, slot: i32) -> bool {
+pub unsafe fn apply_profile_camera_override(base: usize, renderer: usize, slot: i32) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if renderer == 0 || renderer == null {
         return false;

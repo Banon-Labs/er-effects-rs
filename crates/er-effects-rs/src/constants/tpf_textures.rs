@@ -43,10 +43,6 @@ pub(crate) const ER_TPF_COVER_ERR_TEX_REPO_NULL: usize = 3;
 pub(crate) const ER_TPF_COVER_ERR_PANIC: usize = 4;
 pub(crate) const ER_TPF_COVER_ERR_RESCAP_NULL: usize = 5;
 pub(crate) const ER_TPF_COVER_ERR_BASE_UNRESOLVED: usize = 6;
-/// 1 once the er-tpf TPF003 byte blob was built (pure CPU, no native call).
-pub(crate) use er_telemetry::counters::ER_TPF_COVER_TEXTURE_BUILT;
-/// Built TPF003 blob length in bytes (0 until built).
-pub(crate) use er_telemetry::counters::ER_TPF_COVER_BLOB_LEN;
 /// 1 once the native CreateTpfResCap call has been ATTEMPTED (success or failure). Latched the moment a
 /// real call is made so the register fires exactly ONCE; precondition-not-ready bails (repos still null
 /// during boot) do NOT set this and keep retrying until graphics is up.

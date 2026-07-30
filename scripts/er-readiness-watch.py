@@ -683,44 +683,29 @@ _LOGO_FIRST_COMMIT_MONOTONIC: float | None = None
 def telemetry_loading_screen_portrait_capture_ready(telemetry: dict[str, Any] | None) -> bool:
     """True when the loading-screen portrait moment is worth visually capturing.
 
-    The product surface is the now-loading screen (full-screen background art), not the title logo.
-    Capture while the CSFakeLoadingScreen is CURRENTLY on-screen (oracle_fake_loading_visible is an
-    int 0/1, not a bool) AND our now-loading background forge has committed a replacement texture
-    (oracle_loading_bg_portrait_redirect_commits > 0) -- that is the frame where the forged portrait
-    should be the loading background. Stop/continue decisions still come from the RAM oracles, not
-    this image; it is the visual confirmation that the injected texture actually displays.
+    The product surface is the loading cover our DLL composites over the now-loading screen
+    (portrait + stats + bar), so capture while that cover is actually drawing the portrait.
+    Stop/continue decisions still come from the RAM oracles, not this image; it is the visual
+    confirmation that the composed cover actually displays.
     """
     if telemetry is None:
         return False
-    # The forge commits during the title->load transition (the now-loading helper requests its image a
-    # couple seconds before the art "Now Loading" screen actually renders during world streaming).
-    # Capturing at the first commit catches the title PRESS-ANY-BUTTON screen, so wait a short delay
-    # after the first commit so the screenshot lands while the art screen (our forged bg) is on-screen.
-    # The now-loading background binds BEFORE our post-Continue own-renderer exists, so the forge commit
-    # alone catches the checker/title transition. The frame worth capturing is when our OWN built renderer
-    # is up (oracle_loadscreen_table_builds > 0) AND we have re-bound its live offscreen RT into the
-    # displayed now-loading container (oracle_loading_bg_live_gx_rebinds > 0). Wait a short settle so the
-    # model has rendered a few frames into the bound RT before the screenshot.
+    # Path-B CPU cover (the only portrait path since the path-A forge/Present-composite deletion,
+    # bd er-effects-rs-f9mq): the portrait is composited into the shared boot/loading frame by
+    # portrait_onto, counted by oracle_portrait_onto_draw_hits. The frame worth capturing is when that
+    # composite is actually drawing AND there is a real portrait behind it -- EITHER our own
+    # post-Continue renderer table was built (oracle_loadscreen_table_builds > 0) OR the menu's
+    # still-live table yielded a non-black captured portrait (oracle_loading_bg_portrait_gx_nonblack);
+    # the immediate-build-kick path captures via the menu table without our builder ever running
+    # (builds stays 0), so requiring builds>0 alone misses the exact frame worth seeing.
     global _LOGO_FIRST_COMMIT_MONOTONIC
-    commits = as_int(telemetry.get("oracle_loading_bg_portrait_redirect_commits"), 0)
+    portrait_hits = as_int(telemetry.get("oracle_portrait_onto_draw_hits"), 0)
     builds = as_int(telemetry.get("oracle_loadscreen_table_builds"), 0)
-    # Fire once the forge has committed a now-loading background AND we have a real portrait to show.
-    # "Something real to show" is EITHER our own post-Continue renderer table was built
-    # (oracle_loadscreen_table_builds > 0) OR the menu's still-live table yielded a non-black captured
-    # portrait (oracle_loading_bg_portrait_gx_nonblack) -- the immediate-build-kick path captures via the
-    # menu table without our builder ever running (builds stays 0), so requiring builds>0 alone misses the
-    # exact frame worth seeing. (The live-RT re-bind oracle is NOT required -- the force-checker isolation
-    # path intentionally skips it.)
     gx_nonblack = bool(telemetry.get("oracle_loading_bg_portrait_gx_nonblack"))
-    # FORGE cover path: the native now-loading background was replaced (commits>0) and we have a portrait.
-    forge_ready = commits > 0 and (builds > 0 or gx_nonblack)
-    # OVERLAY-ONLY path (live portrait overlay): the native forge is disabled, so the live present-overlay is the
-    # display surface. Capture once it is actually compositing (overlay_draw_hits>0) on the loading screen
-    # (our post-Continue renderer table was built). Without this the screenshot never fires in overlay mode.
-    overlay_hits = as_int(telemetry.get("oracle_overlay_draw_hits"), 0)
-    overlay_ready = overlay_hits > 0 and builds > 0
-    if not (forge_ready or overlay_ready):
+    if not (portrait_hits > 0 and (builds > 0 or gx_nonblack)):
         return False
+    # Wait a short settle after the first ready frame so the screenshot lands while the cover (portrait +
+    # stats + bar) is fully composed on-screen rather than on its first frame.
     now = time.monotonic()
     if _LOGO_FIRST_COMMIT_MONOTONIC is None:
         _LOGO_FIRST_COMMIT_MONOTONIC = now
@@ -1309,16 +1294,14 @@ def telemetry_cold_char_mount_complete(telemetry: dict[str, Any] | None) -> bool
 def telemetry_loading_portrait_stopped(telemetry: dict[str, Any] | None) -> bool:
     """True once the loading portrait feature hit its product stop.
 
-    Stop reason 5 is the native LoadingScreen close/result handoff, intentionally later than the legacy
-    Gauge_3 terminal-frame reason 4. Feature-specific probes should tear down here instead of waiting
-    for world-stable.
+    The native LoadingScreen close/result handoff (close_sent_hits > 0) is the product stop for the
+    loading cover. (The old path-A overlay stop-reason oracle died with the path-A deletion,
+    bd er-effects-rs-f9mq.) Feature-specific probes should tear down here instead of waiting for
+    world-stable.
     """
     if not isinstance(telemetry, dict):
         return False
-    return (
-        as_int(telemetry.get("oracle_overlay_stop_reason"), 0) == 5
-        and as_int(telemetry.get("oracle_loading_screen_close_sent_hits"), 0) > 0
-    )
+    return as_int(telemetry.get("oracle_loading_screen_close_sent_hits"), 0) > 0
 
 
 def telemetry_server_status_semaphore_detected(telemetry: dict[str, Any] | None) -> bool:
