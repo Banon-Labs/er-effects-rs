@@ -776,6 +776,11 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
                         if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
                             *g = Some((w, h, px.clone()));
                         }
+                        // Identity tag rides with every bridge write (bd er-effects-rs-dpf6 Phase 1).
+                        // Game thread: hash slot `s`'s summary record directly.
+                        LS_PORTRAIT_PUBLISHED_SLOT.store((s + 1) as usize, Ordering::SeqCst);
+                        LS_PORTRAIT_PUBLISHED_NAME_HASH
+                            .store(unsafe { portrait_slot_name_hash(s) }, Ordering::SeqCst);
                         append_autoload_debug(format_args!(
                             "loading-portrait: BAKE-CAPTURED real menu portrait slot={s} dims={w}x{h} ibl_region=0x{ibl_region:x} -> LOADING_BG_PORTRAIT_RGBA (forge will bake it)"
                         ));

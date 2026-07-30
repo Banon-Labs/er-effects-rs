@@ -406,6 +406,11 @@ pub(crate) unsafe fn kick_target_profile_slot(
     }
     PORTRAIT_KICK_SLOT_KEY.store((slot + 1) as usize, Ordering::SeqCst);
     PORTRAIT_KICK_RENDERER.store(renderer, Ordering::SeqCst);
+    // KICK IDENTITY (bd er-effects-rs-dpf6 Phase 1): stamp the target's name hash on the game thread
+    // (from the same summary record the kick configures) so the consume worker -- which may not read
+    // game memory -- can copy it next to the bridge at publish. `record` == summary record base
+    // (name UTF-16 units at +0; verified: kick log record=0x92041c98 == summary 0x92041c80 + 0x18).
+    PORTRAIT_TARGET_NAME_HASH.store(unsafe { portrait_record_name_hash(record) }, Ordering::SeqCst);
     let kicks = PROFILE_TARGET_KICKS.fetch_add(1, Ordering::SeqCst) + 1;
     if kicks <= 4 {
         append_autoload_debug(format_args!(

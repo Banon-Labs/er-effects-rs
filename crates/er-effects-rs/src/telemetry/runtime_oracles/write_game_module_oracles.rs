@@ -1928,6 +1928,24 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_boot_view_dark_gap_last_native_hits",
             BOOT_VIEW_DARK_GAP_LAST_NATIVE_HITS.load(Ordering::SeqCst),
         );
+        // Cover-window measurability (bd er-effects-rs-dpf6 Phase 1): why the cover last stopped
+        // (0 armed/none, 1 release-fade, 2 fps-bail, 3 can-move world handoff), the last window's
+        // rearm->stop duration, and how many times the fps-bail was resumed by a fresh publish.
+        push_json_usize(
+            body,
+            "oracle_boot_view_stop_reason",
+            er_telemetry::counters::BOOT_VIEW_STOP_REASON.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_cover_window_ms",
+            er_telemetry::counters::BOOT_VIEW_COVER_WINDOW_MS_LAST.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_fps_bail_resumes",
+            er_telemetry::counters::BOOT_VIEW_FPS_BAIL_RESUMES.load(Ordering::SeqCst),
+        );
         let native_loading_updates = LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst);
         let forced_continue_observed = SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
             || TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0
@@ -2122,6 +2140,29 @@ fn write_game_module_oracles(body: &mut String) {
             body,
             "oracle_ls_portrait_rejected_publishes",
             LS_PORTRAIT_REJECTED_PUBLISHES.load(Ordering::SeqCst),
+        );
+        // Publish identity + race measurability (bd er-effects-rs-dpf6 Phase 1): which character the
+        // published head belongs to (slot+1 / FNV-1a64 name hash; 0 = no head/unknown), the last
+        // measured switch-confirm -> publish latency, and the Phase-3 same-identity bridge holds.
+        push_json_usize(
+            body,
+            "oracle_ls_portrait_slot",
+            er_telemetry::counters::LS_PORTRAIT_PUBLISHED_SLOT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_ls_portrait_name_hash",
+            er_telemetry::counters::LS_PORTRAIT_PUBLISHED_NAME_HASH.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_confirm_to_publish_ms",
+            er_telemetry::counters::PORTRAIT_CONFIRM_TO_PUBLISH_MS_LAST.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_bridge_same_identity_holds",
+            er_telemetry::counters::PORTRAIT_BRIDGE_SAME_IDENTITY_HOLDS.load(Ordering::SeqCst),
         );
         // CROSS-SLOT SWAP tripwires: the pinned content-RT candidate (0 = never latched a confirmed head),
         // how many times the pin MOVED after first latch (>0 in one load window = unstable content source,
