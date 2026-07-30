@@ -41,6 +41,183 @@ pub const PHASE_LABELS: [&str; PHASE_COUNT] = [
 pub const PHASE_PERMILLE: [usize; PHASE_COUNT] =
     [30, 80, 150, 220, 290, 360, 440, 520, 610, 730, 860, 950];
 
+/// Identity of a single loading phase, independent of which epoch's sequence contains it.
+///
+/// A load "epoch" is one arm-to-teardown lifetime of the bar. The phases a process boot walks
+/// through are NOT the phases a later character reload walks through: a reload cannot start the
+/// engine, construct GameMan, or acquire the title's Scaleform resources a second time. Naming the
+/// phase (rather than indexing a single global table) is what lets each epoch publish a sequence
+/// containing only the phases that can actually occur in it, so the visible `N/M` denominator is
+/// honest instead of padded with phases that already happened in a previous epoch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LoadPhase {
+    /// Process boot only: our present path is coming up.
+    StartingUp,
+    /// Process boot only: the engine's core managers are constructing.
+    GameSystems,
+    /// Process boot only: the title menu is acquiring its resources.
+    AcquiringAssets,
+    /// Process boot only: title Scaleform movies are opening.
+    OpeningMenuUi,
+    /// Process boot only: title Scaleform movies are building.
+    BuildingMenuUi,
+    /// Reload only: the user picked a slot and the switch was committed.
+    SwitchConfirmed,
+    /// Reload only: the live world is being torn down back to the title owner.
+    ReturningToTitle,
+    /// The title is up and owns the frame.
+    TitleReady,
+    /// The load request is armed and the save is being prepared.
+    PreparingSave,
+    /// The save is being read / the load has been confirmed.
+    LoadingSave,
+    /// The native loading screen is up; the world build has begun.
+    BuildingWorld,
+    /// The native world-load gauge is streaming.
+    StreamingWorld,
+    /// The native world-load gauge is past its midpoint.
+    FinalizingWorld,
+    /// The world is handing off to gameplay.
+    EnteringWorld,
+}
+
+impl LoadPhase {
+    /// Left-aligned visible label. Uppercase A-Z + space only (embedded 5x7 font contract).
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::StartingUp => "STARTING UP",
+            Self::GameSystems => "GAME SYSTEMS",
+            Self::AcquiringAssets => "ACQUIRING ASSETS",
+            Self::OpeningMenuUi => "OPENING MENU UI",
+            Self::BuildingMenuUi => "BUILDING MENU UI",
+            Self::SwitchConfirmed => "SWITCHING SAVE",
+            Self::ReturningToTitle => "RETURNING TO TITLE",
+            Self::TitleReady => "TITLE READY",
+            Self::PreparingSave => "PREPARING SAVE",
+            Self::LoadingSave => "LOADING SAVE",
+            Self::BuildingWorld => "BUILDING WORLD",
+            Self::StreamingWorld => "STREAMING WORLD",
+            Self::FinalizingWorld => "FINALIZING WORLD",
+            Self::EnteringWorld => "ENTERING WORLD",
+        }
+    }
+}
+
+/// One epoch's ordered phase sequence plus that sequence's own fill targets.
+///
+/// The permille targets belong to the SET, not to the phase: the same phase occupies a different
+/// slice of 0..1000 depending on how many phases share the bar with it in that epoch.
+pub struct PhaseSet {
+    phases: &'static [LoadPhase],
+    permille: &'static [usize],
+}
+
+impl PhaseSet {
+    pub const fn len(&self) -> usize {
+        self.phases.len()
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.phases.is_empty()
+    }
+
+    /// The largest main index this set can display; also the `M` in the visible `N/M`.
+    pub const fn main_total(&self) -> usize {
+        self.phases.len() - 1
+    }
+
+    pub fn phase(&self, idx: usize) -> LoadPhase {
+        self.phases[idx.min(self.main_total())]
+    }
+
+    pub fn label(&self, idx: usize) -> &'static str {
+        self.phase(idx).label()
+    }
+
+    /// Fill target reached when this phase becomes the active one.
+    pub fn base_permille(&self, idx: usize) -> usize {
+        self.permille[idx.min(self.main_total())]
+    }
+
+    /// Fill target of the NEXT phase, i.e. the ceiling the active phase fills toward.
+    /// The final phase fills toward a full bar.
+    pub fn next_permille(&self, idx: usize) -> usize {
+        let i = idx.min(self.main_total());
+        if i + 1 < self.permille.len() {
+            self.permille[i + 1]
+        } else {
+            1000
+        }
+    }
+
+    pub fn index_of(&self, phase: LoadPhase) -> Option<usize> {
+        let mut i = 0;
+        while i < self.phases.len() {
+            if self.phases[i] as usize == phase as usize {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    /// `base_permille` of `phase` when this set contains it, else 0.
+    pub fn base_permille_of(&self, phase: LoadPhase) -> usize {
+        match self.index_of(phase) {
+            Some(i) => self.permille[i],
+            None => 0,
+        }
+    }
+}
+
+/// Process-boot epoch: engine bring-up all the way through to the first world.
+pub static BOOT_PHASE_SET: PhaseSet = PhaseSet {
+    phases: &[
+        LoadPhase::StartingUp,
+        LoadPhase::GameSystems,
+        LoadPhase::AcquiringAssets,
+        LoadPhase::OpeningMenuUi,
+        LoadPhase::BuildingMenuUi,
+        LoadPhase::TitleReady,
+        LoadPhase::PreparingSave,
+        LoadPhase::LoadingSave,
+        LoadPhase::BuildingWorld,
+        LoadPhase::StreamingWorld,
+        LoadPhase::FinalizingWorld,
+        LoadPhase::EnteringWorld,
+    ],
+    permille: &PHASE_PERMILLE,
+};
+
+/// Character-reload epoch (System->Quit->Load Profile and the programmatic switch that mirrors it).
+///
+/// Deliberately excludes every boot-only phase: the engine is already up, GameMan already exists,
+/// and the title's Scaleform resources are already resident, so those phases cannot recur and must
+/// not sit in the denominator inflating a reload's reported progress.
+pub static RELOAD_PHASE_SET: PhaseSet = PhaseSet {
+    phases: &[
+        LoadPhase::SwitchConfirmed,
+        LoadPhase::ReturningToTitle,
+        LoadPhase::TitleReady,
+        LoadPhase::PreparingSave,
+        LoadPhase::LoadingSave,
+        LoadPhase::BuildingWorld,
+        LoadPhase::StreamingWorld,
+        LoadPhase::FinalizingWorld,
+        LoadPhase::EnteringWorld,
+    ],
+    permille: &RELOAD_PHASE_PERMILLE,
+};
+
+/// Reload fill targets, weighted by where a reload actually spends its time rather than spread evenly
+/// across the phase count. Measured over two reload epochs (run samechar-3x-threedll-20260730-083446,
+/// epochs 1 and 2, rearm -> full bar in ~22s each): the five pre-world phases complete inside the first
+/// ~0.8s (~4% of the load) while the world tail owns the remaining ~21s. An even spread therefore put
+/// 45% of the bar behind the first second and left the long streaming stretch crawling through the top
+/// half -- technically monotonic, but not paced. These targets track the measured wall-clock split:
+/// BUILDING WORLD ~3%, STREAMING ~22%, FINALIZING ~48%, ENTERING WORLD ~91%.
+pub const RELOAD_PHASE_PERMILLE: [usize; 9] = [15, 25, 35, 45, 55, 70, 240, 480, 900];
+
 /// A single phase/subphase label suitable for the visible shape
 /// `<main> N/M (<sub> X/Y)`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -358,6 +535,110 @@ mod tests {
             assert!(is_supported_text(label), "unsupported phase label: {label}");
             assert_eq!(label, label.to_ascii_uppercase());
         }
+    }
+
+    const ALL_PHASES: [LoadPhase; 14] = [
+        LoadPhase::StartingUp,
+        LoadPhase::GameSystems,
+        LoadPhase::AcquiringAssets,
+        LoadPhase::OpeningMenuUi,
+        LoadPhase::BuildingMenuUi,
+        LoadPhase::SwitchConfirmed,
+        LoadPhase::ReturningToTitle,
+        LoadPhase::TitleReady,
+        LoadPhase::PreparingSave,
+        LoadPhase::LoadingSave,
+        LoadPhase::BuildingWorld,
+        LoadPhase::StreamingWorld,
+        LoadPhase::FinalizingWorld,
+        LoadPhase::EnteringWorld,
+    ];
+
+    #[test]
+    fn every_phase_label_fits_the_embedded_font_contract() {
+        for phase in ALL_PHASES {
+            let label = phase.label();
+            assert!(is_supported_text(label), "unsupported phase label: {label}");
+            assert_eq!(label, label.to_ascii_uppercase());
+        }
+    }
+
+    #[test]
+    fn boot_phase_set_matches_the_legacy_flat_tables() {
+        assert_eq!(BOOT_PHASE_SET.len(), PHASE_COUNT);
+        for i in 0..PHASE_COUNT {
+            assert_eq!(BOOT_PHASE_SET.label(i), PHASE_LABELS[i]);
+            assert_eq!(BOOT_PHASE_SET.base_permille(i), PHASE_PERMILLE[i]);
+        }
+    }
+
+    #[test]
+    fn phase_sets_are_ordered_and_span_the_whole_bar() {
+        for set in [&BOOT_PHASE_SET, &RELOAD_PHASE_SET] {
+            assert!(!set.is_empty());
+            assert_eq!(set.main_total(), set.len() - 1);
+            for i in 0..set.len() {
+                assert!(
+                    set.base_permille(i) < set.next_permille(i),
+                    "phase {i} ({}) has a non-advancing span",
+                    set.label(i)
+                );
+            }
+            // The last phase always fills toward a full bar.
+            assert_eq!(set.next_permille(set.main_total()), 1000);
+        }
+    }
+
+    /// The whole point of the reload set: a character reload cannot replay engine bring-up, so those
+    /// phases must not appear in its sequence (and therefore not in its `N/M` denominator).
+    #[test]
+    fn reload_phase_set_excludes_boot_only_phases() {
+        for boot_only in [
+            LoadPhase::StartingUp,
+            LoadPhase::GameSystems,
+            LoadPhase::AcquiringAssets,
+            LoadPhase::OpeningMenuUi,
+            LoadPhase::BuildingMenuUi,
+        ] {
+            assert!(
+                RELOAD_PHASE_SET.index_of(boot_only).is_none(),
+                "{boot_only:?} cannot recur on a character reload"
+            );
+            assert!(BOOT_PHASE_SET.index_of(boot_only).is_some());
+        }
+        for reload_only in [LoadPhase::SwitchConfirmed, LoadPhase::ReturningToTitle] {
+            assert!(RELOAD_PHASE_SET.index_of(reload_only).is_some());
+            assert!(
+                BOOT_PHASE_SET.index_of(reload_only).is_none(),
+                "{reload_only:?} cannot occur during a process boot"
+            );
+        }
+        // Both epochs share the world tail, and the reload denominator is strictly smaller.
+        assert!(RELOAD_PHASE_SET.len() < BOOT_PHASE_SET.len());
+        for shared in [
+            LoadPhase::LoadingSave,
+            LoadPhase::BuildingWorld,
+            LoadPhase::StreamingWorld,
+            LoadPhase::FinalizingWorld,
+            LoadPhase::EnteringWorld,
+        ] {
+            assert!(RELOAD_PHASE_SET.index_of(shared).is_some());
+            assert!(BOOT_PHASE_SET.index_of(shared).is_some());
+        }
+    }
+
+    #[test]
+    fn base_permille_of_resolves_the_world_tail_floor_per_epoch() {
+        assert_eq!(
+            BOOT_PHASE_SET.base_permille_of(LoadPhase::BuildingWorld),
+            PHASE_PERMILLE[8]
+        );
+        assert_eq!(
+            RELOAD_PHASE_SET.base_permille_of(LoadPhase::BuildingWorld),
+            RELOAD_PHASE_PERMILLE[5]
+        );
+        // A phase the set does not contain has no floor to contribute.
+        assert_eq!(RELOAD_PHASE_SET.base_permille_of(LoadPhase::StartingUp), 0);
     }
 
     #[test]

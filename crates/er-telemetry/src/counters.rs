@@ -952,6 +952,22 @@ pub static BOOT_VIEW_MONO_LABEL_PTR: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_MONO_LABEL_LEN: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_REACHED_MASK: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_MILESTONE_IDX: AtomicUsize = AtomicUsize::new(0);
+/// LOAD EPOCH IDENTITY (bd er-effects-rs-ok8d). One epoch = one arm-to-teardown lifetime of the bar.
+/// `SEQ` increments on every epoch reset and is the key every per-epoch high-water latch is stamped
+/// with, so a new epoch invalidates them all at once. It deliberately does NOT reuse the fresh-deser
+/// counter, which only bumps at the reload's DESERIALIZE -- far too late to bound the epoch, and the
+/// reason the visible label walked backwards mid-load.
+pub static BOOT_VIEW_EPOCH_SEQ: AtomicUsize = AtomicUsize::new(0);
+/// Which phase sequence this epoch publishes: 0 = process boot, 1 = character reload.
+pub static BOOT_VIEW_EPOCH_KIND: AtomicUsize = AtomicUsize::new(0);
+/// Per-epoch baselines for counters that are STICKY for the whole process. A reload epoch must
+/// assert its phases from what happened SINCE the rearm, never from `!= 0` on a counter that a
+/// previous load already moved (bd er-effects-rs-ok8d: load 2's mask opened at 0x9f because
+/// `boot_milestone_reached` re-latched five boot phases from sticky counters the instant it ran).
+pub static BOOT_VIEW_CONTINUE_ALLOW_BASELINE: AtomicUsize = AtomicUsize::new(0);
+pub static BOOT_VIEW_TFC_CONTINUE_BASELINE: AtomicUsize = AtomicUsize::new(0);
+pub static BOOT_VIEW_PORTRAIT_SPARED_BASELINE: AtomicUsize = AtomicUsize::new(0);
+pub static BOOT_VIEW_FRESH_DESER_BASELINE: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_LAST_LABEL_HASH: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_ALLOCATOR: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_LIST: AtomicUsize = AtomicUsize::new(0);
