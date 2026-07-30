@@ -21,6 +21,14 @@
 //
 // The game task keeps ticking meanwhile -- see `save_flow_next_stage_ticks`, which is why the
 // flow's deadlines are frozen while `SAVE_PICKER_OS_DIALOG_OPEN` is set.
+//
+// THE BOOT INTENT IS THE EXCEPTION, and it is an exception about WHICH THREAD, never about this
+// file's contract. See `save_picker_boot.rs`: at a missing-save boot the only threads that reach
+// the picker are the D3D12 Present hook and the CSTaskImp recurring task, and blocking either one
+// stalls the game's own frame loop rather than a menu pump we are trying to make modal. That arm
+// therefore calls `os_pick_validated` from a thread WE own and passes `PickerDim::None`, because
+// with no game thread blocked Present keeps running and the boot's own overlay keeps drawing --
+// there is nothing frozen for a cover to explain.
 
 use windows::Win32::UI::Controls::Dialogs::{
     CommDlgExtendedError, GetOpenFileNameW, GetSaveFileNameW, OFN_DONTADDTORECENT, OFN_EXPLORER,
@@ -87,6 +95,63 @@ fn should_reopen(outcome: &OsPickOutcome, pick_was_valid: bool, attempts: usize)
     matches!(outcome, OsPickOutcome::Picked(_))
         && !pick_was_valid
         && attempts < SAVE_PICKER_OS_MAX_REOPENS
+}
+
+/// Why an open ended with nothing staged. THREE reasons, not one, and every collapse between them
+/// has already shipped as a bug.
+///
+/// A `bool`/`Option` return conflates all three, and two different consumers were burnt by two
+/// different halves of that conflation:
+///
+///  * conflating "a dialog RAN and answered" with "no dialog ran" is the reopen loop PR #107 had to
+///    unpick one level up (a `bool` that meant both "the picker ran" and "the picker is still up",
+///    so the menu pump re-armed a cancelled dialog every ~57 ms, forever -- bd
+///    `er-effects-rs-rsxi`). That is `Cancelled`/`Failed` vs `NotOpened`.
+///  * conflating "the user decided" with "we could not ask" is what would let the BOOT arm quit a
+///    user's game over a defect in comdlg32, because at a missing-save boot a Cancel is
+///    `ExitProcess(0)`. That is `Cancelled` vs `Failed`.
+///
+/// The two System>Quit arms discriminate only the first split, and say so where they map these onto
+/// [`PickerOpenOutcome`]. The boot arm is the one caller that needs both, and `boot_abort_action`
+/// is where it makes the decision -- pure, and therefore pinned by a test rather than by a thread.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OsPickAbort {
+    /// The user dismissed a dialog that RAN. A DECISION, and the only outcome a caller may treat as
+    /// one. Terminal: the request that asked for the dialog has been carried out.
+    Cancelled,
+    /// A dialog RAN and came back unusable: comdlg32 failed, or the invalid-pick reopen bound was
+    /// exhausted. Terminal for the same reason `Cancelled` is -- a dialog happened, so re-asking
+    /// would reopen it -- but NEVER a user decision, so no caller may act on it as a choice. A
+    /// caller with a second surface should use that surface instead.
+    Failed,
+    /// NO dialog ran at all: the core `CreateFileW` detour is not live yet, or a re-entrant open was
+    /// refused because one is already up. The request is STILL OWED, and a caller that can ask again
+    /// on its next tick must.
+    NotOpened,
+}
+
+/// What one [`os_pick_validated`] call did: `Ok(staged)`, or one of the three ways an open ends with
+/// nothing staged.
+///
+/// The `Err` half used to be a single `None`, and collapsing it is what let a user's Cancel be
+/// retried as though the dialog had never opened (bd `er-effects-rs-rsxi`). Those are opposite
+/// facts: a dismissal means a dialog RAN and was answered, so the request that asked for it is
+/// finished; a `NotOpened` means no dialog ran at all, so the request still stands.
+type OsPickResult<T> = Result<T, OsPickAbort>;
+
+/// Whether an open covers the game while it blocks.
+///
+/// A parameter rather than an unconditional arm, because the cover answers a question that is only
+/// asked when a GAME thread is parked in comdlg32: the game renders nothing, so a still frame is
+/// indistinguishable from a hang. The boot arm blocks a thread of ours instead, Present keeps
+/// running, and a dim there would cover the boot picker's own overlay to explain a freeze that is
+/// not happening.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PickerDim {
+    /// A game thread is blocked: raise the cover for exactly as long as it is frozen.
+    CoverFrozenGame,
+    /// No game thread is blocked: no cover.
+    None,
 }
 
 /// Double-NUL-terminated comdlg32 filter for the active flavor's extensions, e.g.
@@ -295,23 +360,6 @@ fn os_dialog_run(
     outcome
 }
 
-/// What one [`os_pick_validated`] call did.
-///
-/// `Dismissed` and `NotOpened` were a single `None` before, and collapsing them is what let a
-/// user's Cancel be retried as though the dialog had never opened (bd `er-effects-rs-rsxi`). They
-/// are opposite facts: a dismissal means a dialog RAN and the user answered it, so the request that
-/// asked for it is finished; a `NotOpened` means no dialog ran at all, so the request still stands.
-enum OsPickResult<T> {
-    /// The pick cleared the listing predicate and `stage` ran on it.
-    Staged(T),
-    /// A dialog ran and came back with no usable pick: the user cancelled, comdlg32 failed, or the
-    /// invalid-pick reopen bound gave up. TERMINAL.
-    Dismissed,
-    /// No dialog ran: the core `CreateFileW` detour is not live yet, or a re-entrant open was
-    /// refused because one is already up.
-    NotOpened,
-}
-
 /// Open the dialog, validate what comes back with the picker's OWN predicate, and reopen where the
 /// user was standing when it is not a save this intent accepts.
 ///
@@ -326,16 +374,19 @@ enum OsPickResult<T> {
 /// before the caller could stage anything. Taking the staging as a closure makes that window
 /// impossible to open by accident.
 ///
-/// Returns `Staged(stage(path))`, or `Dismissed` for cancel / comdlg32 failure / reopen exhaustion
-/// -- in which case `stage` never ran and nothing was staged, which is exactly what stage 3 already
-/// reads as "the user abandoned the save". `NotOpened` is the third case and is deliberately NOT
-/// spelled the same as a dismissal: no dialog ran, so the caller's open request is still owed.
+/// Returns `Ok(stage(path))`, or one of the three [`OsPickAbort`]s -- in which case `stage` never
+/// ran and nothing was staged, which is exactly what stage 3 already reads as "the user abandoned
+/// the save". `NotOpened` is deliberately NOT spelled the same as a dismissal: no dialog ran, so the
+/// caller's open request is still owed. `Cancelled` and `Failed` are both terminal and are
+/// deliberately not spelled the same either: only one of them is a user's decision, and the boot arm
+/// answers a user's decision by quitting the game.
 fn os_pick_validated<T>(
     save_as: bool,
     mut start_dir: String,
     leaf: &str,
     extensions: &[&str],
     intent: &crate::experiments::save_picker::PickerIntent,
+    dim: PickerDim,
     stage: impl FnOnce(&str) -> T,
 ) -> OsPickResult<T> {
     // H4: refuse while the core CreateFileW detour is still settling. Installing a MinHook suspends
@@ -348,10 +399,10 @@ fn os_pick_validated<T>(
         append_autoload_debug(format_args!(
             "save-picker-os: refusing to open -- the core CreateFileW detour is not live yet, and installing a hook while a thread is parked in comdlg32 can deadlock"
         ));
-        return OsPickResult::NotOpened;
+        return Err(OsPickAbort::NotOpened);
     }
     let Some(_claim) = OsDialogClaim::claim() else {
-        return OsPickResult::NotOpened;
+        return Err(OsPickAbort::NotOpened);
     };
     // COVER THE GAME FOR EXACTLY AS LONG AS IT IS FROZEN. Everything below this line runs with the
     // menu thread parked inside comdlg32, so the game renders nothing and a user with no cover sees
@@ -363,16 +414,20 @@ fn os_pick_validated<T>(
     // pick REOPENS the dialog, and a per-call bracket would flash the game back at full brightness
     // between the two dialogs. From the user's side the reopen is one continuous "pick a save",
     // which is what the cover should track.
-    let _dim = picker_dim_arm(if save_as { "save-as" } else { "load" });
+    let _dim = match dim {
+        PickerDim::CoverFrozenGame => picker_dim_arm(if save_as { "save-as" } else { "load" }),
+        PickerDim::None => None,
+    };
     let commit_window_armed = save_dest_commit_window_armed();
     let mut attempts = 0usize;
     loop {
         let outcome = os_dialog_run(save_as, &start_dir, leaf, extensions, commit_window_armed);
         let picked = match &outcome {
             OsPickOutcome::Picked(path) => path.clone(),
-            OsPickOutcome::Cancelled | OsPickOutcome::Failed { .. } => {
-                return OsPickResult::Dismissed;
-            }
+            // BOTH are terminal -- a dialog ran, so the request is discharged and must not be
+            // re-armed -- and they are still two answers, because only the first is the user's.
+            OsPickOutcome::Cancelled => return Err(OsPickAbort::Cancelled),
+            OsPickOutcome::Failed { .. } => return Err(OsPickAbort::Failed),
         };
         let verdict =
             crate::experiments::save_picker::save_picker_accepts(
@@ -383,7 +438,7 @@ fn os_pick_validated<T>(
         let Err(reason) = verdict else {
             // `_claim` outlives this expression and drops on return, so every latch `stage` sets is
             // visible to the tick before the dialog term clears.
-            return OsPickResult::Staged(stage(&picked));
+            return Ok(stage(&picked));
         };
         SAVE_PICKER_PICK_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
         SAVE_PICKER_OS_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
@@ -397,9 +452,14 @@ fn os_pick_validated<T>(
         if !should_reopen(&outcome, false, attempts - 1) {
             SAVE_PICKER_OS_REOPEN_EXHAUSTED.store(1, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "save-picker-os: {SAVE_PICKER_OS_MAX_REOPENS} consecutive invalid picks -- giving up and taking the cancel path (a comdlg32 that fails instantly must not spin the menu pump)"
+                "save-picker-os: {SAVE_PICKER_OS_MAX_REOPENS} consecutive invalid picks -- abandoning the open (a comdlg32 that fails instantly must not spin the calling thread)"
             ));
-            return OsPickResult::Dismissed;
+            // FAILED, not Cancelled -- and not NotOpened either. Dialogs DID run, so the request is
+            // discharged and the System>Quit arms still read this as "nothing staged" and leave the
+            // System menu alone. But exhaustion is a dialog we could not get a usable answer out of
+            // -- most plausibly a comdlg32 returning instantly with a stale path -- so calling it a
+            // user cancel would let the boot arm quit the game over a comdlg32 defect.
+            return Err(OsPickAbort::Failed);
         }
         SAVE_PICKER_OS_REOPEN_COUNT.fetch_add(1, Ordering::SeqCst);
         // Reopen where they were, not back at the start.
@@ -456,12 +516,17 @@ pub(crate) unsafe fn os_open_save_picker_load(action_obj: usize) -> PickerOpenOu
         Ordering::SeqCst,
     );
     SAVE_PICKER_OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
+    // THE ONE COLLAPSE THIS ARM IS ALLOWED: the System>Quit load surface treats a user's Cancel and
+    // an unusable comdlg32 identically, because both leave the System menu alone and the row press
+    // that asked for the dialog is spent either way. It does NOT collapse either of them into
+    // `NotOpened` -- that collapse is the reopen loop (bd `er-effects-rs-rsxi`).
     let staged = os_pick_validated(
         false,
         start_dir,
         "",
         extensions,
         &crate::experiments::save_picker::PickerIntent::LoadSource,
+        PickerDim::CoverFrozenGame,
         |picked| {
             // The SECOND gate, unchanged: BND4 parse, SteamID normalization, ProfileSummary
             // preview, candidate staging, picked-dir memory. The predicate above only added the
@@ -487,7 +552,7 @@ pub(crate) unsafe fn os_open_save_picker_load(action_obj: usize) -> PickerOpenOu
         },
     );
     match staged {
-        OsPickResult::Staged(true) => PickerOpenOutcome::Opened,
+        Ok(true) => PickerOpenOutcome::Opened,
         // Nothing staged, the System menu untouched. Restore the preview we armed above so the
         // user's real rows are what the System UI shows. There is no retry latch on this surface --
         // the row press IS the request -- so a cancel here simply leaves the user standing on the
@@ -498,15 +563,20 @@ pub(crate) unsafe fn os_open_save_picker_load(action_obj: usize) -> PickerOpenOu
                 // No dialog ever appeared, so this is NOT a user decision. It used to be counted as
                 // a cancel (every `None` was); now that the two are distinguishable, counting a
                 // refusal as a user's Cancel is just a telemetry lie.
-                OsPickResult::NotOpened => PickerOpenOutcome::NotOpened,
-                OsPickResult::Dismissed => {
+                Err(OsPickAbort::NotOpened) => PickerOpenOutcome::NotOpened,
+                // A dialog RAN and produced nothing. `SAVE_PICKER_CANCEL_COUNT` is the
+                // surface-agnostic "a picker was abandoned" counter, and both halves belong in it;
+                // WHICH half it was is already separated one layer down, by
+                // `SAVE_PICKER_OS_CANCEL_COUNT` and `SAVE_PICKER_OS_ERROR_COUNT`. Nothing on this
+                // surface acts on the difference -- only the boot arm does.
+                Err(OsPickAbort::Cancelled | OsPickAbort::Failed) => {
                     SAVE_PICKER_CANCEL_COUNT.fetch_add(1, Ordering::SeqCst);
                     PickerOpenOutcome::Dismissed
                 }
                 // The ingest refused a path the listing predicate had accepted: a dialog RAN and
                 // came back, so the request is discharged -- but that is OUR refusal, not the
                 // user's, and `SAVE_PICKER_PICK_REJECT_COUNT` already counted it.
-                OsPickResult::Staged(_) => PickerOpenOutcome::Dismissed,
+                Ok(_) => PickerOpenOutcome::Dismissed,
             }
         }
     }
@@ -560,12 +630,17 @@ pub(crate) unsafe fn os_open_save_dest_picker(system_dialog: usize) -> PickerOpe
     };
     SAVE_DEST_PICKER_OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
     SAVE_PICKER_OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
+    // Identical reasoning to the load arm: a cancelled and an unusable destination browser both
+    // mean "nothing staged", which is what the save-flow tick already reads as the user abandoning
+    // the save. `NotOpened` stays separate, because the menu pump's `SAVE_DEST_OPEN_PICKER_PENDING`
+    // is a real retry latch and that is the one outcome allowed to keep it armed.
     let staged = os_pick_validated(
         true,
         start_dir,
         &loaded_file_name,
         extensions,
         &intent,
+        PickerDim::CoverFrozenGame,
         |picked| {
             let target = PathBuf::from(picked);
             // The SAME mode-free routing decision the in-game browser's activation makes, so the
@@ -595,14 +670,14 @@ pub(crate) unsafe fn os_open_save_dest_picker(system_dialog: usize) -> PickerOpe
         },
     );
     match staged {
-        OsPickResult::Staged(()) => PickerOpenOutcome::Opened,
-        OsPickResult::Dismissed => {
+        Ok(()) => PickerOpenOutcome::Opened,
+        Err(abort @ (OsPickAbort::Cancelled | OsPickAbort::Failed)) => {
             append_autoload_debug(format_args!(
-                "save-picker-os: save-as closed without choosing; nothing staged and the menu pump's open request is DISCHARGED (no reopen) -- the save-flow tick will end the flow with nothing written"
+                "save-picker-os: save-as closed without choosing ({abort:?}); nothing staged and the menu pump's open request is DISCHARGED (no reopen) -- the save-flow tick will end the flow with nothing written"
             ));
             PickerOpenOutcome::Dismissed
         }
-        OsPickResult::NotOpened => PickerOpenOutcome::NotOpened,
+        Err(OsPickAbort::NotOpened) => PickerOpenOutcome::NotOpened,
     }
 }
 

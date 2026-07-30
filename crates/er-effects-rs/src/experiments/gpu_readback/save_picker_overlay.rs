@@ -277,20 +277,77 @@ fn save_picker_sample() -> (usize, usize) {
     (held, pressed)
 }
 
+/// The IN-GAME arm of the missing-save boot picker: open the overlay's model for the pending
+/// no-save boot if not already armed. Idempotent, and safe from any thread (Mutex state plus a
+/// directory enumeration; it touches no game pointer).
+///
+/// Reached through [`open_picker_for_intent`] like every other picker open, so
+/// `os_native_save_picker` decides between this and the OS dialog in ONE place. It is also the
+/// fallback the OS arm hands the pick to when comdlg32 cannot be used, which is why it is callable
+/// on its own rather than only from the router.
+///
+/// Returns whether the boot pick is now owned by this surface.
+pub(crate) fn boot_arm_missing_save_picker_in_game() -> bool {
+    save_picker_overlay_arm_if_pending();
+    save_picker_overlay_active()
+}
+
+/// Stage an already-validated container into the CHARACTER sub-picker, arming the overlay's file
+/// browser at that container's own folder so the sub-picker's BACK lands somewhere real.
+///
+/// Exists for the OS boot arm: comdlg32 chooses a FILE and has no character list, but
+/// `native_fullread_slot()` needs the slot the sub-picker records or it falls through to slot 0 and
+/// the save watchdog aborts on a container whose slot 0 is empty. This is the same tail the
+/// in-game file stage runs after its own pick -- deliberately the same code path, so the two
+/// surfaces cannot diverge on what choosing a character means.
+///
+/// `false` when the container yields no readable character slots, which the caller must treat as
+/// "this pick cannot proceed" rather than staging a sub-picker with nothing in it.
+pub(crate) fn boot_stage_picked_save_for_character_choice(path: std::path::PathBuf) -> bool {
+    let slots = std::fs::read(&path)
+        .ok()
+        .map(|bytes| crate::experiments::parse_save_character_slots(&bytes))
+        .unwrap_or_default();
+    if slots.is_empty() {
+        SAVE_PICKER_OVERLAY_PICK_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
+        return false;
+    }
+    // Arm the browser at the picked file's folder BEFORE switching stages, so a BACK out of the
+    // character list finds a populated listing instead of an empty panel.
+    if let Some(parent) = path.parent() {
+        save_picker_overlay_arm_at(parent);
+    }
+    append_autoload_debug(format_args!(
+        "save-picker-overlay: staged '{}' from the OS dialog -- {} character slots; opening character sub-picker",
+        path.display(),
+        slots.len()
+    ));
+    *pending_save_lock() = Some(PendingSave { path, slots });
+    SAVE_PICKER_CHAR_CURSOR.store(0, Ordering::SeqCst);
+    SAVE_PICKER_STAGE_CHARS.store(1, Ordering::SeqCst);
+    true
+}
+
 /// Open the picker model for the pending no-save boot if not already armed. Idempotent.
 fn save_picker_overlay_arm_if_pending() {
+    let start_dir = save_picker_title_start_dir();
+    save_picker_overlay_arm_at(&start_dir);
+}
+
+/// Arm the overlay's browser rooted at `start_dir`, if a missing-save pick is pending and nothing
+/// is armed yet. Idempotent.
+fn save_picker_overlay_arm_at(start_dir: &std::path::Path) {
     if !missing_save_selection_pending() || SAVE_PICKER_OVERLAY_ARMED.load(Ordering::SeqCst) != 0 {
         return;
     }
     let seamless = save_picker_seamless_mode_after_settle("startup-overlay-picker");
-    let start_dir = save_picker_title_start_dir();
     let model = if seamless {
         crate::experiments::save_picker::SavePickerModel::open_with_extensions(
-            &start_dir,
+            start_dir,
             &["co2", "sl2"],
         )
     } else {
-        crate::experiments::save_picker::SavePickerModel::open(&start_dir, "sl2")
+        crate::experiments::save_picker::SavePickerModel::open(start_dir, "sl2")
     };
     *crate::experiments::save_picker::active_save_picker_lock() = Some(model);
     SAVE_PICKER_OVERLAY_ARMED.store(1, Ordering::SeqCst);
@@ -333,7 +390,13 @@ fn save_picker_overlay_disarm(reason: &str) {
 /// deferred to [`save_picker_overlay_process_completion`] on the game-task thread. No-op unless the
 /// overlay is active.
 pub(crate) fn save_picker_overlay_input_tick() {
-    save_picker_overlay_arm_if_pending();
+    // The boot picker's OPEN goes through the surface router, not straight to this overlay: with
+    // `os_native_save_picker = true` the boot pick belongs to the OS dialog, and arming the
+    // overlay here unconditionally is exactly how that key came to be silently ignored at boot.
+    // One-shot and idempotent, so calling it every tick from every driving thread is a no-op after
+    // the first open, and the input drive below still runs whenever this overlay owns the pick --
+    // in OS mode that is the character sub-picker stage, after the dialog hands its file over.
+    crate::experiments::boot_open_missing_save_picker_if_pending();
     if !save_picker_overlay_active() {
         // No longer pending -> the pick released the hold; drop the model.
         save_picker_overlay_disarm("not-pending");

@@ -225,6 +225,10 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     let initial_state = EffectsState::default();
     arm_product_autoload_from_request(&initial_state.autoload);
     let state = Arc::new(Mutex::new(initial_state));
+    // Publish the handle so a non-game-task thread can flush telemetry before it ends the process.
+    // Without this the telemetry file can only ever describe events the game task lived to see, and
+    // the boot picker's cancel path deliberately outlives it.
+    publish_effects_state(&state);
 
     // Splash-skip: apply the clean BeginLogo branch-flip as early as possible,
     // from a thread, so it lands before the title state machine runs state 2.
