@@ -1271,6 +1271,18 @@ pub(crate) const MENU_WINDOW_JOB_DTOR_RVA: usize = 0x7ac720;
 /// `MenuWindowJob::Run` (0x7ad1c0), where two detours already collided (MinHook allows one per
 /// address; see bd system-quit-menuwindowjob-run-dead-hook-rootcause-2026-07-15).
 pub(crate) const MENU_WINDOW_JOB_FINALIZE_RVA: usize = 0x7ada40;
+/// `MsbFileCap` load-complete callback -- THE SOLE WRITER of `msbResCap` (`cap+0x90`), 1.16.2 dump
+/// `FUN_14021bbf0`. Byte-verified against `eldenring-deobf.bin` at the same VA (shift 0 on 1.16.2):
+/// `48 8b c4 56 57 41 56 48 81 ec 80 00 00 00`, with the first rip-relative operand only at +0x1e,
+/// so the prologue is safely detourable.
+///
+/// It writes `msbResCap` ONLY when the cap's content is non-null, and returns normally otherwise --
+/// leaving `(loadState=4, msbResCap=0)`, which wedges `WorldBlockRes` case 2 forever. Tracing it
+/// separates "fired with null content" (empty read) from "never fired" (cache hit, no enqueue); no
+/// passive read can, because both end in identical cap state.
+pub(crate) const MSB_FILECAP_PARSE_CALLBACK_RVA: usize = 0x21bbf0;
+/// How many SUCCESSFUL parses to log before rate-limiting. Null-result parses are always logged.
+pub(crate) const MSB_PARSE_TRACE_VERBOSE_CALLS: usize = 24;
 pub(crate) const MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET: usize = 0x130;
 /// The window's cached menu id (`field246_0x180`). `0xffff` is the unmapped sentinel and the state
 /// every observed crash was in; the finalize's second getter is itself gated on it.
@@ -1309,6 +1321,10 @@ pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_DOOMED_GUARDS;
 pub(crate) use er_telemetry::counters::{
     MENU_WINDOW_JOB_FINALIZE_GUARDS, MENU_WINDOW_JOB_FINALIZE_INSTALLED,
     MENU_WINDOW_JOB_FINALIZE_LAST_WINDOW, MENU_WINDOW_JOB_FINALIZE_ORIG,
+};
+pub(crate) use er_telemetry::counters::{
+    MSB_PARSE_TRACE_CALLS, MSB_PARSE_TRACE_INSTALLED, MSB_PARSE_TRACE_NULL_RESULTS,
+    MSB_PARSE_TRACE_ORIG,
 };
 pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_LIST_REMOVALS;
 pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_LAST_GUARDED_WINDOW;

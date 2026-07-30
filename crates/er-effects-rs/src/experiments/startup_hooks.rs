@@ -28,6 +28,7 @@ include!("startup_hooks/save_picker_os_dialog.rs");
 include!("startup_hooks/save_picker_boot.rs");
 include!("startup_hooks/save_picker_surface.rs");
 include!("startup_hooks/system_quit_ownership_repro.rs");
+include!("startup_hooks/msb_parse_trace.rs");
 include!("startup_hooks/system_quit_repro_guards.rs");
 include!("startup_hooks/system_quit_hooks.rs");
 include!("startup_hooks/layout_global_hooks.rs");

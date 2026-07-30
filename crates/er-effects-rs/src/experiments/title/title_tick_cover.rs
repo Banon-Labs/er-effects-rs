@@ -8,7 +8,7 @@
 /// `MsbFileCap::msbResCap` stay `0` even at `loadState == 4`, so sampling it says whether the freeze
 /// is "no buffer at all" or "buffer present but never parsed". Read-only: no acquire, no refcount
 /// touch, no vtable call.
-unsafe fn fd4_filecap_content_state(load_process: usize) -> (usize, usize, usize, i64) {
+pub(crate) unsafe fn fd4_filecap_content_state(load_process: usize) -> (usize, usize, usize, i64) {
     if load_process <= 0x10000 {
         return (0, 0, 0, -1);
     }
@@ -35,7 +35,7 @@ unsafe fn fd4_filecap_content_state(load_process: usize) -> (usize, usize, usize
 /// inline in the union itself. Both `length` and the read are clamped so a garbage capacity cannot
 /// walk the probe off a page, every character goes through `safe_read_u8`, and non-ASCII collapses
 /// to `?` -- this runs on the game thread during a stall, so it must not fault or allocate wildly.
-unsafe fn fd4_filecap_name(cap: usize) -> String {
+pub(crate) unsafe fn fd4_filecap_name(cap: usize) -> String {
     let capacity =
         unsafe { safe_read_usize(cap + FD4_FILECAP_NAME_CAPACITY_30_OFFSET) }.unwrap_or(0);
     let length = unsafe { safe_read_usize(cap + FD4_FILECAP_NAME_LENGTH_28_OFFSET) }.unwrap_or(0);

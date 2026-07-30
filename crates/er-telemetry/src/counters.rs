@@ -680,6 +680,18 @@ pub static MENU_WINDOW_JOB_FINALIZE_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub static MENU_WINDOW_JOB_FINALIZE_GUARDS: AtomicUsize = AtomicUsize::new(0);
 /// Last window pointer the finalize hook neutralized (diagnostic).
 pub static MENU_WINDOW_JOB_FINALIZE_LAST_WINDOW: AtomicUsize = AtomicUsize::new(0);
+
+/// One-shot install guard for the msb-parse trace (the sole `msbResCap` writer, deobf 0x14021bbf0).
+pub static MSB_PARSE_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Trampoline for the msb-parse trace. 0 = not hooked.
+pub static MSB_PARSE_TRACE_ORIG: AtomicUsize = AtomicUsize::new(0);
+/// Total msb load-complete callbacks observed. Exposed as `oracle_msb_parse_calls`.
+pub static MSB_PARSE_TRACE_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// Callbacks that returned with `msbResCap` STILL null -- i.e. the content was null and the parse
+/// silently short-circuited. Every one of these is a cap that will wedge `WorldBlockRes` case 2 if a
+/// block ever waits on it, so a non-zero value here IS the freeze precursor. Exposed as
+/// `oracle_msb_parse_null_results`.
+pub static MSB_PARSE_TRACE_NULL_RESULTS: AtomicUsize = AtomicUsize::new(0);
 pub static MENU_WINDOW_JOB_DTOR_LIST_REMOVALS: AtomicUsize = AtomicUsize::new(0);
 pub static MENU_WINDOW_JOB_DTOR_LAST_GUARDED_WINDOW: AtomicUsize = AtomicUsize::new(0);
 pub static MENU_WINDOW_JOB_DTOR_LAST_GUARDED_INDEX: AtomicUsize = AtomicUsize::new(0);
