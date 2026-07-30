@@ -64,6 +64,10 @@ deny contains decision if {
 	guarded_executable_tool
 	ersc_bundle_detected
 
+	# Same-path user-restore rename only; the shape check guarantees the whole
+	# command is that single mv, so nothing else can ride under the exemption.
+	not ersc_user_restore_rename_command
+
 	decision := {
 		"rule_id": "ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD",
 		"severity": "HIGH",
@@ -238,9 +242,19 @@ start_protected_launch_detected if {
 # about Seamless compatibility unwritable.
 # ---------------------------------------------------------------------------
 
-# (a) copy/archive/interpreter command word + unquoted path operand.
+# (a) copy/archive command word + unquoted path operand.
 ersc_bundle_detected if {
-	regex.match(`(?i)(^|[[:space:];|&()])(cp|copy|mv|move|install|rsync|scp|ln|dd|tee|zip|unzip|tar|7z|7za|rar|unrar|cpio|gzip|xz|xcopy|robocopy|python|python3|bash|sh)[^;|&()]*ersc\.dll([[:space:];|&()]|$)`, scrubbed_command)
+	regex.match(`(?i)(^|[[:space:];|&()])(cp|copy|mv|move|install|rsync|scp|ln|dd|tee|zip|unzip|tar|7z|7za|rar|unrar|cpio|gzip|xz|xcopy|robocopy)[^;|&()]*ersc\.dll([[:space:];|&()]|$)`, scrubbed_command)
+}
+
+# (a') interpreter command word + unquoted path operand. An interpreter can
+# only bundle through the script/code it runs, so a read-only scan whose
+# every ersc.dll mention is an absolute drive-mount (game-install) operand
+# path is exempt -- see ersc_interpreter_gameinstall_scan_only below. All
+# other interpreter + operand shapes deny exactly as before.
+ersc_bundle_detected if {
+	regex.match(`(?i)(^|[[:space:];|&()])(python|python3|bash|sh)[^;|&()]*ersc\.dll([[:space:];|&()]|$)`, scrubbed_command)
+	not ersc_interpreter_gameinstall_scan_only
 }
 
 # (b) redirect whose write target is the DLL (`cat ... > profile/ersc.dll`).
@@ -314,6 +328,125 @@ ersc_naming_statement_tokens contains tokens if {
 		some token in split(cleaned, " ")
 		token != ""
 	]
+}
+
+# ---------------------------------------------------------------------------
+# User game-install restore rename exemption.
+#
+# False positive fixed 2026-07-30 (bd er-effects-rs-gkqa): restoring the
+# user's own game-installed Seamless Co-op module -- renaming the
+# `.er-effects-staged` file back to its normal name -- was denied by the
+# file-moving arms, which match the verb + DLL name with no destination
+# scoping. The denied command:
+#
+#   mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-effects-staged' '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll'
+#
+# The guard's mandate keys on the DESTINATION: no ersc.dll into me3/product
+# release artifacts or repo target/ bundles. A same-path rename that only
+# strips the repo's own `.er-effects-staged` suffix puts the DLL back exactly
+# where it already lives -- the user's game install -- which is the OPPOSITE
+# of bundling.
+#
+# Fail-closed shape: the WHOLE command must be a single `mv` with two quoted
+# operands and nothing else -- no chaining, no substitution, no redirects --
+# and the destination must equal the source minus the `.er-effects-staged`
+# suffix (same directory, same filename, byte-for-byte). Any other
+# destination (a repo `target/`/`dist/` path, a different directory, an extra
+# command) fails the shape and the file-moving arms deny as before.
+# ---------------------------------------------------------------------------
+
+ersc_user_restore_rename_command if {
+	tool_name == "Bash"
+	not contains(command, "$(")
+	not contains(command, "`")
+	quote_parts := split(ersc_restore_quote_normalized, "'")
+	count(quote_parts) == 5
+	regex.match(`^mv( -{1,2}[a-zA-Z-]+)* $`, quote_parts[0])
+	quote_parts[2] == " "
+	quote_parts[4] == ""
+	regex.match(`/ersc\.dll\.er-effects-staged$`, quote_parts[1])
+	concat("", [quote_parts[3], ".er-effects-staged"]) == quote_parts[1]
+}
+
+# Whitespace-normalized command with `"` folded to `'` so one split handles
+# both quoting styles; a command mixing quotes in any trickier way fails the
+# exact five-part shape above and stays denied.
+ersc_restore_quote_normalized := replace(proc_scan_norm_command, `"`, "'")
+
+# ---------------------------------------------------------------------------
+# Read-only interpreter scan of the game-installed DLL.
+#
+# False positive fixed 2026-07-30 (bd er-effects-rs-gkqa): a read-only
+# interpreter scan passing the installed DLL path as an UNQUOTED operand,
+#
+#   python3 scripts/pe_export_dump.py /mnt/c/SteamLibrary/steamapps/common/ELDEN\ RING/Game/SeamlessCoop/ersc.dll
+#
+# was denied because arm (a) counted python/bash as bundling verbs. An
+# interpreter command line only shows the SOURCE operand, and the guard's
+# mandate keys on the DESTINATION (repo/release/target trees), so the
+# exemption requires the command to show a game-install source and no
+# destination or moving mechanism at all:
+#   * single command: no chaining, substitution, redirects, or heredocs;
+#   * command position is a bare interpreter word;
+#   * every `ersc.dll` occurrence in the quote-scrubbed command is the tail
+#     of an absolute `/mnt/<drive>/...` path (escaped spaces allowed) and is
+#     followed by whitespace or end-of-command (a terminal path operand; a
+#     relative or repo path like `SeamlessCoop/ersc.dll` never qualifies);
+#   * no whitespace-delimited token is a file-moving verb (a smuggled `cp`
+#     argument that a helper script would execute keeps the guard on); and
+#   * no repo-tree destination marker (`target/`, `dist/`, `build/`, `out/`,
+#     `release/`, `releases/`, `.me3`, `me3/`) appears anywhere in the
+#     command -- a visible bundling destination keeps the guard on.
+# Inline copy code, redirects, and chained movers are unaffected either way:
+# arms (a)/(b)/(c)/(d) still scan and deny independently of this arm.
+# ---------------------------------------------------------------------------
+
+ersc_interpreter_gameinstall_scan_only if {
+	tool_name == "Bash"
+	not contains(command, "$(")
+	not contains(command, "`")
+	not regex.match(`[;|&()<>\n\r]`, scrubbed_command)
+	regex.match(`^[[:space:]]*(/usr/bin/)?(python3?|bash|sh)[[:space:]]`, command)
+	ersc_scan_operands_all_gameinstall
+	not ersc_scan_mover_token
+	not ersc_scan_repo_destination_marker
+}
+
+# Every ersc.dll occurrence in the quote-scrubbed command must be the tail of
+# an absolute /mnt/<drive>/ path (the piece BEFORE it ends with that path
+# prefix, escaped spaces allowed) and must be terminal (the piece AFTER it
+# starts with whitespace or is empty; the read-only `.er-effects-staged`
+# sibling suffix is also accepted).
+ersc_scan_operands_all_gameinstall if {
+	pieces := split(lower(scrubbed_command), "ersc.dll")
+	n := count(pieces)
+	n > 1
+	prefix_ok := count([idx |
+		some idx, piece in pieces
+		idx < n - 1
+		regex.match(`(^|[[:space:]])/mnt/[a-z0-9]+/(\\ |[^[:space:]])*$`, piece)
+	])
+	prefix_ok == n - 1
+	suffix_ok := count([idx |
+		some idx, piece in pieces
+		idx > 0
+		regex.match(`^(\.er-effects-staged)?([[:space:]]|$)`, piece)
+	])
+	suffix_ok == n - 1
+}
+
+# Whole-token scan of the quote-scrubbed command for file-moving verbs, so a
+# mover smuggled as an interpreter ARGUMENT (`python3 run.py cp /mnt/...`)
+# keeps the guard on while a path/word merely containing one does not.
+ersc_scan_mover_token if {
+	normalized := replace(replace(replace(scrubbed_command, "\t", " "), "\r", " "), "\n", " ")
+	some token in split(lower(normalized), " ")
+	token in ersc_bundle_verbs
+}
+
+ersc_scan_repo_destination_marker if {
+	some marker in {"target/", "dist/", "build/", "out/", "release/", "releases/", ".me3", "me3/"}
+	contains(lower(command), marker)
 }
 
 executable_source_marker if {
