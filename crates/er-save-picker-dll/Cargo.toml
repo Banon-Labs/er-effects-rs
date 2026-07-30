@@ -1,0 +1,26 @@
+# Thin standalone ME3-loadable shell for the `er-save-picker` feature crate (product A):
+# own DllMain, own log file, individually shippable.
+#
+# UNLIKE `er-loading-portrait-dll`, this DLL is designed to COEXIST. The user requirement
+# (2026-07-30) is that a profile may list either new DLL, both, neither, and any
+# combination with the product and the other companions. Two rules make that hold:
+#   1. product (A) installs NO game-address detour at all -- its only OS hook is a
+#      `WH_KEYBOARD_LL` keyboard hook, which is per-DLL and cannot collide; and
+#   2. anything that ever does hook a game address must go through the `er-hook` union
+#      (`register_union_hook` / the `er_effects_union_register` C export), never a bare
+#      `MhHook::new`, so one MinHook instance owns each address and handlers chain.
+# See docs/plans/save-picker-crate-extraction.md, "Hook-ownership election".
+[package]
+name = "er-save-picker-dll"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_save_picker_dll"
+# `cdylib` is the ME3-loadable artifact; `rlib` keeps the tiny DLL shell testable on the
+# host without pulling game deps into the test graph.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+er-save-picker = { path = "../er-save-picker" }
