@@ -54,18 +54,6 @@ pub(crate) fn experimental_direct_menu_load_enabled() -> bool {
 pub(crate) fn product_autoload_enabled() -> bool {
     PRODUCT_AUTOLOAD_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
 }
-/// Portrait render window: hold the autoload's own load-commit at the open main menu until the loaded
-/// character's profile portrait has rendered, so the now-loading screen can show it.
-///
-/// DISABLED (2026-06-29): a runtime probe proved this BREAKS the core char-load -- kicking the refresh
-/// (0x9aa680) at menu-open + holding the commit crashed during world-load (access-violation, run
-/// product-continue-direct-20260629-104328), and the refresh gate fails there anyway (req754 stayed 0:
-/// the ProfileSummary slot entry is not loaded at the open main menu, only when navigating to the
-/// Load-Game/ProfileSelect submenu). The proven now-loading injection mechanism is unaffected. Leaving
-/// the (gated-off) implementation in place for the record; do not re-enable without a safe render path.
-pub(crate) fn portrait_render_window_enabled() -> bool {
-    false
-}
 /// DEFAULT-OFF gate for the ProfileSelect load flow. When false (the default) `product_core_autoload_tick`
 /// takes the PROVEN native Continue char-load commit, byte-for-byte unchanged. When the human flips
 /// `PROFILE_SELECT_LOAD_FLOW_ENABLED` on to probe-test, the menu branch instead fires the title menu's

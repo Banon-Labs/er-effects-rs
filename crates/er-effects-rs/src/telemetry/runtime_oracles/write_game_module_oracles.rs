@@ -980,18 +980,7 @@ fn write_game_module_oracles(body: &mut String) {
         let now_loading_helper_last_requested_replace_tex_info =
             NOW_LOADING_HELPER_LAST_REQUESTED_REPLACE_TEX_INFO.load(Ordering::SeqCst);
         let now_loading_helper_last_flags = NOW_LOADING_HELPER_LAST_FLAGS.load(Ordering::SeqCst);
-        let loading_bg_portrait_redirect_installed =
-            LOADING_BG_TEXTURE_REDIRECT_INSTALLED.load(Ordering::SeqCst);
-        let loading_bg_portrait_redirect_attempts =
-            LOADING_BG_TEXTURE_REDIRECT_ATTEMPTS.load(Ordering::SeqCst);
-        let loading_bg_portrait_redirect_commits =
-            LOADING_BG_TEXTURE_REDIRECT_COMMITS.load(Ordering::SeqCst);
-        let loading_bg_live_gx_rebinds = LOADING_BG_LIVE_GX_REBINDS.load(Ordering::SeqCst);
         let loadscreen_table_builds = PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst);
-        let loading_bg_portrait_redirect_last_symbol_match =
-            LOADING_BG_TEXTURE_REDIRECT_LAST_SYMBOL_MATCH.load(Ordering::SeqCst);
-        let loading_bg_portrait_redirect_last_portrait =
-            LOADING_BG_TEXTURE_REDIRECT_LAST_PORTRAIT.load(Ordering::SeqCst);
         let loading_bg_portrait_gx_nonblack =
             LOADING_BG_PORTRAIT_NONBLACK.load(Ordering::SeqCst) != 0;
         let loading_bg_portrait_is_checker =
@@ -1179,7 +1168,7 @@ fn write_game_module_oracles(body: &mut String) {
             server_status_text_id
         ));
         body.push_str(&format!(
-            "  \"oracle_title_native_menu_visual_suppress_installed\": {},\n  \"oracle_title_native_menu_visual_suppressed_builds\": {},\n  \"oracle_title_native_menu_visual_any_suppressed\": {},\n  \"oracle_title_native_menu_visual_last_out_slot\": {},\n  \"oracle_title_native_menu_visual_last_prev_out\": {},\n  \"oracle_title_native_menu_visual_last_args\": [{}, {}],\n  \"oracle_title_native_menu_visual_last_caller_rva\": {},\n  \"oracle_title_native_menu_visual_native_job\": {},\n  \"oracle_title_native_menu_visual_native_window\": {},\n  \"oracle_title_native_menu_visual_current_menu_id\": {},\n  \"oracle_title_native_menu_visual_current_flags\": {},\n  \"oracle_title_native_menu_visual_current_draw_bit_set\": {},\n  \"oracle_title_native_menu_visual_render_suppress_installed\": {},\n  \"oracle_title_native_menu_visual_render_suppressed_windows\": {},\n  \"oracle_title_native_menu_visual_render_any_suppressed\": {},\n  \"oracle_title_native_menu_visual_render_last_window\": {},\n  \"oracle_title_native_menu_visual_render_last_flags_before\": {},\n  \"oracle_title_native_menu_visual_render_last_flags_after\": {},\n  \"oracle_title_native_menu_visual_render_last_caller_rva\": {},\n  \"oracle_title_logo_surface_name\": \"{}\",\n  \"oracle_title_logo_resource_name\": \"{}\",\n  \"oracle_title_logo_gfx_root_depth\": {},\n  \"oracle_title_logo_gfx_root_sprite_char\": {},\n  \"oracle_title_logo_gfx_main_asset_char\": {},\n  \"oracle_title_logo_gfx_main_asset_name\": \"{}\",\n  \"oracle_title_logo_back_view_parts\": {},\n  \"oracle_title_logo_back_view_parts_vtable\": {},\n  \"oracle_title_logo_gfx_frame\": {},\n  \"oracle_title_logo_gfx_alpha_mult_term\": {},\n  \"oracle_title_logo_gfx_visibility\": {},\n  \"oracle_title_logo_gfx_hide_calls\": {},\n  \"oracle_title_logo_gfx_any_hidden\": {},\n  \"oracle_title_logo_gfx_hide_last_dialog\": {},\n  \"oracle_title_logo_gfx_hide_last_logo\": {},\n  \"oracle_title_logo_gfx_hide_last_caller_phase\": {},\n  \"oracle_title_logo_gfx_hide_last_requested_visible\": {},\n  \"oracle_title_press_start_surface_name\": \"PressStart\",\n  \"oracle_title_press_start_text_name\": \"StaticSystemText_101000\",\n  \"oracle_title_press_start_text_initial\": \"PRESS BUTTON\",\n  \"oracle_title_press_start_gfx_hide_calls\": {},\n  \"oracle_title_press_start_gfx_any_hidden\": {},\n  \"oracle_title_press_start_gfx_hide_last_dialog\": {},\n  \"oracle_title_press_start_gfx_hide_last_proxy\": {},\n  \"oracle_title_press_start_gfx_hide_last_context\": {},\n  \"oracle_title_press_start_gfx_hide_last_caller_phase\": {},\n  \"oracle_title_press_start_gfx_value\": {},\n  \"oracle_title_press_start_gfx_force_false_calls\": {},\n  \"oracle_title_press_start_gfx_force_false_any\": {},\n  \"oracle_title_press_start_gfx_force_false_last_value\": {},\n  \"oracle_title_press_start_gfx_force_false_last_requested\": {},\n  \"oracle_title_press_start_bind_hits\": {},\n  \"oracle_title_press_start_bind_any\": {},\n  \"oracle_title_press_start_bind_last_parent\": {},\n  \"oracle_title_press_start_bind_last_out\": {},\n  \"oracle_title_press_start_bind_last_name\": {},\n  \"oracle_title_press_start_bind_last_context\": {},\n  \"oracle_title_press_start_bind_hide_calls\": {},\n  \"oracle_title_press_start_bind_any_hidden\": {},\n  \"oracle_title_profile_cover_bound_to_logo_surface\": {},\n  \"oracle_title_overlay_cover_render_calls\": {},\n  \"oracle_title_overlay_cover_rendered\": {},\n  \"oracle_title_overlay_cover_last_display_size\": [{}, {}],\n  \"oracle_title_overlay_cover_display_sane\": {},\n  \"oracle_title_overlay_cover_texture_bound\": {},\n  \"oracle_title_overlay_cover_last_gx_texture\": {},\n  \"oracle_title_overlay_cover_last_texture_resource\": {},\n  \"oracle_title_profile_face_bind_hits\": {},\n  \"oracle_title_profile_face_transform_applied\": {},\n  \"oracle_title_profile_face_other_hidden\": {},\n  \"oracle_title_profile_face_last_proxy\": {},\n  \"oracle_title_profile_face_last_value\": {},\n  \"oracle_title_loaded_character_portrait_rendered\": {},\n  \"oracle_title_loaded_character_portrait_visible_during_boot\": {},\n  \"oracle_title_loaded_character_portrait_held_until_loading_takeover\": {},\n  \"oracle_title_scaleform_bind_observer_hits\": {},\n  \"oracle_title_scaleform_bind_observer_systex_hits\": {},\n  \"oracle_title_scaleform_bind_observer_last_owner\": {},\n  \"oracle_title_scaleform_bind_observer_last_pair\": {},\n  \"oracle_title_scaleform_bind_observer_last_symbol_ptr\": {},\n  \"oracle_title_scaleform_bind_observer_last_target_ptr\": {},\n  \"oracle_title_portrait_visible_surface_symbol\": \"{}\",\n  \"oracle_title_portrait_visible_surface_bind_rewrites\": {},\n  \"oracle_title_portrait_visible_surface_bound\": {},\n  \"oracle_title_portrait_visible_surface_bind_last_owner\": {},\n  \"oracle_title_portrait_visible_surface_bind_last_pair\": {},\n  \"oracle_title_portrait_visible_surface_bind_last_symbol_ptr\": {},\n  \"oracle_title_now_loading_helper_hooks_installed\": {},\n  \"oracle_title_now_loading_helper_ctor_hits\": {},\n  \"oracle_title_now_loading_helper_update_hits\": {},\n  \"oracle_title_now_loading_helper_last_this\": {},\n  \"oracle_title_now_loading_helper_last_menu_index\": {},\n  \"oracle_title_now_loading_helper_last_replace_tex_info\": {},\n  \"oracle_title_now_loading_helper_last_requested_replace_tex_info\": {},\n  \"oracle_title_now_loading_helper_last_flags\": {},\n  \"oracle_loading_bg_portrait_redirect_installed\": {},\n  \"oracle_loading_bg_portrait_redirect_attempts\": {},\n  \"oracle_loading_bg_portrait_redirect_commits\": {},\n  \"oracle_loading_bg_live_gx_rebinds\": {},\n  \"oracle_loadscreen_table_builds\": {},\n  \"oracle_loading_bg_portrait_redirect_last_symbol_match\": {},\n  \"oracle_loading_bg_portrait_redirect_last_portrait\": {},\n  \"oracle_loading_bg_portrait_gx_nonblack\": {},\n  \"oracle_loading_bg_portrait_is_checker\": {},\n  \"oracle_portrait_render_drive_hits\": {},\n  \"oracle_loading_bg_portrait_gx_dims\": {},\n  \"oracle_loading_bg_portrait_gx_format\": {},\n  \"oracle_title_logo_profile_summary\": {},\n  \"oracle_title_logo_profile_summary_ready\": {},\n  \"oracle_title_profile_render_refresh_gate_ready\": {},\n  \"oracle_title_custom_cover_profile_render_refresh_calls\": {},\n  \"oracle_title_custom_cover_profile_render_refresh_last_profile_summary\": {},\n  \"oracle_title_custom_cover_profile_render_refresh_last_caller_phase\": {},\n  \"oracle_title_custom_cover_profile_source_sample_calls\": {},\n  \"oracle_title_custom_cover_profile_source_slot\": {},\n  \"oracle_title_custom_cover_profile_source_renderer\": {},\n  \"oracle_title_custom_cover_profile_source_renderer_vtable\": {},\n  \"oracle_title_custom_cover_profile_source_offscreen_rend\": {},\n  \"oracle_title_custom_cover_profile_source_tex_rescap\": {},\n  \"oracle_title_custom_cover_profile_source_tex_index\": {},\n  \"oracle_title_custom_cover_profile_source_ready_754\": {},\n  \"oracle_title_custom_cover_profile_source_ready_755\": {},\n  \"oracle_title_custom_cover_profile_source_ready\": {},\n  \"oracle_title_custom_cover_profile_source_name\": \"{}\",\n  \"oracle_title_custom_cover_profile_renderer_class\": \"{}\",\n  \"oracle_title_custom_cover_profile_select_builds\": {},\n  \"oracle_title_custom_cover_profile_select_any_built\": {},\n  \"oracle_title_custom_cover_profile_select_last_ret\": {},\n  \"oracle_title_custom_cover_profile_select_last_job\": {},\n  \"oracle_title_custom_cover_profile_select_last_caller_rva\": {},\n  \"oracle_title_custom_cover_black_surface_name\": \"{}\",\n  \"oracle_title_custom_cover_black_builds\": {},\n  \"oracle_title_custom_cover_black_any_built\": {},\n  \"oracle_title_custom_cover_black_last_ret\": {},\n  \"oracle_title_custom_cover_black_last_job\": {},\n  \"oracle_title_custom_cover_black_last_caller_rva\": {},\n  \"oracle_title_custom_cover_run_calls\": {},\n  \"oracle_title_custom_cover_run_any\": {},\n  \"oracle_title_custom_cover_run_last_native_job\": {},\n  \"oracle_title_custom_cover_run_last_cover_job\": {},\n  \"oracle_title_custom_cover_run_last_cover_window\": {},\n  \"oracle_title_custom_cover_run_last_ret\": {},\n  \"oracle_title_pab_information_visual_name\": \"{}\",\n  \"oracle_title_pab_information_visual_builds\": {},\n  \"oracle_title_pab_information_visual_any_built\": {},\n  \"oracle_title_pab_information_visual_last_job\": {},\n  \"oracle_title_pab_information_visual_last_window\": {},\n  \"oracle_title_pab_information_visual_last_caller_rva\": {},\n",
+            "  \"oracle_title_native_menu_visual_suppress_installed\": {},\n  \"oracle_title_native_menu_visual_suppressed_builds\": {},\n  \"oracle_title_native_menu_visual_any_suppressed\": {},\n  \"oracle_title_native_menu_visual_last_out_slot\": {},\n  \"oracle_title_native_menu_visual_last_prev_out\": {},\n  \"oracle_title_native_menu_visual_last_args\": [{}, {}],\n  \"oracle_title_native_menu_visual_last_caller_rva\": {},\n  \"oracle_title_native_menu_visual_native_job\": {},\n  \"oracle_title_native_menu_visual_native_window\": {},\n  \"oracle_title_native_menu_visual_current_menu_id\": {},\n  \"oracle_title_native_menu_visual_current_flags\": {},\n  \"oracle_title_native_menu_visual_current_draw_bit_set\": {},\n  \"oracle_title_native_menu_visual_render_suppress_installed\": {},\n  \"oracle_title_native_menu_visual_render_suppressed_windows\": {},\n  \"oracle_title_native_menu_visual_render_any_suppressed\": {},\n  \"oracle_title_native_menu_visual_render_last_window\": {},\n  \"oracle_title_native_menu_visual_render_last_flags_before\": {},\n  \"oracle_title_native_menu_visual_render_last_flags_after\": {},\n  \"oracle_title_native_menu_visual_render_last_caller_rva\": {},\n  \"oracle_title_logo_surface_name\": \"{}\",\n  \"oracle_title_logo_resource_name\": \"{}\",\n  \"oracle_title_logo_gfx_root_depth\": {},\n  \"oracle_title_logo_gfx_root_sprite_char\": {},\n  \"oracle_title_logo_gfx_main_asset_char\": {},\n  \"oracle_title_logo_gfx_main_asset_name\": \"{}\",\n  \"oracle_title_logo_back_view_parts\": {},\n  \"oracle_title_logo_back_view_parts_vtable\": {},\n  \"oracle_title_logo_gfx_frame\": {},\n  \"oracle_title_logo_gfx_alpha_mult_term\": {},\n  \"oracle_title_logo_gfx_visibility\": {},\n  \"oracle_title_logo_gfx_hide_calls\": {},\n  \"oracle_title_logo_gfx_any_hidden\": {},\n  \"oracle_title_logo_gfx_hide_last_dialog\": {},\n  \"oracle_title_logo_gfx_hide_last_logo\": {},\n  \"oracle_title_logo_gfx_hide_last_caller_phase\": {},\n  \"oracle_title_logo_gfx_hide_last_requested_visible\": {},\n  \"oracle_title_press_start_surface_name\": \"PressStart\",\n  \"oracle_title_press_start_text_name\": \"StaticSystemText_101000\",\n  \"oracle_title_press_start_text_initial\": \"PRESS BUTTON\",\n  \"oracle_title_press_start_gfx_hide_calls\": {},\n  \"oracle_title_press_start_gfx_any_hidden\": {},\n  \"oracle_title_press_start_gfx_hide_last_dialog\": {},\n  \"oracle_title_press_start_gfx_hide_last_proxy\": {},\n  \"oracle_title_press_start_gfx_hide_last_context\": {},\n  \"oracle_title_press_start_gfx_hide_last_caller_phase\": {},\n  \"oracle_title_press_start_gfx_value\": {},\n  \"oracle_title_press_start_gfx_force_false_calls\": {},\n  \"oracle_title_press_start_gfx_force_false_any\": {},\n  \"oracle_title_press_start_gfx_force_false_last_value\": {},\n  \"oracle_title_press_start_gfx_force_false_last_requested\": {},\n  \"oracle_title_press_start_bind_hits\": {},\n  \"oracle_title_press_start_bind_any\": {},\n  \"oracle_title_press_start_bind_last_parent\": {},\n  \"oracle_title_press_start_bind_last_out\": {},\n  \"oracle_title_press_start_bind_last_name\": {},\n  \"oracle_title_press_start_bind_last_context\": {},\n  \"oracle_title_press_start_bind_hide_calls\": {},\n  \"oracle_title_press_start_bind_any_hidden\": {},\n  \"oracle_title_profile_cover_bound_to_logo_surface\": {},\n  \"oracle_title_overlay_cover_render_calls\": {},\n  \"oracle_title_overlay_cover_rendered\": {},\n  \"oracle_title_overlay_cover_last_display_size\": [{}, {}],\n  \"oracle_title_overlay_cover_display_sane\": {},\n  \"oracle_title_overlay_cover_texture_bound\": {},\n  \"oracle_title_overlay_cover_last_gx_texture\": {},\n  \"oracle_title_overlay_cover_last_texture_resource\": {},\n  \"oracle_title_profile_face_bind_hits\": {},\n  \"oracle_title_profile_face_transform_applied\": {},\n  \"oracle_title_profile_face_other_hidden\": {},\n  \"oracle_title_profile_face_last_proxy\": {},\n  \"oracle_title_profile_face_last_value\": {},\n  \"oracle_title_loaded_character_portrait_rendered\": {},\n  \"oracle_title_loaded_character_portrait_visible_during_boot\": {},\n  \"oracle_title_loaded_character_portrait_held_until_loading_takeover\": {},\n  \"oracle_title_scaleform_bind_observer_hits\": {},\n  \"oracle_title_scaleform_bind_observer_systex_hits\": {},\n  \"oracle_title_scaleform_bind_observer_last_owner\": {},\n  \"oracle_title_scaleform_bind_observer_last_pair\": {},\n  \"oracle_title_scaleform_bind_observer_last_symbol_ptr\": {},\n  \"oracle_title_scaleform_bind_observer_last_target_ptr\": {},\n  \"oracle_title_portrait_visible_surface_symbol\": \"{}\",\n  \"oracle_title_portrait_visible_surface_bind_rewrites\": {},\n  \"oracle_title_portrait_visible_surface_bound\": {},\n  \"oracle_title_portrait_visible_surface_bind_last_owner\": {},\n  \"oracle_title_portrait_visible_surface_bind_last_pair\": {},\n  \"oracle_title_portrait_visible_surface_bind_last_symbol_ptr\": {},\n  \"oracle_title_now_loading_helper_hooks_installed\": {},\n  \"oracle_title_now_loading_helper_ctor_hits\": {},\n  \"oracle_title_now_loading_helper_update_hits\": {},\n  \"oracle_title_now_loading_helper_last_this\": {},\n  \"oracle_title_now_loading_helper_last_menu_index\": {},\n  \"oracle_title_now_loading_helper_last_replace_tex_info\": {},\n  \"oracle_title_now_loading_helper_last_requested_replace_tex_info\": {},\n  \"oracle_title_now_loading_helper_last_flags\": {},\n  \"oracle_loadscreen_table_builds\": {},\n  \"oracle_loading_bg_portrait_gx_nonblack\": {},\n  \"oracle_loading_bg_portrait_is_checker\": {},\n  \"oracle_portrait_render_drive_hits\": {},\n  \"oracle_loading_bg_portrait_gx_dims\": {},\n  \"oracle_loading_bg_portrait_gx_format\": {},\n  \"oracle_title_logo_profile_summary\": {},\n  \"oracle_title_logo_profile_summary_ready\": {},\n  \"oracle_title_profile_render_refresh_gate_ready\": {},\n  \"oracle_title_custom_cover_profile_render_refresh_calls\": {},\n  \"oracle_title_custom_cover_profile_render_refresh_last_profile_summary\": {},\n  \"oracle_title_custom_cover_profile_render_refresh_last_caller_phase\": {},\n  \"oracle_title_custom_cover_profile_source_sample_calls\": {},\n  \"oracle_title_custom_cover_profile_source_slot\": {},\n  \"oracle_title_custom_cover_profile_source_renderer\": {},\n  \"oracle_title_custom_cover_profile_source_renderer_vtable\": {},\n  \"oracle_title_custom_cover_profile_source_offscreen_rend\": {},\n  \"oracle_title_custom_cover_profile_source_tex_rescap\": {},\n  \"oracle_title_custom_cover_profile_source_tex_index\": {},\n  \"oracle_title_custom_cover_profile_source_ready_754\": {},\n  \"oracle_title_custom_cover_profile_source_ready_755\": {},\n  \"oracle_title_custom_cover_profile_source_ready\": {},\n  \"oracle_title_custom_cover_profile_source_name\": \"{}\",\n  \"oracle_title_custom_cover_profile_renderer_class\": \"{}\",\n  \"oracle_title_custom_cover_profile_select_builds\": {},\n  \"oracle_title_custom_cover_profile_select_any_built\": {},\n  \"oracle_title_custom_cover_profile_select_last_ret\": {},\n  \"oracle_title_custom_cover_profile_select_last_job\": {},\n  \"oracle_title_custom_cover_profile_select_last_caller_rva\": {},\n  \"oracle_title_custom_cover_black_surface_name\": \"{}\",\n  \"oracle_title_custom_cover_black_builds\": {},\n  \"oracle_title_custom_cover_black_any_built\": {},\n  \"oracle_title_custom_cover_black_last_ret\": {},\n  \"oracle_title_custom_cover_black_last_job\": {},\n  \"oracle_title_custom_cover_black_last_caller_rva\": {},\n  \"oracle_title_custom_cover_run_calls\": {},\n  \"oracle_title_custom_cover_run_any\": {},\n  \"oracle_title_custom_cover_run_last_native_job\": {},\n  \"oracle_title_custom_cover_run_last_cover_job\": {},\n  \"oracle_title_custom_cover_run_last_cover_window\": {},\n  \"oracle_title_custom_cover_run_last_ret\": {},\n  \"oracle_title_pab_information_visual_name\": \"{}\",\n  \"oracle_title_pab_information_visual_builds\": {},\n  \"oracle_title_pab_information_visual_any_built\": {},\n  \"oracle_title_pab_information_visual_last_job\": {},\n  \"oracle_title_pab_information_visual_last_window\": {},\n  \"oracle_title_pab_information_visual_last_caller_rva\": {},\n",
             title_visual_suppress_installed,
             title_visual_suppressed_builds,
             title_visual_suppressed_builds != 0,
@@ -1273,13 +1262,7 @@ fn write_game_module_oracles(body: &mut String) {
             now_loading_helper_last_replace_tex_info,
             now_loading_helper_last_requested_replace_tex_info,
             now_loading_helper_last_flags,
-            loading_bg_portrait_redirect_installed,
-            loading_bg_portrait_redirect_attempts,
-            loading_bg_portrait_redirect_commits,
-            loading_bg_live_gx_rebinds,
             loadscreen_table_builds,
-            loading_bg_portrait_redirect_last_symbol_match,
-            loading_bg_portrait_redirect_last_portrait,
             loading_bg_portrait_gx_nonblack,
             loading_bg_portrait_is_checker,
             portrait_render_drive_hits,
@@ -1587,18 +1570,6 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_title_scaleform_resource_ctor_last_caller_rva",
             title_scaleform_resource_ctor_last_caller_rva,
         );
-        // er-tpf Tier-4 in-memory cover wire-up oracles (memory-read telemetry, NOT screenshot): a
-        // runtime watcher can observe build/register/bind progress + failures without an image.
-        push_json_bool(
-            body,
-            "oracle_tpf_texture_built",
-            ER_TPF_COVER_TEXTURE_BUILT.load(Ordering::SeqCst) != 0,
-        );
-        push_json_usize(
-            body,
-            "oracle_tpf_texture_blob_len",
-            ER_TPF_COVER_BLOB_LEN.load(Ordering::SeqCst),
-        );
         push_json_str(body, "oracle_tpf_texture_key", ER_TPF_COVER_SYSTEX_KEY);
         push_json_bool(
             body,
@@ -1853,11 +1824,6 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_present_backbuffer_format",
             PRESENT_BACKBUFFER_FORMAT.load(Ordering::SeqCst),
         );
-        push_json_usize(
-            body,
-            "oracle_present_composite_build_skips",
-            PRESENT_COMPOSITE_BUILD_SKIPS.load(Ordering::SeqCst),
-        );
         // Presents where we skipped ALL compositing because the now-loading display window had not opened
         // yet -- the pure-passthrough gate that keeps our GPU work out of the fragile early-boot crash
         // window on native Windows (er-effects-rs-n4x). High during boot, stops once now-loading opens.
@@ -1899,118 +1865,6 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_portrait_alpha_cover_pct",
             PORTRAIT_ALPHA_COVER_PCT.load(Ordering::SeqCst),
         );
-        push_json_usize(
-            body,
-            "oracle_overlay_draw_hits",
-            OVERLAY_DRAW_HITS.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_overlay_reuploads",
-            OVERLAY_REUPLOADS.load(Ordering::SeqCst),
-        );
-
-        let overlay_draw_hits = OVERLAY_DRAW_HITS.load(Ordering::SeqCst);
-        let overlay_draw_first_ms = OVERLAY_DRAW_FIRST_MS.load(Ordering::SeqCst);
-        let overlay_draw_last_ms = OVERLAY_DRAW_LAST_MS.load(Ordering::SeqCst);
-        let overlay_reuploads = OVERLAY_REUPLOADS.load(Ordering::SeqCst);
-        let overlay_reupload_first_ms = OVERLAY_REUPLOAD_FIRST_MS.load(Ordering::SeqCst);
-        let overlay_reupload_last_ms = OVERLAY_REUPLOAD_LAST_MS.load(Ordering::SeqCst);
-        let fps_x1000 = |frames: usize, first_ms: usize, last_ms: usize| -> usize {
-            let dt = last_ms.saturating_sub(first_ms);
-            if frames < 2 || dt == 0 {
-                0
-            } else {
-                (frames - 1).saturating_mul(1_000_000) / dt
-            }
-        };
-        push_json_usize(body, "oracle_overlay_draw_first_ms", overlay_draw_first_ms);
-        push_json_usize(body, "oracle_overlay_draw_last_ms", overlay_draw_last_ms);
-        push_json_usize(
-            body,
-            "oracle_overlay_draw_fps_x1000",
-            fps_x1000(
-                overlay_draw_hits,
-                overlay_draw_first_ms,
-                overlay_draw_last_ms,
-            ),
-        );
-        push_json_usize(
-            body,
-            "oracle_overlay_reupload_first_ms",
-            overlay_reupload_first_ms,
-        );
-        push_json_usize(
-            body,
-            "oracle_overlay_reupload_last_ms",
-            overlay_reupload_last_ms,
-        );
-        push_json_usize(
-            body,
-            "oracle_overlay_reupload_fps_x1000",
-            fps_x1000(
-                overlay_reuploads,
-                overlay_reupload_first_ms,
-                overlay_reupload_last_ms,
-            ),
-        );
-        push_json_usize(
-            body,
-            "oracle_overlay_stale_present_current",
-            OVERLAY_STALE_PRESENT_RUN.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_overlay_stale_present_max",
-            OVERLAY_STALE_PRESENT_MAX.load(Ordering::SeqCst),
-        );
-        let avg_x1000 = |sum_ms: usize, count: usize| -> usize {
-            if count == 0 {
-                0
-            } else {
-                sum_ms.saturating_mul(1000) / count
-            }
-        };
-        let rb_count = OVERLAY_STAGE_READBACK_WAIT_COUNT.load(Ordering::SeqCst);
-        let rb_sum = OVERLAY_STAGE_READBACK_WAIT_MS_SUM.load(Ordering::SeqCst);
-        push_json_usize(body, "oracle_overlay_readback_wait_count", rb_count);
-        push_json_usize(
-            body,
-            "oracle_overlay_readback_wait_avg_ms_x1000",
-            avg_x1000(rb_sum, rb_count),
-        );
-        push_json_usize(
-            body,
-            "oracle_overlay_readback_wait_max_ms",
-            OVERLAY_STAGE_READBACK_WAIT_MS_MAX.load(Ordering::SeqCst),
-        );
-        let blend_count = OVERLAY_STAGE_BLEND_COUNT.load(Ordering::SeqCst);
-        let blend_sum = OVERLAY_STAGE_BLEND_MS_SUM.load(Ordering::SeqCst);
-        push_json_usize(body, "oracle_overlay_blend_count", blend_count);
-        push_json_usize(
-            body,
-            "oracle_overlay_blend_avg_ms_x1000",
-            avg_x1000(blend_sum, blend_count),
-        );
-        push_json_usize(
-            body,
-            "oracle_overlay_blend_max_ms",
-            OVERLAY_STAGE_BLEND_MS_MAX.load(Ordering::SeqCst),
-        );
-        let up_count = OVERLAY_STAGE_UPLOAD_WAIT_COUNT.load(Ordering::SeqCst);
-        let up_sum = OVERLAY_STAGE_UPLOAD_WAIT_MS_SUM.load(Ordering::SeqCst);
-        push_json_usize(body, "oracle_overlay_upload_wait_count", up_count);
-        push_json_usize(
-            body,
-            "oracle_overlay_upload_wait_avg_ms_x1000",
-            avg_x1000(up_sum, up_count),
-        );
-        push_json_usize(
-            body,
-            "oracle_overlay_upload_wait_max_ms",
-            OVERLAY_STAGE_UPLOAD_WAIT_MS_MAX.load(Ordering::SeqCst),
-        );
-
         // BOOT-PROGRESS VIEW semaphores: draw_hits = strip composites actually reaching the backbuffer
         // (the pre-Continue black frames are covered); last_permille = displayed progress; milestone_mask/
         // idx = which boot semaphores latched (bit order: BOOT, GAME, OFFLINE, TITLE, MENU, CONTINUE,
@@ -2942,19 +2796,6 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_portrait_luma_flicker_max",
             PORTRAIT_LUMA_FLICKER_MAX.load(Ordering::SeqCst),
         );
-        // LOADING-SCREEN WINDOW semaphores: overlay stop count + last stop reason (1 = load-done bridge
-        // elapsed; 3 = anti-runaway backstop; 4 = legacy Gauge_3 terminal frame; 5 = native LoadingScreen
-        // close/result handoff after the post-100%-bar countdown).
-        push_json_usize(
-            body,
-            "oracle_overlay_window_stops",
-            OVERLAY_WINDOW_STOPS.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_overlay_stop_reason",
-            OVERLAY_STOP_REASON.load(Ordering::SeqCst),
-        );
         push_json_usize(
             body,
             "oracle_loading_bar_hook_installed",
@@ -3033,84 +2874,6 @@ fn write_game_module_oracles(body: &mut String) {
         push_json_usize(body, "oracle_loading_screen_gfx_fadeout_last_ms", LOADING_SCREEN_GFX_FADEOUT_LAST_MS.load(Ordering::SeqCst));
         push_json_usize(body, "oracle_loading_screen_update_last_ms", LOADING_SCREEN_UPDATE_LAST_MS.load(Ordering::SeqCst));
         push_json_usize(body, "oracle_loading_screen_close_sent_first_ms", LOADING_SCREEN_CLOSE_SENT_FIRST_MS.load(Ordering::SeqCst));
-        // CANDIDATE A (er-effects-rs-jsm): live head copied INTO the displayed now-loading GFx texture so
-        // the native tips/bar render above it. `uploads > 0` == the head is in the movie; `overlay_yields`
-        // proves the Present-overlay demoted (stopped drawing over the tips); `demote_credit` is the live
-        // handoff level; `last_error` names the current fail-open reason (0 = ok).
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_uploads",
-            GFX_PORTRAIT_UPLOADS.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_resolves",
-            GFX_PORTRAIT_RESOLVES.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_resolve_fails",
-            GFX_PORTRAIT_RESOLVE_FAILS.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_overlay_yields",
-            GFX_PORTRAIT_OVERLAY_YIELDS.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_demote_credit",
-            GFX_PORTRAIT_DEMOTE_CREDIT.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_hal_dims",
-            GFX_PORTRAIT_HAL_DIMS.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_cached_hal",
-            GFX_PORTRAIT_CACHED_HAL.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_last_error",
-            GFX_PORTRAIT_LAST_ERROR.load(Ordering::SeqCst),
-        );
-        // BAKE path: head baked into the forged now-loading background (proven display), and whether a
-        // baked artwork was actually DISPLAYED (overlay demoted -> tips render above the in-movie head).
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_baked",
-            GFX_PORTRAIT_BAKED.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_baked_displayed",
-            GFX_PORTRAIT_BAKED_DISPLAYED.load(Ordering::SeqCst),
-        );
-        // PIXEL ORACLE: did the head actually reach the loading screen (backbuffer readback vs the
-        // captured head, excluding the tip/bar rects)? Resource-agnostic regression guard.
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_head_on_screen",
-            GFX_PORTRAIT_HEAD_ON_SCREEN.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_head_match_pct",
-            GFX_PORTRAIT_HEAD_MATCH_PCT.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_head_probe_count",
-            GFX_PORTRAIT_HEAD_PROBE_COUNT.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_head_ever",
-            GFX_PORTRAIT_HEAD_EVER.load(Ordering::SeqCst),
-        );
         // PIVOT (er-effects-rs-jsm): player-stats loading text. `stats_text_built` = cumulative count of
         // stats bitmaps rendered from the game font (content-keyed rebuilds: a character switch or the
         // record->live upgrade bumps it); `tip_suppressed_hits` = native tip-refresh calls we no-op'd.
@@ -3154,21 +2917,6 @@ fn write_game_module_oracles(body: &mut String) {
             body,
             "oracle_scaleform_desc_provider_null_hits",
             SCALEFORM_DESC_PROVIDER_NULL_HITS.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_overlay_gpu_fail_count",
-            OVERLAY_GPU_FAIL_COUNT.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_overlay_gpu_fail_code",
-            OVERLAY_GPU_FAIL_CODE.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_overlay_gpu_fail_version",
-            OVERLAY_GPU_FAIL_VERSION.load(Ordering::SeqCst),
         );
         body.push_str(&format!(
             "  \"oracle_native_profile_capture_enabled\": {},\n  \"oracle_native_load_game_fired\": {},\n  \"oracle_native_load_game_last_node\": {},\n  \"oracle_native_load_game_last_node_vtable\": {},\n  \"oracle_native_load_game_last_member_dialog\": {},\n  \"oracle_native_load_game_last_member_fn\": {},\n  \"oracle_native_load_game_last_member_adjust\": {},\n  \"oracle_native_profile_source_ready\": {},\n  \"oracle_native_profile_source_name\": \"{}\",\n  \"oracle_native_profile_renderer_class\": \"{}\",\n",

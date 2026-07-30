@@ -534,38 +534,6 @@ unsafe fn read_dlstring_u16(s: usize) -> Option<(Vec<u16>, u8)> {
     Some((out, encoding))
 }
 
-/// Extract the bare GFx background texture symbol (e.g. `MENU_Load_00008`) from a now-loading TPF
-/// path symbol like `menutpfbnd:/00_Solo/MENU_Load_00008.tpf`. The pump registers this bare name into
-/// the Scaleform texture repository, so it must be exactly the symbol the loading GFx resolves.
-/// Returns None when the path has no `MENU_Load_` segment (i.e. not a now-loading background).
-fn extract_menu_load_tex_name(path: &str) -> Option<String> {
-    let lower = path.to_ascii_lowercase();
-    let idx = lower.find("menu_load_")?;
-    // Lowercasing ASCII preserves byte indices, so `idx` is valid in the original `path`.
-    let tail = path.get(idx..)?;
-    let name = tail.split('.').next().unwrap_or(tail);
-    if name.is_empty() {
-        None
-    } else {
-        Some(name.to_string())
-    }
-}
-
-/// Bounded ASCII preview of a UTF-16 buffer for debug logging.
-fn utf16_ascii_preview(units: &[u16]) -> String {
-    units
-        .iter()
-        .take(64)
-        .map(|&u| {
-            if (0x20..=0x7e).contains(&u) {
-                u as u8 as char
-            } else {
-                '?'
-            }
-        })
-        .collect()
-}
-
 /// Absolute address of the profile renderer table entry for `slot` (`DAT_143d6d8d0[slot]`, the
 /// `CSMenuProfModelRend*` for that ABSOLUTE save slot; offscreen tex index `slot*2`). Out-of-range
 /// slots fall back to entry 0, preserving the historical table[0] behavior for `slot == 0` or unknown.
@@ -607,97 +575,6 @@ unsafe fn sample_portrait_gxtexture(base: usize, slot: i32) -> usize {
     }
     unsafe { safe_read_usize(tex_rescap + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET) }
         .unwrap_or(0)
-}
-
-/// Re-bind the LIVE offscreen-RT CSGxTexture of our post-Continue built renderer into the now-loading
-/// background container that the forge already injected. The now-loading background binds ~15-17s (BEFORE
-/// our renderer's RT is live) and never re-binds, so the displayed container holds the forged checker; this
-/// swaps our live GX into that container's first TexResCap every tick once the RT is up, and GFx -- which
-/// re-samples the bound CSGxTexture each composite frame -- then shows the live animated portrait. The
-/// CSGxTexture identity is stable while our feed window keeps the renderer alive, so this is idempotent
-/// once latched. Read/validate-guarded; writes only the single GX pointer slot.
-unsafe fn refresh_loading_bg_live_gx(base: usize) {
-    let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let valid = |p: usize| p != 0 && p != null;
-    // DISABLED (crashes): binding the built-own renderer's LIVE offscreen SRV into the now-loading
-    // Scaleform container makes dxgi/vkd3d AV ~330ms later when the GFx sampler reads it (run 2026-06-30:
-    // RE-BOUND +18003ms -> 0xc0000005 in vkd3d at +18336ms). The offscreen SRV is a render-target resource,
-    // not valid as a Scaleform shader-resource (format/descriptor/state mismatch), so the container's
-    // sampler faults. Native Scaleform GX rebind is a dead end (the menu-renderer variant UAF'd; this
-    // built-own variant format-faults). The SAFE display path is the present-overlay D3D12 composite
-    // (CopyTextureRegion, not a sampler) fed by a per-frame READBACK of the live built SRV -- see bd
-    // portrait-live-render-reattach-crashes-build-own-2026-06-30. Kept gated-off here for reference.
-    if true || !portrait_render_drive_enabled() {
-        return;
-    }
-    if PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst) == 0 {
-        return;
-    }
-    let cap = LOADING_BG_TEXTURE_REDIRECT_LAST_PORTRAIT.load(Ordering::SeqCst);
-    if !valid(cap) {
-        return;
-    }
-    // Resolve the LIVE SRV from our built target-slot renderer: table[slot] -> +0xa8 (offscreen) -> +0x10
-    // (TexResCap) -> +GX = the sampleable CSGxTexture the engine re-renders each frame. Validate the vtable
-    // so a torn/rebuilding slot can't bind a bad pointer. Slot = the loaded character (er-effects-rs-j3r).
-    let slot = portrait_loaded_slot();
-    let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, slot)) }.unwrap_or(0);
-    if !valid(r)
-        || unsafe { safe_read_usize(r) }.unwrap_or(0)
-            != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
-    {
-        return;
-    }
-    let off =
-        unsafe { safe_read_usize(r + TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET) }
-            .unwrap_or(0);
-    if !valid(off) {
-        return;
-    }
-    let trc =
-        unsafe { safe_read_usize(off + TITLE_CUSTOM_COVER_PROFILE_OFFSCREEN_TEX_RESCAP_OFFSET) }
-            .unwrap_or(0);
-    if !valid(trc) {
-        return;
-    }
-    let bind_gx = unsafe { safe_read_usize(trc + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET) }
-        .unwrap_or(0);
-    if !valid(bind_gx) {
-        return;
-    }
-    let container = unsafe { safe_read_usize(cap + TPF_FILE_CAP_TEX_RESCAP_OFFSET) }.unwrap_or(0);
-    if !valid(container) {
-        return;
-    }
-    let count = unsafe { safe_read_usize(container + TPF_RESCAP_CONTAINER_COUNT_OFFSET) }
-        .unwrap_or(0)
-        & 0xffff_ffff;
-    let array =
-        unsafe { safe_read_usize(container + TPF_RESCAP_CONTAINER_ARRAY_OFFSET) }.unwrap_or(0);
-    if count < 1 || !valid(array) {
-        return;
-    }
-    let tex_rescap0 = unsafe { safe_read_usize(array) }.unwrap_or(0);
-    if !valid(tex_rescap0) {
-        return;
-    }
-    let cur =
-        unsafe { safe_read_usize(tex_rescap0 + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET) }
-            .unwrap_or(0);
-    if cur == bind_gx {
-        return; // already bound to the captured RT
-    }
-    unsafe {
-        ((tex_rescap0 + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET) as *mut usize)
-            .write_volatile(bind_gx)
-    };
-    LOADING_BG_LIVE_GX_BOUND.store(bind_gx, Ordering::SeqCst);
-    let n = LOADING_BG_LIVE_GX_REBINDS.fetch_add(1, Ordering::SeqCst) + 1;
-    if n == 1 {
-        append_autoload_debug(format_args!(
-            "loading-portrait: RE-BOUND captured (AddRef'd) portrait RT into the now-loading container -- bind_gx=0x{bind_gx:x} (was 0x{cur:x}) cap=0x{cap:x} container=0x{container:x}; loading screen samples the lifetime-safe portrait"
-        ));
-    }
 }
 
 /// Per-frame: keep the spared profile renderer drawing and capture the portrait once its model

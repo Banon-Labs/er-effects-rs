@@ -4,7 +4,7 @@
 // overlay so native Windows shows the stats the USER expects: the game's OWN menu font (MenuFont_01 via
 // `er_gfx::raster::RasterFont`, captured from the game's `font.gfx`), the same on-screen SIZE
 // (`em_px = screen_max * 48/2056`), and the same LOCATION (top-left at 5% width / 60% height -- the exact
-// mapping `stats_text_screen_position` used for the in-swapchain Present overlay in `overlay_composite.rs`).
+// mapping `stats_text_screen_position` used for the retired in-swapchain Present overlay (path A, deleted)).
 //
 // The difference vs the Wine path: the composite is PURELY CPU here (`render_lines_to_rgba` -> versioned
 // screen bitmap -> `blend_rgba_over`), so it never creates resources or submits command lists on the game's

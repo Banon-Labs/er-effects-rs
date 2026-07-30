@@ -593,22 +593,6 @@ pub(crate) use er_telemetry::counters::PROFILE_DRIVE_FRAMES_WINDOW;
 pub(crate) use er_telemetry::counters::PROFILE_DISPLAY_FRAMES_WINDOW;
 pub(crate) use er_telemetry::counters::PROFILE_DRIVE_FRAMES_WINDOW_LAST;
 pub(crate) use er_telemetry::counters::PROFILE_DISPLAY_FRAMES_WINDOW_LAST;
-/// The FIRST (displayed) now-loading rti the forge bound, plus its bare texture name + encoding. The
-/// sprite commits to the first bind, which happens BEFORE the real portrait is captured -- so once the
-/// portrait is baked we RE-FORGE this exact rti to swap the checker for the portrait on the live screen.
-pub(crate) use er_telemetry::counters::LOADING_BG_FIRST_RTI;
-pub(crate) use er_telemetry::counters::LOADING_BG_FIRST_ENCODING;
-pub(crate) static LOADING_BG_FIRST_TEX_NAME: std::sync::Mutex<Option<String>> =
-    std::sync::Mutex::new(None);
-/// (Retired one-shot guard; the reforge is now version-gated via LOADING_BG_REFORGE_VERSION for live
-/// re-upload.) Kept allocated to avoid churn; not read.
-#[allow(dead_code)]
-pub(crate) use er_telemetry::counters::LOADING_BG_REFORGE_DONE;
-/// `CS::TexRepositoryImp::GetResCap(repo, wchar_t* name) -> TexResCap*` (dump 0x140b80a90 -> deobf, shift
-/// -0xf0). The TexResCap's `gxTexture` (+TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET = +0x78) is the
-/// EXACT CSGxTexture the Scaleform now-loading sprite samples by name -- distinct from the forge's source
-/// container GX, so we upload the captured portrait into THIS one to actually update the screen.
-pub(crate) const TEX_REPOSITORY_GET_RES_CAP_RVA: usize = 0xb809a0;
 /// Same RGB/ALPHA-max stats but from a readback of the texture actually BOUND into the now-loading
 /// container (what GFx samples), not the renderer's offscreen RT. If the RT (above) has content but this
 /// reads black, the sampleable CSGxTexture is a separate/unresolved resource from the render target.

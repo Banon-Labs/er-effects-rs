@@ -30,7 +30,7 @@ pub(crate) fn loading_portrait_window_reset(reason: &str) {
     // published head snapshot the moment the load completes (character in-world, native bar terminal).
     // The kept bridge was the stale-content reservoir behind the second-load wrong-head bug: the next
     // window's forge baked the PREVIOUS character's held frame into the now-loading background at decode
-    // time (the bake is decode-once; maybe_update_gfx_loading_portrait is a no-op), so the old head
+    // time (the bake was decode-once), so the old head
     // stayed on screen for the whole next load even while the readback/publish pipeline was proven
     // (pixel-diff vs same-character baseline, runs 2026-07-06) to produce the NEW character. With the
     // snapshot cleared here there is nothing stale to bake or bridge: the next window starts head-less
@@ -42,9 +42,6 @@ pub(crate) fn loading_portrait_window_reset(reason: &str) {
     PROFILE_HAVE_KEYED_FRAME.store(0, Ordering::SeqCst);
     PROFILE_BAKE_RGBA_CAPTURED.store(0, Ordering::SeqCst);
     PROFILE_LOADSCREEN_TABLE_OWNED.store(0, Ordering::SeqCst);
-    // Candidate A (er-effects-rs-jsm): drop the demote credit + stash the cached CSTextureImage ref for
-    // the game-thread updater to Release (this reset runs off the game thread; Scaleform frees must not).
-    gfx_loading_portrait_window_reset();
     // Rebuild the stats text for the next load (a System-Quit character switch may load a different char).
     stats_text_window_reset();
     PROFILE_RT_PIN.store(0, Ordering::SeqCst);
@@ -52,7 +49,6 @@ pub(crate) fn loading_portrait_window_reset(reason: &str) {
     // Fresh adaptive tear baseline for the next window's character (honest content scores differ
     // per character: speckled textures sit ~40, smooth skin ~3).
     PROFILE_TEAR_EMA.store(0, Ordering::SeqCst);
-    OVERLAY_NOW_LOADING_SEEN.store(0, Ordering::SeqCst);
     // Do NOT drop the spared renderer -- that leaked one live CSMenuProfModelRend per switch (it was
     // excluded from the native delete and its offscreen draw task kept filling the 192-slot GX
     // command queue -> 0x1aeaf05 overflow ~switch #4). MOVE it to the orphan slot; the game-thread

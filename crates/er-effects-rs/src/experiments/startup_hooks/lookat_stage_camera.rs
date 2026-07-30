@@ -152,58 +152,6 @@ unsafe fn profile_lookat_rt_sample(base: usize) {
             }
         }
     }
-    // SAMPLEABLE-TEXTURE READBACK: read the texture actually BOUND into the now-loading container (what
-    // GFx samples) and compare to the render target above. Same render-thread context (safe). If the RT
-    // has content but this reads black, the bound CSGxTexture is a separate/unresolved resource.
-    {
-        let cap = LOADING_BG_TEXTURE_REDIRECT_LAST_PORTRAIT.load(Ordering::SeqCst);
-        let mut bgx = 0usize;
-        if valid(cap) {
-            let container =
-                unsafe { safe_read_usize(cap + TPF_FILE_CAP_TEX_RESCAP_OFFSET) }.unwrap_or(0);
-            if valid(container) {
-                let array =
-                    unsafe { safe_read_usize(container + TPF_RESCAP_CONTAINER_ARRAY_OFFSET) }
-                        .unwrap_or(0);
-                if valid(array) {
-                    let trc0 = unsafe { safe_read_usize(array) }.unwrap_or(0);
-                    if valid(trc0) {
-                        bgx = unsafe {
-                            safe_read_usize(trc0 + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET)
-                        }
-                        .unwrap_or(0);
-                    }
-                }
-            }
-        }
-        if valid(bgx) {
-            if let Some((bw, bh, bpx)) = unsafe { readback_offscreen_rgba8(bgx) } {
-                let (wq, hq) = (bw as usize, bh as usize);
-                if wq > 0 && hq > 0 && bpx.len() >= wq * hq * 4 {
-                    let (cx, cy) = (wq / 2, hq / 2);
-                    let (x0, x1) = (cx.saturating_sub(32), (cx + 32).min(wq));
-                    let (y0, y1) = (cy.saturating_sub(32), (cy + 32).min(hq));
-                    let (mut rgb_max, mut a_max) = (0u8, 0u8);
-                    for y in y0..y1 {
-                        for x in x0..x1 {
-                            let idx = (y * wq + x) * 4;
-                            rgb_max = rgb_max.max(bpx[idx]).max(bpx[idx + 1]).max(bpx[idx + 2]);
-                            a_max = a_max.max(bpx[idx + 3]);
-                        }
-                    }
-                    PROFILE_BOUND_GX_RGB_MAX.store(rgb_max as usize, Ordering::SeqCst);
-                    PROFILE_BOUND_GX_ALPHA_MAX.store(a_max as usize, Ordering::SeqCst);
-                    // One-shot dump of the bound SRV (slot 101) once we've also captured the content RT,
-                    // so the two can be compared side by side (is the SRV black? is the RT the portrait?).
-                    if PROFILE_RT_CONTENT_DUMPED.load(Ordering::SeqCst) != 0
-                        && PROFILE_SRV_DUMPED.swap(1, Ordering::SeqCst) == 0
-                    {
-                        dump_portrait_rgba(101, bw, bh, &bpx);
-                    }
-                }
-            }
-        }
-    }
     // Cheap strided FNV-1a hash of the RT to detect frame-to-frame content change without storing pixels.
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     let step = (px.len() / 4096).max(1);
@@ -420,28 +368,6 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
                     }
                 }
             }
-            // Bound container's first TexResCap GX (what the loading screen actually samples).
-            let cap = LOADING_BG_TEXTURE_REDIRECT_LAST_PORTRAIT.load(Ordering::SeqCst);
-            if cap != 0 && cap != null {
-                let container =
-                    unsafe { safe_read_usize(cap + TPF_FILE_CAP_TEX_RESCAP_OFFSET) }.unwrap_or(0);
-                if container != 0 && container != null {
-                    let array =
-                        unsafe { safe_read_usize(container + TPF_RESCAP_CONTAINER_ARRAY_OFFSET) }
-                            .unwrap_or(0);
-                    if array != 0 && array != null {
-                        let trc0 = unsafe { safe_read_usize(array) }.unwrap_or(0);
-                        if trc0 != 0 && trc0 != null {
-                            bound_gx = unsafe {
-                                safe_read_usize(
-                                    trc0 + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET,
-                                )
-                            }
-                            .unwrap_or(0);
-                        }
-                    }
-                }
-            }
         }
         append_autoload_debug(format_args!(
             "loading-portrait-chain: built_slot_r=0x{ch_r:x} off=0x{ch_off:x} trc=0x{ch_trc:x} chain_gx=0x{ch_gx:x} | bound_gx=0x{bound_gx:x} copies={} rt[rgb_max={} alpha_max={}] boundtex[rgb_max={} alpha_max={}]",
@@ -461,13 +387,11 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
             PORTRAIT_PUMP_BLOCK_MULTI.load(Ordering::SeqCst),
         ));
         append_autoload_debug(format_args!(
-            "lookat-spared-sweep: frame={n} nowload={} loadbuilds={} built[r={built_r} m={built_m}] rebind[n={} gx=0x{:x}] model_raw=0x{model_raw:x} cap_model=0x{cap_model:x} cap_vt=0x{cap_vt:x} spared[ptr=0x{:x} model_ok={} draws={} hits={}] rt[samples={} nonblack={} changed={}]",
+            "lookat-spared-sweep: frame={n} nowload={} loadbuilds={} built[r={built_r} m={built_m}] model_raw=0x{model_raw:x} cap_model=0x{cap_model:x} cap_vt=0x{cap_vt:x} spared[ptr=0x{:x} model_ok={} draws={} hits={}] rt[samples={} nonblack={} changed={}]",
             game_module_base()
                 .map(|b| unsafe { now_loading_active(b) } as u8)
                 .unwrap_or(0),
             PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst),
-            LOADING_BG_LIVE_GX_REBINDS.load(Ordering::SeqCst),
-            LOADING_BG_LIVE_GX_BOUND.load(Ordering::SeqCst),
             LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst),
             PROFILE_SPARED_MODEL_OK.load(Ordering::SeqCst),
             PROFILE_PERFRAME_SPARED_DRAWS.load(Ordering::SeqCst),

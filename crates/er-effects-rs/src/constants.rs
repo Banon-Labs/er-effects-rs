@@ -25,8 +25,6 @@ pub(crate) const DIRECTINPUT_FORWARD_ERROR_MOD_NOT_FOUND: i32 = 0x8007_007e_u32 
 pub(crate) const DINPUT8_SYSTEM_DLL: &[u8] = b"C:\\windows\\system32\\dinput8.dll\0";
 pub(crate) const DIRECTINPUT8_CREATE_SYMBOL: &[u8] = b"DirectInput8Create\0";
 pub(crate) const APPEAR_ANIMATION_ID: i32 = 63010;
-pub(crate) const OVERLAY_INITIAL_POSITION: [f32; 2] = [24.0, 24.0];
-pub(crate) const OVERLAY_INITIAL_SIZE: [f32; 2] = [420.0, 420.0];
 /// TimeAct animation IDs at or below this value mark unused/cleared queue
 /// slots rather than a real animation.
 pub(crate) const INVALID_ANIMATION_ID_FLOOR: i32 = 0;

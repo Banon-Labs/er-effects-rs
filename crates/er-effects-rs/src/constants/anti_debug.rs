@@ -742,31 +742,6 @@ pub(crate) const DLSTRING_U16_LENGTH_OFFSET: usize = 0x18; // code units
 pub(crate) const DLSTRING_U16_CAPACITY_OFFSET: usize = 0x20; // code units; SSO threshold > 7 -> heap
 pub(crate) const DLSTRING_U16_ENCODING_OFFSET: usize = 0x28; // u8 DLCharacterSet
 pub(crate) const DLSTRING_U16_SSO_THRESHOLD: usize = 7;
-/// The now-loading background image symbols are MENU_Load_00001..00034; match by prefix.
-pub(crate) const LOADING_BG_SYMBOL_PREFIX: &str = "MENU_Load_";
-pub(crate) static LOADING_BG_TEXTURE_REDIRECT_ORIG: AtomicUsize =
-    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::LOADING_BG_TEXTURE_REDIRECT_INSTALLED;
-/// Times the producer-bind hook saw a MENU_Load_ symbol (a now-loading background request).
-pub(crate) use er_telemetry::counters::LOADING_BG_TEXTURE_REDIRECT_ATTEMPTS;
-/// Times we successfully forged + injected our portrait TPF cap on the rti (the proof oracle: >0
-/// means our texture was bound as the loading-screen background).
-pub(crate) use er_telemetry::counters::LOADING_BG_TEXTURE_REDIRECT_COMMITS;
-/// Last forge outcome code: 1=injected, 2=tpf-build-fail, 3=createrescap-null, 4=alloc-null.
-pub(crate) use er_telemetry::counters::LOADING_BG_TEXTURE_REDIRECT_LAST_SYMBOL_MATCH;
-/// Last forged TpfFileCap pointer.
-pub(crate) static LOADING_BG_TEXTURE_REDIRECT_LAST_PORTRAIT: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-/// Times we re-bound the live offscreen-RT CSGxTexture into the already-forged now-loading container
-/// AFTER the bind (the now-loading background binds ~15-17s, BEFORE our post-Continue renderer's RT is
-/// live, and never re-binds -- so the live portrait must be swapped into the displayed container after the
-/// fact). >0 means the loading screen's displayed background is now sampling our live animated portrait.
-pub(crate) use er_telemetry::counters::LOADING_BG_LIVE_GX_REBINDS;
-/// The live CSGxTexture currently re-bound into the now-loading container (telemetry/sweep).
-pub(crate) use er_telemetry::counters::LOADING_BG_LIVE_GX_BOUND;
-/// Diagnostic: total calls into the replace-bind hook (every symbol, ungated), so we can tell
-/// whether `FUN_140d69880` is even on the now-loading background path vs the producer cache-hit path.
-pub(crate) use er_telemetry::counters::LOADING_BG_REPLACE_BIND_TOTAL_CALLS;
 /// The kept-alive portrait `CSGxTexture` captured during ProfileSelect (0 until captured). When set,
 /// the forge swaps it into its TpfResCap container's TexResCap so the loading screen shows the real
 /// rendered character portrait instead of the placeholder checker.
@@ -789,54 +764,4 @@ pub(crate) use er_telemetry::counters::LOADING_BG_PORTRAIT_RGBA_VERSION;
 /// One-shot log latch for the live-display-feed (built RT content -> overlay).
 pub(crate) use er_telemetry::counters::PROFILE_LIVE_FEED_LOGGED;
 
-// === Candidate A: live head INSIDE the now-loading GFx movie (er-effects-rs-jsm) ==================
-// STATIC-RE PROVEN 2026-07-05 (bd tooltip-above-portrait-VERDICT-2026-07-05, gfx-decoded-tex-
-// deterministic-resolve-2026-07-05): the texture GFx actually DISPLAYS for a MENU_Load_NNNNN
-// background is a `CS::CSTextureImage` held in the Scaleform tex repository name-map at
-// `*(GLOBAL_SCALEFORM_TEX_REPOSITORY)+0x80`, resolvable BY NAME (the forge's bare symbol) via the
-// resolver below. Its GFx-SAMPLED HAL texture is `CSTextureImage+0x10`; a per-frame CopyTextureRegion
-// into that resource puts the head inside the movie, so the movie's own Gauge_3 bar (depth 5) and
-// tip/keyguide text (depth 11) render ABOVE it natively (BackImage artwork is depth 3). This is the
-// only path that layers native tips above the portrait -- the Present-overlay draws after the whole
-// GFx pass and structurally cannot. Reconciles the "mechanism A failed" history: those uploads hit the
-// CS-side GetResCap CSGxTexture (TexResCap+0x78), which Scaleform does NOT sample; the CSTextureImage
-// HAL texture is a different object the history never tested.
-/// `GLOBAL_ScaleformTexRepository` singleton pointer (absolute 0x143d82510 in BOTH the dump and the
-/// deobf/live binary -> data RVA 0x3d82510). The resolver PANICS (non-returning) if this is null, so it
-/// MUST be null-checked (graphics up) before the call. Ground-truthed: the live resolver at RVA
-/// 0xd7c940 loads exactly this RIP-relative address.
-pub(crate) const GLOBAL_SCALEFORM_TEX_REPOSITORY_RVA: usize = 0x3d82510;
-/// GFx-displayed-texture resolver `FUN_140d7c9f0` (dump 0x140d7c9f0 -> deobf 0x140d7c940, shift -0xb0,
-/// content-unique). `fn(param1_IGNORED /rcx/, out: *mut *mut CSTextureImage /rdx/, name: *const u16
-/// /r8/)`. Ignores rcx (loads the repo singleton itself), tail-calls FUN_140d63ce0(repo, out, name, 0):
-/// searches the name map at repo+0x80; HIT stores entry+0x50, MISS builds+inserts a CSTextureImage via
-/// the GetResCap bridge. `*out` becomes an AddRef'd (owned) `CSTextureImage*`, or 0. Caller must Release.
-pub(crate) const SCALEFORM_TEX_RESOLVE_RVA: usize = 0xd7c940;
-/// Scaleform `RefCountImpl` Release `thunk_FUN_14112b7f0` (dump 0x14112b7f0 -> deobf 0x14112b7d0, shift
-/// -0x20, content-unique). `fn(obj /rcx/)`; decrements the refcount at obj+0x08 and frees at 0. Used to
-/// drop the resolver's owned ref on the CSTextureImage when the displayed name changes / the window ends.
-/// RVA = deobf 0x14112b7d0 - base 0x140000000 = 0x112b7d0 (game_rva adds base back).
-pub(crate) const SCALEFORM_REFCOUNT_RELEASE_RVA: usize = 0x112b7d0;
-/// `CS::CSTextureImage` -> its GFx-sampled HAL texture (the object whose ID3D12Resource GFx samples).
-/// Layout (FUN_140d68600): +0x00 vtable, +0x08 refcount, +0x10 pHALTexture, +0x2c/0x30 width/height.
-pub(crate) const CS_TEXTURE_IMAGE_HAL_TEX_OFFSET: usize = 0x10;
-// === Now-loading BackImage geometry -- SINGLE SOURCE OF TRUTH (er-effects-rs-jsm) =================
-// VERIFIED from the packed asset display list (scripts/gfx_display_list.py over menu/02_903_nowloading2
-// .gfx): stage 1920x1080 (16:9); the BackImage sprite places MENU_DummyLoad (char 36) 4096x2048 (2:1)
-// at IDENTITY, and that sprite is placed at root at scale 0.530365, tx=ty=0. So the artwork quad covers
-// stage (0,0)..(2172.4,1086.2) -- WIDER than the 16:9 stage -- and the VISIBLE region is the TOP-LEFT
-// (u<=1920/2172.4=0.8838, v<=1080/1086.2=0.9943) of the 2:1 texture, NOT its centre. The forge must
-// therefore build the replacement texture at the artwork's 2:1 aspect (so GFx maps texture->quad with no
-// horizontal stretch -- the earlier 1024x1024 square was stretched onto the 2:1 quad) and aspect-cover
-// (centre-crop, never stretch) the background + head into the visible top-left sub-rect. Every derived
-// value (forge dims, visible sub-rect, head placement) is computed from these five constants.
-pub(crate) const NOWLOADING_STAGE_W: f32 = 1920.0;
-pub(crate) const NOWLOADING_STAGE_H: f32 = 1080.0;
-pub(crate) const NOWLOADING_BACKIMAGE_TEX_W: u32 = 4096;
-pub(crate) const NOWLOADING_BACKIMAGE_TEX_H: u32 = 2048;
-pub(crate) const NOWLOADING_BACKIMAGE_SPRITE_SCALE: f32 = 0.530_364_99;
-/// The forge builds the replacement TPF at the artwork's native aspect but 1/`NOWLOADING_FORGE_DOWNSCALE`
-/// the resolution (4096x2048 -> 2048x1024): same 2:1 aspect (no stretch), 1/4 the memory, still wider
-/// than the visible 1920-px stage so texture->stage upscaling is negligible.
-pub(crate) const NOWLOADING_FORGE_DOWNSCALE: u32 = 2;
 

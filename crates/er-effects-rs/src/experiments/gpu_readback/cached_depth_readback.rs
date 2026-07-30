@@ -168,9 +168,6 @@ pub(crate) use er_telemetry::counters::COHERENT_READ_FALLBACK;
 /// backbuffer region, blends the portrait over it honoring per-pixel alpha (bg alpha 0 => loading screen
 /// shows through), and writes the blended region back -- all with the existing COPY primitives, so NO new
 /// PSO/shader/RTV pipeline is needed. Owned raw COM pointers (released only on footprint change).
-pub(crate) use er_telemetry::counters::OVERLAY_BB_READBACK;
-pub(crate) use er_telemetry::counters::OVERLAY_BB_UPLOAD;
-pub(crate) use er_telemetry::counters::OVERLAY_BB_BUFSIZE;
 
 /// DETERMINISTICALLY resolve the content RT's vkd3d `ID3D12Resource` from a CSGxTexture by following the
 /// FIXED wrapper chain (bd live-portrait-d3d12-resource-buried-in-gx-wrapper-nest, RE'd from a live dump),

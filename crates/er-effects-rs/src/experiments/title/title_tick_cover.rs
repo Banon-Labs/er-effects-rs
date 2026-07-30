@@ -1145,50 +1145,6 @@ pub(crate) unsafe fn sample_title_profile_portrait_source(base: usize, slot: i32
         && ready_755 != TITLE_OWNER_SCAN_START_ADDRESS
 }
 
-/// Build the er-tpf Tier-4 cover blob ONCE and cache it for the process lifetime. A bright
-/// magenta/white checker (unmistakable on the loading-screen-portrait screenshot), encoded uncompressed
-/// `R8G8B8A8_UNORM` with a LEGACY DDS header (maps to DXGI 28 and bypasses the DX10 format validator),
-/// wrapped in a one-entry TPF003 whose ENTRY NAME == `ER_TPF_COVER_SYSTEX_KEY` (which becomes the
-/// `GLOBAL_TexRepository` GPU key the Scaleform bridge resolves). Held alive forever so the engine's
-/// deferred GPU upload can never read freed bytes. Pure CPU; no native call, no disk.
-fn er_tpf_cover_blob() -> &'static [u8] {
-    static BLOB: OnceLock<Vec<u8>> = OnceLock::new();
-    BLOB.get_or_init(|| {
-        let img = DdsImage::checker(
-            ER_TPF_COVER_TEX_DIM,
-            ER_TPF_COVER_TEX_DIM,
-            ER_TPF_COVER_TEX_CELL,
-            [255, 0, 255, 255],   // magenta
-            [255, 255, 255, 255], // white
-        );
-        let dds = img.to_dds_bytes_with(DdsHeaderMode::LegacyRgba8);
-        match Tpf::single_pc(ER_TPF_COVER_SYSTEX_KEY, dds, 1).build() {
-            Ok(bytes) => {
-                ER_TPF_COVER_TEXTURE_BUILT.store(1, Ordering::SeqCst);
-                ER_TPF_COVER_BLOB_LEN.store(bytes.len(), Ordering::SeqCst);
-                bytes
-            }
-            Err(_) => Vec::new(),
-        }
-    })
-}
-
-/// er-tpf Tier-4 ONE-SHOT, fail-closed register of our in-memory cover texture into the live texture
-/// repositories via the engine's own raw-(ptr,len) TPF factory `CS::CreateTpfResCap` (deobf
-/// `CREATE_TPF_RES_CAP_RVA`), mirroring the FaceGen call exactly. Runs on the CSTaskImp game-task thread
-/// (post-graphics-init), NEVER from DllMain/loader. Validates every precondition before the first native
-/// call (module base resolved, `GLOBAL_TpfRepository` + `GLOBAL_TexRepository` non-null == gfx up, blob
-/// non-empty), wraps the call in `catch_unwind`, and on any failure bumps `ER_TPF_COVER_FAILURES` +
-/// records `ER_TPF_COVER_LAST_ERROR` and bails (never crashes). Does NOT consume the one-shot until a
-/// real call is attempted, so a not-yet-initialized repo simply retries next tick. The actual DRAW
-/// redirect (pointing the visible profile surface's bind TARGET at our key) is a separate one-shot in
-/// the Scaleform bind observer, gated on `ER_TPF_COVER_REGISTERED`.
-/// RETIRED (2026-06-30, user): the `SYSTEX_ErTpf_Cover00` POC cover -- a 1024x1024 magenta/YELLOW checker
-/// -- was the early "prove we own the title/loading surface" test feature. The real character portrait now
-/// displays, so it is dead weight AND actively harmful: being the same 1024 size as the head RT, the
-/// portrait readback's "largest TEXTURE2D" scan grabbed IT instead of the head (nondeterministic
-/// magenta/yellow checker on the loading screen). The registration is removed -- this is now a no-op.
-pub(crate) unsafe fn maybe_register_er_tpf_cover_texture(_base: usize) {}
 
 pub(crate) unsafe fn maybe_refresh_title_profile_cover(
     base: usize,
@@ -1229,10 +1185,6 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
     PRODUCT_CORE_AUTOLOAD_TICKS.fetch_add(1, Ordering::SeqCst);
     let phase = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
     PRODUCT_CORE_LAST_PHASE.store(phase, Ordering::SeqCst);
-    // er-tpf Tier-4: register our in-memory cover texture into the live texture repos as soon as
-    // graphics is up (self-gating one-shot; runs on this CSTaskImp game-task thread, post-gfx-init).
-    // The visible-surface redirect happens in the Scaleform bind observer once this succeeds.
-    unsafe { maybe_register_er_tpf_cover_texture(module_base) };
     // NOTE: the stats-panel neutral-bg register is NOT called here -- this product-core tick only runs
     // on the `direct_menu_load` path (product_autoload_armed), whereas the product `save_requested`
     // autoload never enters it. The register lives on the always-running FrameBegin game task in
@@ -2946,40 +2898,6 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         // loses the race the capture simply never fires (degrades to current behavior, no crash).
         if force_profile_render_enabled() {
             unsafe { force_profile_render_tick(module_base, slot) };
-        }
-        // PORTRAIT RENDER WINDOW (bounded, fail-open): the main menu is OPEN (a40=1) -> valid menu
-        // render context, and the load is NOT yet committed (the commit is product_continue_autoload_tick
-        // below -- our own code on a later tick). Kick the async character-model build once (refresh
-        // 0x9aa680, idempotent per-slot via +0x754), then HOLD our commit until the portrait has
-        // rendered + been captured (maybe_capture_portrait_gxtexture sets LOADING_BG_PORTRAIT_GX_KEPT)
-        // or a timeout, so the now-loading screen shows the real character portrait. Fail-open: after
-        // the cap we commit regardless, so the char-load can never be permanently blocked.
-        if portrait_render_window_enabled()
-            && PORTRAIT_RENDER_WINDOW_DONE.load(Ordering::SeqCst) == 0
-        {
-            if PROFILE_REFRESH_KICKED.swap(1, Ordering::SeqCst) == 0 {
-                let refresh: unsafe extern "system" fn() =
-                    unsafe { std::mem::transmute(module_base + PROFILE_RENDERER_REFRESH_RVA) };
-                unsafe { refresh() };
-                append_autoload_debug(format_args!(
-                    "portrait-window: kicked profile refresh 0x{:x} to request the model render (menu open)",
-                    module_base + PROFILE_RENDERER_REFRESH_RVA
-                ));
-            }
-            let captured = LOADING_BG_PORTRAIT_GX_KEPT.load(Ordering::SeqCst) != 0;
-            let waited = PORTRAIT_HOLD_WAIT_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
-            if !captured && waited < PORTRAIT_HOLD_MAX_TICKS {
-                if waited % 30 == 1 {
-                    append_autoload_debug(format_args!(
-                        "portrait-window: holding load-commit for portrait render (captured={captured} waited={waited}/{PORTRAIT_HOLD_MAX_TICKS})"
-                    ));
-                }
-                return true;
-            }
-            PORTRAIT_RENDER_WINDOW_DONE.store(1, Ordering::SeqCst);
-            append_autoload_debug(format_args!(
-                "portrait-window: release -> commit load (captured={captured} waited={waited})"
-            ));
         }
         if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
             >= SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN

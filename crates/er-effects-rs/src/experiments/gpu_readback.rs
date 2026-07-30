@@ -19,8 +19,8 @@
 include!("gpu_readback/resource_readback.rs");
 include!("gpu_readback/cached_depth_readback.rs");
 include!("gpu_readback/depth_mask_upload.rs");
-include!("gpu_readback/overlay_composite.rs");
 include!("gpu_readback/portrait_shared.rs");
+include!("gpu_readback/gpu_draw_shared.rs");
 include!("gpu_readback/boot_progress.rs");
 include!("gpu_readback/save_picker_overlay.rs");
 include!("gpu_readback/stats_overlay.rs");

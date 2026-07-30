@@ -541,7 +541,7 @@ pub(crate) unsafe extern "system" fn knowledge_tip_refresh_hook(this: usize) {
         let f: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(orig) };
         unsafe { f(this) };
     }
-    if !gfx_loading_portrait_enabled() {
+    if !portrait_overlay_enabled() {
         return;
     }
     // Suppress: after the movie set the tip, BLANK the title + body handles so no native tip renders --
@@ -573,7 +573,7 @@ pub(crate) unsafe extern "system" fn knowledge_tip_refresh_hook(this: usize) {
 /// keyguide composer drops the action from the keyguide list, so the "press [button] to advance" prompt
 /// never renders. Calls through when the portrait path is off so vanilla tips keep keyguide + press.
 pub(crate) unsafe extern "system" fn knowledge_tip_advance_enabled_hook(functor: usize) -> u8 {
-    if gfx_loading_portrait_enabled() {
+    if portrait_overlay_enabled() {
         KNOWLEDGE_TIP_ADVANCE_SUPPRESSED_HITS.fetch_add(1, Ordering::SeqCst);
         return 0;
     }

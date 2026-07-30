@@ -23,7 +23,6 @@ pub(crate) struct RuntimeConfig {
     pub slot: Option<i32>,
     pub method: Option<String>,
     pub boot_background_image: Option<PathBuf>,
-    pub persist_boot_background_to_loading_screen: Option<bool>,
     pub preferred_save_picker_dir: Option<PathBuf>,
     pub autoupdate_preferred_picker_dir: Option<bool>,
     /// Which file-picker SURFACE the System>Quit "Load Save Profiles" row and the Save Game
@@ -44,7 +43,7 @@ pub(crate) fn init_runtime_config(hmodule: HINSTANCE) {
     );
     match RUNTIME_CONFIG.get() {
         Some(Ok(config)) => append_autoload_debug(format_args!(
-            "runtime-config: loaded '{}' save_file={} slot={} method={} boot_background_image={} persist_boot_background_to_loading_screen={} preferred_save_picker_dir={} autoupdate_preferred_picker_dir={} {OS_NATIVE_SAVE_PICKER_KEY}={}",
+            "runtime-config: loaded '{}' save_file={} slot={} method={} boot_background_image={} preferred_save_picker_dir={} autoupdate_preferred_picker_dir={} {OS_NATIVE_SAVE_PICKER_KEY}={}",
             config.path.display(),
             config
                 .save_file
@@ -61,10 +60,6 @@ pub(crate) fn init_runtime_config(hmodule: HINSTANCE) {
                 .as_ref()
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| "<unset>".to_owned()),
-            config
-                .persist_boot_background_to_loading_screen
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "<default:true>".to_owned()),
             config
                 .preferred_save_picker_dir
                 .as_ref()
@@ -114,14 +109,6 @@ pub(crate) fn configured_save_file_string() -> Option<String> {
 /// the production DLL can be configured without shipping a helper script or hard-coding Steam account IDs.
 pub(crate) fn configured_boot_background_image() -> Option<PathBuf> {
     runtime_config().and_then(|config| config.boot_background_image.clone())
-}
-
-/// Whether the chosen boot background should persist into the game's native loading-screen GFX
-/// background. Default-on; users can opt out in `er-effects.toml`.
-pub(crate) fn persist_boot_background_to_loading_screen_enabled() -> bool {
-    runtime_config()
-        .and_then(|config| config.persist_boot_background_to_loading_screen)
-        .unwrap_or(true)
 }
 
 /// Folder the missing-save picker opens in, from `er-effects.toml` only (no env form on purpose:
@@ -291,7 +278,6 @@ fn boilerplate_config(picker_assignment: Option<&str>) -> String {
 # slot = 0                               # character slot the autoload selects
 # method = \"...\"                         # autoload method override
 # boot_background_image = 'C:\\path\\to\\background.png'
-# persist_boot_background_to_loading_screen = true
 {picker_block}
 "
     )
@@ -473,18 +459,6 @@ fn parse_runtime_config(path: PathBuf, contents: &str) -> Result<RuntimeConfig, 
                     )
                 })?;
                 config.boot_background_image = Some(configured_path_from_toml(&raw, &config_dir));
-            }
-            "persist_boot_background_to_loading_screen"
-            | "boot.persist_background_to_loading_screen"
-            | "loading_screen.persist_boot_background"
-            | "loading_background.persist_boot_background" => {
-                config.persist_boot_background_to_loading_screen =
-                    Some(parse_toml_bool(value).map_err(|err| {
-                        format!(
-                            "invalid persist_boot_background_to_loading_screen on line {}: {err}",
-                            line_no + 1
-                        )
-                    })?);
             }
             "preferred_save_picker_dir" => {
                 let parsed = PathBuf::from(parse_toml_string(value).map_err(|err| {
