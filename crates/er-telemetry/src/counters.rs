@@ -658,6 +658,7 @@ pub static MENU_WINDOW_JOB_DTOR_DOOMED_GUARDS: AtomicUsize = AtomicUsize::new(0)
 pub static MENU_WINDOW_JOB_DTOR_LIST_REMOVALS: AtomicUsize = AtomicUsize::new(0);
 pub static MENU_WINDOW_JOB_DTOR_LAST_GUARDED_WINDOW: AtomicUsize = AtomicUsize::new(0);
 pub static MENU_WINDOW_JOB_DTOR_LAST_GUARDED_INDEX: AtomicUsize = AtomicUsize::new(0);
+pub static MENU_WINDOW_JOB_DTOR_PRESERVED_STALE_DETACHES: AtomicUsize = AtomicUsize::new(0);
 pub static MENU_OFFSCR_REND_PARAM_LOOKUP_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static QUIT_TO_DESKTOP_CLEAN_KILLS: AtomicUsize = AtomicUsize::new(0);
 pub static OPTIONSETTING_PANE_SAMPLE_COUNT: AtomicUsize = AtomicUsize::new(0);
