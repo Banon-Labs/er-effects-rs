@@ -904,3 +904,118 @@ test_deny_bd_home_var_substitution_ersc_copy if {
 	denials := guard.deny with input as bash_event(cmd)
 	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
 }
+
+# --- user game-install RESTORE rename is ALLOWED (bd er-effects-rs-gkqa) -----
+#
+# Re-validated 2026-07-30 via opa eval before fixing: this exact command was
+# denied by the file-moving arms even though the destination is the same
+# game-install path the DLL came from -- only the repo's `.er-effects-staged`
+# suffix is removed, which is the opposite of bundling.
+
+test_allow_mv_restore_staged_ersc_dll_same_gameinstall_path if {
+	cmd := `mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-effects-staged' '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll'`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+test_allow_mv_restore_staged_ersc_dll_double_quoted if {
+	cmd := `mv -f "/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-effects-staged" "/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll"`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+test_allow_mv_restore_staged_ersc_dll_no_flags if {
+	cmd := `mv '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-effects-staged' '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll'`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# Destination scoping: the SAME staged source moved anywhere else stays denied.
+test_deny_mv_staged_ersc_dll_into_target_bundle if {
+	cmd := `mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-effects-staged' 'target/release-bundle/ersc.dll'`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
+}
+
+test_deny_mv_staged_ersc_dll_into_me3_profile_dir if {
+	cmd := `mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-effects-staged' '/home/banon/Elden/profile/ersc.dll'`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
+}
+
+# A restore rename with a second command riding along stays denied.
+test_deny_mv_restore_then_chained_ersc_copy if {
+	cmd := `mv -f '/mnt/d/er/Game/SeamlessCoop/ersc.dll.er-effects-staged' '/mnt/d/er/Game/SeamlessCoop/ersc.dll' && cp '/mnt/d/er/Game/SeamlessCoop/ersc.dll' dist/`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
+}
+
+# The STAGING direction (plain name -> .er-effects-staged) is not the restore
+# shape and keeps denying; only the suffix-stripping restore is exempt.
+test_deny_mv_ersc_dll_to_staged_name if {
+	cmd := `mv -f '/mnt/d/er/Game/SeamlessCoop/ersc.dll' '/mnt/d/er/Game/SeamlessCoop/ersc.dll.er-effects-staged'`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
+}
+
+# --- read-only interpreter scans of the INSTALLED DLL are ALLOWED ------------
+#
+# Re-validated 2026-07-30 via opa eval before fixing (bd er-effects-rs-gkqa):
+# arm (a) counted python/bash as bundling verbs, so a read-only scan passing
+# the game-install DLL path as an unquoted operand was denied.
+
+test_allow_python_scan_gameinstall_ersc_dll_unquoted_operand if {
+	cmd := `python3 scripts/pe_export_dump.py /mnt/c/SteamLibrary/steamapps/common/ELDEN\ RING/Game/SeamlessCoop/ersc.dll`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+test_allow_python_scan_gameinstall_ersc_dll_no_space_path if {
+	cmd := `python3 scripts/pe_export_dump.py /mnt/d/er-game/Game/SeamlessCoop/ersc.dll`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+test_allow_bash_script_scan_gameinstall_ersc_dll if {
+	cmd := `bash scripts/inspect-dll.sh /mnt/c/SteamLibrary/steamapps/common/ELDEN\ RING/Game/SeamlessCoop/ersc.dll`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# The read-only staged SIBLING may be scanned alongside the installed DLL.
+test_allow_python_scan_gameinstall_ersc_dll_and_staged_sibling if {
+	cmd := `python3 scripts/cmp_dll.py /mnt/d/er/Game/SeamlessCoop/ersc.dll /mnt/d/er/Game/SeamlessCoop/ersc.dll.er-effects-staged`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# A relative/repo-tree operand is not a game-install scan target: the staging
+# script deny above (`bash scripts/stage-net-effects-release.sh --dll
+# SeamlessCoop/ersc.dll`) keeps its contract, and so does this python twin.
+test_deny_python_script_with_repo_relative_ersc_dll_operand if {
+	cmd := `python3 scripts/pe_export_dump.py SeamlessCoop/ersc.dll`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
+}
+
+# A visible repo-tree destination alongside the game-install source is a
+# bundling shape, not a scan.
+test_deny_python_script_gameinstall_source_with_target_destination if {
+	cmd := `python3 scripts/stage_helper.py /mnt/c/SteamLibrary/steamapps/common/ELDEN\ RING/Game/SeamlessCoop/ersc.dll target/release/`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
+}
+
+# A file-moving verb smuggled as an interpreter argument keeps the guard on.
+test_deny_python_helper_with_cp_token_and_gameinstall_ersc_dll if {
+	cmd := `python3 scripts/run_tool.py cp /mnt/d/er/Game/SeamlessCoop/ersc.dll /mnt/d/elsewhere/`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
+}
+
+# A chained real copy after the scan stays denied via the sibling mover arm.
+test_deny_python_scan_then_chained_cp_ersc_dll if {
+	cmd := `python3 scripts/pe_export_dump.py /mnt/d/er/Game/SeamlessCoop/ersc.dll && cp /mnt/d/er/Game/SeamlessCoop/ersc.dll dist/`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
+}

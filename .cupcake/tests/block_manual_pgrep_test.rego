@@ -139,6 +139,67 @@ test_deny_python_subprocess_pgrep_quoted_arg if {
 	denied(cmd)
 }
 
+# --- (c) bd issue-tracker text mentions (bd er-effects-rs-uxyz) --------------
+#
+# False positive re-validated 2026-07-30 via opa eval before fixing: a bd
+# close whose quoted --reason described launch-guard allow-tests was denied
+# because the reason text mentioned the tool token. bd only records text; a
+# single, non-chained bd invocation whose pgrep token sits entirely inside
+# quoted text is exempt.
+
+# The recorded false-positive family: a quoted --reason mentioning
+# `pgrep -x start_protected_game.exe` while describing launch-guard tests.
+test_allow_bd_close_reason_mentioning_pgrep if {
+	not denied(`$HOME/.local/bin/bd close er-effects-rs-aaa --reason "launch-guard allow-test keeps pgrep -x start_protected_game.exe detection green"`)
+}
+
+test_allow_bd_remember_mentioning_pgrep if {
+	not denied(`$HOME/.local/bin/bd remember --key steam-check "never use raw pgrep -x steam on this box; it false-negatives"`)
+}
+
+test_allow_bd_update_other_home_mentioning_pgrep if {
+	not denied(`/home/choza/.local/bin/bd update er-effects-rs-1 --notes 'the guard denies bare pgrep everywhere'`)
+}
+
+test_allow_bare_bd_create_mentioning_pgrep if {
+	not denied(`bd create "guard note" -d "manual pgrep is a WSL false negative" -t chore`)
+}
+
+# The ORIGINAL denied shape (2026-07-29) -- a chained `bash -c` batch of bd
+# closes -- stays denied BY DESIGN: the exemption covers a single non-chained
+# bd invocation only. Run bd invocations one at a time.
+test_deny_chained_bash_c_bd_close_batch_mentioning_pgrep if {
+	denied(`bash -c '"$HOME/.local/bin/bd" close er-effects-rs-aaa --reason "keeps pgrep -x start_protected_game.exe detection green" && "$HOME/.local/bin/bd" close er-effects-rs-bbb --reason "second"'`)
+}
+
+# Chained real pgrep after a bd text command must still deny.
+test_deny_bd_close_then_chained_pgrep if {
+	denied(`$HOME/.local/bin/bd close er-effects-rs-aaa --reason "done" && pgrep -x steam`)
+}
+
+test_deny_bd_close_semicolon_then_pgrep if {
+	denied(`$HOME/.local/bin/bd close er-effects-rs-aaa --reason "done"; pgrep -x steam`)
+}
+
+# Command substitution inside the quoted reason EXECUTES; must still deny.
+test_deny_bd_close_reason_command_substitution_pgrep if {
+	denied(`$HOME/.local/bin/bd close er-effects-rs-aaa --reason "$(pgrep -x steam)"`)
+}
+
+test_deny_bd_close_reason_backtick_pgrep if {
+	denied("$HOME/.local/bin/bd close er-effects-rs-aaa --reason \"`pgrep -x steam`\"")
+}
+
+# An UNQUOTED pgrep token in a bd command keeps the guard on.
+test_deny_bd_close_unquoted_pgrep_token if {
+	denied(`$HOME/.local/bin/bd close er-effects-rs-aaa --reason pgrep`)
+}
+
+# A non-bd command quoting pgrep is unchanged: still denied, no quote scrub.
+test_deny_echo_quoted_pgrep_still_denied if {
+	denied(`echo "pgrep -x steam"`)
+}
+
 # Non-Bash tools are out of scope for this Bash-command guard.
 test_allow_non_bash_tool if {
 	denials := guard.deny with input as {
