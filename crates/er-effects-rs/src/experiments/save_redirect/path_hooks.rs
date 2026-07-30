@@ -818,27 +818,47 @@ fn save_file_is_readonly(path: &Path) -> bool {
     std::fs::metadata(path).is_ok_and(|meta| meta.permissions().readonly())
 }
 
-fn remember_rejected_save_parent_for_picker(path: &Path) {
-    if let Some(parent) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
-        crate::config::set_session_preferred_save_picker_dir(parent);
-    }
-}
-
-fn validated_writable_autoload_save_file(path: PathBuf, source_label: &str) -> Option<PathBuf> {
+/// Read-only is NEVER a reason to refuse a save, at any surface. Loading is a pure READ and succeeds
+/// on a `0444` file; the bit can only bite later, at the first WRITE.
+///
+/// For a PICKED or CONFIGURED save it cannot bite at all: those are staged into a private native tree
+/// and `save_redirect_target_for_path` sends reads *and writes* to the staged copy, so the source is
+/// never a write target (the repo corpus is `0444` and loads fine). Those paths call
+/// `validated_save_file_path` directly and never reach this function.
+///
+/// For the DEFAULT save the bit is worth REPAIRING, because `DEFAULT-USER-SAVE` mode writes the active
+/// Steam user's APPDATA save in place, and Elden Ring owns that file and requires it writable -- a
+/// stray read-only bit (botched copy/restore, bd `er-save-files-readonly-staging-2026-06-26`) makes the
+/// title-flow "Updating save data" write fail with "Failed to save game. Save data is corrupted.". So
+/// clear it when we can, exactly as staging does for its own copies.
+///
+/// When we CANNOT clear it, still load. Refusing repairs nothing: the APPDATA save stays unwritable
+/// either way, and the only alternative on offer -- bouncing to the picker -- is strictly worse,
+/// because any save picked there is STAGED, so the user's progress would silently land in the staged
+/// tree instead of the save they meant to play. The game's own save-failure popup, on the save they
+/// actually asked for, beats a silent substitution.
+fn validated_default_save_file(path: PathBuf, source_label: &str) -> Option<PathBuf> {
     let validated = validated_save_file_path(path)?;
     if save_file_is_readonly(&validated) {
-        remember_rejected_save_parent_for_picker(&validated);
-        append_autoload_debug(format_args!(
-            "save-override: rejected read-only autoload save '{}' source={source_label}; arming in-game picker and leaving world-entry paused until the user chooses a writable save",
-            validated.display()
-        ));
-        return None;
+        make_file_writable(&validated);
+        if save_file_is_readonly(&validated) {
+            append_autoload_debug(format_args!(
+                "save-override: DEFAULT save '{}' source={source_label} is read-only and could NOT be made writable -- LOADING IT ANYWAY (the load is a pure read); expect the game's own save-failure popup at the first autosave/quit-save until the file is made writable",
+                validated.display()
+            ));
+        } else {
+            append_autoload_debug(format_args!(
+                "save-override: cleared a stray read-only bit on the game-owned DEFAULT save '{}' source={source_label} (Elden Ring writes this file in place and requires it writable)",
+                validated.display()
+            ));
+        }
     }
     Some(validated)
 }
 
 fn validated_configured_save_file() -> Option<PathBuf> {
-    validated_writable_autoload_save_file(env_save_file_path()?, "configured-save-file")
+    // Staged, never written in place -- read-only is valid, so no writability check here.
+    validated_save_file_path(env_save_file_path()?)
 }
 
 fn plausible_steam_id64(value: u64) -> Option<u64> {
@@ -953,7 +973,7 @@ fn default_save_with_character(path: PathBuf) -> Option<PathBuf> {
 
 fn default_save_file_for_steam_id64(steam_id: u64) -> Option<PathBuf> {
     let dir = default_save_root()?.join(steam_id.to_string());
-    validated_writable_autoload_save_file(
+    validated_default_save_file(
         dir.join(active_default_save_file_name()),
         "active-default-save",
     )
@@ -978,7 +998,7 @@ fn default_save_file_candidates() -> Vec<(PathBuf, u64)> {
                 .and_then(|name| name.parse::<u64>().ok())
                 .and_then(plausible_steam_id64)?;
             let dir = entry.path();
-            validated_writable_autoload_save_file(
+            validated_default_save_file(
                 dir.join(active_default_save_file_name()),
                 "default-save-candidate",
             )
@@ -1180,7 +1200,7 @@ pub(crate) fn enforce_save_override_or_abort() -> SaveOverrideMode {
         return activate_save_redirect_source(source, "early-enforced-configured-save");
     }
     append_autoload_debug(format_args!(
-        "save-override: no usable autoload save (configured save missing/invalid/read-only, or no readable+writable active default {} >= {} bytes). config_error={}. Arming the IN-GAME missing-save picker: the title boots to its native no-save menu and the 05_010 file browser presents itself (save_picker_menu.rs); world entry stays denied until a save is picked.",
+        "save-override: no usable autoload save (configured save missing/invalid, or no readable active default {} >= {} bytes; read-only is NOT a rejection reason). config_error={}. Arming the IN-GAME missing-save picker: the title boots to its native no-save menu and the 05_010 file browser presents itself (save_picker_menu.rs); world entry stays denied until a save is picked.",
         active_default_save_file_name(),
         SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES,
         runtime_config_error().unwrap_or_else(|| "none".to_owned())
@@ -1216,11 +1236,13 @@ pub(crate) fn save_picker_seamless_mode_after_settle(reason: &str) -> bool {
 /// hooks synchronously (idempotent -- the install is Once-guarded), and releases every waiter on
 /// the missing-save gate. Returns false (state unchanged, picker stays up) on an invalid pick.
 pub(crate) fn complete_missing_save_selection_from_picker(path: &Path) -> bool {
-    let Some(validated) =
-        validated_writable_autoload_save_file(path.to_path_buf(), "title-picker-selection")
-    else {
+    // NO writability check: the pick is staged into a private native tree and the source is never a
+    // write target, so a read-only save (the norm for the `0444` repo corpus) loads exactly like a
+    // writable one. Rejecting those was a false negative that looked to the user like the picker
+    // simply refusing to open the save.
+    let Some(validated) = validated_save_file_path(path.to_path_buf()) else {
         append_autoload_debug(format_args!(
-            "save-override: title picker rejected non-plausible/read-only save '{}' (missing, under {} bytes, or not writable)",
+            "save-override: title picker rejected non-plausible save '{}' (missing or under {} bytes)",
             path.display(),
             SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES
         ));
