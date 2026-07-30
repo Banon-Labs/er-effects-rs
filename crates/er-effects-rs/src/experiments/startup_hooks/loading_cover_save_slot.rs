@@ -275,6 +275,20 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     PROFILE_LOADSCREEN_REBUILT.store(1, Ordering::SeqCst);
     PROFILE_LOADSCREEN_TABLE_OWNED.store(1, Ordering::SeqCst);
     PROFILE_LOADSCREEN_TABLE_BUILDS.fetch_add(1, Ordering::SeqCst);
+    // BOOT-EPOCH publish-latency anchor (bd er-effects-rs-io53): the switch path stamps
+    // PORTRAIT_CONFIRM_MS at the switch confirm, so PORTRAIT_CONFIRM_TO_PUBLISH_MS_LAST never measured
+    // the boot window. Stamp the boot anchor here -- the loading-owned table build, observed ~90ms
+    // after the boot loading screen opens -- so the boot window's first publish computes the same
+    // latency oracle. compare_exchange from 0 so a pending switch-confirm stamp is never clobbered;
+    // epoch 0 only (switch epochs keep the confirm-press anchor).
+    if crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) == 0 {
+        let _ = er_telemetry::counters::PORTRAIT_CONFIRM_MS.compare_exchange(
+            0,
+            crate::experiments::boot_view_epoch_ms().max(1) as usize,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+    }
     append_autoload_debug(format_args!(
         "loading-portrait: profile table rebuild (trigger={} streak={streak}) -> called builder 0x{:x} to build our own renderers for the post-Continue portrait",
         if force_loading_screen_rebuild {

@@ -407,12 +407,17 @@ pub unsafe fn find_d3d12_resource_ex(
     // Once the CURRENT fresh_deser epoch is genuinely in-world (world-clock live), there is no loading RT
     // to find, so skip the scan -- the same per-epoch gate the composite (present_overlay.rs:277) and the
     // lookat draw-tick (lookat_bone_hooks.rs:366) already use. Loading-time scans (world not yet live)
-    // still run.
+    // still run. BOOT-EPOCH EXEMPTION (bd er-effects-rs-io53): `cur != 0`, matching the composite and
+    // the draw tick -- on epoch 0 the world clock can go live MID boot loading screen, and this gate
+    // then starved the staged readback (gx samples 0 all cover). Boot in-world stays cheap because the
+    // draw-tick callers idle via portrait_pipeline_idle_in_gameplay (load1 in-world measured 8 scans,
+    // bd FPS-ROOT-...-2026-07-22); the reload fps protection (cur != 0) is unchanged.
     {
         use std::sync::atomic::Ordering as RbOrd;
         let cur = er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
             .load(RbOrd::SeqCst);
-        if er_telemetry::counters::BOOT_VIEW_EPOCH_WORLD_LIVE.load(RbOrd::SeqCst) == cur {
+        if cur != 0 && er_telemetry::counters::BOOT_VIEW_EPOCH_WORLD_LIVE.load(RbOrd::SeqCst) == cur
+        {
             return None;
         }
     }
