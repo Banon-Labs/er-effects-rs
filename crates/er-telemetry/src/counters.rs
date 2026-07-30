@@ -1337,6 +1337,60 @@ pub static SAVE_PICKER_STAGED_ROW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_REBUILD_PENDING_DIALOG: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_LIST_BUILDER_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_LIST_BUILDER_RESTAGE_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Which file-picker surface this session runs: 0 = the in-game `05_010` browser (default),
+/// 1 = the OS common file dialog (`er-effects.toml os_native_save_picker = true`).
+///
+/// A LATCH set once from `init_runtime_config`, not a lazy read, so it is exported even in a
+/// session where no picker ever opens. Every other `SAVE_PICKER_OS_*` counter is only meaningful
+/// once this reads 1, and a report can state the mode without the reporter knowing the config.
+pub static SAVE_PICKER_SURFACE: AtomicUsize = AtomicUsize::new(0);
+/// 1 while an OS common file dialog is up and BLOCKING the thread that owns the menu pump.
+///
+/// One word of state doing triple duty: the re-entrancy claim (taken by compare-exchange, so only
+/// the first caller proceeds and a message comdlg32 dispatches back into our own row-action detour
+/// cannot open a second dialog), the freeze predicate for `SAVE_FLOW_STAGE_TICKS`, and the stage-3
+/// "a browser is live" term. Released by a guard whose `Drop` clears it, so an unwind cannot leave
+/// it stuck.
+pub static SAVE_PICKER_OS_DIALOG_OPEN: AtomicUsize = AtomicUsize::new(0);
+/// Game-task ticks whose `SAVE_FLOW_STAGE_TICKS` accrual was SUPPRESSED because a dialog was open.
+///
+/// Load-bearing, and the only thing that answers a question nothing static can: `> 0` proves the
+/// game task kept ticking while the menu pump was blocked -- so every save-flow deadline WOULD have
+/// expired under a browsing user, and the freeze is what saved the flow. `== 0` with a dialog
+/// demonstrably open instead says the whole frame stalled with the pump.
+pub static SAVE_PICKER_OS_TICKS_FROZEN: AtomicUsize = AtomicUsize::new(0);
+/// OS common file dialogs opened this session.
+pub static SAVE_PICKER_OS_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// OS dialogs that closed returning a path we accepted.
+pub static SAVE_PICKER_OS_CLOSED_WITH_PATH: AtomicUsize = AtomicUsize::new(0);
+/// OS dialogs the user cancelled (`FALSE` with `CommDlgExtendedError() == 0`).
+pub static SAVE_PICKER_OS_CANCEL_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// OS dialogs comdlg32 FAILED (`FALSE` with a non-zero extended error), and the last such error.
+/// Distinguished from a cancel because only a failure is a bug of ours, and neither reopens.
+pub static SAVE_PICKER_OS_ERROR_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_OS_LAST_ERROR: AtomicUsize = AtomicUsize::new(0);
+/// Picks the shared save-validity predicate rejected, and the last `PickRejection as usize`.
+pub static SAVE_PICKER_OS_REJECT_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_OS_LAST_REJECT_REASON: AtomicUsize = AtomicUsize::new(0);
+/// Dialog reopens after an invalid pick, and 1 if the bound was ever hit.
+///
+/// The bound is not about user patience: a comdlg32 that fails INSTANTLY (Wine's is a
+/// reimplementation) would spin the reopen loop at full speed on the thread that owns the menu
+/// pump, an unbreakable hang. Exhaustion takes the cancel path.
+pub static SAVE_PICKER_OS_REOPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_OS_REOPEN_EXHAUSTED: AtomicUsize = AtomicUsize::new(0);
+/// The `hwndOwner` handed to comdlg32 (0 = none found). Non-zero plus a logged class that is the
+/// game window -- not `ErEffectsLoadingOverlay` -- is what says we owned the dialog correctly.
+pub static SAVE_PICKER_OS_OWNER_HWND: AtomicUsize = AtomicUsize::new(0);
+/// Save-like `CreateFileW` opens observed while a dialog was open. Attribution for the shell
+/// browsing traffic that otherwise pollutes the save CreateFileW diagnostics.
+pub static SAVE_PICKER_OS_SAVELIKE_OPENS: AtomicUsize = AtomicUsize::new(0);
+/// 1 = an OS Save-As returned an EXISTING file, so the Box3 overwrite confirm is owed.
+///
+/// A latch rather than a direct `SAVE_FLOW_STAGE` write: the menu thread must not become a second
+/// writer of the stage (a filed defect the in-game arm already has). The save-flow tick consumes
+/// this and performs the transition through `save_flow_enter_stage`, staying the sole owner.
+pub static SAVE_DEST_CONFIRM_PENDING: AtomicUsize = AtomicUsize::new(0);
 /// Browse rows with no character on which the hide of the per-slot info fields (`Level`
 /// caption/value, `PlayTime`) was DRIVEN -- the native setter was called; pair with
 /// `PROFILE_ROW_SLOT_INFO_NON_DISPLAY` to know it took effect. Doubles as the latch that arms the

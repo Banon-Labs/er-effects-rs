@@ -422,8 +422,11 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SYSTEM_QUIT_QUIT_AUTHORIZED_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_ACTION_ALIAS_FALSE_QUIT_CLAIMS.load(Ordering::SeqCst)
     ));
+    // `oracle_save_picker_surface` states which picker this session runs (0 in-game, 1 OS dialog)
+    // regardless of whether one ever opened, so a report never has to guess the mode.
     body.push_str(&format!(
-        "  \"oracle_save_picker_mode_active\": {},\n  \"oracle_save_picker_open_count\": {},\n  \"oracle_save_picker_repopulate_count\": {},\n  \"oracle_save_picker_pick_count\": {},\n  \"oracle_save_picker_pick_reject_count\": {},\n  \"oracle_save_picker_resubmit_count\": {},\n  \"oracle_save_picker_cancel_count\": {},\n  \"oracle_save_picker_staged_row_count\": {},\n",
+        "  \"oracle_save_picker_surface\": {},\n  \"oracle_save_picker_mode_active\": {},\n  \"oracle_save_picker_open_count\": {},\n  \"oracle_save_picker_repopulate_count\": {},\n  \"oracle_save_picker_pick_count\": {},\n  \"oracle_save_picker_pick_reject_count\": {},\n  \"oracle_save_picker_resubmit_count\": {},\n  \"oracle_save_picker_cancel_count\": {},\n  \"oracle_save_picker_staged_row_count\": {},\n",
+        SAVE_PICKER_SURFACE.load(Ordering::SeqCst),
         SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst),
         SAVE_PICKER_OPEN_COUNT.load(Ordering::SeqCst),
         SAVE_PICKER_REPOPULATE_COUNT.load(Ordering::SeqCst),
@@ -432,6 +435,31 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SAVE_PICKER_RESUBMIT_COUNT.load(Ordering::SeqCst),
         SAVE_PICKER_CANCEL_COUNT.load(Ordering::SeqCst),
         SAVE_PICKER_STAGED_ROW_COUNT.load(Ordering::SeqCst)
+    ));
+    // OS file-dialog surface. Only meaningful while `oracle_save_picker_surface` is 1, and that is
+    // the point: with the default key they are all 0, which IS the non-regression proof for the
+    // in-game path. `_ticks_frozen` is the load-bearing one -- it is the only thing that answers
+    // whether the game task kept ticking while the menu pump was blocked, which nothing static can.
+    // A `> 0` says the freeze saved the flow; a `0` with a dialog demonstrably open says the whole
+    // frame stalled instead. `_savelike_opens` attributes shell browsing traffic that would
+    // otherwise pollute the save CreateFileW diagnostics, and `_owner_hwnd` must be non-zero AND
+    // logged as the game window, not `ErEffectsLoadingOverlay`.
+    body.push_str(&format!(
+        "  \"oracle_save_picker_os_dialog_open\": {},\n  \"oracle_save_picker_os_open_count\": {},\n  \"oracle_save_picker_os_closed_with_path\": {},\n  \"oracle_save_picker_os_cancel_count\": {},\n  \"oracle_save_picker_os_error_count\": {},\n  \"oracle_save_picker_os_last_error\": {},\n  \"oracle_save_picker_os_reject_count\": {},\n  \"oracle_save_picker_os_last_reject_reason\": {},\n  \"oracle_save_picker_os_reopen_count\": {},\n  \"oracle_save_picker_os_reopen_exhausted\": {},\n  \"oracle_save_picker_os_ticks_frozen\": {},\n  \"oracle_save_picker_os_owner_hwnd\": {},\n  \"oracle_save_picker_os_savelike_opens\": {},\n  \"oracle_save_dest_confirm_pending\": {},\n",
+        SAVE_PICKER_OS_DIALOG_OPEN.load(Ordering::SeqCst),
+        SAVE_PICKER_OS_OPEN_COUNT.load(Ordering::SeqCst),
+        SAVE_PICKER_OS_CLOSED_WITH_PATH.load(Ordering::SeqCst),
+        SAVE_PICKER_OS_CANCEL_COUNT.load(Ordering::SeqCst),
+        SAVE_PICKER_OS_ERROR_COUNT.load(Ordering::SeqCst),
+        SAVE_PICKER_OS_LAST_ERROR.load(Ordering::SeqCst),
+        SAVE_PICKER_OS_REJECT_COUNT.load(Ordering::SeqCst),
+        SAVE_PICKER_OS_LAST_REJECT_REASON.load(Ordering::SeqCst),
+        SAVE_PICKER_OS_REOPEN_COUNT.load(Ordering::SeqCst),
+        SAVE_PICKER_OS_REOPEN_EXHAUSTED.load(Ordering::SeqCst),
+        SAVE_PICKER_OS_TICKS_FROZEN.load(Ordering::SeqCst),
+        SAVE_PICKER_OS_OWNER_HWND.load(Ordering::SeqCst),
+        SAVE_PICKER_OS_SAVELIKE_OPENS.load(Ordering::SeqCst),
+        SAVE_DEST_CONFIRM_PENDING.load(Ordering::SeqCst)
     ));
     // Per-slot info fields (Level caption/value, PlayTime) on browse rows with no character. `_hidden`
     // > 0 proves the suppression reached real rows; `_non_display` > 0 or a `_last_datatype` other

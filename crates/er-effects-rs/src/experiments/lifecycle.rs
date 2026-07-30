@@ -120,6 +120,100 @@ pub(crate) unsafe fn switch_harness_discovery_tick() {
 // fire, so the native writer's own container write lands on the destination while the
 // loaded save is only read; stage 8 verifies both files before returning to IDLE.
 
+/// This stage's next tick count -- FROZEN while a modal OS file dialog is up.
+///
+/// Every save-flow deadline derives from `SAVE_FLOW_STAGE_TICKS`, which the game task increments
+/// once per frame at exactly one site. The game task runs CONCURRENTLY with the menu/Scaleform
+/// pump, so a modal dialog that blocks the pump does not stop the tick: a user browsing folders for
+/// twenty seconds would spend ~1200 ticks and watch the destination-browser bound (180), the
+/// confirm-box build bound (180) and eventually the commit watchdog (900) all expire underneath
+/// them -- pick a file, nothing happens. Freezing this one READ freezes all of them.
+///
+/// The COUNTER is frozen, not the handlers. An early `return` from `save_flow_tick` would also
+/// suspend the event-driven work that must keep running while a dialog is open (a box decision
+/// arriving, the writer-idle teardown interlock, the IDLE-tick deferred-teardown sweep); a frozen
+/// `ticks` value suspends only the deadlines. That is why this is a frozen read and not a skipped
+/// tick.
+///
+/// Freezing is NECESSARY BUT NOT SUFFICIENT: stage 3's "abandoned" branch has no tick bound at all,
+/// so it needs the separate liveness term in [`dest_browse_verdict`].
+fn save_flow_next_stage_ticks(dialog_open: bool, counter: &AtomicUsize) -> usize {
+    if dialog_open {
+        SAVE_PICKER_OS_TICKS_FROZEN.fetch_add(1, Ordering::SeqCst);
+        return counter.load(Ordering::SeqCst);
+    }
+    counter.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+/// What stage 3 does with this tick. `WaitForUser` is every "do nothing this frame" case --
+/// waiting on the user's choice, on the browser to appear, or on its teardown -- because the action
+/// is identical in all three and only the terminal verdicts differ.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DestBrowseAction {
+    /// A destination is committed and the browser is gone: close the menus and fire.
+    CloseAndCommit,
+    /// A committed destination whose browser will not tear down. Nothing is armed; abort.
+    TeardownTimeout,
+    /// Do nothing this frame.
+    WaitForUser,
+    /// A browser open that was staged for the menu pump and never appeared. Abort.
+    OpenTimeout,
+    /// No browser, no pending open, no commit, no confirm: the user backed out.
+    Abandoned,
+    /// An OS Save-As chose an existing file; the tick owes the Box3 overwrite confirm.
+    EnterBox3,
+}
+
+/// Stage 3's decision, as a pure function of the latches it reads.
+///
+/// `os_dialog_open` is the term the OS surface adds, and it is not cosmetic. In OS mode, once the
+/// menu pump has consumed `SAVE_DEST_OPEN_PICKER_PENDING` and blocked inside comdlg32, this tick
+/// would see no commit pending, no `05_010` browser and no pending open -- and end the flow as
+/// "abandoned" on the very next frame, a millisecond after the dialog appeared. No amount of tick
+/// freezing prevents that, because that branch never looked at `ticks`. "A browser is live" simply
+/// has two spellings now.
+///
+/// `confirm_pending` is checked ahead of every liveness term for the same reason: by the time an OS
+/// Save-As has named an existing file its dialog is already gone, so a verdict that consulted
+/// liveness first would read the flow as abandoned instead of owing a Box3.
+#[allow(clippy::too_many_arguments)]
+fn dest_browse_verdict(
+    commit_pending: bool,
+    picker_window_live: bool,
+    dest_mode: bool,
+    os_dialog_open: bool,
+    confirm_pending: bool,
+    open_pending: bool,
+    ticks: usize,
+) -> DestBrowseAction {
+    // A confirmed destination outranks every other latch: the browser is on its way out and only
+    // its teardown is being waited on.
+    if commit_pending {
+        if !picker_window_live {
+            return DestBrowseAction::CloseAndCommit;
+        }
+        if ticks >= SAVE_DEST_PICKER_OPEN_TIMEOUT_TICKS {
+            return DestBrowseAction::TeardownTimeout;
+        }
+        return DestBrowseAction::WaitForUser;
+    }
+    if confirm_pending {
+        return DestBrowseAction::EnterBox3;
+    }
+    if dest_mode || os_dialog_open {
+        // A browser owns the screen; the user's decision has no timeout.
+        return DestBrowseAction::WaitForUser;
+    }
+    if open_pending {
+        // Staged for the menu pump but not open yet.
+        if ticks >= SAVE_DEST_PICKER_OPEN_TIMEOUT_TICKS {
+            return DestBrowseAction::OpenTimeout;
+        }
+        return DestBrowseAction::WaitForUser;
+    }
+    DestBrowseAction::Abandoned
+}
+
 /// Transition helper: swap the stage, reset the per-stage tick counter, log the edge.
 fn save_flow_enter_stage(stage: usize, reason: &str) {
     let prev = SAVE_FLOW_STAGE.swap(stage, Ordering::SeqCst);
@@ -146,7 +240,10 @@ pub(crate) unsafe fn save_flow_tick() {
         }
         return;
     }
-    let ticks = SAVE_FLOW_STAGE_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
+    let ticks = save_flow_next_stage_ticks(
+        SAVE_PICKER_OS_DIALOG_OPEN.load(Ordering::SeqCst) != 0,
+        &SAVE_FLOW_STAGE_TICKS,
+    );
     match stage {
         SAVE_FLOW_STAGE_BOX1_WAIT => unsafe {
             save_flow_box_wait_tick(SAVE_FLOW_BOX_CONFIRM_SAVE, ticks)
@@ -280,12 +377,18 @@ unsafe fn save_flow_box_wait_tick(box_id: usize, ticks: usize) {
             );
         }
         (SAVE_FLOW_BOX_OVERWRITE_FILE, SaveFlowDecision::No) => {
-            // Declining the overwrite drops only the target: the browser is untouched, so the
-            // user can pick a different destination.
+            // Declining the overwrite drops only the target. In-game the browser window was never
+            // closed, so the user is simply back in it and nothing else is needed. In OS mode the
+            // dialog is gone by the time Box3 is answered, so "back to the picker" means RE-OPEN
+            // it -- which is exactly what Box2-No already does to open it in the first place, and
+            // the menu pump's existing consumer now routes through `open_picker_for_intent`.
             save_dest_clear_target("box3 declined");
+            if os_native_picker_active() {
+                SAVE_DEST_OPEN_PICKER_PENDING.store(1, Ordering::SeqCst);
+            }
             save_flow_enter_stage(
                 SAVE_FLOW_STAGE_DEST_BROWSE,
-                "box3 No -> back to the destination browser",
+                "box3 No -> back to the destination picker",
             );
         }
         (_, SaveFlowDecision::No) => {
@@ -313,15 +416,25 @@ unsafe fn save_flow_box_wait_tick(box_id: usize, ticks: usize) {
 /// existing file goes to stage 4 first. Backing out of the browser clears the picker latches with
 /// no commit pending, which is what this reads as "the user abandoned the save".
 unsafe fn save_flow_dest_browse_tick(ticks: usize) {
-    // A confirmed destination outranks every other latch: once the commit is staged the browser is
-    // on its way out and only its teardown is being waited on.
-    if SAVE_DEST_COMMIT_PENDING.load(Ordering::SeqCst) != 0 {
-        if SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) == 0 {
+    let verdict = dest_browse_verdict(
+        SAVE_DEST_COMMIT_PENDING.load(Ordering::SeqCst) != 0,
+        SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) != 0,
+        SAVE_PICKER_DEST_MODE.load(Ordering::SeqCst) != 0,
+        SAVE_PICKER_OS_DIALOG_OPEN.load(Ordering::SeqCst) != 0,
+        SAVE_DEST_CONFIRM_PENDING.load(Ordering::SeqCst) != 0,
+        SAVE_DEST_OPEN_PICKER_PENDING.load(Ordering::SeqCst) != 0,
+        ticks,
+    );
+    match verdict {
+        DestBrowseAction::WaitForUser => {}
+        DestBrowseAction::CloseAndCommit => {
             // Gone: its close already restored the user's ProfileSummary rows and re-showed the
-            // System windows, which is the state the close-all sequence expects.
+            // System windows, which is the state the close-all sequence expects. (In OS mode there
+            // was never a picker window, so this is true on the first tick after the pick.)
             SAVE_DEST_COMMIT_PENDING.store(0, Ordering::SeqCst);
             unsafe { save_flow_close_menus_from_tick("dest_commit", true) };
-        } else if ticks >= SAVE_DEST_PICKER_OPEN_TIMEOUT_TICKS {
+        }
+        DestBrowseAction::TeardownTimeout => {
             // The browser will not go away. Nothing has been armed or fired yet, so abort rather
             // than close the root menus out from under a live window.
             SAVE_DEST_COMMIT_PENDING.store(0, Ordering::SeqCst);
@@ -330,30 +443,38 @@ unsafe fn save_flow_dest_browse_tick(ticks: usize) {
             ));
             unsafe { save_flow_close_menus_from_tick("dest_teardown_timeout", false) };
         }
-        return;
-    }
-    if SAVE_PICKER_DEST_MODE.load(Ordering::SeqCst) != 0 {
-        // Browser is live and owns the screen; the user's decision has no timeout.
-        return;
-    }
-    if SAVE_DEST_OPEN_PICKER_PENDING.load(Ordering::SeqCst) != 0 {
-        // Staged for the menu pump but not open yet.
-        if ticks >= SAVE_DEST_PICKER_OPEN_TIMEOUT_TICKS {
+        DestBrowseAction::EnterBox3 => {
+            // OS Save-As named an existing file. The TICK performs the transition so the menu
+            // thread never becomes a second writer of `SAVE_FLOW_STAGE`.
+            SAVE_DEST_CONFIRM_PENDING.store(0, Ordering::SeqCst);
+            // Box3 is hosted by the System dialog here: in OS mode there is no picker window job
+            // occupying that queue, so it is the right owner.
+            save_flow_box_set_host_dialog(0);
+            SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_OVERWRITE_FILE, Ordering::SeqCst);
+            save_flow_enter_stage(
+                SAVE_FLOW_STAGE_BOX3_WAIT,
+                "os save-as chose an existing file -> overwrite confirm",
+            );
+        }
+        DestBrowseAction::OpenTimeout => {
             SAVE_DEST_OPEN_PICKER_PENDING.store(0, Ordering::SeqCst);
             append_autoload_debug(format_args!(
                 "save-flow: destination browser never opened after {ticks} ticks -- ending the flow, the user's save did NOT happen"
             ));
             unsafe { save_flow_close_menus_from_tick("dest_picker_open_timeout", false) };
         }
-        return;
+        DestBrowseAction::Abandoned => {
+            // No browser, no pending open, no commit, no confirm: the user backed out. In OS mode
+            // this is exactly what dropping the dialog latch with nothing chosen looks like, which
+            // is why an OS cancel needs no code of its own.
+            SAVE_DEST_CANCEL_COUNT.fetch_add(1, Ordering::SeqCst);
+            save_dest_clear_target("destination browser abandoned");
+            append_autoload_debug(format_args!(
+                "save-flow: destination browser closed without choosing after {ticks} ticks -- returning to the world with nothing written"
+            ));
+            unsafe { save_flow_close_menus_from_tick("dest_abandoned", false) };
+        }
     }
-    // No browser, no pending open, no commit: the user backed out of the destination browser.
-    SAVE_DEST_CANCEL_COUNT.fetch_add(1, Ordering::SeqCst);
-    save_dest_clear_target("destination browser abandoned");
-    append_autoload_debug(format_args!(
-        "save-flow: destination browser closed without choosing after {ticks} ticks -- returning to the world with nothing written"
-    ));
-    unsafe { save_flow_close_menus_from_tick("dest_abandoned", false) };
 }
 
 /// Native cancel-close of the destination browser from the game task. Same primitive (and same
@@ -1990,5 +2111,164 @@ pub(crate) fn install_boot_diagnostics_and_trace_hooks() {
                 .name("er-effects-continue-trace".to_owned())
                 .spawn(install_continue_trace_hooks);
         });
+    }
+}
+
+#[cfg(test)]
+mod save_flow_deadline_tests {
+    use super::*;
+
+    /// Every save-flow bound, referenced by its real constant so a future retune cannot silently
+    /// invalidate the proof below. Two entries share `SAVE_DEST_PICKER_OPEN_TIMEOUT_TICKS` because
+    /// the browser's OPEN and its TEARDOWN are two uses of one budget.
+    const SAVE_FLOW_BOUNDS: [usize; 7] = [
+        SAVE_FLOW_BOX_BUILD_TIMEOUT_TICKS,
+        SAVE_DEST_PICKER_OPEN_TIMEOUT_TICKS,
+        SAVE_DEST_PICKER_OPEN_TIMEOUT_TICKS,
+        SAVE_FLOW_FIRE_GATE_TIMEOUT_TICKS,
+        SAVE_FLOW_ENQUEUE_GRACE_TICKS,
+        SAVE_BYPASS_WATCHDOG_TICKS,
+        SAVE_BYPASS_WATCHDOG_TICKS + SAVE_DEST_TEARDOWN_UNPROVEN_EXTRA_TICKS,
+    ];
+
+    /// A user may browse for arbitrarily long, so the freeze cannot be "extend the timeouts". Run
+    /// the frozen read past the LONGEST bound in the flow (~75 s of game-task frames at 60 Hz) and
+    /// assert it never reaches any of them; then one unfrozen call must advance by exactly 1, so the
+    /// freeze is a suspension and not a break.
+    #[test]
+    fn a_frozen_counter_crosses_no_save_flow_bound() {
+        let counter = AtomicUsize::new(0);
+        let iterations = SAVE_BYPASS_WATCHDOG_TICKS + SAVE_DEST_TEARDOWN_UNPROVEN_EXTRA_TICKS + 1;
+        for frame in 0..iterations {
+            let ticks = save_flow_next_stage_ticks(true, &counter);
+            assert_eq!(ticks, 0, "the frozen read accrued at frame {frame}");
+            for bound in SAVE_FLOW_BOUNDS {
+                assert!(
+                    ticks < bound,
+                    "frame {frame} reached the {bound}-tick bound while a dialog was open"
+                );
+            }
+        }
+        assert_eq!(
+            save_flow_next_stage_ticks(false, &counter),
+            1,
+            "the counter must resume from where it was frozen, advancing by exactly one"
+        );
+    }
+
+    /// FREEZING IS NOT ENOUGH. Stage 3's abandon branch never consulted `ticks`, so with the dialog
+    /// term missing it would end the flow one frame after the dialog opened no matter how frozen
+    /// the counter was. Both halves are asserted here: with the term, every tick count waits; with
+    /// it removed, the same state is abandoned.
+    #[test]
+    fn an_open_os_dialog_is_never_read_as_an_abandoned_browser() {
+        for ticks in [
+            1,
+            SAVE_DEST_PICKER_OPEN_TIMEOUT_TICKS - 1,
+            SAVE_DEST_PICKER_OPEN_TIMEOUT_TICKS,
+            SAVE_FLOW_FIRE_GATE_TIMEOUT_TICKS,
+            SAVE_BYPASS_WATCHDOG_TICKS,
+            100_000,
+        ] {
+            assert_eq!(
+                dest_browse_verdict(false, false, false, true, false, false, ticks),
+                DestBrowseAction::WaitForUser,
+                "an open OS dialog must have no deadline at tick {ticks}"
+            );
+            // The ordering window: the menu-pump arm sets the dialog latch BEFORE clearing the
+            // pending-open latch, so a tick landing between the two stores sees both set.
+            assert_eq!(
+                dest_browse_verdict(false, false, false, true, false, true, ticks),
+                DestBrowseAction::WaitForUser,
+                "the both-latches-set window must not time out at tick {ticks}"
+            );
+        }
+        assert_eq!(
+            dest_browse_verdict(false, false, false, false, false, false, 1),
+            DestBrowseAction::Abandoned,
+            "without the dialog term the very same state aborts on the next frame -- this is the \
+             bug the tick freeze alone does not fix"
+        );
+    }
+
+    /// A confirm the OS arm staged must reach Box3 even though nothing is live by then: its dialog
+    /// closed before the target was known, so a verdict that consulted liveness first would call it
+    /// abandoned and silently drop the save.
+    #[test]
+    fn an_owed_overwrite_confirm_outranks_the_abandoned_verdict() {
+        assert_eq!(
+            dest_browse_verdict(false, false, false, false, true, false, 1),
+            DestBrowseAction::EnterBox3
+        );
+        assert_eq!(
+            dest_browse_verdict(false, false, false, false, true, false, 100_000),
+            DestBrowseAction::EnterBox3,
+            "an owed confirm has no deadline either"
+        );
+        assert_eq!(
+            dest_browse_verdict(true, false, false, false, true, false, 1),
+            DestBrowseAction::CloseAndCommit,
+            "a destination already committed still outranks an owed confirm"
+        );
+    }
+
+    /// The in-game verdicts, unchanged. With the OS terms both false this reproduces the shipping
+    /// branch order exactly, so the extraction is provably behaviour-preserving for the default.
+    #[test]
+    fn the_in_game_verdicts_are_what_they_were_before_the_os_terms_existed() {
+        let over = SAVE_DEST_PICKER_OPEN_TIMEOUT_TICKS;
+        let under = over - 1;
+        for (label, args, expected) in [
+            (
+                "commit staged, browser gone",
+                (true, false, false, false, false, false, 1),
+                DestBrowseAction::CloseAndCommit,
+            ),
+            (
+                "commit staged, browser still up, under budget",
+                (true, true, false, false, false, false, under),
+                DestBrowseAction::WaitForUser,
+            ),
+            (
+                "commit staged, browser will not tear down",
+                (true, true, false, false, false, false, over),
+                DestBrowseAction::TeardownTimeout,
+            ),
+            (
+                "browser live, user choosing",
+                (false, true, true, false, false, false, 100_000),
+                DestBrowseAction::WaitForUser,
+            ),
+            (
+                "open staged, not up yet, under budget",
+                (false, false, false, false, false, true, under),
+                DestBrowseAction::WaitForUser,
+            ),
+            (
+                "open staged, never appeared",
+                (false, false, false, false, false, true, over),
+                DestBrowseAction::OpenTimeout,
+            ),
+            (
+                "nothing live, nothing pending",
+                (false, false, false, false, false, false, 1),
+                DestBrowseAction::Abandoned,
+            ),
+        ] {
+            let (commit, window, dest_mode, os_open, confirm, open_pending, ticks) = args;
+            assert_eq!(
+                dest_browse_verdict(
+                    commit,
+                    window,
+                    dest_mode,
+                    os_open,
+                    confirm,
+                    open_pending,
+                    ticks
+                ),
+                expected,
+                "in-game verdict changed for: {label}"
+            );
+        }
     }
 }

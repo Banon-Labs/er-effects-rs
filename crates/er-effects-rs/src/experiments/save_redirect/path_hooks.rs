@@ -1626,6 +1626,16 @@ unsafe extern "system" fn save_redirect_createfilew_hook(
             || wide_ends_with_ci_ascii(path, BAKD);
         if save_like {
             record_save_like_createfile_path_kind(path);
+            // ATTRIBUTION, not a gate. A modal OS file dialog enumerates folders on THIS thread, so
+            // its shell traffic re-enters this detour and any path containing "eldenring" or ending
+            // .sl2/.co2/.bak counts as save-like -- polluting the save CreateFileW diagnostics with
+            // browsing. Counting the ones seen while a dialog was open makes that noise
+            // attributable instead of indistinguishable from the game's own save I/O. These are
+            // READ opens that pass through unredirected; the shell does not write the loaded save,
+            // so this is a reporting concern, not a corruption one -- but it must be visible.
+            if er_telemetry::counters::SAVE_PICKER_OS_DIALOG_OPEN.load(Ordering::SeqCst) != 0 {
+                er_telemetry::counters::SAVE_PICKER_OS_SAVELIKE_OPENS.fetch_add(1, Ordering::SeqCst);
+            }
         }
         if calls == 0 || save_like {
             // Rate-limit: log the first 8 save-LIKE opens, then only at power-of-two hit counts.

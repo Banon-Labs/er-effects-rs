@@ -390,6 +390,18 @@ pub(crate) fn install_save_file_core_hooks() {
     });
 }
 
+/// True once the core `kernel32!CreateFileW` detour is live.
+///
+/// The OS file dialog gates on this. A modal common dialog performs a great deal of shell file I/O
+/// on the calling thread, which re-enters that detour; installing a MinHook while a thread is parked
+/// inside comdlg32 is the one shape that could deadlock, because `MH_ApplyQueued` suspends every
+/// other thread and allocates while they are frozen. Every installer in this DLL is attach-time and
+/// long finished before a user can reach System>Quit, so refusing to open a dialog until the detour
+/// has settled removes the overlap entirely rather than reasoning about it.
+pub(crate) fn save_file_core_hooks_live() -> bool {
+    SAVE_FILE_OPS_CORE_CREATEFILEW_INSTALLED.load(Ordering::SeqCst) != 0
+}
+
 pub(crate) fn install_save_redirect_hooks() {
     // While the in-game missing-save picker is pending the hooks stay UNINSTALLED on purpose:
     // native save IO must flow so the title completes its no-save boot and the 05_010 file
