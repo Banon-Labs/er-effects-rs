@@ -160,6 +160,32 @@ pub(crate) const BLOCK_SAMPLE_SHIFT: u32 = 8;
 pub(crate) const BLOCK_LOADSTATE_GETTER_VT_10_OFFSET: usize = 0x10;
 pub(crate) const BLOCK_LOADSTATE_FLAG_2D_OFFSET: usize = 0x2d;
 pub(crate) const BLOCK_LOADSTATE_PHASE_35_OFFSET: usize = 0x35;
+/// PHASE-2 STALL DISCRIMINATORS (added 2026-07-30 for the profile-switch reload freeze:
+/// a warm reload parks at `[+0x35]==2` for 50s+ while the FIRST load in the same process
+/// clears the same phase; run product-continue-direct-20260730-134058).
+///
+/// Two 1.16.1-era RE accounts of what phase 2 polls disagree -- one says the FD4FileCaps
+/// hang off this WorldBlockRes at `[+0x40]`/`[+0x48]`, the other says they hang off the
+/// WorldAreaRes (which `fc_present`/`fc_notloaded` already scan, and which read all-loaded
+/// while the block stayed at phase 2). These offsets sample the BLOCK's own copies so the
+/// next run discriminates the accounts instead of assuming one. All read-only.
+///
+/// `[+0x2f]` is the gate the phase machine recomputes every tick as `[+0x2f]=[+0x2d]` iff
+/// the block's IO-request object state is 6 and a virtual predicate passes, else 0. Phase 2
+/// exits to phase 5 when it is 0, and only polls the caps when it is non-zero -- so it
+/// separates "gave up" from "still waiting on a cap".
+pub(crate) const BLOCK_LOADSTATE_ASSET_GATE_2F_OFFSET: usize = 0x2f;
+/// Countdown the phase-9 handler decrements; underflow reverts `[+0x35]` to 8.
+pub(crate) const BLOCK_LOADSTATE_COUNTDOWN_3C_OFFSET: usize = 0x3c;
+/// Sticky "load gave up" byte the phase-2/3 handlers set alongside a fallback to phase 5.
+pub(crate) const BLOCK_LOADSTATE_GAVEUP_06_OFFSET: usize = 0x06;
+/// The block's own FD4FileCap pointers, populated by the phase-1 load requester. FOUR slots,
+/// not two: the 1.16.2 handler at `0x1406158a0` reads `param_1[8]`, `[9]`, `[10]` and `[0xb]`
+/// (a `longlong*`, so byte offsets 0x40/0x48/0x50/0x58), taking `cap+0x90` from each.
+pub(crate) const BLOCK_LOADSTATE_FILECAP_SLOTS: [usize; 4] = [0x40, 0x48, 0x50, 0x58];
+/// FD4FileCap load status; `0x04` == load complete. Paired with a non-null bytes pointer.
+pub(crate) const FD4_FILECAP_STATUS_88_OFFSET: usize = 0x88;
+pub(crate) const FD4_FILECAP_BYTES_90_OFFSET: usize = 0x90;
 /// OWN-LOAD m28 direct-enqueue lever (adddefaultfileloadprocess-lever-viable-2026-06-22).
 /// `FD4::FD4FileCap::AddDefaultFileLoadProcess` deobf VA 0x142658c60 (prologue-grounded
 /// `40 55 56 57 41 56 41 57`; dump 0x142658c50 is +0x10). Stored as an RVA offset from the

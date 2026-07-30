@@ -1530,6 +1530,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             mms_ar_state,
             mms_ar_bres,
             mms_ar_ptr,
+            mms_blk_phase2,
         ) = if (MOVEMAPSTEP_STEP_WORLDRESWAIT_INDEX..=8).contains(&mms_step)
             && mms_cur_block != u32::MAX
             && mms_blocks > 0
@@ -1551,6 +1552,11 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             let mut ls_2c: i32 = -1;
             let mut ls_2d: i32 = -1;
             let mut ls_35: i32 = -1;
+            let mut ls_2f: i32 = -1;
+            let mut ls_3c: i32 = -1;
+            let mut ls_06: i32 = -1;
+            // Rendered once at the end rather than threaded out as seven more tuple slots.
+            let mut ls_phase2 = String::new();
             let mut areas = String::new();
             // WorldAreaRes ACTIVATION state (RE wf_3f1e7d9a): the matched +0xb3030 entry IS the area's
             // WorldAreaRes. +0x1a = "area wanted" flag, +0x1c = activation state machine (0..7; ==6 is
@@ -1658,6 +1664,55 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                                     unsafe { safe_read_u8(ls + BLOCK_LOADSTATE_PHASE_35_OFFSET) }
                                         .map(|v| v as i32)
                                         .unwrap_or(-1);
+                                // PHASE-2 STALL DISCRIMINATORS. `fc_*` above scans the caps on the
+                                // WorldAreaRes and reported all-loaded while this block sat at phase
+                                // 2, so the caps phase 2 actually waits on may be the BLOCK's own.
+                                // Sample both those and the `[+0x2f]` gate that decides whether phase
+                                // 2 polls at all. Read-only; no call, no write.
+                                ls_2f = unsafe {
+                                    safe_read_u8(ls + BLOCK_LOADSTATE_ASSET_GATE_2F_OFFSET)
+                                }
+                                .map(|v| v as i32)
+                                .unwrap_or(-1);
+                                ls_3c = unsafe {
+                                    safe_read_u8(ls + BLOCK_LOADSTATE_COUNTDOWN_3C_OFFSET)
+                                }
+                                .map(|v| v as i32)
+                                .unwrap_or(-1);
+                                ls_06 =
+                                    unsafe { safe_read_u8(ls + BLOCK_LOADSTATE_GAVEUP_06_OFFSET) }
+                                        .map(|v| v as i32)
+                                        .unwrap_or(-1);
+                                let mut caps = String::new();
+                                for slot in BLOCK_LOADSTATE_FILECAP_SLOTS {
+                                    let Some(cap) = (unsafe { safe_read_usize(ls + slot) })
+                                        .filter(|&v| v > 0x10000)
+                                    else {
+                                        let _ = core::fmt::Write::write_fmt(
+                                            &mut caps,
+                                            format_args!("+{slot:x}:none,"),
+                                        );
+                                        continue;
+                                    };
+                                    let st =
+                                        unsafe { safe_read_u8(cap + FD4_FILECAP_STATUS_88_OFFSET) }
+                                            .map(|v| v as i32)
+                                            .unwrap_or(-1);
+                                    let bytes = unsafe {
+                                        safe_read_usize(cap + FD4_FILECAP_BYTES_90_OFFSET)
+                                    }
+                                    .unwrap_or(0);
+                                    let _ = core::fmt::Write::write_fmt(
+                                        &mut caps,
+                                        format_args!("+{slot:x}:st={st}/bytes={bytes:#x},"),
+                                    );
+                                }
+                                let _ = core::fmt::Write::write_fmt(
+                                    &mut ls_phase2,
+                                    format_args!(
+                                        " blk_2f={ls_2f} blk_3c={ls_3c} blk_06={ls_06} blk_caps=[{caps}]"
+                                    ),
+                                );
                             }
                         }
                     }
@@ -1678,9 +1733,10 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                 ar_state,
                 ar_bres,
                 ar_ptr,
+                ls_phase2,
             )
         } else {
-            (-1, String::new(), -1, -1, -1, 0, 0, -1, -1, -1, 0)
+            (-1, String::new(), -1, -1, -1, 0, 0, -1, -1, -1, 0, String::new())
         };
         // FILE-CAP READINESS (RE FUN_140613710): the state-2 handler advances 2->3 only when every present
         // FD4FileCap slot on the WorldAreaRes has load-status +0x88 == 0x04. Scan them so the stall shows
@@ -2294,7 +2350,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             // vtable[0x10] load-state getter that returns null (why the legacy load is never created).
             let blk_vt_rva = mms_blk_vt.saturating_sub(module_base);
             append_autoload_debug(format_args!(
-                "SWITCH-ORACLE #{n}: slot={slot} bc4={bc4v} player={player_present} ig_d8={ig_d8} pstep={ig_pstep}/{ig_pnext} menu_job=0x{menu_job:x} csm6b0={csm6b0} lsmode={lsmode} ls10={loading_screen_field10} ls11={loading_screen_field11} gm_bf5={gm_bf5} dd=0x{delay_delete:x} dd40={dd40} dd54={dd54} wcm=0x{world_chr_man:x} mainp=0x{main_player:x} stable_frames={sf} peak={peak} mms=0x{mms_disp:x} mms_step={mms_step}({}) next={mms_next} fin12a={finalize_now} epoch={reload_epoch_now} done50={mms_done} gate={mms_gate_lo}/{mms_gate_hi} end5e={md_5e} rt5d={md_5d} force={ending_force} b7c={gb7c} b7d={gb7d} warp={gwarp} hold270=0x{mms_hold:x} cd100={mms_cd} req248={mms_req248} b7c1={mms_b7c1} blocks={mms_blocks} curblk=0x{mms_cur_block:x} b798=0x{mms_b798:x} b79c=0x{mms_b79c:x} blk_found={mms_block_found} blk_ls=0x{mms_blk_ls:x} blk_2c={mms_blk_2c} blk_2d={mms_blk_2d} blk_35={mms_blk_35} ar_wanted={mms_ar_wanted} ar_state={mms_ar_state} ar_bres={mms_ar_bres} fc_present={mms_fc_present} fc_notloaded={mms_fc_notloaded} fc_stuck=[{mms_fc_stuck}] blk_vt_rva=0x{blk_vt_rva:x} ll_size={ll_size} ll_fcap=0x{ll_fcap:x} ll_path='{ll_path}' ow_cnt={mms_ow_count} ow=[{mms_ow_areas}] blk_areas=[{mms_block_areas}] phase={} -- {cls}",
+                "SWITCH-ORACLE #{n}: slot={slot} bc4={bc4v} player={player_present} ig_d8={ig_d8} pstep={ig_pstep}/{ig_pnext} menu_job=0x{menu_job:x} csm6b0={csm6b0} lsmode={lsmode} ls10={loading_screen_field10} ls11={loading_screen_field11} gm_bf5={gm_bf5} dd=0x{delay_delete:x} dd40={dd40} dd54={dd54} wcm=0x{world_chr_man:x} mainp=0x{main_player:x} stable_frames={sf} peak={peak} mms=0x{mms_disp:x} mms_step={mms_step}({}) next={mms_next} fin12a={finalize_now} epoch={reload_epoch_now} done50={mms_done} gate={mms_gate_lo}/{mms_gate_hi} end5e={md_5e} rt5d={md_5d} force={ending_force} b7c={gb7c} b7d={gb7d} warp={gwarp} hold270=0x{mms_hold:x} cd100={mms_cd} req248={mms_req248} b7c1={mms_b7c1} blocks={mms_blocks} curblk=0x{mms_cur_block:x} b798=0x{mms_b798:x} b79c=0x{mms_b79c:x} blk_found={mms_block_found} blk_ls=0x{mms_blk_ls:x} blk_2c={mms_blk_2c} blk_2d={mms_blk_2d} blk_35={mms_blk_35}{mms_blk_phase2} ar_wanted={mms_ar_wanted} ar_state={mms_ar_state} ar_bres={mms_ar_bres} fc_present={mms_fc_present} fc_notloaded={mms_fc_notloaded} fc_stuck=[{mms_fc_stuck}] blk_vt_rva=0x{blk_vt_rva:x} ll_size={ll_size} ll_fcap=0x{ll_fcap:x} ll_path='{ll_path}' ow_cnt={mms_ow_count} ow=[{mms_ow_areas}] blk_areas=[{mms_block_areas}] phase={} -- {cls}",
                 movemapstep_step_name(mms_step),
                 SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
             ));
