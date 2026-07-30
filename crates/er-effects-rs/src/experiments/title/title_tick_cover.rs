@@ -1,3 +1,75 @@
+/// Walk `FD4FileCap::loadProcess -> FD4FileLoadProcess::fileLoadProcessor` and sample the content
+/// state the MSB load-complete callback gates on, returning `(processor, content, size, acquires)`.
+///
+/// This is the exact chain `FD4FileCap::AcquireContent` (`FUN_1426591c0`) walks: it returns null if
+/// either `loadProcess` or `fileLoadProcessor` is null, and otherwise hands back `processor.content_`
+/// -- re-fetching it through a vtable call only on the acquire refcount's `0 -> 1` edge, while the
+/// matching release nulls `content_` on the `1 -> 0` edge. A null content is what makes
+/// `MsbFileCap::msbResCap` stay `0` even at `loadState == 4`, so sampling it says whether the freeze
+/// is "no buffer at all" or "buffer present but never parsed". Read-only: no acquire, no refcount
+/// touch, no vtable call.
+unsafe fn fd4_filecap_content_state(load_process: usize) -> (usize, usize, usize, i64) {
+    if load_process <= 0x10000 {
+        return (0, 0, 0, -1);
+    }
+    let Some(processor) =
+        (unsafe { safe_read_usize(load_process + FD4_FILELOADPROCESS_PROCESSOR_20_OFFSET) })
+            .filter(|&v| v > 0x10000)
+    else {
+        return (0, 0, 0, -1);
+    };
+    let content =
+        unsafe { safe_read_usize(processor + FD4_FILELOADPROCESSOR_CONTENT_20_OFFSET) }.unwrap_or(0);
+    let size =
+        unsafe { safe_read_usize(processor + FD4_FILELOADPROCESSOR_SIZE_28_OFFSET) }.unwrap_or(0);
+    let acquires = unsafe { safe_read_usize(processor + FD4_FILELOADPROCESSOR_ACQUIRE_30_OFFSET) }
+        .map(|v| (v & 0xffff_ffff) as i64)
+        .unwrap_or(-1);
+    (processor, content, size, acquires)
+}
+
+/// Read an `FD4ResCapHolderItem`'s resource name (the msb filename) off a file cap, as ASCII.
+///
+/// `resourceString` is an `FD4BasicHashString` whose `DLString<wchar_t>` is small-string-optimized:
+/// `capacity > 7` means the union at `+0x18` holds a heap POINTER, otherwise the characters sit
+/// inline in the union itself. Both `length` and the read are clamped so a garbage capacity cannot
+/// walk the probe off a page, every character goes through `safe_read_u8`, and non-ASCII collapses
+/// to `?` -- this runs on the game thread during a stall, so it must not fault or allocate wildly.
+unsafe fn fd4_filecap_name(cap: usize) -> String {
+    let capacity =
+        unsafe { safe_read_usize(cap + FD4_FILECAP_NAME_CAPACITY_30_OFFSET) }.unwrap_or(0);
+    let length = unsafe { safe_read_usize(cap + FD4_FILECAP_NAME_LENGTH_28_OFFSET) }.unwrap_or(0);
+    let union_addr = cap + FD4_FILECAP_NAME_UNION_18_OFFSET;
+    let chars_addr = if capacity > DLSTRING_INLINE_CAPACITY_MAX {
+        match unsafe { safe_read_usize(union_addr) }.filter(|&v| v > 0x10000) {
+            Some(ptr) => ptr,
+            None => return String::from("<badptr>"),
+        }
+    } else {
+        union_addr
+    };
+    let count = length.min(FD4_FILECAP_NAME_MAX_CHARS);
+    let mut out = String::with_capacity(count);
+    for i in 0..count {
+        let (Some(lo), Some(hi)) = (unsafe { safe_read_u8(chars_addr + i * 2) }, unsafe {
+            safe_read_u8(chars_addr + i * 2 + 1)
+        }) else {
+            out.push_str("<trunc>");
+            break;
+        };
+        let unit = u16::from(lo) | (u16::from(hi) << 8);
+        if unit == 0 {
+            break;
+        }
+        out.push(if (0x20..0x7f).contains(&unit) {
+            unit as u8 as char
+        } else {
+            '?'
+        });
+    }
+    out
+}
+
 /// Read the TitleTopDialog FD4 state machine by NAME (is_in_state) given the title `owner` (rcx of
 /// STEP_MenuJobWait). Returns `(dialog_ptr, in_fadein, in_loop, in_textfadeout, menu_opened_latch)` or
 /// `None` if the dialog isn't the TitleTopDialog yet. Read-only / no side effects. Mirrors STAGE1d.
@@ -1702,15 +1774,59 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                                         safe_read_usize(cap + FD4_FILECAP_BYTES_90_OFFSET)
                                     }
                                     .unwrap_or(0);
+                                    // WHY `msbResCap == 0` -- the two surviving explanations.
+                                    // `bytes` is `MsbFileCap::msbResCap`, written at exactly ONE
+                                    // site, guarded on the cap's CONTENT being non-null (see the
+                                    // constant's docs). So a null here means the parse never ran,
+                                    // and the question is whether this cap is (a) FRESH, built by
+                                    // this reload, whose file read came back empty, or (b) a
+                                    // CACHE-HIT SURVIVOR from the previous load that was never
+                                    // reparsed. `rc`/`fl` separate those; `ct` shows whether the
+                                    // content the callback gates on is present right now.
+                                    let rc = unsafe {
+                                        safe_read_usize(cap + FD4_FILECAP_REFCOUNT_58_OFFSET)
+                                    }
+                                    .map(|v| (v & 0xffff_ffff) as i64)
+                                    .unwrap_or(-1);
+                                    let fl = unsafe { safe_read_u8(cap + FD4_FILECAP_FLAGS_89_OFFSET) }
+                                        .map(|v| v as i32)
+                                        .unwrap_or(-1);
+                                    let lp = unsafe {
+                                        safe_read_usize(cap + FD4_FILECAP_LOADPROCESS_78_OFFSET)
+                                    }
+                                    .unwrap_or(0);
+                                    let (proc_ptr, content, csize, acq) = unsafe {
+                                        fd4_filecap_content_state(lp)
+                                    };
+                                    let name = unsafe { fd4_filecap_name(cap) };
                                     let _ = core::fmt::Write::write_fmt(
                                         &mut caps,
-                                        format_args!("+{slot:x}:st={st}/bytes={bytes:#x},"),
+                                        format_args!(
+                                            "+{slot:x}:st={st}/bytes={bytes:#x}/rc={rc}/fl={fl:#x}\
+                                             /lp={lp:#x}/proc={proc_ptr:#x}/ct={content:#x}\
+                                             /csz={csize:#x}/acq={acq}/name='{name}',"
+                                        ),
                                     );
                                 }
+                                // The user reports the NATIVE loading screen owns the screen at the
+                                // softlock, where a healthy load only flashes it for about a vblank.
+                                // Pin that to RAM rather than leaving it a visual observation: sample
+                                // both loading-screen surfaces at the stall so the report becomes a
+                                // semaphore.
+                                let (now_loading, fake_cover) =
+                                    match game_module_base().ok().filter(|&b| b != 0) {
+                                        Some(b) => (
+                                            unsafe { now_loading_active(b) } as i32,
+                                            unsafe { fake_loading_screen_visible(b) } as i32,
+                                        ),
+                                        None => (-1, -1),
+                                    };
                                 let _ = core::fmt::Write::write_fmt(
                                     &mut ls_phase2,
                                     format_args!(
-                                        " blk_2f={ls_2f} blk_3c={ls_3c} blk_06={ls_06} blk_caps=[{caps}]"
+                                        " blk_2f={ls_2f} blk_3c={ls_3c} blk_06={ls_06}\
+                                         blk_nowloading={now_loading} blk_fakecover={fake_cover}\
+                                         blk_caps=[{caps}]"
                                     ),
                                 );
                             }
