@@ -128,6 +128,16 @@ EOF
 # the launch owner for the lifetime of the game.
 me3_launch() {
   local profile_path="$1"
+  # Fail loudly on the CWD payload-hijack trap (bd me3-launch-cwd-must-lack-rust-target-dir):
+  # me3 resolves me3-launcher.exe/me3_mod_host.dll from a CWD-relative
+  # target/x86_64-pc-windows-msvc/release dir when one exists. Launching from a rust
+  # checkout makes Proton exec a nonexistent (or stale) launcher and the run dies
+  # silently inside the compat tool. Callers must cd to GAME_DIR (or any non-checkout
+  # dir) first.
+  if [[ -d "$PWD/target/x86_64-pc-windows-msvc/release" ]]; then
+    echo "me3-launch-lib: refusing to launch from $PWD -- CWD contains target/x86_64-pc-windows-msvc/release, which hijacks me3's launcher payload resolution; cd to GAME_DIR first" >&2
+    return 2
+  fi
   "$ME3_BIN" --steam-dir "$ME3_STEAM_DIR" launch -g eldenring -p "$profile_path"
 }
 

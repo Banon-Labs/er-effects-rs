@@ -337,6 +337,42 @@ unsafe extern "system" fn crash_vectored_handler(info: *mut ExceptionPointersMin
             bt,
         ),
     );
+    // Attribution context for a stack-exec AV (rip landing on the faulting thread's own
+    // stack): dump the "code" bytes being executed plus a return-address scan of the
+    // stack above rsp, tagged self+/game+ -- this names the native path that jumped into
+    // the stack without needing a debugger attach. Bounded, own-stack reads only.
+    if rip >= rsp.saturating_sub(0x1000) && rip < rsp + 0x4000 && rsp != 0 {
+        let mut hex = String::new();
+        let dump_start = rip.saturating_sub(0x10);
+        for off in 0..0x40usize {
+            let byte = unsafe { *((dump_start + off) as *const u8) };
+            let _ = std::fmt::Write::write_fmt(&mut hex, format_args!("{byte:02x}"));
+        }
+        let mut scan = String::new();
+        let mut found = 0usize;
+        for slot in 0..256usize {
+            let qword = unsafe { *((rsp + slot * 8) as *const usize) };
+            let tag = address_tag(qword);
+            if tag.starts_with("self+") || tag.starts_with("game+") {
+                if found != 0 {
+                    scan.push(',');
+                }
+                let _ = std::fmt::Write::write_fmt(
+                    &mut scan,
+                    format_args!("rsp+0x{:x}={tag}", slot * 8),
+                );
+                found += 1;
+                if found >= 24 {
+                    break;
+                }
+            }
+        }
+        append_named_log(
+            &log_dir(),
+            CRASH_LOG_FILE_NAME,
+            format_args!("stack-exec detail: bytes@rip-0x10=[{hex}] stack_scan=[{scan}]"),
+        );
+    }
     EXCEPTION_CONTINUE_SEARCH
 }
 

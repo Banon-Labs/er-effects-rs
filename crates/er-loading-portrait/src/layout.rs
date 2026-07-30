@@ -26,7 +26,18 @@ pub const TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET: usize = 0x78;
 /// Observe the native now-loading helper visible during the black/progress-bar loading surface.
 /// This is the first-pass target for a separate custom loading/masquerade surface after live title-logo
 /// remaps proved crash-prone.
-pub const NOW_LOADING_HELPER_CTOR_RVA: usize = 0x2a20e0;
+///
+/// 1.16.2 re-verification (er-effects-rs-3t4m): the ctor ENTRY is `0x2a2020`. The previous value
+/// `0x2a20e0` was the 1.16.1 entry (byte-proven: the 1.16.1 runtime dump holds the exact prologue
+/// `48 89 4c 24 08 53 56 57 41 56 48 83 ec 38` at 0x2a20e0, and the 1.16.2 dump/deobf hold it at
+/// 0x2a2020); in 1.16.2, 0x2a20e0 is the MID-BODY instruction `MOV [RSI+0x38],RAX` (+0xc0, zero
+/// xrefs). A MinHook detour installed there is entered mid-frame, so its trampoline continues the
+/// ctor epilogue at an rsp displaced by the detour call frame and the final RET pops a garbage
+/// stack slot -> deterministic stack-exec access violation the first time the helper is
+/// constructed (~8.4s into boot). The product never tripped it only because it installs this hook
+/// after the boot-time construction (293/293 archived runs: ctor_hits == 0); the standalone DLL
+/// installs at attach and crashed every boot until this entry was corrected.
+pub const NOW_LOADING_HELPER_CTOR_RVA: usize = 0x2a2020;
 pub const NOW_LOADING_HELPER_UPDATE_RVA: usize = 0x2a2c40;
 pub static NOW_LOADING_HELPER_CTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub static NOW_LOADING_HELPER_UPDATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
@@ -122,7 +133,7 @@ pub const LOADING_SCREEN_DATA_INTERP_ELAPSED_OFFSET: usize = 0x24;
 
 /// `CS::CSNowLoadingHelperImp` -- the controller behind the now-loading UI (the tips + rotating artwork,
 /// distinct from the `CSFakeLoadingScreenImp` cover and from the Scaleform movie that draws them). RE'd
-/// from the Ghidra dump's named layout (ctor deobf 0x1402a20e0, `Update` 0x1402a2c40). Key fields:
+/// from the Ghidra dump's named layout (1.16.2 ctor 0x1402a2020, `Update` 0x1402a2c40). Key fields:
 /// `menu_load_entries` is a Fisher-Yates-shuffled 1..=34 array (the 34 loading-screen artwork/tip
 /// variants) and `current_menu_load_index` picks the active one; `replace_tex_info` /
 /// `requested_replace_tex_info` are the Scaleform texture-replacement handoff that swaps that artwork into
