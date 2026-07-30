@@ -1171,11 +1171,15 @@ pub static SAVE_CREATEFILEW_DIAG_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_CREATEFILEW_STAGE_STEAMID_DIR_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_CREATEFILEW_STAGE_SAVE_FILE_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_CREATEFILEW_CONFIGURED_FILE_HITS: AtomicUsize = AtomicUsize::new(0);
-/// Deepest nesting ever reached in the save-redirect file detours (CreateFileW / CopyFileW /
-/// GetFileAttributes(Ex)W / FindFirstFileW / NtCreateFile), counted per thread by
-/// `SaveDetourDepth`. 1 = no detour ever re-entered; 2 = a detour's own `fs::read`/`fs::write`
-/// re-entered once and was passed through, the expected steady state. ANY value above 2 means a
-/// pass-through decision was lost and the unbounded-recursion stack overflow of 2026-07-30 is back.
+/// Deepest nesting ever reached in the WIN32 save-redirect file detours (CreateFileW / CopyFileW /
+/// GetFileAttributes(Ex)W / FindFirstFileW), counted per thread by `SaveDetourDepth`. 1 = no detour
+/// ever re-entered; 2 = a detour's own `fs::read`/`fs::write` re-entered once and was passed
+/// through, the expected steady state. ANY value above 2 means a pass-through decision was lost and
+/// the unbounded-recursion stack overflow of 2026-07-30 is back.
+///
+/// The ntdll `NtCreateFile` detour deliberately does NOT count here: it is the layer BENEATH these,
+/// firing again under every Win32 open, so including it would put a healthy open at 2 and a healthy
+/// normalize-triggering open at 3 -- an alarm that fires on a working game is an alarm nobody reads.
 pub static SAVE_REDIRECT_DETOUR_MAX_DEPTH: AtomicUsize = AtomicUsize::new(0);
 /// Nested save-redirect detour entries that were degraded to a pure pass-through. Nonzero is
 /// normal (the detours do their own file I/O); it is the DEPTH above, not this count, that
