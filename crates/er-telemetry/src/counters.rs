@@ -692,6 +692,19 @@ pub static MSB_PARSE_TRACE_CALLS: AtomicUsize = AtomicUsize::new(0);
 /// block ever waits on it, so a non-zero value here IS the freeze precursor. Exposed as
 /// `oracle_msb_parse_null_results`.
 pub static MSB_PARSE_TRACE_NULL_RESULTS: AtomicUsize = AtomicUsize::new(0);
+
+/// Blocks whose stale file cap stayed (status=0x04, data=null) AFTER the single native re-enqueue.
+/// This is the DETERMINISTIC "the map archive backing this file is not mounted" signal -- the read
+/// genuinely ran and returned nothing -- so a non-zero value means the load cannot complete and the
+/// phase-2 handler will wait forever. Exposed as `oracle_blockres_stalecap_unrecoverable`.
+pub static BLOCKRES_STALECAP_UNRECOVERABLE: AtomicUsize = AtomicUsize::new(0);
+/// The file cap that tripped it (diagnostic).
+pub static BLOCKRES_STALECAP_LAST_DEAD_CAP: AtomicUsize = AtomicUsize::new(0);
+/// Ticks on which the map-mount guard-flip driver declined to act. It logged NOTHING on the
+/// 2026-07-30 stall it exists to fix, and with five ANDed conditions there was no way to tell which
+/// one refused. Exposed as `oracle_map_mount_guard_declines`.
+pub static MOUNT_GUARD_DECLINE_LOGS: AtomicUsize = AtomicUsize::new(0);
+
 pub static MENU_WINDOW_JOB_DTOR_LIST_REMOVALS: AtomicUsize = AtomicUsize::new(0);
 pub static MENU_WINDOW_JOB_DTOR_LAST_GUARDED_WINDOW: AtomicUsize = AtomicUsize::new(0);
 pub static MENU_WINDOW_JOB_DTOR_LAST_GUARDED_INDEX: AtomicUsize = AtomicUsize::new(0);

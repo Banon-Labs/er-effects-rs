@@ -920,7 +920,20 @@ pub(crate) use er_telemetry::counters::BLOCKRES_PHASE2_ORIG;
 // un-evictable file trips the cap in << 1s of frames and the block is left to the game.
 pub(crate) use er_telemetry::counters::BLOCKRES_STALECAP_RETRIES;
 pub(crate) use er_telemetry::counters::BLOCKRES_STALECAP_LAST_BRES;
-const BLOCKRES_STALECAP_MAX_RETRIES: usize = 32;
+pub(crate) use er_telemetry::counters::BLOCKRES_STALECAP_LAST_DEAD_CAP;
+pub(crate) use er_telemetry::counters::BLOCKRES_STALECAP_UNRECOVERABLE;
+// ONE ATTEMPT, NOT A LOOP (2026-07-30). This was 32, and the 2026-07-30 msb-parse capture showed
+// exactly what those 32 extra attempts bought: nothing. The re-enqueue MECHANICALLY WORKS -- the
+// sole `msbResCap` writer fired once per re-issue, 33 times, each with a fresh `FD4FileLoadProcess`
+// -- and every one of those genuine reads returned zero bytes for `mapstudio_dlc2:/m28_00_00_00.msb`
+// and its `_99` sibling. Attempt 1 already establishes that the bytes are absent from the archive
+// layer; nothing changes between frames that could make attempt 2..32 read differently.
+//
+// Retrying a corrective action with no plausible second-attempt case is worse than not retrying: it
+// spends ~2.6s, floods the log, and disguises a DETERMINISTIC failure as a flaky one. So: act once,
+// and if the condition survives that single re-issue, treat it as an IDENTIFIED failure and say so
+// plainly rather than spinning.
+const BLOCKRES_STALECAP_MAX_RETRIES: usize = 1;
 
 // PRODUCT DEFAULT (2026-07-17): the stale-file-cap reload fix is ON by default so it runs on the plain
 // me3 product path with NO env vars and NO marker (goal: the second-load fix must not depend on
@@ -1005,8 +1018,14 @@ pub(crate) unsafe extern "system" fn blockres_phase2_hook(
                 "BLOCKRES-STALECAP-FIX #{n}: block-res=0x{bres:x} primary-cap=0x{fc:x} status=0x04 data=null -> re-enqueued {issued} stale file cap(s) onto the CSFile load queue (native 0x269d7b0) to re-attach +0x90"
             ));
         } else if n == BLOCKRES_STALECAP_MAX_RETRIES + 1 {
+            // IDENTIFIED FAILURE, not a hedge. One native re-issue already ran and the read came back
+            // with nothing, so the file is not retrievable through this path and the block will sit at
+            // phase 2 forever (it has no timeout). Name it once, raise a semaphore a caller can act on,
+            // and stop -- do not keep re-issuing.
+            BLOCKRES_STALECAP_UNRECOVERABLE.fetch_add(1, Ordering::SeqCst);
+            BLOCKRES_STALECAP_LAST_DEAD_CAP.store(fc, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "BLOCKRES-STALECAP-FIX: retry cap ({BLOCKRES_STALECAP_MAX_RETRIES}) hit for block-res=0x{bres:x} cap=0x{fc:x}; native re-enqueue did not re-attach data (file may be genuinely evicted from its package -- needs a full block teardown/reload)"
+                "BLOCKRES-STALECAP-UNRECOVERABLE: block-res=0x{bres:x} cap=0x{fc:x} status=0x04 data=null AFTER one native re-enqueue -- the read returned no bytes, so the map archive backing this file is not mounted for this load. Not retrying: the phase-2 handler has no timeout and will wait forever, so this needs the archive re-mounted (map-mount guard), not another read."
             ));
         }
     }
@@ -1273,6 +1292,9 @@ pub(crate) unsafe extern "system" fn mount_guard_detector_hook(
 pub(crate) use er_telemetry::counters::MOUNT_GUARD_FLIP_COUNT;
 pub(crate) use er_telemetry::counters::MOUNT_GUARD_FLIP_LAST_TICK;
 pub(crate) use er_telemetry::counters::MOUNT_GUARD_TICK;
+pub(crate) use er_telemetry::counters::MOUNT_GUARD_DECLINE_LOGS;
+/// Decline-reason log budget: enough to cover a whole stall window without flooding.
+const MOUNT_GUARD_DECLINE_LOG_CAP: usize = 40;
 
 /// True when the EBL mounted-archive registry `R = *(EBL_REGISTRY_GLOBAL_RVA)` is null/unreadable, i.e. no
 /// map archive is mounted yet (the mount step has not run). Used to gate the guard-flip: keep flipping
@@ -1323,12 +1345,36 @@ pub(crate) fn map_mount_guard_flip_tick(in_world: bool, mms_step: i32, sf: i64) 
     const COOLDOWN_TICKS: usize = 20;
     const MAX_FLIPS: usize = 60;
     let tick = MOUNT_GUARD_TICK.fetch_add(1, Ordering::SeqCst) + 1;
-    if !blockres_stalecap_fix_enabled()
-        || !in_world
-        || mms_step < 0
-        || sf != 0
-        || !ebl_registry_is_null()
-    {
+    // WHY THIS DECLINED (2026-07-30). The 16:44 capture froze at phase 2 with ZERO
+    // MAP-MOUNT-GUARD-FLIP lines, so this driver silently declined on every tick of a stall it exists
+    // to fix -- and with five ANDed conditions the log said nothing about which one. Name the first
+    // failing condition, bounded, so the next run identifies it instead of leaving it to inference.
+    //
+    // Standing suspicion to CONFIRM OR KILL with that line, not to assume: `ebl_registry_is_null()`
+    // reads a single global and asks "is ANY map archive mounted". On a same-area reload the m61
+    // overworld tiles stay resident, so the registry is non-null and this returns false -- declining
+    // the flip -- while the ONE archive the block actually needs (m28) is the one that is missing.
+    // A per-archive check would be required if that is what the line shows.
+    let decline = if !blockres_stalecap_fix_enabled() {
+        Some("kill-switch file present")
+    } else if !in_world {
+        Some("not in_world (first autoload is never touched)")
+    } else if mms_step < 0 {
+        Some("mms_step < 0 (not loading)")
+    } else if sf != 0 {
+        Some("stable_frames != 0 (load already settled)")
+    } else if !ebl_registry_is_null() {
+        Some("EBL registry NON-NULL -- some archive is mounted, so this gate says 'map is mounted' even though the block's own archive may not be")
+    } else {
+        None
+    };
+    if let Some(reason) = decline {
+        let n = MOUNT_GUARD_DECLINE_LOGS.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= MOUNT_GUARD_DECLINE_LOG_CAP {
+            append_autoload_debug(format_args!(
+                "MAP-MOUNT-GUARD-DECLINED #{n}: {reason} (in_world={in_world} mms_step={mms_step} sf={sf})"
+            ));
+        }
         return;
     }
     let cnt = MOUNT_GUARD_FLIP_COUNT.load(Ordering::SeqCst);
