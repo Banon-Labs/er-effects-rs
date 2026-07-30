@@ -21,6 +21,14 @@
 //
 // The game task keeps ticking meanwhile -- see `save_flow_next_stage_ticks`, which is why the
 // flow's deadlines are frozen while `SAVE_PICKER_OS_DIALOG_OPEN` is set.
+//
+// THE BOOT INTENT IS THE EXCEPTION, and it is an exception about WHICH THREAD, never about this
+// file's contract. See `save_picker_boot_os.rs`: at a missing-save boot the only threads that reach
+// the picker are the D3D12 Present hook and the CSTaskImp recurring task, and blocking either one
+// stalls the game's own frame loop rather than a menu pump we are trying to make modal. That arm
+// therefore calls `os_pick_validated` from a thread WE own and passes `PickerDim::None`, because
+// with no game thread blocked Present keeps running and the boot's own overlay keeps drawing --
+// there is nothing frozen for a cover to explain.
 
 use windows::Win32::UI::Controls::Dialogs::{
     CommDlgExtendedError, GetOpenFileNameW, GetSaveFileNameW, OFN_DONTADDTORECENT, OFN_EXPLORER,
@@ -87,6 +95,38 @@ fn should_reopen(outcome: &OsPickOutcome, pick_was_valid: bool, attempts: usize)
     matches!(outcome, OsPickOutcome::Picked(_))
         && !pick_was_valid
         && attempts < SAVE_PICKER_OS_MAX_REOPENS
+}
+
+/// Why an open ended with nothing staged.
+///
+/// A `bool`/`Option` return conflates "the user decided" with "we could not ask", and that exact
+/// conflation is what PR #107 had to unpick one level up (a `bool` that meant both "the picker ran"
+/// and "the picker is still up", so the menu pump re-armed it forever). The System>Quit arms treat
+/// both the same and say so with `.ok()`; the BOOT arm cannot, because one of them quits the game
+/// and the other must fall back to the in-game browser.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OsPickAbort {
+    /// The user dismissed the dialog. A DECISION, and the only outcome a caller may treat as one.
+    Cancelled,
+    /// We could not ask: comdlg32 failed, a re-entrant open was refused, the core `CreateFileW`
+    /// detour is not live, or the reopen bound was exhausted. Never a user decision, so a caller
+    /// with another surface should use it rather than acting on a choice nobody made.
+    Unavailable,
+}
+
+/// Whether an open covers the game while it blocks.
+///
+/// A parameter rather than an unconditional arm, because the cover answers a question that is only
+/// asked when a GAME thread is parked in comdlg32: the game renders nothing, so a still frame is
+/// indistinguishable from a hang. The boot arm blocks a thread of ours instead, Present keeps
+/// running, and a dim there would cover the boot picker's own overlay to explain a freeze that is
+/// not happening.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PickerDim {
+    /// A game thread is blocked: raise the cover for exactly as long as it is frozen.
+    CoverFrozenGame,
+    /// No game thread is blocked: no cover.
+    None,
 }
 
 /// Double-NUL-terminated comdlg32 filter for the active flavor's extensions, e.g.
@@ -309,17 +349,19 @@ fn os_dialog_run(
 /// before the caller could stage anything. Taking the staging as a closure makes that window
 /// impossible to open by accident.
 ///
-/// Returns `Some(stage(path))`, or `None` for cancel / comdlg32 failure / reopen exhaustion -- in
-/// which case `stage` never ran and nothing was staged, which is exactly what stage 3 already reads
-/// as "the user abandoned the save".
+/// Returns `Ok(stage(path))`, or `Err(OsPickAbort)` -- in which case `stage` never ran and nothing
+/// was staged, which is exactly what stage 3 already reads as "the user abandoned the save". The
+/// two System>Quit callers `.ok()` this back into the `Option` they always had; only the boot arm
+/// separates a user's cancel from a dialog we could not open.
 fn os_pick_validated<T>(
     save_as: bool,
     mut start_dir: String,
     leaf: &str,
     extensions: &[&str],
     intent: &crate::experiments::save_picker::PickerIntent,
+    dim: PickerDim,
     stage: impl FnOnce(&str) -> T,
-) -> Option<T> {
+) -> Result<T, OsPickAbort> {
     // H4: refuse while the core CreateFileW detour is still settling. Installing a MinHook suspends
     // every other thread and allocates while they are frozen, and a thread parked in comdlg32
     // holding a heap or shell critical section is the one deadlock candidate. Every installer in
@@ -330,10 +372,10 @@ fn os_pick_validated<T>(
         append_autoload_debug(format_args!(
             "save-picker-os: refusing to open -- the core CreateFileW detour is not live yet, and installing a hook while a thread is parked in comdlg32 can deadlock"
         ));
-        return None;
+        return Err(OsPickAbort::Unavailable);
     }
     let Some(_claim) = OsDialogClaim::claim() else {
-        return None;
+        return Err(OsPickAbort::Unavailable);
     };
     // COVER THE GAME FOR EXACTLY AS LONG AS IT IS FROZEN. Everything below this line runs with the
     // menu thread parked inside comdlg32, so the game renders nothing and a user with no cover sees
@@ -345,14 +387,18 @@ fn os_pick_validated<T>(
     // pick REOPENS the dialog, and a per-call bracket would flash the game back at full brightness
     // between the two dialogs. From the user's side the reopen is one continuous "pick a save",
     // which is what the cover should track.
-    let _dim = picker_dim_arm(if save_as { "save-as" } else { "load" });
+    let _dim = match dim {
+        PickerDim::CoverFrozenGame => picker_dim_arm(if save_as { "save-as" } else { "load" }),
+        PickerDim::None => None,
+    };
     let commit_window_armed = save_dest_commit_window_armed();
     let mut attempts = 0usize;
     loop {
         let outcome = os_dialog_run(save_as, &start_dir, leaf, extensions, commit_window_armed);
         let picked = match &outcome {
             OsPickOutcome::Picked(path) => path.clone(),
-            OsPickOutcome::Cancelled | OsPickOutcome::Failed { .. } => return None,
+            OsPickOutcome::Cancelled => return Err(OsPickAbort::Cancelled),
+            OsPickOutcome::Failed { .. } => return Err(OsPickAbort::Unavailable),
         };
         let verdict =
             crate::experiments::save_picker::save_picker_accepts(
@@ -363,7 +409,7 @@ fn os_pick_validated<T>(
         let Err(reason) = verdict else {
             // `_claim` outlives this expression and drops on return, so every latch `stage` sets is
             // visible to the tick before the dialog term clears.
-            return Some(stage(&picked));
+            return Ok(stage(&picked));
         };
         SAVE_PICKER_PICK_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
         SAVE_PICKER_OS_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
@@ -377,9 +423,13 @@ fn os_pick_validated<T>(
         if !should_reopen(&outcome, false, attempts - 1) {
             SAVE_PICKER_OS_REOPEN_EXHAUSTED.store(1, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "save-picker-os: {SAVE_PICKER_OS_MAX_REOPENS} consecutive invalid picks -- giving up and taking the cancel path (a comdlg32 that fails instantly must not spin the menu pump)"
+                "save-picker-os: {SAVE_PICKER_OS_MAX_REOPENS} consecutive invalid picks -- abandoning the open (a comdlg32 that fails instantly must not spin the calling thread)"
             ));
-            return None;
+            // UNAVAILABLE, not Cancelled. Exhaustion is a dialog we could not get a usable answer
+            // out of -- most plausibly a comdlg32 returning instantly with a stale path -- and the
+            // System>Quit arms still read it as "nothing staged" through `.ok()`. Calling it a user
+            // cancel would let the boot arm quit the game over a comdlg32 defect.
+            return Err(OsPickAbort::Unavailable);
         }
         SAVE_PICKER_OS_REOPEN_COUNT.fetch_add(1, Ordering::SeqCst);
         // Reopen where they were, not back at the start.
@@ -436,12 +486,16 @@ pub(crate) unsafe fn os_open_save_picker_load(action_obj: usize) -> bool {
         Ordering::SeqCst,
     );
     SAVE_PICKER_OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
+    // `.ok()`: the System>Quit load arm treats a user cancel and an unusable comdlg32 identically
+    // -- both leave the System menu alone -- so it collapses the distinction here, at the one place
+    // that is allowed to.
     let staged = os_pick_validated(
         false,
         start_dir,
         "",
         extensions,
         &crate::experiments::save_picker::PickerIntent::LoadSource,
+        PickerDim::CoverFrozenGame,
         |picked| {
             // The SECOND gate, unchanged: BND4 parse, SteamID normalization, ProfileSummary
             // preview, candidate staging, picked-dir memory. The predicate above only added the
@@ -465,7 +519,8 @@ pub(crate) unsafe fn os_open_save_picker_load(action_obj: usize) -> bool {
             ));
             true
         },
-    );
+    )
+    .ok();
     if staged != Some(true) {
         // Nothing staged, the System menu untouched. Restore the preview we armed above so the
         // user's real rows are what the System UI shows.
@@ -522,12 +577,16 @@ pub(crate) unsafe fn os_open_save_dest_picker(system_dialog: usize) -> bool {
     };
     SAVE_DEST_PICKER_OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
     SAVE_PICKER_OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
+    // `.ok()`: identical reasoning to the load arm -- a cancelled and an unavailable destination
+    // browser both mean "nothing staged", which is what the save-flow tick already reads as the
+    // user abandoning the save.
     let staged = os_pick_validated(
         true,
         start_dir,
         &loaded_file_name,
         extensions,
         &intent,
+        PickerDim::CoverFrozenGame,
         |picked| {
             let target = PathBuf::from(picked);
             // The SAME mode-free routing decision the in-game browser's activation makes, so the
@@ -555,7 +614,8 @@ pub(crate) unsafe fn os_open_save_dest_picker(system_dialog: usize) -> bool {
                 }
             }
         },
-    );
+    )
+    .ok();
     if staged.is_none() {
         append_autoload_debug(format_args!(
             "save-picker-os: save-as closed without choosing; nothing staged -- the save-flow tick will end the flow with nothing written"

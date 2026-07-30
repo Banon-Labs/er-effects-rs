@@ -69,6 +69,11 @@ pub(crate) const BOOTSTRAP_EVENT_GAME_TASK_INSTANCE_READY: &str = "game_task_ins
 pub(crate) const BOOTSTRAP_EVENT_GAME_TASK_RECURRING_REGISTERED: &str =
     "game_task_recurring_registered";
 pub(crate) const BOOTSTRAP_EVENT_TELEMETRY_WRITE: &str = "telemetry_write";
+/// Boot missing-save picker CANCEL -> quit. Recorded here, and not only in the telemetry JSON,
+/// because this channel is append-only, lock-free and reachable from any thread: it is the one
+/// record that survives a game task frozen while holding the state mutex, which is exactly the
+/// condition under which the cancel path runs.
+pub(crate) const BOOTSTRAP_EVENT_BOOT_PICKER_CANCEL_EXIT: &str = "boot_picker_cancel_exit";
 pub(crate) const BOOTSTRAP_EVENT_POLICY_TELEMETRY_SNAPSHOT: &str = "policy_telemetry_snapshot";
 pub(crate) const BOOTSTRAP_EVENT_CONTINUE_TRACE_STARTED: &str = "continue_trace_started";
 pub(crate) const BOOTSTRAP_EVENT_CONTINUE_TRACE_APPLIED: &str = "continue_trace_applied";

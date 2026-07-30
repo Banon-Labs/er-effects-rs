@@ -1,30 +1,49 @@
 // THE one place that decides WHICH picker opens.
 //
-// There are exactly two "open a picker" entry points in the System>Quit flow -- the "Load Save
-// Profiles" row and the Save Game destination step -- and `er-effects.toml`'s
-// `os_native_save_picker` governs BOTH from a single key. Routing them through one function is
-// what makes that mechanical rather than a convention two call sites have to remember: the four
-// existing call sites keep calling the same public names, those names delegate here, and no other
-// file learns the flag exists.
+// There are exactly three "open a picker" entry points -- the System>Quit "Load Save Profiles"
+// row, the System>Quit Save Game destination step, and the MISSING-SAVE BOOT -- and
+// `er-effects.toml`'s `os_native_save_picker` governs ALL THREE from a single key. Routing them
+// through one function is what makes that mechanical rather than a convention three call sites
+// have to remember: the existing call sites keep calling the same public names, those names
+// delegate here, and no other file learns the flag exists.
+//
+// That is not a hypothetical. The boot intent was ADDED here because it was the one entry point
+// that never routed through this function: the boot arm called the in-game overlay directly, so a
+// user with `os_native_save_picker = true` got the OS dialog at System>Quit and the in-game
+// browser at boot, with no code anywhere reading the key on that path. A per-intent surface
+// decision is exactly what the table test below now forbids.
 //
 // The mode is read ONCE PER OPEN, here. It cannot change mid-session anyway (`RUNTIME_CONFIG` is
 // a parse-once `OnceLock`), but reading it in one place means a future caching change has one
 // place to touch.
 //
+// WHAT THE SURFACE DECISION IS NOT. The surface is uniform across intents; the OUTCOME OF A CANCEL
+// is not, and deliberately so. A cancelled System>Quit picker discharges its open request and
+// returns to the System menu (the #107 fix). A cancelled BOOT picker QUITS THE GAME, because at a
+// missing-save boot there is no menu to return to and world entry stays denied until a save is
+// chosen -- "OK -> choose a save, Cancel -> exit", the contract `path_hooks.rs` has documented
+// since the pre-in-game-picker era. Per-intent cancel semantics live in each intent's own arm; the
+// discrimination is by INTENT (an enum variant, checked by the compiler) and never by a flag read
+// inside the OS dialog code.
+//
 // The rest of the file is the decisions BOTH surfaces must share, for the same reason: where a
 // destination browser starts (`save_dest_start_dir`) and what a chosen destination becomes
 // (`save_dest_route_picked_target`). A copy of either in the OS arm is how the modes would drift.
 
-/// Which System>Quit surface is asking for a picker, and the native handle that surface owns.
+/// Which surface is asking for a picker, and the native handle that surface owns.
 ///
 /// `LoadSource` carries the row's action object (the load picker derives the System dialog, the
 /// submit queue and the window list from it). `SaveDestination` carries the System dialog
 /// directly, because the save flow -- not a row press -- opens that browser and there is no row
-/// action object at all.
+/// action object at all. `MissingSaveBoot` carries NOTHING, and the absence is the information:
+/// at a no-save boot the game's menu assets are not built, there is no `05_010` window and no row
+/// action object to derive anything from, which is why that intent's in-game arm is the DLL-drawn
+/// overlay rather than a native menu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PickerOpenRequest {
     LoadSource { action_obj: usize },
     SaveDestination { system_dialog: usize },
+    MissingSaveBoot,
 }
 
 /// Which picker surface an open resolves to.
@@ -60,6 +79,11 @@ pub(crate) fn os_native_picker_active() -> bool {
 /// Open the picker this request's surface calls for. Returns whatever the chosen surface returns:
 /// true when a picker is up (in-game) or a path was accepted (OS), false when nothing was staged
 /// and the caller must leave the System menu alone.
+///
+/// The boot arms return "this open was TAKEN OVER by a surface". A `false` there is not a failure
+/// and not a cancel -- it is "nothing owns the pick yet, ask again on the next tick" -- which is
+/// what lets the OS boot arm wait for the core `CreateFileW` detour to go live without either
+/// spinning a dialog or stranding the boot.
 pub(crate) unsafe fn open_picker_for_intent(request: PickerOpenRequest) -> bool {
     let surface = picker_surface_for(os_native_picker_active());
     match (surface, request) {
@@ -69,12 +93,18 @@ pub(crate) unsafe fn open_picker_for_intent(request: PickerOpenRequest) -> bool 
         (PickerSurface::InGame, PickerOpenRequest::SaveDestination { system_dialog }) => unsafe {
             system_quit_open_save_dest_picker_in_game(system_dialog)
         },
+        (PickerSurface::InGame, PickerOpenRequest::MissingSaveBoot) => {
+            crate::experiments::boot_arm_missing_save_picker_in_game()
+        }
         (PickerSurface::OsNative, PickerOpenRequest::LoadSource { action_obj }) => unsafe {
             os_open_save_picker_load(action_obj)
         },
         (PickerSurface::OsNative, PickerOpenRequest::SaveDestination { system_dialog }) => unsafe {
             os_open_save_dest_picker(system_dialog)
         },
+        (PickerSurface::OsNative, PickerOpenRequest::MissingSaveBoot) => {
+            boot_os_open_missing_save_picker()
+        }
     }
 }
 
@@ -157,11 +187,16 @@ pub(crate) fn save_dest_route_picked_target(target: &Path) -> DestRoute {
 mod save_picker_surface_tests {
     use super::*;
 
-    /// CONTRACT 2, mechanically. One key, both surfaces: for a given flag value every intent
+    /// CONTRACT 2, mechanically. One key, EVERY surface: for a given flag value every intent
     /// resolves to the SAME surface. A future per-intent special case has to break this table
     /// before it can reach a user.
+    ///
+    /// `MissingSaveBoot` is in this table because it is the intent that was MISSING one: the boot
+    /// arm bypassed `open_picker_for_intent` entirely and always drew the in-game overlay, so
+    /// `os_native_save_picker = true` was silently ignored at a missing-save boot. Listing it here
+    /// is what makes that regression impossible to reintroduce quietly.
     #[test]
-    fn one_key_value_resolves_both_intents_to_the_same_surface() {
+    fn one_key_value_resolves_every_intent_to_the_same_surface() {
         let requests = [
             PickerOpenRequest::LoadSource {
                 action_obj: 0x1234_5678,
@@ -169,6 +204,7 @@ mod save_picker_surface_tests {
             PickerOpenRequest::SaveDestination {
                 system_dialog: 0x8765_4321,
             },
+            PickerOpenRequest::MissingSaveBoot,
         ];
         for (os_enabled, expected) in [(false, PickerSurface::InGame), (true, PickerSurface::OsNative)]
         {

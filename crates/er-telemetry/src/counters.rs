@@ -77,6 +77,19 @@ pub static COMPOSITE_LAST_US: AtomicUsize = AtomicUsize::new(0);
 /// DLL per-frame CODE cost (large on reloads => our bug) from a game-side loop cost (fast => game/env).
 /// bd CORRECTION-scan-fix-didnt-recover...suspect-moveprobe-2026-07-22.
 pub static GAME_TASK_LAST_US: AtomicUsize = AtomicUsize::new(0);
+/// Free-running count of MAIN recurring game-task bodies entered, readable FROM ANY THREAD.
+///
+/// `EffectsState::game_task_ticks` already counts this, but it lives behind the state mutex and is
+/// only observable through a telemetry write the game task itself performs -- so it can answer "how
+/// many ticks happened" only for as long as the task is alive to report it, which is precisely when
+/// the question is uninteresting. A thread that needs to know whether the game task is STILL RUNNING
+/// (the boot picker, which blocks for as long as a user browses) cannot use it: taking the mutex is
+/// the one thing that can block forever if the task froze while holding it.
+///
+/// Measured need, run pr109-boot-oscancel-20260730-110704: the task reached tick 60 at +16.9s and
+/// then stopped for the remaining 17s of the run. Nothing in the telemetry said so -- the file simply
+/// stopped changing, which is indistinguishable from a file nobody looked at.
+pub static GAME_TASK_TICKS_TOTAL: AtomicUsize = AtomicUsize::new(0);
 /// Microseconds in the DLL build-driver FrameBegin task (maybe_register_stats_panel_textures +
 /// force_profile_render_tick) last frame -- the last untimed DLL per-frame task. bd
 /// SWEEP-DIAG-CHEAP-last-dll-suspect-is-build-driver-2026-07-22.
@@ -1351,6 +1364,64 @@ pub static SAVE_PICKER_OS_OWNER_HWND: AtomicUsize = AtomicUsize::new(0);
 /// Save-like `CreateFileW` opens observed while a dialog was open. Attribution for the shell
 /// browsing traffic that otherwise pollutes the save CreateFileW diagnostics.
 pub static SAVE_PICKER_OS_SAVELIKE_OPENS: AtomicUsize = AtomicUsize::new(0);
+
+// ---- OS picker at the MISSING-SAVE BOOT (startup_hooks/save_picker_boot_os.rs) ----
+//
+// The `SAVE_PICKER_OS_*` family above counts DIALOGS and is shared by all three intents. This
+// family counts the BOOT intent's OUTCOMES, which the shared family cannot express: at a
+// missing-save boot a cancel is not "the user backed out of a menu", it QUITS THE GAME, and that
+// terminal step has to be provable from telemetry rather than from watching the screen.
+
+/// Where the boot missing-save pick stands. `0` idle (nothing opened, or not a missing-save boot),
+/// `1` a surface owns the pick, `2` a file was accepted and the character sub-picker owns it,
+/// `3` the user cancelled the OS dialog and the game is quitting, `4` comdlg32 was unusable and the
+/// in-game browser took the pick over.
+pub static SAVE_PICKER_OS_BOOT_STATE: AtomicUsize = AtomicUsize::new(0);
+/// Boot OS dialogs this session. At a missing-save boot exactly one open is ever started, so `> 1`
+/// means the one-shot latch leaked and the reopen loop this design exists to prevent came back.
+pub static SAVE_PICKER_OS_BOOT_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Boot OS picks that cleared the shared validity predicate and reached the character sub-picker.
+pub static SAVE_PICKER_OS_BOOT_PICK_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// THE ACCEPTANCE ORACLE for the boot cancel path: the user pressed Cancel on the boot OS dialog
+/// and the game is quitting.
+///
+/// Only trustworthy when `SAVE_PICKER_BOOT_TELEMETRY_FLUSHED` reads 1. When it reads 0 this field
+/// is whatever it was before the cancel, and `er-effects-bootstrap.jsonl`'s
+/// `boot_picker_cancel_exit` record is the outcome instead.
+pub static SAVE_PICKER_OS_BOOT_CANCEL_EXIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// 1 once the picker thread is calling `ExitProcess(0)`.
+///
+/// (An earlier `SAVE_PICKER_OS_BOOT_EXIT_PENDING` companion was removed with the game-task exit
+/// hand-off it belonged to: the hand-off never executed at a missing-save boot, because the game
+/// task had stopped ticking long before the user answered the dialog. The picker thread now does
+/// the whole thing, so there is no interval during which an exit is owed but not performed.)
+pub static SAVE_PICKER_OS_BOOT_EXIT_PERFORMED: AtomicUsize = AtomicUsize::new(0);
+/// Times the boot OS surface gave up and handed the pick to the in-game browser (comdlg32 failed,
+/// the reopen bound was exhausted, or the core `CreateFileW` detour never went live). Non-zero says
+/// the user still got a picker, which is why this is a fallback and not a failure.
+pub static SAVE_PICKER_OS_BOOT_FALLBACK_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Ticks the boot OS open was deferred waiting for the core `CreateFileW` detour to go live. The
+/// wait is bounded; on exhaustion the in-game browser takes over rather than the boot stranding.
+pub static SAVE_PICKER_OS_BOOT_DEFER_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// Did the picker thread manage to refresh the telemetry file before quitting?
+///
+/// `1` the file you are reading describes the cancel. `0` the flush could not run (the state mutex
+/// was held by a thread that is not giving it back), so **every other field in this file predates
+/// the cancel** and only `er-effects-bootstrap.jsonl` plus the debug log describe the outcome.
+///
+/// THIS FIELD EXISTS BECAUSE ITS ABSENCE COST A DIAGNOSIS. In run pr109-boot-oscancel-20260730-110704
+/// the cancel worked perfectly and the telemetry showed `boot_state = OPEN`, `cancel_exit_count = 0`
+/// -- identical to what a dialog that never returned would have written, because the file had gone
+/// stale 12s earlier. A reader had no way to tell a working feature from a broken one.
+pub static SAVE_PICKER_BOOT_TELEMETRY_FLUSHED: AtomicUsize = AtomicUsize::new(0);
+/// `GAME_TASK_TICKS_TOTAL` sampled by the PICKER THREAD when the boot dialog opened, and again when
+/// the user answered it. Both are written by a thread that is demonstrably alive, so their
+/// DIFFERENCE is the direct answer to "was the game task running while the dialog was up" -- the
+/// question the first live run left open and no existing field could settle.
+///
+/// Equal values mean the game task did not tick once across the dialog's entire life.
+pub static SAVE_PICKER_BOOT_GAME_TICKS_AT_OPEN: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_BOOT_GAME_TICKS_AT_ANSWER: AtomicUsize = AtomicUsize::new(0);
 
 // ---- OS-picker DIM OVERLAY (save_picker_dim_overlay.rs) ----
 //
