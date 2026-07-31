@@ -2166,17 +2166,18 @@ fn write_game_module_oracles(body: &mut String) {
             LS_PORTRAIT_REJECTED_PUBLISHES.load(Ordering::SeqCst),
         );
         // Reject ATTRIBUTION (er-effects-rs-k979). The bare count above cannot say whether the
-        // neutral gate was doing its job or the pipeline broke. `_after_any_publish` is the one a
-        // proof should gate on; `_before_any_publish` is warm-up and expected.
+        // neutral gate was doing its job or the pipeline broke. `_after_window_publish` is the one
+        // a proof should gate on; `_before_window_publish` is warm-up and expected. Both are scoped
+        // to the CURRENT window -- the version counter they derive from is process-cumulative.
         push_json_usize(
             body,
-            "oracle_ls_portrait_rejects_before_any_publish",
-            er_telemetry::counters::LS_PORTRAIT_REJECTS_BEFORE_ANY_PUBLISH.load(Ordering::SeqCst),
+            "oracle_ls_portrait_rejects_before_window_publish",
+            er_telemetry::counters::LS_PORTRAIT_REJECTS_BEFORE_WINDOW_PUBLISH.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,
-            "oracle_ls_portrait_rejects_after_any_publish",
-            er_telemetry::counters::LS_PORTRAIT_REJECTS_AFTER_ANY_PUBLISH.load(Ordering::SeqCst),
+            "oracle_ls_portrait_rejects_after_window_publish",
+            er_telemetry::counters::LS_PORTRAIT_REJECTS_AFTER_WINDOW_PUBLISH.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,

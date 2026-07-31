@@ -17,7 +17,7 @@ This driver validates the fix END TO END, fully agent-driven (no menu nav, no in
 PASS semaphores for the load2 window (all RAM/native, screenshots are user evidence only):
   - oracle_ls_portrait_w/h >= 1024 (expect 1542) on captures seen during the window
   - oracle_portrait_onto_draw_hits delta > 0 (the portrait actually composited)
-  - oracle_ls_portrait_rejects_after_any_publish delta == 0. NOT "zero rejects": the only reject
+  - oracle_ls_portrait_rejects_after_window_publish delta == 0. NOT "zero rejects": the only reject
     reason is a >=90%-blank frame, and refusing one is the neutral gate WORKING. Run
     20260731-130803 saw the neutral leak at capture version 1 and refused 2 of 1542 frames while
     all 1540 publishes were clean -- warm-up, yet the old `rejected_delta == 0` failed it. A reject
@@ -71,8 +71,8 @@ PORTRAIT_KEYS = [
     "oracle_ls_portrait_w", "oracle_ls_portrait_h",
     "oracle_ls_portrait_slot", "oracle_ls_portrait_name_hash",
     "oracle_ls_portrait_rejected_publishes", "oracle_ls_portrait_too_small_seen_version",
-    "oracle_ls_portrait_rejects_before_any_publish",
-    "oracle_ls_portrait_rejects_after_any_publish",
+    "oracle_ls_portrait_rejects_before_window_publish",
+    "oracle_ls_portrait_rejects_after_window_publish",
     "oracle_ls_portrait_reject_last_version",
     "oracle_ls_portrait_reject_last_neutral_pct",
     "oracle_ls_portrait_neutral_leak_seen_version",
@@ -465,8 +465,8 @@ def main() -> int:
             # `rejected_delta == 0` failed the run for it. Gate on rejects that landed AFTER a clean
             # publish instead -- those mean the pipeline began emitting blanks mid-window.
             rejects_after_publish = (
-                final.get("oracle_ls_portrait_rejects_after_any_publish") or 0
-            ) - (base_s.get("oracle_ls_portrait_rejects_after_any_publish") or 0)
+                final.get("oracle_ls_portrait_rejects_after_window_publish") or 0
+            ) - (base_s.get("oracle_ls_portrait_rejects_after_window_publish") or 0)
             sw["rejects_after_publish"] = rejects_after_publish
             sw["reject_last_neutral_pct"] = final.get("oracle_ls_portrait_reject_last_neutral_pct")
             sw["portrait_pass"] = (

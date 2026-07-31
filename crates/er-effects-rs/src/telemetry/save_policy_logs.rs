@@ -504,11 +504,15 @@ pub(crate) fn note_ls_portrait_capture(w: u32, h: u32, px: &[u8]) -> bool {
         er_telemetry::counters::LS_PORTRAIT_REJECT_LAST_VERSION.store(version, Ordering::SeqCst);
         er_telemetry::counters::LS_PORTRAIT_REJECT_LAST_NEUTRAL_PCT
             .store(neutral_pct, Ordering::SeqCst);
-        if reject_is_warmup(LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst)) {
-            er_telemetry::counters::LS_PORTRAIT_REJECTS_BEFORE_ANY_PUBLISH
+        let warmup = reject_is_warmup(
+            LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst),
+            er_telemetry::counters::LS_PORTRAIT_REJECT_PUBLISH_BASELINE.load(Ordering::SeqCst),
+        );
+        if warmup {
+            er_telemetry::counters::LS_PORTRAIT_REJECTS_BEFORE_WINDOW_PUBLISH
                 .fetch_add(1, Ordering::SeqCst);
         } else {
-            er_telemetry::counters::LS_PORTRAIT_REJECTS_AFTER_ANY_PUBLISH
+            er_telemetry::counters::LS_PORTRAIT_REJECTS_AFTER_WINDOW_PUBLISH
                 .fetch_add(1, Ordering::SeqCst);
         }
     }
@@ -517,18 +521,22 @@ pub(crate) fn note_ls_portrait_capture(w: u32, h: u32, px: &[u8]) -> bool {
 
 /// Is a rejected capture pipeline WARM-UP rather than a fault? (er-effects-rs-k979)
 ///
-/// Split on whether anything has ever published cleanly. Before the first clean publish the
+/// Split on whether THIS WINDOW has published cleanly yet. Before its first clean publish the
 /// offscreen RT is still the blank background, so a >=90%-neutral frame is expected and refusing it
 /// is the gate working -- measured in run slot-portrait-proof-20260731-130803, where the neutral
 /// frame was capture version 1, 2 of 1542 were refused, and all 1540 publishes were clean. After a
 /// clean publish the same refusal means the pipeline started emitting blanks mid-window, which is a
 /// real defect and the thing a proof should fail on.
 ///
-/// Pulled out as a pure function so the distinction is unit-testable: the live event is
-/// intermittent and did not recur on the validation run, so waiting for it would leave the
-/// classification unproven.
-fn reject_is_warmup(published_rgba_version: usize) -> bool {
-    published_rgba_version == 0
+/// The baseline is essential, not decoration: `LOADING_BG_PORTRAIT_RGBA_VERSION` is cumulative for
+/// the whole PROCESS (that 3-window run ended at 1540 and never reset), so comparing it against 0
+/// would mark every window after the first as "already published" and misfile its warm-up reject as
+/// a fault -- reintroducing the very failure this change removes, one window later.
+///
+/// Pure so the distinction is unit-testable: the live event is intermittent and did not recur on
+/// the validation run, so waiting for it would leave the classification unproven.
+fn reject_is_warmup(published_rgba_version: usize, window_baseline: usize) -> bool {
+    published_rgba_version <= window_baseline
 }
 
 #[cfg(test)]
@@ -536,16 +544,24 @@ mod portrait_reject_attribution_tests {
     use super::reject_is_warmup;
 
     #[test]
-    fn a_reject_before_anything_published_is_warmup() {
-        assert!(reject_is_warmup(0));
+    fn a_reject_before_this_window_published_is_warmup() {
+        assert!(reject_is_warmup(0, 0));
     }
 
     #[test]
-    fn a_reject_after_a_clean_publish_is_not_warmup() {
-        // The defect this split exists to surface: the pipeline published fine, then began
+    fn a_reject_after_this_window_published_is_not_warmup() {
+        // The defect this split exists to surface: the window published fine, then began
         // producing blank frames.
-        assert!(!reject_is_warmup(1));
-        assert!(!reject_is_warmup(1540));
+        assert!(!reject_is_warmup(1, 0));
+        assert!(!reject_is_warmup(1540, 1400));
+    }
+
+    #[test]
+    fn a_later_windows_warmup_is_still_warmup() {
+        // The regression this baseline exists to prevent. Window 2 opens at cumulative version
+        // 1400; a reject before it publishes anything is warm-up, NOT a fault, even though the
+        // process-wide counter is long past zero.
+        assert!(reject_is_warmup(1400, 1400));
     }
 }
 

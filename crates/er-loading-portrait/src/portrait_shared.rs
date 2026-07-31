@@ -68,6 +68,15 @@ pub fn loading_portrait_window_reset(reason: &str) {
 /// holds. An identity MISMATCH (or unknown identity on either side) keeps the full 2026-07-06
 /// wrong-character clear. Game-thread only (reads the incoming slot's summary record).
 pub unsafe fn loading_portrait_window_reset_for_switch(selected_slot: i32, reason: &str) {
+    // Reject attribution baseline (er-effects-rs-k979). LOADING_BG_PORTRAIT_RGBA_VERSION is
+    // cumulative for the whole PROCESS -- it ends a 3-window run in the 1500s and never resets --
+    // so "has anything published yet" is only meaningful against the CURRENT window. Snapshot it
+    // here, at the one place a new portrait window begins, or every warm-up reject from switch 2
+    // onward would be misfiled as a post-publish fault.
+    er_telemetry::counters::LS_PORTRAIT_REJECT_PUBLISH_BASELINE.store(
+        LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst),
+        Ordering::SeqCst,
+    );
     let incoming_hash = unsafe { portrait_slot_name_hash(selected_slot) };
     let incoming_slot_tag = if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&selected_slot) {
         (selected_slot + 1) as usize

@@ -1219,10 +1219,16 @@ pub static LS_PORTRAIT_REJECT_LAST_VERSION: AtomicUsize = AtomicUsize::new(0);
 /// Neutral percentage of the most recent rejected frame. `LS_PORTRAIT_LAST_NEUTRAL_PCT` is
 /// overwritten by every capture, so the value that actually caused the refusal was being lost.
 pub static LS_PORTRAIT_REJECT_LAST_NEUTRAL_PCT: AtomicUsize = AtomicUsize::new(0);
-/// Rejects that occurred while the run had never published a clean frame (pipeline warm-up).
-pub static LS_PORTRAIT_REJECTS_BEFORE_ANY_PUBLISH: AtomicUsize = AtomicUsize::new(0);
-/// Rejects that occurred after at least one clean publish -- the signal worth failing a proof on.
-pub static LS_PORTRAIT_REJECTS_AFTER_ANY_PUBLISH: AtomicUsize = AtomicUsize::new(0);
+/// `LOADING_BG_PORTRAIT_RGBA_VERSION` snapshotted when the current portrait window opened. The
+/// version counter is cumulative for the whole PROCESS, so "has anything published yet" is only
+/// answerable against this baseline -- comparing against 0 would misfile every warm-up reject from
+/// the second window onward as a post-publish fault.
+pub static LS_PORTRAIT_REJECT_PUBLISH_BASELINE: AtomicUsize = AtomicUsize::new(0);
+/// Rejects that occurred before THIS window published a clean frame (pipeline warm-up).
+pub static LS_PORTRAIT_REJECTS_BEFORE_WINDOW_PUBLISH: AtomicUsize = AtomicUsize::new(0);
+/// Rejects that occurred after THIS window published cleanly -- the signal worth failing a proof
+/// on: the pipeline began emitting blanks mid-window.
+pub static LS_PORTRAIT_REJECTS_AFTER_WINDOW_PUBLISH: AtomicUsize = AtomicUsize::new(0);
 
 // CHARACTER-LOAD RELEASE GATE (er-effects-rs-q6vk). A profile switch presents TWO native loading
 // screens: the return-to-title teardown, then the character load after continue_confirm. Both
