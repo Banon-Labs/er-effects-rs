@@ -2165,6 +2165,29 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_ls_portrait_rejected_publishes",
             LS_PORTRAIT_REJECTED_PUBLISHES.load(Ordering::SeqCst),
         );
+        // Reject ATTRIBUTION (er-effects-rs-k979). The bare count above cannot say whether the
+        // neutral gate was doing its job or the pipeline broke. `_after_any_publish` is the one a
+        // proof should gate on; `_before_any_publish` is warm-up and expected.
+        push_json_usize(
+            body,
+            "oracle_ls_portrait_rejects_before_any_publish",
+            er_telemetry::counters::LS_PORTRAIT_REJECTS_BEFORE_ANY_PUBLISH.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_ls_portrait_rejects_after_any_publish",
+            er_telemetry::counters::LS_PORTRAIT_REJECTS_AFTER_ANY_PUBLISH.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_ls_portrait_reject_last_version",
+            er_telemetry::counters::LS_PORTRAIT_REJECT_LAST_VERSION.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_ls_portrait_reject_last_neutral_pct",
+            er_telemetry::counters::LS_PORTRAIT_REJECT_LAST_NEUTRAL_PCT.load(Ordering::SeqCst),
+        );
         // Publish identity + race measurability (bd er-effects-rs-dpf6 Phase 1): which character the
         // published head belongs to (slot+1 / FNV-1a64 name hash; 0 = no head/unknown), the last
         // measured switch-confirm -> publish latency, and the Phase-3 same-identity bridge holds.

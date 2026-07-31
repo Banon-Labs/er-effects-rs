@@ -495,8 +495,58 @@ pub(crate) fn note_ls_portrait_capture(w: u32, h: u32, px: &[u8]) -> bool {
     let publishable = !is_neutral;
     if !publishable {
         LS_PORTRAIT_REJECTED_PUBLISHES.fetch_add(1, Ordering::SeqCst);
+        // ATTRIBUTION (er-effects-rs-k979). A bare reject count cannot distinguish the gate doing
+        // its job from the pipeline breaking, so a proof gating on "zero rejects" failed healthy
+        // runs. Stamp WHY (the neutral share that tripped it) and WHEN (this capture's version),
+        // and split on whether anything has ever published cleanly: before the first clean publish
+        // this is warm-up -- the offscreen RT is still the blank background and refusing it is
+        // correct -- while after it means the pipeline began emitting blanks mid-window.
+        er_telemetry::counters::LS_PORTRAIT_REJECT_LAST_VERSION.store(version, Ordering::SeqCst);
+        er_telemetry::counters::LS_PORTRAIT_REJECT_LAST_NEUTRAL_PCT
+            .store(neutral_pct, Ordering::SeqCst);
+        if reject_is_warmup(LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst)) {
+            er_telemetry::counters::LS_PORTRAIT_REJECTS_BEFORE_ANY_PUBLISH
+                .fetch_add(1, Ordering::SeqCst);
+        } else {
+            er_telemetry::counters::LS_PORTRAIT_REJECTS_AFTER_ANY_PUBLISH
+                .fetch_add(1, Ordering::SeqCst);
+        }
     }
     publishable
+}
+
+/// Is a rejected capture pipeline WARM-UP rather than a fault? (er-effects-rs-k979)
+///
+/// Split on whether anything has ever published cleanly. Before the first clean publish the
+/// offscreen RT is still the blank background, so a >=90%-neutral frame is expected and refusing it
+/// is the gate working -- measured in run slot-portrait-proof-20260731-130803, where the neutral
+/// frame was capture version 1, 2 of 1542 were refused, and all 1540 publishes were clean. After a
+/// clean publish the same refusal means the pipeline started emitting blanks mid-window, which is a
+/// real defect and the thing a proof should fail on.
+///
+/// Pulled out as a pure function so the distinction is unit-testable: the live event is
+/// intermittent and did not recur on the validation run, so waiting for it would leave the
+/// classification unproven.
+fn reject_is_warmup(published_rgba_version: usize) -> bool {
+    published_rgba_version == 0
+}
+
+#[cfg(test)]
+mod portrait_reject_attribution_tests {
+    use super::reject_is_warmup;
+
+    #[test]
+    fn a_reject_before_anything_published_is_warmup() {
+        assert!(reject_is_warmup(0));
+    }
+
+    #[test]
+    fn a_reject_after_a_clean_publish_is_not_warmup() {
+        // The defect this split exists to surface: the pipeline published fine, then began
+        // producing blank frames.
+        assert!(!reject_is_warmup(1));
+        assert!(!reject_is_warmup(1540));
+    }
 }
 
 /// DEFAULT-OFF marker gate for the `append_autoload_debug` firehose (Phase B decoupled diagnostics,

@@ -1206,6 +1206,24 @@ pub static BOOT_VIEW_RELEASE_READY_MS: AtomicUsize = AtomicUsize::new(0);
 /// switches) -- NOT the number of native loading screens, of which a switch shows two.
 pub static BOOT_VIEW_SEMANTIC_RELEASES: AtomicUsize = AtomicUsize::new(0);
 
+// PORTRAIT REJECT ATTRIBUTION (er-effects-rs-k979). `LS_PORTRAIT_REJECTED_PUBLISHES` is a bare
+// count with no reason and no ordering, so a proof could only ask "were there any rejects", and
+// answering yes failed the run. But refusing a blank frame is the neutral gate WORKING: measured in
+// run slot-portrait-proof-20260731-130803, the neutral leak was first seen at capture version 1 --
+// the very first capture -- 2 frames were refused out of 1542, and all 1540 publishes were clean.
+// That is warm-up, not a defect. What WOULD be a defect is a refusal AFTER the window has published
+// cleanly: the pipeline started emitting blanks mid-window. These let the two be told apart.
+/// Capture version stamped at the most recent rejected publish. Compared against a window's publish
+/// baseline to place the reject before or after that window's first clean publish.
+pub static LS_PORTRAIT_REJECT_LAST_VERSION: AtomicUsize = AtomicUsize::new(0);
+/// Neutral percentage of the most recent rejected frame. `LS_PORTRAIT_LAST_NEUTRAL_PCT` is
+/// overwritten by every capture, so the value that actually caused the refusal was being lost.
+pub static LS_PORTRAIT_REJECT_LAST_NEUTRAL_PCT: AtomicUsize = AtomicUsize::new(0);
+/// Rejects that occurred while the run had never published a clean frame (pipeline warm-up).
+pub static LS_PORTRAIT_REJECTS_BEFORE_ANY_PUBLISH: AtomicUsize = AtomicUsize::new(0);
+/// Rejects that occurred after at least one clean publish -- the signal worth failing a proof on.
+pub static LS_PORTRAIT_REJECTS_AFTER_ANY_PUBLISH: AtomicUsize = AtomicUsize::new(0);
+
 // CHARACTER-LOAD RELEASE GATE (er-effects-rs-q6vk). A profile switch presents TWO native loading
 // screens: the return-to-title teardown, then the character load after continue_confirm. Both
 // satisfy "player render-ready + native screen finishing", so the cover released on the FIRST and

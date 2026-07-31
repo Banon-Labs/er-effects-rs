@@ -17,7 +17,11 @@ This driver validates the fix END TO END, fully agent-driven (no menu nav, no in
 PASS semaphores for the load2 window (all RAM/native, screenshots are user evidence only):
   - oracle_ls_portrait_w/h >= 1024 (expect 1542) on captures seen during the window
   - oracle_portrait_onto_draw_hits delta > 0 (the portrait actually composited)
-  - oracle_ls_portrait_rejected_publishes delta == 0 (no small/neutral captures were eaten)
+  - oracle_ls_portrait_rejects_after_any_publish delta == 0. NOT "zero rejects": the only reject
+    reason is a >=90%-blank frame, and refusing one is the neutral gate WORKING. Run
+    20260731-130803 saw the neutral leak at capture version 1 and refused 2 of 1542 frames while
+    all 1540 publishes were clean -- warm-up, yet the old `rejected_delta == 0` failed it. A reject
+    AFTER a clean publish is the real defect: the pipeline began emitting blanks mid-window.
   - published identity oracle_ls_portrait_slot == target_slot + 1
   - oracle_ls_portrait_renderer_visible_armor_equipped > 0 when the source has armor (not nude)
 
@@ -67,6 +71,10 @@ PORTRAIT_KEYS = [
     "oracle_ls_portrait_w", "oracle_ls_portrait_h",
     "oracle_ls_portrait_slot", "oracle_ls_portrait_name_hash",
     "oracle_ls_portrait_rejected_publishes", "oracle_ls_portrait_too_small_seen_version",
+    "oracle_ls_portrait_rejects_before_any_publish",
+    "oracle_ls_portrait_rejects_after_any_publish",
+    "oracle_ls_portrait_reject_last_version",
+    "oracle_ls_portrait_reject_last_neutral_pct",
     "oracle_ls_portrait_neutral_leak_seen_version",
     "oracle_loading_bg_portrait_rgba_version",
     "oracle_portrait_onto_draw_hits",
@@ -450,9 +458,20 @@ def main() -> int:
             # A same-map in-place reload can finish faster than the ~2.3s confirm->publish
             # latency; a short window with no displayed frame is recorded, not failed.
             short_window = window_s < 4.0
+            # REJECTS ARE NOT AUTOMATICALLY A FAILURE (er-effects-rs-k979). The only reject reason
+            # is `is_neutral` -- the frame was >=90% blank background -- and refusing it is the gate
+            # WORKING. Run 20260731-130803 measured the neutral leak first seen at capture version 1,
+            # 2 frames refused out of 1542, all 1540 publishes clean: pipeline warm-up, yet
+            # `rejected_delta == 0` failed the run for it. Gate on rejects that landed AFTER a clean
+            # publish instead -- those mean the pipeline began emitting blanks mid-window.
+            rejects_after_publish = (
+                final.get("oracle_ls_portrait_rejects_after_any_publish") or 0
+            ) - (base_s.get("oracle_ls_portrait_rejects_after_any_publish") or 0)
+            sw["rejects_after_publish"] = rejects_after_publish
+            sw["reject_last_neutral_pct"] = final.get("oracle_ls_portrait_reject_last_neutral_pct")
             sw["portrait_pass"] = (
                 result == "LOADED"
-                and rejected_delta == 0
+                and rejects_after_publish == 0
                 and (short_window or (max(max_w, max_h) >= 1024 and window_display_frames > 0))
             )
             sw["portrait_short_window"] = short_window
@@ -485,7 +504,7 @@ def main() -> int:
             log(
                 f"[switch {idx}] RESULT={result} portrait_pass={sw['portrait_pass']} "
                 f"window={window_s}s capture={max_w}x{max_h} display={window_display_frames} "
-                f"rejected_delta={rejected_delta} "
+                f"rejected_delta={rejected_delta} (after_publish={rejects_after_publish}) "
                 f"native_exposure={sw['native_exposure_delta']}/"
                 f"{sw['native_exposure_delta'] + sw['native_covered_delta']} frames "
                 f"(max_run={sw['native_exposure_max_run']} gate={sw['native_exposure_last_gate']} "
