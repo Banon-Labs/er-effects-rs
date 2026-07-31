@@ -368,12 +368,10 @@ pub static TITLE_CUSTOM_COVER_RUN_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_CUSTOM_COVER_RUN_RECURSION: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_CUSTOM_COVER_RUN_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub static PAB_RUN_POST_CALLS: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_OVERLAY_COVER_RENDER_CALLS: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_OVERLAY_COVER_LAST_DISPLAY_W: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_OVERLAY_COVER_LAST_DISPLAY_H: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_OVERLAY_COVER_TEXTURE_BOUND: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_OVERLAY_COVER_LAST_GX_TEXTURE: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_OVERLAY_COVER_LAST_TEXTURE_RESOURCE: AtomicUsize = AtomicUsize::new(0);
+// TITLE_OVERLAY_COVER_* removed 2026-07-31: six counters with zero writers, read once each to emit
+// oracles for the unbuilt custom title render surface (er-effects-rs-trp). A permanently-0 counter
+// cannot be distinguished from a feature that ran and did nothing, so they reported an ABSENT
+// feature as a FAILING one. Re-add with writers at the real render site when trp lands.
 pub static NOW_LOADING_HELPER_HOOKS_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static NOW_LOADING_HELPER_CTOR_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static NOW_LOADING_HELPER_UPDATE_HITS: AtomicUsize = AtomicUsize::new(0);
@@ -1195,6 +1193,21 @@ pub static NATIVE_LS_EXPOSURE_LAST_STOP_REASON: AtomicUsize = AtomicUsize::new(0
 /// Per-gate exposure tallies, indexed by the `NATIVE_LS_GATE_*` codes.
 pub static NATIVE_LS_EXPOSURE_BY_GATE: [AtomicUsize; NATIVE_LS_GATE_COUNT] =
     [const { AtomicUsize::new(0) }; NATIVE_LS_GATE_COUNT];
+
+// COVER RELEASE LATCHES (er-effects-rs-drb7). The cover's release needs the player to be
+// render-ready AND the native loading screen to be finishing. Both happen in a normal session but
+// NOT at the same instant (measured: render-ready at +27491ms, native close much later), and the
+// predicate required them simultaneously, so it never fired in product. Latch each per cover
+// window; both latched = release. Cleared by `boot_view_reset_cover_window`.
+/// Set once the local player has been observed render-enabled during this cover window.
+pub static BOOT_VIEW_RELEASE_RENDER_READY_SEEN: AtomicUsize = AtomicUsize::new(0);
+/// Set once the native loading screen has been observed closing/complete during this cover window.
+pub static BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN: AtomicUsize = AtomicUsize::new(0);
+/// Epoch ms at which both latches were first satisfied (the real handoff instant); 0 = not yet.
+pub static BOOT_VIEW_RELEASE_READY_MS: AtomicUsize = AtomicUsize::new(0);
+/// Cover windows released by the real end condition rather than by a bail. The product-health
+/// counter: on a healthy session this should equal the number of load windows.
+pub static BOOT_VIEW_SEMANTIC_RELEASES: AtomicUsize = AtomicUsize::new(0);
 
 /// The cover drew this frame -- not an exposure.
 pub const NATIVE_LS_GATE_DREW: usize = 0;
