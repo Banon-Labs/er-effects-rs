@@ -397,11 +397,54 @@ fn boot_view_player_render_ready() -> bool {
         && player.chr_ins.chr_flags1c5.enable_render()
 }
 
+/// Has the cover's job finished -- is the game ready to be revealed?
+///
+/// The two facts that answer this are "the player model is render-enabled" and "the native loading
+/// screen is finishing". Both occur in a normal session, but at DIFFERENT times: `render_ready` is
+/// an instantaneous read of the player's render flags and goes true early (measured +27491ms in run
+/// slot-portrait-proof-20260731-115718), while the native close/fadeout lands seconds later. The
+/// previous predicate `render_ready && (close_sent || permille >= 998)` required them in the SAME
+/// frame, so it never fired in product -- all 57 `boot-view DECISION` lines of that run read
+/// `world_handoff=false` while the loads completed normally. With no reachable release, the FPS bail
+/// became the cover's only stop, and its heuristic predicate is what the user saw as the vanilla
+/// loading screen flashing through (er-effects-rs-drb7).
+///
+/// So latch each fact for the window and release once BOTH have been observed. `can_move_handoff`
+/// stays as an immediate release: it is the strongest possible proof the world is playable, but it
+/// is written only by the PROOF-ONLY can-move probe (`can_move_probe.rs:277` -- "never fires in a
+/// normal user session"), so it can never be the product path on its own.
 fn boot_view_cover_release_ready(can_move_handoff: bool) -> bool {
-    can_move_handoff
-        || (boot_view_player_render_ready()
-            && (LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst) != 0
-                || LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst) >= 998))
+    use er_telemetry::counters::{
+        BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN, BOOT_VIEW_RELEASE_READY_MS,
+        BOOT_VIEW_RELEASE_RENDER_READY_SEEN, BOOT_VIEW_SEMANTIC_RELEASES,
+    };
+    if can_move_handoff {
+        return true;
+    }
+    if boot_view_player_render_ready() {
+        BOOT_VIEW_RELEASE_RENDER_READY_SEEN.store(1, Ordering::SeqCst);
+    }
+    // The game's own "this loading screen is going away" signals. The GFx fadeout is included
+    // because it is the earliest honest one and it demonstrably fires in product
+    // (oracle_loading_screen_gfx_fadeout_hits=91 in that run); the bar threshold is kept for the
+    // boot window, where the native bar does reach full.
+    if LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst) != 0
+        || LOADING_SCREEN_GFX_FADEOUT_HITS.load(Ordering::SeqCst) != 0
+        || LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst) >= 998
+    {
+        BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN.store(1, Ordering::SeqCst);
+    }
+    let ready = BOOT_VIEW_RELEASE_RENDER_READY_SEEN.load(Ordering::SeqCst) != 0
+        && BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN.load(Ordering::SeqCst) != 0;
+    if ready && BOOT_VIEW_RELEASE_READY_MS.load(Ordering::SeqCst) == 0 {
+        let now_ms = boot_view_epoch_ms().max(1) as usize;
+        BOOT_VIEW_RELEASE_READY_MS.store(now_ms, Ordering::SeqCst);
+        let n = BOOT_VIEW_SEMANTIC_RELEASES.fetch_add(1, Ordering::SeqCst) + 1;
+        append_autoload_debug(format_args!(
+            "boot-view: COVER RELEASE #{n} at {now_ms}ms -- render-ready and native loading screen finishing both latched this window (the real handoff; no bail needed)"
+        ));
+    }
+    ready
 }
 
 fn boot_view_load_flow_requested() -> bool {
@@ -453,6 +496,10 @@ fn boot_view_reset_cover_window() {
     BOOT_VIEW_DARK_GAP_FAILURES.store(0, Ordering::SeqCst);
     BOOT_VIEW_DARK_GAP_LAST_HELD_MS.store(0, Ordering::SeqCst);
     BOOT_VIEW_DARK_GAP_LAST_NATIVE_HITS.store(0, Ordering::SeqCst);
+    // Release latches belong to the window that observed them.
+    er_telemetry::counters::BOOT_VIEW_RELEASE_RENDER_READY_SEEN.store(0, Ordering::SeqCst);
+    er_telemetry::counters::BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN.store(0, Ordering::SeqCst);
+    er_telemetry::counters::BOOT_VIEW_RELEASE_READY_MS.store(0, Ordering::SeqCst);
     // Draw cache: force a re-rasterize on the first frame of the new window.
     BOOT_VIEW_DRAWN_PERMILLE.store(usize::MAX, Ordering::SeqCst);
     BOOT_VIEW_DRAWN_IDX.store(usize::MAX, Ordering::SeqCst);
@@ -2262,10 +2309,18 @@ unsafe fn composite_boot_progress_inner(
         // resumed window (the bar is already ~full on the healthy fast load that tripped it), so it
         // is suppressed after the once-per-window publish resume. The composite-time cap stays armed
         // -- it is the FPS backstop the bail exists for.
+        // PERMILLE ARM REMOVED (er-effects-rs-drb7). It stopped the cover the moment the bar read
+        // ~full, which on a HEALTHY switch happens ~1.3s in, long before the first portrait publish
+        // -- a progress reading standing in for a freeze predicate. With no reachable semantic
+        // release (see boot_view_cover_release_ready) this arm was the cover's de facto end
+        // condition, and it produced the vanilla flash-through on every switch: run
+        // slot-portrait-proof-20260731-115718 logged 4 bail stops, 0 semantic stops, 144 and 142
+        // native-exposure frames with holes of 81 and 127 consecutive frames. The composite-time cap
+        // stays and is now the bail's whole job: the guarantee that a genuinely frozen load can
+        // never leave the per-frame GPU readback running forever.
         let resumed = BOOT_VIEW_FPS_BAIL_RESUMED.load(Ordering::SeqCst) != 0;
-        if (!resumed && permille >= crate::constants::BOOT_VIEW_EPOCH_BAIL_PERMILLE as usize)
-            || composite_ms >= crate::constants::BOOT_VIEW_EPOCH_COMPOSITE_CAP_MS
-        {
+        let _ = (resumed, permille);
+        if composite_ms >= crate::constants::BOOT_VIEW_EPOCH_COMPOSITE_CAP_MS {
             if BOOT_VIEW_STOPPED.swap(1, Ordering::SeqCst) == 0 {
                 // Phase-1/2 measurability: stop reason + window duration + the publish-version and
                 // slot-key snapshots the publish-triggered resume compares/restores against.

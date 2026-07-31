@@ -87,6 +87,12 @@ PORTRAIT_KEYS = [
     "oracle_native_ls_exposure_last_gate", "oracle_native_ls_exposure_last_stop_reason",
     "oracle_native_ls_exposure_first_ms", "oracle_native_ls_exposure_last_ms",
     "oracle_boot_view_stop_reason",
+    # Cover END-CONDITION health: semantic_releases should equal the load-window count. If it
+    # lags, the two latches say which half never arrived.
+    "oracle_boot_view_semantic_releases",
+    "oracle_boot_view_release_render_ready_seen",
+    "oracle_boot_view_release_native_done_seen",
+    "oracle_boot_view_release_ready_ms",
     "oracle_portrait_loadwin_total", "oracle_portrait_loadwin_ok_full",
     "oracle_portrait_loadwin_displayed_small", "oracle_portrait_loadwin_displayed_stale",
     "oracle_portrait_loadwin_missing", "oracle_portrait_loadwin_open",
@@ -432,6 +438,13 @@ def main() -> int:
             sw["native_exposure_last_gate"] = final.get("oracle_native_ls_exposure_last_gate")
             sw["native_exposure_by_gate"] = final.get("oracle_native_ls_exposure_by_gate")
             sw["boot_view_stop_reason"] = final.get("oracle_boot_view_stop_reason")
+            sw["semantic_release_delta"] = (
+                final.get("oracle_boot_view_semantic_releases") or 0
+            ) - (base_s.get("oracle_boot_view_semantic_releases") or 0)
+            sw["release_render_ready_seen"] = final.get(
+                "oracle_boot_view_release_render_ready_seen"
+            )
+            sw["release_native_done_seen"] = final.get("oracle_boot_view_release_native_done_seen")
             # A same-map in-place reload can finish faster than the ~2.3s confirm->publish
             # latency; a short window with no displayed frame is recorded, not failed.
             short_window = window_s < 4.0

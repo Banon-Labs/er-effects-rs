@@ -1960,6 +1960,28 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_boot_view_stop_reason",
             er_telemetry::counters::BOOT_VIEW_STOP_REASON.load(Ordering::SeqCst),
         );
+        // Cover END-CONDITION health (er-effects-rs-drb7). semantic_releases should equal the load
+        // window count; the two latches say WHICH half is missing when it does not.
+        push_json_usize(
+            body,
+            "oracle_boot_view_semantic_releases",
+            er_telemetry::counters::BOOT_VIEW_SEMANTIC_RELEASES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_release_render_ready_seen",
+            er_telemetry::counters::BOOT_VIEW_RELEASE_RENDER_READY_SEEN.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_release_native_done_seen",
+            er_telemetry::counters::BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_release_ready_ms",
+            er_telemetry::counters::BOOT_VIEW_RELEASE_READY_MS.load(Ordering::SeqCst),
+        );
         push_json_usize(
             body,
             "oracle_boot_view_cover_window_ms",
