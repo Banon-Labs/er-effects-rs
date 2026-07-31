@@ -462,7 +462,22 @@ fn boot_view_cover_release_ready(can_move_handoff: bool) -> bool {
         crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
     let epoch_world_live = cur_load_epoch != 0
         && crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur_load_epoch;
-    if epoch_world_live || boot_view_player_render_ready() {
+    // ...but world-live is not reachable under every run either: it needs play time to ADVANCE past
+    // a threshold, and an agent probe that tears down shortly after the world appears never gets
+    // there -- runs 20260731-125800 and -130326 both ended with oracle_play_time_live=false and
+    // play_time_advanced_ms=0, so the release still never fired and the cover rode the 20s cap.
+    //
+    // The load-arrival fact that IS reachable in every run is the one the proof harness itself
+    // trusts to declare LOADED: the local player exists and carries a real loaded character. Both
+    // of those runs ended with oracle_player_present=true and a valid name/level while world-live
+    // stayed false. Reading it here in-process is the same evidence, one layer earlier.
+    let player_loaded = unsafe { PlayerIns::local_player_mut() }
+        .map(|player| {
+            player.chr_ins.chr_model_ins.as_ptr() as usize != TITLE_OWNER_SCAN_START_ADDRESS
+                && player.chr_ins.chr_ctrl.as_ptr() as usize != TITLE_OWNER_SCAN_START_ADDRESS
+        })
+        .unwrap_or(false);
+    if epoch_world_live || player_loaded || boot_view_player_render_ready() {
         BOOT_VIEW_RELEASE_RENDER_READY_SEEN.store(1, Ordering::SeqCst);
     }
     // The game's own "this loading screen is going away" signals.
