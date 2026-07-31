@@ -1386,6 +1386,15 @@ fn save_flow_degraded_commit_wait_tick(ticks: usize, completions_at_fire: u64) {
 
 pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     unsafe { switch_harness_discovery_tick() };
+    // PROFILE-SWITCH RELOAD SOFTLOCK FIX (bd
+    // FORK-RESOLVED-refill-job-never-enqueued-on-reload-fix-is-gated-self-heal-2026-07-30): the
+    // title start-game flow blanks the 13 `*_dlc2` DLIO virtual roots on every pass, but the job
+    // that repopulates them is enqueued only on boot -- so a reload leaves `mapstudio_dlc2` empty,
+    // every `m28` msb read returns 0 bytes, and WorldBlockRes case 2 waits forever with no timeout.
+    // Restores the root by calling the game's OWN refill, gated on the populated -> empty edge and
+    // verified against the expected string. Runs before the player lookup because the damage is done
+    // during the load, long before a player exists.
+    unsafe { dlc_roots_self_heal_tick() };
     // LOAD2 WORLD-COMPLETION (bd load2-sole-failing-gate-is-shouldsave-save_requested-b72): when a
     // committed reload parks at MoveMapStep finalize substate 7 (SAVE-DRAIN WAIT), the sole failing 7->8
     // gate condition is !ShouldSave() -- the suppressed quit-save left GameMan.save_requested set. This

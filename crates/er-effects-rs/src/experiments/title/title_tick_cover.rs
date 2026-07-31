@@ -1,3 +1,172 @@
+/// Walk `FD4FileCap::loadProcess -> FD4FileLoadProcess::fileLoadProcessor` and sample the content
+/// state the MSB load-complete callback gates on, returning `(processor, content, size, acquires)`.
+///
+/// This is the exact chain `FD4FileCap::AcquireContent` (`FUN_1426591c0`) walks: it returns null if
+/// either `loadProcess` or `fileLoadProcessor` is null, and otherwise hands back `processor.content_`
+/// -- re-fetching it through a vtable call only on the acquire refcount's `0 -> 1` edge, while the
+/// matching release nulls `content_` on the `1 -> 0` edge. A null content is what makes
+/// `MsbFileCap::msbResCap` stay `0` even at `loadState == 4`, so sampling it says whether the freeze
+/// is "no buffer at all" or "buffer present but never parsed". Read-only: no acquire, no refcount
+/// touch, no vtable call.
+pub(crate) unsafe fn fd4_filecap_content_state(load_process: usize) -> (usize, usize, usize, i64) {
+    if load_process <= 0x10000 {
+        return (0, 0, 0, -1);
+    }
+    let Some(processor) =
+        (unsafe { safe_read_usize(load_process + FD4_FILELOADPROCESS_PROCESSOR_20_OFFSET) })
+            .filter(|&v| v > 0x10000)
+    else {
+        return (0, 0, 0, -1);
+    };
+    let content =
+        unsafe { safe_read_usize(processor + FD4_FILELOADPROCESSOR_CONTENT_20_OFFSET) }.unwrap_or(0);
+    let size =
+        unsafe { safe_read_usize(processor + FD4_FILELOADPROCESSOR_SIZE_28_OFFSET) }.unwrap_or(0);
+    let acquires = unsafe { safe_read_usize(processor + FD4_FILELOADPROCESSOR_ACQUIRE_30_OFFSET) }
+        .map(|v| (v & 0xffff_ffff) as i64)
+        .unwrap_or(-1);
+    (processor, content, size, acquires)
+}
+
+/// Read an `FD4ResCapHolderItem`'s resource name (the msb filename) off a file cap, as ASCII.
+///
+/// `resourceString` is an `FD4BasicHashString` whose `DLString<wchar_t>` is small-string-optimized:
+/// `capacity > 7` means the union at `+0x18` holds a heap POINTER, otherwise the characters sit
+/// inline in the union itself. Both `length` and the read are clamped so a garbage capacity cannot
+/// walk the probe off a page, every character goes through `safe_read_u8`, and non-ASCII collapses
+/// to `?` -- this runs on the game thread during a stall, so it must not fault or allocate wildly.
+pub(crate) unsafe fn fd4_filecap_name(cap: usize) -> String {
+    let capacity =
+        unsafe { safe_read_usize(cap + FD4_FILECAP_NAME_CAPACITY_30_OFFSET) }.unwrap_or(0);
+    let length = unsafe { safe_read_usize(cap + FD4_FILECAP_NAME_LENGTH_28_OFFSET) }.unwrap_or(0);
+    let union_addr = cap + FD4_FILECAP_NAME_UNION_18_OFFSET;
+    let chars_addr = if capacity > DLSTRING_INLINE_CAPACITY_MAX {
+        match unsafe { safe_read_usize(union_addr) }.filter(|&v| v > 0x10000) {
+            Some(ptr) => ptr,
+            None => return String::from("<badptr>"),
+        }
+    } else {
+        union_addr
+    };
+    let count = length.min(FD4_FILECAP_NAME_MAX_CHARS);
+    let mut out = String::with_capacity(count);
+    for i in 0..count {
+        let (Some(lo), Some(hi)) = (unsafe { safe_read_u8(chars_addr + i * 2) }, unsafe {
+            safe_read_u8(chars_addr + i * 2 + 1)
+        }) else {
+            out.push_str("<trunc>");
+            break;
+        };
+        let unit = u16::from(lo) | (u16::from(hi) << 8);
+        if unit == 0 {
+            break;
+        }
+        out.push(if (0x20..0x7f).contains(&unit) {
+            unit as u8 as char
+        } else {
+            '?'
+        });
+    }
+    out
+}
+
+/// Read a `DLString<wchar_t>` (given the address of the string itself) as clamped ASCII.
+///
+/// Same small-string-optimization rule as `fd4_filecap_name`: `capacity > 7` means the union holds
+/// a heap pointer, otherwise the characters are inline. Kept separate because that helper takes a
+/// cap and bakes in the `+0x10` string base, while virtual-root entries hold bare `DLString`s.
+pub(crate) unsafe fn dlstring_wide_ascii(string_base: usize) -> String {
+    if string_base <= 0x10000 {
+        return String::new();
+    }
+    let capacity =
+        unsafe { safe_read_usize(string_base + DLSTRING_CAPACITY_20_OFFSET) }.unwrap_or(0);
+    let length = unsafe { safe_read_usize(string_base + DLSTRING_LENGTH_18_OFFSET) }.unwrap_or(0);
+    let union_addr = string_base + DLSTRING_UNION_08_OFFSET;
+    let chars_addr = if capacity > DLSTRING_INLINE_CAPACITY_MAX {
+        match unsafe { safe_read_usize(union_addr) }.filter(|&v| v > 0x10000) {
+            Some(ptr) => ptr,
+            None => return String::from("<badptr>"),
+        }
+    } else {
+        union_addr
+    };
+    let count = length.min(FD4_FILECAP_NAME_MAX_CHARS);
+    let mut out = String::with_capacity(count);
+    for i in 0..count {
+        let (Some(lo), Some(hi)) = (unsafe { safe_read_u8(chars_addr + i * 2) }, unsafe {
+            safe_read_u8(chars_addr + i * 2 + 1)
+        }) else {
+            out.push_str("<trunc>");
+            break;
+        };
+        let unit = u16::from(lo) | (u16::from(hi) << 8);
+        if unit == 0 {
+            break;
+        }
+        out.push(if (0x20..0x7f).contains(&unit) {
+            unit as u8 as char
+        } else {
+            '?'
+        });
+    }
+    out
+}
+
+/// Report the DLIO virtual-root aliases that back the stalled `mapstudio_dlc2:/m28_*.msb` reads.
+///
+/// The phase-2 freeze's file caps resolve through `mapstudio_dlc2:`, which is an alias in
+/// `DLFileDeviceManager::virtualRoots`, NOT a data archive. That alias is registered EMPTY (`L""`)
+/// by the title start-game flow and only filled in by `CSDlcImp::AddVirtualFileRoots` behind the
+/// `STEP_LoadListWait` gate. So an alias present with an EMPTY path at the stall means the read had
+/// nowhere to resolve to -- which is exactly a 0-byte read and a null `msbResCap`. Emitting
+/// `mapstudio` alongside it is the control: base-game populated + dlc2 empty is decisive on its own.
+///
+/// Strictly read-only -- a vector walk with bounded length and per-field `safe_read_*`, no locks and
+/// no allocation beyond the returned string, because this runs on the game thread mid-stall.
+pub(crate) unsafe fn dlio_virtual_roots_summary(base: usize) -> String {
+    if base == 0 {
+        return String::from("<nobase>");
+    }
+    let Some(manager) =
+        (unsafe { safe_read_usize(base + DL_FILE_DEVICE_MANAGER_SINGLETON_RVA) }).filter(|&v| v > 0x10000)
+    else {
+        return String::from("<mgrnull>");
+    };
+    let roots = manager + DL_FILE_DEVICE_MANAGER_VIRTUAL_ROOTS_48_OFFSET;
+    let (Some(start), Some(end)) = (
+        unsafe { safe_read_usize(roots + FILE_DEVICE_VIRTUAL_ROOT_VECTOR_START_08_OFFSET) },
+        unsafe { safe_read_usize(roots + FILE_DEVICE_VIRTUAL_ROOT_VECTOR_END_10_OFFSET) },
+    ) else {
+        return String::from("<vecunreadable>");
+    };
+    if start <= 0x10000 || end <= start {
+        return format!("<vecempty start={start:#x} end={end:#x}>");
+    }
+    let count =
+        ((end - start) / FILE_DEVICE_VIRTUAL_ROOT_ENTRY_STRIDE).min(FILE_DEVICE_VIRTUAL_ROOT_MAX_ENTRIES);
+    let mut out = String::new();
+    let mut seen = 0usize;
+    for i in 0..count {
+        let entry = start + i * FILE_DEVICE_VIRTUAL_ROOT_ENTRY_STRIDE;
+        let name = unsafe { dlstring_wide_ascii(entry) };
+        if !VIRTUAL_ROOTS_OF_INTEREST.iter().any(|w| *w == name) {
+            continue;
+        }
+        seen += 1;
+        let path =
+            unsafe { dlstring_wide_ascii(entry + FILE_DEVICE_VIRTUAL_ROOT_ENTRY_PATH_30_OFFSET) };
+        // An EMPTY path on a present alias is the whole point of this probe -- label it loudly so a
+        // log scan cannot mistake it for a formatting artifact.
+        let verdict = if path.is_empty() { "EMPTY" } else { "ok" };
+        let _ = core::fmt::Write::write_fmt(
+            &mut out,
+            format_args!("{name}='{path}'({verdict}),"),
+        );
+    }
+    format!("total={count}/matched={seen}/{out}")
+}
+
 /// Read the TitleTopDialog FD4 state machine by NAME (is_in_state) given the title `owner` (rcx of
 /// STEP_MenuJobWait). Returns `(dialog_ptr, in_fadein, in_loop, in_textfadeout, menu_opened_latch)` or
 /// `None` if the dialog isn't the TitleTopDialog yet. Read-only / no side effects. Mirrors STAGE1d.
@@ -1702,15 +1871,66 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                                         safe_read_usize(cap + FD4_FILECAP_BYTES_90_OFFSET)
                                     }
                                     .unwrap_or(0);
+                                    // WHY `msbResCap == 0` -- the two surviving explanations.
+                                    // `bytes` is `MsbFileCap::msbResCap`, written at exactly ONE
+                                    // site, guarded on the cap's CONTENT being non-null (see the
+                                    // constant's docs). So a null here means the parse never ran,
+                                    // and the question is whether this cap is (a) FRESH, built by
+                                    // this reload, whose file read came back empty, or (b) a
+                                    // CACHE-HIT SURVIVOR from the previous load that was never
+                                    // reparsed. `rc`/`fl` separate those; `ct` shows whether the
+                                    // content the callback gates on is present right now.
+                                    let rc = unsafe {
+                                        safe_read_usize(cap + FD4_FILECAP_REFCOUNT_58_OFFSET)
+                                    }
+                                    .map(|v| (v & 0xffff_ffff) as i64)
+                                    .unwrap_or(-1);
+                                    let fl = unsafe { safe_read_u8(cap + FD4_FILECAP_FLAGS_89_OFFSET) }
+                                        .map(|v| v as i32)
+                                        .unwrap_or(-1);
+                                    let lp = unsafe {
+                                        safe_read_usize(cap + FD4_FILECAP_LOADPROCESS_78_OFFSET)
+                                    }
+                                    .unwrap_or(0);
+                                    let (proc_ptr, content, csize, acq) = unsafe {
+                                        fd4_filecap_content_state(lp)
+                                    };
+                                    let name = unsafe { fd4_filecap_name(cap) };
                                     let _ = core::fmt::Write::write_fmt(
                                         &mut caps,
-                                        format_args!("+{slot:x}:st={st}/bytes={bytes:#x},"),
+                                        format_args!(
+                                            "+{slot:x}:st={st}/bytes={bytes:#x}/rc={rc}/fl={fl:#x}\
+                                             /lp={lp:#x}/proc={proc_ptr:#x}/ct={content:#x}\
+                                             /csz={csize:#x}/acq={acq}/name='{name}',"
+                                        ),
                                     );
                                 }
+                                // The user reports the NATIVE loading screen owns the screen at the
+                                // softlock, where a healthy load only flashes it for about a vblank.
+                                // Pin that to RAM rather than leaving it a visual observation: sample
+                                // both loading-screen surfaces at the stall so the report becomes a
+                                // semaphore.
+                                let module_base = game_module_base().ok().filter(|&b| b != 0);
+                                let (now_loading, fake_cover) = match module_base {
+                                    Some(b) => (
+                                        unsafe { now_loading_active(b) } as i32,
+                                        unsafe { fake_loading_screen_visible(b) } as i32,
+                                    ),
+                                    None => (-1, -1),
+                                };
+                                // The caps above name `mapstudio_dlc2:/m28_*.msb`, so dump the DLIO
+                                // alias that prefix resolves through. An alias present but EMPTY is
+                                // a 0-byte read by construction, which is the null `msbResCap`.
+                                let roots = match module_base {
+                                    Some(b) => unsafe { dlio_virtual_roots_summary(b) },
+                                    None => String::from("<nobase>"),
+                                };
                                 let _ = core::fmt::Write::write_fmt(
                                     &mut ls_phase2,
                                     format_args!(
-                                        " blk_2f={ls_2f} blk_3c={ls_3c} blk_06={ls_06} blk_caps=[{caps}]"
+                                        " blk_2f={ls_2f} blk_3c={ls_3c} blk_06={ls_06}\
+                                         blk_nowloading={now_loading} blk_fakecover={fake_cover}\
+                                         blk_roots=[{roots}] blk_caps=[{caps}]"
                                     ),
                                 );
                             }

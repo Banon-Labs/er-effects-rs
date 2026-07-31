@@ -680,6 +680,94 @@ pub static MENU_WINDOW_JOB_FINALIZE_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub static MENU_WINDOW_JOB_FINALIZE_GUARDS: AtomicUsize = AtomicUsize::new(0);
 /// Last window pointer the finalize hook neutralized (diagnostic).
 pub static MENU_WINDOW_JOB_FINALIZE_LAST_WINDOW: AtomicUsize = AtomicUsize::new(0);
+
+/// One-shot install guard for the msb-parse trace (the sole `msbResCap` writer, deobf 0x14021bbf0).
+pub static MSB_PARSE_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Trampoline for the msb-parse trace. 0 = not hooked.
+pub static MSB_PARSE_TRACE_ORIG: AtomicUsize = AtomicUsize::new(0);
+/// Total msb load-complete callbacks observed. Read from the `msb-parse #N` debug-log lines;
+/// despite the name pattern there is no `oracle_msb_parse_calls` JSON field.
+pub static MSB_PARSE_TRACE_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// Callbacks that returned with `msbResCap` STILL null -- i.e. the content was null and the parse
+/// silently short-circuited. Every one of these is a cap that will wedge `WorldBlockRes` case 2 if a
+/// block ever waits on it, so a non-zero value here IS the freeze precursor. Read from the
+/// `msb-parse-NULL-RESULT` debug-log lines; there is no JSON export for it.
+pub static MSB_PARSE_TRACE_NULL_RESULTS: AtomicUsize = AtomicUsize::new(0);
+
+/// One-shot install guard for the `STEP_LoadListWait` gate trace (deobf 0x140af1800).
+pub static LOADLIST_WAIT_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Trampoline for the `STEP_LoadListWait` gate trace. 0 = not hooked.
+pub static LOADLIST_WAIT_TRACE_ORIG: AtomicUsize = AtomicUsize::new(0);
+/// Total `STEP_LoadListWait` entries observed. THE ZERO CASE IS THE POINT: the DLC virtual roots are
+/// refilled only from inside this step, so if this stays flat across a profile-switch reload the
+/// blocker is "the step never ran", which is NOT any of its three internal gates. Read from the
+/// `loadlist-wait #N` debug-log lines; there is no JSON export for it.
+pub static LOADLIST_WAIT_TRACE_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// Last gate verdict seen, so the trace can log on CHANGE instead of every frame. Encoding matches
+/// `loadlist_wait_verdict`: 0 = both readable gates pass, 1 = loadList state gate, 2 = the `+0xb8`
+/// gate. `usize::MAX` = nothing observed yet.
+pub static LOADLIST_WAIT_TRACE_LAST_VERDICT: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Entries where BOTH readable gates passed, i.e. the step reached the storage-status check. If this
+/// is non-zero on a reload whose roots stayed empty, the blocker is that third check -- the one the
+/// trace deliberately does NOT evaluate itself, because it allocates and would perturb the run.
+/// Reported inline as `reachedC=` on each `loadlist-wait` line; there is no JSON export for it.
+pub static LOADLIST_WAIT_TRACE_REACHED_STATUS_GATE: AtomicUsize = AtomicUsize::new(0);
+
+/// One-shot install guard for the DLC virtual-root blank/refill traces.
+pub static DLC_ROOTS_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Trampoline for the DLC-root BLANK (`FUN_140e06490`). 0 = not hooked.
+pub static DLC_ROOTS_BLANK_ORIG: AtomicUsize = AtomicUsize::new(0);
+/// Trampoline for the DLC-root REFILL (`FUN_140e05fb0`). 0 = not hooked.
+pub static DLC_ROOTS_REFILL_ORIG: AtomicUsize = AtomicUsize::new(0);
+/// Times the DLC virtual roots were blanked to `L""`. Read from the `dlc-roots-BLANK` log lines.
+pub static DLC_ROOTS_BLANK_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// Trampoline for the DLC-root refill JOB BODY (`FUN_140836f30`). 0 = not hooked.
+pub static DLC_ROOTS_JOB_ORIG: AtomicUsize = AtomicUsize::new(0);
+/// Times the refill JOB BODY ran. THIS IS THE FORK: the job body sits one level above the refill
+/// (body -> FUN_14082e230 -> FUN_14082eb60 -> FUN_14082dbf0 -> FUN_14082faf0 -> ... -> the refill).
+/// If this fires on a reload whose roots stay empty, the job runs and diverges INSIDE, so a native
+/// fix exists. If it stays flat, the job was never enqueued -- and its creator is a dynamically
+/// built `std::function` with no static registration, so there is no call site to patch.
+pub static DLC_ROOTS_JOB_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+/// Cached address of the `mapstudio_dlc2` entry in `DLFileDeviceManager::virtualRoots`.
+pub static DLC_ROOT_ENTRY_ADDR: AtomicUsize = AtomicUsize::new(0);
+/// 1 once the `mapstudio_dlc2` root has been observed POPULATED. Arms the self-heal: we only ever
+/// restore a root the game itself filled in correctly, never guess one during early boot.
+pub static DLC_ROOT_SEEN_POPULATED: AtomicUsize = AtomicUsize::new(0);
+/// FNV-1a hash of the `mapstudio_dlc2` root as the GAME populated it. The heal compares against
+/// this rather than a literal, because a literal transcribed from the decompile was wrong (the
+/// native stores a trailing slash the source literal lacks) and silently broke the alarm counter.
+pub static DLC_ROOT_GOOD_PATH_HASH: AtomicUsize = AtomicUsize::new(0);
+/// Self-heal invocations (populated -> empty edges acted on).
+pub static DLC_ROOT_HEAL_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+/// Heals that produced the EXPECTED root string. This is the success metric -- not the attempt count.
+pub static DLC_ROOT_HEAL_OK: AtomicUsize = AtomicUsize::new(0);
+/// Heals that produced a non-empty but WRONG root (e.g. the `L"system:/"` fallback the native takes
+/// when DLC ownership is unresolved). Non-zero means the heal fired too early and DLC content is
+/// resolving to the wrong place -- treat as a failure, not a partial success.
+pub static DLC_ROOT_HEAL_WRONG: AtomicUsize = AtomicUsize::new(0);
+
+/// Times the DLC virtual-root refill ran. IF THIS TRAILS THE BLANK COUNT ACROSS A RELOAD, the roots
+/// were emptied and never restored -- which is the softlock. Read from the `dlc-roots-REFILL` lines.
+pub static DLC_ROOTS_REFILL_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+/// Blocks whose stale file cap stayed (status=0x04, data=null) AFTER the single native re-enqueue.
+/// This is the DETERMINISTIC "the map archive backing this file is not mounted" signal -- the read
+/// genuinely ran and returned nothing -- so a non-zero value means the load cannot complete and the
+/// phase-2 handler will wait forever. Exposed as `oracle_blockres_stalecap_unrecoverable`.
+pub static BLOCKRES_STALECAP_UNRECOVERABLE: AtomicUsize = AtomicUsize::new(0);
+/// The file cap that tripped it (diagnostic).
+pub static BLOCKRES_STALECAP_LAST_DEAD_CAP: AtomicUsize = AtomicUsize::new(0);
+/// Ticks on which the map-mount guard-flip driver declined to act. It logged NOTHING on the
+/// 2026-07-30 stall it exists to fix, and with five ANDed conditions there was no way to tell which
+/// one refused. Exposed as `oracle_map_mount_guard_declines`.
+pub static MOUNT_GUARD_DECLINE_LOGS: AtomicUsize = AtomicUsize::new(0);
+/// Boot-phase (`!in_world`) declines, budgeted separately. These are EXPECTED and would otherwise
+/// exhaust the shared budget long before the reload stall, which is exactly what happened on the
+/// instrumentation's first run.
+pub static MOUNT_GUARD_DECLINE_BOOT_LOGS: AtomicUsize = AtomicUsize::new(0);
+
 pub static MENU_WINDOW_JOB_DTOR_LIST_REMOVALS: AtomicUsize = AtomicUsize::new(0);
 pub static MENU_WINDOW_JOB_DTOR_LAST_GUARDED_WINDOW: AtomicUsize = AtomicUsize::new(0);
 pub static MENU_WINDOW_JOB_DTOR_LAST_GUARDED_INDEX: AtomicUsize = AtomicUsize::new(0);
