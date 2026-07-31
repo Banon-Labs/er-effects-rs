@@ -211,15 +211,7 @@ unsafe extern "system" fn present_hook(this: *mut c_void, sync: u32, flags: u32)
     if this_u == GAME_SWAPCHAIN.load(Ordering::SeqCst) {
         let base = GAME_BASE.load(Ordering::SeqCst);
         if base != 0 {
-            // Time the boot-view composite (the suspected per-frame WORK stall on reloads). Gated on the
-            // overlay being a product feature this run: telemetry-only measurement records cadence (below)
-            // but SKIPS the flow-modifying composite so the vanilla baseline stays flow-faithful.
-            let tc = std::time::Instant::now();
-            if portrait_overlay_enabled() {
-                unsafe { composite_on_game_swapchain(base, this_u) };
-            }
-            er_telemetry::counters::COMPOSITE_LAST_US
-                .store(tc.elapsed().as_micros() as usize, Ordering::SeqCst);
+            unsafe { composite_and_record_exposure(base, this_u) };
         }
     }
     let orig = PRESENT_ORIG.load(Ordering::SeqCst);
@@ -265,15 +257,7 @@ unsafe extern "system" fn present1_hook(
     if this_u == GAME_SWAPCHAIN.load(Ordering::SeqCst) {
         let base = GAME_BASE.load(Ordering::SeqCst);
         if base != 0 {
-            // Composite gated on the overlay being a product feature this run; telemetry-only measurement
-            // records cadence (below) but skips the flow-modifying composite (vanilla baseline stays
-            // flow-faithful). See the Present(8) detour for the rationale.
-            let tc = std::time::Instant::now();
-            if portrait_overlay_enabled() {
-                unsafe { composite_on_game_swapchain(base, this_u) };
-            }
-            er_telemetry::counters::COMPOSITE_LAST_US
-                .store(tc.elapsed().as_micros() as usize, Ordering::SeqCst);
+            unsafe { composite_and_record_exposure(base, this_u) };
         }
     }
     let orig = PRESENT1_ORIG.load(Ordering::SeqCst);
@@ -318,7 +302,33 @@ fn composite_suppressed_on_native() -> bool {
 /// drive. So on native Windows: SKIP the portrait composite (it would only ever have a stale/absent head
 /// with the drive off, and its readback path is heavier), and draw the boot-progress bar + picker
 /// directly. On Wine/Proton (vkd3d), keep the full portrait-first path.
-unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) {
+/// Run the per-frame cover composite and report WHICH gate decided this frame, as a
+/// `er_telemetry::counters::NATIVE_LS_GATE_*` code. The caller feeds that to
+/// [`native_ls_exposure_record`], which latches the frames where the game's own loading screen was
+/// live but our cover did not draw -- er-effects-rs-wmw defect #1, the vanilla flash-through.
+unsafe fn composite_and_record_exposure(base: usize, this_u: usize) {
+    use er_telemetry::counters::NATIVE_LS_GATE_OVERLAY_DISABLED;
+    // Time the boot-view composite (the suspected per-frame WORK stall on reloads). Gated on the
+    // overlay being a product feature this run: telemetry-only measurement records cadence but
+    // SKIPS the flow-modifying composite so the vanilla baseline stays flow-faithful.
+    let tc = std::time::Instant::now();
+    let gate = if portrait_overlay_enabled() {
+        unsafe { composite_on_game_swapchain(base, this_u) }
+    } else {
+        NATIVE_LS_GATE_OVERLAY_DISABLED
+    };
+    er_telemetry::counters::COMPOSITE_LAST_US
+        .store(tc.elapsed().as_micros() as usize, Ordering::SeqCst);
+    crate::telemetry::native_ls_exposure_record(gate);
+}
+
+/// Returns the `NATIVE_LS_GATE_*` code describing whether the cover drew this frame, and if not,
+/// which gate blocked it.
+unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) -> usize {
+    use er_telemetry::counters::{
+        NATIVE_LS_GATE_COVER_STOPPED, NATIVE_LS_GATE_DREW, NATIVE_LS_GATE_EPOCH_WORLD_LIVE,
+        NATIVE_LS_GATE_NATIVE_SUPPRESSED,
+    };
     // FPS PARITY (bd FPS-DELTA-CONFIRMED-load2-20fps-load1-45fps): once the CURRENT load epoch is
     // genuinely in-world (world-clock live for THIS fresh_deser epoch -- BOOT_VIEW_EPOCH_WORLD_LIVE was
     // set to it by the play_time_live oracle), every overlay here (portrait cover, loading bar, save
@@ -334,7 +344,7 @@ unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) {
             && crate::experiments::BOOT_VIEW_STOPPED.load(Ordering::SeqCst) != 0
         {
             PRESENT_COMPOSITE_EARLY_SKIPS.fetch_add(1, Ordering::SeqCst);
-            return;
+            return NATIVE_LS_GATE_EPOCH_WORLD_LIVE;
         }
     }
     // NOTE: the offscreen RASTERIZE is NOT driven here. Present is the WRONG GX phase -- the frame's GX
@@ -351,17 +361,23 @@ unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) {
     // as before.)
     if composite_suppressed_on_native() {
         PRESENT_COMPOSITE_EARLY_SKIPS.fetch_add(1, Ordering::SeqCst);
-        return;
+        return NATIVE_LS_GATE_NATIVE_SUPPRESSED;
     }
     // Loading bar + save picker + portrait/stats cover + boot-cover handoff oracle. The boot
     // compositor is internally gated by BOOT_VIEW_STOPPED and draw-state, so this is a cheap no-op after
-    // the seamless cut.
-    let _ = unsafe { composite_boot_progress_on_swapchain(base, this_u) };
+    // the seamless cut. Its bool is now load-bearing: false means nothing was drawn over the
+    // backbuffer this frame, so whatever the game rendered is what the user sees.
+    let drew = unsafe { composite_boot_progress_on_swapchain(base, this_u) };
     // Keyboard input runs on an event-driven WH_KEYBOARD_LL hook (spawned once) so every press registers
     // regardless of the ~4fps boot Present rate; the render-thread poll handles gamepad (and is the
     // keyboard fallback if the hook fails to install).
     let _ = std::panic::catch_unwind(ensure_save_picker_keyboard_hook);
     let _ = std::panic::catch_unwind(save_picker_overlay_input_tick);
+    if drew {
+        NATIVE_LS_GATE_DREW
+    } else {
+        NATIVE_LS_GATE_COVER_STOPPED
+    }
 }
 
 pub(crate) use er_telemetry::counters::FACTORY2_ORIG;
