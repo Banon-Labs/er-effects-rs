@@ -8,6 +8,7 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
     write_game_module_oracles(body);
     write_player_presence_oracle(body);
     write_stepfinish_gate_oracle(body);
+    portrait_loadwin_sample_and_write(body);
 }
 
 /// STEP_Finish sub-gate diagnostic (bd render-handoff-freeze-second-gate-pins-2026-07-18). The
