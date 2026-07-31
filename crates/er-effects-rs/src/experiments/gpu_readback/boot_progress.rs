@@ -445,7 +445,24 @@ fn boot_view_cover_release_ready(can_move_handoff: bool) -> bool {
             return false;
         }
     }
-    if boot_view_player_render_ready() {
+    // "The game is ready to be revealed." `boot_view_player_render_ready()` alone cannot answer
+    // this on a switch: measured (run slot-portrait-proof-20260731-125800) it reads TRUE during the
+    // teardown/title and FALSE once the character is actually in the world -- every `boot-view
+    // DECISION` line of that run has `render_ready=false` while `in_world=1`, `player_present=true`
+    // and the loaded character named. Gating on it alone left the release permanently unsatisfiable
+    // after the character-load gate closed the teardown path: 0 semantic releases, both switches
+    // riding to the 20s cap.
+    //
+    // The per-epoch world-live signal answers it directly -- play time advancing for THIS load
+    // epoch is the game telling us the world is running -- and it is the same signal the Present
+    // hook's in-world composite skip already trusts. It is only meaningful once a switch epoch
+    // exists (`fresh_deser != 0`), exactly as that skip requires, so boot keeps the render-flag
+    // path.
+    let cur_load_epoch =
+        crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+    let epoch_world_live = cur_load_epoch != 0
+        && crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur_load_epoch;
+    if epoch_world_live || boot_view_player_render_ready() {
         BOOT_VIEW_RELEASE_RENDER_READY_SEEN.store(1, Ordering::SeqCst);
     }
     // The game's own "this loading screen is going away" signals.
