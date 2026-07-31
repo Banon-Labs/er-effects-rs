@@ -149,9 +149,12 @@ pub(crate) unsafe fn own_load_feed_deserialize(base: usize, gm: usize, want_slot
 pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_PHASE;
 pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_DRAIN_WAITS;
 pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_COMMITTED;
-const SWITCH_RELOAD_FD4IO_IDLE: usize = 0;
-const SWITCH_RELOAD_FD4IO_DRAIN: usize = 1;
-const SWITCH_RELOAD_FD4IO_COMMIT: usize = 2;
+// The phase VALUES moved next to the atomic in er-telemetry (2026-07-31, bd er-effects-rs-9jbe):
+// er-title-flow's b78 guard now reads this phase to detect that fd4io owns GameMan+0xb78, and that
+// crate must not depend on the root crate. This file remains the only WRITER of the phase machine.
+pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_COMMIT;
+pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_DRAIN;
+pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_IDLE;
 /// Bound the reload drain far below the boot's FULLREAD_DRAIN_MAX (1200): the b80 2->3 save-file read
 /// residency is fast (~17 ticks at boot); if it does not resident within this many frames the read is
 /// not draining at the clean-title timing -> fall through to COMMIT without residency (fail-soft to the

@@ -1434,6 +1434,25 @@ pub static OWN_LOAD_M28_DISPATCH_DIAG_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub static SWITCH_RELOAD_FD4IO_PHASE: AtomicUsize = AtomicUsize::new(0);
 pub static SWITCH_RELOAD_FD4IO_DRAIN_WAITS: AtomicUsize = AtomicUsize::new(0);
 pub static SWITCH_RELOAD_FD4IO_COMMITTED: AtomicUsize = AtomicUsize::new(0);
+/// The three states `SWITCH_RELOAD_FD4IO_PHASE` takes. They live HERE, beside the atomic they
+/// describe, because reading that phase correctly requires them and the readers now span crates:
+/// the writer/owner is the root crate's `own_load::loaders` (SUBMIT -> DRAIN -> COMMIT), while
+/// `er-title-flow`'s b78 guard reads it to decide whether fd4io currently owns `GameMan+0xb78`.
+/// er-title-flow must NOT depend on the root crate, so a private `const` root-side would have
+/// forced either a duplicated literal or a host-seam call for a plain comparison against 0.
+/// IDLE(0): no reload in flight, nobody owns b78. DRAIN(1): the full read was SUBMITted and is
+/// being pumped to residency. COMMIT(2): residency reached (or the bounded drain timed out) and
+/// the feed + continue_confirm own the load.
+pub const SWITCH_RELOAD_FD4IO_IDLE: usize = 0;
+pub const SWITCH_RELOAD_FD4IO_DRAIN: usize = 1;
+pub const SWITCH_RELOAD_FD4IO_COMMIT: usize = 2;
+/// Frames the b78 guard STOOD DOWN because the fd4io reload machine was non-IDLE, i.e. frames on
+/// which the guard would have forced `GameMan+0xb78 = -1` and no longer does (bd er-effects-rs-9jbe).
+/// This is the ENGAGEMENT oracle for that stand-down: a clean switch run proves only that nothing
+/// regressed, whereas `> 0` proves the new condition actually fired against a live fd4io overlap --
+/// the exact race (fd4io non-IDLE inside the guard's active window) that produced the black-screen
+/// softlock. Published as `oracle_switch_b78_guard_standdowns`.
+pub static SWITCH_RELOAD_B78_GUARD_STANDDOWNS: AtomicUsize = AtomicUsize::new(0);
 pub static COLDBUILD_DONE: AtomicUsize = AtomicUsize::new(0);
 pub static MOUNT_WAITS: AtomicUsize = AtomicUsize::new(0);
 pub static WARM_KICK_FIRED: AtomicUsize = AtomicUsize::new(0);

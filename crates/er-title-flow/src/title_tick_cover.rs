@@ -1715,12 +1715,42 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
     // dormant here once committed: emit nothing, write nothing, let the native session settle. Inert before
     // the feed (latch 0 -> block runs and fires the initial load exactly as before); re-enabled for the next
     // genuine pick when the arm clears the latch.
-    if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+    let b78_guard_window_open = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
         >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
         && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 0
         && gm != null
-        && slot >= OWN_STEPPER_SLOT_ZERO
-    {
+        && slot >= OWN_STEPPER_SLOT_ZERO;
+    // FD4IO OWNERSHIP STAND-DOWN (black-screen fix, user eval run 20260731-user-eval-pr117
+    // switch #2 / cross-save Banon; bd er-effects-rs-9jbe). Once the switch-reload fd4io machine
+    // has left IDLE it OWNS GameMan+0xb78 as the warp target ("b78 kept armed (warp target)
+    // through finalize" at SUBMIT->DRAIN->COMMIT); this guard's force-(-1) below raced that
+    // finalize when the quickload phase lagged at 3 (+95422ms: "kept gm_b78=-1" 650ms AFTER the
+    // fd4io COMMIT) and stripped the warp destination mid-warp -- STEP_MoveMap_Update reads
+    // BlockId 0xffffffff, skips the map load, and the world tears down with nothing armed (black
+    // screen, mms=-1, defaulted level-9 character, loading bar frozen at 1/500). The in-world
+    // protection this guard exists for is UNAFFECTED: fd4io SUBMIT only ever happens post-teardown
+    // at the clean title, so IDLE still covers the whole in-world window (the 2026-07-01
+    // RequestLoadSlot spin, where writing b78=slot in-world made FUN_140afb970 spin
+    // RequestLoadSlot 4600+ times). Reset per switch by reset_switch_reload_latches.
+    let fd4io_owns_b78 = er_telemetry::counters::SWITCH_RELOAD_FD4IO_PHASE.load(Ordering::SeqCst)
+        != er_telemetry::counters::SWITCH_RELOAD_FD4IO_IDLE;
+    if b78_guard_window_open && fd4io_owns_b78 {
+        // ENGAGEMENT SEMAPHORE. Count every frame the guard would have forced b78=-1 and now does
+        // not. This is the only way a run can show the fix FIRED rather than merely not breaking
+        // anything: the softlock is timing-dependent (observed once), so a clean switch proves
+        // non-regression alone. `> 0` == a real fd4io overlap was survived.
+        let n = er_telemetry::counters::SWITCH_RELOAD_B78_GUARD_STANDDOWNS
+            .fetch_add(1, Ordering::SeqCst)
+            + 1;
+        if n <= 5 || n % 120 == 0 {
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: b78 guard STOOD DOWN #{n} -- fd4io reload phase={} (non-IDLE) owns GameMan+0xb78 as the warp target; not forcing -1 (phase={} slot={slot} bc4=0x{return_title_job_predicate_bc4:x})",
+                er_telemetry::counters::SWITCH_RELOAD_FD4IO_PHASE.load(Ordering::SeqCst),
+                SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+            ));
+        }
+    }
+    if b78_guard_window_open && !fd4io_owns_b78 {
         // GameMan+0xb78 is CS::GameMan::GetRequestedSaveSlotLoad: the per-frame MoveMapStep load
         // orchestrator (FUN_140afb970, live) reads it and, when != -1, calls RequestLoadSlot(b78) to
         // load that slot IN-WORLD. So while the OLD world is still up (local player present) b78 MUST
