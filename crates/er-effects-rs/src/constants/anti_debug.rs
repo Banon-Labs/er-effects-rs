@@ -376,15 +376,7 @@ pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_COVER_WINDOW: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_RET: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-/// Removed fallback-cover counters kept only so older telemetry references compile during cleanup.
-/// Product title/loading cover work must use native CSEzDraw/Scaleform/game-render surfaces.
-pub(crate) use er_telemetry::counters::TITLE_OVERLAY_COVER_RENDER_CALLS;
-pub(crate) use er_telemetry::counters::TITLE_OVERLAY_COVER_LAST_DISPLAY_W;
-pub(crate) use er_telemetry::counters::TITLE_OVERLAY_COVER_LAST_DISPLAY_H;
 pub(crate) const TITLE_CUSTOM_COVER_GX_TEXTURE_RESOURCE_OFFSET: usize = 0x10;
-pub(crate) use er_telemetry::counters::TITLE_OVERLAY_COVER_TEXTURE_BOUND;
-pub(crate) use er_telemetry::counters::TITLE_OVERLAY_COVER_LAST_GX_TEXTURE;
-pub(crate) use er_telemetry::counters::TITLE_OVERLAY_COVER_LAST_TEXTURE_RESOURCE;
 
 /// Scaleform (GFx) D3D12 `CBV_SRV_UAV` descriptor-heap ring/sub-allocator advance
 /// (deobf entry `0x140ec9530`; `f(this /rcx/, count /edx/)`). Verified disasm: the new-page branch
