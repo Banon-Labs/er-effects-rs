@@ -1283,6 +1283,43 @@ pub(crate) const MENU_WINDOW_JOB_FINALIZE_RVA: usize = 0x7ada40;
 pub(crate) const MSB_FILECAP_PARSE_CALLBACK_RVA: usize = 0x21bbf0;
 /// How many SUCCESSFUL parses to log before rate-limiting. Null-result parses are always logged.
 pub(crate) const MSB_PARSE_TRACE_VERBOSE_CALLS: usize = 24;
+/// `CS::MoveMapListStep::STEP_LoadListWait` -- the ONLY live path that refills the DLC virtual roots
+/// (it calls `FUN_140e05fb0(GLOBAL_CSDlc, true)` -> `CSDlcImp::AddVirtualFileRoots`). Proven to be
+/// the fix site by bd `PROVEN-reload-softlock-is-blanked-dlc-virtual-root-mapstudio-dlc2-empty`.
+///
+/// Prologue is `40 53 48 83 ec 20 48 8b 81 c0 02 00 00` (`push rbx; sub rsp,0x20; mov rax,[rcx+0x2c0]`)
+/// -- no rip-relative operand anywhere near the patch site, and the deobf bytes match the 1.16.2 dump
+/// exactly, so a 5-byte detour relocates cleanly. `rcx` is the `MoveMapListStep` this-pointer.
+pub(crate) const STEP_LOADLIST_WAIT_RVA: usize = 0x00af_1800;
+/// Gate A operand: `MoveMapListStep::loadList`. The step proceeds when this is NULL **or** the int at
+/// `*loadList` is 2 or 3 (`sub eax,2; cmp eax,1; ja bail`).
+pub(crate) const MOVEMAPLISTSTEP_LOADLIST_2C0_OFFSET: usize = 0x2c0;
+/// Gate B operand: must be 0 for the step to proceed (`cmp qword [rcx+0xb8],0; jnz bail`).
+pub(crate) const MOVEMAPLISTSTEP_GATE_B8_OFFSET: usize = 0xb8;
+/// `STEP_LoadListWait` runs every frame, so the trace logs only on VERDICT CHANGE plus this many
+/// opening entries -- enough to capture the load-1 baseline without burying the reload.
+pub(crate) const LOADLIST_WAIT_TRACE_VERBOSE_CALLS: usize = 6;
+/// `FUN_140e06490(CSDlcImp*, bool)` -- BLANKS the 13 `*_dlc2` virtual roots to `L""` and clears the
+/// DLC ownership flags. Sole code caller is the title start-game flow `FUN_1409b24e0`.
+pub(crate) const DLC_ROOTS_BLANK_RVA: usize = 0x00e0_6490;
+/// `FUN_140e05fb0(CSDlcImp*, bool)` -- the REFILL: re-queries Steam DLC ownership and calls
+/// `CSDlcImp::AddVirtualFileRoots`. Hooked at this shared entry rather than at either caller,
+/// because a measured run showed `STEP_LoadListWait` never executes at all.
+pub(crate) const DLC_ROOTS_REFILL_RVA: usize = 0x00e0_5fb0;
+/// `FUN_140836f30` -- the `Do` of the MenuFunctorJob that eventually reaches the refill (vtable
+/// 0x142acb638). One level above `FUN_140e05fb0`, so it separates "job never enqueued" from "job ran
+/// and diverged inside". Prologue `48 89 54 24 10 53 48 83 ec 30`, no rip-relative in the window.
+pub(crate) const DLC_ROOTS_JOB_RVA: usize = 0x0083_6f30;
+/// `GLOBAL_CSDlc` -- the `CSDlcImp` singleton. Grounded from `FUN_1408371e0`'s own load:
+/// `mov 0x354f9ed(%rip),%rcx  # 0x143d86bd8`.
+pub(crate) const CSDLC_SINGLETON_RVA: usize = 0x03d8_6bd8;
+/// The DLIO alias every failing `m28` read resolves through.
+pub(crate) const DLC_ROOT_ALIAS_NAME: &str = "mapstudio_dlc2";
+
+/// How many NULL-RESULT parses also carry a DLIO virtual-root dump. The null path fires ~13x/second
+/// during the stall and the root walk is a vector scan, so only the first few need it -- the roots
+/// do not change once the block is wedged, and the load-1 baseline comes from the verbose successes.
+pub(crate) const MSB_PARSE_TRACE_ROOTS_ON_NULL_RESULTS: usize = 4;
 pub(crate) const MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET: usize = 0x130;
 /// The window's cached menu id (`field246_0x180`). `0xffff` is the unmapped sentinel and the state
 /// every observed crash was in; the finalize's second getter is itself gated on it.
@@ -1325,6 +1362,19 @@ pub(crate) use er_telemetry::counters::{
 pub(crate) use er_telemetry::counters::{
     MSB_PARSE_TRACE_CALLS, MSB_PARSE_TRACE_INSTALLED, MSB_PARSE_TRACE_NULL_RESULTS,
     MSB_PARSE_TRACE_ORIG,
+};
+pub(crate) use er_telemetry::counters::{
+    LOADLIST_WAIT_TRACE_CALLS, LOADLIST_WAIT_TRACE_INSTALLED, LOADLIST_WAIT_TRACE_LAST_VERDICT,
+    LOADLIST_WAIT_TRACE_ORIG, LOADLIST_WAIT_TRACE_REACHED_STATUS_GATE,
+};
+pub(crate) use er_telemetry::counters::{
+    DLC_ROOTS_BLANK_CALLS, DLC_ROOTS_BLANK_ORIG, DLC_ROOTS_REFILL_CALLS, DLC_ROOTS_REFILL_ORIG,
+    DLC_ROOTS_TRACE_INSTALLED,
+};
+pub(crate) use er_telemetry::counters::{DLC_ROOTS_JOB_CALLS, DLC_ROOTS_JOB_ORIG};
+pub(crate) use er_telemetry::counters::{
+    DLC_ROOT_ENTRY_ADDR, DLC_ROOT_GOOD_PATH_HASH, DLC_ROOT_HEAL_ATTEMPTS, DLC_ROOT_HEAL_OK,
+    DLC_ROOT_HEAL_WRONG, DLC_ROOT_SEEN_POPULATED,
 };
 pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_LIST_REMOVALS;
 pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_LAST_GUARDED_WINDOW;

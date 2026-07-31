@@ -111,8 +111,26 @@ pub(crate) unsafe extern "system" fn msb_parse_trace_hook(cap: usize) {
         } else {
             String::from("<badcap>")
         };
+        // WITHIN-RUN CONTROL for the DLC-virtual-root theory. These caps are named
+        // `mapstudio_dlc2:/m28_*.msb`, and `mapstudio_dlc2` is a DLIO virtual-root alias that the
+        // title start-game flow registers EMPTY and only `STEP_LoadListWait` fills in. Dumping the
+        // alias HERE -- where load 1 demonstrably succeeds -- is what makes a later EMPTY reading
+        // mean something: without a known-good baseline, "everything reads empty" is
+        // indistinguishable from a broken vector walk. Bounded to the first few calls of each
+        // outcome because the null path fires ~13x/second during the stall and the walk is not free.
+        let roots = if n <= MSB_PARSE_TRACE_VERBOSE_CALLS
+            || MSB_PARSE_TRACE_NULL_RESULTS.load(Ordering::SeqCst)
+                <= MSB_PARSE_TRACE_ROOTS_ON_NULL_RESULTS
+        {
+            match game_module_base().ok().filter(|&b| b != 0) {
+                Some(b) => unsafe { dlio_virtual_roots_summary(b) },
+                None => String::from("<nobase>"),
+            }
+        } else {
+            String::from("<skipped>")
+        };
         append_crash_log(format_args!(
-            "msb-parse{} #{n}: cap=0x{cap:x} name='{name}' loadState={load_state} loadProcess=0x{load_process:x} content=0x{content:x} size=0x{csize:x} msbResCap 0x{before:x}->0x{after:x}",
+            "msb-parse{} #{n}: cap=0x{cap:x} name='{name}' loadState={load_state} loadProcess=0x{load_process:x} content=0x{content:x} size=0x{csize:x} msbResCap 0x{before:x}->0x{after:x} roots=[{roots}]",
             if interesting { "-NULL-RESULT" } else { "" }
         ));
     }

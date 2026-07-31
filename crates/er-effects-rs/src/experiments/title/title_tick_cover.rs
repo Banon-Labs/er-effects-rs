@@ -70,6 +70,103 @@ pub(crate) unsafe fn fd4_filecap_name(cap: usize) -> String {
     out
 }
 
+/// Read a `DLString<wchar_t>` (given the address of the string itself) as clamped ASCII.
+///
+/// Same small-string-optimization rule as `fd4_filecap_name`: `capacity > 7` means the union holds
+/// a heap pointer, otherwise the characters are inline. Kept separate because that helper takes a
+/// cap and bakes in the `+0x10` string base, while virtual-root entries hold bare `DLString`s.
+pub(crate) unsafe fn dlstring_wide_ascii(string_base: usize) -> String {
+    if string_base <= 0x10000 {
+        return String::new();
+    }
+    let capacity =
+        unsafe { safe_read_usize(string_base + DLSTRING_CAPACITY_20_OFFSET) }.unwrap_or(0);
+    let length = unsafe { safe_read_usize(string_base + DLSTRING_LENGTH_18_OFFSET) }.unwrap_or(0);
+    let union_addr = string_base + DLSTRING_UNION_08_OFFSET;
+    let chars_addr = if capacity > DLSTRING_INLINE_CAPACITY_MAX {
+        match unsafe { safe_read_usize(union_addr) }.filter(|&v| v > 0x10000) {
+            Some(ptr) => ptr,
+            None => return String::from("<badptr>"),
+        }
+    } else {
+        union_addr
+    };
+    let count = length.min(FD4_FILECAP_NAME_MAX_CHARS);
+    let mut out = String::with_capacity(count);
+    for i in 0..count {
+        let (Some(lo), Some(hi)) = (unsafe { safe_read_u8(chars_addr + i * 2) }, unsafe {
+            safe_read_u8(chars_addr + i * 2 + 1)
+        }) else {
+            out.push_str("<trunc>");
+            break;
+        };
+        let unit = u16::from(lo) | (u16::from(hi) << 8);
+        if unit == 0 {
+            break;
+        }
+        out.push(if (0x20..0x7f).contains(&unit) {
+            unit as u8 as char
+        } else {
+            '?'
+        });
+    }
+    out
+}
+
+/// Report the DLIO virtual-root aliases that back the stalled `mapstudio_dlc2:/m28_*.msb` reads.
+///
+/// The phase-2 freeze's file caps resolve through `mapstudio_dlc2:`, which is an alias in
+/// `DLFileDeviceManager::virtualRoots`, NOT a data archive. That alias is registered EMPTY (`L""`)
+/// by the title start-game flow and only filled in by `CSDlcImp::AddVirtualFileRoots` behind the
+/// `STEP_LoadListWait` gate. So an alias present with an EMPTY path at the stall means the read had
+/// nowhere to resolve to -- which is exactly a 0-byte read and a null `msbResCap`. Emitting
+/// `mapstudio` alongside it is the control: base-game populated + dlc2 empty is decisive on its own.
+///
+/// Strictly read-only -- a vector walk with bounded length and per-field `safe_read_*`, no locks and
+/// no allocation beyond the returned string, because this runs on the game thread mid-stall.
+pub(crate) unsafe fn dlio_virtual_roots_summary(base: usize) -> String {
+    if base == 0 {
+        return String::from("<nobase>");
+    }
+    let Some(manager) =
+        (unsafe { safe_read_usize(base + DL_FILE_DEVICE_MANAGER_SINGLETON_RVA) }).filter(|&v| v > 0x10000)
+    else {
+        return String::from("<mgrnull>");
+    };
+    let roots = manager + DL_FILE_DEVICE_MANAGER_VIRTUAL_ROOTS_48_OFFSET;
+    let (Some(start), Some(end)) = (
+        unsafe { safe_read_usize(roots + FILE_DEVICE_VIRTUAL_ROOT_VECTOR_START_08_OFFSET) },
+        unsafe { safe_read_usize(roots + FILE_DEVICE_VIRTUAL_ROOT_VECTOR_END_10_OFFSET) },
+    ) else {
+        return String::from("<vecunreadable>");
+    };
+    if start <= 0x10000 || end <= start {
+        return format!("<vecempty start={start:#x} end={end:#x}>");
+    }
+    let count =
+        ((end - start) / FILE_DEVICE_VIRTUAL_ROOT_ENTRY_STRIDE).min(FILE_DEVICE_VIRTUAL_ROOT_MAX_ENTRIES);
+    let mut out = String::new();
+    let mut seen = 0usize;
+    for i in 0..count {
+        let entry = start + i * FILE_DEVICE_VIRTUAL_ROOT_ENTRY_STRIDE;
+        let name = unsafe { dlstring_wide_ascii(entry) };
+        if !VIRTUAL_ROOTS_OF_INTEREST.iter().any(|w| *w == name) {
+            continue;
+        }
+        seen += 1;
+        let path =
+            unsafe { dlstring_wide_ascii(entry + FILE_DEVICE_VIRTUAL_ROOT_ENTRY_PATH_30_OFFSET) };
+        // An EMPTY path on a present alias is the whole point of this probe -- label it loudly so a
+        // log scan cannot mistake it for a formatting artifact.
+        let verdict = if path.is_empty() { "EMPTY" } else { "ok" };
+        let _ = core::fmt::Write::write_fmt(
+            &mut out,
+            format_args!("{name}='{path}'({verdict}),"),
+        );
+    }
+    format!("total={count}/matched={seen}/{out}")
+}
+
 /// Read the TitleTopDialog FD4 state machine by NAME (is_in_state) given the title `owner` (rcx of
 /// STEP_MenuJobWait). Returns `(dialog_ptr, in_fadein, in_loop, in_textfadeout, menu_opened_latch)` or
 /// `None` if the dialog isn't the TitleTopDialog yet. Read-only / no side effects. Mirrors STAGE1d.
@@ -1813,20 +1910,27 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                                 // Pin that to RAM rather than leaving it a visual observation: sample
                                 // both loading-screen surfaces at the stall so the report becomes a
                                 // semaphore.
-                                let (now_loading, fake_cover) =
-                                    match game_module_base().ok().filter(|&b| b != 0) {
-                                        Some(b) => (
-                                            unsafe { now_loading_active(b) } as i32,
-                                            unsafe { fake_loading_screen_visible(b) } as i32,
-                                        ),
-                                        None => (-1, -1),
-                                    };
+                                let module_base = game_module_base().ok().filter(|&b| b != 0);
+                                let (now_loading, fake_cover) = match module_base {
+                                    Some(b) => (
+                                        unsafe { now_loading_active(b) } as i32,
+                                        unsafe { fake_loading_screen_visible(b) } as i32,
+                                    ),
+                                    None => (-1, -1),
+                                };
+                                // The caps above name `mapstudio_dlc2:/m28_*.msb`, so dump the DLIO
+                                // alias that prefix resolves through. An alias present but EMPTY is
+                                // a 0-byte read by construction, which is the null `msbResCap`.
+                                let roots = match module_base {
+                                    Some(b) => unsafe { dlio_virtual_roots_summary(b) },
+                                    None => String::from("<nobase>"),
+                                };
                                 let _ = core::fmt::Write::write_fmt(
                                     &mut ls_phase2,
                                     format_args!(
                                         " blk_2f={ls_2f} blk_3c={ls_3c} blk_06={ls_06}\
                                          blk_nowloading={now_loading} blk_fakecover={fake_cover}\
-                                         blk_caps=[{caps}]"
+                                         blk_roots=[{roots}] blk_caps=[{caps}]"
                                     ),
                                 );
                             }

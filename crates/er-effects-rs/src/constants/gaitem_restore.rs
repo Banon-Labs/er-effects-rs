@@ -229,6 +229,49 @@ pub(crate) const FD4_FILECAP_LOADPROCESS_78_OFFSET: usize = 0x78;
 /// `FD4FileCap::flags`; the `MsbFileCap` factory `FUN_1401f3560` sets `0x20` on every cap it builds
 /// before handing it to `AddFileCap`.
 pub(crate) const FD4_FILECAP_FLAGS_89_OFFSET: usize = 0x89;
+/// `DLIO::DLFileDeviceManager` singleton. `GetFileDeviceManager` (0x141f48b40) is literally
+/// `MOV RAX,[0x1448464a8]` plus a null-check branch, so this global IS the manager pointer.
+///
+/// NOTE this corrects bd `step3-census-registry-null-on-load2-mount-skip-confirmed-2026-07-17`,
+/// which called the same address "the mounted-archive registry". It is not: a genuinely null
+/// manager would break every file read in the process, so that census reading `null` was a
+/// deref-depth/timing artifact and the conclusion drawn from it does not follow.
+pub(crate) const DL_FILE_DEVICE_MANAGER_SINGLETON_RVA: usize = 0x0484_64a8;
+/// `DLFileDeviceManager::virtualRoots` -- a `FileDeviceVirtualRootVector`
+/// (`allocator +0x00`, `start +0x08`, `end +0x10`, `capacity +0x18`).
+///
+/// THIS IS THE PHASE-2 FREEZE SUSPECT. The stalled caps are named
+/// `mapstudio_dlc2:/m28_00_00_00.msb`, and `mapstudio_dlc2` is an entry in THIS vector, not a data
+/// archive. It has a two-phase lifecycle: `FUN_140e06490(CSDlc, true)` -- called only from the title
+/// start-game flow `FUN_1409b24e0` -- registers 13 `*_dlc2` aliases with an EMPTY root `L""`, and
+/// only `CSDlcImp::AddVirtualFileRoots` (0x140e06b80, reachable solely via `FUN_140e05fb0`, whose
+/// callers are `CS::MoveMapListStep::STEP_LoadListWait` and one title-flow function) fills in the
+/// real `mapstudio_dlc2 -> "map_dlc2:/mapstudio"`. If the title blanks it and the
+/// `STEP_LoadListWait` gate (`loadList == NULL || *loadList in {2,3}`) does not pass on the warm
+/// reload, the alias stays empty, the msb read resolves against nothing and returns 0 bytes, and
+/// `msbResCap` never gets written. Reading the alias AT the stall settles that without any hook.
+pub(crate) const DL_FILE_DEVICE_MANAGER_VIRTUAL_ROOTS_48_OFFSET: usize = 0x48;
+pub(crate) const FILE_DEVICE_VIRTUAL_ROOT_VECTOR_START_08_OFFSET: usize = 0x08;
+pub(crate) const FILE_DEVICE_VIRTUAL_ROOT_VECTOR_END_10_OFFSET: usize = 0x10;
+/// `FileDeviceVirtualRootVectorEntry`: `root` (the alias name) and `path` (what it resolves to),
+/// both `DLString<wchar_t>` (48 bytes each), so the entry stride is 0x60.
+pub(crate) const FILE_DEVICE_VIRTUAL_ROOT_ENTRY_STRIDE: usize = 0x60;
+pub(crate) const FILE_DEVICE_VIRTUAL_ROOT_ENTRY_PATH_30_OFFSET: usize = 0x30;
+/// `DLString<wchar_t>` field offsets RELATIVE TO THE STRING ITSELF (`allocator +0x00`,
+/// union `+0x08`, `length +0x18`, `capacity +0x20`). The `FD4_FILECAP_NAME_*` constants above are
+/// the same layout pre-added to the cap's `+0x10` string base, which is why their numbers differ.
+pub(crate) const DLSTRING_UNION_08_OFFSET: usize = 0x08;
+pub(crate) const DLSTRING_LENGTH_18_OFFSET: usize = 0x18;
+pub(crate) const DLSTRING_CAPACITY_20_OFFSET: usize = 0x20;
+/// Bound the virtual-root walk: the table is a few dozen aliases, so anything past this is a
+/// corrupt/mid-teardown vector and the probe must stop rather than walk off a page.
+pub(crate) const FILE_DEVICE_VIRTUAL_ROOT_MAX_ENTRIES: usize = 256;
+/// Alias prefixes worth reporting at the stall: the DLC roots that back `m28`, plus the base-game
+/// `mapstudio` for contrast (if the base alias is populated and the dlc2 one is not, that is the
+/// answer outright).
+pub(crate) const VIRTUAL_ROOTS_OF_INTEREST: [&str; 4] =
+    ["mapstudio_dlc2", "map_dlc2", "game_dlc2", "mapstudio"];
+
 pub(crate) const FD4_FILELOADPROCESS_PROCESSOR_20_OFFSET: usize = 0x20;
 /// `FD4FileLoadProcessor`: `content_` at `+0x20`, its byte count at `+0x28`, and the
 /// acquire/release refcount at `+0x30` whose `1 -> 0` edge nulls `content_` and frees the buffer.
