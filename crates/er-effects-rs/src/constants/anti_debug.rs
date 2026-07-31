@@ -104,41 +104,10 @@ pub(crate) const SAFE_INPUT_DIRECT_INPUT_WAIT_TICKS: u64 = 300;
 // (`lea rax,[0x142b63bb0]; mov [rdi],rax` at 0x140b0b1e5). The previous value
 // 0x02b63ba0 was off by 0x10 (the base/parent vtable), so the owner scan never
 // matched the live object.
-#[repr(usize)]
-pub(crate) enum TitleSessionRva {
-    TitleOwnerVtable = 0x02b63bb0,
-    SaveSafeBeginLogoSession = 0x4588e98,
-    SessionA = 0x3d687a0,
-    SessionB = 0x3d67bd0,
-    MoveMapSession = 0x47ef360,
-}
+pub(crate) use er_title_flow::TitleSessionRva;
 
-pub(crate) const TITLE_OWNER_VTABLE_RVA: usize = TitleSessionRva::TitleOwnerVtable as usize;
-/// Partial SimpleTitleStep owner layout used by the zero-input title/menu driver.
-/// Unknown byte arrays intentionally document unmodeled in-between fields while
-/// keeping the offsets compiler-checked through `offset_of!`.
-#[repr(C)]
-pub(crate) struct TitleOwnerLayout {
-    pub(crate) vtable: usize,
-    pub(crate) unknown_08: [u8; 0x08],
-    pub(crate) instance_table: usize,
-    pub(crate) unknown_18: [u8; 0x30],
-    pub(crate) committed_state: i32,
-    pub(crate) requested_state: i32,
-    pub(crate) unknown_50: [u8; 0x68],
-    pub(crate) beginlogo_list_gate: u32,
-    pub(crate) play_game_slot: i32,
-    pub(crate) unknown_c0: [u8; 0x20],
-    pub(crate) menu_holder: usize,
-    pub(crate) unknown_e8: [u8; 0x48],
-    pub(crate) menu_list: usize,
-    pub(crate) unknown_138: [u8; 0x14c],
-    pub(crate) new_game_flag: u8,
-    pub(crate) unknown_285: [u8; 0x63],
-    pub(crate) load_job: usize,
-    pub(crate) unknown_2f0: [u8; 0xf1],
-    pub(crate) play_game_request_flag: u8,
-}
+pub(crate) use er_title_flow::TITLE_OWNER_VTABLE_RVA;
+pub(crate) use er_title_flow::TitleOwnerLayout;
 
 #[repr(C)]
 pub(crate) struct TitleOwnerLoadJobLayout {
@@ -146,59 +115,25 @@ pub(crate) struct TitleOwnerLoadJobLayout {
     pub(crate) pending: i32,
 }
 
-pub(crate) const TITLE_OWNER_STATE_OFFSET: usize =
-    core::mem::offset_of!(TitleOwnerLayout, requested_state);
-/// Committed/current state the inner-TitleStep dispatcher actually runs (the pump
-/// commits +0x4c -> +0x48 each frame and dispatches on +0x48). +0x4c is the
-/// requested/next state. Read +0x48 to know the live state.
-pub(crate) const TITLE_OWNER_STATE_COMMITTED_OFFSET: usize =
-    core::mem::offset_of!(TitleOwnerLayout, committed_state);
-/// The inner TitleStep stores a per-instance copy of its state-dispatch table
-/// base (0x143d71580) at owner+0x10; the dispatcher reads [owner+0x10]. Requiring
-/// this rejects stray .data vtable matches (e.g. the 0x1000ffc58 false positive).
-pub(crate) const TITLE_OWNER_INSTANCE_TABLE_OFFSET: usize =
-    core::mem::offset_of!(TitleOwnerLayout, instance_table);
-pub(crate) const INNER_TITLE_STATE_TABLE_RVA: usize = 0x3d71580;
-pub(crate) const TITLE_OWNER_SCAN_ALIGNMENT: usize = core::mem::align_of::<usize>();
-pub(crate) const TITLE_OWNER_SCAN_MAX_ADDRESS: usize =
-    (true as usize) << (usize::BITS as usize - (u16::BITS as usize + true as usize));
-#[repr(usize)]
-pub(crate) enum TraceSampleLimit {
-    Value4 = 4,
-    Value8 = 8,
-    Value12 = 12,
-    Value24 = 24,
-    Value48 = 48,
-    Value64 = 64,
-}
+pub(crate) use er_title_flow::TITLE_OWNER_STATE_OFFSET;
+pub(crate) use er_title_flow::TITLE_OWNER_STATE_COMMITTED_OFFSET;
+pub(crate) use er_title_flow::TITLE_OWNER_INSTANCE_TABLE_OFFSET;
+pub(crate) use er_title_flow::INNER_TITLE_STATE_TABLE_RVA;
+pub(crate) use er_title_flow::TITLE_OWNER_SCAN_ALIGNMENT;
+pub(crate) use er_title_flow::TITLE_OWNER_SCAN_MAX_ADDRESS;
+pub(crate) use er_title_flow::TraceSampleLimit;
 
-pub(crate) const TITLE_OWNER_TRACE_LIMIT: usize = TraceSampleLimit::Value64 as usize;
-/// How many `title_owner` calls to skip between full-memory owner scans.
-///
-/// The owner scan walks every committed region via `VirtualQuery`; running it
-/// every frame while the owner does not yet exist (or cannot be matched)
-/// collapses the game's frame rate. Throttling to roughly once per second at
-/// 60 fps keeps a failed lookup from being user-visible.
-pub(crate) const TITLE_OWNER_SCAN_CALL_INTERVAL: usize = TitleNativeJobTiming::FrameRate as usize;
-pub(crate) const TITLE_OWNER_SCAN_COUNTDOWN_STEP: usize = true as usize;
-pub(crate) const TITLE_OWNER_SCAN_COUNTDOWN_READY: usize = usize::MIN;
-#[repr(u32)]
-pub(crate) enum MenuTraceRva {
-    TaskEnqueue = 0x007a7b60,
-    TaskUpdateWrapper = 0x0082a0f0,
-    NewOrLoadWrapper = 0x0082ba80,
-    ContinueWrapper = 0x0082bac0,
-    MenuJobWait = 0x00b0d400,
-    TaskUpdateTable = 0x02ac72a0,
-}
+pub(crate) use er_title_flow::TITLE_OWNER_TRACE_LIMIT;
+pub(crate) use er_title_flow::TITLE_OWNER_SCAN_CALL_INTERVAL;
+pub(crate) use er_title_flow::TITLE_OWNER_SCAN_COUNTDOWN_STEP;
+pub(crate) use er_title_flow::TITLE_OWNER_SCAN_COUNTDOWN_READY;
+pub(crate) use er_title_flow::MenuTraceRva;
 
-pub(crate) const TITLE_MENU_JOB_WAIT_RVA: usize = MenuTraceRva::MenuJobWait as usize;
-/// Legacy native-autoload startup delay is a diagnostic tick throttle only; product autoload
-/// phases must use semantic predicates plus wall-clock fail-safe deadlines, never frame budgets.
-pub(crate) const TITLE_NATIVE_JOB_MIN_TICK: u64 = 170;
-pub(crate) const MEM_COMMIT_NUMERIC: u32 = 0x1000;
-pub(crate) const PAGE_NOACCESS_NUMERIC: u32 = 0x01;
-pub(crate) const PAGE_GUARD_NUMERIC: u32 = 0x100;
+pub(crate) use er_title_flow::TITLE_MENU_JOB_WAIT_RVA;
+pub(crate) use er_title_flow::TITLE_NATIVE_JOB_MIN_TICK;
+pub(crate) use er_title_flow::MEM_COMMIT_NUMERIC;
+pub(crate) use er_title_flow::PAGE_NOACCESS_NUMERIC;
+pub(crate) use er_title_flow::PAGE_GUARD_NUMERIC;
 pub(crate) const TRACE_MENU_CONTINUE_WRAPPER_RVA: u32 = MenuTraceRva::ContinueWrapper as u32;
 pub(crate) const TRACE_MENU_NEW_OR_LOAD_WRAPPER_RVA: u32 = MenuTraceRva::NewOrLoadWrapper as u32;
 pub(crate) const TRACE_MENU_OTHER_LOAD_WRAPPER_RVA: u32 =
@@ -235,39 +170,28 @@ pub(crate) const SAFE_INPUT_INITIAL_DELAY_TICKS: u64 = 0;
 pub(crate) const WINDOW_PID_UNSET: u32 = 0;
 pub(crate) const ENUM_WINDOWS_STOP_NUMERIC: i32 = 0;
 pub(crate) const ENUM_WINDOWS_CONTINUE_NUMERIC: i32 = 1;
-pub(crate) const DIRECT_INPUT_FAILURE_HRESULT: i32 = -1;
+pub(crate) use er_title_flow::DIRECT_INPUT_FAILURE_HRESULT;
 pub(crate) const DIRECT_INPUT_KEY_DOWN_MASK: u8 = 0x80;
-pub(crate) const MENU_TRACE_UNSEEN_SEQ: usize = NULL_MODULE_BASE;
+pub(crate) use er_title_flow::MENU_TRACE_UNSEEN_SEQ;
 pub(crate) const POST_MAP_CONTINUATION_STATE_QWORD: usize = 2;
-pub(crate) const TITLE_OWNER_SCAN_START_ADDRESS: usize = usize::MIN;
-pub(crate) const TITLE_OWNER_QUERY_FAILED_BYTES: usize = usize::MIN;
-pub(crate) const PAGE_PROTECTION_NO_FLAGS: u32 = 0;
-pub(crate) const TITLE_OWNER_MIN_STATE: i32 = TitleStepState::Min as i32;
-pub(crate) const TITLE_OWNER_MAX_STATE: i32 = TitleStepState::Finish as i32;
-pub(crate) const TITLE_NATIVE_JOB_NOT_CALLED: usize = false as usize;
-pub(crate) const TITLE_TRACE_SEQUENCE_INCREMENT: usize = 1;
-#[repr(C)]
-pub(crate) struct TitleNativeJobTaskData {
-    pub(crate) unknown_00: [u8; 0x08],
-    pub(crate) frame_delta: f32,
-    pub(crate) unknown_0c: [u8; 0x04],
-}
+pub(crate) use er_title_flow::TITLE_OWNER_SCAN_START_ADDRESS;
+pub(crate) use er_title_flow::TITLE_OWNER_QUERY_FAILED_BYTES;
+pub(crate) use er_title_flow::PAGE_PROTECTION_NO_FLAGS;
+pub(crate) use er_title_flow::TITLE_OWNER_MIN_STATE;
+pub(crate) use er_title_flow::TITLE_OWNER_MAX_STATE;
+pub(crate) use er_title_flow::TITLE_NATIVE_JOB_NOT_CALLED;
+pub(crate) use er_title_flow::TITLE_TRACE_SEQUENCE_INCREMENT;
+pub(crate) use er_title_flow::TitleNativeJobTaskData;
 
-#[repr(u32)]
-pub(crate) enum TitleNativeJobTiming {
-    FrameRate = 60,
-}
+pub(crate) use er_title_flow::TitleNativeJobTiming;
 
-pub(crate) const TITLE_NATIVE_JOB_TASK_DATA_ZERO: u8 = false as u8;
-pub(crate) const TITLE_NATIVE_JOB_TASK_DATA_BYTES: usize =
-    core::mem::size_of::<TitleNativeJobTaskData>();
-pub(crate) const TITLE_NATIVE_JOB_FRAME_DELTA_NUMERATOR: f32 = true as u8 as f32;
-pub(crate) const TITLE_NATIVE_JOB_FRAME_RATE: f32 = TitleNativeJobTiming::FrameRate as u32 as f32;
-pub(crate) const TITLE_NATIVE_JOB_DELTA_OFFSET_START: usize =
-    core::mem::offset_of!(TitleNativeJobTaskData, frame_delta);
-pub(crate) const TITLE_NATIVE_JOB_DELTA_OFFSET_END: usize =
-    TITLE_NATIVE_JOB_DELTA_OFFSET_START + core::mem::size_of::<f32>();
-pub(crate) const TITLE_NATIVE_JOB_CALLED_VALUE: usize = true as usize;
+pub(crate) use er_title_flow::TITLE_NATIVE_JOB_TASK_DATA_ZERO;
+pub(crate) use er_title_flow::TITLE_NATIVE_JOB_TASK_DATA_BYTES;
+pub(crate) use er_title_flow::TITLE_NATIVE_JOB_FRAME_DELTA_NUMERATOR;
+pub(crate) use er_title_flow::TITLE_NATIVE_JOB_FRAME_RATE;
+pub(crate) use er_title_flow::TITLE_NATIVE_JOB_DELTA_OFFSET_START;
+pub(crate) use er_title_flow::TITLE_NATIVE_JOB_DELTA_OFFSET_END;
+pub(crate) use er_title_flow::TITLE_NATIVE_JOB_CALLED_VALUE;
 
 // ── Title-animation speedup lever (pab_dismiss -> menu_open) ─────────────────────────────────
 // The title/menu transition is a Scaleform/GFx animation advanced by the FD4 frame-delta f32 the
@@ -277,8 +201,7 @@ pub(crate) const TITLE_NATIVE_JOB_CALLED_VALUE: usize = true as usize;
 // in fewer wall-clock frames -- every downstream predicate (Scaleform tick, completion compare,
 // (flags&0x8f)>1 settle gate) is satisfied naturally; nothing is bypassed and the load does not
 // desync. bd autoload-menu-speed-lever-framedelta-2026-06-22.
-/// Clamp range for the speedup factor.
-pub(crate) const TITLE_ANIM_SPEEDUP_MIN: f32 = 1.0;
+pub(crate) use er_title_flow::TITLE_ANIM_SPEEDUP_MIN;
 pub(crate) const TITLE_ANIM_SPEEDUP_MAX: f32 = 16.0;
 /// DEFAULT-ON for real autoload runs (no opt-in). Any value > 1.0 ARMS the FadeIn skip; the magnitude
 /// no longer scales anything (the dt-scale and frame-burst levers were both runtime-falsified -- bd
@@ -288,17 +211,9 @@ pub(crate) const TITLE_ANIM_SPEEDUP_MAX: f32 = 16.0;
 pub(crate) const TITLE_ANIM_SPEEDUP_DEFAULT: f32 = 4.0;
 /// Diagnostic frame counter for the title-anim lever (logs SM state every Nth detour call).
 pub(crate) use er_telemetry::counters::TITLE_ANIM_DIAG_CALLS;
-/// Log the title SM state every this many detour calls.
-pub(crate) const TITLE_ANIM_DIAG_INTERVAL: usize = 60;
-/// FD4 state-machine `SetState`/request-transition (deobf 0x1407499e0; dump 0x140749ae0, shift -0x100).
-/// `__fastcall(rcx = FD4StateMachine* sm, rdx = StateDesc* desc)`. Routes the transition through the
-/// SM owner's vtable[0x150] and no-ops unless the current node is settled (`[node+0x20]&0x8f >= 2`), so
-/// it cannot corrupt the SM. This is the call CS::TitleTopDialog::update's input-skip branch makes to
-/// move FadeIn->Loop on a button press. bd fadein-* RE 2026-06-24.
-pub(crate) const TITLE_FD4_SETSTATE_RVA: usize = 0x7499e0;
-/// One-shot latch: the zero-input FadeIn->Loop transition has fired.
-pub(crate) static TITLE_FADEIN_SKIP_FIRED: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) use er_title_flow::TITLE_ANIM_DIAG_INTERVAL;
+pub(crate) use er_title_flow::TITLE_FD4_SETSTATE_RVA;
+pub(crate) use er_title_flow::TITLE_FADEIN_SKIP_FIRED;
 /// PART-A title-cover masquerade: `STEP_BeginTitle`'s only native visual side effect is wrapper
 /// 0x14081f9f0 building the `05_000_Title` MenuWindowJob through factory 0x1407acbf0. Suppressing
 /// this wrapper hides the native press-any-button/title Scaleform while leaving TitleStep state,
@@ -408,42 +323,25 @@ pub(crate) const TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME: &str = "05_010_ProfileS
 pub(crate) const TITLE_CUSTOM_COVER_BLACK_WRAPPER_RVA: usize = 0x793b20;
 pub(crate) const TITLE_CUSTOM_COVER_BLACK_NAME: &str = "01_900_Black";
 pub(crate) const TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL: &str = "MENU_DummyProfileFace_01";
-pub(crate) const TITLE_CUSTOM_COVER_SYSTEX_TARGET: &str = "SYSTEX_Menu_Profile00";
-pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS: &str = "CSMenuProfModelRend";
-/// Profile renderer table initializer: live 0x1409af3a0 (dump 0x1409af4f0) allocates the ten
-/// CSMenuProfModelRend instances and writes DAT_143d6d8d0 before the refresh/feed pass below.
-pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA: usize = 0x9af3a0;
-/// Profile portrait refresh/display pipeline: live 0x1409aa680 (dump 0x1409aa7d0) reads the loaded
-/// `ProfileSummary`, loops 10 slots, fills CSMenuProfModelRend / face/player model data, and maps
-/// each active slot to `SYSTEX_Menu_ProfileNN` through `FUN_140bb8cf0(renderer, slot*2)`. It must run
-/// after SL2/profile readiness, not at early `05_001_Title_Logo` construction time.
-pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA: usize = 0x9aa680;
-pub(crate) static TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_CALLS: AtomicUsize =
-    AtomicUsize::new(0);
-pub(crate) static TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_PROFILE_SUMMARY: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_CALLER_PHASE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_754: usize = 0x754;
-pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_755: usize = 0x755;
-pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_TEX_INDEX_OFFSET: usize = 0x9a8;
+pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_SYSTEX_TARGET;
+pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS;
+pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA;
+pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA;
+pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_CALLS;
+pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_PROFILE_SUMMARY;
+pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_CALLER_PHASE;
+pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_754;
+pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_755;
+pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_RENDERER_TEX_INDEX_OFFSET;
 pub(crate) use er_telemetry::counters::TITLE_CUSTOM_COVER_PROFILE_SOURCE_SAMPLE_CALLS;
-pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_SLOT: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_RENDERER: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_RENDERER_VTABLE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_OFFSCREEN_REND: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_TEX_RESCAP: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_TEX_INDEX: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_754: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_755: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_SOURCE_SLOT;
+pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_SOURCE_RENDERER;
+pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_SOURCE_RENDERER_VTABLE;
+pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_SOURCE_OFFSCREEN_REND;
+pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_SOURCE_TEX_RESCAP;
+pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_SOURCE_TEX_INDEX;
+pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_754;
+pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_755;
 pub(crate) use er_telemetry::counters::TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS;
 pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_RET: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);

@@ -108,9 +108,5 @@ pub(crate) unsafe extern "system" fn own_stepper_idx6(owner: usize, framectx: us
 // connection-error dialog, and writing +0x25e0/+0x25e8 corrupts the dialog (+0x25e8 is the
 // button COUNT). The dismiss is force_dismiss_startup_dialog -> OnDecide 0x140927ba0.)
 
-/// Pseudo-handle for the current process (GetCurrentProcess() is constant -1).
-pub(crate) const CURRENT_PROCESS_PSEUDO_HANDLE: isize = -1;
-/// Bytes read per ReadProcessMemory call when scanning a region for the title
-/// vtable. One syscall per 64KB chunk (then an in-process buffer scan) keeps the
-/// fault-tolerant scan fast -- a syscall per 8-byte cursor would stall the thread.
-pub(crate) const SCAN_CHUNK_SIZE: usize = 0x10000;
+pub(crate) use er_title_flow::CURRENT_PROCESS_PSEUDO_HANDLE;
+pub(crate) use er_title_flow::SCAN_CHUNK_SIZE;

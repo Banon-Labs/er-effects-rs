@@ -297,11 +297,11 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_NON_SWITCH_C
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_WORLD_UP_COUNT;
 /// Switch forwards whose native requested-slot proof did not fire (carries the `FORWARD #n` label).
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_UNPROVEN_FORWARD_COUNT;
-pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE: usize = 0;
+pub(crate) use er_title_flow::SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE;
 pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED: usize = 1;
-pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED: usize = 2;
-pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN: usize = 3;
-pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF: usize = 4;
+pub(crate) use er_title_flow::SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED;
+pub(crate) use er_title_flow::SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN;
+pub(crate) use er_title_flow::SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_PHASE;
 /// Continuous in-world game-task frames observed while a return-title reload is still ARMED
 /// (`SYSTEM_QUIT_QUICKLOAD_PHASE >= RETURN_TITLE_REQUESTED`) with the local player present. A genuine
@@ -358,22 +358,14 @@ pub(crate) use er_telemetry::counters::INWORLD_FINALIZE_DRIVE_WHYNOT_COUNT;
 /// 0 == not currently resolved.
 pub(crate) use er_telemetry::counters::ORACLE_RELIABLE_INGAME_PTR;
 pub(crate) use er_telemetry::counters::ORACLE_RELIABLE_MMS_PTR;
-/// Child-done-query override (FUN_140eb5550, deobf 0x140eb5530). STEP_MoveMap_Update tears the
-/// MoveMapStep child down when this returns done; for load2 it returns done PREMATURELY (field25=0),
-/// stranding the reload. The MoveMapStep child's EzChildStepBase = MoveMapStep + 0x108 (isolates its
-/// call from the generic query's other callers). We hold its result not-done while the finalize is
-/// mid-walk on a committed reload, so the child survives and the advancer completes.
-pub(crate) const CHILD_DONE_QUERY_RVA: usize = 0xeb5530;
-pub(crate) const MOVEMAPSTEP_CHILD_EZSTEP_BASE_OFFSET: usize = 0x108;
+pub(crate) use er_title_flow::CHILD_DONE_QUERY_RVA;
+pub(crate) use er_title_flow::MOVEMAPSTEP_CHILD_EZSTEP_BASE_OFFSET;
 pub(crate) use er_telemetry::counters::CHILD_DONE_QUERY_ORIG;
 pub(crate) use er_telemetry::counters::CHILD_DONE_QUERY_HOOK_INSTALLED;
 pub(crate) use er_telemetry::counters::CHILD_DONE_HELD_COUNT;
 pub(crate) use er_telemetry::counters::CHILD_DONE_DIAG_COUNT;
-/// Held frozen-signature frames before the in-world drive fires. ~2s at load2's ~20fps; short so the
-/// RAM-gated drive completes before an incidental unfocused-mouse click can contaminate the run.
-pub(crate) const INWORLD_FINALIZE_DRIVE_RELEASE_FRAMES: usize = 40;
-/// Sustained stuck-at-18 frames before the recovery drives the ending request (~2s at task rate).
-pub(crate) const ENDING_REQUEST_STALL_RELEASE_FRAMES: usize = 120;
+pub(crate) use er_title_flow::INWORLD_FINALIZE_DRIVE_RELEASE_FRAMES;
+pub(crate) use er_title_flow::ENDING_REQUEST_STALL_RELEASE_FRAMES;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT;
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT: AtomicUsize =
     AtomicUsize::new(0);

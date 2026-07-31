@@ -122,6 +122,76 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         read_utf16_name_units: crate::experiments::read_utf16_name_units,
         boot_view_render_frame: crate::experiments::boot_view_render_frame,
     });
+    // Title-flow crate split: wire the er-title-flow seam to the real product fns, same
+    // rules as the portrait seam above (installed before any hook install or task spawn
+    // can execute moved code; pure fn-pointer writes).
+    er_title_flow::install_host(er_title_flow::TitleFlowHost {
+        append_autoload_debug: crate::telemetry::append_autoload_debug,
+        timeline_event: crate::telemetry::timeline_event,
+        game_directory_path: crate::telemetry::game_directory_path,
+        game_data_man_ptr_or_null: crate::constants::game_data_man_ptr_or_null,
+        game_man_ptr_or_null: crate::constants::game_man_ptr_or_null,
+        runtime_heap_allocator_ptr_or_null: crate::constants::runtime_heap_allocator_ptr_or_null,
+        ingamestep_request_code_name: crate::constants::ingamestep_request_code_name,
+        movemapstep_step_name: crate::constants::movemapstep_step_name,
+        title_step_state_name: crate::constants::title_step_state_name,
+        autoload_disabled: crate::experiments::autoload_disabled,
+        cleanup_title_dialog_after_world_enabled:
+            crate::experiments::cleanup_title_dialog_after_world_enabled,
+        experimental_direct_menu_load_enabled:
+            crate::experiments::experimental_direct_menu_load_enabled,
+        fire_tfc_continue_enabled: crate::experiments::fire_tfc_continue_enabled,
+        force_profile_render_enabled: crate::experiments::force_profile_render_enabled,
+        native_profile_capture_enabled: crate::experiments::native_profile_capture_enabled,
+        product_autoload_enabled: crate::experiments::product_autoload_enabled,
+        profile_select_load_flow_enabled: crate::experiments::profile_select_load_flow_enabled,
+        title_accept_byte_gate_enabled: crate::experiments::title_accept_byte_gate_enabled,
+        title_proceed_gate_enabled: crate::experiments::title_proceed_gate_enabled,
+        pab_advance_enabled: crate::experiments::pab_advance_enabled,
+        outgoing_teardown_enabled: crate::experiments::outgoing_teardown_enabled,
+        outgoing_teardown_suppresses_holds:
+            crate::experiments::outgoing_teardown_suppresses_holds,
+        switch_reload_ownload_disabled: crate::experiments::switch_reload_ownload_disabled,
+        title_anim_speedup_factor: crate::experiments::title_anim_speedup_factor,
+        direct_save_file_source_active: crate::experiments::direct_save_file_source_active,
+        missing_save_selection_pending: crate::experiments::missing_save_selection_pending,
+        save_override_telemetry_only: crate::experiments::save_override_telemetry_only,
+        create_continue_trace_hook: crate::experiments::create_continue_trace_hook,
+        apply_xor_ret_stub: crate::experiments::apply_xor_ret_stub,
+        patch_3byte_stub: crate::experiments::patch_3byte_stub,
+        install_auto_accept_hook: crate::experiments::install_auto_accept_hook,
+        disable_system_quit_gaitem_deserialize_hook:
+            crate::experiments::disable_system_quit_gaitem_deserialize_hook,
+        disable_system_quit_gaitem_finalize_hook:
+            crate::experiments::disable_system_quit_gaitem_finalize_hook,
+        disable_system_quit_gaitem_lookup_hook:
+            crate::experiments::disable_system_quit_gaitem_lookup_hook,
+        decode_thunk_hop: crate::experiments::decode_thunk_hop,
+        scan_dialog_for_loadgame: crate::experiments::scan_dialog_for_loadgame,
+        resolve_menu_system_save_load: crate::experiments::resolve_menu_system_save_load,
+        fire_product_title_load_action: crate::experiments::fire_product_title_load_action,
+        product_continue_action_ready: crate::experiments::product_continue_action_ready,
+        product_continue_autoload_tick: crate::experiments::product_continue_autoload_tick,
+        native_fullread_tick: crate::experiments::native_fullread_tick,
+        resolve_active_load_slot: crate::experiments::resolve_active_load_slot,
+        mark_tfc_forced_continue_handoff: crate::experiments::mark_tfc_forced_continue_handoff,
+        own_stepper_enter_s2_phase: crate::experiments::own_stepper_enter_s2_phase,
+        own_stepper_stage2: crate::experiments::own_stepper_stage2,
+        own_load_switch_reload_fire: crate::experiments::own_load_switch_reload_fire,
+        reset_switch_reload_latches: crate::experiments::reset_switch_reload_latches,
+        blockres_stalecap_fix_enabled: crate::experiments::blockres_stalecap_fix_enabled,
+        map_mount_guard_flip_tick: crate::experiments::map_mount_guard_flip_tick,
+        run_ebl_mount_census: crate::experiments::run_ebl_mount_census,
+        fake_loading_screen_visible: crate::experiments::fake_loading_screen_visible,
+        now_loading_active: crate::experiments::now_loading_active,
+        force_profile_render_tick: crate::experiments::force_profile_render_tick,
+        system_quit_save_swap_recommit_after_return_title_save:
+            crate::experiments::system_quit_save_swap_recommit_after_return_title_save,
+        portrait_retarget_and_rearm_for_switch:
+            crate::experiments::portrait_retarget_and_rearm_for_switch,
+        title_update_detour: crate::experiments::title_update_detour,
+        pab_node_update_detour: crate::experiments::pab_node_update_detour,
+    });
     er_d3d12_compositor::set_frame_provider(boot_view_d3d12_compositor_frame);
     write_bootstrap_event(BOOTSTRAP_EVENT_DLL_MAIN_ATTACH, BOOTSTRAP_DETAIL_START);
     init_runtime_config(hmodule);

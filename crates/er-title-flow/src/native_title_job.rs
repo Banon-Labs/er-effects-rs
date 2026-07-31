@@ -1,4 +1,4 @@
-pub(crate) unsafe fn title_owner(module_base: usize) -> Option<*mut u8> {
+pub unsafe fn title_owner(module_base: usize) -> Option<*mut u8> {
     let cached = TITLE_OWNER_PTR.load(Ordering::SeqCst) as *mut u8;
     if !cached.is_null() {
         return Some(cached);
@@ -19,7 +19,7 @@ pub(crate) unsafe fn title_owner(module_base: usize) -> Option<*mut u8> {
     ));
     Some(found)
 }
-pub(crate) unsafe fn call_native_title_job_once(module_base: usize, tick: u64) -> bool {
+pub unsafe fn call_native_title_job_once(module_base: usize, tick: u64) -> bool {
     if TITLE_NATIVE_JOB_CALLED.load(Ordering::SeqCst) != TITLE_NATIVE_JOB_NOT_CALLED {
         return true;
     }

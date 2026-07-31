@@ -2785,6 +2785,7 @@ dependencies = [
  "er-save-loader",
  "er-save-suppress",
  "er-telemetry",
+ "er-title-flow",
  "er-tpf",
  "erpx-rs",
  "fromsoftware-shared",
@@ -3044,6 +3045,21 @@ dependencies = [
  "eldenring",
  "er-hook",
  "er-telemetry",
+ "fromsoftware-shared",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "er-title-flow"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-game-base",
+ "er-hook",
+ "er-loading-portrait",
+ "er-save-loader",
+ "er-telemetry",
+ "er-tpf",
  "fromsoftware-shared",
  "windows 0.62.2",
 ]

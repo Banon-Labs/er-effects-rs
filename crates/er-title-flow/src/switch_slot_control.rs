@@ -49,7 +49,7 @@ unsafe fn switch_world_resident_state(base: usize) -> (bool, i32) {
 /// NO save request -- b72/b73/bc4 stay 0). Deliberately does NOT fire the return-title REQUEST/bc4/
 /// MenuJob chain (those are the case-7 save-gate hang + Scaleform-race hazards). See RE workflow
 /// wf_b4dae22c + bd repeatability-menu-free-phase-reset-fix-2026-07-18.
-pub(crate) unsafe fn switch_slot_arm_programmatic(base: usize, slot: i32) {
+pub unsafe fn switch_slot_arm_programmatic(base: usize, slot: i32) {
     SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.store(slot as usize, Ordering::SeqCst);
     SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT.store(0, Ordering::SeqCst); // genuine in-world switch
     SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(0, Ordering::SeqCst);
@@ -60,7 +60,7 @@ pub(crate) unsafe fn switch_slot_arm_programmatic(base: usize, slot: i32) {
     // ProfileSelect arm (system_quit_arm_quickload_autoload) via reset_switch_reload_latches() so the two
     // arm paths cannot drift -- that drift softlocked a user-driven load3 (bd
     // compounding-reload-two-roots-...-chainB-stale-fd4io-latch-b78-2026-07-23).
-    crate::experiments::own_load::reset_switch_reload_latches();
+    crate::compat::own_load::reset_switch_reload_latches();
     PRODUCT_AUTOLOAD_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     OWN_STEPPER_SLOT.store(slot, Ordering::SeqCst);
     OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_MENU, Ordering::SeqCst);
@@ -107,7 +107,7 @@ pub(crate) unsafe fn switch_slot_arm_programmatic(base: usize, slot: i32) {
     // no boot-view rearm, no confirm timestamp -- so control-file switches showed the bare native
     // loading screen and agent probes could never exercise the user path's publish-race machinery.
     unsafe {
-        crate::experiments::portrait_retarget_and_rearm_for_switch(
+        crate::compat::portrait_retarget_and_rearm_for_switch(
             slot,
             "SwitchSlotProgrammaticArm",
         )
@@ -117,7 +117,7 @@ pub(crate) unsafe fn switch_slot_arm_programmatic(base: usize, slot: i32) {
 /// Poll the harness switch-slot control file (mtime-gated) and, when a NEW request appears while the
 /// world is resident+stable and no switch is in flight, arm a programmatic menu-free switch. Primes on
 /// first sight so a stale file at boot never fires; DEFERS (leaves mtime unconsumed) until eligible.
-pub(crate) unsafe fn poll_switch_slot_control_file(base: usize) {
+pub unsafe fn poll_switch_slot_control_file(base: usize) {
     let Some(path) = switch_slot_control_path() else {
         return;
     };

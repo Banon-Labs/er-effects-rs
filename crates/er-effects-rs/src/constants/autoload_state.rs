@@ -15,14 +15,8 @@
 /// pump drives (the live-dialog MenuWindow wall was a forcing artifact -- this de-risks step 4).
 pub(crate) const MENU_MEMBER_FUNC_JOB_RUN_RVA: usize =
     ProfileLoadMenuRva::MenuMemberFuncJobRun as usize;
-/// CS::MenuMemberFuncJob<TitleTopDialog> vtable 0x142b265d0 (RVA): the registry-entry node the
-/// registrar 0x1409b24e0 inserts into [dialog+0xa48]; its run is MENU_MEMBER_FUNC_JOB_RUN_RVA.
-/// (Mirrors the local MEMBERFUNCJOB_VTABLE_RVA in scan_dialog_for_loadgame.)
-pub(crate) const MEMBERFUNCJOB_VTABLE_RVA: usize = 0x2b265d0;
-/// TitleTopDialog row registry [dialog+0xa48] (the FD4 delegate registry the registrar populates).
-/// Used as the live-menu readiness signal: populated == the menu rows are registered + rendered.
-pub(crate) const DIALOG_ROW_REGISTRY_A48_OFFSET: usize =
-    core::mem::offset_of!(TitleTopDialogLayout, row_registry);
+pub(crate) use er_title_flow::MEMBERFUNCJOB_VTABLE_RVA;
+pub(crate) use er_title_flow::DIALOG_ROW_REGISTRY_A48_OFFSET;
 /// NATIVE-LOAD fire latch states (one-shot: fire the Load-Game run exactly once).
 pub(crate) const NATIVE_LOAD_FIRED_NO: usize = 0;
 pub(crate) const NATIVE_LOAD_FIRED_YES: usize = 1;
@@ -49,17 +43,10 @@ pub(crate) const NATIVE_LOAD_LOG_INTERVAL: u64 = 120;
 /// recipe for the full-read chain.)
 pub(crate) const GAME_MAN_SLOT_SELECT_B78_OFFSET: usize =
     core::mem::offset_of!(GameMan, requested_save_slot_load_index);
-/// GameMan+0xb80 (== GameMan.save_state == load_in_progress) FSM values. The full-save read walks
-/// IDLE(0) -> OPENING(1) -> READING(2) -> RESIDENT(3); a healthy load then drains RESIDENT -> IDLE as
-/// the deserialize consumes the 0x280000 buffer. `load_in_progress_b80_name` (constants::return_title)
-/// gives the display names. The finalize case-7 gate (FUN_14067a170 == save_state==0) waits on b80
-/// reaching IDLE; on the warm reload it is stuck at RESIDENT because the deserialize never consumes it.
-pub(crate) const GAME_MAN_SAVE_STATE_IDLE: i32 = 0;
+pub(crate) use er_title_flow::GAME_MAN_SAVE_STATE_IDLE;
 pub(crate) const GAME_MAN_SAVE_STATE_OPENING: i32 = 1;
 pub(crate) const GAME_MAN_SAVE_STATE_READING: i32 = 2;
-/// GameMan+0xb80 == 3 == RESIDENT (the full-save read drained into the 0x280000 buffer). The DRAIN
-/// phase ticks the lane + poll each frame until b80 reaches this.
-pub(crate) const FULLREAD_B80_RESIDENT: i32 = 3;
+pub(crate) use er_title_flow::FULLREAD_B80_RESIDENT;
 /// GameMan+0xc30 m10 new-game default (golden-oracle-baseline). c30 == this == FAILURE (the char did
 /// NOT deserialize). The step-6 guard requires c30 != this before the (gated) continue_confirm.
 pub(crate) const FULLREAD_C30_M10_DEFAULT: i32 = 0xa010000;
@@ -82,14 +69,12 @@ pub(crate) const FULLREAD_OWNER_NEW_GAME_OK: u8 = 0;
 /// owner = *(game_data_man_ptr_or_null() + this offset) -- the GameDataMan+0x8 chain the
 /// continue_confirm shim owner is read from (recipe step 7: owner = *(base+0x3d5df38+8)).
 pub(crate) const FULLREAD_OWNER_GDM_08_OFFSET: usize = 0x08;
-/// Full-read chain phase machine states (one step per frame).
-pub(crate) const FULLREAD_PHASE_SUBMIT: usize = 0;
+pub(crate) use er_title_flow::FULLREAD_PHASE_SUBMIT;
 pub(crate) const FULLREAD_PHASE_DRAIN: usize = 1;
 pub(crate) const FULLREAD_PHASE_DESER: usize = 2;
-pub(crate) const FULLREAD_PHASE_GUARD: usize = 3;
+pub(crate) use er_title_flow::FULLREAD_PHASE_GUARD;
 pub(crate) const FULLREAD_PHASE_DONE: usize = 4;
-/// Live phase + drain-wait counters for the full-read chain (one-shot per run).
-pub(crate) static FULLREAD_PHASE: AtomicUsize = AtomicUsize::new(FULLREAD_PHASE_SUBMIT);
+pub(crate) use er_title_flow::FULLREAD_PHASE;
 pub(crate) use er_telemetry::counters::FULLREAD_DRAIN_WAITS;
 /// Terminal non-commit disarm counters for the full-read chain (bd er-effects-rs-ns4n). SUBMIT arms
 /// the native slot-request register (GameMan+0xb78, `requested_save_slot_load_index`); the in-game
@@ -112,47 +97,18 @@ pub(crate) use er_telemetry::counters::LOADED_PEAK_LEVEL;
 pub(crate) use er_telemetry::counters::LOADED_PEAK_C30;
 pub(crate) use er_telemetry::counters::LOADED_PEAK_NAME_LEN;
 pub(crate) static LOADED_PEAK_NAME: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
-/// The native full-read chain shares the semantic `title_menu_action_ready` menu readiness gate;
-/// it no longer latches a first-seen frame before starting the save-read phase machine.
-/// `save_requested`: bound to the upstream typed layout (compiler-verified equal to our prior
-/// hand-decoded offset).
-pub(crate) const GAME_MAN_ARM_FLAG_B72_OFFSET: usize =
-    core::mem::offset_of!(GameMan, save_requested);
+pub(crate) use er_title_flow::GAME_MAN_ARM_FLAG_B72_OFFSET;
 
-#[repr(C)]
-pub(crate) struct GameManAutoloadFlagCluster {
-    pub(crate) save_requested: u8,
-    pub(crate) probe_b73: u8,
-    pub(crate) probe_b74: u8,
-    pub(crate) probe_b75: u8,
-}
+pub(crate) use er_title_flow::GameManAutoloadFlagCluster;
 
-pub(crate) const GAME_MAN_FLAG_B73_PROBE_OFFSET: usize =
-    GAME_MAN_ARM_FLAG_B72_OFFSET + core::mem::offset_of!(GameManAutoloadFlagCluster, probe_b73);
-pub(crate) const GAME_MAN_FLAG_B75_PROBE_OFFSET: usize =
-    GAME_MAN_ARM_FLAG_B72_OFFSET + core::mem::offset_of!(GameManAutoloadFlagCluster, probe_b75);
-/// `requested_save_slot_load_index`: bound to upstream (compiler-verified equal to our offset).
-pub(crate) const GAME_MAN_REQUESTED_SLOT_B78_OFFSET: usize =
-    core::mem::offset_of!(GameMan, requested_save_slot_load_index);
-pub(crate) const GAME_MAN_FLAG_BC4_OFFSET: usize =
-    core::mem::offset_of!(GameMan, is_in_online_mode) - core::mem::size_of::<u32>();
-/// Submit-gate diagnostics (b80-submit-kick-exact-false-gate-decoded-2026). The b72
-/// autoload initiator 0x14067b750 sets GameMan+0xb80=1 ONLY if the async submit
-/// 0x140e6ec70 returns true; the submit body 0x140e6f940 bails FALSE if the IO device
-/// has a STALE request in-flight ([iodev+0x10]!=0) or a stale request handle
-/// ([iodev+0x20]!=0). The IO device global is abs 0x144589390 (RVA 0x4589390); we read
-/// it both as a possible pointer-to-device and as a struct base so the log
-/// disambiguates. Also: the b72 effective-getter 0x1406793d0 zeroes b72 if
-/// [GameMan+0xbc4]==3 or [inputmgr+0x13c]!=0, so log those too.
-pub(crate) const IODEV_GLOBAL_RVA: usize = 0x4589390;
-pub(crate) const IODEV_INFLIGHT_10_OFFSET: usize = 0x10;
-/// The async-IO request handle the poll 0x140e6e080 actually reads is the PAIR
-/// [iodev+0x18] && [iodev+0x20] (a *started* request). 0x14067b4e0's preview read
-/// (0x140e6ec80) is what populates these; 0x14067b200's queue (0x140e6eb80) goes to
-/// the file-device-mgr instead, so it never appears here. Logging both pins which
-/// initiator actually started the iodev read (menu-b80-mount-orchestration-sequence).
-pub(crate) const IODEV_REQHANDLE_18_OFFSET: usize = 0x18;
-pub(crate) const IODEV_REQHANDLE_20_OFFSET: usize = 0x20;
+pub(crate) use er_title_flow::GAME_MAN_FLAG_B73_PROBE_OFFSET;
+pub(crate) use er_title_flow::GAME_MAN_FLAG_B75_PROBE_OFFSET;
+pub(crate) use er_title_flow::GAME_MAN_REQUESTED_SLOT_B78_OFFSET;
+pub(crate) use er_title_flow::GAME_MAN_FLAG_BC4_OFFSET;
+pub(crate) use er_title_flow::IODEV_GLOBAL_RVA;
+pub(crate) use er_title_flow::IODEV_INFLIGHT_10_OFFSET;
+pub(crate) use er_title_flow::IODEV_REQHANDLE_18_OFFSET;
+pub(crate) use er_title_flow::IODEV_REQHANDLE_20_OFFSET;
 /// The save-DEVICE MOUNT/OPEN routine 0x140e6e8d0(rcx=iodev): the title->Continue boot
 /// (single native call site 0x140defec2) runs it to BIND the .sl2 file to the IO device.
 /// It opens the OS handle (via 0x140e45660), registers the save paths, then writes the
@@ -241,42 +197,19 @@ pub(crate) const FD4_IO_POOL_RVA: usize = 0x4853048;
 /// IO context). Empty when [[registry+0x28]] == [registry+0x28].
 pub(crate) const IO_WORKER_REGISTRY_LIST_28_OFFSET: usize = 0x28;
 pub(crate) const INPUTMGR_PENDING_13C_OFFSET: usize = 0x13c;
-pub(crate) const ARM_PROBE_MIN_TICK: u64 = 60;
-pub(crate) const ARM_PROBE_TICK_INTERVAL: u64 = 30;
-/// Lever 2 (zero-input title-accept via input-event injection). Inner TitleStep
-/// state is at owner+0x4c (==10 MenuJobWait); the press-any-button job is at
-/// owner+0x130; its vtable[+0x18] fills a descriptor whose first i32 indexes the
-/// event table 0x143d6a860 (stride 0x60); eventId=[entry+4], value=[entry+8];
-/// the game's node update writes inputmgr(0x143d6b7b0)+0xdc+eventId*4 = value.
-/// Injecting that event makes the game's own node update accept and run the real
-/// front-end bootstrap. Verdict is [job+0x1e8] >= 2.
-/// The press-any-button job (owner+0x130) is an AND-combiner (vtable RVA
-/// 0x2aa2958) over child condition nodes at [job+0x18 + i*8], count [job+0x60].
-/// The real input node is the child with vtable RVA 0x2aa97e8; its keycode is at
-/// child+0x180. Accept = set the inputmgr keystate bitmap (inputmgr+0x90+keycode
-/// |= 3 pressed+triggered) so the leaf returns accepted and the combiner ANDs to
-/// done -> MenuJobWait advances 10->11 and the front-end bootstraps.
-/// Logical input-event array on the inputmgr (inputmgr+0xdc, i32 per event id,
-/// ids 0..=0x15e). The leaf input node detects a press via this layer (then
-/// mirrors into the keystate bitmap), so injecting here is what actually accepts.
-pub(crate) const TITLE_ACCEPT_LATCH_RVA: usize = 0x3d856a0;
-/// Boot intro/movie singleton (ptr) and its decoder skip-flag byte. The latch
-/// 0x143d856a0 is set by the intro thread 0x140c8fe90 only after its movie-wait
-/// loop ends; the movie-dismiss gate 0x140e90820 finishes on decode-complete or
-/// when the skip-flag byte 0x14458b8a5 is non-zero (sole non-WNDPROC effect is the
-/// movie's own stop). Setting the skip-flag drives a genuine zero-input dismiss.
-pub(crate) const MOVIE_SINGLETON_RVA: usize = 0x458b890;
-pub(crate) const MOVIE_SKIP_FLAG_RVA: usize = 0x458b8a5;
-pub(crate) const MOVIE_SKIP_FLAG_CLEAR: u8 = 0;
-pub(crate) const MOVIE_SKIP_FLAG_SET: u8 = 1;
-/// Movie controller vtable RVA (0x142bfe088), HWND field offset (M+8), and the
-/// USER32 constants for mirroring the WNDPROC WM_CLOSE teardown.
-pub(crate) const MOVIE_VTABLE_RVA: usize = 0x2bfe088;
-pub(crate) const MOVIE_HWND_OFFSET: usize = 0x8;
-pub(crate) const WND_SC_CLOSE: u32 = 0xf060;
-pub(crate) const WND_MF_BYCOMMAND: u32 = 0;
-pub(crate) const WND_SW_HIDE: i32 = 0;
-pub(crate) const WND_GET_SYSTEM_MENU_KEEP: i32 = false as i32;
+pub(crate) use er_title_flow::ARM_PROBE_MIN_TICK;
+pub(crate) use er_title_flow::ARM_PROBE_TICK_INTERVAL;
+pub(crate) use er_title_flow::TITLE_ACCEPT_LATCH_RVA;
+pub(crate) use er_title_flow::MOVIE_SINGLETON_RVA;
+pub(crate) use er_title_flow::MOVIE_SKIP_FLAG_RVA;
+pub(crate) use er_title_flow::MOVIE_SKIP_FLAG_CLEAR;
+pub(crate) use er_title_flow::MOVIE_SKIP_FLAG_SET;
+pub(crate) use er_title_flow::MOVIE_VTABLE_RVA;
+pub(crate) use er_title_flow::MOVIE_HWND_OFFSET;
+pub(crate) use er_title_flow::WND_SC_CLOSE;
+pub(crate) use er_title_flow::WND_MF_BYCOMMAND;
+pub(crate) use er_title_flow::WND_SW_HIDE;
+pub(crate) use er_title_flow::WND_GET_SYSTEM_MENU_KEEP;
 /// Render-thread liveness probe logging cadence (in render frames).
 pub(crate) const RENDER_PROBE_INTERVAL: usize = 120;
 /// Splash-skip static patch (ports chozandrias76/er-skip-splash-screens to 1.16.1):
@@ -288,75 +221,24 @@ pub(crate) const SPLASH_SKIP_RVA: usize = 0xb0c35d;
 pub(crate) const SPLASH_SKIP_EXPECTED_JE: u8 = 0x74;
 pub(crate) const SPLASH_SKIP_REPLACEMENT_JG: u8 = 0x7f;
 pub(crate) const SPLASH_PATCH_LEN: usize = 1;
-/// ONLINE-DISABLE (headless offline boot, no "Unable to start in online mode" modal).
-/// `GameMan::IsOnlineMode` getter 0x14067a030 = `mov rax,[rip+..]; movzx eax,[rax+0xbc8]; ret`
-/// (the canonical online/offline flag, default 1=online, read by ~22 consumers incl. the boot
-/// login flow). Patching the getter body to `xor eax,eax; ret` forces every consumer onto the
-/// game's own OFFLINE branch, so the boot never attempts online login and the connection-error
-/// modal is never raised. Single leaf accessor, no side effects -> equivalent to "Play Offline";
-/// no save/crash risk. Verified (self-disasm, online-disable RE 2026-06-17): first byte 0x48.
-pub(crate) const ONLINE_DISABLE_RVA: usize = 0x67a030;
+pub(crate) use er_title_flow::ONLINE_DISABLE_RVA;
 pub(crate) const ONLINE_DISABLE_EXPECTED_FIRST: u8 = 0x48;
-/// `xor eax,eax; ret` -- returns 0 (offline) for the whole getter (the original body is 15
-/// bytes followed by the next function, so a 3-byte stub is self-contained).
-pub(crate) const ONLINE_DISABLE_STUB: [u8; 3] = [0x31, 0xc0, 0xc3];
+pub(crate) use er_title_flow::ONLINE_DISABLE_STUB;
 pub(crate) const ONLINE_DISABLE_PATCH_LEN: usize = 3;
 pub(crate) const ONLINE_DISABLE_BYTE_STEP: usize = 1;
 // Foreground-force constants REMOVED (user directive 2026-07-16): the product must not patch
 // CS::CSWindowImp::IsGameInForeground (it made the game grab the OS cursor on world-entry). See
 // bootstrap.rs / profile_select_flow.rs.
-/// Sign-in force (cold save-load gate). The SaveLoad2 storage-select op ctor (deobf 0x14240f1b0)
-/// creates its runnable ONLY if the sign-in check returns true AND the user index is <= 3; cold
-/// (no signed-in user) both fail, so the op is null and the load FSM parks (the b80 wall). Patch
-/// both gate fns to pass so the cold menu-free path loads as if signed in as user 0. Addresses
-/// ground-truthed against the deobf/live binary (the Ghidra dump's FUN_1424129a0 / FUN_14240f480
-/// are shifted; live entries below). Scoped to the cold-mount attempt, not attach.
-/// `CS::..::IsSignedIn`-class check (dump FUN_1424129a0) -> always true.
-pub(crate) const SIGNIN_FORCE_RVA: usize = 0x24129b0;
-pub(crate) const SIGNIN_FORCE_EXPECTED_FIRST: u8 = 0x40;
-pub(crate) const SIGNIN_FORCE_STUB: [u8; 3] = [0xb0, 0x01, 0xc3]; // mov al,1; ret
-/// User-index resolver (dump FUN_14240f480) -> return 0 (valid index, <= 3) instead of 0xffffffff.
-pub(crate) const USERINDEX_FORCE_RVA: usize = 0x240f490;
-pub(crate) const USERINDEX_FORCE_EXPECTED_FIRST: u8 = 0x4c;
-pub(crate) const USERINDEX_FORCE_STUB: [u8; 3] = [0x31, 0xc0, 0xc3]; // xor eax,eax; ret
-/// Login-readiness predicate 0x140cab230 (`sub rsp,0x18; ...`, returns 1 only if all 3 session
-/// mgrs == 2). The boot/menu network-flow step calls it to decide ONLINE-attempt vs OFFLINE; a
-/// non-zero return makes it attempt online login, which FAILS offline -> the connection-error
-/// modal re-pops on every menu transition (the popup LOOP). Patching it to `xor eax,eax; ret`
-/// (return "not ready") makes the flow take the clean OFFLINE fork and NEVER attempt online.
-/// Same 3-byte stub; first byte 0x48 (verified disasm). Applied with the getter patch.
-pub(crate) const ONLINE_PREDICATE_DISABLE_RVA: usize = 0xcab230;
-/// MENU OFFLINE-NOTICE GATE -- the THIRD menu-open popup, root-caused 2026-06-23
-/// (bd `menu-open-3rd-popup-offline-mode-notice-2026-06-23`, Ghidra RE `er-effects-rs-yvf`).
-/// `Menu_IsEnableOnlineMode` (deobf 0x140e56310) is a lazy-init cached getter that DEFAULTS TRUE. The
-/// TitleTopDialog ctx-init step (0x14082d0d0) computes
-/// `TitleFlowContext->notReleaseFlag55 (+0x18C) = !Menu_IsEnableOnlineMode()`. With the getter TRUE and the
-/// boot offline, `notReleaseFlag55 == 0` routes the title-flow offline step (0x14082fda0) into building the
-/// "Starting in offline mode" `GR_System_Message` (id 401170) `CS::MessageBoxDialog` -- which BLOCKS the
-/// Continue/Load/NewGame row build (the stage-3 / 0-node continue-readiness wall). Patching this getter to
-/// `xor eax,eax; ret` (return false) makes the game's OWN ctx-init set `notReleaseFlag55 = 1` every time it
-/// runs, so the offline step takes the clean no-popup branch and the menu rows build with ZERO MessageBoxDialog
-/// builds. Race-free (re-evaluated on each ctx-init, unlike a one-shot field poke). Applied with the
-/// IsOnlineMode getter patch (offline-gated -> Seamless online is unaffected). Verified prologue first byte 0x40
-/// (`push rbx`; deobf disasm). Reuses `ONLINE_DISABLE_STUB` (`xor eax,eax; ret`).
-pub(crate) const MENU_ONLINE_MODE_DISABLE_RVA: usize = 0xe56310;
-pub(crate) const MENU_ONLINE_MODE_EXPECTED_FIRST: u8 = 0x40;
-/// AUTO-ACCEPT every `CS::MessageBoxDialog` popup that appears BEFORE the character is in-world
-/// (connection-error, EULA, warnings, "save data" notices, ...), so the headless autoload never
-/// stops on a startup modal. We hook the dialog's finished-poll getter 0x1407b0cf0
-/// (`cmp [rcx+0x25e8],2; setge al; ret`, rcx=dialog) and, for the MessageBoxDialog vtable only,
-/// write the result fields (button=OK, state=decided) and return "finished" -- exactly as if OK
-/// were pressed. Scoped by vtable + pre-in-world so in-game dialogs + the load flow are untouched.
-/// Verified self-disasm (online-disable RE 2026-06-17 + local disasm).
-#[repr(usize)]
-pub(crate) enum MsgBoxRva {
-    ForceStop = 0x78dfd0,
-    MultiChoiceGetter = 0x7b0cf0,
-    Builder = 0x9275b0,
-    OnDecide = 0x927ba0,
-    Update = 0x927d30,
-    DialogVtable = 0x2b03550,
-}
+pub(crate) use er_title_flow::SIGNIN_FORCE_RVA;
+pub(crate) use er_title_flow::SIGNIN_FORCE_EXPECTED_FIRST;
+pub(crate) use er_title_flow::SIGNIN_FORCE_STUB;
+pub(crate) use er_title_flow::USERINDEX_FORCE_RVA;
+pub(crate) use er_title_flow::USERINDEX_FORCE_EXPECTED_FIRST;
+pub(crate) use er_title_flow::USERINDEX_FORCE_STUB;
+pub(crate) use er_title_flow::ONLINE_PREDICATE_DISABLE_RVA;
+pub(crate) use er_title_flow::MENU_ONLINE_MODE_DISABLE_RVA;
+pub(crate) use er_title_flow::MENU_ONLINE_MODE_EXPECTED_FIRST;
+pub(crate) use er_title_flow::MsgBoxRva;
 
 /// `FUN_1407b0cf0` -- vtable slot 14 of every MessageBoxDialog-family vtable. Whole body is
 /// `return 1 < *(i32*)(this+0x25e8)`, i.e. "this box has MORE THAN ONE button" (a Yes/No
@@ -365,7 +247,7 @@ pub(crate) enum MsgBoxRva {
 /// The old name (`MSGBOX_FINISHED_GETTER_RVA`) was wrong and is what made the save-flow poll
 /// resolve a freshly built two-button confirm on its first frame (2026-07-28).
 pub(crate) const MSGBOX_MULTI_CHOICE_GETTER_RVA: u32 = MsgBoxRva::MultiChoiceGetter as u32;
-pub(crate) const MSGBOX_DIALOG_VTABLE_RVA: usize = MsgBoxRva::DialogVtable as usize;
+pub(crate) use er_title_flow::MSGBOX_DIALOG_VTABLE_RVA;
 /// `CS::MessageBoxDialog::Update` (`FUN_140927d30`), vtable slot 2. STRUCTURAL IDENTITY: all
 /// five MessageBoxDialog-family vtables in `eldenring-deobf.bin` carry this exact function in
 /// slot 2 -- base `CS::MessageBoxDialog` (rva 0x2b03550), `CS::SaveRetryDialog` (0x2aaabf8),
@@ -377,20 +259,7 @@ pub(crate) const MSGBOX_DIALOG_UPDATE_RVA: usize = MsgBoxRva::Update as usize;
 /// Index of the `Update` entry in a MessageBoxDialog vtable (slot 2 == byte offset 0x10).
 pub(crate) const MSGBOX_DIALOG_VTABLE_UPDATE_SLOT: usize = 2;
 
-#[repr(C)]
-pub(crate) struct MsgBoxDialogLayout {
-    pub(crate) unknown_000: [u8; 0x1e8],
-    pub(crate) job_result_state: i32,
-    pub(crate) job_result_subcode: i32,
-    pub(crate) unknown_1f0: [u8; 0x1c0],
-    pub(crate) closing_latch: u8,
-    pub(crate) unknown_3b1: [u8; 0x180f],
-    pub(crate) confirm_latch: u8,
-    pub(crate) unknown_1bc1: [u8; 0xa1f],
-    pub(crate) default_cursor_index: i32,
-    pub(crate) unknown_25e4: [u8; 0x04],
-    pub(crate) button_count: i32,
-}
+pub(crate) use er_title_flow::MsgBoxDialogLayout;
 
 /// `dialog+0x25e0` -- the DEFAULT/INITIAL CURSOR INDEX, written once by the ctor
 /// (`FUN_1409275b0`: `*(u32*)(param_1+0x4bc) = param_5`, and `0x4bc*8 == 0x25e0`) from the
@@ -457,13 +326,7 @@ pub(crate) static MENU_JOB_EMIT_RESULT_ORIG: AtomicUsize = AtomicUsize::new(HOOK
 pub(crate) const MENU_JOB_EMIT_RESULT_NOT_INSTALLED: usize = 0;
 pub(crate) const MENU_JOB_EMIT_RESULT_INSTALLED_YES: usize = 1;
 pub(crate) use er_telemetry::counters::MENU_JOB_EMIT_RESULT_INSTALLED;
-/// CS::SaveRetryDialog vtable (RVA). A MessageBoxDialog SUBCLASS: the wrapper 0x1407af9a0 overrides
-/// the base vtable to this AFTER the builder 0x1409275b0 runs. It is the "save/load failed -- Retry?"
-/// prompt the offline title flow builds (save-data/profile read error in a degraded/offline env). The
-/// auto-accept must recognize it by THIS vtable -- not the base MessageBoxDialog vtable (0x2b03550) --
-/// or it bails before dismissing (the vtable mismatch is why auto-accept never fired). bd
-/// offline-title-modal-is-saveretrydialog + press-any-button-golden-lever-job1e8-readiness-2026-06-23.
-pub(crate) const SAVE_RETRY_DIALOG_VTABLE_RVA: usize = 0x2aaabf8;
+pub(crate) use er_title_flow::SAVE_RETRY_DIALOG_VTABLE_RVA;
 /// SaveRetryDialog fade gate the OK-handler (0x78e030) reads: it commits/closes only when
 /// fade_current (+0x1278) <= fade_target (+0x2300). Writing fade_current = fade_target bits makes it
 /// commit on the first frame (no fade-in animation = no visible flash) instead of ~20 frames.
@@ -491,7 +354,7 @@ pub(crate) use er_telemetry::counters::AUTO_ACCEPT_COUNT;
 /// MessageBoxDialogs (which need real choices) are never force-accepted.
 pub(crate) use er_telemetry::counters::IN_WORLD_REACHED;
 pub(crate) const IN_WORLD_NOT_REACHED: usize = 0;
-pub(crate) const IN_WORLD_REACHED_YES: usize = 1;
+pub(crate) use er_title_flow::IN_WORLD_REACHED_YES;
 /// The fresh_deser load epoch whose world is genuinely LIVE (play_time advanced past that epoch's
 /// baseline), published by the play-time-live oracle. The boot-view compositor uses this as a
 /// PER-EPOCH world-reached signal to stop its per-frame GPU readback promptly after an own-menu switch
@@ -1177,10 +1040,8 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT;
 /// Live/deobf native `05_010_ProfileSelect` wrapper (`FUN_14081f7e0` dump -> live `0x14081f6f0`).
 pub(crate) const PROFILE_SELECT_WRAPPER_RVA: u32 = 0x81f6f0;
-/// Live/deobf native menu-job submit helper (`FUN_1407a9340` dump -> live `0x1407a9250`).
-pub(crate) const MENU_JOB_SUBMIT_RVA: u32 = 0x7a9250;
-/// Live/deobf native menu-job queue idle predicate (`FUN_1407a9320` dump -> live `0x1407a9230`).
-pub(crate) const MENU_JOB_QUEUE_READY_RVA: u32 = 0x7a9230;
+pub(crate) use er_title_flow::MENU_JOB_SUBMIT_RVA;
+pub(crate) use er_title_flow::MENU_JOB_QUEUE_READY_RVA;
 /// Live/deobf native `CS::MenuJob::ChainMenuJobs` (`0x1407a7ca0` dump -> live `0x1407a7bb0`).
 /// ABI: `rcx=&first_job_slot, rdx=&out_job_slot, r8=&second_job_slot`; it builds a native
 /// FixOrderJobSequence so the existing menu/job pump owns both jobs rather than a private manual pump.

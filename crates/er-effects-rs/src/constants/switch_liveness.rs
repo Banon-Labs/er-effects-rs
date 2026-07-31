@@ -7,27 +7,16 @@
 // Down taps in-process (NO host input, NO window focus) until d180 is captured, then STAGE 2
 // invokes its functor directly -- so we never Confirm a wrong item (no New-Game/save-write risk).
 // ============================================================================================
-/// inputmgr keystate bitmap offset (inputmgr = [0x143d6b7b0]); bit0 = pressed-this-frame (edge).
-pub(crate) const INPUTMGR_BITMAP_90_OFFSET: usize = 0x90;
-pub(crate) const MENU_EVENT_PRESSED_BIT: u8 = true as u8;
-/// Front-end menu event ids (verified): Confirm/OK, and the two vertical-move candidates (one is
-/// Down, one Up -- we inject both; only Down moves the cursor down, Up saturates at the top so it
-/// is harmless from Continue). We do NOT inject Confirm (STAGE 2 invokes d180's functor instead).
-#[repr(usize)]
-pub(crate) enum MenuEventId {
-    MoveA = 0x00,
-    Confirm = 0x3d,
-    MoveB = 0x45,
-}
+pub(crate) use er_title_flow::INPUTMGR_BITMAP_90_OFFSET;
+pub(crate) use er_title_flow::MENU_EVENT_PRESSED_BIT;
+pub(crate) use er_title_flow::MenuEventId;
 
-pub(crate) const MENU_EVENT_CONFIRM_3D: usize = MenuEventId::Confirm as usize;
+pub(crate) use er_title_flow::MENU_EVENT_CONFIRM_3D;
 pub(crate) const MENU_EVENT_MOVE_A_00: usize = MenuEventId::MoveA as usize;
 pub(crate) const MENU_EVENT_MOVE_B_45: usize = MenuEventId::MoveB as usize;
-/// AUTO-CONFIRM (observe natural flow past the modal): tap Confirm on a SET/GAP cycle slow enough
-/// that the connection-error modal (which appears ~90 frames after the press) gets its own tap.
-pub(crate) const AUTO_CONFIRM_CYCLE_FRAMES: u64 = 120;
-pub(crate) const AUTO_CONFIRM_SET_FRAMES: u64 = 3;
-pub(crate) const AUTO_CONFIRM_LOG_INTERVAL: u64 = 60;
+pub(crate) use er_title_flow::AUTO_CONFIRM_CYCLE_FRAMES;
+pub(crate) use er_title_flow::AUTO_CONFIRM_SET_FRAMES;
+pub(crate) use er_title_flow::AUTO_CONFIRM_LOG_INTERVAL;
 pub(crate) use er_telemetry::counters::AUTO_CONFIRM_FRAME;
 pub(crate) use er_telemetry::counters::AUTO_CONFIRM_MODAL_SEEN;
 /// Menu list cursor (highlighted index) and item count, on the list object (cursor getter

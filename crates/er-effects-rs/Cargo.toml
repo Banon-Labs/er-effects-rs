@@ -10,6 +10,7 @@ crate-type = ["cdylib"]
 [dependencies]
 # Shared cross-platform telemetry counters used by host checks and the Windows DLL.
 er-telemetry = { path = "../er-telemetry" }
+er-title-flow = { path = "../er-title-flow" }
 
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }

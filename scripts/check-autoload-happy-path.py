@@ -15,6 +15,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_SRC = REPO_ROOT / "crates" / "er-effects-rs" / "src"
 EXPERIMENTS_DIR = RUNTIME_SRC / "experiments"
 EXPERIMENTS = RUNTIME_SRC / "experiments.rs"  # legacy single-file fallback
+# The title/autoload/switch cluster moved into the er-title-flow crate
+# (docs/plans/title-flow-crate-extraction.md). It is the same logical module the
+# checks below were written against, so it stays part of the concatenated source.
+TITLE_FLOW_DIR = REPO_ROOT / "crates" / "er-title-flow" / "src"
 LIB = RUNTIME_SRC / "lib.rs"
 CONSTANTS = RUNTIME_SRC / "constants.rs"
 TELEMETRY = RUNTIME_SRC / "telemetry.rs"
@@ -58,7 +62,11 @@ def read_module_tree(root_file: Path, module_dir: Path | None = None) -> str:
 
 
 def read_experiments() -> str:
-    return read_module_tree(EXPERIMENTS, EXPERIMENTS_DIR)
+    return (
+        read_module_tree(EXPERIMENTS, EXPERIMENTS_DIR)
+        + "\n"
+        + read_module_tree(TITLE_FLOW_DIR / "lib.rs", TITLE_FLOW_DIR)
+    )
 
 
 def rust_fn_body(source: str, name: str) -> str:

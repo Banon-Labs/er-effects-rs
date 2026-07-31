@@ -39,9 +39,9 @@ pub(crate) const TITLE_HANDOFF_INCOMPLETE: usize = 0;
 pub(crate) const TITLE_HANDOFF_COMPLETE_VALUE: usize = 1;
 pub(crate) const STACK_TRACE_FRAME_COUNT: usize = 8;
 pub(crate) const STACK_TRACE_FRAMES_TO_SKIP: u32 = 0;
-pub(crate) const NULL_MODULE_BASE: usize = 0;
+pub(crate) use er_title_flow::NULL_MODULE_BASE;
 pub(crate) const HOOK_ORIGINAL_UNSET: usize = 0;
-pub(crate) const HOOK_FALSE_RETURN: u8 = 0;
+pub(crate) use er_title_flow::HOOK_FALSE_RETURN;
 
 #[repr(usize)]
 pub(crate) enum RuntimeGlobalRva {
