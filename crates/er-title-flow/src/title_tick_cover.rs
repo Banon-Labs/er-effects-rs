@@ -5,7 +5,7 @@
 /// when done (`ShouldContinue==false`). We pump OUR job (not the dialog's `+0x8` slot, which is not a
 /// MenuJob and AV'd the queue-drain wrapper). Pure native call (no input). Stops on completion (slot
 /// cleared), in-world, panic, or the tick cap. Every call is `catch_unwind`-guarded.
-pub(crate) unsafe fn tfc_continue_drain_tick(base: usize, frame_delta: f32) {
+pub unsafe fn tfc_continue_drain_tick(base: usize, frame_delta: f32) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let job = TFC_DRAIN_JOB.load(Ordering::SeqCst);
     if job == 0 || job == null {
@@ -65,7 +65,7 @@ pub(crate) unsafe fn tfc_continue_drain_tick(base: usize, frame_delta: f32) {
 /// menu-open), per the INJECT_NAV schedule: settle, then `INJECT_NAV_MAX_CYCLES` tap+gap cycles
 /// with Down asserted for the first `INJECT_NAV_TAP_LEN` frames of each cycle. Returns 0 (no
 /// input) during settle, gaps, and after the cycles complete.
-pub(crate) fn inject_nav_buttons(n: usize) -> u16 {
+pub fn inject_nav_buttons(n: usize) -> u16 {
     const NONE: u16 = 0;
     if n < INJECT_NAV_SETTLE_FRAMES {
         return NONE;
@@ -85,7 +85,7 @@ pub(crate) fn inject_nav_buttons(n: usize) -> u16 {
 /// STOPS once the modal has been SEEN and is now GONE, so we never confirm a main-menu item
 /// (Continue = load most-recent = SetState(5) save-write risk). Pure observation of the post-modal
 /// view. Uses the builder capture hook only to know when the modal is up.
-pub(crate) fn auto_confirm_tap() {
+pub fn auto_confirm_tap() {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let Ok(base) = game_module_base() else {
         return;
@@ -118,7 +118,7 @@ pub(crate) fn auto_confirm_tap() {
         ));
     }
 }
-pub(crate) unsafe fn title_press_button_component_ready(
+pub unsafe fn title_press_button_component_ready(
     dialog: usize,
     base: usize,
 ) -> Option<TitlePressButtonComponent> {
@@ -135,7 +135,7 @@ pub(crate) unsafe fn title_press_button_component_ready(
     }
     Some(TitlePressButtonComponent { proxy, context })
 }
-pub(crate) unsafe fn title_dialog_state(dialog: usize, base: usize) -> TitleDialogState {
+pub unsafe fn title_dialog_state(dialog: usize, base: usize) -> TitleDialogState {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
     let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
@@ -153,7 +153,7 @@ pub(crate) unsafe fn title_dialog_state(dialog: usize, base: usize) -> TitleDial
         menu_opened_latch,
     }
 }
-pub(crate) unsafe fn title_boot_ready(owner: usize, base: usize) -> bool {
+pub unsafe fn title_boot_ready(owner: usize, base: usize) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let committed = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }
         .unwrap_or(TITLE_STATE_OWNER_GONE);
@@ -187,10 +187,10 @@ pub(crate) unsafe fn title_boot_ready(owner: usize, base: usize) -> bool {
         unsafe { is_in_state(sm, base + TITLE_STATE_DESC_TEXTFADEOUT_RVA) } != OWN_STEPPER_FALSE;
     in_loop || in_textfadeout
 }
-pub(crate) unsafe fn title_scheduler_ready(owner: usize, base: usize) -> bool {
+pub unsafe fn title_scheduler_ready(owner: usize, base: usize) -> bool {
     unsafe { title_boot_ready(owner, base) }
 }
-pub(crate) unsafe fn product_core_autoload_ready(
+pub unsafe fn product_core_autoload_ready(
     owner: usize,
     base: usize,
     gm: usize,
@@ -288,7 +288,7 @@ unsafe fn hide_title_press_start_proxy(base: usize, dialog: usize, proxy: usize,
     }
 }
 
-pub(crate) unsafe fn maybe_hide_title_press_start(base: usize, ready: &ProductCoreAutoloadReady) {
+pub unsafe fn maybe_hide_title_press_start(base: usize, ready: &ProductCoreAutoloadReady) {
     unsafe {
         hide_title_press_start_proxy(
             base,
@@ -299,7 +299,7 @@ pub(crate) unsafe fn maybe_hide_title_press_start(base: usize, ready: &ProductCo
     };
 }
 
-pub(crate) unsafe fn maybe_hide_title_logo_surface(base: usize, ready: &ProductCoreAutoloadReady) {
+pub unsafe fn maybe_hide_title_logo_surface(base: usize, ready: &ProductCoreAutoloadReady) {
     if ready.title_dialog == TITLE_OWNER_SCAN_START_ADDRESS || ready.title_dialog == 0 {
         return;
     }
@@ -324,7 +324,7 @@ pub(crate) unsafe fn maybe_hide_title_logo_surface(base: usize, ready: &ProductC
     }
 }
 
-pub(crate) unsafe fn sample_title_profile_portrait_source(base: usize, slot: i32) -> bool {
+pub unsafe fn sample_title_profile_portrait_source(base: usize, slot: i32) -> bool {
     if slot < OWN_STEPPER_SLOT_ZERO {
         return false;
     }
@@ -397,7 +397,7 @@ pub(crate) unsafe fn sample_title_profile_portrait_source(base: usize, slot: i32
 }
 
 
-pub(crate) unsafe fn maybe_refresh_title_profile_cover(
+pub unsafe fn maybe_refresh_title_profile_cover(
     base: usize,
     ready: &ProductCoreAutoloadReady,
 ) {
@@ -429,7 +429,7 @@ pub(crate) unsafe fn maybe_refresh_title_profile_cover(
     ));
 }
 
-pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u64) -> bool {
+pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u64) -> bool {
     if !product_autoload_enabled() {
         return false;
     }

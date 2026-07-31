@@ -3056,6 +3056,7 @@ dependencies = [
  "eldenring",
  "er-game-base",
  "er-hook",
+ "er-loading-portrait",
  "er-save-loader",
  "er-telemetry",
  "er-tpf",

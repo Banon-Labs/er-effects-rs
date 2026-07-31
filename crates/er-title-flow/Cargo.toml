@@ -20,6 +20,7 @@ eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 er-hook = { path = "../er-hook" }
 er-game-base = { path = "../er-game-base", features = ["game-types"] }
+er-loading-portrait = { path = "../er-loading-portrait" }
 er-save-loader = { path = "../er-save-loader" }
 er-tpf = { path = "../er-tpf" }
 windows = { version = "0.62", features = [

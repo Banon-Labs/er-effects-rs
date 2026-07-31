@@ -1201,10 +1201,7 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
     }
 }
 
-/// How often (in own_stepper frames) the OWN-LOAD world-stream stall telemetry emits a throttled
-/// debug line. The oracle_* atomics are refreshed EVERY frame; only the human-readable log is
-/// throttled so a probe log shows the trend without flooding.
-pub(crate) const OWN_LOAD_STREAM_LOG_INTERVAL: u64 = 30;
+pub(crate) use er_title_flow::OWN_LOAD_STREAM_LOG_INTERVAL;
 /// MoveMapStep step-machine state field offset (mms_state). The step machine commits its current
 /// step at +0x48 (same layout as the title owner committed_state); STEP_WorldResWait == 3 is the
 /// observed stall floor. Read [[InGameStep(owner+0x2e8)+0xe8]+0x48].

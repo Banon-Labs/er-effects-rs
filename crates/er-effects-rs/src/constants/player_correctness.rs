@@ -138,10 +138,9 @@ pub(crate) const LOAD_CORRECTNESS_NOT_DUMPED: usize = 0;
 /// T_menu_open when the TitleTopDialog reaches TextFadeOut). Lets a true-vanilla run (no forcing,
 /// modals + presses by the user) emit the SAME markers as the DLL-headless run for comparison.
 pub(crate) use er_telemetry::counters::OBSERVE_T0_EMITTED;
-pub(crate) static OBSERVE_MENU_OPEN_EMITTED: AtomicUsize =
-    AtomicUsize::new(OBSERVE_MARKER_NOT_EMITTED);
-pub(crate) const OBSERVE_MARKER_NOT_EMITTED: usize = 0;
-pub(crate) const OBSERVE_MARKER_EMITTED: usize = 1;
+pub(crate) use er_title_flow::OBSERVE_MENU_OPEN_EMITTED;
+pub(crate) use er_title_flow::OBSERVE_MARKER_NOT_EMITTED;
+pub(crate) use er_title_flow::OBSERVE_MARKER_EMITTED;
 /// Synthetic `this` for the IngameInit-tail stream-worker register call 0x140b0a980
 /// (+0x48 set to WORLD_WORKER_BUILD_STATE hits the build+register arm).
 pub(crate) static mut OWN_STEPPER_WORKER_THIS: [u8; SYNTHETIC_STEP_THIS_SIZE] =
@@ -150,7 +149,7 @@ pub(crate) const OWN_STEPPER_PATCHED_NO: usize = false as usize;
 pub(crate) const OWN_STEPPER_PATCHED_YES: usize = true as usize;
 /// Original idx10 func ptr (STEP_MenuJobWait), saved so our handler can pass through.
 pub(crate) static OWN_STEPPER_ORIG_IDX10: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static OWN_STEPPER_BASE: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) use er_title_flow::OWN_STEPPER_BASE;
 pub(crate) static OWN_STEPPER_PATCHED: AtomicUsize = AtomicUsize::new(OWN_STEPPER_PATCHED_NO);
 pub(crate) static OWN_STEPPER_CALLS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 

@@ -12,7 +12,6 @@ use std::{
 
 use std::os::windows::ffi::OsStrExt as _;
 
-use crate::compat::{InputBlocker, InputFlags};
 use er_hook::{MH_ApplyQueued, MH_Initialize, MhHook, MH_STATUS};
 use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
@@ -45,7 +44,7 @@ use crate::compat::*;
 
 
 
-pub(crate) fn arm_product_autoload_from_request(request: &SaveLoader) {
+pub fn arm_product_autoload_from_request(request: &SaveLoader) {
     // Product autoload is the release/default behavior. Do not make it depend on smoke-only env
     // variables, `er-effects-autoload.txt`, or the experimental DirectMenuLoad method: the title/menu
     // visual suppression is also default-on for real runs, so leaving the load driver unarmed creates
@@ -137,7 +136,7 @@ pub(crate) fn arm_product_autoload_from_request(request: &SaveLoader) {
         PRODUCT_AUTOLOAD_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     }
 }
-pub(crate) fn product_core_ready_blocker_label(blocker: usize) -> &'static str {
+pub fn product_core_ready_blocker_label(blocker: usize) -> &'static str {
     match blocker {
         PRODUCT_CORE_BLOCKER_UNSEEN => "unseen",
         PRODUCT_CORE_BLOCKER_READY => "ready",
@@ -167,7 +166,7 @@ pub(crate) fn product_core_ready_blocker_label(blocker: usize) -> &'static str {
 /// an idle pump (state stable, queue/selection empty, gate 0) confirms the
 /// injection target is real and reachable; a null registry means the SelectBot
 /// harness is not initialized and the lane needs a different entry.
-pub(crate) unsafe fn selectbot_probe_once(module_base: usize, tick: u64) {
+pub unsafe fn selectbot_probe_once(module_base: usize, tick: u64) {
     if tick % TITLE_JOB_OBSERVE_TICK_INTERVAL != TITLE_OWNER_SCAN_START_ADDRESS as u64 {
         return;
     }
@@ -244,7 +243,7 @@ pub(crate) unsafe fn selectbot_probe_once(module_base: usize, tick: u64) {
 /// setter `0x67a810` and raise the force flag ONCE, then let the engine load.
 /// The earlier crash from raising that flag came from leaving the slot at -1 (a
 /// Finish teardown with no load armed); arming the slot first is the fix.
-pub(crate) unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u64) {
+pub unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u64) {
     if tick < TITLE_NATIVE_JOB_MIN_TICK {
         return;
     }
@@ -293,7 +292,7 @@ pub(crate) unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u
         "native_autoload: armed slot={slot_after} b72=1 latch_left={latch_before} b80={load_in_progress} csfeman=0x{csfeman:x} tick={tick}"
     ));
 }
-pub(crate) unsafe fn cleanup_title_dialog_after_world_once(module_base: usize, frame: u64) {
+pub unsafe fn cleanup_title_dialog_after_world_once(module_base: usize, frame: u64) {
     static TITLE_DIALOG_CLEANUP_DONE: AtomicUsize =
         AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
     if !cleanup_title_dialog_after_world_enabled()
@@ -349,7 +348,7 @@ pub(crate) unsafe fn cleanup_title_dialog_after_world_once(module_base: usize, f
 /// (sets a40=1). Requires online-disable (`er-effects-offline.txt`) so the connection modal is skipped
 /// and the SM reaches Loop. One-shot. Then `maybe_fire_tfc_continue` (gated a40==1) fires Continue. No
 /// input. (Same self-fire the own_stepper STAGE1d uses, extracted for the tfc flow.)
-pub(crate) unsafe fn maybe_auto_open_menu(base: usize) {
+pub unsafe fn maybe_auto_open_menu(base: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if TFC_AUTO_MENU_OPENED.load(Ordering::SeqCst) != 0 {
         return;
@@ -426,7 +425,7 @@ pub(crate) unsafe fn maybe_auto_open_menu(base: usize) {
 /// Menu_IsEnableOnlineMode patches, so it should reach the main menu cleanly; the msgbox/policy oracles
 /// will catch any regression. One-shot via TITLE_ACCEPT_BYTE_GATE_FIRED, latched only after the gating
 /// passes so a not-yet-settled title does not consume the shot.
-pub(crate) unsafe fn maybe_set_title_accept_byte(base: usize) {
+pub unsafe fn maybe_set_title_accept_byte(base: usize) {
     // Missing-save picker gate: do NOT arm the zero-input menu-open while the user still has not
     // chosen a save. This accept byte makes the native registrar build the Continue/Load/NewGame
     // rows in its own update frame; if that happens BEFORE the pick installs the save redirect, the
@@ -537,7 +536,7 @@ pub(crate) unsafe fn maybe_set_title_accept_byte(base: usize) {
 /// enqueued -- not suppressed, not dismissed). Pure offline state, no save write, no input. Readable-
 /// guarded so a not-yet-initialized GameMan can never fault the game thread. bd er-effects-rs-0ye
 /// (subagent-D GR_System_Message gate, subagent-B premise: modals are network notices not SaveRetry).
-pub(crate) unsafe fn force_offline_connection_bytes(base: usize) {
+pub unsafe fn force_offline_connection_bytes(base: usize) {
     const IS_IN_ONLINE_MODE_BC8_OFFSET: usize = 0xBC8;
     const SERVER_CONNECTION_ENABLED_BC9_OFFSET: usize = 0xBC9;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -570,7 +569,7 @@ pub(crate) unsafe fn force_offline_connection_bytes(base: usize) {
 /// engine's own job pump (the proven user-Continue path, which avoids the FixOrderJobSequence
 /// overflow that killed the factory-direct `own_load_pump`). Logs before/after so a probe sees the
 /// exact write.
-pub(crate) unsafe fn maybe_fire_tfc_continue(base: usize) {
+pub unsafe fn maybe_fire_tfc_continue(base: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if !fire_tfc_continue_enabled() {
         return;
@@ -780,7 +779,7 @@ pub(crate) unsafe fn maybe_fire_tfc_continue(base: usize) {
 /// Install the TitleTopDialog::update hook ONCE so the Continue build runs in the pump's live frame.
 /// minhook on 0x1409aac10, mirroring install_continue_trace_hooks (queue_enable + MH_ApplyQueued +
 /// mem::forget to keep the hook alive). Gated by `fire_tfc_continue_enabled` at the call site.
-pub(crate) unsafe fn install_title_update_hook(base: usize) {
+pub unsafe fn install_title_update_hook(base: usize) {
     if TITLE_UPDATE_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
         != TITLE_OWNER_SCAN_START_ADDRESS
     {
@@ -820,7 +819,7 @@ pub(crate) unsafe fn install_title_update_hook(base: usize) {
 /// `[step+0x130]`; once it is a valid in-image job (we are at press-any-button) and has settled, sets
 /// `[job+0x1e8]=2` so the job's own predicate (0x1407a9200) completes it through the native path. Logs
 /// the job struct on first sighting so the run self-confirms the offsets. ZERO input.
-pub(crate) unsafe fn pab_advance_try(step: usize) {
+pub unsafe fn pab_advance_try(step: usize) {
     if !pab_advance_enabled() || PAB_ADVANCE_FIRED.load(Ordering::SeqCst) != 0 {
         return;
     }
@@ -871,7 +870,7 @@ pub(crate) unsafe fn pab_advance_try(step: usize) {
 }
 /// Install the press-any-button node-update hook ONCE (minhook, mirroring `install_title_update_hook`).
 /// Gated by `pab_advance_enabled` at the call site; the detour self-gates too (pass-through until armed).
-pub(crate) unsafe fn install_pab_advance_hook(base: usize) {
+pub unsafe fn install_pab_advance_hook(base: usize) {
     if PAB_ADVANCE_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
         != TITLE_OWNER_SCAN_START_ADDRESS
     {

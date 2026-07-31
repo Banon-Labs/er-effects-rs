@@ -67,11 +67,7 @@ pub(crate) const REQUEST_MOVE_MAP_RVA: usize = 0xaebdc0;
 /// byte `((blockid >> 24) & 0xff)` is >= this is a debug area for which RequestMoveMap skips FormatV.
 pub(crate) const REQUEST_MOVE_MAP_NONDEBUG_AREA_CEIL: u32 = 0x59;
 pub(crate) const STREAMING_ENABLE_RVA: usize = 0x66e2e4;
-/// Direct poke of the streaming-enable flag [resmgr+0xb7c1]=1 (the virtual enabler
-/// 0x14066e2e4 crashes -- wrong receiver). The virtual also builds session singletons
-/// 0x143d687a0 / 0x143d67bd0; read them to see if the poke is safe (already built) or
-/// if the job machine will deref null.
-pub(crate) const RESMGR_STREAM_ENABLE_B7C1_OFFSET: usize = 0xb7c1;
+pub(crate) use er_title_flow::RESMGR_STREAM_ENABLE_B7C1_OFFSET;
 pub(crate) const SESSION_SINGLETON_A_RVA: usize = TitleSessionRva::SessionA as usize;
 pub(crate) const SESSION_SINGLETON_B_RVA: usize = TitleSessionRva::SessionB as usize;
 /// Corrected streaming-enable (worldres-enable-0x14066e2e4-decoded-receiver-and-
@@ -81,7 +77,7 @@ pub(crate) const SESSION_SINGLETON_B_RVA: usize = TitleSessionRva::SessionB as u
 /// session driver singleton 0x143d7c088 (job machine asserts if null); build it via
 /// the lazy getter 0x140cd6c50 before calling enable 0x14066e2e4(resmgr).
 pub(crate) const RESMGR_EXPECTED_VTABLE_RVA: usize = 0x2a7e030;
-pub(crate) const STREAMING_DRIVER_SINGLETON_RVA: usize = 0x3d7c088;
+pub(crate) use er_title_flow::STREAMING_DRIVER_SINGLETON_RVA;
 pub(crate) const STREAMING_DRIVER_BUILDER_RVA: usize = 0xcd6c50;
 /// World-stream worker build+register: IngameInit's SetState tail 0x140b0a980, whose
 /// `[this+0x48] >= 7` arm constructs the world-stream worker 0x144842d40 (ctor
@@ -110,13 +106,9 @@ pub(crate) fn runtime_heap_allocator_ptr_or_null() -> usize {
 /// worker is servicing the stream vs the b80 lane stalling first.
 pub(crate) const WORLD_SINGLETON_A_RVA: usize = 0x3d691d8;
 pub(crate) const WORLD_SINGLETON_B_RVA: usize = 0x3d69ba8;
-/// World-resource manager chain for STEP_WorldResWait residency (0x14066d3e0):
-/// resmgr = [[MoveMapStep+0xf0]+0x10]; loaded-block count = [resmgr+0xb3140].
-/// count==0 -> no map-block registered (setup gap); count>0 but block not at load
-/// phase 0xa -> streaming gap. Diagnostic for the final wall.
-pub(crate) const MOVEMAPSTEP_WORLDRES_F0_OFFSET: usize = 0xf0;
-pub(crate) const WORLDRES_RESMGR_10_OFFSET: usize = 0x10;
-pub(crate) const RESMGR_BLOCK_COUNT_B3140_OFFSET: usize = 0xb3140;
+pub(crate) use er_title_flow::MOVEMAPSTEP_WORLDRES_F0_OFFSET;
+pub(crate) use er_title_flow::WORLDRES_RESMGR_10_OFFSET;
+pub(crate) use er_title_flow::RESMGR_BLOCK_COUNT_B3140_OFFSET;
 pub(crate) const DIAG_NULL_CHAIN: i32 = -2;
 /// The block coord/map-id the MoveMapStep requests in STEP_WorldResWait: at
 /// [[MoveMapStep+0xf0]+0x2c] (0x140624bd0 reads byte3 as the target area). byte3 ==
@@ -154,130 +146,41 @@ pub(crate) const BLOCK_ENTRY_STRIDE: usize = 8;
 pub(crate) const BLOCK_SAMPLE_COUNT: usize = 4;
 pub(crate) const BLOCK_AREA_BYTE_MASK: u32 = 0xff;
 pub(crate) const BLOCK_SAMPLE_SHIFT: u32 = 8;
-/// m10 block load-state (mirrors 0x14066d3e0 readiness tail): loadstate =
-/// entry->vtable[+0x10](entry); ready iff [loadstate+0x2d]!=0 AND [loadstate+0x35]==0xa.
-/// Reading [+0x35] live shows which load phase the m10 block is stuck at (<0xa).
-pub(crate) const BLOCK_LOADSTATE_GETTER_VT_10_OFFSET: usize = 0x10;
-pub(crate) const BLOCK_LOADSTATE_FLAG_2D_OFFSET: usize = 0x2d;
-pub(crate) const BLOCK_LOADSTATE_PHASE_35_OFFSET: usize = 0x35;
-/// PHASE-2 STALL DISCRIMINATORS (added 2026-07-30 for the profile-switch reload freeze:
-/// a warm reload parks at `[+0x35]==2` for 50s+ while the FIRST load in the same process
-/// clears the same phase; run product-continue-direct-20260730-134058).
-///
-/// Two 1.16.1-era RE accounts of what phase 2 polls disagree -- one says the FD4FileCaps
-/// hang off this WorldBlockRes at `[+0x40]`/`[+0x48]`, the other says they hang off the
-/// WorldAreaRes (which `fc_present`/`fc_notloaded` already scan, and which read all-loaded
-/// while the block stayed at phase 2). These offsets sample the BLOCK's own copies so the
-/// next run discriminates the accounts instead of assuming one. All read-only.
-///
-/// `[+0x2f]` is the gate the phase machine recomputes every tick as `[+0x2f]=[+0x2d]` iff
-/// the block's IO-request object state is 6 and a virtual predicate passes, else 0. Phase 2
-/// exits to phase 5 when it is 0, and only polls the caps when it is non-zero -- so it
-/// separates "gave up" from "still waiting on a cap".
-pub(crate) const BLOCK_LOADSTATE_ASSET_GATE_2F_OFFSET: usize = 0x2f;
-/// Countdown the phase-9 handler decrements; underflow reverts `[+0x35]` to 8.
-pub(crate) const BLOCK_LOADSTATE_COUNTDOWN_3C_OFFSET: usize = 0x3c;
-/// Sticky "load gave up" byte the phase-2/3 handlers set alongside a fallback to phase 5.
-pub(crate) const BLOCK_LOADSTATE_GAVEUP_06_OFFSET: usize = 0x06;
-/// The block's own FD4FileCap pointers, populated by the phase-1 load requester. FOUR slots,
-/// not two: the 1.16.2 handler at `0x1406158a0` reads `param_1[8]`, `[9]`, `[10]` and `[0xb]`
-/// (a `longlong*`, so byte offsets 0x40/0x48/0x50/0x58), taking `cap+0x90` from each.
-pub(crate) const BLOCK_LOADSTATE_FILECAP_SLOTS: [usize; 4] = [0x40, 0x48, 0x50, 0x58];
-/// FD4FileCap load status; `0x04` == load complete. Paired with a non-null bytes pointer.
-pub(crate) const FD4_FILECAP_STATUS_88_OFFSET: usize = 0x88;
-/// `MsbFileCap::msbResCap` -- the PARSED MSB resource, not the raw file buffer. `FD4FileCap` is
-/// exactly 0x90 bytes, so this is the first field of the `MsbFileCap` subclass.
-///
-/// IT HAS EXACTLY ONE ASSIGNMENT SITE (1.16.2 static RE, bd
-/// `msbrescap-single-assignment-site-and-null-content-shortcircuit-2026-07-30`): the load-complete
-/// callback `FUN_14021bbf0`, which does
-/// `content = AcquireContent(cap); if (content != 0 && header_ok) { msbResCap = MsbRepository::
-/// GetOrCreate(name, content, size); } ReleaseContent(cap);`
-/// -- and returns NORMALLY when `content` is null. `loadState` is already `4` by then, nothing
-/// errors and nothing retries, so `(loadState=4, msbResCap=0)` is a reachable SILENT TERMINAL state.
-/// That is precisely the profile-switch reload freeze: WorldBlockRes case 2 advances to phase 3 only
-/// on `cap+0x90 != 0`, and its only other escape is also closed, so the block spins at phase 2 with
-/// no timeout.
-///
-/// `0` and `0xDEADBEEF` mean DIFFERENT things and the distinction is the key discriminator:
-/// `MsbFileCap::MsbFileCap` (0x14021b880) inits it to `0`, while `~MsbFileCap` (0x14021b940)
-/// releases through the repository and then stores `0xDEADBEEF`. So `0` == NEVER PARSED, never
-/// "freed after use".
-pub(crate) const FD4_FILECAP_BYTES_90_OFFSET: usize = 0x90;
+pub(crate) use er_title_flow::BLOCK_LOADSTATE_GETTER_VT_10_OFFSET;
+pub(crate) use er_title_flow::BLOCK_LOADSTATE_FLAG_2D_OFFSET;
+pub(crate) use er_title_flow::BLOCK_LOADSTATE_PHASE_35_OFFSET;
+pub(crate) use er_title_flow::BLOCK_LOADSTATE_ASSET_GATE_2F_OFFSET;
+pub(crate) use er_title_flow::BLOCK_LOADSTATE_COUNTDOWN_3C_OFFSET;
+pub(crate) use er_title_flow::BLOCK_LOADSTATE_GAVEUP_06_OFFSET;
+pub(crate) use er_title_flow::BLOCK_LOADSTATE_FILECAP_SLOTS;
+pub(crate) use er_title_flow::FD4_FILECAP_STATUS_88_OFFSET;
+pub(crate) use er_title_flow::FD4_FILECAP_BYTES_90_OFFSET;
 /// Poison `~MsbFileCap` writes over `msbResCap` after releasing it; see above.
 pub(crate) const MSB_FILECAP_DESTROYED_SENTINEL: usize = 0xdead_beef;
-/// `FD4ResCapHolderItem::resourceString` is an `FD4BasicHashString` at `cap+0x08`, whose
-/// `DLString<wchar_t>` starts at `cap+0x10`: union (inline `wchar[8]` OR pointer) at `+0x08`,
-/// `length` at `+0x18`, `capacity` at `+0x20`. `capacity > 7` means the union holds a POINTER.
-/// Reading it names WHICH msb the stalled cap is, which separates "wrong file requested" from
-/// "right file, empty read".
-pub(crate) const FD4_FILECAP_NAME_UNION_18_OFFSET: usize = 0x18;
-pub(crate) const FD4_FILECAP_NAME_LENGTH_28_OFFSET: usize = 0x28;
-pub(crate) const FD4_FILECAP_NAME_CAPACITY_30_OFFSET: usize = 0x30;
-/// Inline-vs-pointer threshold for `DLString<wchar_t>` (SSO capacity).
-pub(crate) const DLSTRING_INLINE_CAPACITY_MAX: usize = 7;
-/// Cap the wide-name read so a garbage `length` cannot walk the probe off a page.
-pub(crate) const FD4_FILECAP_NAME_MAX_CHARS: usize = 96;
-/// `FD4ResCapHolderItem::referenceCount`. Discriminates a FRESH cap (the reload built it) from a
-/// CACHE-HIT SURVIVOR still held by the outgoing world -- the two remaining explanations for a
-/// null `msbResCap`.
-pub(crate) const FD4_FILECAP_REFCOUNT_58_OFFSET: usize = 0x58;
-/// `FD4FileCap::loadProcess` -> `FD4FileLoadProcess::fileLoadProcessor` (`+0x20`) -> the content
-/// the load-complete callback gates on. A null anywhere along this chain makes `AcquireContent`
-/// return null, which is exactly the short-circuit that leaves `msbResCap` at `0`.
-pub(crate) const FD4_FILECAP_LOADPROCESS_78_OFFSET: usize = 0x78;
-/// `FD4FileCap::flags`; the `MsbFileCap` factory `FUN_1401f3560` sets `0x20` on every cap it builds
-/// before handing it to `AddFileCap`.
-pub(crate) const FD4_FILECAP_FLAGS_89_OFFSET: usize = 0x89;
-/// `DLIO::DLFileDeviceManager` singleton. `GetFileDeviceManager` (0x141f48b40) is literally
-/// `MOV RAX,[0x1448464a8]` plus a null-check branch, so this global IS the manager pointer.
-///
-/// NOTE this corrects bd `step3-census-registry-null-on-load2-mount-skip-confirmed-2026-07-17`,
-/// which called the same address "the mounted-archive registry". It is not: a genuinely null
-/// manager would break every file read in the process, so that census reading `null` was a
-/// deref-depth/timing artifact and the conclusion drawn from it does not follow.
-pub(crate) const DL_FILE_DEVICE_MANAGER_SINGLETON_RVA: usize = 0x0484_64a8;
-/// `DLFileDeviceManager::virtualRoots` -- a `FileDeviceVirtualRootVector`
-/// (`allocator +0x00`, `start +0x08`, `end +0x10`, `capacity +0x18`).
-///
-/// THIS IS THE PHASE-2 FREEZE SUSPECT. The stalled caps are named
-/// `mapstudio_dlc2:/m28_00_00_00.msb`, and `mapstudio_dlc2` is an entry in THIS vector, not a data
-/// archive. It has a two-phase lifecycle: `FUN_140e06490(CSDlc, true)` -- called only from the title
-/// start-game flow `FUN_1409b24e0` -- registers 13 `*_dlc2` aliases with an EMPTY root `L""`, and
-/// only `CSDlcImp::AddVirtualFileRoots` (0x140e06b80, reachable solely via `FUN_140e05fb0`, whose
-/// callers are `CS::MoveMapListStep::STEP_LoadListWait` and one title-flow function) fills in the
-/// real `mapstudio_dlc2 -> "map_dlc2:/mapstudio"`. If the title blanks it and the
-/// `STEP_LoadListWait` gate (`loadList == NULL || *loadList in {2,3}`) does not pass on the warm
-/// reload, the alias stays empty, the msb read resolves against nothing and returns 0 bytes, and
-/// `msbResCap` never gets written. Reading the alias AT the stall settles that without any hook.
-pub(crate) const DL_FILE_DEVICE_MANAGER_VIRTUAL_ROOTS_48_OFFSET: usize = 0x48;
-pub(crate) const FILE_DEVICE_VIRTUAL_ROOT_VECTOR_START_08_OFFSET: usize = 0x08;
-pub(crate) const FILE_DEVICE_VIRTUAL_ROOT_VECTOR_END_10_OFFSET: usize = 0x10;
-/// `FileDeviceVirtualRootVectorEntry`: `root` (the alias name) and `path` (what it resolves to),
-/// both `DLString<wchar_t>` (48 bytes each), so the entry stride is 0x60.
-pub(crate) const FILE_DEVICE_VIRTUAL_ROOT_ENTRY_STRIDE: usize = 0x60;
-pub(crate) const FILE_DEVICE_VIRTUAL_ROOT_ENTRY_PATH_30_OFFSET: usize = 0x30;
-/// `DLString<wchar_t>` field offsets RELATIVE TO THE STRING ITSELF (`allocator +0x00`,
-/// union `+0x08`, `length +0x18`, `capacity +0x20`). The `FD4_FILECAP_NAME_*` constants above are
-/// the same layout pre-added to the cap's `+0x10` string base, which is why their numbers differ.
-pub(crate) const DLSTRING_UNION_08_OFFSET: usize = 0x08;
-pub(crate) const DLSTRING_LENGTH_18_OFFSET: usize = 0x18;
-pub(crate) const DLSTRING_CAPACITY_20_OFFSET: usize = 0x20;
-/// Bound the virtual-root walk: the table is a few dozen aliases, so anything past this is a
-/// corrupt/mid-teardown vector and the probe must stop rather than walk off a page.
-pub(crate) const FILE_DEVICE_VIRTUAL_ROOT_MAX_ENTRIES: usize = 256;
-/// Alias prefixes worth reporting at the stall: the DLC roots that back `m28`, plus the base-game
-/// `mapstudio` for contrast (if the base alias is populated and the dlc2 one is not, that is the
-/// answer outright).
-pub(crate) const VIRTUAL_ROOTS_OF_INTEREST: [&str; 4] =
-    ["mapstudio_dlc2", "map_dlc2", "game_dlc2", "mapstudio"];
+pub(crate) use er_title_flow::FD4_FILECAP_NAME_UNION_18_OFFSET;
+pub(crate) use er_title_flow::FD4_FILECAP_NAME_LENGTH_28_OFFSET;
+pub(crate) use er_title_flow::FD4_FILECAP_NAME_CAPACITY_30_OFFSET;
+pub(crate) use er_title_flow::DLSTRING_INLINE_CAPACITY_MAX;
+pub(crate) use er_title_flow::FD4_FILECAP_NAME_MAX_CHARS;
+pub(crate) use er_title_flow::FD4_FILECAP_REFCOUNT_58_OFFSET;
+pub(crate) use er_title_flow::FD4_FILECAP_LOADPROCESS_78_OFFSET;
+pub(crate) use er_title_flow::FD4_FILECAP_FLAGS_89_OFFSET;
+pub(crate) use er_title_flow::DL_FILE_DEVICE_MANAGER_SINGLETON_RVA;
+pub(crate) use er_title_flow::DL_FILE_DEVICE_MANAGER_VIRTUAL_ROOTS_48_OFFSET;
+pub(crate) use er_title_flow::FILE_DEVICE_VIRTUAL_ROOT_VECTOR_START_08_OFFSET;
+pub(crate) use er_title_flow::FILE_DEVICE_VIRTUAL_ROOT_VECTOR_END_10_OFFSET;
+pub(crate) use er_title_flow::FILE_DEVICE_VIRTUAL_ROOT_ENTRY_STRIDE;
+pub(crate) use er_title_flow::FILE_DEVICE_VIRTUAL_ROOT_ENTRY_PATH_30_OFFSET;
+pub(crate) use er_title_flow::DLSTRING_UNION_08_OFFSET;
+pub(crate) use er_title_flow::DLSTRING_LENGTH_18_OFFSET;
+pub(crate) use er_title_flow::DLSTRING_CAPACITY_20_OFFSET;
+pub(crate) use er_title_flow::FILE_DEVICE_VIRTUAL_ROOT_MAX_ENTRIES;
+pub(crate) use er_title_flow::VIRTUAL_ROOTS_OF_INTEREST;
 
-pub(crate) const FD4_FILELOADPROCESS_PROCESSOR_20_OFFSET: usize = 0x20;
-/// `FD4FileLoadProcessor`: `content_` at `+0x20`, its byte count at `+0x28`, and the
-/// acquire/release refcount at `+0x30` whose `1 -> 0` edge nulls `content_` and frees the buffer.
-pub(crate) const FD4_FILELOADPROCESSOR_CONTENT_20_OFFSET: usize = 0x20;
-pub(crate) const FD4_FILELOADPROCESSOR_SIZE_28_OFFSET: usize = 0x28;
-pub(crate) const FD4_FILELOADPROCESSOR_ACQUIRE_30_OFFSET: usize = 0x30;
+pub(crate) use er_title_flow::FD4_FILELOADPROCESS_PROCESSOR_20_OFFSET;
+pub(crate) use er_title_flow::FD4_FILELOADPROCESSOR_CONTENT_20_OFFSET;
+pub(crate) use er_title_flow::FD4_FILELOADPROCESSOR_SIZE_28_OFFSET;
+pub(crate) use er_title_flow::FD4_FILELOADPROCESSOR_ACQUIRE_30_OFFSET;
 /// OWN-LOAD m28 direct-enqueue lever (adddefaultfileloadprocess-lever-viable-2026-06-22).
 /// `FD4::FD4FileCap::AddDefaultFileLoadProcess` deobf VA 0x142658c60 (prologue-grounded
 /// `40 55 56 57 41 56 41 57`; dump 0x142658c50 is +0x10). Stored as an RVA offset from the
@@ -320,18 +223,8 @@ pub(crate) const DIAG_SAMPLE_ZERO: u32 = 0;
 pub(crate) fn game_man_ptr_or_null() -> usize {
     GameMan::instance_ptr().map_or(NULL_MODULE_BASE, |ptr| ptr as usize)
 }
-/// GameMan `save_slot` (compiler-verified equal to the upstream typed field).
-pub(crate) const FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET: usize =
-    core::mem::offset_of!(GameMan, save_slot);
-/// Save-manager load-in-progress flag (GameMan/save-mgr singleton 0x143d69918):
-/// `0x14067b570` sets `[mgr+0xb80]=1` when it begins the load and clears it to 0
-/// when finished. The native autoload (recipe A) arms the load by setting the
-/// slot (`+0xac0`) and the force flag `0x143d856a0`, then the save-manager
-/// per-frame update `0x14067f5d0` performs it.
-/// Bound to upstream `GameMan::save_state` (compiler-verified equal to our offset); our research
-/// reads this same dword as the load-in-progress lane (set 1 on load begin, cleared on finish).
-pub(crate) const GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET: usize =
-    core::mem::offset_of!(GameMan, save_state);
+pub(crate) use er_title_flow::FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET;
+pub(crate) use er_title_flow::GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET;
 /// Read-only autoload-arm precondition probe. The native save-mgr update
 /// 0x14067f5d0 arms autoload (sets GameMan+0xb72=1 -> load) only when its gates
 /// pass; the one runtime unknown is whether the slot-record container
@@ -342,22 +235,13 @@ pub(crate) const GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET: usize =
 pub(crate) fn game_data_man_ptr_or_null() -> usize {
     GameDataMan::instance_ptr().map_or(NULL_MODULE_BASE, |ptr| ptr as usize)
 }
-/// GameDataMan -> main player save data (compiler-verified equal to the upstream typed field).
-pub(crate) const SLOT_MANAGER_DATA_OFFSET: usize =
-    core::mem::offset_of!(GameDataMan, main_player_game_data);
-pub(crate) const CSFEMAN_SINGLETON_RVA: usize = 0x3d6b880;
-/// Session manager singleton (absolute 0x1447ef360; NULL at the title, built by
-/// the move-map/load path). RVA = 0x1447ef360 - 0x140000000 = 0x47ef360.
-pub(crate) const SESSION_SINGLETON_RVA: usize = TitleSessionRva::MoveMapSession as usize;
-pub(crate) const TITLE_INPUT_MANAGER_RVA: usize = 0x3d6b7b0;
-/// Pure-observe snapshot interval (game-task ticks). Logs the title->menu->load state
-/// every N ticks with NO forcing, to capture what the REAL button press does.
-pub(crate) const OBSERVE_INTERVAL: u64 = 10;
-/// Observe change-detection: log a snapshot only when the packed signature changes
-/// (full granularity, minimal file I/O). Multiplier for the rolling signature.
-pub(crate) const OBSERVE_SIG_MULT: i64 = 0x100000001b3;
-pub(crate) static OBSERVE_LAST_SIG: std::sync::atomic::AtomicI64 =
-    std::sync::atomic::AtomicI64::new(i64::MIN);
+pub(crate) use er_title_flow::SLOT_MANAGER_DATA_OFFSET;
+pub(crate) use er_title_flow::CSFEMAN_SINGLETON_RVA;
+pub(crate) use er_title_flow::SESSION_SINGLETON_RVA;
+pub(crate) use er_title_flow::TITLE_INPUT_MANAGER_RVA;
+pub(crate) use er_title_flow::OBSERVE_INTERVAL;
+pub(crate) use er_title_flow::OBSERVE_SIG_MULT;
+pub(crate) use er_title_flow::OBSERVE_LAST_SIG;
 /// OWN-THE-STEPPER (own-stepper-control-verified-and-driver-call-2026): the
 /// SimpleTitleStep step-fn table (base abs 0x143d71580, owner+0x10) is in WRITABLE
 /// .data. idx10 = STEP_MenuJobWait func slot = base + 10*0x10 = abs 0x143d71620
@@ -389,18 +273,7 @@ pub(crate) const LOADGAME_JOB_BUILD_RVA: usize = 0x826510;
 /// occupant, then `AtomicDecrement`s/releases the PRIOR occupant and zeroes `*src` (move-assign).
 /// Installs the built job into `owner+0x130`, releasing the idle `IfElseJob` it replaces.
 pub(crate) const MENUJOB_ASSIGN_RVA: usize = 0x7a9560;
-/// `CS::MenuJobQueue::PushBackJob` (live entry `0x1407a9250` -- prologue-grounded vs eldenring-deobf.bin:
-/// `mov [rsp+0x10],rdx; push rdi; sub rsp,0x30; movq $-2,[rsp+0x20]`; dump `FUN_1407a9340`). CORRECTED
-/// from the prior `0x7a9254`, which was +4 INTO the first instruction (mid-`mov`) and would execute
-/// garbage -- a latent bug that likely helped kill the gated `own_load_install_job` path. APPENDS a job
-/// into a MenuJobQueue's auto-growing deque ring (`AtomicIncrement`s the job, ring-push behind the
-/// active job) -- does NOT replace the active job or zero `*src`, and is overflow-safe (NOT the cap-8
-/// FixOrderJobSequence). Win64 fastcall `(rcx = queue_base, rdx = src: *MenuJob* (a DLReferenceCount
-/// Pointer slot whose [0] is the job))`. Queue targets: `owner+0x130` (ring +0x138, count +0x178;
-/// STEP_MenuJobWait's ExecuteMenuJob ticks it) OR `dialog+0x10` (ring +0x18; the per-frame menu pump
-/// 0x1409aa680 over the active-screen array drains it -- the native Continue post target).
-/// bd continue-load-POST-primitive-pushbackjob-kick-2026-06-22.
-pub(crate) const MENUJOB_PUSHBACK_RVA: usize = 0x7a9250;
+pub(crate) use er_title_flow::MENUJOB_PUSHBACK_RVA;
 /// MenuJobQueue field offsets (for diagnostics): the queued-job ring count at +0x178 grows by 1 on a
 /// successful PushBackJob; the active job stays at +0x130.
 pub(crate) const MENUJOB_QUEUE_COUNT_178_OFFSET: usize = 0x178;

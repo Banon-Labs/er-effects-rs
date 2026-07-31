@@ -75,7 +75,7 @@ unsafe fn product_profile_select_load_flow(owner: usize, base: usize, slot: i32,
         ));
     }
 }
-pub(crate) unsafe fn title_menu_action_ready(owner: usize, base: usize) -> Option<MenuActionNode> {
+pub unsafe fn title_menu_action_ready(owner: usize, base: usize) -> Option<MenuActionNode> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let dialog =
         unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(null);
@@ -133,7 +133,7 @@ pub(crate) unsafe fn title_menu_action_ready(owner: usize, base: usize) -> Optio
     }
     None
 }
-pub(crate) unsafe fn title_live_dialog_fire_ready(
+pub unsafe fn title_live_dialog_fire_ready(
     owner: usize,
     base: usize,
 ) -> Option<LiveDialogFireReady> {
@@ -194,10 +194,10 @@ pub(crate) unsafe fn title_live_dialog_fire_ready(
 /// vtable OR the CS::SaveRetryDialog subclass vtable (the wrapper 0x1407af9a0 overrides base ->
 /// SaveRetryDialog AFTER the builder, so a base-only check bails once the override lands). bd
 /// offline-title-modal-is-saveretrydialog.
-pub(crate) fn is_startup_msgbox_vtable(vt: usize, base: usize) -> bool {
+pub fn is_startup_msgbox_vtable(vt: usize, base: usize) -> bool {
     vt == base + MSGBOX_DIALOG_VTABLE_RVA || vt == base + SAVE_RETRY_DIALOG_VTABLE_RVA
 }
-pub(crate) fn startup_modal_blocking_state() -> StartupModalBlockingState {
+pub fn startup_modal_blocking_state() -> StartupModalBlockingState {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let dialog = CONNECTION_ERROR_DIALOG.load(Ordering::SeqCst);
     if dialog == null {
@@ -229,7 +229,7 @@ pub(crate) fn startup_modal_blocking_state() -> StartupModalBlockingState {
         closing_latch: closing,
     }
 }
-pub(crate) unsafe fn profile_load_dialog_ready(
+pub unsafe fn profile_load_dialog_ready(
     base: usize,
     dialog: usize,
     want_slot: i32,
@@ -344,7 +344,7 @@ pub(crate) unsafe fn profile_load_dialog_ready(
 /// session build, when the save mounts (GameMan+0xc30 changes from the default), the
 /// InGameStep/MoveMapStep appearance. Ground-truths the menu-build the static RE
 /// kept mis-identifying.
-pub(crate) unsafe fn title_observe_tick(module_base: usize, tick: u64) {
+pub unsafe fn title_observe_tick(module_base: usize, tick: u64) {
     let _ = OBSERVE_INTERVAL;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let owner = unsafe { title_owner(module_base) }.map(|p| p as usize);
@@ -499,7 +499,7 @@ pub(crate) unsafe fn title_observe_tick(module_base: usize, tick: u64) {
 /// what the function RETURNS, not a data field, so it works whether GameMan is constructed yet
 /// or not). Mirrors `apply_splash_skip`. Equivalent to the player choosing "Play Offline" --
 /// no save access, no struct mutation, no crash risk.
-pub(crate) fn apply_online_disable() {
+pub fn apply_online_disable() {
     let Ok(base) = game_module_base() else {
         append_autoload_debug(format_args!("online-disable: module base unavailable"));
         return;
@@ -534,7 +534,7 @@ pub(crate) fn apply_online_disable() {
 /// select-op ctor (0x14240f1b0) builds the runnable and the load proceeds to SLLoadSession -> read
 /// -> b80 RESIDENT. Save-safe (in-memory code patch; no save write). Called once from the cold-mount
 /// attempt so normal play is unaffected unless a cold mount is requested.
-pub(crate) fn apply_signin_force(base: usize) {
+pub fn apply_signin_force(base: usize) {
     let s = patch_3byte_stub(
         base,
         SIGNIN_FORCE_RVA,
@@ -564,7 +564,7 @@ pub(crate) fn apply_signin_force(base: usize) {
 /// fade-out + teardown + latch LEGITIMATELY (proper bookkeeping, unlike the bare
 /// latch poke that crashes), driving the native title-accept with zero input.
 /// Watch CSFeMan 0x143d6b880 for the bootstrap.
-pub(crate) unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
+pub unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
     if tick < ARM_PROBE_MIN_TICK {
         return;
     }
@@ -634,7 +634,7 @@ pub(crate) unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: 
 /// title's reset) and sets the latch, giving the native update 0x14067f5d0 a
 /// chance to arm GameMan+0xb72 before Finish. Observes b72 / b80 / CSFeMan to see
 /// if the arm + bootstrap take. Crash logger should run alongside.
-pub(crate) unsafe fn native_arm_loop_tick(module_base: usize, slot: i32, tick: u64) {
+pub unsafe fn native_arm_loop_tick(module_base: usize, slot: i32, tick: u64) {
     if tick < ARM_PROBE_MIN_TICK {
         return;
     }
@@ -668,7 +668,7 @@ pub(crate) unsafe fn native_arm_loop_tick(module_base: usize, slot: i32, tick: u
 /// native save-mgr update arms autoload only when it is populated. Logs the
 /// GameMan flow flags, slot manager + its data/container pointers, and whether
 /// CSFeMan / the input manager exist yet. Touches no state.
-pub(crate) unsafe fn arm_precondition_probe(module_base: usize, tick: u64) {
+pub unsafe fn arm_precondition_probe(module_base: usize, tick: u64) {
     if tick < ARM_PROBE_MIN_TICK
         || tick % ARM_PROBE_TICK_INTERVAL != TITLE_OWNER_SCAN_START_ADDRESS as u64
     {
@@ -714,7 +714,7 @@ pub(crate) unsafe fn arm_precondition_probe(module_base: usize, tick: u64) {
         gm_byte(GAME_MAN_FLAG_BC4_OFFSET),
     ));
 }
-pub(crate) unsafe fn find_title_owner_by_vtable(module_base: usize) -> Option<*mut u8> {
+pub unsafe fn find_title_owner_by_vtable(module_base: usize) -> Option<*mut u8> {
     TITLE_OWNER_SCAN_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
     let target_vtable = module_base.checked_add(TITLE_OWNER_VTABLE_RVA)?;
     let mut scan_buf = vec![MOVIE_SKIP_FLAG_CLEAR; SCAN_CHUNK_SIZE];

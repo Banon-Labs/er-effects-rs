@@ -9,7 +9,11 @@
 #![allow(clippy::missing_safety_doc)]
 
 pub mod compat;
+pub mod constants_moved;
 pub mod host;
+
+pub use constants_moved::*;
+pub use host::{TitleFlowHost, install_host};
 
 include!("product_autoload_gates.rs");
 include!("title_load_step_hooks.rs");

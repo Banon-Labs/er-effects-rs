@@ -1,19 +1,19 @@
 use super::*;
 
-pub(crate) const PRODUCT_CORE_BLOCKER_UNSEEN: usize = 0;
-pub(crate) const PRODUCT_CORE_BLOCKER_READY: usize = 1;
-pub(crate) const PRODUCT_CORE_BLOCKER_NO_TITLE_OWNER: usize = 2;
-pub(crate) const PRODUCT_CORE_BLOCKER_TITLE_OWNER_STATE: usize = 3;
-pub(crate) const PRODUCT_CORE_BLOCKER_TITLE_TABLE: usize = 4;
-pub(crate) const PRODUCT_CORE_BLOCKER_SESSION: usize = 5;
-pub(crate) const PRODUCT_CORE_BLOCKER_GAME_DATA_MAN: usize = 6;
-pub(crate) const PRODUCT_CORE_BLOCKER_PROFILE_SUMMARY: usize = 7;
-pub(crate) const PRODUCT_CORE_BLOCKER_IODEV: usize = 8;
-pub(crate) const PRODUCT_CORE_BLOCKER_HEAP_ALLOCATOR: usize = 9;
-pub(crate) const PRODUCT_CORE_BLOCKER_TITLE_DIALOG: usize = 10;
-pub(crate) const PRODUCT_CORE_BLOCKER_PRESS_START: usize = 11;
-pub(crate) const PRODUCT_CORE_BLOCKER_TITLE_STATE: usize = 12;
-pub(crate) const PRODUCT_CORE_BLOCKER_UNKNOWN: usize = 13;
+pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_GAME_DATA_MAN;
+pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_HEAP_ALLOCATOR;
+pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_IODEV;
+pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_NO_TITLE_OWNER;
+pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_PRESS_START;
+pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_PROFILE_SUMMARY;
+pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_READY;
+pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_SESSION;
+pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_TITLE_DIALOG;
+pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_TITLE_OWNER_STATE;
+pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_TITLE_STATE;
+pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_TITLE_TABLE;
+pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_UNKNOWN;
+pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_UNSEEN;
 
 pub(crate) use er_telemetry::counters::COLD_CHAR_MOUNT_FILE_ARMED;
 /// Module-level mirror of cold_char_mount_drive's internal MOUNT_PHASE, stored as `phase + 1`
@@ -198,39 +198,28 @@ pub(crate) use er_telemetry::counters::PRODUCT_CORE_CALLSITE_BASE_OK_TICKS;
 pub(crate) use er_telemetry::counters::PRODUCT_CORE_CALLSITE_LAST_SLOT;
 pub(crate) use er_telemetry::counters::PRODUCT_CORE_CALLSITE_SLOT_OK_TICKS;
 pub(crate) use er_telemetry::counters::PRODUCT_CORE_CALLSITE_TICKS;
+pub(crate) use er_telemetry::counters::PRODUCT_CORE_LAST_TITLE_IN_LOOP;
+pub(crate) use er_telemetry::counters::PRODUCT_CORE_LAST_TITLE_IN_TEXTFADEOUT;
 pub(crate) use er_telemetry::counters::PRODUCT_CORE_OWNER_TICKS;
 pub(crate) use er_telemetry::counters::PRODUCT_CORE_READY_BLOCKS;
 pub(crate) use er_telemetry::counters::PRODUCT_CORE_READY_SUCCESSES;
-pub(crate) static PRODUCT_CORE_LAST_OWNER: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static PRODUCT_CORE_LAST_TITLE_DIALOG: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static PRODUCT_CORE_LAST_TITLE_DIALOG_VT: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) use er_telemetry::counters::PRODUCT_CORE_LAST_TITLE_IN_LOOP;
-pub(crate) use er_telemetry::counters::PRODUCT_CORE_LAST_TITLE_IN_TEXTFADEOUT;
-pub(crate) static PRODUCT_CORE_LAST_MENU_OPENED_LATCH: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static PRODUCT_CORE_LAST_PRESS_START_PROXY: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static PRODUCT_CORE_LAST_PRESS_START_VT: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static PRODUCT_CORE_LAST_PRESS_START_CONTEXT: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static PRODUCT_CORE_LAST_RETURN_TITLE_JOB_PREDICATE_BC4: AtomicUsize =
-    AtomicUsize::new(usize::MAX);
-pub(crate) static PRODUCT_CORE_LAST_PHASE: AtomicUsize = AtomicUsize::new(OWN_STEPPER_PHASE_MENU);
-pub(crate) static PRODUCT_CORE_LAST_BLOCKER: AtomicUsize =
-    AtomicUsize::new(PRODUCT_CORE_BLOCKER_UNSEEN);
 pub(crate) use er_telemetry::counters::TITLE_OWNER_SCAN_ATTEMPTS;
+pub(crate) use er_telemetry::counters::TITLE_OWNER_SCAN_LAST_STATE_BITS;
 pub(crate) use er_telemetry::counters::TITLE_OWNER_SCAN_STATE_REJECTS;
 pub(crate) use er_telemetry::counters::TITLE_OWNER_SCAN_TABLE_REJECTS;
 pub(crate) use er_telemetry::counters::TITLE_OWNER_SCAN_VTABLE_HITS;
-pub(crate) static TITLE_OWNER_SCAN_LAST_CANDIDATE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_OWNER_SCAN_LAST_TABLE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) use er_telemetry::counters::TITLE_OWNER_SCAN_LAST_STATE_BITS;
+pub(crate) use er_title_flow::PRODUCT_CORE_LAST_BLOCKER;
+pub(crate) use er_title_flow::PRODUCT_CORE_LAST_MENU_OPENED_LATCH;
+pub(crate) use er_title_flow::PRODUCT_CORE_LAST_OWNER;
+pub(crate) use er_title_flow::PRODUCT_CORE_LAST_PHASE;
+pub(crate) use er_title_flow::PRODUCT_CORE_LAST_PRESS_START_CONTEXT;
+pub(crate) use er_title_flow::PRODUCT_CORE_LAST_PRESS_START_PROXY;
+pub(crate) use er_title_flow::PRODUCT_CORE_LAST_PRESS_START_VT;
+pub(crate) use er_title_flow::PRODUCT_CORE_LAST_RETURN_TITLE_JOB_PREDICATE_BC4;
+pub(crate) use er_title_flow::PRODUCT_CORE_LAST_TITLE_DIALOG;
+pub(crate) use er_title_flow::PRODUCT_CORE_LAST_TITLE_DIALOG_VT;
+pub(crate) use er_title_flow::TITLE_OWNER_SCAN_LAST_CANDIDATE;
+pub(crate) use er_title_flow::TITLE_OWNER_SCAN_LAST_TABLE;
 pub(crate) static MENU_CONTINUE_ENTRY: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_CONTINUE_ITEM: AtomicUsize =
@@ -420,8 +409,7 @@ pub(crate) use er_telemetry::counters::TFC_LOAD_VEC_WAIT_TICKS;
 pub(crate) use er_telemetry::counters::TITLE_UPDATE_HOOK_INSTALLED;
 /// Trampoline for the hooked TitleTopDialog::update (`title_update_detour` -> original). 0 = not hooked.
 pub(crate) use er_telemetry::counters::TITLE_UPDATE_ORIG;
-/// Max drain ticks (~ a generous loading-screen budget at 60fps) before giving up on the drain.
-pub(crate) const TFC_DRAIN_TICK_CAP: usize = 4096;
+pub(crate) use er_title_flow::TFC_DRAIN_TICK_CAP;
 
 /// One-shot log latch for `force_offline_connection_bytes` (only logs the first 1->0 clear).
 pub(crate) use er_telemetry::counters::FORCE_OFFLINE_BYTES_CLEARED;
@@ -457,23 +445,14 @@ pub(crate) unsafe extern "system" fn title_update_detour(dialog: usize, delta: f
 // cap-8 overflow), no replace, no file mod, no input. Distinct from the DEAD latch-force 0x143d856a0
 // (skipped bookkeeping -> crash). bd press-any-button-golden-lever-job1e8-readiness-2026-06-23.
 
-/// Press-any-button node-update/builder RVA (deobf/live; prologue re-confirmed in the 0x1407adxxx
-/// region, which is otherwise flagged unreliable). `__fastcall(rcx=step, rdx, r8[, r9])`.
-pub(crate) const PAB_NODE_UPDATE_RVA: u32 = 0x7ad1c0;
-/// The built press-any-button job within the node-update receiver: `[step+0x130]`.
-pub(crate) const PAB_JOB_SLOT_130_OFFSET: usize = 0x130;
-/// The job's completion press-count the predicate 0x1407a9200 reads (>=2 == complete).
-pub(crate) const PAB_JOB_PRESS_COUNT_1E8_OFFSET: usize = 0x1e8;
-/// The job's bound keycode (logged for identity validation + the documented fallback input bit).
-pub(crate) const PAB_JOB_KEYCODE_180_OFFSET: usize = 0x180;
-/// The "pressed" value the predicate treats as complete.
-pub(crate) const PAB_PRESS_COUNT_SATISFIED: u32 = 2;
-/// Upper sanity bound for a plausible press-count (reject garbage/unreadable reads -> keep waiting).
-pub(crate) const PAB_COUNT_SANITY_MAX: u32 = 8;
-/// Frames the press-any-button job must be built+valid before we advance (screen settle).
-pub(crate) const PAB_ADVANCE_SETTLE_FRAMES: usize = 10;
-/// Minimum plausible heap pointer (reject not-yet-built / garbage job slots).
-pub(crate) const PAB_MIN_HEAP_PTR: usize = 0x10000;
+pub(crate) use er_title_flow::PAB_ADVANCE_SETTLE_FRAMES;
+pub(crate) use er_title_flow::PAB_COUNT_SANITY_MAX;
+pub(crate) use er_title_flow::PAB_JOB_KEYCODE_180_OFFSET;
+pub(crate) use er_title_flow::PAB_JOB_PRESS_COUNT_1E8_OFFSET;
+pub(crate) use er_title_flow::PAB_JOB_SLOT_130_OFFSET;
+pub(crate) use er_title_flow::PAB_MIN_HEAP_PTR;
+pub(crate) use er_title_flow::PAB_NODE_UPDATE_RVA;
+pub(crate) use er_title_flow::PAB_PRESS_COUNT_SATISFIED;
 
 /// One-shot latch: the readiness advance has fired (0 = not yet).
 pub(crate) use er_telemetry::counters::PAB_ADVANCE_FIRED;
@@ -531,16 +510,7 @@ pub(crate) unsafe extern "system" fn pab_node_update_detour(
     ret
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct MenuActionNode {
-    pub(crate) node: usize,
-    pub(crate) node_vt: usize,
-    pub(crate) registry: usize,
-    pub(crate) member_dialog: usize,
-    pub(crate) member_fn: usize,
-    pub(crate) member_adjust: usize,
-    pub(crate) window_item: usize,
-}
+pub(crate) use er_title_flow::MenuActionNode;
 
 #[derive(Clone, Copy)]
 pub(crate) struct NativeContinueEntry {
@@ -561,70 +531,17 @@ pub(crate) struct NativeContinueItemAction {
     pub(crate) do_call: usize,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct LiveDialogFireReady {
-    pub(crate) title_dialog: usize,
-    pub(crate) title_dialog_vt: usize,
-    pub(crate) capture_slot: usize,
-    pub(crate) capture: usize,
-    pub(crate) capture_vt: usize,
-    pub(crate) registry_vt: usize,
-    pub(crate) menu_opened_latch: usize,
-    pub(crate) menu_window: usize,
-    pub(crate) menu_window_vt: usize,
-}
+pub(crate) use er_title_flow::LiveDialogFireReady;
 
-#[derive(Clone, Copy)]
-pub(crate) struct ProfileLoadDialogReady {
-    pub(crate) dialog: usize,
-    pub(crate) dvt: usize,
-    pub(crate) bound: i32,
-    pub(crate) cursor_now: i32,
-    pub(crate) cursor_target: i32,
-    pub(crate) expected_slot: i32,
-    pub(crate) load_activate: usize,
-    pub(crate) load_job_ctx: usize,
-    pub(crate) load_job_ctx_vt: usize,
-    pub(crate) player_game_data: usize,
-}
+pub(crate) use er_title_flow::ProfileLoadDialogReady;
 
-#[derive(Clone, Copy)]
-pub(crate) enum StartupModalBlockingState {
-    Clear,
-    Blocking {
-        dialog: usize,
-        vtable: usize,
-        closing_latch: usize,
-    },
-}
+pub(crate) use er_title_flow::StartupModalBlockingState;
 
-pub(crate) struct ProductCoreAutoloadReady {
-    pub(crate) committed: i32,
-    pub(crate) requested: i32,
-    pub(crate) table: usize,
-    pub(crate) session: usize,
-    pub(crate) game_data_man: usize,
-    pub(crate) profile_summary: usize,
-    pub(crate) iodev: usize,
-    pub(crate) heap_allocator: usize,
-    pub(crate) title_dialog: usize,
-    pub(crate) title_in_loop: bool,
-    pub(crate) title_in_textfadeout: bool,
-    pub(crate) menu_opened_latch: usize,
-    pub(crate) press_start_proxy: usize,
-    pub(crate) press_start_context: usize,
-}
+pub(crate) use er_title_flow::ProductCoreAutoloadReady;
 
-pub(crate) struct TitlePressButtonComponent {
-    pub(crate) proxy: usize,
-    pub(crate) context: usize,
-}
+pub(crate) use er_title_flow::TitlePressButtonComponent;
 
-pub(crate) struct TitleDialogState {
-    pub(crate) in_loop: bool,
-    pub(crate) in_textfadeout: bool,
-    pub(crate) menu_opened_latch: usize,
-}
+pub(crate) use er_title_flow::TitleDialogState;
 
 /// OWN-THE-STEPPER step 2 (the load driver): runs IN-CONTEXT at idx10 (STEP_MenuJobWait,
 /// rcx=owner, rdx=FD4Time) as a real FD4 step. After letting the boot settle to the

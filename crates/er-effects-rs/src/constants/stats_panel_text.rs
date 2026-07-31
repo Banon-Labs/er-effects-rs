@@ -151,20 +151,13 @@ pub(crate) static TITLE_PRESS_START_BIND_LAST_CONTEXT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) use er_telemetry::counters::TITLE_PRESS_START_BIND_HIDE_CALLS;
 pub(crate) use er_telemetry::counters::TITLE_PRESS_START_GFX_HIDE_CALLS;
-pub(crate) static TITLE_PRESS_START_GFX_HIDE_LAST_DIALOG: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_PRESS_START_GFX_HIDE_LAST_PROXY: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_PRESS_START_GFX_HIDE_LAST_CONTEXT: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_PRESS_START_GFX_HIDE_LAST_CALLER_PHASE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-/// Actual visible native title-logo layer. Static RE of `TitleTopDialog` (dump 0x1409a82d0 ->
-/// live 0x1409a8180) shows `CS::TitleBackViewParts` embedded at dialog+0xaa8 and constructed from
-/// the `05_001_Title_Logo` resource; this is distinct from the preserved `05_000_Title` MenuWindowJob.
-pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_AA8_OFFSET: usize = 0xaa8;
-pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_NAME: &str = "TitleBackViewParts";
-pub(crate) const TITLE_LOGO_RESOURCE_NAME: &str = "05_001_Title_Logo";
+pub(crate) use er_title_flow::TITLE_PRESS_START_GFX_HIDE_LAST_DIALOG;
+pub(crate) use er_title_flow::TITLE_PRESS_START_GFX_HIDE_LAST_PROXY;
+pub(crate) use er_title_flow::TITLE_PRESS_START_GFX_HIDE_LAST_CONTEXT;
+pub(crate) use er_title_flow::TITLE_PRESS_START_GFX_HIDE_LAST_CALLER_PHASE;
+pub(crate) use er_title_flow::TITLE_LOGO_BACK_VIEW_PARTS_AA8_OFFSET;
+pub(crate) use er_title_flow::TITLE_LOGO_BACK_VIEW_PARTS_NAME;
+pub(crate) use er_title_flow::TITLE_LOGO_RESOURCE_NAME;
 /// `TitleBackViewParts` embeds its `SceneObjProxy` at `this+0x70`; the GFx/ScaleformValue handle
 /// used by the native label/frame helpers is the proxy field at `this+0x88` (`SceneObjProxy+0x18`).
 pub(crate) const TITLE_LOGO_GFX_VALUE_88_OFFSET: usize = 0x88;
@@ -186,7 +179,7 @@ pub(crate) const TITLE_LOGO_GFX_MAIN_ASSET_NAME: &str = "MENU_Title_EldenRing_01
 /// `TitleTopDialog` itself calls this with `1` in the start-login path (dump 0x1409b3050), so using
 /// it with `0` is a native visibility semantic, not a timeline FadeIn/FadeOut guess.
 pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_CTOR_RVA: usize = 0x9a6180;
-pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA: usize = 0x9a62c0;
+pub(crate) use er_title_flow::TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA;
 /// TitleTopDialog start-login/native accept path (dump 0x1409b3050 -> deobf/live 0x1409b2f00).
 /// It calls `TitleBackViewParts::SetVisible(1)` on dialog+0xaa8 before continuing through native
 /// login/save-load setup, so detouring it and hiding the logo after the original is the earliest
@@ -203,12 +196,9 @@ pub(crate) use er_telemetry::counters::TITLE_LOGO_SET_VISIBLE_INSTALLED;
 pub(crate) static TITLE_LOGO_CTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::TITLE_LOGO_CTOR_INSTALLED;
 pub(crate) use er_telemetry::counters::TITLE_LOGO_GFX_HIDE_CALLS;
-pub(crate) static TITLE_LOGO_GFX_HIDE_LAST_DIALOG: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_LOGO_GFX_HIDE_LAST_LOGO: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_LOGO_GFX_HIDE_LAST_CALLER_PHASE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) use er_title_flow::TITLE_LOGO_GFX_HIDE_LAST_DIALOG;
+pub(crate) use er_title_flow::TITLE_LOGO_GFX_HIDE_LAST_LOGO;
+pub(crate) use er_title_flow::TITLE_LOGO_GFX_HIDE_LAST_CALLER_PHASE;
 pub(crate) static TITLE_LOGO_GFX_HIDE_LAST_REQUESTED_VISIBLE: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// Passive observer for `CSScaleformSystem::AcquireMenuResource` (`dump 0x140d786e0 ->
@@ -799,33 +789,15 @@ pub(crate) const TITLE_PRESS_START_NAME_RVA: usize = 0x2b26500;
 /// Diagnostic span: if *(proxy) is NOT SceneObjProxy, scan [proxy .. proxy+0x40] stride 8 logging
 /// each qword + its [0] vtable so the next probe reveals the real layout. Also bounds the fallback.
 pub(crate) const SCENE_PROXY_DIAG_SCAN_SPAN: usize = 0x40;
-/// FD4 StateMachine sub-object EMBEDDED at dialog+0xa60. NB: the registrar / set_state /
-/// is_in_state receiver is the ADDRESS dialog+0xa60 (they do `add rcx,0xa60; call`), NOT
-/// `*(dialog+0xa60)`. Its first qword is the SM vtable.
-pub(crate) const TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET: usize =
-    core::mem::offset_of!(TitleTopDialogLayout, state_machine);
-/// Byte latch at [dialog+0xa40]: 0 = menu not opened (the native non-input registrar path
-/// requires it ==0), 1 = registrar ran. We READ it (never write/clear it -- pre-setting it
-/// poisons the native non-input open path, bd titletopdialog-loop-ready-gate-2026).
-pub(crate) const TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET: usize =
-    core::mem::offset_of!(TitleTopDialogLayout, menu_opened);
-/// Mask to extract the latch byte from an 8-byte read at dialog+0xa40.
-pub(crate) const TITLE_TOP_DIALOG_LATCH_BYTE_MASK: usize = u8::MAX as usize;
-/// CS FD4 `is_in_state(rcx = sm-receiver = dialog+0xa60, rdx = state descriptor ptr) -> bool`
-/// (0x140749b20). Returns true iff the SM's CURRENT node is SETTLED (flags&0x8f>=2) AND its name
-/// matches the descriptor's inline ASCII name. We call the game's own checker to read the live
-/// state by NAME -- robust, no hand pointer-chase / SSO parsing.
-pub(crate) const TITLE_TOP_DIALOG_IS_IN_STATE_RVA: usize = TitleDialogRva::IsInState as usize;
-/// FD4 state name-descriptor RVAs (inline ASCII at the VA). FadeIn = the intro-fade node;
-/// Loop = the settled press-prompt node (the correct gate to open the menu); TextFadeOut = the
-/// menu-list-active node the registrar transitions to. bd titletopdialog-fadein-gate-...-2026.
-pub(crate) const TITLE_STATE_DESC_FADEIN_RVA: usize = 0x2a90500;
-pub(crate) const TITLE_STATE_DESC_LOOP_RVA: usize = 0x2a8f9e8;
-pub(crate) const TITLE_STATE_DESC_TEXTFADEOUT_RVA: usize = 0x2b264f0;
-/// Boolean-false byte returned by the game's `is_in_state` (compare `!= this` for true).
-pub(crate) const OWN_STEPPER_FALSE: u8 = false as u8;
-/// Initial value (0) for the open-menu registrar one-shot guard.
-pub(crate) const OWN_STEPPER_MENU_OPENED_NO: usize = OWN_STEPPER_FALSE as usize;
+pub(crate) use er_title_flow::TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
+pub(crate) use er_title_flow::TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET;
+pub(crate) use er_title_flow::TITLE_TOP_DIALOG_LATCH_BYTE_MASK;
+pub(crate) use er_title_flow::TITLE_TOP_DIALOG_IS_IN_STATE_RVA;
+pub(crate) use er_title_flow::TITLE_STATE_DESC_FADEIN_RVA;
+pub(crate) use er_title_flow::TITLE_STATE_DESC_LOOP_RVA;
+pub(crate) use er_title_flow::TITLE_STATE_DESC_TEXTFADEOUT_RVA;
+pub(crate) use er_title_flow::OWN_STEPPER_FALSE;
+pub(crate) use er_title_flow::OWN_STEPPER_MENU_OPENED_NO;
 /// STAGE1d probes the dialog's FD4 state immediately and opens only on the semantic Loop+latch
 /// predicate; it does not use a fixed pre-probe settle delay.
 /// Interval (frames) for logging the state probe (FadeIn/Loop/TextFadeOut + latch), so the log
@@ -838,8 +810,7 @@ pub(crate) const STAGE1D_RETRY_INTERVAL: u64 = 30;
 pub(crate) const MENU_ENTRIES_SEEN_NO: usize = false as usize;
 pub(crate) const MENU_ENTRIES_SEEN_YES: usize = true as usize;
 pub(crate) static MENU_ENTRIES_SEEN: AtomicUsize = AtomicUsize::new(MENU_ENTRIES_SEEN_NO);
-pub(crate) static OWN_STEPPER_MENU_OPENED: core::sync::atomic::AtomicUsize =
-    core::sync::atomic::AtomicUsize::new(OWN_STEPPER_MENU_OPENED_NO);
+pub(crate) use er_title_flow::OWN_STEPPER_MENU_OPENED;
 /// Count of TitleTopDialog entry-vector dumps emitted (the Continue/Load-Game rows live there,
 /// not in the FD4 tree). Capped so the diagnostic samples the entries as they realize after
 /// menu-open without spamming the log every frame.
@@ -852,9 +823,7 @@ pub(crate) const OWN_STEPPER_TITLETOP_DUMP_CAP: usize = TraceSampleLimit::Value8
 /// TitleTopDialog registry entries, not FD4 jobs.
 pub(crate) static OWN_STEPPER_LOADGAME_SCANS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 pub(crate) const OWN_STEPPER_LOADGAME_SCAN_CAP: usize = TraceSampleLimit::Value12 as usize;
-/// Sentinel logged when the inner TitleStep owner can no longer be found (the
-/// title flow advanced past the title and the owner was finalized/destructed).
-pub(crate) const TITLE_STATE_OWNER_GONE: i32 = -1;
+pub(crate) use er_title_flow::TITLE_STATE_OWNER_GONE;
 pub(crate) const FORCE_PLAY_GAME_STATE_UNOBSERVED: i32 = -999;
 /// One-shot "PlayGame requested" flag on the TitleStep owner. STEP_PlayGame only
 /// runs its real load-trigger (`consume_owner300` 0x140ca89e0 on owner+0x300,
@@ -870,22 +839,13 @@ pub(crate) const TITLE_OWNER_PLAY_GAME_REQUEST_FLAG_SET: u8 = true as u8;
 /// feeds global+0x1200, not the load pair — so this is the field to select.
 pub(crate) const TITLE_OWNER_PLAY_GAME_SLOT_OFFSET: usize =
     core::mem::offset_of!(TitleOwnerLayout, play_game_slot);
-/// STEP_GameStepWait (handler 0x140b0cde0) waits on the load job at owner+0x2e8:
-/// `cmp dword [job+0xd8],0 / jne wait`. Observe job+0xd8 while holding here to
-/// learn whether anything drains the job (needs a pump) or it is static.
-pub(crate) const TITLE_STEP_GAME_STEP_WAIT: i32 = TitleStepState::GameStepWait as i32;
-pub(crate) const TITLE_OWNER_JOB_OFFSET: usize = core::mem::offset_of!(TitleOwnerLayout, load_job);
+pub(crate) use er_title_flow::TITLE_STEP_GAME_STEP_WAIT;
+pub(crate) use er_title_flow::TITLE_OWNER_JOB_OFFSET;
 pub(crate) const TITLE_OWNER_JOB_PENDING_OFFSET: usize =
     core::mem::offset_of!(TitleOwnerLoadJobLayout, pending);
-pub(crate) const TITLE_JOB_OBSERVE_TICK_INTERVAL: u64 = 30;
-pub(crate) const FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA: usize =
-    er_save_loader::SET_SAVE_SLOT_RVA as usize;
-/// Corrected play-game submit recipe (play-game-submit-and-continue-load-recipe-2026):
-/// the Continue/Load handler 0x140b0e180 sets owner+0xbc to a PACKED MAP id, clears
-/// the new-game flag owner+0x284, and calls SetState 0x140b0d960(owner, 5=PlayGame)
-/// -- then the existing pump runs PlayGame -> child MoveMap_Init -> builds CSFeMan.
-/// (force_play_game wrote owner+0x4c=5 raw + a raw slot in +0xbc, so it orphaned.)
-pub(crate) const TITLE_SET_STATE_RVA: usize = 0xb0d960;
+pub(crate) use er_title_flow::TITLE_JOB_OBSERVE_TICK_INTERVAL;
+pub(crate) use er_title_flow::FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA;
+pub(crate) use er_title_flow::TITLE_SET_STATE_RVA;
 pub(crate) const TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET: usize =
     core::mem::offset_of!(TitleOwnerLayout, new_game_flag);
 /// Packed map id for m60_42_34_00 (the new-game default; resolver 0x14071fd60 packs
@@ -901,25 +861,10 @@ pub(crate) const DESERIALIZE_SLOT_RVA: usize = 0x67b290;
 /// `continue_load(-1, 0, 0)`: it resolves `-1` through GameMan+0xac0, submits the
 /// 0x280000 save read, and arms GameMan+0xb80 for the b80 drain/deser chain.
 pub(crate) const CONTINUE_LOAD_RVA: usize = 0x67b750;
-/// Private saved-map slot inside the GameMan block immediately after
-/// `stay_in_multiplay_area_saved_rotation`; derive it from the adjacent typed
-/// vector layout instead of retaining the raw absolute field offset.
-pub(crate) const GAME_MAN_SAVED_MAP_C30_OFFSET: usize =
-    core::mem::offset_of!(GameMan, stay_in_multiplay_area_saved_rotation)
-        + core::mem::size_of::<F32Vector4>()
-        + core::mem::size_of::<F32Vector4>();
-/// Unnamed native Quit Game / return-title job-chain predicate field.
-/// Ghidra labels this `GameMan::field143_0xbc4`; known writes are 1 -> 2 -> 3, and
-/// the native wait predicate tests `== 3`. This is NOT a named enum until further RE proves one.
-pub(crate) const GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET: usize = 0xbc4;
-/// Terminal value for `GameMan::field143_0xbc4` observed after the native return-title job tail.
-/// Keep this value named as a predicate terminal, not a semantic enum state.
-pub(crate) const GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY: usize = 3;
-/// "Return-title requested, save not yet pumped" value for `GameMan::field143_0xbc4`: the native
-/// return-title REQUEST (`FUN_14067a490`) sets bc4 = 1, then the quit-save pump advances it 1 -> 2 -> 3.
-/// The switch-2 soft-lock is bc4 FROZEN at this value because the quit-save (`ShouldSave`) aborts on a
-/// stale `CSMenuMan->disableSaveMenu` (see [`CS_MENU_MAN_DISABLE_SAVE_MENU_OFFSET`] in return_title.rs).
-pub(crate) const GAME_MAN_RETURN_TITLE_JOB_PREDICATE_PENDING: usize = 1;
+pub(crate) use er_title_flow::GAME_MAN_SAVED_MAP_C30_OFFSET;
+pub(crate) use er_title_flow::GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET;
+pub(crate) use er_title_flow::GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY;
+pub(crate) use er_title_flow::GAME_MAN_RETURN_TITLE_JOB_PREDICATE_PENDING;
 /// submit_play_game 3-phase states: build CSFeMan -> deserialize slot -> re-submit
 /// the real map. Driven one step per game-task tick.
 pub(crate) const SUBMIT_PHASE_INIT: i32 = 0;
@@ -931,7 +876,7 @@ pub(crate) const SUBMIT_PHASE_DONE: i32 = 3;
 /// driven by per-frame update 0x140aff640(rcx=MoveMapStep, rdx=FD4TaskData). The
 /// MoveMapStep is held at InGameStep(owner+0x2e8)+0xe8. Pump it until child+0xd8 drains.
 pub(crate) const MOVEMAPSTEP_UPDATE_RVA: usize = 0xaff640;
-pub(crate) const INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET: usize = 0xe8;
+pub(crate) use er_title_flow::INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET;
 pub(crate) const INGAMESTEP_PENDING_D8_PENDING: i32 = 1;
 /// play_game_submit-handoff discriminators on the InGameStep object (own-load-worldreswait-is-block-
 /// registration-not-coord-2026-06-22). play_game_submit 0x140aebdc0 sets InGameStep+0xd8=1 and

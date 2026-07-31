@@ -8,7 +8,7 @@
 /// `MsbFileCap::msbResCap` stay `0` even at `loadState == 4`, so sampling it says whether the freeze
 /// is "no buffer at all" or "buffer present but never parsed". Read-only: no acquire, no refcount
 /// touch, no vtable call.
-pub(crate) unsafe fn fd4_filecap_content_state(load_process: usize) -> (usize, usize, usize, i64) {
+pub unsafe fn fd4_filecap_content_state(load_process: usize) -> (usize, usize, usize, i64) {
     if load_process <= 0x10000 {
         return (0, 0, 0, -1);
     }
@@ -35,7 +35,7 @@ pub(crate) unsafe fn fd4_filecap_content_state(load_process: usize) -> (usize, u
 /// inline in the union itself. Both `length` and the read are clamped so a garbage capacity cannot
 /// walk the probe off a page, every character goes through `safe_read_u8`, and non-ASCII collapses
 /// to `?` -- this runs on the game thread during a stall, so it must not fault or allocate wildly.
-pub(crate) unsafe fn fd4_filecap_name(cap: usize) -> String {
+pub unsafe fn fd4_filecap_name(cap: usize) -> String {
     let capacity =
         unsafe { safe_read_usize(cap + FD4_FILECAP_NAME_CAPACITY_30_OFFSET) }.unwrap_or(0);
     let length = unsafe { safe_read_usize(cap + FD4_FILECAP_NAME_LENGTH_28_OFFSET) }.unwrap_or(0);
@@ -75,7 +75,7 @@ pub(crate) unsafe fn fd4_filecap_name(cap: usize) -> String {
 /// Same small-string-optimization rule as `fd4_filecap_name`: `capacity > 7` means the union holds
 /// a heap pointer, otherwise the characters are inline. Kept separate because that helper takes a
 /// cap and bakes in the `+0x10` string base, while virtual-root entries hold bare `DLString`s.
-pub(crate) unsafe fn dlstring_wide_ascii(string_base: usize) -> String {
+pub unsafe fn dlstring_wide_ascii(string_base: usize) -> String {
     if string_base <= 0x10000 {
         return String::new();
     }
@@ -124,7 +124,7 @@ pub(crate) unsafe fn dlstring_wide_ascii(string_base: usize) -> String {
 ///
 /// Strictly read-only -- a vector walk with bounded length and per-field `safe_read_*`, no locks and
 /// no allocation beyond the returned string, because this runs on the game thread mid-stall.
-pub(crate) unsafe fn dlio_virtual_roots_summary(base: usize) -> String {
+pub unsafe fn dlio_virtual_roots_summary(base: usize) -> String {
     if base == 0 {
         return String::from("<nobase>");
     }
@@ -255,7 +255,7 @@ unsafe fn title_anim_fadein_skip(owner: usize) {
 
 /// Detour for STEP_MenuJobWait (0x140b0d400, `__fastcall(rcx=owner, rdx=task_data, ...)`). Drives the
 /// one-shot FadeIn->Loop skip from the live SM state, then passes through to the original unchanged.
-pub(crate) unsafe extern "system" fn title_menujob_speed_detour(
+pub unsafe extern "system" fn title_menujob_speed_detour(
     owner: usize,
     task_data: usize,
     r8: usize,
@@ -275,7 +275,7 @@ pub(crate) unsafe extern "system" fn title_menujob_speed_detour(
 
 /// Install the title-anim speedup hook ONCE (MinHook, mirroring `install_pab_advance_hook`). Gated by
 /// `title_anim_speedup_enabled` at the call site; the detour self-gates per frame too.
-pub(crate) unsafe fn install_title_anim_speed_hook(base: usize) {
+pub unsafe fn install_title_anim_speed_hook(base: usize) {
     if TITLE_ANIM_SPEED_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
         != TITLE_OWNER_SCAN_START_ADDRESS
     {
@@ -316,7 +316,7 @@ pub(crate) unsafe fn install_title_anim_speed_hook(base: usize) {
 /// at `MoveMapStep+0x4b8` near the end of this function; a normal game-task write runs too late because
 /// the state machine can consume the gate and run Cleanup/Finish in the same tick. This detour calls the
 /// original first, then clears the gate only for the current same-session reload until movement proof.
-pub(crate) unsafe extern "system" fn movemapstep_step_move_map_gate_detour(
+pub unsafe extern "system" fn movemapstep_step_move_map_gate_detour(
     mms: usize,
     task_data: usize,
     r8: usize,
@@ -396,7 +396,7 @@ pub(crate) unsafe extern "system" fn movemapstep_step_move_map_gate_detour(
 
 /// Diagnostic opt-in for the failed state-18 hold hook. Default OFF so canonical semaphore-diff runs are
 /// observational and not contaminated by candidate writes.
-pub(crate) fn movemapstep_step_move_map_gate_hold_enabled() -> bool {
+pub fn movemapstep_step_move_map_gate_hold_enabled() -> bool {
     // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): the state-18 candidate-write hold
     // was a diagnostic behavioral experiment gated by env; env feature gates are forbidden; retired.
     false
@@ -404,7 +404,7 @@ pub(crate) fn movemapstep_step_move_map_gate_hold_enabled() -> bool {
 
 /// Install the `STEP_MoveMap` after-original advance-gate hook ONCE. Runtime-falsified task-tick holds
 /// were too late; this hook runs immediately after the native state-18 body.
-pub(crate) unsafe fn install_movemapstep_step_move_map_gate_hook(base: usize) {
+pub unsafe fn install_movemapstep_step_move_map_gate_hook(base: usize) {
     if MOVEMAPSTEP_STEP_MOVEMAP_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
         != TITLE_OWNER_SCAN_START_ADDRESS
     {
@@ -438,7 +438,7 @@ pub(crate) unsafe fn install_movemapstep_step_move_map_gate_hook(base: usize) {
 /// decompile) gets the frames to reach 9; then the original runs and advances normally. Bounded by
 /// INGAMESTEP_MOVEMAP_UPDATE_DEFER_MAX (fail-soft) and scoped to a committed reload epoch so the proven
 /// boot load is untouched. DEFAULT behavior (no marker/env toggle); scoped to a committed reload epoch.
-pub(crate) unsafe extern "system" fn ingamestep_step_movemap_update_defer_detour(
+pub unsafe extern "system" fn ingamestep_step_movemap_update_defer_detour(
     ingame_step: usize,
     param2: usize,
     r8: usize,
@@ -514,7 +514,7 @@ pub(crate) unsafe extern "system" fn ingamestep_step_movemap_update_defer_detour
 }
 
 /// Install the STEP_MoveMap_Update finalize-defer hook ONCE.
-pub(crate) unsafe fn install_ingamestep_step_movemap_update_defer_hook(base: usize) {
+pub unsafe fn install_ingamestep_step_movemap_update_defer_hook(base: usize) {
     if INGAMESTEP_STEP_MOVEMAP_UPDATE_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
         != TITLE_OWNER_SCAN_START_ADDRESS
     {
@@ -547,7 +547,7 @@ pub(crate) unsafe fn install_ingamestep_step_movemap_update_defer_hook(base: usi
 /// FD4-ticked child keeps ticking the advancer FUN_140afa7c0 until field25 reaches 9; then the real
 /// done passes -> natural teardown -> world completes. ONLY the MoveMapStep child (rcx gate) on a
 /// committed reload is touched; load1 (epoch 0) and every other child/query are unchanged.
-pub(crate) unsafe extern "system" fn child_done_query_override_detour(
+pub unsafe extern "system" fn child_done_query_override_detour(
     child_base: usize,
     param2: usize,
     r8: usize,
@@ -642,7 +642,7 @@ pub(crate) unsafe extern "system" fn child_done_query_override_detour(
 }
 
 /// Install the child-done-query override hook ONCE (unioned).
-pub(crate) unsafe fn install_child_done_query_override_hook(base: usize) {
+pub unsafe fn install_child_done_query_override_hook(base: usize) {
     if CHILD_DONE_QUERY_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
         != TITLE_OWNER_SCAN_START_ADDRESS
     {
@@ -677,13 +677,13 @@ pub(crate) unsafe fn install_child_done_query_override_hook(base: usize) {
 // mislanded at 0xaec480 in the -0xf0 sub-region). Verified by prologue mov [rsp+0x10],rbx; push rsi;
 // sub rsp,0x20; mov rbx,rcx then the DAT_143d5db09=1 store (0x140aec57d) + CreateLoadlistlistFileCap
 // call (0x140aec5f0). bd loadlist-capture-hook-wrong-address-0xaec480-midfunction-refind-entry.
-pub(crate) const LOADLIST_INIT_RVA: usize = 0xaec570;
+pub const LOADLIST_INIT_RVA: usize = 0xaec570;
 const INGAMESTEP_WORLDLOADLIST_VPATH_OFFSET: usize = 0x108;
-pub(crate) static LOADLIST_INIT_ORIG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub static LOADLIST_INIT_ORIG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 static LOADLIST_INIT_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) use er_telemetry::counters::LOADLIST_INIT_CALLS;
 
-pub(crate) unsafe extern "system" fn loadlist_init_capture_detour(
+pub unsafe extern "system" fn loadlist_init_capture_detour(
     ingamestep: usize,
     param2: usize,
     r8: usize,
@@ -729,7 +729,7 @@ pub(crate) unsafe extern "system" fn loadlist_init_capture_detour(
 }
 
 /// Install the LoadlistInit capture hook ONCE (product-owned so the union detour actually fires).
-pub(crate) unsafe fn install_loadlist_init_capture_hook(base: usize) {
+pub unsafe fn install_loadlist_init_capture_hook(base: usize) {
     if LOADLIST_INIT_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
         != TITLE_OWNER_SCAN_START_ADDRESS
     {
@@ -758,7 +758,7 @@ pub(crate) unsafe fn install_loadlist_init_capture_hook(base: usize) {
 /// at which BeginTitle(3) fires natively (and the full state sequence during boot), so we can decide
 /// whether the 05_000_Title build has any headroom to be started earlier (overlap with init) before
 /// risking a forced SetState (which has NO double-build guard). bd menu-build-overlap-lever-2026-06-24.
-pub(crate) unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i32) {
+pub unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i32) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if owner > PAB_MIN_HEAP_PTR {
             TITLE_SETSTATE_TRACE_LAST_OWNER.store(owner, Ordering::SeqCst);
@@ -880,7 +880,7 @@ pub(crate) unsafe extern "system" fn title_setstate_trace_detour(owner: usize, s
 }
 /// Install the READ-ONLY title step-setter trace hook ONCE. Mirrors `install_pab_advance_hook`.
 /// Save-safe: the detour only logs + passes through. bd menu-build-overlap-lever-2026-06-24.
-pub(crate) unsafe fn install_title_setstate_trace_hook(base: usize) {
+pub unsafe fn install_title_setstate_trace_hook(base: usize) {
     if TITLE_SETSTATE_TRACE_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
         != TITLE_OWNER_SCAN_START_ADDRESS
     {
