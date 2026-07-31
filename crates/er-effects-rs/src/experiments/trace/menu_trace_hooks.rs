@@ -1295,6 +1295,10 @@ pub(crate) use er_telemetry::counters::MOUNT_GUARD_TICK;
 pub(crate) use er_telemetry::counters::MOUNT_GUARD_DECLINE_LOGS;
 /// Decline-reason log budget: enough to cover a whole stall window without flooding.
 const MOUNT_GUARD_DECLINE_LOG_CAP: usize = 40;
+pub(crate) use er_telemetry::counters::MOUNT_GUARD_DECLINE_BOOT_LOGS;
+/// Token budget for the expected boot-phase declines -- enough to prove the driver ticks, small
+/// enough that it cannot crowd out the reload-phase reasons that actually matter.
+const MOUNT_GUARD_DECLINE_BOOT_LOG_CAP: usize = 3;
 
 /// True when the EBL mounted-archive registry `R = *(EBL_REGISTRY_GLOBAL_RVA)` is null/unreadable, i.e. no
 /// map archive is mounted yet (the mount step has not run). Used to gate the guard-flip: keep flipping
@@ -1369,10 +1373,28 @@ pub(crate) fn map_mount_guard_flip_tick(in_world: bool, mms_step: i32, sf: i64) 
         None
     };
     if let Some(reason) = decline {
-        let n = MOUNT_GUARD_DECLINE_LOGS.fetch_add(1, Ordering::SeqCst) + 1;
-        if n <= MOUNT_GUARD_DECLINE_LOG_CAP {
+        // SPLIT BUDGETS (2026-07-30, fixing this instrumentation's own first run). A single shared
+        // budget was useless: the driver ticks throughout boot, where `!in_world` declines are
+        // EXPECTED and uninteresting, and they burned all 40 slots between +12.8s and +14.0s -- 35
+        // seconds before the stall at +49.2s this was built to explain. The boot-phase reason gets a
+        // token budget just to prove the driver is ticking; every OTHER reason (the ones that can
+        // only occur once the reload is actually in progress) keeps the full budget.
+        let boot_phase = !in_world;
+        let (n, cap) = if boot_phase {
+            (
+                MOUNT_GUARD_DECLINE_BOOT_LOGS.fetch_add(1, Ordering::SeqCst) + 1,
+                MOUNT_GUARD_DECLINE_BOOT_LOG_CAP,
+            )
+        } else {
+            (
+                MOUNT_GUARD_DECLINE_LOGS.fetch_add(1, Ordering::SeqCst) + 1,
+                MOUNT_GUARD_DECLINE_LOG_CAP,
+            )
+        };
+        if n <= cap {
             append_autoload_debug(format_args!(
-                "MAP-MOUNT-GUARD-DECLINED #{n}: {reason} (in_world={in_world} mms_step={mms_step} sf={sf})"
+                "MAP-MOUNT-GUARD-DECLINED[{}] #{n}: {reason} (in_world={in_world} mms_step={mms_step} sf={sf})",
+                if boot_phase { "boot" } else { "RELOAD" }
             ));
         }
         return;

@@ -704,6 +704,10 @@ pub static BLOCKRES_STALECAP_LAST_DEAD_CAP: AtomicUsize = AtomicUsize::new(0);
 /// 2026-07-30 stall it exists to fix, and with five ANDed conditions there was no way to tell which
 /// one refused. Exposed as `oracle_map_mount_guard_declines`.
 pub static MOUNT_GUARD_DECLINE_LOGS: AtomicUsize = AtomicUsize::new(0);
+/// Boot-phase (`!in_world`) declines, budgeted separately. These are EXPECTED and would otherwise
+/// exhaust the shared budget long before the reload stall, which is exactly what happened on the
+/// instrumentation's first run.
+pub static MOUNT_GUARD_DECLINE_BOOT_LOGS: AtomicUsize = AtomicUsize::new(0);
 
 pub static MENU_WINDOW_JOB_DTOR_LIST_REMOVALS: AtomicUsize = AtomicUsize::new(0);
 pub static MENU_WINDOW_JOB_DTOR_LAST_GUARDED_WINDOW: AtomicUsize = AtomicUsize::new(0);
