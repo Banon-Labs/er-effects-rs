@@ -2263,19 +2263,18 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
             let active_switch_phase =
                 quickload_phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED;
-            // RE-ENABLED AS PARKED-STATE RECOVERY (2026-07-31, live user session). The 2026-07-21
-            // disable ("follow vanilla") removed the only completer for the post-entry parked state,
-            // and the live run 20260731-user-portrait-verify proved the cost: every switch leaves the
-            // incoming world at mms18 with requestCode=1, menuData 0x5d/0x5e=0, finalize=0 -- playable,
-            // but menu_job never rebuilds, now_loading stays latched, the stable proof never fires, the
-            // switch phase parks at AUTOLOAD_HANDOFF, and the hidden System windows are never restored
-            // (restore_count=0, row presses resolve onto dead windows -> the user's Load Profile button
-            // did nothing for 15 minutes). The 2026-07-21 concern was forcing the finalize MID-LOAD;
-            // this gate cannot fire there: it requires the PLAYER PRESENT and the full frozen signature
-            // to hold for a sustained ~10s streak (a healthy load transits mms18 in a few frames; no
-            // legitimate in-flight load holds requestCode=1/5d=0/5e=0 with the player resident for 10s).
-            // One-shot per stall; the residual clear below still drops 0x5d the frame mms leaves 18.
-            const FINALIZE_FORCING_ENABLED: bool = true;
+            // DISABLED AGAIN -- LIVE-DISPROVEN AS A PARKED-STATE RECOVERY (2026-07-31, run
+            // 20260731-user-portrait-verify-2). The 2026-07-31 re-enable (player_present + 600-frame
+            // streak, aimed at the post-entry parked state that leaves the System windows hidden and
+            // the Load Profile row dead) fired exactly as scoped -- and TORE THE WORLD DOWN: on a
+            // PLAYABLE parked world the 0x5d write is an ending/return-title request, so the advancer
+            // walked mms 18->Cleanup->Finish->-1 (player_present -> false, char gone, no reload armed)
+            // and the user faded to black mid-gameplay into a dead post-teardown state. The 2026-07-18
+            // teardown-the-OUTGOING-world usage and the 2026-07-20 mid-load completion are NOT this
+            // state; do not re-enable this for a world that has already entered. The parked-finalize
+            // problem (bd parked-finalize-mms18-dead-menus-rt5d-reenable-2026-07-31, AMENDED) needs a
+            // real completion mechanism for the INCOMING step machine, not the ending request.
+            const FINALIZE_FORCING_ENABLED: bool = false;
             let stuck_mms18 = FINALIZE_FORCING_ENABLED
                 && active_switch_phase
                 && player_present
