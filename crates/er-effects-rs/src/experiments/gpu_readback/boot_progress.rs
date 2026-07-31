@@ -445,32 +445,40 @@ fn boot_view_cover_release_ready(can_move_handoff: bool) -> bool {
             return false;
         }
     }
-    // "The game is ready to be revealed." `boot_view_player_render_ready()` alone cannot answer
-    // this on a switch: measured (run slot-portrait-proof-20260731-125800) it reads TRUE during the
-    // teardown/title and FALSE once the character is actually in the world -- every `boot-view
-    // DECISION` line of that run has `render_ready=false` while `in_world=1`, `player_present=true`
-    // and the loaded character named. Gating on it alone left the release permanently unsatisfiable
-    // after the character-load gate closed the teardown path: 0 semantic releases, both switches
-    // riding to the 20s cap.
+    // "The game is ready to be revealed." This needs a signal that is still TRUE once the
+    // character-load gate above opens, which rules out the obvious one.
     //
-    // The per-epoch world-live signal answers it directly -- play time advancing for THIS load
-    // epoch is the game telling us the world is running -- and it is the same signal the Present
-    // hook's in-world composite skip already trusts. It is only meaningful once a switch epoch
-    // exists (`fresh_deser != 0`), exactly as that skip requires, so boot keeps the render-flag
-    // path.
+    // `boot_view_player_render_ready()` is not wrong, it is TRANSIENT: measured across runs
+    // 20260731-115718, -122038 and -125800 it reads true for only ~2 sampled seconds at the TAIL of
+    // each load (permille 990-1000) and false everywhere else, twice per load. The gate is still
+    // holding during that window -- it clears both latches every frame until this switch's
+    // fresh-deser bump -- so the transient is discarded, and it never comes back. Gating on it
+    // alone therefore left the release permanently unsatisfiable once the teardown path was closed:
+    // 0 semantic releases, both switches riding the 20s cap (run -125800).
+    //
+    // (An earlier revision of this comment called it "inverted, true at the title and false
+    // in-world". That was drawn from the last 8 DECISION lines of one run -- all post-load steady
+    // state -- and is wrong. The full logs show the tail-of-load spikes above.)
+    //
+    // The per-epoch world-live signal is the semantically ideal answer -- play time advancing for
+    // THIS load epoch is the game saying the world is running, and it is what the Present hook's
+    // in-world composite skip already trusts -- but it is not reachable in every run: it needs play
+    // time to ADVANCE past a threshold, and a probe that tears down shortly after the world appears
+    // never gets there (runs -125800 and -130326 both ended `play_time_live=false`,
+    // `play_time_advanced_ms=0`). Kept as the preferred signal for real sessions, not relied on.
     let cur_load_epoch =
         crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
     let epoch_world_live = cur_load_epoch != 0
         && crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur_load_epoch;
-    // ...but world-live is not reachable under every run either: it needs play time to ADVANCE past
-    // a threshold, and an agent probe that tears down shortly after the world appears never gets
-    // there -- runs 20260731-125800 and -130326 both ended with oracle_play_time_live=false and
-    // play_time_advanced_ms=0, so the release still never fired and the cover rode the 20s cap.
+    // The fact that IS both reachable and PERSISTENT -- so it survives the gate's hold window,
+    // unlike the render-flag spike -- is the one the proof harness itself trusts to declare LOADED:
+    // the local player exists and carries a real loaded character. Runs -125800 and -130326 both
+    // ended `player_present=true` with a valid name/level while world-live stayed false. Reading it
+    // here in-process is the same evidence one layer earlier.
     //
-    // The load-arrival fact that IS reachable in every run is the one the proof harness itself
-    // trusts to declare LOADED: the local player exists and carries a real loaded character. Both
-    // of those runs ended with oracle_player_present=true and a valid name/level while world-live
-    // stayed false. Reading it here in-process is the same evidence, one layer earlier.
+    // It cannot reveal the game early despite being broad: the character-load gate above still
+    // blocks everything before this switch's confirm, and the release also requires the native-done
+    // latch, which only sets when the load screen is actually finishing.
     let player_loaded = unsafe { PlayerIns::local_player_mut() }
         .map(|player| {
             player.chr_ins.chr_model_ins.as_ptr() as usize != TITLE_OWNER_SCAN_START_ADDRESS
