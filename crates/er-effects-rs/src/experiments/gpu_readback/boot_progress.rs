@@ -2305,10 +2305,6 @@ unsafe fn composite_boot_progress_inner(
         let first_ms = crate::constants::BOOT_VIEW_COMPOSITE_FIRST_MS.load(Ordering::SeqCst) as u64;
         let composite_ms = now_ms.saturating_sub(first_ms);
         let permille = BOOT_VIEW_LAST_PERMILLE.load(Ordering::SeqCst);
-        // Post-resume (bd er-effects-rs-dpf6 Phase 2): the permille arm re-fires instantly on a
-        // resumed window (the bar is already ~full on the healthy fast load that tripped it), so it
-        // is suppressed after the once-per-window publish resume. The composite-time cap stays armed
-        // -- it is the FPS backstop the bail exists for.
         // PERMILLE ARM REMOVED (er-effects-rs-drb7). It stopped the cover the moment the bar read
         // ~full, which on a HEALTHY switch happens ~1.3s in, long before the first portrait publish
         // -- a progress reading standing in for a freeze predicate. With no reachable semantic
@@ -2318,8 +2314,9 @@ unsafe fn composite_boot_progress_inner(
         // native-exposure frames with holes of 81 and 127 consecutive frames. The composite-time cap
         // stays and is now the bail's whole job: the guarantee that a genuinely frozen load can
         // never leave the per-frame GPU readback running forever.
+        // Both still feed the stop log below -- they describe the state the cap fired in, they no
+        // longer decide it.
         let resumed = BOOT_VIEW_FPS_BAIL_RESUMED.load(Ordering::SeqCst) != 0;
-        let _ = (resumed, permille);
         if composite_ms >= crate::constants::BOOT_VIEW_EPOCH_COMPOSITE_CAP_MS {
             if BOOT_VIEW_STOPPED.swap(1, Ordering::SeqCst) == 0 {
                 // Phase-1/2 measurability: stop reason + window duration + the publish-version and

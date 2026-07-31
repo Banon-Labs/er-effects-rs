@@ -369,9 +369,10 @@ pub(crate) use er_telemetry::counters::BOOT_VIEW_EPOCH_WORLD_LIVE;
 /// bail reliably stops the readback regardless of the handoff signals. Per-epoch composite clock.
 pub(crate) use er_telemetry::counters::BOOT_VIEW_COMPOSITE_EPOCH;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_COMPOSITE_FIRST_MS;
-/// Loading bar permille (0..1000) at/above which the FPS bail stops the composite for an own-menu
-/// reload (bar essentially full = loading visually done).
-pub(crate) const BOOT_VIEW_EPOCH_BAIL_PERMILLE: u32 = 950;
+// BOOT_VIEW_EPOCH_BAIL_PERMILLE removed 2026-07-31 (er-effects-rs-drb7) along with the FPS bail's
+// permille arm: "the bar reads ~full" is a progress reading, not the freeze predicate the bail
+// needs, and it fired ~1.3s into every healthy switch. BOOT_VIEW_EPOCH_COMPOSITE_CAP_MS is now the
+// bail's only trigger.
 /// Hard cap (ms) on how long the composite may run for one own-menu reload epoch before the FPS bail
 /// force-stops it, so the GPU readback can never tank FPS indefinitely even if permille stalls.
 pub(crate) const BOOT_VIEW_EPOCH_COMPOSITE_CAP_MS: u64 = 20_000;
