@@ -1388,6 +1388,22 @@ pub(crate) unsafe fn portrait_retarget_and_rearm_for_switch(selected_slot: i32, 
         ));
     }
     PROFILE_PORTRAIT_RETARGETS.fetch_add(1, Ordering::SeqCst);
+    // OFFSCREEN-SIZE ROW FIRST (2026-07-30, different-slot 256x256 root cause): the selected slot is
+    // known HERE, before any of this switch's profile-table builds (ours at the loading screen AND the
+    // native TitleTopDialog rebuild at the title transition). Patch its offscreen-size row now so every
+    // renderer constructed for this switch snapshots the full-size RT; waiting for the loaded-slot flip
+    // left the row native 128 until after both builds (run 20260730-202840).
+    {
+        let base = game_rva(0).unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+        if base != 0 && base != TITLE_OWNER_SCAN_START_ADDRESS {
+            let patched = unsafe { patch_profile_offscreen_size_for_slot(base, selected_slot) };
+            if !patched {
+                append_autoload_debug(format_args!(
+                    "loading-portrait: offscreen-size row patch DID NOT land for selected slot {selected_slot} at retarget -- switch-window portrait will build native-size (256) until a later patch succeeds"
+                ));
+            }
+        }
+    }
     // CONFIRM TIMESTAMP (bd er-effects-rs-dpf6 Phase 1): the first portrait publish after this confirm
     // consumes it to measure oracle_portrait_confirm_to_publish_ms (the publish-race latency).
     PORTRAIT_CONFIRM_MS.store(
@@ -1882,12 +1898,10 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                 "system-quit-quickload: continue_confirm intercepted at clean title phase={phase} slot={slot} native_slot_proven={native_slot_proven} shim=0x{shim:x}"
             ));
             if !native_slot_proven {
-                if gm != TITLE_OWNER_SCAN_START_ADDRESS {
-                    unsafe {
-                        *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) =
-                            OWN_STEPPER_SLOT_NONE;
-                    }
-                }
+                // Do NOT disarm GameMan+0xb78 here. The 2026-07-30 slot-1 repro hit this unproven
+                // branch, cleared the requested slot to -1, then waited forever for stable-world proof
+                // that the native stream could no longer reach. The same b78-as-warp-target rule below
+                // applies even when the earlier proof latch missed.
                 // The `#n` label comes from this branch's OWN counter. It used to come from
                 // ALLOW_COUNT, which also increments unconditionally at the tail of this hook -- so
                 // one call incremented the total-load witness TWICE and inflated it by one per
@@ -1901,7 +1915,7 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                     Ordering::SeqCst,
                 );
                 append_autoload_debug(format_args!(
-                    "system-quit-quickload: continue_confirm FORWARD #{n} -- native requested-slot proof did not fire for slot={slot}; disarmed GameMan+0xb78 and holding phase at AUTOLOAD_HANDOFF until stable-world proof fires (runtime evidence: setting DONE/IDLE here lets the next switch overlap unfinished MoveMap)"
+                    "system-quit-quickload: continue_confirm FORWARD #{n} -- native requested-slot proof did not fire for slot={slot}; leaving GameMan+0xb78 armed as the warp target and holding phase at AUTOLOAD_HANDOFF until stable-world proof fires (runtime evidence: clearing b78 here strands the native stream; setting DONE/IDLE here lets the next switch overlap unfinished MoveMap)"
                 ));
             }
             {
