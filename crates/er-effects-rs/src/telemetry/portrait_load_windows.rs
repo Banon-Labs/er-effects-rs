@@ -146,6 +146,21 @@ fn portrait_loadwin_tick() {
             er_telemetry::counters::NATIVE_LS_EXPOSURE_FRAMES.load(Ordering::SeqCst),
             Ordering::SeqCst,
         );
+        // Reject-attribution baseline for windows that are NOT profile switches
+        // (er-effects-rs-k979). `loading_portrait_window_reset_for_switch` -- which sets it at the
+        // exact instant a switch arms -- has only ONE caller, the own-menu switch arm. Boot is fine
+        // because the baseline starts at 0, but a death or fast-travel window would inherit the
+        // STALE baseline from the last switch and misfile its warm-up reject as a post-publish
+        // fault: the same false failure this work removes, on a different path.
+        //
+        // Setting it here closes that to a bounded race rather than a permanent error. This runs
+        // from the ~4 Hz telemetry writer, so a reject in the first ~250 ms of a non-switch window
+        // can still be misfiled; switch windows keep the exact arm-time value set above it. Neither
+        // path has been exercised against a live reject yet.
+        er_telemetry::counters::LS_PORTRAIT_REJECT_PUBLISH_BASELINE.store(
+            LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst),
+            Ordering::SeqCst,
+        );
         LOADWIN_MAX_CAP_SIDE.store(0, Ordering::SeqCst);
         LOADWIN_MAX_PUB_SIDE.store(0, Ordering::SeqCst);
         LOADWIN_LAST_LIVE_MS.store(update_last, Ordering::SeqCst);
