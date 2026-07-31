@@ -71,7 +71,41 @@ pub(crate) const FACE_DATA_BUFFER_TOTAL_SIZE: usize =
 pub(crate) const FACE_DATA_COPY_FROM_BUFFER_RVA: usize = 0x00252f70;
 /// Native `ChrAsm` copy the row builder uses for a ProfileSummary record's equipment block (+0x1a8) --
 /// the source the profile renderer reads to dress the portrait model.
+///
+/// NOT A MEMCPY (byte-verified 2026-07-31 at deobf 0x140245c00, 1.16.2 zero shift): it runs
+/// `GaitemHandle::copy` (0x140682580) 22 times over `+0x24`, i.e. a REFCOUNTING assign that
+/// increments the incoming handle and releases the previous occupant, and only then does a plain
+/// 22-entry u32 copy of `equipment_param_ids` at `+0x7c`. Feeding it a FOREIGN save's handles
+/// therefore touches live refcount state on a `gaitemInsTable` this process owns -- which is why
+/// `SerializedSaveSlot::runtime_chr_asm_image` zeroes the handle array instead of copying it.
 pub(crate) const CHR_ASM_COPY_RVA: usize = 0x00245c00;
+/// `CS::CSGaitemImp::GetGaItemHandleProtector(CSGaitemImp* rcx, u32* out rdx, i32 paramId r8d) -> u32*`
+/// (deobf 0x140671fd0, byte-verified). MINTS a live in-process instance for a protector param id:
+/// `GetUnindexedGaItemHandle` pops a free table index (refCount 0->1), HeapAllocs a `CSProGaitemIns`,
+/// registers it into `gaitemInsTable[index]`, then `SetItemIdWithProtectorCategory(ins, paramId)`.
+/// Returns the `out` pointer in rax. Under free-queue exhaustion it returns an unresolved (zero)
+/// handle rather than faulting, so the failure mode is a blank slot, not an AV.
+pub(crate) const GET_GAITEM_HANDLE_PROTECTOR_RVA: usize = 0x00671fd0;
+/// `CS::ChrAsm::EquipProtectorOrAccessory(ChrAsm* rcx, i32 slot edx, u32* handle r8)`
+/// (deobf 0x1403bf490, byte-verified as literally `add $0xc,%edx; jmp 0x1403bf3c0` = `EquipItem`).
+/// The `+0xc` is what pins `ChrAsm::ProtectorHead == 12`; see `CHR_ASM_PROTECTOR_HEAD_INDEX`.
+pub(crate) const CHR_ASM_EQUIP_PROTECTOR_RVA: usize = 0x003bf490;
+/// `GaItemHandle::~GaItemHandle(u32* rcx)` (deobf 0x140682480, byte-verified; early-outs when the
+/// handle word is 0). MANDATORY after every `GET_GAITEM_HANDLE_PROTECTOR_RVA` + equip pair: the
+/// per-feed refcount ledger only nets to zero because this drops the local's reference (alloc takes
+/// the entry 0->1, the equip assign takes it to 2 and releases the previous occupant, this drops
+/// 2->1). Skipping it pins refCount at 2 and leaks one slot of a 5119-entry pool per call.
+pub(crate) const GAITEM_HANDLE_DTOR_RVA: usize = 0x00682480;
+/// Index of `ProtectorHead` within `ChrAsm::gaitem_handles` / `ChrAsm::equipment_param_ids`; the four
+/// armor slots are head/chest/hands/legs at `+0..+3`. Grounded in the `add $0xc,%edx` above rather
+/// than assumed.
+pub(crate) const CHR_ASM_PROTECTOR_HEAD_INDEX: usize = 12;
+/// Number of protector (armor) slots the portrait resolution oracle covers: head, chest, hands, legs.
+pub(crate) const CHR_ASM_PROTECTOR_SLOT_COUNT: usize = 4;
+/// `CSMenuProfModelRend` -> its owned `ChrAsm`. The native getter `FUN_140bb9800` is literally
+/// `lea 0x548(%rcx),%rax; ret`, and the profile feed `FUN_140bbe1a0` passes exactly that pointer to
+/// every `EquipItem`/`EquipProtectorOrAccessory` call it makes.
+pub(crate) const PROFILE_RENDERER_CHR_ASM_OFFSET: usize = 0x548;
 /// Face-body values are the face payload that begins at FaceDataBuffer::buffer.
 pub(crate) const FACE_BODY_FIELD_FACE_MODEL_OFFSET: usize = FACE_DATA_BUFFER_PAYLOAD_OFFSET;
 pub(crate) const FACE_BODY_FIELD_HAIR_MODEL_OFFSET: usize =

@@ -304,6 +304,136 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     ));
 }
 
+/// The protector slots the record can actually contribute to the portrait: 0 = head, 1 = chest.
+/// Slots 2 (hands) and 3 (legs) are DELIBERATELY excluded -- the native profile feed equips its own
+/// default protector into both AFTER copying the record, so re-resolving them here would be dead code
+/// stomped microseconds later, and making gloves/greaves visible in the preview would be a deviation
+/// from vanilla (a feature request), not this bugfix.
+const PORTRAIT_RECORD_PROTECTOR_SLOTS: [i32; 2] = [0, 1];
+/// The protector slots the NATIVE profile feed equips ITSELF, with a freshly-resolved default
+/// (bare-body) protector, in the same synchronous call that copies the record: 2 = hands, 3 = legs.
+/// Named so the per-slot resolution oracle can count them as attempted without our touching them.
+const PORTRAIT_NATIVE_DEFAULT_PROTECTOR_SLOTS: [i32; 2] = [2, 3];
+/// Sentinel `CS::ChrAsm::EquipItem` stores into `equipmentParamIds[slot]` when the gaitem handle it
+/// was handed does not resolve to a live item (`GaitemLookupResult` -> `GetItemId` came back as the
+/// invalid id). A non-negative value there therefore means "this slot's handle resolves", which is the
+/// only honest per-slot "the armor will render" read.
+const CHR_ASM_PARAM_ID_UNRESOLVED: i32 = -1;
+/// PER-SLOT portrait armor-resolution oracles. Aggregate "4/4 equipped" counters are structurally
+/// blind to the stale-handle class because the param id is an OUTPUT of handle resolution; these split
+/// "param present" from "handle resolves to a live gaitemInsTable entry" per slot.
+pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_PROTECTOR_REFEEDS;
+pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_SLOT_RESOLVED_MASK;
+pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_SLOT_UNRESOLVED_TOTAL;
+
+/// Re-establish the portrait's HEAD and CHEST from the record's param ids, mirroring the engine's own
+/// default-protector sequence byte for byte (native at deobf 0x140bbe2a5..0x140bbe2d8):
+///
+/// ```text
+///   mov rbx,[GLOBAL_CSGaitem]                      ; the singleton POINTER, not its address
+///   call GetDefaultProtectorParamId                ; we substitute the record's param id
+///   call CSGaitemImp::GetGaItemHandleProtector     ; mint a LOCAL handle for that param id
+///   call ChrAsm::EquipProtectorOrAccessory         ; assign it into the renderer's ChrAsm
+///   call GaItemHandle::~GaItemHandle               ; release the local -- MANDATORY
+/// ```
+///
+/// LIFECYCLE. The per-feed refcount ledger nets to ZERO and only because of the destructor:
+/// `GetGaItemHandleProtector` pops a free index (refCount 0->1), the equip assign
+/// (`swapInventoryItemGaItemHandles_`, a refcounted assignment despite the name) takes it to 2 and
+/// RELEASES the previous occupant back to the free queue, and `~GaItemHandle` drops 2->1. Post-state
+/// equals pre-state. Dropping the destructor pins refCount at 2 and is a real one-slot-per-call leak
+/// against a 5119-entry pool. Do not reorder alloc-before-equip, and do not equip one local twice
+/// without re-allocating. Mutating the handle already in the slot via `SetItemIdWithProtectorCategory`
+/// is NOT a cheaper variant: it skips the generation bump, so stale copies of the handle elsewhere
+/// would silently start resolving to the new item.
+///
+/// A slot whose record param id is negative is legitimately EMPTY: leave the native state alone (bare
+/// head/chest is correct for an unarmored character) and do not count it as a resolution failure.
+/// Fault-guarded reads throughout; bails when the singleton pointer is null (native `DLPanic`s there,
+/// so in practice `set_model_source` would already have paniced before we run).
+unsafe fn reequip_record_protectors(base: usize, renderer: usize, record: usize) {
+    let gaitem =
+        unsafe { safe_read_usize(base + GLOBAL_CSGAITEM_SINGLETON_RVA) }.unwrap_or(NULL_MODULE_BASE);
+    if gaitem == NULL_MODULE_BASE {
+        append_autoload_debug(format_args!(
+            "loading-portrait: armor re-resolve SKIPPED -- GLOBAL_CSGaitem singleton is null; head/chest stay bare"
+        ));
+        return;
+    }
+    let chr_asm = renderer + PROFILE_RENDERER_CHR_ASM_OFFSET;
+    let get_protector_handle: unsafe extern "system" fn(usize, *mut u32, i32) -> *mut u32 =
+        unsafe { core::mem::transmute(base + GET_GAITEM_HANDLE_PROTECTOR_RVA) };
+    let equip_protector: unsafe extern "system" fn(usize, i32, *mut u32) =
+        unsafe { core::mem::transmute(base + CHR_ASM_EQUIP_PROTECTOR_RVA) };
+    let release_handle: unsafe extern "system" fn(*mut u32) =
+        unsafe { core::mem::transmute(base + GAITEM_HANDLE_DTOR_RVA) };
+    let mut attempted = 0usize;
+    for slot in PORTRAIT_RECORD_PROTECTOR_SLOTS {
+        let param_id = unsafe {
+            safe_read_i32(
+                record + PROFILE_SUMMARY_CHR_ASM_OFFSET + chr_asm_protector_param_id_offset(slot),
+            )
+        };
+        let Some(param_id) = param_id else {
+            continue;
+        };
+        if param_id < 0 {
+            continue;
+        }
+        let mut handle: [u32; 2] = [0; 2];
+        unsafe {
+            let minted = get_protector_handle(gaitem, handle.as_mut_ptr(), param_id);
+            equip_protector(chr_asm, slot, minted);
+            release_handle(handle.as_mut_ptr());
+        }
+        attempted |= 1usize << slot;
+        PORTRAIT_EQUIP_PROTECTOR_REFEEDS.fetch_add(1, Ordering::SeqCst);
+    }
+    // Native always equips its defaults into hands + legs, so those two are attempted on every feed.
+    for slot in PORTRAIT_NATIVE_DEFAULT_PROTECTOR_SLOTS {
+        attempted |= 1usize << slot;
+    }
+    unsafe { publish_protector_resolution(chr_asm, attempted) };
+}
+
+/// Byte offset of protector `slot`'s entry within a `ChrAsm`'s `equipment_param_ids` array.
+fn chr_asm_protector_param_id_offset(slot: i32) -> usize {
+    CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET
+        + (CHR_ASM_PROTECTOR_HEAD_INDEX + slot as usize) * core::mem::size_of::<i32>()
+}
+
+/// Stamp the per-slot armor-resolution semaphore off the renderer's OWN `ChrAsm`, after every slot
+/// that is going to be equipped has been. Reading `equipmentParamIds` here is not the same read the
+/// aggregate counters do: every value in this array has just been DERIVED by `EquipItem` from a handle
+/// lookup, so `-1` means "the handle did not resolve and this armor piece will not render" -- the
+/// exact condition that false-negatived through `naked_kicks=0`.
+unsafe fn publish_protector_resolution(chr_asm: usize, attempted_mask: usize) {
+    let mut resolved = 0usize;
+    let mut unresolved = 0usize;
+    for slot in 0..CHR_ASM_PROTECTOR_SLOT_COUNT {
+        let derived = unsafe {
+            safe_read_i32(chr_asm + chr_asm_protector_param_id_offset(slot as i32))
+        }
+        .unwrap_or(CHR_ASM_PARAM_ID_UNRESOLVED);
+        if derived >= 0 {
+            resolved |= 1usize << slot;
+        } else if attempted_mask & (1usize << slot) != 0 {
+            unresolved += 1;
+        }
+    }
+    PORTRAIT_EQUIP_SLOT_RESOLVED_MASK.store(
+        resolved | (attempted_mask << CHR_ASM_PROTECTOR_SLOT_COUNT),
+        Ordering::SeqCst,
+    );
+    if unresolved > 0 {
+        let total = PORTRAIT_EQUIP_SLOT_UNRESOLVED_TOTAL.fetch_add(unresolved, Ordering::SeqCst)
+            + unresolved;
+        append_autoload_debug(format_args!(
+            "loading-portrait: {unresolved} protector slot(s) EQUIPPED but UNRESOLVED (resolved_mask=0b{resolved:04b} attempted=0b{attempted_mask:04b} total={total}) -- that armor will render invisible"
+        ));
+    }
+}
+
 /// Kick the ASYNC character-model build for ONE profile slot -- a faithful per-slot replica of the body
 /// of the engine's global refresh (dump `FUN_1409aa7d0`), which we no longer call from the post-Continue
 /// feed: the global form iterates all 10 slots and kicks every real+marked one, building EVERY save
@@ -387,6 +517,12 @@ pub(crate) unsafe fn kick_target_profile_slot(
         unsafe { safe_read_usize(renderer + PROFILE_RENDERER_MODEL_INS_OFFSET) }.unwrap_or(0);
     unsafe {
         set_model_source(renderer, record + 0x1a8);
+        // The feed above ran the WHOLE native model-source sequence synchronously: ChrAsm::Copy from
+        // the record, clear the ten weapon-class slots, then equip a freshly-resolved DEFAULT
+        // protector into slots 2 (hands) and 3 (legs). Those two default writes land AFTER the copy,
+        // so hands/legs from the record are always overwritten -- only head and chest survive it, and
+        // they survive carrying the record's (now zeroed) handles. Re-establish exactly those two.
+        reequip_record_protectors(base, renderer, record);
         let fd = facedata_buffer(record + 0x38, 1);
         set_facedata(renderer, fd);
         set_byte290(renderer, b290);
@@ -970,6 +1106,20 @@ impl<'a> SerializedSaveSlot<'a> {
     /// receives the layout it expects: runtime is `[hdr 8][ChrAsmEquipment][gaitem_handles]
     /// [equipment_param_ids][tail]` while the save serializes `[slot indices][ChrAsmEquipment]
     /// [param ids][handles]` -- a raw copy of the save bytes dresses the portrait from garbage.
+    ///
+    /// THE GAITEM HANDLE ARRAY IS LEFT ZERO ON PURPOSE (bd er-effects-rs-pnth). A gaitem handle only
+    /// has meaning against the `gaitemInsTable` of the process that minted it; the FOREIGN save's
+    /// serialized handles index a table this process never populated. Two things follow, and the
+    /// second is why this is a correctness bug rather than a cosmetic one:
+    ///   * the armor never resolves, so head and chest render INVISIBLE while the param ids sitting
+    ///     beside them still read "equipped" to any aggregate semaphore -- the nude-with-equipment
+    ///     class;
+    ///   * both consumers of this image (`CHR_ASM_COPY_RVA` into the ProfileSummary record, then the
+    ///     renderer's own `ChrAsm::Copy` inside the profile feed) run `GaitemHandle::copy` 22 times,
+    ///     a REFCOUNTING assign, so foreign handles are refcounted against live local entries.
+    /// The param ids ARE kept: they are global/static and save-independent, and they are the input
+    /// `kick_target_profile_slot` re-resolves into LOCAL handles right after the native feed. Zeroing
+    /// alone would leave nothing equipped -- there is no param-id-only path in the renderer.
     fn runtime_chr_asm_image(
         self,
         pgd: SerializedPlayerGameData<'a>,
@@ -982,12 +1132,13 @@ impl<'a> SerializedSaveSlot<'a> {
         off = off.checked_add(SAVE_ARM_STYLE_ACTIVE_WEAPON_SLOTS_SIZE)?;
         let param_ids = self.body.get(off..off + SAVE_CHR_ASM_EQUIPMENT_SIZE)?;
         off = off.checked_add(SAVE_CHR_ASM_EQUIPMENT_SIZE)?;
-        let handles = self.body.get(off..off + SAVE_CHR_ASM_EQUIPMENT_SIZE)?;
+        // Bounds only: a save truncated before the handle section is not a whole ChrAsm and must
+        // still fail the walk exactly as it did before. The bytes themselves are dropped.
+        let _foreign_handles = self.body.get(off..off + SAVE_CHR_ASM_EQUIPMENT_SIZE)?;
         let mut image = [0u8; CHR_ASM_SIZE];
         image[CHR_ASM_EQUIPMENT_OFFSET..CHR_ASM_EQUIPMENT_OFFSET + equipment.len()]
             .copy_from_slice(equipment);
-        image[CHR_ASM_GAITEM_HANDLES_OFFSET..CHR_ASM_GAITEM_HANDLES_OFFSET + handles.len()]
-            .copy_from_slice(handles);
+        // `image[CHR_ASM_GAITEM_HANDLES_OFFSET..]` is left at its zero-init value: see the header.
         image[CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET
             ..CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET + param_ids.len()]
             .copy_from_slice(param_ids);
@@ -1279,5 +1430,121 @@ impl<'a> SerializedPlayerGameData<'a> {
                 as *mut u8) = 1;
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod loading_cover_chr_asm_image_tests {
+    use super::*;
+
+    /// Distinctive synthetic section payloads -- no game bytes are read or versioned here. Handles
+    /// carry the real `0x8xxxxxxx` gaitem shape so a stray copy of them is unmistakable in the image.
+    const TEST_EQUIPMENT_FILL: u8 = 0xa5;
+    const TEST_PARAM_ID_BASE: i32 = 0x0001_0000;
+    const TEST_HANDLE_BASE: u32 = 0x8000_0000;
+    const CHR_ASM_ENTRY_COUNT: usize = SAVE_CHR_ASM_EQUIPMENT_SIZE / core::mem::size_of::<i32>();
+
+    fn param_id_at(index: usize) -> i32 {
+        TEST_PARAM_ID_BASE + index as i32
+    }
+
+    /// A save body whose ChrAsm region holds the four serialized sections in save order:
+    /// `[slot indices][ChrAsmEquipment][param ids][gaitem handles]`.
+    fn synthetic_save_body() -> Vec<u8> {
+        let prefix = SAVE_PLAYER_GAME_DATA_MIN_SIZE + SAVE_SPEFFECT_COUNT * SAVE_SPEFFECT_SIZE;
+        let mut body = vec![0u8; prefix];
+        body.resize(body.len() + SAVE_CHR_ASM_EQUIPMENT_SIZE, 0u8); // slot indices
+        body.resize(
+            body.len() + SAVE_ARM_STYLE_ACTIVE_WEAPON_SLOTS_SIZE,
+            TEST_EQUIPMENT_FILL,
+        );
+        for index in 0..CHR_ASM_ENTRY_COUNT {
+            body.extend(param_id_at(index).to_le_bytes());
+        }
+        for index in 0..CHR_ASM_ENTRY_COUNT {
+            body.extend((TEST_HANDLE_BASE | index as u32).to_le_bytes());
+        }
+        body
+    }
+
+    fn image_from(body: &[u8]) -> Option<[u8; CHR_ASM_SIZE]> {
+        SerializedSaveSlot::new(body).runtime_chr_asm_image(SerializedPlayerGameData {
+            body,
+            offset: 0,
+        })
+    }
+
+    /// The whole point of the fix (bd er-effects-rs-pnth): a FOREIGN save's gaitem handles index a
+    /// `gaitemInsTable` this process never populated, so they must never reach the refcounting
+    /// `ChrAsm::Copy` -- not for the ProfileSummary record and not for the renderer.
+    #[test]
+    fn the_foreign_saves_gaitem_handles_are_never_copied_into_the_runtime_image() {
+        let body = synthetic_save_body();
+        let image = image_from(&body).expect("synthetic body walks to the ChrAsm sections");
+        let handles = &image[CHR_ASM_GAITEM_HANDLES_OFFSET
+            ..CHR_ASM_GAITEM_HANDLES_OFFSET + SAVE_CHR_ASM_EQUIPMENT_SIZE];
+        assert!(
+            handles.iter().all(|byte| *byte == 0),
+            "gaitem handle array must be zeroed, got {handles:02x?}"
+        );
+    }
+
+    /// Param ids are the INPUT the head/chest re-resolve turns back into live local handles, so
+    /// zeroing the handles must not take them with it.
+    #[test]
+    fn the_equipment_param_ids_survive_verbatim() {
+        let body = synthetic_save_body();
+        let image = image_from(&body).expect("synthetic body walks to the ChrAsm sections");
+        for index in 0..CHR_ASM_ENTRY_COUNT {
+            let at = CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET + index * core::mem::size_of::<i32>();
+            let got = i32::from_le_bytes(image[at..at + 4].try_into().expect("4 bytes"));
+            assert_eq!(got, param_id_at(index), "param id {index} drifted");
+        }
+    }
+
+    #[test]
+    fn the_chr_asm_equipment_block_still_lands_at_its_runtime_offset() {
+        let body = synthetic_save_body();
+        let image = image_from(&body).expect("synthetic body walks to the ChrAsm sections");
+        let equipment = &image[CHR_ASM_EQUIPMENT_OFFSET
+            ..CHR_ASM_EQUIPMENT_OFFSET + SAVE_ARM_STYLE_ACTIVE_WEAPON_SLOTS_SIZE];
+        assert!(equipment.iter().all(|byte| *byte == TEST_EQUIPMENT_FILL));
+    }
+
+    /// Dropping the handle bytes must NOT drop the bounds check they carried: a body truncated
+    /// inside the handle section is not a whole serialized ChrAsm and must still be rejected.
+    #[test]
+    fn a_body_truncated_inside_the_handle_section_is_still_rejected() {
+        let mut body = synthetic_save_body();
+        body.truncate(body.len() - 1);
+        assert!(image_from(&body).is_none());
+    }
+
+    /// The protector param-id offsets are derived from `ProtectorHead == 12`, which the native
+    /// `EquipProtectorOrAccessory` pins as `add $0xc,%edx`. Keep them inside the struct.
+    #[test]
+    fn protector_param_id_offsets_are_head_chest_hands_legs_and_stay_in_bounds() {
+        let head = chr_asm_protector_param_id_offset(0);
+        assert_eq!(
+            head,
+            CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET
+                + CHR_ASM_PROTECTOR_HEAD_INDEX * core::mem::size_of::<i32>()
+        );
+        for slot in 1..CHR_ASM_PROTECTOR_SLOT_COUNT {
+            assert_eq!(
+                chr_asm_protector_param_id_offset(slot as i32),
+                head + slot * core::mem::size_of::<i32>()
+            );
+        }
+        let last = chr_asm_protector_param_id_offset(CHR_ASM_PROTECTOR_SLOT_COUNT as i32 - 1);
+        assert!(last + core::mem::size_of::<i32>() <= CHR_ASM_SIZE);
+    }
+
+    /// Slots 2 and 3 are deliberately NOT in the re-resolve set: the native feed overwrites hands and
+    /// legs with its own defaults immediately after copying the record, so touching them would be
+    /// dead code and would deviate from vanilla.
+    #[test]
+    fn only_head_and_chest_are_re_resolved_from_the_record() {
+        assert_eq!(PORTRAIT_RECORD_PROTECTOR_SLOTS, [0, 1]);
     }
 }

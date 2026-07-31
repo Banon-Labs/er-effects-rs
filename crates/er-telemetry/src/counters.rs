@@ -1831,6 +1831,23 @@ pub static PROFILE_ROW_LAST_SAVED_STAGE_FAILURES: AtomicUsize = AtomicUsize::new
 pub static LAST_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_FACE_IDENTITY_CHECKS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_FACE_IDENTITY_MISMATCHES: AtomicUsize = AtomicUsize::new(0);
+/// PER-SLOT armor resolution of the loading-screen portrait, stamped after every profile feed.
+/// Low nibble (bits 0..3) = protector slots head/chest/hands/legs whose gaitem handle RESOLVED to a
+/// live `gaitemInsTable` entry; high nibble (bits 4..7) = the slots that were ATTEMPTED (equipped)
+/// during that feed. See `PORTRAIT_EQUIP_SLOT_UNRESOLVED_TOTAL` for why an aggregate count cannot
+/// stand in for this.
+pub static PORTRAIT_EQUIP_SLOT_RESOLVED_MASK: AtomicUsize = AtomicUsize::new(0);
+/// Cumulative count of (feed, protector slot) pairs that were EQUIPPED yet came back with a derived
+/// param id of -1, i.e. the handle did not resolve to a live item and that armor piece renders
+/// invisible. This is the discriminator aggregate 4/4 counters are structurally blind to:
+/// `CS::ChrAsm::EquipItem` DERIVES `equipmentParamIds[slot]` from the handle lookup (storing -1 on
+/// failure), so a param id copied verbatim beside a dead handle still reads "equipped" while nothing
+/// renders -- the `source_visible_armor=4/4 AND renderer 4/4` yet nude contradiction (bd
+/// er-effects-rs-pnth). Slots that are legitimately EMPTY are never attempted and never counted.
+pub static PORTRAIT_EQUIP_SLOT_UNRESOLVED_TOTAL: AtomicUsize = AtomicUsize::new(0);
+/// Count of local gaitem handles minted + equipped + released to re-establish the portrait's head and
+/// chest from the record's param ids (2 per feed for a fully-armored character, 0 for a bare one).
+pub static PORTRAIT_EQUIP_PROTECTOR_REFEEDS: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_SAVE_SWAP_POLL_TICK: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_STATS_PREVIEW_ROW_CURSOR: AtomicUsize = AtomicUsize::new(0);
 pub static SQ_REPRO_TAB_DISCOVERED: AtomicUsize = AtomicUsize::new(0);

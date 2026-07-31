@@ -2244,6 +2244,29 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_portrait_foreign_models",
             PROFILE_FOREIGN_MODELS_MAX.load(Ordering::SeqCst),
         );
+        // NUDE-WITH-EQUIPMENT tripwire (bd er-effects-rs-pnth). Aggregate "4/4 equipped" counters
+        // cannot see this class: `CS::ChrAsm::EquipItem` DERIVES equipmentParamIds from the gaitem
+        // handle lookup, so a param id copied beside a DEAD handle still reads equipped while the
+        // armor renders invisible. `..._slot_resolved` splits that per slot -- low nibble = protector
+        // slots (head/chest/hands/legs) whose handle resolved to a live gaitemInsTable entry, high
+        // nibble = the slots that were actually equipped this feed. `..._unresolved_total` counts
+        // equipped-but-dead slots and must stay 0; `..._refeeds` is how many local handles the
+        // head/chest re-resolve minted+released (2 per feed for an armored character, 0 for a bare one).
+        push_json_usize(
+            body,
+            "oracle_portrait_equip_slot_resolved",
+            PORTRAIT_EQUIP_SLOT_RESOLVED_MASK.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_equip_slot_unresolved_total",
+            PORTRAIT_EQUIP_SLOT_UNRESOLVED_TOTAL.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_equip_protector_refeeds",
+            PORTRAIT_EQUIP_PROTECTOR_REFEEDS.load(Ordering::SeqCst),
+        );
         // Scaleform menu-handler lifecycle guard (repeated-switch ProfileSelect UAF). double_frees > 0
         // proves the guard caught+skipped the crash; ctors/dtors give the churn context.
         push_json_usize(
