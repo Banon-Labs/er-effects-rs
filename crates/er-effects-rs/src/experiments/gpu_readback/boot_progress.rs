@@ -424,12 +424,19 @@ fn boot_view_cover_release_ready(can_move_handoff: bool) -> bool {
     if boot_view_player_render_ready() {
         BOOT_VIEW_RELEASE_RENDER_READY_SEEN.store(1, Ordering::SeqCst);
     }
-    // The game's own "this loading screen is going away" signals. The GFx fadeout is included
-    // because it is the earliest honest one and it demonstrably fires in product
-    // (oracle_loading_screen_gfx_fadeout_hits=91 in that run); the bar threshold is kept for the
-    // boot window, where the native bar does reach full.
+    // The game's own "this loading screen is going away" signals.
+    //
+    // The Scaleform GFx fadeout is deliberately NOT one of them. It looked like the earliest honest
+    // end-of-screen signal, but the run that validated this release proves it contributed nothing:
+    // in both windows the window's first fadeout landed AFTER the release had already fired
+    // (release 28047ms vs fadeout 28569ms; release 52351ms vs fadeout 52875ms) -- the release
+    // latched on the native bar instead. It is also unsafe here. `scaleform_label_goto_hook`
+    // stamps on any timeline label merely CONTAINING "fadeout", and a burst of 64 such stamps
+    // lands during the return-to-title transition (42834ms in that run). Once the cover is armed
+    // earlier to close the re-arm gap (er-effects-rs-q6vk), that burst would latch native-done at
+    // window OPEN, and with the player still resident from the previous world render-ready latches
+    // too -- releasing the cover instantly and defeating that fix.
     if LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst) != 0
-        || LOADING_SCREEN_GFX_FADEOUT_HITS.load(Ordering::SeqCst) != 0
         || LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst) >= 998
     {
         BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN.store(1, Ordering::SeqCst);
