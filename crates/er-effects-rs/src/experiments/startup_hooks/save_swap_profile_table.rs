@@ -368,17 +368,45 @@ pub(crate) fn system_quit_committed_foreign_save_path() -> Option<String> {
     }
 }
 
-/// Patch the loaded slot's profile offscreen RT size BEFORE any post-Continue profile renderer is
+/// Patch the target slot's profile offscreen RT size BEFORE any post-Continue profile renderer is
 /// constructed. The constructor snapshots this table; patching after `PROFILE_TABLE_BUILDER_RVA` runs is
-/// too late and produces the 256x256 loading-screen portrait (Bug A). Returns true only when the loaded
+/// too late and produces the 256x256 loading-screen portrait (Bug A). Returns true only when the target
 /// slot is known and its row is confirmed at the configured target size.
+///
+/// TARGET SLOT, NOT LOADED SLOT (2026-07-30, deterministic different-slot no-portrait root cause).
+/// During a System->Quit->Load-Profile switch the confirmed loaded slot still names the OLD character,
+/// whose row was already patched at boot -- so this function silently early-returned true while the
+/// NEWLY-selected slot's row stayed native 128 (x2 supersample = the observed 256x256 capture, run
+/// 20260730-202840: kick #2/#3 renderers for slot 1 both built 256 while `portrait-res` only logged
+/// slot 2 at boot and slot 1 too late at +41246ms, after both builds). Every switch-window capture was
+/// then small -> pixelated when published, rejected (no portrait at all) once the small-capture gate
+/// landed. Resolve the row for the SELECTED slot as soon as the switch names it, so every later build
+/// (our loading-owned rebuild AND the native mid-window TitleTopDialog rebuild) constructs the target
+/// RT at full size.
 unsafe fn patch_profile_offscreen_size_for_loaded_slot(base: usize) -> bool {
     if !portrait_real_pixels_enabled() {
         return true;
     }
-    let Some(target) = portrait_loaded_slot_confirmed() else {
-        return false;
+    let target = if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+        >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+    {
+        portrait_target_slot()
+    } else {
+        let Some(loaded) = portrait_loaded_slot_confirmed() else {
+            return false;
+        };
+        loaded
     };
+    unsafe { patch_profile_offscreen_size_for_slot(base, target) }
+}
+
+/// Row-level worker for [`patch_profile_offscreen_size_for_loaded_slot`]; also called eagerly from the
+/// switch retarget (`portrait_retarget_and_rearm_for_switch`) the moment the selected slot is known.
+/// Idempotent per slot via `PROFILE_SIZE_PATCHED`.
+pub(crate) unsafe fn patch_profile_offscreen_size_for_slot(base: usize, target: i32) -> bool {
+    if !portrait_real_pixels_enabled() {
+        return true;
+    }
     if !(0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&target) {
         return false;
     }
@@ -505,24 +533,30 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     // renderer's +0x754 is still 0, mark + refresh it immediately (off-cadence) and open the feed window to
     // drive the async build to completion. Idempotent -- once +0x754 latches to 1 this no-ops, so no churn.
     // Only marks REAL slots (post-read), identical to the cadence loop's gate, so it can't pre-empt the read.
-    // ONLY THE LOADED SLOT (2026-06-30, user: a DIFFERENT character showed on the loading screen). The
-    // save holds multiple characters (all 10 slots build models), and the slot-0 readback grabbed a
-    // neighbouring slot's identical-size 1024 RT -> wrong face. Build + mark ONLY the autoload target slot
-    // so the loaded character (Banon, slot 0) is the ONLY portrait model that exists -> no wrong-slot grab.
-    // CORRELATION FIX (er-effects-rs-j3r): render the slot the game ACTUALLY loaded (ac0), via the
-    // shared `portrait_loaded_slot*` source used by every portrait site (build/capture/spare).
-    // CONFIRMED-ONLY (run anim-bind5, 2026-07-03): before ac0/stepper name the slot, do NOTHING --
-    // the old fallback-to-0 kicked a foreign slot-0 build ~340ms early; storm-free that model
-    // persisted and the single-model stability gate starved the drive/publish/anim pipeline for the
-    // whole load. The lever loops below are no-ops with no model built, so skipping the tick is safe.
-    let Some(target_slot) = portrait_loaded_slot_confirmed() else {
-        return;
+    // ONLY THE TARGET SLOT (2026-07-30): during System->Quit->Load Profile, `GameMan.save_slot`
+    // still names the old resident character when the loading-cover portrait must build the newly
+    // selected incoming row. The 19:54 softlock repro proved the drift: target slot=1 but this path
+    // kicked "LOADED slot 2", so the first other-slot load displayed no matching profile render. Use the
+    // selected switch target when present, otherwise fall back to the confirmed loaded slot for boot/load1.
+    let target_slot = if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+        >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+    {
+        portrait_target_slot()
+    } else {
+        let Some(loaded) = portrait_loaded_slot_confirmed() else {
+            return;
+        };
+        loaded
     };
-    // FAIL-FAST SEMAPHORE: assert the slot we're about to render IS the loaded character
-    // (er-effects-rs-j3r). With the correlation fix above, condition A (wrong-slot) is structurally
-    // satisfied and stands as a regression tripwire; condition B (null loaded-slot renderer) stays a
-    // live guard against the 3rd-open null-deref class.
-    unsafe { portrait_render_slot_semaphore(base, target_slot) };
+    if !(0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&target_slot) {
+        return;
+    }
+    // FAIL-FAST SEMAPHORE: only compare against the live loaded character once the target slot has
+    // actually become the loaded slot. During the switch pre-load window, rendering the selected
+    // incoming slot before ac0 flips is intentional, not a wrong-slot failure.
+    if portrait_loaded_slot_confirmed() == Some(target_slot) {
+        unsafe { portrait_render_slot_semaphore(base, target_slot) };
+    }
     {
         let mark: unsafe extern "system" fn(usize, i32) -> u8 =
             unsafe { core::mem::transmute(base + PROFILE_MARK_SLOT_USED_RVA) };
