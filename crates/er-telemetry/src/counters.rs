@@ -1563,9 +1563,23 @@ pub static SAVE_PICKER_OS_LAST_REJECT_REASON: AtomicUsize = AtomicUsize::new(0);
 /// pump, an unbreakable hang. Exhaustion takes the cancel path.
 pub static SAVE_PICKER_OS_REOPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_OS_REOPEN_EXHAUSTED: AtomicUsize = AtomicUsize::new(0);
-/// The `hwndOwner` handed to comdlg32 (0 = none found). Non-zero plus a logged class that is the
-/// game window -- not `ErEffectsLoadingOverlay` -- is what says we owned the dialog correctly.
+/// The `hwndOwner` handed to comdlg32 (0 = none found).
+///
+/// WHICH window this is changed on 2026-07-31 and the old expectation is now WRONG. It used to be
+/// required to be the GAME window; it is now the DIM COVER whenever a cover is up, because an owned
+/// window is always above its owner and that is the only way to make "the picker is in front of the
+/// blur" structural instead of a race. Read it together with `SAVE_PICKER_OS_OWNER_IS_COVER`:
+/// `is_cover = 1` means this equals `SAVE_PICKER_DIM_HWND`, and `is_cover = 0` means it equals the
+/// game window (the boot arm, which raises no cover, and the fallback when the cover did not come
+/// up in time).
 pub static SAVE_PICKER_OS_OWNER_HWND: AtomicUsize = AtomicUsize::new(0);
+/// 1 when the last dialog was owned by the DIM COVER, 0 when it fell back to the ER window.
+///
+/// This is the field that says whether the z-order guarantee was actually in force for a given
+/// open. A System>Quit open with `SAVE_PICKER_DIM_ARM_COUNT` advancing but `is_cover = 0` means the
+/// cover was armed and the dialog STILL took the game window as its owner -- i.e. the cover did not
+/// finish coming up inside `SAVE_PICKER_DIM_ARM_WAIT_MS` and the ordering is back to a race.
+pub static SAVE_PICKER_OS_OWNER_IS_COVER: AtomicUsize = AtomicUsize::new(0);
 /// Save-like `CreateFileW` opens observed while a dialog was open. Attribution for the shell
 /// browsing traffic that otherwise pollutes the save CreateFileW diagnostics.
 pub static SAVE_PICKER_OS_SAVELIKE_OPENS: AtomicUsize = AtomicUsize::new(0);
@@ -1698,6 +1712,45 @@ pub static SAVE_PICKER_DIM_FULL_PUSHES: AtomicUsize = AtomicUsize::new(0);
 /// user's dialog opens means a broken environment is visible in telemetry from a run that never even
 /// opened a picker, instead of surfacing as a missing cover at the worst moment.
 pub static SAVE_PICKER_DIM_SELFTEST: AtomicUsize = AtomicUsize::new(0);
+// ---- COVER OWNERSHIP + ARM HANDSHAKE (user report 2026-07-31) ----
+//
+// Two defects were reported against the same window: the OS picker came up BEHIND the cover, and
+// the cover could be dragged off the game as if it were an unrelated application. Both were the
+// same root cause -- the cover was an UNOWNED top-level popup whose only claim to a z-order was one
+// `HWND_TOP` raise, issued by the overlay thread up to a frame period AFTER `arm` returned and
+// therefore quite possibly after comdlg32 had already created its window. The fix makes both
+// relations structural (game owns cover, cover owns dialog), and these fields are how a run proves
+// the relations actually took rather than being assumed.
+//
+/// Did the cover get installed as an owned window of the ER window? 0 = never attempted (no game
+/// window known), 1 = `SetWindowLongPtrW(GWLP_HWNDPARENT)` stored AND the owner read back equal,
+/// 2 = attempted and the read-back did NOT match, i.e. this environment ignored the store.
+///
+/// A READ-BACK rather than the call's return value on purpose: `SetWindowLongPtrW` returns the
+/// PREVIOUS value, and 0 means both "there was no owner" and "the call failed", so its return
+/// cannot distinguish success from failure on the very first store.
+pub static SAVE_PICKER_DIM_OWNER_SET: AtomicUsize = AtomicUsize::new(0);
+/// The owner HWND read back out of the cover's `GWLP_HWNDPARENT`. Equal to
+/// `SAVE_PICKER_DIM_GAME_HWND` is the proof the attachment took; 0 with `_owner_set = 2` says the
+/// store was silently dropped.
+pub static SAVE_PICKER_DIM_OWNER_READBACK: AtomicUsize = AtomicUsize::new(0);
+/// Milliseconds the ARMING thread waited for the overlay thread to report the cover up at the
+/// game's geometry, on the last arm.
+///
+/// `arm` used to return immediately and the caller went straight into `GetOpenFileNameW`, so the
+/// cover's raise and comdlg32's window creation were unordered. The arm now blocks on an atomic
+/// handshake, which is what makes the ordering real; this field is its cost. Tens of milliseconds
+/// is the expected value (one overlay frame plus the full-screen DIB fill).
+pub static SAVE_PICKER_DIM_ARM_WAIT_MS: AtomicUsize = AtomicUsize::new(0);
+/// Arms that hit the handshake DEADLINE instead of the cover reporting ready. Non-zero means the
+/// overlay thread is wedged or too slow, the dialog fell back to owning itself to the game window,
+/// and the stacking for those opens is a race again -- not a silent degradation.
+pub static SAVE_PICKER_DIM_ARM_WAIT_TIMEOUTS: AtomicUsize = AtomicUsize::new(0);
+/// Frames on which the cover was found to have DRIFTED off the ER window's rect and was snapped
+/// back. Ownership is what a compositor is supposed to honour, but a Wayland compositor with a
+/// move-modifier can still drag any toplevel; this counts the times something moved the cover and
+/// we pulled it back, so "the blur is attached to the game" is measured rather than hoped for.
+pub static SAVE_PICKER_DIM_REANCHOR_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// 1 = an OS Save-As returned an EXISTING file, so the Box3 overwrite confirm is owed.
 ///
 /// A latch rather than a direct `SAVE_FLOW_STAGE` write: the menu thread must not become a second

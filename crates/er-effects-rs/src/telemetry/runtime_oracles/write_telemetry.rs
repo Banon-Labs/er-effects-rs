@@ -489,10 +489,19 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // whether the game task kept ticking while the menu pump was blocked, which nothing static can.
     // A `> 0` says the freeze saved the flow; a `0` with a dialog demonstrably open says the whole
     // frame stalled instead. `_savelike_opens` attributes shell browsing traffic that would
-    // otherwise pollute the save CreateFileW diagnostics, and `_owner_hwnd` must be non-zero AND
-    // logged as the game window, not `ErEffectsLoadingOverlay`.
+    // otherwise pollute the save CreateFileW diagnostics.
+    //
+    // `_owner_hwnd` must be non-zero, and READ IT WITH `_owner_is_cover` -- what it is REQUIRED to
+    // be changed on 2026-07-31. It used to have to be the game window; a System>Quit open should
+    // now show `_owner_is_cover = 1` and an `_owner_hwnd` equal to `_dim_hwnd`, because owning the
+    // dialog to the cover is what makes "the picker is in front of the blur" a z-order invariant
+    // instead of a race (an owned window is always above its owner). `_owner_is_cover = 0` on a
+    // System>Quit open means the cover did not come up inside the arm handshake and the stacking
+    // for that open was unguaranteed; at the missing-save BOOT it is simply correct, since that arm
+    // raises no cover at all. It must still never be `ErEffectsLoadingOverlay`, which is a
+    // different window entirely.
     body.push_str(&format!(
-        "  \"oracle_save_picker_os_dialog_open\": {},\n  \"oracle_save_picker_os_open_count\": {},\n  \"oracle_save_picker_os_closed_with_path\": {},\n  \"oracle_save_picker_os_cancel_count\": {},\n  \"oracle_save_picker_os_error_count\": {},\n  \"oracle_save_picker_os_last_error\": {},\n  \"oracle_save_picker_os_reject_count\": {},\n  \"oracle_save_picker_os_last_reject_reason\": {},\n  \"oracle_save_picker_os_reopen_count\": {},\n  \"oracle_save_picker_os_reopen_exhausted\": {},\n  \"oracle_save_picker_os_ticks_frozen\": {},\n  \"oracle_save_picker_os_owner_hwnd\": {},\n  \"oracle_save_picker_os_savelike_opens\": {},\n  \"oracle_save_dest_confirm_pending\": {},\n",
+        "  \"oracle_save_picker_os_dialog_open\": {},\n  \"oracle_save_picker_os_open_count\": {},\n  \"oracle_save_picker_os_closed_with_path\": {},\n  \"oracle_save_picker_os_cancel_count\": {},\n  \"oracle_save_picker_os_error_count\": {},\n  \"oracle_save_picker_os_last_error\": {},\n  \"oracle_save_picker_os_reject_count\": {},\n  \"oracle_save_picker_os_last_reject_reason\": {},\n  \"oracle_save_picker_os_reopen_count\": {},\n  \"oracle_save_picker_os_reopen_exhausted\": {},\n  \"oracle_save_picker_os_ticks_frozen\": {},\n  \"oracle_save_picker_os_owner_hwnd\": {},\n  \"oracle_save_picker_os_owner_is_cover\": {},\n  \"oracle_save_picker_os_savelike_opens\": {},\n  \"oracle_save_dest_confirm_pending\": {},\n",
         SAVE_PICKER_OS_DIALOG_OPEN.load(Ordering::SeqCst),
         SAVE_PICKER_OS_OPEN_COUNT.load(Ordering::SeqCst),
         SAVE_PICKER_OS_CLOSED_WITH_PATH.load(Ordering::SeqCst),
@@ -505,6 +514,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SAVE_PICKER_OS_REOPEN_EXHAUSTED.load(Ordering::SeqCst),
         SAVE_PICKER_OS_TICKS_FROZEN.load(Ordering::SeqCst),
         SAVE_PICKER_OS_OWNER_HWND.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OS_OWNER_IS_COVER.load(Ordering::SeqCst),
         SAVE_PICKER_OS_SAVELIKE_OPENS.load(Ordering::SeqCst),
         SAVE_DEST_CONFIRM_PENDING.load(Ordering::SeqCst)
     ));
@@ -555,7 +565,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // must land BETWEEN `_z_foreign` (comdlg32) and `_z_game`, which is how the stacking is checked
     // without anyone looking at a screenshot.
     body.push_str(&format!(
-        "  \"oracle_save_picker_dim_armed\": {},\n  \"oracle_save_picker_dim_arm_count\": {},\n  \"oracle_save_picker_dim_disarm_count\": {},\n  \"oracle_save_picker_dim_frames\": {},\n  \"oracle_save_picker_dim_alive_ms\": {},\n  \"oracle_save_picker_dim_teardown_reason\": {},\n  \"oracle_save_picker_dim_stage\": {},\n  \"oracle_save_picker_dim_selftest\": {},\n  \"oracle_save_picker_dim_hwnd\": {},\n  \"oracle_save_picker_dim_game_hwnd\": {},\n  \"oracle_save_picker_dim_update_fails\": {},\n  \"oracle_save_picker_dim_z_self\": {},\n  \"oracle_save_picker_dim_z_game\": {},\n  \"oracle_save_picker_dim_z_foreign\": {},\n  \"oracle_save_picker_dim_z_violations\": {},\n  \"oracle_save_picker_dim_full_pushes\": {},\n  \"oracle_save_picker_dim_foreign_fg_hwnd\": {},\n",
+        "  \"oracle_save_picker_dim_armed\": {},\n  \"oracle_save_picker_dim_arm_count\": {},\n  \"oracle_save_picker_dim_disarm_count\": {},\n  \"oracle_save_picker_dim_frames\": {},\n  \"oracle_save_picker_dim_alive_ms\": {},\n  \"oracle_save_picker_dim_teardown_reason\": {},\n  \"oracle_save_picker_dim_stage\": {},\n  \"oracle_save_picker_dim_selftest\": {},\n  \"oracle_save_picker_dim_hwnd\": {},\n  \"oracle_save_picker_dim_game_hwnd\": {},\n  \"oracle_save_picker_dim_update_fails\": {},\n  \"oracle_save_picker_dim_z_self\": {},\n  \"oracle_save_picker_dim_z_game\": {},\n  \"oracle_save_picker_dim_z_foreign\": {},\n  \"oracle_save_picker_dim_z_violations\": {},\n  \"oracle_save_picker_dim_full_pushes\": {},\n  \"oracle_save_picker_dim_foreign_fg_hwnd\": {},\n  \"oracle_save_picker_dim_owner_set\": {},\n  \"oracle_save_picker_dim_owner_readback\": {},\n  \"oracle_save_picker_dim_arm_wait_ms\": {},\n  \"oracle_save_picker_dim_arm_wait_timeouts\": {},\n  \"oracle_save_picker_dim_reanchor_count\": {},\n",
         er_telemetry::counters::SAVE_PICKER_DIM_ARMED.load(Ordering::SeqCst),
         er_telemetry::counters::SAVE_PICKER_DIM_ARM_COUNT.load(Ordering::SeqCst),
         er_telemetry::counters::SAVE_PICKER_DIM_DISARM_COUNT.load(Ordering::SeqCst),
@@ -572,7 +582,12 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         er_telemetry::counters::SAVE_PICKER_DIM_Z_FOREIGN.load(Ordering::SeqCst) as isize,
         er_telemetry::counters::SAVE_PICKER_DIM_Z_VIOLATIONS.load(Ordering::SeqCst),
         er_telemetry::counters::SAVE_PICKER_DIM_FULL_PUSHES.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_DIM_FOREIGN_FG_HWND.load(Ordering::SeqCst)
+        er_telemetry::counters::SAVE_PICKER_DIM_FOREIGN_FG_HWND.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_DIM_OWNER_SET.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_DIM_OWNER_READBACK.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_DIM_ARM_WAIT_MS.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_DIM_ARM_WAIT_TIMEOUTS.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_DIM_REANCHOR_COUNT.load(Ordering::SeqCst)
     ));
     // Per-slot info fields (Level caption/value, PlayTime) on browse rows with no character. `_hidden`
     // > 0 proves the suppression reached real rows; `_non_display` > 0 or a `_last_datatype` other

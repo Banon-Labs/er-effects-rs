@@ -19,6 +19,13 @@
 // keystrokes typed into the dialog. Blocking the menu pump means the menus cannot process anything
 // at all, which is the modality we want.
 //
+// THAT WARNING IS ABOUT THE THREAD, NOT ABOUT WHICH WINDOW OWNS THE DIALOG, and the two got read as
+// one thing once already. `hwndOwner` is now the DIM COVER rather than the game window whenever a
+// cover is up (see `os_dialog_owner` for the full argument): the call is still inline on this same
+// thread, so nothing above changes, and what comdlg32 disables becomes a click-through,
+// non-activating window with no input to lose. The modality still comes from the block -- from the
+// sentence directly above this one -- and never came from `EnableWindow`.
+//
 // The game task keeps ticking meanwhile -- see `save_flow_next_stage_ticks`, which is why the
 // flow's deadlines are frozen while `SAVE_PICKER_OS_DIALOG_OPEN` is set.
 //
@@ -43,6 +50,7 @@ pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_LAST_ERROR;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_LAST_REJECT_REASON;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_OPEN_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_OWNER_HWND;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_OWNER_IS_COVER;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_REJECT_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_REOPEN_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_REOPEN_EXHAUSTED;
@@ -209,14 +217,44 @@ impl Drop for OsDialogClaim {
     }
 }
 
-/// The `hwndOwner` for a dialog: the game's own main window, so a window manager keeps the dialog
-/// in front of it. Never `hooks::own_window()` -- see [`game_main_window`].
+/// The `hwndOwner` for a dialog: THE DIM COVER when one is up, otherwise the game's own main
+/// window. Never `hooks::own_window()` -- see [`game_main_window`].
+///
+/// WHY THE COVER (user report 2026-07-31: the picker came up BEHIND the blur). `hwndOwner` is not
+/// a hint, it is the z-order relation: a window is always above the window that owns it. Owning the
+/// dialog to the game window only promises dialog-above-GAME, and left dialog-vs-cover to be
+/// settled by creation order -- a race the cover can and did win, because its `HWND_TOP` raise was
+/// issued asynchronously by the overlay thread and could land after comdlg32's window existed. The
+/// cover is itself an owned popup of the ER window (`picker_dim::attach_to_game`), so owning the
+/// dialog to the cover makes the whole chain game < cover < dialog a window-manager invariant.
+///
+/// THE FILE-HEADER INPUT WARNING DOES NOT APPLY TO THIS, and the distinction is worth being exact
+/// about. That warning is about calling the dialog from ANOTHER THREAD while the game window is the
+/// owner: comdlg32 disables its owner, so a cross-thread open would disable the game window while
+/// the thread that polls raw input kept running. Nothing about the thread changes here -- the call
+/// is still inline on the thread that owns the pump. What changes is WHICH window comdlg32
+/// disables, and the cover is `WS_EX_NOACTIVATE | WS_EX_TRANSPARENT` behind a bare `DefWindowProcW`
+/// proc, so it has no input to be deprived of.
+///
+/// Leaving the game window ENABLED is likewise not a loss of modality. The modality has never come
+/// from `EnableWindow` -- the header says so directly: "Blocking the menu pump means the menus
+/// cannot process anything at all, which is the modality we want." The one thing an enabled game
+/// window could still do that a disabled one could not -- be clicked, and raised over the dialog --
+/// is precisely what the ownership chain forbids, since a window can never be raised above the
+/// windows it owns.
 ///
 /// A null result is NOT fatal: pass it through and log `owner=none`, so a report can distinguish
 /// "we passed no owner" from "we passed one and the dialog still went behind the game".
 fn os_dialog_owner() -> HWND {
-    let hwnd = game_main_window();
+    // Null cover = no cover to own to: the missing-save BOOT arm passes `PickerDim::None` and
+    // raises none, and an arm whose cover did not come up in time reports null rather than hand
+    // comdlg32 a window that is still 1x1 at the origin -- comdlg32 CENTRES the dialog on its
+    // owner, so that would put the picker in the desktop's top-left corner.
+    let cover = picker_dim_armed_cover_hwnd();
+    let is_cover = !cover.0.is_null();
+    let hwnd = if is_cover { cover } else { game_main_window() };
     SAVE_PICKER_OS_OWNER_HWND.store(hwnd.0 as usize, Ordering::SeqCst);
+    SAVE_PICKER_OS_OWNER_IS_COVER.store(usize::from(is_cover), Ordering::SeqCst);
     hwnd
 }
 
@@ -307,7 +345,27 @@ fn os_dialog_run(
         "save-picker-os: dialog OPENED surface={} owner=0x{:x}{} dir='{}' leaf='{}' filter='{}' flags=0x{:x} overwrite_prompt=NOT_SET commit_window_armed={commit_window_armed}",
         if save_as { "save-as" } else { "load" },
         owner.0 as usize,
-        if owner.0.is_null() { " (owner=none)" } else { "" },
+        // Spell out the OWNERSHIP CHAIN, because "the picker is in front of the blur" is now a
+        // structural claim about these three handles and a log that only shows one of them cannot
+        // be used to check it. `owner=<cover>` with the cover owned by the game is the good shape;
+        // `owner=<game>` while a cover is armed means the handshake timed out and this open's
+        // stacking is back to a race.
+        if owner.0.is_null() {
+            " (owner=none)".to_owned()
+        } else if SAVE_PICKER_OS_OWNER_IS_COVER.load(Ordering::SeqCst) == 1 {
+            format!(
+                " (owner=the dim COVER, itself owned by ER window 0x{:x}: attach={} readback=0x{:x}; game < cover < dialog)",
+                er_telemetry::counters::SAVE_PICKER_DIM_GAME_HWND.load(Ordering::SeqCst),
+                er_telemetry::counters::SAVE_PICKER_DIM_OWNER_SET.load(Ordering::SeqCst),
+                er_telemetry::counters::SAVE_PICKER_DIM_OWNER_READBACK.load(Ordering::SeqCst),
+            )
+        } else {
+            format!(
+                " (owner=the GAME window; no cover was up for this open -- dim_armed={} arm_wait_timeouts={})",
+                er_telemetry::counters::SAVE_PICKER_DIM_ARMED.load(Ordering::SeqCst),
+                er_telemetry::counters::SAVE_PICKER_DIM_ARM_WAIT_TIMEOUTS.load(Ordering::SeqCst),
+            )
+        },
         system_quit_windows_path_for_log(start_dir),
         leaf,
         extensions.join("/"),
