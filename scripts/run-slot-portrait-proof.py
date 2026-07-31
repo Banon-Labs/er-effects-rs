@@ -225,6 +225,13 @@ def main() -> int:
         default="",
         help="comma-separated CHAIN of switch targets (e.g. '1,3,2'); overrides --switch-slot",
     )
+    ap.add_argument(
+        "--switch-files",
+        default="",
+        help="optional comma-separated save paths per chain entry (CASE 2 cross-save: written to "
+        "er-effects-switch-save-file.txt as a Z:-prefixed Windows path BEFORE the slot; empty "
+        "entry = same-save CASE 1)",
+    )
     ap.add_argument("--label", default="proof")
     args = ap.parse_args()
 
@@ -318,12 +325,22 @@ def main() -> int:
             if args.switch_slots.strip()
             else [args.switch_slot]
         )
+        files = [s.strip() for s in args.switch_files.split(",")] if args.switch_files.strip() else []
         verdict["chain"] = chain
+        verdict["chain_files"] = files
         switches = []
         overall_ok = True
         for idx, slot in enumerate(chain, start=1):
             sw: dict = {"slot": slot, "index": idx}
             base_s = snap(read_telemetry())
+            fpath = files[idx - 1] if idx - 1 < len(files) else ""
+            if fpath:
+                win = "Z:" + str(Path(fpath).resolve()).replace("/", "\\")
+                SWITCH_SAVE.write_text(win + "\n")
+                sw["switch_file"] = fpath
+                log(f"[switch {idx}/{len(chain)}] WROTE er-effects-switch-save-file.txt = {win}")
+            elif SWITCH_SAVE.exists():
+                SWITCH_SAVE.unlink()
             SWITCH_SLOT.write_text(f"{slot}\n")
             log(f"[switch {idx}/{len(chain)}] WROTE er-effects-switch-slot.txt = {slot}")
             switch_t0 = time.time()

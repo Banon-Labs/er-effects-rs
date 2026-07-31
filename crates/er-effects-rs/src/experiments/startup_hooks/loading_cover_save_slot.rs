@@ -352,6 +352,15 @@ unsafe fn restore_loading_portrait_visible_armor(source_chr_asm: usize, renderer
         let dst_param_addr = renderer_chr_asm + CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET + slot * core::mem::size_of::<i32>();
         let handle = unsafe { core::ptr::read_volatile(src_handle_addr as *const u32) };
         let param = unsafe { core::ptr::read_volatile(src_param_addr as *const u32) };
+        // OCCUPIED SOURCE SLOTS ONLY (user eval 2026-07-31, run 20260731-user-eval-pr117: the
+        // 125-Frenzy character rendered fully nude). The native ctor normalization writes DEFAULT
+        // protectors -- the body underwear -- into empty slots; copying a source slot that is EMPTY
+        // (param NONE, no gaitem handle) stomps that default with "nothing equipped" and renders
+        // bare skin. Restore only what the character actually wears; leave native defaults for the
+        // rest so unarmored characters keep their underwear, exactly like the equip menu shows them.
+        if param == CHR_ASM_EMPTY_EQUIP_PARAM_ID && handle == 0 {
+            continue;
+        }
         unsafe { core::ptr::write_volatile(dst_handle_addr as *mut u32, handle) };
         unsafe { core::ptr::write_volatile(dst_param_addr as *mut u32, param) };
     }

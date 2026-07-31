@@ -3,6 +3,7 @@
 #![allow(unused_imports)]
 
 include!("title/product_autoload_gates.rs");
+include!("title/title_load_step_hooks.rs");
 include!("title/title_tick_cover.rs");
 include!("title/switch_slot_control.rs");
 include!("title/profile_select_flow.rs");
