@@ -1963,6 +1963,23 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_boot_view_release_ready_ms",
             er_telemetry::counters::BOOT_VIEW_RELEASE_READY_MS.load(Ordering::SeqCst),
         );
+        // q6vk character-load gate. held_for_confirm > 0 proves the gate engaged on a switch;
+        // before_confirm MUST stay 0 -- a release without its character load is the defect back.
+        push_json_usize(
+            body,
+            "oracle_boot_view_release_held_for_confirm",
+            er_telemetry::counters::BOOT_VIEW_RELEASE_HELD_FOR_CONFIRM.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_release_before_confirm",
+            er_telemetry::counters::BOOT_VIEW_RELEASE_BEFORE_CONFIRM.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_release_require_confirm",
+            er_telemetry::counters::BOOT_VIEW_RELEASE_REQUIRE_CONFIRM.load(Ordering::SeqCst),
+        );
         push_json_usize(
             body,
             "oracle_boot_view_cover_window_ms",

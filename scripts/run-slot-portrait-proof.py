@@ -93,6 +93,8 @@ PORTRAIT_KEYS = [
     "oracle_boot_view_release_render_ready_seen",
     "oracle_boot_view_release_native_done_seen",
     "oracle_boot_view_release_ready_ms",
+    "oracle_boot_view_release_held_for_confirm",
+    "oracle_boot_view_release_before_confirm",
     "oracle_portrait_loadwin_total", "oracle_portrait_loadwin_ok_full",
     "oracle_portrait_loadwin_displayed_small", "oracle_portrait_loadwin_displayed_stale",
     "oracle_portrait_loadwin_missing", "oracle_portrait_loadwin_open",
@@ -499,6 +501,33 @@ def main() -> int:
         verdict["switches"] = switches
         verdict["result"] = switches[-1]["result"] if switches else "FAIL:no-switch-ran"
         verdict["portrait_pass"] = overall_ok
+        # ---- er-effects-rs-q6vk ACCEPTANCE: the cover must hold across EVERY native loading
+        # screen, not just the first. The per-switch exposure deltas above are aggregates and hid
+        # this once already -- run 20260731-122038 read as "exposure halved" while loadwin window 2
+        # was still 116 frames uncovered. Gate on the per-window record instead.
+        final_t = read_telemetry()
+        history = final_t.get("oracle_portrait_loadwin_history") or []
+        dirty = [w for w in history if int(w.get("expo") or 0) > 0]
+        verdict["loadwin_history"] = history
+        verdict["windows_with_exposure"] = [
+            {"i": w.get("i"), "expo": w.get("expo"), "cause": w.get("cause")} for w in dirty
+        ]
+        verdict["release_held_for_confirm"] = final_t.get(
+            "oracle_boot_view_release_held_for_confirm"
+        )
+        verdict["release_before_confirm"] = final_t.get("oracle_boot_view_release_before_confirm")
+        verdict["semantic_releases"] = final_t.get("oracle_boot_view_semantic_releases")
+        # A1: every window clean. A4: no release landed before its character load.
+        cover_ok = not dirty and (final_t.get("oracle_boot_view_release_before_confirm") or 0) == 0
+        verdict["cover_pass"] = cover_ok
+        log(
+            f"[cover] windows={len(history)} with_exposure={len(dirty)} "
+            f"held_for_confirm={verdict['release_held_for_confirm']} "
+            f"before_confirm={verdict['release_before_confirm']} "
+            f"semantic_releases={verdict['semantic_releases']} cover_pass={cover_ok}"
+        )
+        for w in dirty:
+            log(f"[cover]   window #{w.get('i')} expo={w.get('expo')} cause={w.get('cause')}")
         # settle a moment for a stable final telemetry copy, then tear down.
         settle_until = time.time() + 5.0
         while time.time() < settle_until:
@@ -509,7 +538,9 @@ def main() -> int:
         watch.close()
         (art / "verdict.json").write_text(json.dumps(verdict, indent=1))
         log(f"verdict -> {art / 'verdict.json'}")
-    return 0 if verdict.get("portrait_pass") else 1
+    # Both gates must hold: the portrait rendered AND the cover never let the game's own loading
+    # screen through. `cover_pass` is absent on runs that fail before any window closes.
+    return 0 if (verdict.get("portrait_pass") and verdict.get("cover_pass")) else 1
 
 
 if __name__ == "__main__":
