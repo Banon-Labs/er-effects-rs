@@ -220,6 +220,11 @@ def rotate_outputs(art: Path) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--switch-slot", type=int, default=1)
+    ap.add_argument(
+        "--switch-slots",
+        default="",
+        help="comma-separated CHAIN of switch targets (e.g. '1,3,2'); overrides --switch-slot",
+    )
     ap.add_argument("--label", default="proof")
     args = ap.parse_args()
 
@@ -307,96 +312,145 @@ def main() -> int:
             f"rgba_v={base.get('oracle_loading_bg_portrait_rgba_version')} "
             f"w={base.get('oracle_ls_portrait_w')}x{base.get('oracle_ls_portrait_h')}")
 
-        # ---- phase 2: arm the switch via the product control file -------------------
-        SWITCH_SLOT.write_text(f"{args.switch_slot}\n")
-        log(f"WROTE er-effects-switch-slot.txt = {args.switch_slot} (the deterministic menu click)")
-        switch_t0 = time.time()
-        deadline = switch_t0 + cap
-        window_seen_at = 0.0
-        shot_window = False
-        shot_display = False
-        max_w = 0
-        max_h = 0
-        window_display_frames = 0
-        last_mtime = TELEMETRY.stat().st_mtime if TELEMETRY.exists() else 0.0
-        stall_since = time.time()
-        result = "FAIL:load2-cap"
-        while time.time() < deadline:
-            watch.wait(1.0)
-            if TELEMETRY.exists():
-                m = TELEMETRY.stat().st_mtime
-                if m != last_mtime:
-                    last_mtime = m
-                    stall_since = time.time()
-            if time.time() - stall_since > 60.0:
-                result = "FAIL:telemetry-frozen-60s"
-                break
-            t = read_telemetry()
-            if not t:
-                continue
-            s = snap(t)
-            s["t_s"] = round(time.time() - switch_t0, 1)
-            series_f.write(json.dumps(s) + "\n")
-            series_f.flush()
-            phase = t.get("system_quit_quickload_phase") or 0
-            loading = t.get("oracle_now_loading") is True or t.get("oracle_player_present") is not True
-            in_window = phase >= 2 and loading
-            if in_window and window_seen_at == 0.0:
-                window_seen_at = time.time()
-                log(f"load2 window OPEN at +{s['t_s']}s (phase={phase})")
-            if in_window:
-                w = int(t.get("oracle_ls_portrait_w") or 0)
-                h = int(t.get("oracle_ls_portrait_h") or 0)
-                max_w, max_h = max(max_w, w), max(max_h, h)
-                window_display_frames = max(
-                    window_display_frames,
-                    int(t.get("oracle_portrait_display_frames_current_window") or 0),
-                )
-                if not shot_window and time.time() - window_seen_at > 3.0:
-                    # Protocol: the loading-screen-portrait moment, where the USER can see the
-                    # feature failing or working. Never delayed for prettiness.
-                    capture(art / "loading-screen-portrait-screenshot.jpg")
-                    shot_window = True
-                if not shot_display and window_display_frames > 0:
-                    capture(art / "portrait-display-moment.jpg")
-                    shot_display = True
-            if proc.poll() is not None and not er_pids():
-                result = "FAIL:game-exited-during-switch(quit-to-desktop path?)"
-                break
-            if window_seen_at != 0.0 and player_in_world(t) and phase >= 2:
-                result = "LOADED"
-                break
-        load2_t = time.time() - switch_t0
-        final = snap(read_telemetry())
-        verdict["load2"] = final
-        verdict["load2_seconds"] = round(load2_t, 1)
-        verdict["window_max_capture"] = [max_w, max_h]
-        verdict["window_display_frames"] = window_display_frames
-        rejected_delta = (final.get("oracle_ls_portrait_rejected_publishes") or 0) - (
-            base.get("oracle_ls_portrait_rejected_publishes") or 0
+        # ---- phase 2..N: chained switches via the product control file --------------
+        chain = (
+            [int(s) for s in args.switch_slots.replace(",", " ").split()]
+            if args.switch_slots.strip()
+            else [args.switch_slot]
         )
-        verdict["rejected_delta"] = rejected_delta
-        verdict["result"] = result
-        published_slot_ok = final.get("oracle_ls_portrait_slot") == args.switch_slot + 1
-        portrait_pass = (
-            result == "LOADED"
-            and max(max_w, max_h) >= 1024
-            and window_display_frames > 0
-            and rejected_delta == 0
-        )
-        verdict["published_slot_ok"] = published_slot_ok
-        verdict["portrait_pass"] = portrait_pass
-        log(
-            f"RESULT={result} portrait_pass={portrait_pass} max_capture={max_w}x{max_h} "
-            f"display_frames={window_display_frames} rejected_delta={rejected_delta} "
-            f"published_slot={final.get('oracle_ls_portrait_slot')} (want {args.switch_slot + 1}) "
-            f"char={final.get('oracle_char_name')}"
-        )
-        # settle a moment in world for a stable final telemetry copy, then tear down.
+        verdict["chain"] = chain
+        switches = []
+        overall_ok = True
+        for idx, slot in enumerate(chain, start=1):
+            sw: dict = {"slot": slot, "index": idx}
+            base_s = snap(read_telemetry())
+            SWITCH_SLOT.write_text(f"{slot}\n")
+            log(f"[switch {idx}/{len(chain)}] WROTE er-effects-switch-slot.txt = {slot}")
+            switch_t0 = time.time()
+            deadline = switch_t0 + cap
+            window_seen_at = 0.0
+            window_closed_at = 0.0
+            shot_window = False
+            shot_display = False
+            max_w = max_h = 0
+            window_display_frames = 0
+            last_mtime = TELEMETRY.stat().st_mtime if TELEMETRY.exists() else 0.0
+            stall_since = time.time()
+            result = "FAIL:load-cap"
+            while time.time() < deadline:
+                watch.wait(1.0)
+                if TELEMETRY.exists():
+                    m = TELEMETRY.stat().st_mtime
+                    if m != last_mtime:
+                        last_mtime = m
+                        stall_since = time.time()
+                if time.time() - stall_since > 60.0:
+                    result = "FAIL:telemetry-frozen-60s"
+                    break
+                t = read_telemetry()
+                if not t:
+                    continue
+                s = snap(t)
+                s["t_s"] = round(time.time() - switch_t0, 1)
+                s["switch_index"] = idx
+                series_f.write(json.dumps(s) + "\n")
+                series_f.flush()
+                phase = t.get("system_quit_quickload_phase") or 0
+                loading = t.get("oracle_now_loading") is True or t.get("oracle_player_present") is not True
+                in_window = phase >= 2 and loading
+                if in_window and window_seen_at == 0.0:
+                    window_seen_at = time.time()
+                    log(f"[switch {idx}] window OPEN at +{s['t_s']}s (phase={phase})")
+                if in_window:
+                    w = int(t.get("oracle_ls_portrait_w") or 0)
+                    h = int(t.get("oracle_ls_portrait_h") or 0)
+                    max_w, max_h = max(max_w, w), max(max_h, h)
+                    window_display_frames = max(
+                        window_display_frames,
+                        int(t.get("oracle_portrait_display_frames_current_window") or 0),
+                    )
+                    if not shot_window and time.time() - window_seen_at > 3.0:
+                        # Protocol: the loading-screen-portrait moment, where the USER can see
+                        # the feature failing or working. Never delayed for prettiness.
+                        capture(art / f"loading-screen-portrait-screenshot-sw{idx}.jpg")
+                        shot_window = True
+                    if not shot_display and window_display_frames > 0:
+                        capture(art / f"portrait-display-moment-sw{idx}.jpg")
+                        shot_display = True
+                if proc.poll() is not None and not er_pids():
+                    result = "FAIL:game-exited-during-switch(quit-to-desktop path?)"
+                    break
+                if window_seen_at != 0.0 and player_in_world(t) and phase >= 2:
+                    window_closed_at = time.time()
+                    result = "LOADED"
+                    break
+            sw["result"] = result
+            sw["load_seconds"] = round(time.time() - switch_t0, 1)
+            window_s = round((window_closed_at or time.time()) - (window_seen_at or switch_t0), 1)
+            sw["window_seconds"] = window_s
+            final = snap(read_telemetry())
+            rejected_delta = (final.get("oracle_ls_portrait_rejected_publishes") or 0) - (
+                base_s.get("oracle_ls_portrait_rejected_publishes") or 0
+            )
+            sw["window_max_capture"] = [max_w, max_h]
+            sw["window_display_frames"] = window_display_frames
+            sw["rejected_delta"] = rejected_delta
+            sw["published_slot"] = final.get("oracle_ls_portrait_slot")
+            # A same-map in-place reload can finish faster than the ~2.3s confirm->publish
+            # latency; a short window with no displayed frame is recorded, not failed.
+            short_window = window_s < 4.0
+            sw["portrait_pass"] = (
+                result == "LOADED"
+                and rejected_delta == 0
+                and (short_window or (max(max_w, max_h) >= 1024 and window_display_frames > 0))
+            )
+            sw["portrait_short_window"] = short_window
+            # ---- HANDOFF COMPLETION (the dead-Load-Profile-button class): after the world
+            # is reached, the switch machine must actually FINISH -- phase back to IDLE, the
+            # in-game menu job rebuilt, now_loading cleared. These are the exact semaphores
+            # that stayed wedged in run 20260731-user-portrait-verify (phase=4 for 15 min).
+            comp_deadline = time.time() + 45.0
+            completed = False
+            while time.time() < comp_deadline:
+                watch.wait(1.0)
+                t = read_telemetry()
+                if not t:
+                    continue
+                if (
+                    (t.get("system_quit_quickload_phase") or 0) == 0
+                    and t.get("oracle_switch_menu_job_present") == 1
+                    and not t.get("oracle_now_loading")
+                ):
+                    completed = True
+                    break
+            tt = read_telemetry()
+            sw["handoff_complete"] = completed
+            sw["handoff_phase"] = tt.get("system_quit_quickload_phase")
+            sw["handoff_menu_job"] = tt.get("oracle_switch_menu_job_present")
+            sw["handoff_now_loading"] = tt.get("oracle_now_loading")
+            sw["handoff_request_code"] = tt.get("oracle_stepfinish_request_code")
+            sw["char"] = tt.get("oracle_char_name")
+            switches.append(sw)
+            log(
+                f"[switch {idx}] RESULT={result} portrait_pass={sw['portrait_pass']} "
+                f"window={window_s}s capture={max_w}x{max_h} display={window_display_frames} "
+                f"rejected_delta={rejected_delta} handoff_complete={completed} "
+                f"(phase={sw['handoff_phase']} menu_job={sw['handoff_menu_job']} "
+                f"now_loading={sw['handoff_now_loading']}) char={sw['char']}"
+            )
+            if result != "LOADED" or not completed:
+                overall_ok = False
+                break
+            if not sw["portrait_pass"]:
+                overall_ok = False
+        verdict["switches"] = switches
+        verdict["result"] = switches[-1]["result"] if switches else "FAIL:no-switch-ran"
+        verdict["portrait_pass"] = overall_ok
+        # settle a moment for a stable final telemetry copy, then tear down.
         settle_until = time.time() + 5.0
         while time.time() < settle_until:
             watch.wait(1.0)
-        teardown(f"done:{result}")
+        teardown(f"done:{verdict['result']}")
     finally:
         series_f.close()
         watch.close()

@@ -378,7 +378,10 @@ pub(crate) use er_telemetry::counters::CHILD_DONE_DIAG_COUNT;
 /// RAM-gated drive completes before an incidental unfocused-mouse click can contaminate the run.
 pub(crate) const INWORLD_FINALIZE_DRIVE_RELEASE_FRAMES: usize = 40;
 /// Sustained stuck-at-18 frames before the recovery drives the ending request (~2s at task rate).
-pub(crate) const ENDING_REQUEST_STALL_RELEASE_FRAMES: usize = 120;
+// Raised 120 -> 600 (~10s at 60fps) on 2026-07-31: the rt5d drive is now a PARKED-STATE recovery
+// (re-enabled after the live dead-menus session), and the longer streak guarantees it can never fire
+// on a slow but advancing load -- only on a world genuinely stuck post-entry at the frozen signature.
+pub(crate) const ENDING_REQUEST_STALL_RELEASE_FRAMES: usize = 600;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT;
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT: AtomicUsize =
     AtomicUsize::new(0);
