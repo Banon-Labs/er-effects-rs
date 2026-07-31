@@ -1561,32 +1561,12 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_title_scaleform_resource_ctor_last_caller_rva",
             title_scaleform_resource_ctor_last_caller_rva,
         );
-        push_json_str(body, "oracle_tpf_texture_key", ER_TPF_COVER_SYSTEX_KEY);
-        push_json_bool(
-            body,
-            "oracle_tpf_texture_registered",
-            ER_TPF_COVER_REGISTERED.load(Ordering::SeqCst) != 0,
-        );
-        push_json_usize(
-            body,
-            "oracle_tpf_texture_last_rescap",
-            ER_TPF_COVER_LAST_RESCAP.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_tpf_texture_bound",
-            ER_TPF_COVER_BOUND.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_tpf_texture_failures",
-            ER_TPF_COVER_FAILURES.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_tpf_texture_last_error",
-            ER_TPF_COVER_LAST_ERROR.load(Ordering::SeqCst),
-        );
+        // REMOVED 2026-07-31 (er-effects-rs-56fx): oracle_tpf_texture_registered / _last_rescap /
+        // _bound / _failures / _last_error. All five counters had zero writers -- the TPF cover
+        // texture path never reports through them -- and three carried sentinel initialisers
+        // (ER_TPF_COVER_ERR_NONE and friends), so they emitted a plausible-looking value forever
+        // rather than an obviously-absent 0. `oracle_tpf_texture_key` stays: it is a static string,
+        // not a counter. Re-add these WITH writers at the register/bind sites if that path is built.
         // Stats-panel neutral-background wire-up oracles (memory-read telemetry, NOT screenshot). A
         // runtime watcher confirms the character render is blanked, each per-slot neutral bg registered
         // into the repos, and each visible face bind redirected to our key -- all without an image.
