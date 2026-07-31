@@ -333,8 +333,11 @@ unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) {
             && crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur
             && crate::experiments::BOOT_VIEW_STOPPED.load(Ordering::SeqCst) != 0
         {
-            PRESENT_COMPOSITE_EARLY_SKIPS.fetch_add(1, Ordering::SeqCst);
-            return;
+            if !boot_view_try_resume_after_native_reappears(base) {
+                boot_view_note_native_exposure(base, 3);
+                PRESENT_COMPOSITE_EARLY_SKIPS.fetch_add(1, Ordering::SeqCst);
+                return;
+            }
         }
     }
     // NOTE: the offscreen RASTERIZE is NOT driven here. Present is the WRONG GX phase -- the frame's GX
@@ -350,6 +353,7 @@ unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) {
     // passthrough and the game boots exactly as it does overlay-less. (Wine/vkd3d composites throughout,
     // as before.)
     if composite_suppressed_on_native() {
+        boot_view_note_native_exposure(base, 4);
         PRESENT_COMPOSITE_EARLY_SKIPS.fetch_add(1, Ordering::SeqCst);
         return;
     }

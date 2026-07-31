@@ -55,6 +55,11 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_HIDE_REAL_WINDOWS_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_RESTORE_REAL_WINDOWS_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SKIP_RESTORE_AFTER_QUICKLOAD_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SKIP_RESTORE_LAST_DIRECT_CHAIN_SUBMITTED;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SKIP_RESTORE_LAST_OPTION_WINDOW;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SKIP_RESTORE_LAST_PHASE;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SKIP_RESTORE_LAST_PROFILE_WINDOW;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SKIP_RESTORE_LAST_TOP_WINDOW;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_REAL_WINDOWS_HIDDEN;
 pub(crate) static SYSTEM_QUIT_WINDOW_LIST_PUSH_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);

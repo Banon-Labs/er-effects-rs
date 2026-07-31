@@ -165,6 +165,9 @@ const SWITCH_RELOAD_FD4IO_DRAIN_MAX: usize = 600;
 /// native teardown never completes -> fail-soft to the OLD in-place reload (the two holds re-engage), so a
 /// stalled outgoing teardown can never softlock the switch. ~15s at 60fps, well under the runtime cap.
 const OUTGOING_TEARDOWN_WAIT_MAX: usize = 900;
+const SWITCH_RELOAD_PORTRAIT_PUBLISH_WAIT_MAX: usize = 480;
+static SWITCH_RELOAD_PORTRAIT_PUBLISH_WAIT_TICKS: AtomicUsize = AtomicUsize::new(0);
+
 
 /// Reset the switch-reload FD4-IO phase machine so a NEW switch re-runs SUBMIT -> DRAIN -> COMMIT.
 /// Without this the one-shot stays claimed after the FIRST switch (PHASE stuck at COMMIT +
@@ -200,6 +203,7 @@ pub(crate) fn reset_switch_reload_latches() {
     er_telemetry::counters::OUTGOING_TEARDOWN_DONE.store(0, Ordering::SeqCst);
     er_telemetry::counters::OUTGOING_TEARDOWN_WAIT_TICKS.store(0, Ordering::SeqCst);
     er_telemetry::counters::OUTGOING_TEARDOWN_FAILSOFT.store(0, Ordering::SeqCst);
+    SWITCH_RELOAD_PORTRAIT_PUBLISH_WAIT_TICKS.store(0, Ordering::SeqCst);
     // Per-switch WorldResWait defer-release hold latches: clear ARMED + residency/hold state so each
     // switch gets a fresh hold and a stale ARMED can never leak into a later load (bd reload-overlap-fix-
     // design-worldreswait-defer-release-on-streaming-settle-2026-07-24).
@@ -379,9 +383,32 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
             return false;
         }
     }
-    // (c) Defuse the CSGaitemImp free-queue exhaustion AV (live 0x67141a): char#1's leaked gaitem
+    // (c) If a loading-screen portrait renderer is building, wait for the keyed-frame publish before
+    // sweeping GLOBAL_CSGaitem. The renderer/model holds CSGaitemIns pointers: resetting first keeps
+    // ChrAsm param ids intact but destroys the backing instances, producing the user-visible nude portrait
+    // while RAM counters still say armor is equipped. Bounded fail-open keeps reload from deadlocking.
+    if PORTRAIT_KICK_SLOT_KEY.load(Ordering::SeqCst) != 0
+        && PROFILE_HAVE_KEYED_FRAME.load(Ordering::SeqCst) == 0
+    {
+        let waited = SWITCH_RELOAD_PORTRAIT_PUBLISH_WAIT_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
+        if waited < SWITCH_RELOAD_PORTRAIT_PUBLISH_WAIT_MAX {
+            if waited == 1 || waited % 60 == 0 {
+                append_autoload_debug(format_args!(
+                    "own-load-switch-reload: holding gaitem reset until loading portrait publishes keyed frame (waited={waited}/{SWITCH_RELOAD_PORTRAIT_PUBLISH_WAIT_MAX}, kick_slot_key={}, rgba_version={})",
+                    PORTRAIT_KICK_SLOT_KEY.load(Ordering::SeqCst),
+                    LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst),
+                ));
+            }
+            return false;
+        }
+        append_autoload_debug(format_args!(
+            "own-load-switch-reload: portrait publish wait timed out ({waited}/{SWITCH_RELOAD_PORTRAIT_PUBLISH_WAIT_MAX}) -- fail-open to gaitem reset/reload; portrait may be blank/nude but switch must not deadlock"
+        ));
+    }
+    // (d) Defuse the CSGaitemImp free-queue exhaustion AV (live 0x67141a): char#1's leaked gaitem
     // entries still populate the gaitem singleton at the clean title (the lightweight return-title
-    // chain skips the native inventory teardown). Safe now because the old world is torn down.
+    // chain skips the native inventory teardown). Safe now because either no portrait renderer is building
+    // or the loading portrait has already published its keyed frame.
     let _ = unsafe { own_load_reset_gaitem_singleton(base) };
     // (d) Feed the picked slot's on-disk bytes through the native parser -> GameMan+0xc30 becomes the
     // picked character's REAL map + a real PGD fingerprint. No FD4 IO SUBMIT/DRAIN, no b80==3 needed.

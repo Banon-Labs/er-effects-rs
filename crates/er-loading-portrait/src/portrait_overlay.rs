@@ -15,6 +15,7 @@ use crate::prelude::*;
 /// `oracle_portrait_onto_draw_hits`). RAM proof the captured head reached the isolated overlay; distinct
 /// from the readback/publish counters (which prove the head was CAPTURED, not displayed).
 pub use er_telemetry::counters::PORTRAIT_ONTO_DRAW_HITS;
+pub use er_telemetry::counters::PROFILE_DISPLAY_FRAMES_WINDOW;
 
 /// Last measured alpha-coverage of the captured portrait, in percent of the full source area (telemetry
 /// `oracle_portrait_alpha_cover_pct`). The captured head sits in a central region of the square source with
@@ -155,5 +156,6 @@ pub fn portrait_onto(buf: &mut [u8], w: usize, h: usize) -> bool {
         }
     }
     PORTRAIT_ONTO_DRAW_HITS.fetch_add(1, Ordering::SeqCst);
+    PROFILE_DISPLAY_FRAMES_WINDOW.fetch_add(1, Ordering::SeqCst);
     true
 }

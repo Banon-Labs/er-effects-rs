@@ -2074,6 +2074,10 @@ fn write_game_module_oracles(body: &mut String) {
             && !(can_move || render_ready)) as usize;
         if pre_world_stop_failure != 0 { BOOT_VIEW_PRE_WORLD_STOP_FAILURES.store(1, Ordering::SeqCst); }
         push_json_usize(body, "oracle_boot_view_present_cover_failures", BOOT_VIEW_PRESENT_COVER_FAILURES.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_native_exposure_frames", er_telemetry::counters::BOOT_VIEW_NATIVE_EXPOSURE_FRAMES.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_native_exposure_first_ms", er_telemetry::counters::BOOT_VIEW_NATIVE_EXPOSURE_FIRST_MS.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_native_exposure_last_reason", er_telemetry::counters::BOOT_VIEW_NATIVE_EXPOSURE_LAST_REASON.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_boot_view_native_exposure_last_fake_visible", er_telemetry::counters::BOOT_VIEW_NATIVE_EXPOSURE_LAST_FAKE_VISIBLE.load(Ordering::SeqCst));
         push_json_usize(body, "oracle_boot_view_pre_world_stop_failures", BOOT_VIEW_PRE_WORLD_STOP_FAILURES.load(Ordering::SeqCst));
         push_json_usize(body, "oracle_boot_view_swapchain_found_ms", BOOT_VIEW_SWAPCHAIN_FOUND_MS.load(Ordering::SeqCst));
         push_json_usize(body, "oracle_boot_view_fade_start_ms", BOOT_VIEW_FADE_START_MS.load(Ordering::SeqCst));
@@ -2165,6 +2169,13 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_ls_portrait_rejected_publishes",
             LS_PORTRAIT_REJECTED_PUBLISHES.load(Ordering::SeqCst),
         );
+        push_json_usize(body, "oracle_ls_portrait_equip_sample_count", er_telemetry::counters::LS_PORTRAIT_EQUIP_SAMPLE_COUNT.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_ls_portrait_source_visible_armor_equipped", er_telemetry::counters::LS_PORTRAIT_SOURCE_VISIBLE_ARMOR_EQUIPPED.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_ls_portrait_renderer_visible_armor_equipped", er_telemetry::counters::LS_PORTRAIT_RENDERER_VISIBLE_ARMOR_EQUIPPED.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_ls_portrait_source_full_loadout_equipped", er_telemetry::counters::LS_PORTRAIT_SOURCE_FULL_LOADOUT_EQUIPPED.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_ls_portrait_renderer_full_loadout_equipped", er_telemetry::counters::LS_PORTRAIT_RENDERER_FULL_LOADOUT_EQUIPPED.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_ls_portrait_source_naked_kicks", er_telemetry::counters::LS_PORTRAIT_SOURCE_NAKED_KICKS.load(Ordering::SeqCst));
+        push_json_usize(body, "oracle_ls_portrait_renderer_naked_kicks", er_telemetry::counters::LS_PORTRAIT_RENDERER_NAKED_KICKS.load(Ordering::SeqCst));
         // Publish identity + race measurability (bd er-effects-rs-dpf6 Phase 1): which character the
         // published head belongs to (slot+1 / FNV-1a64 name hash; 0 = no head/unknown), the last
         // measured switch-confirm -> publish latency, and the Phase-3 same-identity bridge holds.
@@ -2399,6 +2410,146 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_optionsetting_game_options_quit_label_hits",
             OPTIONSETTING_GAME_OPTIONS_QUIT_LABEL_HITS.load(Ordering::SeqCst),
         );
+        // System->Quit menu ownership and interaction semaphores. These answer the "only Load Save
+        // Profiles responds" failure without screenshots: when real_windows_hidden=1 and
+        // skip_restore_last_phase!=0, the native System/OptionSetting windows are still hidden because
+        // the switch phase is non-IDLE, while the DLL-owned ProfileSelect/save-picker path can still own
+        // input. Row counters capture the last activated/focused row identity and ambiguity reason.
+        push_json_usize(
+            body,
+            "oracle_system_quit_real_windows_hidden",
+            SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_system_quit_hide_real_windows_count",
+            SYSTEM_QUIT_HIDE_REAL_WINDOWS_COUNT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_system_quit_restore_real_windows_count",
+            SYSTEM_QUIT_RESTORE_REAL_WINDOWS_COUNT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_system_quit_skip_restore_count",
+            SYSTEM_QUIT_SKIP_RESTORE_AFTER_QUICKLOAD_COUNT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_system_quit_skip_restore_last_phase",
+            SYSTEM_QUIT_SKIP_RESTORE_LAST_PHASE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_system_quit_skip_restore_last_profile_window",
+            SYSTEM_QUIT_SKIP_RESTORE_LAST_PROFILE_WINDOW.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_system_quit_skip_restore_last_top_window",
+            SYSTEM_QUIT_SKIP_RESTORE_LAST_TOP_WINDOW.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_system_quit_skip_restore_last_option_window",
+            SYSTEM_QUIT_SKIP_RESTORE_LAST_OPTION_WINDOW.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_system_quit_skip_restore_last_direct_chain_submitted",
+            SYSTEM_QUIT_SKIP_RESTORE_LAST_DIRECT_CHAIN_SUBMITTED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_system_quit_row_table_dialog",
+            SYSTEM_QUIT_ROW_TABLE_DIALOG.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_system_quit_row_index_save_game_plus1",
+            SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_PLUS1.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_system_quit_row_index_return_desktop_plus1",
+            SYSTEM_QUIT_ROW_INDEX_RETURN_DESKTOP_PLUS1.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_system_quit_row_index_load_profile_plus1",
+            SYSTEM_QUIT_ROW_INDEX_LOAD_PROFILE_PLUS1.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_system_quit_row_index_load_save_profiles_plus1",
+            SYSTEM_QUIT_ROW_INDEX_LOAD_SAVE_PROFILES_PLUS1.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_system_quit_row_resolve_count",
+            SYSTEM_QUIT_ROW_RESOLVE_COUNT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_system_quit_row_resolved_by_cursor_count",
+            SYSTEM_QUIT_ROW_RESOLVED_BY_CURSOR_ROW_COUNT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_system_quit_row_ambiguous_count",
+            SYSTEM_QUIT_ROW_AMBIGUOUS_COUNT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_system_quit_row_last_discriminator",
+            SYSTEM_QUIT_ROW_LAST_DISCRIMINATOR.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_system_quit_row_last_resolved_row",
+            SYSTEM_QUIT_ROW_LAST_RESOLVED_ROW.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_system_quit_row_last_ambiguity",
+            SYSTEM_QUIT_ROW_LAST_AMBIGUITY.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_system_quit_row_last_cursor_plus1",
+            SYSTEM_QUIT_ROW_LAST_CURSOR_PLUS1.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_system_quit_row_last_cursor_label_kind",
+            SYSTEM_QUIT_ROW_LAST_CURSOR_LABEL_KIND.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_system_quit_row_last_input_kind",
+            SYSTEM_QUIT_ROW_LAST_INPUT_KIND.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_system_quit_quit_refused_ambiguous_row_count",
+            SYSTEM_QUIT_QUIT_REFUSED_AMBIGUOUS_ROW_COUNT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_system_quit_quit_authorized_count",
+            SYSTEM_QUIT_QUIT_AUTHORIZED_COUNT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_system_quit_action_alias_false_quit_claims",
+            SYSTEM_QUIT_ACTION_ALIAS_FALSE_QUIT_CLAIMS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_system_quit_row_refused_disagreement_count",
+            SYSTEM_QUIT_ROW_REFUSED_DISAGREEMENT_COUNT.load(Ordering::SeqCst),
+        );
         // GX command-queue overflow forensics (repeated-switch crash 0x1aeaf05): max_fill climbing
         // toward cap across switches = the accumulating-producer signature; top_producers names the
         // caller RVAs (entries tagged +self passed through our DLL).
@@ -2553,6 +2704,11 @@ fn write_game_module_oracles(body: &mut String) {
             body,
             "oracle_portrait_drive_frames_last_window",
             PROFILE_DRIVE_FRAMES_WINDOW_LAST.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_display_frames_current_window",
+            PROFILE_DISPLAY_FRAMES_WINDOW.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,

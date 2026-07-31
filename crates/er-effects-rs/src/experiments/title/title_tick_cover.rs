@@ -2633,8 +2633,9 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
     // dormant here once committed: emit nothing, write nothing, let the native session settle. Inert before
     // the feed (latch 0 -> block runs and fires the initial load exactly as before); re-enabled for the next
     // genuine pick when the arm clears the latch.
-    if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
-        >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+    let quickload_phase_for_b78_guard = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    if quickload_phase_for_b78_guard >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+        && quickload_phase_for_b78_guard < SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
         && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 0
         && gm != null
         && slot >= OWN_STEPPER_SLOT_ZERO
@@ -2697,9 +2698,9 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         // `world_up` is the correct invariant: b78 must be -1 until the world is gone, then = slot for the
         // clean-title autoload. So the force-(-1) condition stays keyed on world_up, unchanged from switch 1.
         // POST-COMMIT RE-LOAD LOOP FIX (2026-07-16, runtime-confirmed). Once this switch's picked slot has
-        // COMMITTED its load (SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE=1 -- set by the feed/continue_confirm
-        // at the clean-title stream, cleared to 0 only when a genuinely NEW switch arms at
-        // system_quit_repro_guards.rs:864), STOP re-arming b78=slot. Proven from the gm-snap/setstate trace:
+        // COMMITTED its load (the phase reaches AUTOLOAD_HANDOFF after feed/continue_confirm; the
+        // FRESH_DESER_DONE latch may be consumed/cleared before world readiness), STOP touching b78 at all.
+        // Proven from the gm-snap/setstate trace:
         // after the picked char loads and reaches stable in-world (ig_d8=2, menu_job populated), the world
         // momentarily drops to world_up=false and this guard RE-WROTE b78=slot -> a redundant in-world reload
         // that tears the freshly-loaded world down and bounces it back to title (menu_job->0 -> requestCode->0
@@ -3174,19 +3175,6 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         // loses the race the capture simply never fires (degrades to current behavior, no crash).
         if force_profile_render_enabled() {
             unsafe { force_profile_render_tick(module_base, slot) };
-        }
-        if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
-            >= SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN
-            && gm != null
-            && slot >= OWN_STEPPER_SLOT_ZERO
-        {
-            let requested_slot = unsafe { safe_read_i32(gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) }
-                .unwrap_or(OWN_STEPPER_SLOT_NONE);
-            if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
-                append_autoload_debug(format_args!(
-                    "system-quit-quickload: leaving requested save-slot load index untouched before Continue selected_slot={slot} gm_b78={requested_slot} -- SetState5 handoff owns reload; phase-4 task must not re-arm b78"
-                ));
-            }
         }
         // SWITCH-SAFETY: for the in-world System->Quit->Load-Profile switch, do NOT drive ANY native
         // Continue/menu-readiness probing or the autoload tick until the OLD world is actually torn

@@ -1057,6 +1057,12 @@ unsafe fn system_quit_restore_real_system_windows(base: usize, source: &str) {
         let submitted =
             unsafe { system_quit_submit_direct_return_title_chain(base, system_dialog, source) };
         SYSTEM_QUIT_SKIP_RESTORE_AFTER_QUICKLOAD_COUNT.fetch_add(1, Ordering::SeqCst);
+        SYSTEM_QUIT_SKIP_RESTORE_LAST_PHASE.store(phase, Ordering::SeqCst);
+        SYSTEM_QUIT_SKIP_RESTORE_LAST_PROFILE_WINDOW.store(profile, Ordering::SeqCst);
+        SYSTEM_QUIT_SKIP_RESTORE_LAST_TOP_WINDOW.store(top, Ordering::SeqCst);
+        SYSTEM_QUIT_SKIP_RESTORE_LAST_OPTION_WINDOW.store(option, Ordering::SeqCst);
+        SYSTEM_QUIT_SKIP_RESTORE_LAST_DIRECT_CHAIN_SUBMITTED
+            .store(submitted as usize, Ordering::SeqCst);
         append_autoload_debug(format_args!(
             "system-quit-dup: skip restore real windows after quickload handoff source={source} phase={phase} profile=0x{profile:x} top=0x{top:x} option=0x{option:x} direct_chain_submitted={submitted}; leaving old System UI hidden during native transition"
         ));

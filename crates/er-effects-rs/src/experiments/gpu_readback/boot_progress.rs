@@ -206,6 +206,85 @@ const BOOT_VIEW_RELEASE_FADE_MS: u64 = 640;
 const BOOT_VIEW_NATIVE_GFX_FADEOUT_HOLD_MS: u64 = 600;
 const BOOT_VIEW_NATIVE_LOADING_QUIET_HOLD_MS: u64 = 900;
 
+fn boot_view_native_loading_visible_or_fresh(base: usize) -> (bool, bool) {
+    let fake_visible = unsafe { fake_loading_screen_visible(base) };
+    let now_ms = boot_view_epoch_ms();
+    let update_last = LOADING_SCREEN_UPDATE_LAST_MS.load(Ordering::SeqCst) as u64;
+    let fadeout_anchor = LOADING_SCREEN_GFX_FADEOUT_LAST_MS
+        .load(Ordering::SeqCst)
+        .max(LOADING_SCREEN_CLOSE_SENT_FIRST_MS.load(Ordering::SeqCst)) as u64;
+    let update_recent = update_last != 0
+        && now_ms.saturating_sub(update_last) < BOOT_VIEW_NATIVE_LOADING_QUIET_HOLD_MS;
+    let fadeout_recent = fadeout_anchor != 0
+        && now_ms.saturating_sub(fadeout_anchor) < BOOT_VIEW_NATIVE_GFX_FADEOUT_HOLD_MS;
+    (fake_visible || update_recent || fadeout_recent, fake_visible)
+}
+
+pub(crate) fn boot_view_try_resume_after_native_reappears(base: usize) -> bool {
+    if base == 0 || BOOT_VIEW_STOPPED.load(Ordering::SeqCst) == 0 {
+        return false;
+    }
+    let own_menu_active = BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0;
+    let boot_still_pre_world = IN_WORLD_REACHED.load(Ordering::SeqCst) == 0;
+    if !(own_menu_active || boot_still_pre_world) {
+        return false;
+    }
+    let (native_visible_or_fresh, fake_visible) = boot_view_native_loading_visible_or_fresh(base);
+    if !native_visible_or_fresh {
+        return false;
+    }
+    if BOOT_VIEW_STOPPED.swap(0, Ordering::SeqCst) == 0 {
+        return true;
+    }
+    BOOT_VIEW_STOP_REASON.store(0, Ordering::SeqCst);
+    // Let the existing world-handoff path hold through native quiet/fade windows, then start a fresh
+    // release fade after the native loading backbuffer is no longer the thing behind us.
+    BOOT_VIEW_FADE_START_MS.store(0, Ordering::SeqCst);
+    let n = er_telemetry::counters::BOOT_VIEW_NATIVE_EXPOSURE_FRAMES.load(Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "boot-view: RESUME cover after stopped because native loading reappeared/stayed fresh during active load window (own_menu_active={} boot_pre_world={} fake_visible={} exposure_frames={n} update_last_ms={} fadeout_last_ms={} close_ms={})",
+        own_menu_active as usize,
+        boot_still_pre_world as usize,
+        fake_visible as usize,
+        LOADING_SCREEN_UPDATE_LAST_MS.load(Ordering::SeqCst),
+        LOADING_SCREEN_GFX_FADEOUT_LAST_MS.load(Ordering::SeqCst),
+        LOADING_SCREEN_CLOSE_SENT_FIRST_MS.load(Ordering::SeqCst),
+    ));
+    true
+}
+
+pub(crate) fn boot_view_note_native_exposure(base: usize, reason: usize) {
+    let (native_visible_or_fresh, fake_visible) = boot_view_native_loading_visible_or_fresh(base);
+    if !native_visible_or_fresh {
+        return;
+    }
+    let now_ms = boot_view_epoch_ms().max(1) as usize;
+    let first = er_telemetry::counters::BOOT_VIEW_NATIVE_EXPOSURE_FIRST_MS
+        .compare_exchange(0, now_ms, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok();
+    er_telemetry::counters::BOOT_VIEW_NATIVE_EXPOSURE_LAST_REASON
+        .store(reason, Ordering::SeqCst);
+    er_telemetry::counters::BOOT_VIEW_NATIVE_EXPOSURE_LAST_FAKE_VISIBLE
+        .store(fake_visible as usize, Ordering::SeqCst);
+    let n = er_telemetry::counters::BOOT_VIEW_NATIVE_EXPOSURE_FRAMES
+        .fetch_add(1, Ordering::SeqCst)
+        + 1;
+    if first || n <= 4 || n.is_power_of_two() {
+        append_autoload_debug(format_args!(
+            "boot-view: NATIVE-LOADING EXPOSURE #{n} reason={reason} fake_visible={} update_last_ms={} fadeout_last_ms={} close_ms={} stopped={} draw_state={} draws={} full_clears={} alpha={} -- custom cover failed to fully mask a native loading frame",
+            fake_visible as usize,
+            LOADING_SCREEN_UPDATE_LAST_MS.load(Ordering::SeqCst),
+            LOADING_SCREEN_GFX_FADEOUT_LAST_MS.load(Ordering::SeqCst),
+            LOADING_SCREEN_CLOSE_SENT_FIRST_MS.load(Ordering::SeqCst),
+            BOOT_VIEW_STOPPED.load(Ordering::SeqCst),
+            BOOT_VIEW_DRAW_STATE.load(Ordering::SeqCst),
+            BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst),
+            BOOT_VIEW_PRESENT_FULL_CLEAR_HITS.load(Ordering::SeqCst),
+            BOOT_VIEW_FADE_LAST_ALPHA.load(Ordering::SeqCst),
+        ));
+    }
+}
+
 static BOOT_VIEW_FADE_ROOT_SIGNATURE: AtomicUsize = AtomicUsize::new(0);
 static BOOT_VIEW_FADE_PSO: AtomicUsize = AtomicUsize::new(0);
 static BOOT_VIEW_FADE_PSO_FORMAT: AtomicUsize = AtomicUsize::new(0);
@@ -1926,13 +2005,17 @@ unsafe fn composite_boot_release_fade_frame(swapchain_raw: usize, alpha: u8) -> 
 /// render around the loading bar. Full-clear + strip copy keeps the bar persistent and tells the rest
 /// of the frame, politely, to die in a fire.
 pub(crate) unsafe fn composite_boot_progress_on_swapchain(
-    _base: usize,
+    base: usize,
     swapchain_raw: usize,
 ) -> bool {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        composite_boot_progress_inner(swapchain_raw, true, false)
+    let drew = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        composite_boot_progress_inner(base, swapchain_raw, true, false)
     }))
-    .unwrap_or(false)
+    .unwrap_or(false);
+    if !drew {
+        boot_view_note_native_exposure(base, 1);
+    }
+    drew
 }
 
 /// Self-present-pump frame (pre-first-game-present): same draw, but the engine has NEVER rendered
@@ -1940,7 +2023,7 @@ pub(crate) unsafe fn composite_boot_progress_on_swapchain(
 /// copy so no init-garbage flashes on screen.
 pub(crate) unsafe fn composite_boot_progress_self_frame(swapchain_raw: usize) -> bool {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        composite_boot_progress_inner(swapchain_raw, true, true)
+        composite_boot_progress_inner(0, swapchain_raw, true, true)
     }))
     .unwrap_or(false)
 }
@@ -2006,12 +2089,14 @@ fn boot_view_try_fps_bail_resume_on_publish() -> bool {
 }
 
 unsafe fn composite_boot_progress_inner(
+    base: usize,
     swapchain_raw: usize,
     clear_first: bool,
     self_present_frame: bool,
 ) -> bool {
     if BOOT_VIEW_STOPPED.load(Ordering::SeqCst) != 0
         && !boot_view_try_fps_bail_resume_on_publish()
+        && !boot_view_try_resume_after_native_reappears(base)
     {
         return false;
     }
@@ -2229,6 +2314,9 @@ unsafe fn composite_boot_progress_inner(
                     / BOOT_VIEW_RELEASE_FADE_MS)
                     .clamp(1, 255) as u8;
                 BOOT_VIEW_FADE_LAST_ALPHA.store(alpha as usize, Ordering::SeqCst);
+                if alpha < u8::MAX {
+                    boot_view_note_native_exposure(base, 2);
+                }
                 if unsafe { composite_boot_release_fade_frame(swapchain_raw, alpha) } {
                     return true;
                 }
@@ -2260,11 +2348,27 @@ unsafe fn composite_boot_progress_inner(
         let permille = BOOT_VIEW_LAST_PERMILLE.load(Ordering::SeqCst);
         // Post-resume (bd er-effects-rs-dpf6 Phase 2): the permille arm re-fires instantly on a
         // resumed window (the bar is already ~full on the healthy fast load that tripped it), so it
-        // is suppressed after the once-per-window publish resume. The composite-time cap stays armed
-        // -- it is the FPS backstop the bail exists for.
+        // is suppressed after the once-per-window publish resume. Also suppress it once this window has
+        // displayed ANY portrait frame: the different-slot repro published before the bail, so the old
+        // one-shot resume had no later version bump to re-open the cover and exposed native loading. The
+        // composite-time cap stays armed as the true emergency FPS backstop.
         let resumed = BOOT_VIEW_FPS_BAIL_RESUMED.load(Ordering::SeqCst) != 0;
-        if (!resumed && permille >= crate::constants::BOOT_VIEW_EPOCH_BAIL_PERMILLE as usize)
-            || composite_ms >= crate::constants::BOOT_VIEW_EPOCH_COMPOSITE_CAP_MS
+        let portrait_displayed = PROFILE_DISPLAY_FRAMES_WINDOW.load(Ordering::SeqCst) != 0;
+        let loading_update_last = LOADING_SCREEN_UPDATE_LAST_MS.load(Ordering::SeqCst) as u64;
+        let fadeout_anchor = LOADING_SCREEN_GFX_FADEOUT_LAST_MS
+            .load(Ordering::SeqCst)
+            .max(LOADING_SCREEN_CLOSE_SENT_FIRST_MS.load(Ordering::SeqCst))
+            as u64;
+        let native_loading_recent = (loading_update_last != 0
+            && now_ms.saturating_sub(loading_update_last) < BOOT_VIEW_NATIVE_LOADING_QUIET_HOLD_MS)
+            || (fadeout_anchor != 0
+                && now_ms.saturating_sub(fadeout_anchor) < BOOT_VIEW_NATIVE_GFX_FADEOUT_HOLD_MS);
+        if ((!resumed
+            && !portrait_displayed
+            && !native_loading_recent
+            && permille >= crate::constants::BOOT_VIEW_EPOCH_BAIL_PERMILLE as usize)
+            || (composite_ms >= crate::constants::BOOT_VIEW_EPOCH_COMPOSITE_CAP_MS
+                && !native_loading_recent))
         {
             if BOOT_VIEW_STOPPED.swap(1, Ordering::SeqCst) == 0 {
                 // Phase-1/2 measurability: stop reason + window duration + the publish-version and
@@ -2284,7 +2388,7 @@ unsafe fn composite_boot_progress_inner(
                     Ordering::SeqCst,
                 );
                 append_autoload_debug(format_args!(
-                    "boot-view: FPS BAIL stop (own-menu reload epoch={cur_epoch} permille={permille} composite_ms={composite_ms} resumed={resumed} cover_window_ms={}) -- handoff signals never fired (frozen load2); stopping per-frame GPU readback (resumable once on a fresh portrait publish while native loading is active)",
+                    "boot-view: FPS BAIL stop (own-menu reload epoch={cur_epoch} permille={permille} composite_ms={composite_ms} resumed={resumed} portrait_displayed={portrait_displayed} native_loading_recent={native_loading_recent} cover_window_ms={}) -- handoff signals never fired and native loading is quiet/stalled; stopping per-frame GPU readback (resumable once on a fresh portrait publish while native loading is active)",
                     BOOT_VIEW_COVER_WINDOW_MS_LAST.load(Ordering::SeqCst),
                 ));
             }

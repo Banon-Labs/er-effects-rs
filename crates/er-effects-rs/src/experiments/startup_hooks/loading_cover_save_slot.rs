@@ -304,6 +304,88 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     ));
 }
 
+const PORTRAIT_VISIBLE_ARMOR_SLOTS: &[usize] = &[12, 13, 14, 15];
+const PORTRAIT_FULL_LOADOUT_SLOTS: &[usize] = &[
+    0, 1, 2, 3, 4, 5,
+    6, 7, 8, 9, 10, 11,
+    12, 13, 14, 15,
+    17, 18, 19, 20, 21,
+];
+const CHR_ASM_EMPTY_EQUIP_PARAM_ID: u32 = u32::MAX;
+
+unsafe fn count_chr_asm_equipped_slots(chr_asm: usize, slots: &[usize]) -> usize {
+    if chr_asm == 0 || chr_asm == TITLE_OWNER_SCAN_START_ADDRESS {
+        return 0;
+    }
+    let mut equipped = 0usize;
+    for &slot in slots {
+        let param = unsafe {
+            safe_read_usize(chr_asm + CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET + slot * core::mem::size_of::<i32>())
+        }
+        .map(|v| v as u32)
+        .unwrap_or(CHR_ASM_EMPTY_EQUIP_PARAM_ID);
+        let handle = unsafe {
+            safe_read_usize(chr_asm + CHR_ASM_GAITEM_HANDLES_OFFSET + slot * core::mem::size_of::<u32>())
+        }
+        .map(|v| v as u32)
+        .unwrap_or(0);
+        if param != CHR_ASM_EMPTY_EQUIP_PARAM_ID || handle != 0 {
+            equipped += 1;
+        }
+    }
+    equipped
+}
+
+unsafe fn restore_loading_portrait_visible_armor(source_chr_asm: usize, renderer: usize) {
+    if source_chr_asm == 0
+        || source_chr_asm == TITLE_OWNER_SCAN_START_ADDRESS
+        || renderer == 0
+        || renderer == TITLE_OWNER_SCAN_START_ADDRESS
+    {
+        return;
+    }
+    let renderer_chr_asm = renderer + 0x548; // FUN_140bb9800(renderer) => renderer+0x548.
+    for &slot in PORTRAIT_VISIBLE_ARMOR_SLOTS {
+        let src_handle_addr = source_chr_asm + CHR_ASM_GAITEM_HANDLES_OFFSET + slot * core::mem::size_of::<u32>();
+        let dst_handle_addr = renderer_chr_asm + CHR_ASM_GAITEM_HANDLES_OFFSET + slot * core::mem::size_of::<u32>();
+        let src_param_addr = source_chr_asm + CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET + slot * core::mem::size_of::<i32>();
+        let dst_param_addr = renderer_chr_asm + CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET + slot * core::mem::size_of::<i32>();
+        let handle = unsafe { core::ptr::read_volatile(src_handle_addr as *const u32) };
+        let param = unsafe { core::ptr::read_volatile(src_param_addr as *const u32) };
+        unsafe { core::ptr::write_volatile(dst_handle_addr as *mut u32, handle) };
+        unsafe { core::ptr::write_volatile(dst_param_addr as *mut u32, param) };
+    }
+}
+
+unsafe fn note_loading_portrait_equipment_sample(slot: i32, source_chr_asm: usize, renderer: usize) {
+    let renderer_chr_asm = renderer + 0x548; // FUN_140bb9800(renderer) => renderer+0x548.
+    let source_armor = unsafe { count_chr_asm_equipped_slots(source_chr_asm, PORTRAIT_VISIBLE_ARMOR_SLOTS) };
+    let renderer_armor = unsafe { count_chr_asm_equipped_slots(renderer_chr_asm, PORTRAIT_VISIBLE_ARMOR_SLOTS) };
+    let source_full = unsafe { count_chr_asm_equipped_slots(source_chr_asm, PORTRAIT_FULL_LOADOUT_SLOTS) };
+    let renderer_full = unsafe { count_chr_asm_equipped_slots(renderer_chr_asm, PORTRAIT_FULL_LOADOUT_SLOTS) };
+    er_telemetry::counters::LS_PORTRAIT_EQUIP_SAMPLE_COUNT.fetch_add(1, Ordering::SeqCst);
+    er_telemetry::counters::LS_PORTRAIT_SOURCE_VISIBLE_ARMOR_EQUIPPED.store(source_armor, Ordering::SeqCst);
+    er_telemetry::counters::LS_PORTRAIT_RENDERER_VISIBLE_ARMOR_EQUIPPED.store(renderer_armor, Ordering::SeqCst);
+    er_telemetry::counters::LS_PORTRAIT_SOURCE_FULL_LOADOUT_EQUIPPED.store(source_full, Ordering::SeqCst);
+    er_telemetry::counters::LS_PORTRAIT_RENDERER_FULL_LOADOUT_EQUIPPED.store(renderer_full, Ordering::SeqCst);
+    if source_armor == 0 {
+        let n = er_telemetry::counters::LS_PORTRAIT_SOURCE_NAKED_KICKS.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 4 || n.is_power_of_two() {
+            append_autoload_debug(format_args!(
+                "loading-portrait: SOURCE ChrAsm naked/armorless at kick #{n} slot={slot} source=0x{source_chr_asm:x} full_equipped={source_full}"
+            ));
+        }
+    }
+    if renderer_armor == 0 {
+        let n = er_telemetry::counters::LS_PORTRAIT_RENDERER_NAKED_KICKS.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 4 || n.is_power_of_two() {
+            append_autoload_debug(format_args!(
+                "loading-portrait: RENDERER ChrAsm naked/armorless after config #{n} slot={slot} renderer=0x{renderer:x} renderer_chr_asm=0x{renderer_chr_asm:x} source_armor={source_armor} source_full={source_full} renderer_full={renderer_full}"
+            ));
+        }
+    }
+}
+
 /// Kick the ASYNC character-model build for ONE profile slot -- a faithful per-slot replica of the body
 /// of the engine's global refresh (dump `FUN_1409aa7d0`), which we no longer call from the post-Continue
 /// feed: the global form iterates all 10 slots and kicks every real+marked one, building EVERY save
@@ -386,13 +468,19 @@ pub(crate) unsafe fn kick_target_profile_slot(
     let model_live =
         unsafe { safe_read_usize(renderer + PROFILE_RENDERER_MODEL_INS_OFFSET) }.unwrap_or(0);
     unsafe {
-        set_model_source(renderer, record + 0x1a8);
-        let fd = facedata_buffer(record + 0x38, 1);
+        set_model_source(renderer, record + PROFILE_SUMMARY_CHR_ASM_OFFSET);
+        // Native CSMenuProfModelRend setup copies the ProfileSummary ChrAsm, then overwrites two
+        // protector slots with default/nude protectors (Ghidra: FUN_140bbe1a0 -> GetDefaultProtectorParamId
+        // for special indexes 2/3). Product loading portraits must use the saved armor, so restore visible
+        // armor slots after the native normalization while keeping its weapon/ammo stripping.
+        restore_loading_portrait_visible_armor(record + PROFILE_SUMMARY_CHR_ASM_OFFSET, renderer);
+        let fd = facedata_buffer(record + PROFILE_SUMMARY_FACE_DATA_OFFSET, 1);
         set_facedata(renderer, fd);
         set_byte290(renderer, b290);
         set_flag_one(renderer, 1);
         set_byte294(renderer, b294);
         set_stream_index(renderer, (slot as u32) * 2);
+        note_loading_portrait_equipment_sample(slot, record + PROFILE_SUMMARY_CHR_ASM_OFFSET, renderer);
         set_req_754(renderer);
         if valid(model_live) {
             set_req_755(renderer);

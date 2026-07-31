@@ -250,6 +250,16 @@ pub static LS_PORTRAIT_LAST_NEUTRAL_PCT: AtomicUsize = AtomicUsize::new(0);
 pub static LS_PORTRAIT_TOO_SMALL_SEEN_VERSION: AtomicUsize = AtomicUsize::new(0);
 pub static LS_PORTRAIT_NEUTRAL_LEAK_SEEN_VERSION: AtomicUsize = AtomicUsize::new(0);
 pub static LS_PORTRAIT_REJECTED_PUBLISHES: AtomicUsize = AtomicUsize::new(0);
+/// ChrAsm/equipment source checks sampled when the loading portrait build kick configures a renderer.
+/// Visible armor counts slots 12..15; full loadout counts weapons/ammo/armor/accessory slots except the
+/// unused slot 16. Empty item id is 0xffffffff (Ghidra-proven through CS::ChrAsm::EquipItem).
+pub static LS_PORTRAIT_EQUIP_SAMPLE_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub static LS_PORTRAIT_SOURCE_VISIBLE_ARMOR_EQUIPPED: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub static LS_PORTRAIT_RENDERER_VISIBLE_ARMOR_EQUIPPED: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub static LS_PORTRAIT_SOURCE_FULL_LOADOUT_EQUIPPED: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub static LS_PORTRAIT_RENDERER_FULL_LOADOUT_EQUIPPED: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub static LS_PORTRAIT_SOURCE_NAKED_KICKS: AtomicUsize = AtomicUsize::new(0);
+pub static LS_PORTRAIT_RENDERER_NAKED_KICKS: AtomicUsize = AtomicUsize::new(0);
 /// Identity tag of the currently-published loading-portrait head (bd er-effects-rs-dpf6 Phase 1):
 /// slot+1 (0 = no published head) and the FNV-1a64 hash of the slot's ProfileSummary character name
 /// UTF-16 units (0 = unknown). Written next to the bridge on every publish; cleared with the bridge.
@@ -829,6 +839,14 @@ pub static SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE: AtomicUsize = AtomicUsize::new(
 pub static SYSTEM_QUIT_HIDE_REAL_WINDOWS_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_RESTORE_REAL_WINDOWS_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_SKIP_RESTORE_AFTER_QUICKLOAD_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Last switch phase that made `system_quit_restore_real_system_windows` refuse to restore the native
+/// System/OptionSetting windows. This is the menu-deadlock semaphore: non-IDLE here while the custom
+/// ProfileSelect plumbing remains live explains why only the DLL-owned Load Save Profiles path responds.
+pub static SYSTEM_QUIT_SKIP_RESTORE_LAST_PHASE: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub static SYSTEM_QUIT_SKIP_RESTORE_LAST_PROFILE_WINDOW: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_SKIP_RESTORE_LAST_TOP_WINDOW: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_SKIP_RESTORE_LAST_OPTION_WINDOW: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_SKIP_RESTORE_LAST_DIRECT_CHAIN_SUBMITTED: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_REAL_WINDOWS_HIDDEN: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_FIRED: AtomicUsize = AtomicUsize::new(0);
@@ -1104,6 +1122,13 @@ pub static BOOT_VIEW_SELF_PRESENTS: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_SELF_FULL_CLEAR_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_PRESENT_FULL_CLEAR_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_PRESENT_COVER_FAILURES: AtomicUsize = AtomicUsize::new(0);
+/// Present frames where native loading was visible/fresh while our custom full-frame loading cover did
+/// not draw opaque content. This is the one-frame vanilla-loading-screen flash tripwire.
+pub static BOOT_VIEW_NATIVE_EXPOSURE_FRAMES: AtomicUsize = AtomicUsize::new(0);
+pub static BOOT_VIEW_NATIVE_EXPOSURE_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
+/// 1 = boot-view draw miss while native loading was visible/fresh; 2 = release fade exposed native loading.
+pub static BOOT_VIEW_NATIVE_EXPOSURE_LAST_REASON: AtomicUsize = AtomicUsize::new(0);
+pub static BOOT_VIEW_NATIVE_EXPOSURE_LAST_FAKE_VISIBLE: AtomicUsize = AtomicUsize::new(0);
 // Nonzero means the cover stopped before a world/playable handoff. Native loading becoming visible is
 // not enough; the product owns the full backbuffer until the game can safely show.
 pub static BOOT_VIEW_PRE_WORLD_STOP_FAILURES: AtomicUsize = AtomicUsize::new(0);
