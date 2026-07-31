@@ -421,7 +421,71 @@ fn boot_view_cover_release_ready(can_move_handoff: bool) -> bool {
     if can_move_handoff {
         return true;
     }
-    if boot_view_player_render_ready() {
+    // CHARACTER-LOAD GATE (er-effects-rs-q6vk). A switch shows TWO native loading screens -- the
+    // return-to-title teardown, then the character load after continue_confirm -- and BOTH satisfy
+    // the two facts below. Measured (run slot-portrait-proof-20260731-122038): the cover armed at
+    // ~25490ms, released at 28047ms while still in the teardown, and the character load that began
+    // at ~42513ms ran uncovered. So hold the release until THIS switch's character load has
+    // actually begun: the fresh-deser count bumps at the reload's deserialize, and is documented to
+    // NOT have incremented yet at arm time (see the composite-clock note in
+    // `rearm_boot_progress_for_own_menu_load`).
+    //
+    // While held, the latches are CLEARED rather than left standing. Both facts are readily true
+    // during the teardown/title -- the player is still resident and the teardown bar fills -- so a
+    // latch kept from that phase would fire the release the instant the confirm landed, which is
+    // the same bug one screen later. They must be observed again against the character load.
+    if er_telemetry::counters::BOOT_VIEW_RELEASE_REQUIRE_CONFIRM.load(Ordering::SeqCst) != 0 {
+        let baseline = er_telemetry::counters::BOOT_VIEW_RELEASE_CONFIRM_BASELINE.load(Ordering::SeqCst);
+        let fresh_deser =
+            crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+        if fresh_deser <= baseline {
+            er_telemetry::counters::BOOT_VIEW_RELEASE_HELD_FOR_CONFIRM.fetch_add(1, Ordering::SeqCst);
+            BOOT_VIEW_RELEASE_RENDER_READY_SEEN.store(0, Ordering::SeqCst);
+            BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN.store(0, Ordering::SeqCst);
+            return false;
+        }
+    }
+    // "The game is ready to be revealed." This needs a signal that is still TRUE once the
+    // character-load gate above opens, which rules out the obvious one.
+    //
+    // `boot_view_player_render_ready()` is not wrong, it is TRANSIENT: measured across runs
+    // 20260731-115718, -122038 and -125800 it reads true for only ~2 sampled seconds at the TAIL of
+    // each load (permille 990-1000) and false everywhere else, twice per load. The gate is still
+    // holding during that window -- it clears both latches every frame until this switch's
+    // fresh-deser bump -- so the transient is discarded, and it never comes back. Gating on it
+    // alone therefore left the release permanently unsatisfiable once the teardown path was closed:
+    // 0 semantic releases, both switches riding the 20s cap (run -125800).
+    //
+    // (An earlier revision of this comment called it "inverted, true at the title and false
+    // in-world". That was drawn from the last 8 DECISION lines of one run -- all post-load steady
+    // state -- and is wrong. The full logs show the tail-of-load spikes above.)
+    //
+    // The per-epoch world-live signal is the semantically ideal answer -- play time advancing for
+    // THIS load epoch is the game saying the world is running, and it is what the Present hook's
+    // in-world composite skip already trusts -- but it is not reachable in every run: it needs play
+    // time to ADVANCE past a threshold, and a probe that tears down shortly after the world appears
+    // never gets there (runs -125800 and -130326 both ended `play_time_live=false`,
+    // `play_time_advanced_ms=0`). Kept as the preferred signal for real sessions, not relied on.
+    let cur_load_epoch =
+        crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+    let epoch_world_live = cur_load_epoch != 0
+        && crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur_load_epoch;
+    // The fact that IS both reachable and PERSISTENT -- so it survives the gate's hold window,
+    // unlike the render-flag spike -- is the one the proof harness itself trusts to declare LOADED:
+    // the local player exists and carries a real loaded character. Runs -125800 and -130326 both
+    // ended `player_present=true` with a valid name/level while world-live stayed false. Reading it
+    // here in-process is the same evidence one layer earlier.
+    //
+    // It cannot reveal the game early despite being broad: the character-load gate above still
+    // blocks everything before this switch's confirm, and the release also requires the native-done
+    // latch, which only sets when the load screen is actually finishing.
+    let player_loaded = unsafe { PlayerIns::local_player_mut() }
+        .map(|player| {
+            player.chr_ins.chr_model_ins.as_ptr() as usize != TITLE_OWNER_SCAN_START_ADDRESS
+                && player.chr_ins.chr_ctrl.as_ptr() as usize != TITLE_OWNER_SCAN_START_ADDRESS
+        })
+        .unwrap_or(false);
+    if epoch_world_live || player_loaded || boot_view_player_render_ready() {
         BOOT_VIEW_RELEASE_RENDER_READY_SEEN.store(1, Ordering::SeqCst);
     }
     // The game's own "this loading screen is going away" signals.
@@ -447,8 +511,18 @@ fn boot_view_cover_release_ready(can_move_handoff: bool) -> bool {
         let now_ms = boot_view_epoch_ms().max(1) as usize;
         BOOT_VIEW_RELEASE_READY_MS.store(now_ms, Ordering::SeqCst);
         let n = BOOT_VIEW_SEMANTIC_RELEASES.fetch_add(1, Ordering::SeqCst) + 1;
+        // A4: a release that lands without its switch's character load having begun is the q6vk
+        // defect recurring. Counted, not merely logged, so the harness can gate on it.
+        let require = er_telemetry::counters::BOOT_VIEW_RELEASE_REQUIRE_CONFIRM.load(Ordering::SeqCst);
+        let baseline = er_telemetry::counters::BOOT_VIEW_RELEASE_CONFIRM_BASELINE.load(Ordering::SeqCst);
+        let fresh_deser =
+            crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+        let before_confirm = require != 0 && fresh_deser <= baseline;
+        if before_confirm {
+            er_telemetry::counters::BOOT_VIEW_RELEASE_BEFORE_CONFIRM.fetch_add(1, Ordering::SeqCst);
+        }
         append_autoload_debug(format_args!(
-            "boot-view: COVER RELEASE #{n} at {now_ms}ms -- render-ready and native loading screen finishing both latched this window (the real handoff; no bail needed)"
+            "boot-view: COVER RELEASE #{n} at {now_ms}ms -- render-ready and native loading screen finishing both latched this window (the real handoff; no bail needed) require_confirm={require} fresh_deser={fresh_deser} baseline={baseline} before_confirm={before_confirm}"
         ));
     }
     ready
@@ -507,6 +581,10 @@ fn boot_view_reset_cover_window() {
     er_telemetry::counters::BOOT_VIEW_RELEASE_RENDER_READY_SEEN.store(0, Ordering::SeqCst);
     er_telemetry::counters::BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN.store(0, Ordering::SeqCst);
     er_telemetry::counters::BOOT_VIEW_RELEASE_READY_MS.store(0, Ordering::SeqCst);
+    // Default OFF: boot's single load has no teardown screen in front of it, so it must not wait
+    // for a fresh-deser bump that will never come. `rearm_boot_progress_for_own_menu_load` turns it
+    // back on after calling through here, which is the only path that faces two screens.
+    er_telemetry::counters::BOOT_VIEW_RELEASE_REQUIRE_CONFIRM.store(0, Ordering::SeqCst);
     // Draw cache: force a re-rasterize on the first frame of the new window.
     BOOT_VIEW_DRAWN_PERMILLE.store(usize::MAX, Ordering::SeqCst);
     BOOT_VIEW_DRAWN_IDX.store(usize::MAX, Ordering::SeqCst);
@@ -608,6 +686,16 @@ pub(crate) fn rearm_boot_progress_for_own_menu_load(selected_slot: i32, source: 
     crate::constants::BOOT_VIEW_COMPOSITE_EPOCH.store(usize::MAX, Ordering::SeqCst);
     BOOT_VIEW_PUMP_STOP_MS.store(0, Ordering::SeqCst);
     BOOT_VIEW_PUMP_STOP_REASON.store(0, Ordering::SeqCst);
+    // CHARACTER-LOAD RELEASE GATE (er-effects-rs-q6vk). This arm happens at the switch TRIGGER,
+    // before the return-to-title teardown -- so the character load this cover exists for has not
+    // started yet. Snapshot the fresh-deser count here; the release stays held until it advances,
+    // which is exactly when the reload deserializes. Set AFTER boot_view_reset_epoch_state above,
+    // which resets the per-window release latches.
+    er_telemetry::counters::BOOT_VIEW_RELEASE_CONFIRM_BASELINE.store(
+        crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst),
+        Ordering::SeqCst,
+    );
+    er_telemetry::counters::BOOT_VIEW_RELEASE_REQUIRE_CONFIRM.store(1, Ordering::SeqCst);
     // Clear the PREVIOUS character's portrait/render state IMMEDIATELY when a new load arms (2026-07-16,
     // user-reported: the old character lingered on the new load screen). The portrait window is otherwise
     // only reset on load COMPLETION, so the just-loaded character carried into the NEXT switch's cover.

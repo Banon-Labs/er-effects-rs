@@ -1206,8 +1206,25 @@ pub static BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN: AtomicUsize = AtomicUsize::new(0)
 /// Epoch ms at which both latches were first satisfied (the real handoff instant); 0 = not yet.
 pub static BOOT_VIEW_RELEASE_READY_MS: AtomicUsize = AtomicUsize::new(0);
 /// Cover windows released by the real end condition rather than by a bail. The product-health
-/// counter: on a healthy session this should equal the number of load windows.
+/// counter: on a healthy session this should equal the number of CHARACTER loads (boot + N
+/// switches) -- NOT the number of native loading screens, of which a switch shows two.
 pub static BOOT_VIEW_SEMANTIC_RELEASES: AtomicUsize = AtomicUsize::new(0);
+
+// CHARACTER-LOAD RELEASE GATE (er-effects-rs-q6vk). A profile switch presents TWO native loading
+// screens: the return-to-title teardown, then the character load after continue_confirm. Both
+// satisfy "player render-ready + native screen finishing", so the cover released on the FIRST and
+// left the character load bare. These hold the release until THIS switch's character load has
+// actually begun, identified by the fresh-deser count advancing past its value at arm time.
+/// `SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT` snapshotted when the cover armed for a switch.
+pub static BOOT_VIEW_RELEASE_CONFIRM_BASELINE: AtomicUsize = AtomicUsize::new(0);
+/// 1 while the current cover window must wait for a character load (set at an own-menu switch arm,
+/// cleared for boot, whose single load has no teardown screen in front of it).
+pub static BOOT_VIEW_RELEASE_REQUIRE_CONFIRM: AtomicUsize = AtomicUsize::new(0);
+/// Times the gate held a release that would otherwise have fired on the teardown screen. Proves the
+/// gate engaged; 0 on a chain with switches means it is not doing anything.
+pub static BOOT_VIEW_RELEASE_HELD_FOR_CONFIRM: AtomicUsize = AtomicUsize::new(0);
+/// Releases that still landed before their switch's character load began. MUST stay 0.
+pub static BOOT_VIEW_RELEASE_BEFORE_CONFIRM: AtomicUsize = AtomicUsize::new(0);
 
 /// The cover drew this frame -- not an exposure.
 pub const NATIVE_LS_GATE_DREW: usize = 0;
