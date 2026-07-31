@@ -35,28 +35,16 @@ pub(crate) const ER_TPF_COVER_SYSTEX_KEY: &str = "SYSTEX_ErTpf_Cover00";
 /// loading-screen-portrait screenshot). 256x256 RGBA8 (uncompressed, legacy DDS header -> DXGI 28).
 pub(crate) const ER_TPF_COVER_TEX_DIM: u32 = 256;
 pub(crate) const ER_TPF_COVER_TEX_CELL: u32 = 32;
-/// Last-error codes recorded in `ER_TPF_COVER_LAST_ERROR` (a memory-read oracle, not a screenshot).
-pub(crate) const ER_TPF_COVER_ERR_NONE: usize = 0;
-pub(crate) const ER_TPF_COVER_ERR_BLOB_EMPTY: usize = 1;
-pub(crate) const ER_TPF_COVER_ERR_TPF_REPO_NULL: usize = 2;
-pub(crate) const ER_TPF_COVER_ERR_TEX_REPO_NULL: usize = 3;
-pub(crate) const ER_TPF_COVER_ERR_PANIC: usize = 4;
-pub(crate) const ER_TPF_COVER_ERR_RESCAP_NULL: usize = 5;
-pub(crate) const ER_TPF_COVER_ERR_BASE_UNRESOLVED: usize = 6;
+// ER_TPF_COVER_ERR_* removed 2026-07-31 (er-effects-rs-56fx) with ER_TPF_COVER_LAST_ERROR: every
+// code had exactly one reference -- its own definition -- because nothing ever recorded one.
 /// 1 once the native CreateTpfResCap call has been ATTEMPTED (success or failure). Latched the moment a
 /// real call is made so the register fires exactly ONCE; precondition-not-ready bails (repos still null
 /// during boot) do NOT set this and keep retrying until graphics is up.
 pub(crate) use er_telemetry::counters::ER_TPF_COVER_REGISTER_ATTEMPTED;
-/// 1 once CreateTpfResCap returned a non-null TpfResCap (the GPU texture registered into the repos).
-pub(crate) use er_telemetry::counters::ER_TPF_COVER_REGISTERED;
-/// The TpfResCap* CreateTpfResCap returned (0 until registered).
-pub(crate) use er_telemetry::counters::ER_TPF_COVER_LAST_RESCAP;
-/// Count of bind-observer target rewrites that pointed the visible profile surface at our key.
-pub(crate) use er_telemetry::counters::ER_TPF_COVER_BOUND;
-/// Number of failed/abandoned register attempts (precondition miss or caught panic).
-pub(crate) use er_telemetry::counters::ER_TPF_COVER_FAILURES;
-/// Last error code (see `ER_TPF_COVER_ERR_*`).
-pub(crate) static ER_TPF_COVER_LAST_ERROR: AtomicUsize = AtomicUsize::new(ER_TPF_COVER_ERR_NONE);
+// ER_TPF_COVER_REGISTERED / _LAST_RESCAP / _BOUND / _FAILURES / _LAST_ERROR removed 2026-07-31
+// (er-effects-rs-56fx): all five were read once each to emit an oracle and written nowhere, so the
+// TPF cover texture path reported registered=false, bound=0, failures=0, err=NONE on every run
+// whether or not it ever ran. Re-add WITH writers at the register/bind sites if that path is built.
 /// One-shot latch for the bind-observer target rewrite (fires once after registration).
 pub(crate) use er_telemetry::counters::ER_TPF_COVER_TARGET_REWRITE_FIRED;
 

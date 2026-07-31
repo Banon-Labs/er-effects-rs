@@ -6,6 +6,10 @@ repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 bash "$repo_root/scripts/check-no-local-main-commits.sh"
 python3 "$repo_root/scripts/check-no-timeouts.py"
 python3 "$repo_root/scripts/test-no-timeouts.py"
+# Telemetry honesty: no counter may be READ to emit an oracle while written nowhere. Selftest first,
+# so the gate is never trusted on its own say-so (er-effects-rs-56fx).
+python3 "$repo_root/scripts/check-oracle-writers.py" --selftest
+python3 "$repo_root/scripts/check-oracle-writers.py"
 python3 "$repo_root/scripts/check-launch-guardrails.py" --audit
 python3 "$repo_root/scripts/check-runtime-probe-contract.py" --audit
 python3 "$repo_root/scripts/test-runtime-probe-contract.py"
