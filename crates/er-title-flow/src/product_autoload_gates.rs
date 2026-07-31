@@ -12,8 +12,8 @@ use std::{
 
 use std::os::windows::ffi::OsStrExt as _;
 
-use crate::input_blocker::{InputBlocker, InputFlags};
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MhHook, MH_STATUS};
+use crate::compat::{InputBlocker, InputFlags};
+use er_hook::{MH_ApplyQueued, MH_Initialize, MhHook, MH_STATUS};
 use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
@@ -39,11 +39,11 @@ use windows::{
 };
 
 #[allow(unused_imports)]
-use crate::*;
+use crate::compat::*;
 #[allow(unused_imports)]
-use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
+use crate::compat::*;
 
-use super::*;
+
 
 pub(crate) fn arm_product_autoload_from_request(request: &SaveLoader) {
     // Product autoload is the release/default behavior. Do not make it depend on smoke-only env

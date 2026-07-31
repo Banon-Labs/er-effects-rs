@@ -60,7 +60,7 @@ pub(crate) unsafe fn switch_slot_arm_programmatic(base: usize, slot: i32) {
     // ProfileSelect arm (system_quit_arm_quickload_autoload) via reset_switch_reload_latches() so the two
     // arm paths cannot drift -- that drift softlocked a user-driven load3 (bd
     // compounding-reload-two-roots-...-chainB-stale-fd4io-latch-b78-2026-07-23).
-    crate::experiments::own_load::reset_switch_reload_latches();
+    crate::compat::own_load::reset_switch_reload_latches();
     PRODUCT_AUTOLOAD_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     OWN_STEPPER_SLOT.store(slot, Ordering::SeqCst);
     OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_MENU, Ordering::SeqCst);
@@ -107,7 +107,7 @@ pub(crate) unsafe fn switch_slot_arm_programmatic(base: usize, slot: i32) {
     // no boot-view rearm, no confirm timestamp -- so control-file switches showed the bare native
     // loading screen and agent probes could never exercise the user path's publish-race machinery.
     unsafe {
-        crate::experiments::portrait_retarget_and_rearm_for_switch(
+        crate::compat::portrait_retarget_and_rearm_for_switch(
             slot,
             "SwitchSlotProgrammaticArm",
         )
