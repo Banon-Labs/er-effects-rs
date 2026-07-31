@@ -249,7 +249,9 @@ fn os_dialog_run(
     let title: Vec<u16> = if save_as {
         "Save Game to...".encode_utf16().chain(core::iter::once(0)).collect()
     } else {
-        "Load Save Profiles".encode_utf16().chain(core::iter::once(0)).collect()
+        // Same words as the row that opens it, so the window the user context-switches into is
+        // recognisably the thing they pressed.
+        "Load Character from File".encode_utf16().chain(core::iter::once(0)).collect()
     };
     let initial_dir: Vec<u16> = start_dir.encode_utf16().chain(core::iter::once(0)).collect();
     let mut path_buffer = [0u16; OS_PICK_PATH_UNITS];
@@ -614,7 +616,12 @@ pub(crate) unsafe fn os_open_save_dest_picker(system_dialog: usize) -> PickerOpe
     }
     // The SAME start-dir/leaf resolution the in-game destination browser uses, so the two modes
     // cannot open in different places.
-    let Some((start_dir, loaded_file_name)) = save_dest_start_dir() else {
+    let Some(SaveDestOrigin {
+        start_dir,
+        loaded_file_name,
+        loaded_path,
+    }) = save_dest_start_dir()
+    else {
         return PickerOpenOutcome::NotOpened;
     };
     let Some(start_dir) = start_dir.to_str().map(str::to_owned) else {
@@ -627,6 +634,7 @@ pub(crate) unsafe fn os_open_save_dest_picker(system_dialog: usize) -> PickerOpe
     let extensions: &[&str] = if seamless { &["co2", "sl2"] } else { &["sl2"] };
     let intent = crate::experiments::save_picker::PickerIntent::SaveDestination {
         loaded_file_name: loaded_file_name.clone(),
+        loaded_path: loaded_path.clone(),
     };
     SAVE_DEST_PICKER_OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
     SAVE_PICKER_OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
@@ -648,6 +656,17 @@ pub(crate) unsafe fn os_open_save_dest_picker(system_dialog: usize) -> PickerOpe
             match save_dest_route_picked_target(&target) {
                 DestRoute::ConfirmOverwrite => {
                     SAVE_DEST_TARGET_EXISTING_COUNT.fetch_add(1, Ordering::SeqCst);
+                    // Same refusal as the in-game arm: with no buildable confirm there is no
+                    // overwrite. Nothing is staged, so stage 3 reads this as an abandoned browse
+                    // and ends the flow without writing.
+                    if !save_flow_box_recipe_available() {
+                        SAVE_DEST_OVERWRITE_UNCONFIRMABLE_COUNT.fetch_add(1, Ordering::SeqCst);
+                        append_autoload_debug(format_args!(
+                            "save-picker-os: REFUSED to overwrite '{}' -- the overwrite confirm cannot be built on this build, and an unconfirmed overwrite is not something this flow performs. Nothing staged",
+                            system_quit_windows_path_for_log(picked)
+                        ));
+                        return;
+                    }
                     save_dest_set_target(target, "os-save-as");
                     SAVE_DEST_CONFIRM_PENDING.store(1, Ordering::SeqCst);
                     append_autoload_debug(format_args!(

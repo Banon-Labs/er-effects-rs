@@ -58,7 +58,7 @@
 //
 // # The other destination: the loaded save itself
 //
-// Box2 answered "Yes" (and a browsed pick that resolves back to the loaded save) means the native
+// A browsed pick that resolves back to the loaded save means the native
 // writer rewrites the live container in place -- correct, sanctioned, and until now completely
 // unnamed in telemetry, which is how run 4's 20:43:51 live-file rewrite read as an anonymous
 // mutation. `save_dest_arm_live_overwrite` records that intent BEFORE the fire and verifies it
@@ -172,7 +172,8 @@ struct SaveDestRedirect {
 
 static SAVE_DEST_REDIRECT: Mutex<Option<SaveDestRedirect>> = Mutex::new(None);
 
-/// A commit whose destination IS the loaded save: Box2 answered "Yes", or a browsed pick that
+/// A commit whose destination IS the loaded save -- a browsed pick, or `[ new ]` in the loaded
+/// save's own folder, that
 /// resolves back to the loaded save. Nothing is redirected -- the native writer rewrites the live
 /// container in place, which is exactly what the user asked for. Recorded anyway so the rewrite is
 /// NAMED before it happens and scored after it, instead of surfacing later as an unattributed

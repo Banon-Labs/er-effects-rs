@@ -1,15 +1,16 @@
 // In-game save-file picker rendered through the native `05_010_ProfileSelect` window.
 //
-// Replaces the System>Quit "Load Save Profiles" `GetOpenFileNameW` OS dialog (context switch out
-// of the game) with the same native 10-row window the character switcher already drives. The rows
-// are a browsable directory listing -- up, drive cycler, `[ new ]` in destination intent, dirs +
-// mode-locked save files, page cycler -- staged as synthetic ProfileSummary records; the shared
-// model lives in `experiments::save_picker` and owns the row layout (see its module docs for the
-// order and why nothing sits at a fixed index). Directory/drive/page navigation rebuilds the row
-// list in place via the game's own records-changed rebuild (close + menu-pump resubmit as
-// fallback). Picking a file feeds the exact validation/preview pipeline the OS picker used
-// (`system_quit_ingest_picked_save`) and then reopens the window as the normal slot view, so
-// the "pick file -> pick character slot" flow never leaves the game's visual system.
+// Replaces the System>Quit "Load Character from File" `GetOpenFileNameW` OS dialog (context switch
+// out of the game) with the same native 10-row window the character switcher already drives. The
+// rows are a browsable directory listing -- a pinned `[ new ]` FIRST in destination intent, then
+// up, drive cycler, dirs + mode-locked save files, page cycler -- staged as synthetic
+// ProfileSummary records; the shared model lives in `experiments::save_picker` and owns the row
+// layout (see its module docs for the order and why nothing sits at a fixed index). It is also the
+// surface the Save Game row press opens directly, with no confirm in front of it. Directory, drive
+// and page navigation rebuild the row list in place via the game's own records-changed rebuild
+// (close + menu-pump resubmit as fallback). Picking a file feeds the validation/preview pipeline
+// the OS picker used (`system_quit_ingest_picked_save`) and then reopens the window as the normal
+// slot view, so the "pick file -> pick character" flow never leaves the game's visual system.
 //
 // The only input this window gives the DLL is ROW ACTIVATION: `system_quit_profile_load_activate_hook`
 // intercepts `CS::ProfileLoadDialog` vtable slot 20 (`0x9a4670`) and reads the highlighted list
@@ -25,11 +26,11 @@ pub(crate) use er_telemetry::counters::SAVE_PICKER_REOPEN_PENDING;
 /// 1 = a file was ingested from the picker; the menu-pump Run hook must resubmit `05_010` as the
 /// NORMAL slot view (picker mode already cleared) so the user picks a character slot next.
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OPEN_SLOTS_PENDING;
-/// Action object of the "Load Save Profiles" row; `system_quit_open_profile_load_dialog` derives
+/// Action object of the "Load Character from File" row; `system_quit_open_profile_load_dialog` derives
 /// the System dialog (action+0x8), submit queue and window list from it on every (re)submit.
 pub(crate) use er_telemetry::counters::SAVE_PICKER_ACTION_OBJ;
 /// 1 while the live picker is the save-DESTINATION chooser (save-game-flow WP3) instead of the
-/// load-source browser: row 1 is a pinned `[ new ]`, and activation feeds the save flow.
+/// load-source browser: row 0 is a pinned `[ new ]`, and activation feeds the save flow.
 pub(crate) use er_telemetry::counters::SAVE_PICKER_DEST_MODE;
 /// System/Quit dialog the live picker window was submitted from; the menu-pump resubmit reopens
 /// through it (the destination picker is opened by the save flow, which has no row action object).
@@ -198,7 +199,7 @@ unsafe fn save_picker_stage_row_records(
     true
 }
 
-/// Open the LOAD-source picker from the "Load Save Profiles" row action (menu thread). Which
+/// Open the LOAD-source picker from the "Load Character from File" row action (menu thread). Which
 /// surface that is -- this in-game browser or the OS file dialog -- is decided in one place,
 /// [`open_picker_for_intent`]; the signature and the four call sites are unchanged.
 pub(crate) unsafe fn system_quit_open_save_picker_menu(action_obj: usize) -> PickerOpenOutcome {
@@ -293,10 +294,13 @@ pub(crate) unsafe fn system_quit_open_save_dest_picker(system_dialog: usize) -> 
 /// Differences from the load-source picker, all deliberate:
 ///   * start dir = the LOADED save's own directory, not the remembered preferred dir -- "save
 ///     next to the save you loaded" is the expected default and the remembered dir belongs to the
-///     load flow;
+///     load flow. Since the Save Game row press opens this browser with nothing in front of it,
+///     that folder is also the first thing the user sees, so it has to be the one where both
+///     answers -- a fresh file, or the save they are playing -- are one press away;
 ///   * NO save-swap byte preview is armed: nothing foreign is previewed here, and the safety
 ///     snapshot of the live save is taken later, at the fire gate, by `save_dest_arm_redirect`;
-///   * the model carries the loaded save's filename so the `[ new ]` row writes that leaf.
+///   * the model carries the loaded save's filename so the `[ new ]` row writes that leaf, and its
+///     full path so that row is marked `[CURRENT]` in the listing.
 pub(crate) unsafe fn system_quit_open_save_dest_picker_in_game(system_dialog: usize) -> bool {
     const HEAP_LO: usize = 0x10000;
     if system_dialog < HEAP_LO || system_dialog == TITLE_OWNER_SCAN_START_ADDRESS {
@@ -305,7 +309,12 @@ pub(crate) unsafe fn system_quit_open_save_dest_picker_in_game(system_dialog: us
         ));
         return false;
     }
-    let Some((start_dir, loaded_file_name)) = save_dest_start_dir() else {
+    let Some(SaveDestOrigin {
+        start_dir,
+        loaded_file_name,
+        loaded_path,
+    }) = save_dest_start_dir()
+    else {
         return false;
     };
     unsafe { system_quit_save_swap_restore_profile_summary("save-dest-picker-open") };
@@ -321,6 +330,7 @@ pub(crate) unsafe fn system_quit_open_save_dest_picker_in_game(system_dialog: us
         &start_dir,
         extensions,
         &loaded_file_name,
+        &loaded_path,
     );
     if !unsafe { save_picker_stage_row_records(&model) } {
         return false;
@@ -353,21 +363,39 @@ pub(crate) unsafe fn system_quit_open_save_dest_picker_in_game(system_dialog: us
 }
 
 /// Handle a destination-browser activation (menu thread, from `save_picker_handle_activation`).
-/// `target` already exists -> the Box3 overwrite confirm; otherwise the commit is staged and the
-/// picker closes so the save-flow tick can close the menus and fire.
+/// `target` already exists -> the overwrite confirm; otherwise the commit is staged and the picker
+/// closes so the save-flow tick can close the menus and fire.
+///
+/// THE ROUTE IS DECIDED BY THE TARGET, NOT BY WHICH ROW WAS PRESSED. `[ new ]` gets no exemption:
+/// it resolves to the loaded save's own leaf in the browsed folder, and in the folder the browser
+/// OPENS IN that leaf is the loaded save itself -- so pressing `[ new ]` there is an overwrite and
+/// confirms like any other. The only rows that skip the question are the ones whose target does
+/// not exist, where there is nothing to warn about.
 unsafe fn save_dest_handle_picked_target(dialog: usize, target: PathBuf, source: &'static str) {
     match save_dest_route_picked_target(&target) {
         DestRoute::ConfirmOverwrite => {
             SAVE_DEST_TARGET_EXISTING_COUNT.fetch_add(1, Ordering::SeqCst);
+            // NO CONFIRM MEANS NO OVERWRITE. On a build whose MessageBoxBuilder recipe failed its
+            // prologue check the question cannot be asked, and the answer to "may I destroy this
+            // file without asking" is no. The user stays in the browser and can still save to a
+            // free name; the refusal is counted so a run can tell it from a decline.
+            if !save_flow_box_recipe_available() {
+                SAVE_DEST_OVERWRITE_UNCONFIRMABLE_COUNT.fetch_add(1, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "save-dest: REFUSED to overwrite '{}' (source={source}) -- the overwrite confirm cannot be built on this build, and an unconfirmed overwrite is not something this flow performs. Staying in the destination list; a new file name still saves",
+                    target.display()
+                ));
+                return;
+            }
             save_dest_set_target(target, source);
-            // Box3 is hosted by the PICKER dialog (the game raises its own confirms over 05_010 the
-            // same way), so it does not contend with the System dialog queue that owns the picker
-            // window job. Submitted inline here (menu thread); a not-ready queue leaves the pending
-            // latch for the next menu pump.
+            // The confirm is hosted by the PICKER dialog (the game raises its own confirms over
+            // 05_010 the same way), so it does not contend with the System dialog queue that owns
+            // the picker window job. Submitted inline here (menu thread); a not-ready queue leaves
+            // the pending latch for the next menu pump.
             save_flow_box_set_host_dialog(dialog);
             SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_OVERWRITE_FILE, Ordering::SeqCst);
             SAVE_FLOW_STAGE_TICKS.store(0, Ordering::SeqCst);
-            SAVE_FLOW_STAGE.store(SAVE_FLOW_STAGE_BOX3_WAIT, Ordering::SeqCst);
+            SAVE_FLOW_STAGE.store(SAVE_FLOW_STAGE_OVERWRITE_CONFIRM, Ordering::SeqCst);
             if unsafe { save_flow_submit_box(SAVE_FLOW_BOX_OVERWRITE_FILE) } {
                 SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_NONE, Ordering::SeqCst);
             }
@@ -622,20 +650,36 @@ const SAVE_PICKER_BROWSE_LINE_CHAR_BUDGET: usize = 44;
 /// picker does not own the rows (the normal character-slot view keeps the attribute stats panel).
 /// Generated text uses `/` separators and never inserts commas (comma-safe labels,
 /// er-effects-rs-dly6); names pass through with HTML escaping only.
+///
+/// THE `[CURRENT]` MARKER LIVES HERE, on the top line, and it is the answer to a question the
+/// destination browser now has to answer on its own: "which of these is the file I am playing?"
+/// Before 2026-07-31 a separate up-front box asked whether to overwrite the loaded save, so the
+/// list never had to identify it. That box is gone -- overwriting your own save means finding its
+/// row -- so the row says so. It is a display hint over a path compare, never the commit-time
+/// identity check (see `SavePickerModel::row_is_loaded_save`).
 pub(crate) fn save_picker_browse_stats_lines(row: usize) -> Option<(Vec<u16>, Vec<u16>)> {
     if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 && !missing_save_selection_pending() {
         return None;
     }
     let guard = crate::experiments::save_picker::active_save_picker_lock();
     let model = guard.as_ref()?;
+    let is_current = model.row_is_loaded_save(row);
     let Some(chars) = model.row_file_characters(row) else {
         // Non-file row: blank both lines.
         return Some((vec![0], vec![0]));
     };
-    let top = if chars.len() == 1 {
+    let count = if chars.len() == 1 {
         "1 CHARACTER".to_owned()
     } else {
         format!("{} CHARACTERS", chars.len())
+    };
+    let top = if is_current {
+        format!(
+            "{} {count}",
+            crate::experiments::save_picker::PICKER_CURRENT_SAVE_MARKER
+        )
+    } else {
+        count
     };
     let mut bottom = String::new();
     let mut shown = 0usize;

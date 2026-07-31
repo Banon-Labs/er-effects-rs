@@ -673,12 +673,13 @@ pub(crate) unsafe fn system_quit_repro_tick() {
         }
         SQ_REPRO_STATE_TO_PROFILE => {
             if sq_repro_save_game_only() {
-                // WP2: the row press no longer commits -- it opens the confirm chain. Hand off
-                // to SAVE_CONFIRM as soon as the save-flow stage machine reports Box1 is up.
+                // The row press no longer commits and no longer asks: it opens the destination
+                // list (stage 3). Hand off to SAVE_CONFIRM the moment the flow leaves IDLE --
+                // checkpointing on the stage machine, never on a timer.
                 let stage = SAVE_FLOW_STAGE.load(Ordering::SeqCst);
-                if stage == SAVE_FLOW_STAGE_BOX1_WAIT {
+                if stage != SAVE_FLOW_STAGE_IDLE {
                     append_autoload_debug(format_args!(
-                        "sq-repro: Save Game row opened the confirm chain (save_flow_stage={stage}) -> SAVE_CONFIRM (walk the boxes to Yes)"
+                        "sq-repro: Save Game row opened the destination list (save_flow_stage={stage}) -> SAVE_CONFIRM (pick a destination, then answer the overwrite confirm)"
                     ));
                     set_pad(0);
                     sq_repro_transition(SQ_REPRO_STATE_SAVE_CONFIRM);
@@ -688,7 +689,7 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                     sq_repro_edges(tick, &[XINPUT_GAMEPAD_LEFT_SHOULDER, XINPUT_GAMEPAD_A]);
                 if holding {
                     sq_repro_waiting_once(
-                        "TO_SAVE_GAME: LB+A issued, waiting for the Save Game row to open Box1 (oracle_save_flow_stage=1)",
+                        "TO_SAVE_GAME: LB+A issued, waiting for the Save Game row to open the destination list (oracle_save_flow_stage=3)",
                     );
                 }
                 set_pad(btn);
@@ -868,11 +869,17 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             set_pad(btn);
         }
         SQ_REPRO_STATE_SAVE_CONFIRM => {
-            // Walk the Save Game confirm chain the way a user does: move the live dialog
-            // cursor onto the box's affirmative button, then press confirm. Checkpointed on
-            // `oracle_save_flow_stage` and the dialog's own cursor -- never on timers, and no
+            // Walk the Save Game flow the way a user does, checkpointed on
+            // `oracle_save_flow_stage` and on live dialog cursors -- never on timers, and with no
             // guessed button layout (`sq_repro_box_nav_button` discovers the working axis by
             // observing the cursor move).
+            //
+            // TWO SCREENS NOW, NOT A CHAIN OF BOXES. Stage 3 is the destination list; the drive
+            // confirms the row the list opened on, which is the pinned `[ new ]` (row 0). In the
+            // folder that list opens in -- the loaded save's own -- `[ new ]` resolves to the
+            // loaded save itself, so the pick routes to stage 4's overwrite confirm, and the
+            // existing cursor-walk answers it Yes. That is deliberately the SAME two presses a
+            // user makes to overwrite their own save, which is the case worth self-driving.
             let stage = SAVE_FLOW_STAGE.load(Ordering::SeqCst);
             let commits = SAVE_FLOW_COMMIT_COMPLETE_COUNT.load(Ordering::SeqCst);
             let aborts = SAVE_FLOW_ABORT_COUNT.load(Ordering::SeqCst);
@@ -884,11 +891,31 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                 SQ_REPRO_STATE.store(SQ_REPRO_STATE_DONE, Ordering::SeqCst);
                 return;
             }
+            if stage == SAVE_FLOW_STAGE_DEST_BROWSE {
+                SQ_REPRO_BOX_NAV_BASELINE.store(usize::MAX, Ordering::SeqCst);
+                // Only press while OUR browser is actually up and no commit is already staged;
+                // otherwise this is the teardown/commit window and a press would be noise.
+                let picker_live = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) != 0
+                    && SAVE_PICKER_DEST_MODE.load(Ordering::SeqCst) != 0
+                    && SAVE_DEST_COMMIT_PENDING.load(Ordering::SeqCst) == 0;
+                if picker_live {
+                    sq_repro_waiting_once(
+                        "SAVE_CONFIRM: destination list is up -- confirming the row it opened on ([ new ])",
+                    );
+                    set_pad(if (tick % INJECT_NAV_CYCLE) < INJECT_NAV_TAP_LEN {
+                        XINPUT_GAMEPAD_A
+                    } else {
+                        0
+                    });
+                } else {
+                    set_pad(0);
+                }
+                return;
+            }
             let box_id = match stage {
-                SAVE_FLOW_STAGE_BOX1_WAIT => SAVE_FLOW_BOX_CONFIRM_SAVE,
-                SAVE_FLOW_STAGE_BOX2_WAIT => SAVE_FLOW_BOX_OVERWRITE_LOADED,
-                // Between boxes (close/commit/fire stages): hold neutral and let the product
-                // state machine run; the completion check above ends the drive.
+                SAVE_FLOW_STAGE_OVERWRITE_CONFIRM => SAVE_FLOW_BOX_OVERWRITE_FILE,
+                // Close/commit/fire stages: hold neutral and let the product state machine run;
+                // the completion check above ends the drive.
                 _ => {
                     set_pad(0);
                     SQ_REPRO_BOX_NAV_BASELINE.store(usize::MAX, Ordering::SeqCst);

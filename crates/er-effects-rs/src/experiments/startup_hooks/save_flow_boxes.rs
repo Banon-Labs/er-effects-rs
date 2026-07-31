@@ -1,15 +1,24 @@
-// Native confirm boxes for the System->Quit "Save Game" flow (save-game-flow WP2).
+// The Save Game flow's ONE native confirm box (save-game-flow WP2; reduced to one 2026-07-31).
 //
-// Clicking Save Game no longer writes anything on its own. It opens a confirm chain built
-// from the GAME's own `CS::MessageBoxBuilder`, so the boxes are localized, skinned and
-// input-routed exactly like the native quit confirm -- no bespoke UI, no fabricated input:
+// Clicking Save Game writes nothing on its own and asks nothing on its own: it opens the
+// destination list. The single question this module builds is asked LATER, and only about a
+// destination the user has actually pointed at:
 //
-//   Box1 "Are you sure you want to save?"   choices Yes / No, default No
-//   Box2 "Overwrite your loaded save?"      choices Yes / No, default Yes
-//   Box3 "Overwrite this file?"             choices Yes / No, default No
+//   "Are you sure you want to overwrite this file?"   choices Yes / No, default No
 //
-// Box1/Box2 are hosted by the System/Quit dialog; Box3 is raised over the destination browser and
-// is hosted by the picker's own dialog (see `save_flow_box_host_dialog`).
+// It is built from the GAME's own `CS::MessageBoxBuilder`, so it is localized, skinned and
+// input-routed exactly like the native quit confirm -- no bespoke UI, no fabricated input. It is
+// hosted by whichever dialog owns the screen when it is asked: the picker's own `05_010` dialog
+// for the in-game browser, the System/Quit dialog for the OS Save-As (whose own dialog is already
+// gone by then). See `save_flow_box_host_dialog`.
+//
+// TWO BOXES WERE DELETED HERE, and the reason is the whole point of the change. The flow used to
+// open "Are you sure you want to save?" and then "Overwrite your loaded save?" BEFORE showing any
+// destination, so the user had to predict what they wanted before seeing what was there -- and the
+// destructive answer was the DEFAULT on the second box. Reviewer report: "Prompting to overwrite
+// the current file or not every time up front seems like it will lead to more mistakes." An
+// overwrite confirm attached to a file the user just pointed at cannot be answered by reflex about
+// some other file.
 //
 // RECIPE (disassembled from `eldenring-deobf.bin` 2026-07-28; the native Yes/No confirm
 // wrapper `FUN_1407b73d0`, which is what the quit confirm at `FUN_14079d700` calls):
@@ -23,15 +32,15 @@
 //     finalize(builder, &job_slot, 0)         ; 0x7b10f0, writes the MenuJob reference
 //     dtor(builder)                           ; 0x7b0140
 //
-// then the resulting MenuJob is submitted to the System dialog's own queue (dialog+0x10)
-// with `MENU_JOB_SUBMIT_RVA`, exactly like the profile-load route. The one place we differ
-// from the native wrapper is the ADD ORDER: `default_last` selects the LAST button added, so
-// a box that must default to Yes adds [No, Yes] while a box that must default to No adds
-// [Yes, No]. That keeps the default under native control (no raw builder-field pokes) at the
-// cost of the two buttons being drawn in the reversed order on the default-Yes box.
+// then the resulting MenuJob is submitted to a dialog's own queue (dialog+0x10) with
+// `MENU_JOB_SUBMIT_RVA`, exactly like the profile-load route. The one place we differ from the
+// native wrapper is the ADD ORDER: `default_last` selects the LAST button added, so a box that
+// must default to No adds [Yes, No]. That keeps the default under native control (no raw
+// builder-field pokes). Nothing here needs the reversed [No, Yes] order any more -- the only box
+// that wanted a Yes default was the up-front "Overwrite your loaded save?", and it is gone.
 //
-// The chosen button comes back as the ADD-ORDER index in `dialog+0x25e0` (-1 = cancel/B), so
-// each box records its own order and maps the index through it.
+// The chosen button comes back as the ADD-ORDER index in `dialog+0x25e0` (-1 = cancel/B), so the
+// box records its order and maps the index through it.
 //
 // Prompt text is ours (process-lifetime UTF-16 statics turned into a `CS::MenuString` by the
 // game's own ctor, the same pattern the shipping Save Game row label uses). Button labels are
@@ -39,12 +48,10 @@
 
 /// No confirm box (also the `SAVE_FLOW_BOX_EXPECTED` "not expecting a build" sentinel).
 pub(crate) const SAVE_FLOW_BOX_NONE: usize = 0;
-/// "Are you sure you want to save?" -- the first gate on the Save Game row.
-pub(crate) const SAVE_FLOW_BOX_CONFIRM_SAVE: usize = 1;
-/// "Overwrite your loaded save?" -- Yes overwrites, No goes to the destination browser (WP3).
-pub(crate) const SAVE_FLOW_BOX_OVERWRITE_LOADED: usize = 2;
-/// "Overwrite this file?" -- the destination browser's final overwrite gate (WP3).
-pub(crate) const SAVE_FLOW_BOX_OVERWRITE_FILE: usize = 3;
+/// "Are you sure you want to overwrite this file?" -- the flow's ONLY confirm, asked about a
+/// destination that already exists. A destination whose name is free is written with no question,
+/// because there is nothing there to lose and nothing to warn about.
+pub(crate) const SAVE_FLOW_BOX_OVERWRITE_FILE: usize = 1;
 
 /// Fixed capacity (UTF-16 units) of a confirm-box prompt buffer. The const builder
 /// zero-fills the tail, so the NUL terminator `CS::MenuString` expects is always present and
@@ -63,12 +70,8 @@ const fn save_flow_prompt(text: &[u8]) -> [u16; SAVE_FLOW_PROMPT_CAPACITY] {
     out
 }
 
-static SAVE_FLOW_BOX1_PROMPT_W: [u16; SAVE_FLOW_PROMPT_CAPACITY] =
-    save_flow_prompt(b"Are you sure you want to save?");
-static SAVE_FLOW_BOX2_PROMPT_W: [u16; SAVE_FLOW_PROMPT_CAPACITY] =
-    save_flow_prompt(b"Overwrite your loaded save?");
-static SAVE_FLOW_BOX3_PROMPT_W: [u16; SAVE_FLOW_PROMPT_CAPACITY] =
-    save_flow_prompt(b"Overwrite this file?");
+static SAVE_FLOW_OVERWRITE_PROMPT_W: [u16; SAVE_FLOW_PROMPT_CAPACITY] =
+    save_flow_prompt(b"Are you sure you want to overwrite this file?");
 
 /// The Yes descriptor's internal label `L"\u{6c7a}\u{5b9a}"` ("kettei"/decide). This is an
 /// INTERNAL key the adder `_wcsicmp`s against the builder's default-label slot, not display
@@ -131,15 +134,14 @@ pub(crate) enum SaveFlowDecision {
 }
 
 /// Add order per box. `default_last` makes the LAST entry the default choice.
+///
+/// There is one order because there is one box, and it defaults to NO. So every answer this flow
+/// can be given by reflex destroys nothing: the default is "leave that file alone". The box that
+/// used to default to YES -- the up-front "Overwrite your loaded save?" -- is gone.
 fn save_flow_box_add_order(box_id: usize) -> Option<&'static [SaveFlowButton]> {
-    // Default No: refuse unless the user actively chooses to write.
+    // Default No: refuse unless the user actively chooses to write over an existing file.
     const DEFAULT_NO: &[SaveFlowButton] = &[SaveFlowButton::Yes, SaveFlowButton::No];
-    // Default Yes (spec): overwriting the save the user already has loaded is the expected
-    // answer once they have confirmed they want to save at all.
-    const DEFAULT_YES: &[SaveFlowButton] = &[SaveFlowButton::No, SaveFlowButton::Yes];
     match box_id {
-        SAVE_FLOW_BOX_CONFIRM_SAVE => Some(DEFAULT_NO),
-        SAVE_FLOW_BOX_OVERWRITE_LOADED => Some(DEFAULT_YES),
         SAVE_FLOW_BOX_OVERWRITE_FILE => Some(DEFAULT_NO),
         _ => None,
     }
@@ -147,9 +149,7 @@ fn save_flow_box_add_order(box_id: usize) -> Option<&'static [SaveFlowButton]> {
 
 fn save_flow_box_prompt(box_id: usize) -> Option<&'static [u16; SAVE_FLOW_PROMPT_CAPACITY]> {
     match box_id {
-        SAVE_FLOW_BOX_CONFIRM_SAVE => Some(&SAVE_FLOW_BOX1_PROMPT_W),
-        SAVE_FLOW_BOX_OVERWRITE_LOADED => Some(&SAVE_FLOW_BOX2_PROMPT_W),
-        SAVE_FLOW_BOX_OVERWRITE_FILE => Some(&SAVE_FLOW_BOX3_PROMPT_W),
+        SAVE_FLOW_BOX_OVERWRITE_FILE => Some(&SAVE_FLOW_OVERWRITE_PROMPT_W),
         _ => None,
     }
 }
@@ -167,9 +167,7 @@ pub(crate) fn save_flow_box_yes_index(box_id: usize) -> Option<i32> {
 
 pub(crate) fn save_flow_box_label(box_id: usize) -> &'static str {
     match box_id {
-        SAVE_FLOW_BOX_CONFIRM_SAVE => "box1-confirm-save",
-        SAVE_FLOW_BOX_OVERWRITE_LOADED => "box2-overwrite-loaded",
-        SAVE_FLOW_BOX_OVERWRITE_FILE => "box3-overwrite-file",
+        SAVE_FLOW_BOX_OVERWRITE_FILE => "overwrite-file-confirm",
         _ => "box-unknown",
     }
 }
@@ -278,7 +276,7 @@ fn save_flow_box_recipe() -> Option<&'static SaveFlowBoxRecipe> {
         .as_ref()
 }
 
-/// True when the confirm chain can be built on this image.
+/// True when the overwrite confirm can be built on this image.
 pub(crate) fn save_flow_box_recipe_available() -> bool {
     save_flow_box_recipe().is_some()
 }
@@ -307,7 +305,8 @@ pub(crate) fn save_flow_box_set_host_dialog(dialog: usize) {
 ///
 /// MENU-THREAD ONLY: this calls the native MessageBoxBuilder + MenuJob submit helpers, so it
 /// must run in the same ownership context `system_quit_open_profile_load_dialog` does -- the
-/// row-action hook for Box1, `system_quit_menu_window_run_post` for the later boxes.
+/// picker activation hook when a destination is picked inline, and
+/// `system_quit_menu_window_run_post` when that submit had to be deferred to the pump.
 ///
 /// Returns false when the box could not be submitted. A false from a NOT-ready job queue is
 /// retryable (the caller keeps the pending latch and tries on the next menu pump); every other
@@ -478,10 +477,10 @@ struct SaveFlowBoxSnapshot {
 /// The previous implementation read `+0x25e8` as a "decided" state and `+0x25e0` as the chosen
 /// button. RE of the 1.16.2 ctor `FUN_1409275b0` shows both are written at CONSTRUCTION:
 /// `+0x25e8` is the BUTTON COUNT (2 for a Yes/No confirm) and `+0x25e0` is the DEFAULT CURSOR
-/// INDEX (1 for Box1's `[Yes, No]` + `default_last`). So the old poll saw "state 2 >= decided"
-/// on its very first frame and mapped index 1 to `No` -- it answered the user's own dialog for
-/// them, with no input, and aborted their save. That exactly reproduces the measured
-/// `box1_open=1, box1_no=1, abort=1` with the box never touched.
+/// INDEX (1 for a default-No box's `[Yes, No]` + `default_last`). So the old poll saw "state 2 >=
+/// decided" on its very first frame and mapped index 1 to `No` -- it answered the user's own dialog
+/// for them, with no input, and aborted their save. That exactly reproduced the measured
+/// `open=1, no=1, abort=1` with the box never touched.
 ///
 /// What actually carries the answer:
 ///   * each button gets a `MenuJobResult` from the builder -- `add_yes` -> `Success` (2),

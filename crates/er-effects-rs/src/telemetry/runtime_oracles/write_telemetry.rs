@@ -907,29 +907,28 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         slot_hex(consumer_after.map(|slot| slot.load_content)),
         slot_hex(consumer_after.map(|slot| slot.job)),
     ));
-    // SAVE-FLOW CONFIRM CHAIN oracles (save-game-flow WP2 + WP3): Box1 "are you sure", Box2
-    // "overwrite your loaded save", Box3 "overwrite this file" (the destination browser's final
-    // gate).
+    // SAVE-FLOW CONFIRM oracles. There is ONE confirm box in the flow -- "Are you sure you want to
+    // overwrite this file?" -- so there is one set of counters. The three-box spelling
+    // (`oracle_save_flow_box1/2/3_*`) is GONE with the two up-front confirms it described; a probe
+    // written against those names will not silently read zeros from a renamed field, it will fail
+    // to find them, which is the intended way to learn the flow changed.
     //
-    // A save-flow probe must key on `oracle_save_flow_stage` + these counters, NOT on the
-    // msgbox oracles: the confirm boxes are captured into the flow's OWN dialog slot and
-    // deliberately do not feed `MSGBOX_LAST_DIALOG` / `oracle_blocking_modal_present`, so the
-    // startup auto-accept can never reach a user-facing save confirm and an expected, wanted
-    // confirm never reads as a blocking-modal failure.
+    // A save-flow probe must key on `oracle_save_flow_stage` + these counters, NOT on the msgbox
+    // oracles: the confirm box is captured into the flow's OWN dialog slot and deliberately does
+    // not feed `MSGBOX_LAST_DIALOG` / `oracle_blocking_modal_present`, so the startup auto-accept
+    // can never reach a user-facing save confirm and an expected, wanted confirm never reads as a
+    // blocking-modal failure.
     body.push_str(&format!(
-        "  \"oracle_save_flow_box1_open_count\": {},\n  \"oracle_save_flow_box1_yes_count\": {},\n  \"oracle_save_flow_box1_no_count\": {},\n  \"oracle_save_flow_box2_open_count\": {},\n  \"oracle_save_flow_box2_yes_count\": {},\n  \"oracle_save_flow_box2_no_count\": {},\n  \"oracle_save_flow_box3_open_count\": {},\n  \"oracle_save_flow_box3_yes_count\": {},\n  \"oracle_save_flow_box3_no_count\": {},\n  \"oracle_save_flow_abort_count\": {},\n  \"oracle_save_flow_box_build_timeout_count\": {},\n  \"oracle_save_flow_recipe_unavailable\": {},\n",
+        "  \"oracle_save_flow_overwrite_box_open_count\": {},\n  \"oracle_save_flow_overwrite_box_yes_count\": {},\n  \"oracle_save_flow_overwrite_box_no_count\": {},\n  \"oracle_save_flow_abort_count\": {},\n  \"oracle_save_flow_box_build_timeout_count\": {},\n  \"oracle_save_flow_recipe_unavailable\": {},\n  \"oracle_save_dest_overwrite_unconfirmable_count\": {},\n",
         SAVE_FLOW_BOX_OPEN_COUNTS[0].load(Ordering::SeqCst),
         SAVE_FLOW_BOX_YES_COUNTS[0].load(Ordering::SeqCst),
         SAVE_FLOW_BOX_NO_COUNTS[0].load(Ordering::SeqCst),
-        SAVE_FLOW_BOX_OPEN_COUNTS[1].load(Ordering::SeqCst),
-        SAVE_FLOW_BOX_YES_COUNTS[1].load(Ordering::SeqCst),
-        SAVE_FLOW_BOX_NO_COUNTS[1].load(Ordering::SeqCst),
-        SAVE_FLOW_BOX_OPEN_COUNTS[2].load(Ordering::SeqCst),
-        SAVE_FLOW_BOX_YES_COUNTS[2].load(Ordering::SeqCst),
-        SAVE_FLOW_BOX_NO_COUNTS[2].load(Ordering::SeqCst),
         SAVE_FLOW_ABORT_COUNT.load(Ordering::SeqCst),
         SAVE_FLOW_BOX_BUILD_TIMEOUT_COUNT.load(Ordering::SeqCst),
         SAVE_FLOW_RECIPE_UNAVAILABLE.load(Ordering::SeqCst),
+        // Non-zero = a user chose an existing destination on a build whose confirm recipe failed
+        // verification, and the overwrite was REFUSED rather than performed unconfirmed.
+        SAVE_DEST_OVERWRITE_UNCONFIRMABLE_COUNT.load(Ordering::SeqCst),
     ));
     // CONFIRM-BOX FAILURE oracles (2026-07-28). `..._undecidable_count` is the box the DLL
     // could not read an answer out of; it is deliberately NOT folded into the No counts, so a
@@ -939,10 +938,8 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // (>= 1 per answered box once the hook is installed), and `..._emit_installed` says whether
     // that observer is live at all.
     body.push_str(&format!(
-        "  \"oracle_save_flow_box1_undecidable_count\": {},\n  \"oracle_save_flow_box2_undecidable_count\": {},\n  \"oracle_save_flow_box3_undecidable_count\": {},\n  \"oracle_save_flow_box_identity_lost_count\": {},\n  \"oracle_save_flow_box_emit_count\": {},\n  \"oracle_save_flow_box_emit_installed\": {},\n  \"oracle_save_flow_enqueue_missing_count\": {},\n",
+        "  \"oracle_save_flow_overwrite_box_undecidable_count\": {},\n  \"oracle_save_flow_box_identity_lost_count\": {},\n  \"oracle_save_flow_box_emit_count\": {},\n  \"oracle_save_flow_box_emit_installed\": {},\n  \"oracle_save_flow_enqueue_missing_count\": {},\n",
         SAVE_FLOW_BOX_UNDECIDABLE_COUNTS[0].load(Ordering::SeqCst),
-        SAVE_FLOW_BOX_UNDECIDABLE_COUNTS[1].load(Ordering::SeqCst),
-        SAVE_FLOW_BOX_UNDECIDABLE_COUNTS[2].load(Ordering::SeqCst),
         SAVE_FLOW_BOX_IDENTITY_LOST_COUNT.load(Ordering::SeqCst),
         SAVE_FLOW_BOX_EMIT_COUNT.load(Ordering::SeqCst),
         MENU_JOB_EMIT_RESULT_INSTALLED.load(Ordering::SeqCst),

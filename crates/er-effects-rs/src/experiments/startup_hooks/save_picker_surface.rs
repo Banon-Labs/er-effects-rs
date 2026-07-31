@@ -1,6 +1,6 @@
 // THE one place that decides WHICH picker opens.
 //
-// There are exactly three "open a picker" entry points -- the System>Quit "Load Save Profiles"
+// There are exactly three "open a picker" entry points -- the System>Quit "Load Character from File"
 // row, the System>Quit Save Game destination step, and the MISSING-SAVE BOOT -- and
 // `er-effects.toml`'s `os_native_save_picker` governs ALL THREE from a single key. Routing them
 // through one function is what makes that mechanical rather than a convention three call sites
@@ -182,15 +182,39 @@ pub(crate) unsafe fn open_picker_for_intent(request: PickerOpenRequest) -> Picke
     }
 }
 
-/// Where a save-DESTINATION browser starts, and the leaf a new file there is given. `None` (with a
-/// logged reason) when the loaded save cannot be resolved or no readable folder exists.
+/// Where a save-DESTINATION browser opens, and what it needs to know about the save already
+/// loaded. Resolved once per open by [`save_dest_start_dir`].
+pub(crate) struct SaveDestOrigin {
+    /// Folder the browser opens in.
+    pub(crate) start_dir: PathBuf,
+    /// Leaf the `[ new ]` row (and the OS Save-As filename field) is pre-filled with -- always the
+    /// loaded save's own filename, so a destination keeps its save flavor.
+    pub(crate) loaded_file_name: String,
+    /// Full path of the save currently loaded, for the `[CURRENT]` row marker.
+    ///
+    /// DISPLAY ONLY. Marking a row is a string comparison; deciding that a chosen destination IS
+    /// the loaded save is a FILESYSTEM-IDENTITY check (volume serial + file index, runtime-proven
+    /// 2026-07-29) performed at commit time in `save_dest_commit.rs`. Two paths that name one file
+    /// through different mounts, cases or links must never be told apart by this field, and the
+    /// commit never asks it.
+    pub(crate) loaded_path: PathBuf,
+}
+
+/// Where a save-DESTINATION browser starts, the leaf a new file there is given, and which file is
+/// the loaded one. `None` (with a logged reason) when the loaded save cannot be resolved or no
+/// readable folder exists.
 ///
 /// BOTH surfaces call this, so they cannot drift. Contract 8 read per surface: a destination starts
 /// at the LOADED SAVE'S OWN folder, deliberately NOT at the remembered `preferred_save_picker_dir`
 /// -- "save next to the save you loaded" is the expected default and the remembered dir belongs to
 /// the LOAD flow, which is where `save_picker_start_dir` consults it. If that reading is ever
 /// changed, it changes here, for both modes at once.
-fn save_dest_start_dir() -> Option<(PathBuf, String)> {
+///
+/// STARTING THERE IS NOW LOAD-BEARING, not just convenient. The Save Game row opens this browser
+/// with no question in front of it, so the first screen has to be the screen where "save over what
+/// I had" is one press away: the loaded save's own folder, with the loaded save in the list and
+/// `[ new ]` resolving to its own leaf.
+fn save_dest_start_dir() -> Option<SaveDestOrigin> {
     let save_path = match system_quit_env_save_path() {
         Ok(path) => path,
         Err(reason) => {
@@ -200,6 +224,7 @@ fn save_dest_start_dir() -> Option<(PathBuf, String)> {
             return None;
         }
     };
+    let loaded_path = PathBuf::from(save_picker_windows_path_string(&save_path));
     let loaded_file_name = match Path::new(&save_path)
         .file_name()
         .and_then(|name| name.to_str())
@@ -230,18 +255,30 @@ fn save_dest_start_dir() -> Option<(PathBuf, String)> {
         ));
         return None;
     };
-    Some((start_dir, loaded_file_name))
+    Some(SaveDestOrigin {
+        start_dir,
+        loaded_file_name,
+        loaded_path,
+    })
 }
 
 /// What a chosen destination becomes. Mode-free on purpose: a `[ new ]` row, a picked existing file
 /// in the in-game browser and an OS Save-As all route through the same decision, so the overwrite
 /// gate cannot differ between surfaces.
+///
+/// This is also the ONLY gate left in the Save Game flow. The two up-front confirms it used to sit
+/// behind are gone, so "does this destination already exist" is now the entire question of whether
+/// the user is asked anything at all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DestRoute {
-    /// The file is already there: Box3 decides, and Box3 is the SINGLE overwrite gate (which is why
-    /// the OS Save-As does not set `OFN_OVERWRITEPROMPT`).
+    /// The file is already there: the overwrite confirm decides, and it is the SINGLE overwrite
+    /// gate in either surface -- which is why the OS Save-As deliberately does not set
+    /// `OFN_OVERWRITEPROMPT` (verified 2026-07-31; its absence is load-bearing, see
+    /// `save_picker_os_dialog.rs`). Setting it would ask the same question twice, once in a
+    /// Windows dialog whose answer we do not receive and once in ours, which is the one that
+    /// decides.
     ConfirmOverwrite,
-    /// A name nobody is using: stage the commit.
+    /// A name nobody is using: stage the commit. No question, because nothing is at risk.
     CommitDirect,
 }
 

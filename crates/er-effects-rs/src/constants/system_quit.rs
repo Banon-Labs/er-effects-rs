@@ -130,7 +130,7 @@ pub(crate) const SQ_REPRO_STATE_PROFILE_BACK_BASELINE: usize = 9;
 pub(crate) const SQ_REPRO_STATE_PROFILE_BACK_OPEN: usize = 10;
 pub(crate) const SQ_REPRO_STATE_PROFILE_BACK: usize = 11;
 pub(crate) const SQ_REPRO_STATE_PROFILE_BACK_TO_GAME_TAB: usize = 12;
-/// SAVE-GAME CONFIRM CHAIN drive (save-game-flow WP2): once the Save Game row has opened Box1,
+/// SAVE-GAME SELF-DRIVE (save-game-flow WP2): once the Save Game row has opened the destination list,
 /// walk the confirm boxes the way a user does -- move the dialog cursor onto the affirmative
 /// button, then press confirm -- checkpointed on `oracle_save_flow_stage`, never on timers.
 pub(crate) const SQ_REPRO_STATE_SAVE_CONFIRM: usize = 13;

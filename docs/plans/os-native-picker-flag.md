@@ -628,7 +628,7 @@ Live-run acceptance (one windowed, non-fullscreen run, `os_native_save_picker = 
 | `oracle_save_flow_stage` | reaches 8 then returns to 0 |
 | `oracle_save_dest_target_written_ok` | 1 |
 | `oracle_save_dest_live_file_mutated` | 0 |
-| `oracle_save_flow_box3_open_count` | >= 1, with a Box3-No producing a second `os_open_count` (proves section 6) |
+| `oracle_save_flow_overwrite_box_open_count` | >= 1, with a declined overwrite producing a second `os_open_count` (proves section 6). Renamed 2026-07-31 from `oracle_save_flow_box3_open_count` when the two up-front confirms were removed and this became the flow's only box. |
 | `oracle_save_picker_os_owner_hwnd` | non-zero, and the logged class/title is the game window, not `ErEffectsLoadingOverlay` |
 | `oracle_save_flow_commit_watchdog_count`, `..._enqueue_missing_count`, `..._box_build_timeout_count`, `oracle_save_dest_cancel_count` | 0 on the happy path -- direct evidence no frozen bound expired |
 

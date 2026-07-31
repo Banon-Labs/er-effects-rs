@@ -1868,11 +1868,14 @@ pub static SAVE_FLOW_REQUEST_RETRACTIONS: AtomicUsize = AtomicUsize::new(0);
 /// `oracle_save_dispatch_declines` to see the cost.
 pub static SAVE_FLOW_RETRACT_DECLINED: AtomicUsize = AtomicUsize::new(0);
 
-// ---- save-flow confirm chain (save-game-flow WP2) ----
-/// Number of confirm boxes the save flow can build (Box1 "are you sure", Box2 "overwrite
-/// the loaded save", Box3 "overwrite this file"). Indexes the per-box counters below;
-/// box ids are 1-based so 0 stays the "no box" sentinel.
-pub const SAVE_FLOW_BOX_COUNT: usize = 3;
+// ---- save-flow confirm box (save-game-flow WP2, reduced to ONE box 2026-07-31) ----
+/// Number of confirm boxes the save flow can build. It is ONE: "Overwrite this file?", asked
+/// only when the chosen destination already exists. The two up-front confirms this flow used to
+/// open ("Are you sure you want to save?" and "Overwrite your loaded save?") were removed -- they
+/// asked the user to predict a destination before seeing the list, which is the mistake the
+/// reviewer reported. Indexes the per-box counters below; box ids are 1-based so 0 stays the
+/// "no box" sentinel.
+pub const SAVE_FLOW_BOX_COUNT: usize = 1;
 /// Box id (1..=SAVE_FLOW_BOX_COUNT) the NEXT `CS::MessageBoxDialog` build belongs to, set
 /// immediately before the confirm-box MenuJob is submitted and cleared by the builder hook
 /// that captures the dialog. Non-zero makes the builder hook forward the build and capture
@@ -1926,26 +1929,33 @@ pub static MENU_JOB_EMIT_RESULT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 /// Submitted confirm boxes whose `CS::MessageBoxDialog` build was never captured within
 /// `SAVE_FLOW_BOX_BUILD_TIMEOUT_TICKS` -- the recipe produced no visible box (failure path).
 pub static SAVE_FLOW_BOX_BUILD_TIMEOUT_COUNT: AtomicUsize = AtomicUsize::new(0);
-/// 1 once a MessageBoxBuilder recipe RVA failed its prologue byte check: the confirm chain is
-/// unavailable on this build and Save Game degrades to the WP1 immediate bypass commit.
+/// 1 once a MessageBoxBuilder recipe RVA failed its prologue byte check: the overwrite confirm
+/// cannot be built on this build. Save Game still opens the destination list (that needs no
+/// message box), and a destination that would OVERWRITE an existing file is REFUSED rather than
+/// written unconfirmed -- a free name still commits.
 pub static SAVE_FLOW_RECIPE_UNAVAILABLE: AtomicUsize = AtomicUsize::new(0);
-/// Dialog the NEXT confirm box is built against and submitted to (its MenuJob queue at +0x10 and
-/// MenuWindow list at +0x50). 0 = the System/Quit dialog captured at the row press. Box3 sets the
-/// live `05_010` ProfileLoadDialog instead, exactly like the game's own load-confirm
-/// (`FUN_1409a4670` submits its confirm to `profile_load_dialog+0x10`), so the confirm never
-/// contends with the System dialog queue that still owns the open picker window job.
+/// Destination picks refused because the overwrite confirm could not be built on this build.
+/// Non-zero means a user chose an existing file and nothing was written; the free-name path is
+/// unaffected.
+pub static SAVE_DEST_OVERWRITE_UNCONFIRMABLE_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Dialog the confirm box is built against and submitted to (its MenuJob queue at +0x10 and
+/// MenuWindow list at +0x50). 0 = the System/Quit dialog captured at the row press. The in-game
+/// destination browser sets the live `05_010` ProfileLoadDialog instead, exactly like the game's
+/// own load-confirm (`FUN_1409a4670` submits its confirm to `profile_load_dialog+0x10`), so the
+/// confirm never contends with the System dialog queue that still owns the open picker window job.
 pub static SAVE_FLOW_BOX_HOST_DIALOG: AtomicUsize = AtomicUsize::new(0);
 
 // ---- save destination browser (save-game-flow WP3) ----
-/// 1 while the live `05_010` picker is the save-DESTINATION chooser (Box2 "No" path) rather than
-/// the load-source browser. Cleared by `save_picker_reset` like the rest of the picker latches.
+/// 1 while the live `05_010` picker is the save-DESTINATION chooser (the Save Game row opens it
+/// directly) rather than the load-source browser. Cleared by `save_picker_reset` like the rest of the picker latches.
 pub static SAVE_PICKER_DEST_MODE: AtomicUsize = AtomicUsize::new(0);
 /// System/Quit PropertyEditDialog the live picker window was submitted from. The load-source
 /// picker resolves it from its row action object; the destination picker is opened by the save
 /// flow, which has the dialog but no action object. The menu-pump resubmit reopens through it.
 pub static SAVE_PICKER_SYSTEM_DIALOG: AtomicUsize = AtomicUsize::new(0);
 /// Menu-pump pending: open the destination browser from `system_quit_menu_window_run_post` (the
-/// proven menu-job submit context). Set by the save-flow tick on Box2 "No".
+/// proven menu-job submit context). Set by the Save Game row press, and again whenever the OS
+/// surface has to re-show its Save-As after a declined overwrite.
 pub static SAVE_DEST_OPEN_PICKER_PENDING: AtomicUsize = AtomicUsize::new(0);
 /// Times the menu pump tried to open the destination browser and LEFT THE REQUEST ARMED because no
 /// picker ran (a MenuJob the dialog's queue deferred). The direct oracle for the reopen loop of bd
@@ -1976,8 +1986,8 @@ pub static SAVE_DEST_SEED_FAIL_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// container from a file that merely has the right length. Per-commit: cleared by
 /// [`save_dest_reset_commit_verdicts`] at every arm.
 pub static SAVE_DEST_TARGET_STRUCTURE_OK: AtomicUsize = AtomicUsize::new(0);
-/// Commits whose destination IS the loaded save (Box2 "Yes", or a browsed pick that resolves back
-/// to it). Non-zero means this flow deliberately rewrote the user's live save file -- the ONLY
+/// Commits whose destination IS the loaded save -- a browsed pick (or `[ new ]` in the loaded
+/// save's own folder) that resolves back to it. Non-zero means this flow deliberately rewrote the user's live save file -- the ONLY
 /// sanctioned way that happens, and the counter that keeps such a rewrite from reading as an
 /// anonymous mutation or a suppression leak.
 pub static SAVE_DEST_LIVE_OVERWRITE_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -1986,7 +1996,8 @@ pub static SAVE_DEST_LIVE_OVERWRITE_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// container over its own backup. Named so the movement is never unattributed. Per-commit: cleared
 /// by [`save_dest_reset_commit_verdicts`] at every arm.
 pub static SAVE_DEST_LIVE_BAK_MUTATED: AtomicUsize = AtomicUsize::new(0);
-/// Destination browsers opened (Box2 answered "No").
+/// Destination browsers opened (one per Save Game row press, plus a re-open after a declined
+/// overwrite on the OS surface).
 pub static SAVE_DEST_PICKER_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Destination picks that landed on an EXISTING file (a pre-existing row, or `[ new ]` whose
 /// filename already exists in the browsed folder) -- these go through the Box3 overwrite confirm.
