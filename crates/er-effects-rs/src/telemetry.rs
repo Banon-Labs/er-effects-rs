@@ -65,3 +65,4 @@ const RUNTIME_MODE_VANILLA_OR_UNKNOWN: &str = "vanilla_or_unknown";
 include!("telemetry/runtime_oracles.rs");
 include!("telemetry/save_policy_logs.rs");
 include!("telemetry/portrait_load_windows.rs");
+include!("telemetry/native_ls_exposure.rs");

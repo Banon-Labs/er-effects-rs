@@ -50,6 +50,9 @@ static LOADWIN_BASE_ONTO_DRAWS: AtomicUsize = AtomicUsize::new(0);
 static LOADWIN_BASE_RGBA_VERSION: AtomicUsize = AtomicUsize::new(0);
 static LOADWIN_BASE_REJECTS: AtomicUsize = AtomicUsize::new(0);
 static LOADWIN_BASE_TABLE_BUILDS: AtomicUsize = AtomicUsize::new(0);
+/// Native-loading-screen exposure frames at window open, so each window reports its OWN
+/// flash-through count (`expo` in the history record) rather than the session total.
+static LOADWIN_BASE_EXPOSURE: AtomicUsize = AtomicUsize::new(0);
 // Maxima tracked while the window is open.
 static LOADWIN_MAX_CAP_SIDE: AtomicUsize = AtomicUsize::new(0);
 static LOADWIN_MAX_PUB_SIDE: AtomicUsize = AtomicUsize::new(0);
@@ -139,6 +142,10 @@ fn portrait_loadwin_tick() {
             PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst),
             Ordering::SeqCst,
         );
+        LOADWIN_BASE_EXPOSURE.store(
+            er_telemetry::counters::NATIVE_LS_EXPOSURE_FRAMES.load(Ordering::SeqCst),
+            Ordering::SeqCst,
+        );
         LOADWIN_MAX_CAP_SIDE.store(0, Ordering::SeqCst);
         LOADWIN_MAX_PUB_SIDE.store(0, Ordering::SeqCst);
         LOADWIN_LAST_LIVE_MS.store(update_last, Ordering::SeqCst);
@@ -216,6 +223,12 @@ fn portrait_loadwin_close(close_ms: usize) {
     let cap_side = LOADWIN_MAX_CAP_SIDE.load(Ordering::SeqCst);
     let pub_side = LOADWIN_MAX_PUB_SIDE.load(Ordering::SeqCst);
     let slot_tag = LS_PORTRAIT_PUBLISHED_SLOT.load(Ordering::SeqCst);
+    // Frames of THIS window where the game's own loading screen reached the screen uncovered
+    // (er-effects-rs-wmw defect #1). Orthogonal to the portrait verdict: a window can publish a
+    // perfect 1542 head and still have flashed vanilla for a frame.
+    let exposure = er_telemetry::counters::NATIVE_LS_EXPOSURE_FRAMES
+        .load(Ordering::SeqCst)
+        .saturating_sub(LOADWIN_BASE_EXPOSURE.load(Ordering::SeqCst));
     let base_cause = if displayed > 0 {
         if publishes == 0 {
             "displayed-stale"
@@ -257,11 +270,11 @@ fn portrait_loadwin_close(close_ms: usize) {
         }
     }
     append_autoload_debug(format_args!(
-        "PORTRAIT-LOADWIN VERDICT #{i}: cause={cause} dur_ms={dur_ms} displayed={displayed} publishes={publishes} rejects={rejects} kicked={} cap_max_side={cap_side} pub_max_side={pub_side} slot_tag={slot_tag} window={open_ms}..{close_ms}ms",
+        "PORTRAIT-LOADWIN VERDICT #{i}: cause={cause} dur_ms={dur_ms} displayed={displayed} publishes={publishes} rejects={rejects} kicked={} cap_max_side={cap_side} pub_max_side={pub_side} slot_tag={slot_tag} native_exposure_frames={exposure} window={open_ms}..{close_ms}ms",
         kicked as u8
     ));
     let record = format!(
-        "{{\"i\":{i},\"open_ms\":{open_ms},\"dur_ms\":{dur_ms},\"disp\":{displayed},\"pub\":{publishes},\"rej\":{rejects},\"kick\":{},\"cap_side\":{cap_side},\"pub_side\":{pub_side},\"slot\":{slot_tag},\"cause\":\"{cause}\"}}",
+        "{{\"i\":{i},\"open_ms\":{open_ms},\"dur_ms\":{dur_ms},\"disp\":{displayed},\"pub\":{publishes},\"rej\":{rejects},\"kick\":{},\"cap_side\":{cap_side},\"pub_side\":{pub_side},\"slot\":{slot_tag},\"expo\":{exposure},\"cause\":\"{cause}\"}}",
         kicked as u8
     );
     let mut guard = match LOADWIN_HISTORY.lock() {

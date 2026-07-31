@@ -1172,6 +1172,41 @@ pub static MISSING_SAVE_PICKER_SELECTED_SLOT: AtomicUsize = AtomicUsize::new(usi
 pub static SAVE_PICKER_KBD_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_ONTO_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_ALPHA_COVER_PCT: AtomicUsize = AtomicUsize::new(0);
+
+// NATIVE LOADING-SCREEN EXPOSURE (er-effects-rs-wmw defect #1: "the custom loading screen
+// disappeared for about one frame and the vanilla loading screen flashed through"). One Present
+// frame is an EXPOSURE frame when the game's own CS::LoadingScreen is live but our cover did not
+// draw over the backbuffer -- exactly the frame the user sees vanilla. Counted in the Present
+// detour, attributed to the gate that blocked the composite (`NATIVE_LS_GATE_*`).
+/// Present frames with the native loading screen live and our cover NOT drawn (the defect).
+pub static NATIVE_LS_EXPOSURE_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// Present frames with the native loading screen live and our cover drawn (the healthy case).
+pub static NATIVE_LS_COVERED_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// Consecutive exposure frames right now; resets on any covered frame.
+pub static NATIVE_LS_EXPOSURE_CUR_RUN: AtomicUsize = AtomicUsize::new(0);
+/// Longest consecutive exposure run this session. 1 == the user's "about one frame" flash.
+pub static NATIVE_LS_EXPOSURE_MAX_RUN: AtomicUsize = AtomicUsize::new(0);
+pub static NATIVE_LS_EXPOSURE_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
+pub static NATIVE_LS_EXPOSURE_LAST_MS: AtomicUsize = AtomicUsize::new(0);
+/// `NATIVE_LS_GATE_*` code for the most recent exposure frame.
+pub static NATIVE_LS_EXPOSURE_LAST_GATE: AtomicUsize = AtomicUsize::new(0);
+/// `BOOT_VIEW_STOP_REASON` sampled at the most recent exposure frame.
+pub static NATIVE_LS_EXPOSURE_LAST_STOP_REASON: AtomicUsize = AtomicUsize::new(0);
+/// Per-gate exposure tallies, indexed by the `NATIVE_LS_GATE_*` codes.
+pub static NATIVE_LS_EXPOSURE_BY_GATE: [AtomicUsize; NATIVE_LS_GATE_COUNT] =
+    [const { AtomicUsize::new(0) }; NATIVE_LS_GATE_COUNT];
+
+/// The cover drew this frame -- not an exposure.
+pub const NATIVE_LS_GATE_DREW: usize = 0;
+/// `portrait_overlay_enabled()` was false, so the composite was never attempted.
+pub const NATIVE_LS_GATE_OVERLAY_DISABLED: usize = 1;
+/// The in-world epoch fast-path skip fired (world clock live for the current load epoch).
+pub const NATIVE_LS_GATE_EPOCH_WORLD_LIVE: usize = 2;
+/// The native-Windows pre-loading-screen composite suppression fired.
+pub const NATIVE_LS_GATE_NATIVE_SUPPRESSED: usize = 3;
+/// The composite ran but drew nothing (internally gated: `BOOT_VIEW_STOPPED` / draw-state).
+pub const NATIVE_LS_GATE_COVER_STOPPED: usize = 4;
+pub const NATIVE_LS_GATE_COUNT: usize = 5;
 pub static PORTRAIT_CROP_MINX: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static PORTRAIT_CROP_MINY: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static PORTRAIT_CROP_MAXX: AtomicUsize = AtomicUsize::new(0);
