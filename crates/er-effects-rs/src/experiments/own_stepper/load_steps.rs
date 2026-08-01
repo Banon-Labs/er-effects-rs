@@ -1,3 +1,5 @@
+use super::*;
+
 /// MODEL B orchestrator (gated by live_dialog_enabled(), OFF by default). At the rendered title
 /// menu: (1) do the wall-clock-bounded active-screen scan to acquire the live TitleTopDialog* +
 /// MenuWindow*, (2) call the dialog factory 0x14081ead0(rcx=title_dialog+0xa38, rdx=menu_window)
