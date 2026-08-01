@@ -149,9 +149,12 @@ pub(crate) unsafe fn own_load_feed_deserialize(base: usize, gm: usize, want_slot
 pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_PHASE;
 pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_DRAIN_WAITS;
 pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_COMMITTED;
-const SWITCH_RELOAD_FD4IO_IDLE: usize = 0;
-const SWITCH_RELOAD_FD4IO_DRAIN: usize = 1;
-const SWITCH_RELOAD_FD4IO_COMMIT: usize = 2;
+// The phase VALUES moved next to the atomic in er-telemetry (2026-07-31, bd er-effects-rs-9jbe):
+// er-title-flow's b78 guard now reads this phase to detect that fd4io owns GameMan+0xb78, and that
+// crate must not depend on the root crate. This file remains the only WRITER of the phase machine.
+pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_COMMIT;
+pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_DRAIN;
+pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_IDLE;
 /// Bound the reload drain far below the boot's FULLREAD_DRAIN_MAX (1200): the b80 2->3 save-file read
 /// residency is fast (~17 ticks at boot); if it does not resident within this many frames the read is
 /// not draining at the clean-title timing -> fall through to COMMIT without residency (fail-soft to the
@@ -360,7 +363,16 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
                 // (system_quit_repro_guards.rs:1720-1754). Clearing it early leaves the load with no
                 // warp target -> warp_requested stuck at 1 and STEP_MoveMap self-loops at 18 (observed
                 // in the b78-disarm build: world resident, real char, but mms18 next=18/done50=0
-                // warp=1 forever). The continue_confirm hook's post-resident proof point clears b78.
+                // warp=1 forever).
+                // WHO ACTUALLY CLEARS b78 (corrected 2026-08-01, bd er-effects-rs-0nie): NOT the
+                // continue_confirm hook -- that stopped writing OWN_STEPPER_SLOT_NONE at 1a0ad8e4.
+                // The remaining clearer on this path is system_quit_inworld_load_skip_hook
+                // (system_quit_repro_guards.rs), which hooks SYSTEM_QUIT_INWORLD_LOAD_RVA 0x67b290 --
+                // the SAME address as DESERIALIZE_SLOT_RVA that own_load_feed_deserialize calls
+                // directly, so despite the "inworld" name it runs on this COMMIT feed. The other
+                // writer, er-title-flow's b78 guard, cannot reach here: the line below sets
+                // FRESH_DESER_DONE=1, which is one of that guard's window conditions, so its window
+                // closes the moment COMMIT begins.
                 append_autoload_debug(format_args!(
                     "reload-fd4io: DRAIN done b80={b80} waits={w} resident={resident}{} -> COMMIT (feed+continue_confirm); b78 kept armed (warp target) through finalize",
                     if resident { "" } else { " (TIMEOUT -- committing without residency, fail-soft to old behavior)" }

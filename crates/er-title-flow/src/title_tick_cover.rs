@@ -1715,12 +1715,71 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
     // dormant here once committed: emit nothing, write nothing, let the native session settle. Inert before
     // the feed (latch 0 -> block runs and fires the initial load exactly as before); re-enabled for the next
     // genuine pick when the arm clears the latch.
-    if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+    let b78_guard_window_open = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
         >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
         && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 0
         && gm != null
-        && slot >= OWN_STEPPER_SLOT_ZERO
-    {
+        && slot >= OWN_STEPPER_SLOT_ZERO;
+    // FD4IO OWNERSHIP STAND-DOWN (black-screen fix, user eval run 20260731-user-eval-pr117
+    // switch #2 / cross-save Banon; bd er-effects-rs-9jbe). Once the switch-reload fd4io machine
+    // has left IDLE it OWNS GameMan+0xb78 as the warp target ("b78 kept armed (warp target)
+    // through finalize" at SUBMIT->DRAIN->COMMIT); this guard's force-(-1) below raced that
+    // finalize when the quickload phase lagged at 3 (+95422ms: "kept gm_b78=-1" 650ms AFTER the
+    // fd4io COMMIT) and stripped the warp destination mid-warp -- STEP_MoveMap_Update reads
+    // BlockId 0xffffffff, skips the map load, and the world tears down with nothing armed (black
+    // screen, mms=-1, defaulted level-9 character, loading bar frozen at 1/500). The in-world
+    // protection this guard exists for is UNAFFECTED: fd4io SUBMIT only ever happens post-teardown
+    // at the clean title, so IDLE still covers the whole in-world window (the 2026-07-01
+    // RequestLoadSlot spin, where writing b78=slot in-world made FUN_140afb970 spin
+    // RequestLoadSlot 4600+ times). Reset per switch by reset_switch_reload_latches.
+    //
+    // SCOPED TO COMMIT, NOT ALL OF NON-IDLE (user-driven A/B, 2026-08-01, runs
+    // userdrive-b78-20260801-091449 vs userdrive-MAIN-control-20260801-092134). The first shipped
+    // form of this stand-down used `!= IDLE`, which also covers DRAIN -- and standing down through
+    // DRAIN broke the user's ProfileSelect switch. Measured, same save/slot on both sides:
+    //   MAIN     forces "kept gm_b78=-1" three times inside the DRAIN window; the finalize's own
+    //            autosave then dispatches, saveRequested+b73 clear 51ms later, 0 declines/4 calls.
+    //   != IDLE  leaves b78 armed for all 81 DRAIN frames; 15s later the NATIVE save dispatcher
+    //            refuses the finalize autosave with `load-job-latched-0x18+0x20` (SL request slot
+    //            still holds load_content=0x97e71200 job=0x353300c0, save_content=0x0) -- 907
+    //            declines/910 calls, so b72/b73 latch forever, the case-7 gate (which needs both
+    //            == 0, bd CASE7-GATE-DECOMPILED-...-2026-07-21) never opens, STEP_MoveMap self-
+    //            loops at 18, the cover FPS-bails and the vanilla loading screen reaches the user.
+    // So the DRAIN-window clears are load-bearing: they retire the load request before the finalize
+    // needs the SL slot for its save. The PR-117 black screen was never a DRAIN-window write -- its
+    // evidence is a "kept gm_b78=-1" 650ms AFTER the fd4io COMMIT. COMMIT is therefore the exact
+    // and only window where the finalize owns b78 as the warp target and this guard must not touch
+    // it; DRAIN keeps the pre-existing behavior.
+    let fd4io_owns_b78 = er_telemetry::counters::SWITCH_RELOAD_FD4IO_PHASE.load(Ordering::SeqCst)
+        == er_telemetry::counters::SWITCH_RELOAD_FD4IO_COMMIT;
+    if b78_guard_window_open && fd4io_owns_b78 {
+        // ENGAGEMENT SEMAPHORE. Count every frame the guard would have forced b78=-1 and now does
+        // not. `> 0` == a real fd4io COMMIT overlap was survived.
+        //
+        // EXPECT 0 ON A HEALTHY RUN, BY CONSTRUCTION (measured 2026-08-01, run
+        // userdrive-COMMITscoped-20260801-092654: two switches incl. a cross-save, 0 stand-downs,
+        // 0 dispatcher declines, 0 native-LS exposure). COMMIT's own feed sets
+        // FRESH_DESER_DONE=1 (own_load/loaders.rs), and that is one of `b78_guard_window_open`'s
+        // conditions -- so on a run whose deserialize completes normally the window shuts the
+        // instant COMMIT starts and this branch is unreachable. It becomes reachable only in the
+        // PR-117 failure timing, where the deserialize has NOT completed and the window is still
+        // open 650ms past COMMIT. That is the intended shape (a guard that is inert until the
+        // thing it guards against is actually happening), but it means a clean run can NEVER
+        // prove this engaged: healthy runs are non-regression evidence only, and `> 0` will only
+        // ever be seen on a run that was heading for the black screen. Do not read 0 as broken,
+        // and do not read a clean run as proof. bd er-effects-rs-9jbe.
+        let n = er_telemetry::counters::SWITCH_RELOAD_B78_GUARD_STANDDOWNS
+            .fetch_add(1, Ordering::SeqCst)
+            + 1;
+        if n <= 5 || n % 120 == 0 {
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: b78 guard STOOD DOWN #{n} -- fd4io reload phase={} (COMMIT) owns GameMan+0xb78 as the warp target through finalize; not forcing -1 (phase={} slot={slot} bc4=0x{return_title_job_predicate_bc4:x})",
+                er_telemetry::counters::SWITCH_RELOAD_FD4IO_PHASE.load(Ordering::SeqCst),
+                SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+            ));
+        }
+    }
+    if b78_guard_window_open && !fd4io_owns_b78 {
         // GameMan+0xb78 is CS::GameMan::GetRequestedSaveSlotLoad: the per-frame MoveMapStep load
         // orchestrator (FUN_140afb970, live) reads it and, when != -1, calls RequestLoadSlot(b78) to
         // load that slot IN-WORLD. So while the OLD world is still up (local player present) b78 MUST
