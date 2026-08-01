@@ -44,6 +44,13 @@ command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.
 command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_push.rego" "$repo_root/.cupcake/tests/git_block_main_push_test.rego"
 command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_commit.rego" "$repo_root/.cupcake/tests/git_block_main_commit_test.rego"
 python3 "$repo_root/scripts/check-no-lossy-utf8.py"
+# One game address must have exactly ONE literal declaration. Divergent names for one address are
+# divergent CLAIMS about what it is; three turned out to be wrong RE facts shipping in the DLL
+# (bd rva-67b750-is-save-write-not-continue-load-2026-08-01,
+# rva-4852f88-is-saveload2-slsystemimpl-not-fd4-io-worker-2026-08-01). Selftest first, so the gate
+# is never trusted on its own say-so.
+python3 "$repo_root/scripts/check-rva-alias-drift.py" --selftest
+python3 "$repo_root/scripts/check-rva-alias-drift.py"
 python3 "$repo_root/scripts/check-rust-file-sizes.py"
 python3 "$repo_root/scripts/check-markdown-code-blocks.py" "$repo_root/README.md"
 cargo fmt --all --manifest-path "$repo_root/Cargo.toml" -- --check
