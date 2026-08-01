@@ -1,4 +1,3 @@
-
 /// Read CSDelayDeleteMan's pending count (+0x40) and high-water (+0x44) via the singleton pointer
 /// at DELAY_DELETE_MAN_SINGLETON_PTR_RVA. Returns `(pending, highwater)` or None if the singleton is
 /// null/unresolved or the read is implausible (a wrong RVA/layout -> the count fails the sane bound).
@@ -485,9 +484,9 @@ pub(crate) unsafe extern "system" fn menu_window_job_dtor_hook(
             let owning_addr = job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET;
             if let Some(window) = unsafe { safe_read_usize(owning_addr) } {
                 if window != 0 {
-                    if let Some((doomed, index)) = unsafe {
-                        menu_window_doomed_event_index(window, base, preserved_stale)
-                    } {
+                    if let Some((doomed, index)) =
+                        unsafe { menu_window_doomed_event_index(window, base, preserved_stale) }
+                    {
                         if doomed {
                             // The finalize would remove the window from its push-target vector, but
                             // it crashes at the getter first, leaving the window dangling in the
@@ -498,11 +497,15 @@ pub(crate) unsafe extern "system" fn menu_window_job_dtor_hook(
                             // Null owningMenuWindow so the finalize skips its own (now-crashing)
                             // window block entirely.
                             unsafe { (owning_addr as *mut usize).write_volatile(0) };
-                            let n =
-                                MENU_WINDOW_JOB_DTOR_DOOMED_GUARDS.fetch_add(1, Ordering::SeqCst) + 1;
-                            MENU_WINDOW_JOB_DTOR_LAST_GUARDED_WINDOW.store(window, Ordering::SeqCst);
-                            MENU_WINDOW_JOB_DTOR_LAST_GUARDED_INDEX
-                                .store(index.map(|i| i as usize).unwrap_or(usize::MAX), Ordering::SeqCst);
+                            let n = MENU_WINDOW_JOB_DTOR_DOOMED_GUARDS
+                                .fetch_add(1, Ordering::SeqCst)
+                                + 1;
+                            MENU_WINDOW_JOB_DTOR_LAST_GUARDED_WINDOW
+                                .store(window, Ordering::SeqCst);
+                            MENU_WINDOW_JOB_DTOR_LAST_GUARDED_INDEX.store(
+                                index.map(|i| i as usize).unwrap_or(usize::MAX),
+                                Ordering::SeqCst,
+                            );
                             if preserved_stale {
                                 MENU_WINDOW_JOB_DTOR_PRESERVED_STALE_DETACHES
                                     .fetch_add(1, Ordering::SeqCst);
@@ -571,7 +574,8 @@ unsafe fn menu_window_doomed_event_index(
         // OUR stale job, unreadable or garbage menu_id: freed/reused window -> doomed.
         _ => return Some((true, None)),
     }
-    let Some(vf3) = (unsafe { safe_read_usize(vtable + MENU_WINDOW_INPUT_DESC_VTABLE_SLOT) }) else {
+    let Some(vf3) = (unsafe { safe_read_usize(vtable + MENU_WINDOW_INPUT_DESC_VTABLE_SLOT) })
+    else {
         return Some((true, None));
     };
     if !in_module(vf3) {
@@ -666,7 +670,8 @@ unsafe fn menu_window_remove_from_push_target(job: usize, window: usize, base: u
         return false;
     };
     let _ = base;
-    let remove: unsafe extern "system" fn(usize, usize) = unsafe { std::mem::transmute(remove_addr) };
+    let remove: unsafe extern "system" fn(usize, usize) =
+        unsafe { std::mem::transmute(remove_addr) };
     unsafe { remove(vector, window) };
     MENU_WINDOW_JOB_DTOR_LIST_REMOVALS.fetch_add(1, Ordering::SeqCst);
     true
@@ -840,8 +845,10 @@ fn install_system_quit_menu_window_job_run_hook() {
             append_autoload_debug(format_args!(
                 "system-quit-dup: MH_Initialize for MenuWindowJob::Run hook failed: {status:?}"
             ));
-            SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED
-                .store(SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED, Ordering::SeqCst);
+            SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED.store(
+                SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED,
+                Ordering::SeqCst,
+            );
             return;
         }
     }
@@ -849,8 +856,10 @@ fn install_system_quit_menu_window_job_run_hook() {
         append_autoload_debug(format_args!(
             "system-quit-dup: failed to resolve MenuWindowJob::Run rva 0x{MENU_WINDOW_JOB_RUN_RVA:x}"
         ));
-        SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED
-            .store(SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED, Ordering::SeqCst);
+        SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED.store(
+            SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED,
+            Ordering::SeqCst,
+        );
         return;
     };
     let created = match unsafe {
@@ -860,7 +869,8 @@ fn install_system_quit_menu_window_job_run_hook() {
         )
     } {
         Ok(hook) => {
-            SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_ORIG
+                .store(hook.trampoline() as usize, Ordering::SeqCst);
             std::mem::forget(hook);
             true
         }
@@ -870,8 +880,10 @@ fn install_system_quit_menu_window_job_run_hook() {
             append_autoload_debug(format_args!(
                 "system-quit-dup: MhHook::new MenuWindowJob::Run hook failed: {status:?}"
             ));
-            SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED
-                .store(SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED, Ordering::SeqCst);
+            SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED.store(
+                SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED,
+                Ordering::SeqCst,
+            );
             return;
         }
     };
@@ -885,8 +897,10 @@ fn install_system_quit_menu_window_job_run_hook() {
             append_autoload_debug(format_args!(
                 "system-quit-dup: MH_EnableHook MenuWindowJob::Run hook failed: {status:?}"
             ));
-            SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED
-                .store(SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED, Ordering::SeqCst);
+            SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED.store(
+                SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED,
+                Ordering::SeqCst,
+            );
         }
     }
 }
@@ -1045,7 +1059,8 @@ fn install_system_quit_noop_action_hook() {
         != SYSTEM_QUIT_NOOP_ACTION_NOT_INSTALLED;
     let second_installed = SYSTEM_QUIT_RETURN_DESKTOP_ACTION_INSTALLED.load(Ordering::SeqCst)
         != SYSTEM_QUIT_RETURN_DESKTOP_ACTION_NOT_INSTALLED;
-    let controller_installed = PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_INSTALLED.load(Ordering::SeqCst)
+    let controller_installed = PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_INSTALLED
+        .load(Ordering::SeqCst)
         != PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_NOT_INSTALLED;
     if first_installed && second_installed && controller_installed {
         return;
@@ -1124,8 +1139,10 @@ fn install_system_quit_noop_action_hook() {
                 match unsafe { MH_ApplyQueued() } {
                     MH_STATUS::MH_OK => {
                         std::mem::forget(hook);
-                        SYSTEM_QUIT_RETURN_DESKTOP_ACTION_INSTALLED
-                            .store(SYSTEM_QUIT_RETURN_DESKTOP_ACTION_INSTALLED_YES, Ordering::SeqCst);
+                        SYSTEM_QUIT_RETURN_DESKTOP_ACTION_INSTALLED.store(
+                            SYSTEM_QUIT_RETURN_DESKTOP_ACTION_INSTALLED_YES,
+                            Ordering::SeqCst,
+                        );
                         append_autoload_debug(format_args!(
                             "system-quit-dup: hooked second Quit-tab action invoke 0x{addr:x}; cloned Load Profile/Load Save Profiles rows route before native Return-to-Desktop confirmation"
                         ));
@@ -1165,8 +1182,10 @@ fn install_system_quit_noop_action_hook() {
                 match unsafe { MH_ApplyQueued() } {
                     MH_STATUS::MH_OK => {
                         std::mem::forget(hook);
-                        PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_INSTALLED
-                            .store(PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_INSTALLED_YES, Ordering::SeqCst);
+                        PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_INSTALLED.store(
+                            PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_INSTALLED_YES,
+                            Ordering::SeqCst,
+                        );
                         append_autoload_debug(format_args!(
                             "system-quit-dup: hooked PropertyNewButtonController activation 0x{addr:x}; custom Quit rows route by controller before native confirmation"
                         ));
@@ -1330,7 +1349,11 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
         "sqdiag: ProfileLoadDialog ACTIVATE dialog=0x{dialog:x} vt_match={} flow_active={flow_active_diag} (old-async: hidden={hidden} profile_window=0x{profile_window:x}) save_picker={} -> {}",
         vt == expected_vt,
         SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst),
-        if flow_active_diag && vt == expected_vt { "ARM-load" } else { "forward-original(no-op)" }
+        if flow_active_diag && vt == expected_vt {
+            "ARM-load"
+        } else {
+            "forward-original(no-op)"
+        }
     ));
 
     // SAVE-FILE PICKER: while the live 05_010 window is our directory browser (in-game System
@@ -1341,8 +1364,7 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
     // at the title the in-game predicate below is false (nothing hidden), but the picker still
     // owns the dialog. Never forwards the native activation (which would arm a world load).
     if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0 && vt == expected_vt {
-        let cursor =
-            unsafe { safe_read_i32(dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) }.unwrap_or(-1);
+        let cursor = unsafe { safe_read_i32(dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) }.unwrap_or(-1);
         SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_DIALOG.store(dialog, Ordering::SeqCst);
         SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_CURSOR.store(cursor as usize, Ordering::SeqCst);
         // Split out from the shared total: a picker activation is a BROWSE step (up, enter dir,

@@ -1,4 +1,3 @@
-
 /// Reads `CSNowLoadingHelperImp::load_done` off the NowLoading singleton. WARNING (RE-corrected
 /// 2026-07-02): despite the name this is a load-COMPLETE latch, not "loading screen visible" -- `Update`
 /// copies it from `request_load_done` (raised by the map-load system), so it reads true AFTER the load
@@ -73,7 +72,10 @@ pub(crate) fn native_loading_screen_active() -> bool {
     pub(crate) use er_telemetry::counters::LAST_HITS;
     static LAST_CHANGE_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-    let now_ms = EPOCH.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64;
+    let now_ms = EPOCH
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis() as u64;
     let hits = LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst);
     if LAST_HITS.swap(hits, Ordering::SeqCst) != hits {
         LAST_CHANGE_MS.store(now_ms, Ordering::SeqCst);
@@ -281,7 +283,8 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     // after the boot loading screen opens -- so the boot window's first publish computes the same
     // latency oracle. compare_exchange from 0 so a pending switch-confirm stamp is never clobbered;
     // epoch 0 only (switch epochs keep the confirm-press anchor).
-    if crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) == 0 {
+    if crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) == 0
+    {
         let _ = er_telemetry::counters::PORTRAIT_CONFIRM_MS.compare_exchange(
             0,
             crate::experiments::boot_view_epoch_ms().max(1) as usize,
@@ -431,7 +434,10 @@ pub(crate) unsafe fn kick_target_profile_slot(
     // (from the same summary record the kick configures) so the consume worker -- which may not read
     // game memory -- can copy it next to the bridge at publish. `record` == summary record base
     // (name UTF-16 units at +0; verified: kick log record=0x92041c98 == summary 0x92041c80 + 0x18).
-    PORTRAIT_TARGET_NAME_HASH.store(unsafe { portrait_record_name_hash(record) }, Ordering::SeqCst);
+    PORTRAIT_TARGET_NAME_HASH.store(
+        unsafe { portrait_record_name_hash(record) },
+        Ordering::SeqCst,
+    );
     let kicks = PROFILE_TARGET_KICKS.fetch_add(1, Ordering::SeqCst) + 1;
     if kicks <= 4 {
         append_autoload_debug(format_args!(
@@ -706,8 +712,8 @@ const SAVE_NOT_ALONE_FLAG_SIZE: usize = 0x01;
 const SAVE_INGAME_TIMER_PADDING_AFTER_NOT_ALONE: usize = 0x04;
 const SAVE_INGAME_TIMER_TICKS_MAX: u32 = 999 * 60 * 60 / 10 + 59 * 60 / 10 + 59 / 10 + 1;
 const SYSTEM_QUIT_SAVE_SWAP_POLL_INTERVAL_TICKS: usize = 30;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_SWAP_POLL_TICK;
 pub(crate) use er_telemetry::counters::PROFILE_STATS_PREVIEW_ROW_CURSOR;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_SWAP_POLL_TICK;
 
 #[derive(Default)]
 struct SystemQuitSaveSwapState {
@@ -965,7 +971,9 @@ impl<'a> SerializedSaveSlot<'a> {
     /// (caller keeps the fallback face and logs).
     fn face_data_buffer_bytes(self, pgd: SerializedPlayerGameData<'a>) -> Option<&'a [u8]> {
         let sect_off = self.walk_to_face_section(pgd)?;
-        let sect = self.body.get(sect_off..sect_off + SAVE_FACE_DATA_FULL_SIZE)?;
+        let sect = self
+            .body
+            .get(sect_off..sect_off + SAVE_FACE_DATA_FULL_SIZE)?;
         let rel = sect
             .windows(SAVE_FACE_MAGIC.len())
             .position(|w| w == SAVE_FACE_MAGIC)?;
@@ -1358,10 +1366,8 @@ mod loading_cover_chr_asm_image_tests {
     }
 
     fn image_from(body: &[u8]) -> Option<[u8; CHR_ASM_SIZE]> {
-        SerializedSaveSlot::new(body).runtime_chr_asm_image(SerializedPlayerGameData {
-            body,
-            offset: 0,
-        })
+        SerializedSaveSlot::new(body)
+            .runtime_chr_asm_image(SerializedPlayerGameData { body, offset: 0 })
     }
 
     fn image_i32_at(image: &[u8; CHR_ASM_SIZE], offset: usize) -> i32 {
@@ -1470,5 +1476,4 @@ mod loading_cover_chr_asm_image_tests {
         body.truncate(body.len() - 1);
         assert!(image_from(&body).is_none());
     }
-
 }

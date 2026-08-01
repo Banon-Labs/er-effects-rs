@@ -30,8 +30,8 @@ use windows::{
             Threading::GetCurrentProcessId,
         },
         UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-            WM_KEYDOWN, WM_KEYUP,
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
+            WM_KEYUP,
         },
     },
     core::{BOOL, PCSTR},
@@ -147,7 +147,7 @@ fn steam_id64_from_wide_save_path(path: &[u16]) -> Option<u64> {
     None
 }
 
-fn observe_steam_id64_from_save_path(path: &[u16]) {
+pub(super) fn observe_steam_id64_from_save_path(path: &[u16]) {
     if let Some(steam_id) = steam_id64_from_wide_save_path(path) {
         OBSERVED_ACTIVE_STEAM_ID64.store(steam_id, Ordering::SeqCst);
         // Latching the observed id is a pure store and always safe. The two calls below are NOT:
@@ -384,15 +384,15 @@ pub(crate) fn normalize_env_save_file_to_active_steam_id_once(base: usize, reaso
 
 /// Redirect directory (UTF-16, NUL-free, no trailing separator) computed from the parent of
 /// `ER_EFFECTS_SAVE_FILE`. Set once at init, BEFORE the CreateFileW hook is armed.
-static SAVE_REDIRECT_DIR_W: OnceLock<Vec<u16>> = OnceLock::new();
+pub(super) static SAVE_REDIRECT_DIR_W: OnceLock<Vec<u16>> = OnceLock::new();
 /// Configured save file may be an arbitrary loose `.sl2`/`.co2` file, not staged under
 /// `EldenRing/<steamid>`. It is a read-only source copied into the private native save tree; save opens
 /// are redirected to that staged tree, never back to this source path.
 static SAVE_DIRECT_SOURCE_FILE: OnceLock<PathBuf> = OnceLock::new();
 static SAVE_DIRECT_STAGE_ROOT: OnceLock<PathBuf> = OnceLock::new();
+pub(crate) use er_telemetry::counters::SAVE_DIRECT_STAGE_DIAG_HITS;
 pub(crate) use er_telemetry::counters::SAVE_DIRECT_STAGE_DONE_STEAM_ID;
 pub(crate) use er_telemetry::counters::SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID;
-pub(crate) use er_telemetry::counters::SAVE_DIRECT_STAGE_DIAG_HITS;
 pub(crate) use er_telemetry::counters::SAVE_DIRECT_STAGE_NO_STEAMID_HITS;
 static SAVE_DIRECT_STAGE_LAST_NO_STEAMID_KIND: AtomicUsize =
     AtomicUsize::new(DIRECT_STAGE_NO_STEAMID_KIND_NONE);
@@ -632,22 +632,26 @@ fn direct_stage_file_status(steam_id: u64) -> (bool, Option<u64>) {
     (false, None)
 }
 /// Original CreateFileW / CopyFileW (MinHook trampolines). 0 = not hooked.
-static SAVE_REDIRECT_ORIG_CREATEFILEW: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-static SAVE_REDIRECT_ORIG_COPYFILEW: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(super) static SAVE_REDIRECT_ORIG_CREATEFILEW: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(super) static SAVE_REDIRECT_ORIG_COPYFILEW: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 /// Save-existence-check redirects: the game stats/enumerates the save file BEFORE opening it; if
 /// these hit the (wiped) default dir the game concludes "no save" and never CreateFileW's it.
-static SAVE_REDIRECT_ORIG_GETATTRW: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-static SAVE_REDIRECT_ORIG_GETATTREXW: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-static SAVE_REDIRECT_ORIG_FINDFIRSTW: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(super) static SAVE_REDIRECT_ORIG_GETATTRW: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(super) static SAVE_REDIRECT_ORIG_GETATTREXW: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(super) static SAVE_REDIRECT_ORIG_FINDFIRSTW: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 /// PRIMARY redirect: the save-dir builder (FUN_140e0e680) calls SHGetFolderPathW(CSIDL_APPDATA) to
 /// get %APPDATA%, then formats `%APPDATA%/EldenRing/<steamid>/`. Returning OUR staged root here makes
 /// the game build AND open the full save path under our tree NATIVELY (Wine does case-insensitive
 /// resolution), so the character is read without depending on intercepting each handle-relative open.
-static SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_LOGGED;
+pub(super) static SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_APPDATA_REQUESTS;
 pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_DIRECT_FILE_BLOCKS;
 pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_FIRST_LOAD_DONE_BLOCKS;
+pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_LOGGED;
 pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_NO_ROOT_BLOCKS;
 /// One-shot redirect latch (user design 2026-06-23): the gold is provided via the Z: staged dir for
 /// the FIRST load (reading from Z: works), but writing to Z: fails (Wine free-space) AND would mutate
@@ -659,36 +663,39 @@ pub(crate) static SAVE_FIRST_LOAD_DONE: std::sync::atomic::AtomicBool =
 /// ntdll NtCreateFile diagnostic: the boot save read happens BELOW Win32 (no CreateFileW/
 /// GetFileAttributesW/FindFirstFileW hit the save), so hook the ntdll chokepoint to SEE the actual
 /// open of ER0000.sl2 -- its NT path form and whether it is relative to a RootDirectory handle.
-static SAVE_REDIRECT_ORIG_NTCREATEFILE: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(super) static SAVE_REDIRECT_ORIG_NTCREATEFILE: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::SAVE_NTCREATE_DIAG_LOGGED;
-const SAVE_NTCREATE_DIAG_MAX: usize = 120;
+pub(super) const SAVE_NTCREATE_DIAG_MAX: usize = 120;
 /// THE corruption fix (corrupted-save-re-findings): the save commit prechecks free space via
 /// GetDiskFreeSpaceExW(saveDir), which on the Wine Z:->/home drive mapping returns bogus/ZERO free
 /// space -> `free < needed` -> the write aborts BEFORE any byte ("Failed to save game / corrupted").
 /// We hook it to report ample free space for the save dir so the game's OWN save flow writes our
 /// staged save (no hardcoded paths, no Steam Cloud).
-static SAVE_REDIRECT_ORIG_GETDISKFREEW: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(super) static SAVE_REDIRECT_ORIG_GETDISKFREEW: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::SAVE_DISKFREE_LOGGED;
 /// The game doesn't call kernel32!GetDiskFreeSpaceExW from our hook (no fire) -- under Wine all
 /// free-space queries funnel to ntdll!NtQueryVolumeInformationFile. Override the AVAILABLE allocation
 /// units for FileFsSizeInformation(3)/FileFsFullSizeInformation(7) so the save-commit free-space
 /// precheck sees ample space regardless of the bogus Z:-drive report. THE corruption fix, robust.
-static SAVE_REDIRECT_ORIG_NTQUERYVOLINFO: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(super) static SAVE_REDIRECT_ORIG_NTQUERYVOLINFO: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::SAVE_VOLINFO_LOGGED;
-static SAVE_REDIRECT_INSTALL_ONCE: Once = Once::new();
+pub(super) static SAVE_REDIRECT_INSTALL_ONCE: Once = Once::new();
 /// One-shot guard for the CORE file-ops install (CreateFileW alone, every save mode; the
 /// save-destination commit rides that detour). Separate from the redirect installer above, which
 /// stays gated on an actual redirect source.
-static SAVE_FILE_OPS_CORE_ONCE: Once = Once::new();
+pub(super) static SAVE_FILE_OPS_CORE_ONCE: Once = Once::new();
 /// 1 once the core CreateFileW detour is live. The redirect installer reads it instead of creating
 /// a second MinHook on the same prologue (`MH_ERROR_ALREADY_CREATED`).
-static SAVE_FILE_OPS_CORE_CREATEFILEW_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) use er_telemetry::counters::SAVE_STEAM_ID_ENV_NORMALIZE_DONE;
-pub(crate) use er_telemetry::counters::SAVE_STEAM_API_STEAM_ID_LOGGED;
+pub(super) static SAVE_FILE_OPS_CORE_CREATEFILEW_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 /// Count of save-path opens we have redirected, logged for the first few so a probe can CONFIRM the
 /// game actually opened our staged save through the redirect (not the default dir). Capped so a
 /// busy IO loop cannot spam the debug log.
 pub(crate) use er_telemetry::counters::SAVE_REDIRECT_HITS;
+pub(crate) use er_telemetry::counters::SAVE_STEAM_API_STEAM_ID_LOGGED;
+pub(crate) use er_telemetry::counters::SAVE_STEAM_ID_ENV_NORMALIZE_DONE;
 const SAVE_REDIRECT_LOG_MAX: usize = 8;
 /// Diagnostic: total CreateFileW calls our detour observed (proves the hook is live at all under
 /// Wine's kernel32->kernelbase forwarding), and a bounded log of save-LIKE paths so we can see the
@@ -702,9 +709,9 @@ const SAVE_CREATEFILEW_DIAG_MAX: usize = 200;
 /// keeps its early window and a sparse tail without flooding the debug log.
 pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_DIAG_HITS;
 static SAVE_CREATEFILEW_LAST_SAVE_LIKE_KIND: AtomicUsize = AtomicUsize::new(SAVE_PATH_KIND_NONE);
-pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_STAGE_STEAMID_DIR_HITS;
-pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_STAGE_SAVE_FILE_HITS;
 pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_CONFIGURED_FILE_HITS;
+pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_STAGE_SAVE_FILE_HITS;
+pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_STAGE_STEAMID_DIR_HITS;
 const MISSING_SAVE_DIALOG_IDLE: usize = 0;
 const MISSING_SAVE_DIALOG_PENDING: usize = 1;
 const MISSING_SAVE_DIALOG_READY: usize = 2;
@@ -728,9 +735,9 @@ pub(crate) fn missing_save_selection_pending() -> bool {
 pub(crate) fn direct_save_file_source_active() -> bool {
     SAVE_DIRECT_SOURCE_FILE.get().is_some()
 }
-pub(crate) use er_telemetry::counters::SAVE_QUERY_STAGE_STEAMID_DIR_HITS;
-pub(crate) use er_telemetry::counters::SAVE_QUERY_STAGE_SAVE_FILE_HITS;
 pub(crate) use er_telemetry::counters::SAVE_QUERY_CONFIGURED_FILE_HITS;
+pub(crate) use er_telemetry::counters::SAVE_QUERY_STAGE_SAVE_FILE_HITS;
+pub(crate) use er_telemetry::counters::SAVE_QUERY_STAGE_STEAMID_DIR_HITS;
 const SAVE_PATH_KIND_NONE: usize = 0;
 const SAVE_PATH_KIND_ELDENRING_ROOT: usize = 1;
 const SAVE_PATH_KIND_GRAPHICS_CONFIG: usize = 2;
@@ -1288,7 +1295,7 @@ pub(crate) fn complete_missing_save_selection_from_picker(path: &Path) -> bool {
 /// blocking here re-creates the input-dead title the old OS dialog existed to paper over. The
 /// pick later installs/activates the redirect and fires a title reload, so nothing read during
 /// the pending window is ever committed.
-fn wait_for_missing_save_dialog_if_pending(path: &[u16]) {
+pub(super) fn wait_for_missing_save_dialog_if_pending(path: &[u16]) {
     if MISSING_SAVE_DIALOG_STATE.load(Ordering::SeqCst) != MISSING_SAVE_DIALOG_PENDING {
         return;
     }
@@ -1302,7 +1309,7 @@ fn wait_for_missing_save_dialog_if_pending(path: &[u16]) {
     }
 }
 
-fn is_save_file_or_backup_path(path: &[u16]) -> bool {
+pub(super) fn is_save_file_or_backup_path(path: &[u16]) -> bool {
     const SL2D: &[u16] = &[b'.' as u16, b's' as u16, b'l' as u16, b'2' as u16];
     const CO2D: &[u16] = &[b'.' as u16, b'c' as u16, b'o' as u16, b'2' as u16];
     const BAKD: &[u16] = &[b'.' as u16, b'b' as u16, b'a' as u16, b'k' as u16];
@@ -1312,7 +1319,7 @@ fn is_save_file_or_backup_path(path: &[u16]) -> bool {
 }
 
 /// Length of a NUL-terminated UTF-16 string at `ptr` (excludes the NUL). 0 on null pointer.
-unsafe fn wide_len(ptr: *const u16) -> usize {
+pub(super) unsafe fn wide_len(ptr: *const u16) -> usize {
     if ptr.is_null() {
         return 0;
     }
@@ -1367,7 +1374,7 @@ fn wide_find_ci_ascii(hay: &[u16], needle: &[u16]) -> Option<usize> {
 }
 
 /// True if `hay` ends with `suffix` (ASCII, case-insensitive). `suffix` must be ASCII lowercase.
-fn wide_ends_with_ci_ascii(hay: &[u16], suffix: &[u16]) -> bool {
+pub(super) fn wide_ends_with_ci_ascii(hay: &[u16], suffix: &[u16]) -> bool {
     if suffix.len() > hay.len() {
         return false;
     }
@@ -1632,7 +1639,7 @@ type CopyFileWFn = unsafe extern "system" fn(*const u16, *const u16, i32) -> i32
 
 /// CreateFileW detour: redirect save-file opens to the env dir; pass everything else through.
 /// Covers BOTH read and write (the returned HANDLE is reused by ReadFile/WriteFile).
-unsafe extern "system" fn save_redirect_createfilew_hook(
+pub(super) unsafe extern "system" fn save_redirect_createfilew_hook(
     lp_file_name: *const u16,
     access: u32,
     share: u32,
@@ -1724,7 +1731,8 @@ unsafe extern "system" fn save_redirect_createfilew_hook(
             // READ opens that pass through unredirected; the shell does not write the loaded save,
             // so this is a reporting concern, not a corruption one -- but it must be visible.
             if er_telemetry::counters::SAVE_PICKER_OS_DIALOG_OPEN.load(Ordering::SeqCst) != 0 {
-                er_telemetry::counters::SAVE_PICKER_OS_SAVELIKE_OPENS.fetch_add(1, Ordering::SeqCst);
+                er_telemetry::counters::SAVE_PICKER_OS_SAVELIKE_OPENS
+                    .fetch_add(1, Ordering::SeqCst);
             }
         }
         if calls == 0 || save_like {
@@ -1797,7 +1805,7 @@ unsafe extern "system" fn save_redirect_createfilew_hook(
 /// CopyFileW detour: redirect either endpoint that is a save artifact (the `.bak` backup routine
 /// copies ER0000.sl2 -> ER0000.sl2.bak), so backups follow the save into the env dir and never
 /// touch the default user directory.
-unsafe extern "system" fn save_redirect_copyfilew_hook(
+pub(super) unsafe extern "system" fn save_redirect_copyfilew_hook(
     existing: *const u16,
     new_file: *const u16,
     fail_if_exists: i32,
@@ -1899,7 +1907,7 @@ fn save_path_api_redirect(api: &str, path: &[u16]) -> Option<Vec<u16>> {
 }
 
 /// GetFileAttributesW detour: redirect save-path existence checks to the env dir.
-unsafe extern "system" fn save_redirect_getattrw_hook(lp_file_name: *const u16) -> u32 {
+pub(super) unsafe extern "system" fn save_redirect_getattrw_hook(lp_file_name: *const u16) -> u32 {
     let orig = SAVE_REDIRECT_ORIG_GETATTRW.load(Ordering::SeqCst);
     let call: unsafe extern "system" fn(*const u16) -> u32 =
         unsafe { std::mem::transmute::<usize, unsafe extern "system" fn(*const u16) -> u32>(orig) };
@@ -1917,7 +1925,7 @@ unsafe extern "system" fn save_redirect_getattrw_hook(lp_file_name: *const u16) 
 }
 
 /// GetFileAttributesExW detour: same redirect for the Ex existence check.
-unsafe extern "system" fn save_redirect_getattrexw_hook(
+pub(super) unsafe extern "system" fn save_redirect_getattrexw_hook(
     lp_file_name: *const u16,
     info_level: i32,
     info: *mut c_void,
@@ -1941,7 +1949,7 @@ unsafe extern "system" fn save_redirect_getattrexw_hook(
 }
 
 /// FindFirstFileW detour: redirect save-path enumeration/existence checks to the env dir.
-unsafe extern "system" fn save_redirect_findfirstw_hook(
+pub(super) unsafe extern "system" fn save_redirect_findfirstw_hook(
     lp_file_name: *const u16,
     find_data: *mut c_void,
 ) -> isize {

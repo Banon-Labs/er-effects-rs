@@ -50,7 +50,8 @@ unsafe fn dlc_root_entry_addr(base: usize) -> Option<usize> {
     let manager = unsafe { safe_read_usize(base + DL_FILE_DEVICE_MANAGER_SINGLETON_RVA) }
         .filter(|&v| v > 0x10000)?;
     let roots = manager + DL_FILE_DEVICE_MANAGER_VIRTUAL_ROOTS_48_OFFSET;
-    let start = unsafe { safe_read_usize(roots + FILE_DEVICE_VIRTUAL_ROOT_VECTOR_START_08_OFFSET) }?;
+    let start =
+        unsafe { safe_read_usize(roots + FILE_DEVICE_VIRTUAL_ROOT_VECTOR_START_08_OFFSET) }?;
     let end = unsafe { safe_read_usize(roots + FILE_DEVICE_VIRTUAL_ROOT_VECTOR_END_10_OFFSET) }?;
     if start <= 0x10000 || end <= start {
         return None;

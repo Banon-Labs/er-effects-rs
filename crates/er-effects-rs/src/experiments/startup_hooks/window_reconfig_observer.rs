@@ -11,21 +11,21 @@
 // native calls -- and the eventual product fix (window at final geometry from creation) has
 // its before/after proof. Pure passthrough: nothing is modified, reordered, or suppressed.
 
+pub(crate) use er_telemetry::counters::WINRECONFIG_CHANGE_DISPLAY_ORIG;
 /// Trampolines (0 = hook not installed).
 pub(crate) use er_telemetry::counters::WINRECONFIG_CREATE_WINDOW_ORIG;
-pub(crate) use er_telemetry::counters::WINRECONFIG_SET_WINDOW_POS_ORIG;
-pub(crate) use er_telemetry::counters::WINRECONFIG_SET_WINDOW_LONG_ORIG;
 pub(crate) use er_telemetry::counters::WINRECONFIG_MOVE_WINDOW_ORIG;
-pub(crate) use er_telemetry::counters::WINRECONFIG_CHANGE_DISPLAY_ORIG;
+pub(crate) use er_telemetry::counters::WINRECONFIG_SET_WINDOW_LONG_ORIG;
+pub(crate) use er_telemetry::counters::WINRECONFIG_SET_WINDOW_POS_ORIG;
 
+pub(crate) use er_telemetry::counters::WINRECONFIG_CHANGE_DISPLAY_CALLS;
 /// Total call counts (telemetry: the reconfig timeline's RAM counters).
 pub(crate) use er_telemetry::counters::WINRECONFIG_CREATE_WINDOW_CALLS;
-pub(crate) use er_telemetry::counters::WINRECONFIG_SET_WINDOW_POS_CALLS;
-pub(crate) use er_telemetry::counters::WINRECONFIG_SET_WINDOW_LONG_CALLS;
-pub(crate) use er_telemetry::counters::WINRECONFIG_MOVE_WINDOW_CALLS;
-pub(crate) use er_telemetry::counters::WINRECONFIG_CHANGE_DISPLAY_CALLS;
 /// Last SetWindowPos geometry, packed (cx << 32 | cy) and (x << 32 | y as u32) for telemetry.
 pub(crate) use er_telemetry::counters::WINRECONFIG_LAST_SET_POS_SIZE;
+pub(crate) use er_telemetry::counters::WINRECONFIG_MOVE_WINDOW_CALLS;
+pub(crate) use er_telemetry::counters::WINRECONFIG_SET_WINDOW_LONG_CALLS;
+pub(crate) use er_telemetry::counters::WINRECONFIG_SET_WINDOW_POS_CALLS;
 
 /// Per-hook log cap: the first calls carry the whole startup story; later calls only count.
 const WINRECONFIG_LOG_CAP: usize = 48;
@@ -172,8 +172,7 @@ unsafe extern "system" fn winreconfig_move_window_hook(
     unsafe { f(hwnd, x, y, w, h, repaint) }
 }
 
-type ChangeDisplaySettingsExWFn =
-    unsafe extern "system" fn(usize, usize, usize, u32, usize) -> i32;
+type ChangeDisplaySettingsExWFn = unsafe extern "system" fn(usize, usize, usize, u32, usize) -> i32;
 
 unsafe extern "system" fn winreconfig_change_display_hook(
     devname: usize,
@@ -256,9 +255,9 @@ pub(crate) fn install_window_reconfig_observer_hooks() {
             Ok(target) => unsafe {
                 create_absolute_hook(&mut hooks, name, target, hook_impl, original)
             },
-            Err(error) => append_autoload_debug(format_args!(
-                "winreconfig: {name} resolve failed: {error}"
-            )),
+            Err(error) => {
+                append_autoload_debug(format_args!("winreconfig: {name} resolve failed: {error}"))
+            }
         }
     }
     match unsafe { MH_ApplyQueued() } {
@@ -286,12 +285,12 @@ pub(crate) fn install_window_reconfig_observer_hooks() {
 // The boot pump holds its FIRST self-present until this declares a result, so no pixel can reach
 // the screen at pre-final geometry. Config-respecting: WINDOWED mode skips the apply entirely.
 
-/// Result latch: 0 = not finished, 1 = applied, 2 = skipped (WINDOWED), 3 = window never found,
-/// 4 = monitor info failed, 5 = config unreadable (skipped), 6 = already at final geometry.
-pub(crate) use er_telemetry::counters::WINRECONFIG_EARLY_APPLY_RESULT;
 /// Attach-relative ms when the early apply finished, and the applied (w<<16|h) pack.
 pub(crate) use er_telemetry::counters::WINRECONFIG_EARLY_APPLY_MS;
 pub(crate) use er_telemetry::counters::WINRECONFIG_EARLY_APPLY_RECT;
+/// Result latch: 0 = not finished, 1 = applied, 2 = skipped (WINDOWED), 3 = window never found,
+/// 4 = monitor info failed, 5 = config unreadable (skipped), 6 = already at final geometry.
+pub(crate) use er_telemetry::counters::WINRECONFIG_EARLY_APPLY_RESULT;
 
 const WINRECONFIG_EARLY_APPLY_MAX_MS: u128 = 20_000;
 const WINRECONFIG_EARLY_APPLY_POLL_MS: u64 = 20;
@@ -359,8 +358,8 @@ fn apply_startup_window_final_geometry() {
         GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowRect, MoveWindow, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER,
-        SetWindowPos,
+        GetWindowRect, MoveWindow, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOOWNERZORDER,
+        SWP_NOZORDER, SetWindowPos,
     };
 
     let start = std::time::Instant::now();

@@ -27,7 +27,8 @@ pub(crate) unsafe extern "system" fn scaleform_descriptor_advance_hook(
     }
     let orig = SCALEFORM_DESC_ADVANCE_ORIG.load(Ordering::SeqCst);
     if orig != TITLE_OWNER_SCAN_START_ADDRESS && orig != HOOK_ORIGINAL_UNSET {
-        let f: unsafe extern "system" fn(usize, u32) -> usize = unsafe { std::mem::transmute(orig) };
+        let f: unsafe extern "system" fn(usize, u32) -> usize =
+            unsafe { std::mem::transmute(orig) };
         return unsafe { f(this, count) };
     }
     0

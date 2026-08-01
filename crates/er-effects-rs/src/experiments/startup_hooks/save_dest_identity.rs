@@ -207,7 +207,10 @@ pub(crate) fn save_dest_normalize_path(text: &str) -> Option<String> {
 /// Normalized form of a NUL-terminated wide Windows path, or `None` when it is empty or not
 /// valid UTF-16 (which no save path this flow cares about ever is).
 pub(crate) fn save_dest_normalize_wide(path: &[u16]) -> Option<String> {
-    let end = path.iter().position(|unit| *unit == 0).unwrap_or(path.len());
+    let end = path
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(path.len());
     if end == 0 {
         return None;
     }
@@ -349,10 +352,7 @@ mod save_dest_identity_tests {
             save_dest_normalized_parent(r"c:\users\steamuser\er0000.sl2"),
             Some(r"c:\users\steamuser")
         );
-        assert_eq!(
-            save_dest_normalized_parent(r"c:\er0000.sl2"),
-            Some(r"c:\")
-        );
+        assert_eq!(save_dest_normalized_parent(r"c:\er0000.sl2"), Some(r"c:\"));
         assert_eq!(save_dest_normalized_parent("er0000.sl2"), None);
     }
 

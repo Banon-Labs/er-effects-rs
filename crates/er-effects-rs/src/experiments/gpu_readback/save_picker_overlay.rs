@@ -1,3 +1,4 @@
+use super::*;
 // DLL-drawn startup save-file picker overlay.
 //
 // At a no-save boot the game's menu assets are NOT ready to draw an in-game menu, and the whole
@@ -16,18 +17,16 @@
 
 use windows::Win32::System::LibraryLoader::GetProcAddress;
 
+/// Cached `user32!GetAsyncKeyState` / `xinput!XInputGetState` resolutions (0 = unresolved, !0 = tried-and-absent).
+pub(crate) use er_telemetry::counters::GET_ASYNC_KEY_STATE_PROC;
 /// 1 once the startup overlay picker has opened its model for this pending no-save boot. Distinct
 /// from `SAVE_PICKER_MODE_ACTIVE` (the in-world System>Quit native-window picker).
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OVERLAY_ARMED;
-/// Previous frame's pressed-action bitmask (edge detection; see `PickerAction`).
-pub(crate) use er_telemetry::counters::SAVE_PICKER_OVERLAY_PREV_ACTIONS;
-/// Cached `user32!GetAsyncKeyState` / `xinput!XInputGetState` resolutions (0 = unresolved, !0 = tried-and-absent).
-pub(crate) use er_telemetry::counters::GET_ASYNC_KEY_STATE_PROC;
-pub(crate) use er_telemetry::counters::XINPUT_GET_STATE_PROC;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_OVERLAY_DRAW_HITS;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_OVERLAY_HELD_POLLS;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_OVERLAY_INPUT_HITS;
 /// Telemetry oracles.
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OVERLAY_OPEN_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_OVERLAY_DRAW_HITS;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_OVERLAY_INPUT_HITS;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OVERLAY_PICK_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OVERLAY_PICK_REJECT_COUNT;
 /// Diagnostics for the "inputs eaten during load" report: total input polls the dedicated thread ran
@@ -36,15 +35,17 @@ pub(crate) use er_telemetry::counters::SAVE_PICKER_OVERLAY_PICK_REJECT_COUNT;
 /// under Wine/Proton -- if this stays ~0 while the user mashes, a background thread cannot see the
 /// keys and input must move back to a pumped thread).
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OVERLAY_POLL_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_OVERLAY_HELD_POLLS;
+/// Previous frame's pressed-action bitmask (edge detection; see `PickerAction`).
+pub(crate) use er_telemetry::counters::SAVE_PICKER_OVERLAY_PREV_ACTIONS;
+pub(crate) use er_telemetry::counters::XINPUT_GET_STATE_PROC;
 
-/// Overlay stage: 0 = browsing files, 1 = choosing a character (save slot) from the picked file.
-pub(crate) use er_telemetry::counters::SAVE_PICKER_STAGE_CHARS;
-/// Highlighted row in the character sub-picker.
-pub(crate) use er_telemetry::counters::SAVE_PICKER_CHAR_CURSOR;
 /// The autoload slot the character sub-picker chose (`usize::MAX` = none yet). The product-core
 /// callsite reads this as the load target when no slot is configured.
 pub(crate) use er_telemetry::counters::MISSING_SAVE_PICKER_SELECTED_SLOT;
+/// Highlighted row in the character sub-picker.
+pub(crate) use er_telemetry::counters::SAVE_PICKER_CHAR_CURSOR;
+/// Overlay stage: 0 = browsing files, 1 = choosing a character (save slot) from the picked file.
+pub(crate) use er_telemetry::counters::SAVE_PICKER_STAGE_CHARS;
 
 /// The picked save awaiting a character selection: its path and the active character slots parsed
 /// from its bytes.
@@ -507,8 +508,8 @@ pub(crate) fn ensure_save_picker_keyboard_hook() {
             };
             use windows::Win32::UI::WindowsAndMessaging::{
                 DispatchMessageW, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, PM_REMOVE,
-                PeekMessageW, QS_ALLINPUT, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx,
-                WH_KEYBOARD_LL,
+                PeekMessageW, QS_ALLINPUT, SetWindowsHookExW, TranslateMessage,
+                UnhookWindowsHookEx, WH_KEYBOARD_LL,
             };
             // Keep this thread scheduled through the heavy boot load. A low-level keyboard hook whose
             // thread isn't serviced within ~300ms gets bypassed by the OS -- that dropped keypress is
@@ -556,7 +557,6 @@ pub(crate) fn ensure_save_picker_keyboard_hook() {
         SAVE_PICKER_KBD_HOOK_STARTED.store(false, Ordering::SeqCst);
     }
 }
-
 
 /// File-browser stage input: navigate/drive/page, and on picking a save file, parse its character
 /// slots and switch to the character sub-picker (the redirect + load are deferred until a
@@ -726,7 +726,16 @@ pub(crate) fn overlay_save_picker_onto(buf: &mut [u8], w: usize, h: usize) -> bo
     let panel_top = (h / 12).max(24);
     let panel_bottom = h * 82 / 100;
     let panel_h = panel_bottom.saturating_sub(panel_top);
-    boot_fill_rect(buf, w, h, margin_x, panel_top, content_w, panel_h, PICKER_RGB_PANEL);
+    boot_fill_rect(
+        buf,
+        w,
+        h,
+        margin_x,
+        panel_top,
+        content_w,
+        panel_h,
+        PICKER_RGB_PANEL,
+    );
 
     // Stage two: choose which character (save slot) in the picked file to load.
     if SAVE_PICKER_STAGE_CHARS.load(Ordering::SeqCst) != 0 {
@@ -749,12 +758,30 @@ pub(crate) fn overlay_save_picker_onto(buf: &mut [u8], w: usize, h: usize) -> bo
     let mut y = panel_top + line_h;
 
     // Title.
-    boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, "SELECT SAVE FILE", PICKER_RGB_TITLE, scale);
+    boot_draw_text_rgb(
+        buf,
+        w,
+        h,
+        margin_x + scale * 4,
+        y,
+        "SELECT SAVE FILE",
+        PICKER_RGB_TITLE,
+        scale,
+    );
     y += line_h + line_h / 2;
 
     // Location line (dimmed, fit to width): the current directory path.
     let loc_line = picker_fit_text(&model.location_label(), content_w.saturating_sub(scale * 8));
-    boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, &loc_line, PICKER_RGB_DIM, scale);
+    boot_draw_text_rgb(
+        buf,
+        w,
+        h,
+        margin_x + scale * 4,
+        y,
+        &loc_line,
+        PICKER_RGB_DIM,
+        scale,
+    );
     y += line_h;
     let mode_line = format!(
         "SHOWING *.{}   PAGE {}/{}",
@@ -762,10 +789,28 @@ pub(crate) fn overlay_save_picker_onto(buf: &mut [u8], w: usize, h: usize) -> bo
         model.page() + 1,
         model.page_count()
     );
-    boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, &mode_line, PICKER_RGB_DIM, scale);
+    boot_draw_text_rgb(
+        buf,
+        w,
+        h,
+        margin_x + scale * 4,
+        y,
+        &mode_line,
+        PICKER_RGB_DIM,
+        scale,
+    );
     y += line_h;
     // Divider rule.
-    boot_fill_rect(buf, w, h, margin_x + scale * 4, y, content_w.saturating_sub(scale * 8), scale.max(1), PICKER_RGB_RULE);
+    boot_fill_rect(
+        buf,
+        w,
+        h,
+        margin_x + scale * 4,
+        y,
+        content_w.saturating_sub(scale * 8),
+        scale.max(1),
+        PICKER_RGB_RULE,
+    );
     y += line_h;
 
     // Rows.
@@ -797,7 +842,10 @@ pub(crate) fn overlay_save_picker_onto(buf: &mut [u8], w: usize, h: usize) -> bo
         } else {
             (PICKER_RGB_ROW, "  ")
         };
-        let text = picker_fit_text(&format!("{prefix}{label}"), content_w.saturating_sub(scale * 8));
+        let text = picker_fit_text(
+            &format!("{prefix}{label}"),
+            content_w.saturating_sub(scale * 8),
+        );
         boot_draw_text_rgb(buf, w, h, margin_x + scale * 6, y, &text, color, scale);
         y += row_step;
     }
@@ -836,7 +884,16 @@ fn overlay_character_stage_onto(
     };
 
     let mut y = panel_top + line_h;
-    boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, "SELECT CHARACTER", PICKER_RGB_TITLE, scale);
+    boot_draw_text_rgb(
+        buf,
+        w,
+        h,
+        margin_x + scale * 4,
+        y,
+        "SELECT CHARACTER",
+        PICKER_RGB_TITLE,
+        scale,
+    );
     y += line_h + line_h / 2;
 
     let name = pending
@@ -846,7 +903,16 @@ fn overlay_character_stage_onto(
         .unwrap_or("?")
         .to_ascii_uppercase();
     let file_line = picker_fit_text(&name, content_w.saturating_sub(scale * 8));
-    boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, &file_line, PICKER_RGB_DIM, scale);
+    boot_draw_text_rgb(
+        buf,
+        w,
+        h,
+        margin_x + scale * 4,
+        y,
+        &file_line,
+        PICKER_RGB_DIM,
+        scale,
+    );
     y += line_h;
     boot_fill_rect(
         buf,

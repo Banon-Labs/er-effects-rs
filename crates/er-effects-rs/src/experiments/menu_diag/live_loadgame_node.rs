@@ -1,3 +1,4 @@
+use super::*;
 
 /// MODEL B (FACTORY-HOOK LATCH RECIPE 2026-06-18, bd
 /// live-dialog-menuwindow-latch-via-factory-hook-0x14081e5e0-2026): READ-ONLY deterministic

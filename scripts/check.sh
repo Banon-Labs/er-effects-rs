@@ -52,6 +52,7 @@ python3 "$repo_root/scripts/check-no-lossy-utf8.py"
 python3 "$repo_root/scripts/check-rva-alias-drift.py" --selftest
 python3 "$repo_root/scripts/check-rva-alias-drift.py"
 python3 "$repo_root/scripts/check-rust-file-sizes.py"
+python3 "$repo_root/scripts/check-experiments-rustfmt.py"
 python3 "$repo_root/scripts/check-markdown-code-blocks.py" "$repo_root/README.md"
 cargo fmt --all --manifest-path "$repo_root/Cargo.toml" -- --check
 shellcheck "$repo_root/scripts/check-no-local-main-commits.sh"

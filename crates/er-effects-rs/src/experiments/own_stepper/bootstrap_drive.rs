@@ -30,8 +30,8 @@ use windows::{
             Threading::GetCurrentProcessId,
         },
         UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-            WM_KEYDOWN, WM_KEYUP,
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
+            WM_KEYUP,
         },
     },
     core::{BOOL, PCSTR},
@@ -317,7 +317,8 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         // `GLOBAL_MainHeapAllocator->_vfptr->AllocateAligned`. Renamed 2026-08-01.
         const SLLOADCONTENT_SRC_RVA: usize = 0x3d87358;
         let src1 = unsafe { safe_read_usize(base + SLLOADCONTENT_SRC_RVA) }.unwrap_or(null);
-        let src2 = unsafe { safe_read_usize(base + GLOBAL_MAIN_HEAP_ALLOCATOR_RVA) }.unwrap_or(null);
+        let src2 =
+            unsafe { safe_read_usize(base + GLOBAL_MAIN_HEAP_ALLOCATOR_RVA) }.unwrap_or(null);
         let owner_probe = unsafe { *((base + IODEV_GLOBAL_RVA) as *const usize) };
         let owner8 = if owner_probe != null {
             unsafe { safe_read_usize(owner_probe + 8) }.unwrap_or(null)
@@ -785,8 +786,8 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         {
             const NODE_FINALIZER_RVA: usize = er_game_base::rva::SL_RELEASE_REQUEST_RVA;
             // NOT a "warm load kick": 0x67b4e0 blanks the whole save container. See
-// BLANK_SAVE_CONTAINER_REQUEST_RVA. Only referenced below to suppress an unused warning.
-const WARM_LOAD_KICK_RVA: usize = BLANK_SAVE_CONTAINER_REQUEST_RVA;
+            // BLANK_SAVE_CONTAINER_REQUEST_RVA. Only referenced below to suppress an unused warning.
+            const WARM_LOAD_KICK_RVA: usize = BLANK_SAVE_CONTAINER_REQUEST_RVA;
             const GAME_MAN_LOAD_HANDLE_B98_OFFSET: usize = 0xb98;
             const GAME_MAN_LOAD_HANDLE_BA0_OFFSET: usize = 0xba0;
             // RUNTIME-PROVEN cold gate (bd b80-WARM-kick-runtime-0x140e6ec80-returns0-cold): the

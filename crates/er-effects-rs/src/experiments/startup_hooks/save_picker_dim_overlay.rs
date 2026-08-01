@@ -81,30 +81,31 @@ pub(crate) mod picker_dim {
     };
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DispatchMessageW, GWLP_HWNDPARENT, GW_HWNDNEXT,
+        CreateWindowExW, DefWindowProcW, DispatchMessageW, GW_HWNDNEXT, GWLP_HWNDPARENT,
         GetForegroundWindow, GetTopWindow, GetWindow, GetWindowLongPtrW, GetWindowRect, HWND_TOP,
         MSG, PM_REMOVE, PeekMessageW, RegisterClassW, SW_HIDE, SWP_NOACTIVATE, SWP_NOOWNERZORDER,
-        SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage,
-        ULW_ALPHA, UPDATELAYEREDWINDOWINFO, UpdateLayeredWindow, UpdateLayeredWindowIndirect,
-        WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP,
+        SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+        TranslateMessage, ULW_ALPHA, UPDATELAYEREDWINDOWINFO, UpdateLayeredWindow,
+        UpdateLayeredWindowIndirect, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+        WS_EX_TRANSPARENT, WS_POPUP,
     };
     use windows::core::w;
 
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_ALIVE_MS;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_ARMED;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_ARM_COUNT;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_ARM_WAIT_MS;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_ARM_WAIT_TIMEOUTS;
+    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_ARMED;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_DISARM_COUNT;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_OWNER_READBACK;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_OWNER_SET;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_REANCHOR_COUNT;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_FOREIGN_FG_HWND;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_FRAMES;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_FRAMES_AT_ARM;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_FULL_PUSHES;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_GAME_HWND;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_HWND;
+    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_OWNER_READBACK;
+    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_OWNER_SET;
+    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_REANCHOR_COUNT;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_SELFTEST;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_STAGE;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_TEARDOWN_REASON;
@@ -476,9 +477,10 @@ pub(crate) mod picker_dim {
             for y in y0..y1 {
                 let row = y * self.width;
                 for x in x0..x1 {
-                    let intensity =
-                        glow_intensity((x as f32 - self.cx) / self.radius, (y as f32 - self.cy) / self.radius)
-                            * pulse;
+                    let intensity = glow_intensity(
+                        (x as f32 - self.cx) / self.radius,
+                        (y as f32 - self.cy) / self.radius,
+                    ) * pulse;
                     let (b, g, r, a) = premultiplied_gold_over_dim(intensity);
                     let offset = (row + x) * 4;
                     if offset + 4 <= pixels.len() {
@@ -659,15 +661,13 @@ pub(crate) mod picker_dim {
     /// only a total.
     fn sample_z_order(self_hwnd: HWND, game_hwnd: HWND, since_arm_ms: usize) {
         let foreground = unsafe { GetForegroundWindow() };
-        let foreign = if !foreground.0.is_null()
-            && foreground != self_hwnd
-            && foreground != game_hwnd
-        {
-            SAVE_PICKER_DIM_FOREIGN_FG_HWND.store(foreground.0 as usize, Ordering::SeqCst);
-            foreground
-        } else {
-            HWND(std::ptr::null_mut())
-        };
+        let foreign =
+            if !foreground.0.is_null() && foreground != self_hwnd && foreground != game_hwnd {
+                SAVE_PICKER_DIM_FOREIGN_FG_HWND.store(foreground.0 as usize, Ordering::SeqCst);
+                foreground
+            } else {
+                HWND(std::ptr::null_mut())
+            };
         let (self_z, game_z, foreign_z) = (
             z_index_of(self_hwnd),
             z_index_of(game_hwnd),
@@ -819,15 +819,15 @@ pub(crate) mod picker_dim {
                 ..Default::default()
             };
             let mut bits: *mut c_void = std::ptr::null_mut();
-            let bitmap =
-                match unsafe { CreateDIBSection(Some(dc), &info, DIB_RGB_COLORS, &mut bits, None, 0) }
-                {
-                    Ok(bitmap) if !bits.is_null() => bitmap,
-                    _ => {
-                        let _ = unsafe { DeleteDC(dc) };
-                        return None;
-                    }
-                };
+            let bitmap = match unsafe {
+                CreateDIBSection(Some(dc), &info, DIB_RGB_COLORS, &mut bits, None, 0)
+            } {
+                Ok(bitmap) if !bits.is_null() => bitmap,
+                _ => {
+                    let _ = unsafe { DeleteDC(dc) };
+                    return None;
+                }
+            };
             let previous = unsafe { SelectObject(dc, bitmap.into()) };
             Some(Self {
                 dc,
@@ -936,8 +936,7 @@ pub(crate) mod picker_dim {
                     ULW_ALPHA,
                 )
             };
-            SAVE_PICKER_DIM_SELFTEST
-                .store(if accepted.is_ok() { 1 } else { 2 }, Ordering::SeqCst);
+            SAVE_PICKER_DIM_SELFTEST.store(if accepted.is_ok() { 1 } else { 2 }, Ordering::SeqCst);
             super::append_autoload_debug(format_args!(
                 "picker-dim: bring-up UpdateLayeredWindow self-test {} (hidden 1x1 transparent layer)",
                 if accepted.is_ok() {
@@ -1054,7 +1053,12 @@ pub(crate) mod picker_dim {
                 let mut own = RECT::default();
                 if unsafe { GetWindowRect(hwnd, &mut own) }.is_ok()
                     && cover_drifted(
-                        (own.left, own.top, own.right - own.left, own.bottom - own.top),
+                        (
+                            own.left,
+                            own.top,
+                            own.right - own.left,
+                            own.bottom - own.top,
+                        ),
                         (x, y, width as i32, height as i32),
                     )
                 {
@@ -1229,7 +1233,10 @@ pub(crate) mod picker_dim {
             let samples: Vec<f32> = (0..16).map(|i| pulse_intensity(i as f32 / 16.0)).collect();
             let low = samples.iter().copied().fold(f32::MAX, f32::min);
             let high = samples.iter().copied().fold(f32::MIN, f32::max);
-            assert!(low > 0.3, "the indicator dimmed to {low}, which reads as stopped");
+            assert!(
+                low > 0.3,
+                "the indicator dimmed to {low}, which reads as stopped"
+            );
             assert!(
                 high - low > 0.5,
                 "the pulse only spanned {}, which is not visible motion",
@@ -1299,7 +1306,10 @@ pub(crate) mod picker_dim {
             // An unknown SELF disqualifies this half as well.
             assert_eq!(z_order_violations(usize::MAX, 3, 2), (false, false));
             // Both operands unknown: nothing to say about either half.
-            assert_eq!(z_order_violations(2, usize::MAX, usize::MAX), (false, false));
+            assert_eq!(
+                z_order_violations(2, usize::MAX, usize::MAX),
+                (false, false)
+            );
         }
 
         /// BOTH HALVES CAN BREAK ON THE SAME FRAME, and when they do EACH COUNTER MUST TAKE ITS OWN
@@ -1357,7 +1367,11 @@ pub(crate) mod picker_dim {
             let (behind, covering) = (test_record(&BEHIND), test_record(&COVERING));
             score_z_sample(&behind, &covering, (4, 3, 1), 8);
             score_z_sample(&behind, &covering, (9, 3, 1), 900);
-            assert_eq!(behind.count.load(Ordering::SeqCst), 2, "both frames counted");
+            assert_eq!(
+                behind.count.load(Ordering::SeqCst),
+                2,
+                "both frames counted"
+            );
             assert_eq!(behind.first_self.load(Ordering::SeqCst), 4);
             assert_eq!(
                 behind.first_ms.load(Ordering::SeqCst),
@@ -1423,7 +1437,10 @@ pub(crate) mod picker_dim {
                 let surface = DimSurface::new(width, height);
                 let (x0, y0, x1, y1) = surface.indicator_box();
                 assert!(x0 <= x1 && y0 <= y1);
-                assert!(x1 <= width && y1 <= height, "{width}x{height} box escaped the surface");
+                assert!(
+                    x1 <= width && y1 <= height,
+                    "{width}x{height} box escaped the surface"
+                );
             }
         }
     }

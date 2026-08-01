@@ -30,8 +30,8 @@ use windows::{
             Threading::GetCurrentProcessId,
         },
         UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-            WM_KEYDOWN, WM_KEYUP,
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
+            WM_KEYUP,
         },
     },
     core::{BOOL, PCSTR},
@@ -762,7 +762,9 @@ pub(crate) unsafe extern "system" fn mms_child_cleanup_hook(
         let gm = game_man_ptr_or_null();
         let rd = |off: usize| {
             if gm != 0 {
-                unsafe { safe_read_u8(gm + off) }.map(|v| v as i32).unwrap_or(-1)
+                unsafe { safe_read_u8(gm + off) }
+                    .map(|v| v as i32)
+                    .unwrap_or(-1)
             } else {
                 -1
             }
@@ -798,8 +800,8 @@ pub(crate) unsafe extern "system" fn mms_child_cleanup_hook(
 const MMS_STEP_INIT_RVA: u32 = 0xaec120;
 /// STEP_MoveMap_Finish deobf RVA (dump 0x140aec140, shift -0xf0 content-unique). Load complete.
 const MMS_STEP_FINISH_RVA: u32 = 0xaec050;
-pub(crate) use er_telemetry::counters::MMS_STEP_INIT_ORIG;
 pub(crate) use er_telemetry::counters::MMS_STEP_FINISH_ORIG;
+pub(crate) use er_telemetry::counters::MMS_STEP_INIT_ORIG;
 
 /// Pass-through: call the chained original (union trampoline) with the received ABI. The step
 /// executors are `fn(InGameStep*, FD4TaskData*)`; the union passes 4 regs and the callee ignores
@@ -843,9 +845,9 @@ pub(crate) unsafe extern "system" fn mms_step_init_hook(
     ret
 }
 
+pub(crate) use er_telemetry::counters::STEP3_INIT_REBUILD_COUNT;
 /// One-shot latch (per DLL load) + count for the init-point world-res rebuild (runtime semaphore).
 pub(crate) use er_telemetry::counters::STEP3_INIT_REBUILD_FIRED;
-pub(crate) use er_telemetry::counters::STEP3_INIT_REBUILD_COUNT;
 
 pub(crate) use er_telemetry::counters::POPULATE_BLOCKS_LISTS_ORIG;
 
@@ -878,8 +880,8 @@ pub(crate) unsafe extern "system" fn populate_blocks_lists_hook(
 }
 pub(crate) use er_telemetry::counters::POPULATE_BLOCKS_LISTS_CALLS;
 
-pub(crate) use er_telemetry::counters::WORLDRES_ENTRY_CTOR_ORIG;
 pub(crate) use er_telemetry::counters::WORLDRES_ENTRY_CTOR_1C_HITS;
+pub(crate) use er_telemetry::counters::WORLDRES_ENTRY_CTOR_ORIG;
 
 /// DECISIVE: the load-state ENTRY constructor. `entry`=rcx, `desc`=rdx (descriptor node whose first
 /// dword is the BlockId key written to entry+0x8). Logs when an entry is created for an area-0x1c block,
@@ -923,9 +925,9 @@ pub(crate) use er_telemetry::counters::BLOCKRES_PHASE2_ORIG;
 // second load) the counter resets, so one exhausted block can never starve later loads (the old single
 // global counter capped the WHOLE session at 6 and never re-armed). Bound is per block; a genuinely
 // un-evictable file trips the cap in << 1s of frames and the block is left to the game.
-pub(crate) use er_telemetry::counters::BLOCKRES_STALECAP_RETRIES;
 pub(crate) use er_telemetry::counters::BLOCKRES_STALECAP_LAST_BRES;
 pub(crate) use er_telemetry::counters::BLOCKRES_STALECAP_LAST_DEAD_CAP;
+pub(crate) use er_telemetry::counters::BLOCKRES_STALECAP_RETRIES;
 pub(crate) use er_telemetry::counters::BLOCKRES_STALECAP_UNRECOVERABLE;
 // ONE ATTEMPT, NOT A LOOP (2026-07-30). This was 32, and the 2026-07-30 msb-parse capture showed
 // exactly what those 32 extra attempts bought: nothing. The re-enqueue MECHANICALLY WORKS -- the
@@ -1008,13 +1010,20 @@ pub(crate) unsafe extern "system" fn blockres_phase2_hook(
             // Re-enqueue every block file cap that is resident-but-dataless (both +0x40 and +0x48; the
             // handler requires both status==4 and only advances when the primary's +0x90 re-attaches).
             let mut issued = 0u32;
-            for coff in [BLOCKRES_PRIMARY_FILECAP_40_OFFSET, BLOCKRES_SECOND_FILECAP_48_OFFSET] {
-                if let Some(cap) = unsafe { safe_read_usize(bres + coff) }.filter(|&v| v > 0x10000) {
+            for coff in [
+                BLOCKRES_PRIMARY_FILECAP_40_OFFSET,
+                BLOCKRES_SECOND_FILECAP_48_OFFSET,
+            ] {
+                if let Some(cap) = unsafe { safe_read_usize(bres + coff) }.filter(|&v| v > 0x10000)
+                {
                     let cs = unsafe { safe_read_u8(cap + FILECAP_STATUS_88_OFFSET) }
                         .map(|v| v as i32)
                         .unwrap_or(-1);
                     let cd = unsafe { safe_read_usize(cap + FILECAP_DATA_90_OFFSET) }.unwrap_or(0);
-                    if cs == FILECAP_STATUS_LOADED && cd == 0 && unsafe { blockres_reissue_filecap(cap) } {
+                    if cs == FILECAP_STATUS_LOADED
+                        && cd == 0
+                        && unsafe { blockres_reissue_filecap(cap) }
+                    {
                         issued += 1;
                     }
                 }
@@ -1050,7 +1059,8 @@ unsafe fn blockres_reissue_filecap(cap: usize) -> bool {
     let Ok(singleton_addr) = game_rva(CSFILE_SINGLETON_RVA) else {
         return false;
     };
-    let Some(singleton) = (unsafe { safe_read_usize(singleton_addr) }).filter(|&v| v > 0x10000) else {
+    let Some(singleton) = (unsafe { safe_read_usize(singleton_addr) }).filter(|&v| v > 0x10000)
+    else {
         return false;
     };
     let Some(holder) =
@@ -1069,7 +1079,8 @@ unsafe fn blockres_reissue_filecap(cap: usize) -> bool {
     // Clear the stale "loaded" status so the per-frame update loop (0x1426525a0) will select this cap
     // (it picks only status==0 queue entries), then hand it to the enqueue primitive (rcx=queue,rdx=cap).
     unsafe { *((cap + FILECAP_STATUS_88_OFFSET) as *mut u8) = 0 };
-    let enqueue: unsafe extern "system" fn(usize, usize) = unsafe { core::mem::transmute(enqueue_addr) };
+    let enqueue: unsafe extern "system" fn(usize, usize) =
+        unsafe { core::mem::transmute(enqueue_addr) };
     unsafe { enqueue(queue, cap) };
     true
 }
@@ -1109,12 +1120,20 @@ pub(crate) unsafe extern "system" fn worldres_blockres_getter_hook(
             let fc8 = unsafe { safe_read_usize(ret + 0x40) }.unwrap_or(0);
             let fc9 = unsafe { safe_read_usize(ret + 0x48) }.unwrap_or(0);
             (
-                unsafe { safe_read_u8(ret + 0x2d) }.map(|v| v as i32).unwrap_or(-1),
-                unsafe { safe_read_u8(ret + 0x35) }.map(|v| v as i32).unwrap_or(-1),
-                unsafe { safe_read_u8(ret + 0x2f) }.map(|v| v as i32).unwrap_or(-1),
+                unsafe { safe_read_u8(ret + 0x2d) }
+                    .map(|v| v as i32)
+                    .unwrap_or(-1),
+                unsafe { safe_read_u8(ret + 0x35) }
+                    .map(|v| v as i32)
+                    .unwrap_or(-1),
+                unsafe { safe_read_u8(ret + 0x2f) }
+                    .map(|v| v as i32)
+                    .unwrap_or(-1),
                 fc8,
                 if fc8 > 0x10000 {
-                    unsafe { safe_read_u8(fc8 + 0x88) }.map(|v| v as i32).unwrap_or(-1)
+                    unsafe { safe_read_u8(fc8 + 0x88) }
+                        .map(|v| v as i32)
+                        .unwrap_or(-1)
                 } else {
                     -1
                 },
@@ -1125,7 +1144,9 @@ pub(crate) unsafe extern "system" fn worldres_blockres_getter_hook(
                 },
                 fc9,
                 if fc9 > 0x10000 {
-                    unsafe { safe_read_u8(fc9 + 0x88) }.map(|v| v as i32).unwrap_or(-1)
+                    unsafe { safe_read_u8(fc9 + 0x88) }
+                        .map(|v| v as i32)
+                        .unwrap_or(-1)
                 } else {
                     -1
                 },
@@ -1166,9 +1187,15 @@ pub(crate) unsafe extern "system" fn worldres_blockres_getter_hook(
                 }
                 let rc58 = unsafe { safe_read_i32(cap + 0x58) }.unwrap_or(-1);
                 let r5c = unsafe { safe_read_i32(cap + 0x5c) }.unwrap_or(-1);
-                let s88 = unsafe { safe_read_u8(cap + 0x88) }.map(|v| v as i32).unwrap_or(-1);
-                let f89 = unsafe { safe_read_u8(cap + 0x89) }.map(|v| v as i32).unwrap_or(-1);
-                let f8a = unsafe { safe_read_u8(cap + 0x8a) }.map(|v| v as i32).unwrap_or(-1);
+                let s88 = unsafe { safe_read_u8(cap + 0x88) }
+                    .map(|v| v as i32)
+                    .unwrap_or(-1);
+                let f89 = unsafe { safe_read_u8(cap + 0x89) }
+                    .map(|v| v as i32)
+                    .unwrap_or(-1);
+                let f8a = unsafe { safe_read_u8(cap + 0x8a) }
+                    .map(|v| v as i32)
+                    .unwrap_or(-1);
                 let w8c = unsafe { safe_read_i32(cap + 0x8c) }.unwrap_or(-1);
                 let job78 = unsafe { safe_read_usize(cap + 0x78) }.unwrap_or(0);
                 let pend80 = unsafe { safe_read_usize(cap + 0x80) }.unwrap_or(0);
@@ -1189,10 +1216,18 @@ pub(crate) unsafe extern "system" fn worldres_blockres_getter_hook(
                 .and_then(|a| unsafe { safe_read_u8(a) })
                 .map(|v| v as i32)
                 .unwrap_or(-1);
-            let repo_singleton = g(0x0485d0e8).and_then(|a| unsafe { safe_read_usize(a) }).unwrap_or(0);
-            let ebl_mgr = g(0x03d5b078).and_then(|a| unsafe { safe_read_usize(a) }).unwrap_or(0);
-            let ebl_mgr_lazy = g(0x03d5b088).and_then(|a| unsafe { safe_read_usize(a) }).unwrap_or(0);
-            let csfile = g(0x03d5b0f8).and_then(|a| unsafe { safe_read_usize(a) }).unwrap_or(0);
+            let repo_singleton = g(0x0485d0e8)
+                .and_then(|a| unsafe { safe_read_usize(a) })
+                .unwrap_or(0);
+            let ebl_mgr = g(0x03d5b078)
+                .and_then(|a| unsafe { safe_read_usize(a) })
+                .unwrap_or(0);
+            let ebl_mgr_lazy = g(0x03d5b088)
+                .and_then(|a| unsafe { safe_read_usize(a) })
+                .unwrap_or(0);
+            let csfile = g(0x03d5b0f8)
+                .and_then(|a| unsafe { safe_read_usize(a) })
+                .unwrap_or(0);
             append_autoload_debug(format_args!(
                 "CAPSTATE-SUBSYS: repo_gate(*0x14485cbec)={repo_gate} repo_singleton=0x{repo_singleton:x} csebl_mgr=0x{ebl_mgr:x} csebl_lazy=0x{ebl_mgr_lazy:x} csfile=0x{csfile:x} -- gate==0 => repo-path loss; gate==1 + live mgr => EBL unmount (read yields empty)"
             ));
@@ -1248,16 +1283,18 @@ pub(crate) fn run_ebl_mount_census(src: &str) {
         if name.contains("m28") || name.contains("28_") {
             m28_hits += 1;
         }
-        append_autoload_debug(format_args!("  EBL-ARCH[{i}]: name='{name}' archive=0x{archive:x}"));
+        append_autoload_debug(format_args!(
+            "  EBL-ARCH[{i}]: name='{name}' archive=0x{archive:x}"
+        ));
     }
     append_autoload_debug(format_args!(
         "EBL-MOUNT-CENSUS DONE: m28_hits={m28_hits} of {count} entries (src={src}) -- 0 => m28 archive NOT mounted on load 2 (mount-skip root)"
     ));
 }
 
-pub(crate) use er_telemetry::counters::MOUNT_GUARD_DETECTOR_ORIG;
 pub(crate) use er_telemetry::counters::MOUNT_GUARD_DET_LOGS_L1;
 pub(crate) use er_telemetry::counters::MOUNT_GUARD_DET_LOGS_L2;
+pub(crate) use er_telemetry::counters::MOUNT_GUARD_DETECTOR_ORIG;
 
 /// Read-only instrument of the map-mount change-detector 0x14082d5b0 (rcx=controller, rdx=descriptor -> al
 /// in rax; al=1 CHANGED->mount runs, al=0 UNCHANGED->mount skipped). Logs controller id/bits (+0x120 id,
@@ -1270,7 +1307,8 @@ pub(crate) unsafe extern "system" fn mount_guard_detector_hook(
     c: usize,
     d: usize,
 ) -> usize {
-    let ret = unsafe { mms_call_original(&MOUNT_GUARD_DETECTOR_ORIG, controller, descriptor, c, d) };
+    let ret =
+        unsafe { mms_call_original(&MOUNT_GUARD_DETECTOR_ORIG, controller, descriptor, c, d) };
     let in_world = IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
     let n = if in_world {
         MOUNT_GUARD_DET_LOGS_L2.fetch_add(1, Ordering::SeqCst) + 1
@@ -1280,9 +1318,15 @@ pub(crate) unsafe extern "system" fn mount_guard_detector_hook(
     let cap = if in_world { 300 } else { 60 };
     if n <= cap && controller > 0x10000 && descriptor > 0x10000 {
         let cid = unsafe { safe_read_usize(controller + 0x120) }.unwrap_or(0);
-        let c128 = unsafe { safe_read_u8(controller + 0x128) }.map(|v| v as i32).unwrap_or(-1);
-        let c130 = unsafe { safe_read_u8(controller + 0x130) }.map(|v| v as i32).unwrap_or(-1);
-        let c132 = unsafe { safe_read_u8(controller + 0x132) }.map(|v| v as i32).unwrap_or(-1);
+        let c128 = unsafe { safe_read_u8(controller + 0x128) }
+            .map(|v| v as i32)
+            .unwrap_or(-1);
+        let c130 = unsafe { safe_read_u8(controller + 0x130) }
+            .map(|v| v as i32)
+            .unwrap_or(-1);
+        let c132 = unsafe { safe_read_u8(controller + 0x132) }
+            .map(|v| v as i32)
+            .unwrap_or(-1);
         let did = unsafe { safe_read_usize(descriptor + 0x08) }.unwrap_or(0);
         let d04 = unsafe { safe_read_i32(descriptor + 0x04) }.unwrap_or(-1) as u32;
         append_autoload_debug(format_args!(
@@ -1294,10 +1338,10 @@ pub(crate) unsafe extern "system" fn mount_guard_detector_hook(
     ret
 }
 
+pub(crate) use er_telemetry::counters::MOUNT_GUARD_DECLINE_LOGS;
 pub(crate) use er_telemetry::counters::MOUNT_GUARD_FLIP_COUNT;
 pub(crate) use er_telemetry::counters::MOUNT_GUARD_FLIP_LAST_TICK;
 pub(crate) use er_telemetry::counters::MOUNT_GUARD_TICK;
-pub(crate) use er_telemetry::counters::MOUNT_GUARD_DECLINE_LOGS;
 /// Decline-reason log budget: enough to cover a whole stall window without flooding.
 const MOUNT_GUARD_DECLINE_LOG_CAP: usize = 40;
 pub(crate) use er_telemetry::counters::MOUNT_GUARD_DECLINE_BOOT_LOGS;
@@ -1373,7 +1417,9 @@ pub(crate) fn map_mount_guard_flip_tick(in_world: bool, mms_step: i32, sf: i64) 
     } else if sf != 0 {
         Some("stable_frames != 0 (load already settled)")
     } else if !ebl_registry_is_null() {
-        Some("EBL registry NON-NULL -- some archive is mounted, so this gate says 'map is mounted' even though the block's own archive may not be")
+        Some(
+            "EBL registry NON-NULL -- some archive is mounted, so this gate says 'map is mounted' even though the block's own archive may not be",
+        )
     } else {
         None
     };
@@ -1421,8 +1467,6 @@ pub(crate) fn map_mount_guard_flip_tick(in_world: bool, mms_step: i32, sf: i64) 
         ));
     }
 }
-
-
 
 /// DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): this gated a corrective native
 /// world-res rebuild CALL that was never runtime-validated ("default off until proven"). Env/marker
@@ -1557,8 +1601,8 @@ unsafe fn step3_init_worldres_rebuild(this: usize) {
         return;
     }
     let embed_worldio = this + INGAMESTEP_WORLDINFO_OWNER_EMBED_250_OFFSET;
-    let fcap = unsafe { safe_read_usize(this + INGAMESTEP_LOADLISTLIST_FILECAP_238_OFFSET) }
-        .unwrap_or(0);
+    let fcap =
+        unsafe { safe_read_usize(this + INGAMESTEP_LOADLISTLIST_FILECAP_238_OFFSET) }.unwrap_or(0);
     let dlc02 =
         unsafe { safe_read_usize(this + INGAMESTEP_LOADLISTLIST_DLC02_240_OFFSET) }.unwrap_or(0);
     let (vbase, vsize, vpath) = read_ingamestep_vpath(this);

@@ -236,7 +236,9 @@ pub(crate) fn boot_os_open_missing_save_picker() -> bool {
     // freshly spawned thread. Checking HERE, on a caller that IS re-entered every tick, makes the
     // normal case a retry and keeps the fallback for a detour that never arrives at all.
     if !crate::experiments::save_file_core_hooks_live() {
-        let waited = BOOT_OS_CORE_HOOK_WAIT_STARTED.get_or_init(Instant::now).elapsed();
+        let waited = BOOT_OS_CORE_HOOK_WAIT_STARTED
+            .get_or_init(Instant::now)
+            .elapsed();
         SAVE_PICKER_OS_BOOT_DEFER_TICKS.fetch_add(1, Ordering::SeqCst);
         if waited < BOOT_OS_CORE_HOOK_WAIT {
             return false;

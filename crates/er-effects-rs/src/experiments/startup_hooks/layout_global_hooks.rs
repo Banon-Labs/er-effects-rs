@@ -1,4 +1,3 @@
-
 fn apply_system_quit_multislot_layout_patch() {
     let Ok(base) = game_module_base() else {
         append_autoload_debug(format_args!(

@@ -1,3 +1,4 @@
+use super::*;
 // Shared D3D12 GPU-draw plumbing used by the boot-view fade and effect-selector overlay
 // draws in boot_progress.rs: HLSL compile, root-signature/PSO builders, the generic
 // texture+upload+SRV slot creator, SRV handle math, and the close/execute/fence-wait
@@ -5,36 +6,34 @@
 // (bd er-effects-rs-f9mq); the imports below feed the whole flat gpu_readback namespace.
 
 use windows::Win32::Foundation::RECT;
+use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
 use windows::Win32::Graphics::Direct3D::{
     D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, ID3DBlob, ID3DInclude,
 };
-use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
 use windows::Win32::Graphics::Direct3D12::{
-    D3D_ROOT_SIGNATURE_VERSION_1, D3D12_BLEND_DESC, D3D12_BLEND_INV_SRC_ALPHA,
-    D3D12_BLEND_ONE, D3D12_BLEND_OP_ADD, D3D12_BLEND_SRC_ALPHA,
-    D3D12_COLOR_WRITE_ENABLE_ALL, D3D12_COMPARISON_FUNC_ALWAYS,
-    D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF, D3D12_CULL_MODE_NONE,
-    D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, D3D12_DEPTH_STENCIL_DESC,
-    D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_DESCRIPTOR_HEAP_DESC, D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
+    D3D_ROOT_SIGNATURE_VERSION_1, D3D12_BLEND_DESC, D3D12_BLEND_INV_SRC_ALPHA, D3D12_BLEND_ONE,
+    D3D12_BLEND_OP_ADD, D3D12_BLEND_SRC_ALPHA, D3D12_COLOR_WRITE_ENABLE_ALL,
+    D3D12_COMPARISON_FUNC_ALWAYS, D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF,
+    D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_CULL_MODE_NONE, D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+    D3D12_DEPTH_STENCIL_DESC, D3D12_DESCRIPTOR_HEAP_DESC, D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
     D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
     D3D12_DESCRIPTOR_HEAP_TYPE_RTV, D3D12_DESCRIPTOR_RANGE, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    D3D12_GPU_DESCRIPTOR_HANDLE,
-    D3D12_DESCRIPTOR_RANGE_TYPE_SRV, D3D12_FILL_MODE_SOLID,
-    D3D12_FILTER_MIN_MAG_MIP_LINEAR, D3D12_GRAPHICS_PIPELINE_STATE_DESC,
+    D3D12_DESCRIPTOR_RANGE_TYPE_SRV, D3D12_FILL_MODE_SOLID, D3D12_FILTER_MIN_MAG_MIP_LINEAR,
+    D3D12_GPU_DESCRIPTOR_HANDLE, D3D12_GRAPHICS_PIPELINE_STATE_DESC,
     D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED, D3D12_INPUT_LAYOUT_DESC,
-    D3D12_PIPELINE_STATE_FLAG_NONE, D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-    D3D12_RASTERIZER_DESC, D3D12_RENDER_TARGET_BLEND_DESC, D3D12_RENDER_TARGET_VIEW_DESC,
-    D3D12_RENDER_TARGET_VIEW_DESC_0, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-    D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_ROOT_CONSTANTS, D3D12_ROOT_DESCRIPTOR_TABLE,
-    D3D12_ROOT_PARAMETER, D3D12_ROOT_PARAMETER_0, D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
+    D3D12_PIPELINE_STATE_FLAG_NONE, D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE, D3D12_RASTERIZER_DESC,
+    D3D12_RENDER_TARGET_BLEND_DESC, D3D12_RENDER_TARGET_VIEW_DESC, D3D12_RENDER_TARGET_VIEW_DESC_0,
+    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET,
+    D3D12_ROOT_CONSTANTS, D3D12_ROOT_DESCRIPTOR_TABLE, D3D12_ROOT_PARAMETER,
+    D3D12_ROOT_PARAMETER_0, D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
     D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE, D3D12_ROOT_SIGNATURE_DESC,
-    D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
-    D3D12_RTV_DIMENSION_TEXTURE2D, D3D12_SAMPLER_DESC, D3D12_SHADER_BYTECODE,
-    D3D12_SHADER_RESOURCE_VIEW_DESC, D3D12_SHADER_RESOURCE_VIEW_DESC_0,
-    D3D12_SHADER_VISIBILITY_PIXEL, D3D12_SRV_DIMENSION_TEXTURE2D,
-    D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK, D3D12_STATIC_SAMPLER_DESC,
-    D3D12_TEXTURE_ADDRESS_MODE_CLAMP, D3D12_TEX2D_RTV, D3D12_TEX2D_SRV, D3D12_VIEWPORT,
-    D3D12SerializeRootSignature, ID3D12DescriptorHeap, ID3D12PipelineState, ID3D12RootSignature,
+    D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT, D3D12_RTV_DIMENSION_TEXTURE2D,
+    D3D12_SAMPLER_DESC, D3D12_SHADER_BYTECODE, D3D12_SHADER_RESOURCE_VIEW_DESC,
+    D3D12_SHADER_RESOURCE_VIEW_DESC_0, D3D12_SHADER_VISIBILITY_PIXEL,
+    D3D12_SRV_DIMENSION_TEXTURE2D, D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK,
+    D3D12_STATIC_SAMPLER_DESC, D3D12_TEX2D_RTV, D3D12_TEX2D_SRV, D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+    D3D12_VIEWPORT, D3D12SerializeRootSignature, ID3D12DescriptorHeap, ID3D12PipelineState,
+    ID3D12RootSignature,
 };
 use windows::core::BOOL;
 
@@ -68,7 +67,9 @@ float4 ps_main(VsOut input) : SV_Target {
 }
 "#;
 
-unsafe fn create_overlay_root_signature(device: &ID3D12Device) -> Option<ID3D12RootSignature> {
+pub(super) unsafe fn create_overlay_root_signature(
+    device: &ID3D12Device,
+) -> Option<ID3D12RootSignature> {
     let range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,
@@ -141,10 +142,14 @@ unsafe fn create_overlay_root_signature(device: &ID3D12Device) -> Option<ID3D12R
     let bytes = unsafe {
         std::slice::from_raw_parts(blob.GetBufferPointer() as *const u8, blob.GetBufferSize())
     };
-    unsafe { device.CreateRootSignature::<ID3D12RootSignature>(0, bytes).ok() }
+    unsafe {
+        device
+            .CreateRootSignature::<ID3D12RootSignature>(0, bytes)
+            .ok()
+    }
 }
 
-unsafe fn create_overlay_pso(
+pub(super) unsafe fn create_overlay_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
     bb_format: DXGI_FORMAT,
@@ -205,7 +210,11 @@ unsafe fn create_overlay_pso(
         Flags: D3D12_PIPELINE_STATE_FLAG_NONE,
         ..Default::default()
     };
-    unsafe { device.CreateGraphicsPipelineState::<ID3D12PipelineState>(&desc).ok() }
+    unsafe {
+        device
+            .CreateGraphicsPipelineState::<ID3D12PipelineState>(&desc)
+            .ok()
+    }
 }
 
 unsafe fn compile_overlay_shader(entry: &'static [u8], target: &'static [u8]) -> Option<ID3DBlob> {
@@ -228,7 +237,10 @@ unsafe fn compile_overlay_shader(entry: &'static [u8], target: &'static [u8]) ->
     }
     .is_err()
     {
-        log_shader_error(core::str::from_utf8(entry).unwrap_or("shader"), err.as_ref());
+        log_shader_error(
+            core::str::from_utf8(entry).unwrap_or("shader"),
+            err.as_ref(),
+        );
         return None;
     }
     code
@@ -241,15 +253,19 @@ fn log_shader_error(stage: &str, err: Option<&ID3DBlob>) {
         if !ptr.is_null() && len > 0 {
             let bytes = unsafe { std::slice::from_raw_parts(ptr, len.min(512)) };
             let msg = core::str::from_utf8(bytes).unwrap_or("<non-utf8 shader error>");
-            append_autoload_debug(format_args!("present-overlay: {stage} compile error: {msg}"));
+            append_autoload_debug(format_args!(
+                "present-overlay: {stage} compile error: {msg}"
+            ));
             return;
         }
     }
-    append_autoload_debug(format_args!("present-overlay: {stage} compile/serialize failed"));
+    append_autoload_debug(format_args!(
+        "present-overlay: {stage} compile/serialize failed"
+    ));
 }
 
 #[allow(clippy::too_many_arguments)]
-unsafe fn ensure_overlay_gpu_texture_slot(
+pub(super) unsafe fn ensure_overlay_gpu_texture_slot(
     device: &ID3D12Device,
     srv_heap: &ID3D12DescriptorHeap,
     sw: u32,
@@ -281,7 +297,10 @@ unsafe fn ensure_overlay_gpu_texture_slot(
         DepthOrArraySize: 1,
         MipLevels: 1,
         Format: DXGI_FORMAT_R8G8B8A8_UNORM,
-        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
         Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
         Flags: D3D12_RESOURCE_FLAG_NONE,
     };
@@ -334,7 +353,10 @@ unsafe fn ensure_overlay_gpu_texture_slot(
         DepthOrArraySize: 1,
         MipLevels: 1,
         Format: DXGI_FORMAT_UNKNOWN,
-        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
         Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
         Flags: D3D12_RESOURCE_FLAG_NONE,
     };
@@ -398,25 +420,29 @@ fn srv_cpu_handle_at(
     index: u32,
 ) -> D3D12_CPU_DESCRIPTOR_HANDLE {
     let mut handle = unsafe { heap.GetCPUDescriptorHandleForHeapStart() };
-    let inc = unsafe { device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) } as usize;
+    let inc =
+        unsafe { device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) }
+            as usize;
     handle.ptr += inc * index as usize;
     handle
 }
 
-fn srv_gpu_handle_at(
+pub(super) fn srv_gpu_handle_at(
     device: &ID3D12Device,
     heap: &ID3D12DescriptorHeap,
     index: u32,
 ) -> D3D12_GPU_DESCRIPTOR_HANDLE {
     let mut handle = unsafe { heap.GetGPUDescriptorHandleForHeapStart() };
-    let inc = unsafe { device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) } as u64;
+    let inc =
+        unsafe { device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) }
+            as u64;
     handle.ptr += inc * index as u64;
     handle
 }
 
 /// Close `list`, execute it on `queue`, signal `fence` with a fresh monotonic value, and CPU-wait (bounded)
 /// for GPU completion. `false` on any failure. Shared by the two-submit CPU-blend composite.
-unsafe fn execute_and_wait(
+pub(super) unsafe fn execute_and_wait(
     queue: &ID3D12CommandQueue,
     list: &ID3D12GraphicsCommandList,
     fence: &ID3D12Fence,

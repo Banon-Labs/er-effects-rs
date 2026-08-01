@@ -1,4 +1,3 @@
-
 pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
     if TITLE_MENU_RESOURCE_ACQUIRE_INSTALLED.load(Ordering::SeqCst) != 0
         && TITLE_SCALEFORM_FILE_OPEN_INSTALLED.load(Ordering::SeqCst) != 0
@@ -1083,47 +1082,49 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
                 }
             } else if stats_panel_enabled() {
                 let cache_loaded = unsafe { ensure_profile_slot_stats_cached(base) };
-            // Per-slot attributes from the save; if the whole cache failed to load, degrade to the
-            // loaded character so a row still shows real values (rather than nothing).
-            let attrs = profile_slot_attributes(slot).or_else(|| {
-                if cache_loaded {
-                    None
-                } else {
-                    build_loaded_char_attributes()
-                }
-            });
-            if let Some(attrs) = attrs {
-                let seen = PROFILE_STATS_ROW_POPULATES.fetch_add(1, Ordering::SeqCst) + 1;
-                // Split the eight attributes across the row's two text lines: the first four on the
-                // top line (`ErStatsTop`), the last four on the bottom line (`ErStatsBottom`), using
-                // the vertical space each row already has. Names are NUL-terminated for the C binder.
-                let top = build_stats_html_utf16(&attrs, 0, STATS_ATTR_COUNT / 2);
-                let bottom = build_stats_html_utf16(&attrs, STATS_ATTR_COUNT / 2, STATS_ATTR_COUNT);
-                let pushed_top =
-                    unsafe { push_stats_text_on_row(base, row_proxy, "ErStatsTop\0", &top) };
-                let pushed_bottom =
-                    unsafe { push_stats_text_on_row(base, row_proxy, "ErStatsBottom\0", &bottom) };
-                debug_assert_eq!("ErStatsTop", er_gfx::title_05_010::STATS_FIELD_NAME_TOP);
-                debug_assert_eq!(
-                    "ErStatsBottom",
-                    er_gfx::title_05_010::STATS_FIELD_NAME_BOTTOM
-                );
-                if pushed_top && pushed_bottom {
-                    let subs = PROFILE_STATS_SETTEXT_SUBS.fetch_add(1, Ordering::SeqCst) + 1;
-                    if subs <= 4 {
-                        append_autoload_debug(format_args!(
-                            "stats-text: pushed ErStatsTop+Bottom slot={slot} on row=0x{row_proxy:x} (row_triggers={seen} subs={subs})"
-                        ));
+                // Per-slot attributes from the save; if the whole cache failed to load, degrade to the
+                // loaded character so a row still shows real values (rather than nothing).
+                let attrs = profile_slot_attributes(slot).or_else(|| {
+                    if cache_loaded {
+                        None
+                    } else {
+                        build_loaded_char_attributes()
                     }
-                } else {
-                    let fails = PROFILE_STATS_PUSH_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
-                    if fails <= 4 {
-                        append_autoload_debug(format_args!(
-                            "stats-text: ErStats push REJECTED slot={slot} on row=0x{row_proxy:x} top={pushed_top} bottom={pushed_bottom} (05_010 GFX edit not live?) (fails={fails})"
-                        ));
+                });
+                if let Some(attrs) = attrs {
+                    let seen = PROFILE_STATS_ROW_POPULATES.fetch_add(1, Ordering::SeqCst) + 1;
+                    // Split the eight attributes across the row's two text lines: the first four on the
+                    // top line (`ErStatsTop`), the last four on the bottom line (`ErStatsBottom`), using
+                    // the vertical space each row already has. Names are NUL-terminated for the C binder.
+                    let top = build_stats_html_utf16(&attrs, 0, STATS_ATTR_COUNT / 2);
+                    let bottom =
+                        build_stats_html_utf16(&attrs, STATS_ATTR_COUNT / 2, STATS_ATTR_COUNT);
+                    let pushed_top =
+                        unsafe { push_stats_text_on_row(base, row_proxy, "ErStatsTop\0", &top) };
+                    let pushed_bottom = unsafe {
+                        push_stats_text_on_row(base, row_proxy, "ErStatsBottom\0", &bottom)
+                    };
+                    debug_assert_eq!("ErStatsTop", er_gfx::title_05_010::STATS_FIELD_NAME_TOP);
+                    debug_assert_eq!(
+                        "ErStatsBottom",
+                        er_gfx::title_05_010::STATS_FIELD_NAME_BOTTOM
+                    );
+                    if pushed_top && pushed_bottom {
+                        let subs = PROFILE_STATS_SETTEXT_SUBS.fetch_add(1, Ordering::SeqCst) + 1;
+                        if subs <= 4 {
+                            append_autoload_debug(format_args!(
+                                "stats-text: pushed ErStatsTop+Bottom slot={slot} on row=0x{row_proxy:x} (row_triggers={seen} subs={subs})"
+                            ));
+                        }
+                    } else {
+                        let fails = PROFILE_STATS_PUSH_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
+                        if fails <= 4 {
+                            append_autoload_debug(format_args!(
+                                "stats-text: ErStats push REJECTED slot={slot} on row=0x{row_proxy:x} top={pushed_top} bottom={pushed_bottom} (05_010 GFX edit not live?) (fails={fails})"
+                            ));
+                        }
                     }
                 }
-            }
             }
         }
         PROFILE_STATS_PUSH_IN_PROGRESS.store(0, Ordering::SeqCst);

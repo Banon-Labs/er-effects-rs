@@ -1,3 +1,4 @@
+use super::*;
 
 /// Restore `GLOBAL_CSGaitem` to constructor-pristine (empty gaitemInsTable + full free-queue) at a
 /// clean title BEFORE the switch reload's fresh deserialize, so char#2's deserialize does not
@@ -143,12 +144,12 @@ pub(crate) unsafe fn own_load_feed_deserialize(base: usize, gm: usize, want_slot
 // behavior in own_load_switch_reload_fire (the boot native-fullread SUBMIT -> DRAIN(b80==RESIDENT) ->
 // COMMIT sequence), replacing the old resource-less one-shot. No marker/env gate.
 
+pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_COMMITTED;
+pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_DRAIN_WAITS;
 /// Phase machine state for the reload FD4-IO SUBMIT/DRAIN (own_load_switch_reload_fire), persisted
 /// across the caller's per-frame retries. 0=IDLE (do SUBMIT once), 1=DRAIN (tick until b80==3),
 /// 2=COMMIT (fall through to feed+continue_confirm).
 pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_PHASE;
-pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_DRAIN_WAITS;
-pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_COMMITTED;
 // The phase VALUES moved next to the atomic in er-telemetry (2026-07-31, bd er-effects-rs-9jbe):
 // er-title-flow's b78 guard now reads this phase to detect that fd4io owns GameMan+0xb78, and that
 // crate must not depend on the root crate. This file remains the only WRITER of the phase machine.
@@ -280,11 +281,11 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
     if owner == null {
         return false;
     }
-    let new_game_flag = match unsafe { safe_read_usize(owner + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) }
-    {
-        Some(v) => v as u8,
-        None => return false,
-    };
+    let new_game_flag =
+        match unsafe { safe_read_usize(owner + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) } {
+            Some(v) => v as u8,
+            None => return false,
+        };
     if new_game_flag != FULLREAD_OWNER_NEW_GAME_OK {
         return false;
     }
@@ -311,8 +312,9 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
                 "outgoing-teardown: OBSERVED _Common_Finalize (calls={calls} > baseline={baseline}) -- OUTGOING world released; reload rebuilds FRESH (in-place holds stay disabled) (#{n})"
             ));
         } else {
-            let waited =
-                er_telemetry::counters::OUTGOING_TEARDOWN_WAIT_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
+            let waited = er_telemetry::counters::OUTGOING_TEARDOWN_WAIT_TICKS
+                .fetch_add(1, Ordering::SeqCst)
+                + 1;
             if waited >= OUTGOING_TEARDOWN_WAIT_MAX {
                 er_telemetry::counters::OUTGOING_TEARDOWN_FAILSOFT.store(1, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
@@ -375,7 +377,11 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
                 // closes the moment COMMIT begins.
                 append_autoload_debug(format_args!(
                     "reload-fd4io: DRAIN done b80={b80} waits={w} resident={resident}{} -> COMMIT (feed+continue_confirm); b78 kept armed (warp target) through finalize",
-                    if resident { "" } else { " (TIMEOUT -- committing without residency, fail-soft to old behavior)" }
+                    if resident {
+                        ""
+                    } else {
+                        " (TIMEOUT -- committing without residency, fail-soft to old behavior)"
+                    }
                 ));
                 SWITCH_RELOAD_FD4IO_PHASE.store(SWITCH_RELOAD_FD4IO_COMMIT, Ordering::SeqCst);
                 // fall through to feed+continue_confirm this frame
@@ -409,7 +415,8 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
     // (f) Re-read the freshly-mounted c30 + fingerprint and fire the GUARDED native continue_confirm
     // (own_load_continue_fire re-guards c30_real && fp_real && owner+0x284==0 internally -- the only
     // save-writing SetState5 is behind that hard guard).
-    let c30 = unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }.unwrap_or(GAME_MAN_C30_UNSET);
+    let c30 =
+        unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }.unwrap_or(GAME_MAN_C30_UNSET);
     let c30_real = c30 != GAME_MAN_C30_UNSET && c30 != 0 && c30 != FULLREAD_C30_M10_DEFAULT;
     let (fp_real, fp_level, _nl) = unsafe { char_fingerprint(base) };
     append_autoload_debug(format_args!(

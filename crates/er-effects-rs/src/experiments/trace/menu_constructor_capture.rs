@@ -1,3 +1,4 @@
+use super::*;
 
 /// Forward a captured menu-UI call through its trampoline. Uniform 4-arg fastcall: the
 /// integer arg registers (rcx/rdx/r8/r9) pass through; callees taking fewer args ignore the
@@ -220,7 +221,7 @@ unsafe fn log_row_push_caller(tag: &str, container: usize) {
 /// the exact objects TitleTopDialog::open_menu inserts. This is intentionally generic: log the
 /// original return plus a few qwords around rcx/rdx so the next static/runtime step can identify the
 /// registry storage without guessing dialog fields or generic Sequence trees.
-unsafe fn log_menu_insert_details(a: usize, b: usize, c: usize, d: usize, ret: usize) {
+pub(super) unsafe fn log_menu_insert_details(a: usize, b: usize, c: usize, d: usize, ret: usize) {
     let n = CAP_MENU_INSERT_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     if n < CAP_MENU_INSERT_LOG_FIRST {
         let q = |addr: usize, off: usize| -> usize {
