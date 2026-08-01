@@ -1715,8 +1715,35 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
     // dormant here once committed: emit nothing, write nothing, let the native session settle. Inert before
     // the feed (latch 0 -> block runs and fires the initial load exactly as before); re-enabled for the next
     // genuine pick when the arm clears the latch.
-    let b78_guard_window_open = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+    // PHASE UPPER BOUND (bd er-effects-rs-af3a; ported from branch commit c1b2dccd, which shipped it
+    // as "b78 guard phase-windowing" and never reached main). The window is [RETURN_TITLE_REQUESTED,
+    // AUTOLOAD_HANDOFF) == phases 2..3, not [2, inf).
+    //
+    // WHY A PHASE AND NOT THE LATCH. FRESH_DESER_DONE alone cannot close this window, because it is
+    // not monotonic: system_quit_repro_guards.rs re-arms it to 0 on EVERY user ProfileSelect arm, and
+    // its own comment there records where that leads -- "FRESH_DESER_DONE stuck 0 -> the b78 guard
+    // wrote GameMan requestedSaveSlotLoad=-1 every frame -> native pump gate false -> world torn down
+    // at ENTERING WORLD = the load3 softlock" (bd compounding-reload-two-roots-...-chainB-stale-fd4io-
+    // latch-b78-2026-07-23). c1b2dccd reached the same conclusion from the other direction: "the
+    // FRESH_DESER_DONE latch may be consumed/cleared before world readiness". The quickload phase does
+    // not have that problem -- it advances to AUTOLOAD_HANDOFF and stays there -- and past that point
+    // the SetState5/handoff owns b78, so BOTH of this block's branches (force -1, and re-arm = slot)
+    // are wrong there regardless of what the latch says.
+    //
+    // WHAT THIS DOES *NOT* FIX, stated so nobody re-derives it. It would NOT have prevented the PR-117
+    // black screen: that write happened at quickload phase 3, which is INSIDE this window. Only the
+    // fd4io COMMIT stand-down below covers that. The two conditions guard different failures and
+    // neither subsumes the other.
+    //
+    // MEASURED IMPACT ON HEALTHY RUNS: none. Across the five user-driven and agent-driven runs captured
+    // 2026-08-01 (userdrive-b78-20260801-091449, userdrive-MAIN-control-20260801-092134,
+    // userdrive-COMMITscoped-20260801-092654 and their pre-run logs), every single b78-guard write --
+    // 12 of them -- reported quickload phase 3. Zero fired at phase >= 4. So this bound is inert on a
+    // run that behaves, and only bites the stuck-latch shape above.
+    let b78_guard_quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    let b78_guard_window_open = b78_guard_quickload_phase
         >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+        && b78_guard_quickload_phase < SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
         && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 0
         && gm != null
         && slot >= OWN_STEPPER_SLOT_ZERO;
