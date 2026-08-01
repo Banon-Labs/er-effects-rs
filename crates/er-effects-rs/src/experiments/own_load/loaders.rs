@@ -363,7 +363,16 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
                 // (system_quit_repro_guards.rs:1720-1754). Clearing it early leaves the load with no
                 // warp target -> warp_requested stuck at 1 and STEP_MoveMap self-loops at 18 (observed
                 // in the b78-disarm build: world resident, real char, but mms18 next=18/done50=0
-                // warp=1 forever). The continue_confirm hook's post-resident proof point clears b78.
+                // warp=1 forever).
+                // WHO ACTUALLY CLEARS b78 (corrected 2026-08-01, bd er-effects-rs-0nie): NOT the
+                // continue_confirm hook -- that stopped writing OWN_STEPPER_SLOT_NONE at 1a0ad8e4.
+                // The remaining clearer on this path is system_quit_inworld_load_skip_hook
+                // (system_quit_repro_guards.rs), which hooks SYSTEM_QUIT_INWORLD_LOAD_RVA 0x67b290 --
+                // the SAME address as DESERIALIZE_SLOT_RVA that own_load_feed_deserialize calls
+                // directly, so despite the "inworld" name it runs on this COMMIT feed. The other
+                // writer, er-title-flow's b78 guard, cannot reach here: the line below sets
+                // FRESH_DESER_DONE=1, which is one of that guard's window conditions, so its window
+                // closes the moment COMMIT begins.
                 append_autoload_debug(format_args!(
                     "reload-fd4io: DRAIN done b80={b80} waits={w} resident={resident}{} -> COMMIT (feed+continue_confirm); b78 kept armed (warp target) through finalize",
                     if resident { "" } else { " (TIMEOUT -- committing without residency, fail-soft to old behavior)" }
