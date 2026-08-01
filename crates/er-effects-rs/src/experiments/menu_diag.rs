@@ -2,5 +2,10 @@
 
 #![allow(unused_imports)]
 
-include!("menu_diag/menu_observation.rs");
-include!("menu_diag/live_loadgame_node.rs");
+use super::*;
+
+mod menu_observation;
+pub(crate) use menu_observation::*;
+
+mod live_loadgame_node;
+pub(crate) use live_loadgame_node::*;
