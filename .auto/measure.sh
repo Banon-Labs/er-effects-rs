@@ -678,7 +678,9 @@ if re.search(r'native Continue MenuWindowJob result rejected[^\n]*mode=', exp):
 
 direct_failures: list[str] = []
 direct_tokens = [
-    'CONTINUE_LOAD_RVA',
+    # 0x67b750 = GameMan::WriteSaveToSlot (renamed 2026-08-01; it writes a save, it does
+    # not continue a load). Still a forbidden direct-shortcut token in the product body.
+    'SAVE_WRITE_TO_SLOT_RVA',
     'B80_DESERIALIZE_RVA',
     'drive_product_continue_post_click_dispatchers',
     'menu_continue_wrapper(',

@@ -550,7 +550,7 @@ pub(crate) unsafe fn dump_titletop_menu_entries(
     // /[+0x1298] (stride 0x210); cursor [+0xb0c], bound [+0xb08]. Locate router_this by scanning
     // the TitleTopDialog's fields for a pointer to an object whose [0] == that vtable. Pure reads
     // (safe_read_usize tolerates bad derefs) -> save-safe.
-    const ROUTER_VTABLE_RVA: usize = 0x02afa070;
+    const ROUTER_VTABLE_RVA: usize = ROUTER_THIS_VTABLE_RVA;
     const ROUTER_SCAN_QWORDS: usize = 0x400;
     const PTR_ALIGN_MASK: usize = 0x7;
     const QW_START: usize = 0;

@@ -16,8 +16,45 @@ pub const GAME_DATA_MAN_GLOBAL_RVA: usize = 0x3d5df38;
 pub const CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d6b7b0;
 /// `GameMan` singleton global (save-slot owner).
 pub const GAME_MAN_SINGLETON_RVA: usize = 0x3d69918;
-/// Save-data subsystem gate global (submit path guard).
+/// `FUN_14067b570` -- system-slot-only save dispatcher (GameMan b73 set, b72 clear).
+pub const SAVE_DISPATCH_SYSTEM_RVA: usize = 0x67b570;
+/// `FUN_14067b940` -- combined character+system save dispatcher (GameMan b72 and b73 set).
+pub const SAVE_DISPATCH_COMBINED_RVA: usize = 0x67b940;
+/// `InGameStep::STEP_MoveMap_LoadlistInit` -- builds the world-res loadlist.
+pub const STEP_MOVEMAP_LOADLIST_INIT_RVA: usize = 0xaec570;
+/// SaveLoad IO device request teardown/release function.
+pub const SL_RELEASE_REQUEST_RVA: usize = 0xe6f200;
+/// `EzChildStepBase` child-step reset/teardown function.
+pub const EZ_CHILDSTEP_RESET_RVA: usize = 0xeb54c0;
+/// Scaleform LoaderImpl file-open wrapper.
+pub const TITLE_SCALEFORM_FILE_OPEN_RVA: usize = 0x11ced80;
+/// CS::TitleTopDialog vtable.
+pub const TITLE_TOP_DIALOG_VTABLE_RVA: usize = 0x2b26468;
+/// Scaleform::MemoryFile vtable.
+pub const SCALEFORM_MEMORY_FILE_VTABLE_RVA: usize = 0x2ba4c80;
+/// `CSSystemStep` singleton global.
+pub const CS_SYSTEM_STEP_GLOBAL_RVA: usize = 0x3d85680;
+/// Native `MenuWindowJob::Run` close-with-Failed helper. It calls `SetResult(..., Failed=3, 0)`
+/// and then invokes the receiver's own vtable slot +0x60.
+pub const MENU_WINDOW_CLOSE_WITH_FAILED_RVA: usize = 0x7ac890;
+/// Save-data subsystem gate global (submit path guard). Ghidra names it `GLOBAL_CSEventState`;
+/// the guard role is the reason it is here. It is a 3-byte HeapAlloc read as a byte at
+/// offset 0, not the 0x270-byte object allocated beside it (that one is 0x3d68448).
 pub const SAVE_DATA_SUBSYSTEM_GATE_RVA: usize = 0x3d68078;
+/// Main heap allocator singleton global (`GLOBAL_MainHeapAllocator`). Identified from the
+/// 1.16.2 Ghidra dump: 1821 xrefs, readers spanning `CSTaskImp` / `CSWindowImp` / `CSEzWork`
+/// / `BloodMessageInsMan`, and `GameMan::WriteSaveToSlot` (0x14067b750) derefs
+/// `GLOBAL_MainHeapAllocator->_vfptr->AllocateAligned` while referencing this address.
+/// Aliased in the tree as GLOBAL_MAIN_HEAP_ALLOCATOR_RVA / SLLOAD_SRC2_RVA (a wrong name) /
+/// SAVE_BUFFER_ALLOCATOR_GLOBAL_RVA (a role name in er-save-loader; that crate now derives
+/// from here, so the misnomer is documented at its declaration rather than duplicated).
+pub const GLOBAL_MAIN_HEAP_ALLOCATOR_RVA: usize = 0x3d872e0;
+/// SaveLoad IO device singleton global. Its lazy getter is 0x140e6e060, and
+/// `GameMan::WriteSaveToSlot` fetches the device through that getter before submitting a save.
+/// Aliased as IODEV_GLOBAL_RVA (er-title-flow) / SL_IODEV_GLOBAL_RVA (er-save-suppress); both
+/// now derive from here (2026-08-01). "iodev" is the role the callers use -- the dump does not
+/// name the class, so treat the name as descriptive rather than authoritative.
+pub const SL_IODEV_GLOBAL_RVA: usize = 0x4589390;
 
 /// `GameDataMan` -> `PlayerGameData` pointer field offset.
 pub const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize = 0x08;

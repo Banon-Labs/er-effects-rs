@@ -54,7 +54,9 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
     // upstream's `runtime_heap_allocator` (DLAllocator) -- always non-null, so the
     // `fd4_stream_task_present` signal is meaningless. Resolve it through fromsoftware-rs.
     const FD4_IO_POOL_RVA: usize = RuntimeGlobalRva::Fd4IoPool as usize;
-    const FD4_IO_WORKER_MANAGER_RVA: usize = RuntimeGlobalRva::Fd4IoWorkerManager as usize;
+    // Kept under the local name for its call sites; the object is SaveLoad2::SLSystemImpl,
+    // not an FD4 IO worker manager (corrected 2026-08-01).
+    const FD4_IO_WORKER_MANAGER_RVA: usize = RuntimeGlobalRva::SaveLoad2SlSystemImpl as usize;
     const IO_DEVICE_SINGLETON_RVA: usize = RuntimeGlobalRva::IoDeviceSingleton as usize;
     const IO_DEVICE_INFLIGHT_10_OFFSET: usize =
         core::mem::offset_of!(IoDeviceSnapshotLayout, inflight);

@@ -255,7 +255,7 @@ pub(crate) unsafe fn submit_play_game_once(
                 SESSION_SINGLETON_A_RVA,
                 SESSION_SINGLETON_B_RVA,
                 TITLE_PROCEED_GATE_SET_VALUE,
-                LOAD_INITIATOR_RVA,
+                BLANK_SAVE_CONTAINER_REQUEST_RVA,
                 WORLD_WORKER_BUILD_RVA,
                 SYNTHETIC_STEP_THIS_SIZE,
                 SYNTHETIC_STEP_STATE_OFFSET,

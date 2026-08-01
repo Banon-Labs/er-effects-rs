@@ -205,7 +205,7 @@ pub(crate) unsafe fn diagnostic_job_tree_walk(
     const NODE_CHILDREN_BASE_18: usize = 0x18;
     const NODE_COUNT_60: usize = 0x60;
     const NODE_HOLDER_ROOT_18: usize = 0x18;
-    const SEQ_UPDATE_RVA: usize = 0x07aa1f0;
+    const SEQ_UPDATE_RVA: usize = SEQUENCE_ITER_RVA as usize;
     const LEAF_UPDATE_RVA: usize = 0x07ad1c0;
     // IfElseJob combiner (vt 0x142aa2c38). Its child jobs are NOT at the sequence
     // [+0x18]/[+0x60] layout; that mis-read is the "garbage count" the generic walk hit.

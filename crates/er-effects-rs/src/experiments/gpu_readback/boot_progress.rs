@@ -993,7 +993,7 @@ fn boot_view_starting_up_submilestone() -> (&'static str, usize, usize) {
 /// (res/file/pad/sound/graphics). InitBoot/WaitBoot pairs are the early core-boot sub-phases (each
 /// InitBootN kicks the work, the paired WaitBootN blocks on it) -- named generically because their
 /// per-index subsystem was not statically pinned. Labels are 5x7 font-safe (uppercase + digits).
-const BOOT_SYS_STEP_GLOBAL_RVA: usize = 0x3d85680;
+const BOOT_SYS_STEP_GLOBAL_RVA: usize = er_game_base::rva::CS_SYSTEM_STEP_GLOBAL_RVA;
 const BOOT_SYS_STEP_STATE_OFFSET: usize = 0x40;
 const BOOT_SYS_STEP_STATE_COUNT: usize = 21;
 const BOOT_SYS_STEP_SUBLABELS: [&str; BOOT_SYS_STEP_STATE_COUNT] = [

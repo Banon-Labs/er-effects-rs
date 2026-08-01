@@ -141,7 +141,7 @@ pub(crate) const TRACE_MENU_OTHER_LOAD_WRAPPER_RVA: u32 =
 pub(crate) const TRACE_MENU_TASK_UPDATE_WRAPPER_RVA: u32 = MenuTraceRva::TaskUpdateWrapper as u32;
 pub(crate) const TRACE_MENU_TASK_UPDATE_TABLE_RVA: u32 = MenuTraceRva::TaskUpdateTable as u32;
 pub(crate) const TRACE_TASK_ENQUEUE_RVA: u32 = MenuTraceRva::TaskEnqueue as u32;
-pub(crate) const RESULT_EVENT_HANDLER_RVA: u32 = 0x00746e80;
+pub(crate) const RESULT_EVENT_HANDLER_RVA: u32 = MENU_JOB_EMIT_RESULT_RVA;
 pub(crate) const RESULT_ACTION_BUILDER_RVA: u32 = 0x00746a00;
 pub(crate) const RESULT_EVENT_WRAPPER_BUILDER_RVA: u32 = 0x00744a60;
 pub(crate) const TRACE_UNKNOWN_TABLE_RVA: u32 = 0;
@@ -274,7 +274,7 @@ pub(crate) const TITLE_GFX_VISIBLE_TITLE_FADEIN_CALLER_RVA: usize = 0x744e02;
 /// the user-visible flash/glare during the autoload transition. Keep the name behavioral: the
 /// underlying Scaleform object identity is still unknown.
 pub(crate) const TITLE_05_000_FADEIN_FLASH_VISIBLE_ORDINAL: usize = 2;
-pub(crate) const CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d6b7b0;
+pub(crate) const CS_MENU_MAN_GLOBAL_RVA: usize = er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA;
 /// OptionSetting tab-select VISIBILITY pass `FUN_14093b850` (deobf 0x93b760):
 /// `fn(CompositeOptionSettingDialog* composite, int tabIndex, u8* r8, u8* r9)`. It sets the current
 /// pane (`composite+0xb8 = cache[tabIndex]`, building via the switch dispatch only if the cache slot is
@@ -312,9 +312,9 @@ pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_CALLER_RVA: AtomicUsize =
 /// `MENU_DummyProfileFace_01..10` symbols that the profile renderer maps to
 /// `SYSTEX_Menu_Profile00..09` (via CSMenuProfModelRend / active-screen render targets). The wrapper
 /// below is the deobf/live address for the native `05_010_ProfileSelect` MenuWindowJob builder
-/// (Ghidra dump 0x14081f7e0 -> deobf 0x14081f6f0). We use it as the initial custom cover surface
+/// (NOT a shift: 0x14081f7e0 and 0x14081f6f0 are two DIFFERENT functions. 1.16.2 shift is 0; 0x14081f7e0 (size 235) builds L"05_000_Title", 0x14081f6f0 (size 239) builds L"05_010_ProfileSelect". The old parenthetical came from dump-deobf-shift.py against the 1.16.1 dump and would send you to the Title-movie builder. Corrected 2026-08-01.). We use it as the initial custom cover surface
 /// instead of trying to remap `05_001_Title_Logo`, which has no dummy-profile symbol.
-pub(crate) const TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA: usize = 0x81f6f0;
+pub(crate) const TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA: usize = PROFILE_SELECT_WRAPPER_RVA as usize;
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME: &str = "05_010_ProfileSelect";
 /// Native full-screen black Scaleform/MenuWindowJob surface. Ghidra dump 0x140793c10 ->
 /// deobf/live 0x140793b20 (content-unique) builds `01_900_Black` with the same
@@ -468,7 +468,8 @@ pub(crate) const DLSTRING_WCHAR_SUBSTR_RVA: usize = 0x116c70;
 // the existing `GLOBAL_TPF_REPOSITORY_RVA` (0x3d73fb8).
 /// `GLOBAL_MainHeapAllocator` singleton pointer (data, 0x143d872e0; identical RVA to the repo's
 /// `runtime_heap_allocator`). Deref -> the allocator object for the 0x98-byte TpfFileCap allocation.
-pub(crate) const GLOBAL_MAIN_HEAP_ALLOCATOR_RVA: usize = 0x3d872e0;
+pub(crate) const GLOBAL_MAIN_HEAP_ALLOCATOR_RVA: usize =
+    er_game_base::rva::GLOBAL_MAIN_HEAP_ALLOCATOR_RVA;
 /// CSScaleformReplaceTexInfo (size 0x50) field offsets.
 pub(crate) const REPLACE_TEX_INFO_REFCOUNT_OFFSET: usize = 0x8; // i32 DLReferenceCountObject refcount
 pub(crate) const REPLACE_TEX_INFO_SYMBOL_OFFSET: usize = 0x10; // DLString<u16>

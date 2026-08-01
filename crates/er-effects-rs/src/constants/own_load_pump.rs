@@ -28,7 +28,7 @@ pub(crate) use er_title_flow::FD4_TIME_SIZE;
 pub(crate) use er_title_flow::FD4_TIME_DELTA_8_OFFSET;
 /// GameDataMan singleton global (.data abs `0x143d5df38`, == `CONTINUE_MANAGER_GLOBAL_RVA` deref base).
 /// `GetMenuSystemSaveLoad() = GLOBAL_GameDataMan->menuSystemSaveLoad`, i.e. `mss = *(*(base+RVA)+0x60)`.
-pub(crate) const GAME_DATA_MAN_GLOBAL_RVA: usize = 0x3d5df38;
+pub(crate) const GAME_DATA_MAN_GLOBAL_RVA: usize = er_game_base::rva::GAME_DATA_MAN_GLOBAL_RVA;
 /// `GameDataMan->menuSystemSaveLoad` field offset (`mss = *(GameDataMan + 0x60)`).
 pub(crate) const GAME_DATA_MAN_MENU_SAVELOAD_60_OFFSET: usize = 0x60;
 /// LoadGame build factory REAL ctx args (golden Continue trace): `ctx_parent = mss + 0x50`,

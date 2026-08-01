@@ -188,7 +188,7 @@ const SL_POLL_SAVE_STATUS_RVA: usize = 0xe6e430;
 /// through `CSDelayDeleteMan`/`CSFile`, and zeroes `+0x44`. This is precisely what
 /// the native code calls when the enqueue fails, which is the state we synthesize.
 #[cfg(windows)]
-const SL_RELEASE_REQUEST_RVA: usize = 0xe6f200;
+const SL_RELEASE_REQUEST_RVA: usize = er_game_base::rva::SL_RELEASE_REQUEST_RVA;
 
 /// The status code `FUN_140e6e430` returns when `iodev+0x10 == 0`, meaning "there is
 /// no save request". Its single producer is the `MOV EAX,0x4` at `0x140e6e460`.
@@ -284,7 +284,7 @@ const SL_RELEASE_REQUEST_SIG: &[u8] = &[
 /// inside `FUN_140e6e060` (the getter) and `FUN_140e6f6f0` (the destructor), so every
 /// consumer in the game reaches the same object through the getter.
 #[cfg(windows)]
-const SL_IODEV_GLOBAL_RVA: usize = 0x4589390;
+const SL_IODEV_GLOBAL_RVA: usize = er_game_base::rva::SL_IODEV_GLOBAL_RVA;
 
 /// Bytes of the device sampled in one `ReadProcessMemory`: enough to cover `+0x30`.
 #[cfg(windows)]
@@ -781,14 +781,21 @@ pub fn load_consumer_slot_after() -> Option<SlRequestSlot> {
 /// `FUN_14067b940` -- combined save dispatcher, taken when b72 AND b73 are set. This is
 /// the lane the Save Game commit deliberately produces (it fires both request setters).
 #[cfg(windows)]
-const SAVE_DISPATCH_COMBINED_RVA: usize = 0x67b940;
+const SAVE_DISPATCH_COMBINED_RVA: usize = er_game_base::rva::SAVE_DISPATCH_COMBINED_RVA;
 /// `FUN_14067b750` -- character-slot-only dispatcher (b72 set, b73 clear).
+///
+/// Same address as `SAVE_WRITE_TO_SLOT_RVA` in er-effects-rs and er-save-loader, where it
+/// was called `CONTINUE_LOAD_RVA` until 2026-08-01. This crate's name was the correct one:
+/// the 1.16.2 dump shows it writes a save (serializes via `SAVE_SERIALIZE_CHAR_RVA` below,
+/// then submits through the IO device and sets `saveState = 1`). Deliberately NOT renamed to
+/// match the others -- the `_COMBINED` / `_CHAR` / `_SYSTEM` family here encodes the b72/b73
+/// lane distinction, which a generic "write to slot" name would lose.
 #[cfg(windows)]
 const SAVE_DISPATCH_CHAR_RVA: usize = 0x67b750;
 /// `FUN_14067b570` -- system-slot-only dispatcher (b73 set, b72 clear). Unlike the two
 /// character lanes it does NOT consult `FUN_14067dc00`; it always submits.
 #[cfg(windows)]
-const SAVE_DISPATCH_SYSTEM_RVA: usize = 0x67b570;
+const SAVE_DISPATCH_SYSTEM_RVA: usize = er_game_base::rva::SAVE_DISPATCH_SYSTEM_RVA;
 /// `FUN_14067dc00` -- the character serializer. Its return value is the SOLE gate on the
 /// submit call in both character lanes.
 #[cfg(windows)]

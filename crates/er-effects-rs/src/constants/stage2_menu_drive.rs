@@ -48,7 +48,12 @@ pub(crate) const MENU_ITEM_DIALOG_RESULT_130_OFFSET: usize =
 pub(crate) const MENU_TITLE_CONTINUE_DOCALL_RVA: usize = 0x00764b80;
 /// Native FD4 row submit helper used by `MenuWindowJob::Update` for one result-mode branch.
 /// It forwards event `3` to the row result's own vtable slot `+0x60`.
-pub(crate) const MENU_ITEM_SUBMIT_RVA: usize = 0x007ac890;
+/// `f(rcx = MenuWindow*)`: calls `MenuJobResult::SetResult(&r, Failed=3, 0)` then invokes the
+/// receiver's OWN vtable slot +0x60. It is a close-with-Failed, NOT an item submit or accept
+/// (Success is 2; the sibling emits 4). Its caller is `CS::MenuWindowJob::Run`, not `::Update`.
+/// Renamed 2026-08-01 -- the old name and doc asserted three things the dump contradicts.
+pub(crate) const MENU_WINDOW_CLOSE_WITH_FAILED_RVA: usize =
+    er_game_base::rva::MENU_WINDOW_CLOSE_WITH_FAILED_RVA;
 /// Row-result field consumed by `MenuWindowJob::Update` to choose which native accept event branch
 /// to send to the built row result.
 pub(crate) const MENU_ITEM_RESULT_MODE_58_OFFSET: usize = 0x58;

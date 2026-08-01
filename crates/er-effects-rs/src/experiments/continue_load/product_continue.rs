@@ -187,7 +187,7 @@ pub(crate) unsafe fn submit_native_continue_item_action(
     const CONTINUE_WRAPPER_EVENT_WORDS: usize = 2;
     const CONTINUE_WRAPPER_EVENT_CODE_INDEX: usize = 0;
     const CONTINUE_WRAPPER_EVENT_PAYLOAD_INDEX: usize = 1;
-    let native_submit = base + MENU_ITEM_SUBMIT_RVA;
+    let native_submit = base + MENU_WINDOW_CLOSE_WITH_FAILED_RVA;
     let fd4_event_constructor = base + FD4_EVENT_CONSTRUCTOR_RVA;
     let native_submit_fn: unsafe extern "system" fn(usize) =
         unsafe { std::mem::transmute(native_submit) };
@@ -359,7 +359,7 @@ pub(crate) unsafe fn product_continue_autoload_tick(
         let (fp_real, fp_level, fp_name_len) = unsafe { char_fingerprint(base) };
         append_autoload_debug(format_args!(
             "product-core-autoload: *** SUBMITTED native Continue MenuWindowJob result mode={result_mode} submit=0x{:x}(result=0x{:x}, result_vt=0x{:x}, item=0x{:x}, functor=0x{:x}, docall=0x{:x}) after set_save_slot({slot}) b78={b78} ac0={ac0} c30=0x{c30:x} b80={b80} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) dialog=0x{:x} menu_latch={} tick={tick} -- no input/direct_load/direct_build/raw deserialize/direct_confirm ***",
-            base + MENU_ITEM_SUBMIT_RVA,
+            base + MENU_WINDOW_CLOSE_WITH_FAILED_RVA,
             action.result,
             action.result_vt,
             action.item,
@@ -778,12 +778,12 @@ pub(crate) unsafe fn native_load_tick(owner: usize, base: usize, n: u64) {
         };
         const MENU_SYSTEM_SAVE_LOAD_GETTER_RVA: usize = 0x00256360;
         const GET_PROFILE_SUMMARY_RVA: usize = 0x002567b0;
-        const MARK_PROFILE_INDEX_AS_USED_RVA: usize = 0x00262250;
+        const MARK_PROFILE_INDEX_AS_USED_RVA: usize = er_loading_portrait::PROFILE_MARK_SLOT_USED_RVA;
         const NATIVE_LOAD_SAVE_DATA_RVA: usize = 0x0067b200;
         const TITLE_FLOW_CONTEXT_SAVE_INIT_RVA: usize = 0x0082d0d0;
         const MENU_SYSTEM_SAVE_SLOT_OFFSET: usize = 0x1200;
         const PROFILE_SELECT_JOB_BUILDER_RVA: usize = 0x009ad0e0;
-        const MENU_JOB_QUEUE_RVA: usize = 0x007a9250;
+        const MENU_JOB_QUEUE_RVA: usize = er_title_flow::MENU_JOB_SUBMIT_RVA as usize;
         const TITLE_MENU_WINDOW_JOB_QUEUE_OFFSET: usize = 0x10;
         let capture =
             unsafe { safe_read_usize(title_dialog + DIALOG_SCENE_PROXY_CAPTURE_A38_OFFSET) }
@@ -805,7 +805,7 @@ pub(crate) unsafe fn native_load_tick(owner: usize, base: usize, n: u64) {
         let save_request_profile: unsafe extern "system" fn(u8) = unsafe {
             std::mem::transmute(base + er_save_loader::SAVE_REQUEST_PROFILE_RVA as usize)
         };
-        const GET_SAVE_SYSTEM_RVA: usize = 0x00e6e060;
+        const GET_SAVE_SYSTEM_RVA: usize = IODEV_GETTER_RVA;
         let get_save_system: unsafe extern "system" fn() -> usize =
             unsafe { std::mem::transmute(base + GET_SAVE_SYSTEM_RVA) };
         const NATIVE_LOAD_SAVE_DATA_POLL_RVA: usize = 0x00679180;

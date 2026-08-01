@@ -336,6 +336,43 @@ pub(crate) fn harness_injection_active() -> bool {
     MOVE_PROBE_ACTIVE.load(Ordering::SeqCst) || sq_repro_actively_driving()
 }
 
+fn native_loading_screen_started_recently() -> bool {
+    const LOAD_STARTED_FRESH_MS: usize = 250;
+    let last_ms = LOADING_SCREEN_UPDATE_LAST_MS.load(Ordering::SeqCst);
+    if last_ms == 0 {
+        return false;
+    }
+    let age_ms = (boot_view_epoch_ms() as usize).saturating_sub(last_ms);
+    age_ms <= LOAD_STARTED_FRESH_MS
+        && LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst) != 0
+        && LOADING_SCREEN_BAR_ENABLED.load(Ordering::SeqCst) != 0
+        && LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst) != 0
+}
+
+fn game_man_load_sequence_started() -> bool {
+    const GAME_MAN_SAVE_STATE_IDLE: usize = 0;
+    let gm = crate::game_man_ptr_or_null();
+    if gm == 0 || gm == TITLE_OWNER_SCAN_START_ADDRESS {
+        return false;
+    }
+    let save_state_offset = core::mem::offset_of!(GameMan, save_state);
+    unsafe { safe_read_usize(gm + save_state_offset) }
+        .map(|save_state| (save_state as u32 as usize) != GAME_MAN_SAVE_STATE_IDLE)
+        .unwrap_or(false)
+}
+
+fn autoload_load_started() -> bool {
+    if native_loading_screen_started_recently() || game_man_load_sequence_started() {
+        return true;
+    }
+    if let Ok(base) = game_module_base() {
+        // Current render-pipeline cover visibility is a load-start/current-load signal. Do not use
+        // CSNowLoadingHelperImp::load_done here: that latch is load-COMPLETE and lingers into gameplay.
+        return unsafe { fake_loading_screen_visible(base) };
+    }
+    false
+}
+
 // ENV-GATE RATIONALE: ER_EFFECTS_BLOCK_INPUT is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn block_input_enabled() -> bool {
     // SYSTEM-QUIT REPRO AUTOPILOT: keep the block engaged in-world (past the normal in-world
@@ -368,43 +405,41 @@ pub(crate) fn block_input_enabled() -> bool {
     if is_native_windows() {
         return false;
     }
-    // PASSIVE mode never blocks. Otherwise keep the block engaged through the ENTIRE headless
-    // drive -- boot -> menu-open -> zero-input title-confirm Load fire -> mount -> confirm --
-    // releasing ONLY once in-world (the user takes over) or on abort (phase DONE). Product
-    // autoload keeps blocking after the guarded SetState5 until the in-world oracle fires, so the
-    // world-stream interval cannot be contaminated by user input.
-    let product_world_stream_pending = product_autoload_enabled()
-        && OWN_STEPPER_CONFIRMED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS
-        && IN_WORLD_REACHED.load(Ordering::SeqCst) != IN_WORLD_REACHED_YES;
-    // ZERO-INPUT INVARIANT (always-block-input-zero-input-invariant-2026-06-22, extended
-    // 2026-06-24 user-directive "block input until the load has started -- our side is done"):
-    // block ALL foreign input whenever ANY automated load lever is armed until in-world, so no probe
-    // can be contaminated and no path can secretly rely on input. This now INCLUDES the DEFAULT
-    // zero-input autoload path (native_continue + the readiness PAB advance), which is on for every
-    // real (non-telemetry-only) run -- previously only own_stepper/own_load/product_autoload engaged
-    // the block, so the default path ran with input LIVE and a human Continue press could (and did,
-    // 2026-06-24 gold-load run) drive the load instead of our DLL, masking that native_continue never
-    // found the Continue node. Blocking the default path makes the zero-input claim honest: if our
-    // drive cannot fire the load with input suppressed, the run stalls (correct failure) rather than
-    // riding on a foreign press. Normal play and user-driven golden traces (no lever armed, or
-    // telemetry-only) never block; the in-world release lets the user take over after the load.
-    //
-    // TODO(load-start release): release at the LOAD-STARTED semaphore (NowLoading flag set / the
-    // MoveMapStep load sequence begun) instead of full in-world, once the zero-input drive reliably
-    // fires the load -- so "our side is done" releases the user the moment the engine commits, not
-    // after the world finishes streaming.
     let autoload_armed = own_stepper_enabled()
         || own_load_enabled()
         || product_autoload_enabled()
         || native_continue_enabled()
         || pab_advance_enabled();
-    autoload_armed
-        && !own_stepper_passive_enabled()
-        && IN_WORLD_REACHED.load(Ordering::SeqCst) != IN_WORLD_REACHED_YES
+    if !autoload_armed || own_stepper_passive_enabled() || autoload_load_started() {
+        return false;
+    }
+    // PASSIVE mode never blocks. Otherwise keep the block engaged through the zero-input title/menu
+    // drive and release as soon as the current load-start semaphore proves the engine committed the
+    // load (native LoadingScreen update/bar, FakeLoadingScreen cover visibility, or GameMan.save_state
+    // leaving idle). At that point our zero-input side is done; the user need not wait for full in-world
+    // streaming before keyboard/gamepad input is live again. Product autoload still keeps blocking after
+    // the guarded SetState5 only until that load-start proof appears.
+    let product_world_stream_pending = product_autoload_enabled()
+        && OWN_STEPPER_CONFIRMED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS
+        && IN_WORLD_REACHED.load(Ordering::SeqCst) != IN_WORLD_REACHED_YES;
+    // ZERO-INPUT INVARIANT (always-block-input-zero-input-invariant-2026-06-22, extended
+    // 2026-06-24 user-directive "block input until the load has started -- our side is done"):
+    // block ALL foreign input whenever ANY automated load lever is armed until load start, so no probe
+    // can be contaminated and no path can secretly rely on input before the engine commits the load.
+    // This now INCLUDES the DEFAULT zero-input autoload path (native_continue + the readiness PAB
+    // advance), which is on for every real (non-telemetry-only) run -- previously only
+    // own_stepper/own_load/product_autoload engaged the block, so the default path ran with input LIVE
+    // and a human Continue press could (and did, 2026-06-24 gold-load run) drive the load instead of our
+    // DLL, masking that native_continue never found the Continue node. Blocking the default path makes
+    // the zero-input claim honest: if our drive cannot fire the load with input suppressed, the run
+    // stalls (correct failure) rather than riding on a foreign press. Normal play and user-driven golden
+    // traces (no lever armed, or telemetry-only) never block; the load-start release lets the user take
+    // over once the committed load no longer needs protected title/menu input.
+    IN_WORLD_REACHED.load(Ordering::SeqCst) != IN_WORLD_REACHED_YES
         && (OWN_STEPPER_PHASE.load(Ordering::SeqCst) != OWN_STEPPER_PHASE_DONE
             || product_world_stream_pending
             // The default native_continue/pab path does not drive the own_stepper phase machine, so
-            // its phase stays 0 (!= DONE) -- keep it blocked until in-world regardless.
+            // its phase stays 0 (!= DONE) -- keep it blocked until load-start regardless.
             || native_continue_enabled()
             || pab_advance_enabled())
 }
@@ -416,7 +451,7 @@ pub(crate) fn release_input_block_now() {
     if BLOCK_INPUT_ACTIVE.swap(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst) == BLOCK_INPUT_ON {
         InputBlocker::get_instance().block_only(InputFlags::empty());
         append_autoload_debug(format_args!(
-            "input-block: RELEASED (in-world / abort) -- keyboard + gamepad live (mouse + cursor never touched)"
+            "input-block: RELEASED (load-start / in-world / abort) -- keyboard + gamepad live (mouse + cursor never touched)"
         ));
     }
 }

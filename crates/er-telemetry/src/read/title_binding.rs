@@ -39,7 +39,7 @@ const TITLE_OWNER_INSTANCE_TABLE_10_OFFSET: usize = 0x10;
 const TITLE_OWNER_DIALOG_E0_OFFSET: usize = 0xe0;
 /// CS::TitleTopDialog vtable RVA -- `[dialog+0x00] == base+this`. Source:
 /// constants/stats_panel_background.rs `TitleDialogRva::Vtable`.
-const TITLE_TOP_DIALOG_VTABLE_RVA: usize = 0x2b26468;
+const TITLE_TOP_DIALOG_VTABLE_RVA: usize = er_game_base::rva::TITLE_TOP_DIALOG_VTABLE_RVA;
 /// TitleTopDialog embedded press-start SceneObjProxy window (`dialog+0xb78`).
 /// Source: constants/stats_panel_background.rs
 /// `TITLE_PRESS_START_SCENE_PROXY_B78_OFFSET`.

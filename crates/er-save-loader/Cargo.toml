@@ -6,6 +6,8 @@ publish = false
 
 [dependencies]
 er-safe-input = { path = "../er-safe-input" }
+# Tier A only (default features = zero external deps): shared singleton RVA table.
+er-game-base = { path = "../er-game-base" }
 
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }

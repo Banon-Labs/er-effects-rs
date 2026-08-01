@@ -34,7 +34,7 @@ use crate::log_message;
 
 /// Scaleform `MemoryFile` vtable RVA; a File whose first qword == `base + this` is a
 /// MemoryFile with the data/len/cursor layout below (`Read` memcpy's from +0x18).
-const MEMORY_FILE_VTABLE_RVA: usize = 0x2ba4c80;
+const MEMORY_FILE_VTABLE_RVA: usize = er_game_base::rva::SCALEFORM_MEMORY_FILE_VTABLE_RVA;
 const MEMORY_FILE_DATA_OFFSET: usize = 0x18;
 const MEMORY_FILE_LEN_OFFSET: usize = 0x20;
 const MEMORY_FILE_CURSOR_OFFSET: usize = 0x24;
@@ -48,7 +48,7 @@ const PARSE_SIG: &str =
 
 /// File-open observer (logs the `.gfx` open sequence AND provides a live loader to resolve
 /// FileOpener::OpenFile from). Known-good hardcoded 1.16.2 RVA.
-const FILE_OPEN_RVA: usize = 0x11ced80;
+const FILE_OPEN_RVA: usize = er_game_base::rva::TITLE_SCALEFORM_FILE_OPEN_RVA;
 
 /// Which badge movie does this open URL name, if any?
 ///

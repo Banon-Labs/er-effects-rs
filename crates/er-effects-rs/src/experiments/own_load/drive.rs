@@ -253,7 +253,7 @@ pub(crate) fn install_own_load_hook() -> bool {
 //         completes -> the IO/CSFile path is the gap (cause 2).
 
 /// `CS::WorldBlockRes::Update` real entry (deobf-grounded; the dump entry FUN_1406148e0 is +0x10).
-const WORLDBLOCKRES_UPDATE_RVA: usize = 0x614870;
+const WORLDBLOCKRES_UPDATE_RVA: usize = WORLDBLOCKRES_UPDATE_RE_RVA;
 /// Phase byte the switch dispatches on: `this+0x35` (9 -> 0xa is the residency transition).
 const WBR_PHASE_35_OFFSET: usize = 0x35;
 /// FD4 file-load completion gate: `this+0x2f` (recomputed each tick; !=0 lets phase 9 advance to 0xa).
@@ -737,7 +737,7 @@ pub(crate) fn install_request_move_map_fix_hook() -> bool {
 /// false match in this low-.text staircase region); resolved by unique prologue byte-search
 /// (`48 89 5c 24 08 57 48 83 ec 30 48 8b d9 0f 29 74 24 20 48 8d 51 2c 0f 28 f1 48 8b 49 10`, 1 hit) and
 /// disasm-verified (first insn `mov %rbx,0x8(%rsp)` = a clean 5-byte MinHook boundary).
-const WORLDRESWAIT_GATE_RVA: usize = 0x624bd0;
+const WORLDRESWAIT_GATE_RVA: usize = WORLDRESWAIT_FIELDAREA_GATE_RVA;
 /// Consecutive settled frames required before releasing the hold (the design's K~8-16; mirrors the game's
 /// own FieldArea stabilization countdown). Filters a one-frame settle blip on the persistent world.
 const WORLDRESWAIT_HOLD_SETTLE_FRAMES: usize = 12;

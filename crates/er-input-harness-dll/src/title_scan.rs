@@ -39,7 +39,7 @@ const TITLE_OWNER_INSTANCE_TABLE_OFFSET: usize = 0x10;
 /// TitleTopDialog holder (`owner+0xe0` -> dialog).
 const TITLE_OWNER_DIALOG_E0_OFFSET: usize = 0xe0;
 /// TitleTopDialog vtable RVA -- `[dialog+0x00]` equals `base + this`.
-const TITLETOP_DIALOG_VTABLE_RVA: usize = 0x2b26468;
+const TITLETOP_DIALOG_VTABLE_RVA: usize = er_game_base::rva::TITLE_TOP_DIALOG_VTABLE_RVA;
 /// TitleTopDialog discriminator (`dialog+0xa40`, u8): 0 = PRESS ANY BUTTON parked / 1 = Continue-Load
 /// menu built (both are outer state 10 -- this byte is THE difference).
 const TITLETOP_DIALOG_A40_OFFSET: usize = 0xa40;

@@ -2830,6 +2830,7 @@ name = "er-input-harness-dll"
 version = "0.1.0"
 dependencies = [
  "eldenring",
+ "er-game-base",
  "er-hook",
  "fromsoftware-shared",
  "windows 0.62.2",
@@ -2941,6 +2942,7 @@ dependencies = [
 name = "er-reload-trace-dll"
 version = "0.1.0"
 dependencies = [
+ "er-game-base",
  "er-hook",
 ]
 
@@ -2962,6 +2964,7 @@ name = "er-save-loader"
 version = "0.1.0"
 dependencies = [
  "eldenring",
+ "er-game-base",
  "er-safe-input",
 ]
 
