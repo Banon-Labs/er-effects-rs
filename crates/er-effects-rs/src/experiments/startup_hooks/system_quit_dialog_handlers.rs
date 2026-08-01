@@ -1,4 +1,3 @@
-
 unsafe fn system_quit_open_profile_load_dialog(action_obj: usize) -> bool {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const HEAP_LO: usize = 0x10000;
@@ -196,7 +195,8 @@ unsafe fn system_quit_route_button_action_or_forward(
             ));
             return 0;
         }
-        let original: unsafe extern "system" fn(usize) -> usize = unsafe { std::mem::transmute(orig) };
+        let original: unsafe extern "system" fn(usize) -> usize =
+            unsafe { std::mem::transmute(orig) };
         return unsafe { original(action_obj) };
     }
     // No event object reaches an action thunk, so the input kind is unclassifiable here -- which
@@ -313,7 +313,9 @@ pub(crate) unsafe extern "system" fn system_quit_return_desktop_action_hook(
     action_obj: usize,
 ) -> usize {
     let orig = SYSTEM_QUIT_RETURN_DESKTOP_ACTION_ORIG.load(Ordering::SeqCst);
-    unsafe { system_quit_route_button_action_or_forward(action_obj, orig, "return-desktop/second-row") }
+    unsafe {
+        system_quit_route_button_action_or_forward(action_obj, orig, "return-desktop/second-row")
+    }
 }
 
 unsafe fn system_quit_forward_button_controller_activation(
@@ -329,7 +331,8 @@ unsafe fn system_quit_forward_button_controller_activation(
         ));
         return;
     }
-    let original: unsafe extern "system" fn(usize, u32, usize, usize) = unsafe { std::mem::transmute(orig) };
+    let original: unsafe extern "system" fn(usize, u32, usize, usize) =
+        unsafe { std::mem::transmute(orig) };
     unsafe { original(controller, event_kind, event_a, event_b) };
 }
 
@@ -340,7 +343,8 @@ unsafe fn system_quit_controller_should_invoke_action(controller: usize, event_a
         ));
         return false;
     };
-    let predicate: unsafe extern "system" fn(usize, usize) -> u8 = unsafe { std::mem::transmute(predicate_addr) };
+    let predicate: unsafe extern "system" fn(usize, usize) -> u8 =
+        unsafe { std::mem::transmute(predicate_addr) };
     unsafe { predicate(controller, event_a) != 0 }
 }
 
@@ -361,14 +365,18 @@ pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hoo
     if !system_quit_controller_is_a_quit_row(controller) {
         // Not a row of the patched Quit tab: vanilla behaviour, untouched.
         unsafe {
-            system_quit_forward_button_controller_activation(controller, event_kind, event_a, event_b)
+            system_quit_forward_button_controller_activation(
+                controller, event_kind, event_a, event_b,
+            )
         };
         return;
     }
     // Focus / per-frame update rather than a confirm: never routes, never quits.
     if !unsafe { system_quit_controller_should_invoke_action(controller, event_a) } {
         unsafe {
-            system_quit_forward_button_controller_activation(controller, event_kind, event_a, event_b)
+            system_quit_forward_button_controller_activation(
+                controller, event_kind, event_a, event_b,
+            )
         };
         return;
     }
@@ -414,7 +422,8 @@ pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hoo
                 != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
                 || SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) != 0
                 || SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.load(Ordering::SeqCst) != 0;
-            let save_flow_in_flight = SAVE_FLOW_STAGE.load(Ordering::SeqCst) != SAVE_FLOW_STAGE_IDLE;
+            let save_flow_in_flight =
+                SAVE_FLOW_STAGE.load(Ordering::SeqCst) != SAVE_FLOW_STAGE_IDLE;
             if switch_in_flight || save_flow_in_flight {
                 SYSTEM_QUIT_QUIT_REFUSED_AMBIGUOUS_ROW_COUNT.fetch_add(1, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
@@ -473,7 +482,9 @@ fn wide_z(text: &str) -> Vec<u16> {
 /// direct source file under `save-files/` or a user-picked path.
 fn system_quit_env_save_path() -> Result<String, &'static str> {
     let Some(path) = active_save_file_for_system_quit() else {
-        return Err("no active save file (direct/configured save unset and no default ER0000 save resolved)");
+        return Err(
+            "no active save file (direct/configured save unset and no default ER0000 save resolved)",
+        );
     };
     let path = path.to_string_lossy();
     let trimmed = path.trim();
@@ -1062,7 +1073,8 @@ pub(crate) unsafe fn system_quit_save_game_deferred_close_tick() {
     SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_FRAMES.store(0, Ordering::SeqCst);
     let top = SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_WINDOW.swap(0, Ordering::SeqCst);
     if top != 0 {
-        let closed = unsafe { system_quit_save_game_close_window(top, "deferred_ingame_top_window") };
+        let closed =
+            unsafe { system_quit_save_game_close_window(top, "deferred_ingame_top_window") };
         append_autoload_debug(format_args!(
             "system-quit-save: deferred IngameTop close top=0x{top:x} closed={closed}"
         ));
@@ -1156,7 +1168,9 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
             unsafe { safe_read_usize(native_row + EDIT_PROPERTY_CONTROLLER_OFFSET) }.unwrap_or(0);
         let native_action = if native_controller != 0 {
             unsafe {
-                safe_read_usize(native_controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET)
+                safe_read_usize(
+                    native_controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET,
+                )
             }
             .unwrap_or(0)
         } else {
@@ -1220,7 +1234,9 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
                 unsafe { safe_read_usize(row + EDIT_PROPERTY_CONTROLLER_OFFSET) }.unwrap_or(0);
             let action = if controller != 0 {
                 unsafe {
-                    safe_read_usize(controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET)
+                    safe_read_usize(
+                        controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET,
+                    )
                 }
                 .unwrap_or(0)
             } else {
@@ -1265,7 +1281,9 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
                 unsafe { safe_read_usize(row + EDIT_PROPERTY_CONTROLLER_OFFSET) }.unwrap_or(0);
             let action = if controller != 0 {
                 unsafe {
-                    safe_read_usize(controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET)
+                    safe_read_usize(
+                        controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET,
+                    )
                 }
                 .unwrap_or(0)
             } else {
@@ -1275,7 +1293,8 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
                 SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_LAST_OBJECT.store(action, Ordering::SeqCst);
             }
             if controller != 0 {
-                SYSTEM_QUIT_OPEN_SAVE_DIR_CONTROLLER_LAST_OBJECT.store(controller, Ordering::SeqCst);
+                SYSTEM_QUIT_OPEN_SAVE_DIR_CONTROLLER_LAST_OBJECT
+                    .store(controller, Ordering::SeqCst);
                 system_quit_row_table_record_index(QuitRow::LoadSaveProfiles, row_index);
             }
             (r, row, controller, action)
@@ -1290,7 +1309,8 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
         // embedded scroll control at `+0x1a8` -- exactly what the native rebuild `FUN_140975040`
         // calls. A raw field write left that scroll control still describing the two-row list, which
         // is the state the vertical movement clamp reads.
-        let prior_bound = unsafe { safe_read_i32(dialog + DIALOG_SLOT_BOUND_B08_OFFSET) }.unwrap_or(-1);
+        let prior_bound =
+            unsafe { safe_read_i32(dialog + DIALOG_SLOT_BOUND_B08_OFFSET) }.unwrap_or(-1);
         let new_bound = (after_final.min(i32::MAX as usize)) as i32;
         let set_item_count = game_rva(GRID_CONTROL_SET_ITEM_COUNT_RVA).ok();
         if new_bound > prior_bound {
@@ -1305,7 +1325,8 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
                 )),
             }
         }
-        let bound_after = unsafe { safe_read_i32(dialog + DIALOG_SLOT_BOUND_B08_OFFSET) }.unwrap_or(-1);
+        let bound_after =
+            unsafe { safe_read_i32(dialog + DIALOG_SLOT_BOUND_B08_OFFSET) }.unwrap_or(-1);
         unsafe { system_quit_record_grid_geometry(dialog) };
         // The row TABLE is the identity from here on: index + live label per row. Log it, and log the
         // label actually readable at each captured index so a run shows the table agreeing with

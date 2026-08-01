@@ -104,7 +104,13 @@ fn protector_default_param_id(slot: usize) -> i32 {
 /// Replicate `FUN_1409e6fb0`'s protector resolution (deobf 0x1409e7553..0x1409e75b6, every test a
 /// SIGNED `js`) for one slot. The per-slot param id is the baseline; a non-negative override field
 /// replaces it outright.
-fn portrait_effective_protector_id(slot: usize, param_id: i32, unk0: i32, unkd4: i32, unkd8: i32) -> i32 {
+fn portrait_effective_protector_id(
+    slot: usize,
+    param_id: i32,
+    unk0: i32,
+    unkd4: i32,
+    unkd8: i32,
+) -> i32 {
     match slot {
         PORTRAIT_EQUIP_SLOT_HEAD if unkd4 >= 0 => unkd4,
         PORTRAIT_EQUIP_SLOT_CHEST if unkd8 >= 0 => unkd8 + CHR_ASM_OVERRIDE_CHEST_ADDEND,
@@ -269,13 +275,8 @@ unsafe fn portrait_equip_read_sample(
     }
     let mut effective = [CHR_ASM_OVERRIDE_ABSENT; CHR_ASM_PROTECTOR_SLOT_COUNT];
     for slot_index in 0..CHR_ASM_PROTECTOR_SLOT_COUNT {
-        effective[slot_index] = portrait_effective_protector_id(
-            slot_index,
-            param_ids[slot_index],
-            unk0,
-            unkd4,
-            unkd8,
-        );
+        effective[slot_index] =
+            portrait_effective_protector_id(slot_index, param_ids[slot_index], unk0, unkd4, unkd8);
     }
     Some(PortraitEquipSample {
         unk0,
@@ -312,7 +313,10 @@ pub(crate) unsafe fn portrait_equip_oracle_sample(base: usize, summary: usize, t
     portrait_equip_latch_first(&PORTRAIT_EQUIP_FIRST_UNKD4, sample.unkd4);
     portrait_equip_latch_first(&PORTRAIT_EQUIP_FIRST_UNKD8, sample.unkd8);
     for slot in 0..CHR_ASM_PROTECTOR_SLOT_COUNT {
-        portrait_equip_latch_first(&PORTRAIT_EQUIP_FIRST_EFFECTIVE_ID[slot], sample.effective[slot]);
+        portrait_equip_latch_first(
+            &PORTRAIT_EQUIP_FIRST_EFFECTIVE_ID[slot],
+            sample.effective[slot],
+        );
         portrait_equip_latch_first(&PORTRAIT_EQUIP_RECORD_PARAM_ID[slot], sample.record[slot]);
     }
     if mask != 0 {
@@ -340,8 +344,10 @@ pub(crate) unsafe fn portrait_equip_oracle_sample(base: usize, summary: usize, t
             == PORTRAIT_EQUIP_CAPTURE_NOT_SAMPLED
     {
         for slot in 0..CHR_ASM_PROTECTOR_SLOT_COUNT {
-            PORTRAIT_EQUIP_CAPTURE_EFFECTIVE_ID[slot]
-                .store(portrait_equip_pack(sample.effective[slot]), Ordering::SeqCst);
+            PORTRAIT_EQUIP_CAPTURE_EFFECTIVE_ID[slot].store(
+                portrait_equip_pack(sample.effective[slot]),
+                Ordering::SeqCst,
+            );
         }
         PORTRAIT_EQUIP_CAPTURE_VERDICT.store(
             if mask == 0 {
@@ -369,7 +375,13 @@ pub(crate) unsafe fn portrait_equip_oracle_sample(base: usize, summary: usize, t
 mod portrait_equip_oracle_tests {
     use super::*;
 
-    fn sample(unk0: i32, unkd4: i32, unkd8: i32, param_ids: [i32; 4], record: [i32; 4]) -> PortraitEquipSample {
+    fn sample(
+        unk0: i32,
+        unkd4: i32,
+        unkd8: i32,
+        param_ids: [i32; 4],
+        record: [i32; 4],
+    ) -> PortraitEquipSample {
         let mut effective = [CHR_ASM_OVERRIDE_ABSENT; CHR_ASM_PROTECTOR_SLOT_COUNT];
         for slot in 0..CHR_ASM_PROTECTOR_SLOT_COUNT {
             effective[slot] =
@@ -389,7 +401,13 @@ mod portrait_equip_oracle_tests {
     /// scored as a clean 4/4 pass.
     #[test]
     fn a_zeroed_chr_asm_resolves_every_protector_slot_to_a_bogus_row_and_is_flagged() {
-        let s = sample(0, 0, 0, [21000, 21100, 10200, 10300], [21000, 21100, -1, -1]);
+        let s = sample(
+            0,
+            0,
+            0,
+            [21000, 21100, 10200, 10300],
+            [21000, 21100, -1, -1],
+        );
         assert_eq!(s.effective, [0, 100, 200, 300]);
         let mask = portrait_equip_sample_bad_mask(&s);
         assert!(mask & PORTRAIT_EQUIP_BAD_OVERRIDE_ACTIVE != 0);
@@ -403,7 +421,13 @@ mod portrait_equip_oracle_tests {
     /// what the renderer asks for.
     #[test]
     fn the_sentinel_image_resolves_the_records_own_armor_and_passes() {
-        let s = sample(-1, -1, -1, [21000, 21100, 10200, 10300], [21000, 21100, -1, -1]);
+        let s = sample(
+            -1,
+            -1,
+            -1,
+            [21000, 21100, 10200, 10300],
+            [21000, 21100, -1, -1],
+        );
         assert_eq!(s.effective, [21000, 21100, 10200, 10300]);
         assert_eq!(portrait_equip_sample_bad_mask(&s), 0);
     }
@@ -431,7 +455,13 @@ mod portrait_equip_oracle_tests {
     /// (`mov (%rcx),%eax ; test ; js ; lea 0xc8(%rax),%ebx` at deobf 0x1409e758f).
     #[test]
     fn a_non_negative_unk0_overrides_hands_alone() {
-        let s = sample(5, -1, -1, [21000, 21100, 10200, 10300], [21000, 21100, -1, -1]);
+        let s = sample(
+            5,
+            -1,
+            -1,
+            [21000, 21100, 10200, 10300],
+            [21000, 21100, -1, -1],
+        );
         assert_eq!(s.effective, [21000, 21100, 205, 10300]);
         assert_eq!(
             portrait_equip_sample_bad_mask(&s),

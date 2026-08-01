@@ -17,43 +17,43 @@
 // index out of `dialog+0xb0c`. Cursor movement, back and every other press stay inside the game's
 // own list widget. So every browse action -- including switching drives -- has to BE a row.
 
-/// 1 while the live `05_010_ProfileSelect` window is OUR file-picker (rows = directory listing).
-/// 0 when it is the normal character-slot view.
-pub(crate) use er_telemetry::counters::SAVE_PICKER_MODE_ACTIVE;
-/// 1 = the picker window was closed for a directory/page change; the menu-pump Run hook must
-/// resubmit a fresh `05_010` job (records already restaged) instead of restoring the System UI.
-pub(crate) use er_telemetry::counters::SAVE_PICKER_REOPEN_PENDING;
-/// 1 = a file was ingested from the picker; the menu-pump Run hook must resubmit `05_010` as the
-/// NORMAL slot view (picker mode already cleared) so the user picks a character slot next.
-pub(crate) use er_telemetry::counters::SAVE_PICKER_OPEN_SLOTS_PENDING;
 /// Action object of the "Load Character from File" row; `system_quit_open_profile_load_dialog` derives
 /// the System dialog (action+0x8), submit queue and window list from it on every (re)submit.
 pub(crate) use er_telemetry::counters::SAVE_PICKER_ACTION_OBJ;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_CANCEL_COUNT;
 /// 1 while the live picker is the save-DESTINATION chooser (save-game-flow WP3) instead of the
 /// load-source browser: row 0 is a pinned `[ new ]`, and activation feeds the save flow.
 pub(crate) use er_telemetry::counters::SAVE_PICKER_DEST_MODE;
-/// System/Quit dialog the live picker window was submitted from; the menu-pump resubmit reopens
-/// through it (the destination picker is opened by the save flow, which has no row action object).
-pub(crate) use er_telemetry::counters::SAVE_PICKER_SYSTEM_DIALOG;
-/// Which picker surface this session runs (0 = this in-game browser, 1 = the OS file dialog).
-/// Latched once in `init_runtime_config`; exported as `oracle_save_picker_surface`.
-pub(crate) use er_telemetry::counters::SAVE_PICKER_SURFACE;
+/// 1 while the live `05_010_ProfileSelect` window is OUR file-picker (rows = directory listing).
+/// 0 when it is the normal character-slot view.
+pub(crate) use er_telemetry::counters::SAVE_PICKER_MODE_ACTIVE;
+/// Diagnostics / telemetry oracles.
+pub(crate) use er_telemetry::counters::SAVE_PICKER_OPEN_COUNT;
+/// 1 = a file was ingested from the picker; the menu-pump Run hook must resubmit `05_010` as the
+/// NORMAL slot view (picker mode already cleared) so the user picks a character slot next.
+pub(crate) use er_telemetry::counters::SAVE_PICKER_OPEN_SLOTS_PENDING;
 /// 1 while a modal OS file dialog is blocking the menu pump. Freeze predicate, re-entrancy claim
 /// and stage-3 liveness term, all one word.
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_DIALOG_OPEN;
 /// Game-task ticks whose save-flow deadline accrual was suppressed while a dialog was open.
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_TICKS_FROZEN;
-/// Diagnostics / telemetry oracles.
-pub(crate) use er_telemetry::counters::SAVE_PICKER_OPEN_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_REPOPULATE_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_PICK_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_PICK_REJECT_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_RESUBMIT_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_CANCEL_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_STAGED_ROW_COUNT;
 /// Dialog whose row list must be rebuilt in menu-pump ownership (0 = none). Set by a
 /// navigation/page activation after restaging records; consumed by the Run hook.
 pub(crate) use er_telemetry::counters::SAVE_PICKER_REBUILD_PENDING_DIALOG;
+/// 1 = the picker window was closed for a directory/page change; the menu-pump Run hook must
+/// resubmit a fresh `05_010` job (records already restaged) instead of restoring the System UI.
+pub(crate) use er_telemetry::counters::SAVE_PICKER_REOPEN_PENDING;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_REPOPULATE_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_RESUBMIT_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_STAGED_ROW_COUNT;
+/// Which picker surface this session runs (0 = this in-game browser, 1 = the OS file dialog).
+/// Latched once in `init_runtime_config`; exported as `oracle_save_picker_surface`.
+pub(crate) use er_telemetry::counters::SAVE_PICKER_SURFACE;
+/// System/Quit dialog the live picker window was submitted from; the menu-pump resubmit reopens
+/// through it (the destination picker is opened by the save flow, which has no row action object).
+pub(crate) use er_telemetry::counters::SAVE_PICKER_SYSTEM_DIALOG;
 
 /// Windows-form (`Z:\...`) string for a possibly Linux-form absolute path; drive-prefixed paths
 /// pass through with separators normalized. String twin of `system_quit_path_for_windows`.
@@ -214,9 +214,7 @@ pub(crate) unsafe fn system_quit_open_save_picker_menu_in_game(action_obj: usize
         Ok(path) => path,
         Err(reason) => {
             SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
-            append_autoload_debug(format_args!(
-                "save-picker: refused to open -- {reason}"
-            ));
+            append_autoload_debug(format_args!("save-picker: refused to open -- {reason}"));
             return false;
         }
     };
@@ -321,11 +319,7 @@ pub(crate) unsafe fn system_quit_open_save_dest_picker_in_game(system_dialog: us
     // Same mode-locked filter as the load picker: the destination list shows the containers the
     // active runtime flavor understands.
     let seamless = save_picker_seamless_mode_after_settle("system-quit-save-dest-picker-open");
-    let extensions: &[&str] = if seamless {
-        &["co2", "sl2"]
-    } else {
-        &["sl2"]
-    };
+    let extensions: &[&str] = if seamless { &["co2", "sl2"] } else { &["sl2"] };
     let model = crate::experiments::save_picker::SavePickerModel::open_destination(
         &start_dir,
         extensions,
@@ -470,9 +464,7 @@ pub(crate) unsafe fn save_picker_handle_activation(dialog: usize, cursor: i32) -
             }
             0
         }
-        PickerActivation::PickedFile(path)
-            if SAVE_PICKER_DEST_MODE.load(Ordering::SeqCst) != 0 =>
-        {
+        PickerActivation::PickedFile(path) if SAVE_PICKER_DEST_MODE.load(Ordering::SeqCst) != 0 => {
             // DESTINATION browser: an existing container was picked as the save target, so the
             // final overwrite confirm decides. No ingest/preview -- nothing is being loaded.
             unsafe { save_dest_handle_picked_target(dialog, path, "picked-file") };
@@ -588,7 +580,11 @@ pub(crate) unsafe fn save_picker_menu_pump_resubmit() -> bool {
         SAVE_PICKER_RESUBMIT_COUNT.fetch_add(1, Ordering::SeqCst);
         append_autoload_debug(format_args!(
             "save-picker: menu-pump resubmitted 05_010 window as {} (dialog=0x{system_dialog:x})",
-            if reopen_as_picker { "picker page" } else { "slot view" }
+            if reopen_as_picker {
+                "picker page"
+            } else {
+                "slot view"
+            }
         ));
         return true;
     }
@@ -790,8 +786,8 @@ unsafe fn local_utc_offset_seconds(utc_secs: i64) -> Option<i64> {
     unsafe { SystemTimeToFileTime(&local_st, &mut local_ft) }.ok()?;
     let local_ticks =
         (u64::from(local_ft.dwHighDateTime) << 32) | u64::from(local_ft.dwLowDateTime);
-    let local_secs = i64::try_from(local_ticks / TICKS_PER_SECOND as u64).ok()?
-        - FILETIME_EPOCH_TO_UNIX_SECONDS;
+    let local_secs =
+        i64::try_from(local_ticks / TICKS_PER_SECOND as u64).ok()? - FILETIME_EPOCH_TO_UNIX_SECONDS;
     Some(local_secs - utc_secs)
 }
 

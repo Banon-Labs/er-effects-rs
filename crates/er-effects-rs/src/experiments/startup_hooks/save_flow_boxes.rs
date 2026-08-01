@@ -387,9 +387,7 @@ pub(crate) unsafe fn save_flow_submit_box(box_id: usize) -> bool {
         unsafe { std::mem::transmute(recipe.add_no) };
     for button in add_order {
         builder = match button {
-            SaveFlowButton::Yes => unsafe {
-                add_yes(builder, (&raw const yes_desc) as usize)
-            },
+            SaveFlowButton::Yes => unsafe { add_yes(builder, (&raw const yes_desc) as usize) },
             SaveFlowButton::No => unsafe { add_no(builder) },
         };
     }
@@ -448,9 +446,7 @@ pub(crate) unsafe fn save_flow_submit_box(box_id: usize) -> bool {
 fn save_flow_box_identity(dialog: usize, base: usize) -> (usize, usize, bool) {
     let vtable = unsafe { safe_read_usize(dialog) }.unwrap_or(0);
     let update_slot = unsafe {
-        safe_read_usize(
-            vtable + MSGBOX_DIALOG_VTABLE_UPDATE_SLOT * core::mem::size_of::<usize>(),
-        )
+        safe_read_usize(vtable + MSGBOX_DIALOG_VTABLE_UPDATE_SLOT * core::mem::size_of::<usize>())
     }
     .unwrap_or(0);
     let ok = vtable != 0 && update_slot == base + MSGBOX_DIALOG_UPDATE_RVA;
@@ -724,8 +720,7 @@ pub(crate) fn install_menu_job_emit_result_hook() {
     // Fast idempotent exit BEFORE any byte reading or MinHook work. This runs from the
     // per-tick install driver and again at the Save Game row press, and the target is a busy
     // generic MenuJob method: once it is installed, later calls must touch nothing.
-    if MENU_JOB_EMIT_RESULT_INSTALLED.load(Ordering::SeqCst) != MENU_JOB_EMIT_RESULT_NOT_INSTALLED
-    {
+    if MENU_JOB_EMIT_RESULT_INSTALLED.load(Ordering::SeqCst) != MENU_JOB_EMIT_RESULT_NOT_INSTALLED {
         return;
     }
     let Some(addr) = save_flow_verify_rva(

@@ -160,7 +160,9 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
     }
     if gm == NULL {
         if n % NATIVE_LOAD_LOG_INTERVAL == NULL as u64 {
-            let (node, registry) = action.as_ref().map_or((NULL, NULL), |a| (a.node, a.registry));
+            let (node, registry) = action
+                .as_ref()
+                .map_or((NULL, NULL), |a| (a.node, a.registry));
             append_autoload_debug(format_args!(
                 "native-fullread: waiting for GameMan after menu ready node=0x{node:x} registry=0x{registry:x} (#{n})"
             ));

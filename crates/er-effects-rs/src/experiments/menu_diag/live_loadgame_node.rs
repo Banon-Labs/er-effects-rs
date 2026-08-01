@@ -1,4 +1,3 @@
-
 /// MODEL B (FACTORY-HOOK LATCH RECIPE 2026-06-18, bd
 /// live-dialog-menuwindow-latch-via-factory-hook-0x14081e5e0-2026): READ-ONLY deterministic
 /// acquisition of the two LIVE args the Load-Game dialog factory 0x14081ead0 needs -- the live

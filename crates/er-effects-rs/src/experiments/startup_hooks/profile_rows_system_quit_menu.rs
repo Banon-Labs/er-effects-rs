@@ -782,8 +782,8 @@ unsafe fn system_quit_reapply_optionsetting_pane_visibility(
         }
     }
     append_autoload_debug(format_args!(
-        "system-quit-dup: optionsetting pane-reapply native-select source={source} composite=0x{composite:x} old_current=0x{current:x} selected=0x{selected:x} tab_index={tab_index} pane_index={pane_index} live_tab={live_tab:?} forced_tab={forced_tab:?} cache_tab={cache_tab:?} visible_mask=0x{visible_mask:x} refreshed={refreshed} select_addr=0x{:x} set_visible=0x{set_visible_addr:x} (pre-repaired self-copy)"
-        , game_rva(OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA).unwrap_or(0)
+        "system-quit-dup: optionsetting pane-reapply native-select source={source} composite=0x{composite:x} old_current=0x{current:x} selected=0x{selected:x} tab_index={tab_index} pane_index={pane_index} live_tab={live_tab:?} forced_tab={forced_tab:?} cache_tab={cache_tab:?} visible_mask=0x{visible_mask:x} refreshed={refreshed} select_addr=0x{:x} set_visible=0x{set_visible_addr:x} (pre-repaired self-copy)",
+        game_rva(OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA).unwrap_or(0)
     ));
 }
 
@@ -874,8 +874,8 @@ unsafe fn system_quit_log_save_gates(base: usize, source: &str) {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const HEAP_LO: usize = 0x10000;
     // The engine SHUTDOWN/CLEANUP flag, not a "force latch" -- read-only here. See
-// er_title_flow::TITLE_ACCEPT_LATCH_RVA for the evidence.
-const FORCE_LATCH_RVA: usize = TITLE_ACCEPT_LATCH_RVA;
+    // er_title_flow::TITLE_ACCEPT_LATCH_RVA for the evidence.
+    const FORCE_LATCH_RVA: usize = TITLE_ACCEPT_LATCH_RVA;
     const GAME_MAN_SINGLETON_RVA: usize = er_game_base::rva::GAME_MAN_SINGLETON_RVA;
     let n = SYSTEM_QUIT_SAVE_GATE_DIAG_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
     if !(n <= 8 || n % 240 == 0) {

@@ -1,4 +1,3 @@
-
 /// Dismiss the captured startup MessageBoxDialog (connection-error / EULA / warning) by calling
 /// its verified OnDecide/finalize 0x140927ba0(rcx=dialog) -- the genuine OK handler that
 /// dispatches the chosen button (builder-defaulted to OK) and drives the dialog to emit "stop"
@@ -54,7 +53,8 @@ pub(crate) fn force_dismiss_startup_dialog() {
     //   * `+0x25e0` is the DEFAULT CURSOR INDEX. Writing 0 makes `OnDecide` dispatch button 0
     //     instead of taking its `index == -1` cancel arm.
     unsafe {
-        *((dialog + MSGBOX_BUTTON_COUNT_25E8_OFFSET) as *mut i32) = MSGBOX_BUTTON_COUNT_MULTI_CHOICE;
+        *((dialog + MSGBOX_BUTTON_COUNT_25E8_OFFSET) as *mut i32) =
+            MSGBOX_BUTTON_COUNT_MULTI_CHOICE;
         *((dialog + MSGBOX_DEFAULT_CURSOR_25E0_OFFSET) as *mut i32) = MSGBOX_FIRST_BUTTON_INDEX;
     }
     if let Some(fade_target_bits) =
@@ -165,9 +165,9 @@ pub(crate) fn grsysmsg_log_enabled() -> bool {
             .exists()
 }
 
+pub(crate) use er_telemetry::counters::GR_SYSMSG_LOG_COUNT;
 pub(crate) use er_telemetry::counters::GR_SYSMSG_LOG_INSTALLED;
 pub(crate) use er_telemetry::counters::GR_SYSMSG_LOG_ORIG;
-pub(crate) use er_telemetry::counters::GR_SYSMSG_LOG_COUNT;
 /// `CS::GetGR_System_Message` (deobf entry 0x140762e30): `MenuString* (rcx=out, edx=int messageId)`.
 /// The dump labels it 0x140762e40 but that is MID-INSTRUCTION (inside `movq $-2,[rsp+0x28]`); the real
 /// MSVC prologue (`mov [rsp+8],rcx; push rdi; sub rsp,0x30`) is at 0x140762e30 -- VERIFIED by deobf
@@ -308,10 +308,10 @@ const FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA: usize = 0x29c8e48;
 /// `MenuJobState::Continue` (the no-modal result), verified from the deobf clean leaf (`lea edx,[r8+1]`).
 const MENU_JOB_STATE_CONTINUE: i32 = 1;
 
-pub(crate) use er_telemetry::counters::NETWORK_CHECK_SHORTCIRCUIT_INSTALLED;
 /// pub(crate): the boot-progress view reads this as its menu-open-era milestone (the shortcircuit
 /// fires within ~10ms of the title-accept-byte natural menu-open on the product path).
 pub(crate) use er_telemetry::counters::NETWORK_CHECK_SHORTCIRCUIT_COUNT;
+pub(crate) use er_telemetry::counters::NETWORK_CHECK_SHORTCIRCUIT_INSTALLED;
 
 /// THE MILESTONE-3 FIX (zero-input, save-safe). `CS::NetworkCheckJob::Run` is a title-flow MenuJob the
 /// TitleTopDialog registrar chains UNCONDITIONALLY at menu-open. Offline, its Steam-holder check
@@ -431,8 +431,8 @@ const SHOW_PROGRESS_JOB_RUN_RVA: u32 = 0x8349c0;
 /// loop the timed job; Success(2) completes it cleanly.
 const MENU_JOB_STATE_SUCCESS: i32 = 2;
 
-pub(crate) use er_telemetry::counters::SHOW_PROGRESS_SHORTCIRCUIT_INSTALLED;
 pub(crate) use er_telemetry::counters::SHOW_PROGRESS_SHORTCIRCUIT_COUNT;
+pub(crate) use er_telemetry::counters::SHOW_PROGRESS_SHORTCIRCUIT_INSTALLED;
 /// Original CS::ShowProgressJob::Run trampoline (MinHook). Needed so the SAVE-data progressType can be
 /// PASSED THROUGH to its real delegate -- that delegate IS the boot ProfileSummary read (SLLoadSession
 /// -> ER0000.sl2). Blanket-suppressing every type (the prior behavior) killed the save read, leaving

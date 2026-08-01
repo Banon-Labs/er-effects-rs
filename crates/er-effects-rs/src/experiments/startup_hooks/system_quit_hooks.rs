@@ -1,4 +1,3 @@
-
 pub(crate) fn install_system_quit_continue_confirm_hook() {
     if SYSTEM_QUIT_CONTINUE_CONFIRM_INSTALLED.load(Ordering::SeqCst) != 0 {
         return;
@@ -141,10 +140,10 @@ pub(crate) fn install_system_quit_child_finish_trace_hook() {
     }
 }
 
+pub(crate) use er_telemetry::counters::TESTNET_FF_FIRED_EPOCH;
+pub(crate) use er_telemetry::counters::TESTNET_FF_LAST_MMS;
 /// Stuck-frame + one-shot state for the load2/boot testNetStep force-finish below.
 pub(crate) use er_telemetry::counters::TESTNET_FF_STUCK_FRAMES;
-pub(crate) use er_telemetry::counters::TESTNET_FF_LAST_MMS;
-pub(crate) use er_telemetry::counters::TESTNET_FF_FIRED_EPOCH;
 const TESTNET_FF_STUCK_FRAME_THRESHOLD: usize = 120;
 
 /// LOAD2 WORLD-COMPLETION FIX (bd load2-fires-but-stalls-at-mms18-world-completion-2026-07-19). A
@@ -182,8 +181,7 @@ pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
         return;
     }
     let mms_from_ingame = ig.and_then(|ig| {
-        unsafe { safe_read_usize(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) }
-            .filter(|v| *v >= 0x10000)
+        unsafe { safe_read_usize(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) }.filter(|v| *v >= 0x10000)
     });
     let mms_from_oracle = ORACLE_RELIABLE_MMS_PTR.load(Ordering::SeqCst);
     let mms = mms_from_ingame.or_else(|| (mms_from_oracle >= 0x10000).then_some(mms_from_oracle));
@@ -201,10 +199,9 @@ pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
         .unwrap_or(-1);
     let mms_state = unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET) }.unwrap_or(-1);
     if boot_epoch {
-        let testnet_stepper = unsafe {
-            safe_read_usize(mms + MOVEMAPSTEP_TESTNETSTEP_STEPPER_110_OFFSET)
-        }
-        .unwrap_or(0);
+        let testnet_stepper =
+            unsafe { safe_read_usize(mms + MOVEMAPSTEP_TESTNETSTEP_STEPPER_110_OFFSET) }
+                .unwrap_or(0);
         let boot_stuck_signature = request_code == 1
             && mms_state == MOVEMAPSTEP_STEP_MOVEMAP_INDEX
             && fin == 0
@@ -743,8 +740,10 @@ pub(crate) fn install_system_quit_gaitem_deserialize_hook() {
             append_autoload_debug(format_args!(
                 "system-quit-quickload: MH_Initialize for CSGaitemImp::Deserialize hook failed: {status:?}"
             ));
-            SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED
-                .store(SYSTEM_QUIT_GAITEM_DESERIALIZE_NOT_INSTALLED, Ordering::SeqCst);
+            SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED.store(
+                SYSTEM_QUIT_GAITEM_DESERIALIZE_NOT_INSTALLED,
+                Ordering::SeqCst,
+            );
             return;
         }
     }
@@ -752,8 +751,10 @@ pub(crate) fn install_system_quit_gaitem_deserialize_hook() {
         append_autoload_debug(format_args!(
             "system-quit-quickload: failed to resolve CSGaitemImp::Deserialize rva 0x{SYSTEM_QUIT_GAITEM_DESERIALIZE_RVA:x}"
         ));
-        SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED
-            .store(SYSTEM_QUIT_GAITEM_DESERIALIZE_NOT_INSTALLED, Ordering::SeqCst);
+        SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED.store(
+            SYSTEM_QUIT_GAITEM_DESERIALIZE_NOT_INSTALLED,
+            Ordering::SeqCst,
+        );
         return;
     };
     SYSTEM_QUIT_GAITEM_DESERIALIZE_ADDR.store(addr, Ordering::SeqCst);
@@ -773,8 +774,10 @@ pub(crate) fn install_system_quit_gaitem_deserialize_hook() {
             append_autoload_debug(format_args!(
                 "system-quit-quickload: MhHook::new CSGaitemImp::Deserialize hook failed: {status:?}"
             ));
-            SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED
-                .store(SYSTEM_QUIT_GAITEM_DESERIALIZE_NOT_INSTALLED, Ordering::SeqCst);
+            SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED.store(
+                SYSTEM_QUIT_GAITEM_DESERIALIZE_NOT_INSTALLED,
+                Ordering::SeqCst,
+            );
             return;
         }
     };
@@ -788,8 +791,10 @@ pub(crate) fn install_system_quit_gaitem_deserialize_hook() {
             append_autoload_debug(format_args!(
                 "system-quit-quickload: MH_EnableHook CSGaitemImp::Deserialize hook failed: {status:?}"
             ));
-            SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED
-                .store(SYSTEM_QUIT_GAITEM_DESERIALIZE_NOT_INSTALLED, Ordering::SeqCst);
+            SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED.store(
+                SYSTEM_QUIT_GAITEM_DESERIALIZE_NOT_INSTALLED,
+                Ordering::SeqCst,
+            );
         }
     }
 }
@@ -952,7 +957,12 @@ pub(crate) fn mh_install_hook_once(
     name: &str,
 ) -> bool {
     if flag
-        .compare_exchange(not_installed, installed_yes, Ordering::SeqCst, Ordering::SeqCst)
+        .compare_exchange(
+            not_installed,
+            installed_yes,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        )
         .is_err()
     {
         return flag.load(Ordering::SeqCst) == installed_yes;

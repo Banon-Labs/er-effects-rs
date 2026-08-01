@@ -1,4 +1,3 @@
-
 fn format_optional_usize_hex(value: usize) -> String {
     if value == TITLE_OWNER_SCAN_START_ADDRESS {
         "null".to_owned()

@@ -1,4 +1,3 @@
-
 unsafe fn system_quit_apply_foreign_profile_summary_preview(base: usize, bytes: &[u8]) -> usize {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let summary = unsafe { system_quit_profile_summary_ptr() };
@@ -745,8 +744,8 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
                     .unwrap_or(false)
             {
                 PROFILE_SPARE_CANDIDATE.store(r, Ordering::SeqCst);
-                let model = unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
-                    .unwrap_or(0);
+                let model =
+                    unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }.unwrap_or(0);
                 PROFILE_SPARE_CANDIDATE_MODEL.store(model, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
                     "loading-portrait: pre-recorded spare candidate renderer=0x{r:x} slot={s} model_ins=0x{model:x} (loading-screen-owned renderer)"

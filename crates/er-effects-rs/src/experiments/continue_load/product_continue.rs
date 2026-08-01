@@ -30,8 +30,8 @@ use windows::{
             Threading::GetCurrentProcessId,
         },
         UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-            WM_KEYDOWN, WM_KEYUP,
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
+            WM_KEYUP,
         },
     },
     core::{BOOL, PCSTR},
@@ -778,7 +778,8 @@ pub(crate) unsafe fn native_load_tick(owner: usize, base: usize, n: u64) {
         };
         const MENU_SYSTEM_SAVE_LOAD_GETTER_RVA: usize = 0x00256360;
         const GET_PROFILE_SUMMARY_RVA: usize = 0x002567b0;
-        const MARK_PROFILE_INDEX_AS_USED_RVA: usize = er_loading_portrait::PROFILE_MARK_SLOT_USED_RVA;
+        const MARK_PROFILE_INDEX_AS_USED_RVA: usize =
+            er_loading_portrait::PROFILE_MARK_SLOT_USED_RVA;
         const NATIVE_LOAD_SAVE_DATA_RVA: usize = 0x0067b200;
         const TITLE_FLOW_CONTEXT_SAVE_INIT_RVA: usize = 0x0082d0d0;
         const MENU_SYSTEM_SAVE_SLOT_OFFSET: usize = 0x1200;
@@ -810,8 +811,8 @@ pub(crate) unsafe fn native_load_tick(owner: usize, base: usize, n: u64) {
             unsafe { std::mem::transmute(base + GET_SAVE_SYSTEM_RVA) };
         const NATIVE_LOAD_SAVE_DATA_POLL_RVA: usize = 0x00679180;
         const PROFILE_SUMMARY_POPULATE_SLOT_RVA: usize = 0x00262270;
-        pub(crate) use er_telemetry::counters::NATIVE_PROFILE_READ_PHASE;
         pub(crate) use er_telemetry::counters::NATIVE_PROFILE_READ_LAST_POLL_STATUS;
+        pub(crate) use er_telemetry::counters::NATIVE_PROFILE_READ_PHASE;
         let poll_save_load: unsafe extern "system" fn(u8, u32) -> i32 =
             unsafe { std::mem::transmute(base + NATIVE_LOAD_SAVE_DATA_POLL_RVA) };
         let populate_profile_summary_slot: unsafe extern "system" fn(usize, u32) -> usize =

@@ -306,23 +306,23 @@ fn sq_repro_gamepad_to_vk(btn: u16) -> u32 {
     }
 }
 
-/// TO_PROFILE tab-switch key auto-discovery state (native keyboard): the discovered VK that moves
-/// OPTIONSETTING_CURRENT_TAB (0 = not found yet), the tab index observed when the current candidate
-/// window began (to detect a change), and the phase-local tick when we reached the Quit tab (so the
-/// DOWN,DOWN,Enter row nav has its own base; usize::MAX = not yet on the Quit tab).
-pub(crate) use er_telemetry::counters::SQ_REPRO_TAB_DISCOVERED;
-pub(crate) use er_telemetry::counters::SQ_REPRO_TAB_BASELINE;
-pub(crate) use er_telemetry::counters::SQ_REPRO_ROWNAV_BASE;
+/// One-shot: we force-built the OptionSetting Quit-tab pane (via the game's own tab-select
+/// FUN_14093b850) so the cloned Load-Profile row + its action object get created without the
+/// mouse-only tab visit.
+pub(crate) use er_telemetry::counters::SQ_REPRO_PANE_BUILD_TRIED;
 /// One-shot: the deterministic Load-Profile route (`system_quit_open_profile_load_dialog`) was fired
 /// this switch, so we do not re-fire it. Native ER has no keyboard bind for the OptionSetting
 /// tab-switch (mouse-only), so instead of navigating to the Quit tab we invoke the DLL's own route
 /// directly when the Load-Profile row action was captured -- it opens ProfileSelect and sets the
 /// return-chain System dialog, exactly like a click.
 pub(crate) use er_telemetry::counters::SQ_REPRO_ROUTE_FIRED;
-/// One-shot: we force-built the OptionSetting Quit-tab pane (via the game's own tab-select
-/// FUN_14093b850) so the cloned Load-Profile row + its action object get created without the
-/// mouse-only tab visit.
-pub(crate) use er_telemetry::counters::SQ_REPRO_PANE_BUILD_TRIED;
+pub(crate) use er_telemetry::counters::SQ_REPRO_ROWNAV_BASE;
+pub(crate) use er_telemetry::counters::SQ_REPRO_TAB_BASELINE;
+/// TO_PROFILE tab-switch key auto-discovery state (native keyboard): the discovered VK that moves
+/// OPTIONSETTING_CURRENT_TAB (0 = not found yet), the tab index observed when the current candidate
+/// window began (to detect a change), and the phase-local tick when we reached the Quit tab (so the
+/// DOWN,DOWN,Enter row nav has its own base; usize::MAX = not yet on the Quit tab).
+pub(crate) use er_telemetry::counters::SQ_REPRO_TAB_DISCOVERED;
 
 /// Fabricated gamepad wButtons for a phase that issues a FIXED list of button edges ONCE, in order,
 /// then holds. `tick` is phase-local; each edge occupies one `INJECT_NAV_CYCLE` (the RE-grounded
@@ -379,8 +379,8 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             // == this fresh_deser epoch means the world clock is advancing for the CURRENT load = genuinely
             // in-world (set by the play_time_live oracle from GameDataMan+0xa0). The +180-tick settle below
             // still gates the actual menu-open, so an early world-live cannot fire the menu prematurely.
-            let cur_epoch =
-                crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+            let cur_epoch = crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
+                .load(Ordering::SeqCst);
             // FULL vanilla movable signature (user 2026-07-21: play_time_live ALONE armed the switch DURING
             // load1's loading -> soft-locked load1 mid-finalize with mismatched stats). Require the player
             // present + render-group enabled + enable_render (the char is genuinely rendered in-world) AND
@@ -1232,8 +1232,7 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             // reload that cannot latch (drift/contention) force-switches rather than hanging.
             let move_verdict_proven =
                 crate::constants::HARNESS_MOVE_VERDICT.load(Ordering::SeqCst) == 1;
-            let move_proven =
-                committed && render_ready && epoch_world_live && move_verdict_proven;
+            let move_proven = committed && render_ready && epoch_world_live && move_verdict_proven;
             if move_proven {
                 let completed = switch_index + 1;
                 SQ_REPRO_SWITCH_INDEX.store(completed, Ordering::SeqCst);

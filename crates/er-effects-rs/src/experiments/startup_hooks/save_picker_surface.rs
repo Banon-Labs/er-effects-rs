@@ -160,7 +160,9 @@ pub(crate) unsafe fn open_picker_for_intent(request: PickerOpenRequest) -> Picke
     let surface = picker_surface_for(os_native_picker_active());
     match (surface, request) {
         (PickerSurface::InGame, PickerOpenRequest::LoadSource { action_obj }) => {
-            open_taken_over_outcome(unsafe { system_quit_open_save_picker_menu_in_game(action_obj) })
+            open_taken_over_outcome(unsafe {
+                system_quit_open_save_picker_menu_in_game(action_obj)
+            })
         }
         (PickerSurface::InGame, PickerOpenRequest::SaveDestination { system_dialog }) => {
             open_taken_over_outcome(unsafe {
@@ -317,8 +319,10 @@ mod save_picker_surface_tests {
             },
             PickerOpenRequest::MissingSaveBoot,
         ];
-        for (os_enabled, expected) in [(false, PickerSurface::InGame), (true, PickerSurface::OsNative)]
-        {
+        for (os_enabled, expected) in [
+            (false, PickerSurface::InGame),
+            (true, PickerSurface::OsNative),
+        ] {
             for request in requests {
                 assert_eq!(
                     picker_surface_for(os_enabled),

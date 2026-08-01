@@ -1,4 +1,3 @@
-
 pub(crate) fn install_profile_select_table_diag_hook() {
     if PROFILE_SELECT_TABLE_DIAG_INSTALLED.load(Ordering::SeqCst) != 0 {
         return;
@@ -102,7 +101,6 @@ pub(crate) fn install_profile_renderer_teardown_spare_hook() {
         )),
     }
 }
-
 
 /// Build (once, cached for the process lifetime) the neutral-background TPF003 blob for a stats-panel
 /// slot: a solid `STATS_PANEL_BG_RGBA` `STATS_PANEL_TEX_DIM` square, uncompressed legacy-RGBA8 DDS,

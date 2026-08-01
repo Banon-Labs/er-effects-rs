@@ -30,8 +30,8 @@ use windows::{
             Threading::GetCurrentProcessId,
         },
         UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-            WM_KEYDOWN, WM_KEYUP,
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
+            WM_KEYUP,
         },
     },
     core::{BOOL, PCSTR},
@@ -66,14 +66,14 @@ const READ_67B100_RVA: usize = 0x67b100;
 static OWN_LOAD_GATE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Trampoline to the original 0x67b100 (set on hook install).
 static READ_67B100_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-/// One-shot install guard for the 0x67b100 detour.
-pub(crate) use er_telemetry::counters::OWN_LOAD_HOOK_INSTALLED;
+pub(crate) use er_telemetry::counters::OWN_LOAD_BODY_LEN;
 /// The sliced plaintext slot body the hook feeds: a leaked `&'static [u8]`, exposed to the detour
 /// as (ptr, len) atomics so the game-thread detour reads it lock-free. Set BEFORE arming the gate.
 pub(crate) use er_telemetry::counters::OWN_LOAD_BODY_PTR;
-pub(crate) use er_telemetry::counters::OWN_LOAD_BODY_LEN;
 /// Count of bytes the gated hook fed into the engine buffer on the latched call (verify telemetry).
 pub(crate) use er_telemetry::counters::OWN_LOAD_FED_BYTES;
+/// One-shot install guard for the 0x67b100 detour.
+pub(crate) use er_telemetry::counters::OWN_LOAD_HOOK_INSTALLED;
 
 /// Destination handed to the pass-through consumer call in [`run_native_load_consumer`].
 ///
@@ -135,12 +135,8 @@ unsafe fn run_native_load_consumer(origin: &str) {
     let mut scratch = [0_u8; CONSUMER_SCRATCH_BYTES];
     let consumer: unsafe extern "system" fn(usize, u32) -> u8 =
         unsafe { std::mem::transmute(orig) };
-    let consumed = unsafe {
-        consumer(
-            scratch.as_mut_ptr() as usize,
-            CONSUMER_SCRATCH_BYTES as u32,
-        )
-    };
+    let consumed =
+        unsafe { consumer(scratch.as_mut_ptr() as usize, CONSUMER_SCRATCH_BYTES as u32) };
     let after = er_save_suppress::sample_sl_request_slot();
     let outcome = er_save_suppress::note_load_consumer(before, after, origin, true);
     if outcome == er_save_suppress::LOAD_CONSUMER_RELEASED {
@@ -259,12 +255,12 @@ const WBR_PHASE_35_OFFSET: usize = 0x35;
 /// FD4 file-load completion gate: `this+0x2f` (recomputed each tick; !=0 lets phase 9 advance to 0xa).
 const WBR_GATE_2F_OFFSET: usize = 0x2f;
 
-/// Total calls to `WorldBlockRes::Update` observed via the detour (per-block-per-frame; 0 == the
-/// FieldArea update loop never ticked our block on this path).
-pub(crate) use er_telemetry::counters::OWN_LOAD_WBR_UPDATE_CALLS;
 /// Max phase byte ([this+0x35]) seen across all observed calls. <0xa across the stall == the block's
 /// resource-stream never reached residency.
 pub(crate) use er_telemetry::counters::OWN_LOAD_WBR_MAX_PHASE;
+/// Total calls to `WorldBlockRes::Update` observed via the detour (per-block-per-frame; 0 == the
+/// FieldArea update loop never ticked our block on this path).
+pub(crate) use er_telemetry::counters::OWN_LOAD_WBR_UPDATE_CALLS;
 /// Whether ANY observed block had its FD4 completion gate ([this+0x2f]) set non-zero. false across the
 /// stall == the FD4 file-load never completed for any block (the IO/CSFile gap).
 pub(crate) static OWN_LOAD_WBR_ANY_GATE_SET: std::sync::atomic::AtomicBool =
@@ -505,7 +501,9 @@ pub(crate) fn install_common_finalize_hook() -> bool {
         Ok(hook) => {
             COMMON_FINALIZE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
             if let Err(status) = unsafe { hook.queue_enable() } {
-                append_autoload_debug(format_args!("common-finalize: queue_enable failed: {status:?}"));
+                append_autoload_debug(format_args!(
+                    "common-finalize: queue_enable failed: {status:?}"
+                ));
                 return false;
             }
             match unsafe { MH_ApplyQueued() } {
@@ -527,7 +525,9 @@ pub(crate) fn install_common_finalize_hook() -> bool {
             }
         }
         Err(status) => {
-            append_autoload_debug(format_args!("common-finalize: MhHook::new failed: {status:?}"));
+            append_autoload_debug(format_args!(
+                "common-finalize: MhHook::new failed: {status:?}"
+            ));
             false
         }
     }
@@ -547,8 +547,6 @@ pub(crate) fn install_common_finalize_hook() -> bool {
 // ProcessMsbLoadLists -> world-stream -> STEP_Finish chain then runs natively and re-enables render.
 /// Trampoline to the original `InGameStep::RequestMoveMap` (set on hook install).
 static REQUEST_MOVE_MAP_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-/// One-shot install guard.
-pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_HOOK_INSTALLED;
 /// ARM countdown: our load trigger sets this to `REQUEST_MOVE_MAP_ARM_WINDOW` right before it drives
 /// SetState5/PlayGame. Each RequestMoveMap call while armed decrements it; the fixup fires on the FIRST
 /// call whose target BlockId is actually invalid (disarming immediately), and a valid intervening call
@@ -557,14 +555,16 @@ pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_HOOK_INSTALLED;
 /// the actual load's stale `-1` call a few calls later, leaving WorldResWait stuck (bug found runtime
 /// 2026-07-18, run boot-fix-validate-155035: calls=2 fixups=0, boot stuck at mms 3 for 66s).
 pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_ARM_COUNTDOWN;
+/// One-shot install guard.
+pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_HOOK_INSTALLED;
 /// How many RequestMoveMap calls after a load trigger stay eligible for the fixup. Generous enough to
 /// skip benign intervening calls but bounded so the arm never leaks into unrelated later transitions.
 const REQUEST_MOVE_MAP_ARM_WINDOW: usize = 8;
-/// Total RequestMoveMap calls seen (telemetry oracle_request_move_map_hook_calls).
-pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_HOOK_CALLS;
 /// Times we substituted a valid c30 BlockId into an invalid `*param_2`
 /// (telemetry oracle_request_move_map_hook_fixups). >=1 == the fix fired.
 pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_FIXUPS;
+/// Total RequestMoveMap calls seen (telemetry oracle_request_move_map_hook_calls).
+pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_HOOK_CALLS;
 /// Last (param_2-before, c30-substituted) pair, for telemetry/diagnosis.
 pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_LAST_BEFORE;
 pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_LAST_C30;
@@ -602,9 +602,8 @@ pub(crate) unsafe extern "system" fn request_move_map_fix_hook(
             };
             let c30_u = c30 as u32;
             let c30_area = (c30_u >> 24) & 0xff;
-            let c30_valid = c30_u != u32::MAX
-                && c30 != 0
-                && c30_area < REQUEST_MOVE_MAP_NONDEBUG_AREA_CEIL;
+            let c30_valid =
+                c30_u != u32::MAX && c30 != 0 && c30_area < REQUEST_MOVE_MAP_NONDEBUG_AREA_CEIL;
             if invalid && c30_valid {
                 // The actual load's stale/-1 target -- fix it and disarm (done for this load).
                 unsafe {
@@ -660,7 +659,12 @@ pub(crate) fn install_request_move_map_fix_hook() -> bool {
         ));
         return false;
     };
-    match unsafe { MhHook::new(addr as *mut c_void, request_move_map_fix_hook as *mut c_void) } {
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            request_move_map_fix_hook as *mut c_void,
+        )
+    } {
         Ok(hook) => {
             REQUEST_MOVE_MAP_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
             if let Err(status) = unsafe { hook.queue_enable() } {
@@ -819,7 +823,10 @@ unsafe fn worldreswait_gate_call_orig(field_area: usize, load_delta: f32) -> u8 
 /// with AL=1 once CSWorldGeomMan settles for K frames or the fail-soft cap expires. See the section
 /// header. `load_delta` is the xmm1 float the caller passes in -- declared as a real `f32` param so the
 /// ABI keeps it in xmm1 and we forward it to the original untouched.
-pub(crate) unsafe extern "system" fn worldreswait_gate_hook(field_area: usize, load_delta: f32) -> u8 {
+pub(crate) unsafe extern "system" fn worldreswait_gate_hook(
+    field_area: usize,
+    load_delta: f32,
+) -> u8 {
     er_telemetry::counters::WORLDRESWAIT_GATE_HOOK_CALLS.fetch_add(1, Ordering::SeqCst);
     // Fast path: not an armed/scoped switch reload -> behave EXACTLY as the original (load1/boot safe).
     if !worldreswait_hold_armed_and_scoped() {
@@ -845,7 +852,8 @@ pub(crate) unsafe extern "system" fn worldreswait_gate_hook(field_area: usize, l
         // fall through to the hold decision this same frame (defer immediately)
     }
     // Holding: decide release-on-settle / fail-soft / keep-holding. Never call the original here.
-    let waited = er_telemetry::counters::WORLDRESWAIT_HOLD_WAIT_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
+    let waited =
+        er_telemetry::counters::WORLDRESWAIT_HOLD_WAIT_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
     if worldreswait_geom_settled_once() {
         let streak =
             er_telemetry::counters::WORLDRESWAIT_SETTLE_STREAK.fetch_add(1, Ordering::SeqCst) + 1;
@@ -920,7 +928,9 @@ pub(crate) fn install_worldreswait_gate_hook() -> bool {
     match unsafe { MH_Initialize() } {
         MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
         status => {
-            append_autoload_debug(format_args!("worldreswait-gate: MH_Initialize failed: {status:?}"));
+            append_autoload_debug(format_args!(
+                "worldreswait-gate: MH_Initialize failed: {status:?}"
+            ));
             return false;
         }
     }
@@ -958,7 +968,9 @@ pub(crate) fn install_worldreswait_gate_hook() -> bool {
             }
         }
         Err(status) => {
-            append_autoload_debug(format_args!("worldreswait-gate: MhHook::new failed: {status:?}"));
+            append_autoload_debug(format_args!(
+                "worldreswait-gate: MhHook::new failed: {status:?}"
+            ));
             false
         }
     }
@@ -1027,7 +1039,11 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
             Ok(mut bytes)
                 if bytes.len() as u64 >= crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES =>
             {
-                normalize_save_bytes_to_active_steam_id(base, &mut bytes, "own-load-switch-file-override");
+                normalize_save_bytes_to_active_steam_id(
+                    base,
+                    &mut bytes,
+                    "own-load-switch-file-override",
+                );
                 append_autoload_debug(format_args!(
                     "own-load: read SWITCH FILE OVERRIDE \"{}\" ({} bytes) for slicing (programmatic cross-file (file,slot) switch overrides configured save_file for this load)",
                     override_path,
@@ -1056,7 +1072,11 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
             Ok(mut bytes)
                 if bytes.len() as u64 >= crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES =>
             {
-                normalize_save_bytes_to_active_steam_id(base, &mut bytes, "own-load-committed-foreign");
+                normalize_save_bytes_to_active_steam_id(
+                    base,
+                    &mut bytes,
+                    "own-load-committed-foreign",
+                );
                 append_autoload_debug(format_args!(
                     "own-load: read COMMITTED FOREIGN save \"{}\" ({} bytes) for slicing (Load-Save-Profiles pick overrides configured save_file for this load)",
                     committed_path,
@@ -1172,7 +1192,9 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
     let expected_name = active_default_save_file_name();
     let path = dir_path.join(expected_name);
     let valid = std::fs::metadata(&path)
-        .map(|meta| meta.is_file() && meta.len() >= crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES)
+        .map(|meta| {
+            meta.is_file() && meta.len() >= crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES
+        })
         .unwrap_or(false);
     if !valid {
         append_autoload_debug(format_args!(

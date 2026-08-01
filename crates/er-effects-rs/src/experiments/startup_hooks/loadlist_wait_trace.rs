@@ -35,7 +35,9 @@ pub(crate) unsafe fn loadlist_wait_verdict(this: usize) -> (usize, usize, i64, u
         unsafe { safe_read_usize(this + MOVEMAPLISTSTEP_LOADLIST_2C0_OFFSET) }.unwrap_or(0);
     // Native reads the state only when loadList is non-null; a NULL list PASSES gate A.
     let state = if load_list > 0x10000 {
-        unsafe { safe_read_i32(load_list) }.map(i64::from).unwrap_or(-1)
+        unsafe { safe_read_i32(load_list) }
+            .map(i64::from)
+            .unwrap_or(-1)
     } else {
         -1
     };

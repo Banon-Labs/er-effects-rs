@@ -30,8 +30,8 @@ use windows::{
             Threading::GetCurrentProcessId,
         },
         UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-            WM_KEYDOWN, WM_KEYUP,
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
+            WM_KEYUP,
         },
     },
     core::{BOOL, PCSTR},
@@ -390,9 +390,9 @@ static SAVE_REDIRECT_DIR_W: OnceLock<Vec<u16>> = OnceLock::new();
 /// are redirected to that staged tree, never back to this source path.
 static SAVE_DIRECT_SOURCE_FILE: OnceLock<PathBuf> = OnceLock::new();
 static SAVE_DIRECT_STAGE_ROOT: OnceLock<PathBuf> = OnceLock::new();
+pub(crate) use er_telemetry::counters::SAVE_DIRECT_STAGE_DIAG_HITS;
 pub(crate) use er_telemetry::counters::SAVE_DIRECT_STAGE_DONE_STEAM_ID;
 pub(crate) use er_telemetry::counters::SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID;
-pub(crate) use er_telemetry::counters::SAVE_DIRECT_STAGE_DIAG_HITS;
 pub(crate) use er_telemetry::counters::SAVE_DIRECT_STAGE_NO_STEAMID_HITS;
 static SAVE_DIRECT_STAGE_LAST_NO_STEAMID_KIND: AtomicUsize =
     AtomicUsize::new(DIRECT_STAGE_NO_STEAMID_KIND_NONE);
@@ -644,10 +644,10 @@ static SAVE_REDIRECT_ORIG_FINDFIRSTW: AtomicUsize = AtomicUsize::new(HOOK_ORIGIN
 /// the game build AND open the full save path under our tree NATIVELY (Wine does case-insensitive
 /// resolution), so the character is read without depending on intercepting each handle-relative open.
 static SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_LOGGED;
 pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_APPDATA_REQUESTS;
 pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_DIRECT_FILE_BLOCKS;
 pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_FIRST_LOAD_DONE_BLOCKS;
+pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_LOGGED;
 pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_NO_ROOT_BLOCKS;
 /// One-shot redirect latch (user design 2026-06-23): the gold is provided via the Z: staged dir for
 /// the FIRST load (reading from Z: works), but writing to Z: fails (Wine free-space) AND would mutate
@@ -683,12 +683,12 @@ static SAVE_FILE_OPS_CORE_ONCE: Once = Once::new();
 /// 1 once the core CreateFileW detour is live. The redirect installer reads it instead of creating
 /// a second MinHook on the same prologue (`MH_ERROR_ALREADY_CREATED`).
 static SAVE_FILE_OPS_CORE_CREATEFILEW_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) use er_telemetry::counters::SAVE_STEAM_ID_ENV_NORMALIZE_DONE;
-pub(crate) use er_telemetry::counters::SAVE_STEAM_API_STEAM_ID_LOGGED;
 /// Count of save-path opens we have redirected, logged for the first few so a probe can CONFIRM the
 /// game actually opened our staged save through the redirect (not the default dir). Capped so a
 /// busy IO loop cannot spam the debug log.
 pub(crate) use er_telemetry::counters::SAVE_REDIRECT_HITS;
+pub(crate) use er_telemetry::counters::SAVE_STEAM_API_STEAM_ID_LOGGED;
+pub(crate) use er_telemetry::counters::SAVE_STEAM_ID_ENV_NORMALIZE_DONE;
 const SAVE_REDIRECT_LOG_MAX: usize = 8;
 /// Diagnostic: total CreateFileW calls our detour observed (proves the hook is live at all under
 /// Wine's kernel32->kernelbase forwarding), and a bounded log of save-LIKE paths so we can see the
@@ -702,9 +702,9 @@ const SAVE_CREATEFILEW_DIAG_MAX: usize = 200;
 /// keeps its early window and a sparse tail without flooding the debug log.
 pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_DIAG_HITS;
 static SAVE_CREATEFILEW_LAST_SAVE_LIKE_KIND: AtomicUsize = AtomicUsize::new(SAVE_PATH_KIND_NONE);
-pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_STAGE_STEAMID_DIR_HITS;
-pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_STAGE_SAVE_FILE_HITS;
 pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_CONFIGURED_FILE_HITS;
+pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_STAGE_SAVE_FILE_HITS;
+pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_STAGE_STEAMID_DIR_HITS;
 const MISSING_SAVE_DIALOG_IDLE: usize = 0;
 const MISSING_SAVE_DIALOG_PENDING: usize = 1;
 const MISSING_SAVE_DIALOG_READY: usize = 2;
@@ -728,9 +728,9 @@ pub(crate) fn missing_save_selection_pending() -> bool {
 pub(crate) fn direct_save_file_source_active() -> bool {
     SAVE_DIRECT_SOURCE_FILE.get().is_some()
 }
-pub(crate) use er_telemetry::counters::SAVE_QUERY_STAGE_STEAMID_DIR_HITS;
-pub(crate) use er_telemetry::counters::SAVE_QUERY_STAGE_SAVE_FILE_HITS;
 pub(crate) use er_telemetry::counters::SAVE_QUERY_CONFIGURED_FILE_HITS;
+pub(crate) use er_telemetry::counters::SAVE_QUERY_STAGE_SAVE_FILE_HITS;
+pub(crate) use er_telemetry::counters::SAVE_QUERY_STAGE_STEAMID_DIR_HITS;
 const SAVE_PATH_KIND_NONE: usize = 0;
 const SAVE_PATH_KIND_ELDENRING_ROOT: usize = 1;
 const SAVE_PATH_KIND_GRAPHICS_CONFIG: usize = 2;
@@ -1724,7 +1724,8 @@ unsafe extern "system" fn save_redirect_createfilew_hook(
             // READ opens that pass through unredirected; the shell does not write the loaded save,
             // so this is a reporting concern, not a corruption one -- but it must be visible.
             if er_telemetry::counters::SAVE_PICKER_OS_DIALOG_OPEN.load(Ordering::SeqCst) != 0 {
-                er_telemetry::counters::SAVE_PICKER_OS_SAVELIKE_OPENS.fetch_add(1, Ordering::SeqCst);
+                er_telemetry::counters::SAVE_PICKER_OS_SAVELIKE_OPENS
+                    .fetch_add(1, Ordering::SeqCst);
             }
         }
         if calls == 0 || save_like {

@@ -1,4 +1,3 @@
-
 /// Forward a captured menu-UI call through its trampoline. Uniform 4-arg fastcall: the
 /// integer arg registers (rcx/rdx/r8/r9) pass through; callees taking fewer args ignore the
 /// rest, and none of the captured targets take >4 integer args or float args. Returns rax.

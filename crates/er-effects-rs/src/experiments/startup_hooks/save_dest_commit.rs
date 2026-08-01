@@ -98,23 +98,23 @@
 //    -- itself a whole-container write over the user's loaded save -- now requires positive
 //    evidence of a CONTENT change: an unreadable stat is reported as unreadable, not as mutation.
 
-/// 1 while the scoped write-open redirect is armed. Read by the `CreateFileW` detour BEFORE it
-/// touches any lock, so an unarmed process pays one relaxed-ordering atomic load per open.
-pub(crate) use er_telemetry::counters::SAVE_DEST_REDIRECT_ARMED;
-pub(crate) use er_telemetry::counters::SAVE_DEST_REDIRECT_HITS;
-/// Flow latches: the menu-pump open request, and the "a destination is chosen, commit once the
-/// picker has torn down" hand-off from the picker's activation hook to the save-flow tick.
-pub(crate) use er_telemetry::counters::SAVE_DEST_COMMIT_PENDING;
-pub(crate) use er_telemetry::counters::SAVE_DEST_OPEN_PICKER_PENDING;
 /// Destination oracles.
 pub(crate) use er_telemetry::counters::SAVE_DEST_CANCEL_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_DEST_COMMIT_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_DEST_COMMIT_FAIL;
+/// Flow latches: the menu-pump open request, and the "a destination is chosen, commit once the
+/// picker has torn down" hand-off from the picker's activation hook to the save-flow tick.
+pub(crate) use er_telemetry::counters::SAVE_DEST_COMMIT_PENDING;
 pub(crate) use er_telemetry::counters::SAVE_DEST_LIVE_BAK_MUTATED;
 pub(crate) use er_telemetry::counters::SAVE_DEST_LIVE_FILE_MUTATED;
 pub(crate) use er_telemetry::counters::SAVE_DEST_LIVE_OVERWRITE_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_DEST_OPEN_PICKER_PENDING;
 pub(crate) use er_telemetry::counters::SAVE_DEST_PICKER_OPEN_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_DEST_PICKER_OPEN_RETRY_COUNT;
+/// 1 while the scoped write-open redirect is armed. Read by the `CreateFileW` detour BEFORE it
+/// touches any lock, so an unarmed process pays one relaxed-ordering atomic load per open.
+pub(crate) use er_telemetry::counters::SAVE_DEST_REDIRECT_ARMED;
+pub(crate) use er_telemetry::counters::SAVE_DEST_REDIRECT_HITS;
 pub(crate) use er_telemetry::counters::SAVE_DEST_SEED_FAIL_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_DEST_SEEDED_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_EXISTING_COUNT;
@@ -206,7 +206,8 @@ fn save_dest_redirect_lock() -> std::sync::MutexGuard<'static, Option<SaveDestRe
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn save_dest_live_overwrite_lock() -> std::sync::MutexGuard<'static, Option<SaveDestLiveOverwrite>> {
+fn save_dest_live_overwrite_lock() -> std::sync::MutexGuard<'static, Option<SaveDestLiveOverwrite>>
+{
     SAVE_DEST_LIVE_OVERWRITE
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -651,7 +652,10 @@ pub(crate) fn save_dest_redirect_for_open(path: &[u16], access: u32) -> Option<V
         SAVE_DEST_FOREIGN_OPEN_PASSED.fetch_add(1, Ordering::SeqCst);
         return None;
     };
-    if accepted_paths.iter().any(|accepted| *accepted == normalized) {
+    if accepted_paths
+        .iter()
+        .any(|accepted| *accepted == normalized)
+    {
         return Some(target_w);
     }
     // Different spelling, possibly the same folder. This costs one directory open, and only for
@@ -1062,9 +1066,10 @@ mod save_dest_commit_tests {
             out.push(0);
             out
         };
-        let same_file_other_case =
-            save_dest_normalize_wide(&wide(r"C:\Users\SteamUser\AppData\Roaming\EldenRing\7656\ER0000.SL2"))
-                .expect("normalizes");
+        let same_file_other_case = save_dest_normalize_wide(&wide(
+            r"C:\Users\SteamUser\AppData\Roaming\EldenRing\7656\ER0000.SL2",
+        ))
+        .expect("normalizes");
         let different_folder = save_dest_normalize_wide(&wide(
             r"C:\SteamLibrary\ELDEN RING\Game\SeamlessCoop\ER0000.sl2",
         ))
@@ -1108,7 +1113,10 @@ mod save_dest_commit_tests {
             .map(|entry| entry.file_name())
             .filter(|name| name.to_string_lossy().ends_with(".tmp"))
             .collect();
-        assert!(leftovers.is_empty(), "staging file left behind: {leftovers:?}");
+        assert!(
+            leftovers.is_empty(),
+            "staging file left behind: {leftovers:?}"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 

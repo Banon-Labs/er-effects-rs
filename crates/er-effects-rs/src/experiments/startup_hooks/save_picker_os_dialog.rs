@@ -285,13 +285,22 @@ fn os_dialog_run(
 ) -> OsPickOutcome {
     let filter = os_dialog_filter(extensions);
     let title: Vec<u16> = if save_as {
-        "Save Game to...".encode_utf16().chain(core::iter::once(0)).collect()
+        "Save Game to..."
+            .encode_utf16()
+            .chain(core::iter::once(0))
+            .collect()
     } else {
         // Same words as the row that opens it, so the window the user context-switches into is
         // recognisably the thing they pressed.
-        "Load Character from File".encode_utf16().chain(core::iter::once(0)).collect()
+        "Load Character from File"
+            .encode_utf16()
+            .chain(core::iter::once(0))
+            .collect()
     };
-    let initial_dir: Vec<u16> = start_dir.encode_utf16().chain(core::iter::once(0)).collect();
+    let initial_dir: Vec<u16> = start_dir
+        .encode_utf16()
+        .chain(core::iter::once(0))
+        .collect();
     let mut path_buffer = [0u16; OS_PICK_PATH_UNITS];
     for (index, unit) in leaf.encode_utf16().take(OS_PICK_PATH_UNITS - 1).enumerate() {
         path_buffer[index] = unit;
@@ -489,12 +498,11 @@ fn os_pick_validated<T>(
             OsPickOutcome::Cancelled => return Err(OsPickAbort::Cancelled),
             OsPickOutcome::Failed { .. } => return Err(OsPickAbort::Failed),
         };
-        let verdict =
-            crate::experiments::save_picker::save_picker_accepts(
-                Path::new(&picked),
-                intent,
-                extensions,
-            );
+        let verdict = crate::experiments::save_picker::save_picker_accepts(
+            Path::new(&picked),
+            intent,
+            extensions,
+        );
         let Err(reason) = verdict else {
             // `_claim` outlives this expression and drops on return, so every latch `stage` sets is
             // visible to the tick before the dialog term clears.
@@ -545,9 +553,7 @@ pub(crate) unsafe fn os_open_save_picker_load(action_obj: usize) -> PickerOpenOu
         Ok(path) => path,
         Err(reason) => {
             SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
-            append_autoload_debug(format_args!(
-                "save-picker-os: refused to open -- {reason}"
-            ));
+            append_autoload_debug(format_args!("save-picker-os: refused to open -- {reason}"));
             return PickerOpenOutcome::NotOpened;
         }
     };

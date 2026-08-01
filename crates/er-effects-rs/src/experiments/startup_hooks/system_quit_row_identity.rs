@@ -423,11 +423,15 @@ fn system_quit_row_table_index(row: QuitRow) -> i32 {
 /// The captured `PropertyNewButtonController` of a row, or 0 when it was never captured.
 fn system_quit_row_controller(row: QuitRow) -> usize {
     match row {
-        QuitRow::SaveGame => SYSTEM_QUIT_NATIVE_SAVE_GAME_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst),
+        QuitRow::SaveGame => {
+            SYSTEM_QUIT_NATIVE_SAVE_GAME_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst)
+        }
         QuitRow::ReturnToDesktop => {
             SYSTEM_QUIT_NATIVE_RETURN_DESKTOP_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst)
         }
-        QuitRow::LoadProfile => SYSTEM_QUIT_LOAD_PROFILE_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst),
+        QuitRow::LoadProfile => {
+            SYSTEM_QUIT_LOAD_PROFILE_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst)
+        }
         QuitRow::LoadSaveProfiles => {
             SYSTEM_QUIT_OPEN_SAVE_DIR_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst)
         }
@@ -475,7 +479,8 @@ pub(crate) unsafe fn system_quit_row_label_at(dialog: usize, index: i32) -> Opti
     if dialog < HEAP_LO || index < 0 {
         return None;
     }
-    let count = unsafe { safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET) }?;
+    let count =
+        unsafe { safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET) }?;
     if count == 0 || index as usize >= count.min(16) {
         return None;
     }
@@ -773,7 +778,10 @@ mod system_quit_row_identity_tests {
             f.cursor_row_label = label;
             let verdict = resolve_quit_row(&f);
             assert!(verdict.resolved_row().is_some(), "cursor={cursor}");
-            assert!(!verdict.authorizes_quit(), "cursor={cursor} authorized a quit");
+            assert!(
+                !verdict.authorizes_quit(),
+                "cursor={cursor} authorized a quit"
+            );
         }
     }
 
