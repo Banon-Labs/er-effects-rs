@@ -2244,29 +2244,84 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_portrait_foreign_models",
             PROFILE_FOREIGN_MODELS_MAX.load(Ordering::SeqCst),
         );
-        // NUDE-WITH-EQUIPMENT tripwire (bd er-effects-rs-pnth). Aggregate "4/4 equipped" counters
-        // cannot see this class: `CS::ChrAsm::EquipItem` DERIVES equipmentParamIds from the gaitem
-        // handle lookup, so a param id copied beside a DEAD handle still reads equipped while the
-        // armor renders invisible. `..._slot_resolved` splits that per slot -- low nibble = protector
-        // slots (head/chest/hands/legs) whose handle resolved to a live gaitemInsTable entry, high
-        // nibble = the slots that were actually equipped this feed. `..._unresolved_total` counts
-        // equipped-but-dead slots and must stay 0; `..._refeeds` is how many local handles the
-        // head/chest re-resolve minted+released (2 per feed for an armored character, 0 for a bare one).
+        // NUDE-PORTRAIT ARMOR ORACLE (bd er-effects-rs-wncc root cause, er-effects-rs-91l5 Layer 1).
+        // Sampled every game tick off the profile renderer's LIVE stage-0 ChrAsm (+0x130 -- NOT the
+        // +0x548 inbox), replicating FUN_1409e6fb0's override arithmetic, so these are the
+        // EquipParamProtector rows the model build actually requests.
+        //
+        // READ IT LIKE THIS. `bad_frames > 0` = FAIL, and no later frame can erase it.
+        // `sampled_frames == 0` = ALSO FAIL: the oracle never got to look. `capture_verdict` is
+        // tri-state on purpose -- 0 means "no capture-frame sample", which is not a pass. The raw
+        // unk0/unkd4/unkd8 must all read -1; any non-negative value is the whole-outfit override that
+        // rendered the character nude. Param-id fields read -2147483648 when never sampled, which is
+        // distinct from the -1 that means "this slot is legitimately empty".
         push_json_usize(
             body,
-            "oracle_portrait_equip_slot_resolved",
-            PORTRAIT_EQUIP_SLOT_RESOLVED_MASK.load(Ordering::SeqCst),
+            "oracle_portrait_equip_window",
+            PORTRAIT_EQUIP_ORACLE_WINDOW.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,
-            "oracle_portrait_equip_slot_unresolved_total",
-            PORTRAIT_EQUIP_SLOT_UNRESOLVED_TOTAL.load(Ordering::SeqCst),
+            "oracle_portrait_equip_slot",
+            PORTRAIT_EQUIP_ORACLE_SLOT.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,
-            "oracle_portrait_equip_protector_refeeds",
-            PORTRAIT_EQUIP_PROTECTOR_REFEEDS.load(Ordering::SeqCst),
+            "oracle_portrait_equip_sampled_frames",
+            PORTRAIT_EQUIP_SAMPLED_FRAMES.load(Ordering::SeqCst),
         );
+        push_json_usize(
+            body,
+            "oracle_portrait_equip_bad_frames",
+            PORTRAIT_EQUIP_BAD_FRAMES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_equip_bad_frames_total",
+            PORTRAIT_EQUIP_BAD_FRAMES_TOTAL.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_equip_bad_mask",
+            PORTRAIT_EQUIP_BAD_MASK.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_equip_windows_sampled",
+            PORTRAIT_EQUIP_WINDOWS_SAMPLED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_equip_windows_bad",
+            PORTRAIT_EQUIP_WINDOWS_BAD.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_equip_capture_verdict",
+            PORTRAIT_EQUIP_CAPTURE_VERDICT.load(Ordering::SeqCst),
+        );
+        {
+            let unpack = crate::experiments::portrait_equip_unpack;
+            let effective = |slot: usize| unpack(PORTRAIT_EQUIP_FIRST_EFFECTIVE_ID[slot].load(Ordering::SeqCst));
+            let captured = |slot: usize| unpack(PORTRAIT_EQUIP_CAPTURE_EFFECTIVE_ID[slot].load(Ordering::SeqCst));
+            let recorded = |slot: usize| unpack(PORTRAIT_EQUIP_RECORD_PARAM_ID[slot].load(Ordering::SeqCst));
+            body.push_str(&format!(
+                "  \"oracle_portrait_equip_effective_head\": {},\n  \"oracle_portrait_equip_effective_chest\": {},\n  \"oracle_portrait_equip_effective_hands\": {},\n  \"oracle_portrait_equip_effective_legs\": {},\n  \"oracle_portrait_equip_capture_head\": {},\n  \"oracle_portrait_equip_capture_chest\": {},\n  \"oracle_portrait_equip_capture_hands\": {},\n  \"oracle_portrait_equip_capture_legs\": {},\n  \"oracle_portrait_equip_record_head\": {},\n  \"oracle_portrait_equip_record_chest\": {},\n  \"oracle_portrait_equip_unk0\": {},\n  \"oracle_portrait_equip_unkd4\": {},\n  \"oracle_portrait_equip_unkd8\": {},\n",
+                effective(0),
+                effective(1),
+                effective(2),
+                effective(3),
+                captured(0),
+                captured(1),
+                captured(2),
+                captured(3),
+                recorded(0),
+                recorded(1),
+                unpack(PORTRAIT_EQUIP_FIRST_UNK0.load(Ordering::SeqCst)),
+                unpack(PORTRAIT_EQUIP_FIRST_UNKD4.load(Ordering::SeqCst)),
+                unpack(PORTRAIT_EQUIP_FIRST_UNKD8.load(Ordering::SeqCst)),
+            ));
+        }
         // Scaleform menu-handler lifecycle guard (repeated-switch ProfileSelect UAF). double_frees > 0
         // proves the guard caught+skipped the crash; ctors/dtors give the churn context.
         push_json_usize(

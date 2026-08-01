@@ -1831,23 +1831,55 @@ pub static PROFILE_ROW_LAST_SAVED_STAGE_FAILURES: AtomicUsize = AtomicUsize::new
 pub static LAST_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_FACE_IDENTITY_CHECKS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_FACE_IDENTITY_MISMATCHES: AtomicUsize = AtomicUsize::new(0);
-/// PER-SLOT armor resolution of the loading-screen portrait, stamped after every profile feed.
-/// Low nibble (bits 0..3) = protector slots head/chest/hands/legs whose gaitem handle RESOLVED to a
-/// live `gaitemInsTable` entry; high nibble (bits 4..7) = the slots that were ATTEMPTED (equipped)
-/// during that feed. See `PORTRAIT_EQUIP_SLOT_UNRESOLVED_TOTAL` for why an aggregate count cannot
-/// stand in for this.
-pub static PORTRAIT_EQUIP_SLOT_RESOLVED_MASK: AtomicUsize = AtomicUsize::new(0);
-/// Cumulative count of (feed, protector slot) pairs that were EQUIPPED yet came back with a derived
-/// param id of -1, i.e. the handle did not resolve to a live item and that armor piece renders
-/// invisible. This is the discriminator aggregate 4/4 counters are structurally blind to:
-/// `CS::ChrAsm::EquipItem` DERIVES `equipmentParamIds[slot]` from the handle lookup (storing -1 on
-/// failure), so a param id copied verbatim beside a dead handle still reads "equipped" while nothing
-/// renders -- the `source_visible_armor=4/4 AND renderer 4/4` yet nude contradiction (bd
-/// er-effects-rs-pnth). Slots that are legitimately EMPTY are never attempted and never counted.
-pub static PORTRAIT_EQUIP_SLOT_UNRESOLVED_TOTAL: AtomicUsize = AtomicUsize::new(0);
-/// Count of local gaitem handles minted + equipped + released to re-establish the portrait's head and
-/// chest from the record's param ids (2 per feed for a fully-armored character, 0 for a bare one).
-pub static PORTRAIT_EQUIP_PROTECTOR_REFEEDS: AtomicUsize = AtomicUsize::new(0);
+// LOADING-SCREEN PORTRAIT ARMOR ORACLE (bd er-effects-rs-91l5 Layer 1). Written every game tick by
+// `portrait_equip_oracle_sample` off the profile renderer's LIVE stage-0 `ChrAsm` (+0x130). These
+// replace `PORTRAIT_EQUIP_SLOT_RESOLVED_MASK` / `_UNRESOLVED_TOTAL` / `_PROTECTOR_REFEEDS`, which
+// sampled the wrong stage, once, through a bare `.store()`, on a field the renderer overrides -- and
+// reported a clean pass on a run the user saw render entirely nude.
+//
+// The load window these per-window accumulators belong to: `PROFILE_LOADSCREEN_TABLE_BUILDS` at the
+// time of sampling. A change rolls every per-window value below back to its unset state.
+pub static PORTRAIT_EQUIP_ORACLE_WINDOW: AtomicUsize = AtomicUsize::new(0);
+/// Profile slot the sampler read this window, biased by 1 (0 = nothing sampled yet).
+pub static PORTRAIT_EQUIP_ORACLE_SLOT: AtomicUsize = AtomicUsize::new(0);
+/// Frames THIS window on which a portrait model existed and its live `ChrAsm` was configured. ZERO is
+/// a FAILURE verdict, not a pass: it means the oracle never got to look, which is the `naked_kicks=0`
+/// false negative in a different costume.
+pub static PORTRAIT_EQUIP_SAMPLED_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// Frames THIS window whose effective protector rows would not render the character's own armor.
+/// Any value > 0 is a FAILURE that a later good frame cannot erase (`fetch_add`, never `.store`).
+pub static PORTRAIT_EQUIP_BAD_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// OR of every failing frame's reason mask this window: bit 0 forced whole-outfit override active
+/// (`unk0`/`unkd4`/`unkd8` non-negative), bit 1 head != record, bit 2 chest != record, bit 3 hands !=
+/// bare-body default, bit 4 legs != bare-body default.
+pub static PORTRAIT_EQUIP_BAD_MASK: AtomicUsize = AtomicUsize::new(0);
+/// Session total of bad frames across every window. Never reset, so one snapshot at any time proves
+/// whether the session EVER rendered a wrong portrait outfit.
+pub static PORTRAIT_EQUIP_BAD_FRAMES_TOTAL: AtomicUsize = AtomicUsize::new(0);
+/// Session count of load windows that produced at least one sample. Compare against
+/// `oracle_portrait_loadscreen_table_builds`: a shortfall names windows the oracle never observed.
+pub static PORTRAIT_EQUIP_WINDOWS_SAMPLED: AtomicUsize = AtomicUsize::new(0);
+/// Session count of load windows that produced at least one BAD frame.
+pub static PORTRAIT_EQUIP_WINDOWS_BAD: AtomicUsize = AtomicUsize::new(0);
+/// FIRST sample of this window, `compare_exchange`-from-zero so the value belongs to the first frame
+/// rather than whichever tick ran last. Packed: bit 32 = present, low 32 = the `i32`. Raw 0 means
+/// never sampled, which is NOT the same as a param id of 0.
+pub static PORTRAIT_EQUIP_FIRST_EFFECTIVE_ID: [AtomicUsize; 4] = [const { AtomicUsize::new(0) }; 4];
+/// The target save record's own head/chest/hands/legs param ids, first sample of this window; the
+/// comparison basis for `PORTRAIT_EQUIP_BAD_MASK` bits 1 and 2. Same packing.
+pub static PORTRAIT_EQUIP_RECORD_PARAM_ID: [AtomicUsize; 4] = [const { AtomicUsize::new(0) }; 4];
+/// `ChrAsm::unk0` / `unkd4` / `unkd8` verbatim, first sample of this window. All three read -1 on a
+/// correctly built `ChrAsm`; a non-negative value in any of them IS the nude bug. Same packing.
+pub static PORTRAIT_EQUIP_FIRST_UNK0: AtomicUsize = AtomicUsize::new(0);
+pub static PORTRAIT_EQUIP_FIRST_UNKD4: AtomicUsize = AtomicUsize::new(0);
+pub static PORTRAIT_EQUIP_FIRST_UNKD8: AtomicUsize = AtomicUsize::new(0);
+/// The four effective rows as of the first game tick on which `PROFILE_BAKE_RGBA_CAPTURED` was
+/// observed set -- the frame whose pixels the user is shown. Same packing.
+pub static PORTRAIT_EQUIP_CAPTURE_EFFECTIVE_ID: [AtomicUsize; 4] =
+    [const { AtomicUsize::new(0) }; 4];
+/// Tri-state verdict for that capture-frame sample: 0 never sampled, 1 clean, 2 bad. Deliberately not
+/// a boolean -- "the oracle never ran" must not read as a pass.
+pub static PORTRAIT_EQUIP_CAPTURE_VERDICT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_SAVE_SWAP_POLL_TICK: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_STATS_PREVIEW_ROW_CURSOR: AtomicUsize = AtomicUsize::new(0);
 pub static SQ_REPRO_TAB_DISCOVERED: AtomicUsize = AtomicUsize::new(0);
