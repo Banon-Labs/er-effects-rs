@@ -565,7 +565,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // must land BETWEEN `_z_foreign` (comdlg32) and `_z_game`, which is how the stacking is checked
     // without anyone looking at a screenshot.
     body.push_str(&format!(
-        "  \"oracle_save_picker_dim_armed\": {},\n  \"oracle_save_picker_dim_arm_count\": {},\n  \"oracle_save_picker_dim_disarm_count\": {},\n  \"oracle_save_picker_dim_frames\": {},\n  \"oracle_save_picker_dim_alive_ms\": {},\n  \"oracle_save_picker_dim_teardown_reason\": {},\n  \"oracle_save_picker_dim_stage\": {},\n  \"oracle_save_picker_dim_selftest\": {},\n  \"oracle_save_picker_dim_hwnd\": {},\n  \"oracle_save_picker_dim_game_hwnd\": {},\n  \"oracle_save_picker_dim_update_fails\": {},\n  \"oracle_save_picker_dim_z_self\": {},\n  \"oracle_save_picker_dim_z_game\": {},\n  \"oracle_save_picker_dim_z_foreign\": {},\n  \"oracle_save_picker_dim_z_violations\": {},\n  \"oracle_save_picker_dim_full_pushes\": {},\n  \"oracle_save_picker_dim_foreign_fg_hwnd\": {},\n  \"oracle_save_picker_dim_owner_set\": {},\n  \"oracle_save_picker_dim_owner_readback\": {},\n  \"oracle_save_picker_dim_arm_wait_ms\": {},\n  \"oracle_save_picker_dim_arm_wait_timeouts\": {},\n  \"oracle_save_picker_dim_reanchor_count\": {},\n",
+        "  \"oracle_save_picker_dim_armed\": {},\n  \"oracle_save_picker_dim_arm_count\": {},\n  \"oracle_save_picker_dim_disarm_count\": {},\n  \"oracle_save_picker_dim_frames\": {},\n  \"oracle_save_picker_dim_alive_ms\": {},\n  \"oracle_save_picker_dim_teardown_reason\": {},\n  \"oracle_save_picker_dim_stage\": {},\n  \"oracle_save_picker_dim_selftest\": {},\n  \"oracle_save_picker_dim_hwnd\": {},\n  \"oracle_save_picker_dim_game_hwnd\": {},\n  \"oracle_save_picker_dim_update_fails\": {},\n  \"oracle_save_picker_dim_z_self\": {},\n  \"oracle_save_picker_dim_z_game\": {},\n  \"oracle_save_picker_dim_z_foreign\": {},\n  \"oracle_save_picker_dim_full_pushes\": {},\n  \"oracle_save_picker_dim_foreign_fg_hwnd\": {},\n  \"oracle_save_picker_dim_owner_set\": {},\n  \"oracle_save_picker_dim_owner_readback\": {},\n  \"oracle_save_picker_dim_arm_wait_ms\": {},\n  \"oracle_save_picker_dim_arm_wait_timeouts\": {},\n  \"oracle_save_picker_dim_reanchor_count\": {},\n",
         er_telemetry::counters::SAVE_PICKER_DIM_ARMED.load(Ordering::SeqCst),
         er_telemetry::counters::SAVE_PICKER_DIM_ARM_COUNT.load(Ordering::SeqCst),
         er_telemetry::counters::SAVE_PICKER_DIM_DISARM_COUNT.load(Ordering::SeqCst),
@@ -580,7 +580,6 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         er_telemetry::counters::SAVE_PICKER_DIM_Z_SELF.load(Ordering::SeqCst) as isize,
         er_telemetry::counters::SAVE_PICKER_DIM_Z_GAME.load(Ordering::SeqCst) as isize,
         er_telemetry::counters::SAVE_PICKER_DIM_Z_FOREIGN.load(Ordering::SeqCst) as isize,
-        er_telemetry::counters::SAVE_PICKER_DIM_Z_VIOLATIONS.load(Ordering::SeqCst),
         er_telemetry::counters::SAVE_PICKER_DIM_FULL_PUSHES.load(Ordering::SeqCst),
         er_telemetry::counters::SAVE_PICKER_DIM_FOREIGN_FG_HWND.load(Ordering::SeqCst),
         er_telemetry::counters::SAVE_PICKER_DIM_OWNER_SET.load(Ordering::SeqCst),
@@ -588,6 +587,42 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         er_telemetry::counters::SAVE_PICKER_DIM_ARM_WAIT_MS.load(Ordering::SeqCst),
         er_telemetry::counters::SAVE_PICKER_DIM_ARM_WAIT_TIMEOUTS.load(Ordering::SeqCst),
         er_telemetry::counters::SAVE_PICKER_DIM_REANCHOR_COUNT.load(Ordering::SeqCst)
+    ));
+    // THE Z-ORDER VERDICT, AND IT IS TWO VERDICTS, NOT ONE (er-effects-rs-mc1d). These replace the
+    // single fused `oracle_save_picker_dim_z_violations`, which scored "the cover is behind the
+    // game" and "the cover is over the dialog" into the same atomic even though they are opposite
+    // failures. A run came back with 130 of them across 424 dim frames and could therefore neither
+    // confirm nor refute the ownership fix it existed to test. READ THEM AS:
+    //
+    //   `_z_covering_dialog` > 0  -- REAL FAILURE of the z-order fix. Our cover was nearer the front
+    //       than comdlg32 for that many frames, i.e. laid over the controls the user has to click.
+    //   `_z_behind_game` > 0      -- a separate, LOWER-SEVERITY COSMETIC bug: the cover was invisible
+    //       for that many frames. The dialog still worked; file it on its own, do not block on it.
+    //
+    // Both exclude unknown ordinals, so a frame from before comdlg32 existed is never counted. The
+    // `_first_*` quartets carry the FIRST offending sample of each kind and how many milliseconds
+    // into that arm's cover it happened -- `-1` means that kind never fired, and the `_ms` is what
+    // separates a bring-up transient the compositor settles from a stacking that never took.
+    body.push_str(&format!(
+        "  \"oracle_save_picker_dim_z_behind_game\": {},\n  \"oracle_save_picker_dim_z_behind_game_first_self\": {},\n  \"oracle_save_picker_dim_z_behind_game_first_game\": {},\n  \"oracle_save_picker_dim_z_behind_game_first_foreign\": {},\n  \"oracle_save_picker_dim_z_behind_game_first_ms\": {},\n  \"oracle_save_picker_dim_z_covering_dialog\": {},\n  \"oracle_save_picker_dim_z_covering_dialog_first_self\": {},\n  \"oracle_save_picker_dim_z_covering_dialog_first_game\": {},\n  \"oracle_save_picker_dim_z_covering_dialog_first_foreign\": {},\n  \"oracle_save_picker_dim_z_covering_dialog_first_ms\": {},\n",
+        er_telemetry::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_SELF.load(Ordering::SeqCst)
+            as isize,
+        er_telemetry::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_GAME.load(Ordering::SeqCst)
+            as isize,
+        er_telemetry::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_FOREIGN.load(Ordering::SeqCst)
+            as isize,
+        er_telemetry::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_MS.load(Ordering::SeqCst)
+            as isize,
+        er_telemetry::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_SELF.load(Ordering::SeqCst)
+            as isize,
+        er_telemetry::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_GAME.load(Ordering::SeqCst)
+            as isize,
+        er_telemetry::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_FOREIGN
+            .load(Ordering::SeqCst) as isize,
+        er_telemetry::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_MS.load(Ordering::SeqCst)
+            as isize
     ));
     // Per-slot info fields (Level caption/value, PlayTime) on browse rows with no character. `_hidden`
     // > 0 proves the suppression reached real rows; `_non_display` > 0 or a `_last_datatype` other

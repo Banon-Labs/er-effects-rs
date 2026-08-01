@@ -52,7 +52,11 @@
 // construction rather than by hope -- which also matters because comdlg32 centres the dialog on its
 // owner, and centring on a not-yet-positioned 1x1 window would drop the picker in the desktop's
 // top-left corner. `SAVE_PICKER_DIM_Z_*` still samples the resulting order every frame so the claim
-// stays checkable from telemetry instead of from a screenshot.
+// stays checkable from telemetry instead of from a screenshot -- scored as TWO counters, never one,
+// because "the cover is behind the game" (invisible, cosmetic) and "the cover is in front of the
+// dialog" (the defect this whole ownership chain exists to remove) are opposite failures and a
+// single fused total reports neither. See `SAVE_PICKER_DIM_Z_BEHIND_GAME` for the run that proved
+// that, and `z_order_violations` for the scoring.
 //
 // The window is `WS_EX_NOACTIVATE | WS_EX_TRANSPARENT`, so it never takes focus and never eats a
 // click, and its class name starts with `ErEffects` so `game_main_window`'s finder keeps skipping
@@ -97,6 +101,7 @@ pub(crate) mod picker_dim {
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_REANCHOR_COUNT;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_FOREIGN_FG_HWND;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_FRAMES;
+    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_FRAMES_AT_ARM;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_FULL_PUSHES;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_GAME_HWND;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_HWND;
@@ -104,10 +109,19 @@ pub(crate) mod picker_dim {
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_STAGE;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_TEARDOWN_REASON;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_UPDATE_FAILS;
+    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME;
+    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_FOREIGN;
+    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_GAME;
+    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_MS;
+    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_SELF;
+    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG;
+    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_FOREIGN;
+    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_GAME;
+    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_MS;
+    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_SELF;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_FOREIGN;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_GAME;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_SELF;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_VIOLATIONS;
 
     /// How dark the cover is, as the layer's base alpha (0 = invisible, 255 = opaque black).
     ///
@@ -257,6 +271,13 @@ pub(crate) mod picker_dim {
         DIM_H.store(height, Ordering::SeqCst);
         SAVE_PICKER_DIM_GAME_HWND.store(hwnd.0 as usize, Ordering::SeqCst);
         start_thread_once();
+        // BASELINE THE CUMULATIVE FRAME COUNT so the disarm can report THIS arm rather than the
+        // process total. Taken before the generation bump, which is the only point at which the
+        // overlay thread is guaranteed not to have pushed a frame belonging to the new arm yet.
+        SAVE_PICKER_DIM_FRAMES_AT_ARM.store(
+            SAVE_PICKER_DIM_FRAMES.load(Ordering::SeqCst),
+            Ordering::SeqCst,
+        );
         let generation = DIM_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
         SAVE_PICKER_DIM_ARM_COUNT.fetch_add(1, Ordering::SeqCst);
         SAVE_PICKER_DIM_ARMED.store(1, Ordering::SeqCst);
@@ -355,8 +376,17 @@ pub(crate) mod picker_dim {
         }
         SAVE_PICKER_DIM_TEARDOWN_REASON.store(reason, Ordering::SeqCst);
         SAVE_PICKER_DIM_DISARM_COUNT.fetch_add(1, Ordering::SeqCst);
+        // PER-ARM, NOT CUMULATIVE. `SAVE_PICKER_DIM_FRAMES` counts the whole process, and printing
+        // it raw here made every disarm line overstate its own arm -- a four-open run logged
+        // 108/241/362/423 for arms that had pushed 108/133/121/61. Subtracting the arm-time
+        // baseline is what makes "with N frames pushed" true of the interval the line describes.
+        // The other two values on this line are already per-arm: `_ALIVE_MS` is stored by the
+        // guard's `Drop` from that guard's own `armed_at`, and `reason` is this disarm's argument.
+        let frames_this_arm = SAVE_PICKER_DIM_FRAMES
+            .load(Ordering::SeqCst)
+            .saturating_sub(SAVE_PICKER_DIM_FRAMES_AT_ARM.load(Ordering::SeqCst));
         super::append_autoload_debug(format_args!(
-            "picker-dim: DISARMED reason={reason} after {}ms with {} frames pushed (frames > 0 across an interval where the game logged nothing is the proof the animation ran on our own thread)",
+            "picker-dim: DISARMED reason={reason} after {}ms with {frames_this_arm} frames pushed THIS ARM ({} cumulative) (frames > 0 across an interval where the game logged nothing is the proof the animation ran on our own thread)",
             SAVE_PICKER_DIM_ALIVE_MS.load(Ordering::SeqCst),
             SAVE_PICKER_DIM_FRAMES.load(Ordering::SeqCst)
         ));
@@ -623,7 +653,11 @@ pub(crate) mod picker_dim {
     /// Sample the ordering of our overlay, the game, and whatever foreign window has the foreground
     /// (comdlg32, once it is up). This is the objective answer to "is the dim above the game but
     /// below the dialog" -- no screenshot, and no human looking at one.
-    fn sample_z_order(self_hwnd: HWND, game_hwnd: HWND) {
+    ///
+    /// `since_arm_ms` is how long this arm's cover has been up, and it is recorded with the first
+    /// break of each kind so a reader can see the PHASE of the failure inside the arm rather than
+    /// only a total.
+    fn sample_z_order(self_hwnd: HWND, game_hwnd: HWND, since_arm_ms: usize) {
         let foreground = unsafe { GetForegroundWindow() };
         let foreign = if !foreground.0.is_null()
             && foreground != self_hwnd
@@ -645,20 +679,108 @@ pub(crate) mod picker_dim {
         // Score the contract EVERY frame and keep the failures, because the three fields above only
         // survive one frame -- and the frame that survives is the one sampled as the dialog is
         // already tearing down, which is the least representative moment of the whole run.
-        if z_order_violates(self_z, game_z, foreign_z) {
-            SAVE_PICKER_DIM_Z_VIOLATIONS.fetch_add(1, Ordering::SeqCst);
+        score_z_sample(
+            &BEHIND_GAME_RECORD,
+            &COVERING_DIALOG_RECORD,
+            (self_z, game_z, foreign_z),
+            since_arm_ms,
+        );
+    }
+
+    /// The five telemetry fields describing ONE half of the stacking contract: how many frames
+    /// broke it, and the first sample that did.
+    ///
+    /// Bundled into a struct so the scoring is one function that takes both halves symmetrically
+    /// and can be exercised by a unit test over its own statics -- the counting is the part that
+    /// was wrong before (two opposite failures folded into one atomic), so it must be checkable
+    /// without a Windows window chain and a running game.
+    struct ZBreakRecord {
+        count: &'static AtomicUsize,
+        first_self: &'static AtomicUsize,
+        first_game: &'static AtomicUsize,
+        first_foreign: &'static AtomicUsize,
+        first_ms: &'static AtomicUsize,
+    }
+
+    static BEHIND_GAME_RECORD: ZBreakRecord = ZBreakRecord {
+        count: &SAVE_PICKER_DIM_Z_BEHIND_GAME,
+        first_self: &SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_SELF,
+        first_game: &SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_GAME,
+        first_foreign: &SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_FOREIGN,
+        first_ms: &SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_MS,
+    };
+    static COVERING_DIALOG_RECORD: ZBreakRecord = ZBreakRecord {
+        count: &SAVE_PICKER_DIM_Z_COVERING_DIALOG,
+        first_self: &SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_SELF,
+        first_game: &SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_GAME,
+        first_foreign: &SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_FOREIGN,
+        first_ms: &SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_MS,
+    };
+
+    /// Score one z-order sample into the two records.
+    ///
+    /// SCORED AS TWO INDEPENDENT FAILURES, never fused into one total: they are opposite defects
+    /// (an invisible cover vs. a cover over the dialog) and one number can report neither. A frame
+    /// that breaks BOTH increments BOTH -- see `SAVE_PICKER_DIM_Z_BEHIND_GAME` for the run that
+    /// proved the fused shape unusable.
+    fn score_z_sample(
+        behind_game: &ZBreakRecord,
+        covering_dialog: &ZBreakRecord,
+        sample: (usize, usize, usize),
+        since_arm_ms: usize,
+    ) {
+        let (behind, covering) = z_order_violations(sample.0, sample.1, sample.2);
+        if behind {
+            behind_game.record(sample, since_arm_ms);
+        }
+        if covering {
+            covering_dialog.record(sample, since_arm_ms);
         }
     }
 
-    /// Whether one z-order sample breaks the cover's contract: the dim must be ABOVE the game and
-    /// BELOW the dialog (smaller ordinal = nearer the front). Unknown ordinals (`usize::MAX`) are not
-    /// violations -- a window legitimately drops out of the chain while it is being created or
-    /// destroyed, and counting that would drown the two failures that actually matter.
-    fn z_order_violates(self_z: usize, game_z: usize, foreign_z: usize) -> bool {
-        let behind_the_game = self_z != usize::MAX && game_z != usize::MAX && self_z >= game_z;
-        let covering_the_dialog =
-            self_z != usize::MAX && foreign_z != usize::MAX && self_z < foreign_z;
-        behind_the_game || covering_the_dialog
+    impl ZBreakRecord {
+        /// Count this break and, if it is the FIRST of its kind, latch the sample and its phase.
+        ///
+        /// FIRST-WINS AND UNOVERWRITABLE, which is the whole point: the interesting sample is the
+        /// one that shows the transition INTO failure, and a plain store would decay into the same
+        /// tear-down-moment snapshot the counters exist to avoid. `first_self` is the claim ticket
+        /// -- its `compare_exchange` off the `usize::MAX` sentinel succeeds exactly once, and only
+        /// that winner writes the other three fields, so the four can never describe different
+        /// frames. The sentinel cannot collide with a real value because every break requires a
+        /// KNOWN `self_z`.
+        fn record(&self, (self_z, game_z, foreign_z): (usize, usize, usize), since_arm_ms: usize) {
+            self.count.fetch_add(1, Ordering::SeqCst);
+            if self
+                .first_self
+                .compare_exchange(usize::MAX, self_z, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
+                return;
+            }
+            self.first_game.store(game_z, Ordering::SeqCst);
+            self.first_foreign.store(foreign_z, Ordering::SeqCst);
+            self.first_ms.store(since_arm_ms, Ordering::SeqCst);
+        }
+    }
+
+    /// How one z-order sample breaks the cover's contract, as the two answers SEPARATELY:
+    /// `(behind_the_game, covering_the_dialog)`. The dim must be ABOVE the game and BELOW the
+    /// dialog (smaller ordinal = nearer the front), and the two ways to get that wrong are opposite
+    /// defects: behind the game the cover is merely invisible, in front of the dialog it hides the
+    /// control the user has to click. They are returned apart -- rather than OR'd into one verdict,
+    /// which is what this function used to do -- because a caller that fuses them cannot tell a
+    /// cosmetic miss from the failure the ownership chain exists to prevent.
+    ///
+    /// Unknown ordinals (`usize::MAX`) are not violations of EITHER half -- a window legitimately
+    /// drops out of the chain while it is being created or destroyed, and counting that would drown
+    /// the two failures that actually matter. Note this excludes the benign reading of a non-zero
+    /// count: a frame before the dialog exists scores `foreign_z == usize::MAX` and is not counted,
+    /// so every counted break has both of its operands known.
+    fn z_order_violations(self_z: usize, game_z: usize, foreign_z: usize) -> (bool, bool) {
+        let known_self = self_z != usize::MAX;
+        let behind_the_game = known_self && game_z != usize::MAX && self_z >= game_z;
+        let covering_the_dialog = known_self && foreign_z != usize::MAX && self_z < foreign_z;
+        (behind_the_game, covering_the_dialog)
     }
 
     /// GDI resources for one surface size. Kept together so a size change is one drop and one rebuild
@@ -1029,9 +1151,13 @@ pub(crate) mod picker_dim {
             } else {
                 SAVE_PICKER_DIM_UPDATE_FAILS.fetch_add(1, Ordering::SeqCst);
             }
+            // `shown_at` is re-stamped by the show branch above on every arm, so its elapsed time
+            // is the offset INTO THIS ARM -- which is what makes a recorded first break placeable
+            // as a bring-up transient or as a stacking that never took.
             sample_z_order(
                 hwnd,
                 HWND(SAVE_PICKER_DIM_GAME_HWND.load(Ordering::SeqCst) as *mut c_void),
+                shown_at.elapsed().as_millis().min(usize::MAX as u128) as usize,
             );
             // ACK THE ARM. Published only here -- AFTER the window is owned, positioned, raised and
             // carrying a pushed layer -- because that is exactly the state `arm` is waiting to be
@@ -1133,19 +1259,136 @@ pub(crate) mod picker_dim {
         #[test]
         fn the_cover_must_sit_between_the_dialog_and_the_game() {
             // dialog 1, cover 2, game 3 -- the shape the first live run actually measured.
-            assert!(!z_order_violates(2, 3, 1));
+            assert_eq!(z_order_violations(2, 3, 1), (false, false));
             // No dialog up yet: cover above game is still correct.
-            assert!(!z_order_violates(2, 3, usize::MAX));
-            // Cover BEHIND the game: invisible.
-            assert!(z_order_violates(4, 3, 1));
-            assert!(z_order_violates(3, 3, 1), "level pegging is still not in front");
-            // Cover in FRONT of the dialog: it would hide comdlg32.
-            assert!(z_order_violates(1, 3, 2));
-            // An ordinal that is simply unknown is not evidence of a violation -- windows drop out
-            // of the chain while they are being created or destroyed, and counting that would bury
-            // the two failures above in noise.
-            assert!(!z_order_violates(usize::MAX, 3, 1));
-            assert!(!z_order_violates(2, usize::MAX, usize::MAX));
+            assert_eq!(z_order_violations(2, 3, usize::MAX), (false, false));
+        }
+
+        /// BEING BEHIND THE GAME IS ITS OWN FAILURE and must be reported on its own axis: the cover
+        /// is invisible, which is cosmetic, and it must never be able to masquerade as the far more
+        /// serious "the cover is over the dialog" (or be masked by it).
+        #[test]
+        fn the_cover_behind_the_game_scores_only_that_half() {
+            // Cover behind the game while the dialog is correctly in front of both.
+            assert_eq!(z_order_violations(4, 3, 1), (true, false));
+            assert_eq!(
+                z_order_violations(3, 3, 1),
+                (true, false),
+                "level pegging with the game is still not in front of it"
+            );
+            // The GAME ordinal is this half's second operand: unknown means unscoreable, not innocent
+            // and not guilty. Counting it would bury the real breaks in windows that had merely
+            // dropped out of the z-chain while being created or destroyed.
+            assert_eq!(z_order_violations(4, usize::MAX, 1), (false, false));
+            // And an unknown SELF disqualifies this half too -- there is nothing to compare.
+            assert_eq!(z_order_violations(usize::MAX, 3, 1), (false, false));
+        }
+
+        /// COVERING THE DIALOG IS THE DEFECT THE OWNERSHIP CHAIN EXISTS TO ELIMINATE. A non-zero
+        /// count of this half means the fix is incomplete and the user is looking at a dim laid
+        /// over the controls they have to click, so it must be scored strictly on its own.
+        #[test]
+        fn the_cover_in_front_of_the_dialog_scores_only_that_half() {
+            // Cover 1, game 3, dialog 2: we are nearer the front than comdlg32.
+            assert_eq!(z_order_violations(1, 3, 2), (false, true));
+            // No dialog in the chain yet. THIS IS THE EXCLUSION THAT MAKES A NON-ZERO COUNT
+            // MEANINGFUL: every frame before comdlg32 exists scores `usize::MAX` here and is not
+            // counted, so a recorded break is never just "the dialog had not been created".
+            assert_eq!(z_order_violations(2, 3, usize::MAX), (false, false));
+            assert_eq!(z_order_violations(1, 3, usize::MAX), (false, false));
+            // An unknown SELF disqualifies this half as well.
+            assert_eq!(z_order_violations(usize::MAX, 3, 2), (false, false));
+            // Both operands unknown: nothing to say about either half.
+            assert_eq!(z_order_violations(2, usize::MAX, usize::MAX), (false, false));
+        }
+
+        /// BOTH HALVES CAN BREAK ON THE SAME FRAME, and when they do EACH COUNTER MUST TAKE ITS OWN
+        /// INCREMENT. The fused predecessor collapsed this case into a single tick, which is how a
+        /// run could report 130 breaks and still not say whether the serious half had ever fired.
+        /// Checked through the real scoring function, over this test's own statics, so it is the
+        /// counting that is proven and not just the predicate.
+        #[test]
+        fn a_sample_that_breaks_both_halves_increments_both_counters() {
+            static BEHIND: ZBreakCells = new_cells();
+            static COVERING: ZBreakCells = new_cells();
+            let (behind, covering) = (test_record(&BEHIND), test_record(&COVERING));
+            // Cover 5, game 2, dialog 9: behind the game AND in front of the dialog at once -- the
+            // cover is sandwiched in the middle of a chain that is inverted end to end.
+            assert_eq!(z_order_violations(5, 2, 9), (true, true));
+            score_z_sample(&behind, &covering, (5, 2, 9), 40);
+            assert_eq!(behind.count.load(Ordering::SeqCst), 1);
+            assert_eq!(covering.count.load(Ordering::SeqCst), 1);
+            // And each half latched the same offending sample under its own name.
+            for record in [&behind, &covering] {
+                assert_eq!(record.first_self.load(Ordering::SeqCst), 5);
+                assert_eq!(record.first_game.load(Ordering::SeqCst), 2);
+                assert_eq!(record.first_foreign.load(Ordering::SeqCst), 9);
+                assert_eq!(record.first_ms.load(Ordering::SeqCst), 40);
+            }
+        }
+
+        /// A frame that breaks only one half must leave the other half's counter AND its whole
+        /// first-sample record untouched, or the split has bought nothing: a reader would still be
+        /// unable to say the cosmetic failure never fired.
+        #[test]
+        fn one_broken_half_leaves_the_other_half_silent() {
+            static BEHIND: ZBreakCells = new_cells();
+            static COVERING: ZBreakCells = new_cells();
+            let (behind, covering) = (test_record(&BEHIND), test_record(&COVERING));
+            // Cover 1, game 3, dialog 2: in front of the dialog, correctly ahead of the game.
+            score_z_sample(&behind, &covering, (1, 3, 2), 12);
+            assert_eq!(covering.count.load(Ordering::SeqCst), 1);
+            assert_eq!(behind.count.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                behind.first_self.load(Ordering::SeqCst),
+                usize::MAX,
+                "the untouched half must still read as never-fired"
+            );
+            assert_eq!(behind.first_ms.load(Ordering::SeqCst), usize::MAX);
+        }
+
+        /// The first-sample record is FIRST-WINS: later frames keep counting but must not overwrite
+        /// the sample that showed the transition into failure. A last-wins record would decay into
+        /// the tear-down-moment snapshot the counters were introduced to replace.
+        #[test]
+        fn the_first_offending_sample_cannot_be_overwritten() {
+            static BEHIND: ZBreakCells = new_cells();
+            static COVERING: ZBreakCells = new_cells();
+            let (behind, covering) = (test_record(&BEHIND), test_record(&COVERING));
+            score_z_sample(&behind, &covering, (4, 3, 1), 8);
+            score_z_sample(&behind, &covering, (9, 3, 1), 900);
+            assert_eq!(behind.count.load(Ordering::SeqCst), 2, "both frames counted");
+            assert_eq!(behind.first_self.load(Ordering::SeqCst), 4);
+            assert_eq!(
+                behind.first_ms.load(Ordering::SeqCst),
+                8,
+                "the phase must be the FIRST break's, not the latest one's"
+            );
+        }
+
+        /// Scratch cells backing a `ZBreakRecord` in a test. The record's fields are `&'static`
+        /// because the production ones are process-lifetime telemetry, so a test supplies its own
+        /// function-scoped statics -- one pair per test, never shared, because `cargo test` runs
+        /// these on parallel threads and a shared counter would make them flake against each other.
+        /// The point is that the tests drive the REAL scoring path rather than a re-implementation.
+        type ZBreakCells = [AtomicUsize; 5];
+
+        const fn new_cells() -> ZBreakCells {
+            [const { AtomicUsize::new(0) }; 5]
+        }
+
+        fn test_record(cells: &'static ZBreakCells) -> ZBreakRecord {
+            cells[0].store(0, Ordering::SeqCst);
+            for cell in &cells[1..] {
+                cell.store(usize::MAX, Ordering::SeqCst);
+            }
+            ZBreakRecord {
+                count: &cells[0],
+                first_self: &cells[1],
+                first_game: &cells[2],
+                first_foreign: &cells[3],
+                first_ms: &cells[4],
+            }
         }
 
         /// The snap-back must fire when the cover has been moved off the game and must NOT fire
