@@ -1,3 +1,5 @@
+use super::*;
+
 /// MODEL B: LIVE-dialog Load-Game fire (er-effects-live-dialog.txt / ER_EFFECTS_LIVE_DIALOG).
 /// OFF by default. SIBLING to direct_build (the forge). Instead of FORGING a ProfileLoadDialog
 /// (factory 0x14081ead0 with a synthetic capture + no live MenuWindow -> a NON-LIVE dialog the
