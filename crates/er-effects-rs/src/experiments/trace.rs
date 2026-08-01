@@ -2,6 +2,13 @@
 
 #![allow(unused_imports)]
 
-include!("trace/menu_trace_hooks.rs");
-include!("trace/menu_constructor_capture.rs");
-include!("trace/native_result_map_hooks.rs");
+use super::*;
+
+mod menu_trace_hooks;
+pub(crate) use menu_trace_hooks::*;
+
+mod menu_constructor_capture;
+pub(crate) use menu_constructor_capture::*;
+
+mod native_result_map_hooks;
+pub(crate) use native_result_map_hooks::*;

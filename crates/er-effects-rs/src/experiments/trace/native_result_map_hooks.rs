@@ -1,3 +1,5 @@
+use super::*;
+
 fn format_optional_usize_hex(value: usize) -> String {
     if value == TITLE_OWNER_SCAN_START_ADDRESS {
         "null".to_owned()
@@ -263,7 +265,7 @@ unsafe fn qword_window_summary(ptr: usize) -> String {
     out
 }
 
-unsafe fn menu_item_action_summary(ptr: usize) -> String {
+pub(super) unsafe fn menu_item_action_summary(ptr: usize) -> String {
     const OFFSETS: [usize; 14] = [
         0x0, 0x8, 0x10, 0x40, 0x50, 0x68, 0xa8, 0xb0, 0xe8, 0xf0, 0xf8, 0x100, 0x130, 0x138,
     ];
