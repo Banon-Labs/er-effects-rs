@@ -677,7 +677,7 @@ pub unsafe fn install_child_done_query_override_hook(base: usize) {
 // mislanded at 0xaec480 in the -0xf0 sub-region). Verified by prologue mov [rsp+0x10],rbx; push rsi;
 // sub rsp,0x20; mov rbx,rcx then the DAT_143d5db09=1 store (0x140aec57d) + CreateLoadlistlistFileCap
 // call (0x140aec5f0). bd loadlist-capture-hook-wrong-address-0xaec480-midfunction-refind-entry.
-pub const LOADLIST_INIT_RVA: usize = 0xaec570;
+pub const LOADLIST_INIT_RVA: usize = er_game_base::rva::STEP_MOVEMAP_LOADLIST_INIT_RVA;
 const INGAMESTEP_WORLDLOADLIST_VPATH_OFFSET: usize = 0x108;
 pub static LOADLIST_INIT_ORIG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 static LOADLIST_INIT_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);

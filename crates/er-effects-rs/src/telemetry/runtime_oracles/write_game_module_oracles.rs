@@ -110,7 +110,7 @@ fn write_game_module_oracles(body: &mut String) {
         // this type; layout from the WIP worktree: current_state at stepper+0x40, verified by the unk48
         // field naming). current_state is the low 4 bytes (requested_state is the adjacent +0x44).
         {
-            const CS_SYSTEM_STEP_GLOBAL_RVA: usize = 0x3d85680;
+            const CS_SYSTEM_STEP_GLOBAL_RVA: usize = er_game_base::rva::CS_SYSTEM_STEP_GLOBAL_RVA;
             const CS_SYSTEM_STEP_CURRENT_STATE_OFFSET: usize = 0x40;
             const SYSTEM_STEP_LABELS: [&str; 21] = [
                 "Init",
@@ -2794,7 +2794,7 @@ fn write_game_module_oracles(body: &mut String) {
         // already emitted (oracle_wcm_*/oracle_worldchrman_* in write_player_presence_oracle) and are flat
         // per AC-2, so they are not duplicated here.
         {
-            const G_GX_DRAW_CONTEXT_RVA: usize = 0x47ef360;
+            const G_GX_DRAW_CONTEXT_RVA: usize = er_loading_portrait::GX_DRAW_CONTEXT_RVA;
             const GXDC_OUTPUT_VEC_BEGIN_OFFSET: usize = 0x128;
             const GXDC_OUTPUT_VEC_END_OFFSET: usize = 0x130;
             const GXDC_OUTPUT_VEC_CAP_OFFSET: usize = 0x138;

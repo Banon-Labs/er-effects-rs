@@ -179,7 +179,8 @@ pub const DLSTRING_U16_SSO_THRESHOLD: usize = 7;
 /// Not hooked -- called directly for the stats push (null-guards text and checks the field dataType).
 pub const PROFILE_SETTEXT_RVA: usize = 0x74a000;
 
-pub const SCALEFORM_MEMORY_FILE_VTABLE_RVA: usize = 0x2ba4c80;
+pub const SCALEFORM_MEMORY_FILE_VTABLE_RVA: usize =
+    er_game_base::rva::SCALEFORM_MEMORY_FILE_VTABLE_RVA;
 
 pub const SCALEFORM_MEMORY_FILE_DATA_OFFSET: usize = 0x18;
 pub const SCALEFORM_MEMORY_FILE_LEN_OFFSET: usize = 0x20;

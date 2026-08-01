@@ -849,7 +849,7 @@ unsafe fn system_quit_clear_disable_save_menu(base: usize, source: &str) -> i32 
 unsafe fn system_quit_force_return_title_bc4_ready(base: usize, source: &str) -> i32 {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const HEAP_LO: usize = 0x10000;
-    const GAME_MAN_SINGLETON_RVA: usize = 0x3d69918;
+    const GAME_MAN_SINGLETON_RVA: usize = er_game_base::rva::GAME_MAN_SINGLETON_RVA;
     let gm = unsafe { safe_read_usize(base + GAME_MAN_SINGLETON_RVA) }.unwrap_or(NULL);
     if gm < HEAP_LO {
         return -1;
@@ -873,8 +873,10 @@ unsafe fn system_quit_force_return_title_bc4_ready(base: usize, source: &str) ->
 unsafe fn system_quit_log_save_gates(base: usize, source: &str) {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const HEAP_LO: usize = 0x10000;
-    const FORCE_LATCH_RVA: usize = 0x3d856a0;
-    const GAME_MAN_SINGLETON_RVA: usize = 0x3d69918;
+    // The engine SHUTDOWN/CLEANUP flag, not a "force latch" -- read-only here. See
+// er_title_flow::TITLE_ACCEPT_LATCH_RVA for the evidence.
+const FORCE_LATCH_RVA: usize = TITLE_ACCEPT_LATCH_RVA;
+    const GAME_MAN_SINGLETON_RVA: usize = er_game_base::rva::GAME_MAN_SINGLETON_RVA;
     let n = SYSTEM_QUIT_SAVE_GATE_DIAG_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
     if !(n <= 8 || n % 240 == 0) {
         return;

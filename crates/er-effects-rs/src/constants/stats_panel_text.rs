@@ -227,7 +227,8 @@ pub(crate) static TITLE_MENU_RESOURCE_ACQUIRE_LAST_CALLER_RVA: AtomicUsize =
 /// Scaleform LoaderImpl file-open wrapper (`dump 0x1411ceda0 -> deobf/live 0x1411ced80`).
 /// Signature: `file = f(loader_impl, char* url, flags)`, calls FileOpener vtable +0x18. Observe-only
 /// until we know the exact returned file object's vtable/buffer contract.
-pub(crate) const TITLE_SCALEFORM_FILE_OPEN_RVA: usize = 0x11ced80;
+pub(crate) const TITLE_SCALEFORM_FILE_OPEN_RVA: usize =
+    er_game_base::rva::TITLE_SCALEFORM_FILE_OPEN_RVA;
 pub(crate) static TITLE_SCALEFORM_FILE_OPEN_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::TITLE_SCALEFORM_FILE_OPEN_INSTALLED;
@@ -857,10 +858,25 @@ pub(crate) const DEFAULT_PLAY_GAME_MAP: i32 = 0x3c2a2200;
 /// the save, writes the real saved map to GameMan+0xc30, applies the character. The
 /// cycle-breaker for slot loading (slot9-load-phase-machine-b80-csfeman-less-2026).
 pub(crate) const DESERIALIZE_SLOT_RVA: usize = 0x67b290;
-/// The title menu's CONTINUE row wrapper 0x14082bac0 calls this native loader as
-/// `continue_load(-1, 0, 0)`: it resolves `-1` through GameMan+0xac0, submits the
-/// 0x280000 save read, and arms GameMan+0xb80 for the b80 drain/deser chain.
-pub(crate) const CONTINUE_LOAD_RVA: usize = 0x67b750;
+/// `GameMan::WriteSaveToSlot(slot, flushToDisk, blankSlot) -> char`. **This WRITES a save;
+/// it does not read one.** Corrected 2026-08-01 against the 1.16.2 Ghidra dump after this
+/// address was found declared under two contradictory names across three crates (it was
+/// `CONTINUE_LOAD_RVA` here and in er-save-loader, `SAVE_DISPATCH_CHAR_RVA` in
+/// er-save-suppress -- the latter was right).
+///
+/// Decompile evidence at 0x14067b750: early-bails on `CanShowSaveMenu()` and clears
+/// `GameMan->saveRequested`; requires `GameMan->saveState == 0`; resolves `slot == -1` to
+/// `GameMan->saveSlot`; allocates 0x280000 from the main heap; calls
+/// `CS::ProfileSummary::MarkProfileIndexAsUsed(summary, slot)`; SERIALIZES game state into
+/// that buffer via 0x14067dc00 (which builds a `DLMemoryOutputStream` and calls `Write` /
+/// `Seek` / `GetGameDataVersion`); stamps `DLDateTime` into GameMan+0xb88; fetches the IO
+/// device via [`IODEV_GETTER_RVA`] (0xe6e060) and writes the buffer out through 0x140e6ec70;
+/// then sets `saveState = 1` and clears `saveRequested`.
+///
+/// `blankSlot == 1` takes the `memset(buf, 0, 0x280000)` branch, i.e. it writes an ERASED
+/// slot -- destructive. The prior doc claimed this "submits the 0x280000 save read"; the
+/// 0x280000 buffer is the save WRITE buffer.
+pub(crate) const SAVE_WRITE_TO_SLOT_RVA: usize = 0x67b750;
 pub(crate) use er_title_flow::GAME_MAN_SAVED_MAP_C30_OFFSET;
 pub(crate) use er_title_flow::GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET;
 pub(crate) use er_title_flow::GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY;
@@ -891,7 +907,14 @@ pub(crate) const INGAMESTEP_REQ_BLOCKID_100_OFFSET: usize = 0x100;
 /// b80 machine (dispatcher-1 deserialize + dispatcher-2 apply) + MsbLoad PRIME the
 /// world-stream natively -> resident -> child+0xd8 drains. This is the stream-priming
 /// step the direct 0x14067b290 deserialize skipped.
-pub(crate) const LOAD_INITIATOR_RVA: usize = 0x67b4e0;
+/// **BLANKS THE ENTIRE SAVE CONTAINER.** Not a load initiator, despite the old name.
+/// 0x67b4e0 stages one memset-to-zero 0x280000 buffer into EVERY container entry via
+/// 0x140e6ec80 (whose callees are `memset` + `SLSaveContent` + `AllocateAligned`), submits on
+/// the write lane, and sets `GameMan->saveState = 1`. It is NOT among the code xrefs of the
+/// READ builder 0x140e6eb80. Corrected 2026-08-01; nothing in this repo calls it (the two
+/// remaining references sit in `let _ = (...)` warning-suppression tuples, and one trace hook
+/// observes it), so this is a badly-named loaded gun rather than a live hazard.
+pub(crate) const BLANK_SAVE_CONTAINER_REQUEST_RVA: usize = 0x67b4e0;
 /// FULL-LOAD (deserialize-arm) initiator 0x14067b1a0(ecx=slot): begins the slot read and
 /// sets GameMan+0xb80=2 (the b80==2 deserialize arm), NOT b80=1 (the preview lane that
 /// 0x14067b4e0 uses and that resets to 0 without deserializing). Runtime-proven the

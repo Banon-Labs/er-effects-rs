@@ -308,12 +308,16 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         // (-1.5) SOURCE PROBE (read-only) for a future controlled public-requestLoad (0x14240ac00):
         // the dead load builder reads source globals that may be invalid cold (it crashed). Before
         // ever calling requestLoad, log the candidate sources so we know a valid one: SLLoadContent
-        // *0x143d87358, the secondary *0x143d872e0, and owner+8 (what the dead builder passed as the
-        // requestLoad source). Pure reads -- no calls into risky fns.
+        // *0x143d87358, the main heap allocator *0x143d872e0, and owner+8 (what the dead builder
+        // passed as the requestLoad source). Pure reads -- no calls into risky fns.
+        //
+        // 0x3d872e0 was named SLLOAD_SRC2_RVA here, which read as a save-load-specific "second
+        // source". It is not: the 1.16.2 dump shows GLOBAL_MainHeapAllocator, 1821 xrefs across
+        // CSTaskImp/CSWindowImp/CSEzWork, and GameMan::WriteSaveToSlot derefs it as
+        // `GLOBAL_MainHeapAllocator->_vfptr->AllocateAligned`. Renamed 2026-08-01.
         const SLLOADCONTENT_SRC_RVA: usize = 0x3d87358;
-        const SLLOAD_SRC2_RVA: usize = 0x3d872e0;
         let src1 = unsafe { safe_read_usize(base + SLLOADCONTENT_SRC_RVA) }.unwrap_or(null);
-        let src2 = unsafe { safe_read_usize(base + SLLOAD_SRC2_RVA) }.unwrap_or(null);
+        let src2 = unsafe { safe_read_usize(base + GLOBAL_MAIN_HEAP_ALLOCATOR_RVA) }.unwrap_or(null);
         let owner_probe = unsafe { *((base + IODEV_GLOBAL_RVA) as *const usize) };
         let owner8 = if owner_probe != null {
             unsafe { safe_read_usize(owner_probe + 8) }.unwrap_or(null)
@@ -329,7 +333,9 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         // the manager) before any load. If it's already built+ready (sysimpl+0x19!=0), the crash is a
         // deeper threading issue and the synthetic path is a real dead end. *0x144852f88 = SLSystemImpl
         // ptr; +0x8 = SLSessionManager; +0x10 = device/result table; +0x19 = manager-ready flag.
-        const SLSYSTEMIMPL_PTR_RVA: usize = 0x4852f88;
+        // This file had the identity right all along; `constants.rs` called the same address
+        // an FD4 IO worker manager until 2026-08-01. Ghidra confirms this reading.
+        const SLSYSTEMIMPL_PTR_RVA: usize = RuntimeGlobalRva::SaveLoad2SlSystemImpl as usize;
         let sysimpl = unsafe { safe_read_usize(base + SLSYSTEMIMPL_PTR_RVA) }.unwrap_or(null);
         let (sl_mgr, sl_tbl, sl_ready) = if sysimpl != null {
             let m = unsafe { safe_read_usize(sysimpl + 0x8) }.unwrap_or(null);
@@ -777,8 +783,10 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         if b80 == B80_IDLE
             && WARM_KICK_FIRED.swap(WAIT_INC, Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS
         {
-            const NODE_FINALIZER_RVA: usize = 0xe6f200;
-            const WARM_LOAD_KICK_RVA: usize = 0x67b4e0;
+            const NODE_FINALIZER_RVA: usize = er_game_base::rva::SL_RELEASE_REQUEST_RVA;
+            // NOT a "warm load kick": 0x67b4e0 blanks the whole save container. See
+// BLANK_SAVE_CONTAINER_REQUEST_RVA. Only referenced below to suppress an unused warning.
+const WARM_LOAD_KICK_RVA: usize = BLANK_SAVE_CONTAINER_REQUEST_RVA;
             const GAME_MAN_LOAD_HANDLE_B98_OFFSET: usize = 0xb98;
             const GAME_MAN_LOAD_HANDLE_BA0_OFFSET: usize = 0xba0;
             // RUNTIME-PROVEN cold gate (bd b80-WARM-kick-runtime-0x140e6ec80-returns0-cold): the
@@ -905,7 +913,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         // gates 0x67bd70 inside 0x67b290).
         const DF0_OFFSET: usize = 0xdf0;
         const ASYNC_JOB_18_OFFSET: usize = 0x18;
-        const C30_WRITE_GATE_RVA: usize = 0x3d68078;
+        const C30_WRITE_GATE_RVA: usize = er_game_base::rva::SAVE_DATA_SUBSYSTEM_GATE_RVA;
         let df0 = unsafe { *((gm + DF0_OFFSET) as *const usize) };
         let job18 = unsafe { *((gm + ASYNC_JOB_18_OFFSET) as *const usize) };
         let c30_gate = unsafe { *((base + C30_WRITE_GATE_RVA) as *const usize) };

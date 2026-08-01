@@ -23,9 +23,9 @@ use crate::win32::{GetModuleHandleA, read_usize};
 //   GAME_DATA_MAN_GLOBAL_RVA / +0x08 PlayerGameData -- er-reload-trace-dll src/lib.rs
 //   CS_MENU_MAN_GLOBAL_RVA / CS_MENU_MAN_MENU_DATA_OFFSET -- crates/er-effects-rs/src/constants/*
 // They are plain integer literals (addresses the DLL reads), not shared statics.
-const GAME_DATA_MAN_GLOBAL_RVA: usize = 0x3d5df38;
+const GAME_DATA_MAN_GLOBAL_RVA: usize = er_game_base::rva::GAME_DATA_MAN_GLOBAL_RVA;
 const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize = 0x08;
-const CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d6b7b0;
+const CS_MENU_MAN_GLOBAL_RVA: usize = er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA;
 const CS_MENU_MAN_MENU_DATA_OFFSET: usize = 0x8;
 
 /// Lowest plausible heap/image pointer -- filters null and small sentinel values out of walks.
@@ -121,7 +121,7 @@ pub fn world_simulating() -> bool {
 // of these trips within the frame budget -- else the harness is derailed (bd HARNESS-drive-semaphore-
 // gated-teardown-on-miss). GameMan singleton RVA 0x3d69918 (profile_rows_system_quit_menu.rs), b80 =
 // GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET; NowLoading singleton 0x3d60ec8, flag +0xED (CSNowLoadingHelperImp.load_done).
-const GAME_MAN_SINGLETON_RVA: usize = 0x3d69918;
+const GAME_MAN_SINGLETON_RVA: usize = er_game_base::rva::GAME_MAN_SINGLETON_RVA;
 const GAME_MAN_LOAD_FSM_B80_OFFSET: usize = 0xb80;
 const NOW_LOADING_SINGLETON_RVA: usize = 0x3d60ec8;
 const NOW_LOADING_FLAG_ED_OFFSET: usize = 0xed;

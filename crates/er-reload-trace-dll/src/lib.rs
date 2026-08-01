@@ -19,8 +19,8 @@ const MH_OK: i32 = 0;
 const MH_ERROR_ALREADY_INITIALIZED: i32 = 1;
 const MH_ERROR_ENABLED: i32 = 5;
 
-const GAME_MAN_SINGLETON_RVA: usize = 0x3d69918;
-const GAME_DATA_MAN_GLOBAL_RVA: usize = 0x3d5df38;
+const GAME_MAN_SINGLETON_RVA: usize = er_game_base::rva::GAME_MAN_SINGLETON_RVA;
+const GAME_DATA_MAN_GLOBAL_RVA: usize = er_game_base::rva::GAME_DATA_MAN_GLOBAL_RVA;
 const MOUNTED_ARCHIVE_REGISTRY_RVA: usize = 0x448464a8;
 
 // MoveMapStep finalize advancer FUN_140afa7c0 (dump) -> deobf 0x140afa6d0 -> rva 0xafa6d0 (content-
@@ -33,10 +33,10 @@ const MOVEMAPSTEP_FINALIZE_12A_OFFSET: usize = 0x12a;
 /// logging the child_base-0x108 MoveMapStep state(+0x48)/field25(+0x12a) shows whether load2's
 /// MoveMapStep child (state==18) is torn down at field25<9 (teardown mechanism) or never appears here
 /// (never re-scheduled). rva 0xafa6d0 = the advancer; the mms= pointer in each log distinguishes loads.
-const CHILD_TEARDOWN_RVA: usize = 0xeb54c0;
+const CHILD_TEARDOWN_RVA: usize = er_game_base::rva::EZ_CHILDSTEP_RESET_RVA;
 const MOVEMAPSTEP_CHILD_EZSTEP_OFFSET: usize = 0x108;
 const MOVEMAPSTEP_STATE_48_OFFSET: usize = 0x48;
-const CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d6b7b0;
+const CS_MENU_MAN_GLOBAL_RVA: usize = er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA;
 const CS_MENU_MAN_MENU_DATA_OFFSET: usize = 0x8;
 const MENU_DATA_RT5D_OFFSET: usize = 0x5d;
 const MENU_DATA_ENDING_5E_OFFSET: usize = 0x5e;
@@ -61,7 +61,7 @@ const GAME_MAN_SUBMIT_GATE_CB1_OFFSET: usize = 0xcb1;
 const GAME_MAN_SUBMIT_GATE_CB2_OFFSET: usize = 0xcb2;
 const GAME_MAN_SUBMIT_GATE_BCA_OFFSET: usize = 0xbca;
 const GAME_MAN_SUBMIT_GATE_B5E_OFFSET: usize = 0xb5e;
-const SUBMIT_GLOBAL_PTR_3D68078_RVA: usize = 0x3d68078;
+const SUBMIT_GLOBAL_PTR_3D68078_RVA: usize = er_game_base::rva::SAVE_DATA_SUBSYSTEM_GATE_RVA;
 const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize = 0x08;
 
 const HOOK_ORIGINAL_UNSET: usize = 0;

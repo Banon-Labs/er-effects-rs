@@ -81,7 +81,8 @@ pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA: u32 = 0x826d50;
 /// is the native cancel/back close (approach B): it clears `queue[0]` so the return-title chain's
 /// `queue[0]==0` ready-gate finally passes and the direct chain can submit. See bd
 /// `system-quit-profileselect-native-close-B-path` / `menu-job-queue-pump-dequeue-mechanism`.
-pub(crate) const SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA: u32 = 0x7ac890;
+pub(crate) const SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA: u32 =
+    er_game_base::rva::MENU_WINDOW_CLOSE_WITH_FAILED_RVA as u32;
 /// Native ProfileLoadDialog in-place list rebuild `FUN_1409a5020` (dump `0x1409a5020` -> live/deobf
 /// `0x9a4ed0`, content-unique via dump-deobf-shift). `fn(rcx = dialog)`. The game's own
 /// records-changed refresh, used by the delete-save flow: re-runs the item-list builder

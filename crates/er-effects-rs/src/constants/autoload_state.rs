@@ -181,7 +181,15 @@ pub(crate) const IO_WORKER_REGISTRY_COUNT_18_OFFSET: usize = 0x18;
 /// status 0xe, b80 2->0 in one frame) when [worker+0x19]!=0 (the worker no-accept/shutdown
 /// byte) @0x14240e472. Prime suspect for the read-completes-empty wall (b80-DEVICE-MOUNT-
 /// REFUTED-...).
-pub(crate) const FD4_IO_WORKER_MGR_RVA: usize = 0x4852f88;
+/// CORRECTION (2026-08-01): this is `SaveLoad2::SLSystemImpl*`, NOT an FD4 IO worker
+/// manager -- its lazy initializer `FUN_14240dee0` opens with
+/// `*param_1 = SaveLoad2::SLSystemImpl::vftable`. The name is kept for its call sites.
+///
+/// UNRESOLVED, and it matters: the doc above reads `+0x19` as "the worker no-accept/
+/// shutdown byte", while `experiments/own_stepper/bootstrap_drive.rs` reads the SAME field
+/// on the SAME object as "sysimpl built+ready (`sysimpl+0x19 != 0`)". Those are opposite
+/// polarities. Tracked in bd; do not build new logic on either reading until it is settled.
+pub(crate) const FD4_IO_WORKER_MGR_RVA: usize = RuntimeGlobalRva::SaveLoad2SlSystemImpl as usize;
 pub(crate) const FD4_IO_WORKER_NOACCEPT_19_OFFSET: usize = 0x19;
 /// The worker's job QUEUE fields the normal (non-discard) enqueue pushes to: 0x14240e420
 /// pushes onto [worker+0x8] (via 0x14240c060) and [worker+0x10] (via 0x14240f2c0). Reading
@@ -1515,7 +1523,7 @@ pub(crate) use er_telemetry::counters::GX_CMD_ARENA_SWITCH_MIN_REMAINING;
 /// (validate the pointer + a sane count); RVA ground-truthed in the DEOBF binary (teardown 0x9b2db0
 /// disasm: `mov 0x3bd68d1(%rip),%rcx # 0x1445896a8` -> RVA 0x1445896a8 - 0x140000000 = 0x45896a8),
 /// same VA as the dump. The runtime read is self-validating so a bad RVA logs -1, not a crash.
-pub(crate) const DELAY_DELETE_MAN_SINGLETON_PTR_RVA: usize = 0x45896a8;
+pub(crate) const DELAY_DELETE_MAN_SINGLETON_PTR_RVA: usize = er_title_flow::CS_DELAY_DELETE_MAN_GLOBAL_RVA;
 pub(crate) const DELAY_DELETE_MAN_PENDING_COUNT_OFFSET: usize = 0x40;
 pub(crate) const DELAY_DELETE_MAN_PENDING_HIGHWATER_OFFSET: usize = 0x44;
 /// Sane upper bound for the pending count; a larger read means the singleton RVA/layout is wrong.

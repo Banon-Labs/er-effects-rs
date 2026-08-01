@@ -118,7 +118,11 @@ pub const TITLE_ANIM_DIAG_INTERVAL: usize = 60;
 /// SM owner's vtable[0x150] and no-ops unless the current node is settled (`[node+0x20]&0x8f >= 2`), so
 /// it cannot corrupt the SM. This is the call CS::TitleTopDialog::update's input-skip branch makes to
 /// move FadeIn->Loop on a button press. bd fadein-* RE 2026-06-24.
-pub const TITLE_FD4_SETSTATE_RVA: usize = 0x7499e0;
+/// NOT an FD4 SetState: 0x7499e0 is a Scaleform **frame-label goto** on a SceneObjProxy
+/// (er-loading-portrait names it correctly as SCALEFORM_LABEL_GOTO_RVA and this now derives
+/// from it, 2026-08-01). Its operands are frame LABELS, not StateDescs. The old name is kept
+/// for its call sites in title_load_step_hooks.rs.
+pub const TITLE_FD4_SETSTATE_RVA: usize = er_loading_portrait::SCALEFORM_LABEL_GOTO_RVA;
 
 /// One-shot latch: the zero-input FadeIn->Loop transition has fired.
 pub static TITLE_FADEIN_SKIP_FIRED: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -129,13 +133,15 @@ pub const TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS: &str = "CSMenuProfModelRend
 
 /// Profile renderer table initializer: live 0x1409af3a0 (dump 0x1409af4f0) allocates the ten
 /// CSMenuProfModelRend instances and writes DAT_143d6d8d0 before the refresh/feed pass below.
-pub const TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA: usize = 0x9af3a0;
+pub const TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA: usize =
+    er_loading_portrait::PROFILE_TABLE_BUILDER_RVA;
 
 /// Profile portrait refresh/display pipeline: live 0x1409aa680 (dump 0x1409aa7d0) reads the loaded
 /// `ProfileSummary`, loops 10 slots, fills CSMenuProfModelRend / face/player model data, and maps
 /// each active slot to `SYSTEX_Menu_ProfileNN` through `FUN_140bb8cf0(renderer, slot*2)`. It must run
 /// after SL2/profile readiness, not at early `05_001_Title_Logo` construction time.
-pub const TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA: usize = 0x9aa680;
+pub const TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA: usize =
+    er_loading_portrait::PROFILE_RENDERER_REFRESH_RVA;
 
 pub static TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_CALLS: AtomicUsize = AtomicUsize::new(0);
 
@@ -233,7 +239,7 @@ pub const GAME_MAN_FLAG_BC4_OFFSET: usize =
 /// it both as a possible pointer-to-device and as a struct base so the log
 /// disambiguates. Also: the b72 effective-getter 0x1406793d0 zeroes b72 if
 /// [GameMan+0xbc4]==3 or [inputmgr+0x13c]!=0, so log those too.
-pub const IODEV_GLOBAL_RVA: usize = 0x4589390;
+pub const IODEV_GLOBAL_RVA: usize = er_game_base::rva::SL_IODEV_GLOBAL_RVA;
 
 pub const IODEV_INFLIGHT_10_OFFSET: usize = 0x10;
 
@@ -266,6 +272,17 @@ pub const ARM_PROBE_TICK_INTERVAL: u64 = 30;
 /// Logical input-event array on the inputmgr (inputmgr+0xdc, i32 per event id,
 /// ids 0..=0x15e). The leaf input node detects a press via this layer (then
 /// mirrors into the keystate bitmap), so injecting here is what actually accepts.
+/// **This is the engine's SHUTDOWN/CLEANUP flag, not a title latch.** The game writes this
+/// byte exactly ONCE in the whole image, at 0x140c8ff41 inside `MainLoop` (0x140c8fe90, sole
+/// caller `WinMain`) -- immediately after the `while (MainUpdate())` loop exits and immediately
+/// before the `while (CleanupUpdate())` teardown loop. It is false for the entire normal game
+/// lifetime. Of its 25 xrefs, 1 is that write and 24 are readers of MIXED polarity: some
+/// suppress on set (`SaveRequest_Profile`, `RequestSave`), some ACT on set
+/// (`STEP_MenuJobWait` -> SetState(0xb)). Step machines short-circuit to terminal states at
+/// teardown, which is exactly why product code writing it appears to "work" -- it advances the
+/// title by telling the whole engine it is shutting down. See bd er-effects-rs-d4em.
+/// Canonical name should be GAME_SHUTDOWN_CLEANUP_FLAG_RVA; the four existing aliases now
+/// derive from this one declaration (2026-08-01) so the value has a single home.
 pub const TITLE_ACCEPT_LATCH_RVA: usize = 0x3d856a0;
 
 /// Boot intro/movie singleton (ptr) and its decoder skip-flag byte. The latch
@@ -566,7 +583,9 @@ pub const CSFEMAN_SINGLETON_RVA: usize = 0x3d6b880;
 /// the move-map/load path). RVA = 0x1447ef360 - 0x140000000 = 0x47ef360.
 pub const SESSION_SINGLETON_RVA: usize = TitleSessionRva::MoveMapSession as usize;
 
-pub const TITLE_INPUT_MANAGER_RVA: usize = 0x3d6b7b0;
+/// Alias of the `CSMenuMan` singleton. Derived from `er-game-base`'s table so the value has
+/// exactly one definition (2026-08-01 RVA dedupe); the name is kept for its call sites.
+pub const TITLE_INPUT_MANAGER_RVA: usize = er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA;
 
 /// Pure-observe snapshot interval (game-task ticks). Logs the title->menu->load state
 /// every N ticks with NO forcing, to capture what the REAL button press does.
@@ -583,14 +602,24 @@ pub static OBSERVE_LAST_SIG: std::sync::atomic::AtomicI64 =
 /// `mov [rsp+0x10],rdx; push rdi; sub rsp,0x30; movq $-2,[rsp+0x20]`; dump `FUN_1407a9340`). CORRECTED
 /// from the prior `0x7a9254`, which was +4 INTO the first instruction (mid-`mov`) and would execute
 /// garbage -- a latent bug that likely helped kill the gated `own_load_install_job` path. APPENDS a job
-/// into a MenuJobQueue's auto-growing deque ring (`AtomicIncrement`s the job, ring-push behind the
-/// active job) -- does NOT replace the active job or zero `*src`, and is overflow-safe (NOT the cap-8
-/// FixOrderJobSequence). Win64 fastcall `(rcx = queue_base, rdx = src: *MenuJob* (a DLReferenceCount
+/// into a MenuJobQueue (`AtomicIncrement`s the job, then appends into the container at
+/// `owner+0x8`).
+///
+/// CORRECTED 2026-08-01 -- the two safety properties this doc used to assert are BOTH FALSE, and
+/// the transmute at `er-effects-rs .../own_load/loaders.rs` cites them as its justification:
+///   * "does NOT ... zero `*src`" -- it DOES. The tail Unrefs the caller's reference and then
+///     executes `*param_2 = 0`, clearing the source slot.
+///   * "is overflow-safe (NOT the cap-8 FixOrderJobSequence)" -- the insert it delegates to,
+///     `FUN_1407a8820`, is typed by the dump as `(undefined8, FixOrderJobSequence *)`. It is a
+///     BOUNDED, FAILABLE push: it inserts only when `capacity_field == 0 || count < capacity`,
+///     and otherwise silently drops the job and returns 0. A caller that ignores the return can
+///     lose an enqueue with no error.
+/// Win64 fastcall `(rcx = queue_base, rdx = src: *MenuJob* (a DLReferenceCount
 /// Pointer slot whose [0] is the job))`. Queue targets: `owner+0x130` (ring +0x138, count +0x178;
 /// STEP_MenuJobWait's ExecuteMenuJob ticks it) OR `dialog+0x10` (ring +0x18; the per-frame menu pump
 /// 0x1409aa680 over the active-screen array drains it -- the native Continue post target).
 /// bd continue-load-POST-primitive-pushbackjob-kick-2026-06-22.
-pub const MENUJOB_PUSHBACK_RVA: usize = 0x7a9250;
+pub const MENUJOB_PUSHBACK_RVA: usize = MENU_JOB_SUBMIT_RVA as usize;
 
 // ===== moved verbatim from crates/er-effects-rs/src/constants/own_load_pump.rs =====
 
@@ -670,7 +699,7 @@ pub const EXECUTE_MENU_JOB_RVA: usize = 0x7a9600;
 /// CS::MenuManImp singleton global (`*(base+0x3d6b7b0)` = CSMenuManImp*). Verified: HasTopMenuJob
 /// 0x14080d960 does `mov rax,[0x143d6b7b0]; mov rcx,0x80(rax)` (popupMenu) then reads +0xB0. (Same
 /// singleton whose +0x90 is the menu input bitmap.) bd menu-job-install-mechanism-2026-06-23.
-pub const GLOBAL_CSMENUMAN_RVA: usize = 0x3d6b7b0;
+pub const GLOBAL_CSMENUMAN_RVA: usize = er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA;
 
 /// CSMenuManImp -> CSPopupMenu* at +0x80.
 pub const CSMENUMAN_POPUP_80_OFFSET: usize = 0x80;
@@ -709,7 +738,7 @@ pub const MSS_SAVE_SLOT_1200_OFFSET: usize = 0x1200;
 /// GameMan/GameDataMan singleton global read by `GetSaveSlot` (`*(0x143d69918)`, slot at `+0xac0`):
 /// the "rest of GameMan is set up" readiness signal the user observed after press-any-button. The
 /// direct continue trigger only fires once this is non-null. RVA = abs - base.
-pub const GAME_SAVE_SLOT_SINGLETON_RVA: usize = 0x3d69918;
+pub const GAME_SAVE_SLOT_SINGLETON_RVA: usize = er_game_base::rva::GAME_MAN_SINGLETON_RVA;
 
 /// Plausible-pointer bounds for validating `owner_ctx = *(mss+0xa38)`: at `title_boot_ready` the
 /// TitleFlowContext is often uninitialized (reads as 0x8080808080808080 -- non-null garbage), so a
@@ -798,7 +827,7 @@ pub const CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET: usize = 0x5d;
 pub const CS_MENU_DATA_ENDING_FLAG_5E_OFFSET: usize = 0x5e;
 
 /// The force/ending latch global (BOOL_143d856a0) = one of the `cVar10` ending-request inputs.
-pub const ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA: usize = 0x3d856a0;
+pub const ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA: usize = TITLE_ACCEPT_LATCH_RVA;
 
 /// The remaining `cVar10` ending-request INPUTS that read GameMan directly (the load-in signals a
 /// normal load sets so STEP_MoveMap walks the child to its -1 terminal): GameMan+0xb7c (FUN_140679520),
@@ -1393,7 +1422,7 @@ pub const SELECTBOT_OWNER_PARSED_SELECTION_130_OFFSET: usize = 0x130;
 
 pub const SELECTBOT_REGISTRY_GLOBAL_RVA: usize = 0x3d87360;
 
-pub const SELECTBOT_LOAD_GATE_RVA: usize = 0x3d856a0;
+pub const SELECTBOT_LOAD_GATE_RVA: usize = TITLE_ACCEPT_LATCH_RVA;
 
 /// The MenuLoop pump 0xb0a5e0 sets `[input_manager+0x6b0]=1` near its entry
 /// (`mov rax,[0x143d6b7b0]; mov byte [rax+0x6b0],1` at 0xb0a64d) every frame it
@@ -1401,7 +1430,7 @@ pub const SELECTBOT_LOAD_GATE_RVA: usize = 0x3d856a0;
 /// actually running MenuLoop at the title idle (so SelectBot injection would be
 /// parsed) or is still parked before it (so injection alone would be a no-op
 /// until the title-accept advances the outer state).
-pub const SELECTBOT_INPUT_MANAGER_GLOBAL_RVA: usize = 0x3d6b7b0;
+pub const SELECTBOT_INPUT_MANAGER_GLOBAL_RVA: usize = er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA;
 
 pub const SELECTBOT_PUMP_RAN_FLAG_OFFSET: usize = 0x6b0;
 

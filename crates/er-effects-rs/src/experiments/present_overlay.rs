@@ -64,7 +64,7 @@ type Present1Fn = unsafe extern "system" fn(*mut c_void, u32, u32, *const c_void
 /// each inline 0x170-byte entry's first qword is the per-window output object, whose first qword IS the live
 /// `IDXGISwapChain3*`. Chain: `*(base+RVA)` -> `+0x128` -> `*entry[0]` -> `*output` = swapchain. (Supersedes
 /// the old `GLOBAL_CSGraphics` root, which never held the swapchain -- CSGraphics is unrelated to GX present.)
-const G_GX_DRAW_CONTEXT_RVA: usize = 0x47ef360;
+const G_GX_DRAW_CONTEXT_RVA: usize = er_loading_portrait::GX_DRAW_CONTEXT_RVA;
 /// `GxDrawContext+0x128` = begin pointer of the per-window render-output vector (vector object at +0x120).
 const GXDC_OUTPUT_VEC_BEGIN_OFFSET: usize = 0x128;
 pub(crate) use er_telemetry::counters::GAME_BASE;

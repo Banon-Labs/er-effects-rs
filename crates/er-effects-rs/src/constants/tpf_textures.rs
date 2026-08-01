@@ -13,7 +13,7 @@
 // 0x141a004c0) + FUN_140b81110(GLOBAL_TexRepository, name=NULL, builder, ...) -- name=NULL DERIVES the
 // GLOBAL_TexRepository GPU key from the TPF ENTRY name (FUN_141a00950(builder)). So the TPF entry name
 // (not texName) is the GPU repo key. Returns the TpfResCap* (non-null on success).
-pub(crate) const CREATE_TPF_RES_CAP_RVA: usize = 0xb83680;
+pub(crate) const CREATE_TPF_RES_CAP_RVA: usize = CREATE_TPF_RESCAP_RVA;
 /// `GLOBAL_TpfRepository` singleton pointer (dump 0x143d73fb8; data RVA = dump_va - 0x140000000, the
 /// 0-shift data convention used by the other singleton RVAs here). MUST be read + null-checked before
 /// the CreateTpfResCap call -- the engine's own `accessed an uninitialized singleton` DLPanic is

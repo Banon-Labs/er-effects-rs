@@ -51,7 +51,13 @@ pub(crate) enum RuntimeGlobalRva {
     RendManSingleton = 0x3d7b0c0,
     CsScaleformSingleton = 0x3d83148,
     Fd4IoPool = 0x4853048,
-    Fd4IoWorkerManager = 0x4852f88,
+    /// `SaveLoad2::SLSystemImpl*`. Named `Fd4IoWorkerManager` until 2026-08-01, which was
+    /// wrong: the 1.16.2 dump shows its lazy initializer `FUN_14240dee0` opens with
+    /// `*param_1 = SaveLoad2::SLSystemImpl::vftable`, and all 11 xrefs sit in the SaveLoad2
+    /// region (`0x14240a...`, alongside requestLoad). `experiments/own_stepper/
+    /// bootstrap_drive.rs` already had it right in a comment. See bd
+    /// `rva-4852f88-is-saveload2-slsystemimpl-not-fd4-io-worker-2026-08-01`.
+    SaveLoad2SlSystemImpl = 0x4852f88,
     IoDeviceSingleton = 0x4589390,
     DluidInputManager = 0x485dc18,
 }

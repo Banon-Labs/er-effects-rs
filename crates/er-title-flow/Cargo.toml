@@ -14,12 +14,14 @@ name = "er_title_flow"
 
 [dependencies]
 er-telemetry = { path = "../er-telemetry" }
+# Tier A is host-safe and keeps shared RVA constants available to host-compiled modules;
+# `game-types` only pulls typed game bindings on Windows because er-game-base gates them there.
+er-game-base = { path = "../er-game-base", features = ["game-types"] }
 
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 er-hook = { path = "../er-hook" }
-er-game-base = { path = "../er-game-base", features = ["game-types"] }
 er-loading-portrait = { path = "../er-loading-portrait" }
 er-save-loader = { path = "../er-save-loader" }
 er-tpf = { path = "../er-tpf" }

@@ -20,14 +20,15 @@ er-telemetry = { path = "../er-telemetry" }
 # Scaleform file-open. Cross-platform so the unified stats-line layout + raster
 # (`stats_lines`) is provable by host tests (bd er-effects-rs-qic7).
 er-gfx = { path = "../er-gfx" }
+# Tier A is host-safe and keeps shared RVA constants available to host-tested layout code;
+# `game-types` only pulls typed game bindings on Windows because er-game-base gates them there.
+er-game-base = { path = "../er-game-base", features = ["game-types"] }
 
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 # Shared MinHook FFI + hook union (single MinHook instance per final DLL).
 er-hook = { path = "../er-hook" }
-# Fault-safe RAM readers, game base/rva resolution. game-types re-exports typed bindings.
-er-game-base = { path = "../er-game-base", features = ["game-types"] }
 # ERPX portrait-dump container (encode side) for the debug RGBA dump format.
 # Core-only (default-features off) so the DLL never pulls the host `png` dep.
 erpx-rs = { path = "../erpx-rs", default-features = false }

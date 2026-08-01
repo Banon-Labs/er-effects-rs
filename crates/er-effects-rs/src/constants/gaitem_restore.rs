@@ -37,11 +37,17 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_BEFOR
 pub(crate) static SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_AFTER: AtomicUsize =
     AtomicUsize::new(usize::MAX);
 /// The save-data subsystem gate the c30-writer 0x67bd70 checks before it writes
-/// GameMan+0xc30: `[0x143d68078]` (RVA 0x3d68078). It is a 0x270-byte heap object
-/// built by the save-load boot 0x6798d0..0x679904 and zeroed on teardown 0x6789bf.
+/// GameMan+0xc30: `[0x143d68078]` (RVA 0x3d68078). Ghidra names it `GLOBAL_CSEventState`.
+///
+/// CORRECTED 2026-08-01: it is NOT "a 0x270-byte heap object". The allocation is
+/// `MOV EDX,0x1` / `LEA ECX,[RDX+0x2]` -> `HeapAlloc(size = 3, align = 1)`, which is consistent
+/// with `IsAliveMotion` reading it as `MOVZX EAX, byte [RAX]` at offset 0. The 0x270-byte object
+/// allocated in the same function belongs to a DIFFERENT global (`MOV ECX,0x270` ...
+/// `MOV [0x143d68448],RAX`). The gate role below is unaffected -- only the size claim was wrong.
 /// If null at the writer's entry, 0x67bd70 returns without writing c30 (gate (a) in
 /// the c30-stays-default diagnosis). The save-safe c30-writer probe logs this.
-pub(crate) const SAVE_DATA_SUBSYSTEM_GATE_RVA: usize = 0x3d68078;
+pub(crate) const SAVE_DATA_SUBSYSTEM_GATE_RVA: usize =
+    er_game_base::rva::SAVE_DATA_SUBSYSTEM_GATE_RVA;
 /// World-resource streaming lever (worldres-loadstate-creator-and-streaming-enable-
 /// gate-2026). Gap 1: the block-load request is built from the InGameStep target
 /// coord [InGameStep+0x100]; set it to slot 9's real map then re-submit via
@@ -257,10 +263,13 @@ pub(crate) const CONTINUE_CONFIRM_RVA: usize = 0xb0e180;
 /// literal "owner" used by the native-fullread COMMIT recipe. Used READ-ONLY here for the
 /// OWN-LOAD owner diagnostic; the continue_confirm owner is the threaded SetState-able
 /// title owner (see `own_load_continue_fire`), NOT this literal.
-pub(crate) const CONTINUE_MANAGER_GLOBAL_RVA: usize = 0x3d5df38;
+/// This IS `GameDataMan` (1.16.2 Ghidra: 734 xrefs, readers `AddInventoryEquip` /
+/// `Deserialize` / `CanBeVisitor`) -- "continue manager" is a role name, not a distinct
+/// object. Derived from `er-game-base` so the value has one definition (2026-08-01 dedupe).
+pub(crate) const CONTINUE_MANAGER_GLOBAL_RVA: usize = er_game_base::rva::GAME_DATA_MAN_GLOBAL_RVA;
 
-/// LoadGame-JOB BUILD factory (`FUN_140826510` live; dump VA `0x140826600` lands +0xF0 mid-instr in
-/// the deobf image -- the real prologue is here, prologue-grounded vs `eldenring-deobf.bin`). Builds
+/// LoadGame-JOB BUILD factory (`FUN_140826510` live; the 1.16.2 shift is 0, so the live VA IS `0x140826510`; the old
+/// "dump VA 0x140826600 lands +0xF0 mid-instr" note was a 1.16.1 dump-deobf-shift.py artifact). Builds
 /// the LoadGame `CS::MenuJobWithContext<LoadJobContext>` via the menu-heap factory and returns it in
 /// `*out` with refcount 1. Win64 fastcall `(out: *DLRefCountPtr<MenuJob>, ctx_parent, save_slot:i32,
 /// owner_ctx)`. Only `out` (our local) and `save_slot` (the int slot) are required by the deser/map

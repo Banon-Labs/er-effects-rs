@@ -275,10 +275,15 @@ pub(crate) fn install_continue_trace_hooks() {
     const SET_SAVE_SLOT_RVA: u32 = er_save_loader::SET_SAVE_SLOT_RVA;
     const SAVE_REQUEST_PROFILE_RVA: u32 = er_save_loader::SAVE_REQUEST_PROFILE_RVA;
     const REQUEST_SAVE_RVA: u32 = er_save_loader::REQUEST_SAVE_RVA;
-    const CURRENT_SLOT_LOAD_RVA: u32 = 0x0067b570;
-    const CONTINUE_LOAD_RVA: u32 = 0x0067b750;
-    const COMBINED_LOAD_RVA: u32 = 0x0067b940;
-    const MAP_LOAD_RVA: u32 = 0x0067bc10;
+    const SAVE_DISPATCH_SYSTEM_RVA: u32 = er_game_base::rva::SAVE_DISPATCH_SYSTEM_RVA as u32;
+    // 0x67b750 WRITES a save, it does not load one -- see the decompile evidence on
+    // `SAVE_WRITE_TO_SLOT_RVA` (constants/stats_panel_text.rs). The trace LABEL below is
+    // deliberately left as "continue_load_67b750": er-reload-trace-dll matches that exact
+    // string (its lib.rs:555 and :724), so renaming it here would desync the two DLLs' log
+    // correlation. The address is in the label, so it stays unambiguous.
+    const SAVE_WRITE_TO_SLOT_RVA: u32 = 0x0067b750;
+    const SAVE_DISPATCH_COMBINED_RVA: u32 = er_game_base::rva::SAVE_DISPATCH_COMBINED_RVA as u32;
+    const SAVE_DISPATCH_ENTRY0B_RVA: u32 = 0x0067bc10;
     const SAVE_LOAD_STATE_INIT_RVA: u32 = er_save_loader::SAVE_LOAD_STATE_INIT_RVA;
 
     append_continue_trace(format_args!(
@@ -333,7 +338,7 @@ pub(crate) fn install_continue_trace_hooks() {
         create_continue_trace_hook(
             &mut hooks,
             "native_submit_7ac890",
-            MENU_ITEM_SUBMIT_RVA as u32,
+            MENU_WINDOW_CLOSE_WITH_FAILED_RVA as u32,
             native_submit_hook as *mut c_void,
             &NATIVE_SUBMIT_ORIG,
         );
@@ -389,28 +394,28 @@ pub(crate) fn install_continue_trace_hooks() {
         create_continue_trace_hook(
             &mut hooks,
             "current_slot_load_67b570",
-            CURRENT_SLOT_LOAD_RVA,
+            SAVE_DISPATCH_SYSTEM_RVA,
             current_slot_load_hook as *mut c_void,
             &CURRENT_SLOT_LOAD_ORIG,
         );
         create_continue_trace_hook(
             &mut hooks,
             "continue_load_67b750",
-            CONTINUE_LOAD_RVA,
+            SAVE_WRITE_TO_SLOT_RVA,
             continue_load_hook as *mut c_void,
             &CONTINUE_LOAD_ORIG,
         );
         create_continue_trace_hook(
             &mut hooks,
             "combined_load_67b940",
-            COMBINED_LOAD_RVA,
+            SAVE_DISPATCH_COMBINED_RVA,
             combined_load_hook as *mut c_void,
             &COMBINED_LOAD_ORIG,
         );
         create_continue_trace_hook(
             &mut hooks,
             "map_load_67bc10",
-            MAP_LOAD_RVA,
+            SAVE_DISPATCH_ENTRY0B_RVA,
             map_load_hook as *mut c_void,
             &MAP_LOAD_ORIG,
         );
@@ -428,7 +433,7 @@ pub(crate) fn install_continue_trace_hooks() {
         create_continue_trace_hook(
             &mut hooks,
             "b80_preview_67b4e0",
-            LOAD_INITIATOR_RVA as u32,
+            BLANK_SAVE_CONTAINER_REQUEST_RVA as u32,
             b80_preview_initiator_hook as *mut c_void,
             &B80_PREVIEW_INITIATOR_ORIG,
         );

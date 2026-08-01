@@ -43,7 +43,7 @@ pub(crate) use er_title_flow::CS_DELAY_DELETE_FINALIZE_54_OFFSET;
 /// teardown ends the in-world MoveMapStep session through here; the post-switch reload bounce is
 /// this firing against the FRESH MoveMapStep child right after streaming completes. Read-only
 /// trace hook logs every call + caller RVA to identify the stale requester.
-pub(crate) const EZ_CHILD_STEP_REQUEST_FINISH_RVA: u32 = 0xeb5570;
+pub(crate) const EZ_CHILD_STEP_REQUEST_FINISH_RVA: u32 = EZ_CHILDSTEP_REQUEST_FINISH_RVA as u32;
 /// `EzChildStep<MoveMapStep>` wrapper offset inside `InGameStep` (ctor dump 0x140aeabf3).
 pub(crate) const IN_GAME_STEP_MOVE_MAP_WRAPPER_E0_OFFSET: usize = 0xe0;
 /// `EzChildStep<InGameStayStep>` wrapper offset inside `InGameStep` (ctor dump 0x140aeabc3).
@@ -370,7 +370,10 @@ pub(crate) const CSFILE_ENQUEUE_RVA: u32 = 0x0269d7b0;
 /// the cached descriptor already equals the controller (System->Quit resets neither) -> "unchanged" ->
 /// mount SKIPPED -> the block FD4FileCap gets +0x88=4 but +0x90 stays NULL -> WORLD RES WAIT stall.
 /// singleton = *(root + 0x60); the job's cached descriptor is at singleton + 0x1200.
-pub(crate) const MOUNT_GUARD_STATE_ROOT_RVA: u32 = 0x03d5df38;
+/// The "mount guard state root" IS `GameDataMan` (1.16.2 Ghidra, 734 xrefs). Worth stating
+/// plainly because the guard below writes into a structure hanging off it (`*(root+0x60)`)
+/// and nothing here said so. Derived from `er-game-base` (2026-08-01 RVA dedupe).
+pub(crate) const MOUNT_GUARD_STATE_ROOT_RVA: u32 = er_game_base::rva::GAME_DATA_MAN_GLOBAL_RVA as u32;
 /// The change-detector itself (deobf 0x14082d5b0, `fn(rcx=controller, rdx=descriptor) -> al`): al=1 CHANGED
 /// (mount runs + descriptor re-synced), al=0 UNCHANGED (mount skipped). Instrumented read-only to identify
 /// which gate instance is the m28 map-mount (al flips 1 on load1 -> 0 on load2). A clean leaf compare fn.

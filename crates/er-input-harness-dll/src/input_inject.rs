@@ -25,7 +25,7 @@ use crate::win32::{read_u8, read_usize};
 
 /// `inputmgr`/CSMenuMan singleton RVA (`SELECTBOT_INPUT_MANAGER_GLOBAL_RVA` /
 /// `GLOBAL_CSMENUMAN_RVA` in the product constant tree).
-const INPUT_MANAGER_GLOBAL_RVA: usize = 0x3d6b7b0;
+const INPUT_MANAGER_GLOBAL_RVA: usize = er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA;
 /// Keystate bitmap base within the input manager (`INPUTMGR_BITMAP_90_OFFSET`).
 const INPUTMGR_BITMAP_90_OFFSET: usize = 0x90;
 /// Edge bit written per event (`MENU_EVENT_PRESSED_BIT`).

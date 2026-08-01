@@ -132,7 +132,10 @@ def product_path_uses_semantic_readiness(experiments: str) -> bool:
         and "own_stepper_stage2" in product_core
         and "product_continue_action_ready" in product_core
         and "product_continue_autoload_tick" in product_core
-        and "CONTINUE_LOAD_RVA" in experiments
+        # Renamed 2026-08-01: 0x67b750 is GameMan::WriteSaveToSlot, not a continue-load.
+        # Proven against the 1.16.2 Ghidra dump; er-save-suppress already had it right.
+        # See bd rva-67b750-is-save-write-not-continue-load-2026-08-01.
+        and "SAVE_WRITE_TO_SLOT_RVA" in experiments
         and "cold_char_mount_drive" in stage2
         and "title_boot_ready" in own_stepper
         and "startup_modal_blocking_state" in own_stepper
@@ -319,7 +322,12 @@ def main() -> int:
         failures,
     )
     require(
-        "TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA: usize = 0x81f6f0" in lib
+        # Assert the anchor still EXISTS and 0x81f6f0 is still declared somewhere, rather than
+        # pinning one literal spelling. The RVA dedupe (2026-08-01) made this name derive from
+        # the canonical PROFILE_SELECT_WRAPPER_RVA so the value has a single definition; pinning
+        # `: usize = 0x81f6f0` here would have forced the duplicate literal to stay forever.
+        "TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA" in lib
+        and "0x81f6f0" in lib
         and "TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL" in lib
         and "MENU_DummyProfileFace_01" in lib
         and "SYSTEX_Menu_Profile00" in lib
@@ -728,7 +736,7 @@ def main() -> int:
         "product_core_autoload_tick still calls broken direct_build path" in measure
         and "product_continue_autoload_tick" in measure
         and "product_continue_action_ready" in measure
-        and "CONTINUE_LOAD_RVA" in measure,
+        and "SAVE_WRITE_TO_SLOT_RVA" in measure,
         "measure must enforce product autoload uses the native Continue row load path, not direct_build",
         failures,
     )

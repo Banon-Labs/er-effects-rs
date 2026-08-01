@@ -839,7 +839,7 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             B80_LANE1_DRIVER_RVA,
             B80_LOAD_SAVE_DATA_INITIATOR_RVA,
             DESERIALIZE_SLOT_RVA,
-            LOAD_INITIATOR_RVA,
+            BLANK_SAVE_CONTAINER_REQUEST_RVA,
             WORLD_WORKER_BUILD_RVA,
             crate::runtime_heap_allocator_ptr_or_null as fn() -> usize,
             WORLD_WORKER_BUILD_STATE,

@@ -28,7 +28,10 @@ const MENU_OTHER_LOAD_STATE_PTR: usize = NativeSaveMenuRva::MenuOtherLoadStatePt
 pub const SET_SAVE_SLOT_RVA: u32 = NativeSaveMenuRva::SetSaveSlot as u32;
 pub const SAVE_REQUEST_PROFILE_RVA: u32 = NativeSaveMenuRva::SaveRequestProfile as u32;
 pub const REQUEST_SAVE_RVA: u32 = NativeSaveMenuRva::RequestSave as u32;
-const COMBINED_LOAD_RVA: u32 = 0x0067b940;
+// 0x67b940 WRITES a combined character+system save (serialises via 0x67dc00 and a
+// DLMemoryOutputStream, submits BOTH entries, sets GameMan->saveState = 1). It does not
+// load. Renamed 2026-08-01; matches er-save-suppress's SAVE_DISPATCH_* family.
+const SAVE_DISPATCH_COMBINED_RVA: u32 = er_game_base::rva::SAVE_DISPATCH_COMBINED_RVA as u32;
 const MARK_TITLE_BOOTSTRAP_RVA: u32 = 0x0067a310;
 const SAVE_LOAD_PUMP_DEFAULT_RVA: u32 = NativeSaveMenuRva::SaveLoadPumpDefault as u32;
 pub const SAVE_LOAD_STATE_INIT_RVA: u32 = NativeSaveMenuRva::SaveLoadStateInit as u32;
