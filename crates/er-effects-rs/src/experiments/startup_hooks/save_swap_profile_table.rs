@@ -557,6 +557,12 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     if portrait_loaded_slot_confirmed() == Some(target_slot) {
         unsafe { portrait_render_slot_semaphore(base, target_slot) };
     }
+    // ARMOR-RESOLUTION oracle (bd er-effects-rs-91l5 Layer 1). Every tick, read the LIVE stage-0
+    // ChrAsm of the renderer this tick is driving and publish the four EquipParamProtector rows the
+    // model build will actually request. It reads the SAME `target_slot` the kick and the bake capture
+    // use, so it can never score a renderer other than the displayed one. Read-only, fault-guarded,
+    // and it re-resolves the pool pointer itself on every call.
+    unsafe { portrait_equip_oracle_sample(base, summary, target_slot) };
     {
         let mark: unsafe extern "system" fn(usize, i32) -> u8 =
             unsafe { core::mem::transmute(base + PROFILE_MARK_SLOT_USED_RVA) };
