@@ -1,3 +1,5 @@
+use super::*;
+
 /// Restore `GLOBAL_CSGaitem` to constructor-pristine (empty gaitemInsTable + full free-queue) at a
 /// clean title BEFORE the switch reload's fresh deserialize, so char#2's deserialize does not
 /// exhaust the free-queue on char#1's leaked items (the AV at live 0x67141a, bd

@@ -63,7 +63,8 @@ const READ_67B100_RVA: usize = 0x67b100;
 /// One-shot gate: true ONLY for the single 0x67b290(slot) call we make from `own_load_drive`. The
 /// hook feeds our body + returns al=1 only while this is set; every other (native menu) read passes
 /// straight through to the original.
-static OWN_LOAD_GATE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub(super) static OWN_LOAD_GATE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 /// Trampoline to the original 0x67b100 (set on hook install).
 static READ_67B100_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::OWN_LOAD_BODY_LEN;
