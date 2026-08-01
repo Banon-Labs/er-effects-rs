@@ -2,6 +2,13 @@
 
 #![allow(unused_imports)]
 
-include!("save_redirect/path_hooks.rs");
-include!("save_redirect/file_ops.rs");
-include!("save_redirect/reentry.rs");
+use super::*;
+
+mod path_hooks;
+pub(crate) use path_hooks::*;
+
+mod file_ops;
+pub(crate) use file_ops::*;
+
+mod reentry;
+pub(crate) use reentry::*;

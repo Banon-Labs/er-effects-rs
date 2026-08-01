@@ -1,3 +1,6 @@
+use super::*;
+use std::sync::atomic::Ordering;
+
 // ===========================================================================
 // SAVE-REDIRECT DETOUR RE-ENTRANCY GUARD
 // ===========================================================================
@@ -159,6 +162,7 @@ pub(crate) fn save_detour_disk_io_allowed() -> bool {
 #[cfg(test)]
 mod save_detour_reentry_tests {
     use super::*;
+    use std::sync::atomic::Ordering;
 
     /// Models the production loop exactly: a detour body whose own file I/O re-enters the same
     /// detour. The recursion is unbounded unless the nested entry short-circuits, so deleting the

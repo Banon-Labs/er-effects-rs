@@ -1,9 +1,13 @@
+use super::*;
+
+use crate::mh::MH_STATUS;
+
 type ShGetFolderPathWFn = unsafe extern "system" fn(isize, i32, isize, u32, *mut u16) -> i32;
 
 /// SHGetFolderPathW detour: for CSIDL_APPDATA, return our staged ROOT instead of the real %APPDATA%,
 /// so the game's save-dir builder produces `<our_root>\EldenRing\<steamid>\...` and reads our gold
 /// save's character natively. All other folders pass through unchanged.
-unsafe extern "system" fn save_redirect_shgetfolderpathw_hook(
+pub(super) unsafe extern "system" fn save_redirect_shgetfolderpathw_hook(
     hwnd: isize,
     csidl: i32,
     token: isize,
@@ -63,7 +67,7 @@ type NtCreateFileFn = unsafe extern "system" fn(
 /// including whether the open is RELATIVE to a RootDirectory handle (the invisible-to-Win32 path the
 /// game uses for the boot save read). Pure logging -- always calls the original unchanged.
 #[allow(clippy::too_many_arguments)]
-unsafe extern "system" fn save_ntcreatefile_diag_hook(
+pub(super) unsafe extern "system" fn save_ntcreatefile_diag_hook(
     handle: *mut isize,
     access: u32,
     object_attributes: *const u8,
@@ -196,7 +200,7 @@ type GetDiskFreeSpaceExWFn =
 /// GetDiskFreeSpaceExW detour: for the EldenRing save dir, report ample free space (Wine returns
 /// bogus 0 on the Z:->/home drive, which fails the save-commit free-space precheck -> corrupted-save
 /// loop). Everything else passes through unchanged.
-unsafe extern "system" fn save_redirect_getdiskfreew_hook(
+pub(super) unsafe extern "system" fn save_redirect_getdiskfreew_hook(
     lp_dir: *const u16,
     free_avail: *mut u64,
     total: *mut u64,
@@ -235,7 +239,7 @@ type NtQueryVolumeInfoFn = unsafe extern "system" fn(isize, *mut u8, *mut u8, u3
 
 /// NtQueryVolumeInformationFile detour: override the AVAILABLE free-space units for the size info
 /// classes so the save-commit precheck passes (Wine reports bogus 0 free on the Z: staged drive).
-unsafe extern "system" fn save_redirect_ntqueryvolinfo_hook(
+pub(super) unsafe extern "system" fn save_redirect_ntqueryvolinfo_hook(
     handle: isize,
     iosb: *mut u8,
     fs_info: *mut u8,
@@ -302,7 +306,7 @@ pub(crate) fn running_under_wine() -> bool {
 
 /// Resolve an export address from an already-loaded module (NUL-terminated ASCII names). 0 if the
 /// module isn't loaded or the export is absent.
-unsafe fn module_proc(module_name: &[u8], proc_name: &[u8]) -> usize {
+pub(super) unsafe fn module_proc(module_name: &[u8], proc_name: &[u8]) -> usize {
     let module = match unsafe { GetModuleHandleA(PCSTR::from_raw(module_name.as_ptr())) } {
         Ok(m) => m,
         Err(_) => return HOOK_ORIGINAL_UNSET,
