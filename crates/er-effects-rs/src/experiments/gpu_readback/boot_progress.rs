@@ -1,3 +1,4 @@
+use super::*;
 // Boot-progress view -- our own pre-Continue cover content, drawn from the FIRST presented frame.
 //
 // With the splash/logo/title visuals suppressed, every frame the game presents between its first
@@ -225,7 +226,7 @@ static BOOT_VIEW_FADE_TEX_VERSION: AtomicUsize = AtomicUsize::new(usize::MAX);
 // indistinguishable from the black boot frames underneath, so only the bar + label are visible.
 // (The game's REAL loading-bar widget/asset cannot be reused here: its menu resources are not in
 // game memory until ~+12.7s and the DLL must not unpack assets from disk itself.)
-const BOOT_VIEW_TEXT_BASE_SCALE: usize = 2;
+pub(super) const BOOT_VIEW_TEXT_BASE_SCALE: usize = 2;
 const BOOT_VIEW_TEXT_REFERENCE_H: u32 = 1080;
 const BOOT_VIEW_TEXT_MIN_SCALE: usize = 1;
 const BOOT_VIEW_TEXT_MAX_SCALE: usize = 4;
@@ -1198,7 +1199,7 @@ fn boot_draw_text_shadowed(
 }
 
 /// Axis-aligned opaque fill into the tight RGBA buffer (clamped).
-fn boot_fill_rect(
+pub(super) fn boot_fill_rect(
     buf: &mut [u8],
     w: usize,
     h: usize,

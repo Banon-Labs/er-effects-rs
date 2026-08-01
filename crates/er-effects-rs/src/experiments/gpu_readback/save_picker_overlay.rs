@@ -1,3 +1,4 @@
+use super::*;
 // DLL-drawn startup save-file picker overlay.
 //
 // At a no-save boot the game's menu assets are NOT ready to draw an in-game menu, and the whole

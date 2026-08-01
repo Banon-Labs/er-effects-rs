@@ -1,3 +1,4 @@
+use super::*;
 // Shared D3D12 GPU-draw plumbing used by the boot-view fade and effect-selector overlay
 // draws in boot_progress.rs: HLSL compile, root-signature/PSO builders, the generic
 // texture+upload+SRV slot creator, SRV handle math, and the close/execute/fence-wait
@@ -66,7 +67,9 @@ float4 ps_main(VsOut input) : SV_Target {
 }
 "#;
 
-unsafe fn create_overlay_root_signature(device: &ID3D12Device) -> Option<ID3D12RootSignature> {
+pub(super) unsafe fn create_overlay_root_signature(
+    device: &ID3D12Device,
+) -> Option<ID3D12RootSignature> {
     let range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,
@@ -146,7 +149,7 @@ unsafe fn create_overlay_root_signature(device: &ID3D12Device) -> Option<ID3D12R
     }
 }
 
-unsafe fn create_overlay_pso(
+pub(super) unsafe fn create_overlay_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
     bb_format: DXGI_FORMAT,
@@ -262,7 +265,7 @@ fn log_shader_error(stage: &str, err: Option<&ID3DBlob>) {
 }
 
 #[allow(clippy::too_many_arguments)]
-unsafe fn ensure_overlay_gpu_texture_slot(
+pub(super) unsafe fn ensure_overlay_gpu_texture_slot(
     device: &ID3D12Device,
     srv_heap: &ID3D12DescriptorHeap,
     sw: u32,
@@ -424,7 +427,7 @@ fn srv_cpu_handle_at(
     handle
 }
 
-fn srv_gpu_handle_at(
+pub(super) fn srv_gpu_handle_at(
     device: &ID3D12Device,
     heap: &ID3D12DescriptorHeap,
     index: u32,
@@ -439,7 +442,7 @@ fn srv_gpu_handle_at(
 
 /// Close `list`, execute it on `queue`, signal `fence` with a fresh monotonic value, and CPU-wait (bounded)
 /// for GPU completion. `false` on any failure. Shared by the two-submit CPU-blend composite.
-unsafe fn execute_and_wait(
+pub(super) unsafe fn execute_and_wait(
     queue: &ID3D12CommandQueue,
     list: &ID3D12GraphicsCommandList,
     fence: &ID3D12Fence,
