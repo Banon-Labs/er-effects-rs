@@ -1,7 +1,7 @@
 //! Shared in-game save-file picker model.
 //!
 //! Pure filesystem/pagination state for the two in-game file-picker menus (the startup
-//! missing-save picker and the System>Quit "Load Save Profiles" picker). Both menus render
+//! missing-save picker and the System>Quit "Load Character from File" picker). Both menus render
 //! through the native `05_010_ProfileSelect` 10-row window, so this model maps a browsable
 //! directory listing onto row pages. The UI layers own all native staging (ProfileSummary preview
 //! records, window submit/close); this module owns what the rows MEAN.
@@ -20,11 +20,19 @@
 //!
 //! The visible rows are a contiguous prefix of the window's 10 slots, in this order:
 //!
-//! 1. `[..] <parent>` -- only when the current directory has a parent (absent at a drive root);
-//! 2. `[ C: > Z: ]`   -- the drive cycler, only when more than one drive is mounted;
-//! 3. `[ new ]`       -- destination intent only;
+//! 1. `[ new ]`       -- destination intent only, and FIRST;
+//! 2. `[..] <parent>` -- only when the current directory has a parent (absent at a drive root);
+//! 3. `[ C: > Z: ]`   -- the drive cycler, only when more than one drive is mounted;
 //! 4. the current page's directory / save-file entries;
 //! 5. `[ page N/M ]`  -- only when the listing overflows one page.
+//!
+//! `[ new ]` SITS ABOVE THE NAVIGATION ROWS, which is the one place the two intents' layouts
+//! differ, and it is deliberate. Since the Save Game row press opens this browser with no question
+//! in front of it (2026-07-31), the destination list is the first thing the user sees after
+//! pressing Save Game -- so the row that means "write a fresh file, destroy nothing" is row 0, the
+//! index a freshly built native list highlights, and the index the model's own cursor starts on
+//! ([`SavePickerModel::first_selectable_row`]). Row 0 in a LOAD browse still means what it always
+//! did; only the destination browser has a `[ new ]` at all.
 //!
 //! Nothing sits at a fixed index: [`SavePickerModel::entry_row_base`] is the single place the
 //! layout is decided, and every row query derives from it. That matters for two reasons.
@@ -54,13 +62,19 @@ use crate::telemetry::append_autoload_debug;
 
 /// Rows per `05_010_ProfileSelect` window (native slot count).
 pub(crate) const PICKER_ROW_COUNT: usize = 10;
-/// Row index of the "up one directory" row. It is always first WHEN IT EXISTS; at a drive root
-/// there is no up row and index 0 belongs to whichever row comes next in the layout.
-pub(crate) const PICKER_ROW_PARENT: usize = 0;
 /// ProfileSummary name field capacity: 16 UTF-16 units + NUL (0x22 bytes).
 pub(crate) const PICKER_ROW_NAME_UTF16_MAX: usize = 16;
 /// Label of the destination-intent `[ new ]` row (7 UTF-16 units, inside the name budget).
 pub(crate) const PICKER_NEW_FILE_LABEL: &str = "[ new ]";
+/// Marker prefixed to the stats line of the row that IS the save currently loaded.
+///
+/// It goes on the row's `ErStats` TOP line, not in the row NAME, and that is a capacity fact
+/// rather than a preference: the name field holds 16 UTF-16 units, `ER0000.sl2` already spends 10,
+/// and a 9-unit marker would push the filename out of its own row. The stats line is 630px wide at
+/// the 19px `MenuFont_01` the browse rows render in; `scripts/gfx_text_width.py` measures
+/// `[CURRENT] 10 CHARACTERS` at 247.1px there, against 143.4px for the bare count. It is a
+/// single-line no-wordwrap field, so an overflow would clip -- this one does not come close.
+pub(crate) const PICKER_CURRENT_SAVE_MARKER: &str = "[CURRENT]";
 
 /// What the browsing session is FOR. Fixed at construction; it selects the row layout, the
 /// occupancy filter, and what activating a row means.
@@ -70,8 +84,12 @@ pub(crate) enum PickerIntent {
     #[default]
     LoadSource,
     /// Browse for a folder to SAVE INTO. `loaded_file_name` is the leaf the `[ new ]` row writes
-    /// (always the loaded save's own filename, so the destination keeps its save flavor).
-    SaveDestination { loaded_file_name: String },
+    /// (always the loaded save's own filename, so the destination keeps its save flavor);
+    /// `loaded_path` is the save currently loaded, used ONLY to mark its row `[CURRENT]`.
+    SaveDestination {
+        loaded_file_name: String,
+        loaded_path: PathBuf,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -371,17 +389,20 @@ impl SavePickerModel {
     }
 
     /// Build a save-DESTINATION browser rooted at `dir` (save-game-flow WP3). `loaded_file_name` is
-    /// the leaf the `[ new ]` row writes into the browsed folder.
+    /// the leaf the `[ new ]` row writes into the browsed folder; `loaded_path` is the save
+    /// currently loaded, so its row can be marked [`PICKER_CURRENT_SAVE_MARKER`].
     pub(crate) fn open_destination(
         dir: &Path,
         extensions: &[&str],
         loaded_file_name: &str,
+        loaded_path: &Path,
     ) -> Self {
         Self::open_with_intent(
             dir,
             extensions,
             PickerIntent::SaveDestination {
                 loaded_file_name: loaded_file_name.to_owned(),
+                loaded_path: loaded_path.to_path_buf(),
             },
         )
     }
@@ -443,20 +464,34 @@ impl SavePickerModel {
         usize::from(self.has_parent_row()) + usize::from(self.has_drive_row())
     }
 
+    /// Rows the PINNED `[ new ]` row occupies above everything else: 1 in destination intent, 0 in
+    /// a load browse. Every other row index in the layout is offset by exactly this.
+    fn pinned_row_count(&self) -> usize {
+        usize::from(self.is_destination())
+    }
+
     /// Row index of the first directory/file entry.
     fn entry_row_base(&self) -> usize {
-        self.nav_row_count() + usize::from(self.is_destination())
+        self.pinned_row_count() + self.nav_row_count()
+    }
+
+    /// Row index of the pinned `[ new ]` row (destination intent only). ALWAYS 0 when it exists --
+    /// see the module docs: it is the first thing the Save Game row press shows.
+    pub(crate) fn new_file_row(&self) -> Option<usize> {
+        self.is_destination().then_some(0)
+    }
+
+    /// Row index of the "up one directory" row, when the current directory has a parent. It is
+    /// first in a load browse and second in a destination browse (`[ new ]` is pinned above it);
+    /// at a drive root there is no up row at all.
+    pub(crate) fn parent_row(&self) -> Option<usize> {
+        self.has_parent_row().then(|| self.pinned_row_count())
     }
 
     /// Row index of the drive cycler, when it exists.
     pub(crate) fn drive_row(&self) -> Option<usize> {
         self.has_drive_row()
-            .then(|| usize::from(self.has_parent_row()))
-    }
-
-    /// Row index of the pinned `[ new ]` row (destination intent only).
-    pub(crate) fn new_file_row(&self) -> Option<usize> {
-        self.is_destination().then(|| self.nav_row_count())
+            .then(|| self.pinned_row_count() + usize::from(self.has_parent_row()))
     }
 
     /// Row index of the page cycler, when the listing overflows one page. It sits immediately
@@ -497,12 +532,51 @@ impl SavePickerModel {
 
     /// Destination target for the `[ new ]` row: the loaded save's own filename in the browsed
     /// directory. `None` outside destination intent.
+    ///
+    /// "New" NAMES THE INTENT, NOT A GUARANTEE. In the folder the destination browser opens in,
+    /// this leaf IS the loaded save, so activating the row there resolves to an existing file and
+    /// takes the overwrite confirm like any other pick (`save_dest_route_picked_target`). Browse
+    /// anywhere else and the same row is a genuinely new file. That is why the row cannot be given
+    /// a "skip the confirm" shortcut: what it means depends entirely on where you are standing.
     fn new_file_target(&self) -> Option<PathBuf> {
         match &self.intent {
-            PickerIntent::SaveDestination { loaded_file_name } => {
-                Some(self.current_dir.join(loaded_file_name))
-            }
+            PickerIntent::SaveDestination {
+                loaded_file_name, ..
+            } => Some(self.current_dir.join(loaded_file_name)),
             PickerIntent::LoadSource => None,
+        }
+    }
+
+    /// The save currently loaded, when this browser is a destination chooser. Display use only --
+    /// see [`crate::experiments::startup_hooks::SaveDestOrigin::loaded_path`].
+    fn loaded_save_path(&self) -> Option<&Path> {
+        match &self.intent {
+            PickerIntent::SaveDestination { loaded_path, .. } => Some(loaded_path.as_path()),
+            PickerIntent::LoadSource => None,
+        }
+    }
+
+    /// True when `row` is the save file that is currently loaded -- the row the browse list marks
+    /// [`PICKER_CURRENT_SAVE_MARKER`].
+    ///
+    /// A CASE-INSENSITIVE PATH COMPARE, AND ONLY THAT. Windows paths are case-insensitive, so
+    /// `ER0000.sl2` and `er0000.SL2` are one file and a case-sensitive compare would leave the
+    /// user's own save unmarked. It can still MISS -- a different mount, a link, a `..` segment --
+    /// and missing is harmless here: an unmarked row is a row the user reads the filename of. It
+    /// must never be promoted into a decision, because the decision "this destination IS the
+    /// loaded save" is made at commit time from volume serial + file index, which is exact.
+    pub(crate) fn row_is_loaded_save(&self, row: usize) -> bool {
+        let (PickerRow::File(path), Some(loaded)) =
+            (self.row_meaning(row), self.loaded_save_path())
+        else {
+            return false;
+        };
+        // A path that does not round-trip through UTF-8 simply does not match: the listing already
+        // refuses such paths (`PickRejection::PathNotUtf8`), so this is unreachable rather than
+        // lenient, and answering "not the loaded save" is the harmless direction anyway.
+        match (path.to_str(), loaded.to_str()) {
+            (Some(row_path), Some(loaded_path)) => row_path.eq_ignore_ascii_case(loaded_path),
+            _ => false,
         }
     }
 
@@ -721,16 +795,16 @@ impl SavePickerModel {
         if row >= PICKER_ROW_COUNT {
             return PickerRow::Empty;
         }
-        if self.has_parent_row() && row == PICKER_ROW_PARENT {
-            return PickerRow::ParentDir;
-        }
-        if self.drive_row() == Some(row) {
-            return PickerRow::DriveCycle;
-        }
         if self.new_file_row() == Some(row) {
             return self
                 .new_file_target()
                 .map_or(PickerRow::Empty, PickerRow::NewFile);
+        }
+        if self.parent_row() == Some(row) {
+            return PickerRow::ParentDir;
+        }
+        if self.drive_row() == Some(row) {
+            return PickerRow::DriveCycle;
         }
         if self.next_page_row() == Some(row) {
             return PickerRow::NextPage;
@@ -944,12 +1018,21 @@ impl SavePickerModel {
     }
 
     fn first_selectable_row(&self) -> usize {
-        // Prefer the first row AFTER the pure-navigation rows so a fresh listing lands on something
-        // actionable -- an entry, or the pinned `[ new ]` row in an empty destination folder --
-        // rather than on `[..] up` or the drive cycler. Fall back to any selectable row (a folder
-        // with nothing in it), else 0.
-        let nav = self.nav_row_count();
-        (nav..PICKER_ROW_COUNT)
+        // A DESTINATION BROWSE STARTS ON `[ new ]`, in every folder, always. The reviewer's whole
+        // complaint about the old flow was that its default answer was the destructive one, so the
+        // one row this cursor may rest on by default is the row that creates rather than replaces
+        // -- and when the browsed folder happens to be the loaded save's own, the overwrite confirm
+        // (default No) still stands between that row and any damage.
+        if let Some(new_row) = self.new_file_row()
+            && self.row_selectable(new_row)
+        {
+            return new_row;
+        }
+        // LOAD BROWSE: prefer the first row AFTER the pure-navigation rows so a fresh listing lands
+        // on something actionable -- an entry -- rather than on `[..] up` or the drive cycler. Fall
+        // back to any selectable row (a folder with nothing in it), else 0.
+        let first_entry = self.entry_row_base();
+        (first_entry..PICKER_ROW_COUNT)
             .find(|&r| self.row_selectable(r))
             .or_else(|| (0..PICKER_ROW_COUNT).find(|&r| self.row_selectable(r)))
             .unwrap_or(0)
@@ -1106,9 +1189,16 @@ mod tests {
     }
 
     fn destination(dir: &str, files: usize) -> SavePickerModel {
+        destination_loading(dir, files, "Z:\\elsewhere\\ER0000.sl2")
+    }
+
+    /// A destination browse whose LOADED save is `loaded`, so the `[CURRENT]` marker has something
+    /// to point at. The default `destination` deliberately loads a save that is not in the listing.
+    fn destination_loading(dir: &str, files: usize, loaded: &str) -> SavePickerModel {
         model_with(
             PickerIntent::SaveDestination {
                 loaded_file_name: "ER0000.sl2".to_owned(),
+                loaded_path: PathBuf::from(loaded),
             },
             dir,
             files,
@@ -1254,13 +1344,16 @@ mod tests {
     }
 
     fn dest(path: &Path) -> Result<Vec<crate::experiments::SaveSlotInfo>, PickRejection> {
-        save_picker_accepts(
-            path,
-            &PickerIntent::SaveDestination {
-                loaded_file_name: "ER0000.sl2".to_owned(),
-            },
-            SL2,
-        )
+        save_picker_accepts(path, &dest_intent("Z:\\elsewhere\\ER0000.sl2"), SL2)
+    }
+
+    /// A destination intent loading `loaded`. The leaf is always `ER0000.sl2` because that is what
+    /// `[ new ]` writes; only the folder differs between these tests.
+    fn dest_intent(loaded: &str) -> PickerIntent {
+        PickerIntent::SaveDestination {
+            loaded_file_name: "ER0000.sl2".to_owned(),
+            loaded_path: PathBuf::from(loaded),
+        }
     }
 
     /// The generator has to actually produce a container the shipping reader accepts, or every
@@ -1376,10 +1469,13 @@ mod tests {
                 SavePickerModel::open_with_extensions(&dir, SL2),
             ),
             (
-                PickerIntent::SaveDestination {
-                    loaded_file_name: "ER0000.sl2".to_owned(),
-                },
-                SavePickerModel::open_destination(&dir, SL2, "ER0000.sl2"),
+                dest_intent("Z:\\elsewhere\\ER0000.sl2"),
+                SavePickerModel::open_destination(
+                    &dir,
+                    SL2,
+                    "ER0000.sl2",
+                    Path::new("Z:\\elsewhere\\ER0000.sl2"),
+                ),
             ),
         ] {
             let mut listed: Vec<PathBuf> = model
@@ -1417,16 +1513,22 @@ mod tests {
         (dir.clone(), root.to_path_buf())
     }
 
+    /// `[ new ]` IS PINNED ABOVE THE NAVIGATION ROWS, not below them (moved 2026-07-31, when the
+    /// Save Game row press started opening this list with no confirm in front of it). Row 0 is the
+    /// index a freshly built native list highlights, and the row that belongs there is the one that
+    /// creates a file rather than one that replaces one.
     #[test]
-    fn destination_pins_new_file_under_the_nav_rows_and_shifts_entries_down() {
+    fn destination_pins_new_file_above_the_nav_rows_and_shifts_them_down() {
         let model = destination("Z:\\saves", 3);
-        // No drive row here, and `Z:\saves` has a parent: up at 0, `[ new ]` at 1, entries from 2.
-        assert_eq!(model.new_file_row(), Some(1));
+        // No drive row here, and `Z:\saves` has a parent: `[ new ]` at 0, up at 1, entries from 2.
+        assert_eq!(model.new_file_row(), Some(0));
+        assert_eq!(model.parent_row(), Some(1));
         assert_eq!(model.drive_row(), None);
         assert_eq!(
-            model.row_meaning(1),
+            model.row_meaning(0),
             PickerRow::NewFile(PathBuf::from("Z:\\saves").join("ER0000.sl2"))
         );
+        assert_eq!(model.row_meaning(1), PickerRow::ParentDir);
         for (offset, expected) in (0..3).enumerate() {
             assert_eq!(
                 model.row_meaning(2 + offset),
@@ -1435,6 +1537,15 @@ mod tests {
         }
         assert_eq!(model.row_meaning(5), PickerRow::Empty);
         assert_eq!(model.visible_row_count(), 5);
+        // At a DRIVE ROOT there is no up row at all, so `[ new ]` is still 0 and entries follow it
+        // directly -- the pin is not "one above the up row", it is first, full stop.
+        let root = destination("Z:\\", 2);
+        assert_eq!(root.new_file_row(), Some(0));
+        assert_eq!(root.parent_row(), None);
+        assert_eq!(
+            root.row_meaning(1),
+            PickerRow::File(PathBuf::from("Z:\\").join("save0.sl2"))
+        );
     }
 
     /// REGRESSION: the per-row character info was read at `row - 1` while the row LABEL came from
@@ -1666,15 +1777,20 @@ mod tests {
             "the first entry must sit directly under the drive row"
         );
 
+        // Destination layout: `[ new ]` is PINNED at row 0, so the up row and the cycler each
+        // shift down by one and the entries start at 3.
         let dest = with_drives(destination("Z:\\saves", 2), &["C:\\", "Z:\\"]);
-        assert_eq!(dest.drive_row(), Some(1));
-        assert_eq!(dest.new_file_row(), Some(2));
-        assert_eq!(dest.row_meaning(1), PickerRow::DriveCycle);
-        assert_eq!(dest.row_file_characters(1), None);
+        assert_eq!(dest.new_file_row(), Some(0));
+        assert_eq!(dest.parent_row(), Some(1));
+        assert_eq!(dest.drive_row(), Some(2));
         assert_eq!(
-            dest.row_meaning(2),
+            dest.row_meaning(0),
             PickerRow::NewFile(PathBuf::from("Z:\\saves").join("ER0000.sl2"))
         );
+        assert_eq!(dest.row_meaning(1), PickerRow::ParentDir);
+        assert_eq!(dest.row_meaning(2), PickerRow::DriveCycle);
+        assert_eq!(dest.row_file_characters(0), None);
+        assert_eq!(dest.row_file_characters(2), None);
         assert_eq!(
             dest.row_meaning(3),
             PickerRow::File(PathBuf::from("Z:\\saves").join("save0.sl2"))
@@ -1823,13 +1939,21 @@ mod tests {
             "Z:\\home\\banon\\Roaming\\deep",
             0,
         );
-        assert_eq!(label_of(&model, PICKER_ROW_PARENT), "[..] Roaming");
+        let up = model.parent_row().expect("a nested folder has an up row");
+        assert_eq!(up, 0, "a load browse pins nothing above the up row");
+        assert_eq!(label_of(&model, up), "[..] Roaming");
         let long = model_with(
             PickerIntent::LoadSource,
             "Z:\\a-very-long-folder-name-indeed\\child",
             0,
         );
-        assert!(long.row_label_utf16(PICKER_ROW_PARENT).len() <= PICKER_ROW_NAME_UTF16_MAX);
+        let long_up = long.parent_row().expect("a nested folder has an up row");
+        assert!(long.row_label_utf16(long_up).len() <= PICKER_ROW_NAME_UTF16_MAX);
+        // Same row, one index lower, in a destination browse: the label is derived from
+        // `parent_row()` rather than a constant, so pinning `[ new ]` above it moved nothing else.
+        let dest = destination("Z:\\home\\banon\\Roaming\\deep", 0);
+        assert_eq!(dest.parent_row(), Some(1));
+        assert_eq!(label_of(&dest, 1), "[..] Roaming");
     }
 
     /// Rows beyond the listing must be reported as NOT visible, so the staging layer marks their
@@ -1844,7 +1968,7 @@ mod tests {
             assert_eq!(load.row_meaning(row), PickerRow::Empty);
             assert!(load.row_label_utf16(row).is_empty());
         }
-        // Destination, drive row, one file: up + drive + [ new ] + 1 entry = 4 visible rows.
+        // Destination, drive row, one file: [ new ] + up + drive + 1 entry = 4 visible rows.
         let dest = with_drives(destination("Z:\\saves", 1), &["C:\\", "Z:\\"]);
         assert_eq!(dest.visible_row_count(), 4);
         for row in dest.visible_row_count()..PICKER_ROW_COUNT {
@@ -1923,24 +2047,39 @@ mod tests {
         assert_eq!(model.row_meaning(9), PickerRow::Empty);
     }
 
+    /// THE DESTINATION CURSOR STARTS ON `[ new ]`, IN EVERY LAYOUT. Since the Save Game row press
+    /// opens this browser with no question in front of it, the row the cursor rests on is the
+    /// answer a user gets for pressing confirm twice without reading -- so it must be the row that
+    /// creates rather than the row that replaces. Checked with entries present and absent, with and
+    /// without a drive row, and at a drive root where there is no up row at all.
     #[test]
-    fn empty_destination_folder_still_lands_the_cursor_on_new_file() {
-        for (model, expected_row) in [
-            (destination("Z:\\saves", 0), 1),
-            // With the drive row present the `[ new ]` row moves down one, and the cursor must
-            // follow it rather than sticking to a hard-coded index.
-            (
-                with_drives(destination("Z:\\saves", 0), &["C:\\", "Z:\\"]),
-                2,
-            ),
+    fn a_destination_browse_always_starts_the_cursor_on_new_file() {
+        for model in [
+            destination("Z:\\saves", 0),
+            destination("Z:\\saves", 3),
+            with_drives(destination("Z:\\saves", 0), &["C:\\", "Z:\\"]),
+            with_drives(destination("Z:\\saves", 5), &["C:\\", "S:\\", "Z:\\"]),
+            with_drives(destination("Z:\\", 2), &["C:\\", "Z:\\"]),
+            destination("Z:\\", 0),
         ] {
             let mut model = model;
             model.cursor = model.first_selectable_row();
-            assert_eq!(model.cursor, expected_row);
-            assert_eq!(model.new_file_row(), Some(expected_row));
+            assert_eq!(
+                model.new_file_row(),
+                Some(0),
+                "`[ new ]` is pinned first in {:?}",
+                model.current_dir()
+            );
+            assert_eq!(
+                model.cursor,
+                0,
+                "the destination cursor must start on `[ new ]` in {:?}",
+                model.current_dir()
+            );
+            let expected = model.current_dir().join("ER0000.sl2");
             assert_eq!(
                 model.activate_cursor(),
-                PickerActivation::PickedNewFile(PathBuf::from("Z:\\saves").join("ER0000.sl2"))
+                PickerActivation::PickedNewFile(expected)
             );
         }
     }
@@ -1985,6 +2124,77 @@ mod tests {
         let label = model.row_label_utf16(row);
         assert!(!label.is_empty() && label.len() <= PICKER_ROW_NAME_UTF16_MAX);
         assert_eq!(String::from_utf16(&label).unwrap(), PICKER_NEW_FILE_LABEL);
+    }
+
+    /// EXACTLY ONE ROW IS `[CURRENT]`, and it is the row whose file the user is playing. With the
+    /// up-front "Overwrite your loaded save?" box gone, finding that row IS the overwrite-my-own-
+    /// save flow, so a marker on the wrong row (or on none) sends the user to the wrong file.
+    #[test]
+    fn only_the_loaded_saves_row_is_marked_current() {
+        let dir = "Z:\\saves";
+        let model = destination_loading(dir, 4, "Z:\\saves\\save2.sl2");
+        let marked: Vec<usize> = (0..PICKER_ROW_COUNT)
+            .filter(|&row| model.row_is_loaded_save(row))
+            .collect();
+        let base = model.entry_row_base();
+        assert_eq!(
+            marked,
+            vec![base + 2],
+            "only save2.sl2's row may be marked (entries start at row {base})"
+        );
+        assert_eq!(
+            row_label_file(&model, base + 2).as_deref(),
+            Some("save2.sl2"),
+            "the marked row must be the one whose LABEL names the loaded file"
+        );
+    }
+
+    /// The marker is a Windows path compare, so it must survive case differences -- `ER0000.SL2`
+    /// and `er0000.sl2` are one file there, and a case-sensitive compare would leave a user's own
+    /// save unmarked in the list they are being asked to find it in.
+    #[test]
+    fn the_current_marker_ignores_path_case() {
+        let model = destination_loading("Z:\\saves", 2, "z:\\SAVES\\SAVE1.SL2");
+        let row = model.entry_row_base() + 1;
+        assert_eq!(row_label_file(&model, row).as_deref(), Some("save1.sl2"));
+        assert!(model.row_is_loaded_save(row));
+    }
+
+    /// NOTHING is marked when the loaded save is not in the browsed folder, and NOTHING is ever
+    /// marked in a load browse -- there is no "current" there, and a marker would be a claim the
+    /// model cannot support.
+    #[test]
+    fn no_row_is_marked_current_without_a_matching_loaded_save() {
+        for model in [
+            destination("Z:\\saves", 4),
+            model_with(PickerIntent::LoadSource, "Z:\\saves", 4),
+        ] {
+            for row in 0..PICKER_ROW_COUNT {
+                assert!(
+                    !model.row_is_loaded_save(row),
+                    "row {row} was marked current in {:?}",
+                    model.intent
+                );
+            }
+        }
+    }
+
+    /// The marker never lands on a non-file row: `[ new ]` resolves to the loaded save's own leaf,
+    /// and in the loaded save's own folder that path IS the loaded save -- but `[ new ]` is an
+    /// ACTION row, not the file's row, and marking it would put `[CURRENT]` on two rows at once.
+    #[test]
+    fn the_new_file_row_is_never_marked_current_even_when_it_targets_the_loaded_save() {
+        let model = destination_loading("Z:\\saves", 2, "Z:\\saves\\ER0000.sl2");
+        let new_row = model.new_file_row().expect("destination pins [ new ]");
+        assert_eq!(
+            model.row_meaning(new_row),
+            PickerRow::NewFile(PathBuf::from("Z:\\saves").join("ER0000.sl2")),
+            "the row targets exactly the loaded save's path"
+        );
+        assert!(
+            !model.row_is_loaded_save(new_row),
+            "`[ new ]` is an action row; only a File row may be marked"
+        );
     }
 }
 

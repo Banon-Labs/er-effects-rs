@@ -249,7 +249,7 @@ unsafe fn system_quit_route_button_action_or_forward(
             SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
             let started = unsafe { system_quit_save_game_start_flow(dialog) };
             append_autoload_debug(format_args!(
-                "system-quit-save: Save Game native row selected {hook_name} action_alias=0x{action_obj:x} dialog=0x{dialog:x} cursor={cursor} {verdict_text}; opened confirm chain started={started} stage={}; suppressed native Quit Game/return-title action",
+                "system-quit-save: Save Game native row selected {hook_name} action_alias=0x{action_obj:x} dialog=0x{dialog:x} cursor={cursor} {verdict_text}; staged the destination list started={started} stage={}; suppressed native Quit Game/return-title action",
                 SAVE_FLOW_STAGE.load(Ordering::SeqCst)
             ));
             0
@@ -647,283 +647,80 @@ unsafe fn system_quit_build_static_label_component(
     label_ok && help_ok
 }
 
-const SYSTEM_QUIT_LOAD_PROFILE_LABEL_W: [u16; 13] = [
-    b'L' as u16,
-    b'o' as u16,
-    b'a' as u16,
-    b'd' as u16,
-    b' ' as u16,
-    b'P' as u16,
-    b'r' as u16,
-    b'o' as u16,
-    b'f' as u16,
-    b'i' as u16,
-    b'l' as u16,
-    b'e' as u16,
-    0,
-];
+/// Fixed capacity (UTF-16 units) of a System>Quit row label / line-help / dialog-prompt buffer.
+///
+/// `CS::MenuString` stores the RAW pointer it is given and reads to the first NUL, so a zero-padded
+/// fixed buffer is exactly as valid as an exact-length one -- and an over-long string fails at
+/// COMPILE time here instead of losing its tail at runtime. It replaced eight hand-expanded
+/// `[b'L' as u16, b'o' as u16, ...]` arrays whose lengths had to be counted by hand.
+const SYSTEM_QUIT_ROW_TEXT_CAPACITY: usize = 96;
 
-const SYSTEM_QUIT_LOAD_PROFILE_HELP_W: [u16; 37] = [
-    b'S' as u16,
-    b'e' as u16,
-    b'l' as u16,
-    b'e' as u16,
-    b'c' as u16,
-    b't' as u16,
-    b' ' as u16,
-    b'a' as u16,
-    b' ' as u16,
-    b's' as u16,
-    b't' as u16,
-    b'a' as u16,
-    b'g' as u16,
-    b'e' as u16,
-    b'd' as u16,
-    b' ' as u16,
-    b's' as u16,
-    b'a' as u16,
-    b'v' as u16,
-    b'e' as u16,
-    b' ' as u16,
-    b'p' as u16,
-    b'r' as u16,
-    b'o' as u16,
-    b'f' as u16,
-    b'i' as u16,
-    b'l' as u16,
-    b'e' as u16,
-    b' ' as u16,
-    b't' as u16,
-    b'o' as u16,
-    b' ' as u16,
-    b'l' as u16,
-    b'o' as u16,
-    b'a' as u16,
-    b'd' as u16,
-    0,
-];
+/// Widen an ASCII row string into a NUL-terminated UTF-16 buffer at compile time. Every result must
+/// live in a `const`/`static` with process lifetime: `CS::MenuString` keeps the pointer, not a copy.
+const fn system_quit_row_text(text: &[u8]) -> [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] {
+    let mut out = [0_u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY];
+    let mut idx = 0;
+    while idx < text.len() {
+        out[idx] = text[idx] as u16;
+        idx += 1;
+    }
+    out
+}
 
-const SYSTEM_QUIT_LOAD_SAVE_PROFILES_LABEL_W: [u16; 19] = [
-    b'L' as u16,
-    b'o' as u16,
-    b'a' as u16,
-    b'd' as u16,
-    b' ' as u16,
-    b'S' as u16,
-    b'a' as u16,
-    b'v' as u16,
-    b'e' as u16,
-    b' ' as u16,
-    b'P' as u16,
-    b'r' as u16,
-    b'o' as u16,
-    b'f' as u16,
-    b'i' as u16,
-    b'l' as u16,
-    b'e' as u16,
-    b's' as u16,
-    0,
-];
+// THE TWO CLONED ROW LABELS, AND WHY THESE WORDS (2026-07-31).
+//
+// They used to read "Load Profile" and "Load Save Profiles", which a reviewer could not tell apart:
+// "I'm not clear on the difference between Load Profile and Load Save Profiles. It looks like Load
+// Save Profiles will load a character profile and then you have access to that character's saves.
+// Does it make more sense to call this 'Load Character' or 'Load Character Profile'?"
+//
+// The guess was inverted -- it is the OTHER row that ends in a character list -- and that inversion
+// is the evidence the words were wrong, not just similar. So each row is now named after what it
+// takes as INPUT: a character out of the container already loaded, or a file off the disk.
+//
+// BOTH FIT, MEASURED RATHER THAN ASSUMED. The Quit-tab cell renders its label through
+// `02_040_optionsetting.gfx` sprite 129 -> `Text_0` -> sprite 96 -> `DefineEditText` char 95, whose
+// bounds are -40..7960 twips = 400px at a 24px `MenuFont_01`, single-line with wordwrap OFF -- an
+// overflow would CLIP, not wrap, so it would silently eat the tail.
+// `scripts/gfx_text_width.py --height-px 24 --box-px 400` sums that font's own advance table:
+// "Load Character" 144.5px, "Load Character from File" 234.6px, against the native "Return to
+// Desktop" at 172.8px which is known to render on this row. Nothing is near the edge, so no
+// placement matrix and no row width was touched. The line-help field on the same tab (char 87,
+// -40..22760 twips = 1140px, also 24px) has room to spare for the help strings below.
+const SYSTEM_QUIT_LOAD_PROFILE_LABEL_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
+    system_quit_row_text(b"Load Character");
 
-const SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_W: [u16; 50] = [
-    b'O' as u16,
-    b'p' as u16,
-    b'e' as u16,
-    b'n' as u16,
-    b' ' as u16,
-    b't' as u16,
-    b'h' as u16,
-    b'e' as u16,
-    b' ' as u16,
-    b's' as u16,
-    b't' as u16,
-    b'a' as u16,
-    b'g' as u16,
-    b'e' as u16,
-    b'd' as u16,
-    b' ' as u16,
-    b's' as u16,
-    b'a' as u16,
-    b'v' as u16,
-    b'e' as u16,
-    b' ' as u16,
-    b'f' as u16,
-    b'o' as u16,
-    b'l' as u16,
-    b'd' as u16,
-    b'e' as u16,
-    b'r' as u16,
-    b' ' as u16,
-    b't' as u16,
-    b'o' as u16,
-    b' ' as u16,
-    b'r' as u16,
-    b'e' as u16,
-    b'p' as u16,
-    b'l' as u16,
-    b'a' as u16,
-    b'c' as u16,
-    b'e' as u16,
-    b' ' as u16,
-    b'E' as u16,
-    b'R' as u16,
-    b'0' as u16,
-    b'0' as u16,
-    b'0' as u16,
-    b'0' as u16,
-    b'.' as u16,
-    b's' as u16,
-    b'l' as u16,
-    b'2' as u16,
-    0,
-];
+const SYSTEM_QUIT_LOAD_PROFILE_HELP_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
+    system_quit_row_text(b"Load another character from the save you are playing");
+
+const SYSTEM_QUIT_LOAD_SAVE_PROFILES_LABEL_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
+    system_quit_row_text(b"Load Character from File");
+
+const SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
+    system_quit_row_text(b"Browse for another save file and load a character from it (ER0000.sl2)");
 
 // Seamless Co-op variant of the row help above: same text but naming `ER0000.co2`, the container
 // ERSC actually reads/writes. Selected at row-build time so the row never advertises the save
 // flavor the active mode ignores (matches the picker's mode-locked filter; user directive
 // 2026-07-06).
-const SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_CO2_W: [u16; 50] = [
-    b'O' as u16,
-    b'p' as u16,
-    b'e' as u16,
-    b'n' as u16,
-    b' ' as u16,
-    b't' as u16,
-    b'h' as u16,
-    b'e' as u16,
-    b' ' as u16,
-    b's' as u16,
-    b't' as u16,
-    b'a' as u16,
-    b'g' as u16,
-    b'e' as u16,
-    b'd' as u16,
-    b' ' as u16,
-    b's' as u16,
-    b'a' as u16,
-    b'v' as u16,
-    b'e' as u16,
-    b' ' as u16,
-    b'f' as u16,
-    b'o' as u16,
-    b'l' as u16,
-    b'd' as u16,
-    b'e' as u16,
-    b'r' as u16,
-    b' ' as u16,
-    b't' as u16,
-    b'o' as u16,
-    b' ' as u16,
-    b'r' as u16,
-    b'e' as u16,
-    b'p' as u16,
-    b'l' as u16,
-    b'a' as u16,
-    b'c' as u16,
-    b'e' as u16,
-    b' ' as u16,
-    b'E' as u16,
-    b'R' as u16,
-    b'0' as u16,
-    b'0' as u16,
-    b'0' as u16,
-    b'0' as u16,
-    b'.' as u16,
-    b'c' as u16,
-    b'o' as u16,
-    b'2' as u16,
-    0,
-];
+const SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_CO2_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
+    system_quit_row_text(b"Browse for another save file and load a character from it (ER0000.co2)");
 
-const SYSTEM_QUIT_SAVE_GAME_LABEL_W: [u16; 10] = [
-    b'S' as u16,
-    b'a' as u16,
-    b'v' as u16,
-    b'e' as u16,
-    b' ' as u16,
-    b'G' as u16,
-    b'a' as u16,
-    b'm' as u16,
-    b'e' as u16,
-    0,
-];
-const SYSTEM_QUIT_SAVE_GAME_HELP_W: [u16; 36] = [
-    b'S' as u16,
-    b'a' as u16,
-    b'v' as u16,
-    b'e' as u16,
-    b' ' as u16,
-    b'a' as u16,
-    b'n' as u16,
-    b'd' as u16,
-    b' ' as u16,
-    b'r' as u16,
-    b'e' as u16,
-    b't' as u16,
-    b'u' as u16,
-    b'r' as u16,
-    b'n' as u16,
-    b' ' as u16,
-    b't' as u16,
-    b'o' as u16,
-    b' ' as u16,
-    b'p' as u16,
-    b'l' as u16,
-    b'a' as u16,
-    b'y' as u16,
-    b'i' as u16,
-    b'n' as u16,
-    b'g' as u16,
-    b' ' as u16,
-    b't' as u16,
-    b'h' as u16,
-    b'e' as u16,
-    b' ' as u16,
-    b'g' as u16,
-    b'a' as u16,
-    b'm' as u16,
-    b'e' as u16,
-    0,
-];
-const SYSTEM_QUIT_SAVE_GAME_DIALOG_W: [u16; 37] = [
-    b'S' as u16,
-    b'a' as u16,
-    b'v' as u16,
-    b'e' as u16,
-    b' ' as u16,
-    b'a' as u16,
-    b'n' as u16,
-    b'd' as u16,
-    b' ' as u16,
-    b'r' as u16,
-    b'e' as u16,
-    b't' as u16,
-    b'u' as u16,
-    b'r' as u16,
-    b'n' as u16,
-    b' ' as u16,
-    b't' as u16,
-    b'o' as u16,
-    b' ' as u16,
-    b'p' as u16,
-    b'l' as u16,
-    b'a' as u16,
-    b'y' as u16,
-    b'i' as u16,
-    b'n' as u16,
-    b'g' as u16,
-    b' ' as u16,
-    b't' as u16,
-    b'h' as u16,
-    b'e' as u16,
-    b' ' as u16,
-    b'g' as u16,
-    b'a' as u16,
-    b'm' as u16,
-    b'e' as u16,
-    b'?' as u16,
-    0,
-];
+const SYSTEM_QUIT_SAVE_GAME_LABEL_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
+    system_quit_row_text(b"Save Game");
+
+// The help says CHOOSE, because that is what the row now does: pressing it opens the destination
+// list rather than asking a question. Promising "Save and return to playing the game" would have
+// described the pre-2026-07-31 flow, where the row's first act was a yes/no box.
+const SYSTEM_QUIT_SAVE_GAME_HELP_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
+    system_quit_row_text(b"Choose where to save, then return to playing");
+
+// Native dialog id 110000's text. The product row press suppresses the native activation and opens
+// the destination list, so this substitution should never be reached; it stays because a build
+// where the suppression did not take would otherwise show the VANILLA quit prompt on a row labelled
+// Save Game, which is worse than a stale-but-harmless sentence.
+const SYSTEM_QUIT_SAVE_GAME_DIALOG_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
+    system_quit_row_text(b"Save and return to playing the game?");
 
 unsafe fn wide_equals_ascii(ptr: usize, ascii: &[u8]) -> bool {
     if ptr == 0 || ptr == TITLE_OWNER_SCAN_START_ADDRESS || ascii.is_empty() {
@@ -1184,16 +981,26 @@ pub(crate) unsafe fn system_quit_save_game_close_menus(
     closed_option || closed_top
 }
 
-/// Enter the Save Game confirm chain from the row press (save-game-flow WP2).
+/// Enter the Save Game flow from the row press: STRAIGHT TO THE DESTINATION LIST.
 ///
-/// Captures the System/Quit dialog the whole flow is anchored on, then submits Box1 INLINE:
-/// this runs from the row-action hook, i.e. the same menu-thread ownership context the native
-/// quit confirm submits from. Later boxes go through `SAVE_FLOW_SUBMIT_BOX_PENDING` because
-/// the tick that decides them is on the game task, not the menu pump.
+/// Captures the System/Quit dialog the whole flow is anchored on, then hands the browser open to
+/// the menu pump via `SAVE_DEST_OPEN_PICKER_PENDING` and parks in stage 3. Nothing is asked here
+/// and nothing is written here.
 ///
-/// On a build where the MessageBoxBuilder recipe failed verification the chain is unavailable;
-/// rather than leave a dead button, Save Game degrades to the WP1 behavior (close-then-fire
-/// straight to the commit) and says so once.
+/// WHY THE PUMP AND NOT AN INLINE OPEN. Opening the destination browser stages ProfileSummary row
+/// records and submits an `05_010` MenuJob; `system_quit_menu_window_run_post` is the context that
+/// was runtime-proven to own that submit (2026-07-29, three consecutive commits), and it is the
+/// same hand-off the OS surface needs in order to block inside comdlg32 off the row-action stack.
+/// The row press therefore stages the request rather than performing it, and stage 3's
+/// `SAVE_DEST_PICKER_OPEN_TIMEOUT_TICKS` bounds a pump that never picks it up.
+///
+/// THERE IS NO "DEGRADE TO AN IMMEDIATE COMMIT" PATH ANY MORE, and its removal is a safety fix
+/// rather than a simplification. It existed because the old flow could not ask its first question
+/// without the MessageBoxBuilder recipe, so a build that failed the prologue check wrote to the
+/// loaded save with NO confirm at all. Opening a list needs no message box, so a broken recipe now
+/// costs only the overwrite confirm -- and an unconfirmable overwrite is REFUSED at the pick
+/// (`save_dest_handle_picked_target`), never performed silently. A free destination name still
+/// commits, because it never needed a confirm in the first place.
 unsafe fn system_quit_save_game_start_flow(dialog: usize) -> bool {
     if dialog < 0x10000 || dialog == TITLE_OWNER_SCAN_START_ADDRESS {
         append_autoload_debug(format_args!(
@@ -1207,7 +1014,7 @@ unsafe fn system_quit_save_game_start_flow(dialog: usize) -> bool {
     save_dest_reset("save game row press");
     SAVE_FLOW_DIALOG.store(dialog, Ordering::SeqCst);
     SAVE_FLOW_STAGE_TICKS.store(0, Ordering::SeqCst);
-    // The confirm boxes are only answerable if the MessageBoxDialog BUILDER hook is live --
+    // The overwrite confirm is only answerable if the MessageBoxDialog BUILDER hook is live --
     // that detour is what captures the dialog pointer the stage machine polls. It is normally
     // installed at boot (`online_disable_enabled()` path in the game task), but make sure:
     // this call is idempotent, and the row press is the menu thread, i.e. the one context in
@@ -1224,28 +1031,23 @@ unsafe fn system_quit_save_game_start_flow(dialog: usize) -> bool {
     // bug"; without it the two are indistinguishable from telemetry alone.
     let press = SAVE_FLOW_ROW_PRESS_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
     append_autoload_debug(format_args!(
-        "save-flow: row press #{press} dialog=0x{dialog:x} recipe_ok={} builder_capture_live={capture_live} emit_observer_installed={}",
+        "save-flow: row press #{press} dialog=0x{dialog:x} -> opening the destination list (no confirm is asked here); overwrite_confirm_available={} builder_capture_live={capture_live} emit_observer_installed={}",
         save_flow_box_recipe_available(),
         MENU_JOB_EMIT_RESULT_INSTALLED.load(Ordering::SeqCst)
     ));
     if !save_flow_box_recipe_available() || !capture_live {
+        // NOT fatal to the press, and deliberately so: the list needs no message box. Only a pick
+        // that would clobber an existing file needs one, and that pick is refused rather than
+        // written blind. Say it once here so a run can attribute a later refusal.
         append_autoload_debug(format_args!(
-            "save-flow: confirm chain unavailable on this build (recipe_ok={} builder_capture_live={capture_live}) -- Save Game degrades to the immediate close-then-fire commit",
+            "save-flow: the overwrite confirm cannot be built on this build (recipe_ok={} builder_capture_live={capture_live}) -- the destination list still opens; picking an EXISTING file will be refused, picking a free name still commits",
             save_flow_box_recipe_available()
         ));
-        return unsafe { system_quit_save_game_close_menus(dialog, "row_action_no_recipe", true) };
     }
-    SAVE_FLOW_STAGE.store(SAVE_FLOW_STAGE_BOX1_WAIT, Ordering::SeqCst);
-    if unsafe { save_flow_submit_box(SAVE_FLOW_BOX_CONFIRM_SAVE) } {
-        return true;
-    }
-    append_autoload_debug(format_args!(
-        "save-flow: Box1 submit failed at the row press -- aborting back to the world without writing"
-    ));
-    SAVE_FLOW_ABORT_COUNT.fetch_add(1, Ordering::SeqCst);
-    save_flow_box_clear();
-    SAVE_FLOW_STAGE.store(SAVE_FLOW_STAGE_IDLE, Ordering::SeqCst);
-    false
+    // Menu-pump owns the open (see this function's docs). Stage 3 waits for it and bounds it.
+    SAVE_DEST_OPEN_PICKER_PENDING.store(1, Ordering::SeqCst);
+    SAVE_FLOW_STAGE.store(SAVE_FLOW_STAGE_DEST_BROWSE, Ordering::SeqCst);
+    true
 }
 
 pub(crate) unsafe fn system_quit_save_game_deferred_close_tick() {

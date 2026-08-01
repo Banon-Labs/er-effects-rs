@@ -54,8 +54,16 @@ pub struct SavePickerHost {
     pub remember_picker_dir: fn(&Path),
 
     // --- OS common-file-dialog mechanism ----------------------------------------------
-    /// The GAME's main top-level window, used as the dialog's `hwndOwner` so the modal
-    /// disables the right window (`experiments::input_block::game_main_window`). 0 = none.
+    /// The GAME's main top-level window (`experiments::input_block::game_main_window`).
+    /// 0 = none.
+    ///
+    /// This is the dialog's FALLBACK `hwndOwner`, not its usual one. Since 2026-07-31 a
+    /// System>Quit open owns the dialog to the DIM COVER instead, because a window is always
+    /// above the window that owns it and that is the only way to make "the picker is in front
+    /// of the blur" structural rather than a race with comdlg32's window creation. The cover
+    /// is in turn an owned popup of THIS window, so the chain is game < cover < dialog. The
+    /// game window is still the owner wherever no cover is up -- the missing-save boot arm,
+    /// which raises none, and an arm whose cover did not come up in time.
     pub game_main_window: fn() -> usize,
     /// H4 gate: refuse to open a dialog while the core `CreateFileW` detour is still
     /// settling, because installing a MinHook suspends every thread and a thread parked in

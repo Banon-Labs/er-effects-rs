@@ -33,8 +33,20 @@
 //! (bottom-right, `tx = +4780, ty = 5600`) measures `cols = 2, rows = 2`: both axes are
 //! live, all four cells are inside the hit test, and `row * cols + col` maps them onto
 //! property indices 0..3 in the order the rows are appended -- Save Game, Return to
-//! Desktop, Load Profile, Load Save Profiles. The placement matrices are untouched, so
-//! nothing moves on screen; only the names change.
+//! Desktop, Load Character, Load Character from File. The placement matrices are
+//! untouched, so nothing moves on screen; only the names change.
+//!
+//! # The label field is 400px, and the labels were measured against it
+//!
+//! Each cell (`char 129`) shows its label through `Text_0` -> sprite 96 -> `DefineEditText`
+//! char 95: bounds -40..7960 twips = **400px** wide, `MenuFont_01` at 480 twips = **24px**,
+//! center-aligned, and crucially `wordwrap = false, multiline = false, autosize = false` --
+//! so a label wider than the field CLIPS rather than wrapping, losing its tail silently.
+//! `scripts/gfx_text_width.py --height-px 24 --box-px 400` sums that font's own advance
+//! table: "Save Game" 103.1px, "Return to Desktop" 172.8px, "Load Character" 144.5px,
+//! "Load Character from File" 234.6px. Any future relabel goes through that tool before it
+//! goes in; widening the field or moving a matrix is not the answer, because these
+//! placements are what makes the 2x2 measure work.
 
 use crate::edit::{EditError, EditOp, TagEdit, apply_edits};
 use crate::title_05_000::fnv1a64;

@@ -21,16 +21,43 @@
 //
 // Z-ORDER (the requirement that is easiest to get backwards). We must sit ABOVE the game and BELOW
 // the dialog. That is why this window is NOT `WS_EX_TOPMOST`: the topmost band beats every ordinary
-// window, so a topmost dim would cover the very dialog the user has to click. Instead we raise to
-// `HWND_TOP` ONCE at arm time -- before comdlg32 creates its window -- and never touch the z-order
-// again. The dialog is created after us and activates, so Windows/Wine puts it above us on its own,
-// and with nothing else running (the game is frozen) nothing can get between. `SAVE_PICKER_DIM_Z_*`
-// samples the resulting order every frame so the claim is checkable from telemetry instead of from
-// a screenshot.
+// window, so a topmost dim would cover the very dialog the user has to click.
+//
+// THE ORDERING IS NOW OWNERSHIP, NOT TIMING (2026-07-31, user-reported: "the file picker must be on
+// top of the blur", and "the blur must be attached to Elden Ring so I can't move it
+// independently"). The previous shape raised to `HWND_TOP` once and relied on comdlg32's window
+// being created AFTER that raise. That claim was never enforced by anything: `arm` published a
+// generation and returned immediately, the caller went straight into `GetOpenFileNameW`, and the
+// raise was issued by the OVERLAY thread up to a whole frame period (33 ms) later -- comfortably
+// long enough for the dialog to already exist, at which point the raise puts the cover ON TOP OF
+// the dialog. Two changes replace that race with window-manager invariants:
+//
+//  1. THE COVER IS AN OWNED POPUP OF THE ER WINDOW (`attach_to_game`). An owned window is always
+//     above its owner, so the cover can no longer fall behind the game whatever the z-order does;
+//     and Wine maps the owner onto the native transient/parent relation (X11 `WM_TRANSIENT_FOR`,
+//     Wayland `xdg_toplevel` parent), which is what tells a compositor this window belongs to the
+//     game rather than being something to drag around on its own.
+//  2. THE DIALOG IS OWNED BY THE COVER (`os_dialog_owner`), so the full chain is
+//     game < cover < dialog and no raise of ours can get in front of comdlg32.
+//
+// NOT `WS_CHILD`, which would be the strongest "attached" of all -- genuinely clipped to and moved
+// with the parent. Two reasons it is the wrong tool here. `UpdateLayeredWindow` wants a TOP-LEVEL
+// layered window; layered CHILD windows are a much later and much thinner platform feature, and
+// this runs on Wine's reimplementation, not on Windows. And a GDI child window does not composite
+// over a D3D12 swapchain -- the parent presents straight past it. An owned popup keeps its own
+// surface, which is the thing that actually has to work, and still gets the attachment.
+//
+// `arm` now BLOCKS on an atomic handshake until the overlay thread reports the cover up at the
+// game's geometry, so "the cover exists and is positioned before comdlg32 is called" is true by
+// construction rather than by hope -- which also matters because comdlg32 centres the dialog on its
+// owner, and centring on a not-yet-positioned 1x1 window would drop the picker in the desktop's
+// top-left corner. `SAVE_PICKER_DIM_Z_*` still samples the resulting order every frame so the claim
+// stays checkable from telemetry instead of from a screenshot.
 //
 // The window is `WS_EX_NOACTIVATE | WS_EX_TRANSPARENT`, so it never takes focus and never eats a
 // click, and its class name starts with `ErEffects` so `game_main_window`'s finder keeps skipping
-// it (that filter is why the OS dialog gets the GAME window as `hwndOwner` and not one of ours).
+// it -- which is what keeps the OWNER of the cover, and the input-drive target, the real game
+// window even though the dialog's own owner is now the cover.
 
 /// Everything that owns the dim window lives in its own module rather than in the flat
 /// `startup_hooks` namespace: this file needs ~30 GDI/window imports and that namespace is built by
@@ -39,6 +66,7 @@
 pub(crate) mod picker_dim {
     use std::ffi::c_void;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Mutex, OnceLock, mpsc};
     use std::time::{Duration, Instant};
 
     use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
@@ -49,19 +77,24 @@ pub(crate) mod picker_dim {
     };
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DispatchMessageW, GW_HWNDNEXT, GetForegroundWindow,
-        GetTopWindow, GetWindow, GetWindowRect, HWND_TOP, MSG, PM_REMOVE, PeekMessageW,
-        RegisterClassW, SW_HIDE, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_SHOWWINDOW, SetWindowPos,
-        ShowWindow, TranslateMessage, ULW_ALPHA, UPDATELAYEREDWINDOWINFO, UpdateLayeredWindow,
-        UpdateLayeredWindowIndirect, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-        WS_EX_TRANSPARENT, WS_POPUP,
+        CreateWindowExW, DefWindowProcW, DispatchMessageW, GWLP_HWNDPARENT, GW_HWNDNEXT,
+        GetForegroundWindow, GetTopWindow, GetWindow, GetWindowLongPtrW, GetWindowRect, HWND_TOP,
+        MSG, PM_REMOVE, PeekMessageW, RegisterClassW, SW_HIDE, SWP_NOACTIVATE, SWP_NOOWNERZORDER,
+        SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage,
+        ULW_ALPHA, UPDATELAYEREDWINDOWINFO, UpdateLayeredWindow, UpdateLayeredWindowIndirect,
+        WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP,
     };
     use windows::core::w;
 
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_ALIVE_MS;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_ARMED;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_ARM_COUNT;
+    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_ARM_WAIT_MS;
+    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_ARM_WAIT_TIMEOUTS;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_DISARM_COUNT;
+    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_OWNER_READBACK;
+    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_OWNER_SET;
+    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_REANCHOR_COUNT;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_FOREIGN_FG_HWND;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_FRAMES;
     pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_FULL_PUSHES;
@@ -90,6 +123,19 @@ pub(crate) mod picker_dim {
     /// Seconds for one full breath of the indicator.
     const PULSE_PERIOD_SECS: f32 = 1.6;
 
+    /// One blocking slice of the arm handshake, and how many of them [`arm`] will sit through
+    /// before giving up and letting the dialog open with no cover to own it.
+    ///
+    /// A BOUNDED COUNT OF CHANNEL RECEIVES, not a wall-clock deadline and emphatically not a spin.
+    /// The arm returns the instant the overlay thread acknowledges -- one frame period plus the
+    /// full-screen DIB fill, in the normal case -- because each slice is a `recv_timeout` that the
+    /// acknowledgement wakes immediately. The count exists so a wedged or never-started overlay
+    /// thread costs a bounded pause and a `SAVE_PICKER_DIM_ARM_WAIT_TIMEOUTS` bump instead of
+    /// refusing to open the user's picker at all: a missing cover is a cosmetic loss, a dialog that
+    /// never appears is not.
+    const ARM_COVER_SLICE: Duration = Duration::from_millis(10);
+    const ARM_COVER_READY_SLICES: usize = 25;
+
     /// Teardown reasons stored in `SAVE_PICKER_DIM_TEARDOWN_REASON`.
     pub(crate) const TEARDOWN_DIALOG_RETURNED: usize = 1;
     pub(crate) const TEARDOWN_ARM_FAILED: usize = 2;
@@ -106,6 +152,39 @@ pub(crate) mod picker_dim {
     /// Bumped on every arm. The overlay thread compares it to the value it last acted on, so a
     /// disarm/re-arm pair that both land inside one frame period cannot be missed as "still armed".
     static DIM_GENERATION: AtomicUsize = AtomicUsize::new(0);
+
+    /// The generation the overlay thread has finished SHOWING: window owned by the game, positioned
+    /// over its rect, raised, and carrying a pushed layer. The arming thread waits on this.
+    ///
+    /// This is the whole synchronisation between the two threads and it is deliberately ONE ATOMIC.
+    /// The arming thread is about to park inside comdlg32, so it must not take a lock the overlay
+    /// thread could need; and it must not make a cross-thread USER32 call either -- `SetWindowPos`
+    /// or `EnableWindow` into a window another thread owns blocks until that thread pumps, which
+    /// with the cover now OWNED BY the game window (whose thread is the arming thread) is a
+    /// deadlock shape. Reading an atomic can do neither.
+    static DIM_SHOWN_GENERATION: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+    /// The overlay thread's acknowledgement channel: it sends each generation it has finished
+    /// showing, and [`wait_for_cover`] receives.
+    ///
+    /// STATE IS THE ATOMIC ABOVE; THIS IS ONLY THE WAKEUP, and that split is what makes the
+    /// handshake correct rather than merely fast. A pure channel handshake loses an acknowledgement
+    /// that lands before the arming thread starts listening; a pure polled flag is a sleep wearing a
+    /// hat. Checking `DIM_SHOWN_GENERATION` BEFORE every receive gets both properties: the arm
+    /// cannot miss an early ack, and it never busy-waits for a late one.
+    ///
+    /// Both halves sit behind their own `Mutex` because `Sender`/`Receiver` are `Send` but not
+    /// `Sync`. Neither lock is ever held across the comdlg32 call -- `wait_for_cover` drops the
+    /// receiver guard before `arm` returns -- which is the rule the whole module is built around.
+    type AckChannel = (Mutex<mpsc::Sender<usize>>, Mutex<mpsc::Receiver<usize>>);
+    static DIM_ACK: OnceLock<AckChannel> = OnceLock::new();
+
+    fn dim_ack() -> &'static AckChannel {
+        DIM_ACK.get_or_init(|| {
+            let (tx, rx) = mpsc::channel();
+            (Mutex::new(tx), Mutex::new(rx))
+        })
+    }
 
     /// One-shot latch for the overlay thread.
     ///
@@ -178,20 +257,93 @@ pub(crate) mod picker_dim {
         DIM_H.store(height, Ordering::SeqCst);
         SAVE_PICKER_DIM_GAME_HWND.store(hwnd.0 as usize, Ordering::SeqCst);
         start_thread_once();
-        DIM_GENERATION.fetch_add(1, Ordering::SeqCst);
+        let generation = DIM_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
         SAVE_PICKER_DIM_ARM_COUNT.fetch_add(1, Ordering::SeqCst);
         SAVE_PICKER_DIM_ARMED.store(1, Ordering::SeqCst);
+        let guard = PickerDimGuard {
+            armed_at: Instant::now(),
+        };
+        // WAIT FOR THE COVER BEFORE RETURNING, because the caller's very next act is to block
+        // inside comdlg32 -- and comdlg32 both stacks the dialog against its owner and CENTRES it
+        // on that owner. Returning early is what left the two unordered.
+        let ready = wait_for_cover(generation);
         super::append_autoload_debug(format_args!(
-            "picker-dim: ARMED for {label} over the ER window hwnd=0x{:x} at {},{} {}x{} alpha={DIM_ALPHA}/255 -- the game thread is about to block in comdlg32 and will render nothing until it returns",
+            "picker-dim: ARMED for {label} over the ER window hwnd=0x{:x} at {},{} {}x{} alpha={DIM_ALPHA}/255 gen={generation} cover_ready={ready} after={}ms (owner_set={} owner_readback=0x{:x}) -- the game thread is about to block in comdlg32 and will render nothing until it returns",
             hwnd.0 as usize,
             rect.left,
             rect.top,
             width,
-            height
+            height,
+            SAVE_PICKER_DIM_ARM_WAIT_MS.load(Ordering::SeqCst),
+            SAVE_PICKER_DIM_OWNER_SET.load(Ordering::SeqCst),
+            SAVE_PICKER_DIM_OWNER_READBACK.load(Ordering::SeqCst),
         ));
-        Some(PickerDimGuard {
-            armed_at: Instant::now(),
-        })
+        Some(guard)
+    }
+
+    /// Block until the overlay thread acknowledges `generation`, or until the deadline. `true` when
+    /// the cover is genuinely up (owned, positioned over the game, layer pushed).
+    ///
+    /// The guard is constructed BEFORE this runs, so an early return or a panic here still disarms.
+    fn wait_for_cover(generation: usize) -> bool {
+        let started = Instant::now();
+        let record = |started: &Instant| {
+            SAVE_PICKER_DIM_ARM_WAIT_MS.store(
+                started.elapsed().as_millis().min(usize::MAX as u128) as usize,
+                Ordering::SeqCst,
+            );
+        };
+        // A poisoned receiver means some earlier arm panicked mid-handshake. Degrade to "no cover
+        // to own the dialog to" rather than refusing to open the user's picker.
+        let Ok(acks) = dim_ack().1.lock() else {
+            record(&started);
+            return false;
+        };
+        for _ in 0..ARM_COVER_READY_SLICES {
+            if DIM_SHOWN_GENERATION.load(Ordering::SeqCst) == generation {
+                record(&started);
+                return true;
+            }
+            // A re-arm landed while we were waiting: what we are waiting for can no longer arrive,
+            // and the newer arm owns the handshake now.
+            if DIM_GENERATION.load(Ordering::SeqCst) != generation {
+                record(&started);
+                return false;
+            }
+            // Blocks until the overlay thread acknowledges a generation or the slice expires. The
+            // VALUE is ignored on purpose -- it is a wakeup, and the loop re-reads the authoritative
+            // atomic above, so a stale ack from a previous arm costs one extra iteration and cannot
+            // be mistaken for this one.
+            let _ = acks.recv_timeout(ARM_COVER_SLICE);
+        }
+        record(&started);
+        SAVE_PICKER_DIM_ARM_WAIT_TIMEOUTS.fetch_add(1, Ordering::SeqCst);
+        super::append_autoload_debug(format_args!(
+            "picker-dim: the cover did not come up within {} slices of {}ms for gen={generation} (stage={}, selftest={}) -- opening the dialog anyway, owned to the GAME window, so the stacking for this open is a race rather than a guarantee",
+            ARM_COVER_READY_SLICES,
+            ARM_COVER_SLICE.as_millis(),
+            SAVE_PICKER_DIM_STAGE.load(Ordering::SeqCst),
+            SAVE_PICKER_DIM_SELFTEST.load(Ordering::SeqCst),
+        ));
+        false
+    }
+
+    /// The cover's window when it is ACTUALLY UP for the current arm -- the handle a blocking OS
+    /// dialog should take as its `hwndOwner`, because an owned window is always above its owner.
+    ///
+    /// Null when there is no cover to own the dialog to: never armed (the missing-save boot arm
+    /// passes `PickerDim::None` and raises none), the overlay thread never got a window up, or this
+    /// arm's handshake timed out. The dialog then falls back to the ER window exactly as before --
+    /// a weaker guarantee, but the alternative is centring comdlg32 on a 1x1 window at the origin.
+    pub(crate) fn armed_cover_hwnd() -> HWND {
+        let null = HWND(std::ptr::null_mut());
+        if SAVE_PICKER_DIM_ARMED.load(Ordering::SeqCst) == 0 {
+            return null;
+        }
+        if DIM_SHOWN_GENERATION.load(Ordering::SeqCst) != DIM_GENERATION.load(Ordering::SeqCst) {
+            return null;
+        }
+        HWND(SAVE_PICKER_DIM_HWND.load(Ordering::SeqCst) as *mut c_void)
     }
 
     /// Clear the armed latch. Idempotent, and safe from any thread: the overlay thread notices on its
@@ -348,6 +500,87 @@ pub(crate) mod picker_dim {
             (GOLD.2 * scale).round().clamp(0.0, 255.0) as u8,
             alpha.round().clamp(0.0, 255.0) as u8,
         )
+    }
+
+    /// Make the cover an OWNED POPUP of the ER window, and PROVE it took.
+    ///
+    /// For a `WS_POPUP`, `GWLP_HWNDPARENT` sets the OWNER, not a parent -- the window keeps its own
+    /// top-level surface (which `UpdateLayeredWindow` needs) and gains two relations we want:
+    /// the window manager keeps an owned window above its owner, and Wine translates the owner into
+    /// the native transient/parent relation a compositor uses to treat one window as belonging to
+    /// another rather than as a free-floating application window the user may drag away.
+    ///
+    /// Called from the OVERLAY thread on the OVERLAY's own window, while that window is still
+    /// hidden. Both halves matter: a same-thread `SetWindowLongPtrW` cannot block the game thread
+    /// that is about to park in comdlg32, and Wine reads the owner when it maps the surface, so
+    /// setting it before the first show is what gets the relation onto the native window.
+    ///
+    /// `SetWindowLongPtrW` returns the PREVIOUS value, and `0` means both "there was no owner" and
+    /// "the call failed" -- so the result is established by READING THE OWNER BACK, never from the
+    /// return. Idempotent: a no-op once the owner already matches.
+    fn attach_to_game(hwnd: HWND, game: HWND) {
+        // A window that owns ITSELF is a cycle in the z-order graph, and the cheapest place to make
+        // that impossible is here. It should already be impossible -- `game_main_window` skips every
+        // class beginning with `ErEffects`, which is exactly why this window's class is named that
+        // way -- but "should already be" is what that filter said before it was the only thing
+        // standing between us and picking our own overlay as the game window (runtime-proven
+        // 2026-07-17), and the cost of the check is one comparison.
+        if game.0.is_null() || game == hwnd {
+            return;
+        }
+        let current = unsafe { GetWindowLongPtrW(hwnd, GWLP_HWNDPARENT) };
+        if current == game.0 as isize {
+            SAVE_PICKER_DIM_OWNER_SET.store(1, Ordering::SeqCst);
+            SAVE_PICKER_DIM_OWNER_READBACK.store(game.0 as usize, Ordering::SeqCst);
+            return;
+        }
+        let _previous = unsafe { SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, game.0 as isize) };
+        let readback = unsafe { GetWindowLongPtrW(hwnd, GWLP_HWNDPARENT) };
+        SAVE_PICKER_DIM_OWNER_READBACK.store(readback as usize, Ordering::SeqCst);
+        let took = readback == game.0 as isize;
+        SAVE_PICKER_DIM_OWNER_SET.store(if took { 1 } else { 2 }, Ordering::SeqCst);
+        super::append_autoload_debug(format_args!(
+            "picker-dim: {} the cover hwnd=0x{:x} to the ER window hwnd=0x{:x} as an owned popup (read back 0x{readback:x}) -- an owned window is always above its owner, and Wine maps the owner onto the compositor's transient/parent relation",
+            if took { "ATTACHED" } else { "FAILED to attach" },
+            hwnd.0 as usize,
+            game.0 as usize,
+        ));
+    }
+
+    /// Re-read the ER window's rect into the published geometry, so the cover tracks the game
+    /// rather than a snapshot taken when the dialog was armed.
+    ///
+    /// A no-op when the game window is unknown or its rect is unreadable/empty: the arm-time values
+    /// are then still the best answer available, and blanking them would take the cover down
+    /// mid-dialog over a transient read failure.
+    fn refresh_geometry_from_game() {
+        let game = HWND(SAVE_PICKER_DIM_GAME_HWND.load(Ordering::SeqCst) as *mut c_void);
+        if game.0.is_null() {
+            return;
+        }
+        let mut rect = RECT::default();
+        if unsafe { GetWindowRect(game, &mut rect) }.is_err() {
+            return;
+        }
+        let width = (rect.right - rect.left).max(0) as usize;
+        let height = (rect.bottom - rect.top).max(0) as usize;
+        if width == 0 || height == 0 {
+            return;
+        }
+        DIM_X.store(rect.left as isize as usize, Ordering::SeqCst);
+        DIM_Y.store(rect.top as isize as usize, Ordering::SeqCst);
+        DIM_W.store(width, Ordering::SeqCst);
+        DIM_H.store(height, Ordering::SeqCst);
+    }
+
+    /// Whether the cover has drifted off the rect it is supposed to be pinned to.
+    ///
+    /// Split out and kept free of Windows types so the snap-back condition is checkable by a unit
+    /// test: the interesting cases are "moved by a compositor" (snap back) and "already exactly
+    /// there" (do nothing, because re-issuing `SetWindowPos` every frame is how a cover starts to
+    /// flicker).
+    fn cover_drifted(current: (i32, i32, i32, i32), target: (i32, i32, i32, i32)) -> bool {
+        current != target
     }
 
     /// Record the furthest bring-up stage reached. A HIGH-WATER mark rather than a plain store: the
@@ -623,6 +856,13 @@ pub(crate) mod picker_dim {
                 continue;
             }
 
+            // FOLLOW THE GAME, don't trust the arm-time snapshot. The user's report is that the
+            // cover can be dragged away and "the game stays in place", so the target rect has to be
+            // re-read from the ER window every frame rather than frozen at arm: that way a cover
+            // the compositor moved is measurably off-target and gets snapped back below, and a game
+            // window that moved takes its cover with it. Reading another thread's window rect does
+            // not block on that thread, which matters because the game's is parked in comdlg32.
+            refresh_geometry_from_game();
             let width = DIM_W.load(Ordering::SeqCst);
             let height = DIM_H.load(Ordering::SeqCst);
             let x = DIM_X.load(Ordering::SeqCst) as isize as i32;
@@ -656,8 +896,17 @@ pub(crate) mod picker_dim {
             };
 
             if !shown || generation != acted_generation {
-                // ONE z-order raise, and only here: before comdlg32's window exists. Re-raising per
-                // frame would jump us back above the dialog the moment it opened.
+                // OWN FIRST, THEN SHOW. Wine reads the owner when it maps the surface, so the
+                // attachment has to be in place before the window is made visible or the native
+                // transient/parent relation is never established for this show.
+                attach_to_game(
+                    hwnd,
+                    HWND(SAVE_PICKER_DIM_GAME_HWND.load(Ordering::SeqCst) as *mut c_void),
+                );
+                // ONE z-order raise, and only here. `arm` blocks until this frame acknowledges, so
+                // this genuinely does run before comdlg32's window exists -- which it did NOT
+                // before the handshake, and re-raising per frame would in any case jump us back
+                // above the dialog the moment it opened.
                 let _ = unsafe {
                     SetWindowPos(
                         hwnd,
@@ -673,6 +922,33 @@ pub(crate) mod picker_dim {
                 full_push = true;
                 shown_at = Instant::now();
                 acted_generation = generation;
+            } else {
+                // PIN IT TO THE GAME. Ownership is what a window manager is supposed to honour, but
+                // a Wayland compositor with a move-modifier can still drag any toplevel, and the
+                // user reported doing exactly that. Snap back whenever our own rect has drifted off
+                // the ER window's -- with SWP_NOZORDER, so a correction can never lift the cover
+                // back above the dialog, and only when it HAS drifted, because re-issuing
+                // `SetWindowPos` every frame is how a cover starts to flicker.
+                let mut own = RECT::default();
+                if unsafe { GetWindowRect(hwnd, &mut own) }.is_ok()
+                    && cover_drifted(
+                        (own.left, own.top, own.right - own.left, own.bottom - own.top),
+                        (x, y, width as i32, height as i32),
+                    )
+                {
+                    SAVE_PICKER_DIM_REANCHOR_COUNT.fetch_add(1, Ordering::SeqCst);
+                    let _ = unsafe {
+                        SetWindowPos(
+                            hwnd,
+                            None,
+                            x,
+                            y,
+                            width as i32,
+                            height as i32,
+                            SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER,
+                        )
+                    };
+                }
             }
 
             let phase = shown_at.elapsed().as_secs_f32() / PULSE_PERIOD_SECS;
@@ -757,6 +1033,21 @@ pub(crate) mod picker_dim {
                 hwnd,
                 HWND(SAVE_PICKER_DIM_GAME_HWND.load(Ordering::SeqCst) as *mut c_void),
             );
+            // ACK THE ARM. Published only here -- AFTER the window is owned, positioned, raised and
+            // carrying a pushed layer -- because that is exactly the state `arm` is waiting to be
+            // able to promise comdlg32: an owner that already exists at the game's geometry.
+            // Published whether or not the push succeeded: a cover that cannot draw is a cosmetic
+            // failure already counted by `_update_fails`, and making the arm sit through its whole
+            // slice budget over it would delay the user's dialog for nothing.
+            //
+            // The atomic is the state and the send is only the wakeup, so the send is skipped once
+            // this generation is already published -- otherwise every frame of a 17-second dialog
+            // would queue an ack nobody reads.
+            if DIM_SHOWN_GENERATION.swap(acted_generation, Ordering::SeqCst) != acted_generation
+                && let Ok(tx) = dim_ack().0.lock()
+            {
+                let _ = tx.send(acted_generation);
+            }
 
             let _ = pace_rx.recv_timeout(FRAME_PERIOD);
         }
@@ -857,6 +1148,30 @@ pub(crate) mod picker_dim {
             assert!(!z_order_violates(2, usize::MAX, usize::MAX));
         }
 
+        /// The snap-back must fire when the cover has been moved off the game and must NOT fire
+        /// when it is already exactly there. Both halves are load-bearing: without the first the
+        /// user can drag the blur away from a game that stays put (reported 2026-07-31), and
+        /// without the second every frame re-issues a `SetWindowPos` for nothing, which is how a
+        /// layered cover starts to flicker.
+        #[test]
+        fn the_cover_snaps_back_only_when_it_has_actually_drifted() {
+            let target = (100, 200, 1920, 1080);
+            assert!(
+                !cover_drifted(target, target),
+                "a cover already on the game's rect must be left alone"
+            );
+            assert!(
+                cover_drifted((140, 260, 1920, 1080), target),
+                "a cover the compositor dragged away must be pulled back"
+            );
+            assert!(
+                cover_drifted((100, 200, 1280, 720), target),
+                "a cover that no longer covers the whole game window is also off-target"
+            );
+            // One pixel is still drift: a partially-uncovered edge is exactly the seam a user sees.
+            assert!(cover_drifted((101, 200, 1920, 1080), target));
+        }
+
         /// The indicator box must sit inside the surface -- clamping it wrong would index past the
         /// DIB and the failure would be a crash in the middle of a user's save picker.
         #[test]
@@ -872,5 +1187,6 @@ pub(crate) mod picker_dim {
 }
 
 pub(crate) use picker_dim::{
-    PickerDimGuard, arm as picker_dim_arm, install as install_picker_dim_overlay,
+    PickerDimGuard, arm as picker_dim_arm, armed_cover_hwnd as picker_dim_armed_cover_hwnd,
+    install as install_picker_dim_overlay,
 };

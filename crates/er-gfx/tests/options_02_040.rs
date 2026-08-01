@@ -120,7 +120,9 @@ fn the_derived_movie_measures_a_two_by_two_grid() {
     );
     assert_eq!(cols * rows, 4, "all four cells must be inside the hit test");
     // Item index order must match the order the DLL appends the property rows:
-    // 0 Save Game, 1 Return to Desktop, 2 Load Profile, 3 Load Save Profiles.
+    // 0 Save Game, 1 Return to Desktop, 2 Load Character, 3 Load Character from File.
+    // (Rows 2 and 3 were "Load Profile" / "Load Save Profiles" before 2026-07-31; the ORDER is
+    // what this test pins, and the relabel did not move anything.)
     for (index, cell) in QUIT4_GRID_CELL_NAMES.iter().enumerate() {
         let (row, col) = (index as u32 / cols, index as u32 % cols);
         assert_eq!(grid_item_index(row, col, cols), index as u32);

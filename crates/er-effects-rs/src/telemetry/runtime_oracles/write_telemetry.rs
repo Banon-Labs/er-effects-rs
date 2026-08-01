@@ -489,10 +489,19 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // whether the game task kept ticking while the menu pump was blocked, which nothing static can.
     // A `> 0` says the freeze saved the flow; a `0` with a dialog demonstrably open says the whole
     // frame stalled instead. `_savelike_opens` attributes shell browsing traffic that would
-    // otherwise pollute the save CreateFileW diagnostics, and `_owner_hwnd` must be non-zero AND
-    // logged as the game window, not `ErEffectsLoadingOverlay`.
+    // otherwise pollute the save CreateFileW diagnostics.
+    //
+    // `_owner_hwnd` must be non-zero, and READ IT WITH `_owner_is_cover` -- what it is REQUIRED to
+    // be changed on 2026-07-31. It used to have to be the game window; a System>Quit open should
+    // now show `_owner_is_cover = 1` and an `_owner_hwnd` equal to `_dim_hwnd`, because owning the
+    // dialog to the cover is what makes "the picker is in front of the blur" a z-order invariant
+    // instead of a race (an owned window is always above its owner). `_owner_is_cover = 0` on a
+    // System>Quit open means the cover did not come up inside the arm handshake and the stacking
+    // for that open was unguaranteed; at the missing-save BOOT it is simply correct, since that arm
+    // raises no cover at all. It must still never be `ErEffectsLoadingOverlay`, which is a
+    // different window entirely.
     body.push_str(&format!(
-        "  \"oracle_save_picker_os_dialog_open\": {},\n  \"oracle_save_picker_os_open_count\": {},\n  \"oracle_save_picker_os_closed_with_path\": {},\n  \"oracle_save_picker_os_cancel_count\": {},\n  \"oracle_save_picker_os_error_count\": {},\n  \"oracle_save_picker_os_last_error\": {},\n  \"oracle_save_picker_os_reject_count\": {},\n  \"oracle_save_picker_os_last_reject_reason\": {},\n  \"oracle_save_picker_os_reopen_count\": {},\n  \"oracle_save_picker_os_reopen_exhausted\": {},\n  \"oracle_save_picker_os_ticks_frozen\": {},\n  \"oracle_save_picker_os_owner_hwnd\": {},\n  \"oracle_save_picker_os_savelike_opens\": {},\n  \"oracle_save_dest_confirm_pending\": {},\n",
+        "  \"oracle_save_picker_os_dialog_open\": {},\n  \"oracle_save_picker_os_open_count\": {},\n  \"oracle_save_picker_os_closed_with_path\": {},\n  \"oracle_save_picker_os_cancel_count\": {},\n  \"oracle_save_picker_os_error_count\": {},\n  \"oracle_save_picker_os_last_error\": {},\n  \"oracle_save_picker_os_reject_count\": {},\n  \"oracle_save_picker_os_last_reject_reason\": {},\n  \"oracle_save_picker_os_reopen_count\": {},\n  \"oracle_save_picker_os_reopen_exhausted\": {},\n  \"oracle_save_picker_os_ticks_frozen\": {},\n  \"oracle_save_picker_os_owner_hwnd\": {},\n  \"oracle_save_picker_os_owner_is_cover\": {},\n  \"oracle_save_picker_os_savelike_opens\": {},\n  \"oracle_save_dest_confirm_pending\": {},\n",
         SAVE_PICKER_OS_DIALOG_OPEN.load(Ordering::SeqCst),
         SAVE_PICKER_OS_OPEN_COUNT.load(Ordering::SeqCst),
         SAVE_PICKER_OS_CLOSED_WITH_PATH.load(Ordering::SeqCst),
@@ -505,6 +514,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SAVE_PICKER_OS_REOPEN_EXHAUSTED.load(Ordering::SeqCst),
         SAVE_PICKER_OS_TICKS_FROZEN.load(Ordering::SeqCst),
         SAVE_PICKER_OS_OWNER_HWND.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OS_OWNER_IS_COVER.load(Ordering::SeqCst),
         SAVE_PICKER_OS_SAVELIKE_OPENS.load(Ordering::SeqCst),
         SAVE_DEST_CONFIRM_PENDING.load(Ordering::SeqCst)
     ));
@@ -555,7 +565,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // must land BETWEEN `_z_foreign` (comdlg32) and `_z_game`, which is how the stacking is checked
     // without anyone looking at a screenshot.
     body.push_str(&format!(
-        "  \"oracle_save_picker_dim_armed\": {},\n  \"oracle_save_picker_dim_arm_count\": {},\n  \"oracle_save_picker_dim_disarm_count\": {},\n  \"oracle_save_picker_dim_frames\": {},\n  \"oracle_save_picker_dim_alive_ms\": {},\n  \"oracle_save_picker_dim_teardown_reason\": {},\n  \"oracle_save_picker_dim_stage\": {},\n  \"oracle_save_picker_dim_selftest\": {},\n  \"oracle_save_picker_dim_hwnd\": {},\n  \"oracle_save_picker_dim_game_hwnd\": {},\n  \"oracle_save_picker_dim_update_fails\": {},\n  \"oracle_save_picker_dim_z_self\": {},\n  \"oracle_save_picker_dim_z_game\": {},\n  \"oracle_save_picker_dim_z_foreign\": {},\n  \"oracle_save_picker_dim_z_violations\": {},\n  \"oracle_save_picker_dim_full_pushes\": {},\n  \"oracle_save_picker_dim_foreign_fg_hwnd\": {},\n",
+        "  \"oracle_save_picker_dim_armed\": {},\n  \"oracle_save_picker_dim_arm_count\": {},\n  \"oracle_save_picker_dim_disarm_count\": {},\n  \"oracle_save_picker_dim_frames\": {},\n  \"oracle_save_picker_dim_alive_ms\": {},\n  \"oracle_save_picker_dim_teardown_reason\": {},\n  \"oracle_save_picker_dim_stage\": {},\n  \"oracle_save_picker_dim_selftest\": {},\n  \"oracle_save_picker_dim_hwnd\": {},\n  \"oracle_save_picker_dim_game_hwnd\": {},\n  \"oracle_save_picker_dim_update_fails\": {},\n  \"oracle_save_picker_dim_z_self\": {},\n  \"oracle_save_picker_dim_z_game\": {},\n  \"oracle_save_picker_dim_z_foreign\": {},\n  \"oracle_save_picker_dim_z_violations\": {},\n  \"oracle_save_picker_dim_full_pushes\": {},\n  \"oracle_save_picker_dim_foreign_fg_hwnd\": {},\n  \"oracle_save_picker_dim_owner_set\": {},\n  \"oracle_save_picker_dim_owner_readback\": {},\n  \"oracle_save_picker_dim_arm_wait_ms\": {},\n  \"oracle_save_picker_dim_arm_wait_timeouts\": {},\n  \"oracle_save_picker_dim_reanchor_count\": {},\n",
         er_telemetry::counters::SAVE_PICKER_DIM_ARMED.load(Ordering::SeqCst),
         er_telemetry::counters::SAVE_PICKER_DIM_ARM_COUNT.load(Ordering::SeqCst),
         er_telemetry::counters::SAVE_PICKER_DIM_DISARM_COUNT.load(Ordering::SeqCst),
@@ -572,7 +582,12 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         er_telemetry::counters::SAVE_PICKER_DIM_Z_FOREIGN.load(Ordering::SeqCst) as isize,
         er_telemetry::counters::SAVE_PICKER_DIM_Z_VIOLATIONS.load(Ordering::SeqCst),
         er_telemetry::counters::SAVE_PICKER_DIM_FULL_PUSHES.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_DIM_FOREIGN_FG_HWND.load(Ordering::SeqCst)
+        er_telemetry::counters::SAVE_PICKER_DIM_FOREIGN_FG_HWND.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_DIM_OWNER_SET.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_DIM_OWNER_READBACK.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_DIM_ARM_WAIT_MS.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_DIM_ARM_WAIT_TIMEOUTS.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_DIM_REANCHOR_COUNT.load(Ordering::SeqCst)
     ));
     // Per-slot info fields (Level caption/value, PlayTime) on browse rows with no character. `_hidden`
     // > 0 proves the suppression reached real rows; `_non_display` > 0 or a `_last_datatype` other
@@ -907,29 +922,28 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         slot_hex(consumer_after.map(|slot| slot.load_content)),
         slot_hex(consumer_after.map(|slot| slot.job)),
     ));
-    // SAVE-FLOW CONFIRM CHAIN oracles (save-game-flow WP2 + WP3): Box1 "are you sure", Box2
-    // "overwrite your loaded save", Box3 "overwrite this file" (the destination browser's final
-    // gate).
+    // SAVE-FLOW CONFIRM oracles. There is ONE confirm box in the flow -- "Are you sure you want to
+    // overwrite this file?" -- so there is one set of counters. The three-box spelling
+    // (`oracle_save_flow_box1/2/3_*`) is GONE with the two up-front confirms it described; a probe
+    // written against those names will not silently read zeros from a renamed field, it will fail
+    // to find them, which is the intended way to learn the flow changed.
     //
-    // A save-flow probe must key on `oracle_save_flow_stage` + these counters, NOT on the
-    // msgbox oracles: the confirm boxes are captured into the flow's OWN dialog slot and
-    // deliberately do not feed `MSGBOX_LAST_DIALOG` / `oracle_blocking_modal_present`, so the
-    // startup auto-accept can never reach a user-facing save confirm and an expected, wanted
-    // confirm never reads as a blocking-modal failure.
+    // A save-flow probe must key on `oracle_save_flow_stage` + these counters, NOT on the msgbox
+    // oracles: the confirm box is captured into the flow's OWN dialog slot and deliberately does
+    // not feed `MSGBOX_LAST_DIALOG` / `oracle_blocking_modal_present`, so the startup auto-accept
+    // can never reach a user-facing save confirm and an expected, wanted confirm never reads as a
+    // blocking-modal failure.
     body.push_str(&format!(
-        "  \"oracle_save_flow_box1_open_count\": {},\n  \"oracle_save_flow_box1_yes_count\": {},\n  \"oracle_save_flow_box1_no_count\": {},\n  \"oracle_save_flow_box2_open_count\": {},\n  \"oracle_save_flow_box2_yes_count\": {},\n  \"oracle_save_flow_box2_no_count\": {},\n  \"oracle_save_flow_box3_open_count\": {},\n  \"oracle_save_flow_box3_yes_count\": {},\n  \"oracle_save_flow_box3_no_count\": {},\n  \"oracle_save_flow_abort_count\": {},\n  \"oracle_save_flow_box_build_timeout_count\": {},\n  \"oracle_save_flow_recipe_unavailable\": {},\n",
+        "  \"oracle_save_flow_overwrite_box_open_count\": {},\n  \"oracle_save_flow_overwrite_box_yes_count\": {},\n  \"oracle_save_flow_overwrite_box_no_count\": {},\n  \"oracle_save_flow_abort_count\": {},\n  \"oracle_save_flow_box_build_timeout_count\": {},\n  \"oracle_save_flow_recipe_unavailable\": {},\n  \"oracle_save_dest_overwrite_unconfirmable_count\": {},\n",
         SAVE_FLOW_BOX_OPEN_COUNTS[0].load(Ordering::SeqCst),
         SAVE_FLOW_BOX_YES_COUNTS[0].load(Ordering::SeqCst),
         SAVE_FLOW_BOX_NO_COUNTS[0].load(Ordering::SeqCst),
-        SAVE_FLOW_BOX_OPEN_COUNTS[1].load(Ordering::SeqCst),
-        SAVE_FLOW_BOX_YES_COUNTS[1].load(Ordering::SeqCst),
-        SAVE_FLOW_BOX_NO_COUNTS[1].load(Ordering::SeqCst),
-        SAVE_FLOW_BOX_OPEN_COUNTS[2].load(Ordering::SeqCst),
-        SAVE_FLOW_BOX_YES_COUNTS[2].load(Ordering::SeqCst),
-        SAVE_FLOW_BOX_NO_COUNTS[2].load(Ordering::SeqCst),
         SAVE_FLOW_ABORT_COUNT.load(Ordering::SeqCst),
         SAVE_FLOW_BOX_BUILD_TIMEOUT_COUNT.load(Ordering::SeqCst),
         SAVE_FLOW_RECIPE_UNAVAILABLE.load(Ordering::SeqCst),
+        // Non-zero = a user chose an existing destination on a build whose confirm recipe failed
+        // verification, and the overwrite was REFUSED rather than performed unconfirmed.
+        SAVE_DEST_OVERWRITE_UNCONFIRMABLE_COUNT.load(Ordering::SeqCst),
     ));
     // CONFIRM-BOX FAILURE oracles (2026-07-28). `..._undecidable_count` is the box the DLL
     // could not read an answer out of; it is deliberately NOT folded into the No counts, so a
@@ -939,10 +953,8 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // (>= 1 per answered box once the hook is installed), and `..._emit_installed` says whether
     // that observer is live at all.
     body.push_str(&format!(
-        "  \"oracle_save_flow_box1_undecidable_count\": {},\n  \"oracle_save_flow_box2_undecidable_count\": {},\n  \"oracle_save_flow_box3_undecidable_count\": {},\n  \"oracle_save_flow_box_identity_lost_count\": {},\n  \"oracle_save_flow_box_emit_count\": {},\n  \"oracle_save_flow_box_emit_installed\": {},\n  \"oracle_save_flow_enqueue_missing_count\": {},\n",
+        "  \"oracle_save_flow_overwrite_box_undecidable_count\": {},\n  \"oracle_save_flow_box_identity_lost_count\": {},\n  \"oracle_save_flow_box_emit_count\": {},\n  \"oracle_save_flow_box_emit_installed\": {},\n  \"oracle_save_flow_enqueue_missing_count\": {},\n",
         SAVE_FLOW_BOX_UNDECIDABLE_COUNTS[0].load(Ordering::SeqCst),
-        SAVE_FLOW_BOX_UNDECIDABLE_COUNTS[1].load(Ordering::SeqCst),
-        SAVE_FLOW_BOX_UNDECIDABLE_COUNTS[2].load(Ordering::SeqCst),
         SAVE_FLOW_BOX_IDENTITY_LOST_COUNT.load(Ordering::SeqCst),
         SAVE_FLOW_BOX_EMIT_COUNT.load(Ordering::SeqCst),
         MENU_JOB_EMIT_RESULT_INSTALLED.load(Ordering::SeqCst),

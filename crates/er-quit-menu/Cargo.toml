@@ -2,8 +2,8 @@
 # game's own System>Quit tab, as one product:
 #   * the AddCancelButton row cloning that CREATES the two rows, and the routing that puts
 #     them ahead of the native Return-to-Desktop confirm;
-#   * the "Load Profile" row (character-slot switch);
-#   * the "Load Save Profiles" row (browse for a different save container), its in-game
+#   * the "Load Character" row (character-slot switch);
+#   * the "Load Character from File" row (browse for a different save container), its in-game
 #     `05_010_ProfileSelect` browse surface, and the ProfileSummary preview/save-swap it
 #     drives;
 #   * the "Save Game" row: label substitution, the native confirm chain, the destination
