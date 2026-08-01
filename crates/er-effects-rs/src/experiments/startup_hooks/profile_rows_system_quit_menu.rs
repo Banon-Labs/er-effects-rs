@@ -1280,13 +1280,20 @@ fn wide_ptr_starts_with_ascii(ptr: usize, ascii: &[u8]) -> bool {
     true
 }
 
+/// Which of the four Quit-tab labels a row carries (0 = none of ours). Telemetry only
+/// (`oracle_optionsetting_active_row_quit_label_mask`); the routing identity lives in
+/// `system_quit_row_label_at`.
+///
+/// "Load Character from File" IS TESTED BEFORE "Load Character", because the first string starts
+/// with the second and a prefix test in the other order would report every file-browse row as the
+/// character row. The pre-2026-07-31 labels did not overlap, so this order was arbitrary then.
 fn optionsetting_quit_label_kind(label_ptr: usize) -> usize {
     if wide_ptr_starts_with_ascii(label_ptr, b"Save Game") {
         1
-    } else if wide_ptr_starts_with_ascii(label_ptr, b"Load Profile") {
-        2
-    } else if wide_ptr_starts_with_ascii(label_ptr, b"Load Save Profiles") {
+    } else if wide_ptr_starts_with_ascii(label_ptr, b"Load Character from File") {
         3
+    } else if wide_ptr_starts_with_ascii(label_ptr, b"Load Character") {
+        2
     } else if wide_ptr_starts_with_ascii(label_ptr, b"Return to Desktop") {
         4
     } else {

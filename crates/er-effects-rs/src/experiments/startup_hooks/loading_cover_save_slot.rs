@@ -386,6 +386,13 @@ pub(crate) unsafe fn kick_target_profile_slot(
     let model_live =
         unsafe { safe_read_usize(renderer + PROFILE_RENDERER_MODEL_INS_OFFSET) }.unwrap_or(0);
     unsafe {
+        // Runs the WHOLE native model-source sequence synchronously: ChrAsm::Copy from the record,
+        // EIGHT `EquipItemBySpecialIndex` clears (edx = {0,1,2,3,6,7,8,9} -- slots 4 and 5 are
+        // skipped, so it is NOT a 0..9 sweep), then equip a freshly-resolved DEFAULT (bare-body)
+        // protector into slots 2 (hands) and 3 (legs). Nothing is re-equipped on top: the record's
+        // ChrAsm already carries the character's own protector param ids, and the render path resolves
+        // armor from those ids alone (see `runtime_chr_asm_image`). What the resulting live ChrAsm
+        // actually resolves to is measured per frame by `portrait_equip_oracle_sample`.
         set_model_source(renderer, record + 0x1a8);
         let fd = facedata_buffer(record + 0x38, 1);
         set_facedata(renderer, fd);
@@ -970,6 +977,31 @@ impl<'a> SerializedSaveSlot<'a> {
     /// receives the layout it expects: runtime is `[hdr 8][ChrAsmEquipment][gaitem_handles]
     /// [equipment_param_ids][tail]` while the save serializes `[slot indices][ChrAsmEquipment]
     /// [param ids][handles]` -- a raw copy of the save bytes dresses the portrait from garbage.
+    ///
+    /// THE THREE OVERRIDE SENTINELS MUST BE -1, NOT ZERO (bd er-effects-rs-wncc -- the real
+    /// entirely-nude root cause). `unk0` (+0x00), `unkd4` (+0xd4) and `unkd8` (+0xd8) are not padding:
+    /// the model-resource request `FUN_1409e6fb0` tests them SIGNED and treats a non-negative value in
+    /// any of them as a forced whole-outfit override, so a zero-filled image resolves head/chest/hands/
+    /// legs to param ids 0/100/200/300 -- rows that do not exist. Nothing renders, INCLUDING the
+    /// bare-body defaults the native feed equips into hands and legs, which is exactly the reported
+    /// "nude, missing even the default underwear". A ctor-built `ChrAsm` holds -1 here (deobf
+    /// 0x1403be1d0 and 0x1403be208), which is why BOOT was unaffected: its record is copied from the
+    /// ctor-initialised `PlayerGameData.equipGameData.chrAsm`. See `CHR_ASM_OVERRIDE_ABSENT`.
+    /// `unk4` (+0x04) and the +0xdc..+0xe8 tail stay ZERO -- that is also what the ctor does.
+    ///
+    /// THE GAITEM HANDLE ARRAY IS LEFT ZERO ON PURPOSE. A gaitem handle only has meaning against the
+    /// `gaitemInsTable` of the process that minted it; the FOREIGN save's serialized handles index a
+    /// table this process never populated. Both consumers of this image (`CHR_ASM_COPY_RVA` into the
+    /// ProfileSummary record, then the renderer's own `ChrAsm::Copy` inside the profile feed) run
+    /// `GaitemHandle::copy` 22 times -- a REFCOUNTING assign -- so copying foreign handles would
+    /// mutate live refcount state on entries this process owns.
+    ///
+    /// Dropping them costs nothing visually: the render path resolves armor from
+    /// `equipment_param_ids` alone (`CS::ChrAsm::GetProtectorParamIdBySlot` at deobf 0x1403be950 is
+    /// `mov 0x7c(%rcx,%rdx,4),%eax`, and `FUN_1409e6fb0` feeds that straight to
+    /// `EquipParamProtector::GetEntry`). No gaitem handle is read anywhere on the render path.
+    /// Handles matter only because `CS::ChrAsm::EquipItem` WRITES a param id from a handle lookup and
+    /// stores -1 when the lookup fails -- i.e. a bad handle can only DESTROY a good param id.
     fn runtime_chr_asm_image(
         self,
         pgd: SerializedPlayerGameData<'a>,
@@ -982,12 +1014,21 @@ impl<'a> SerializedSaveSlot<'a> {
         off = off.checked_add(SAVE_ARM_STYLE_ACTIVE_WEAPON_SLOTS_SIZE)?;
         let param_ids = self.body.get(off..off + SAVE_CHR_ASM_EQUIPMENT_SIZE)?;
         off = off.checked_add(SAVE_CHR_ASM_EQUIPMENT_SIZE)?;
-        let handles = self.body.get(off..off + SAVE_CHR_ASM_EQUIPMENT_SIZE)?;
+        // Bounds only: a save truncated before the handle section is not a whole ChrAsm and must
+        // still fail the walk exactly as it did before. The bytes themselves are dropped.
+        let _foreign_handles = self.body.get(off..off + SAVE_CHR_ASM_EQUIPMENT_SIZE)?;
         let mut image = [0u8; CHR_ASM_SIZE];
+        for offset in [
+            CHR_ASM_UNK0_OFFSET,
+            CHR_ASM_UNKD4_OFFSET,
+            CHR_ASM_UNKD8_OFFSET,
+        ] {
+            image[offset..offset + core::mem::size_of::<i32>()]
+                .copy_from_slice(&CHR_ASM_OVERRIDE_ABSENT.to_le_bytes());
+        }
         image[CHR_ASM_EQUIPMENT_OFFSET..CHR_ASM_EQUIPMENT_OFFSET + equipment.len()]
             .copy_from_slice(equipment);
-        image[CHR_ASM_GAITEM_HANDLES_OFFSET..CHR_ASM_GAITEM_HANDLES_OFFSET + handles.len()]
-            .copy_from_slice(handles);
+        // `image[CHR_ASM_GAITEM_HANDLES_OFFSET..]` is left at its zero-init value: see the header.
         image[CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET
             ..CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET + param_ids.len()]
             .copy_from_slice(param_ids);
@@ -1280,4 +1321,154 @@ impl<'a> SerializedPlayerGameData<'a> {
         }
         true
     }
+}
+
+#[cfg(test)]
+mod loading_cover_chr_asm_image_tests {
+    use super::*;
+
+    /// Distinctive synthetic section payloads -- no game bytes are read or versioned here. Handles
+    /// carry the real `0x8xxxxxxx` gaitem shape so a stray copy of them is unmistakable in the image.
+    const TEST_EQUIPMENT_FILL: u8 = 0xa5;
+    const TEST_PARAM_ID_BASE: i32 = 0x0001_0000;
+    const TEST_HANDLE_BASE: u32 = 0x8000_0000;
+    const CHR_ASM_ENTRY_COUNT: usize = SAVE_CHR_ASM_EQUIPMENT_SIZE / core::mem::size_of::<i32>();
+
+    fn param_id_at(index: usize) -> i32 {
+        TEST_PARAM_ID_BASE + index as i32
+    }
+
+    /// A save body whose ChrAsm region holds the four serialized sections in save order:
+    /// `[slot indices][ChrAsmEquipment][param ids][gaitem handles]`.
+    fn synthetic_save_body() -> Vec<u8> {
+        let prefix = SAVE_PLAYER_GAME_DATA_MIN_SIZE + SAVE_SPEFFECT_COUNT * SAVE_SPEFFECT_SIZE;
+        let mut body = vec![0u8; prefix];
+        body.resize(body.len() + SAVE_CHR_ASM_EQUIPMENT_SIZE, 0u8); // slot indices
+        body.resize(
+            body.len() + SAVE_ARM_STYLE_ACTIVE_WEAPON_SLOTS_SIZE,
+            TEST_EQUIPMENT_FILL,
+        );
+        for index in 0..CHR_ASM_ENTRY_COUNT {
+            body.extend(param_id_at(index).to_le_bytes());
+        }
+        for index in 0..CHR_ASM_ENTRY_COUNT {
+            body.extend((TEST_HANDLE_BASE | index as u32).to_le_bytes());
+        }
+        body
+    }
+
+    fn image_from(body: &[u8]) -> Option<[u8; CHR_ASM_SIZE]> {
+        SerializedSaveSlot::new(body).runtime_chr_asm_image(SerializedPlayerGameData {
+            body,
+            offset: 0,
+        })
+    }
+
+    fn image_i32_at(image: &[u8; CHR_ASM_SIZE], offset: usize) -> i32 {
+        i32::from_le_bytes(
+            image[offset..offset + core::mem::size_of::<i32>()]
+                .try_into()
+                .expect("4 bytes"),
+        )
+    }
+
+    /// THE FIX (bd er-effects-rs-wncc). `FUN_1409e6fb0` tests these three SIGNED and treats a
+    /// non-negative value as a forced whole-outfit override, so a zero here resolves the four
+    /// protector slots to 0/100/200/300 and the portrait renders entirely nude -- default underwear
+    /// included. A ctor-built `ChrAsm` holds -1; our hand-built image must too.
+    #[test]
+    fn the_three_whole_outfit_override_sentinels_are_minus_one_not_zero() {
+        let body = synthetic_save_body();
+        let image = image_from(&body).expect("synthetic body walks to the ChrAsm sections");
+        for (name, offset) in [
+            ("unk0", CHR_ASM_UNK0_OFFSET),
+            ("unkd4", CHR_ASM_UNKD4_OFFSET),
+            ("unkd8", CHR_ASM_UNKD8_OFFSET),
+        ] {
+            assert_eq!(
+                image_i32_at(&image, offset),
+                CHR_ASM_OVERRIDE_ABSENT,
+                "{name} (+{offset:#x}) must be the no-override sentinel"
+            );
+        }
+    }
+
+    /// The ctor writes `unk4` and the +0xdc..+0xe8 tail as ZERO, so the image must leave them zero --
+    /// matching the ctor exactly, no wider.
+    #[test]
+    fn only_those_three_fields_are_seeded_the_rest_of_the_header_and_tail_stay_zero() {
+        let body = synthetic_save_body();
+        let image = image_from(&body).expect("synthetic body walks to the ChrAsm sections");
+        let unk4 = CHR_ASM_UNK0_OFFSET + core::mem::size_of::<i32>();
+        assert_eq!(image_i32_at(&image, unk4), 0, "unk4 must stay zero");
+        let tail = CHR_ASM_UNKD8_OFFSET + core::mem::size_of::<i32>();
+        assert!(
+            image[tail..].iter().all(|byte| *byte == 0),
+            "the +0xdc tail must stay zero, got {:02x?}",
+            &image[tail..]
+        );
+    }
+
+    /// The sentinel offsets must sit exactly one param-id array past the last public field and must
+    /// stay inside the struct -- `unkd4`/`unkd8` are private in `fromsoftware-rs`, so this is what
+    /// stands in for `offset_of!` if the typed layout ever moves.
+    #[test]
+    fn the_sentinel_offsets_agree_with_the_typed_chr_asm_layout() {
+        assert_eq!(CHR_ASM_UNK0_OFFSET, 0);
+        assert_eq!(CHR_ASM_UNKD4_OFFSET, 0xd4);
+        assert_eq!(CHR_ASM_UNKD8_OFFSET, 0xd8);
+        assert_eq!(
+            CHR_ASM_EQUIPMENT_ENTRY_COUNT,
+            SAVE_CHR_ASM_EQUIPMENT_SIZE / core::mem::size_of::<i32>(),
+            "the save section and the runtime array must hold the same number of entries"
+        );
+        assert!(CHR_ASM_UNKD8_OFFSET + core::mem::size_of::<i32>() <= CHR_ASM_SIZE);
+    }
+
+    /// A FOREIGN save's gaitem handles index a `gaitemInsTable` this process never populated, so they
+    /// must never reach the refcounting `ChrAsm::Copy` -- not for the ProfileSummary record and not
+    /// for the renderer. Costless visually: the render path never reads a handle.
+    #[test]
+    fn the_foreign_saves_gaitem_handles_are_never_copied_into_the_runtime_image() {
+        let body = synthetic_save_body();
+        let image = image_from(&body).expect("synthetic body walks to the ChrAsm sections");
+        let handles = &image[CHR_ASM_GAITEM_HANDLES_OFFSET
+            ..CHR_ASM_GAITEM_HANDLES_OFFSET + SAVE_CHR_ASM_EQUIPMENT_SIZE];
+        assert!(
+            handles.iter().all(|byte| *byte == 0),
+            "gaitem handle array must be zeroed, got {handles:02x?}"
+        );
+    }
+
+    /// The param ids are the ONLY armor source the render path reads, so zeroing the handles must not
+    /// take them with it.
+    #[test]
+    fn the_equipment_param_ids_survive_verbatim() {
+        let body = synthetic_save_body();
+        let image = image_from(&body).expect("synthetic body walks to the ChrAsm sections");
+        for index in 0..CHR_ASM_ENTRY_COUNT {
+            let at = CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET + index * core::mem::size_of::<i32>();
+            let got = i32::from_le_bytes(image[at..at + 4].try_into().expect("4 bytes"));
+            assert_eq!(got, param_id_at(index), "param id {index} drifted");
+        }
+    }
+
+    #[test]
+    fn the_chr_asm_equipment_block_still_lands_at_its_runtime_offset() {
+        let body = synthetic_save_body();
+        let image = image_from(&body).expect("synthetic body walks to the ChrAsm sections");
+        let equipment = &image[CHR_ASM_EQUIPMENT_OFFSET
+            ..CHR_ASM_EQUIPMENT_OFFSET + SAVE_ARM_STYLE_ACTIVE_WEAPON_SLOTS_SIZE];
+        assert!(equipment.iter().all(|byte| *byte == TEST_EQUIPMENT_FILL));
+    }
+
+    /// Dropping the handle bytes must NOT drop the bounds check they carried: a body truncated
+    /// inside the handle section is not a whole serialized ChrAsm and must still be rejected.
+    #[test]
+    fn a_body_truncated_inside_the_handle_section_is_still_rejected() {
+        let mut body = synthetic_save_body();
+        body.truncate(body.len() - 1);
+        assert!(image_from(&body).is_none());
+    }
+
 }

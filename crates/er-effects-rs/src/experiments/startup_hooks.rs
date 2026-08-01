@@ -12,6 +12,7 @@ pub(crate) use er_loading_portrait::*;
 include!("startup_hooks/title_scaleform_msgbox.rs");
 include!("startup_hooks/startup_modals_menu_cover.rs");
 include!("startup_hooks/loading_cover_save_slot.rs");
+include!("startup_hooks/portrait_equip_oracle.rs");
 include!("startup_hooks/save_swap_profile_table.rs");
 include!("startup_hooks/profile_table_gfx_files.rs");
 include!("startup_hooks/scaleform_descriptor_guard.rs");

@@ -1582,9 +1582,23 @@ pub static SAVE_PICKER_OS_LAST_REJECT_REASON: AtomicUsize = AtomicUsize::new(0);
 /// pump, an unbreakable hang. Exhaustion takes the cancel path.
 pub static SAVE_PICKER_OS_REOPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_OS_REOPEN_EXHAUSTED: AtomicUsize = AtomicUsize::new(0);
-/// The `hwndOwner` handed to comdlg32 (0 = none found). Non-zero plus a logged class that is the
-/// game window -- not `ErEffectsLoadingOverlay` -- is what says we owned the dialog correctly.
+/// The `hwndOwner` handed to comdlg32 (0 = none found).
+///
+/// WHICH window this is changed on 2026-07-31 and the old expectation is now WRONG. It used to be
+/// required to be the GAME window; it is now the DIM COVER whenever a cover is up, because an owned
+/// window is always above its owner and that is the only way to make "the picker is in front of the
+/// blur" structural instead of a race. Read it together with `SAVE_PICKER_OS_OWNER_IS_COVER`:
+/// `is_cover = 1` means this equals `SAVE_PICKER_DIM_HWND`, and `is_cover = 0` means it equals the
+/// game window (the boot arm, which raises no cover, and the fallback when the cover did not come
+/// up in time).
 pub static SAVE_PICKER_OS_OWNER_HWND: AtomicUsize = AtomicUsize::new(0);
+/// 1 when the last dialog was owned by the DIM COVER, 0 when it fell back to the ER window.
+///
+/// This is the field that says whether the z-order guarantee was actually in force for a given
+/// open. A System>Quit open with `SAVE_PICKER_DIM_ARM_COUNT` advancing but `is_cover = 0` means the
+/// cover was armed and the dialog STILL took the game window as its owner -- i.e. the cover did not
+/// finish coming up inside `SAVE_PICKER_DIM_ARM_WAIT_MS` and the ordering is back to a race.
+pub static SAVE_PICKER_OS_OWNER_IS_COVER: AtomicUsize = AtomicUsize::new(0);
 /// Save-like `CreateFileW` opens observed while a dialog was open. Attribution for the shell
 /// browsing traffic that otherwise pollutes the save CreateFileW diagnostics.
 pub static SAVE_PICKER_OS_SAVELIKE_OPENS: AtomicUsize = AtomicUsize::new(0);
@@ -1668,6 +1682,16 @@ pub static SAVE_PICKER_DIM_DISARM_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// same interval is the objective proof that the animation ticked on a thread we own -- something no
 /// game-render-path overlay could produce.
 pub static SAVE_PICKER_DIM_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// `SAVE_PICKER_DIM_FRAMES` sampled at the START of the current arm, so the disarm can subtract and
+/// report THIS ARM'S frames.
+///
+/// The counter above is process-cumulative and the disarm line used to print it raw, which read as
+/// a per-arm figure and was not one: a four-open run logged 108/241/362/423 where the arms had
+/// actually pushed 108/133/121/61. Every one of those lines overstated its own arm, and the last
+/// overstated it by 7x. Snapshotting at arm and subtracting at disarm is what makes the line say
+/// what it claims to say. Written by the ARMING thread before the generation bump, so the overlay
+/// thread cannot have pushed a frame of the new arm yet.
+pub static SAVE_PICKER_DIM_FRAMES_AT_ARM: AtomicUsize = AtomicUsize::new(0);
 /// Wall-clock milliseconds of the LAST completed armed interval (arm -> disarm). Pairs with the
 /// dialog's own `after=Nms` log line: the two must agree, or the dim did not bracket the call.
 pub static SAVE_PICKER_DIM_ALIVE_MS: AtomicUsize = AtomicUsize::new(0);
@@ -1695,15 +1719,58 @@ pub static SAVE_PICKER_DIM_Z_FOREIGN: AtomicUsize = AtomicUsize::new(usize::MAX)
 /// The foreground window seen while armed that is neither ours nor the game's -- i.e. comdlg32's.
 /// 0 means no foreign foreground window was ever observed while the dim was up.
 pub static SAVE_PICKER_DIM_FOREIGN_FG_HWND: AtomicUsize = AtomicUsize::new(0);
-/// Times the sampled z-order VIOLATED the contract while armed: the dim at or behind the game (it
-/// would be invisible), or the dim in front of the foreign foreground window (it would be covering
-/// the very dialog the user has to click).
+/// Frames whose sampled z-order VIOLATED the cover's contract while armed, counted SEPARATELY for
+/// the two ways it can break.
 ///
-/// A COUNTER, not a last-sample snapshot, because `SAVE_PICKER_DIM_Z_*` only carry the most recent
+/// COUNTERS, not last-sample snapshots, because `SAVE_PICKER_DIM_Z_*` only carry the most recent
 /// frame -- and the most recent frame is the one taken as the dialog is already tearing down, which
 /// is exactly when the ordering is least representative. `0` across a run where frames were pushed
 /// is the real proof the stacking held for the whole dialog, not just at the end.
-pub static SAVE_PICKER_DIM_Z_VIOLATIONS: AtomicUsize = AtomicUsize::new(0);
+///
+/// THEY ARE TWO FIELDS BECAUSE THEY MEAN OPPOSITE THINGS AND CARRY OPPOSITE SEVERITIES (split
+/// 2026-08-01, er-effects-rs-mc1d). The fused predecessor `SAVE_PICKER_DIM_Z_VIOLATIONS` scored
+/// `behind_game || covering_dialog` into one atomic, and the live run that was supposed to prove
+/// the ownership fix came back with 130 of them across 424 dim frames -- a number from which
+/// neither failure could be confirmed nor excluded. The oracle could not answer the single question
+/// it was built to answer, so the run could neither pass nor fail the fix. The severities:
+///
+/// - `_Z_COVERING_DIALOG` (`self_z < foreign_z`, our cover NEARER THE FRONT than the dialog) is
+///   precisely the defect the ownership chain exists to eliminate. Non-zero means the fix is
+///   INCOMPLETE and for those frames the user was looking at a dim laid over the controls they have
+///   to click. Treat any non-zero value as a failure of the z-order fix.
+/// - `_Z_BEHIND_GAME` (`self_z >= game_z`) is a lower-severity COSMETIC failure: the cover is
+///   invisible for those frames, but the dialog is still fully usable. Non-zero deserves its own
+///   issue, not a block on the ownership work.
+///
+/// Unknown ordinals (`usize::MAX`) are excluded from BOTH, so neither counts a window that had
+/// merely dropped out of the z-chain while being created or destroyed.
+pub static SAVE_PICKER_DIM_Z_BEHIND_GAME: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_DIM_Z_COVERING_DIALOG: AtomicUsize = AtomicUsize::new(0);
+/// The FIRST offending sample of each kind: the `(self, game, foreign)` ordinals that broke the
+/// contract, plus the milliseconds between that arm's cover coming up and the break. `usize::MAX`
+/// (emitted as `-1`) means that kind never fired.
+///
+/// A TOTAL ALONE CANNOT SAY *WHERE IN THE ARM* THE BREAK SAT, and the phase is most of the
+/// diagnosis: ordinals that break at `+0ms` and then settle are a bring-up transient the compositor
+/// resolves, while the same ordinals still breaking hundreds of milliseconds in are a stacking that
+/// never took. The run that motivated this recorded 130 breaks over 4 arms with no way to tell
+/// those two apart.
+///
+/// FIRST-WINS, NOT LAST-WINS, and enforced rather than assumed: the `_FIRST_SELF` field is the
+/// whole record's claim ticket, taken by a `compare_exchange` off the `usize::MAX` sentinel, and
+/// only the sample that wins that CAS writes the other three. A violating sample always has a known
+/// `self_z` (both disjuncts require it), so the sentinel can never collide with a real value. The
+/// first break is the one that shows the transition into failure; a last-wins record would decay
+/// into the same tear-down-moment snapshot the counters above exist to avoid.
+pub static SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_SELF: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub static SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_GAME: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub static SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_FOREIGN: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub static SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_MS: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub static SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_SELF: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub static SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_GAME: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub static SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_FOREIGN: AtomicUsize =
+    AtomicUsize::new(usize::MAX);
+pub static SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_MS: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// Frames whose push had to fall back to a FULL-surface upload because the dirty-rectangle path was
 /// refused. The cover is a mostly-static image with a small animating mark, so pushing only the
 /// mark's rectangle is what keeps the pulse smooth; a run where this equals the frame count is a run
@@ -1717,6 +1784,45 @@ pub static SAVE_PICKER_DIM_FULL_PUSHES: AtomicUsize = AtomicUsize::new(0);
 /// user's dialog opens means a broken environment is visible in telemetry from a run that never even
 /// opened a picker, instead of surfacing as a missing cover at the worst moment.
 pub static SAVE_PICKER_DIM_SELFTEST: AtomicUsize = AtomicUsize::new(0);
+// ---- COVER OWNERSHIP + ARM HANDSHAKE (user report 2026-07-31) ----
+//
+// Two defects were reported against the same window: the OS picker came up BEHIND the cover, and
+// the cover could be dragged off the game as if it were an unrelated application. Both were the
+// same root cause -- the cover was an UNOWNED top-level popup whose only claim to a z-order was one
+// `HWND_TOP` raise, issued by the overlay thread up to a frame period AFTER `arm` returned and
+// therefore quite possibly after comdlg32 had already created its window. The fix makes both
+// relations structural (game owns cover, cover owns dialog), and these fields are how a run proves
+// the relations actually took rather than being assumed.
+//
+/// Did the cover get installed as an owned window of the ER window? 0 = never attempted (no game
+/// window known), 1 = `SetWindowLongPtrW(GWLP_HWNDPARENT)` stored AND the owner read back equal,
+/// 2 = attempted and the read-back did NOT match, i.e. this environment ignored the store.
+///
+/// A READ-BACK rather than the call's return value on purpose: `SetWindowLongPtrW` returns the
+/// PREVIOUS value, and 0 means both "there was no owner" and "the call failed", so its return
+/// cannot distinguish success from failure on the very first store.
+pub static SAVE_PICKER_DIM_OWNER_SET: AtomicUsize = AtomicUsize::new(0);
+/// The owner HWND read back out of the cover's `GWLP_HWNDPARENT`. Equal to
+/// `SAVE_PICKER_DIM_GAME_HWND` is the proof the attachment took; 0 with `_owner_set = 2` says the
+/// store was silently dropped.
+pub static SAVE_PICKER_DIM_OWNER_READBACK: AtomicUsize = AtomicUsize::new(0);
+/// Milliseconds the ARMING thread waited for the overlay thread to report the cover up at the
+/// game's geometry, on the last arm.
+///
+/// `arm` used to return immediately and the caller went straight into `GetOpenFileNameW`, so the
+/// cover's raise and comdlg32's window creation were unordered. The arm now blocks on an atomic
+/// handshake, which is what makes the ordering real; this field is its cost. Tens of milliseconds
+/// is the expected value (one overlay frame plus the full-screen DIB fill).
+pub static SAVE_PICKER_DIM_ARM_WAIT_MS: AtomicUsize = AtomicUsize::new(0);
+/// Arms that hit the handshake DEADLINE instead of the cover reporting ready. Non-zero means the
+/// overlay thread is wedged or too slow, the dialog fell back to owning itself to the game window,
+/// and the stacking for those opens is a race again -- not a silent degradation.
+pub static SAVE_PICKER_DIM_ARM_WAIT_TIMEOUTS: AtomicUsize = AtomicUsize::new(0);
+/// Frames on which the cover was found to have DRIFTED off the ER window's rect and was snapped
+/// back. Ownership is what a compositor is supposed to honour, but a Wayland compositor with a
+/// move-modifier can still drag any toplevel; this counts the times something moved the cover and
+/// we pulled it back, so "the blur is attached to the game" is measured rather than hoped for.
+pub static SAVE_PICKER_DIM_REANCHOR_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// 1 = an OS Save-As returned an EXISTING file, so the Box3 overwrite confirm is owed.
 ///
 /// A latch rather than a direct `SAVE_FLOW_STAGE` write: the menu thread must not become a second
@@ -1744,6 +1850,55 @@ pub static PROFILE_ROW_LAST_SAVED_STAGE_FAILURES: AtomicUsize = AtomicUsize::new
 pub static LAST_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_FACE_IDENTITY_CHECKS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_FACE_IDENTITY_MISMATCHES: AtomicUsize = AtomicUsize::new(0);
+// LOADING-SCREEN PORTRAIT ARMOR ORACLE (bd er-effects-rs-91l5 Layer 1). Written every game tick by
+// `portrait_equip_oracle_sample` off the profile renderer's LIVE stage-0 `ChrAsm` (+0x130). These
+// replace `PORTRAIT_EQUIP_SLOT_RESOLVED_MASK` / `_UNRESOLVED_TOTAL` / `_PROTECTOR_REFEEDS`, which
+// sampled the wrong stage, once, through a bare `.store()`, on a field the renderer overrides -- and
+// reported a clean pass on a run the user saw render entirely nude.
+//
+// The load window these per-window accumulators belong to: `PROFILE_LOADSCREEN_TABLE_BUILDS` at the
+// time of sampling. A change rolls every per-window value below back to its unset state.
+pub static PORTRAIT_EQUIP_ORACLE_WINDOW: AtomicUsize = AtomicUsize::new(0);
+/// Profile slot the sampler read this window, biased by 1 (0 = nothing sampled yet).
+pub static PORTRAIT_EQUIP_ORACLE_SLOT: AtomicUsize = AtomicUsize::new(0);
+/// Frames THIS window on which a portrait model existed and its live `ChrAsm` was configured. ZERO is
+/// a FAILURE verdict, not a pass: it means the oracle never got to look, which is the `naked_kicks=0`
+/// false negative in a different costume.
+pub static PORTRAIT_EQUIP_SAMPLED_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// Frames THIS window whose effective protector rows would not render the character's own armor.
+/// Any value > 0 is a FAILURE that a later good frame cannot erase (`fetch_add`, never `.store`).
+pub static PORTRAIT_EQUIP_BAD_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// OR of every failing frame's reason mask this window: bit 0 forced whole-outfit override active
+/// (`unk0`/`unkd4`/`unkd8` non-negative), bit 1 head != record, bit 2 chest != record, bit 3 hands !=
+/// bare-body default, bit 4 legs != bare-body default.
+pub static PORTRAIT_EQUIP_BAD_MASK: AtomicUsize = AtomicUsize::new(0);
+/// Session total of bad frames across every window. Never reset, so one snapshot at any time proves
+/// whether the session EVER rendered a wrong portrait outfit.
+pub static PORTRAIT_EQUIP_BAD_FRAMES_TOTAL: AtomicUsize = AtomicUsize::new(0);
+/// Session count of load windows that produced at least one sample. Compare against
+/// `oracle_portrait_loadscreen_table_builds`: a shortfall names windows the oracle never observed.
+pub static PORTRAIT_EQUIP_WINDOWS_SAMPLED: AtomicUsize = AtomicUsize::new(0);
+/// Session count of load windows that produced at least one BAD frame.
+pub static PORTRAIT_EQUIP_WINDOWS_BAD: AtomicUsize = AtomicUsize::new(0);
+/// FIRST sample of this window, `compare_exchange`-from-zero so the value belongs to the first frame
+/// rather than whichever tick ran last. Packed: bit 32 = present, low 32 = the `i32`. Raw 0 means
+/// never sampled, which is NOT the same as a param id of 0.
+pub static PORTRAIT_EQUIP_FIRST_EFFECTIVE_ID: [AtomicUsize; 4] = [const { AtomicUsize::new(0) }; 4];
+/// The target save record's own head/chest/hands/legs param ids, first sample of this window; the
+/// comparison basis for `PORTRAIT_EQUIP_BAD_MASK` bits 1 and 2. Same packing.
+pub static PORTRAIT_EQUIP_RECORD_PARAM_ID: [AtomicUsize; 4] = [const { AtomicUsize::new(0) }; 4];
+/// `ChrAsm::unk0` / `unkd4` / `unkd8` verbatim, first sample of this window. All three read -1 on a
+/// correctly built `ChrAsm`; a non-negative value in any of them IS the nude bug. Same packing.
+pub static PORTRAIT_EQUIP_FIRST_UNK0: AtomicUsize = AtomicUsize::new(0);
+pub static PORTRAIT_EQUIP_FIRST_UNKD4: AtomicUsize = AtomicUsize::new(0);
+pub static PORTRAIT_EQUIP_FIRST_UNKD8: AtomicUsize = AtomicUsize::new(0);
+/// The four effective rows as of the first game tick on which `PROFILE_BAKE_RGBA_CAPTURED` was
+/// observed set -- the frame whose pixels the user is shown. Same packing.
+pub static PORTRAIT_EQUIP_CAPTURE_EFFECTIVE_ID: [AtomicUsize; 4] =
+    [const { AtomicUsize::new(0) }; 4];
+/// Tri-state verdict for that capture-frame sample: 0 never sampled, 1 clean, 2 bad. Deliberately not
+/// a boolean -- "the oracle never ran" must not read as a pass.
+pub static PORTRAIT_EQUIP_CAPTURE_VERDICT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_SAVE_SWAP_POLL_TICK: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_STATS_PREVIEW_ROW_CURSOR: AtomicUsize = AtomicUsize::new(0);
 pub static SQ_REPRO_TAB_DISCOVERED: AtomicUsize = AtomicUsize::new(0);
@@ -1887,11 +2042,14 @@ pub static SAVE_FLOW_REQUEST_RETRACTIONS: AtomicUsize = AtomicUsize::new(0);
 /// `oracle_save_dispatch_declines` to see the cost.
 pub static SAVE_FLOW_RETRACT_DECLINED: AtomicUsize = AtomicUsize::new(0);
 
-// ---- save-flow confirm chain (save-game-flow WP2) ----
-/// Number of confirm boxes the save flow can build (Box1 "are you sure", Box2 "overwrite
-/// the loaded save", Box3 "overwrite this file"). Indexes the per-box counters below;
-/// box ids are 1-based so 0 stays the "no box" sentinel.
-pub const SAVE_FLOW_BOX_COUNT: usize = 3;
+// ---- save-flow confirm box (save-game-flow WP2, reduced to ONE box 2026-07-31) ----
+/// Number of confirm boxes the save flow can build. It is ONE: "Overwrite this file?", asked
+/// only when the chosen destination already exists. The two up-front confirms this flow used to
+/// open ("Are you sure you want to save?" and "Overwrite your loaded save?") were removed -- they
+/// asked the user to predict a destination before seeing the list, which is the mistake the
+/// reviewer reported. Indexes the per-box counters below; box ids are 1-based so 0 stays the
+/// "no box" sentinel.
+pub const SAVE_FLOW_BOX_COUNT: usize = 1;
 /// Box id (1..=SAVE_FLOW_BOX_COUNT) the NEXT `CS::MessageBoxDialog` build belongs to, set
 /// immediately before the confirm-box MenuJob is submitted and cleared by the builder hook
 /// that captures the dialog. Non-zero makes the builder hook forward the build and capture
@@ -1945,26 +2103,33 @@ pub static MENU_JOB_EMIT_RESULT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 /// Submitted confirm boxes whose `CS::MessageBoxDialog` build was never captured within
 /// `SAVE_FLOW_BOX_BUILD_TIMEOUT_TICKS` -- the recipe produced no visible box (failure path).
 pub static SAVE_FLOW_BOX_BUILD_TIMEOUT_COUNT: AtomicUsize = AtomicUsize::new(0);
-/// 1 once a MessageBoxBuilder recipe RVA failed its prologue byte check: the confirm chain is
-/// unavailable on this build and Save Game degrades to the WP1 immediate bypass commit.
+/// 1 once a MessageBoxBuilder recipe RVA failed its prologue byte check: the overwrite confirm
+/// cannot be built on this build. Save Game still opens the destination list (that needs no
+/// message box), and a destination that would OVERWRITE an existing file is REFUSED rather than
+/// written unconfirmed -- a free name still commits.
 pub static SAVE_FLOW_RECIPE_UNAVAILABLE: AtomicUsize = AtomicUsize::new(0);
-/// Dialog the NEXT confirm box is built against and submitted to (its MenuJob queue at +0x10 and
-/// MenuWindow list at +0x50). 0 = the System/Quit dialog captured at the row press. Box3 sets the
-/// live `05_010` ProfileLoadDialog instead, exactly like the game's own load-confirm
-/// (`FUN_1409a4670` submits its confirm to `profile_load_dialog+0x10`), so the confirm never
-/// contends with the System dialog queue that still owns the open picker window job.
+/// Destination picks refused because the overwrite confirm could not be built on this build.
+/// Non-zero means a user chose an existing file and nothing was written; the free-name path is
+/// unaffected.
+pub static SAVE_DEST_OVERWRITE_UNCONFIRMABLE_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Dialog the confirm box is built against and submitted to (its MenuJob queue at +0x10 and
+/// MenuWindow list at +0x50). 0 = the System/Quit dialog captured at the row press. The in-game
+/// destination browser sets the live `05_010` ProfileLoadDialog instead, exactly like the game's
+/// own load-confirm (`FUN_1409a4670` submits its confirm to `profile_load_dialog+0x10`), so the
+/// confirm never contends with the System dialog queue that still owns the open picker window job.
 pub static SAVE_FLOW_BOX_HOST_DIALOG: AtomicUsize = AtomicUsize::new(0);
 
 // ---- save destination browser (save-game-flow WP3) ----
-/// 1 while the live `05_010` picker is the save-DESTINATION chooser (Box2 "No" path) rather than
-/// the load-source browser. Cleared by `save_picker_reset` like the rest of the picker latches.
+/// 1 while the live `05_010` picker is the save-DESTINATION chooser (the Save Game row opens it
+/// directly) rather than the load-source browser. Cleared by `save_picker_reset` like the rest of the picker latches.
 pub static SAVE_PICKER_DEST_MODE: AtomicUsize = AtomicUsize::new(0);
 /// System/Quit PropertyEditDialog the live picker window was submitted from. The load-source
 /// picker resolves it from its row action object; the destination picker is opened by the save
 /// flow, which has the dialog but no action object. The menu-pump resubmit reopens through it.
 pub static SAVE_PICKER_SYSTEM_DIALOG: AtomicUsize = AtomicUsize::new(0);
 /// Menu-pump pending: open the destination browser from `system_quit_menu_window_run_post` (the
-/// proven menu-job submit context). Set by the save-flow tick on Box2 "No".
+/// proven menu-job submit context). Set by the Save Game row press, and again whenever the OS
+/// surface has to re-show its Save-As after a declined overwrite.
 pub static SAVE_DEST_OPEN_PICKER_PENDING: AtomicUsize = AtomicUsize::new(0);
 /// Times the menu pump tried to open the destination browser and LEFT THE REQUEST ARMED because no
 /// picker ran (a MenuJob the dialog's queue deferred). The direct oracle for the reopen loop of bd
@@ -1995,8 +2160,8 @@ pub static SAVE_DEST_SEED_FAIL_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// container from a file that merely has the right length. Per-commit: cleared by
 /// [`save_dest_reset_commit_verdicts`] at every arm.
 pub static SAVE_DEST_TARGET_STRUCTURE_OK: AtomicUsize = AtomicUsize::new(0);
-/// Commits whose destination IS the loaded save (Box2 "Yes", or a browsed pick that resolves back
-/// to it). Non-zero means this flow deliberately rewrote the user's live save file -- the ONLY
+/// Commits whose destination IS the loaded save -- a browsed pick (or `[ new ]` in the loaded
+/// save's own folder) that resolves back to it. Non-zero means this flow deliberately rewrote the user's live save file -- the ONLY
 /// sanctioned way that happens, and the counter that keeps such a rewrite from reading as an
 /// anonymous mutation or a suppression leak.
 pub static SAVE_DEST_LIVE_OVERWRITE_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -2005,7 +2170,8 @@ pub static SAVE_DEST_LIVE_OVERWRITE_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// container over its own backup. Named so the movement is never unattributed. Per-commit: cleared
 /// by [`save_dest_reset_commit_verdicts`] at every arm.
 pub static SAVE_DEST_LIVE_BAK_MUTATED: AtomicUsize = AtomicUsize::new(0);
-/// Destination browsers opened (Box2 answered "No").
+/// Destination browsers opened (one per Save Game row press, plus a re-open after a declined
+/// overwrite on the OS surface).
 pub static SAVE_DEST_PICKER_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Destination picks that landed on an EXISTING file (a pre-existing row, or `[ new ]` whose
 /// filename already exists in the browsed folder) -- these go through the Box3 overwrite confirm.

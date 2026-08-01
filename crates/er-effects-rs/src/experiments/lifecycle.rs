@@ -99,26 +99,38 @@ pub(crate) unsafe fn switch_harness_discovery_tick() {
 }
 
 // === SAVE-FLOW state machine (save-game-flow WP1 + WP2 + WP3, 2026-07-28) ===
-// Drives the System->Quit "Save Game" row's confirm chain and CLOSE-THEN-FIRE commit.
+// Drives the System->Quit "Save Game" row's destination pick and CLOSE-THEN-FIRE commit.
 // Stage map lives on `er_telemetry::counters::SAVE_FLOW_STAGE` (oracle_save_flow_stage):
-// 0 IDLE, 1 BOX1_WAIT, 2 BOX2_WAIT, 3 DEST_BROWSE, 4 BOX3_WAIT, 5 CLOSING_ABORT,
-// 6 CLOSING_COMMIT, 7 FIRE_GATE_WAIT, 8 COMMIT_WAIT.
+// 0 IDLE, 3 DEST_BROWSE, 4 OVERWRITE_CONFIRM, 5 CLOSING_ABORT, 6 CLOSING_COMMIT,
+// 7 FIRE_GATE_WAIT, 8 COMMIT_WAIT. Ids 1 and 2 are RETIRED (see `autoload_state.rs`).
 //
-// WP2 added the confirm chain: the row press submits Box1 ("Are you sure you want to
-// save?", default No) inline on the menu thread; the tick POLLS the box result (pure
-// reads) and, on Yes, stages Box2 ("Overwrite your loaded save?", default Yes) for the
-// menu pump to submit. Box2 Yes stages the commit, No opens the WP3 destination browser,
-// cancel aborts. Both terminal paths run the proven close sequence (OptionSetting
-// immediately, IngameTop deferred 2 frames), and only once the menus are closed AND the
-// RAM gates are green does the tick arm the one-shot er-save-suppress bypass and fire the
-// FORCED (throttle-skipping) native save request pair. The tick only reads and decides;
-// all menu mutation stays on the paths that already own it, except the window CLOSE,
-// which the shipping deferred IngameTop close already performs from this same game task.
+// THE ROW PRESS OPENS THE LIST (stage 3) AND ASKS NOTHING. It used to open two confirms
+// first -- "Are you sure you want to save?" then "Overwrite your loaded save?" (which
+// DEFAULTED to Yes) -- which made the user commit to a destination before seeing one.
+// Reviewer report, 2026-07-31: "I'd prefer it if when you clicked Save game it took you
+// straight to a list of save files ... Prompting to overwrite the current file or not
+// every time up front seems like it will lead to more mistakes."
 //
-// WP3 added the destination browser (stage 3) and its overwrite confirm (stage 4). A
-// chosen destination is committed by ARMING a scoped write-open redirect just before the
+// So there is exactly ONE question left, stage 4, and it is asked about a file the user
+// has already pointed at: "Are you sure you want to overwrite this file?", default No. A
+// destination whose name is FREE is written with no question at all. `[ new ]` is not
+// exempt: it computes a leaf, and if that leaf is already taken the pick IS an overwrite
+// and confirms like any other.
+//
+// The tick POLLS the box result (pure reads). Every terminal path runs the proven close
+// sequence (OptionSetting immediately, IngameTop deferred 2 frames), and only once the
+// menus are closed AND the RAM gates are green does the tick arm the one-shot
+// er-save-suppress bypass and fire the FORCED (throttle-skipping) native save request
+// pair. The tick only reads and decides; all menu mutation stays on the paths that already
+// own it, except the window CLOSE, which the shipping deferred IngameTop close already
+// performs from this same game task.
+//
+// A chosen destination is committed by ARMING a scoped write-open redirect just before the
 // fire, so the native writer's own container write lands on the destination while the
-// loaded save is only read; stage 8 verifies both files before returning to IDLE.
+// loaded save is only read; stage 8 verifies both files before returning to IDLE. A pick
+// that resolves back to the LOADED save takes the sanctioned in-place overwrite instead --
+// the only remaining way to overwrite your own save, so that identity check now carries
+// the whole "overwrite my current file" use case.
 
 /// This stage's next tick count -- FROZEN while a modal OS file dialog is up.
 ///
@@ -160,8 +172,8 @@ enum DestBrowseAction {
     OpenTimeout,
     /// No browser, no pending open, no commit, no confirm: the user backed out.
     Abandoned,
-    /// An OS Save-As chose an existing file; the tick owes the Box3 overwrite confirm.
-    EnterBox3,
+    /// An OS Save-As chose an existing file; the tick owes the overwrite confirm.
+    EnterOverwriteConfirm,
 }
 
 /// Stage 3's decision, as a pure function of the latches it reads.
@@ -175,7 +187,7 @@ enum DestBrowseAction {
 ///
 /// `confirm_pending` is checked ahead of every liveness term for the same reason: by the time an OS
 /// Save-As has named an existing file its dialog is already gone, so a verdict that consulted
-/// liveness first would read the flow as abandoned instead of owing a Box3.
+/// liveness first would read the flow as abandoned instead of owing an overwrite confirm.
 #[allow(clippy::too_many_arguments)]
 fn dest_browse_verdict(
     commit_pending: bool,
@@ -198,7 +210,7 @@ fn dest_browse_verdict(
         return DestBrowseAction::WaitForUser;
     }
     if confirm_pending {
-        return DestBrowseAction::EnterBox3;
+        return DestBrowseAction::EnterOverwriteConfirm;
     }
     if dest_mode || os_dialog_open {
         // A browser owns the screen; the user's decision has no timeout.
@@ -245,16 +257,8 @@ pub(crate) unsafe fn save_flow_tick() {
         &SAVE_FLOW_STAGE_TICKS,
     );
     match stage {
-        SAVE_FLOW_STAGE_BOX1_WAIT => unsafe {
-            save_flow_box_wait_tick(SAVE_FLOW_BOX_CONFIRM_SAVE, ticks)
-        },
-        SAVE_FLOW_STAGE_BOX2_WAIT => unsafe {
-            save_flow_box_wait_tick(SAVE_FLOW_BOX_OVERWRITE_LOADED, ticks)
-        },
         SAVE_FLOW_STAGE_DEST_BROWSE => unsafe { save_flow_dest_browse_tick(ticks) },
-        SAVE_FLOW_STAGE_BOX3_WAIT => unsafe {
-            save_flow_box_wait_tick(SAVE_FLOW_BOX_OVERWRITE_FILE, ticks)
-        },
+        SAVE_FLOW_STAGE_OVERWRITE_CONFIRM => unsafe { save_flow_overwrite_confirm_tick(ticks) },
         SAVE_FLOW_STAGE_CLOSING_ABORT | SAVE_FLOW_STAGE_CLOSING_COMMIT => {
             // The close sequence itself is owned by system_quit_save_game_close_menus
             // (OptionSetting now) + the deferred-close tick (IngameTop, 2 frames). Menus are
@@ -289,13 +293,19 @@ pub(crate) unsafe fn save_flow_tick() {
     }
 }
 
-/// Stages 1/2 BOX*_WAIT: the confirm box is (or is becoming) visible. PURE READS -- every
-/// menu mutation this decides is staged for the owning thread (`SAVE_FLOW_SUBMIT_BOX_PENDING`
-/// for the next box) or runs through the proven close sequence.
+/// Stage 4 OVERWRITE_CONFIRM: "Are you sure you want to overwrite this file?" is (or is becoming)
+/// visible over the destination browser. PURE READS -- every menu mutation this decides runs
+/// through the picker's own native close or the proven close-all sequence.
 ///
-/// There is deliberately NO timeout on the user's decision; the only timeout is on the BUILD,
-/// i.e. the box never appearing at all, which means the recipe failed and waiting is pointless.
-unsafe fn save_flow_box_wait_tick(box_id: usize, ticks: usize) {
+/// There is deliberately NO timeout on the user's decision; the only timeout is on the BUILD, i.e.
+/// the box never appearing at all, which means the recipe failed and waiting is pointless.
+///
+/// EVERY NON-YES OUTCOME RETURNS TO THE BROWSER, not to the world. Declining an overwrite is not
+/// declining to save -- the user is choosing a different destination, and the list is where that
+/// choice is made. That is also why an unreadable box lands here instead of ending the flow: a
+/// question we could not read the answer to must not be counted as "the user gave up on saving".
+unsafe fn save_flow_overwrite_confirm_tick(ticks: usize) {
+    let box_id = SAVE_FLOW_BOX_OVERWRITE_FILE;
     let Some(decision) = (unsafe { save_flow_box_decision(box_id) }) else {
         // The ONLY timeout in this stage covers the box never BECOMING visible: either the
         // menu pump never consumed the submit pending, or the submitted job never reached the
@@ -306,103 +316,68 @@ unsafe fn save_flow_box_wait_tick(box_id: usize, ticks: usize) {
             let pending = SAVE_FLOW_SUBMIT_BOX_PENDING.load(Ordering::SeqCst);
             SAVE_FLOW_BOX_BUILD_TIMEOUT_COUNT.fetch_add(1, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "save-flow: {} BUILD TIMEOUT after {ticks} ticks (submit_pending={pending}) -- the confirm box never became visible; ending the flow, the user's save did NOT happen",
+                "save-flow: {} BUILD TIMEOUT after {ticks} ticks (submit_pending={pending}) -- the overwrite confirm never became visible; dropping the target and returning to the destination list, nothing was written",
                 save_flow_box_label(box_id)
             ));
             save_flow_box_clear();
-            if box_id == SAVE_FLOW_BOX_OVERWRITE_FILE {
-                // Box3 sits OVER the destination browser: tear the picker down first (its close
-                // restores the user's rows and re-shows the System windows) and let the stage-3
-                // abort path close the menus once the window is gone.
-                let picker = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
-                save_dest_clear_target("box3 build timeout");
-                unsafe { save_flow_close_dest_picker_from_tick(picker, "box3_build_timeout") };
-                save_flow_enter_stage(SAVE_FLOW_STAGE_DEST_BROWSE, "box3 build timeout");
-            } else {
-                unsafe { save_flow_close_menus_from_tick("box_build_timeout", false) };
-            }
+            // The confirm sits OVER the destination browser: tear the picker down first (its close
+            // restores the user's rows and re-shows the System windows) and let the stage-3 path
+            // take over once the window is gone.
+            let picker = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
+            save_dest_clear_target("overwrite confirm build timeout");
+            unsafe {
+                save_flow_close_dest_picker_from_tick(picker, "overwrite_confirm_build_timeout")
+            };
+            save_flow_enter_stage(
+                SAVE_FLOW_STAGE_DEST_BROWSE,
+                "overwrite confirm build timeout",
+            );
         }
         return;
     };
-    // UNDECIDABLE outranks the per-box routing: the box was freed/reused, or it reported an
-    // answer we could not map. That is a FAILURE of ours, not a user "No" -- it never advances
-    // toward a write, and it is reported as a failure so a run can tell the two apart.
-    if decision == SaveFlowDecision::Undecidable {
-        append_autoload_debug(format_args!(
-            "save-flow: {} could NOT be resolved (undecidable) -- closing back to the world with NOTHING written. This is a save-flow FAILURE, not the user declining; see the preceding save-flow-box line for the fields that were read",
-            save_flow_box_label(box_id)
-        ));
-        if box_id == SAVE_FLOW_BOX_OVERWRITE_FILE {
-            // Box3 sits over the destination browser: tear the picker down first, exactly like
-            // its build-timeout path, so the abort does not close menus under a live window.
+    match decision {
+        // UNDECIDABLE is a FAILURE of ours, not a user "No": the box was freed/reused, or it
+        // reported an answer we could not map. It never advances toward a write, and it is
+        // counted separately so a run can tell "the user declined" from "we could not read the
+        // user's answer".
+        SaveFlowDecision::Undecidable => {
+            append_autoload_debug(format_args!(
+                "save-flow: {} could NOT be resolved (undecidable) -- dropping the target and returning to the destination list with NOTHING written. This is a save-flow FAILURE, not the user declining; see the preceding save-flow-box line for the fields that were read",
+                save_flow_box_label(box_id)
+            ));
             let picker = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
-            save_dest_clear_target("box3 undecidable");
-            unsafe { save_flow_close_dest_picker_from_tick(picker, "box3_undecidable") };
-            save_flow_enter_stage(SAVE_FLOW_STAGE_DEST_BROWSE, "box3 undecidable");
-        } else {
-            unsafe { save_flow_close_menus_from_tick("box_undecidable", false) };
+            save_dest_clear_target("overwrite confirm undecidable");
+            unsafe {
+                save_flow_close_dest_picker_from_tick(picker, "overwrite_confirm_undecidable")
+            };
+            save_flow_enter_stage(SAVE_FLOW_STAGE_DEST_BROWSE, "overwrite confirm undecidable");
         }
-        return;
-    }
-    match (box_id, decision) {
-        (SAVE_FLOW_BOX_CONFIRM_SAVE, SaveFlowDecision::Yes) => {
-            // Menu-pump owns the submit; the tick only stages it.
-            SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_OVERWRITE_LOADED, Ordering::SeqCst);
-            save_flow_enter_stage(SAVE_FLOW_STAGE_BOX2_WAIT, "box1 Yes -> overwrite confirm");
-        }
-        (SAVE_FLOW_BOX_OVERWRITE_LOADED, SaveFlowDecision::Yes) => {
-            // Commit plan: overwrite the loaded save. No destination target is set, so the fire
-            // gate arms no redirect and the native writer hits its normal path.
-            unsafe { save_flow_close_menus_from_tick("box2_overwrite_loaded", true) };
-        }
-        (SAVE_FLOW_BOX_OVERWRITE_LOADED, SaveFlowDecision::No) => {
-            // "Save somewhere else": hand the destination browser open to the menu pump (staging
-            // records + submitting the 05_010 job is menu-pump work) and wait in stage 3.
-            SAVE_DEST_OPEN_PICKER_PENDING.store(1, Ordering::SeqCst);
-            save_flow_enter_stage(
-                SAVE_FLOW_STAGE_DEST_BROWSE,
-                "box2 No -> choose a save destination",
-            );
-        }
-        (SAVE_FLOW_BOX_OVERWRITE_FILE, SaveFlowDecision::Yes) => {
-            // Final overwrite confirm for an existing destination file. The picker close is the
-            // same native primitive the deferred IngameTop close already calls from this task.
+        SaveFlowDecision::Yes => {
+            // The user chose to overwrite this specific file. The picker close is the same native
+            // primitive the deferred IngameTop close already calls from this task.
             let picker = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
             SAVE_DEST_COMMIT_COUNT.fetch_add(1, Ordering::SeqCst);
             SAVE_DEST_COMMIT_PENDING.store(1, Ordering::SeqCst);
-            unsafe { save_flow_close_dest_picker_from_tick(picker, "box3_overwrite_confirmed") };
+            unsafe { save_flow_close_dest_picker_from_tick(picker, "overwrite_confirmed") };
             save_flow_enter_stage(
                 SAVE_FLOW_STAGE_DEST_BROWSE,
-                "box3 Yes -> commit to the chosen file",
+                "overwrite confirmed -> commit to the chosen file",
             );
         }
-        (SAVE_FLOW_BOX_OVERWRITE_FILE, SaveFlowDecision::No) => {
-            // Declining the overwrite drops only the target. In-game the browser window was never
-            // closed, so the user is simply back in it and nothing else is needed. In OS mode the
-            // dialog is gone by the time Box3 is answered, so "back to the picker" means RE-OPEN
-            // it -- which is exactly what Box2-No already does to open it in the first place, and
-            // the menu pump's existing consumer now routes through `open_picker_for_intent`.
-            save_dest_clear_target("box3 declined");
+        SaveFlowDecision::No => {
+            // Declining the overwrite drops only the TARGET, never the flow: the user is picking a
+            // different destination, not abandoning the save. In-game the browser window was never
+            // closed, so they are simply back in it. In OS mode the dialog is gone by the time the
+            // confirm is answered, so "back to the picker" means RE-OPEN it, through the same
+            // menu-pump consumer the row press uses.
+            save_dest_clear_target("overwrite declined");
             if os_native_picker_active() {
                 SAVE_DEST_OPEN_PICKER_PENDING.store(1, Ordering::SeqCst);
             }
             save_flow_enter_stage(
                 SAVE_FLOW_STAGE_DEST_BROWSE,
-                "box3 No -> back to the destination picker",
+                "overwrite declined -> back to the destination list",
             );
-        }
-        (_, SaveFlowDecision::No) => {
-            append_autoload_debug(format_args!(
-                "save-flow: {} answered No/cancel -- closing back to the world, nothing will be written",
-                save_flow_box_label(box_id)
-            ));
-            unsafe { save_flow_close_menus_from_tick("box_declined", false) };
-        }
-        (other, _) => {
-            append_autoload_debug(format_args!(
-                "save-flow: decision for unexpected box id {other}; aborting without writing"
-            ));
-            unsafe { save_flow_close_menus_from_tick("box_unexpected_id", false) };
         }
     }
 }
@@ -443,16 +418,16 @@ unsafe fn save_flow_dest_browse_tick(ticks: usize) {
             ));
             unsafe { save_flow_close_menus_from_tick("dest_teardown_timeout", false) };
         }
-        DestBrowseAction::EnterBox3 => {
+        DestBrowseAction::EnterOverwriteConfirm => {
             // OS Save-As named an existing file. The TICK performs the transition so the menu
             // thread never becomes a second writer of `SAVE_FLOW_STAGE`.
             SAVE_DEST_CONFIRM_PENDING.store(0, Ordering::SeqCst);
-            // Box3 is hosted by the System dialog here: in OS mode there is no picker window job
+            // The confirm is hosted by the System dialog here: in OS mode there is no picker window job
             // occupying that queue, so it is the right owner.
             save_flow_box_set_host_dialog(0);
             SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_OVERWRITE_FILE, Ordering::SeqCst);
             save_flow_enter_stage(
-                SAVE_FLOW_STAGE_BOX3_WAIT,
+                SAVE_FLOW_STAGE_OVERWRITE_CONFIRM,
                 "os save-as chose an existing file -> overwrite confirm",
             );
         }
@@ -547,8 +522,14 @@ unsafe fn save_flow_close_menus_from_tick(source: &str, commit: bool) {
 
 /// What a Save Game commit is about to write, decided before anything is written.
 enum SaveFlowCommitPlan {
-    /// The loaded save is the target: Box2 answered "Yes", or a browsed pick that the filesystem
-    /// says IS the loaded save. The native writer rewrites it in place and nothing is redirected.
+    /// The loaded save is the target: a browsed pick (or `[ new ]` in the loaded save's own folder)
+    /// that the filesystem says IS the loaded save, or a commit that never named a destination at
+    /// all. The native writer rewrites it in place and nothing is redirected.
+    ///
+    /// SINCE 2026-07-31 THE BROWSED-PICK ARM IS THE ONLY WAY A USER REACHES THIS. The up-front
+    /// "Overwrite your loaded save?" box that used to land here directly is gone, so overwriting
+    /// your own save means finding its row in the destination list -- which is exactly what makes
+    /// the filesystem-identity check below load-bearing rather than a corner case.
     LiveOverwrite { live: PathBuf, reason: &'static str },
     /// A browsed destination PROVEN to be a different file from the loaded save.
     Redirect { live: PathBuf, target: PathBuf },
@@ -575,12 +556,15 @@ enum SaveFlowCommitPlan {
 ///   unaffected.)
 fn save_flow_resolve_commit_plan() -> Result<SaveFlowCommitPlan, String> {
     let Some(target) = save_dest_target() else {
-        // Box2 answered "Yes": no destination was ever chosen because the destination IS the
-        // loaded save.
+        // NO DESTINATION WAS EVER NAMED. The product path always names one now (the row press
+        // opens the list and nothing commits without a pick), so this is the dormant
+        // return-title safety net in `system_quit_save_game_return_title_request_hook`, which
+        // fires a plain save with no redirect. Writing the loaded save in place is what a save
+        // with no chosen destination means.
         return Ok(match save_dest_live_save_path() {
             Some(live) => SaveFlowCommitPlan::LiveOverwrite {
                 live,
-                reason: "box2 overwrite-the-loaded-save",
+                reason: "no destination chosen; overwrite the loaded save",
             },
             None => SaveFlowCommitPlan::Unnamed,
         });
@@ -2228,7 +2212,7 @@ mod save_flow_deadline_tests {
     ///
     /// The old behaviour is not literally infinite -- `OpenTimeout` fires once the stage has accrued
     /// its budget -- but ~60 dialogs is indistinguishable from a trap, and it is a FLOOR, because
-    /// every Box3 round-trip re-enters stage 3 and resets the budget to zero.
+    /// every overwrite-confirm round-trip re-enters stage 3 and resets the budget to zero.
     #[test]
     fn a_cancelling_user_is_shown_one_destination_dialog_not_a_reopen_loop() {
         /// One run of the pump+tick pair against a user who cancels every dialog. Returns how many
@@ -2269,18 +2253,18 @@ mod save_flow_deadline_tests {
         );
     }
 
-    /// A confirm the OS arm staged must reach Box3 even though nothing is live by then: its dialog
+    /// A confirm the OS arm staged must be reached even though nothing is live by then: its dialog
     /// closed before the target was known, so a verdict that consulted liveness first would call it
     /// abandoned and silently drop the save.
     #[test]
     fn an_owed_overwrite_confirm_outranks_the_abandoned_verdict() {
         assert_eq!(
             dest_browse_verdict(false, false, false, false, true, false, 1),
-            DestBrowseAction::EnterBox3
+            DestBrowseAction::EnterOverwriteConfirm
         );
         assert_eq!(
             dest_browse_verdict(false, false, false, false, true, false, 100_000),
-            DestBrowseAction::EnterBox3,
+            DestBrowseAction::EnterOverwriteConfirm,
             "an owed confirm has no deadline either"
         );
         assert_eq!(

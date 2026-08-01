@@ -25,8 +25,8 @@ pub(crate) struct RuntimeConfig {
     pub boot_background_image: Option<PathBuf>,
     pub preferred_save_picker_dir: Option<PathBuf>,
     pub autoupdate_preferred_picker_dir: Option<bool>,
-    /// Which file-picker SURFACE the System>Quit "Load Save Profiles" row and the Save Game
-    /// destination step open. Absent (`None`) means the in-game `05_010` browser, which is the
+    /// Which file-picker SURFACE the System>Quit "Load Character from File" row and the Save Game
+    /// destination list open. Absent (`None`) means the in-game `05_010` browser, which is the
     /// only surface the build gate can exercise.
     pub os_native_save_picker: Option<bool>,
 }
@@ -245,7 +245,7 @@ fn upsert_top_level_key(contents: &str, key: &str, assignment: &str) -> String {
 /// the key just as the attach-time auto-created one does.
 fn os_native_save_picker_doc() -> String {
     format!(
-        "# Open the OS file dialog instead of the in-game 05_010 browser, for BOTH the\n# \"Load Save Profiles\" row and the Save Game destination step. One key governs both.\n# Default false = the in-game browser. The OS dialog is NOT covered by the build gate\n# and can land behind an exclusive-fullscreen game; the in-game browser exists for that case.\n# {OS_NATIVE_SAVE_PICKER_KEY} = false"
+        "# Open the OS file dialog instead of the in-game 05_010 browser, for BOTH the\n# \"Load Character from File\" row and the Save Game destination list. One key governs both.\n# Default false = the in-game browser. The OS dialog is NOT covered by the build gate\n# and can land behind an exclusive-fullscreen game; the in-game browser exists for that case.\n# {OS_NATIVE_SAVE_PICKER_KEY} = false"
     )
 }
 

@@ -20,7 +20,7 @@
 // dispatched through only TWO controllers: in the measured run only the two NATIVE row controllers
 // ever reached `PropertyNewButtonController::Activate` (0x23517880 with index 0, 0x23517580 with
 // index 1, twice per frame), and the two cloned rows' controllers never appeared at all. So a click
-// on the fourth visible button ("Load Save Profiles") arrives carrying the second native row's
+// on the fourth visible button ("Load Character from File") arrives carrying the second native row's
 // controller -- and the old gate read that as "the user confirmed Return to Desktop" and called
 // `ExitProcess(0)`.
 //
@@ -36,7 +36,7 @@
 // `oracle_optionsetting_active_row_quit_label_mask = 15`, i.e. all four rows' labels were readable
 // and each matched one of the four known Quit labels, on the very dialog (`0x175842080`) the fatal
 // click came from. `cloned_mask = 12` and `native_save_mask = 1` pin the order: row 0 Save Game,
-// row 1 Return to Desktop, row 2 Load Profile, row 3 Load Save Profiles.
+// row 1 Return to Desktop, row 2 Load Character, row 3 Load Character from File.
 //
 // Which row was ACTIVATED comes from ONE source for all three input kinds: the dialog's own list
 // cursor, `dialog + 0xb0c` -- field `+0xd4` of the `CS::GridControl` embedded at `dialog + 0xa38`
@@ -73,9 +73,11 @@ pub(crate) enum QuitRow {
     SaveGame,
     /// Native second row: the real Return to Desktop. The only row allowed to quit.
     ReturnToDesktop,
-    /// Cloned row: opens the native `05_010_ProfileSelect` character picker.
+    /// Cloned row, labelled "Load Character": opens the native `05_010_ProfileSelect` character
+    /// picker over the container already loaded.
     LoadProfile,
-    /// Cloned row: opens the in-game save-container picker.
+    /// Cloned row, labelled "Load Character from File": opens the save-container browser, and the
+    /// character picker follows once a container is chosen.
     LoadSaveProfiles,
 }
 
@@ -90,12 +92,16 @@ impl QuitRow {
         }
     }
 
+    /// The row's VISIBLE label. The variant names still say "profile" because that is the native
+    /// vocabulary these rows are built from (`ProfileSummary`, `05_010_ProfileSelect`,
+    /// `SaveRequest_Profile`) and renaming them would rename half the save-flow surface; the words
+    /// a USER reads live here, and only here.
     pub(crate) fn label(self) -> &'static str {
         match self {
             QuitRow::SaveGame => "Save Game",
             QuitRow::ReturnToDesktop => "Return to Desktop",
-            QuitRow::LoadProfile => "Load Profile",
-            QuitRow::LoadSaveProfiles => "Load Save Profiles",
+            QuitRow::LoadProfile => "Load Character",
+            QuitRow::LoadSaveProfiles => "Load Character from File",
         }
     }
 }
@@ -492,12 +498,15 @@ pub(crate) unsafe fn system_quit_row_label_at(dialog: usize, index: i32) -> Opti
     // Confirm the pointer is a readable UTF-16 string before classifying it as foreign, so an
     // unmapped/garbage pointer reports `None` (ambiguous) rather than "native label".
     unsafe { safe_read_u16(label_ptr) }?;
-    // Longest label first: "Load Save Profiles" starts with neither of the others, but "Load
-    // Profile" would also prefix-match a hypothetical longer string, so keep the order explicit.
-    if wide_ptr_starts_with_ascii(label_ptr, b"Load Save Profiles") {
+    // LONGEST LABEL FIRST, AND SINCE 2026-07-31 THAT IS LOAD-BEARING RATHER THAN TIDY.
+    // "Load Character from File" STARTS WITH "Load Character", so a prefix test in the other order
+    // classifies the file-browse row as the character row -- and this function's answer decides
+    // which row a click ran. The old pair ("Load Save Profiles" / "Load Profile") did not overlap,
+    // so the ordering was free then and is not now. Any future label must be checked against this.
+    if wide_ptr_starts_with_ascii(label_ptr, b"Load Character from File") {
         return Some(QuitRowLabel::Ours(QuitRow::LoadSaveProfiles));
     }
-    if wide_ptr_starts_with_ascii(label_ptr, b"Load Profile") {
+    if wide_ptr_starts_with_ascii(label_ptr, b"Load Character") {
         return Some(QuitRowLabel::Ours(QuitRow::LoadProfile));
     }
     if wide_ptr_starts_with_ascii(label_ptr, b"Save Game") {
@@ -682,7 +691,7 @@ mod system_quit_row_identity_tests {
     use super::*;
 
     /// The measured table from the fatal run: dialog 0x175842080, rows 0..3 =
-    /// Save Game / Return to Desktop / Load Profile / Load Save Profiles, cursor parked on row 1.
+    /// Save Game / Return to Desktop / Load Character / Load Character from File, cursor on row 1.
     fn facts() -> QuitRowFacts {
         QuitRowFacts {
             save_game_index: 0,

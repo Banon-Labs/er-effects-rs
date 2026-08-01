@@ -92,7 +92,7 @@ windows = { version = "0.62", features = [
   "Win32_UI_Input_KeyboardAndMouse",
   # comdlg32 (GetOpenFileNameW / GetSaveFileNameW / CommDlgExtendedError) for the OPT-IN OS file
   # picker: `er-effects.toml os_native_save_picker = true` routes BOTH System -> Quit surfaces --
-  # "Load Save Profiles" and the Save Game destination step -- to the OS dialog instead of the
+  # "Load Character from File" and the Save Game destination list -- to the OS dialog instead of the
   # in-game 05_010 browser. Both code paths ship in the one DLL; see save_picker_os_dialog.rs.
   "Win32_UI_Controls_Dialogs",
   # CreateEventW (fence-completion event for the D3D12 readback wait) is gated behind Win32_Security.

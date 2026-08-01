@@ -664,23 +664,26 @@ pub(crate) const SAVE_REQUEST_RETRACT_B72_SIG: &[u8] = &[
 pub(crate) const SAVE_REQUEST_RETRACT_B73_SIG: &[u8] = &[
     0x48, 0x8B, 0x05, 0x01, 0x12, 0x6F, 0x03, 0xC6, 0x80, 0x73, 0x0B, 0x00, 0x00, 0x00, 0xC3,
 ];
-// ---- SAVE-FLOW state machine (save-game-flow WP1, 2026-07-28) ----
-// The Save Game row is CLOSE-THEN-FIRE: the row press stages a commit (stage 6), the proven
-// close sequence runs, and only with menus closed + RAM gates green does the tick arm the
-// one-shot er-save-suppress bypass and fire the FORCED (throttle-skipping) request pair.
-// The row press does not go straight to stage 6, though: it opens the confirm chain (stages
-// 1/2), and Box2 "No" routes through the destination browser (stages 3/4) before a commit is
-// staged. Full stage map lives on `er_telemetry::counters::SAVE_FLOW_STAGE`.
+// ---- SAVE-FLOW state machine (save-game-flow WP1, 2026-07-28; reshaped 2026-07-31) ----
+// The Save Game row is CLOSE-THEN-FIRE: a commit is staged (stage 6), the proven close sequence
+// runs, and only with menus closed + RAM gates green does the tick arm the one-shot
+// er-save-suppress bypass and fire the FORCED (throttle-skipping) request pair.
+//
+// The row press goes STRAIGHT TO THE DESTINATION LIST (stage 3). It asks nothing first: the only
+// question in the flow is the overwrite confirm (stage 4), and it is asked about a file the user
+// has already pointed at. Full stage map lives on `er_telemetry::counters::SAVE_FLOW_STAGE`.
+//
+// STAGE IDS 1 AND 2 ARE RETIRED, NOT REUSED. They were the two up-front confirms. Leaving the gap
+// keeps every existing log line and `oracle_save_flow_stage` value in the archive meaning what it
+// meant when it was written; renumbering 3..8 down would silently redefine them. A live 1 or 2 is
+// now state corruption, and `save_flow_tick`'s catch-all arm resets loudly on it.
 pub(crate) const SAVE_FLOW_STAGE_IDLE: usize = 0;
-/// WP2: the "Are you sure you want to save?" confirm is up (default No).
-pub(crate) const SAVE_FLOW_STAGE_BOX1_WAIT: usize = 1;
-/// WP2: the "Overwrite your loaded save?" confirm is up (default Yes).
-pub(crate) const SAVE_FLOW_STAGE_BOX2_WAIT: usize = 2;
-/// WP3: the destination browser owns the screen -- opening, being browsed, or tearing down after a
-/// destination was chosen (`SAVE_DEST_COMMIT_PENDING`).
+/// The destination browser owns the screen -- opening, being browsed, or tearing down after a
+/// destination was chosen (`SAVE_DEST_COMMIT_PENDING`). The Save Game row press enters HERE.
 pub(crate) const SAVE_FLOW_STAGE_DEST_BROWSE: usize = 3;
-/// WP3: the "Overwrite this file?" confirm is up over the destination browser (default No).
-pub(crate) const SAVE_FLOW_STAGE_BOX3_WAIT: usize = 4;
+/// The "Are you sure you want to overwrite this file?" confirm is up over the destination
+/// browser (default No). The only confirm in the flow.
+pub(crate) const SAVE_FLOW_STAGE_OVERWRITE_CONFIRM: usize = 4;
 /// WP2: the user declined (or a recipe failure aborted); the close sequence is running and
 /// NOTHING will be written.
 pub(crate) const SAVE_FLOW_STAGE_CLOSING_ABORT: usize = 5;
@@ -733,12 +736,12 @@ pub(crate) const SAVE_FLOW_ENQUEUE_GRACE_TICKS: usize = 180;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_GATE_LATCH_BLOCKED_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_STAGE;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_STAGE_TICKS;
-// ---- SAVE-FLOW confirm chain (save-game-flow WP2, 2026-07-28) ----
-// The Save Game row no longer commits on press: it opens Box1 ("Are you sure you want to
-// save?", default No) and, on Yes, Box2 ("Overwrite your loaded save?", default Yes). Both
-// are built through the GAME's own `CS::MessageBoxBuilder` recipe (RVAs below) and submitted
-// to the System dialog's own MenuJob queue, so they are localized, skinned and input-routed
-// exactly like the native quit confirm. See `save_flow_boxes.rs` for the recipe.
+// ---- SAVE-FLOW confirm box (save-game-flow WP2, 2026-07-28; one box since 2026-07-31) ----
+// The Save Game row does not commit on press and does not ask on press: it opens the destination
+// list. The flow's ONE confirm ("Are you sure you want to overwrite this file?", default No) is
+// built through the GAME's own `CS::MessageBoxBuilder` recipe (RVAs below) and submitted to a
+// MenuJob queue, so it is localized, skinned and input-routed exactly like the native quit
+// confirm. See `save_flow_boxes.rs` for the recipe.
 pub(crate) use er_telemetry::counters::SAVE_FLOW_ABORT_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_BUILD_TIMEOUT_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_COUNT;
@@ -762,9 +765,12 @@ pub(crate) use er_telemetry::counters::SAVE_FLOW_SUBMIT_BOX_PENDING;
 pub(crate) const SAVE_FLOW_BOX_BUILD_TIMEOUT_TICKS: usize = 180;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_HOST_DIALOG;
 // ---- SAVE-DESTINATION browser (save-game-flow WP3, 2026-07-28) ----
-// Box2 "No" opens the shipping `05_010` picker REPURPOSED as a save-destination chooser (row 1 is
-// a pinned `[ new ]`), and the commit writes there instead of the loaded save by diverting the
-// native writer's single container write-open. See `save_dest_commit.rs`.
+// The Save Game row press opens the shipping `05_010` picker REPURPOSED as a save-destination
+// chooser (row 0 is a pinned `[ new ]`), and the commit writes there instead of the loaded save by
+// diverting the native writer's single container write-open. See `save_dest_commit.rs`. A pick
+// that resolves back to the LOADED save is recognised as such and routed to the sanctioned
+// in-place overwrite -- with the up-front "Overwrite your loaded save?" box gone, that is the ONLY
+// way a user overwrites their own save, so the filesystem-identity check is load-bearing.
 pub(crate) use er_telemetry::counters::SAVE_DEST_CANCEL_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_DEST_COMMIT_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_DEST_COMMIT_FAIL;
@@ -774,6 +780,7 @@ pub(crate) use er_telemetry::counters::SAVE_DEST_COMMIT_PENDING;
 pub(crate) use er_telemetry::counters::SAVE_DEST_CONFIRM_PENDING;
 pub(crate) use er_telemetry::counters::SAVE_DEST_LIVE_FILE_MUTATED;
 pub(crate) use er_telemetry::counters::SAVE_DEST_OPEN_PICKER_PENDING;
+pub(crate) use er_telemetry::counters::SAVE_DEST_OVERWRITE_UNCONFIRMABLE_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_DEST_PICKER_OPEN_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_DEST_REDIRECT_ARMED;
 pub(crate) use er_telemetry::counters::SAVE_DEST_REDIRECT_HITS;
@@ -989,7 +996,7 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_DUPLICATE_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_NATIVE_SAVE_GAME_ACTION_LAST_OBJECT;
 /// Native second Quit-tab row action object (Return to Desktop). The patched 4-slot GameEnd GFx can
 /// still dispatch this native object for the lower visual buttons; the action hook disambiguates those
-/// by the live dialog cursor so row 2/3 become Load Profile / Load Save Profiles instead of showing
+/// by the live dialog cursor so row 2/3 become Load Character / Load Character from File instead of showing
 /// the native desktop confirmation.
 pub(crate) static SYSTEM_QUIT_NATIVE_RETURN_DESKTOP_ACTION_LAST_OBJECT: AtomicUsize =
     AtomicUsize::new(0);
@@ -1365,7 +1372,7 @@ pub(crate) use er_telemetry::counters::OPTIONSETTING_REAL_BLANK_DETECTED_COUNT;
 /// cache slot the current pane dialog matches -- to identify WHICH tab is blank (e.g. the Quit/Exit tab
 /// where our injected Load-Profile rows live vs the Game tab).
 pub(crate) use er_telemetry::counters::OPTIONSETTING_CURRENT_TAB;
-/// The System/OptionSetting Quit tab index. The custom Load Profile / Load Save Profiles rows are
+/// The System/OptionSetting Quit tab index. The custom Load Character / Load Character from File rows are
 /// children of this tab, so Back from their ProfileSelect child must restore this tab as the parent.
 pub(crate) const OPTIONSETTING_QUIT_TAB_INDEX: usize = 8;
 pub(crate) use er_telemetry::counters::OPTIONSETTING_CURRENT_TAB_AT_BLANK;
