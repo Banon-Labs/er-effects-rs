@@ -1,3 +1,5 @@
+use super::*;
+
 /// Crash-on-not-loaded watchdog (privacy-policy-gated-on-character-presence-CONFIRMED-2026-06-23):
 /// the Bandai-Namco privacy policy / new-game state shows ONLY when the active profile has no
 /// character (profile_slot_active == 0). When a load is expected (not telemetry-only) and the profile

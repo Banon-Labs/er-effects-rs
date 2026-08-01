@@ -2,5 +2,10 @@
 
 #![allow(unused_imports)]
 
-include!("continue_load/product_continue.rs");
-include!("continue_load/slot_resolution.rs");
+use super::*;
+
+mod product_continue;
+pub(crate) use product_continue::*;
+
+mod slot_resolution;
+pub(crate) use slot_resolution::*;
