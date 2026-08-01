@@ -1663,6 +1663,16 @@ pub static SAVE_PICKER_DIM_DISARM_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// same interval is the objective proof that the animation ticked on a thread we own -- something no
 /// game-render-path overlay could produce.
 pub static SAVE_PICKER_DIM_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// `SAVE_PICKER_DIM_FRAMES` sampled at the START of the current arm, so the disarm can subtract and
+/// report THIS ARM'S frames.
+///
+/// The counter above is process-cumulative and the disarm line used to print it raw, which read as
+/// a per-arm figure and was not one: a four-open run logged 108/241/362/423 where the arms had
+/// actually pushed 108/133/121/61. Every one of those lines overstated its own arm, and the last
+/// overstated it by 7x. Snapshotting at arm and subtracting at disarm is what makes the line say
+/// what it claims to say. Written by the ARMING thread before the generation bump, so the overlay
+/// thread cannot have pushed a frame of the new arm yet.
+pub static SAVE_PICKER_DIM_FRAMES_AT_ARM: AtomicUsize = AtomicUsize::new(0);
 /// Wall-clock milliseconds of the LAST completed armed interval (arm -> disarm). Pairs with the
 /// dialog's own `after=Nms` log line: the two must agree, or the dim did not bracket the call.
 pub static SAVE_PICKER_DIM_ALIVE_MS: AtomicUsize = AtomicUsize::new(0);
@@ -1690,15 +1700,58 @@ pub static SAVE_PICKER_DIM_Z_FOREIGN: AtomicUsize = AtomicUsize::new(usize::MAX)
 /// The foreground window seen while armed that is neither ours nor the game's -- i.e. comdlg32's.
 /// 0 means no foreign foreground window was ever observed while the dim was up.
 pub static SAVE_PICKER_DIM_FOREIGN_FG_HWND: AtomicUsize = AtomicUsize::new(0);
-/// Times the sampled z-order VIOLATED the contract while armed: the dim at or behind the game (it
-/// would be invisible), or the dim in front of the foreign foreground window (it would be covering
-/// the very dialog the user has to click).
+/// Frames whose sampled z-order VIOLATED the cover's contract while armed, counted SEPARATELY for
+/// the two ways it can break.
 ///
-/// A COUNTER, not a last-sample snapshot, because `SAVE_PICKER_DIM_Z_*` only carry the most recent
+/// COUNTERS, not last-sample snapshots, because `SAVE_PICKER_DIM_Z_*` only carry the most recent
 /// frame -- and the most recent frame is the one taken as the dialog is already tearing down, which
 /// is exactly when the ordering is least representative. `0` across a run where frames were pushed
 /// is the real proof the stacking held for the whole dialog, not just at the end.
-pub static SAVE_PICKER_DIM_Z_VIOLATIONS: AtomicUsize = AtomicUsize::new(0);
+///
+/// THEY ARE TWO FIELDS BECAUSE THEY MEAN OPPOSITE THINGS AND CARRY OPPOSITE SEVERITIES (split
+/// 2026-08-01, er-effects-rs-mc1d). The fused predecessor `SAVE_PICKER_DIM_Z_VIOLATIONS` scored
+/// `behind_game || covering_dialog` into one atomic, and the live run that was supposed to prove
+/// the ownership fix came back with 130 of them across 424 dim frames -- a number from which
+/// neither failure could be confirmed nor excluded. The oracle could not answer the single question
+/// it was built to answer, so the run could neither pass nor fail the fix. The severities:
+///
+/// - `_Z_COVERING_DIALOG` (`self_z < foreign_z`, our cover NEARER THE FRONT than the dialog) is
+///   precisely the defect the ownership chain exists to eliminate. Non-zero means the fix is
+///   INCOMPLETE and for those frames the user was looking at a dim laid over the controls they have
+///   to click. Treat any non-zero value as a failure of the z-order fix.
+/// - `_Z_BEHIND_GAME` (`self_z >= game_z`) is a lower-severity COSMETIC failure: the cover is
+///   invisible for those frames, but the dialog is still fully usable. Non-zero deserves its own
+///   issue, not a block on the ownership work.
+///
+/// Unknown ordinals (`usize::MAX`) are excluded from BOTH, so neither counts a window that had
+/// merely dropped out of the z-chain while being created or destroyed.
+pub static SAVE_PICKER_DIM_Z_BEHIND_GAME: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_DIM_Z_COVERING_DIALOG: AtomicUsize = AtomicUsize::new(0);
+/// The FIRST offending sample of each kind: the `(self, game, foreign)` ordinals that broke the
+/// contract, plus the milliseconds between that arm's cover coming up and the break. `usize::MAX`
+/// (emitted as `-1`) means that kind never fired.
+///
+/// A TOTAL ALONE CANNOT SAY *WHERE IN THE ARM* THE BREAK SAT, and the phase is most of the
+/// diagnosis: ordinals that break at `+0ms` and then settle are a bring-up transient the compositor
+/// resolves, while the same ordinals still breaking hundreds of milliseconds in are a stacking that
+/// never took. The run that motivated this recorded 130 breaks over 4 arms with no way to tell
+/// those two apart.
+///
+/// FIRST-WINS, NOT LAST-WINS, and enforced rather than assumed: the `_FIRST_SELF` field is the
+/// whole record's claim ticket, taken by a `compare_exchange` off the `usize::MAX` sentinel, and
+/// only the sample that wins that CAS writes the other three. A violating sample always has a known
+/// `self_z` (both disjuncts require it), so the sentinel can never collide with a real value. The
+/// first break is the one that shows the transition into failure; a last-wins record would decay
+/// into the same tear-down-moment snapshot the counters above exist to avoid.
+pub static SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_SELF: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub static SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_GAME: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub static SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_FOREIGN: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub static SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_MS: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub static SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_SELF: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub static SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_GAME: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub static SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_FOREIGN: AtomicUsize =
+    AtomicUsize::new(usize::MAX);
+pub static SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_MS: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// Frames whose push had to fall back to a FULL-surface upload because the dirty-rectangle path was
 /// refused. The cover is a mostly-static image with a small animating mark, so pushing only the
 /// mark's rectangle is what keeps the pulse smooth; a run where this equals the frame count is a run
