@@ -7,18 +7,23 @@
 //!
 //!   Run:  cargo run -p er-objectkit --example replay_capture -- <capture_dir>
 //!
-//! Status: cbuffer replay (lighting + camera). Texture replay (IBL/GI DDS via image_dds)
-//! is the next step; until then those bind to gray stubs.
+//! Status: cbuffer replay (lighting + camera) plus captured DDS texture replay for
+//! texture SRVs present in the capture manifest.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::Cursor;
+use std::path::Path;
 
 use er_flver::{Isg1Input, parse_raw};
 use er_objectkit::capture::{Capture, OurCbuffer, match_by_size};
 use er_objectkit::passthrough::to_obj_bind;
-use er_objectkit::spirv_reflect::{block_byte_sizes, reflect};
+use er_objectkit::spirv_reflect::{BindingKind, Reflection, block_byte_sizes, reflect};
 use er_shaderkit::dxbc::parse_input_signature;
 use er_shaderkit::dxil_to_spirv;
-use er_shaderkit::render::{Headless, ObjBind, ObjDrawDesc, ObjVbo};
+use er_shaderkit::render::{
+    Headless, ObjBind, ObjDrawDesc, ObjVbo, RealTexture, parse_image_bindings,
+};
+use image_dds::ddsfile::{Caps2, Dds, MiscFlag};
 
 fn find_flver() -> Option<Vec<u8>> {
     let dir = std::path::Path::new("target/er-objectkit/aeg301_012");
@@ -30,6 +35,148 @@ fn find_flver() -> Option<Vec<u8>> {
         .filter_map(|p| Some((p.metadata().ok()?.len(), p)))
         .max_by_key(|(sz, _)| *sz)
         .and_then(|(_, p)| std::fs::read(p).ok())
+}
+
+struct OwnedReplayTexture {
+    set: u32,
+    binding: u32,
+    width: u32,
+    height: u32,
+    depth_or_layers: u32,
+    dim: wgpu::TextureViewDimension,
+    data: Vec<u8>,
+}
+
+impl OwnedReplayTexture {
+    fn as_real(&self) -> RealTexture<'_> {
+        RealTexture {
+            set: self.set,
+            binding: self.binding,
+            width: self.width,
+            height: self.height,
+            depth_or_layers: self.depth_or_layers,
+            dim: self.dim,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            data: &self.data,
+        }
+    }
+}
+
+fn is_cubemap_dds(dds: &Dds) -> bool {
+    dds.header.caps2.contains(Caps2::CUBEMAP)
+        || dds
+            .header10
+            .as_ref()
+            .is_some_and(|h| h.misc_flag.contains(MiscFlag::TEXTURECUBE))
+}
+
+fn dds_layer_count(dds: &Dds) -> u32 {
+    if dds
+        .header10
+        .as_ref()
+        .is_some_and(|h| h.misc_flag.contains(MiscFlag::TEXTURECUBE))
+    {
+        dds.get_num_array_layers().max(1) * 6
+    } else {
+        dds.get_num_array_layers().max(1)
+    }
+}
+
+fn dds_fallback_view_dim(dds: &Dds, layers: u32) -> wgpu::TextureViewDimension {
+    if dds.get_depth() > 1 {
+        wgpu::TextureViewDimension::D3
+    } else if is_cubemap_dds(dds) {
+        if layers > 6 {
+            wgpu::TextureViewDimension::CubeArray
+        } else {
+            wgpu::TextureViewDimension::Cube
+        }
+    } else if layers > 1 {
+        wgpu::TextureViewDimension::D2Array
+    } else {
+        wgpu::TextureViewDimension::D2
+    }
+}
+
+fn validate_decoded_shape(
+    dim: wgpu::TextureViewDimension,
+    depth: u32,
+    layers: u32,
+) -> Result<u32, String> {
+    match dim {
+        wgpu::TextureViewDimension::D3 => Ok(depth.max(1)),
+        wgpu::TextureViewDimension::Cube if layers == 6 => Ok(layers),
+        wgpu::TextureViewDimension::Cube => {
+            Err(format!("shader expects cube view, DDS has {layers} layers"))
+        }
+        wgpu::TextureViewDimension::CubeArray if layers >= 6 && layers % 6 == 0 => Ok(layers),
+        wgpu::TextureViewDimension::CubeArray => Err(format!(
+            "shader expects cube-array view, DDS has invalid layer count {layers}"
+        )),
+        _ => Ok(layers.max(1)),
+    }
+}
+
+fn decode_replay_texture(
+    set: u32,
+    binding: u32,
+    path: &Path,
+    dim_hint: Option<wgpu::TextureViewDimension>,
+) -> Result<OwnedReplayTexture, String> {
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let dds = Dds::read(&mut Cursor::new(bytes)).map_err(|e| e.to_string())?;
+    let layers = dds_layer_count(&dds);
+    let surface = image_dds::SurfaceRgba8::decode_layers_mipmaps_dds(&dds, 0..layers, 0..1)
+        .map_err(|e| e.to_string())?;
+    let dim = dim_hint.unwrap_or_else(|| dds_fallback_view_dim(&dds, surface.layers));
+    let depth_or_layers = validate_decoded_shape(dim, surface.depth, surface.layers)?;
+    Ok(OwnedReplayTexture {
+        set,
+        binding,
+        width: surface.width,
+        height: surface.height,
+        depth_or_layers,
+        dim,
+        data: surface.data,
+    })
+}
+
+fn texture_binding_for_stage(
+    stage: &str,
+    register: u32,
+    maps: &[Vec<(u32, u32, u32)>],
+    vr: &Reflection,
+    pr: &Reflection,
+) -> Option<u32> {
+    let (module_index, reflection) = match stage {
+        "vertex" => (0, vr),
+        "pixel" => (1, pr),
+        _ => return None,
+    };
+    let texture_bindings: BTreeSet<u32> = reflection
+        .bindings
+        .iter()
+        .filter(|b| b.kind == BindingKind::Texture)
+        .map(|b| b.binding)
+        .collect();
+    maps.get(module_index)?.iter().find_map(|(old, new, sc)| {
+        (*old == register && *sc == 0 && texture_bindings.contains(new)).then_some(*new)
+    })
+}
+
+fn texture_binding(
+    stage: &str,
+    register: u32,
+    maps: &[Vec<(u32, u32, u32)>],
+    vr: &Reflection,
+    pr: &Reflection,
+) -> Option<u32> {
+    if stage == "vertex" || stage == "pixel" {
+        texture_binding_for_stage(stage, register, maps, vr, pr)
+    } else {
+        texture_binding_for_stage("pixel", register, maps, vr, pr)
+            .or_else(|| texture_binding_for_stage("vertex", register, maps, vr, pr))
+    }
 }
 
 fn main() {
@@ -122,6 +269,47 @@ fn main() {
         }
     }
 
+    let image_dims: BTreeMap<(u32, u32), wgpu::TextureViewDimension> = parse_image_bindings(&v_spv)
+        .into_iter()
+        .chain(parse_image_bindings(&p_spv))
+        .map(|i| ((i.set, i.binding), i.view_dim))
+        .collect();
+    let mut owned_textures: Vec<OwnedReplayTexture> = Vec::new();
+    for t in &capture.manifest.textures {
+        let Some(binding) = texture_binding(&t.stage, t.register, &maps, &vr, &pr) else {
+            eprintln!("  UNMATCHED {} texture t{} {}", t.stage, t.register, t.name);
+            continue;
+        };
+        let path = capture.dir.join(&t.file);
+        match decode_replay_texture(0, binding, &path, image_dims.get(&(0, binding)).copied()) {
+            Ok(tex) => {
+                eprintln!(
+                    "  bind {} texture t{} {} -> binding {} ({}x{} {:?} layers/depth {})",
+                    t.stage,
+                    t.register,
+                    t.name,
+                    binding,
+                    tex.width,
+                    tex.height,
+                    tex.dim,
+                    tex.depth_or_layers
+                );
+                owned_textures.push(tex);
+            }
+            Err(e) => eprintln!(
+                "  texture decode skipped {} t{} {} ({}): {e}",
+                t.stage,
+                t.register,
+                t.name,
+                path.display()
+            ),
+        }
+    }
+    let textures: Vec<RealTexture<'_>> = owned_textures
+        .iter()
+        .map(OwnedReplayTexture::as_real)
+        .collect();
+
     // FLVER geometry (largest drawable mesh) + vertex layout from the ISG1 signature.
     let sig = parse_input_signature(&vpo).expect("isg1");
     let isg1: Vec<Isg1Input> = sig
@@ -204,7 +392,7 @@ fn main() {
         uniform_sizes: &[],
         uniform_writes: &[], // the captured cbuffers carry the real matrices + lighting
         buffer_data: &buffer_data,
-        textures: &[], // TODO: decode captured IBL/GI DDS via image_dds
+        textures: &textures,
         color_targets: pr.output_locations.len().max(1),
         size,
         pixel_wgsl: None,

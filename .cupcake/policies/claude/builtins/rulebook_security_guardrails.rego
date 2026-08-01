@@ -208,10 +208,10 @@ get_file_path_from_tool_input := path if {
 # - Grep's 'path' field now uses canonical paths (closes symlink bypass)
 # - Glob's 'pattern' field still uses raw patterns (can't be canonicalized)
 #
-# TODO: Known Glob limitations (complex pattern parsing required):
+# Known Glob limitations tracked in bd er-effects-rs-4afu (complex pattern parsing required):
 # - Glob(pattern="backup/**/*.rego") where "backup" is symlink to .cupcake
 # - Glob(pattern="**/*.rego") searches symlinks without .cupcake in pattern
-# - Requires pattern parsing before file expansion to fully address
+# - Requires a filesystem-aware pre-tool/path-resolver layer before policy evaluation
 get_file_path_with_preprocessing_fallback := path if {
 	# For Glob only, use raw pattern since it can't be canonicalized (e.g., "**/*.rs")
 	# Grep's 'path' field CAN be canonicalized, so it goes through TOB-4 defense

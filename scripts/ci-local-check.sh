@@ -38,6 +38,13 @@ fi
 python3 scripts/check-no-lossy-utf8.py
 python3 scripts/check-no-timeouts.py
 python3 scripts/test-no-timeouts.py
+# One game address must have exactly ONE literal declaration. Divergent names for one address
+# are divergent CLAIMS about what it is, and three of them turned out to be wrong RE facts
+# shipping in the DLL (bd rva-67b750-is-save-write-not-continue-load-2026-08-01,
+# rva-4852f88-is-saveload2-slsystemimpl-not-fd4-io-worker-2026-08-01). Selftest first, so the
+# gate is never trusted on its own say-so.
+python3 scripts/check-rva-alias-drift.py --selftest
+python3 scripts/check-rva-alias-drift.py
 cupcake validate --log-level error
 python3 scripts/test-cupcake-policies.py
 cargo fmt --all -- --check
