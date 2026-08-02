@@ -16,7 +16,7 @@ use std::{
     },
 };
 
-use er_hook::MhHook;
+use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 
 /// Exact byte length of Elden Ring PC `ER0000.sl2` / Seamless `.co2` save containers.
 ///
@@ -180,6 +180,65 @@ pub unsafe fn queue_resolved_save_hook(
             "save-override: MhHook::new {name} failed at 0x{target_addr:x}: {status:?}"
         )),
     }
+}
+
+/// Install the always-on core CreateFileW save hook once.
+///
+/// Product still supplies export resolution, the detour function pointer, and the log sink. The
+/// shared redirect core owns the idempotency, MinHook initialization, trampoline storage, queue
+/// enable, apply, and live-state mark.
+///
+/// # Safety
+/// `createfilew_detour` must match the Win32 `CreateFileW` ABI and must remain valid for the process
+/// lifetime.
+pub unsafe fn install_core_createfilew_hook(
+    state: &SaveHookInstallState,
+    createfilew_detour: *mut c_void,
+    resolve_kernel32: impl FnOnce(&[u8]) -> usize,
+    mut log: impl FnMut(String),
+) {
+    state.install_core_once(|| {
+        match unsafe { MH_Initialize() } {
+            MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+            status => {
+                log(format!("save-override: core MH_Initialize failed: {status:?}"));
+                return;
+            }
+        }
+        let create_addr = resolve_kernel32(b"CreateFileW\0");
+        if create_addr == SAVE_HOOK_ORIGINAL_UNSET {
+            log("save-override: core could not resolve kernel32!CreateFileW -- save-destination commits cannot redirect their write-open".to_owned());
+            return;
+        }
+        let hook = match unsafe {
+            MhHook::new(create_addr as *mut c_void, createfilew_detour)
+        } {
+            Ok(hook) => hook,
+            Err(status) => {
+                log(format!(
+                    "save-override: core MhHook::new CreateFileW failed at 0x{create_addr:x}: {status:?}"
+                ));
+                return;
+            }
+        };
+        SAVE_REDIRECT_ORIG_CREATEFILEW.store(hook.trampoline() as usize, Ordering::SeqCst);
+        if let Err(status) = unsafe { hook.queue_enable() } {
+            log(format!("save-override: core CreateFileW queue_enable failed: {status:?}"));
+            return;
+        }
+        match unsafe { MH_ApplyQueued() } {
+            MH_STATUS::MH_OK => {
+                state.mark_core_createfilew_installed();
+                std::mem::forget(hook);
+                log(format!(
+                    "save-override: core INSTALLED CreateFileW(0x{create_addr:x}) -- pass-through until a redirect dir or a save destination is armed"
+                ));
+            }
+            status => log(format!(
+                "save-override: core CreateFileW MH_ApplyQueued failed: {status:?}"
+            )),
+        }
+    });
 }
 
 /// Why a candidate save source was rejected before redirect planning.
