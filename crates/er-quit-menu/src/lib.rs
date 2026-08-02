@@ -1,11 +1,11 @@
 //! Product (B): the customized post-autoload vanilla System>Quit menu.
 //!
-//! SCAFFOLDING ONLY (phase 1 of docs/plans/save-picker-crate-extraction.md). The modules
-//! this crate will own are listed below; nothing has been moved yet, so `er-effects-rs`
-//! behaves byte-for-byte as it did before this crate existed.
+//! S7 has moved the pure decision core for rows, save-destination identity/commit helper
+//! decisions, and save-flow confirm-box decisions into this crate. Runtime-native hook surfaces
+//! still live in `er-effects-rs` shims until S8/S9.
 //!
-//! Planned contents, moved from the root DLL (line counts are the current source, and the
-//! per-file product/diagnostic split is in the plan doc -- several of these files move
+//! Planned contents, moved from the root DLL in slices (line counts are from the extraction plan,
+//! and the per-file product/diagnostic split is in the plan doc -- several of these files move
 //! only in part):
 //! * `rows` -- `startup_hooks/quit_menu/system_quit_row_identity.rs` (921, ~100% product): the
 //!   `QuitRow`/`QuitRowFacts`/`QuitRowVerdict` resolver and the single gate on the
