@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -833,8 +834,11 @@ def main() -> int:
         )
     else:
         print(f"skip: gh-attribution guard cases (no global policy at {attribution_policy})")
-    for case in cases:
-        run_case(case)
+    max_workers = min(8, max(1, len(cases)))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(run_case, case): case for case in cases}
+        for future in as_completed(futures):
+            future.result()
     print("cupcake policy regression tests passed")
     return 0
 
