@@ -642,6 +642,53 @@ pub fn nt_createfile_diag_hit_should_log(hits: usize) -> bool {
     hits <= 8 || hits.is_power_of_two()
 }
 
+/// Shared classification for save existence/query APIs (`GetFileAttributes*`, `FindFirstFileW`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SaveQueryPathDiag {
+    pub contains_eldenring: bool,
+    pub contains_er0000: bool,
+}
+
+impl SaveQueryPathDiag {
+    pub fn should_record_path_kind(self) -> bool {
+        self.contains_eldenring || self.contains_er0000
+    }
+
+    pub fn should_capture_save_file_query_log(self, logged: usize, max: usize) -> bool {
+        self.contains_er0000 && logged < max
+    }
+
+    pub fn should_capture_general_query_log(self, logged: usize, max: usize) -> bool {
+        self.contains_eldenring && logged < max
+    }
+}
+
+pub fn classify_save_query_path(path: &[u16]) -> SaveQueryPathDiag {
+    const ELDENRING_SEG: &[u16] = &[
+        b'e' as u16,
+        b'l' as u16,
+        b'd' as u16,
+        b'e' as u16,
+        b'n' as u16,
+        b'r' as u16,
+        b'i' as u16,
+        b'n' as u16,
+        b'g' as u16,
+    ];
+    const ER0000: &[u16] = &[
+        b'e' as u16,
+        b'r' as u16,
+        b'0' as u16,
+        b'0' as u16,
+        b'0' as u16,
+        b'0' as u16,
+    ];
+    SaveQueryPathDiag {
+        contains_eldenring: wide_contains_ci_ascii(path, ELDENRING_SEG),
+        contains_er0000: wide_contains_ci_ascii(path, ER0000),
+    }
+}
+
 /// Shared classification for CreateFileW save redirect diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CreateFileSavePathDiag {
@@ -1252,6 +1299,32 @@ mod tests {
         assert_eq!(
             &out[..5],
             &[b'Z' as u16, b':' as u16, b'\\' as u16, b's' as u16, 0]
+        );
+    }
+
+    #[test]
+    fn classifies_query_paths_for_existence_diagnostics() {
+        let save = wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\76561197960265729\ER0000.sl2");
+        let diag = classify_save_query_path(&save);
+        assert_eq!(
+            diag,
+            SaveQueryPathDiag {
+                contains_eldenring: true,
+                contains_er0000: true,
+            }
+        );
+        assert!(diag.should_record_path_kind());
+        assert!(diag.should_capture_save_file_query_log(0, 1));
+        assert!(!diag.should_capture_save_file_query_log(1, 1));
+        assert!(diag.should_capture_general_query_log(0, 1));
+
+        let root = wide_path(r"C:\Users\x\AppData\Roaming\EldenRing");
+        let root_diag = classify_save_query_path(&root);
+        assert!(root_diag.should_record_path_kind());
+        assert!(!root_diag.should_capture_save_file_query_log(0, 8));
+
+        assert!(
+            !classify_save_query_path(&wide_path(r"C:\tmp\notes.txt")).should_record_path_kind()
         );
     }
 
