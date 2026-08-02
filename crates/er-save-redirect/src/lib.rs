@@ -9,7 +9,10 @@ pub use reentry::{SaveDetourDepth, SaveNtCreateDetourGuard, save_detour_disk_io_
 
 use std::{
     path::{Path, PathBuf},
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        Once,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 /// Exact byte length of Elden Ring PC `ER0000.sl2` / Seamless `.co2` save containers.
@@ -71,6 +74,48 @@ impl MissingSaveGate {
 }
 
 impl Default for MissingSaveGate {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Process-local save hook install gate state.
+///
+/// This does not install MinHook detours by itself. It owns the shared once/installed-state shape so
+/// product and later standalone hook-owner code use the same idempotency contract.
+pub struct SaveHookInstallState {
+    core_once: Once,
+    redirect_once: Once,
+    core_createfilew_installed: AtomicUsize,
+}
+
+impl SaveHookInstallState {
+    pub const fn new() -> Self {
+        Self {
+            core_once: Once::new(),
+            redirect_once: Once::new(),
+            core_createfilew_installed: AtomicUsize::new(0),
+        }
+    }
+
+    pub fn install_core_once(&self, install: impl FnOnce()) {
+        self.core_once.call_once(install);
+    }
+
+    pub fn install_redirect_once(&self, install: impl FnOnce()) {
+        self.redirect_once.call_once(install);
+    }
+
+    pub fn mark_core_createfilew_installed(&self) {
+        self.core_createfilew_installed.store(1, Ordering::SeqCst);
+    }
+
+    pub fn core_createfilew_installed(&self) -> bool {
+        self.core_createfilew_installed.load(Ordering::SeqCst) != 0
+    }
+}
+
+impl Default for SaveHookInstallState {
     fn default() -> Self {
         Self::new()
     }
@@ -275,6 +320,23 @@ mod tests {
         assert!(gate.is_pending());
         gate.set(MissingSaveState::Ready);
         assert_eq!(gate.state(), MissingSaveState::Ready);
+    }
+
+    #[test]
+    fn save_hook_install_state_runs_each_install_gate_once() {
+        let state = SaveHookInstallState::new();
+        let core_calls = std::cell::Cell::new(0);
+        state.install_core_once(|| core_calls.set(core_calls.get() + 1));
+        state.install_core_once(|| core_calls.set(core_calls.get() + 1));
+        assert_eq!(core_calls.get(), 1);
+        assert!(!state.core_createfilew_installed());
+        state.mark_core_createfilew_installed();
+        assert!(state.core_createfilew_installed());
+
+        let redirect_calls = std::cell::Cell::new(0);
+        state.install_redirect_once(|| redirect_calls.set(redirect_calls.get() + 1));
+        state.install_redirect_once(|| redirect_calls.set(redirect_calls.get() + 1));
+        assert_eq!(redirect_calls.get(), 1);
     }
 
     #[test]

@@ -4,7 +4,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex, Once, OnceLock,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
@@ -19,7 +19,7 @@ use eldenring::{
     fd4::FD4TaskData,
 };
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
-use er_save_redirect::{SaveDetourDepth, save_detour_disk_io_allowed};
+use er_save_redirect::{SaveDetourDepth, SaveHookInstallState, save_detour_disk_io_allowed};
 use er_telemetry::counters::{
     SAVE_REDIRECT_DETOUR_MAX_DEPTH, SAVE_REDIRECT_DETOUR_REENTRANT_PASSTHROUGHS,
 };
@@ -686,14 +686,10 @@ pub(crate) use er_telemetry::counters::SAVE_DISKFREE_LOGGED;
 pub(super) static SAVE_REDIRECT_ORIG_NTQUERYVOLINFO: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::SAVE_VOLINFO_LOGGED;
-pub(super) static SAVE_REDIRECT_INSTALL_ONCE: Once = Once::new();
-/// One-shot guard for the CORE file-ops install (CreateFileW alone, every save mode; the
-/// save-destination commit rides that detour). Separate from the redirect installer above, which
-/// stays gated on an actual redirect source.
-pub(super) static SAVE_FILE_OPS_CORE_ONCE: Once = Once::new();
-/// 1 once the core CreateFileW detour is live. The redirect installer reads it instead of creating
-/// a second MinHook on the same prologue (`MH_ERROR_ALREADY_CREATED`).
-pub(super) static SAVE_FILE_OPS_CORE_CREATEFILEW_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// One-shot/idempotency state for the core and redirect save-hook installers. The shared
+/// `er-save-redirect` type owns this contract so later standalone hook-owner code does not invent a
+/// second install state machine.
+pub(super) static SAVE_HOOK_INSTALL_STATE: SaveHookInstallState = SaveHookInstallState::new();
 /// Count of save-path opens we have redirected, logged for the first few so a probe can CONFIRM the
 /// game actually opened our staged save through the redirect (not the default dir). Capped so a
 /// busy IO loop cannot spam the debug log.
