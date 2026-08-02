@@ -1,8 +1,9 @@
 //! Standalone ME3-loadable shell for product (A), the DLL-drawn boot save picker.
 //!
-//! SCAFFOLDING ONLY (phase 1 of docs/plans/save-picker-crate-extraction.md): the shell
-//! exists, logs its attach, and installs a standalone host seam. It arms nothing yet,
-//! because `er-save-picker` still has no moved code to arm.
+//! SCAFFOLDING ONLY: the shell exists, logs its attach, and installs a standalone host
+//! seam. The boot overlay now has an explicit `er_save_picker::overlay::arm_boot_picker()`
+//! entrypoint, but this DLL still arms nothing until the standalone smoke/profile wiring
+//! lands in the later DLL-realization slice.
 //!
 //! Deliberately separate from the product `er_effects_rs.dll`, same pattern as
 //! `er-loading-bar-dll` / `er-loading-portrait-dll`: it proves the feature crate builds
@@ -74,7 +75,7 @@ pub unsafe extern "system" fn DllMain(
             append_log(
                 &log_dir(),
                 format_args!(
-                    "loaded module_base=0x{module_base:x}; standalone boot-save-picker shell (scaffolding: nothing armed yet)"
+                    "loaded module_base=0x{module_base:x}; standalone boot-save-picker shell (scaffolding: arm_boot_picker not wired yet)"
                 ),
             );
         });

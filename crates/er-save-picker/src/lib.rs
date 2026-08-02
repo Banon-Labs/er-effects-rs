@@ -2,9 +2,9 @@
 //! common-file-dialog mechanism.
 //!
 //! The save-picker crate extraction has moved the host-testable row model, config keys,
-//! slot parser, and reusable OS common-file-dialog mechanism here. The boot overlay and
-//! product entrypoints still live under `er-effects-rs/src/experiments/startup_hooks/save_picker/`
-//! until their host seams are extracted.
+//! slot parser, reusable OS common-file-dialog mechanism, and DLL-drawn boot overlay here.
+//! Product entrypoints still live under `er-effects-rs/src/experiments/startup_hooks/save_picker/`
+//! until the remaining quit-menu seams are extracted.
 //!
 //! Contents and remaining planned moves:
 //! * `model` -- moved from `experiments/save_picker.rs`: `SavePickerModel`,
@@ -18,12 +18,13 @@
 //! * `slots` -- `SaveSlotInfo` + `parse_save_character_slots`, moved from
 //!   `startup_hooks/loading_cover/loading_cover_save_slot.rs` because they are picker-owned
 //!   offline save-container parsing.
-//! * `overlay` -- `experiments/gpu_readback/save_picker_overlay.rs` (849 lines): the
+//! * `overlay` -- moved from `experiments/gpu_readback/save_picker_overlay.rs`: the
 //!   arm/disarm lifecycle keyed off the missing-save hold, both input paths (the
 //!   render-thread `GetAsyncKeyState`/XInput poll and the dedicated `WH_KEYBOARD_LL`
 //!   thread), the file stage and the character sub-stage, the CPU compositor
-//!   (`overlay_save_picker_onto`), and the deferred pick completion that runs the redirect
-//!   install on the game-task thread.
+//!   (`overlay_save_picker_onto`), the explicit [`overlay::arm_boot_picker`] entrypoint,
+//!   and the deferred pick completion that runs the redirect install on the game-task
+//!   thread.
 //! * `os_dialog` -- moved from the mechanism half of
 //!   `startup_hooks/save_picker/save_picker_os_dialog.rs`: `os_dialog_run`,
 //!   `os_pick_validated`, `classify_os_outcome`, `should_reopen`, `os_dialog_filter`,
@@ -80,6 +81,8 @@ pub mod host;
 pub mod model;
 #[cfg(feature = "os-dialog")]
 pub mod os_dialog;
+#[cfg(feature = "boot-flow")]
+pub mod overlay;
 pub mod slots;
 
 pub use config::*;
