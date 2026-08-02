@@ -40,6 +40,12 @@
 //!   the generated boilerplate doc text, and `remember_preferred_save_picker_dir`. Only
 //!   picker code reads them, so they move with the picker; the product's `er-effects.toml`
 //!   parser keeps one file and delegates those keys here.
+//! * `surface` -- the pure surface/outcome routing types (`PickerOpenRequest`,
+//!   `PickerSurface`, `PickerOpenOutcome`) and destination target routing (`DestRoute`).
+//!   The host product still opens native menu windows and stages save-flow state.
+//! * `boot` -- boot missing-save telemetry state values and the pure OS-dialog abort
+//!   decision table; the host product still owns the dialog thread, telemetry flush, and
+//!   process exit.
 //!
 //! # The screen cover is the CALLER's decision, not this crate's
 //!
@@ -76,6 +82,7 @@
 //!
 //! See [`host::install_host`]. This crate must not depend on the root crate.
 
+pub mod boot;
 pub mod config;
 pub mod host;
 pub mod model;
@@ -84,10 +91,13 @@ pub mod os_dialog;
 #[cfg(feature = "boot-flow")]
 pub mod overlay;
 pub mod slots;
+pub mod surface;
 
+pub use boot::*;
 pub use config::*;
 pub use host::*;
 pub use model::*;
 #[cfg(feature = "os-dialog")]
 pub use os_dialog::*;
 pub use slots::*;
+pub use surface::*;
