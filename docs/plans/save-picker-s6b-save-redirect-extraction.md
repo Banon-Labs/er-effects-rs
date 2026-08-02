@@ -85,6 +85,8 @@ Tenth slice on `refactor/s6b2j-save-redirect-install-gate-20260802`: move the re
 
 Eleventh slice on `refactor/s6b2k-free-space-detour-core-20260802`: move Wine free-space detour output patching into host-testable `er-save-redirect` helpers. Product detour bodies still own the Win32/NT ABI boundary, original-call trampoline, and telemetry logging, but the shared core now owns the exact ample-space constants and output-buffer mutation logic.
 
+Twelfth slice on `refactor/s6b3a-ntcreatefile-diag-core-20260802`: move NtCreateFile save-path/access diagnostic classification into host-testable `er-save-redirect` helpers. Product still owns OBJECT_ATTRIBUTES decoding, original-call trampoline, missing-save waiting, SteamID observation, normalization side effects, and telemetry logging.
+
 Gate: Windows-target check plus a no-runtime hook-install smoke if available. Runtime proof comes after this, not before.
 
 ### S6b.3: boot-hold/title-flow seam
