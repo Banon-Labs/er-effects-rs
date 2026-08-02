@@ -263,6 +263,43 @@ pub struct SaveRedirectHookDetours {
 /// Every detour pointer must match the ABI of the target function resolved for it and remain valid
 /// for the process lifetime. The `install_core_createfilew` callback must install the matching core
 /// `CreateFileW` hook before this batch needs to redirect save opens.
+/// Install the redirect-mode save hook batch only after a redirect root or trace mode is ready.
+///
+/// This keeps the native no-save picker boot path unhooked until the product has activated a picked
+/// source, while still allowing explicit trace mode to install the observation hooks.
+///
+/// # Safety
+/// Same requirements as [`install_redirect_save_hooks`].
+pub unsafe fn install_redirect_save_hooks_when_ready(
+    state: &SaveHookInstallState,
+    redirect_root_ready: bool,
+    trace_enabled: bool,
+    detours: SaveRedirectHookDetours,
+    running_under_wine: bool,
+    resolve_kernel32: impl FnMut(&[u8]) -> usize,
+    resolve_shell32: impl FnMut(&[u8]) -> usize,
+    resolve_ntdll: impl FnMut(&[u8]) -> usize,
+    install_core_createfilew: impl FnOnce(),
+    mut log: impl FnMut(String),
+) {
+    if !redirect_root_ready && !trace_enabled {
+        log("save-override: install deferred -- redirect dir not set yet (waiting for missing-save picker/configured source)".to_owned());
+        return;
+    }
+    unsafe {
+        install_redirect_save_hooks(
+            state,
+            detours,
+            running_under_wine,
+            resolve_kernel32,
+            resolve_shell32,
+            resolve_ntdll,
+            install_core_createfilew,
+            log,
+        );
+    }
+}
+
 pub unsafe fn install_redirect_save_hooks(
     state: &SaveHookInstallState,
     detours: SaveRedirectHookDetours,

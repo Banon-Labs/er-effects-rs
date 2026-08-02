@@ -81,6 +81,8 @@ Eighth slice on `refactor/s6b2h-core-createfile-install-20260802`: move the alwa
 
 Ninth slice on `refactor/s6b2i-save-redirect-batch-install-20260802`: move the redirect-mode hook batch sequencing into `er-save-redirect::install_redirect_save_hooks`. Product still owns the redirect/trace gate, module/export resolution callbacks, detour bodies, and telemetry sink, but the shared core now owns the idempotent MinHook initialize/queue/apply/forget sequence for the redirect batch.
 
+Tenth slice on `refactor/s6b2j-save-redirect-install-gate-20260802`: move the redirect/trace readiness gate into `er-save-redirect::install_redirect_save_hooks_when_ready`. Product still supplies the raw readiness booleans and all runtime-specific callbacks, but the shared core now owns the deferred-install decision and log line.
+
 Gate: Windows-target check plus a no-runtime hook-install smoke if available. Runtime proof comes after this, not before.
 
 ### S6b.3: boot-hold/title-flow seam
