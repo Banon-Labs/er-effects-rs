@@ -95,6 +95,8 @@ Fifteenth slice on `refactor/s6b3d-query-path-diag-core-20260802`: move save exi
 
 Sixteenth slice on `refactor/s6b3e-copyfile-endpoint-core-20260802`: move CopyFileW endpoint wait/redirect planning into `er-save-redirect::classify_copyfile_endpoint`. Product still owns pointer decoding, missing-save wait side effect, redirect path construction callback, original-call trampoline, and telemetry logging.
 
+Seventeenth slice on `refactor/s6b3f-createfile-open-plan-20260802`: move CreateFileW post-save-destination open planning into `er-save-redirect::plan_create_file_open`. Product still owns the save-destination fast path, SteamID observation, missing-save wait side effect, redirect path construction callback, normalization side effect, original-call trampoline, counters, and telemetry logging.
+
 Gate: Windows-target check plus a no-runtime hook-install smoke if available. Runtime proof comes after this, not before.
 
 ### S6b.3: boot-hold/title-flow seam
