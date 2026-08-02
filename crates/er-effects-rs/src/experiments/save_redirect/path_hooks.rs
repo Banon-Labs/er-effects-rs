@@ -24,11 +24,11 @@ use er_save_redirect::{
     SAVE_REDIRECT_ORIG_FINDFIRSTW, SAVE_REDIRECT_ORIG_GETATTREXW, SAVE_REDIRECT_ORIG_GETATTRW,
     SAVE_REDIRECT_ORIG_GETDISKFREEW, SAVE_REDIRECT_ORIG_NTCREATEFILE,
     SAVE_REDIRECT_ORIG_NTQUERYVOLINFO, SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW, SaveDetourDepth,
-    SaveHookInstallState, SavePathKind, classify_create_file_save_path, classify_save_like_path,
-    classify_save_query_path, createfile_diag_hit_should_log, direct_stage_no_steamid_kind,
-    is_save_file_or_backup_path, redirect_wide_save_path_with_side_effects,
-    save_detour_disk_io_allowed, steam_id64_from_wide_save_path, wide_contains_ci_ascii,
-    wide_ends_with_ci_ascii,
+    SaveHookInstallState, SavePathKind, classify_copyfile_endpoint, classify_create_file_save_path,
+    classify_save_like_path, classify_save_query_path, createfile_diag_hit_should_log,
+    direct_stage_no_steamid_kind, is_save_file_or_backup_path,
+    redirect_wide_save_path_with_side_effects, save_detour_disk_io_allowed,
+    steam_id64_from_wide_save_path, wide_contains_ci_ascii, wide_ends_with_ci_ascii,
 };
 use er_telemetry::counters::{
     SAVE_REDIRECT_DETOUR_MAX_DEPTH, SAVE_REDIRECT_DETOUR_REENTRANT_PASSTHROUGHS,
@@ -1480,25 +1480,25 @@ pub(super) unsafe extern "system" fn save_redirect_copyfilew_hook(
         let len = unsafe { wide_len(existing) };
         (len != 0)
             .then(|| unsafe { std::slice::from_raw_parts(existing, len) })
-            .map(|path| {
-                if is_save_file_or_backup_path(path) {
+            .and_then(|path| {
+                let plan = classify_copyfile_endpoint(path, save_redirect_path);
+                if plan.should_wait_for_missing_save_dialog {
                     wait_for_missing_save_dialog_if_pending(path);
                 }
-                path
+                plan.redirected
             })
-            .and_then(save_redirect_path)
     };
     let new_red = {
         let len = unsafe { wide_len(new_file) };
         (len != 0)
             .then(|| unsafe { std::slice::from_raw_parts(new_file, len) })
-            .map(|path| {
-                if is_save_file_or_backup_path(path) {
+            .and_then(|path| {
+                let plan = classify_copyfile_endpoint(path, save_redirect_path);
+                if plan.should_wait_for_missing_save_dialog {
                     wait_for_missing_save_dialog_if_pending(path);
                 }
-                path
+                plan.redirected
             })
-            .and_then(save_redirect_path)
     };
     let existing_ptr = existing_red.as_ref().map_or(existing, |v| v.as_ptr());
     let new_ptr = new_red.as_ref().map_or(new_file, |v| v.as_ptr());

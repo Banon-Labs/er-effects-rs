@@ -642,6 +642,23 @@ pub fn nt_createfile_diag_hit_should_log(hits: usize) -> bool {
     hits <= 8 || hits.is_power_of_two()
 }
 
+/// Shared per-endpoint decision for `CopyFileW` save redirects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopyFileEndpointRedirect {
+    pub should_wait_for_missing_save_dialog: bool,
+    pub redirected: Option<Vec<u16>>,
+}
+
+pub fn classify_copyfile_endpoint(
+    path: &[u16],
+    redirect_path: impl FnOnce(&[u16]) -> Option<Vec<u16>>,
+) -> CopyFileEndpointRedirect {
+    CopyFileEndpointRedirect {
+        should_wait_for_missing_save_dialog: is_save_file_or_backup_path(path),
+        redirected: redirect_path(path),
+    }
+}
+
 /// Shared classification for save existence/query APIs (`GetFileAttributes*`, `FindFirstFileW`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SaveQueryPathDiag {
@@ -1300,6 +1317,24 @@ mod tests {
             &out[..5],
             &[b'Z' as u16, b':' as u16, b'\\' as u16, b's' as u16, 0]
         );
+    }
+
+    #[test]
+    fn classifies_copyfile_endpoints_for_wait_and_redirect() {
+        let backup =
+            wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\76561197960265729\ER0000.sl2.bak");
+        let plan = classify_copyfile_endpoint(&backup, |path| {
+            let mut out = path.to_vec();
+            out.push(0);
+            Some(out)
+        });
+        assert!(plan.should_wait_for_missing_save_dialog);
+        assert_eq!(plan.redirected.as_ref().and_then(|v| v.last()), Some(&0));
+
+        let non_save = wide_path(r"C:\tmp\notes.txt");
+        let plan = classify_copyfile_endpoint(&non_save, |_| None);
+        assert!(!plan.should_wait_for_missing_save_dialog);
+        assert!(plan.redirected.is_none());
     }
 
     #[test]
