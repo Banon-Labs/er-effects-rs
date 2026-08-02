@@ -509,10 +509,10 @@ pub const DL_FILE_DEVICE_MANAGER_SINGLETON_RVA: usize = 0x0484_64a8;
 
 /// `FUN_140e05fb0(CSDlcImp*, bool)` -- the DLC virtual-root REFILL: re-queries Steam DLC ownership
 /// and calls `CSDlcImp::AddVirtualFileRoots`.
-pub(crate) const DLC_ROOTS_REFILL_RVA: usize = 0x00e0_5fb0;
+pub(crate) const DLC_ROOTS_REFILL_RVA: usize = er_game_base::rva::DLC_ROOTS_REFILL_RVA;
 
 /// `GLOBAL_CSDlc` -- the `CSDlcImp` singleton.
-pub(crate) const CSDLC_SINGLETON_RVA: usize = 0x03d8_6bd8;
+pub(crate) const CSDLC_SINGLETON_RVA: usize = er_game_base::rva::CSDLC_SINGLETON_RVA;
 
 /// The DLIO alias every failing `m28` read resolves through.
 pub(crate) const DLC_ROOT_ALIAS_NAME: &str = "mapstudio_dlc2";
