@@ -19,6 +19,10 @@ use eldenring::{
     fd4::FD4TaskData,
 };
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
+use er_save_redirect::{SaveDetourDepth, save_detour_disk_io_allowed};
+use er_telemetry::counters::{
+    SAVE_REDIRECT_DETOUR_MAX_DEPTH, SAVE_REDIRECT_DETOUR_REENTRANT_PASSTHROUGHS,
+};
 use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
 use windows::{
     Win32::{
@@ -1891,4 +1895,49 @@ pub(super) unsafe extern "system" fn save_redirect_findfirstw_hook(
         }
     }
     unsafe { call(lp_file_name, find_data) }
+}
+
+#[cfg(test)]
+mod save_redirect_product_reentry_tests {
+    use super::*;
+
+    /// The production one-shot must refuse to touch the disk from inside a detour. With no
+    /// configured save file it normally reaches the "no configured save file" one-shot log; held
+    /// inside a depth token it must bail before even resolving the path, so that latch stays 0.
+    #[test]
+    fn normalize_one_shot_bails_before_resolving_a_path_inside_a_detour() {
+        if configured_save_file().is_some() {
+            // A save file is configured in this environment, so the one-shot would take the
+            // read-the-file arm and the latch this test reads is not the observable. Skip rather
+            // than assert against a different code path.
+            return;
+        }
+        let prior_steam_id = OBSERVED_ACTIVE_STEAM_ID64.load(Ordering::SeqCst);
+        let prior_done = SAVE_STEAM_ID_ENV_NORMALIZE_DONE.load(Ordering::SeqCst);
+        let prior_logged = SAVE_STEAM_ID_NORMALIZE_NO_SOURCE_LOGGED.load(Ordering::SeqCst);
+        // The preconditions the one-shot needs before it does anything at all.
+        OBSERVED_ACTIVE_STEAM_ID64.store(76_561_197_960_265_729, Ordering::SeqCst);
+        SAVE_STEAM_ID_ENV_NORMALIZE_DONE.store(0, Ordering::SeqCst);
+        SAVE_STEAM_ID_NORMALIZE_NO_SOURCE_LOGGED.store(0, Ordering::SeqCst);
+
+        {
+            let _inside_detour = SaveDetourDepth::enter();
+            normalize_env_save_file_to_active_steam_id_once(0, "unit-test-reentrant");
+            assert_eq!(
+                SAVE_STEAM_ID_NORMALIZE_NO_SOURCE_LOGGED.load(Ordering::SeqCst),
+                0,
+                "the one-shot ran its body from inside a save-redirect detour"
+            );
+        }
+        normalize_env_save_file_to_active_steam_id_once(0, "unit-test-outside-detour");
+        assert_eq!(
+            SAVE_STEAM_ID_NORMALIZE_NO_SOURCE_LOGGED.load(Ordering::SeqCst),
+            1,
+            "the one-shot did not run its body outside a detour"
+        );
+
+        OBSERVED_ACTIVE_STEAM_ID64.store(prior_steam_id, Ordering::SeqCst);
+        SAVE_STEAM_ID_ENV_NORMALIZE_DONE.store(prior_done, Ordering::SeqCst);
+        SAVE_STEAM_ID_NORMALIZE_NO_SOURCE_LOGGED.store(prior_logged, Ordering::SeqCst);
+    }
 }

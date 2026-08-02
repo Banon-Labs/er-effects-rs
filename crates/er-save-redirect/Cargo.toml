@@ -13,3 +13,4 @@ name = "er_save_redirect"
 
 [dependencies]
 er-save-loader = { path = "../er-save-loader" }
+er-telemetry = { path = "../er-telemetry" }
