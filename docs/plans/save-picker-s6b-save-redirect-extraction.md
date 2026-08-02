@@ -107,6 +107,8 @@ Twenty-first slice on `refactor/s6b5b-direct-stage-dirs-core-20260802`: move the
 
 Twenty-second slice on `refactor/s6b5c-direct-stage-request-plan-20260802`: move direct-stage requested-path planning into `er-save-redirect::plan_direct_stage_request`, returning either a SteamID64 or a no-SteamID diagnostic kind. Product still owns counters, capped logging, directory creation timing, and staging side effects.
 
+Twenty-third slice on `refactor/s6b5d-save-path-telemetry-plan-20260802`: move save-like path telemetry planning into `er-save-redirect::plan_save_path_telemetry`, returning both the shared kind and optional counted telemetry bucket. Product still owns the actual counters and serialization.
+
 Gate: Windows-target check plus a no-runtime hook-install smoke if available. Runtime proof comes after this, not before.
 
 ### S6b.3: boot-hold/title-flow seam
