@@ -8,6 +8,7 @@
 #![allow(unused_imports)]
 #![allow(clippy::missing_safety_doc)]
 
+pub mod boot_hold;
 pub mod compat;
 pub mod constants_moved;
 pub mod host;
