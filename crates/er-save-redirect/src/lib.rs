@@ -1307,6 +1307,10 @@ pub fn save_file_writeback_allowed(path: &Path, default_root: Option<&Path>) -> 
         .is_some_and(|root| path_eq_ignore_ascii_case(root, default_root))
 }
 
+pub fn save_file_is_readonly(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|meta| meta.permissions().readonly())
+}
+
 pub fn plan_validated_save_source(path: PathBuf, writeback_allowed: bool) -> SaveSourcePlan {
     if writeback_allowed && let Some((staged_root, steam_id)) = staged_save_root_for_file(&path) {
         return SaveSourcePlan::StagedRoot {
@@ -1966,6 +1970,29 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reports_save_file_readonly_status() {
+        let unique = format!(
+            "er-save-redirect-readonly-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let file = std::env::temp_dir().join(unique);
+        std::fs::write(&file, b"save").unwrap();
+        assert!(!save_file_is_readonly(&file));
+        let mut perms = std::fs::metadata(&file).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&file, perms).unwrap();
+        assert!(save_file_is_readonly(&file));
+        let mut perms = std::fs::metadata(&file).unwrap().permissions();
+        perms.set_readonly(false);
+        std::fs::set_permissions(&file, perms).unwrap();
+        let _ = std::fs::remove_file(&file);
     }
 
     #[test]
