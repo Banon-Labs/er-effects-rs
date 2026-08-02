@@ -1280,6 +1280,10 @@ pub fn plan_validated_save_source(path: PathBuf, writeback_allowed: bool) -> Sav
     }
 }
 
+pub fn direct_stage_case_dirs(root: &Path) -> [PathBuf; 2] {
+    [root.join("eldenring"), root.join("EldenRing")]
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DirectStageFileStatus {
     pub exists: bool,
@@ -1818,6 +1822,14 @@ mod tests {
                 root_wide: WineRootWide("Z:\\prefix".encode_utf16().collect()),
             }
         );
+    }
+
+    #[test]
+    fn builds_direct_stage_case_dirs() {
+        let root = Path::new(r"C:\stage");
+        let [lower, canonical] = direct_stage_case_dirs(root);
+        assert_eq!(lower, root.join("eldenring"));
+        assert_eq!(canonical, root.join("EldenRing"));
     }
 
     #[test]
