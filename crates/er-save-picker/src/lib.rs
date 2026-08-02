@@ -1,12 +1,13 @@
 //! Product (A): the DLL-drawn boot save picker, its shared row model, and the OS-native
 //! common-file-dialog mechanism.
 //!
-//! SCAFFOLDING ONLY (phase 1 of docs/plans/save-picker-crate-extraction.md). The modules
-//! this crate will own are listed below; nothing has been moved yet, so `er-effects-rs`
-//! behaves byte-for-byte as it did before this crate existed.
+//! Phase 1 of docs/plans/save-picker-crate-extraction.md has moved the host-testable row
+//! model, config keys, and slot parser here. The remaining product-A runtime pieces still
+//! live under `er-effects-rs/src/experiments/startup_hooks/save_picker/` until their host
+//! seam is extracted.
 //!
-//! Planned contents, moved verbatim from the root DLL:
-//! * `model` -- `experiments/save_picker.rs` (2002 lines): `SavePickerModel`,
+//! Contents and remaining planned moves:
+//! * `model` -- moved from `experiments/save_picker.rs`: `SavePickerModel`,
 //!   `PickerIntent`, `PickerRow`, `PickerEntry`, `PickerActivation`, `PickRejection`, the
 //!   dense row layout (`entry_row_base` and everything derived from it), drive/page
 //!   cycling, `save_picker_accepts` / `save_picker_extension_accepted`, the civil-time
@@ -14,10 +15,9 @@
 //!   filesystem logic with ~960 lines of its own tests -- host-runnable, which is the
 //!   point: the cancel/reopen state machine is only exercisable by launching the whole
 //!   game today.
-//! * `slots` -- `SaveSlotInfo` + `parse_save_character_slots`, lifted out of
-//!   `startup_hooks/loading_cover_save_slot.rs`. They live there today but are referenced
-//!   ONLY by picker code, so leaving them behind would make both extracted crates reach
-//!   back into the product.
+//! * `slots` -- `SaveSlotInfo` + `parse_save_character_slots`, moved from
+//!   `startup_hooks/loading_cover/loading_cover_save_slot.rs` because they are picker-owned
+//!   offline save-container parsing.
 //! * `overlay` -- `experiments/gpu_readback/save_picker_overlay.rs` (849 lines): the
 //!   arm/disarm lifecycle keyed off the missing-save hold, both input paths (the
 //!   render-thread `GetAsyncKeyState`/XInput poll and the dedicated `WH_KEYBOARD_LL`
@@ -25,14 +25,14 @@
 //!   (`overlay_save_picker_onto`), and the deferred pick completion that runs the redirect
 //!   install on the game-task thread.
 //! * `os_dialog` -- the comdlg32 MECHANISM half of
-//!   `startup_hooks/save_picker_os_dialog.rs` (~370 of its 676 lines): `os_dialog_run`,
+//!   `startup_hooks/save_picker/save_picker_os_dialog.rs` (~370 of its 676 lines): `os_dialog_run`,
 //!   `os_pick_validated`, `classify_os_outcome`, `should_reopen`, `os_dialog_filter`,
 //!   `OsDialogClaim`, `os_dialog_owner`, `os_pick_path_from_buffer`, `OsPickOutcome`. That
 //!   half "converts strings and calls comdlg32... reads no game pointers, calls no game
 //!   function" (its own rule H3), which is exactly why it is reusable. Its two System>Quit
 //!   ENTRY POINTS (`os_open_save_picker_load`, `os_open_save_dest_picker`) are not here --
 //!   they are quit-menu callers and belong to `er-quit-menu`.
-//! * `config` -- the three picker keys and their plumbing, lifted out of
+//! * `config` -- the three picker keys and their plumbing, moved out of
 //!   `er-effects-rs/src/config.rs`: `preferred_save_picker_dir`,
 //!   `autoupdate_preferred_picker_dir` and `os_native_save_picker` (with its
 //!   `use_os_file_picker` / `save_picker.os_native` aliases), their parse + validation,

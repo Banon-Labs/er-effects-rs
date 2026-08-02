@@ -19,8 +19,8 @@
     "ER_EFFECTS_SAVE_TRACE@crates/er-effects-rs/src/experiments/save_redirect/path_hooks.rs": "Passive save-IO trace hook: logs save-path activity. Observe-only; no game behavior change.",
     "ER_EFFECTS_AUTOLOAD_DEBUG_PATH@crates/er-loading-portrait/src/dlstring_lookat_math.rs": "Diagnostic OUTPUT-PATH override for the autoload debug log. Path only; no game behavior change.",
     "ER_EFFECTS_AUTOLOAD_DEBUG_PATH@crates/er-effects-rs/src/telemetry/save_policy_logs.rs": "Diagnostic OUTPUT-PATH override for the autoload debug log (canonical resolver). Path only; no game behavior change.",
-    "ER_EFFECTS_GRSYSMSG_LOG@crates/er-effects-rs/src/experiments/startup_hooks/startup_modals_menu_cover.rs": "Diagnostic log of the GR_System_Message ids seen at startup. Observe-only; no game behavior change.",
     "ER_EFFECTS_CRASH_LOG_PATH@crates/er-effects-rs/src/telemetry/save_policy_logs.rs": "Diagnostic OUTPUT-PATH override for the crash log. Path only; no game behavior change.",
-    "ER_EFFECTS_TRACE_CONTINUE_PATH@crates/er-effects-rs/src/telemetry/save_policy_logs.rs": "Diagnostic OUTPUT-PATH override for the continue-trace log. Path only; no game behavior change."
+    "ER_EFFECTS_TRACE_CONTINUE_PATH@crates/er-effects-rs/src/telemetry/save_policy_logs.rs": "Diagnostic OUTPUT-PATH override for the continue-trace log. Path only; no game behavior change.",
+    "ER_EFFECTS_GRSYSMSG_LOG@crates/er-effects-rs/src/experiments/startup_hooks/loading_cover/startup_modals_menu_cover.rs": "Diagnostic log of the GR_System_Message ids seen at startup. Observe-only; no game behavior change."
   }
 }

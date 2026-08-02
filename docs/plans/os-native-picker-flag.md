@@ -139,7 +139,7 @@ save" (contract 7).
 
 ## 3. The OS dialog itself
 
-New module `crates/er-effects-rs/src/experiments/startup_hooks/save_picker_os_dialog.rs` (~300
+New module `crates/er-effects-rs/src/experiments/startup_hooks/save_picker/save_picker_os_dialog.rs` (~300
 lines). A new file, not an addition to `save_picker_menu.rs` (841 lines):
 `check-rust-file-sizes.py` warns above 900.
 

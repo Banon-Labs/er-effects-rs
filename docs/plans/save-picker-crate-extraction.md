@@ -53,11 +53,11 @@ and that commit, all in files the picker PRs touched.
 |---|---:|---|
 | `experiments/save_picker.rs` | 2002 | -> **A** (whole file; the shared row model) |
 | `experiments/gpu_readback/save_picker_overlay.rs` | 912 | -> **A** (whole file) |
-| `startup_hooks/save_picker_os_dialog.rs` | 792 | **SPLIT**: mechanism + tests (~590: 1-482, 684-792) -> A; the two System>Quit entry points (~200: 483-683) -> B |
-| `startup_hooks/save_picker_menu.rs` | 944 | -> **B** (whole file) |
-| `startup_hooks/save_picker_surface.rs` | 369 | -> **B** (whole file) |
-| `startup_hooks/save_picker_dim_overlay.rs` | 876 | -> **B** (whole file) |
-| `startup_hooks/save_swap_profile_table.rs` | 1050 | **SPLIT**: save-swap preview/restore/prepare/recommit (1-417) -> B; the profile-renderer drive + table hooks (418-1050) **STAY** |
+| `startup_hooks/save_picker/save_picker_os_dialog.rs` | 792 | **SPLIT**: mechanism + tests (~590: 1-482, 684-792) -> A; the two System>Quit entry points (~200: 483-683) -> B |
+| `startup_hooks/quit_menu/save_picker_menu.rs` | 944 | -> **B** (whole file) |
+| `startup_hooks/save_picker/save_picker_surface.rs` | 369 | -> **B** (whole file) |
+| `startup_hooks/quit_menu/save_picker_dim_overlay.rs` | 876 | -> **B** (whole file) |
+| `startup_hooks/quit_menu/save_swap_profile_table.rs` | 1050 | **SPLIT**: save-swap preview/restore/prepare/recommit (1-417) -> B; the profile-renderer drive + table hooks (418-1050) **STAY** |
 | **total** | **6945** | |
 
 Structural fact that shapes everything below: five of the seven are **`include!`d** into
@@ -74,9 +74,9 @@ is tightly coupled to the OS-native file dialog, so the dialog implementation be
 | Item | Source | Lines |
 |---|---|---:|
 | Row model: `SavePickerModel`, `PickerIntent`, `PickerRow`, `PickerEntry`, `PickerActivation`, `PickRejection`, `entry_row_base` and every derived index, drive/page cycling, `save_picker_accepts`, `save_picker_extension_accepted`, `civil_from_unix_seconds`, `format_last_saved`, `truncate_utf16`, `ACTIVE_SAVE_PICKER` | `experiments/save_picker.rs` | 2002 (of which ~960 are its own tests) |
-| `SaveSlotInfo`, `parse_save_character_slots` | `startup_hooks/loading_cover_save_slot.rs` 754-799 | 47 |
+| `SaveSlotInfo`, `parse_save_character_slots` | `startup_hooks/loading_cover/loading_cover_save_slot.rs` 754-799 | 47 |
 | Boot overlay: arm/disarm, both input paths, file stage + character sub-stage, `overlay_save_picker_onto`, deferred pick completion | `gpu_readback/save_picker_overlay.rs` | 912 |
-| comdlg32 mechanism: `os_dialog_run`, `os_pick_validated`, `classify_os_outcome`, `should_reopen`, `os_dialog_filter`, `OsDialogClaim`, `os_dialog_owner`, `os_pick_path_from_buffer`, `OsPickOutcome` + its tests | `startup_hooks/save_picker_os_dialog.rs` 1-482, 684-792 | ~590 |
+| comdlg32 mechanism: `os_dialog_run`, `os_pick_validated`, `classify_os_outcome`, `should_reopen`, `os_dialog_filter`, `OsDialogClaim`, `os_dialog_owner`, `os_pick_path_from_buffer`, `OsPickOutcome` + its tests | `startup_hooks/save_picker/save_picker_os_dialog.rs` 1-482, 684-792 | ~590 |
 | Config keys `preferred_save_picker_dir`, `autoupdate_preferred_picker_dir`, `os_native_save_picker` (+ `use_os_file_picker` / `save_picker.os_native` aliases): struct fields, accessors, parse + validation, generated boilerplate text, `remember_preferred_save_picker_dir`, their tests | `src/config.rs` (26-31, 116-200, 253-266, 463-495, 600-670) | ~120 |
 | **A total** | | ** 3671** |
 

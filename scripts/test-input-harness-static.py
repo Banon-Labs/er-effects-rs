@@ -51,7 +51,7 @@ def test_samechar_runner_arms_product_movement_for_deterministic_reload_driver()
 
 
 def test_boot_autoload_mms18_can_force_stuck_testnet_step() -> None:
-    hooks = (REPO_ROOT / "crates/er-effects-rs/src/experiments/startup_hooks/system_quit_hooks.rs").read_text()
+    hooks = (REPO_ROOT / "crates/er-effects-rs/src/experiments/startup_hooks/quit_menu/system_quit_hooks.rs").read_text()
     assert "let boot_epoch = epoch == 0;" in hooks
     assert "if boot_epoch {" in hooks
     assert "mms_state == MOVEMAPSTEP_STEP_MOVEMAP_INDEX" in hooks

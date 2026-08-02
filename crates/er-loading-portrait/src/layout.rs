@@ -1,6 +1,6 @@
 //! Reverse-engineered layout constants, hook-original slots, and observer statics moved
 //! from er-effects-rs (constants/anti_debug.rs, constants/stats_panel_text.rs,
-//! constants/gaitem_restore.rs, experiments/startup_hooks/loading_cover_save_slot.rs,
+//! constants/gaitem_restore.rs, experiments/startup_hooks/loading_cover/loading_cover_save_slot.rs,
 //! experiments/startup_hooks/title_resources_stats_text.rs) in the portrait crate split.
 //! Values are byte-identical to the product originals; the product re-imports them
 //! through the `er_loading_portrait::*` shims.
@@ -196,7 +196,7 @@ pub struct GameDataManProfileSummaryLayout {
 pub const SLOT_MANAGER_CONTAINER_OFFSET: usize =
     core::mem::offset_of!(GameDataManProfileSummaryLayout, profile_summary);
 
-// From experiments/startup_hooks/loading_cover_save_slot.rs (product keeps the rest of the
+// From experiments/startup_hooks/loading_cover/loading_cover_save_slot.rs (product keeps the rest of the
 // ProfileSummary record offsets; these four are shared with the moved stats producer).
 /// ProfileSummary save-record layout (bd native-full-save-read-slot-resolve-chain-observe-recipe):
 /// per-slot records start at `summary+0x18`, stride `0x2a0`; character NAME at record+0.
