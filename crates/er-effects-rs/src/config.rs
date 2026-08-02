@@ -20,6 +20,7 @@ const CONFIG_FILE_NAME: &str = "er-effects.toml";
 const SAVE_FILE_ENV: &str = "ER_EFFECTS_SAVE_FILE";
 const SLOT_ENV: &str = "ER_EFFECTS_AUTOLOAD_SLOT";
 const METHOD_ENV: &str = "ER_EFFECTS_AUTOLOAD_METHOD";
+const SAVE_SUPPRESSION_ENABLED_KEY: &str = "save_suppression_enabled";
 #[derive(Clone, Debug, Default)]
 pub(crate) struct RuntimeConfig {
     pub path: PathBuf,
@@ -27,6 +28,7 @@ pub(crate) struct RuntimeConfig {
     pub slot: Option<i32>,
     pub method: Option<String>,
     pub boot_background_image: Option<PathBuf>,
+    pub save_suppression_enabled: Option<bool>,
     pub save_picker: SavePickerRuntimeConfig,
 }
 
@@ -44,7 +46,7 @@ pub(crate) fn init_runtime_config(hmodule: HINSTANCE) {
     );
     match RUNTIME_CONFIG.get() {
         Some(Ok(config)) => append_autoload_debug(format_args!(
-            "runtime-config: loaded '{}' save_file={} slot={} method={} boot_background_image={} preferred_save_picker_dir={} autoupdate_preferred_picker_dir={} {OS_NATIVE_SAVE_PICKER_KEY}={}",
+            "runtime-config: loaded '{}' save_file={} slot={} method={} boot_background_image={} {SAVE_SUPPRESSION_ENABLED_KEY}={} preferred_save_picker_dir={} autoupdate_preferred_picker_dir={} {OS_NATIVE_SAVE_PICKER_KEY}={}",
             config.path.display(),
             config
                 .save_file
@@ -61,6 +63,10 @@ pub(crate) fn init_runtime_config(hmodule: HINSTANCE) {
                 .as_ref()
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| "<unset>".to_owned()),
+            config
+                .save_suppression_enabled
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "<default:false>".to_owned()),
             config
                 .save_picker
                 .preferred_save_picker_dir
@@ -235,6 +241,7 @@ fn boilerplate_config(picker_assignment: Option<&str>) -> String {
 # slot = 0                               # character slot the autoload selects
 # method = \"...\"                         # autoload method override
 # boot_background_image = 'C:\\path\\to\\background.png'
+# save_suppression_enabled = false        # opt-in only: suppresses native saves except the Save Game one-shot bypass
 {picker_block}
 "
     )
@@ -248,6 +255,12 @@ fn toml_path_literal(path: &str) -> String {
     } else {
         format!("\"{}\"", path.replace('\\', "\\\\").replace('"', "\\\""))
     }
+}
+
+pub(crate) fn save_suppression_enabled() -> bool {
+    runtime_config()
+        .and_then(|config| config.save_suppression_enabled)
+        .unwrap_or(false)
 }
 
 pub(crate) fn configured_autoload_slot() -> Option<i32> {
@@ -416,6 +429,14 @@ fn parse_runtime_config(path: PathBuf, contents: &str) -> Result<RuntimeConfig, 
                     )
                 })?;
                 config.boot_background_image = Some(configured_path_from_toml(&raw, &config_dir));
+            }
+            SAVE_SUPPRESSION_ENABLED_KEY => {
+                config.save_suppression_enabled = Some(parse_toml_bool(value).map_err(|err| {
+                    format!(
+                        "invalid {SAVE_SUPPRESSION_ENABLED_KEY} on line {}: {err}",
+                        line_no + 1
+                    )
+                })?);
             }
             "preferred_save_picker_dir" => {
                 let parsed = PathBuf::from(parse_toml_string(value).map_err(|err| {
@@ -605,6 +626,31 @@ mod tests {
     }
 
     #[test]
+    fn save_suppression_config_is_explicit_opt_in() {
+        let config = parse("slot = 0\n").expect("a config without the key must still parse");
+        assert_eq!(config.save_suppression_enabled, None);
+        assert!(
+            !config.save_suppression_enabled.unwrap_or(false),
+            "save suppression must default off when the key is absent"
+        );
+
+        let enabled =
+            parse("save_suppression_enabled = true\n").expect("an explicit true value must parse");
+        assert_eq!(enabled.save_suppression_enabled, Some(true));
+
+        let disabled = parse("save_suppression_enabled = false\n")
+            .expect("an explicit false value must parse");
+        assert_eq!(disabled.save_suppression_enabled, Some(false));
+
+        let err = parse("save_suppression_enabled = maybe\n")
+            .expect_err("a non-boolean value must be rejected");
+        assert!(
+            err.contains(SAVE_SUPPRESSION_ENABLED_KEY) && err.contains("line 1"),
+            "the error must name the key and the line: {err}"
+        );
+    }
+
+    #[test]
     fn both_boilerplate_branches_document_the_picker_surface_key() {
         for (label, generated) in [
             ("auto-created", boilerplate_config(None)),
@@ -616,6 +662,17 @@ mod tests {
             assert!(
                 generated.contains(OS_NATIVE_SAVE_PICKER_KEY),
                 "the {label} boilerplate must document {OS_NATIVE_SAVE_PICKER_KEY}"
+            );
+            assert!(
+                generated.contains(SAVE_SUPPRESSION_ENABLED_KEY),
+                "the {label} boilerplate must document {SAVE_SUPPRESSION_ENABLED_KEY}"
+            );
+            assert_eq!(
+                parse(&generated)
+                    .expect("generated boilerplate must parse")
+                    .save_suppression_enabled,
+                None,
+                "the {label} boilerplate must leave save suppression unset/default-off"
             );
             // Documented as a COMMENT: writing the key live would opt the user in.
             assert_eq!(
