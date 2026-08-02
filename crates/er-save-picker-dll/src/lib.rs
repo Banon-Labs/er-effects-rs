@@ -1,24 +1,29 @@
 //! Standalone ME3-loadable shell for product (A), the DLL-drawn boot save picker.
 //!
-//! SCAFFOLDING ONLY: the shell exists, logs its attach, and installs a standalone host
-//! seam. The boot overlay now has an explicit `er_save_picker::overlay::arm_boot_picker()`
-//! entrypoint, but this DLL still arms nothing until the standalone smoke/profile wiring
-//! lands in the later DLL-realization slice.
+//! This DLL is deliberately separate from the product `er_effects_rs.dll`, following the
+//! `er-loading-bar-dll` / `er-loading-portrait-dll` shape: the feature crate owns the picker
+//! logic, this thin shell installs a standalone host seam and arms the boot picker when loaded
+//! by ME3.
 //!
-//! Deliberately separate from the product `er_effects_rs.dll`, same pattern as
-//! `er-loading-bar-dll` / `er-loading-portrait-dll`: it proves the feature crate builds
-//! and loads as its own native DLL without dragging product hooks, autoload or runtime
-//! state along.
-//!
-//! It is ALSO designed to be co-loadable with every other DLL we ship, which those two
-//! predecessors are not -- see this crate's Cargo.toml for the two rules that make that
-//! true.
+//! Co-loading stays conservative when the product DLL is already present: this standalone shell
+//! does not install its host or arm, so the product remains the owner of the boot flow. S6 does not
+//! claim a standalone-first co-load proof; when loaded by itself this DLL owns a standalone pending
+//! latch, opens the picker model, starts the low-level keyboard hook, and records selected paths in
+//! its own log. It does not install product save-redirect hooks; a standalone pick proves the
+//! picker surface and staging path, then closes the standalone latch instead of pretending to load
+//! the game save.
 
 #![allow(non_snake_case)]
 
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(windows)]
+use windows::Win32::System::LibraryLoader::GetModuleHandleA;
+#[cfg(windows)]
+use windows::core::PCSTR;
 
 const DLL_PROCESS_ATTACH: u32 = 1;
 const DLL_MAIN_SUCCESS: i32 = 1;
@@ -26,6 +31,8 @@ const LOG_FILE_NAME: &str = "er-save-picker-dll.log";
 
 #[cfg(windows)]
 static START: std::sync::Once = std::sync::Once::new();
+
+static STANDALONE_MISSING_SAVE_PENDING: AtomicBool = AtomicBool::new(true);
 
 /// Where the standalone log lands: next to the executable, falling back to the CWD.
 fn log_dir() -> PathBuf {
@@ -35,7 +42,7 @@ fn log_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-fn append_log(dir: &PathBuf, args: std::fmt::Arguments<'_>) {
+fn append_log(dir: &Path, args: std::fmt::Arguments<'_>) {
     if let Ok(mut file) = OpenOptions::new()
         .create(true)
         .append(true)
@@ -45,17 +52,61 @@ fn append_log(dir: &PathBuf, args: std::fmt::Arguments<'_>) {
     }
 }
 
-/// The standalone host seam: this DLL has no product behind it, so every product-owned
-/// answer stays at its neutral default and only the log sink is real.
-fn install_standalone_host() {
-    let _ = er_save_picker::install_host(er_save_picker::SavePickerHost {
+/// The standalone host seam. There is no product save redirect behind this DLL, so the
+/// completion callback records the pick and releases this DLL's own picker latch instead of
+/// claiming it activated autoload.
+fn install_standalone_host() -> bool {
+    er_save_picker::install_host(er_save_picker::SavePickerHost {
         append_autoload_debug: standalone_log,
+        missing_save_selection_pending: standalone_missing_save_selection_pending,
+        complete_missing_save_selection_from_picker: standalone_complete_missing_save_selection,
+        picker_start_dir: standalone_picker_start_dir,
+        remember_picker_dir: standalone_remember_picker_dir,
         ..er_save_picker::SavePickerHost::defaults()
-    });
+    })
 }
 
 fn standalone_log(args: std::fmt::Arguments<'_>) {
     append_log(&log_dir(), args);
+}
+
+fn standalone_missing_save_selection_pending() -> bool {
+    STANDALONE_MISSING_SAVE_PENDING.load(Ordering::SeqCst)
+}
+
+fn standalone_complete_missing_save_selection(path: &Path) -> bool {
+    standalone_log(format_args!(
+        "standalone pick accepted for surface proof: '{}' (no product save redirect installed)",
+        path.display()
+    ));
+    STANDALONE_MISSING_SAVE_PENDING.store(false, Ordering::SeqCst);
+    true
+}
+
+fn standalone_picker_start_dir() -> PathBuf {
+    // ME3 launches with the game directory as CWD on the approved path. Starting there is more
+    // useful than an empty model and does not invent a user-specific save path.
+    std::env::current_dir()
+        .ok()
+        .filter(|path| path.exists())
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(PathBuf::from))
+        })
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn standalone_remember_picker_dir(dir: &Path) {
+    standalone_log(format_args!(
+        "standalone picker remembered directory for this run only: '{}'",
+        dir.display()
+    ));
+}
+
+#[cfg(windows)]
+fn product_dll_present() -> bool {
+    unsafe { GetModuleHandleA(PCSTR(b"er_effects_rs.dll\0".as_ptr())).is_ok() }
 }
 
 #[cfg(windows)]
@@ -71,15 +122,36 @@ pub unsafe extern "system" fn DllMain(
     if reason == DLL_PROCESS_ATTACH {
         let module_base = module as usize;
         START.call_once(|| {
-            install_standalone_host();
+            if product_dll_present() {
+                STANDALONE_MISSING_SAVE_PENDING.store(false, Ordering::SeqCst);
+                append_log(
+                    &log_dir(),
+                    format_args!(
+                        "loaded module_base=0x{module_base:x}; product DLL already present; standalone boot-save-picker stood down before host install"
+                    ),
+                );
+                return;
+            }
+
+            let host_installed = install_standalone_host();
+            STANDALONE_MISSING_SAVE_PENDING.store(true, Ordering::SeqCst);
+            let armed = er_save_picker::overlay::arm_boot_picker();
+            er_save_picker::overlay::ensure_save_picker_keyboard_hook();
             append_log(
                 &log_dir(),
                 format_args!(
-                    "loaded module_base=0x{module_base:x}; standalone boot-save-picker shell (scaffolding: arm_boot_picker not wired yet)"
+                    "loaded module_base=0x{module_base:x}; standalone boot-save-picker armed={armed}; host_installed={host_installed}; standalone-first co-load is not S6 proof; start_dir='{}'",
+                    standalone_picker_start_dir().display()
                 ),
             );
         });
     }
+    DLL_MAIN_SUCCESS
+}
+
+#[cfg(not(windows))]
+#[unsafe(no_mangle)]
+pub extern "C" fn er_save_picker_dll_host_stub() -> i32 {
     DLL_MAIN_SUCCESS
 }
 
@@ -88,15 +160,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_standalone_host_installs_exactly_once() {
-        assert!(install_host_once());
-        assert!(!install_host_once());
+    fn standalone_host_installs_once_and_releases_its_own_latch_on_pick() {
+        STANDALONE_MISSING_SAVE_PENDING.store(true, Ordering::SeqCst);
+        assert!(install_standalone_host());
+        assert!(!install_standalone_host());
+        assert!(standalone_missing_save_selection_pending());
+        assert!(standalone_complete_missing_save_selection(Path::new(
+            "Z:\\saves\\ER0000.sl2"
+        )));
+        assert!(!standalone_missing_save_selection_pending());
     }
 
-    fn install_host_once() -> bool {
-        er_save_picker::install_host(er_save_picker::SavePickerHost {
-            append_autoload_debug: standalone_log,
-            ..er_save_picker::SavePickerHost::defaults()
-        })
+    #[test]
+    fn standalone_start_dir_is_non_empty() {
+        assert!(!standalone_picker_start_dir().as_os_str().is_empty());
     }
 }
