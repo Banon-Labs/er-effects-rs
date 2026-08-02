@@ -1,7 +1,10 @@
 use super::*;
 
 use crate::mh::MH_STATUS;
-use er_save_redirect::{SaveNtCreateDetourGuard, save_detour_disk_io_allowed};
+use er_save_redirect::{
+    SaveNtCreateDetourGuard, is_save_file_or_backup_path, save_detour_disk_io_allowed,
+    wide_ends_with_ci_ascii,
+};
 
 type ShGetFolderPathWFn = unsafe extern "system" fn(isize, i32, isize, u32, *mut u16) -> i32;
 

@@ -67,6 +67,8 @@ First slice on `refactor/s6b2-save-hook-owner-20260802`: move the save-detour re
 
 Second slice on `refactor/s6b2b-save-hook-install-owner-20260802`: move the core/redirect one-shot install gate and core-CreateFileW-live flag shape into `er-save-redirect::SaveHookInstallState`. Product still owns the actual MinHook install calls, but the idempotency/live-state contract now belongs to the shared hook-owner boundary.
 
+Third slice on `refactor/s6b2c-save-path-classifier-20260802`: move host-runnable UTF-16 save-path classification helpers into `er-save-redirect` (`SavePathKind`, `DirectStageNoSteamIdKind`, save-file suffix detection, SteamID extraction, ASCII case-insensitive wide matching). Product telemetry and detour bodies still own counters/logging, but their save-like path categories now come from the shared redirect core.
+
 Gate: Windows-target check plus a no-runtime hook-install smoke if available. Runtime proof comes after this, not before.
 
 ### S6b.3: boot-hold/title-flow seam
