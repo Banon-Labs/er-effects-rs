@@ -41,7 +41,7 @@ pub(crate) fn system_quit_row_table_record_index(row: QuitRow, index: usize) {
     }
 }
 
-fn system_quit_row_table_index(row: QuitRow) -> i32 {
+pub(crate) fn system_quit_row_table_index(row: QuitRow) -> i32 {
     let plus1 = match row {
         QuitRow::SaveGame => SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_PLUS1.load(Ordering::SeqCst),
         QuitRow::ReturnToDesktop => {

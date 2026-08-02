@@ -36,10 +36,8 @@ pub(crate) use loading_cover::*;
 
 // Product (B): customized System>Quit / profile-switch / save-flow menu.
 include!("startup_hooks/quit_menu/profile_rows_system_quit_menu.rs");
-include!("startup_hooks/quit_menu/system_quit_row_identity.rs");
 include!("startup_hooks/quit_menu/system_quit_dialog_handlers.rs");
 include!("startup_hooks/quit_menu/save_flow_boxes.rs");
-include!("startup_hooks/quit_menu/save_dest_identity.rs");
 include!("startup_hooks/quit_menu/save_dest_commit.rs");
 include!("startup_hooks/quit_menu/save_picker_menu.rs");
 mod quit_menu;
