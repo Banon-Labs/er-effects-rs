@@ -1,3 +1,5 @@
+use super::*;
+
 // The MISSING-SAVE BOOT picker: its one-shot open, and the OS-native arm of it.
 //
 // WHAT THIS FIXES. `er-effects.toml`'s `os_native_save_picker` governed the two System>Quit
@@ -136,7 +138,7 @@ pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_BOOT_STATE;
 /// Small on purpose. The ordinary case is the game task holding the state mutex for the microseconds
 /// of its own tick, which one or two tries cover; the pathological case is a task that has stopped
 /// giving the mutex back, and no number of retries fixes that -- it only delays the user's quit.
-const BOOT_EXIT_FLUSH_ATTEMPTS: usize = 4;
+pub(crate) const BOOT_EXIT_FLUSH_ATTEMPTS: usize = 4;
 
 /// How long the OS arm waits for the core `CreateFileW` detour before handing the pick to the
 /// in-game browser.
@@ -147,12 +149,12 @@ const BOOT_EXIT_FLUSH_ATTEMPTS: usize = 4;
 /// thread spawned in `DllMain` and is normally live within a second; this is the backstop for the
 /// case where it never is, and its expiry is a FALLBACK rather than a failure, so the user still
 /// gets a picker.
-const BOOT_OS_CORE_HOOK_WAIT: Duration = Duration::from_secs(20);
+pub(crate) const BOOT_OS_CORE_HOOK_WAIT: Duration = Duration::from_secs(20);
 
 /// When the OS arm first found the core detour not yet live.
-static BOOT_OS_CORE_HOOK_WAIT_STARTED: OnceLock<Instant> = OnceLock::new();
+pub(crate) static BOOT_OS_CORE_HOOK_WAIT_STARTED: OnceLock<Instant> = OnceLock::new();
 /// One-shot guard for the dialog thread.
-static BOOT_OS_THREAD_STARTED: std::sync::atomic::AtomicBool =
+pub(crate) static BOOT_OS_THREAD_STARTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 /// What an abandoned boot open means. PURE and separated from the code that acts on it, so the one
@@ -270,7 +272,7 @@ pub(crate) fn boot_os_open_missing_save_picker() -> bool {
 }
 
 /// The dialog, and the one decision each outcome leads to. Runs on `er-effects-boot-os-picker`.
-fn boot_os_picker_thread() {
+pub(crate) fn boot_os_picker_thread() {
     // Same flavor filter and the same source of it as the in-game boot arm, so the two surfaces
     // cannot offer different containers at the same boot.
     let seamless = save_picker_seamless_mode_after_settle("boot-os-picker");
@@ -339,7 +341,7 @@ fn boot_os_picker_thread() {
 /// existing BACK lands somewhere real. That is a deliberate hand-off to the other surface rather
 /// than a re-open of this one: comdlg32 has no character list, and reopening it on BACK is the
 /// reopen loop this whole design refuses.
-fn boot_os_stage_pick(path: PathBuf) {
+pub(crate) fn boot_os_stage_pick(path: PathBuf) {
     if !crate::experiments::boot_stage_picked_save_for_character_choice(path.clone()) {
         // The predicate accepted it and the slot parse then found nothing -- the two disagree, so
         // there is nothing to choose from. Back to the in-game browser rather than a dead stage.
@@ -360,7 +362,7 @@ fn boot_os_stage_pick(path: PathBuf) {
 
 /// Hand the boot pick to the in-game browser. Terminal for the OS arm: the user still gets a
 /// picker, so this is a degraded surface rather than a failed boot.
-fn boot_os_fall_back_to_in_game(reason: &str) -> bool {
+pub(crate) fn boot_os_fall_back_to_in_game(reason: &str) -> bool {
     SAVE_PICKER_OS_BOOT_FALLBACK_COUNT.fetch_add(1, Ordering::SeqCst);
     SAVE_PICKER_OS_BOOT_STATE.store(BOOT_PICKER_FELL_BACK, Ordering::SeqCst);
     append_autoload_debug(format_args!(
@@ -389,7 +391,7 @@ fn boot_os_fall_back_to_in_game(reason: &str) -> bool {
 /// table the teardown has unloaded, and `DLPanic`s). The in-world path requests a character save
 /// first and releases the cursor clip; here there is no character to save -- that is the premise of
 /// a missing-save boot -- so only the input release carries over.
-fn boot_os_perform_cancel_exit() -> ! {
+pub(crate) fn boot_os_perform_cancel_exit() -> ! {
     SAVE_PICKER_OS_BOOT_CANCEL_EXIT_COUNT.fetch_add(1, Ordering::SeqCst);
     SAVE_PICKER_OS_BOOT_STATE.store(BOOT_PICKER_CANCEL_EXIT, Ordering::SeqCst);
     append_autoload_debug(format_args!(

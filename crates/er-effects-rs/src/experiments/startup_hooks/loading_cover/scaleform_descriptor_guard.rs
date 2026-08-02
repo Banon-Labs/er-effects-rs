@@ -1,3 +1,5 @@
+use super::*;
+
 // === Scaleform descriptor-heap null guard (er-effects-rs-y22i) ===================================
 //
 // Crash-report-driven, ALWAYS-ON defensive guard. With our DLL loaded, native-Windows users

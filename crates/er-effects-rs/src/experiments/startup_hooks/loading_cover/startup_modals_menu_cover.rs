@@ -1,3 +1,5 @@
+use super::*;
+
 /// Dismiss the captured startup MessageBoxDialog (connection-error / EULA / warning) by calling
 /// its verified OnDecide/finalize 0x140927ba0(rcx=dialog) -- the genuine OK handler that
 /// dispatches the chosen button (builder-defaulted to OK) and drives the dialog to emit "stop"
@@ -178,8 +180,8 @@ pub(crate) use er_telemetry::counters::GR_SYSMSG_LOG_ORIG;
 // 0x140762d50 (dump 0x140762e40 - 0xf0 region shift): it loads L"GR_System_Message"+L"SM" and calls
 // MsgRepository::GetAndFormat with the id in edx. Hooking the WRONG fn is why the 401106 corrupted-
 // save id was never seen (oracle stayed 0). This RVA must be the real getter for the semaphore.
-const GR_SYSTEM_MESSAGE_RVA: u32 = 0x762d50;
-const GR_SYSMSG_LOG_MAX: usize = 64;
+pub(crate) const GR_SYSTEM_MESSAGE_RVA: u32 = 0x762d50;
+pub(crate) const GR_SYSMSG_LOG_MAX: usize = 64;
 
 /// DIAGNOSTIC detour for GetGR_System_Message 0x140762e40. Once the main menu has opened (skip the
 /// boot-time message flood), log the integer message id (the `edx`/`rdx` arg) + first game caller RVA
@@ -301,12 +303,12 @@ pub(crate) fn install_gr_sysmsg_log_hook() {
 /// CS::NetworkCheckJob::Run RVA (deobf entry 0x140821310). Signature
 /// `MenuJobResult*(rcx=job, rdx=MenuJobResult* result, r8=FD4Time*)`. Entry prologue
 /// (push rbp/rsi/rdi/r14/r15; lea rbp; sub rsp) is a clean MinHook target (disasm-verified).
-const NETWORK_CHECK_JOB_RUN_RVA: u32 = 0x821310;
+pub(crate) const NETWORK_CHECK_JOB_RUN_RVA: u32 = 0x821310;
 /// `FD4::FD4TimeTemplate<float>::vftable` (deobf 0x1429c8e48) -- the value Run's common-return path
 /// writes to `*(param_3)` in every leaf (RVA read from the deobf disasm of the clean leaf).
-const FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA: usize = 0x29c8e48;
+pub(crate) const FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA: usize = 0x29c8e48;
 /// `MenuJobState::Continue` (the no-modal result), verified from the deobf clean leaf (`lea edx,[r8+1]`).
-const MENU_JOB_STATE_CONTINUE: i32 = 1;
+pub(crate) const MENU_JOB_STATE_CONTINUE: i32 = 1;
 
 /// pub(crate): the boot-progress view reads this as its menu-open-era milestone (the shortcircuit
 /// fires within ~10ms of the title-accept-byte natural menu-open on the product path).
@@ -424,12 +426,12 @@ pub(crate) fn install_network_check_shortcircuit_hook() {
 /// CS::ShowProgressJob::Run RVA (deobf entry 0x1408349c0; dump 0x140834ab0, region shift -0xf0,
 /// clean prologue disasm-verified). Signature `MenuJobResult*(rcx=ShowProgressJob, rdx=MenuJobResult*
 /// result, r8=FD4Time*)` -- IDENTICAL to NetworkCheckJob::Run.
-const SHOW_PROGRESS_JOB_RUN_RVA: u32 = 0x8349c0;
+pub(crate) const SHOW_PROGRESS_JOB_RUN_RVA: u32 = 0x8349c0;
 /// `MenuJobState::Success` (=2; Continue=1). Verified from FUN_1407a7340's `SetResult(.,Success,0)`
 /// clean leaf (deobf `lea edx,[r8+2]`). A passing check returns Success -> `ShouldContinue` (state>1)
 /// true -> ShowProgressJob::Run propagates it -> flow ADVANCES (no modal). Forcing Continue(1) would
 /// loop the timed job; Success(2) completes it cleanly.
-const MENU_JOB_STATE_SUCCESS: i32 = 2;
+pub(crate) const MENU_JOB_STATE_SUCCESS: i32 = 2;
 
 pub(crate) use er_telemetry::counters::SHOW_PROGRESS_SHORTCIRCUIT_COUNT;
 pub(crate) use er_telemetry::counters::SHOW_PROGRESS_SHORTCIRCUIT_INSTALLED;
@@ -437,11 +439,12 @@ pub(crate) use er_telemetry::counters::SHOW_PROGRESS_SHORTCIRCUIT_INSTALLED;
 /// PASSED THROUGH to its real delegate -- that delegate IS the boot ProfileSummary read (SLLoadSession
 /// -> ER0000.sl2). Blanket-suppressing every type (the prior behavior) killed the save read, leaving
 /// an empty profile -> Bandai privacy policy. bd boot-profile-read-STEP_InitMenu-blocked-by-showprogress-shortcircuit-2026-06-23.
-static SHOW_PROGRESS_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static SHOW_PROGRESS_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 /// ShowProgressJob progressType at [job+0x18] (RE-confirmed). 10 = save-data check/load (MUST run its
 /// delegate); 20=network, 30/31=sign-in, 60=login (offline-modal types we still short-circuit).
-const SHOW_PROGRESS_TYPE_OFFSET: usize = 0x18;
-const SHOW_PROGRESS_SAVE_TYPE: u32 = er_title_flow::boot_hold::SHOW_PROGRESS_SAVE_CHECK_TYPE;
+pub(crate) const SHOW_PROGRESS_TYPE_OFFSET: usize = 0x18;
+pub(crate) const SHOW_PROGRESS_SAVE_TYPE: u32 =
+    er_title_flow::boot_hold::SHOW_PROGRESS_SAVE_CHECK_TYPE;
 pub(crate) use er_telemetry::counters::SHOW_PROGRESS_TYPE_LOGGED;
 
 /// THE MILESTONE-3 FIX, part 2 (zero-input, save-safe). `CS::ShowProgressJob::Run` (deobf 0x1408349c0)
@@ -467,7 +470,7 @@ pub(crate) use er_telemetry::counters::SHOW_PROGRESS_TYPE_LOGGED;
 /// clean-title reload, never while the old world is live -- where it would misdirect the return-title
 /// quit-save to the picked slot. Save-safe: a pure active-slot write, no save-file mutation. See bd
 /// system-quit-ac0-fix-insufficient-cleantitle-load-is-native-mostrecent-2026-07-02.
-unsafe fn system_quit_repoint_active_slot_at_clean_title(source: &str) {
+pub(crate) unsafe fn system_quit_repoint_active_slot_at_clean_title(source: &str) {
     if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
         < SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
     {
@@ -549,10 +552,8 @@ pub(crate) unsafe extern "system" fn show_progress_job_run_hook(
         // installs the save redirect and clears `missing_save_selection_pending()`, so the very
         // next frame this job passes through to the delegate with the redirected save present and
         // the boot resumes -- the bar advances past SAVE_CHECK and the overlay disarms.
-        if er_title_flow::boot_hold::should_hold_save_check(
-            ptype,
-            missing_save_selection_pending(),
-        ) {
+        if er_title_flow::boot_hold::should_hold_save_check(ptype, missing_save_selection_pending())
+        {
             if result > null && unsafe { safe_read_usize(result) }.is_some() {
                 unsafe {
                     *(result as *mut i32) = MENU_JOB_STATE_CONTINUE;
@@ -684,7 +685,8 @@ pub(crate) fn install_show_progress_shortcircuit_hook() {
 // path, regardless of how long the user waits. Self-gates on `missing_save_selection_pending()`, so it
 // is a pure pass-through on an early pick and on any run without the missing-save picker armed.
 pub(crate) use er_telemetry::counters::TITLE_OPEN_MENU_SUPPRESS_INSTALLED;
-static TITLE_OPEN_MENU_SUPPRESS_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_OPEN_MENU_SUPPRESS_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::TITLE_OPEN_MENU_SUPPRESSED_COUNT;
 
 pub(crate) unsafe extern "system" fn title_open_menu_suppress_hook(
@@ -693,9 +695,7 @@ pub(crate) unsafe extern "system" fn title_open_menu_suppress_hook(
     r8: usize,
     r9: usize,
 ) -> usize {
-    if er_title_flow::boot_hold::should_suppress_title_open_menu(
-        missing_save_selection_pending(),
-    ) {
+    if er_title_flow::boot_hold::should_suppress_title_open_menu(missing_save_selection_pending()) {
         let n = TITLE_OPEN_MENU_SUPPRESSED_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
         // Log the first suppression and then sparsely (power-of-two) so a repro shows the hold firing
         // without flooding the log across the whole pending window.
@@ -823,7 +823,7 @@ pub(crate) unsafe extern "system" fn scene_obj_proxy_ctor_hook(
     unsafe { f(rcx, rdx, r8, r9) }
 }
 
-unsafe fn build_profile_select_cover_job(
+pub(crate) unsafe fn build_profile_select_cover_job(
     base: usize,
     rdx: usize,
     r8: usize,
@@ -849,7 +849,12 @@ unsafe fn build_profile_select_cover_job(
     ));
 }
 
-unsafe fn build_black_cover_job(base: usize, rdx: usize, caller_rva: usize, source: &str) {
+pub(crate) unsafe fn build_black_cover_job(
+    base: usize,
+    rdx: usize,
+    caller_rva: usize,
+    source: &str,
+) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if base == null || base == 0 {
         return;
@@ -974,7 +979,7 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_begin_title_hook(
     native_ret
 }
 
-unsafe fn force_hide_title_logo_surface(
+pub(crate) unsafe fn force_hide_title_logo_surface(
     base: usize,
     logo: usize,
     requested_visible: usize,

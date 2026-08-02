@@ -1,3 +1,5 @@
+use super::*;
+
 // POSITIVE row identity for the four-row System -> Quit dialog.
 //
 // S7 moved the pure row-decision core to `er-quit-menu::rows`. This product-side shim keeps the
@@ -41,7 +43,7 @@ pub(crate) fn system_quit_row_table_record_index(row: QuitRow, index: usize) {
     }
 }
 
-fn system_quit_row_table_index(row: QuitRow) -> i32 {
+pub(crate) fn system_quit_row_table_index(row: QuitRow) -> i32 {
     let plus1 = match row {
         QuitRow::SaveGame => SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_PLUS1.load(Ordering::SeqCst),
         QuitRow::ReturnToDesktop => {
@@ -60,7 +62,7 @@ fn system_quit_row_table_index(row: QuitRow) -> i32 {
 }
 
 /// The captured `PropertyNewButtonController` of a row, or 0 when it was never captured.
-fn system_quit_row_controller(row: QuitRow) -> usize {
+pub(crate) fn system_quit_row_controller(row: QuitRow) -> usize {
     match row {
         QuitRow::SaveGame => {
             SYSTEM_QUIT_NATIVE_SAVE_GAME_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst)
@@ -163,7 +165,7 @@ pub(crate) unsafe fn system_quit_row_label_at(dialog: usize, index: i32) -> Opti
 /// `PropertyNewButtonController`'s should-invoke predicate (`FUN_140974b00`) runs. The pad predicate
 /// short-circuits with no positional test; the mouse predicate is the one whose result the native
 /// code then hit-tests against a display object.
-unsafe fn system_quit_classify_activation_input(event: usize) -> QuitInputKind {
+pub(crate) unsafe fn system_quit_classify_activation_input(event: usize) -> QuitInputKind {
     if event == 0 {
         return QuitInputKind::Unknown;
     }
@@ -240,7 +242,7 @@ pub(crate) unsafe fn system_quit_record_grid_geometry(dialog: usize) {
     ));
 }
 
-fn system_quit_row_record_resolution(facts: &QuitRowFacts, verdict: QuitRowVerdict) {
+pub(crate) fn system_quit_row_record_resolution(facts: &QuitRowFacts, verdict: QuitRowVerdict) {
     SYSTEM_QUIT_ROW_RESOLVE_COUNT.fetch_add(1, Ordering::SeqCst);
     SYSTEM_QUIT_ROW_LAST_INPUT_KIND.store(facts.input_kind.code(), Ordering::SeqCst);
     SYSTEM_QUIT_ROW_LAST_CURSOR_PLUS1.store(

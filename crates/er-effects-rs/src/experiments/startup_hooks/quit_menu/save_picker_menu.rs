@@ -1,3 +1,5 @@
+use super::*;
+
 // In-game save-file picker rendered through the native `05_010_ProfileSelect` window.
 //
 // Replaces the System>Quit "Load Character from File" `GetOpenFileNameW` OS dialog (context switch
@@ -57,7 +59,7 @@ pub(crate) use er_telemetry::counters::SAVE_PICKER_SYSTEM_DIALOG;
 
 /// Windows-form (`Z:\...`) string for a possibly Linux-form absolute path; drive-prefixed paths
 /// pass through with separators normalized. String twin of `system_quit_path_for_windows`.
-fn save_picker_windows_path_string(path: &str) -> String {
+pub(crate) fn save_picker_windows_path_string(path: &str) -> String {
     let mut win = if path.starts_with('/') {
         format!("Z:{}", path.replace('/', "\\"))
     } else {
@@ -71,7 +73,7 @@ fn save_picker_windows_path_string(path: &str) -> String {
 
 /// Starting directory for the picker: last picked dir (session, then er-effects.toml) when it
 /// still exists, else the active save's directory, else the default save root.
-fn save_picker_start_dir() -> Option<PathBuf> {
+pub(crate) fn save_picker_start_dir() -> Option<PathBuf> {
     if let Some(preferred) = crate::config::preferred_save_picker_dir_now() {
         if let Some(text) = preferred.to_str() {
             let windows = PathBuf::from(save_picker_windows_path_string(text));
@@ -110,7 +112,7 @@ fn save_picker_start_dir() -> Option<PathBuf> {
 ///     are dense by construction (`visible_row_count`), so the list index the activation hook reads
 ///     from `dialog+0xb0c`, the slot the row-populate hook reads back from `rowModel+0x8`, and the
 ///     model row are all the same number.
-unsafe fn save_picker_write_row_records(
+pub(crate) unsafe fn save_picker_write_row_records(
     model: &crate::experiments::save_picker::SavePickerModel,
     summary: usize,
 ) -> usize {
@@ -156,7 +158,7 @@ unsafe fn save_picker_write_row_records(
 /// first via the save-swap state -- occupancy bytes included -- so every existing backout path
 /// restores the user's real rows. Menu-thread only (record writes + renderer refresh -- same
 /// context the foreign-save preview uses).
-unsafe fn save_picker_stage_row_records(
+pub(crate) unsafe fn save_picker_stage_row_records(
     model: &crate::experiments::save_picker::SavePickerModel,
 ) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -362,20 +364,21 @@ pub(crate) unsafe fn system_quit_open_save_dest_picker_in_game(system_dialog: us
 /// menu thread. If the game task has already moved the flow out of the destination-browser stage
 /// (for example a timeout/abort path), the picker must not resurrect it by blindly storing a new
 /// stage. Compare-and-swap against the browser stage and reset ticks only on success.
-fn save_flow_menu_stage_cas(
+pub(crate) fn save_flow_menu_stage_cas(
     stage_word: &std::sync::atomic::AtomicUsize,
     ticks_word: &std::sync::atomic::AtomicUsize,
     expected: usize,
     stage: usize,
 ) -> Result<usize, usize> {
-    let previous = stage_word.compare_exchange(expected, stage, Ordering::SeqCst, Ordering::SeqCst)?;
+    let previous =
+        stage_word.compare_exchange(expected, stage, Ordering::SeqCst, Ordering::SeqCst)?;
     ticks_word.store(0, Ordering::SeqCst);
     Ok(previous)
 }
 
 /// Enter a save-flow stage from the menu thread only if the game task has not already left the
 /// expected stage.
-fn save_flow_menu_enter_stage(expected: usize, stage: usize, reason: &str) -> bool {
+pub(crate) fn save_flow_menu_enter_stage(expected: usize, stage: usize, reason: &str) -> bool {
     match save_flow_menu_stage_cas(&SAVE_FLOW_STAGE, &SAVE_FLOW_STAGE_TICKS, expected, stage) {
         Ok(previous) => {
             append_autoload_debug(format_args!(
@@ -395,6 +398,7 @@ fn save_flow_menu_enter_stage(expected: usize, stage: usize, reason: &str) -> bo
 #[cfg(test)]
 mod save_picker_menu_stage_transition_tests {
     use super::save_flow_menu_stage_cas;
+    use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
@@ -427,7 +431,11 @@ mod save_picker_menu_stage_transition_tests {
 /// OPENS IN that leaf is the loaded save itself -- so pressing `[ new ]` there is an overwrite and
 /// confirms like any other. The only rows that skip the question are the ones whose target does
 /// not exist, where there is nothing to warn about.
-unsafe fn save_dest_handle_picked_target(dialog: usize, target: PathBuf, source: &'static str) {
+pub(crate) unsafe fn save_dest_handle_picked_target(
+    dialog: usize,
+    target: PathBuf,
+    source: &'static str,
+) {
     match save_dest_route_picked_target(&target) {
         DestRoute::ConfirmOverwrite => {
             SAVE_DEST_TARGET_EXISTING_COUNT.fetch_add(1, Ordering::SeqCst);
@@ -479,7 +487,7 @@ unsafe fn save_dest_handle_picked_target(dialog: usize, target: PathBuf, source:
 /// picker window has finished tearing down (the native close also restores the user's real
 /// ProfileSummary rows and re-shows the System windows, which is exactly the state the close-all
 /// sequence expects).
-unsafe fn save_dest_stage_commit_and_close_picker(dialog: usize, reason: &str) {
+pub(crate) unsafe fn save_dest_stage_commit_and_close_picker(dialog: usize, reason: &str) {
     if !save_flow_menu_enter_stage(
         SAVE_FLOW_STAGE_DEST_BROWSE,
         SAVE_FLOW_STAGE_DEST_BROWSE,
@@ -590,7 +598,7 @@ pub(crate) unsafe fn save_picker_handle_activation(dialog: usize, cursor: i32) -
 
 /// Native cancel-close (SetResult(Failed) + window close) -- same primitive the character-switch
 /// pick uses; runs in menu ownership from the activate hook.
-unsafe fn save_picker_native_close(dialog: usize, reason: &str) {
+pub(crate) unsafe fn save_picker_native_close(dialog: usize, reason: &str) {
     if let Ok(close_addr) = game_rva(SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA) {
         let close_fn: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(close_addr) };
         unsafe { close_fn(dialog) };
@@ -683,7 +691,7 @@ pub(crate) unsafe fn save_picker_menu_pump_resubmit() -> bool {
 
 /// Escape text for the Scaleform-HTML SetText path (the `ErStats` row fields parse with bHTML=1,
 /// so a character/file name containing `&`, `<` or `>` must not be interpreted as markup).
-fn save_picker_html_escape(text: &str) -> String {
+pub(crate) fn save_picker_html_escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
         match c {
@@ -699,15 +707,15 @@ fn save_picker_html_escape(text: &str) -> String {
 /// One dim Scaleform-HTML line for the browse rows' `ErStats` fields (same size/color language as
 /// the stats panel's attribute lines), NUL-terminated UTF-16 for the native SetText wrapper. An
 /// empty `text` yields a bare NUL so the field renders blank.
-fn save_picker_browse_html_utf16(text: &str) -> Vec<u16> {
+pub(crate) fn save_picker_browse_html_utf16(text: &str) -> Vec<u16> {
     save_picker_browse_html_utf16_color(text, "#8f887a")
 }
 
-fn save_picker_error_html_utf16(text: &str) -> Vec<u16> {
+pub(crate) fn save_picker_error_html_utf16(text: &str) -> Vec<u16> {
     save_picker_browse_html_utf16_color(text, "#d8a052")
 }
 
-fn save_picker_browse_html_utf16_color(text: &str, color: &str) -> Vec<u16> {
+pub(crate) fn save_picker_browse_html_utf16_color(text: &str, color: &str) -> Vec<u16> {
     // Matches the stats panel's font size so browse info and attribute lines read identically.
     const SIZE: &str = "19";
     if text.is_empty() {
@@ -723,7 +731,7 @@ fn save_picker_browse_html_utf16_color(text: &str, color: &str) -> Vec<u16> {
     s.encode_utf16().chain(core::iter::once(0)).collect()
 }
 
-fn save_picker_set_visible_status(message: er_save_picker::PickerStatusMessage) {
+pub(crate) fn save_picker_set_visible_status(message: er_save_picker::PickerStatusMessage) {
     if let Some(model) = crate::experiments::save_picker::active_save_picker_lock().as_mut() {
         model.set_status_message(message);
     }
@@ -731,7 +739,7 @@ fn save_picker_set_visible_status(message: er_save_picker::PickerStatusMessage) 
 
 /// Character budget for the per-file character list line (the four-attribute stats line occupies
 /// roughly this width at the same font size, so the list clips no earlier than the stats did).
-const SAVE_PICKER_BROWSE_LINE_CHAR_BUDGET: usize = 44;
+pub(crate) const SAVE_PICKER_BROWSE_LINE_CHAR_BUDGET: usize = 44;
 
 /// The two `ErStats` lines for ProfileSelect row `row` while the browse picker owns the window.
 /// File rows show the file's REAL character info: active-slot count on the top line and the
@@ -838,7 +846,7 @@ pub(crate) fn save_picker_row_slot_info(row: usize) -> Option<RowSlotInfo> {
 /// Render one file's modification time as the row's last-saved text, in local time.
 /// `None` when the stamp predates the epoch or the OS cannot give a local offset for it -- the row
 /// then hides the field rather than showing a date we cannot stand behind.
-fn save_picker_last_saved_text(modified: std::time::SystemTime) -> Option<String> {
+pub(crate) fn save_picker_last_saved_text(modified: std::time::SystemTime) -> Option<String> {
     let secs = modified
         .duration_since(std::time::SystemTime::UNIX_EPOCH)
         .ok()?
@@ -857,7 +865,7 @@ fn save_picker_last_saved_text(modified: std::time::SystemTime) -> Option<String
 /// (Comparing `GetLocalTime` to `GetSystemTime` would give only the CURRENT offset and misdate every
 /// file from the other side of the boundary by an hour.) The offset comes back as a number, which is
 /// all the pure formatter needs -- that is what keeps the rendering unit-testable.
-unsafe fn local_utc_offset_seconds(utc_secs: i64) -> Option<i64> {
+pub(crate) unsafe fn local_utc_offset_seconds(utc_secs: i64) -> Option<i64> {
     use windows::Win32::Foundation::{FILETIME, SYSTEMTIME};
     use windows::Win32::System::Time::{
         FileTimeToSystemTime, SystemTimeToFileTime, SystemTimeToTzSpecificLocalTime,
@@ -897,6 +905,7 @@ unsafe fn local_utc_offset_seconds(utc_secs: i64) -> Option<i64> {
 #[cfg(test)]
 mod save_picker_row_slot_info_tests {
     use super::*;
+    use std::sync::atomic::Ordering;
 
     /// SCOPE PROOF for the row Level/PlayTime rework: with no picker owning the rows -- the state
     /// the vanilla character-slot views run in, the title-screen Load Game list among them -- the

@@ -1,3 +1,5 @@
+use super::*;
+
 /// Reads `CSNowLoadingHelperImp::load_done` off the NowLoading singleton. WARNING (RE-corrected
 /// 2026-07-02): despite the name this is a load-COMPLETE latch, not "loading screen visible" -- `Update`
 /// copies it from `request_load_done` (raised by the map-load system), so it reads true AFTER the load
@@ -548,7 +550,7 @@ pub(crate) fn portrait_target_slot() -> i32 {
 /// normal runtime research must leave the game alive so the underlying game/DLL behavior can continue
 /// producing evidence. Gated on a real loaded character AND a real record, so pre-load transients and
 /// empty slots never fire.
-unsafe fn portrait_render_slot_semaphore(base: usize, render_target_slot: i32) {
+pub(crate) unsafe fn portrait_render_slot_semaphore(base: usize, render_target_slot: i32) {
     // New-game / not-yet-resolved saved-map sentinel; excluded from the map check so a transient c30
     // during the loading screen cannot false-fire.
     const DEFAULT_MAP_C30: i32 = 0x0a01_0000;
@@ -630,21 +632,21 @@ unsafe fn portrait_render_slot_semaphore(base: usize, render_target_slot: i32) {
     }
 }
 
-const PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET: usize = 0x8;
-const PROFILE_SUMMARY_TOTAL_BYTES: usize =
+pub(crate) const PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET: usize = 0x8;
+pub(crate) const PROFILE_SUMMARY_TOTAL_BYTES: usize =
     PROFILE_SUMMARY_RECORD_BASE + PROFILE_SUMMARY_RECORD_STRIDE * TITLE_PROFILE_SLOT_COUNT;
-const PROFILE_SUMMARY_NAME_BYTES: usize = 0x22;
-const PROFILE_SUMMARY_RUNE_MEMORY_OFFSET: usize = 0x2c;
-const PROFILE_SUMMARY_MAP_OFFSET: usize = 0x30;
-const PROFILE_SUMMARY_FACE_DATA_OFFSET: usize = 0x38;
-const PROFILE_SUMMARY_CHR_ASM_OFFSET: usize = 0x1a8;
-const PROFILE_SUMMARY_GENDER_OFFSET: usize = 0x290;
-const PROFILE_SUMMARY_ARCHETYPE_OFFSET: usize = 0x291;
-const PROFILE_SUMMARY_STARTING_GIFT_OFFSET: usize = 0x292;
-const PROFILE_SUMMARY_FIELD_C4_OFFSET: usize = 0x293;
-const SAVE_SLOT_MAP_OFFSET: usize = 0x14;
-const SAVE_FACE_MAGIC: &[u8; 4] = b"FACE";
-const SAVE_FACE_DATA_BUFFER_SIZE: usize = 0x120;
+pub(crate) const PROFILE_SUMMARY_NAME_BYTES: usize = 0x22;
+pub(crate) const PROFILE_SUMMARY_RUNE_MEMORY_OFFSET: usize = 0x2c;
+pub(crate) const PROFILE_SUMMARY_MAP_OFFSET: usize = 0x30;
+pub(crate) const PROFILE_SUMMARY_FACE_DATA_OFFSET: usize = 0x38;
+pub(crate) const PROFILE_SUMMARY_CHR_ASM_OFFSET: usize = 0x1a8;
+pub(crate) const PROFILE_SUMMARY_GENDER_OFFSET: usize = 0x290;
+pub(crate) const PROFILE_SUMMARY_ARCHETYPE_OFFSET: usize = 0x291;
+pub(crate) const PROFILE_SUMMARY_STARTING_GIFT_OFFSET: usize = 0x292;
+pub(crate) const PROFILE_SUMMARY_FIELD_C4_OFFSET: usize = 0x293;
+pub(crate) const SAVE_SLOT_MAP_OFFSET: usize = 0x14;
+pub(crate) const SAVE_FACE_MAGIC: &[u8; 4] = b"FACE";
+pub(crate) const SAVE_FACE_DATA_BUFFER_SIZE: usize = 0x120;
 
 /// Per-slot FNV-1a64 (truncated to usize) of the FOREIGN character's inner `FaceDataBuffer` as written
 /// into the RAM ProfileSummary record by the save-swap preview -- the EXPECTED portrait identity for
@@ -656,94 +658,95 @@ pub(crate) static PROFILE_PREVIEW_FACE_HASH: [AtomicUsize; TITLE_PROFILE_SLOT_CO
     [const { AtomicUsize::new(0) }; TITLE_PROFILE_SLOT_COUNT];
 pub(crate) use er_telemetry::counters::PORTRAIT_FACE_IDENTITY_CHECKS;
 pub(crate) use er_telemetry::counters::PORTRAIT_FACE_IDENTITY_MISMATCHES;
-const SAVE_PGD_SCAN_LEADING_FACE_COUNT: usize = 4;
-const SAVE_PGD_FACE_DELTA_WINDOW_LOW: usize = 0xa000;
-const SAVE_PGD_FACE_DELTA_WINDOW_HIGH: usize = 0xa600;
-const SAVE_PLAYER_GAME_DATA_MIN_SIZE: usize = 0x1b0;
-const SAVE_PGD_HEALTH_OFFSET: usize = 0x08;
-const SAVE_PGD_MAX_HEALTH_OFFSET: usize = 0x0c;
-const SAVE_PGD_BASE_MAX_HEALTH_OFFSET: usize = 0x10;
-const SAVE_PGD_STAT_BASE_OFFSET: usize = 0x34;
-const SAVE_PGD_STAT_COUNT: usize = 8;
-const SAVE_PGD_LEVEL_OFFSET: usize = 0x60;
-const SAVE_PGD_RUNE_MEMORY_OFFSET: usize = 0x68;
-const SAVE_PGD_CHARACTER_NAME_OFFSET: usize = 0x94;
-const SAVE_PGD_CHARACTER_NAME_UNITS: usize = 0x10;
-const SAVE_PGD_CHARACTER_NAME_BYTES: usize = SAVE_PGD_CHARACTER_NAME_UNITS * 2;
-const SAVE_PGD_GENDER_OFFSET: usize = 0xb6;
+pub(crate) const SAVE_PGD_SCAN_LEADING_FACE_COUNT: usize = 4;
+pub(crate) const SAVE_PGD_FACE_DELTA_WINDOW_LOW: usize = 0xa000;
+pub(crate) const SAVE_PGD_FACE_DELTA_WINDOW_HIGH: usize = 0xa600;
+pub(crate) const SAVE_PLAYER_GAME_DATA_MIN_SIZE: usize = 0x1b0;
+pub(crate) const SAVE_PGD_HEALTH_OFFSET: usize = 0x08;
+pub(crate) const SAVE_PGD_MAX_HEALTH_OFFSET: usize = 0x0c;
+pub(crate) const SAVE_PGD_BASE_MAX_HEALTH_OFFSET: usize = 0x10;
+pub(crate) const SAVE_PGD_STAT_BASE_OFFSET: usize = 0x34;
+pub(crate) const SAVE_PGD_STAT_COUNT: usize = 8;
+pub(crate) const SAVE_PGD_LEVEL_OFFSET: usize = 0x60;
+pub(crate) const SAVE_PGD_RUNE_MEMORY_OFFSET: usize = 0x68;
+pub(crate) const SAVE_PGD_CHARACTER_NAME_OFFSET: usize = 0x94;
+pub(crate) const SAVE_PGD_CHARACTER_NAME_UNITS: usize = 0x10;
+pub(crate) const SAVE_PGD_CHARACTER_NAME_BYTES: usize = SAVE_PGD_CHARACTER_NAME_UNITS * 2;
+pub(crate) const SAVE_PGD_GENDER_OFFSET: usize = 0xb6;
 // The serialized PGD tracks the runtime struct at (runtime - 8) for these early scalars (level
 // 0x68->0x60, name 0x9c->0x94, gender 0xbe->0xb6): archetype/gift/c4 follow the same shift.
-const SAVE_PGD_ARCHETYPE_OFFSET: usize = 0xb7;
-const SAVE_PGD_STARTING_GIFT_OFFSET: usize = 0xbb;
-const SAVE_PGD_FIELD_C4_OFFSET: usize = 0xbc;
-const SAVE_PGD_MAX_CRIMSON_FLASK_OFFSET: usize = 0xf9;
-const SAVE_PGD_MAX_CERULEAN_FLASK_OFFSET: usize = 0xfa;
-const SAVE_SPEFFECT_COUNT: usize = 0x0d;
-const SAVE_SPEFFECT_SIZE: usize = 0x10;
-const SAVE_CHR_ASM_EQUIPMENT_SIZE: usize = 0x58;
-const SAVE_ARM_STYLE_ACTIVE_WEAPON_SLOTS_SIZE: usize = 0x1c;
-const SAVE_INVENTORY_HELD_SIZE: usize = 0x9010;
-const SAVE_EQUIP_MAGIC_SIZE: usize = 0x74;
-const SAVE_EQUIP_ITEM_SIZE: usize = 0x8c;
-const SAVE_GESTURE_EQUIP_SIZE: usize = 0x18;
-const SAVE_PROJECTILE_ENTRY_SIZE: usize = 0x08;
-const SAVE_PROJECTILE_COUNT_MAX: u32 = 0x400;
-const SAVE_EQUIPPED_ARMAMENTS_AND_ITEMS_SIZE: usize = 0x9c;
-const SAVE_PHYSIC_EQUIP_SIZE: usize = 0x0c;
-const SAVE_FACE_DATA_FULL_SIZE: usize = 0x12f;
-const SAVE_INVENTORY_STORAGE_SIZE: usize = 0x6010;
-const SAVE_GESTURE_GAME_DATA_SIZE: usize = 0x100;
-const SAVE_REGION_COUNT_MAX: u32 = 0x400;
-const SAVE_REGION_ID_SIZE: usize = 0x04;
-const SAVE_RIDE_GAME_DATA_SIZE: usize = 0x28;
-const SAVE_CONTROL_BYTE_SIZE: usize = 0x01;
-const SAVE_BLOODSTAIN_DATA_SIZE: usize = 0x44;
-const SAVE_MENU_PROFILE_SAVE_LOAD_SIZE: usize = 0x1008;
-const SAVE_TROPHY_EQUIP_DATA_SIZE: usize = 0x34;
-const SAVE_GAITEM_GAME_DATA_SIZE: usize = 0x1b588;
-const SAVE_TUTORIAL_DATA_SIZE: usize = 0x408;
-const SAVE_GLOBAL_GAME_MAN_FLAGS_SIZE: usize = 0x03;
-const SAVE_TOTAL_DEATHS_SIZE: usize = 0x04;
-const SAVE_CHARACTER_TYPE_SIZE: usize = 0x04;
-const SAVE_ONLINE_SESSION_FLAG_SIZE: usize = 0x01;
-const SAVE_ONLINE_CHARACTER_TYPE_FLAG_SIZE: usize = 0x04;
-const SAVE_LAST_RESTED_GRACE_SIZE: usize = 0x04;
-const SAVE_NOT_ALONE_FLAG_SIZE: usize = 0x01;
-const SAVE_INGAME_TIMER_PADDING_AFTER_NOT_ALONE: usize = 0x04;
-const SAVE_INGAME_TIMER_TICKS_MAX: u32 = 999 * 60 * 60 / 10 + 59 * 60 / 10 + 59 / 10 + 1;
-const SYSTEM_QUIT_SAVE_SWAP_POLL_INTERVAL_TICKS: usize = 30;
+pub(crate) const SAVE_PGD_ARCHETYPE_OFFSET: usize = 0xb7;
+pub(crate) const SAVE_PGD_STARTING_GIFT_OFFSET: usize = 0xbb;
+pub(crate) const SAVE_PGD_FIELD_C4_OFFSET: usize = 0xbc;
+pub(crate) const SAVE_PGD_MAX_CRIMSON_FLASK_OFFSET: usize = 0xf9;
+pub(crate) const SAVE_PGD_MAX_CERULEAN_FLASK_OFFSET: usize = 0xfa;
+pub(crate) const SAVE_SPEFFECT_COUNT: usize = 0x0d;
+pub(crate) const SAVE_SPEFFECT_SIZE: usize = 0x10;
+pub(crate) const SAVE_CHR_ASM_EQUIPMENT_SIZE: usize = 0x58;
+pub(crate) const SAVE_ARM_STYLE_ACTIVE_WEAPON_SLOTS_SIZE: usize = 0x1c;
+pub(crate) const SAVE_INVENTORY_HELD_SIZE: usize = 0x9010;
+pub(crate) const SAVE_EQUIP_MAGIC_SIZE: usize = 0x74;
+pub(crate) const SAVE_EQUIP_ITEM_SIZE: usize = 0x8c;
+pub(crate) const SAVE_GESTURE_EQUIP_SIZE: usize = 0x18;
+pub(crate) const SAVE_PROJECTILE_ENTRY_SIZE: usize = 0x08;
+pub(crate) const SAVE_PROJECTILE_COUNT_MAX: u32 = 0x400;
+pub(crate) const SAVE_EQUIPPED_ARMAMENTS_AND_ITEMS_SIZE: usize = 0x9c;
+pub(crate) const SAVE_PHYSIC_EQUIP_SIZE: usize = 0x0c;
+pub(crate) const SAVE_FACE_DATA_FULL_SIZE: usize = 0x12f;
+pub(crate) const SAVE_INVENTORY_STORAGE_SIZE: usize = 0x6010;
+pub(crate) const SAVE_GESTURE_GAME_DATA_SIZE: usize = 0x100;
+pub(crate) const SAVE_REGION_COUNT_MAX: u32 = 0x400;
+pub(crate) const SAVE_REGION_ID_SIZE: usize = 0x04;
+pub(crate) const SAVE_RIDE_GAME_DATA_SIZE: usize = 0x28;
+pub(crate) const SAVE_CONTROL_BYTE_SIZE: usize = 0x01;
+pub(crate) const SAVE_BLOODSTAIN_DATA_SIZE: usize = 0x44;
+pub(crate) const SAVE_MENU_PROFILE_SAVE_LOAD_SIZE: usize = 0x1008;
+pub(crate) const SAVE_TROPHY_EQUIP_DATA_SIZE: usize = 0x34;
+pub(crate) const SAVE_GAITEM_GAME_DATA_SIZE: usize = 0x1b588;
+pub(crate) const SAVE_TUTORIAL_DATA_SIZE: usize = 0x408;
+pub(crate) const SAVE_GLOBAL_GAME_MAN_FLAGS_SIZE: usize = 0x03;
+pub(crate) const SAVE_TOTAL_DEATHS_SIZE: usize = 0x04;
+pub(crate) const SAVE_CHARACTER_TYPE_SIZE: usize = 0x04;
+pub(crate) const SAVE_ONLINE_SESSION_FLAG_SIZE: usize = 0x01;
+pub(crate) const SAVE_ONLINE_CHARACTER_TYPE_FLAG_SIZE: usize = 0x04;
+pub(crate) const SAVE_LAST_RESTED_GRACE_SIZE: usize = 0x04;
+pub(crate) const SAVE_NOT_ALONE_FLAG_SIZE: usize = 0x01;
+pub(crate) const SAVE_INGAME_TIMER_PADDING_AFTER_NOT_ALONE: usize = 0x04;
+pub(crate) const SAVE_INGAME_TIMER_TICKS_MAX: u32 = 999 * 60 * 60 / 10 + 59 * 60 / 10 + 59 / 10 + 1;
+pub(crate) const SYSTEM_QUIT_SAVE_SWAP_POLL_INTERVAL_TICKS: usize = 30;
 pub(crate) use er_telemetry::counters::PROFILE_STATS_PREVIEW_ROW_CURSOR;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_SWAP_POLL_TICK;
 
 #[derive(Default)]
-struct SystemQuitSaveSwapState {
-    armed: bool,
-    path: String,
-    original_bytes: Vec<u8>,
-    original_hash: u64,
-    original_len: u64,
-    original_modified_ns: u128,
-    candidate_bytes: Vec<u8>,
-    candidate_hash: u64,
-    candidate_slot_mask: usize,
-    candidate_stats_utf16: Vec<Vec<u16>>,
-    preview_applied: bool,
-    committed: bool,
+pub(crate) struct SystemQuitSaveSwapState {
+    pub(crate) armed: bool,
+    pub(crate) path: String,
+    pub(crate) original_bytes: Vec<u8>,
+    pub(crate) original_hash: u64,
+    pub(crate) original_len: u64,
+    pub(crate) original_modified_ns: u128,
+    pub(crate) candidate_bytes: Vec<u8>,
+    pub(crate) candidate_hash: u64,
+    pub(crate) candidate_slot_mask: usize,
+    pub(crate) candidate_stats_utf16: Vec<Vec<u16>>,
+    pub(crate) preview_applied: bool,
+    pub(crate) committed: bool,
     /// The candidate bytes were written a SECOND time, after the game's return-title save finished
     /// (same-slot clobber fix; see `system_quit_save_swap_recommit_after_return_title_save`).
-    recommitted: bool,
-    summary_ptr: usize,
-    summary_snapshot: Vec<u8>,
+    pub(crate) recommitted: bool,
+    pub(crate) summary_ptr: usize,
+    pub(crate) summary_snapshot: Vec<u8>,
 }
 
-static SYSTEM_QUIT_SAVE_SWAP_STATE: OnceLock<Mutex<SystemQuitSaveSwapState>> = OnceLock::new();
+pub(crate) static SYSTEM_QUIT_SAVE_SWAP_STATE: OnceLock<Mutex<SystemQuitSaveSwapState>> =
+    OnceLock::new();
 
 /// True if ProfileSummary slot `slot` holds a real character (non-empty saved name). Used to gate the
 /// human-driven in-world Load-Profile pick so activating an EMPTY slot never arms a switch (which
 /// would tear the world down to a clean title and then fail the fresh deserialize, stranding the game
 /// at a blank title). Reads the same save-record table the identity semaphore uses -- fault-guarded,
 /// returns false on any unreadable pointer so an empty/unknown slot is treated as "no character".
-unsafe fn profile_slot_has_character(slot: i32) -> bool {
+pub(crate) unsafe fn profile_slot_has_character(slot: i32) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if !(0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&slot) {
         return false;
@@ -766,17 +769,18 @@ unsafe fn profile_slot_has_character(slot: i32) -> bool {
 
 pub(crate) use er_save_picker::{SaveSlotInfo, parse_save_character_slots};
 
-fn system_quit_save_swap_state() -> &'static Mutex<SystemQuitSaveSwapState> {
+pub(crate) fn system_quit_save_swap_state() -> &'static Mutex<SystemQuitSaveSwapState> {
     SYSTEM_QUIT_SAVE_SWAP_STATE.get_or_init(|| Mutex::new(SystemQuitSaveSwapState::default()))
 }
 
-fn system_quit_save_swap_lock() -> std::sync::MutexGuard<'static, SystemQuitSaveSwapState> {
+pub(crate) fn system_quit_save_swap_lock() -> std::sync::MutexGuard<'static, SystemQuitSaveSwapState>
+{
     system_quit_save_swap_state()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn system_quit_hash_bytes(bytes: &[u8]) -> u64 {
+pub(crate) fn system_quit_hash_bytes(bytes: &[u8]) -> u64 {
     let mut h = 0xcbf29ce484222325u64;
     for b in bytes.iter().copied() {
         h ^= b as u64;
@@ -785,7 +789,7 @@ fn system_quit_hash_bytes(bytes: &[u8]) -> u64 {
     h
 }
 
-fn system_quit_file_stamp(path: &str) -> Option<(u64, u128)> {
+pub(crate) fn system_quit_file_stamp(path: &str) -> Option<(u64, u128)> {
     let meta = fs::metadata(path).ok()?;
     let modified_ns = meta
         .modified()
@@ -796,7 +800,7 @@ fn system_quit_file_stamp(path: &str) -> Option<(u64, u128)> {
     Some((meta.len(), modified_ns))
 }
 
-fn system_quit_save_swap_arm_original(path: &str) -> bool {
+pub(crate) fn system_quit_save_swap_arm_original(path: &str) -> bool {
     let Ok(bytes) = fs::read(path) else {
         append_autoload_debug(format_args!(
             "system-quit-save-swap: failed to snapshot active save '{path}' before opening replacement folder"
@@ -826,7 +830,7 @@ fn system_quit_save_swap_arm_original(path: &str) -> bool {
     true
 }
 
-unsafe fn system_quit_profile_summary_ptr() -> usize {
+pub(crate) unsafe fn system_quit_profile_summary_ptr() -> usize {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let gdm = game_data_man_ptr_or_null();
     if gdm == null {
@@ -836,22 +840,22 @@ unsafe fn system_quit_profile_summary_ptr() -> usize {
 }
 
 #[derive(Clone, Copy)]
-struct SerializedSaveSlot<'a> {
-    body: &'a [u8],
+pub(crate) struct SerializedSaveSlot<'a> {
+    pub(crate) body: &'a [u8],
 }
 
 #[derive(Clone, Copy)]
-struct SerializedPlayerGameData<'a> {
-    body: &'a [u8],
-    offset: usize,
+pub(crate) struct SerializedPlayerGameData<'a> {
+    pub(crate) body: &'a [u8],
+    pub(crate) offset: usize,
 }
 
 impl<'a> SerializedSaveSlot<'a> {
-    fn new(body: &'a [u8]) -> Self {
+    pub(crate) fn new(body: &'a [u8]) -> Self {
         Self { body }
     }
 
-    fn saved_map(self) -> Option<i32> {
+    pub(crate) fn saved_map(self) -> Option<i32> {
         self.read_i32(SAVE_SLOT_MAP_OFFSET)
     }
 
@@ -924,7 +928,10 @@ impl<'a> SerializedSaveSlot<'a> {
     /// The face section has a small prefix before the magic (observed: 4 bytes of 0xff), so the magic
     /// is scanned within the section rather than assumed at +0. `None` when the walk or magic fails
     /// (caller keeps the fallback face and logs).
-    fn face_data_buffer_bytes(self, pgd: SerializedPlayerGameData<'a>) -> Option<&'a [u8]> {
+    pub(crate) fn face_data_buffer_bytes(
+        self,
+        pgd: SerializedPlayerGameData<'a>,
+    ) -> Option<&'a [u8]> {
         let sect_off = self.walk_to_face_section(pgd)?;
         let sect = self
             .body
@@ -965,7 +972,7 @@ impl<'a> SerializedSaveSlot<'a> {
     /// `EquipParamProtector::GetEntry`). No gaitem handle is read anywhere on the render path.
     /// Handles matter only because `CS::ChrAsm::EquipItem` WRITES a param id from a handle lookup and
     /// stores -1 when the lookup fails -- i.e. a bad handle can only DESTROY a good param id.
-    fn runtime_chr_asm_image(
+    pub(crate) fn runtime_chr_asm_image(
         self,
         pgd: SerializedPlayerGameData<'a>,
     ) -> Option<[u8; CHR_ASM_SIZE]> {
@@ -998,7 +1005,10 @@ impl<'a> SerializedSaveSlot<'a> {
         Some(image)
     }
 
-    fn in_game_timer_ticks(self, player_game_data: SerializedPlayerGameData<'a>) -> Option<u32> {
+    pub(crate) fn in_game_timer_ticks(
+        self,
+        player_game_data: SerializedPlayerGameData<'a>,
+    ) -> Option<u32> {
         let mut offset = self.walk_to_face_section(player_game_data)?;
         Self::add_offset(&mut offset, SAVE_FACE_DATA_FULL_SIZE)?;
         Self::add_offset(&mut offset, SAVE_INVENTORY_STORAGE_SIZE)?;
@@ -1033,7 +1043,7 @@ impl<'a> SerializedSaveSlot<'a> {
             .take(SAVE_PGD_SCAN_LEADING_FACE_COUNT)
     }
 
-    fn player_game_data(self) -> Option<SerializedPlayerGameData<'a>> {
+    pub(crate) fn player_game_data(self) -> Option<SerializedPlayerGameData<'a>> {
         let mut best: Option<SerializedPlayerGameData<'a>> = None;
         let mut best_score = 0usize;
         for face_offset in self.face_magic_offsets() {
@@ -1177,7 +1187,7 @@ impl<'a> SerializedPlayerGameData<'a> {
             + usize::from(self.read_u32(SAVE_PGD_LEVEL_OFFSET).unwrap_or(0) > 0)
     }
 
-    fn stats_text_utf16(&self) -> Option<Vec<u16>> {
+    pub(crate) fn stats_text_utf16(&self) -> Option<Vec<u16>> {
         const LABELS: [&str; SAVE_PGD_STAT_COUNT] =
             ["VIG", "MND", "END", "STR", "DEX", "INT", "FAI", "ARC"];
         let stats = self.stats()?;
@@ -1194,7 +1204,7 @@ impl<'a> SerializedPlayerGameData<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    unsafe fn write_profile_summary_record(
+    pub(crate) unsafe fn write_profile_summary_record(
         &self,
         base: usize,
         profile_summary: usize,

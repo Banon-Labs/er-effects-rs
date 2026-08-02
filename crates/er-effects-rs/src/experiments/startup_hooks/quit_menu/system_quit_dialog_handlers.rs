@@ -1,4 +1,6 @@
-unsafe fn system_quit_open_profile_load_dialog(action_obj: usize) -> bool {
+use super::*;
+
+pub(crate) unsafe fn system_quit_open_profile_load_dialog(action_obj: usize) -> bool {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const HEAP_LO: usize = 0x10000;
     let system_dialog =
@@ -17,7 +19,7 @@ unsafe fn system_quit_open_profile_load_dialog(action_obj: usize) -> bool {
 /// PropertyEditDialog. Split out of the action-object form (save-game-flow WP3) because the save
 /// flow opens the destination browser from the dialog it captured at the row press -- it never has
 /// a row action object of its own.
-unsafe fn system_quit_open_profile_load_dialog_on(system_dialog: usize) -> bool {
+pub(crate) unsafe fn system_quit_open_profile_load_dialog_on(system_dialog: usize) -> bool {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const HEAP_LO: usize = 0x10000;
     let Ok(base) = game_module_base() else {
@@ -166,7 +168,7 @@ pub(crate) unsafe extern "system" fn system_quit_menu_window_list_push_hook(
 /// row, so the row is resolved positively from the row table + the live label at the dialog's list
 /// cursor. An unresolvable row is SUPPRESSED rather than forwarded, because the native action behind
 /// the second row is the irreversible Return to Desktop.
-unsafe fn system_quit_route_button_action_or_forward(
+pub(crate) unsafe fn system_quit_route_button_action_or_forward(
     action_obj: usize,
     orig: usize,
     hook_name: &str,
@@ -318,7 +320,7 @@ pub(crate) unsafe extern "system" fn system_quit_return_desktop_action_hook(
     }
 }
 
-unsafe fn system_quit_forward_button_controller_activation(
+pub(crate) unsafe fn system_quit_forward_button_controller_activation(
     controller: usize,
     event_kind: u32,
     event_a: usize,
@@ -336,7 +338,10 @@ unsafe fn system_quit_forward_button_controller_activation(
     unsafe { original(controller, event_kind, event_a, event_b) };
 }
 
-unsafe fn system_quit_controller_should_invoke_action(controller: usize, event_a: usize) -> bool {
+pub(crate) unsafe fn system_quit_controller_should_invoke_action(
+    controller: usize,
+    event_a: usize,
+) -> bool {
     let Ok(predicate_addr) = game_rva(PROPERTY_NEW_BUTTON_CONTROLLER_SHOULD_INVOKE_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-dup: failed to resolve PropertyNewButtonController action predicate rva 0x{PROPERTY_NEW_BUTTON_CONTROLLER_SHOULD_INVOKE_RVA:x}; forwarding native activation"
@@ -470,7 +475,7 @@ pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hoo
     }
 }
 
-fn wide_z(text: &str) -> Vec<u16> {
+pub(crate) fn wide_z(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(core::iter::once(0)).collect()
 }
 
@@ -480,7 +485,7 @@ fn wide_z(text: &str) -> Vec<u16> {
 /// this returns the game's native `%APPDATA%/EldenRing/<steamid>/ER0000.{co2|sl2}` path for writes.
 /// Explicit/default saves keep using the normal configured/default resolver. Never write back to the
 /// direct source file under `save-files/` or a user-picked path.
-fn system_quit_env_save_path() -> Result<String, &'static str> {
+pub(crate) fn system_quit_env_save_path() -> Result<String, &'static str> {
     let Some(path) = active_save_file_for_system_quit() else {
         return Err(
             "no active save file (direct/configured save unset and no default ER0000 save resolved)",
@@ -494,7 +499,7 @@ fn system_quit_env_save_path() -> Result<String, &'static str> {
     Ok(trimmed.trim_end_matches(['/', '\\']).to_owned())
 }
 
-fn system_quit_env_save_dir() -> Result<String, &'static str> {
+pub(crate) fn system_quit_env_save_dir() -> Result<String, &'static str> {
     let trimmed = system_quit_env_save_path()?;
     let Some(sep) = trimmed.rfind(['/', '\\']) else {
         return Err("configured save_file has no parent directory");
@@ -506,7 +511,7 @@ fn system_quit_env_save_dir() -> Result<String, &'static str> {
     Ok(dir.to_owned())
 }
 
-fn system_quit_path_for_windows(path: &str) -> Vec<u16> {
+pub(crate) fn system_quit_path_for_windows(path: &str) -> Vec<u16> {
     let mut win = if path.starts_with('/') {
         format!("Z:{}", path.replace('/', "\\"))
     } else {
@@ -518,7 +523,7 @@ fn system_quit_path_for_windows(path: &str) -> Vec<u16> {
     wide_z(&win)
 }
 
-fn system_quit_path_from_windows_picker(path: &[u16]) -> Option<String> {
+pub(crate) fn system_quit_path_from_windows_picker(path: &[u16]) -> Option<String> {
     let end = path.iter().position(|c| *c == 0).unwrap_or(path.len());
     if end == 0 {
         return None;
@@ -543,7 +548,7 @@ pub(crate) fn system_quit_windows_path_for_log(path: &str) -> String {
 /// refresh).
 /// The caller is responsible for the pre-pick work (`system_quit_save_swap_restore_profile_summary`
 /// + `system_quit_save_swap_arm_original`), which happens at picker OPEN time.
-unsafe fn system_quit_ingest_picked_save(selected_path: &str) -> bool {
+pub(crate) unsafe fn system_quit_ingest_picked_save(selected_path: &str) -> bool {
     // Extension policy: vanilla only accepts `.sl2`; Seamless accepts its native `.co2` plus
     // vanilla `.sl2` sources so a vanilla save can be loaded/imported while ERSC owns the session.
     let seamless = save_picker_seamless_mode_after_settle("system-quit-ingest-picked-save");
@@ -571,8 +576,7 @@ unsafe fn system_quit_ingest_picked_save(selected_path: &str) -> bool {
     if !ext_ok {
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
         save_picker_set_visible_status(
-            er_save_picker::PickRejection::WrongExtension
-                .status_message(&allowed_exts.join("/.")),
+            er_save_picker::PickRejection::WrongExtension.status_message(&allowed_exts.join("/.")),
         );
         append_autoload_debug(format_args!(
             "system-quit-load-save-profiles: rejected '{}' -- picker accepts only .{} (seamless={seamless}; visible reason set)",
@@ -583,7 +587,9 @@ unsafe fn system_quit_ingest_picked_save(selected_path: &str) -> bool {
     }
     let Ok(mut bytes) = fs::read(selected_path) else {
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
-        save_picker_set_visible_status(er_save_picker::PickRejection::Unreadable.status_message("SL2"));
+        save_picker_set_visible_status(
+            er_save_picker::PickRejection::Unreadable.status_message("SL2"),
+        );
         append_autoload_debug(format_args!(
             "system-quit-load-save-profiles: failed to read selected save '{}' (visible reason set)",
             selected_log
@@ -594,7 +600,9 @@ unsafe fn system_quit_ingest_picked_save(selected_path: &str) -> bool {
     let raw_hash = system_quit_hash_bytes(&bytes);
     if er_save_loader::bnd4::parse_entries(&bytes).is_err() {
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
-        save_picker_set_visible_status(er_save_picker::PickRejection::NotBnd4.status_message("SL2"));
+        save_picker_set_visible_status(
+            er_save_picker::PickRejection::NotBnd4.status_message("SL2"),
+        );
         append_autoload_debug(format_args!(
             "system-quit-load-save-profiles: selected save is not a valid BND4 '{}' len={len} hash=0x{raw_hash:016x} (visible reason set)",
             selected_log
@@ -649,7 +657,10 @@ unsafe fn system_quit_ingest_picked_save(selected_path: &str) -> bool {
     true
 }
 
-unsafe fn system_quit_init_menu_string_from_static_wide(out: usize, text: &'static [u16]) -> bool {
+pub(crate) unsafe fn system_quit_init_menu_string_from_static_wide(
+    out: usize,
+    text: &'static [u16],
+) -> bool {
     let Ok(ctor_addr) = game_rva(MENU_STRING_FROM_WIDE_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-dup: failed to resolve MenuString ctor rva 0x{MENU_STRING_FROM_WIDE_RVA:x}; cannot build static label"
@@ -662,7 +673,7 @@ unsafe fn system_quit_init_menu_string_from_static_wide(out: usize, text: &'stat
     true
 }
 
-unsafe fn system_quit_build_static_label_component(
+pub(crate) unsafe fn system_quit_build_static_label_component(
     out: usize,
     label: &'static [u16],
     help: &'static [u16],
@@ -681,11 +692,11 @@ unsafe fn system_quit_build_static_label_component(
 /// fixed buffer is exactly as valid as an exact-length one -- and an over-long string fails at
 /// COMPILE time here instead of losing its tail at runtime. It replaced eight hand-expanded
 /// `[b'L' as u16, b'o' as u16, ...]` arrays whose lengths had to be counted by hand.
-const SYSTEM_QUIT_ROW_TEXT_CAPACITY: usize = 96;
+pub(crate) const SYSTEM_QUIT_ROW_TEXT_CAPACITY: usize = 96;
 
 /// Widen an ASCII row string into a NUL-terminated UTF-16 buffer at compile time. Every result must
 /// live in a `const`/`static` with process lifetime: `CS::MenuString` keeps the pointer, not a copy.
-const fn system_quit_row_text(text: &[u8]) -> [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] {
+pub(crate) const fn system_quit_row_text(text: &[u8]) -> [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] {
     let mut out = [0_u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY];
     let mut idx = 0;
     while idx < text.len() {
@@ -715,42 +726,42 @@ const fn system_quit_row_text(text: &[u8]) -> [u16; SYSTEM_QUIT_ROW_TEXT_CAPACIT
 // Desktop" at 172.8px which is known to render on this row. Nothing is near the edge, so no
 // placement matrix and no row width was touched. The line-help field on the same tab (char 87,
 // -40..22760 twips = 1140px, also 24px) has room to spare for the help strings below.
-const SYSTEM_QUIT_LOAD_PROFILE_LABEL_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
+pub(crate) const SYSTEM_QUIT_LOAD_PROFILE_LABEL_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
     system_quit_row_text(b"Load Character");
 
-const SYSTEM_QUIT_LOAD_PROFILE_HELP_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
+pub(crate) const SYSTEM_QUIT_LOAD_PROFILE_HELP_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
     system_quit_row_text(b"Load another character from the save you are playing");
 
-const SYSTEM_QUIT_LOAD_SAVE_PROFILES_LABEL_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
+pub(crate) const SYSTEM_QUIT_LOAD_SAVE_PROFILES_LABEL_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
     system_quit_row_text(b"Load Character from File");
 
-const SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
+pub(crate) const SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
     system_quit_row_text(b"Browse for another save file and load a character from it (ER0000.sl2)");
 
 // Seamless Co-op variant of the row help above: same text but naming `ER0000.co2`, the container
 // ERSC actually reads/writes. Selected at row-build time so the row never advertises the save
 // flavor the active mode ignores (matches the picker's mode-locked filter; user directive
 // 2026-07-06).
-const SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_CO2_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
+pub(crate) const SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_CO2_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
     system_quit_row_text(b"Browse for another save file and load a character from it (ER0000.co2)");
 
-const SYSTEM_QUIT_SAVE_GAME_LABEL_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
+pub(crate) const SYSTEM_QUIT_SAVE_GAME_LABEL_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
     system_quit_row_text(b"Save Game");
 
 // The help says CHOOSE, because that is what the row now does: pressing it opens the destination
 // list rather than asking a question. Promising "Save and return to playing the game" would have
 // described the pre-2026-07-31 flow, where the row's first act was a yes/no box.
-const SYSTEM_QUIT_SAVE_GAME_HELP_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
+pub(crate) const SYSTEM_QUIT_SAVE_GAME_HELP_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
     system_quit_row_text(b"Choose where to save, then return to playing");
 
 // Native dialog id 110000's text. The product row press suppresses the native activation and opens
 // the destination list, so this substitution should never be reached; it stays because a build
 // where the suppression did not take would otherwise show the VANILLA quit prompt on a row labelled
 // Save Game, which is worse than a stale-but-harmless sentence.
-const SYSTEM_QUIT_SAVE_GAME_DIALOG_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
+pub(crate) const SYSTEM_QUIT_SAVE_GAME_DIALOG_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
     system_quit_row_text(b"Save and return to playing the game?");
 
-unsafe fn wide_equals_ascii(ptr: usize, ascii: &[u8]) -> bool {
+pub(crate) unsafe fn wide_equals_ascii(ptr: usize, ascii: &[u8]) -> bool {
     if ptr == 0 || ptr == TITLE_OWNER_SCAN_START_ADDRESS || ascii.is_empty() {
         return false;
     }
@@ -840,7 +851,7 @@ pub(crate) unsafe fn system_quit_save_game_close_window(window: usize, label: &s
     true
 }
 
-unsafe fn system_quit_save_game_request_save_only() {
+pub(crate) unsafe fn system_quit_save_game_request_save_only() {
     let Ok(request_save_addr) = game_rva(SYSTEM_QUIT_REQUEST_SAVE_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-save: failed to resolve RequestSave rva 0x{SYSTEM_QUIT_REQUEST_SAVE_RVA:x}"
@@ -902,7 +913,7 @@ pub(crate) unsafe fn system_quit_save_game_request_save_forced() {
 /// Fails CLOSED through `save_flow_verify_rva`: an unresolvable address or a single drifted
 /// byte skips the call and reports it. Not retracting costs CPU; calling unknown code costs
 /// the process.
-unsafe fn call_verified_retract(rva: u32, expected: &[u8], name: &str) -> bool {
+pub(crate) unsafe fn call_verified_retract(rva: u32, expected: &[u8], name: &str) -> bool {
     let Some(address) = save_flow_verify_rva(rva, expected, name) else {
         return false;
     };
@@ -1029,7 +1040,7 @@ pub(crate) unsafe fn system_quit_save_game_close_menus(
 /// costs only the overwrite confirm -- and an unconfirmable overwrite is REFUSED at the pick
 /// (`save_dest_handle_picked_target`), never performed silently. A free destination name still
 /// commits, because it never needed a confirm in the first place.
-unsafe fn system_quit_save_game_start_flow(dialog: usize) -> bool {
+pub(crate) unsafe fn system_quit_save_game_start_flow(dialog: usize) -> bool {
     if dialog < 0x10000 || dialog == TITLE_OWNER_SCAN_START_ADDRESS {
         append_autoload_debug(format_args!(
             "save-flow: row press abort -- dialog=0x{dialog:x} is not heap-like"

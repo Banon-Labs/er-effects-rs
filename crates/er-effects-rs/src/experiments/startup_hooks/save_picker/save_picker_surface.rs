@@ -1,3 +1,5 @@
+use super::*;
+
 // THE one place that decides WHICH picker opens.
 //
 // There are exactly three "open a picker" entry points -- the System>Quit "Load Character from File"
@@ -113,7 +115,7 @@ impl PickerOpenOutcome {
 ///
 /// So `true` is `Opened` and `false` is `NotOpened`, and NEITHER can be `Dismissed`: re-arming on a
 /// `false` here is the deferred-submit retry both surfaces need, not the reopen loop.
-fn open_taken_over_outcome(taken: bool) -> PickerOpenOutcome {
+pub(crate) fn open_taken_over_outcome(taken: bool) -> PickerOpenOutcome {
     if taken {
         PickerOpenOutcome::Opened
     } else {
@@ -124,7 +126,7 @@ fn open_taken_over_outcome(taken: bool) -> PickerOpenOutcome {
 /// Resolve the surface from the flag. Takes the bool as an ARGUMENT rather than reading the
 /// config, so the invariant the contract cares about -- one key value yields the same surface for
 /// BOTH intents -- is provable by a table test instead of by reviewer discipline.
-fn picker_surface_for(os_enabled: bool) -> PickerSurface {
+pub(crate) fn picker_surface_for(os_enabled: bool) -> PickerSurface {
     if os_enabled {
         PickerSurface::OsNative
     } else {
@@ -216,7 +218,7 @@ pub(crate) struct SaveDestOrigin {
 /// with no question in front of it, so the first screen has to be the screen where "save over what
 /// I had" is one press away: the loaded save's own folder, with the loaded save in the list and
 /// `[ new ]` resolving to its own leaf.
-fn save_dest_start_dir() -> Option<SaveDestOrigin> {
+pub(crate) fn save_dest_start_dir() -> Option<SaveDestOrigin> {
     let save_path = match system_quit_env_save_path() {
         Ok(path) => path,
         Err(reason) => {

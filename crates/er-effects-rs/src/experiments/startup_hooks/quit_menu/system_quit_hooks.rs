@@ -1,3 +1,5 @@
+use super::*;
+
 pub(crate) fn install_system_quit_continue_confirm_hook() {
     if SYSTEM_QUIT_CONTINUE_CONFIRM_INSTALLED.load(Ordering::SeqCst) != 0 {
         return;
@@ -144,7 +146,7 @@ pub(crate) use er_telemetry::counters::TESTNET_FF_FIRED_EPOCH;
 pub(crate) use er_telemetry::counters::TESTNET_FF_LAST_MMS;
 /// Stuck-frame + one-shot state for the load2/boot testNetStep force-finish below.
 pub(crate) use er_telemetry::counters::TESTNET_FF_STUCK_FRAMES;
-const TESTNET_FF_STUCK_FRAME_THRESHOLD: usize = 120;
+pub(crate) const TESTNET_FF_STUCK_FRAME_THRESHOLD: usize = 120;
 
 /// LOAD2 WORLD-COMPLETION FIX (bd load2-fires-but-stalls-at-mms18-world-completion-2026-07-19). A
 /// DRIVEN reload (`fresh_deser>=1`) reaches MoveMapStep STEP_Finish but its testNetStep child never
@@ -989,7 +991,7 @@ pub(crate) fn mh_install_hook_once(
     }
 }
 
-fn install_system_quit_profile_load_activate_hook() {
+pub(crate) fn install_system_quit_profile_load_activate_hook() {
     let Ok(addr) = game_rva(SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-dup: failed to resolve ProfileLoadDialog activation rva 0x{SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA:x}"
@@ -1007,7 +1009,7 @@ fn install_system_quit_profile_load_activate_hook() {
     );
 }
 
-fn install_system_quit_profile_load_confirmed_hook() {
+pub(crate) fn install_system_quit_profile_load_confirmed_hook() {
     let Ok(addr) = game_rva(SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-dup: failed to resolve ProfileLoadDialog confirmed-load rva 0x{SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_RVA:x}"
@@ -1025,7 +1027,7 @@ fn install_system_quit_profile_load_confirmed_hook() {
     );
 }
 
-fn install_system_quit_profile_load_job_run_hook() {
+pub(crate) fn install_system_quit_profile_load_job_run_hook() {
     let Ok(addr) = game_rva(SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-dup: failed to resolve ProfileLoadDialog load-job Run rva 0x{SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA:x}"

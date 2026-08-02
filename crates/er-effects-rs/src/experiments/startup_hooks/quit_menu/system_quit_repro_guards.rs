@@ -1,7 +1,9 @@
+use super::*;
+
 /// Log `msg` exactly once for the current repro phase (`SQ_REPRO_STATE_TAPS` latches it), used when
 /// a phase has issued all its edges and is now HOLDING until its transition is observed. Not a retry
 /// budget -- a boolean latch so the "waiting" line is not spammed.
-fn sq_repro_waiting_once(msg: &str) {
+pub(crate) fn sq_repro_waiting_once(msg: &str) {
     if SQ_REPRO_STATE_TAPS.swap(1, Ordering::SeqCst) == 0 {
         append_autoload_debug(format_args!(
             "sq-repro: {msg} (holding until observed; no re-tap)"
@@ -11,19 +13,19 @@ fn sq_repro_waiting_once(msg: &str) {
 
 /// Mismatch bit outside the tab range. Tripped when ProfileSelect->Back restore did not run the
 /// safe native visible-row refresh (`FUN_140975c20`) for the selected OptionSetting pane.
-const SQ_REPRO_PROFILE_BACK_VISIBLE_REFRESH_MISSING_MASK: usize =
+pub(crate) const SQ_REPRO_PROFILE_BACK_VISIBLE_REFRESH_MISSING_MASK: usize =
     1usize << OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT;
 
 /// Cumulative ProfileSelect OK-confirm count (cancel-close BLOCK + ALLOW). Legacy fallback signal:
 /// the CONFIRM state's primary advance is the direct-arm phase observation; this count (an INCREASE
 /// over the per-switch baseline, so switch #2 does not trip on switch #1's residual) only fires if
 /// the pick fell through to the native confirm-box -> OK -> load-job chain.
-fn sq_repro_confirm_count() -> usize {
+pub(crate) fn sq_repro_confirm_count() -> usize {
     SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT.load(Ordering::SeqCst)
         + SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT.load(Ordering::SeqCst)
 }
 
-fn sq_repro_native_load_state() -> (i32, i32, bool) {
+pub(crate) fn sq_repro_native_load_state() -> (i32, i32, bool) {
     let owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
     let ingame = if owner != TITLE_OWNER_SCAN_START_ADDRESS && owner > 0x10000 {
         unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) }
@@ -51,7 +53,7 @@ fn sq_repro_native_load_state() -> (i32, i32, bool) {
 /// `er-effects-sq-target-slots.txt` = comma/space-separated slot indices (e.g. "0,2,3"). Switch i
 /// loads the i-th entry (clamped to the last). Absent/unparseable -> the compile-time
 /// SQ_REPRO_TARGET_SLOTS table. Control file, not an env gate (env gates are frozen).
-fn sq_repro_target_slot() -> i32 {
+pub(crate) fn sq_repro_target_slot() -> i32 {
     let i = SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst);
     let path = game_directory_path()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -70,7 +72,7 @@ fn sq_repro_target_slot() -> i32 {
 
 /// How many back-to-back switches to drive in the legacy ProfileSelect harness path. The active Save
 /// Game row validation path below is always-on and no longer reads an env selector.
-fn sq_repro_target_switches() -> usize {
+pub(crate) fn sq_repro_target_switches() -> usize {
     // Runtime override so the multi-load proof harness can drive N back-to-back switches without a
     // recompile (diagnostic/harness knob only; the shipped default stays SQ_REPRO_TARGET_SWITCHES=1).
     // Uses a game-dir CONTROL FILE (`er-effects-sq-target-switches.txt` = a decimal count), the same
@@ -86,7 +88,10 @@ fn sq_repro_target_switches() -> usize {
         .clamp(0, SQ_REPRO_TARGET_SLOTS.len())
 }
 
-fn sq_repro_option_tab_row_fingerprint(option_window: usize, tab: usize) -> Option<(usize, usize)> {
+pub(crate) fn sq_repro_option_tab_row_fingerprint(
+    option_window: usize,
+    tab: usize,
+) -> Option<(usize, usize)> {
     const HEAP_LO: usize = 0x10000;
     if option_window < HEAP_LO || tab >= OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT {
         return None;
@@ -118,7 +123,7 @@ fn sq_repro_option_tab_row_fingerprint(option_window: usize, tab: usize) -> Opti
     Some((count, hash))
 }
 
-fn sq_repro_profile_back_record_baseline(option_window: usize, tab: usize) {
+pub(crate) fn sq_repro_profile_back_record_baseline(option_window: usize, tab: usize) {
     let Some((count, hash)) = sq_repro_option_tab_row_fingerprint(option_window, tab) else {
         return;
     };
@@ -127,7 +132,7 @@ fn sq_repro_profile_back_record_baseline(option_window: usize, tab: usize) {
     SQ_REPRO_PROFILE_BACK_BASELINE_MASK.fetch_or(1usize << tab, Ordering::SeqCst);
 }
 
-fn sq_repro_profile_back_verify_tab(option_window: usize, tab: usize) {
+pub(crate) fn sq_repro_profile_back_verify_tab(option_window: usize, tab: usize) {
     let Some((count, hash)) = sq_repro_option_tab_row_fingerprint(option_window, tab) else {
         return;
     };
@@ -142,7 +147,7 @@ fn sq_repro_profile_back_verify_tab(option_window: usize, tab: usize) {
 }
 
 /// Legacy pause-at-menu mode is disabled while the always-on Save Game row repro is active.
-fn sq_repro_pause_at_menu() -> bool {
+pub(crate) fn sq_repro_pause_at_menu() -> bool {
     false
 }
 
@@ -151,7 +156,7 @@ fn sq_repro_pause_at_menu() -> bool {
 /// OptionSetting opens the autopilot drives RIGHT to the last tab then LEFT back to Game Options and
 /// dwells -- reproducing the blank the user reported (tab goes blank on return after the custom tab),
 /// with NO Save Game / no load (save-safe). Takes precedence over the Save Game row path.
-fn sq_repro_tab_return_mode() -> bool {
+pub(crate) fn sq_repro_tab_return_mode() -> bool {
     // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): agent-owned repro autopilot;
     // env/marker feature gates are forbidden; retired (off).
     false
@@ -160,7 +165,7 @@ fn sq_repro_tab_return_mode() -> bool {
 /// Exact USER repro: System menu -> Quit tab -> Load Profile -> Back before selecting a profile ->
 /// return to Game Options. This is the cross-populated-row bug path; it does not load a profile and
 /// does not use the file picker. Gated separately so the older Save Game harness stays default.
-fn sq_repro_profile_back_mode() -> bool {
+pub(crate) fn sq_repro_profile_back_mode() -> bool {
     // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): agent-owned repro autopilot;
     // env/marker feature gates are forbidden; retired (off).
     false
@@ -177,7 +182,7 @@ fn sq_repro_profile_back_mode() -> bool {
 // ENV-GATE RATIONALE: ER_EFFECTS_SQ_LOAD_SWITCH=1 selects the profile-load-switch repro autopilot (Quit
 // tab -> Load Profile -> pick top character -> confirm -> load). This mode DOES drive a real profile
 // load/reload; agent-owned repro only, gated separately from the default Save Game harness.
-fn sq_repro_load_switch_mode() -> bool {
+pub(crate) fn sq_repro_load_switch_mode() -> bool {
     // DECOUPLED TOGGLE (2026-07-19): the load2 flow drives a REAL profile-load switch (Quit tab ->
     // Load Profile -> pick top character -> confirm -> load) whenever the separate input-harness DLL
     // is loaded in the profile. Presence-gated (GetModuleHandle), not env/marker. bd
@@ -188,14 +193,14 @@ fn sq_repro_load_switch_mode() -> bool {
 /// SAVE-GAME ROW mode for the System->Quit repro autopilot. The main
 /// `ER_EFFECTS_SYSTEM_QUIT_REPRO=1` gate still controls whether the repro harness runs at all.
 /// Yields to the tab-return, profile-back, and profile-load-switch modes.
-fn sq_repro_save_game_only() -> bool {
+pub(crate) fn sq_repro_save_game_only() -> bool {
     !sq_repro_tab_return_mode() && !sq_repro_profile_back_mode() && !sq_repro_load_switch_mode()
 }
 
 /// Enter a switch: capture the confirm-count baseline and clear the per-switch menu-window/cursor
 /// signals so the state machine re-detects them fresh for this switch (they hold stale pointers from
 /// the prior switch otherwise). Called before OPEN_MENU for every switch.
-fn sq_repro_begin_switch() {
+pub(crate) fn sq_repro_begin_switch() {
     SQ_REPRO_CONFIRM_BASELINE.store(sq_repro_confirm_count(), Ordering::SeqCst);
     SYSTEM_QUIT_INGAME_TOP_WINDOW.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_OPTION_SETTING_WINDOW.store(0, Ordering::SeqCst);
@@ -274,7 +279,7 @@ fn sq_repro_begin_switch() {
 /// back), and Enter (confirm) are FIXED menu keys in ER -- not the remappable gameplay binds -- so
 /// this is robust to the user's custom keybinds. Tab-switch (LB/RB) keyboard binds are the least
 /// certain and are refined empirically from the phase the run stalls at. 0 = no key this frame.
-fn sq_repro_gamepad_to_dik(btn: u16) -> u8 {
+pub(crate) fn sq_repro_gamepad_to_dik(btn: u16) -> u8 {
     match btn {
         XINPUT_GAMEPAD_START => 0x01, // DIK_ESCAPE  -- open the in-world system/escape menu
         XINPUT_GAMEPAD_A => 0x1c,     // DIK_RETURN  -- menu confirm/select
@@ -293,7 +298,7 @@ fn sq_repro_gamepad_to_dik(btn: u16) -> u8 {
 /// to menu actions -- so this WM path is the actual driver on native; the XInput/DInk mirrors stay for
 /// Wine. Esc opens the in-world menu; arrows nav; Enter confirms -- fixed menu keys, not the
 /// remappable gameplay binds. Tab-switch (LB/RB) VKs are the least certain and refined empirically.
-fn sq_repro_gamepad_to_vk(btn: u16) -> u32 {
+pub(crate) fn sq_repro_gamepad_to_vk(btn: u16) -> u32 {
     match btn {
         XINPUT_GAMEPAD_START => 0x1b, // VK_ESCAPE -- open the in-world system/escape menu
         XINPUT_GAMEPAD_A => 0x0d,     // VK_RETURN -- menu confirm
@@ -329,7 +334,7 @@ pub(crate) use er_telemetry::counters::SQ_REPRO_TAB_DISCOVERED;
 /// edge hold+gap -- edge-triggered menu nav needs a multi-frame hold to register one step). Returns
 /// `(wButtons_this_frame, holding)`: `holding` is true once every edge has been issued, so the
 /// caller waits on an OBSERVED transition (never a timer or budget) to advance.
-fn sq_repro_edges(tick: usize, edges: &[u16]) -> (u16, bool) {
+pub(crate) fn sq_repro_edges(tick: usize, edges: &[u16]) -> (u16, bool) {
     let edge_index = tick / INJECT_NAV_CYCLE;
     if edge_index >= edges.len() {
         return (0, true);
@@ -1442,7 +1447,7 @@ pub(crate) unsafe fn portrait_retarget_and_rearm_for_switch(selected_slot: i32, 
     rearm_boot_progress_for_own_menu_load(selected_slot, source);
 }
 
-unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, source: &str) {
+pub(crate) unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, source: &str) {
     const NO_SLOT: usize = usize::MAX;
     if selected_slot < 0 {
         append_autoload_debug(format_args!(

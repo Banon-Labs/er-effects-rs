@@ -1,3 +1,5 @@
+use super::*;
+
 // Save-to-a-chosen-destination commit state (save-game-flow WP3).
 //
 // The System->Quit "Save Game" flow can end on a destination the user browsed to instead of the
@@ -126,21 +128,21 @@ pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_WRITTEN_OK;
 // `constants::autoload_state`, which is in scope here.
 
 /// BND4 container magic: the first four bytes of every ER save the game writes.
-const SAVE_DEST_BND4_MAGIC: [u8; 4] = *b"BND4";
+pub(crate) const SAVE_DEST_BND4_MAGIC: [u8; 4] = *b"BND4";
 /// `CreateFileW` desired-access bits that make an open a WRITE open (`GENERIC_WRITE`,
 /// `FILE_WRITE_DATA`). Read-opens (the RMW base read) must pass through untouched.
-const SAVE_DEST_WRITE_ACCESS_MASK: u32 = 0x4000_0000 | 0x2;
+pub(crate) const SAVE_DEST_WRITE_ACCESS_MASK: u32 = 0x4000_0000 | 0x2;
 /// Save-container extensions: a destination whose leaf is the live save's counterpart twin
 /// (`ER0000.co2` vs `ER0000.sl2`) is still the same open, whichever side rewrote the path first.
-const SAVE_DEST_SEAMLESS_EXTENSION: &str = "co2";
-const SAVE_DEST_VANILLA_EXTENSION: &str = "sl2";
+pub(crate) const SAVE_DEST_SEAMLESS_EXTENSION: &str = "co2";
+pub(crate) const SAVE_DEST_VANILLA_EXTENSION: &str = "sl2";
 
 /// The chosen destination for the save currently being committed. `None` = the loaded save is the
 /// target (the plain overwrite path), which needs no redirect at all.
-static SAVE_DEST_TARGET_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+pub(crate) static SAVE_DEST_TARGET_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 /// Live save + destination bookkeeping for one in-flight commit.
-struct SaveDestRedirect {
+pub(crate) struct SaveDestRedirect {
     target_path: PathBuf,
     /// NUL-terminated Windows-form destination handed to the original `CreateFileW`.
     target_w: Vec<u16>,
@@ -170,7 +172,7 @@ struct SaveDestRedirect {
     accepted_dirs: Vec<PathBuf>,
 }
 
-static SAVE_DEST_REDIRECT: Mutex<Option<SaveDestRedirect>> = Mutex::new(None);
+pub(crate) static SAVE_DEST_REDIRECT: Mutex<Option<SaveDestRedirect>> = Mutex::new(None);
 
 /// A commit whose destination IS the loaded save -- a browsed pick, or `[ new ]` in the loaded
 /// save's own folder, that
@@ -178,14 +180,14 @@ static SAVE_DEST_REDIRECT: Mutex<Option<SaveDestRedirect>> = Mutex::new(None);
 /// container in place, which is exactly what the user asked for. Recorded anyway so the rewrite is
 /// NAMED before it happens and scored after it, instead of surfacing later as an unattributed
 /// change to the user's save file.
-struct SaveDestLiveOverwrite {
+pub(crate) struct SaveDestLiveOverwrite {
     live_path: PathBuf,
     before: Option<(u64, u128)>,
     bak_before: Option<(u64, u128)>,
     reason: &'static str,
 }
 
-static SAVE_DEST_LIVE_OVERWRITE: Mutex<Option<SaveDestLiveOverwrite>> = Mutex::new(None);
+pub(crate) static SAVE_DEST_LIVE_OVERWRITE: Mutex<Option<SaveDestLiveOverwrite>> = Mutex::new(None);
 
 /// Outcome of scoring one commit's file(s). Returned so the flow's FINAL log line can state the
 /// file result rather than announcing the game's SL status and being contradicted a line later.
@@ -194,20 +196,21 @@ pub(crate) struct SaveDestVerdict {
     pub(crate) summary: String,
 }
 
-fn save_dest_target_lock() -> std::sync::MutexGuard<'static, Option<PathBuf>> {
+pub(crate) fn save_dest_target_lock() -> std::sync::MutexGuard<'static, Option<PathBuf>> {
     SAVE_DEST_TARGET_PATH
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn save_dest_redirect_lock() -> std::sync::MutexGuard<'static, Option<SaveDestRedirect>> {
+pub(crate) fn save_dest_redirect_lock() -> std::sync::MutexGuard<'static, Option<SaveDestRedirect>>
+{
     SAVE_DEST_REDIRECT
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn save_dest_live_overwrite_lock() -> std::sync::MutexGuard<'static, Option<SaveDestLiveOverwrite>>
-{
+pub(crate) fn save_dest_live_overwrite_lock()
+-> std::sync::MutexGuard<'static, Option<SaveDestLiveOverwrite>> {
     SAVE_DEST_LIVE_OVERWRITE
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -258,21 +261,21 @@ pub(crate) fn save_dest_reset(reason: &str) {
 
 /// ASCII-lowercase leaf (file name) of a wide Windows path, or `None` when the path ends in a
 /// separator / is empty.
-fn save_dest_wide_leaf_lower(path: &[u16]) -> Option<Vec<u16>> {
+pub(crate) fn save_dest_wide_leaf_lower(path: &[u16]) -> Option<Vec<u16>> {
     er_quit_menu::save_dest_commit::save_dest_wide_leaf_lower(path)
 }
 
-fn save_dest_ascii_lower(c: u16) -> u16 {
+pub(crate) fn save_dest_ascii_lower(c: u16) -> u16 {
     er_quit_menu::save_dest_commit::save_dest_ascii_lower(c)
 }
 
 /// The live save's leaf plus its counterpart-extension twin, ASCII-lowercased UTF-16.
-fn save_dest_accepted_leaves(live_path: &Path) -> Vec<Vec<u16>> {
+pub(crate) fn save_dest_accepted_leaves(live_path: &Path) -> Vec<Vec<u16>> {
     er_quit_menu::save_dest_commit::save_dest_accepted_leaves(live_path)
 }
 
 /// Leaf names of the live save and its counterpart twin, ASCII-lowercased UTF-8.
-fn save_dest_accepted_leaf_names(live_path: &Path) -> Vec<String> {
+pub(crate) fn save_dest_accepted_leaf_names(live_path: &Path) -> Vec<String> {
     er_quit_menu::save_dest_commit::save_dest_accepted_leaf_names(live_path)
 }
 
@@ -283,7 +286,7 @@ fn save_dest_accepted_leaf_names(live_path: &Path) -> Vec<String> {
 /// `...\Roaming\EldenRing\<steamid>\ER0000.sl2` -- the general save redirect rewrites that open a
 /// moment after this one declines it -- so that game-side folder counts too. Leaf-only matching
 /// used to cover this case by accident; a full-path match has to name it.
-fn save_dest_accepted_dirs(live_path: &Path) -> Vec<PathBuf> {
+pub(crate) fn save_dest_accepted_dirs(live_path: &Path) -> Vec<PathBuf> {
     er_quit_menu::save_dest_commit::save_dest_accepted_dirs_for(
         live_path,
         save_redirect_native_source_dir(),
@@ -292,14 +295,14 @@ fn save_dest_accepted_dirs(live_path: &Path) -> Vec<PathBuf> {
 
 /// Normalized full paths that ARE the loaded save's container: every accepted leaf in every
 /// accepted directory.
-fn save_dest_accepted_paths(live_path: &Path) -> Vec<String> {
+pub(crate) fn save_dest_accepted_paths(live_path: &Path) -> Vec<String> {
     er_quit_menu::save_dest_commit::save_dest_accepted_paths_for(
         live_path,
         save_redirect_native_source_dir(),
     )
 }
 
-fn save_dest_file_stamp(path: &Path) -> Option<(u64, u128)> {
+pub(crate) fn save_dest_file_stamp(path: &Path) -> Option<(u64, u128)> {
     let meta = fs::metadata(path).ok()?;
     let modified_ns = meta
         .modified()
@@ -311,7 +314,7 @@ fn save_dest_file_stamp(path: &Path) -> Option<(u64, u128)> {
 }
 
 /// The `.bak` twin the native backup step (`FUN_142410830`) copies a saved container to.
-fn save_dest_bak_path(path: &Path) -> PathBuf {
+pub(crate) fn save_dest_bak_path(path: &Path) -> PathBuf {
     er_quit_menu::save_dest_commit::save_dest_bak_path(path)
 }
 
@@ -320,7 +323,7 @@ fn save_dest_bak_path(path: &Path) -> PathBuf {
 /// This is the check that would have caught run 4's garbage file for what it was: the sparse file
 /// the in-place writer left had no `BND4` header at all, and even a container that parses is only
 /// complete when its own index accounts for every byte up to EOF.
-fn save_dest_container_end(bytes: &[u8]) -> Option<usize> {
+pub(crate) fn save_dest_container_end(bytes: &[u8]) -> Option<usize> {
     er_quit_menu::save_dest_commit::save_dest_container_end(bytes)
 }
 
@@ -472,7 +475,7 @@ pub(crate) fn save_dest_is_write_access(access: u32) -> bool {
 }
 
 /// One "the teardown is waiting for the writer" line per commit, not one per tick.
-static SAVE_DEST_DEFER_REPORTED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SAVE_DEST_DEFER_REPORTED: AtomicUsize = AtomicUsize::new(0);
 
 /// Where the native SL writer is, relative to the commit that armed this window.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -655,7 +658,10 @@ pub(crate) fn save_dest_verify_and_disarm(reason: &str) -> Option<SaveDestVerdic
     Some(save_dest_verify_live_overwrite(&state, reason))
 }
 
-fn save_dest_verify_destination(state: &SaveDestRedirect, reason: &str) -> SaveDestVerdict {
+pub(crate) fn save_dest_verify_destination(
+    state: &SaveDestRedirect,
+    reason: &str,
+) -> SaveDestVerdict {
     let hits = SAVE_DEST_REDIRECT_HITS.load(Ordering::SeqCst);
     let target_bytes = fs::read(&state.target_path).unwrap_or_default();
     let magic_ok = target_bytes
@@ -712,7 +718,7 @@ fn save_dest_verify_destination(state: &SaveDestRedirect, reason: &str) -> SaveD
 /// enough -- then triggered a whole-container overwrite of the user's live save with a snapshot,
 /// on no evidence at all that anything had happened to it.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum SaveDestLiveState {
+pub(crate) enum SaveDestLiveState {
     /// Stamp and content match the pre-fire snapshot. The commit kept its promise.
     Untouched,
     /// The stamp moved but the bytes are identical to the snapshot. Nothing was lost, so nothing
@@ -750,7 +756,10 @@ impl SaveDestLiveState {
 ///   * and the write goes through the same temp-plus-rename as the seed, so a restore that fails
 ///     leaves the container the writer produced instead of a truncated one. There is deliberately
 ///     no in-place fallback: a valid save of the wrong vintage beats an unloadable file.
-fn save_dest_score_live_file(state: &SaveDestRedirect, reason: &str) -> SaveDestLiveState {
+pub(crate) fn save_dest_score_live_file(
+    state: &SaveDestRedirect,
+    reason: &str,
+) -> SaveDestLiveState {
     let Some((len, modified_ns)) = save_dest_file_stamp(&state.live_path) else {
         SAVE_DEST_LIVE_STAT_UNREADABLE.store(1, Ordering::SeqCst);
         SAVE_DEST_RESTORE_SUPPRESSED.fetch_add(1, Ordering::SeqCst);
@@ -817,7 +826,10 @@ fn save_dest_score_live_file(state: &SaveDestRedirect, reason: &str) -> SaveDest
     SaveDestLiveState::Changed
 }
 
-fn save_dest_verify_live_overwrite(state: &SaveDestLiveOverwrite, reason: &str) -> SaveDestVerdict {
+pub(crate) fn save_dest_verify_live_overwrite(
+    state: &SaveDestLiveOverwrite,
+    reason: &str,
+) -> SaveDestVerdict {
     let after = save_dest_file_stamp(&state.live_path);
     let changed_ok = after.is_some() && after != state.before;
     let bytes = fs::read(&state.live_path).unwrap_or_default();

@@ -1,3 +1,5 @@
+use super::*;
+
 pub(crate) fn install_profile_select_table_diag_hook() {
     if PROFILE_SELECT_TABLE_DIAG_INSTALLED.load(Ordering::SeqCst) != 0 {
         return;
@@ -107,7 +109,7 @@ pub(crate) fn install_profile_renderer_teardown_spare_hook() {
 /// wrapped in a one-entry TPF whose ENTRY NAME == the slot's `STATS_PANEL_SYSTEX_KEYS` (which becomes
 /// the GLOBAL_TexRepository GPU key). Held alive forever so the engine's DEFERRED GPU upload can never
 /// read freed bytes (same lifetime discipline the er-tpf cover used). Pure CPU; no native call, no disk.
-fn stats_panel_tpf_blob(slot: usize) -> Option<&'static [u8]> {
+pub(crate) fn stats_panel_tpf_blob(slot: usize) -> Option<&'static [u8]> {
     static BLOBS: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
     let blobs = BLOBS.get_or_init(|| {
         (0..STATS_PANEL_SLOT_COUNT)
@@ -218,7 +220,7 @@ pub(crate) unsafe fn maybe_register_stats_panel_textures(base: usize) {
 /// Parse the trailing 2-digit slot index (`00`..`09`) from a `systex_menu_profileNN` target DLString.
 /// Returns `Some(0..=9)` only for a target that actually looks like the profile SYSTEX key, else `None`
 /// (so we never redirect the status-face / kick-face / decorative binds).
-unsafe fn systex_profile_target_slot(target_ptr: usize) -> Option<usize> {
+pub(crate) unsafe fn systex_profile_target_slot(target_ptr: usize) -> Option<usize> {
     let mut buf = [0u8; 96];
     let n = unsafe { copy_ascii_preview(target_ptr, &mut buf) };
     if n < 2 {
@@ -300,7 +302,7 @@ pub(crate) unsafe extern "system" fn title_menu_resource_acquire_observer_hook(
     ret
 }
 
-unsafe fn construct_title_scaleform_memory_file(
+pub(crate) unsafe fn construct_title_scaleform_memory_file(
     base: usize,
     url: usize,
     bytes: &[u8],
@@ -354,7 +356,7 @@ unsafe fn construct_title_scaleform_memory_file(
 /// lifetime, and swap the native file's data/len/cursor onto the cached buffer. ANY failure
 /// leaves the native file untouched and returns it as-is: fail-closed to the vanilla title UI,
 /// never a crash, never a half-stripped movie.
-unsafe fn title_05_000_swap_to_stripped(base: usize, file: usize) -> bool {
+pub(crate) unsafe fn title_05_000_swap_to_stripped(base: usize, file: usize) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if file == 0 || file == null || file == HOOK_ORIGINAL_UNSET {
         return false;
@@ -450,7 +452,7 @@ unsafe fn title_05_000_swap_to_stripped(base: usize, file: usize) -> bool {
 /// leaves the native file untouched and returns it as-is: fail-closed to the vanilla ProfileSelect
 /// rows (the row-populate hook's push then fails cleanly on the missing field), never a crash,
 /// never a half-edited movie.
-unsafe fn profile_05_010_swap_to_edited(base: usize, file: usize) -> bool {
+pub(crate) unsafe fn profile_05_010_swap_to_edited(base: usize, file: usize) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if file == 0 || file == null || file == HOOK_ORIGINAL_UNSET {
         return false;
@@ -536,7 +538,7 @@ unsafe fn profile_05_010_swap_to_edited(base: usize, file: usize) -> bool {
 /// MemoryFile swap path, but deliberately has no env/file-backed diagnostic input: the product must not
 /// ship or depend on an external GFx. The derived movie is built from the game's own vanilla payload and
 /// cached for process lifetime so the native MemoryFile's data pointer remains valid.
-unsafe fn options_02_040_quit4_swap_to_edited(base: usize, file: usize) -> bool {
+pub(crate) unsafe fn options_02_040_quit4_swap_to_edited(base: usize, file: usize) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if file == 0 || file == null || file == HOOK_ORIGINAL_UNSET {
         return false;

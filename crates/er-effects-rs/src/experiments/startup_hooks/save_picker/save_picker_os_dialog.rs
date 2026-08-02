@@ -1,3 +1,5 @@
+use super::*;
+
 // System>Quit entrypoints for the OS common file dialog. The reusable comdlg32 mechanism
 // lives in `er-save-picker`; this product-side shim owns the quit-menu staging, save-flow
 // staging, and dim-cover factory.
@@ -11,7 +13,7 @@ pub(crate) use er_telemetry::counters::{
     SAVE_PICKER_OS_REOPEN_COUNT, SAVE_PICKER_OS_REOPEN_EXHAUSTED, SAVE_PICKER_OS_SAVELIKE_OPENS,
 };
 
-fn picker_dim_cover_factory(label: &str) -> Option<PickerCover> {
+pub(crate) fn picker_dim_cover_factory(label: &str) -> Option<PickerCover> {
     let guard = picker_dim_arm(label)?;
     let owner_hwnd = picker_dim_armed_cover_hwnd().0 as usize;
     Some(PickerCover::new(owner_hwnd, Box::new(guard)))
