@@ -441,7 +441,7 @@ static SHOW_PROGRESS_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 /// ShowProgressJob progressType at [job+0x18] (RE-confirmed). 10 = save-data check/load (MUST run its
 /// delegate); 20=network, 30/31=sign-in, 60=login (offline-modal types we still short-circuit).
 const SHOW_PROGRESS_TYPE_OFFSET: usize = 0x18;
-const SHOW_PROGRESS_SAVE_TYPE: u32 = 10;
+const SHOW_PROGRESS_SAVE_TYPE: u32 = er_title_flow::boot_hold::SHOW_PROGRESS_SAVE_CHECK_TYPE;
 pub(crate) use er_telemetry::counters::SHOW_PROGRESS_TYPE_LOGGED;
 
 /// THE MILESTONE-3 FIX, part 2 (zero-input, save-safe). `CS::ShowProgressJob::Run` (deobf 0x1408349c0)
@@ -549,7 +549,10 @@ pub(crate) unsafe extern "system" fn show_progress_job_run_hook(
         // installs the save redirect and clears `missing_save_selection_pending()`, so the very
         // next frame this job passes through to the delegate with the redirected save present and
         // the boot resumes -- the bar advances past SAVE_CHECK and the overlay disarms.
-        if missing_save_selection_pending() {
+        if er_title_flow::boot_hold::should_hold_save_check(
+            ptype,
+            missing_save_selection_pending(),
+        ) {
             if result > null && unsafe { safe_read_usize(result) }.is_some() {
                 unsafe {
                     *(result as *mut i32) = MENU_JOB_STATE_CONTINUE;
@@ -690,7 +693,9 @@ pub(crate) unsafe extern "system" fn title_open_menu_suppress_hook(
     r8: usize,
     r9: usize,
 ) -> usize {
-    if missing_save_selection_pending() {
+    if er_title_flow::boot_hold::should_suppress_title_open_menu(
+        missing_save_selection_pending(),
+    ) {
         let n = TITLE_OPEN_MENU_SUPPRESSED_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
         // Log the first suppression and then sparsely (power-of-two) so a repro shows the hold firing
         // without flooding the log across the whole pending window.
