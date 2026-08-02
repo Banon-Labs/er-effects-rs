@@ -5,8 +5,10 @@ use er_save_redirect::{
     SAVE_REDIRECT_ORIG_GETATTREXW, SAVE_REDIRECT_ORIG_GETATTRW, SAVE_REDIRECT_ORIG_GETDISKFREEW,
     SAVE_REDIRECT_ORIG_NTCREATEFILE, SAVE_REDIRECT_ORIG_NTQUERYVOLINFO,
     SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW, SaveNtCreateDetourGuard, SaveRedirectHookDetours,
-    install_core_createfilew_hook, install_redirect_save_hooks_when_ready,
-    is_save_file_or_backup_path, save_detour_disk_io_allowed, wide_ends_with_ci_ascii,
+    fill_get_disk_free_space_ex_outputs, install_core_createfilew_hook,
+    install_redirect_save_hooks_when_ready, is_ntquery_volume_free_space_class,
+    is_save_file_or_backup_path, ntquery_volume_available_units, patch_ntquery_volume_free_space,
+    save_detour_disk_io_allowed, wide_ends_with_ci_ascii,
 };
 
 type ShGetFolderPathWFn = unsafe extern "system" fn(isize, i32, isize, u32, *mut u16) -> i32;
@@ -216,16 +218,7 @@ pub(super) unsafe extern "system" fn save_redirect_getdiskfreew_hook(
     // Override EVERY call (the game's save-commit precheck may pass the bare drive root, not an
     // EldenRing path -- diag showed it never matched the eldenring filter). Returning ample free is
     // benign for a probe and guarantees the `free < needed` precheck passes. Log the first few paths.
-    const AMPLE_FREE: u64 = 0x10_0000_0000; // 64 GiB
-    if !free_avail.is_null() {
-        unsafe { *free_avail = AMPLE_FREE };
-    }
-    if !total.is_null() {
-        unsafe { *total = AMPLE_FREE };
-    }
-    if !total_free.is_null() {
-        unsafe { *total_free = AMPLE_FREE };
-    }
+    unsafe { fill_get_disk_free_space_ex_outputs(free_avail, total, total_free) };
     let d = SAVE_DISKFREE_LOGGED.fetch_add(1, Ordering::SeqCst);
     if d < 6 {
         let len = unsafe { wide_len(lp_dir) };
@@ -253,9 +246,6 @@ pub(super) unsafe extern "system" fn save_redirect_ntqueryvolinfo_hook(
     length: u32,
     fs_class: u32,
 ) -> i32 {
-    const FILE_FS_SIZE_INFORMATION: u32 = 3;
-    const FILE_FS_FULL_SIZE_INFORMATION: u32 = 7;
-    const AMPLE_UNITS: i64 = 0x1000_0000; // ~268M allocation units -> ample free regardless of unit size
     let orig = SAVE_REDIRECT_ORIG_NTQUERYVOLINFO.load(Ordering::SeqCst);
     let call: NtQueryVolumeInfoFn =
         unsafe { std::mem::transmute::<usize, NtQueryVolumeInfoFn>(orig) };
@@ -263,37 +253,18 @@ pub(super) unsafe extern "system" fn save_redirect_ntqueryvolinfo_hook(
     // DIAGNOSTIC: log only the FREE-SPACE classes (3/7), capped. Logging every class exhausts the cap
     // on early-boot class=1 spam before the save-time free-space precheck fires; the precheck is the
     // only thing that matters for the corrupted-save loop. pre_avail_units = the bogus Wine value.
-    if fs_class == FILE_FS_SIZE_INFORMATION || fs_class == FILE_FS_FULL_SIZE_INFORMATION {
+    if is_ntquery_volume_free_space_class(fs_class) {
         let d = SAVE_VOLINFO_LOGGED.load(Ordering::SeqCst);
         if d < 40 {
             SAVE_VOLINFO_LOGGED.store(d + 1, Ordering::SeqCst);
-            let avail = if ret == 0 && !fs_info.is_null() && length >= 16 {
-                unsafe { *(fs_info.add(8) as *const i64) }
-            } else {
-                -1
-            };
+            let avail = unsafe { ntquery_volume_available_units(ret, fs_info, length, fs_class) }
+                .unwrap_or(-1);
             append_autoload_debug(format_args!(
                 "save-override: NtQueryVolumeInformationFile diag class={fs_class} len={length} ret=0x{ret:x} pre_avail_units={avail}"
             ));
         }
     }
-    if ret == 0 && !fs_info.is_null() {
-        if fs_class == FILE_FS_SIZE_INFORMATION && length >= 16 {
-            // [+0] TotalAllocationUnits (i64), [+8] AvailableAllocationUnits (i64).
-            unsafe {
-                *(fs_info.add(0) as *mut i64) = AMPLE_UNITS;
-                *(fs_info.add(8) as *mut i64) = AMPLE_UNITS;
-            }
-        } else if fs_class == FILE_FS_FULL_SIZE_INFORMATION && length >= 24 {
-            // [+0] Total, [+8] CallerAvailable, [+16] ActualAvailable (all i64).
-            unsafe {
-                *(fs_info.add(0) as *mut i64) = AMPLE_UNITS;
-                *(fs_info.add(8) as *mut i64) = AMPLE_UNITS;
-                *(fs_info.add(16) as *mut i64) = AMPLE_UNITS;
-            }
-        } else {
-            return ret;
-        }
+    if unsafe { patch_ntquery_volume_free_space(ret, fs_info, length, fs_class) } {
         let d = SAVE_VOLINFO_LOGGED.fetch_add(1, Ordering::SeqCst);
         if d < 4 {
             append_autoload_debug(format_args!(

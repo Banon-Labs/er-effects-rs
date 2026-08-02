@@ -466,6 +466,96 @@ unsafe fn queue_kernel32_save_redirect_hook(
     }
 }
 
+/// Ample byte count reported by the Wine free-space workaround (`64 GiB`).
+pub const SAVE_REDIRECT_AMPLE_FREE_BYTES: u64 = 0x10_0000_0000;
+/// `FILE_FS_SIZE_INFORMATION` class id for `NtQueryVolumeInformationFile`.
+pub const FILE_FS_SIZE_INFORMATION_CLASS: u32 = 3;
+/// `FILE_FS_FULL_SIZE_INFORMATION` class id for `NtQueryVolumeInformationFile`.
+pub const FILE_FS_FULL_SIZE_INFORMATION_CLASS: u32 = 7;
+/// Ample allocation-unit count reported by the Wine `NtQueryVolumeInformationFile` workaround.
+pub const SAVE_REDIRECT_AMPLE_FREE_UNITS: i64 = 0x1000_0000;
+
+/// Fill `GetDiskFreeSpaceExW` output pointers with ample free space.
+///
+/// # Safety
+/// Non-null pointers must be valid writable `u64` outputs for the duration of the call.
+pub unsafe fn fill_get_disk_free_space_ex_outputs(
+    free_avail: *mut u64,
+    total: *mut u64,
+    total_free: *mut u64,
+) {
+    if !free_avail.is_null() {
+        unsafe { *free_avail = SAVE_REDIRECT_AMPLE_FREE_BYTES };
+    }
+    if !total.is_null() {
+        unsafe { *total = SAVE_REDIRECT_AMPLE_FREE_BYTES };
+    }
+    if !total_free.is_null() {
+        unsafe { *total_free = SAVE_REDIRECT_AMPLE_FREE_BYTES };
+    }
+}
+
+pub fn is_ntquery_volume_free_space_class(fs_class: u32) -> bool {
+    fs_class == FILE_FS_SIZE_INFORMATION_CLASS || fs_class == FILE_FS_FULL_SIZE_INFORMATION_CLASS
+}
+
+/// Read the pre-patch available-unit field for the free-space info classes.
+///
+/// # Safety
+/// `fs_info` must point at the buffer returned by `NtQueryVolumeInformationFile` when non-null.
+pub unsafe fn ntquery_volume_available_units(
+    ret: i32,
+    fs_info: *const u8,
+    length: u32,
+    fs_class: u32,
+) -> Option<i64> {
+    if ret == 0
+        && !fs_info.is_null()
+        && is_ntquery_volume_free_space_class(fs_class)
+        && length >= 16
+    {
+        Some(unsafe { *(fs_info.add(8) as *const i64) })
+    } else {
+        None
+    }
+}
+
+/// Patch free-space fields in `NtQueryVolumeInformationFile` output to ample units.
+///
+/// Returns true when it recognized and patched a free-space info class.
+///
+/// # Safety
+/// `fs_info` must point at the mutable buffer returned by `NtQueryVolumeInformationFile` when
+/// non-null, and `length` must describe the writable byte length.
+pub unsafe fn patch_ntquery_volume_free_space(
+    ret: i32,
+    fs_info: *mut u8,
+    length: u32,
+    fs_class: u32,
+) -> bool {
+    if ret != 0 || fs_info.is_null() {
+        return false;
+    }
+    if fs_class == FILE_FS_SIZE_INFORMATION_CLASS && length >= 16 {
+        // [+0] TotalAllocationUnits (i64), [+8] AvailableAllocationUnits (i64).
+        unsafe {
+            *(fs_info.add(0) as *mut i64) = SAVE_REDIRECT_AMPLE_FREE_UNITS;
+            *(fs_info.add(8) as *mut i64) = SAVE_REDIRECT_AMPLE_FREE_UNITS;
+        }
+        true
+    } else if fs_class == FILE_FS_FULL_SIZE_INFORMATION_CLASS && length >= 24 {
+        // [+0] Total, [+8] CallerAvailable, [+16] ActualAvailable (all i64).
+        unsafe {
+            *(fs_info.add(0) as *mut i64) = SAVE_REDIRECT_AMPLE_FREE_UNITS;
+            *(fs_info.add(8) as *mut i64) = SAVE_REDIRECT_AMPLE_FREE_UNITS;
+            *(fs_info.add(16) as *mut i64) = SAVE_REDIRECT_AMPLE_FREE_UNITS;
+        }
+        true
+    } else {
+        false
+    }
+}
+
 /// Why a candidate save source was rejected before redirect planning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SaveSourceRejection {
@@ -1002,6 +1092,67 @@ mod tests {
         state.install_redirect_once(|| redirect_calls.set(redirect_calls.get() + 1));
         state.install_redirect_once(|| redirect_calls.set(redirect_calls.get() + 1));
         assert_eq!(redirect_calls.get(), 1);
+    }
+
+    #[test]
+    fn fills_get_disk_free_space_outputs_with_ample_bytes() {
+        let mut free = 1;
+        let mut total = 2;
+        let mut total_free = 3;
+        unsafe {
+            fill_get_disk_free_space_ex_outputs(&mut free, std::ptr::null_mut(), &mut total_free);
+        }
+        assert_eq!(free, SAVE_REDIRECT_AMPLE_FREE_BYTES);
+        assert_eq!(total, 2);
+        assert_eq!(total_free, SAVE_REDIRECT_AMPLE_FREE_BYTES);
+
+        unsafe {
+            fill_get_disk_free_space_ex_outputs(
+                std::ptr::null_mut(),
+                &mut total,
+                std::ptr::null_mut(),
+            );
+        }
+        assert_eq!(total, SAVE_REDIRECT_AMPLE_FREE_BYTES);
+    }
+
+    #[test]
+    fn patches_ntquery_volume_free_space_outputs() {
+        let mut size_info = [10_i64, 20_i64, 30_i64];
+        let ptr = size_info.as_mut_ptr() as *mut u8;
+        assert_eq!(
+            unsafe { ntquery_volume_available_units(0, ptr, 16, FILE_FS_SIZE_INFORMATION_CLASS) },
+            Some(20)
+        );
+        assert!(unsafe {
+            patch_ntquery_volume_free_space(0, ptr, 16, FILE_FS_SIZE_INFORMATION_CLASS)
+        });
+        assert_eq!(
+            &size_info,
+            &[
+                SAVE_REDIRECT_AMPLE_FREE_UNITS,
+                SAVE_REDIRECT_AMPLE_FREE_UNITS,
+                30,
+            ]
+        );
+
+        let mut full_info = [10_i64, 20_i64, 30_i64];
+        let ptr = full_info.as_mut_ptr() as *mut u8;
+        assert!(unsafe {
+            patch_ntquery_volume_free_space(0, ptr, 24, FILE_FS_FULL_SIZE_INFORMATION_CLASS)
+        });
+        assert_eq!(full_info, [SAVE_REDIRECT_AMPLE_FREE_UNITS; 3]);
+
+        assert!(!unsafe {
+            patch_ntquery_volume_free_space(0, ptr, 8, FILE_FS_SIZE_INFORMATION_CLASS)
+        });
+        assert!(!unsafe {
+            patch_ntquery_volume_free_space(-1, ptr, 24, FILE_FS_FULL_SIZE_INFORMATION_CLASS)
+        });
+        assert_eq!(
+            unsafe { ntquery_volume_available_units(0, ptr, 16, 1) },
+            None
+        );
     }
 
     fn wide_path(path: &str) -> Vec<u16> {
