@@ -25,9 +25,10 @@ use er_save_redirect::{
     SAVE_REDIRECT_ORIG_GETDISKFREEW, SAVE_REDIRECT_ORIG_NTCREATEFILE,
     SAVE_REDIRECT_ORIG_NTQUERYVOLINFO, SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW, SaveDetourDepth,
     SaveHookInstallState, SavePathKind, classify_create_file_save_path, classify_save_like_path,
-    createfile_diag_hit_should_log, direct_stage_no_steamid_kind, is_save_file_or_backup_path,
-    redirect_wide_save_path_with_side_effects, save_detour_disk_io_allowed,
-    steam_id64_from_wide_save_path, wide_contains_ci_ascii, wide_ends_with_ci_ascii,
+    classify_save_query_path, createfile_diag_hit_should_log, direct_stage_no_steamid_kind,
+    is_save_file_or_backup_path, redirect_wide_save_path_with_side_effects,
+    save_detour_disk_io_allowed, steam_id64_from_wide_save_path, wide_contains_ci_ascii,
+    wide_ends_with_ci_ascii,
 };
 use er_telemetry::counters::{
     SAVE_REDIRECT_DETOUR_MAX_DEPTH, SAVE_REDIRECT_DETOUR_REENTRANT_PASSTHROUGHS,
@@ -1508,32 +1509,17 @@ pub(super) unsafe extern "system" fn save_redirect_copyfilew_hook(
 /// "eldenring"-containing paths (capped, shared budget) so we see the exact existence-check path
 /// form, and returns the redirected NUL-terminated path when the save filter matches (else None).
 fn save_path_api_redirect(api: &str, path: &[u16]) -> Option<Vec<u16>> {
-    const ELDENRING_SEG: &[u16] = &[
-        b'e' as u16,
-        b'l' as u16,
-        b'd' as u16,
-        b'e' as u16,
-        b'n' as u16,
-        b'r' as u16,
-        b'i' as u16,
-        b'n' as u16,
-        b'g' as u16,
-    ];
     let redirected = save_redirect_path(path);
+    let diag = classify_save_query_path(path);
     // DEDICATED save-FILE query log (own budget; immune to the early-boot churn that exhausts the
     // shared cap below) -- captures the exact ER0000.sl2 existence/enum path + its <steamid> component.
-    const ER0000: &[u16] = &[
-        b'e' as u16,
-        b'r' as u16,
-        b'0' as u16,
-        b'0' as u16,
-        b'0' as u16,
-        b'0' as u16,
-    ];
-    if wide_contains_ci_ascii(path, ELDENRING_SEG) || wide_contains_ci_ascii(path, ER0000) {
+    if diag.should_record_path_kind() {
         record_save_like_query_path_kind(path);
     }
-    if wide_contains_ci_ascii(path, ER0000) {
+    if diag.should_capture_save_file_query_log(
+        SAVE_SL2_QUERY_LOGGED.load(Ordering::SeqCst),
+        SAVE_SL2_QUERY_MAX,
+    ) {
         let d = SAVE_SL2_QUERY_LOGGED.fetch_add(1, Ordering::SeqCst);
         if d < SAVE_SL2_QUERY_MAX {
             // UTF-8 Lossy: log-only decode of the save-file query path for probe diagnosis.
@@ -1546,7 +1532,10 @@ fn save_path_api_redirect(api: &str, path: &[u16]) -> Option<Vec<u16>> {
             append_autoload_debug(format_args!("save-override: {api} SL2-QUERY {did} '{p}'"));
         }
     }
-    if wide_contains_ci_ascii(path, ELDENRING_SEG) {
+    if diag.should_capture_general_query_log(
+        SAVE_CREATEFILEW_DIAG_LOGGED.load(Ordering::SeqCst),
+        SAVE_CREATEFILEW_DIAG_MAX,
+    ) {
         let d = SAVE_CREATEFILEW_DIAG_LOGGED.load(Ordering::SeqCst);
         if d < SAVE_CREATEFILEW_DIAG_MAX {
             SAVE_CREATEFILEW_DIAG_LOGGED.store(d + 1, Ordering::SeqCst);
