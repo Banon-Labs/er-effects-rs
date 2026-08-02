@@ -222,6 +222,266 @@ pub fn plausible_steam_id64(value: u64) -> Option<u64> {
     (value >= 10_000_000_000_000_000 && value <= 99_999_999_999_999_999).then_some(value)
 }
 
+/// Save-like wide path category used by save-redirect telemetry and hook decisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SavePathKind {
+    None,
+    EldenRingRoot,
+    GraphicsConfig,
+    StageSteamIdDir,
+    StageSaveFile,
+    ConfiguredSaveFile,
+    OtherSaveLike,
+}
+
+impl SavePathKind {
+    pub const fn as_usize(self) -> usize {
+        match self {
+            Self::None => 0,
+            Self::EldenRingRoot => 1,
+            Self::GraphicsConfig => 2,
+            Self::StageSteamIdDir => 3,
+            Self::StageSaveFile => 4,
+            Self::ConfiguredSaveFile => 5,
+            Self::OtherSaveLike => 6,
+        }
+    }
+
+    pub const fn from_usize(value: usize) -> Self {
+        match value {
+            1 => Self::EldenRingRoot,
+            2 => Self::GraphicsConfig,
+            3 => Self::StageSteamIdDir,
+            4 => Self::StageSaveFile,
+            5 => Self::ConfiguredSaveFile,
+            6 => Self::OtherSaveLike,
+            _ => Self::None,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::EldenRingRoot => "eldenring_root",
+            Self::GraphicsConfig => "graphics_config",
+            Self::StageSteamIdDir => "stage_steamid_dir",
+            Self::StageSaveFile => "stage_save_file",
+            Self::ConfiguredSaveFile => "configured_save_file",
+            Self::OtherSaveLike => "other_save_like",
+            Self::None => "none",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectStageNoSteamIdKind {
+    None,
+    EldenRingRoot,
+    GraphicsConfig,
+    ConfiguredSave,
+    Other,
+}
+
+impl DirectStageNoSteamIdKind {
+    pub const fn as_usize(self) -> usize {
+        match self {
+            Self::None => 0,
+            Self::EldenRingRoot => 1,
+            Self::GraphicsConfig => 2,
+            Self::ConfiguredSave => 3,
+            Self::Other => 4,
+        }
+    }
+
+    pub const fn from_usize(value: usize) -> Self {
+        match value {
+            1 => Self::EldenRingRoot,
+            2 => Self::GraphicsConfig,
+            3 => Self::ConfiguredSave,
+            4 => Self::Other,
+            _ => Self::None,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::EldenRingRoot => "eldenring_root",
+            Self::GraphicsConfig => "graphics_config",
+            Self::ConfiguredSave => "configured_save_without_steamid",
+            Self::Other => "other",
+            Self::None => "none",
+        }
+    }
+}
+
+/// ASCII-lowercase a UTF-16 code unit (leaves non-ASCII untouched).
+pub fn wide_ascii_lower(c: u16) -> u16 {
+    if (b'A' as u16..=b'Z' as u16).contains(&c) {
+        c + 0x20
+    } else {
+        c
+    }
+}
+
+/// True if `hay` contains `needle` (ASCII, case-insensitive). `needle` must be ASCII lowercase.
+pub fn wide_contains_ci_ascii(hay: &[u16], needle: &[u16]) -> bool {
+    if needle.is_empty() || needle.len() > hay.len() {
+        return false;
+    }
+    let last = hay.len() - needle.len();
+    (0..=last).any(|start| {
+        needle
+            .iter()
+            .enumerate()
+            .all(|(i, &n)| wide_ascii_lower(hay[start + i]) == n)
+    })
+}
+
+/// First index in `hay` where `needle` occurs (ASCII, case-insensitive). `needle` must be ASCII
+/// lowercase. None if absent.
+pub fn wide_find_ci_ascii(hay: &[u16], needle: &[u16]) -> Option<usize> {
+    if needle.is_empty() || needle.len() > hay.len() {
+        return None;
+    }
+    let last = hay.len() - needle.len();
+    (0..=last).find(|&start| {
+        needle
+            .iter()
+            .enumerate()
+            .all(|(i, &n)| wide_ascii_lower(hay[start + i]) == n)
+    })
+}
+
+/// True if `hay` ends with `suffix` (ASCII, case-insensitive). `suffix` must be ASCII lowercase.
+pub fn wide_ends_with_ci_ascii(hay: &[u16], suffix: &[u16]) -> bool {
+    if suffix.len() > hay.len() {
+        return false;
+    }
+    let start = hay.len() - suffix.len();
+    suffix
+        .iter()
+        .enumerate()
+        .all(|(i, &s)| wide_ascii_lower(hay[start + i]) == s)
+}
+
+pub fn steam_id64_from_wide_save_path(path: &[u16]) -> Option<u64> {
+    const ELDENRING: &[u16] = &[
+        b'e' as u16,
+        b'l' as u16,
+        b'd' as u16,
+        b'e' as u16,
+        b'n' as u16,
+        b'r' as u16,
+        b'i' as u16,
+        b'n' as u16,
+        b'g' as u16,
+    ];
+    let mut search_from = 0usize;
+    while search_from < path.len() {
+        let Some(rel_idx) = wide_find_ci_ascii(&path[search_from..], ELDENRING) else {
+            break;
+        };
+        let idx = search_from + rel_idx;
+        let mut pos = idx + ELDENRING.len();
+        while matches!(path.get(pos), Some(c) if *c == b'\\' as u16 || *c == b'/' as u16) {
+            pos += 1;
+        }
+        let start = pos;
+        let mut steam_id = 0u64;
+        while let Some(&c) = path.get(pos) {
+            if !(b'0' as u16..=b'9' as u16).contains(&c) {
+                break;
+            }
+            steam_id = steam_id
+                .saturating_mul(10)
+                .saturating_add((c - b'0' as u16) as u64);
+            pos += 1;
+        }
+        let digits = pos.saturating_sub(start);
+        if (16..=20).contains(&digits) && steam_id != 0 {
+            return Some(steam_id);
+        }
+        search_from = idx + 1;
+    }
+    None
+}
+
+fn is_primary_save_file_path(path: &[u16]) -> bool {
+    const SL2D: &[u16] = &[b'.' as u16, b's' as u16, b'l' as u16, b'2' as u16];
+    const CO2D: &[u16] = &[b'.' as u16, b'c' as u16, b'o' as u16, b'2' as u16];
+    wide_ends_with_ci_ascii(path, SL2D) || wide_ends_with_ci_ascii(path, CO2D)
+}
+
+pub fn is_save_file_or_backup_path(path: &[u16]) -> bool {
+    const BAKD: &[u16] = &[b'.' as u16, b'b' as u16, b'a' as u16, b'k' as u16];
+    is_primary_save_file_path(path) || wide_ends_with_ci_ascii(path, BAKD)
+}
+
+fn wide_ends_with_separator_or_eldenring(path: &[u16]) -> bool {
+    const ELDENRING: &[u16] = &[
+        b'e' as u16,
+        b'l' as u16,
+        b'd' as u16,
+        b'e' as u16,
+        b'n' as u16,
+        b'r' as u16,
+        b'i' as u16,
+        b'n' as u16,
+        b'g' as u16,
+    ];
+    let trimmed_len = path
+        .iter()
+        .rposition(|&c| c != b'\\' as u16 && c != b'/' as u16)
+        .map_or(0, |idx| idx + 1);
+    wide_ends_with_ci_ascii(&path[..trimmed_len], ELDENRING)
+}
+
+pub fn direct_stage_no_steamid_kind(path: &[u16]) -> DirectStageNoSteamIdKind {
+    const GRAPHICS_XML: &[u16] = &[
+        b'g' as u16,
+        b'r' as u16,
+        b'a' as u16,
+        b'p' as u16,
+        b'h' as u16,
+        b'i' as u16,
+        b'c' as u16,
+        b's' as u16,
+        b'c' as u16,
+        b'o' as u16,
+        b'n' as u16,
+        b'f' as u16,
+        b'i' as u16,
+        b'g' as u16,
+        b'.' as u16,
+        b'x' as u16,
+        b'm' as u16,
+        b'l' as u16,
+    ];
+    const SL2D: &[u16] = &[b'.' as u16, b's' as u16, b'l' as u16, b'2' as u16];
+    const CO2D: &[u16] = &[b'.' as u16, b'c' as u16, b'o' as u16, b'2' as u16];
+    if wide_ends_with_ci_ascii(path, GRAPHICS_XML) {
+        DirectStageNoSteamIdKind::GraphicsConfig
+    } else if wide_ends_with_ci_ascii(path, SL2D) || wide_ends_with_ci_ascii(path, CO2D) {
+        DirectStageNoSteamIdKind::ConfiguredSave
+    } else if wide_ends_with_separator_or_eldenring(path) {
+        DirectStageNoSteamIdKind::EldenRingRoot
+    } else {
+        DirectStageNoSteamIdKind::Other
+    }
+}
+
+pub fn classify_save_like_path(path: &[u16]) -> SavePathKind {
+    match steam_id64_from_wide_save_path(path) {
+        Some(_) if is_primary_save_file_path(path) => SavePathKind::StageSaveFile,
+        Some(_) => SavePathKind::StageSteamIdDir,
+        None => match direct_stage_no_steamid_kind(path) {
+            DirectStageNoSteamIdKind::ConfiguredSave => SavePathKind::ConfiguredSaveFile,
+            DirectStageNoSteamIdKind::GraphicsConfig => SavePathKind::GraphicsConfig,
+            DirectStageNoSteamIdKind::EldenRingRoot => SavePathKind::EldenRingRoot,
+            _ => SavePathKind::OtherSaveLike,
+        },
+    }
+}
+
 /// If `path` is under `<root>/EldenRing/<steamid>/...`, return that root plus steam id.
 pub fn staged_save_root_for_file(path: &Path) -> Option<(PathBuf, u64)> {
     let mut root = PathBuf::new();
@@ -337,6 +597,64 @@ mod tests {
         state.install_redirect_once(|| redirect_calls.set(redirect_calls.get() + 1));
         state.install_redirect_once(|| redirect_calls.set(redirect_calls.get() + 1));
         assert_eq!(redirect_calls.get(), 1);
+    }
+
+    fn wide_path(path: &str) -> Vec<u16> {
+        path.encode_utf16().collect()
+    }
+
+    #[test]
+    fn classifies_wide_save_paths_for_hook_telemetry() {
+        let stage_file =
+            wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\76561197960265729\ER0000.sl2");
+        assert_eq!(
+            steam_id64_from_wide_save_path(&stage_file),
+            Some(76_561_197_960_265_729)
+        );
+        assert_eq!(
+            classify_save_like_path(&stage_file),
+            SavePathKind::StageSaveFile
+        );
+
+        let stage_dir = wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\76561197960265729\");
+        assert_eq!(
+            classify_save_like_path(&stage_dir),
+            SavePathKind::StageSteamIdDir
+        );
+        let backup =
+            wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\76561197960265729\ER0000.sl2.bak");
+        assert!(is_save_file_or_backup_path(&backup));
+        assert_eq!(
+            classify_save_like_path(&backup),
+            SavePathKind::StageSteamIdDir
+        );
+
+        let graphics = wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\GraphicsConfig.xml");
+        assert_eq!(
+            direct_stage_no_steamid_kind(&graphics),
+            DirectStageNoSteamIdKind::GraphicsConfig
+        );
+        assert_eq!(
+            classify_save_like_path(&graphics),
+            SavePathKind::GraphicsConfig
+        );
+
+        let root = wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\\");
+        assert_eq!(
+            direct_stage_no_steamid_kind(&root),
+            DirectStageNoSteamIdKind::EldenRingRoot
+        );
+        assert_eq!(classify_save_like_path(&root), SavePathKind::EldenRingRoot);
+
+        let loose_save = wide_path(r"Z:\tmp\picked\ER0000.co2");
+        assert_eq!(
+            direct_stage_no_steamid_kind(&loose_save),
+            DirectStageNoSteamIdKind::ConfiguredSave
+        );
+        assert_eq!(
+            classify_save_like_path(&loose_save),
+            SavePathKind::ConfiguredSaveFile
+        );
     }
 
     #[test]

@@ -19,7 +19,12 @@ use eldenring::{
     fd4::FD4TaskData,
 };
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
-use er_save_redirect::{SaveDetourDepth, SaveHookInstallState, save_detour_disk_io_allowed};
+use er_save_redirect::{
+    DirectStageNoSteamIdKind, SaveDetourDepth, SaveHookInstallState, SavePathKind,
+    classify_save_like_path, direct_stage_no_steamid_kind, is_save_file_or_backup_path,
+    save_detour_disk_io_allowed, steam_id64_from_wide_save_path, wide_ascii_lower,
+    wide_contains_ci_ascii, wide_ends_with_ci_ascii, wide_find_ci_ascii,
+};
 use er_telemetry::counters::{
     SAVE_REDIRECT_DETOUR_MAX_DEPTH, SAVE_REDIRECT_DETOUR_REENTRANT_PASSTHROUGHS,
 };
@@ -108,48 +113,6 @@ pub(crate) fn save_trace_enabled() -> bool {
 }
 
 pub(crate) use er_telemetry::counters::OBSERVED_ACTIVE_STEAM_ID64;
-
-fn steam_id64_from_wide_save_path(path: &[u16]) -> Option<u64> {
-    const ELDENRING: &[u16] = &[
-        b'e' as u16,
-        b'l' as u16,
-        b'd' as u16,
-        b'e' as u16,
-        b'n' as u16,
-        b'r' as u16,
-        b'i' as u16,
-        b'n' as u16,
-        b'g' as u16,
-    ];
-    let mut search_from = 0usize;
-    while search_from < path.len() {
-        let Some(rel_idx) = wide_find_ci_ascii(&path[search_from..], ELDENRING) else {
-            break;
-        };
-        let idx = search_from + rel_idx;
-        let mut pos = idx + ELDENRING.len();
-        while matches!(path.get(pos), Some(c) if *c == b'\\' as u16 || *c == b'/' as u16) {
-            pos += 1;
-        }
-        let start = pos;
-        let mut steam_id = 0u64;
-        while let Some(&c) = path.get(pos) {
-            if !(b'0' as u16..=b'9' as u16).contains(&c) {
-                break;
-            }
-            steam_id = steam_id
-                .saturating_mul(10)
-                .saturating_add((c - b'0' as u16) as u64);
-            pos += 1;
-        }
-        let digits = pos.saturating_sub(start);
-        if (16..=20).contains(&digits) && steam_id != 0 {
-            return Some(steam_id);
-        }
-        search_from = idx + 1;
-    }
-    None
-}
 
 pub(super) fn observe_steam_id64_from_save_path(path: &[u16]) {
     if let Some(steam_id) = steam_id64_from_wide_save_path(path) {
@@ -399,12 +362,7 @@ pub(crate) use er_telemetry::counters::SAVE_DIRECT_STAGE_DONE_STEAM_ID;
 pub(crate) use er_telemetry::counters::SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID;
 pub(crate) use er_telemetry::counters::SAVE_DIRECT_STAGE_NO_STEAMID_HITS;
 static SAVE_DIRECT_STAGE_LAST_NO_STEAMID_KIND: AtomicUsize =
-    AtomicUsize::new(DIRECT_STAGE_NO_STEAMID_KIND_NONE);
-const DIRECT_STAGE_NO_STEAMID_KIND_NONE: usize = 0;
-const DIRECT_STAGE_NO_STEAMID_KIND_ROOT: usize = 1;
-const DIRECT_STAGE_NO_STEAMID_KIND_GRAPHICS: usize = 2;
-const DIRECT_STAGE_NO_STEAMID_KIND_CONFIGURED_SAVE: usize = 3;
-const DIRECT_STAGE_NO_STEAMID_KIND_OTHER: usize = 4;
+    AtomicUsize::new(DirectStageNoSteamIdKind::None.as_usize());
 static SAVE_REDIRECT_MODE: AtomicUsize = AtomicUsize::new(SAVE_REDIRECT_MODE_UNSET);
 const SAVE_REDIRECT_MODE_UNSET: usize = 0;
 const SAVE_REDIRECT_MODE_STAGED_ROOT: usize = 1;
@@ -476,49 +434,20 @@ pub(crate) fn write_save_redirect_telemetry(body: &mut String) {
 }
 
 fn save_path_kind_label(kind: usize) -> &'static str {
-    match kind {
-        SAVE_PATH_KIND_ELDENRING_ROOT => "eldenring_root",
-        SAVE_PATH_KIND_GRAPHICS_CONFIG => "graphics_config",
-        SAVE_PATH_KIND_STAGE_STEAMID_DIR => "stage_steamid_dir",
-        SAVE_PATH_KIND_STAGE_SAVE_FILE => "stage_save_file",
-        SAVE_PATH_KIND_CONFIGURED_SAVE_FILE => "configured_save_file",
-        SAVE_PATH_KIND_OTHER_SAVE_LIKE => "other_save_like",
-        _ => "none",
-    }
-}
-
-fn classify_save_like_createfile_path(path: &[u16]) -> usize {
-    let no_steamid_kind = direct_stage_no_steamid_kind(path);
-    if steam_id64_from_wide_save_path(path).is_some() {
-        const SL2D: &[u16] = &[b'.' as u16, b's' as u16, b'l' as u16, b'2' as u16];
-        const CO2D: &[u16] = &[b'.' as u16, b'c' as u16, b'o' as u16, b'2' as u16];
-        if wide_ends_with_ci_ascii(path, SL2D) || wide_ends_with_ci_ascii(path, CO2D) {
-            SAVE_PATH_KIND_STAGE_SAVE_FILE
-        } else {
-            SAVE_PATH_KIND_STAGE_STEAMID_DIR
-        }
-    } else if no_steamid_kind == DIRECT_STAGE_NO_STEAMID_KIND_CONFIGURED_SAVE {
-        SAVE_PATH_KIND_CONFIGURED_SAVE_FILE
-    } else if no_steamid_kind == DIRECT_STAGE_NO_STEAMID_KIND_GRAPHICS {
-        SAVE_PATH_KIND_GRAPHICS_CONFIG
-    } else if no_steamid_kind == DIRECT_STAGE_NO_STEAMID_KIND_ROOT {
-        SAVE_PATH_KIND_ELDENRING_ROOT
-    } else {
-        SAVE_PATH_KIND_OTHER_SAVE_LIKE
-    }
+    SavePathKind::from_usize(kind).label()
 }
 
 fn record_save_like_createfile_path_kind(path: &[u16]) {
-    let kind = classify_save_like_createfile_path(path);
-    SAVE_CREATEFILEW_LAST_SAVE_LIKE_KIND.store(kind, Ordering::SeqCst);
+    let kind = classify_save_like_path(path);
+    SAVE_CREATEFILEW_LAST_SAVE_LIKE_KIND.store(kind.as_usize(), Ordering::SeqCst);
     match kind {
-        SAVE_PATH_KIND_STAGE_STEAMID_DIR => {
+        SavePathKind::StageSteamIdDir => {
             SAVE_CREATEFILEW_STAGE_STEAMID_DIR_HITS.fetch_add(1, Ordering::SeqCst);
         }
-        SAVE_PATH_KIND_STAGE_SAVE_FILE => {
+        SavePathKind::StageSaveFile => {
             SAVE_CREATEFILEW_STAGE_SAVE_FILE_HITS.fetch_add(1, Ordering::SeqCst);
         }
-        SAVE_PATH_KIND_CONFIGURED_SAVE_FILE => {
+        SavePathKind::ConfiguredSaveFile => {
             SAVE_CREATEFILEW_CONFIGURED_FILE_HITS.fetch_add(1, Ordering::SeqCst);
         }
         _ => {}
@@ -526,16 +455,16 @@ fn record_save_like_createfile_path_kind(path: &[u16]) {
 }
 
 fn record_save_like_query_path_kind(path: &[u16]) {
-    let kind = classify_save_like_createfile_path(path);
-    SAVE_QUERY_LAST_SAVE_LIKE_KIND.store(kind, Ordering::SeqCst);
+    let kind = classify_save_like_path(path);
+    SAVE_QUERY_LAST_SAVE_LIKE_KIND.store(kind.as_usize(), Ordering::SeqCst);
     match kind {
-        SAVE_PATH_KIND_STAGE_STEAMID_DIR => {
+        SavePathKind::StageSteamIdDir => {
             SAVE_QUERY_STAGE_STEAMID_DIR_HITS.fetch_add(1, Ordering::SeqCst);
         }
-        SAVE_PATH_KIND_STAGE_SAVE_FILE => {
+        SavePathKind::StageSaveFile => {
             SAVE_QUERY_STAGE_SAVE_FILE_HITS.fetch_add(1, Ordering::SeqCst);
         }
-        SAVE_PATH_KIND_CONFIGURED_SAVE_FILE => {
+        SavePathKind::ConfiguredSaveFile => {
             SAVE_QUERY_CONFIGURED_FILE_HITS.fetch_add(1, Ordering::SeqCst);
         }
         _ => {}
@@ -543,66 +472,7 @@ fn record_save_like_query_path_kind(path: &[u16]) {
 }
 
 fn direct_stage_no_steamid_kind_label(kind: usize) -> &'static str {
-    match kind {
-        DIRECT_STAGE_NO_STEAMID_KIND_ROOT => "eldenring_root",
-        DIRECT_STAGE_NO_STEAMID_KIND_GRAPHICS => "graphics_config",
-        DIRECT_STAGE_NO_STEAMID_KIND_CONFIGURED_SAVE => "configured_save_without_steamid",
-        DIRECT_STAGE_NO_STEAMID_KIND_OTHER => "other",
-        _ => "none",
-    }
-}
-
-fn direct_stage_no_steamid_kind(path: &[u16]) -> usize {
-    const GRAPHICS_XML: &[u16] = &[
-        b'g' as u16,
-        b'r' as u16,
-        b'a' as u16,
-        b'p' as u16,
-        b'h' as u16,
-        b'i' as u16,
-        b'c' as u16,
-        b's' as u16,
-        b'c' as u16,
-        b'o' as u16,
-        b'n' as u16,
-        b'f' as u16,
-        b'i' as u16,
-        b'g' as u16,
-        b'.' as u16,
-        b'x' as u16,
-        b'm' as u16,
-        b'l' as u16,
-    ];
-    const SL2D: &[u16] = &[b'.' as u16, b's' as u16, b'l' as u16, b'2' as u16];
-    const CO2D: &[u16] = &[b'.' as u16, b'c' as u16, b'o' as u16, b'2' as u16];
-    if wide_ends_with_ci_ascii(path, GRAPHICS_XML) {
-        DIRECT_STAGE_NO_STEAMID_KIND_GRAPHICS
-    } else if wide_ends_with_ci_ascii(path, SL2D) || wide_ends_with_ci_ascii(path, CO2D) {
-        DIRECT_STAGE_NO_STEAMID_KIND_CONFIGURED_SAVE
-    } else if wide_ends_with_separator_or_eldenring(path) {
-        DIRECT_STAGE_NO_STEAMID_KIND_ROOT
-    } else {
-        DIRECT_STAGE_NO_STEAMID_KIND_OTHER
-    }
-}
-
-fn wide_ends_with_separator_or_eldenring(path: &[u16]) -> bool {
-    const ELDENRING: &[u16] = &[
-        b'e' as u16,
-        b'l' as u16,
-        b'd' as u16,
-        b'e' as u16,
-        b'n' as u16,
-        b'r' as u16,
-        b'i' as u16,
-        b'n' as u16,
-        b'g' as u16,
-    ];
-    let trimmed_len = path
-        .iter()
-        .rposition(|&c| c != b'\\' as u16 && c != b'/' as u16)
-        .map_or(0, |idx| idx + 1);
-    wide_ends_with_ci_ascii(&path[..trimmed_len], ELDENRING)
+    DirectStageNoSteamIdKind::from_usize(kind).label()
 }
 
 fn direct_stage_file_status(steam_id: u64) -> (bool, Option<u64>) {
@@ -708,14 +578,16 @@ const SAVE_CREATEFILEW_DIAG_MAX: usize = 200;
 /// (16/32/64/...) -- same rate-limit pattern as `now_loading_helper_update_hook` -- so the diagnostic
 /// keeps its early window and a sparse tail without flooding the debug log.
 pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_DIAG_HITS;
-static SAVE_CREATEFILEW_LAST_SAVE_LIKE_KIND: AtomicUsize = AtomicUsize::new(SAVE_PATH_KIND_NONE);
+static SAVE_CREATEFILEW_LAST_SAVE_LIKE_KIND: AtomicUsize =
+    AtomicUsize::new(SavePathKind::None.as_usize());
 pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_CONFIGURED_FILE_HITS;
 pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_STAGE_SAVE_FILE_HITS;
 pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_STAGE_STEAMID_DIR_HITS;
 static MISSING_SAVE_DIALOG_GATE: er_save_redirect::MissingSaveGate =
     er_save_redirect::MissingSaveGate::new();
 pub(crate) use er_telemetry::counters::MISSING_SAVE_BLOCKED_IO_LOGGED;
-static SAVE_QUERY_LAST_SAVE_LIKE_KIND: AtomicUsize = AtomicUsize::new(SAVE_PATH_KIND_NONE);
+static SAVE_QUERY_LAST_SAVE_LIKE_KIND: AtomicUsize =
+    AtomicUsize::new(SavePathKind::None.as_usize());
 
 fn set_missing_save_dialog_state(state: er_save_redirect::MissingSaveState) {
     MISSING_SAVE_DIALOG_GATE.set(state);
@@ -736,13 +608,6 @@ pub(crate) fn direct_save_file_source_active() -> bool {
 pub(crate) use er_telemetry::counters::SAVE_QUERY_CONFIGURED_FILE_HITS;
 pub(crate) use er_telemetry::counters::SAVE_QUERY_STAGE_SAVE_FILE_HITS;
 pub(crate) use er_telemetry::counters::SAVE_QUERY_STAGE_STEAMID_DIR_HITS;
-const SAVE_PATH_KIND_NONE: usize = 0;
-const SAVE_PATH_KIND_ELDENRING_ROOT: usize = 1;
-const SAVE_PATH_KIND_GRAPHICS_CONFIG: usize = 2;
-const SAVE_PATH_KIND_STAGE_STEAMID_DIR: usize = 3;
-const SAVE_PATH_KIND_STAGE_SAVE_FILE: usize = 4;
-const SAVE_PATH_KIND_CONFIGURED_SAVE_FILE: usize = 5;
-const SAVE_PATH_KIND_OTHER_SAVE_LIKE: usize = 6;
 /// DEDICATED budget for save-FILE queries (paths ending .sl2 / .co2 or containing ER0000): the shared
 /// CreateFileW/existence-check diag cap above is exhausted by early-boot `eldenring\` dir churn
 /// (GraphicsConfig.xml etc.) BEFORE the actual save read, hiding whether/with-what-steamid the game
@@ -1231,15 +1096,6 @@ pub(super) fn wait_for_missing_save_dialog_if_pending(path: &[u16]) {
     }
 }
 
-pub(super) fn is_save_file_or_backup_path(path: &[u16]) -> bool {
-    const SL2D: &[u16] = &[b'.' as u16, b's' as u16, b'l' as u16, b'2' as u16];
-    const CO2D: &[u16] = &[b'.' as u16, b'c' as u16, b'o' as u16, b'2' as u16];
-    const BAKD: &[u16] = &[b'.' as u16, b'b' as u16, b'a' as u16, b'k' as u16];
-    wide_ends_with_ci_ascii(path, SL2D)
-        || wide_ends_with_ci_ascii(path, CO2D)
-        || wide_ends_with_ci_ascii(path, BAKD)
-}
-
 /// Length of a NUL-terminated UTF-16 string at `ptr` (excludes the NUL). 0 on null pointer.
 pub(super) unsafe fn wide_len(ptr: *const u16) -> usize {
     if ptr.is_null() {
@@ -1257,56 +1113,6 @@ pub(super) unsafe fn wide_len(ptr: *const u16) -> usize {
     len
 }
 
-/// ASCII-lowercase a UTF-16 code unit (leaves non-ASCII untouched).
-fn wide_ascii_lower(c: u16) -> u16 {
-    if (b'A' as u16..=b'Z' as u16).contains(&c) {
-        c + 0x20
-    } else {
-        c
-    }
-}
-
-/// True if `hay` contains `needle` (ASCII, case-insensitive). `needle` must be ASCII lowercase.
-fn wide_contains_ci_ascii(hay: &[u16], needle: &[u16]) -> bool {
-    if needle.is_empty() || needle.len() > hay.len() {
-        return false;
-    }
-    let last = hay.len() - needle.len();
-    (0..=last).any(|start| {
-        needle
-            .iter()
-            .enumerate()
-            .all(|(i, &n)| wide_ascii_lower(hay[start + i]) == n)
-    })
-}
-
-/// First index in `hay` where `needle` occurs (ASCII, case-insensitive). `needle` must be ASCII
-/// lowercase. None if absent.
-fn wide_find_ci_ascii(hay: &[u16], needle: &[u16]) -> Option<usize> {
-    if needle.is_empty() || needle.len() > hay.len() {
-        return None;
-    }
-    let last = hay.len() - needle.len();
-    (0..=last).find(|&start| {
-        needle
-            .iter()
-            .enumerate()
-            .all(|(i, &n)| wide_ascii_lower(hay[start + i]) == n)
-    })
-}
-
-/// True if `hay` ends with `suffix` (ASCII, case-insensitive). `suffix` must be ASCII lowercase.
-pub(super) fn wide_ends_with_ci_ascii(hay: &[u16], suffix: &[u16]) -> bool {
-    if suffix.len() > hay.len() {
-        return false;
-    }
-    let start = hay.len() - suffix.len();
-    suffix
-        .iter()
-        .enumerate()
-        .all(|(i, &s)| wide_ascii_lower(hay[start + i]) == s)
-}
-
 /// Index just after the last path separator in `path` (0 if none) -- the basename start.
 fn ensure_direct_stage_for_requested_path(path: &[u16]) {
     let Some(root) = SAVE_DIRECT_STAGE_ROOT.get() else {
@@ -1315,12 +1121,12 @@ fn ensure_direct_stage_for_requested_path(path: &[u16]) {
     let Some(steam_id) = steam_id64_from_wide_save_path(path) else {
         let kind = direct_stage_no_steamid_kind(path);
         SAVE_DIRECT_STAGE_NO_STEAMID_HITS.fetch_add(1, Ordering::SeqCst);
-        SAVE_DIRECT_STAGE_LAST_NO_STEAMID_KIND.store(kind, Ordering::SeqCst);
+        SAVE_DIRECT_STAGE_LAST_NO_STEAMID_KIND.store(kind.as_usize(), Ordering::SeqCst);
         let hit = SAVE_DIRECT_STAGE_DIAG_HITS.fetch_add(1, Ordering::SeqCst);
         if hit < 8 {
             // UTF-8 Lossy: log-only decode of a Windows wide path for probe diagnosis.
             let shown = String::from_utf16_lossy(path);
-            let kind_label = direct_stage_no_steamid_kind_label(kind);
+            let kind_label = kind.label();
             append_autoload_debug(format_args!(
                 "save-override: direct-file stage pending -- no SteamID64 in {kind_label} requested path '{shown}'"
             ));
