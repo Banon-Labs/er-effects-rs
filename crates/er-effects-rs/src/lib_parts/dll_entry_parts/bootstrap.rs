@@ -81,6 +81,10 @@ pub unsafe extern "system" fn DirectInput8Create(
     unsafe { forward(hinst, version, riid, out, outer) }
 }
 
+fn game_main_window_handle_usize() -> usize {
+    game_main_window().0 as usize
+}
+
 #[unsafe(no_mangle)]
 /// # Safety
 ///
@@ -121,6 +125,23 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         game_data_man_ptr_or_null: crate::constants::game_data_man_ptr_or_null,
         read_utf16_name_units: crate::experiments::read_utf16_name_units,
         boot_view_render_frame: crate::experiments::boot_view_render_frame,
+    });
+    // Save-picker crate split: wire product (A)'s seam before any hook install or task spawn can
+    // execute moved picker code. Pure fn-pointer writes; linking the crate still arms nothing by
+    // itself.
+    er_save_picker::install_host(er_save_picker::SavePickerHost {
+        append_autoload_debug: crate::telemetry::append_autoload_debug,
+        missing_save_selection_pending: crate::experiments::missing_save_selection_pending,
+        complete_missing_save_selection_from_picker:
+            crate::experiments::complete_missing_save_selection_from_picker,
+        save_picker_seamless_mode_after_settle:
+            crate::experiments::save_picker_seamless_mode_after_settle,
+        picker_start_dir: crate::experiments::save_picker_title_start_dir,
+        remember_picker_dir: crate::config::remember_preferred_save_picker_dir,
+        game_main_window: game_main_window_handle_usize,
+        save_file_core_hooks_live: crate::experiments::save_file_core_hooks_live,
+        windows_path_for_log: crate::experiments::system_quit_windows_path_for_log,
+        save_dest_commit_window_armed: crate::experiments::save_dest_commit_window_armed,
     });
     // Title-flow crate split: wire the er-title-flow seam to the real product fns, same
     // rules as the portrait seam above (installed before any hook install or task spawn

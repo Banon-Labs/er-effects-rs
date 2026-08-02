@@ -83,7 +83,9 @@
 //! See [`host::install_host`]. This crate must not depend on the root crate.
 
 pub mod host;
+pub mod model;
 pub mod slots;
 
 pub use host::*;
+pub use model::*;
 pub use slots::*;
