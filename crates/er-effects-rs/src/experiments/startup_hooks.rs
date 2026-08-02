@@ -1,11 +1,9 @@
 //! Startup-hook glue for product loading flows, save-picker/quit-menu features, and
 //! runtime diagnostics.
 //!
-//! This module intentionally still uses `include!` at one flat namespace. The files below
-//! are grouped by ownership on disk so the next crate-extraction slices can move whole
-//! ownership clusters without first untangling unrelated startup hooks. Keeping the
-//! includes flat preserves the current private helper visibility and makes this a
-//! zero-behavior file move.
+//! This module is being converted from one flat `include!` namespace into ownership
+//! modules. Compatibility `pub(crate) use` shims preserve the current private helper
+//! visibility while each ownership cluster is moved behind a real Rust module.
 //!
 //! Ownership groups:
 //! * `loading_cover/` -- title/loading-cover/product boot resources that stay with the
@@ -45,7 +43,8 @@ include!("startup_hooks/quit_menu/save_flow_boxes.rs");
 include!("startup_hooks/quit_menu/save_dest_identity.rs");
 include!("startup_hooks/quit_menu/save_dest_commit.rs");
 include!("startup_hooks/quit_menu/save_picker_menu.rs");
-include!("startup_hooks/quit_menu/save_picker_dim_overlay.rs");
+mod quit_menu;
+pub(crate) use quit_menu::*;
 include!("startup_hooks/quit_menu/save_swap_profile_table.rs");
 include!("startup_hooks/quit_menu/system_quit_ownership_repro.rs");
 include!("startup_hooks/quit_menu/system_quit_repro_guards.rs");
@@ -57,7 +56,6 @@ include!("startup_hooks/save_picker/save_picker_boot.rs");
 include!("startup_hooks/save_picker/save_picker_surface.rs");
 
 // Runtime diagnostics / agent probes.
-include!("startup_hooks/diagnostics/msb_parse_trace.rs");
-include!("startup_hooks/diagnostics/loadlist_wait_trace.rs");
-include!("startup_hooks/diagnostics/dlc_roots_trace.rs");
+mod diagnostics;
+pub(crate) use diagnostics::*;
 include!("startup_hooks/diagnostics/layout_global_hooks.rs");
