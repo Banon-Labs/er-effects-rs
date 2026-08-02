@@ -117,6 +117,8 @@ Twenty-sixth slice on `refactor/s6b7a-save-normalize-hash-core-20260802`: move s
 
 Twenty-seventh slice on `refactor/s6b8a-steamid-validation-core-20260802`: move plausible SteamID64 range validation into `er-save-redirect::plausible_steam_id64`. Product still owns environment/config reads, Steam API access, active-user selection policy, and telemetry logging.
 
+Twenty-eighth slice on `refactor/s6b8b-steamid-dir-name-core-20260802`: move SteamID64 directory-name parsing into `er-save-redirect::steam_id64_from_dir_name`. Product still owns default-save root enumeration, candidate validation, active-user selection policy, and telemetry logging.
+
 Gate: Windows-target check plus a no-runtime hook-install smoke if available. Runtime proof comes after this, not before.
 
 ### S6b.3: boot-hold/title-flow seam
