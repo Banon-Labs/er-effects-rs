@@ -556,6 +556,44 @@ pub unsafe fn patch_ntquery_volume_free_space(
     }
 }
 
+/// Low-byte folder id for `%APPDATA%` in `SHGetFolderPathW` requests.
+pub const SHGFP_CSIDL_APPDATA: i32 = 0x1a;
+/// Mask for extracting the folder id from a `SHGetFolderPathW` CSIDL value.
+pub const SHGFP_CSIDL_FOLDER_MASK: i32 = 0xff;
+/// Product-side `SHGetFolderPathW` buffer capacity used by the save redirect hook.
+pub const SHGFP_MAX_PATH_W: usize = 259;
+
+pub fn shgetfolderpath_is_appdata_request(csidl: i32) -> bool {
+    (csidl & SHGFP_CSIDL_FOLDER_MASK) == SHGFP_CSIDL_APPDATA
+}
+
+pub fn shgetfolderpath_staged_appdata_len(
+    csidl: i32,
+    first_load_done: bool,
+    staged_root_len: Option<usize>,
+    max_path_w: usize,
+) -> Option<usize> {
+    if shgetfolderpath_is_appdata_request(csidl) && !first_load_done {
+        staged_root_len.map(|len| len.min(max_path_w))
+    } else {
+        None
+    }
+}
+
+/// Copy the staged root into a `SHGetFolderPathW` output buffer and NUL-terminate it.
+///
+/// # Safety
+/// `path` must point at a writable buffer with room for `n + 1` UTF-16 code units, where `n` is the
+/// returned copy length.
+pub unsafe fn write_shgetfolderpath_staged_root(path: *mut u16, root: &[u16], n: usize) -> usize {
+    let n = n.min(root.len());
+    for (i, ch) in root.iter().copied().take(n).enumerate() {
+        unsafe { *path.add(i) = ch };
+    }
+    unsafe { *path.add(n) = 0 };
+    n
+}
+
 /// `GENERIC_WRITE` access bit used by NtCreateFile diagnostics.
 pub const NT_CREATEFILE_GENERIC_WRITE: u32 = 0x4000_0000;
 /// `FILE_WRITE_DATA` access bit used by NtCreateFile diagnostics.
@@ -1140,6 +1178,39 @@ mod tests {
         state.install_redirect_once(|| redirect_calls.set(redirect_calls.get() + 1));
         state.install_redirect_once(|| redirect_calls.set(redirect_calls.get() + 1));
         assert_eq!(redirect_calls.get(), 1);
+    }
+
+    #[test]
+    fn classifies_shgetfolderpath_appdata_redirects() {
+        assert!(shgetfolderpath_is_appdata_request(SHGFP_CSIDL_APPDATA));
+        assert!(shgetfolderpath_is_appdata_request(
+            0x8000 | SHGFP_CSIDL_APPDATA
+        ));
+        assert!(!shgetfolderpath_is_appdata_request(0x20));
+        assert_eq!(
+            shgetfolderpath_staged_appdata_len(SHGFP_CSIDL_APPDATA, false, Some(400), 259),
+            Some(259)
+        );
+        assert_eq!(
+            shgetfolderpath_staged_appdata_len(SHGFP_CSIDL_APPDATA, true, Some(10), 259),
+            None
+        );
+        assert_eq!(
+            shgetfolderpath_staged_appdata_len(SHGFP_CSIDL_APPDATA, false, None, 259),
+            None
+        );
+    }
+
+    #[test]
+    fn writes_shgetfolderpath_staged_root_with_nul() {
+        let root = wide_path(r"Z:\stage");
+        let mut out = vec![0xffff; root.len() + 2];
+        let copied = unsafe { write_shgetfolderpath_staged_root(out.as_mut_ptr(), &root, 4) };
+        assert_eq!(copied, 4);
+        assert_eq!(
+            &out[..5],
+            &[b'Z' as u16, b':' as u16, b'\\' as u16, b's' as u16, 0]
+        );
     }
 
     #[test]

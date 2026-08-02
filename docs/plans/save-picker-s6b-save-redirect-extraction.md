@@ -87,6 +87,8 @@ Eleventh slice on `refactor/s6b2k-free-space-detour-core-20260802`: move Wine fr
 
 Twelfth slice on `refactor/s6b3a-ntcreatefile-diag-core-20260802`: move NtCreateFile save-path/access diagnostic classification into host-testable `er-save-redirect` helpers. Product still owns OBJECT_ATTRIBUTES decoding, original-call trampoline, missing-save waiting, SteamID observation, normalization side effects, and telemetry logging.
 
+Thirteenth slice on `refactor/s6b3b-shgetfolderpath-core-20260802`: move SHGetFolderPathW APPDATA redirect classification and output-buffer writing into host-testable `er-save-redirect` helpers. Product still owns first-load/root counters, original-call trampoline, and telemetry logging.
+
 Gate: Windows-target check plus a no-runtime hook-install smoke if available. Runtime proof comes after this, not before.
 
 ### S6b.3: boot-hold/title-flow seam
