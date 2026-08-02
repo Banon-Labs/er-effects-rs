@@ -73,6 +73,8 @@ Fourth slice on `refactor/s6b2d-save-redirect-path-map-20260802`: move the pure 
 
 Fifth slice on `refactor/s6b2e-save-path-side-effects-20260802`: move the save-path redirect flow ordering into `er-save-redirect::redirect_wide_save_path_with_side_effects`, with product callbacks for SteamID observation and direct-file staging. Product still owns the callback bodies plus hook detours/install.
 
+Sixth slice on `refactor/s6b2f-save-hook-install-primitives-20260802`: move the save hook original/trampoline slots into `er-save-redirect`. Product still resolves addresses, creates MinHook objects, installs detours, and owns the callback bodies, but the shared core now owns the process-global trampoline cells those bodies call through.
+
 Gate: Windows-target check plus a no-runtime hook-install smoke if available. Runtime proof comes after this, not before.
 
 ### S6b.3: boot-hold/title-flow seam

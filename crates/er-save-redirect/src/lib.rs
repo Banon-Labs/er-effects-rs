@@ -121,6 +121,27 @@ impl Default for SaveHookInstallState {
     }
 }
 
+/// Original/trampoline slot value before a hook is installed.
+pub const SAVE_HOOK_ORIGINAL_UNSET: usize = 0;
+
+/// Original CreateFileW / CopyFileW MinHook trampolines. 0 = not hooked.
+pub static SAVE_REDIRECT_ORIG_CREATEFILEW: AtomicUsize = AtomicUsize::new(SAVE_HOOK_ORIGINAL_UNSET);
+pub static SAVE_REDIRECT_ORIG_COPYFILEW: AtomicUsize = AtomicUsize::new(SAVE_HOOK_ORIGINAL_UNSET);
+/// Save-existence-check redirect trampolines.
+pub static SAVE_REDIRECT_ORIG_GETATTRW: AtomicUsize = AtomicUsize::new(SAVE_HOOK_ORIGINAL_UNSET);
+pub static SAVE_REDIRECT_ORIG_GETATTREXW: AtomicUsize = AtomicUsize::new(SAVE_HOOK_ORIGINAL_UNSET);
+pub static SAVE_REDIRECT_ORIG_FINDFIRSTW: AtomicUsize = AtomicUsize::new(SAVE_HOOK_ORIGINAL_UNSET);
+/// SHGetFolderPathW redirect trampoline.
+pub static SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW: AtomicUsize =
+    AtomicUsize::new(SAVE_HOOK_ORIGINAL_UNSET);
+/// Ntdll/save-destination diagnostics and free-space override trampolines.
+pub static SAVE_REDIRECT_ORIG_NTCREATEFILE: AtomicUsize =
+    AtomicUsize::new(SAVE_HOOK_ORIGINAL_UNSET);
+pub static SAVE_REDIRECT_ORIG_GETDISKFREEW: AtomicUsize =
+    AtomicUsize::new(SAVE_HOOK_ORIGINAL_UNSET);
+pub static SAVE_REDIRECT_ORIG_NTQUERYVOLINFO: AtomicUsize =
+    AtomicUsize::new(SAVE_HOOK_ORIGINAL_UNSET);
+
 /// Why a candidate save source was rejected before redirect planning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SaveSourceRejection {
