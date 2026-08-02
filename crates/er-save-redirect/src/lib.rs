@@ -903,6 +903,15 @@ pub fn plausible_steam_id64(value: u64) -> Option<u64> {
         .then_some(value)
 }
 
+pub fn steam_id64_from_dir_name(name: &str) -> Option<u64> {
+    let is_steam_id =
+        (16..=20).contains(&name.len()) && name.as_bytes().iter().all(u8::is_ascii_digit);
+    is_steam_id
+        .then(|| name.parse::<u64>().ok())
+        .flatten()
+        .and_then(plausible_steam_id64)
+}
+
 /// Save-like wide path category used by save-redirect telemetry and hook decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SavePathKind {
@@ -1905,6 +1914,17 @@ mod tests {
                 root_wide: WineRootWide("Z:\\prefix".encode_utf16().collect()),
             }
         );
+    }
+
+    #[test]
+    fn parses_plausible_steam_id64_dir_names() {
+        assert_eq!(
+            steam_id64_from_dir_name("76561197960265729"),
+            Some(76561197960265729)
+        );
+        assert_eq!(steam_id64_from_dir_name("76561197960265729.bak"), None);
+        assert_eq!(steam_id64_from_dir_name("not-a-steamid"), None);
+        assert_eq!(steam_id64_from_dir_name("9999999999999999"), None);
     }
 
     #[test]

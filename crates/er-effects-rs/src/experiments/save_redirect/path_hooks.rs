@@ -30,7 +30,8 @@ use er_save_redirect::{
     plan_save_path_telemetry, plan_save_query_path, plausible_steam_id64,
     probe_direct_stage_file_status, redirect_wide_save_path_with_side_effects,
     save_detour_disk_io_allowed, save_file_is_readonly, save_normalize_hash_bytes,
-    steam_id64_from_wide_save_path, wide_contains_ci_ascii, wide_ends_with_ci_ascii,
+    steam_id64_from_dir_name, steam_id64_from_wide_save_path, wide_contains_ci_ascii,
+    wide_ends_with_ci_ascii,
 };
 use er_telemetry::counters::{
     SAVE_REDIRECT_DETOUR_MAX_DEPTH, SAVE_REDIRECT_DETOUR_REENTRANT_PASSTHROUGHS,
@@ -765,10 +766,7 @@ fn default_save_file_candidates() -> Vec<(PathBuf, u64)> {
             let steam_id = entry
                 .file_name()
                 .to_str()
-                .filter(|name| (16..=20).contains(&name.len()))
-                .filter(|name| name.as_bytes().iter().all(u8::is_ascii_digit))
-                .and_then(|name| name.parse::<u64>().ok())
-                .and_then(plausible_steam_id64)?;
+                .and_then(steam_id64_from_dir_name)?;
             let dir = entry.path();
             validated_default_save_file(
                 dir.join(active_default_save_file_name()),
