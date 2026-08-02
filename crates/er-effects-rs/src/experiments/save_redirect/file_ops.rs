@@ -5,8 +5,8 @@ use er_save_redirect::{
     SAVE_REDIRECT_ORIG_GETATTREXW, SAVE_REDIRECT_ORIG_GETATTRW, SAVE_REDIRECT_ORIG_GETDISKFREEW,
     SAVE_REDIRECT_ORIG_NTCREATEFILE, SAVE_REDIRECT_ORIG_NTQUERYVOLINFO,
     SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW, SaveNtCreateDetourGuard, SaveRedirectHookDetours,
-    install_core_createfilew_hook, install_redirect_save_hooks, is_save_file_or_backup_path,
-    save_detour_disk_io_allowed, wide_ends_with_ci_ascii,
+    install_core_createfilew_hook, install_redirect_save_hooks_when_ready,
+    is_save_file_or_backup_path, save_detour_disk_io_allowed, wide_ends_with_ci_ascii,
 };
 
 type ShGetFolderPathWFn = unsafe extern "system" fn(isize, i32, isize, u32, *mut u16) -> i32;
@@ -365,15 +365,11 @@ pub(crate) fn install_save_redirect_hooks() {
     // native save IO must flow so the title completes its no-save boot and the 05_010 file
     // browser can present itself. `complete_missing_save_selection_from_picker` re-invokes this
     // installer right after activating the picked source (the install body is Once-guarded).
-    if SAVE_REDIRECT_DIR_W.get().is_none() && !save_trace_enabled() {
-        append_autoload_debug(format_args!(
-            "save-override: install deferred -- redirect dir not set yet (waiting for missing-save picker/configured source)"
-        ));
-        return;
-    }
     unsafe {
-        install_redirect_save_hooks(
+        install_redirect_save_hooks_when_ready(
             &SAVE_HOOK_INSTALL_STATE,
+            SAVE_REDIRECT_DIR_W.get().is_some(),
+            save_trace_enabled(),
             SaveRedirectHookDetours {
                 copyfilew: save_redirect_copyfilew_hook as *mut c_void,
                 get_file_attributes_w: save_redirect_getattrw_hook as *mut c_void,
