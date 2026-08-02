@@ -1,4 +1,6 @@
-//! Product-side compatibility shim for S4: the boot picker overlay lives in `er-save-picker`.
+//! Product-side compatibility shim for the save-picker extraction: the boot picker overlay lives
+//! in `er-save-picker`; this module keeps existing product callsites stable while the remaining
+//! picker/quit-menu seams are moved.
 
 pub(crate) use er_save_picker::overlay::{
     GET_ASYNC_KEY_STATE_PROC, MISSING_SAVE_PICKER_SELECTED_SLOT, SAVE_PICKER_CHAR_CURSOR,
