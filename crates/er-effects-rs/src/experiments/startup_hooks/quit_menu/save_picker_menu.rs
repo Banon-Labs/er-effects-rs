@@ -903,6 +903,8 @@ pub(crate) unsafe fn local_utc_offset_seconds(utc_secs: i64) -> Option<i64> {
 
 #[cfg(test)]
 mod save_picker_row_slot_info_tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
 
     /// SCOPE PROOF for the row Level/PlayTime rework: with no picker owning the rows -- the state
     /// the vanilla character-slot views run in, the title-screen Load Game list among them -- the
