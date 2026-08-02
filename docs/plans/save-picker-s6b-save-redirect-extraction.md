@@ -119,6 +119,8 @@ Twenty-seventh slice on `refactor/s6b8a-steamid-validation-core-20260802`: move 
 
 Twenty-eighth slice on `refactor/s6b8b-steamid-dir-name-core-20260802`: move SteamID64 directory-name parsing into `er-save-redirect::steam_id64_from_dir_name`. Product still owns default-save root enumeration, candidate validation, active-user selection policy, and telemetry logging.
 
+Twenty-ninth slice on `refactor/s6b8c-default-save-path-core-20260802`: move default save path construction into `er-save-redirect::default_save_file_path`. Product still owns default-save root discovery/enumeration, candidate validation, active-user selection policy, and telemetry logging.
+
 Gate: Windows-target check plus a no-runtime hook-install smoke if available. Runtime proof comes after this, not before.
 
 ### S6b.3: boot-hold/title-flow seam

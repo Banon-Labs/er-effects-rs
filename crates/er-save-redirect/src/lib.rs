@@ -912,6 +912,10 @@ pub fn steam_id64_from_dir_name(name: &str) -> Option<u64> {
         .and_then(plausible_steam_id64)
 }
 
+pub fn default_save_file_path(root: &Path, steam_id: u64, file_name: &str) -> PathBuf {
+    root.join(steam_id.to_string()).join(file_name)
+}
+
 /// Save-like wide path category used by save-redirect telemetry and hook decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SavePathKind {
@@ -1913,6 +1917,15 @@ mod tests {
                 steam_id: 76_561_198_000_000_000,
                 root_wide: WineRootWide("Z:\\prefix".encode_utf16().collect()),
             }
+        );
+    }
+
+    #[test]
+    fn builds_default_save_file_path_from_root_steamid_and_leaf() {
+        let root = Path::new(r"C:\Users\x\AppData\Roaming\EldenRing");
+        assert_eq!(
+            default_save_file_path(root, 76561197960265729, "ER0000.sl2"),
+            root.join("76561197960265729").join("ER0000.sl2")
         );
     }
 
