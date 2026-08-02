@@ -524,6 +524,24 @@ pub fn redirect_wide_roaming_eldenring_path(path: &[u16], root_wide: &[u16]) -> 
     Some(out)
 }
 
+/// Shared save-path redirect flow with product-owned side effects injected at the boundary.
+///
+/// `observe_path` always runs first so the product can learn the active SteamID even when no redirect
+/// root is active. `ensure_staged_path` runs only after the path is known to redirect, preserving the
+/// old behavior that staging does not fire for non-Roaming/non-EldenRing paths or missing roots.
+pub fn redirect_wide_save_path_with_side_effects(
+    path: &[u16],
+    root_wide: Option<&[u16]>,
+    observe_path: impl FnOnce(&[u16]),
+    ensure_staged_path: impl FnOnce(&[u16]),
+) -> Option<Vec<u16>> {
+    observe_path(path);
+    let root_wide = root_wide?;
+    let redirected = redirect_wide_roaming_eldenring_path(path, root_wide)?;
+    ensure_staged_path(path);
+    Some(redirected)
+}
+
 /// If `path` is under `<root>/EldenRing/<steamid>/...`, return that root plus steam id.
 pub fn staged_save_root_for_file(path: &Path) -> Option<(PathBuf, u64)> {
     let mut root = PathBuf::new();
@@ -716,6 +734,52 @@ mod tests {
             redirect_wide_roaming_eldenring_path(&already_staged, &root),
             None
         );
+    }
+
+    #[test]
+    fn redirect_flow_preserves_observe_then_stage_side_effect_order() {
+        let root = wide_path(r"Z:\tmp\stage");
+        let source =
+            wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\76561197960265729\ER0000.sl2");
+        let events = std::cell::RefCell::new(Vec::new());
+        let redirected = redirect_wide_save_path_with_side_effects(
+            &source,
+            Some(&root),
+            |_| events.borrow_mut().push("observe"),
+            |_| events.borrow_mut().push("ensure"),
+        )
+        .unwrap();
+        assert_eq!(&*events.borrow(), &["observe", "ensure"]);
+        assert_eq!(redirected.last(), Some(&0));
+    }
+
+    #[test]
+    fn redirect_flow_observes_but_does_not_stage_without_a_redirect() {
+        let root = wide_path(r"Z:\tmp\stage");
+        let non_save = wide_path(r"C:\Users\x\Desktop\EldenRing\ER0000.sl2");
+        let events = std::cell::RefCell::new(Vec::new());
+        assert_eq!(
+            redirect_wide_save_path_with_side_effects(
+                &non_save,
+                Some(&root),
+                |_| events.borrow_mut().push("observe"),
+                |_| events.borrow_mut().push("ensure"),
+            ),
+            None
+        );
+        assert_eq!(&*events.borrow(), &["observe"]);
+
+        events.borrow_mut().clear();
+        assert_eq!(
+            redirect_wide_save_path_with_side_effects(
+                &non_save,
+                None,
+                |_| events.borrow_mut().push("observe"),
+                |_| events.borrow_mut().push("ensure"),
+            ),
+            None
+        );
+        assert_eq!(&*events.borrow(), &["observe"]);
     }
 
     #[test]
