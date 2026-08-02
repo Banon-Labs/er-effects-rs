@@ -940,6 +940,22 @@ impl SavePathKind {
             Self::None => "none",
         }
     }
+
+    pub const fn telemetry_bucket(self) -> Option<SavePathTelemetryBucket> {
+        match self {
+            Self::StageSteamIdDir => Some(SavePathTelemetryBucket::StageSteamIdDir),
+            Self::StageSaveFile => Some(SavePathTelemetryBucket::StageSaveFile),
+            Self::ConfiguredSaveFile => Some(SavePathTelemetryBucket::ConfiguredSaveFile),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SavePathTelemetryBucket {
+    StageSteamIdDir,
+    StageSaveFile,
+    ConfiguredSaveFile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1570,6 +1586,24 @@ mod tests {
 
     fn wide_path(path: &str) -> Vec<u16> {
         path.encode_utf16().collect()
+    }
+
+    #[test]
+    fn exposes_telemetry_buckets_for_counted_save_path_kinds() {
+        assert_eq!(
+            SavePathKind::StageSteamIdDir.telemetry_bucket(),
+            Some(SavePathTelemetryBucket::StageSteamIdDir)
+        );
+        assert_eq!(
+            SavePathKind::StageSaveFile.telemetry_bucket(),
+            Some(SavePathTelemetryBucket::StageSaveFile)
+        );
+        assert_eq!(
+            SavePathKind::ConfiguredSaveFile.telemetry_bucket(),
+            Some(SavePathTelemetryBucket::ConfiguredSaveFile)
+        );
+        assert_eq!(SavePathKind::GraphicsConfig.telemetry_bucket(), None);
+        assert_eq!(SavePathKind::OtherSaveLike.telemetry_bucket(), None);
     }
 
     #[test]

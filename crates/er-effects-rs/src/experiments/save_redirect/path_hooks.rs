@@ -24,10 +24,10 @@ use er_save_redirect::{
     SAVE_REDIRECT_ORIG_FINDFIRSTW, SAVE_REDIRECT_ORIG_GETATTREXW, SAVE_REDIRECT_ORIG_GETATTRW,
     SAVE_REDIRECT_ORIG_GETDISKFREEW, SAVE_REDIRECT_ORIG_NTCREATEFILE,
     SAVE_REDIRECT_ORIG_NTQUERYVOLINFO, SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW, SaveDetourDepth,
-    SaveHookInstallState, SavePathKind, classify_copyfile_endpoint, classify_save_like_path,
-    classify_save_query_path, createfile_diag_hit_should_log, direct_stage_no_steamid_kind,
-    is_save_file_or_backup_path, plan_create_file_open, plan_save_query_path,
-    redirect_wide_save_path_with_side_effects, save_detour_disk_io_allowed,
+    SaveHookInstallState, SavePathKind, SavePathTelemetryBucket, classify_copyfile_endpoint,
+    classify_save_like_path, classify_save_query_path, createfile_diag_hit_should_log,
+    direct_stage_no_steamid_kind, is_save_file_or_backup_path, plan_create_file_open,
+    plan_save_query_path, redirect_wide_save_path_with_side_effects, save_detour_disk_io_allowed,
     steam_id64_from_wide_save_path, wide_contains_ci_ascii, wide_ends_with_ci_ascii,
 };
 use er_telemetry::counters::{
@@ -445,34 +445,34 @@ fn save_path_kind_label(kind: usize) -> &'static str {
 fn record_save_like_createfile_path_kind(path: &[u16]) {
     let kind = classify_save_like_path(path);
     SAVE_CREATEFILEW_LAST_SAVE_LIKE_KIND.store(kind.as_usize(), Ordering::SeqCst);
-    match kind {
-        SavePathKind::StageSteamIdDir => {
+    match kind.telemetry_bucket() {
+        Some(SavePathTelemetryBucket::StageSteamIdDir) => {
             SAVE_CREATEFILEW_STAGE_STEAMID_DIR_HITS.fetch_add(1, Ordering::SeqCst);
         }
-        SavePathKind::StageSaveFile => {
+        Some(SavePathTelemetryBucket::StageSaveFile) => {
             SAVE_CREATEFILEW_STAGE_SAVE_FILE_HITS.fetch_add(1, Ordering::SeqCst);
         }
-        SavePathKind::ConfiguredSaveFile => {
+        Some(SavePathTelemetryBucket::ConfiguredSaveFile) => {
             SAVE_CREATEFILEW_CONFIGURED_FILE_HITS.fetch_add(1, Ordering::SeqCst);
         }
-        _ => {}
+        None => {}
     }
 }
 
 fn record_save_like_query_path_kind(path: &[u16]) {
     let kind = classify_save_like_path(path);
     SAVE_QUERY_LAST_SAVE_LIKE_KIND.store(kind.as_usize(), Ordering::SeqCst);
-    match kind {
-        SavePathKind::StageSteamIdDir => {
+    match kind.telemetry_bucket() {
+        Some(SavePathTelemetryBucket::StageSteamIdDir) => {
             SAVE_QUERY_STAGE_STEAMID_DIR_HITS.fetch_add(1, Ordering::SeqCst);
         }
-        SavePathKind::StageSaveFile => {
+        Some(SavePathTelemetryBucket::StageSaveFile) => {
             SAVE_QUERY_STAGE_SAVE_FILE_HITS.fetch_add(1, Ordering::SeqCst);
         }
-        SavePathKind::ConfiguredSaveFile => {
+        Some(SavePathTelemetryBucket::ConfiguredSaveFile) => {
             SAVE_QUERY_CONFIGURED_FILE_HITS.fetch_add(1, Ordering::SeqCst);
         }
-        _ => {}
+        None => {}
     }
 }
 
