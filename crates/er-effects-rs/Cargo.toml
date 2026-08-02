@@ -22,7 +22,7 @@ er-hook = { path = "../er-hook" }
 # defined in experiments/mem.rs. game-types re-exports the typed game bindings.
 er-game-base = { path = "../er-game-base", features = ["game-types"] }
 er-save-loader = { path = "../er-save-loader" }
-er-save-picker = { path = "../er-save-picker", default-features = false }
+er-save-picker = { path = "../er-save-picker", default-features = false, features = ["os-dialog"] }
 # Save-write suppression core, shared with the standalone er-save-disable-dll (save-game-flow
 # WP1): swallow every SL save enqueue + rewrite the status poll from boot, plus the one-shot
 # bypass token that makes the System->Quit "Save Game" row the ONLY path that really writes.
@@ -94,7 +94,8 @@ windows = { version = "0.62", features = [
   # comdlg32 (GetOpenFileNameW / GetSaveFileNameW / CommDlgExtendedError) for the OPT-IN OS file
   # picker: `er-effects.toml os_native_save_picker = true` routes BOTH System -> Quit surfaces --
   # "Load Character from File" and the Save Game destination list -- to the OS dialog instead of the
-  # in-game 05_010 browser. Both code paths ship in the one DLL; see save_picker_os_dialog.rs.
+  # in-game 05_010 browser. The reusable mechanism lives in er-save-picker::os_dialog; the product
+  # entrypoints still live in startup_hooks/save_picker/save_picker_os_dialog.rs.
   "Win32_UI_Controls_Dialogs",
   # CreateEventW (fence-completion event for the D3D12 readback wait) is gated behind Win32_Security.
   "Win32_Security",

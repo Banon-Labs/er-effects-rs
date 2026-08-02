@@ -29,7 +29,7 @@
 // Blocking either one produces the "not responding" window `save_picker_dim_overlay.rs` exists to
 // explain -- and at boot it would freeze the very overlay that IS the alternative picker. So this
 // arm opens the dialog on a thread WE own. Nothing of the game's stalls, Present keeps running,
-// the boot bar keeps animating, and `PickerDim::None` follows from that: there is no frozen game
+// the boot bar keeps animating, and `no_picker_cover` follows from that: there is no frozen game
 // for a cover to account for.
 //
 // PROVEN 2026-07-30 (run pr109-boot-oscancel-20260730-110704): comdlg32 DOES render and take input
@@ -299,8 +299,8 @@ fn boot_os_picker_thread() {
         start_dir,
         "",
         extensions,
-        &crate::experiments::save_picker::PickerIntent::LoadSource,
-        PickerDim::None,
+        &er_save_picker::PickerIntent::LoadSource,
+        no_picker_cover,
         str::to_owned,
     );
     SAVE_PICKER_BOOT_GAME_TICKS_AT_ANSWER.store(

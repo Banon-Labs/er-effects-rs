@@ -22,7 +22,26 @@ use std::sync::OnceLock;
 /// The guard drops BEFORE the dialog claim, and spans the WHOLE reopen loop rather than
 /// each individual dialog, so an invalid pick does not flash the game back at full
 /// brightness between two dialogs.
-pub type PickerCover = Box<dyn std::any::Any>;
+pub struct PickerCover {
+    owner_hwnd: usize,
+    _guard: Box<dyn std::any::Any>,
+}
+
+impl PickerCover {
+    /// Wrap a host-owned cover guard and the HWND that should own the common dialog.
+    /// `owner_hwnd == 0` means the dialog falls back to the game window owner.
+    pub fn new(owner_hwnd: usize, guard: Box<dyn std::any::Any>) -> Self {
+        Self {
+            owner_hwnd,
+            _guard: guard,
+        }
+    }
+
+    pub(crate) fn owner_hwnd(&self) -> usize {
+        self.owner_hwnd
+    }
+}
+
 /// Builds a cover for the named surface (`"load"` / `"save-as"`), or `None` for no cover.
 pub type PickerCoverFactory = fn(&str) -> Option<PickerCover>;
 
