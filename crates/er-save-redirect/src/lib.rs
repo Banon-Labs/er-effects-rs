@@ -642,6 +642,48 @@ pub fn nt_createfile_diag_hit_should_log(hits: usize) -> bool {
     hits <= 8 || hits.is_power_of_two()
 }
 
+/// Shared classification for CreateFileW save redirect diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CreateFileSavePathDiag {
+    pub save_like: bool,
+    pub is_save_file: bool,
+    pub should_wait_for_missing_save_dialog: bool,
+}
+
+impl CreateFileSavePathDiag {
+    pub fn should_capture_diag_log(self, calls: usize) -> bool {
+        calls == 0 || self.save_like
+    }
+}
+
+pub fn classify_create_file_save_path(path: &[u16]) -> CreateFileSavePathDiag {
+    const ELDENRING_SEG: &[u16] = &[
+        b'e' as u16,
+        b'l' as u16,
+        b'd' as u16,
+        b'e' as u16,
+        b'n' as u16,
+        b'r' as u16,
+        b'i' as u16,
+        b'n' as u16,
+        b'g' as u16,
+    ];
+    const SL2D: &[u16] = &[b'.' as u16, b's' as u16, b'l' as u16, b'2' as u16];
+    const CO2D: &[u16] = &[b'.' as u16, b'c' as u16, b'o' as u16, b'2' as u16];
+    const BAKD: &[u16] = &[b'.' as u16, b'b' as u16, b'a' as u16, b'k' as u16];
+    let is_save_file = wide_ends_with_ci_ascii(path, SL2D) || wide_ends_with_ci_ascii(path, CO2D);
+    let is_backup = wide_ends_with_ci_ascii(path, BAKD);
+    CreateFileSavePathDiag {
+        save_like: wide_contains_ci_ascii(path, ELDENRING_SEG) || is_save_file || is_backup,
+        is_save_file,
+        should_wait_for_missing_save_dialog: is_save_file || is_backup,
+    }
+}
+
+pub fn createfile_diag_hit_should_log(hits: usize) -> bool {
+    hits <= 8 || hits.is_power_of_two()
+}
+
 /// Why a candidate save source was rejected before redirect planning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SaveSourceRejection {
@@ -1211,6 +1253,37 @@ mod tests {
             &out[..5],
             &[b'Z' as u16, b':' as u16, b'\\' as u16, b's' as u16, 0]
         );
+    }
+
+    #[test]
+    fn classifies_createfile_save_paths_for_callbacks() {
+        let save = wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\76561197960265729\ER0000.co2");
+        let diag = classify_create_file_save_path(&save);
+        assert!(diag.save_like);
+        assert!(diag.is_save_file);
+        assert!(diag.should_wait_for_missing_save_dialog);
+        assert!(diag.should_capture_diag_log(99));
+
+        let backup = wide_path(r"Z:\stage\EldenRing\76561197960265729\ER0000.sl2.bak");
+        let backup_diag = classify_create_file_save_path(&backup);
+        assert!(backup_diag.save_like);
+        assert!(!backup_diag.is_save_file);
+        assert!(backup_diag.should_wait_for_missing_save_dialog);
+
+        let graphics = wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\GraphicsConfig.xml");
+        let graphics_diag = classify_create_file_save_path(&graphics);
+        assert!(graphics_diag.save_like);
+        assert!(!graphics_diag.is_save_file);
+        assert!(!graphics_diag.should_wait_for_missing_save_dialog);
+        assert!(!classify_create_file_save_path(&wide_path(r"C:\tmp\notes.txt")).save_like);
+    }
+
+    #[test]
+    fn createfile_diag_hit_logging_keeps_first_eight_and_powers_of_two() {
+        assert!((1..=8).all(createfile_diag_hit_should_log));
+        assert!(!createfile_diag_hit_should_log(9));
+        assert!(!createfile_diag_hit_should_log(31));
+        assert!(createfile_diag_hit_should_log(32));
     }
 
     #[test]

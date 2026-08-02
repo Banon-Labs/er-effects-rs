@@ -89,6 +89,8 @@ Twelfth slice on `refactor/s6b3a-ntcreatefile-diag-core-20260802`: move NtCreate
 
 Thirteenth slice on `refactor/s6b3b-shgetfolderpath-core-20260802`: move SHGetFolderPathW APPDATA redirect classification and output-buffer writing into host-testable `er-save-redirect` helpers. Product still owns first-load/root counters, original-call trampoline, and telemetry logging.
 
+Fourteenth slice on `refactor/s6b3c-createfile-diag-core-20260802`: move CreateFileW save-like/save-file/backup diagnostic classification and log-hit policy into host-testable `er-save-redirect` helpers. Product still owns the save-destination redirect, SteamID observation, direct staging, normalization side effects, original-call trampoline, counters, and telemetry logging.
+
 Gate: Windows-target check plus a no-runtime hook-install smoke if available. Runtime proof comes after this, not before.
 
 ### S6b.3: boot-hold/title-flow seam
