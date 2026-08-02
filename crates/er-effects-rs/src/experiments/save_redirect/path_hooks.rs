@@ -308,7 +308,7 @@ fn normalize_env_save_file_to_known_steam_id(path: &Path, steam_id: u64, reason:
 }
 
 /// One-shot latch for the "no configured save file" line above (see its comment).
-static SAVE_STEAM_ID_NORMALIZE_NO_SOURCE_LOGGED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SAVE_STEAM_ID_NORMALIZE_NO_SOURCE_LOGGED: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) fn normalize_env_save_file_to_active_steam_id_once(base: usize, reason: &str) {
     if SAVE_STEAM_ID_ENV_NORMALIZE_DONE.load(Ordering::SeqCst) != 0

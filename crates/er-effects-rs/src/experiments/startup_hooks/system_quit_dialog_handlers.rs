@@ -526,7 +526,7 @@ fn system_quit_path_from_windows_picker(path: &[u16]) -> Option<String> {
     String::from_utf16(&path[..end]).ok()
 }
 
-fn system_quit_windows_path_for_log(path: &str) -> String {
+pub(crate) fn system_quit_windows_path_for_log(path: &str) -> String {
     if let Some(rest) = path
         .strip_prefix("Z:\\")
         .or_else(|| path.strip_prefix("z:\\"))
