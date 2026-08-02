@@ -30,10 +30,9 @@ include!("startup_hooks/loading_cover/startup_modals_menu_cover.rs");
 include!("startup_hooks/loading_cover/loading_cover_save_slot.rs");
 include!("startup_hooks/loading_cover/portrait_equip_oracle.rs");
 include!("startup_hooks/loading_cover/profile_table_gfx_files.rs");
-include!("startup_hooks/loading_cover/scaleform_descriptor_guard.rs");
 include!("startup_hooks/loading_cover/title_resources_stats_text.rs");
-include!("startup_hooks/loading_cover/window_reconfig_observer.rs");
-include!("startup_hooks/loading_cover/dlc_roots_self_heal.rs");
+mod loading_cover;
+pub(crate) use loading_cover::*;
 
 // Product (B): customized System>Quit / profile-switch / save-flow menu.
 include!("startup_hooks/quit_menu/profile_rows_system_quit_menu.rs");
