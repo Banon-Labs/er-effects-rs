@@ -105,6 +105,8 @@ Twentieth slice on `refactor/s6b5a-direct-stage-status-core-20260802`: move dire
 
 Twenty-first slice on `refactor/s6b5b-direct-stage-dirs-core-20260802`: move the direct-stage case-directory convention (`eldenring` and `EldenRing`) into `er-save-redirect::direct_stage_case_dirs`. Product still owns when to create those directories and how to log stage state.
 
+Twenty-second slice on `refactor/s6b5c-direct-stage-request-plan-20260802`: move direct-stage requested-path planning into `er-save-redirect::plan_direct_stage_request`, returning either a SteamID64 or a no-SteamID diagnostic kind. Product still owns counters, capped logging, directory creation timing, and staging side effects.
+
 Gate: Windows-target check plus a no-runtime hook-install smoke if available. Runtime proof comes after this, not before.
 
 ### S6b.3: boot-hold/title-flow seam
