@@ -1280,6 +1280,58 @@ pub fn plan_validated_save_source(path: PathBuf, writeback_allowed: bool) -> Sav
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DirectStageFileStatus {
+    pub exists: bool,
+    pub bytes: Option<u64>,
+}
+
+pub fn probe_direct_stage_file_status(
+    root: Option<&Path>,
+    source_file: Option<&Path>,
+    steam_id: u64,
+) -> DirectStageFileStatus {
+    if steam_id == 0 {
+        return DirectStageFileStatus {
+            exists: false,
+            bytes: None,
+        };
+    }
+    let Some(root) = root else {
+        return DirectStageFileStatus {
+            exists: false,
+            bytes: None,
+        };
+    };
+    let staged_is_co2 = source_file
+        .and_then(Path::extension)
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("co2"));
+    let candidates = if staged_is_co2 {
+        [("eldenring", "er0000.co2"), ("EldenRing", "ER0000.co2")]
+    } else {
+        [("eldenring", "er0000.sl2"), ("EldenRing", "ER0000.sl2")]
+    };
+    for (dir_name, file_name) in candidates {
+        let path = root
+            .join(dir_name)
+            .join(steam_id.to_string())
+            .join(file_name);
+        if let Ok(meta) = std::fs::metadata(path)
+            && meta.is_file()
+        {
+            return DirectStageFileStatus {
+                exists: true,
+                bytes: Some(meta.len()),
+            };
+        }
+    }
+    DirectStageFileStatus {
+        exists: false,
+        bytes: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1766,6 +1818,65 @@ mod tests {
                 root_wide: WineRootWide("Z:\\prefix".encode_utf16().collect()),
             }
         );
+    }
+
+    #[test]
+    fn probes_direct_stage_file_status_for_sl2_and_co2_names() {
+        let unique = format!(
+            "er-save-redirect-status-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique);
+        let steam_id = 76561197960265729_u64;
+        let sl2 = root
+            .join("EldenRing")
+            .join(steam_id.to_string())
+            .join("ER0000.sl2");
+        std::fs::create_dir_all(sl2.parent().unwrap()).unwrap();
+        std::fs::write(&sl2, b"sl2").unwrap();
+
+        assert_eq!(
+            probe_direct_stage_file_status(Some(&root), None, steam_id),
+            DirectStageFileStatus {
+                exists: true,
+                bytes: Some(3)
+            }
+        );
+
+        let co2_source = Path::new("picked.co2");
+        assert_eq!(
+            probe_direct_stage_file_status(Some(&root), Some(co2_source), steam_id),
+            DirectStageFileStatus {
+                exists: false,
+                bytes: None
+            }
+        );
+        let co2 = root
+            .join("eldenring")
+            .join(steam_id.to_string())
+            .join("er0000.co2");
+        std::fs::create_dir_all(co2.parent().unwrap()).unwrap();
+        std::fs::write(&co2, b"co2!!").unwrap();
+        assert_eq!(
+            probe_direct_stage_file_status(Some(&root), Some(co2_source), steam_id),
+            DirectStageFileStatus {
+                exists: true,
+                bytes: Some(5)
+            }
+        );
+        assert_eq!(
+            probe_direct_stage_file_status(Some(&root), None, 0),
+            DirectStageFileStatus {
+                exists: false,
+                bytes: None
+            }
+        );
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
