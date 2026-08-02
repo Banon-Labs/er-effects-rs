@@ -5,10 +5,11 @@ use er_save_redirect::{
     SAVE_REDIRECT_ORIG_GETATTREXW, SAVE_REDIRECT_ORIG_GETATTRW, SAVE_REDIRECT_ORIG_GETDISKFREEW,
     SAVE_REDIRECT_ORIG_NTCREATEFILE, SAVE_REDIRECT_ORIG_NTQUERYVOLINFO,
     SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW, SaveNtCreateDetourGuard, SaveRedirectHookDetours,
-    fill_get_disk_free_space_ex_outputs, install_core_createfilew_hook,
-    install_redirect_save_hooks_when_ready, is_ntquery_volume_free_space_class,
-    is_save_file_or_backup_path, ntquery_volume_available_units, patch_ntquery_volume_free_space,
-    save_detour_disk_io_allowed, wide_ends_with_ci_ascii,
+    classify_nt_create_file_save_path, fill_get_disk_free_space_ex_outputs,
+    install_core_createfilew_hook, install_redirect_save_hooks_when_ready,
+    is_ntquery_volume_free_space_class, nt_createfile_diag_hit_should_log,
+    ntquery_volume_available_units, patch_ntquery_volume_free_space, save_detour_disk_io_allowed,
+    wide_ends_with_ci_ascii,
 };
 
 type ShGetFolderPathWFn = unsafe extern "system" fn(isize, i32, isize, u32, *mut u16) -> i32;
@@ -120,7 +121,7 @@ pub(super) unsafe extern "system" fn save_ntcreatefile_diag_hook(
             )
         };
     }
-    let mut save_diag: Option<(String, bool)> = None;
+    let mut save_diag: Option<(String, bool, bool)> = None;
     if !object_attributes.is_null() {
         let objname = unsafe { *(object_attributes.add(0x10) as *const usize) } as *const u8;
         if !objname.is_null() {
@@ -129,43 +130,30 @@ pub(super) unsafe extern "system" fn save_ntcreatefile_diag_hook(
             if !buf.is_null() && len_bytes >= 2 && len_bytes < 0x2000 {
                 let nwch = len_bytes / 2;
                 let path = unsafe { std::slice::from_raw_parts(buf, nwch) };
-                const ELDENRING_SEG: &[u16] = &[
-                    b'e' as u16,
-                    b'l' as u16,
-                    b'd' as u16,
-                    b'e' as u16,
-                    b'n' as u16,
-                    b'r' as u16,
-                    b'i' as u16,
-                    b'n' as u16,
-                    b'g' as u16,
-                ];
-                const SL2D: &[u16] = &[b'.' as u16, b's' as u16, b'l' as u16, b'2' as u16];
                 // Focus the (capped) budget on ER0000.sl2 opens ONLY -- early boot churns hundreds
                 // of "eldenring"-dir opens (graphicsconfig.xml, etc.) that otherwise exhaust the cap
                 // before the boot save READ/WRITE we care about. The .sl2 opens ARE the save commit.
-                let _ = ELDENRING_SEG;
-                let is_sl2 = wide_ends_with_ci_ascii(path, SL2D);
-                if is_save_file_or_backup_path(path) {
+                let diag = classify_nt_create_file_save_path(path, access);
+                if diag.should_wait_for_missing_save_dialog() {
                     wait_for_missing_save_dialog_if_pending(path);
                 }
-                if is_sl2 {
+                if diag.should_observe_steam_id() {
                     observe_steam_id64_from_save_path(path);
-                    let is_write = access & 0x4000_0000 != 0 || access & 0x2 != 0;
-                    if !is_write {
-                        if let Ok(base) = game_module_base() {
-                            normalize_env_save_file_to_active_steam_id_once(
-                                base,
-                                "ntcreatefile-save-open",
-                            );
-                        }
+                    if diag.should_normalize_on_read()
+                        && let Ok(base) = game_module_base()
+                    {
+                        normalize_env_save_file_to_active_steam_id_once(
+                            base,
+                            "ntcreatefile-save-open",
+                        );
                     }
                 }
-                if is_sl2
-                    && SAVE_NTCREATE_DIAG_LOGGED.load(Ordering::SeqCst) < SAVE_NTCREATE_DIAG_MAX
-                {
+                if diag.should_capture_diag_log(
+                    SAVE_NTCREATE_DIAG_LOGGED.load(Ordering::SeqCst),
+                    SAVE_NTCREATE_DIAG_MAX,
+                ) {
                     // UTF-8 Lossy: log-only decode of an NT path for probe diagnosis.
-                    save_diag = Some((String::from_utf16_lossy(path), is_sl2));
+                    save_diag = Some((String::from_utf16_lossy(path), diag.is_sl2, diag.is_write));
                 }
             }
         }
@@ -187,14 +175,13 @@ pub(super) unsafe extern "system" fn save_ntcreatefile_diag_hook(
             ea_len,
         )
     };
-    if let Some((p, is_sl2)) = save_diag {
+    if let Some((p, is_sl2, is_write)) = save_diag {
         // Rate-limit: log the first 8 .sl2 opens, then only at power-of-two hit counts (the capture
         // pre-gate above still bounds this counter at SAVE_NTCREATE_DIAG_MAX).
         let hits = SAVE_NTCREATE_DIAG_LOGGED.fetch_add(1, Ordering::SeqCst) + 1;
-        if hits <= 8 || hits.is_power_of_two() {
+        if nt_createfile_diag_hit_should_log(hits) {
             // ret is NTSTATUS (0 == STATUS_SUCCESS). is_write keys off GENERIC_WRITE (0x40000000)
             // or FILE_WRITE_DATA (0x2) so a failing save COMMIT is unambiguous in the log.
-            let is_write = access & 0x4000_0000 != 0 || access & 0x2 != 0;
             append_autoload_debug(format_args!(
                 "save-override: NtCreateFile diag access=0x{access:x} disp={disposition} opts=0x{options:x} write={is_write} sl2={is_sl2} diag_hits={hits} '{p}'"
             ));

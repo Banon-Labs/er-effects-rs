@@ -556,6 +556,54 @@ pub unsafe fn patch_ntquery_volume_free_space(
     }
 }
 
+/// `GENERIC_WRITE` access bit used by NtCreateFile diagnostics.
+pub const NT_CREATEFILE_GENERIC_WRITE: u32 = 0x4000_0000;
+/// `FILE_WRITE_DATA` access bit used by NtCreateFile diagnostics.
+pub const NT_CREATEFILE_FILE_WRITE_DATA: u32 = 0x2;
+
+/// Shared classification for the NtCreateFile diagnostic detour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NtCreateFileSavePathDiag {
+    pub is_save_file_or_backup: bool,
+    pub is_sl2: bool,
+    pub is_write: bool,
+}
+
+impl NtCreateFileSavePathDiag {
+    pub fn should_wait_for_missing_save_dialog(self) -> bool {
+        self.is_save_file_or_backup
+    }
+
+    pub fn should_observe_steam_id(self) -> bool {
+        self.is_sl2
+    }
+
+    pub fn should_normalize_on_read(self) -> bool {
+        self.is_sl2 && !self.is_write
+    }
+
+    pub fn should_capture_diag_log(self, logged: usize, max: usize) -> bool {
+        self.is_sl2 && logged < max
+    }
+}
+
+pub fn nt_createfile_access_is_write(access: u32) -> bool {
+    access & NT_CREATEFILE_GENERIC_WRITE != 0 || access & NT_CREATEFILE_FILE_WRITE_DATA != 0
+}
+
+pub fn classify_nt_create_file_save_path(path: &[u16], access: u32) -> NtCreateFileSavePathDiag {
+    const SL2D: &[u16] = &[b'.' as u16, b's' as u16, b'l' as u16, b'2' as u16];
+    NtCreateFileSavePathDiag {
+        is_save_file_or_backup: is_save_file_or_backup_path(path),
+        is_sl2: wide_ends_with_ci_ascii(path, SL2D),
+        is_write: nt_createfile_access_is_write(access),
+    }
+}
+
+pub fn nt_createfile_diag_hit_should_log(hits: usize) -> bool {
+    hits <= 8 || hits.is_power_of_two()
+}
+
 /// Why a candidate save source was rejected before redirect planning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SaveSourceRejection {
@@ -1092,6 +1140,44 @@ mod tests {
         state.install_redirect_once(|| redirect_calls.set(redirect_calls.get() + 1));
         state.install_redirect_once(|| redirect_calls.set(redirect_calls.get() + 1));
         assert_eq!(redirect_calls.get(), 1);
+    }
+
+    #[test]
+    fn classifies_ntcreatefile_save_paths_for_callbacks() {
+        let read = wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\76561197960265729\ER0000.sl2");
+        let diag = classify_nt_create_file_save_path(&read, 0);
+        assert_eq!(
+            diag,
+            NtCreateFileSavePathDiag {
+                is_save_file_or_backup: true,
+                is_sl2: true,
+                is_write: false,
+            }
+        );
+        assert!(diag.should_wait_for_missing_save_dialog());
+        assert!(diag.should_observe_steam_id());
+        assert!(diag.should_normalize_on_read());
+        assert!(diag.should_capture_diag_log(7, 8));
+        assert!(!diag.should_capture_diag_log(8, 8));
+
+        let write = classify_nt_create_file_save_path(&read, NT_CREATEFILE_GENERIC_WRITE);
+        assert!(write.is_write);
+        assert!(!write.should_normalize_on_read());
+
+        let backup =
+            wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\76561197960265729\ER0000.sl2.bak");
+        let backup_diag = classify_nt_create_file_save_path(&backup, NT_CREATEFILE_FILE_WRITE_DATA);
+        assert!(backup_diag.is_save_file_or_backup);
+        assert!(!backup_diag.is_sl2);
+        assert!(backup_diag.is_write);
+    }
+
+    #[test]
+    fn ntcreatefile_diag_hit_logging_keeps_first_eight_and_powers_of_two() {
+        assert!((1..=8).all(nt_createfile_diag_hit_should_log));
+        assert!(!nt_createfile_diag_hit_should_log(9));
+        assert!(!nt_createfile_diag_hit_should_log(15));
+        assert!(nt_createfile_diag_hit_should_log(16));
     }
 
     #[test]
