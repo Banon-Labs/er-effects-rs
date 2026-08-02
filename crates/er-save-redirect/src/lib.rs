@@ -748,6 +748,33 @@ pub fn createfile_diag_hit_should_log(hits: usize) -> bool {
     hits <= 8 || hits.is_power_of_two()
 }
 
+/// Shared post-save-destination CreateFileW open plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateFileOpenPlan {
+    pub diag: CreateFileSavePathDiag,
+    pub redirected: Option<Vec<u16>>,
+}
+
+impl CreateFileOpenPlan {
+    pub fn should_wait_for_missing_save_dialog(&self) -> bool {
+        self.diag.should_wait_for_missing_save_dialog
+    }
+
+    pub fn should_normalize_on_save_open(&self) -> bool {
+        self.diag.is_save_file
+    }
+}
+
+pub fn plan_create_file_open(
+    path: &[u16],
+    redirect_path: impl FnOnce(&[u16]) -> Option<Vec<u16>>,
+) -> CreateFileOpenPlan {
+    CreateFileOpenPlan {
+        diag: classify_create_file_save_path(path),
+        redirected: redirect_path(path),
+    }
+}
+
 /// Why a candidate save source was rejected before redirect planning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SaveSourceRejection {
@@ -1384,6 +1411,23 @@ mod tests {
         assert!(!graphics_diag.is_save_file);
         assert!(!graphics_diag.should_wait_for_missing_save_dialog);
         assert!(!classify_create_file_save_path(&wide_path(r"C:\tmp\notes.txt")).save_like);
+    }
+
+    #[test]
+    fn plans_createfile_open_redirect_and_side_effect_flags() {
+        let save = wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\76561197960265729\ER0000.sl2");
+        let plan = plan_create_file_open(&save, |path| Some(path.to_vec()));
+        assert!(plan.diag.save_like);
+        assert!(plan.should_wait_for_missing_save_dialog());
+        assert!(plan.should_normalize_on_save_open());
+        assert_eq!(plan.redirected.as_deref(), Some(save.as_slice()));
+
+        let graphics = wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\GraphicsConfig.xml");
+        let plan = plan_create_file_open(&graphics, |_| None);
+        assert!(plan.diag.save_like);
+        assert!(!plan.should_wait_for_missing_save_dialog());
+        assert!(!plan.should_normalize_on_save_open());
+        assert!(plan.redirected.is_none());
     }
 
     #[test]

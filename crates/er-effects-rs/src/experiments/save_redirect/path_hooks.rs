@@ -24,11 +24,11 @@ use er_save_redirect::{
     SAVE_REDIRECT_ORIG_FINDFIRSTW, SAVE_REDIRECT_ORIG_GETATTREXW, SAVE_REDIRECT_ORIG_GETATTRW,
     SAVE_REDIRECT_ORIG_GETDISKFREEW, SAVE_REDIRECT_ORIG_NTCREATEFILE,
     SAVE_REDIRECT_ORIG_NTQUERYVOLINFO, SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW, SaveDetourDepth,
-    SaveHookInstallState, SavePathKind, classify_copyfile_endpoint, classify_create_file_save_path,
-    classify_save_like_path, classify_save_query_path, createfile_diag_hit_should_log,
-    direct_stage_no_steamid_kind, is_save_file_or_backup_path,
-    redirect_wide_save_path_with_side_effects, save_detour_disk_io_allowed,
-    steam_id64_from_wide_save_path, wide_contains_ci_ascii, wide_ends_with_ci_ascii,
+    SaveHookInstallState, SavePathKind, classify_copyfile_endpoint, classify_save_like_path,
+    classify_save_query_path, createfile_diag_hit_should_log, direct_stage_no_steamid_kind,
+    is_save_file_or_backup_path, plan_create_file_open, redirect_wide_save_path_with_side_effects,
+    save_detour_disk_io_allowed, steam_id64_from_wide_save_path, wide_contains_ci_ascii,
+    wide_ends_with_ci_ascii,
 };
 use er_telemetry::counters::{
     SAVE_REDIRECT_DETOUR_MAX_DEPTH, SAVE_REDIRECT_DETOUR_REENTRANT_PASSTHROUGHS,
@@ -1379,7 +1379,8 @@ pub(super) unsafe extern "system" fn save_redirect_createfilew_hook(
         // Diagnostic: confirm the hook is live (log the very first call), then log save-LIKE paths
         // (contain "eldenring" or end .sl2/.co2/.bak) so we can see the exact save path form even when
         // the redirect filter does NOT match -- distinguishes "hook never fires" from "filter misses".
-        let diag = classify_create_file_save_path(path);
+        let plan = plan_create_file_open(path, save_redirect_path);
+        let diag = plan.diag;
         if diag.save_like {
             record_save_like_createfile_path_kind(path);
             // ATTRIBUTION, not a gate. A modal OS file dialog enumerates folders on THIS thread, so
@@ -1406,16 +1407,15 @@ pub(super) unsafe extern "system" fn save_redirect_createfilew_hook(
                 ));
             }
         }
-        if diag.should_wait_for_missing_save_dialog {
+        if plan.should_wait_for_missing_save_dialog() {
             wait_for_missing_save_dialog_if_pending(path);
         }
-        let redirected_path = save_redirect_path(path);
-        if diag.is_save_file {
+        if plan.should_normalize_on_save_open() {
             if let Ok(base) = game_module_base() {
                 normalize_env_save_file_to_active_steam_id_once(base, "createfile-save-open");
             }
         }
-        if let Some(redirected) = redirected_path {
+        if let Some(redirected) = plan.redirected {
             let ret = unsafe {
                 call(
                     redirected.as_ptr(),
