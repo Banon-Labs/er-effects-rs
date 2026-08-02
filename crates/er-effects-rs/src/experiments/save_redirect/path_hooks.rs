@@ -25,13 +25,13 @@ use er_save_redirect::{
     SAVE_REDIRECT_ORIG_GETATTRW, SAVE_REDIRECT_ORIG_GETDISKFREEW, SAVE_REDIRECT_ORIG_NTCREATEFILE,
     SAVE_REDIRECT_ORIG_NTQUERYVOLINFO, SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW, SaveDetourDepth,
     SaveHookInstallState, SavePathKind, SavePathTelemetryBucket, classify_copyfile_endpoint,
-    classify_save_query_path, createfile_diag_hit_should_log, direct_stage_case_dirs,
-    is_save_file_or_backup_path, plan_create_file_open, plan_direct_stage_request,
-    plan_save_path_telemetry, plan_save_query_path, plausible_steam_id64,
-    probe_direct_stage_file_status, redirect_wide_save_path_with_side_effects,
-    save_detour_disk_io_allowed, save_file_is_readonly, save_normalize_hash_bytes,
-    steam_id64_from_dir_name, steam_id64_from_wide_save_path, wide_contains_ci_ascii,
-    wide_ends_with_ci_ascii,
+    classify_save_query_path, createfile_diag_hit_should_log, default_save_file_path,
+    direct_stage_case_dirs, is_save_file_or_backup_path, plan_create_file_open,
+    plan_direct_stage_request, plan_save_path_telemetry, plan_save_query_path,
+    plausible_steam_id64, probe_direct_stage_file_status,
+    redirect_wide_save_path_with_side_effects, save_detour_disk_io_allowed, save_file_is_readonly,
+    save_normalize_hash_bytes, steam_id64_from_dir_name, steam_id64_from_wide_save_path,
+    wide_contains_ci_ascii, wide_ends_with_ci_ascii,
 };
 use er_telemetry::counters::{
     SAVE_REDIRECT_DETOUR_MAX_DEPTH, SAVE_REDIRECT_DETOUR_REENTRANT_PASSTHROUGHS,
@@ -745,9 +745,9 @@ fn default_save_with_character(path: PathBuf) -> Option<PathBuf> {
 }
 
 fn default_save_file_for_steam_id64(steam_id: u64) -> Option<PathBuf> {
-    let dir = default_save_root()?.join(steam_id.to_string());
+    let root = default_save_root()?;
     validated_default_save_file(
-        dir.join(active_default_save_file_name()),
+        default_save_file_path(&root, steam_id, active_default_save_file_name()),
         "active-default-save",
     )
     .and_then(default_save_with_character)
@@ -757,7 +757,7 @@ fn default_save_file_candidates() -> Vec<(PathBuf, u64)> {
     let Some(root) = default_save_root() else {
         return Vec::new();
     };
-    let Ok(entries) = std::fs::read_dir(root) else {
+    let Ok(entries) = std::fs::read_dir(&root) else {
         return Vec::new();
     };
     entries
@@ -767,9 +767,8 @@ fn default_save_file_candidates() -> Vec<(PathBuf, u64)> {
                 .file_name()
                 .to_str()
                 .and_then(steam_id64_from_dir_name)?;
-            let dir = entry.path();
             validated_default_save_file(
-                dir.join(active_default_save_file_name()),
+                default_save_file_path(&root, steam_id, active_default_save_file_name()),
                 "default-save-candidate",
             )
             .and_then(default_save_with_character)
@@ -811,11 +810,11 @@ fn direct_mode_native_active_save_file() -> Option<PathBuf> {
     let steam_id = OBSERVED_ACTIVE_STEAM_ID64.load(Ordering::SeqCst);
     plausible_steam_id64(steam_id)?;
     ensure_direct_stage_for_steam_id(steam_id);
-    Some(
-        default_save_root()?
-            .join(steam_id.to_string())
-            .join(active_default_save_file_name()),
-    )
+    Some(default_save_file_path(
+        &default_save_root()?,
+        steam_id,
+        active_default_save_file_name(),
+    ))
 }
 
 /// Runtime-active save file for System->Quit character switching. A direct/picked save is a READ-ONLY
