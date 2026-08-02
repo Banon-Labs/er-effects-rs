@@ -28,7 +28,7 @@ use er_save_redirect::{
     classify_save_query_path, createfile_diag_hit_should_log, direct_stage_case_dirs,
     is_save_file_or_backup_path, plan_create_file_open, plan_direct_stage_request,
     plan_save_path_telemetry, plan_save_query_path, probe_direct_stage_file_status,
-    redirect_wide_save_path_with_side_effects, save_detour_disk_io_allowed,
+    redirect_wide_save_path_with_side_effects, save_detour_disk_io_allowed, save_file_is_readonly,
     steam_id64_from_wide_save_path, wide_contains_ci_ascii, wide_ends_with_ci_ascii,
 };
 use er_telemetry::counters::{
@@ -600,10 +600,6 @@ fn validated_save_file_path(path: PathBuf) -> Option<PathBuf> {
             None
         }
     }
-}
-
-fn save_file_is_readonly(path: &Path) -> bool {
-    std::fs::metadata(path).is_ok_and(|meta| meta.permissions().readonly())
 }
 
 /// Read-only is NEVER a reason to refuse a save, at any surface. Loading is a pure READ and succeeds
