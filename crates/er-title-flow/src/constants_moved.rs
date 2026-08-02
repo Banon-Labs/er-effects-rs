@@ -507,6 +507,16 @@ pub const FD4_FILECAP_FLAGS_89_OFFSET: usize = 0x89;
 /// deref-depth/timing artifact and the conclusion drawn from it does not follow.
 pub const DL_FILE_DEVICE_MANAGER_SINGLETON_RVA: usize = 0x0484_64a8;
 
+/// `FUN_140e05fb0(CSDlcImp*, bool)` -- the DLC virtual-root REFILL: re-queries Steam DLC ownership
+/// and calls `CSDlcImp::AddVirtualFileRoots`.
+pub(crate) const DLC_ROOTS_REFILL_RVA: usize = 0x00e0_5fb0;
+
+/// `GLOBAL_CSDlc` -- the `CSDlcImp` singleton.
+pub(crate) const CSDLC_SINGLETON_RVA: usize = 0x03d8_6bd8;
+
+/// The DLIO alias every failing `m28` read resolves through.
+pub(crate) const DLC_ROOT_ALIAS_NAME: &str = "mapstudio_dlc2";
+
 /// `DLFileDeviceManager::virtualRoots` -- a `FileDeviceVirtualRootVector`
 /// (`allocator +0x00`, `start +0x08`, `end +0x10`, `capacity +0x18`).
 ///

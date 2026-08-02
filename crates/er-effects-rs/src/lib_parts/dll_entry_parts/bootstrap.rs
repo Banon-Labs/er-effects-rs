@@ -148,6 +148,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // can execute moved code; pure fn-pointer writes).
     er_title_flow::install_host(er_title_flow::TitleFlowHost {
         append_autoload_debug: crate::telemetry::append_autoload_debug,
+        append_crash_log: crate::telemetry::append_crash_log,
         timeline_event: crate::telemetry::timeline_event,
         game_directory_path: crate::telemetry::game_directory_path,
         game_data_man_ptr_or_null: crate::constants::game_data_man_ptr_or_null,
