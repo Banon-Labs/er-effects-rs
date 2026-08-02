@@ -11,6 +11,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 STAGE_SCRIPT = REPO_ROOT / "scripts" / "stage-autoload-release.sh"
+MEASURE_SCRIPT = REPO_ROOT / ".auto" / "measure.sh"
 
 EXPECTED_PROFILE = """profileVersion = "v1"
 
@@ -41,7 +42,15 @@ EXPECTED_SPLASH_SKIP = """# Copy this file to er-effects-splash-skip.txt next to
 """
 
 
+def require_measure_reads_title_flow() -> None:
+    measure = MEASURE_SCRIPT.read_text(encoding="utf-8", errors="replace")
+    if "crates/er-title-flow/src" not in measure or "title_flow" not in measure:
+        raise SystemExit("measure must read er-title-flow as part of the logical autoload module")
+
+
 def main() -> int:
+    require_measure_reads_title_flow()
+
     with tempfile.TemporaryDirectory(prefix="er-effects-autoload-stage-") as tmp:
         tmp_path = Path(tmp)
         er_dll = tmp_path / "er_effects_rs.dll"

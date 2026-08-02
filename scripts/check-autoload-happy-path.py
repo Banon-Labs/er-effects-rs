@@ -718,6 +718,11 @@ def main() -> int:
         failures,
     )
     require(
+        "crates/er-title-flow/src" in measure and "title_flow" in measure,
+        "measure must include the er-title-flow crate in the logical autoload module source",
+        failures,
+    )
+    require(
         all(name in measure for name in READINESS_HELPERS),
         "measure must check every semantic readiness helper",
         failures,
