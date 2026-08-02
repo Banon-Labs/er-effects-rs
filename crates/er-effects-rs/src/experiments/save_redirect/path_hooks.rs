@@ -26,9 +26,9 @@ use er_save_redirect::{
     SAVE_REDIRECT_ORIG_NTQUERYVOLINFO, SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW, SaveDetourDepth,
     SaveHookInstallState, SavePathKind, classify_copyfile_endpoint, classify_save_like_path,
     classify_save_query_path, createfile_diag_hit_should_log, direct_stage_no_steamid_kind,
-    is_save_file_or_backup_path, plan_create_file_open, redirect_wide_save_path_with_side_effects,
-    save_detour_disk_io_allowed, steam_id64_from_wide_save_path, wide_contains_ci_ascii,
-    wide_ends_with_ci_ascii,
+    is_save_file_or_backup_path, plan_create_file_open, plan_save_query_path,
+    redirect_wide_save_path_with_side_effects, save_detour_disk_io_allowed,
+    steam_id64_from_wide_save_path, wide_contains_ci_ascii, wide_ends_with_ci_ascii,
 };
 use er_telemetry::counters::{
     SAVE_REDIRECT_DETOUR_MAX_DEPTH, SAVE_REDIRECT_DETOUR_REENTRANT_PASSTHROUGHS,
@@ -1509,8 +1509,8 @@ pub(super) unsafe extern "system" fn save_redirect_copyfilew_hook(
 /// "eldenring"-containing paths (capped, shared budget) so we see the exact existence-check path
 /// form, and returns the redirected NUL-terminated path when the save filter matches (else None).
 fn save_path_api_redirect(api: &str, path: &[u16]) -> Option<Vec<u16>> {
-    let redirected = save_redirect_path(path);
-    let diag = classify_save_query_path(path);
+    let plan = plan_save_query_path(path, save_redirect_path);
+    let diag = plan.diag;
     // DEDICATED save-FILE query log (own budget; immune to the early-boot churn that exhausts the
     // shared cap below) -- captures the exact ER0000.sl2 existence/enum path + its <steamid> component.
     if diag.should_record_path_kind() {
@@ -1524,7 +1524,7 @@ fn save_path_api_redirect(api: &str, path: &[u16]) -> Option<Vec<u16>> {
         if d < SAVE_SL2_QUERY_MAX {
             // UTF-8 Lossy: log-only decode of the save-file query path for probe diagnosis.
             let p = String::from_utf16_lossy(path);
-            let did = if redirected.is_some() {
+            let did = if plan.redirected.is_some() {
                 "REDIRECT"
             } else {
                 "pass"
@@ -1541,7 +1541,7 @@ fn save_path_api_redirect(api: &str, path: &[u16]) -> Option<Vec<u16>> {
             SAVE_CREATEFILEW_DIAG_LOGGED.store(d + 1, Ordering::SeqCst);
             // UTF-8 Lossy: log-only decode of a Windows wide path for probe diagnosis.
             let p = String::from_utf16_lossy(path);
-            let did = if redirected.is_some() {
+            let did = if plan.redirected.is_some() {
                 "REDIRECT"
             } else {
                 "pass"
@@ -1549,7 +1549,7 @@ fn save_path_api_redirect(api: &str, path: &[u16]) -> Option<Vec<u16>> {
             append_autoload_debug(format_args!("save-override: {api} diag {did} '{p}'"));
         }
     }
-    redirected
+    plan.redirected
 }
 
 /// GetFileAttributesW detour: redirect save-path existence checks to the env dir.

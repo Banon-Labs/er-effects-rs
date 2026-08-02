@@ -706,6 +706,22 @@ pub fn classify_save_query_path(path: &[u16]) -> SaveQueryPathDiag {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaveQueryPathPlan {
+    pub diag: SaveQueryPathDiag,
+    pub redirected: Option<Vec<u16>>,
+}
+
+pub fn plan_save_query_path(
+    path: &[u16],
+    redirect_path: impl FnOnce(&[u16]) -> Option<Vec<u16>>,
+) -> SaveQueryPathPlan {
+    SaveQueryPathPlan {
+        diag: classify_save_query_path(path),
+        redirected: redirect_path(path),
+    }
+}
+
 /// Shared classification for CreateFileW save redirect diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CreateFileSavePathDiag {
@@ -1361,6 +1377,21 @@ mod tests {
         let non_save = wide_path(r"C:\tmp\notes.txt");
         let plan = classify_copyfile_endpoint(&non_save, |_| None);
         assert!(!plan.should_wait_for_missing_save_dialog);
+        assert!(plan.redirected.is_none());
+    }
+
+    #[test]
+    fn plans_query_path_redirect_and_diagnostics() {
+        let save = wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\76561197960265729\ER0000.sl2");
+        let plan = plan_save_query_path(&save, |path| Some(path.to_vec()));
+        assert!(plan.diag.contains_eldenring);
+        assert!(plan.diag.contains_er0000);
+        assert!(plan.diag.should_record_path_kind());
+        assert_eq!(plan.redirected.as_deref(), Some(save.as_slice()));
+
+        let other = wide_path(r"C:\tmp\other.bin");
+        let plan = plan_save_query_path(&other, |_| None);
+        assert!(!plan.diag.should_record_path_kind());
         assert!(plan.redirected.is_none());
     }
 
