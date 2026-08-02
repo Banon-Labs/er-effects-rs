@@ -368,7 +368,7 @@ unsafe fn queue_save_redirect_hook(
 /// `install_save_redirect_hooks` -- and especially the Wine-only free-space overrides -- stays
 /// behind its own gate. Idempotent; safe to call from both installers.
 pub(crate) fn install_save_file_core_hooks() {
-    SAVE_FILE_OPS_CORE_ONCE.call_once(|| {
+    SAVE_HOOK_INSTALL_STATE.install_core_once(|| {
         match unsafe { MH_Initialize() } {
             MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
             status => {
@@ -408,7 +408,7 @@ pub(crate) fn install_save_file_core_hooks() {
         }
         match unsafe { MH_ApplyQueued() } {
             MH_STATUS::MH_OK => {
-                SAVE_FILE_OPS_CORE_CREATEFILEW_INSTALLED.store(1, Ordering::SeqCst);
+                SAVE_HOOK_INSTALL_STATE.mark_core_createfilew_installed();
                 std::mem::forget(hook);
                 append_autoload_debug(format_args!(
                     "save-override: core INSTALLED CreateFileW(0x{create_addr:x}) -- pass-through until a redirect dir or a save destination is armed"
@@ -430,7 +430,7 @@ pub(crate) fn install_save_file_core_hooks() {
 /// long finished before a user can reach System>Quit, so refusing to open a dialog until the detour
 /// has settled removes the overlap entirely rather than reasoning about it.
 pub(crate) fn save_file_core_hooks_live() -> bool {
-    SAVE_FILE_OPS_CORE_CREATEFILEW_INSTALLED.load(Ordering::SeqCst) != 0
+    SAVE_HOOK_INSTALL_STATE.core_createfilew_installed()
 }
 
 pub(crate) fn install_save_redirect_hooks() {
@@ -444,7 +444,7 @@ pub(crate) fn install_save_redirect_hooks() {
         ));
         return;
     }
-    SAVE_REDIRECT_INSTALL_ONCE.call_once(|| {
+    SAVE_HOOK_INSTALL_STATE.install_redirect_once(|| {
         match unsafe { MH_Initialize() } {
             MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
             status => {
@@ -465,7 +465,7 @@ pub(crate) fn install_save_redirect_hooks() {
         // same prologue would fail `MH_ERROR_ALREADY_CREATED` and clobber the trampoline, so this
         // installer only makes sure the core ran.
         install_save_file_core_hooks();
-        let create_addr = if SAVE_FILE_OPS_CORE_CREATEFILEW_INSTALLED.load(Ordering::SeqCst) != 0 {
+        let create_addr = if SAVE_HOOK_INSTALL_STATE.core_createfilew_installed() {
             unsafe { kernel32_proc(b"CreateFileW\0") }
         } else {
             append_autoload_debug(format_args!(

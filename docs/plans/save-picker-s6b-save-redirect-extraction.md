@@ -65,6 +65,8 @@ Move `experiments/save_redirect/file_ops.rs` and the remaining state it needs in
 
 First slice on `refactor/s6b2-save-hook-owner-20260802`: move the save-detour reentry/depth guard into `er-save-redirect`. That guard is hook-owner state, is host-testable, and must travel with the eventual Win32/NT hook owner rather than staying buried in product `experiments`. The detour bodies still live in product after this slice.
 
+Second slice on `refactor/s6b2b-save-hook-install-owner-20260802`: move the core/redirect one-shot install gate and core-CreateFileW-live flag shape into `er-save-redirect::SaveHookInstallState`. Product still owns the actual MinHook install calls, but the idempotency/live-state contract now belongs to the shared hook-owner boundary.
+
 Gate: Windows-target check plus a no-runtime hook-install smoke if available. Runtime proof comes after this, not before.
 
 ### S6b.3: boot-hold/title-flow seam
