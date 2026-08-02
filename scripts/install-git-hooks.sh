@@ -6,6 +6,6 @@ repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 chmod +x scripts/hooks/* 2>/dev/null || true
 git config core.hooksPath scripts/hooks
-echo "installed: core.hooksPath -> scripts/hooks (pre-commit runs the fast static guards)"
+echo "installed: core.hooksPath -> scripts/hooks (pre-commit fast static guards; pre-push blocks main and runs local CI)"
 echo "verify:    git config --get core.hooksPath"
-echo "bypass:    git commit --no-verify   (emergency only)"
+echo "bypass:    git commit --no-verify / git push --no-verify   (emergency only; agents must not use this)"
