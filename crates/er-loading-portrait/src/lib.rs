@@ -103,6 +103,8 @@ pub use dlstring_lookat_math::*;
 pub mod stats_lines;
 pub use stats_lines::*;
 
+pub mod portrait_equip;
+
 #[cfg(windows)]
 pub mod stats_loading_text;
 #[cfg(windows)]
