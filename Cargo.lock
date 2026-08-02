@@ -2785,6 +2785,7 @@ dependencies = [
  "er-quit-menu",
  "er-save-loader",
  "er-save-picker",
+ "er-save-redirect",
  "er-save-suppress",
  "er-telemetry",
  "er-title-flow",
@@ -2985,7 +2986,15 @@ name = "er-save-picker-dll"
 version = "0.1.0"
 dependencies = [
  "er-save-picker",
+ "er-save-redirect",
  "windows 0.62.2",
+]
+
+[[package]]
+name = "er-save-redirect"
+version = "0.1.0"
+dependencies = [
+ "er-save-loader",
 ]
 
 [[package]]

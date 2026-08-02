@@ -1,0 +1,15 @@
+# Shared save-source/redirect planning core.
+#
+# S6b.1 deliberately keeps process-wide Win32/NT hooks and boot/title-flow ownership out of this
+# crate. It is host-runnable planning/validation only; runtime hook ownership moves in later slices.
+[package]
+name = "er-save-redirect"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_save_redirect"
+
+[dependencies]
+er-save-loader = { path = "../er-save-loader" }

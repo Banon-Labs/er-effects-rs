@@ -1,4 +1,4 @@
-# S6b save-redirect ownership extraction finding
+# S6b save-redirect ownership extraction
 
 Branch: `refactor/s6b-save-redirect-extraction-20260802`
 Base: S6 `refactor/s6-save-picker-dll-20260802` at `4758cb13`
@@ -6,9 +6,11 @@ Issue: `er-effects-rs-orao`
 
 ## Result
 
-Do **not** fold save-redirect ownership into S6.
+Do **not** fold full save-redirect ownership into S6.
 
 Static inspection shows the missing-save picker completion path is only the front door. A true standalone `er-save-picker-dll` save load also needs the product save-redirect owner and the boot-hold/title-flow owner. Moving just `complete_missing_save_selection_from_picker` would create another surface proof: it could validate a picked path, but it could not make Elden Ring read that save or resume the held boot job.
+
+This branch implements the first safe slice anyway: `crates/er-save-redirect` now owns the host-runnable missing-save state machine and save-source planning/validation. It enforces the exact fixed PC save size (`0x1ba03d0`) for `.sl2`/`.co2`, not a loose minimum, and it exposes the staged-root/direct-file plan without installing runtime hooks.
 
 ## Current ownership chain
 
@@ -47,15 +49,15 @@ So the smallest honest implementation is not "add a callback to S6". It is a new
 
 ### S6b.1: shared save-redirect core crate, no runtime hook move yet
 
-Create `crates/er-save-redirect` and move host-runnable pieces first:
+Implemented on this branch as the first code slice: `crates/er-save-redirect` moves host-runnable pieces first:
 
 - missing-save state machine (`idle` / `pending` / `ready`),
 - save source validation and source plan (`staged root` vs `direct file`),
-- BND4 plausibility validation for picked/configured saves,
+- exact fixed-size `.sl2`/`.co2` plus BND4 validation for picked/configured saves,
 - Wine path-root formatting helpers,
 - direct-stage path planning.
 
-Gate: host tests only. This gives `er-save-picker-dll` a real shared completion planner without installing hooks yet.
+Gate: host tests only. This gives `er-save-picker-dll` a real shared completion planner without installing hooks yet; the standalone shell validates/plans the selected save through this crate, then still stops at surface/staging proof.
 
 ### S6b.2: move the save file hook owner
 

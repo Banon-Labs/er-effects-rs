@@ -1038,7 +1038,7 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
     if let Some(override_path) = switch_save_file_override() {
         match std::fs::read(&override_path) {
             Ok(mut bytes)
-                if bytes.len() as u64 >= crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES =>
+                if bytes.len() as u64 == crate::experiments::SAVE_OVERRIDE_EXPECTED_BYTES =>
             {
                 normalize_save_bytes_to_active_steam_id(
                     base,
@@ -1054,10 +1054,10 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
             }
             Ok(bytes) => {
                 append_autoload_debug(format_args!(
-                    "own-load: switch file override \"{}\" too small ({} bytes < {}) -- falling back to committed/configured",
+                    "own-load: switch file override \"{}\" wrong size ({} bytes != {}) -- falling back to committed/configured",
                     override_path,
                     bytes.len(),
-                    crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES
+                    crate::experiments::SAVE_OVERRIDE_EXPECTED_BYTES
                 ));
             }
             Err(e) => {
@@ -1071,7 +1071,7 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
     if let Some(committed_path) = system_quit_committed_foreign_save_path() {
         match std::fs::read(&committed_path) {
             Ok(mut bytes)
-                if bytes.len() as u64 >= crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES =>
+                if bytes.len() as u64 == crate::experiments::SAVE_OVERRIDE_EXPECTED_BYTES =>
             {
                 normalize_save_bytes_to_active_steam_id(
                     base,
@@ -1087,10 +1087,10 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
             }
             Ok(bytes) => {
                 append_autoload_debug(format_args!(
-                    "own-load: committed foreign save \"{}\" too small ({} bytes < {}) -- falling back to configured/native save-dir",
+                    "own-load: committed foreign save \"{}\" wrong size ({} bytes != {}) -- falling back to configured/native save-dir",
                     committed_path,
                     bytes.len(),
-                    crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES
+                    crate::experiments::SAVE_OVERRIDE_EXPECTED_BYTES
                 ));
             }
             Err(e) => {
@@ -1104,7 +1104,7 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
     if let Some(path) = configured_or_default_save_file() {
         match std::fs::read(&path) {
             Ok(mut bytes)
-                if bytes.len() as u64 >= crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES =>
+                if bytes.len() as u64 == crate::experiments::SAVE_OVERRIDE_EXPECTED_BYTES =>
             {
                 normalize_save_bytes_to_active_steam_id(base, &mut bytes, "own-load-staged-config");
                 append_autoload_debug(format_args!(
@@ -1116,10 +1116,10 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
             }
             Ok(bytes) => {
                 append_autoload_debug(format_args!(
-                    "own-load: staged configured save \"{}\" too small ({} bytes < {}) -- falling back to native save-dir builder",
+                    "own-load: staged configured save \"{}\" wrong size ({} bytes != {}) -- falling back to native save-dir builder",
                     path.display(),
                     bytes.len(),
-                    crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES
+                    crate::experiments::SAVE_OVERRIDE_EXPECTED_BYTES
                 ));
             }
             Err(e) => {
@@ -1194,7 +1194,7 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
     let path = dir_path.join(expected_name);
     let valid = std::fs::metadata(&path)
         .map(|meta| {
-            meta.is_file() && meta.len() >= crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES
+            meta.is_file() && meta.len() == crate::experiments::SAVE_OVERRIDE_EXPECTED_BYTES
         })
         .unwrap_or(false);
     if !valid {

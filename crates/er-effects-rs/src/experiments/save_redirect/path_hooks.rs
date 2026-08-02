@@ -74,9 +74,9 @@ use super::*;
 // shape internally. Non-save opens pass through unchanged. Stable Win32 ABI; no fixed-
 // offset code poke; mod-compatible (ERSC does not replace this open).
 
-/// Minimum plausible size (bytes) of a real ER0000.sl2/.co2: the fixed-slot BND4 container
-/// is ~28 MB even with empty slots, so anything under 1 MB is missing/truncated/garbage.
-pub(crate) const SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES: u64 = 0x10_0000;
+/// Exact byte length of a real ER0000.sl2/.co2. The shared save-redirect core owns this invariant
+/// so product and standalone planning reject the same impossible files.
+pub(crate) const SAVE_OVERRIDE_EXPECTED_BYTES: u64 = er_save_redirect::EXPECTED_SAVE_FILE_BYTES;
 
 /// Telemetry/observe-only exemption: env `ER_EFFECTS_TELEMETRY_ONLY=1` OR GAME_DIR file
 /// `er-effects-telemetry-only.txt`. The SOLE case the DLL may run without an env-provided
@@ -712,19 +712,17 @@ static SAVE_CREATEFILEW_LAST_SAVE_LIKE_KIND: AtomicUsize = AtomicUsize::new(SAVE
 pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_CONFIGURED_FILE_HITS;
 pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_STAGE_SAVE_FILE_HITS;
 pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_STAGE_STEAMID_DIR_HITS;
-const MISSING_SAVE_DIALOG_IDLE: usize = 0;
-const MISSING_SAVE_DIALOG_PENDING: usize = 1;
-const MISSING_SAVE_DIALOG_READY: usize = 2;
-static MISSING_SAVE_DIALOG_STATE: AtomicUsize = AtomicUsize::new(MISSING_SAVE_DIALOG_IDLE);
+static MISSING_SAVE_DIALOG_GATE: er_save_redirect::MissingSaveGate =
+    er_save_redirect::MissingSaveGate::new();
 pub(crate) use er_telemetry::counters::MISSING_SAVE_BLOCKED_IO_LOGGED;
 static SAVE_QUERY_LAST_SAVE_LIKE_KIND: AtomicUsize = AtomicUsize::new(SAVE_PATH_KIND_NONE);
 
-fn set_missing_save_dialog_state(state: usize) {
-    MISSING_SAVE_DIALOG_STATE.store(state, Ordering::SeqCst);
+fn set_missing_save_dialog_state(state: er_save_redirect::MissingSaveState) {
+    MISSING_SAVE_DIALOG_GATE.set(state);
 }
 
 pub(crate) fn missing_save_selection_pending() -> bool {
-    MISSING_SAVE_DIALOG_STATE.load(Ordering::SeqCst) == MISSING_SAVE_DIALOG_PENDING
+    MISSING_SAVE_DIALOG_GATE.is_pending()
 }
 
 /// True after an explicit loose save source (`er-effects.toml save_file` / ER_EFFECTS_SAVE_FILE) or
@@ -763,29 +761,6 @@ const SAVE_CREATEFILEW_DIAG_ALL_BELOW: usize = 120;
 pub(crate) use er_telemetry::counters::SAVE_WATCHDOG_ZERO_FRAMES;
 pub(crate) const SAVE_WATCHDOG_ZERO_BUDGET: usize = 900;
 
-/// Convert a configured path root to the Wine drive form the in-process `CreateFileW` accepts.
-/// Unix absolute paths become `Z:\...`; already-Windows/Wine paths like `Z:\...` or `C:\...` are
-/// preserved. Backslash separators, no trailing separator. Returns a wide string.
-fn path_root_to_wine_wide(root: &std::path::Path) -> Vec<u16> {
-    // to_string_lossy: building a path string, not decoding game memory (the from_utf8_lossy ban
-    // targets in-process telemetry; OsStr->String here is fine).
-    let win: String = root
-        .to_string_lossy()
-        .chars()
-        .map(|c| if c == '/' { '\\' } else { c })
-        .collect();
-    let has_drive_prefix = win.as_bytes().get(1).copied() == Some(b':');
-    let mut out: Vec<u16> = if has_drive_prefix {
-        win.encode_utf16().collect()
-    } else {
-        "Z:".encode_utf16().chain(win.encode_utf16()).collect()
-    };
-    while matches!(out.last(), Some(&c) if c == b'\\' as u16) {
-        out.pop();
-    }
-    out
-}
-
 /// Resolve configured save file -> the staged save ROOT (the ancestor directory that CONTAINS the
 /// `EldenRing` folder) in Wine `Z:\...` wide form, or None if config/env is unset/blank/not a readable
 /// plausibly-sized save / not staged under an `EldenRing` directory component. The redirect rewrites
@@ -795,30 +770,18 @@ fn env_save_file_path() -> Option<PathBuf> {
     configured_save_file()
 }
 
-enum SaveRedirectSource {
-    /// Configured save is already staged under `<root>/EldenRing/<steamid>/ER0000.sl2`; preserve
-    /// native directory/profile discovery by redirecting the whole save root.
-    StagedRoot {
-        file: PathBuf,
-        steam_id: u64,
-        root_w: Vec<u16>,
-    },
-    /// User supplied an arbitrary `.sl2`/`.co2` save file path. Copy it into a private staged native
-    /// save tree; do not require the user path to mirror Elden Ring's SteamID folder layout, and never
-    /// redirect gameplay writes back to the source file.
-    DirectFile {
-        file: PathBuf,
-        stage_root: PathBuf,
-        root_w: Vec<u16>,
-    },
-}
+type SaveRedirectSource = er_save_redirect::SaveSourcePlan;
 
 fn validated_save_file_path(path: PathBuf) -> Option<PathBuf> {
-    let meta = std::fs::metadata(&path).ok()?;
-    if !meta.is_file() || meta.len() < SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES {
-        return None;
+    match er_save_redirect::validate_save_file_path(path) {
+        Ok(path) => Some(path),
+        Err(err) => {
+            append_autoload_debug(format_args!(
+                "save-override: rejected save source during shared validation: {err:?}"
+            ));
+            None
+        }
     }
-    Some(path)
 }
 
 fn save_file_is_readonly(path: &Path) -> bool {
@@ -869,7 +832,7 @@ fn validated_configured_save_file() -> Option<PathBuf> {
 }
 
 fn plausible_steam_id64(value: u64) -> Option<u64> {
-    (value >= 10_000_000_000_000_000 && value <= 99_999_999_999_999_999).then_some(value)
+    er_save_redirect::plausible_steam_id64(value)
 }
 
 fn configured_active_steam_id64_env() -> Option<u64> {
@@ -1066,53 +1029,12 @@ pub(crate) fn active_save_file_for_system_quit() -> Option<PathBuf> {
     configured_or_default_save_file()
 }
 
-fn staged_save_root_for_configured_file(path: &Path) -> Option<(PathBuf, u64)> {
-    let mut root = PathBuf::new();
-    let mut comps = path.components().peekable();
-    while let Some(comp) = comps.next() {
-        let text = comp.as_os_str().to_string_lossy();
-        if text.eq_ignore_ascii_case("EldenRing") {
-            let Some(steam_id_comp) = comps.peek() else {
-                return None;
-            };
-            let steam_id = steam_id_comp.as_os_str().to_string_lossy();
-            let is_steam_id = (16..=20).contains(&steam_id.len())
-                && steam_id.as_bytes().iter().all(u8::is_ascii_digit);
-            if is_steam_id {
-                return steam_id
-                    .parse::<u64>()
-                    .ok()
-                    .filter(|value| *value != 0)
-                    .map(|value| (root, value));
-            }
-            return None;
-        }
-        root.push(comp);
-    }
-    None
-}
-
 fn save_redirect_source_for_validated_file(path: PathBuf) -> SaveRedirectSource {
-    if let Some((staged_root, steam_id)) = staged_save_root_for_configured_file(&path)
-        && save_file_writeback_allowed(&path)
-    {
-        return SaveRedirectSource::StagedRoot {
-            file: path,
-            steam_id,
-            root_w: path_root_to_wine_wide(&staged_root),
-        };
-    }
     // Explicit/user-picked non-default saves are read-only sources, even if they already live under an
-    // `EldenRing/<steamid>/ER0000.*` layout. The game writes only to our private staged copy.
-    let stage_root = path
-        .parent()
-        .map(|parent| parent.join("er-effects-save-redirect-stage"))
-        .unwrap_or_else(|| PathBuf::from("er-effects-save-redirect-stage"));
-    SaveRedirectSource::DirectFile {
-        file: path.clone(),
-        root_w: path_root_to_wine_wide(&stage_root),
-        stage_root,
-    }
+    // `EldenRing/<steamid>/ER0000.*` layout. The game writes only to our private staged copy unless
+    // the shared planner proves this is the current game-owned default-save root and writeback is safe.
+    let writeback_allowed = save_file_writeback_allowed(&path);
+    er_save_redirect::plan_validated_save_source(path, writeback_allowed)
 }
 
 fn save_override_redirect_source() -> Option<SaveRedirectSource> {
@@ -1137,14 +1059,14 @@ fn activate_save_redirect_source(
         SaveRedirectSource::StagedRoot {
             file,
             steam_id,
-            root_w,
+            root_wide,
         } => {
             OBSERVED_ACTIVE_STEAM_ID64.store(steam_id, Ordering::SeqCst);
             normalize_env_save_file_to_known_steam_id(&file, steam_id, source_label);
             SAVE_STEAM_ID_ENV_NORMALIZE_DONE.store(1, Ordering::SeqCst);
             // UTF-8 Lossy: log-only decode of configured Windows wide path for probe confirmation.
-            let shown = String::from_utf16_lossy(&root_w);
-            let _ = SAVE_REDIRECT_DIR_W.set(root_w);
+            let shown = String::from_utf16_lossy(root_wide.as_slice());
+            let _ = SAVE_REDIRECT_DIR_W.set(root_wide.into_vec());
             SAVE_REDIRECT_MODE.store(SAVE_REDIRECT_MODE_STAGED_ROOT, Ordering::SeqCst);
             append_autoload_debug(format_args!(
                 "save-override: ENFORCED -- redirecting native save root to staged root '{shown}' source={source_label}"
@@ -1154,18 +1076,18 @@ fn activate_save_redirect_source(
         SaveRedirectSource::DirectFile {
             file,
             stage_root,
-            root_w,
+            root_wide,
         } => {
             let _ = std::fs::create_dir_all(stage_root.join("eldenring"));
             let _ = std::fs::create_dir_all(stage_root.join("EldenRing"));
             // UTF-8 Lossy: log-only decode of configured source/stage paths for probe confirmation.
             let shown = file.display().to_string();
-            let stage_shown = String::from_utf16_lossy(&root_w);
+            let stage_shown = String::from_utf16_lossy(root_wide.as_slice());
             let configured_file = file.clone();
             let explicit_steam_id = configured_active_steam_id64();
             let _ = SAVE_DIRECT_SOURCE_FILE.set(file);
             let _ = SAVE_DIRECT_STAGE_ROOT.set(stage_root);
-            let _ = SAVE_REDIRECT_DIR_W.set(root_w);
+            let _ = SAVE_REDIRECT_DIR_W.set(root_wide.into_vec());
             SAVE_REDIRECT_MODE.store(SAVE_REDIRECT_MODE_DIRECT_FILE, Ordering::SeqCst);
             if let Some((steam_id, reason)) = explicit_steam_id {
                 OBSERVED_ACTIVE_STEAM_ID64.store(steam_id, Ordering::SeqCst);
@@ -1207,12 +1129,12 @@ pub(crate) fn enforce_save_override_or_abort() -> SaveOverrideMode {
         return activate_save_redirect_source(source, "early-enforced-configured-save");
     }
     append_autoload_debug(format_args!(
-        "save-override: no usable autoload save (configured save missing/invalid, or no readable active default {} >= {} bytes; read-only is NOT a rejection reason). config_error={}. Arming the IN-GAME missing-save picker: the title boots to its native no-save menu and the 05_010 file browser presents itself (save_picker_menu.rs); world entry stays denied until a save is picked.",
+        "save-override: no usable autoload save (configured save missing/invalid, or no readable active default {} exactly {} bytes; read-only is NOT a rejection reason). config_error={}. Arming the IN-GAME missing-save picker: the title boots to its native no-save menu and the 05_010 file browser presents itself (save_picker_menu.rs); world entry stays denied until a save is picked.",
         active_default_save_file_name(),
-        SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES,
+        SAVE_OVERRIDE_EXPECTED_BYTES,
         runtime_config_error().unwrap_or_else(|| "none".to_owned())
     ));
-    set_missing_save_dialog_state(MISSING_SAVE_DIALOG_PENDING);
+    set_missing_save_dialog_state(er_save_redirect::MissingSaveState::Pending);
     SaveOverrideMode::Redirect
 }
 
@@ -1249,9 +1171,9 @@ pub(crate) fn complete_missing_save_selection_from_picker(path: &Path) -> bool {
     // simply refusing to open the save.
     let Some(validated) = validated_save_file_path(path.to_path_buf()) else {
         append_autoload_debug(format_args!(
-            "save-override: title picker rejected non-plausible save '{}' (missing or under {} bytes)",
+            "save-override: title picker rejected invalid save '{}' (missing, unreadable, not BND4, or not exactly {} bytes)",
             path.display(),
-            SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES
+            SAVE_OVERRIDE_EXPECTED_BYTES
         ));
         return false;
     };
@@ -1281,7 +1203,7 @@ pub(crate) fn complete_missing_save_selection_from_picker(path: &Path) -> bool {
     let source = save_redirect_source_for_validated_file(validated.clone());
     let _ = activate_save_redirect_source(source, "title-picker-selection");
     install_save_redirect_hooks();
-    set_missing_save_dialog_state(MISSING_SAVE_DIALOG_READY);
+    set_missing_save_dialog_state(er_save_redirect::MissingSaveState::Ready);
     append_autoload_debug(format_args!(
         "save-override: title picker selected save '{}'; redirect active, missing-save gate released",
         validated.display()
@@ -1296,7 +1218,7 @@ pub(crate) fn complete_missing_save_selection_from_picker(path: &Path) -> bool {
 /// pick later installs/activates the redirect and fires a title reload, so nothing read during
 /// the pending window is ever committed.
 pub(super) fn wait_for_missing_save_dialog_if_pending(path: &[u16]) {
-    if MISSING_SAVE_DIALOG_STATE.load(Ordering::SeqCst) != MISSING_SAVE_DIALOG_PENDING {
+    if !MISSING_SAVE_DIALOG_GATE.is_pending() {
         return;
     }
     let hit = MISSING_SAVE_BLOCKED_IO_LOGGED.fetch_add(1, Ordering::SeqCst);

@@ -29,6 +29,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 er-save-picker = { path = "../er-save-picker" }
+er-save-redirect = { path = "../er-save-redirect" }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

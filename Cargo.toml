@@ -29,6 +29,7 @@ members = [
   # feature crate plus a thin standalone ME3-loadable shell.
   "crates/er-save-picker",
   "crates/er-save-picker-dll",
+  "crates/er-save-redirect",
   "crates/er-quit-menu",
   "crates/er-quit-menu-dll",
   "crates/er-safe-input",
