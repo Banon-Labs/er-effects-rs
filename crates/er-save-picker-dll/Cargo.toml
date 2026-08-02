@@ -24,3 +24,8 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 er-save-picker = { path = "../er-save-picker" }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+  "Win32_System_LibraryLoader",
+] }

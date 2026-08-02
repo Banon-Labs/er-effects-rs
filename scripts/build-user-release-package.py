@@ -104,7 +104,8 @@ def write_package_files(stage_dir: Path, package_name: str, commit: str) -> None
             ## What this package contains
 
             - `run-er-effects-release.sh` — Linux/Proton ME3 launcher helper.
-            - `quicksave.me3.template` — example ME3 profile with no empty savefile override.
+            - `quicksave.me3.template` — example product-DLL ME3 profile with no empty savefile override.
+            - `save-picker-standalone.me3.template` — example standalone boot save-picker profile.
             - `er-effects.toml.example` — optional game-directory config template.
             - `SHA256SUMS.txt` and `PACKAGE-MANIFEST.txt` — package audit artifacts.
 
@@ -116,11 +117,26 @@ def write_package_files(stage_dir: Path, package_name: str, commit: str) -> None
             cargo xwin build --release --target x86_64-pc-windows-msvc
             ```
 
-            That creates the DLL at:
+            That creates the product DLL at:
 
             ```text
             /home/banon/projects/er-effects-rs/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll
             ```
+
+            The standalone boot save-picker surface/staging DLL is built separately:
+
+            ```bash
+            cargo xwin build --release --target x86_64-pc-windows-msvc -p er-save-picker-dll
+            ```
+
+            It creates:
+
+            ```text
+            /home/banon/projects/er-effects-rs/target/x86_64-pc-windows-msvc/release/er_save_picker_dll.dll
+            ```
+
+            This standalone picker DLL records picked saves and closes its own picker latch; it does
+            not install the product save-redirect hooks and is not standalone autoload proof.
 
             ## Launch with ME3
 
@@ -164,6 +180,23 @@ def write_package_files(stage_dir: Path, package_name: str, commit: str) -> None
             # Replace this with the absolute path to your locally-built er_effects_rs.dll,
             # or use run-er-effects-release.sh to generate a profile automatically.
             path = '/absolute/path/to/er_effects_rs.dll'
+            """
+        ).lstrip(),
+        encoding="utf-8",
+    )
+
+    (stage_dir / "save-picker-standalone.me3.template").write_text(
+        textwrap.dedent(
+            """
+            profileVersion = "v1"
+            start_online = false
+
+            [[supports]]
+            game = "eldenring"
+
+            [[natives]]
+            # Replace this with the absolute path to your locally-built standalone boot picker DLL.
+            path = '/absolute/path/to/er_save_picker_dll.dll'
             """
         ).lstrip(),
         encoding="utf-8",
