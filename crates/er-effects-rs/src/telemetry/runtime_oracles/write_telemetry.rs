@@ -502,20 +502,20 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // different window entirely.
     body.push_str(&format!(
         "  \"oracle_save_picker_os_dialog_open\": {},\n  \"oracle_save_picker_os_open_count\": {},\n  \"oracle_save_picker_os_closed_with_path\": {},\n  \"oracle_save_picker_os_cancel_count\": {},\n  \"oracle_save_picker_os_error_count\": {},\n  \"oracle_save_picker_os_last_error\": {},\n  \"oracle_save_picker_os_reject_count\": {},\n  \"oracle_save_picker_os_last_reject_reason\": {},\n  \"oracle_save_picker_os_reopen_count\": {},\n  \"oracle_save_picker_os_reopen_exhausted\": {},\n  \"oracle_save_picker_os_ticks_frozen\": {},\n  \"oracle_save_picker_os_owner_hwnd\": {},\n  \"oracle_save_picker_os_owner_is_cover\": {},\n  \"oracle_save_picker_os_savelike_opens\": {},\n  \"oracle_save_dest_confirm_pending\": {},\n",
-        SAVE_PICKER_OS_DIALOG_OPEN.load(Ordering::SeqCst),
-        SAVE_PICKER_OS_OPEN_COUNT.load(Ordering::SeqCst),
-        SAVE_PICKER_OS_CLOSED_WITH_PATH.load(Ordering::SeqCst),
-        SAVE_PICKER_OS_CANCEL_COUNT.load(Ordering::SeqCst),
-        SAVE_PICKER_OS_ERROR_COUNT.load(Ordering::SeqCst),
-        SAVE_PICKER_OS_LAST_ERROR.load(Ordering::SeqCst),
-        SAVE_PICKER_OS_REJECT_COUNT.load(Ordering::SeqCst),
-        SAVE_PICKER_OS_LAST_REJECT_REASON.load(Ordering::SeqCst),
-        SAVE_PICKER_OS_REOPEN_COUNT.load(Ordering::SeqCst),
-        SAVE_PICKER_OS_REOPEN_EXHAUSTED.load(Ordering::SeqCst),
-        SAVE_PICKER_OS_TICKS_FROZEN.load(Ordering::SeqCst),
-        SAVE_PICKER_OS_OWNER_HWND.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OS_DIALOG_OPEN.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OS_OPEN_COUNT.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OS_CLOSED_WITH_PATH.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OS_CANCEL_COUNT.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OS_ERROR_COUNT.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OS_LAST_ERROR.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OS_REJECT_COUNT.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OS_LAST_REJECT_REASON.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OS_REOPEN_COUNT.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OS_REOPEN_EXHAUSTED.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OS_TICKS_FROZEN.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OS_OWNER_HWND.load(Ordering::SeqCst),
         er_telemetry::counters::SAVE_PICKER_OS_OWNER_IS_COVER.load(Ordering::SeqCst),
-        SAVE_PICKER_OS_SAVELIKE_OPENS.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OS_SAVELIKE_OPENS.load(Ordering::SeqCst),
         SAVE_DEST_CONFIRM_PENDING.load(Ordering::SeqCst)
     ));
     // The OS dialog at the MISSING-SAVE BOOT. Separate from the fields above because that intent's
