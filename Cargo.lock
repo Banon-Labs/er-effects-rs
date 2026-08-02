@@ -2783,6 +2783,7 @@ dependencies = [
  "er-loading-bar",
  "er-loading-portrait",
  "er-save-loader",
+ "er-save-picker",
  "er-save-suppress",
  "er-telemetry",
  "er-title-flow",

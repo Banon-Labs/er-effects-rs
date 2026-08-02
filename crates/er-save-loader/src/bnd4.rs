@@ -200,6 +200,42 @@ pub fn has_active_slot(data: &[u8]) -> Result<bool, Bnd4Error> {
     active_slots(data).map(|slots| slots.into_iter().any(|active| active))
 }
 
+/// One active character slot parsed from the save container bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CharacterSlotInfo {
+    pub slot: usize,
+    pub name: String,
+    pub level: i32,
+}
+
+/// Parse active, loadable character slots from a save container.
+///
+/// This applies the same filter the autoload path expects: `USER_DATA010.active_slot` must mark the
+/// slot occupied, the slot body must contain a plausible PlayerGameData block, the name must be
+/// non-empty, and the level must be at least 1.
+pub fn active_character_slots(data: &[u8]) -> Result<Vec<CharacterSlotInfo>, Bnd4Error> {
+    let active_slots = active_slots(data)?;
+    Ok((0..SAVE_SLOT_COUNT)
+        .filter_map(|slot| {
+            if !active_slots.get(slot).copied().unwrap_or(false) {
+                return None;
+            }
+            let body = slot_body(data, slot).ok()?;
+            let pgd_offset = slot_player_game_data_offset(body)?;
+            let units = slot_name_units(body, pgd_offset)?;
+            let name = String::from_utf16(&units).ok()?;
+            if name.trim().is_empty() {
+                return None;
+            }
+            let level = rd_slot_i32(body, pgd_offset + SAVE_PGD_LEVEL_OFFSET).unwrap_or(0);
+            if level < 1 {
+                return None;
+            }
+            Some(CharacterSlotInfo { slot, name, level })
+        })
+        .collect())
+}
+
 /// The 16-byte stored MD5 checksum prefix of a slot entry.
 pub fn slot_md5(data: &[u8], slot: usize) -> Result<&[u8], Bnd4Error> {
     let want = format!("USER_DATA{:03}", slot);
@@ -914,6 +950,19 @@ mod tests {
             ]
         );
         assert!(has_active_slot(&data).expect("has active slot"));
+    }
+
+    #[test]
+    fn parses_active_character_slot_info() {
+        let Some(data) = load_150_banon_fixture() else {
+            eprintln!("150-Banon fixture missing; skipping");
+            return;
+        };
+        let slots = active_character_slots(&data).expect("active character slots");
+        assert_eq!(slots.len(), 1);
+        assert_eq!(slots[0].slot, 0);
+        assert!(!slots[0].name.trim().is_empty());
+        assert!(slots[0].level >= 1);
     }
 
     #[test]
