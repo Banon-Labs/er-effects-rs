@@ -2,8 +2,11 @@ use super::*;
 
 use crate::mh::MH_STATUS;
 use er_save_redirect::{
-    SaveNtCreateDetourGuard, is_save_file_or_backup_path, save_detour_disk_io_allowed,
-    wide_ends_with_ci_ascii,
+    SAVE_REDIRECT_ORIG_COPYFILEW, SAVE_REDIRECT_ORIG_CREATEFILEW, SAVE_REDIRECT_ORIG_FINDFIRSTW,
+    SAVE_REDIRECT_ORIG_GETATTREXW, SAVE_REDIRECT_ORIG_GETATTRW, SAVE_REDIRECT_ORIG_GETDISKFREEW,
+    SAVE_REDIRECT_ORIG_NTCREATEFILE, SAVE_REDIRECT_ORIG_NTQUERYVOLINFO,
+    SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW, SaveNtCreateDetourGuard, is_save_file_or_backup_path,
+    save_detour_disk_io_allowed, wide_ends_with_ci_ascii,
 };
 
 type ShGetFolderPathWFn = unsafe extern "system" fn(isize, i32, isize, u32, *mut u16) -> i32;

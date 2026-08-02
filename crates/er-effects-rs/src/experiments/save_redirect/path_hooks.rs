@@ -20,10 +20,14 @@ use eldenring::{
 };
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
 use er_save_redirect::{
-    DirectStageNoSteamIdKind, SaveDetourDepth, SaveHookInstallState, SavePathKind,
-    classify_save_like_path, direct_stage_no_steamid_kind, is_save_file_or_backup_path,
-    redirect_wide_save_path_with_side_effects, save_detour_disk_io_allowed,
-    steam_id64_from_wide_save_path, wide_contains_ci_ascii, wide_ends_with_ci_ascii,
+    DirectStageNoSteamIdKind, SAVE_REDIRECT_ORIG_COPYFILEW, SAVE_REDIRECT_ORIG_CREATEFILEW,
+    SAVE_REDIRECT_ORIG_FINDFIRSTW, SAVE_REDIRECT_ORIG_GETATTREXW, SAVE_REDIRECT_ORIG_GETATTRW,
+    SAVE_REDIRECT_ORIG_GETDISKFREEW, SAVE_REDIRECT_ORIG_NTCREATEFILE,
+    SAVE_REDIRECT_ORIG_NTQUERYVOLINFO, SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW, SaveDetourDepth,
+    SaveHookInstallState, SavePathKind, classify_save_like_path, direct_stage_no_steamid_kind,
+    is_save_file_or_backup_path, redirect_wide_save_path_with_side_effects,
+    save_detour_disk_io_allowed, steam_id64_from_wide_save_path, wide_contains_ci_ascii,
+    wide_ends_with_ci_ascii,
 };
 use er_telemetry::counters::{
     SAVE_REDIRECT_DETOUR_MAX_DEPTH, SAVE_REDIRECT_DETOUR_REENTRANT_PASSTHROUGHS,
@@ -505,23 +509,13 @@ fn direct_stage_file_status(steam_id: u64) -> (bool, Option<u64>) {
     }
     (false, None)
 }
-/// Original CreateFileW / CopyFileW (MinHook trampolines). 0 = not hooked.
-pub(super) static SAVE_REDIRECT_ORIG_CREATEFILEW: AtomicUsize =
-    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(super) static SAVE_REDIRECT_ORIG_COPYFILEW: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 /// Save-existence-check redirects: the game stats/enumerates the save file BEFORE opening it; if
 /// these hit the (wiped) default dir the game concludes "no save" and never CreateFileW's it.
-pub(super) static SAVE_REDIRECT_ORIG_GETATTRW: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(super) static SAVE_REDIRECT_ORIG_GETATTREXW: AtomicUsize =
-    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(super) static SAVE_REDIRECT_ORIG_FINDFIRSTW: AtomicUsize =
-    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+///
 /// PRIMARY redirect: the save-dir builder (FUN_140e0e680) calls SHGetFolderPathW(CSIDL_APPDATA) to
 /// get %APPDATA%, then formats `%APPDATA%/EldenRing/<steamid>/`. Returning OUR staged root here makes
 /// the game build AND open the full save path under our tree NATIVELY (Wine does case-insensitive
 /// resolution), so the character is read without depending on intercepting each handle-relative open.
-pub(super) static SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW: AtomicUsize =
-    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_APPDATA_REQUESTS;
 pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_DIRECT_FILE_BLOCKS;
 pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_FIRST_LOAD_DONE_BLOCKS;
@@ -537,8 +531,6 @@ pub(crate) static SAVE_FIRST_LOAD_DONE: std::sync::atomic::AtomicBool =
 /// ntdll NtCreateFile diagnostic: the boot save read happens BELOW Win32 (no CreateFileW/
 /// GetFileAttributesW/FindFirstFileW hit the save), so hook the ntdll chokepoint to SEE the actual
 /// open of ER0000.sl2 -- its NT path form and whether it is relative to a RootDirectory handle.
-pub(super) static SAVE_REDIRECT_ORIG_NTCREATEFILE: AtomicUsize =
-    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::SAVE_NTCREATE_DIAG_LOGGED;
 pub(super) const SAVE_NTCREATE_DIAG_MAX: usize = 120;
 /// THE corruption fix (corrupted-save-re-findings): the save commit prechecks free space via
@@ -546,15 +538,11 @@ pub(super) const SAVE_NTCREATE_DIAG_MAX: usize = 120;
 /// space -> `free < needed` -> the write aborts BEFORE any byte ("Failed to save game / corrupted").
 /// We hook it to report ample free space for the save dir so the game's OWN save flow writes our
 /// staged save (no hardcoded paths, no Steam Cloud).
-pub(super) static SAVE_REDIRECT_ORIG_GETDISKFREEW: AtomicUsize =
-    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::SAVE_DISKFREE_LOGGED;
 /// The game doesn't call kernel32!GetDiskFreeSpaceExW from our hook (no fire) -- under Wine all
 /// free-space queries funnel to ntdll!NtQueryVolumeInformationFile. Override the AVAILABLE allocation
 /// units for FileFsSizeInformation(3)/FileFsFullSizeInformation(7) so the save-commit free-space
 /// precheck sees ample space regardless of the bogus Z:-drive report. THE corruption fix, robust.
-pub(super) static SAVE_REDIRECT_ORIG_NTQUERYVOLINFO: AtomicUsize =
-    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::SAVE_VOLINFO_LOGGED;
 /// One-shot/idempotency state for the core and redirect save-hook installers. The shared
 /// `er-save-redirect` type owns this contract so later standalone hook-owner code does not invent a
