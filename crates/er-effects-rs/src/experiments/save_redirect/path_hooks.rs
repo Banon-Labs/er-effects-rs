@@ -27,7 +27,8 @@ use er_save_redirect::{
     SaveHookInstallState, SavePathKind, SavePathTelemetryBucket, classify_copyfile_endpoint,
     classify_save_like_path, classify_save_query_path, createfile_diag_hit_should_log,
     direct_stage_no_steamid_kind, is_save_file_or_backup_path, plan_create_file_open,
-    plan_save_query_path, redirect_wide_save_path_with_side_effects, save_detour_disk_io_allowed,
+    plan_save_query_path, probe_direct_stage_file_status,
+    redirect_wide_save_path_with_side_effects, save_detour_disk_io_allowed,
     steam_id64_from_wide_save_path, wide_contains_ci_ascii, wide_ends_with_ci_ascii,
 };
 use er_telemetry::counters::{
@@ -481,34 +482,12 @@ fn direct_stage_no_steamid_kind_label(kind: usize) -> &'static str {
 }
 
 fn direct_stage_file_status(steam_id: u64) -> (bool, Option<u64>) {
-    if steam_id == 0 {
-        return (false, None);
-    }
-    let Some(root) = SAVE_DIRECT_STAGE_ROOT.get() else {
-        return (false, None);
-    };
-    let staged_is_co2 = SAVE_DIRECT_SOURCE_FILE
-        .get()
-        .and_then(|source| source.extension())
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("co2"));
-    let candidates = if staged_is_co2 {
-        [("eldenring", "er0000.co2"), ("EldenRing", "ER0000.co2")]
-    } else {
-        [("eldenring", "er0000.sl2"), ("EldenRing", "ER0000.sl2")]
-    };
-    for (dir_name, file_name) in candidates {
-        let path = root
-            .join(dir_name)
-            .join(steam_id.to_string())
-            .join(file_name);
-        if let Ok(meta) = std::fs::metadata(path)
-            && meta.is_file()
-        {
-            return (true, Some(meta.len()));
-        }
-    }
-    (false, None)
+    let status = probe_direct_stage_file_status(
+        SAVE_DIRECT_STAGE_ROOT.get().map(PathBuf::as_path),
+        SAVE_DIRECT_SOURCE_FILE.get().map(PathBuf::as_path),
+        steam_id,
+    );
+    (status.exists, status.bytes)
 }
 /// Save-existence-check redirects: the game stats/enumerates the save file BEFORE opening it; if
 /// these hit the (wiped) default dir the game concludes "no save" and never CreateFileW's it.

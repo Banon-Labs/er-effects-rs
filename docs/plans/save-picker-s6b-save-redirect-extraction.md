@@ -101,6 +101,8 @@ Eighteenth slice on `refactor/s6b3g-query-path-plan-20260802`: move save existen
 
 Nineteenth slice on `refactor/s6b4a-save-path-kind-core-20260802`: move the pure mapping from `SavePathKind` to telemetry-counted bucket into `er-save-redirect::SavePathTelemetryBucket`. Product still owns the actual counters, telemetry serialization, and hook-side recording.
 
+Twentieth slice on `refactor/s6b5a-direct-stage-status-core-20260802`: move direct-stage file existence/byte-size probing into `er-save-redirect::probe_direct_stage_file_status`. Product still owns global stage/source state and telemetry serialization.
+
 Gate: Windows-target check plus a no-runtime hook-install smoke if available. Runtime proof comes after this, not before.
 
 ### S6b.3: boot-hold/title-flow seam
