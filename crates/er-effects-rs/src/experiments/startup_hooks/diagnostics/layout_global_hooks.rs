@@ -1,4 +1,6 @@
-fn apply_system_quit_multislot_layout_patch() {
+use super::*;
+
+pub(crate) fn apply_system_quit_multislot_layout_patch() {
     let Ok(base) = game_module_base() else {
         append_autoload_debug(format_args!(
             "system-quit-dup: component-index patch skipped -- module base unavailable"
@@ -320,10 +322,10 @@ pub(crate) fn apply_splash_skip() {
     ));
 }
 
-type SoundPostEventCoreFn =
+pub(crate) type SoundPostEventCoreFn =
     unsafe extern "system" fn(u32, u64, u32, usize, usize, *const c_void, u32) -> u32;
 
-unsafe extern "system" fn sound_post_event_core_hook(
+pub(crate) unsafe extern "system" fn sound_post_event_core_hook(
     event_id: u32,
     game_object: u64,
     flags: u32,

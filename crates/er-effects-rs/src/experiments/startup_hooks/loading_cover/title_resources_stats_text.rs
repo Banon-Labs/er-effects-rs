@@ -1,3 +1,5 @@
+use super::*;
+
 pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
     if TITLE_MENU_RESOURCE_ACQUIRE_INSTALLED.load(Ordering::SeqCst) != 0
         && TITLE_SCALEFORM_FILE_OPEN_INSTALLED.load(Ordering::SeqCst) != 0
@@ -398,7 +400,7 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_window_fadein_hook
     ));
 }
 
-unsafe fn title_child_name_matches(name_ptr: usize) -> bool {
+pub(crate) unsafe fn title_child_name_matches(name_ptr: usize) -> bool {
     if name_ptr == 0 || name_ptr == TITLE_OWNER_SCAN_START_ADDRESS {
         return false;
     }
@@ -418,7 +420,7 @@ unsafe fn title_child_name_matches(name_ptr: usize) -> bool {
     )
 }
 
-unsafe fn title_profile_list_container_matches(name_ptr: usize) -> bool {
+pub(crate) unsafe fn title_profile_list_container_matches(name_ptr: usize) -> bool {
     if name_ptr == 0 || name_ptr == TITLE_OWNER_SCAN_START_ADDRESS {
         return false;
     }
@@ -428,7 +430,7 @@ unsafe fn title_profile_list_container_matches(name_ptr: usize) -> bool {
     name == "ProfileList/ItemList/ItemList/ItemList"
 }
 
-fn record_title_text_gfx_value(value: usize) {
+pub(crate) fn record_title_text_gfx_value(value: usize) {
     if value == 0 || value == TITLE_OWNER_SCAN_START_ADDRESS {
         return;
     }
@@ -600,7 +602,7 @@ pub(crate) fn profile_slot_vitals(slot: i32) -> Option<[u32; 3]> {
 /// Fallback attributes read live from `GameDataMan -> PlayerGameData` -- the CURRENTLY-LOADED
 /// character. Used only when the per-slot `.sl2` read fails entirely, so the row still shows real
 /// (if not per-slot) values rather than nothing. Returns `None` when no character is loaded.
-fn build_loaded_char_attributes() -> Option<[i32; STATS_ATTR_COUNT]> {
+pub(crate) fn build_loaded_char_attributes() -> Option<[i32; STATS_ATTR_COUNT]> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let gdm = game_data_man_ptr_or_null();
     if gdm == 0 || gdm == null {
@@ -624,7 +626,7 @@ fn build_loaded_char_attributes() -> Option<[i32; STATS_ATTR_COUNT]> {
 /// dispatches with `bHTML=1` (static RE 2026-07-04), so per-span `<font color>`/`<b>` tags are parsed and
 /// rendered by the field's own `MenuFont_01`. Each label is dimmed and each value gets a distinct color.
 /// The panel splits the eight attributes across two row lines (0..4 top, 4..8 bottom) via two calls.
-fn build_stats_html_utf16(
+pub(crate) fn build_stats_html_utf16(
     attributes: &[i32; STATS_ATTR_COUNT],
     start: usize,
     end: usize,
@@ -674,12 +676,12 @@ fn build_stats_html_utf16(
 
 /// Number of character attributes (Vig..Arc).
 /// Profile/save slot count on the ProfileSelect screen.
-const PROFILE_SLOT_COUNT: i32 = 10;
+pub(crate) const PROFILE_SLOT_COUNT: i32 = 10;
 
 /// Per-slot stats cache (the 8 attributes + stored max vitals), parsed once from the live
 /// `.sl2`, indexed by save slot (0-9). A per-slot `None` means an empty slot; the outer
 /// `Option` is the "have we tried to load it yet?" latch.
-static PROFILE_SLOT_STATS_CACHE: std::sync::Mutex<
+pub(crate) static PROFILE_SLOT_STATS_CACHE: std::sync::Mutex<
     Option<[Option<er_save_loader::stats::SlotStats>; 10]>,
 > = std::sync::Mutex::new(None);
 
@@ -730,7 +732,12 @@ pub(crate) unsafe fn ensure_profile_slot_stats_cached(base: usize) -> bool {
 /// menu-arena object with a garbage heap vtable, and that dispatch jumped into `.rdata` (hard
 /// crash). Validate component -> vtable -> slot target are all game-image-plausible before letting
 /// the wrapper dispatch; otherwise skip fail-closed with full diagnostics.
-unsafe fn push_stats_text_on_row(base: usize, row_proxy: usize, name: &str, utf16: &[u16]) -> bool {
+pub(crate) unsafe fn push_stats_text_on_row(
+    base: usize,
+    row_proxy: usize,
+    name: &str,
+    utf16: &[u16],
+) -> bool {
     debug_assert!(name.ends_with('\0'), "field name must be NUL-terminated");
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let assign = match TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG.load(Ordering::SeqCst) {
@@ -809,7 +816,12 @@ unsafe fn push_stats_text_on_row(base: usize, row_proxy: usize, name: &str, utf1
 /// display object, and we skip the call unless the out proxy carries the game's own
 /// `CS::SceneObjProxy` vtable (the wrapper's first act is an unvalidated
 /// `(*proxy->vfptr->GetScaleformValue2)(proxy)` dispatch -- the er-effects-rs-7e7 class of hazard).
-unsafe fn set_row_field_visible(base: usize, row_proxy: usize, name: &str, visible: bool) -> bool {
+pub(crate) unsafe fn set_row_field_visible(
+    base: usize,
+    row_proxy: usize,
+    name: &str,
+    visible: bool,
+) -> bool {
     debug_assert!(name.ends_with('\0'), "field name must be NUL-terminated");
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let assign = match TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG.load(Ordering::SeqCst) {
@@ -875,7 +887,7 @@ unsafe fn set_row_field_visible(base: usize, row_proxy: usize, name: &str, visib
 
 /// Which of a row's per-slot info fields should be on screen.
 #[derive(Clone, Copy, PartialEq, Eq)]
-struct RowSlotFieldVisibility {
+pub(crate) struct RowSlotFieldVisibility {
     /// The `Level` FMG caption and the level value, which live and die together -- a caption with no
     /// number reads as a broken row, so nothing ever shows one without the other.
     level: bool,
@@ -898,7 +910,7 @@ impl RowSlotFieldVisibility {
 /// the seven native row clips are REUSED -- a clip that showed `[ up .. ]` renders a save file two
 /// scrolls later, and the same movie can outlive the picker window -- so every row states the full
 /// answer for all three fields rather than only touching the ones it wants gone.
-unsafe fn apply_row_slot_info_visibility(
+pub(crate) unsafe fn apply_row_slot_info_visibility(
     base: usize,
     row_proxy: usize,
     want: RowSlotFieldVisibility,
@@ -944,7 +956,10 @@ unsafe fn apply_row_slot_info_visibility(
 ///
 /// `None` when the field is unreadable, in which case nothing is written and the row keeps the
 /// game's own playtime.
-unsafe fn stage_row_model_play_time(row_model: usize, text: *const u16) -> Option<usize> {
+pub(crate) unsafe fn stage_row_model_play_time(
+    row_model: usize,
+    text: *const u16,
+) -> Option<usize> {
     let field = row_model + PROFILE_ROW_MODEL_PLAY_TIME_MENUSTRING_C8_OFFSET;
     let displaced = unsafe { safe_read_usize(field) }?;
     unsafe { (field as *mut usize).write_volatile(text as usize) };
@@ -953,7 +968,7 @@ unsafe fn stage_row_model_play_time(row_model: usize, text: *const u16) -> Optio
 
 /// Put back whatever [`stage_row_model_play_time`] displaced, so the game's structure is untouched
 /// outside the one native call we borrowed it for.
-unsafe fn restore_row_model_play_time(row_model: usize, displaced: usize) {
+pub(crate) unsafe fn restore_row_model_play_time(row_model: usize, displaced: usize) {
     let field = row_model + PROFILE_ROW_MODEL_PLAY_TIME_MENUSTRING_C8_OFFSET;
     unsafe { (field as *mut usize).write_volatile(displaced) };
 }

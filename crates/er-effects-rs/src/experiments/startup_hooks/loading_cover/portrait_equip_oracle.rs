@@ -1,3 +1,5 @@
+use super::*;
+
 // LOADING-SCREEN PORTRAIT ARMOR ORACLE -- Layer 1 of bd er-effects-rs-91l5.
 //
 // WHY THE PREVIOUS ORACLE IS GONE RATHER THAN TUNED. `oracle_portrait_equip_slot_resolved` reported a
@@ -26,7 +28,7 @@ const _: () = assert!(usize::BITS >= 64);
 
 /// Presence bit for a packed `i32` oracle value. A raw 0 means NEVER SAMPLED -- which matters because
 /// 0 is also a perfectly representable (and, for this bug, highly diagnostic) param id.
-const PORTRAIT_EQUIP_VALUE_PRESENT: usize = 1usize << 32;
+pub(crate) const PORTRAIT_EQUIP_VALUE_PRESENT: usize = 1usize << 32;
 /// What a packed slot decodes to when it was never sampled. Distinct from every real param id and
 /// from the `-1` "slot legitimately empty" sentinel, so a reader can tell "no data" from "no armor".
 pub(crate) const PORTRAIT_EQUIP_VALUE_UNSAMPLED: i32 = i32::MIN;
@@ -34,27 +36,27 @@ pub(crate) const PORTRAIT_EQUIP_VALUE_UNSAMPLED: i32 = i32::MIN;
 /// Bits of the per-sample failure mask. Published OR-ed across the window as
 /// `oracle_portrait_equip_bad_mask`, so a failing window names WHICH condition fired.
 /// A non-negative `unk0`/`unkd4`/`unkd8` -- the forced whole-outfit override; the nude root cause.
-const PORTRAIT_EQUIP_BAD_OVERRIDE_ACTIVE: usize = 1 << 0;
+pub(crate) const PORTRAIT_EQUIP_BAD_OVERRIDE_ACTIVE: usize = 1 << 0;
 /// The effective HEAD id is not the one the target save record carries.
-const PORTRAIT_EQUIP_BAD_HEAD: usize = 1 << 1;
+pub(crate) const PORTRAIT_EQUIP_BAD_HEAD: usize = 1 << 1;
 /// The effective CHEST id is not the one the target save record carries.
-const PORTRAIT_EQUIP_BAD_CHEST: usize = 1 << 2;
+pub(crate) const PORTRAIT_EQUIP_BAD_CHEST: usize = 1 << 2;
 /// The effective HANDS id is not the bare-body default the native feed equips into that slot.
-const PORTRAIT_EQUIP_BAD_HANDS: usize = 1 << 3;
+pub(crate) const PORTRAIT_EQUIP_BAD_HANDS: usize = 1 << 3;
 /// The effective LEGS id is not the bare-body default the native feed equips into that slot.
-const PORTRAIT_EQUIP_BAD_LEGS: usize = 1 << 4;
+pub(crate) const PORTRAIT_EQUIP_BAD_LEGS: usize = 1 << 4;
 
 /// Protector slot indices within the four the oracle covers.
-const PORTRAIT_EQUIP_SLOT_HEAD: usize = 0;
-const PORTRAIT_EQUIP_SLOT_CHEST: usize = 1;
-const PORTRAIT_EQUIP_SLOT_HANDS: usize = 2;
-const PORTRAIT_EQUIP_SLOT_LEGS: usize = 3;
+pub(crate) const PORTRAIT_EQUIP_SLOT_HEAD: usize = 0;
+pub(crate) const PORTRAIT_EQUIP_SLOT_CHEST: usize = 1;
+pub(crate) const PORTRAIT_EQUIP_SLOT_HANDS: usize = 2;
+pub(crate) const PORTRAIT_EQUIP_SLOT_LEGS: usize = 3;
 
 /// Verdict values for `oracle_portrait_equip_capture_verdict`. Deliberately tri-state: "never sampled"
 /// must NOT read as a pass, which is the `naked_kicks=0` false negative in a different costume.
-const PORTRAIT_EQUIP_CAPTURE_NOT_SAMPLED: usize = 0;
-const PORTRAIT_EQUIP_CAPTURE_CLEAN: usize = 1;
-const PORTRAIT_EQUIP_CAPTURE_BAD: usize = 2;
+pub(crate) const PORTRAIT_EQUIP_CAPTURE_NOT_SAMPLED: usize = 0;
+pub(crate) const PORTRAIT_EQUIP_CAPTURE_CLEAN: usize = 1;
+pub(crate) const PORTRAIT_EQUIP_CAPTURE_BAD: usize = 2;
 
 pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_BAD_FRAMES;
 pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_BAD_FRAMES_TOTAL;
@@ -74,7 +76,7 @@ pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_WINDOWS_SAMPLED;
 
 /// One frame's reading of the live stage-0 `ChrAsm`, already reduced to what the renderer will act on.
 #[derive(Clone, Copy)]
-struct PortraitEquipSample {
+pub(crate) struct PortraitEquipSample {
     /// `ChrAsm::unk0` / `unkd4` / `unkd8` verbatim. All three are `-1` on a ctor-built `ChrAsm`; a
     /// non-negative value in any of them is the bug's signature and settles boot-vs-switch in one run.
     unk0: i32,
@@ -90,21 +92,21 @@ struct PortraitEquipSample {
 /// Byte offset of protector `slot`'s entry within a `ChrAsm`'s `equipment_param_ids` array.
 /// `CS::ChrAsm::GetProtectorParamIdBySlot` (deobf 0x1403be950) is literally
 /// `lea 0xc(%rdx),%eax ; movslq %eax,%rdx ; mov 0x7c(%rcx,%rdx,4),%eax ; ret`.
-fn chr_asm_protector_param_id_offset(slot: usize) -> usize {
+pub(crate) fn chr_asm_protector_param_id_offset(slot: usize) -> usize {
     CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET
         + (CHR_ASM_PROTECTOR_HEAD_INDEX + slot) * core::mem::size_of::<i32>()
 }
 
 /// The bare-body row `CS::ChrAsm::GetDefaultProtectorParamId` returns for a protector slot, and which
 /// the native profile feed equips into HANDS and LEGS on every `set_model_source`.
-fn protector_default_param_id(slot: usize) -> i32 {
+pub(crate) fn protector_default_param_id(slot: usize) -> i32 {
     PROTECTOR_DEFAULT_PARAM_ID_BASE + PROTECTOR_DEFAULT_PARAM_ID_STRIDE * slot as i32
 }
 
 /// Replicate `FUN_1409e6fb0`'s protector resolution (deobf 0x1409e7553..0x1409e75b6, every test a
 /// SIGNED `js`) for one slot. The per-slot param id is the baseline; a non-negative override field
 /// replaces it outright.
-fn portrait_effective_protector_id(
+pub(crate) fn portrait_effective_protector_id(
     slot: usize,
     param_id: i32,
     unk0: i32,
@@ -130,7 +132,7 @@ fn portrait_effective_protector_id(
 /// bare-body defaults instead, because the native feed overwrites those two with
 /// `GetDefaultProtectorParamId(2)` / `(3)` immediately after copying the record -- a portrait wearing
 /// its own gauntlets would be the deviation, not the fix.
-fn portrait_equip_sample_bad_mask(sample: &PortraitEquipSample) -> usize {
+pub(crate) fn portrait_equip_sample_bad_mask(sample: &PortraitEquipSample) -> usize {
     let mut mask = 0usize;
     if sample.unk0 >= 0 || sample.unkd4 >= 0 || sample.unkd8 >= 0 {
         mask |= PORTRAIT_EQUIP_BAD_OVERRIDE_ACTIVE;
@@ -154,7 +156,7 @@ fn portrait_equip_sample_bad_mask(sample: &PortraitEquipSample) -> usize {
     mask
 }
 
-fn portrait_equip_pack(value: i32) -> usize {
+pub(crate) fn portrait_equip_pack(value: i32) -> usize {
     PORTRAIT_EQUIP_VALUE_PRESENT | (value as u32 as usize)
 }
 
@@ -171,7 +173,7 @@ pub(crate) fn portrait_equip_unpack(raw: usize) -> i32 {
 /// First writer wins. `compare_exchange` from 0 rather than `.store()` is the whole point: the value
 /// the reader gets belongs to the FIRST frame of the window, not to whichever tick happened to run
 /// last before the telemetry writer sampled.
-fn portrait_equip_latch_first(cell: &AtomicUsize, value: i32) {
+pub(crate) fn portrait_equip_latch_first(cell: &AtomicUsize, value: i32) {
     let _ = cell.compare_exchange(
         0,
         portrait_equip_pack(value),
@@ -183,7 +185,7 @@ fn portrait_equip_latch_first(cell: &AtomicUsize, value: i32) {
 /// Roll the per-window accumulators over when a new loading-owned profile table is built.
 /// `PROFILE_LOADSCREEN_TABLE_BUILDS` increments exactly once per load window, in
 /// `maybe_build_profile_table_for_loading`, which is also where the spec's window starts.
-fn portrait_equip_roll_window(window: usize) {
+pub(crate) fn portrait_equip_roll_window(window: usize) {
     if PORTRAIT_EQUIP_ORACLE_WINDOW.swap(window, Ordering::SeqCst) == window {
         return;
     }
@@ -218,7 +220,7 @@ fn portrait_equip_roll_window(window: usize) {
 ///   * any of the fault-guarded reads comes back unmapped, including the one-per-window read of the
 ///     target record's own protector ids (the next tick simply retries).
 /// A window that produces zero samples is itself a FAILURE verdict -- see `oracle_portrait_equip_sampled_frames`.
-unsafe fn portrait_equip_read_sample(
+pub(crate) unsafe fn portrait_equip_read_sample(
     base: usize,
     summary: usize,
     slot: i32,
@@ -373,7 +375,6 @@ pub(crate) unsafe fn portrait_equip_oracle_sample(base: usize, summary: usize, t
 
 #[cfg(test)]
 mod portrait_equip_oracle_tests {
-    use super::*;
 
     fn sample(
         unk0: i32,

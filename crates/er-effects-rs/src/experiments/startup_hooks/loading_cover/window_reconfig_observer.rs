@@ -1,3 +1,5 @@
+use super::*;
+
 // Observe-only user32 window-reconfiguration hooks (bd er-effects-rs-rzow).
 //
 // The 60fps boot videos proved the mid-boot black flashes are the game's own startup
@@ -28,16 +30,16 @@ pub(crate) use er_telemetry::counters::WINRECONFIG_SET_WINDOW_LONG_CALLS;
 pub(crate) use er_telemetry::counters::WINRECONFIG_SET_WINDOW_POS_CALLS;
 
 /// Per-hook log cap: the first calls carry the whole startup story; later calls only count.
-const WINRECONFIG_LOG_CAP: usize = 48;
+pub(crate) const WINRECONFIG_LOG_CAP: usize = 48;
 /// Class/name pointers below this are ATOM values, not strings (Win32 MAKEINTATOM contract).
-const WINRECONFIG_ATOM_LIMIT: usize = 0x1_0000;
+pub(crate) const WINRECONFIG_ATOM_LIMIT: usize = 0x1_0000;
 /// Bounded UTF-16 read for window/class names.
-const WINRECONFIG_NAME_CAP: usize = 64;
+pub(crate) const WINRECONFIG_NAME_CAP: usize = 64;
 /// DEVMODEW fixed ABI offsets (dmPelsWidth / dmPelsHeight); read raw so no Gdi feature is needed.
-const DEVMODEW_PELS_WIDTH_OFFSET: usize = 0xAC;
-const DEVMODEW_PELS_HEIGHT_OFFSET: usize = 0xB0;
+pub(crate) const DEVMODEW_PELS_WIDTH_OFFSET: usize = 0xAC;
+pub(crate) const DEVMODEW_PELS_HEIGHT_OFFSET: usize = 0xB0;
 
-fn winreconfig_name(ptr: usize) -> String {
+pub(crate) fn winreconfig_name(ptr: usize) -> String {
     if ptr == 0 {
         return "<null>".to_owned();
     }
@@ -55,7 +57,7 @@ fn winreconfig_name(ptr: usize) -> String {
     String::from_utf16(&units).unwrap_or_else(|_| format!("<utf16-err:{ptr:#x}>"))
 }
 
-type CreateWindowExWFn = unsafe extern "system" fn(
+pub(crate) type CreateWindowExWFn = unsafe extern "system" fn(
     u32,
     usize,
     usize,
@@ -70,7 +72,7 @@ type CreateWindowExWFn = unsafe extern "system" fn(
     usize,
 ) -> usize;
 
-unsafe extern "system" fn winreconfig_create_window_hook(
+pub(crate) unsafe extern "system" fn winreconfig_create_window_hook(
     exstyle: u32,
     class: usize,
     name: usize,
@@ -103,9 +105,10 @@ unsafe extern "system" fn winreconfig_create_window_hook(
     hwnd
 }
 
-type SetWindowPosFn = unsafe extern "system" fn(usize, usize, i32, i32, i32, i32, u32) -> i32;
+pub(crate) type SetWindowPosFn =
+    unsafe extern "system" fn(usize, usize, i32, i32, i32, i32, u32) -> i32;
 
-unsafe extern "system" fn winreconfig_set_window_pos_hook(
+pub(crate) unsafe extern "system" fn winreconfig_set_window_pos_hook(
     hwnd: usize,
     insert_after: usize,
     x: i32,
@@ -130,9 +133,9 @@ unsafe extern "system" fn winreconfig_set_window_pos_hook(
     unsafe { f(hwnd, insert_after, x, y, cx, cy, flags) }
 }
 
-type SetWindowLongPtrWFn = unsafe extern "system" fn(usize, i32, isize) -> isize;
+pub(crate) type SetWindowLongPtrWFn = unsafe extern "system" fn(usize, i32, isize) -> isize;
 
-unsafe extern "system" fn winreconfig_set_window_long_hook(
+pub(crate) unsafe extern "system" fn winreconfig_set_window_long_hook(
     hwnd: usize,
     index: i32,
     value: isize,
@@ -150,9 +153,9 @@ unsafe extern "system" fn winreconfig_set_window_long_hook(
     previous
 }
 
-type MoveWindowFn = unsafe extern "system" fn(usize, i32, i32, i32, i32, i32) -> i32;
+pub(crate) type MoveWindowFn = unsafe extern "system" fn(usize, i32, i32, i32, i32, i32) -> i32;
 
-unsafe extern "system" fn winreconfig_move_window_hook(
+pub(crate) unsafe extern "system" fn winreconfig_move_window_hook(
     hwnd: usize,
     x: i32,
     y: i32,
@@ -172,9 +175,10 @@ unsafe extern "system" fn winreconfig_move_window_hook(
     unsafe { f(hwnd, x, y, w, h, repaint) }
 }
 
-type ChangeDisplaySettingsExWFn = unsafe extern "system" fn(usize, usize, usize, u32, usize) -> i32;
+pub(crate) type ChangeDisplaySettingsExWFn =
+    unsafe extern "system" fn(usize, usize, usize, u32, usize) -> i32;
 
-unsafe extern "system" fn winreconfig_change_display_hook(
+pub(crate) unsafe extern "system" fn winreconfig_change_display_hook(
     devname: usize,
     devmode: usize,
     hwnd: usize,
@@ -292,24 +296,24 @@ pub(crate) use er_telemetry::counters::WINRECONFIG_EARLY_APPLY_RECT;
 /// 4 = monitor info failed, 5 = config unreadable (skipped), 6 = already at final geometry.
 pub(crate) use er_telemetry::counters::WINRECONFIG_EARLY_APPLY_RESULT;
 
-const WINRECONFIG_EARLY_APPLY_MAX_MS: u128 = 20_000;
-const WINRECONFIG_EARLY_APPLY_POLL_MS: u64 = 20;
-const WINRECONFIG_RESULT_APPLIED: usize = 1;
-const WINRECONFIG_RESULT_SKIP_WINDOWED: usize = 2;
-const WINRECONFIG_RESULT_NO_WINDOW: usize = 3;
-const WINRECONFIG_RESULT_NO_MONITOR: usize = 4;
-const WINRECONFIG_RESULT_NO_CONFIG: usize = 5;
-const WINRECONFIG_RESULT_ALREADY_FINAL: usize = 6;
-const CSIDL_APPDATA: i32 = 0x1a;
-const SHGFP_TYPE_CURRENT: u32 = 0;
-const MAX_PATH_W: usize = 260;
+pub(crate) const WINRECONFIG_EARLY_APPLY_MAX_MS: u128 = 20_000;
+pub(crate) const WINRECONFIG_EARLY_APPLY_POLL_MS: u64 = 20;
+pub(crate) const WINRECONFIG_RESULT_APPLIED: usize = 1;
+pub(crate) const WINRECONFIG_RESULT_SKIP_WINDOWED: usize = 2;
+pub(crate) const WINRECONFIG_RESULT_NO_WINDOW: usize = 3;
+pub(crate) const WINRECONFIG_RESULT_NO_MONITOR: usize = 4;
+pub(crate) const WINRECONFIG_RESULT_NO_CONFIG: usize = 5;
+pub(crate) const WINRECONFIG_RESULT_ALREADY_FINAL: usize = 6;
+pub(crate) const CSIDL_APPDATA: i32 = 0x1a;
+pub(crate) const SHGFP_TYPE_CURRENT: u32 = 0;
+pub(crate) const MAX_PATH_W: usize = 260;
 
-type WinreconfigShGetFolderPathWFn =
+pub(crate) type WinreconfigShGetFolderPathWFn =
     unsafe extern "system" fn(isize, i32, isize, u32, *mut u16) -> i32;
 
 /// Read the game's own GraphicsConfig.xml ScreenMode (UTF-16 XML). Resolves %APPDATA% through
 /// SHGetFolderPathW so an active save-redirect (which the game also sees) is honored.
-fn winreconfig_screen_mode() -> Option<String> {
+pub(crate) fn winreconfig_screen_mode() -> Option<String> {
     let mut root = [0u16; MAX_PATH_W];
     let resolved = match safe_input_proc(b"shell32.dll\0", b"SHGetFolderPathW\0") {
         Ok(addr) => {
@@ -344,7 +348,7 @@ fn winreconfig_screen_mode() -> Option<String> {
     Some(mode)
 }
 
-fn winreconfig_finish(result: usize, since_ms: u128, detail: &str) {
+pub(crate) fn winreconfig_finish(result: usize, since_ms: u128, detail: &str) {
     WINRECONFIG_EARLY_APPLY_MS.store(since_ms.min(usize::MAX as u128) as usize, Ordering::SeqCst);
     WINRECONFIG_EARLY_APPLY_RESULT.store(result, Ordering::SeqCst);
     append_autoload_debug(format_args!(
@@ -352,7 +356,7 @@ fn winreconfig_finish(result: usize, since_ms: u128, detail: &str) {
     ));
 }
 
-fn apply_startup_window_final_geometry() {
+pub(crate) fn apply_startup_window_final_geometry() {
     use windows::Win32::Foundation::RECT;
     use windows::Win32::Graphics::Gdi::{
         GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,

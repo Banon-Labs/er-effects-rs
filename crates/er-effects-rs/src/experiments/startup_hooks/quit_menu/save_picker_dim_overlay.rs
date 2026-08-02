@@ -1,3 +1,5 @@
+use super::*;
+
 // The screen dim that covers the game while the OS-native save picker is up.
 //
 // WHY THIS EXISTS AS A SEPARATE WINDOW AND NOT A GAME-RENDER-PATH OVERLAY. `save_picker_os_dialog`
@@ -63,10 +65,9 @@
 // it -- which is what keeps the OWNER of the cover, and the input-drive target, the real game
 // window even though the dialog's own owner is now the cover.
 
-/// Everything that owns the dim window lives in its own module rather than in the flat
-/// `startup_hooks` namespace: this file needs ~30 GDI/window imports and that namespace is built by
-/// `include!`, so a plain `use` here would collide with the identically-named imports other included
-/// files already made.
+/// Everything that owns the dim window lives in its own nested module: this code needs ~30
+/// GDI/window imports, and keeping them nested avoids colliding with the startup-hook compatibility
+/// import shim while the larger module split is underway.
 pub(crate) mod picker_dim {
     use std::ffi::c_void;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1185,7 +1186,6 @@ pub(crate) mod picker_dim {
 
     #[cfg(test)]
     mod picker_dim_tests {
-        use super::*;
 
         /// At zero intensity the indicator must composite to EXACTLY the flat dim, and at full
         /// intensity to opaque gold. If the first fails the mark leaves a visible rectangle of

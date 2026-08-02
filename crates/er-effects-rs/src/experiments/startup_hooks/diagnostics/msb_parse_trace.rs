@@ -1,3 +1,5 @@
+use super::*;
+
 // MSB PARSE TRACE -- the one measurement that collapses the phase-2 reload freeze.
 //
 // `MsbFileCap::msbResCap` (+0x90) has EXACTLY ONE writer on 1.16.2: the load-complete callback at

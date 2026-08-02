@@ -1,3 +1,5 @@
+use super::*;
+
 /// Install the row-populate hook (`FUN_1408758d0`). Idempotent; mirrors the named-child binder install.
 pub(crate) fn install_profile_row_populate_hook() {
     if PROFILE_ROW_POPULATE_INSTALLED.load(Ordering::SeqCst) != 0 {
@@ -498,21 +500,21 @@ pub(crate) fn install_title_native_menu_visual_render_suppression_hook() {
 }
 
 #[repr(C, align(8))]
-struct SystemQuitMenuHelpLabelScratch {
+pub(crate) struct SystemQuitMenuHelpLabelScratch {
     bytes: [u8; MENU_HELP_LABEL_SIZE],
 }
 
 #[repr(C, align(8))]
-struct SystemQuitRootProxyScratch {
+pub(crate) struct SystemQuitRootProxyScratch {
     bytes: [u8; MENU_WINDOW_ROOT_PROXY_SCRATCH_SIZE],
 }
 
-fn system_quit_list_slot_addr(list: usize, slot: usize) -> usize {
+pub(crate) fn system_quit_list_slot_addr(list: usize, slot: usize) -> usize {
     list.wrapping_add((0usize.wrapping_sub(list)) & 7)
         .wrapping_add(slot * std::mem::size_of::<usize>())
 }
 
-unsafe fn system_quit_menu_window_set_visible_and_flags(
+pub(crate) unsafe fn system_quit_menu_window_set_visible_and_flags(
     base: usize,
     window: usize,
     visible: bool,
@@ -592,7 +594,7 @@ unsafe fn system_quit_menu_window_set_visible_and_flags(
     true
 }
 
-fn system_quit_read_wide_resource_name(ptr: usize) -> String {
+pub(crate) fn system_quit_read_wide_resource_name(ptr: usize) -> String {
     const MAX_UNITS: usize = 64;
     if ptr < 0x10000 {
         return String::new();
@@ -608,7 +610,7 @@ fn system_quit_read_wide_resource_name(ptr: usize) -> String {
     String::from_utf16_lossy(&units)
 }
 
-unsafe fn system_quit_hide_real_system_windows(base: usize, source: &str) {
+pub(crate) unsafe fn system_quit_hide_real_system_windows(base: usize, source: &str) {
     let top = SYSTEM_QUIT_INGAME_TOP_WINDOW.load(Ordering::SeqCst);
     let option = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
     let profile = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
@@ -647,7 +649,7 @@ unsafe fn system_quit_hide_real_system_windows(base: usize, source: &str) {
 /// each cached pane's embedded proxy. No row/table copy, no rebuild, no upsert into a shared table.
 /// Runs on the menu thread (the restore path is menu-pump owned). Read-guarded; no-ops if the
 /// composite / selected tab / cached pane can't be resolved.
-unsafe fn system_quit_reapply_optionsetting_pane_visibility(
+pub(crate) unsafe fn system_quit_reapply_optionsetting_pane_visibility(
     base: usize,
     option_window: usize,
     forced_tab: Option<usize>,
@@ -787,7 +789,7 @@ unsafe fn system_quit_reapply_optionsetting_pane_visibility(
     ));
 }
 
-unsafe fn system_quit_reset_profile_select_state(source: &str) {
+pub(crate) unsafe fn system_quit_reset_profile_select_state(source: &str) {
     save_picker_reset(source);
     SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_PROFILE_SELECT_WINDOW.store(0, Ordering::SeqCst);
@@ -814,7 +816,7 @@ unsafe fn system_quit_reset_profile_select_state(source: &str) {
 /// once at the return-title REQUEST for pre-clear telemetry. Returns the pre-clear value (-1 if CSMenuMan
 /// unavailable). Only ever called from switch-active paths, and a no-op when already 0, so normal-gameplay
 /// save-disable behaviour is untouched.
-unsafe fn system_quit_clear_disable_save_menu(base: usize, source: &str) -> i32 {
+pub(crate) unsafe fn system_quit_clear_disable_save_menu(base: usize, source: &str) -> i32 {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const HEAP_LO: usize = 0x10000;
     let cs_menu_man = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }.unwrap_or(NULL);
@@ -846,7 +848,7 @@ unsafe fn system_quit_clear_disable_save_menu(base: usize, source: &str) -> i32 
 /// disk write is attempted and no "failed to save" popup can appear. Returns the pre-force bc4 value
 /// (-1 if GameMan unavailable). The incoming world's STEP_MoveMap(18) finalize gate (blocked while
 /// bc4 != 0) is released later by the deterministic streamed-and-parked bc4->0 clear on the game task.
-unsafe fn system_quit_force_return_title_bc4_ready(base: usize, source: &str) -> i32 {
+pub(crate) unsafe fn system_quit_force_return_title_bc4_ready(base: usize, source: &str) -> i32 {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const HEAP_LO: usize = 0x10000;
     const GAME_MAN_SINGLETON_RVA: usize = er_game_base::rva::GAME_MAN_SINGLETON_RVA;
@@ -870,7 +872,7 @@ unsafe fn system_quit_force_return_title_bc4_ready(base: usize, source: &str) ->
 /// `GameMan->save_state` (== our b80 offset) must be 0 (`FUN_14067a170`); (c) the menu gate `FUN_14080d660`:
 /// `*(CSMenuMan+0x80)->0x290` (byte) == 0 AND `->0x298` (qword) == 0. `save_state` is already 0 at the
 /// freeze, so this logs all three per-frame during the switch to NAME the actual blocker. Read-only.
-unsafe fn system_quit_log_save_gates(base: usize, source: &str) {
+pub(crate) unsafe fn system_quit_log_save_gates(base: usize, source: &str) {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const HEAP_LO: usize = 0x10000;
     // The engine SHUTDOWN/CLEANUP flag, not a "force latch" -- read-only here. See
@@ -1038,7 +1040,7 @@ pub(crate) unsafe fn system_quit_submit_direct_return_title_chain(
     true
 }
 
-unsafe fn system_quit_restore_real_system_windows(base: usize, source: &str) {
+pub(crate) unsafe fn system_quit_restore_real_system_windows(base: usize, source: &str) {
     if SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) == 0 {
         unsafe { system_quit_reset_profile_select_state(source) };
         return;
@@ -1166,7 +1168,7 @@ pub(crate) unsafe fn system_quit_profile_select_top_menu_tick() {
 }
 
 /// Result of resolving one named OptionSetting child and reading its DisplayInfo.Visible.
-struct OptionSettingPaneSample {
+pub(crate) struct OptionSettingPaneSample {
     /// `assignComponentWithName` returned a live out proxy (not 0 / not the null sentinel).
     resolved: bool,
     /// The resolved child's CSScaleformValue is a live DisplayObject (`(dataType & MASK) == VALUE`).
@@ -1183,7 +1185,7 @@ struct OptionSettingPaneSample {
 /// before any virtual dispatch, and `~CSScaleformValue` on the out proxy's EMBEDDED value (+0x28).
 /// Nothing is mutated; the `GetDisplayInfo` vcall only fills the caller's stack buffer. dtor is run
 /// exactly once for every resolved out proxy (never for an unresolved name).
-unsafe fn resolve_optionsetting_pane(
+pub(crate) unsafe fn resolve_optionsetting_pane(
     base: usize,
     assign: unsafe extern "system" fn(usize, usize, usize) -> usize,
     dtor: unsafe extern "system" fn(usize),
@@ -1227,7 +1229,10 @@ unsafe fn resolve_optionsetting_pane(
 /// caller; an embedded proxy has nothing to release). 7e7 guard on the vptr chain before any dispatch:
 /// validate the vtable (`*objectInterface`) and the resolved fn are game-image-live (NOT the heap
 /// objectInterface instance itself). `safe_read` of `*objectInterface` fails closed if unmapped.
-unsafe fn read_scaleform_pane_visible(base: usize, cs_value: usize) -> (bool, bool, i32) {
+pub(crate) unsafe fn read_scaleform_pane_visible(
+    base: usize,
+    cs_value: usize,
+) -> (bool, bool, i32) {
     let object_interface =
         unsafe { safe_read_usize(cs_value + CSSCALEFORMVALUE_OBJECT_INTERFACE_OFFSET) }
             .unwrap_or(0);
@@ -1267,7 +1272,7 @@ unsafe fn read_scaleform_pane_visible(base: usize, cs_value: usize) -> (bool, bo
     )
 }
 
-fn wide_ptr_starts_with_ascii(ptr: usize, ascii: &[u8]) -> bool {
+pub(crate) fn wide_ptr_starts_with_ascii(ptr: usize, ascii: &[u8]) -> bool {
     if ptr < TITLE_OWNER_SCAN_START_ADDRESS || ascii.is_empty() {
         return false;
     }
@@ -1289,7 +1294,7 @@ fn wide_ptr_starts_with_ascii(ptr: usize, ascii: &[u8]) -> bool {
 /// "Load Character from File" IS TESTED BEFORE "Load Character", because the first string starts
 /// with the second and a prefix test in the other order would report every file-browse row as the
 /// character row. The pre-2026-07-31 labels did not overlap, so this order was arbitrary then.
-fn optionsetting_quit_label_kind(label_ptr: usize) -> usize {
+pub(crate) fn optionsetting_quit_label_kind(label_ptr: usize) -> usize {
     if wide_ptr_starts_with_ascii(label_ptr, b"Save Game") {
         1
     } else if wide_ptr_starts_with_ascii(label_ptr, b"Load Character from File") {
@@ -1303,7 +1308,7 @@ fn optionsetting_quit_label_kind(label_ptr: usize) -> usize {
     }
 }
 
-fn hash_wide_label_ptr(label_ptr: usize) -> usize {
+pub(crate) fn hash_wide_label_ptr(label_ptr: usize) -> usize {
     let mut hash = 0xcbf2_9ce4_8422_2325usize;
     if label_ptr < TITLE_OWNER_SCAN_START_ADDRESS {
         return hash;
@@ -1321,7 +1326,7 @@ fn hash_wide_label_ptr(label_ptr: usize) -> usize {
     hash
 }
 
-unsafe fn sample_optionsetting_active_row_table(
+pub(crate) unsafe fn sample_optionsetting_active_row_table(
     current_dialog: usize,
     current_tab: usize,
     actively_shown: bool,
@@ -1430,7 +1435,7 @@ unsafe fn sample_optionsetting_active_row_table(
 /// repair: when the visible selected tab is 0, re-assert the cached/native Game Options pane once on
 /// entry so stale Quit-tab rows cannot remain cross-populated under the vanilla Game Options tab.
 /// Runs on the menu/game thread (the `MenuWindowJob::Run` hook) as required for GFx vcalls.
-unsafe fn sample_optionsetting_pane_visibility(base: usize, option_window: usize) {
+pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_window: usize) {
     pub(crate) use er_telemetry::counters::OPTIONSETTING_LAST_ACTIVE_TAB;
     if option_window == 0 || option_window < OPTIONSETTING_WINDOW_MIN_PTR {
         return;

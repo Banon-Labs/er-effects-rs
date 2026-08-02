@@ -1,3 +1,5 @@
+use super::*;
+
 // DLC VIRTUAL ROOT BLANK/REFILL TRACE -- why the reload's roots stay empty.
 //
 // The reload softlock is a blanked DLC virtual root: at the stall `mapstudio_dlc2` is `""` while the
@@ -62,7 +64,7 @@ pub(crate) fn install_dlc_roots_trace() {
 }
 
 /// Shared install body for the two root traces -- same shape, different target.
-fn install_one_dlc_roots_hook(
+pub(crate) fn install_one_dlc_roots_hook(
     rva: usize,
     detour: *mut c_void,
     orig: &'static AtomicUsize,
@@ -96,7 +98,7 @@ fn install_one_dlc_roots_hook(
 }
 
 /// Sample the DLC roots, run `body`, sample again, and log the transition.
-fn trace_dlc_roots_transition(kind: &str, n: usize, arg: u8, body: impl FnOnce()) {
+pub(crate) fn trace_dlc_roots_transition(kind: &str, n: usize, arg: u8, body: impl FnOnce()) {
     let base = game_module_base().ok().filter(|&b| b != 0);
     let before = match base {
         Some(b) => unsafe { dlio_virtual_roots_summary(b) },

@@ -1,3 +1,5 @@
+use super::*;
+
 // The Save Game flow's ONE native confirm box (save-game-flow WP2; reduced to one 2026-07-31).
 //
 // Clicking Save Game writes nothing on its own and asks nothing on its own: it opens the
@@ -57,11 +59,11 @@ pub(crate) use er_quit_menu::save_flow_boxes::{
 /// Fixed capacity (UTF-16 units) of a confirm-box prompt buffer. The const builder
 /// zero-fills the tail, so the NUL terminator `CS::MenuString` expects is always present and
 /// an over-long prompt fails at compile time rather than truncating silently.
-const SAVE_FLOW_PROMPT_CAPACITY: usize = 64;
+pub(crate) const SAVE_FLOW_PROMPT_CAPACITY: usize = 64;
 
 /// Widen an ASCII prompt into a NUL-terminated fixed-capacity UTF-16 buffer at compile time.
 /// `CS::MenuString` stores the RAW pointer, so every prompt must be a process-lifetime static.
-const fn save_flow_prompt(text: &[u8]) -> [u16; SAVE_FLOW_PROMPT_CAPACITY] {
+pub(crate) const fn save_flow_prompt(text: &[u8]) -> [u16; SAVE_FLOW_PROMPT_CAPACITY] {
     let mut out = [0_u16; SAVE_FLOW_PROMPT_CAPACITY];
     let mut idx = 0;
     while idx < text.len() {
@@ -71,19 +73,19 @@ const fn save_flow_prompt(text: &[u8]) -> [u16; SAVE_FLOW_PROMPT_CAPACITY] {
     out
 }
 
-static SAVE_FLOW_OVERWRITE_PROMPT_W: [u16; SAVE_FLOW_PROMPT_CAPACITY] =
+pub(crate) static SAVE_FLOW_OVERWRITE_PROMPT_W: [u16; SAVE_FLOW_PROMPT_CAPACITY] =
     save_flow_prompt(b"Are you sure you want to overwrite this file?");
 
 /// The Yes descriptor's internal label `L"\u{6c7a}\u{5b9a}"` ("kettei"/decide). This is an
 /// INTERNAL key the adder `_wcsicmp`s against the builder's default-label slot, not display
 /// text (the visible label comes from the localized Yes adder), and it is byte-identical to
 /// the literal every native Yes/No confirm passes.
-static SAVE_FLOW_YES_DESC_LABEL_W: [u16; 3] = [0x6c7a, 0x5b9a, 0];
+pub(crate) static SAVE_FLOW_YES_DESC_LABEL_W: [u16; 3] = [0x6c7a, 0x5b9a, 0];
 
 /// The 24-byte descriptor the Yes adder copies out (`FUN_1407b1d40` reads three qwords from
 /// it). Values are byte-identical to every native Yes/No confirm: `{100, 2, 1, <pad>, label}`.
 #[repr(C)]
-struct SaveFlowYesButtonDesc {
+pub(crate) struct SaveFlowYesButtonDesc {
     sound_id: i32,
     category: i32,
     kind: i32,
@@ -91,25 +93,27 @@ struct SaveFlowYesButtonDesc {
     label: usize,
 }
 
-const SAVE_FLOW_YES_DESC_SOUND_ID: i32 = 100;
-const SAVE_FLOW_YES_DESC_CATEGORY: i32 = 2;
-const SAVE_FLOW_YES_DESC_KIND: i32 = 1;
-const SAVE_FLOW_YES_DESC_RESERVED: i32 = 0;
+pub(crate) const SAVE_FLOW_YES_DESC_SOUND_ID: i32 = 100;
+pub(crate) const SAVE_FLOW_YES_DESC_CATEGORY: i32 = 2;
+pub(crate) const SAVE_FLOW_YES_DESC_KIND: i32 = 1;
+pub(crate) const SAVE_FLOW_YES_DESC_RESERVED: i32 = 0;
 
 /// Stack scratch for `CS::MessageBoxBuilder`. 16-byte aligned: the builder ctor stores xmm
 /// registers into its own body (`movups` in the sub-ctor `FUN_1407af5b0`).
 #[repr(C, align(16))]
-struct SaveFlowMsgBoxBuilderScratch {
+pub(crate) struct SaveFlowMsgBoxBuilderScratch {
     bytes: [u8; MSGBOX_BUILDER_SIZE],
 }
 
 /// Stack scratch for the prompt `CS::MenuString`.
 #[repr(C, align(8))]
-struct SaveFlowMenuStringScratch {
+pub(crate) struct SaveFlowMenuStringScratch {
     bytes: [u8; MENU_STRING_SIZE],
 }
 
-fn save_flow_box_prompt(box_id: usize) -> Option<&'static [u16; SAVE_FLOW_PROMPT_CAPACITY]> {
+pub(crate) fn save_flow_box_prompt(
+    box_id: usize,
+) -> Option<&'static [u16; SAVE_FLOW_PROMPT_CAPACITY]> {
     match box_id {
         SAVE_FLOW_BOX_OVERWRITE_FILE => Some(&SAVE_FLOW_OVERWRITE_PROMPT_W),
         _ => None,
@@ -117,7 +121,10 @@ fn save_flow_box_prompt(box_id: usize) -> Option<&'static [u16; SAVE_FLOW_PROMPT
 }
 
 /// Bump the per-box counter arrays with a bounds-checked box id.
-fn save_flow_box_counter_bump(counters: &[AtomicUsize; SAVE_FLOW_BOX_COUNT], box_id: usize) {
+pub(crate) fn save_flow_box_counter_bump(
+    counters: &[AtomicUsize; SAVE_FLOW_BOX_COUNT],
+    box_id: usize,
+) {
     if let Some(slot) = box_id.checked_sub(1).and_then(|idx| counters.get(idx)) {
         slot.fetch_add(1, Ordering::SeqCst);
     }
@@ -125,7 +132,7 @@ fn save_flow_box_counter_bump(counters: &[AtomicUsize; SAVE_FLOW_BOX_COUNT], box
 
 /// Resolved + prologue-verified recipe addresses. Resolving once keeps the byte checks off
 /// the per-box path while still failing closed on a drifted build.
-struct SaveFlowBoxRecipe {
+pub(crate) struct SaveFlowBoxRecipe {
     ctor: usize,
     add_yes: usize,
     add_no: usize,
@@ -137,12 +144,12 @@ struct SaveFlowBoxRecipe {
     submit: usize,
 }
 
-static SAVE_FLOW_BOX_RECIPE: OnceLock<Option<SaveFlowBoxRecipe>> = OnceLock::new();
+pub(crate) static SAVE_FLOW_BOX_RECIPE: OnceLock<Option<SaveFlowBoxRecipe>> = OnceLock::new();
 
 /// Resolve an RVA and confirm the live bytes still start with the prologue this address was
 /// verified against. Same fail-closed shape as `er_save_suppress::verify`: a mismatch means
 /// the running image is not the build these addresses came from, so we refuse to call it.
-fn save_flow_verify_rva(rva: u32, expected: &[u8], name: &str) -> Option<usize> {
+pub(crate) fn save_flow_verify_rva(rva: u32, expected: &[u8], name: &str) -> Option<usize> {
     let address = match game_rva(rva) {
         Ok(address) => address,
         Err(err) => {
@@ -172,7 +179,7 @@ fn save_flow_verify_rva(rva: u32, expected: &[u8], name: &str) -> Option<usize> 
 /// The verified recipe, or `None` on a build whose bytes drifted. On the first failure the
 /// `oracle_save_flow_recipe_unavailable` semaphore latches and Save Game degrades to the WP1
 /// immediate commit, so the row is never a dead button.
-fn save_flow_box_recipe() -> Option<&'static SaveFlowBoxRecipe> {
+pub(crate) fn save_flow_box_recipe() -> Option<&'static SaveFlowBoxRecipe> {
     SAVE_FLOW_BOX_RECIPE
         .get_or_init(|| {
             let recipe = (|| {
@@ -233,7 +240,7 @@ pub(crate) fn save_flow_box_recipe_available() -> bool {
 /// `profile_load_dialog + 0x10` with the context `profile_load_dialog + 0x50` -- i.e. a confirm
 /// raised over the picker belongs to the PICKER's job queue, not the System dialog's, whose queue
 /// is still busy with the open picker window job.
-fn save_flow_box_host_dialog() -> usize {
+pub(crate) fn save_flow_box_host_dialog() -> usize {
     match SAVE_FLOW_BOX_HOST_DIALOG.load(Ordering::SeqCst) {
         0 => SAVE_FLOW_DIALOG.load(Ordering::SeqCst),
         host => host,
@@ -387,7 +394,7 @@ pub(crate) unsafe fn save_flow_submit_box(box_id: usize) -> bool {
 /// every legitimate class while still rejecting a freed or reused block, because a stale
 /// object's first qword almost never points at a game-image vtable whose slot 2 is this one
 /// function.
-fn save_flow_box_identity(dialog: usize, base: usize) -> (usize, usize, bool) {
+pub(crate) fn save_flow_box_identity(dialog: usize, base: usize) -> (usize, usize, bool) {
     let vtable = unsafe { safe_read_usize(dialog) }.unwrap_or(0);
     let update_slot = unsafe {
         safe_read_usize(vtable + MSGBOX_DIALOG_VTABLE_UPDATE_SLOT * core::mem::size_of::<usize>())
@@ -400,7 +407,7 @@ fn save_flow_box_identity(dialog: usize, base: usize) -> (usize, usize, bool) {
 /// Everything one poll reads out of the live dialog. Kept as a struct so the trace line and
 /// the decision are derived from the SAME snapshot.
 #[derive(Clone, Copy, PartialEq, Eq)]
-struct SaveFlowBoxSnapshot {
+pub(crate) struct SaveFlowBoxSnapshot {
     vtable: usize,
     update_slot: usize,
     result_state: i32,
@@ -534,7 +541,7 @@ pub(crate) unsafe fn save_flow_box_decision(box_id: usize) -> Option<SaveFlowDec
 
 /// The `MenuJobResult` state the captured box carried AS BUILT (see
 /// `SAVE_FLOW_BOX_RESULT_BASELINE`).
-fn save_flow_box_result_baseline() -> i32 {
+pub(crate) fn save_flow_box_result_baseline() -> i32 {
     (SAVE_FLOW_BOX_RESULT_BASELINE.load(Ordering::SeqCst) as u32) as i32
 }
 
@@ -548,7 +555,7 @@ pub(crate) fn save_flow_decision_label(decision: SaveFlowDecision) -> &'static s
 
 /// Retire the capture slot and bump the counter that matches `decision`. Undecidable gets its
 /// OWN counter so a box we could not read never inflates the "user said No" tally.
-fn save_flow_box_finish(box_id: usize, decision: SaveFlowDecision) -> SaveFlowDecision {
+pub(crate) fn save_flow_box_finish(box_id: usize, decision: SaveFlowDecision) -> SaveFlowDecision {
     SAVE_FLOW_BOX_DIALOG.store(0, Ordering::SeqCst);
     SAVE_FLOW_BOX_EXPECTED.store(SAVE_FLOW_BOX_NONE, Ordering::SeqCst);
     SAVE_FLOW_BOX_EMIT_DIALOG.store(0, Ordering::SeqCst);
@@ -567,7 +574,7 @@ fn save_flow_box_finish(box_id: usize, decision: SaveFlowDecision) -> SaveFlowDe
 
 /// The `MenuJobResult` state the emit hook observed for `dialog`, or 0 when it has not fired
 /// for this dialog. Read-only.
-fn save_flow_box_emitted_state(dialog: usize) -> i32 {
+pub(crate) fn save_flow_box_emitted_state(dialog: usize) -> i32 {
     if SAVE_FLOW_BOX_EMIT_DIALOG.load(Ordering::SeqCst) != dialog {
         return 0;
     }
@@ -577,7 +584,10 @@ fn save_flow_box_emitted_state(dialog: usize) -> i32 {
 /// Fingerprint of the last logged poll, so the per-frame poll leaves a COMPLETE trace of every
 /// state the box passed through without becoming a per-frame firehose: one line when the box
 /// is first polled and one line every time any observed field changes.
-fn save_flow_box_poll_fingerprint(dialog: usize, snapshot: &SaveFlowBoxSnapshot) -> usize {
+pub(crate) fn save_flow_box_poll_fingerprint(
+    dialog: usize,
+    snapshot: &SaveFlowBoxSnapshot,
+) -> usize {
     let mut hash = dialog;
     for value in [
         snapshot.result_state as usize,
@@ -594,7 +604,11 @@ fn save_flow_box_poll_fingerprint(dialog: usize, snapshot: &SaveFlowBoxSnapshot)
     hash | 1
 }
 
-fn save_flow_box_trace_poll(box_id: usize, dialog: usize, snapshot: &SaveFlowBoxSnapshot) {
+pub(crate) fn save_flow_box_trace_poll(
+    box_id: usize,
+    dialog: usize,
+    snapshot: &SaveFlowBoxSnapshot,
+) {
     let fingerprint = save_flow_box_poll_fingerprint(dialog, snapshot);
     if SAVE_FLOW_BOX_LAST_POLL.swap(fingerprint, Ordering::SeqCst) == fingerprint {
         return;
@@ -614,11 +628,11 @@ fn save_flow_box_trace_poll(box_id: usize, dialog: usize, snapshot: &SaveFlowBox
 }
 
 /// Fingerprint of the last logged confirm-box poll (see `save_flow_box_trace_poll`).
-static SAVE_FLOW_BOX_LAST_POLL: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SAVE_FLOW_BOX_LAST_POLL: AtomicUsize = AtomicUsize::new(0);
 
 /// Box id whose submit is currently waiting on a busy MenuJob queue; keeps the retry log to
 /// one line per deferral rather than one per menu pump.
-static SAVE_FLOW_BOX_SUBMIT_DEFERRED: AtomicUsize = AtomicUsize::new(SAVE_FLOW_BOX_NONE);
+pub(crate) static SAVE_FLOW_BOX_SUBMIT_DEFERRED: AtomicUsize = AtomicUsize::new(SAVE_FLOW_BOX_NONE);
 
 /// Observer detour on `CS::MenuJob::EmitResult` (`MENU_JOB_EMIT_RESULT_RVA`, vtable slot
 /// `+0x60`). PURE OBSERVATION: it records the emitted `MenuJobResult` when `this` is the live

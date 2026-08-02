@@ -1,3 +1,5 @@
+use super::*;
+
 /// Read CSDelayDeleteMan's pending count (+0x40) and high-water (+0x44) via the singleton pointer
 /// at DELAY_DELETE_MAN_SINGLETON_PTR_RVA. Returns `(pending, highwater)` or None if the singleton is
 /// null/unresolved or the read is implausible (a wrong RVA/layout -> the count fails the sane bound).
@@ -101,7 +103,7 @@ pub(crate) unsafe fn delay_delete_enqueue_renderer(renderer: usize) -> bool {
 }
 
 /// Format an `AtomicUsize` low-water value: `usize::MAX` is the never-sampled sentinel.
-fn fmt_lowwater(v: usize) -> String {
+pub(crate) fn fmt_lowwater(v: usize) -> String {
     if v == usize::MAX {
         "unsampled".to_string()
     } else {
@@ -111,7 +113,7 @@ fn fmt_lowwater(v: usize) -> String {
 
 /// Bump the GX command-queue producer histogram for `key` (lock-free open addressing; a full table
 /// counts drops instead of evicting so the hot producers stay attributed).
-fn gx_cmd_queue_hist_bump(key: usize) {
+pub(crate) fn gx_cmd_queue_hist_bump(key: usize) {
     if key == 0 {
         return;
     }
@@ -223,7 +225,7 @@ pub(crate) fn gx_cmd_queue_bucket_summary() -> String {
 /// limit@+0x20 - align4(cursor_lo@+0x28), per the FUN_141c48e80 decompile) and fold it into the
 /// cumulative + per-switch low-water. Returns the sampled remaining for the caller's own logging,
 /// or None on unreadable fields.
-unsafe fn gx_cmd_arena_sample_remaining(queue: usize) -> Option<i64> {
+pub(crate) unsafe fn gx_cmd_arena_sample_remaining(queue: usize) -> Option<i64> {
     let arena = queue + GX_CMD_QUEUE_ARENA_OFFSET;
     let limit = unsafe { safe_read_i32(arena + GX_CMD_ARENA_LIMIT_OFFSET) }?;
     let cursor_lo = unsafe { safe_read_i32(arena + GX_CMD_ARENA_CURSOR_OFFSET) }?;
@@ -314,7 +316,7 @@ pub(crate) unsafe extern "system" fn gx_reserve_cmd_queue_slot_hook(
 
 /// Install the GX command-queue producer telemetry hooks (never alter queue behavior): the
 /// reserve-slot occupancy/histogram wrapper plus the thin pump-context latch for the bucket table.
-fn install_gx_cmd_queue_telemetry() {
+pub(crate) fn install_gx_cmd_queue_telemetry() {
     if GX_RESERVE_CMD_QUEUE_SLOT_INSTALLED.load(Ordering::SeqCst) != 0 {
         return;
     }
@@ -382,7 +384,7 @@ fn install_gx_cmd_queue_telemetry() {
 }
 
 /// Install the Scaleform handler ctor/dtor lifecycle guard (repeated-switch ProfileSelect UAF).
-fn install_scaleform_handler_lifecycle_guard() {
+pub(crate) fn install_scaleform_handler_lifecycle_guard() {
     if SCALEFORM_HANDLER_TRACE_INSTALLED.load(Ordering::SeqCst) != 0 {
         return;
     }
@@ -548,7 +550,7 @@ pub(crate) unsafe extern "system" fn menu_window_job_dtor_hook(
 ///   menu_id means freed/reused memory and is doomed. This closes the 2026-07-23 false negative
 ///   (crash at rva 0x7ada7c: reused window, in-module vtable, menu_id garbage != 0xffff, native
 ///   finalize virtual-called the reused object).
-unsafe fn menu_window_doomed_event_index(
+pub(crate) unsafe fn menu_window_doomed_event_index(
     window: usize,
     base: usize,
     preserved_stale: bool,
@@ -624,7 +626,7 @@ pub(crate) fn masquerade_preserved_job_note(job: usize) {
 /// this instead of `masquerade_preserved_job_take`: the finalize runs repeatedly over a job's life
 /// (three call sites in `MenuWindowJob::Run` alone), whereas the destructor runs exactly once, so
 /// consuming the entry there would disarm the strict predicate for every later call on the same job.
-fn masquerade_preserved_job_contains(job: usize) -> bool {
+pub(crate) fn masquerade_preserved_job_contains(job: usize) -> bool {
     if job == 0 {
         return false;
     }
@@ -633,7 +635,7 @@ fn masquerade_preserved_job_contains(job: usize) -> bool {
         .any(|slot| slot.load(Ordering::SeqCst) == job)
 }
 
-fn masquerade_preserved_job_take(job: usize) -> bool {
+pub(crate) fn masquerade_preserved_job_take(job: usize) -> bool {
     if job == 0 {
         return false;
     }
@@ -654,7 +656,11 @@ fn masquerade_preserved_job_take(job: usize) -> bool {
 /// (`vector+0x48`) sane, because the native search loop is not SEH-guarded and a corrupt vector
 /// pointer would otherwise fault. The removal itself only touches vector slots -- never the window's
 /// vtable -- so it is safe on a doomed window.
-unsafe fn menu_window_remove_from_push_target(job: usize, window: usize, base: usize) -> bool {
+pub(crate) unsafe fn menu_window_remove_from_push_target(
+    job: usize,
+    window: usize,
+    base: usize,
+) -> bool {
     let Some(vector) = (unsafe { safe_read_usize(job + MENU_WINDOW_JOB_PUSH_TARGET_50_OFFSET) })
     else {
         return false;
@@ -767,7 +773,7 @@ pub(crate) fn install_menu_window_job_finalize_guard() {
     }
 }
 
-fn install_menu_window_job_dtor_guard() {
+pub(crate) fn install_menu_window_job_dtor_guard() {
     if MENU_WINDOW_JOB_DTOR_TRACE_INSTALLED.load(Ordering::SeqCst) != 0 {
         return;
     }
@@ -821,7 +827,7 @@ fn install_menu_window_job_dtor_guard() {
     }
 }
 
-fn install_system_quit_menu_window_job_run_hook() {
+pub(crate) fn install_system_quit_menu_window_job_run_hook() {
     // Atomic ONCE-CLAIM: only the FIRST caller proceeds; concurrent/reentrant callers bail immediately. The
     // old `load != NOT ? return` guard did NOT block a reentrant call while the first was mid-install (INSTALLED
     // was only set on full success), so the install ran twice -> double MhHook::new (ALREADY_CREATED) + double
@@ -905,7 +911,7 @@ fn install_system_quit_menu_window_job_run_hook() {
     }
 }
 
-fn install_system_quit_window_list_push_hook() {
+pub(crate) fn install_system_quit_window_list_push_hook() {
     if SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED.load(Ordering::SeqCst)
         != SYSTEM_QUIT_WINDOW_LIST_PUSH_NOT_INSTALLED
     {
@@ -963,7 +969,7 @@ fn install_system_quit_window_list_push_hook() {
 /// Is the `MenuOffscrRendParam` param table absent from SoloParamRepository? True only during a quit
 /// teardown (the world unload drops it); it stays resident through loads. Reproduces the game's own
 /// check (`GetParamResCap(repo, MenuOffscrRendParam, 0) == NULL`) read-only.
-unsafe fn menu_offscr_rend_param_table_absent(base: usize) -> bool {
+pub(crate) unsafe fn menu_offscr_rend_param_table_absent(base: usize) -> bool {
     let repo = unsafe { safe_read_usize(base + SOLO_PARAM_REPOSITORY_PTR_RVA) }.unwrap_or(0);
     if repo == 0 {
         return false; // repo itself not up yet -> not the quit-teardown condition; forward.
@@ -1000,7 +1006,7 @@ pub(crate) unsafe extern "system" fn menu_offscr_rend_param_lookup_hook(out: usi
 }
 
 /// Install the quit-to-desktop clean-kill guard (er-effects-rs-j74t follow-up). Idempotent.
-fn install_quit_to_desktop_clean_kill_hook() {
+pub(crate) fn install_quit_to_desktop_clean_kill_hook() {
     if MENU_OFFSCR_REND_PARAM_LOOKUP_INSTALLED.load(Ordering::SeqCst) != 0 {
         return;
     }
@@ -1054,7 +1060,7 @@ fn install_quit_to_desktop_clean_kill_hook() {
     }
 }
 
-fn install_system_quit_noop_action_hook() {
+pub(crate) fn install_system_quit_noop_action_hook() {
     let first_installed = SYSTEM_QUIT_NOOP_ACTION_INSTALLED.load(Ordering::SeqCst)
         != SYSTEM_QUIT_NOOP_ACTION_NOT_INSTALLED;
     let second_installed = SYSTEM_QUIT_RETURN_DESKTOP_ACTION_INSTALLED.load(Ordering::SeqCst)
@@ -1202,7 +1208,7 @@ fn install_system_quit_noop_action_hook() {
     }
 }
 
-fn install_system_quit_save_game_text_hook() {
+pub(crate) fn install_system_quit_save_game_text_hook() {
     if SYSTEM_QUIT_SAVE_GAME_TEXT_INSTALLED.load(Ordering::SeqCst)
         != SYSTEM_QUIT_SAVE_GAME_TEXT_NOT_INSTALLED
     {
@@ -1258,7 +1264,7 @@ fn install_system_quit_save_game_text_hook() {
     }
 }
 
-fn install_system_quit_save_game_confirm_hook() {
+pub(crate) fn install_system_quit_save_game_confirm_hook() {
     if SYSTEM_QUIT_SAVE_GAME_CONFIRM_INSTALLED.load(Ordering::SeqCst)
         != SYSTEM_QUIT_SAVE_GAME_CONFIRM_NOT_INSTALLED
     {
@@ -1465,7 +1471,7 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
 
 /// Advance the System->Quit repro autopilot to `next`, resetting the phase-local tick and the
 /// waiting-log latch.
-fn sq_repro_transition(next: usize) {
+pub(crate) fn sq_repro_transition(next: usize) {
     SQ_REPRO_STATE.store(next, Ordering::SeqCst);
     SQ_REPRO_STATE_TICK.store(0, Ordering::SeqCst);
     SQ_REPRO_STATE_TAPS.store(0, Ordering::SeqCst);

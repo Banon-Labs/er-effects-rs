@@ -1,3 +1,5 @@
+use super::*;
+
 // DLC VIRTUAL ROOT SELF-HEAL -- the profile-switch reload softlock fix.
 //
 // PROVEN CAUSE (bd `FORK-RESOLVED-refill-job-never-enqueued-on-reload-fix-is-gated-self-heal-2026-07-30`):
@@ -34,7 +36,7 @@
 
 /// Locate the `mapstudio_dlc2` entry in `DLFileDeviceManager::virtualRoots` and return its address.
 /// Cached: the vector is stable once built, and this runs every frame.
-unsafe fn dlc_root_entry_addr(base: usize) -> Option<usize> {
+pub(crate) unsafe fn dlc_root_entry_addr(base: usize) -> Option<usize> {
     let cached = DLC_ROOT_ENTRY_ADDR.load(Ordering::SeqCst);
     if cached > 0x10000 {
         // RE-VALIDATE, do not trust the cache blindly. The alias table GROWS (measured: the title's
@@ -144,7 +146,7 @@ pub(crate) unsafe fn dlc_roots_self_heal_tick() {
 
 /// FNV-1a over the observed root string. Used instead of storing a `String` in a static: the heal
 /// runs on the game thread every frame and must not allocate or lock on the common path.
-fn fnv1a64(bytes: &[u8]) -> u64 {
+pub(crate) fn fnv1a64(bytes: &[u8]) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for b in bytes {
         hash ^= u64::from(*b);

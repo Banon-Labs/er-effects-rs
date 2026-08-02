@@ -1,4 +1,9 @@
-unsafe fn system_quit_apply_foreign_profile_summary_preview(base: usize, bytes: &[u8]) -> usize {
+use super::*;
+
+pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
+    base: usize,
+    bytes: &[u8],
+) -> usize {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let summary = unsafe { system_quit_profile_summary_ptr() };
     if summary == null {
@@ -110,7 +115,10 @@ unsafe fn system_quit_apply_foreign_profile_summary_preview(base: usize, bytes: 
     mask
 }
 
-fn system_quit_save_swap_restore_original_file(st: &SystemQuitSaveSwapState, reason: &str) -> bool {
+pub(crate) fn system_quit_save_swap_restore_original_file(
+    st: &SystemQuitSaveSwapState,
+    reason: &str,
+) -> bool {
     if st.path.is_empty() || st.original_bytes.is_empty() {
         return false;
     }
@@ -134,7 +142,7 @@ fn system_quit_save_swap_restore_original_file(st: &SystemQuitSaveSwapState, rea
     }
 }
 
-unsafe fn system_quit_save_swap_restore_profile_summary(reason: &str) {
+pub(crate) unsafe fn system_quit_save_swap_restore_profile_summary(reason: &str) {
     let mut st = system_quit_save_swap_lock();
     if !st.preview_applied || st.committed {
         return;
@@ -167,7 +175,7 @@ unsafe fn system_quit_save_swap_restore_profile_summary(reason: &str) {
     *st = SystemQuitSaveSwapState::default();
 }
 
-unsafe fn system_quit_save_swap_poll_preview(base: usize) {
+pub(crate) unsafe fn system_quit_save_swap_poll_preview(base: usize) {
     let tick = SYSTEM_QUIT_SAVE_SWAP_POLL_TICK.fetch_add(1, Ordering::SeqCst);
     if tick % SYSTEM_QUIT_SAVE_SWAP_POLL_INTERVAL_TICKS != 0 {
         return;
@@ -234,7 +242,7 @@ unsafe fn system_quit_save_swap_poll_preview(base: usize) {
     ));
 }
 
-unsafe fn system_quit_save_swap_prepare_selected_slot(slot: i32) -> Result<bool, ()> {
+pub(crate) unsafe fn system_quit_save_swap_prepare_selected_slot(slot: i32) -> Result<bool, ()> {
     if !(0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&slot) {
         append_autoload_debug(format_args!(
             "system-quit-save-swap: prepare selected slot skipped -- out-of-range slot={slot}"
@@ -294,7 +302,7 @@ unsafe fn system_quit_save_swap_prepare_selected_slot(slot: i32) -> Result<bool,
     }
 }
 
-fn make_save_file_writable_for_overwrite(path: &str) {
+pub(crate) fn make_save_file_writable_for_overwrite(path: &str) {
     if let Ok(meta) = fs::metadata(path) {
         let mut perms = meta.permissions();
         if perms.readonly() {
@@ -304,7 +312,7 @@ fn make_save_file_writable_for_overwrite(path: &str) {
     }
 }
 
-fn write_save_bytes_for_overwrite(path: &str, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_save_bytes_for_overwrite(path: &str, bytes: &[u8]) -> std::io::Result<()> {
     make_save_file_writable_for_overwrite(path);
     fs::write(path, bytes)
 }
@@ -382,7 +390,7 @@ pub(crate) fn system_quit_committed_foreign_save_path() -> Option<String> {
 /// landed. Resolve the row for the SELECTED slot as soon as the switch names it, so every later build
 /// (our loading-owned rebuild AND the native mid-window TitleTopDialog rebuild) constructs the target
 /// RT at full size.
-unsafe fn patch_profile_offscreen_size_for_loaded_slot(base: usize) -> bool {
+pub(crate) unsafe fn patch_profile_offscreen_size_for_loaded_slot(base: usize) -> bool {
     if !portrait_real_pixels_enabled() {
         return true;
     }

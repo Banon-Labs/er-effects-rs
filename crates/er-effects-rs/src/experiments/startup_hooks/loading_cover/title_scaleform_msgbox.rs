@@ -1,3 +1,5 @@
+use super::*;
+
 use std::{
     ffi::{CStr, c_void},
     fmt::Write as _,
@@ -32,8 +34,7 @@ use windows::{
             Threading::GetCurrentProcessId,
         },
         // The comdlg32 imports this block used to carry now live in `save_picker_os_dialog.rs`,
-        // where they are actually used; `startup_hooks` is one flat module built from `include!`s,
-        // so importing the same names twice would collide.
+        // where they are actually used; keep this module limited to its own window-message imports.
         UI::WindowsAndMessaging::{
             EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
             WM_KEYUP,
@@ -47,28 +48,26 @@ use crate::*;
 #[allow(unused_imports)]
 use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 
-use super::*;
-
-static TITLE_SCALEFORM_MEMORY_GFX: OnceLock<Vec<u8>> = OnceLock::new();
-static TITLE_SCALEFORM_05_000_MEMORY_GFX: OnceLock<Vec<u8>> = OnceLock::new();
+pub(crate) static TITLE_SCALEFORM_MEMORY_GFX: OnceLock<Vec<u8>> = OnceLock::new();
+pub(crate) static TITLE_SCALEFORM_05_000_MEMORY_GFX: OnceLock<Vec<u8>> = OnceLock::new();
 /// Runtime-derived stripped 05_000_title movie (er-effects-rs-h7x): computed once at first
 /// title file-open from the native MemoryFile's vanilla payload, then reused for every later
 /// title visit. Lives for the process lifetime so the swapped-in data pointer stays valid for
 /// as long as any native file object references it.
-static TITLE_05_000_RUNTIME_STRIPPED: OnceLock<Vec<u8>> = OnceLock::new();
+pub(crate) static TITLE_05_000_RUNTIME_STRIPPED: OnceLock<Vec<u8>> = OnceLock::new();
 /// Runtime-derived stats-panel 05_010_profileselect movie: computed once at first ProfileSelect
 /// file-open from the native MemoryFile's vanilla payload, then reused for every later open.
 /// Process-lifetime for the same data-pointer-validity reason as the 05_000 buffer above.
-static PROFILE_05_010_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::new();
+pub(crate) static PROFILE_05_010_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::new();
 /// Runtime-derived 4-button System->Quit OptionSetting movie: computed once at first
 /// `02_040_optionsetting` file-open from the native MemoryFile's vanilla payload, then reused
 /// for later opens. This keeps the DLL self-contained: no shipped GFx, only in-memory edits
 /// against the game's own loaded bytes.
-static OPTIONS_02_040_QUIT4_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::new();
+pub(crate) static OPTIONS_02_040_QUIT4_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::new();
 pub(crate) use er_telemetry::counters::OPTIONS_02_040_QUIT4_RUNTIME_FAILURES;
 pub(crate) use er_telemetry::counters::OPTIONS_02_040_QUIT4_RUNTIME_SERVES;
 
-fn load_memory_gfx_from_env(var: &str, slot: &OnceLock<Vec<u8>>, label: &str) {
+pub(crate) fn load_memory_gfx_from_env(var: &str, slot: &OnceLock<Vec<u8>>, label: &str) {
     // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): the env-driven memory-GFX override
     // (`var` named a custom-movie path / embedded selector) is removed -- env feature gates are
     // forbidden. Inert no-op now: with no env source `path` is empty and the loader does nothing, so
@@ -125,7 +124,7 @@ fn load_memory_gfx_from_env(var: &str, slot: &OnceLock<Vec<u8>>, label: &str) {
 }
 
 // ENV-GATE RATIONALE: ER_EFFECTS_TITLE_05_000_MEMORY_GFX is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
-fn load_title_scaleform_memory_gfx() {
+pub(crate) fn load_title_scaleform_memory_gfx() {
     load_memory_gfx_from_env(
         "ER_EFFECTS_TITLE_RESOURCE_MEMORY_GFX",
         &TITLE_SCALEFORM_MEMORY_GFX,
@@ -154,7 +153,7 @@ fn load_title_scaleform_memory_gfx() {
 /// in rax). Calls the original, then (pre-world, capped) logs the BUILT dialog's vtable/class +
 /// the 4 args (the FMG message id is one of them) + caller, so we can identify the actual
 /// connection-error dialog without guessing. Read-only; never mutates the dialog.
-unsafe fn policy_tos_record_fields(record: usize) -> (usize, usize, usize) {
+pub(crate) unsafe fn policy_tos_record_fields(record: usize) -> (usize, usize, usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if record == null {
         return (null, null, null);
@@ -342,7 +341,7 @@ pub(crate) unsafe extern "system" fn policy_tos_selector_ctor_hook(
     ret
 }
 
-unsafe fn policy_tos_flag_value(owner: usize) -> (usize, usize) {
+pub(crate) unsafe fn policy_tos_flag_value(owner: usize) -> (usize, usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let flag_ptr = if owner != null {
         unsafe { safe_read_usize(owner + 0x29c0) }.unwrap_or(null)
@@ -727,7 +726,7 @@ pub(crate) fn install_server_status_hook() {
 /// Layout: [+0x10]=length (chars), [+0x18]=capacity (chars); the text is inline at `s` when capacity
 /// < 8, else `*(s)` points at the heap buffer. Every read is fault-guarded so a garbage Spec field can
 /// never AV the game thread. UTF-16 lossy decode (the repo no-lossy lint targets from_utf8_lossy only).
-unsafe fn read_dlw_string(s: usize, max_chars: usize) -> Option<String> {
+pub(crate) unsafe fn read_dlw_string(s: usize, max_chars: usize) -> Option<String> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if s <= null {
         return None;
@@ -764,7 +763,7 @@ unsafe fn read_dlw_string(s: usize, max_chars: usize) -> Option<String> {
 /// is NOT in rdx/r9 (a pointer pair 0x40 apart) and is NOT fetched via GetGR_System_Message at build
 /// time, so read it straight from the Spec. Tries the reported MenuString offset (+0x8e0) plus a scan
 /// of early offsets for any embedded/pointed-to DLW string. Read-only; logs each decoded string.
-unsafe fn dump_msgbox_spec(c: usize, n: usize) {
+pub(crate) unsafe fn dump_msgbox_spec(c: usize, n: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if c <= null {
         return;
