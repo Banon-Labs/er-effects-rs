@@ -99,6 +99,8 @@ Seventeenth slice on `refactor/s6b3f-createfile-open-plan-20260802`: move Create
 
 Eighteenth slice on `refactor/s6b3g-query-path-plan-20260802`: move save existence/query API redirect planning into `er-save-redirect::plan_save_query_path`. Product still owns API-specific log budgets, path-kind counters, redirect path construction callback, original-call trampolines, and telemetry logging.
 
+Nineteenth slice on `refactor/s6b4a-save-path-kind-core-20260802`: move the pure mapping from `SavePathKind` to telemetry-counted bucket into `er-save-redirect::SavePathTelemetryBucket`. Product still owns the actual counters, telemetry serialization, and hook-side recording.
+
 Gate: Windows-target check plus a no-runtime hook-install smoke if available. Runtime proof comes after this, not before.
 
 ### S6b.3: boot-hold/title-flow seam
