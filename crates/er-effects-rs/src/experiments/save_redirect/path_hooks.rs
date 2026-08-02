@@ -27,10 +27,10 @@ use er_save_redirect::{
     SaveHookInstallState, SavePathKind, SavePathTelemetryBucket, classify_copyfile_endpoint,
     classify_save_query_path, createfile_diag_hit_should_log, direct_stage_case_dirs,
     is_save_file_or_backup_path, plan_create_file_open, plan_direct_stage_request,
-    plan_save_path_telemetry, plan_save_query_path, probe_direct_stage_file_status,
-    redirect_wide_save_path_with_side_effects, save_detour_disk_io_allowed, save_file_is_readonly,
-    save_normalize_hash_bytes, steam_id64_from_wide_save_path, wide_contains_ci_ascii,
-    wide_ends_with_ci_ascii,
+    plan_save_path_telemetry, plan_save_query_path, plausible_steam_id64,
+    probe_direct_stage_file_status, redirect_wide_save_path_with_side_effects,
+    save_detour_disk_io_allowed, save_file_is_readonly, save_normalize_hash_bytes,
+    steam_id64_from_wide_save_path, wide_contains_ci_ascii, wide_ends_with_ci_ascii,
 };
 use er_telemetry::counters::{
     SAVE_REDIRECT_DETOUR_MAX_DEPTH, SAVE_REDIRECT_DETOUR_REENTRANT_PASSTHROUGHS,
@@ -635,10 +635,6 @@ fn validated_default_save_file(path: PathBuf, source_label: &str) -> Option<Path
 fn validated_configured_save_file() -> Option<PathBuf> {
     // Staged, never written in place -- read-only is valid, so no writability check here.
     validated_save_file_path(env_save_file_path()?)
-}
-
-fn plausible_steam_id64(value: u64) -> Option<u64> {
-    er_save_redirect::plausible_steam_id64(value)
 }
 
 fn configured_active_steam_id64_env() -> Option<u64> {

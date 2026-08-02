@@ -898,7 +898,9 @@ pub fn path_root_to_wine_wide(root: &Path) -> WineRootWide {
 }
 
 pub fn plausible_steam_id64(value: u64) -> Option<u64> {
-    (value >= 10_000_000_000_000_000 && value <= 99_999_999_999_999_999).then_some(value)
+    (10_000_000_000_000_000..=99_999_999_999_999_999)
+        .contains(&value)
+        .then_some(value)
 }
 
 /// Save-like wide path category used by save-redirect telemetry and hook decisions.
@@ -1903,6 +1905,20 @@ mod tests {
                 root_wide: WineRootWide("Z:\\prefix".encode_utf16().collect()),
             }
         );
+    }
+
+    #[test]
+    fn validates_plausible_steam_id64_range() {
+        assert_eq!(
+            plausible_steam_id64(10_000_000_000_000_000),
+            Some(10_000_000_000_000_000)
+        );
+        assert_eq!(
+            plausible_steam_id64(99_999_999_999_999_999),
+            Some(99_999_999_999_999_999)
+        );
+        assert_eq!(plausible_steam_id64(9_999_999_999_999_999), None);
+        assert_eq!(plausible_steam_id64(100_000_000_000_000_000), None);
     }
 
     #[test]
