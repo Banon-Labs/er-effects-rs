@@ -398,6 +398,7 @@ pub(crate) fn save_flow_menu_enter_stage(expected: usize, stage: usize, reason: 
 #[cfg(test)]
 mod save_picker_menu_stage_transition_tests {
     use super::save_flow_menu_stage_cas;
+    use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
