@@ -22,6 +22,9 @@ er-hook = { path = "../er-hook" }
 # defined in experiments/mem.rs. game-types re-exports the typed game bindings.
 er-game-base = { path = "../er-game-base", features = ["game-types"] }
 er-save-loader = { path = "../er-save-loader" }
+# Host-runnable save-source/redirect planner. Process-wide hooks stay in this product crate until
+# the later save-redirect owner slice.
+er-save-redirect = { path = "../er-save-redirect" }
 er-save-picker = { path = "../er-save-picker", default-features = false, features = ["boot-flow", "os-dialog"] }
 # Customized System>Quit decision core. Hooked surfaces stay in this crate until S8.
 er-quit-menu = { path = "../er-quit-menu" }

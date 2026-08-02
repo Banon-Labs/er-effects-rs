@@ -15,8 +15,9 @@ Usage: scripts/smoke-save-picker-dll.sh [options]
 
 Builds/prepares a standalone ME3 profile for er_save_picker_dll.dll. By default it builds the DLL
 and writes artifacts only; pass --launch to run the approved ME3/offline Elden Ring path.
-This is a surface/staging smoke: the standalone DLL records a picked save and releases its own
-picker latch, but it does not install the product save-redirect hooks or prove standalone autoload.
+This is a surface/staging smoke: the standalone DLL validates/plans a picked save through
+`er-save-redirect` and releases its own picker latch, but it does not install the product
+save-redirect hooks or prove standalone autoload.
 
 Options:
   --artifact-dir DIR   Artifact directory to create/use

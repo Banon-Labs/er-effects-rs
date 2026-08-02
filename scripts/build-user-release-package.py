@@ -135,8 +135,9 @@ def write_package_files(stage_dir: Path, package_name: str, commit: str) -> None
             /home/banon/projects/er-effects-rs/target/x86_64-pc-windows-msvc/release/er_save_picker_dll.dll
             ```
 
-            This standalone picker DLL records picked saves and closes its own picker latch; it does
-            not install the product save-redirect hooks and is not standalone autoload proof.
+            This standalone picker DLL validates/plans picked saves through `er-save-redirect` and
+            closes its own picker latch; it does not install the product save-redirect hooks and is
+            not standalone autoload proof.
 
             ## Launch with ME3
 

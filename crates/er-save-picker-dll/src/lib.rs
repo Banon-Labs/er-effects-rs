@@ -9,9 +9,9 @@
 //! does not install its host or arm, so the product remains the owner of the boot flow. S6 does not
 //! claim a standalone-first co-load proof; when loaded by itself this DLL owns a standalone pending
 //! latch, opens the picker model, starts the low-level keyboard hook, and records selected paths in
-//! its own log. It does not install product save-redirect hooks; a standalone pick proves the
-//! picker surface and staging path, then closes the standalone latch instead of pretending to load
-//! the game save.
+//! its own log. It does not install product save-redirect hooks; a standalone pick is validated and
+//! planned through `er-save-redirect`, then closes the standalone latch instead of pretending to
+//! install hooks or load the game save.
 
 #![allow(non_snake_case)]
 
@@ -52,8 +52,8 @@ fn append_log(dir: &Path, args: std::fmt::Arguments<'_>) {
     }
 }
 
-/// The standalone host seam. There is no product save redirect behind this DLL, so the
-/// completion callback records the pick and releases this DLL's own picker latch instead of
+/// The standalone host seam. There is no product save hook owner behind this DLL, so the
+/// completion callback validates/plans the pick and releases this DLL's own picker latch instead of
 /// claiming it activated autoload.
 fn install_standalone_host() -> bool {
     er_save_picker::install_host(er_save_picker::SavePickerHost {
@@ -75,9 +75,17 @@ fn standalone_missing_save_selection_pending() -> bool {
 }
 
 fn standalone_complete_missing_save_selection(path: &Path) -> bool {
+    let Ok(validated) = er_save_redirect::validate_save_file_path(path.to_path_buf()) else {
+        standalone_log(format_args!(
+            "standalone pick rejected by shared save-source validation: '{}'",
+            path.display()
+        ));
+        return false;
+    };
+    let plan = er_save_redirect::plan_validated_save_source(validated.clone(), false);
     standalone_log(format_args!(
-        "standalone pick accepted for surface proof: '{}' (no product save redirect installed)",
-        path.display()
+        "standalone pick accepted for surface proof: '{}' plan={plan:?} (no save hook owner installed)",
+        validated.display()
     ));
     STANDALONE_MISSING_SAVE_PENDING.store(false, Ordering::SeqCst);
     true
@@ -160,15 +168,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn standalone_host_installs_once_and_releases_its_own_latch_on_pick() {
+    fn standalone_host_installs_once_and_refuses_invalid_picks_without_releasing_the_latch() {
         STANDALONE_MISSING_SAVE_PENDING.store(true, Ordering::SeqCst);
         assert!(install_standalone_host());
         assert!(!install_standalone_host());
         assert!(standalone_missing_save_selection_pending());
-        assert!(standalone_complete_missing_save_selection(Path::new(
+        assert!(!standalone_complete_missing_save_selection(Path::new(
             "Z:\\saves\\ER0000.sl2"
         )));
-        assert!(!standalone_missing_save_selection_pending());
+        assert!(standalone_missing_save_selection_pending());
     }
 
     #[test]
