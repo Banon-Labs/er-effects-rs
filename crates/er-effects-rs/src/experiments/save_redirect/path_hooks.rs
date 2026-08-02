@@ -20,14 +20,14 @@ use eldenring::{
 };
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
 use er_save_redirect::{
-    DirectStageNoSteamIdKind, SAVE_REDIRECT_ORIG_COPYFILEW, SAVE_REDIRECT_ORIG_CREATEFILEW,
-    SAVE_REDIRECT_ORIG_FINDFIRSTW, SAVE_REDIRECT_ORIG_GETATTREXW, SAVE_REDIRECT_ORIG_GETATTRW,
-    SAVE_REDIRECT_ORIG_GETDISKFREEW, SAVE_REDIRECT_ORIG_NTCREATEFILE,
+    DirectStageNoSteamIdKind, DirectStageRequestPlan, SAVE_REDIRECT_ORIG_COPYFILEW,
+    SAVE_REDIRECT_ORIG_CREATEFILEW, SAVE_REDIRECT_ORIG_FINDFIRSTW, SAVE_REDIRECT_ORIG_GETATTREXW,
+    SAVE_REDIRECT_ORIG_GETATTRW, SAVE_REDIRECT_ORIG_GETDISKFREEW, SAVE_REDIRECT_ORIG_NTCREATEFILE,
     SAVE_REDIRECT_ORIG_NTQUERYVOLINFO, SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW, SaveDetourDepth,
     SaveHookInstallState, SavePathKind, SavePathTelemetryBucket, classify_copyfile_endpoint,
     classify_save_like_path, classify_save_query_path, createfile_diag_hit_should_log,
-    direct_stage_case_dirs, direct_stage_no_steamid_kind, is_save_file_or_backup_path,
-    plan_create_file_open, plan_save_query_path, probe_direct_stage_file_status,
+    direct_stage_case_dirs, is_save_file_or_backup_path, plan_create_file_open,
+    plan_direct_stage_request, plan_save_query_path, probe_direct_stage_file_status,
     redirect_wide_save_path_with_side_effects, save_detour_disk_io_allowed,
     steam_id64_from_wide_save_path, wide_contains_ci_ascii, wide_ends_with_ci_ascii,
 };
@@ -1087,25 +1087,25 @@ fn ensure_direct_stage_for_requested_path(path: &[u16]) {
     let Some(root) = SAVE_DIRECT_STAGE_ROOT.get() else {
         return;
     };
-    let Some(steam_id) = steam_id64_from_wide_save_path(path) else {
-        let kind = direct_stage_no_steamid_kind(path);
-        SAVE_DIRECT_STAGE_NO_STEAMID_HITS.fetch_add(1, Ordering::SeqCst);
-        SAVE_DIRECT_STAGE_LAST_NO_STEAMID_KIND.store(kind.as_usize(), Ordering::SeqCst);
-        let hit = SAVE_DIRECT_STAGE_DIAG_HITS.fetch_add(1, Ordering::SeqCst);
-        if hit < 8 {
-            // UTF-8 Lossy: log-only decode of a Windows wide path for probe diagnosis.
-            let shown = String::from_utf16_lossy(path);
-            let kind_label = kind.label();
-            append_autoload_debug(format_args!(
-                "save-override: direct-file stage pending -- no SteamID64 in {kind_label} requested path '{shown}'"
-            ));
+    match plan_direct_stage_request(path) {
+        DirectStageRequestPlan::SteamId(steam_id) => ensure_direct_stage_for_steam_id(steam_id),
+        DirectStageRequestPlan::NoSteamId(kind) => {
+            SAVE_DIRECT_STAGE_NO_STEAMID_HITS.fetch_add(1, Ordering::SeqCst);
+            SAVE_DIRECT_STAGE_LAST_NO_STEAMID_KIND.store(kind.as_usize(), Ordering::SeqCst);
+            let hit = SAVE_DIRECT_STAGE_DIAG_HITS.fetch_add(1, Ordering::SeqCst);
+            if hit < 8 {
+                // UTF-8 Lossy: log-only decode of a Windows wide path for probe diagnosis.
+                let shown = String::from_utf16_lossy(path);
+                let kind_label = kind.label();
+                append_autoload_debug(format_args!(
+                    "save-override: direct-file stage pending -- no SteamID64 in {kind_label} requested path '{shown}'"
+                ));
+            }
+            for dir in direct_stage_case_dirs(root) {
+                let _ = std::fs::create_dir_all(dir);
+            }
         }
-        for dir in direct_stage_case_dirs(root) {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        return;
-    };
-    ensure_direct_stage_for_steam_id(steam_id);
+    }
 }
 
 fn make_file_writable(path: &Path) {

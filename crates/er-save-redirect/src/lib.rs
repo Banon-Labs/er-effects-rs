@@ -999,6 +999,19 @@ impl DirectStageNoSteamIdKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectStageRequestPlan {
+    SteamId(u64),
+    NoSteamId(DirectStageNoSteamIdKind),
+}
+
+pub fn plan_direct_stage_request(path: &[u16]) -> DirectStageRequestPlan {
+    match steam_id64_from_wide_save_path(path) {
+        Some(steam_id) => DirectStageRequestPlan::SteamId(steam_id),
+        None => DirectStageRequestPlan::NoSteamId(direct_stage_no_steamid_kind(path)),
+    }
+}
+
 /// ASCII-lowercase a UTF-16 code unit (leaves non-ASCII untouched).
 pub fn wide_ascii_lower(c: u16) -> u16 {
     if (b'A' as u16..=b'Z' as u16).contains(&c) {
@@ -1821,6 +1834,21 @@ mod tests {
                 steam_id: 76_561_198_000_000_000,
                 root_wide: WineRootWide("Z:\\prefix".encode_utf16().collect()),
             }
+        );
+    }
+
+    #[test]
+    fn plans_direct_stage_request_from_steamid_or_no_steamid_kind() {
+        let save = wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\76561197960265729\ER0000.sl2");
+        assert_eq!(
+            plan_direct_stage_request(&save),
+            DirectStageRequestPlan::SteamId(76561197960265729)
+        );
+
+        let graphics = wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\GraphicsConfig.xml");
+        assert_eq!(
+            plan_direct_stage_request(&graphics),
+            DirectStageRequestPlan::NoSteamId(DirectStageNoSteamIdKind::GraphicsConfig)
         );
     }
 
