@@ -79,6 +79,8 @@ Seventh slice on `refactor/s6b2g-save-hook-queue-helper-20260802`: move the reso
 
 Eighth slice on `refactor/s6b2h-core-createfile-install-20260802`: move the always-on core `CreateFileW` install sequence into `er-save-redirect::install_core_createfilew_hook`. Product still supplies export resolution, the detour callback, and logging, but the shared core now owns the idempotent install sequence for the hook required by save-destination commits.
 
+Ninth slice on `refactor/s6b2i-save-redirect-batch-install-20260802`: move the redirect-mode hook batch sequencing into `er-save-redirect::install_redirect_save_hooks`. Product still owns the redirect/trace gate, module/export resolution callbacks, detour bodies, and telemetry sink, but the shared core now owns the idempotent MinHook initialize/queue/apply/forget sequence for the redirect batch.
+
 Gate: Windows-target check plus a no-runtime hook-install smoke if available. Runtime proof comes after this, not before.
 
 ### S6b.3: boot-hold/title-flow seam

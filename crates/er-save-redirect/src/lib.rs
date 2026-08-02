@@ -241,6 +241,194 @@ pub unsafe fn install_core_createfilew_hook(
     });
 }
 
+/// Detour entry points for the redirect-mode save hook batch.
+pub struct SaveRedirectHookDetours {
+    pub copyfilew: *mut c_void,
+    pub get_file_attributes_w: *mut c_void,
+    pub get_file_attributes_ex_w: *mut c_void,
+    pub find_first_file_w: *mut c_void,
+    pub get_disk_free_space_ex_w: *mut c_void,
+    pub sh_get_folder_path_w: *mut c_void,
+    pub nt_query_volume_information_file: *mut c_void,
+    pub nt_create_file: *mut c_void,
+}
+
+/// Install the redirect-mode save hook batch once.
+///
+/// Product still decides when redirect mode is armed, supplies module/export resolution, supplies
+/// detour entry points, and logs to its telemetry sink. The shared core owns the idempotent MinHook
+/// initialization, queue/store/apply sequence for the redirect batch.
+///
+/// # Safety
+/// Every detour pointer must match the ABI of the target function resolved for it and remain valid
+/// for the process lifetime. The `install_core_createfilew` callback must install the matching core
+/// `CreateFileW` hook before this batch needs to redirect save opens.
+pub unsafe fn install_redirect_save_hooks(
+    state: &SaveHookInstallState,
+    detours: SaveRedirectHookDetours,
+    running_under_wine: bool,
+    mut resolve_kernel32: impl FnMut(&[u8]) -> usize,
+    mut resolve_shell32: impl FnMut(&[u8]) -> usize,
+    mut resolve_ntdll: impl FnMut(&[u8]) -> usize,
+    install_core_createfilew: impl FnOnce(),
+    mut log: impl FnMut(String),
+) {
+    state.install_redirect_once(|| {
+        match unsafe { MH_Initialize() } {
+            MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+            status => {
+                log(format!("save-override: MH_Initialize failed: {status:?}"));
+                return;
+            }
+        }
+        log(format!(
+            "save-override: install begin -- running_under_wine={} (Wine-only free-space overrides {})",
+            running_under_wine,
+            if running_under_wine { "ARMED" } else { "SKIPPED" }
+        ));
+        let mut hooks = Vec::new();
+        install_core_createfilew();
+        let create_addr = if state.core_createfilew_installed() {
+            resolve_kernel32(b"CreateFileW\0")
+        } else {
+            log("save-override: CreateFileW detour is NOT live (core install failed) -- save-path redirection cannot work".to_owned());
+            SAVE_HOOK_ORIGINAL_UNSET
+        };
+
+        let copy_addr = resolve_kernel32(b"CopyFileW\0");
+        if copy_addr != SAVE_HOOK_ORIGINAL_UNSET {
+            unsafe {
+                queue_resolved_save_hook(
+                    &mut hooks,
+                    "CopyFileW",
+                    copy_addr,
+                    detours.copyfilew,
+                    &SAVE_REDIRECT_ORIG_COPYFILEW,
+                    &mut log,
+                );
+            }
+        }
+
+        unsafe {
+            queue_kernel32_save_redirect_hook(
+                &mut hooks,
+                "GetFileAttributesW",
+                b"GetFileAttributesW\0",
+                detours.get_file_attributes_w,
+                &SAVE_REDIRECT_ORIG_GETATTRW,
+                &mut resolve_kernel32,
+                &mut log,
+            );
+            queue_kernel32_save_redirect_hook(
+                &mut hooks,
+                "GetFileAttributesExW",
+                b"GetFileAttributesExW\0",
+                detours.get_file_attributes_ex_w,
+                &SAVE_REDIRECT_ORIG_GETATTREXW,
+                &mut resolve_kernel32,
+                &mut log,
+            );
+            queue_kernel32_save_redirect_hook(
+                &mut hooks,
+                "FindFirstFileW",
+                b"FindFirstFileW\0",
+                detours.find_first_file_w,
+                &SAVE_REDIRECT_ORIG_FINDFIRSTW,
+                &mut resolve_kernel32,
+                &mut log,
+            );
+            if running_under_wine {
+                queue_kernel32_save_redirect_hook(
+                    &mut hooks,
+                    "GetDiskFreeSpaceExW",
+                    b"GetDiskFreeSpaceExW\0",
+                    detours.get_disk_free_space_ex_w,
+                    &SAVE_REDIRECT_ORIG_GETDISKFREEW,
+                    &mut resolve_kernel32,
+                    &mut log,
+                );
+            }
+        }
+
+        let shgfp_addr = resolve_shell32(b"SHGetFolderPathW\0");
+        if shgfp_addr != SAVE_HOOK_ORIGINAL_UNSET {
+            unsafe {
+                queue_resolved_save_hook(
+                    &mut hooks,
+                    "SHGetFolderPathW",
+                    shgfp_addr,
+                    detours.sh_get_folder_path_w,
+                    &SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW,
+                    &mut log,
+                );
+            }
+        } else {
+            log("save-override: could not resolve shell32!SHGetFolderPathW (shell32 not loaded yet?)".to_owned());
+        }
+
+        let ntqvi_addr = if running_under_wine {
+            resolve_ntdll(b"NtQueryVolumeInformationFile\0")
+        } else {
+            SAVE_HOOK_ORIGINAL_UNSET
+        };
+        if ntqvi_addr != SAVE_HOOK_ORIGINAL_UNSET {
+            unsafe {
+                queue_resolved_save_hook(
+                    &mut hooks,
+                    "NtQueryVolumeInformationFile",
+                    ntqvi_addr,
+                    detours.nt_query_volume_information_file,
+                    &SAVE_REDIRECT_ORIG_NTQUERYVOLINFO,
+                    &mut log,
+                );
+            }
+        } else {
+            log("save-override: could not resolve ntdll!NtQueryVolumeInformationFile".to_owned());
+        }
+
+        let ntcf_addr = resolve_ntdll(b"NtCreateFile\0");
+        if ntcf_addr != SAVE_HOOK_ORIGINAL_UNSET {
+            unsafe {
+                queue_resolved_save_hook(
+                    &mut hooks,
+                    "NtCreateFile",
+                    ntcf_addr,
+                    detours.nt_create_file,
+                    &SAVE_REDIRECT_ORIG_NTCREATEFILE,
+                    &mut log,
+                );
+            }
+        }
+
+        match unsafe { MH_ApplyQueued() } {
+            MH_STATUS::MH_OK => log(format!(
+                "save-override: INSTALLED SHGetFolderPathW(0x{shgfp_addr:x})+CreateFileW(0x{create_addr:x})+CopyFileW(0x{copy_addr:x})+GetFileAttributesW/ExW+FindFirstFileW save-path redirect -- default user save dir is now never read"
+            )),
+            status => log(format!("save-override: MH_ApplyQueued failed: {status:?}")),
+        }
+        std::mem::forget(hooks);
+    });
+}
+
+unsafe fn queue_kernel32_save_redirect_hook(
+    hooks: &mut Vec<MhHook>,
+    name: &str,
+    proc_name: &[u8],
+    detour: *mut c_void,
+    orig: &AtomicUsize,
+    resolve_kernel32: &mut impl FnMut(&[u8]) -> usize,
+    log: &mut impl FnMut(String),
+) {
+    let addr = resolve_kernel32(proc_name);
+    if addr == SAVE_HOOK_ORIGINAL_UNSET {
+        log(format!("save-override: could not resolve kernel32!{name}"));
+        return;
+    }
+    unsafe {
+        queue_resolved_save_hook(hooks, name, addr, detour, orig, log);
+    }
+}
+
 /// Why a candidate save source was rejected before redirect planning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SaveSourceRejection {
