@@ -23,6 +23,8 @@ er-hook = { path = "../er-hook" }
 er-game-base = { path = "../er-game-base", features = ["game-types"] }
 er-save-loader = { path = "../er-save-loader" }
 er-save-picker = { path = "../er-save-picker", default-features = false, features = ["boot-flow", "os-dialog"] }
+# Customized System>Quit decision core. Hooked surfaces stay in this crate until S8.
+er-quit-menu = { path = "../er-quit-menu" }
 # Save-write suppression core, shared with the standalone er-save-disable-dll (save-game-flow
 # WP1): swallow every SL save enqueue + rewrite the status poll from boot, plus the one-shot
 # bypass token that makes the System->Quit "Save Game" row the ONLY path that really writes.

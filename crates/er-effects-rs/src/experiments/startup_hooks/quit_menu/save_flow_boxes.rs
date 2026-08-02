@@ -46,12 +46,13 @@
 // game's own ctor, the same pattern the shipping Save Game row label uses). Button labels are
 // the game's, so no `MenuJobResult` enum literal is needed anywhere in this file.
 
-/// No confirm box (also the `SAVE_FLOW_BOX_EXPECTED` "not expecting a build" sentinel).
-pub(crate) const SAVE_FLOW_BOX_NONE: usize = 0;
-/// "Are you sure you want to overwrite this file?" -- the flow's ONLY confirm, asked about a
-/// destination that already exists. A destination whose name is free is written with no question,
-/// because there is nothing there to lose and nothing to warn about.
-pub(crate) const SAVE_FLOW_BOX_OVERWRITE_FILE: usize = 1;
+// S7 moved the pure box ids, button order and resolved-answer enums to `er-quit-menu`. This file
+// keeps the native MessageBoxBuilder/queue integration in the product DLL until the hooked surfaces
+// move in S8.
+pub(crate) use er_quit_menu::save_flow_boxes::{
+    SAVE_FLOW_BOX_NONE, SAVE_FLOW_BOX_OVERWRITE_FILE, SaveFlowButton, SaveFlowDecision,
+    save_flow_box_add_order, save_flow_box_label, save_flow_box_yes_index,
+};
 
 /// Fixed capacity (UTF-16 units) of a confirm-box prompt buffer. The const builder
 /// zero-fills the tail, so the NUL terminator `CS::MenuString` expects is always present and
@@ -108,67 +109,10 @@ struct SaveFlowMenuStringScratch {
     bytes: [u8; MENU_STRING_SIZE],
 }
 
-/// One confirm-box button, in the order it is added to the builder.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SaveFlowButton {
-    Yes,
-    No,
-}
-
-/// A resolved confirm-box outcome.
-///
-/// `No` means the GAME told us the user chose the negative button or cancelled -- the native
-/// `MenuJobResult` came back `Failed`, which is what `add_no` attaches to its button and what
-/// the cancel/auto-close path (`FUN_1407ac890`) emits.
-///
-/// `Undecidable` is a FAILURE, not an answer: the dialog stopped being a MessageBoxDialog, or
-/// it reported that it had emitted a result we could not map. It ends the flow without writing
-/// (the safe direction) but is counted and logged separately, because a box we could not read
-/// is not the user pressing No, and folding the two together would make an answer we invented
-/// indistinguishable from one the user gave.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SaveFlowDecision {
-    Yes,
-    No,
-    Undecidable,
-}
-
-/// Add order per box. `default_last` makes the LAST entry the default choice.
-///
-/// There is one order because there is one box, and it defaults to NO. So every answer this flow
-/// can be given by reflex destroys nothing: the default is "leave that file alone". The box that
-/// used to default to YES -- the up-front "Overwrite your loaded save?" -- is gone.
-fn save_flow_box_add_order(box_id: usize) -> Option<&'static [SaveFlowButton]> {
-    // Default No: refuse unless the user actively chooses to write over an existing file.
-    const DEFAULT_NO: &[SaveFlowButton] = &[SaveFlowButton::Yes, SaveFlowButton::No];
-    match box_id {
-        SAVE_FLOW_BOX_OVERWRITE_FILE => Some(DEFAULT_NO),
-        _ => None,
-    }
-}
-
 fn save_flow_box_prompt(box_id: usize) -> Option<&'static [u16; SAVE_FLOW_PROMPT_CAPACITY]> {
     match box_id {
         SAVE_FLOW_BOX_OVERWRITE_FILE => Some(&SAVE_FLOW_OVERWRITE_PROMPT_W),
         _ => None,
-    }
-}
-
-/// Add-order index of the affirmative button for `box_id` -- i.e. the value the dialog's live
-/// cursor (`dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET`) must reach before a confirm press means
-/// Yes. Used by the agent-owned self-drive so it never has to guess the button layout.
-pub(crate) fn save_flow_box_yes_index(box_id: usize) -> Option<i32> {
-    let order = save_flow_box_add_order(box_id)?;
-    order
-        .iter()
-        .position(|button| *button == SaveFlowButton::Yes)
-        .and_then(|idx| i32::try_from(idx).ok())
-}
-
-pub(crate) fn save_flow_box_label(box_id: usize) -> &'static str {
-    match box_id {
-        SAVE_FLOW_BOX_OVERWRITE_FILE => "overwrite-file-confirm",
-        _ => "box-unknown",
     }
 }
 

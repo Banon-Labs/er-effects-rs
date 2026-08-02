@@ -50,3 +50,15 @@
 
 pub mod host;
 pub use host::*;
+
+// S7 decision-core modules moved from the product DLL. Product callsites keep
+// stable shim names until the hooked surfaces move in S8.
+pub mod rows;
+pub mod save_dest_commit;
+pub mod save_dest_identity;
+pub mod save_flow_boxes;
+
+pub use rows::*;
+pub use save_dest_commit::*;
+pub use save_dest_identity::*;
+pub use save_flow_boxes::*;

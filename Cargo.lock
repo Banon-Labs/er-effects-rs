@@ -2782,6 +2782,7 @@ dependencies = [
  "er-hook",
  "er-loading-bar",
  "er-loading-portrait",
+ "er-quit-menu",
  "er-save-loader",
  "er-save-picker",
  "er-save-suppress",
