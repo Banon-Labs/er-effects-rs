@@ -13,11 +13,11 @@ use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
 use windows::core::PCSTR;
 
 use crate::host::{
-    append_autoload_debug, complete_missing_save_selection_from_picker,
-    missing_save_selection_pending, save_picker_seamless_mode_after_settle,
-    save_picker_title_start_dir,
+    MissingSaveSelectionOutcome, append_autoload_debug,
+    complete_missing_save_selection_from_picker, missing_save_selection_pending,
+    save_picker_seamless_mode_after_settle, save_picker_title_start_dir,
 };
-use crate::model::{self, PickerActivation, SavePickerModel};
+use crate::model::{self, PickerActivation, PickerStatusMessage, SavePickerModel};
 use crate::slots::{SaveSlotInfo, parse_save_character_slots};
 
 const BOOT_VIEW_TEXT_BASE_SCALE: usize = 2;
@@ -116,19 +116,26 @@ pub fn save_picker_overlay_process_completion() {
     let Some((path, slot)) = request else {
         return;
     };
-    if complete_missing_save_selection_from_picker(&path) {
-        SAVE_PICKER_OVERLAY_PICK_COUNT.fetch_add(1, Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "save-picker-overlay: completed pick '{}' slot {slot} -- redirect active, releasing the save-check hold to autoload that character",
-            path.display()
-        ));
-        save_picker_overlay_disarm("picked");
-    } else {
-        // Validation failed at commit -- back to the file browser.
-        MISSING_SAVE_PICKER_SELECTED_SLOT.store(usize::MAX, Ordering::SeqCst);
-        SAVE_PICKER_OVERLAY_PICK_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
-        *pending_save_lock() = None;
-        SAVE_PICKER_STAGE_CHARS.store(0, Ordering::SeqCst);
+    match complete_missing_save_selection_from_picker(&path) {
+        MissingSaveSelectionOutcome::Completed => {
+            SAVE_PICKER_OVERLAY_PICK_COUNT.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "save-picker-overlay: completed pick '{}' slot {slot} -- redirect active, releasing the save-check hold to autoload that character",
+                path.display()
+            ));
+            save_picker_overlay_disarm("picked");
+        }
+        MissingSaveSelectionOutcome::Rejected(message) => {
+            // Validation failed at commit: keep the character picker in place and name WHY, so the
+            // rejection cannot be mistaken for Back/navigation.
+            MISSING_SAVE_PICKER_SELECTED_SLOT.store(usize::MAX, Ordering::SeqCst);
+            SAVE_PICKER_OVERLAY_PICK_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
+            set_overlay_status_message(message);
+            append_autoload_debug(format_args!(
+                "save-picker-overlay: rejected completion for '{}' slot {slot}; staying in character picker with visible reason",
+                path.display()
+            ));
+        }
     }
 }
 
@@ -416,6 +423,18 @@ fn save_picker_overlay_arm_at(start_dir: &std::path::Path) {
 }
 
 /// Disarm the overlay (pick completed / no longer pending): drop the model and reset edge state.
+fn set_overlay_status_message(message: PickerStatusMessage) {
+    if let Some(model) = model::active_save_picker_lock().as_mut() {
+        model.set_status_message(message);
+    }
+}
+
+fn save_picker_overlay_status_message() -> Option<PickerStatusMessage> {
+    model::active_save_picker_lock()
+        .as_ref()
+        .and_then(|model| model.status_message().cloned())
+}
+
 fn save_picker_overlay_disarm(reason: &str) {
     if SAVE_PICKER_OVERLAY_ARMED.swap(0, Ordering::SeqCst) == 0 {
         return;
@@ -663,8 +682,11 @@ fn save_picker_file_stage_input(pressed: usize) {
     if slots.is_empty() {
         // Not a readable save / no characters -- stay in the file browser.
         SAVE_PICKER_OVERLAY_PICK_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
+        set_overlay_status_message(
+            crate::model::PickRejection::NoLoadableCharacter.status_message("sl2"),
+        );
         append_autoload_debug(format_args!(
-            "save-picker-overlay: '{}' has no readable character slots; staying in file browser",
+            "save-picker-overlay: '{}' has no readable character slots; staying in file browser with visible reason",
             path.display()
         ));
         return;
@@ -743,6 +765,7 @@ const PICKER_RGB_ROW: [u8; 3] = [176, 172, 160];
 const PICKER_RGB_SEL_BAR: [u8; 3] = [58, 54, 44];
 const PICKER_RGB_SEL_TEXT: [u8; 3] = [238, 232, 214];
 const PICKER_RGB_RULE: [u8; 3] = [40, 38, 33];
+const PICKER_RGB_WARNING: [u8; 3] = [220, 160, 82];
 
 /// Truncate `text` so it fits within `max_px` at the boot font's scale (drops the tail; keeps a
 /// trailing marker when clipped).
@@ -849,6 +872,23 @@ pub fn overlay_save_picker_onto(buf: &mut [u8], w: usize, h: usize) -> bool {
         scale,
     );
     y += line_h;
+    if let Some(message) = model.status_message() {
+        let status = picker_fit_text(
+            &format!("{}: {}", message.headline(), message.detail()),
+            content_w.saturating_sub(scale * 8),
+        );
+        boot_draw_text_rgb(
+            buf,
+            w,
+            h,
+            margin_x + scale * 4,
+            y,
+            &status,
+            PICKER_RGB_WARNING,
+            scale,
+        );
+        y += line_h;
+    }
     // Divider rule.
     boot_fill_rect(
         buf,
@@ -963,6 +1003,23 @@ fn overlay_character_stage_onto(
         scale,
     );
     y += line_h;
+    if let Some(message) = save_picker_overlay_status_message() {
+        let status = picker_fit_text(
+            &format!("{}: {}", message.headline(), message.detail()),
+            content_w.saturating_sub(scale * 8),
+        );
+        boot_draw_text_rgb(
+            buf,
+            w,
+            h,
+            margin_x + scale * 4,
+            y,
+            &status,
+            PICKER_RGB_WARNING,
+            scale,
+        );
+        y += line_h;
+    }
     boot_fill_rect(
         buf,
         w,

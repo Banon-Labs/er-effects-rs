@@ -551,8 +551,12 @@ unsafe fn system_quit_ingest_picked_save(selected_path: &str) -> bool {
     let selected_log = system_quit_windows_path_for_log(selected_path);
     if !Path::new(selected_path).is_file() {
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+        save_picker_set_visible_status(er_save_picker::PickerStatusMessage::new(
+            "SAVE NOT FOUND",
+            "The selected path is missing or is not a file.",
+        ));
         append_autoload_debug(format_args!(
-            "system-quit-load-save-profiles: selected path is not a file '{}'",
+            "system-quit-load-save-profiles: selected path is not a file '{}' (visible reason set)",
             selected_log
         ));
         return false;
@@ -566,8 +570,12 @@ unsafe fn system_quit_ingest_picked_save(selected_path: &str) -> bool {
     );
     if !ext_ok {
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+        save_picker_set_visible_status(
+            er_save_picker::PickRejection::WrongExtension
+                .status_message(&allowed_exts.join("/.")),
+        );
         append_autoload_debug(format_args!(
-            "system-quit-load-save-profiles: rejected '{}' -- picker accepts only .{} (seamless={seamless})",
+            "system-quit-load-save-profiles: rejected '{}' -- picker accepts only .{} (seamless={seamless}; visible reason set)",
             selected_log,
             allowed_exts.join("/.")
         ));
@@ -575,8 +583,9 @@ unsafe fn system_quit_ingest_picked_save(selected_path: &str) -> bool {
     }
     let Ok(mut bytes) = fs::read(selected_path) else {
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+        save_picker_set_visible_status(er_save_picker::PickRejection::Unreadable.status_message("SL2"));
         append_autoload_debug(format_args!(
-            "system-quit-load-save-profiles: failed to read selected save '{}'",
+            "system-quit-load-save-profiles: failed to read selected save '{}' (visible reason set)",
             selected_log
         ));
         return false;
@@ -585,16 +594,21 @@ unsafe fn system_quit_ingest_picked_save(selected_path: &str) -> bool {
     let raw_hash = system_quit_hash_bytes(&bytes);
     if er_save_loader::bnd4::parse_entries(&bytes).is_err() {
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+        save_picker_set_visible_status(er_save_picker::PickRejection::NotBnd4.status_message("SL2"));
         append_autoload_debug(format_args!(
-            "system-quit-load-save-profiles: selected save is not a valid BND4 '{}' len={len} hash=0x{raw_hash:016x}",
+            "system-quit-load-save-profiles: selected save is not a valid BND4 '{}' len={len} hash=0x{raw_hash:016x} (visible reason set)",
             selected_log
         ));
         return false;
     }
     let Ok(base) = game_module_base() else {
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+        save_picker_set_visible_status(er_save_picker::PickerStatusMessage::new(
+            "GAME STATE NOT READY",
+            "The save is valid, but the game was not ready to preview it.",
+        ));
         append_autoload_debug(format_args!(
-            "system-quit-load-save-profiles: selected save '{}' is valid but game module base is unavailable",
+            "system-quit-load-save-profiles: selected save '{}' is valid but game module base is unavailable (visible reason set)",
             selected_log
         ));
         return false;
@@ -604,8 +618,11 @@ unsafe fn system_quit_ingest_picked_save(selected_path: &str) -> bool {
     let mask = unsafe { system_quit_apply_foreign_profile_summary_preview(base, &bytes) };
     if mask == 0 {
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+        save_picker_set_visible_status(
+            er_save_picker::PickRejection::NoLoadableCharacter.status_message("SL2"),
+        );
         append_autoload_debug(format_args!(
-            "system-quit-load-save-profiles: selected save had no readable character slots '{}' len={len} hash=0x{hash:016x}",
+            "system-quit-load-save-profiles: selected save had no readable character slots '{}' len={len} hash=0x{hash:016x} (visible reason set)",
             selected_log
         ));
         return false;

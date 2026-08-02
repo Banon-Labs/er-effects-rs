@@ -45,10 +45,13 @@ use std::{ffi::c_void, time::Instant};
 #[cfg(windows)]
 use windows::Win32::{
     Foundation::HWND,
-    UI::Controls::Dialogs::{
-        CommDlgExtendedError, GetOpenFileNameW, GetSaveFileNameW, OFN_DONTADDTORECENT,
-        OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_HIDEREADONLY, OFN_NOCHANGEDIR, OFN_NOTESTFILECREATE,
-        OFN_PATHMUSTEXIST, OPEN_FILENAME_FLAGS, OPENFILENAMEW,
+    UI::{
+        Controls::Dialogs::{
+            CommDlgExtendedError, GetOpenFileNameW, GetSaveFileNameW, OFN_DONTADDTORECENT,
+            OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_HIDEREADONLY, OFN_NOCHANGEDIR,
+            OFN_NOTESTFILECREATE, OFN_PATHMUSTEXIST, OPEN_FILENAME_FLAGS, OPENFILENAMEW,
+        },
+        WindowsAndMessaging::{MB_ICONWARNING, MB_OK, MessageBoxW},
     },
 };
 #[cfg(windows)]
@@ -59,7 +62,7 @@ use crate::{
         PickerCover, PickerCoverFactory, append_autoload_debug, game_main_window,
         save_dest_commit_window_armed, save_file_core_hooks_live, system_quit_windows_path_for_log,
     },
-    model::{PickerIntent, save_picker_accepts},
+    model::{PickerIntent, PickerStatusMessage, save_picker_accepts},
 };
 
 use er_telemetry::counters::SAVE_PICKER_DIM_ARM_WAIT_TIMEOUTS;
@@ -131,6 +134,37 @@ fn should_reopen(outcome: &OsPickOutcome, pick_was_valid: bool, attempts: usize)
         && !pick_was_valid
         && attempts < SAVE_PICKER_OS_MAX_REOPENS
 }
+
+fn extension_label(extensions: &[&str]) -> String {
+    extensions
+        .iter()
+        .map(|ext| ext.trim_start_matches('.').to_ascii_uppercase())
+        .collect::<Vec<_>>()
+        .join("/.")
+}
+
+#[cfg(windows)]
+fn show_os_reject_message(cover: Option<&PickerCover>, message: &PickerStatusMessage) {
+    let body = format!("{}\n\n{}", message.headline(), message.detail());
+    let body_wide: Vec<u16> = body.encode_utf16().chain(core::iter::once(0)).collect();
+    let title_wide: Vec<u16> = "Save rejected"
+        .encode_utf16()
+        .chain(core::iter::once(0))
+        .collect();
+    let owner = os_dialog_owner(cover);
+    let hwnd = (owner != 0).then_some(HWND(owner as *mut c_void));
+    let _ = unsafe {
+        MessageBoxW(
+            hwnd,
+            PCWSTR(body_wide.as_ptr()),
+            PCWSTR(title_wide.as_ptr()),
+            MB_OK | MB_ICONWARNING,
+        )
+    };
+}
+
+#[cfg(not(windows))]
+fn show_os_reject_message(_cover: Option<&PickerCover>, _message: &PickerStatusMessage) {}
 
 /// Why an open ended with nothing staged. THREE reasons, not one, and every collapse between them
 /// has already shipped as a bug.
@@ -544,14 +578,18 @@ pub fn os_pick_validated<T>(
             // visible to the tick before the dialog term clears.
             return Ok(stage(&picked));
         };
+        let message = reason.status_message(&extension_label(extensions));
+        show_os_reject_message(cover.as_ref(), &message);
         SAVE_PICKER_PICK_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
         SAVE_PICKER_OS_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
         SAVE_PICKER_OS_LAST_REJECT_REASON.store(reason as usize, Ordering::SeqCst);
         attempts += 1;
         append_autoload_debug(format_args!(
-            "save-picker-os: rejected '{}' -- {reason:?} (reason={}); reopening ({attempts}/{SAVE_PICKER_OS_MAX_REOPENS})",
+            "save-picker-os: rejected '{}' -- {reason:?} (reason={}) visible='{}: {}'; reopening ({attempts}/{SAVE_PICKER_OS_MAX_REOPENS})",
             system_quit_windows_path_for_log(&picked),
-            reason as usize
+            reason as usize,
+            message.headline(),
+            message.detail()
         ));
         if !should_reopen(&outcome, false, attempts - 1) {
             SAVE_PICKER_OS_REOPEN_EXHAUSTED.store(1, Ordering::SeqCst);

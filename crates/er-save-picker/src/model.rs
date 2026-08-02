@@ -257,6 +257,10 @@ pub struct SavePickerModel {
     /// Highlighted row index (0..PICKER_ROW_COUNT) for the overlay picker. Clamped to a
     /// selectable (non-Empty) row on every listing change.
     cursor: usize,
+    /// Last rejection/status line the picker should render on the current surface. Cleared by
+    /// navigation or a fresh pick attempt so a stale error never follows the user into another
+    /// folder/page.
+    status_message: Option<PickerStatusMessage>,
     /// Mounted drives that browse as folders (cached at open). Two or more of them add the drive
     /// cycler row; the overlay picker also cycles them with left/right.
     drives: Vec<PathBuf>,
@@ -348,6 +352,68 @@ pub enum PickRejection {
     PathNotUtf8 = 6,
     /// (Destination intent) the folder the file would live in does not exist.
     ParentMissing = 7,
+}
+
+/// User-facing picker status text. Product telemetry/log wording stays at the caller; the picker
+/// surface only needs a concise headline plus one explanatory line it can render inline.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PickerStatusMessage {
+    headline: String,
+    detail: String,
+}
+
+impl PickerStatusMessage {
+    pub fn new(headline: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            headline: headline.into(),
+            detail: detail.into(),
+        }
+    }
+
+    pub fn headline(&self) -> &str {
+        &self.headline
+    }
+
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+}
+
+impl PickRejection {
+    /// Convert a structural pick rejection into visible picker copy. The exact log/telemetry fields
+    /// remain owned by each product path; this copy is intentionally screen-facing and reason-first.
+    pub fn status_message(self, extension_label: &str) -> PickerStatusMessage {
+        match self {
+            PickRejection::NotAFile => PickerStatusMessage::new(
+                "SAVE NOT FOUND",
+                "The selected path is missing or is not a file.",
+            ),
+            PickRejection::WrongExtension => PickerStatusMessage::new(
+                "WRONG FILE TYPE",
+                format!("Choose an Elden Ring save ending in .{}.", extension_label),
+            ),
+            PickRejection::Unreadable => PickerStatusMessage::new(
+                "SAVE UNREADABLE",
+                "The save exists, but could not be read.",
+            ),
+            PickRejection::NotBnd4 => PickerStatusMessage::new(
+                "NOT AN ELDEN RING SAVE",
+                "The file is not a readable BND4 save container.",
+            ),
+            PickRejection::NoLoadableCharacter => PickerStatusMessage::new(
+                "NO LOADABLE CHARACTER",
+                "The save has no character slot this loader can use.",
+            ),
+            PickRejection::PathNotUtf8 => PickerStatusMessage::new(
+                "PATH NOT SUPPORTED",
+                "This path cannot be named safely by the save picker.",
+            ),
+            PickRejection::ParentMissing => PickerStatusMessage::new(
+                "FOLDER NOT FOUND",
+                "The destination folder does not exist.",
+            ),
+        }
+    }
 }
 
 /// True when `path`'s extension is one the active runtime flavor accepts. THE extension filter --
@@ -473,6 +539,7 @@ impl SavePickerModel {
             entries: Vec::new(),
             page: 0,
             cursor: 0,
+            status_message: None,
             drives: enumerate_drives(),
             last_dir_per_drive: HashMap::new(),
             intent,
@@ -687,6 +754,7 @@ impl SavePickerModel {
         let Some(root) = self.neighbour_drive(forward) else {
             return;
         };
+        self.clear_status_message();
         let cur = self.current_drive_root();
         self.last_dir_per_drive
             .insert(cur.clone(), self.current_dir.clone());
@@ -731,6 +799,18 @@ impl SavePickerModel {
 
     pub fn entry_count(&self) -> usize {
         self.entries.len()
+    }
+
+    pub fn status_message(&self) -> Option<&PickerStatusMessage> {
+        self.status_message.as_ref()
+    }
+
+    pub fn set_status_message(&mut self, message: PickerStatusMessage) {
+        self.status_message = Some(message);
+    }
+
+    pub fn clear_status_message(&mut self) {
+        self.status_message = None;
     }
 
     /// Re-enumerate `current_dir`. Unreadable directories yield an empty listing rather than an
@@ -914,7 +994,11 @@ impl SavePickerModel {
 
     /// Apply the effect of activating `row`.
     pub fn activate(&mut self, row: usize) -> PickerActivation {
-        match self.row_meaning(row) {
+        let meaning = self.row_meaning(row);
+        if !matches!(meaning, PickerRow::AtRoot | PickerRow::Empty) {
+            self.clear_status_message();
+        }
+        match meaning {
             PickerRow::ParentDir => {
                 if let Some(parent) = path_parent(&self.current_dir) {
                     self.current_dir = parent;
@@ -1118,6 +1202,7 @@ impl SavePickerModel {
         if count < 2 {
             return;
         }
+        self.clear_status_message();
         self.page = if forward {
             (self.page + 1) % count
         } else {
@@ -1132,6 +1217,7 @@ impl SavePickerModel {
         if let Some(parent) = self.current_dir.parent().map(Path::to_path_buf)
             && !parent.as_os_str().is_empty()
         {
+            self.clear_status_message();
             self.current_dir = parent;
             self.refresh();
             self.cursor = self.first_selectable_row();
@@ -1189,6 +1275,7 @@ mod tests {
                 .collect(),
             page: 0,
             cursor: 0,
+            status_message: None,
             drives: Vec::new(),
             last_dir_per_drive: HashMap::new(),
             intent,
@@ -2232,6 +2319,96 @@ mod tests {
         assert!(
             !model.row_is_loaded_save(new_row),
             "`[ new ]` is an action row; only a File row may be marked"
+        );
+    }
+
+    #[test]
+    fn rejection_reasons_have_distinct_visible_copy() {
+        assert_eq!(
+            PickRejection::NotBnd4.status_message("SL2").headline(),
+            "NOT AN ELDEN RING SAVE"
+        );
+        assert_eq!(
+            PickRejection::NoLoadableCharacter
+                .status_message("SL2")
+                .headline(),
+            "NO LOADABLE CHARACTER"
+        );
+        let wrong_type = PickRejection::WrongExtension.status_message("CO2/.SL2");
+        assert_eq!(wrong_type.headline(), "WRONG FILE TYPE");
+        assert!(
+            wrong_type.detail().contains(".CO2/.SL2"),
+            "the visible reason must name the accepted extension set"
+        );
+    }
+
+    #[test]
+    fn picker_status_survives_rejection_and_clears_on_navigation() {
+        let mut model = model_with(PickerIntent::LoadSource, "Z:\\saves", 2);
+        model.set_status_message(PickerStatusMessage::new(
+            "WRONG SAVE SIZE",
+            "Expected a full container.",
+        ));
+        assert_eq!(
+            model.status_message().map(PickerStatusMessage::headline),
+            Some("WRONG SAVE SIZE")
+        );
+
+        assert_eq!(model.activate(0), PickerActivation::Repopulate);
+        assert!(
+            model.status_message().is_none(),
+            "moving to another folder must not carry a stale rejection"
+        );
+    }
+
+    #[test]
+    fn picker_status_clears_on_direct_page_drive_and_up_navigation() {
+        let mut paged = model_with(PickerIntent::LoadSource, "Z:\\saves", PICKER_ROW_COUNT);
+        paged.set_status_message(PickerStatusMessage::new(
+            "NO LOADABLE CHARACTER",
+            "Pick another save.",
+        ));
+        paged.cycle_page(true);
+        assert!(
+            paged.status_message().is_none(),
+            "direct page cycling must not carry a stale rejection"
+        );
+
+        let (real_dir, real_root) = real_dir_and_root("status-clear-drive");
+        let other_root = PathBuf::from("Q:\\");
+        let mut drive = with_drives(
+            model_with(PickerIntent::LoadSource, "unused", 0),
+            &[
+                real_root.to_string_lossy().as_ref(),
+                other_root.to_string_lossy().as_ref(),
+            ],
+        );
+        drive.current_dir = real_dir.clone();
+        drive.set_status_message(PickerStatusMessage::new(
+            "WRONG FILE TYPE",
+            "Pick another file.",
+        ));
+        drive.cycle_drive(true);
+        assert!(
+            drive.status_message().is_none(),
+            "direct drive cycling must not carry a stale rejection"
+        );
+
+        let child = real_dir.join("child");
+        std::fs::create_dir_all(&child).expect("temp child dir must be creatable");
+        let mut up = model_with(
+            PickerIntent::LoadSource,
+            child.to_string_lossy().as_ref(),
+            0,
+        );
+        up.set_status_message(PickerStatusMessage::new(
+            "UNREADABLE SAVE",
+            "Pick another file.",
+        ));
+        up.go_up();
+        assert!(
+            up.status_message().is_none(),
+            "direct up navigation must not carry a stale rejection"
         );
     }
 }
