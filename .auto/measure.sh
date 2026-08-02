@@ -93,9 +93,11 @@ def read_module_tree(root_file: Path, module_dir: Path | None = None) -> str:
 
 
 _src_root = root / 'crates/er-effects-rs/src'
+_title_flow_root = root / 'crates/er-title-flow/src'
 lib = read_module_tree(_src_root / 'lib.rs', _src_root / 'lib_parts')
 constants_src = read_module_tree(_src_root / 'constants.rs', _src_root / 'constants')
-exp = read_module_tree(_src_root / 'experiments.rs', _src_root / 'experiments')
+title_flow = read_module_tree(_title_flow_root / 'lib.rs', _title_flow_root)
+exp = read_module_tree(_src_root / 'experiments.rs', _src_root / 'experiments') + '\n' + title_flow
 check = (root / 'scripts/check-autoload-happy-path.py').read_text(encoding='utf-8', errors='replace')
 telemetry_src = read_module_tree(_src_root / 'telemetry.rs', _src_root / 'telemetry')
 overlay_code = (root / 'crates/er-effects-rs/src/overlay.rs').read_text(encoding='utf-8', errors='replace') if (root / 'crates/er-effects-rs/src/overlay.rs').exists() else ''
