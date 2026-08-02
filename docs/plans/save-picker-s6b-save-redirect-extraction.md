@@ -77,6 +77,8 @@ Sixth slice on `refactor/s6b2f-save-hook-install-primitives-20260802`: move the 
 
 Seventh slice on `refactor/s6b2g-save-hook-queue-helper-20260802`: move the resolved-target MinHook queue/store primitive into `er-save-redirect::queue_resolved_save_hook`. Product still resolves module exports, gates install sequencing, applies queued hooks, and owns callback bodies.
 
+Eighth slice on `refactor/s6b2h-core-createfile-install-20260802`: move the always-on core `CreateFileW` install sequence into `er-save-redirect::install_core_createfilew_hook`. Product still supplies export resolution, the detour callback, and logging, but the shared core now owns the idempotent install sequence for the hook required by save-destination commits.
+
 Gate: Windows-target check plus a no-runtime hook-install smoke if available. Runtime proof comes after this, not before.
 
 ### S6b.3: boot-hold/title-flow seam

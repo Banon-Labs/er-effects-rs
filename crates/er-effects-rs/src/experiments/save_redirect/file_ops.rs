@@ -5,8 +5,9 @@ use er_save_redirect::{
     SAVE_REDIRECT_ORIG_COPYFILEW, SAVE_REDIRECT_ORIG_CREATEFILEW, SAVE_REDIRECT_ORIG_FINDFIRSTW,
     SAVE_REDIRECT_ORIG_GETATTREXW, SAVE_REDIRECT_ORIG_GETATTRW, SAVE_REDIRECT_ORIG_GETDISKFREEW,
     SAVE_REDIRECT_ORIG_NTCREATEFILE, SAVE_REDIRECT_ORIG_NTQUERYVOLINFO,
-    SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW, SaveNtCreateDetourGuard, is_save_file_or_backup_path,
-    queue_resolved_save_hook, save_detour_disk_io_allowed, wide_ends_with_ci_ascii,
+    SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW, SaveNtCreateDetourGuard, install_core_createfilew_hook,
+    is_save_file_or_backup_path, queue_resolved_save_hook, save_detour_disk_io_allowed,
+    wide_ends_with_ci_ascii,
 };
 
 type ShGetFolderPathWFn = unsafe extern "system" fn(isize, i32, isize, u32, *mut u16) -> i32;
@@ -364,57 +365,14 @@ unsafe fn queue_save_redirect_hook(
 /// `install_save_redirect_hooks` -- and especially the Wine-only free-space overrides -- stays
 /// behind its own gate. Idempotent; safe to call from both installers.
 pub(crate) fn install_save_file_core_hooks() {
-    SAVE_HOOK_INSTALL_STATE.install_core_once(|| {
-        match unsafe { MH_Initialize() } {
-            MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
-            status => {
-                append_autoload_debug(format_args!(
-                    "save-override: core MH_Initialize failed: {status:?}"
-                ));
-                return;
-            }
-        }
-        let create_addr = unsafe { kernel32_proc(b"CreateFileW\0") };
-        if create_addr == HOOK_ORIGINAL_UNSET {
-            append_autoload_debug(format_args!(
-                "save-override: core could not resolve kernel32!CreateFileW -- save-destination commits cannot redirect their write-open"
-            ));
-            return;
-        }
-        let hook = match unsafe {
-            MhHook::new(
-                create_addr as *mut c_void,
-                save_redirect_createfilew_hook as *mut c_void,
-            )
-        } {
-            Ok(hook) => hook,
-            Err(status) => {
-                append_autoload_debug(format_args!(
-                    "save-override: core MhHook::new CreateFileW failed at 0x{create_addr:x}: {status:?}"
-                ));
-                return;
-            }
-        };
-        SAVE_REDIRECT_ORIG_CREATEFILEW.store(hook.trampoline() as usize, Ordering::SeqCst);
-        if let Err(status) = unsafe { hook.queue_enable() } {
-            append_autoload_debug(format_args!(
-                "save-override: core CreateFileW queue_enable failed: {status:?}"
-            ));
-            return;
-        }
-        match unsafe { MH_ApplyQueued() } {
-            MH_STATUS::MH_OK => {
-                SAVE_HOOK_INSTALL_STATE.mark_core_createfilew_installed();
-                std::mem::forget(hook);
-                append_autoload_debug(format_args!(
-                    "save-override: core INSTALLED CreateFileW(0x{create_addr:x}) -- pass-through until a redirect dir or a save destination is armed"
-                ));
-            }
-            status => append_autoload_debug(format_args!(
-                "save-override: core CreateFileW MH_ApplyQueued failed: {status:?}"
-            )),
-        }
-    });
+    unsafe {
+        install_core_createfilew_hook(
+            &SAVE_HOOK_INSTALL_STATE,
+            save_redirect_createfilew_hook as *mut c_void,
+            |name| kernel32_proc(name),
+            |message| append_autoload_debug(format_args!("{message}")),
+        );
+    }
 }
 
 /// True once the core `kernel32!CreateFileW` detour is live.
