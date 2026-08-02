@@ -2994,6 +2994,7 @@ dependencies = [
 name = "er-save-redirect"
 version = "0.1.0"
 dependencies = [
+ "er-hook",
  "er-save-loader",
  "er-telemetry",
 ]

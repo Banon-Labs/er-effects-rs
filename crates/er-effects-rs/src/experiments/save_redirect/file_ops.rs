@@ -6,7 +6,7 @@ use er_save_redirect::{
     SAVE_REDIRECT_ORIG_GETATTREXW, SAVE_REDIRECT_ORIG_GETATTRW, SAVE_REDIRECT_ORIG_GETDISKFREEW,
     SAVE_REDIRECT_ORIG_NTCREATEFILE, SAVE_REDIRECT_ORIG_NTQUERYVOLINFO,
     SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW, SaveNtCreateDetourGuard, is_save_file_or_backup_path,
-    save_detour_disk_io_allowed, wide_ends_with_ci_ascii,
+    queue_resolved_save_hook, save_detour_disk_io_allowed, wide_ends_with_ci_ascii,
 };
 
 type ShGetFolderPathWFn = unsafe extern "system" fn(isize, i32, isize, u32, *mut u16) -> i32;
@@ -348,20 +348,10 @@ unsafe fn queue_save_redirect_hook(
         ));
         return;
     }
-    match unsafe { MhHook::new(addr as *mut c_void, detour) } {
-        Ok(hook) => {
-            orig.store(hook.trampoline() as usize, Ordering::SeqCst);
-            if let Err(status) = unsafe { hook.queue_enable() } {
-                append_autoload_debug(format_args!(
-                    "save-override: {name} queue_enable failed: {status:?}"
-                ));
-            } else {
-                hooks.push(hook);
-            }
-        }
-        Err(status) => append_autoload_debug(format_args!(
-            "save-override: MhHook::new {name} failed at 0x{addr:x}: {status:?}"
-        )),
+    unsafe {
+        queue_resolved_save_hook(hooks, name, addr, detour, orig, |message| {
+            append_autoload_debug(format_args!("{message}"));
+        });
     }
 }
 
