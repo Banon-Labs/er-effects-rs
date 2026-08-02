@@ -127,6 +127,15 @@ impl SaveHookInstallState {
     }
 }
 
+/// Whether the redirect-mode save hook batch should install now.
+///
+/// The native missing-save picker path deliberately keeps redirect hooks uninstalled until a picked
+/// or configured redirect root exists. Trace mode is the diagnostic exception: it installs the batch
+/// without a redirect root so hook observations can be collected.
+fn redirect_save_hooks_install_ready(redirect_root_ready: bool, trace_enabled: bool) -> bool {
+    redirect_root_ready || trace_enabled
+}
+
 impl Default for SaveHookInstallState {
     fn default() -> Self {
         Self::new()
@@ -291,7 +300,7 @@ pub unsafe fn install_redirect_save_hooks_when_ready(
     install_core_createfilew: impl FnOnce(),
     mut log: impl FnMut(String),
 ) {
-    if !redirect_root_ready && !trace_enabled {
+    if !redirect_save_hooks_install_ready(redirect_root_ready, trace_enabled) {
         log("save-override: install deferred -- redirect dir not set yet (waiting for missing-save picker/configured source)".to_owned());
         return;
     }
@@ -1480,6 +1489,45 @@ mod tests {
         state.install_redirect_once(|| redirect_calls.set(redirect_calls.get() + 1));
         state.install_redirect_once(|| redirect_calls.set(redirect_calls.get() + 1));
         assert_eq!(redirect_calls.get(), 1);
+    }
+
+    #[test]
+    fn no_runtime_hook_install_smoke_defers_until_ready_and_installs_once() {
+        let state = SaveHookInstallState::new();
+        let core_calls = std::cell::Cell::new(0);
+        let redirect_calls = std::cell::Cell::new(0);
+        let deferrals = std::cell::Cell::new(0);
+
+        let attempt_install = |redirect_root_ready: bool, trace_enabled: bool| {
+            if !redirect_save_hooks_install_ready(redirect_root_ready, trace_enabled) {
+                deferrals.set(deferrals.get() + 1);
+                return;
+            }
+            state.install_redirect_once(|| {
+                redirect_calls.set(redirect_calls.get() + 1);
+                state.install_core_once(|| core_calls.set(core_calls.get() + 1));
+            });
+        };
+
+        attempt_install(false, false);
+        assert_eq!(deferrals.get(), 1);
+        assert_eq!(redirect_calls.get(), 0);
+        assert_eq!(core_calls.get(), 0);
+
+        attempt_install(false, true);
+        assert_eq!(redirect_calls.get(), 1);
+        assert_eq!(core_calls.get(), 1);
+
+        attempt_install(true, false);
+        attempt_install(false, true);
+        state.install_core_once(|| core_calls.set(core_calls.get() + 1));
+        assert_eq!(deferrals.get(), 1);
+        assert_eq!(redirect_calls.get(), 1);
+        assert_eq!(core_calls.get(), 1);
+
+        assert!(redirect_save_hooks_install_ready(true, false));
+        assert!(redirect_save_hooks_install_ready(false, true));
+        assert!(!redirect_save_hooks_install_ready(false, false));
     }
 
     #[test]
