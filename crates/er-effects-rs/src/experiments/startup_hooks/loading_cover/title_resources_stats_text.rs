@@ -148,8 +148,10 @@ pub(crate) unsafe extern "system" fn title_scaleform_bind_observer_hook(owner: u
     );
     if stats_panel_enabled() && unsafe { bounded_ascii_contains(symbol_ptr, b"dummyprofileface") } {
         if let Some(slot) = unsafe { systex_profile_target_slot(target_ptr) } {
-            if STATS_PANEL_TEX_REGISTERED_MASK.load(Ordering::SeqCst) & (1 << slot) != 0 {
-                let key = STATS_PANEL_SYSTEX_KEYS[slot];
+            if let Some(key) = er_loading_portrait::stats_panel_registered_systex_key(
+                slot,
+                STATS_PANEL_TEX_REGISTERED_MASK.load(Ordering::SeqCst),
+            ) {
                 if unsafe { rewrite_native_dlstring_ascii(pair + 0x30, key) }.is_some() {
                     rewritten_visible_profile_surface = true;
                     let prev = STATS_PANEL_BIND_REDIRECT_MASK.fetch_or(1 << slot, Ordering::SeqCst);
@@ -619,60 +621,10 @@ pub(crate) fn build_loaded_char_attributes() -> Option<[i32; STATS_ATTR_COUNT]> 
     Some(attrs)
 }
 
-/// Build the attribute line for `attributes[start..end]` as a NUL-terminated UTF-16 string for native
-/// SetText. The attributes are in struct order (Vigor, Mind, Endurance, Strength, Dexterity,
-/// Intelligence, Faith, Arcane); labels/colors are indexed globally so a sub-range renders with the same
-/// per-attribute colors as the full line. Emitted as **Scaleform HTML**: the SetText core `FUN_140d84350`
-/// dispatches with `bHTML=1` (static RE 2026-07-04), so per-span `<font color>`/`<b>` tags are parsed and
-/// rendered by the field's own `MenuFont_01`. Each label is dimmed and each value gets a distinct color.
-/// The panel splits the eight attributes across two row lines (0..4 top, 4..8 bottom) via two calls.
-pub(crate) fn build_stats_html_utf16(
-    attributes: &[i32; STATS_ATTR_COUNT],
-    start: usize,
-    end: usize,
-) -> Vec<u16> {
-    const LABELS: [&str; STATS_ATTR_COUNT] =
-        ["VIG", "MND", "END", "STR", "DEX", "INT", "FAI", "ARC"];
-    // One distinct, dark-row-legible color per attribute value.
-    const VALUE_COLORS: [&str; STATS_ATTR_COUNT] = [
-        "#e0736b", // VIG - red
-        "#6fb4e0", // MND - blue
-        "#7fc27a", // END - green
-        "#e0973f", // STR - orange
-        "#d7d06a", // DEX - yellow
-        "#79cfe0", // INT - cyan
-        "#e0c766", // FAI - gold
-        "#c489c0", // ARC - violet
-    ];
-    // Labels dimmer than the native #cccccc so they read as secondary.
-    const LABEL_COLOR: &str = "#8f887a";
-    const SIZE: &str = "19";
-    let end = end.min(LABELS.len());
-    let mut s = String::from("<p align=\"left\">");
-    for i in start..end {
-        let v = attributes[i];
-        if i > start {
-            // A wider gap between pairs (vs the single space inside a pair) groups the attributes.
-            s.push_str("  ");
-        }
-        // Dim label, then the distinct-colored, bold value.
-        s.push_str("<font size=\"");
-        s.push_str(SIZE);
-        s.push_str("\" color=\"");
-        s.push_str(LABEL_COLOR);
-        s.push_str("\">");
-        s.push_str(LABELS[i]);
-        s.push_str("</font> <font size=\"");
-        s.push_str(SIZE);
-        s.push_str("\" color=\"");
-        s.push_str(VALUE_COLORS[i]);
-        s.push_str("\"><b>");
-        s.push_str(&v.to_string());
-        s.push_str("</b></font>");
-    }
-    s.push_str("</p>");
-    s.encode_utf16().chain(core::iter::once(0)).collect()
-}
+/// Build the ProfileSelect stats line for `attributes[start..end]` as a NUL-terminated UTF-16
+/// Scaleform-HTML string for native SetText. Pure formatting ownership lives in `er-loading-portrait`;
+/// this compatibility name keeps the startup-hook callsite stable.
+pub(crate) use er_loading_portrait::build_title_stats_html_utf16 as build_stats_html_utf16;
 
 /// Number of character attributes (Vig..Arc).
 /// Profile/save slot count on the ProfileSelect screen.
@@ -885,24 +837,9 @@ pub(crate) unsafe fn set_row_field_visible(
     vtable_ok
 }
 
-/// Which of a row's per-slot info fields should be on screen.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RowSlotFieldVisibility {
-    /// The `Level` FMG caption and the level value, which live and die together -- a caption with no
-    /// number reads as a broken row, so nothing ever shows one without the other.
-    level: bool,
-    /// The `PlayTime` field, which a browse row keeps only when it has a last-saved time to put
-    /// there.
-    play_time: bool,
-}
-
-impl RowSlotFieldVisibility {
-    /// What a row the picker does NOT own gets: exactly what the game drew.
-    const NATIVE: Self = Self {
-        level: true,
-        play_time: true,
-    };
-}
+/// Which of a row's per-slot info fields should be on screen. Pure row-visibility decision ownership
+/// lives in `er-loading-portrait`; this compatibility name keeps the startup-hook callsite stable.
+pub(crate) use er_loading_portrait::RowSlotFieldVisibility;
 
 /// Apply a row's field visibility through the game's own wrapper.
 ///
@@ -1026,10 +963,7 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
             let slot_info = picker_row.and_then(save_picker_row_slot_info);
             let (want_visibility, play_time) = match slot_info {
                 Some(info) => (
-                    RowSlotFieldVisibility {
-                        level: false,
-                        play_time: info.play_time.is_some(),
-                    },
+                    RowSlotFieldVisibility::browse_row(info.play_time.is_some()),
                     info.play_time,
                 ),
                 None => (RowSlotFieldVisibility::NATIVE, None),

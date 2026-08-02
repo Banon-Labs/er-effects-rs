@@ -44,6 +44,7 @@ pub(crate) use crate::stats_lines::*;
 pub(crate) use crate::stats_loading_text::*;
 #[cfg(windows)]
 pub(crate) use crate::stats_overlay::*;
+pub(crate) use crate::title_stats_text::*;
 
 // --- telemetry counters whose canonical product re-export stays in er-effects-rs ----
 pub(crate) use er_telemetry::counters::{
