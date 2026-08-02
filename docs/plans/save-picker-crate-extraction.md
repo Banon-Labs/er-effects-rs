@@ -254,8 +254,8 @@ Each field is one measured outbound cross-call from A's files into the rest of t
 | `save_dest_commit_window_armed` | `save_dest_commit` | `false` (log-only) |
 
 Plus the caller-supplied cover: `os_pick_validated` takes a `PickerCoverFactory`
-(`fn(&str) -> Option<PickerCover>`), the cross-crate form of the `PickerDim` argument it
-already takes on main -- which is how the dim stays out of A's business (SS5.3).
+(`fn(&str) -> Option<PickerCover>`), the cross-crate form of the pre-extraction caller
+argument -- which is how the dim stays out of A's business (SS5.3).
 
 ### 2.4 `QuitMenuHost` (product B)
 
@@ -334,12 +334,11 @@ What the code shows, as supporting evidence:
   dispatched at `save_picker_surface.rs:170`/`:179`). The boot flow no longer only draws
   its own overlay: under `os_native_save_picker` it opens the OS dialog like the other two.
   So A owns the mechanism by decision AND is already its own caller.
-* `picker_dim_arm` has exactly **one** call site --
-  `save_picker_os_dialog.rs:418`, inside `os_pick_validated` -- but it is **not**
-  unconditional: it is gated on the `dim: PickerDim` argument the caller passes
-  (`:389`). The two `PickerDim::CoverFrozenGame` sites (`:529`, `:643`) are the System>Quit
-  entry points; the boot flow passes `PickerDim::None` (`save_picker_boot.rs:295-301`).
-  The cover is therefore ALREADY the caller's decision on main -- see SS5.3.
+* `picker_dim_arm` now has exactly **one** call site -- the product-side
+  `picker_dim_cover_factory` in `startup_hooks/save_picker/save_picker_os_dialog.rs`.
+  That factory is passed only by the two System>Quit entry points. The boot flow passes
+  `er_save_picker::os_dialog::no_picker_cover`. The cover is therefore still the caller's
+  decision after S5 -- see SS5.3.
 * The dialog file's own doc (rule H3) says it "reads no game pointers, calls no game
   function, and dereferences nothing from `game_module_base()`". That is exactly why the
   mechanism half is portable and the entry-point half is not.
@@ -520,7 +519,7 @@ Each slice keeps `er-effects-rs` behaviorally identical when bundled, ends green
 | S2 | Delete the ~640 dead lines from SS1.4 | none by construction (zero callers) -- but audit each before deleting | `check.sh` + one product smoke |
 | S3 | Move the row model + `SaveSlotInfo`/`parse_save_character_slots` + the three config keys -> `er-save-picker`. `er-effects-rs` re-exports under the old paths so no call site changes | none | ~960 lines of tests become host-runnable -- the biggest single win |
 | S4 | Move the boot overlay -> `er-save-picker`, behind `arm_boot_picker()` | low | boot-with-no-save smoke |
-| S5 | **After bd `er-effects-rs-rsxi` lands.** Split `save_picker_os_dialog.rs`: mechanism -> `er-save-picker`; entry points stay in the product for now; the caller-supplied cover becomes the `PickerCoverFactory` seam (SS5.3) | **none** -- the caller-decides shape is already on main (SS5.3) | all three surfaces: boot, load, save-as |
+| S5 | **This branch.** Split `save_picker_os_dialog.rs`: mechanism + tests -> `er-save-picker::os_dialog`; entry points stay in the product shim for now; the caller-supplied cover is the `PickerCoverFactory` seam (SS5.3) | **none** -- the caller-decides shape was already on main and is preserved across the crate seam | all three surfaces: boot, load, save-as |
 | S6 | `er-save-picker-dll` becomes real + its standalone smoke script | none to the product | matrix rows 2, 4 |
 | S7 | Move B's decision core -> `er-quit-menu`: `system_quit_row_identity.rs`, `save_dest_identity.rs`, `save_dest_commit.rs`, `save_flow_boxes.rs` (~3400 lines, ~745 of them tests) | low (near-pure, heavily tested) | `check.sh` |
 | S8 | Move B's hooked surfaces -> `er-quit-menu`: `system_quit_dialog_handlers.rs`, `save_picker_menu.rs`, `save_picker_surface.rs`, `save_picker_dim_overlay.rs`, the OS entry points, `install_system_quit_duplicate_button_hook`. Every detour switches to `register_union_hook` | **high** -- this is the feature | full System>Quit smoke: all four rows |
@@ -538,23 +537,22 @@ boot missing-save dialog was dimmed too, and listed un-dimming it as S5's one de
 behavior change. **That is no longer true and S5 has no behavior change in it.** PR #109
 landed the caller-decides shape when it routed the boot flow through the OS dialog:
 
-* the arm at `save_picker_os_dialog.rs:418` is gated on the `dim: PickerDim` argument (`:389`);
-* the two `PickerDim::CoverFrozenGame` sites (`:529`, `:643`) are the System>Quit entry points;
-* the boot flow passes `PickerDim::None` (`save_picker_boot.rs:295-301`), and the file's own
-  comment (`:25-31`) explains why -- no game thread is blocked at a missing-save boot, so
-  Present keeps running and there is nothing frozen for a cover to explain.
+* the extracted `er-save-picker::os_dialog::os_pick_validated` takes a `PickerCoverFactory`;
+* the two System>Quit entry points pass a product-side factory that arms the dim cover;
+* the boot flow passes `no_picker_cover`, preserving the existing rule: no game thread is
+  blocked at a missing-save boot, so Present keeps running and there is nothing frozen for a
+  cover to explain.
 
 Measured, not only read: a live boot-picker run on `4ae8c6d1`
 (`product-continue-direct-20260730-124605`) recorded `oracle_save_picker_dim_arm_count = 0`
 while the overlay's bring-up self-test passed (`dim_selftest = 1`) -- the mechanism was
 healthy and simply was not asked to arm.
 
-S5's job is therefore to carry that shape across the crate boundary unchanged: the
-`PickerDim` enum becomes a `PickerCoverFactory` in A's host seam, B passes a factory that
-arms its dim, A's boot flow passes none. The cover must keep its two current properties: it
-drops BEFORE the dialog claim, and it spans the WHOLE reopen loop rather than each individual
-dialog (so an invalid pick does not flash the game back at full brightness between two
-dialogs).
+S5 carries that shape across the crate boundary unchanged: `PickerCoverFactory` is the
+seam, the System>Quit product shim passes a factory that arms its dim, and A's boot flow
+passes none. The cover must keep its two current properties: it drops BEFORE the dialog
+claim, and it spans the WHOLE reopen loop rather than each individual dialog (so an
+invalid pick does not flash the game back at full brightness between two dialogs).
 
 **Reviewer note:** do not "restore" dimming to the boot dialog while executing S5. The boot
 dialog being undimmed is current, intended, user-directed behavior.

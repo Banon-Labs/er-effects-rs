@@ -1,10 +1,10 @@
 //! Product (A): the DLL-drawn boot save picker, its shared row model, and the OS-native
 //! common-file-dialog mechanism.
 //!
-//! Phase 1 of docs/plans/save-picker-crate-extraction.md has moved the host-testable row
-//! model, config keys, and slot parser here. The remaining product-A runtime pieces still
-//! live under `er-effects-rs/src/experiments/startup_hooks/save_picker/` until their host
-//! seam is extracted.
+//! The save-picker crate extraction has moved the host-testable row model, config keys,
+//! slot parser, and reusable OS common-file-dialog mechanism here. The boot overlay and
+//! product entrypoints still live under `er-effects-rs/src/experiments/startup_hooks/save_picker/`
+//! until their host seams are extracted.
 //!
 //! Contents and remaining planned moves:
 //! * `model` -- moved from `experiments/save_picker.rs`: `SavePickerModel`,
@@ -24,14 +24,14 @@
 //!   thread), the file stage and the character sub-stage, the CPU compositor
 //!   (`overlay_save_picker_onto`), and the deferred pick completion that runs the redirect
 //!   install on the game-task thread.
-//! * `os_dialog` -- the comdlg32 MECHANISM half of
-//!   `startup_hooks/save_picker/save_picker_os_dialog.rs` (~370 of its 676 lines): `os_dialog_run`,
+//! * `os_dialog` -- moved from the mechanism half of
+//!   `startup_hooks/save_picker/save_picker_os_dialog.rs`: `os_dialog_run`,
 //!   `os_pick_validated`, `classify_os_outcome`, `should_reopen`, `os_dialog_filter`,
-//!   `OsDialogClaim`, `os_dialog_owner`, `os_pick_path_from_buffer`, `OsPickOutcome`. That
-//!   half "converts strings and calls comdlg32... reads no game pointers, calls no game
-//!   function" (its own rule H3), which is exactly why it is reusable. Its two System>Quit
-//!   ENTRY POINTS (`os_open_save_picker_load`, `os_open_save_dest_picker`) are not here --
-//!   they are quit-menu callers and belong to `er-quit-menu`.
+//!   `OsDialogClaim`, `os_dialog_owner`, `os_pick_path_from_buffer`, `OsPickOutcome`. It
+//!   converts strings and calls comdlg32, with product state supplied through host callbacks
+//!   and a caller-supplied cover factory. Its two System>Quit entrypoints
+//!   (`os_open_save_picker_load`, `os_open_save_dest_picker`) are not here -- they are
+//!   quit-menu callers and still live in the product shim for now.
 //! * `config` -- the three picker keys and their plumbing, moved out of
 //!   `er-effects-rs/src/config.rs`: `preferred_save_picker_dir`,
 //!   `autoupdate_preferred_picker_dir` and `os_native_save_picker` (with its
@@ -43,17 +43,10 @@
 //! # The screen cover is the CALLER's decision, not this crate's
 //!
 //! Under the 2026-07-30 user decision the dim belongs to product (B) and the boot dialog
-//! must NOT be dimmed. **Main already works this way** -- the arm inside `os_pick_validated`
-//! (`save_picker_os_dialog.rs:417-420`) is gated on a `PickerDim` the CALLER passes, the two
-//! `CoverFrozenGame` sites (`:529`, `:643`) are the System>Quit entry points, and the boot
-//! flow passes `PickerDim::None` (`save_picker_boot.rs:295-301`). Measured, not just read: a
-//! live boot-picker run recorded `oracle_save_picker_dim_arm_count = 0` with the overlay's
-//! own bring-up self-test passing.
-//!
-//! So the extraction PRESERVES that shape rather than introducing it: the `PickerDim` enum
-//! becomes the [`host::PickerCoverFactory`] seam, `er-quit-menu` passes a factory that arms
-//! its dim, and this crate's boot flow passes none. Same behavior, expressed across a crate
-//! boundary instead of an in-crate enum.
+//! must NOT be dimmed. The extracted `os_pick_validated` preserves that caller-decides
+//! shape through the [`host::PickerCoverFactory`] seam: the System>Quit product shim passes
+//! a factory that arms its dim, and the boot flow passes [`os_dialog::no_picker_cover`].
+//! Same behavior, expressed across a crate boundary instead of an in-crate enum.
 //!
 //! # The OS-native surface is a REQUIREMENT, not an option
 //!
@@ -85,9 +78,13 @@
 pub mod config;
 pub mod host;
 pub mod model;
+#[cfg(feature = "os-dialog")]
+pub mod os_dialog;
 pub mod slots;
 
 pub use config::*;
 pub use host::*;
 pub use model::*;
+#[cfg(feature = "os-dialog")]
+pub use os_dialog::*;
 pub use slots::*;

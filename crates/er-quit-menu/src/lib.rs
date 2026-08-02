@@ -21,10 +21,10 @@
 //!   which picker surface opens, plus the destination decisions both surfaces share.
 //! * `dim` -- `startup_hooks/quit_menu/save_picker_dim_overlay.rs` (876): the layered GDI window
 //!   that covers the game while an OS dialog is up. IN-GAME QUIT-MENU CASE ONLY.
-//! * `os_entry` -- the two System>Quit ENTRY POINTS out of
+//! * `os_entry` -- the two System>Quit entrypoints in the product shim
 //!   `startup_hooks/save_picker/save_picker_os_dialog.rs` (`os_open_save_picker_load`,
-//!   `os_open_save_dest_picker`, ~180 lines). The comdlg32 mechanism they call lives in
-//!   `er-save-picker`; this crate supplies the dim as its cover.
+//!   `os_open_save_dest_picker`). The comdlg32 mechanism they call now lives in
+//!   `er-save-picker::os_dialog`; this crate supplies the dim as its cover.
 //! * `save_flow` -- `startup_hooks/save_flow_boxes.rs` (790), `save_dest_identity.rs`
 //!   (465), `save_dest_commit.rs` (1286), and the `save_flow_tick` stage machine currently
 //!   at `experiments/lifecycle.rs`.
