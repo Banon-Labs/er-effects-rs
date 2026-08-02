@@ -22,7 +22,7 @@ use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoad
 use er_save_redirect::{
     DirectStageNoSteamIdKind, SaveDetourDepth, SaveHookInstallState, SavePathKind,
     classify_save_like_path, direct_stage_no_steamid_kind, is_save_file_or_backup_path,
-    redirect_wide_roaming_eldenring_path, save_detour_disk_io_allowed,
+    redirect_wide_save_path_with_side_effects, save_detour_disk_io_allowed,
     steam_id64_from_wide_save_path, wide_contains_ci_ascii, wide_ends_with_ci_ascii,
 };
 use er_telemetry::counters::{
@@ -1309,17 +1309,15 @@ fn wide_with_nul(path: &[u16]) -> Vec<u16> {
 /// opens redirect to the configured file itself so users do NOT need to stage their path under
 /// `EldenRing` or include a SteamID folder.
 fn save_redirect_path(path: &[u16]) -> Option<Vec<u16>> {
-    // Always learn the native `<steamid>` segment from save-like paths; this is the safest
-    // current-account oracle because the native save-dir builder already called Steam before the path
-    // reached our hook. The redirect decision below is still anchored on `Roaming` to avoid loops.
-    observe_steam_id64_from_save_path(path);
     // Direct-file mode stages the selected source into the private native save tree. Do NOT redirect
     // save-file or .bak opens to `SAVE_DIRECT_SOURCE_FILE`; reads and writes must hit the staged copy
     // so readonly/user-provided source saves are never modified by gameplay or profile switching.
-    let root = SAVE_REDIRECT_DIR_W.get()?;
-    let redirected = redirect_wide_roaming_eldenring_path(path, root)?;
-    ensure_direct_stage_for_requested_path(path);
-    Some(redirected)
+    redirect_wide_save_path_with_side_effects(
+        path,
+        SAVE_REDIRECT_DIR_W.get().map(Vec::as_slice),
+        observe_steam_id64_from_save_path,
+        ensure_direct_stage_for_requested_path,
+    )
 }
 
 type CreateFileWFn =
