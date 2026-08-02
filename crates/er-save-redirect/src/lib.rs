@@ -8,12 +8,15 @@ mod reentry;
 pub use reentry::{SaveDetourDepth, SaveNtCreateDetourGuard, save_detour_disk_io_allowed};
 
 use std::{
+    ffi::c_void,
     path::{Path, PathBuf},
     sync::{
         Once,
         atomic::{AtomicUsize, Ordering},
     },
 };
+
+use er_hook::MhHook;
 
 /// Exact byte length of Elden Ring PC `ER0000.sl2` / Seamless `.co2` save containers.
 ///
@@ -141,6 +144,43 @@ pub static SAVE_REDIRECT_ORIG_GETDISKFREEW: AtomicUsize =
     AtomicUsize::new(SAVE_HOOK_ORIGINAL_UNSET);
 pub static SAVE_REDIRECT_ORIG_NTQUERYVOLINFO: AtomicUsize =
     AtomicUsize::new(SAVE_HOOK_ORIGINAL_UNSET);
+
+/// Queue one already-resolved save hook target and store its trampoline.
+///
+/// Address resolution and logging remain caller-owned so product and future standalone owners can use
+/// different module/export lookup and telemetry sinks while sharing the MinHook queue/slot contract.
+///
+/// # Safety
+/// `target_addr` and `detour` must be valid for MinHook in the current process, and `detour` must
+/// match the target function ABI.
+pub unsafe fn queue_resolved_save_hook(
+    hooks: &mut Vec<MhHook>,
+    name: &str,
+    target_addr: usize,
+    detour: *mut c_void,
+    orig: &AtomicUsize,
+    mut log: impl FnMut(String),
+) {
+    if target_addr == SAVE_HOOK_ORIGINAL_UNSET {
+        log(format!("save-override: could not resolve {name}"));
+        return;
+    }
+    match unsafe { MhHook::new(target_addr as *mut c_void, detour) } {
+        Ok(hook) => {
+            orig.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                log(format!(
+                    "save-override: {name} queue_enable failed: {status:?}"
+                ));
+            } else {
+                hooks.push(hook);
+            }
+        }
+        Err(status) => log(format!(
+            "save-override: MhHook::new {name} failed at 0x{target_addr:x}: {status:?}"
+        )),
+    }
+}
 
 /// Why a candidate save source was rejected before redirect planning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
