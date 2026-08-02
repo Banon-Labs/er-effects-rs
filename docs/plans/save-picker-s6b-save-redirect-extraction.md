@@ -103,6 +103,8 @@ Nineteenth slice on `refactor/s6b4a-save-path-kind-core-20260802`: move the pure
 
 Twentieth slice on `refactor/s6b5a-direct-stage-status-core-20260802`: move direct-stage file existence/byte-size probing into `er-save-redirect::probe_direct_stage_file_status`. Product still owns global stage/source state and telemetry serialization.
 
+Twenty-first slice on `refactor/s6b5b-direct-stage-dirs-core-20260802`: move the direct-stage case-directory convention (`eldenring` and `EldenRing`) into `er-save-redirect::direct_stage_case_dirs`. Product still owns when to create those directories and how to log stage state.
+
 Gate: Windows-target check plus a no-runtime hook-install smoke if available. Runtime proof comes after this, not before.
 
 ### S6b.3: boot-hold/title-flow seam

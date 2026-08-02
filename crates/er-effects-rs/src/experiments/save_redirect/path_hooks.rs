@@ -26,8 +26,8 @@ use er_save_redirect::{
     SAVE_REDIRECT_ORIG_NTQUERYVOLINFO, SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW, SaveDetourDepth,
     SaveHookInstallState, SavePathKind, SavePathTelemetryBucket, classify_copyfile_endpoint,
     classify_save_like_path, classify_save_query_path, createfile_diag_hit_should_log,
-    direct_stage_no_steamid_kind, is_save_file_or_backup_path, plan_create_file_open,
-    plan_save_query_path, probe_direct_stage_file_status,
+    direct_stage_case_dirs, direct_stage_no_steamid_kind, is_save_file_or_backup_path,
+    plan_create_file_open, plan_save_query_path, probe_direct_stage_file_status,
     redirect_wide_save_path_with_side_effects, save_detour_disk_io_allowed,
     steam_id64_from_wide_save_path, wide_contains_ci_ascii, wide_ends_with_ci_ascii,
 };
@@ -911,8 +911,9 @@ fn activate_save_redirect_source(
             stage_root,
             root_wide,
         } => {
-            let _ = std::fs::create_dir_all(stage_root.join("eldenring"));
-            let _ = std::fs::create_dir_all(stage_root.join("EldenRing"));
+            for dir in direct_stage_case_dirs(&stage_root) {
+                let _ = std::fs::create_dir_all(dir);
+            }
             // UTF-8 Lossy: log-only decode of configured source/stage paths for probe confirmation.
             let shown = file.display().to_string();
             let stage_shown = String::from_utf16_lossy(root_wide.as_slice());
@@ -1099,8 +1100,9 @@ fn ensure_direct_stage_for_requested_path(path: &[u16]) {
                 "save-override: direct-file stage pending -- no SteamID64 in {kind_label} requested path '{shown}'"
             ));
         }
-        let _ = std::fs::create_dir_all(root.join("eldenring"));
-        let _ = std::fs::create_dir_all(root.join("EldenRing"));
+        for dir in direct_stage_case_dirs(root) {
+            let _ = std::fs::create_dir_all(dir);
+        }
         return;
     };
     ensure_direct_stage_for_steam_id(steam_id);
