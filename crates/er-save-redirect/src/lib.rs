@@ -482,6 +482,48 @@ pub fn classify_save_like_path(path: &[u16]) -> SavePathKind {
     }
 }
 
+/// Redirect a Windows/Wine wide path rooted under `%APPDATA%\\Roaming\\EldenRing` to a staged
+/// save root. Returns a NUL-terminated wide path.
+///
+/// The `Roaming` anchor prevents already-redirected staged paths from being redirected again. The
+/// `EldenRing` suffix is lowercased because the staged tree is created on a case-sensitive Linux
+/// filesystem as lowercase `eldenring/<steamid>/er0000.*`.
+pub fn redirect_wide_roaming_eldenring_path(path: &[u16], root_wide: &[u16]) -> Option<Vec<u16>> {
+    const ELDENRING: &[u16] = &[
+        b'e' as u16,
+        b'l' as u16,
+        b'd' as u16,
+        b'e' as u16,
+        b'n' as u16,
+        b'r' as u16,
+        b'i' as u16,
+        b'n' as u16,
+        b'g' as u16,
+    ];
+    const ROAMING: &[u16] = &[
+        b'r' as u16,
+        b'o' as u16,
+        b'a' as u16,
+        b'm' as u16,
+        b'i' as u16,
+        b'n' as u16,
+        b'g' as u16,
+    ];
+    if !wide_contains_ci_ascii(path, ROAMING) {
+        return None;
+    }
+    let idx = wide_find_ci_ascii(path, ELDENRING)?;
+    let suffix = &path[idx..];
+    let mut out = Vec::with_capacity(root_wide.len() + 1 + suffix.len() + 1);
+    out.extend_from_slice(root_wide);
+    out.push(b'\\' as u16);
+    for &c in suffix {
+        out.push(wide_ascii_lower(c));
+    }
+    out.push(0);
+    Some(out)
+}
+
 /// If `path` is under `<root>/EldenRing/<steamid>/...`, return that root plus steam id.
 pub fn staged_save_root_for_file(path: &Path) -> Option<(PathBuf, u64)> {
     let mut root = PathBuf::new();
@@ -654,6 +696,25 @@ mod tests {
         assert_eq!(
             classify_save_like_path(&loose_save),
             SavePathKind::ConfiguredSaveFile
+        );
+    }
+
+    #[test]
+    fn redirects_roaming_eldenring_paths_to_staged_root() {
+        let root = wide_path(r"Z:\tmp\stage");
+        let source =
+            wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\76561197960265729\ER0000.SL2");
+        let redirected = redirect_wide_roaming_eldenring_path(&source, &root).unwrap();
+        assert_eq!(
+            String::from_utf16(&redirected[..redirected.len() - 1]).unwrap(),
+            r"Z:\tmp\stage\eldenring\76561197960265729\er0000.sl2"
+        );
+        assert_eq!(redirected.last(), Some(&0));
+
+        let already_staged = wide_path(r"Z:\tmp\stage\EldenRing\76561197960265729\ER0000.sl2");
+        assert_eq!(
+            redirect_wide_roaming_eldenring_path(&already_staged, &root),
+            None
         );
     }
 

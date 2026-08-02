@@ -69,6 +69,8 @@ Second slice on `refactor/s6b2b-save-hook-install-owner-20260802`: move the core
 
 Third slice on `refactor/s6b2c-save-path-classifier-20260802`: move host-runnable UTF-16 save-path classification helpers into `er-save-redirect` (`SavePathKind`, `DirectStageNoSteamIdKind`, save-file suffix detection, SteamID extraction, ASCII case-insensitive wide matching). Product telemetry and detour bodies still own counters/logging, but their save-like path categories now come from the shared redirect core.
 
+Fourth slice on `refactor/s6b2d-save-redirect-path-map-20260802`: move the pure `%APPDATA%\\Roaming\\EldenRing` wide-path rewrite into `er-save-redirect::redirect_wide_roaming_eldenring_path`. Product still owns observation, direct-file staging side effects, counters, logging, and detour bodies.
+
 Gate: Windows-target check plus a no-runtime hook-install smoke if available. Runtime proof comes after this, not before.
 
 ### S6b.3: boot-hold/title-flow seam

@@ -22,8 +22,8 @@ use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoad
 use er_save_redirect::{
     DirectStageNoSteamIdKind, SaveDetourDepth, SaveHookInstallState, SavePathKind,
     classify_save_like_path, direct_stage_no_steamid_kind, is_save_file_or_backup_path,
-    save_detour_disk_io_allowed, steam_id64_from_wide_save_path, wide_ascii_lower,
-    wide_contains_ci_ascii, wide_ends_with_ci_ascii, wide_find_ci_ascii,
+    redirect_wide_roaming_eldenring_path, save_detour_disk_io_allowed,
+    steam_id64_from_wide_save_path, wide_contains_ci_ascii, wide_ends_with_ci_ascii,
 };
 use er_telemetry::counters::{
     SAVE_REDIRECT_DETOUR_MAX_DEPTH, SAVE_REDIRECT_DETOUR_REENTRANT_PASSTHROUGHS,
@@ -1309,56 +1309,17 @@ fn wide_with_nul(path: &[u16]) -> Vec<u16> {
 /// opens redirect to the configured file itself so users do NOT need to stage their path under
 /// `EldenRing` or include a SteamID folder.
 fn save_redirect_path(path: &[u16]) -> Option<Vec<u16>> {
-    const ELDENRING: &[u16] = &[
-        b'e' as u16,
-        b'l' as u16,
-        b'd' as u16,
-        b'e' as u16,
-        b'n' as u16,
-        b'r' as u16,
-        b'i' as u16,
-        b'n' as u16,
-        b'g' as u16,
-    ];
-    const ROAMING: &[u16] = &[
-        b'r' as u16,
-        b'o' as u16,
-        b'a' as u16,
-        b'm' as u16,
-        b'i' as u16,
-        b'n' as u16,
-        b'g' as u16,
-    ];
     // Always learn the native `<steamid>` segment from save-like paths; this is the safest
     // current-account oracle because the native save-dir builder already called Steam before the path
     // reached our hook. The redirect decision below is still anchored on `Roaming` to avoid loops.
     observe_steam_id64_from_save_path(path);
-    // Anchor on `Roaming` + `EldenRing` so a coincidental "eldenring" elsewhere -- and our already-
-    // redirected target (`Z:\...\save\EldenRing\...`, no "Roaming") -- never re-redirects.
-    if !wide_contains_ci_ascii(path, ROAMING) {
-        return None;
-    }
-    let idx = wide_find_ci_ascii(path, ELDENRING)?;
     // Direct-file mode stages the selected source into the private native save tree. Do NOT redirect
     // save-file or .bak opens to `SAVE_DIRECT_SOURCE_FILE`; reads and writes must hit the staged copy
     // so readonly/user-provided source saves are never modified by gameplay or profile switching.
     let root = SAVE_REDIRECT_DIR_W.get()?;
-    let suffix = &path[idx..]; // "EldenRing\<id>\ER0000.sl2" (or "EldenRing\" for the dir open)
+    let redirected = redirect_wide_roaming_eldenring_path(path, root)?;
     ensure_direct_stage_for_requested_path(path);
-    let mut out = Vec::with_capacity(root.len() + 1 + suffix.len() + 1);
-    out.extend_from_slice(root);
-    out.push(b'\\' as u16);
-    // ASCII-lowercase the suffix: the game opens the save root in MIXED case ("EldenRing\" for the
-    // dir handle, "eldenring\graphicsconfig.xml" elsewhere). Our staged tree is on a CASE-SENSITIVE
-    // Linux filesystem, so we normalize every case-variant to lowercase and stage the tree lowercase
-    // (eldenring/<steamid>/er0000.sl2). The game reads through the returned HANDLE -- it does not care
-    // about the redirected filename's case; the Windows-side case-insensitive name compare still
-    // matches the enumerated lowercase entries.
-    for &c in suffix {
-        out.push(wide_ascii_lower(c));
-    }
-    out.push(0);
-    Some(out)
+    Some(redirected)
 }
 
 type CreateFileWFn =
