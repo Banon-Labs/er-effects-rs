@@ -374,6 +374,15 @@ pub fn boot_stage_picked_save_for_character_choice(path: std::path::PathBuf) -> 
     true
 }
 
+/// Force the boot picker surface down when this DLL stops owning the pending pick.
+///
+/// This is intentionally narrower than a product save completion: it only drops this crate's
+/// model/input state. The host still owns whatever latch made [`save_picker_overlay_active`]
+/// true in the first place.
+pub fn stand_down_boot_picker(reason: &str) {
+    save_picker_overlay_disarm(reason);
+}
+
 /// Open the picker model for the pending no-save boot if not already armed. Idempotent.
 fn save_picker_overlay_arm_if_pending() {
     let start_dir = save_picker_title_start_dir();

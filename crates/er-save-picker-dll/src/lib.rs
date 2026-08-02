@@ -5,12 +5,13 @@
 //! logic, this thin shell installs a standalone host seam and arms the boot picker when loaded
 //! by ME3.
 //!
-//! Co-loading stays safe: if the full product DLL is already present, this standalone shell logs
-//! and stands down so the product remains the sole owner of the missing-save boot flow. When this
-//! DLL is loaded by itself it owns a standalone pending latch, opens the picker model, starts the
-//! low-level keyboard hook, and records selected paths in its own log. It does not install product
-//! save-redirect hooks; a standalone pick proves the picker surface and staging path, then closes
-//! the standalone latch instead of pretending to load the game save.
+//! Co-loading stays conservative when the product DLL is already present: this standalone shell
+//! does not install its host or arm, so the product remains the owner of the boot flow. S6 does not
+//! claim a standalone-first co-load proof; when loaded by itself this DLL owns a standalone pending
+//! latch, opens the picker model, starts the low-level keyboard hook, and records selected paths in
+//! its own log. It does not install product save-redirect hooks; a standalone pick proves the
+//! picker surface and staging path, then closes the standalone latch instead of pretending to load
+//! the game save.
 
 #![allow(non_snake_case)]
 
@@ -121,25 +122,25 @@ pub unsafe extern "system" fn DllMain(
     if reason == DLL_PROCESS_ATTACH {
         let module_base = module as usize;
         START.call_once(|| {
-            let host_installed = install_standalone_host();
             if product_dll_present() {
                 STANDALONE_MISSING_SAVE_PENDING.store(false, Ordering::SeqCst);
                 append_log(
                     &log_dir(),
                     format_args!(
-                        "loaded module_base=0x{module_base:x}; product DLL present; standalone boot-save-picker stood down; host_installed={host_installed}"
+                        "loaded module_base=0x{module_base:x}; product DLL already present; standalone boot-save-picker stood down before host install"
                     ),
                 );
                 return;
             }
 
+            let host_installed = install_standalone_host();
             STANDALONE_MISSING_SAVE_PENDING.store(true, Ordering::SeqCst);
             let armed = er_save_picker::overlay::arm_boot_picker();
             er_save_picker::overlay::ensure_save_picker_keyboard_hook();
             append_log(
                 &log_dir(),
                 format_args!(
-                    "loaded module_base=0x{module_base:x}; standalone boot-save-picker armed={armed}; host_installed={host_installed}; start_dir='{}'",
+                    "loaded module_base=0x{module_base:x}; standalone boot-save-picker armed={armed}; host_installed={host_installed}; standalone-first co-load is not S6 proof; start_dir='{}'",
                     standalone_picker_start_dir().display()
                 ),
             );
