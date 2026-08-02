@@ -595,6 +595,35 @@ fn validated_save_file_path(path: PathBuf) -> Option<PathBuf> {
     }
 }
 
+fn picker_status_for_save_source_rejection(
+    err: er_save_redirect::SaveSourceRejection,
+) -> er_save_picker::PickerStatusMessage {
+    match err {
+        er_save_redirect::SaveSourceRejection::MissingOrNotFile => {
+            er_save_picker::PickerStatusMessage::new(
+                "SAVE NOT FOUND",
+                "The selected path is missing or is not a file.",
+            )
+        }
+        er_save_redirect::SaveSourceRejection::WrongSize { len, expected } => {
+            er_save_picker::PickerStatusMessage::new(
+                "WRONG SAVE SIZE",
+                format!("Expected {expected} bytes, but this file is {len} bytes."),
+            )
+        }
+        er_save_redirect::SaveSourceRejection::NotBnd4 => er_save_picker::PickerStatusMessage::new(
+            "NOT AN ELDEN RING SAVE",
+            "The file is not a readable BND4 save container.",
+        ),
+        er_save_redirect::SaveSourceRejection::Unreadable => {
+            er_save_picker::PickerStatusMessage::new(
+                "SAVE UNREADABLE",
+                "The save exists, but could not be read.",
+            )
+        }
+    }
+}
+
 /// Read-only is NEVER a reason to refuse a save, at any surface. Loading is a pure READ and succeeds
 /// on a `0444` file; the bit can only bite later, at the first WRITE.
 ///
@@ -963,36 +992,57 @@ pub(crate) fn save_picker_seamless_mode_after_settle(reason: &str) -> bool {
 /// picked container (size floor + BND4 parse -- stronger than the old OS flow's size-only check),
 /// persists the picked directory, activates the save-redirect source, installs the Win32 redirect
 /// hooks synchronously (idempotent -- the install is Once-guarded), and releases every waiter on
-/// the missing-save gate. Returns false (state unchanged, picker stays up) on an invalid pick.
-pub(crate) fn complete_missing_save_selection_from_picker(path: &Path) -> bool {
+/// the missing-save gate. A rejection carries the user-facing reason and leaves state unchanged so
+/// the picker stays up.
+pub(crate) fn complete_missing_save_selection_from_picker(
+    path: &Path,
+) -> er_save_picker::MissingSaveSelectionOutcome {
+    use er_save_picker::MissingSaveSelectionOutcome;
     // NO writability check: the pick is staged into a private native tree and the source is never a
     // write target, so a read-only save (the norm for the `0444` repo corpus) loads exactly like a
     // writable one. Rejecting those was a false negative that looked to the user like the picker
     // simply refusing to open the save.
-    let Some(validated) = validated_save_file_path(path.to_path_buf()) else {
-        append_autoload_debug(format_args!(
-            "save-override: title picker rejected invalid save '{}' (missing, unreadable, not BND4, or not exactly {} bytes)",
-            path.display(),
-            SAVE_OVERRIDE_EXPECTED_BYTES
-        ));
-        return false;
+    let validated = match er_save_redirect::validate_save_file_path(path.to_path_buf()) {
+        Ok(path) => path,
+        Err(err) => {
+            let message = picker_status_for_save_source_rejection(err);
+            append_autoload_debug(format_args!(
+                "save-override: title picker rejected invalid save '{}' -- {err:?} visible='{}: {}'",
+                path.display(),
+                message.headline(),
+                message.detail()
+            ));
+            return MissingSaveSelectionOutcome::Rejected(message);
+        }
     };
     match fs::read(&validated) {
         Ok(bytes) if er_save_loader::bnd4::parse_entries(&bytes).is_ok() => {}
         Ok(bytes) => {
+            let message = er_save_picker::PickerStatusMessage::new(
+                "NOT AN ELDEN RING SAVE",
+                "The file is not a readable BND4 save container.",
+            );
             append_autoload_debug(format_args!(
-                "save-override: title picker rejected non-BND4 file '{}' len={}",
+                "save-override: title picker rejected non-BND4 file '{}' len={} visible='{}: {}'",
                 validated.display(),
-                bytes.len()
+                bytes.len(),
+                message.headline(),
+                message.detail()
             ));
-            return false;
+            return MissingSaveSelectionOutcome::Rejected(message);
         }
         Err(err) => {
+            let message = er_save_picker::PickerStatusMessage::new(
+                "SAVE UNREADABLE",
+                "The save exists, but could not be read.",
+            );
             append_autoload_debug(format_args!(
-                "save-override: title picker could not read '{}': {err}",
-                validated.display()
+                "save-override: title picker could not read '{}': {err} visible='{}: {}'",
+                validated.display(),
+                message.headline(),
+                message.detail()
             ));
-            return false;
+            return MissingSaveSelectionOutcome::Rejected(message);
         }
     }
     if autoupdate_preferred_picker_dir_enabled()
@@ -1008,7 +1058,7 @@ pub(crate) fn complete_missing_save_selection_from_picker(path: &Path) -> bool {
         "save-override: title picker selected save '{}'; redirect active, missing-save gate released",
         validated.display()
     ));
-    true
+    MissingSaveSelectionOutcome::Completed
 }
 
 /// Diagnostic-only observer for save-like IO while the missing-save selection is pending. The

@@ -74,13 +74,22 @@ fn standalone_missing_save_selection_pending() -> bool {
     STANDALONE_MISSING_SAVE_PENDING.load(Ordering::SeqCst)
 }
 
-fn standalone_complete_missing_save_selection(path: &Path) -> bool {
-    let Ok(validated) = er_save_redirect::validate_save_file_path(path.to_path_buf()) else {
-        standalone_log(format_args!(
-            "standalone pick rejected by shared save-source validation: '{}'",
-            path.display()
-        ));
-        return false;
+fn standalone_complete_missing_save_selection(
+    path: &Path,
+) -> er_save_picker::MissingSaveSelectionOutcome {
+    use er_save_picker::MissingSaveSelectionOutcome;
+    let validated = match er_save_redirect::validate_save_file_path(path.to_path_buf()) {
+        Ok(validated) => validated,
+        Err(err) => {
+            let message = standalone_rejection_message(err);
+            standalone_log(format_args!(
+                "standalone pick rejected by shared save-source validation: '{}' -- {err:?} visible='{}: {}'",
+                path.display(),
+                message.headline(),
+                message.detail()
+            ));
+            return MissingSaveSelectionOutcome::Rejected(message);
+        }
     };
     let plan = er_save_redirect::plan_validated_save_source(validated.clone(), false);
     standalone_log(format_args!(
@@ -88,7 +97,36 @@ fn standalone_complete_missing_save_selection(path: &Path) -> bool {
         validated.display()
     ));
     STANDALONE_MISSING_SAVE_PENDING.store(false, Ordering::SeqCst);
-    true
+    MissingSaveSelectionOutcome::Completed
+}
+
+fn standalone_rejection_message(
+    err: er_save_redirect::SaveSourceRejection,
+) -> er_save_picker::PickerStatusMessage {
+    match err {
+        er_save_redirect::SaveSourceRejection::MissingOrNotFile => {
+            er_save_picker::PickerStatusMessage::new(
+                "SAVE NOT FOUND",
+                "The selected path is missing or is not a file.",
+            )
+        }
+        er_save_redirect::SaveSourceRejection::WrongSize { len, expected } => {
+            er_save_picker::PickerStatusMessage::new(
+                "WRONG SAVE SIZE",
+                format!("Expected {expected} bytes, but this file is {len} bytes."),
+            )
+        }
+        er_save_redirect::SaveSourceRejection::NotBnd4 => er_save_picker::PickerStatusMessage::new(
+            "NOT AN ELDEN RING SAVE",
+            "The file is not a readable BND4 save container.",
+        ),
+        er_save_redirect::SaveSourceRejection::Unreadable => {
+            er_save_picker::PickerStatusMessage::new(
+                "SAVE UNREADABLE",
+                "The save exists, but could not be read.",
+            )
+        }
+    }
 }
 
 fn standalone_picker_start_dir() -> PathBuf {
@@ -173,9 +211,10 @@ mod tests {
         assert!(install_standalone_host());
         assert!(!install_standalone_host());
         assert!(standalone_missing_save_selection_pending());
-        assert!(!standalone_complete_missing_save_selection(Path::new(
-            "Z:\\saves\\ER0000.sl2"
-        )));
+        assert!(matches!(
+            standalone_complete_missing_save_selection(Path::new("Z:\\saves\\ER0000.sl2")),
+            er_save_picker::MissingSaveSelectionOutcome::Rejected(_)
+        ));
         assert!(standalone_missing_save_selection_pending());
     }
 

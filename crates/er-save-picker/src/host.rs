@@ -12,6 +12,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use crate::model::PickerStatusMessage;
+
 /// An opaque screen cover held for the lifetime of one OS-dialog interaction.
 ///
 /// The dim overlay belongs to product (B) and must NOT dim the boot missing-save dialog
@@ -45,6 +47,13 @@ impl PickerCover {
 /// Builds a cover for the named surface (`"load"` / `"save-as"`), or `None` for no cover.
 pub type PickerCoverFactory = fn(&str) -> Option<PickerCover>;
 
+/// Result of committing a boot-picker file+character selection through the host.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MissingSaveSelectionOutcome {
+    Completed,
+    Rejected(PickerStatusMessage),
+}
+
 /// Host callbacks the picker reads through the seam. Every field has a neutral default
 /// (see [`SavePickerHost::defaults`]); hosts overwrite the ones they own.
 #[derive(Clone, Copy)]
@@ -58,9 +67,9 @@ pub struct SavePickerHost {
     /// (`save_redirect::path_hooks::missing_save_selection_pending`).
     pub missing_save_selection_pending: fn() -> bool,
     /// Commit a picked container: validate it, activate the save redirect, install the
-    /// redirect hooks and release the save-check hold. False = invalid pick, picker stays
-    /// up (`save_redirect::path_hooks::complete_missing_save_selection_from_picker`).
-    pub complete_missing_save_selection_from_picker: fn(&Path) -> bool,
+    /// redirect hooks and release the save-check hold. `Rejected` carries the visible reason and
+    /// keeps the picker up (`save_redirect::path_hooks::complete_missing_save_selection_from_picker`).
+    pub complete_missing_save_selection_from_picker: fn(&Path) -> MissingSaveSelectionOutcome,
     /// True when the active runtime is Seamless Co-op, so the browser offers `.co2` as
     /// well as `.sl2` (`save_redirect::path_hooks::save_picker_seamless_mode_after_settle`).
     pub save_picker_seamless_mode_after_settle: fn(&str) -> bool,
@@ -101,8 +110,11 @@ fn default_log(_args: std::fmt::Arguments<'_>) {}
 fn default_gate_off() -> bool {
     false
 }
-fn default_complete(_path: &Path) -> bool {
-    false
+fn default_complete(_path: &Path) -> MissingSaveSelectionOutcome {
+    MissingSaveSelectionOutcome::Rejected(PickerStatusMessage::new(
+        "SAVE NOT AVAILABLE",
+        "No host accepted this save selection.",
+    ))
 }
 fn default_seamless(_reason: &str) -> bool {
     false
@@ -169,7 +181,9 @@ pub(crate) fn missing_save_selection_pending() -> bool {
     (host().missing_save_selection_pending)()
 }
 #[allow(dead_code)]
-pub(crate) fn complete_missing_save_selection_from_picker(path: &Path) -> bool {
+pub(crate) fn complete_missing_save_selection_from_picker(
+    path: &Path,
+) -> MissingSaveSelectionOutcome {
     (host().complete_missing_save_selection_from_picker)(path)
 }
 #[allow(dead_code)]
@@ -211,9 +225,10 @@ mod tests {
         // and keep the H4 dialog gate CLOSED, so a crate loaded without a host cannot
         // half-drive a save selection or throw a modal over an unknown window.
         assert!(!missing_save_selection_pending());
-        assert!(!complete_missing_save_selection_from_picker(Path::new(
-            "Z:\\nowhere\\ER0000.sl2"
-        )));
+        assert!(matches!(
+            complete_missing_save_selection_from_picker(Path::new("Z:\\nowhere\\ER0000.sl2")),
+            MissingSaveSelectionOutcome::Rejected(_)
+        ));
         assert!(!save_picker_seamless_mode_after_settle("test"));
         assert_eq!(save_picker_title_start_dir(), PathBuf::new());
         assert!(!save_file_core_hooks_live());

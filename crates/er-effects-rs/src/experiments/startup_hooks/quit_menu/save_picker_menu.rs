@@ -375,8 +375,12 @@ unsafe fn save_dest_handle_picked_target(dialog: usize, target: PathBuf, source:
             // free name; the refusal is counted so a run can tell it from a decline.
             if !save_flow_box_recipe_available() {
                 SAVE_DEST_OVERWRITE_UNCONFIRMABLE_COUNT.fetch_add(1, Ordering::SeqCst);
+                save_picker_set_visible_status(er_save_picker::PickerStatusMessage::new(
+                    "CANNOT CONFIRM OVERWRITE",
+                    "This build cannot show the overwrite prompt; choose a new file instead.",
+                ));
                 append_autoload_debug(format_args!(
-                    "save-dest: REFUSED to overwrite '{}' (source={source}) -- the overwrite confirm cannot be built on this build, and an unconfirmed overwrite is not something this flow performs. Staying in the destination list; a new file name still saves",
+                    "save-dest: REFUSED to overwrite '{}' (source={source}) -- the overwrite confirm cannot be built on this build, and an unconfirmed overwrite is not something this flow performs. Staying in the destination list with visible reason; a new file name still saves",
                     target.display()
                 ));
                 return;
@@ -485,6 +489,9 @@ pub(crate) unsafe fn save_picker_handle_activation(dialog: usize, cursor: i32) -
             // held save-check stage.
             let Some(path_str) = path.to_str() else {
                 SAVE_PICKER_PICK_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
+                save_picker_set_visible_status(
+                    er_save_picker::PickRejection::PathNotUtf8.status_message("SL2"),
+                );
                 return 0;
             };
             if unsafe { system_quit_ingest_picked_save(path_str) } {
@@ -617,21 +624,33 @@ fn save_picker_html_escape(text: &str) -> String {
 /// the stats panel's attribute lines), NUL-terminated UTF-16 for the native SetText wrapper. An
 /// empty `text` yields a bare NUL so the field renders blank.
 fn save_picker_browse_html_utf16(text: &str) -> Vec<u16> {
+    save_picker_browse_html_utf16_color(text, "#8f887a")
+}
+
+fn save_picker_error_html_utf16(text: &str) -> Vec<u16> {
+    save_picker_browse_html_utf16_color(text, "#d8a052")
+}
+
+fn save_picker_browse_html_utf16_color(text: &str, color: &str) -> Vec<u16> {
     // Matches the stats panel's font size so browse info and attribute lines read identically.
     const SIZE: &str = "19";
-    // The stats panel's dim label color -- browse info is secondary to the row name.
-    const COLOR: &str = "#8f887a";
     if text.is_empty() {
         return vec![0];
     }
     let mut s = String::from("<p align=\"left\"><font size=\"");
     s.push_str(SIZE);
     s.push_str("\" color=\"");
-    s.push_str(COLOR);
+    s.push_str(color);
     s.push_str("\">");
     s.push_str(&save_picker_html_escape(text));
     s.push_str("</font></p>");
     s.encode_utf16().chain(core::iter::once(0)).collect()
+}
+
+fn save_picker_set_visible_status(message: er_save_picker::PickerStatusMessage) {
+    if let Some(model) = crate::experiments::save_picker::active_save_picker_lock().as_mut() {
+        model.set_status_message(message);
+    }
 }
 
 /// Character budget for the per-file character list line (the four-attribute stats line occupies
@@ -659,6 +678,14 @@ pub(crate) fn save_picker_browse_stats_lines(row: usize) -> Option<(Vec<u16>, Ve
     }
     let guard = crate::experiments::save_picker::active_save_picker_lock();
     let model = guard.as_ref()?;
+    if let Some(message) = model.status_message()
+        && row == 0
+    {
+        return Some((
+            save_picker_error_html_utf16(message.headline()),
+            save_picker_error_html_utf16(message.detail()),
+        ));
+    }
     let is_current = model.row_is_loaded_save(row);
     let Some(chars) = model.row_file_characters(row) else {
         // Non-file row: blank both lines.
