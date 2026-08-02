@@ -63,6 +63,8 @@ Gate: host tests only. This gives `er-save-picker-dll` a real shared completion 
 
 Move `experiments/save_redirect/file_ops.rs` and the remaining state it needs into `er-save-redirect`, or wrap it behind a single exported owner chosen by the same feature-ownership scheme as the other DLLs. The moved owner must be idempotent and co-load-safe for both product and standalone profiles.
 
+First slice on `refactor/s6b2-save-hook-owner-20260802`: move the save-detour reentry/depth guard into `er-save-redirect`. That guard is hook-owner state, is host-testable, and must travel with the eventual Win32/NT hook owner rather than staying buried in product `experiments`. The detour bodies still live in product after this slice.
+
 Gate: Windows-target check plus a no-runtime hook-install smoke if available. Runtime proof comes after this, not before.
 
 ### S6b.3: boot-hold/title-flow seam

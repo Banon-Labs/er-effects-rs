@@ -4,6 +4,9 @@
 //! Win32/NT save hooks and does not own boot/title-flow gates. Those are process-wide runtime
 //! ownership questions for later slices.
 
+mod reentry;
+pub use reentry::{SaveDetourDepth, SaveNtCreateDetourGuard, save_detour_disk_io_allowed};
+
 use std::{
     path::{Path, PathBuf},
     sync::atomic::{AtomicUsize, Ordering},
