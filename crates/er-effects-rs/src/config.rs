@@ -4,6 +4,10 @@ use std::{
 };
 
 use er_save_loader::{SaveLoadMethod, SaveLoadRequest};
+use er_save_picker::{
+    AUTOUPDATE_PICKER_DIR_KEY, OS_NATIVE_SAVE_PICKER_KEY, PREFERRED_PICKER_DIR_KEY,
+    SavePickerRuntimeConfig, boilerplate_picker_block, os_native_save_picker_from,
+};
 use er_telemetry::counters::SAVE_PICKER_SURFACE;
 use windows::Win32::{
     Foundation::{HINSTANCE, HMODULE},
@@ -23,12 +27,7 @@ pub(crate) struct RuntimeConfig {
     pub slot: Option<i32>,
     pub method: Option<String>,
     pub boot_background_image: Option<PathBuf>,
-    pub preferred_save_picker_dir: Option<PathBuf>,
-    pub autoupdate_preferred_picker_dir: Option<bool>,
-    /// Which file-picker SURFACE the System>Quit "Load Character from File" row and the Save Game
-    /// destination list open. Absent (`None`) means the in-game `05_010` browser, which is the
-    /// only surface the build gate can exercise.
-    pub os_native_save_picker: Option<bool>,
+    pub save_picker: SavePickerRuntimeConfig,
 }
 
 static RUNTIME_CONFIG: OnceLock<Result<RuntimeConfig, String>> = OnceLock::new();
@@ -38,7 +37,9 @@ pub(crate) fn init_runtime_config(hmodule: HINSTANCE) {
     // Latched, not read lazily, so the surface is exported even in a session where no picker ever
     // opens -- and so the first debug line of every session states which picker the user is on.
     SAVE_PICKER_SURFACE.store(
-        usize::from(os_native_save_picker_from(runtime_config())),
+        usize::from(os_native_save_picker_from(
+            runtime_config().map(|config| &config.save_picker),
+        )),
         Ordering::SeqCst,
     );
     match RUNTIME_CONFIG.get() {
@@ -61,15 +62,18 @@ pub(crate) fn init_runtime_config(hmodule: HINSTANCE) {
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| "<unset>".to_owned()),
             config
+                .save_picker
                 .preferred_save_picker_dir
                 .as_ref()
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| "<unset>".to_owned()),
             config
+                .save_picker
                 .autoupdate_preferred_picker_dir
                 .map(|v| v.to_string())
                 .unwrap_or_else(|| "<default:true>".to_owned()),
             config
+                .save_picker
                 .os_native_save_picker
                 .map(|v| v.to_string())
                 .unwrap_or_else(|| "<default:false>".to_owned())
@@ -114,7 +118,7 @@ pub(crate) fn configured_boot_background_image() -> Option<PathBuf> {
 /// Folder the missing-save picker opens in, from `er-effects.toml` only (no env form on purpose:
 /// this is persisted UI state, not a probe gate).
 pub(crate) fn configured_preferred_save_picker_dir() -> Option<PathBuf> {
-    runtime_config().and_then(|config| config.preferred_save_picker_dir.clone())
+    runtime_config().and_then(|config| config.save_picker.preferred_save_picker_dir.clone())
 }
 
 /// Dir of the most recent validated pick THIS session. `RUNTIME_CONFIG` is parse-once, so
@@ -137,35 +141,15 @@ pub(crate) fn preferred_save_picker_dir_now() -> Option<PathBuf> {
 /// `er-effects.toml`. Defaults to true when the key is absent.
 pub(crate) fn autoupdate_preferred_picker_dir_enabled() -> bool {
     runtime_config()
-        .and_then(|config| config.autoupdate_preferred_picker_dir)
+        .map(|config| config.save_picker.autoupdate_preferred_picker_dir_enabled())
         .unwrap_or(true)
-}
-
-const PREFERRED_PICKER_DIR_KEY: &str = "preferred_save_picker_dir";
-const AUTOUPDATE_PICKER_DIR_KEY: &str = "autoupdate_preferred_picker_dir";
-const OS_NATIVE_SAVE_PICKER_KEY: &str = "os_native_save_picker";
-
-/// Which picker surface the System>Quit load and save-destination steps open, decided from a
-/// possibly-absent config.
-///
-/// Split out from [`os_native_save_picker_enabled`] purely so it is reachable from a unit test:
-/// `RUNTIME_CONFIG` is a process-global `OnceLock` set once in `DllMain`, which no test can stage.
-///
-/// `None` -- the config failed to load, or was never initialized -- yields `false`, the in-game
-/// browser. That direction is deliberate: the in-game picker is the surface the build gate
-/// exercises, so an `er-effects.toml` the parser rejected must never silently move the user onto
-/// the OS dialog, which ships without gate coverage.
-fn os_native_save_picker_from(config: Option<&RuntimeConfig>) -> bool {
-    config
-        .and_then(|config| config.os_native_save_picker)
-        .unwrap_or(false)
 }
 
 /// True when the OS file dialog -- rather than the in-game `05_010` browser -- is the picker for
 /// BOTH System>Quit surfaces. Read once per picker open; the value cannot change mid-session
 /// because `RUNTIME_CONFIG` is parsed once at attach and nothing rewrites the in-memory copy.
 pub(crate) fn os_native_save_picker_enabled() -> bool {
-    os_native_save_picker_from(runtime_config())
+    os_native_save_picker_from(runtime_config().map(|config| &config.save_picker))
 }
 
 /// Persist the folder of the last validated missing-save pick into the game-directory
@@ -240,26 +224,8 @@ fn upsert_top_level_key(contents: &str, key: &str, assignment: &str) -> String {
     out
 }
 
-/// Commented documentation for [`OS_NATIVE_SAVE_PICKER_KEY`], appended to the picker block in
-/// BOTH boilerplate branches -- a file created by `remember_preferred_save_picker_dir` documents
-/// the key just as the attach-time auto-created one does.
-fn os_native_save_picker_doc() -> String {
-    format!(
-        "# Open the OS file dialog instead of the in-game 05_010 browser, for BOTH the\n# \"Load Character from File\" row and the Save Game destination list. One key governs both.\n# Default false = the in-game browser. The OS dialog is NOT covered by the build gate\n# and can land behind an exclusive-fullscreen game; the in-game browser exists for that case.\n# {OS_NATIVE_SAVE_PICKER_KEY} = false"
-    )
-}
-
 fn boilerplate_config(picker_assignment: Option<&str>) -> String {
-    let os_picker_doc = os_native_save_picker_doc();
-    let picker_block = if let Some(assignment) = picker_assignment {
-        format!(
-            "# Folder the missing-save picker opens in. While {AUTOUPDATE_PICKER_DIR_KEY} is true,\n# it is rewritten to the folder of each successfully picked save.\n{assignment}\n{AUTOUPDATE_PICKER_DIR_KEY} = true\n{os_picker_doc}"
-        )
-    } else {
-        format!(
-            "# Folder the missing-save picker opens in. While {AUTOUPDATE_PICKER_DIR_KEY} is true,\n# it is rewritten to the folder of each successfully picked save.\n# {PREFERRED_PICKER_DIR_KEY} = 'C:\\path\\to\\saves'\n{AUTOUPDATE_PICKER_DIR_KEY} = true\n{os_picker_doc}"
-        )
-    };
+    let picker_block = boilerplate_picker_block(picker_assignment);
     format!(
         "\
 # er-effects-rs runtime config (auto-created next to the game executable).
@@ -458,14 +424,14 @@ fn parse_runtime_config(path: PathBuf, contents: &str) -> Result<RuntimeConfig, 
                         line_no + 1
                     )
                 })?);
-                config.preferred_save_picker_dir = Some(if parsed.is_absolute() {
+                config.save_picker.preferred_save_picker_dir = Some(if parsed.is_absolute() {
                     parsed
                 } else {
                     config_dir.join(parsed)
                 });
             }
             "autoupdate_preferred_picker_dir" => {
-                config.autoupdate_preferred_picker_dir =
+                config.save_picker.autoupdate_preferred_picker_dir =
                     Some(parse_toml_bool(value).map_err(|err| {
                         format!(
                             "invalid autoupdate_preferred_picker_dir on line {}: {err}",
@@ -476,12 +442,13 @@ fn parse_runtime_config(path: PathBuf, contents: &str) -> Result<RuntimeConfig, 
             // ONE key for BOTH picker surfaces (load source and save destination). Two keys would
             // let the modes drift apart, and nothing about the OS dialog is per-surface.
             "os_native_save_picker" | "use_os_file_picker" | "save_picker.os_native" => {
-                config.os_native_save_picker = Some(parse_toml_bool(value).map_err(|err| {
-                    format!(
-                        "invalid {OS_NATIVE_SAVE_PICKER_KEY} on line {}: {err}",
-                        line_no + 1
-                    )
-                })?);
+                config.save_picker.os_native_save_picker =
+                    Some(parse_toml_bool(value).map_err(|err| {
+                        format!(
+                            "invalid {OS_NATIVE_SAVE_PICKER_KEY} on line {}: {err}",
+                            line_no + 1
+                        )
+                    })?);
             }
             _ => {}
         }
@@ -601,12 +568,12 @@ mod tests {
         ] {
             let config = parse(line).unwrap_or_else(|err| panic!("'{line}' must parse: {err}"));
             assert_eq!(
-                config.os_native_save_picker,
+                config.save_picker.os_native_save_picker,
                 Some(expected),
                 "'{line}' parsed to the wrong surface"
             );
             assert_eq!(
-                os_native_save_picker_from(Some(&config)),
+                os_native_save_picker_from(Some(&config.save_picker)),
                 expected,
                 "'{line}' resolved to the wrong surface"
             );
@@ -629,8 +596,8 @@ mod tests {
     #[test]
     fn a_config_that_does_not_say_leaves_the_user_on_the_in_game_picker() {
         let config = parse("slot = 0\n").expect("a config without the key must still parse");
-        assert_eq!(config.os_native_save_picker, None);
-        assert!(!os_native_save_picker_from(Some(&config)));
+        assert_eq!(config.save_picker.os_native_save_picker, None);
+        assert!(!os_native_save_picker_from(Some(&config.save_picker)));
         assert!(
             !os_native_save_picker_from(None),
             "a config that failed to load must not move the user to the OS dialog"
@@ -654,6 +621,7 @@ mod tests {
             assert_eq!(
                 parse(&generated)
                     .expect("generated boilerplate must parse")
+                    .save_picker
                     .os_native_save_picker,
                 None,
                 "the {label} boilerplate must leave the surface unset"
