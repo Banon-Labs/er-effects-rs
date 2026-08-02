@@ -51,9 +51,8 @@ include!("startup_hooks/quit_menu/system_quit_repro_guards.rs");
 include!("startup_hooks/quit_menu/system_quit_hooks.rs");
 
 // Product (A): boot missing-save picker and shared OS-native picker mechanism.
-include!("startup_hooks/save_picker/save_picker_os_dialog.rs");
-include!("startup_hooks/save_picker/save_picker_boot.rs");
-include!("startup_hooks/save_picker/save_picker_surface.rs");
+mod save_picker;
+pub(crate) use save_picker::*;
 
 // Runtime diagnostics / agent probes.
 mod diagnostics;

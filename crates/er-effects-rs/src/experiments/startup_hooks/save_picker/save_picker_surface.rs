@@ -216,7 +216,7 @@ pub(crate) struct SaveDestOrigin {
 /// with no question in front of it, so the first screen has to be the screen where "save over what
 /// I had" is one press away: the loaded save's own folder, with the loaded save in the list and
 /// `[ new ]` resolving to its own leaf.
-fn save_dest_start_dir() -> Option<SaveDestOrigin> {
+pub(crate) fn save_dest_start_dir() -> Option<SaveDestOrigin> {
     let save_path = match system_quit_env_save_path() {
         Ok(path) => path,
         Err(reason) => {
