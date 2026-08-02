@@ -222,17 +222,27 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // addresses the game-base resolver cannot decode. Pure PE-header read, no API/loader lock.
     record_self_dll_base(hmodule.0 as usize);
 
-    // SAVE-DISABLE SUPPRESSION (save-game-flow WP1): swallow every native SL save enqueue and
-    // answer the status poll with success, from boot, so the System->Quit "Save Game" row's
-    // scoped one-shot bypass is the ONLY path that really writes a save. Spawned on its own
-    // thread (no hook work inside DllMain); the attach-time spawn beats the boot-time
-    // system-slot save (proven by the standalone er-save-disable-dll's validated run). No
-    // product code hooks 0xe6fb50/0xe6e430/0x67a980 elsewhere, so there is no ordering
-    // constraint; the product only *calls* 0xe6f200 as a finalizer, which is compatible.
-    // GraphicsConfig.xml is untouched: suppression sits on the SL container funnel only.
-    // NEVER load er_save_disable.dll together with this DLL in one me3 profile -- two MinHook
-    // instances would double-detour the same prologues.
-    START_SAVE_SUPPRESS.call_once(spawn_save_suppress_install);
+    // SAVE-DISABLE SUPPRESSION (save-game-flow WP1): swallow native SL save enqueues and
+    // answer the status poll with success, so the System->Quit "Save Game" row's scoped
+    // one-shot bypass is the ONLY path that really writes while suppression is armed. This
+    // is dangerous as a partial slice: without the WP2/WP3 arming+commit path, unconditional
+    // install would silently suppress every native save. Keep the product hook default-off
+    // behind er-effects.toml `save_suppression_enabled = true`; when unset, the save-flow
+    // tick already runs degraded fail-open and fires native saves without a bypass token.
+    // Spawned on its own thread (no hook work inside DllMain); when enabled, the attach-time
+    // spawn beats the boot-time system-slot save (proven by the standalone
+    // er-save-disable-dll's validated run). No product code hooks 0xe6fb50/0xe6e430/0x67a980
+    // elsewhere, so there is no ordering constraint; the product only *calls* 0xe6f200 as a
+    // finalizer, which is compatible. GraphicsConfig.xml is untouched: suppression sits on
+    // the SL container funnel only. NEVER load er_save_disable.dll together with this DLL in
+    // one me3 profile -- two MinHook instances would double-detour the same prologues.
+    if save_suppression_enabled() {
+        START_SAVE_SUPPRESS.call_once(spawn_save_suppress_install);
+    } else {
+        append_autoload_debug(format_args!(
+            "save-suppress: disabled by default config guard (set save_suppression_enabled=true to opt in); native saves are not suppressed"
+        ));
+    }
 
     // SAVE-DESTINATION WRITE-OPEN REDIRECT CORE (save-game-flow WP3): the "save somewhere else"
     // path diverts the native writer's single container write-open, which means the CreateFileW
@@ -401,8 +411,8 @@ fn spawn_save_suppress_install() {
                     }
                 }
             }
-            // Product behavior consults NO env vars here: `false` = never disarm. The
-            // census-only positive-control lever belongs to the standalone DLL alone.
+            // The product opt-in is the er-effects.toml guard above, not an env var or a
+            // standalone-DLL positive-control lever. Once opted in, `false` = never disarm.
             let installed = er_save_suppress::install(false);
             crate::telemetry::append_autoload_debug(format_args!(
                 "save-suppress: install done hooks={installed}/{} armed={} -- all native \
