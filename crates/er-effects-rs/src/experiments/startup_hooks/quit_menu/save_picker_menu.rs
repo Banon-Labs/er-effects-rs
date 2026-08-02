@@ -356,6 +356,68 @@ pub(crate) unsafe fn system_quit_open_save_dest_picker_in_game(system_dialog: us
     true
 }
 
+/// Atomic stage edge used by menu-thread destination-picker decisions.
+///
+/// The game task owns the save-flow stage machine, but a picked destination is delivered on the
+/// menu thread. If the game task has already moved the flow out of the destination-browser stage
+/// (for example a timeout/abort path), the picker must not resurrect it by blindly storing a new
+/// stage. Compare-and-swap against the browser stage and reset ticks only on success.
+fn save_flow_menu_stage_cas(
+    stage_word: &std::sync::atomic::AtomicUsize,
+    ticks_word: &std::sync::atomic::AtomicUsize,
+    expected: usize,
+    stage: usize,
+) -> Result<usize, usize> {
+    let previous = stage_word.compare_exchange(expected, stage, Ordering::SeqCst, Ordering::SeqCst)?;
+    ticks_word.store(0, Ordering::SeqCst);
+    Ok(previous)
+}
+
+/// Enter a save-flow stage from the menu thread only if the game task has not already left the
+/// expected stage.
+fn save_flow_menu_enter_stage(expected: usize, stage: usize, reason: &str) -> bool {
+    match save_flow_menu_stage_cas(&SAVE_FLOW_STAGE, &SAVE_FLOW_STAGE_TICKS, expected, stage) {
+        Ok(previous) => {
+            append_autoload_debug(format_args!(
+                "save-flow: menu stage {previous} -> {stage} ({reason})"
+            ));
+            true
+        }
+        Err(actual) => {
+            append_autoload_debug(format_args!(
+                "save-flow: menu stage transition REFUSED expected={expected} actual={actual} target={stage} ({reason}); the destination decision is stale and nothing will be written from it"
+            ));
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod save_picker_menu_stage_transition_tests {
+    use super::save_flow_menu_stage_cas;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn stage_cas_resets_ticks_only_when_expected_stage_matches() {
+        let stage = AtomicUsize::new(3);
+        let ticks = AtomicUsize::new(41);
+
+        assert_eq!(save_flow_menu_stage_cas(&stage, &ticks, 3, 8), Ok(3));
+        assert_eq!(stage.load(Ordering::SeqCst), 8);
+        assert_eq!(ticks.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn stage_cas_refuses_stale_menu_thread_decisions() {
+        let stage = AtomicUsize::new(9);
+        let ticks = AtomicUsize::new(41);
+
+        assert_eq!(save_flow_menu_stage_cas(&stage, &ticks, 3, 8), Err(9));
+        assert_eq!(stage.load(Ordering::SeqCst), 9);
+        assert_eq!(ticks.load(Ordering::SeqCst), 41);
+    }
+}
+
 /// Handle a destination-browser activation (menu thread, from `save_picker_handle_activation`).
 /// `target` already exists -> the overwrite confirm; otherwise the commit is staged and the picker
 /// closes so the save-flow tick can close the menus and fire.
@@ -392,8 +454,15 @@ unsafe fn save_dest_handle_picked_target(dialog: usize, target: PathBuf, source:
             // the pending latch for the next menu pump.
             save_flow_box_set_host_dialog(dialog);
             SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_OVERWRITE_FILE, Ordering::SeqCst);
-            SAVE_FLOW_STAGE_TICKS.store(0, Ordering::SeqCst);
-            SAVE_FLOW_STAGE.store(SAVE_FLOW_STAGE_OVERWRITE_CONFIRM, Ordering::SeqCst);
+            if !save_flow_menu_enter_stage(
+                SAVE_FLOW_STAGE_DEST_BROWSE,
+                SAVE_FLOW_STAGE_OVERWRITE_CONFIRM,
+                "picked existing destination -> overwrite confirm",
+            ) {
+                save_flow_box_clear();
+                save_dest_clear_target("stale overwrite-confirm stage transition");
+                return;
+            }
             if unsafe { save_flow_submit_box(SAVE_FLOW_BOX_OVERWRITE_FILE) } {
                 SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_NONE, Ordering::SeqCst);
             }
@@ -411,10 +480,17 @@ unsafe fn save_dest_handle_picked_target(dialog: usize, target: PathBuf, source:
 /// ProfileSummary rows and re-shows the System windows, which is exactly the state the close-all
 /// sequence expects).
 unsafe fn save_dest_stage_commit_and_close_picker(dialog: usize, reason: &str) {
+    if !save_flow_menu_enter_stage(
+        SAVE_FLOW_STAGE_DEST_BROWSE,
+        SAVE_FLOW_STAGE_DEST_BROWSE,
+        "picked free destination -> commit",
+    ) {
+        SAVE_DEST_COMMIT_FAIL.fetch_add(1, Ordering::SeqCst);
+        save_dest_clear_target("stale destination-commit stage transition");
+        return;
+    }
     SAVE_DEST_COMMIT_COUNT.fetch_add(1, Ordering::SeqCst);
     SAVE_DEST_COMMIT_PENDING.store(1, Ordering::SeqCst);
-    SAVE_FLOW_STAGE_TICKS.store(0, Ordering::SeqCst);
-    SAVE_FLOW_STAGE.store(SAVE_FLOW_STAGE_DEST_BROWSE, Ordering::SeqCst);
     save_flow_box_clear();
     unsafe { save_picker_native_close(dialog, reason) };
     append_autoload_debug(format_args!(
