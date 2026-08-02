@@ -1,13 +1,12 @@
 use super::*;
 
-use crate::mh::MH_STATUS;
 use er_save_redirect::{
     SAVE_REDIRECT_ORIG_COPYFILEW, SAVE_REDIRECT_ORIG_CREATEFILEW, SAVE_REDIRECT_ORIG_FINDFIRSTW,
     SAVE_REDIRECT_ORIG_GETATTREXW, SAVE_REDIRECT_ORIG_GETATTRW, SAVE_REDIRECT_ORIG_GETDISKFREEW,
     SAVE_REDIRECT_ORIG_NTCREATEFILE, SAVE_REDIRECT_ORIG_NTQUERYVOLINFO,
-    SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW, SaveNtCreateDetourGuard, install_core_createfilew_hook,
-    is_save_file_or_backup_path, queue_resolved_save_hook, save_detour_disk_io_allowed,
-    wide_ends_with_ci_ascii,
+    SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW, SaveNtCreateDetourGuard, SaveRedirectHookDetours,
+    install_core_createfilew_hook, install_redirect_save_hooks, is_save_file_or_backup_path,
+    save_detour_disk_io_allowed, wide_ends_with_ci_ascii,
 };
 
 type ShGetFolderPathWFn = unsafe extern "system" fn(isize, i32, isize, u32, *mut u16) -> i32;
@@ -330,32 +329,6 @@ unsafe fn kernel32_proc(name: &[u8]) -> usize {
     unsafe { module_proc(b"kernel32.dll\0", name) }
 }
 
-/// Install the save-redirect hooks (CreateFileW + CopyFileW) ONCE. Idempotent. Must run while the
-/// redirect dir is already stashed (after `enforce_save_override_or_abort` -> Redirect). Mirrors the
-/// thread-spawn install pattern of the other early DllMain subsystems.
-/// Queue one kernel32 export hook (resolve by name, store trampoline, queue-enable). Best-effort:
-/// logs and skips on any failure. Used for the save-redirect existence-check APIs.
-unsafe fn queue_save_redirect_hook(
-    hooks: &mut Vec<MhHook>,
-    name: &str,
-    proc_name: &[u8],
-    detour: *mut c_void,
-    orig: &AtomicUsize,
-) {
-    let addr = unsafe { kernel32_proc(proc_name) };
-    if addr == HOOK_ORIGINAL_UNSET {
-        append_autoload_debug(format_args!(
-            "save-override: could not resolve kernel32!{name}"
-        ));
-        return;
-    }
-    unsafe {
-        queue_resolved_save_hook(hooks, name, addr, detour, orig, |message| {
-            append_autoload_debug(format_args!("{message}"));
-        });
-    }
-}
-
 /// Install the CreateFileW detour ALONE, unconditionally, in every save mode (save-game-flow WP3).
 ///
 /// The detour body is pass-through-safe on its own: every redirect decision it makes needs either
@@ -398,192 +371,25 @@ pub(crate) fn install_save_redirect_hooks() {
         ));
         return;
     }
-    SAVE_HOOK_INSTALL_STATE.install_redirect_once(|| {
-        match unsafe { MH_Initialize() } {
-            MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
-            status => {
-                append_autoload_debug(format_args!(
-                    "save-override: MH_Initialize failed: {status:?}"
-                ));
-                return;
-            }
-        }
-        append_autoload_debug(format_args!(
-            "save-override: install begin -- running_under_wine={} (Wine-only free-space overrides {})",
+    unsafe {
+        install_redirect_save_hooks(
+            &SAVE_HOOK_INSTALL_STATE,
+            SaveRedirectHookDetours {
+                copyfilew: save_redirect_copyfilew_hook as *mut c_void,
+                get_file_attributes_w: save_redirect_getattrw_hook as *mut c_void,
+                get_file_attributes_ex_w: save_redirect_getattrexw_hook as *mut c_void,
+                find_first_file_w: save_redirect_findfirstw_hook as *mut c_void,
+                get_disk_free_space_ex_w: save_redirect_getdiskfreew_hook as *mut c_void,
+                sh_get_folder_path_w: save_redirect_shgetfolderpathw_hook as *mut c_void,
+                nt_query_volume_information_file: save_redirect_ntqueryvolinfo_hook as *mut c_void,
+                nt_create_file: save_ntcreatefile_diag_hook as *mut c_void,
+            },
             running_under_wine(),
-            if running_under_wine() { "ARMED" } else { "SKIPPED" }
-        ));
-        let mut hooks = Vec::new();
-        // CreateFileW belongs to the CORE installer now (it must exist in every save mode so a
-        // save-destination commit can divert its write-open). Creating a second MinHook on the
-        // same prologue would fail `MH_ERROR_ALREADY_CREATED` and clobber the trampoline, so this
-        // installer only makes sure the core ran.
-        install_save_file_core_hooks();
-        let create_addr = if SAVE_HOOK_INSTALL_STATE.core_createfilew_installed() {
-            unsafe { kernel32_proc(b"CreateFileW\0") }
-        } else {
-            append_autoload_debug(format_args!(
-                "save-override: CreateFileW detour is NOT live (core install failed) -- save-path redirection cannot work"
-            ));
-            HOOK_ORIGINAL_UNSET
-        };
-        let copy_addr = unsafe { kernel32_proc(b"CopyFileW\0") };
-        if copy_addr != HOOK_ORIGINAL_UNSET {
-            match unsafe {
-                MhHook::new(
-                    copy_addr as *mut c_void,
-                    save_redirect_copyfilew_hook as *mut c_void,
-                )
-            } {
-                Ok(hook) => {
-                    SAVE_REDIRECT_ORIG_COPYFILEW.store(hook.trampoline() as usize, Ordering::SeqCst);
-                    if let Err(status) = unsafe { hook.queue_enable() } {
-                        append_autoload_debug(format_args!(
-                            "save-override: CopyFileW queue_enable failed: {status:?}"
-                        ));
-                    } else {
-                        hooks.push(hook);
-                    }
-                }
-                Err(status) => append_autoload_debug(format_args!(
-                    "save-override: MhHook::new CopyFileW failed at 0x{copy_addr:x}: {status:?}"
-                )),
-            }
-        }
-        // Existence-check redirects: the game stats/enumerates ER0000.sl2 before opening it; without
-        // these the wiped default dir reads as "no save" and CreateFileW is never reached.
-        unsafe {
-            queue_save_redirect_hook(
-                &mut hooks,
-                "GetFileAttributesW",
-                b"GetFileAttributesW\0",
-                save_redirect_getattrw_hook as *mut c_void,
-                &SAVE_REDIRECT_ORIG_GETATTRW,
-            );
-            queue_save_redirect_hook(
-                &mut hooks,
-                "GetFileAttributesExW",
-                b"GetFileAttributesExW\0",
-                save_redirect_getattrexw_hook as *mut c_void,
-                &SAVE_REDIRECT_ORIG_GETATTREXW,
-            );
-            queue_save_redirect_hook(
-                &mut hooks,
-                "FindFirstFileW",
-                b"FindFirstFileW\0",
-                save_redirect_findfirstw_hook as *mut c_void,
-                &SAVE_REDIRECT_ORIG_FINDFIRSTW,
-            );
-            // THE corruption fix (WINE ONLY): ample free space for the save dir (Wine Z: drive reports
-            // bogus 0). Native Windows reports correctly, so this must not run there.
-            if running_under_wine() {
-                queue_save_redirect_hook(
-                    &mut hooks,
-                    "GetDiskFreeSpaceExW",
-                    b"GetDiskFreeSpaceExW\0",
-                    save_redirect_getdiskfreew_hook as *mut c_void,
-                    &SAVE_REDIRECT_ORIG_GETDISKFREEW,
-                );
-            }
-        }
-        // PRIMARY: redirect the %APPDATA% root via SHGetFolderPathW (shell32) so the game builds and
-        // opens the full save path under our staged tree natively -- this is what actually makes the
-        // character load (the per-file kernel32 hooks above are a fallback for the real default dir).
-        let shgfp_addr = unsafe { module_proc(b"shell32.dll\0", b"SHGetFolderPathW\0") };
-        if shgfp_addr != HOOK_ORIGINAL_UNSET {
-            match unsafe {
-                MhHook::new(
-                    shgfp_addr as *mut c_void,
-                    save_redirect_shgetfolderpathw_hook as *mut c_void,
-                )
-            } {
-                Ok(hook) => {
-                    SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW
-                        .store(hook.trampoline() as usize, Ordering::SeqCst);
-                    if let Err(status) = unsafe { hook.queue_enable() } {
-                        append_autoload_debug(format_args!(
-                            "save-override: SHGetFolderPathW queue_enable failed: {status:?}"
-                        ));
-                    } else {
-                        hooks.push(hook);
-                    }
-                }
-                Err(status) => append_autoload_debug(format_args!(
-                    "save-override: MhHook::new SHGetFolderPathW failed at 0x{shgfp_addr:x}: {status:?}"
-                )),
-            }
-        } else {
-            append_autoload_debug(format_args!(
-                "save-override: could not resolve shell32!SHGetFolderPathW (shell32 not loaded yet?)"
-            ));
-        }
-        // THE corruption fix at the lowest layer (WINE ONLY): ntdll!NtQueryVolumeInformationFile
-        // free-space override (the game's free-space precheck never reaches our kernel32 hook). Native
-        // Windows reports free space correctly, so this Wine-bug workaround must not run there.
-        let ntqvi_addr = if running_under_wine() {
-            unsafe { module_proc(b"ntdll.dll\0", b"NtQueryVolumeInformationFile\0") }
-        } else {
-            HOOK_ORIGINAL_UNSET
-        };
-        if ntqvi_addr != HOOK_ORIGINAL_UNSET {
-            match unsafe {
-                MhHook::new(
-                    ntqvi_addr as *mut c_void,
-                    save_redirect_ntqueryvolinfo_hook as *mut c_void,
-                )
-            } {
-                Ok(hook) => {
-                    SAVE_REDIRECT_ORIG_NTQUERYVOLINFO
-                        .store(hook.trampoline() as usize, Ordering::SeqCst);
-                    if let Err(status) = unsafe { hook.queue_enable() } {
-                        append_autoload_debug(format_args!(
-                            "save-override: NtQueryVolumeInformationFile queue_enable failed: {status:?}"
-                        ));
-                    } else {
-                        hooks.push(hook);
-                    }
-                }
-                Err(status) => append_autoload_debug(format_args!(
-                    "save-override: MhHook::new NtQueryVolumeInformationFile failed at 0x{ntqvi_addr:x}: {status:?}"
-                )),
-            }
-        } else {
-            append_autoload_debug(format_args!(
-                "save-override: could not resolve ntdll!NtQueryVolumeInformationFile"
-            ));
-        }
-        // DIAGNOSTIC: ntdll!NtCreateFile -- see the boot save read that is invisible to Win32.
-        let ntcf_addr = unsafe { module_proc(b"ntdll.dll\0", b"NtCreateFile\0") };
-        if ntcf_addr != HOOK_ORIGINAL_UNSET {
-            match unsafe {
-                MhHook::new(
-                    ntcf_addr as *mut c_void,
-                    save_ntcreatefile_diag_hook as *mut c_void,
-                )
-            } {
-                Ok(hook) => {
-                    SAVE_REDIRECT_ORIG_NTCREATEFILE.store(hook.trampoline() as usize, Ordering::SeqCst);
-                    if let Err(status) = unsafe { hook.queue_enable() } {
-                        append_autoload_debug(format_args!(
-                            "save-override: NtCreateFile queue_enable failed: {status:?}"
-                        ));
-                    } else {
-                        hooks.push(hook);
-                    }
-                }
-                Err(status) => append_autoload_debug(format_args!(
-                    "save-override: MhHook::new NtCreateFile failed at 0x{ntcf_addr:x}: {status:?}"
-                )),
-            }
-        }
-        match unsafe { MH_ApplyQueued() } {
-            MH_STATUS::MH_OK => append_autoload_debug(format_args!(
-                "save-override: INSTALLED SHGetFolderPathW(0x{shgfp_addr:x})+CreateFileW(0x{create_addr:x})+CopyFileW(0x{copy_addr:x})+GetFileAttributesW/ExW+FindFirstFileW save-path redirect -- default user save dir is now never read"
-            )),
-            status => append_autoload_debug(format_args!(
-                "save-override: MH_ApplyQueued failed: {status:?}"
-            )),
-        }
-        std::mem::forget(hooks);
-    });
+            |name| kernel32_proc(name),
+            |name| module_proc(b"shell32.dll\0", name),
+            |name| module_proc(b"ntdll.dll\0", name),
+            install_save_file_core_hooks,
+            |message| append_autoload_debug(format_args!("{message}")),
+        );
+    }
 }
