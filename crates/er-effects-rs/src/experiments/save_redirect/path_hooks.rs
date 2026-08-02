@@ -29,7 +29,8 @@ use er_save_redirect::{
     is_save_file_or_backup_path, plan_create_file_open, plan_direct_stage_request,
     plan_save_path_telemetry, plan_save_query_path, probe_direct_stage_file_status,
     redirect_wide_save_path_with_side_effects, save_detour_disk_io_allowed, save_file_is_readonly,
-    steam_id64_from_wide_save_path, wide_contains_ci_ascii, wide_ends_with_ci_ascii,
+    save_normalize_hash_bytes, steam_id64_from_wide_save_path, wide_contains_ci_ascii,
+    wide_ends_with_ci_ascii,
 };
 use er_telemetry::counters::{
     SAVE_REDIRECT_DETOUR_MAX_DEPTH, SAVE_REDIRECT_DETOUR_REENTRANT_PASSTHROUGHS,
@@ -143,15 +144,6 @@ pub(super) fn observe_steam_id64_from_save_path(path: &[u16]) {
 pub(crate) unsafe fn active_steam_id64(_base: usize) -> Option<u64> {
     let observed = OBSERVED_ACTIVE_STEAM_ID64.load(Ordering::SeqCst);
     (observed != 0).then_some(observed)
-}
-
-fn save_normalize_hash_bytes(bytes: &[u8]) -> u64 {
-    let mut h = 0xcbf29ce484222325u64;
-    for b in bytes.iter().copied() {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    h
 }
 
 fn log_save_steam_id_locations(bytes: &[u8], target: u64, source: &str) {
