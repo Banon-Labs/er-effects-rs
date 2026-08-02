@@ -6,6 +6,7 @@ repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 bash "$repo_root/scripts/check-no-local-main-commits.sh"
 python3 "$repo_root/scripts/check-no-timeouts.py"
 python3 "$repo_root/scripts/test-no-timeouts.py"
+bash "$repo_root/scripts/test-git-pre-push-block-main.sh"
 # Telemetry honesty: no counter may be READ to emit an oracle while written nowhere. Selftest first,
 # so the gate is never trusted on its own say-so (er-effects-rs-56fx).
 python3 "$repo_root/scripts/check-oracle-writers.py" --selftest
@@ -55,8 +56,11 @@ python3 "$repo_root/scripts/check-rust-file-sizes.py"
 python3 "$repo_root/scripts/check-experiments-rustfmt.py"
 python3 "$repo_root/scripts/check-markdown-code-blocks.py" "$repo_root/README.md"
 cargo fmt --all --manifest-path "$repo_root/Cargo.toml" -- --check
+shellcheck "$repo_root/.githooks/pre-push"
 shellcheck "$repo_root/scripts/check-no-local-main-commits.sh"
 shellcheck "$repo_root/scripts/git-pre-push-block-main.sh"
+shellcheck "$repo_root/scripts/test-git-pre-push-block-main.sh"
+shellcheck "$repo_root/scripts/hooks/pre-push"
 shellcheck "$repo_root/scripts/stage-autoload-release.sh"
 shellcheck "$repo_root/scripts/run-product-continue-direct-probe.sh"
 shellcheck "$repo_root/scripts/run-me3-product-smoke.sh"

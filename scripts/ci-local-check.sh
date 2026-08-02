@@ -38,6 +38,7 @@ fi
 python3 scripts/check-no-lossy-utf8.py
 python3 scripts/check-no-timeouts.py
 python3 scripts/test-no-timeouts.py
+bash scripts/test-git-pre-push-block-main.sh
 # One game address must have exactly ONE literal declaration. Divergent names for one address
 # are divergent CLAIMS about what it is, and three of them turned out to be wrong RE facts
 # shipping in the DLL (bd rva-67b750-is-save-write-not-continue-load-2026-08-01,
