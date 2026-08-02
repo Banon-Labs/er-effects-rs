@@ -115,6 +115,8 @@ Twenty-fifth slice on `refactor/s6b6b-readonly-status-core-20260802`: move save-
 
 Twenty-sixth slice on `refactor/s6b7a-save-normalize-hash-core-20260802`: move save normalization byte hashing into `er-save-redirect::save_normalize_hash_bytes`. Product still owns active SteamID discovery, BND4 normalization call sites, file writes, and telemetry logging.
 
+Twenty-seventh slice on `refactor/s6b8a-steamid-validation-core-20260802`: move plausible SteamID64 range validation into `er-save-redirect::plausible_steam_id64`. Product still owns environment/config reads, Steam API access, active-user selection policy, and telemetry logging.
+
 Gate: Windows-target check plus a no-runtime hook-install smoke if available. Runtime proof comes after this, not before.
 
 ### S6b.3: boot-hold/title-flow seam
