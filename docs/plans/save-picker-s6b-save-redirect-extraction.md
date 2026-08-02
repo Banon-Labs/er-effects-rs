@@ -113,6 +113,8 @@ Twenty-fourth slice on `refactor/s6b6a-writeback-path-core-20260802`: move case-
 
 Twenty-fifth slice on `refactor/s6b6b-readonly-status-core-20260802`: move save-file readonly status probing into `er-save-redirect::save_file_is_readonly`. Product still owns any permission mutation and user-facing diagnostic logging.
 
+Twenty-sixth slice on `refactor/s6b7a-save-normalize-hash-core-20260802`: move save normalization byte hashing into `er-save-redirect::save_normalize_hash_bytes`. Product still owns active SteamID discovery, BND4 normalization call sites, file writes, and telemetry logging.
+
 Gate: Windows-target check plus a no-runtime hook-install smoke if available. Runtime proof comes after this, not before.
 
 ### S6b.3: boot-hold/title-flow seam
