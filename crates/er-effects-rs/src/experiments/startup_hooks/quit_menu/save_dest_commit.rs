@@ -896,6 +896,7 @@ pub(crate) fn save_dest_commit_identity(target: &Path, live: &Path) -> SaveDestI
 
 #[cfg(test)]
 mod save_dest_commit_tests {
+    use super::*;
 
     /// Build a minimal, structurally complete BND4 container: header, `names.len()` entry headers
     /// of `entry_len` bytes each, a UTF-16 name table, then the data blobs back to back.

@@ -1298,6 +1298,7 @@ impl<'a> SerializedPlayerGameData<'a> {
 
 #[cfg(test)]
 mod loading_cover_chr_asm_image_tests {
+    use super::*;
 
     /// Distinctive synthetic section payloads -- no game bytes are read or versioned here. Handles
     /// carry the real `0x8xxxxxxx` gaitem shape so a stray copy of them is unmistakable in the image.

@@ -1186,6 +1186,7 @@ pub(crate) mod picker_dim {
 
     #[cfg(test)]
     mod picker_dim_tests {
+        use super::*;
 
         /// At zero intensity the indicator must composite to EXACTLY the flat dim, and at full
         /// intensity to opaque gold. If the first fails the mark leaves a visible rectangle of

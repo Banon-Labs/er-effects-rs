@@ -375,6 +375,7 @@ pub(crate) unsafe fn portrait_equip_oracle_sample(base: usize, summary: usize, t
 
 #[cfg(test)]
 mod portrait_equip_oracle_tests {
+    use super::*;
 
     fn sample(
         unk0: i32,

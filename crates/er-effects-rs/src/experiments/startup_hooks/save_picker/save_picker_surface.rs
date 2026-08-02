@@ -300,6 +300,7 @@ pub(crate) fn save_dest_route_picked_target(target: &Path) -> DestRoute {
 
 #[cfg(test)]
 mod save_picker_surface_tests {
+    use super::*;
 
     /// CONTRACT 2, mechanically. One key, EVERY surface: for a given flag value every intent
     /// resolves to the SAME surface. A future per-intent special case has to break this table
