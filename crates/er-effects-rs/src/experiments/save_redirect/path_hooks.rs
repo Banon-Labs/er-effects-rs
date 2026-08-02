@@ -24,10 +24,10 @@ use er_save_redirect::{
     SAVE_REDIRECT_ORIG_FINDFIRSTW, SAVE_REDIRECT_ORIG_GETATTREXW, SAVE_REDIRECT_ORIG_GETATTRW,
     SAVE_REDIRECT_ORIG_GETDISKFREEW, SAVE_REDIRECT_ORIG_NTCREATEFILE,
     SAVE_REDIRECT_ORIG_NTQUERYVOLINFO, SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW, SaveDetourDepth,
-    SaveHookInstallState, SavePathKind, classify_save_like_path, direct_stage_no_steamid_kind,
-    is_save_file_or_backup_path, redirect_wide_save_path_with_side_effects,
-    save_detour_disk_io_allowed, steam_id64_from_wide_save_path, wide_contains_ci_ascii,
-    wide_ends_with_ci_ascii,
+    SaveHookInstallState, SavePathKind, classify_create_file_save_path, classify_save_like_path,
+    createfile_diag_hit_should_log, direct_stage_no_steamid_kind, is_save_file_or_backup_path,
+    redirect_wide_save_path_with_side_effects, save_detour_disk_io_allowed,
+    steam_id64_from_wide_save_path, wide_contains_ci_ascii, wide_ends_with_ci_ascii,
 };
 use er_telemetry::counters::{
     SAVE_REDIRECT_DETOUR_MAX_DEPTH, SAVE_REDIRECT_DETOUR_REENTRANT_PASSTHROUGHS,
@@ -1378,25 +1378,8 @@ pub(super) unsafe extern "system" fn save_redirect_createfilew_hook(
         // Diagnostic: confirm the hook is live (log the very first call), then log save-LIKE paths
         // (contain "eldenring" or end .sl2/.co2/.bak) so we can see the exact save path form even when
         // the redirect filter does NOT match -- distinguishes "hook never fires" from "filter misses".
-        const ELDENRING_SEG: &[u16] = &[
-            b'e' as u16,
-            b'l' as u16,
-            b'd' as u16,
-            b'e' as u16,
-            b'n' as u16,
-            b'r' as u16,
-            b'i' as u16,
-            b'n' as u16,
-            b'g' as u16,
-        ];
-        const SL2D: &[u16] = &[b'.' as u16, b's' as u16, b'l' as u16, b'2' as u16];
-        const CO2D: &[u16] = &[b'.' as u16, b'c' as u16, b'o' as u16, b'2' as u16];
-        const BAKD: &[u16] = &[b'.' as u16, b'b' as u16, b'a' as u16, b'k' as u16];
-        let save_like = wide_contains_ci_ascii(path, ELDENRING_SEG)
-            || wide_ends_with_ci_ascii(path, SL2D)
-            || wide_ends_with_ci_ascii(path, CO2D)
-            || wide_ends_with_ci_ascii(path, BAKD);
-        if save_like {
+        let diag = classify_create_file_save_path(path);
+        if diag.save_like {
             record_save_like_createfile_path_kind(path);
             // ATTRIBUTION, not a gate. A modal OS file dialog enumerates folders on THIS thread, so
             // its shell traffic re-enters this detour and any path containing "eldenring" or ending
@@ -1410,24 +1393,23 @@ pub(super) unsafe extern "system" fn save_redirect_createfilew_hook(
                     .fetch_add(1, Ordering::SeqCst);
             }
         }
-        if calls == 0 || save_like {
+        if diag.should_capture_diag_log(calls) {
             // Rate-limit: log the first 8 save-LIKE opens, then only at power-of-two hit counts.
             let hits = SAVE_CREATEFILEW_DIAG_HITS.fetch_add(1, Ordering::SeqCst) + 1;
-            if hits <= 8 || hits.is_power_of_two() {
+            if createfile_diag_hit_should_log(hits) {
                 // UTF-8 Lossy: log-only decode of a Windows wide path for probe diagnosis.
                 let p = String::from_utf16_lossy(path);
                 append_autoload_debug(format_args!(
-                    "save-override: CreateFileW diag call#{calls} save_like={save_like} diag_hits={hits} '{p}'"
+                    "save-override: CreateFileW diag call#{calls} save_like={} diag_hits={hits} '{p}'",
+                    diag.save_like
                 ));
             }
         }
-        let is_save_file =
-            wide_ends_with_ci_ascii(path, SL2D) || wide_ends_with_ci_ascii(path, CO2D);
-        if is_save_file || wide_ends_with_ci_ascii(path, BAKD) {
+        if diag.should_wait_for_missing_save_dialog {
             wait_for_missing_save_dialog_if_pending(path);
         }
         let redirected_path = save_redirect_path(path);
-        if is_save_file {
+        if diag.is_save_file {
             if let Ok(base) = game_module_base() {
                 normalize_env_save_file_to_active_steam_id_once(base, "createfile-save-open");
             }
