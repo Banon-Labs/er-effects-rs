@@ -25,9 +25,9 @@ use er_save_redirect::{
     SAVE_REDIRECT_ORIG_GETATTRW, SAVE_REDIRECT_ORIG_GETDISKFREEW, SAVE_REDIRECT_ORIG_NTCREATEFILE,
     SAVE_REDIRECT_ORIG_NTQUERYVOLINFO, SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW, SaveDetourDepth,
     SaveHookInstallState, SavePathKind, SavePathTelemetryBucket, classify_copyfile_endpoint,
-    classify_save_like_path, classify_save_query_path, createfile_diag_hit_should_log,
-    direct_stage_case_dirs, is_save_file_or_backup_path, plan_create_file_open,
-    plan_direct_stage_request, plan_save_query_path, probe_direct_stage_file_status,
+    classify_save_query_path, createfile_diag_hit_should_log, direct_stage_case_dirs,
+    is_save_file_or_backup_path, plan_create_file_open, plan_direct_stage_request,
+    plan_save_path_telemetry, plan_save_query_path, probe_direct_stage_file_status,
     redirect_wide_save_path_with_side_effects, save_detour_disk_io_allowed,
     steam_id64_from_wide_save_path, wide_contains_ci_ascii, wide_ends_with_ci_ascii,
 };
@@ -444,9 +444,9 @@ fn save_path_kind_label(kind: usize) -> &'static str {
 }
 
 fn record_save_like_createfile_path_kind(path: &[u16]) {
-    let kind = classify_save_like_path(path);
-    SAVE_CREATEFILEW_LAST_SAVE_LIKE_KIND.store(kind.as_usize(), Ordering::SeqCst);
-    match kind.telemetry_bucket() {
+    let plan = plan_save_path_telemetry(path);
+    SAVE_CREATEFILEW_LAST_SAVE_LIKE_KIND.store(plan.kind.as_usize(), Ordering::SeqCst);
+    match plan.bucket {
         Some(SavePathTelemetryBucket::StageSteamIdDir) => {
             SAVE_CREATEFILEW_STAGE_STEAMID_DIR_HITS.fetch_add(1, Ordering::SeqCst);
         }
@@ -461,9 +461,9 @@ fn record_save_like_createfile_path_kind(path: &[u16]) {
 }
 
 fn record_save_like_query_path_kind(path: &[u16]) {
-    let kind = classify_save_like_path(path);
-    SAVE_QUERY_LAST_SAVE_LIKE_KIND.store(kind.as_usize(), Ordering::SeqCst);
-    match kind.telemetry_bucket() {
+    let plan = plan_save_path_telemetry(path);
+    SAVE_QUERY_LAST_SAVE_LIKE_KIND.store(plan.kind.as_usize(), Ordering::SeqCst);
+    match plan.bucket {
         Some(SavePathTelemetryBucket::StageSteamIdDir) => {
             SAVE_QUERY_STAGE_STEAMID_DIR_HITS.fetch_add(1, Ordering::SeqCst);
         }

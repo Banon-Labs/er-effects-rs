@@ -959,6 +959,20 @@ pub enum SavePathTelemetryBucket {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SavePathTelemetryPlan {
+    pub kind: SavePathKind,
+    pub bucket: Option<SavePathTelemetryBucket>,
+}
+
+pub fn plan_save_path_telemetry(path: &[u16]) -> SavePathTelemetryPlan {
+    let kind = classify_save_like_path(path);
+    SavePathTelemetryPlan {
+        kind,
+        bucket: kind.telemetry_bucket(),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DirectStageNoSteamIdKind {
     None,
     EldenRingRoot,
@@ -1655,6 +1669,21 @@ mod tests {
 
     fn wide_path(path: &str) -> Vec<u16> {
         path.encode_utf16().collect()
+    }
+
+    #[test]
+    fn plans_save_path_telemetry_kind_and_bucket() {
+        let staged = wide_path(
+            r"Z:\tmp\er-effects-save-redirect-stage\eldenring\76561197960265729\ER0000.sl2",
+        );
+        let plan = plan_save_path_telemetry(&staged);
+        assert_eq!(plan.kind, SavePathKind::StageSaveFile);
+        assert_eq!(plan.bucket, Some(SavePathTelemetryBucket::StageSaveFile));
+
+        let graphics = wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\GraphicsConfig.xml");
+        let plan = plan_save_path_telemetry(&graphics);
+        assert_eq!(plan.kind, SavePathKind::GraphicsConfig);
+        assert_eq!(plan.bucket, None);
     }
 
     #[test]
