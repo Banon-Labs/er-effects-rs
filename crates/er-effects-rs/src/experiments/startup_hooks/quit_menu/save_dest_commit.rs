@@ -259,68 +259,21 @@ pub(crate) fn save_dest_reset(reason: &str) {
 /// ASCII-lowercase leaf (file name) of a wide Windows path, or `None` when the path ends in a
 /// separator / is empty.
 fn save_dest_wide_leaf_lower(path: &[u16]) -> Option<Vec<u16>> {
-    let start = path
-        .iter()
-        .rposition(|&c| c == b'\\' as u16 || c == b'/' as u16)
-        .map_or(0, |idx| idx + 1);
-    let leaf = path.get(start..)?;
-    if leaf.is_empty() {
-        return None;
-    }
-    Some(leaf.iter().copied().map(save_dest_ascii_lower).collect())
+    er_quit_menu::save_dest_commit::save_dest_wide_leaf_lower(path)
 }
 
 fn save_dest_ascii_lower(c: u16) -> u16 {
-    if (b'A' as u16..=b'Z' as u16).contains(&c) {
-        c + 0x20
-    } else {
-        c
-    }
+    er_quit_menu::save_dest_commit::save_dest_ascii_lower(c)
 }
 
 /// The live save's leaf plus its counterpart-extension twin, ASCII-lowercased UTF-16.
 fn save_dest_accepted_leaves(live_path: &Path) -> Vec<Vec<u16>> {
-    let Some(leaf) = live_path.file_name().and_then(|name| name.to_str()) else {
-        return Vec::new();
-    };
-    let mut names = vec![leaf.to_ascii_lowercase()];
-    if let Some((stem, extension)) = leaf.rsplit_once('.') {
-        let twin = if extension.eq_ignore_ascii_case(SAVE_DEST_SEAMLESS_EXTENSION) {
-            Some(SAVE_DEST_VANILLA_EXTENSION)
-        } else if extension.eq_ignore_ascii_case(SAVE_DEST_VANILLA_EXTENSION) {
-            Some(SAVE_DEST_SEAMLESS_EXTENSION)
-        } else {
-            None
-        };
-        if let Some(twin) = twin {
-            names.push(format!("{}.{twin}", stem.to_ascii_lowercase()));
-        }
-    }
-    names
-        .iter()
-        .map(|name| name.encode_utf16().collect())
-        .collect()
+    er_quit_menu::save_dest_commit::save_dest_accepted_leaves(live_path)
 }
 
 /// Leaf names of the live save and its counterpart twin, ASCII-lowercased UTF-8.
 fn save_dest_accepted_leaf_names(live_path: &Path) -> Vec<String> {
-    let Some(leaf) = live_path.file_name().and_then(|name| name.to_str()) else {
-        return Vec::new();
-    };
-    let mut names = vec![leaf.to_ascii_lowercase()];
-    if let Some((stem, extension)) = leaf.rsplit_once('.') {
-        let twin = if extension.eq_ignore_ascii_case(SAVE_DEST_SEAMLESS_EXTENSION) {
-            Some(SAVE_DEST_VANILLA_EXTENSION)
-        } else if extension.eq_ignore_ascii_case(SAVE_DEST_VANILLA_EXTENSION) {
-            Some(SAVE_DEST_SEAMLESS_EXTENSION)
-        } else {
-            None
-        };
-        if let Some(twin) = twin {
-            names.push(format!("{}.{twin}", stem.to_ascii_lowercase()));
-        }
-    }
-    names
+    er_quit_menu::save_dest_commit::save_dest_accepted_leaf_names(live_path)
 }
 
 /// Every directory whose `ER0000.{sl2,co2}` write-open IS the loaded save's.
@@ -331,37 +284,19 @@ fn save_dest_accepted_leaf_names(live_path: &Path) -> Vec<String> {
 /// moment after this one declines it -- so that game-side folder counts too. Leaf-only matching
 /// used to cover this case by accident; a full-path match has to name it.
 fn save_dest_accepted_dirs(live_path: &Path) -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Some(parent) = live_path.parent() {
-        dirs.push(parent.to_path_buf());
-    }
-    if let Some(native) = save_redirect_native_source_dir()
-        && !dirs.contains(&native)
-    {
-        dirs.push(native);
-    }
-    dirs
+    er_quit_menu::save_dest_commit::save_dest_accepted_dirs_for(
+        live_path,
+        save_redirect_native_source_dir(),
+    )
 }
 
 /// Normalized full paths that ARE the loaded save's container: every accepted leaf in every
 /// accepted directory.
 fn save_dest_accepted_paths(live_path: &Path) -> Vec<String> {
-    let leaves = save_dest_accepted_leaf_names(live_path);
-    let mut paths = Vec::new();
-    for dir in save_dest_accepted_dirs(live_path) {
-        let Some(dir_text) = dir.to_str() else {
-            continue;
-        };
-        for leaf in &leaves {
-            let joined = format!("{dir_text}/{leaf}");
-            if let Some(normalized) = save_dest_normalize_path(&joined)
-                && !paths.contains(&normalized)
-            {
-                paths.push(normalized);
-            }
-        }
-    }
-    paths
+    er_quit_menu::save_dest_commit::save_dest_accepted_paths_for(
+        live_path,
+        save_redirect_native_source_dir(),
+    )
 }
 
 fn save_dest_file_stamp(path: &Path) -> Option<(u64, u128)> {
@@ -377,9 +312,7 @@ fn save_dest_file_stamp(path: &Path) -> Option<(u64, u128)> {
 
 /// The `.bak` twin the native backup step (`FUN_142410830`) copies a saved container to.
 fn save_dest_bak_path(path: &Path) -> PathBuf {
-    let mut name = path.as_os_str().to_os_string();
-    name.push(".bak");
-    PathBuf::from(name)
+    er_quit_menu::save_dest_commit::save_dest_bak_path(path)
 }
 
 /// End offset of the last BND4 entry, i.e. the length a STRUCTURALLY COMPLETE container must have.
@@ -388,15 +321,7 @@ fn save_dest_bak_path(path: &Path) -> PathBuf {
 /// the in-place writer left had no `BND4` header at all, and even a container that parses is only
 /// complete when its own index accounts for every byte up to EOF.
 fn save_dest_container_end(bytes: &[u8]) -> Option<usize> {
-    let entries = er_save_loader::bnd4::parse_entries(bytes).ok()?;
-    if entries.is_empty() {
-        return None;
-    }
-    let mut end = 0_usize;
-    for entry in &entries {
-        end = end.max(entry.data_offset.checked_add(entry.entry_size)?);
-    }
-    Some(end)
+    er_quit_menu::save_dest_commit::save_dest_container_end(bytes)
 }
 
 /// Record that this commit's destination IS the loaded save, and say so BEFORE the write happens.
@@ -543,7 +468,7 @@ pub(crate) fn save_dest_commit_window_armed() -> bool {
 
 /// True when `access` is a write open (the only opens the redirect may divert).
 pub(crate) fn save_dest_is_write_access(access: u32) -> bool {
-    access & SAVE_DEST_WRITE_ACCESS_MASK != 0
+    er_quit_menu::save_dest_commit::save_dest_is_write_access(access)
 }
 
 /// One "the teardown is waiting for the writer" line per commit, not one per tick.
