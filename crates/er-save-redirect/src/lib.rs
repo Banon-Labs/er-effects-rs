@@ -1287,6 +1287,26 @@ pub fn staged_save_root_for_file(path: &Path) -> Option<(PathBuf, u64)> {
 }
 
 /// Build the redirect source plan for an already validated save file.
+pub fn path_eq_ignore_ascii_case(a: &Path, b: &Path) -> bool {
+    a.to_string_lossy()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .eq_ignore_ascii_case(
+            b.to_string_lossy()
+                .replace('/', "\\")
+                .trim_end_matches('\\'),
+        )
+}
+
+pub fn save_file_writeback_allowed(path: &Path, default_root: Option<&Path>) -> bool {
+    let Some(default_root) = default_root else {
+        return false;
+    };
+    path.parent()
+        .and_then(|steam_dir| steam_dir.parent())
+        .is_some_and(|root| path_eq_ignore_ascii_case(root, default_root))
+}
+
 pub fn plan_validated_save_source(path: PathBuf, writeback_allowed: bool) -> SaveSourcePlan {
     if writeback_allowed && let Some((staged_root, steam_id)) = staged_save_root_for_file(&path) {
         return SaveSourcePlan::StagedRoot {
@@ -1946,6 +1966,19 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn checks_writeback_allowed_under_default_root_case_insensitively() {
+        let default_root = Path::new(r"C:\Users\x\AppData\Roaming\EldenRing");
+        let save = Path::new(r"c:/users/x/appdata/roaming/eldenring/76561197960265729/ER0000.sl2");
+        assert!(save_file_writeback_allowed(save, Some(default_root)));
+
+        let staged = Path::new(
+            r"Z:\tmp\er-effects-save-redirect-stage\eldenring\76561197960265729\ER0000.sl2",
+        );
+        assert!(!save_file_writeback_allowed(staged, Some(default_root)));
+        assert!(!save_file_writeback_allowed(save, None));
     }
 
     #[test]

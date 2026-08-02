@@ -215,24 +215,9 @@ pub(crate) fn normalize_save_bytes_to_active_steam_id(
     }
 }
 
-fn path_eq_ignore_ascii_case(a: &Path, b: &Path) -> bool {
-    a.to_string_lossy()
-        .replace('/', "\\")
-        .trim_end_matches('\\')
-        .eq_ignore_ascii_case(
-            b.to_string_lossy()
-                .replace('/', "\\")
-                .trim_end_matches('\\'),
-        )
-}
-
 fn save_file_writeback_allowed(path: &Path) -> bool {
-    let Some(default_root) = default_save_root() else {
-        return false;
-    };
-    path.parent()
-        .and_then(|steam_dir| steam_dir.parent())
-        .is_some_and(|root| path_eq_ignore_ascii_case(root, &default_root))
+    let default_root = default_save_root();
+    er_save_redirect::save_file_writeback_allowed(path, default_root.as_deref())
 }
 
 fn normalize_env_save_file_to_known_steam_id(path: &Path, steam_id: u64, reason: &str) {
