@@ -29,6 +29,62 @@
 // A `+short` suffix marks windows shorter than the ~confirm->publish latency, where a missing
 // portrait is expected-by-latency rather than a pipeline failure.
 
+/// PUBLISHED-vs-LOADED identity check for one closed window (bd er-effects-rs-qoqc defect 6 /
+/// er-effects-rs-91zb). IMPLEMENTED BUT UNPROVEN -- it changes no rendering, but nothing has yet
+/// observed it fire on a live run.
+///
+/// Every pre-existing portrait oracle compared our TARGET slot against the currently-resident
+/// character. That is silent about the failure the user actually sees: on 2026-08-02 the pipeline
+/// published slot 9's head and displayed it for 29.7 seconds while slot 5 loaded, and the window
+/// still closed `cause=ok-full`. This compares the two things the loading screen's pixels really
+/// depend on -- the slot we PUBLISHED, and the slot whose deserialize COMPLETED -- plus their
+/// record name hashes as an independent second axis (a slot index can coincide; a name hash is the
+/// character). Returns a short tag for the verdict line.
+fn portrait_published_identity_check(published_slot_tag: usize) -> &'static str {
+    use er_loading_portrait::portrait_identity::{PublishedIdentity, published_identity_verdict};
+    use er_telemetry::counters::{
+        LS_PORTRAIT_PUBLISHED_NAME_HASH, PORTRAIT_PUBLISHED_IDENTITY_CHECKS,
+        PORTRAIT_PUBLISHED_NAME_HASH_MISMATCHES, PORTRAIT_PUBLISHED_SLOT_MISMATCHES,
+        PORTRAIT_TARGET_NAME_HASH, SYSTEM_QUIT_FRESH_DESER_DONE_SLOT,
+    };
+    // Ground truth for "which character loaded" is the slot whose deserialize completed, NOT
+    // `GameMan.save_slot`: the game's own selector and our own `set_save_slot` both write ac0 for
+    // reasons unrelated to that question, which is exactly how the 29.7s window went unreported.
+    let loaded = SYSTEM_QUIT_FRESH_DESER_DONE_SLOT
+        .load(Ordering::SeqCst)
+        .checked_sub(1)
+        .map(|s| s as i32);
+    let verdict = published_identity_verdict(published_slot_tag, loaded);
+    match verdict {
+        PublishedIdentity::NothingPublished => "no-publish",
+        PublishedIdentity::NoLoadedSlot => "no-loaded-slot",
+        PublishedIdentity::Match => {
+            PORTRAIT_PUBLISHED_IDENTITY_CHECKS.fetch_add(1, Ordering::SeqCst);
+            // Second axis: the published head's record name hash against the target the build kick
+            // stamped. A slot index can match while the record underneath it was rewritten.
+            let published_hash = LS_PORTRAIT_PUBLISHED_NAME_HASH.load(Ordering::SeqCst);
+            let target_hash = PORTRAIT_TARGET_NAME_HASH.load(Ordering::SeqCst);
+            if published_hash != 0 && target_hash != 0 && published_hash != target_hash {
+                let n = PORTRAIT_PUBLISHED_NAME_HASH_MISMATCHES.fetch_add(1, Ordering::SeqCst) + 1;
+                append_autoload_debug(format_args!(
+                    "PORTRAIT-PUBLISHED-IDENTITY NAME MISMATCH #{n}: published head name hash 0x{published_hash:x} != loaded character's record hash 0x{target_hash:x} (slot matched) -- the displayed face is not the loaded character"
+                ));
+                "name-mismatch"
+            } else {
+                "ok"
+            }
+        }
+        PublishedIdentity::SlotMismatch { published, loaded } => {
+            PORTRAIT_PUBLISHED_IDENTITY_CHECKS.fetch_add(1, Ordering::SeqCst);
+            let n = PORTRAIT_PUBLISHED_SLOT_MISMATCHES.fetch_add(1, Ordering::SeqCst) + 1;
+            append_autoload_debug(format_args!(
+                "PORTRAIT-PUBLISHED-IDENTITY SLOT MISMATCH #{n}: the loading screen displayed slot {published}'s portrait for this whole window while slot {loaded} was the character that loaded"
+            ));
+            "slot-mismatch"
+        }
+    }
+}
+
 /// Window considered CLOSED after the native LoadingScreen update has been quiet this long.
 const LOADWIN_QUIET_CLOSE_MS: usize = 1500;
 /// Published side at/above this = the full-size product portrait.
@@ -238,6 +294,7 @@ fn portrait_loadwin_close(close_ms: usize) {
     let cap_side = LOADWIN_MAX_CAP_SIDE.load(Ordering::SeqCst);
     let pub_side = LOADWIN_MAX_PUB_SIDE.load(Ordering::SeqCst);
     let slot_tag = LS_PORTRAIT_PUBLISHED_SLOT.load(Ordering::SeqCst);
+    let identity = portrait_published_identity_check(slot_tag);
     // Frames of THIS window where the game's own loading screen reached the screen uncovered
     // (er-effects-rs-wmw defect #1). Orthogonal to the portrait verdict: a window can publish a
     // perfect 1542 head and still have flashed vanilla for a frame.
@@ -285,7 +342,7 @@ fn portrait_loadwin_close(close_ms: usize) {
         }
     }
     append_autoload_debug(format_args!(
-        "PORTRAIT-LOADWIN VERDICT #{i}: cause={cause} dur_ms={dur_ms} displayed={displayed} publishes={publishes} rejects={rejects} kicked={} cap_max_side={cap_side} pub_max_side={pub_side} slot_tag={slot_tag} native_exposure_frames={exposure} window={open_ms}..{close_ms}ms",
+        "PORTRAIT-LOADWIN VERDICT #{i}: cause={cause} dur_ms={dur_ms} displayed={displayed} publishes={publishes} rejects={rejects} kicked={} cap_max_side={cap_side} pub_max_side={pub_side} slot_tag={slot_tag} identity={identity} native_exposure_frames={exposure} window={open_ms}..{close_ms}ms",
         kicked as u8
     ));
     let record = format!(
