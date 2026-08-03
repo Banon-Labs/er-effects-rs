@@ -58,6 +58,15 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	cargo xwin check --tests \
 		-p er-save-picker -p er-save-picker-dll -p er-quit-menu -p er-quit-menu-dll \
 		--manifest-path "$repo_root/Cargo.toml" --target "$target"
+	# World-map invasion-spawn warp crates (docs/plans/world-map-invasion-warp.md). Same
+	# situation as the save-picker split: neither is a default-member and the DLL shell is
+	# not depended on by anything, so without this line nothing in any gate would compile
+	# them for the shipping target -- including the `cfg(windows)`-only `CSAutoInvadePoint`
+	# read, which the host `cargo test` never sees.
+	echo "[check-rust-build] cargo xwin check --tests -p er-invasion-warp -p er-invasion-warp-dll --target $target"
+	cargo xwin check --tests \
+		-p er-invasion-warp -p er-invasion-warp-dll \
+		--manifest-path "$repo_root/Cargo.toml" --target "$target"
 	# FEATURE MATRIX. `er-quit-menu` takes `er-save-picker` with `default-features = false`
 	# so a standalone quit-menu DLL links the OS-native fallback surface WITHOUT the boot
 	# missing-save flow. Cargo unifies features across a build graph, so the line above

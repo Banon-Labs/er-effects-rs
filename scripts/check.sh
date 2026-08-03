@@ -95,6 +95,15 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-loading-portrait
 cargo test --manifest-path "$repo_root/Cargo.toml" \
 	-p er-save-picker -p er-save-picker-dll -p er-quit-menu -p er-quit-menu-dll
 
+# The world-map invasion-spawn warp crates (docs/plans/world-map-invasion-warp.md). The
+# catalog, the block grouping, the BlockId disk/memory byte-order conversion and the on-disk
+# `.aip` decoder are all pure logic, so the HOST run is their real coverage -- that
+# testability is the point of the crate split. The corpus test that decodes the 365 real
+# `.aip` files skips when the local extraction is absent (game-derived bytes are never
+# versioned). `check-rust-build.sh` keeps both crates building for the shipping target.
+cargo test --manifest-path "$repo_root/Cargo.toml" \
+	-p er-invasion-warp -p er-invasion-warp-dll
+
 # er-telemetry's host-portable logic. The workspace pins `default-members` to the DLL crate, so the
 # windows-target `cargo xwin test --lib` below selects er-effects-rs ONLY and never ran these -- a
 # telemetry-crate test module could be added and silently never execute in any gate. The load-count
