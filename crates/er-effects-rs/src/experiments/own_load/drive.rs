@@ -1186,24 +1186,30 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
     }
     // The native dir uses backslashes (Windows under Proton); normalise for std::fs lookup.
     let dir_path = PathBuf::from(dir.replace('\\', "/"));
-    // Pick only the active runtime's container extension. Do NOT fall back to the other flavor:
-    // Seamless must not silently load a vanilla `.sl2`, and vanilla must not silently load a
-    // Seamless `.co2`. If the active extension is absent, behave as "no save" so the normal
-    // configured-save / missing-save picker path can ask the user for the right file.
-    let expected_name = active_default_save_file_name();
-    let path = dir_path.join(expected_name);
-    let valid = std::fs::metadata(&path)
-        .map(|meta| {
-            meta.is_file() && meta.len() == crate::experiments::SAVE_OVERRIDE_EXPECTED_BYTES
+    // Asymmetric container rule (user spec 2026-08-02, bd
+    // `save-container-mode-lock-is-asymmetric-seamless-takes-both-2026-08-02`): Seamless loads
+    // `ER0000.co2` OR `ER0000.sl2`, preferring the co-op container; vanilla loads ONLY `.sl2` and
+    // must never silently pick up a Seamless `.co2`. If no candidate is present, behave as "no
+    // save" so the configured-save / missing-save picker path can ask the user for a file.
+    let candidates = active_default_save_file_names();
+    let Some(path) = candidates
+        .iter()
+        .map(|name| dir_path.join(name))
+        .find(|path| {
+            std::fs::metadata(path)
+                .map(|meta| {
+                    meta.is_file() && meta.len() == crate::experiments::SAVE_OVERRIDE_EXPECTED_BYTES
+                })
+                .unwrap_or(false)
         })
-        .unwrap_or(false);
-    if !valid {
+    else {
         append_autoload_debug(format_args!(
-            "own-load: active-mode save '{expected_name}' missing/invalid under dir=\"{}\" -- not falling back across .sl2/.co2",
-            dir_path.display()
+            "own-load: no loadable save under dir=\"{}\" -- tried {:?} for the active mode",
+            dir_path.display(),
+            candidates
         ));
         return None;
-    }
+    };
     match std::fs::read(&path) {
         Ok(mut bytes) => {
             normalize_save_bytes_to_active_steam_id(base, &mut bytes, "own-load-native-dir");
