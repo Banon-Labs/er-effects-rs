@@ -30,6 +30,8 @@ use crate::constants_moved::{MenuActionNode, ProductCoreAutoloadReady};
 pub struct TitleFlowHost {
     /// Structured debug logging sink (the product's `append_autoload_debug`).
     pub append_autoload_debug: fn(std::fmt::Arguments<'_>),
+    /// Crash-log sink for product faults/investigation breadcrumbs.
+    pub append_crash_log: fn(std::fmt::Arguments<'_>),
     /// Structured timeline event sink (the product's `timeline_event`).
     pub timeline_event: fn(&str, u64, std::fmt::Arguments<'_>),
     /// Directory of the game executable (log/artifact root); `None` when unresolvable.
@@ -226,6 +228,7 @@ impl TitleFlowHost {
     pub const fn defaults() -> Self {
         Self {
             append_autoload_debug: default_log,
+            append_crash_log: default_log,
             timeline_event: default_timeline_event,
             game_directory_path: default_game_directory_path,
             game_data_man_ptr_or_null: default_ptr_or_null,
@@ -309,6 +312,9 @@ fn host() -> &'static TitleFlowHost {
 
 pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
     (host().append_autoload_debug)(args)
+}
+pub(crate) fn append_crash_log(args: std::fmt::Arguments<'_>) {
+    (host().append_crash_log)(args)
 }
 pub(crate) fn timeline_event(name: &str, frame: u64, fields: std::fmt::Arguments<'_>) {
     (host().timeline_event)(name, frame, fields)
