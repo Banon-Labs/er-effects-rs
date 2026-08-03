@@ -216,6 +216,7 @@ impl InvasionWarpDrive {
             publish(&warp_oracle_json(
                 &outcome,
                 &arrival,
+                expected,
                 self.warps_issued,
                 self.warps_arrived,
             ));
@@ -425,6 +426,7 @@ pub fn describe_arrival(outcome: &WarpOutcome, arrival: &WarpArrival) -> String 
 pub fn warp_oracle_json(
     outcome: &WarpOutcome,
     arrival: &WarpArrival,
+    expected_physics: Option<[f32; 3]>,
     warps_issued: u32,
     warps_arrived: u32,
 ) -> String {
@@ -454,11 +456,21 @@ pub fn warp_oracle_json(
     };
     let requested = encode_position_oracle(outcome.spawn_position);
     let final_encoded = final_position.map(encode_position_oracle);
+    // The two position fields are in DIFFERENT SPACES and must be labelled as such.
+    // `requested_position` is the BLOCK-LOCAL .aip value read back out of GameMan+0xc90 --
+    // that is what the engine was handed. `final_position` is the player's PHYSICS position.
+    // They coincide only where the block origin happens to be ~0, which made a live run look
+    // self-consistent by luck. `expected_position_physics` is the requested point put through
+    // the engine's own conversion, and IS the value the arrival verdict compares against.
+    let expected_encoded = expected_physics.map(encode_position_oracle);
     format!(
         "{{\"{ORACLE_INVASION_WARP_SELECTED_ID}\":{selected},\
          \"{ORACLE_INVASION_WARP_REQUESTED_BLOCK}\":{requested_block},\
          \"{ORACLE_INVASION_WARP_REQUESTED_POSITION}\":[{rx},{ry},{rz}],\
          \"{ORACLE_INVASION_WARP_REQUESTED_YAW}\":{yaw},\
+         \"requested_position_space\":\"block_local\",\
+         \"expected_position_physics\":{expected_position_json},\
+         \"final_position_space\":\"physics\",\
          \"{ORACLE_INVASION_WARP_FINAL_BLOCK}\":{final_block_json},\
          \"{ORACLE_INVASION_WARP_FINAL_POSITION}\":{final_position_json},\
          \"{ORACLE_INVASION_WARP_SESSION_TOUCHES}\":{session_touches},\
@@ -473,6 +485,10 @@ pub fn warp_oracle_json(
         ry = requested[1],
         rz = requested[2],
         yaw = encode_scalar_oracle(outcome.spawn_yaw),
+        expected_position_json = expected_encoded.map_or_else(
+            || "null".to_string(),
+            |p| format!("[{},{},{}]", p[0], p[1], p[2])
+        ),
         final_block_json = final_block.map_or_else(|| "null".to_string(), |b| b.to_string()),
         final_position_json = final_encoded.map_or_else(
             || "null".to_string(),
@@ -539,7 +555,7 @@ mod tests {
             (WarpArrival::Pending { ticks_waited: 1 }, false),
         ];
         for (arrival, expected) in cases {
-            let json = warp_oracle_json(&outcome(), &arrival, 1, u32::from(expected));
+            let json = warp_oracle_json(&outcome(), &arrival, None, 1, u32::from(expected));
             assert!(
                 json.contains(&format!("\"passed\":{expected}")),
                 "{arrival:?} -> {json}"
@@ -550,7 +566,13 @@ mod tests {
     #[test]
     fn a_pending_warp_reports_null_final_values_rather_than_zeros() {
         // A zero would read as "settled at the origin"; null says "not measured yet".
-        let json = warp_oracle_json(&outcome(), &WarpArrival::Pending { ticks_waited: 3 }, 1, 0);
+        let json = warp_oracle_json(
+            &outcome(),
+            &WarpArrival::Pending { ticks_waited: 3 },
+            None,
+            1,
+            0,
+        );
         assert!(
             json.contains("\"oracle_invasion_warp_final_block\":null"),
             "{json}"
@@ -562,8 +584,46 @@ mod tests {
     }
 
     #[test]
+    fn the_two_position_fields_are_labelled_with_their_coordinate_space() {
+        // A live run had requested_position (block-local) numerically EQUAL to final_position
+        // (physics) because that block's origin was ~0, which made a mixed-space document look
+        // self-consistent by luck. The labels stop that reading.
+        let json = warp_oracle_json(
+            &outcome(),
+            &WarpArrival::Arrived {
+                final_block: 0x3C22_3300,
+                final_position: [10.0, 20.0, 30.0],
+                ticks_waited: 9,
+            },
+            Some([1000.0, 20.0, 30.0]),
+            1,
+            1,
+        );
+        assert!(
+            json.contains("\"requested_position_space\":\"block_local\""),
+            "{json}"
+        );
+        assert!(
+            json.contains("\"final_position_space\":\"physics\""),
+            "{json}"
+        );
+        // The physics-space expectation is the value the verdict actually compared against,
+        // and it must be present and distinct from the block-local one.
+        assert!(
+            json.contains("\"expected_position_physics\":[1000000,20000,30000]"),
+            "{json}"
+        );
+    }
+
+    #[test]
     fn the_session_touch_count_is_reported_not_asserted_to_be_zero() {
-        let json = warp_oracle_json(&outcome(), &WarpArrival::Pending { ticks_waited: 0 }, 1, 0);
+        let json = warp_oracle_json(
+            &outcome(),
+            &WarpArrival::Pending { ticks_waited: 0 },
+            None,
+            1,
+            0,
+        );
         assert!(
             json.contains("\"oracle_invasion_warp_session_touches\":1"),
             "{json}"
@@ -601,7 +661,13 @@ mod tests {
     #[test]
     fn the_selected_id_survives_into_the_oracle_document() {
         let outcome = outcome();
-        let json = warp_oracle_json(&outcome, &WarpArrival::Pending { ticks_waited: 0 }, 1, 0);
+        let json = warp_oracle_json(
+            &outcome,
+            &WarpArrival::Pending { ticks_waited: 0 },
+            None,
+            1,
+            0,
+        );
         assert!(
             json.contains(&format!(
                 "\"oracle_invasion_warp_selected_id\":{}",
