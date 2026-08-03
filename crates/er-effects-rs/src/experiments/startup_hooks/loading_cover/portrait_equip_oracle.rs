@@ -253,6 +253,7 @@ pub(crate) unsafe fn portrait_equip_oracle_sample(base: usize, summary: usize, t
 #[cfg(test)]
 mod portrait_equip_oracle_root_tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// The protector param-id offsets are pinned by `GetProtectorParamIdBySlot`'s `lea 0xc(%rdx)` +
     /// `mov 0x7c(%rcx,%rdx,4)`, and all four must stay inside the struct.

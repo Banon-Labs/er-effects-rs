@@ -105,6 +105,9 @@ pub use stats_lines::*;
 
 pub mod portrait_equip;
 
+pub mod title_stats_text;
+pub use title_stats_text::*;
+
 #[cfg(windows)]
 pub mod stats_loading_text;
 #[cfg(windows)]

@@ -1182,14 +1182,14 @@ pub(crate) const DLC_ROOTS_BLANK_RVA: usize = 0x00e0_6490;
 /// `FUN_140e05fb0(CSDlcImp*, bool)` -- the REFILL: re-queries Steam DLC ownership and calls
 /// `CSDlcImp::AddVirtualFileRoots`. Hooked at this shared entry rather than at either caller,
 /// because a measured run showed `STEP_LoadListWait` never executes at all.
-pub(crate) const DLC_ROOTS_REFILL_RVA: usize = 0x00e0_5fb0;
+pub(crate) const DLC_ROOTS_REFILL_RVA: usize = er_game_base::rva::DLC_ROOTS_REFILL_RVA;
 /// `FUN_140836f30` -- the `Do` of the MenuFunctorJob that eventually reaches the refill (vtable
 /// 0x142acb638). One level above `FUN_140e05fb0`, so it separates "job never enqueued" from "job ran
 /// and diverged inside". Prologue `48 89 54 24 10 53 48 83 ec 30`, no rip-relative in the window.
 pub(crate) const DLC_ROOTS_JOB_RVA: usize = 0x0083_6f30;
 /// `GLOBAL_CSDlc` -- the `CSDlcImp` singleton. Grounded from `FUN_1408371e0`'s own load:
 /// `mov 0x354f9ed(%rip),%rcx  # 0x143d86bd8`.
-pub(crate) const CSDLC_SINGLETON_RVA: usize = 0x03d8_6bd8;
+pub(crate) const CSDLC_SINGLETON_RVA: usize = er_game_base::rva::CSDLC_SINGLETON_RVA;
 /// The DLIO alias every failing `m28` read resolves through.
 pub(crate) const DLC_ROOT_ALIAS_NAME: &str = "mapstudio_dlc2";
 

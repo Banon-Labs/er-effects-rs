@@ -55,6 +55,11 @@ pub const GLOBAL_MAIN_HEAP_ALLOCATOR_RVA: usize = 0x3d872e0;
 /// now derive from here (2026-08-01). "iodev" is the role the callers use -- the dump does not
 /// name the class, so treat the name as descriptive rather than authoritative.
 pub const SL_IODEV_GLOBAL_RVA: usize = 0x4589390;
+/// `FUN_140e05fb0(CSDlcImp*, bool)` -- the DLC virtual-root REFILL: re-queries Steam DLC ownership
+/// and calls `CSDlcImp::AddVirtualFileRoots`.
+pub const DLC_ROOTS_REFILL_RVA: usize = 0x00e0_5fb0;
+/// `GLOBAL_CSDlc` -- the `CSDlcImp` singleton.
+pub const CSDLC_SINGLETON_RVA: usize = 0x03d8_6bd8;
 
 /// `GameDataMan` -> `PlayerGameData` pointer field offset.
 pub const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize = 0x08;

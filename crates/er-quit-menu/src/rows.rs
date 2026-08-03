@@ -106,6 +106,59 @@ impl QuitRow {
     }
 }
 
+/// The four rows of the patched Quit dialog, in the captured table's stable order.
+pub const QUIT_ROW_TABLE_ROWS: [QuitRow; 4] = [
+    QuitRow::SaveGame,
+    QuitRow::ReturnToDesktop,
+    QuitRow::LoadProfile,
+    QuitRow::LoadSaveProfiles,
+];
+
+/// The `std::function` storage inside a controller that the action thunks receive as their `this`.
+/// `*(controller + 0xa8) == controller + 0x70` for a small callable, so this is the SAME value the
+/// old `*_ACTION_LAST_OBJECT` latches held -- named for what it is.
+pub const PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_STORAGE_OFFSET: usize = 0x70;
+
+/// Recover the controller an action thunk's `this` pointer aliases. Pure pointer arithmetic: the
+/// action "object" is `controller + 0x70`, never an independent allocation.
+pub fn quit_controller_of_action_alias(action_obj: usize) -> usize {
+    action_obj.saturating_sub(PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_STORAGE_OFFSET)
+}
+
+/// Decode the telemetry table's plus-one storage format into a row index.
+pub fn quit_row_index_from_plus1(plus1: usize) -> i32 {
+    if plus1 == 0 || plus1 > i32::MAX as usize {
+        -1
+    } else {
+        (plus1 - 1) as i32
+    }
+}
+
+/// A pure snapshot of the row table captured from live memory. Root DLL code still owns the
+/// telemetry atomics; this crate owns the shape and interpretation of those four row indices.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct QuitRowTable {
+    pub save_game_index: i32,
+    pub return_desktop_index: i32,
+    pub load_profile_index: i32,
+    pub load_save_profiles_index: i32,
+}
+
+impl QuitRowTable {
+    pub fn index(self, row: QuitRow) -> i32 {
+        match row {
+            QuitRow::SaveGame => self.save_game_index,
+            QuitRow::ReturnToDesktop => self.return_desktop_index,
+            QuitRow::LoadProfile => self.load_profile_index,
+            QuitRow::LoadSaveProfiles => self.load_save_profiles_index,
+        }
+    }
+
+    pub fn row_count(self) -> i32 {
+        QUIT_ROW_TABLE_ROWS.len() as i32
+    }
+}
+
 /// What the label at a given row index turned out to be.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum QuitRowLabel {
@@ -282,13 +335,36 @@ pub struct QuitRowFacts {
 }
 
 impl QuitRowFacts {
-    fn index_of(&self, row: QuitRow) -> i32 {
-        match row {
-            QuitRow::SaveGame => self.save_game_index,
-            QuitRow::ReturnToDesktop => self.return_desktop_index,
-            QuitRow::LoadProfile => self.load_profile_index,
-            QuitRow::LoadSaveProfiles => self.load_save_profiles_index,
+    pub fn from_table(
+        table: QuitRowTable,
+        table_dialog: usize,
+        activation_dialog: usize,
+        cursor: i32,
+        cursor_row_label: Option<QuitRowLabel>,
+        input_kind: QuitInputKind,
+    ) -> Self {
+        Self {
+            save_game_index: table.save_game_index,
+            return_desktop_index: table.return_desktop_index,
+            load_profile_index: table.load_profile_index,
+            load_save_profiles_index: table.load_save_profiles_index,
+            table_dialog,
+            activation_dialog,
+            cursor,
+            row_count: table.row_count(),
+            cursor_row_label,
+            input_kind,
         }
+    }
+
+    fn index_of(&self, row: QuitRow) -> i32 {
+        QuitRowTable {
+            save_game_index: self.save_game_index,
+            return_desktop_index: self.return_desktop_index,
+            load_profile_index: self.load_profile_index,
+            load_save_profiles_index: self.load_save_profiles_index,
+        }
+        .index(row)
     }
 
     fn table_complete_and_distinct(&self) -> bool {
@@ -366,6 +442,40 @@ pub fn resolve_quit_row(facts: &QuitRowFacts) -> QuitRowVerdict {
         },
         Err(reason) => QuitRowVerdict::Ambiguous(reason),
     }
+}
+
+/// Both halves of the cursor identity, for the debug log: what the captured table says sits at each
+/// index, and what the label read live at the cursor actually is.
+pub fn quit_row_facts_text(facts: &QuitRowFacts) -> String {
+    format!(
+        "cursor={} table=[save_game=#{} return_desktop=#{} load_profile=#{} load_save_profiles=#{}] live_label={:?} input_kind={:?}",
+        facts.cursor,
+        facts.save_game_index,
+        facts.return_desktop_index,
+        facts.load_profile_index,
+        facts.load_save_profiles_index,
+        facts.cursor_row_label,
+        facts.input_kind,
+    )
+}
+
+/// One-line description of a verdict for the debug log.
+pub fn quit_row_verdict_text(verdict: QuitRowVerdict) -> String {
+    match verdict {
+        QuitRowVerdict::Resolved { row, by } => {
+            format!("row='{}' by={}", row.label(), by.label())
+        }
+        QuitRowVerdict::Ambiguous(reason) => format!("row=AMBIGUOUS reason={}", reason.label()),
+    }
+}
+
+/// `true` when a resolved non-quit row arrived at an instant-quit gate. Root telemetry records this
+/// separately from plain ambiguity because it catches action-alias false-positive regressions.
+pub fn quit_row_is_false_quit_claim(verdict: QuitRowVerdict) -> bool {
+    matches!(
+        verdict.resolved_row(),
+        Some(QuitRow::LoadProfile) | Some(QuitRow::LoadSaveProfiles)
+    )
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -613,5 +723,69 @@ mod system_quit_row_identity_tests {
         // is exactly ONE discriminator: `oracle_system_quit_row_last_discriminator` reads 1 for every
         // resolution, whatever the input kind.
         assert_eq!(QuitRowDiscriminator::CursorRow.code(), 1);
+    }
+
+    #[test]
+    fn table_snapshot_and_plus_one_decoder_preserve_the_telemetry_contract() {
+        assert_eq!(quit_row_index_from_plus1(0), -1);
+        assert_eq!(quit_row_index_from_plus1(1), 0);
+        assert_eq!(quit_row_index_from_plus1(4), 3);
+        assert_eq!(quit_row_index_from_plus1(i32::MAX as usize + 1), -1);
+
+        let table = QuitRowTable {
+            save_game_index: 0,
+            return_desktop_index: 1,
+            load_profile_index: 2,
+            load_save_profiles_index: 3,
+        };
+        assert_eq!(table.row_count(), QUIT_ROW_TABLE_ROWS.len() as i32);
+        assert_eq!(table.index(QuitRow::SaveGame), 0);
+        assert_eq!(table.index(QuitRow::ReturnToDesktop), 1);
+        assert_eq!(table.index(QuitRow::LoadProfile), 2);
+        assert_eq!(table.index(QuitRow::LoadSaveProfiles), 3);
+
+        let facts = QuitRowFacts::from_table(
+            table,
+            0x10_0000,
+            0x10_0000,
+            3,
+            Some(QuitRowLabel::Ours(QuitRow::LoadSaveProfiles)),
+            QuitInputKind::MouseClick,
+        );
+        assert_eq!(facts.row_count, 4);
+        assert_eq!(
+            resolve_quit_row(&facts).resolved_row(),
+            Some(QuitRow::LoadSaveProfiles)
+        );
+    }
+
+    #[test]
+    fn action_alias_and_log_text_helpers_are_pure_contracts() {
+        assert_eq!(PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_STORAGE_OFFSET, 0x70);
+        assert_eq!(quit_controller_of_action_alias(0x1234_5670), 0x1234_5600);
+        assert_eq!(quit_controller_of_action_alias(0x40), 0);
+
+        assert_eq!(
+            quit_row_verdict_text(QuitRowVerdict::Resolved {
+                row: QuitRow::ReturnToDesktop,
+                by: QuitRowDiscriminator::CursorRow,
+            }),
+            "row='Return to Desktop' by=cursor-row"
+        );
+        assert_eq!(
+            quit_row_verdict_text(QuitRowVerdict::Ambiguous(
+                QuitRowAmbiguity::CursorRowUnclaimed
+            )),
+            "row=AMBIGUOUS reason=cursor-row-unclaimed"
+        );
+        assert!(quit_row_facts_text(&facts()).contains("return_desktop=#1"));
+        assert!(quit_row_is_false_quit_claim(QuitRowVerdict::Resolved {
+            row: QuitRow::LoadProfile,
+            by: QuitRowDiscriminator::CursorRow,
+        }));
+        assert!(!quit_row_is_false_quit_claim(QuitRowVerdict::Resolved {
+            row: QuitRow::ReturnToDesktop,
+            by: QuitRowDiscriminator::CursorRow,
+        }));
     }
 }

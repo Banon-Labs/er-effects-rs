@@ -22,3 +22,4 @@ include!("title_tick_cover.rs");
 include!("switch_slot_control.rs");
 include!("profile_select_flow.rs");
 include!("native_title_job.rs");
+include!("dlc_roots_self_heal.rs");

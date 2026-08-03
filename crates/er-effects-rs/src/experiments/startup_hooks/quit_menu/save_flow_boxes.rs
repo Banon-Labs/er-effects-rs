@@ -52,51 +52,11 @@ use super::*;
 // keeps the native MessageBoxBuilder/queue integration in the product DLL until the hooked surfaces
 // move in S8.
 pub(crate) use er_quit_menu::save_flow_boxes::{
-    SAVE_FLOW_BOX_NONE, SAVE_FLOW_BOX_OVERWRITE_FILE, SaveFlowButton, SaveFlowDecision,
-    save_flow_box_add_order, save_flow_box_label, save_flow_box_yes_index,
+    SAVE_FLOW_BOX_NONE, SAVE_FLOW_BOX_OVERWRITE_FILE, SAVE_FLOW_PROMPT_CAPACITY, SaveFlowBoxRecipe,
+    SaveFlowButton, SaveFlowDecision, save_flow_box_add_order, save_flow_box_counter_bump,
+    save_flow_box_label, save_flow_box_prompt, save_flow_box_yes_index, save_flow_decision_label,
+    save_flow_yes_button_desc,
 };
-
-/// Fixed capacity (UTF-16 units) of a confirm-box prompt buffer. The const builder
-/// zero-fills the tail, so the NUL terminator `CS::MenuString` expects is always present and
-/// an over-long prompt fails at compile time rather than truncating silently.
-pub(crate) const SAVE_FLOW_PROMPT_CAPACITY: usize = 64;
-
-/// Widen an ASCII prompt into a NUL-terminated fixed-capacity UTF-16 buffer at compile time.
-/// `CS::MenuString` stores the RAW pointer, so every prompt must be a process-lifetime static.
-pub(crate) const fn save_flow_prompt(text: &[u8]) -> [u16; SAVE_FLOW_PROMPT_CAPACITY] {
-    let mut out = [0_u16; SAVE_FLOW_PROMPT_CAPACITY];
-    let mut idx = 0;
-    while idx < text.len() {
-        out[idx] = text[idx] as u16;
-        idx += 1;
-    }
-    out
-}
-
-pub(crate) static SAVE_FLOW_OVERWRITE_PROMPT_W: [u16; SAVE_FLOW_PROMPT_CAPACITY] =
-    save_flow_prompt(b"Are you sure you want to overwrite this file?");
-
-/// The Yes descriptor's internal label `L"\u{6c7a}\u{5b9a}"` ("kettei"/decide). This is an
-/// INTERNAL key the adder `_wcsicmp`s against the builder's default-label slot, not display
-/// text (the visible label comes from the localized Yes adder), and it is byte-identical to
-/// the literal every native Yes/No confirm passes.
-pub(crate) static SAVE_FLOW_YES_DESC_LABEL_W: [u16; 3] = [0x6c7a, 0x5b9a, 0];
-
-/// The 24-byte descriptor the Yes adder copies out (`FUN_1407b1d40` reads three qwords from
-/// it). Values are byte-identical to every native Yes/No confirm: `{100, 2, 1, <pad>, label}`.
-#[repr(C)]
-pub(crate) struct SaveFlowYesButtonDesc {
-    sound_id: i32,
-    category: i32,
-    kind: i32,
-    reserved: i32,
-    label: usize,
-}
-
-pub(crate) const SAVE_FLOW_YES_DESC_SOUND_ID: i32 = 100;
-pub(crate) const SAVE_FLOW_YES_DESC_CATEGORY: i32 = 2;
-pub(crate) const SAVE_FLOW_YES_DESC_KIND: i32 = 1;
-pub(crate) const SAVE_FLOW_YES_DESC_RESERVED: i32 = 0;
 
 /// Stack scratch for `CS::MessageBoxBuilder`. 16-byte aligned: the builder ctor stores xmm
 /// registers into its own body (`movups` in the sub-ctor `FUN_1407af5b0`).
@@ -109,39 +69,6 @@ pub(crate) struct SaveFlowMsgBoxBuilderScratch {
 #[repr(C, align(8))]
 pub(crate) struct SaveFlowMenuStringScratch {
     bytes: [u8; MENU_STRING_SIZE],
-}
-
-pub(crate) fn save_flow_box_prompt(
-    box_id: usize,
-) -> Option<&'static [u16; SAVE_FLOW_PROMPT_CAPACITY]> {
-    match box_id {
-        SAVE_FLOW_BOX_OVERWRITE_FILE => Some(&SAVE_FLOW_OVERWRITE_PROMPT_W),
-        _ => None,
-    }
-}
-
-/// Bump the per-box counter arrays with a bounds-checked box id.
-pub(crate) fn save_flow_box_counter_bump(
-    counters: &[AtomicUsize; SAVE_FLOW_BOX_COUNT],
-    box_id: usize,
-) {
-    if let Some(slot) = box_id.checked_sub(1).and_then(|idx| counters.get(idx)) {
-        slot.fetch_add(1, Ordering::SeqCst);
-    }
-}
-
-/// Resolved + prologue-verified recipe addresses. Resolving once keeps the byte checks off
-/// the per-box path while still failing closed on a drifted build.
-pub(crate) struct SaveFlowBoxRecipe {
-    ctor: usize,
-    add_yes: usize,
-    add_no: usize,
-    default_last: usize,
-    finalize: usize,
-    dtor: usize,
-    menu_string: usize,
-    queue_ready: usize,
-    submit: usize,
 }
 
 pub(crate) static SAVE_FLOW_BOX_RECIPE: OnceLock<Option<SaveFlowBoxRecipe>> = OnceLock::new();
@@ -325,13 +252,7 @@ pub(crate) unsafe fn save_flow_submit_box(box_id: usize) -> bool {
         )
     };
 
-    let yes_desc = SaveFlowYesButtonDesc {
-        sound_id: SAVE_FLOW_YES_DESC_SOUND_ID,
-        category: SAVE_FLOW_YES_DESC_CATEGORY,
-        kind: SAVE_FLOW_YES_DESC_KIND,
-        reserved: SAVE_FLOW_YES_DESC_RESERVED,
-        label: SAVE_FLOW_YES_DESC_LABEL_W.as_ptr() as usize,
-    };
+    let yes_desc = save_flow_yes_button_desc();
     let add_yes: unsafe extern "system" fn(usize, usize) -> usize =
         unsafe { std::mem::transmute(recipe.add_yes) };
     let add_no: unsafe extern "system" fn(usize) -> usize =
@@ -543,14 +464,6 @@ pub(crate) unsafe fn save_flow_box_decision(box_id: usize) -> Option<SaveFlowDec
 /// `SAVE_FLOW_BOX_RESULT_BASELINE`).
 pub(crate) fn save_flow_box_result_baseline() -> i32 {
     (SAVE_FLOW_BOX_RESULT_BASELINE.load(Ordering::SeqCst) as u32) as i32
-}
-
-pub(crate) fn save_flow_decision_label(decision: SaveFlowDecision) -> &'static str {
-    match decision {
-        SaveFlowDecision::Yes => "Yes",
-        SaveFlowDecision::No => "No",
-        SaveFlowDecision::Undecidable => "UNDECIDABLE",
-    }
 }
 
 /// Retire the capture slot and bump the counter that matches `decision`. Undecidable gets its

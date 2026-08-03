@@ -110,16 +110,10 @@ use super::*;
 // bootstrap-event channel, ATTEMPTS the telemetry flush with `try_lock` (a frozen task holding the
 // state mutex costs a stale file, never a hung quit), and exits. No hand-off, no 5s wait.
 
-/// Nothing has opened a boot picker (or this is not a missing-save boot).
-pub(crate) const BOOT_PICKER_IDLE: usize = 0;
-/// A surface owns the boot pick and is waiting on the user.
-pub(crate) const BOOT_PICKER_OPEN: usize = 1;
-/// A file cleared the shared validity predicate; the character sub-picker owns the rest.
-pub(crate) const BOOT_PICKER_PICKED: usize = 2;
-/// The user cancelled the boot OS dialog; the game is quitting.
-pub(crate) const BOOT_PICKER_CANCEL_EXIT: usize = 3;
-/// comdlg32 was unusable; the in-game browser took the pick over.
-pub(crate) const BOOT_PICKER_FELL_BACK: usize = 4;
+pub(crate) use er_save_picker::{
+    BOOT_PICKER_CANCEL_EXIT, BOOT_PICKER_FELL_BACK, BOOT_PICKER_IDLE, BOOT_PICKER_OPEN,
+    BOOT_PICKER_PICKED, BootAbortAction, boot_abort_action,
+};
 
 pub(crate) use er_telemetry::counters::GAME_TASK_TICKS_TOTAL;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_BOOT_GAME_TICKS_AT_ANSWER;
@@ -156,39 +150,6 @@ pub(crate) static BOOT_OS_CORE_HOOK_WAIT_STARTED: OnceLock<Instant> = OnceLock::
 /// One-shot guard for the dialog thread.
 pub(crate) static BOOT_OS_THREAD_STARTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
-
-/// What an abandoned boot open means. PURE and separated from the code that acts on it, so the one
-/// decision that can terminate the process is checkable by a test rather than by reading a thread.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum BootAbortAction {
-    /// The user decided. Quit the game.
-    QuitGame,
-    /// We could not ask. Hand the pick to the in-game browser instead of acting on a choice
-    /// nobody made.
-    FallBackToInGame,
-}
-
-/// Map an abandoned OS open onto the boot intent's response.
-///
-/// ONLY a genuine user cancel quits. A comdlg32 failure, a refused re-entrant open and an
-/// exhausted reopen bound all mean the dialog could not be used, and terminating a user's game
-/// over a defect in a file dialog is the opposite of what the cancel contract promises.
-///
-/// `NotOpened` IS A TERMINAL ANSWER HERE, unlike everywhere else in the picker code, and the
-/// asymmetry is a property of this caller rather than of the outcome. Elsewhere `NotOpened` means
-/// "ask again next tick" because the asker gets another tick; this thread is one-shot -- it is
-/// spawned once behind `BOOT_OS_THREAD_STARTED` with the boot state already latched `OPEN` -- so
-/// "try again later" is not one of its options. Its only remaining `NotOpened` source is a refused
-/// re-entrant open, which means some other dialog owns the screen, and handing the pick to the
-/// in-game browser is the same answer that would be right one tick later anyway. The retry that
-/// `NotOpened` normally buys is instead spent BEFORE the thread exists, by
-/// `boot_os_open_missing_save_picker`'s own detour wait.
-pub(crate) fn boot_abort_action(abort: OsPickAbort) -> BootAbortAction {
-    match abort {
-        OsPickAbort::Cancelled => BootAbortAction::QuitGame,
-        OsPickAbort::Failed | OsPickAbort::NotOpened => BootAbortAction::FallBackToInGame,
-    }
-}
 
 /// Open the boot missing-save picker on whichever surface the config asks for, ONCE.
 ///
@@ -434,6 +395,7 @@ pub(crate) fn boot_os_perform_cancel_exit() -> ! {
 #[cfg(test)]
 mod save_picker_boot_tests {
     use super::*;
+    use std::time::Duration;
 
     /// THE decision that can terminate a user's game, pinned. Only a cancel -- the one outcome
     /// that IS a user decision -- quits; every "we could not ask" outcome falls back to the
