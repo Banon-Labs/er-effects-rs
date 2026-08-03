@@ -743,17 +743,43 @@ pub(crate) fn default_save_root() -> Option<PathBuf> {
         .map(|appdata| appdata.join("EldenRing"))
 }
 
-/// Default save file name for the active runtime mode. Seamless Co-op (ERSC) keeps co-op progress in
-/// `ER0000.co2` -- a separate container from the vanilla `ER0000.sl2`. This is deliberately
-/// mode-locked: a Seamless launch must not silently load a vanilla `.sl2` just because it is the only
-/// appdata save present, and a vanilla launch must not silently load a Seamless `.co2`. If the active
-/// mode's file is absent, default-save discovery returns "no save" and the normal missing-save picker
-/// asks the user for the correct save flavor.
+/// The container name the active runtime WRITES to. Seamless Co-op (ERSC) keeps co-op progress in
+/// `ER0000.co2` -- a separate container from the vanilla `ER0000.sl2`. This is the single native
+/// write target: it names the staged copy and the `%APPDATA%` path our hook redirects, so the
+/// container that gets loaded and the container that gets written are always the same file.
+///
+/// This is NOT the acceptance predicate -- see [`active_default_save_file_names`]. A source save is
+/// accepted on the asymmetric rule (Seamless takes both flavors, vanilla takes only `.sl2`) and then
+/// staged under THIS name regardless of the source's own extension. `.sl2` and `.co2` are the same
+/// 28 MB BND4 format, so restamping the name is byte-safe.
 pub(crate) fn active_default_save_file_name() -> &'static str {
     if save_picker_seamless_mode_after_settle("active-default-save-file-name") {
         "ER0000.co2"
     } else {
         "ER0000.sl2"
+    }
+}
+
+/// Container names the active runtime will LOAD, in priority order.
+///
+/// The mode lock is deliberately ASYMMETRIC (user spec 2026-08-02), matching what every picker
+/// surface already offers (`save_picker_boot.rs`, `save_picker_menu.rs`,
+/// `system_quit_dialog_handlers.rs` all use `if seamless { ["co2","sl2"] } else { ["sl2"] }`):
+///
+/// * **Seamless** takes BOTH `ER0000.co2` and `ER0000.sl2`, preferring the co-op container when
+///   both exist. Refusing a vanilla `.sl2` here is what softlocked the loading screen on
+///   2026-08-02 (bd `er-effects-rs-h6sh`): the picker legitimately accepted one and nothing
+///   downstream would load it.
+/// * **Vanilla** takes ONLY `ER0000.sl2`. A vanilla launch must never silently load a Seamless
+///   `.co2`, because that would advance co-op progress in an offline session.
+///
+/// If none of these is present, default-save discovery returns "no save" and the missing-save
+/// picker asks the user for a file.
+pub(crate) fn active_default_save_file_names() -> &'static [&'static str] {
+    if save_picker_seamless_mode_after_settle("active-default-save-file-names") {
+        &["ER0000.co2", "ER0000.sl2"]
+    } else {
+        &["ER0000.sl2"]
     }
 }
 
@@ -775,11 +801,15 @@ fn default_save_with_character(path: PathBuf) -> Option<PathBuf> {
 
 fn default_save_file_for_steam_id64(steam_id: u64) -> Option<PathBuf> {
     let root = default_save_root()?;
-    validated_default_save_file(
-        default_save_file_path(&root, steam_id, active_default_save_file_name()),
-        "active-default-save",
-    )
-    .and_then(default_save_with_character)
+    // Asymmetric mode lock: Seamless takes `.co2` then falls back to `.sl2`; vanilla takes only
+    // `.sl2`. First candidate that holds a readable character wins.
+    active_default_save_file_names().iter().find_map(|name| {
+        validated_default_save_file(
+            default_save_file_path(&root, steam_id, name),
+            "active-default-save",
+        )
+        .and_then(default_save_with_character)
+    })
 }
 
 fn default_save_file_candidates() -> Vec<(PathBuf, u64)> {
@@ -796,12 +826,16 @@ fn default_save_file_candidates() -> Vec<(PathBuf, u64)> {
                 .file_name()
                 .to_str()
                 .and_then(steam_id64_from_dir_name)?;
-            validated_default_save_file(
-                default_save_file_path(&root, steam_id, active_default_save_file_name()),
-                "default-save-candidate",
-            )
-            .and_then(default_save_with_character)
-            .map(|path| (path, steam_id))
+            active_default_save_file_names()
+                .iter()
+                .find_map(|name| {
+                    validated_default_save_file(
+                        default_save_file_path(&root, steam_id, name),
+                        "default-save-candidate",
+                    )
+                    .and_then(default_save_with_character)
+                })
+                .map(|path| (path, steam_id))
         })
         .collect()
 }
@@ -958,8 +992,8 @@ pub(crate) fn enforce_save_override_or_abort() -> SaveOverrideMode {
         return activate_save_redirect_source(source, "early-enforced-configured-save");
     }
     append_autoload_debug(format_args!(
-        "save-override: no usable autoload save (configured save missing/invalid, or no readable active default {} exactly {} bytes; read-only is NOT a rejection reason). config_error={}. Arming the IN-GAME missing-save picker: the title boots to its native no-save menu and the 05_010 file browser presents itself (save_picker_menu.rs); world entry stays denied until a save is picked.",
-        active_default_save_file_name(),
+        "save-override: no usable autoload save (configured save missing/invalid, or no readable active default among {:?} exactly {} bytes; read-only is NOT a rejection reason). config_error={}. Arming the IN-GAME missing-save picker: the title boots to its native no-save menu and the 05_010 file browser presents itself (save_picker_menu.rs); world entry stays denied until a save is picked.",
+        active_default_save_file_names(),
         SAVE_OVERRIDE_EXPECTED_BYTES,
         runtime_config_error().unwrap_or_else(|| "none".to_owned())
     ));
@@ -1224,19 +1258,21 @@ fn ensure_direct_stage_for_steam_id(steam_id: u64) {
             root.display()
         ));
     }
-    let staged_is_co2 = source
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("co2"));
-    let staged_basename_lower = if staged_is_co2 {
+    // Name the staged copy for the ACTIVE MODE, never for the source's own extension. The source
+    // flavor was already vetted by the picker's asymmetric rule (Seamless takes `.sl2` and `.co2`,
+    // vanilla takes only `.sl2`); what matters here is that the staged container matches the one
+    // the runtime loads AND writes -- `direct_mode_native_active_save_file` and
+    // `own_load::drive` both resolve through `active_default_save_file_name()`.
+    //
+    // Naming it from the source instead is what softlocked the loading screen on 2026-08-02
+    // (bd `er-effects-rs-h6sh`): a picked `.sl2` staged as `ER0000.sl2` under a Seamless run that
+    // then spent 46s looking for `ER0000.co2`. Restamping is byte-safe -- both flavors are the same
+    // 28 MB BND4 container and the copy below rewrites the embedded Steam ID either way.
+    let staged_basename_native = active_default_save_file_name();
+    let staged_basename_lower = if staged_basename_native.eq_ignore_ascii_case("ER0000.co2") {
         "er0000.co2"
     } else {
         "er0000.sl2"
-    };
-    let staged_basename_native = if staged_is_co2 {
-        "ER0000.co2"
-    } else {
-        "ER0000.sl2"
     };
     let lower_dir = root.join("eldenring").join(steam_id.to_string());
     let native_dir = root.join("EldenRing").join(steam_id.to_string());
@@ -1612,6 +1648,51 @@ pub(super) unsafe extern "system" fn save_redirect_findfirstw_hook(
         }
     }
     unsafe { call(lp_file_name, find_data) }
+}
+
+#[cfg(test)]
+mod save_container_mode_lock_tests {
+    use super::*;
+
+    /// The mode lock is ASYMMETRIC and must stay that way (user spec 2026-08-02). A symmetric
+    /// one-container-per-mode rule is what softlocked the loading screen for 46s on 2026-08-02
+    /// (bd `er-effects-rs-h6sh`): a picked `.sl2` staged under a Seamless run that then refused
+    /// to load anything but `.co2`.
+    ///
+    /// Under test there is no live ERSC module, so `save_picker_seamless_mode_after_settle` is
+    /// false and this pins the VANILLA half -- the half where a wrong answer is dangerous, because
+    /// loading a Seamless `.co2` offline would advance co-op progress in the wrong container.
+    #[test]
+    fn vanilla_loads_only_sl2_and_never_a_seamless_co2() {
+        let names = active_default_save_file_names();
+        assert_eq!(
+            names,
+            &["ER0000.sl2"],
+            "vanilla must accept exactly one container and it must be .sl2"
+        );
+        assert!(
+            !names.iter().any(|n| n.eq_ignore_ascii_case("ER0000.co2")),
+            "a vanilla run must never load a Seamless .co2"
+        );
+    }
+
+    /// The write target is a SINGLE container, always drawn from the same mode decision as the
+    /// load candidates, and it must be the first (preferred) candidate. That equality is what
+    /// guarantees the staged copy, the loaded container and the native write path are one file --
+    /// the invariant whose violation caused the softlock.
+    #[test]
+    fn the_write_target_is_the_preferred_load_candidate() {
+        let names = active_default_save_file_names();
+        assert_eq!(
+            active_default_save_file_name(),
+            names[0],
+            "the staged/native write name must be the preferred load candidate"
+        );
+        assert!(
+            !names.is_empty(),
+            "every mode must name at least one loadable container"
+        );
+    }
 }
 
 #[cfg(test)]
