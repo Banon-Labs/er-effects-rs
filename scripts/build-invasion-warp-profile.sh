@@ -80,13 +80,27 @@ for n in "${natives[@]}"; do
 done
 cat <<'EOF'
 [invasion-warp-profile]
-[invasion-warp-profile] THIS FEATURE HAS NO UI. It installs zero detours: there are no map
-[invasion-warp-profile] markers and no menu entry. The only way to observe it is to read
-[invasion-warp-profile] these two files next to the game exe after loading into the world:
-[invasion-warp-profile]   er-invasion-warp-telemetry.json
-[invasion-warp-profile]   er-invasion-warp-dll.log
+[invasion-warp-profile] HOW TO TRY IT. Load into the world, then:
+[invasion-warp-profile]   F7  warp to the NEAREST invasion spawn point (skips the one you are
+[invasion-warp-profile]       standing on, so pressing it repeatedly keeps moving)
+[invasion-warp-profile]   F8  warp to the NEXT point in catalog order -- this one crosses the
+[invasion-warp-profile]       map, because the order is by block id, not by distance
+[invasion-warp-profile] Both only respond while the Elden Ring window has focus. Each warp is a
+[invasion-warp-profile] real area reload, so expect a loading screen exactly like a grace warp.
+[invasion-warp-profile]
+[invasion-warp-profile] There is still NO WORLD-MAP UI: no pins, no menu entry, no tab. The map
+[invasion-warp-profile] surface is the next slice; these hotkeys exist to prove the warp payload
+[invasion-warp-profile] underneath it.
+[invasion-warp-profile]
+[invasion-warp-profile] Evidence written next to the game exe:
+[invasion-warp-profile]   er-invasion-warp-dll.log        every warp, refusal and verdict
+[invasion-warp-profile]   er-invasion-warp-telemetry.json oracle 1, the catalog read
+[invasion-warp-profile]   er-invasion-warp-run.json       the per-warp oracle document
 [invasion-warp-profile] Oracle 1 passes on an EXACT cardinality match (365 blocks / 7073
 [invasion-warp-profile] targets / 2 areas with dlc02; 257 / 4482 / 1 without) -- not "> 0".
-[invasion-warp-profile] It compares counts and block-id extremes only, NOT bytes and NOT
-[invasion-warp-profile] coordinates, and proves nothing about the UI or the warp itself.
+[invasion-warp-profile] A WARP counts as proven only on "verdict":"arrived" -- the player read
+[invasion-warp-profile] back in the destination block within 5m of the requested point. Landing
+[invasion-warp-profile] in the right block at the wrong spot reports "mislanded" and is a
+[invasion-warp-profile] FAILURE (it means the explicit-spawn slot did not take), and a warp that
+[invasion-warp-profile] was merely issued never reports passed.
 EOF

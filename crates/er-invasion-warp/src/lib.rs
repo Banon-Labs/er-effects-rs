@@ -29,6 +29,10 @@
 //!   hung game thread is a far worse outcome than a missing oracle.
 //! * [`sampler`] -- the driver that keeps re-reading until the totals settle, so a catalog
 //!   caught mid-load is never reported as the final answer, and ORACLE 1 lands.
+//! * [`select`] -- which target to warp to: nearest-to-the-player and a stable cycle, ranked
+//!   over targets the engine's coordinate conversion already accepted. Pure and offline-testable.
+//! * [`warp`] -- the warp itself: the `TriggerAreaReload` sequence (block id + block-local xyz +
+//!   euler yaw + stage kick) run against a chosen invasion target instead of the current spot.
 //! * [`oracles`] -- the RAM/telemetry semaphore names the eventual runtime proof must go
 //!   green on. A rendered/behavioural feature is never proven by build or launch success.
 //! * [`host`] -- the dependency-injection seam back to whichever DLL hosts this crate.
@@ -54,3 +58,9 @@ pub use oracles::*;
 
 pub mod sampler;
 pub use sampler::*;
+
+pub mod select;
+pub use select::*;
+
+pub mod warp;
+pub use warp::*;

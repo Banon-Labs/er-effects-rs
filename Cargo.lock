@@ -2854,6 +2854,7 @@ name = "er-invasion-warp-dll"
 version = "0.1.0"
 dependencies = [
  "eldenring",
+ "er-game-base",
  "er-invasion-warp",
  "fromsoftware-shared",
 ]

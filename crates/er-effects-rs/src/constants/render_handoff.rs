@@ -58,7 +58,8 @@ pub(crate) const WORLDBLOCKRES_UPDATE_RE_RVA: usize = 0x614870;
 /// INITIAL load's RequestMoveMap param_2 does NOT read +0x14; it traces to GameMan+0xc30. So this is
 /// NOT the initial-load fix (only later transitions). Kept for completeness.
 #[allow(dead_code)]
-pub(crate) const SET_MOVEMAP_STEP_BLOCKID_RVA: usize = 0x67abd0; // dump 0x14067acc0
+pub(crate) const SET_MOVEMAP_STEP_BLOCKID_RVA: usize =
+    er_game_base::rva::SET_MOVE_MAP_STEP_BLOCK_ID_RVA;
 /// `GameMan::GetMoveMapStepBlockId` -- reads GameMan+0x14.
 #[allow(dead_code)]
 pub(crate) const GET_MOVEMAP_STEP_BLOCKID_RVA: usize = 0x679340; // dump 0x140679430

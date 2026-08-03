@@ -24,6 +24,8 @@
 
 #![allow(non_snake_case)]
 
+pub mod drive;
+
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
@@ -34,6 +36,9 @@ const LOG_FILE_NAME: &str = "er-invasion-warp-dll.log";
 /// Rewritten (not appended) on every publish, so the file always holds the CURRENT oracle
 /// values rather than a history a reader has to scroll to the end of.
 const TELEMETRY_FILE_NAME: &str = "er-invasion-warp-telemetry.json";
+/// The WARP document, kept separate from the catalog one on purpose: both are rewritten in
+/// place, so sharing a filename would let whichever wrote last erase the other's evidence.
+const WARP_TELEMETRY_FILE_NAME: &str = "er-invasion-warp-run.json";
 
 #[cfg(windows)]
 static START: std::sync::Once = std::sync::Once::new();
@@ -65,6 +70,13 @@ fn standalone_log(args: std::fmt::Arguments<'_>) {
 /// "log lines only", never to a panic on the game thread.
 fn standalone_publish_oracle_json(body: &str) {
     let path = log_dir().join(TELEMETRY_FILE_NAME);
+    let _ = std::fs::write(path, body.as_bytes());
+}
+
+/// Warp telemetry sink: the per-warp oracle document, in its own file so it never overwrites
+/// the catalog's.
+fn standalone_publish_warp_json(body: &str) {
+    let path = log_dir().join(WARP_TELEMETRY_FILE_NAME);
     let _ = std::fs::write(path, body.as_bytes());
 }
 
@@ -113,12 +125,22 @@ fn spawn_catalog_task() {
             standalone_log(format_args!(
                 "CSTaskImp resolved; registering the invasion-warp catalog sampler on FrameBegin"
             ));
+            // Owned by the task closure: one driver instance for the process lifetime. The task
+            // is the only thing that touches it, and the task is single-threaded, so no lock is
+            // needed and none is taken on the game thread.
+            let mut warp_drive = crate::drive::InvasionWarpDrive::new();
             let handle = task.run_recurring(
-                |_data: &FD4TaskData| {
+                move |_data: &FD4TaskData| {
                     // SAFETY: this closure runs on the game task thread, after CSTaskImp
                     // resolved -- exactly the context the tick's contract requires. The read
                     // itself is fault-closed (er_invasion_warp::live_read).
                     unsafe { er_invasion_warp::sampler::invasion_warp_catalog_tick() };
+                    // SAFETY: same game-task context. Reads hotkeys, and on a press runs the
+                    // engine's own warp sequence; every native call is byte-checked and every
+                    // pointer read is fault-closed.
+                    unsafe {
+                        warp_drive.tick(standalone_log, standalone_publish_warp_json);
+                    }
                 },
                 CSTaskGroupIndex::FrameBegin,
             );
@@ -146,7 +168,7 @@ pub unsafe extern "system" fn DllMain(
                 &log_dir(),
                 format_args!(
                     "loaded module_base=0x{module_base:x}; standalone invasion-warp shell \
-                     (host_installed={installed}; oracle 1 catalog sampler only, no detours)"
+                     (host_installed={installed}; catalog sampler + F7/F8 warp driver, no detours)"
                 ),
             );
             spawn_catalog_task();
@@ -179,9 +201,14 @@ mod tests {
     #[test]
     fn the_two_artifact_names_are_distinct_and_namespaced_to_this_dll() {
         // A shared name would let a combined profile's DLLs overwrite each other's evidence.
-        assert_ne!(LOG_FILE_NAME, TELEMETRY_FILE_NAME);
-        for name in [LOG_FILE_NAME, TELEMETRY_FILE_NAME] {
+        let names = [LOG_FILE_NAME, TELEMETRY_FILE_NAME, WARP_TELEMETRY_FILE_NAME];
+        for (index, name) in names.iter().enumerate() {
             assert!(name.starts_with("er-invasion-warp"), "{name}");
+            for other in &names[index + 1..] {
+                // A shared name would let the catalog document and the warp document -- both
+                // rewritten in place -- erase each other's evidence.
+                assert_ne!(name, other);
+            }
         }
     }
 

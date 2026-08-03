@@ -187,10 +187,47 @@ world.z = point.z + origin.z
 ```
 
 The point's fourth float takes no part in that sum -- it is carried alongside as the facing.
-`ConvertBlockCoordsToPhysicsCoords` (`0x14061e120`) is the equivalent conversion used on the
-MSB path. Reimplemented as `InvasionWarpTarget::world_position`; the engine function is not
-called, because in `_GetCurBreakInPointVecFromAutoIntrudePoint` it sits inside a
-`CSNetMan->quickmatchManager` walk.
+
+`InvasionWarpTarget::world_position` reimplements the addition above. It takes the block origin
+as a PARAMETER, and nothing in the crate can supply one: the origin comes from
+`WorldGridAreaInfo::GetWorldAreaInfoCoordinates`, which needs a `WorldGridAreaInfo` the crate
+never resolves. So as written the catalog cannot produce a world coordinate, and the warp had
+no way to aim.
+
+**CORRECTED (2026-08-03): call `ConvertBlockCoordsToPhysicsCoords` (`0x14061e120`).** It was
+previously dismissed here as merely "the equivalent conversion used on the MSB path", not
+called because the *other* conversion sits inside a `CSNetMan->quickmatchManager` walk. That
+reasoning conflated two different functions. `ConvertBlockCoordsToPhysicsCoords` is an
+independent leaf utility with **no session state anywhere in it**; the quickmatch walk is in
+`_GetCurBreakInPointVecFromAutoIntrudePoint`, a different function that merely happens to call
+the same math. Byte-checked: `0x14061e120 MATCH 24 instructions identical (shift 0)`.
+
+```c
+bool ConvertBlockCoordsToPhysicsCoords(FloatVector3 *outPosition,
+                                       FloatVector3 *mapLocalCoordinates,
+                                       BlockId      *mapId);
+```
+
+Its whole body reads `GLOBAL_FieldArea->worldInfoOwner2` and branches on
+`CS::BlockId::IsOverworldBlockId` (`0x140660fe0`, byte-checked `MATCH ... (shift 0)`):
+
+* overworld -> `GetWorldAreaInfoByAreaId` + `GetWorldAreaInfoCoordinates`, then adds the local
+  xyz -- i.e. exactly the sum above;
+* interior/legacy -> `WorldBlockInfo::GetBlockCenterInPhysicsSpace` + the same add, gated on
+  `WorldBlockInfo+0xb9`.
+
+Three reasons this beats the reimplementation, and it is now the chosen path:
+
+1. it needs only `{block-local xyz, BlockId}` -- precisely what an `InvasionWarpTarget` already
+   holds -- so no origin has to be plumbed in;
+2. it handles the interior/legacy branch the reimplementation does not (harmless for the
+   shipped `.aip` data, which is overworld-only, but the same call then serves any later
+   MSB-sourced target);
+3. it **returns `false`** when the block's world info is not resident, which is a free
+   fail-closed check: a target we cannot convert is a target we must not warp to.
+
+`InvasionWarpTarget::world_position` stays as the offline/testable form and is what the unit
+tests pin; the live path calls the engine.
 
 ---
 
@@ -320,22 +357,72 @@ index through the `dialog+0xab8` / `dialog+0xa90` pair (`0x1409ba970`'s inputs),
 row's `+0x08` source row, and if its `+0x238` falls in the private invasion band, run the
 local warp and swallow the native grace-warp; otherwise tail-call the original.
 
-### 3c. The local warp primitive
+### 3c. The local warp primitive -- RESOLVED (2026-08-03), and it is neither candidate
 
-Two candidates, neither yet chosen:
+Both candidates below were reversed and both are wrong for this feature. The answer is a
+**third** function whose input shape is, field for field, the `.aip` record.
 
-* `WarpPlayer` (`0x1405f7ad0`) -- `GameMan::SetMoveMapStepBlockId` + `SetInitialAreaEntityId`
-  + `WarpNextStageKick_`. This is the Lua-exposed warp and is **entity-id anchored**: it
-  moves you to a map's initial-spawn entity, not to arbitrary coordinates. Useful for getting
-  into a block, not for landing on a point.
-* The player's own set-position-and-orientation virtual. `RespawnPlayer` (`0x140657ce0`)
-  calls `chrIns->vtable[+0x5a0](pos: FloatVector4*, orientation: FloatVector4*, 1)` after
-  computing the coordinates. That is the arbitrary-coordinate primitive, and it carries no
-  session state. **The vtable slot has not been byte-checked or independently identified yet;
-  it must be before anything calls it.**
+Rejected:
 
-Because m60/m61 are one continuously streamed overworld, a single coordinate set may be
-enough and no block transition may be needed. That is a runtime question.
+* `WarpPlayer` (`0x1405f7ad0`) is **entity-id anchored** -- it moves you to a map's
+  initial-spawn entity, not to a coordinate. Confirmed unusable for arbitrary points.
+* The `ChrIns` vtable slot `+0x5a0` **is** now identified and byte-checked: the `PlayerIns`
+  vtable is `0x142a7cb40` (proven by the ctor/dtor data refs), and reading the shipped image at
+  `*(u64*)0x142a7d0e0` gives `0x140657b60` = `CS::PlayerIns::Respawn`, signature
+  `(PlayerIns*, FloatVector4* pos, FloatVector4* euler, bool suppressInitAnim)` -- the literal
+  `1` `RespawnPlayer` passes suppresses `Play_W_Init`. But it **heals to full, reinitialises
+  SpEffects, and issues no map load or streaming request whatsoever**, so a long-distance
+  teleport drops the player into unstreamed world. Retained only as a possible lean same-block
+  option. **Alignment trap if it is ever used:** `CSChrPhysicsModule::ForceSetPosition`
+  (`0x14045f910`) loads its argument with `MOVAPS`, so the position pointer must be 16-byte
+  aligned or it `#GP`s.
+
+**Chosen: replicate `TriggerAreaReload` (`0x1405f2890`)**, the EMEVD `Event2003` warp -- an
+arbitrary-coordinate warp **with** the load. It cannot be called directly, because it always
+reloads the *current* map; what the crate does is run its sequence with our destination and our
+coordinates substituted for the "where I am standing now" values it derives:
+
+| # | call | VA | note |
+|---|---|---|---|
+| 1 | `CSSessionManagerImp::SetupMapReentry(mgr, true)` | `0x140cafc30` | only when `GLOBAL_CSSessionManager`(`0x143d7a4d0`)`->protocolState`(`+0x10`)` == InGame`(`6`) |
+| 2 | `GameMan::SetDisableMapEnterAnim(true)` | `0x14067a850` | |
+| 3 | `GameMan::SetMoveMapStepBlockId(out, in)` | `0x14067abd0` | `param_1` is the **OUT** slot |
+| 4 | `FUN_14067ab20(blockLocalPos, euler)` | `0x14067ab20` | `GameMan+0xc90` pos, `+0xca0` euler, `+0xcb0 = 1` |
+| 5 | `WarpNextStageKick_()` | `0x1405f7b70` | |
+
+Read-back before the kick: `FUN_14067a1c0` (`0x67a1c0`) for the `+0xcb0` flag and
+`FUN_1406792a0` (`0x6792a0`) for the position/euler. **If the flag is not 1, refuse the warp** --
+`MoveMapStep` would ignore our coordinates and drop the player at the block's *default* spawn,
+and a silently wrong warp is worse than a refused one.
+
+Three consequences that are easy to get wrong:
+
+1. **The coordinates go in RAW.** `MoveMapStep`'s spawn resolver `FUN_140afcf60` reads the
+   explicit-spawn slot and runs `ConvertBlockCoordsToPhysicsCoords` on it *itself*. Converting
+   first double-applies the block origin.
+2. **The destination can be rewritten under us.** `SetMoveMapStepBlockId` remaps the id through
+   `CalcGetReplaceMapIdByDisaster` when `GameMan+0xb28 == false` and `areaId - 0x32 < 0x27`,
+   i.e. areas 50..=88 -- which covers **both** shipped `.aip` areas (60 and 61). So
+   `requested != effective` is legitimate; the OUT slot is read back and reported, never
+   asserted equal.
+3. **The orientation is euler radians, not a quaternion.** `ChrCtrl::SetOrientation` feeds it to
+   `EulerToQuat` (`0x140461a00`), which reads `.x`/`.y`/`.z` as half-angle rotations about
+   `DL_X/Y/Z`. Yaw is the **`.y`** slot, and the conversion is `euler = {0, aip_yaw_raw, 0, 0}` --
+   **no negation, no degrees, no wrapping.** Confirmed by the inverse
+   (`EulerFromTransformationMatrix`, `0x14039b0b0`, derives `.y` from `atan2` in the XZ plane)
+   and by `SosSignMan::SetMultiplayJoinData` (`0x1406fb577`) writing `{0, spawnAngle, 0, 0}`.
+   Feeding `InvasionWarpTarget::heading_radians` here -- the display-wrapped value -- would
+   rotate half the catalog by a full turn; a unit test pins that they differ.
+
+**On the session boundary.** Step 1 is the one session-manager call, and it is *vanilla*:
+`TriggerAreaReload` performs it on every EMEVD warp in the game. Omitting a step the engine
+always performs is how a reload softlocks, so it is replicated -- and
+`oracle_invasion_warp_session_touches` **counts** it (expected 0 or 1) rather than asserting a
+zero that would be false. No `CSNetMan`, `QuickmatchManager` or `CSBreakInPointManager` code is
+entered.
+
+Implemented in `crates/er-invasion-warp/src/warp.rs`. **Not runtime-proven**: the run has to
+report `"verdict":"arrived"`.
 
 ---
 
@@ -361,26 +448,160 @@ and position read back after the warp. Plus two that must stay at zero:
 | oracle | state |
 |---|---|
 | `oracle_invasion_warp_catalog_targets` / `_blocks` / `_areas` | **LIVE.** Written by `crate::sampler` from the fail-closed `CSAutoInvadePoint` read; emitted to `er-invasion-warp-telemetry.json` + the DLL log with both expected fingerprints on the same line. |
-| `_list_rows`, `_selected_id`, `_requested_*`, `_final_*` | names only -- they need the world-map interception, which is still section 2's design |
-| `_session_touches`, `_msgbox_builds` | **UNMEASURED, and deliberately have no counter.** The catalog slice has no session call site to count, and attributing a `MessageBoxDialog` build needs a builder detour this DLL does not install. They are emitted as JSON `null` with `negative_oracles_measured: false` so nobody can read them as a measured zero. |
+| `_selected_id`, `_requested_block/_position/_yaw`, `_final_block/_position` | **LIVE as of the hotkey slice.** Written per warp by `er-invasion-warp-dll/src/drive.rs` into `er-invasion-warp-run.json`. `_final_*` are the **settled** read-back, emitted as JSON `null` while pending so a not-yet-measured value can never be misread as "settled at the origin". |
+| `_list_rows` | name only -- needs the world-map surface, which is not built |
+| `_session_touches` | **MEASURED as of the hotkey slice**, and expected to be **0 or 1**, not 0. See section 3c: the reload sequence's `SetupMapReentry` is vanilla, so it is counted rather than asserted away. |
+| `_msgbox_builds` | **UNMEASURED, and deliberately has no counter.** Attributing a `MessageBoxDialog` build needs a builder detour this DLL does not install. |
 
-A run of the catalog slice therefore proves the table was read live and matches the shipped
-bytes exactly. It does NOT prove anything about the UI, the warp, or the negative oracles.
+A run of the catalog slice proves the table was read live and matches the shipped bytes
+exactly -- nothing more. **A warp is proven only by `"verdict":"arrived"`**: the player read
+back in the destination block within `INVASION_WARP_POSITION_TOLERANCE_METRES` of the requested
+point. The two verdicts that exist to stop a false pass are `"mislanded"` -- right block, wrong
+spot, which is the signature of the explicit-spawn slot not taking and the engine falling back
+to the block default -- and `"unproven_timeout"`. A warp that was merely *issued* never reports
+`passed`.
+
+### 3d. The hotkey slice (built 2026-08-03)
+
+The world-map surface is a shell around a warp call, so the warp is built and proven first.
+`F7` warps to the nearest invasion point (excluding the one underfoot, so repeated presses keep
+moving); `F8` steps through the catalog's stable order, which crosses the map because the order
+is by block id rather than by distance. Both are ignored unless the Elden Ring window has focus.
+Selection lives in `crates/er-invasion-warp/src/select.rs` and is pure, so the ranking rules are
+`cargo test`-provable with no game; only the coordinate conversion and the warp itself are
+native.
+
+Targets are ranked **after** the engine's own `ConvertBlockCoordsToPhysicsCoords` has accepted
+them, which makes its `false` return a free fail-closed filter: a point that cannot be placed
+never becomes a candidate.
 
 ---
 
-## 5. Open RE tasks (all static; none needs the game running)
+## 5. Open RE tasks -- ALL FIVE RESOLVED (2026-08-03)
 
-1. The remaining `0x350` source-row fields -- specifically the map/pin position and the name
-   id. Without them a cloned row cannot be re-pointed at an invasion coordinate.
-2. Identify which of the six `0x140744540` registrations is confirm, by resolving each lambda
-   vtable to its `operator()` body.
-3. Identify the object that owns the source-row vector (the ctor reads it as
-   `*(longlong*)&param_1[1].base.referenceCount + 0x2d8`).
-4. Identify and byte-check the `ChrIns` vtable slot at `+0x5a0` used by `RespawnPlayer`.
-5. `BonfireWarpSubCategoryParam` / `BonfireWarpCategoryParam` row layouts, enough to author a
-   private "Invasion Points" category (`FUN_140d26220` reads `+0x08` as a u16 key,
-   `FUN_140d26390` requires `+0x04 >= 0`).
+All five were static, and all five are answered. Every address below was byte-checked at shift
+0, and each was then handed to an independent agent told to **refute** it; four claims came back
+refuted and are corrected here rather than carried forward.
+
+### 5.1 The `0x350` source row (was task 1)
+
+It is **`CS::WorldMapWarpPinData`** -- RTTI `.?AVWorldMapWarpPinData@CS@@`, vtable
+`0x142ad8228`. The `0x350` stride is confirmed three independent ways: `operator_delete(this,
+0x350)` in the deleting dtor, `begin + i*0x350` in the list's `GetItemAt`, and
+`(end-begin)/0x350` in its `Count`.
+
+| offset | field |
+|---|---|
+| `+0x10` | pin position, `WorldMapCoordinates {f32 x; f32 z}`, in **MAP space** -- not block-local and not world-space. Derived by `WorldMapAreaConverter::ConvertMsbCoordsToMapCoords` (`0x140876140`) from a BlockId + an MSB `FloatVector3`; exposed as the vtable `+0x20` accessor, which just returns `this+0x10`. |
+| `+0x18` | a `MenuString` -- **owns heap** |
+| `+0x68` | `DLFixedVector<MenuString,8>` of already-resolved wide label strings -- **owns heap** |
+| `+0x230` | label count |
+| `+0x238` | bonfire entity id (the `BonfireWarpParamLookupResult`) |
+| `+0x240` | `BonfireWarpParam*`; `+0x14` is the subcategory row id |
+
+There is **no BlockId field**: the map is re-derived from the param row's bytes at
+`+0x20/+0x21/+0x22` by `FUN_140d25aa0`. The labels are not ids on the row -- they are resolved
+strings filled from PlaceName/NPCName FMG ids that live in the `BonfireWarpParam` row
+(`textId` at `param+0x30+12*i`, kind byte at `param+0x90+i`).
+
+**This kills the "raw memcpy clone" in section 3a.** The row owns two heap-string regions, the
+destructor frees both, and the vector's destructor (`FUN_140888c10`) runs the virtual dtor over
+every element -- so an injected row *will* be destructed and a `memcpy`'d one will double-free.
+The engine ships the right primitive: the **copy-constructor `FUN_140885ed0`** (byte-checked
+`MATCH`, shift 0). *Refuted detail:* that function carries **no symbol** in the 1.16.2 dump; the
+name `CS::WorldMapWarpPinData::WorldMapWarpPinData` was invented. The address is good, the
+symbol is not.
+
+### 5.2 The confirm command (was task 2)
+
+`FUN_140744540(dialog, cmdDescriptor, fnA, fnB)` copy-constructs a `0x140`-byte command record
+and stores `param_3` at `record+0xC0` and `param_4` at `record+0x100`. **The plan's warning that
+the `(CanCmd, Action)` order flips between registrations is wrong**: in all six registrations
+`param_3` is the `std::function<void()>` ACTION and `param_4` the `std::function<bool()>`
+CanCmd. Travel's ACTION vtable is `0x142B32040`; its `_Do_call` slot (`0x142B32050`) holds the
+thunk `0x1409E5390` (`MOV RCX,[RCX+8]; JMP 0x1409E5EB0`), whose body is **`0x1409E5EB0`**.
+
+*Three refutations that matter before anyone writes a detour:*
+
+1. The `lambda_039bc7fd...` symbol is **fabricated** -- the dump has 21 `lambda_` symbols and
+   this is not one of them. The real name is `FUN_1409e5eb0`, no symbol.
+2. **`RCX` at `0x1409E5EB0` is not a dialog.** Because of the thunk's `MOV RCX,[RCX+8]` it is
+   `*(closure+8)` -- the captured owner *menu* object. Its fields are `+0x10` MenuJob queue,
+   `+0x1360` entry list, `+0x1388` selected index, `+0x1b50` a `BonfireWarpParamLookupResult`. A
+   detour written expecting a dialog dereferences the wrong struct and crashes.
+3. It is **not the only** confirm body: sibling `FUN_1409e6050` performs the same warp from the
+   owner's own stored lookup result with no list/index path. Hooking `0x1409E5EB0` alone
+   intercepts one of **five** routes into job construction.
+
+The single real chokepoint "before the MenuJob exists" is the warp-job assembler
+**`0x1407A04F0`** (callers `FUN_1409bc0c0`, `FUN_1409bc260`, `FUN_1409d19e0`, `FUN_1409e5eb0`,
+`FUN_1409e6050`). **Its parameter contract is still unreversed** -- callers pass
+`(&outJobPtr, owner+0x50, bonfireEntityIdPtr, <result of FUN_1408896e0>)` -- and must be before
+it is hooked. Downstream the job body reaches `CSLuaEventManImp::CallLua_Warp` (`0x14058E450`).
+
+### 5.3 Who owns the source list (was task 3)
+
+**`CS::WorldMapViewModel`** (`0x450` bytes, vtable `0x142ad82e0`); the list at `+0x2d8` is
+`CS::WorldMapPinDataList<CS::WorldMapWarpPinData>`, laid out
+`{vfptr @+0x2d8, allocator @+0x2e0, begin @+0x2e8, end @+0x2f0, capacity @+0x2f8}`. Proof is
+direct: the ViewModel ctor (`0x1408855b0`) calls `FUN_140885460(&field_0x2d8)`, which stamps the
+`WorldMapPinDataList` vtable (`0x142ad82a8`).
+
+**The list is NOT rebuilt when the map opens.** The ViewModel is lazily allocated exactly once
+(`FUN_1407ed840`: `if (worldMapViewModel == 0) { HeapAlloc(0x450); ctor }`, reached from
+`MoveMapStep`), and the only code that ever appends to the vector is the ctor's loop over every
+`BonfireWarpParam` row. The append is literally `addq $0x350, 0x10(%rbx)`; the grow helper is
+`FUN_140888aa0`.
+
+Best injection seam: an **epilogue hook on the ViewModel ctor `0x1408855b0`**, appending through
+the native copy-ctor `FUN_140885ed0` rather than fabricating rows.
+
+### 5.4 The `ChrIns` vtable slot `+0x5a0` (was task 4)
+
+Resolved in section 3c: `CS::PlayerIns::Respawn` @ `0x140657b60`, and rejected as the warp
+primitive for the reasons given there.
+
+### 5.5 The warp params (was task 5)
+
+The plan's "BonfireWarpCategoryParam" is really **`BonfireWarpTabParam`**. Param table indices
+via `SoloParamRepositoryImp::GetParamResCap`: `BonfireWarpParam` `0x2B`,
+`BonfireWarpTabParam` `0x2C` (`FUN_140d26390`), `BonfireWarpSubCategoryParam` `0x2D`
+(`FUN_140d26220`).
+
+Both lookups are identical binary searches over a sorted `{u32 rowId, i32 rowIndex}` table
+appended at `paramFile + align16(fileSize)`, returning a 16-byte
+`BonfireWarpParamLookupResult {int id; int pad; row*}`. **A miss simply yields a NULL row
+pointer and every caller null-checks it** -- so a fabricated row id is never validated, never
+rejected loudly, and never crashes; it is silently invisible.
+
+Only three fields are read from each row type:
+
+| row | offset | meaning |
+|---|---|---|
+| SubCategory | `+0x04` | i32 `GR_MenuText` id, the group-header caption; must be `>= 0` for the header to be emitted |
+| SubCategory | `+0x08` | u16 tab id |
+| SubCategory | `+0x0A` | u16 sort order |
+| Tab | `+0x04` | i32 `GR_MenuText` id, the tab caption; **`>= 0` is required by the row filter** or every row under that tab disappears |
+| Tab | `+0x08` | i32 tab sort order |
+| Tab | `+0x0C` | u16 icon id |
+
+Tabs are **data-derived, not hard-coded**: `FUN_1408803b0` walks the `0x350`-stride source list,
+and a tab exists only if at least one row passes `FUN_14088be50` *and* its subcategory's `+0x08`
+resolves to a real tab row; the set is then deduped by tab id, sorted by the tab row's `+0x08`,
+and materialised as `0xA8`-stride `CS::WorldMapTabData`. Mutating the live param table would
+mean growing the file allocation, rewriting the u16 `rowCount` at `P+0x0a`, extending the
+format-dependent descriptor array and rebuilding the sorted index -- so the cheap, safe route is
+a lookup detour returning a DLL-owned static row instead.
+
+## 5b. What is still open
+
+1. The parameter contract of the warp-job assembler `0x1407A04F0` (5.2) -- required before any
+   confirm interception.
+2. The concrete class/RTTI of the owner object in `RCX` at `0x1409E5EB0` (5.2); only its field
+   usage is known.
+3. Whether an all-synthetic tab is a valid state for the list view, and whether a synthetic tab
+   renders at all -- the Scaleform movie may only have art slots for the shipped tab count. That
+   one needs a rendered-pixel oracle, not a hook counter.
 
 ## 6. RESOLVED (was "open non-RE risk"): `pointCount` is 32 bits and its upper dword is junk
 
