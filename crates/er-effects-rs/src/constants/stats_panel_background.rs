@@ -7,31 +7,10 @@
 // resolves our texture). The dummy-face shapes ARE the visible per-row boxes (05_010 RE 2026-07-04), so
 // redirecting their texture paints our background on-screen -- no symbol rewrite needed. A texture
 // upload is cheap (no per-frame render), so all 10 slots get a background with NO GX-queue overflow.
-pub(crate) const STATS_PANEL_SLOT_COUNT: usize = 10;
-/// Unique in-RAM SYSTEX keys, one per slot 00..09. Each is the TPF003 entry name (== the
-/// GLOBAL_TexRepository GPU key the Scaleform bridge derives) AND the rewritten bind TARGET. Kept to 18
-/// ASCII chars -- comfortably under the native `SYSTEX_Menu_Profile0N` target's 21-char DLString
-/// capacity so the in-place `rewrite_native_dlstring_ascii` never overflows -- and deliberately distinct
-/// from any native key so a first-resolve Scaleform-repo miss bridges to our GPU texture.
-pub(crate) const STATS_PANEL_SYSTEX_KEYS: [&str; STATS_PANEL_SLOT_COUNT] = [
-    "SYSTEX_ErTpf_Prf00",
-    "SYSTEX_ErTpf_Prf01",
-    "SYSTEX_ErTpf_Prf02",
-    "SYSTEX_ErTpf_Prf03",
-    "SYSTEX_ErTpf_Prf04",
-    "SYSTEX_ErTpf_Prf05",
-    "SYSTEX_ErTpf_Prf06",
-    "SYSTEX_ErTpf_Prf07",
-    "SYSTEX_ErTpf_Prf08",
-    "SYSTEX_ErTpf_Prf09",
-];
-/// Neutral-background texture side length (square, RGBA8, uncompressed legacy-RGBA8 DDS). The native
-/// face box is 128x128 on-screen; 256 gives a little headroom for baked stats text later without being
-/// a large upload.
-pub(crate) const STATS_PANEL_TEX_DIM: u32 = 256;
-/// Neutral dark panel color (opaque). Distinct from pure black so a registered-but-unredirected slot is
-/// visually diagnosable, and dark enough that light native text reads on top later.
-pub(crate) const STATS_PANEL_BG_RGBA: [u8; 4] = [30, 28, 26, 255];
+pub(crate) use er_loading_portrait::STATS_PANEL_BG_RGBA;
+pub(crate) use er_loading_portrait::STATS_PANEL_SLOT_COUNT;
+pub(crate) use er_loading_portrait::STATS_PANEL_SYSTEX_KEYS;
+pub(crate) use er_loading_portrait::STATS_PANEL_TEX_DIM;
 /// Last-error codes for `STATS_PANEL_LAST_ERROR` (a memory-read oracle).
 pub(crate) const STATS_PANEL_ERR_NONE: usize = 0;
 pub(crate) const STATS_PANEL_ERR_TPF_REPO_NULL: usize = 1;
