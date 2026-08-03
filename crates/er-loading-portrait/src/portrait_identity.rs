@@ -126,6 +126,44 @@ pub fn portrait_target_slot_from_sources(
         .or(valid(save_slot))
 }
 
+/// STABILITY over freshness, for the duration of ONE loading-screen window.
+///
+/// [`portrait_target_slot_from_sources`] is a precedence ordering evaluated fresh on every kick,
+/// so its answer can CHANGE while a single loading screen is on screen — and when it does, the
+/// face the user is looking at is replaced by a different character's mid-load. Measured
+/// 2026-08-02 21:05: the user picked slot 0, the pipeline built and published slot 0 at
+/// +17775ms, then the picker term expired (it is spent on `IN_WORLD_REACHED`, i.e. *a* world
+/// existing, not *that slot's* world), precedence fell through `request_slot = -1` to
+/// `save_slot = 9`, and kick #2 retargeted the SAME window to slot 9 at +20998ms. The window did
+/// not close until +29989ms, so the user watched the portrait change out from under the character
+/// they clicked.
+///
+/// This is the fix for that, and it is deliberately the smallest one that can work: once a window
+/// has committed to a target, that target is what the window keeps. A newly-resolved slot is
+/// adopted only when the window has no target yet.
+///
+/// `latched` is the target this window already committed to (`None` before the first resolution).
+/// Returns the slot the window should use, plus whether it is newly latching — callers reset
+/// `latched` to `None` on window close, which is what allows the NEXT load to pick a new target.
+///
+/// It intentionally does NOT try to decide which slot is *correct*: that question belongs to the
+/// load path, and a portrait that stays wrong for one window is strictly better than one that
+/// changes identity while a user is looking at it.
+#[must_use]
+pub fn portrait_window_target_slot(
+    latched: Option<i32>,
+    resolved: Option<i32>,
+) -> (Option<i32>, bool) {
+    match (latched, resolved) {
+        // Window already committed: keep it, whatever the sources say now.
+        (Some(held), _) => (Some(held), false),
+        // First resolution of this window: adopt it.
+        (None, Some(fresh)) => (Some(fresh), true),
+        // Nothing named a slot yet; stay uncommitted rather than inventing one.
+        (None, None) => (None, false),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,5 +318,58 @@ mod tests {
             portrait_target_slot_from_sources(Some(-1), Some(-1), Some(-1), 10),
             None
         );
+    }
+
+    /// THE 2026-08-02 21:05 REGRESSION, replayed with that run's literal values. The user picked
+    /// slot 0; the pipeline latched and published slot 0; then the picker term expired and the
+    /// sources started naming slot 9 (`save_slot` = ac0 = 9, `request_slot` = b78 = -1). Before
+    /// the latch, kick #2 retargeted the live window to 9 and the face changed on screen.
+    #[test]
+    fn a_window_that_committed_to_the_picked_slot_never_retargets_mid_load() {
+        // Kick #1: picker still names slot 0.
+        let resolved = portrait_target_slot_from_sources(Some(0), Some(-1), Some(0), 10);
+        assert_eq!(resolved, Some(0));
+        let (target, latching) = portrait_window_target_slot(None, resolved);
+        assert_eq!(target, Some(0));
+        assert!(latching, "the first resolution of a window must latch");
+
+        // Kick #2, same window: picker spent, b78 disarmed, ac0 now 9. The SOURCES flip...
+        let resolved_later = portrait_target_slot_from_sources(None, Some(-1), Some(9), 10);
+        assert_eq!(
+            resolved_later,
+            Some(9),
+            "precedence really does name slot 9 once the picker term is spent -- this is the input that caused the bug"
+        );
+        // ...but the WINDOW does not.
+        let (target_later, latching_later) = portrait_window_target_slot(target, resolved_later);
+        assert_eq!(
+            target_later,
+            Some(0),
+            "the window must keep the character the user clicked"
+        );
+        assert!(!latching_later);
+    }
+
+    /// The latch must not become a permanent pin: window close clears it, and the NEXT load is
+    /// free to target a different character. Without this a System->Quit->Load switch would show
+    /// the boot character's face forever -- the same defect in the opposite direction.
+    #[test]
+    fn a_new_window_is_free_to_target_a_different_character() {
+        let (first, _) = portrait_window_target_slot(None, Some(0));
+        assert_eq!(first, Some(0));
+        // Window closes -> caller resets the latch to None.
+        let (second, latching) = portrait_window_target_slot(None, Some(9));
+        assert_eq!(second, Some(9));
+        assert!(latching);
+    }
+
+    /// A window that has not resolved any slot yet must stay uncommitted rather than latch a
+    /// placeholder -- latching `0` here would reintroduce the `unwrap_or(0)` lie the rest of this
+    /// module exists to remove.
+    #[test]
+    fn an_unresolved_window_latches_nothing() {
+        assert_eq!(portrait_window_target_slot(None, None), (None, false));
+        // ...and a later real resolution still latches normally.
+        assert_eq!(portrait_window_target_slot(None, Some(3)), (Some(3), true));
     }
 }

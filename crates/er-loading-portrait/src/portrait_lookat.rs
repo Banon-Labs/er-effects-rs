@@ -203,6 +203,8 @@ pub use er_telemetry::counters::PORTRAIT_LAST_CONFIRMED_SLOT;
 /// streak = consecutive ticks it has held.
 pub use er_telemetry::counters::PORTRAIT_SLOT_FLIP_CANDIDATE;
 pub use er_telemetry::counters::PORTRAIT_SLOT_FLIP_STREAK;
+pub use er_telemetry::counters::PORTRAIT_WINDOW_RETARGETS_SUPPRESSED;
+pub use er_telemetry::counters::PORTRAIT_WINDOW_TARGET_SLOT;
 pub const PORTRAIT_SLOT_FLIP_ACCEPT_TICKS: usize = 60;
 /// DEPTH-KEY branch attribution (the black-background-on-reload bug): every key call ends in
 /// exactly one of applied-fresh / applied-cached / NO-MASK (fail-open, the black frames); the
