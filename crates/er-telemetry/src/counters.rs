@@ -255,6 +255,22 @@ pub static LS_PORTRAIT_REJECTED_PUBLISHES: AtomicUsize = AtomicUsize::new(0);
 /// UTF-16 units (0 = unknown). Written next to the bridge on every publish; cleared with the bridge.
 pub static LS_PORTRAIT_PUBLISHED_SLOT: AtomicUsize = AtomicUsize::new(0);
 pub static LS_PORTRAIT_PUBLISHED_NAME_HASH: AtomicUsize = AtomicUsize::new(0);
+/// PUBLISHED-vs-LOADED semaphore (bd er-effects-rs-qoqc defect 6 / er-effects-rs-91zb). The
+/// pre-existing identity semaphore compared our TARGET slot against the currently-resident
+/// character, which is silent about the failure that actually reached the screen: on 2026-08-02
+/// slot 9's face was published and displayed for 29.7s while slot 5 loaded, and every oracle said
+/// ok. These compare what was PUBLISHED against the slot whose load actually COMPLETED, asserted
+/// at every loading-window close (`PORTRAIT-LOADWIN VERDICT`). Both must stay 0.
+pub static PORTRAIT_PUBLISHED_SLOT_MISMATCHES: AtomicUsize = AtomicUsize::new(0);
+pub static PORTRAIT_PUBLISHED_NAME_HASH_MISMATCHES: AtomicUsize = AtomicUsize::new(0);
+/// Number of loading windows whose published-vs-loaded identity was actually CHECKED. A run with
+/// 0 mismatches and 0 checks proved nothing -- read this before believing the two counters above.
+pub static PORTRAIT_PUBLISHED_IDENTITY_CHECKS: AtomicUsize = AtomicUsize::new(0);
+/// The slot whose fresh deserialize COMPLETED, as slot+1 (0 = none this process yet). Written at
+/// each `SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE = 1` site, all of which know their slot.
+/// This is the "which character actually loaded" ground truth the publish check compares against;
+/// `GameMan.save_slot` is not (both the game and our own code write it for other reasons).
+pub static SYSTEM_QUIT_FRESH_DESER_DONE_SLOT: AtomicUsize = AtomicUsize::new(0);
 /// Name-hash of the slot the portrait pipeline currently TARGETS, stamped on the game thread at the
 /// per-slot build kick (the consume worker may not read game memory, so it copies this atomic into
 /// `LS_PORTRAIT_PUBLISHED_NAME_HASH` at publish). 0 = unknown/never kicked this window.

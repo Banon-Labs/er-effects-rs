@@ -2892,6 +2892,27 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_portrait_face_identity_mismatches",
             PORTRAIT_FACE_IDENTITY_MISMATCHES.load(Ordering::SeqCst),
         );
+        // PUBLISHED-vs-LOADED identity (bd er-effects-rs-qoqc defect 6 / er-effects-rs-91zb).
+        // Asserted at every loading-window close. The face-identity pair above catches a record
+        // whose FACE was rewritten under a slot; these catch the portrait being built for the
+        // WRONG SLOT entirely -- the class that put slot 9's head on screen for 29.7s while slot 5
+        // loaded with every other oracle reporting ok. Read `_checks` first: 0 mismatches with 0
+        // checks is an unexercised path, not a pass.
+        push_json_usize(
+            body,
+            "oracle_portrait_published_identity_checks",
+            er_telemetry::counters::PORTRAIT_PUBLISHED_IDENTITY_CHECKS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_published_slot_mismatches",
+            er_telemetry::counters::PORTRAIT_PUBLISHED_SLOT_MISMATCHES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_published_name_hash_mismatches",
+            er_telemetry::counters::PORTRAIT_PUBLISHED_NAME_HASH_MISMATCHES.load(Ordering::SeqCst),
+        );
         push_json_usize(
             body,
             "oracle_portrait_pump_draws",
