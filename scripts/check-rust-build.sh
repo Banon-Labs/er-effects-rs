@@ -67,6 +67,64 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	cargo xwin check --tests \
 		-p er-invasion-warp -p er-invasion-warp-dll \
 		--manifest-path "$repo_root/Cargo.toml" --target "$target"
+	# LINK the cdylib, do not merely type-check it. `cargo xwin check` stops at metadata and
+	# never invokes the linker, so a shell that cannot link -- a missing `#[no_mangle]`
+	# DllMain, a bad crate-type, an unresolved import from a `cfg(windows)` block -- passed
+	# every gate above while being unloadable. Found when the DLL had to be built by hand
+	# with an ad-hoc `-p` invocation to run it at all (bd er-effects-rs-5es review).
+	# `er-invasion-warp-dll` is not a default-member and nothing depends on it, so this is
+	# the only step in any gate that produces the artifact a profile can load.
+	# EVERY ME3-LOADABLE SHELL MUST LINK. `cargo xwin check` stops at metadata and never
+	# invokes the linker, and the bare `cargo xwin build` above builds only `default-members`
+	# (= crates/er-effects-rs). So before this step, 13 of the 15 cdylibs that export a
+	# `DllMain` -- i.e. every DLL a user can list in an me3 `[[natives]]` entry except the
+	# product itself -- were never linked by ANY gate. A shell that cannot link (missing
+	# `#[no_mangle] DllMain`, wrong crate-type, an unresolved import inside a `cfg(windows)`
+	# block) passed the whole suite while being unloadable. Found when er-invasion-warp-dll
+	# had to be built by hand with an ad-hoc `-p` to run it at all (bd er-effects-rs-5es).
+	#
+	# Keep this list in sync with the cdylibs that define `DllMain`. Measured cost: ~17s
+	# incremental for all 13, which is cheap enough to run unconditionally.
+	# `package:artifact`. The artifact is NOT always the package name with dashes swapped for
+	# underscores -- four of these override `[lib] name`, so er-better-refills-dll produces
+	# er_better_refills.dll, er-inventory-sort-dll -> er_inventory_sort.dll,
+	# er-save-disable-dll -> er_save_disable.dll, mushroom-man-runtime -> mushroom_man.dll.
+	# Deriving the filename instead of listing it silently skipped those four.
+	me3_shells=(
+		er-armament-icons:er_armament_icons
+		er-better-refills-dll:er_better_refills
+		er-input-harness-dll:er_input_harness_dll
+		er-invasion-warp-dll:er_invasion_warp_dll
+		er-inventory-sort-dll:er_inventory_sort
+		er-loading-bar-dll:er_loading_bar_dll
+		er-loading-portrait-dll:er_loading_portrait_dll
+		er-net-effects-dll:er_net_effects_dll
+		er-quit-menu-dll:er_quit_menu_dll
+		er-reload-trace-dll:er_reload_trace_dll
+		er-save-disable-dll:er_save_disable
+		er-save-picker-dll:er_save_picker_dll
+		er-telemetry-dll:er_telemetry_dll
+		mushroom-man-runtime:mushroom_man
+	)
+	shell_pkg_args=()
+	for shell in "${me3_shells[@]}"; do
+		shell_pkg_args+=(-p "${shell%%:*}")
+	done
+	echo "[check-rust-build] cargo xwin build --release ${#me3_shells[@]} me3 shells --target $target (LINK)"
+	cargo xwin build --release "${shell_pkg_args[@]}" \
+		--manifest-path "$repo_root/Cargo.toml" --target "$target"
+	# Assert the artifact exists. `cargo build` succeeding is not by itself proof the cdylib
+	# was produced -- and note a bare `rm` of the artifact does NOT force a relink, because
+	# cargo restores it from `target/.../deps` with its original mtime. Use
+	# `cargo clean -p <crate> --release --target <target>` to force a genuine link locally.
+	for shell in "${me3_shells[@]}"; do
+		shell_dll="$repo_root/target/$target/release/${shell##*:}.dll"
+		if [[ ! -f "$shell_dll" ]]; then
+			echo "[check-rust-build] FAIL: cdylib did not link: $shell_dll (package ${shell%%:*})" >&2
+			exit 1
+		fi
+	done
+	echo "[check-rust-build] linked ${#me3_shells[@]} me3 shells + the product DLL"
 	# FEATURE MATRIX. `er-quit-menu` takes `er-save-picker` with `default-features = false`
 	# so a standalone quit-menu DLL links the OS-native fallback surface WITHOUT the boot
 	# missing-save flow. Cargo unifies features across a build graph, so the line above
