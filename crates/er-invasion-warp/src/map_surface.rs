@@ -22,10 +22,16 @@
 //!
 //! # The recognition scheme
 //!
-//! The engine reads the row's bonfire entity id at `+0x238` and hands it to the warp-job
-//! assembler, so the id is the natural place to encode "this is ours". Each injected row gets a
-//! synthetic id in a private band; a confirm hook recognises one by range and maps it back to
-//! the exact [`InvasionWarpTarget`] to warp to.
+//! The engine reads the row's bonfire entity id and hands it to the warp-job assembler, so the
+//! id is the natural place to encode "this is ours". Each injected row gets a synthetic id in a
+//! private band; a confirm hook recognises one by range and maps it back to the exact
+//! [`InvasionWarpTarget`] to warp to.
+//!
+//! The id lives at row `+0x50`, NOT `+0x238` -- `+0x238` is the 16-byte
+//! `BonfireWarpParamLookupResult` (`{paramId, pad, BonfireWarpParam*}`), and the row constructor
+//! copies the id into `+0x50` from the param row's `+0x08` (mapping `-1` to `0`). So the id a
+//! synthetic row carries is whatever its DLL-owned `BonfireWarpParam` puts at `+0x08`; it is not
+//! written into the row directly.
 //!
 //! The band must not collide with a real bonfire entity id. Real ids are map-derived and sit
 //! well below `0x4000_0000`; the band here starts at [`INVASION_ENTITY_ID_BASE`], far above

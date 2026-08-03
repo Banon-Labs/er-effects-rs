@@ -29,6 +29,8 @@
 //!   hung game thread is a far worse outcome than a missing oracle.
 //! * [`sampler`] -- the driver that keeps re-reading until the totals settle, so a catalog
 //!   caught mid-load is never reported as the final answer, and ORACLE 1 lands.
+//! * [`param_row`] -- the DLL-owned synthetic `BonfireWarpParam` row a pin needs behind it: the
+//!   row constructor reads the entity id, icon, category bits and all 8 labels out of one.
 //! * [`map_surface`] -- which invasion points become world-map pins, and the private
 //!   bonfire-entity-id band that lets a confirm hook recognise one of ours and map it back to a
 //!   target. Pure and offline-testable.
@@ -64,6 +66,9 @@ pub use sampler::*;
 
 pub mod map_surface;
 pub use map_surface::*;
+
+pub mod param_row;
+pub use param_row::*;
 
 pub mod select;
 pub use select::*;
