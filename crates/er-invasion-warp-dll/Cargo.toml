@@ -27,6 +27,12 @@ er-invasion-warp = { path = "../er-invasion-warp" }
 # Tier A only: `game_module_base()` for the RVA-relative native calls the warp driver makes.
 path = "../er-game-base"
 
+[target.'cfg(windows)'.dependencies.er-hook]
+# The shared MinHook union. Every detour this DLL installs MUST go through it: two MinHook
+# instances patching one prologue corrupt each other's trampolines, and er_effects_rs.dll may be
+# loaded in the same process.
+path = "../er-hook"
+
 # Game-thread task registration ONLY (`CSTaskImp` + `FD4TaskData`, the er-telemetry-dll
 # pattern). Windows-only so the host `cargo test` of this shell never pulls the game bindings
 # into its graph.

@@ -497,6 +497,93 @@ Targets are ranked **after** the engine's own `ConvertBlockCoordsToPhysicsCoords
 them, which makes its `false` return a free fail-closed filter: a point that cannot be placed
 never becomes a candidate.
 
+### 3e. The map surface: decisions taken before the RE landed
+
+Two choices are ours rather than the engine's, so they are recorded here with their reasoning
+instead of appearing as unexplained constants in the code.
+
+**One pin per BLOCK, not per point (365, not 7073).** `crates/er-invasion-warp/src/map_surface.rs`,
+`PinGranularity::PerBlock` (the default). Three reasons, in order of weight:
+
+1. *Cost.* A `CS::WorldMapWarpPinData` row is `0x350` bytes and owns a `MenuString` plus a
+   `DLFixedVector<MenuString, 8>`. 7073 rows is ~6 MB of rows before their string allocations,
+   injected into a MenuHeap and re-walked by both list builders on every tab change. Section 5.3
+   records "whether appending thousands of rows is survivable" as an OPEN question -- betting the
+   feature on an unproven answer is avoidable.
+2. *Usability.* Auto-invasion points cluster densely inside a tile. Twenty pins within a few
+   metres are not twenty destinations anyone chooses between.
+3. *Precedent.* 365 pins is the same order as the game's own Site-of-Grace count, which the map
+   UI already renders comfortably.
+
+`PinGranularity::PerPoint` keeps all 7073 and exists so the cap is a parameter with a stated
+cost rather than a silent truncation. Either way `InvasionRowRegistry::len()` is the number
+actually injected, and the log reports it alongside `block_count()`, so a decimated set reads as
+decimated.
+
+**A private bonfire-entity-id band at `0x7F000000`.** The engine reads the row's entity id at
+`+0x238` and hands it to the warp-job assembler, so the id is where "this row is ours" belongs.
+Row `i` carries `0x7F000000 + i`; a confirm hook recognises one by RANGE (both ends -- an id past
+the registered rows is not ours) and maps it back to the exact target.
+
+The band sits far above real map-derived ids (which are below `0x4000_0000`) and wholly inside
+positive `i32`, because `GetBonfireEntityId` answers `-1` as `0` and a negative synthetic id
+would be indistinguishable from "no bonfire". The distance is deliberate rather than a tight
+fit: a collision would **not** crash -- the param lookup misses, returns NULL, and every caller
+null-checks -- it would make a real grace warp silently run the invasion warp, which is a worse
+failure than a crash because it is silent.
+
+### 3f. Hook seams and the two guards on them
+
+`crates/er-invasion-warp-dll/src/map_seams.rs` carries every detour target with its RVA, its
+prologue bytes and its argument count.
+
+* **Offline guard**: every address byte-checked against `eldenring-deobf.bin` at shift 0.
+* **Runtime guard**: `verify_seam` re-reads the prologue from live memory and REFUSES to hook on
+  mismatch. A patch applied to a differently-built game lands mid-instruction and crashes;
+  refusing costs only the feature.
+
+#### Measured live 2026-08-03 (observation-only ctor detour)
+
+```
+map-hooks: WorldMapViewModel ctor #1 this=0x2a86be80
+  list[vftable=0x142ad82a8 begin=0x35890080 end=0x358e6fc0 capacity=0x358f22a0]
+  used=356160 capacity_bytes=401952 rows=420 spare_rows=54 plausible=true
+```
+
+Four static claims became measurements:
+
+* the list at `+0x2d8` really is `CS::WorldMapPinDataList<CS::WorldMapWarpPinData>` -- the
+  vftable reads back as `0x142ad82a8`, the exact value the RE named;
+* the `0x350` stride is right -- `356160` divides by `848` **exactly**, 420 rows, no remainder;
+* the ctor fires **once**, during WORLD LOAD, before the map is ever opened -- so an epilogue
+  injection lands before the user sees the map and needs no re-run per map open;
+* no ASLR relocation -- `game_module_base() + rva` resolved to exactly `0x1408855b0`.
+
+**And one constraint that changes the design: there are only 54 spare rows.** Capacity is 474
+rows, 420 are already used. The per-block pin set is 365, so an append **cannot** fit in spare
+capacity and MUST go through the grow helper `FUN_140888aa0`, which reallocates and moves
+`begin`. Section 5.3 listed the realloc-vs-live-`WorldMapWarpData` hazard as an open question;
+it is now load-bearing rather than hypothetical, because the realloc is unavoidable.
+
+The mitigation to verify: inject at the ctor **epilogue**, before any `WorldMapWarpSelectDialog`
+exists and before any `CS::WorldMapWarpData` list has captured `+0x08` source-row pointers. At
+that instant nothing can hold a stale pointer. What still needs checking is whether any *other*
+object caches `begin`/`end`/count at ctor time.
+
+For scale: the game ships 420 warp pins, so 365 invasion pins takes the list to 785 -- under 2x,
+the same order as existing content. Per-point would be 7073, roughly 17x, which is the other
+reason `PerBlock` is the default.
+
+Two traps pinned by tests rather than left to memory:
+
+* A prologue signature detects **drift**, not identity. The three `BonfireWarp*` param lookups
+  share a byte-identical 12-byte prologue (`40 57 48 83 ec 40 48 c7 44 24 20 fe`) because they
+  are the same binary-search shape over different tables. Only the RVA distinguishes them.
+* `er_hook`'s union dispatcher is a **four-argument** `extern "system"` shape. A target taking
+  five or more silently loses the extras -- including out-parameters the callee writes through,
+  which corrupts memory instead of failing loudly. `MapSeam::arg_count` records the count and a
+  test asserts every seam fits; anything that does not must get its own typed `MhHook`.
+
 ---
 
 ## 5. Open RE tasks -- ALL FIVE RESOLVED (2026-08-03)

@@ -25,6 +25,9 @@
 #![allow(non_snake_case)]
 
 pub mod drive;
+#[cfg(windows)]
+pub mod map_hooks;
+pub mod map_seams;
 
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -141,6 +144,10 @@ fn spawn_catalog_task() {
                     unsafe {
                         warp_drive.tick(standalone_log, standalone_publish_warp_json);
                     }
+                    // SAFETY: same game-task context, and the installer is idempotent. The
+                    // world-map observer is installed from the task rather than DllMain because
+                    // MinHook must not run under the loader lock.
+                    unsafe { crate::map_hooks::install_map_observers() };
                 },
                 CSTaskGroupIndex::FrameBegin,
             );

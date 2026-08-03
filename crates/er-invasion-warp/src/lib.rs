@@ -29,6 +29,9 @@
 //!   hung game thread is a far worse outcome than a missing oracle.
 //! * [`sampler`] -- the driver that keeps re-reading until the totals settle, so a catalog
 //!   caught mid-load is never reported as the final answer, and ORACLE 1 lands.
+//! * [`map_surface`] -- which invasion points become world-map pins, and the private
+//!   bonfire-entity-id band that lets a confirm hook recognise one of ours and map it back to a
+//!   target. Pure and offline-testable.
 //! * [`select`] -- which target to warp to: nearest-to-the-player and a stable cycle, ranked
 //!   over targets the engine's coordinate conversion already accepted. Pure and offline-testable.
 //! * [`warp`] -- the warp itself: the `TriggerAreaReload` sequence (block id + block-local xyz +
@@ -58,6 +61,9 @@ pub use oracles::*;
 
 pub mod sampler;
 pub use sampler::*;
+
+pub mod map_surface;
+pub use map_surface::*;
 
 pub mod select;
 pub use select::*;
