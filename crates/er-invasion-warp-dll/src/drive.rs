@@ -1,5 +1,9 @@
-//! The user-facing trigger: two hotkeys that warp the player to invasion spawn points, and the
+//! The user-facing trigger: three hotkeys that warp the player to invasion spawn points, and the
 //! arrival oracle that decides whether the warp actually worked.
+//!
+//! F7 warps to the nearest point, F8 steps through the catalog's stable order, and F9 jumps to
+//! another AREA entirely. Only F7 needs world coordinates -- see the note on the candidate set
+//! in [`InvasionWarpDrive::tick`] for why that distinction is load-bearing.
 //!
 //! # Why hotkeys, when the goal is the world map
 //!
@@ -243,7 +247,7 @@ impl InvasionWarpDrive {
             let player = unsafe { er_invasion_warp::warp::player_physics_position(base) };
             log(format_args!(
                 "invasion-warp: heartbeat tick={} focused={focused} f7_state={:#06x} \
-                 f8_state={:#06x} player={} -- press F7 (nearest) or F8 (next)",
+                 f8_state={:#06x} player={} -- press F7 (nearest), F8 (next), F9 (other area)",
                 self.ticks,
                 self.nearest_key.raw_state() as u16,
                 self.next_key.raw_state() as u16,

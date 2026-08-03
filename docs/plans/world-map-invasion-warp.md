@@ -421,8 +421,30 @@ always performs is how a reload softlocks, so it is replicated -- and
 zero that would be false. No `CSNetMan`, `QuickmatchManager` or `CSBreakInPointManager` code is
 entered.
 
-Implemented in `crates/er-invasion-warp/src/warp.rs`. **Not runtime-proven**: the run has to
-report `"verdict":"arrived"`.
+Implemented in `crates/er-invasion-warp/src/warp.rs`. **RUNTIME-PROVEN 2026-08-03**: four warps
+issued, four arrived, `"verdict":"arrived","passed":true`, including a cross-area jump in **both**
+directions (area 60 -> 61 and 61 -> 60), each landing in the requested block at the requested
+point. Every warp reported `spawn_flag=1`, `requested == effective`, and `session_touches=1` --
+the predicted vanilla `SetupMapReentry`, counted rather than assumed away.
+
+> **The warp is NOT area-limited; the first reading of it was wrong.** An early run logged
+> "2591 of 7073 targets converted" -- exactly the dlc02 point count -- which invites the
+> conclusion that only the resident area is reachable. It is not: the warp never uses the
+> source-side conversion. `SetMoveMapStepBlockId` takes the BlockId, `FUN_14067ab20` stores
+> BLOCK-LOCAL coordinates, and `MoveMapStep` converts on the DESTINATION side after that block
+> loads. `ConvertBlockCoordsToPhysicsCoords` was being called only to RANK candidates by
+> distance, so dropping the ones it refused deleted every non-resident area from the candidate
+> set. Only "nearest" needs it; the cycle and the cross-area jump work on raw catalog targets
+> and span all 7073 (`candidates=7073` in the proving run).
+
+> **Overworld coordinate coincidence.** On every overworld warp,
+> `expected_position_physics` came out identical to the block-local `requested_position` --
+> `WorldGridAreaInfo::GetWorldAreaInfoCoordinates` returns ~zero for m60/m61 tiles, so the
+> overworld grid shares ONE coordinate space rather than offsetting per tile, and `.aip` points
+> are authored in it. That coincidence is what made a mixed-space oracle document look
+> self-consistent by luck. It holds for the OVERWORLD only: an interior/legacy target routes
+> through `WorldBlockInfo::GetBlockCenterInPhysicsSpace` and would break it, which is why the
+> document labels both spaces and emits the physics expectation separately.
 
 ---
 
