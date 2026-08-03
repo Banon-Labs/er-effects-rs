@@ -132,6 +132,22 @@ pub static PORTRAIT_ANIM_BOUND_LOC: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_FACEDATA_NEQ_TICKS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_DRIVE_TICKS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_KICK_SLOT_KEY: AtomicUsize = AtomicUsize::new(0);
+/// Times the LoadGame job builder (0x140826510) was asked to build for a slot other than the one
+/// the user picked, and we redirected it to the pick. Nonzero means the save container's stored
+/// last-used slot (`CSMenuSystemSaveLoad+0x1200`) disagreed with the click and the click won --
+/// i.e. the wrong character would have loaded. Was 1 in the 2026-08-03 repro (stored 2 vs pick 0).
+pub static LOADGAME_BUILDER_SLOT_OVERRIDES: AtomicUsize = AtomicUsize::new(0);
+/// The native slot the last override replaced, u32-packed. Together with the pick this identifies
+/// exactly which character the game was about to load instead.
+pub static LOADGAME_BUILDER_LAST_NATIVE_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// The slot THIS loading-screen window committed its portrait to, +1 (0 == not yet committed).
+/// Latched at the window's first slot resolution and held until the window closes, so the face on
+/// screen cannot change character mid-load. See `er_loading_portrait::portrait_window_target_slot`.
+pub static PORTRAIT_WINDOW_TARGET_SLOT: AtomicUsize = AtomicUsize::new(0);
+/// Times the freshly-resolved target DISAGREED with what this window already committed to, i.e.
+/// retargets that were suppressed. Each one is a mid-load face change the user did not see.
+/// Nonzero proves the latch is load-bearing; it was 1 in the 2026-08-02 21:05 repro (slot 0 -> 9).
+pub static PORTRAIT_WINDOW_RETARGETS_SUPPRESSED: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_KICK_RENDERER: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_LAST_CONFIRMED_SLOT: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_SLOT_FLIP_CANDIDATE: AtomicUsize = AtomicUsize::new(0);

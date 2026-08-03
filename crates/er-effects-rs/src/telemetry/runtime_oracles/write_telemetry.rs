@@ -718,6 +718,25 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         FULLREAD_REQ_DISARM_COUNT.load(Ordering::SeqCst),
         FULLREAD_REQ_DISARM_LAST_PREV_SLOT.load(Ordering::SeqCst) as u32 as i32
     ));
+    // LoadGame builder slot override. `overrides` > 0 means the save container's stored last-used
+    // slot disagreed with the user's pick and we redirected the job to the pick -- i.e. the wrong
+    // character WOULD have loaded. `last_native_slot` is the slot we replaced (u32-packed i32).
+    // Read with `game_save_slot` / `oracle_char_name`: a correct run has the picked character in
+    // world, and `overrides` tells you whether the container tried to send you elsewhere.
+    body.push_str(&format!(
+        "  \"oracle_loadgame_builder_slot_overrides\": {},\n  \"oracle_loadgame_builder_last_native_slot\": {},\n",
+        LOADGAME_BUILDER_SLOT_OVERRIDES.load(Ordering::SeqCst),
+        LOADGAME_BUILDER_LAST_NATIVE_SLOT.load(Ordering::SeqCst) as u32 as i32
+    ));
+    // Per-window portrait target latch. `retargets_suppressed` > 0 means the precedence ordering
+    // tried to change the on-screen character mid-loading-screen and was refused -- each one is a
+    // face change the user did NOT see. It was exactly 1 in the 2026-08-02 21:05 repro (0 -> 9).
+    // `window_target_slot` is the committed slot +1, or 0 between windows.
+    body.push_str(&format!(
+        "  \"oracle_portrait_window_target_slot\": {},\n  \"oracle_portrait_window_retargets_suppressed\": {},\n",
+        PORTRAIT_WINDOW_TARGET_SLOT.load(Ordering::SeqCst),
+        PORTRAIT_WINDOW_RETARGETS_SUPPRESSED.load(Ordering::SeqCst)
+    ));
     // Missing-save picker menu-open hold (bd er-effects-rs-ns4n follow-up): count > 0 proves the native
     // title auto-menu-open was suppressed while the pick was pending, so the menu rows build post-pick
     // with the save present. On a fast/early pick this stays 0 (nothing to suppress).

@@ -501,7 +501,7 @@ pub(crate) fn portrait_loaded_slot_confirmed() -> Option<i32> {
     let request = (gm != TITLE_OWNER_SCAN_START_ADDRESS)
         .then(|| unsafe { safe_read_i32(gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) })
         .flatten();
-    er_loading_portrait::portrait_target_slot_from_sources(
+    let resolved = er_loading_portrait::portrait_target_slot_from_sources(
         picker,
         request,
         Some(ac0),
@@ -512,7 +512,38 @@ pub(crate) fn portrait_loaded_slot_confirmed() -> Option<i32> {
         (0..TITLE_PROFILE_SLOT_COUNT as i32)
             .contains(&own)
             .then_some(own)
-    })
+    });
+    // PER-WINDOW LATCH. Everything above is a precedence ordering re-evaluated on every kick, so
+    // its answer can change WHILE a loading screen is on screen -- and when it does, the user
+    // watches the face of the character they clicked be replaced by someone else's. Measured
+    // 2026-08-02 21:05: picked slot 0, published slot 0 at +17775ms, the picker term expired
+    // (spent on IN_WORLD_REACHED = *a* world exists, not *that slot's* world), precedence fell
+    // through to ac0=9, kick #2 retargeted the same window at +20998ms, window closed +29989ms.
+    //
+    // The window keeps whatever it first committed to; the reset in
+    // `loading_portrait_window_reset_inner` releases it so the next load can differ. Deliberately
+    // NOT an attempt to decide which slot is correct -- that belongs to the load path, and a
+    // portrait that stays wrong for one window beats one that changes identity mid-load.
+    let latched = match PORTRAIT_WINDOW_TARGET_SLOT.load(Ordering::SeqCst) {
+        0 => None,
+        packed => Some((packed - 1) as i32),
+    };
+    let (target, latching) = er_loading_portrait::portrait_window_target_slot(latched, resolved);
+    if latching && let Some(slot) = target {
+        PORTRAIT_WINDOW_TARGET_SLOT.store(slot as usize + 1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "loading-portrait: window LATCHED portrait target slot {slot} (picker={picker:?} b78={request:?} ac0={ac0}) -- held until this loading screen closes"
+        ));
+    } else if let (Some(held), Some(fresh)) = (target, resolved)
+        && held != fresh
+    {
+        if PORTRAIT_WINDOW_RETARGETS_SUPPRESSED.fetch_add(1, Ordering::SeqCst) == 0 {
+            append_autoload_debug(format_args!(
+                "loading-portrait: SUPPRESSED a mid-window retarget {held} -> {fresh} (picker={picker:?} b78={request:?} ac0={ac0}) -- the face the user clicked stays on screen for this window"
+            ));
+        }
+    }
+    target
 }
 
 /// TORN-READBACK score: average absolute VERTICAL luma step across the masked (alpha != 0, i.e. head)

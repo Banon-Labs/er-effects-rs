@@ -176,6 +176,10 @@ fn loading_portrait_window_reset_inner(reason: &str, hold_bridge: bool) {
     PORTRAIT_ANIM_BOUND_LOC.store(0, Ordering::SeqCst);
     PORTRAIT_KICK_SLOT_KEY.store(0, Ordering::SeqCst);
     PORTRAIT_KICK_RENDERER.store(0, Ordering::SeqCst);
+    // Release this window's committed portrait target so the NEXT load is free to name a different
+    // character. Without this reset the latch would pin the boot character's face across every
+    // later System->Quit->Load switch -- the same wrong-face class in the opposite direction.
+    PORTRAIT_WINDOW_TARGET_SLOT.store(0, Ordering::SeqCst);
     // The kick-target name hash re-stamps at the next window's build kick (both modes).
     PORTRAIT_TARGET_NAME_HASH.store(0, Ordering::SeqCst);
     if let Ok(mut g) = PORTRAIT_MOTION_PREV_PLANES.lock() {

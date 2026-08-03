@@ -356,6 +356,8 @@ pub(crate) use er_telemetry::counters::AUTO_ACCEPT_COUNT;
 /// Set once when the local player first exists in-world; gates the auto-accept OFF so in-game
 /// MessageBoxDialogs (which need real choices) are never force-accepted.
 pub(crate) use er_telemetry::counters::IN_WORLD_REACHED;
+pub(crate) use er_telemetry::counters::LOADGAME_BUILDER_LAST_NATIVE_SLOT;
+pub(crate) use er_telemetry::counters::LOADGAME_BUILDER_SLOT_OVERRIDES;
 pub(crate) const IN_WORLD_NOT_REACHED: usize = 0;
 pub(crate) use er_title_flow::IN_WORLD_REACHED_YES;
 /// The fresh_deser load epoch whose world is genuinely LIVE (play_time advanced past that epoch's
