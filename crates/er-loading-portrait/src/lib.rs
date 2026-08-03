@@ -103,6 +103,9 @@ pub use dlstring_lookat_math::*;
 pub mod stats_lines;
 pub use stats_lines::*;
 
+pub mod title_stats_text;
+pub use title_stats_text::*;
+
 #[cfg(windows)]
 pub mod stats_loading_text;
 #[cfg(windows)]
