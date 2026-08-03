@@ -155,8 +155,6 @@ pub(crate) static TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG: AtomicUsize =
 pub(crate) static TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_INSTALLED: AtomicUsize =
     AtomicUsize::new(0);
 pub(crate) use er_telemetry::counters::TITLE_PROFILE_FACE_BIND_HITS;
-pub(crate) use er_telemetry::counters::TITLE_PROFILE_FACE_TRANSFORM_APPLIED;
-pub(crate) use er_telemetry::counters::TITLE_PROFILE_FACE_OTHER_HIDDEN;
 pub(crate) use er_telemetry::counters::TITLE_PROFILE_FACE_LAST_PROXY;
 pub(crate) use er_telemetry::counters::TITLE_PROFILE_FACE_LAST_VALUE;
 

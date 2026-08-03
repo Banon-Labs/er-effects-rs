@@ -2408,9 +2408,10 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 Ordering::SeqCst,
             );
             SYSTEM_QUIT_QUICKLOAD_AUTOLOAD_HANDOFF_COUNT.fetch_add(1, Ordering::SeqCst);
-            disable_system_quit_gaitem_deserialize_hook("native-continue-handoff");
-            disable_system_quit_gaitem_lookup_hook("native-continue-handoff");
-            disable_system_quit_gaitem_finalize_hook("native-continue-handoff");
+            // The three CSGaitemImp hook-disable calls that used to live here are gone with the hooks
+            // themselves: install_system_quit_gaitem_{finalize,lookup,deserialize}_hook had no callers,
+            // so rustc never codegen'd them, the INSTALLED latches were never set, and each disable was
+            // an unconditional early return. bd er-effects-rs-57fw.
         }
         // Direct-file save source: the "native Continue row" product_continue waits for can be stale
         // or backed by an empty ProfileSummary. Picker path already used this bypass; explicit loose

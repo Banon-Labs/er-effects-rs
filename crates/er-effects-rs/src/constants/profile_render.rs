@@ -173,11 +173,8 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_INSTALLE
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ADDR;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_DESERIALIZE_ADDR;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_LOOKUP_ADDR;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_FINALIZE_ADDR;
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED_YES: usize = 1;
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_NOT_INSTALLED: usize = 0;

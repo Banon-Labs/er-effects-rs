@@ -302,49 +302,6 @@ pub(crate) unsafe extern "system" fn title_menu_resource_acquire_observer_hook(
     ret
 }
 
-pub(crate) unsafe fn construct_title_scaleform_memory_file(
-    base: usize,
-    url: usize,
-    bytes: &[u8],
-) -> Option<usize> {
-    if bytes.is_empty() || bytes.len() > u32::MAX as usize {
-        return None;
-    }
-    let memory_global = unsafe { safe_read_usize(base + SCALEFORM_MEMORY_GLOBAL_RVA) }?;
-    let memory_vtable = unsafe { safe_read_usize(memory_global) }?;
-    let alloc_fn = unsafe { safe_read_usize(memory_vtable + 0x50) }?;
-    if alloc_fn == 0 || alloc_fn == TITLE_OWNER_SCAN_START_ADDRESS {
-        return None;
-    }
-    let alloc: unsafe extern "system" fn(usize, usize, usize) -> usize =
-        unsafe { std::mem::transmute(alloc_fn) };
-    let file = unsafe { alloc(memory_global, SCALEFORM_MEMORY_FILE_SIZE, 0) };
-    if file == 0 || file == TITLE_OWNER_SCAN_START_ADDRESS {
-        return None;
-    }
-    let dlstring_copy: unsafe extern "system" fn(usize, usize) -> usize =
-        unsafe { std::mem::transmute(base + SCALEFORM_DLSTRING_CHAR_COPY_RVA) };
-    unsafe {
-        core::ptr::write(file as *mut usize, base + SCALEFORM_MEMORY_FILE_VTABLE_RVA);
-        core::ptr::write(
-            (file + SCALEFORM_MEMORY_FILE_REFCOUNT_OFFSET) as *mut u32,
-            1,
-        );
-        dlstring_copy(file + SCALEFORM_MEMORY_FILE_NAME_OFFSET, url);
-        core::ptr::write(
-            (file + SCALEFORM_MEMORY_FILE_DATA_OFFSET) as *mut usize,
-            bytes.as_ptr() as usize,
-        );
-        core::ptr::write(
-            (file + SCALEFORM_MEMORY_FILE_LEN_OFFSET) as *mut u32,
-            bytes.len() as u32,
-        );
-        core::ptr::write((file + SCALEFORM_MEMORY_FILE_CURSOR_OFFSET) as *mut u32, 0);
-        core::ptr::write((file + SCALEFORM_MEMORY_FILE_VALID_OFFSET) as *mut u8, 1);
-    }
-    Some(file)
-}
-
 /// Product-default 05_000_title strip WITHOUT embedded bytes (er-effects-rs-h7x). `file` is what
 /// the native FileOpener just returned for `data0:/menu/05_000_title.gfx`; per the rescap static
 /// RE (`FUN_140ce8320`, bd `native-memoryfile-wrapper-expects-gfx-rescap-2026-06-28`) that is a
@@ -631,51 +588,23 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
 
     let base = game_module_base().unwrap_or(null);
     let mut memory_replacement = false;
-    let mut memory_label = "";
-    let memory_bytes = if is_title_logo {
-        memory_label = "05_001_title_logo";
-        TITLE_SCALEFORM_MEMORY_GFX.get().map(Vec::as_slice)
+    // Label only. Every synthetic/embedded MemoryFile substitution is gone: the title, ProfileSelect
+    // and OptionSetting movies are all derived IN PLACE from the game's own vanilla payload below, so
+    // the DLL never constructs a Scaleform MemoryFile of its own.
+    let memory_label = if is_title_logo {
+        "05_001_title_logo"
     } else if is_title_05_000 {
-        memory_label = "05_000_title";
-        TITLE_SCALEFORM_05_000_MEMORY_GFX.get().map(Vec::as_slice)
+        "05_000_title"
     } else if is_profile_05_010 {
-        // No embedded/env-loaded movie for 05_010: only the in-place runtime edit above.
-        memory_label = "05_010_profileselect";
-        None
+        "05_010_profileselect"
     } else if is_options_02_040 {
-        // No embedded/env-loaded movie for 02_040: the 4-button Quit layout is derived in place from
-        // the game's own MemoryFile so the DLL remains self-contained.
-        memory_label = "02_040_optionsetting";
-        None
+        "02_040_optionsetting"
     } else {
-        None
+        ""
     };
     let orig = TITLE_SCALEFORM_FILE_OPEN_ORIG.load(Ordering::SeqCst);
     let ret = if base != null {
-        if let Some(bytes) = memory_bytes {
-            match unsafe { construct_title_scaleform_memory_file(base, url, bytes) } {
-                Some(file) => {
-                    memory_replacement = true;
-                    TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS.fetch_add(1, Ordering::SeqCst);
-                    if is_title_05_000 {
-                        TITLE_SCALEFORM_05_000_MEMORY_GFX_REPLACEMENTS
-                            .fetch_add(1, Ordering::SeqCst);
-                    }
-                    TITLE_SCALEFORM_MEMORY_GFX_LAST_FILE.store(file, Ordering::SeqCst);
-                    file
-                }
-                None => {
-                    TITLE_SCALEFORM_MEMORY_GFX_FAILURES.fetch_add(1, Ordering::SeqCst);
-                    if orig != null && orig != HOOK_ORIGINAL_UNSET {
-                        let f: unsafe extern "system" fn(usize, usize, u32) -> usize =
-                            unsafe { std::mem::transmute(orig) };
-                        unsafe { f(loader, url, flags) }
-                    } else {
-                        null
-                    }
-                }
-            }
-        } else if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        if orig != null && orig != HOOK_ORIGINAL_UNSET {
             let f: unsafe extern "system" fn(usize, usize, u32) -> usize =
                 unsafe { std::mem::transmute(orig) };
             let native = unsafe { f(loader, url, flags) };
@@ -731,8 +660,7 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
         let name_len = unsafe { copy_ascii_preview(url, &mut name) };
         let name = core::str::from_utf8(&name[..name_len]).unwrap_or("?");
         append_autoload_debug(format_args!(
-            "title-resource-observer: Scaleform file-open title-memory label={memory_label} logo_hit={logo_hit} total={hit} loader=0x{loader:x} url=0x{url:x} '{name}' flags=0x{flags:x} ret=0x{ret:x} ret_vtable=0x{ret_vtable:x} caller_rva=0x{caller_rva:x} memory_replacement={memory_replacement} total_memory_bytes={}",
-            TITLE_SCALEFORM_MEMORY_GFX_BYTES.load(Ordering::SeqCst)
+            "title-resource-observer: Scaleform file-open title-memory label={memory_label} logo_hit={logo_hit} total={hit} loader=0x{loader:x} url=0x{url:x} '{name}' flags=0x{flags:x} ret=0x{ret:x} ret_vtable=0x{ret_vtable:x} caller_rva=0x{caller_rva:x} memory_replacement={memory_replacement}"
         ));
     } else if hit <= 24 {
         let mut name = [0u8; 96];
