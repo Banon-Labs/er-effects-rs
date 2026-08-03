@@ -395,6 +395,7 @@ pub(crate) fn boot_os_perform_cancel_exit() -> ! {
 #[cfg(test)]
 mod save_picker_boot_tests {
     use super::*;
+    use std::time::Duration;
 
     /// THE decision that can terminate a user's game, pinned. Only a cancel -- the one outcome
     /// that IS a user decision -- quits; every "we could not ask" outcome falls back to the

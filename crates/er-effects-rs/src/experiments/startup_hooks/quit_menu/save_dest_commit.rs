@@ -897,6 +897,16 @@ pub(crate) fn save_dest_commit_identity(target: &Path, live: &Path) -> SaveDestI
 #[cfg(test)]
 mod save_dest_commit_tests {
     use super::*;
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
+    use er_telemetry::counters::{
+        SAVE_DEST_LIVE_BAK_MUTATED, SAVE_DEST_LIVE_FILE_MUTATED, SAVE_DEST_LIVE_STAT_UNREADABLE,
+        SAVE_DEST_REDIRECT_HITS, SAVE_DEST_TARGET_STRUCTURE_OK, SAVE_DEST_TARGET_WRITTEN_OK,
+    };
 
     /// Build a minimal, structurally complete BND4 container: header, `names.len()` entry headers
     /// of `entry_len` bytes each, a UTF-16 name table, then the data blobs back to back.
