@@ -1,0 +1,31 @@
+# Thin standalone ME3-loadable shell for the `er-invasion-warp` feature crate
+# (bd er-effects-rs-5es): own DllMain, own log file, individually shippable.
+#
+# It is designed to COEXIST with the product DLL and the other companions: a profile may list
+# it, omit it, or combine it freely. It installs NO detours at all -- it arms the host seam and
+# registers one recurring `CSTaskImp` game task that READS the `CSAutoInvadePoint` coordinate
+# table for oracle 1 -- so it contends on nothing. When it does start hooking, every detour
+# MUST go through the `er-hook` union rather than a bare `MhHook::new`, for the same reason
+# er-quit-menu-dll does: two MinHook instances patching one prologue corrupt each other's
+# trampolines.
+[package]
+name = "er-invasion-warp-dll"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_invasion_warp_dll"
+# `cdylib` is the ME3-loadable artifact; `rlib` keeps the tiny DLL shell testable on the
+# host without pulling game deps into the test graph.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+er-invasion-warp = { path = "../er-invasion-warp" }
+
+# Game-thread task registration ONLY (`CSTaskImp` + `FD4TaskData`, the er-telemetry-dll
+# pattern). Windows-only so the host `cargo test` of this shell never pulls the game bindings
+# into its graph.
+[target.'cfg(windows)'.dependencies]
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
