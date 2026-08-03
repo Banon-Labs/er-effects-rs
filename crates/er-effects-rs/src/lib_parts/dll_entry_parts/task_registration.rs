@@ -198,13 +198,19 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         {
                             Some(quickload_slot as i32)
                         } else {
-                            // The missing-save picker cannot set a config slot; instead its
-                            // character sub-picker records the chosen slot here. Configured slots
-                            // still win via `state.autoload.slot()`.
-                            state
-                                .autoload
-                                .slot()
-                                .or_else(missing_save_picker_selected_slot)
+                            // DELIBERATE BEHAVIOR CHANGE (bd er-effects-rs-91zb; IMPLEMENTED BUT
+                            // UNPROVEN -- no live run has exercised it). The missing-save picker
+                            // cannot set a config slot; its character sub-picker records the chosen
+                            // slot here. This used to be `autoload.slot().or_else(picker)` --
+                            // "configured slots still win" -- while the OTHER resolver for the same
+                            // question, `continue_load::slot_resolution::native_fullread_slot`,
+                            // puts the picker FIRST. Two resolvers disagreeing about which slot the
+                            // user meant is how a portrait ends up targeting one character while
+                            // another loads. Resolved in the picker's favour on both sides: a
+                            // user's explicit on-screen pick outranks a config default, which is a
+                            // stale preference by comparison.
+                            missing_save_picker_selected_slot()
+                                .or_else(|| state.autoload.slot())
                         };
                         if let Some(slot) = slot_result {
                             PRODUCT_CORE_CALLSITE_SLOT_OK_TICKS.fetch_add(1, Ordering::SeqCst);

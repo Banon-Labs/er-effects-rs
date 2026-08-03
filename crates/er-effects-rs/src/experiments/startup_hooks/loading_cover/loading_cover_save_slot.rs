@@ -449,37 +449,70 @@ pub(crate) unsafe fn kick_target_profile_slot(
     true
 }
 
-/// The save slot whose portrait the loading-screen pipeline should build / capture / display / spare:
-/// the character the game ACTUALLY loaded (`GameMan.save_slot` = ac0), the single ground truth on a
-/// boot most-recent Continue AND on our switch deserialize. Falls back to the autoload hint
-/// `OWN_STEPPER_SLOT`, then 0, only pre-load when ac0 is not yet a valid slot. The raw
-/// `OWN_STEPPER_SLOT` is `-1` on a most-recent boot (title.rs:113 returns early without setting it) and
-/// collapsed to slot 0, so the pipeline built/captured slot 0's portrait for a non-slot-0 character
-/// (wrong on load 1) and captured nothing once its gate stopped matching (blank on load 2). Routing
-/// EVERY portrait site through this one loaded-character source is the er-effects-rs-j3r correlation fix.
+/// [`portrait_loaded_slot_confirmed`] COLLAPSED to a bare slot index, with `0` standing in for
+/// "nothing named a slot". Routing every portrait site through one loaded-character source is the
+/// er-effects-rs-j3r correlation fix; this form exists only for DISPLAY-side readers where a wrong
+/// slot reads inert (no model is built for it, so it draws nothing).
+///
+/// PREFER [`portrait_loaded_slot_confirmed`] AND HANDLE `None`. The `unwrap_or(0)` here is a lie by
+/// omission -- it reports slot 0 with the same confidence as a real answer. Anything that BUILDS,
+/// CAPTURES or PUBLISHES must not use it: the publish gate did, and with no confirmed slot it
+/// published slot 0's head as though that were the loaded character (bd er-effects-rs-91zb).
 pub(crate) fn portrait_loaded_slot() -> i32 {
     portrait_loaded_slot_confirmed().unwrap_or(0)
 }
 
-/// The loaded slot ONLY when a real source names it (ac0 or the autoload stepper hint) -- `None`
-/// while neither is valid yet. The BUILD KICK must use this form: the old fallback-to-0 kicked a
+/// The loaded slot ONLY when a real source names it -- `None` while none is valid yet. The BUILD
+/// KICK must use this form: the old fallback-to-0 kicked a
 /// SLOT-0 build ~340ms before ac0 flipped to the real slot (run anim-bind5, kicks #1 slot0 /
 /// #2 slot5), and with the rebuild storm fixed that foreign model now PERSISTS -- the
 /// `count_live_profile_models == 1` stability gate then blocks the whole live-drive/publish/anim
 /// pipeline for the rest of the load (1 motion sample all window). Display-side readers may still
 /// use the collapsed `portrait_loaded_slot()` form (with no model built, a wrong slot reads inert).
+///
+/// IMPLEMENTED BUT UNPROVEN (bd er-effects-rs-91zb; needs one live run -- build success and kick
+/// counters prove nothing about which face reached the screen). `GameMan.save_slot` (ac0) is NOT
+/// authoritative for "which character is loading": both the game's own selector and our own
+/// `set_save_slot(picked)` (own_load/loaders.rs, ~5s before the deserialize) write it for reasons
+/// unrelated to that question. Measured 2026-08-02 18:07: the user picked slot 5, ac0 was
+/// correctly set to 5, the native selector then dragged ac0 to 9 while the REQUEST register held
+/// the correct 5 the whole time -- and slot 9's face sat on the loading screen for 29.7 seconds.
+///
+/// So the sources are consulted strongest-first (see
+/// `er_loading_portrait::portrait_target_slot_from_sources`, which is host-tested):
+///   1. the user's explicit on-screen save-picker pick, until that slot's load completes;
+///   2. `GameMan+0xb78`, the native load-REQUEST register -- a load for it is in flight, so ac0
+///      is stale by definition. `-1` is its no-request sentinel and falls through;
+///   3. ac0, then the `OWN_STEPPER_SLOT` autoload hint.
 pub(crate) fn portrait_loaded_slot_confirmed() -> Option<i32> {
     let ac0 = (unsafe { eldenring::cs::GameMan::instance() })
         .map(|gm| er_save_loader::GameManSaveAccess::save_slot(gm))
         .unwrap_or(OWN_STEPPER_SLOT_NONE);
-    if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&ac0) {
-        return Some(ac0);
-    }
-    let own = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
-    if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&own) {
-        return Some(own);
-    }
-    None
+    // The user's boot pick outranks everything the game infers -- but ONLY for its own load. The
+    // missing-save picker is a BOOT surface, so its pick is spent the moment the world it asked for
+    // exists; `IN_WORLD_REACHED` is the monotonic latch for that and never un-suppresses. Without
+    // this bound the stale boot pick would outrank ac0 forever and pin the portrait to the boot
+    // character across every later System->Quit->Load switch -- the same wrong-face class in the
+    // opposite direction. (A switch's own selection is handled upstream by `portrait_target_slot`.)
+    let picker = (IN_WORLD_REACHED.load(Ordering::SeqCst) != IN_WORLD_REACHED_YES)
+        .then(missing_save_picker_selected_slot)
+        .flatten();
+    let gm = game_man_ptr_or_null();
+    let request = (gm != TITLE_OWNER_SCAN_START_ADDRESS)
+        .then(|| unsafe { safe_read_i32(gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) })
+        .flatten();
+    er_loading_portrait::portrait_target_slot_from_sources(
+        picker,
+        request,
+        Some(ac0),
+        TITLE_PROFILE_SLOT_COUNT as i32,
+    )
+    .or_else(|| {
+        let own = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+        (0..TITLE_PROFILE_SLOT_COUNT as i32)
+            .contains(&own)
+            .then_some(own)
+    })
 }
 
 /// TORN-READBACK score: average absolute VERTICAL luma step across the masked (alpha != 0, i.e. head)
@@ -551,9 +584,9 @@ pub(crate) fn portrait_target_slot() -> i32 {
 /// producing evidence. Gated on a real loaded character AND a real record, so pre-load transients and
 /// empty slots never fire.
 pub(crate) unsafe fn portrait_render_slot_semaphore(base: usize, render_target_slot: i32) {
-    // New-game / not-yet-resolved saved-map sentinel; excluded from the map check so a transient c30
-    // during the loading screen cannot false-fire.
-    const DEFAULT_MAP_C30: i32 = 0x0a01_0000;
+    // The new-game / not-yet-resolved saved-map sentinel and the "is this a real packed BlockId"
+    // predicate both live in er-loading-portrait, where they are host-tested.
+    use er_loading_portrait::portrait_identity::{DEFAULT_MAP_C30, packed_maps_disagree};
     // ProfileSummary record layout (bd native-full-save-read-slot-resolve-chain-observe-recipe-2026):
     // records start at summary+0x18, stride 0x2a0; NAME at record+0, saved MAP at record+0x30.
     const PROFILE_RECORD_BASE: usize = 0x18;
@@ -599,28 +632,63 @@ pub(crate) unsafe fn portrait_render_slot_semaphore(base: usize, render_target_s
     }
     let our_map = unsafe { safe_read_i32(rec + PROFILE_RECORD_MAP_OFFSET) }.unwrap_or(-1);
 
-    // Compare RAM identities. Name is the character identity; the saved map is a second discriminator,
-    // checked only when BOTH are real resolved maps (so a default/transient c30 can't false-fire).
+    // Compare RAM identities. NAME is the character identity and carries the check on its own.
     let name_match = our_len == live_len && our_name[..our_len] == live_name[..live_len];
-    let both_real_map =
-        our_map > 0 && our_map != DEFAULT_MAP_C30 && live_map > 0 && live_map != DEFAULT_MAP_C30;
-    let map_mismatch = both_real_map && our_map != live_map;
+
+    // MAP is only a second discriminator, and only when the record is OURS. Both sides are the
+    // same TYPE but not always the same QUANTITY: our foreign-save preview writes record+0x30 from
+    // the slot body's saved `BlockId` (= exactly what deserializes into c30), whereas a
+    // GAME-written record is filled from `GetCurrentMapId` (`FUN_140262270`). Measured on the
+    // corpus: 65 of 726 active slots have body+0x04 = 0x0e000000 while the game's own record says
+    // 0x1c000000 -- a systematic, entirely legitimate difference that would fire this semaphore on
+    // every one of those characters. `PROFILE_PREVIEW_FACE_HASH[slot] != 0` marks a record our
+    // preview wrote with foreign visual data (set in the same call as the +0x30 write, cleared when
+    // the preview is dropped), so the map term applies only where the two sides are comparable.
+    // It errs toward silence: a preview that wrote +0x30 but could not locate the face leaves the
+    // hash at 0 and the map term off. That is a MISSED detection, never a false alarm, and the NAME
+    // axis still carries the check -- `record_is_ours` is logged so the distinction is visible.
+    //
+    // The plausibility test is an areaId RANGE, not the old `> 0` sign gate: a packed BlockId's
+    // sign bit is just bit 7 of its areaId and means nothing, so garbage with bit31 set silently
+    // switched the map term OFF instead of failing it (2 of the 6 logged FAILs).
+    let record_is_ours =
+        PROFILE_PREVIEW_FACE_HASH[render_target_slot as usize].load(Ordering::SeqCst) != 0;
+    let map_mismatch = record_is_ours && packed_maps_disagree(our_map, live_map);
     if name_match && !map_mismatch {
         return; // our portrait's character == the loaded character (RAM identity match).
     }
+
+    // Self-classifying failure line: everything needed to tell a real wrong-character render from a
+    // pre-load transient, without re-deriving it from a second log. Previously our_name/live_name
+    // were in scope and thrown away, so every FAIL had to be re-litigated by hand.
+    let gm_ptr = game_man_ptr_or_null();
+    let ac0 = (unsafe { eldenring::cs::GameMan::instance() })
+        .map(|gm| er_save_loader::GameManSaveAccess::save_slot(gm))
+        .unwrap_or(OWN_STEPPER_SLOT_NONE);
+    let b78 = if gm_ptr != null {
+        unsafe { safe_read_i32(gm_ptr + GAME_MAN_SLOT_SELECT_B78_OFFSET) }.unwrap_or(i32::MIN)
+    } else {
+        i32::MIN
+    };
+    let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    let fresh_deser = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst);
     let cond = ((!name_match) as usize) | ((map_mismatch as usize) << 1);
+    // areaId (the high byte), NOT `& 0xff` -- the low byte of a packed BlockId is the indexId and
+    // is 0 on nearly every real map, so the old packing threw away the only discriminating byte.
     PORTRAIT_RENDER_SEMAPHORE_STATE.store(
         ((render_target_slot as u32 as usize) << 16)
-            | ((our_map as u32 as usize & 0xff) << 8)
+            | ((er_loading_portrait::portrait_identity::packed_map_area_id(our_map) as usize) << 8)
             | cond,
         Ordering::SeqCst,
     );
+    let our_text = String::from_utf16_lossy(&our_name[..our_len]);
+    let live_text = String::from_utf16_lossy(&live_name[..live_len]);
     if PORTRAIT_RENDER_SEMAPHORE_LOGGED.swap(1, Ordering::SeqCst) == 0 {
         append_crash_log(format_args!(
-            "PORTRAIT-IDENTITY-SEMAPHORE FAIL: our portrait targets slot={render_target_slot} (record name_len={our_len} map=0x{our_map:x}) but the LOADED character is name_len={live_len} map=0x{live_map:x} -- name_match={name_match} map_mismatch={map_mismatch}. Our portrait is not the loaded character (er-effects-rs-j3r); deliberate fault only if ER_EFFECTS_FAIL_FAST=1"
+            "PORTRAIT-IDENTITY-SEMAPHORE FAIL: our portrait targets slot={render_target_slot} (record name='{our_text}' len={our_len} map=0x{our_map:x}) but the LOADED character is name='{live_text}' len={live_len} map=0x{live_map:x} -- name_match={name_match} map_mismatch={map_mismatch} record_is_ours={record_is_ours} ac0={ac0} b78={b78} quickload_phase={quickload_phase} fresh_deser={fresh_deser}. Our portrait is not the loaded character (er-effects-rs-j3r); deliberate fault only if ER_EFFECTS_FAIL_FAST=1"
         ));
         append_autoload_debug(format_args!(
-            "PORTRAIT-IDENTITY-SEMAPHORE FAIL: target_slot={render_target_slot} record(name_len={our_len} map=0x{our_map:x}) vs loaded(name_len={live_len} map=0x{live_map:x}) name_match={name_match} map_mismatch={map_mismatch}"
+            "PORTRAIT-IDENTITY-SEMAPHORE FAIL: target_slot={render_target_slot} record(name='{our_text}' len={our_len} map=0x{our_map:x}) vs loaded(name='{live_text}' len={live_len} map=0x{live_map:x}) name_match={name_match} map_mismatch={map_mismatch} record_is_ours={record_is_ours} ac0={ac0} b78={b78} quickload_phase={quickload_phase} fresh_deser={fresh_deser}"
         ));
     }
     if crate::crashlog::deliberate_fail_fast_enabled() {
@@ -644,7 +712,11 @@ pub(crate) const PROFILE_SUMMARY_GENDER_OFFSET: usize = 0x290;
 pub(crate) const PROFILE_SUMMARY_ARCHETYPE_OFFSET: usize = 0x291;
 pub(crate) const PROFILE_SUMMARY_STARTING_GIFT_OFFSET: usize = 0x292;
 pub(crate) const PROFILE_SUMMARY_FIELD_C4_OFFSET: usize = 0x293;
-pub(crate) const SAVE_SLOT_MAP_OFFSET: usize = 0x14;
+/// Body-relative offset of the slot's saved `BlockId`. NOT a literal here on purpose -- the single
+/// declaration lives in `er_save_loader::bnd4`, next to the Ghidra proof and the corpus test that
+/// pins it, so this cannot silently drift back to the `0x14` that read a `CSRandXorshift` dword
+/// and wrote it into the live `CS::ProfileSummary` record at +0x30 (bd er-effects-rs-qoqc).
+pub(crate) use er_save_loader::bnd4::SLOT_BODY_MAP_OFFSET as SAVE_SLOT_MAP_OFFSET;
 pub(crate) const SAVE_FACE_MAGIC: &[u8; 4] = b"FACE";
 pub(crate) const SAVE_FACE_DATA_BUFFER_SIZE: usize = 0x120;
 
@@ -855,8 +927,11 @@ impl<'a> SerializedSaveSlot<'a> {
         Self { body }
     }
 
+    /// The saved `BlockId` / map id this slot deserializes into `GameMan+0xc30`. Delegates to
+    /// `er_save_loader::bnd4::slot_saved_map`, which is the function the host corpus test asserts
+    /// against, so `saved_map()` IS the tested read rather than a parallel one that can drift.
     pub(crate) fn saved_map(self) -> Option<i32> {
-        self.read_i32(SAVE_SLOT_MAP_OFFSET)
+        er_save_loader::bnd4::slot_saved_map(self.body)
     }
 
     fn read_u32(self, offset: usize) -> Option<u32> {

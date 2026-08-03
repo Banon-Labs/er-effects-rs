@@ -24,6 +24,44 @@ pub const ENTRY_MD5_LEN: usize = 0x10;
 /// Expected full entry size of a character slot (`0x10` MD5 + body). Sanity only.
 pub const SLOT_ENTRY_LEN: usize = ENTRY_MD5_LEN + SLOT_BODY_LEN; // 0x280010
 
+/// Body-relative offset of the slot's saved `BlockId` (the packed map id that becomes
+/// `GameMan.stayInMultipleAreaBlockId`, a.k.a. the runtime `c30`).
+///
+/// **This is `0x04`, NOT `0x14`** — re-verified against the 1.16.2 Ghidra dump 2026-08-02
+/// and again 2026-08-03, both directions:
+///
+/// * SERIALIZER `FUN_14067dc00` builds the 16-byte body header as
+///   `local_150 = CONCAT44(BVar3, GetGameDataVersion()); Write(&local_150, 0x10)` — little-endian,
+///   so the data version lands at body+0x00 and the `BlockId` at body+0x04. It then writes FOUR
+///   `CS::CSRandXorshift::NextInt` dwords as the *next* 0x10 bytes, so **body+0x10..0x20 is random
+///   noise** and body+0x14 is merely the second random dword.
+/// * DESERIALIZER `FUN_14067bd70` mirrors it: `ReadBytes(&local_50, 0x10)` then
+///   `param_1->stayInMultipleAreaBlockId = local_50._4_4_` (bytes 4..8 of that read), then
+///   `SkipBytes(0x10)` straight over the random block.
+/// * `GameMan::stayInMultipleAreaBlockId` sits at struct offset 3120 = `0xC30`, which is exactly
+///   the field `GAME_MAN_SAVED_MAP_C30_OFFSET` reads at runtime — so body+0x04 and the live `c30`
+///   are the same quantity.
+///
+/// Byte-confirmed on the corpus: `save-files/25-Invades-patches/ER0000.sl2` `USER_DATA003` body
+/// header is `fa 00 00 00 | 00 00 01 0c | 07 40 4e 17 | 00 00 00 00 | aa 52 39 d1 | 7c 45 20 3e ...`,
+/// i.e. body+0x04 = `0x0c010000` (a clean packed BlockId, areaId 0x0c) and body+0x14 = `0x3e20457c`
+/// (uniform garbage). Across 726 active corpus slots every body+0x04 areaId lands in
+/// `0x0a..=0x3d`, while only 9% of body+0x14 words do.
+///
+/// The DLL's `SAVE_SLOT_MAP_OFFSET` is a re-export of THIS constant, so there is exactly one
+/// literal: the `0x14` that shipped previously wrote a random dword into the live
+/// `CS::ProfileSummary` record at +0x30 and made the portrait identity semaphore fire on noise.
+/// Same off-by-0x10 as the sibling steam-id field below, which was already correct.
+pub const SLOT_BODY_MAP_OFFSET: usize = 0x04;
+
+/// Read a character slot body's saved `BlockId` / map id (see [`SLOT_BODY_MAP_OFFSET`]).
+/// `None` when the body is too short to hold the header.
+#[must_use]
+pub fn slot_saved_map(body: &[u8]) -> Option<i32> {
+    body.get(SLOT_BODY_MAP_OFFSET..SLOT_BODY_MAP_OFFSET + 4)
+        .map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+}
+
 const BND4_MAGIC: &[u8; 4] = b"BND4";
 const MAGIC_LEN: usize = 4;
 /// Expected BND4 file header size; the actual value is read from the header
@@ -863,21 +901,52 @@ pub fn md5_digest(input: &[u8]) -> [u8; 16] {
 mod tests {
     use super::*;
 
+    /// Root of the local save corpus. Game-derived bytes are never versioned, so every test that
+    /// reads one SKIPS when the root is absent. Env-overridable (`ER_SAVE_CORPUS_ROOT`) so the
+    /// suite is not pinned to one machine's layout; defaults to the repo's `save-files/`.
+    fn corpus_root() -> std::path::PathBuf {
+        std::env::var_os("ER_SAVE_CORPUS_ROOT")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../save-files")
+            })
+    }
+
+    fn load_corpus_save(relative: &str) -> Option<Vec<u8>> {
+        std::fs::read(corpus_root().join(relative)).ok()
+    }
+
     fn load_fixture() -> Option<Vec<u8>> {
-        // repo-root/save-files/45-Slots/ER0000.sl2 ; crate is crates/er-save-loader
-        let p = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../save-files/45-Slots/ER0000.sl2"
-        );
-        std::fs::read(p).ok()
+        load_corpus_save("45-Slots/ER0000.sl2")
     }
 
     fn load_150_banon_fixture() -> Option<Vec<u8>> {
-        let p = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../save-files/150-Banon/ER0000.sl2"
-        );
-        std::fs::read(p).ok()
+        load_corpus_save("150-Banon/ER0000.sl2")
+    }
+
+    /// Every `.sl2`/`.co2` under the corpus root, recursively. Empty when the root is absent.
+    fn corpus_containers() -> Vec<std::path::PathBuf> {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("sl2") || e.eq_ignore_ascii_case("co2"))
+                {
+                    out.push(path);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&corpus_root(), &mut out);
+        out.sort();
+        out
     }
 
     fn count_bytes(haystack: &[u8], needle: &[u8]) -> usize {
@@ -1128,9 +1197,78 @@ mod tests {
         // c30 (saved map) candidate = body+4, proven 0x1c000000 for this save
         let c30 = u32::from_le_bytes([body[4], body[5], body[6], body[7]]);
         assert_eq!(c30, 0x1c00_0000, "slot 0 c30/map dword");
+        // ...and that literal body+4 IS what the accessor returns. This is the anti-drift pin for
+        // `SLOT_BODY_MAP_OFFSET`: the DLL's `SAVE_SLOT_MAP_OFFSET` / `SerializedSaveSlot::saved_map`
+        // are re-exports of this constant and this function, so a silent return to the old `0x14`
+        // (which read a `CSRandXorshift` dword and wrote it into the live ProfileSummary record)
+        // fails right here.
+        assert_eq!(SLOT_BODY_MAP_OFFSET, 0x04);
+        assert_eq!(
+            slot_saved_map(body),
+            Some(c30 as i32),
+            "slot_saved_map must return the body+0x04 dword"
+        );
         // plaintext sanity: a real decrypted body is structured (lots of zeros),
         // not high-entropy ciphertext.
         let zeros = body[..0x10000].iter().filter(|&&b| b == 0).count();
         assert!(zeros > 0x10000 / 4, "body should be structured plaintext");
+    }
+
+    /// Corpus-wide shape check for [`SLOT_BODY_MAP_OFFSET`]. A packed `BlockId` is
+    /// `{indexId, regionId, blockId, areaId}` little-endian, so the areaId is the HIGH byte; every
+    /// real ER area id observed across the corpus sits in `0x0a..=0x3d`. The word at the OLD
+    /// offset (body+0x14) is one of four `CSRandXorshift::NextInt` dwords, so it clears that
+    /// range only by chance. Requiring body+0x04 to pass on every active slot while body+0x14
+    /// passes on a small minority is a structural, machine-checkable statement of which offset
+    /// holds the map — no game bytes are versioned, and the whole test skips without the corpus.
+    #[test]
+    fn every_corpus_slot_map_is_a_plausible_block_id_at_body_04() {
+        let containers = corpus_containers();
+        if containers.is_empty() {
+            eprintln!("save corpus absent (set ER_SAVE_CORPUS_ROOT); skipping");
+            return;
+        }
+        const AREA_MIN: u8 = 0x0a;
+        const AREA_MAX: u8 = 0x3d;
+        let area_of = |v: i32| ((v as u32) >> 24) as u8;
+        let mut active = 0usize;
+        let mut noise_offset_plausible = 0usize;
+        for path in &containers {
+            let Ok(data) = std::fs::read(path) else {
+                continue;
+            };
+            let Ok(active_flags) = active_slots(&data) else {
+                continue;
+            };
+            for (slot, occupied) in active_flags.iter().enumerate() {
+                if !occupied {
+                    continue;
+                }
+                let Ok(body) = slot_body(&data, slot) else {
+                    continue;
+                };
+                let map = slot_saved_map(body).expect("slot body holds a header");
+                active += 1;
+                assert!(
+                    (AREA_MIN..=AREA_MAX).contains(&area_of(map)),
+                    "{}: slot {slot} map 0x{map:08x} has areaId 0x{:02x} outside 0x{AREA_MIN:02x}..=0x{AREA_MAX:02x} -- body+0x{SLOT_BODY_MAP_OFFSET:02x} is not the BlockId",
+                    path.display(),
+                    area_of(map),
+                );
+                let noise = i32::from_le_bytes(body[0x14..0x18].try_into().expect("4 bytes"));
+                if (AREA_MIN..=AREA_MAX).contains(&area_of(noise)) {
+                    noise_offset_plausible += 1;
+                }
+            }
+        }
+        assert!(active > 0, "corpus present but held no active slots");
+        // The old offset must be visibly WORSE, not merely different: if body+0x14 ever passed as
+        // often as body+0x04 this discriminator would be worthless and the pin above would be the
+        // only guard left.
+        assert!(
+            noise_offset_plausible * 4 < active,
+            "body+0x14 looked like a BlockId on {noise_offset_plausible}/{active} slots -- \
+             that offset is supposed to be CSRandXorshift noise"
+        );
     }
 }

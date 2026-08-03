@@ -1679,6 +1679,10 @@ pub(crate) unsafe extern "system" fn system_quit_inworld_load_skip_hook(slot: i3
     let selected = SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst);
     if ret != 0 && selected < TITLE_PROFILE_SLOT_COUNT && slot == selected as i32 {
         SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(1, Ordering::SeqCst);
+        // Which slot's deserialize completed (slot+1) -- ground truth for the published-vs-loaded
+        // portrait oracle. See er_telemetry counters.
+        er_telemetry::counters::SYSTEM_QUIT_FRESH_DESER_DONE_SLOT
+            .store((slot + 1) as usize, Ordering::SeqCst);
         SYSTEM_QUIT_QUICKLOAD_PHASE.store(SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE, Ordering::SeqCst);
         let gm = game_man_ptr_or_null();
         if gm != TITLE_OWNER_SCAN_START_ADDRESS {
