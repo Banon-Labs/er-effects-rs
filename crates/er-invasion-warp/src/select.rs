@@ -139,6 +139,62 @@ pub fn next_from(resolved: &[ResolvedTarget], current: Option<u64>) -> Option<us
     best.map(|(index, _)| index).or_else(|| lowest_id(resolved))
 }
 
+/// [`next_from`] over RAW catalog targets, which is the form that matters for crossing areas.
+///
+/// The cycle orders by [`InvasionWarpTarget::stable_id`] and needs no world coordinates at all,
+/// so it must NOT be restricted to targets the engine could convert. Restricting it was a real
+/// bug: `ConvertBlockCoordsToPhysicsCoords` only resolves blocks in the player's currently
+/// resident area, so filtering the candidate set by it silently made every other area
+/// unreachable -- even though the warp itself never needs the conversion (the explicit-spawn
+/// slot takes BLOCK-LOCAL coordinates and `MoveMapStep` converts them after the destination
+/// loads).
+#[must_use]
+pub fn next_target_from(targets: &[InvasionWarpTarget], current: Option<u64>) -> Option<usize> {
+    if targets.is_empty() {
+        return None;
+    }
+    let Some(current) = current else {
+        return lowest_target_id(targets);
+    };
+    let mut best: Option<(usize, u64)> = None;
+    for (index, candidate) in targets.iter().enumerate() {
+        let id = candidate.stable_id();
+        if id <= current {
+            continue;
+        }
+        match best {
+            Some((_, best_id)) if id >= best_id => {}
+            _ => best = Some((index, id)),
+        }
+    }
+    best.map(|(index, _)| index)
+        .or_else(|| lowest_target_id(targets))
+}
+
+/// The first target belonging to an area other than `current_area`.
+///
+/// Deterministic because the catalog is sorted by block then point index. This exists to make
+/// "can the warp leave the area it is standing in" a single decidable action rather than a
+/// property inferred from a filtered candidate count.
+#[must_use]
+pub fn first_in_other_area(targets: &[InvasionWarpTarget], current_area: u8) -> Option<usize> {
+    targets
+        .iter()
+        .position(|target| target.block.area() != current_area)
+}
+
+fn lowest_target_id(targets: &[InvasionWarpTarget]) -> Option<usize> {
+    let mut best: Option<(usize, u64)> = None;
+    for (index, candidate) in targets.iter().enumerate() {
+        let id = candidate.stable_id();
+        match best {
+            Some((_, best_id)) if id >= best_id => {}
+            _ => best = Some((index, id)),
+        }
+    }
+    best.map(|(index, _)| index)
+}
+
 fn lowest_id(resolved: &[ResolvedTarget]) -> Option<usize> {
     let mut best: Option<(usize, u64)> = None;
     for (index, candidate) in resolved.iter().enumerate() {
@@ -300,6 +356,43 @@ mod tests {
         // And the lap closes back onto its own start.
         let wrapped = next_from(&resolved, current).expect("cycle wraps");
         assert_eq!(wrapped, seen[0]);
+    }
+
+    #[test]
+    fn the_raw_target_cycle_matches_the_resolved_one_when_everything_resolves() {
+        let raw = [
+            InvasionWarpTarget::new(block(3), 1, [0.0; 3], 0.0),
+            InvasionWarpTarget::new(block(1), 0, [0.0; 3], 0.0),
+            InvasionWarpTarget::new(block(2), 7, [0.0; 3], 0.0),
+        ];
+        let resolved: Vec<_> = raw
+            .iter()
+            .map(|t| ResolvedTarget::new(*t, [0.0; 3]))
+            .collect();
+        assert_eq!(next_target_from(&raw, None), next_from(&resolved, None));
+        let first = raw[1].stable_id();
+        assert_eq!(
+            next_target_from(&raw, Some(first)),
+            next_from(&resolved, Some(first))
+        );
+    }
+
+    #[test]
+    fn the_cross_area_jump_finds_a_target_outside_the_current_area() {
+        // The case that matters live: standing in the DLC (61), reach the base game (60).
+        let targets = [
+            InvasionWarpTarget::new(BlockKey::from_parts(61, 49, 41, 0), 0, [0.0; 3], 0.0),
+            InvasionWarpTarget::new(BlockKey::from_parts(61, 50, 41, 0), 0, [0.0; 3], 0.0),
+            InvasionWarpTarget::new(BlockKey::from_parts(60, 33, 40, 0), 0, [0.0; 3], 0.0),
+        ];
+        assert_eq!(first_in_other_area(&targets, 61), Some(2));
+        assert_eq!(first_in_other_area(&targets, 60), Some(0));
+    }
+
+    #[test]
+    fn a_single_area_catalog_has_no_cross_area_target() {
+        let targets = [InvasionWarpTarget::new(block(0), 0, [0.0; 3], 0.0)];
+        assert_eq!(first_in_other_area(&targets, 60), None);
     }
 
     #[test]

@@ -85,6 +85,12 @@ cat <<'EOF'
 [invasion-warp-profile]       standing on, so pressing it repeatedly keeps moving)
 [invasion-warp-profile]   F8  warp to the NEXT point in catalog order -- this one crosses the
 [invasion-warp-profile]       map, because the order is by block id, not by distance
+[invasion-warp-profile]   F9  warp to another AREA entirely (base game <-> Shadow of the
+[invasion-warp-profile]       Erdtree). F7 can only see points in the area you are already in,
+[invasion-warp-profile]       because ranking by distance needs world coordinates and the engine
+[invasion-warp-profile]       only converts blocks in the resident area. F8 and F9 have no such
+[invasion-warp-profile]       limit: the warp takes BLOCK-LOCAL coordinates and the game converts
+[invasion-warp-profile]       them after the destination loads.
 [invasion-warp-profile] Both only respond while the Elden Ring window has focus. Each warp is a
 [invasion-warp-profile] real area reload, so expect a loading screen exactly like a grace warp.
 [invasion-warp-profile]

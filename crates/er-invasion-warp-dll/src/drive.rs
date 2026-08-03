@@ -25,7 +25,9 @@ use er_invasion_warp::warp::{WARP_ARRIVAL_TICK_BUDGET, WarpArrival, WarpOutcome}
 #[cfg(windows)]
 use er_invasion_warp::invasion_warp::InvasionWarpTarget;
 #[cfg(windows)]
-use er_invasion_warp::select::{ResolvedTarget, nearest_from, next_from};
+use er_invasion_warp::select::{
+    ResolvedTarget, first_in_other_area, nearest_from, next_target_from,
+};
 #[cfg(windows)]
 use er_invasion_warp::warp::classify_arrival;
 
@@ -34,6 +36,11 @@ pub const VK_WARP_NEAREST: i32 = 0x76;
 /// `VK_F8`: step to the next invasion spawn point in the catalog's stable order. Unlike
 /// "nearest" this crosses the map, because the order is by block id rather than by distance.
 pub const VK_WARP_NEXT: i32 = 0x77;
+/// `VK_F9`: jump to the first spawn point in a DIFFERENT area than the one the player is in --
+/// base game <-> Shadow of the Erdtree. A deliberate single action rather than something
+/// inferred from candidate counts, because "can the warp leave its own area" is the one
+/// question a filtered candidate list cannot answer.
+pub const VK_WARP_OTHER_AREA: i32 = 0x78;
 
 /// `GetAsyncKeyState` sets the high bit while the key is held.
 #[cfg(windows)]
@@ -143,6 +150,7 @@ enum DriveState {
 pub struct InvasionWarpDrive {
     nearest_key: KeyEdge,
     next_key: KeyEdge,
+    other_area_key: KeyEdge,
     state: DriveState,
     /// Stable id of the last target warped to, so [`next_from`] advances instead of repeating.
     last_target_id: Option<u64>,
@@ -166,6 +174,7 @@ impl InvasionWarpDrive {
         Self {
             nearest_key: KeyEdge::new(VK_WARP_NEAREST),
             next_key: KeyEdge::new(VK_WARP_NEXT),
+            other_area_key: KeyEdge::new(VK_WARP_OTHER_AREA),
             state: DriveState::Idle,
             last_target_id: None,
             warps_issued: 0,
@@ -248,11 +257,13 @@ impl InvasionWarpDrive {
         if !focused {
             self.nearest_key.forget();
             self.next_key.forget();
+            self.other_area_key.forget();
             return;
         }
         let want_nearest = self.nearest_key.pressed_this_tick();
         let want_next = self.next_key.pressed_this_tick();
-        if !want_nearest && !want_next {
+        let want_other_area = self.other_area_key.pressed_this_tick();
+        if !want_nearest && !want_next && !want_other_area {
             return;
         }
         log(format_args!(
@@ -268,29 +279,79 @@ impl InvasionWarpDrive {
             return;
         };
 
-        let resolved = unsafe { resolve_catalog(base, log) };
-        if resolved.is_empty() {
+        // The FULL catalog is the candidate set for everything except "nearest".
+        //
+        // Only "nearest" needs world coordinates, because only it needs distances. The warp
+        // itself never does: the explicit-spawn slot takes BLOCK-LOCAL coordinates and
+        // MoveMapStep runs ConvertBlockCoordsToPhysicsCoords on them once the destination area
+        // has loaded. Filtering every candidate through that conversion up front -- it resolves
+        // only blocks in the player's currently resident area -- silently made every OTHER area
+        // unreachable. A live run showed it as "2591 of 7073 targets converted" while standing
+        // in the DLC: exactly the dlc02 count, with the whole base game excluded.
+        let catalog =
+            match unsafe { er_invasion_warp::invasion_warp::collect_invasion_warp_catalog() } {
+                Ok(catalog) => catalog,
+                Err(error) => {
+                    log(format_args!(
+                        "invasion-warp: hotkey ignored -- catalog unavailable: {error}"
+                    ));
+                    return;
+                }
+            };
+        let targets = catalog.targets();
+        if targets.is_empty() {
             log(format_args!(
-                "invasion-warp: hotkey ignored -- no invasion target could be converted to world \
-                 coordinates (catalog empty or no block resident)"
+                "invasion-warp: hotkey ignored -- the catalog is empty"
             ));
             return;
         }
 
-        let index = if want_nearest {
-            nearest_from(&resolved, player_position)
+        let target = if want_nearest {
+            let resolved = unsafe { resolve_catalog(base, log) };
+            match nearest_from(&resolved, player_position) {
+                Some(index) => resolved[index].target,
+                None => {
+                    log(format_args!(
+                        "invasion-warp: hotkey ignored -- no NEAREST target ({} of {} placeable \
+                         in this area, and none outside the same-point radius)",
+                        resolved.len(),
+                        targets.len()
+                    ));
+                    return;
+                }
+            }
+        } else if want_next {
+            match next_target_from(targets, self.last_target_id) {
+                Some(index) => targets[index],
+                None => return,
+            }
         } else {
-            next_from(&resolved, self.last_target_id)
+            let current_area = unsafe { er_invasion_warp::warp::current_block_id(base) }
+                .map(|block| er_invasion_warp::invasion_warp::BlockKey::from_raw(block).area());
+            let Some(current_area) = current_area else {
+                log(format_args!(
+                    "invasion-warp: hotkey ignored -- current block id unavailable, so 'other \
+                     area' has nothing to be other than"
+                ));
+                return;
+            };
+            match first_in_other_area(targets, current_area) {
+                Some(index) => {
+                    log(format_args!(
+                        "invasion-warp: cross-area jump: leaving area {current_area} for area {}",
+                        targets[index].block.area()
+                    ));
+                    targets[index]
+                }
+                None => {
+                    log(format_args!(
+                        "invasion-warp: hotkey ignored -- every catalog target is already in \
+                         area {current_area}"
+                    ));
+                    return;
+                }
+            }
         };
-        let Some(index) = index else {
-            log(format_args!(
-                "invasion-warp: hotkey ignored -- no selectable target ({} resolved, all within \
-                 the same-point radius of the player)",
-                resolved.len()
-            ));
-            return;
-        };
-        let target = resolved[index].target;
 
         match unsafe { er_invasion_warp::warp::request_invasion_warp(&target) } {
             Ok(outcome) => {
@@ -300,7 +361,13 @@ impl InvasionWarpDrive {
                     "invasion-warp: warp issued via {} -> block {} (requested {:#010x}, effective \
                      {:#010x}) point {} pos [{:.2}, {:.2}, {:.2}] yaw {:.4} spawn_flag={} \
                      session_touches={} candidates={}",
-                    if want_nearest { "NEAREST" } else { "NEXT" },
+                    if want_nearest {
+                        "NEAREST"
+                    } else if want_next {
+                        "NEXT"
+                    } else {
+                        "OTHER-AREA"
+                    },
                     target.block,
                     outcome.requested_block,
                     outcome.effective_block,
@@ -311,7 +378,7 @@ impl InvasionWarpDrive {
                     outcome.spawn_yaw,
                     outcome.spawn_flag,
                     outcome.session_touches,
-                    resolved.len(),
+                    targets.len(),
                 ));
                 self.state = DriveState::AwaitingArrival {
                     outcome: Box::new(outcome),
