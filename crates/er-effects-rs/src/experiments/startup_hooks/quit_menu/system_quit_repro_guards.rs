@@ -11,11 +11,6 @@ pub(crate) fn sq_repro_waiting_once(msg: &str) {
     }
 }
 
-/// Mismatch bit outside the tab range. Tripped when ProfileSelect->Back restore did not run the
-/// safe native visible-row refresh (`FUN_140975c20`) for the selected OptionSetting pane.
-pub(crate) const SQ_REPRO_PROFILE_BACK_VISIBLE_REFRESH_MISSING_MASK: usize =
-    1usize << OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT;
-
 /// Cumulative ProfileSelect OK-confirm count (cancel-close BLOCK + ALLOW). Legacy fallback signal:
 /// the CONFIRM state's primary advance is the direct-arm phase observation; this count (an INCREASE
 /// over the per-switch baseline, so switch #2 does not trip on switch #1's residual) only fires if
@@ -1587,66 +1582,6 @@ pub(crate) unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, sour
     append_autoload_debug(format_args!(
         "system-quit-quickload: armed product Continue autoload selected_slot={selected_slot} source={source}; will direct-submit native return-title chain once ProfileSelect closes system_dialog=0x{system_dialog:x}"
     ));
-}
-
-pub(crate) unsafe extern "system" fn system_quit_gaitem_finalize_hook(gaitem: usize) {
-    let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
-    if (SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED..SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF)
-        .contains(&phase)
-    {
-        let skips = SYSTEM_QUIT_GAITEM_FINALIZE_SKIP_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-        append_autoload_debug(format_args!(
-            "system-quit-quickload: CSGaitemImp finalize SKIPPED during return-title transition #{skips} phase={phase} gaitem=0x{gaitem:x}; avoids post-deserialize singleton-state assert while native return-title job advances"
-        ));
-        return;
-    }
-    SYSTEM_QUIT_GAITEM_FINALIZE_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
-    let orig = SYSTEM_QUIT_GAITEM_FINALIZE_ORIG.load(Ordering::SeqCst);
-    if orig == HOOK_ORIGINAL_UNSET {
-        append_autoload_debug(format_args!(
-            "system-quit-quickload: CSGaitemImp finalize trampoline unset phase={phase} gaitem=0x{gaitem:x}; fail-closed skip"
-        ));
-        return;
-    }
-    let original: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(orig) };
-    unsafe { original(gaitem) };
-}
-
-pub(crate) unsafe extern "system" fn system_quit_gaitem_lookup_hook(
-    gaitem: usize,
-    out_handle: usize,
-    in_handle: usize,
-) -> usize {
-    let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
-    if (SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED..SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF)
-        .contains(&phase)
-    {
-        if out_handle != 0 && out_handle != TITLE_OWNER_SCAN_START_ADDRESS {
-            unsafe { *(out_handle as *mut u32) = 0 };
-        }
-        let empties = SYSTEM_QUIT_GAITEM_LOOKUP_EMPTY_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-        if empties <= 16 || empties % 64 == 0 {
-            let input = unsafe { safe_read_i32(in_handle) }.unwrap_or(0) as u32;
-            append_autoload_debug(format_args!(
-                "system-quit-quickload: CSGaitemImp lookup EMPTIED during return-title transition #{empties} phase={phase} gaitem=0x{gaitem:x} out=0x{out_handle:x} in=0x{in_handle:x} input=0x{input:x}; avoids ChrAsm equipment lookup assert while stream remains consumed"
-            ));
-        }
-        return out_handle;
-    }
-    SYSTEM_QUIT_GAITEM_LOOKUP_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
-    let orig = SYSTEM_QUIT_GAITEM_LOOKUP_ORIG.load(Ordering::SeqCst);
-    if orig == HOOK_ORIGINAL_UNSET {
-        append_autoload_debug(format_args!(
-            "system-quit-quickload: CSGaitemImp lookup trampoline unset phase={phase} gaitem=0x{gaitem:x}; returning empty"
-        ));
-        if out_handle != 0 && out_handle != TITLE_OWNER_SCAN_START_ADDRESS {
-            unsafe { *(out_handle as *mut u32) = 0 };
-        }
-        return out_handle;
-    }
-    let original: unsafe extern "system" fn(usize, usize, usize) -> usize =
-        unsafe { std::mem::transmute(orig) };
-    unsafe { original(gaitem, out_handle, in_handle) }
 }
 
 /// Guard on the load-only routine `FUN_14067b380(slot)`. While the in-world System->Quit->Load-Profile
