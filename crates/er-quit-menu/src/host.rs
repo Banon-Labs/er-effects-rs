@@ -17,7 +17,16 @@
 //! reader) are specified in docs/plans/save-picker-crate-extraction.md and land with the
 //! slice that moves their caller.
 
+use std::path::PathBuf;
 use std::sync::OnceLock;
+
+/// Where a save-destination browser opens, and what loaded file it is saving beside.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SaveDestOrigin {
+    pub start_dir: PathBuf,
+    pub loaded_file_name: String,
+    pub loaded_path: PathBuf,
+}
 
 /// Host callbacks the quit menu reads through the seam. Every field has a neutral default
 /// (see [`QuitMenuHost::defaults`]); hosts overwrite the ones they own.
@@ -75,6 +84,31 @@ pub struct QuitMenuHost {
     pub product_autoload_enabled: fn() -> bool,
     /// True while a switch-driven reload owns the flow.
     pub switch_reload_active: fn() -> bool,
+    /// True when the configured picker surface is the OS-native common-file dialog.
+    /// The dim overlay is a quit-menu concern, but the surface decision is product-wide.
+    pub os_native_picker_active: fn() -> bool,
+    /// Redact a Windows-form path for debug logs.
+    pub windows_path_for_log: fn(&str) -> String,
+
+    // --- OS-dialog System>Quit picker entrypoints -------------------------------------
+    /// Recover the owning System dialog from a row action object.
+    pub system_dialog_from_action_obj: unsafe fn(usize) -> usize,
+    /// Restore the live ProfileSummary after a non-staging picker return.
+    pub system_quit_save_swap_restore_profile_summary: unsafe fn(&str),
+    /// Arm the original loaded save's ProfileSummary before a source browse.
+    pub system_quit_save_swap_arm_original: fn(&str) -> bool,
+    /// Start directory for the source browse surface.
+    pub save_picker_start_dir: fn() -> Option<PathBuf>,
+    /// Ingest a picked foreign save through the root product pipeline.
+    pub system_quit_ingest_picked_save: unsafe fn(&str) -> bool,
+    /// Start directory and default filename for the destination browser.
+    pub save_dest_start_dir: fn() -> Option<SaveDestOrigin>,
+    /// Stage the chosen save destination target in the product save-flow state machine.
+    pub save_dest_set_target: fn(PathBuf, &'static str),
+    /// True when the overwrite confirm recipe is buildable in the live game state.
+    pub save_flow_box_recipe_available: fn() -> bool,
+    /// Clear the save-flow confirm box state before a direct destination commit.
+    pub save_flow_box_clear: fn(),
 }
 
 fn default_log(_args: std::fmt::Arguments<'_>) {}
@@ -116,6 +150,27 @@ fn default_release_input() {}
 fn default_take_bypass(_reason: &'static str) -> bool {
     false
 }
+unsafe fn default_dialog_from_action(_action_obj: usize) -> usize {
+    0
+}
+unsafe fn default_restore_profile_summary(_reason: &str) {}
+fn default_arm_original(_save_path: &str) -> bool {
+    false
+}
+fn default_no_pathbuf() -> Option<PathBuf> {
+    None
+}
+unsafe fn default_ingest_save(_selected_path: &str) -> bool {
+    false
+}
+fn default_no_save_dest_origin() -> Option<SaveDestOrigin> {
+    None
+}
+fn default_set_target(_path: PathBuf, _source: &'static str) {}
+fn default_clear_save_flow_box() {}
+fn default_windows_path_for_log(path: &str) -> String {
+    path.to_owned()
+}
 
 impl QuitMenuHost {
     /// Neutral defaults: no-op logging, no save source, no summary, no slots, no window,
@@ -142,6 +197,17 @@ impl QuitMenuHost {
             take_save_write_bypass: default_take_bypass,
             product_autoload_enabled: default_gate_off,
             switch_reload_active: default_gate_off,
+            os_native_picker_active: default_gate_off,
+            windows_path_for_log: default_windows_path_for_log,
+            system_dialog_from_action_obj: default_dialog_from_action,
+            system_quit_save_swap_restore_profile_summary: default_restore_profile_summary,
+            system_quit_save_swap_arm_original: default_arm_original,
+            save_picker_start_dir: default_no_pathbuf,
+            system_quit_ingest_picked_save: default_ingest_save,
+            save_dest_start_dir: default_no_save_dest_origin,
+            save_dest_set_target: default_set_target,
+            save_flow_box_recipe_available: default_gate_off,
+            save_flow_box_clear: default_clear_save_flow_box,
         }
     }
 }
@@ -242,6 +308,51 @@ pub(crate) fn product_autoload_enabled() -> bool {
 #[allow(dead_code)]
 pub(crate) fn switch_reload_active() -> bool {
     (host().switch_reload_active)()
+}
+#[allow(dead_code)]
+pub(crate) fn os_native_picker_active() -> bool {
+    (host().os_native_picker_active)()
+}
+#[allow(dead_code)]
+#[allow(dead_code)]
+pub(crate) fn system_quit_windows_path_for_log(path: &str) -> String {
+    (host().windows_path_for_log)(path)
+}
+#[allow(dead_code)]
+pub(crate) unsafe fn system_dialog_from_action_obj(action_obj: usize) -> usize {
+    unsafe { (host().system_dialog_from_action_obj)(action_obj) }
+}
+#[allow(dead_code)]
+pub(crate) unsafe fn system_quit_save_swap_restore_profile_summary(reason: &str) {
+    unsafe { (host().system_quit_save_swap_restore_profile_summary)(reason) }
+}
+#[allow(dead_code)]
+pub(crate) fn system_quit_save_swap_arm_original(save_path: &str) -> bool {
+    (host().system_quit_save_swap_arm_original)(save_path)
+}
+#[allow(dead_code)]
+pub(crate) fn save_picker_start_dir() -> Option<PathBuf> {
+    (host().save_picker_start_dir)()
+}
+#[allow(dead_code)]
+pub(crate) unsafe fn system_quit_ingest_picked_save(selected_path: &str) -> bool {
+    unsafe { (host().system_quit_ingest_picked_save)(selected_path) }
+}
+#[allow(dead_code)]
+pub(crate) fn save_dest_start_dir() -> Option<SaveDestOrigin> {
+    (host().save_dest_start_dir)()
+}
+#[allow(dead_code)]
+pub(crate) fn save_dest_set_target(path: PathBuf, source: &'static str) {
+    (host().save_dest_set_target)(path, source)
+}
+#[allow(dead_code)]
+pub(crate) fn save_flow_box_recipe_available() -> bool {
+    (host().save_flow_box_recipe_available)()
+}
+#[allow(dead_code)]
+pub(crate) fn save_flow_box_clear() {
+    (host().save_flow_box_clear)()
 }
 
 #[cfg(test)]

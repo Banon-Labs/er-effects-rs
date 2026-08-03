@@ -58,6 +58,15 @@ pub mod save_dest_commit;
 pub mod save_dest_identity;
 pub mod save_flow_boxes;
 
+#[cfg(windows)]
+pub mod dim;
+#[cfg(windows)]
+pub use dim::*;
+#[cfg(windows)]
+pub mod os_dialog;
+#[cfg(windows)]
+pub use os_dialog::*;
+
 pub use rows::*;
 pub use save_dest_commit::*;
 pub use save_dest_identity::*;
