@@ -6,8 +6,12 @@ use super::*;
 // live memory capture/telemetry functions in the root DLL until the hooked surfaces move in S8.
 
 pub(crate) use er_quit_menu::rows::{
-    QuitInputKind, QuitRow, QuitRowAmbiguity, QuitRowDiscriminator, QuitRowFacts, QuitRowLabel,
-    QuitRowVerdict, resolve_quit_row,
+    PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_STORAGE_OFFSET,
+    QUIT_ROW_TABLE_ROWS as SYSTEM_QUIT_ROW_TABLE_ROWS, QuitInputKind, QuitRow, QuitRowAmbiguity,
+    QuitRowDiscriminator, QuitRowFacts, QuitRowLabel, QuitRowTable, QuitRowVerdict,
+    quit_controller_of_action_alias as system_quit_controller_of_action_alias, quit_row_facts_text,
+    quit_row_index_from_plus1, quit_row_is_false_quit_claim,
+    quit_row_verdict_text as system_quit_row_verdict_text, resolve_quit_row,
 };
 
 // Live side: capture the row table at build time, read the facts at activation time, and record
@@ -54,11 +58,7 @@ pub(crate) fn system_quit_row_table_index(row: QuitRow) -> i32 {
             SYSTEM_QUIT_ROW_INDEX_LOAD_SAVE_PROFILES_PLUS1.load(Ordering::SeqCst)
         }
     };
-    if plus1 == 0 || plus1 > i32::MAX as usize {
-        -1
-    } else {
-        (plus1 - 1) as i32
-    }
+    quit_row_index_from_plus1(plus1)
 }
 
 /// The captured `PropertyNewButtonController` of a row, or 0 when it was never captured.
@@ -79,13 +79,6 @@ pub(crate) fn system_quit_row_controller(row: QuitRow) -> usize {
     }
 }
 
-pub(crate) const SYSTEM_QUIT_ROW_TABLE_ROWS: [QuitRow; 4] = [
-    QuitRow::SaveGame,
-    QuitRow::ReturnToDesktop,
-    QuitRow::LoadProfile,
-    QuitRow::LoadSaveProfiles,
-];
-
 /// Is this dispatched controller one of the patched Quit tab's four? A pure SCOPE test: the
 /// activation hook shares its `_Func_impl` thunk vtable and `Activate` slot with other dialogs, so it
 /// must forward foreign controllers untouched.
@@ -98,17 +91,6 @@ pub(crate) fn system_quit_controller_is_a_quit_row(controller: usize) -> bool {
         && SYSTEM_QUIT_ROW_TABLE_ROWS
             .into_iter()
             .any(|row| system_quit_row_controller(row) == controller)
-}
-
-/// The `std::function` storage inside a controller that the action thunks receive as their `this`.
-/// `*(controller + 0xa8) == controller + 0x70` for a small callable, so this is the SAME value the
-/// old `*_ACTION_LAST_OBJECT` latches held -- named for what it is.
-pub(crate) const PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_STORAGE_OFFSET: usize = 0x70;
-
-/// Recover the controller an action thunk's `this` pointer aliases. Pure pointer arithmetic: the
-/// action "object" is `controller + 0x70`, never an independent allocation.
-pub(crate) fn system_quit_controller_of_action_alias(action_obj: usize) -> usize {
-    action_obj.saturating_sub(PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_STORAGE_OFFSET)
 }
 
 /// Read the label of one property row, live from the dialog. `EditProperty.label`
@@ -202,18 +184,20 @@ pub(crate) unsafe fn system_quit_resolve_row_now(
     } else {
         -1
     };
-    let facts = QuitRowFacts {
+    let table = QuitRowTable {
         save_game_index: system_quit_row_table_index(QuitRow::SaveGame),
         return_desktop_index: system_quit_row_table_index(QuitRow::ReturnToDesktop),
         load_profile_index: system_quit_row_table_index(QuitRow::LoadProfile),
         load_save_profiles_index: system_quit_row_table_index(QuitRow::LoadSaveProfiles),
-        table_dialog: SYSTEM_QUIT_ROW_TABLE_DIALOG.load(Ordering::SeqCst),
+    };
+    let facts = QuitRowFacts::from_table(
+        table,
+        SYSTEM_QUIT_ROW_TABLE_DIALOG.load(Ordering::SeqCst),
         activation_dialog,
         cursor,
-        row_count: SYSTEM_QUIT_ROW_TABLE_ROWS.len() as i32,
-        cursor_row_label: unsafe { system_quit_row_label_at(activation_dialog, cursor) },
-        input_kind: unsafe { system_quit_classify_activation_input(event) },
-    };
+        unsafe { system_quit_row_label_at(activation_dialog, cursor) },
+        unsafe { system_quit_classify_activation_input(event) },
+    );
     let verdict = resolve_quit_row(&facts);
     system_quit_row_record_resolution(&facts, verdict);
     verdict
@@ -284,31 +268,6 @@ pub(crate) fn system_quit_row_record_resolution(facts: &QuitRowFacts, verdict: Q
     }
 }
 
-/// Both halves of the cursor identity, for the debug log: what the captured table says sits at each
-/// index, and what the label read live at the cursor actually is.
-pub(crate) fn quit_row_facts_text(facts: &QuitRowFacts) -> String {
-    format!(
-        "cursor={} table=[save_game=#{} return_desktop=#{} load_profile=#{} load_save_profiles=#{}] live_label={:?} input_kind={:?}",
-        facts.cursor,
-        facts.save_game_index,
-        facts.return_desktop_index,
-        facts.load_profile_index,
-        facts.load_save_profiles_index,
-        facts.cursor_row_label,
-        facts.input_kind,
-    )
-}
-
-/// One-line description of a verdict for the debug log.
-pub(crate) fn system_quit_row_verdict_text(verdict: QuitRowVerdict) -> String {
-    match verdict {
-        QuitRowVerdict::Resolved { row, by } => {
-            format!("row='{}' by={}", row.label(), by.label())
-        }
-        QuitRowVerdict::Ambiguous(reason) => format!("row=AMBIGUOUS reason={}", reason.label()),
-    }
-}
-
 /// The single gate for the irreversible instant `ExitProcess(0)`. Returns `true` only on POSITIVE
 /// evidence that the activated row is the Return-to-Desktop row; every refusal is counted so a run
 /// shows the gate working instead of merely not crashing. Takes an already-resolved verdict so one
@@ -319,10 +278,7 @@ pub(crate) fn system_quit_row_gate_instant_quit(verdict: QuitRowVerdict, site: &
         return true;
     }
     SYSTEM_QUIT_QUIT_REFUSED_AMBIGUOUS_ROW_COUNT.fetch_add(1, Ordering::SeqCst);
-    if matches!(
-        verdict.resolved_row(),
-        Some(QuitRow::LoadProfile) | Some(QuitRow::LoadSaveProfiles)
-    ) {
+    if quit_row_is_false_quit_claim(verdict) {
         SYSTEM_QUIT_ACTION_ALIAS_FALSE_QUIT_CLAIMS.fetch_add(1, Ordering::SeqCst);
     }
     append_autoload_debug(format_args!(

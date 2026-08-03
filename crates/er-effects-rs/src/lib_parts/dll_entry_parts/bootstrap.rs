@@ -85,6 +85,19 @@ fn game_main_window_handle_usize() -> usize {
     game_main_window().0 as usize
 }
 
+unsafe fn system_dialog_from_action_obj_usize(action_obj: usize) -> usize {
+    unsafe { safe_read_usize(action_obj + SYSTEM_QUIT_ACTION_OBJECT_DIALOG_08_OFFSET) }.unwrap_or(0)
+}
+
+fn save_dest_start_dir_for_quit_menu() -> Option<er_quit_menu::SaveDestOrigin> {
+    let origin = save_dest_start_dir()?;
+    Some(er_quit_menu::SaveDestOrigin {
+        start_dir: origin.start_dir,
+        loaded_file_name: origin.loaded_file_name,
+        loaded_path: origin.loaded_path,
+    })
+}
+
 #[unsafe(no_mangle)]
 /// # Safety
 ///
@@ -142,6 +155,28 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         save_file_core_hooks_live: crate::experiments::save_file_core_hooks_live,
         windows_path_for_log: crate::experiments::system_quit_windows_path_for_log,
         save_dest_commit_window_armed: crate::experiments::save_dest_commit_window_armed,
+    });
+    // Quit-menu crate split: wire product (B)'s seam before its moved hook code can run.
+    // This slice moves the OS-dialog dim overlay; the rest of the seam stays on neutral
+    // defaults until the corresponding hooked surfaces move.
+    er_quit_menu::install_host(er_quit_menu::QuitMenuHost {
+        append_autoload_debug: crate::telemetry::append_autoload_debug,
+        append_crash_log: crate::telemetry::append_crash_log,
+        game_main_window: game_main_window_handle_usize,
+        os_native_picker_active: crate::experiments::os_native_picker_active,
+        windows_path_for_log: crate::experiments::system_quit_windows_path_for_log,
+        system_dialog_from_action_obj: system_dialog_from_action_obj_usize,
+        system_quit_save_swap_restore_profile_summary:
+            crate::experiments::system_quit_save_swap_restore_profile_summary,
+        system_quit_save_swap_arm_original:
+            crate::experiments::system_quit_save_swap_arm_original,
+        save_picker_start_dir: crate::experiments::save_picker_start_dir,
+        system_quit_ingest_picked_save: crate::experiments::system_quit_ingest_picked_save,
+        save_dest_start_dir: save_dest_start_dir_for_quit_menu,
+        save_dest_set_target: crate::experiments::save_dest_set_target,
+        save_flow_box_recipe_available: crate::experiments::save_flow_box_recipe_available,
+        save_flow_box_clear: crate::experiments::save_flow_box_clear,
+        ..er_quit_menu::QuitMenuHost::defaults()
     });
     // Title-flow crate split: wire the er-title-flow seam to the real product fns, same
     // rules as the portrait seam above (installed before any hook install or task spawn
