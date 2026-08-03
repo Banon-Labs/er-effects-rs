@@ -76,9 +76,6 @@ pub struct TitleFlowHost {
     pub apply_xor_ret_stub: fn(usize, usize, &str),
     pub patch_3byte_stub: fn(usize, usize, u8, [u8; 3], &str) -> bool,
     pub install_auto_accept_hook: fn(),
-    pub disable_system_quit_gaitem_deserialize_hook: fn(&str),
-    pub disable_system_quit_gaitem_finalize_hook: fn(&str),
-    pub disable_system_quit_gaitem_lookup_hook: fn(&str),
     // --- menu/dialog observation -----------------------------------------------------
     pub decode_thunk_hop: unsafe fn(usize) -> Option<usize>,
     pub scan_dialog_for_loadgame: unsafe fn(usize, usize) -> (Option<usize>, Option<usize>),
@@ -259,9 +256,6 @@ impl TitleFlowHost {
             apply_xor_ret_stub: default_apply_xor_ret_stub,
             patch_3byte_stub: default_patch_3byte_stub,
             install_auto_accept_hook: default_unit,
-            disable_system_quit_gaitem_deserialize_hook: default_unit_str,
-            disable_system_quit_gaitem_finalize_hook: default_unit_str,
-            disable_system_quit_gaitem_lookup_hook: default_unit_str,
             decode_thunk_hop: default_decode_thunk_hop,
             scan_dialog_for_loadgame: default_scan_dialog_for_loadgame,
             resolve_menu_system_save_load: default_resolve_menu_system_save_load,
@@ -438,15 +432,6 @@ pub(crate) fn patch_3byte_stub(
 }
 pub(crate) fn install_auto_accept_hook() {
     (host().install_auto_accept_hook)()
-}
-pub(crate) fn disable_system_quit_gaitem_deserialize_hook(source: &str) {
-    (host().disable_system_quit_gaitem_deserialize_hook)(source)
-}
-pub(crate) fn disable_system_quit_gaitem_finalize_hook(source: &str) {
-    (host().disable_system_quit_gaitem_finalize_hook)(source)
-}
-pub(crate) fn disable_system_quit_gaitem_lookup_hook(source: &str) {
-    (host().disable_system_quit_gaitem_lookup_hook)(source)
 }
 pub(crate) unsafe fn decode_thunk_hop(addr: usize) -> Option<usize> {
     unsafe { (host().decode_thunk_hop)(addr) }

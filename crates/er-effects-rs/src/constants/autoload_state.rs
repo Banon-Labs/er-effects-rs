@@ -343,11 +343,6 @@ pub(crate) const MSGBOX_FADE_TARGET_2300_OFFSET: usize = 0x2300;
 pub(crate) const MSGBOX_FINISHED_TRUE: u8 = true as u8;
 pub(crate) const MSGBOX_FINISHED_FALSE: u8 = false as u8;
 pub(crate) const AUTO_ACCEPT_LOG_INTERVAL: usize = 30;
-/// The `MenuWindowJob` currently executing inside `system_quit_menu_window_job_run_hook` (stored at
-/// its entry each call). The MessageBox builder hook -- which fires nested inside that Run when a job
-/// shows a `CS::MessageBoxDialog` -- reads this to learn WHICH job is building a (Seamless-suppressed)
-/// popup, so that job's next Run can be advanced past the never-shown modal.
-pub(crate) use er_telemetry::counters::CURRENT_MENU_WINDOW_JOB_RUN_JOB;
 /// A `MenuWindowJob` whose Run built a Seamless-suppressed (ERSC post-PAB) MessageBox. Its next Run
 /// is forced to `MenuJobResult(Success)` so the title `FixOrderJobSequence` steps past the popup that
 /// was never shown -- the same advance the ToS-skip performs. 0 = none pending.

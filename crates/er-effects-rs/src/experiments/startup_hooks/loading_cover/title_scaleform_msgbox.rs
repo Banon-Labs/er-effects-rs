@@ -48,8 +48,6 @@ use crate::*;
 #[allow(unused_imports)]
 use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 
-pub(crate) static TITLE_SCALEFORM_MEMORY_GFX: OnceLock<Vec<u8>> = OnceLock::new();
-pub(crate) static TITLE_SCALEFORM_05_000_MEMORY_GFX: OnceLock<Vec<u8>> = OnceLock::new();
 /// Runtime-derived stripped 05_000_title movie (er-effects-rs-h7x): computed once at first
 /// title file-open from the native MemoryFile's vanilla payload, then reused for every later
 /// title visit. Lives for the process lifetime so the swapped-in data pointer stays valid for
@@ -67,77 +65,14 @@ pub(crate) static OPTIONS_02_040_QUIT4_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceL
 pub(crate) use er_telemetry::counters::OPTIONS_02_040_QUIT4_RUNTIME_FAILURES;
 pub(crate) use er_telemetry::counters::OPTIONS_02_040_QUIT4_RUNTIME_SERVES;
 
-pub(crate) fn load_memory_gfx_from_env(var: &str, slot: &OnceLock<Vec<u8>>, label: &str) {
-    // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): the env-driven memory-GFX override
-    // (`var` named a custom-movie path / embedded selector) is removed -- env feature gates are
-    // forbidden. Inert no-op now: with no env source `path` is empty and the loader does nothing, so
-    // the product-default runtime 05_000 strip is the sole title-resource path.
-    let _ = var;
-    let path = String::new();
-    let trimmed = path.trim();
-    if trimmed.is_empty() || slot.get().is_some() {
-        return;
-    }
-    let embedded_bytes = if trimmed.eq_ignore_ascii_case("embedded:minimal-magenta") {
-        Some(TITLE_MINIMAL_MAGENTA_GFX)
-    } else if trimmed.eq_ignore_ascii_case("embedded:minimal-magenta-counter") {
-        Some(TITLE_MINIMAL_MAGENTA_COUNTER_GFX)
-    } else {
-        None
-    };
-    if let Some(bytes) = embedded_bytes {
-        TITLE_SCALEFORM_MEMORY_GFX_BYTES.fetch_add(bytes.len(), Ordering::SeqCst);
-        let _ = slot.set(bytes.to_vec());
-        append_autoload_debug(format_args!(
-            "title-resource-observer: loaded embedded memory-backed {label} selector='{}' bytes={}",
-            trimmed,
-            slot.get().map(|bytes| bytes.len()).unwrap_or(0)
-        ));
-        return;
-    }
-    match fs::read(trimmed) {
-        Ok(bytes) if bytes.starts_with(b"GFX") => {
-            TITLE_SCALEFORM_MEMORY_GFX_BYTES.fetch_add(bytes.len(), Ordering::SeqCst);
-            let _ = slot.set(bytes);
-            append_autoload_debug(format_args!(
-                "title-resource-observer: loaded memory-backed {label} bytes={} from '{}'",
-                slot.get().map(|bytes| bytes.len()).unwrap_or(0),
-                trimmed
-            ));
-        }
-        Ok(bytes) => {
-            TITLE_SCALEFORM_MEMORY_GFX_FAILURES.fetch_add(1, Ordering::SeqCst);
-            append_autoload_debug(format_args!(
-                "title-resource-observer: refused memory-backed {label} '{}' bytes={} (missing GFX magic)",
-                trimmed,
-                bytes.len()
-            ));
-        }
-        Err(err) => {
-            TITLE_SCALEFORM_MEMORY_GFX_FAILURES.fetch_add(1, Ordering::SeqCst);
-            append_autoload_debug(format_args!(
-                "title-resource-observer: failed to read memory-backed {label} '{}': {err}",
-                trimmed
-            ));
-        }
-    }
-}
-
-// ENV-GATE RATIONALE: ER_EFFECTS_TITLE_05_000_MEMORY_GFX is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
+/// Arm the product-default runtime 05_000_title strip. The old env-driven memory-GFX overrides
+/// (`load_memory_gfx_from_env` and the `TITLE_SCALEFORM_MEMORY_GFX` /
+/// `TITLE_SCALEFORM_05_000_MEMORY_GFX` slots it filled) were de-gated to inert no-ops in 2026-07-19
+/// and are now gone: the file-open hook derives the stripped 05_000_title from the native
+/// MemoryFile's own vanilla payload via er-gfx, so there is no embedded or on-disk movie left to
+/// load.
 pub(crate) fn load_title_scaleform_memory_gfx() {
-    load_memory_gfx_from_env(
-        "ER_EFFECTS_TITLE_RESOURCE_MEMORY_GFX",
-        &TITLE_SCALEFORM_MEMORY_GFX,
-        "05_001_title_logo GFX",
-    );
-    // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): the ER_EFFECTS_TITLE_05_000_MEMORY_GFX
-    // env override (force-vanilla `vanilla`/`off`/`0`, legacy embedded selector, or custom-movie path)
-    // is removed -- env feature gates are forbidden. Only the product-default runtime 05_000 strip
-    // remains (armed whenever the product autoload owns the title flow).
-    // Product default (er-effects-rs-dl0/h7x): arm the RUNTIME strip whenever
-    // the product autoload owns the title flow. No embedded movie: the file-open hook derives the
-    // stripped 05_000_title from the native MemoryFile's own vanilla payload via er-gfx.
-    if TITLE_SCALEFORM_05_000_MEMORY_GFX.get().is_some() || !title_05_000_strip_default_enabled() {
+    if !title_05_000_strip_default_enabled() {
         return;
     }
     TITLE_05_000_RUNTIME_STRIP_ARMED.store(1, Ordering::SeqCst);
@@ -875,15 +810,13 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
         }
         // SEAMLESS post-PAB popup: the box is nulled (never shown), but the MenuWindowJob whose Run is
         // building it would then sit on MenuJobResult(Continue) forever (ERSC's post-PAB MessageBox
-        // stall). Latch that job (recorded at MenuWindowJob::Run entry) so its next Run is advanced to
-        // Success -- the FixOrderJobSequence steps past the never-shown popup. Seamless-only; vanilla
-        // pre-world boxes (connection-error/EULA) do not fire offline and keep the plain null-suppress.
-        if crate::telemetry::seamless_coop_loaded() {
-            let cur = CURRENT_MENU_WINDOW_JOB_RUN_JOB.load(Ordering::SeqCst);
-            if cur != null {
-                MSGBOX_STALL_JOB.store(cur, Ordering::SeqCst);
-            }
-        }
+        // stall). The latch that was meant to record that job read CURRENT_MENU_WINDOW_JOB_RUN_JOB,
+        // which was ONLY ever written by system_quit_menu_window_job_run_hook -- a detour whose only
+        // address-taker (install_system_quit_menu_window_job_run_hook) had no callers, so rustc never
+        // codegen'd it and the counter read 0 in every shipped build. The latch could therefore never
+        // fire; removing it changes nothing at runtime. Re-arming the stall fix means writing the job
+        // from the detour that ACTUALLY wins MenuWindowJob::Run (the PAB one in
+        // product_core_own_stepper.rs) -- tracked separately, not done here.
         return null;
     }
     let orig = MSGBOX_BUILDER_ORIG.load(Ordering::SeqCst);

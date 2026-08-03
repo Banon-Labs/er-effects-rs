@@ -217,12 +217,6 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         apply_xor_ret_stub: crate::experiments::apply_xor_ret_stub,
         patch_3byte_stub: crate::experiments::patch_3byte_stub,
         install_auto_accept_hook: crate::experiments::install_auto_accept_hook,
-        disable_system_quit_gaitem_deserialize_hook:
-            crate::experiments::disable_system_quit_gaitem_deserialize_hook,
-        disable_system_quit_gaitem_finalize_hook:
-            crate::experiments::disable_system_quit_gaitem_finalize_hook,
-        disable_system_quit_gaitem_lookup_hook:
-            crate::experiments::disable_system_quit_gaitem_lookup_hook,
         decode_thunk_hop: crate::experiments::decode_thunk_hop,
         scan_dialog_for_loadgame: crate::experiments::scan_dialog_for_loadgame,
         resolve_menu_system_save_load: crate::experiments::resolve_menu_system_save_load,

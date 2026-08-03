@@ -100,18 +100,12 @@ pub(crate) const DIK_NONE: u8 = 0;
 /// (see `system_quit_repro_tick`). Each phase issues its KNOWN edges once and advances ONLY on an
 /// observed transition (menu-window semaphore / save-request telemetry / close telemetry) -- never a
 /// timer, tap budget, or retry count:
-///   WAIT_WORLD -> OPEN_MENU (START -> 02_000_IngameTop)
-///   -> TO_SYSTEM (UP, A -> 02_040_OptionSetting, the quit submenu)
-///   -> TO_PROFILE/TO_SAVE_GAME (LB, A -> Save Game row)
-///   -> DONE.
-/// After a phase's edges are issued it HOLDS (injects nothing) until its transition is observed, so
-/// a genuinely missed edge self-reports (stuck waiting) instead of being papered over by a re-tap.
+///   WAIT_WORLD -> WAIT_RELOAD (menu-free programmatic switch arm) -> DONE.
+/// The intermediate menu-nav states 1..5 (OPEN_MENU / TO_SYSTEM / TO_PROFILE / TO_SLOT / CONFIRM)
+/// are GONE: nothing ever transitioned into them, so the arms that implemented them were shipped but
+/// unreachable machine code. The values are left unused rather than renumbered because DONE=6 and
+/// WAIT_RELOAD=7 are compared against in telemetry consumers.
 pub(crate) const SQ_REPRO_STATE_WAIT_WORLD: usize = 0;
-pub(crate) const SQ_REPRO_STATE_OPEN_MENU: usize = 1;
-pub(crate) const SQ_REPRO_STATE_TO_SYSTEM: usize = 2;
-pub(crate) const SQ_REPRO_STATE_TO_PROFILE: usize = 3;
-pub(crate) const SQ_REPRO_STATE_TO_SLOT: usize = 4;
-pub(crate) const SQ_REPRO_STATE_CONFIRM: usize = 5;
 pub(crate) const SQ_REPRO_STATE_DONE: usize = 6;
 /// Between two back-to-back switches: after a switch's OK is confirmed, wait here for THAT switch's
 /// reload to commit (fresh-deser count reached) and the NEW world to be up + settled, then re-arm
@@ -175,11 +169,6 @@ pub(crate) use er_telemetry::counters::SQ_REPRO_SWITCH_INDEX;
 // after the first automatic load). The harness ships inert (harness_dll_present), so this only affects
 // agent-owned runs. Overridable per-run via er-effects-sq-target-switches.txt.
 pub(crate) const SQ_REPRO_TARGET_SWITCHES: usize = 2;
-/// RAM oracle latch (0 -> 1, never reset): the pause-at-menu autopilot observed 05_010_ProfileSelect
-/// open and STOPPED there (transitioned to DONE without TO_SLOT/CONFIRM). Exported as telemetry
-/// `sq_repro_paused_at_profile_select`; the pause-probe watcher's PASS gate is this latch == 1 while
-/// the no-load semaphores (activate count, quickload phase, fresh-deser count) all still read idle.
-pub(crate) use er_telemetry::counters::SQ_REPRO_PAUSED_AT_PROFILE_SELECT;
 /// Exact ProfileSelect Back repro latches. `DONE` means the self-drive opened System->Quit's cloned
 /// Load Profile row, observed ProfileSelect, sent B/Back, observed restore, returned to Game Options,
 /// and did not arm a profile load.

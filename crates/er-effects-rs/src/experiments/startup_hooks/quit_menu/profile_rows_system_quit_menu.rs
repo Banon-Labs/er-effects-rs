@@ -148,58 +148,6 @@ pub(crate) fn install_title_gfx_value_set_visible_hook() {
     }
 }
 
-pub(crate) fn install_title_custom_cover_run_hook() {
-    if TITLE_CUSTOM_COVER_RUN_INSTALLED.load(Ordering::SeqCst) != 0 {
-        return;
-    }
-    match unsafe { MH_Initialize() } {
-        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
-        status => {
-            append_autoload_debug(format_args!(
-                "title-cover-part-b: MenuWindowJob::Run MH_Initialize failed: {status:?}"
-            ));
-            return;
-        }
-    }
-    let Ok(run_addr) = game_rva(MENU_WINDOW_JOB_RUN_RVA as u32) else {
-        append_autoload_debug(format_args!(
-            "title-cover-part-b: failed to resolve MenuWindowJob::Run rva 0x{MENU_WINDOW_JOB_RUN_RVA:x}"
-        ));
-        return;
-    };
-    match unsafe {
-        MhHook::new(
-            run_addr as *mut c_void,
-            title_custom_cover_menu_window_run_hook as *mut c_void,
-        )
-    } {
-        Ok(hook) => {
-            TITLE_CUSTOM_COVER_RUN_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            if let Err(status) = unsafe { hook.queue_enable() } {
-                append_autoload_debug(format_args!(
-                    "title-cover-part-b: queue_enable MenuWindowJob::Run failed: {status:?}"
-                ));
-                return;
-            }
-            match unsafe { MH_ApplyQueued() } {
-                MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
-                    TITLE_CUSTOM_COVER_RUN_INSTALLED.store(1, Ordering::SeqCst);
-                    append_autoload_debug(format_args!(
-                        "title-cover-part-b: hooked MenuWindowJob::Run 0x{run_addr:x}; ProfileSelect cover will run alongside preserved native title job"
-                    ));
-                }
-                status => append_autoload_debug(format_args!(
-                    "title-cover-part-b: MenuWindowJob::Run MH_ApplyQueued failed: {status:?}"
-                )),
-            }
-        }
-        Err(status) => append_autoload_debug(format_args!(
-            "title-cover-part-b: MhHook::new MenuWindowJob::Run failed: {status:?}"
-        )),
-    }
-}
-
 pub(crate) fn install_title_logo_force_hidden_hooks() {
     match unsafe { MH_Initialize() } {
         MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
@@ -1591,80 +1539,6 @@ pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_wi
             OPTIONSETTING_PANE_GUARD_SKIPS.load(Ordering::SeqCst)
         ));
     }
-}
-
-pub(crate) unsafe extern "system" fn system_quit_menu_window_job_run_hook(
-    job: usize,
-    load_params: usize,
-    fd4_time: usize,
-    menu_man: usize,
-) -> usize {
-    let orig = SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_ORIG.load(Ordering::SeqCst);
-    if orig == HOOK_ORIGINAL_UNSET {
-        return load_params;
-    }
-    let filename_ptr = unsafe { safe_read_usize(job + 0x60) }.unwrap_or(0);
-    let filename = system_quit_read_wide_resource_name(filename_ptr);
-
-    // SEAMLESS ToS SKIP (2026-07-06): the online-service ToS (`06_000_TermOfService_BNE`) is a job in
-    // the title `CS::FixOrderJobSequence`, which steps to the next job ONLY when a job's Run returns a
-    // Success result. While the ToS window is up this job returns Continue (and the ctor-null makes it
-    // Failed), so the zero-input autoload stalls on it forever (observed +17s..+108s idle). The
-    // ToS/Privacy policy is an OFFICIAL-servers-only gate the DLL never needs -- ERSC uses its own
-    // private relay and does not respect the official policy, so skipping it is safe for co-op. Force
-    // this one job's MenuJobResult to Success BEFORE running the original (so the ToS never builds --
-    // no window, no MessageBox, zero input) and return; `FixOrderJobSequence::Run` then advances past
-    // it. Same proven pattern as `show_progress_job_run_hook` advancing the network/login jobs. The
-    // MenuJobResult is at `load_params+0` (Run returns `load_params`, read as `MenuJobResult*` by the
-    // sequence). Gated by `policy_tos_suppress_enabled()` (product autoload + Seamless, or the diag
-    // override), so vanilla-offline is untouched (the ToS never fires there anyway).
-    // Record which job's Run is executing so the nested MessageBox builder hook can attribute a
-    // (suppressed) ERSC popup to this job and latch it into MSGBOX_STALL_JOB for next-frame advance.
-    CURRENT_MENU_WINDOW_JOB_RUN_JOB.store(job, Ordering::SeqCst);
-
-    // Advance-skip a title job to Success so `FixOrderJobSequence::Run` steps past it (never showing
-    // its modal). Two Seamless cases: (1) the official-servers ToS job (`06_000_TermOfService_BNE`);
-    // (2) the ERSC post-PAB MessageBox job -- its dialog build was already nulled by
-    // `msgbox_builder_hook`, which latched THIS job into `MSGBOX_STALL_JOB`, so its next Run advances.
-    pub(crate) use er_telemetry::counters::SEAMLESS_TOS_SKIP_COUNT;
-    let is_tos = filename.contains("TermOfService");
-    let is_stalled_msgbox = job != 0 && MSGBOX_STALL_JOB.load(Ordering::SeqCst) == job;
-    if policy_tos_suppress_enabled() && (is_tos || is_stalled_msgbox) {
-        if is_stalled_msgbox {
-            MSGBOX_STALL_JOB.store(0, Ordering::SeqCst);
-        }
-        const MENU_JOB_STATE_SUCCESS: i32 = 2;
-        const FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA: usize = 0x29c8e48;
-        if load_params != 0 {
-            unsafe {
-                *(load_params as *mut i32) = MENU_JOB_STATE_SUCCESS;
-                *((load_params + 4) as *mut i32) = 0;
-            }
-        }
-        if let Ok(base) = game_module_base() {
-            if fd4_time != 0 {
-                unsafe { *(fd4_time as *mut usize) = base + FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA };
-            }
-        }
-        let skip_n = SEAMLESS_TOS_SKIP_COUNT.fetch_add(1, Ordering::SeqCst);
-        if skip_n < 12 {
-            let kind = if is_tos {
-                "official-ToS"
-            } else {
-                "ersc-post-pab-msgbox"
-            };
-            append_autoload_debug(format_args!(
-                "seamless-tos-skip #{skip_n} ({kind}): forced MenuWindowJob::Run('{filename}') -> MenuJobResult(Success) job=0x{job:x} -- FixOrderJobSequence advances past the never-shown modal"
-            ));
-        }
-        return load_params;
-    }
-
-    let original: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
-        unsafe { std::mem::transmute(orig) };
-    let ret = unsafe { original(job, load_params, fd4_time, menu_man) };
-    unsafe { system_quit_menu_window_run_post(job, ret) };
-    ret
 }
 
 /// Post-original MenuWindowJob::Run work for System->Quit: System/ProfileSelect resource mapping + the

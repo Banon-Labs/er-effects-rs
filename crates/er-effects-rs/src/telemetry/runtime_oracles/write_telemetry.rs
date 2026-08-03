@@ -745,10 +745,9 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         TITLE_OPEN_MENU_SUPPRESSED_COUNT.load(Ordering::SeqCst)
     ));
     body.push_str(&format!(
-        "  \"sq_repro_state\": {},\n  \"sq_repro_switch_index\": {},\n  \"sq_repro_paused_at_profile_select\": {},\n  \"sq_repro_profile_back_opened\": {},\n  \"sq_repro_profile_back_done\": {},\n  \"sq_repro_profile_back_restore_count\": {},\n  \"sq_repro_profile_back_final_tab\": {},\n  \"sq_repro_profile_back_baseline_mask\": {},\n  \"sq_repro_profile_back_verify_mask\": {},\n  \"sq_repro_profile_back_mismatch_mask\": {},\n  \"system_quit_optionsetting_direct_visible_reapply_count\": {},\n  \"system_quit_optionsetting_direct_visible_last_tab\": {},\n  \"system_quit_optionsetting_direct_visible_last_old_current\": {},\n  \"system_quit_optionsetting_direct_visible_last_selected\": {},\n  \"system_quit_optionsetting_direct_refresh_count\": {},\n  \"system_quit_optionsetting_direct_refresh_last_selected\": {},\n",
+        "  \"sq_repro_state\": {},\n  \"sq_repro_switch_index\": {},\n  \"sq_repro_profile_back_opened\": {},\n  \"sq_repro_profile_back_done\": {},\n  \"sq_repro_profile_back_restore_count\": {},\n  \"sq_repro_profile_back_final_tab\": {},\n  \"sq_repro_profile_back_baseline_mask\": {},\n  \"sq_repro_profile_back_verify_mask\": {},\n  \"sq_repro_profile_back_mismatch_mask\": {},\n  \"system_quit_optionsetting_direct_visible_reapply_count\": {},\n  \"system_quit_optionsetting_direct_visible_last_tab\": {},\n  \"system_quit_optionsetting_direct_visible_last_old_current\": {},\n  \"system_quit_optionsetting_direct_visible_last_selected\": {},\n  \"system_quit_optionsetting_direct_refresh_count\": {},\n  \"system_quit_optionsetting_direct_refresh_last_selected\": {},\n",
         SQ_REPRO_STATE.load(Ordering::SeqCst),
         SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst),
-        SQ_REPRO_PAUSED_AT_PROFILE_SELECT.load(Ordering::SeqCst),
         SQ_REPRO_PROFILE_BACK_OPENED.load(Ordering::SeqCst),
         SQ_REPRO_PROFILE_BACK_DONE.load(Ordering::SeqCst),
         SQ_REPRO_PROFILE_BACK_RESTORE_COUNT.load(Ordering::SeqCst),
