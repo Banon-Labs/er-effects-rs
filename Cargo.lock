@@ -2844,6 +2844,7 @@ name = "er-invasion-warp"
 version = "0.1.0"
 dependencies = [
  "eldenring",
+ "er-game-base",
  "er-telemetry",
  "fromsoftware-shared",
 ]
@@ -2852,7 +2853,9 @@ dependencies = [
 name = "er-invasion-warp-dll"
 version = "0.1.0"
 dependencies = [
+ "eldenring",
  "er-invasion-warp",
+ "fromsoftware-shared",
 ]
 
 [[package]]

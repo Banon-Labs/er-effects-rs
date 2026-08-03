@@ -30,3 +30,7 @@ er-telemetry = { path = "../er-telemetry" }
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+# Tier A only (zero external deps): the repo's fault-tolerant `ReadProcessMemory` primitive,
+# which is what makes the live `CSAutoInvadePoint` walk fail closed instead of faulting inside
+# the user's game. Windows-only, so the host `cargo test` never links kernel32.
+er-game-base = { path = "../er-game-base" }

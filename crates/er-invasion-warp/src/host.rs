@@ -30,19 +30,29 @@ pub struct InvasionWarpHost {
     /// DLLs a me3 profile loads and what the product's own state says), and because the repo
     /// forbids introducing a new per-feature env/marker gate to answer it.
     pub invasion_warp_enabled: fn() -> bool,
+    /// Publish the feature's oracle telemetry document (the string
+    /// [`crate::oracles::catalog_oracle_json`] builds).
+    ///
+    /// The feature owns the CONTENT; the host owns WHERE it lands, which is genuinely a host
+    /// decision and the reason this crosses the seam: the standalone shell writes its own file
+    /// next to the executable, while a host that already owns a telemetry document would fold
+    /// the fields into that instead. Lands with the catalog slice that first calls it.
+    pub publish_oracle_json: fn(&str),
 }
 
 fn default_log(_args: std::fmt::Arguments<'_>) {}
 fn default_gate_off() -> bool {
     false
 }
+fn default_publish_oracle_json(_body: &str) {}
 
 impl InvasionWarpHost {
-    /// Neutral defaults: no-op logging, feature off.
+    /// Neutral defaults: no-op logging, feature off, telemetry dropped.
     pub const fn defaults() -> Self {
         Self {
             append_autoload_debug: default_log,
             invasion_warp_enabled: default_gate_off,
+            publish_oracle_json: default_publish_oracle_json,
         }
     }
 }
@@ -78,6 +88,11 @@ pub fn invasion_warp_enabled() -> bool {
     (host().invasion_warp_enabled)()
 }
 
+/// Hand the host a finished oracle telemetry document to store wherever it keeps them.
+pub(crate) fn publish_oracle_json(body: &str) {
+    (host().publish_oracle_json)(body)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,7 +102,8 @@ mod tests {
         // Deliberately does NOT install a host: a crate loaded into a process that never
         // called install_host must answer "feature off", never "feature on".
         assert!(!invasion_warp_enabled());
-        // And logging through the default sink must not panic.
+        // And logging / publishing through the default sinks must not panic.
         append_autoload_debug(format_args!("inert"));
+        publish_oracle_json("{}");
     }
 }

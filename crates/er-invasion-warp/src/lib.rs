@@ -23,6 +23,12 @@
 //! * [`aip`] -- the on-disk `.aip` record decoder, reverse-engineered from
 //!   `CS::CSAutoInvadePoint::AddForBlockId`. Lets the catalog be validated against the local
 //!   extraction corpus offline, with no game running.
+//! * [`live_read`] -- the FAIL-CLOSED walk of the live singleton's red-black tree. Every
+//!   pointer is plausibility-checked and read through a fault-tolerant primitive, and the walk
+//!   carries a hard visit budget, because this runs inside the user's game where a crash or a
+//!   hung game thread is a far worse outcome than a missing oracle.
+//! * [`sampler`] -- the driver that keeps re-reading until the totals settle, so a catalog
+//!   caught mid-load is never reported as the final answer, and ORACLE 1 lands.
 //! * [`oracles`] -- the RAM/telemetry semaphore names the eventual runtime proof must go
 //!   green on. A rendered/behavioural feature is never proven by build or launch success.
 //! * [`host`] -- the dependency-injection seam back to whichever DLL hosts this crate.
@@ -40,5 +46,11 @@ pub use aip::*;
 pub mod invasion_warp;
 pub use invasion_warp::*;
 
+pub mod live_read;
+pub use live_read::*;
+
 pub mod oracles;
 pub use oracles::*;
+
+pub mod sampler;
+pub use sampler::*;

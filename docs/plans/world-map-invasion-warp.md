@@ -356,6 +356,17 @@ list rows, selected target id, requested block/position/yaw, and the **settled**
 and position read back after the warp. Plus two that must stay at zero:
 `oracle_invasion_warp_session_touches` and `oracle_invasion_warp_msgbox_builds`.
 
+### Oracle status as of the catalog slice
+
+| oracle | state |
+|---|---|
+| `oracle_invasion_warp_catalog_targets` / `_blocks` / `_areas` | **LIVE.** Written by `crate::sampler` from the fail-closed `CSAutoInvadePoint` read; emitted to `er-invasion-warp-telemetry.json` + the DLL log with both expected fingerprints on the same line. |
+| `_list_rows`, `_selected_id`, `_requested_*`, `_final_*` | names only -- they need the world-map interception, which is still section 2's design |
+| `_session_touches`, `_msgbox_builds` | **UNMEASURED, and deliberately have no counter.** The catalog slice has no session call site to count, and attributing a `MessageBoxDialog` build needs a builder detour this DLL does not install. They are emitted as JSON `null` with `negative_oracles_measured: false` so nobody can read them as a measured zero. |
+
+A run of the catalog slice therefore proves the table was read live and matches the shipped
+bytes exactly. It does NOT prove anything about the UI, the warp, or the negative oracles.
+
 ---
 
 ## 5. Open RE tasks (all static; none needs the game running)
@@ -371,9 +382,31 @@ and position read back after the warp. Plus two that must stay at zero:
    private "Invasion Points" category (`FUN_140d26220` reads `+0x08` as a u16 key,
    `FUN_140d26390` requires `+0x04 >= 0`).
 
-## 6. Open non-RE risk
+## 6. RESOLVED (was "open non-RE risk"): `pointCount` is 32 bits and its upper dword is junk
 
 `AddForBlockId` writes the block entry's `count` with a **32-bit** store while
-`fromsoftware-rs` declares it `count: usize` (64-bit). Reads are correct only if the upper
-half is zeroed by the map insert or the allocator. Not proven either way offline. If a
-runtime read ever returns an absurd count, this is the first thing to check.
+`fromsoftware-rs` declares it `count: usize` (64-bit). This was recorded as "not proven
+either way offline". It is proven now, statically, and the answer is the bad one:
+
+```text
+140a695d5  MOV    ECX, dword ptr [RSI + 0xc]      ; count, a u32 in the .aip header
+140a695e9  MOV    dword ptr [RSP + 0x30], ECX     ; 32-BIT store; [RSP+0x34] is never written
+140a695f0  MOV    qword ptr [RSP + 0x38], RBX     ; the points allocation
+140a695f8  MOVUPS XMM0, xmmword ptr [RSP + 0x30]
+140a69609  MOVUPS xmmword ptr [RSP + 0x48], XMM0  ; -> pair.pointCount, pair.points
+```
+
+The 16-byte copy drags `[RSP+0x34]` -- a stack slot the function never writes -- into the
+upper half of the value's 8-byte `pointCount`. Nothing zeroes it. The engine never notices
+because it only reads the low dword: `_GetCurBreakInPointVecFromAutoIntrudePoint`
+(`0x140a0c4f0`) tests `0 < (int)count` and loops `while ((int)i < (int)count)`.
+
+Consequences, already applied in `crates/er-invasion-warp/src/live_read.rs`:
+
+* `pointCount` is read as a **u32**; the upper dword is ignored, and stale junk there is
+  NORMAL engine behaviour, not corruption, so it must not fail a read.
+* the `fromsoftware-rs` typed path is unusable for this struct regardless of readiness --
+  `AutoInvadePointBlockEntry::items()` builds `slice::from_raw_parts(head, count)` from the
+  full 64-bit field, so it would fault on a garbage upper dword. That is a second, independent
+  reason the live read goes through the fault-tolerant walk instead of the binding. (Per
+  AGENTS.md this is fixed/pinned HERE and never filed upstream.)

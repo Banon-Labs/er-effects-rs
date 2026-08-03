@@ -428,6 +428,15 @@ pub fn log_catalog_summary(catalog: &InvasionWarpCatalog) {
 
 /// Read the engine's loaded `CSAutoInvadePoint` singleton into a catalog.
 ///
+/// FAIL-CLOSED. This runs inside the user's live game, where a crash or a hung game thread is
+/// a far worse outcome than a missing oracle, so it does NOT dereference the singleton's
+/// red-black tree with the typed binding (which would `slice::from_raw_parts` a torn `count`
+/// and walk node pointers on hope). It resolves the singleton ADDRESS and hands it to
+/// [`crate::live_read::read_catalog`], which reads every word through a fault-tolerant
+/// primitive, refuses implausible pointers/counts, and cannot loop unboundedly. A singleton
+/// that is not there yet, or a tree caught mid-load, comes back as an `Err` to retry -- never
+/// as a partial catalog and never as a fault.
+///
 /// # Safety
 ///
 /// Must only be called after the FromSoftware runtime singletons exist and from a context
@@ -439,13 +448,9 @@ pub unsafe fn collect_invasion_warp_catalog()
     use eldenring::cs::CSAutoInvadePoint;
     use fromsoftware_shared::FromStatic;
 
-    // SAFETY: the caller's contract guarantees the singleton pointer is initialised and
-    // stable for read-only access.
-    let auto_invade_point = unsafe { CSAutoInvadePoint::instance() }
+    let auto_invade_point = CSAutoInvadePoint::instance_ptr()
         .map_err(|error| InvasionWarpCatalogError::AutoInvadePointUnavailable(error.to_string()))?;
-    let catalog = InvasionWarpCatalog::try_from_targets(collect_targets_from(auto_invade_point))?;
-    log_catalog_summary(&catalog);
-    Ok(catalog)
+    crate::live_read::read_catalog(&crate::live_read::ProcessMemory, auto_invade_point as u64)
 }
 
 /// The catalog the world-map UI should offer, or `None` when the host has the feature off.
@@ -463,29 +468,6 @@ pub unsafe fn catalog_for_ui() -> Option<Result<InvasionWarpCatalog, InvasionWar
     }
     // SAFETY: forwarded from this function's own contract.
     Some(unsafe { collect_invasion_warp_catalog() })
-}
-
-/// Flatten a live `CSAutoInvadePoint` into raw targets. Split out from
-/// [`collect_invasion_warp_catalog`] so the singleton resolution and the flattening are
-/// separately reviewable.
-#[cfg(windows)]
-#[must_use]
-pub fn collect_targets_from(
-    auto_invade_point: &eldenring::cs::CSAutoInvadePoint,
-) -> Vec<InvasionWarpTarget> {
-    let mut targets = Vec::new();
-    for entry in &auto_invade_point.entries {
-        let block = BlockKey::from_raw(i32::from(entry.first) as u32);
-        for (point_index, point) in entry.second.items().iter().enumerate() {
-            targets.push(InvasionWarpTarget::new(
-                block,
-                point_index as u32,
-                [point.position.0, point.position.1, point.position.2],
-                point.yaw,
-            ));
-        }
-    }
-    targets
 }
 
 #[cfg(test)]
