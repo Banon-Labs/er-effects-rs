@@ -3,10 +3,18 @@
 //! # The injection, and why it is gated the way it is
 //!
 //! The seam is the `CS::WorldMapViewModel` constructor: the pin-row list at `+0x2d8` is populated
-//! there and nowhere else, and the ViewModel is built exactly once per session. Appending
-//! anywhere else is unsafe -- `CS::WorldMapWarpData+0x08` holds RAW pointers into this buffer,
-//! and the reserve relocates it, so a later append dangles every live dialog row pointer. At the
-//! ctor epilogue no dialog exists yet.
+//! there and nowhere else. Appending anywhere else is unsafe -- `CS::WorldMapWarpData+0x08` holds
+//! RAW pointers into this buffer, and the reserve relocates it, so a later append dangles every
+//! live dialog row pointer. At the ctor epilogue no dialog exists yet.
+//!
+//! **The ViewModel is NOT built once per session.** The RE said it was, and a first run appeared
+//! to confirm it (`ctor #1`). A later run measured `ctor #1 this=0x2d41be80` followed by
+//! `ctor #2 this=0x8400a580` -- a second, different instance. Each map VIEW (overworld,
+//! underground, Shadow Lands) constructs its own, each with its own freshly-built row list. A
+//! process-wide "already injected" flag therefore left every view after the first with no
+//! invasion pins, which is what "the markers vanish when I switch views" and "nothing on the DLC
+//! map" both were. Injection is keyed per ViewModel instance ([`claim_view_model`]), and the
+//! param rows and registry are built once and shared, since a pin does not own its param row.
 //!
 //! The observation that shipped first measured the list before anything was written: rows=420,
 //! capacity=474, **54 spare**, vftable `0x142ad82a8`, and `356160 / 0x350` dividing exactly. That
@@ -67,8 +75,8 @@ pub const PIN_ROW_STRIDE: usize = 0x350;
 /// Trampoline to the original ViewModel ctor, installed by the union.
 static ORIG_WORLDMAP_VIEWMODEL_CTOR: AtomicUsize = AtomicUsize::new(0);
 
-/// How many times the ctor hook has fired. The ViewModel is built once per session, so a value
-/// above 1 means the lifetime assumption in section 5.3 is wrong and rows would need re-injecting.
+/// How many times the ctor hook has fired. Measured >1 in practice: one ViewModel per map view,
+/// not one per session. Kept as the counter that refuted the original lifetime assumption.
 static VIEWMODEL_CTOR_HITS: AtomicUsize = AtomicUsize::new(0);
 
 /// Row count observed on the last ctor return, or `usize::MAX` when never read.
@@ -229,8 +237,45 @@ static ORIG_ROW_FILTER: AtomicUsize = AtomicUsize::new(0);
 
 /// How many pins were injected, and why not more.
 static PINS_INJECTED: AtomicUsize = AtomicUsize::new(0);
-/// Set once injection has been attempted, so it can never run twice on one list.
-static INJECTION_ATTEMPTED: AtomicUsize = AtomicUsize::new(0);
+/// ViewModels already injected. The ctor fires ONCE PER MAP VIEW, not once per session
+/// (measured: two instances, `0x2d41be80` then `0x8400a580`), so a process-wide "done" flag left
+/// every view after the first with no invasion pins -- which is exactly what "the markers vanish
+/// when I switch to the underground or Shadow Lands view" looks like, and also why the DLC map
+/// appeared empty.
+///
+/// A small fixed set rather than a single "last" pointer, because views can be revisited in any
+/// order and each keeps its own ViewModel. Bounded and allocation-free: this runs on the game
+/// thread inside a ctor.
+const MAX_TRACKED_VIEW_MODELS: usize = 16;
+static INJECTED_VIEW_MODELS: [AtomicUsize; MAX_TRACKED_VIEW_MODELS] =
+    [const { AtomicUsize::new(0) }; MAX_TRACKED_VIEW_MODELS];
+
+/// The leaked param rows and registry, built once and shared by every ViewModel. A pin does not
+/// own its param row, so one immutable set serves all views; rebuilding per view would leak a
+/// fresh copy each time the player switched maps.
+static SHARED_PARAM_ROWS_PTR: AtomicUsize = AtomicUsize::new(0);
+static SHARED_PARAM_ROWS_LEN: AtomicUsize = AtomicUsize::new(0);
+
+/// Claim `view_model` for injection. False when it was already injected.
+fn claim_view_model(view_model: usize) -> bool {
+    for slot in &INJECTED_VIEW_MODELS {
+        if slot.load(Ordering::SeqCst) == view_model {
+            return false;
+        }
+    }
+    for slot in &INJECTED_VIEW_MODELS {
+        if slot
+            .compare_exchange(0, view_model, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            return true;
+        }
+    }
+    // All slots taken: inject anyway rather than silently skipping a view. Re-injecting a
+    // genuinely new ViewModel is correct; the only cost of losing the record is that a
+    // revisited view could be injected twice, which the per-ctor fresh list makes harmless.
+    true
+}
 
 /// Read the donor fields off the first existing row.
 ///
@@ -357,7 +402,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     use er_invasion_warp::map_surface::{InvasionRowRegistry, PinGranularity};
     use er_invasion_warp::param_row::{SYNTHETIC_PARAM_ROW_LEN, SyntheticParamSpec};
 
-    if INJECTION_ATTEMPTED.swap(1, Ordering::SeqCst) != 0 {
+    if !claim_view_model(view_model) {
         return;
     }
     let Some(before) = (unsafe { read_pin_list(view_model) }) else {
@@ -448,31 +493,53 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     // One param row per pin, leaked on purpose: the pin does not own it, its dtor never touches
     // it, but IsOpen / the row filter / the label refresh all dereference it on demand for the
     // rest of the session.
-    let mut param_rows: Vec<[u8; SYNTHETIC_PARAM_ROW_LEN]> = Vec::with_capacity(wanted);
-    for index in 0..wanted {
-        let Some(entity_id) = registry.entity_id_at(index) else {
-            break;
-        };
-        param_rows.push(
-            SyntheticParamSpec {
-                entity_id,
-                subcategory_id: donor.subcategory_id,
-                // Deliberately NOT the donor's icon: cloning it made the pins look exactly
-                // like Sites of Grace. This is the only visual-distinction lever at this layer.
-                icon_id: er_invasion_warp::param_row::INVASION_PIN_ICON_ID,
-                category_bits: donor.category_bits,
-                place_name_text_id: donor.label_text_id,
-            }
-            .to_row_bytes(),
-        );
+    // Build the param rows ONCE and share them across every map view. A pin does not own its
+    // param row, so one immutable set serves all views; rebuilding per view would leak a fresh
+    // copy every time the player switched between the overworld, underground and Shadow Lands.
+    let cached = SHARED_PARAM_ROWS_PTR.load(Ordering::SeqCst);
+    let param_rows: &'static [[u8; SYNTHETIC_PARAM_ROW_LEN]] = if cached != 0 {
+        let len = SHARED_PARAM_ROWS_LEN.load(Ordering::SeqCst);
+        // SAFETY: leaked on the first injection and never freed or mutated.
+        unsafe { core::slice::from_raw_parts(cached as *const [u8; SYNTHETIC_PARAM_ROW_LEN], len) }
+    } else {
+        let mut rows: Vec<[u8; SYNTHETIC_PARAM_ROW_LEN]> = Vec::with_capacity(wanted);
+        for index in 0..wanted {
+            let Some(entity_id) = registry.entity_id_at(index) else {
+                break;
+            };
+            rows.push(
+                SyntheticParamSpec {
+                    entity_id,
+                    subcategory_id: donor.subcategory_id,
+                    // Deliberately NOT the donor's icon: cloning it made the pins look exactly
+                    // like Sites of Grace. This is the only visual lever at this layer.
+                    icon_id: er_invasion_warp::param_row::INVASION_PIN_ICON_ID,
+                    category_bits: donor.category_bits,
+                    place_name_text_id: donor.label_text_id,
+                }
+                .to_row_bytes(),
+            );
+        }
+        let leaked: &'static [[u8; SYNTHETIC_PARAM_ROW_LEN]] = Box::leak(rows.into_boxed_slice());
+        SHARED_PARAM_ROWS_PTR.store(leaked.as_ptr() as usize, Ordering::SeqCst);
+        SHARED_PARAM_ROWS_LEN.store(leaked.len(), Ordering::SeqCst);
+        leaked
+    };
+    if param_rows.len() < wanted {
+        crate::standalone_log(format_args!(
+            "map-inject: cached param rows hold {} entries but {wanted} pins were wanted; \
+             injecting only what is backed",
+            param_rows.len()
+        ));
     }
-    let param_rows: &'static [[u8; SYNTHETIC_PARAM_ROW_LEN]] =
-        Box::leak(param_rows.into_boxed_slice());
-    // Leak the registry too: the confirm hook needs it for the rest of the session to map a
-    // synthetic entity id back to the target to warp to.
+    let wanted = wanted.min(param_rows.len());
+    // Leak the registry too, once: the confirm hook needs it for the rest of the session to map
+    // a synthetic entity id back to the target to warp to.
     let leaked_registry: &'static InvasionRowRegistry = Box::leak(Box::new(registry.clone()));
-    INJECTED_REGISTRY.store(
+    let _ = INJECTED_REGISTRY.compare_exchange(
+        0,
         core::ptr::from_ref(leaked_registry) as usize,
+        Ordering::SeqCst,
         Ordering::SeqCst,
     );
 
