@@ -5,11 +5,11 @@ use super::*;
 // Replaces the System>Quit "Load Character from File" `GetOpenFileNameW` OS dialog (context switch
 // out of the game) with the same native 10-row window the character switcher already drives. The
 // rows are a browsable directory listing -- a pinned `[ new ]` FIRST in destination intent, then
-// up, drive cycler, dirs + mode-locked save files, page cycler -- staged as synthetic
-// ProfileSummary records; the shared model lives in `experiments::save_picker` and owns the row
-// layout (see its module docs for the order and why nothing sits at a fixed index). It is also the
-// surface the Save Game row press opens directly, with no confirm in front of it. Directory, drive
-// and page navigation rebuild the row list in place via the game's own records-changed rebuild
+// up, drive cycler, dirs + mode-locked save files -- staged as synthetic ProfileSummary records;
+// the shared model lives in `experiments::save_picker` and owns the row layout (see its module docs
+// for the order and why nothing sits at a fixed index). It is also the surface the Save Game row
+// press opens directly, with no confirm in front of it. Directory, drive and scroll-window navigation
+// rebuild the row list in place via the game's own records-changed rebuild
 // (close + menu-pump resubmit as fallback). Picking a file feeds the validation/preview pipeline
 // the OS picker used (`system_quit_ingest_picked_save`) and then reopens the window as the normal
 // slot view, so the "pick file -> pick character" flow never leaves the game's visual system.
@@ -42,7 +42,7 @@ pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_TICKS_FROZEN;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_PICK_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_PICK_REJECT_COUNT;
 /// Dialog whose row list must be rebuilt in menu-pump ownership (0 = none). Set by a
-/// navigation/page activation after restaging records; consumed by the Run hook.
+/// navigation/scroll activation after restaging records; consumed by the Run hook.
 pub(crate) use er_telemetry::counters::SAVE_PICKER_REBUILD_PENDING_DIALOG;
 /// 1 = the picker window was closed for a directory/page change; the menu-pump Run hook must
 /// resubmit a fresh `05_010` job (records already restaged) instead of restoring the System UI.
@@ -190,11 +190,11 @@ pub(crate) unsafe fn save_picker_stage_row_records(
         unsafe { refresh() };
     }
     append_autoload_debug(format_args!(
-        "save-picker: staged {staged} occupied row records ({} slots left unoccupied) dir='{}' page={}/{} entries={} drives={}",
+        "save-picker: staged {staged} occupied row records ({} slots left unoccupied) dir='{}' scroll={}/{} entries={} drives={}",
         TITLE_PROFILE_SLOT_COUNT.saturating_sub(staged),
         model.current_dir().display(),
-        model.page() + 1,
-        model.page_count(),
+        model.scroll_offset(),
+        model.scroll_max(),
         model.entry_count(),
         model.drive_count()
     ));
@@ -619,6 +619,52 @@ pub(crate) fn save_picker_resubmit_pending() -> bool {
         || SAVE_PICKER_OPEN_SLOTS_PENDING.load(Ordering::SeqCst) != 0
 }
 
+const PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET: usize = 0xa38;
+const MENU_ITEM_LIST_CURSOR_GETTER_RVA: usize = 0x739e20;
+
+/// Menu-pump-owned scroll-window maintenance. The native ProfileSelect backing list has only ten
+/// row models, so long directory listings are represented as a sliding ten-row window with no page
+/// row. When the native cursor rests on a window edge, the model advances and this queues the same
+/// in-place rebuild used by directory/drive navigation.
+pub(crate) unsafe fn save_picker_menu_pump_edge_scroll() {
+    let dialog = SAVE_PICKER_SYSTEM_DIALOG.load(Ordering::SeqCst);
+    if dialog == 0 || SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
+        return;
+    }
+    let Ok(base) = game_module_base() else {
+        return;
+    };
+    let cursor_getter: unsafe extern "system" fn(usize) -> i32 =
+        unsafe { std::mem::transmute(base + MENU_ITEM_LIST_CURSOR_GETTER_RVA) };
+    let cursor = unsafe { cursor_getter(dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET) };
+    if cursor < 0 || cursor as usize >= crate::experiments::save_picker::PICKER_ROW_COUNT {
+        return;
+    }
+    let scrolled = {
+        let mut guard = crate::experiments::save_picker::active_save_picker_lock();
+        let Some(model) = guard.as_mut() else {
+            return;
+        };
+        model.edge_scroll_from_native_cursor_tick(cursor as usize)
+    };
+    if !scrolled {
+        return;
+    }
+    let staged = {
+        let guard = crate::experiments::save_picker::active_save_picker_lock();
+        match guard.as_ref() {
+            Some(model) => unsafe { save_picker_stage_row_records(model) },
+            None => false,
+        }
+    };
+    if staged {
+        SAVE_PICKER_REBUILD_PENDING_DIALOG.store(dialog, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "save-picker: edge-scroll restaged browse rows at native cursor {cursor}"
+        ));
+    }
+}
+
 /// Menu-pump-owned in-place list rebuild (called from the MenuWindowJob::Run hook). Runs the
 /// native records-changed rebuild queued by a picker navigation; falls back to close+resubmit
 /// when the rebuild fn cannot be resolved.
@@ -716,8 +762,8 @@ pub(crate) fn save_picker_error_html_utf16(text: &str) -> Vec<u16> {
 }
 
 pub(crate) fn save_picker_browse_html_utf16_color(text: &str, color: &str) -> Vec<u16> {
-    // Matches the stats panel's font size so browse info and attribute lines read identically.
-    const SIZE: &str = "19";
+    // Match the native ProfileSelect filename/timestamp fields; the asset gives ErStats a native-height box.
+    const SIZE: &str = "24";
     if text.is_empty() {
         return vec![0];
     }
@@ -737,26 +783,17 @@ pub(crate) fn save_picker_set_visible_status(message: er_save_picker::PickerStat
     }
 }
 
-/// Character budget for the per-file character list line (the four-attribute stats line occupies
-/// roughly this width at the same font size, so the list clips no earlier than the stats did).
-pub(crate) const SAVE_PICKER_BROWSE_LINE_CHAR_BUDGET: usize = 44;
+/// Character budget for the per-file character list fragment. This text is merged onto the single
+/// inline `ErStats` row field beside the filename and timestamp, so it must stay short enough to read
+/// as row detail instead of a wrapped second line.
+pub(crate) const SAVE_PICKER_BROWSE_LINE_CHAR_BUDGET: usize = 34;
 
-/// The two `ErStats` lines for ProfileSelect row `row` while the browse picker owns the window.
-/// File rows show the file's REAL character info: active-slot count on the top line and the
-/// characters' names + levels on the bottom line (as many as fit the budget, then a `+k` overflow
-/// marker). Navigation/info/status rows show host-testable auxiliary text from `er-save-picker`,
-/// so explanatory copy lives in the injected stats fields instead of the 16-UTF-16 row name. Empty
-/// rows still get empty lines so neither leftover row text nor per-slot attribute stats render as
-/// junk there. `None` when the picker does not own the rows (the normal character-slot view keeps
-/// the attribute stats panel). Generated text uses `/` separators and never inserts commas
-/// (comma-safe labels, er-effects-rs-dly6); names pass through with HTML escaping only.
-///
-/// THE `[CURRENT]` MARKER LIVES HERE, on the top line, and it is the answer to a question the
-/// destination browser now has to answer on its own: "which of these is the file I am playing?"
-/// Before 2026-07-31 a separate up-front box asked whether to overwrite the loaded save, so the
-/// list never had to identify it. That box is gone -- overwriting your own save means finding its
-/// row -- so the row says so. It is a display hint over a path compare, never the commit-time
-/// identity check (see `SavePickerModel::row_is_loaded_save`).
+/// The `ErStats` fragments for ProfileSelect row `row` while the browse picker owns the window.
+/// The row-populate hook merges the two fragments into ONE inline field: file rows show active-slot
+/// count plus character names/levels beside `ER0000.sl2`, while navigation/status rows show their
+/// auxiliary copy beside the row label. Empty rows get blank fragments so neither leftover row text
+/// nor per-slot attribute stats render as junk there. `None` when the picker does not own the rows
+/// (the normal character-slot view keeps the attribute stats panel).
 pub(crate) fn save_picker_browse_stats_lines(row: usize) -> Option<(Vec<u16>, Vec<u16>)> {
     if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 && !missing_save_selection_pending() {
         return None;
@@ -778,26 +815,23 @@ pub(crate) fn save_picker_browse_stats_lines(row: usize) -> Option<(Vec<u16>, Ve
     }
     let is_current = model.row_is_loaded_save(row);
     let Some(chars) = model.row_file_characters(row) else {
-        // Empty row: blank both lines.
+        // Empty row: blank the injected stats field so no per-slot attribute stats render as junk.
         return Some((vec![0], vec![0]));
     };
     let count = if chars.len() == 1 {
-        "1 CHARACTER".to_owned()
+        "1 CHAR".to_owned()
     } else {
-        format!("{} CHARACTERS", chars.len())
+        format!("{} CHAR", chars.len())
     };
     let top = if is_current {
-        format!(
-            "{} {count}",
-            crate::experiments::save_picker::PICKER_CURRENT_SAVE_MARKER
-        )
+        format!("* {count}")
     } else {
         count
     };
     let mut bottom = String::new();
     let mut shown = 0usize;
     for info in chars {
-        let seg = format!("{} LV {}", info.name, info.level);
+        let seg = format!("{} L{}", info.name, info.level);
         let sep = if bottom.is_empty() { "" } else { " / " };
         if !bottom.is_empty()
             && bottom.chars().count() + sep.chars().count() + seg.chars().count()
@@ -818,16 +852,16 @@ pub(crate) fn save_picker_browse_stats_lines(row: usize) -> Option<(Vec<u16>, Ve
     ))
 }
 
-/// What a browse row does with the three native per-slot info fields.
+/// What a browse row does with the native per-slot info fields.
 ///
-/// The `Level` caption and value are not represented here because there is nothing to decide: no
-/// browse row is a profile slot, so a level is meaningless on every one of them and they are hidden
-/// on all rows the picker owns.
+/// The `Level` caption/value and bottom `PlayTime` are hidden for picker-owned rows. A save-file row
+/// stages its timestamp into top-right `Location`, so the row reads as one line: filename left,
+/// last-saved time right.
 pub(crate) struct RowSlotInfo {
-    /// Replacement text for the `PlayTime` field (when the file was last written), or `None` to hide
+    /// Replacement text for the `Location` field (when the file was last written), or `None` to hide
     /// the field -- which is what every non-file row gets, and what a file whose timestamp is
     /// unreadable gets rather than a fabricated date.
-    pub(crate) play_time: Option<String>,
+    pub(crate) location: Option<String>,
 }
 
 /// What the browse picker wants done with ProfileSelect row `row`'s per-slot info fields.
@@ -845,7 +879,7 @@ pub(crate) fn save_picker_row_slot_info(row: usize) -> Option<RowSlotInfo> {
         guard.as_ref()?.row_last_saved(row)
     };
     Some(RowSlotInfo {
-        play_time: last_saved.and_then(save_picker_last_saved_text),
+        location: last_saved.and_then(save_picker_last_saved_text),
     })
 }
 
