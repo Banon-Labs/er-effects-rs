@@ -110,19 +110,43 @@ pub const FALLBACK_INVASION_PIN_ICON_ID: u16 = 87;
 /// The category bits, masked `& 7` into pin `+0x60`. These are **map-layer visibility bits**.
 pub const CATEGORY_BITS_MASK: u8 = 0x7;
 
-/// Category bits that make a pin visible on EVERY map layer.
+/// Layer bit for the Lands Between surface (map layer id `0`).
+pub const LAYER_BIT_SURFACE: u8 = 0x1;
+/// Layer bit for the underground (map layer id `1`) -- Siofra, Ainsel, Deeproot, Mohgwyn.
+pub const LAYER_BIT_UNDERGROUND: u8 = 0x2;
+/// Layer bit for the Shadow Lands (map layer id `10`).
+pub const LAYER_BIT_SHADOW_LANDS: u8 = 0x4;
+
+/// Area byte of a Shadow Lands (Shadow of the Erdtree) block.
+pub const AREA_SHADOW_LANDS: u8 = 61;
+/// Area byte the engine treats as the UNDERGROUND layer (Siofra, Ainsel, Deeproot, Mohgwyn).
 ///
-/// `+0x60` is not a category in the taxonomic sense -- it is a per-layer visibility bitmap. The
-/// per-frame visibility pass `FUN_14087afa0` sets a row's drawn flag (`row+0xc`) only when
-/// `(row+0x60 >> bitIdx) & 1`, where `bitIdx = FUN_140887e90(control+0xec)` maps the current map
-/// layer id onto a bit: layer `0` (the Lands Between) -> bit 0, layer `1` (the underground) ->
-/// bit 1, layer `10` (the Shadow Lands) -> bit 2, and anything else -> `-1`, meaning invisible.
+/// It is `12`, not `60`. An earlier comment here asserted that area 60 covered both the surface
+/// and the underground; the binary says otherwise (`0x140886c40` / `0x140887870` promote a
+/// layer-0 block to layer 1 only when its area byte is `0x0C`). The shipped auto-invade-point
+/// corpus holds no area-12 blocks at all, so the underground map legitimately has no invasion
+/// pins -- an absence to report honestly, not to paper over by setting extra bits.
+pub const AREA_UNDERGROUND: u8 = 12;
+
+/// How `row+0x60` decides which map a pin is drawn on.
 ///
-/// Copying the sampled donor's bits was therefore a latent bug with a very specific shape: a
-/// grace donor measured `0x1`, so every injected pin was structurally overworld-only and could
-/// never appear on the underground or DLC maps no matter how correctly it was placed. Setting
-/// all three bits is what "on every map" actually means at this layer.
-pub const CATEGORY_BITS_ALL_LAYERS: u8 = 0x7;
+/// `+0x60` is a per-layer visibility BITMAP, not a category: `FUN_14087afa0` sets a row's drawn
+/// flag (`row+0xc`) only when `(row+0x60 >> bitIdx) & 1`, where
+/// `bitIdx = FUN_140887e90(currentLayerId)` maps layer `0` -> bit 0, `1` -> bit 1, `10` -> bit 2,
+/// and anything else -> `-1` (invisible).
+///
+/// **A row carries exactly ONE coordinate** (`row+0x10`), produced by one area converter. Setting
+/// several bits therefore does not put a pin on several maps -- it draws the SAME point on each
+/// of them, and that point only means anything on the map whose converter produced it. Setting
+/// all three was wrong in a way that was easy to see and easy to misdiagnose: a Shadow Lands pin,
+/// correctly projected into Shadow Lands space, was also drawn on the Lands Between map at those
+/// coordinates, i.e. out at sea -- while still warping correctly, because the warp resolves the
+/// block id and never reads the map position.
+///
+/// So the bit must come from the converter that actually accepted the pin (the caller has that
+/// index; see the DLL's `layer_bit_for_converter`), and exactly one bit may be set. "On every
+/// map" is a property of the pin SET, not of any single row's mask.
+pub const LAYER_BIT_DOC: () = ();
 
 /// How a synthetic pin should be described and categorised.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

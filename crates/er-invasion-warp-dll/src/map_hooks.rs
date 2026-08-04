@@ -329,6 +329,32 @@ static SHARED_PARAM_ROWS_LEN: AtomicUsize = AtomicUsize::new(0);
 /// `usize::MAX` until the first stamp, which no real frame number can collide with.
 static SHARED_PARAM_ROWS_ICON: AtomicUsize = AtomicUsize::new(usize::MAX);
 
+/// Signature of the spawn table the cached registry was built from.
+static CATALOG_SIGNATURE: AtomicUsize = AtomicUsize::new(0);
+
+/// A cheap fingerprint of a pin set, used to notice that the loaded spawn table changed.
+///
+/// It folds every target's block AND its position, because a mod can move a spawn without
+/// changing how many there are -- counting alone would call an ersc-rewritten table identical to
+/// the vanilla one and keep serving stale pins. This is not a cryptographic digest and does not
+/// need to be; it needs to change when the data changes.
+fn catalog_signature(registry: &er_invasion_warp::map_surface::InvasionRowRegistry) -> usize {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    let mut mix = |value: u64| {
+        hash ^= value;
+        hash = hash.wrapping_mul(0x100_0000_01b3);
+    };
+    mix(registry.len() as u64);
+    for target in registry.targets() {
+        mix(u64::from(target.block.raw()));
+        mix(u64::from(target.point_index));
+        for axis in target.position {
+            mix(u64::from(axis.to_bits()));
+        }
+    }
+    hash as usize
+}
+
 /// There is deliberately NO "already injected" bookkeeping.
 ///
 /// Two earlier shapes both failed, and they failed for the same underlying reason:
@@ -453,6 +479,55 @@ unsafe fn project_to_map(
     None
 }
 
+/// `DAT_142ad82f8` -- the engine's converter-index -> map-layer-id table, `{0, 1, 10}`.
+///
+/// Read live rather than hard-coded: if a patch ever reorders the converters, a baked table would
+/// keep assigning confidently wrong layers, whereas a live read that fails its shape check
+/// assigns none.
+pub const LAYER_ID_TABLE_RVA: usize = 0x2ad_82f8;
+/// Converter slots that have a layer entry. The engine gates every use on `(byte)i < 3`, so a
+/// pin projected by slot 3..7 can never be drawn on any map.
+pub const LAYERED_CONVERTER_COUNT: usize = 3;
+
+/// The single `row+0x60` bit a pin projected by converter `converter_index` must carry.
+///
+/// `None` means "this pin cannot be drawn anywhere" -- an unlayered converter slot, or a table
+/// that is not the `{0, 1, 10}` the RE describes. Both are refusals, not defaults: giving such a
+/// pin a bit anyway is how a marker ends up painted onto a map whose coordinate space it was
+/// never projected into.
+#[cfg(windows)]
+#[must_use]
+fn layer_bit_for_converter(base: usize, converter_index: usize, block_area: u8) -> Option<u8> {
+    if converter_index >= LAYERED_CONVERTER_COUNT {
+        return None;
+    }
+    let table: [u8; LAYERED_CONVERTER_COUNT] = core::array::from_fn(|i| {
+        unsafe { er_game_base::mem::safe_read_u8(base + LAYER_ID_TABLE_RVA + i) }.unwrap_or(0xFF)
+    });
+    // Fail closed on an unexpected table: the layer ids are what the whole mapping rests on.
+    if table != [0, 1, 10] {
+        return None;
+    }
+    let mut layer_id = table[converter_index];
+    // The underground has NO converter of its own. Siofra, Ainsel, Deeproot and Mohgwyn are area
+    // 12, and they reach map space by having the legacy converter rewrite them into an overworld
+    // block, which slot 0 then accepts -- so they arrive here looking like layer 0. The engine
+    // corrects that with exactly this test (`FUN_140887870`: `if (mapId == 0 && areaId == 0x0C)
+    // mapId = 1`), and it is mirrored rather than skipped so the mapping stays right if a catalog
+    // ever does contain area-12 points. The shipped one does not, which is why the underground
+    // map honestly has no invasion pins.
+    if layer_id == 0 && block_area == er_invasion_warp::param_row::AREA_UNDERGROUND {
+        layer_id = 1;
+    }
+    // `FUN_140887e90`: layer 0 -> bit 0, 1 -> bit 1, 10 -> bit 2, anything else -> invisible.
+    match layer_id {
+        0 => Some(er_invasion_warp::param_row::LAYER_BIT_SURFACE),
+        1 => Some(er_invasion_warp::param_row::LAYER_BIT_UNDERGROUND),
+        10 => Some(er_invasion_warp::param_row::LAYER_BIT_SHADOW_LANDS),
+        _ => None,
+    }
+}
+
 /// Area byte of a packed `BlockId` (byte 3).
 #[must_use]
 pub const fn block_area(block_id: u32) -> u8 {
@@ -544,38 +619,57 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         return;
     };
 
-    // The registry is built from the catalog ONCE and then reused by every later injection.
+    // The catalog is RE-READ on every injection, and the derived registry is rebuilt only when
+    // the data actually changed.
     //
-    // Two reasons, and the second is the one that bites. It is leaked anyway (the confirm hook
-    // dereferences it for the rest of the session), so rebuilding it per injection leaks a fresh
-    // 365-entry copy on every map open. And `collect_invasion_warp_catalog` walks all 7073
-    // authored points out of the `CSAutoInvadePoint` map -- that is work this code does while
-    // sitting inside the ViewModel constructor on the game thread, i.e. in the middle of the
-    // player opening the map. Once per session is fine there; once per open is a stutter the
-    // player would feel.
-    let cached_registry = INJECTED_REGISTRY.load(Ordering::SeqCst);
-    let registry: &'static InvasionRowRegistry = if cached_registry == 0 {
-        let catalog =
-            match unsafe { er_invasion_warp::invasion_warp::collect_invasion_warp_catalog() } {
-                Ok(catalog) => catalog,
-                Err(error) => {
-                    INJECTIONS_SKIPPED.fetch_add(1, Ordering::SeqCst);
-                    crate::standalone_log(format_args!(
-                        "map-inject: invasion catalog unavailable at ViewModel ctor time \
-                         ({error}); no pins injected"
-                    ));
-                    return;
-                }
-            };
-        let leaked: &'static InvasionRowRegistry = Box::leak(Box::new(
-            InvasionRowRegistry::from_catalog(&catalog, PinGranularity::PerBlock),
-        ));
-        INJECTED_REGISTRY.store(core::ptr::from_ref(leaked) as usize, Ordering::SeqCst);
-        leaked
-    } else {
-        // SAFETY: leaked on the first injection, never freed and never mutated.
-        unsafe { &*(cached_registry as *const InvasionRowRegistry) }
+    // The spawn table is not a constant. Seamless Co-op's `ersc.dll` rewrites the invasion spawn
+    // regions the vanilla game ships, and the whole point of reading `CSAutoInvadePoint` live is
+    // that the pins show whatever is actually loaded: vanilla points under a vanilla profile,
+    // ersc's under a Seamless one. An earlier version cached the registry for the session to stop
+    // a per-injection leak, which quietly broke that -- read once before ersc patched and the map
+    // shows the wrong spawns for the rest of the session, with nothing to indicate it.
+    //
+    // The leak is avoided by comparing a cheap signature instead of by refusing to look. Only a
+    // genuine change re-leaks, and injection runs per WORLD LOAD (the ViewModel is built in
+    // `MoveMapStep`), not per frame and not per map open -- so the walk sits inside a load the
+    // player is already waiting through.
+    let catalog = match unsafe { er_invasion_warp::invasion_warp::collect_invasion_warp_catalog() }
+    {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            INJECTIONS_SKIPPED.fetch_add(1, Ordering::SeqCst);
+            crate::standalone_log(format_args!(
+                "map-inject: invasion catalog unavailable at ViewModel ctor time ({error}); no \
+                 pins injected"
+            ));
+            return;
+        }
     };
+    let fresh = InvasionRowRegistry::from_catalog(&catalog, PinGranularity::PerBlock);
+    let signature = catalog_signature(&fresh);
+    let cached_registry = INJECTED_REGISTRY.load(Ordering::SeqCst);
+    let registry: &'static InvasionRowRegistry =
+        if cached_registry != 0 && CATALOG_SIGNATURE.load(Ordering::SeqCst) == signature {
+            // SAFETY: leaked by this function, never freed, and only replaced (never mutated).
+            unsafe { &*(cached_registry as *const InvasionRowRegistry) }
+        } else {
+            if cached_registry != 0 {
+                crate::standalone_log(format_args!(
+                    "map-inject: the invasion spawn table CHANGED under us (signature \
+                     {:#018x} -> {signature:#018x}); rebuilding the pin set so the map shows the \
+                     spawns that are actually loaded",
+                    CATALOG_SIGNATURE.load(Ordering::SeqCst)
+                ));
+                // The param rows describe the old set, so they must be rebuilt too.
+                SHARED_PARAM_ROWS_PTR.store(0, Ordering::SeqCst);
+                SHARED_PARAM_ROWS_LEN.store(0, Ordering::SeqCst);
+                SHARED_PARAM_ROWS_ICON.store(usize::MAX, Ordering::SeqCst);
+            }
+            let leaked: &'static InvasionRowRegistry = Box::leak(Box::new(fresh));
+            INJECTED_REGISTRY.store(core::ptr::from_ref(leaked) as usize, Ordering::SeqCst);
+            CATALOG_SIGNATURE.store(signature, Ordering::SeqCst);
+            leaked
+        };
     let wanted = registry.len();
     if wanted == 0 {
         INJECTIONS_SKIPPED.fetch_add(1, Ordering::SeqCst);
@@ -584,6 +678,17 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         ));
         return;
     }
+
+    // PROJECT FIRST. The layer bit a pin must carry is decided by WHICH converter accepted it,
+    // not by anything readable off the block on its own, so the projection has to run before the
+    // param rows are authored rather than after them.
+    let projections: Vec<Option<(MapCoordinates, usize, u8)>> = registry
+        .targets()
+        .iter()
+        .map(|target| unsafe {
+            project_to_map(base, view_model, target.block.raw(), target.position)
+        })
+        .collect();
 
     // One param row per pin, leaked on purpose: the pin does not own it, its dtor never touches
     // it, but IsOpen / the row filter / the label refresh all dereference it on demand for the
@@ -602,6 +707,21 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
             let Some(entity_id) = registry.entity_id_at(index) else {
                 break;
             };
+            // The layer bit follows the CONVERTER THAT ACCEPTED THIS PIN, because a row carries
+            // exactly one coordinate and that coordinate only means anything on the map whose
+            // converter produced it. A pin nothing accepted gets no bit at all -- it is dropped
+            // below rather than given a default that would draw it somewhere arbitrary.
+            let block_area_byte = registry
+                .targets()
+                .get(index)
+                .map_or(0, |target| block_area(target.block.raw()));
+            let layer_bits = projections
+                .get(index)
+                .and_then(|projection| projection.as_ref())
+                .and_then(|(_, converter_index, _)| {
+                    layer_bit_for_converter(base, *converter_index, block_area_byte)
+                })
+                .unwrap_or(0);
             rows.push(
                 SyntheticParamSpec {
                     entity_id,
@@ -611,10 +731,12 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
                     icon_id: er_invasion_warp::param_row::invasion_pin_icon_id(
                         crate::map_gfx::red_pin_frame_installed(),
                     ),
-                    // NOT the donor's bits either. These are per-map-layer visibility bits, and
-                    // a grace donor supplies 0x1 -- overworld only -- which is why the pins
-                    // could never appear on the underground or Shadow Lands maps.
-                    category_bits: er_invasion_warp::param_row::CATEGORY_BITS_ALL_LAYERS,
+                    // NOT the donor's bits, and NOT all three. These are per-map-layer
+                    // visibility bits over a row that holds ONE coordinate, so all-three drew
+                    // every Shadow Lands pin on the Lands Between map too -- at Shadow Lands
+                    // coordinates, i.e. out in the sea, while still warping correctly because
+                    // the warp reads the block id and never the map position.
+                    category_bits: layer_bits,
                     place_name_text_id: donor.label_text_id,
                 }
                 .to_row_bytes(),
@@ -714,19 +836,44 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
 
     let mut injected = 0_usize;
     let mut unplaceable = 0_usize;
+    // Per-area and per-converter tallies. The "0 CROSS-AREA" line was reassuring and nearly
+    // meaningless: area 60 covers BOTH the surface and the underground, so an area match cannot
+    // tell a Siofra block from a Limgrave one. Counting which converter actually accepted each
+    // pin is the measurement that can, because the converters are what differ per map.
+    let mut per_area: [usize; 2] = [0, 0]; // [area 60, area 61]
+    let mut per_converter: [usize; 8] = [0; 8];
     /// How many pins were accepted by a converter belonging to a DIFFERENT area than the
     /// target's own -- those land in the wrong map's coordinate space.
     let mut cross_area_projections = 0_usize;
     let mut cross_area_trace = 4_usize;
     let mut area_trace = 4_usize;
     for (index, target) in registry.targets().iter().enumerate() {
+        // Reuse the projection computed above rather than re-running it: the layer bit and the
+        // coordinate must come from the SAME converter decision, and projecting twice invites
+        // them to disagree as well as doubling 365 native calls inside a world load.
         let Some((coords, converter_index, converter_area)) =
-            (unsafe { project_to_map(base, view_model, target.block.raw(), target.position) })
+            projections.get(index).copied().flatten()
         else {
             unplaceable += 1;
             continue;
         };
+        // A pin whose converter carries no layer entry can never be drawn on any map, so it is
+        // dropped rather than appended with a zero mask that would make it permanently invisible
+        // while still occupying a row and a clip-pool slot.
+        if layer_bit_for_converter(base, converter_index, block_area(target.block.raw())).is_none()
+        {
+            unplaceable += 1;
+            continue;
+        }
         let target_area = block_area(target.block.raw());
+        if target_area == er_invasion_warp::param_row::AREA_SHADOW_LANDS {
+            per_area[1] += 1;
+        } else {
+            per_area[0] += 1;
+        }
+        if let Some(slot) = per_converter.get_mut(converter_index) {
+            *slot += 1;
+        }
         if converter_area != target_area {
             // The converter that accepted this point belongs to a DIFFERENT area, so the map
             // coordinates are in that area's space and the pin renders somewhere meaningless.
@@ -806,6 +953,12 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         let first = final_geometry.begin + existing_rows * PIN_ROW_STRIDE;
         record_injected_span(first, first + injected * PIN_ROW_STRIDE);
     }
+    crate::standalone_log(format_args!(
+        "map-inject: layer split: area60(surface bit)={} area61(shadow-lands bit)={}; converter \
+         usage={per_converter:?} -- a pin is drawn ONLY on the layer whose bit it carries, \
+         because its single coordinate is only valid in that converter's space",
+        per_area[0], per_area[1]
+    ));
     let settled = unsafe { read_pin_list(view_model) };
     crate::standalone_log(format_args!(
         "map-inject: appended {injected} invasion pins ({unplaceable} unplaceable, \
