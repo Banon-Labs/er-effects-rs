@@ -174,6 +174,18 @@ pub const WORLDMAP_PIN_LIST_GROW: MapSeam = MapSeam {
     arg_count: 2,
 };
 
+/// `FUN_14088be50` -- the row filter. `(row /*RCX*/, categoryMask /*EDX*/, allowUnvisited /*R8B*/)`
+/// returns non-zero when the row should be listed. This is the function that decides whether an
+/// injected pin is VISIBLE, so it is the oracle for "are the pins showing".
+pub const WORLDMAP_ROW_FILTER: MapSeam = MapSeam {
+    name: "WorldMapWarpPinData row filter (FUN_14088be50)",
+    rva: 0x088_be50,
+    prologue: &[
+        0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89,
+    ],
+    arg_count: 3,
+};
+
 /// `CS::WorldMapAreaConverter::ConvertMsbCoordsToMapCoords` -- `0x140876140`. Produces the
 /// `WorldMapCoordinates{x, z}` a pin renders at.
 pub const CONVERT_MSB_COORDS_TO_MAP_COORDS: MapSeam = MapSeam {
@@ -197,6 +209,7 @@ pub const ALL_SEAMS: &[MapSeam] = &[
     WORLDMAP_PIN_ROW_CTOR,
     WORLDMAP_PIN_ROW_DTOR,
     WORLDMAP_PIN_LIST_GROW,
+    WORLDMAP_ROW_FILTER,
     CONVERT_MSB_COORDS_TO_MAP_COORDS,
 ];
 
@@ -302,6 +315,7 @@ mod tests {
             (WORLDMAP_PIN_ROW_CTOR, 0x1_4088_b7b0),
             (WORLDMAP_PIN_ROW_DTOR, 0x1_4088_bac0),
             (WORLDMAP_PIN_LIST_GROW, 0x1_4088_8aa0),
+            (WORLDMAP_ROW_FILTER, 0x1_4088_be50),
             (CONVERT_MSB_COORDS_TO_MAP_COORDS, 0x1_4087_6140),
         ] {
             assert_eq!(seam.verified_va(), va, "{}", seam.name);

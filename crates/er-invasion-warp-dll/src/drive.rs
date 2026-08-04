@@ -244,10 +244,16 @@ impl InvasionWarpDrive {
         // during the first live run they were indistinguishable: no focus, no keypress and no
         // driver all looked identical in the log.
         if self.ticks % HEARTBEAT_TICK_INTERVAL == 0 {
+            // (passed, queried) per bucket -- the visibility oracle. `ours 0/N` with a healthy
+            // shipped ratio means our rows are reaching the filter and being REJECTED, which is
+            // a field problem; `ours 0/0` means the filter never saw them at all, which is a
+            // different bug entirely.
+            let verdicts = crate::map_hooks::filter_verdicts();
             let player = unsafe { er_invasion_warp::warp::player_physics_position(base) };
             log(format_args!(
                 "invasion-warp: heartbeat tick={} focused={focused} f7_state={:#06x} \
-                 f8_state={:#06x} player={} -- press F7 (nearest), F8 (next), F9 (other area)",
+                 f8_state={:#06x} player={} pins={} filter[ours {}/{} shipped {}/{}] -- press \
+                 F7 (nearest), F8 (next), F9 (other area)",
                 self.ticks,
                 self.nearest_key.raw_state() as u16,
                 self.next_key.raw_state() as u16,
@@ -255,6 +261,11 @@ impl InvasionWarpDrive {
                     || "none".to_string(),
                     |p| format!("[{:.1}, {:.1}, {:.1}]", p[0], p[1], p[2])
                 ),
+                crate::map_hooks::pins_injected(),
+                verdicts.1,
+                verdicts.0,
+                verdicts.3,
+                verdicts.2,
             ));
         }
 

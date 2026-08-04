@@ -208,6 +208,25 @@ struct DonorParamFields {
 /// appears far earlier; an unbounded scan on the game thread is not worth the risk.
 const MAX_DONOR_SCAN_ROWS: usize = 128;
 
+/// First injected row address, and one past the last. A filter callback is "ours" when the row
+/// falls in this half-open span -- an address test, which stays correct even though the reserve
+/// relocated the buffer, because the span is recorded AFTER the reserve.
+static INJECTED_ROWS_BEGIN: AtomicUsize = AtomicUsize::new(0);
+static INJECTED_ROWS_END: AtomicUsize = AtomicUsize::new(0);
+
+/// Filter verdicts for OUR rows: how many were asked about, and how many were accepted.
+static FILTER_QUERIES_OURS: AtomicUsize = AtomicUsize::new(0);
+static FILTER_PASSES_OURS: AtomicUsize = AtomicUsize::new(0);
+/// Same for the shipped rows, as a control: if the shipped rows also fail, the mask being used
+/// is simply not one our rows were ever going to match, and the fault is not in our fields.
+static FILTER_QUERIES_SHIPPED: AtomicUsize = AtomicUsize::new(0);
+static FILTER_PASSES_SHIPPED: AtomicUsize = AtomicUsize::new(0);
+/// Log only the first few verdicts; the filter runs once per row per list build.
+static FILTER_TRACE_BUDGET: AtomicUsize = AtomicUsize::new(6);
+
+/// Trampoline to the original row filter.
+static ORIG_ROW_FILTER: AtomicUsize = AtomicUsize::new(0);
+
 /// How many pins were injected, and why not more.
 static PINS_INJECTED: AtomicUsize = AtomicUsize::new(0);
 /// Set once injection has been attempted, so it can never run twice on one list.
@@ -480,6 +499,15 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     }
 
     PINS_INJECTED.store(injected, Ordering::SeqCst);
+    // Record the span AFTER the appends: the reserve already relocated the buffer, so these are
+    // the final addresses the filter will be asked about.
+    if injected > 0
+        && let Some(final_geometry) = unsafe { read_pin_list(view_model) }
+    {
+        let first = final_geometry.begin + existing_rows * PIN_ROW_STRIDE;
+        INJECTED_ROWS_BEGIN.store(first, Ordering::SeqCst);
+        INJECTED_ROWS_END.store(first + injected * PIN_ROW_STRIDE, Ordering::SeqCst);
+    }
     let settled = unsafe { read_pin_list(view_model) };
     crate::standalone_log(format_args!(
         "map-inject: appended {injected} invasion pins ({unplaceable} unplaceable, {wanted} \
@@ -496,6 +524,73 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         donor.icon_id,
         donor.label_text_id,
     ));
+}
+
+/// Union handler for the row filter `FUN_14088be50`.
+///
+/// Observation only -- it forwards the original verdict untouched. It exists because "are the
+/// pins visible" is otherwise a pixel question: this is the function that decides, so counting
+/// its verdicts turns visibility into a RAM oracle. The shipped rows are counted alongside as a
+/// control, so a mask that rejects EVERYTHING is distinguishable from one that rejects only ours.
+///
+/// # Safety
+/// Installed by the union on a byte-verified prologue; ABI is `(row, mask, allowUnvisited)`.
+#[cfg(windows)]
+unsafe extern "system" fn worldmap_row_filter_hook(
+    row: usize,
+    mask: usize,
+    allow_unvisited: usize,
+    d: usize,
+) -> usize {
+    let orig = ORIG_ROW_FILTER.load(Ordering::SeqCst);
+    if orig == 0 {
+        // Claiming a verdict we did not compute would silently change what the map shows.
+        return 0;
+    }
+    type FilterFn = unsafe extern "system" fn(usize, usize, usize, usize) -> usize;
+    let original: FilterFn = unsafe { core::mem::transmute(orig) };
+    let verdict = unsafe { original(row, mask, allow_unvisited, d) };
+
+    let begin = INJECTED_ROWS_BEGIN.load(Ordering::SeqCst);
+    let end = INJECTED_ROWS_END.load(Ordering::SeqCst);
+    let ours = begin != 0 && row >= begin && row < end;
+    // The verdict is a `char`; only the low byte is meaningful.
+    let passed = (verdict & 0xFF) != 0;
+    if ours {
+        FILTER_QUERIES_OURS.fetch_add(1, Ordering::SeqCst);
+        if passed {
+            FILTER_PASSES_OURS.fetch_add(1, Ordering::SeqCst);
+        }
+    } else {
+        FILTER_QUERIES_SHIPPED.fetch_add(1, Ordering::SeqCst);
+        if passed {
+            FILTER_PASSES_SHIPPED.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    if ours && FILTER_TRACE_BUDGET.fetch_sub(1, Ordering::SeqCst) > 0 {
+        let bits = unsafe { er_game_base::mem::safe_read_u8(row + 0x60) };
+        let entity = unsafe { er_game_base::mem::safe_read_i32(row + ROW_ENTITY_ID_OFFSET) };
+        crate::standalone_log(format_args!(
+            "map-filter: OUR row 0x{row:x} verdict={passed} mask=0x{:x} allow_unvisited={} \
+             row+0x60=0x{:02x} entity_id={:?}",
+            mask as u32,
+            allow_unvisited & 0xFF,
+            bits.unwrap_or(0),
+            entity
+        ));
+    }
+    verdict
+}
+
+/// Filter verdict tallies: `(ours_queried, ours_passed, shipped_queried, shipped_passed)`.
+#[must_use]
+pub fn filter_verdicts() -> (usize, usize, usize, usize) {
+    (
+        FILTER_QUERIES_OURS.load(Ordering::SeqCst),
+        FILTER_PASSES_OURS.load(Ordering::SeqCst),
+        FILTER_QUERIES_SHIPPED.load(Ordering::SeqCst),
+        FILTER_PASSES_SHIPPED.load(Ordering::SeqCst),
+    )
 }
 
 /// Union handler for `CS::WorldMapViewModel::WorldMapViewModel`.
@@ -610,11 +705,10 @@ pub unsafe fn install_map_observers() -> usize {
     } {
         Ok(()) => {
             crate::standalone_log(format_args!(
-                "map-hooks: observing {} @0x{address:x} (verified prologue; observation only, \
-                 nothing is written into the engine)",
+                "map-hooks: hooked {} @0x{address:x} (verified prologue)",
                 WORLDMAP_VIEWMODEL_CTOR.name
             ));
-            1
+            1 + unsafe { install_row_filter_observer() }
         }
         Err(status) => {
             crate::standalone_log(format_args!(
@@ -740,5 +834,44 @@ mod tests {
         assert_eq!(g.capacity_bytes(), 0);
         assert_eq!(g.spare_rows(), 0);
         assert!(!g.is_plausible());
+    }
+}
+
+/// Install the row-filter observer. Failure costs the visibility oracle and nothing else.
+///
+/// # Safety
+/// Game task thread.
+#[cfg(windows)]
+unsafe fn install_row_filter_observer() -> usize {
+    let seam = crate::map_seams::WORLDMAP_ROW_FILTER;
+    let address = match unsafe { verify_seam(&seam) } {
+        Ok(address) => address,
+        Err(error) => {
+            crate::standalone_log(format_args!("map-hooks: {error}"));
+            return 0;
+        }
+    };
+    match unsafe {
+        er_hook::register_union_hook(
+            address,
+            worldmap_row_filter_hook as er_hook::UnionFn,
+            &ORIG_ROW_FILTER,
+        )
+    } {
+        Ok(()) => {
+            crate::standalone_log(format_args!(
+                "map-hooks: observing {} @0x{address:x} -- this is the visibility oracle",
+                seam.name
+            ));
+            1
+        }
+        Err(status) => {
+            crate::standalone_log(format_args!(
+                "map-hooks: union registration for {} failed: {status:?} -- pins may still be \
+                 fine, but this run cannot say whether they pass the filter",
+                seam.name
+            ));
+            0
+        }
     }
 }
