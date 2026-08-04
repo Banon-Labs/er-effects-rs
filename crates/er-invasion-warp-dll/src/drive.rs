@@ -249,10 +249,22 @@ impl InvasionWarpDrive {
             // a field problem; `ours 0/0` means the filter never saw them at all, which is a
             // different bug entirely.
             let verdicts = crate::map_hooks::filter_verdicts();
+            // (ctor hits, injections that appended, injections that appended nothing). These
+            // are the "every map view, every map open" oracle: opens and injections must stay
+            // equal, and skips must stay zero. A screenshot cannot tell the difference between
+            // "no pins were injected" and "pins were injected but are not drawn"; this can.
+            let (opens, injections, skips) = crate::map_hooks::injection_tallies();
+            // (gfx parses seen, world-map movies recognised, edited movies served, derive
+            // failures). `served=0` means the pins are on the fallback vanilla icon rather than
+            // the red one -- the difference between "the icon did not change" and "the icon
+            // could not be installed", which is otherwise a question only a screenshot answers.
+            let (_, map_movies, red_served, red_failures) = crate::map_gfx::gfx_tallies();
             let player = unsafe { er_invasion_warp::warp::player_physics_position(base) };
             log(format_args!(
                 "invasion-warp: heartbeat tick={} focused={focused} f7_state={:#06x} \
-                 f8_state={:#06x} player={} pins={} filter[ours {}/{} shipped {}/{}] -- press \
+                 f8_state={:#06x} player={} pins={} map[opens={opens} injected={injections} \
+                 skipped={skips}] icon[movie={map_movies} red_served={red_served} \
+                 derive_failed={red_failures}] filter[ours {}/{} shipped {}/{}] -- press \
                  F7 (nearest), F8 (next), F9 (other area)",
                 self.ticks,
                 self.nearest_key.raw_state() as u16,

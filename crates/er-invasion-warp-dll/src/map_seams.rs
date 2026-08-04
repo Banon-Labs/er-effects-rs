@@ -174,9 +174,19 @@ pub const WORLDMAP_PIN_LIST_GROW: MapSeam = MapSeam {
     arg_count: 2,
 };
 
-/// `FUN_14088be50` -- the row filter. `(row /*RCX*/, categoryMask /*EDX*/, allowUnvisited /*R8B*/)`
-/// returns non-zero when the row should be listed. This is the function that decides whether an
-/// injected pin is VISIBLE, so it is the oracle for "are the pins showing".
+/// `FUN_14088be50` -- the FAST-TRAVEL LIST filter.
+/// `(row /*RCX*/, categoryMask /*EDX*/, allowUnvisited /*R8B*/)` returns non-zero when the row
+/// should be listed.
+///
+/// It is **NOT** the map-marker visibility gate, whatever this comment used to claim. All four
+/// of its callers (`0x1409cef10`, `0x1408803b0`, `0x14088a6c0`, `0x14088aba0`) build the
+/// fast-travel list or the bookmark dialog. A live run that saw the pins on the map while this
+/// reported `ours 0/0` was reporting the truth; the earlier reading of that as a bug sent an
+/// agent chasing a refuted experiment, which is why the correction is spelled out here.
+///
+/// The real marker gate is `WorldMapPinData::UpdateVisible` (`0x14087afa0`, pin vtable slot 3),
+/// which writes the per-row draw flag `row+0xc` from four tests: `IsOpen`, the map-layer bit
+/// (`(row+0x60 >> FUN_140887e90(mapId)) & 1`), an any-label-enabled test, and a zoom threshold.
 pub const WORLDMAP_ROW_FILTER: MapSeam = MapSeam {
     name: "WorldMapWarpPinData row filter (FUN_14088be50)",
     rva: 0x088_be50,

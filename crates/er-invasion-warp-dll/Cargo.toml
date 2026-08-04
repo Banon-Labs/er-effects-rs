@@ -23,6 +23,11 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 er-invasion-warp = { path = "../er-invasion-warp" }
 
+# The GFX codec, for the world-map movie edit that gives the invasion pins a red icon. Host-
+# buildable on purpose: the edit itself is pure byte manipulation and is covered by offline
+# tests against the extraction corpus, so only the load-time swap needs the game.
+er-gfx = { path = "../er-gfx" }
+
 [target.'cfg(windows)'.dependencies.er-game-base]
 # Tier A only: `game_module_base()` for the RVA-relative native calls the warp driver makes.
 path = "../er-game-base"

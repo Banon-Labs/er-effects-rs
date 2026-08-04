@@ -65,21 +65,64 @@ pub const LABEL_KIND_NPC_NAME: u8 = 1;
 /// A text id the engine treats as "no label" -- it renders an empty `MenuString`.
 pub const LABEL_TEXT_ID_NONE: i32 = -1;
 
-/// Icon id given to invasion pins so they are visually distinct from Sites of Grace.
+/// The icon id is a **1-based GFx frame number**, not a texture id.
 ///
-/// The pin's icon is NOT a colour tint -- it is an index the engine resolves to a sprite, read
-/// from the param row's `+0x1C` and copied to pin `+0x248`. Changing the sprite is the only
-/// distinguishing lever this layer has; recolouring an existing sprite would mean touching the
-/// renderer.
+/// `BonfireWarpParam+0x1C` is copied to pin `+0x248`, and `CS::WorldMapPinData::SetTo`
+/// (`0x14087ae20`) hands it to Scaleform as `Icon_0.gotoAndStop(id)`. `Icon_0` is a 348-frame
+/// MovieClip (sprite 171) inside `menu:/02_120_WorldMap.gfx`, and frame N places one
+/// `MENU_MAP_*` bitmap. There is no lookup table, no atlas indirection and no clamp: an id
+/// outside the populated frames lands on one of the 230 empty frames and draws NOTHING.
 ///
-/// The shipped grace rows use icon `1`, which is why cloning a donor verbatim produced pins
-/// indistinguishable from graces. This value is deliberately different. The injector logs the
-/// distinct icon ids it sees across the shipped rows, so the choice can be made from what the
-/// game actually has rather than from a guess.
-pub const INVASION_PIN_ICON_ID: u16 = 2;
+/// This is why the earlier value here was actively wrong. It was `2`, chosen as "some id that
+/// is not the graces' `1`" -- but frame 2 is `MENU_MAP_01_Bonfire` *plus* an overlay, i.e. the
+/// Site-of-Grace art with a decoration. The pins were not merely undifferentiated from graces;
+/// they were drawn as graces on purpose by an id picked without knowing what it selected.
+///
+/// The frame the invasion pins use. [`RED_INVASION_PIN_FRAME`] when the world-map movie has
+/// been given a red marker on a spare frame, [`FALLBACK_INVASION_PIN_ICON_ID`] otherwise -- so
+/// a pin never points at an empty frame and vanishes.
+#[must_use]
+pub const fn invasion_pin_icon_id(red_frame_installed: bool) -> u16 {
+    if red_frame_installed {
+        RED_INVASION_PIN_FRAME
+    } else {
+        FALLBACK_INVASION_PIN_ICON_ID
+    }
+}
 
-/// The category bits the row filter masks. Only the low three survive `& 7`.
+/// The spare `Icon_0` frame the DLL installs a red marker on.
+///
+/// 300 is one of the 230 frames sprite 171 declares but never populates (the populated set is
+/// 1..90-ish, 101..139, 208..218, 230..234, 240..261 and 348), so writing it collides with no
+/// shipped icon. The bitmap placed there is `MENU_MAP_Enemy_02` -- the hostile-player marker,
+/// which is the reddest art in the map atlas by measurement (alpha-weighted mean RGB
+/// `234/99/48` against the grace's `170/144/81`) and at 146x146 declared / 73x73 packed is the
+/// same scale as the 156x156 / 78x78 grace icon it replaces.
+pub const RED_INVASION_PIN_FRAME: u16 = 300;
+
+/// Used when the red frame is not installed: a populated, non-grace frame so the pins are still
+/// visually distinct rather than invisible.
+///
+/// Frame 87 is `MENU_MAP_87`, the reddest of the icons the game itself already places on a
+/// frame (mean RGB `202/144/106`) and 78x78, the same size as the grace icon.
+pub const FALLBACK_INVASION_PIN_ICON_ID: u16 = 87;
+
+/// The category bits, masked `& 7` into pin `+0x60`. These are **map-layer visibility bits**.
 pub const CATEGORY_BITS_MASK: u8 = 0x7;
+
+/// Category bits that make a pin visible on EVERY map layer.
+///
+/// `+0x60` is not a category in the taxonomic sense -- it is a per-layer visibility bitmap. The
+/// per-frame visibility pass `FUN_14087afa0` sets a row's drawn flag (`row+0xc`) only when
+/// `(row+0x60 >> bitIdx) & 1`, where `bitIdx = FUN_140887e90(control+0xec)` maps the current map
+/// layer id onto a bit: layer `0` (the Lands Between) -> bit 0, layer `1` (the underground) ->
+/// bit 1, layer `10` (the Shadow Lands) -> bit 2, and anything else -> `-1`, meaning invisible.
+///
+/// Copying the sampled donor's bits was therefore a latent bug with a very specific shape: a
+/// grace donor measured `0x1`, so every injected pin was structurally overworld-only and could
+/// never appear on the underground or DLC maps no matter how correctly it was placed. Setting
+/// all three bits is what "on every map" actually means at this layer.
+pub const CATEGORY_BITS_ALL_LAYERS: u8 = 0x7;
 
 /// How a synthetic pin should be described and categorised.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

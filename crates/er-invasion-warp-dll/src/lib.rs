@@ -26,6 +26,7 @@
 
 pub mod drive;
 #[cfg(windows)]
+pub mod map_gfx;
 pub mod map_hooks;
 pub mod map_seams;
 
@@ -148,6 +149,14 @@ fn spawn_catalog_task() {
                     // world-map observer is installed from the task rather than DllMain because
                     // MinHook must not run under the loader lock.
                     unsafe { crate::map_hooks::install_map_observers() };
+                    // SAFETY: same game-task context; also idempotent. This one arms as early
+                    // as the task runs on purpose: it swaps the world-map movie as Scaleform
+                    // parses it, so arming after that parse means the red pin icon simply never
+                    // appears. The pins read the outcome rather than assuming it, so a late or
+                    // failed arm costs the red icon and never leaves a pin iconless.
+                    if let Ok(base) = er_game_base::mem::game_module_base() {
+                        unsafe { crate::map_gfx::install_world_map_gfx_hook(base) };
+                    }
                 },
                 CSTaskGroupIndex::FrameBegin,
             );

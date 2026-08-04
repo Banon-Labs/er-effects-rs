@@ -9,12 +9,17 @@
 //!
 //! **The ViewModel is NOT built once per session.** The RE said it was, and a first run appeared
 //! to confirm it (`ctor #1`). A later run measured `ctor #1 this=0x2d41be80` followed by
-//! `ctor #2 this=0x8400a580` -- a second, different instance. Each map VIEW (overworld,
-//! underground, Shadow Lands) constructs its own, each with its own freshly-built row list. A
-//! process-wide "already injected" flag therefore left every view after the first with no
-//! invasion pins, which is what "the markers vanish when I switch views" and "nothing on the DLC
-//! map" both were. Injection is keyed per ViewModel instance ([`claim_view_model`]), and the
-//! param rows and registry are built once and shared, since a pin does not own its param row.
+//! `ctor #2 this=0x8400a580` -- a second, different instance, with its own freshly-built
+//! 420-row list, and that second one got nothing. That single log is both reported symptoms at
+//! once: the markers vanish when the map is reopened, and views other than the first are bare.
+//!
+//! So injection runs on EVERY constructor call and remembers nothing between them. The ctor
+//! builds a fresh list each time, which makes re-injection the correct behaviour rather than a
+//! hazard, and makes bookkeeping the only thing that can be wrong -- as it twice was, first as a
+//! process-wide flag and then as a `this`-pointer table that a recycled menu-heap address
+//! defeats. What IS shared is the catalog-derived registry and the synthetic param rows, built
+//! once: a pin does not own its param row, and rebuilding them per open would both leak and drag
+//! a 7073-point catalog walk into the frame where the player opens the map.
 //!
 //! The observation that shipped first measured the list before anything was written: rows=420,
 //! capacity=474, **54 spare**, vftable `0x142ad82a8`, and `356160 / 0x350` dividing exactly. That
@@ -56,7 +61,13 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::map_seams::{WORLDMAP_VIEWMODEL_CTOR, verify_seam};
+use crate::map_seams::WORLDMAP_VIEWMODEL_CTOR;
+// `verify_seam` reads live process memory, so it only exists on the game target. The import has
+// to be gated with it: an ungated `use` of a `cfg(windows)` item fails the HOST build outright,
+// which took this crate's unit tests -- the pin-list geometry and span-table checks that need no
+// game at all -- out of reach on Linux.
+#[cfg(windows)]
+use crate::map_seams::verify_seam;
 
 /// Offsets into `CS::WorldMapViewModel` for the pin-row list, from the RE
 /// (docs/plans/world-map-invasion-warp.md section 5.3).
@@ -174,6 +185,18 @@ pub const AREA_CONVERTER_COUNT_OFFSET: usize = 0x280;
 pub const ROW_PARAM_POINTER_OFFSET: usize = 0x240;
 /// Row field `+0x50` -- the bonfire entity id the ctor copies from param `+0x08`.
 pub const ROW_ENTITY_ID_OFFSET: usize = 0x50;
+/// Row field `+0x08` -- `CS::WorldMapPinDataBase`'s per-row id.
+///
+/// Assigned from a global counter by the base constructor, but COPIED by the copy-ctor, which
+/// is how every injected row ends up sharing one value unless it is stamped. The marker draw
+/// treats it as a change-detection token, not as an identity: see the stamp in [`inject_pins`].
+pub const ROW_ID_OFFSET: usize = 0x08;
+/// First id stamped into an injected row's `+0x08`.
+///
+/// Chosen far above the engine's own counter, which starts at 0 and increments per constructed
+/// pin (a map holds a few hundred), so an injected row's id can never alias a shipped one. It is
+/// deliberately NOT `-1`: the engine treats `-1` as its counter's wrap sentinel.
+pub const INJECTED_ROW_ID_BASE: i32 = 0x4000_0000;
 
 /// `WorldMapCoordinates` -- the 8 bytes a pin renders at (`row+0x10`).
 #[repr(C)]
@@ -216,11 +239,59 @@ struct DonorParamFields {
 /// appears far earlier; an unbounded scan on the game thread is not worth the risk.
 const MAX_DONOR_SCAN_ROWS: usize = 128;
 
-/// First injected row address, and one past the last. A filter callback is "ours" when the row
-/// falls in this half-open span -- an address test, which stays correct even though the reserve
-/// relocated the buffer, because the span is recorded AFTER the reserve.
-static INJECTED_ROWS_BEGIN: AtomicUsize = AtomicUsize::new(0);
-static INJECTED_ROWS_END: AtomicUsize = AtomicUsize::new(0);
+/// Half-open address spans covering the rows we appended, one entry per injection.
+///
+/// A filter callback is "ours" when the row falls inside any recorded span -- an address test,
+/// which stays correct even though the reserve relocated the buffer, because a span is recorded
+/// AFTER the reserve.
+///
+/// A TABLE rather than one pair, because more than one ViewModel is alive at a time and each has
+/// its own row buffer. With a single pair, the newest injection overwrote the span of every older
+/// live view, so the filter observer stopped recognising that view's rows and under-counted
+/// `ours` -- turning the visibility oracle into a source of false negatives exactly when there is
+/// more than one map view to explain. Oldest entries are overwritten once the table is full,
+/// which is harmless: a ViewModel that old has been destroyed and its rows freed.
+const MAX_INJECTED_SPANS: usize = 16;
+static INJECTED_SPANS: [(AtomicUsize, AtomicUsize); MAX_INJECTED_SPANS] =
+    [const { (AtomicUsize::new(0), AtomicUsize::new(0)) }; MAX_INJECTED_SPANS];
+/// Next span slot to write, monotonically increasing and taken modulo the table size.
+static INJECTED_SPAN_CURSOR: AtomicUsize = AtomicUsize::new(0);
+
+/// Write one span into `spans`, wrapping at the end of the table.
+///
+/// Split from [`record_injected_span`] so the wrap and containment rules can be tested against a
+/// caller-owned table: the global one is shared process-wide, and tests that mutate it would
+/// evict each other's entries when the harness runs them in parallel.
+fn record_span(
+    spans: &[(AtomicUsize, AtomicUsize)],
+    cursor: &AtomicUsize,
+    begin: usize,
+    end: usize,
+) {
+    let slot = cursor.fetch_add(1, Ordering::SeqCst) % spans.len();
+    // End first: a concurrent reader that sees a non-zero begin must already see a valid end,
+    // otherwise it would test against an empty span and report a row of ours as not ours.
+    spans[slot].1.store(end, Ordering::SeqCst);
+    spans[slot].0.store(begin, Ordering::SeqCst);
+}
+
+/// Whether `row` falls inside any recorded span.
+fn span_contains(spans: &[(AtomicUsize, AtomicUsize)], row: usize) -> bool {
+    spans.iter().any(|(begin, end)| {
+        let begin = begin.load(Ordering::SeqCst);
+        begin != 0 && row >= begin && row < end.load(Ordering::SeqCst)
+    })
+}
+
+/// Record the rows one injection appended, so the filter observer can recognise them.
+fn record_injected_span(begin: usize, end: usize) {
+    record_span(&INJECTED_SPANS, &INJECTED_SPAN_CURSOR, begin, end);
+}
+
+/// Whether `row` is one of the rows we appended, in any live view.
+fn row_is_ours(row: usize) -> bool {
+    span_contains(&INJECTED_SPANS, row)
+}
 
 /// Filter verdicts for OUR rows: how many were asked about, and how many were accepted.
 static FILTER_QUERIES_OURS: AtomicUsize = AtomicUsize::new(0);
@@ -235,47 +306,46 @@ static FILTER_TRACE_BUDGET: AtomicUsize = AtomicUsize::new(6);
 /// Trampoline to the original row filter.
 static ORIG_ROW_FILTER: AtomicUsize = AtomicUsize::new(0);
 
-/// How many pins were injected, and why not more.
+/// Pins appended by the MOST RECENT injection.
 static PINS_INJECTED: AtomicUsize = AtomicUsize::new(0);
-/// ViewModels already injected. The ctor fires ONCE PER MAP VIEW, not once per session
-/// (measured: two instances, `0x2d41be80` then `0x8400a580`), so a process-wide "done" flag left
-/// every view after the first with no invasion pins -- which is exactly what "the markers vanish
-/// when I switch to the underground or Shadow Lands view" looks like, and also why the DLC map
-/// appeared empty.
-///
-/// A small fixed set rather than a single "last" pointer, because views can be revisited in any
-/// order and each keeps its own ViewModel. Bounded and allocation-free: this runs on the game
-/// thread inside a ctor.
-const MAX_TRACKED_VIEW_MODELS: usize = 16;
-static INJECTED_VIEW_MODELS: [AtomicUsize; MAX_TRACKED_VIEW_MODELS] =
-    [const { AtomicUsize::new(0) }; MAX_TRACKED_VIEW_MODELS];
+/// Injections that actually appended at least one pin, for the whole session. Paired with
+/// [`VIEWMODEL_CTOR_HITS`] this is the oracle for "every map open got pins": the two must stay
+/// equal. A gap is the bug, and it is visible in RAM without looking at the screen.
+static INJECTIONS_PERFORMED: AtomicUsize = AtomicUsize::new(0);
+/// Ctor calls that reached [`inject_pins`] and appended nothing. Non-zero means a map view was
+/// left bare, and the log line above the increment says why.
+static INJECTIONS_SKIPPED: AtomicUsize = AtomicUsize::new(0);
 
-/// The leaked param rows and registry, built once and shared by every ViewModel. A pin does not
-/// own its param row, so one immutable set serves all views; rebuilding per view would leak a
-/// fresh copy each time the player switched maps.
+/// The leaked param rows and registry, built once and shared by every ViewModel.
+///
+/// A pin does not own its param row, so one immutable set serves every view. Building them per
+/// injection would leak a fresh copy of both on every single map open -- and now that injection
+/// runs on EVERY ctor rather than once, that is a per-open leak of ~365 param rows plus a
+/// 365-entry registry, which is a slow but real memory bleed for a player who opens the map a
+/// hundred times.
 static SHARED_PARAM_ROWS_PTR: AtomicUsize = AtomicUsize::new(0);
 static SHARED_PARAM_ROWS_LEN: AtomicUsize = AtomicUsize::new(0);
+/// Icon frame the cached rows currently carry, so a change can be detected and re-stamped.
+/// `usize::MAX` until the first stamp, which no real frame number can collide with.
+static SHARED_PARAM_ROWS_ICON: AtomicUsize = AtomicUsize::new(usize::MAX);
 
-/// Claim `view_model` for injection. False when it was already injected.
-fn claim_view_model(view_model: usize) -> bool {
-    for slot in &INJECTED_VIEW_MODELS {
-        if slot.load(Ordering::SeqCst) == view_model {
-            return false;
-        }
-    }
-    for slot in &INJECTED_VIEW_MODELS {
-        if slot
-            .compare_exchange(0, view_model, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
-        {
-            return true;
-        }
-    }
-    // All slots taken: inject anyway rather than silently skipping a view. Re-injecting a
-    // genuinely new ViewModel is correct; the only cost of losing the record is that a
-    // revisited view could be injected twice, which the per-ctor fresh list makes harmless.
-    true
-}
+/// There is deliberately NO "already injected" bookkeeping.
+///
+/// Two earlier shapes both failed, and they failed for the same underlying reason:
+///
+/// * a process-wide flag left every map view after the first with no pins;
+/// * keying on the ViewModel's `this` pointer fixed the *observed* case (two live instances at
+///   different addresses) but is only as good as the assumption that a later ViewModel never
+///   lands where an earlier one was. These objects are allocated out of a menu heap and freed
+///   when the map closes, so a reopen reusing the address is not exotic -- it is the normal
+///   behaviour of a size-bucketed allocator. Under that dedupe, the reopen is silently skipped
+///   and the map is bare, which is precisely the reported symptom.
+///
+/// Injection is idempotent-by-construction instead: the ctor builds a FRESH row list every time
+/// it runs (measured -- `rows=420` on both observed instances, never 785), so "has this list
+/// already got our pins" is answerable from the list itself and the answer is always "no" at the
+/// ctor epilogue. Nothing needs to be remembered between calls, so nothing can be remembered
+/// WRONG.
 
 /// Read the donor fields off the first existing row.
 ///
@@ -402,16 +472,15 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     use er_invasion_warp::map_surface::{InvasionRowRegistry, PinGranularity};
     use er_invasion_warp::param_row::{SYNTHETIC_PARAM_ROW_LEN, SyntheticParamSpec};
 
-    if !claim_view_model(view_model) {
-        return;
-    }
     let Some(before) = (unsafe { read_pin_list(view_model) }) else {
+        INJECTIONS_SKIPPED.fetch_add(1, Ordering::SeqCst);
         crate::standalone_log(format_args!(
             "map-inject: pin list unreadable; no pins injected"
         ));
         return;
     };
     if !before.is_plausible() {
+        INJECTIONS_SKIPPED.fetch_add(1, Ordering::SeqCst);
         crate::standalone_log(format_args!(
             "map-inject: pin list implausible (begin=0x{:x} end=0x{:x} cap=0x{:x}); no pins \
              injected",
@@ -420,6 +489,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         return;
     }
     let Some(existing_rows) = before.row_count() else {
+        INJECTIONS_SKIPPED.fetch_add(1, Ordering::SeqCst);
         crate::standalone_log(format_args!(
             "map-inject: row span does not divide by the 0x350 stride; refusing to append"
         ));
@@ -427,6 +497,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     };
     if existing_rows == 0 {
         // Nothing to sample a donor from, and a shipped map always has warp rows.
+        INJECTIONS_SKIPPED.fetch_add(1, Ordering::SeqCst);
         crate::standalone_log(format_args!(
             "map-inject: list is empty, so there is no donor row to sample; no pins injected"
         ));
@@ -455,12 +526,15 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
             }
         }
         seen.sort_unstable();
+        let red_installed = crate::map_gfx::red_pin_frame_installed();
         crate::standalone_log(format_args!(
-            "map-inject: shipped rows use icon ids {seen:?}; invasion pins will use {}",
-            er_invasion_warp::param_row::INVASION_PIN_ICON_ID
+            "map-inject: shipped rows use icon frames {seen:?}; invasion pins will use frame {} \
+             (red marker installed: {red_installed})",
+            er_invasion_warp::param_row::invasion_pin_icon_id(red_installed)
         ));
     }
     let Some(donor) = (unsafe { sample_donor(before.begin, existing_rows) }) else {
+        INJECTIONS_SKIPPED.fetch_add(1, Ordering::SeqCst);
         crate::standalone_log(format_args!(
             "map-inject: no shipped row among the first {} has non-zero category bits and a \
                  non-negative label text id; without a filter-passing donor the pins would be \
@@ -470,20 +544,41 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         return;
     };
 
-    let catalog = match unsafe { er_invasion_warp::invasion_warp::collect_invasion_warp_catalog() }
-    {
-        Ok(catalog) => catalog,
-        Err(error) => {
-            crate::standalone_log(format_args!(
-                "map-inject: invasion catalog unavailable at ViewModel ctor time ({error}); no \
-                 pins injected"
-            ));
-            return;
-        }
+    // The registry is built from the catalog ONCE and then reused by every later injection.
+    //
+    // Two reasons, and the second is the one that bites. It is leaked anyway (the confirm hook
+    // dereferences it for the rest of the session), so rebuilding it per injection leaks a fresh
+    // 365-entry copy on every map open. And `collect_invasion_warp_catalog` walks all 7073
+    // authored points out of the `CSAutoInvadePoint` map -- that is work this code does while
+    // sitting inside the ViewModel constructor on the game thread, i.e. in the middle of the
+    // player opening the map. Once per session is fine there; once per open is a stutter the
+    // player would feel.
+    let cached_registry = INJECTED_REGISTRY.load(Ordering::SeqCst);
+    let registry: &'static InvasionRowRegistry = if cached_registry == 0 {
+        let catalog =
+            match unsafe { er_invasion_warp::invasion_warp::collect_invasion_warp_catalog() } {
+                Ok(catalog) => catalog,
+                Err(error) => {
+                    INJECTIONS_SKIPPED.fetch_add(1, Ordering::SeqCst);
+                    crate::standalone_log(format_args!(
+                        "map-inject: invasion catalog unavailable at ViewModel ctor time \
+                         ({error}); no pins injected"
+                    ));
+                    return;
+                }
+            };
+        let leaked: &'static InvasionRowRegistry = Box::leak(Box::new(
+            InvasionRowRegistry::from_catalog(&catalog, PinGranularity::PerBlock),
+        ));
+        INJECTED_REGISTRY.store(core::ptr::from_ref(leaked) as usize, Ordering::SeqCst);
+        leaked
+    } else {
+        // SAFETY: leaked on the first injection, never freed and never mutated.
+        unsafe { &*(cached_registry as *const InvasionRowRegistry) }
     };
-    let registry = InvasionRowRegistry::from_catalog(&catalog, PinGranularity::PerBlock);
     let wanted = registry.len();
     if wanted == 0 {
+        INJECTIONS_SKIPPED.fetch_add(1, Ordering::SeqCst);
         crate::standalone_log(format_args!(
             "map-inject: registry is empty; no pins injected"
         ));
@@ -511,10 +606,15 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
                 SyntheticParamSpec {
                     entity_id,
                     subcategory_id: donor.subcategory_id,
-                    // Deliberately NOT the donor's icon: cloning it made the pins look exactly
-                    // like Sites of Grace. This is the only visual lever at this layer.
-                    icon_id: er_invasion_warp::param_row::INVASION_PIN_ICON_ID,
-                    category_bits: donor.category_bits,
+                    // Deliberately NOT the donor's icon: the donor is a grace, and the id is a
+                    // GFx frame number, so copying it draws a Site of Grace.
+                    icon_id: er_invasion_warp::param_row::invasion_pin_icon_id(
+                        crate::map_gfx::red_pin_frame_installed(),
+                    ),
+                    // NOT the donor's bits either. These are per-map-layer visibility bits, and
+                    // a grace donor supplies 0x1 -- overworld only -- which is why the pins
+                    // could never appear on the underground or Shadow Lands maps.
+                    category_bits: er_invasion_warp::param_row::CATEGORY_BITS_ALL_LAYERS,
                     place_name_text_id: donor.label_text_id,
                 }
                 .to_row_bytes(),
@@ -525,6 +625,44 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         SHARED_PARAM_ROWS_LEN.store(leaked.len(), Ordering::SeqCst);
         leaked
     };
+    // Re-stamp the icon frame every injection rather than trusting the one baked in at the first.
+    //
+    // The frame depends on whether the edited world-map movie has been served, which is an
+    // OBSERVED fact that starts out false. Both live runs parsed the movie during boot, before
+    // any world load, so the first injection already saw `true` -- but that ordering is the
+    // loader's business, not ours. If a world ever loads first, the cached rows would be frozen
+    // on the fallback icon for the whole session and no later swap could rescue them.
+    //
+    // Writing the param bytes is safe at any time: a pin copies the icon out of its param at
+    // construction (`param+0x1C` -> `pin+0x248`), so a re-stamp cannot disturb a pin that already
+    // exists -- it only decides what the NEXT ViewModel's pins are built with, which is exactly
+    // the scope wanted.
+    {
+        use er_invasion_warp::param_row::PARAM_ICON_ID_OFFSET;
+        let desired = er_invasion_warp::param_row::invasion_pin_icon_id(
+            crate::map_gfx::red_pin_frame_installed(),
+        );
+        let stamped = SHARED_PARAM_ROWS_ICON.swap(desired as usize, Ordering::SeqCst);
+        if stamped != desired as usize {
+            // SAFETY: this slice was leaked by this function and is never freed; the game only
+            // ever reads it, and this runs on the game thread inside the ctor.
+            let rows: &mut [[u8; SYNTHETIC_PARAM_ROW_LEN]] = unsafe {
+                core::slice::from_raw_parts_mut(
+                    SHARED_PARAM_ROWS_PTR.load(Ordering::SeqCst)
+                        as *mut [u8; SYNTHETIC_PARAM_ROW_LEN],
+                    SHARED_PARAM_ROWS_LEN.load(Ordering::SeqCst),
+                )
+            };
+            for row in rows.iter_mut() {
+                row[PARAM_ICON_ID_OFFSET..PARAM_ICON_ID_OFFSET + 2]
+                    .copy_from_slice(&desired.to_le_bytes());
+            }
+            crate::standalone_log(format_args!(
+                "map-inject: re-stamped {} param rows onto icon frame {desired}",
+                rows.len()
+            ));
+        }
+    }
     if param_rows.len() < wanted {
         crate::standalone_log(format_args!(
             "map-inject: cached param rows hold {} entries but {wanted} pins were wanted; \
@@ -533,15 +671,6 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         ));
     }
     let wanted = wanted.min(param_rows.len());
-    // Leak the registry too, once: the confirm hook needs it for the rest of the session to map
-    // a synthetic entity id back to the target to warp to.
-    let leaked_registry: &'static InvasionRowRegistry = Box::leak(Box::new(registry.clone()));
-    let _ = INJECTED_REGISTRY.compare_exchange(
-        0,
-        core::ptr::from_ref(leaked_registry) as usize,
-        Ordering::SeqCst,
-        Ordering::SeqCst,
-    );
 
     // Reserve ONCE with the final count. Each reserve copy-constructs every existing element
     // into a new block and destructs the originals, so per-row reserves are O(N*size) and
@@ -554,12 +683,14 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
 
     // Re-read: the reserve moved the buffer.
     let Some(after_reserve) = (unsafe { read_pin_list(view_model) }) else {
+        INJECTIONS_SKIPPED.fetch_add(1, Ordering::SeqCst);
         crate::standalone_log(format_args!(
             "map-inject: pin list unreadable after reserve; NOT appending"
         ));
         return;
     };
     if after_reserve.spare_rows() < wanted {
+        INJECTIONS_SKIPPED.fetch_add(1, Ordering::SeqCst);
         crate::standalone_log(format_args!(
             "map-inject: reserve gave {} spare rows for {wanted} pins; NOT appending",
             after_reserve.spare_rows()
@@ -639,6 +770,21 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         };
         if end != 0 {
             unsafe { copy_ctor(end as *mut u8, temp.0.as_ptr()) };
+            // Stamp a DISTINCT row id. The base ctor draws `+0x8` from the engine's counter
+            // (`CS::WorldMapPinDataBase::WorldMapPinDataBase`), but the copy-ctor copies it
+            // verbatim and never re-runs that ctor -- so every row cloned from one temp would
+            // otherwise carry the SAME id.
+            //
+            // That is not cosmetic. The marker draw uses `+0x8` purely as a change-detection
+            // token: a clip slot is re-bound (`SetTo`, which is what sets the icon and the
+            // visibility) only when `idCache[slot] != row+0x8`. With duplicate ids the engine
+            // concludes the slot already shows this row, skips the re-bind, and then moves the
+            // clip to the new row's coordinates -- leaving the PREVIOUS pin's icon sitting at
+            // this pin's position. Distinct ids are what make each pin render as itself.
+            unsafe {
+                *((end + ROW_ID_OFFSET) as *mut i32) =
+                    INJECTED_ROW_ID_BASE.wrapping_add(index as i32);
+            }
             unsafe { *((vector + VECTOR_END_OFFSET) as *mut usize) = end + PIN_ROW_STRIDE };
             injected += 1;
         }
@@ -647,14 +793,18 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     }
 
     PINS_INJECTED.store(injected, Ordering::SeqCst);
+    if injected > 0 {
+        INJECTIONS_PERFORMED.fetch_add(1, Ordering::SeqCst);
+    } else {
+        INJECTIONS_SKIPPED.fetch_add(1, Ordering::SeqCst);
+    }
     // Record the span AFTER the appends: the reserve already relocated the buffer, so these are
     // the final addresses the filter will be asked about.
     if injected > 0
         && let Some(final_geometry) = unsafe { read_pin_list(view_model) }
     {
         let first = final_geometry.begin + existing_rows * PIN_ROW_STRIDE;
-        INJECTED_ROWS_BEGIN.store(first, Ordering::SeqCst);
-        INJECTED_ROWS_END.store(first + injected * PIN_ROW_STRIDE, Ordering::SeqCst);
+        record_injected_span(first, first + injected * PIN_ROW_STRIDE);
     }
     let settled = unsafe { read_pin_list(view_model) };
     crate::standalone_log(format_args!(
@@ -775,12 +925,15 @@ pub fn confirm_tallies() -> (usize, usize) {
     )
 }
 
-/// Union handler for the row filter `FUN_14088be50`.
+/// Union handler for the fast-travel list filter `FUN_14088be50`.
 ///
-/// Observation only -- it forwards the original verdict untouched. It exists because "are the
-/// pins visible" is otherwise a pixel question: this is the function that decides, so counting
-/// its verdicts turns visibility into a RAM oracle. The shipped rows are counted alongside as a
-/// control, so a mask that rejects EVERYTHING is distinguishable from one that rejects only ours.
+/// Observation only -- it forwards the original verdict untouched.
+///
+/// It was installed believing it was the MAP-MARKER visibility gate. It is not: its callers all
+/// build the fast-travel list and the bookmark dialog, so `ours 0/0` here means "our rows were
+/// never offered to the warp list", which is a different question from "are the pins drawn".
+/// The counters are kept because that first question is still worth answering, but nothing may
+/// conclude from them that the markers are missing.
 ///
 /// # Safety
 /// Installed by the union on a byte-verified prologue; ABI is `(row, mask, allowUnvisited)`.
@@ -800,9 +953,7 @@ unsafe extern "system" fn worldmap_row_filter_hook(
     let original: FilterFn = unsafe { core::mem::transmute(orig) };
     let verdict = unsafe { original(row, mask, allow_unvisited, d) };
 
-    let begin = INJECTED_ROWS_BEGIN.load(Ordering::SeqCst);
-    let end = INJECTED_ROWS_END.load(Ordering::SeqCst);
-    let ours = begin != 0 && row >= begin && row < end;
+    let ours = row_is_ours(row);
     // The verdict is a `char`; only the low byte is meaningful.
     let passed = (verdict & 0xFF) != 0;
     if ours {
@@ -919,10 +1070,26 @@ fn base_for_inject() -> usize {
     er_game_base::mem::game_module_base().unwrap_or(0)
 }
 
-/// Pins appended this session.
+/// Pins appended by the most recent injection.
 #[must_use]
 pub fn pins_injected() -> usize {
     PINS_INJECTED.load(Ordering::SeqCst)
+}
+
+/// `(ctor_hits, injections_performed, injections_skipped)`.
+///
+/// THE ORACLE for "the pins come back every time the map is opened". Every ViewModel
+/// construction must be followed by an injection that appended rows, so a healthy session has
+/// `injections_performed == ctor_hits` and `injections_skipped == 0`. Any gap means some map view
+/// or some map open was left bare, and it is readable from memory without deciding anything from
+/// a screenshot.
+#[must_use]
+pub fn injection_tallies() -> (usize, usize, usize) {
+    (
+        VIEWMODEL_CTOR_HITS.load(Ordering::SeqCst),
+        INJECTIONS_PERFORMED.load(Ordering::SeqCst),
+        INJECTIONS_SKIPPED.load(Ordering::SeqCst),
+    )
 }
 
 /// Install the world-map observation hooks. Returns how many bound.
@@ -1069,6 +1236,63 @@ mod tests {
             capacity: 0x2000,
         };
         assert!(!over.is_plausible(), "end past capacity");
+    }
+
+    /// A private span table, so these tests never race the process-wide one.
+    fn span_table() -> (
+        [(AtomicUsize, AtomicUsize); MAX_INJECTED_SPANS],
+        AtomicUsize,
+    ) {
+        (
+            [const { (AtomicUsize::new(0), AtomicUsize::new(0)) }; MAX_INJECTED_SPANS],
+            AtomicUsize::new(0),
+        )
+    }
+
+    #[test]
+    fn a_row_in_any_recorded_span_is_recognised_as_ours() {
+        // The defect this pins: one live ViewModel's injection used to overwrite the recorded
+        // span of every other live one, so the filter observer reported `ours 0/0` for views it
+        // had genuinely injected -- a false negative in the visibility oracle.
+        let (spans, cursor) = span_table();
+        record_span(&spans, &cursor, 0x1000, 0x2000);
+        record_span(&spans, &cursor, 0x9000, 0xA000);
+        assert!(span_contains(&spans, 0x1000), "first span, first row");
+        assert!(span_contains(&spans, 0x1FFF), "first span, last byte");
+        assert!(
+            span_contains(&spans, 0x9500),
+            "second span still recognised"
+        );
+        assert!(
+            !span_contains(&spans, 0x2000),
+            "one past the end is not ours"
+        );
+        assert!(
+            !span_contains(&spans, 0x8FFF),
+            "between the spans is not ours"
+        );
+        assert!(!span_contains(&spans, 0), "a null row is never ours");
+    }
+
+    #[test]
+    fn the_span_table_wraps_instead_of_growing_without_bound() {
+        // Runs on the game thread inside a ctor, so it must stay allocation-free and bounded.
+        let (spans, cursor) = span_table();
+        for index in 0..MAX_INJECTED_SPANS * 2 {
+            let begin = 0x10_0000 + index * 0x1000;
+            record_span(&spans, &cursor, begin, begin + 0x800);
+        }
+        let newest = 0x10_0000 + (MAX_INJECTED_SPANS * 2 - 1) * 0x1000;
+        assert!(
+            span_contains(&spans, newest),
+            "the newest span survives the wrap"
+        );
+        let oldest = 0x10_0000;
+        assert!(
+            !span_contains(&spans, oldest),
+            "the oldest span was evicted rather than the table growing"
+        );
+        assert_eq!(INJECTED_SPANS.len(), MAX_INJECTED_SPANS);
     }
 
     #[test]
