@@ -528,6 +528,79 @@ fn layer_bit_for_converter(base: usize, converter_index: usize, block_area: u8) 
     }
 }
 
+/// `BonfireWarpParam+0x20` -- the row's own area number, used to keep a base-map pin from
+/// borrowing a name whose coordinates live in the DLC's frame.
+pub const PARAM_AREA_NO_OFFSET: usize = 0x20;
+
+/// The `PlaceName` text id of the shipped warp row nearest `coords`, or `-1` when there is none.
+///
+/// Every injected pin previously carried the DONOR row's label, so all 365 read "Godrick the
+/// Grafted" -- the donor is a Site of Grace and its name was copied wholesale. The game has no
+/// block-to-place-name function to ask instead, but it does not need one: 225 of the shipped warp
+/// rows in areas 60/61 carry a valid `PlaceName` text id, and they are already sitting in the
+/// list being appended to, already projected into map space by the engine. Naming a pin after the
+/// nearest one costs a walk over resident memory and no engine calls at all.
+///
+/// `-1` is returned rather than any fallback id, and that choice is load-bearing: an id that
+/// resolves in no FMG does NOT render blank, it renders the literal `?PlaceName?` on the pin.
+/// Only `-1` produces an empty label.
+///
+/// # Safety
+/// Game thread; `begin` must point at the first constructed row. Every read is fault-tolerant.
+#[cfg(windows)]
+unsafe fn nearest_place_name_text_id(
+    begin: usize,
+    existing_rows: usize,
+    area: u8,
+    coords: MapCoordinates,
+) -> i32 {
+    use er_invasion_warp::param_row::{PARAM_LABEL_KIND_BASE, PARAM_LABEL_TEXT_ID_BASE};
+
+    let mut best_text_id = -1_i32;
+    let mut best_distance = f32::INFINITY;
+    for index in 0..existing_rows {
+        let row = begin + index * PIN_ROW_STRIDE;
+        let Some(param) =
+            (unsafe { er_game_base::mem::safe_read_usize(row + ROW_PARAM_POINTER_OFFSET) })
+        else {
+            continue;
+        };
+        if param == 0 {
+            continue;
+        }
+        // Same area only. A base-map pin latching onto a DLC row would take a name whose
+        // coordinates mean something in a different frame entirely, which is the same class of
+        // mistake as drawing a DLC pin on the base map.
+        if unsafe { er_game_base::mem::safe_read_u8(param + PARAM_AREA_NO_OFFSET) } != Some(area) {
+            continue;
+        }
+        // Label 0 must be a PlaceName; an NpcName would give the pin a character's name.
+        if unsafe { er_game_base::mem::safe_read_u8(param + PARAM_LABEL_KIND_BASE) } != Some(0) {
+            continue;
+        }
+        let Some(text_id) =
+            (unsafe { er_game_base::mem::safe_read_i32(param + PARAM_LABEL_TEXT_ID_BASE) })
+        else {
+            continue;
+        };
+        if text_id <= 0 {
+            continue;
+        }
+        let Some(x) = (unsafe { er_game_base::mem::safe_read_f32(row + 0x10) }) else {
+            continue;
+        };
+        let Some(z) = (unsafe { er_game_base::mem::safe_read_f32(row + 0x14) }) else {
+            continue;
+        };
+        let distance = (coords.x - x).powi(2) + (coords.z - z).powi(2);
+        if distance < best_distance {
+            best_distance = distance;
+            best_text_id = text_id;
+        }
+    }
+    best_text_id
+}
+
 /// Area byte of a packed `BlockId` (byte 3).
 #[must_use]
 pub const fn block_area(block_id: u32) -> u8 {
@@ -715,13 +788,17 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
                 .targets()
                 .get(index)
                 .map_or(0, |target| block_area(target.block.raw()));
-            let layer_bits = projections
-                .get(index)
-                .and_then(|projection| projection.as_ref())
+            let projection = projections.get(index).and_then(|p| p.as_ref());
+            let layer_bits = projection
                 .and_then(|(_, converter_index, _)| {
                     layer_bit_for_converter(base, *converter_index, block_area_byte)
                 })
                 .unwrap_or(0);
+            // Name the pin after the nearest shipped warp row in its own area, instead of
+            // cloning the donor's name onto all 365.
+            let place_name_text_id = projection.map_or(-1, |(coords, _, _)| unsafe {
+                nearest_place_name_text_id(before.begin, existing_rows, block_area_byte, *coords)
+            });
             rows.push(
                 SyntheticParamSpec {
                     entity_id,
@@ -737,10 +814,29 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
                     // coordinates, i.e. out in the sea, while still warping correctly because
                     // the warp reads the block id and never the map position.
                     category_bits: layer_bits,
-                    place_name_text_id: donor.label_text_id,
+                    place_name_text_id,
                 }
                 .to_row_bytes(),
             );
+        }
+        {
+            use er_invasion_warp::param_row::PARAM_LABEL_TEXT_ID_BASE;
+            let named = rows
+                .iter()
+                .filter(|row| {
+                    i32::from_le_bytes(
+                        row[PARAM_LABEL_TEXT_ID_BASE..PARAM_LABEL_TEXT_ID_BASE + 4]
+                            .try_into()
+                            .unwrap_or([0; 4]),
+                    ) > 0
+                })
+                .count();
+            crate::standalone_log(format_args!(
+                "map-inject: named {named}/{} pins from the nearest shipped warp row; the rest \
+                 carry -1 and render an EMPTY label (never a fallback id -- an id no FMG \
+                 resolves prints \"?PlaceName?\" on the pin)",
+                rows.len()
+            ));
         }
         let leaked: &'static [[u8; SYNTHETIC_PARAM_ROW_LEN]] = Box::leak(rows.into_boxed_slice());
         SHARED_PARAM_ROWS_PTR.store(leaked.as_ptr() as usize, Ordering::SeqCst);
