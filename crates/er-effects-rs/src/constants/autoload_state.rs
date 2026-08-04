@@ -894,6 +894,12 @@ pub(crate) static START_SAVE_SUPPRESS: Once = Once::new();
 /// One-shot spawn guard for the boot-time CORE file-ops install thread (CreateFileW in every save
 /// mode; the save-destination commit rides that detour).
 pub(crate) static START_SAVE_FILE_OPS_CORE: Once = Once::new();
+/// One-shot spawn guard for the OBSERVERS-ONLY save-lane attribution thread, used when save
+/// suppression is left at its product default of off. The observers call their originals and only
+/// count, so binding them changes no save behaviour -- but without them
+/// `oracle_save_dispatch_last_decline_reason` reads `unsampled`, which is the field that names why a
+/// save was refused and therefore why `GameMan+0xb72`/`+0xb73` stay latched after a reload.
+pub(crate) static START_SAVE_OBSERVERS: Once = Once::new();
 /// `MenuHelpLabelComponent` contains two `MenuString` objects: visible label at +0, help at +0x38.
 pub(crate) const MENU_HELP_LABEL_HELP_OFFSET: usize = 0x38;
 pub(crate) const MENU_HELP_LABEL_SIZE: usize = 0x70;

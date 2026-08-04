@@ -149,6 +149,46 @@ enum DriveState {
     },
 }
 
+/// A warp issued from OUTSIDE this driver -- i.e. by the world-map confirm hook -- handed over so
+/// the driver's arrival watcher can judge it.
+///
+/// WHY THIS EXISTS. `classify_arrival` was wired only into the keyboard driver, so a warp the
+/// player triggered by selecting a map pin was never checked at all: the confirm hook logged
+/// "LOCAL warp to block ..." the moment the stage kick was issued and stopped there. That line
+/// says the explicit-spawn slot latched, NOT that the player went anywhere -- and on 2026-08-04 a
+/// user reported warping doing nothing while the log recorded a dozen consecutive "successes"
+/// and `er-invasion-warp-run.json` was never written at all, because nothing on that path ever
+/// published it. The product path now produces the same arrival evidence the driver does.
+///
+/// The hook runs on the menu/UI callsite, not the game task, so the outcome is parked here and
+/// adopted by the next tick rather than judged in place.
+#[cfg(windows)]
+static EXTERNAL_WARP: std::sync::Mutex<Option<WarpOutcome>> = std::sync::Mutex::new(None);
+
+/// Hand a warp issued outside the driver to the driver's arrival watcher.
+///
+/// Last writer wins: if a second warp is confirmed before the first has settled, the newer one is
+/// what the player is actually waiting on. Poisoning is recovered from rather than propagated --
+/// a warp must never be able to panic the game thread.
+#[cfg(windows)]
+pub fn note_external_warp(outcome: WarpOutcome) {
+    let mut slot = match EXTERNAL_WARP.lock() {
+        Ok(slot) => slot,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    *slot = Some(outcome);
+}
+
+/// Take the parked external warp, if any.
+#[cfg(windows)]
+fn take_external_warp() -> Option<WarpOutcome> {
+    let mut slot = match EXTERNAL_WARP.lock() {
+        Ok(slot) => slot,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    slot.take()
+}
+
 #[cfg(windows)]
 /// The whole driver. One instance, owned by the game task.
 pub struct InvasionWarpDrive {
@@ -199,6 +239,26 @@ impl InvasionWarpDrive {
         let Ok(base) = er_game_base::mem::game_module_base() else {
             return;
         };
+
+        // A warp the world-map confirm hook issued is adopted before anything else, so the
+        // product path gets the same arrival proof the keyboard driver has always had. Only when
+        // idle: an in-flight warp is still the one being judged.
+        if matches!(self.state, DriveState::Idle)
+            && let Some(outcome) = take_external_warp()
+        {
+            self.warps_issued = self.warps_issued.saturating_add(1);
+            log(format_args!(
+                "invasion-warp: adopting a map-confirm warp to block {} for arrival checking \
+                 (session gate: {}); the confirm log line only proves the spawn slot latched, \
+                 this is what proves the player moved",
+                outcome.target.block,
+                outcome.session_gate.describe()
+            ));
+            self.state = DriveState::AwaitingArrival {
+                outcome: Box::new(outcome),
+                ticks_waited: 0,
+            };
+        }
 
         // An in-flight warp is judged first: the settled read-back is the proof, and it must be
         // taken before any new press is honoured.
@@ -260,15 +320,25 @@ impl InvasionWarpDrive {
             // could not be installed", which is otherwise a question only a screenshot answers.
             let (_, map_movies, red_served, red_failures) = crate::map_gfx::gfx_tallies();
             let player = unsafe { er_invasion_warp::warp::player_physics_position(base) };
+            // WHICH BLOCK the player is in. The position alone cannot answer "did the warp move
+            // me": it is BLOCK-LOCAL, so arriving in a different block can read as a similar
+            // triple, and on 2026-08-04 a whole run's worth of heartbeats could not distinguish
+            // a warp that worked from one that did nothing. The block id can.
+            let block = unsafe { er_invasion_warp::warp::current_block_id(base) };
+            // MSB invasion-point coverage: (points, maps read). The `.aip` table cannot describe
+            // any legacy dungeon, so `msb[0/0]` while standing in one means the second source is
+            // not running -- a distinct failure from "running but nothing placed".
+            let (msb_points, msb_maps) = crate::map_hooks::msb_coverage();
             log(format_args!(
                 "invasion-warp: heartbeat tick={} focused={focused} f7_state={:#06x} \
-                 f8_state={:#06x} player={} pins={} map[opens={opens} injected={injections} \
-                 skipped={skips}] icon[movie={map_movies} red_served={red_served} \
-                 derive_failed={red_failures}] filter[ours {}/{} shipped {}/{}] -- press \
-                 F7 (nearest), F8 (next), F9 (other area)",
+                 f8_state={:#06x} block={} player={} pins={} msb[{msb_points} points/{msb_maps} \
+                 maps] map[opens={opens} injected={injections} skipped={skips}] \
+                 icon[movie={map_movies} red_served={red_served} derive_failed={red_failures}] \
+                 filter[ours {}/{} shipped {}/{}] -- press F7 (nearest), F8 (next), F9 (other area)",
                 self.ticks,
                 self.nearest_key.raw_state() as u16,
                 self.next_key.raw_state() as u16,
+                block.map_or_else(|| "none".to_string(), |b| format!("{b:#010x}")),
                 player.map_or_else(
                     || "none".to_string(),
                     |p| format!("[{:.1}, {:.1}, {:.1}]", p[0], p[1], p[2])
@@ -616,6 +686,7 @@ mod tests {
             spawn_position: [10.0, 20.0, 30.0],
             spawn_yaw: -1.25,
             session_touches: 1,
+            session_gate: er_invasion_warp::warp::SessionGate::Entered,
         }
     }
 

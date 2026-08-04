@@ -278,6 +278,14 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         append_autoload_debug(format_args!(
             "save-suppress: disabled by default config guard (set save_suppression_enabled=true to opt in); native saves are not suppressed"
         ));
+        // ATTRIBUTION WITHOUT SUPPRESSION (2026-08-04). The save-lane observers are read-only --
+        // each calls its original and only counts -- but they used to be reachable only through
+        // `install`, which ARMS suppression. So in the default configuration, which is the one every
+        // user runs, `oracle_save_dispatch_last_decline_reason` read `unsampled`: the single field
+        // that names why the lane refused a save was unavailable precisely where the refusal
+        // matters. `GameMan+0xb72`/`+0xb73` latching after a reload is the `FUN_140afa6d0` case-7
+        // blocker, and without this the only way to explain it is to guess.
+        START_SAVE_OBSERVERS.call_once(spawn_save_observers_only);
     }
 
     // SAVE-DESTINATION WRITE-OPEN REDIRECT CORE (save-game-flow WP3): the "save somewhere else"
@@ -455,6 +463,41 @@ fn spawn_save_suppress_install() {
                  saves suppressed; the Save Game row's one-shot bypass is the only real writer",
                 er_save_suppress::SUPPRESSOR_HOOKS,
                 er_save_suppress::is_armed()
+            ));
+        });
+}
+
+/// Bind the save-lane observers WITHOUT arming suppression.
+///
+/// Same thread shape and same module-base wait as [`spawn_save_suppress_install`] -- MinHook and the
+/// prologue verification both need the image mapped -- but it installs only the read-only observer
+/// batch. No suppressor is bound, `ARMED` is never set, and every native save proceeds exactly as it
+/// does today. The single thing that changes is that a refused save now says why.
+fn spawn_save_observers_only() {
+    let _ = std::thread::Builder::new()
+        .name("er-effects-save-observers".to_owned())
+        .spawn(|| {
+            er_save_suppress::set_log_sink(crate::telemetry::append_autoload_debug);
+            let mut attempts = 0_u64;
+            loop {
+                match er_game_base::mem::game_module_base() {
+                    Ok(_) => break,
+                    Err(err) => {
+                        if attempts == 0 || attempts % SAVE_SUPPRESS_WAIT_LOG_INTERVAL == 0 {
+                            crate::telemetry::append_autoload_debug(format_args!(
+                                "save-observers: waiting for game module base: {err}"
+                            ));
+                        }
+                        attempts = attempts.saturating_add(1);
+                        std::thread::yield_now();
+                    }
+                }
+            }
+            let bound = er_save_suppress::install_observers_only();
+            crate::telemetry::append_autoload_debug(format_args!(
+                "save-observers: bound {bound}/4 save-lane attribution observers with suppression \
+                 DISARMED -- native saves are untouched; oracle_save_dispatch_last_decline_reason \
+                 now names a refusal instead of reading 'unsampled'"
             ));
         });
 }

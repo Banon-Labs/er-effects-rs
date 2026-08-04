@@ -58,6 +58,12 @@ pub use invasion_warp::*;
 pub mod live_read;
 pub use live_read::*;
 
+/// Invasion spawn points for the maps the `.aip` table does not cover -- every legacy dungeon,
+/// cave, catacomb and tunnel. Not re-exported at the crate root: [`msb_invasion_points`] and
+/// [`aip`] both define a point type, and glob-importing two of them is how the wrong one gets
+/// used silently.
+pub mod msb_invasion_points;
+
 pub mod oracles;
 pub use oracles::*;
 

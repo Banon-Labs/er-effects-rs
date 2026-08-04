@@ -134,8 +134,18 @@ fn spawn_catalog_task() {
             // is the only thing that touches it, and the task is single-threaded, so no lock is
             // needed and none is taken on the game thread.
             let mut warp_drive = crate::drive::InvasionWarpDrive::new();
+            let mut frame: u64 = 0;
             let handle = task.run_recurring(
                 move |_data: &FD4TaskData| {
+                    frame = frame.wrapping_add(1);
+                    // Fold every map the player has actually been in into the MSB InvasionPoint
+                    // catalog. This has to live here rather than in the map hook: the world-map
+                    // ViewModel constructor fires once per world entry during the loading screen,
+                    // long before the player walks into a catacomb.
+                    //
+                    // SAFETY: game task thread with the world up; every read inside is fault-closed
+                    // and each map is read at most once per session.
+                    unsafe { crate::map_hooks::harvest_resident_msb_points(frame) };
                     // SAFETY: this closure runs on the game task thread, after CSTaskImp
                     // resolved -- exactly the context the tick's contract requires. The read
                     // itself is fault-closed (er_invasion_warp::live_read).

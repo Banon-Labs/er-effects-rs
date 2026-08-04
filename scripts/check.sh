@@ -74,6 +74,20 @@ shellcheck "$repo_root/scripts/run-windows-proof-render-smoke.sh"
 shellcheck "$repo_root/scripts/run-portrait-dll-standalone-smoke.sh"
 shellcheck "$repo_root/scripts/build-invasion-warp-profile.sh"
 shellcheck "$repo_root/scripts/check-rust-build.sh"
+shellcheck "$repo_root/scripts/er-stale-run-sentinel.sh"
+
+# The stale-run sentinel kills a live game when a tracked file is edited, so its process matching is
+# load-bearing: a name it cannot match is a run it cannot stop. `/proc/<pid>/comm` is capped at 15
+# characters by the kernel, which made the verbatim `start_protected_game.exe` entry unmatchable
+# against any process that has ever existed. The selftest proves the truncation handling end to end
+# against a real process, so that class of silent no-op cannot come back.
+bash "$repo_root/scripts/er-stale-run-sentinel.sh" --selftest
+
+# LAUNCH REACHABILITY GATE (2026-08-04). A launch takes the user's screen and yields one recording;
+# spending it on a predicate that CANNOT fire returns a clean-looking run that proves nothing. The
+# selftest runs first and includes the concrete regression -- the `requestCode latches 2` terminator
+# that shipped and could never execute -- so the gate is never trusted on its own say-so.
+python3 "$repo_root/scripts/er-launch-gate.py" --selftest
 
 # Host-buildable GFx codec + derived-movie proof gates. These are the only place the runtime GFx
 # transforms are checked (the Windows-target `cargo xwin test --lib` below cannot reach an integration

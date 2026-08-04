@@ -712,6 +712,161 @@ a lookup detour returning a DLL-owned static row instead.
    renders at all -- the Scaleform movie may only have art slots for the shipped tab count. That
    one needs a rendered-pixel oracle, not a hook counter.
 
+## 5c. The SECOND data source: MSB `InvasionPoint` regions (2026-08-04)
+
+The `.aip` table is not the whole invasion-spawn story, and this was invisible for as long as the
+feature only read it. `AutoInvadePoint.aipbnd` holds 7073 points across 365 blocks and **every one
+is in area 60 or 61**. Leyndell, Stormveil, Farum Azula, the Haligtree, Raya Lucaria, Volcano
+Manor, the m12 underground and every cave/catacomb/tunnel have **no `.aip` entries at all**, so a
+surface built only from that table can never mark them.
+
+That is a deliberate engine split, not missing data:
+
+* `CS::PlayRegionParamLookupResult::isAutoIntrudePoint` (`0x140d44a20`) returns
+  `_PLAY_REGION_PARAM_ST` byte `0x45` bit 0. Of the 593 `PlayRegionParam` rows in the shipped
+  `regulation.bin`, exactly **90** have it set, and all 90 are area 60, area 61, or an `areaNo == 0`
+  row in the 6100000..=6941010 overworld band. Every row for areas 10..=45 has it clear.
+* `CSBreakInPointManager` branches on that bit:
+  `_GetCurBreakInPointVecFromAutoIntrudePoint` (`0x140a0c4f0`) is the `.aip` path, and
+  `FUN_140a0c100` is the general path, which enumerates MSB `POINT_PARAM_ST` regions of subtype
+  `InvasionPoint` out of each resident map.
+  (The branch POLARITY is inferred, not proven: the dispatching block at
+  `0x140a0c360..0x140a0c4ef` is Arxan-mutated and Ghidra defines no function there. The param data
+  makes the inference strong -- all 90 auto-intrude rows are area 60/61, and no `.aip` file exists
+  outside those areas -- but a runtime hook on both consumers would settle it.)
+
+An offline harvest of all 1347 shipped MSBs found **2807 `InvasionPoint` regions across 113 maps**,
+2596 of them outside the overworld: Leyndell 168, Farum Azula 119, Volcano Manor 115, Stormveil 94,
+Haligtree 88, Raya Lucaria 55, catacombs 285, caves 229, tunnels 81, the m12 underground 399, plus
+the DLC legacy maps. That harvest is a CHECK ORACLE only -- it is never shipped as data, per the
+rule that the surface must reflect what is actually loaded because mods rewrite invasion data.
+
+### Reading it live
+
+`crates/er-invasion-warp/src/msb_invasion_points.rs`, using the engine's own calls:
+
+| what | address | note |
+|---|---|---|
+| `CS::MsbResCap::GetPointDataSectionItemCount(MsbResCap*, MsbPointType)` | `0x140cf6300` | `type = 1`; byte-verified as the `EDX` at `0x140a0c1f1`. Preferred over walking `MsbResCap+0x318 + type*0x10`, because the count is that static TOC entry PLUS a dynamic overflow vector at `MsbResCap+0xa70 + type*0x18` |
+| `CS::CSMsbPoint::CSMsbPoint(out, cap, 0, type, index)` | `0x140cf9300` | 5 args, 5th on the stack; struct size `0x58` |
+| `CS::CSMsbPoint::~CSMsbPoint` | `0x140cf9500` | the ctor takes a reference on the cap, so this is not optional |
+| `ComputePosition` / `GetAngle` | `0x140cfaff0` / `0x140cfae60` | map-local position, euler degrees |
+| `HasNoShapeData` | `0x140cfbc30` | a point without shape data has no position; the engine's own consumer skips these |
+
+Resident blocks come from the typed `FieldArea -> WorldInfoOwner -> WorldRes -> WorldInfo` binding,
+NOT from `FUN_140669af0`: that native fills a `std::vector` with the GAME's allocator, and owning
+an engine-allocated vector's lifetime from a hook is a leak-or-crash choice with no upside. The
+`WorldInfo::world_block_info()` slice is already the block list; `WorldBlockInfo+0x48` is its
+`msbResCap`.
+
+**`world_block_info()` is the block LIST, not a list of blocks whose resources are loaded.** An
+entry can carry a null or leftover `msbResCap`, and handing one to
+`GetPointDataSectionItemCount` is a wild call through a garbage vtable on the game thread. Every
+cap is therefore structurally validated first (`msb_res_cap_looks_live`): non-null, above
+`0x10000`, and its vtable pointer inside `[module_base, module_base + 0x10000000)`.
+
+### Why coverage accumulates
+
+`.aip` is one global table that is resident all session, so it can be read once and be complete.
+MSB point data is **per map and evicted with the map**, so there is no instant at which every
+map's points are readable. `MsbInvasionCatalog` therefore only ever grows: whatever is resident is
+folded in and remembered, keyed by `(block, index)` so a revisit is free and pins keep their
+identity. A map is recorded as observed even when it yields no points, so "this dungeon has none"
+stops being confused with "we have not looked".
+
+Consequence, and it is a real limitation: **a dungeon contributes a marker only once its map has
+been resident.** Full coverage from the first map open requires reading non-resident maps' MSBs
+through the engine's own VFS, which is a separate piece of work.
+
+### Legacy dungeons project without extra math
+
+`CS::WorldMapAreaConverter::ConvertMsbCoordsToMapCoords` (`0x140876140`) calls
+`WorldMapLegacyConverter::ConvertLegacyDungeonPositionToOverworldPositionForMap` on its input
+BEFORE the area comparison, when its `legacyConverter` pointer is non-null. A legacy block is
+therefore remapped to an overworld block+position and then accepted by the ordinary area-60
+converter. The existing converter loop in `map_hooks.rs` needs no change, and re-implementing
+`WorldMapLegacyConvParam` would be wasted work. The runtime discriminator is the
+`map-inject: legacy-dungeon pins: P/S placed` line: `S == 0` means no dungeon map has been
+resident yet; `S > 0 && P == 0` means the converters refused them, i.e. `legacyConverter` is null.
+
+### Seamless Co-op does not use this table either
+
+Static analysis of the shipped `ersc.dll` v1.9.9 (7.79 MB, Themida-packed but `.text` plain) finds
+**zero** references to `AutoInvadePoint`, `aipbnd`, `BreakInPoint` or any `.aip` symbol. It places
+joining/invading players by writing `CS::GameMan.lastLoadPosition` (`GameMan+0xaa0`) and
+`lastLoadOrientation` (`+0xab0`) directly, resolving the target through MSB **PseudoMultiplayer**
+events -- `FUN_14061f810` with `entityId = GameMan+0xaf0` and `mapId = GameMan+0xac8`. So under
+Seamless, the `.aip`-derived pins do not describe where an invader lands.
+
+## 5d. The warp was dead after any reload, and it was our own product DLL (2026-08-04)
+
+**Symptom reported:** "I'm not able to warp to any of the locations again after I have loaded my
+character a second time." **Cause:** `er-effects-rs`, not the invasion-warp feature. Full evidence in
+bd `cvar10-warp-clear-had-no-product-release-broke-all-warps-2026-08-04`; the short version:
+
+`system_quit_hooks.rs` zeroes `GameMan+0x10` (`warpRequested`) on every frame of a map move while
+`mms_state  13..=18 && fin < 5`, to hold `cVar10 = 0` and give a warm reload load1's fin=0 movable
+window. It assumed a set `warpRequested` is residue of the return-to-title. That is true *during* the
+load it was written for, and the clear had **no product-side end**: its only release read
+`CAN_MOVE_CONFIRMED`, which `can_move_probe::tick` sets only when the input-harness DLL is loaded
+("never fires in a normal user session" -- its own comment). So in a normal session the clear armed at
+the first reload and then stomped the warp byte for the rest of the process.
+
+That byte is what `SetCallForWarp(true)` sets and the only live input to the `cVar10` that
+`FUN_140afa6d0` gates case 0 on, so **no** warp could complete after a reload -- an ordinary
+grace-to-grace fast travel included. Measured: `warps_issued: 3, warps_arrived: 1`, the arrival being
+epoch 0, which the clear deliberately never touches.
+
+**Fix:** a per-epoch phase (`warp_clear_phase`), not a value read.
+`PRE_WINDOW -> WINDOW_SEEN` (set only from *inside* the real load window) `-> DISARMED` (set where
+`request_code` stops being 1, i.e. the world load latched done). Once disarmed the clear leaves
+`GameMan+0x10` alone for the rest of that epoch.
+
+A **sequence** rather than a value because every single-value candidate is fooled by staleness at the
+epoch boundary: right after a fresh deserialize, `request_code` and `protocolState` still describe the
+*previous* load, so `requestCode == 2` or `protocolState == 6` can read true before this epoch's load
+has started and would disarm mid-load, reintroducing the load2 freeze. Requiring the window to be
+observed first cannot be, because that window exists only inside the load.
+`BOOT_VIEW_EPOCH_WORLD_LIVE` was rejected for the same reason -- its playtime baseline can latch on the
+*outgoing* character's playtime across a profile switch. A cross-module "this warp is mine" export was
+rejected because it would exempt only our own warps and leave vanilla fast travel broken.
+
+**Not yet runtime-validated.** The next run must show `cvar10-warp-clear: DISARMED for epoch N` after
+each reload, and `warps_arrived == warps_issued` for epoch >= 1.
+
+## 5e. Increment A: harvest per frame, dedup the two sources, measure placement (2026-08-04)
+
+Three changes, no new file I/O and no new native calls:
+
+**A1 -- the resident harvest moved off the map hook.** `refresh_msb_catalog()` was called only from
+`inject_pins`, which runs from the `WorldMapViewModel` constructor -- and that constructor has exactly
+one call site in the image, reached only from `STEP_MoveMap_Init`. So it fired once per *world entry*,
+during the loading screen, before `MoveMapStep` had ticked and before the destination's `MsbResCap`s
+existed; it never fired when the player opened the map. The legacy-dungeon source could therefore only
+ever see what was resident at world-entry init, never the catacomb the player was standing in. It now
+runs from the recurring `FrameBegin` task on a one-second stride (`MSB_HARVEST_FRAME_STRIDE`; a
+cost/latency choice, not a guess -- `has_observed` already makes re-reads free and correctness does not
+depend on the value).
+
+**A2 -- NOT DONE, deliberately.** The proposal was to key points on `regionID` at `shapeData + 0x2C`.
+Ghidra's `CS/CSMsbPointShapeData` names `pos` at `+0x14`, `angle` at `+0x20` and `mapStudioLayer` at
+`+0x44`, leaving `0x2C` as undefined bytes with no accessor on the class -- so the offset is unverified
+and was not baked in. It is also moot for the current build: the per-subtype ordinal question only
+matters when reconciling a *file*-parsed point against a resident one, and there is no file source.
+`ComputePosition` returning `shapeData->pos` verbatim is confirmed, so the resident path and the file's
+`+0x14` are the same map-local space and there is no conversion to write.
+
+**A3 -- the placement pair is now an oracle**, not a log line:
+`oracle_invasion_warp_legacy_pins_seen` / `_placed`. This is the measurement that decides whether the
+1347-map VFS sweep is worth building: `seen > 0 && placed == 0` means the converter set cannot place a
+dungeon pin at all, so reading more dungeon MSBs would produce nothing visible and
+`layer_bit_for_converter` is what needs fixing first.
+
+**Also fixed: the two sources overlap.** `.aip` covers areas 60/61; the MSB harvest reads whatever is
+resident, *including* those same overworld blocks. Both emit one representative per block, so an m60
+block present in both stacked two markers on one spot with different synthetic entity ids. The `.aip`
+table now wins where it has an entry.
+
 ## 6. RESOLVED (was "open non-RE risk"): `pointCount` is 32 bits and its upper dword is junk
 
 `AddForBlockId` writes the block entry's `count` with a **32-bit** store while

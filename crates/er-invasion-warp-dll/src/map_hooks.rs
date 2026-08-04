@@ -745,7 +745,49 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
             }
         ));
     }
-    let fresh = InvasionRowRegistry::from_catalog(&catalog, PinGranularity::PerBlock);
+    // The `.aip` table covers areas 60 and 61 only, so on its own it can never put a marker in
+    // Leyndell, Stormveil, Farum Azula, the Haligtree or any cave/catacomb/tunnel. Those maps
+    // carry their invasion spawns as MSB `InvasionPoint` regions instead, which is the branch
+    // `CSBreakInPointManager` takes when `PlayRegionParam.isAutoIntrudePoint` is clear.
+    //
+    // Those regions are per-map and are evicted with the map, so there is no moment at which all
+    // of them are readable. Coverage therefore ACCUMULATES: whatever is resident now is folded in
+    // and remembered, and a map contributes from the first time the player has been near it.
+    let (msb_points_now, msb_blocks_now) = unsafe { refresh_msb_catalog() };
+    let mut targets = InvasionRowRegistry::from_catalog(&catalog, PinGranularity::PerBlock)
+        .targets()
+        .to_vec();
+    let aip_pins = targets.len();
+    // The two sources OVERLAP. `.aip` is areas 60/61 only, but the MSB harvest reads whatever is
+    // resident -- which includes the overworld blocks the player is standing in. Both sides emit one
+    // representative per block, so an m60 block present in both would stack two markers on the same
+    // spot, and the second would be indistinguishable from the first in the UI while carrying a
+    // different synthetic entity id. Let the `.aip` table win where it has an entry: it is the
+    // table the engine's own auto-invasion path uses for those areas.
+    let aip_blocks: std::collections::BTreeSet<u32> =
+        targets.iter().map(|t| t.block.raw()).collect();
+    let msb_targets = msb_block_targets();
+    let msb_offered = msb_targets.len();
+    targets.extend(
+        msb_targets
+            .into_iter()
+            .filter(|t| !aip_blocks.contains(&t.block.raw())),
+    );
+    let msb_pins = targets.len() - aip_pins;
+    if msb_offered != msb_pins {
+        crate::standalone_log(format_args!(
+            "map-inject: dropped {} MSB representative(s) whose block already has an .aip pin (no \
+             double markers on overworld blocks)",
+            msb_offered - msb_pins
+        ));
+    }
+    crate::standalone_log(format_args!(
+        "map-inject: pin sources: {aip_pins} from the .aip table (areas 60/61 only) + {msb_pins} \
+         from MSB InvasionPoint regions ({msb_points_now} points across {msb_blocks_now} maps \
+         seen so far this session -- legacy dungeons, caves and catacombs have no .aip entries at \
+         all, so this is the ONLY source that can mark them)"
+    ));
+    let fresh = InvasionRowRegistry::from_targets(targets);
     let signature = catalog_signature(&fresh);
     let cached_registry = INJECTED_REGISTRY.load(Ordering::SeqCst);
     let registry: &'static InvasionRowRegistry =
@@ -970,16 +1012,50 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     let mut cross_area_projections = 0_usize;
     let mut cross_area_trace = 4_usize;
     let mut area_trace = 4_usize;
+    // Legacy-dungeon accounting, kept separate from the `.aip` totals.
+    //
+    // Areas other than 60/61 can only come from the MSB `InvasionPoint` source, and they are the
+    // whole point of that source. Folding them into one `unplaceable` number would make the two
+    // failures indistinguishable: "the dungeon's MSB was never read" and "it was read and the
+    // converter refused to place it" need completely different fixes, and the second one is
+    // specifically a claim about `WorldMapAreaConverter::legacyConverter` being null.
+    let mut legacy_seen = 0_usize;
+    let mut legacy_placed = 0_usize;
+    let mut legacy_trace = 6_usize;
     for (index, target) in registry.targets().iter().enumerate() {
         // Reuse the projection computed above rather than re-running it: the layer bit and the
         // coordinate must come from the SAME converter decision, and projecting twice invites
         // them to disagree as well as doubling 365 native calls inside a world load.
+        let is_legacy = !matches!(
+            block_area(target.block.raw()),
+            er_invasion_warp::param_row::AREA_SHADOW_LANDS | 60
+        );
+        if is_legacy {
+            legacy_seen += 1;
+        }
         let Some((coords, converter_index, converter_area)) =
             projections.get(index).copied().flatten()
         else {
             unplaceable += 1;
+            if is_legacy && legacy_trace > 0 {
+                legacy_trace -= 1;
+                crate::standalone_log(format_args!(
+                    "map-inject: LEGACY pin REFUSED by every converter: block {} area {} pos \
+                     {:?}. ConvertMsbCoordsToMapCoords remaps a legacy block to overworld space \
+                     itself when its converter has a legacyConverter, so a refusal here means \
+                     that pointer is null on all {} converters -- NOT that the conversion is \
+                     missing.",
+                    target.block,
+                    block_area(target.block.raw()),
+                    target.position,
+                    projections.len().min(8)
+                ));
+            }
             continue;
         };
+        if is_legacy {
+            legacy_placed += 1;
+        }
         // A pin whose converter carries no layer entry can never be drawn on any map, so it is
         // dropped rather than appended with a zero mask that would make it permanently invisible
         // while still occupying a row and a clip-pool slot.
@@ -1082,6 +1158,17 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
          because its single coordinate is only valid in that converter's space",
         per_area[0], per_area[1]
     ));
+    // The legacy line is emitted unconditionally, INCLUDING when the count is zero. A silent
+    // absence would read as "legacy dungeons are handled" when the truth is "no dungeon map has
+    // been resident yet, so none were even offered".
+    er_invasion_warp::oracles::publish_legacy_pin_oracles(legacy_seen, legacy_placed);
+    crate::standalone_log(format_args!(
+        "map-inject: legacy-dungeon pins: {legacy_placed}/{legacy_seen} placed on the map. These \
+         are the ONLY markers possible for Leyndell, Stormveil, Farum Azula, the Haligtree and \
+         every cave/catacomb/tunnel -- the .aip table has no entries outside areas 60 and 61. \
+         seen=0 means no such map has been resident this session yet (coverage accumulates as \
+         maps load); seen>0 with placed=0 means the converters refused them."
+    ));
     let settled = unsafe { read_pin_list(view_model) };
     crate::standalone_log(format_args!(
         "map-inject: appended {injected} invasion pins ({unplaceable} unplaceable, \
@@ -1099,6 +1186,127 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         donor.icon_id,
         donor.label_text_id,
     ));
+}
+
+/// Invasion points harvested from the MSBs of maps that have been resident this session.
+///
+/// Session-scoped and only ever grown. It is NOT reset when the catalog signature changes: a mod
+/// rewriting the `.aip` table says nothing about MSB region data, and throwing away coverage the
+/// player has already walked past would make the surface worse for no reason.
+static MSB_CATALOG: std::sync::Mutex<er_invasion_warp::msb_invasion_points::MsbInvasionCatalog> =
+    std::sync::Mutex::new(er_invasion_warp::msb_invasion_points::MsbInvasionCatalog::new());
+
+/// Read every resident map's `InvasionPoint` regions into [`MSB_CATALOG`].
+///
+/// Returns `(points known, maps read)` after the fold. Skips maps already read: the geometry is
+/// static per map, so re-reading one is pure cost on the game thread during a map open.
+///
+/// # Safety
+/// Game task thread, with the world up.
+#[cfg(windows)]
+pub(crate) unsafe fn refresh_msb_catalog() -> (usize, usize) {
+    use er_invasion_warp::msb_invasion_points::{read_map_invasion_points, resident_blocks};
+    let Ok(base) = er_game_base::mem::game_module_base() else {
+        return (0, 0);
+    };
+    let mut catalog = match MSB_CATALOG.lock() {
+        Ok(catalog) => catalog,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    for (block, cap) in unsafe { resident_blocks() } {
+        if catalog.has_observed(block) {
+            continue;
+        }
+        let points = unsafe { read_map_invasion_points(base, block, cap) };
+        catalog.absorb(block, points);
+    }
+    (catalog.len(), catalog.observed_block_count())
+}
+
+#[cfg(not(windows))]
+pub(crate) unsafe fn refresh_msb_catalog() -> (usize, usize) {
+    (0, 0)
+}
+
+/// How many frames between resident-map harvests.
+///
+/// The harvest itself is nearly free once a map has been read (`has_observed` short-circuits), but
+/// the walk that finds the resident maps is a native call plus a list iteration, and running it on
+/// every single frame buys nothing: the resident set only changes when the player crosses a load
+/// boundary. A one-second stride bounds the cost while keeping the latency between "the player walks
+/// into a catacomb" and "that catacomb can contribute a marker" far below the time it takes to open
+/// the map. This is a cost/latency choice, not a guess at an unknown -- correctness does not depend
+/// on the value.
+#[cfg(windows)]
+const MSB_HARVEST_FRAME_STRIDE: u64 = 60;
+
+/// Fold whatever maps are resident right now into the session catalog.
+///
+/// WHY THIS RUNS PER FRAME AND NOT FROM THE MAP HOOK (2026-08-04). The harvest used to be called only
+/// from [`inject_pins`], which runs from the `WorldMapViewModel` constructor -- and that constructor
+/// has exactly one call site in the image, reached only from `STEP_MoveMap_Init`. So it fires once
+/// per WORLD ENTRY, during the loading screen, before `MoveMapStep` has ticked and before the
+/// destination's `MsbResCap`s exist. It does NOT fire when the player opens the map. That made the
+/// legacy-dungeon source able to see only whatever happened to be resident at world-entry init --
+/// never the catacomb the player is standing in. Harvesting from the recurring task instead means a
+/// map contributes from the moment the player has actually been in it.
+///
+/// # Safety
+/// Game task thread with the world up; the harvest itself is fault-closed.
+#[cfg(windows)]
+pub(crate) unsafe fn harvest_resident_msb_points(frame: u64) {
+    if !frame.is_multiple_of(MSB_HARVEST_FRAME_STRIDE) {
+        return;
+    }
+    let before = msb_coverage();
+    let after = unsafe { refresh_msb_catalog() };
+    if after.1 != before.1 {
+        crate::standalone_log(format_args!(
+            "map-msb: read {} newly resident map(s) -- MSB InvasionPoint coverage is now {} points \
+             across {} maps (this is the ONLY source that can mark a legacy dungeon, cave or \
+             catacomb; the .aip table has no entries outside areas 60/61)",
+            after.1 - before.1,
+            after.0,
+            after.1
+        ));
+    }
+}
+
+/// One pin per map that has MSB invasion points, using that map's first point.
+///
+/// Per-map rather than per-point deliberately: a legacy dungeon is a single place on the world
+/// map, and 285 catacomb points would stack 285 markers on one icon. This matches the
+/// `PinGranularity::PerBlock` the `.aip` side already uses.
+fn msb_block_targets() -> Vec<er_invasion_warp::invasion_warp::InvasionWarpTarget> {
+    let catalog = match MSB_CATALOG.lock() {
+        Ok(catalog) => catalog,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    catalog
+        .block_representatives()
+        .into_iter()
+        .map(|point| {
+            er_invasion_warp::invasion_warp::InvasionWarpTarget::new(
+                point.block,
+                point.index,
+                point.position,
+                point.yaw,
+            )
+        })
+        .collect()
+}
+
+/// MSB invasion-point coverage so far: `(points, maps read)`.
+///
+/// Surfaced on the heartbeat because it is the one number that says whether the legacy-dungeon
+/// source is doing anything at all, and waiting for a map open to find out is too late.
+#[must_use]
+pub fn msb_coverage() -> (usize, usize) {
+    let catalog = match MSB_CATALOG.lock() {
+        Ok(catalog) => catalog,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    (catalog.len(), catalog.observed_block_count())
 }
 
 /// The injected registry, leaked so the confirm hook can map a synthetic entity id back to its
@@ -1152,15 +1360,22 @@ unsafe extern "system" fn warp_job_assembler_hook(
                     CONFIRMS_WARPED.fetch_add(1, Ordering::SeqCst);
                     crate::standalone_log(format_args!(
                         "map-confirm: invasion pin entity_id={entity_id:#x} -> LOCAL warp to \
-                         block {} point {} (requested {:#010x} effective {:#010x} spawn_flag={} \
-                         session_touches={}); native grace warp SWALLOWED",
+                         block {} point {} (origin {:#010x} requested {:#010x} effective \
+                         {:#010x} spawn_flag={} session gate: {}); native grace warp SWALLOWED. \
+                         REQUESTED ONLY -- arrival is judged separately",
                         target.block,
                         target.point_index,
+                        outcome.origin_block,
                         outcome.requested_block,
                         outcome.effective_block,
                         outcome.spawn_flag,
-                        outcome.session_touches
+                        outcome.session_gate.describe()
                     ));
+                    // Hand it to the driver's arrival watcher. Without this the line above was
+                    // the ONLY record of a map warp, and it reports that the spawn slot latched,
+                    // not that the player arrived -- so a warp that did nothing was
+                    // indistinguishable from one that worked.
+                    crate::drive::note_external_warp(outcome);
                 }
                 Err(error) => {
                     crate::standalone_log(format_args!(

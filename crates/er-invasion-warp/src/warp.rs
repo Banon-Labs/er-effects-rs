@@ -85,6 +85,92 @@ pub const CHR_INS_GET_PHYSICS_POSITION_RVA: usize = 0x3f_0bf0;
 pub const SESSION_PROTOCOL_STATE_OFFSET: usize = 0x10;
 /// The `InGame` protocol state -- the literal `6` that same compare tests.
 pub const SESSION_PROTOCOL_STATE_IN_GAME: i32 = 6;
+/// The `WaitReentryToMap` protocol state -- the literal `7` that `SetupMapReentry` **writes as
+/// its very first statement** (`140cafc47: movl $0x7,0x10(%rcx)`).
+///
+/// This is why the re-entry is self-latching: entering it moves the session OUT of `InGame`, so a
+/// second warp issued before the engine has driven the session back sees `7` and skips the
+/// re-entry. Seeing `7` here is therefore the EXPECTED reading straight after one of our own
+/// warps; seeing it persist across many warps means the map re-entry never completed.
+pub const SESSION_PROTOCOL_STATE_WAIT_REENTRY_TO_MAP: i32 = 7;
+/// Offset of `lobbyState`, from `140cafc54: cmpl $0x3,0xc(%rcx)`. Reported alongside the protocol
+/// state because `SetupMapReentry`'s `LeaveSession` branch is reachable only when this is `Host`.
+pub const SESSION_LOBBY_STATE_OFFSET: usize = 0x0c;
+/// `LobbyState::Host` -- the literal `3` that compare tests.
+pub const SESSION_LOBBY_STATE_HOST: i32 = 3;
+
+/// Why the session-manager re-entry did or did not run.
+///
+/// This replaces a bare count. `session_touches` could only ever say "1" or "0", and **three
+/// materially different situations all produced `0`**: an unreadable global, a null manager, and
+/// a live manager parked in some other protocol state. A user-visible warp failure that reported
+/// `session_touches=0` was therefore undiagnosable without another launch -- which is exactly
+/// what happened on 2026-08-04, where the counter flipped to `0` and stayed there across a dozen
+/// confirms with no way to tell which of the three it was.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionGate {
+    /// `protocolState == InGame`, so `SetupMapReentry` ran -- exactly as vanilla
+    /// `TriggerAreaReload` does.
+    Entered,
+    /// The session-manager global could not be read at all.
+    ManagerUnreadable,
+    /// The session-manager global is null (teardown, or the world is not up).
+    ManagerNull,
+    /// The manager is live but its `protocolState` could not be read.
+    StateUnreadable,
+    /// The manager is live and not `InGame`. Carries the observed state and lobby state, because
+    /// [`SESSION_PROTOCOL_STATE_WAIT_REENTRY_TO_MAP`] is a self-inflicted, expected value right
+    /// after one of our own warps, while any other value is something else entirely.
+    NotInGame {
+        state: i32,
+        lobby_state: Option<i32>,
+    },
+}
+
+impl SessionGate {
+    /// How many times the session manager was entered: 1 for [`Self::Entered`], else 0.
+    ///
+    /// Kept so the number vanilla's branch would produce is still reported, without it being the
+    /// only thing reported.
+    #[must_use]
+    pub const fn touches(self) -> u32 {
+        matches!(self, Self::Entered) as u32
+    }
+
+    /// Whether the session is parked in the re-entry state our own previous warp puts it in.
+    #[must_use]
+    pub const fn is_parked_in_reentry(self) -> bool {
+        matches!(
+            self,
+            Self::NotInGame {
+                state: SESSION_PROTOCOL_STATE_WAIT_REENTRY_TO_MAP,
+                ..
+            }
+        )
+    }
+
+    /// A short, log-ready description that never loses which of the failure modes it was.
+    #[must_use]
+    pub fn describe(self) -> String {
+        match self {
+            Self::Entered => {
+                format!("ENTERED (protocolState={SESSION_PROTOCOL_STATE_IN_GAME} InGame)")
+            }
+            Self::ManagerUnreadable => "SKIPPED (session-manager global unreadable)".into(),
+            Self::ManagerNull => "SKIPPED (session-manager global is null)".into(),
+            Self::StateUnreadable => "SKIPPED (protocolState unreadable)".into(),
+            Self::NotInGame { state, lobby_state } => {
+                let named = if state == SESSION_PROTOCOL_STATE_WAIT_REENTRY_TO_MAP {
+                    " WaitReentryToMap -- the state OUR OWN previous warp set; the engine has not \
+                     driven the session back to InGame"
+                } else {
+                    ""
+                };
+                format!("SKIPPED (protocolState={state}{named}, lobbyState={lobby_state:?})")
+            }
+        }
+    }
+}
 
 /// `BlockId::NONE`: the sentinel `SetMoveMapStepBlockId` refuses to disaster-remap.
 pub const BLOCK_ID_NONE: u32 = 0xFFFF_FFFF;
@@ -196,7 +282,14 @@ pub struct WarpOutcome {
     /// How many times the sequence entered the session manager. Expected 0 or 1 -- 1 exactly
     /// when `protocolState == InGame`, matching vanilla `TriggerAreaReload`. Counted, never
     /// assumed.
+    ///
+    /// Derived from [`Self::session_gate`]; kept because it is the number vanilla's branch
+    /// produces, but it must never be the only thing reported -- on its own it cannot say which
+    /// of four situations a `0` was.
     pub session_touches: u32,
+    /// WHY the re-entry did or did not run. This is the diagnostic field; `session_touches` is
+    /// the summary of it.
+    pub session_gate: SessionGate,
 }
 
 #[cfg(windows)]
@@ -204,10 +297,10 @@ mod native {
     use super::{
         BLOCK_ID_NONE, CHR_INS_GET_PHYSICS_POSITION_RVA, CONVERT_BLOCK_COORDS_TO_PHYSICS_RVA,
         FloatVector4, GET_CURRENT_MAP_ID_RVA, GET_EXPLICIT_SPAWN_FLAG_RVA, GET_EXPLICIT_SPAWN_RVA,
-        SESSION_MANAGER_GLOBAL_RVA, SESSION_PROTOCOL_STATE_IN_GAME, SESSION_PROTOCOL_STATE_OFFSET,
-        SET_DISABLE_MAP_ENTER_ANIM_RVA, SET_EXPLICIT_SPAWN_RVA, SET_MOVE_MAP_STEP_BLOCK_ID_RVA,
-        SETUP_MAP_REENTRY_RVA, WARP_NEXT_STAGE_KICK_RVA, WarpError, WarpOutcome, spawn_orientation,
-        spawn_position,
+        SESSION_LOBBY_STATE_OFFSET, SESSION_MANAGER_GLOBAL_RVA, SESSION_PROTOCOL_STATE_IN_GAME,
+        SESSION_PROTOCOL_STATE_OFFSET, SET_DISABLE_MAP_ENTER_ANIM_RVA, SET_EXPLICIT_SPAWN_RVA,
+        SET_MOVE_MAP_STEP_BLOCK_ID_RVA, SETUP_MAP_REENTRY_RVA, SessionGate,
+        WARP_NEXT_STAGE_KICK_RVA, WarpError, WarpOutcome, spawn_orientation, spawn_position,
     };
     use crate::invasion_warp::InvasionWarpTarget;
     use crate::select::ResolvedTarget;
@@ -256,8 +349,10 @@ mod native {
         unsafe { get_current_map_id(&raw mut origin_block) };
 
         // Vanilla step 1: the session-manager re-entry, gated exactly as TriggerAreaReload
-        // gates it. Counted, not hidden.
-        let session_touches = unsafe { setup_map_reentry_if_in_game(base) };
+        // gates it. The REASON is recorded, not just a count -- entering it sets
+        // `protocolState = WaitReentryToMap`, so this gate is self-latching and a `0` here on a
+        // later warp is a fact about the previous one.
+        let session_gate = unsafe { setup_map_reentry_if_in_game(base) };
 
         // Vanilla step 2: suppress the map-enter animation.
         let set_disable_map_enter_anim: SetBoolFn =
@@ -312,7 +407,8 @@ mod native {
                 position_readback.z,
             ],
             spawn_yaw: orientation_readback.y,
-            session_touches,
+            session_touches: session_gate.touches(),
+            session_gate,
         })
     }
 
@@ -390,36 +486,45 @@ mod native {
 
     /// `if (GLOBAL_CSSessionManager->protocolState == InGame) SetupMapReentry(mgr, true);`
     ///
-    /// Returns how many times the session manager was entered, so the caller can report a
-    /// measured number instead of asserting zero.
+    /// Returns WHY the re-entry did or did not run, so a caller can report a measured reason
+    /// instead of a bare count that four different situations share.
+    ///
+    /// Note that entering the re-entry is self-latching: `SetupMapReentry`'s first statement is
+    /// `protocolState = WaitReentryToMap`, so an immediately following warp will take the
+    /// `NotInGame` path until the engine drives the session back to `InGame`.
     ///
     /// # Safety
     ///
     /// Game task thread, world loaded.
-    unsafe fn setup_map_reentry_if_in_game(base: usize) -> u32 {
+    unsafe fn setup_map_reentry_if_in_game(base: usize) -> SessionGate {
         // Fault-tolerant: during teardown the global can be null or stale, and a warp that
         // cannot read it must degrade to "did not touch the session", never to a crash.
+        //
+        // Each bail returns a DISTINCT reason. They used to collapse to a bare `0`, which made a
+        // live failure unattributable without another launch.
         let Some(manager) =
             (unsafe { er_game_base::mem::safe_read_usize(base + SESSION_MANAGER_GLOBAL_RVA) })
         else {
-            return 0;
+            return SessionGate::ManagerUnreadable;
         };
         if manager == 0 {
-            return 0;
+            return SessionGate::ManagerNull;
         }
         // `cmpl $0x6,0x10(%rcx)` compares a 32-bit signed value, so read it the same width.
         let Some(state) =
             (unsafe { er_game_base::mem::safe_read_i32(manager + SESSION_PROTOCOL_STATE_OFFSET) })
         else {
-            return 0;
+            return SessionGate::StateUnreadable;
         };
         if state != SESSION_PROTOCOL_STATE_IN_GAME {
-            return 0;
+            let lobby_state =
+                unsafe { er_game_base::mem::safe_read_i32(manager + SESSION_LOBBY_STATE_OFFSET) };
+            return SessionGate::NotInGame { state, lobby_state };
         }
         let setup_map_reentry: SetupMapReentryFn =
             unsafe { core::mem::transmute(base + SETUP_MAP_REENTRY_RVA) };
         unsafe { setup_map_reentry(manager, SETUP_MAP_REENTRY_ARG) };
-        1
+        SessionGate::Entered
     }
 }
 
@@ -610,7 +715,77 @@ mod tests {
             spawn_position: [1.0, 2.0, 3.0],
             spawn_yaw: -0.5,
             session_touches: 1,
+            session_gate: SessionGate::Entered,
         }
+    }
+
+    #[test]
+    fn the_session_gate_summarises_to_the_count_vanilla_would_produce() {
+        assert_eq!(SessionGate::Entered.touches(), 1);
+        for skipped in [
+            SessionGate::ManagerUnreadable,
+            SessionGate::ManagerNull,
+            SessionGate::StateUnreadable,
+            SessionGate::NotInGame {
+                state: SESSION_PROTOCOL_STATE_WAIT_REENTRY_TO_MAP,
+                lobby_state: None,
+            },
+        ] {
+            assert_eq!(skipped.touches(), 0, "{skipped:?}");
+        }
+    }
+
+    #[test]
+    fn every_skipped_gate_describes_itself_distinctly() {
+        // The whole point of the enum: a `0` used to be four situations wearing one number, so a
+        // live failure could not be attributed without another launch.
+        let described: Vec<String> = [
+            SessionGate::Entered,
+            SessionGate::ManagerUnreadable,
+            SessionGate::ManagerNull,
+            SessionGate::StateUnreadable,
+            SessionGate::NotInGame {
+                state: SESSION_PROTOCOL_STATE_WAIT_REENTRY_TO_MAP,
+                lobby_state: Some(SESSION_LOBBY_STATE_HOST),
+            },
+        ]
+        .iter()
+        .map(|gate| gate.describe())
+        .collect();
+        let unique: std::collections::BTreeSet<&String> = described.iter().collect();
+        assert_eq!(unique.len(), described.len(), "{described:#?}");
+    }
+
+    #[test]
+    fn only_the_reentry_state_counts_as_parked_by_our_own_previous_warp() {
+        assert!(
+            SessionGate::NotInGame {
+                state: SESSION_PROTOCOL_STATE_WAIT_REENTRY_TO_MAP,
+                lobby_state: None,
+            }
+            .is_parked_in_reentry()
+        );
+        // Any other non-InGame state is a different situation and must not be blamed on us.
+        assert!(
+            !SessionGate::NotInGame {
+                state: 0,
+                lobby_state: None,
+            }
+            .is_parked_in_reentry()
+        );
+        assert!(!SessionGate::Entered.is_parked_in_reentry());
+        assert!(!SessionGate::ManagerNull.is_parked_in_reentry());
+    }
+
+    #[test]
+    fn the_reentry_state_is_the_one_setup_map_reentry_writes() {
+        // `140cafc47: movl $0x7,0x10(%rcx)` -- the first statement of SetupMapReentry. If this
+        // ever disagrees with the binary, the gate's diagnosis is wrong rather than merely stale.
+        assert_eq!(SESSION_PROTOCOL_STATE_WAIT_REENTRY_TO_MAP, 7);
+        assert_ne!(
+            SESSION_PROTOCOL_STATE_WAIT_REENTRY_TO_MAP,
+            SESSION_PROTOCOL_STATE_IN_GAME
+        );
     }
 
     #[test]

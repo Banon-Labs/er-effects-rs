@@ -102,6 +102,20 @@ pub const ORACLE_INVASION_WARP_SESSION_TOUCHES: &str = "oracle_invasion_warp_ses
 /// MUST STAY ZERO: `CS::MessageBoxDialog` builds during the run.
 pub const ORACLE_INVASION_WARP_MSGBOX_BUILDS: &str = "oracle_invasion_warp_msgbox_builds";
 
+/// How many legacy-dungeon (non-area-60/61) targets were OFFERED to the world-map injection.
+///
+/// Zero means no such map has been resident this session yet -- the MSB source accumulates as maps
+/// load, so a fresh boot in the overworld legitimately offers none.
+pub const ORACLE_INVASION_WARP_LEGACY_PINS_SEEN: &str = "oracle_invasion_warp_legacy_pins_seen";
+/// How many of those the world-map coordinate converters actually ACCEPTED.
+///
+/// This is the decisive number for legacy-dungeon coverage, and the reason it is an oracle rather
+/// than a log line: `seen > 0 && placed == 0` says the converter set cannot place a dungeon pin at
+/// all, in which case reading MORE dungeon MSBs (the whole non-resident-map sweep) would produce
+/// nothing visible and the converter is what needs fixing first. `placed` tracking `seen` says the
+/// opposite. No amount of build or launch success answers that question; only this pair does.
+pub const ORACLE_INVASION_WARP_LEGACY_PINS_PLACED: &str = "oracle_invasion_warp_legacy_pins_placed";
+
 // --- ORACLE 1 counters --------------------------------------------------------------------
 //
 // Written by `crate::sampler` on every successful read of the live `CSAutoInvadePoint`, read
@@ -115,6 +129,45 @@ pub static INVASION_WARP_CATALOG_TARGETS: AtomicUsize = AtomicUsize::new(0);
 pub static INVASION_WARP_CATALOG_BLOCKS: AtomicUsize = AtomicUsize::new(0);
 /// Distinct map areas in that catalog.
 pub static INVASION_WARP_CATALOG_AREAS: AtomicUsize = AtomicUsize::new(0);
+
+/// Legacy-dungeon targets offered to the last world-map injection.
+pub static INVASION_WARP_LEGACY_PINS_SEEN: AtomicUsize = AtomicUsize::new(0);
+/// Legacy-dungeon targets the converters accepted in that injection.
+pub static INVASION_WARP_LEGACY_PINS_PLACED: AtomicUsize = AtomicUsize::new(0);
+
+/// Publish the legacy-dungeon placement pair measured by a world-map injection.
+pub fn publish_legacy_pin_oracles(seen: usize, placed: usize) {
+    INVASION_WARP_LEGACY_PINS_SEEN.store(seen, Ordering::SeqCst);
+    INVASION_WARP_LEGACY_PINS_PLACED.store(placed, Ordering::SeqCst);
+}
+
+/// The legacy-dungeon placement pair as it currently stands, `(seen, placed)`.
+#[must_use]
+pub fn legacy_pin_oracle_snapshot() -> (usize, usize) {
+    (
+        INVASION_WARP_LEGACY_PINS_SEEN.load(Ordering::SeqCst),
+        INVASION_WARP_LEGACY_PINS_PLACED.load(Ordering::SeqCst),
+    )
+}
+
+/// What `(seen, placed)` means for the non-resident-map sweep, in one line.
+#[must_use]
+pub fn describe_legacy_pin_oracle(seen: usize, placed: usize) -> &'static str {
+    match (seen, placed) {
+        (0, _) => {
+            "no legacy-dungeon map has been resident this session yet -- coverage accumulates as \
+             maps load, so this is not a failure"
+        }
+        (_, 0) => {
+            "the world-map converters REFUSED every legacy-dungeon pin -- reading more dungeon MSBs \
+             cannot help until a converter can place one"
+        }
+        _ if placed == seen => "every offered legacy-dungeon pin was placed",
+        _ => {
+            "some legacy-dungeon pins were placed and some refused -- the converter set is partial"
+        }
+    }
+}
 
 /// Publish a freshly-read catalog's totals to the oracle-1 counters.
 pub fn publish_catalog_oracles(summary: InvasionWarpCatalogSummary) {
@@ -254,6 +307,7 @@ fn json_escape(value: &str) -> String {
 #[must_use]
 pub fn catalog_oracle_json(status: &str, detail: &str) -> String {
     let (targets, blocks, areas) = catalog_oracle_snapshot();
+    let (legacy_seen, legacy_placed) = legacy_pin_oracle_snapshot();
     let summary = InvasionWarpCatalogSummary {
         block_count: blocks,
         target_count: targets,
@@ -270,11 +324,15 @@ pub fn catalog_oracle_json(status: &str, detail: &str) -> String {
 \"detail\":\"{detail}\",\
 \"expected_base\":{{\"blocks\":{base_blocks},\"targets\":{base_targets},\"areas\":{base_areas}}},\
 \"expected_base_dlc02\":{{\"blocks\":{dlc_blocks},\"targets\":{dlc_targets},\"areas\":{dlc_areas}}},\
+\"{ORACLE_INVASION_WARP_LEGACY_PINS_SEEN}\":{legacy_seen},\
+\"{ORACLE_INVASION_WARP_LEGACY_PINS_PLACED}\":{legacy_placed},\
+\"legacy_pins_note\":\"{legacy_note}\",\
 \"{ORACLE_INVASION_WARP_SESSION_TOUCHES}\":null,\
 \"{ORACLE_INVASION_WARP_MSGBOX_BUILDS}\":null,\
 \"negative_oracles_measured\":false,\
 \"negative_oracles_note\":\"{note}\"}}\n",
         status = json_escape(status),
+        legacy_note = json_escape(describe_legacy_pin_oracle(legacy_seen, legacy_placed)),
         verdict_tag = verdict.tag(),
         passed = verdict.passed(),
         detail = json_escape(detail),
@@ -505,6 +563,41 @@ mod tests {
         assert!(json.contains("is\\nunreadable"), "{json}");
         assert!(!json.contains('\t'), "{json}");
         // Balanced braces is the cheap structural check that the escaping did not corrupt it.
+        assert_eq!(
+            json.matches('{').count(),
+            json.matches('}').count(),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn the_legacy_pin_oracle_separates_never_offered_from_refused() {
+        // These are the two failures that a single "no dungeon markers" number would fuse, and
+        // they need opposite fixes: nothing resident yet (wait / visit a dungeon) versus the
+        // converters rejecting what they were given (fix the converter, do not read more MSBs).
+        assert!(describe_legacy_pin_oracle(0, 0).contains("not a failure"));
+        assert!(describe_legacy_pin_oracle(12, 0).contains("REFUSED"));
+        assert_eq!(
+            describe_legacy_pin_oracle(12, 12),
+            "every offered legacy-dungeon pin was placed"
+        );
+        assert!(describe_legacy_pin_oracle(12, 5).contains("partial"));
+    }
+
+    #[test]
+    fn the_telemetry_document_carries_the_legacy_pin_pair() {
+        publish_legacy_pin_oracles(9, 0);
+        assert_eq!(legacy_pin_oracle_snapshot(), (9, 0));
+        let json = catalog_oracle_json("latched", "stable");
+        assert!(
+            json.contains("\"oracle_invasion_warp_legacy_pins_seen\":9"),
+            "{json}"
+        );
+        assert!(
+            json.contains("\"oracle_invasion_warp_legacy_pins_placed\":0"),
+            "{json}"
+        );
+        assert!(json.contains("REFUSED"), "{json}");
         assert_eq!(
             json.matches('{').count(),
             json.matches('}').count(),
