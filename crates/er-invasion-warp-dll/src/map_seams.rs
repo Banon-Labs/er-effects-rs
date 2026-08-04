@@ -151,6 +151,19 @@ pub const WORLDMAP_PIN_ROW_CTOR: MapSeam = MapSeam {
     arg_count: 3,
 };
 
+/// `FUN_14088bac0` -- the `CS::WorldMapWarpPinData` non-deleting destructor. Destroys
+/// `label[0..*(u64*)(row+0x230))` then the `+0x18` MenuString. Does NOT free the row storage.
+/// The temp row used to build a pin MUST be destroyed with this; `free`/`operator delete`
+/// instead corrupts the game heap.
+pub const WORLDMAP_PIN_ROW_DTOR: MapSeam = MapSeam {
+    name: "WorldMapWarpPinData dtor (FUN_14088bac0)",
+    rva: 0x088_bac0,
+    prologue: &[
+        0x48, 0x89, 0x4c, 0x24, 0x08, 0x53, 0x48, 0x83, 0xec, 0x30, 0x48, 0xc7,
+    ],
+    arg_count: 1,
+};
+
 /// `FUN_140888aa0` -- the row list's reserve/grow helper.
 pub const WORLDMAP_PIN_LIST_GROW: MapSeam = MapSeam {
     name: "WorldMapPinDataList grow (FUN_140888aa0)",
@@ -182,6 +195,7 @@ pub const ALL_SEAMS: &[MapSeam] = &[
     GET_BONFIRE_ENTITY_ID,
     WORLDMAP_PIN_ROW_COPY_CTOR,
     WORLDMAP_PIN_ROW_CTOR,
+    WORLDMAP_PIN_ROW_DTOR,
     WORLDMAP_PIN_LIST_GROW,
     CONVERT_MSB_COORDS_TO_MAP_COORDS,
 ];
@@ -286,6 +300,7 @@ mod tests {
             (GET_BONFIRE_ENTITY_ID, 0x1_40d2_5650),
             (WORLDMAP_PIN_ROW_COPY_CTOR, 0x1_4088_5ed0),
             (WORLDMAP_PIN_ROW_CTOR, 0x1_4088_b7b0),
+            (WORLDMAP_PIN_ROW_DTOR, 0x1_4088_bac0),
             (WORLDMAP_PIN_LIST_GROW, 0x1_4088_8aa0),
             (CONVERT_MSB_COORDS_TO_MAP_COORDS, 0x1_4087_6140),
         ] {
