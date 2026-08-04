@@ -3,7 +3,7 @@
 use std::{
     env,
     ffi::c_void,
-    fs::{self, OpenOptions},
+    fs,
     io::Write,
     path::PathBuf,
     sync::atomic::{AtomicBool, Ordering},
@@ -294,7 +294,9 @@ fn write_runtime_log(message: &str) {
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+    // Fresh per run: truncated by this process's first line (previous run kept one generation as
+    // `.log.prev`). This one lives under LOCALAPPDATA, where nothing clears it between launches.
+    if let Some(mut file) = er_game_base::log::open_fresh_run_append(&path) {
         let _ = writeln!(file, "{:?} {message}", SystemTime::now());
     }
 }

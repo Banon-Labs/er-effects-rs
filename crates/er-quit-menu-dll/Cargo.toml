@@ -28,3 +28,6 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 er-quit-menu = { path = "../er-quit-menu" }
+# Tier A only (zero external deps, host-buildable): the fresh-per-process log writer, so this
+# shell's log describes exactly one run instead of accumulating across launches.
+er-game-base = { path = "../er-game-base" }

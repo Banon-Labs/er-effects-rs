@@ -30,8 +30,6 @@ pub mod map_gfx;
 pub mod map_hooks;
 pub mod map_seams;
 
-use std::fs::OpenOptions;
-use std::io::Write;
 use std::path::PathBuf;
 
 const DLL_PROCESS_ATTACH: u32 = 1;
@@ -55,14 +53,17 @@ fn log_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// Fresh per process: the first line of a run truncates the file (rotating the previous
+/// run's aside as `.log.prev`), later lines append.
+///
+/// This DLL is the reason the repo has that rule. It used to open the log with a plain
+/// `append(true)`, so twelve separate launches accumulated into one 565 KB file and a count
+/// taken over it read as one run doing something twelve times over.
 fn append_log(dir: &PathBuf, args: std::fmt::Arguments<'_>) {
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join(LOG_FILE_NAME))
-    {
-        let _ = writeln!(file, "er-invasion-warp-dll: {args}");
-    }
+    er_game_base::log::append_line(
+        &dir.join(LOG_FILE_NAME),
+        format_args!("er-invasion-warp-dll: {args}"),
+    );
 }
 
 fn standalone_log(args: std::fmt::Arguments<'_>) {

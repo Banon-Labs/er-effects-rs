@@ -52,6 +52,12 @@ python3 "$repo_root/scripts/check-no-lossy-utf8.py"
 # is never trusted on its own say-so.
 python3 "$repo_root/scripts/check-rva-alias-drift.py" --selftest
 python3 "$repo_root/scripts/check-rva-alias-drift.py"
+# A log describes exactly ONE process run. er-invasion-warp-dll appended to a fixed filename, so
+# twelve launches became one 565KB file and a count over it read as one run's behaviour. Every
+# appending opener must route through er-game-base's one-shot truncation. Selftest first, so the
+# gate is never trusted on its own say-so.
+python3 "$repo_root/scripts/check-fresh-run-logs.py" --selftest
+python3 "$repo_root/scripts/check-fresh-run-logs.py"
 python3 "$repo_root/scripts/check-rust-file-sizes.py"
 python3 "$repo_root/scripts/check-experiments-rustfmt.py"
 python3 "$repo_root/scripts/check-markdown-code-blocks.py" "$repo_root/README.md"
