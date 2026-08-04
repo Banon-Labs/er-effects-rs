@@ -744,11 +744,12 @@ pub(crate) const SAVE_PICKER_BROWSE_LINE_CHAR_BUDGET: usize = 44;
 /// The two `ErStats` lines for ProfileSelect row `row` while the browse picker owns the window.
 /// File rows show the file's REAL character info: active-slot count on the top line and the
 /// characters' names + levels on the bottom line (as many as fit the budget, then a `+k` overflow
-/// marker). Every other row (up/drive, directory, page cycle, placeholder) gets EMPTY lines so
-/// neither leftover row text nor per-slot attribute stats render as junk there. `None` when the
-/// picker does not own the rows (the normal character-slot view keeps the attribute stats panel).
-/// Generated text uses `/` separators and never inserts commas (comma-safe labels,
-/// er-effects-rs-dly6); names pass through with HTML escaping only.
+/// marker). Navigation/info/status rows show host-testable auxiliary text from `er-save-picker`,
+/// so explanatory copy lives in the injected stats fields instead of the 16-UTF-16 row name. Empty
+/// rows still get empty lines so neither leftover row text nor per-slot attribute stats render as
+/// junk there. `None` when the picker does not own the rows (the normal character-slot view keeps
+/// the attribute stats panel). Generated text uses `/` separators and never inserts commas
+/// (comma-safe labels, er-effects-rs-dly6); names pass through with HTML escaping only.
 ///
 /// THE `[CURRENT]` MARKER LIVES HERE, on the top line, and it is the answer to a question the
 /// destination browser now has to answer on its own: "which of these is the file I am playing?"
@@ -762,17 +763,22 @@ pub(crate) fn save_picker_browse_stats_lines(row: usize) -> Option<(Vec<u16>, Ve
     }
     let guard = crate::experiments::save_picker::active_save_picker_lock();
     let model = guard.as_ref()?;
-    if let Some(message) = model.status_message()
-        && row == 0
-    {
+    let status_row = model.status_message().is_some() && row == 0;
+    if let Some((top, bottom)) = model.row_auxiliary_lines(row) {
+        if status_row {
+            return Some((
+                save_picker_error_html_utf16(&top),
+                save_picker_error_html_utf16(&bottom),
+            ));
+        }
         return Some((
-            save_picker_error_html_utf16(message.headline()),
-            save_picker_error_html_utf16(message.detail()),
+            save_picker_browse_html_utf16(&top),
+            save_picker_browse_html_utf16(&bottom),
         ));
     }
     let is_current = model.row_is_loaded_save(row);
     let Some(chars) = model.row_file_characters(row) else {
-        // Non-file row: blank both lines.
+        // Empty row: blank both lines.
         return Some((vec![0], vec![0]));
     };
     let count = if chars.len() == 1 {
@@ -923,6 +929,10 @@ mod save_picker_row_slot_info_tests {
             assert!(
                 save_picker_row_slot_info(row).is_none(),
                 "row {row} was classified without a picker owning the rows"
+            );
+            assert!(
+                save_picker_browse_stats_lines(row).is_none(),
+                "row {row} got browse stats without a picker owning the rows"
             );
         }
     }
