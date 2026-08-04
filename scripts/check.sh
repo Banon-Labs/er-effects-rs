@@ -116,6 +116,14 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry --lib
 # Rust format + Windows-target BUILD of the injectable DLL (cross-compiled from Linux via
 # cargo-xwin). A real build (not just `cargo check`) so codegen/link regressions -- including
 # any pre-existing rust breakage -- are caught here, producing the linked er_effects_rs.dll.
+# The linking gate above is only as good as its list. `check-rust-build.sh` carries an
+# `me3_shells` array of every ME3-loadable cdylib and links each one, but that array was kept
+# correct by a COMMENT saying "keep this list in sync" -- so adding a new DLL crate would leave
+# the suite green while nothing ever linked it, which is the same hole the array closed, one
+# level up. This makes the list's completeness executable.
+python3 "$repo_root/scripts/check-me3-shell-coverage.py" --selftest
+python3 "$repo_root/scripts/check-me3-shell-coverage.py"
+
 bash "$repo_root/scripts/check-rust-build.sh"
 
 # Dead/unused code in the save-disable DLL, on its shipping target. Scoped to that one
