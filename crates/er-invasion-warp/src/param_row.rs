@@ -65,6 +65,19 @@ pub const LABEL_KIND_NPC_NAME: u8 = 1;
 /// A text id the engine treats as "no label" -- it renders an empty `MenuString`.
 pub const LABEL_TEXT_ID_NONE: i32 = -1;
 
+/// Icon id given to invasion pins so they are visually distinct from Sites of Grace.
+///
+/// The pin's icon is NOT a colour tint -- it is an index the engine resolves to a sprite, read
+/// from the param row's `+0x1C` and copied to pin `+0x248`. Changing the sprite is the only
+/// distinguishing lever this layer has; recolouring an existing sprite would mean touching the
+/// renderer.
+///
+/// The shipped grace rows use icon `1`, which is why cloning a donor verbatim produced pins
+/// indistinguishable from graces. This value is deliberately different. The injector logs the
+/// distinct icon ids it sees across the shipped rows, so the choice can be made from what the
+/// game actually has rather than from a guess.
+pub const INVASION_PIN_ICON_ID: u16 = 2;
+
 /// The category bits the row filter masks. Only the low three survive `& 7`.
 pub const CATEGORY_BITS_MASK: u8 = 0x7;
 

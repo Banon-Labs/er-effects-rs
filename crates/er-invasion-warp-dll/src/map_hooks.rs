@@ -306,7 +306,7 @@ unsafe fn project_to_map(
     view_model: usize,
     block_id: u32,
     msb_pos: [f32; 3],
-) -> Option<MapCoordinates> {
+) -> Option<(MapCoordinates, usize, u8)> {
     type ConvertFn =
         unsafe extern "system" fn(usize, *mut MapCoordinates, *const u32, *const [f32; 3]) -> bool;
     let convert: ConvertFn = unsafe {
@@ -327,10 +327,21 @@ unsafe fn project_to_map(
                 &raw const msb_pos,
             )
         } {
-            return Some(out);
+            // `refBlock` sits at converter+0x08; its AREA is byte 3 of the packed BlockId.
+            // Reporting it distinguishes "an area-61 point matched a DLC converter" from "an
+            // area-61 point was accepted by a BASE converter and is now drawn at a meaningless
+            // place on the base map" -- the leading hypothesis for the missing DLC pins.
+            let converter_area = unsafe { er_game_base::mem::safe_read_u8(converter + 0x0b) };
+            return Some((out, index, converter_area.unwrap_or(0)));
         }
     }
     None
+}
+
+/// Area byte of a packed `BlockId` (byte 3).
+#[must_use]
+pub const fn block_area(block_id: u32) -> u8 {
+    ((block_id >> 24) & 0xFF) as u8
 }
 
 /// Append the invasion pins to a freshly-constructed ViewModel's row list.
@@ -376,6 +387,34 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         ));
         return;
     }
+    // Enumerate the icon ids the shipped rows actually use, so a distinct one can be chosen
+    // from what the game has rather than guessed at.
+    {
+        use er_invasion_warp::param_row::PARAM_ICON_ID_OFFSET;
+        let mut seen: Vec<u16> = Vec::new();
+        for index in 0..existing_rows.min(MAX_DONOR_SCAN_ROWS) {
+            let row = before.begin + index * PIN_ROW_STRIDE;
+            let Some(param) =
+                (unsafe { er_game_base::mem::safe_read_usize(row + ROW_PARAM_POINTER_OFFSET) })
+            else {
+                continue;
+            };
+            if param == 0 {
+                continue;
+            }
+            if let Some(icon) =
+                unsafe { er_game_base::mem::safe_read_u16(param + PARAM_ICON_ID_OFFSET) }
+                && !seen.contains(&icon)
+            {
+                seen.push(icon);
+            }
+        }
+        seen.sort_unstable();
+        crate::standalone_log(format_args!(
+            "map-inject: shipped rows use icon ids {seen:?}; invasion pins will use {}",
+            er_invasion_warp::param_row::INVASION_PIN_ICON_ID
+        ));
+    }
     let Some(donor) = (unsafe { sample_donor(before.begin, existing_rows) }) else {
         crate::standalone_log(format_args!(
             "map-inject: no shipped row among the first {} has non-zero category bits and a \
@@ -418,7 +457,9 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
             SyntheticParamSpec {
                 entity_id,
                 subcategory_id: donor.subcategory_id,
-                icon_id: donor.icon_id,
+                // Deliberately NOT the donor's icon: cloning it made the pins look exactly
+                // like Sites of Grace. This is the only visual-distinction lever at this layer.
+                icon_id: er_invasion_warp::param_row::INVASION_PIN_ICON_ID,
                 category_bits: donor.category_bits,
                 place_name_text_id: donor.label_text_id,
             }
@@ -427,6 +468,13 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     }
     let param_rows: &'static [[u8; SYNTHETIC_PARAM_ROW_LEN]] =
         Box::leak(param_rows.into_boxed_slice());
+    // Leak the registry too: the confirm hook needs it for the rest of the session to map a
+    // synthetic entity id back to the target to warp to.
+    let leaked_registry: &'static InvasionRowRegistry = Box::leak(Box::new(registry.clone()));
+    INJECTED_REGISTRY.store(
+        core::ptr::from_ref(leaked_registry) as usize,
+        Ordering::SeqCst,
+    );
 
     // Reserve ONCE with the final count. Each reserve copy-constructs every existing element
     // into a new block and destructs the originals, so per-row reserves are O(N*size) and
@@ -468,13 +516,46 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
 
     let mut injected = 0_usize;
     let mut unplaceable = 0_usize;
+    /// How many pins were accepted by a converter belonging to a DIFFERENT area than the
+    /// target's own -- those land in the wrong map's coordinate space.
+    let mut cross_area_projections = 0_usize;
+    let mut cross_area_trace = 4_usize;
+    let mut area_trace = 4_usize;
     for (index, target) in registry.targets().iter().enumerate() {
-        let Some(coords) =
+        let Some((coords, converter_index, converter_area)) =
             (unsafe { project_to_map(base, view_model, target.block.raw(), target.position) })
         else {
             unplaceable += 1;
             continue;
         };
+        let target_area = block_area(target.block.raw());
+        if converter_area != target_area {
+            // The converter that accepted this point belongs to a DIFFERENT area, so the map
+            // coordinates are in that area's space and the pin renders somewhere meaningless.
+            // This is the leading explanation for "markers on the base map, none on the DLC map,
+            // and not where I'd expect".
+            cross_area_projections += 1;
+            if cross_area_trace > 0 {
+                cross_area_trace -= 1;
+                crate::standalone_log(format_args!(
+                    "map-inject: CROSS-AREA projection: block {} (area {target_area}) accepted by \
+                     converter #{converter_index} (area {converter_area}) -> map[{:.1}, {:.1}]",
+                    target.block, coords.x, coords.z
+                ));
+            }
+        } else if area_trace > 0 {
+            area_trace -= 1;
+            crate::standalone_log(format_args!(
+                "map-inject: sample: block {} area={target_area} converter=#{converter_index} \
+                 map[{:.1}, {:.1}] aip[{:.1}, {:.1}, {:.1}]",
+                target.block,
+                coords.x,
+                coords.z,
+                target.position[0],
+                target.position[1],
+                target.position[2]
+            ));
+        }
         let lookup = BonfireLookupResult {
             param_id: registry.entity_id_at(index).unwrap_or(0),
             pad: 0,
@@ -510,8 +591,9 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     }
     let settled = unsafe { read_pin_list(view_model) };
     crate::standalone_log(format_args!(
-        "map-inject: appended {injected} invasion pins ({unplaceable} unplaceable, {wanted} \
-         wanted, {existing_rows} shipped rows before) -> list now rows={} spare={} plausible={} \
+        "map-inject: appended {injected} invasion pins ({unplaceable} unplaceable, \
+         {cross_area_projections} CROSS-AREA (wrong map's coordinate space), {wanted} wanted, \
+         {existing_rows} shipped rows before) -> list now rows={} spare={} plausible={} \
          donor[row={} subcategory={} category_bits=0x{:x} icon={} label_text_id={}]",
         settled
             .and_then(|g| g.row_count())
@@ -524,6 +606,106 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         donor.icon_id,
         donor.label_text_id,
     ));
+}
+
+/// The injected registry, leaked so the confirm hook can map a synthetic entity id back to its
+/// target for the rest of the session. 0 until the injection runs.
+static INJECTED_REGISTRY: AtomicUsize = AtomicUsize::new(0);
+/// Trampoline to the original warp-job assembler.
+static ORIG_WARP_JOB_ASSEMBLER: AtomicUsize = AtomicUsize::new(0);
+/// Confirms recognised as ours, and how many of those issued a warp.
+static CONFIRMS_INTERCEPTED: AtomicUsize = AtomicUsize::new(0);
+static CONFIRMS_WARPED: AtomicUsize = AtomicUsize::new(0);
+
+/// Union handler for the warp-job assembler `FUN_1407a04f0`.
+///
+/// THIS IS THE SOFTLOCK FIX. All five confirm routes funnel through here, and `R8` points at the
+/// bonfire entity id BEFORE any MenuJob is allocated. Without this hook, selecting an injected
+/// pin hands our synthetic id to the native grace warp, which passes it to
+/// `CSLuaEventManImp::CallLua_Warp`; Lua cannot resolve it, the stage transition never completes,
+/// and the game hangs on the loading screen. That is exactly what a live run did.
+///
+/// On recognising one of ours we run the proven local warp and return a NULL job. Swallowing is
+/// safe: the callers' `Clone` (0x1407a7b60) and enqueue (0x1407a9250) both NULL-check, and the
+/// engine itself returns a NULL job on its own no-SpecialEffect path -- so a NULL out-slot is a
+/// state the callers already handle. The map is torn down by the area reload our warp kicks.
+///
+/// # Safety
+/// Installed by the union on a byte-verified prologue; ABI is
+/// `(outJobSlot, menuOwner+0x50, const u32* entityId, MenuString* name)`.
+#[cfg(windows)]
+unsafe extern "system" fn warp_job_assembler_hook(
+    out_job_slot: usize,
+    menu_owner: usize,
+    entity_id_ptr: usize,
+    name: usize,
+) -> usize {
+    let entity_id = if entity_id_ptr != 0 {
+        unsafe { er_game_base::mem::safe_read_i32(entity_id_ptr) }
+    } else {
+        None
+    };
+    let registry_ptr = INJECTED_REGISTRY.load(Ordering::SeqCst);
+    if let (Some(entity_id), true) = (entity_id, registry_ptr != 0)
+        && er_invasion_warp::map_surface::is_invasion_entity_id(entity_id)
+    {
+        // SAFETY: the registry was leaked at injection time and is never freed or mutated.
+        let registry: &er_invasion_warp::map_surface::InvasionRowRegistry =
+            unsafe { &*(registry_ptr as *const _) };
+        if let Some(target) = registry.target_for_entity_id(entity_id) {
+            CONFIRMS_INTERCEPTED.fetch_add(1, Ordering::SeqCst);
+            match unsafe { er_invasion_warp::warp::request_invasion_warp(target) } {
+                Ok(outcome) => {
+                    CONFIRMS_WARPED.fetch_add(1, Ordering::SeqCst);
+                    crate::standalone_log(format_args!(
+                        "map-confirm: invasion pin entity_id={entity_id:#x} -> LOCAL warp to \
+                         block {} point {} (requested {:#010x} effective {:#010x} spawn_flag={} \
+                         session_touches={}); native grace warp SWALLOWED",
+                        target.block,
+                        target.point_index,
+                        outcome.requested_block,
+                        outcome.effective_block,
+                        outcome.spawn_flag,
+                        outcome.session_touches
+                    ));
+                }
+                Err(error) => {
+                    crate::standalone_log(format_args!(
+                        "map-confirm: invasion pin entity_id={entity_id:#x} REFUSED: {error}; \
+                         native warp still swallowed rather than sending a synthetic id to \
+                         Lua_Warp (which softlocks)"
+                    ));
+                }
+            }
+            // NULL job either way. Letting the native path run with a synthetic id is the
+            // softlock, so it is never the fallback.
+            if out_job_slot != 0 {
+                unsafe { *(out_job_slot as *mut usize) = 0 };
+            }
+            return out_job_slot;
+        }
+    }
+
+    let orig = ORIG_WARP_JOB_ASSEMBLER.load(Ordering::SeqCst);
+    if orig == 0 {
+        // No trampoline: refuse rather than fabricate a job pointer.
+        if out_job_slot != 0 {
+            unsafe { *(out_job_slot as *mut usize) = 0 };
+        }
+        return out_job_slot;
+    }
+    type AssemblerFn = unsafe extern "system" fn(usize, usize, usize, usize) -> usize;
+    let original: AssemblerFn = unsafe { core::mem::transmute(orig) };
+    unsafe { original(out_job_slot, menu_owner, entity_id_ptr, name) }
+}
+
+/// Confirm-hook tallies: `(intercepted, warped)`.
+#[must_use]
+pub fn confirm_tallies() -> (usize, usize) {
+    (
+        CONFIRMS_INTERCEPTED.load(Ordering::SeqCst),
+        CONFIRMS_WARPED.load(Ordering::SeqCst),
+    )
 }
 
 /// Union handler for the row filter `FUN_14088be50`.
@@ -708,7 +890,7 @@ pub unsafe fn install_map_observers() -> usize {
                 "map-hooks: hooked {} @0x{address:x} (verified prologue)",
                 WORLDMAP_VIEWMODEL_CTOR.name
             ));
-            1 + unsafe { install_row_filter_observer() }
+            1 + unsafe { install_row_filter_observer() } + unsafe { install_confirm_interceptor() }
         }
         Err(status) => {
             crate::standalone_log(format_args!(
@@ -869,6 +1051,49 @@ unsafe fn install_row_filter_observer() -> usize {
             crate::standalone_log(format_args!(
                 "map-hooks: union registration for {} failed: {status:?} -- pins may still be \
                  fine, but this run cannot say whether they pass the filter",
+                seam.name
+            ));
+            0
+        }
+    }
+}
+
+/// Install the confirm interceptor. Without it, selecting an injected pin softlocks, so a
+/// failure here is logged loudly -- the pins are already in the list by then.
+///
+/// # Safety
+/// Game task thread.
+#[cfg(windows)]
+unsafe fn install_confirm_interceptor() -> usize {
+    let seam = crate::map_seams::WARP_JOB_ASSEMBLER;
+    let address = match unsafe { verify_seam(&seam) } {
+        Ok(address) => address,
+        Err(error) => {
+            crate::standalone_log(format_args!(
+                "map-hooks: {error} -- WITHOUT THIS HOOK, SELECTING AN INJECTED PIN SOFTLOCKS"
+            ));
+            return 0;
+        }
+    };
+    match unsafe {
+        er_hook::register_union_hook(
+            address,
+            warp_job_assembler_hook as er_hook::UnionFn,
+            &ORIG_WARP_JOB_ASSEMBLER,
+        )
+    } {
+        Ok(()) => {
+            crate::standalone_log(format_args!(
+                "map-hooks: intercepting {} @0x{address:x} -- invasion pins now run the LOCAL \
+                 warp instead of handing a synthetic id to Lua_Warp",
+                seam.name
+            ));
+            1
+        }
+        Err(status) => {
+            crate::standalone_log(format_args!(
+                "map-hooks: union registration for {} failed: {status:?} -- SELECTING AN \
+                 INJECTED PIN WILL SOFTLOCK",
                 seam.name
             ));
             0
