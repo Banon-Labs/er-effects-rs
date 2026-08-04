@@ -624,7 +624,36 @@ pub(crate) fn build_loaded_char_attributes() -> Option<[i32; STATS_ATTR_COUNT]> 
 /// Build the ProfileSelect stats line for `attributes[start..end]` as a NUL-terminated UTF-16
 /// Scaleform-HTML string for native SetText. Pure formatting ownership lives in `er-loading-portrait`;
 /// this compatibility name keeps the startup-hook callsite stable.
-pub(crate) use er_loading_portrait::build_title_stats_html_utf16 as build_stats_html_utf16;
+pub(crate) use er_loading_portrait::build_title_stats_compact_html_utf16 as build_stats_compact_html_utf16;
+
+fn merge_scaleform_html_utf16_lines(first: &[u16], second: &[u16]) -> Vec<u16> {
+    fn decode_line(line: &[u16]) -> Option<String> {
+        let body = line.strip_suffix(&[0]).unwrap_or(line);
+        if body.is_empty() {
+            return None;
+        }
+        String::from_utf16(body).ok().filter(|s| !s.is_empty())
+    }
+
+    let Some(first) = decode_line(first) else {
+        return second.to_vec();
+    };
+    let Some(second) = decode_line(second) else {
+        return first.encode_utf16().chain(core::iter::once(0)).collect();
+    };
+    let first = first
+        .strip_prefix("<p align=\"left\">")
+        .and_then(|s| s.strip_suffix("</p>"))
+        .unwrap_or(&first);
+    let second = second
+        .strip_prefix("<p align=\"left\">")
+        .and_then(|s| s.strip_suffix("</p>"))
+        .unwrap_or(&second);
+    let merged = format!(
+        "<p align=\"left\">{first} <font size=\"16\" color=\"#8f887a\">/</font> {second}</p>"
+    );
+    merged.encode_utf16().chain(core::iter::once(0)).collect()
+}
 
 /// Number of character attributes (Vig..Arc).
 /// Profile/save slot count on the ProfileSelect screen.
@@ -855,6 +884,7 @@ pub(crate) unsafe fn apply_row_slot_info_visibility(
     let fields = [
         (PROFILE_ROW_LEVEL_CAPTION_FIELD_NAME, want.level),
         (PROFILE_ROW_LEVEL_VALUE_FIELD_NAME, want.level),
+        (PROFILE_ROW_LOCATION_FIELD_NAME, want.location),
         (PROFILE_ROW_PLAYTIME_FIELD_NAME, want.play_time),
     ];
     let (mut hidden, mut shown) = (0usize, 0usize);
@@ -871,8 +901,8 @@ pub(crate) unsafe fn apply_row_slot_info_visibility(
         let rows = PROFILE_ROW_SLOT_INFO_HIDDEN_ROWS.fetch_add(1, Ordering::SeqCst) + 1;
         if rows <= 4 || rows.is_power_of_two() {
             append_autoload_debug(format_args!(
-                "save-picker: hid {hidden} per-slot field(s) on row=0x{row_proxy:x} (level={} play_time={} rows={rows})",
-                want.level, want.play_time
+                "save-picker: hid {hidden} per-slot field(s) on row=0x{row_proxy:x} (level={} location={} play_time={} rows={rows})",
+                want.level, want.location, want.play_time
             ));
         }
     }
@@ -893,21 +923,46 @@ pub(crate) unsafe fn apply_row_slot_info_visibility(
 ///
 /// `None` when the field is unreadable, in which case nothing is written and the row keeps the
 /// game's own playtime.
-pub(crate) unsafe fn stage_row_model_play_time(
+unsafe fn stage_row_model_menu_string(
     row_model: usize,
+    offset: usize,
     text: *const u16,
 ) -> Option<usize> {
-    let field = row_model + PROFILE_ROW_MODEL_PLAY_TIME_MENUSTRING_C8_OFFSET;
+    let field = row_model + offset;
     let displaced = unsafe { safe_read_usize(field) }?;
     unsafe { (field as *mut usize).write_volatile(text as usize) };
     Some(displaced)
 }
 
-/// Put back whatever [`stage_row_model_play_time`] displaced, so the game's structure is untouched
-/// outside the one native call we borrowed it for.
-pub(crate) unsafe fn restore_row_model_play_time(row_model: usize, displaced: usize) {
-    let field = row_model + PROFILE_ROW_MODEL_PLAY_TIME_MENUSTRING_C8_OFFSET;
+unsafe fn restore_row_model_menu_string(row_model: usize, offset: usize, displaced: usize) {
+    let field = row_model + offset;
     unsafe { (field as *mut usize).write_volatile(displaced) };
+}
+
+/// Point the row model's `Location` `CS::MenuString` at `text` and return the pointer it displaced,
+/// so the caller can put it back the moment the native populate returns.
+///
+/// Browse save-file rows use this for the last-saved timestamp because `Location` is the top-right
+/// field, on the same visual line as `PlayerName`; `PlayTime` remains hidden for those rows.
+pub(crate) unsafe fn stage_row_model_location(row_model: usize, text: *const u16) -> Option<usize> {
+    unsafe {
+        stage_row_model_menu_string(
+            row_model,
+            PROFILE_ROW_MODEL_LOCATION_MENUSTRING_90_OFFSET,
+            text,
+        )
+    }
+}
+
+/// Put back whatever [`stage_row_model_location`] displaced.
+pub(crate) unsafe fn restore_row_model_location(row_model: usize, displaced: usize) {
+    unsafe {
+        restore_row_model_menu_string(
+            row_model,
+            PROFILE_ROW_MODEL_LOCATION_MENUSTRING_90_OFFSET,
+            displaced,
+        )
+    };
 }
 
 /// Hook of the ProfileSelect row-populate template `FUN_1408758d0(rowModel, rowProxy, ...)`. Runs once
@@ -933,8 +988,9 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
         unsafe { std::mem::transmute(orig) };
     // The last-saved text and the row-model pointer it displaced, held across the native call: the
     // populate reads the pointer, so the buffer has to outlive it and the field has to go back
-    // afterwards.
-    let mut staged_play_time: Option<(usize, Vec<u16>)> = None;
+    // afterwards. For browse file rows it is staged into Location, not PlayTime, so filename and
+    // timestamp share one visual line.
+    let mut staged_location: Option<(usize, Vec<u16>)> = None;
     if row_model != 0
         && row_model != null
         && row_proxy != 0
@@ -951,20 +1007,20 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
             // PER-SLOT INFO FIELDS ON A BROWSE ROW. A browse row is a file or a navigation entry,
             // never a profile slot, so the record behind it is staged and its numbers are zeros: the
             // native fields render "Level 0" and "0:00:00" about a character that does not exist. So
-            // while the picker owns a row, the Level caption and value are always hidden -- there is
-            // no browse row they could be true of -- and the playtime slot is repurposed: a
-            // save-FILE row shows when that file was last written, and every row with no such time
-            // (navigation rows, and a file whose metadata was unreadable) hides the field instead of
-            // showing a fabricated date.
+            // while the picker owns a row, the Level caption/value and bottom PlayTime are always
+            // hidden -- there is no browse row they could be true of -- and the top-right Location
+            // slot is repurposed: a save-FILE row shows when that file was last written on the same
+            // visual line as the filename, while every row with no such time hides the field instead
+            // of showing a fabricated date.
             //
             // `None` (the vanilla character-slot views, title-screen Load Game list included) always
             // means "exactly what the game drew", and until a row was actually hidden the re-assert
             // does not run at all, so the vanilla path stays untouched.
             let slot_info = picker_row.and_then(save_picker_row_slot_info);
-            let (want_visibility, play_time) = match slot_info {
+            let (want_visibility, last_saved) = match slot_info {
                 Some(info) => (
-                    RowSlotFieldVisibility::browse_row(info.play_time.is_some()),
-                    info.play_time,
+                    RowSlotFieldVisibility::browse_row(info.location.is_some()),
+                    info.location,
                 ),
                 None => (RowSlotFieldVisibility::NATIVE, None),
             };
@@ -973,18 +1029,18 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
             {
                 unsafe { apply_row_slot_info_visibility(base, row_proxy, want_visibility) };
             }
-            if let Some(text) = play_time {
+            if let Some(text) = last_saved {
                 // NUL-terminated UTF-16 for the native SetText, kept alive past the populate call.
                 let utf16: Vec<u16> = text.encode_utf16().chain(core::iter::once(0)).collect();
-                match unsafe { stage_row_model_play_time(row_model, utf16.as_ptr()) } {
+                match unsafe { stage_row_model_location(row_model, utf16.as_ptr()) } {
                     Some(displaced) => {
                         let rows = PROFILE_ROW_LAST_SAVED_ROWS.fetch_add(1, Ordering::SeqCst) + 1;
                         if rows <= 4 || rows.is_power_of_two() {
                             append_autoload_debug(format_args!(
-                                "save-picker: row slot={slot} shows last-saved '{text}' in place of the native playtime (rows={rows})"
+                                "save-picker: row slot={slot} shows last-saved '{text}' in top-right Location (rows={rows})"
                             ));
                         }
-                        staged_play_time = Some((displaced, utf16));
+                        staged_location = Some((displaced, utf16));
                     }
                     None => {
                         let fails = PROFILE_ROW_LAST_SAVED_STAGE_FAILURES
@@ -992,40 +1048,34 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
                             + 1;
                         if fails <= 4 {
                             append_autoload_debug(format_args!(
-                                "save-picker: last-saved '{text}' NOT staged on slot={slot} -- row model 0x{row_model:x} playtime field unreadable (fails={fails})"
+                                "save-picker: last-saved '{text}' NOT staged on slot={slot} -- row model 0x{row_model:x} location field unreadable (fails={fails})"
                             ));
                         }
                     }
                 }
             }
-            // BROWSE PICKER ROWS (er-effects-rs-dly6): while the save-file picker owns the 05_010
-            // window the rows are directories/files, not save slots, so the per-slot character
-            // attributes are meaningless there (they rendered the ACTIVE save's characters' stats
-            // onto browse rows). Push the browse info instead: file rows show the file's real
-            // character slots (count + names/levels, parsed once per listing build and cached in
-            // the picker model); every other row pushes EMPTY lines so no attribute junk renders.
-            // Deliberately not gated on `stats_panel_enabled` -- if the 05_010 GFX edit (which
-            // adds the ErStats fields) is not live, the push fails closed and is counted, exactly
-            // like the stats push.
+            // BROWSE PICKER ROWS: one visual baseline. `PlayerName` carries the filename,
+            // `ErStats` carries the file details/navigation copy inline, and `Location` carries the
+            // timestamp. The asset places all three on the same y coordinate, so this is not a
+            // second subrow.
             let browse_lines = picker_row.and_then(save_picker_browse_stats_lines);
             if let Some((top, bottom)) = browse_lines {
                 let seen = PROFILE_STATS_ROW_POPULATES.fetch_add(1, Ordering::SeqCst) + 1;
-                let pushed_top =
-                    unsafe { push_stats_text_on_row(base, row_proxy, "ErStatsTop\0", &top) };
-                let pushed_bottom =
-                    unsafe { push_stats_text_on_row(base, row_proxy, "ErStatsBottom\0", &bottom) };
-                if pushed_top && pushed_bottom {
+                let merged = merge_scaleform_html_utf16_lines(&top, &bottom);
+                let pushed =
+                    unsafe { push_stats_text_on_row(base, row_proxy, "ErStats\0", &merged) };
+                if pushed {
                     let subs = PROFILE_STATS_SETTEXT_SUBS.fetch_add(1, Ordering::SeqCst) + 1;
                     if subs <= 4 {
                         append_autoload_debug(format_args!(
-                            "save-picker: pushed browse-row info slot={slot} on row=0x{row_proxy:x} (row_triggers={seen} subs={subs})"
+                            "save-picker: pushed inline browse-row info slot={slot} on row=0x{row_proxy:x} (row_triggers={seen} subs={subs})"
                         ));
                     }
                 } else {
                     let fails = PROFILE_STATS_PUSH_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
                     if fails <= 4 {
                         append_autoload_debug(format_args!(
-                            "save-picker: browse-row info push REJECTED slot={slot} on row=0x{row_proxy:x} top={pushed_top} bottom={pushed_bottom} (05_010 GFX edit not live?) (fails={fails})"
+                            "save-picker: inline browse-row info push REJECTED slot={slot} on row=0x{row_proxy:x} pushed={pushed} (05_010 GFX edit not live?) (fails={fails})"
                         ));
                     }
                 }
@@ -1042,34 +1092,24 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
                 });
                 if let Some(attrs) = attrs {
                     let seen = PROFILE_STATS_ROW_POPULATES.fetch_add(1, Ordering::SeqCst) + 1;
-                    // Split the eight attributes across the row's two text lines: the first four on the
-                    // top line (`ErStatsTop`), the last four on the bottom line (`ErStatsBottom`), using
-                    // the vertical space each row already has. Names are NUL-terminated for the C binder.
-                    let top = build_stats_html_utf16(&attrs, 0, STATS_ATTR_COUNT / 2);
-                    let bottom =
-                        build_stats_html_utf16(&attrs, STATS_ATTR_COUNT / 2, STATS_ATTR_COUNT);
-                    let pushed_top =
-                        unsafe { push_stats_text_on_row(base, row_proxy, "ErStatsTop\0", &top) };
-                    let pushed_bottom = unsafe {
-                        push_stats_text_on_row(base, row_proxy, "ErStatsBottom\0", &bottom)
-                    };
-                    debug_assert_eq!("ErStatsTop", er_gfx::title_05_010::STATS_FIELD_NAME_TOP);
-                    debug_assert_eq!(
-                        "ErStatsBottom",
-                        er_gfx::title_05_010::STATS_FIELD_NAME_BOTTOM
-                    );
-                    if pushed_top && pushed_bottom {
+                    // One compact stats line: all eight attributes use initial labels and a 16px font so
+                    // the row can be shorter without keeping two injected stat fields alive.
+                    let stats = build_stats_compact_html_utf16(&attrs);
+                    let pushed =
+                        unsafe { push_stats_text_on_row(base, row_proxy, "ErStats\0", &stats) };
+                    debug_assert_eq!("ErStats", er_gfx::title_05_010::STATS_FIELD_NAME);
+                    if pushed {
                         let subs = PROFILE_STATS_SETTEXT_SUBS.fetch_add(1, Ordering::SeqCst) + 1;
                         if subs <= 4 {
                             append_autoload_debug(format_args!(
-                                "stats-text: pushed ErStatsTop+Bottom slot={slot} on row=0x{row_proxy:x} (row_triggers={seen} subs={subs})"
+                                "stats-text: pushed merged ErStats slot={slot} on row=0x{row_proxy:x} (row_triggers={seen} subs={subs})"
                             ));
                         }
                     } else {
                         let fails = PROFILE_STATS_PUSH_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
                         if fails <= 4 {
                             append_autoload_debug(format_args!(
-                                "stats-text: ErStats push REJECTED slot={slot} on row=0x{row_proxy:x} top={pushed_top} bottom={pushed_bottom} (05_010 GFX edit not live?) (fails={fails})"
+                                "stats-text: merged ErStats push REJECTED slot={slot} on row=0x{row_proxy:x} pushed={pushed} (05_010 GFX edit not live?) (fails={fails})"
                             ));
                         }
                     }
@@ -1081,8 +1121,8 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
     let ret = unsafe { f(row_model, row_proxy, arg3, arg4) };
     // The populate has read the string; give the row model its own pointer back so our borrow does
     // not outlive the call that needed it. `utf16` drops here, after the read, never before.
-    if let Some((displaced, _utf16)) = staged_play_time {
-        unsafe { restore_row_model_play_time(row_model, displaced) };
+    if let Some((displaced, _utf16)) = staged_location {
+        unsafe { restore_row_model_location(row_model, displaced) };
     }
     ret
 }
