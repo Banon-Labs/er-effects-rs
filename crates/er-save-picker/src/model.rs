@@ -1,9 +1,9 @@
 //! Shared in-game save-file picker model.
 //!
-//! Pure filesystem/pagination state for the two in-game file-picker menus (the startup
+//! Pure filesystem/scroll-window state for the two in-game file-picker menus (the startup
 //! missing-save picker and the System>Quit "Load Character from File" picker). Both menus render
 //! through the native `05_010_ProfileSelect` 10-row window, so this model maps a browsable
-//! directory listing onto row pages. The UI layers own all native staging (ProfileSummary preview
+//! directory listing onto a sliding native row window. The UI layers own all native staging (ProfileSummary preview
 //! records, window submit/close); this module owns what the rows MEAN.
 //!
 //! Extension filtering follows the active runtime flavor: vanilla offers `.sl2`; Seamless offers
@@ -23,8 +23,7 @@
 //! 1. `[ new ]`       -- destination intent only, and FIRST;
 //! 2. `[..] <parent>` -- only when the current directory has a parent (absent at a drive root);
 //! 3. `[ C: > Z: ]`   -- the drive cycler, only when more than one drive is mounted;
-//! 4. the current page's directory / save-file entries;
-//! 5. `[ page N/M ]`  -- only when the listing overflows one page.
+//! 4. the current scroll window's directory / save-file entries.
 //!
 //! `[ new ]` SITS ABOVE THE NAVIGATION ROWS, which is the one place the two intents' layouts
 //! differ, and it is deliberate. Since the Save Game row press opens this browser with no question
@@ -122,7 +121,7 @@ impl PickerEntry {
     }
 }
 
-/// What a row on the CURRENT page means. Produced by [`SavePickerModel::row_meaning`]; the UI
+/// What a row in the CURRENT native scroll window means. Produced by [`SavePickerModel::row_meaning`]; the UI
 /// layer stages row text from this and routes slot activation through it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PickerRow {
@@ -140,7 +139,11 @@ pub enum PickerRow {
     File(PathBuf),
     /// Destination intent only: save into the browsed folder under the loaded save's own filename.
     NewFile(PathBuf),
-    /// Advance to the next page (wraps to the first page after the last).
+    /// Scroll the native row window toward earlier directory entries.
+    ScrollUp,
+    /// Scroll the native row window toward later directory entries.
+    ScrollDown,
+    /// Deprecated compatibility variant: pagination was removed in favor of a scroll window.
     NextPage,
     /// Row beyond the visible rows; it is staged UNOCCUPIED so the native builder omits it, and
     /// activation is a no-op.
@@ -162,6 +165,8 @@ pub fn picker_row_has_last_saved_time(row: &PickerRow) -> bool {
         | PickerRow::AtRoot
         | PickerRow::Dir(_)
         | PickerRow::NewFile(_)
+        | PickerRow::ScrollUp
+        | PickerRow::ScrollDown
         | PickerRow::NextPage
         | PickerRow::Empty => false,
     }
@@ -233,7 +238,7 @@ pub fn format_last_saved(secs: i64, utc_offset_seconds: i64) -> Option<String> {
 }
 
 /// Outcome of activating a row. `Repopulate` means the listing changed (new directory, new drive or
-/// new page) and the UI must re-stage row records and re-present the window.
+/// new scroll window) and the UI must re-stage row records and re-present the window.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PickerActivation {
     PickedFile(PathBuf),
@@ -253,14 +258,18 @@ pub struct SavePickerModel {
     extensions: Vec<String>,
     /// Dirs first (name order), then files (most recently modified first).
     entries: Vec<PickerEntry>,
-    page: usize,
+    scroll_offset: usize,
     /// Highlighted row index (0..PICKER_ROW_COUNT) for the overlay picker. Clamped to a
     /// selectable (non-Empty) row on every listing change.
     cursor: usize,
     /// Last rejection/status line the picker should render on the current surface. Cleared by
     /// navigation or a fresh pick attempt so a stale error never follows the user into another
-    /// folder/page.
+    /// folder/scroll window.
     status_message: Option<PickerStatusMessage>,
+    /// Menu-pump dwell counter for native edge scrolling. The native cursor cannot report an
+    /// attempted move past the first/last row, so while it rests on an edge this counter turns a held
+    /// edge into steady one-row window slides.
+    edge_scroll_ticks: u8,
     /// Mounted drives that browse as folders (cached at open). Two or more of them add the drive
     /// cycler row; the overlay picker also cycles them with left/right.
     drives: Vec<PathBuf>,
@@ -537,9 +546,10 @@ impl SavePickerModel {
             extension: filters.join("/"),
             extensions: filters,
             entries: Vec::new(),
-            page: 0,
+            scroll_offset: 0,
             cursor: 0,
             status_message: None,
+            edge_scroll_ticks: 0,
             drives: enumerate_drives(),
             last_dir_per_drive: HashMap::new(),
             intent,
@@ -607,40 +617,75 @@ impl SavePickerModel {
             .then(|| self.pinned_row_count() + usize::from(self.has_parent_row()))
     }
 
-    /// Row index of the page cycler, when the listing overflows one page. It sits immediately
-    /// after the CURRENT page's last entry, so a short final page has no gap above it -- and the
-    /// native cursor re-clamp lands the highlight back on the cycler after paging.
+    /// Row index of the old page cycler. Pagination is removed; overflow is represented by scroll
+    /// affordance rows plus native-window restaging instead.
     pub fn next_page_row(&self) -> Option<usize> {
-        (self.page_count() > 1).then(|| self.entry_row_base() + self.page_entries().len())
+        None
+    }
+
+    pub fn scroll_up_row(&self) -> Option<usize> {
+        (self.scroll_offset > 0).then_some(self.entry_row_base())
+    }
+
+    pub fn scroll_down_row(&self) -> Option<usize> {
+        (self.scroll_offset < self.max_scroll_offset())
+            .then(|| self.visible_row_count().saturating_sub(1))
+    }
+
+    fn entry_window_row_base(&self) -> usize {
+        self.entry_row_base() + usize::from(self.scroll_up_row().is_some())
     }
 
     /// Rows the window actually shows. Slots at or beyond this are staged UNOCCUPIED so the native
     /// list builder omits them (no name, no level, no playtime).
     pub fn visible_row_count(&self) -> usize {
-        let rows = self.entry_row_base()
-            + self.page_entries().len()
-            + usize::from(self.next_page_row().is_some());
+        let rows = self.entry_window_row_base()
+            + self.window_entries().len()
+            + usize::from(self.scroll_offset < self.max_scroll_offset());
         // Never zero: an empty single-drive root has nothing above and nothing to list, and a
         // zero-row native list would leave the window with no selectable item at all. Row 0
         // becomes the `[ root ]` dead-end marker instead.
         rows.max(1)
     }
 
-    /// Entries that fit when NO page cycler is needed (every row after the fixed rows is an entry).
-    fn max_entries_single_page(&self) -> usize {
-        PICKER_ROW_COUNT.saturating_sub(self.entry_row_base())
+    /// Directory/save entries that fit in the native ten-row transport after fixed rows and visible
+    /// scroll affordance rows.
+    fn entry_window_capacity(&self) -> usize {
+        let fixed = self.entry_row_base()
+            + usize::from(self.scroll_offset > 0)
+            + usize::from(self.scroll_offset < self.max_scroll_offset());
+        PICKER_ROW_COUNT.saturating_sub(fixed).max(1)
     }
 
-    /// Entries per page. A listing that fits uses every remaining row; one that overflows spends
-    /// one row on the page cycler. Non-circular: the branch reads the ENTRY count, never the page
-    /// count, so `page_count` can derive from it without recursion.
-    pub fn entries_per_page(&self) -> usize {
-        let single = self.max_entries_single_page();
-        if self.entries.len() <= single {
-            single.max(1)
-        } else {
-            single.saturating_sub(1).max(1)
+    fn max_scroll_offset(&self) -> usize {
+        let no_marker_capacity = PICKER_ROW_COUNT
+            .saturating_sub(self.entry_row_base())
+            .max(1);
+        if self.entries.len() <= no_marker_capacity {
+            return 0;
         }
+        let end_capacity = PICKER_ROW_COUNT
+            .saturating_sub(self.entry_row_base() + 1)
+            .max(1);
+        self.entries.len().saturating_sub(end_capacity)
+    }
+
+    fn clamp_scroll_offset(&mut self) {
+        self.scroll_offset = self.scroll_offset.min(self.max_scroll_offset());
+    }
+
+    fn reset_edge_scroll_dwell(&mut self) {
+        self.edge_scroll_ticks = 0;
+    }
+
+    /// Compatibility name for callers/tests that care how many entries fit without scrolling.
+    fn max_entries_single_page(&self) -> usize {
+        self.entry_window_capacity()
+    }
+
+    /// Compatibility name for callers/tests that care how many entries fit in one native window.
+    pub fn entries_per_page(&self) -> usize {
+        self.entry_window_capacity()
     }
 
     /// Destination target for the `[ new ]` row: the loaded save's own filename in the browsed
@@ -790,11 +835,63 @@ impl SavePickerModel {
     }
 
     pub fn page(&self) -> usize {
-        self.page
+        0
     }
 
     pub fn page_count(&self) -> usize {
-        self.entries.len().div_ceil(self.entries_per_page()).max(1)
+        1
+    }
+
+    pub fn scroll_offset(&self) -> usize {
+        self.scroll_offset
+    }
+
+    pub fn scroll_max(&self) -> usize {
+        self.max_scroll_offset()
+    }
+
+    pub fn scroll_window_one(&mut self, down: bool) -> bool {
+        let old = self.scroll_offset;
+        if down {
+            self.scroll_offset = (self.scroll_offset + 1).min(self.max_scroll_offset());
+        } else {
+            self.scroll_offset = self.scroll_offset.saturating_sub(1);
+        }
+        let changed = self.scroll_offset != old;
+        if changed {
+            self.clear_status_message();
+        }
+        changed
+    }
+
+    /// Native `05_010` edge-scroll adapter. Returns true when row records must be restaged.
+    pub fn edge_scroll_from_native_cursor_tick(&mut self, cursor: usize) -> bool {
+        const EDGE_SCROLL_DWELL_TICKS: u8 = 8;
+        let first_content_row = self
+            .entry_row_base()
+            .min(PICKER_ROW_COUNT.saturating_sub(1));
+        let last_visible_row = self
+            .visible_row_count()
+            .saturating_sub(1)
+            .min(PICKER_ROW_COUNT.saturating_sub(1));
+        let direction =
+            if cursor >= last_visible_row && self.scroll_offset < self.max_scroll_offset() {
+                Some(true)
+            } else if cursor <= first_content_row && self.scroll_offset > 0 {
+                Some(false)
+            } else {
+                None
+            };
+        let Some(down) = direction else {
+            self.reset_edge_scroll_dwell();
+            return false;
+        };
+        self.edge_scroll_ticks = self.edge_scroll_ticks.saturating_add(1);
+        if self.edge_scroll_ticks < EDGE_SCROLL_DWELL_TICKS {
+            return false;
+        }
+        self.edge_scroll_ticks = 0;
+        self.scroll_window_one(down)
     }
 
     pub fn entry_count(&self) -> usize {
@@ -818,7 +915,8 @@ impl SavePickerModel {
     /// log records the failure.
     pub fn refresh(&mut self) {
         self.entries.clear();
-        self.page = 0;
+        self.scroll_offset = 0;
+        self.reset_edge_scroll_dwell();
         // Owned copies so the per-entry predicate borrows nothing from `self` while the listing is
         // being built. `save_picker_accepts` is the SAME function the OS dialog's post-return check
         // calls, which is what keeps the two surfaces from disagreeing about what a save is.
@@ -909,14 +1007,13 @@ impl SavePickerModel {
         self.entries.append(&mut files);
     }
 
-    fn page_entries(&self) -> &[PickerEntry] {
-        let per_page = self.entries_per_page();
-        let start = self.page * per_page;
-        let end = (start + per_page).min(self.entries.len());
+    fn window_entries(&self) -> &[PickerEntry] {
+        let start = self.scroll_offset.min(self.entries.len());
+        let end = (start + self.entry_window_capacity()).min(self.entries.len());
         self.entries.get(start..end).unwrap_or(&[])
     }
 
-    /// Meaning of `row` (0..PICKER_ROW_COUNT) on the current page.
+    /// Meaning of `row` (0..PICKER_ROW_COUNT) in the current scroll window.
     pub fn row_meaning(&self, row: usize) -> PickerRow {
         if row >= PICKER_ROW_COUNT {
             return PickerRow::Empty;
@@ -932,12 +1029,18 @@ impl SavePickerModel {
         if self.drive_row() == Some(row) {
             return PickerRow::DriveCycle;
         }
+        if self.scroll_up_row() == Some(row) {
+            return PickerRow::ScrollUp;
+        }
+        if self.scroll_down_row() == Some(row) {
+            return PickerRow::ScrollDown;
+        }
         if self.next_page_row() == Some(row) {
             return PickerRow::NextPage;
         }
         match row
-            .checked_sub(self.entry_row_base())
-            .and_then(|idx| self.page_entries().get(idx))
+            .checked_sub(self.entry_window_row_base())
+            .and_then(|idx| self.window_entries().get(idx))
         {
             Some(PickerEntry::Dir { path, .. }) => PickerRow::Dir(path.clone()),
             Some(PickerEntry::File { path, .. }) => PickerRow::File(path.clone()),
@@ -949,12 +1052,12 @@ impl SavePickerModel {
         }
     }
 
-    /// The cached character summaries behind `row` when it is a save-file row on the current page
-    /// (the file's active loadable characters, parsed once at listing build). `None` for every
-    /// non-file row (up, drive cycler, `[ new ]`, directory, page cycler, placeholder).
+    /// The cached character summaries behind `row` when it is a save-file row in the current scroll
+    /// window (the file's active loadable characters, parsed once at listing build). `None` for every
+    /// non-file row (up, drive cycler, `[ new ]`, directory, placeholder).
     ///
     /// Derived from the SAME `row_meaning` the label comes from, then cross-checked: the entry read
-    /// at the page index must be the very file the label named. One decision point plus a proof,
+    /// at the scroll-window index must be the very file the label named. One decision point plus a proof,
     /// so the stats text and the row label cannot describe different entries -- and if they ever
     /// disagree the row renders BLANK rather than a neighbour's character.
     pub fn row_file_characters(&self, row: usize) -> Option<&[crate::slots::SaveSlotInfo]> {
@@ -962,7 +1065,7 @@ impl SavePickerModel {
             return None;
         };
         match self
-            .page_entries()
+            .window_entries()
             .get(row.checked_sub(self.entry_row_base())?)
         {
             Some(PickerEntry::File { path, chars, .. }) if *path == labelled => Some(chars),
@@ -975,7 +1078,7 @@ impl SavePickerModel {
     /// listing build could not read.
     ///
     /// Cross-checked exactly like [`row_file_characters`](Self::row_file_characters), and for the
-    /// same reason: the entry read at the page index must be the very file the label named, or the
+    /// same reason: the entry read at the scroll-window index must be the very file the label named, or the
     /// row would date itself from a neighbour. Reads only what the listing build already collected
     /// (`PickerEntry::File::modified`, the dirent metadata the sort order is derived from), so no
     /// row query ever touches the filesystem.
@@ -984,7 +1087,7 @@ impl SavePickerModel {
             return None;
         };
         match self
-            .page_entries()
+            .window_entries()
             .get(row.checked_sub(self.entry_row_base())?)
         {
             Some(PickerEntry::File { path, modified, .. }) if *path == labelled => *modified,
@@ -1021,10 +1124,15 @@ impl SavePickerModel {
             }
             PickerRow::File(path) => PickerActivation::PickedFile(path),
             PickerRow::NewFile(path) => PickerActivation::PickedNewFile(path),
-            PickerRow::NextPage => {
-                self.page = (self.page + 1) % self.page_count();
+            PickerRow::ScrollUp => {
+                self.cycle_page(false);
                 PickerActivation::Repopulate
             }
+            PickerRow::ScrollDown => {
+                self.cycle_page(true);
+                PickerActivation::Repopulate
+            }
+            PickerRow::NextPage => PickerActivation::Ignored,
             PickerRow::AtRoot | PickerRow::Empty => PickerActivation::Ignored,
         }
     }
@@ -1084,9 +1192,9 @@ impl SavePickerModel {
                 .unwrap_or("?")
                 .to_owned(),
             PickerRow::NewFile(_) => PICKER_NEW_FILE_LABEL.to_owned(),
-            PickerRow::NextPage => {
-                format!("[ page {}/{} ]", self.page + 1, self.page_count())
-            }
+            PickerRow::ScrollUp => "[ SCROLL ^ ]".to_owned(),
+            PickerRow::ScrollDown => "[ SCROLL v ]".to_owned(),
+            PickerRow::NextPage => String::new(),
             PickerRow::Empty => String::new(),
         };
         truncate_utf16(&label, PICKER_ROW_NAME_UTF16_MAX)
@@ -1101,8 +1209,8 @@ impl SavePickerModel {
         }
     }
 
-    /// Two auxiliary display lines for a non-file row, rendered by the native `05_010`
-    /// `ErStatsTop` / `ErStatsBottom` fields while the in-game picker owns the ProfileSelect rows.
+    /// Two auxiliary display fragments for a non-file row, rendered through the injected native
+    /// `05_010` `ErStats` field while the in-game picker owns the ProfileSelect rows.
     ///
     /// Row names stay inside the 16-UTF-16 `ProfileSummary` budget; explanatory text lives here
     /// instead. File rows return `None` because their two stats lines are real character summaries,
@@ -1152,10 +1260,18 @@ impl SavePickerModel {
                         .unwrap_or("the loaded save")
                 ),
             )),
-            PickerRow::NextPage => Some((
-                format!("PAGE {}/{}", self.page + 1, self.page_count()),
-                "Show next page".to_owned(),
+            PickerRow::ScrollUp => Some((
+                "MORE ABOVE".to_owned(),
+                format!("Show rows before {}", self.scroll_offset + 1),
             )),
+            PickerRow::ScrollDown => Some((
+                "MORE BELOW".to_owned(),
+                format!(
+                    "Show rows after {}",
+                    self.scroll_offset + self.window_entries().len()
+                ),
+            )),
+            PickerRow::NextPage => None,
             PickerRow::File(_) | PickerRow::Empty => None,
         }
     }
@@ -1187,7 +1303,9 @@ impl SavePickerModel {
                     .and_then(|name| name.to_str())
                     .unwrap_or("?")
             ),
-            PickerRow::NextPage => format!("[PAGE {}/{}]", self.page + 1, self.page_count()),
+            PickerRow::ScrollUp => "[ SCROLL UP ]".to_owned(),
+            PickerRow::ScrollDown => "[ SCROLL DOWN ]".to_owned(),
+            PickerRow::NextPage => String::new(),
             PickerRow::Empty => String::new(),
         };
         label.to_ascii_uppercase()
@@ -1226,6 +1344,7 @@ impl SavePickerModel {
     /// Move the highlight one selectable row up (`down=false`) or down, wrapping. No-op when only
     /// one row is selectable.
     pub fn move_cursor(&mut self, down: bool) {
+        self.reset_edge_scroll_dwell();
         let selectable: Vec<usize> = (0..PICKER_ROW_COUNT)
             .filter(|&r| self.row_selectable(r))
             .collect();
@@ -1245,7 +1364,7 @@ impl SavePickerModel {
         self.cursor = selectable[next];
     }
 
-    /// Activate the highlighted row. On a listing change (dir/drive/page) the cursor resets to the
+    /// Activate the highlighted row. On a listing change (dir/drive/scroll) the cursor resets to the
     /// first selectable row so the highlight never lands on a stale index.
     pub fn activate_cursor(&mut self) -> PickerActivation {
         let result = self.activate(self.cursor);
@@ -1255,17 +1374,17 @@ impl SavePickerModel {
         result
     }
 
-    /// Move to the previous/next page (wrapping), resetting the cursor. No-op when single-page.
+    /// Compatibility wrapper for old overlay callers: move the scroll window by one native page.
     pub fn cycle_page(&mut self, forward: bool) {
-        let count = self.page_count();
-        if count < 2 {
+        let cap = self.entry_window_capacity();
+        if self.max_scroll_offset() == 0 {
             return;
         }
         self.clear_status_message();
-        self.page = if forward {
-            (self.page + 1) % count
+        self.scroll_offset = if forward {
+            (self.scroll_offset + cap).min(self.max_scroll_offset())
         } else {
-            (self.page + count - 1) % count
+            self.scroll_offset.saturating_sub(cap)
         };
         self.cursor = self.first_selectable_row();
     }
@@ -1283,13 +1402,14 @@ impl SavePickerModel {
         }
     }
 
-    /// Long-form status line for the auxiliary text fields (full current dir + page info).
+    /// Long-form status line for the auxiliary text fields (full current dir + scroll info).
     pub fn status_line(&self) -> String {
         format!(
-            "{}  (page {}/{}, *.{})",
+            "{}  (rows {}-{}/{}, *.{})",
             self.current_dir.display(),
-            self.page + 1,
-            self.page_count(),
+            self.scroll_offset + 1,
+            (self.scroll_offset + self.window_entries().len()).max(1),
+            self.entries.len().max(1),
             self.extension
         )
     }
@@ -1332,9 +1452,10 @@ mod tests {
                     }],
                 })
                 .collect(),
-            page: 0,
+            scroll_offset: 0,
             cursor: 0,
             status_message: None,
+            edge_scroll_ticks: 0,
             drives: Vec::new(),
             last_dir_per_drive: HashMap::new(),
             intent,
@@ -1857,14 +1978,12 @@ mod tests {
             model.row_auxiliary_lines(2),
             Some(("SWITCH DRIVE".to_owned(), "Z: -> C:".to_owned()))
         );
-        let page_row = model
-            .next_page_row()
-            .expect("overflowing destination listing has a page row");
-        assert_eq!(page_row, 9);
-        assert_eq!(model.row_meaning(page_row), PickerRow::NextPage);
+        assert_eq!(model.next_page_row(), None);
+        assert_eq!(model.visible_row_count(), PICKER_ROW_COUNT);
+        assert_eq!(model.row_meaning(9), PickerRow::ScrollDown);
         assert_eq!(
-            model.row_auxiliary_lines(page_row),
-            Some(("PAGE 1/3".to_owned(), "Show next page".to_owned()))
+            model.row_auxiliary_lines(9),
+            Some(("MORE BELOW".to_owned(), "Show rows after 6".to_owned()))
         );
     }
 
@@ -1897,8 +2016,8 @@ mod tests {
         assert_eq!(dest.activate(0), PickerActivation::PickedNewFile(target));
     }
 
-    /// Status/rejection text also lives in the auxiliary lines, so the runtime hook can render it
-    /// through the same `ErStatsTop` / `ErStatsBottom` fields while leaving row names short.
+    /// Status/rejection text also lives in the auxiliary text, so the runtime hook can render it
+    /// through the same `ErStats` field while leaving row names short.
     #[test]
     fn status_message_auxiliary_lines_override_row_zero_only() {
         let mut model = model_with(PickerIntent::LoadSource, r"Z:\saves", 2);
@@ -2278,6 +2397,53 @@ mod tests {
         assert_eq!(label_of(&dest, 1), "[..] Roaming");
     }
 
+    #[test]
+    fn long_listing_uses_scroll_window_instead_of_page_row() {
+        let model = model_with(PickerIntent::LoadSource, "Z:\\saves", PICKER_ROW_COUNT + 20);
+        assert_eq!(model.page_count(), 1);
+        assert_eq!(model.next_page_row(), None);
+        assert_eq!(model.scroll_offset(), 0);
+        assert_eq!(model.scroll_max(), 22);
+        assert_eq!(model.visible_row_count(), PICKER_ROW_COUNT);
+        assert_eq!(
+            model.row_meaning(PICKER_ROW_COUNT - 1),
+            PickerRow::ScrollDown
+        );
+    }
+
+    #[test]
+    fn native_cursor_edge_tick_slides_the_scroll_window() {
+        let mut model = model_with(PickerIntent::LoadSource, "Z:\\saves", PICKER_ROW_COUNT + 20);
+        for _ in 0..7 {
+            assert!(!model.edge_scroll_from_native_cursor_tick(PICKER_ROW_COUNT - 1));
+            assert_eq!(model.scroll_offset(), 0);
+        }
+        assert!(model.edge_scroll_from_native_cursor_tick(PICKER_ROW_COUNT - 1));
+        assert_eq!(model.scroll_offset(), 1);
+        for _ in 0..8 {
+            model.edge_scroll_from_native_cursor_tick(0);
+        }
+        assert_eq!(model.scroll_offset(), 0);
+    }
+
+    #[test]
+    fn cycle_page_compatibility_moves_scroll_window_without_page_row() {
+        let mut model = model_with(PickerIntent::LoadSource, "Z:\\saves", PICKER_ROW_COUNT + 20);
+        model.cycle_page(true);
+        assert_eq!(model.next_page_row(), None);
+        assert_eq!(model.scroll_offset(), 8);
+        assert_eq!(model.row_meaning(1), PickerRow::ScrollUp);
+        assert_eq!(
+            model.row_meaning(2),
+            PickerRow::File(PathBuf::from("Z:\\saves").join("save8.sl2"))
+        );
+        model.cycle_page(false);
+        assert_eq!(model.scroll_offset(), 1);
+        assert_eq!(model.row_meaning(1), PickerRow::ScrollUp);
+        assert!(matches!(model.activate(1), PickerActivation::Repopulate));
+        assert_eq!(model.scroll_offset(), 0);
+    }
+
     /// Rows beyond the listing must be reported as NOT visible, so the staging layer marks their
     /// native slots unoccupied and the builder omits them -- that is what stops a short listing
     /// rendering placeholder rows with a name, `Level 0` and `0:00:00`.
@@ -2297,11 +2463,10 @@ mod tests {
             assert_eq!(dest.row_meaning(row), PickerRow::Empty);
             assert!(dest.row_label_utf16(row).is_empty());
         }
-        // A page cycler is INSIDE the visible count -- it must never be dropped as a placeholder.
+        // Overflow is handled by scroll state, not a visible page-cycler row.
         let paged = model_with(PickerIntent::LoadSource, "Z:\\saves", PICKER_ROW_COUNT + 4);
-        let pager = paged.next_page_row().expect("overflowing listing pages");
-        assert!(pager < paged.visible_row_count());
-        assert_eq!(paged.row_meaning(pager), PickerRow::NextPage);
+        assert_eq!(paged.next_page_row(), None);
+        assert!(paged.scroll_max() > 0);
         assert_eq!(paged.visible_row_count(), PICKER_ROW_COUNT);
     }
 
@@ -2329,28 +2494,27 @@ mod tests {
         }
     }
 
-    /// A listing that fits uses every remaining row; one entry more spends a row on the cycler.
+    /// A listing that overflows keeps every row for content; paging rows stay gone.
     #[test]
-    fn the_page_cycler_appears_only_when_the_listing_overflows() {
+    fn overflowing_listing_uses_scroll_window_without_page_cycler() {
         let fits = model_with(PickerIntent::LoadSource, "Z:\\saves", PICKER_ROW_COUNT - 1);
         assert_eq!(fits.page_count(), 1);
         assert_eq!(fits.next_page_row(), None);
         assert_eq!(fits.entries_per_page(), PICKER_ROW_COUNT - 1);
 
-        let overflows = model_with(PickerIntent::LoadSource, "Z:\\saves", PICKER_ROW_COUNT);
+        let mut overflows = model_with(PickerIntent::LoadSource, "Z:\\saves", PICKER_ROW_COUNT);
         assert_eq!(overflows.entries_per_page(), PICKER_ROW_COUNT - 2);
-        assert_eq!(overflows.page_count(), 2);
-        assert_eq!(overflows.next_page_row(), Some(PICKER_ROW_COUNT - 1));
-        // Second page holds the remainder, and the cycler moves up to sit under the last entry.
-        let mut overflows = overflows;
+        assert_eq!(overflows.page_count(), 1);
+        assert_eq!(overflows.next_page_row(), None);
+        assert_eq!(overflows.visible_row_count(), PICKER_ROW_COUNT);
         overflows.cycle_page(true);
+        assert_eq!(overflows.scroll_offset(), 2);
+        assert_eq!(overflows.row_meaning(1), PickerRow::ScrollUp);
         assert_eq!(
-            overflows.row_meaning(1),
-            PickerRow::File(PathBuf::from("Z:\\saves").join("save8.sl2"))
+            overflows.row_meaning(2),
+            PickerRow::File(PathBuf::from("Z:\\saves").join("save2.sl2"))
         );
-        assert_eq!(overflows.next_page_row(), Some(3));
-        assert_eq!(overflows.row_meaning(3), PickerRow::NextPage);
-        assert_eq!(overflows.visible_row_count(), 4);
+        assert_eq!(overflows.next_page_row(), None);
     }
 
     #[test]
