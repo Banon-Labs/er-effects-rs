@@ -411,8 +411,27 @@ pub fn describe_catalog(catalog: &InvasionWarpCatalog) -> String {
         .last()
         .map(|target| target.block.to_string())
         .unwrap_or_else(|| "none".to_owned());
+    // Whether this is the shipped table or one a mod rewrote in memory. The counts above cannot
+    // answer it -- a mod that MOVES points without adding or removing any leaves them identical --
+    // so fold every position and yaw into the same canonical form the on-disk containers hash to.
+    // Reported at catalog-read time (boot) rather than at pin injection, because it describes the
+    // DATA, and waiting for a world load to learn it would be waiting for no reason.
+    let content: Vec<_> = catalog
+        .targets()
+        .iter()
+        .map(|target| (target.block, target.position, target.yaw))
+        .collect();
+    let digest = crate::aip::catalog_content_digest(&content);
+    let vanilla = crate::aip::AIP_CATALOG_CONTENT_DIGEST_VANILLA;
+    let provenance = if digest == vanilla {
+        "VANILLA (byte-identical to the shipped containers)"
+    } else {
+        "MODIFIED IN MEMORY (a mod rewrote the spawn points; on-disk data does not describe them)"
+    };
     format!(
-        "invasion-warp catalog: targets={} blocks={} areas={} first_block={first} last_block={last}",
+        "invasion-warp catalog: targets={} blocks={} areas={} first_block={first} \
+         last_block={last} content_digest={digest:#018x} vs vanilla {vanilla:#018x} -> \
+         {provenance}",
         summary.target_count, summary.block_count, summary.area_count
     )
 }

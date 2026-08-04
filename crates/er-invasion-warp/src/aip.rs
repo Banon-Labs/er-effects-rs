@@ -171,6 +171,57 @@ pub fn fnv1a64(bytes: &[u8]) -> u64 {
     hash
 }
 
+/// Digest of a catalog's CONTENT, computable identically from live memory and from disk.
+///
+/// This exists to answer one question with a measurement instead of an argument: **does a mod
+/// rewrite the invasion point table in memory, or only change how the game picks from it?**
+/// Seamless Co-op modifies invasion locations at runtime, and the answer decides whether on-disk
+/// data can ever be trusted to describe what a player will actually encounter.
+///
+/// The existing count-based oracle cannot answer it -- a mod that MOVES points without adding or
+/// removing any leaves 365 blocks and 7073 points looking untouched. This folds every position and
+/// yaw, so a moved point changes the digest.
+///
+/// Canonical form: blocks in ascending raw-BlockId order, each contributed as the exact `.aip`
+/// payload [`encode_aip`] produces. That is what makes the live and on-disk sides comparable --
+/// the disk side is literally those bytes, and the live side reconstructs them.
+///
+/// `targets` must be grouped by block and ordered by point index within each block, which is the
+/// order the catalog already guarantees.
+#[must_use]
+pub fn catalog_content_digest(targets: &[(BlockKey, [f32; 3], f32)]) -> u64 {
+    let mut blocks: Vec<BlockKey> = targets.iter().map(|(block, _, _)| *block).collect();
+    blocks.sort_unstable_by_key(|block| block.raw());
+    blocks.dedup();
+
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for block in blocks {
+        let points: Vec<([f32; 3], f32)> = targets
+            .iter()
+            .filter(|(candidate, _, _)| *candidate == block)
+            .map(|(_, position, yaw)| (*position, *yaw))
+            .collect();
+        let payload = encode_aip(block, &points);
+        for byte in &payload {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    hash
+}
+
+/// [`catalog_content_digest`] over the VANILLA on-disk containers (ELDEN RING 1.16.2): all 365
+/// entries, 7073 points, blocks in ascending raw-BlockId order.
+///
+/// A live catalog that hashes to this is byte-for-byte the shipped table. A live catalog that
+/// does NOT -- while still reporting 365 blocks and 7073 points, as the count oracle would --
+/// has been rewritten in memory by a mod, and that is the signal that on-disk data cannot
+/// describe what the player will actually meet.
+///
+/// This is a fingerprint, not game data: 8 bytes derived from the containers, which is exactly
+/// the form this repo versions instead of the bytes themselves.
+pub const AIP_CATALOG_CONTENT_DIGEST_VANILLA: u64 = 0xadf8_f8d3_2e3e_8504;
+
 /// Fingerprints of the shipped auto-invade-point data (ELDEN RING 1.16.2), so a corpus test
 /// can assert it is looking at the same bytes these RE claims were made about without any
 /// game-derived file entering the repo.

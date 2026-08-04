@@ -718,6 +718,33 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
             return;
         }
     };
+    // Is this the shipped table, or has a mod rewritten it in memory?
+    //
+    // The count oracle cannot tell: Seamless Co-op modifies invasion locations at runtime, and a
+    // mod that MOVES points without adding or removing any leaves 365 blocks / 7073 points
+    // looking untouched. This folds every position and yaw into the same canonical form the
+    // on-disk containers hash to, so a moved point is visible. It is also the measurement that
+    // decides whether on-disk data could ever describe what a player will actually encounter --
+    // if the live table differs, offline sources are wrong by construction.
+    {
+        let content: Vec<_> = catalog
+            .targets()
+            .iter()
+            .map(|target| (target.block, target.position, target.yaw))
+            .collect();
+        let digest = er_invasion_warp::aip::catalog_content_digest(&content);
+        let vanilla = er_invasion_warp::aip::AIP_CATALOG_CONTENT_DIGEST_VANILLA;
+        crate::standalone_log(format_args!(
+            "map-inject: live spawn table digest {digest:#018x} vs vanilla on-disk \
+             {vanilla:#018x} -> {}",
+            if digest == vanilla {
+                "IDENTICAL (no mod has rewritten the points)"
+            } else {
+                "DIFFERENT -- a mod has rewritten the spawn points in memory; the pins show the \
+                 LIVE data, and any on-disk source would be wrong"
+            }
+        ));
+    }
     let fresh = InvasionRowRegistry::from_catalog(&catalog, PinGranularity::PerBlock);
     let signature = catalog_signature(&fresh);
     let cached_registry = INJECTED_REGISTRY.load(Ordering::SeqCst);
