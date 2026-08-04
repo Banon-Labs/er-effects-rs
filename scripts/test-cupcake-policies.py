@@ -446,6 +446,52 @@ def main() -> int:
             False,
             "blocked this Elden Ring EAC launcher command",
         ),
+        # 2026-08-04 false positive: NAMING the EAC launcher as data was denied.
+        # The blocked command recorded a memory ABOUT the launcher (that
+        # /proc/<pid>/comm truncates at 15 chars, so an exact-match entry for
+        # the 24-char name could never match a process). The substring fallback
+        # asked only "payload contains the name" plus a generic marker word,
+        # and "bash" in prose is such a word; the bd text exemption could not
+        # rescue it because its shape did not anticipate a QUOTED binary path.
+        # Deny now needs the name to occur somewhere it could be executed.
+        PolicyCase(
+            "allow-bd-remember-quoted-binary-path-naming-eac-launcher",
+            '"$HOME/.local/bin/bd" remember "er-stale-run-sentinel compared'
+            " start_protected_game.exe (24 chars) verbatim against"
+            " /proc/<pid>/comm, which the kernel truncates at 15 chars, so that"
+            " entry could never match any process; run bash"
+            ' scripts/er-stale-run-sentinel.sh --selftest" --key'
+            " stale-sentinel-comm-truncation-2026-08-04",
+            True,
+        ),
+        PolicyCase(
+            "allow-echo-prose-naming-eac-launcher",
+            "echo 'the sentinel detects start_protected_game.exe; never launch"
+            " it from bash or proton wrappers'",
+            True,
+        ),
+        PolicyCase(
+            "allow-python-c-string-literal-naming-eac-launcher",
+            "python3 -c \"print('sentinel comm entry:"
+            " start_protected_game.exe truncated to 15 chars')\"",
+            True,
+        ),
+        # ... and naming-as-data must not become a launch bypass: an inert first
+        # statement does not launder a launch in the second, and an inert head
+        # does not make a PIPE inert.
+        PolicyCase(
+            "deny-echo-prose-then-setsid-bare-launcher",
+            "echo 'do not run start_protected_game.exe from bash'; setsid"
+            " start_protected_game.exe",
+            False,
+            "blocked this Elden Ring EAC launcher command",
+        ),
+        PolicyCase(
+            "deny-echo-launcher-name-piped-into-shell",
+            "echo 'start_protected_game.exe' | bash",
+            False,
+            "blocked this Elden Ring EAC launcher command",
+        ),
         # Read-only /proc comm scans may NAME the EAC launcher inside quoted
         # string literals (2026-07-05 false positive: the sanctioned no-pgrep
         # process-detection heredoc was denied by the raw marker fallback).
