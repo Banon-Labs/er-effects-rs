@@ -8,13 +8,18 @@ use std::sync::Mutex;
 use std::sync::atomic::Ordering;
 
 #[cfg(windows)]
-use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
+use windows::Win32::{
+    Foundation::{HWND, POINT, RECT},
+    Graphics::Gdi::ScreenToClient,
+    System::LibraryLoader::{GetModuleHandleA, GetProcAddress},
+    UI::WindowsAndMessaging::{GetClientRect, GetCursorPos},
+};
 #[cfg(windows)]
 use windows::core::PCSTR;
 
 use crate::host::{
     MissingSaveSelectionOutcome, append_autoload_debug,
-    complete_missing_save_selection_from_picker, missing_save_selection_pending,
+    complete_missing_save_selection_from_picker, game_main_window, missing_save_selection_pending,
     save_picker_seamless_mode_after_settle, save_picker_title_start_dir,
 };
 use crate::model::{self, PickerActivation, PickerStatusMessage, SavePickerModel};
@@ -156,6 +161,8 @@ const PICKER_ACT_SELECT: usize = 1 << 4;
 const PICKER_ACT_BACK: usize = 1 << 5;
 
 // Virtual-key codes (win32).
+const VK_LBUTTON: i32 = 0x01;
+const VK_RBUTTON: i32 = 0x02;
 const VK_BACK: i32 = 0x08;
 const VK_RETURN: i32 = 0x0d;
 const VK_LEFT: i32 = 0x25;
@@ -330,6 +337,64 @@ fn save_picker_sample() -> (usize, usize) {
     (held, pressed)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MouseButton {
+    Left,
+    Right,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MouseClick {
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+    button: MouseButton,
+}
+
+#[cfg(windows)]
+fn save_picker_mouse_click() -> Option<MouseClick> {
+    let gaks = resolve_get_async_key_state()?;
+    let left = unsafe { gaks(VK_LBUTTON) } as u16;
+    let right = unsafe { gaks(VK_RBUTTON) } as u16;
+    let button = if left & 0x0001 != 0 {
+        MouseButton::Left
+    } else if right & 0x0001 != 0 {
+        MouseButton::Right
+    } else {
+        return None;
+    };
+    let hwnd_raw = game_main_window();
+    if hwnd_raw == 0 {
+        return None;
+    }
+    let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
+    let mut point = POINT::default();
+    if unsafe { GetCursorPos(&mut point) }.is_err() {
+        return None;
+    }
+    if !unsafe { ScreenToClient(hwnd, &mut point) }.as_bool() {
+        return None;
+    }
+    let mut rect = RECT::default();
+    if unsafe { GetClientRect(hwnd, &mut rect) }.is_err() {
+        return None;
+    }
+    let w = (rect.right - rect.left).max(0) as usize;
+    let h = (rect.bottom - rect.top).max(0) as usize;
+    if w == 0 || h == 0 || point.x < 0 || point.y < 0 {
+        return None;
+    }
+    let x = point.x as usize;
+    let y = point.y as usize;
+    (x < w && y < h).then_some(MouseClick { x, y, w, h, button })
+}
+
+#[cfg(not(windows))]
+fn save_picker_mouse_click() -> Option<MouseClick> {
+    None
+}
+
 /// The IN-GAME arm of the missing-save boot picker: open the overlay's model for the pending
 /// no-save boot if not already armed. Idempotent, and safe from any thread (Mutex state plus a
 /// directory enumeration; it touches no game pointer).
@@ -451,6 +516,107 @@ fn save_picker_overlay_disarm(reason: &str) {
     append_autoload_debug(format_args!("save-picker-overlay: disarmed ({reason})"));
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PickerOverlayMetrics {
+    margin_x: usize,
+    content_w: usize,
+    panel_top: usize,
+    panel_bottom: usize,
+    scale: usize,
+    line_h: usize,
+    row_step: usize,
+}
+
+fn picker_overlay_metrics(w: usize, h: usize) -> Option<PickerOverlayMetrics> {
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let scale = BOOT_VIEW_TEXT_BASE_SCALE;
+    let line_h = BOOT_VIEW_GLYPH_H * scale;
+    let margin_x = (w / 10).max(24);
+    let content_w = w.checked_sub(margin_x * 2)?;
+    let panel_top = (h / 12).max(24);
+    let panel_bottom = h * 82 / 100;
+    if content_w == 0 || panel_bottom <= panel_top || line_h == 0 {
+        return None;
+    }
+    Some(PickerOverlayMetrics {
+        margin_x,
+        content_w,
+        panel_top,
+        panel_bottom,
+        scale,
+        line_h,
+        row_step: line_h + line_h / 2,
+    })
+}
+
+fn picker_file_rows_start_y(metrics: PickerOverlayMetrics, has_status: bool) -> usize {
+    metrics.panel_top
+        + metrics.line_h * 5
+        + metrics.line_h / 2
+        + usize::from(has_status) * metrics.line_h
+}
+
+fn picker_character_rows_start_y(metrics: PickerOverlayMetrics, has_status: bool) -> usize {
+    metrics.panel_top
+        + metrics.line_h * 4
+        + metrics.line_h / 2
+        + usize::from(has_status) * metrics.line_h
+}
+
+fn picker_row_hit(
+    metrics: PickerOverlayMetrics,
+    x: usize,
+    y: usize,
+    first_row_y: usize,
+    rows: usize,
+) -> Option<usize> {
+    let x0 = metrics.margin_x + metrics.scale * 2;
+    let x1 = metrics
+        .margin_x
+        .checked_add(metrics.content_w.saturating_sub(metrics.scale * 2))?;
+    if x < x0 || x >= x1 {
+        return None;
+    }
+    let rows_bottom = metrics.panel_bottom.saturating_sub(metrics.line_h * 2);
+    for row in 0..rows {
+        let row_y = first_row_y + row * metrics.row_step;
+        if row_y + metrics.line_h >= rows_bottom {
+            break;
+        }
+        let y0 = row_y.saturating_sub(metrics.scale * 2);
+        let y1 = row_y + metrics.line_h + metrics.scale * 2;
+        if y >= y0 && y < y1 {
+            return Some(row);
+        }
+    }
+    None
+}
+
+fn picker_file_row_hit(model: &SavePickerModel, click: MouseClick) -> Option<usize> {
+    let metrics = picker_overlay_metrics(click.w, click.h)?;
+    let first_row_y = picker_file_rows_start_y(metrics, model.status_message().is_some());
+    let row = picker_row_hit(
+        metrics,
+        click.x,
+        click.y,
+        first_row_y,
+        model::PICKER_ROW_COUNT,
+    )?;
+    (!model.row_label_ascii(row).is_empty()).then_some(row)
+}
+
+fn picker_character_row_hit(
+    click: MouseClick,
+    slot_count: usize,
+    has_status: bool,
+) -> Option<usize> {
+    let metrics = picker_overlay_metrics(click.w, click.h)?;
+    let first_row_y = picker_character_rows_start_y(metrics, has_status);
+    picker_row_hit(metrics, click.x, click.y, first_row_y, slot_count)
+}
+
 /// One input poll for the startup overlay picker. Reads OS keyboard/gamepad directly (independent of
 /// the game's blocked input) and captures presses. MUST run on the game's render thread -- it is
 /// driven from the D3D12 Present hook, which is the only thread that can read `GetAsyncKeyState`
@@ -474,10 +640,12 @@ pub fn save_picker_overlay_input_tick() {
     if held != 0 {
         SAVE_PICKER_OVERLAY_HELD_POLLS.fetch_add(1, Ordering::SeqCst);
     }
-    if pressed == 0 {
-        return;
+    if pressed != 0 {
+        save_picker_apply_pressed(pressed);
     }
-    save_picker_apply_pressed(pressed);
+    if let Some(click) = save_picker_mouse_click() {
+        save_picker_apply_mouse_click(click);
+    }
 }
 
 /// Apply one pressed-action bitmask to the active picker stage. Shared by the render-thread gamepad
@@ -512,6 +680,29 @@ fn picker_action_for_vk(vk: i32) -> usize {
         VK_RETURN => PICKER_ACT_SELECT,
         VK_BACK => PICKER_ACT_BACK,
         _ => 0,
+    }
+}
+
+/// Apply one left-click to whichever picker stage is active. A click on a visible file-browser row
+/// both moves the highlight to that row and activates it, so the mouse can use every row action the
+/// keyboard/controller path can: up-directory, drive cycle, page cycle, directory open and save-file
+/// selection. In the character sub-picker a click chooses the clicked slot directly.
+fn save_picker_apply_mouse_click(click: MouseClick) {
+    let hits = SAVE_PICKER_OVERLAY_INPUT_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+    let chars_stage = SAVE_PICKER_STAGE_CHARS.load(Ordering::SeqCst) != 0;
+    append_autoload_debug(format_args!(
+        "save-picker-input: applied #{hits} mouse {:?} stage={} at {},{} client={}x{}",
+        click.button,
+        if chars_stage { "chars" } else { "files" },
+        click.x,
+        click.y,
+        click.w,
+        click.h
+    ));
+    if chars_stage {
+        save_picker_character_stage_mouse_click(click);
+    } else {
+        save_picker_file_stage_mouse_click(click);
     }
 }
 
@@ -669,7 +860,42 @@ fn save_picker_file_stage_input(pressed: usize) {
             None
         }
     };
+    save_picker_stage_picked_file(picked);
+}
 
+fn save_picker_file_stage_mouse_click(click: MouseClick) {
+    let picked = {
+        let mut guard = model::active_save_picker_lock();
+        let Some(model) = guard.as_mut() else {
+            return;
+        };
+        if click.button == MouseButton::Right {
+            model.go_up();
+            return;
+        }
+        let Some(row) = picker_file_row_hit(model, click) else {
+            return;
+        };
+        model.set_cursor(row);
+        match model.row_meaning(row) {
+            model::PickerRow::DriveCycle => {
+                model.cycle_drive(click.x >= click.w / 2);
+                None
+            }
+            model::PickerRow::NextPage => {
+                model.cycle_page(click.x >= click.w / 2);
+                None
+            }
+            _ => match model.activate_cursor() {
+                PickerActivation::PickedFile(path) => Some(path),
+                _ => None,
+            },
+        }
+    };
+    save_picker_stage_picked_file(picked);
+}
+
+fn save_picker_stage_picked_file(picked: Option<std::path::PathBuf>) {
     let Some(path) = picked else {
         return;
     };
@@ -706,11 +932,6 @@ fn save_picker_file_stage_input(pressed: usize) {
 /// hold.
 fn save_picker_character_stage_input(pressed: usize) {
     // Resolve the chosen slot + path under the lock, act (redirect/complete) outside it.
-    enum Act {
-        None,
-        Back,
-        Pick(std::path::PathBuf, usize),
-    }
     let act = {
         let guard = pending_save_lock();
         let Some(pending) = guard.as_ref() else {
@@ -728,20 +949,45 @@ fn save_picker_character_stage_input(pressed: usize) {
         }
         SAVE_PICKER_CHAR_CURSOR.store(cursor, Ordering::SeqCst);
         if pressed & PICKER_ACT_BACK != 0 {
-            Act::Back
+            CharacterAct::Back
         } else if pressed & PICKER_ACT_SELECT != 0 {
-            Act::Pick(pending.path.clone(), pending.slots[cursor].slot)
+            CharacterAct::Pick(pending.path.clone(), pending.slots[cursor].slot)
         } else {
-            Act::None
+            CharacterAct::None
         }
     };
+    save_picker_apply_character_act(act);
+}
+
+fn save_picker_character_stage_mouse_click(click: MouseClick) {
+    let act = {
+        if click.button == MouseButton::Right {
+            CharacterAct::Back
+        } else {
+            let guard = pending_save_lock();
+            let Some(pending) = guard.as_ref() else {
+                SAVE_PICKER_STAGE_CHARS.store(0, Ordering::SeqCst);
+                return;
+            };
+            let has_status = save_picker_overlay_status_message().is_some();
+            let Some(row) = picker_character_row_hit(click, pending.slots.len(), has_status) else {
+                return;
+            };
+            SAVE_PICKER_CHAR_CURSOR.store(row, Ordering::SeqCst);
+            CharacterAct::Pick(pending.path.clone(), pending.slots[row].slot)
+        }
+    };
+    save_picker_apply_character_act(act);
+}
+
+fn save_picker_apply_character_act(act: CharacterAct) {
     match act {
-        Act::None => {}
-        Act::Back => {
+        CharacterAct::None => {}
+        CharacterAct::Back => {
             *pending_save_lock() = None;
             SAVE_PICKER_STAGE_CHARS.store(0, Ordering::SeqCst);
         }
-        Act::Pick(path, slot) => {
+        CharacterAct::Pick(path, slot) => {
             // Defer the actual redirect activation + MinHook install to the game-task thread (via
             // this request): it runs the risky install off the render thread, and the game task is
             // alive at pick time (the boot is still HELD -- loading only starts once the pick
@@ -753,6 +999,12 @@ fn save_picker_character_stage_input(pressed: usize) {
             ));
         }
     }
+}
+
+enum CharacterAct {
+    None,
+    Back,
+    Pick(std::path::PathBuf, usize),
 }
 
 // ---- Rendering ----
@@ -947,7 +1199,7 @@ pub fn overlay_save_picker_onto(buf: &mut [u8], w: usize, h: usize) -> bool {
         h,
         margin_x + scale * 4,
         footer_y,
-        "UP/DN MOVE  L/R DRIVE (TOP ROW) OR PAGE  ENTER/A OPEN  BKSP/B UP",
+        "CLICK ROW OPEN  CLICK LEFT/RIGHT HALF ON DRIVE/PAGE  RIGHT CLICK UP/BACK",
         PICKER_RGB_DIM,
         scale,
     );
@@ -1076,11 +1328,101 @@ fn overlay_character_stage_onto(
         h,
         margin_x + scale * 4,
         footer_y,
-        "UP/DN MOVE  ENTER/A LOAD CHARACTER  BKSP/B BACK TO FILES",
+        "CLICK CHARACTER TO LOAD  RIGHT CLICK BACK TO FILES",
         PICKER_RGB_DIM,
         scale,
     );
     true
+}
+
+#[cfg(test)]
+mod mouse_hit_tests {
+    use super::*;
+
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("er-save-picker-mouse-hit-{tag}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir must be creatable");
+        dir
+    }
+
+    fn click_on_file_row(model: &SavePickerModel, row: usize) -> MouseClick {
+        let w = 1920;
+        let h = 1080;
+        let metrics = picker_overlay_metrics(w, h).expect("metrics");
+        let y = picker_file_rows_start_y(metrics, model.status_message().is_some())
+            + row * metrics.row_step
+            + metrics.line_h / 2;
+        MouseClick {
+            x: metrics.margin_x + metrics.content_w / 2,
+            y,
+            w,
+            h,
+            button: MouseButton::Left,
+        }
+    }
+
+    #[test]
+    fn mouse_hit_testing_maps_file_browser_rows_to_the_same_model_rows_drawn() {
+        let dir = scratch_dir("file-rows");
+        std::fs::create_dir_all(dir.join("subdir")).expect("subdir must be creatable");
+        let model = SavePickerModel::open(&dir, "sl2");
+        let parent = model.parent_row().expect("temp dir has a parent row");
+        assert_eq!(
+            picker_file_row_hit(&model, click_on_file_row(&model, parent)),
+            Some(parent)
+        );
+        let dir_row = parent + 1;
+        assert!(matches!(
+            model.row_meaning(dir_row),
+            model::PickerRow::Dir(_)
+        ));
+        assert_eq!(
+            picker_file_row_hit(&model, click_on_file_row(&model, dir_row)),
+            Some(dir_row)
+        );
+        let metrics = picker_overlay_metrics(1920, 1080).expect("metrics");
+        assert_eq!(
+            picker_file_row_hit(
+                &model,
+                MouseClick {
+                    x: 0,
+                    y: metrics.panel_top,
+                    w: 1920,
+                    h: 1080,
+                    button: MouseButton::Left,
+                }
+            ),
+            None,
+            "clicks outside the row band must not activate a stale cursor"
+        );
+    }
+
+    #[test]
+    fn mouse_hit_testing_maps_character_rows_to_slot_indices() {
+        let w = 1920;
+        let h = 1080;
+        let metrics = picker_overlay_metrics(w, h).expect("metrics");
+        let first = picker_character_rows_start_y(metrics, false);
+        for row in 0..3 {
+            let click = MouseClick {
+                x: metrics.margin_x + metrics.content_w / 2,
+                y: first + row * metrics.row_step + metrics.line_h / 2,
+                w,
+                h,
+                button: MouseButton::Left,
+            };
+            assert_eq!(picker_character_row_hit(click, 3, false), Some(row));
+        }
+        let below_slots = MouseClick {
+            x: metrics.margin_x + metrics.content_w / 2,
+            y: first + 3 * metrics.row_step + metrics.line_h / 2,
+            w,
+            h,
+            button: MouseButton::Left,
+        };
+        assert_eq!(picker_character_row_hit(below_slots, 3, false), None);
+    }
 }
 
 #[cfg(not(windows))]
