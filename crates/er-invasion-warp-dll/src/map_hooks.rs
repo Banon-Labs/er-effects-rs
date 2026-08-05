@@ -1053,6 +1053,14 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
             }
             continue;
         };
+        // A LEGACY PIN ACCEPTED BY A 60/61 CONVERTER IS CORRECT, NOT CROSS-AREA (user-observed
+        // 2026-08-04, and it reverses a "fix" made earlier the same day). `ConvertMsbCoordsToMapCoords`
+        // calls `ConvertLegacyDungeonPositionToOverworldPositionForMap` FIRST and area-matches the
+        // REMAPPED block, so a dungeon necessarily arrives through the ordinary overworld converter
+        // and its converter area necessarily differs from the block's own. Requiring them to be equal
+        // made the counter unsatisfiable for exactly the maps it exists to measure: the Haligtree pin
+        // logged `m15_00_00_00 (area 15) accepted by converter #0 (area 60)` and reported 0/2 placed,
+        // while the user watched it render on the Haligtree warp point.
         if is_legacy {
             legacy_placed += 1;
         }
@@ -1073,7 +1081,15 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         if let Some(slot) = per_converter.get_mut(converter_index) {
             *slot += 1;
         }
-        if converter_area != target_area {
+        // Cross-area is only meaningful for a pin that was NOT remapped: an area-60/61 target
+        // accepted by a converter of the other area really is drawn in the wrong space. A legacy
+        // block reaching a 60/61 converter went through the legacy remap and is where it belongs.
+        let legacy_remap_expected = is_legacy
+            && matches!(
+                converter_area,
+                60 | er_invasion_warp::param_row::AREA_SHADOW_LANDS
+            );
+        if converter_area != target_area && !legacy_remap_expected {
             // The converter that accepted this point belongs to a DIFFERENT area, so the map
             // coordinates are in that area's space and the pin renders somewhere meaningless.
             // This is the leading explanation for "markers on the base map, none on the DLC map,
@@ -1217,10 +1233,35 @@ pub(crate) unsafe fn refresh_msb_catalog() -> (usize, usize) {
         if catalog.has_observed(block) {
             continue;
         }
-        let points = unsafe { read_map_invasion_points(base, block, cap) };
-        catalog.absorb(block, points);
+        // `None` = the map is not loaded, so nothing was looked at. Leaving it UNOBSERVED is what
+        // makes the harvest accumulate: `resident_blocks` walks the world's static block list, so
+        // most entries are dead caps on any given frame, and absorbing them would mark every map in
+        // the game as read during the boot pass and skip them forever afterwards. That is exactly
+        // what happened before this check existed -- the player reached the Haligtree and its 88
+        // invasion points were never read, because m15 had been "observed" at boot with a null cap.
+        if let Some(points) = unsafe { read_map_invasion_points(base, block, cap) } {
+            catalog.absorb(block, points);
+        }
     }
     (catalog.len(), catalog.observed_block_count())
+}
+
+/// How many blocks the world lists that the catalog has NOT read yet.
+///
+/// Reported alongside coverage because the two together are the whole diagnosis: `read` climbing
+/// while `pending` falls is the harvest working; `pending` frozen at the full block count means
+/// every cap is dead, which is what a boot-time-only pass looks like.
+#[cfg(windows)]
+fn msb_pending_block_count() -> usize {
+    use er_invasion_warp::msb_invasion_points::resident_blocks;
+    let catalog = match MSB_CATALOG.lock() {
+        Ok(catalog) => catalog,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    unsafe { resident_blocks() }
+        .into_iter()
+        .filter(|(block, _)| !catalog.has_observed(*block))
+        .count()
 }
 
 #[cfg(not(windows))]
@@ -1253,21 +1294,105 @@ const MSB_HARVEST_FRAME_STRIDE: u64 = 60;
 ///
 /// # Safety
 /// Game task thread with the world up; the harvest itself is fault-closed.
+///
+/// Say which blocks the world list actually offers a usable `MsbResCap` for, and which one the
+/// player is standing in.
+///
+/// THIS IS THE MEASUREMENT, not decoration. The feature rests on one unverified assumption: that
+/// while the player is inside a legacy dungeon, that dungeon's block appears in
+/// `world_block_info()` with a live cap at `+0x48`. Run 1615 falsified the old code but could not
+/// distinguish WHY -- the player was in the Haligtree (`block=0x0f000000`, m15, 88 invasion points
+/// on disk) and coverage read `0 points/111 maps`, which is equally consistent with "m15 is absent
+/// from the list", "m15 is listed but its cap is null", and "the cap is there but the liveness test
+/// rejects it". Those need three different fixes, so the next run must name which one it is.
+///
+/// Bounded: emits only when the non-null-cap population CHANGES, so travelling logs a handful of
+/// lines rather than one per second.
+#[cfg(windows)]
+unsafe fn log_msb_cap_census() {
+    use er_invasion_warp::msb_invasion_points::resident_blocks;
+    let Ok(base) = er_game_base::mem::game_module_base() else {
+        return;
+    };
+    let blocks = unsafe { resident_blocks() };
+    let total = blocks.len();
+    let non_null = blocks.iter().filter(|(_, cap)| *cap != 0).count();
+    let live = blocks
+        .iter()
+        .filter(|(_, cap)| unsafe {
+            er_invasion_warp::msb_invasion_points::msb_res_cap_looks_live(base, *cap)
+        })
+        .count();
+
+    // The block the player is actually in, and whether the list can see it. `None` means the world
+    // does not list it at all, which would make retrying pointless and send the fix elsewhere.
+    let player_block = unsafe { current_player_block() };
+
+    // The dedup signature MUST include the player's block. Keying it on the population counts alone
+    // meant one block going live while another died -- equal totals -- printed nothing, so walking
+    // into the Haligtree could be silent, which is the one event this census exists to capture.
+    static LAST: AtomicUsize = AtomicUsize::new(usize::MAX);
+    let signature =
+        (total << 44) | (non_null << 34) | (live << 24) | (player_block.unwrap_or(0) as usize >> 8);
+    if LAST.swap(signature, Ordering::SeqCst) == signature {
+        return;
+    }
+    let player_entry = player_block.and_then(|raw| {
+        blocks
+            .iter()
+            .find(|(block, _)| block.raw() == raw)
+            .map(|(_, cap)| *cap)
+    });
+    let player_desc = match (player_block, player_entry) {
+        (None, _) => "player block UNKNOWN".to_owned(),
+        (Some(raw), None) => {
+            format!("player block {raw:#010x} is NOT IN the world block list at all")
+        }
+        (Some(raw), Some(cap)) => {
+            let live =
+                unsafe { er_invasion_warp::msb_invasion_points::msb_res_cap_looks_live(base, cap) };
+            format!("player block {raw:#010x} listed with cap {cap:#x} live={live}")
+        }
+    };
+    crate::standalone_log(format_args!(
+        "map-msb-census: {total} blocks listed, {non_null} with a non-null cap, {live} passing the \
+         vtable-in-image liveness test -- {player_desc}"
+    ));
+}
+
+#[cfg(not(windows))]
+unsafe fn log_msb_cap_census() {}
+
+/// The block id the player is currently in, read the same way the warp path reads it.
+#[cfg(windows)]
+unsafe fn current_player_block() -> Option<u32> {
+    let base = er_game_base::mem::game_module_base().ok()?;
+    unsafe { er_invasion_warp::warp::current_block_id(base) }
+}
+
+#[cfg(not(windows))]
+unsafe fn current_player_block() -> Option<u32> {
+    None
+}
+
 #[cfg(windows)]
 pub(crate) unsafe fn harvest_resident_msb_points(frame: u64) {
     if !frame.is_multiple_of(MSB_HARVEST_FRAME_STRIDE) {
         return;
     }
+    unsafe { log_msb_cap_census() };
     let before = msb_coverage();
     let after = unsafe { refresh_msb_catalog() };
     if after.1 != before.1 {
         crate::standalone_log(format_args!(
             "map-msb: read {} newly resident map(s) -- MSB InvasionPoint coverage is now {} points \
-             across {} maps (this is the ONLY source that can mark a legacy dungeon, cave or \
-             catacomb; the .aip table has no entries outside areas 60/61)",
+             across {} maps, {} block(s) still unread (a block stays unread until the player is \
+             actually in it, so this falls as you travel; the .aip table has no entries outside \
+             areas 60/61, making this the ONLY source for a legacy dungeon, cave or catacomb)",
             after.1 - before.1,
             after.0,
-            after.1
+            after.1,
+            msb_pending_block_count()
         ));
     }
 }

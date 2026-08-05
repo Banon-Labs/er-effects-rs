@@ -259,7 +259,10 @@ mod native {
     ///
     /// # Safety
     /// Any address may be passed; the reads are fault-tolerant.
-    unsafe fn msb_res_cap_looks_live(base: usize, cap: usize) -> bool {
+    /// Exported so the DLL can census which listed blocks are actually usable without duplicating
+    /// (and therefore drifting from) the exact test the reader gates on.
+    #[must_use]
+    pub unsafe fn msb_res_cap_looks_live(base: usize, cap: usize) -> bool {
         if cap == 0 || cap < 0x1_0000 {
             return false;
         }
@@ -279,9 +282,18 @@ mod native {
 
     /// Read every `InvasionPoint` region out of one map's `MsbResCap`.
     ///
-    /// Returns an empty vector both when the map genuinely has none and when the cap is
-    /// unreadable; the caller records the block as observed either way, because "read it, found
-    /// nothing" is a real answer and must not be confused with "never looked".
+    /// `None` means THE MAP WAS NOT LOADED -- its cap is null or does not carry an in-image vtable,
+    /// so nothing was looked at. `Some(points)` means the cap was live and this is the map's real
+    /// answer, empty vector included.
+    ///
+    /// THE DISTINCTION IS THE WHOLE POINT (2026-08-04). This used to return a bare `Vec` and the
+    /// caller recorded the block as observed either way, on the reasoning that "read it, found
+    /// nothing" is a real answer. It is -- but a dead cap is not that answer, it is "never looked",
+    /// and conflating them broke the feature: `resident_blocks` enumerates the world's STATIC block
+    /// list, so at boot all 111 entries were marked observed with dead caps, and every one of them
+    /// was then skipped forever by `has_observed`. Measured in run 1615 -- the player standing in the
+    /// Haligtree (`block=0x0f000000`) with `msb[0 points/111 maps]` and exactly one `map-msb:` line
+    /// in the log, from boot. m15 carries 88 invasion points and not one was ever read.
     ///
     /// # Safety
     ///
@@ -293,15 +305,18 @@ mod native {
         base: usize,
         block: BlockKey,
         msb_res_cap: usize,
-    ) -> Vec<MsbInvasionPoint> {
+    ) -> Option<Vec<MsbInvasionPoint>> {
         if !unsafe { msb_res_cap_looks_live(base, msb_res_cap) } {
-            return Vec::new();
+            // Not loaded. Say so, so the caller leaves this block unobserved and looks again once
+            // the player actually goes there.
+            return None;
         }
         let get_count: GetPointCountFn =
             unsafe { core::mem::transmute(base + GET_POINT_DATA_SECTION_ITEM_COUNT_RVA) };
         let count = unsafe { get_count(msb_res_cap, MSB_POINT_TYPE_INVASION_POINT) };
         if count <= 0 || count > MAX_POINTS_PER_MAP {
-            return Vec::new();
+            // The cap IS live, so this is a genuine answer: this map has no invasion points.
+            return Some(Vec::new());
         }
 
         let ctor: MsbPointCtorFn = unsafe { core::mem::transmute(base + CS_MSB_POINT_CTOR_RVA) };
@@ -350,7 +365,7 @@ mod native {
             }
             unsafe { dtor(point) };
         }
-        points
+        Some(points)
     }
 
     /// Every resident block paired with its `MsbResCap`.
@@ -391,7 +406,9 @@ mod native {
 }
 
 #[cfg(windows)]
-pub use native::{MAX_POINTS_PER_MAP, read_map_invasion_points, resident_blocks};
+pub use native::{
+    MAX_POINTS_PER_MAP, msb_res_cap_looks_live, read_map_invasion_points, resident_blocks,
+};
 
 #[cfg(test)]
 mod tests {
