@@ -6,6 +6,8 @@ members = [
   "crates/er-telemetry",
   "crates/er-title-flow",
   "crates/er-telemetry-dll",
+  "crates/er-crash-logging",
+  "crates/er-crash-logging-dll",
   "crates/er-reload-trace-dll",
   "crates/er-input-harness-dll",
   "crates/er-ags-stub",
