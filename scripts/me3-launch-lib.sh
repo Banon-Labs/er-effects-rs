@@ -56,6 +56,38 @@ print(
 )
 sys.exit(1)
 PY
+  me3_launch_gate || return 2
+}
+
+# Refuse a launch whose changed code path has never been shown to execute.
+#
+# A launch takes the user's screen and produces one recording. Spending it on a predicate that
+# cannot fire is worse than not launching: it returns a clean-looking run that proves nothing, and
+# the absence of the expected log line reads as "the fix did not work" rather than "the fix could
+# never have run". That happened on 2026-08-04 -- a disarm gated on `requestCode` latching 2 shipped
+# and did nothing, because the state it was scoped to is DEFINED by `requestCode` staying 1, and the
+# previous run's telemetry already said so.
+#
+# `scripts/er-launch-gate.py` checks that offline, against recordings that already exist, in
+# milliseconds. Fail-closed: a gate that cannot read its evidence refuses.
+#
+# ER_LAUNCH_GATE_SKIP=1 bypasses it. That is for a launch which is NOT validating a code path (the
+# user just wants to play, or a launch whose only purpose is to PRODUCE a first recording). It is
+# not a way to launch a fix you have not shown can run -- the skip is logged so a run that used it
+# can never later be cited as proof.
+me3_launch_gate() {
+  if [[ "${ER_LAUNCH_GATE_SKIP:-0}" == "1" ]]; then
+    echo "me3-launch-lib: launch gate SKIPPED by ER_LAUNCH_GATE_SKIP=1 -- this run is not validation evidence" >&2
+    return 0
+  fi
+  local repo_root
+  repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+  local gate="$repo_root/scripts/er-launch-gate.py"
+  if [[ ! -f "$gate" ]]; then
+    echo "me3-launch-lib: launch gate missing at $gate -- refusing to launch" >&2
+    return 2
+  fi
+  python3 "$gate" || return 2
 }
 
 # me3_write_profile PROFILE_PATH DLL_PATH [EXTRA_NATIVE_PATH]

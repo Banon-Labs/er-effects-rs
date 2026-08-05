@@ -11,8 +11,6 @@
 
 #![allow(non_snake_case)]
 
-use std::fs::OpenOptions;
-use std::io::Write;
 use std::path::PathBuf;
 
 const DLL_PROCESS_ATTACH: u32 = 1;
@@ -30,14 +28,15 @@ fn log_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// Fresh per process: the first line of a run truncates the file (rotating the previous
+/// run's aside as `.log.prev`), later lines append. No log in this repo accumulates across
+/// runs -- mixing evidence from builds that no longer exist is how a count over one file
+/// gets read as one run's behaviour.
 fn append_log(dir: &PathBuf, args: std::fmt::Arguments<'_>) {
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join(LOG_FILE_NAME))
-    {
-        let _ = writeln!(file, "er-quit-menu-dll: {args}");
-    }
+    er_game_base::log::append_line(
+        &dir.join(LOG_FILE_NAME),
+        format_args!("er-quit-menu-dll: {args}"),
+    );
 }
 
 /// The standalone host seam: this DLL has no product behind it, so every product-owned

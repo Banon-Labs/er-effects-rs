@@ -3,7 +3,7 @@
 use std::{
     ffi::c_void,
     fmt,
-    fs::{File, OpenOptions},
+    fs::File,
     io::Write,
     ptr::null_mut,
     sync::atomic::{AtomicI32, AtomicU64, AtomicUsize, Ordering},
@@ -189,17 +189,16 @@ unsafe extern "system" {
     ) -> i32;
 }
 
+/// Cached appending handle onto a log this process freshened on its first write. The one-shot
+/// truncation lives in `er_game_base::log`, so the handle can be held for the whole run.
 fn open_log_file() -> Option<Mutex<File>> {
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(LOG_PATH)
-        .ok()
-        .map(Mutex::new)
+    er_game_base::log::open_fresh_run_append(std::path::Path::new(LOG_PATH)).map(Mutex::new)
 }
 
+/// Start this run's trace clean at attach. Rotates the previous run's file to `.log.prev`
+/// rather than destroying it (this used to be a bare `File::create`).
 fn reset_log_file() {
-    let _ = File::create(LOG_PATH);
+    er_game_base::log::begin_fresh_run(std::path::Path::new(LOG_PATH));
 }
 
 fn log_line(args: fmt::Arguments<'_>) {

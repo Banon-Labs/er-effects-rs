@@ -6,6 +6,8 @@ members = [
   "crates/er-telemetry",
   "crates/er-title-flow",
   "crates/er-telemetry-dll",
+  "crates/er-crash-logging",
+  "crates/er-crash-logging-dll",
   "crates/er-reload-trace-dll",
   "crates/er-input-harness-dll",
   "crates/er-ags-stub",
@@ -32,6 +34,11 @@ members = [
   "crates/er-save-redirect",
   "crates/er-quit-menu",
   "crates/er-quit-menu-dll",
+  # World-map invasion-spawn warp targets (bd er-effects-rs-5es,
+  # docs/plans/world-map-invasion-warp.md). Feature crate + thin ME3-loadable shell, same
+  # split as er-loading-portrait / er-loading-portrait-dll.
+  "crates/er-invasion-warp",
+  "crates/er-invasion-warp-dll",
   "crates/er-safe-input",
   "crates/er-save-loader",
   "crates/er-tpf",

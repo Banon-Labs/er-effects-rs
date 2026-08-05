@@ -1,7 +1,7 @@
 use std::{
     ffi::c_void,
     fmt::Write as FmtWrite,
-    fs::{self, OpenOptions},
+    fs,
     io::Write as IoWrite,
     sync::{
         OnceLock,
@@ -400,10 +400,10 @@ unsafe extern "system" fn exception_handler(info: *mut EXCEPTION_POINTERS) -> i3
         thread_id,
     );
     let _ = fs::write(CRASH_LATEST_PATH, &report);
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(CRASH_LOG_PATH)
+    // Fresh per process: this run's crashes, `---`-separated, and nothing from a build that no
+    // longer exists. The previous run's file survives one generation as `.log.prev`.
+    if let Some(mut file) =
+        er_game_base::log::open_fresh_run_append(std::path::Path::new(CRASH_LOG_PATH))
     {
         let _ = file.write_all(report.as_bytes());
         let _ = file.write_all(b"\n---\n");

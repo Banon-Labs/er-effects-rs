@@ -15,8 +15,6 @@
 
 #![allow(non_snake_case)]
 
-use std::fs::OpenOptions;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -42,14 +40,14 @@ fn log_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// Fresh per process: the first line of a run truncates the file (rotating the previous
+/// run's aside as `.log.prev`), later lines append. No log in this repo accumulates across
+/// runs -- which save path a run picked must be readable without splitting a file by hand.
 fn append_log(dir: &Path, args: std::fmt::Arguments<'_>) {
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join(LOG_FILE_NAME))
-    {
-        let _ = writeln!(file, "er-save-picker-dll: {args}");
-    }
+    er_game_base::log::append_line(
+        &dir.join(LOG_FILE_NAME),
+        format_args!("er-save-picker-dll: {args}"),
+    );
 }
 
 /// The standalone host seam. There is no product save hook owner behind this DLL, so the

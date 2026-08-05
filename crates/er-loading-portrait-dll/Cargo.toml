@@ -25,3 +25,6 @@ er-loading-portrait = { path = "../er-loading-portrait" }
 er-d3d12-compositor = { path = "../er-d3d12-compositor" }
 # RgbaFrame is the pixel-carrier type er-d3d12-compositor's CompositorFrame wraps.
 er-loading-bar = { path = "../er-loading-bar" }
+# Tier A only (zero external deps, host-buildable): the fresh-per-process log writer, so this
+# shell's run log and crash log each describe exactly one run.
+er-game-base = { path = "../er-game-base" }
