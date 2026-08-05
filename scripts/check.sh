@@ -76,12 +76,19 @@ shellcheck "$repo_root/scripts/run-portrait-dll-standalone-smoke.sh"
 shellcheck "$repo_root/scripts/build-invasion-warp-profile.sh"
 shellcheck "$repo_root/scripts/check-rust-build.sh"
 shellcheck "$repo_root/scripts/er-stale-run-sentinel.sh"
+shellcheck "$repo_root/scripts/test-er-stale-run-sentinel-e2e.sh"
 
-# The stale-run sentinel kills a live game when a tracked file is edited, so its process matching is
-# load-bearing: a name it cannot match is a run it cannot stop. `/proc/<pid>/comm` is capped at 15
-# characters by the kernel, which made the verbatim `start_protected_game.exe` entry unmatchable
-# against any process that has ever existed. The selftest proves the truncation handling end to end
-# against a real process, so that class of silent no-op cannot come back.
+# The stale-run sentinel kills a live game when an edit feeds a DLL that run loaded, so BOTH
+# directions are load-bearing: a name it cannot match is a run it cannot stop, and a path it
+# misclassifies is either contaminated evidence or a run killed mid-measurement. The selftest proves
+# the classifier in both directions (a crate feeding a loaded DLL and its transitive dependencies
+# tear down; host-side scripts, policy, docs and crates building UNLOADED DLLs do not), plus the
+# `/proc/<pid>/comm` 15-character truncation handling end to end against a real process.
+#
+# It deliberately never calls `teardown` -- a real game may be live while this gate runs. The other
+# half (/proc profile discovery + the kill itself) is proven by
+# scripts/test-er-stale-run-sentinel-e2e.sh, which is NOT run here because it is destructive by
+# design; run it by hand, and it refuses if a real run is live.
 bash "$repo_root/scripts/er-stale-run-sentinel.sh" --selftest
 
 # LAUNCH REACHABILITY GATE (2026-08-04). A launch takes the user's screen and yields one recording;
