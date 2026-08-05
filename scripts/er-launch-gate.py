@@ -46,7 +46,15 @@ from dataclasses import dataclass, field
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 TELEMETRY_NAME = "er-effects-telemetry.json"
-DEBUG_LOG_NAME = "er-effects-autoload-debug.log"
+# Every DLL log a predicate may name. Each product DLL writes its OWN file next to the
+# executable, and reading only the first one makes the gate structurally blind to any predicate
+# owned by another DLL -- it would score that predicate against a log its evidence can never
+# appear in, and report NEVER OBSERVED forever. The legacy-converter census lives in
+# er-invasion-warp-dll.log, so a gate that reads only the autoload log can never pass it.
+DEBUG_LOG_NAMES = (
+    "er-effects-autoload-debug.log",
+    "er-invasion-warp-dll.log",
+)
 
 # Where a live run drops its artifacts, and where this session archives them.
 DEFAULT_RUN_DIRS = [
@@ -221,11 +229,22 @@ class RunEvidence:
     directory: str
     telemetry: dict
     log_text: str
+    recorded_at: float = 0.0
+
+    def predates(self, source_mtime: float) -> bool:
+        """Whether this run was produced before the current sources existed.
+
+        A run is evidence about the build that produced it, not about the tree as it stands now.
+        After a fix, the recorded run still shows the OLD failure -- and scoring it as a
+        contradiction refuses the launch that would prove the fix, permanently. That is the same
+        "cannot tell a disagreement from a silence" defect this gate already corrects once; a
+        stale run is a third category, and it is a silence.
+        """
+        return self.recorded_at < source_mtime
 
 
 def load_run(directory: str) -> RunEvidence | None:
     telemetry_path = os.path.join(directory, TELEMETRY_NAME)
-    log_path = os.path.join(directory, DEBUG_LOG_NAME)
     if not os.path.exists(telemetry_path):
         return None
     try:
@@ -233,14 +252,26 @@ def load_run(directory: str) -> RunEvidence | None:
             telemetry = json.load(handle)
     except (OSError, ValueError):
         return None
-    log_text = ""
-    if os.path.exists(log_path):
+    chunks = []
+    for name in DEBUG_LOG_NAMES:
+        path = os.path.join(directory, name)
+        if not os.path.exists(path):
+            continue
         try:
-            with open(log_path, encoding="utf-8", errors="replace") as handle:
-                log_text = handle.read()
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                chunks.append(handle.read())
         except OSError:
-            log_text = ""
-    return RunEvidence(directory=directory, telemetry=telemetry, log_text=log_text)
+            continue
+    try:
+        recorded_at = os.path.getmtime(telemetry_path)
+    except OSError:
+        recorded_at = 0.0
+    return RunEvidence(
+        directory=directory,
+        telemetry=telemetry,
+        log_text="\n".join(chunks),
+        recorded_at=recorded_at,
+    )
 
 
 def newest_source_mtime() -> tuple[float, str]:
@@ -291,7 +322,9 @@ def stale_dlls() -> list[str]:
     return []
 
 
-def evaluate(runs: list[RunEvidence]) -> tuple[bool, list[str], list[str]]:
+def evaluate(
+    runs: list[RunEvidence], source_mtime: float = 0.0
+) -> tuple[bool, list[str], list[str]]:
     """Score every predicate against every recorded run.
 
     Returns `(ok, refusals, obligations)`. A predicate becomes a REFUSAL only when some run got
@@ -312,6 +345,9 @@ def evaluate(runs: list[RunEvidence]) -> tuple[bool, list[str], list[str]]:
             if ok:
                 proven = True
                 break
+            if run.predates(source_mtime):
+                # Produced by a build that no longer exists; says nothing about this tree.
+                continue
             if predicate.is_informative(run.telemetry, run.log_text):
                 contradiction = f"{os.path.basename(run.directory)}: {reason}"
         if proven:
@@ -352,7 +388,7 @@ def gate(run_dirs: list[str]) -> int:
             "offline, so this launch cannot validate anything it claims to."
         )
     else:
-        ok, problems, obligations = evaluate(runs)
+        ok, problems, obligations = evaluate(runs, newest_source_mtime()[0])
         if not ok:
             failures.append("unreachable predicate(s) -- the code path cannot execute:")
             failures.extend(f"      {item}" for item in problems)
@@ -410,7 +446,7 @@ def selftest() -> int:
                 },
                 handle,
             )
-        with open(os.path.join(good, DEBUG_LOG_NAME), "w", encoding="utf-8") as handle:
+        with open(os.path.join(good, DEBUG_LOG_NAMES[0]), "w", encoding="utf-8") as handle:
             # The window actually opened, and a case-7 satisfier actually ran at a reload epoch --
             # the two facts that make the release predicate non-vacuous and non-fatal.
             handle.write(
@@ -437,7 +473,7 @@ def selftest() -> int:
                 },
                 handle,
             )
-        with open(os.path.join(parked, DEBUG_LOG_NAME), "w", encoding="utf-8") as handle:
+        with open(os.path.join(parked, DEBUG_LOG_NAMES[0]), "w", encoding="utf-8") as handle:
             handle.write("cvar10-warp-clear: load2 epoch 1 mms=13 fin=0 warpRequested was set\n")
 
         good_run = load_run(good)
@@ -479,6 +515,32 @@ def selftest() -> int:
         # be CONTRADICTED, so the refusal has to come from the gate's own no-evidence check
         # rather than from scoring -- which is exactly what `gate()` does.
         report(gate([]) != 0, "no recorded run refuses rather than passes")
+
+        # A run from BEFORE the current sources is a silence, not a disagreement. Without this
+        # every bug fix is unprovable: the recorded run still shows the old failure, so the gate
+        # refuses the launch that would demonstrate the fix, forever.
+        stale_predicate = Predicate(
+            name="fixed_since_that_run",
+            why="a predicate whose code was corrected after the recorded run",
+            owner="x",
+            log_any=(r"evidence-only-the-new-build-emits",),
+        )
+        saved_stale = globals()["PREDICATES"]
+        try:
+            globals()["PREDICATES"] = (stale_predicate,)
+            future = good_run.recorded_at + 10_000
+            ok_stale, refusals_stale, obligations_stale = evaluate([good_run], future)
+            report(
+                ok_stale and not refusals_stale and len(obligations_stale) == 1,
+                "a run older than the sources is a silence, not a contradiction",
+            )
+            ok_fresh, refusals_fresh, _ = evaluate([good_run], 0.0)
+            report(
+                not ok_fresh and len(refusals_fresh) == 1,
+                "a run newer than the sources still contradicts",
+            )
+        finally:
+            globals()["PREDICATES"] = saved_stale
 
         # THE DISTINCTION THIS SPLIT EXISTS FOR. A gate that cannot tell "a run disagreed" from
         # "no run ever looked" refuses every launch on a new code path -- including the launch
