@@ -101,6 +101,90 @@ pub(crate) use er_telemetry::counters::SQ_REPRO_BEST_AREA;
 /// Best (largest-area) candidate window + its area, tracked across the EnumWindows callback.
 pub(crate) use er_telemetry::counters::SQ_REPRO_BEST_HWND;
 
+pub(crate) const SAVE_PICKER_NAV_LEFT_MASK: usize = 1 << 0;
+pub(crate) const SAVE_PICKER_NAV_RIGHT_MASK: usize = 1 << 1;
+const VK_LEFT: u16 = 0x25;
+const VK_RIGHT: u16 = 0x27;
+static SAVE_PICKER_USER_NAV_LATCH: AtomicUsize = AtomicUsize::new(0);
+static SAVE_PICKER_XINPUT_DPAD_DOWN_MASK: AtomicUsize = AtomicUsize::new(0);
+static SAVE_PICKER_DINPUT_ARROW_DOWN_MASK: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) fn save_picker_take_user_nav_edges() -> usize {
+    SAVE_PICKER_USER_NAV_LATCH.swap(0, Ordering::SeqCst)
+        & (SAVE_PICKER_NAV_LEFT_MASK | SAVE_PICKER_NAV_RIGHT_MASK)
+}
+
+fn save_picker_latch_keyboard_nav(vkey: u16) {
+    match vkey {
+        VK_LEFT => {
+            SAVE_PICKER_USER_NAV_LATCH.fetch_or(SAVE_PICKER_NAV_LEFT_MASK, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "save-picker-nav: rawinput arrow left edge vkey=0x{vkey:x}"
+            ));
+        }
+        VK_RIGHT => {
+            SAVE_PICKER_USER_NAV_LATCH.fetch_or(SAVE_PICKER_NAV_RIGHT_MASK, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "save-picker-nav: rawinput arrow right edge vkey=0x{vkey:x}"
+            ));
+        }
+        _ => {}
+    }
+}
+
+pub(crate) fn save_picker_latch_dinput_keyboard_state(data: *const u8, size: usize) {
+    const DIK_LEFT: usize = 0xcb;
+    const DIK_RIGHT: usize = 0xcd;
+    const DIK_PRESSED: u8 = 0x80;
+    if data.is_null() || size <= DIK_RIGHT {
+        return;
+    }
+    let mut down = 0usize;
+    if unsafe { *data.add(DIK_LEFT) } & DIK_PRESSED != 0 {
+        down |= SAVE_PICKER_NAV_LEFT_MASK;
+    }
+    if unsafe { *data.add(DIK_RIGHT) } & DIK_PRESSED != 0 {
+        down |= SAVE_PICKER_NAV_RIGHT_MASK;
+    }
+    let prev = SAVE_PICKER_DINPUT_ARROW_DOWN_MASK.swap(down, Ordering::SeqCst);
+    let edges = down & !prev;
+    if edges != 0 {
+        SAVE_PICKER_USER_NAV_LATCH.fetch_or(edges, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "save-picker-nav: dinput arrow edge mask=0x{edges:x} down=0x{down:x}"
+        ));
+    }
+}
+
+fn save_picker_latch_xinput_nav_buttons(buttons: u16) {
+    let mut down = 0usize;
+    if buttons & XINPUT_GAMEPAD_DPAD_LEFT != 0 {
+        down |= SAVE_PICKER_NAV_LEFT_MASK;
+    }
+    if buttons & XINPUT_GAMEPAD_DPAD_RIGHT != 0 {
+        down |= SAVE_PICKER_NAV_RIGHT_MASK;
+    }
+    let prev = SAVE_PICKER_XINPUT_DPAD_DOWN_MASK.swap(down, Ordering::SeqCst);
+    let edges = down & !prev;
+    if edges != 0 {
+        SAVE_PICKER_USER_NAV_LATCH.fetch_or(edges, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "save-picker-nav: xinput dpad edge mask=0x{edges:x} buttons=0x{buttons:x}"
+        ));
+    }
+}
+
+pub(crate) fn ensure_save_picker_user_nav_input_hooks_installed() {
+    ensure_xinput_hook_installed_for_trace();
+    let _ = std::panic::catch_unwind(|| unsafe {
+        if let Err(status) = InputBlocker::get_instance().install_hooks() {
+            append_autoload_debug(format_args!(
+                "save-picker-nav: passive dinput hook install failed: {status:?}"
+            ));
+        }
+    });
+}
+
 unsafe extern "system" fn sq_repro_find_hwnd_cb(hwnd: HWND, _l: LPARAM) -> BOOL {
     let mut pid = 0u32;
     unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
@@ -519,12 +603,18 @@ pub(crate) unsafe extern "system" fn xinput_get_state_hook(user_index: u32, stat
         }
         return XINPUT_SUCCESS;
     }
-    // PASSIVE INPUT-TRACE CAPTURE (er-effects-input-trace.txt): record the REAL slot-0 pad state
-    // exactly as the original returned it, BEFORE the keepalive/fabrication branches below can
-    // overwrite the caller's buffer. A single Relaxed flag load when the trace is off; never
-    // mutates `state` or `hr`, so pass-through/block behavior stays byte-identical.
+    // PASSIVE INPUT-TRACE CAPTURE (er-effects-input-trace.txt) + product picker D-pad capture:
+    // record the REAL slot-0 pad state exactly as the original returned it, BEFORE the
+    // keepalive/fabrication branches below can overwrite the caller's buffer. This never mutates
+    // `state` or `hr`, so pass-through/block behavior stays byte-identical.
     if user_index == XINPUT_PRIMARY_USER_INDEX && hr == XINPUT_SUCCESS && !state.is_null() {
+        let buttons = unsafe {
+            *(state.add(XINPUT_GAMEPAD_OFFSET + WBUTTONS_OFFSET_IN_GAMEPAD) as *const u16)
+        };
+        save_picker_latch_xinput_nav_buttons(buttons);
         input_trace_record_real_poll(state as *const u8);
+    } else if user_index == XINPUT_PRIMARY_USER_INDEX {
+        save_picker_latch_xinput_nav_buttons(0);
     }
     // KEEP SLOT 0 "CONNECTED" while the harness is ACTIVELY INJECTING (only) -- when no physical pad
     // exists, present a connected idle pad with a fresh packet so ER keeps polling slot 0 and the
@@ -869,6 +959,8 @@ unsafe extern "system" fn get_raw_input_data_hook(
                 let msg = unsafe { ((d + 0x08) as *const u32).read_unaligned() };
                 if msg == 0x100 || msg == 0x104 {
                     RAWINPUT_KEY_EVENTS.fetch_add(1, Ordering::Relaxed);
+                    let vkey = unsafe { ((d + 0x06) as *const u16).read_unaligned() };
+                    save_picker_latch_keyboard_nav(vkey);
                 }
             }
         }));

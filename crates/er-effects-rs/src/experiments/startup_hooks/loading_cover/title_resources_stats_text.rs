@@ -1054,10 +1054,32 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
                     }
                 }
             }
-            // BROWSE PICKER ROWS: one visual baseline. `PlayerName` carries the filename,
-            // `ErStats` carries the file details/navigation copy inline, and `Location` carries the
-            // timestamp. The asset places all three on the same y coordinate, so this is not a
-            // second subrow.
+            // BROWSE PICKER ROWS: one visual baseline. `PlayerName` carries the filename or row
+            // title, `ErStats` carries file details/navigation copy, `Location` carries timestamps,
+            // and drive rows draw their actual cells through separate `DriveCell_*` row children.
+            // Blank every synthetic drive child on every picker-owned row first so recycled row clips
+            // cannot leak a previous drive strip into file/directory rows.
+            if let Some(row) = picker_row {
+                for (cell, field) in er_gfx::title_05_010::DRIVE_CELL_FIELD_NAMES
+                    .iter()
+                    .enumerate()
+                {
+                    let text = save_picker_drive_cell_text(row, cell).unwrap_or_else(|| vec![0]);
+                    let mut field_name = String::with_capacity(field.len() + 1);
+                    field_name.push_str(field);
+                    field_name.push('\0');
+                    let pushed =
+                        unsafe { push_stats_text_on_row(base, row_proxy, &field_name, &text) };
+                    if !pushed && row == 0 && cell == 0 {
+                        let fails = PROFILE_STATS_PUSH_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
+                        if fails <= 4 {
+                            append_autoload_debug(format_args!(
+                                "save-picker: DriveCell_* push REJECTED on row=0x{row_proxy:x} (05_010 GFX edit not live?) (fails={fails})"
+                            ));
+                        }
+                    }
+                }
+            }
             let browse_lines = picker_row.and_then(save_picker_browse_stats_lines);
             if let Some((top, bottom)) = browse_lines {
                 let seen = PROFILE_STATS_ROW_POPULATES.fetch_add(1, Ordering::SeqCst) + 1;

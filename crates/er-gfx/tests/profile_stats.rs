@@ -12,16 +12,16 @@ mod common;
 
 use er_gfx::title_05_000::fnv1a64;
 use er_gfx::title_05_010::{
-    COMPACT_LIST_HEIGHT_PX, COMPACT_ROW_PITCH_PX, COMPACT_VISIBLE_ROW_COUNT, EDITED_FNV1A64,
-    EDITED_LEN, STATS_FIELD_NAME, StatsPanelError, VANILLA_FNV1A64, VANILLA_LEN, is_known_vanilla,
-    stats_panel,
+    COMPACT_LIST_HEIGHT_PX, COMPACT_ROW_PITCH_PX, COMPACT_SCROLLBAR_TOP_Y_PX,
+    COMPACT_SCROLLBAR_TRACK_HEIGHT_PX, COMPACT_SCROLLBAR_X_PX, COMPACT_VISIBLE_ROW_COUNT,
+    DRIVE_CELL_FIELD_NAMES, EDITED_FNV1A64, EDITED_LEN, STATS_FIELD_NAME, StatsPanelError,
+    VANILLA_FNV1A64, VANILLA_LEN, is_known_vanilla, stats_panel,
 };
 use er_gfx::{Matrix, Movie, Tag};
 use std::path::PathBuf;
 
 const VANILLA_ROW_PITCH_PX: i32 = 156;
 const VANILLA_LIST_HEIGHT_PX: i32 = 780;
-const VANILLA_SCROLLBAR_Y_PX: i32 = -369;
 const VANILLA_ROW_BACKING_SCALE_Y: f32 = 2.949;
 const SCALE_ONE: i32 = 0x1_0000;
 
@@ -154,11 +154,26 @@ fn stats_panel_output_places_stats_field_and_hides_face_box() {
         Some(0),
         "Icon_0 alpha multiply must be 0 (fully transparent): {cx:?}"
     );
-    // The merged stat field must be placed once.
+    // The merged stat field and synthetic drive cells must be placed on the row's visible frame,
+    // before `ShowFrame`; placements after `ShowFrame` parse fine but do not draw on the row.
     assert!(
         names.contains(&STATS_FIELD_NAME),
         "stats field {STATS_FIELD_NAME} placement missing: {names:?}"
     );
+    let first_show_frame = row
+        .iter()
+        .position(|t| matches!(t, Tag::ShowFrame { .. }))
+        .expect("row template has a visible-frame ShowFrame");
+    for cell in DRIVE_CELL_FIELD_NAMES {
+        let pos = row
+            .iter()
+            .position(|t| matches!(t, Tag::PlaceObject2 { name: Some(n), .. } if n == cell))
+            .unwrap_or_else(|| panic!("drive cell field {cell} placement missing: {names:?}"));
+        assert!(
+            pos < first_show_frame,
+            "drive cell field {cell} must be placed before ShowFrame to be visible: pos={pos}, show_frame={first_show_frame}"
+        );
+    }
     let stats_char = row
         .iter()
         .find_map(|t| match t {
@@ -200,6 +215,9 @@ fn stats_panel_output_places_stats_field_and_hides_face_box() {
         "StaticText_110502",
         "PlayTime",
         STATS_FIELD_NAME,
+        DRIVE_CELL_FIELD_NAMES[0],
+        DRIVE_CELL_FIELD_NAMES[1],
+        DRIVE_CELL_FIELD_NAMES[2],
     ] {
         assert_eq!(
             row_placement_matrix(row, inline).translate_y,
@@ -449,6 +467,9 @@ fn stats_panel_output_keeps_inline_text_boxes_inside_compact_row_slot() {
         "StaticText_110502",
         "PlayTime",
         STATS_FIELD_NAME,
+        DRIVE_CELL_FIELD_NAMES[0],
+        DRIVE_CELL_FIELD_NAMES[1],
+        DRIVE_CELL_FIELD_NAMES[2],
     ] {
         let rect = rects
             .iter()
@@ -515,6 +536,9 @@ fn stats_panel_output_keeps_injected_stats_text_from_overlapping_native_text() {
                 "Level",
                 "StaticText_110502",
                 "PlayTime",
+                DRIVE_CELL_FIELD_NAMES[0],
+                DRIVE_CELL_FIELD_NAMES[1],
+                DRIVE_CELL_FIELD_NAMES[2],
             ]
             .contains(&r.name.as_str())
     });
@@ -571,10 +595,30 @@ fn stats_panel_output_scales_row_internal_chrome_to_compact_pitch() {
         "row cursor/highlight must be vertically scaled"
     );
     assert_eq!(cursor.scale_x, SCALE_ONE);
-    assert_eq!(
-        cursor.scale_y,
-        (SCALE_ONE * COMPACT_ROW_PITCH_PX) / VANILLA_ROW_PITCH_PX,
-        "cursor/highlight scale_y must track compact row pitch"
+    let cursor_body_scale_y = movie
+        .tags
+        .iter()
+        .find_map(|tag| match tag {
+            Tag::DefineSprite { id: 74, tags, .. } => tags.iter().find_map(|child| match child {
+                Tag::PlaceObject2 {
+                    character_id: Some(73),
+                    matrix: Some(m),
+                    ..
+                } => Some(m.scale_y),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .expect("edited movie keeps cursor body sprite 74");
+    let effective_cursor_scale_y =
+        i64::from(cursor.scale_y) * i64::from(cursor_body_scale_y) / i64::from(SCALE_ONE);
+    assert!(
+        (effective_cursor_scale_y - i64::from(backing.scale_y)).abs() <= 1,
+        "cursor/highlight EFFECTIVE scale_y must match the compact row backing rectangle: outer={:?} body_scale_y={} effective={} backing={}",
+        cursor,
+        cursor_body_scale_y,
+        effective_cursor_scale_y,
+        backing.scale_y
     );
 }
 
@@ -686,14 +730,82 @@ fn stats_panel_output_compacts_profile_list_row_stack_and_viewport() {
             _ => None,
         })
         .expect("vertical scrollbar remains placed");
-    assert_eq!(
-        scrollbar.translate_y / 20,
-        compact_y(VANILLA_SCROLLBAR_Y_PX)
-    );
+    assert_eq!(scrollbar.translate_y / 20, COMPACT_SCROLLBAR_TOP_Y_PX);
     assert!(
         scrollbar.has_scale && scrollbar.scale_y > 0 && scrollbar.scale_y < 0x1_0000,
         "scrollbar must shrink vertically with the compact viewport: {scrollbar:?}"
     );
+}
+
+#[test]
+fn stats_panel_output_scrollbar_track_and_thumb_span_the_visible_rows() {
+    let Some(vanilla) = read_vanilla_or_skip() else {
+        return;
+    };
+    let out = stats_panel(&vanilla).expect("edits must apply cleanly");
+    let movie = Movie::parse(&out).expect("edited movie parses");
+    let sprite = |want_id| {
+        movie
+            .tags
+            .iter()
+            .find_map(|t| match t {
+                Tag::DefineSprite { id, tags, .. } if *id == want_id => Some(tags.as_slice()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("edited movie keeps sprite {want_id}"))
+    };
+    let list_window = sprite(86);
+    let row_stack = sprite(77);
+
+    let row_y = |name: &str| {
+        row_stack
+            .iter()
+            .find_map(|t| match t {
+                Tag::PlaceObject2 {
+                    name: Some(n),
+                    matrix: Some(m),
+                    ..
+                } if n == name => Some(m.translate_y / 20),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("row stack places {name}"))
+    };
+    let first_row_top = row_y("Item_0_0") - COMPACT_ROW_PITCH_PX / 2;
+    let last_row_bottom = row_y("Item_9_0") + COMPACT_ROW_PITCH_PX / 2;
+    assert_eq!(first_row_top, COMPACT_SCROLLBAR_TOP_Y_PX);
+    assert_eq!(
+        last_row_bottom,
+        COMPACT_SCROLLBAR_TOP_Y_PX + COMPACT_SCROLLBAR_TRACK_HEIGHT_PX
+    );
+
+    let track = list_window
+        .iter()
+        .find_map(|t| match t {
+            Tag::PlaceObject2 {
+                name: Some(n),
+                matrix: Some(m),
+                ..
+            } if n == "ScrollBarV" => Some(m),
+            _ => None,
+        })
+        .expect("list window places native ScrollBarV");
+    assert_eq!(track.translate_x / 20, COMPACT_SCROLLBAR_X_PX);
+    assert_eq!(track.translate_y / 20, first_row_top, "ScrollBarV top edge");
+    let track_height_px = (764.0 * track.scale_y as f32 / SCALE_ONE as f32).round() as i32;
+    assert_eq!(
+        track_height_px, COMPACT_SCROLLBAR_TRACK_HEIGHT_PX,
+        "native ScrollBarV height must end at last visible row bottom"
+    );
+
+    for forbidden in ["ErScrollBarV", "ErScrollBarThumb", "ErScrollBarPip_0"] {
+        assert!(
+            !list_window.iter().any(|t| matches!(
+                t,
+                Tag::PlaceObject2 { name: Some(n), .. } if n == forbidden
+            )),
+            "list window must not place synthetic scrollbar object {forbidden}"
+        );
+    }
 }
 
 /// The edit set must NOT apply to a movie it wasn't derived for: applying it
