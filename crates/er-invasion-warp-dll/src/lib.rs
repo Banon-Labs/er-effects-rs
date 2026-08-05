@@ -29,6 +29,7 @@ pub mod drive;
 pub mod map_gfx;
 pub mod map_hooks;
 pub mod map_seams;
+mod seamless_probe;
 
 use std::path::PathBuf;
 
@@ -146,6 +147,14 @@ fn spawn_catalog_task() {
                     // SAFETY: game task thread with the world up; every read inside is fault-closed
                     // and each map is read at most once per session.
                     unsafe { crate::map_hooks::harvest_resident_msb_points(frame) };
+                    // What destination a SEAMLESS invasion picked. Seamless does not use the
+                    // .aip/MSB InvasionPoint tables at all, and the code that chooses a target
+                    // is inside the part of ersc.dll Themida encrypted -- but the ANSWER lands
+                    // in CSGameMan where anything can read it. Passive: no hook on ersc's path,
+                    // so it cannot perturb the thing it is measuring.
+                    //
+                    // SAFETY: game task thread; every read is fault-closed.
+                    unsafe { crate::seamless_probe::sample_invade_destination() };
                     // SAFETY: this closure runs on the game task thread, after CSTaskImp
                     // resolved -- exactly the context the tick's contract requires. The read
                     // itself is fault-closed (er_invasion_warp::live_read).

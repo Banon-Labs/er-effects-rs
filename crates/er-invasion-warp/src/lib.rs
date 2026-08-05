@@ -69,6 +69,11 @@ pub mod msb_invasion_points;
 /// [`msb_invasion_points`]: it carries its own region type.
 pub mod legacy_map_regions;
 
+/// What destination a SEAMLESS invasion actually chose, read out of `CSGameMan` after the fact.
+/// Not re-exported: it carries its own reading type, and Seamless's placement path has nothing
+/// to do with the `.aip`/MSB tables the rest of this crate reads.
+pub mod seamless_invade_probe;
+
 pub mod oracles;
 pub use oracles::*;
 
