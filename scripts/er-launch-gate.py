@@ -56,6 +56,16 @@ DEBUG_LOG_NAMES = (
     "er-invasion-warp-dll.log",
 )
 
+# Evidence a run produces OUTSIDE the game directory. Frida-gadget traces are driven from the
+# host and write where they are told, which is deliberately not the repo and not next to the
+# executable -- so without this the gate is blind to them exactly as it was blind to
+# er-invasion-warp-dll.log, and any predicate they own would read NEVER OBSERVED forever.
+# Missing files are skipped silently: absence is what "no run has looked yet" looks like.
+EXTRA_EVIDENCE_PATHS = (
+    "/tmp/claude-1000/-home-banon-projects-er-effects-rs/"
+    "fdd5f467-bf36-402d-bbcd-6defe1f4d0b7/scratchpad/steam-matchmaking-trace.jsonl",
+)
+
 # Where a live run drops its artifacts, and where this session archives them.
 DEFAULT_RUN_DIRS = [
     os.path.expanduser("~/.local/share/Steam/steamapps/common/ELDEN RING/Game"),
@@ -87,10 +97,23 @@ class Predicate:
     oracle_all: dict[str, object] = field(default_factory=dict)
     log_any: tuple[str, ...] = ()
     informative_if: tuple[str, ...] = ()
+    informative_oracle: dict[str, object] = field(default_factory=dict)
 
     def is_informative(self, telemetry: dict, log_text: str) -> bool:
-        """Whether this run reached the state the predicate is about."""
-        if not self.informative_if:
+        """Whether this run reached the state the predicate is about.
+
+        `informative_oracle` exists because a LOG regex is a poor precondition for a state the
+        telemetry names exactly. `epoch [1-9]` matched somewhere in a combined multi-DLL log on a
+        BOOT-ONLY run, so three reload predicates read that run as a contradiction and refused
+        every launch -- the precondition has to be the field that actually says a reload
+        happened, not a substring that can appear anywhere.
+        """
+        if not self.informative_if and not self.informative_oracle:
+            return True
+        for key, want in self.informative_oracle.items():
+            if key not in telemetry or not _values_agree(telemetry[key], want):
+                return False
+        if self.informative_oracle and not self.informative_if:
             return True
         return any(re.search(pattern, log_text) for pattern in self.informative_if)
 
@@ -147,8 +170,9 @@ PREDICATES: tuple[Predicate, ...] = (
         oracle_all={"oracle_current_load_epoch": lambda v: isinstance(v, int) and v >= 1},
         log_any=(r"cvar10-warp-clear: load2 epoch [1-9]\d* mms=1[3-8] fin=[0-4]",),
         # A boot-only run never reloaded, so it has nothing to say about a reload-time clear.
-        # Without this it reads as a contradiction and blocks every launch.
-        informative_if=(r"epoch=[1-9]", r"epoch [1-9]"),
+        # Keyed on the telemetry field rather than a log substring: `epoch [1-9]` matched inside
+        # an unrelated DLL's log on an epoch-0 run and turned a silence into a refusal.
+        informative_oracle={"oracle_current_load_epoch": lambda v: isinstance(v, int) and v >= 1},
     ),
     Predicate(
         name="case7_gate_clear_at_release",
@@ -173,8 +197,9 @@ PREDICATES: tuple[Predicate, ...] = (
             r"reload-drain-b80",
         ),
         # A boot-only run never reloaded, so it has nothing to say about a reload-time clear.
-        # Without this it reads as a contradiction and blocks every launch.
-        informative_if=(r"epoch=[1-9]", r"epoch [1-9]"),
+        # Keyed on the telemetry field rather than a log substring: `epoch [1-9]` matched inside
+        # an unrelated DLL's log on an epoch-0 run and turned a silence into a refusal.
+        informative_oracle={"oracle_current_load_epoch": lambda v: isinstance(v, int) and v >= 1},
     ),
     Predicate(
         name="warp_clear_release_world_live",
@@ -195,8 +220,9 @@ PREDICATES: tuple[Predicate, ...] = (
             "oracle_player_present": True,
         },
         # A boot-only run never reloaded, so it has nothing to say about a reload-time clear.
-        # Without this it reads as a contradiction and blocks every launch.
-        informative_if=(r"epoch=[1-9]", r"epoch [1-9]"),
+        # Keyed on the telemetry field rather than a log substring: `epoch [1-9]` matched inside
+        # an unrelated DLL's log on an epoch-0 run and turned a silence into a refusal.
+        informative_oracle={"oracle_current_load_epoch": lambda v: isinstance(v, int) and v >= 1},
     ),
     Predicate(
         name="legacy_converter_tree_readable",
@@ -220,6 +246,29 @@ PREDICATES: tuple[Predicate, ...] = (
         ),
         # Only a run that actually built a world-map ViewModel has an opinion on the tree walk.
         informative_if=(r"map-inject:",),
+    ),
+    Predicate(
+        name="steam_matchmaking_reached",
+        why=(
+            "THE ONLY REMAINING ROUTE TO SEAMLESS TARGETING, and it is unproven. The functions "
+            "that choose an invasion target (ersc 0x18006a2d0, 0x18006a1e0) are `e9` jumps into "
+            ".themida, and a live dump proved the jump targets are themselves chains of `e9` "
+            "jumps -- that is VIRTUALIZATION, so no dump can ever recover them. The decision has "
+            "to leave the VM to call steam_api64.dll, which is ordinary code, and that boundary "
+            "is where the lobby filters become readable. If this trace hooks nothing, or hooks "
+            "and records no matchmaking call during an invasion, the whole approach is dead and "
+            "a launch spent on it proves nothing -- which is exactly the ambiguity this gate "
+            "exists to stop."
+        ),
+        owner="scripts/frida-steam-matchmaking-trace.py",
+        # A recorded matchmaking call. Deliberately NOT satisfied by the hook list alone: hooks
+        # installing proves the export names matched, not that Seamless ever calls them.
+        log_any=(
+            r'"type":\s*"call"[^\n]*"fn":\s*"[^"]*(RequestLobbyList|JoinLobby|GetLobbyByIndex)',
+        ),
+        # Only a run whose trace file exists at all has an opinion. Without this the predicate
+        # would refuse every launch before the tracer has ever run once.
+        informative_if=(r'"type":\s*"(call|ret|hook-error)"',),
     ),
 )
 
@@ -253,8 +302,9 @@ def load_run(directory: str) -> RunEvidence | None:
     except (OSError, ValueError):
         return None
     chunks = []
-    for name in DEBUG_LOG_NAMES:
-        path = os.path.join(directory, name)
+    paths = [os.path.join(directory, name) for name in DEBUG_LOG_NAMES]
+    paths.extend(EXTRA_EVIDENCE_PATHS)
+    for path in paths:
         if not os.path.exists(path):
             continue
         try:
@@ -515,6 +565,25 @@ def selftest() -> int:
         # be CONTRADICTED, so the refusal has to come from the gate's own no-evidence check
         # rather than from scoring -- which is exactly what `gate()` does.
         report(gate([]) != 0, "no recorded run refuses rather than passes")
+
+        # THE STEAM-TRACE DISTINCTION: hooks INSTALLING is not calls HAPPENING. A trace that
+        # attached to every export and then recorded nothing during an invasion means the
+        # approach is dead, and it must not read as proof.
+        steam_pred = [p for p in PREDICATES if p.name == "steam_matchmaking_reached"][0]
+        called = '{"type": "call", "fn": "SteamAPI_ISteamMatchmaking_RequestLobbyList"}'
+        ok_called, _ = steam_pred.check({}, called)
+        report(ok_called, "a recorded RequestLobbyList call proves the steam route")
+
+        hooked_only = '{"type": "hook-error", "fn": "x", "error": "y"}'
+        ok_hooked, _ = steam_pred.check({}, hooked_only)
+        report(
+            not ok_hooked and steam_pred.is_informative({}, hooked_only),
+            "a trace that hooked but recorded no call is informative and NOT satisfied",
+        )
+        report(
+            not steam_pred.is_informative({}, "nothing here"),
+            "no trace file at all is a silence, not a contradiction",
+        )
 
         # A run from BEFORE the current sources is a silence, not a disagreement. Without this
         # every bug fix is unprovable: the recorded run still shows the old failure, so the gate

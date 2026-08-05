@@ -34,7 +34,12 @@
 use crate::invasion_warp::BlockKey;
 
 /// `GLOBAL_CSGameMan` -- the pointer at `0x143d69918`.
-pub const GAME_MAN_SINGLETON_RVA: usize = 0x3d6_9918;
+///
+/// Re-exported from the one place it is declared rather than repeated here: a second literal
+/// is free to drift from the first, and an address that silently disagrees with itself is the
+/// failure this repo's alias-drift gate exists to catch.
+#[cfg(windows)]
+pub use er_game_base::rva::GAME_MAN_SINGLETON_RVA;
 /// `CSGameMan+0xaf0` -- `npcInvadeTargetEntryPoint`, the MSB entry point an invader spawns at.
 pub const NPC_INVADE_TARGET_ENTRY_POINT_OFFSET: usize = 0xaf0;
 /// `CSGameMan+0xac8` -- the destination `BlockId`.

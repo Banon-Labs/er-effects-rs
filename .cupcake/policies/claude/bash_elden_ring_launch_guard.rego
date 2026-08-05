@@ -256,6 +256,7 @@ ersc_bundle_detected if {
 ersc_bundle_detected if {
 	regex.match(`(?i)(^|[[:space:];|&()])(python|python3|bash|sh)[^;|&()]*ersc\.dll([[:space:];|&()]|$)`, scrubbed_command)
 	not ersc_interpreter_gameinstall_scan_only
+	not ersc_live_module_name_only
 }
 
 # (b) redirect whose write target is the DLL (`cat ... > profile/ersc.dll`).
@@ -448,6 +449,63 @@ ersc_scan_mover_token if {
 ersc_scan_repo_destination_marker if {
 	some marker in {"target/", "dist/", "build/", "out/", "release/", "releases/", ".me3", "me3/"}
 	contains(lower(command), marker)
+}
+
+# ---------------------------------------------------------------------------
+# Exemption: naming a LIVE PROCESS MODULE, not a file.
+#
+# False positive fixed 2026-08-04. `ersc.dll` as a bare module NAME -- no path
+# separator anywhere -- is an argument to a RUNTIME inspection tool (frida
+# enumerating the modules loaded in the running game), not a file operand.
+# Naming a module cannot bundle anything: the bytes it refers to are pages in
+# another process, and this guard's mandate keys on a DESTINATION in the
+# repo/release tree, which such a command does not have.
+#
+# The blocked command:
+#     uv run --with frida python3 <script> --module ersc.dll
+# denied as a "bundling command" though it names no path, copies no file, and
+# writes outside the repo. This matters beyond convenience: reading the
+# runtime-unpacked image is the ONLY way to see the ~40 functions Themida
+# encrypts on disk, so the guard was blocking the one method that works.
+#
+# Deliberately narrow. Every occurrence must be a bare name; the command must
+# be a single unchained invocation; and the mover-token and repo-destination
+# checks below still apply unchanged, so `--module ersc.dll && cp ...` or any
+# visible repo destination keeps the guard on.
+# ---------------------------------------------------------------------------
+
+ersc_live_module_name_only if {
+	tool_name == "Bash"
+	not contains(command, "$(")
+	not contains(command, "`")
+	not regex.match(`[;|&()<>\n\r]`, scrubbed_command)
+	regex.match(`^[[:space:]]*(/usr/bin/)?(uv|python3?|bash|sh)[[:space:]]`, command)
+	ersc_scan_operands_all_bare_module_names
+	not ersc_scan_mover_token
+	not ersc_scan_repo_destination_marker
+}
+
+# Every `ersc.dll` occurrence must be a BARE NAME: the piece before it ends in
+# whitespace or `=` (an option value like `--module=ersc.dll`), NEVER a path
+# separator, and the piece after it starts with whitespace or ends the command.
+# `SeamlessCoop/ersc.dll` and `/mnt/c/.../ersc.dll` both fail the prefix test,
+# so a real file operand can never reach this exemption.
+ersc_scan_operands_all_bare_module_names if {
+	pieces := split(lower(scrubbed_command), "ersc.dll")
+	n := count(pieces)
+	n > 1
+	prefix_ok := count([idx |
+		some idx, piece in pieces
+		idx < n - 1
+		regex.match(`([[:space:]]|=)$`, piece)
+	])
+	prefix_ok == n - 1
+	suffix_ok := count([idx |
+		some idx, piece in pieces
+		idx > 0
+		regex.match(`^([[:space:]]|$)`, piece)
+	])
+	suffix_ok == n - 1
 }
 
 executable_source_marker if {
@@ -724,6 +782,35 @@ proc_scan_norm_command := concat(" ", [word |
 
 proc_scan_heredoc_parts := split(proc_scan_norm_command, "<<")
 
+# ---------------------------------------------------------------------------
+# Shell riding on the heredoc REDIRECTION LINE.
+#
+# Every heredoc shape below checks the region BEFORE `<<` and the region AFTER
+# the terminator, but nothing checked the region between the tag and the body:
+#
+#     python3 - <<'PY' | bash
+#     print("'/opt/er/start_protected_game.exe'")
+#     PY
+#
+# That pipes the PROGRAM'S OUTPUT into a shell, so a path the program merely
+# prints really executes -- and because the engine flattens newlines to spaces,
+# the body's first token is indistinguishable from the rest of that line. (Found
+# 2026-08-04 while adding the file-edit exemption; the `/proc` heredoc exemption
+# had the same hole, so this is applied to every python heredoc shape.)
+#
+# A plain output redirect (`> /tmp/out`, `2>&1`) is not an execution path and
+# stays allowed; a CHAINING operator (`|`, `;`, `&`) or a process substitution
+# (`>(...)`, `<(...)`) in that position is refused, including after a run of
+# plain redirects. A python program's first line can never begin with one of
+# these, so no legitimate body is affected.
+# ---------------------------------------------------------------------------
+heredoc_tail_chains_command if {
+	regex.match(
+		`^['"][A-Za-z_][A-Za-z0-9_]*['"][[:space:]]*([0-9]*[<>]{1,2}&?[[:space:]]*[^[:space:]|;&(]+[[:space:]]*)*([|;&]|[0-9]*[<>]{1,2}&?[[:space:]]*\()`,
+		proc_scan_heredoc_parts[1],
+	)
+}
+
 # Heredoc form: the command starts with `python3 - <<'TAG'` (or "TAG") and the
 # tag word appears exactly once more, as the final token. The quoted-tag
 # requirement keeps the heredoc body fully literal (no $-expansion), and the
@@ -749,6 +836,7 @@ proc_scan_heredoc_tag := tag if {
 proc_scan_python_shape if {
 	count(proc_scan_heredoc_parts) == 2
 	regex.match(`^(cd [^;|&()<>]+ && )?(/usr/bin/)?python3? - ?$`, proc_scan_heredoc_parts[0])
+	not heredoc_tail_chains_command
 	terminator_parts := split(proc_scan_norm_command, concat("", [" ", proc_scan_heredoc_tag]))
 	count(terminator_parts) == 2
 	terminator_parts[1] == ""
@@ -760,6 +848,7 @@ proc_scan_python_shape if {
 proc_scan_python_shape if {
 	count(proc_scan_heredoc_parts) == 2
 	regex.match(`^(/usr/bin/)?pgrep -x steam >/dev/null && echo steam-running \|\| echo steam-missing;? (/usr/bin/)?python3? - ?$`, proc_scan_heredoc_parts[0])
+	not heredoc_tail_chains_command
 	terminator_parts := split(proc_scan_norm_command, concat("", [" ", proc_scan_heredoc_tag]))
 	count(terminator_parts) == 2
 	terminator_parts[1] == ""
@@ -931,7 +1020,7 @@ mention_quoted_exec_marker if {
 # described in the repo that enforces it, nor can the repo's own stale-run
 # sentinel be discussed by the name it detects.
 #
-# Two shapes qualify, and BOTH additionally require that no process-execution
+# Three shapes qualify, and ALL additionally require that no process-execution
 # mechanism (`proc_scan_exec_markers`: subprocess/os.system/exec*/spawn/ctypes/
 # `sh -c`/wine/proton/steam://...) appears anywhere in the command:
 #
@@ -956,12 +1045,17 @@ mention_quoted_exec_marker if {
 #       "'<name>'"`, `setsid "'<name>'"` and `env "..."` denied, and shells
 #       (`bash`, `sh`) are deliberately absent from it.
 #
-# Shared fail-closed shape: Bash tool only; no `$(` and no backtick anywhere (a
-# command substitution inside a quoted argument is expanded by the shell before
-# the inert command ever sees it); no heredoc (heredoc payloads keep the
-# dedicated shapes above, and a doc heredoc is already covered by the gh/git
-# text exemptions); no `|` at all, so `echo <name> | sh` cannot ride through on
-# an inert head; and the name must not appear in non-command tool fields.
+# (III) the same inline-program idea for an interpreter program delivered by a
+#       QUOTED-TAG HEREDOC (`python3 - <<'PY' ... PY`), which shapes (I) and
+#       (II) both refuse outright because they ban `<<`. Defined in its own
+#       section below `launcher_inert_heads`.
+#
+# Shared fail-closed shape for (I) and (II): Bash tool only; no `$(` and no
+# backtick anywhere (a command substitution inside a quoted argument is expanded
+# by the shell before the inert command ever sees it); no heredoc (heredoc
+# payloads keep the dedicated shapes above and shape (III) below); no `|` at
+# all, so `echo <name> | sh` cannot ride through on an inert head; and the name
+# must not appear in non-command tool fields.
 #
 # Every command-position and executor-verb regex arm above is untouched and
 # still denies independently of this exemption, which can only ever silence the
@@ -982,6 +1076,12 @@ launcher_named_only_as_data if {
 	not regex.match(`[;|&()<>\x60\n\r]`, scrubbed_command)
 	not contains(detection_unquoted_command, "start_protected_game.exe")
 	launcher_data_head_allowed
+}
+
+# (III) a single interpreter program delivered by a quoted-tag heredoc, naming
+# the launcher only inside string literals. Defined below `launcher_inert_heads`.
+launcher_named_only_as_data if {
+	launcher_heredoc_program_data
 }
 
 launcher_data_command_shape if {
@@ -1085,6 +1185,104 @@ launcher_inert_heads := {
 	"strings", "tail", "tee", "touch", "tr", "true", "uniq", "wc", "xxd",
 }
 
+# ---------------------------------------------------------------------------
+# (III) The launcher NAMED AS DATA inside a heredoc-delivered interpreter
+# program -- an EDIT of a repo file whose text mentions the launcher.
+#
+# False positive fixed 2026-08-04 (second of the day). Removing one sentence
+# from a module docstring was denied:
+#
+#     python3 - <<'PY'
+#     p = Path('scripts/frida-dump-module.py')
+#     old = """* Offline `eldenring.exe` ONLY. Refuses `start_protected_game.exe` / EAC, like the sibling
+#       `frida-nudge.py`.
+#     """
+#     p.write_text(p.read_text().replace(old, ''), encoding='utf-8')
+#     PY
+#
+# The offending construct is again the substring fallback arm, whose whole test
+# is "the payload contains the name" plus `executable_source_marker` -- generic
+# words including the literal string "python", which an interpreter invocation
+# always supplies. `scrubbed_command` drops the heredoc BODY, so no
+# command-position regex ever sees the mention, and shapes (I)/(II) above refuse
+# `<<` outright, so a heredoc program had no way through no matter how inert it
+# was. That made this repo's own refusal logic and safety documentation -- which
+# deliberately NAMES the forbidden binary -- uneditable by the guard enforcing
+# it.
+#
+# What distinguishes an EDIT from a LAUNCH here is not the interpreter's name;
+# it is where the mention sits and whether the program has any way to start a
+# process at all:
+#
+#   * the WHOLE command is one interpreter invocation reading a heredoc whose
+#     tag is QUOTED (`<<'PY'`). A quoted tag makes the body fully literal, which
+#     is why the body may contain backticks and `$(` -- the docstring above has
+#     markdown backticks -- while the pre-heredoc region may not (it is real
+#     shell; the shape regex excludes `(` and backtick there, and an UNQUOTED
+#     tag fails `proc_scan_heredoc_tag` and is refused);
+#   * nothing rides after the terminator, and the terminator is the last token,
+#     so no shell is chained onto the program;
+#   * every occurrence of the name is inside a quoted string literal
+#     (`detection_unquoted_command`, the quote-scrub of the RAW command, must
+#     not contain it), so it is program TEXT, never a shell word or an argv
+#     element in command position;
+#   * no process-execution mechanism appears anywhere in the command --
+#     `proc_scan_exec_markers` in FULL, including the wine/proton/steam wrapper
+#     words that shapes (I)/(II) exclude, because a heredoc body gets no
+#     statement-head analysis to catch them structurally; and
+#   * no dynamic attribute/namespace lookup that could reassemble an exec call
+#     out of fragments no literal marker matches (`getattr(os, 'sy' + 'stem')`).
+#     This makes shape (III) strictly narrower than the `/proc`-scanning
+#     heredoc exemption above, which has no such condition.
+#
+# The `/proc`-mention requirement of `proc_scan_detection_or_teardown_command`
+# is deliberately NOT reused: it is a scoping heuristic, not a safety property
+# (any payload could satisfy it with a comment), and requiring it here would
+# only mean documentation edits get denied unless they mention `/proc`.
+#
+# Every command-position and executor-verb regex arm above is untouched and
+# still denies independently; this can only ever silence the substring fallback.
+# ---------------------------------------------------------------------------
+
+launcher_heredoc_program_data if {
+	tool_name == "Bash"
+	launcher_heredoc_program_shape
+	launcher_mention_total > 0
+	not contains(detection_unquoted_command, "start_protected_game.exe")
+	not contains(lower(other_text), "start_protected_game.exe")
+	not proc_scan_exec_marker
+	not launcher_dynamic_dispatch_marker
+}
+
+# Exactly one heredoc; the region before it is nothing but an optional `cd` and
+# the interpreter reading stdin, with `(` and backtick excluded so no command
+# substitution can hide in the `cd` operand; the tag must be QUOTED
+# (`proc_scan_heredoc_tag` enforces that, which is what makes the body literal);
+# and the terminator must be the final token of the whitespace-normalized
+# command, so nothing is chained after the program.
+launcher_heredoc_program_shape if {
+	count(proc_scan_heredoc_parts) == 2
+	regex.match(`^(cd [^;|&()<>\x60]+ && )?(/usr/bin/)?python3? - ?$`, proc_scan_heredoc_parts[0])
+	not heredoc_tail_chains_command
+	terminator_parts := split(proc_scan_norm_command, concat("", [" ", proc_scan_heredoc_tag]))
+	count(terminator_parts) == 2
+	terminator_parts[1] == ""
+}
+
+# Dynamic attribute/namespace lookup. `os.system` split across a concatenation
+# and re-joined by `getattr`/`globals()` matches no literal exec marker, so a
+# heredoc program -- which gets no statement-head analysis -- must refuse these
+# outright. Scoped to shape (III) so the existing exemptions are unchanged.
+launcher_dynamic_dispatch_markers := {
+	"getattr", "__getattribute__", "globals(", "locals(", "vars(",
+	"builtins", "__dict__",
+}
+
+launcher_dynamic_dispatch_marker if {
+	some marker in launcher_dynamic_dispatch_markers
+	contains(lower(proc_scan_norm_command), marker)
+}
+
 # Read-only process checks that shell out to exact `pgrep -x` from Python are
 # allowed. This covers the repo runtime preflight form that checks Steam, the
 # approved direct game process, and stale `start_protected_game.exe` presence
@@ -1114,6 +1312,7 @@ pgrep_subprocess_python_shape if {
 pgrep_subprocess_python_shape if {
 	count(proc_scan_heredoc_parts) == 2
 	regex.match(`^(/usr/bin/)?pgrep -x steam >/dev/null && echo steam-running \|\| echo steam-missing;? (/usr/bin/)?python3? - ?$`, proc_scan_heredoc_parts[0])
+	not heredoc_tail_chains_command
 	terminator_parts := split(proc_scan_norm_command, concat("", [" ", proc_scan_heredoc_tag]))
 	count(terminator_parts) == 2
 	terminator_parts[1] == ""
@@ -1126,6 +1325,7 @@ pgrep_subprocess_python_shape if {
 pgrep_subprocess_python_shape if {
 	count(proc_scan_heredoc_parts) == 2
 	regex.match(`^(/usr/bin/)?sleep [0-9]+(\.[0-9]+)?; (/usr/bin/)?python3? - ?$`, proc_scan_heredoc_parts[0])
+	not heredoc_tail_chains_command
 	terminator_parts := split(proc_scan_norm_command, concat("", [" ", proc_scan_heredoc_tag]))
 	count(terminator_parts) == 2
 	terminator_parts[1] == ""
