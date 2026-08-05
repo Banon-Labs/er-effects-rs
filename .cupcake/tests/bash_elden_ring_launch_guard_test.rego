@@ -214,6 +214,303 @@ test_deny_bd_quoted_binary_path_chained_with_bare_launcher if {
 	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
 }
 
+# ---------------------------------------------------------------------------
+# 2026-08-04 false positive #2: EDITING A DOCSTRING that names the launcher was
+# denied.
+#
+# The blocked command was a `python3 - <<'PY'` heredoc that removed this
+# sentence from scripts/frida-dump-module.py's module docstring:
+#
+#     * Offline `eldenring.exe` ONLY. Refuses `start_protected_game.exe` / EAC,
+#       like the sibling `frida-nudge.py`.
+#
+# Root cause: the substring fallback arm. `scrubbed_command` drops the heredoc
+# BODY, so no command-position regex can see anything; the fallback instead
+# scans the RAW payload and denies on "the name occurs" plus
+# `executable_source_marker` -- a set of generic words that includes "python",
+# which the interpreter's own name always supplies. So every python heredoc
+# whose body names the launcher was denied regardless of what the program did.
+#
+# This repo deliberately writes refusal logic and safety documentation that
+# NAMES the forbidden binary, so that made its own safety text uneditable.
+# ---------------------------------------------------------------------------
+
+# The exact denied command (the docstring keeps its markdown backticks, which is
+# why the exemption cannot simply ban backticks in a quoted-tag heredoc body:
+# `<<'PY'` makes the body fully literal, so nothing there expands).
+test_allow_python_heredoc_editing_docstring_naming_eac_launcher if {
+	cmd := concat("\n", [
+		"python3 - <<'PY'",
+		"from pathlib import Path",
+		"p = Path('scripts/frida-dump-module.py')",
+		"s = p.read_text(encoding='utf-8')",
+		"old = \"\"\"* Offline `eldenring.exe` ONLY. Refuses `start_protected_game.exe` / EAC, like the sibling",
+		"  `frida-nudge.py`.",
+		"\"\"\"",
+		"assert old in s",
+		"p.write_text(s.replace(old, ''), encoding='utf-8')",
+		"print('docstring line removed')",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# The live engine delivers the command whitespace-flattened; same verdict.
+test_allow_python_heredoc_editing_docstring_flattened if {
+	cmd := "python3 - <<'PY' from pathlib import Path p = Path('scripts/frida-dump-module.py') s = p.read_text(encoding='utf-8') old = \"\"\"* Offline `eldenring.exe` ONLY. Refuses `start_protected_game.exe` / EAC, like the sibling `frida-nudge.py`. \"\"\" assert old in s p.write_text(s.replace(old, ''), encoding='utf-8') PY"
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# A worktree `cd` prefix before the same edit is still an edit.
+test_allow_cd_prefixed_python_heredoc_editing_repo_file if {
+	cmd := concat("\n", [
+		"cd /home/banon/projects/er-effects-rs && python3 - <<'PY'",
+		"from pathlib import Path",
+		"p = Path('scripts/frida-dump-module.py')",
+		"p.write_text(p.read_text().replace('Refuses start_protected_game.exe / EAC, ', ''))",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# Adding a safety COMMENT that names the binary it refuses.
+test_allow_python_heredoc_writing_refusal_comment_naming_eac_launcher if {
+	cmd := concat("\n", [
+		"python3 - <<'PY'",
+		"from pathlib import Path",
+		"p = Path('scripts/frida-dump-module.py')",
+		"lines = p.read_text().splitlines()",
+		"lines.insert(1, '# Refuses start_protected_game.exe / EAC targets by design.')",
+		"p.write_text('\\n'.join(lines))",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# READING a repo file that contains the name, from the same inline-program shape.
+test_allow_python_heredoc_reading_file_containing_launcher_name if {
+	cmd := concat("\n", [
+		"python3 - <<'PY'",
+		"from pathlib import Path",
+		"for line in Path('scripts/er-stale-run-sentinel.sh').read_text().splitlines():",
+		"    if 'start_protected_game.exe' in line:",
+		"        print(line)",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# The `python3 -c` twin of the same edit.
+test_allow_python_c_rewriting_repo_file_naming_eac_launcher if {
+	cmd := `python3 -c "import pathlib; p = pathlib.Path('scripts/frida-dump-module.py'); p.write_text(p.read_text().replace('Refuses start_protected_game.exe / EAC, ', ''))"`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# Non-interpreter editors/readers operating on a repo file that names the
+# launcher (these already passed; they pin the other half of the distinction).
+test_allow_sed_inplace_edit_of_file_naming_eac_launcher if {
+	cmd := `sed -i 's/start_protected_game.exe/REDACTED/' scripts/er-stale-run-sentinel.sh`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+test_allow_sed_print_matching_lines_naming_eac_launcher if {
+	cmd := `sed -n '/start_protected_game.exe/p' scripts/er-stale-run-sentinel.sh`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# --- ... and the inline-program exemption must not become a launch bypass ----
+
+# An edit that also launches: the exec mechanism keeps the exemption off.
+test_deny_python_heredoc_file_edit_plus_subprocess_launch if {
+	cmd := concat("\n", [
+		"python3 - <<'PY'",
+		"import subprocess",
+		"from pathlib import Path",
+		"Path('scripts/frida-dump-module.py').write_text('# start_protected_game.exe')",
+		"subprocess.run(['wine', '/opt/er/start_protected_game.exe'])",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# Dynamic dispatch reconstructs an exec call out of fragments that no literal
+# marker matches (`getattr(os, 'sy' + 'stem')`). The exemption additionally
+# refuses attribute/namespace lookup verbs for exactly this shape.
+test_deny_python_heredoc_file_edit_with_getattr_obfuscated_exec if {
+	cmd := concat("\n", [
+		"python3 - <<'PY'",
+		"import os",
+		"from pathlib import Path",
+		"Path('scripts/frida-dump-module.py').write_text('# note')",
+		"launcher = 'start_protected_game.exe'",
+		"getattr(os, 'sy' + 'stem')('/opt/er/' + launcher)",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+test_deny_python_heredoc_file_edit_with_globals_obfuscated_exec if {
+	cmd := concat("\n", [
+		"python3 - <<'PY'",
+		"import os",
+		"open('scripts/note.txt', 'w').write('start_protected_game.exe')",
+		"globals()['o' + 's'].system('/opt/er/start_protected_game.exe')",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# Shell riding after the heredoc terminator breaks the single-program shape.
+test_deny_python_heredoc_file_edit_then_trailing_launch if {
+	cmd := concat("\n", [
+		"python3 - <<'PY'",
+		"from pathlib import Path",
+		"Path('scripts/frida-dump-module.py').write_text('# start_protected_game.exe')",
+		"PY",
+		"setsid '/opt/er/start_protected_game.exe'",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# An UNQUOTED heredoc tag lets the shell expand the body, so a command
+# substitution in there really runs. The exemption requires a quoted tag.
+test_deny_python_heredoc_unquoted_tag_with_command_substitution if {
+	cmd := concat("\n", [
+		"python3 - <<PY",
+		"print('editing')",
+		"$( '/opt/er/start_protected_game.exe' )",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# A backtick substitution in the `cd` prefix is real shell, outside the literal
+# heredoc body.
+test_deny_backtick_substitution_in_cd_prefix_before_python_heredoc if {
+	cmd := concat("\n", [
+		"cd `cat /tmp/dir` && python3 - <<'PY'",
+		"from pathlib import Path",
+		"Path('x.py').write_text('start_protected_game.exe')",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# A chained launch after the `-c` edit breaks the single-program shape.
+test_deny_python_c_file_edit_chained_with_wine_launch if {
+	cmd := `python3 -c "open('x.py','w').write('start_protected_game.exe')"; wine /opt/er/start_protected_game.exe`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# The name reaching the SHELL unquoted is a command word, not program text.
+test_deny_python_heredoc_edit_with_unquoted_launcher_outside_heredoc if {
+	cmd := concat("\n", [
+		"python3 - <<'PY' /opt/er/start_protected_game.exe",
+		"from pathlib import Path",
+		"Path('x.py').write_text('note')",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# ---------------------------------------------------------------------------
+# Shell riding on the heredoc REDIRECTION LINE (found 2026-08-04 while adding
+# the exemption above; the `/proc` heredoc exemption had the same hole). Every
+# heredoc shape checked the region before `<<` and the region after the
+# terminator, but not the region between the tag and the body -- and
+# `python3 - <<'PY' | bash` feeds the PROGRAM'S OUTPUT to a shell, so a path the
+# program merely prints really executes.
+# ---------------------------------------------------------------------------
+
+test_deny_python_heredoc_edit_piped_into_shell if {
+	cmd := concat("\n", [
+		"python3 - <<'PY' | bash",
+		"print(\"'/opt/er/start_protected_game.exe'\")",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+test_deny_proc_scan_heredoc_piped_into_shell if {
+	cmd := concat("\n", [
+		"python3 - <<'PY' | bash",
+		"print(open('/proc/1/comm').read())",
+		"print(\"'/opt/er/start_protected_game.exe'\")",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# A plain output redirect on that line is not an execution path and stays
+# allowed -- the refusal is scoped to chaining operators.
+test_allow_python_heredoc_edit_with_plain_output_redirect if {
+	cmd := concat("\n", [
+		"python3 - <<'PY' > /tmp/edit.log",
+		"from pathlib import Path",
+		"p = Path('scripts/frida-dump-module.py')",
+		"p.write_text(p.read_text().replace('Refuses start_protected_game.exe / EAC, ', ''))",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# ... but a redirect followed by a pipe is still a pipe.
+test_deny_python_heredoc_edit_redirect_then_piped_into_shell if {
+	cmd := concat("\n", [
+		"python3 - <<'PY' 2>/dev/null | bash",
+		"print(\"'/opt/er/start_protected_game.exe'\")",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# Process substitution on the redirection line executes its own command.
+test_deny_python_heredoc_edit_with_process_substitution if {
+	cmd := concat("\n", [
+		"python3 - <<'PY' > >(wine /opt/er/start_protected_game.exe)",
+		"print('note')",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# The exemption reads the COMMAND; a non-command tool field naming the launcher
+# keeps the guard on.
+test_deny_python_heredoc_edit_with_launcher_in_description_field if {
+	event := bash_event_with_description(
+		concat("\n", [
+			"python3 - <<'PY'",
+			"from pathlib import Path",
+			"Path('scripts/frida-dump-module.py').write_text('# note')",
+			"PY",
+		]),
+		"probe start_protected_game.exe",
+	)
+	denials := guard.deny with input as event
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
 # --- (b) Exact stale-process detection is ALLOWED ---------------------------
 
 # Process detection is explicitly allowed by repo policy; only launching the
@@ -614,6 +911,168 @@ test_deny_proc_scan_heredoc_unquoted_launcher_name if {
 		"PY",
 	])
 	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# ---------------------------------------------------------------------------
+# 2026-08-04 false positive #3: INERT SHELL AFTER THE HEREDOC TERMINATOR.
+#
+# A read-only /proc walk was denied for printing a timestamp after the program:
+#
+#     python3 - <<'PY'
+#     ... opens /proc/<pid>/{comm,cmdline,stat} and prints every process whose
+#     ... comm matches ["eldenring.exe","me3","start_protected_game.exe"] ...
+#     PY
+#     echo "--- date ---"; date -u +%Y-%m-%dT%H:%M:%SZ
+#
+# It launches nothing -- the launcher name is a python list element compared
+# against /proc/<pid>/comm, which is exactly the process DETECTION AGENTS.md
+# permits and exactly what scripts/er-stale-run-sentinel.sh does with those same
+# three names. Measured on the denied payload: `proc_scan_exec_marker`
+# undefined, `heredoc_tail_chains_command` undefined, tag `PY` resolved, the
+# name quoted. The SOLE failing condition was `terminator_parts[1] == ""`, so
+# the two trailing inert statements dropped the payload into the substring
+# fallback -- whose entire test is "the name occurs" plus a generic marker word,
+# and an interpreter invocation always supplies "python".
+#
+# The narrowing accepts a non-empty trailer only when it is provably inert: no
+# `$`/backtick/`(`/`)`/`<`/`>`/`|`, every `;`/`&`-separated statement headed by a
+# word in `launcher_inert_heads`, and no launcher name in it.
+# ---------------------------------------------------------------------------
+
+# The read-only /proc walk, verbatim from the denied command. Both the full and
+# the 15-char-truncated comm names are matched because the kernel truncates
+# /proc/<pid>/comm at 15 characters.
+proc_walk_lines := [
+	"python3 - <<'PY'",
+	"import os, glob",
+	"COMM_MAX=15",
+	"names={}",
+	`for raw in ["eldenring.exe","me3","start_protected_game.exe"]:`,
+	"    names[raw]=1; names[raw[:COMM_MAX]]=1",
+	"for d in sorted(glob.glob('/proc/[0-9]*'), key=lambda x:int(os.path.basename(x))):",
+	"    try: comm=open(os.path.join(d,'comm')).read().strip()",
+	"    except OSError: continue",
+	"    if comm in names:",
+	"        pid=os.path.basename(d)",
+	`        try: cmd=[a.decode('utf-8','replace') for a in open(os.path.join(d,'cmdline'),'rb').read().split(b'\0') if a]`,
+	"        except OSError: cmd=[]",
+	"        try:",
+	"            s=open(f'/proc/{pid}/stat').read(); ppid=s[s.rindex(')')+2:].split()[1]",
+	"        except OSError: ppid='?'",
+	`        print(pid, comm, "ppid="+ppid, cmd)`,
+	"PY",
+]
+
+proc_walk_with_trailer(trailer) := concat("\n", array.concat(proc_walk_lines, [trailer]))
+
+# The exact denied command.
+test_allow_proc_walk_heredoc_with_inert_trailing_statements if {
+	cmd := proc_walk_with_trailer(`echo "--- date ---"; date -u +%Y-%m-%dT%H:%M:%SZ`)
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# The live engine delivers the command whitespace-flattened; same verdict.
+test_allow_proc_walk_heredoc_with_inert_trailing_statements_flattened if {
+	cmd := `python3 - <<'PY' import os, glob COMM_MAX=15 names={} for raw in ["eldenring.exe","me3","start_protected_game.exe"]: names[raw]=1; names[raw[:COMM_MAX]]=1 for d in sorted(glob.glob('/proc/[0-9]*'), key=lambda x:int(os.path.basename(x))): try: comm=open(os.path.join(d,'comm')).read().strip() except OSError: continue if comm in names: pid=os.path.basename(d) try: cmd=[a.decode('utf-8','replace') for a in open(os.path.join(d,'cmdline'),'rb').read().split(b'\0') if a] except OSError: cmd=[] try: s=open(f'/proc/{pid}/stat').read(); ppid=s[s.rindex(')')+2:].split()[1] except OSError: ppid='?' print(pid, comm, "ppid="+ppid, cmd) PY echo "--- date ---"; date -u +%Y-%m-%dT%H:%M:%SZ`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# A single inert trailing statement.
+test_allow_proc_walk_heredoc_with_single_trailing_echo if {
+	cmd := proc_walk_with_trailer("echo done")
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# `&&`-chained inert statements split the same way `;` does.
+test_allow_proc_walk_heredoc_with_and_chained_inert_trailer if {
+	cmd := proc_walk_with_trailer("date -u && echo scan-complete")
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# --- ... and an inert trailer must not become a launch bypass ----------------
+
+test_deny_proc_walk_heredoc_then_trailing_wine_launch if {
+	cmd := proc_walk_with_trailer(`echo "--- date ---"; wine /opt/er/start_protected_game.exe`)
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+test_deny_proc_walk_heredoc_then_trailing_bare_launcher if {
+	cmd := proc_walk_with_trailer("echo done; start_protected_game.exe --offline")
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+test_deny_proc_walk_heredoc_then_trailing_setsid_quoted_launcher if {
+	cmd := proc_walk_with_trailer(`echo done; setsid '/opt/er/start_protected_game.exe'`)
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+test_deny_proc_walk_heredoc_then_trailing_env_wrapped_launcher if {
+	cmd := proc_walk_with_trailer("echo done; env WINEPREFIX=/tmp/pfx /opt/er/start_protected_game.exe")
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# A command substitution in the trailer runs before the inert head ever does.
+test_deny_proc_walk_heredoc_then_trailing_command_substitution_launch if {
+	cmd := proc_walk_with_trailer(`echo "$(wine /opt/er/start_protected_game.exe)"`)
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# An inert head does not make a PIPE inert.
+test_deny_proc_walk_heredoc_then_trailing_pipe_into_shell if {
+	cmd := proc_walk_with_trailer(`echo '/opt/er/start_protected_game.exe' | bash`)
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# Shells and interpreters are deliberately absent from `launcher_inert_heads`:
+# a trailing script invocation can start anything, so it keeps the guard on.
+test_deny_proc_walk_heredoc_then_trailing_bash_script if {
+	cmd := proc_walk_with_trailer("echo done; bash scripts/er-stale-run-sentinel.sh")
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# Deliberate conservatism: the trailer may not NAME the launcher even under an
+# inert head. Pre-existing behavior -- the post-terminator deny arms
+# (`launch_post_heredoc_region`) already match a bare name out there -- so the
+# trailer rule stays consistent with them rather than carving an exception.
+test_deny_proc_walk_heredoc_trailing_echo_naming_launcher if {
+	cmd := proc_walk_with_trailer(`echo 'start_protected_game.exe not found'`)
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# The Steam launch arms are untouched by the trailer narrowing.
+test_deny_proc_walk_heredoc_then_trailing_steam_applaunch if {
+	cmd := proc_walk_with_trailer("echo done; steam -applaunch 1245620")
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-ELDEN-RING-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+test_deny_proc_walk_heredoc_then_trailing_xdg_open_steam_url if {
+	cmd := proc_walk_with_trailer("echo done; xdg-open steam://run/1245620")
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-ELDEN-RING-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# The exemption reads the COMMAND; a non-command tool field naming the launcher
+# keeps the guard on even with a fully inert trailer.
+test_deny_proc_walk_heredoc_inert_trailer_with_launcher_in_description if {
+	event := bash_event_with_description(
+		proc_walk_with_trailer("echo done"),
+		"probe start_protected_game.exe",
+	)
+	denials := guard.deny with input as event
 	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
 }
 

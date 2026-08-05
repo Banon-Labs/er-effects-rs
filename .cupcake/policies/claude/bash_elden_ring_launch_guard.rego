@@ -833,13 +833,95 @@ proc_scan_heredoc_tag := tag if {
 	regex.match(`^[A-Za-z_][A-Za-z0-9_]*$`, tag)
 }
 
+# ---------------------------------------------------------------------------
+# Text AFTER the heredoc terminator.
+#
+# False positive fixed 2026-08-04 (third of the day). This read-only /proc walk
+# was denied:
+#
+#     python3 - <<'PY'
+#     ... walks /proc/<pid>/{comm,cmdline,stat}, matching each comm against
+#     ... ["eldenring.exe","me3","start_protected_game.exe"] and printing hits
+#     PY
+#     echo "--- date ---"; date -u +%Y-%m-%dT%H:%M:%SZ
+#
+# It launches nothing. The launcher name is a python list element compared
+# against /proc/<pid>/comm -- process DETECTION, which AGENTS.md explicitly
+# permits ("Process detection of stale start_protected_game.exe is allowed, but
+# launching it is not") and which the repo's own er-stale-run-sentinel.sh
+# performs with those same three names. Every other condition of
+# `proc_scan_detection_or_teardown_command` already held (measured: exec-marker
+# scan clean, redirection line clean, name quoted); the SOLE failing condition
+# was `terminator_parts[1] == ""` -- the two trailing inert statements. That
+# dropped the payload into the substring fallback, whose entire test is "the
+# name occurs" plus a generic marker word, and an interpreter invocation always
+# supplies "python".
+#
+# `proc_scan_heredoc_trailer` is the region following the terminator. Unlike the
+# quoted-tag body it is genuine shell, so it must still be scanned -- but
+# demanding it be EMPTY denied a program for printing a timestamp afterwards.
+# Non-empty is now accepted only when the trailer is provably inert, which
+# preserves the "no shell rides after the program" property for anything that
+# could start a process:
+#   * no `$`, backtick, `(`, `)`, `<`, `>` or `|` anywhere in it -- that bars
+#     command substitution, subshells, process substitution, redirects and
+#     pipes, so the trailer can only be a flat list of simple commands;
+#   * `;` and `&` split it into statements, and EVERY statement's head word must
+#     be in `launcher_inert_heads` (basename-matched) -- the same allowlist the
+#     naming-as-data shapes use, which contains no interpreter, shell, wrapper
+#     (`env`, `sudo`, `nohup`, `setsid`, `xargs`) or launcher word, so
+#     `; wine ...`, `; setsid ...`, `; steam ...` and a bare `; <launcher>` all
+#     fail it; and
+#   * the trailer must not name the launcher at all. Such a mention would be
+#     harmless under the head allowlist, but keeping it out means the
+#     post-terminator deny arms (`launch_post_heredoc_region`) stay the only
+#     thing that has to reason about a launcher name out there.
+# ---------------------------------------------------------------------------
+
+proc_scan_heredoc_trailer := trailer if {
+	terminator_parts := split(proc_scan_norm_command, concat("", [" ", proc_scan_heredoc_tag]))
+	count(terminator_parts) == 2
+	trailer := terminator_parts[1]
+}
+
+proc_scan_heredoc_trailer_inert if {
+	proc_scan_heredoc_trailer == ""
+}
+
+proc_scan_heredoc_trailer_inert if {
+	proc_scan_heredoc_trailer != ""
+	not regex.match(`[$|()<>\x60]`, proc_scan_heredoc_trailer)
+	not contains(lower(proc_scan_heredoc_trailer), "start_protected_game.exe")
+	proc_scan_trailer_statement_count > 0
+	proc_scan_trailer_inert_statement_count == proc_scan_trailer_statement_count
+}
+
+# Quotes and tabs folded to spaces so a quoted argument tokenizes like a plain
+# word, then `&` folded into `;` so `a && b` and `a & b` split like `a; b`.
+proc_scan_trailer_pieces := split(
+	replace(replace(replace(replace(lower(proc_scan_heredoc_trailer), `"`, " "), "'", " "), "\t", " "), "&", ";"),
+	";",
+)
+
+proc_scan_trailer_statement_count := count([idx |
+	some idx, piece in proc_scan_trailer_pieces
+	tokens := [token | some token in split(piece, " "); token != ""]
+	count(tokens) > 0
+])
+
+proc_scan_trailer_inert_statement_count := count([idx |
+	some idx, piece in proc_scan_trailer_pieces
+	tokens := [token | some token in split(piece, " "); token != ""]
+	count(tokens) > 0
+	path_parts := split(tokens[0], "/")
+	path_parts[count(path_parts) - 1] in launcher_inert_heads
+])
+
 proc_scan_python_shape if {
 	count(proc_scan_heredoc_parts) == 2
 	regex.match(`^(cd [^;|&()<>]+ && )?(/usr/bin/)?python3? - ?$`, proc_scan_heredoc_parts[0])
 	not heredoc_tail_chains_command
-	terminator_parts := split(proc_scan_norm_command, concat("", [" ", proc_scan_heredoc_tag]))
-	count(terminator_parts) == 2
-	terminator_parts[1] == ""
+	proc_scan_heredoc_trailer_inert
 }
 
 # Runtime preflight may check Steam with shell pgrep before a Python heredoc scans exact
@@ -849,9 +931,7 @@ proc_scan_python_shape if {
 	count(proc_scan_heredoc_parts) == 2
 	regex.match(`^(/usr/bin/)?pgrep -x steam >/dev/null && echo steam-running \|\| echo steam-missing;? (/usr/bin/)?python3? - ?$`, proc_scan_heredoc_parts[0])
 	not heredoc_tail_chains_command
-	terminator_parts := split(proc_scan_norm_command, concat("", [" ", proc_scan_heredoc_tag]))
-	count(terminator_parts) == 2
-	terminator_parts[1] == ""
+	proc_scan_heredoc_trailer_inert
 }
 
 # Inline form: `python3 -c '<program>'` with nothing outside the quotes; the
@@ -1258,15 +1338,14 @@ launcher_heredoc_program_data if {
 # the interpreter reading stdin, with `(` and backtick excluded so no command
 # substitution can hide in the `cd` operand; the tag must be QUOTED
 # (`proc_scan_heredoc_tag` enforces that, which is what makes the body literal);
-# and the terminator must be the final token of the whitespace-normalized
-# command, so nothing is chained after the program.
+# and nothing that could start a process may follow the terminator
+# (`proc_scan_heredoc_trailer_inert`: empty, or a flat list of statements whose
+# heads are all in `launcher_inert_heads`, with no launcher name).
 launcher_heredoc_program_shape if {
 	count(proc_scan_heredoc_parts) == 2
 	regex.match(`^(cd [^;|&()<>\x60]+ && )?(/usr/bin/)?python3? - ?$`, proc_scan_heredoc_parts[0])
 	not heredoc_tail_chains_command
-	terminator_parts := split(proc_scan_norm_command, concat("", [" ", proc_scan_heredoc_tag]))
-	count(terminator_parts) == 2
-	terminator_parts[1] == ""
+	proc_scan_heredoc_trailer_inert
 }
 
 # Dynamic attribute/namespace lookup. `os.system` split across a concatenation
