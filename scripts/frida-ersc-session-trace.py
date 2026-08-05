@@ -168,6 +168,55 @@ function readSession() {
 // window only exists while the search is DRY.
 let dumpedAt15 = false;
 let wanted = null;
+// AUTO-CANCEL STATE.
+// `lastActionArgs` holds the (arg0, arg1) the ENGINE passed on a real option press. The reject
+// actuator replays those exact values rather than synthesising them: arg0 is OSM, but arg1 measured
+// as 0x10f630 -- small enough to be a stack address, and fabricating a pointer for an argument whose
+// use is unknown is how you crash someone's game. If no press has been observed this session the
+// actuator REFUSES to fire; failing closed is the only safe default when the alternative is calling
+// a function with invented arguments.
+let lastActionArgs = null;
+let autoCancel = false;
+let cancelFn = null;
+let cancelsFired = 0;
+let cancelBudget = 0;      // 0 == unlimited
+let matchArea = true;      // compare the AREA byte, not the whole block id
+// RUNAWAY GUARD, expressed as CORRECTNESS rather than a count. A fixed budget cuts a WORKING loop
+// short -- the user may legitimately need many rejects before the wanted area comes up. What must
+// never happen is cancelling forever while the cancel is not actually working. So: after each
+// auto-cancel the session is expected to return to idle (0x00). If several fire in a row and it
+// never does, the actuator is not doing what it claims and disarms itself.
+let cancelsSinceIdle = 0;
+const CANCELS_WITHOUT_IDLE_LIMIT = 3;
+
+// SELF-DRIVING RE-ARM.
+// After an auto-cancel the session walks back to idle (0x00). Re-invading from there keeps the
+// search alive without the user pressing anything, so a hunt for one area runs unattended.
+//
+// The re-invade MUST happen on the GAME THREAD. The state poll is a JS timer on frida's thread, and
+// calling into ERSC from there would run session code concurrently with the game's own update. So
+// the call is deferred to a hook on the session-update function (ersc+0x71420 -- the same function
+// whose arithmetic computes state 0x15), which the engine calls continuously on its own thread.
+//
+// `inOurCall` separates OUR invocations from the user's. A cancel that arrives while it is false is
+// the USER cancelling by hand, which is the agreed stop signal: self-driving disarms and the loop
+// ends. Without that flag our own cancel would look like a user cancel and stop the loop instantly.
+let pendingReinvade = false;
+let inOurCall = false;
+let invadeFn = null;
+let reinvades = 0;
+// Tick accounting. The re-invade fired from ersc+0x71420 never ran even though the session reached
+// idle, and it produced no error -- meaning the CONDITION never held, not that the call failed. The
+// prime suspect is the tick itself: 0x71420 is the SESSION UPDATE, so it plausibly stops being
+// called once there is no session, i.e. exactly when the re-invade needs to happen. Counting ticks
+// and recording how many arrive while idle turns that suspicion into a measurement.
+let tickCount = 0;
+let ticksWhilePending = 0;
+let ticksWhileIdle = 0;
+
+function noteIdleForCancelGuard(state) {
+  if (state === 0x00) cancelsSinceIdle = 0;
+}
 function dumpSeekCandidateRegion(S) {
   if (dumpedAt15) return null;
   function hex(ptr, len) {
@@ -235,13 +284,49 @@ function dumpSeekCandidateRegion(S) {
   return out;
 }
 
+// Re-invade from the POLL thread, and only at idle.
+//
+// This reverses my earlier caution, on measurement rather than instinct. The plan was to issue the
+// re-invade from a game-thread hook on ersc+0x71420 (the session update). The tick diagnostic
+// falsified that outright: `ticks=2 (while re-invade pending=1, while idle=0)` -- 0x71420 is a
+// TRANSITION handler, not a per-frame update, and it never runs at idle. The re-invade was waiting
+// on a clock that had already stopped.
+//
+// The same data licenses this path. ERSC session code is provably NOT executing while the session
+// is idle (that is exactly what `whileIdle=0` means), so there is no concurrent session update to
+// race. Restricting the call to state 0x00 keeps it in that quiescent window; it is never issued
+// mid-search, mid-join, or during the 0x22 teardown.
+function maybeReinvadeAtIdle(state) {
+  if (!pendingReinvade || inOurCall || !autoCancel) return;
+  if (state !== 0x00) return;
+  if (osm === null || lastActionArgs === null) return;
+  try {
+    if (invadeFn === null) {
+      invadeFn = new NativeFunction(base.add(RVA.invade), 'void',
+                                    ['pointer', 'pointer', 'int', 'int']);
+    }
+    inOurCall = true;
+    try {
+      invadeFn(lastActionArgs[0], lastActionArgs[1], 1, 1);
+    } finally { inOurCall = false; }
+    pendingReinvade = false;
+    reinvades++;
+    send({ type: 'self-drive', state: 're-invaded', reinvades: reinvades, cancels: cancelsFired });
+  } catch (e) {
+    pendingReinvade = false;
+    send({ type: 'self-drive', state: 'reinvade-failed', why: '' + e });
+  }
+}
+
 function emitIfChanged(why) {
   const now = readSession();
   if (now === null) return;
   const key = JSON.stringify(now);
   if (key === last) return;
   last = key;
+  noteIdleForCancelGuard(now.state);
   send({ type: 'session', why: why, fields: now });
+  maybeReinvadeAtIdle(now.state);
   if (now.state === 0x15) {
     try {
       const S = osm.add(0x58).readPointer();
@@ -262,8 +347,11 @@ function captureOsm(p, why) {
 }
 
 rpc.exports = {
-  start: function (wantBlock) {
+  start: function (wantBlock, autoCancelOn, maxCancels, useAreaMatch) {
     wanted = (wantBlock === null || wantBlock === undefined) ? null : wantBlock;
+    cancelBudget = maxCancels || 0;
+    autoCancel = !!autoCancelOn;
+    matchArea = !!useAreaMatch;
     const m = Process.findModuleByName('ersc.dll');
     if (m === null) return { error: 'ersc.dll not loaded' };
     base = m.base;
@@ -315,12 +403,61 @@ rpc.exports = {
             for (let a = 0; a < 4; a++) {
               try { argv.push(args[a].toString()); } catch (e) { argv.push('<?>'); }
             }
+            try { lastActionArgs = [args[0], args[1]]; } catch (e) { /* keep prior */ }
+            // A cancel we did NOT issue is the user stopping the hunt by hand -- the agreed exit.
+            if (pair[0] === 'cancel' && !inOurCall && autoCancel) {
+              autoCancel = false;
+              pendingReinvade = false;
+              send({ type: 'self-drive', state: 'disarmed-by-user',
+                     cancels: cancelsFired, reinvades: reinvades });
+            }
             send({ type: 'action', name: pair[0], args: argv, ret: this.returnAddress.toString() });
             emitIfChanged('action-enter:' + pair[0]);
           },
           onLeave() { emitIfChanged('action-leave:' + pair[0]); },
         });
       });
+
+    // ---- GAME-THREAD TICK for the self-driving re-invade ----
+    // ersc+0x71420 is the session update (it contains the bit-19 arithmetic that computes state
+    // 0x15), so the engine calls it constantly on its own thread. Piggybacking gives a safe place to
+    // issue the re-invade; doing it from the JS poll would call session code off-thread.
+    Interceptor.attach(base.add(0x71420), {
+      onEnter() {
+        tickCount++;
+        let state = -1;
+        try { state = osm === null ? -1 : osm.add(0x58).readPointer().add(0x110).readU32(); }
+        catch (e) { state = -1; }
+        if (state === 0x00) ticksWhileIdle++;
+        if (pendingReinvade) {
+          ticksWhilePending++;
+          if (ticksWhilePending === 1 || ticksWhilePending % 200 === 0) {
+            send({ type: 'tick-diag', ticks: tickCount, whilePending: ticksWhilePending,
+                   whileIdle: ticksWhileIdle, state: state });
+          }
+        }
+        if (!pendingReinvade || inOurCall || !autoCancel) return;
+        if (osm === null || lastActionArgs === null) return;
+        if (state !== 0x00) return;   // only re-invade from a settled, idle session
+        try {
+          if (invadeFn === null) {
+            invadeFn = new NativeFunction(base.add(RVA.invade), 'void',
+                                          ['pointer', 'pointer', 'int', 'int']);
+          }
+          inOurCall = true;
+          try {
+            invadeFn(lastActionArgs[0], lastActionArgs[1], 1, 1);
+          } finally { inOurCall = false; }
+          pendingReinvade = false;
+          reinvades++;
+          send({ type: 'self-drive', state: 're-invaded', reinvades: reinvades,
+                 cancels: cancelsFired });
+        } catch (e) {
+          pendingReinvade = false;
+          send({ type: 'self-drive', state: 'reinvade-failed', why: '' + e });
+        }
+      },
+    });
 
     // ---- THE JOIN OBSERVER (vanilla eldenring.exe, not ersc) ----
     //
@@ -372,7 +509,12 @@ rpc.exports = {
             rec.dest = '0x' + dest.toString(16);
             if (wanted !== null) {
               rec.wanted = '0x' + wanted.toString(16);
-              rec.verdict = (dest === wanted) ? 'KEEP' : 'REJECT';
+              const hit = matchArea
+                ? ((dest >>> 24) === (wanted >>> 24))
+                : (dest === wanted);
+              rec.matchMode = matchArea ? 'area' : 'exact';
+              rec.verdict = hit ? 'KEEP' : 'REJECT';
+              this.verdict = rec.verdict;
             }
           } catch (e) { /* unreadable */ }
           send(rec);
@@ -383,6 +525,46 @@ rpc.exports = {
               send({ type: 'join-after', block: '0x' + this.gm.add(0xac8).readU32().toString(16) });
             }
           } catch (e) { /* unreadable */ }
+          // THE REJECT. Fired from onLeave, not onEnter: the join data is fully written, so the
+          // session is in the same shape it is when a human cancels, rather than half-updated.
+          if (!(autoCancel && this.verdict === 'REJECT')) return;
+          if (cancelBudget > 0 && cancelsFired >= cancelBudget) {
+            send({ type: 'auto-cancel', ok: false, why: 'budget exhausted', fired: cancelsFired });
+            return;
+          }
+          if (cancelsSinceIdle >= CANCELS_WITHOUT_IDLE_LIMIT) {
+            send({
+              type: 'auto-cancel', ok: false, fired: cancelsFired,
+              why: 'DISARMED -- ' + cancelsSinceIdle + ' cancels fired without the session ever '
+                   + 'returning to idle, so the cancel is not taking effect',
+            });
+            autoCancel = false;
+            return;
+          }
+          if (lastActionArgs === null) {
+            send({
+              type: 'auto-cancel', ok: false,
+              why: 'no real option press observed yet -- refusing to call cancel with invented args',
+            });
+            return;
+          }
+          try {
+            if (cancelFn === null) {
+              cancelFn = new NativeFunction(base.add(RVA.cancel), 'void',
+                                            ['pointer', 'pointer', 'int', 'int']);
+            }
+            inOurCall = true;
+            try {
+              cancelFn(lastActionArgs[0], lastActionArgs[1], 1, 1);
+            } finally { inOurCall = false; }
+            cancelsFired++;
+            cancelsSinceIdle++;
+            pendingReinvade = true;
+            send({ type: 'auto-cancel', ok: true, fired: cancelsFired,
+                   args: [lastActionArgs[0].toString(), lastActionArgs[1].toString()] });
+          } catch (e) {
+            send({ type: 'auto-cancel', ok: false, why: '' + e });
+          }
         },
       });
       send({ type: 'join-hook', ok: true, addr: joinAddr.toString() });
@@ -402,6 +584,34 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gadget", default=GADGET)
     parser.add_argument("--out", default=DEFAULT_OUT)
+    parser.add_argument(
+        "--auto-cancel",
+        action="store_true",
+        help=(
+            "Arm the actuator: every match outside the wanted area is cancelled by calling "
+            "ersc+0x24460 with the (arg0, arg1) captured from a REAL option press. Unlimited by "
+            "default -- landing in the wanted place may legitimately take many rejects, and a fixed "
+            "budget would cut a WORKING loop short. The runaway guard is a correctness condition "
+            "instead: if cancels fire and the session stops returning to idle, the cancel is not "
+            "taking effect and the actuator disarms itself. It also refuses to fire until a real "
+            "option press has been observed, rather than calling with invented arguments."
+        ),
+    )
+    parser.add_argument(
+        "--max-cancels",
+        type=int,
+        default=0,
+        help="Optional hard cap on auto-cancels. 0 (default) = unlimited.",
+    )
+    parser.add_argument(
+        "--exact-block",
+        action="store_true",
+        help=(
+            "Match the FULL block id instead of just the area byte. Default is area matching, so "
+            "--want-block 0x0f000000 accepts any sub-block of that area -- 'somewhere in the "
+            "Haligtree' rather than one exact tile."
+        ),
+    )
     parser.add_argument(
         "--want-block",
         default=None,
@@ -476,6 +686,27 @@ def main() -> int:
             print(
                 f"ACTION {p['name']}  args={p.get('args')}  called_from={p.get('ret')}"
             )
+        elif kind == "tick-diag":
+            print(
+                f"TICK DIAG: session-update ticks={p['ticks']} (while re-invade pending="
+                f"{p['whilePending']}, while idle={p['whileIdle']}) current_state=0x{p['state']:02x}"
+            )
+        elif kind == "self-drive":
+            st = p.get("state")
+            if st == "re-invaded":
+                print(f"*** RE-INVADED automatically (#{p['reinvades']}) -- hunt continues ***")
+            elif st == "disarmed-by-user":
+                print(
+                    f"*** YOU CANCELLED -- self-driving OFF after {p['cancels']} cancels / "
+                    f"{p['reinvades']} re-invades ***"
+                )
+            else:
+                print(f"SELF-DRIVE {st}: {p.get('why')}", file=sys.stderr)
+        elif kind == "auto-cancel":
+            if p.get("ok"):
+                print(f"*** AUTO-CANCELLED (#{p['fired']}) -- rejected match dropped, search continues ***")
+            else:
+                print(f"AUTO-CANCEL DID NOT FIRE: {p.get('why')}", file=sys.stderr)
         elif kind == "join-hook":
             print(
                 f"JOIN OBSERVER {'armed at ' + p['addr'] if p['ok'] else 'REFUSED (prologue mismatch: got ' + str(p.get('got')) + ')'}"
@@ -532,7 +763,18 @@ def main() -> int:
     if args.want_block is not None:
         want = int(args.want_block, 0)
         print(f"LOCATION FILTER ARMED: want block {want:#010x} -- mismatches will be reported, NOT cancelled")
-    result = script.exports_sync.start(want)
+    if args.auto_cancel and want is None:
+        print("REFUSING: --auto-cancel without --want-block would cancel every match.", file=sys.stderr)
+        return 5
+    area_match = not args.exact_block
+    if args.auto_cancel:
+        scope = f"area {want >> 24:#04x}" if area_match else f"block {want:#010x}"
+        cap = "unlimited" if args.max_cancels == 0 else f"max {args.max_cancels}"
+        print(
+            f"AUTO-CANCEL ARMED ({cap}): every match outside {scope} is cancelled automatically; "
+            f"it disarms itself if cancels stop returning the session to idle."
+        )
+    result = script.exports_sync.start(want, args.auto_cancel, args.max_cancels, area_match)
     print(result)
     if result.get("error"):
         print(
