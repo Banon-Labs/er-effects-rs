@@ -831,9 +831,23 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     let covered: std::collections::BTreeSet<u32> = targets.iter().map(|t| t.block.raw()).collect();
     let legacy_regions = unsafe { legacy_map_regions_for_view(view_model) };
     let legacy_offered = legacy_regions.len();
+    let mut already_precise = 0usize;
+    let mut read_and_empty = 0usize;
     let provisional: Vec<_> = legacy_regions
         .into_iter()
-        .filter(|region| !covered.contains(&region.block.raw()))
+        .filter(|region| {
+            if covered.contains(&region.block.raw()) {
+                already_precise += 1;
+                return false;
+            }
+            // Visited, read, and it genuinely has no invasion points. A marker here would promise
+            // a spawn that does not exist, so retract it rather than leave it standing.
+            if msb_has_observed(region.block) {
+                read_and_empty += 1;
+                return false;
+            }
+            true
+        })
         .map(|region| {
             er_invasion_warp::invasion_warp::InvasionWarpTarget::provisional(region.block)
         })
@@ -842,12 +856,11 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     targets.extend(provisional);
     crate::standalone_log(format_args!(
         "map-inject: legacy-dungeon table: {legacy_offered} block(s) known to the world map's \
-         legacy converter, {provisional_pins} of them have no precise point yet and get a \
-         whole-dungeon marker (warping to one needs no coordinate -- the engine resolves that \
-         map's own spawn after the load). {} already had precise points and were left alone. \
-         legacy_offered=0 means the converter tree was unreadable and NO dungeon marker was \
-         placed.",
-        legacy_offered.saturating_sub(provisional_pins)
+         legacy converter -> {provisional_pins} whole-dungeon marker(s) for dungeons not yet \
+         entered (warping to one needs no coordinate: the engine resolves that map's own spawn \
+         after the load), {already_precise} superseded by precise points, {read_and_empty} \
+         visited and found to have no invasion points at all. legacy_offered=0 means the \
+         converter tree was unreadable and NO dungeon marker was placed."
     ));
     if msb_offered != msb_pins {
         crate::standalone_log(format_args!(
@@ -1326,6 +1339,25 @@ pub(crate) unsafe fn refresh_msb_catalog() -> (usize, usize) {
 /// Reported alongside coverage because the two together are the whole diagnosis: `read` climbing
 /// while `pending` falls is the harvest working; `pending` frozen at the full block count means
 /// every cap is dead, which is what a boot-time-only pass looks like.
+/// Whether the harvest has actually READ this block's MSB this session.
+///
+/// Distinguishes "we have not looked inside this dungeon yet" from "we looked and it has no
+/// invasion points at all". Only the first deserves a provisional marker; the second would be a
+/// marker promising an invasion spawn that does not exist.
+#[cfg(windows)]
+fn msb_has_observed(block: er_invasion_warp::invasion_warp::BlockKey) -> bool {
+    let catalog = match MSB_CATALOG.lock() {
+        Ok(catalog) => catalog,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    catalog.has_observed(block)
+}
+
+#[cfg(not(windows))]
+fn msb_has_observed(_block: er_invasion_warp::invasion_warp::BlockKey) -> bool {
+    false
+}
+
 #[cfg(windows)]
 fn msb_pending_block_count() -> usize {
     use er_invasion_warp::msb_invasion_points::resident_blocks;
