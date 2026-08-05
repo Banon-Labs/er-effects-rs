@@ -51,11 +51,23 @@ DEFAULT_OUT = (
     "fdd5f467-bf36-402d-bbcd-6defe1f4d0b7/scratchpad/steam-matchmaking-trace.jsonl"
 )
 
-#: Substrings of the flat-API export names worth hooking. The FILTER calls say what is being
-#: searched for; the list/join calls say which result was taken. Both halves are needed: a
-#: search with no filters and a search whose filter is a password hash look identical unless
-#: the filter calls are captured.
+#: Substrings of the flat-API export names worth hooking.
+#:
+#: MEASURED 2026-08-04: hooking ONLY the lobby API and attaching after boot produced ZERO calls
+#: across a complete invasion. Two reasons, and both are corrected here:
+#:
+#:  1. WRONG SURFACE. Seamless's matchmaking is its own, not the vanilla shape. Whatever selects
+#:     a target has to move data between peers, so the networking APIs are added -- P2P sessions
+#:     and SteamNetworkingMessages carry ERSC's own protocol, and rich presence / lobby member
+#:     data are how a session advertises who is in it.
+#:  2. WRONG TIME. A lobby joined during session setup is invisible to a tracer that attaches
+#:     afterwards. Nothing here fixes that -- the tracer must be started at BOOT, before the
+#:     session forms, or a per-session (rather than per-invasion) search is missed entirely.
+#:
+#: Kept broad on purpose: a call that never happens costs one idle hook, while a surface left
+#: unhooked costs a whole run and reads as a false negative.
 INTERESTING = [
+    # Lobby search/join -- the vanilla-shaped surface. Retained so its ABSENCE stays on record.
     "AddRequestLobbyListStringFilter",
     "AddRequestLobbyListNumericalFilter",
     "AddRequestLobbyListNearValueFilter",
@@ -71,6 +83,21 @@ INTERESTING = [
     "SetLobbyMemberData",
     "GetNumLobbyMembers",
     "GetLobbyMemberByIndex",
+    # ERSC's own transport. An invasion has to signal the host somehow, and this is where a
+    # target id would cross the wire.
+    "ISteamNetworkingMessages_SendMessageToUser",
+    "ISteamNetworkingMessages_ReceiveMessagesOnChannel",
+    "ISteamNetworkingMessages_AcceptSessionWithUser",
+    "ISteamNetworkingSockets_ConnectP2P",
+    "ISteamNetworkingSockets_SendMessageToConnection",
+    "ISteamNetworkingSockets_AcceptConnection",
+    "ISteamNetworking_SendP2PPacket",
+    "ISteamNetworking_ReadP2PPacket",
+    "ISteamNetworking_AcceptP2PSessionWithUser",
+    # How a session advertises and discovers its members.
+    "ISteamFriends_SetRichPresence",
+    "ISteamFriends_GetFriendRichPresence",
+    "ISteamFriends_RequestFriendRichPresence",
 ]
 
 AGENT = r"""
