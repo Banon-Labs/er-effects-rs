@@ -1644,13 +1644,32 @@ unsafe extern "system" fn warp_job_assembler_hook(
         None
     };
     let registry_ptr = INJECTED_REGISTRY.load(Ordering::SeqCst);
-    if let (Some(entity_id), true) = (entity_id, registry_ptr != 0)
+    // THE SWALLOW IS GATED ON THE ID BAND, NEVER ON THE LOOKUP SUCCEEDING.
+    //
+    // It used to require BOTH `registry_ptr != 0` AND a successful `target_for_entity_id`, with the
+    // NULL-job return nested inside that `if let Some(target)`. So a synthetic id that the registry
+    // could not resolve -- or any confirm arriving before the registry pointer was published -- fell
+    // straight through to the original assembler, which is the softlock this hook exists to prevent:
+    // the 0x7F000000-band id reaches CSLuaEventManImp::CallLua_Warp, Lua cannot resolve it, and the
+    // stage transition never completes.
+    //
+    // The invariant is one-directional and does not depend on our bookkeeping being correct: an id in
+    // our private band is MEANINGLESS TO THE ENGINE, so the native path can never do anything useful
+    // with it, only hang. A lookup miss is our bug; letting it through converts our bug into the
+    // user's frozen game. Refusing the warp and returning a NULL job leaves the map open and the
+    // player in control, which is the strictly better failure.
+    if let Some(entity_id) = entity_id
         && er_invasion_warp::map_surface::is_invasion_entity_id(entity_id)
     {
-        // SAFETY: the registry was leaked at injection time and is never freed or mutated.
-        let registry: &er_invasion_warp::map_surface::InvasionRowRegistry =
-            unsafe { &*(registry_ptr as *const _) };
-        if let Some(target) = registry.target_for_entity_id(entity_id) {
+        let target = if registry_ptr != 0 {
+            // SAFETY: the registry was leaked at injection time and is never freed or mutated.
+            let registry: &er_invasion_warp::map_surface::InvasionRowRegistry =
+                unsafe { &*(registry_ptr as *const _) };
+            registry.target_for_entity_id(entity_id)
+        } else {
+            None
+        };
+        if let Some(target) = target {
             CONFIRMS_INTERCEPTED.fetch_add(1, Ordering::SeqCst);
             match unsafe { er_invasion_warp::warp::request_invasion_warp(target) } {
                 Ok(outcome) => {
@@ -1682,13 +1701,31 @@ unsafe extern "system" fn warp_job_assembler_hook(
                     ));
                 }
             }
-            // NULL job either way. Letting the native path run with a synthetic id is the
-            // softlock, so it is never the fallback.
-            if out_job_slot != 0 {
-                unsafe { *(out_job_slot as *mut usize) = 0 };
-            }
-            return out_job_slot;
+        } else {
+            // An id in our band that we cannot map back to a target. Our bookkeeping is wrong --
+            // the registry was not published before the map opened, or the id was never registered
+            // -- but that is OUR problem to diagnose, and it must not become a hang. Counted as an
+            // interception because the confirm WAS ours and the native path WAS suppressed;
+            // CONFIRMS_WARPED stays put, so `intercepted > warped` is the exact signature of this
+            // case and is visible in the tallies without reading the log.
+            CONFIRMS_INTERCEPTED.fetch_add(1, Ordering::SeqCst);
+            crate::standalone_log(format_args!(
+                "map-confirm: invasion pin entity_id={entity_id:#x} UNRESOLVED \
+                 (registry_ptr={registry_ptr:#x}) -- no target for an id in our own band. \
+                 Native warp SWALLOWED anyway: handing a synthetic id to Lua_Warp hangs the \
+                 game on the loading screen, so a refused warp with the map still open is the \
+                 better failure. This line means the injected registry and the injected rows \
+                 disagree -- fix that, not this guard"
+            ));
         }
+        // NULL job on EVERY path that recognised one of our ids -- warped, refused, or
+        // unresolved. Letting the native assembler run with a synthetic id is the softlock, so
+        // it is never the fallback, and this return is deliberately outside the lookup so no
+        // future edit can nest it back inside one.
+        if out_job_slot != 0 {
+            unsafe { *(out_job_slot as *mut usize) = 0 };
+        }
+        return out_job_slot;
     }
 
     let orig = ORIG_WARP_JOB_ASSEMBLER.load(Ordering::SeqCst);

@@ -3,15 +3,20 @@
 
 WHAT THIS ANSWERS
 -----------------
-Static RE got as far as it can. The option table, the menu builder and the confirm hook are all
-plaintext and fully read (2026-08-04), but two things live inside the Themida-virtualized
-`seamless_session_manager` dispatcher and cannot be read at all:
+The option table, the menu builder and the confirm hook are plaintext and fully read (2026-08-04).
+Two things looked unreachable inside the Themida-virtualized `seamless_session_manager`:
 
   * what puts the session into state 0x15 -- the ONLY state in which "Seek opponent" appears; and
   * what consumes the opponent handle that "Seek opponent" latches.
 
-Neither is readable, but both are *observable*: the state is a plain dword and the latch is a
-plain qword, so sampling them across a real session reconstructs the machine from the outside.
+THE FIRST ONE TURNED OUT NOT TO BE IN THE VM AT ALL (2026-08-05). An earlier pass concluded "nothing
+plaintext sets 0x15" from an accessor search; that was a search artifact, not a fact. 0x15 is never
+a literal ANYWHERE in the image -- it is COMPUTED, by five plain instructions at ersc+0x716e7, from
+one bit. See S+0x00 below. The lesson generalises: "no immediate store of the value" is not the same
+as "no plaintext writer", and a constant that is arithmetic on a flag will never appear as a literal.
+
+The second is still unread, and is genuinely observable rather than readable: the latch is a plain
+qword, so sampling it across a real session reconstructs that half from the outside.
 
 WHAT IT WATCHES, and why each field
 -----------------------------------
@@ -21,11 +26,32 @@ Everything hangs off ERSC's option-menu object, `OSM`, and its session object `S
                            0x15 -> "Seek opponent" (index 0) + "Mark world" (index 1);
                            0x0D/0x0E/0x0F/0x11 -> only "Cancel search";
                            anything else -> the menu will not open at all.
-           "Invade world as a wanderer" sets it to 0x0D; "Cancel search" sets 0x22.
-           NOTHING PLAINTEXT sets 0x15 -- that is the question.
+           "Invade world as a wanderer" sets it to 0x0D; "Cancel search" sets 0x22 -- both as
+           immediate stores. 0x15 is not stored, it is computed; see S+0x00.
   S+0x1D4  cleared to 0 by the "Seek opponent" action. One writer, zero plaintext readers.
   S+0x1F0  the CHOSEN OPPONENT'S HANDLE, latched by "Seek opponent". Zero plaintext consumers.
            This is the closest thing in the mod to "invade this specific person".
+  S+0x00   THE FLAGS WORD THAT DECIDES 0x15. Found statically 2026-08-05, and it is NOT in the
+           virtualized dispatcher after all -- the state is plain arithmetic on one bit, at
+           ersc+0x716e7:
+               mov rax,[rsp+0x30]      ; = *(u32*)S, loaded at ersc+0x71584
+               shr eax,0x13            ; >> 19
+               and eax,1               ; bit 19  (0x0008_0000)
+               lea eax,[rax+rax*8]     ; x9
+               add eax,0xc             ; +12
+               mov [rdi+0x110],eax     ; 12 (0x0C) when clear, 21 (0x15) when SET
+           So "Seek opponent" is offered exactly when bit 19 of S+0x00 is set. Watching that bit
+           predicts the option's availability BEFORE the state byte changes, and distinguishes
+           "the state machine never moved" from "the bit was never set".
+  S+0x10C  update sentinel. `cmp dword [rdi+0x10c],0x7fffffff; je` at ersc+0x716db SKIPS the state
+           write entirely. If state looks frozen while the flags bit flips, this is why -- so it
+           is sampled rather than inferred.
+
+WHAT IS PROVEN vs INFERRED: the derivation above is proven from the bytes. What bit 19 MEANS is
+inferred from context (it sits right after a decrypt+validate of a 0x1C-byte buffer --
+`xorps xmm0,[rbx]` then `call ersc+0x171f00`), which points at server-pushed state, consistent with
+the destination arriving via CS::SosSignMan::SetMultiplayJoinData. Whether the bit can be
+influenced from the client is UNTESTED, and this script does not try -- it only reads.
 
 OSM is a heap allocation with no export, so it is captured rather than computed: the first call
 to show() or to the confirm callback hands it over in RCX.
@@ -95,14 +121,33 @@ let last = null;
 
 function hex(p) { try { return p.toString(); } catch (e) { return '<?>'; } }
 
+// Bit 19 of S+0x00 is the sole input to the 0x15 encoding (ersc+0x716ec: shr 0x13 / and 1).
+const SEEK_FLAG_BIT = 0x00080000;
+// `cmp dword [rdi+0x10c], 0x7fffffff; je` at ersc+0x716db skips the state write.
+const STATE_UPDATE_SUPPRESSED = 0x7fffffff;
+
 function readSession() {
   if (osm === null) return null;
   try {
     const S = osm.add(0x58).readPointer();
     if (S.isNull()) return null;
+    const flags = S.readU32();
+    const sentinel = S.add(0x10c).readU32();
+    const state = S.add(0x110).readU32();
+    // What the arithmetic at ersc+0x716e7 WOULD write given the flags right now. Recomputed here
+    // rather than assumed, so a disagreement between predicted and actual is visible as data --
+    // that gap is the signature of the 0x10c sentinel suppressing the write, or of some other
+    // writer owning the field.
+    const predicted = ((flags & SEEK_FLAG_BIT) ? 1 : 0) * 9 + 0xc;
     return {
       S: S.toString(),
-      state: S.add(0x110).readU32(),
+      flags: '0x' + flags.toString(16),
+      seekBit: (flags & SEEK_FLAG_BIT) !== 0,
+      sentinel: '0x' + sentinel.toString(16),
+      suppressed: sentinel === STATE_UPDATE_SUPPRESSED,
+      state: state,
+      predictedState: predicted,
+      agrees: predicted === state,
       f1d4: S.add(0x1d4).readU8(),
       latch: S.add(0x1f0).readU64().toString(),
     };
@@ -230,6 +275,10 @@ def main() -> int:
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     handle = open(args.out, "w", encoding="utf-8")
     counts = {"session": 0, "action": 0, "confirm": 0, "menu-open": 0}
+    # Run-level verdict on the one question this trace exists to answer. Tracked here rather than
+    # left to scrollback: "the bit never set" and "the bit set but the state never followed" need
+    # completely different next steps, and both look like "Seek opponent never appeared" on screen.
+    seen = {"seek_bit": False, "state_15": False, "disagreed": False, "suppressed": False}
 
     def on_message(message, _data):
         if message.get("type") != "send":
@@ -253,9 +302,27 @@ def main() -> int:
             f = p["fields"]
             state = f["state"]
             name = STATE_NAMES.get(state, "UNKNOWN -- this is the interesting case")
+            # Flags first: bit 19 is the CAUSE, the state byte is the effect.
+            if f.get("seekBit"):
+                seen["seek_bit"] = True
+            if state == 0x15:
+                seen["state_15"] = True
+            if f.get("suppressed"):
+                seen["suppressed"] = True
+            if not f.get("agrees", True):
+                seen["disagreed"] = True
+            note = ""
+            if not f.get("agrees", True):
+                note = (
+                    f"  <-- state disagrees with flags (predicted "
+                    f"0x{f['predictedState']:02x})"
+                    + (" -- 0x10c sentinel is suppressing the write" if f.get("suppressed") else "")
+                )
             print(
-                f"  session state=0x{state:02x} ({name}) "
-                f"+0x1d4={f['f1d4']} latch=+0x1f0={f['latch']}  [{p['why']}]"
+                f"  flags={f['flags']} seek_bit={'SET' if f['seekBit'] else 'clear'} "
+                f"sentinel={f['sentinel']}{' SUPPRESSED' if f.get('suppressed') else ''} "
+                f"state=0x{state:02x} ({name}) "
+                f"+0x1d4={f['f1d4']} latch=+0x1f0={f['latch']}  [{p['why']}]{note}"
             )
 
     script.on("message", on_message)
@@ -297,6 +364,29 @@ def main() -> int:
             "NO SESSION STATE WAS EVER READ. Either OSM was never captured (the menu was never "
             "opened and no action ran) or OSM+0x58 is not the session pointer on this build. "
             "Those need different fixes -- check whether an 'osm' record was emitted.",
+            file=sys.stderr,
+        )
+        return 0
+
+    # The verdict, stated rather than left to be reconstructed from scrollback.
+    print(
+        f"seek bit (S+0x00 bit19) ever set: {seen['seek_bit']}; "
+        f"state ever 0x15: {seen['state_15']}; "
+        f"0x10c ever suppressing: {seen['suppressed']}; "
+        f"flags/state ever disagreed: {seen['disagreed']}"
+    )
+    if not seen["seek_bit"]:
+        print(
+            "BIT 19 NEVER SET. 'Seek opponent' could not have been offered in this session -- the "
+            "option is filtered on state 0x15 and 0x15 is that bit times nine plus twelve. This is "
+            "upstream of anything in the menu: no amount of driving the UI reaches it. The next "
+            "question is what sets the bit, and the decrypt+validate immediately upstream "
+            "(xorps + ersc+0x171f00 over 0x1c bytes) says look at what the SERVER sent."
+        )
+    elif not seen["state_15"]:
+        print(
+            "BIT 19 WAS SET BUT THE STATE NEVER REACHED 0x15 -- the flags moved and the field did "
+            "not follow. Check the 0x10c sentinel above; that branch skips the write outright.",
             file=sys.stderr,
         )
     return 0

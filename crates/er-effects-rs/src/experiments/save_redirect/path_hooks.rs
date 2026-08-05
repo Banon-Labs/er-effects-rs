@@ -1268,12 +1268,29 @@ fn ensure_direct_stage_for_steam_id(steam_id: u64) {
     // (bd `er-effects-rs-h6sh`): a picked `.sl2` staged as `ER0000.sl2` under a Seamless run that
     // then spent 46s looking for `ER0000.co2`. Restamping is byte-safe -- both flavors are the same
     // 28 MB BND4 container and the copy below rewrites the embedded Steam ID either way.
-    let staged_basename_native = active_default_save_file_name();
-    let staged_basename_lower = if staged_basename_native.eq_ignore_ascii_case("ER0000.co2") {
-        "er0000.co2"
-    } else {
-        "er0000.sl2"
-    };
+    // STAGE BOTH FLAVORS, because the active mode is NOT KNOWN YET AT THIS POINT.
+    //
+    // `active_default_save_file_name()` resolves through `save_picker_seamless_mode_after_settle`,
+    // which reads the ERSC module latch. me3 loads natives in profile order and `ersc.dll` comes
+    // AFTER us, so at staging time that latch is still false on a genuine Seamless launch. Measured
+    // 2026-08-05, a Seamless profile: `[+154ms] direct-file staging begin` immediately followed by
+    // `[+154ms] save-picker mode from ERSC module latch seamless=false`. The save was staged
+    // `ER0000.sl2`, Seamless then looked for `ER0000.co2`, found nothing, and the title hung
+    // forever -- `oracle_continue_phase=4`, `continue_guard_waits=121`, load witness `loads=0`.
+    // This is the same softlock as bd `er-effects-rs-h6sh`, arriving by a different door: that one
+    // named the file after the SOURCE, this one names it after a latch that has not settled.
+    //
+    // The env hint that used to disambiguate this (`ER_EFFECTS_SAVE_MODE_HINT`) was removed as a
+    // forbidden env feature-gate, and the comment on the latch flagged the consequence -- "early
+    // Seamless disambiguation now depends on the latch being populated by settle time ... verify on
+    // a Seamless launch". This is that verification, and it fails.
+    //
+    // Writing both names is not a workaround for an unknown; it makes the question moot. The two
+    // containers are the SAME 28 MB BND4 -- the restamp note below and `active_default_save_file_names`
+    // both rely on that already -- so each copy is independently valid, and `copy_save_for_overwrite`
+    // rewrites the embedded Steam ID in each. Whichever flavor the runtime settles on is present:
+    // Seamless prefers `.co2` and accepts `.sl2`, vanilla reads only `.sl2` and ignores a stray
+    // `.co2`. These land in our PRIVATE stage root, never the user's own save directory.
     let lower_dir = root.join("eldenring").join(steam_id.to_string());
     let native_dir = root.join("EldenRing").join(steam_id.to_string());
     for dir in [&lower_dir, &native_dir] {
@@ -1286,33 +1303,42 @@ fn ensure_direct_stage_for_steam_id(steam_id: u64) {
             return;
         }
     }
-    let lower_target = lower_dir.join(staged_basename_lower);
-    let native_target = native_dir.join(staged_basename_native);
-    match copy_save_for_overwrite(source, &lower_target, steam_id) {
-        Ok(lower_bytes) => match copy_save_for_overwrite(source, &native_target, steam_id) {
-            Ok(native_bytes) => {
-                SAVE_DIRECT_STAGE_DONE_STEAM_ID.store(steam_id, Ordering::SeqCst);
+    // (native-case dir + name, lower-case dir + name) for each container flavor.
+    let targets = [
+        native_dir.join("ER0000.sl2"),
+        lower_dir.join("er0000.sl2"),
+        native_dir.join("ER0000.co2"),
+        lower_dir.join("er0000.co2"),
+    ];
+    let mut staged: Vec<String> = Vec::with_capacity(targets.len());
+    let mut failed = false;
+    for target in &targets {
+        match copy_save_for_overwrite(source, target, steam_id) {
+            Ok(bytes) => staged.push(format!("{} ({bytes} bytes)", target.display())),
+            Err(err) => {
+                failed = true;
                 append_autoload_debug(format_args!(
-                    "save-override: direct-file staged lower={} native={} bytes for SteamID64 {steam_id}: '{}' -> '{}' + '{}'",
-                    lower_bytes,
-                    native_bytes,
+                    "save-override: direct-file stage copy failed for SteamID64 {steam_id}: '{}' -> '{}': {err}",
                     source.display(),
-                    lower_target.display(),
-                    native_target.display()
+                    target.display()
                 ));
             }
-            Err(err) => append_autoload_debug(format_args!(
-                "save-override: direct-file native stage copy failed for SteamID64 {steam_id}: '{}' -> '{}': {err}",
-                source.display(),
-                native_target.display()
-            )),
-        },
-        Err(err) => append_autoload_debug(format_args!(
-            "save-override: direct-file stage copy failed for SteamID64 {steam_id}: '{}' -> '{}': {err}",
-            source.display(),
-            lower_target.display()
-        )),
+        }
     }
+    // Done only if EVERY flavor landed. A partial stage is exactly the state this change exists to
+    // prevent -- it would leave the run's fate depending on which name the latch happens to pick.
+    if !failed {
+        SAVE_DIRECT_STAGE_DONE_STEAM_ID.store(steam_id, Ordering::SeqCst);
+    }
+    append_autoload_debug(format_args!(
+        "save-override: direct-file staged {}/{} targets for SteamID64 {steam_id} from '{}': {}. \
+         BOTH .sl2 and .co2 are written because the ERSC latch has not settled at staging time, so \
+         the active container is not yet knowable here",
+        staged.len(),
+        targets.len(),
+        source.display(),
+        staged.join(", ")
+    ));
     SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID.store(0, Ordering::SeqCst);
 }
 
