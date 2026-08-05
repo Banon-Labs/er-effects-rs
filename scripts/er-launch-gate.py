@@ -64,6 +64,8 @@ DEBUG_LOG_NAMES = (
 EXTRA_EVIDENCE_PATHS = (
     "/tmp/claude-1000/-home-banon-projects-er-effects-rs/"
     "fdd5f467-bf36-402d-bbcd-6defe1f4d0b7/scratchpad/steam-matchmaking-trace.jsonl",
+    "/tmp/claude-1000/-home-banon-projects-er-effects-rs/"
+    "fdd5f467-bf36-402d-bbcd-6defe1f4d0b7/scratchpad/steam-vtable-trace.jsonl",
 )
 
 # Where a live run drops its artifacts, and where this session archives them.
@@ -247,28 +249,31 @@ PREDICATES: tuple[Predicate, ...] = (
         # Only a run that actually built a world-map ViewModel has an opinion on the tree walk.
         informative_if=(r"map-inject:",),
     ),
+    # RETIRED: steam_matchmaking_reached. It was ANSWERED, in the negative, and a predicate whose
+    # question is settled must not sit here refusing launches forever. Measured 2026-08-04: 33
+    # steam_api64 flat exports hooked at BOOT -- 18 ISteamMatchmaking, 10 ISteamNetworking*, 5
+    # ISteamFriends rich presence -- and a complete invasion produced ZERO calls. Seamless does
+    # not reach Steam through the flat C API. That is why the predicate below exists instead.
     Predicate(
-        name="steam_matchmaking_reached",
+        name="steam_vtable_call_observed",
         why=(
-            "THE ONLY REMAINING ROUTE TO SEAMLESS TARGETING, and it is unproven. The functions "
-            "that choose an invasion target (ersc 0x18006a2d0, 0x18006a1e0) are `e9` jumps into "
-            ".themida, and a live dump proved the jump targets are themselves chains of `e9` "
-            "jumps -- that is VIRTUALIZATION, so no dump can ever recover them. The decision has "
-            "to leave the VM to call steam_api64.dll, which is ordinary code, and that boundary "
-            "is where the lobby filters become readable. If this trace hooks nothing, or hooks "
-            "and records no matchmaking call during an invasion, the whole approach is dead and "
-            "a launch spent on it proves nothing -- which is exactly the ambiguity this gate "
-            "exists to stop."
+            "THE ONLY REMAINING ROUTE TO SEAMLESS TARGETING. Static reading is out -- the "
+            "deciding functions (ersc 0x18006a2d0, 0x18006a1e0) are Themida-VIRTUALIZED, proven "
+            "by a live dump whose jump targets are themselves chains of `e9` jumps, so no dump "
+            "recovers them. The flat Steam C API is out -- 33 exports hooked at boot, zero calls "
+            "across a full invasion. What is left is the interface VTABLE: a C++ mod fetches the "
+            "pointer once and calls slots directly. If a vtable call is never observed either, "
+            "Steam is not the layer at all and the next one is ERSC's own sockets -- and a run "
+            "that cannot tell those apart is a run wasted, which is what this gate is for."
         ),
-        owner="scripts/frida-steam-matchmaking-trace.py",
-        # A recorded matchmaking call. Deliberately NOT satisfied by the hook list alone: hooks
-        # installing proves the export names matched, not that Seamless ever calls them.
-        log_any=(
-            r'"type":\s*"call"[^\n]*"fn":\s*"[^"]*(RequestLobbyList|JoinLobby|GetLobbyByIndex)',
-        ),
-        # Only a run whose trace file exists at all has an opinion. Without this the predicate
-        # would refuse every launch before the tracer has ever run once.
-        informative_if=(r'"type":\s*"(call|ret|hook-error)"',),
+        owner="scripts/frida-steam-vtable-trace.py",
+        # A vtable CALL, not merely an interface handed out. Capturing the pointer proves the
+        # accessor fired; it says nothing about whether Seamless ever calls through it, and
+        # conflating the two is the same "hooked is not called" error the retired predicate hit.
+        log_any=(r'"type":\s*"vcall"',),
+        # Only a run whose vtable trace produced SOMETHING has an opinion. An empty file means
+        # the tracer never attached or attached too late, which is a silence, not a refutation.
+        informative_if=(r'"type":\s*"(vcall|iface)"',),
     ),
 )
 
@@ -569,20 +574,22 @@ def selftest() -> int:
         # THE STEAM-TRACE DISTINCTION: hooks INSTALLING is not calls HAPPENING. A trace that
         # attached to every export and then recorded nothing during an invasion means the
         # approach is dead, and it must not read as proof.
-        steam_pred = [p for p in PREDICATES if p.name == "steam_matchmaking_reached"][0]
-        called = '{"type": "call", "fn": "SteamAPI_ISteamMatchmaking_RequestLobbyList"}'
+        steam_pred = [p for p in PREDICATES if p.name == "steam_vtable_call_observed"][0]
+        called = '{"type": "vcall", "iface": "SteamMatchMaking009", "slot": 12}'
         ok_called, _ = steam_pred.check({}, called)
-        report(ok_called, "a recorded RequestLobbyList call proves the steam route")
+        report(ok_called, "a recorded vtable call proves the interface route")
 
-        hooked_only = '{"type": "hook-error", "fn": "x", "error": "y"}'
-        ok_hooked, _ = steam_pred.check({}, hooked_only)
+        # THE DISTINCTION THAT RETIRED THE PREVIOUS PREDICATE: capturing an interface pointer
+        # proves the accessor fired, NOT that anything is ever called through it.
+        iface_only = '{"type": "iface", "version": "SteamMatchMaking009", "slotsHooked": 20}'
+        ok_iface, _ = steam_pred.check({}, iface_only)
         report(
-            not ok_hooked and steam_pred.is_informative({}, hooked_only),
-            "a trace that hooked but recorded no call is informative and NOT satisfied",
+            not ok_iface and steam_pred.is_informative({}, iface_only),
+            "an interface captured but never called is informative and NOT satisfied",
         )
         report(
             not steam_pred.is_informative({}, "nothing here"),
-            "no trace file at all is a silence, not a contradiction",
+            "no vtable trace at all is a silence, not a contradiction",
         )
 
         # A run from BEFORE the current sources is a silence, not a disagreement. Without this
