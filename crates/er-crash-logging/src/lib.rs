@@ -18,6 +18,8 @@ use std::{
 const DEFAULT_LOG_FILE: &str = "er-crash-log.txt";
 const DEFAULT_LATEST_FILE: &str = "er-crash-latest.txt";
 const DEFAULT_BREADCRUMB_FILE: &str = "er-crash-breadcrumb-latest.txt";
+const DEFAULT_MODULES_FILE: &str = "er-crash-modules.txt";
+const DEFAULT_MINIDUMP_FILE: &str = "er-crash-minidump.dmp";
 const DEFAULT_MODULE_LABEL: &str = "er-crash-logging";
 
 #[derive(Clone, Copy, Debug)]
@@ -25,6 +27,12 @@ pub struct CrashLogConfig {
     pub log_file_name: &'static str,
     pub latest_file_name: &'static str,
     pub breadcrumb_file_name: &'static str,
+    /// Full loaded-module inventory: what was in the process, where, and which build. Written at
+    /// install and rewritten when the process dies, so an offset like `nvwgf2umx.dll+0xead0c0`
+    /// can be tied back to an exact driver image later.
+    pub modules_file_name: &'static str,
+    /// Postmortem minidump, written only from the unhandled-exception path.
+    pub minidump_file_name: &'static str,
     pub module_label: &'static str,
 }
 
@@ -34,6 +42,8 @@ impl Default for CrashLogConfig {
             log_file_name: DEFAULT_LOG_FILE,
             latest_file_name: DEFAULT_LATEST_FILE,
             breadcrumb_file_name: DEFAULT_BREADCRUMB_FILE,
+            modules_file_name: DEFAULT_MODULES_FILE,
+            minidump_file_name: DEFAULT_MINIDUMP_FILE,
             module_label: DEFAULT_MODULE_LABEL,
         }
     }
@@ -130,28 +140,82 @@ pub fn mark_phase(_phase: Phase) {}
 const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
 #[cfg(windows)]
 const VECTORED_FIRST_HANDLER: u32 = 1;
-#[cfg(windows)]
+
+// Exception codes and the record policy built on them are plain arithmetic, so they stay off
+// `cfg(windows)`: the classification is the part most worth testing, and the tests run on the
+// host toolchain.
 const EXCEPTION_ACCESS_VIOLATION: u32 = 0xc000_0005;
-#[cfg(windows)]
 const EXCEPTION_ILLEGAL_INSTRUCTION: u32 = 0xc000_001d;
-#[cfg(windows)]
 const EXCEPTION_STACK_BUFFER_OVERRUN: u32 = 0xc000_0409;
-#[cfg(windows)]
 const EXCEPTION_STACK_OVERFLOW: u32 = 0xc000_00fd;
-#[cfg(windows)]
 const EXCEPTION_HEAP_CORRUPTION: u32 = 0xc000_0374;
-#[cfg(windows)]
 const EXCEPTION_IN_PAGE_ERROR: u32 = 0xc000_0006;
-#[cfg(windows)]
 const EXCEPTION_INT_DIVIDE_BY_ZERO: u32 = 0xc000_0094;
-#[cfg(windows)]
 const EXCEPTION_PRIVILEGED_INSTRUCTION: u32 = 0xc000_0096;
-#[cfg(windows)]
 const EXCEPTION_NONCONTINUABLE: u32 = 0xc000_0025;
-#[cfg(windows)]
 const EXCEPTION_CPP_THROW: u32 = 0xe06d_7363;
-#[cfg(windows)]
 const EXCEPTION_SEVERITY_MASK: u32 = 0xc000_0000;
+
+/// Which budget an observed exception draws from.
+///
+/// A first-chance vectored handler sees every `0xe06d7363` the process raises, and D3D plus the
+/// vendor user-mode drivers throw and catch C++ exceptions as ordinary control flow. Sharing one
+/// budget between those and real faults means a noisy render thread can exhaust the log before the
+/// access violation that actually killed the process ever gets written.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RecordClass {
+    /// `0xe06d7363` -- a C++/Rust throw. Usually caught by somebody; only interesting in bulk or
+    /// when it turns out to be the one that went unhandled.
+    Throw,
+    /// A hard fault: access violation, heap corruption, fail-fast, and friends.
+    Fault,
+}
+
+/// Throw records are capped low; they are noise until proven otherwise.
+const MAX_THROW_RECORDS: usize = 8;
+/// Faults get their own, larger budget that throws cannot touch.
+const MAX_FAULT_RECORDS: usize = 24;
+/// Distinct `(code, address)` sites tracked for repeat counting.
+const THROW_SITE_SLOTS: usize = 24;
+
+pub fn record_class(code: u32) -> RecordClass {
+    if code == EXCEPTION_CPP_THROW {
+        RecordClass::Throw
+    } else {
+        RecordClass::Fault
+    }
+}
+
+/// Whether a record of `class` may still be written, given how many of each class already were.
+pub fn budget_allows(class: RecordClass, throws_written: usize, faults_written: usize) -> bool {
+    match class {
+        RecordClass::Throw => throws_written < MAX_THROW_RECORDS,
+        RecordClass::Fault => faults_written < MAX_FAULT_RECORDS,
+    }
+}
+
+/// Turn an MSVC RTTI `TypeDescriptor` name into something readable.
+///
+/// `.?AVbad_alloc@std@@` -> `std::bad_alloc`, `.?AV_com_error@@` -> `_com_error`. Anything that
+/// does not match the expected decoration is returned unchanged rather than mangled further --
+/// a raw name we cannot parse is still evidence.
+pub fn format_thrown_type_name(raw: &str) -> String {
+    let Some(body) = raw.strip_prefix('.') else {
+        return raw.to_string();
+    };
+    let body = ["?AV", "?AU", "PEAV", "PEAU", "AV", "AU"]
+        .iter()
+        .find_map(|prefix| body.strip_prefix(prefix))
+        .unwrap_or(body);
+    let Some(body) = body.strip_suffix("@@") else {
+        return raw.to_string();
+    };
+    if body.is_empty() {
+        return raw.to_string();
+    }
+    // MSVC stores the qualified name innermost-first, so `bad_alloc@std` is `std::bad_alloc`.
+    body.split('@').rev().collect::<Vec<_>>().join("::")
+}
 
 #[cfg(windows)]
 const CONTEXT_RAX_OFFSET: usize = 0x78;
@@ -167,6 +231,53 @@ const CONTEXT_R8_OFFSET: usize = 0xb8;
 const CONTEXT_R9_OFFSET: usize = 0xc0;
 #[cfg(windows)]
 const CONTEXT_RIP_OFFSET: usize = 0xf8;
+
+// MSVC C++ EH payload, as raised by `_CxxThrowException`. `ExceptionInformation` is
+// `[magic, thrown object, ThrowInfo, module base]`; on x64 every pointer inside `ThrowInfo` is a
+// 32-bit RVA relative to that module base.
+#[cfg(windows)]
+const CPP_EH_PARAMS_KEPT: usize = 4;
+#[cfg(windows)]
+const CPP_EH_MAGIC: usize = 0x1993_0520;
+#[cfg(windows)]
+const CPP_EH_PARAM_OBJECT: usize = 1;
+#[cfg(windows)]
+const CPP_EH_PARAM_THROW_INFO: usize = 2;
+#[cfg(windows)]
+const CPP_EH_PARAM_MODULE_BASE: usize = 3;
+#[cfg(windows)]
+const THROW_INFO_CATCHABLE_ARRAY_OFFSET: usize = 0x0c;
+#[cfg(windows)]
+const CATCHABLE_ARRAY_FIRST_TYPE_OFFSET: usize = 0x04;
+#[cfg(windows)]
+const CATCHABLE_TYPE_DESCRIPTOR_OFFSET: usize = 0x04;
+#[cfg(windows)]
+const TYPE_DESCRIPTOR_NAME_OFFSET: usize = 0x10;
+#[cfg(windows)]
+const TYPE_DESCRIPTOR_NAME_MAX: usize = 96;
+#[cfg(windows)]
+const THROWN_OBJECT_PREVIEW_BYTES: usize = 32;
+
+// Minidump: indirectly-referenced memory plus thread info keeps the dump small while still
+// carrying the stacks and the objects those stacks point at.
+#[cfg(windows)]
+const MINIDUMP_WITH_UNLOADED_MODULES: u32 = 0x0000_0020;
+#[cfg(windows)]
+const MINIDUMP_WITH_INDIRECTLY_REFERENCED_MEMORY: u32 = 0x0000_0040;
+#[cfg(windows)]
+const MINIDUMP_WITH_PROCESS_THREAD_DATA: u32 = 0x0000_0100;
+#[cfg(windows)]
+const MINIDUMP_WITH_THREAD_INFO: u32 = 0x0000_1000;
+#[cfg(windows)]
+const GENERIC_WRITE: u32 = 0x4000_0000;
+#[cfg(windows)]
+const CREATE_ALWAYS: u32 = 2;
+#[cfg(windows)]
+const FILE_ATTRIBUTE_NORMAL: u32 = 0x0000_0080;
+#[cfg(windows)]
+const INVALID_HANDLE_VALUE: isize = -1;
+#[cfg(windows)]
+const PE_TIMEDATESTAMP_FROM_NT: usize = 0x08;
 
 #[cfg(windows)]
 const STACK_TRACE_FRAMES_TO_SKIP: u32 = 2;
@@ -204,9 +315,112 @@ static HANDLER_HANDLE: AtomicUsize = AtomicUsize::new(0);
 #[cfg(windows)]
 static PHASE: AtomicUsize = AtomicUsize::new(0);
 #[cfg(windows)]
-static EXCEPTION_LINES_WRITTEN: AtomicUsize = AtomicUsize::new(0);
+static THROW_RECORDS_WRITTEN: AtomicUsize = AtomicUsize::new(0);
 #[cfg(windows)]
-const MAX_EXCEPTION_LINES: usize = 16;
+static FAULT_RECORDS_WRITTEN: AtomicUsize = AtomicUsize::new(0);
+#[cfg(windows)]
+static RECORD_INDEX: AtomicUsize = AtomicUsize::new(0);
+#[cfg(windows)]
+static PREVIOUS_UNHANDLED_FILTER: AtomicUsize = AtomicUsize::new(0);
+#[cfg(windows)]
+static FATAL_REPORTED: AtomicUsize = AtomicUsize::new(0);
+#[cfg(windows)]
+static INSTALL_INSTANT: OnceLock<std::time::Instant> = OnceLock::new();
+
+/// One tracked `(code, address)` exception site and how often it has been seen.
+///
+/// The count is the difference between background noise and a smoking gun: a throw site at its
+/// 400th occurrence is how the driver works, one at its 1st occurrence right before the process
+/// dies is the lead.
+#[cfg(windows)]
+struct ThrowSite {
+    code: AtomicUsize,
+    address: AtomicUsize,
+    count: AtomicUsize,
+}
+
+#[cfg(windows)]
+static THROW_SITES: [ThrowSite; THROW_SITE_SLOTS] = [const {
+    ThrowSite {
+        code: AtomicUsize::new(0),
+        address: AtomicUsize::new(0),
+        count: AtomicUsize::new(0),
+    }
+}; THROW_SITE_SLOTS];
+
+/// Count this `(code, address)` and return how many times it has now been seen (1 on first sight).
+/// Returns 0 once the table is full, meaning "unknown, not tracked".
+#[cfg(windows)]
+fn note_exception_site(code: u32, address: usize) -> usize {
+    let code = code as usize;
+    for site in THROW_SITES.iter() {
+        let claimed = site.address.load(Ordering::SeqCst);
+        if claimed == address && site.code.load(Ordering::SeqCst) == code {
+            return site.count.fetch_add(1, Ordering::SeqCst) + 1;
+        }
+        if claimed == 0
+            && site
+                .address
+                .compare_exchange(0, address, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        {
+            site.code.store(code, Ordering::SeqCst);
+            return site.count.fetch_add(1, Ordering::SeqCst) + 1;
+        }
+    }
+    0
+}
+
+/// How many times this `(code, address)` has been seen, without counting this look.
+///
+/// The fatal filter re-observes the exception the vectored handler already counted; counting it
+/// twice would report every fatal site as one occurrence more common than it really is.
+#[cfg(windows)]
+fn current_site_count(code: u32, address: usize) -> usize {
+    let code = code as usize;
+    THROW_SITES
+        .iter()
+        .find(|site| {
+            site.address.load(Ordering::SeqCst) == address
+                && site.code.load(Ordering::SeqCst) == code
+        })
+        .map(|site| site.count.load(Ordering::SeqCst))
+        .unwrap_or(0)
+}
+
+/// Every tracked site with its repeat count, most-repeated first.
+#[cfg(windows)]
+fn exception_site_histogram(modules: &[(usize, usize, String)]) -> String {
+    let mut sites: Vec<(usize, u32, usize)> = THROW_SITES
+        .iter()
+        .filter_map(|site| {
+            let address = site.address.load(Ordering::SeqCst);
+            (address != 0).then(|| {
+                (
+                    site.count.load(Ordering::SeqCst),
+                    site.code.load(Ordering::SeqCst) as u32,
+                    address,
+                )
+            })
+        })
+        .collect();
+    sites.sort_by(|left, right| right.0.cmp(&left.0));
+    let mut out = String::from("[");
+    for (index, (count, code, address)) in sites.iter().enumerate() {
+        if index != 0 {
+            out.push(',');
+        }
+        out.push_str(&format!(
+            "0x{:08x}@0x{:x}{}x{}",
+            code,
+            address,
+            module_tag(*address, modules),
+            count
+        ));
+    }
+    out.push(']');
+    out
+}
 
 #[cfg(windows)]
 #[repr(C)]
@@ -230,8 +444,40 @@ struct ExceptionPointersMin {
 type VectoredHandler = unsafe extern "system" fn(*mut ExceptionPointersMin) -> i32;
 
 #[cfg(windows)]
+type UnhandledExceptionFilter = unsafe extern "system" fn(*mut ExceptionPointersMin) -> i32;
+
+#[cfg(windows)]
+#[repr(C)]
+struct SystemTimeMin {
+    year: u16,
+    month: u16,
+    day_of_week: u16,
+    day: u16,
+    hour: u16,
+    minute: u16,
+    second: u16,
+    milliseconds: u16,
+}
+
+#[cfg(windows)]
 unsafe extern "system" {
     fn AddVectoredExceptionHandler(first: u32, handler: VectoredHandler) -> *mut c_void;
+    fn SetUnhandledExceptionFilter(filter: UnhandledExceptionFilter) -> *mut c_void;
+    fn GetSystemTime(out: *mut SystemTimeMin);
+    fn LoadLibraryA(name: *const u8) -> *mut c_void;
+    fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
+    fn GetCurrentProcess() -> isize;
+    fn GetCurrentProcessId() -> u32;
+    fn CreateFileW(
+        file_name: *const u16,
+        desired_access: u32,
+        share_mode: u32,
+        security_attributes: *mut c_void,
+        creation_disposition: u32,
+        flags_and_attributes: u32,
+        template_file: isize,
+    ) -> isize;
+    fn CloseHandle(handle: isize) -> i32;
     fn GetCurrentThreadId() -> u32;
     fn RtlCaptureStackBackTrace(
         frames_to_skip: u32,
@@ -253,18 +499,27 @@ pub fn install(new_config: CrashLogConfig, self_module_base: usize) {
     let _ = CONFIG.set(new_config);
     record_self_module(self_module_base);
     INSTALLED.call_once(|| {
+        let _ = INSTALL_INSTANT.set(std::time::Instant::now());
         mark_phase(Phase::DllAttach);
         let handle =
             unsafe { AddVectoredExceptionHandler(VECTORED_FIRST_HANDLER, crash_vectored_handler) }
                 as usize;
         HANDLER_HANDLE.store(handle, Ordering::SeqCst);
+        // The vectored handler only ever sees first-chance exceptions, so on its own it cannot say
+        // whether anything it logged was fatal. The top-level filter is what closes that gap: it
+        // runs only when nothing handled the exception. Chain whatever was installed before us --
+        // Seamless Co-op's crashpad lives here too, and silently swallowing it would trade one
+        // blind spot for another.
+        let previous = unsafe { SetUnhandledExceptionFilter(unhandled_exception_filter) } as usize;
+        PREVIOUS_UNHANDLED_FILTER.store(previous, Ordering::SeqCst);
         if handle != 0 {
             mark_phase(Phase::HandlerInstalled);
             append_log(format_args!(
-                "crash logger installed module={} self=0x{:x}+0x{:x}",
+                "crash logger installed module={} self=0x{:x}+0x{:x} previous_unhandled_filter=0x{:x}",
                 config().module_label,
                 SELF_MODULE_BASE.load(Ordering::SeqCst),
-                SELF_MODULE_SIZE.load(Ordering::SeqCst)
+                SELF_MODULE_SIZE.load(Ordering::SeqCst),
+                previous
             ));
             write_breadcrumb("handler-installed", format_args!("handler=0x{handle:x}"));
         } else {
@@ -272,8 +527,30 @@ pub fn install(new_config: CrashLogConfig, self_module_base: usize) {
                 "crash logger AddVectoredExceptionHandler failed"
             ));
         }
+        write_module_inventory("install");
     });
 }
+
+/// Note that the host DLL is detaching.
+///
+/// A fatal record with no matching detach means the process died where it stood; a detach with no
+/// fatal record means it shut down or was killed from outside. Neither is knowable from the crash
+/// log alone.
+#[cfg(windows)]
+pub fn note_process_detach() {
+    write_breadcrumb(
+        "process-detach",
+        format_args!(
+            "throw_records={} fault_records={} fatal_reported={}",
+            THROW_RECORDS_WRITTEN.load(Ordering::SeqCst),
+            FAULT_RECORDS_WRITTEN.load(Ordering::SeqCst),
+            FATAL_REPORTED.load(Ordering::SeqCst)
+        ),
+    );
+}
+
+#[cfg(not(windows))]
+pub fn note_process_detach() {}
 
 #[cfg(not(windows))]
 pub fn install(config: CrashLogConfig, _self_module_base: usize) {
@@ -315,13 +592,68 @@ unsafe extern "system" fn crash_vectored_handler(info: *mut ExceptionPointersMin
     if !is_reportable_exception(snapshot.code) {
         return EXCEPTION_CONTINUE_SEARCH;
     }
-    if EXCEPTION_LINES_WRITTEN.fetch_add(1, Ordering::SeqCst) >= MAX_EXCEPTION_LINES {
+    // Count every occurrence, even ones too far over budget to write: the repeat count is what
+    // separates "this driver throws constantly" from "this happened once, just before the end".
+    let repeat = note_exception_site(snapshot.code, snapshot.address);
+    let class = record_class(snapshot.code);
+    let allowed = budget_allows(
+        class,
+        THROW_RECORDS_WRITTEN.load(Ordering::SeqCst),
+        FAULT_RECORDS_WRITTEN.load(Ordering::SeqCst),
+    );
+    if !allowed {
         return EXCEPTION_CONTINUE_SEARCH;
     }
+    match class {
+        RecordClass::Throw => THROW_RECORDS_WRITTEN.fetch_add(1, Ordering::SeqCst),
+        RecordClass::Fault => FAULT_RECORDS_WRITTEN.fetch_add(1, Ordering::SeqCst),
+    };
     mark_phase(Phase::ExceptionObserved);
-    let report = exception_report(&snapshot);
-    let _ = fs::write(path_for(config().latest_file_name), &report);
+    let report = exception_report(&snapshot, "veh-first-chance-exception", repeat);
+    // A fatal record is the conclusion of the run; never let a later benign throw overwrite it.
+    if FATAL_REPORTED.load(Ordering::SeqCst) == 0 {
+        let _ = fs::write(path_for(config().latest_file_name), &report);
+    }
     append_log(format_args!("{report}\n---"));
+    EXCEPTION_CONTINUE_SEARCH
+}
+
+/// Top-level filter: reached only when no handler anywhere in the process claimed the exception.
+///
+/// This is the record that says "this one was fatal" -- the distinction a first-chance handler
+/// structurally cannot make.
+#[cfg(windows)]
+unsafe extern "system" fn unhandled_exception_filter(info: *mut ExceptionPointersMin) -> i32 {
+    // If reporting the fatal exception itself faults, do not recurse into reporting again -- chain
+    // straight on so the next filter still gets its turn.
+    let first_entry = FATAL_REPORTED
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok();
+    if !first_entry {
+        return chain_previous_unhandled_filter(info);
+    }
+    if let Some(snapshot) = (unsafe { ExceptionSnapshot::from_raw(info) }) {
+        let repeat = current_site_count(snapshot.code, snapshot.address);
+        let report = exception_report(&snapshot, "unhandled-exception-fatal", repeat);
+        let _ = fs::write(path_for(config().latest_file_name), &report);
+        append_log(format_args!("{report}\n---"));
+    }
+    write_module_inventory("fatal");
+    unsafe { write_minidump(info) };
+    chain_previous_unhandled_filter(info)
+}
+
+/// Hand the exception on exactly as we found it.
+///
+/// Whatever was registered before us -- Seamless Co-op's crashpad, the game's own filter, Windows
+/// Error Reporting -- still gets its turn. We observe; we do not consume.
+#[cfg(windows)]
+fn chain_previous_unhandled_filter(info: *mut ExceptionPointersMin) -> i32 {
+    let previous = PREVIOUS_UNHANDLED_FILTER.load(Ordering::SeqCst);
+    if previous != 0 {
+        let chained: UnhandledExceptionFilter = unsafe { std::mem::transmute(previous) };
+        return unsafe { chained(info) };
+    }
     EXCEPTION_CONTINUE_SEARCH
 }
 
@@ -340,6 +672,11 @@ struct ExceptionSnapshot {
     r8: usize,
     r9: usize,
     thread_id: usize,
+    /// The leading `ExceptionInformation` entries, kept verbatim. For `0xe06d7363` these carry the
+    /// C++ EH magic, the thrown object, the `ThrowInfo`, and the module base its RVAs resolve
+    /// against -- everything needed to name the thrown type.
+    params: [usize; CPP_EH_PARAMS_KEPT],
+    param_count: usize,
 }
 
 #[cfg(windows)]
@@ -367,7 +704,14 @@ impl ExceptionSnapshot {
             r8: 0,
             r9: 0,
             thread_id: unsafe { GetCurrentThreadId() as usize },
+            params: [0; CPP_EH_PARAMS_KEPT],
+            param_count: record.number_parameters as usize,
         };
+        for (index, slot) in out.params.iter_mut().enumerate() {
+            if index < out.param_count {
+                *slot = record.exception_information[index];
+            }
+        }
         if record.number_parameters > 0 {
             out.access_kind = record.exception_information[0];
         }
@@ -391,12 +735,31 @@ impl ExceptionSnapshot {
 }
 
 #[cfg(windows)]
-fn exception_report(snapshot: &ExceptionSnapshot) -> String {
+fn exception_report(snapshot: &ExceptionSnapshot, reason: &str, repeat: usize) -> String {
     let mut out = String::new();
     use fmt::Write as _;
     let modules = loaded_modules();
-    let _ = writeln!(out, "reason=veh-crash-like-exception");
+    let class = record_class(snapshot.code);
+    let _ = writeln!(out, "reason={reason}");
     let _ = writeln!(out, "module={}", config().module_label);
+    let _ = writeln!(
+        out,
+        "record_index={}",
+        RECORD_INDEX.fetch_add(1, Ordering::SeqCst)
+    );
+    let _ = writeln!(out, "utc={}", utc_timestamp());
+    let _ = writeln!(out, "ms_since_install={}", ms_since_install());
+    let _ = writeln!(
+        out,
+        "record_class={}",
+        match class {
+            RecordClass::Throw => "throw",
+            RecordClass::Fault => "fault",
+        }
+    );
+    // The one question a first-chance record cannot answer about itself.
+    let _ = writeln!(out, "fatal={}", reason == "unhandled-exception-fatal");
+    let _ = writeln!(out, "site_repeat_count={repeat}");
     let _ = writeln!(out, "exception_code=0x{:08x}", snapshot.code);
     let _ = writeln!(
         out,
@@ -430,13 +793,18 @@ fn exception_report(snapshot: &ExceptionSnapshot) -> String {
     let _ = writeln!(out, "context_r9=0x{:x}", snapshot.r9);
     let _ = writeln!(out, "thread_id={}", snapshot.thread_id);
     write_common_fields(&mut out);
+    if snapshot.code == EXCEPTION_CPP_THROW {
+        write_cpp_throw_fields(&mut out, snapshot, &modules);
+    }
     if snapshot.code == EXCEPTION_STACK_OVERFLOW {
+        // Everything below here formats into deeper stack; on an overflow there is none to spend.
         let _ = writeln!(
             out,
             "stack_note=stack-overflow; skipped stack scan/backtrace"
         );
         return out;
     }
+    let _ = writeln!(out, "site_histogram={}", exception_site_histogram(&modules));
     let _ = writeln!(out, "callers={}", capture_callers(&modules));
     let _ = writeln!(
         out,
@@ -447,8 +815,7 @@ fn exception_report(snapshot: &ExceptionSnapshot) -> String {
     out
 }
 
-#[cfg(windows)]
-fn is_reportable_exception(code: u32) -> bool {
+pub fn is_reportable_exception(code: u32) -> bool {
     matches!(
         code,
         EXCEPTION_ACCESS_VIOLATION
@@ -464,8 +831,7 @@ fn is_reportable_exception(code: u32) -> bool {
     ) || (code & EXCEPTION_SEVERITY_MASK) == EXCEPTION_SEVERITY_MASK
 }
 
-#[cfg(windows)]
-fn exception_code_label(code: u32) -> &'static str {
+pub fn exception_code_label(code: u32) -> &'static str {
     match code {
         EXCEPTION_ACCESS_VIOLATION => "STATUS_ACCESS_VIOLATION",
         EXCEPTION_ILLEGAL_INSTRUCTION => "STATUS_ILLEGAL_INSTRUCTION",
@@ -479,6 +845,269 @@ fn exception_code_label(code: u32) -> &'static str {
         EXCEPTION_CPP_THROW => "C++/Rust throw",
         _ => "unclassified-error-severity-exception",
     }
+}
+
+/// Name the thrown C++ type and preview the thrown object.
+///
+/// Without this a `0xe06d7363` record says only "somebody threw something", which is why the
+/// August 2026 render-thread throw could not be attributed. With it the record names the type --
+/// `_com_error`, `std::bad_alloc`, a driver-internal class -- and that name is the lead.
+#[cfg(windows)]
+fn write_cpp_throw_fields(
+    out: &mut String,
+    snapshot: &ExceptionSnapshot,
+    modules: &[(usize, usize, String)],
+) {
+    use fmt::Write as _;
+    if snapshot.param_count < CPP_EH_PARAMS_KEPT || snapshot.params[0] != CPP_EH_MAGIC {
+        let _ = writeln!(
+            out,
+            "cpp_throw_note=not-a-decodable-msvc-throw params={} magic=0x{:x}",
+            snapshot.param_count, snapshot.params[0]
+        );
+        return;
+    }
+    let object = snapshot.params[CPP_EH_PARAM_OBJECT];
+    let throw_info = snapshot.params[CPP_EH_PARAM_THROW_INFO];
+    let image_base = snapshot.params[CPP_EH_PARAM_MODULE_BASE];
+    let _ = writeln!(
+        out,
+        "cpp_throw_object=0x{:x}{}",
+        object,
+        module_tag(object, modules)
+    );
+    let _ = writeln!(
+        out,
+        "cpp_throw_info=0x{:x}{}",
+        throw_info,
+        module_tag(throw_info, modules)
+    );
+    let _ = writeln!(
+        out,
+        "cpp_throw_image_base=0x{:x}{}",
+        image_base,
+        module_tag(image_base, modules)
+    );
+    match unsafe { read_thrown_type_name(throw_info, image_base) } {
+        Some(raw) => {
+            let _ = writeln!(out, "cpp_throw_type={}", format_thrown_type_name(&raw));
+            let _ = writeln!(out, "cpp_throw_type_raw={raw}");
+        }
+        None => {
+            let _ = writeln!(out, "cpp_throw_type=<unresolved>");
+        }
+    }
+    let _ = writeln!(out, "cpp_throw_object_bytes={}", unsafe {
+        read_hex_preview(object, THROWN_OBJECT_PREVIEW_BYTES)
+    });
+}
+
+/// Walk `ThrowInfo -> CatchableTypeArray -> CatchableType -> TypeDescriptor` and read the name.
+///
+/// Only the first catchable type is read: for `throw Derived` that is `Derived` itself, the rest
+/// being the base classes it could also be caught as.
+#[cfg(windows)]
+unsafe fn read_thrown_type_name(throw_info: usize, image_base: usize) -> Option<String> {
+    if throw_info < MIN_VALID_PTR || image_base < MIN_VALID_PTR {
+        return None;
+    }
+    let array_rva = unsafe { safe_read_u32(throw_info + THROW_INFO_CATCHABLE_ARRAY_OFFSET) }?;
+    if array_rva == 0 {
+        return None;
+    }
+    let array = image_base + array_rva as usize;
+    let count = unsafe { safe_read_u32(array) }?;
+    if count == 0 {
+        return None;
+    }
+    let first_rva = unsafe { safe_read_u32(array + CATCHABLE_ARRAY_FIRST_TYPE_OFFSET) }?;
+    if first_rva == 0 {
+        return None;
+    }
+    let catchable = image_base + first_rva as usize;
+    let descriptor_rva = unsafe { safe_read_u32(catchable + CATCHABLE_TYPE_DESCRIPTOR_OFFSET) }?;
+    if descriptor_rva == 0 {
+        return None;
+    }
+    let name_addr = image_base + descriptor_rva as usize + TYPE_DESCRIPTOR_NAME_OFFSET;
+    let mut bytes = Vec::with_capacity(TYPE_DESCRIPTOR_NAME_MAX);
+    for index in 0..TYPE_DESCRIPTOR_NAME_MAX {
+        match unsafe { safe_read_u8(name_addr + index) } {
+            Some(0) | None => break,
+            Some(byte) => bytes.push(byte),
+        }
+    }
+    if bytes.is_empty() {
+        return None;
+    }
+    // RTTI type names are ASCII by construction; anything else means we walked off target and the
+    // raw bytes are more honest than a substituted replacement character.
+    String::from_utf8(bytes).ok()
+}
+
+#[cfg(windows)]
+unsafe fn read_hex_preview(addr: usize, len: usize) -> String {
+    if addr < MIN_VALID_PTR {
+        return String::from("<null>");
+    }
+    let mut out = String::with_capacity(len * 2);
+    for index in 0..len {
+        match unsafe { safe_read_u8(addr + index) } {
+            Some(byte) => {
+                let _ = fmt::Write::write_fmt(&mut out, format_args!("{byte:02x}"));
+            }
+            None => {
+                out.push_str("??");
+                break;
+            }
+        }
+    }
+    out
+}
+
+#[cfg(windows)]
+fn utc_timestamp() -> String {
+    let mut now = SystemTimeMin {
+        year: 0,
+        month: 0,
+        day_of_week: 0,
+        day: 0,
+        hour: 0,
+        minute: 0,
+        second: 0,
+        milliseconds: 0,
+    };
+    unsafe { GetSystemTime(&mut now) };
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+        now.year, now.month, now.day, now.hour, now.minute, now.second, now.milliseconds
+    )
+}
+
+#[cfg(windows)]
+fn ms_since_install() -> u64 {
+    INSTALL_INSTANT
+        .get()
+        .map(|start| start.elapsed().as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Write the full loaded-module table: name, base, size, and PE timestamp.
+///
+/// The PE `TimeDateStamp` identifies the exact build of each image, so a third-party offset in a
+/// crash record stays resolvable even after the driver or overlay updates.
+#[cfg(windows)]
+fn write_module_inventory(reason: &str) {
+    use fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(out, "reason=module-inventory-{reason}");
+    let _ = writeln!(out, "module={}", config().module_label);
+    let _ = writeln!(out, "utc={}", utc_timestamp());
+    let _ = writeln!(out, "ms_since_install={}", ms_since_install());
+    let modules = loaded_modules();
+    let _ = writeln!(out, "module_count={}", modules.len());
+    for (base, size, name) in &modules {
+        let stamp = unsafe { pe_timedatestamp(*base) }.unwrap_or(0);
+        let _ = writeln!(
+            out,
+            "module_entry base=0x{base:x} size=0x{size:x} pe_timestamp=0x{stamp:08x} name={name}"
+        );
+    }
+    let _ = fs::write(path_for(config().modules_file_name), out);
+}
+
+#[cfg(windows)]
+unsafe fn pe_timedatestamp(base: usize) -> Option<u32> {
+    if unsafe { safe_read_u16(base) }? != 0x5a4d {
+        return None;
+    }
+    let e_lfanew = unsafe { safe_read_usize(base + PE_E_LFANEW_OFFSET) }? & 0xffff_ffff;
+    if e_lfanew > 0x1000 {
+        return None;
+    }
+    let nt = base + e_lfanew;
+    if unsafe { safe_read_usize(nt) }? & 0xffff_ffff != 0x0000_4550 {
+        return None;
+    }
+    unsafe { safe_read_u32(nt + PE_TIMEDATESTAMP_FROM_NT) }
+}
+
+/// Write a postmortem minidump next to the text log.
+///
+/// The text record is a summary of one thread; the dump carries every thread's stack, the full
+/// module list with versions, and the memory those stacks reference. `dbghelp` is resolved lazily
+/// so nothing is linked or loaded until the process is already dying.
+#[cfg(windows)]
+unsafe fn write_minidump(info: *mut ExceptionPointersMin) {
+    #[repr(C)]
+    struct MinidumpExceptionInformation {
+        thread_id: u32,
+        exception_pointers: *mut ExceptionPointersMin,
+        client_pointers: i32,
+    }
+    type MiniDumpWriteDumpFn = unsafe extern "system" fn(
+        process: isize,
+        process_id: u32,
+        file: isize,
+        dump_type: u32,
+        exception_param: *const MinidumpExceptionInformation,
+        user_stream_param: *const c_void,
+        callback_param: *const c_void,
+    ) -> i32;
+
+    let dbghelp = unsafe { LoadLibraryA(c"dbghelp.dll".as_ptr().cast()) };
+    if dbghelp.is_null() {
+        return;
+    }
+    let entry = unsafe { GetProcAddress(dbghelp, c"MiniDumpWriteDump".as_ptr().cast()) };
+    if entry.is_null() {
+        return;
+    }
+    let write_dump: MiniDumpWriteDumpFn = unsafe { std::mem::transmute(entry) };
+
+    let path = path_for(config().minidump_file_name);
+    let mut wide: Vec<u16> = path.to_string_lossy().encode_utf16().collect();
+    wide.push(0);
+    let file = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            GENERIC_WRITE,
+            0,
+            std::ptr::null_mut(),
+            CREATE_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL,
+            0,
+        )
+    };
+    if file == INVALID_HANDLE_VALUE {
+        return;
+    }
+    let exception = MinidumpExceptionInformation {
+        thread_id: unsafe { GetCurrentThreadId() },
+        exception_pointers: info,
+        client_pointers: 0,
+    };
+    let dump_type = MINIDUMP_WITH_UNLOADED_MODULES
+        | MINIDUMP_WITH_INDIRECTLY_REFERENCED_MEMORY
+        | MINIDUMP_WITH_PROCESS_THREAD_DATA
+        | MINIDUMP_WITH_THREAD_INFO;
+    let ok = unsafe {
+        write_dump(
+            GetCurrentProcess(),
+            GetCurrentProcessId(),
+            file,
+            dump_type,
+            &exception,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+    unsafe { CloseHandle(file) };
+    append_log(format_args!(
+        "minidump write ok={} path={}",
+        ok != 0,
+        path.display()
+    ));
 }
 
 #[cfg(windows)]
@@ -699,6 +1328,38 @@ unsafe fn safe_read_usize(addr: usize) -> Option<usize> {
 }
 
 #[cfg(windows)]
+unsafe fn safe_read_u32(addr: usize) -> Option<u32> {
+    let mut out = 0u32;
+    let mut read = 0usize;
+    let ok = unsafe {
+        ReadProcessMemory(
+            CURRENT_PROCESS,
+            addr as *const c_void,
+            (&mut out as *mut u32).cast(),
+            std::mem::size_of::<u32>(),
+            &mut read,
+        )
+    };
+    (ok != 0 && read == std::mem::size_of::<u32>()).then_some(out)
+}
+
+#[cfg(windows)]
+unsafe fn safe_read_u8(addr: usize) -> Option<u8> {
+    let mut out = 0u8;
+    let mut read = 0usize;
+    let ok = unsafe {
+        ReadProcessMemory(
+            CURRENT_PROCESS,
+            addr as *const c_void,
+            (&mut out as *mut u8).cast(),
+            std::mem::size_of::<u8>(),
+            &mut read,
+        )
+    };
+    (ok != 0 && read == std::mem::size_of::<u8>()).then_some(out)
+}
+
+#[cfg(windows)]
 unsafe fn safe_read_u16(addr: usize) -> Option<u16> {
     let mut out = 0u16;
     let mut read = 0usize;
@@ -724,6 +1385,8 @@ mod tests {
         assert_eq!(cfg.log_file_name, DEFAULT_LOG_FILE);
         assert_eq!(cfg.latest_file_name, DEFAULT_LATEST_FILE);
         assert_eq!(cfg.breadcrumb_file_name, DEFAULT_BREADCRUMB_FILE);
+        assert_eq!(cfg.modules_file_name, DEFAULT_MODULES_FILE);
+        assert_eq!(cfg.minidump_file_name, DEFAULT_MINIDUMP_FILE);
         assert_eq!(cfg.module_label, DEFAULT_MODULE_LABEL);
     }
 
@@ -731,5 +1394,74 @@ mod tests {
     fn phase_labels_are_stable() {
         assert_eq!(Phase::DllAttach.label(), "dll-attach");
         assert_eq!(Phase::ExceptionObserved.label(), "exception-observed");
+    }
+
+    #[test]
+    fn cpp_throws_are_classified_apart_from_faults() {
+        assert_eq!(record_class(EXCEPTION_CPP_THROW), RecordClass::Throw);
+        assert_eq!(record_class(EXCEPTION_ACCESS_VIOLATION), RecordClass::Fault);
+        assert_eq!(record_class(EXCEPTION_HEAP_CORRUPTION), RecordClass::Fault);
+    }
+
+    /// The failure this whole change exists to prevent: a render thread throwing C++ exceptions as
+    /// routine control flow must not be able to consume the records reserved for a real fault.
+    #[test]
+    fn exhausted_throw_budget_leaves_fault_budget_intact() {
+        let throws = MAX_THROW_RECORDS * 100;
+        assert!(!budget_allows(RecordClass::Throw, throws, 0));
+        assert!(budget_allows(RecordClass::Fault, throws, 0));
+        assert!(budget_allows(
+            RecordClass::Fault,
+            throws,
+            MAX_FAULT_RECORDS - 1
+        ));
+        assert!(!budget_allows(
+            RecordClass::Fault,
+            throws,
+            MAX_FAULT_RECORDS
+        ));
+    }
+
+    #[test]
+    fn thrown_type_names_are_readable() {
+        assert_eq!(format_thrown_type_name(".?AV_com_error@@"), "_com_error");
+        assert_eq!(
+            format_thrown_type_name(".?AVbad_alloc@std@@"),
+            "std::bad_alloc"
+        );
+        assert_eq!(
+            format_thrown_type_name(".PEAVDeviceRemoved@nv@@"),
+            "nv::DeviceRemoved"
+        );
+    }
+
+    /// An unparseable name is still evidence; never mangle it further.
+    #[test]
+    fn unrecognized_type_names_pass_through_untouched() {
+        assert_eq!(format_thrown_type_name("garbage"), "garbage");
+        assert_eq!(
+            format_thrown_type_name(".?AVunterminated"),
+            ".?AVunterminated"
+        );
+        assert_eq!(format_thrown_type_name(".?AV@@"), ".?AV@@");
+    }
+
+    #[test]
+    fn reportable_set_covers_cpp_throw_and_error_severity() {
+        assert!(is_reportable_exception(EXCEPTION_CPP_THROW));
+        assert!(is_reportable_exception(EXCEPTION_ACCESS_VIOLATION));
+        // Error-severity codes we have not enumerated still report.
+        assert!(is_reportable_exception(0xc000_0fff));
+        // Informational/warning severities do not.
+        assert!(!is_reportable_exception(0x4000_0001));
+    }
+
+    #[test]
+    fn cpp_throw_has_a_distinct_label() {
+        assert_eq!(exception_code_label(EXCEPTION_CPP_THROW), "C++/Rust throw");
+        assert_eq!(
+            exception_code_label(EXCEPTION_ACCESS_VIOLATION),
+            "STATUS_ACCESS_VIOLATION"
+        );
     }
 }
