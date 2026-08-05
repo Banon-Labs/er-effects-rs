@@ -66,6 +66,8 @@ EXTRA_EVIDENCE_PATHS = (
     "fdd5f467-bf36-402d-bbcd-6defe1f4d0b7/scratchpad/steam-matchmaking-trace.jsonl",
     "/tmp/claude-1000/-home-banon-projects-er-effects-rs/"
     "fdd5f467-bf36-402d-bbcd-6defe1f4d0b7/scratchpad/steam-vtable-trace.jsonl",
+    "/tmp/claude-1000/-home-banon-projects-er-effects-rs/"
+    "fdd5f467-bf36-402d-bbcd-6defe1f4d0b7/scratchpad/ersc-session-trace.jsonl",
 )
 
 def _extra_evidence_paths() -> tuple[str, ...]:
@@ -301,6 +303,23 @@ PREDICATES: tuple[Predicate, ...] = (
         # plentiful while every interface stayed unidentified, which is the exact failure here.
         log_any=(r'"version":\s*"[A-Za-z][A-Za-z0-9_]{4,40}\d{3}"',),
         informative_if=(r'"type":\s*"iface"',),
+    ),
+    Predicate(
+        name="ersc_session_state_observed",
+        why=(
+            "THE LAST UNREAD LINK. What sets session state 0x15 -- the only state offering 'Seek "
+            "opponent' -- and what consumes the opponent handle that option latches at S+0x1F0 "
+            "both live inside the Themida-virtualized seamless_session_manager dispatcher and "
+            "CANNOT be read. They can only be watched. If OSM is never captured, the tracer saw "
+            "nothing and the run proves nothing about the state machine; that must not be "
+            "mistaken for 'the state never changed'."
+        ),
+        owner="scripts/frida-ersc-session-trace.py",
+        # A real session reading. NOT satisfied by an 'osm' capture alone: capturing the object
+        # proves a hook fired, not that S+0x110 was ever readable through it -- the same
+        # hooked-is-not-called conflation that made two earlier predicates look promising.
+        log_any=(r'"type":\s*"session"',),
+        informative_if=(r'"type":\s*"(session|osm|menu-open|action)"',),
     ),
 )
 
