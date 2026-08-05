@@ -78,6 +78,16 @@ pub struct PinMarker {
     pub width: u16,
     /// Declared height in pixels.
     pub height: u16,
+    /// Placement scale in 16.16 fixed point.
+    ///
+    /// Every shipped icon frame places at `0.5`, and so does every marker here by default. It is a
+    /// per-marker field rather than a constant because a marker's DRAWN size is the only thing the
+    /// player can actually judge, and the declared atlas sizes do not always land where they should
+    /// on screen -- `MENU_MAP_Enemy_03` is 188x190, half again the default marker, which reads as
+    /// oversized at map scale.
+    ///
+    /// The centring translate is derived from this, so the two can never disagree.
+    pub scale_fixed: i32,
     /// Atlas name, for error messages.
     pub name: &'static str,
 }
@@ -85,27 +95,64 @@ pub struct PinMarker {
 impl PinMarker {
     /// Twips to translate on each axis so the bitmap is centred on the pin's anchor.
     ///
-    /// The shipped frames translate back by half the DRAWN size, and the drawn size is half the
-    /// declared size because every icon frame places at scale 0.5. So the shift is
-    /// `-declared / 2 / 2 * 20`, i.e. `-declared * 5` -- which reproduces the `-730` the
-    /// hand-derived single-marker constant used for 146.
+    /// The shipped frames translate back by half the DRAWN size, and the drawn size is the declared
+    /// size times the placement scale. So the shift is `-declared * 20 * scale / 2`, which at the
+    /// usual `0.5` reduces to `-declared * 5` -- reproducing the `-730` the hand-derived
+    /// single-marker constant used for 146.
     #[must_use]
-    pub const fn translate_twips(size: u16) -> i32 {
-        -(size as i32) * 5
+    pub const fn translate_twips_at(size: u16, scale_fixed: i32) -> i32 {
+        // `size * 20` twips at full scale, halved to centre, then scaled. Done in this order so the
+        // fixed-point divide happens last and the result stays exact for the shipped 0.5 case.
+        -((size as i32) * 10 * scale_fixed / FIXED_ONE)
+    }
+
+    /// Centring translate for this marker, at its own scale.
+    #[must_use]
+    pub const fn translate_x_twips(&self) -> i32 {
+        Self::translate_twips_at(self.width, self.scale_fixed)
+    }
+
+    /// Centring translate for this marker on the vertical axis.
+    #[must_use]
+    pub const fn translate_y_twips(&self) -> i32 {
+        Self::translate_twips_at(self.height, self.scale_fixed)
+    }
+
+    /// Drawn size in pixels, which is what the player actually sees.
+    #[must_use]
+    pub const fn drawn_size(&self) -> (i32, i32) {
+        (
+            (self.width as i32) * self.scale_fixed / FIXED_ONE,
+            (self.height as i32) * self.scale_fixed / FIXED_ONE,
+        )
     }
 }
 
-/// The LARGEST marker: a location the user explicitly chose.
+/// 16.16 fixed-point `1.0`.
+const FIXED_ONE: i32 = 0x0001_0000;
+
+/// A scale expressed as a percentage of the shipped `0.5`.
+const fn percent_of_half_scale(percent: i32) -> i32 {
+    HALF_SCALE_FIXED * percent / 100
+}
+
+/// A location the user explicitly chose.
 ///
-/// `MENU_MAP_Enemy_03` at 188x190 -- bigger than the default marker, which is what makes a chosen
-/// location stand out. It is the dimmest of the family (RGB 125/78/50), so the three tiers are
-/// ranked by SIZE, not brightness: 188 > 146 > 68, strictly monotonic. Size is the legible cue at
-/// map scale, where a pin is a few dozen pixels and its hue is mostly the atlas's glow.
+/// `MENU_MAP_Enemy_03`, a 188x190 bitmap drawn at 66% of the usual placement scale (user request,
+/// live 2026-08-05: at full scale it read as oversized on the map). Declared 188x190 at 0.33 draws
+/// ~62x63 px against the default marker's ~73x73.
+///
+/// NOTE that this deliberately breaks the size ordering the three tiers used to have (188 > 146 >
+/// 68). Chosen now draws SMALLER than untouched, so size no longer encodes tier. That is fine
+/// because size was never the thing distinguishing them -- each tier is a DIFFERENT BITMAP
+/// (`Enemy_03` / `Enemy_02` / `Enemy_00`), and the frame number is what the engine switches on.
+/// Do not "restore" the ordering without asking: it was changed on a look at the real map.
 pub const MARKER_CHOSEN: PinMarker = PinMarker {
     frame: 303,
     character: 55,
     width: 188,
     height: 190,
+    scale_fixed: percent_of_half_scale(66),
     name: "MENU_MAP_Enemy_03",
 };
 
@@ -124,6 +171,7 @@ pub const MARKER_UNTOUCHED: PinMarker = PinMarker {
     character: RED_MARKER_CHARACTER,
     width: 146,
     height: 146,
+    scale_fixed: HALF_SCALE_FIXED,
     name: "MENU_MAP_Enemy_02",
 };
 
@@ -133,10 +181,11 @@ pub const MARKER_EXCLUDED: PinMarker = PinMarker {
     character: 54,
     width: 68,
     height: 72,
+    scale_fixed: HALF_SCALE_FIXED,
     name: "MENU_MAP_Enemy_00",
 };
 
-/// Every marker this module installs, largest first.
+/// Every marker this module installs.
 pub const PIN_MARKERS: [PinMarker; 3] = [MARKER_CHOSEN, MARKER_UNTOUCHED, MARKER_EXCLUDED];
 
 /// Depth the icon clip places its bitmap at. Every populated frame uses depth 1.
@@ -220,15 +269,15 @@ fn marker_placement(marker: PinMarker) -> Tag {
         matrix: Some(Matrix {
             has_scale: true,
             scale_nbits: SCALE_NBITS,
-            scale_x: HALF_SCALE_FIXED,
-            scale_y: HALF_SCALE_FIXED,
+            scale_x: marker.scale_fixed,
+            scale_y: marker.scale_fixed,
             has_rotate: false,
             rotate_nbits: 0,
             rotate_skew0: 0,
             rotate_skew1: 0,
             translate_nbits: TRANSLATE_NBITS,
-            translate_x: PinMarker::translate_twips(marker.width),
-            translate_y: PinMarker::translate_twips(marker.height),
+            translate_x: marker.translate_x_twips(),
+            translate_y: marker.translate_y_twips(),
         }),
         color_transform: None,
         ratio: None,
@@ -481,12 +530,12 @@ mod tests {
         // The original code folded centring into ONE constant because Enemy_02 is square. Its
         // siblings are 68x72 and 102x104; a shared translate would hang them off the anchor.
         assert_eq!(
-            PinMarker::translate_twips(146),
+            PinMarker::translate_twips_at(146, HALF_SCALE_FIXED),
             -730,
             "the hand-derived value"
         );
-        assert_eq!(PinMarker::translate_twips(68), -340);
-        assert_eq!(PinMarker::translate_twips(72), -360);
+        assert_eq!(PinMarker::translate_twips_at(68, HALF_SCALE_FIXED), -340);
+        assert_eq!(PinMarker::translate_twips_at(72, HALF_SCALE_FIXED), -360);
         let mut movie = movie_with(sprite_with_frames(
             ICON_SPRITE_ID,
             ICON_SPRITE_FRAME_COUNT,
@@ -510,6 +559,71 @@ mod tests {
             matrix.translate_x, matrix.translate_y,
             "a non-square bitmap must not share one translate"
         );
+    }
+
+    #[test]
+    fn a_scaled_marker_stays_centred_and_draws_the_size_it_claims() {
+        // Scaling a marker without scaling its translate hangs the bitmap off the anchor by half
+        // the difference -- which on a map reads as "the pin is in the wrong place", not "the pin is
+        // the wrong size". The two are derived from one field so they cannot drift apart.
+        let scale = MARKER_CHOSEN.scale_fixed;
+        assert!(
+            scale < HALF_SCALE_FIXED,
+            "chosen is meant to draw smaller than the shipped placement scale"
+        );
+        assert_eq!(
+            MARKER_CHOSEN.translate_x_twips(),
+            -(188 * 10 * scale / FIXED_ONE)
+        );
+        assert_eq!(
+            MARKER_CHOSEN.translate_y_twips(),
+            -(190 * 10 * scale / FIXED_ONE)
+        );
+        // 66% of the shipped scale, and the drawn size that follows from it.
+        assert_eq!(scale, HALF_SCALE_FIXED * 66 / 100);
+        let (w, h) = MARKER_CHOSEN.drawn_size();
+        assert_eq!((w, h), (62, 62));
+        // And it now draws SMALLER than the default marker -- deliberately. If this ever flips back
+        // the change was not asked for.
+        let (default_w, _) = MARKER_UNTOUCHED.drawn_size();
+        assert!(w < default_w, "chosen must draw smaller than untouched");
+    }
+
+    #[test]
+    fn the_emitted_matrix_carries_each_markers_own_scale() {
+        let mut movie = movie_with(sprite_with_frames(
+            ICON_SPRITE_ID,
+            ICON_SPRITE_FRAME_COUNT,
+            &[1],
+        ));
+        install_red_pin_frame(&mut movie).expect("installs");
+        let Tag::DefineSprite { tags, .. } = &movie.tags[0] else {
+            panic!("sprite");
+        };
+        for marker in PIN_MARKERS {
+            let (_, place) = frame_span(tags, marker.frame).expect("marker frame");
+            let Tag::PlaceObject3 {
+                matrix: Some(matrix),
+                ..
+            } = place
+            else {
+                panic!("no matrix for {}", marker.name);
+            };
+            assert_eq!(matrix.scale_x, marker.scale_fixed, "{}", marker.name);
+            assert_eq!(matrix.scale_y, marker.scale_fixed, "{}", marker.name);
+            assert_eq!(
+                matrix.translate_x,
+                marker.translate_x_twips(),
+                "{}",
+                marker.name
+            );
+            assert_eq!(
+                matrix.translate_y,
+                marker.translate_y_twips(),
+                "{}",
+                marker.name
+            );
+        }
     }
 
     #[test]
