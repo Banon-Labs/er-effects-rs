@@ -363,31 +363,33 @@ pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
     // CSRemo already pass -> saveRequested is the SOLE blocker. Clear saveState + saveRequested native-
     // flow (let the game run 7->8->9; NOT a forced field25 write, which tore the world down). Movement is
     // already proven, so completing the walk now cannot regress the proof.
-    // REACHABILITY (2026-08-04). `move_proven_for_reload` reads CAN_MOVE_CONFIRMED, which
-    // `can_move_probe::tick` sets ONLY when the input-harness DLL is loaded ("never fires in a normal
-    // user session" -- its own comment). So in product this branch never ran, the case-7 gate never
-    // got satisfied, and the reload sat in loading mode indefinitely. `world_live_for_epoch` is the
-    // same fact this file's disarm uses and is measured reachable: `oracle_play_time_live=true`,
-    // `oracle_boot_view_epoch_live == oracle_current_load_epoch == 1`. Either signal now opens it, so
-    // the harness path keeps working and the product path stops being a dead branch.
+    // REACHABILITY, AND WHY THIS GATE IS DELIBERATELY STILL NARROW (2026-08-05).
+    // `move_proven_for_reload` reads CAN_MOVE_CONFIRMED, which `can_move_probe::tick` sets ONLY when
+    // the input-harness DLL is loaded ("never fires in a normal user session" -- its own comment), so
+    // in product this block does not run. That is a real limitation and it is recorded, NOT fixed
+    // here.
     //
-    // SCOPE (fin 1..=7, not "any fin"). At fin=0 the advancer has not started the walk and there is
-    // nothing to unblock, so clearing there would suppress an autosave the game legitimately asked
-    // for while nothing is warping. Restricting to a walk that is already underway keeps this inert
-    // during ordinary play and active exactly where the case-7 gate is evaluated.
+    // It was briefly widened to `move_proven_for_reload || (world_live_for_epoch &&
+    // finalize_walk_underway)`, which made the block LIVE in every normal session: clearing
+    // saveState + saveRequested(0xb72) + companion(0xb73) every frame of any map move, and returning
+    // early past the movable-window preservation below. REVERTED, for two reasons.
     //
-    // 0xb73 IS NOT OPTIONAL. `case 7` needs `!ShouldSave() && !FUN_140679370()`; the first reads
-    // `GameMan+0xb72`, the SECOND reads `+0xb73`, and `case 0` re-sets BOTH every pass via
-    // `SaveRequest_Profile(false)`. Clearing only 0xb72 -- what this branch used to do -- leaves the
-    // gate shut, which is why it must be re-applied per frame rather than once per epoch.
+    // 1. It had no active dependent. The only thing that needed this reachability was the cVar10
+    //    warp-clear DISARM, and that disarm is withheld behind #[allow(dead_code)] in this same file
+    //    (releasing GameMan+0x10 without an unconditional case-7 satisfier parks the game on a black
+    //    screen with a frozen character). Half a paired change shipped alone is not inert -- it is a
+    //    live edit to a path nothing is testing. When the disarm is withheld, its enabler is withheld
+    //    with it, and the two land together or not at all.
+    // 2. It was never A/B'd against main. The branch carrying it softlocked the game in the user's
+    //    hands while main autoloaded repeatedly -- and because no control run was ever taken, that
+    //    regression was misread as the feature/environment being broken.
+    //
+    // When this is re-attempted it needs the disarm, an UNCONDITIONAL case-7 satisfier (0xb73
+    // included -- `case 7` needs `!ShouldSave() && !FUN_140679370()`, reading 0xb72 AND 0xb73, and
+    // `case 0` re-sets both every pass), and a main-vs-branch autoload comparison before it ships.
     let move_proven_for_reload = crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
         && crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == epoch;
-    let world_live_for_epoch =
-        crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == epoch;
-    let finalize_walk_underway = (1..=7).contains(&fin);
-    if (move_proven_for_reload || (world_live_for_epoch && finalize_walk_underway))
-        && (13..=18).contains(&mms_state)
-    {
+    if move_proven_for_reload && (13..=18).contains(&mms_state) {
         if let Ok(gm) = unsafe { eldenring::cs::GameMan::instance() } {
             let gm_addr = gm as *const _ as usize;
             let ss = core::mem::offset_of!(eldenring::cs::GameMan, save_state);
@@ -406,7 +408,7 @@ pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
                 core::sync::atomic::AtomicUsize::new(usize::MAX);
             if SATISFY_LOG_EPOCH.swap(epoch, Ordering::SeqCst) != epoch {
                 append_autoload_debug(format_args!(
-                    "case7-savedrain-satisfy: epoch {epoch} move_proven={move_proven_for_reload} world_live={world_live_for_epoch} mms={mms_state} fin={fin} -> cleared saveState+saveRequested(0xb72)+companion(0xb73) so the finalize completes 7->8->9 natively (loading mode exits, fps -> load1 parity)"
+                    "case7-savedrain-satisfy: epoch {epoch} move-proven mms={mms_state} fin={fin} -> cleared saveState+saveRequested(0xb72)+companion(0xb73) so the finalize completes 7->8->9 natively (loading mode exits, fps -> load1 parity)"
                 ));
             }
         }
