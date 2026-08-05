@@ -307,7 +307,15 @@ rpc.exports = {
         Interceptor.attach(base.add(pair[1]), {
           onEnter(args) {
             captureOsm(args[0], 'action-' + pair[0]);
-            send({ type: 'action', name: pair[0] });
+            // RECORD THE REAL ARGUMENTS. To automate a reject we must CALL cancel, and calling a
+            // function whose signature we inferred from a decompile is how you crash someone's
+            // game. Capturing what the engine actually passes on a genuine user-driven press turns
+            // the ABI from a guess into a measurement -- replay these exact values instead.
+            const argv = [];
+            for (let a = 0; a < 4; a++) {
+              try { argv.push(args[a].toString()); } catch (e) { argv.push('<?>'); }
+            }
+            send({ type: 'action', name: pair[0], args: argv, ret: this.returnAddress.toString() });
             emitIfChanged('action-enter:' + pair[0]);
           },
           onLeave() { emitIfChanged('action-leave:' + pair[0]); },
@@ -465,7 +473,9 @@ def main() -> int:
         elif kind == "confirm":
             print(f"CONFIRM selectedIndex={p['selectedIndex']}")
         elif kind == "action":
-            print(f"ACTION {p['name']}")
+            print(
+                f"ACTION {p['name']}  args={p.get('args')}  called_from={p.get('ret')}"
+            )
         elif kind == "join-hook":
             print(
                 f"JOIN OBSERVER {'armed at ' + p['addr'] if p['ok'] else 'REFUSED (prologue mismatch: got ' + str(p.get('got')) + ')'}"
