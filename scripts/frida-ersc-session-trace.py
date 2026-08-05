@@ -154,6 +154,73 @@ function readSession() {
   } catch (e) { return null; }
 }
 
+// Read-only snapshot of the region the "Seek opponent" action selects from.
+//
+// WHY A DUMP AND NOT A WALK: the action (ersc+0x24bc0) walks a list at OSM+0x60, cross-references a
+// table reached via [OSM+0x10] -> * -> * -> +0x10ef0, and calls a vfunc (+0x48) on each entry. bd
+// `accessor-FUN1402414a0-has-sideeffects-hang-is-notfound-alloc-safe-replicate-readonly-treewalk-only`
+// records that calling that accessor has SIDE EFFECTS and can hang the game. So nothing is called
+// here -- raw bytes only, decoded offline. Guessing the list layout and walking it live would risk
+// the same hang for a structure we have not confirmed.
+//
+// Captured when state == 0x15, because that is the only state where the option is offered, and the
+// user cannot realistically press it: if a candidate exists the invasion fires immediately, so the
+// window only exists while the search is DRY.
+let dumpedAt15 = false;
+function dumpSeekCandidateRegion(S) {
+  if (dumpedAt15) return null;
+  function hex(ptr, len) {
+    try {
+      const b = ptr.readByteArray(len);
+      if (b === null) return null;
+      return Array.from(new Uint8Array(b))
+        .map(function (x) { return ('0' + x.toString(16)).slice(-2); }).join('');
+    } catch (e) { return null; }
+  }
+  const out = { osm: osm.toString(), S: S.toString() };
+  out.osm_00_100 = hex(osm, 0x100);          // includes +0x10 (table root) and +0x60 (list)
+  out.S_1c0_200  = hex(S.add(0x1c0), 0x40);  // includes +0x1d4 and the +0x1f0 latch
+  // Follow the two pointers the action uses, one level, without calling anything.
+  try {
+    const listPtr = osm.add(0x60).readPointer();
+    out.list_ptr = listPtr.toString();
+    out.list_head = hex(listPtr, 0x80);
+  } catch (e) { out.list_ptr = null; }
+  // Follow the list's begin..end. The head at OSM+0x60 is a begin/end/cap triple (measured
+  // 2026-08-05: begin=0x45cbcfe0 end=0x45cbd008 cap=0x45cbd010, a 0x28-byte span), so the ELEMENTS
+  // are what the seek action iterates -- the head alone says only how many there are.
+  try {
+    const lp = osm.add(0x60).readPointer();
+    const begin = lp.readPointer();
+    const end = lp.add(8).readPointer();
+    const span = end.sub(begin).toInt32();
+    out.list_span = span;
+    if (span > 0 && span <= 0x1000) {
+      out.list_elems = hex(begin, span);
+    }
+  } catch (e) { out.list_span = null; }
+  try {
+    const t0 = osm.add(0x10).readPointer();
+    out.t0 = t0.toString();
+    const t1 = t0.readPointer();
+    out.t1 = t1.toString();
+    const t2 = t1.readPointer();
+    out.t2 = t2.toString();
+    out.table_10ef0 = hex(t2.add(0x10ef0), 0x40);   // count at +0, array ptr at +8
+    // The array itself. Stride 0x10 per the static read of ersc+0x24bc0; 6 entries measured, so
+    // cap generously and decode offline rather than trusting a stride guess here.
+    const cnt = t2.add(0x10ef0).readU32();
+    const arr = t2.add(0x10ef0 + 8).readPointer();
+    out.table_count = cnt;
+    out.table_arr = arr.toString();
+    if (cnt > 0 && cnt <= 64) {
+      out.table_entries = hex(arr, Math.min(cnt * 0x10, 0x400));
+    }
+  } catch (e) { out.t0 = out.t0 || null; }
+  dumpedAt15 = true;
+  return out;
+}
+
 function emitIfChanged(why) {
   const now = readSession();
   if (now === null) return;
@@ -161,6 +228,13 @@ function emitIfChanged(why) {
   if (key === last) return;
   last = key;
   send({ type: 'session', why: why, fields: now });
+  if (now.state === 0x15) {
+    try {
+      const S = osm.add(0x58).readPointer();
+      const dump = dumpSeekCandidateRegion(S);
+      if (dump !== null) send({ type: 'seek-region', fields: dump });
+    } catch (e) { /* unreadable */ }
+  }
 }
 
 function captureOsm(p, why) {
@@ -298,6 +372,12 @@ def main() -> int:
             print(f"CONFIRM selectedIndex={p['selectedIndex']}")
         elif kind == "action":
             print(f"ACTION {p['name']}")
+        elif kind == "seek-region":
+            f = p["fields"]
+            print(
+                f"SEEK-REGION captured at state 0x15: OSM={f['osm']} S={f['S']} "
+                f"list_ptr={f.get('list_ptr')} table={f.get('t2')}"
+            )
         elif kind == "session":
             f = p["fields"]
             state = f["state"]
