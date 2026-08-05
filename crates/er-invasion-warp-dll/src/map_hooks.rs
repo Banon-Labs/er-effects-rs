@@ -901,7 +901,17 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
          all, so this is the ONLY source that can mark them)"
     ));
     let fresh = InvasionRowRegistry::from_targets(targets);
-    let signature = catalog_signature(&fresh);
+    // The param rows carry a per-location ICON, so the cache that serves them has to notice the
+    // user's marks changing -- not just the spawn table.
+    //
+    // This is the bug that made the map look frozen. `catalog_signature` hashes blocks, point
+    // indices and positions; marking a location changes none of those, so the signature matched,
+    // the leaked rows were reused verbatim, and every reopen served icon ids computed at the FIRST
+    // injection. Measured live: three marker frames provably installed, four re-injections, zero
+    // visible change. The pin COUNT did change across those runs (467 -> 500 -> 587) precisely
+    // because those were catalog changes, which is what made the cache look like it was working.
+    let signature =
+        catalog_signature(&fresh) ^ crate::local_invasion_filter::pin_choice_signature();
     let cached_registry = INJECTED_REGISTRY.load(Ordering::SeqCst);
     let registry: &'static InvasionRowRegistry =
         if cached_registry != 0 && CATALOG_SIGNATURE.load(Ordering::SeqCst) == signature {
@@ -958,6 +968,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         unsafe { core::slice::from_raw_parts(cached as *const [u8; SYNTHETIC_PARAM_ROW_LEN], len) }
     } else {
         let mut rows: Vec<[u8; SYNTHETIC_PARAM_ROW_LEN]> = Vec::with_capacity(wanted);
+        let (mut tier_chosen, mut tier_untouched, mut tier_excluded) = (0_usize, 0, 0);
         for index in 0..wanted {
             let Some(entity_id) = registry.entity_id_at(index) else {
                 break;
@@ -981,13 +992,35 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
             let place_name_text_id = projection.map_or(-1, |(coords, _, _)| unsafe {
                 nearest_place_name_text_id(before.begin, existing_rows, block_area_byte, *coords)
             });
+            // Keep the name. It is resolved here from the shipped rows, which only exist while the
+            // map is being built; the local-invasion filter needs it much later, when a match
+            // arrives.
+            if let Some(target) = registry.targets().get(index) {
+                record_place_name(target.block.raw(), place_name_text_id);
+            }
+            // Whether the user chose, excluded or ignored this location -- a property of the
+            // LOCATION, not of where they are standing. Asked at injection time because that is
+            // when the row is built; the map re-injects on every open, so marking a place and
+            // reopening the map shows the new tier.
+            let appearance = crate::local_invasion_filter::pin_appearance_for(
+                registry
+                    .targets()
+                    .get(index)
+                    .map(|target| target.block.raw()),
+            );
+            match appearance {
+                er_invasion_warp::param_row::PinAppearance::Chosen => tier_chosen += 1,
+                er_invasion_warp::param_row::PinAppearance::Eligible => tier_untouched += 1,
+                er_invasion_warp::param_row::PinAppearance::Rejected => tier_excluded += 1,
+            }
             rows.push(
                 SyntheticParamSpec {
                     entity_id,
                     subcategory_id: donor.subcategory_id,
                     // Deliberately NOT the donor's icon: the donor is a grace, and the id is a
                     // GFx frame number, so copying it draws a Site of Grace.
-                    icon_id: er_invasion_warp::param_row::invasion_pin_icon_id(
+                    icon_id: er_invasion_warp::param_row::invasion_pin_icon_id_for(
+                        appearance,
                         crate::map_gfx::red_pin_frame_installed(),
                     ),
                     // NOT the donor's bits, and NOT all three. These are per-map-layer
@@ -1021,6 +1054,11 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
             ));
         }
         let leaked: &'static [[u8; SYNTHETIC_PARAM_ROW_LEN]] = Box::leak(rows.into_boxed_slice());
+        crate::local_invasion_filter::log_pin_tier_tally(
+            tier_chosen,
+            tier_untouched,
+            tier_excluded,
+        );
         SHARED_PARAM_ROWS_PTR.store(leaked.as_ptr() as usize, Ordering::SeqCst);
         SHARED_PARAM_ROWS_LEN.store(leaked.len(), Ordering::SeqCst);
         leaked
@@ -1604,6 +1642,51 @@ pub fn msb_coverage() -> (usize, usize) {
         Err(poisoned) => poisoned.into_inner(),
     };
     (catalog.len(), catalog.observed_block_count())
+}
+
+/// Block -> `PlaceName` text ids, recorded as the pins are named.
+///
+/// The registry stores TARGETS, and the resolved name was previously written into the param row
+/// and then forgotten. The local-invasion filter judges by AREA NAME, so the name has to outlive
+/// injection: this is where it is kept. Recording it here costs one map insert per pin and makes
+/// "somewhere in the Haligtree" answerable later, when a match arrives and the map row list is
+/// long gone.
+///
+/// A block can carry SEVERAL names -- that is the whole point of the "five names, five places to
+/// look" rule -- so the value is a set, not a single id.
+static PLACE_NAMES_BY_BLOCK: std::sync::Mutex<
+    Option<std::collections::BTreeMap<u32, std::collections::BTreeSet<i32>>>,
+> = std::sync::Mutex::new(None);
+
+/// Record a resolved place name for a block. `-1` (unresolved) is dropped: an unnamed pin
+/// contributes no name, and storing the sentinel would make "no name" look like a name.
+fn record_place_name(block: u32, place_name_text_id: i32) {
+    if place_name_text_id < 0 {
+        return;
+    }
+    let Ok(mut guard) = PLACE_NAMES_BY_BLOCK.lock() else {
+        return;
+    };
+    guard
+        .get_or_insert_with(std::collections::BTreeMap::new)
+        .entry(block)
+        .or_default()
+        .insert(place_name_text_id);
+}
+
+/// `PlaceName` text ids known for a block. Empty when the map has not been opened this session --
+/// which the filter treats as "no names", failing closed in the name-based modes rather than
+/// matching everything.
+#[must_use]
+pub fn registry_place_names_for_block(block: u32) -> Vec<i32> {
+    let Ok(guard) = PLACE_NAMES_BY_BLOCK.lock() else {
+        return Vec::new();
+    };
+    guard
+        .as_ref()
+        .and_then(|map| map.get(&block))
+        .map(|names| names.iter().copied().collect())
+        .unwrap_or_default()
 }
 
 /// The injected registry, leaked so the confirm hook can map a synthetic entity id back to its

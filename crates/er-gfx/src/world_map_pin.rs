@@ -47,14 +47,87 @@ pub const ICON_SPRITE_ID: u16 = 171;
 /// Frames the icon clip declares. Frame numbers the engine passes are 1-based.
 pub const ICON_SPRITE_FRAME_COUNT: u16 = 348;
 
-/// The spare frame the red marker is installed on.
+/// The spare frame the brightest marker is installed on.
 ///
 /// Sprite 171 declares 348 frames but populates only 118 of them; 300 sits inside a long
-/// unpopulated stretch, so no shipped `BonfireWarpParam` icon id can collide with it.
+/// unpopulated stretch, so no shipped `BonfireWarpParam` icon id can collide with it. The
+/// siblings at 301 and 302 sit in the same stretch and are checked for emptiness individually.
 pub const RED_PIN_FRAME: u16 = 300;
 
 /// `MENU_MAP_Enemy_02` -- the hostile-player marker, and the reddest bitmap in the map atlas.
 pub const RED_MARKER_CHARACTER: u16 = 52;
+
+/// One marker to install: which spare frame, which bitmap, and how big that bitmap is.
+///
+/// # Why the size is carried rather than assumed
+///
+/// The placement centres a bitmap by translating back half its drawn size, and the original
+/// single-marker code folded that into ONE constant because `MENU_MAP_Enemy_02` happens to be
+/// square. Its siblings are not -- 68x72, 102x104, 188x190 -- so a shared constant would hang
+/// three of the four markers off their anchor. Sizes below are read from the hi-res atlas layout
+/// (`SB_MapCursor.layout`), not inferred: the low-res layout is exactly half of each, which is
+/// what confirms the 146x146 the original constant already assumed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PinMarker {
+    /// Spare frame in the icon clip. This IS the icon id the engine is handed.
+    pub frame: u16,
+    /// External-image character in this same movie. Read out of the movie's own
+    /// `GFX_DefineExternalImage2` tags, so nothing new is defined and no texture is shipped.
+    pub character: u16,
+    /// Declared width in pixels, from the hi-res atlas layout.
+    pub width: u16,
+    /// Declared height in pixels.
+    pub height: u16,
+    /// Atlas name, for error messages.
+    pub name: &'static str,
+}
+
+impl PinMarker {
+    /// Twips to translate on each axis so the bitmap is centred on the pin's anchor.
+    ///
+    /// The shipped frames translate back by half the DRAWN size, and the drawn size is half the
+    /// declared size because every icon frame places at scale 0.5. So the shift is
+    /// `-declared / 2 / 2 * 20`, i.e. `-declared * 5` -- which reproduces the `-730` the
+    /// hand-derived single-marker constant used for 146.
+    #[must_use]
+    pub const fn translate_twips(size: u16) -> i32 {
+        -(size as i32) * 5
+    }
+}
+
+/// The brightest marker: a location the user explicitly chose.
+pub const MARKER_CHOSEN: PinMarker = PinMarker {
+    frame: RED_PIN_FRAME,
+    character: RED_MARKER_CHARACTER,
+    width: 146,
+    height: 146,
+    name: "MENU_MAP_Enemy_02",
+};
+
+/// Mid marker: a location the current filter mode would accept, but that was not chosen by hand.
+pub const MARKER_ELIGIBLE: PinMarker = PinMarker {
+    frame: 301,
+    character: 53,
+    width: 102,
+    height: 104,
+    name: "MENU_MAP_Enemy_01",
+};
+
+/// Dimmest marker: a location the current filter would reject.
+pub const MARKER_REJECTED: PinMarker = PinMarker {
+    frame: 302,
+    character: 54,
+    width: 68,
+    height: 72,
+    name: "MENU_MAP_Enemy_00",
+};
+
+/// Every marker this module installs, brightest first.
+///
+/// Three tiers rather than four: `MENU_MAP_Enemy_03` is the largest bitmap but also the dimmest
+/// (RGB 125/78/50 against 234/99/48), so adding it would break the one property that makes these
+/// readable at a glance -- size and brightness both falling together.
+pub const PIN_MARKERS: [PinMarker; 3] = [MARKER_CHOSEN, MARKER_ELIGIBLE, MARKER_REJECTED];
 
 /// Depth the icon clip places its bitmap at. Every populated frame uses depth 1.
 pub const ICON_DEPTH: u16 = 1;
@@ -126,14 +199,14 @@ impl core::fmt::Display for RedPinError {
 
 impl std::error::Error for RedPinError {}
 
-/// The `PlaceObject3` that draws the red marker, centred, at the icon depth.
-fn red_marker_placement() -> Tag {
+/// The `PlaceObject3` that draws one marker, centred, at the icon depth.
+fn marker_placement(marker: PinMarker) -> Tag {
     Tag::PlaceObject3 {
         flags1: PLACE_FLAGS1_CHARACTER_AND_MATRIX,
         flags2: PLACE_FLAGS2_HAS_IMAGE,
         depth: ICON_DEPTH,
         class_name: None,
-        character_id: Some(RED_MARKER_CHARACTER),
+        character_id: Some(marker.character),
         matrix: Some(Matrix {
             has_scale: true,
             scale_nbits: SCALE_NBITS,
@@ -144,8 +217,8 @@ fn red_marker_placement() -> Tag {
             rotate_skew0: 0,
             rotate_skew1: 0,
             translate_nbits: TRANSLATE_NBITS,
-            translate_x: RED_MARKER_TRANSLATE_TWIPS,
-            translate_y: RED_MARKER_TRANSLATE_TWIPS,
+            translate_x: PinMarker::translate_twips(marker.width),
+            translate_y: PinMarker::translate_twips(marker.height),
         }),
         color_transform: None,
         ratio: None,
@@ -225,25 +298,39 @@ pub fn install_red_pin_frame(movie: &mut Movie) -> Result<(), RedPinError> {
             found: *declared_frames,
         });
     }
-    let show_frame = show_frame_index(tags, RED_PIN_FRAME).ok_or(RedPinError::FrameOutOfRange {
-        frames_found: frame_count(tags),
-    })?;
-    if !frame_is_empty(tags, show_frame) {
-        return Err(RedPinError::FrameNotEmpty);
+    // Validate EVERY frame before writing ANY of them. A partial install would leave the movie
+    // with some markers present and others missing, and the caller's fallback ("no markers, use a
+    // vanilla icon") could no longer describe what is actually in front of Scaleform.
+    for marker in PIN_MARKERS {
+        let show_frame =
+            show_frame_index(tags, marker.frame).ok_or(RedPinError::FrameOutOfRange {
+                frames_found: frame_count(tags),
+            })?;
+        if !frame_is_empty(tags, show_frame) {
+            return Err(RedPinError::FrameNotEmpty);
+        }
     }
-    // Insert immediately BEFORE the frame's ShowFrame, so the placement belongs to this frame.
-    // The RemoveObject2 first, mirroring every shipped icon frame: the display list persists
-    // across frames, so without it the previous icon stays under ours at the same depth.
-    tags.splice(
-        show_frame..show_frame,
-        [
-            Tag::RemoveObject2 {
-                depth: ICON_DEPTH,
-                force_long: false,
-            },
-            red_marker_placement(),
-        ],
-    );
+    // Insert from the LAST frame backwards. Each splice shifts every later index, so walking
+    // forwards would invalidate the indices computed for the frames still to come.
+    for marker in PIN_MARKERS.iter().rev() {
+        let show_frame =
+            show_frame_index(tags, marker.frame).ok_or(RedPinError::FrameOutOfRange {
+                frames_found: frame_count(tags),
+            })?;
+        // Insert immediately BEFORE the frame's ShowFrame, so the placement belongs to this frame.
+        // The RemoveObject2 first, mirroring every shipped icon frame: the display list persists
+        // across frames, so without it the previous icon stays under ours at the same depth.
+        tags.splice(
+            show_frame..show_frame,
+            [
+                Tag::RemoveObject2 {
+                    depth: ICON_DEPTH,
+                    force_long: false,
+                },
+                marker_placement(*marker),
+            ],
+        );
+    }
     Ok(())
 }
 
@@ -333,6 +420,104 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// The two tags making up frame `frame`, or `None` if that frame is empty.
+    fn frame_span(tags: &[Tag], frame: u16) -> Option<(Tag, Tag)> {
+        let target = show_frame_index(tags, frame)?;
+        let previous = tags[..target]
+            .iter()
+            .rposition(|tag| matches!(tag, Tag::ShowFrame { .. }))
+            .map_or(0, |index| index + 1);
+        let span = &tags[previous..target];
+        (span.len() == 2).then(|| (span[0].clone(), span[1].clone()))
+    }
+
+    #[test]
+    fn every_marker_lands_on_its_own_frame_with_its_own_bitmap() {
+        let mut movie = movie_with(sprite_with_frames(
+            ICON_SPRITE_ID,
+            ICON_SPRITE_FRAME_COUNT,
+            &[1, 2, 3],
+        ));
+        install_red_pin_frame(&mut movie).expect("installs");
+        let Tag::DefineSprite { tags, .. } = &movie.tags[0] else {
+            panic!("sprite");
+        };
+        for marker in PIN_MARKERS {
+            let (remove, place) =
+                frame_span(tags, marker.frame).unwrap_or_else(|| panic!("{}", marker.name));
+            assert!(matches!(remove, Tag::RemoveObject2 { depth, .. } if depth == ICON_DEPTH));
+            let Tag::PlaceObject3 {
+                character_id: Some(character),
+                ..
+            } = place
+            else {
+                panic!("{} did not place a character", marker.name);
+            };
+            assert_eq!(character, marker.character, "{}", marker.name);
+        }
+        // Distinct frames AND distinct bitmaps, or the three tiers would be indistinguishable on
+        // screen while every structural assertion above still passed.
+        let frames: std::collections::BTreeSet<_> = PIN_MARKERS.iter().map(|m| m.frame).collect();
+        let characters: std::collections::BTreeSet<_> =
+            PIN_MARKERS.iter().map(|m| m.character).collect();
+        assert_eq!(frames.len(), PIN_MARKERS.len(), "frames must not collide");
+        assert_eq!(characters.len(), PIN_MARKERS.len(), "bitmaps must differ");
+    }
+
+    #[test]
+    fn a_non_square_marker_is_centred_on_both_axes_independently() {
+        // The original code folded centring into ONE constant because Enemy_02 is square. Its
+        // siblings are 68x72 and 102x104; a shared translate would hang them off the anchor.
+        assert_eq!(
+            PinMarker::translate_twips(146),
+            -730,
+            "the hand-derived value"
+        );
+        assert_eq!(PinMarker::translate_twips(68), -340);
+        assert_eq!(PinMarker::translate_twips(72), -360);
+        let mut movie = movie_with(sprite_with_frames(
+            ICON_SPRITE_ID,
+            ICON_SPRITE_FRAME_COUNT,
+            &[1],
+        ));
+        install_red_pin_frame(&mut movie).expect("installs");
+        let Tag::DefineSprite { tags, .. } = &movie.tags[0] else {
+            panic!("sprite");
+        };
+        let (_, place) = frame_span(tags, MARKER_REJECTED.frame).expect("rejected marker");
+        let Tag::PlaceObject3 {
+            matrix: Some(matrix),
+            ..
+        } = place
+        else {
+            panic!("no matrix");
+        };
+        assert_eq!(matrix.translate_x, -340);
+        assert_eq!(matrix.translate_y, -360);
+        assert_ne!(
+            matrix.translate_x, matrix.translate_y,
+            "a non-square bitmap must not share one translate"
+        );
+    }
+
+    #[test]
+    fn one_populated_sibling_frame_aborts_the_whole_install() {
+        // Validation runs over every frame before any write, so a movie that is only partly the
+        // one we reversed is left completely alone -- otherwise the caller's "no markers, fall
+        // back to a vanilla icon" could not describe what Scaleform was actually handed.
+        let mut movie = movie_with(sprite_with_frames(
+            ICON_SPRITE_ID,
+            ICON_SPRITE_FRAME_COUNT,
+            &[1, MARKER_REJECTED.frame],
+        ));
+        let before = movie.clone();
+        assert!(matches!(
+            install_red_pin_frame(&mut movie),
+            Err(RedPinError::FrameNotEmpty)
+        ));
+        assert_eq!(movie, before, "a refused install must write nothing at all");
     }
 
     #[test]

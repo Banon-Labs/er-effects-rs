@@ -68,6 +68,8 @@ pub mod msb_invasion_points;
 /// dungeon the player has never entered. Not re-exported for the same reason as
 /// [`msb_invasion_points`]: it carries its own region type.
 pub mod legacy_map_regions;
+pub mod local_invasion;
+pub mod local_invasion_config;
 
 /// What destination a SEAMLESS invasion actually chose, read out of `CSGameMan` after the fact.
 /// Not re-exported: it carries its own reading type, and Seamless's placement path has nothing

@@ -1,0 +1,741 @@
+//! Which invasions are allowed to land, and where.
+//!
+//! # What this encodes
+//!
+//! Seamless decides the destination server-side and pushes it to the client in a
+//! `ServerPushJoinData`; the block id is at `+0x00` of that struct, and it is written to
+//! `GameMan+0xAC8` by `CS::SosSignMan::SetMultiplayJoinData` (`0x1406FB520`). Measured live
+//! 2026-08-05: `+0x00` was the ONLY offset in all 128 bytes whose u32 equalled the destination, so
+//! the field is identified by correlation, not by the reversed field name (`matchPlayerCount`,
+//! which would have pointed elsewhere).
+//!
+//! That is the whole basis for a location filter: at the moment `SetMultiplayJoinData` runs, the
+//! destination is decided and the player has NOT moved. A predicate there can accept or reject
+//! with certainty. Rejecting means cancelling the match, which was measured non-destructive -- the
+//! session walks `0x22 -> 0x00` and a fresh search works afterwards.
+//!
+//! It also encodes a NEGATIVE result, so nobody re-attempts it: the pre-match candidate table does
+//! NOT predict the destination. Its block-shaped fields were the LOCAL character's own map
+//! (`0x1c000000`, matching this save's `c30`) while the match that followed went to `0x3c353800`.
+//! Filtering before connecting is therefore not available, and accept-then-reject is the shape
+//! that works.
+//!
+//! # The anchor
+//!
+//! Every decision is relative to where the player IS. There is always a nearest invasion map point
+//! for the player's current position -- that is what `nearest_place_name_text_id` resolves against
+//! the shipped warp rows, same-area only. The anchor carries the block AND the place-name text ids
+//! valid at that location, because a single warp destination can sit under more than one place
+//! name: one name means one acceptable location, five names mean five.
+//!
+//! # Why the modes are shaped this way
+//!
+//! [`LocalInvasionMode::ExactOnly`] is the strictest useful thing -- the exact block the player
+//! anchored to. [`LocalInvasionMode::PreferExactThenArea`] widens to the anchor's own place names
+//! when the exact block is not on offer, which is the difference between "this tile" and
+//! "somewhere in the Haligtree". [`LocalInvasionMode::NamedOnly`] ignores the anchor entirely and
+//! honours a user-supplied list, for hunting a place you are not standing in.
+//!
+//! Disabled is the DEFAULT. This filter cancels real matches, and a mod that silently rejects
+//! other players' invasions because a config file appeared is worse than one that does nothing
+//! until asked.
+
+use std::collections::BTreeSet;
+
+/// A `PlaceName` FMG text id. `-1` is "no name", and it is not a wildcard.
+pub type PlaceNameTextId = i32;
+
+/// The "no name" sentinel. `nearest_place_name_text_id` returns this when nothing resolves, and it
+/// must never be treated as matching anything -- an unnamed candidate is not "everywhere".
+pub const PLACE_NAME_NONE: PlaceNameTextId = -1;
+
+/// How a destination is judged against the player's anchor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum LocalInvasionMode {
+    /// Only the anchor's own block. The narrowest option.
+    #[default]
+    ExactOnly,
+    /// The anchor's block if offered; otherwise any destination sharing one of the anchor's place
+    /// names. "Prefer exact" is not a ranking this type can express on a single candidate -- each
+    /// match is judged alone -- so it means: exact always passes, same-area also passes.
+    PreferExactThenArea,
+    /// Ignore the anchor; accept only destinations whose place name is in the configured list.
+    NamedOnly,
+}
+
+impl LocalInvasionMode {
+    /// Parse the TOML spelling. Returns `None` for anything unrecognised so the caller can report
+    /// the bad value rather than silently falling back to a mode the user did not ask for.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.trim().to_ascii_lowercase().as_str() {
+            "exact" | "exact_only" | "exact-only" => Some(Self::ExactOnly),
+            "area" | "prefer_exact_then_area" | "prefer-exact-then-area" => {
+                Some(Self::PreferExactThenArea)
+            }
+            "named" | "named_only" | "named-only" => Some(Self::NamedOnly),
+            _ => None,
+        }
+    }
+
+    /// The canonical TOML spelling, for round-tripping and for the generated default file.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ExactOnly => "exact",
+            Self::PreferExactThenArea => "area",
+            Self::NamedOnly => "named",
+        }
+    }
+}
+
+/// Where the player is, and what that location is called.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InvasionAnchor {
+    /// The player's current block id.
+    pub block: u32,
+    /// Place-name text ids valid at the anchor. Usually one; a location that sits under several
+    /// names carries several, and each is an acceptable destination name in area mode.
+    pub place_names: BTreeSet<PlaceNameTextId>,
+}
+
+impl InvasionAnchor {
+    /// Build an anchor from a block and the place names resolved at it, dropping
+    /// [`PLACE_NAME_NONE`] -- an unresolved name is not a name to match on.
+    #[must_use]
+    pub fn new(block: u32, place_names: impl IntoIterator<Item = PlaceNameTextId>) -> Self {
+        Self {
+            block,
+            place_names: place_names
+                .into_iter()
+                .filter(|id| *id != PLACE_NAME_NONE)
+                .collect(),
+        }
+    }
+
+    /// How many distinct named locations this anchor makes acceptable in area mode. One name means
+    /// one place to look, five names mean five.
+    #[must_use]
+    pub fn named_location_count(&self) -> usize {
+        self.place_names.len()
+    }
+}
+
+/// An incoming match, as known at `SetMultiplayJoinData`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InvasionCandidate {
+    /// Destination block from `ServerPushJoinData+0x00`.
+    pub block: u32,
+    /// Place name resolved for that destination, or [`PLACE_NAME_NONE`] if none resolved.
+    pub place_name: PlaceNameTextId,
+}
+
+/// What to do with a candidate, and why. The reason is carried so a rejection can be logged with
+/// its cause instead of appearing as an unexplained cancel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verdict {
+    /// Let the match land.
+    Keep(KeepReason),
+    /// Cancel it.
+    Reject(RejectReason),
+}
+
+/// Why a candidate was kept.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeepReason {
+    /// The filter is switched off; everything lands, exactly as unmodded play.
+    FilterDisabled,
+    /// Same block as the anchor.
+    ExactBlock,
+    /// Different block, but a place name the anchor also carries.
+    SharedPlaceName,
+    /// Place name is on the user's configured list.
+    NamedLocation,
+    /// The exact block is on the user's marked list (Insert, or `allowed_blocks` by hand).
+    MarkedBlock,
+}
+
+/// Why a candidate was rejected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RejectReason {
+    /// Not the anchor's block, in a mode that requires it.
+    WrongBlock,
+    /// Not one of the anchor's place names.
+    WrongPlaceName,
+    /// Not on the configured list.
+    NotNamed,
+    /// The candidate has no resolvable place name, in a mode that judges by name. Rejected rather
+    /// than waved through: an unnamed destination is unknown, not universal.
+    CandidateUnnamed,
+    /// Name-based judging with nothing to judge against -- an anchor with no names, or an empty
+    /// list. Fails CLOSED, because the alternative is accepting everything while appearing to
+    /// filter.
+    NothingToMatchAgainst,
+    /// The user excluded this exact location with Delete.
+    ExcludedByUser,
+}
+
+/// The filter's configuration, as loaded from TOML.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalInvasionConfig {
+    /// Master switch. Off by default.
+    pub enabled: bool,
+    /// How destinations are judged.
+    pub mode: LocalInvasionMode,
+    /// Place-name text ids accepted in [`LocalInvasionMode::NamedOnly`], and -- see [`Self::judge`]
+    /// -- accepted in every other mode too, because this is the list Shift+Insert appends to.
+    pub named_location_text_ids: BTreeSet<PlaceNameTextId>,
+    /// Human-readable names the user typed. Kept alongside the ids so the DLL can resolve them
+    /// against the game's FMG at runtime and report which ones did not resolve -- a name that
+    /// silently matches nothing is the failure mode this exists to make visible.
+    pub named_locations: Vec<String>,
+    /// Exact blocks the user marked with Insert. Widens whatever the mode allows.
+    pub allowed_blocks: BTreeSet<u32>,
+    /// Exact blocks the user excluded with Delete. Overrides everything, including a mode that
+    /// would otherwise accept them.
+    ///
+    /// This is the third state the world map needs. `allowed` and "not allowed" are only two, and
+    /// deriving the third from [`Self::judge`] against the player's current position made the map
+    /// answer a question it should not: standing in a hub, every destination is a `WrongPlaceName`
+    /// reject, so the whole map rendered one uniform tier and conveyed nothing. Chosen / untouched
+    /// / excluded are properties OF A LOCATION, so they read the same from anywhere.
+    pub blocked_blocks: BTreeSet<u32>,
+}
+
+impl Default for LocalInvasionConfig {
+    fn default() -> Self {
+        Self {
+            // OFF. See the module docs: this cancels real matches, so it must be asked for.
+            enabled: false,
+            mode: LocalInvasionMode::ExactOnly,
+            named_location_text_ids: BTreeSet::new(),
+            named_locations: Vec::new(),
+            allowed_blocks: BTreeSet::new(),
+            blocked_blocks: BTreeSet::new(),
+        }
+    }
+}
+
+/// Which of the three persistent states a location is in, independent of where the player stands.
+///
+/// This is what the world map colours by, and it is deliberately NOT derived from [`Verdict`]:
+/// a verdict answers "would this match land right now, from here", which changes as the player
+/// walks. A map needs an answer that does not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum LocationChoice {
+    /// The user marked it with Insert.
+    Chosen,
+    /// Neither marked nor excluded -- an invasion location the user has no opinion about.
+    #[default]
+    Untouched,
+    /// The user excluded it with Delete.
+    Excluded,
+}
+
+impl LocalInvasionConfig {
+    /// Judge one incoming match.
+    ///
+    /// Disabled short-circuits to [`KeepReason::FilterDisabled`] before anything else is
+    /// considered, so a misconfigured filter cannot reject matches while switched off.
+    ///
+    /// # Why marks are checked before the mode
+    ///
+    /// The Insert / Shift+Insert hotkeys exist so a player can say "and here too" without editing
+    /// a file or thinking about which mode they are in. So a mark WIDENS: it can only ever turn a
+    /// reject into a keep, never the reverse. If marks were folded into the mode instead, marking
+    /// a place while in `exact` mode would do nothing visible and the keys would appear broken.
+    ///
+    /// Marks never reject on their own. An empty mark list therefore leaves the mode entirely in
+    /// charge, and `named` mode with an empty list still fails closed further down.
+    #[must_use]
+    pub fn judge(&self, anchor: &InvasionAnchor, candidate: InvasionCandidate) -> Verdict {
+        if !self.enabled {
+            return Verdict::Keep(KeepReason::FilterDisabled);
+        }
+        // Excluded beats chosen. They cannot both hold via the hotkeys -- each key clears the
+        // other list -- but a hand-edited file can say both, and refusing is the fail-closed
+        // reading of a contradiction.
+        if self.blocked_blocks.contains(&candidate.block) {
+            return Verdict::Reject(RejectReason::ExcludedByUser);
+        }
+        if self.allowed_blocks.contains(&candidate.block) {
+            return Verdict::Keep(KeepReason::MarkedBlock);
+        }
+        if candidate.place_name != PLACE_NAME_NONE
+            && self.named_location_text_ids.contains(&candidate.place_name)
+        {
+            return Verdict::Keep(KeepReason::NamedLocation);
+        }
+        match self.mode {
+            LocalInvasionMode::ExactOnly => {
+                if candidate.block == anchor.block {
+                    Verdict::Keep(KeepReason::ExactBlock)
+                } else {
+                    Verdict::Reject(RejectReason::WrongBlock)
+                }
+            }
+            LocalInvasionMode::PreferExactThenArea => {
+                if candidate.block == anchor.block {
+                    return Verdict::Keep(KeepReason::ExactBlock);
+                }
+                if anchor.place_names.is_empty() {
+                    return Verdict::Reject(RejectReason::NothingToMatchAgainst);
+                }
+                if candidate.place_name == PLACE_NAME_NONE {
+                    return Verdict::Reject(RejectReason::CandidateUnnamed);
+                }
+                if anchor.place_names.contains(&candidate.place_name) {
+                    Verdict::Keep(KeepReason::SharedPlaceName)
+                } else {
+                    Verdict::Reject(RejectReason::WrongPlaceName)
+                }
+            }
+            LocalInvasionMode::NamedOnly => {
+                if self.named_location_text_ids.is_empty() {
+                    return Verdict::Reject(RejectReason::NothingToMatchAgainst);
+                }
+                if candidate.place_name == PLACE_NAME_NONE {
+                    return Verdict::Reject(RejectReason::CandidateUnnamed);
+                }
+                // A listed name was already accepted above; reaching here means it was not listed.
+                Verdict::Reject(RejectReason::NotNamed)
+            }
+        }
+    }
+
+    /// What the map should say about a location, with no reference to where the player is.
+    #[must_use]
+    pub fn choice_for(&self, block: u32) -> LocationChoice {
+        if self.blocked_blocks.contains(&block) {
+            LocationChoice::Excluded
+        } else if self.allowed_blocks.contains(&block) {
+            LocationChoice::Chosen
+        } else {
+            LocationChoice::Untouched
+        }
+    }
+
+    /// Insert: "I want to invade here." Clears any exclusion, so the two keys are inverses rather
+    /// than two ways of reaching the same stuck state. Returns whether anything changed, so a
+    /// hotkey can stay silent on a repeat press instead of rewriting the file every frame.
+    pub fn mark_block(&mut self, block: u32) -> bool {
+        let unblocked = self.blocked_blocks.remove(&block);
+        self.allowed_blocks.insert(block) || unblocked
+    }
+
+    /// Delete: "I do not want to invade here." Clears any mark and records the exclusion.
+    ///
+    /// This used to merely un-mark, which made Delete a no-op on anything the user had not already
+    /// chosen -- and left no way at all to say "not here". Excluding is the useful meaning, and it
+    /// is what gives the world map its third tier.
+    pub fn unmark_block(&mut self, block: u32) -> bool {
+        let unmarked = self.allowed_blocks.remove(&block);
+        self.blocked_blocks.insert(block) || unmarked
+    }
+
+    /// Add every place name the anchor carries -- "this place and everywhere sharing its name".
+    ///
+    /// Returns how many were newly added. An anchor with no resolved names adds nothing and
+    /// reports 0, which is what lets the caller say "nothing to mark here" rather than claiming a
+    /// mark that would match nothing.
+    pub fn mark_place_names(&mut self, anchor: &InvasionAnchor) -> usize {
+        anchor
+            .place_names
+            .iter()
+            .filter(|id| self.named_location_text_ids.insert(**id))
+            .count()
+    }
+
+    /// Remove every place name the anchor carries. Returns how many were actually removed.
+    pub fn unmark_place_names(&mut self, anchor: &InvasionAnchor) -> usize {
+        anchor
+            .place_names
+            .iter()
+            .filter(|id| self.named_location_text_ids.remove(*id))
+            .count()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn anchor() -> InvasionAnchor {
+        InvasionAnchor::new(0x0f00_0000, [100, 200])
+    }
+
+    #[test]
+    fn disabled_keeps_everything_even_with_a_mode_that_would_reject() {
+        let config = LocalInvasionConfig {
+            enabled: false,
+            mode: LocalInvasionMode::ExactOnly,
+            ..Default::default()
+        };
+        let far = InvasionCandidate {
+            block: 0x3c35_3800,
+            place_name: 999,
+        };
+        assert_eq!(
+            config.judge(&anchor(), far),
+            Verdict::Keep(KeepReason::FilterDisabled),
+            "a switched-off filter must never cancel someone's match"
+        );
+    }
+
+    #[test]
+    fn the_default_is_off() {
+        assert!(
+            !LocalInvasionConfig::default().enabled,
+            "this cancels real matches; it has to be asked for, not inherited"
+        );
+    }
+
+    #[test]
+    fn exact_mode_takes_the_block_and_nothing_else() {
+        let config = LocalInvasionConfig {
+            enabled: true,
+            mode: LocalInvasionMode::ExactOnly,
+            ..Default::default()
+        };
+        assert_eq!(
+            config.judge(
+                &anchor(),
+                InvasionCandidate {
+                    block: 0x0f00_0000,
+                    place_name: 100
+                }
+            ),
+            Verdict::Keep(KeepReason::ExactBlock)
+        );
+        // Same NAME, different block: exact mode still refuses.
+        assert_eq!(
+            config.judge(
+                &anchor(),
+                InvasionCandidate {
+                    block: 0x0f01_0000,
+                    place_name: 100
+                }
+            ),
+            Verdict::Reject(RejectReason::WrongBlock)
+        );
+    }
+
+    #[test]
+    fn area_mode_takes_exact_first_then_a_shared_name() {
+        let config = LocalInvasionConfig {
+            enabled: true,
+            mode: LocalInvasionMode::PreferExactThenArea,
+            ..Default::default()
+        };
+        assert_eq!(
+            config.judge(
+                &anchor(),
+                InvasionCandidate {
+                    block: 0x0f00_0000,
+                    place_name: 777
+                }
+            ),
+            Verdict::Keep(KeepReason::ExactBlock),
+            "the exact block passes regardless of its name"
+        );
+        assert_eq!(
+            config.judge(
+                &anchor(),
+                InvasionCandidate {
+                    block: 0x0f02_0000,
+                    place_name: 200
+                }
+            ),
+            Verdict::Keep(KeepReason::SharedPlaceName)
+        );
+        assert_eq!(
+            config.judge(
+                &anchor(),
+                InvasionCandidate {
+                    block: 0x0f02_0000,
+                    place_name: 300
+                }
+            ),
+            Verdict::Reject(RejectReason::WrongPlaceName)
+        );
+    }
+
+    #[test]
+    fn an_anchor_reports_how_many_places_it_makes_acceptable() {
+        assert_eq!(InvasionAnchor::new(1, [100]).named_location_count(), 1);
+        assert_eq!(
+            InvasionAnchor::new(1, [100, 200, 300, 400, 500]).named_location_count(),
+            5,
+            "five names means five places to look"
+        );
+    }
+
+    #[test]
+    fn place_name_none_is_never_stored_as_an_anchor_name() {
+        let anchor = InvasionAnchor::new(1, [PLACE_NAME_NONE, 100, PLACE_NAME_NONE]);
+        assert_eq!(anchor.named_location_count(), 1);
+        assert!(!anchor.place_names.contains(&PLACE_NAME_NONE));
+    }
+
+    #[test]
+    fn an_unnamed_candidate_is_rejected_not_waved_through() {
+        let config = LocalInvasionConfig {
+            enabled: true,
+            mode: LocalInvasionMode::PreferExactThenArea,
+            ..Default::default()
+        };
+        assert_eq!(
+            config.judge(
+                &anchor(),
+                InvasionCandidate {
+                    block: 0x2000_0000,
+                    place_name: PLACE_NAME_NONE
+                }
+            ),
+            Verdict::Reject(RejectReason::CandidateUnnamed),
+            "no resolvable name means unknown, not universal"
+        );
+    }
+
+    #[test]
+    fn name_matching_with_nothing_to_match_against_fails_closed() {
+        let no_names = LocalInvasionConfig {
+            enabled: true,
+            mode: LocalInvasionMode::PreferExactThenArea,
+            ..Default::default()
+        };
+        assert_eq!(
+            no_names.judge(
+                &InvasionAnchor::new(0x0f00_0000, []),
+                InvasionCandidate {
+                    block: 0x2000_0000,
+                    place_name: 100
+                }
+            ),
+            Verdict::Reject(RejectReason::NothingToMatchAgainst),
+        );
+        let empty_list = LocalInvasionConfig {
+            enabled: true,
+            mode: LocalInvasionMode::NamedOnly,
+            ..Default::default()
+        };
+        assert_eq!(
+            empty_list.judge(
+                &anchor(),
+                InvasionCandidate {
+                    block: 0x0f00_0000,
+                    place_name: 100
+                }
+            ),
+            Verdict::Reject(RejectReason::NothingToMatchAgainst),
+            "named mode with an empty list must not silently accept everything"
+        );
+    }
+
+    #[test]
+    fn a_marked_block_is_accepted_whatever_the_mode_says() {
+        // Insert marks where you stand. It has to work in the strictest mode too, or the key
+        // appears dead to anyone who has not changed `mode`.
+        let mut config = LocalInvasionConfig {
+            enabled: true,
+            mode: LocalInvasionMode::ExactOnly,
+            ..Default::default()
+        };
+        let far = InvasionCandidate {
+            block: 0x3c35_3800,
+            place_name: 999,
+        };
+        assert_eq!(
+            config.judge(&anchor(), far),
+            Verdict::Reject(RejectReason::WrongBlock)
+        );
+        assert!(
+            config.mark_block(0x3c35_3800),
+            "first mark changes something"
+        );
+        assert_eq!(
+            config.judge(&anchor(), far),
+            Verdict::Keep(KeepReason::MarkedBlock)
+        );
+        assert!(
+            !config.mark_block(0x3c35_3800),
+            "a repeat press changes nothing"
+        );
+        assert!(config.unmark_block(0x3c35_3800));
+        assert_eq!(
+            config.judge(&anchor(), far),
+            Verdict::Reject(RejectReason::ExcludedByUser),
+            "Delete now EXCLUDES rather than reverting to neutral -- it used to be a no-op on \
+             anything not already chosen, which left no way to say \"not here\""
+        );
+        // The two keys are inverses: Insert on an excluded location takes it back.
+        assert!(config.mark_block(0x3c35_3800));
+        assert_eq!(
+            config.judge(&anchor(), far),
+            Verdict::Keep(KeepReason::MarkedBlock)
+        );
+        assert!(
+            config.blocked_blocks.is_empty(),
+            "Insert clears the exclusion"
+        );
+    }
+
+    #[test]
+    fn the_three_location_states_do_not_depend_on_where_the_player_is() {
+        // The whole reason this exists. Deriving the map's tiers from `judge` made them a function
+        // of the player's position, so standing in a hub painted every pin the same tier.
+        let mut config = LocalInvasionConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        config.mark_block(0x0f00_0000);
+        config.unmark_block(0x3c35_3800);
+        assert_eq!(config.choice_for(0x0f00_0000), LocationChoice::Chosen);
+        assert_eq!(config.choice_for(0x3c35_3800), LocationChoice::Excluded);
+        assert_eq!(config.choice_for(0x1234_0000), LocationChoice::Untouched);
+        // No anchor is involved at all -- there is no parameter for one.
+        assert_eq!(
+            LocalInvasionConfig::default().choice_for(0x0f00_0000),
+            LocationChoice::Untouched
+        );
+    }
+
+    #[test]
+    fn an_exclusion_beats_a_mode_that_would_otherwise_accept() {
+        let mut config = LocalInvasionConfig {
+            enabled: true,
+            mode: LocalInvasionMode::PreferExactThenArea,
+            ..Default::default()
+        };
+        let same_name = InvasionCandidate {
+            block: 0x0f02_0000,
+            place_name: 200,
+        };
+        assert_eq!(
+            config.judge(&anchor(), same_name),
+            Verdict::Keep(KeepReason::SharedPlaceName)
+        );
+        config.unmark_block(0x0f02_0000);
+        assert_eq!(
+            config.judge(&anchor(), same_name),
+            Verdict::Reject(RejectReason::ExcludedByUser),
+            "an explicit \"not here\" has to outrank the mode, or Delete would be advisory"
+        );
+    }
+
+    #[test]
+    fn shift_insert_marks_every_name_the_anchor_carries() {
+        let mut config = LocalInvasionConfig {
+            enabled: true,
+            mode: LocalInvasionMode::ExactOnly,
+            ..Default::default()
+        };
+        // anchor() carries 100 and 200: "two names, two places to look".
+        assert_eq!(config.mark_place_names(&anchor()), 2);
+        assert_eq!(config.mark_place_names(&anchor()), 0, "already marked");
+        let elsewhere_same_name = InvasionCandidate {
+            block: 0x9999_0000,
+            place_name: 200,
+        };
+        assert_eq!(
+            config.judge(&anchor(), elsewhere_same_name),
+            Verdict::Keep(KeepReason::NamedLocation),
+            "a marked name has to widen exact mode, not sit inert until the mode changes"
+        );
+        assert_eq!(config.unmark_place_names(&anchor()), 2);
+        assert_eq!(
+            config.judge(&anchor(), elsewhere_same_name),
+            Verdict::Reject(RejectReason::WrongBlock)
+        );
+    }
+
+    #[test]
+    fn an_anchor_with_no_resolved_names_marks_nothing_and_says_so() {
+        let mut config = LocalInvasionConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let nameless = InvasionAnchor::new(0x0f00_0000, [PLACE_NAME_NONE]);
+        assert_eq!(
+            config.mark_place_names(&nameless),
+            0,
+            "marking nothing must report 0, not claim a mark that would match nothing"
+        );
+        assert!(config.named_location_text_ids.is_empty());
+    }
+
+    #[test]
+    fn marking_does_not_override_the_master_switch() {
+        let mut config = LocalInvasionConfig::default();
+        config.mark_block(0x3c35_3800);
+        assert_eq!(
+            config.judge(
+                &anchor(),
+                InvasionCandidate {
+                    block: 0x1234_0000,
+                    place_name: 7
+                }
+            ),
+            Verdict::Keep(KeepReason::FilterDisabled),
+            "marks widen a filter that is ON; they must not switch one on"
+        );
+    }
+
+    #[test]
+    fn named_mode_ignores_the_anchor_entirely() {
+        let config = LocalInvasionConfig {
+            enabled: true,
+            mode: LocalInvasionMode::NamedOnly,
+            named_location_text_ids: [500].into_iter().collect(),
+            named_locations: vec!["Somewhere Else".to_owned()],
+            allowed_blocks: BTreeSet::new(),
+            blocked_blocks: BTreeSet::new(),
+        };
+        // The anchor's own block, but not a listed name -> rejected.
+        assert_eq!(
+            config.judge(
+                &anchor(),
+                InvasionCandidate {
+                    block: 0x0f00_0000,
+                    place_name: 100
+                }
+            ),
+            Verdict::Reject(RejectReason::NotNamed)
+        );
+        // Far from the anchor, but listed -> kept.
+        assert_eq!(
+            config.judge(
+                &anchor(),
+                InvasionCandidate {
+                    block: 0x3c35_3800,
+                    place_name: 500
+                }
+            ),
+            Verdict::Keep(KeepReason::NamedLocation)
+        );
+    }
+
+    #[test]
+    fn mode_spellings_round_trip_and_unknown_is_reported_not_defaulted() {
+        for mode in [
+            LocalInvasionMode::ExactOnly,
+            LocalInvasionMode::PreferExactThenArea,
+            LocalInvasionMode::NamedOnly,
+        ] {
+            assert_eq!(LocalInvasionMode::parse(mode.as_str()), Some(mode));
+        }
+        assert_eq!(
+            LocalInvasionMode::parse("EXACT"),
+            Some(LocalInvasionMode::ExactOnly)
+        );
+        assert_eq!(
+            LocalInvasionMode::parse("prefer-exact-then-area"),
+            Some(LocalInvasionMode::PreferExactThenArea)
+        );
+        assert_eq!(
+            LocalInvasionMode::parse("whatever"),
+            None,
+            "an unknown mode must surface as an error, not become a mode the user did not choose"
+        );
+    }
+}

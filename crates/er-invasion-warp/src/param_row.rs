@@ -90,6 +90,52 @@ pub const fn invasion_pin_icon_id(red_frame_installed: bool) -> u16 {
     }
 }
 
+/// What the map should say about one invasion location, relative to the filter's current rules.
+///
+/// These are not three arbitrary looks -- they are the three answers
+/// [`crate::local_invasion::LocalInvasionConfig::judge`] can give about a destination, so the map
+/// shows what would actually happen if an invasion landed there rather than a separate notion of
+/// "enabled" that could drift away from the filter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PinAppearance {
+    /// The user marked this exact location (Insert, or `allowed_blocks` by hand).
+    Chosen,
+    /// Not marked, but the current mode would accept it.
+    #[default]
+    Eligible,
+    /// The current mode would reject it, so an invasion here would be cancelled.
+    Rejected,
+}
+
+/// The icon id for one pin.
+///
+/// Falls back to the single vanilla frame for EVERY appearance when the markers are not installed.
+/// Distinguishing the tiers requires the spare frames to have been populated; without them the
+/// alternative ids point at empty frames and those pins would silently disappear, which is a worse
+/// outcome than every pin looking the same.
+#[must_use]
+pub const fn invasion_pin_icon_id_for(appearance: PinAppearance, markers_installed: bool) -> u16 {
+    if !markers_installed {
+        return FALLBACK_INVASION_PIN_ICON_ID;
+    }
+    match appearance {
+        PinAppearance::Chosen => RED_INVASION_PIN_FRAME,
+        PinAppearance::Eligible => ELIGIBLE_INVASION_PIN_FRAME,
+        PinAppearance::Rejected => REJECTED_INVASION_PIN_FRAME,
+    }
+}
+
+/// Spare `Icon_0` frame carrying `MENU_MAP_Enemy_01` (102x104, RGB `218/94/50`).
+///
+/// The middle of the three tiers. The set descends in size AND brightness together -- 146/234-red,
+/// 102/218-red, 68/187-red -- which is what makes them separable at a glance on a crowded map
+/// rather than three similar red dots.
+pub const ELIGIBLE_INVASION_PIN_FRAME: u16 = 301;
+
+/// Spare `Icon_0` frame carrying `MENU_MAP_Enemy_00` (68x72, RGB `187/90/61`) -- the dimmest and
+/// smallest of the hostile-marker family, for a location the filter would reject.
+pub const REJECTED_INVASION_PIN_FRAME: u16 = 302;
+
 /// The spare `Icon_0` frame the DLL installs a red marker on.
 ///
 /// 300 is one of the 230 frames sprite 171 declares but never populates (the populated set is
@@ -276,6 +322,41 @@ mod tests {
                 "kind {index}"
             );
         }
+    }
+
+    #[test]
+    fn the_three_tiers_map_to_three_distinct_frames_and_collapse_without_the_markers() {
+        use std::collections::BTreeSet;
+        let tiers = [
+            PinAppearance::Chosen,
+            PinAppearance::Eligible,
+            PinAppearance::Rejected,
+        ];
+        let installed: BTreeSet<u16> = tiers
+            .iter()
+            .map(|a| invasion_pin_icon_id_for(*a, true))
+            .collect();
+        assert_eq!(
+            installed.len(),
+            tiers.len(),
+            "two tiers sharing a frame would render identically"
+        );
+        // Without the spare frames populated, every alternative id points at an EMPTY frame and
+        // draws nothing. Falling back to one vanilla frame loses the distinction but keeps the
+        // pins visible, which is the right way round.
+        for tier in tiers {
+            assert_eq!(
+                invasion_pin_icon_id_for(tier, false),
+                FALLBACK_INVASION_PIN_ICON_ID,
+                "{tier:?} must not point at an unpopulated frame"
+            );
+        }
+        // The chosen tier is the frame the single-appearance helper already used, so the two
+        // entry points cannot disagree about what "the invasion pin" looks like.
+        assert_eq!(
+            invasion_pin_icon_id_for(PinAppearance::Chosen, true),
+            invasion_pin_icon_id(true)
+        );
     }
 
     #[test]

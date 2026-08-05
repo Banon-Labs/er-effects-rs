@@ -81,8 +81,9 @@ unsafe extern "system" {
 
 #[cfg(windows)]
 /// Only react when Elden Ring itself has focus, so alt-tabbing to another window and pressing
-/// F7 there does not teleport the player.
-fn game_has_focus() -> bool {
+/// F7 there does not teleport the player. Shared with the local-invasion mark keys, which need
+/// exactly the same guard for exactly the same reason.
+pub fn game_has_focus() -> bool {
     let hwnd = unsafe { GetForegroundWindow() };
     if hwnd == 0 {
         return false;

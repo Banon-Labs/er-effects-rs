@@ -25,6 +25,7 @@
 #![allow(non_snake_case)]
 
 pub mod drive;
+pub mod local_invasion_filter;
 #[cfg(windows)]
 pub mod map_gfx;
 pub mod map_hooks;
@@ -135,6 +136,10 @@ fn spawn_catalog_task() {
             // is the only thing that touches it, and the task is single-threaded, so no lock is
             // needed and none is taken on the game thread.
             let mut warp_drive = crate::drive::InvasionWarpDrive::new();
+            // Same ownership rule as the warp driver: one instance for the process, touched only
+            // by this single-threaded task.
+            let mut mark_keys = crate::local_invasion_filter::MarkKeys::new();
+            crate::local_invasion_filter::ensure_config_file();
             let mut frame: u64 = 0;
             let handle = task.run_recurring(
                 move |_data: &FD4TaskData| {
@@ -176,6 +181,19 @@ fn spawn_catalog_task() {
                     // failed arm costs the red icon and never leaves a pin iconless.
                     if let Ok(base) = er_game_base::mem::game_module_base() {
                         unsafe { crate::map_gfx::install_world_map_gfx_hook(base) };
+                    }
+                    // The local invasion filter: installs its single game-side detour (idempotent),
+                    // polls the Insert/Delete mark keys, and restarts a search that a rejected
+                    // match cancelled. It hooks nothing in ersc.dll -- see that module's docs for
+                    // why the option actions' arguments turned out to be unnecessary.
+                    //
+                    // SAFETY: same game-task context, after CSTaskImp resolved; every read inside
+                    // is fault-closed and every native call is byte-checked first.
+                    unsafe {
+                        crate::local_invasion_filter::tick(
+                            &mut mark_keys,
+                            crate::drive::game_has_focus(),
+                        );
                     }
                 },
                 CSTaskGroupIndex::FrameBegin,

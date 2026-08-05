@@ -75,6 +75,27 @@ pub const WORLDMAP_VIEWMODEL_CTOR: MapSeam = MapSeam {
     arg_count: 1,
 };
 
+/// `CS::SosSignMan::SetMultiplayJoinData` -- `0x1406fb520`. The single function that writes every
+/// CSGameMan field the invasion destination lives in, from a 128-byte server-pushed struct in RDX:
+/// `SetTargetMapId` -> `GameMan+0xAC8`, `SetMultiplayJoinTargetBlockPos` -> `+0xAA0`,
+/// `SetNPCInvadeTargetEntryPoint(0)` -> `+0xAF0` (hard zero, which is why that field always read
+/// 0 in the RAM sampling).
+///
+/// This is the seam the location filter judges at: the destination is DECIDED and the player has
+/// NOT moved. Measured live 2026-08-05 -- `ServerPushJoinData+0x00` was the only offset in all 128
+/// bytes whose u32 equalled the destination that landed in `GameMan+0xAC8`, so the field is
+/// identified by correlation rather than by its reversed name (`matchPlayerCount`, which would
+/// have pointed at the wrong dword).
+pub const SET_MULTIPLAY_JOIN_DATA: MapSeam = MapSeam {
+    name: "CS::SosSignMan::SetMultiplayJoinData",
+    rva: 0x06f_b520,
+    prologue: &[0x40, 0x53, 0x48, 0x81, 0xec, 0x80, 0x00, 0x00, 0x00],
+    arg_count: 2,
+};
+
+/// Offset of the destination block id within `ServerPushJoinData`.
+pub const JOIN_DATA_DESTINATION_BLOCK_OFFSET: usize = 0x00;
+
 /// `FUN_1407a04f0` -- the warp-job assembler. All five confirm routes funnel through it, which
 /// makes it the single chokepoint before a MenuJob exists.
 pub const WARP_JOB_ASSEMBLER: MapSeam = MapSeam {

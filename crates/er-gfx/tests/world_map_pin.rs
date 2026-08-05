@@ -11,7 +11,7 @@
 mod common;
 
 use er_gfx::world_map_pin::{
-    ICON_SPRITE_FRAME_COUNT, ICON_SPRITE_ID, RED_MARKER_CHARACTER, RED_PIN_FRAME,
+    ICON_SPRITE_FRAME_COUNT, ICON_SPRITE_ID, PIN_MARKERS, RED_MARKER_CHARACTER, RED_PIN_FRAME,
     with_red_pin_frame,
 };
 use er_gfx::{Movie, Tag};
@@ -144,17 +144,22 @@ fn the_edit_changes_nothing_else_about_the_icon_space() {
     let Some(vanilla) = vanilla_or_skip() else {
         return;
     };
+    // Every frame this edit writes, not just the first one. Filtering only `RED_PIN_FRAME` was
+    // correct while there was one marker; with three it would report the two new ones as shipped
+    // icons that moved.
+    let ours = |frame: u16| PIN_MARKERS.iter().any(|marker| marker.frame == frame);
+
     let before = Movie::parse(&vanilla).expect("parse");
     let before_placements: Vec<_> = placements_by_frame(icon_sprite(&before))
         .into_iter()
-        .filter(|(frame, _)| *frame != RED_PIN_FRAME)
+        .filter(|(frame, _)| !ours(*frame))
         .collect();
 
     let edited = with_red_pin_frame(&vanilla).expect("installs");
     let after = Movie::parse(&edited).expect("parse");
     let after_placements: Vec<_> = placements_by_frame(icon_sprite(&after))
         .into_iter()
-        .filter(|(frame, _)| *frame != RED_PIN_FRAME)
+        .filter(|(frame, _)| !ours(*frame))
         .collect();
 
     // Every shipped icon must still answer to the same frame number. Inserting a ShowFrame
