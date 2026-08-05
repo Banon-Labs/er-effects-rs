@@ -61,6 +61,16 @@ class Predicate:
     `oracle_all` are telemetry fields that must ALL hold the given values in one recorded run.
     `log_any` are regexes of which at least one must match a line of that run's debug log.
     A predicate with neither cannot be proven and is rejected at registration time.
+
+    `informative_if` is what separates "a run DISAGREED with this" from "no run has ever had an
+    opinion". Without it the gate treats both as failure, and refuses the very launch that would
+    produce the evidence -- so a brand-new code path can never be proven and the gate becomes an
+    unconditional no, which is a gate nobody can use and everybody skips. A run counts against a
+    predicate only when it got far enough to have an opinion: reached the reload, opened the map,
+    whatever the predicate is about. A run that never got there is silent, not contradicting.
+
+    Leaving it empty means "every recorded run has an opinion", which is right for predicates
+    about states a run always reaches.
     """
 
     name: str
@@ -68,6 +78,13 @@ class Predicate:
     owner: str
     oracle_all: dict[str, object] = field(default_factory=dict)
     log_any: tuple[str, ...] = ()
+    informative_if: tuple[str, ...] = ()
+
+    def is_informative(self, telemetry: dict, log_text: str) -> bool:
+        """Whether this run reached the state the predicate is about."""
+        if not self.informative_if:
+            return True
+        return any(re.search(pattern, log_text) for pattern in self.informative_if)
 
     def check(self, telemetry: dict, log_text: str) -> tuple[bool, str]:
         for key, want in self.oracle_all.items():
@@ -121,6 +138,9 @@ PREDICATES: tuple[Predicate, ...] = (
         ),
         oracle_all={"oracle_current_load_epoch": lambda v: isinstance(v, int) and v >= 1},
         log_any=(r"cvar10-warp-clear: load2 epoch [1-9]\d* mms=1[3-8] fin=[0-4]",),
+        # A boot-only run never reloaded, so it has nothing to say about a reload-time clear.
+        # Without this it reads as a contradiction and blocks every launch.
+        informative_if=(r"epoch=[1-9]", r"epoch [1-9]"),
     ),
     Predicate(
         name="case7_gate_clear_at_release",
@@ -144,6 +164,9 @@ PREDICATES: tuple[Predicate, ...] = (
             r"case7-savedrain-satisfy: epoch [1-9]",
             r"reload-drain-b80",
         ),
+        # A boot-only run never reloaded, so it has nothing to say about a reload-time clear.
+        # Without this it reads as a contradiction and blocks every launch.
+        informative_if=(r"epoch=[1-9]", r"epoch [1-9]"),
     ),
     Predicate(
         name="warp_clear_release_world_live",
@@ -163,6 +186,32 @@ PREDICATES: tuple[Predicate, ...] = (
             "oracle_boot_view_epoch_live": lambda v: isinstance(v, int) and v >= 1,
             "oracle_player_present": True,
         },
+        # A boot-only run never reloaded, so it has nothing to say about a reload-time clear.
+        # Without this it reads as a contradiction and blocks every launch.
+        informative_if=(r"epoch=[1-9]", r"epoch [1-9]"),
+    ),
+    Predicate(
+        name="legacy_converter_tree_readable",
+        why=(
+            "the whole 'markers without visiting' feature rests on ONE unverified read: that the "
+            "std::map at WorldMapLegacyConverter+0x08 walks to real entries. Every failure mode -- "
+            "wrong offset, head-vs-root confusion, converter with no legacy table -- produces the "
+            "SAME visible result as a working feature on a save that has already been everywhere: "
+            "no new markers. Without this the launch cannot tell 'nothing to add' from 'the walk "
+            "found nothing', which is exactly the ambiguity that cost a run on 2026-08-04."
+        ),
+        owner=(
+            "crates/er-invasion-warp/src/legacy_map_regions.rs (walk_tree) / "
+            "crates/er-invasion-warp-dll/src/map_hooks.rs (legacy_map_regions_for_view)"
+        ),
+        # A non-zero block count is the only reading that proves the walk reached real nodes.
+        # Deliberately NOT satisfied by the marker count: a save that has visited every dungeon
+        # legitimately yields zero markers while the walk is working perfectly.
+        log_any=(
+            r"map-inject: legacy-dungeon table: [1-9]\d* block\(s\) known to the world map",
+        ),
+        # Only a run that actually built a world-map ViewModel has an opinion on the tree walk.
+        informative_if=(r"map-inject:",),
     ),
 )
 
@@ -242,28 +291,45 @@ def stale_dlls() -> list[str]:
     return []
 
 
-def evaluate(runs: list[RunEvidence]) -> tuple[bool, list[str]]:
-    """Score every predicate against every recorded run. One run proving it is enough."""
-    problems = []
+def evaluate(runs: list[RunEvidence]) -> tuple[bool, list[str], list[str]]:
+    """Score every predicate against every recorded run.
+
+    Returns `(ok, refusals, obligations)`. A predicate becomes a REFUSAL only when some run got
+    far enough to have an opinion and disagreed -- that is a code path a run has actually shown
+    cannot execute. A predicate no run has an opinion on is an OBLIGATION: the launch proceeds,
+    and this is what it has to come back having shown.
+    """
+    refusals: list[str] = []
+    obligations: list[str] = []
     for predicate in PREDICATES:
         if not predicate.oracle_all and not predicate.log_any:
-            problems.append(f"{predicate.name}: registered with no evidence to check")
+            refusals.append(f"{predicate.name}: registered with no evidence to check")
             continue
-        best_reason = "no recorded run available"
         proven = False
+        contradiction = None
         for run in runs:
             ok, reason = predicate.check(run.telemetry, run.log_text)
             if ok:
                 proven = True
                 break
-            best_reason = f"{os.path.basename(run.directory)}: {reason}"
-        if not proven:
-            problems.append(
-                f"{predicate.name}: NEVER OBSERVED TRUE ({best_reason})\n"
+            if predicate.is_informative(run.telemetry, run.log_text):
+                contradiction = f"{os.path.basename(run.directory)}: {reason}"
+        if proven:
+            continue
+        if contradiction is not None:
+            refusals.append(
+                f"{predicate.name}: A RUN REACHED THIS STATE AND IT WAS NOT TRUE ({contradiction})\n"
                 f"      needed because {predicate.why}\n"
                 f"      owner: {predicate.owner}"
             )
-    return (not problems), problems
+        else:
+            obligations.append(
+                f"{predicate.name}: no recorded run has reached this state, so this launch must "
+                f"be the one that shows it\n"
+                f"      needed because {predicate.why}\n"
+                f"      owner: {predicate.owner}"
+            )
+    return (not refusals), refusals, obligations
 
 
 def gate(run_dirs: list[str]) -> int:
@@ -273,6 +339,7 @@ def gate(run_dirs: list[str]) -> int:
         print(f"[launch-gate]   {run.directory}")
 
     failures = []
+    obligations: list[str] = []
 
     stale = stale_dlls()
     if stale:
@@ -285,10 +352,14 @@ def gate(run_dirs: list[str]) -> int:
             "offline, so this launch cannot validate anything it claims to."
         )
     else:
-        ok, problems = evaluate(runs)
+        ok, problems, obligations = evaluate(runs)
         if not ok:
             failures.append("unreachable predicate(s) -- the code path cannot execute:")
             failures.extend(f"      {item}" for item in problems)
+        if obligations:
+            print("[launch-gate] THIS RUN MUST PROVE:")
+            for item in obligations:
+                print(f"[launch-gate]   {item}")
 
     if failures:
         print("[launch-gate] REFUSED", file=sys.stderr)
@@ -300,7 +371,18 @@ def gate(run_dirs: list[str]) -> int:
         )
         return 1
 
-    print(f"[launch-gate] OK -- {len(PREDICATES)} predicate(s) observed true, build is current")
+    proven = len(PREDICATES) - len(obligations) if runs else 0
+    if obligations:
+        print(
+            f"[launch-gate] OK -- build is current; {proven}/{len(PREDICATES)} predicate(s) "
+            f"already observed true, {len(obligations)} unproven and listed above. Nothing "
+            f"CONTRADICTS them, so the launch proceeds -- but it is only worth taking the screen "
+            f"if it comes back having shown them."
+        )
+    else:
+        print(
+            f"[launch-gate] OK -- {len(PREDICATES)} predicate(s) observed true, build is current"
+        )
     return 0
 
 
@@ -334,6 +416,9 @@ def selftest() -> int:
             handle.write(
                 "[+182370ms] cvar10-warp-clear: load2 epoch 1 mms=13 fin=0 warpRequested was set\n"
                 "[+199001ms] case7-savedrain-satisfy: epoch 1 world-live mms=18 fin=6\n"
+                "[+201455ms] map-inject: legacy-dungeon table: 113 block(s) known to the world "
+                "map's legacy converter -> 109 whole-dungeon marker(s) for dungeons not yet "
+                "entered\n"
             )
 
         # The run that actually happened on 2026-08-04, where the SHIPPED predicate was
@@ -359,7 +444,7 @@ def selftest() -> int:
         parked_run = load_run(parked)
         report(good_run is not None and parked_run is not None, "recorded runs load")
 
-        ok, _ = evaluate([good_run])
+        ok, _, _ = evaluate([good_run])
         report(ok, "a run where the predicate held passes")
 
         # THE REGRESSION THIS GATE EXISTS FOR: the terminator that shipped and could not fire.
@@ -377,12 +462,12 @@ def selftest() -> int:
 
         # An empty evidence set must not silently pass.
         empty = Predicate(name="no_evidence", why="x", owner="y")
-        ok_empty, problems = evaluate([good_run])
+        ok_empty, problems, _ = evaluate([good_run])
         report(ok_empty, "register with evidence still passes")
         saved = globals()["PREDICATES"]
         try:
             globals()["PREDICATES"] = (empty,)
-            ok_none, problems_none = evaluate([good_run])
+            ok_none, problems_none, _ = evaluate([good_run])
             report(
                 not ok_none and any("no evidence" in p for p in problems_none),
                 "a predicate registered with no evidence is refused",
@@ -390,12 +475,45 @@ def selftest() -> int:
         finally:
             globals()["PREDICATES"] = saved
 
-        # No runs at all must refuse, not pass by default.
-        ok_norun, problems_norun = evaluate([])
-        report(
-            not ok_norun and any("NEVER OBSERVED" in p for p in problems_norun),
-            "no recorded run refuses rather than passes",
+        # No runs at all must refuse, not pass by default. With nothing recorded no predicate can
+        # be CONTRADICTED, so the refusal has to come from the gate's own no-evidence check
+        # rather than from scoring -- which is exactly what `gate()` does.
+        report(gate([]) != 0, "no recorded run refuses rather than passes")
+
+        # THE DISTINCTION THIS SPLIT EXISTS FOR. A gate that cannot tell "a run disagreed" from
+        # "no run ever looked" refuses every launch on a new code path -- including the launch
+        # that would produce the evidence -- so it becomes an unconditional no and gets skipped.
+        never_looked = Predicate(
+            name="state_no_run_reached",
+            why="a brand-new path",
+            owner="x",
+            log_any=(r"brand-new-marker",),
+            informative_if=(r"a-line-no-run-has",),
         )
+        looked_and_failed = Predicate(
+            name="state_a_run_reached",
+            why="a path a run actually exercised",
+            owner="x",
+            log_any=(r"brand-new-marker",),
+            # The good run's log DOES contain this, so that run has an opinion -- and disagrees.
+            informative_if=(r"cvar10-warp-clear",),
+        )
+        saved = globals()["PREDICATES"]
+        try:
+            globals()["PREDICATES"] = (never_looked,)
+            ok_new, refusals_new, obligations_new = evaluate([good_run])
+            report(
+                ok_new and not refusals_new and len(obligations_new) == 1,
+                "a predicate no run has an opinion on is an obligation, not a refusal",
+            )
+            globals()["PREDICATES"] = (looked_and_failed,)
+            ok_seen, refusals_seen, obligations_seen = evaluate([good_run])
+            report(
+                not ok_seen and len(refusals_seen) == 1 and not obligations_seen,
+                "a predicate a run reached and disagreed with still refuses",
+            )
+        finally:
+            globals()["PREDICATES"] = saved
 
     if fails:
         print(f"selftest FAILED ({fails})")
