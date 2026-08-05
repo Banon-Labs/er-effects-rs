@@ -299,6 +299,63 @@ rpc.exports = {
         });
       });
 
+    // ---- THE JOIN OBSERVER (vanilla eldenring.exe, not ersc) ----
+    //
+    // CS::SosSignMan::SetMultiplayJoinData @0x1406FB520 is the single function that writes every
+    // CSGameMan field the destination lives in, from a 128-byte server-pushed struct in RDX:
+    //   SetTargetMapId(...)  -> GameMan+0xAC8   the BLOCK
+    //   SetMultiplayJoinTargetBlockPos(...) -> +0xAA0   the position
+    //   SetNPCInvadeTargetEntryPoint(0)     -> +0xAF0   hard zero, which is why it always read 0
+    // Live CSGameMan sampling measured +0xAC8 changing BEFORE +0xAA0, so at THIS call the
+    // destination is already decided and the player has not moved -- the exact window in which a
+    // "is this the place I wanted?" filter could decide to stay or bail.
+    //
+    // Dumps the WHOLE struct rather than a guessed field offset. The field feeding SetTargetMapId
+    // is named `matchPlayerCount` in the reversed signature, which is exactly the kind of name that
+    // makes an offset guess wrong; decoding offline against GameMan+0xAC8 (sampled before AND
+    // after the call) identifies it by CORRELATION instead of by trust.
+    //
+    // READ-ONLY. The call is not blocked and nothing is written -- this observes whether the filter
+    // is possible, it does not implement one.
+    const gameBase = Process.enumerateModules()[0].base;
+    const joinAddr = gameBase.add(0x6fb520);
+    const JOIN_PROLOGUE = '405348 81ec80000000'.replace(/ /g, '');
+    let joinPro = '';
+    try {
+      joinPro = Array.from(new Uint8Array(joinAddr.readByteArray(9)))
+        .map(function (x) { return ('0' + x.toString(16)).slice(-2); }).join('');
+    } catch (e) { /* unreadable */ }
+    if (joinPro === JOIN_PROLOGUE) {
+      Interceptor.attach(joinAddr, {
+        onEnter(args) {
+          const rec = { type: 'join', data: null, gmBefore: null };
+          try {
+            const b = args[1].readByteArray(0x80);
+            if (b !== null) {
+              rec.data = Array.from(new Uint8Array(b))
+                .map(function (x) { return ('0' + x.toString(16)).slice(-2); }).join('');
+            }
+          } catch (e) { /* unreadable */ }
+          try {
+            const gm = gameBase.add(0x3d69918).readPointer();
+            rec.gmBefore = '0x' + gm.add(0xac8).readU32().toString(16);
+            this.gm = gm;
+          } catch (e) { /* no GameMan yet */ }
+          send(rec);
+        },
+        onLeave() {
+          try {
+            if (this.gm) {
+              send({ type: 'join-after', block: '0x' + this.gm.add(0xac8).readU32().toString(16) });
+            }
+          } catch (e) { /* unreadable */ }
+        },
+      });
+      send({ type: 'join-hook', ok: true, addr: joinAddr.toString() });
+    } else {
+      send({ type: 'join-hook', ok: false, expected: JOIN_PROLOGUE, got: joinPro });
+    }
+
     return { base: base.toString(), hooked: Object.keys(RVA) };
   },
 
@@ -372,6 +429,14 @@ def main() -> int:
             print(f"CONFIRM selectedIndex={p['selectedIndex']}")
         elif kind == "action":
             print(f"ACTION {p['name']}")
+        elif kind == "join-hook":
+            print(
+                f"JOIN OBSERVER {'armed at ' + p['addr'] if p['ok'] else 'REFUSED (prologue mismatch: got ' + str(p.get('got')) + ')'}"
+            )
+        elif kind == "join":
+            print(f"JOIN DATA captured; GameMan+0xAC8 before = {p.get('gmBefore')}")
+        elif kind == "join-after":
+            print(f"JOIN DONE; GameMan+0xAC8 after = {p.get('block')}  <-- THE DESTINATION")
         elif kind == "seek-region":
             f = p["fields"]
             print(
