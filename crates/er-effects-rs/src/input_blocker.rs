@@ -176,6 +176,12 @@ unsafe extern "system" fn dinput_kb_get_state_hook(device: usize, size: u32, dat
     }
     let original: GetDeviceStateFn = unsafe { std::mem::transmute(original_addr) };
     let hr = unsafe { original(device, size, data) };
+    if hr == 0 && !data.is_null() {
+        crate::experiments::save_picker_latch_dinput_keyboard_state(
+            data as *const u8,
+            size as usize,
+        );
+    }
     zero_blocked_dinput_state(hr, size, data, InputFlags::Keyboard);
     hr
 }

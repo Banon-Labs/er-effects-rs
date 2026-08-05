@@ -26,13 +26,18 @@
 //! - MOVE PlayerName, Location, Level caption/value, PlayTime, and ErStats onto
 //!   one visual baseline. The native fields remain placed/named for engine row
 //!   population, but none of them define a second subrow.
-//! - COMPACT the `ProfileList/ItemList` visual row pitch from 156px to 52px and expose the full
+//! - COMPACT the `ProfileList/ItemList` visual row pitch from 156px to `COMPACT_ROW_PITCH_PX` and expose the full
 //!   native-backed ten-row picker prefix (`Item_0_0..Item_9_0`) plus top/bottom recycle cells. Row
 //!   population and activation still use native row indices; this moves the row clips, their internal
 //!   chrome, the scroll tween offsets, the viewport mask, and the scrollbar together.
+//! - MOVE and shrink the native `ScrollBarV` so the game's own scrollbar controller remains the
+//!   visible long-list affordance. The DLL feeds that native controller the real save-picker scroll
+//!   offset instead of drawing private fake thumbs or pips.
 
 use er_gfx::title_05_010::{
-    COMPACT_LIST_HEIGHT_PX, COMPACT_ROW_PITCH_PX, COMPACT_VISIBLE_ROW_COUNT, STATS_FIELD_NAME,
+    COMPACT_LIST_HEIGHT_PX, COMPACT_ROW_PITCH_PX, COMPACT_SCROLLBAR_TOP_Y_PX,
+    COMPACT_SCROLLBAR_TRACK_HEIGHT_PX, COMPACT_SCROLLBAR_X_PX, COMPACT_VISIBLE_ROW_COUNT,
+    STATS_FIELD_NAME,
 };
 use er_gfx::{CxformWithAlpha, Matrix, Movie, Rect, Tag};
 
@@ -153,6 +158,22 @@ fn main() {
         .expect("vanilla movie defines sprite 67 (icon frame deco)");
     *deco = stats_field;
 
+    let cursor_body_scale_y = movie
+        .tags
+        .iter()
+        .find_map(|tag| match tag {
+            Tag::DefineSprite { id: 74, tags, .. } => tags.iter().find_map(|child| match child {
+                Tag::PlaceObject2 {
+                    character_id: Some(73),
+                    matrix: Some(m),
+                    ..
+                } => Some(m.scale_y),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .expect("vanilla movie defines cursor body sprite 74 with char 73 scale");
+
     // Row template sprite 76.
     let row = movie
         .tags
@@ -228,6 +249,26 @@ fn main() {
     // Repurpose the existing depth-14 char-67 placement as the one merged field.
     *deco_place = stats_placement(STATS_FIELD_NAME, 14, -292, -18);
 
+    // Synthetic drive cells. Native ProfileSelect gives us one row highlight/click target only; these
+    // are separate row children that the DLL blanks on every picker-owned row and fills only on the
+    // drive row, so `[C:]`, `[S:]`, `[Z:]` are no longer one fused PlayerName string.
+    let row_show_frame = row
+        .iter()
+        .position(|t| matches!(t, Tag::ShowFrame { .. }))
+        .expect("row template has a visible-frame ShowFrame tag");
+    row.insert(
+        row_show_frame,
+        stats_placement("DriveCell_2", 42, -136, -18),
+    );
+    row.insert(
+        row_show_frame,
+        stats_placement("DriveCell_1", 41, -214, -18),
+    );
+    row.insert(
+        row_show_frame,
+        stats_placement("DriveCell_0", 40, -292, -18),
+    );
+
     // One row means one baseline. If any native field renders, it must render inline with the filename
     // and timestamp rather than on the original lower subrow.
     for (name, x, y) in [
@@ -259,8 +300,26 @@ fn main() {
     }
 
     // The row's internal visual chrome must shrink too, not just the row-center positions. Otherwise
-    // the backing/highlight boxes stay vanilla-height and overlap neighboring compact rows.
-    let row_chrome_scale = scale_from_ratio(COMPACT_ROW_PITCH_PX, VANILLA_ROW_PITCH_PX);
+    // the backing/highlight boxes stay vanilla-height and overlap neighboring compact rows. Cursor has
+    // an internal ~3x body scale inside sprite 74, so its outer placement must be smaller: the
+    // EFFECTIVE cursor height, not the outer placement scale alone, tracks the row backing.
+    let compact_row_backing_scale_y = row
+        .iter()
+        .find_map(|tag| match tag {
+            Tag::PlaceObject2 {
+                character_id: Some(54),
+                matrix: Some(m),
+                ..
+            } => Some(
+                i32::try_from(
+                    i64::from(m.scale_y) * i64::from(COMPACT_ROW_PITCH_PX)
+                        / i64::from(VANILLA_ROW_PITCH_PX),
+                )
+                .expect("row backing compact scale fits i32"),
+            ),
+            _ => None,
+        })
+        .expect("row template has backing matrix");
     for tag in row.iter_mut() {
         let Tag::PlaceObject2 {
             character_id,
@@ -277,17 +336,17 @@ fn main() {
                 // The row backing is a huge 9-sliced sprite: x scale is ~20x, so keep enough bits for
                 // the existing x scale while shrinking only y.
                 m.scale_nbits = 23;
-                m.scale_y = i32::try_from(
-                    i64::from(m.scale_y) * i64::from(COMPACT_ROW_PITCH_PX)
-                        / i64::from(VANILLA_ROW_PITCH_PX),
-                )
-                .expect("row backing compact scale fits i32");
+                m.scale_y = compact_row_backing_scale_y;
             } else {
                 m.scale_nbits = 18;
                 if m.scale_x == 0 {
                     m.scale_x = SCALE_ONE;
                 }
-                m.scale_y = row_chrome_scale;
+                m.scale_y = i32::try_from(
+                    i64::from(compact_row_backing_scale_y) * i64::from(SCALE_ONE)
+                        / i64::from(cursor_body_scale_y),
+                )
+                .expect("cursor compact outer scale fits i32");
             }
         }
     }
@@ -425,7 +484,7 @@ fn main() {
         }
     }
 
-    // Clip mask + vertical scrollbar: shrink the list viewport from 780px to the compact five-row
+    // Clip mask + vertical scrollbar: shrink the list viewport from 780px to the compact ten-row
     // stack height so the rows do not float inside a huge native window. Scaling the mask placement
     // is enough; the shape bytes stay vanilla. The scrollbar's own movie remains untouched and
     // receives the same vertical scale and centered y offset as the mask.
@@ -457,20 +516,16 @@ fn main() {
                 ..
             } if name == "ScrollBarV" => {
                 m.translate_nbits = 16;
-                m.translate_y = compact_y(m.translate_y / TW) * TW;
+                m.translate_x = COMPACT_SCROLLBAR_X_PX * TW;
+                m.translate_y = COMPACT_SCROLLBAR_TOP_Y_PX * TW;
                 m.has_scale = true;
                 m.scale_nbits = 18;
                 m.scale_x = SCALE_ONE;
-                m.scale_y = i32::try_from(
-                    i64::from(m.scale_y) * i64::from(COMPACT_LIST_HEIGHT_PX)
-                        / i64::from(VANILLA_LIST_HEIGHT_PX),
-                )
-                .expect("scrollbar compact scale fits i32");
+                m.scale_y = scale_from_ratio(COMPACT_SCROLLBAR_TRACK_HEIGHT_PX, 764);
             }
             _ => {}
         }
     }
-
     let out = movie.write().expect("serialize edited movie");
     std::fs::write(&output, &out).expect("write edited movie");
     println!("wrote {output}: {} -> {} bytes", bytes.len(), out.len());
