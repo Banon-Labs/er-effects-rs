@@ -167,6 +167,7 @@ function readSession() {
 // user cannot realistically press it: if a candidate exists the invasion fires immediately, so the
 // window only exists while the search is DRY.
 let dumpedAt15 = false;
+let wanted = null;
 function dumpSeekCandidateRegion(S) {
   if (dumpedAt15) return null;
   function hex(ptr, len) {
@@ -215,6 +216,19 @@ function dumpSeekCandidateRegion(S) {
     out.table_arr = arr.toString();
     if (cnt > 0 && cnt <= 64) {
       out.table_entries = hex(arr, Math.min(cnt * 0x10, 0x400));
+      // FOLLOW EACH LIVE ENTRY. The whole question is whether a candidate carries its own map
+      // location BEFORE the server commits a match -- if it does, a bad match can be filtered at
+      // CANDIDATE time and never accepted, instead of accepted-then-cancelled. The table is already
+      // populated during the search (measured: 1 live entry while state==0x15), which is strictly
+      // earlier than SetMultiplayJoinData. Dump the pointee and look for a block id offline.
+      out.entry_dumps = [];
+      for (let i = 0; i < cnt && i < 8; i++) {
+        try {
+          const e = arr.add(i * 0x10).readPointer();
+          if (e.isNull()) continue;
+          out.entry_dumps.push({ i: i, ptr: e.toString(), bytes: hex(e, 0x200) });
+        } catch (err) { /* unreadable entry */ }
+      }
     }
   } catch (e) { out.t0 = out.t0 || null; }
   dumpedAt15 = true;
@@ -248,7 +262,8 @@ function captureOsm(p, why) {
 }
 
 rpc.exports = {
-  start: function () {
+  start: function (wantBlock) {
+    wanted = (wantBlock === null || wantBlock === undefined) ? null : wantBlock;
     const m = Process.findModuleByName('ersc.dll');
     if (m === null) return { error: 'ersc.dll not loaded' };
     base = m.base;
@@ -341,6 +356,17 @@ rpc.exports = {
             rec.gmBefore = '0x' + gm.add(0xac8).readU32().toString(16);
             this.gm = gm;
           } catch (e) { /* no GameMan yet */ }
+          // The destination is at struct+0x00. Identified by CORRELATION against GameMan+0xAC8 on a
+          // live invasion (0x0f000000, the only offset in 128 bytes that matched), not by trusting
+          // the reversed field name -- which is `matchPlayerCount` and would have pointed elsewhere.
+          try {
+            const dest = args[1].readU32();
+            rec.dest = '0x' + dest.toString(16);
+            if (wanted !== null) {
+              rec.wanted = '0x' + wanted.toString(16);
+              rec.verdict = (dest === wanted) ? 'KEEP' : 'REJECT';
+            }
+          } catch (e) { /* unreadable */ }
           send(rec);
         },
         onLeave() {
@@ -368,6 +394,17 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gadget", default=GADGET)
     parser.add_argument("--out", default=DEFAULT_OUT)
+    parser.add_argument(
+        "--want-block",
+        default=None,
+        help=(
+            "Target block id, e.g. 0x0f000000. When set, every incoming match is judged against it "
+            "at SetMultiplayJoinData -- the point where the destination is known and the player has "
+            "not moved. THIS ONLY REPORTS. Cancelling is left to you, deliberately: whether bailing "
+            "after the server pushed join data leaves the session clean is UNMEASURED, and that "
+            "measurement should not be taken by a script guessing an ERSC action's ABI."
+        ),
+    )
     args = parser.parse_args()
 
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -434,7 +471,16 @@ def main() -> int:
                 f"JOIN OBSERVER {'armed at ' + p['addr'] if p['ok'] else 'REFUSED (prologue mismatch: got ' + str(p.get('got')) + ')'}"
             )
         elif kind == "join":
-            print(f"JOIN DATA captured; GameMan+0xAC8 before = {p.get('gmBefore')}")
+            v = p.get("verdict")
+            if v == "KEEP":
+                print(f"*** MATCH KEEP: destination {p.get('dest')} IS your target -- let it load ***")
+            elif v == "REJECT":
+                print(
+                    f"*** MATCH REJECT: destination {p.get('dest')} != target {p.get('wanted')} "
+                    f"-- CANCEL NOW to re-roll ***"
+                )
+            else:
+                print(f"JOIN DATA captured; destination = {p.get('dest')}")
         elif kind == "join-after":
             print(f"JOIN DONE; GameMan+0xAC8 after = {p.get('block')}  <-- THE DESTINATION")
         elif kind == "seek-region":
@@ -472,7 +518,11 @@ def main() -> int:
 
     script.on("message", on_message)
     script.load()
-    result = script.exports_sync.start()
+    want = None
+    if args.want_block is not None:
+        want = int(args.want_block, 0)
+        print(f"LOCATION FILTER ARMED: want block {want:#010x} -- mismatches will be reported, NOT cancelled")
+    result = script.exports_sync.start(want)
     print(result)
     if result.get("error"):
         print(
