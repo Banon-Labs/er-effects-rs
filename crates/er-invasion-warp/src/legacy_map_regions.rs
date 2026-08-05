@@ -35,20 +35,56 @@
 //!
 //! # Shape
 //!
-//! The table is an MSVC `std::map`, so the pointer at `WorldMapLegacyConverter+0x08` is the
-//! HEAD SENTINEL, not the root: the real root is the head's parent, the head's `isNil` byte is
-//! set, and every leaf's child pointers lead back to the head. Both facts are load-bearing --
-//! treating the head as the root walks a node whose key field is uninitialised padding.
+//! The table is an MSVC `std::map` and there are two indirections to get wrong, both of which
+//! yield a readable pointer that is not a tree -- so both fail as an EMPTY table rather than a
+//! crash, which is why the census log exists:
+//!
+//! 1. `WorldMapLegacyConverter+0x08` is the container itself, embedded, not a pointer to one.
+//!    Its `root` member is at `+0x08` within it, so the head is at `+0x10`. (`+0x08` is the
+//!    container's allocator.)
+//! 2. That `root` is the HEAD SENTINEL, not the root: the real root is `head->parent`, the
+//!    head's `isNull` byte is set, and every leaf's child pointers lead back to the head.
+//!
+//! `ConvertLegacyDungeonPositionToOverworldPositionForMap` does exactly this:
+//! `pWVar5 = (param_1->blockCoordinates).root; if (pWVar5->parent->isNull == false) ...`,
+//! and returns false when the search lands back on `pWVar5` -- the miss.
 
 use crate::invasion_warp::BlockKey;
 
 /// `CS::WorldMapAreaConverter+0x28` -- the `WorldMapLegacyConverter` this converter owns.
 pub const AREA_CONVERTER_LEGACY_OFFSET: usize = 0x28;
 
-/// `CS::WorldMapLegacyConverter+0x08` -- the `std::map` head sentinel.
+/// `CS::WorldMapLegacyConverter+0x10` -- the `std::map` head sentinel.
 ///
-/// NOT the root. See the module note: the root is this node's parent.
-pub const LEGACY_TREE_HEAD_OFFSET: usize = 0x08;
+/// TWO corrections live in this one number, and getting either wrong reads a valid pointer that
+/// is not a tree and yields an empty table:
+///
+/// * `+0x08` is not the head. It is `blockCoordinates`, an EMBEDDED
+///   `WorldMapAreaLegacyConverter` (24 bytes: `allocator` `+0x00`, `root` `+0x08`, `length`
+///   `+0x10`), so the head sits at `0x08 + 0x08`. Reading `+0x08` yields the ALLOCATOR pointer.
+///   That was the first live run's result: `legacy_offered=0`, no dungeon markers.
+/// * `root` is still not the ROOT. It is the head sentinel; the real root is `root->parent`,
+///   exactly as `ConvertLegacyDungeonPositionToOverworldPositionForMap` reads it
+///   (`pWVar5 = blockCoordinates.root; ... pWVar5->parent`).
+pub const LEGACY_TREE_HEAD_OFFSET: usize = 0x10;
+
+/// `CS::WorldMapLegacyConverter+0x18` -- the container's own entry count.
+///
+/// The engine maintains it, so it is an independent answer to "how many legacy dungeons are
+/// there". Comparing it against what the walk collected turns a silent traversal bug into a
+/// stated disagreement: equal counts mean the walk saw the whole tree, and a walk that returns
+/// fewer is a defect the log names rather than a coverage gap nobody notices.
+pub const LEGACY_TREE_LENGTH_OFFSET: usize = 0x18;
+
+/// `WorldMapLegacyConverter+0x08` -- the embedded `WorldMapAreaLegacyConverter` container.
+///
+/// Named so the two offsets below are visibly DERIVED from the struct layout rather than
+/// asserted as bare numbers. Reading this address as the head is the bug that cost a live run.
+pub const LEGACY_CONTAINER_OFFSET: usize = 0x08;
+/// `root` within that container. `+0x00` is its allocator.
+pub const CONTAINER_ROOT_OFFSET: usize = 0x08;
+/// `length` within that container.
+pub const CONTAINER_LENGTH_OFFSET: usize = 0x10;
 
 /// `_Tree_node` layout, shared by every MSVC associative container.
 pub const TREE_NODE_LEFT_OFFSET: usize = 0x00;
@@ -148,10 +184,10 @@ pub fn walk_tree(
 #[cfg(windows)]
 mod native {
     use super::{
-        AREA_CONVERTER_LEGACY_OFFSET, LEGACY_TREE_HEAD_OFFSET, LegacyMapRegion, RawTreeNode,
-        TREE_NODE_CENTER_OFFSET, TREE_NODE_IS_NIL_OFFSET, TREE_NODE_KEY_OFFSET,
-        TREE_NODE_LEFT_OFFSET, TREE_NODE_OVERRIDE_BLOCK_OFFSET, TREE_NODE_PARENT_OFFSET,
-        TREE_NODE_RIGHT_OFFSET, walk_tree,
+        AREA_CONVERTER_LEGACY_OFFSET, LEGACY_TREE_HEAD_OFFSET, LEGACY_TREE_LENGTH_OFFSET,
+        LegacyMapRegion, RawTreeNode, TREE_NODE_CENTER_OFFSET, TREE_NODE_IS_NIL_OFFSET,
+        TREE_NODE_KEY_OFFSET, TREE_NODE_LEFT_OFFSET, TREE_NODE_OVERRIDE_BLOCK_OFFSET,
+        TREE_NODE_PARENT_OFFSET, TREE_NODE_RIGHT_OFFSET, walk_tree,
     };
 
     /// Read one node through the fault-tolerant primitive.
@@ -185,6 +221,21 @@ mod native {
             }? as u32,
             center,
         })
+    }
+
+    /// What the container itself says its entry count is, for cross-checking the walk.
+    ///
+    /// # Safety
+    /// Game thread, `area_converter` a live `CS::WorldMapAreaConverter`.
+    #[must_use]
+    pub unsafe fn legacy_entry_count_for_converter(area_converter: usize) -> Option<usize> {
+        let legacy = unsafe {
+            er_game_base::mem::safe_read_usize(area_converter + AREA_CONVERTER_LEGACY_OFFSET)
+        }?;
+        if legacy == 0 {
+            return None;
+        }
+        unsafe { er_game_base::mem::safe_read_usize(legacy + LEGACY_TREE_LENGTH_OFFSET) }
     }
 
     /// Every legacy dungeon one `WorldMapAreaConverter` can project.
@@ -221,7 +272,7 @@ mod native {
 }
 
 #[cfg(windows)]
-pub use native::legacy_regions_for_converter;
+pub use native::{legacy_entry_count_for_converter, legacy_regions_for_converter};
 
 #[cfg(test)]
 mod tests {
@@ -257,6 +308,25 @@ mod tests {
             override_block: 0xdead_beef,
             center: [f32::NAN; 3],
         }
+    }
+
+    #[test]
+    fn the_head_offset_is_derived_from_the_embedded_container_not_asserted() {
+        // The first live run read the container's ALLOCATOR as the head and collected nothing:
+        // a readable pointer that is not a tree fails as an empty table, not a crash, so nothing
+        // but the census log distinguished it from "no dungeons to add".
+        assert_eq!(
+            LEGACY_TREE_HEAD_OFFSET,
+            LEGACY_CONTAINER_OFFSET + CONTAINER_ROOT_OFFSET
+        );
+        assert_eq!(
+            LEGACY_TREE_LENGTH_OFFSET,
+            LEGACY_CONTAINER_OFFSET + CONTAINER_LENGTH_OFFSET
+        );
+        assert_ne!(
+            LEGACY_TREE_HEAD_OFFSET, LEGACY_CONTAINER_OFFSET,
+            "the container base is the allocator, never the head"
+        );
     }
 
     #[test]

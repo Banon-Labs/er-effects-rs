@@ -500,14 +500,39 @@ unsafe fn legacy_map_regions_for_view(
     // Same bound as `project_to_map`: the field is a `DLFixedVector<_, 8>`.
     let count = count.min(8);
     let mut regions = Vec::new();
+    let mut claimed = 0usize;
     for index in 0..count {
         let converter = view_model + AREA_CONVERTERS_OFFSET + index * AREA_CONVERTER_STRIDE;
-        regions.extend(unsafe {
+        let walked = unsafe {
             er_invasion_warp::legacy_map_regions::legacy_regions_for_converter(converter)
-        });
+        };
+        // The container keeps its own count, so the walk can be checked against the engine
+        // rather than against nothing. Bounded by the same guard the walk uses, so a garbage
+        // read cannot turn into a huge claimed figure.
+        let says = unsafe {
+            er_invasion_warp::legacy_map_regions::legacy_entry_count_for_converter(converter)
+        }
+        .filter(|n| *n <= er_invasion_warp::legacy_map_regions::MAX_TREE_NODES)
+        .unwrap_or(0);
+        if says != walked.len() {
+            crate::standalone_log(format_args!(
+                "map-inject: legacy converter #{index} says it holds {says} entries but the walk \
+                 collected {} -- the traversal is losing entries, so some dungeons will have no \
+                 marker",
+                walked.len()
+            ));
+        }
+        claimed += says;
+        regions.extend(walked);
     }
     regions.sort_by_key(|region| region.block.raw());
     regions.dedup_by_key(|region| region.block.raw());
+    crate::standalone_log(format_args!(
+        "map-inject: legacy converter walk: {} converter(s), {claimed} entries claimed, {} \
+         distinct block(s) after dedup",
+        count,
+        regions.len()
+    ));
     regions
 }
 
