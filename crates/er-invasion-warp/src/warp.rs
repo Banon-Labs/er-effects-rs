@@ -58,6 +58,18 @@ pub use er_game_base::rva::SET_MOVE_MAP_STEP_BLOCK_ID_RVA;
 /// `FUN_14067ab20(FloatVector4 *blockLocalPos, FloatVector4 *euler)` -- the explicit-spawn
 /// setter: writes `GameMan+0xc90`, `GameMan+0xca0`, and sets `GameMan+0xcb0 = 1`.
 pub const SET_EXPLICIT_SPAWN_RVA: usize = 0x67_ab20;
+/// `CS::GameMan::SetInitialAreaEntityId(int *in)` -- `0x14067abb0`.
+///
+/// `STEP_MoveMap_Init` latches this into `MoveMapStep+0xd8` and it becomes the spawn-point
+/// entity id the destination-side resolver looks for. Grace fast-travel uses it with
+/// `bonfireEntityId - 970`; we use [`DEFAULT_SPAWN_ENTITY_ID`].
+pub const SET_INITIAL_AREA_ENTITY_ID_RVA: usize = 0x67_abb0;
+/// Spawn-point entity id meaning "this map's own default player start".
+///
+/// `FUN_14061fc80` scans the destination MSB's Player parts and treats an unset entity id
+/// (`-1`) as 0, so 0 matches the map's authored `c0000_0000` start. Verified present in every
+/// non-overworld map that has Player parts at all.
+pub const DEFAULT_SPAWN_ENTITY_ID: u32 = 0;
 /// `FUN_14067a1c0()` -- reads the `GameMan+0xcb0` use-explicit-spawn flag back.
 pub const GET_EXPLICIT_SPAWN_FLAG_RVA: usize = 0x67_a1c0;
 /// `FUN_1406792a0(FloatVector4 *outPos, FloatVector4 *outEuler)` -- reads `GameMan+0xc90` /
@@ -239,6 +251,10 @@ pub enum WarpError {
     /// coordinates and drop the player at the block's default spawn instead. Fail before the
     /// stage kick rather than warp somewhere unintended.
     SpawnSlotDidNotLatch { flag: u8 },
+    /// A coordinate-free warp found the explicit-spawn slot still ARMED from an earlier warp.
+    /// `MoveMapStep` would use that stale coordinate instead of the destination block's own
+    /// spawn, dropping the player at another map's position inside this one.
+    StaleSpawnSlotArmed { flag: u8 },
 }
 
 impl core::fmt::Display for WarpError {
@@ -249,6 +265,12 @@ impl core::fmt::Display for WarpError {
             Self::SpawnSlotDidNotLatch { flag } => write!(
                 f,
                 "explicit-spawn flag read back as {flag}, expected 1; refusing to kick the stage"
+            ),
+            Self::StaleSpawnSlotArmed { flag } => write!(
+                f,
+                "explicit-spawn flag read back as {flag} before a coordinate-free warp, expected \
+                 0; a previous warp's coordinate is still armed and would be used instead of the \
+                 destination's own spawn, so the stage was not kicked"
             ),
         }
     }
@@ -296,9 +318,10 @@ pub struct WarpOutcome {
 mod native {
     use super::{
         BLOCK_ID_NONE, CHR_INS_GET_PHYSICS_POSITION_RVA, CONVERT_BLOCK_COORDS_TO_PHYSICS_RVA,
-        FloatVector4, GET_CURRENT_MAP_ID_RVA, GET_EXPLICIT_SPAWN_FLAG_RVA, GET_EXPLICIT_SPAWN_RVA,
-        SESSION_LOBBY_STATE_OFFSET, SESSION_MANAGER_GLOBAL_RVA, SESSION_PROTOCOL_STATE_IN_GAME,
-        SESSION_PROTOCOL_STATE_OFFSET, SET_DISABLE_MAP_ENTER_ANIM_RVA, SET_EXPLICIT_SPAWN_RVA,
+        DEFAULT_SPAWN_ENTITY_ID, FloatVector4, GET_CURRENT_MAP_ID_RVA, GET_EXPLICIT_SPAWN_FLAG_RVA,
+        GET_EXPLICIT_SPAWN_RVA, SESSION_LOBBY_STATE_OFFSET, SESSION_MANAGER_GLOBAL_RVA,
+        SESSION_PROTOCOL_STATE_IN_GAME, SESSION_PROTOCOL_STATE_OFFSET,
+        SET_DISABLE_MAP_ENTER_ANIM_RVA, SET_EXPLICIT_SPAWN_RVA, SET_INITIAL_AREA_ENTITY_ID_RVA,
         SET_MOVE_MAP_STEP_BLOCK_ID_RVA, SETUP_MAP_REENTRY_RVA, SessionGate,
         WARP_NEXT_STAGE_KICK_RVA, WarpError, WarpOutcome, spawn_orientation, spawn_position,
     };
@@ -311,10 +334,14 @@ mod native {
     const SETUP_MAP_REENTRY_ARG: bool = true;
     /// `GameMan+0xcb0` when the explicit spawn is armed.
     const SPAWN_FLAG_ARMED: u8 = 1;
+    /// What the flag must read for a coordinate-free warp: nothing armed, so the engine
+    /// resolves the destination block's own spawn.
+    const SPAWN_FLAG_CLEAR: u8 = 0;
 
     type SetBoolFn = unsafe extern "system" fn(bool);
     type SetMoveMapStepBlockIdFn = unsafe extern "system" fn(*mut u32, *const u32) -> *mut u32;
     type SetExplicitSpawnFn = unsafe extern "system" fn(*const FloatVector4, *const FloatVector4);
+    type SetInitialAreaEntityIdFn = unsafe extern "system" fn(*const u32);
     type GetExplicitSpawnFlagFn = unsafe extern "system" fn() -> u8;
     type GetExplicitSpawnFn = unsafe extern "system" fn(*mut FloatVector4, *mut FloatVector4);
     type VoidFn = unsafe extern "system" fn();
@@ -366,29 +393,59 @@ mod native {
             unsafe { core::mem::transmute(base + SET_MOVE_MAP_STEP_BLOCK_ID_RVA) };
         unsafe { set_move_map_step_block_id(&raw mut effective_block, &raw const requested_block) };
 
-        // Vanilla step 4: arm the explicit spawn with the .aip record, untouched.
-        let position = spawn_position(target.position);
-        let orientation = spawn_orientation(target.yaw);
-        let set_explicit_spawn: SetExplicitSpawnFn =
-            unsafe { core::mem::transmute(base + SET_EXPLICIT_SPAWN_RVA) };
-        unsafe { set_explicit_spawn(&raw const position, &raw const orientation) };
-
-        // Read the slot back BEFORE kicking. If the flag did not latch, MoveMapStep ignores our
-        // coordinates and spawns the player at the block default -- a silently wrong warp is
-        // worse than a refused one.
         let get_explicit_spawn_flag: GetExplicitSpawnFlagFn =
             unsafe { core::mem::transmute(base + GET_EXPLICIT_SPAWN_FLAG_RVA) };
-        let spawn_flag = unsafe { get_explicit_spawn_flag() };
-        if spawn_flag != SPAWN_FLAG_ARMED {
-            return Err(WarpError::SpawnSlotDidNotLatch { flag: spawn_flag });
-        }
-        let mut position_readback = FloatVector4::default();
-        let mut orientation_readback = FloatVector4::default();
-        let get_explicit_spawn: GetExplicitSpawnFn =
-            unsafe { core::mem::transmute(base + GET_EXPLICIT_SPAWN_RVA) };
-        unsafe {
-            get_explicit_spawn(&raw mut position_readback, &raw mut orientation_readback);
-        }
+
+        // Vanilla step 4: arm the explicit spawn with the .aip record, untouched.
+        //
+        // SKIPPED ENTIRELY for a provisional target. `FUN_140afcf60` reads the explicit-spawn
+        // flag and, when it is CLEAR, resolves the destination block's own authored player start
+        // out of that map's MSB instead (`FUN_14061fc80`, on the destination side, after the
+        // load). That is the same coordinate-free path the shipped `WarpPlayer` EMEVD
+        // instruction and grace fast-travel take -- neither of them ever calls
+        // `SET_EXPLICIT_SPAWN_RVA`. It is what lets a dungeon the player has never entered be a
+        // warp destination at all: we do not need to know anything inside it.
+        let (spawn_flag, position_readback, orientation_readback) = if target.is_provisional() {
+            // The flag is consumed and cleared by `UpdatePlayerInfo` on every map load, so it is
+            // normally already 0 here. If it is not, a previous warp's coordinate is still armed
+            // and the engine would use THAT instead of this block's default -- landing the player
+            // at another map's coordinates inside this one. Refuse; do not write GameMan to force
+            // it, because the only native clearer also zeroes live warp state at +0xac4/+0xb28/
+            // +0xb58/+0xb5c/+0xb5e/+0xb68/+0xc35.
+            let flag = unsafe { get_explicit_spawn_flag() };
+            if flag != SPAWN_FLAG_CLEAR {
+                return Err(WarpError::StaleSpawnSlotArmed { flag });
+            }
+            // Spawn point 0 selects the map's own default Player part. Every non-overworld map
+            // that has Player parts at all has one with entity id 0.
+            let entity_id: u32 = DEFAULT_SPAWN_ENTITY_ID;
+            let set_initial_area_entity_id: SetInitialAreaEntityIdFn =
+                unsafe { core::mem::transmute(base + SET_INITIAL_AREA_ENTITY_ID_RVA) };
+            unsafe { set_initial_area_entity_id(&raw const entity_id) };
+            (flag, FloatVector4::default(), FloatVector4::default())
+        } else {
+            let position = spawn_position(target.position);
+            let orientation = spawn_orientation(target.yaw);
+            let set_explicit_spawn: SetExplicitSpawnFn =
+                unsafe { core::mem::transmute(base + SET_EXPLICIT_SPAWN_RVA) };
+            unsafe { set_explicit_spawn(&raw const position, &raw const orientation) };
+
+            // Read the slot back BEFORE kicking. If the flag did not latch, MoveMapStep ignores
+            // our coordinates and spawns the player at the block default -- a silently wrong warp
+            // is worse than a refused one.
+            let flag = unsafe { get_explicit_spawn_flag() };
+            if flag != SPAWN_FLAG_ARMED {
+                return Err(WarpError::SpawnSlotDidNotLatch { flag });
+            }
+            let mut position_readback = FloatVector4::default();
+            let mut orientation_readback = FloatVector4::default();
+            let get_explicit_spawn: GetExplicitSpawnFn =
+                unsafe { core::mem::transmute(base + GET_EXPLICIT_SPAWN_RVA) };
+            unsafe {
+                get_explicit_spawn(&raw mut position_readback, &raw mut orientation_readback);
+            }
+            (flag, position_readback, orientation_readback)
+        };
 
         // Vanilla step 5: kick the stage. Past this point the load is the engine's.
         let warp_next_stage_kick: VoidFn =

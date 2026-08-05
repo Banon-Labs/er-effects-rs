@@ -64,6 +64,11 @@ pub use live_read::*;
 /// used silently.
 pub mod msb_invasion_points;
 
+/// Where each legacy dungeon sits on the world map, read live so a marker can be offered for a
+/// dungeon the player has never entered. Not re-exported for the same reason as
+/// [`msb_invasion_points`]: it carries its own region type.
+pub mod legacy_map_regions;
+
 pub mod oracles;
 pub use oracles::*;
 

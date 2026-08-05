@@ -185,6 +185,19 @@ pub struct InvasionWarpTarget {
     pub yaw: f32,
 }
 
+/// Point index meaning "this block has a marker, but no known point inside it yet".
+///
+/// A legacy dungeon's invasion points live in its MSB and are only readable while that map is
+/// RESIDENT, so a dungeon the player has never entered has none. It does not follow that it
+/// cannot be offered: `MoveMapStep` resolves a spawn on the DESTINATION side, after the load,
+/// whenever the explicit-spawn slot is not armed -- so a warp to such a block needs no
+/// coordinate at all. The dungeon becomes reachable, and once the player is standing in it the
+/// harvest reads its real points and the marker is replaced by precise ones.
+///
+/// `u32::MAX` cannot collide with a real index: `read_map_invasion_points` caps a map at
+/// `MAX_POINTS_PER_MAP` (2048) points and the `.aip` blocks are far smaller.
+pub const PROVISIONAL_POINT_INDEX: u32 = u32::MAX;
+
 impl InvasionWarpTarget {
     #[must_use]
     pub const fn new(block: BlockKey, point_index: u32, position: [f32; 3], yaw: f32) -> Self {
@@ -194,6 +207,28 @@ impl InvasionWarpTarget {
             position,
             yaw,
         }
+    }
+
+    /// A marker for a block whose interior is not known yet.
+    ///
+    /// The position is the block's own origin, which is what the world map's legacy converter
+    /// adds its centre to -- so this projects to the dungeon's centre on the map without any
+    /// knowledge of what is inside it.
+    #[must_use]
+    pub const fn provisional(block: BlockKey) -> Self {
+        Self {
+            block,
+            point_index: PROVISIONAL_POINT_INDEX,
+            position: [0.0, 0.0, 0.0],
+            yaw: 0.0,
+        }
+    }
+
+    /// Whether this target carries no known point, so the warp must let the engine pick the
+    /// destination block's own spawn instead of arming a coordinate.
+    #[must_use]
+    pub const fn is_provisional(&self) -> bool {
+        self.point_index == PROVISIONAL_POINT_INDEX
     }
 
     /// Block-local position + the owning block's origin = physics-space position.

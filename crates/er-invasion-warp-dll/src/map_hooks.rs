@@ -479,6 +479,46 @@ unsafe fn project_to_map(
     None
 }
 
+/// Every legacy dungeon this ViewModel's converters can project, deduped across converters.
+///
+/// Each `WorldMapAreaConverter` owns its own legacy table, and the base-game and DLC converters
+/// carry different dungeons, so all of them are walked and the union taken. A converter whose
+/// table is unreadable contributes nothing rather than failing the rest.
+///
+/// # Safety
+/// Game thread; `view_model` live.
+#[cfg(windows)]
+#[must_use]
+unsafe fn legacy_map_regions_for_view(
+    view_model: usize,
+) -> Vec<er_invasion_warp::legacy_map_regions::LegacyMapRegion> {
+    let Some(count) =
+        (unsafe { er_game_base::mem::safe_read_usize(view_model + AREA_CONVERTER_COUNT_OFFSET) })
+    else {
+        return Vec::new();
+    };
+    // Same bound as `project_to_map`: the field is a `DLFixedVector<_, 8>`.
+    let count = count.min(8);
+    let mut regions = Vec::new();
+    for index in 0..count {
+        let converter = view_model + AREA_CONVERTERS_OFFSET + index * AREA_CONVERTER_STRIDE;
+        regions.extend(unsafe {
+            er_invasion_warp::legacy_map_regions::legacy_regions_for_converter(converter)
+        });
+    }
+    regions.sort_by_key(|region| region.block.raw());
+    regions.dedup_by_key(|region| region.block.raw());
+    regions
+}
+
+#[cfg(not(windows))]
+#[must_use]
+unsafe fn legacy_map_regions_for_view(
+    _view_model: usize,
+) -> Vec<er_invasion_warp::legacy_map_regions::LegacyMapRegion> {
+    Vec::new()
+}
+
 /// `DAT_142ad82f8` -- the engine's converter-index -> map-layer-id table, `{0, 1, 10}`.
 ///
 /// Read live rather than hard-coded: if a patch ever reorders the converters, a baked table would
@@ -774,6 +814,41 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
             .filter(|t| !aip_blocks.contains(&t.block.raw())),
     );
     let msb_pins = targets.len() - aip_pins;
+    // A legacy dungeon the player has NEVER ENTERED contributes nothing above: its invasion
+    // points are in its MSB, and an MSB is only readable while its map is resident. That used to
+    // be the end of it -- no marker for Leyndell, Farum Azula, the Haligtree or any catacomb
+    // until the player had physically walked there.
+    //
+    // It does not have to be. The world map already knows where every legacy dungeon sits: the
+    // `WorldMapLegacyConverter` tree carries one entry per legacy block with the map-space origin
+    // the converter adds to. And a warp to such a block needs no coordinate, because
+    // `MoveMapStep` resolves the destination's own spawn after the load. So a block we know
+    // NOTHING about the inside of is still both drawable and reachable.
+    //
+    // These are placed at the block origin, which the engine's own converter turns into the
+    // dungeon's centre on the map. They are superseded the moment the real points arrive: the
+    // filter below drops any block the precise sources already cover.
+    let covered: std::collections::BTreeSet<u32> = targets.iter().map(|t| t.block.raw()).collect();
+    let legacy_regions = unsafe { legacy_map_regions_for_view(view_model) };
+    let legacy_offered = legacy_regions.len();
+    let provisional: Vec<_> = legacy_regions
+        .into_iter()
+        .filter(|region| !covered.contains(&region.block.raw()))
+        .map(|region| {
+            er_invasion_warp::invasion_warp::InvasionWarpTarget::provisional(region.block)
+        })
+        .collect();
+    let provisional_pins = provisional.len();
+    targets.extend(provisional);
+    crate::standalone_log(format_args!(
+        "map-inject: legacy-dungeon table: {legacy_offered} block(s) known to the world map's \
+         legacy converter, {provisional_pins} of them have no precise point yet and get a \
+         whole-dungeon marker (warping to one needs no coordinate -- the engine resolves that \
+         map's own spawn after the load). {} already had precise points and were left alone. \
+         legacy_offered=0 means the converter tree was unreadable and NO dungeon marker was \
+         placed.",
+        legacy_offered.saturating_sub(provisional_pins)
+    ));
     if msb_offered != msb_pins {
         crate::standalone_log(format_args!(
             "map-inject: dropped {} MSB representative(s) whose block already has an .aip pin (no \
