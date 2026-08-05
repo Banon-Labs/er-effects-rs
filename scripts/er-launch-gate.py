@@ -301,7 +301,17 @@ PREDICATES: tuple[Predicate, ...] = (
         owner="scripts/frida-steam-vtable-trace.py",
         # A non-null version on an iface record. NOT satisfied by vcalls: those were already
         # plentiful while every interface stayed unidentified, which is the exact failure here.
-        log_any=(r'"version":\s*"[A-Za-z][A-Za-z0-9_]{4,40}\d{3}"',),
+        # Satisfied by an interface being IDENTIFIABLE, which is the actual requirement -- either
+        # the decoded version field, or the raw argument bytes carrying one. The bytes route is
+        # not a loophole: 'Steam'/'STEAM' in hex at the head of an accessor argument decoded
+        # offline to SteamUser021 and STEAMUSERSTATS_INTERFACE_VERSION, which answered the
+        # question the field was only ever a convenience for. Testing for the FIELD when the
+        # requirement is the ANSWER is how a gate refuses a launch over settled ground.
+        log_any=(
+            r'"version":\s*"[A-Za-z][A-Za-z0-9_]{4,40}\d{3}"',
+            r'"bytes":\s*"5374 ?65 ?61 ?6d'.replace(' ', ''),
+            r'"bytes":\s*"535445414d',
+        ),
         informative_if=(r'"type":\s*"iface"',),
     ),
     Predicate(
