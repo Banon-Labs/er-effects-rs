@@ -198,13 +198,19 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         {
                             Some(quickload_slot as i32)
                         } else {
-                            // The missing-save picker cannot set a config slot; instead its
-                            // character sub-picker records the chosen slot here. Configured slots
-                            // still win via `state.autoload.slot()`.
-                            state
-                                .autoload
-                                .slot()
-                                .or_else(missing_save_picker_selected_slot)
+                            // DELIBERATE BEHAVIOR CHANGE (bd er-effects-rs-91zb; IMPLEMENTED BUT
+                            // UNPROVEN -- no live run has exercised it). The missing-save picker
+                            // cannot set a config slot; its character sub-picker records the chosen
+                            // slot here. This used to be `autoload.slot().or_else(picker)` --
+                            // "configured slots still win" -- while the OTHER resolver for the same
+                            // question, `continue_load::slot_resolution::native_fullread_slot`,
+                            // puts the picker FIRST. Two resolvers disagreeing about which slot the
+                            // user meant is how a portrait ends up targeting one character while
+                            // another loads. Resolved in the picker's favour on both sides: a
+                            // user's explicit on-screen pick outranks a config default, which is a
+                            // stale preference by comparison.
+                            missing_save_picker_selected_slot()
+                                .or_else(|| state.autoload.slot())
                         };
                         if let Some(slot) = slot_result {
                             PRODUCT_CORE_CALLSITE_SLOT_OK_TICKS.fetch_add(1, Ordering::SeqCst);
@@ -365,16 +371,11 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // that distinguished a playable load from a frozen one (the render/draw_group oracles read
                 // FALSE even for a visibly-rendered, controllable load). Frozen loads never accumulate.
                 // Game-thread only, so driving input here is safe.
-                // Run the move-probe whenever in-world EXCEPT during active MENU-NAV (OPEN_MENU..CONFIRM),
-                // where an injected forward stick would move the menu cursor. WAIT_WORLD(0) / WAIT_RELOAD(7)
-                // / DONE(6) are in-world settle states -- the probe MUST run there (that is where load1 and
-                // each reload prove movement). NB: sq_repro_actively_driving() returns TRUE for WAIT_WORLD
-                // (it blocks during boot), which wrongly skipped load1's proof -- so gate on the STATE range
-                // directly, not that.
-                let sq_menu_nav = system_quit_repro_enabled() && {
-                    let st = SQ_REPRO_STATE.load(Ordering::SeqCst);
-                    (SQ_REPRO_STATE_OPEN_MENU..=SQ_REPRO_STATE_CONFIRM).contains(&st)
-                };
+                // The old OPEN_MENU..CONFIRM menu-nav exclusion is GONE: those autopilot states no longer
+                // exist. `system_quit_repro_tick` now runs WAIT_WORLD -> WAIT_RELOAD -> DONE only, and all
+                // three are in-world settle states where the probe MUST run (that is where load1 and each
+                // reload prove movement). Nothing injects a menu cursor any more, so there is nothing to
+                // exclude.
                 // Only inject once the char is actually RENDERED in-world (render_group 1c4 + enable_render
                 // 1c5), NOT merely present. `player present` goes true mid-load (mms=13, ~14s before
                 // render_group), and injecting there latched an invalid DISPROVEN before the char could be
@@ -384,7 +385,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // means the char genuinely did not move, not that we injected before the world was up.
                 let char_rendered = player.chr_ins.chr_flags1c4.is_render_group_enabled()
                     && player.chr_ins.chr_flags1c5.enable_render();
-                if !sq_menu_nav && char_rendered {
+                if char_rendered {
                     let p = player.chr_ins.modules.physics.position;
                     crate::experiments::can_move_probe::tick((p.0, p.1, p.2));
                 }

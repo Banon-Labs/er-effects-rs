@@ -168,9 +168,6 @@ pub(crate) fn game_main_window() -> HWND {
     HWND(SQ_REPRO_ER_HWND.load(Ordering::SeqCst) as *mut core::ffi::c_void)
 }
 
-/// Count of foreground-forces performed (diagnostic) and whether the ER window is currently the
-/// foreground window at the last drive (1/0), so the OPEN_MENU diag can report if focus was achieved.
-pub(crate) use er_telemetry::counters::SQ_REPRO_FOREGROUND_FORCES;
 pub(crate) use er_telemetry::counters::SQ_REPRO_IS_FOREGROUND;
 
 /// FOCUS SEMAPHORE (2026-07-21, focus-controlled A/B): is the OS foreground window owned by THIS (the
@@ -196,9 +193,9 @@ pub(crate) fn game_window_is_foreground() -> bool {
 /// AttachThreadInput) was REMOVED (user 2026-07-23, bd harness-drive-contract-...-no-force-focus): the
 /// user's window focus must never be seized. This is now OBSERVE-ONLY -- it updates SQ_REPRO_IS_FOREGROUND
 /// so diagnostics can report whether ER happened to be focused, but it never brings ER to the front. The
-/// legacy sq-repro SendInput menu-nav that relied on forced focus is dead-pathed (nothing transitions into
-/// SQ_REPRO_STATE_OPEN_MENU; the live sq-repro flow uses the menu-free programmatic switch arm), and the
-/// can-move probe now delivers movement foreground-only, so no live path forces focus.
+/// legacy sq-repro SendInput menu-nav that relied on forced focus has been DELETED (nothing ever
+/// transitioned into its states; the live sq-repro flow uses the menu-free programmatic switch arm),
+/// and the can-move probe now delivers movement foreground-only, so no live path forces focus.
 fn sq_repro_ensure_foreground(hwnd: HWND) {
     let already = unsafe { GetForegroundWindow() } == hwnd;
     SQ_REPRO_IS_FOREGROUND.store(already as usize, Ordering::SeqCst);

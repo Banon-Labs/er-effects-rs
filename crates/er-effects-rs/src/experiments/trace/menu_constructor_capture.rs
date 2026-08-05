@@ -360,13 +360,64 @@ pub(crate) unsafe extern "system" fn cap_builder_hook(
 ) -> usize {
     let slot_i32 = slot as i32;
     let expected_slot = OWN_STEPPER_EXPECTED_SLOT.load(Ordering::SeqCst);
-    let effective_slot = slot;
+    // THE USER'S PICK BEATS THE CONTAINER'S STORED SLOT (bd er-effects-rs-daq7).
+    //
+    // This builder's `r8d` slot argument is what the LoadGame job is built for, and on the
+    // TitleTopDialog Continue path it comes from `CSMenuSystemSaveLoad+0x1200` -- the last-used
+    // slot PERSISTED INSIDE THE SAVE CONTAINER, restored by the system-save chunk deserialize
+    // (`CSMenuSimpleSaveDataChunk<1, MENU_TITLEFLOW_SAVEDATA, 0>`, ctor 0x14081af80). Nothing about
+    // it knows what the user clicked, so a container whose stored slot differs from the pick loads
+    // the WRONG CHARACTER. Runtime proof 2026-08-03: user picked slot 0 of
+    // save-files/45-Slots/ER0000.sl2, this hook logged `built for slot=2`, and slot 2 of that
+    // container is the Vagabond that loaded while the user had clicked Hero.
+    //
+    // Steering it HERE, at the instruction that consumes the value, rather than by writing
+    // mss+0x1200 earlier: an earlier write is overwritten by the container's own chunk deserialize
+    // (measured -- our SUBMIT read mss+0x1200 as 0 before the chunk landed, and the builder then
+    // saw the stored 2). This is also the least invasive point available: the hook already forwards
+    // `effective_slot` to the original, and nothing in the deserialize/warp machinery is touched
+    // (an earlier attempt to fix this via `own_load_feed_deserialize` set `warp_requested` on a path
+    // that disarms the warp target and softlocked -- see loaders.rs:361-368).
+    //
+    // BOUNDED to the boot pick: only while the picker's selection is unspent (before any world
+    // exists). A System->Quit switch names its own slot through a different path and must not be
+    // overridden here.
+    let picked = (IN_WORLD_REACHED.load(Ordering::SeqCst) != IN_WORLD_REACHED_YES)
+        .then(crate::experiments::missing_save_picker_selected_slot)
+        .flatten();
+    let effective_slot = match picked {
+        Some(pick) if pick != slot_i32 => {
+            LOADGAME_BUILDER_SLOT_OVERRIDES.fetch_add(1, Ordering::SeqCst);
+            LOADGAME_BUILDER_LAST_NATIVE_SLOT.store(slot_i32 as u32 as usize, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "loadgame-builder: OVERRIDE slot {slot_i32} -> {pick} -- the container's stored slot (mss+0x1200) named {slot_i32}, but the user picked {pick}; building the LoadGame job for the PICK"
+            ));
+            pick as usize
+        }
+        _ => slot,
+    };
     append_continue_trace(format_args!(
         "CAP builder owner=0x{owner:x} slot={} effective_slot={} rdx=0x{rdx:x} r9=0x{r9:x} {} {}",
         slot_i32,
         effective_slot as i32,
         trace_callers_summary(),
         b80_mount_trace_summary()
+    ));
+    // WHAT SLOT DID THE GAME WANT? Logged unconditionally (not just on override) so a run where the
+    // native slot already equals the pick is distinguishable from one where the hook never fired.
+    // `append_continue_trace` above carries the same data plus a backtrace, but that sink is not
+    // among the preserved run artifacts, which is why the 2026-08-02 repro could not settle where
+    // the slot came from.
+    //
+    // Reading CSMenuSystemSaveLoad+0x1200 here was tried and REMOVED: it resolved to `None` on every
+    // call across two runs, so it cost a singleton walk per build and told us nothing. The value is
+    // still the origin of `slot` on the TitleTopDialog Continue path (FUN_1409ac760 @0x1409ac9e1:
+    // `CALL GetMenuSystemSaveLoad; MOV R8D,[RAX+0x1200]; CALL 0x140826510`) -- that is established by
+    // static RE plus the on-disk chunk, and does not need re-deriving per frame.
+    append_autoload_debug(format_args!(
+        "loadgame-builder: 0x140826510 built for slot={slot_i32} (expected={expected_slot}) effective={} owner=0x{owner:x} {}",
+        effective_slot as i32,
+        trace_callers_summary()
     ));
     let ret = unsafe { call_cap_original(&CAP_BUILDER_ORIG, owner, rdx, effective_slot, r9) };
     if (live_dialog_enabled() || product_autoload_enabled())

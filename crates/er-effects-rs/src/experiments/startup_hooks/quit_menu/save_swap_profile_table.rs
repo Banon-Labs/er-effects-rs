@@ -558,10 +558,31 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     if !(0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&target_slot) {
         return;
     }
-    // FAIL-FAST SEMAPHORE: only compare against the live loaded character once the target slot has
-    // actually become the loaded slot. During the switch pre-load window, rendering the selected
-    // incoming slot before ac0 flips is intentional, not a wrong-slot failure.
-    if portrait_loaded_slot_confirmed() == Some(target_slot) {
+    // FAIL-FAST SEMAPHORE: only compare against the live loaded character once a LOAD HAS ACTUALLY
+    // COMPLETED. The old gate was `portrait_loaded_slot_confirmed() == Some(target_slot)` -- i.e.
+    // it asked ac0 (`GameMan.save_slot`) whether the target slot was resident. That gate is
+    // defeated by our OWN write: `own_load/loaders.rs` calls the native `SetSaveSlot(picked)`
+    // (Ghidra 0x14067a810 -- a pure field store with no load semantics) before submitting, ~5s
+    // before the deserialize. Three milliseconds later ac0 already equalled the target, the gate
+    // opened, and the semaphore compared our incoming record against the character still resident
+    // from the PREVIOUS session. Gate on the deserialize instead:
+    //   * switch: the picked slot's fresh deserialize completed;
+    //   * boot:   c30 is a real saved map (not the m10 new-game default) AND the native slot
+    //             request register (`GameMan+0xb78`) is back at its no-request sentinel, i.e. no
+    //             load is still in flight.
+    let deserialize_completed = if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+        >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+    {
+        SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 1
+    } else {
+        let gm = game_man_ptr_or_null();
+        gm != TITLE_OWNER_SCAN_START_ADDRESS
+            && unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }
+                .is_some_and(|c30| c30 != FULLREAD_C30_M10_DEFAULT && c30 != 0)
+            && unsafe { safe_read_i32(gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) }
+                .is_some_and(|b78| b78 < 0)
+    };
+    if deserialize_completed {
         unsafe { portrait_render_slot_semaphore(base, target_slot) };
     }
     // ARMOR-RESOLUTION oracle (bd er-effects-rs-91l5 Layer 1). Every tick, read the LIVE stage-0
@@ -809,7 +830,12 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
                 // made oracle_..._gx_nonblack a false success. Requiring !checker means we keep re-checking each
                 // dump cycle and latch only once a real shaded head has actually rendered into the offscreen
                 // (which needs the render-thread offscreen drive -- see portrait_render_drive). One-shot via swap.
-                if s == portrait_loaded_slot()
+                // NO SILENT slot-0 FALLBACK (bd er-effects-rs-91zb step 3). This used to read
+                // `portrait_loaded_slot()`, which collapses "no source names a slot" to 0 via
+                // `unwrap_or(0)` -- so with nothing confirmed, slot 0's head was published as
+                // though it were the loaded character. Publish NOTHING instead: a missing portrait
+                // is a visible, diagnosable absence; a confidently wrong one is not.
+                if portrait_loaded_slot_confirmed() == Some(s)
                     && nb
                     && !checker
                     && PROFILE_BAKE_RGBA_CAPTURED.swap(1, Ordering::SeqCst) == 0
