@@ -59,8 +59,15 @@ enabled = false
 #   "named" -- ignore where you are; accept only the locations listed below.
 mode = "exact"
 
-# Only used by mode = "named". Place names as they appear in game.
-# Any name that does not resolve is reported in the log rather than silently ignored.
+# NOT IMPLEMENTED YET -- anything listed here is parsed and then ignored, and the log says so on
+# every load. Turning a typed place name into the FMG text id the game matches on has not been
+# reversed, so there is nothing to compare a string against.
+#
+# Use Shift+Insert instead: stand somewhere, press it, and every location sharing that place's name
+# is accepted from then on. That writes `named_location_text_ids` below, which IS consulted.
+#
+# Be careful with mode = "named": if this list is the only thing you filled in, no ids exist and
+# EVERY match is rejected.
 named_locations = []
 
 # Locations you marked, and the two lists the in-game keys write to. Both WIDEN whatever `mode`

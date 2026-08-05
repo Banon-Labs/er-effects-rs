@@ -116,6 +116,23 @@ pub const ORACLE_INVASION_WARP_LEGACY_PINS_SEEN: &str = "oracle_invasion_warp_le
 /// opposite. No amount of build or launch success answers that question; only this pair does.
 pub const ORACLE_INVASION_WARP_LEGACY_PINS_PLACED: &str = "oracle_invasion_warp_legacy_pins_placed";
 
+/// Injected pins that were appended to the list but CANNOT BE DRAWN, because all eight of their
+/// label text ids are negative.
+///
+/// This is the oracle whose absence let a whole class of missing icons look like success.
+/// `CS::WorldMapPinData::UpdateVisible` (0x14087afa0) writes the clip's visible flag at `row+0x0c`
+/// only when, among other terms, some label satisfies `param+0x30+12i >= 0`; `SetTo` then hands
+/// that flag straight to the clip. So an unnamed pin is not a pin with a blank caption -- it is a
+/// pin that never appears, while `legacy_pins_placed` counts it as placed and the row count and
+/// spare-row totals all look healthy.
+///
+/// It was legacy dungeons that hit it, because the place-name search was area-locked to the block's
+/// own area and a legacy area whose graces carry no `PlaceName` label yields `-1` for every pin in
+/// every dungeon of that area.
+///
+/// MUST BE ZERO. Any non-zero value is missing icons.
+pub const ORACLE_INVASION_WARP_UNDRAWABLE_PINS: &str = "oracle_invasion_warp_undrawable_pins";
+
 // --- ORACLE 1 counters --------------------------------------------------------------------
 //
 // Written by `crate::sampler` on every successful read of the live `CSAutoInvadePoint`, read
@@ -135,10 +152,24 @@ pub static INVASION_WARP_LEGACY_PINS_SEEN: AtomicUsize = AtomicUsize::new(0);
 /// Legacy-dungeon targets the converters accepted in that injection.
 pub static INVASION_WARP_LEGACY_PINS_PLACED: AtomicUsize = AtomicUsize::new(0);
 
+/// Pins appended that carry no non-negative label text id, and therefore cannot draw.
+pub static INVASION_WARP_UNDRAWABLE_PINS: AtomicUsize = AtomicUsize::new(0);
+
 /// Publish the legacy-dungeon placement pair measured by a world-map injection.
 pub fn publish_legacy_pin_oracles(seen: usize, placed: usize) {
     INVASION_WARP_LEGACY_PINS_SEEN.store(seen, Ordering::SeqCst);
     INVASION_WARP_LEGACY_PINS_PLACED.store(placed, Ordering::SeqCst);
+}
+
+/// Publish how many injected pins cannot be drawn for want of a label. Zero is the only pass.
+pub fn publish_undrawable_pin_count(count: usize) {
+    INVASION_WARP_UNDRAWABLE_PINS.store(count, Ordering::SeqCst);
+}
+
+/// The undrawable-pin count as it currently stands.
+#[must_use]
+pub fn undrawable_pin_count() -> usize {
+    INVASION_WARP_UNDRAWABLE_PINS.load(Ordering::SeqCst)
 }
 
 /// The legacy-dungeon placement pair as it currently stands, `(seen, placed)`.
@@ -327,11 +358,15 @@ pub fn catalog_oracle_json(status: &str, detail: &str) -> String {
 \"{ORACLE_INVASION_WARP_LEGACY_PINS_SEEN}\":{legacy_seen},\
 \"{ORACLE_INVASION_WARP_LEGACY_PINS_PLACED}\":{legacy_placed},\
 \"legacy_pins_note\":\"{legacy_note}\",\
+\"{ORACLE_INVASION_WARP_UNDRAWABLE_PINS}\":{undrawable},\
+\"undrawable_pins_note\":\"a pin whose eight label text ids are all negative is NOT DRAWN; any \
+value above zero is missing icons, not missing captions\",\
 \"{ORACLE_INVASION_WARP_SESSION_TOUCHES}\":null,\
 \"{ORACLE_INVASION_WARP_MSGBOX_BUILDS}\":null,\
 \"negative_oracles_measured\":false,\
 \"negative_oracles_note\":\"{note}\"}}\n",
         status = json_escape(status),
+        undrawable = undrawable_pin_count(),
         legacy_note = json_escape(describe_legacy_pin_oracle(legacy_seen, legacy_placed)),
         verdict_tag = verdict.tag(),
         passed = verdict.passed(),

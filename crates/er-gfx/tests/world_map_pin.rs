@@ -140,6 +140,51 @@ fn the_edit_applies_to_the_real_movie_and_re_parses() {
 }
 
 #[test]
+fn every_marker_frame_of_the_real_movie_carries_a_drawable_placement() {
+    // The gap this closes. The byte delta was checked (+66 = three 22-byte placements) and treated
+    // as proof the frames would DRAW -- which is a different claim, and a live run then showed 510
+    // of 512 pins invisible after they were built on frames 301/302. Writing a placement and
+    // Scaleform rendering it are separate things; this asserts the first properly against the real
+    // movie so the second can be investigated without re-litigating the first.
+    let Some(vanilla) = vanilla_or_skip() else {
+        return;
+    };
+    let edited = with_red_pin_frame(&vanilla).expect("installs");
+    let after = Movie::parse(&edited).expect("parse");
+    let placements = placements_by_frame(icon_sprite(&after));
+    for marker in PIN_MARKERS {
+        let found: Vec<_> = placements
+            .iter()
+            .filter(|(frame, _)| *frame == marker.frame)
+            .collect();
+        assert_eq!(
+            found.len(),
+            1,
+            "{} expected exactly one placement on frame {}, found {}",
+            marker.name,
+            marker.frame,
+            found.len()
+        );
+    }
+    // And the three must reference three DIFFERENT characters, or the tiers are indistinguishable
+    // even when every structural check passes.
+    let characters: std::collections::BTreeSet<u16> = PIN_MARKERS
+        .iter()
+        .filter_map(|marker| {
+            placements
+                .iter()
+                .find(|(frame, _)| *frame == marker.frame)
+                .map(|(_, character)| *character)
+        })
+        .collect();
+    assert_eq!(
+        characters.len(),
+        PIN_MARKERS.len(),
+        "the marker frames must reference distinct bitmaps, got {characters:?}"
+    );
+}
+
+#[test]
 fn the_edit_changes_nothing_else_about_the_icon_space() {
     let Some(vanilla) = vanilla_or_skip() else {
         return;

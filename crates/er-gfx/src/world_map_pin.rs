@@ -95,8 +95,31 @@ impl PinMarker {
     }
 }
 
-/// The brightest marker: a location the user explicitly chose.
+/// The LARGEST marker: a location the user explicitly chose.
+///
+/// `MENU_MAP_Enemy_03` at 188x190 -- bigger than the default marker, which is what makes a chosen
+/// location stand out. It is the dimmest of the family (RGB 125/78/50), so the three tiers are
+/// ranked by SIZE, not brightness: 188 > 146 > 68, strictly monotonic. Size is the legible cue at
+/// map scale, where a pin is a few dozen pixels and its hue is mostly the atlas's glow.
 pub const MARKER_CHOSEN: PinMarker = PinMarker {
+    frame: 303,
+    character: 55,
+    width: 188,
+    height: 190,
+    name: "MENU_MAP_Enemy_03",
+};
+
+/// The DEFAULT marker -- a location the user has expressed no opinion about.
+///
+/// This is deliberately [`RED_PIN_FRAME`], the frame invasion pins have always used, and that is
+/// the whole point: with an untouched config every pin is `Untouched`, so a player who never marks
+/// anything sees exactly the map they saw before this feature existed.
+///
+/// The previous arrangement put `Untouched` on a NEW frame, which meant the default state moved
+/// all 512 pins onto a frame that had never been seen to render -- and a live run came back with a
+/// blank map. Only the two deviations may use new frames now, so the worst case is losing the pins
+/// you explicitly marked, which is bounded and immediately diagnosable, instead of all of them.
+pub const MARKER_UNTOUCHED: PinMarker = PinMarker {
     frame: RED_PIN_FRAME,
     character: RED_MARKER_CHARACTER,
     width: 146,
@@ -104,17 +127,8 @@ pub const MARKER_CHOSEN: PinMarker = PinMarker {
     name: "MENU_MAP_Enemy_02",
 };
 
-/// Mid marker: a location the current filter mode would accept, but that was not chosen by hand.
-pub const MARKER_ELIGIBLE: PinMarker = PinMarker {
-    frame: 301,
-    character: 53,
-    width: 102,
-    height: 104,
-    name: "MENU_MAP_Enemy_01",
-};
-
-/// Dimmest marker: a location the current filter would reject.
-pub const MARKER_REJECTED: PinMarker = PinMarker {
+/// The SMALLEST marker: a location the user excluded.
+pub const MARKER_EXCLUDED: PinMarker = PinMarker {
     frame: 302,
     character: 54,
     width: 68,
@@ -122,12 +136,8 @@ pub const MARKER_REJECTED: PinMarker = PinMarker {
     name: "MENU_MAP_Enemy_00",
 };
 
-/// Every marker this module installs, brightest first.
-///
-/// Three tiers rather than four: `MENU_MAP_Enemy_03` is the largest bitmap but also the dimmest
-/// (RGB 125/78/50 against 234/99/48), so adding it would break the one property that makes these
-/// readable at a glance -- size and brightness both falling together.
-pub const PIN_MARKERS: [PinMarker; 3] = [MARKER_CHOSEN, MARKER_ELIGIBLE, MARKER_REJECTED];
+/// Every marker this module installs, largest first.
+pub const PIN_MARKERS: [PinMarker; 3] = [MARKER_CHOSEN, MARKER_UNTOUCHED, MARKER_EXCLUDED];
 
 /// Depth the icon clip places its bitmap at. Every populated frame uses depth 1.
 pub const ICON_DEPTH: u16 = 1;
@@ -486,7 +496,7 @@ mod tests {
         let Tag::DefineSprite { tags, .. } = &movie.tags[0] else {
             panic!("sprite");
         };
-        let (_, place) = frame_span(tags, MARKER_REJECTED.frame).expect("rejected marker");
+        let (_, place) = frame_span(tags, MARKER_EXCLUDED.frame).expect("rejected marker");
         let Tag::PlaceObject3 {
             matrix: Some(matrix),
             ..
@@ -510,7 +520,7 @@ mod tests {
         let mut movie = movie_with(sprite_with_frames(
             ICON_SPRITE_ID,
             ICON_SPRITE_FRAME_COUNT,
-            &[1, MARKER_REJECTED.frame],
+            &[1, MARKER_EXCLUDED.frame],
         ));
         let before = movie.clone();
         assert!(matches!(

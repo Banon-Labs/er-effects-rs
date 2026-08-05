@@ -48,6 +48,19 @@ pub const PARAM_CLEARED_EVENT_FLAG_OFFSET: usize = 0x18;
 pub const PARAM_ICON_ID_OFFSET: usize = 0x1C;
 /// `+0x1E` -- category bits (u8). Masked with `& 7` into pin `+0x60`.
 pub const PARAM_CATEGORY_BITS_OFFSET: usize = 0x1E;
+/// `+0x10` -- forbidden icon id (u16). Copied to pin `+0x288`.
+pub const PARAM_FORBIDDEN_ICON_ID_OFFSET: usize = 0x10;
+/// `+0xE8` -- ALTERNATE icon id (u16). Copied to pin `+0x2C8`.
+///
+/// `CS::WorldMapWarpPinData::GetIconId` (0x14088bb60) returns this one instead of `+0x1C` whenever
+/// any enabled label carries kind `1` (`NpcName`). Every label this crate writes is kind `0`, so
+/// the alternate is not reached today -- but leaving it zero means a single stray kind byte would
+/// call `gotoAndStop(0)` on a 1-based clip and draw NOTHING, with the row still flagged visible and
+/// every counter green. Mirroring the real icon here costs two bytes and deletes that whole silent
+/// failure mode.
+pub const PARAM_ALT_ICON_ID_OFFSET: usize = 0xE8;
+/// `+0xEA` -- alternate forbidden icon id (u16). Copied to pin `+0x308`.
+pub const PARAM_ALT_FORBIDDEN_ICON_ID_OFFSET: usize = 0xEA;
 /// `+0x30` -- first label text id; label `i` is at `+0x30 + 12*i`.
 pub const PARAM_LABEL_TEXT_ID_BASE: usize = 0x30;
 /// Stride between label text ids.
@@ -119,18 +132,21 @@ pub const fn invasion_pin_icon_id_for(appearance: PinAppearance, markers_install
         return FALLBACK_INVASION_PIN_ICON_ID;
     }
     match appearance {
-        PinAppearance::Chosen => RED_INVASION_PIN_FRAME,
-        PinAppearance::Eligible => ELIGIBLE_INVASION_PIN_FRAME,
+        PinAppearance::Chosen => CHOSEN_INVASION_PIN_FRAME,
+        // The DEFAULT tier keeps the frame invasion pins have always used, so an untouched config
+        // renders exactly the map that existed before tiers. Putting this tier on a new frame is
+        // what blanked a live map: every pin is `Eligible` until the user marks something.
+        PinAppearance::Eligible => RED_INVASION_PIN_FRAME,
         PinAppearance::Rejected => REJECTED_INVASION_PIN_FRAME,
     }
 }
 
-/// Spare `Icon_0` frame carrying `MENU_MAP_Enemy_01` (102x104, RGB `218/94/50`).
+/// Spare `Icon_0` frame carrying `MENU_MAP_Enemy_03` (188x190) -- the LARGEST of the family, for a
+/// location the user chose.
 ///
-/// The middle of the three tiers. The set descends in size AND brightness together -- 146/234-red,
-/// 102/218-red, 68/187-red -- which is what makes them separable at a glance on a crowded map
-/// rather than three similar red dots.
-pub const ELIGIBLE_INVASION_PIN_FRAME: u16 = 301;
+/// The tiers are ranked by size: 188 > 146 > 68. Brightness is not monotonic across this family
+/// (Enemy_03 is the dimmest), and size is the cue that survives at map scale anyway.
+pub const CHOSEN_INVASION_PIN_FRAME: u16 = 303;
 
 /// Spare `Icon_0` frame carrying `MENU_MAP_Enemy_00` (68x72, RGB `187/90/61`) -- the dimmest and
 /// smallest of the hostile-marker family, for a location the filter would reject.
@@ -227,6 +243,15 @@ impl SyntheticParamSpec {
         row[PARAM_ICON_ID_OFFSET..PARAM_ICON_ID_OFFSET + 2]
             .copy_from_slice(&self.icon_id.to_le_bytes());
         row[PARAM_CATEGORY_BITS_OFFSET] = self.category_bits & CATEGORY_BITS_MASK;
+        // Every icon slot the pin can select gets the SAME id, so no branch inside
+        // `GetIconId` can land on a zero and draw nothing. See the offset docs above.
+        for at in [
+            PARAM_FORBIDDEN_ICON_ID_OFFSET,
+            PARAM_ALT_ICON_ID_OFFSET,
+            PARAM_ALT_FORBIDDEN_ICON_ID_OFFSET,
+        ] {
+            row[at..at + 2].copy_from_slice(&self.icon_id.to_le_bytes());
+        }
 
         // Label 0 carries the place name; labels 1..7 are explicitly "none" so the engine
         // renders empty strings rather than resolving whatever happened to be in memory.
@@ -246,7 +271,8 @@ impl SyntheticParamSpec {
     /// The highest byte the engine reads for this layout, as a bounds assertion for the buffer.
     #[must_use]
     pub const fn highest_read_offset() -> usize {
-        PARAM_LABEL_KIND_BASE + PARAM_LABEL_COUNT - 1
+        // The alternate forbidden icon is the last field, past the label kinds.
+        PARAM_ALT_FORBIDDEN_ICON_ID_OFFSET + 1
     }
 }
 
@@ -304,6 +330,19 @@ mod tests {
     fn label_zero_carries_the_place_name_and_the_rest_are_explicitly_none() {
         let row = spec().to_row_bytes();
         assert_eq!(read_i32(&row, PARAM_LABEL_TEXT_ID_BASE), 1234);
+        // Every icon slot carries the real id, so no GetIconId branch can select a zero.
+        for at in [
+            PARAM_ICON_ID_OFFSET,
+            PARAM_FORBIDDEN_ICON_ID_OFFSET,
+            PARAM_ALT_ICON_ID_OFFSET,
+            PARAM_ALT_FORBIDDEN_ICON_ID_OFFSET,
+        ] {
+            assert_ne!(
+                u16::from_le_bytes(row[at..at + 2].try_into().unwrap()),
+                0,
+                "icon slot {at:#x} left at zero would gotoAndStop(0) and draw nothing"
+            );
+        }
         for index in 1..PARAM_LABEL_COUNT {
             let at = PARAM_LABEL_TEXT_ID_BASE + index * PARAM_LABEL_TEXT_ID_STRIDE;
             assert_eq!(read_i32(&row, at), LABEL_TEXT_ID_NONE, "label {index}");
@@ -351,12 +390,23 @@ mod tests {
                 "{tier:?} must not point at an unpopulated frame"
             );
         }
-        // The chosen tier is the frame the single-appearance helper already used, so the two
-        // entry points cannot disagree about what "the invasion pin" looks like.
+        // The DEFAULT tier must be the frame the single-appearance helper already used. This is the
+        // no-regression guarantee: an untouched config makes every pin `Eligible`, so the map has
+        // to render exactly as it did before tiers existed. Pointing this tier at a NEW frame is
+        // what blanked a live map -- 510 of 512 pins moved onto frames that had never been seen to
+        // draw, all at once, by doing nothing at all.
         assert_eq!(
-            invasion_pin_icon_id_for(PinAppearance::Chosen, true),
-            invasion_pin_icon_id(true)
+            invasion_pin_icon_id_for(PinAppearance::Eligible, true),
+            invasion_pin_icon_id(true),
+            "the default tier must keep the historical frame"
         );
+        // The deviations are the only tiers allowed onto new frames.
+        for tier in [PinAppearance::Chosen, PinAppearance::Rejected] {
+            assert_ne!(
+                invasion_pin_icon_id_for(tier, true),
+                invasion_pin_icon_id(true)
+            );
+        }
     }
 
     #[test]

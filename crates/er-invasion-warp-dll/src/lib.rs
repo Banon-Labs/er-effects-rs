@@ -195,6 +195,15 @@ fn spawn_catalog_task() {
                             crate::drive::game_has_focus(),
                         );
                     }
+                    // Re-colour pins that already exist. Gated internally on the user's lists
+                    // actually having changed, so the steady-state cost is one atomic compare.
+                    //
+                    // SAFETY: same game-task context. Walks the rows this module appended in EVERY
+                    // live map view, and writes only to rows still carrying its own `+0x08` stamp,
+                    // so a span whose ViewModel has been destroyed is skipped rather than written.
+                    unsafe {
+                        crate::map_hooks::restyle_live_pins();
+                    }
                 },
                 CSTaskGroupIndex::FrameBegin,
             );

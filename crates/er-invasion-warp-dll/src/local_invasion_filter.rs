@@ -210,6 +210,20 @@ fn refresh_config() {
                 outcome.config.allowed_blocks.len(),
             ));
         }
+        // SAY THAT THE TYPED NAMES DO NOTHING YET. `named_locations` is parsed and stored but never
+        // resolved to text ids, so it contributes nothing to a verdict -- and in `mode = "named"`
+        // with no ids collected that means EVERY match is rejected, forever, for a user who did
+        // exactly what the file told them to. The verdict itself is reported
+        // (`NothingToMatchAgainst`), but nothing connected it to the names they typed.
+        if !outcome.config.named_locations.is_empty() {
+            crate::standalone_log(format_args!(
+                "local-invasion: {} typed name(s) in `named_locations` are NOT being used -- \
+                 resolving a place name string to its FMG text id is not implemented, so only ids \
+                 collected by Shift+Insert are matched. In mode = \"named\" with no such ids, every \
+                 match is rejected as NothingToMatchAgainst.",
+                outcome.config.named_locations.len()
+            ));
+        }
         for issue in &outcome.issues {
             crate::standalone_log(format_args!(
                 "local-invasion: config line {}: {}",
@@ -1032,11 +1046,12 @@ fn apply_mark(adding: bool, by_name: bool) {
 
     match hot.save(&path, &config) {
         Ok(true) => crate::standalone_log(format_args!(
-            "local-invasion: {} {:#010x}{} -- now {} block(s) and {} name(s) marked{}",
-            if adding { "MARKED" } else { "UN-MARKED" },
+            "local-invasion: {} {:#010x}{} -- now {} chosen, {} excluded, {} name(s){}",
+            if adding { "MARKED" } else { "EXCLUDED" },
             anchor.block,
             if by_name { " by name" } else { "" },
             config.allowed_blocks.len(),
+            config.blocked_blocks.len(),
             config.named_location_text_ids.len(),
             if config.enabled {
                 ""
@@ -1224,6 +1239,35 @@ mod tests {
         assert!(
             reinvade.contains("note_state_after_our_action"),
             "an unclaimed restart is indistinguishable from the user pressing Invade world"
+        );
+    }
+
+    #[test]
+    fn nothing_writes_one_icon_id_across_every_param_row() {
+        // Regression, 2026-08-05, caught live. The map's param rows are built with a per-location
+        // icon and were then re-stamped with a SINGLE id over every row, so the tiers were
+        // computed correctly (`chosen=3` then `chosen=96` in the log as marks were added) and then
+        // flattened before anything rendered. Every write of the icon field must come from the
+        // per-appearance helper.
+        let source = include_str!("../src/map_hooks.rs");
+        assert!(
+            source.contains("invasion_pin_icon_id_for("),
+            "the map must choose icons per location"
+        );
+        // Anchored on a string unique to the re-stamp. `PARAM_ICON_ID_OFFSET;` is not: an earlier
+        // `use` of the same constant matched first and put the window over unrelated code.
+        let restamp = source
+            .split_once("let stamp_signature")
+            .expect("re-stamp block")
+            .1;
+        let restamp = &restamp[..restamp.len().min(2_000)];
+        assert!(
+            !restamp.contains(&format!("invasion_pin_icon_id{}", "(")),
+            "the re-stamp must not use the single-icon helper -- that is what flattened the tiers"
+        );
+        assert!(
+            restamp.contains("for (index, row) in rows.iter_mut().enumerate()"),
+            "the re-stamp has to be per row, with the index that identifies the location"
         );
     }
 
