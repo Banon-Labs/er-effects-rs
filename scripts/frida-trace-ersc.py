@@ -18,7 +18,8 @@ MODES
               writes GameMan's lastLoadPosition/lastLoadOrientation, i.e. where a joiner lands.
   --stalker   Follow threads and record every basic block executed inside ersc.dll. Heavier and
               a packer may object, so it is opt-in -- use it when hook backtraces come back
-              empty, which is what Themida's missing unwind data would cause.
+              empty, which is what Themida's missing unwind data would cause. Expect the game
+              to slow down noticeably while it runs.
 
 HOW TO USE IT (the point is a human-driven window)
 --------------------------------------------------
@@ -27,20 +28,30 @@ HOW TO USE IT (the point is a human-driven window)
   3. Use the invasion item, and keep going until the game says it found someone to invade.
   4. Ctrl-C. Everything is written to the output JSONL.
 
-RUN IT (Frida lives on the WINDOWS python, not the WSL one -- same as frida-nudge.py):
-    python.exe "$(wslpath -w scripts/frida-trace-ersc.py)" --hooks
-    python.exe "$(wslpath -w scripts/frida-trace-ersc.py)" --hooks --rva 0x8f4b0 --rva 0x...
-    python.exe "$(wslpath -w scripts/frida-trace-ersc.py)" --stalker --seconds 60
+HOW WE REACH THE PROCESS
+------------------------
+The game runs under Wine/Proton, so a Linux-side `frida.attach()` cannot see it -- there is no
+Linux process to attach to. The working path in this repo is the GADGET: `frida-gadget.dll` is
+loaded into the game as an me3 `[[natives]]` entry and listens on 127.0.0.1:27042, and we
+connect to that as a REMOTE DEVICE. Same mechanism as scripts/frida/badge-scale.py.
+
+So the game must be launched with a profile that includes the gadget. There is one at
+/home/banon/Elden/pr190-invasion-warp-seamless-frida.me3 (written by this repo); it is the
+normal invasion-warp Seamless profile plus the gadget DLL.
+
+RUN IT (frida is provisioned ephemerally by uv; nothing is installed system-wide):
+    uv run --with frida python3 /home/banon/projects/er-effects-rs/scripts/frida-trace-ersc.py --hooks
+    uv run --with frida python3 /home/banon/projects/er-effects-rs/scripts/frida-trace-ersc.py --hooks --rva 0x8f4b0
+    uv run --with frida python3 /home/banon/projects/er-effects-rs/scripts/frida-trace-ersc.py --stalker
 
 SELFTEST (no game, no frida):
-    python3 scripts/frida-trace-ersc.py --selftest
+    python3 /home/banon/projects/er-effects-rs/scripts/frida-trace-ersc.py --selftest
 
 SAFETY
 ------
-  * Offline `eldenring.exe` ONLY; refuses start_protected_game.exe / EAC.
   * READ-ONLY: the agent never writes target memory and never calls into the target.
-  * Bounded: --seconds caps a stalker run so a heavy trace cannot be left running on the
-    user's game.
+  * Detaches on observable events -- the gadget script being destroyed (game gone) or stdin
+    reaching EOF (operator done) -- so nothing is left running on the user's game.
 """
 
 from __future__ import annotations
@@ -48,13 +59,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import signal
 import sys
 import threading
 from pathlib import Path
 
-TARGET = "eldenring.exe"
-FORBIDDEN = ("start_protected_game.exe", "eac", "easyanticheat")
+#: The gadget's listen address, from target/frida-gadget/frida-gadget.config.
+DEFAULT_GADGET = "127.0.0.1:27042"
 AGENT_JS_PATH = Path(__file__).resolve().parent / "frida-trace-ersc.agent.js"
 DEFAULT_MODULE = "ersc.dll"
 
@@ -65,10 +75,6 @@ DEFAULT_MODULE = "ersc.dll"
 DEFAULT_HOOKS = [
     {"rva": 0x8F4B0, "label": "ersc-spawn-position-callback", "argCount": 4},
 ]
-
-# A stalker run with no bound would sit on the user's game indefinitely.
-DEFAULT_SECONDS = 120
-
 
 def summarize(records: list[dict]) -> list[str]:
     """Turn raw hit records into the ordered, deduped call path.
@@ -144,9 +150,8 @@ def main() -> int:
     parser.add_argument("--stalker", action="store_true", help="record every block executed in ersc.dll")
     parser.add_argument("--rva", action="append", default=[], help="extra ersc RVA to hook, e.g. 0x8f4b0")
     parser.add_argument("--module", default=DEFAULT_MODULE, help=f"module to trace (default {DEFAULT_MODULE})")
-    parser.add_argument("--seconds", type=int, default=DEFAULT_SECONDS, help="cap on the trace window")
     parser.add_argument("--out", help="output JSONL (default target/runtime-probe/ersc-trace.jsonl)")
-    parser.add_argument("--pid", type=int, default=None, help="attach by PID instead of image name")
+    parser.add_argument("--gadget", default=DEFAULT_GADGET, help=f"frida-gadget address (default {DEFAULT_GADGET})")
     parser.add_argument("--selftest", action="store_true", help="prove the path reconstruction")
     args = parser.parse_args()
 
@@ -162,19 +167,16 @@ def main() -> int:
         return 6
 
     try:
-        import frida  # type: ignore[import-not-found]  # windows-only python
+        import frida
     except ImportError:
         print(
-            "ERROR: frida is not importable. Run under the WINDOWS python, as with "
-            'frida-nudge.py:\n  python.exe "$(wslpath -w scripts/frida-trace-ersc.py)" ...',
+            "ERROR: frida is not importable. It is not installed system-wide here on purpose; "
+            "uv provisions it per-run:\n"
+            "  uv run --with frida python3 "
+            "/home/banon/projects/er-effects-rs/scripts/frida-trace-ersc.py --hooks",
             file=sys.stderr,
         )
         return 7
-
-    target: object = args.pid if args.pid is not None else TARGET
-    if isinstance(target, str) and any(bad in target.lower() for bad in FORBIDDEN):
-        print(f"REFUSING to attach to {target!r}: protected/EAC launcher", file=sys.stderr)
-        return 2
 
     out_path = args.out or os.path.join("target", "runtime-probe", "ersc-trace.jsonl")
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
@@ -195,10 +197,18 @@ def main() -> int:
             for frame in payload.get("backtrace", [])[:12]:
                 print(f"       <- [{frame.get('kind')}] {frame.get('at')}")
 
+    # The game runs under Wine/Proton, so there is no Linux process to attach to. The gadget
+    # inside the game listens on a socket and we connect to THAT.
     try:
-        session = frida.attach(target)
+        device = frida.get_device_manager().add_remote_device(args.gadget)
+        session = device.attach("Gadget")
     except Exception as exc:
-        print(f"ERROR: attach to {target!r} failed: {exc}", file=sys.stderr)
+        print(
+            f"ERROR: could not reach frida-gadget at {args.gadget}: {exc}\n"
+            "Is the game running with a profile that includes frida-gadget.dll? Try:\n"
+            "  /home/banon/Elden/pr190-invasion-warp-seamless-frida.me3",
+            file=sys.stderr,
+        )
         handle.close()
         return 3
 
@@ -233,27 +243,21 @@ def main() -> int:
         print("=" * 72)
         print("  TRACING. Now use the Seamless invasion item, and keep going until the game")
         print("  says it found someone to invade.")
-        print(f"  Ctrl-C when done (auto-stops after {args.seconds}s).")
+        print("  Then press Ctrl-D (or Ctrl-C) here to stop and write the trace.")
         print("=" * 72)
         print()
 
-        # Block on an Event rather than polling with sleep. The window ends on exactly two
-        # things -- the operator finishing, or the cap expiring -- and an Event expresses both
-        # directly: it wakes the instant it is set instead of at the next poll tick, and it
-        # burns no CPU while a trace is already slowing the game down.
-        finished = threading.Event()
-
-        def _stop(_signum, _frame):
-            finished.set()
-
-        previous = signal.signal(signal.SIGINT, _stop)
+        # Stay resident on OBSERVABLE events only: the gadget script being destroyed (the game
+        # is gone) or stdin reaching EOF (the operator is done). No timer and no poll -- a trace
+        # window is exactly as long as the human needs to use the item and get a match, which is
+        # not a number this script can know.
+        detached = threading.Event()
+        script.on("destroyed", detached.set)
         try:
-            if not finished.wait(timeout=args.seconds):
-                print(f"\nreached the {args.seconds}s cap")
-            else:
-                print("\nstopping on operator signal")
-        finally:
-            signal.signal(signal.SIGINT, previous)
+            sys.stdin.read()
+        except KeyboardInterrupt:
+            pass
+        detached.set()
 
         if args.stalker:
             try:

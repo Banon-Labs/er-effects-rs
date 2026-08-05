@@ -16,18 +16,25 @@ wrong by an amount nobody can see.
 
 SAFETY
 ------
-  * Offline `eldenring.exe` ONLY. Refuses `start_protected_game.exe` / EAC, like the sibling
-    `frida-nudge.py`.
   * READ-ONLY. The agent never writes target memory and never calls into the target.
-  * Attach, dump, detach. No lingering agent holding the loader lock.
+  * Connect, dump, detach. No lingering agent holding the loader lock.
 
-RUN IT (Frida is installed on the WINDOWS python, not the WSL one -- same as frida-nudge.py):
-    python.exe "$(wslpath -w scripts/frida-dump-module.py)" --list
-    python.exe "$(wslpath -w scripts/frida-dump-module.py)" --module ersc.dll
-    python.exe "$(wslpath -w scripts/frida-dump-module.py)" --module ersc.dll --out /tmp/ersc.bin
+HOW WE REACH THE PROCESS
+------------------------
+The game runs under Wine/Proton, so a Linux-side `frida.attach()` sees nothing -- there is no
+Linux process to attach to. `frida-gadget.dll` is loaded INTO the game as an me3 `[[natives]]`
+entry and listens on 127.0.0.1:27042; we connect to that as a REMOTE DEVICE. Same mechanism as
+scripts/frida/badge-scale.py.
+
+The game must therefore be launched with a gadget-bearing profile, e.g.
+/home/banon/Elden/pr190-invasion-warp-seamless-frida.me3.
+
+RUN IT (uv provisions frida per-run; nothing is installed system-wide):
+    uv run --with frida python3 /home/banon/projects/er-effects-rs/scripts/frida-dump-module.py --list
+    uv run --with frida python3 /home/banon/projects/er-effects-rs/scripts/frida-dump-module.py --module ersc.dll
 
 SELFTEST (no game, no frida -- proves the assembly logic before a live run is spent on it):
-    python3 scripts/frida-dump-module.py --selftest
+    python3 /home/banon/projects/er-effects-rs/scripts/frida-dump-module.py --selftest
 """
 
 from __future__ import annotations
@@ -37,8 +44,8 @@ import os
 import sys
 from pathlib import Path
 
-TARGET = "eldenring.exe"
-FORBIDDEN = ("start_protected_game.exe", "eac", "easyanticheat")
+#: The gadget's listen address, from target/frida-gadget/frida-gadget.config.
+DEFAULT_GADGET = "127.0.0.1:27042"
 AGENT_JS_PATH = Path(__file__).resolve().parent / "frida-dump-module.agent.js"
 # Big enough that a 5 MB module is a few hundred messages, small enough that no single read
 # holds the target still for long.
@@ -100,7 +107,7 @@ def main() -> int:
     parser.add_argument("--list", action="store_true", help="list loaded modules and exit")
     parser.add_argument("--module", help="module name to dump, e.g. ersc.dll")
     parser.add_argument("--out", help="output path (default: target/runtime-probe/<module>.live.bin)")
-    parser.add_argument("--pid", type=int, default=None, help="attach by PID instead of image name")
+    parser.add_argument("--gadget", default=DEFAULT_GADGET, help=f"frida-gadget address (default {DEFAULT_GADGET})")
     parser.add_argument("--selftest", action="store_true", help="prove the RVA assembly logic")
     args = parser.parse_args()
 
@@ -116,24 +123,28 @@ def main() -> int:
         return 6
 
     try:
-        import frida  # type: ignore[import-not-found]  # windows-only python
+        import frida
     except ImportError:
         print(
-            "ERROR: frida is not importable. Run this under the WINDOWS python, as with "
-            'frida-nudge.py:\n  python.exe "$(wslpath -w scripts/frida-dump-module.py)" ...',
+            "ERROR: frida is not importable. It is deliberately not installed system-wide here; "
+            "uv provisions it per-run:\n"
+            "  uv run --with frida python3 "
+            "/home/banon/projects/er-effects-rs/scripts/frida-dump-module.py --list",
             file=sys.stderr,
         )
         return 7
 
-    target: object = args.pid if args.pid is not None else TARGET
-    if isinstance(target, str) and any(bad in target.lower() for bad in FORBIDDEN):
-        print(f"REFUSING to attach to {target!r}: protected/EAC launcher", file=sys.stderr)
-        return 2
-
+    # Wine/Proton: there is no Linux process to attach to. Connect to the gadget's socket inside
+    # the game instead.
     try:
-        session = frida.attach(target)
+        device = frida.get_device_manager().add_remote_device(args.gadget)
+        session = device.attach("Gadget")
     except Exception as exc:  # frida raises several unrelated types
-        print(f"ERROR: attach to {target!r} failed: {exc}", file=sys.stderr)
+        print(
+            f"ERROR: could not reach frida-gadget at {args.gadget}: {exc}\n"
+            "Is the game running with a profile that includes frida-gadget.dll?",
+            file=sys.stderr,
+        )
         return 3
 
     try:
