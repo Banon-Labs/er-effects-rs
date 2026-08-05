@@ -280,6 +280,10 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             unsafe { own_load_reset_gaitem_singleton(base) };
             if unsafe { own_load_feed_deserialize(base, gm, picked as i32) } {
                 SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(1, Ordering::SeqCst);
+                // Which slot's deserialize completed (slot+1) -- ground truth for the
+                // published-vs-loaded portrait oracle. See er_telemetry counters.
+                er_telemetry::counters::SYSTEM_QUIT_FRESH_DESER_DONE_SLOT
+                    .store(picked + 1, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
                     "native-fullread: DESER-path FEED of picked slot {picked} OK -- c30 now real, gaitem reset; GUARD->COMMIT continue_confirm streams (FRESH_DESER_DONE=1, no double-feed)"
                 ));

@@ -412,6 +412,11 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
     // (e) Latch native_slot_proven BEFORE firing: the continue_confirm hook reads FRESH_DESER_DONE==1
     // to take the forward->SetState5 path (not the no-proof forward) and to prevent any double-feed.
     SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(1, Ordering::SeqCst);
+    // Record WHICH slot's deserialize completed (slot+1). The published-vs-loaded portrait oracle
+    // compares against this, not `GameMan.save_slot` -- ac0 is written by our own `set_save_slot`
+    // above and by the game's own selector, so it does not answer "which character loaded".
+    er_telemetry::counters::SYSTEM_QUIT_FRESH_DESER_DONE_SLOT
+        .store((picked + 1) as usize, Ordering::SeqCst);
     // (f) Re-read the freshly-mounted c30 + fingerprint and fire the GUARDED native continue_confirm
     // (own_load_continue_fire re-guards c30_real && fp_real && owner+0x284==0 internally -- the only
     // save-writing SetState5 is behind that hard guard).
