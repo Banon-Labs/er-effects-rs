@@ -368,7 +368,14 @@ pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hoo
     event_b: usize,
 ) {
     if !system_quit_controller_is_a_quit_row(controller) {
-        // Not a row of the patched Quit tab: vanilla behaviour, untouched.
+        // Not a row of the patched Quit tab: vanilla behaviour, untouched. While the save picker owns
+        // ProfileSelect, use the same event to capture a same-row drive-strip click before forwarding;
+        // the normal ProfileLoad activation hook will consume the pending cell.
+        if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0
+            && unsafe { system_quit_controller_should_invoke_action(controller, event_a) }
+        {
+            unsafe { save_picker_note_drive_strip_click_event(event_a) };
+        }
         unsafe {
             system_quit_forward_button_controller_activation(
                 controller, event_kind, event_a, event_b,

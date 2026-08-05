@@ -1693,9 +1693,11 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
             SAVE_DEST_PICKER_OPEN_RETRY_COUNT.fetch_add(1, Ordering::SeqCst);
         }
     }
-    // MENU-PUMP-OWNED save-picker maintenance: edge-scroll restaging, in-place row rebuild after a
-    // navigation/scroll, and window resubmit after a navigation/pick close (same submit-context rule
-    // as the return-title chain below).
+    // MENU-PUMP-OWNED save-picker maintenance: drive-cell input, native ScrollBarV sync,
+    // edge-scroll restaging, in-place row rebuild after navigation, and window resubmit after a
+    // navigation/pick close (same submit-context rule as the return-title chain below).
+    unsafe { save_picker_menu_pump_drive_strip_mouse() };
+    unsafe { save_picker_menu_pump_native_scrollbar() };
     unsafe { save_picker_menu_pump_edge_scroll() };
     unsafe { save_picker_menu_pump_rebuild() };
     if save_picker_resubmit_pending() {
