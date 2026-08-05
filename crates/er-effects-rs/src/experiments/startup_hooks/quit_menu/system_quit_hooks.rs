@@ -363,33 +363,40 @@ pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
     // CSRemo already pass -> saveRequested is the SOLE blocker. Clear saveState + saveRequested native-
     // flow (let the game run 7->8->9; NOT a forced field25 write, which tore the world down). Movement is
     // already proven, so completing the walk now cannot regress the proof.
-    // REACHABILITY, AND WHY THIS GATE IS DELIBERATELY STILL NARROW (2026-08-05).
+    // REACHABILITY -- AND THIS GATE IS LOAD-BEARING FOR ORDINARY FAST TRAVEL (measured 2026-08-05).
+    //
     // `move_proven_for_reload` reads CAN_MOVE_CONFIRMED, which `can_move_probe::tick` sets ONLY when
-    // the input-harness DLL is loaded ("never fires in a normal user session" -- its own comment), so
-    // in product this block does not run. That is a real limitation and it is recorded, NOT fixed
-    // here.
+    // the input-harness DLL is loaded ("never fires in a normal user session" -- its own comment).
+    // Gated on that ALONE, this block never runs in product, and substate 7 is never satisfied.
     //
-    // It was briefly widened to `move_proven_for_reload || (world_live_for_epoch &&
-    // finalize_walk_underway)`, which made the block LIVE in every normal session: clearing
-    // saveState + saveRequested(0xb72) + companion(0xb73) every frame of any map move, and returning
-    // early past the movable-window preservation below. REVERTED, for two reasons.
+    // I narrowed it to exactly that earlier today, reasoning it had "no active dependent" because
+    // the cVar10 warp-clear DISARM it was introduced alongside is withheld. That reasoning was
+    // WRONG, and the cost was immediate: a plain grace-to-grace fast travel on epoch 1 hung, with
+    // `STEP_MoveMap_Update CALL #7320 epoch=1 mms_step=18 fin12a=7` still repeating after ~198
+    // seconds. Substate 7 advances only when `!ShouldSave() && !FUN_140679370()` -- GameMan+0xb72
+    // AND +0xb73 clear -- and on a warm reload both stay latched, so without this satisfier the
+    // finalize never walks and the loading screen never ends.
     //
-    // 1. It had no active dependent. The only thing that needed this reachability was the cVar10
-    //    warp-clear DISARM, and that disarm is withheld behind #[allow(dead_code)] in this same file
-    //    (releasing GameMan+0x10 without an unconditional case-7 satisfier parks the game on a black
-    //    screen with a frozen character). Half a paired change shipped alone is not inert -- it is a
-    //    live edit to a path nothing is testing. When the disarm is withheld, its enabler is withheld
-    //    with it, and the two land together or not at all.
-    // 2. It was never A/B'd against main. The branch carrying it softlocked the game in the user's
-    //    hands while main autoloaded repeatedly -- and because no control run was ever taken, that
-    //    regression was misread as the feature/environment being broken.
+    // The satisfier and the disarm are SEPARABLE, which is the thing I got wrong. The disarm needs
+    // the satisfier (releasing GameMan+0x10 without it parks the game on a black screen). The
+    // satisfier does NOT need the disarm -- it independently unblocks the save-drain gate that every
+    // post-first load walks through. So the satisfier is reachable in product; the disarm stays
+    // withheld behind #[allow(dead_code)] until it has its own proof.
     //
-    // When this is re-attempted it needs the disarm, an UNCONDITIONAL case-7 satisfier (0xb73
-    // included -- `case 7` needs `!ShouldSave() && !FUN_140679370()`, reading 0xb72 AND 0xb73, and
-    // `case 0` re-sets both every pass), and a main-vs-branch autoload comparison before it ships.
+    // SCOPE (fin 1..=7, not "any fin"). At fin=0 the advancer has not started the walk and there is
+    // nothing to unblock, so clearing there would suppress an autosave the game legitimately asked
+    // for while nothing is warping.
+    //
+    // 0xb73 IS NOT OPTIONAL: `case 0` re-sets BOTH flags every pass via `SaveRequest_Profile(false)`,
+    // so clearing only 0xb72 leaves the gate shut -- hence per-frame rather than once per epoch.
     let move_proven_for_reload = crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
         && crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == epoch;
-    if move_proven_for_reload && (13..=18).contains(&mms_state) {
+    let world_live_for_epoch =
+        crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == epoch;
+    let finalize_walk_underway = (1..=7).contains(&fin);
+    if (move_proven_for_reload || (world_live_for_epoch && finalize_walk_underway))
+        && (13..=18).contains(&mms_state)
+    {
         if let Ok(gm) = unsafe { eldenring::cs::GameMan::instance() } {
             let gm_addr = gm as *const _ as usize;
             let ss = core::mem::offset_of!(eldenring::cs::GameMan, save_state);
@@ -408,7 +415,7 @@ pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
                 core::sync::atomic::AtomicUsize::new(usize::MAX);
             if SATISFY_LOG_EPOCH.swap(epoch, Ordering::SeqCst) != epoch {
                 append_autoload_debug(format_args!(
-                    "case7-savedrain-satisfy: epoch {epoch} move-proven mms={mms_state} fin={fin} -> cleared saveState+saveRequested(0xb72)+companion(0xb73) so the finalize completes 7->8->9 natively (loading mode exits, fps -> load1 parity)"
+                    "case7-savedrain-satisfy: epoch {epoch} move_proven={move_proven_for_reload} world_live={world_live_for_epoch} mms={mms_state} fin={fin} -> cleared saveState+saveRequested(0xb72)+companion(0xb73) so the finalize completes 7->8->9 natively (this is what unblocks ordinary fast travel on epoch>=1)"
                 ));
             }
         }
