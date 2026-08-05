@@ -68,6 +68,16 @@ EXTRA_EVIDENCE_PATHS = (
     "fdd5f467-bf36-402d-bbcd-6defe1f4d0b7/scratchpad/steam-vtable-trace.jsonl",
 )
 
+def _extra_evidence_paths() -> tuple[str, ...]:
+    """Host-side evidence files, indirected so the selftest can switch them off.
+
+    Reading them directly meant the selftest's synthetic fixtures absorbed whatever the last LIVE
+    run had written, so a genuine runtime contradiction could fail a test about fixture logic.
+    A test that depends on the machine's current state is not a test.
+    """
+    return EXTRA_EVIDENCE_PATHS
+
+
 # Where a live run drops its artifacts, and where this session archives them.
 DEFAULT_RUN_DIRS = [
     os.path.expanduser("~/.local/share/Steam/steamapps/common/ELDEN RING/Game"),
@@ -275,6 +285,23 @@ PREDICATES: tuple[Predicate, ...] = (
         # the tracer never attached or attached too late, which is a silence, not a refutation.
         informative_if=(r'"type":\s*"(vcall|iface)"',),
     ),
+    Predicate(
+        name="steam_interface_version_resolved",
+        why=(
+            "WITHOUT THIS THE 10068 RECORDED VTABLE CALLS ARE ANONYMOUS. All 5 interfaces came "
+            "back through SteamInternal_FindOrCreateUserInterface with version=None, because the "
+            "capture used a prefix allowlist that matched nothing -- so every interface was "
+            "labelled by its accessor and none could be told from another. Slot indices without "
+            "an interface identity name no mechanism: slot[29] firing 6908 times is a transport, "
+            "and the targeting call is one of the slots that fired twice. The filter is now any "
+            "'<Name><3 digits>' string, and this run has to show it resolving."
+        ),
+        owner="scripts/frida-steam-vtable-trace.py",
+        # A non-null version on an iface record. NOT satisfied by vcalls: those were already
+        # plentiful while every interface stayed unidentified, which is the exact failure here.
+        log_any=(r'"version":\s*"[A-Za-z][A-Za-z0-9_]{4,40}\d{3}"',),
+        informative_if=(r'"type":\s*"iface"',),
+    ),
 )
 
 
@@ -308,7 +335,7 @@ def load_run(directory: str) -> RunEvidence | None:
         return None
     chunks = []
     paths = [os.path.join(directory, name) for name in DEBUG_LOG_NAMES]
-    paths.extend(EXTRA_EVIDENCE_PATHS)
+    paths.extend(_extra_evidence_paths())
     for path in paths:
         if not os.path.exists(path):
             continue
@@ -480,6 +507,8 @@ def gate(run_dirs: list[str]) -> int:
 def selftest() -> int:
     """The gate must FAIL on an unreachable predicate; a gate that only ever passes is decoration."""
     fails = 0
+    # Fixtures only. See _extra_evidence_paths.
+    globals()["_extra_evidence_paths"] = lambda: ()
 
     def report(ok: bool, label: str) -> None:
         nonlocal fails

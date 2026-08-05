@@ -130,12 +130,19 @@ rpc.exports = {
           onEnter(args) {
             // The interface VERSION string is what pins slot order; capture it so a slot index
             // can be resolved to a method name from the matching SDK header later.
+            // Capture ANY plausible interface-version string, not a prefix allowlist. The
+            // allowlist matched nothing across 10068 recorded calls, so every interface fell
+            // back to being labelled by its accessor and none could be told apart -- a filter
+            // that silently discards the identifying field is worse than no filter, because the
+            // trace still looks like it worked.
             this.version = null;
             for (let a = 0; a < 4; a++) {
               try {
                 const s = args[a].readUtf8String(64);
-                if (s !== null && /^(SteamMatchMaking|SteamNetworking|SteamFriends|SteamUser)/i.test(s)) {
+                // Steam version strings are `<InterfaceName><3 digits>`, e.g. SteamUser023.
+                if (s !== null && /^[A-Za-z][A-Za-z0-9_]{4,40}\d{3}$/.test(s)) {
                   this.version = s;
+                  break;
                 }
               } catch (err) { /* not a string */ }
             }
