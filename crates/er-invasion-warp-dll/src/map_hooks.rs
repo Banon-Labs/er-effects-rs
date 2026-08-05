@@ -1539,9 +1539,24 @@ fn msb_block_targets() -> Vec<er_invasion_warp::invasion_warp::InvasionWarpTarge
         Ok(catalog) => catalog,
         Err(poisoned) => poisoned.into_inner(),
     };
-    catalog
+    // GRANULARITY IS PER-BLOCK FOR THE OVERWORLD AND PER-POINT FOR A LEGACY DUNGEON, because a
+    // "block" means two completely different sizes of place.
+    //
+    // An overworld block is one map tile, so one marker per tile is already fine resolution --
+    // and collapsing is what keeps the `.aip` table's 7073 points down to 365 readable markers.
+    //
+    // A legacy dungeon's block is the WHOLE dungeon. m15 is the entire Haligtree with 88
+    // invasion points; m11 is all of Leyndell with 168. One representative for that is a marker
+    // saying "somewhere in this castle", which throws away everything that makes the feature
+    // worth having there. The user's report was exactly this: warped to the Haligtree and found
+    // a single marker where there should have been dozens.
+    //
+    // Legacy points only ever exist for maps the player has actually been in, so this grows with
+    // where they have been rather than all at once.
+    let mut targets: Vec<_> = catalog
         .block_representatives()
         .into_iter()
+        .filter(|point| !block_area_is_legacy(point.block.raw()))
         .map(|point| {
             er_invasion_warp::invasion_warp::InvasionWarpTarget::new(
                 point.block,
@@ -1550,7 +1565,32 @@ fn msb_block_targets() -> Vec<er_invasion_warp::invasion_warp::InvasionWarpTarge
                 point.yaw,
             )
         })
-        .collect()
+        .collect();
+    targets.extend(
+        catalog
+            .points()
+            .iter()
+            .filter(|point| block_area_is_legacy(point.block.raw()))
+            .map(|point| {
+                er_invasion_warp::invasion_warp::InvasionWarpTarget::new(
+                    point.block,
+                    point.index,
+                    point.position,
+                    point.yaw,
+                )
+            }),
+    );
+    targets
+}
+
+/// Whether a block belongs to a legacy dungeon rather than the open world.
+///
+/// Areas 60 and 61 are the two overworlds and are the only areas the `.aip` table covers;
+/// everything else is a legacy dungeon, cave, catacomb or tunnel.
+#[must_use]
+pub const fn block_area_is_legacy(block_id: u32) -> bool {
+    let area = block_area(block_id);
+    area != 60 && area != er_invasion_warp::param_row::AREA_SHADOW_LANDS
 }
 
 /// MSB invasion-point coverage so far: `(points, maps read)`.
