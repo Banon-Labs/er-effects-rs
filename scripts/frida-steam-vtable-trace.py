@@ -130,21 +130,35 @@ rpc.exports = {
           onEnter(args) {
             // The interface VERSION string is what pins slot order; capture it so a slot index
             // can be resolved to a method name from the matching SDK header later.
-            // Capture ANY plausible interface-version string, not a prefix allowlist. The
-            // allowlist matched nothing across 10068 recorded calls, so every interface fell
-            // back to being labelled by its accessor and none could be told apart -- a filter
-            // that silently discards the identifying field is worse than no filter, because the
-            // trace still looks like it worked.
+            // NO FILTER. Two successive attempts to recognise the version string by shape both
+            // returned null for every interface, so the identifying field stayed lost while the
+            // trace looked like it worked. Capture the raw argument values AND their bytes and
+            // decide what they are offline -- a filter applied at capture time can only throw
+            // away what it failed to anticipate, and there is no second chance at a boot-time
+            // call that happens once.
             this.version = null;
-            for (let a = 0; a < 4; a++) {
+            this.rawArgs = [];
+            for (let a = 0; a < 6; a++) {
+              const rec = { i: a, raw: '<?>', utf8: null, utf16: null, bytes: null };
+              try { rec.raw = args[a].toString(); } catch (err) { /* unreadable */ }
+              // readUtf8String(N) reads EXACTLY N bytes and throws on the non-UTF8 data
+              // past the terminator, which is why two shape-filters above it looked like
+              // they were failing to match when the read itself was failing. readCString
+              // stops at the NUL, which is what a char* argument actually is.
+              try { rec.utf8 = args[a].readCString(); } catch (err) { /* not a string */ }
+              try { rec.utf16 = args[a].readUtf16String(32); } catch (err) { /* not utf16 */ }
               try {
-                const s = args[a].readUtf8String(64);
-                // Steam version strings are `<InterfaceName><3 digits>`, e.g. SteamUser023.
-                if (s !== null && /^[A-Za-z][A-Za-z0-9_]{4,40}\d{3}$/.test(s)) {
-                  this.version = s;
-                  break;
+                const b = args[a].readByteArray(32);
+                if (b !== null) {
+                  rec.bytes = Array.from(new Uint8Array(b))
+                    .map(function (x) { return ('0' + x.toString(16)).slice(-2); }).join('');
                 }
-              } catch (err) { /* not a string */ }
+              } catch (err) { /* unreadable */ }
+              this.rawArgs.push(rec);
+              if (this.version === null && rec.utf8 !== null &&
+                  /^[A-Za-z][A-Za-z0-9_]{3,40}\d{3}$/.test(rec.utf8)) {
+                this.version = rec.utf8;
+              }
             }
           },
           onLeave(retval) {
@@ -155,7 +169,7 @@ rpc.exports = {
             captured[key] = n;
             send({
               type: 'iface', accessor: label, version: this.version,
-              ptr: retval.toString(), slotsHooked: n,
+              ptr: retval.toString(), slotsHooked: n, rawArgs: this.rawArgs,
             });
           },
         });
