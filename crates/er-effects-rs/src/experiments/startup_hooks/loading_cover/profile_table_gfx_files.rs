@@ -1,5 +1,7 @@
 use super::*;
 
+static PROFILE_05_010_EDITOR_GFX_CACHE: OnceLock<Mutex<Vec<Vec<u8>>>> = OnceLock::new();
+
 pub(crate) fn install_profile_select_table_diag_hook() {
     if PROFILE_SELECT_TABLE_DIAG_INSTALLED.load(Ordering::SeqCst) != 0 {
         return;
@@ -402,12 +404,60 @@ pub(crate) unsafe fn title_05_000_swap_to_stripped(base: usize, file: usize) -> 
     true
 }
 
+fn profile_05_010_editor_hot_gfx() -> Result<Option<(usize, usize, u64)>, String> {
+    let Some(editor_dir) = std::env::var_os("ER_PROFILE_05_010_EDITOR_DIR") else {
+        return Ok(None);
+    };
+    let editor_dir = std::path::PathBuf::from(editor_dir);
+    let Some(pi_local_dir) = editor_dir.parent() else {
+        return Ok(None);
+    };
+    let path = pi_local_dir.join("profile-05-010-manual-layout.gfx");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    if !(64..=0x0100_0000).contains(&bytes.len())
+        || bytes.first() != Some(&b'G')
+        || bytes.get(1) != Some(&b'F')
+        || bytes.get(2) != Some(&b'X')
+    {
+        return Err(format!(
+            "{} is not a plausible GFX payload (len={})",
+            path.display(),
+            bytes.len()
+        ));
+    }
+    let fnv = er_gfx::title_05_000::fnv1a64(&bytes);
+    let cache = PROFILE_05_010_EDITOR_GFX_CACHE.get_or_init(|| Mutex::new(Vec::new()));
+    let mut cache = cache
+        .lock()
+        .map_err(|_| "profile editor hot GFX cache poisoned".to_owned())?;
+    if let Some(existing) = cache.iter().find(|existing| {
+        existing.len() == bytes.len() && er_gfx::title_05_000::fnv1a64(existing) == fnv
+    }) {
+        return Ok(Some((existing.as_ptr() as usize, existing.len(), fnv)));
+    }
+    append_autoload_debug(format_args!(
+        "stats-panel: 05_010 editor hot GFX cached {} len={} fnv=0x{fnv:016x}",
+        path.display(),
+        bytes.len()
+    ));
+    cache.push(bytes);
+    let cached = cache
+        .last()
+        .expect("just-pushed 05_010 editor hot GFX cache entry");
+    Ok(Some((cached.as_ptr() as usize, cached.len(), fnv)))
+}
+
 /// Stats-panel 05_010_ProfileSelect runtime edit (mirrors `title_05_000_swap_to_stripped`): derive
 /// the stats-panel movie (face box removed, `ErStats` field added, left column reflowed -- see
 /// `er_gfx::title_05_010`) from the native MemoryFile's own vanilla payload, cache it for the
-/// process lifetime, and swap the native file's data/len/cursor onto the cached buffer. ANY failure
-/// leaves the native file untouched and returns it as-is: fail-closed to the vanilla ProfileSelect
-/// rows (the row-populate hook's push then fails cleanly on the missing field), never a crash,
+/// process lifetime, and swap the native file's data/len/cursor onto the cached buffer. In editor
+/// mode (`ER_PROFILE_05_010_EDITOR_DIR`), prefer the rebuilt `target/pi-local/profile-05-010-manual-layout.gfx`
+/// file and cache each version for the process lifetime, so rebuild-only controls hot-reload on the
+/// next ProfileSelect movie open without rebuilding/reloading the DLL. ANY failure leaves the native
+/// file untouched and returns it as-is: fail-closed to the vanilla/ProfileSelect rows, never a crash,
 /// never a half-edited movie.
 pub(crate) unsafe fn profile_05_010_swap_to_edited(base: usize, file: usize) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -427,6 +477,32 @@ pub(crate) unsafe fn profile_05_010_swap_to_edited(base: usize, file: usize) -> 
             "unexpected file vtable 0x{vtable:x} (want MemoryFile 0x{:x})",
             base + SCALEFORM_MEMORY_FILE_VTABLE_RVA
         ));
+    }
+    match profile_05_010_editor_hot_gfx() {
+        Ok(Some((ptr, len, fnv))) => {
+            unsafe {
+                core::ptr::write(
+                    (file + SCALEFORM_MEMORY_FILE_DATA_OFFSET) as *mut usize,
+                    ptr,
+                );
+                core::ptr::write(
+                    (file + SCALEFORM_MEMORY_FILE_LEN_OFFSET) as *mut u32,
+                    len as u32,
+                );
+                core::ptr::write((file + SCALEFORM_MEMORY_FILE_CURSOR_OFFSET) as *mut u32, 0);
+            }
+            PROFILE_05_010_RUNTIME_EDIT_OUTPUT_LEN.store(len, Ordering::SeqCst);
+            PROFILE_05_010_RUNTIME_EDIT_OUTPUT_VALIDATED.store(3, Ordering::SeqCst);
+            PROFILE_05_010_RUNTIME_EDIT_SERVES.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "stats-panel: 05_010 editor hot GFX served len={len} fnv=0x{fnv:016x}"
+            ));
+            return true;
+        }
+        Ok(None) => {}
+        Err(err) => {
+            return fail(format_args!("editor hot GFX unavailable: {err}"));
+        }
     }
     let edited = match PROFILE_05_010_RUNTIME_EDITED.get() {
         Some(cached) => cached,

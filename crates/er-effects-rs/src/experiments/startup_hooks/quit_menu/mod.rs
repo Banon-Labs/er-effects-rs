@@ -161,6 +161,9 @@ use windows::{
     core::{BOOL, PCSTR, PCWSTR},
 };
 
+pub(crate) mod profile_05_010_editor_runtime;
+pub(crate) use profile_05_010_editor_runtime::*;
+
 pub(crate) mod profile_rows_system_quit_menu;
 pub(crate) use profile_rows_system_quit_menu::*;
 
