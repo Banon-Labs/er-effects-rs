@@ -25,6 +25,7 @@
 #![allow(non_snake_case)]
 
 pub mod drive;
+pub mod lobby_publish;
 pub mod local_invasion_filter;
 #[cfg(windows)]
 pub mod map_gfx;
@@ -197,6 +198,19 @@ fn spawn_catalog_task() {
                             crate::drive::game_has_focus(),
                         );
                     }
+                    // Advertise this host's current map on its own Steam lobby, so an invader can
+                    // ASK for a location instead of sampling and rejecting. Gated internally on the
+                    // block having CHANGED, so a host standing still costs one string compare.
+                    //
+                    // Republishing is the whole point: Seamless writes its advertisement once at
+                    // CreateLobby and never again (measured -- 7 SetLobbyData calls at creation,
+                    // zero after), so a location key written only at creation would go stale the
+                    // moment the host walks away.
+                    //
+                    // No-ops harmlessly when this player is not hosting, when Steam is not ready, or
+                    // when the block cannot be read. Not being findable by location is a missing
+                    // convenience; a DLL that faulted here would be a broken game.
+                    crate::lobby_publish::publish_current_map();
                     // Re-colour pins that already exist. Gated internally on the user's lists
                     // actually having changed, so the steady-state cost is one atomic compare.
                     //

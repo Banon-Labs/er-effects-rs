@@ -93,6 +93,48 @@ mod ersc {
     pub const CANCEL_PROLOGUE: &[u8] = &[
         0xf3, 0x0f, 0x1e, 0xfa, 0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x8b, 0x79, 0x58,
     ];
+    /// `BuildLobbyKey(ctx, std::string* out)` -- produces the `lobby_key` string.
+    ///
+    /// # Why this one matters more than it looks
+    ///
+    /// Seamless finds worlds with a Steam lobby-list query carrying exactly TWO match terms:
+    /// `lobby_type == "yknx3_seamless_master_lobby"` and `lobby_key == <this string>`, the latter
+    /// with `k_ELobbyComparisonEqual`. An exhaustive decode of the XOR-obfuscated string idiom
+    /// across every plaintext function in `ersc.dll` finds only those two keys in the whole module
+    /// -- no map, block, region, coordinate or radius anywhere. So two players who derive DIFFERENT
+    /// `lobby_key` values are simply invisible to each other, no matter how well their levels,
+    /// weapon levels or locations line up.
+    ///
+    /// The value is **64 lowercase hex characters** -- a SHA-256 digest, finalized at
+    /// `ersc+0xac053` from the IV at `ersc+0x1bab00`. The 16-character `%016llX` string is only the
+    /// PLAINTEXT that gets AES-encrypted and then hashed together with a bit from `ctx+0x229` and a
+    /// 32-byte salt at `ersc+0x1dc58f`; printing 16 characters would be printing a heap pointer's
+    /// worth of the wrong thing and would fabricate exactly the "it changed / it didn't" answer
+    /// this probe exists to measure.
+    ///
+    /// The moment it re-derives is jittered (`time() + [ctx+0x918] + rand() % [ctx+0x920]`, at
+    /// `ersc+0xaaf8d`), so a comparison between two machines must use the key that was live when
+    /// the offers arrived, not merely the first one printed.
+    pub const LOBBY_KEY_HEX_LEN: usize = 64;
+    ///
+    /// Called from `ersc+0xaafff` (the filter path, feeding
+    /// `AddRequestLobbyListStringFilter(this, "lobby_key", value, 0)` at `ersc+0xab07e`) and from
+    /// `ersc+0xab0ae` (the publish path, feeding `SetLobbyData`). Both hand it the same stack
+    /// `std::string`. Observed, never altered: publishing a key of our own would change what every
+    /// other Seamless client matches, which is not ours to do.
+    pub const BUILD_LOBBY_KEY_RVA: usize = 0xa_bc20;
+    pub const BUILD_LOBBY_KEY_PROLOGUE: &[u8] = &[
+        0x55, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x81, 0xec,
+        0x48, 0x01, 0x00, 0x00,
+    ];
+    /// MSVC `std::string`: `{ union { char buf[16]; char* ptr; }; size_t size; size_t capacity; }`.
+    /// A capacity of 16 or more means the bytes are on the heap and the first field is a pointer --
+    /// which is always the case here, because the value is exactly 16 characters and the inline
+    /// buffer holds at most 15 plus a terminator.
+    pub const STD_STRING_SIZE_OFFSET: usize = 0x10;
+    pub const STD_STRING_CAPACITY_OFFSET: usize = 0x18;
+    pub const STD_STRING_HEAP_CAPACITY: usize = 0x10;
+
     /// `OSM+0x58` is the session object.
     ///
     /// A `.data` singleton holding OSM would have let this module hook NOTHING in Seamless. One
@@ -202,12 +244,17 @@ fn refresh_config() {
             ));
         } else {
             crate::standalone_log(format_args!(
-                "local-invasion: config loaded enabled={} mode={} named={} ids={} blocks={}",
+                "local-invasion: config loaded enabled={} mode={} named={} ids={} blocks={} \
+                 mark={} unmark={}",
                 outcome.config.enabled,
                 outcome.config.mode.as_str(),
                 outcome.config.named_locations.len(),
                 outcome.config.named_location_text_ids.len(),
                 outcome.config.allowed_blocks.len(),
+                // Which keys are actually live. Without this a mistyped name that happened to parse
+                // into a DIFFERENT valid key looks exactly like the feature not working.
+                er_invasion_warp::keybind::key_name(outcome.config.mark_key),
+                er_invasion_warp::keybind::key_name(outcome.config.unmark_key),
             ));
         }
         // SAY THAT THE TYPED NAMES DO NOTHING YET. `named_locations` is parsed and stored but never
@@ -375,6 +422,166 @@ fn resolve_session() -> Result<SeamlessSession, NoSession> {
         ));
     }
     Ok(SeamlessSession { osm, session })
+}
+
+/// Trampoline for the lobby-key observer.
+static ORIG_BUILD_LOBBY_KEY: AtomicUsize = AtomicUsize::new(0);
+/// Whether the lobby-key observer is installed.
+static LOBBY_KEY_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// FNV-1a of the last key reported, so a re-key is one line and a steady key is silent.
+static LAST_LOBBY_KEY_HASH: AtomicUsize = AtomicUsize::new(0);
+/// How many times the key has been derived, and how many DISTINCT values were seen.
+static LOBBY_KEY_DERIVATIONS: AtomicUsize = AtomicUsize::new(0);
+static LOBBY_KEY_CHANGES: AtomicUsize = AtomicUsize::new(0);
+
+/// Read an MSVC `std::string` as ASCII, or `None` if it is not the shape we expect.
+///
+/// Every read is fault-closed. The value is 16 hex characters, so the heap branch is the only one
+/// that can carry it -- but the inline branch is handled anyway rather than assumed away, because
+/// an assumption here would silently print nothing on a build whose string differs.
+#[cfg(windows)]
+fn read_std_string(at: usize) -> Option<String> {
+    let size = unsafe { er_game_base::mem::safe_read_usize(at + ersc::STD_STRING_SIZE_OFFSET) }?;
+    let capacity =
+        unsafe { er_game_base::mem::safe_read_usize(at + ersc::STD_STRING_CAPACITY_OFFSET) }?;
+    // A key is 16 characters. Anything wildly longer is not the string this was written for, and
+    // reading it would be a walk through memory on a guess.
+    // A SHA-256 hex digest. Anything else is not the string this was written for, and reading it
+    // would be a walk through memory on a guess.
+    if size != ersc::LOBBY_KEY_HEX_LEN || capacity < size {
+        return None;
+    }
+    let data = if capacity >= ersc::STD_STRING_HEAP_CAPACITY {
+        unsafe { er_game_base::mem::safe_read_usize(at) }?
+    } else {
+        at
+    };
+    let mut out = String::with_capacity(size);
+    for index in 0..size {
+        let byte = unsafe { er_game_base::mem::safe_read_u8(data + index) }?;
+        // Printable ASCII only: the value is hex digits, and refusing anything else keeps a wrong
+        // pointer from spraying control bytes into the log.
+        if !(0x20..0x7f).contains(&byte) {
+            return None;
+        }
+        out.push(char::from(byte));
+    }
+    Some(out)
+}
+
+/// FNV-1a, so "did the key change" costs no allocation and no stored string.
+#[cfg(windows)]
+fn hash_of(value: &str) -> usize {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100_0000_01b3);
+    }
+    hash as usize
+}
+
+/// `BuildLobbyKey(ctx, out)` -- observed, never altered.
+///
+/// Runs the original first, then reads the string it produced. Reading BEFORE the call would see
+/// an uninitialised buffer; reading after is the only ordering that can work, and it also means a
+/// fault in our read cannot affect what Seamless publishes.
+#[cfg(windows)]
+unsafe extern "system" fn build_lobby_key_observer(
+    ctx: usize,
+    out: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let orig = ORIG_BUILD_LOBBY_KEY.load(Ordering::SeqCst);
+    if orig == 0 {
+        return 0;
+    }
+    // SAFETY: the trampoline MinHook produced for a byte-verified prologue; same four-argument
+    // shape the union dispatcher uses everywhere else in this module.
+    let result = unsafe { core::mem::transmute::<usize, ErscActionFn>(orig)(ctx, out, c, d) };
+
+    LOBBY_KEY_DERIVATIONS.fetch_add(1, Ordering::SeqCst);
+    if let Some(key) = read_std_string(out) {
+        let hash = hash_of(&key);
+        if LAST_LOBBY_KEY_HASH.swap(hash, Ordering::SeqCst) != hash {
+            let changes = LOBBY_KEY_CHANGES.fetch_add(1, Ordering::SeqCst) + 1;
+            crate::standalone_log(format_args!(
+                "local-invasion: LOBBY KEY = {key} (derivation #{}, distinct value \
+                 #{changes}). ONE key serves both the lobby search filter and the publish, so \
+                 whatever it partitions applies to co-op and invasions alike -- there is no \
+                 invasion-only key in readable code. Two players whose keys differ never see each \
+                 other; compare this line with your friend's. Observed only; nothing here \
+                 publishes or alters a key.",
+                LOBBY_KEY_DERIVATIONS.load(Ordering::SeqCst)
+            ));
+        }
+    } else if LOBBY_KEY_DERIVATIONS.load(Ordering::SeqCst) == 1 {
+        // Say what was actually there. "Could not read it" invites a guess; the length and
+        // capacity say immediately whether the layout moved or the digest size changed.
+        let size =
+            unsafe { er_game_base::mem::safe_read_usize(out + ersc::STD_STRING_SIZE_OFFSET) };
+        let capacity =
+            unsafe { er_game_base::mem::safe_read_usize(out + ersc::STD_STRING_CAPACITY_OFFSET) };
+        crate::standalone_log(format_args!(
+            "local-invasion: the lobby key was derived but did not read back as {} hex characters \
+             (size={size:?} capacity={capacity:?}) -- the std::string at ersc+0x{:x} is not what \
+             this build expects, so the comparison is UNAVAILABLE rather than wrong. Do not treat \
+             a missing line as 'the key did not change'.",
+            ersc::LOBBY_KEY_HEX_LEN,
+            ersc::BUILD_LOBBY_KEY_RVA
+        ));
+    }
+    result
+}
+
+/// Install the lobby-key observer. Idempotent; returns 1 on success.
+///
+/// Separate from the `show` observer because it can fail independently: a Seamless build that moved
+/// this function should cost the comparison, not the filter.
+#[cfg(windows)]
+fn install_lobby_key_observer() -> usize {
+    if LOBBY_KEY_HOOK_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return 0;
+    }
+    let Some(base) = ersc_module_base() else {
+        return 0; // Seamless not loaded yet -- retry next tick
+    };
+    let address = base + ersc::BUILD_LOBBY_KEY_RVA;
+    if !prologue_matches(address, ersc::BUILD_LOBBY_KEY_PROLOGUE) {
+        if LOBBY_KEY_HOOK_INSTALLED.swap(1, Ordering::SeqCst) == 0 {
+            crate::standalone_log(format_args!(
+                "local-invasion: ersc.dll @0x{base:x} does not carry the lobby-key builder this \
+                 build measured -- NOT touching it. The lobby-key comparison is unavailable; \
+                 everything else is unaffected."
+            ));
+        }
+        return 0;
+    }
+    if LOBBY_KEY_HOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
+        return 0;
+    }
+    match unsafe {
+        er_hook::register_union_hook(
+            address,
+            build_lobby_key_observer as er_hook::UnionFn,
+            &ORIG_BUILD_LOBBY_KEY,
+        )
+    } {
+        Ok(()) => {
+            crate::standalone_log(format_args!(
+                "local-invasion: observing ersc lobby-key builder @0x{address:x} (read-only). It \
+                 reports the one string that decides whether two Seamless players can see each \
+                 other at all."
+            ));
+            1
+        }
+        Err(error) => {
+            crate::standalone_log(format_args!(
+                "local-invasion: could not observe the ersc lobby-key builder: {error:?}"
+            ));
+            0
+        }
+    }
 }
 
 /// Install the one ERSC observer. Idempotent; returns 1 on success.
@@ -552,6 +759,27 @@ unsafe extern "system" fn set_join_data_hook(a: usize, b: usize, c: usize, d: us
         return 0;
     }
     unsafe { core::mem::transmute::<usize, ErscActionFn>(orig)(a, b, c, d) }
+}
+
+/// The advertisement lobby's `CSteamID`, read out of the resolved Seamless session.
+///
+/// Exposed so [`crate::lobby_publish`] can publish on the host's own lobby WITHOUT hooking
+/// `CreateLobby`: session resolution already re-validates the module fingerprint and the session
+/// pointer on every use, and duplicating that elsewhere would mean two places to get stale.
+///
+/// A host session creates two lobbies -- one carrying the published data, one carrying the members.
+/// This is the former, which is the one every `SetLobbyData` call was observed targeting.
+#[cfg(windows)]
+#[must_use]
+pub fn advertisement_lobby_id() -> Option<u64> {
+    let session = resolve_session().ok()?;
+    let raw = unsafe {
+        er_game_base::mem::safe_read_usize(
+            session.session + crate::lobby_publish::SESSION_LOBBY_ID_OFFSET,
+        )
+    }?;
+    // A zero id is "no lobby yet", not a lobby whose id happens to be zero.
+    (raw != 0).then_some(raw as u64)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -917,10 +1145,25 @@ fn install_join_hook() -> usize {
 // Hotkeys
 // ---------------------------------------------------------------------------------------------
 
-/// `VK_INSERT`: mark the location you are standing in.
-pub const VK_MARK: i32 = 0x2d;
-/// `VK_DELETE`: un-mark it.
-pub const VK_UNMARK: i32 = 0x2e;
+/// The keys that mark and un-mark, read from the config every poll.
+///
+/// They used to be the hard-coded constants `VK_INSERT`/`VK_DELETE`. A 60% keyboard has NEITHER,
+/// which locked the marking feature out entirely for anyone using one -- so the pair now comes from
+/// `mark_key` / `unmark_key` in the config, by name. Read per poll rather than latched at startup
+/// so a hand-edit takes effect on the same hot reload as every other setting.
+///
+/// Falls back to the historical defaults when the config is unreadable: losing the config should
+/// cost the player their lists, not their keyboard.
+#[cfg(windows)]
+fn mark_keys_in_force() -> (i32, i32) {
+    current_config().map_or(
+        (
+            er_invasion_warp::keybind::VK_INSERT,
+            er_invasion_warp::keybind::VK_DELETE,
+        ),
+        |config| (config.mark_key, config.unmark_key),
+    )
+}
 /// `VK_SHIFT`: held, the mark keys act on the location's NAME instead of its exact block --
 /// "everywhere that shares this name" rather than "this tile".
 #[cfg(windows)]
@@ -973,8 +1216,16 @@ impl MarkKeys {
     /// Shift is read with the DOWN bit only. Consuming its "pressed since" latch would make a
     /// held Shift look released on the second key press.
     fn poll(&mut self) {
-        let mark = Self::edge(VK_MARK, &mut self.mark_was_down);
-        let unmark = Self::edge(VK_UNMARK, &mut self.unmark_was_down);
+        let (mark_key, unmark_key) = mark_keys_in_force();
+        // BOTH edges are read every poll, even when the two keys are the same. `GetAsyncKeyState`
+        // consumes its own "pressed since" latch per call, so skipping one read would eat the
+        // other's edge -- and a config that names one key for both would then fire neither.
+        let mark = Self::edge(mark_key, &mut self.mark_was_down);
+        let unmark = if unmark_key == mark_key {
+            false
+        } else {
+            Self::edge(unmark_key, &mut self.unmark_was_down)
+        };
         if !mark && !unmark {
             return;
         }
@@ -1086,6 +1337,9 @@ fn apply_mark(adding: bool, by_name: bool) {
 pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
     install_join_hook();
     install_show_observer();
+    // Read-only, and independent of the filter: it reports the one string that decides whether two
+    // Seamless players can find each other at all.
+    install_lobby_key_observer();
     if game_has_focus {
         keys.poll();
     } else {
@@ -1097,8 +1351,121 @@ pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
         return;
     };
     trace_session_state(session.session);
+    // Watch WHICH session fields the Themida VM writes, and when. This is the only way left to
+    // learn the invasion state machine: its middle is virtualized, and a live dump proved there is
+    // no plaintext to recover (ersc's .themida is 99.68% identical on disk and in memory, entropy
+    // unchanged -- the original x86 does not exist at runtime).
+    trace_session_field_writes(session.session);
     drive_pending_reinvade(session);
 }
+
+/// The window of the session object that is watched for VM writes.
+///
+/// Chosen to span every field the static read identified plus the unexplained space between them:
+/// state `+0x110`, the lobby id `+0x178` and owner `+0x180`, the per-offer block `+0x190..0x227`,
+/// the `+0x1D4` / `+0x1F0` latches Seek writes, and the `+0x229` flag the lobby key mixes in.
+/// Deliberately NOT `cfg(windows)`: it is plain arithmetic, and the tests that prove the window
+/// still covers every known field have to run on the host build like every other test here.
+const SESSION_WATCH_BEGIN: usize = 0x100;
+const SESSION_WATCH_WORDS: usize = 0x30; // 0x30 * 8 = 0x180 bytes -> 0x100..0x280
+
+/// Previous snapshot, and which session it came from.
+#[cfg(windows)]
+static SESSION_SNAPSHOT: Mutex<Option<(usize, [u64; SESSION_WATCH_WORDS])>> = Mutex::new(None);
+
+/// How many field-change lines have been written, so a churning field cannot flood the log.
+#[cfg(windows)]
+static SESSION_FIELD_LINES: AtomicUsize = AtomicUsize::new(0);
+/// The cap. Generous enough to cover a whole invasion sequence, small enough to stay readable.
+#[cfg(windows)]
+const SESSION_FIELD_LINE_BUDGET: usize = 400;
+
+/// Report which session fields changed since the last frame, with the state they changed under.
+///
+/// # Why this exists
+///
+/// States `0x0E`, `0x11`, `0x12`, `0x13` and `0x14` are written by NO instruction in ersc's
+/// readable code -- a byte-anchored scan for `C7 /0 disp32=0x110 imm32` finds only
+/// `{0,1,3,6,9,0xD,0x22,0x23}`, and the sole register-sourced write produces `0x0C`/`0x15`. The
+/// rest come out of the Themida VM. Reading that code is not available: a live dump of the module
+/// showed `.themida` is 99.68% byte-identical to disk with unchanged entropy, so the original
+/// instructions never exist in memory to be recovered.
+///
+/// What IS available is the effect. Every field the VM writes is written into an object this
+/// module already holds a pointer to, so diffing that object per frame maps the state machine
+/// empirically -- which fields move together, which precede a transition, which carry a
+/// destination -- without reading a single VM instruction.
+///
+/// Pure observation: it reads and logs, and writes nothing back.
+///
+/// # Safety
+/// Game task thread; every read is fault-closed and the window is a fixed span of an object the
+/// caller already validated.
+#[cfg(windows)]
+fn trace_session_field_writes(session: usize) {
+    if SESSION_FIELD_LINES.load(Ordering::SeqCst) >= SESSION_FIELD_LINE_BUDGET {
+        return;
+    }
+    let mut current = [0_u64; SESSION_WATCH_WORDS];
+    for (index, slot) in current.iter_mut().enumerate() {
+        let at = session + SESSION_WATCH_BEGIN + index * 8;
+        // A fault-closed read that fails leaves the slot zero. That could masquerade as a change,
+        // so a failed read abandons the whole snapshot rather than inventing a transition.
+        let Some(value) = (unsafe { er_game_base::mem::safe_read_usize(at) }) else {
+            return;
+        };
+        *slot = value as u64;
+    }
+
+    let mut guard = match SESSION_SNAPSHOT.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let previous = match guard.as_ref() {
+        // A different session object is a different machine; its first frame is a baseline, not a
+        // set of changes.
+        Some((owner, _)) if *owner != session => None,
+        Some((_, snapshot)) => Some(*snapshot),
+        None => None,
+    };
+    *guard = Some((session, current));
+    drop(guard);
+
+    let Some(previous) = previous else {
+        return;
+    };
+    let changed: Vec<(usize, u64, u64)> = (0..SESSION_WATCH_WORDS)
+        .filter(|index| previous[*index] != current[*index])
+        .map(|index| {
+            (
+                SESSION_WATCH_BEGIN + index * 8,
+                previous[index],
+                current[index],
+            )
+        })
+        .collect();
+    if changed.is_empty() {
+        return;
+    }
+    let state = unsafe { er_game_base::mem::safe_read_i32(session + ersc::SESSION_STATE_OFFSET) }
+        .unwrap_or(-1);
+    let line = SESSION_FIELD_LINES.fetch_add(1, Ordering::SeqCst) + 1;
+    crate::standalone_log(format_args!(
+        "local-invasion: session fields changed at state {state:#04x} -- {changed:x?} \
+         (offset, before, after). These are writes this DLL did not make; the ones at offsets with \
+         no readable writer came from the Themida VM. Line {line}/{SESSION_FIELD_LINE_BUDGET}."
+    ));
+    if line == SESSION_FIELD_LINE_BUDGET {
+        crate::standalone_log(format_args!(
+            "local-invasion: session field tracing has hit its {SESSION_FIELD_LINE_BUDGET}-line \
+             budget and will stay quiet from here. Raise SESSION_FIELD_LINE_BUDGET if a longer \
+             sequence is needed; the cap exists so one churning field cannot bury the run."
+        ));
+    }
+}
+
+#[cfg(not(windows))]
+fn trace_session_field_writes(_session: usize) {}
 
 /// `(keeps, cancels, automatic re-searches)` so a run can be judged without reading the log.
 #[must_use]
@@ -1115,34 +1482,61 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_mark_keys_are_insert_and_delete_and_are_distinct_from_the_warp_keys() {
-        assert_eq!(VK_MARK, 0x2d, "VK_INSERT");
-        assert_eq!(VK_UNMARK, 0x2e, "VK_DELETE");
+    fn the_default_mark_keys_are_insert_and_delete_and_are_distinct_from_the_warp_keys() {
+        let defaults = er_invasion_warp::local_invasion::LocalInvasionConfig::default();
+        assert_eq!(defaults.mark_key, 0x2d, "VK_INSERT");
+        assert_eq!(defaults.unmark_key, 0x2e, "VK_DELETE");
         // Sharing a key with the warp driver would make the two pollers eat each other's
         // GetAsyncKeyState "pressed since last call" edge.
+        //
+        // Only the DEFAULTS can be checked here: the keys are configurable now, so a player is free
+        // to name a warp key and collide on purpose. That is their choice to make and the log line
+        // reports which keys are live, but the shipped defaults must not collide out of the box.
         for warp_key in [
             crate::drive::VK_WARP_NEAREST,
             crate::drive::VK_WARP_NEXT,
             crate::drive::VK_WARP_OTHER_AREA,
         ] {
-            assert_ne!(VK_MARK, warp_key);
-            assert_ne!(VK_UNMARK, warp_key);
+            assert_ne!(defaults.mark_key, warp_key);
+            assert_ne!(defaults.unmark_key, warp_key);
         }
     }
 
+    /// A player who names a key must be able to SEE which key is live, or a typo that parsed into
+    /// some other valid key is indistinguishable from the feature being broken.
     #[test]
-    fn this_module_installs_exactly_two_detours_and_only_one_is_in_seamless() {
+    fn the_configured_keys_render_names_a_player_would_recognise() {
+        let defaults = er_invasion_warp::local_invasion::LocalInvasionConfig::default();
+        assert_eq!(
+            er_invasion_warp::keybind::key_name(defaults.mark_key),
+            "Insert"
+        );
+        assert_eq!(
+            er_invasion_warp::keybind::key_name(defaults.unmark_key),
+            "Delete"
+        );
+    }
+
+    #[test]
+    fn this_module_installs_exactly_three_detours_and_both_seamless_ones_are_read_only() {
         // The budget, made explicit so growing it is a decision rather than a drift:
-        //   ORIG_SET_JOIN_DATA -- the GAME's SetMultiplayJoinData, where matches are judged.
-        //   ORIG_SHOW          -- ersc's menu builder, observation only, because OSM has no
-        //                         static to read it out of (see NEXT_OBJECT_OFFSET's docs).
+        //   ORIG_SET_JOIN_DATA    -- the GAME's SetMultiplayJoinData, where matches are judged.
+        //   ORIG_SHOW             -- ersc's menu builder, observation only, because OSM has no
+        //                            static to read it out of (see NEXT_OBJECT_OFFSET's docs).
+        //   ORIG_BUILD_LOBBY_KEY  -- ersc's lobby-key builder, observation only. Grown from two to
+        //                            three deliberately: the key is the single value that decides
+        //                            whether two Seamless players can see each other, it exists
+        //                            only as a stack `std::string` inside one function, and no
+        //                            field holds it afterwards -- so there is nothing to read
+        //                            passively and a hook is the only way to observe it.
         // The two option ACTIONS are deliberately not hooked: they read `rcx` only, so calling
         // them with `(OSM, 0, 1, 1)` needs no captured arguments and therefore no detour.
         let source = include_str!("local_invasion_filter.rs");
         let orig_slots = source.matches("\nstatic ORIG_").count();
-        assert_eq!(orig_slots, 2, "detour budget is two trampolines");
+        assert_eq!(orig_slots, 3, "detour budget is three trampolines");
         assert!(source.contains("\nstatic ORIG_SET_JOIN_DATA"));
         assert!(source.contains("\nstatic ORIG_SHOW"));
+        assert!(source.contains("\nstatic ORIG_BUILD_LOBBY_KEY"));
         for banned in ["ORIG_INVADE_ACTION", "ORIG_CANCEL_ACTION"] {
             assert!(
                 !source.contains(&format!("static {banned}")),
@@ -1150,6 +1544,182 @@ mod tests {
                  past rcx, so there is nothing to capture"
             );
         }
+    }
+
+    /// The lobby-key observer must stay an OBSERVER. Altering `lobby_key` changes what every other
+    /// Seamless client's filter matches, which is not this DLL's to do.
+    ///
+    /// AMENDED 2026-08-06, deliberately and narrowly. The original banned `SetLobbyData(` and
+    /// `AddRequestLobbyListStringFilter(` outright, which was broader than its own stated reason:
+    /// the harm it names is to `lobby_key`, and publishing a SEPARATE namespaced key does not touch
+    /// it. Measured that day: a host publishes 7 keys and an invader filters on 5 of them, and a
+    /// lobby lacking a filtered key is EXCLUDED (baseline 13 lobbies -> 0 with a filter on an
+    /// unpublished key, reproduced). So one extra key is exactly how a location filter can exist,
+    /// and it is invisible to vanilla Seamless players -- they never query it, and their own
+    /// matching is on `lobby_key`, which stays untouched.
+    ///
+    /// What remains absolute: `lobby_key` itself is never written, and no filter is ever added on
+    /// `lobby_key` or `lobby_type`. Those two decide who can see whom at all.
+    #[test]
+    fn the_lobby_key_is_never_published_or_altered() {
+        let code = product_code();
+        // The keys that decide MUTUAL VISIBILITY. Writing or filtering on either changes what other
+        // players match, so they stay banned by name rather than by call.
+        for reserved in ["lobby_key", "lobby_type"] {
+            assert!(
+                !code.contains(&format!("\"{reserved}\"")),
+                "{reserved}: this key decides who can see whom -- publishing or filtering on it \
+                 changes what every other Seamless player matches"
+            );
+        }
+        // And the observer calls the original before reading, so a fault in our read can never
+        // change the key Seamless publishes.
+        let source = include_str!("local_invasion_filter.rs");
+        let observer = source
+            .split("unsafe extern \"system\" fn build_lobby_key_observer")
+            .nth(1)
+            .expect("the observer exists");
+        let body = &observer[..observer.find("\n}\n").unwrap_or(observer.len())];
+        let call_at = body.find("ErscActionFn").expect("calls the trampoline");
+        let read_at = body
+            .find("read_std_string")
+            .expect("reads the produced string");
+        assert!(
+            call_at < read_at,
+            "the original must run before the string is read"
+        );
+    }
+
+    /// This module's SHIPPING code, with comments and the test module removed.
+    ///
+    /// Both exclusions are load-bearing and were learned by the guards failing on themselves:
+    /// * COMMENTS, because these names appear throughout the documentation, where describing what
+    ///   Seamless does is the entire point. A check that cannot tell prose from a call site either
+    ///   fails on its own docs or forces the docs to go quiet about the mechanism.
+    /// * THE TEST MODULE, because a ban list is written in code -- `["lobby_key", ...]` is a string
+    ///   literal, so a guard scanning the whole file trips on the very list that defines it. Both
+    ///   new guards failed exactly that way on first run.
+    fn product_code() -> String {
+        let source = include_str!("local_invasion_filter.rs");
+        let shipping = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(before, _)| before);
+        shipping
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// No invasion target may ever be chosen by WHO the other player is.
+    ///
+    /// # The line, and why it is drawn here rather than left to judgement
+    ///
+    /// Measured 2026-08-06: a lobby query returns a real candidate SET (13 lobbies), ersc picks one
+    /// (index 14, then 7), and `GetLobbyOwner` / `GetLobbyMemberByIndex` are both called on the
+    /// result. So selecting a candidate by SteamID is not merely conceivable -- every primitive it
+    /// needs is already in the process, it needs nothing from the host, and it would work today.
+    ///
+    /// That is exactly what makes it unacceptable. Its one advantage and its one abuse are the SAME
+    /// property: needing nothing from the target. Any consent check would require the target to run
+    /// this DLL, which removes the advantage entirely, so there is no version of it that is both
+    /// useful and safe. And a location is somewhere a player chose to stand; an account is the
+    /// player, everywhere, forever.
+    ///
+    /// The principle this encodes, which generalises past this one call: filtering may DECLINE, it
+    /// may never SELECT A PERSON. Declining removes options from ourselves -- the worst case is not
+    /// invading someone, which the user could do by hand. Selecting imposes on somebody who never
+    /// opted in. `er_map` passes because a host is findable by location only if that host chose to
+    /// broadcast it; consent is structural rather than a policy someone can quietly drop.
+    #[test]
+    fn no_invasion_target_is_ever_chosen_by_steam_id() {
+        let code = product_code();
+        // The primitives that turn a candidate set into a named person. Reading an owner to LOG it
+        // would be equally targetable once the value exists, so the call itself is the line.
+        for banned in [
+            "GetLobbyOwner",
+            "GetLobbyMemberByIndex",
+            "GetNumLobbyMembers",
+            "GetLobbyByIndex",
+        ] {
+            assert!(
+                !code.contains(&format!("{banned}(")),
+                "{banned}: choosing a lobby by who is in it targets a person who never opted in -- \
+                 filtering may decline, it may never select a person"
+            );
+        }
+        // And no allowlist of accounts, however it is spelled.
+        for banned in [
+            "steam_id_allow",
+            "steamid_allow",
+            "target_steam_id",
+            "friend_steam_id",
+        ] {
+            assert!(
+                !code.contains(banned),
+                "{banned}: an account allowlist is person-targeting with extra steps"
+            );
+        }
+    }
+
+    /// The watched window must actually cover the fields the static read identified, or a VM write
+    /// to one of them is invisible and the whole point of the tracing is lost.
+    #[test]
+    fn the_session_watch_window_covers_every_known_field() {
+        let begin = SESSION_WATCH_BEGIN;
+        let end = SESSION_WATCH_BEGIN + SESSION_WATCH_WORDS * 8;
+        for (name, offset) in [
+            ("state", ersc::SESSION_STATE_OFFSET),
+            ("lobby id", 0x178),
+            ("lobby owner", 0x180),
+            ("offer block start", 0x190),
+            ("seek flag", 0x1d4),
+            ("seek latch", 0x1f0),
+            ("offer block end", 0x220),
+            ("lobby-key flag byte", 0x229),
+        ] {
+            assert!(
+                offset >= begin && offset < end,
+                "{name} at {offset:#x} is outside the watched window {begin:#x}..{end:#x}"
+            );
+        }
+    }
+
+    /// The window is read every frame, so it must stay small enough to be free.
+    #[test]
+    fn the_session_watch_window_stays_small() {
+        assert!(
+            SESSION_WATCH_WORDS * 8 <= 0x200,
+            "a per-frame read of this size is no longer negligible"
+        );
+    }
+
+    /// The digest is SHA-256 hex. A probe that expected the 16-character `%016llX` intermediate
+    /// would print a truncation of the wrong string and answer "did the key change" with noise --
+    /// which is the one question this probe exists to answer.
+    #[test]
+    fn the_lobby_key_is_a_sha256_hex_digest_not_the_sixteen_char_intermediate() {
+        assert_eq!(ersc::LOBBY_KEY_HEX_LEN, 64);
+        assert_ne!(ersc::LOBBY_KEY_HEX_LEN, 16);
+    }
+
+    /// The prologue is what proves the module is the build these RVAs describe. A wrong-length or
+    /// drifted constant would either fail to match (inert, fine) or match the wrong bytes (not).
+    #[test]
+    fn the_lobby_key_builder_prologue_is_the_measured_msvc_frame() {
+        // push rbp; push r15..r12; push rsi; push rdi; push rbx; sub rsp, 0x148
+        assert_eq!(
+            ersc::BUILD_LOBBY_KEY_PROLOGUE,
+            &[
+                0x55, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x81,
+                0xec, 0x48, 0x01, 0x00, 0x00
+            ]
+        );
+        assert_eq!(ersc::BUILD_LOBBY_KEY_RVA, 0xa_bc20);
+        // Long enough that it cannot collide with the other two ersc prologues this module knows.
+        assert!(ersc::BUILD_LOBBY_KEY_PROLOGUE.len() > ersc::SHOW_PROLOGUE.len());
+        assert_ne!(ersc::BUILD_LOBBY_KEY_RVA, ersc::SHOW_RVA);
+        assert_ne!(ersc::BUILD_LOBBY_KEY_RVA, ersc::INVADE_ACTION_RVA);
     }
 
     #[test]
