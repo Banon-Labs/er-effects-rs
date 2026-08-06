@@ -225,6 +225,41 @@ pub struct SyntheticParamSpec {
     pub place_name_text_id: i32,
 }
 
+/// Write `icon_id` into EVERY icon slot of a synthetic param row.
+///
+/// # Why all four, and why this is a function
+///
+/// A pin row does not hold one icon. `CS::WorldMapWarpPinData`'s constructor (`0x14088b7b0`) seeds
+/// FOUR 0x40-byte icon descriptors from four separate fields of this param row -- byte-verified
+/// against its own loads:
+///
+/// | param offset | row descriptor |
+/// |--------------|----------------|
+/// | `0x1c`       | `0x248`        |
+/// | `0x10`       | `0x288`        |
+/// | `0xe8`       | `0x2c8`        |
+/// | `0xea`       | `0x308`        |
+///
+/// At draw time `SetTo` asks vtable slot `0xc` (`0x14088bb60`) which descriptor to use, and that
+/// choice depends on an event-flag predicate over the param row -- state a synthetic row does not
+/// model. So the only way to be sure the pin draws the intended icon is for all four to agree.
+///
+/// THIS IS A FUNCTION BECAUSE THE TWO CALLERS DRIFTED. `to_row_bytes` set all four; the
+/// re-stamp that runs when the player marks a location set only `0x1c`. The result was the
+/// reported bug: the log showed the tiers changing correctly on every pin, and the map on screen
+/// never changed, because the descriptor the engine actually read still held the icon from the
+/// FIRST build. One entry point makes that divergence impossible.
+pub fn stamp_icon_id(row: &mut [u8; SYNTHETIC_PARAM_ROW_LEN], icon_id: u16) {
+    for at in [
+        PARAM_ICON_ID_OFFSET,
+        PARAM_FORBIDDEN_ICON_ID_OFFSET,
+        PARAM_ALT_ICON_ID_OFFSET,
+        PARAM_ALT_FORBIDDEN_ICON_ID_OFFSET,
+    ] {
+        row[at..at + 2].copy_from_slice(&icon_id.to_le_bytes());
+    }
+}
+
 impl SyntheticParamSpec {
     /// Serialise into the byte layout the engine reads.
     ///
@@ -240,18 +275,8 @@ impl SyntheticParamSpec {
             .copy_from_slice(&self.subcategory_id.to_le_bytes());
         row[PARAM_CLEARED_EVENT_FLAG_OFFSET..PARAM_CLEARED_EVENT_FLAG_OFFSET + 4]
             .copy_from_slice(&(-1_i32).to_le_bytes());
-        row[PARAM_ICON_ID_OFFSET..PARAM_ICON_ID_OFFSET + 2]
-            .copy_from_slice(&self.icon_id.to_le_bytes());
+        stamp_icon_id(&mut row, self.icon_id);
         row[PARAM_CATEGORY_BITS_OFFSET] = self.category_bits & CATEGORY_BITS_MASK;
-        // Every icon slot the pin can select gets the SAME id, so no branch inside
-        // `GetIconId` can land on a zero and draw nothing. See the offset docs above.
-        for at in [
-            PARAM_FORBIDDEN_ICON_ID_OFFSET,
-            PARAM_ALT_ICON_ID_OFFSET,
-            PARAM_ALT_FORBIDDEN_ICON_ID_OFFSET,
-        ] {
-            row[at..at + 2].copy_from_slice(&self.icon_id.to_le_bytes());
-        }
 
         // Label 0 carries the place name; labels 1..7 are explicitly "none" so the engine
         // renders empty strings rather than resolving whatever happened to be in memory.
@@ -279,6 +304,89 @@ impl SyntheticParamSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// THE REGRESSION, and it shipped. A pin row carries FOUR icon descriptors and the engine picks
+    /// one at draw time from state a synthetic param row does not model. A stamper that updates
+    /// only the first leaves the map showing the icon from the first build forever -- the exact
+    /// reported symptom: correct tiers in the log, no change on screen.
+    #[test]
+    fn stamping_an_icon_sets_every_slot_the_row_constructor_reads() {
+        let mut row = [0_u8; SYNTHETIC_PARAM_ROW_LEN];
+        stamp_icon_id(&mut row, 303);
+        for at in [
+            PARAM_ICON_ID_OFFSET,
+            PARAM_FORBIDDEN_ICON_ID_OFFSET,
+            PARAM_ALT_ICON_ID_OFFSET,
+            PARAM_ALT_FORBIDDEN_ICON_ID_OFFSET,
+        ] {
+            assert_eq!(
+                u16::from_le_bytes([row[at], row[at + 1]]),
+                303,
+                "slot {at:#x} was not stamped; the engine may read this one"
+            );
+        }
+    }
+
+    /// Re-stamping must REPLACE every slot, not leave a stale one behind -- a mark changes the icon
+    /// of a row that already has one.
+    #[test]
+    fn re_stamping_replaces_every_slot_rather_than_leaving_a_stale_one() {
+        let mut row = [0_u8; SYNTHETIC_PARAM_ROW_LEN];
+        stamp_icon_id(&mut row, 300);
+        stamp_icon_id(&mut row, 302);
+        for at in [
+            PARAM_ICON_ID_OFFSET,
+            PARAM_FORBIDDEN_ICON_ID_OFFSET,
+            PARAM_ALT_ICON_ID_OFFSET,
+            PARAM_ALT_FORBIDDEN_ICON_ID_OFFSET,
+        ] {
+            assert_eq!(
+                u16::from_le_bytes([row[at], row[at + 1]]),
+                302,
+                "slot {at:#x} is stale"
+            );
+        }
+    }
+
+    /// The four param offsets are byte-verified against the row constructor's own loads at
+    /// 0x14088b7b0: `MOVZX EAX,word ptr [RAX + 0x1c]` -> `MOV [RSI + 0x248]`, and likewise
+    /// 0x10 -> 0x288, 0xe8 -> 0x2c8, 0xea -> 0x308. If one of these constants is edited, the
+    /// stamper writes somewhere the engine never reads and the map silently stops responding.
+    #[test]
+    fn the_icon_slot_offsets_are_the_ones_the_row_constructor_loads() {
+        assert_eq!(PARAM_ICON_ID_OFFSET, 0x1c);
+        assert_eq!(PARAM_FORBIDDEN_ICON_ID_OFFSET, 0x10);
+        assert_eq!(PARAM_ALT_ICON_ID_OFFSET, 0xe8);
+        assert_eq!(PARAM_ALT_FORBIDDEN_ICON_ID_OFFSET, 0xea);
+    }
+
+    /// A row built from a spec must agree with the stamper -- they are two entry points to the same
+    /// invariant and the bug was precisely that they disagreed.
+    #[test]
+    fn a_freshly_built_row_matches_what_the_stamper_would_write() {
+        let built = SyntheticParamSpec {
+            entity_id: 0x7f00_0000,
+            subcategory_id: 0,
+            icon_id: 303,
+            category_bits: 1,
+            place_name_text_id: 1_234,
+        }
+        .to_row_bytes();
+        let mut stamped = [0_u8; SYNTHETIC_PARAM_ROW_LEN];
+        stamp_icon_id(&mut stamped, 303);
+        for at in [
+            PARAM_ICON_ID_OFFSET,
+            PARAM_FORBIDDEN_ICON_ID_OFFSET,
+            PARAM_ALT_ICON_ID_OFFSET,
+            PARAM_ALT_FORBIDDEN_ICON_ID_OFFSET,
+        ] {
+            assert_eq!(
+                built[at..at + 2],
+                stamped[at..at + 2],
+                "slot {at:#x} disagrees"
+            );
+        }
+    }
 
     fn spec() -> SyntheticParamSpec {
         SyntheticParamSpec {

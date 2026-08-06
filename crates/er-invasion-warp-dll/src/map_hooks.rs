@@ -59,6 +59,7 @@
 //! success is not proof. If a fifth stack argument or a caller-frame-relative read is ever found
 //! in this ctor, the CALL form breaks and this must become a JMP-entry trampoline.
 
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::map_seams::WORLDMAP_VIEWMODEL_CTOR;
@@ -92,9 +93,82 @@ static ORIG_WORLDMAP_VIEWMODEL_CTOR: AtomicUsize = AtomicUsize::new(0);
 /// value above 1 counts MAP MOVES, not layer toggles or map opens.
 static VIEWMODEL_CTOR_HITS: AtomicUsize = AtomicUsize::new(0);
 /// The ViewModel the last injection wrote into. Exactly one is ever alive.
-static LIVE_VIEW_MODEL: AtomicUsize = AtomicUsize::new(0);
+///
+/// Kept only to recognise the object the recorded span belongs to. It is NEVER the authority --
+/// see [`authoritative_view_model`], which reads the engine's own slot.
+pub(crate) static LIVE_VIEW_MODEL: AtomicUsize = AtomicUsize::new(0);
+
+/// `CSPopupMenu+0x250` -- `CS::WorldMapViewModel*`, the engine's single authoritative slot.
+///
+/// Allocated by `FUN_1407ed840` only when this field is NULL, and freed AND NULLED by
+/// `FUN_1407ed790` from `~MoveMapStep`. So reading it live cannot return a destroyed ViewModel,
+/// which a stored pointer very much can: MenuHeap recycles a freed 0x450 block at the same size
+/// class, and its pages stay mapped, so no amount of fault-tolerant reading detects the swap.
+/// That is exactly how 456 rows got written inside other objects on 2026-08-05.
+pub const POPUP_MENU_WORLD_MAP_VIEW_MODEL_OFFSET: usize = 0x250;
+
+/// `WorldMapViewModel+0x08` -- the currently attached `CS::WorldMapDialog`, or null.
+///
+/// `FUN_140886750(viewModel, dialog)` is a compare-and-clear on this field and is called from the
+/// dialog's destructor, so the slot is the engine's own "is the map open" answer. Reading it needs
+/// no hook of ours, which matters: the obvious place to hook (`FUN_1409cef10`) takes SEVEN
+/// arguments, and the union dispatcher forwards four.
+pub const VIEW_MODEL_ATTACHED_DIALOG_OFFSET: usize = 0x08;
+
+/// The live ViewModel, read from the engine's own slot rather than remembered.
+///
+/// `None` means there is no world map right now (no `MoveMapStep`), which is a refusal, not an
+/// error.
+#[cfg(windows)]
+pub(crate) fn authoritative_view_model() -> Option<usize> {
+    use fromsoftware_shared::FromStatic;
+    let menu_man = unsafe { eldenring::cs::CSMenuManImp::instance() }.ok()?;
+    let popup = menu_man.popup_menu?;
+    let view_model = unsafe {
+        er_game_base::mem::safe_read_usize(
+            popup.as_ptr() as usize + POPUP_MENU_WORLD_MAP_VIEW_MODEL_OFFSET,
+        )
+    }?;
+    (view_model != 0).then_some(view_model)
+}
+
+#[cfg(not(windows))]
+pub(crate) fn authoritative_view_model() -> Option<usize> {
+    None
+}
+
+/// Whether a world-map dialog is currently attached to `view_model`.
+///
+/// A dialog holds raw row pointers (`CS::WorldMapWarpData+0x08`) and its clip pool caches the list
+/// base, so it is the thing that must not be alive while rows are being retargeted.
+///
+/// The field is written by exactly two functions, a matched compare-and-set pair, both proven
+/// against the 1.16.2 image: the attach `0x140886540` (`MOV [RCX+0x8],RDX` at `0x14088654a`), whose
+/// only caller is `CS::WorldMapDialogBase`'s constructor at `0x1409beeba`, and the detach
+/// `0x140886750` (`MOV [RCX+0x8],0`) from that dialog's destructor. The `WorldMapViewModel`
+/// constructor `0x1408855b0` zeroes it unconditionally four instructions in. So the slot is null
+/// exactly while no world-map dialog object is alive -- opening the map, not entering the world, is
+/// what closes this gate.
+///
+/// # It fails CLOSED, and the first version did not
+///
+/// An unreadable slot returns `true`. Reading it with `is_some_and` instead reported an unreadable
+/// slot as "no dialog attached" and let the caller write rows -- inverted, because a read that
+/// fails is the case where it is LEAST known whether a dialog is holding raw row pointers into the
+/// buffer about to be retargeted. The `cfg(not(windows))` stub below has always returned `true`;
+/// this is the Windows path agreeing with it.
+#[cfg(windows)]
+pub(crate) fn map_dialog_is_attached(view_model: usize) -> bool {
+    unsafe { er_game_base::mem::safe_read_usize(view_model + VIEW_MODEL_ATTACHED_DIALOG_OFFSET) }
+        .is_none_or(|dialog| dialog != 0)
+}
+
+#[cfg(not(windows))]
+pub(crate) fn map_dialog_is_attached(_view_model: usize) -> bool {
+    true
+}
 /// Choice signature the live rows were last restyled for.
-static LIVE_RESTYLE_SIGNATURE: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static LIVE_RESTYLE_SIGNATURE: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 /// Row count observed on the last ctor return, or `usize::MAX` when never read.
 static OBSERVED_ROW_COUNT: AtomicUsize = AtomicUsize::new(usize::MAX);
@@ -198,7 +272,86 @@ pub const ROW_ENTITY_ID_OFFSET: usize = 0x50;
 /// available: measured 2026-08-05, closing and reopening the world map does NOT re-run the
 /// ViewModel constructor (`opens=2` with no `ctor #3`), so the pin list outlives every open. The
 /// ctor fires on a WORLD ENTRY (travel / area transition) -- not on open, and not on a layer switch.
+///
+/// THIS IS ONE OF FOUR, AND WRITING ONLY IT IS WHY THE MAP DID NOT CHANGE. See
+/// [`ROW_ICON_DESCRIPTOR_OFFSETS`].
 pub const ROW_ICON_ID_OFFSET: usize = 0x248;
+
+/// Every icon descriptor a pin row carries. The drawn frame is the first DWORD of ONE of them, and
+/// the engine — not us — decides which.
+///
+/// `CS::WorldMapWarpPinData` (vftable `0x142ad8228`, `sizeof == 0x350`, which is the row stride)
+/// embeds four 0x40-byte icon descriptors, seeded by its constructor `0x14088b7b0` from four
+/// separate `BonfireWarpParam` fields:
+///
+/// | offset  | seeded from             |
+/// |---------|-------------------------|
+/// | `0x248` | `iconId`                |
+/// | `0x288` | `forbiddenIconId`       |
+/// | `0x2c8` | `altIconId`             |
+/// | `0x308` | `altForbiddenIconId`    |
+///
+/// `CS::WorldMapPinData::SetTo` (`0x14087ae20`) does not read any of them directly. It calls vtable
+/// slot `0xc` — `0x14088bb60` for this class — which returns an INTERIOR POINTER to whichever
+/// descriptor applies, and the drawn frame is that descriptor's first dword. The selection is:
+///
+/// ```text
+///   alt = FUN_140d25b30(this + 0x238, 0)      // over the row's BonfireWarpParam event flags
+///   normal-vs-forbidden = *(u8*)(this + 0x348)
+///   alt && flag -> 0x2c8 | alt && !flag -> 0x308 | !alt && flag -> 0x248 | else -> 0x288
+/// ```
+///
+/// `FUN_140d25b30` walks slots 0..7 of the row's `BonfireWarpParam*` (`+0x240`), checking an event
+/// flag id at `param+0x30/0x3c/0x48/0x54/0x60/0x6c/0x78/0x84` and returning 1 when the matching
+/// byte at `param+0x90+i` is 1. Our synthetic param rows do not model those fields, so WHICH
+/// descriptor the engine reads from is not something this DLL controls.
+///
+/// So every icon write goes to all four. A row we injected should show our marker whatever the
+/// engine concludes about it, and overwriting the "forbidden" variants costs nothing: they exist to
+/// grey out a warp the player has not unlocked, which is meaningless for a pin we invented.
+///
+/// Writing only `0x248` — and as a `u16` — is what produced the reported symptom: the log showed
+/// correct tiers on every pin (`chosen=0 untouched=486 excluded=48`), the rows were rebuilt from
+/// scratch by a fresh injection, and the map still looked identical.
+pub const ROW_ICON_DESCRIPTOR_OFFSETS: [usize; 4] = [0x248, 0x288, 0x2c8, 0x308];
+
+/// Set every icon descriptor on a row, so the drawn frame changes whichever one the engine picks.
+///
+/// The field is a full `u32`: the constructor stores the param's `u16` zero-extended
+/// (`*(uint *)&this->field_0x248 = (uint)iconId`) and the consumer reads a whole dword
+/// (`0x140749cf4: mov edx,[rdx]`). A `u16` write only ever worked by accident, because the upper
+/// half happened to be zero.
+///
+/// # Safety
+/// `row` must be a pin row this DLL owns, already verified against the param slab.
+#[cfg(windows)]
+pub(crate) unsafe fn write_row_icon(row: usize, icon: u16) {
+    for offset in ROW_ICON_DESCRIPTOR_OFFSETS {
+        // SAFETY: the caller established ownership; each offset is the first dword of a descriptor
+        // the row constructor itself initialises, so all four are in-bounds of a 0x350-byte row.
+        unsafe { *((row + offset) as *mut u32) = u32::from(icon) };
+    }
+}
+
+/// The icon the engine would draw from the NORMAL descriptor, as a full dword.
+///
+/// Read back as `u32` to match the write. A `u16` read cannot tell a correctly-written row from one
+/// whose upper half is stale, which would make the "did this stick?" comparison lie.
+///
+/// # Safety
+/// `row` must be a readable pin row.
+#[cfg(windows)]
+pub(crate) unsafe fn read_row_icon(row: usize) -> Option<u32> {
+    // Read as i32 and reinterpret: the field is a dword and `safe_read_u32` does not exist. The
+    // sign is meaningless here -- an icon id is a small positive frame number, and a negative
+    // reading is a value that will simply never equal the id being compared against.
+    unsafe { er_game_base::mem::safe_read_i32(row + ROW_ICON_ID_OFFSET) }
+        .map(|value| value.cast_unsigned())
+}
+/// Row field `+0x60` -- the MAP-LAYER visibility bitmask (bit 0 Lands Between, 1 underground,
+/// 2 Shadow Lands). `UpdateVisible` clears the draw flag unless the active layer's bit is set, so
+/// zero here is an invisible row on every layer.
+pub const ROW_LAYER_MASK_OFFSET: usize = 0x60;
 /// Row field `+0x08` -- `CS::WorldMapPinDataBase`'s per-row id.
 ///
 /// Assigned from a global counter by the base constructor, but COPIED by the copy-ctor, which
@@ -316,9 +469,9 @@ fn row_is_ours(row: usize) -> bool {
 /// pointed into freed MenuHeap, and a live run repainted 456 rows inside memory that had been handed
 /// to something else. Freed heap pages stay MAPPED, so a fault-tolerant read succeeds and returns
 /// whatever now lives there -- the read cannot be the safety net.
-static LIVE_LIST_BEGIN: AtomicUsize = AtomicUsize::new(0);
-static LIVE_SPAN_BEGIN: AtomicUsize = AtomicUsize::new(0);
-static LIVE_SPAN_END: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static LIVE_LIST_BEGIN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static LIVE_SPAN_BEGIN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static LIVE_SPAN_END: AtomicUsize = AtomicUsize::new(0);
 
 /// Bounds of the leaked synthetic param-row slab, used as the row-ownership test.
 ///
@@ -330,7 +483,7 @@ static LIVE_SPAN_END: AtomicUsize = AtomicUsize::new(0);
 /// worth about FOUR BITS: it accepts any word whose high byte is `0x40..0x4F`, i.e. roughly one
 /// garbage word in sixteen. Against ~1500 stale rows that is ~90 false positives per pass, and the
 /// live run produced far more than that. Calling it self-validating did not make it so.
-fn param_slab_bounds() -> Option<(usize, usize)> {
+pub(crate) fn param_slab_bounds() -> Option<(usize, usize)> {
     let begin = SHARED_PARAM_ROWS_PTR.load(Ordering::SeqCst);
     let len = SHARED_PARAM_ROWS_LEN.load(Ordering::SeqCst);
     if begin == 0 || len == 0 {
@@ -346,7 +499,7 @@ fn param_slab_bounds() -> Option<(usize, usize)> {
 ///
 /// Both, not either. The slab test is what makes it safe; the stamp test is what keeps the index
 /// recoverable.
-fn row_is_verifiably_ours(row: usize, slab: (usize, usize)) -> Option<usize> {
+pub(crate) fn row_is_verifiably_ours(row: usize, slab: (usize, usize)) -> Option<usize> {
     let param = unsafe { er_game_base::mem::safe_read_usize(row + ROW_PARAM_POINTER_OFFSET) }?;
     if param < slab.0 || param >= slab.1 {
         return None;
@@ -365,7 +518,7 @@ fn row_is_verifiably_ours(row: usize, slab: (usize, usize)) -> Option<usize> {
 /// without a live row to read.
 ///
 /// NOT an ownership test on its own -- see [`param_slab_bounds`].
-const fn id_is_our_stamp(id: i32) -> bool {
+pub(crate) const fn id_is_our_stamp(id: i32) -> bool {
     let delta = id.wrapping_sub(INJECTED_ROW_ID_BASE);
     delta >= 0 && delta < STAMP_SPACE
 }
@@ -384,7 +537,7 @@ const fn id_is_our_stamp(id: i32) -> bool {
 /// picks the new frame up. Each row keeps a DISTINCT id within a generation, which the same draw
 /// path requires for a different reason: duplicate ids make it skip the rebind and leave one pin's
 /// icon on another pin's coordinates.
-const fn stamped_row_id(generation: u32, index: usize) -> i32 {
+pub(crate) const fn stamped_row_id(generation: u32, index: usize) -> i32 {
     // Low 20 bits index (the largest list measured is ~1000 rows), next 8 the generation. The whole
     // field stays inside the positive space above the base, far from the engine's own counter.
     let packed = ((generation as usize & 0xff) << 20) | (index & 0x000f_ffff);
@@ -394,8 +547,33 @@ const fn stamped_row_id(generation: u32, index: usize) -> i32 {
 /// Size of the id space reserved for our stamps: 8 generation bits over 20 index bits.
 const STAMP_SPACE: i32 = 1 << 28;
 
+/// The dormant row span in the CURRENT ViewModel, and the next unclaimed slot within it.
+pub(crate) static DORMANT_SPAN_BEGIN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static DORMANT_SPAN_END: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static DORMANT_NEXT_SLOT: AtomicUsize = AtomicUsize::new(0);
+
+/// Rows appended beyond the real pin set, held invisible until a later harvest claims one.
+///
+/// THIS IS THE WHOLE ANSWER TO "WITHOUT A WORLD ENTRY". The pin row vector can only be grown by
+/// `FUN_140888aa0`, which has exactly two call sites, both inside the ViewModel constructor -- and
+/// growing frees the old buffer, dangling every raw row pointer a `CS::WorldMapWarpData` holds.
+/// So there is no safe moment to APPEND later, and 20 independent adversarial reviews of a
+/// late-append design all converged on the same conclusion. Refusing to relocate is a property;
+/// guarding a relocation is a check, and a check is what failed on 2026-08-05.
+///
+/// Instead every row that could ever be needed exists from the constructor, and a later change is a
+/// plain in-place field write to a row that is already there. Nothing moves, so nothing dangles.
+///
+/// Sized from what a top-up must absorb: only what becomes resident BETWEEN two world entries.
+/// Warping into a dungeon IS a world entry, so the case that needs headroom is the reported one --
+/// the constructor runs during the loading screen, before the destination's `MsbResCap`s exist, and
+/// that map's points arrive seconds later. The largest single map is 168 raw points; 512 rows
+/// covers it several times over at 0x350 bytes each, i.e. ~424 KiB of MenuHeap against the
+/// ~402 KiB the shipped 420 rows already occupy.
+pub(crate) const DORMANT_ROW_COUNT: usize = 512;
+
 /// Restyle generation, bumped every time the pin tiers actually change.
-static RESTYLE_GENERATION: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static RESTYLE_GENERATION: AtomicUsize = AtomicUsize::new(0);
 
 /// Filter verdicts for OUR rows: how many were asked about, and how many were accepted.
 static FILTER_QUERIES_OURS: AtomicUsize = AtomicUsize::new(0);
@@ -546,7 +724,7 @@ unsafe fn sample_donor(begin: usize, row_count: usize) -> Option<DonorParamField
 /// # Safety
 /// Game thread; `view_model` live.
 #[cfg(windows)]
-unsafe fn project_to_map(
+pub(crate) unsafe fn project_to_map(
     base: usize,
     view_model: usize,
     block_id: u32,
@@ -666,7 +844,11 @@ pub const LAYERED_CONVERTER_COUNT: usize = 3;
 /// never projected into.
 #[cfg(windows)]
 #[must_use]
-fn layer_bit_for_converter(base: usize, converter_index: usize, block_area: u8) -> Option<u8> {
+pub(crate) fn layer_bit_for_converter(
+    base: usize,
+    converter_index: usize,
+    block_area: u8,
+) -> Option<u8> {
     if converter_index >= LAYERED_CONVERTER_COUNT {
         return None;
     }
@@ -736,7 +918,7 @@ pub const PARAM_AREA_NO_OFFSET: usize = 0x20;
 /// # Safety
 /// Game thread; `begin` must point at the first constructed row. Every read is fault-tolerant.
 #[cfg(windows)]
-unsafe fn nearest_place_name_text_id(
+pub(crate) unsafe fn nearest_place_name_text_id(
     begin: usize,
     existing_rows: usize,
     area: u8,
@@ -1126,7 +1308,16 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         // SAFETY: leaked on the first injection and never freed or mutated.
         unsafe { core::slice::from_raw_parts(cached as *const [u8; SYNTHETIC_PARAM_ROW_LEN], len) }
     } else {
-        let mut rows: Vec<[u8; SYNTHETIC_PARAM_ROW_LEN]> = Vec::with_capacity(wanted);
+        // PRE-SIZED WITH DORMANT HEADROOM, and never grown again.
+        //
+        // Every live row's `+0x240` points into this slab, and `row_is_verifiably_ours` -- the
+        // ownership test that exists because the last crash happened without one -- is a 64-bit
+        // containment check against its bounds. A later `Vec` push and re-leak would REALLOCATE,
+        // leaving every existing row pointing at freed Rust heap and making the ownership test
+        // reject every row it should accept. So the headroom is allocated here, once, at the only
+        // moment anything may move.
+        let mut rows: Vec<[u8; SYNTHETIC_PARAM_ROW_LEN]> =
+            Vec::with_capacity(wanted + DORMANT_ROW_COUNT);
         let (mut tier_chosen, mut tier_untouched, mut tier_excluded) = (0_usize, 0, 0);
         for index in 0..wanted {
             let Some(entity_id) = registry.entity_id_at(index) else {
@@ -1223,6 +1414,30 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
                 rows.len()
             ));
         }
+        // The dormant entries. Built here so the slab's length is final before it is leaked --
+        // `into_boxed_slice` shrinks capacity to length, so a slab built with `wanted` entries has
+        // EXACTLY ZERO spare no matter what capacity was reserved, and a top-up that needed one
+        // would refuse forever without ever saying why.
+        //
+        // Their param carries no layer bit and no label, which is belt AND braces: `UpdateVisible`
+        // clears the draw flag when the row's layer mask misses the active map layer, and again
+        // when no label has a non-negative text id. A dormant row is invisible on both counts until
+        // it is claimed.
+        for _ in 0..DORMANT_ROW_COUNT {
+            rows.push(
+                SyntheticParamSpec {
+                    entity_id: 0,
+                    subcategory_id: donor.subcategory_id,
+                    icon_id: er_invasion_warp::param_row::invasion_pin_icon_id_for(
+                        er_invasion_warp::param_row::PinAppearance::Eligible,
+                        crate::map_gfx::red_pin_frame_installed(),
+                    ),
+                    category_bits: 0,
+                    place_name_text_id: -1,
+                }
+                .to_row_bytes(),
+            );
+        }
         let leaked: &'static [[u8; SYNTHETIC_PARAM_ROW_LEN]] = Box::leak(rows.into_boxed_slice());
         crate::local_invasion_filter::log_pin_tier_tally(
             tier_chosen,
@@ -1285,8 +1500,12 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
                 }
                 let desired =
                     er_invasion_warp::param_row::invasion_pin_icon_id_for(appearance, installed);
-                row[PARAM_ICON_ID_OFFSET..PARAM_ICON_ID_OFFSET + 2]
-                    .copy_from_slice(&desired.to_le_bytes());
+                // ALL FOUR icon slots, via the one stamper. Writing only `+0x1c` here -- which is
+                // what this line used to do -- left the other three holding the icon from the FIRST
+                // build, and the engine reads whichever descriptor its own event-flag predicate
+                // selects. That is why marking a location changed every count in the log and
+                // nothing on the map.
+                er_invasion_warp::param_row::stamp_icon_id(row, desired);
             }
             crate::standalone_log(format_args!(
                 "map-inject: re-stamped {} param rows -- chosen={chosen} untouched={untouched} \
@@ -1311,7 +1530,10 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     let reserve: ReserveFn =
         unsafe { core::mem::transmute(base + crate::map_seams::WORLDMAP_PIN_LIST_GROW.rva) };
     let vector = view_model + PIN_VECTOR_OFFSET;
-    unsafe { reserve(vector, wanted) };
+    // Reserve for the dormant rows in the SAME call. This is the only relocation that will ever
+    // happen to this buffer, and it happens at the one moment it is provably safe: no map dialog
+    // exists yet, so no `CS::WorldMapWarpData+0x08` raw row pointer can be left dangling.
+    unsafe { reserve(vector, wanted + DORMANT_ROW_COUNT) };
 
     // Re-read: the reserve moved the buffer.
     let Some(after_reserve) = (unsafe { read_pin_list(view_model) }) else {
@@ -1321,7 +1543,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         ));
         return;
     };
-    if after_reserve.spare_rows() < wanted {
+    if after_reserve.spare_rows() < wanted + DORMANT_ROW_COUNT {
         INJECTIONS_SKIPPED.fetch_add(1, Ordering::SeqCst);
         crate::standalone_log(format_args!(
             "map-inject: reserve gave {} spare rows for {wanted} pins; NOT appending",
@@ -1546,6 +1768,67 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         // MUST use the engine dtor: the temp owns its MenuString and up to 8 label DLStrings.
         unsafe { dtor(temp.0.as_mut_ptr()) };
     }
+
+    // APPEND THE DORMANT ROWS. Same engine ctor/copy-ctor path as a real pin, into capacity the
+    // single reserve above already claimed, so `end` only advances and the buffer never moves.
+    // Their param carries no layer bit and no label, so `UpdateVisible` leaves the draw flag clear
+    // and none of them is visible until a top-up claims it.
+    let mut dormant = 0_usize;
+    let dormant_first = unsafe { er_game_base::mem::safe_read_usize(vector + VECTOR_END_OFFSET) };
+    for slot in 0..DORMANT_ROW_COUNT {
+        let Some(param_row) = param_rows.get(wanted + slot) else {
+            break;
+        };
+        let lookup = BonfireLookupResult {
+            param_id: 0,
+            pad: 0,
+            param_row: param_row.as_ptr(),
+        };
+        // Position is irrelevant while the row is invisible, and a top-up overwrites `+0x10`
+        // before it makes the row visible. Zero is used rather than a real coordinate so a row that
+        // somehow drew without being claimed would be obviously wrong rather than subtly misplaced.
+        let coords = MapCoordinates { x: 0.0, z: 0.0 };
+        let mut temp = TempPinRow([0_u8; PIN_ROW_STRIDE]);
+        unsafe { make_row(temp.0.as_mut_ptr(), &raw const coords, &raw const lookup) };
+        let Some(end) = (unsafe { er_game_base::mem::safe_read_usize(vector + VECTOR_END_OFFSET) })
+        else {
+            unsafe { dtor(temp.0.as_mut_ptr()) };
+            break;
+        };
+        if end != 0 {
+            unsafe { copy_ctor(end as *mut u8, temp.0.as_ptr()) };
+            unsafe {
+                *((end + ROW_ID_OFFSET) as *mut i32) = stamped_row_id(
+                    RESTYLE_GENERATION.load(Ordering::SeqCst) as u32,
+                    wanted + slot,
+                );
+            }
+            unsafe { *((vector + VECTOR_END_OFFSET) as *mut usize) = end + PIN_ROW_STRIDE };
+            dormant += 1;
+        }
+        unsafe { dtor(temp.0.as_mut_ptr()) };
+    }
+    // The previous world entry's top-up claims describe rows that no longer exist, and the registry
+    // just rebuilt covers those blocks itself. Dropping them here keeps the claim table and the slot
+    // counter describing the same set of rows.
+    clear_top_up_targets();
+    if let Some(first) = dormant_first
+        && dormant > 0
+    {
+        DORMANT_SPAN_BEGIN.store(first, Ordering::SeqCst);
+        DORMANT_SPAN_END.store(first + dormant * PIN_ROW_STRIDE, Ordering::SeqCst);
+        DORMANT_NEXT_SLOT.store(0, Ordering::SeqCst);
+        record_injected_span(first, first + dormant * PIN_ROW_STRIDE);
+    } else {
+        DORMANT_SPAN_BEGIN.store(0, Ordering::SeqCst);
+        DORMANT_SPAN_END.store(0, Ordering::SeqCst);
+    }
+    crate::standalone_log(format_args!(
+        "map-inject: reserved {dormant}/{DORMANT_ROW_COUNT} dormant row(s) for later top-ups. These \
+         are appended here because the list can only GROW inside this constructor -- a later append \
+         would relocate the buffer and dangle every raw row pointer a fast-travel dialog holds. A \
+         dungeon harvested mid-session claims one of these in place instead."
+    ));
 
     PINS_INJECTED.store(injected, Ordering::SeqCst);
     if injected > 0 {
@@ -1891,7 +2174,7 @@ pub(crate) unsafe fn harvest_resident_msb_points(frame: u64) {
 /// Per-map rather than per-point deliberately: a legacy dungeon is a single place on the world
 /// map, and 285 catacomb points would stack 285 markers on one icon. This matches the
 /// `PinGranularity::PerBlock` the `.aip` side already uses.
-fn msb_block_targets() -> Vec<er_invasion_warp::invasion_warp::InvasionWarpTarget> {
+pub(crate) fn msb_block_targets() -> Vec<er_invasion_warp::invasion_warp::InvasionWarpTarget> {
     let catalog = match MSB_CATALOG.lock() {
         Ok(catalog) => catalog,
         Err(poisoned) => poisoned.into_inner(),
@@ -1959,7 +2242,12 @@ fn msb_block_targets() -> Vec<er_invasion_warp::invasion_warp::InvasionWarpTarge
             )
         }));
     }
-    if legacy_raw != legacy_merged {
+    // ONCE PER OUTCOME, NOT ONCE PER FRAME. The live top-up calls this function every frame, so an
+    // unconditional line here wrote 35,900 duplicates and 11.8 MB into one session's log -- noise
+    // that buries the lines a diagnosis actually needs, and disk I/O on the game task thread.
+    // Latched on (raw, merged), which changes exactly when the harvest does.
+    let outcome = ((legacy_raw as u64) << 32) | legacy_merged as u64;
+    if legacy_raw != legacy_merged && MERGE_REPORTED.swap(outcome, Ordering::SeqCst) != outcome {
         crate::standalone_log(format_args!(
             "map-msb: {legacy_raw} legacy invasion point(s) across {} map(s) -> {legacy_merged} \
              separable marker(s) after merging anything closer than {:.0}m. The map projects 1:1 in \
@@ -2011,7 +2299,7 @@ static PLACE_NAMES_BY_BLOCK: std::sync::Mutex<
 
 /// Record a resolved place name for a block. `-1` (unresolved) is dropped: an unnamed pin
 /// contributes no name, and storing the sentinel would make "no name" look like a name.
-fn record_place_name(block: u32, place_name_text_id: i32) {
+pub(crate) fn record_place_name(block: u32, place_name_text_id: i32) {
     if place_name_text_id < 0 {
         return;
     }
@@ -2042,7 +2330,119 @@ pub fn registry_place_names_for_block(block: u32) -> Vec<i32> {
 
 /// The injected registry, leaked so the confirm hook can map a synthetic entity id back to its
 /// target for the rest of the session. 0 until the injection runs.
-static INJECTED_REGISTRY: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static INJECTED_REGISTRY: AtomicUsize = AtomicUsize::new(0);
+
+/// The last `(raw << 32 | merged)` point tally the merge report printed, so it prints once per
+/// distinct harvest outcome instead of once per frame.
+static MERGE_REPORTED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(u64::MAX);
+
+/// Warp destinations for pins a LIVE top-up claimed, which the registry cannot describe.
+///
+/// # Why a second table exists at all
+///
+/// [`InvasionRowRegistry::target_for_entity_id`] is a dense index: entity id `BASE + i` means
+/// "element `i`". A top-up claims a dormant row AFTER the registry was leaked, so the only ids left
+/// to hand it are past the end -- and the lookup then MISSES. The confirm hook, correctly, refuses
+/// to pass an unresolvable synthetic id to the native assembler (that is a loading-screen hang), so
+/// without this table a topped-up marker would draw on the map and then do nothing when selected: a
+/// pin that is visible but dead, which is worse than an absent one because it looks like a feature.
+///
+/// The id is stored EXPLICITLY rather than derived from a position, so it stays correct no matter
+/// what the registry's length does afterwards. Cleared wherever the dormant span is re-established,
+/// because that is the moment every claim it describes stops existing.
+pub(crate) static TOP_UP_TARGETS: Mutex<
+    Vec<(i32, er_invasion_warp::invasion_warp::InvasionWarpTarget)>,
+> = Mutex::new(Vec::new());
+
+/// Remember what a topped-up row's synthetic entity id must warp to.
+pub(crate) fn record_top_up_target(
+    entity_id: i32,
+    target: er_invasion_warp::invasion_warp::InvasionWarpTarget,
+) {
+    let mut table = match TOP_UP_TARGETS.lock() {
+        Ok(table) => table,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some(slot) = table.iter_mut().find(|(id, _)| *id == entity_id) {
+        slot.1 = target;
+    } else {
+        table.push((entity_id, target));
+    }
+}
+
+/// The destination for a synthetic id the registry could not resolve, if a top-up claimed it.
+pub(crate) fn top_up_target_for_entity_id(
+    entity_id: i32,
+) -> Option<er_invasion_warp::invasion_warp::InvasionWarpTarget> {
+    let table = match TOP_UP_TARGETS.lock() {
+        Ok(table) => table,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    table
+        .iter()
+        .find(|(id, _)| *id == entity_id)
+        .map(|(_, target)| *target)
+}
+
+/// Points a top-up examined and could not place, for THIS ViewModel.
+///
+/// All three refusal reasons -- no converter accepted the position, no map layer bit, no nearby
+/// named place -- are decided by the converter set and shipped rows of the ViewModel currently on
+/// screen, and neither changes while it lives. Remembering them lets the freshness test empty out,
+/// so the function reaches its cheap early return instead of re-deriving the same refusal on every
+/// frame. Cleared with the claims, because the next ViewModel gets its own answer.
+static TOP_UP_REFUSED: Mutex<std::collections::BTreeSet<(u32, u32)>> =
+    Mutex::new(std::collections::BTreeSet::new());
+
+/// Remember that a point could not be placed on the live map.
+pub(crate) fn record_top_up_refusal(block: u32, point_index: u32) {
+    let mut refused = match TOP_UP_REFUSED.lock() {
+        Ok(refused) => refused,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    refused.insert((block, point_index));
+}
+
+/// The points already found unplaceable against the live map.
+pub(crate) fn top_up_refused_points() -> std::collections::BTreeSet<(u32, u32)> {
+    let refused = match TOP_UP_REFUSED.lock() {
+        Ok(refused) => refused,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    refused.clone()
+}
+
+/// The `(block, point_index)` pairs a top-up has already placed on the live map.
+///
+/// The registry is immutable once leaked, so a claim leaves no trace in it. Without this the
+/// freshness test would keep reporting the same points as new on every single frame and burn a
+/// dormant row each time -- 512 of them gone in about a second, and 512 duplicate markers stacked
+/// on the map before they ran out.
+pub(crate) fn top_up_claimed_points() -> std::collections::BTreeSet<(u32, u32)> {
+    let table = match TOP_UP_TARGETS.lock() {
+        Ok(table) => table,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    table
+        .iter()
+        .map(|(_, target)| (target.block.raw(), target.point_index))
+        .collect()
+}
+
+/// Forget every top-up claim. Called where the dormant span is re-established: the rows those ids
+/// were written into no longer exist, and the fresh registry describes those blocks itself.
+pub(crate) fn clear_top_up_targets() {
+    let mut table = match TOP_UP_TARGETS.lock() {
+        Ok(table) => table,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    table.clear();
+    let mut refused = match TOP_UP_REFUSED.lock() {
+        Ok(refused) => refused,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    refused.clear();
+}
 /// Trampoline to the original warp-job assembler.
 static ORIG_WARP_JOB_ASSEMBLER: AtomicUsize = AtomicUsize::new(0);
 /// Confirms recognised as ours, and how many of those issued a warp.
@@ -2099,13 +2499,17 @@ unsafe extern "system" fn warp_job_assembler_hook(
             // SAFETY: the registry was leaked at injection time and is never freed or mutated.
             let registry: &er_invasion_warp::map_surface::InvasionRowRegistry =
                 unsafe { &*(registry_ptr as *const _) };
-            registry.target_for_entity_id(entity_id)
+            registry.target_for_entity_id(entity_id).copied()
         } else {
             None
-        };
+        }
+        // A live top-up hands out ids PAST the registry's dense range, so the registry cannot know
+        // them. Without this fallback such a pin drew on the map and then did nothing when
+        // selected -- the swallow below would fire with no destination.
+        .or_else(|| top_up_target_for_entity_id(entity_id));
         if let Some(target) = target {
             CONFIRMS_INTERCEPTED.fetch_add(1, Ordering::SeqCst);
-            match unsafe { er_invasion_warp::warp::request_invasion_warp(target) } {
+            match unsafe { er_invasion_warp::warp::request_invasion_warp(&target) } {
                 Ok(outcome) => {
                     CONFIRMS_WARPED.fetch_add(1, Ordering::SeqCst);
                     crate::standalone_log(format_args!(
@@ -2396,130 +2800,6 @@ pub unsafe fn install_map_observers() -> usize {
     }
 }
 
-/// Re-colour the pins that already exist, in place.
-///
-/// # Why this has to exist
-///
-/// Everything else in this module changes what the NEXT ViewModel is built with, and measurement
-/// says there is no next one: closing and reopening the world map does not re-run the constructor
-/// (`opens=2`, no `ctor #3`, live 2026-08-05), and neither does switching map layer -- the ctor is
-/// reachable only from `STEP_MoveMap_Init`. So a mark made while playing could never reach the
-/// screen, no matter how correct the param rows were, and they were correct: the log's tier tally
-/// proved it.
-///
-/// # Why writing the icon alone was not enough
-///
-/// The icon field is not re-read on its own. `SetTo` (0x14087ae20) is what issues the clip's
-/// `GotoAndStop(frame)`, and a clip slot is re-bound only when the draw's cached id differs from
-/// `row+0x08`. Rewriting `row+0x248` therefore updated a field nothing would look at again. Each
-/// repaint below bumps `row+0x08` to a fresh generation as well, which is the write that actually
-/// makes the change appear.
-///
-/// Only rows this DLL injected are touched. Span membership alone is not authorisation to write --
-/// a span outlives its ViewModel, and the block returns to the same heap at the same size class --
-/// so each row must also still carry our own `+0x08` stamp.
-///
-/// Returns `(examined, rewritten)`.
-///
-/// # Safety
-///
-/// Game task thread. Every read is fault-closed; the writes go only to rows inside a span this
-/// module appended and still owns.
-#[cfg(windows)]
-pub unsafe fn restyle_live_pins() -> (usize, usize) {
-    let signature = crate::local_invasion_filter::pin_choice_signature();
-    if LIVE_RESTYLE_SIGNATURE.load(Ordering::SeqCst) == signature {
-        return (0, 0);
-    }
-    // EXACTLY ONE VIEWMODEL, RE-VALIDATED BEFORE ANY WRITE.
-    //
-    // Three independent gates, because the previous single gate was not one: (1) the ViewModel must
-    // be the one the last injection wrote into and its pin list must still be readable and
-    // plausible; (2) that list must still START where it did when we recorded the span -- if it
-    // moved, the buffer was reallocated and every recorded address is meaningless; (3) each row must
-    // point into our own leaked param slab. Only then is a write authorised.
-    let view_model = LIVE_VIEW_MODEL.load(Ordering::SeqCst);
-    let span_begin = LIVE_SPAN_BEGIN.load(Ordering::SeqCst);
-    let span_end = LIVE_SPAN_END.load(Ordering::SeqCst);
-    if view_model == 0 || span_begin == 0 || span_end <= span_begin {
-        return (0, 0);
-    }
-    let Some(geometry) = (unsafe { read_pin_list(view_model) }) else {
-        return (0, 0);
-    };
-    if !geometry.is_plausible() || geometry.begin != LIVE_LIST_BEGIN.load(Ordering::SeqCst) {
-        // The list moved or stopped making sense. Our span addresses describe a buffer that no
-        // longer exists; writing through them is what put 456 repaints into freed memory.
-        return (0, 0);
-    }
-    // And the span must still lie inside the list we just measured.
-    if span_begin < geometry.begin || span_end > geometry.end {
-        return (0, 0);
-    }
-    let Some(slab) = param_slab_bounds() else {
-        return (0, 0);
-    };
-    let registry_ptr = INJECTED_REGISTRY.load(Ordering::SeqCst);
-    if registry_ptr == 0 {
-        return (0, 0);
-    }
-    // SAFETY: leaked at injection time, never freed or mutated.
-    let registry: &er_invasion_warp::map_surface::InvasionRowRegistry =
-        unsafe { &*(registry_ptr as *const _) };
-    let installed = crate::map_gfx::red_pin_frame_installed();
-    let (mut examined, mut rewritten, mut foreign) = (0_usize, 0_usize, 0_usize);
-    let rows: usize = (span_end - span_begin) / PIN_ROW_STRIDE;
-    // One new generation for this whole pass, so every row it repaints gets an id the renderer has
-    // not cached and is forced to re-bind.
-    let generation = (RESTYLE_GENERATION.fetch_add(1, Ordering::SeqCst) + 1) as u32;
-    for row in (span_begin..span_end).step_by(PIN_ROW_STRIDE) {
-        // Ownership by POINTER, not by a four-bit id range. The row must point at a param row inside
-        // the slab this module leaked, at an exact slab stride -- an address only we hand out.
-        let Some(index) = row_is_verifiably_ours(row, slab) else {
-            foreign += 1;
-            continue;
-        };
-        examined += 1;
-        let Some(entity_id) =
-            (unsafe { er_game_base::mem::safe_read_i32(row + ROW_ENTITY_ID_OFFSET) })
-        else {
-            continue;
-        };
-        let block = registry
-            .target_for_entity_id(entity_id)
-            .map(|target| target.block.raw());
-        let desired = er_invasion_warp::param_row::invasion_pin_icon_id_for(
-            crate::local_invasion_filter::pin_appearance_for(block),
-            installed,
-        );
-        let current = unsafe { er_game_base::mem::safe_read_u16(row + ROW_ICON_ID_OFFSET) };
-        if current == Some(desired) {
-            continue;
-        }
-        // SAFETY: `row` is inside a span this module appended and still carries our stamp; both
-        // fields are plain scalars the engine only reads.
-        unsafe { *((row + ROW_ICON_ID_OFFSET) as *mut u16) = desired };
-        // AND BUMP THE RE-BIND TOKEN. Without this the write above is invisible: the draw re-reads
-        // a row's icon only when re-binding its clip, and it re-binds only on an id it has not
-        // cached. This is the difference between "the field says the new frame" and "the map shows
-        // the new frame".
-        unsafe { *((row + ROW_ID_OFFSET) as *mut i32) = stamped_row_id(generation, index) };
-        rewritten += 1;
-    }
-    LIVE_RESTYLE_SIGNATURE.store(signature, Ordering::SeqCst);
-    if rewritten > 0 || examined > 0 || foreign > 0 {
-        crate::standalone_log(format_args!(
-            "map-inject: restyled LIVE pins -- {rewritten} of {examined} repainted at generation \
-             {generation}, {foreign} of {rows} span row(s) REFUSED because they do not point into \
-             our param slab. foreign>0 means the span and the live list disagree and the refusal is \
-             the only thing standing between this and a write into someone else's object. Each \
-             repaint bumps the row's +0x08 re-bind token as well as its icon -- if the map STILL \
-             looks unchanged with rewritten>0, the re-bind is not reaching the clip."
-        ));
-    }
-    (examined, rewritten)
-}
-
 /// Observed row count, or `None` if the ctor has not fired or the stride did not divide.
 #[must_use]
 pub fn observed_row_count() -> Option<usize> {
@@ -2544,6 +2824,56 @@ pub fn row_stride_mismatches() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn target(block: u32, point: u32) -> er_invasion_warp::invasion_warp::InvasionWarpTarget {
+        er_invasion_warp::invasion_warp::InvasionWarpTarget {
+            block: er_invasion_warp::invasion_warp::BlockKey::from_raw(block),
+            point_index: point,
+            position: [1.0, 2.0, 3.0],
+            yaw: 0.0,
+        }
+    }
+
+    /// A live top-up hands out ids the registry's dense index cannot describe. If those ids have no
+    /// destination the confirm hook swallows the warp and the pin is visible but dead -- so the
+    /// fallback table is the difference between a marker and a decoration.
+    #[test]
+    fn an_id_past_the_registrys_range_is_still_resolvable_after_a_top_up_records_it() {
+        clear_top_up_targets();
+        let id = er_invasion_warp::map_surface::INVASION_ENTITY_ID_BASE + 4_000;
+        assert_eq!(top_up_target_for_entity_id(id), None);
+        record_top_up_target(id, target(0x2800_0000, 7));
+        assert_eq!(
+            top_up_target_for_entity_id(id),
+            Some(target(0x2800_0000, 7))
+        );
+        clear_top_up_targets();
+    }
+
+    /// Re-claiming an id must RETARGET it, not leave two answers where the first one wins.
+    #[test]
+    fn recording_the_same_id_twice_replaces_the_destination() {
+        clear_top_up_targets();
+        let id = er_invasion_warp::map_surface::INVASION_ENTITY_ID_BASE + 4_001;
+        record_top_up_target(id, target(0x2800_0000, 1));
+        record_top_up_target(id, target(0x2900_0000, 2));
+        assert_eq!(
+            top_up_target_for_entity_id(id),
+            Some(target(0x2900_0000, 2))
+        );
+        clear_top_up_targets();
+    }
+
+    /// The claims describe rows in one ViewModel's dormant span. Once that span is re-established
+    /// those rows are gone, and a stale answer would warp a NEW pin to an OLD destination.
+    #[test]
+    fn clearing_forgets_every_claim_so_a_rebuilt_span_cannot_inherit_a_stale_destination() {
+        clear_top_up_targets();
+        let id = er_invasion_warp::map_surface::INVASION_ENTITY_ID_BASE + 4_002;
+        record_top_up_target(id, target(0x2800_0000, 3));
+        clear_top_up_targets();
+        assert_eq!(top_up_target_for_entity_id(id), None);
+    }
 
     fn geometry(begin: usize, rows: usize, cap_rows: usize) -> PinListGeometry {
         PinListGeometry {

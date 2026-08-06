@@ -29,6 +29,8 @@ pub mod local_invasion_filter;
 #[cfg(windows)]
 pub mod map_gfx;
 pub mod map_hooks;
+#[cfg(windows)]
+mod map_live_pins;
 pub mod map_seams;
 mod seamless_probe;
 
@@ -198,11 +200,22 @@ fn spawn_catalog_task() {
                     // Re-colour pins that already exist. Gated internally on the user's lists
                     // actually having changed, so the steady-state cost is one atomic compare.
                     //
-                    // SAFETY: same game-task context. Walks the rows this module appended in EVERY
-                    // live map view, and writes only to rows still carrying its own `+0x08` stamp,
-                    // so a span whose ViewModel has been destroyed is skipped rather than written.
+                    // SAFETY: same game-task context. Walks the ONE live ViewModel's span -- read
+                    // from the engine's own `CSPopupMenu+0x250` slot and required to match the one
+                    // the injection recorded -- and writes only to rows that still point into this
+                    // DLL's leaked param slab, so a span whose ViewModel was destroyed is refused.
                     unsafe {
-                        crate::map_hooks::restyle_live_pins();
+                        crate::map_live_pins::restyle_live_pins();
+                    }
+                    // Make blocks harvested SINCE this world entry visible, by retargeting rows the
+                    // constructor already reserved. Refuses unless the engine's own slots agree it
+                    // is safe: the ViewModel read live from `CSPopupMenu+0x250`, no dialog attached,
+                    // and the row list still beginning where our span was recorded.
+                    //
+                    // SAFETY: same game-task context; appends nothing and allocates nothing, so the
+                    // row buffer cannot move and no raw row pointer can dangle.
+                    unsafe {
+                        crate::map_live_pins::top_up_live_pins();
                     }
                 },
                 CSTaskGroupIndex::FrameBegin,
