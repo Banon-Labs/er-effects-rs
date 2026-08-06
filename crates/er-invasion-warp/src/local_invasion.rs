@@ -122,12 +122,66 @@ impl InvasionAnchor {
 }
 
 /// An incoming match, as known at `SetMultiplayJoinData`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InvasionCandidate {
     /// Destination block from `ServerPushJoinData+0x00`.
     pub block: u32,
-    /// Place name resolved for that destination, or [`PLACE_NAME_NONE`] if none resolved.
-    pub place_name: PlaceNameTextId,
+    /// Place names resolved for that destination. Empty when none resolved.
+    ///
+    /// # Why this is a SET and not one id
+    ///
+    /// It used to be a single `PlaceNameTextId`, taken as `.first()` of the resolved list. A block
+    /// can sit under several place names -- [`InvasionAnchor`] has always modelled that correctly
+    /// -- so keeping one of them threw the rest away, and `.first()` over a `BTreeSet` is the
+    /// numerically smallest text id, which is arbitrary. The effect was silent and one-sided: a
+    /// destination that shared the anchor's name via any name but its lowest-numbered one was
+    /// rejected as `WrongPlaceName`, while the anchor side compared against all of its own. Two
+    /// locations under the same name could therefore judge differently depending on which of them
+    /// the player happened to be standing in.
+    pub place_names: BTreeSet<PlaceNameTextId>,
+}
+
+impl InvasionCandidate {
+    /// Build a candidate from a block and every place name resolved for it, dropping
+    /// [`PLACE_NAME_NONE`] -- the same rule [`InvasionAnchor::new`] applies, so the two sides of a
+    /// name comparison cannot disagree about what counts as a name.
+    #[must_use]
+    pub fn new(block: u32, place_names: impl IntoIterator<Item = PlaceNameTextId>) -> Self {
+        Self {
+            block,
+            place_names: place_names
+                .into_iter()
+                .filter(|id| *id != PLACE_NAME_NONE)
+                .collect(),
+        }
+    }
+
+    /// A candidate carrying exactly one name.
+    #[must_use]
+    pub fn named(block: u32, place_name: PlaceNameTextId) -> Self {
+        Self::new(block, [place_name])
+    }
+
+    /// A candidate whose name could not be resolved.
+    ///
+    /// Distinct from "resolved to nothing": both arrive here, but naming the constructor makes the
+    /// test cases that mean "we could not look it up" read as such.
+    #[must_use]
+    pub fn unnamed(block: u32) -> Self {
+        Self::new(block, [])
+    }
+
+    /// Whether any of this candidate's names appears in `names`.
+    #[must_use]
+    fn shares_a_name_with(&self, names: &BTreeSet<PlaceNameTextId>) -> bool {
+        self.place_names.intersection(names).next().is_some()
+    }
+
+    /// How many names resolved for this destination.
+    #[must_use]
+    pub fn named_location_count(&self) -> usize {
+        self.place_names.len()
+    }
 }
 
 /// What to do with a candidate, and why. The reason is carried so a rejection can be logged with
@@ -270,7 +324,7 @@ impl LocalInvasionConfig {
     /// Marks never reject on their own. An empty mark list therefore leaves the mode entirely in
     /// charge, and `named` mode with an empty list still fails closed further down.
     #[must_use]
-    pub fn judge(&self, anchor: &InvasionAnchor, candidate: InvasionCandidate) -> Verdict {
+    pub fn judge(&self, anchor: &InvasionAnchor, candidate: &InvasionCandidate) -> Verdict {
         if !self.enabled {
             return Verdict::Keep(KeepReason::FilterDisabled);
         }
@@ -283,9 +337,7 @@ impl LocalInvasionConfig {
         if self.allowed_blocks.contains(&candidate.block) {
             return Verdict::Keep(KeepReason::MarkedBlock);
         }
-        if candidate.place_name != PLACE_NAME_NONE
-            && self.named_location_text_ids.contains(&candidate.place_name)
-        {
+        if candidate.shares_a_name_with(&self.named_location_text_ids) {
             return Verdict::Keep(KeepReason::NamedLocation);
         }
         match self.mode {
@@ -303,10 +355,10 @@ impl LocalInvasionConfig {
                 if anchor.place_names.is_empty() {
                     return Verdict::Reject(RejectReason::NothingToMatchAgainst);
                 }
-                if candidate.place_name == PLACE_NAME_NONE {
+                if candidate.place_names.is_empty() {
                     return Verdict::Reject(RejectReason::CandidateUnnamed);
                 }
-                if anchor.place_names.contains(&candidate.place_name) {
+                if candidate.shares_a_name_with(&anchor.place_names) {
                     Verdict::Keep(KeepReason::SharedPlaceName)
                 } else {
                     Verdict::Reject(RejectReason::WrongPlaceName)
@@ -316,7 +368,7 @@ impl LocalInvasionConfig {
                 if self.named_location_text_ids.is_empty() {
                     return Verdict::Reject(RejectReason::NothingToMatchAgainst);
                 }
-                if candidate.place_name == PLACE_NAME_NONE {
+                if candidate.place_names.is_empty() {
                     return Verdict::Reject(RejectReason::CandidateUnnamed);
                 }
                 // A listed name was already accepted above; reaching here means it was not listed.
@@ -382,6 +434,93 @@ impl LocalInvasionConfig {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_destination_matches_on_any_of_its_names_not_just_the_lowest_numbered_one() {
+        // THE TRUNCATION BUG, fixed 2026-08-06. The candidate used to carry ONE name, taken as
+        // `.first()` of the resolved list -- over a `BTreeSet` that is the numerically smallest id,
+        // which has no meaning. A destination sitting under two names, only the higher of which the
+        // anchor shares, was rejected as `WrongPlaceName` while the anchor side compared against
+        // every name it had. The comparison was one-sided, so the same pair of locations judged
+        // differently depending on which one the player stood in.
+        let config = LocalInvasionConfig {
+            enabled: true,
+            mode: LocalInvasionMode::PreferExactThenArea,
+            ..LocalInvasionConfig::default()
+        };
+        let anchor = InvasionAnchor::new(0x0f00_0000, [900]);
+        // 100 is the lower id and does NOT match; 900 does. Truncation would have kept only 100.
+        let two_names = InvasionCandidate::new(0x2000_0000, [100, 900]);
+        assert_eq!(
+            config.judge(&anchor, &two_names),
+            Verdict::Keep(KeepReason::SharedPlaceName),
+            "a shared name must match whichever position it holds"
+        );
+    }
+
+    #[test]
+    fn the_name_comparison_is_symmetric_between_anchor_and_destination() {
+        // Same two locations, roles swapped. Both directions must agree, which is the property
+        // truncating one side silently broke.
+        let config = LocalInvasionConfig {
+            enabled: true,
+            mode: LocalInvasionMode::PreferExactThenArea,
+            ..LocalInvasionConfig::default()
+        };
+        let here = (0x0f00_0000u32, [100, 900]);
+        let there = (0x2000_0000u32, [900, 4200]);
+        let forward = config.judge(
+            &InvasionAnchor::new(here.0, here.1),
+            &InvasionCandidate::new(there.0, there.1),
+        );
+        let backward = config.judge(
+            &InvasionAnchor::new(there.0, there.1),
+            &InvasionCandidate::new(here.0, here.1),
+        );
+        assert_eq!(
+            forward, backward,
+            "judging must not depend on which end you stand at"
+        );
+        assert_eq!(forward, Verdict::Keep(KeepReason::SharedPlaceName));
+    }
+
+    #[test]
+    fn a_configured_named_location_matches_any_of_the_destinations_names() {
+        // The `named_location_text_ids` path had the same truncation: it tested one id against the
+        // list, so a listed name in any other position was missed.
+        let mut config = LocalInvasionConfig {
+            enabled: true,
+            mode: LocalInvasionMode::NamedOnly,
+            ..LocalInvasionConfig::default()
+        };
+        config.named_location_text_ids.insert(900);
+        assert_eq!(
+            config.judge(
+                &InvasionAnchor::new(0x0f00_0000, []),
+                &InvasionCandidate::new(0x2000_0000, [100, 900]),
+            ),
+            Verdict::Keep(KeepReason::NamedLocation)
+        );
+    }
+
+    #[test]
+    fn an_unresolvable_name_is_still_refused_rather_than_treated_as_a_wildcard() {
+        // The fix must not turn "we could not look it up" into "it matches". An unnamed
+        // destination is unknown, not universal -- accepting it would land the player somewhere
+        // they explicitly filtered against, which is worse than the rejection it replaces.
+        let config = LocalInvasionConfig {
+            enabled: true,
+            mode: LocalInvasionMode::PreferExactThenArea,
+            ..LocalInvasionConfig::default()
+        };
+        assert_eq!(
+            config.judge(
+                &InvasionAnchor::new(0x0f00_0000, [900]),
+                &InvasionCandidate::unnamed(0x2000_0000),
+            ),
+            Verdict::Reject(RejectReason::CandidateUnnamed)
+        );
+    }
+
     fn anchor() -> InvasionAnchor {
         InvasionAnchor::new(0x0f00_0000, [100, 200])
     }
@@ -393,12 +532,9 @@ mod tests {
             mode: LocalInvasionMode::ExactOnly,
             ..Default::default()
         };
-        let far = InvasionCandidate {
-            block: 0x3c35_3800,
-            place_name: 999,
-        };
+        let far = InvasionCandidate::named(0x3c35_3800, 999);
         assert_eq!(
-            config.judge(&anchor(), far),
+            config.judge(&anchor(), &far),
             Verdict::Keep(KeepReason::FilterDisabled),
             "a switched-off filter must never cancel someone's match"
         );
@@ -420,24 +556,12 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            config.judge(
-                &anchor(),
-                InvasionCandidate {
-                    block: 0x0f00_0000,
-                    place_name: 100
-                }
-            ),
+            config.judge(&anchor(), &InvasionCandidate::named(0x0f00_0000, 100)),
             Verdict::Keep(KeepReason::ExactBlock)
         );
         // Same NAME, different block: exact mode still refuses.
         assert_eq!(
-            config.judge(
-                &anchor(),
-                InvasionCandidate {
-                    block: 0x0f01_0000,
-                    place_name: 100
-                }
-            ),
+            config.judge(&anchor(), &InvasionCandidate::named(0x0f01_0000, 100)),
             Verdict::Reject(RejectReason::WrongBlock)
         );
     }
@@ -450,34 +574,16 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            config.judge(
-                &anchor(),
-                InvasionCandidate {
-                    block: 0x0f00_0000,
-                    place_name: 777
-                }
-            ),
+            config.judge(&anchor(), &InvasionCandidate::named(0x0f00_0000, 777)),
             Verdict::Keep(KeepReason::ExactBlock),
             "the exact block passes regardless of its name"
         );
         assert_eq!(
-            config.judge(
-                &anchor(),
-                InvasionCandidate {
-                    block: 0x0f02_0000,
-                    place_name: 200
-                }
-            ),
+            config.judge(&anchor(), &InvasionCandidate::named(0x0f02_0000, 200)),
             Verdict::Keep(KeepReason::SharedPlaceName)
         );
         assert_eq!(
-            config.judge(
-                &anchor(),
-                InvasionCandidate {
-                    block: 0x0f02_0000,
-                    place_name: 300
-                }
-            ),
+            config.judge(&anchor(), &InvasionCandidate::named(0x0f02_0000, 300)),
             Verdict::Reject(RejectReason::WrongPlaceName)
         );
     }
@@ -509,10 +615,7 @@ mod tests {
         assert_eq!(
             config.judge(
                 &anchor(),
-                InvasionCandidate {
-                    block: 0x2000_0000,
-                    place_name: PLACE_NAME_NONE
-                }
+                &InvasionCandidate::named(0x2000_0000, PLACE_NAME_NONE)
             ),
             Verdict::Reject(RejectReason::CandidateUnnamed),
             "no resolvable name means unknown, not universal"
@@ -529,10 +632,7 @@ mod tests {
         assert_eq!(
             no_names.judge(
                 &InvasionAnchor::new(0x0f00_0000, []),
-                InvasionCandidate {
-                    block: 0x2000_0000,
-                    place_name: 100
-                }
+                &InvasionCandidate::named(0x2000_0000, 100)
             ),
             Verdict::Reject(RejectReason::NothingToMatchAgainst),
         );
@@ -542,13 +642,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            empty_list.judge(
-                &anchor(),
-                InvasionCandidate {
-                    block: 0x0f00_0000,
-                    place_name: 100
-                }
-            ),
+            empty_list.judge(&anchor(), &InvasionCandidate::named(0x0f00_0000, 100)),
             Verdict::Reject(RejectReason::NothingToMatchAgainst),
             "named mode with an empty list must not silently accept everything"
         );
@@ -563,12 +657,9 @@ mod tests {
             mode: LocalInvasionMode::ExactOnly,
             ..Default::default()
         };
-        let far = InvasionCandidate {
-            block: 0x3c35_3800,
-            place_name: 999,
-        };
+        let far = InvasionCandidate::named(0x3c35_3800, 999);
         assert_eq!(
-            config.judge(&anchor(), far),
+            config.judge(&anchor(), &far),
             Verdict::Reject(RejectReason::WrongBlock)
         );
         assert!(
@@ -576,7 +667,7 @@ mod tests {
             "first mark changes something"
         );
         assert_eq!(
-            config.judge(&anchor(), far),
+            config.judge(&anchor(), &far),
             Verdict::Keep(KeepReason::MarkedBlock)
         );
         assert!(
@@ -585,7 +676,7 @@ mod tests {
         );
         assert!(config.unmark_block(0x3c35_3800));
         assert_eq!(
-            config.judge(&anchor(), far),
+            config.judge(&anchor(), &far),
             Verdict::Reject(RejectReason::ExcludedByUser),
             "Delete now EXCLUDES rather than reverting to neutral -- it used to be a no-op on \
              anything not already chosen, which left no way to say \"not here\""
@@ -593,7 +684,7 @@ mod tests {
         // The two keys are inverses: Insert on an excluded location takes it back.
         assert!(config.mark_block(0x3c35_3800));
         assert_eq!(
-            config.judge(&anchor(), far),
+            config.judge(&anchor(), &far),
             Verdict::Keep(KeepReason::MarkedBlock)
         );
         assert!(
@@ -629,17 +720,14 @@ mod tests {
             mode: LocalInvasionMode::PreferExactThenArea,
             ..Default::default()
         };
-        let same_name = InvasionCandidate {
-            block: 0x0f02_0000,
-            place_name: 200,
-        };
+        let same_name = InvasionCandidate::named(0x0f02_0000, 200);
         assert_eq!(
-            config.judge(&anchor(), same_name),
+            config.judge(&anchor(), &same_name),
             Verdict::Keep(KeepReason::SharedPlaceName)
         );
         config.unmark_block(0x0f02_0000);
         assert_eq!(
-            config.judge(&anchor(), same_name),
+            config.judge(&anchor(), &same_name),
             Verdict::Reject(RejectReason::ExcludedByUser),
             "an explicit \"not here\" has to outrank the mode, or Delete would be advisory"
         );
@@ -655,18 +743,15 @@ mod tests {
         // anchor() carries 100 and 200: "two names, two places to look".
         assert_eq!(config.mark_place_names(&anchor()), 2);
         assert_eq!(config.mark_place_names(&anchor()), 0, "already marked");
-        let elsewhere_same_name = InvasionCandidate {
-            block: 0x9999_0000,
-            place_name: 200,
-        };
+        let elsewhere_same_name = InvasionCandidate::named(0x9999_0000, 200);
         assert_eq!(
-            config.judge(&anchor(), elsewhere_same_name),
+            config.judge(&anchor(), &elsewhere_same_name),
             Verdict::Keep(KeepReason::NamedLocation),
             "a marked name has to widen exact mode, not sit inert until the mode changes"
         );
         assert_eq!(config.unmark_place_names(&anchor()), 2);
         assert_eq!(
-            config.judge(&anchor(), elsewhere_same_name),
+            config.judge(&anchor(), &elsewhere_same_name),
             Verdict::Reject(RejectReason::WrongBlock)
         );
     }
@@ -691,13 +776,7 @@ mod tests {
         let mut config = LocalInvasionConfig::default();
         config.mark_block(0x3c35_3800);
         assert_eq!(
-            config.judge(
-                &anchor(),
-                InvasionCandidate {
-                    block: 0x1234_0000,
-                    place_name: 7
-                }
-            ),
+            config.judge(&anchor(), &InvasionCandidate::named(0x1234_0000, 7)),
             Verdict::Keep(KeepReason::FilterDisabled),
             "marks widen a filter that is ON; they must not switch one on"
         );
@@ -716,24 +795,12 @@ mod tests {
         };
         // The anchor's own block, but not a listed name -> rejected.
         assert_eq!(
-            config.judge(
-                &anchor(),
-                InvasionCandidate {
-                    block: 0x0f00_0000,
-                    place_name: 100
-                }
-            ),
+            config.judge(&anchor(), &InvasionCandidate::named(0x0f00_0000, 100)),
             Verdict::Reject(RejectReason::NotNamed)
         );
         // Far from the anchor, but listed -> kept.
         assert_eq!(
-            config.judge(
-                &anchor(),
-                InvasionCandidate {
-                    block: 0x3c35_3800,
-                    place_name: 500
-                }
-            ),
+            config.judge(&anchor(), &InvasionCandidate::named(0x3c35_3800, 500)),
             Verdict::Keep(KeepReason::NamedLocation)
         );
     }

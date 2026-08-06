@@ -51,10 +51,27 @@ import sys
 import threading
 
 GADGET = "127.0.0.1:27042"
-DEFAULT_OUT = (
-    "/tmp/claude-1000/-home-banon-projects-er-effects-rs/"
-    "fdd5f467-bf36-402d-bbcd-6defe1f4d0b7/scratchpad/steam-filter-probe.jsonl"
-)
+
+
+def _default_out() -> str:
+    """Where the capture lands, without baking one machine's session directory into the tool.
+
+    The previous default was an absolute path containing a specific user, a specific uid and a
+    specific agent session id. It worked exactly once, in the session that wrote it: any later run
+    -- another user, another session, the same user after a reboot -- would have written into a
+    directory that no longer meant anything. `ER_PROBE_OUT_DIR` overrides; otherwise the capture
+    goes next to the repo's other run artefacts, found by walking up from this file rather than
+    assuming a checkout location.
+    """
+    override = os.environ.get("ER_PROBE_OUT_DIR")
+    if override:
+        return os.path.join(override, "steam-filter-probe.jsonl")
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo = os.path.dirname(here)
+    return os.path.join(repo, "target", "steam-probe", "steam-filter-probe.jsonl")
+
+
+DEFAULT_OUT = _default_out()
 
 #: A key no Seamless host publishes. Deliberately namespaced so it cannot collide with a real key
 #: if Seamless ever adds one, and so it is obvious in a capture that it came from this probe.
@@ -72,6 +89,10 @@ let iface = null, vt = null;
 let addFilter = null, getByIndex = null;
 let injecting = false, probeKey = null, probeValue = null;
 let armedFilters = 0;
+// Our own lobby id, lower-case hex WITHOUT the 0x, or null when the caller did not supply one.
+// Compared against the returned set so "did my own lobby come back" is a measured field rather
+// than something read off a list by eye.
+let ownLobby = null;
 
 // Bounded so a bogus count can never spin: a Seamless query has never been observed returning
 // anything near this, and an unbounded walk inside a live process is its own hazard.
@@ -82,7 +103,7 @@ const POLL_MS = 250, POLL_TICKS = 40;   // 10 seconds
 
 function slotFn(i) { return vt.add(i * Process.pointerSize).readPointer(); }
 
-// SELF-CONTAMINATION GUARD. Our own countResults() calls go through the SAME GetLobbyByIndex hook
+// SELF-CONTAMINATION GUARD. Our own collectResults() calls go through the SAME GetLobbyByIndex hook
 // that records ersc's choice, so without this every probe iteration was logged as an 'ersc-pick'.
 // Measured 2026-08-06: one real pick (index 7) was followed by ~550 of our own, and the derived
 // "ersc asked for index 13, so there are >=14 results" was reading OUR probe's own final
@@ -90,12 +111,19 @@ function slotFn(i) { return vt.add(i * Process.pointerSize).readPointer(); }
 // numbers that look like measurements and are not.
 let inOurProbe = false;
 
-// How many lobbies are currently in the result set. Probes indices until Steam returns the nil
+// WHICH lobbies are currently in the result set. Probes indices until Steam returns the nil
 // CSteamID, which is what an out-of-range index yields.
-function countResults() {
-  if (getByIndex === null) return -1;
+//
+// The IDENTITIES are kept, not just the count, because a count cannot answer the question a
+// single-machine run turns on: does a query return YOUR OWN lobby? If it does, a host that
+// publishes a location key and then hunts for that same location proves the whole loop -- publish,
+// filter, match -- without a second player. If it does not, a solo filtered search is zero by
+// construction and can only ever prove the filter went out. The first version of this probe
+// recorded indices alone and could not tell those two worlds apart.
+function collectResults() {
+  if (getByIndex === null) return { n: -1, ids: [] };
   const out = Memory.alloc(8);
-  let n = 0;
+  const ids = [];
   inOurProbe = true;
   try {
     for (let i = 0; i < MAX_INDEX; i++) {
@@ -104,36 +132,41 @@ function countResults() {
         getByIndex(iface, out, i);
         const id = out.readU64();
         if (id.compare(0) === 0) break;
-        n++;
+        ids.push(id.toString(16));
       } catch (e) { break; }
     }
   } finally { inOurProbe = false; }
-  return n;
+  return { n: ids.length, ids: ids };
 }
 
 let polling = false;
 function pollAfterQuery(tag) {
   if (polling) return;
   polling = true;
-  let ticks = 0, best = 0, sawErscPick = false;
+  let ticks = 0, best = 0, bestIds = [];
   const t = setInterval(function () {
     ticks++;
-    const n = countResults();
-    if (n > best) best = n;
+    const got = collectResults();
+    // Keep the identities from the SAME tick as the high-water count, so the list and the number
+    // can never describe two different moments.
+    if (got.n > best) { best = got.n; bestIds = got.ids; }
     if (ticks >= POLL_TICKS) {
       clearInterval(t);
       polling = false;
       send({ type: 'count', tag: tag, results: best, ticks: ticks,
              window_ms: POLL_MS * POLL_TICKS, filter_injected: injecting,
-             filters_added: armedFilters });
+             filters_added: armedFilters, lobbies: bestIds,
+             own_lobby: ownLobby,
+             own_lobby_returned: ownLobby === null ? null : bestIds.indexOf(ownLobby) >= 0 });
     }
   }, POLL_MS);
 }
 
 rpc.exports = {
-  install: function (ifacePtr, inject, key, value) {
+  install: function (ifacePtr, inject, key, value, own) {
     iface = ptr(ifacePtr);
     injecting = !!inject; probeKey = key; probeValue = value;
+    ownLobby = own ? own.toLowerCase().replace(/^0x/, '') : null;
     try { vt = iface.readPointer(); } catch (e) { return { ok: false, why: 'interface unreadable' }; }
 
     try {
@@ -173,10 +206,44 @@ rpc.exports = {
     });
 
     return { ok: true, vtable: vt.toString(), injecting: injecting,
-             probe_key: injecting ? probeKey : null };
+             probe_key: injecting ? probeKey : null, own_lobby: ownLobby };
   },
 };
 """
+
+
+def own_lobby_finding(counts: list[dict]) -> dict:
+    """Does an unfiltered query return the querying player's OWN lobby?
+
+    This decides whether location matchmaking can be proven on ONE machine. If Steam returns your
+    own lobby, a host that publishes its map and then hunts for that same map matches itself, and
+    publish -> filter -> match is established end to end with nobody else involved. If it does not,
+    a solo filtered search is empty by construction and can only ever show that the filter left the
+    process -- which is worth knowing, but is not the same claim.
+
+    Reported as `unmeasured` unless the caller passed `--own-lobby`, because an absent field and a
+    measured "no" are different answers and only one of them is evidence.
+    """
+    unfiltered = [c for c in counts if not c.get("filter_injected")]
+    answered = [c for c in unfiltered if c.get("own_lobby_returned") is not None]
+    if not answered:
+        return {
+            "own_lobby_returned": None,
+            "own_lobby_note": "unmeasured -- pass --own-lobby <id> to settle whether a solo run "
+            "can prove a match",
+        }
+    seen = any(c["own_lobby_returned"] for c in answered)
+    return {
+        "own_lobby_returned": seen,
+        "own_lobby_note": (
+            "an unfiltered query DOES return this player's own lobby, so hunting for the map this "
+            "same client publishes proves publish->filter->match on one machine"
+            if seen
+            else "an unfiltered query does NOT return this player's own lobby, so a solo filtered "
+            "search is empty by construction -- a second machine is required to prove a match, "
+            "and a zero result here is not evidence against the filter"
+        ),
+    }
 
 
 def verdict(records: list[dict]) -> dict:
@@ -202,6 +269,7 @@ def verdict(records: list[dict]) -> dict:
         "implied_min_results": implied,
         "baseline_best": base_max,
     }
+    out.update(own_lobby_finding(counts))
     if not base and not filt:
         out["verdict"] = "no-search-observed"
         out["why"] = "no lobby query ran; nothing was measured"
@@ -283,6 +351,34 @@ def _selftest() -> int:
     check(v["implied_min_results"] == 8 and v["baseline_best"] == 13,
           "one genuine pick at index 7 implies >=8, and the counted 13 is the better baseline")
 
+    # --- does a query return your own lobby? ---------------------------------------------------
+    #
+    # THE TRAP: reporting an unmeasured field as False. "we did not look" and "we looked and it was
+    # not there" lead to opposite decisions -- one says get a second machine, the other says the
+    # experiment is still open -- and a bare False conflates them.
+    v = verdict([count(13, False)])
+    check(v["own_lobby_returned"] is None and "unmeasured" in v["own_lobby_note"],
+          "not passing --own-lobby reports unmeasured, never a measured 'no'")
+
+    def owned(n, injected, present):
+        return {"type": "count", "results": n, "filter_injected": injected,
+                "own_lobby_returned": present}
+
+    v = verdict([owned(13, False, True)])
+    check(v["own_lobby_returned"] is True and "one machine" in v["own_lobby_note"],
+          "own lobby present means a solo run can prove the whole loop")
+
+    v = verdict([owned(13, False, False)])
+    check(v["own_lobby_returned"] is False and "second machine" in v["own_lobby_note"],
+          "own lobby absent means a solo filtered zero is not evidence against the filter")
+
+    # Only the UNFILTERED query answers this. A filtered query that excluded our own lobby would
+    # have excluded it on the filter, not on Steam's own-lobby policy, so reading the answer off
+    # the filtered run would confuse the two.
+    v = verdict([owned(13, False, True), owned(0, True, False)])
+    check(v["own_lobby_returned"] is True,
+          "the answer is taken from the unfiltered query, not from the filtered one")
+
     if fails:
         print(f"selftest FAILED ({fails})")
         return 1
@@ -296,6 +392,10 @@ def main() -> int:
     ap.add_argument("--inject-filter", action="store_true",
                     help="add a filter on an unpublished key to YOUR OWN query (off by default)")
     ap.add_argument("--key", default=PROBE_KEY)
+    ap.add_argument("--own-lobby",
+                    help="this client's own lobby id (hex, e.g. 0x1860000164a8cd9). Settles "
+                         "whether a query returns your own lobby, and therefore whether location "
+                         "matchmaking can be proven without a second machine")
     ap.add_argument("--gadget", default=GADGET)
     ap.add_argument("--out", default=DEFAULT_OUT)
     ap.add_argument("--selftest", action="store_true")
@@ -340,7 +440,9 @@ def main() -> int:
         if kind == "query":
             print(f"QUERY sent (filter injected: {p.get('injected')}) -- counting for 10s")
         elif kind == "count":
-            print(f"RESULT SET: {p['results']} lobbies  [{p['tag']}]")
+            own = p.get("own_lobby_returned")
+            tail = "" if own is None else f"  own lobby returned: {own}"
+            print(f"RESULT SET: {p['results']} lobbies  [{p['tag']}]{tail}")
         elif kind == "ersc-pick":
             print(f"ersc chose index {p['index']}  (implies >= {p['index']+1} results)")
         elif kind == "inject":
@@ -350,7 +452,7 @@ def main() -> int:
     script.on("destroyed", done.set)
     script.load()
     print(json.dumps(script.exports_sync.install(
-        args.iface, args.inject_filter, args.key, PROBE_VALUE), indent=2))
+        args.iface, args.inject_filter, args.key, PROBE_VALUE, args.own_lobby), indent=2))
     print(f"\nwriting {args.out}\nRun an invasion search, then Ctrl-C.\n")
 
     try:

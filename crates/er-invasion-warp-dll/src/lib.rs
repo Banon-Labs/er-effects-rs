@@ -216,6 +216,22 @@ fn spawn_catalog_task() {
                     // until it lands rather than being installed once at attach and failing
                     // silently. It changes nothing unless `hunt = true` is in the config.
                     crate::lobby_publish::install_hunt_hook();
+                    // Lift both halves of location matchmaking out of the log and into the oracle
+                    // document, because their failures are the ones that look like success from
+                    // outside: a host that advertised nothing still runs fine, and a hunt hook that
+                    // never landed is indistinguishable from an empty world. Four atomic loads.
+                    {
+                        let (publishes, refusals) = crate::lobby_publish::tally();
+                        er_invasion_warp::oracles::publish_lobby_oracles(publishes, refusals);
+                        let (hooked, filters) = crate::lobby_publish::hunt_tally();
+                        er_invasion_warp::oracles::publish_hunt_oracles(hooked, filters);
+                        // Writing the counters is not the same as PUBLISHING them: the telemetry
+                        // document is otherwise only written by the catalog sampler, which stops
+                        // once the totals latch -- seconds into a run, and long before anyone
+                        // hunts. Without this the file freezes at zero while the counters climb.
+                        // Gated on a change, so a steady run costs four comparisons and no I/O.
+                        er_invasion_warp::oracles::republish_if_location_matchmaking_changed();
+                    }
                     // Re-colour pins that already exist. Gated internally on the user's lists
                     // actually having changed, so the steady-state cost is one atomic compare.
                     //

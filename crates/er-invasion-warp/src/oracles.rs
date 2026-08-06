@@ -72,6 +72,7 @@
 //! `negative_oracles_measured: false`, which a reader cannot mistake for a measured zero.
 //! They land with the UI/warp interception that first gives them a call site.
 
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::aip::{AIP_FINGERPRINT_BASE, AIP_FINGERPRINT_DLC02};
@@ -133,6 +134,44 @@ pub const ORACLE_INVASION_WARP_LEGACY_PINS_PLACED: &str = "oracle_invasion_warp_
 /// MUST BE ZERO. Any non-zero value is missing icons.
 pub const ORACLE_INVASION_WARP_UNDRAWABLE_PINS: &str = "oracle_invasion_warp_undrawable_pins";
 
+// --- Location matchmaking: publish (host side) and hunt (invader side) ----------------------
+//
+// These four exist because the two halves of location matchmaking fail in ways that look
+// identical from outside the process. A run that publishes nothing and a run that publishes
+// perfectly both end with a live game and a clean log tail; a hunt hook that never installed and
+// a hunt hook that installed but was never asked to narrow anything both produce silence. Build
+// success, launch success and "no crash" separate none of those cases. Only these counters do.
+
+/// How many times this host wrote its current map onto its own Seamless lobby.
+///
+/// The HOST half of location matchmaking. Above zero means an invader running this DLL can ask
+/// Steam for this player by location; zero means this player is only findable the old way.
+pub const ORACLE_INVASION_WARP_LOBBY_PUBLISHES: &str = "oracle_invasion_warp_lobby_publishes";
+
+/// How many publishes were REFUSED -- Steam not ready, no lobby yet, or (the loud one) a lobby
+/// that does not carry Seamless's own advertisement marker.
+///
+/// Not a failure on its own: the first ticks of any run refuse while Seamless is still creating
+/// its lobby. `refusals > 0 && publishes == 0` is the failure, and it is the exact shape a wrong
+/// lobby-id offset would produce while every other signal looked healthy.
+pub const ORACLE_INVASION_WARP_LOBBY_REFUSALS: &str = "oracle_invasion_warp_lobby_refusals";
+
+/// Whether the detour onto `ISteamMatchmaking::RequestLobbyList` is installed.
+///
+/// The INVADER half. This is the one fact about hunt mode that no amount of offline work can
+/// establish: the hook goes onto a vtable slot inside `steamclient64.dll`, not the game image, and
+/// whether our union dispatcher can take that target is only answerable in a live process. False
+/// with `hunt = true` means hunt is INERT and every query went out unfiltered -- which looks
+/// exactly like "nobody is hosting there" from the player's seat.
+pub const ORACLE_INVASION_WARP_HUNT_HOOKED: &str = "oracle_invasion_warp_hunt_hooked";
+
+/// How many outgoing lobby queries actually carried our location filter.
+///
+/// The hook firing is not the same as the filter landing: `hunt_target` can decline (hunt off, no
+/// readable block, several marked locations a single equality filter cannot express). Above zero
+/// is the only proof that Seamless's own search went out narrowed to one place.
+pub const ORACLE_INVASION_WARP_HUNT_FILTERS: &str = "oracle_invasion_warp_hunt_filters";
+
 // --- ORACLE 1 counters --------------------------------------------------------------------
 //
 // Written by `crate::sampler` on every successful read of the live `CSAutoInvadePoint`, read
@@ -154,6 +193,15 @@ pub static INVASION_WARP_LEGACY_PINS_PLACED: AtomicUsize = AtomicUsize::new(0);
 
 /// Pins appended that carry no non-negative label text id, and therefore cannot draw.
 pub static INVASION_WARP_UNDRAWABLE_PINS: AtomicUsize = AtomicUsize::new(0);
+
+/// Successful writes of this host's map onto its own Seamless lobby.
+pub static INVASION_WARP_LOBBY_PUBLISHES: AtomicUsize = AtomicUsize::new(0);
+/// Publishes declined for any reason, including the loud wrong-lobby refusal.
+pub static INVASION_WARP_LOBBY_REFUSALS: AtomicUsize = AtomicUsize::new(0);
+/// `1` once the `RequestLobbyList` detour is installed, `0` before and if it failed.
+pub static INVASION_WARP_HUNT_HOOKED: AtomicUsize = AtomicUsize::new(0);
+/// Outgoing lobby queries that carried our location filter.
+pub static INVASION_WARP_HUNT_FILTERS: AtomicUsize = AtomicUsize::new(0);
 
 /// Publish the legacy-dungeon placement pair measured by a world-map injection.
 pub fn publish_legacy_pin_oracles(seen: usize, placed: usize) {
@@ -216,6 +264,152 @@ pub fn catalog_oracle_snapshot() -> (usize, usize, usize) {
         INVASION_WARP_CATALOG_BLOCKS.load(Ordering::SeqCst),
         INVASION_WARP_CATALOG_AREAS.load(Ordering::SeqCst),
     )
+}
+
+/// The last `(status, detail)` the catalog sampler published, so a republish can carry the
+/// sampler's real phase instead of inventing one.
+static LAST_DOCUMENT_STATUS: Mutex<Option<(String, String)>> = Mutex::new(None);
+
+/// The location-matchmaking counters as of the last document write, so a republish costs four
+/// comparisons in the steady state. Seeded with the all-zero state so a run that never publishes
+/// or hunts never writes at all.
+static LAST_DOCUMENT_MATCHMAKING: Mutex<((usize, usize), (bool, usize))> =
+    Mutex::new(((0, 0), (false, 0)));
+
+/// Write the telemetry document and remember the phase it was written in.
+///
+/// Every sampler emission goes through here rather than calling
+/// [`crate::host::publish_oracle_json`] directly, because a later republish has to reuse the real
+/// status -- a document that reported `latched` when the sampler was still `waiting` would be
+/// worse than a stale one.
+pub fn publish_document(status: &str, detail: &str) {
+    *LAST_DOCUMENT_STATUS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some((status.to_string(), detail.to_string()));
+    *LAST_DOCUMENT_MATCHMAKING
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = (lobby_oracle_snapshot(), hunt_oracle_snapshot());
+    crate::host::publish_oracle_json(&catalog_oracle_json(status, detail));
+}
+
+/// Rewrite the document if a location-matchmaking counter moved since the last write.
+///
+/// # The bug this exists to fix, caught by the feature it was measuring
+///
+/// The document was only ever written by the catalog sampler, which STOPS once the catalog totals
+/// latch -- normally within the first seconds of a run. Every counter written after that moment
+/// was invisible: the file froze with `hunt_filters: 0` while the in-memory counter climbed, and
+/// the verdict line went on saying "no query has been narrowed" after a query had been narrowed.
+///
+/// Measured 2026-08-06: the DLL logged `hunt: asking Steam for hosts at m61_54_46_00 only (#1)`
+/// while the telemetry document, last written 4 minutes earlier, reported zero filters -- and the
+/// driver that read it concluded the detour had declined. A counter that is written but never
+/// PUBLISHED misinforms exactly as badly as one that is published but never written, and this
+/// module opens by warning about the second while shipping the first.
+///
+/// Returns whether anything was written, so a caller can tell a quiet tick from a stale one.
+pub fn republish_if_location_matchmaking_changed() -> bool {
+    let now = (lobby_oracle_snapshot(), hunt_oracle_snapshot());
+    {
+        let mut last = LAST_DOCUMENT_MATCHMAKING
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if *last == now {
+            return false;
+        }
+        *last = now;
+    }
+    let (status, detail) = LAST_DOCUMENT_STATUS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .unwrap_or_else(|| {
+            (
+                "unsampled".to_string(),
+                "the catalog sampler has not reported yet; the location-matchmaking counters below \
+                 are live regardless"
+                    .to_string(),
+            )
+        });
+    crate::host::publish_oracle_json(&catalog_oracle_json(&status, &detail));
+    true
+}
+
+/// Publish the host-side lobby counters, `(successful writes, declined attempts)`.
+pub fn publish_lobby_oracles(publishes: usize, refusals: usize) {
+    INVASION_WARP_LOBBY_PUBLISHES.store(publishes, Ordering::SeqCst);
+    INVASION_WARP_LOBBY_REFUSALS.store(refusals, Ordering::SeqCst);
+}
+
+/// Publish the invader-side hunt counters.
+pub fn publish_hunt_oracles(hooked: bool, filters: usize) {
+    INVASION_WARP_HUNT_HOOKED.store(usize::from(hooked), Ordering::SeqCst);
+    INVASION_WARP_HUNT_FILTERS.store(filters, Ordering::SeqCst);
+}
+
+/// The host-side pair as it currently stands, `(publishes, refusals)`.
+#[must_use]
+pub fn lobby_oracle_snapshot() -> (usize, usize) {
+    (
+        INVASION_WARP_LOBBY_PUBLISHES.load(Ordering::SeqCst),
+        INVASION_WARP_LOBBY_REFUSALS.load(Ordering::SeqCst),
+    )
+}
+
+/// The invader-side pair as it currently stands, `(hooked, filters)`.
+#[must_use]
+pub fn hunt_oracle_snapshot() -> (bool, usize) {
+    (
+        INVASION_WARP_HUNT_HOOKED.load(Ordering::SeqCst) != 0,
+        INVASION_WARP_HUNT_FILTERS.load(Ordering::SeqCst),
+    )
+}
+
+/// What the four location-matchmaking counters mean, in one line per half.
+///
+/// Written as a verdict rather than left to the reader because the failure states are the ones
+/// that look like success: a host that published nothing is still a running game, and a hunt that
+/// never narrowed a query is indistinguishable from an empty world.
+#[must_use]
+pub fn describe_location_matchmaking(
+    publishes: usize,
+    refusals: usize,
+    hooked: bool,
+    filters: usize,
+) -> String {
+    let host = match (publishes, refusals) {
+        (0, 0) => {
+            "publish: never attempted -- this player has not opened a lobby to invaders this \
+                   run, so there was nothing to advertise on"
+                .to_string()
+        }
+        (0, r) => format!(
+            "publish: REFUSED {r} time(s) and never once succeeded -- this host is NOT findable by \
+             location, and the log says which refusal it was"
+        ),
+        (p, r) => format!("publish: advertised this host's map {p} time(s) ({r} declined)"),
+    };
+    let invader = match (hooked, filters) {
+        // Impossible by construction: the filter is only ever added from inside the detour. If
+        // this ever prints, the counters disagree with the code and neither can be trusted.
+        (false, f) if f > 0 => format!(
+            "hunt: CONTRADICTION -- {f} filter(s) recorded with no hook installed; these counters \
+             are not measuring what they claim"
+        ),
+        (false, _) => "hunt: no detour on RequestLobbyList, so every query went out UNFILTERED -- \
+                       hunt mode is inert regardless of what the config says"
+            .to_string(),
+        (true, 0) => {
+            "hunt: hooked, but no query has been narrowed -- hunt is off, it refused (see \
+                      the log), or Seamless has not searched yet"
+                .to_string()
+        }
+        (true, f) => format!(
+            "hunt: {f} outgoing lobby quer(y/ies) asked Steam for ONE location; hosts without this \
+             DLL were not returned"
+        ),
+    };
+    format!("{host}; {invader}")
 }
 
 // --- ORACLE 1 pass conditions ---------------------------------------------------------------
@@ -339,6 +533,8 @@ fn json_escape(value: &str) -> String {
 pub fn catalog_oracle_json(status: &str, detail: &str) -> String {
     let (targets, blocks, areas) = catalog_oracle_snapshot();
     let (legacy_seen, legacy_placed) = legacy_pin_oracle_snapshot();
+    let (publishes, refusals) = lobby_oracle_snapshot();
+    let (hooked, filters) = hunt_oracle_snapshot();
     let summary = InvasionWarpCatalogSummary {
         block_count: blocks,
         target_count: targets,
@@ -361,6 +557,11 @@ pub fn catalog_oracle_json(status: &str, detail: &str) -> String {
 \"{ORACLE_INVASION_WARP_UNDRAWABLE_PINS}\":{undrawable},\
 \"undrawable_pins_note\":\"a pin whose eight label text ids are all negative is NOT DRAWN; any \
 value above zero is missing icons, not missing captions\",\
+\"{ORACLE_INVASION_WARP_LOBBY_PUBLISHES}\":{publishes},\
+\"{ORACLE_INVASION_WARP_LOBBY_REFUSALS}\":{refusals},\
+\"{ORACLE_INVASION_WARP_HUNT_HOOKED}\":{hooked},\
+\"{ORACLE_INVASION_WARP_HUNT_FILTERS}\":{filters},\
+\"location_matchmaking_note\":\"{matchmaking_note}\",\
 \"{ORACLE_INVASION_WARP_SESSION_TOUCHES}\":null,\
 \"{ORACLE_INVASION_WARP_MSGBOX_BUILDS}\":null,\
 \"negative_oracles_measured\":false,\
@@ -368,6 +569,9 @@ value above zero is missing icons, not missing captions\",\
         status = json_escape(status),
         undrawable = undrawable_pin_count(),
         legacy_note = json_escape(describe_legacy_pin_oracle(legacy_seen, legacy_placed)),
+        matchmaking_note = json_escape(&describe_location_matchmaking(
+            publishes, refusals, hooked, filters
+        )),
         verdict_tag = verdict.tag(),
         passed = verdict.passed(),
         detail = json_escape(detail),
@@ -443,6 +647,13 @@ mod tests {
             ORACLE_INVASION_WARP_FINAL_POSITION,
             ORACLE_INVASION_WARP_SESSION_TOUCHES,
             ORACLE_INVASION_WARP_MSGBOX_BUILDS,
+            ORACLE_INVASION_WARP_LEGACY_PINS_SEEN,
+            ORACLE_INVASION_WARP_LEGACY_PINS_PLACED,
+            ORACLE_INVASION_WARP_UNDRAWABLE_PINS,
+            ORACLE_INVASION_WARP_LOBBY_PUBLISHES,
+            ORACLE_INVASION_WARP_LOBBY_REFUSALS,
+            ORACLE_INVASION_WARP_HUNT_HOOKED,
+            ORACLE_INVASION_WARP_HUNT_FILTERS,
         ];
         let mut sorted = names.to_vec();
         sorted.sort_unstable();
@@ -455,6 +666,133 @@ mod tests {
                 "{name} is not namespaced to this feature"
             );
         }
+    }
+
+    #[test]
+    fn a_counter_that_moves_after_the_sampler_latches_still_reaches_the_document() {
+        // THE MEASURED BUG, 2026-08-06. The document was written only by the catalog sampler,
+        // which stops at `Latched`. A hunt filter added minutes later left the file reporting
+        // zero, and the driver reading it concluded the detour had declined -- a false negative
+        // produced by the very instrument meant to prevent them.
+        publish_document("latched", "totals settled");
+        assert!(
+            !republish_if_location_matchmaking_changed(),
+            "an unchanged counter set must not rewrite the document"
+        );
+        publish_hunt_oracles(true, 1);
+        assert!(
+            republish_if_location_matchmaking_changed(),
+            "a filter added after the sampler latched MUST still be published"
+        );
+        assert!(
+            !republish_if_location_matchmaking_changed(),
+            "and only once -- the republish is edge-triggered, not per tick"
+        );
+        publish_hunt_oracles(false, 0);
+        republish_if_location_matchmaking_changed();
+    }
+
+    #[test]
+    fn a_republish_carries_the_samplers_real_phase_not_an_invented_one() {
+        // Reusing the last real status matters: a document claiming `latched` while the sampler
+        // was still `waiting` would misreport the catalog oracle to fix the hunt one.
+        publish_document("waiting", "catalog not ready");
+        publish_lobby_oracles(1, 0);
+        assert!(republish_if_location_matchmaking_changed());
+        let document = catalog_oracle_json("waiting", "catalog not ready");
+        assert!(document.contains("\"status\":\"waiting\""));
+        publish_lobby_oracles(0, 0);
+        republish_if_location_matchmaking_changed();
+    }
+
+    #[test]
+    fn a_host_that_only_ever_refused_is_reported_as_unfindable_not_as_quiet() {
+        // The failure this exists to catch: a wrong lobby-id offset publishes nothing, and every
+        // other signal in the run (game alive, log clean, pins drawn) looks identical to success.
+        let line = describe_location_matchmaking(0, 12, false, 0);
+        assert!(
+            line.contains("REFUSED 12"),
+            "the refusal count has to reach the verdict: {line}"
+        );
+        assert!(
+            line.contains("NOT findable"),
+            "a host that never published must be called unfindable: {line}"
+        );
+    }
+
+    #[test]
+    fn never_opening_a_lobby_is_not_reported_as_a_failure() {
+        // Zero and zero is the ordinary state of a player who simply is not hosting. Calling that
+        // a failure would train the reader to ignore the field.
+        let line = describe_location_matchmaking(0, 0, true, 0);
+        assert!(
+            line.contains("never attempted"),
+            "not hosting must read as not-attempted: {line}"
+        );
+        assert!(
+            !line.contains("REFUSED"),
+            "not hosting is not a refusal: {line}"
+        );
+    }
+
+    #[test]
+    fn an_uninstalled_hunt_hook_is_called_inert_however_the_config_reads() {
+        // `hunt = true` plus a hook that never landed is the silent-failure shape: the player sees
+        // an empty search and concludes nobody is online.
+        let line = describe_location_matchmaking(3, 0, false, 0);
+        assert!(
+            line.contains("UNFILTERED") && line.contains("inert"),
+            "a missing hook must say the queries went out unnarrowed: {line}"
+        );
+    }
+
+    #[test]
+    fn a_hooked_but_never_narrowed_run_is_separated_from_a_narrowed_one() {
+        let idle = describe_location_matchmaking(1, 0, true, 0);
+        let firing = describe_location_matchmaking(1, 0, true, 4);
+        assert!(
+            idle.contains("no query has been narrowed"),
+            "hooked-but-idle must be its own state: {idle}"
+        );
+        assert!(
+            firing.contains('4'),
+            "the filter count is the whole proof: {firing}"
+        );
+        assert_ne!(idle, firing);
+    }
+
+    #[test]
+    fn filters_without_a_hook_are_reported_as_a_contradiction_not_as_success() {
+        // Impossible by construction -- the filter is only added from inside the detour. If the
+        // counters ever say otherwise, the honest output is "these numbers are wrong", not a
+        // cheerful success line built on them.
+        let line = describe_location_matchmaking(0, 0, false, 7);
+        assert!(
+            line.contains("CONTRADICTION"),
+            "impossible counter states must be named, not smoothed over: {line}"
+        );
+    }
+
+    #[test]
+    fn the_telemetry_document_carries_all_four_location_matchmaking_counters() {
+        publish_lobby_oracles(5, 2);
+        publish_hunt_oracles(true, 3);
+        let document = catalog_oracle_json("sampling", "unit test");
+        for expected in [
+            "\"oracle_invasion_warp_lobby_publishes\":5",
+            "\"oracle_invasion_warp_lobby_refusals\":2",
+            "\"oracle_invasion_warp_hunt_hooked\":true",
+            "\"oracle_invasion_warp_hunt_filters\":3",
+        ] {
+            assert!(
+                document.contains(expected),
+                "{expected} missing from {document}"
+            );
+        }
+        // The counters are useless if the document does not also say what they mean.
+        assert!(document.contains("location_matchmaking_note"));
+        publish_lobby_oracles(0, 0);
+        publish_hunt_oracles(false, 0);
     }
 
     #[test]

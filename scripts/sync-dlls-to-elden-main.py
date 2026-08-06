@@ -6,8 +6,12 @@ ELDEN_MAIN_DIR (default ~/Elden/main) and rewrites dll-deploy-manifest.json with
 per-DLL sha256/size plus the repo HEAD. Fails closed if any expected DLL is missing
 from the build output (run the release build first).
 
-Usage: python3 scripts/sync-dlls-to-elden-main.py [--dry-run]
+Usage: python3 scripts/sync-dlls-to-elden-main.py [--dry-run] [--help]
 Env:   ELDEN_MAIN_DIR, ER_EFFECTS_REPO_ROOT override the defaults.
+
+An unrecognised argument is an ERROR, not a silent full deploy: this script had no argument
+parsing at all, so `--help` copied ten DLLs and rewrote the manifest instead of printing usage.
+A deploy is a side effect that must be asked for explicitly.
 """
 
 import hashlib
@@ -25,6 +29,7 @@ DLLS = {
     "er_effects_rs.dll": "er-effects-rs",
     "er_input_harness_dll.dll": "er-input-harness-dll",
     "er_inventory_sort.dll": "er-inventory-sort-dll",
+    "er_invasion_warp_dll.dll": "er-invasion-warp-dll",
     "er_net_effects_dll.dll": "er-net-effects-dll",
     "er_reload_trace_dll.dll": "er-reload-trace-dll",
     "er_telemetry_dll.dll": "er-telemetry-dll",
@@ -33,7 +38,18 @@ DLLS = {
 
 
 def main() -> int:
-    dry_run = "--dry-run" in sys.argv[1:]
+    args = sys.argv[1:]
+    if "--help" in args or "-h" in args:
+        print(__doc__)
+        return 0
+    unknown = [a for a in args if a != "--dry-run"]
+    if unknown:
+        # Fail closed. Deploying because an argument was not understood is how a typo becomes a
+        # deploy nobody asked for.
+        print(f"ERROR: unrecognised argument(s): {' '.join(unknown)}")
+        print(__doc__)
+        return 2
+    dry_run = "--dry-run" in args
     repo = os.environ.get(
         "ER_EFFECTS_REPO_ROOT",
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),

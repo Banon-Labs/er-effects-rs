@@ -104,6 +104,30 @@ pub const SESSION_LOBBY_ID_OFFSET: usize = 0x178;
 /// one of their keys changes what everybody matches.
 pub const GET_LOBBY_DATA_SLOT: usize = 19;
 
+/// `ISteamMatchmaking::GetLobbyOwner` -- vtable slot 35.
+///
+/// THE CHECK THAT WAS MISSING. `SetLobbyData` persists only for a lobby's OWNER; a non-owner write
+/// returns `true`, is accepted into the local copy, and is then replaced by the server's version.
+/// Measured 2026-08-06 in one session, same code, two lobbies:
+///
+/// ```text
+///   0x186000016b32b26  owner == us          -> er_invasion_warp_map = "m35_00_00_00"  persisted
+///   0x18600001692080e  owner == 0x…12fd097f6 -> er_invasion_warp_map = ""             evaporated
+/// ```
+///
+/// [`ADVERTISEMENT_MARKER_KEY`] cannot catch this: the second lobby carried the marker, because it
+/// was a genuine host advertisement -- someone else's, the host being searched against.
+pub const GET_LOBBY_OWNER_SLOT: usize = 35;
+
+/// `ISteamUser::GetSteamID` -- vtable slot 2, for the other half of the ownership comparison.
+pub const USER_GET_STEAM_ID_SLOT: usize = 2;
+
+/// The exported accessor for `ISteamUser`.
+///
+/// Version-suffixed and resolved by name like the matchmaking one. `v021` is what this build
+/// exports; a miss returns `None` and publishing refuses rather than assuming we are the owner.
+pub const USER_ACCESSOR: &str = "SteamAPI_SteamUser_v021\0";
+
 /// The key whose presence PROVES a lobby is the one invaders query.
 ///
 /// Seamless filters its lobby list on `lobby_type == yknx3_seamless_master_lobby`, so by definition
@@ -168,17 +192,34 @@ pub const ADD_STRING_FILTER_SLOT: usize = 5;
 /// * one marked block  -> that one, because marking a single place is unambiguous intent
 /// * several marked    -> `None`; a string filter cannot express OR
 /// * none marked       -> where the player is standing, which is "invade locally"
+///
+/// # Exclusions are honoured here too
+///
+/// `excluded_blocks` is consulted for the same reason [`LocalInvasionConfig::judge`] checks it
+/// first: an exclusion is the strongest thing the user can say about a place. Without this, hunt
+/// read only the marked list and could aim the Steam query straight at a location the reject
+/// filter was standing by to cancel -- the two halves steering to opposite places while sharing
+/// one config snapshot. That is worse than either half alone, because the query would succeed and
+/// every match it returned would then be thrown away.
 #[must_use]
 pub fn hunt_filter_value(
     enabled: bool,
     marked_blocks: &[u32],
+    excluded_blocks: &[u32],
     current: Option<BlockKey>,
 ) -> Option<String> {
     if !enabled {
         return None;
     }
-    match marked_blocks {
-        [] => current.map(map_value),
+    let wanted: Vec<u32> = marked_blocks
+        .iter()
+        .copied()
+        .filter(|block| !excluded_blocks.contains(block))
+        .collect();
+    match wanted.as_slice() {
+        [] => current
+            .filter(|here| !excluded_blocks.contains(&here.raw()))
+            .map(map_value),
         [only] => Some(map_value(BlockKey::from_raw(*only))),
         _ => None,
     }
@@ -194,12 +235,33 @@ pub fn hunt_filter_value(
 pub fn hunt_refusal(
     enabled: bool,
     marked_blocks: &[u32],
+    excluded_blocks: &[u32],
     current: Option<BlockKey>,
 ) -> Option<&'static str> {
     if !enabled {
         return None;
     }
-    match marked_blocks {
+    // Same exclusion pass as `hunt_filter_value`, so the refusal explains the set that function
+    // actually acted on rather than the raw marked list.
+    let wanted: Vec<u32> = marked_blocks
+        .iter()
+        .copied()
+        .filter(|block| !excluded_blocks.contains(block))
+        .collect();
+    match wanted.as_slice() {
+        [] if marked_blocks.is_empty()
+            && current.is_some_and(|here| excluded_blocks.contains(&here.raw())) =>
+        {
+            Some(
+                "hunt: the location you are standing in is EXCLUDED, and nothing else is marked -- \
+                 there is no place to ask Steam for. Searching unfiltered; mark somewhere with \
+                 Insert, or un-exclude here",
+            )
+        }
+        [] if !marked_blocks.is_empty() => Some(
+            "hunt: every marked location is also excluded, so there is nothing left to ask Steam \
+             for -- searching unfiltered. An exclusion beats a mark",
+        ),
         [] if current.is_none() => Some(
             "hunt: no marked location and your own block is unreadable, so there is nothing to ask \
              Steam for -- searching unfiltered",
@@ -218,8 +280,9 @@ pub fn hunt_refusal(
 mod live {
     use super::{
         ADD_STRING_FILTER_SLOT, ADVERTISEMENT_MARKER_KEY, ADVERTISEMENT_MARKER_VALUE,
-        GET_LOBBY_DATA_SLOT, LOBBY_MAP_KEY, MATCHMAKING_ACCESSOR, REQUEST_LOBBY_LIST_SLOT,
-        SET_LOBBY_DATA_SLOT, hunt_filter_value, hunt_refusal, pending_publish,
+        GET_LOBBY_DATA_SLOT, GET_LOBBY_OWNER_SLOT, LOBBY_MAP_KEY, MATCHMAKING_ACCESSOR,
+        REQUEST_LOBBY_LIST_SLOT, SET_LOBBY_DATA_SLOT, USER_ACCESSOR, USER_GET_STEAM_ID_SLOT,
+        hunt_filter_value, hunt_refusal, pending_publish,
     };
     use er_invasion_warp::invasion_warp::BlockKey;
     use std::sync::Mutex;
@@ -238,6 +301,14 @@ mod live {
     /// The `CSteamID` is an 8-byte POD passed BY VALUE, which is why it is a plain `u64` here and
     /// not a pointer -- getting that wrong would shift every argument after it.
     type SetLobbyDataFn = unsafe extern "system" fn(usize, u64, *const u8, *const u8) -> bool;
+    /// `CSteamID GetLobbyOwner(this, CSteamID lobby)` -- returned through a HIDDEN SRET POINTER.
+    ///
+    /// The 8-byte return does not come back in a register here; the caller passes a slot for it.
+    /// Declaring it `-> u64` puts our lobby argument where the sret pointer belongs and the callee
+    /// writes through it: measured as an access violation on `0xbeef`.
+    type GetLobbyOwnerFn = unsafe extern "system" fn(usize, *mut u64, u64) -> usize;
+    /// `CSteamID GetSteamID(this)` on `ISteamUser` -- same sret convention.
+    type GetSteamIdFn = unsafe extern "system" fn(usize, *mut u64) -> usize;
     /// `const char *GetLobbyData(this, CSteamID lobby, const char *key)` -- READ ONLY.
     type GetLobbyDataFn = unsafe extern "system" fn(usize, u64, *const u8) -> *const i8;
 
@@ -286,6 +357,78 @@ mod live {
         let base = er_game_base::mem::game_module_base().ok()?;
         let raw = unsafe { er_invasion_warp::warp::current_block_id(base) }?;
         Some(BlockKey::from_raw(raw))
+    }
+
+    /// Do WE own this lobby? Only an owner's `SetLobbyData` survives the server.
+    ///
+    /// `None` means the question could not be answered -- an unresolvable interface, a missing
+    /// export, a vtable that would not read. The caller must treat that as "not ours", because
+    /// assuming ownership is how the silent-write bug happened in the first place.
+    fn we_own(iface: usize, lobby: u64) -> Option<bool> {
+        let owner = lobby_owner(iface, lobby)?;
+        let me = local_steam_id()?;
+        Some(owner != 0 && owner == me)
+    }
+
+    /// `GetLobbyOwner`, called through the hidden-return-pointer convention.
+    ///
+    /// An 8-byte `CSteamID` return is NOT a plain integer return in this build: it goes through an
+    /// sret pointer, the same shape `GetLobbyByIndex` needs. Calling it as `-> u64` put a sentinel
+    /// in the argument slot and faulted on `0xbeef`.
+    fn lobby_owner(iface: usize, lobby: u64) -> Option<u64> {
+        let vtable = unsafe { er_game_base::mem::safe_read_usize(iface) }?;
+        let slot = unsafe {
+            er_game_base::mem::safe_read_usize(vtable + GET_LOBBY_OWNER_SLOT * size_of::<usize>())
+        }?;
+        if slot == 0 {
+            return None;
+        }
+        let get = unsafe { core::mem::transmute::<usize, GetLobbyOwnerFn>(slot) };
+        let mut out: u64 = 0;
+        unsafe { get(iface, &raw mut out, lobby) };
+        Some(out)
+    }
+
+    /// This client's own `CSteamID`, via `ISteamUser::GetSteamID` -- same sret convention.
+    fn local_steam_id() -> Option<u64> {
+        let module = unsafe { GetModuleHandleA(c"steam_api64.dll".as_ptr().cast()) };
+        if module == 0 {
+            return None;
+        }
+        let accessor = unsafe { GetProcAddress(module, USER_ACCESSOR.as_ptr()) };
+        if accessor == 0 {
+            return None;
+        }
+        let user = unsafe { core::mem::transmute::<usize, MatchmakingAccessor>(accessor)() };
+        if user == 0 {
+            return None;
+        }
+        let vtable = unsafe { er_game_base::mem::safe_read_usize(user) }?;
+        let slot = unsafe {
+            er_game_base::mem::safe_read_usize(vtable + USER_GET_STEAM_ID_SLOT * size_of::<usize>())
+        }?;
+        if slot == 0 {
+            return None;
+        }
+        let get = unsafe { core::mem::transmute::<usize, GetSteamIdFn>(slot) };
+        let mut out: u64 = 0;
+        unsafe { get(user, &raw mut out) };
+        (out != 0).then_some(out)
+    }
+
+    /// Read our key back off the lobby, so a publish is only counted when the value is THERE.
+    ///
+    /// `SetLobbyData` returning `true` proved nothing: the non-owner write returned true and
+    /// vanished. This is the direct measurement of the effect rather than the call.
+    fn published_value(iface: usize, lobby: u64) -> Option<String> {
+        let read = get_lobby_data(iface)?;
+        let key = format!("{LOBBY_MAP_KEY}\0");
+        let got = unsafe { read(iface, lobby, key.as_ptr()) };
+        if got.is_null() {
+            return None;
+        }
+        let value = unsafe { core::ffi::CStr::from_ptr(got.cast()) };
+        value.to_str().ok().map(str::to_owned)
     }
 
     /// Is this the lobby an invader's query can actually see?
@@ -350,6 +493,22 @@ mod live {
             }
             return;
         }
+        // OWNERSHIP, before anything is written. Only the owner's lobby data survives the server,
+        // and while an invader is searching this session field holds the HOST's lobby -- writing
+        // there returns true and evaporates.
+        if we_own(iface, lobby) != Some(true) {
+            if REFUSALS.fetch_add(1, Ordering::SeqCst) == 0 {
+                crate::standalone_log(format_args!(
+                    "lobby-publish: REFUSED -- lobby {lobby:#x} is not ours (owner \
+                     {:#x}, we are {:#x}). Only a lobby's owner can publish to it; writing here \
+                     would return success and be discarded by the server. This is the ordinary \
+                     state while SEARCHING -- that field holds the host's lobby, not ours.",
+                    lobby_owner(iface, lobby).unwrap_or(0),
+                    local_steam_id().unwrap_or(0),
+                ));
+            }
+            return;
+        }
         let Some(write) = set_lobby_data(iface) else {
             REFUSALS.fetch_add(1, Ordering::SeqCst);
             return;
@@ -357,16 +516,31 @@ mod live {
         let key = format!("{LOBBY_MAP_KEY}\0");
         let payload = format!("{value}\0");
         let ok = unsafe { write(iface, lobby, key.as_ptr(), payload.as_ptr()) };
-        if ok {
-            *LAST_PUBLISHED.lock().unwrap_or_else(|e| e.into_inner()) = Some(value.clone());
-            let n = PUBLISHES.fetch_add(1, Ordering::SeqCst) + 1;
-            crate::standalone_log(format_args!(
-                "lobby-publish: {LOBBY_MAP_KEY} = {value} on lobby {lobby:#x} (#{n})"
-            ));
-        } else {
+        if !ok {
             // Steam refused. Do NOT record it as published, or a transient failure would be
             // remembered as success and never retried.
             REFUSALS.fetch_add(1, Ordering::SeqCst);
+            return;
+        }
+        // READ IT BACK. `ok` is what the call SAID; this is what the lobby HAS. The non-owner
+        // write said true and left nothing behind, so the return value alone is not evidence and
+        // a counter built on it reports publishes that never happened.
+        match published_value(iface, lobby) {
+            Some(ref got) if got == &value => {
+                *LAST_PUBLISHED.lock().unwrap_or_else(|e| e.into_inner()) = Some(value.clone());
+                let n = PUBLISHES.fetch_add(1, Ordering::SeqCst) + 1;
+                crate::standalone_log(format_args!(
+                    "lobby-publish: {LOBBY_MAP_KEY} = {value} on lobby {lobby:#x} (#{n}, read back)"
+                ));
+            }
+            other => {
+                REFUSALS.fetch_add(1, Ordering::SeqCst);
+                crate::standalone_log(format_args!(
+                    "lobby-publish: REFUSED -- wrote {LOBBY_MAP_KEY} = {value} to lobby \
+                     {lobby:#x} and Steam accepted it, but reading it back gives {other:?}. The \
+                     write did not stick; this host is NOT findable by location."
+                ));
+            }
         }
     }
 
@@ -383,7 +557,13 @@ mod live {
 
     /// Trampoline to Steam's own `RequestLobbyList`.
     static ORIG_REQUEST_LOBBY_LIST: AtomicUsize = AtomicUsize::new(0);
+    /// "An install has been ATTEMPTED and should not be attempted again", not "it worked". Cleared
+    /// on the transient failures so the next tick retries; deliberately left set when the hook
+    /// itself was refused, because that will not get better by trying every frame.
     static HUNT_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+    /// "The detour is LIVE." Separate from the attempt flag because the oracle must not report a
+    /// failed install as a hooked run -- that is precisely the silent failure hunt mode can have.
+    static HUNT_HOOK_LIVE: AtomicUsize = AtomicUsize::new(0);
     static FILTERS_ADDED: AtomicUsize = AtomicUsize::new(0);
     /// So a refusal is explained once rather than every query.
     static HUNT_REFUSAL_SAID: AtomicUsize = AtomicUsize::new(0);
@@ -452,13 +632,16 @@ mod live {
     fn hunt_target() -> Option<String> {
         let config = crate::local_invasion_filter::current_config_snapshot()?;
         let marked: Vec<u32> = config.allowed_blocks.iter().copied().collect();
-        if let Some(why) = hunt_refusal(config.hunt, &marked, current_block()) {
+        // Exclusions bind hunt as well as the reject filter. Reading only the marked list let the
+        // two halves aim at opposite places while sharing one config snapshot.
+        let excluded: Vec<u32> = config.blocked_blocks.iter().copied().collect();
+        if let Some(why) = hunt_refusal(config.hunt, &marked, &excluded, current_block()) {
             if HUNT_REFUSAL_SAID.swap(1, Ordering::SeqCst) == 0 {
                 crate::standalone_log(format_args!("{why}"));
             }
             return None;
         }
-        hunt_filter_value(config.hunt, &marked, current_block())
+        hunt_filter_value(config.hunt, &marked, &excluded, current_block())
     }
 
     /// Install the query-narrowing hook. Idempotent; only ever called when hunt is configured on.
@@ -471,6 +654,9 @@ mod live {
             return 0;
         };
         let Some(vtable) = (unsafe { er_game_base::mem::safe_read_usize(iface) }) else {
+            // Transient: the interface pointer is real but the vtable is not readable yet. Clear
+            // the attempt flag or hunt mode would be permanently inert after one unlucky tick.
+            HUNT_HOOK_INSTALLED.store(0, Ordering::SeqCst);
             return 0;
         };
         let Some(address) = (unsafe {
@@ -478,6 +664,7 @@ mod live {
                 vtable + REQUEST_LOBBY_LIST_SLOT * size_of::<usize>(),
             )
         }) else {
+            HUNT_HOOK_INSTALLED.store(0, Ordering::SeqCst);
             return 0;
         };
         match unsafe {
@@ -487,7 +674,10 @@ mod live {
                 &ORIG_REQUEST_LOBBY_LIST,
             )
         } {
-            Ok(()) => 1,
+            Ok(()) => {
+                HUNT_HOOK_LIVE.store(1, Ordering::SeqCst);
+                1
+            }
             Err(status) => {
                 crate::standalone_log(format_args!(
                     "hunt: could not hook RequestLobbyList: {status:?} -- hunt mode is INERT and \
@@ -506,14 +696,73 @@ mod live {
             REFUSALS.load(Ordering::SeqCst),
         )
     }
+
+    /// `(the detour is live, queries we narrowed)` -- the invader half of the same judgement.
+    #[must_use]
+    pub fn hunt_tally() -> (bool, usize) {
+        (
+            HUNT_HOOK_LIVE.load(Ordering::SeqCst) != 0,
+            FILTERS_ADDED.load(Ordering::SeqCst),
+        )
+    }
 }
 
 #[cfg(windows)]
-pub use live::{install_hunt_hook, publish_current_map, tally};
+pub use live::{hunt_tally, install_hunt_hook, publish_current_map, tally};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hunt_never_aims_at_a_location_the_user_excluded() {
+        // The two halves share one config snapshot, so they must not steer to opposite places.
+        // Hunt read only the marked list, so an excluded-but-marked block aimed the Steam query at
+        // exactly the destination the reject filter was standing by to cancel: the query succeeds
+        // and every match it returns is thrown away, which is worse than either half alone.
+        let block = 0x0f00_0000;
+        assert_eq!(hunt_filter_value(true, &[block], &[block], None), None);
+    }
+
+    #[test]
+    fn hunt_does_not_ask_for_the_block_the_player_is_standing_in_when_it_is_excluded() {
+        // The no-marks case falls back to "where I am", which must respect an exclusion the same
+        // way -- otherwise standing in an excluded place silently re-enables it.
+        let here = BlockKey::from_parts(60, 51, 36, 0);
+        assert_eq!(
+            hunt_filter_value(true, &[], &[here.raw()], Some(here)),
+            None
+        );
+        // Un-excluded, the same input DOES hunt -- so the guard is the exclusion, not the fallback.
+        assert_eq!(
+            hunt_filter_value(true, &[], &[], Some(here)),
+            Some("m60_51_36_00".to_string())
+        );
+    }
+
+    #[test]
+    fn one_mark_surviving_exclusion_is_still_a_single_unambiguous_target() {
+        // Two marks would refuse (no OR in a Steam filter), but if an exclusion removes one of
+        // them the intent is unambiguous again and hunt should proceed rather than refuse.
+        let keep = 0x0f00_0000;
+        let drop = 0x3c35_3800;
+        assert_eq!(
+            hunt_filter_value(true, &[keep, drop], &[drop], None),
+            Some(map_value(BlockKey::from_raw(keep)))
+        );
+    }
+
+    #[test]
+    fn every_mark_being_excluded_is_explained_rather_than_silently_unfiltered() {
+        let a = 0x0f00_0000;
+        let b = 0x3c35_3800;
+        let why = hunt_refusal(true, &[a, b], &[a, b], None).expect("must explain");
+        assert!(
+            why.contains("excluded"),
+            "the refusal has to name the cause: {why}"
+        );
+        assert_eq!(hunt_filter_value(true, &[a, b], &[a, b], None), None);
+    }
 
     #[test]
     fn the_published_value_is_the_engines_own_map_spelling() {
@@ -672,16 +921,22 @@ mod tests {
     #[test]
     fn hunt_is_inert_until_the_user_asks_for_it() {
         let standing = BlockKey::from_raw(HERE);
-        assert_eq!(hunt_filter_value(false, &[], Some(standing)), None);
-        assert_eq!(hunt_filter_value(false, &[THERE], Some(standing)), None);
-        assert_eq!(hunt_refusal(false, &[THERE, HERE], Some(standing)), None);
+        assert_eq!(hunt_filter_value(false, &[], &[], Some(standing)), None);
+        assert_eq!(
+            hunt_filter_value(false, &[THERE], &[], Some(standing)),
+            None
+        );
+        assert_eq!(
+            hunt_refusal(false, &[THERE, HERE], &[], Some(standing)),
+            None
+        );
     }
 
     #[test]
     fn with_nothing_marked_hunt_asks_for_where_you_are_standing() {
         let standing = BlockKey::from_raw(HERE);
         assert_eq!(
-            hunt_filter_value(true, &[], Some(standing)),
+            hunt_filter_value(true, &[], &[], Some(standing)),
             Some("m60_51_43_00".to_owned())
         );
     }
@@ -691,7 +946,7 @@ mod tests {
         let standing = BlockKey::from_raw(HERE);
         // The MARK wins over where you stand -- marking a place is the user naming a destination.
         assert_eq!(
-            hunt_filter_value(true, &[THERE], Some(standing)),
+            hunt_filter_value(true, &[THERE], &[], Some(standing)),
             Some("m61_46_43_00".to_owned())
         );
     }
@@ -705,10 +960,10 @@ mod tests {
     fn several_marked_locations_refuse_rather_than_matching_nobody() {
         let standing = BlockKey::from_raw(HERE);
         assert_eq!(
-            hunt_filter_value(true, &[HERE, THERE], Some(standing)),
+            hunt_filter_value(true, &[HERE, THERE], &[], Some(standing)),
             None
         );
-        let why = hunt_refusal(true, &[HERE, THERE], Some(standing)).expect("explains itself");
+        let why = hunt_refusal(true, &[HERE, THERE], &[], Some(standing)).expect("explains itself");
         assert!(
             why.contains("no OR"),
             "the reason must name the real cause: {why}"
@@ -721,8 +976,8 @@ mod tests {
 
     #[test]
     fn hunt_with_no_mark_and_no_readable_block_says_so_instead_of_filtering() {
-        assert_eq!(hunt_filter_value(true, &[], None), None);
-        let why = hunt_refusal(true, &[], None).expect("explains itself");
+        assert_eq!(hunt_filter_value(true, &[], &[], None), None);
+        let why = hunt_refusal(true, &[], &[], None).expect("explains itself");
         assert!(
             why.contains("unfiltered"),
             "must say the search is unnarrowed: {why}"
@@ -734,7 +989,7 @@ mod tests {
     fn the_hunted_value_is_spelled_exactly_as_the_published_one() {
         let block = BlockKey::from_raw(THERE);
         assert_eq!(
-            hunt_filter_value(true, &[THERE], None),
+            hunt_filter_value(true, &[THERE], &[], None),
             Some(map_value(block))
         );
     }

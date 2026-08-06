@@ -13,6 +13,16 @@
 //
 // READ-ONLY. This agent never writes target memory and never calls into the target.
 
+// Frida 17 removed NativePointer.toNumber(). Kept as one helper so a future API change has a
+// single place to be fixed rather than being spread across the range loop.
+function ptrToNumber(p) {
+  return Number(p.toString());
+}
+
+// Kept across calls so a systematic read failure is reportable rather than silent.
+var firstReadError = null;
+var readFailures = 0;
+
 rpc.exports = {
   // Every loaded module, so the caller can see what is actually present before choosing one.
   listModules: function () {
@@ -40,8 +50,12 @@ rpc.exports = {
       var rEnd = r.base.add(r.size).compare(end) > 0 ? end : r.base.add(r.size);
       return {
         base: rStart.toString(),
-        rva: rStart.sub(start).toNumber(),
-        size: rEnd.sub(rStart).toNumber(),
+        // `NativePointer.toNumber()` was REMOVED in Frida 17 (this failed as
+        // "TypeError: not a function" against gadget 17.16.4). `toString()` yields "0x...", which
+        // Number() parses exactly, and both values here are offsets/sizes within one module -- far
+        // inside the 2^53 range where that conversion is lossless.
+        rva: ptrToNumber(rStart.sub(start)),
+        size: ptrToNumber(rEnd.sub(rStart)),
         protection: r.protection,
       };
     }).filter(function (r) {
@@ -61,12 +75,27 @@ rpc.exports = {
   readChunk: function (addressStr, size) {
     var address = ptr(addressStr);
     try {
-      var bytes = Memory.readByteArray(address, size);
+      // Frida 17 removed the legacy `Memory.readByteArray(addr, size)` in favour of the pointer
+      // method. Calling the removed form threw for EVERY chunk, and the catch below turned that
+      // into a silent all-zero dump that still reported success -- a broken API dressed up as a
+      // module that refused to be read. See `firstReadError`.
+      var bytes = address.readByteArray(size);
       return bytes === null ? null : bytes;
     } catch (e) {
-      // A page that vanished or refuses to read is reported as a hole, not an abort: losing one
-      // page should cost that page, not the whole dump.
+      // A page that vanished or refuses to read is a hole, not an abort: losing one page should
+      // cost that page, not the whole dump. But the FIRST failure is kept so a systematic failure
+      // (wrong API, detached session, bad base) can be told apart from ordinary unreadable pages.
+      if (firstReadError === null) {
+        firstReadError = String(e && e.message ? e.message : e);
+      }
+      readFailures += 1;
       return null;
     }
+  },
+
+  // What went wrong, if anything did. The dumper prints this when a dump comes back mostly empty,
+  // so "the module would not read" is never reported without the reason.
+  readDiagnostics: function () {
+    return { failures: readFailures, firstError: firstReadError };
   },
 };

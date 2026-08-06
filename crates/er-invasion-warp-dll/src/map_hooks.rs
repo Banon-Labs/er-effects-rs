@@ -2328,6 +2328,20 @@ pub fn registry_place_names_for_block(block: u32) -> Vec<i32> {
         .unwrap_or_default()
 }
 
+/// How many blocks have at least one recorded `PlaceName`.
+///
+/// Exists so a diagnostic can tell "the map has never been opened, so NOTHING has a name" apart
+/// from "the map has been read and this particular block simply has no named pin". Those two have
+/// opposite fixes -- open the map, versus nothing the player can do -- and a message that asserts
+/// the first without checking will confidently give useless advice for the second.
+#[must_use]
+pub fn registry_named_block_count() -> usize {
+    let Ok(guard) = PLACE_NAMES_BY_BLOCK.lock() else {
+        return 0;
+    };
+    guard.as_ref().map_or(0, std::collections::BTreeMap::len)
+}
+
 /// The injected registry, leaked so the confirm hook can map a synthetic entity id back to its
 /// target for the rest of the session. 0 until the injection runs.
 pub(crate) static INJECTED_REGISTRY: AtomicUsize = AtomicUsize::new(0);

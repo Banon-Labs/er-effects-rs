@@ -508,6 +508,25 @@ const WRITERS = [
     prologue: '488b0511ec6e038b118990f00a0000c3' },
 ];
 
+// THE WHOLE CANDIDATE RECORD. `SetMultiplayJoinData(SosSignMan*, ServerPushJoinData*)` receives
+// everything the server sent about this candidate, 0x80 bytes, BEFORE anything is committed. This
+// is the record a location filter would judge, so it is dumped in full rather than field by field:
+// what a filter CAN match on is the question, and a field we did not think to decode is exactly
+// the kind of thing that answers it.
+//
+// Layout from the 1.16.2 dump's own ServerPushJoinData structure:
+//   +0x00 u32          "matchPlayerCount" -- MISNAMED in the dump: this is the value handed to
+//                       SetTargetMapId, i.e. the destination BlockId. Decoded as both.
+//   +0x04 FloatVector3 spawnPosition          +0x10 float spawnAngle
+//   +0x14 int          entryfilelistId        +0x18 SummonParamType summonParamType
+//   +0x1c MultiplayRole multiplayRole         +0x1d bool hasPassword
+//   +0x1e bool         shouldUseRapidReentry  +0x20 FnVector<byte> lobbyData (begin/end/cap)
+//   +0x38 byte         settings               +0x39 byte stage
+//   +0x3a wchar_t[32]  password
+const JOIN_DATA_FN = { name: 'SetMultiplayJoinData', va: '0x1406fb520',
+                       prologue: '40534881ec8000000048c7442428feff' };
+const JOIN_DATA_LEN = 0x80;
+
 // THE COORDINATE. `SetMultiplayJoinData` places by raw position, not by MSB entry point, so on the
 // server-pushed path this -- not the entry point -- is what says a destination is real:
 //   void SetMultiplayJoinTargetBlockPos(FloatVector3*) -> GameMan->multiplayJoinTargetBlockPos
@@ -710,6 +729,40 @@ rpc.exports = {
         emit(rec);
       })) out.hooked.push(w.name);
     });
+
+    // The candidate record, dumped before any of the setters below run.
+    const jdAddr = ptr(JOIN_DATA_FN.va).add(slide);
+    if (attachVerified(jdAddr, JOIN_DATA_FN.prologue, JOIN_DATA_FN.name, function (args) {
+      const p = args[1];
+      const rec = { type: 'candidate', ptr: p.toString(), raw: hexBytes(p, JOIN_DATA_LEN) };
+      try {
+        const mapRaw = p.readU32();
+        rec.map_raw = mapRaw;
+        rec.map = blockName(mapRaw);
+        rec.spawn = [p.add(0x04).readFloat(), p.add(0x08).readFloat(), p.add(0x0c).readFloat()];
+        rec.spawn_angle = p.add(0x10).readFloat();
+        rec.entryfilelist_id = p.add(0x14).readS32();
+        rec.summon_param_type = p.add(0x18).readS32();
+        rec.multiplay_role = p.add(0x1c).readU8();
+        rec.has_password = p.add(0x1d).readU8() !== 0;
+        rec.rapid_reentry = p.add(0x1e).readU8() !== 0;
+        rec.settings = p.add(0x38).readU8();
+        rec.stage = p.add(0x39).readU8();
+        // wchar_t[32]; readUtf16String stops at the NUL rather than running to the fixed width.
+        rec.password = p.add(0x3a).readUtf16String();
+      } catch (e) { rec.decode_error = '' + e; }
+      // lobbyData is a begin/end/cap triple. Whatever identifies the HOST would live in this
+      // payload, so it is followed one level -- bounded, because a garbage length here would
+      // otherwise try to read an arbitrary span out of a live process.
+      try {
+        const begin = p.add(0x20).readPointer();
+        const end = p.add(0x28).readPointer();
+        const span = end.sub(begin).toInt32();
+        rec.lobby_data_len = span;
+        if (span > 0 && span <= 0x400) rec.lobby_data = hexBytes(begin, span);
+      } catch (e) { rec.lobby_data_len = null; }
+      emit(rec);
+    })) out.hooked.push(JOIN_DATA_FN.name);
 
     const posAddr = ptr(SPAWN_POS.va).add(slide);
     if (attachVerified(posAddr, SPAWN_POS.prologue, SPAWN_POS.name, function (args) {

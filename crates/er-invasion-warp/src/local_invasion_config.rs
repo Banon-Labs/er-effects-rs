@@ -57,6 +57,11 @@ enabled = false
 #   "area"  -- that exact location, or anywhere sharing one of its place names. If where you stand
 #              carries one name, that is one place to look; if it carries five, five.
 #   "named" -- ignore where you are; accept only the locations listed below.
+#
+# OPEN YOUR WORLD MAP ONCE per session if you use "area" or "named". Place names are read off the
+# world map's own rows, so before you have opened it no location has a name, every name-based
+# judgement fails closed, and both modes behave like "exact". The log says so the first time it
+# happens. "exact" compares locations directly and never needs the map.
 mode = "exact"
 
 # HUNT MODE -- ask Steam for ONE location instead of rejecting what it sends.
@@ -87,21 +92,6 @@ named_locations = []
 
 # Locations you marked, and the two lists the in-game keys write to. Both WIDEN whatever `mode`
 # allows -- a marked place is always accepted, in every mode -- so you can leave mode = "exact"
-
-# HUNT MODE -- ask Steam for ONE location instead of rejecting what it sends.
-#
-# The filter above DECLINES matches: it sees every host and cancels the ones you do not want, which
-# always works but can take many tries. Hunt instead narrows the QUERY, so the answer arrives right
-# the first time.
-#
-# The cost, and why this is separate and off by default: it filters on a key only this DLL
-# publishes, so while hunt is on you will NOT see hosts who are not running it. Your friend needs
-# it too. Leave it off to keep meeting everybody.
-#
-# A Steam filter tests ONE value and has no OR, so hunt uses the single marked location if you have
-# marked exactly one, or the map you are standing in if you have marked none. Several marked
-# locations cannot be expressed and hunt will say so and stay out of the way.
-hunt = false
 # and just collect places as you visit them.
 #
 #   mark_key         "invade here"      -> allowed_blocks   (and clears any exclusion)
@@ -784,13 +774,8 @@ mod tests {
         );
         let anchor = InvasionAnchor::new(0x0f00_0000, [100]);
         assert_eq!(
-            hot.current().judge(
-                &anchor,
-                InvasionCandidate {
-                    block: 0x3c35_3800,
-                    place_name: 999
-                }
-            ),
+            hot.current()
+                .judge(&anchor, &InvasionCandidate::named(0x3c35_3800, 999)),
             Verdict::Keep(KeepReason::FilterDisabled)
         );
         let _ = std::fs::remove_dir_all(&dir);

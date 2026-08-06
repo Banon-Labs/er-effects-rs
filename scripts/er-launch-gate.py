@@ -331,6 +331,48 @@ PREDICATES: tuple[Predicate, ...] = (
         log_any=(r'"type":\s*"session"',),
         informative_if=(r'"type":\s*"(session|osm|menu-open|action)"',),
     ),
+    Predicate(
+        name="hunt_hook_lands_on_steamclient",
+        why=(
+            "THE ONE FACT ABOUT HUNT MODE NO OFFLINE WORK CAN ESTABLISH. Every other detour this "
+            "repo installs targets the game image or ersc; hunt's goes onto vtable slot 4 of "
+            "ISteamMatchmaking, which lives in steamclient64.dll -- a different module, loaded by "
+            "Steam, with its own page protections. Whether the union dispatcher can take that "
+            "target is answerable only in a live process. If it cannot, hunt is INERT: every query "
+            "goes out unfiltered and the player sees a perfectly ordinary search, which is exactly "
+            "what 'the filter is working and nobody is there' looks like. The DLL logs the failure "
+            "and the oracle carries it, so a run that comes back with this false has told us "
+            "something; a run that never looks has not."
+        ),
+        owner="crates/er-invasion-warp-dll/src/lobby_publish.rs (install_hunt_hook)",
+        oracle_all={"oracle_invasion_warp_hunt_hooked": True},
+        log_any=(r"hunt: asking Steam for hosts at m\d\d_\d\d_\d\d_\d\d only",),
+        # A run with hunt off, or one that never reached a lobby query, has no opinion about
+        # whether the hook can land. Only a run where the DLL published its oracle document at all
+        # counts -- absence of the field means the feature never got that far.
+        informative_oracle={
+            "oracle_invasion_warp_hunt_hooked": lambda v: isinstance(v, bool),
+        },
+    ),
+    Predicate(
+        name="hunt_filter_reaches_the_wire",
+        why=(
+            "Installing the detour is NOT the same as narrowing a query. `hunt_target` declines "
+            "whenever hunt is off, the player's block is unreadable, or several locations are "
+            "marked -- a Steam string filter is one equality test with no OR, so the multi-mark "
+            "case refuses on purpose. All three declines leave a hooked, silent run that looks "
+            "identical to a working one from outside. Only a non-zero filter count says Seamless's "
+            "own outgoing search actually carried our key."
+        ),
+        owner="crates/er-invasion-warp-dll/src/lobby_publish.rs (request_lobby_list_hook)",
+        oracle_all={
+            "oracle_invasion_warp_hunt_filters": lambda v: isinstance(v, int) and v >= 1
+        },
+        log_any=(r"hunt: asking Steam for hosts at m\d\d_\d\d_\d\d_\d\d only",),
+        informative_oracle={
+            "oracle_invasion_warp_hunt_hooked": lambda v: v is True,
+        },
+    ),
 )
 
 

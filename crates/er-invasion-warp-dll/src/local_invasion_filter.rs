@@ -66,7 +66,8 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use er_invasion_warp::local_invasion::{
-    InvasionAnchor, InvasionCandidate, LocalInvasionConfig, LocationChoice, RejectReason, Verdict,
+    InvasionAnchor, InvasionCandidate, LocalInvasionConfig, LocalInvasionMode, LocationChoice,
+    RejectReason, Verdict,
 };
 use er_invasion_warp::local_invasion_config::{CONFIG_FILE_NAME, DEFAULT_CONFIG_TOML, HotConfig};
 use er_invasion_warp::param_row::PinAppearance;
@@ -891,9 +892,76 @@ fn place_names_for_block(block: u32) -> Vec<i32> {
     crate::map_hooks::registry_place_names_for_block(block)
 }
 
-/// The single `PlaceName` text id for a destination block, or `-1` when unknown.
-fn place_name_for_block(block: u32) -> i32 {
-    place_names_for_block(block).first().copied().unwrap_or(-1)
+/// One latch per distinct explanation, so saying one thing never silences the others.
+///
+/// A single shared latch was the first version's defect: whichever cause happened to arrive first
+/// spent it, and every later rejection -- with a different cause and a different fix -- went
+/// unexplained for the rest of the session.
+static SAID_EMPTY_NAMED_LIST: AtomicUsize = AtomicUsize::new(0);
+static SAID_MAP_NEVER_OPENED: AtomicUsize = AtomicUsize::new(0);
+static SAID_BLOCK_HAS_NO_NAME: AtomicUsize = AtomicUsize::new(0);
+
+/// Explain a rejection caused by MISSING information rather than by a wrong location, having first
+/// established WHICH information is missing.
+///
+/// From the player's seat every one of these looks the same -- nobody is hosting there -- and each
+/// has a different fix, or none. The first version of this asserted a single cause ("open your
+/// world map") for all of them without checking anything, which meant it confidently gave the
+/// wrong advice in the most common case and made a false claim about `named` mode on the way past.
+/// Diagnosing by asserting is the same error as the frozen telemetry document: an instrument that
+/// reports a conclusion it never measured.
+///
+/// The three real causes, distinguished by state this function actually reads:
+///
+/// * `named` mode with an empty id list -- nothing to compare against, and the map cannot help
+///   because opening it populates the pin registry, never `named_location_text_ids`.
+/// * the pin registry is entirely empty -- the world map has not been built this session, so no
+///   block anywhere has a name. Opening the map once fixes every subsequent match.
+/// * the registry has names but not for this block -- that location carries no named invasion pin.
+///   Opening the map again changes nothing; only `exact` mode, or marking the place, will help.
+///
+/// Rejecting in all three cases stays correct. Accepting a destination whose location cannot be
+/// verified would land the player exactly where they filtered against. What was wrong was doing it
+/// silently, and then explaining it wrongly.
+fn explain_missing_names(reason: RejectReason, mode: LocalInvasionMode, destination: u32) {
+    if !matches!(
+        reason,
+        RejectReason::CandidateUnnamed | RejectReason::NothingToMatchAgainst
+    ) {
+        return;
+    }
+    // `named` mode reaches `NothingToMatchAgainst` from an empty CONFIG list, before any name is
+    // consulted. Nothing about the map is involved, so none of the map advice applies.
+    if reason == RejectReason::NothingToMatchAgainst && mode == LocalInvasionMode::NamedOnly {
+        if SAID_EMPTY_NAMED_LIST.swap(1, Ordering::SeqCst) == 0 {
+            crate::standalone_log(format_args!(
+                "local-invasion: mode = \"named\" with an EMPTY list rejects everything, including \
+                 the location you are standing in -- it is stricter than \"exact\", not looser. \
+                 Mark a place with Shift+Insert, or add ids to named_location_text_ids, or switch \
+                 mode."
+            ));
+        }
+        return;
+    }
+    let named_blocks = crate::map_hooks::registry_named_block_count();
+    if named_blocks == 0 {
+        if SAID_MAP_NEVER_OPENED.swap(1, Ordering::SeqCst) == 0 {
+            crate::standalone_log(format_args!(
+                "local-invasion: no location has a name yet, so every name-based judgement fails \
+                 closed. Names are read off the world map's own rows -- OPEN YOUR WORLD MAP ONCE \
+                 and matches will judge normally. `exact` mode never needs them."
+            ));
+        }
+        return;
+    }
+    if SAID_BLOCK_HAS_NO_NAME.swap(1, Ordering::SeqCst) == 0 {
+        crate::standalone_log(format_args!(
+            "local-invasion: {named_blocks} location(s) have names, but {destination:#010x} is not \
+             one of them -- that block carries no named invasion pin, so `area` and `named` cannot \
+             judge it and it will keep being rejected. Opening the map again will not change this: \
+             use `exact`, or mark the place with Insert."
+        ));
+    }
 }
 
 /// Judge an incoming match and cancel it if the user's rules say so.
@@ -928,11 +996,12 @@ pub fn judge_incoming_match(join_data: usize) {
         return;
     };
 
-    let candidate = InvasionCandidate {
-        block: destination,
-        place_name: place_name_for_block(destination),
-    };
-    match config.judge(&anchor, candidate) {
+    // EVERY name the destination carries, not one of them. This was `.first()` of the list --
+    // over a `BTreeSet` that is the numerically smallest id -- while the anchor compared against
+    // all of its own names, so a destination sharing a name through any other of its names was
+    // rejected as `WrongPlaceName`.
+    let candidate = InvasionCandidate::new(destination, place_names_for_block(destination));
+    match config.judge(&anchor, &candidate) {
         Verdict::Keep(reason) => {
             KEEPS.fetch_add(1, Ordering::SeqCst);
             // The search that just landed is over; nothing to re-arm.
@@ -947,10 +1016,14 @@ pub fn judge_incoming_match(join_data: usize) {
         }
         Verdict::Reject(reason) => {
             crate::standalone_log(format_args!(
-                "local-invasion: REJECT {destination:#010x} ({reason:?}); anchor {:#010x} mode={}",
+                "local-invasion: REJECT {destination:#010x} ({reason:?}); anchor {:#010x} with {} \
+                 named location(s), destination with {}, mode={}",
                 anchor.block,
+                anchor.named_location_count(),
+                candidate.named_location_count(),
                 config.mode.as_str()
             ));
+            explain_missing_names(reason, config.mode, destination);
             cancel_match(reason);
         }
     }
