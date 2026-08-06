@@ -592,12 +592,12 @@ pub fn standalone_tick() {
     );
     // APPEND one JSON line per write -> a timeseries jsonl the agent reads AFTER the run (no polling,
     // no sleep). body already ends in '\n'.
+    //
+    // The timeseries is per RUN, so the file is truncated by this process's first sample (previous
+    // run kept one generation as `.prev`). A file spanning launches would make the tick stamps jump
+    // backwards mid-file and every "how long did phase X take" read off it wrong.
     use std::io::Write as _;
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(standalone_json_path())
-    {
+    if let Some(mut f) = er_game_base::log::open_fresh_run_append(&standalone_json_path()) {
         let _ = f.write_all(body.as_bytes());
     }
 

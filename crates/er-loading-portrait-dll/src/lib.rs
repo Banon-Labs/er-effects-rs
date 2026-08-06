@@ -14,8 +14,6 @@
 #![allow(non_snake_case)]
 
 use std::{
-    fs::OpenOptions,
-    io::Write,
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -152,15 +150,15 @@ fn append_compositor_log(args: std::fmt::Arguments<'_>) {
     append_named_log(&log_dir(), LOG_FILE_NAME, args);
 }
 
+/// Fresh per process, per file: the first line a run writes to `name` truncates it (rotating
+/// the previous run's aside as `<name>.prev`), later lines append. The one-shot is keyed by
+/// PATH, so the run log and the crash log each get their own clean start.
 fn append_named_log(dir: &std::path::Path, name: &str, args: std::fmt::Arguments<'_>) {
-    let path = dir.join(name);
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or(0);
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(file, "[{now_ms}] {args}");
-    }
+    er_game_base::log::append_line(&dir.join(name), format_args!("[{now_ms}] {args}"));
 }
 
 #[cfg(windows)]

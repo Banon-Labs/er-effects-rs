@@ -791,15 +791,14 @@ impl TraceSem {
 
 /// Append one already-formatted JSONL line (with trailing newline). Cached handle, single
 /// `write_all` per line; errors ignored like every other telemetry writer (never fault the game).
+///
+/// FRESH PER RUN: the handle is opened through `er_game_base::log`, which truncates the file on
+/// this process's first line (previous run kept one generation as `.prev`). A trace is read by
+/// counting and diffing frames, so two runs concatenated is not a longer trace -- it is a wrong one.
 fn input_trace_append(line: &str) {
     static FILE: OnceLock<Option<Mutex<fs::File>>> = OnceLock::new();
     let slot = FILE.get_or_init(|| {
-        fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(input_trace_path())
-            .ok()
-            .map(Mutex::new)
+        er_game_base::log::open_fresh_run_append(&input_trace_path()).map(Mutex::new)
     });
     if let Some(m) = slot {
         let mut f = match m.lock() {

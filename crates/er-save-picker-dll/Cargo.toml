@@ -30,6 +30,9 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 er-save-picker = { path = "../er-save-picker" }
 er-save-redirect = { path = "../er-save-redirect" }
+# Tier A only (zero external deps, host-buildable): the fresh-per-process log writer, so this
+# shell's log describes exactly one run instead of accumulating across launches.
+er-game-base = { path = "../er-game-base" }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

@@ -132,6 +132,7 @@ start_protected_launch_detected if {
 	executable_source_marker
 	contains(marker_scan_text, "start_protected_game.exe")
 	not start_protected_process_detection_only
+	not launcher_named_only_as_data
 }
 
 # The launcher in COMMAND POSITION with no path at all: `start_protected_game.exe
@@ -496,7 +497,11 @@ scrubbed_command := concat(" ", [launch_single_parts[idx] |
 #     (`$HOME`/`${HOME}`/`~`/`/home/<user>`/`/root`/`/Users/<user>`, or a bare
 #     `bd`): AGENTS.md documents the invocation as `$HOME/.local/bin/bd`, and a
 #     hard-coded `/home/banon/...` literal silently disabled this exemption for
-#     the documented form and for every other user's home (2026-07-28);
+#     the documented form and for every other user's home (2026-07-28). The
+#     path may also be QUOTED (`"$HOME/.local/bin/bd" remember ...`), which is
+#     the ordinary way to write it when the home path could contain a space --
+#     the unanticipated leading `"` was the entire reason a bd memory ABOUT
+#     the EAC launcher was denied on 2026-08-04;
 #   * the quote-scrubbed command must contain no separators, subshells,
 #     redirects, or backticks (so no second command rides along); and
 #   * the raw command must contain no `$(` or backtick anywhere (command
@@ -508,7 +513,7 @@ scrubbed_command := concat(" ", [launch_single_parts[idx] |
 
 bd_text_command if {
 	tool_name == "Bash"
-	regex.match(`^[[:space:]]*((\$HOME|\$\{HOME\}|~|/home/[[:alnum:]._-]+|/root|/Users/[[:alnum:]._-]+)/\.local/bin/)?bd[[:space:]]+(create|update|comment|comments|remember|close)([[:space:]]|$)`, command)
+	regex.match(`^[[:space:]]*["']?((\$HOME|\$\{HOME\}|~|/home/[[:alnum:]._-]+|/root|/Users/[[:alnum:]._-]+)/\.local/bin/)?bd["']?[[:space:]]+(create|update|comment|comments|remember|close)([[:space:]]|$)`, command)
 	not regex.match(`[;|&()<>\x60\n\r]`, scrubbed_command)
 	not contains(command, "$(")
 	not contains(command, "`")
@@ -904,6 +909,180 @@ launcher_mention_nested := nested_in_double + nested_in_single if {
 mention_quoted_exec_marker if {
 	some marker in proc_scan_exec_markers
 	contains(mention_quoted_text, marker)
+}
+
+# ---------------------------------------------------------------------------
+# The launcher NAMED AS DATA by a command that cannot execute it.
+#
+# False positive fixed 2026-08-04. Recording a knowledge-base memory ABOUT the
+# launcher was denied:
+#
+#   "$HOME/.local/bin/bd" remember "... start_protected_game.exe (24 chars)
+#   could not match /proc/<pid>/comm, which the kernel truncates at 15 chars
+#   ... run bash scripts/er-stale-run-sentinel.sh" --key <key>
+#
+# The offending construct is the substring fallback arm, whose entire test is
+# "the payload contains the name" plus `executable_source_marker` -- a set of
+# generic words ("bash", "python", "shell", "exec", ...) that occur constantly
+# in ordinary prose. Naming a file is not running it. AGENTS.md forbids
+# LAUNCHING the EAC launcher while explicitly permitting detection of stale
+# `start_protected_game.exe` processes, so documenting, grepping, committing or
+# remembering the name has to stay writable -- otherwise the rule cannot be
+# described in the repo that enforces it, nor can the repo's own stale-run
+# sentinel be discussed by the name it detects.
+#
+# Two shapes qualify, and BOTH additionally require that no process-execution
+# mechanism (`proc_scan_exec_markers`: subprocess/os.system/exec*/spawn/ctypes/
+# `sh -c`/wine/proton/steam://...) appears anywhere in the command:
+#
+#   (I) every occurrence sits in a statement headed by a command that does not
+#       execute its arguments (`bd`, `echo`, `printf`, `git`, `gh`, `cat`,
+#       `grep`, `sha256sum`, ...). The head is matched on its BASENAME so
+#       `"$HOME/.local/bin/bd"` counts as `bd`, and the head set is an
+#       ALLOWLIST: an unrecognised head (`setsid`, `nohup`, a repo script, or
+#       the launcher itself in command position) keeps the guard on. Statement
+#       boundaries are `;`, `&` and newlines; parentheses are token separators
+#       rather than statement separators, so ordinary prose -- "the launcher
+#       (start_protected_game.exe) is forbidden" -- stays inside its inert
+#       statement while `x; (wine <name>)` still exposes `wine` as the head.
+#
+#  (II) the whole command is a SINGLE simple command -- the quote-scrubbed
+#       skeleton holds no separator, subshell, redirect or newline, so
+#       everything interesting is inside quotes -- its head word is inert or an
+#       inline interpreter (`python3 -c "print('... <name> ...')"`), and every
+#       occurrence sits inside a quoted region. A quoted region of a simple
+#       command is one shell WORD, so the name there is program text or an
+#       argument, never a command. The head allowlist is what keeps `eval
+#       "'<name>'"`, `setsid "'<name>'"` and `env "..."` denied, and shells
+#       (`bash`, `sh`) are deliberately absent from it.
+#
+# Shared fail-closed shape: Bash tool only; no `$(` and no backtick anywhere (a
+# command substitution inside a quoted argument is expanded by the shell before
+# the inert command ever sees it); no heredoc (heredoc payloads keep the
+# dedicated shapes above, and a doc heredoc is already covered by the gh/git
+# text exemptions); no `|` at all, so `echo <name> | sh` cannot ride through on
+# an inert head; and the name must not appear in non-command tool fields.
+#
+# Every command-position and executor-verb regex arm above is untouched and
+# still denies independently of this exemption, which can only ever silence the
+# substring fallback.
+# ---------------------------------------------------------------------------
+
+# (I) every occurrence is an argument of an inert (non-executing) command.
+launcher_named_only_as_data if {
+	launcher_data_command_shape
+	launcher_data_naming_statement_count == launcher_mention_total
+	launcher_data_inert_naming_count == launcher_data_naming_statement_count
+}
+
+# (II) a single simple command headed by an inert or inline-interpreter word,
+# with every occurrence inside a quoted region.
+launcher_named_only_as_data if {
+	launcher_data_command_shape
+	not regex.match(`[;|&()<>\x60\n\r]`, scrubbed_command)
+	not contains(detection_unquoted_command, "start_protected_game.exe")
+	launcher_data_head_allowed
+}
+
+launcher_data_command_shape if {
+	tool_name == "Bash"
+	not contains(command, "$(")
+	not contains(command, "`")
+	not contains(command, "<<")
+	not contains(command, "|")
+	not contains(lower(other_text), "start_protected_game.exe")
+	launcher_mention_total > 0
+	not launcher_data_exec_marker
+}
+
+# Process-execution mechanisms that keep this exemption off. The launcher
+# WRAPPER words (wine/proton/steam/xdg-open) are deliberately excluded from
+# this subset: they are what AGENTS.md prose about the rule says
+# ("directly or via Proton/Wine/Steam"), and a real wrapper INVOCATION is
+# caught structurally instead -- as the head of the statement naming the
+# launcher in shape (I), as a non-allowlisted head in shape (II), and by the
+# executor-verb regex arms above, none of which this exemption can silence.
+launcher_data_exec_marker if {
+	some marker in proc_scan_exec_markers
+	not marker in {"wine", "proton", "steam -applaunch", "steam://", "xdg-open"}
+	contains(lower(proc_scan_norm_command), marker)
+}
+
+# Head word of the whole command, quotes folded to whitespace so a quoted
+# binary path (`"$HOME/.local/bin/bd" remember ...`) yields `bd`.
+launcher_data_head_tokens := [token |
+	some token in split(replace(replace(replace(lower(proc_scan_norm_command), `"`, " "), "'", " "), "\t", " "), " ")
+	token != ""
+]
+
+launcher_data_head_basename := basename if {
+	count(launcher_data_head_tokens) > 0
+	parts := split(launcher_data_head_tokens[0], "/")
+	basename := parts[count(parts) - 1]
+}
+
+launcher_data_head_allowed if {
+	launcher_data_head_basename in launcher_inert_heads
+}
+
+launcher_data_head_allowed if {
+	launcher_data_head_basename in launcher_inline_interpreter_heads
+}
+
+# Interpreters whose quoted argument is a PROGRAM, not a command line. Shells
+# are absent on purpose: `bash -c "'<name>'"` runs the launcher.
+launcher_inline_interpreter_heads := {"node", "perl", "python", "python3", "ruby"}
+
+# Whitespace-normalized, lowercased command with quotes DELETED (not quoted
+# spans removed), so a quoted argument survives for the statement-head read the
+# same way `launch_quotes_deleted` preserves a quoted launch operand.
+launcher_data_unquoted := lower(replace(replace(replace(replace(proc_scan_norm_command, `\"`, ""), `\'`, ""), `"`, ""), "'", ""))
+
+# Statement separators normalized to `;`. Parentheses are deliberately NOT
+# separators here (see the header comment); `$(` and backticks are excluded by
+# the shape check, and `|` cannot be present.
+launcher_data_statement_text := replace(replace(replace(launcher_data_unquoted, "&", ";"), "\n", ";"), "\r", ";")
+
+launcher_data_pieces := split(launcher_data_statement_text, "start_protected_game.exe")
+
+# One entry per occurrence: the statement that NAMES the launcher. An array
+# comprehension (not a set) so two occurrences in identical statements are
+# counted twice and cannot collapse into one.
+launcher_data_naming_statements := [statement |
+	some idx
+	piece := launcher_data_pieces[idx]
+	idx < count(launcher_data_pieces) - 1
+	statements := split(piece, ";")
+	statement := statements[count(statements) - 1]
+]
+
+launcher_data_naming_statement_count := count(launcher_data_naming_statements)
+
+launcher_data_inert_naming_count := count([1 |
+	some idx
+	statement := launcher_data_naming_statements[idx]
+	cleaned := replace(replace(replace(replace(replace(replace(statement, "\t", " "), "(", " "), ")", " "), "[", " "), "]", " "), ",", " ")
+	tokens := [token |
+		some token in split(cleaned, " ")
+		token != ""
+	]
+	count(tokens) > 0
+	path_parts := split(tokens[0], "/")
+	path_parts[count(path_parts) - 1] in launcher_inert_heads
+])
+
+# Commands that record, print, search or measure their arguments and never
+# execute them. Basenames only, so any path form of the same tool matches.
+# Interpreters, shells, wrappers (`env`, `sudo`, `nohup`, `setsid`, `xargs`)
+# and repo scripts are deliberately absent: an unlisted head keeps the guard
+# on. `sed`/`awk` can shell out via `system(`, which is an exec marker and so
+# is already excluded by the shared shape check.
+launcher_inert_heads := {
+	"awk", "basename", "bd", "cat", "cmp", "column", "comm", "cut", "date",
+	"diff", "dirname", "echo", "false", "file", "fold", "gh", "git", "grep",
+	"head", "jq", "ls", "md5sum", "mkdir", "nl", "od", "printf", "readlink",
+	"realpath", "rg", "rtk", "sed", "sha1sum", "sha256sum", "sort", "stat",
+	"strings", "tail", "tee", "touch", "tr", "true", "uniq", "wc", "xxd",
 }
 
 # Read-only process checks that shell out to exact `pgrep -x` from Python are

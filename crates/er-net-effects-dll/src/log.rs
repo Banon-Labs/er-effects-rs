@@ -1,5 +1,4 @@
 use std::{
-    fs::{self, OpenOptions},
     io::Write,
     path::PathBuf,
     sync::OnceLock,
@@ -25,18 +24,19 @@ fn log_path() -> PathBuf {
     PathBuf::from(LOG_FILE_NAME)
 }
 
+/// Anchor the `[+Nms]` stamps to DLL attach and start this run's log clean.
+///
+/// The truncation is delegated rather than done here (this used to `fs::write("")`) so the
+/// previous run's file is rotated aside as `.log.prev` instead of being destroyed, and so the
+/// log still starts fresh even if a line somehow beats attach to the file.
 pub(crate) fn reset_log_file() {
     let _ = START_MS.set(now_ms());
-    let _ = fs::write(log_path(), "");
+    er_game_base::log::begin_fresh_run(&log_path());
 }
 
 pub(crate) fn net_effects_log(args: std::fmt::Arguments<'_>) {
     let line = format!("[+{}ms] {args}\n", elapsed_ms());
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path())
-    {
+    if let Some(mut file) = er_game_base::log::open_fresh_run_append(&log_path()) {
         let _ = file.write_all(line.as_bytes());
     }
 }

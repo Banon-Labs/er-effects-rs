@@ -17,6 +17,12 @@ bash_event(cmd) := {
 	"tool_input": {"command": cmd, "timeout": 30000, "description": "test case"},
 }
 
+bash_event_with_description(cmd, desc) := {
+	"hook_event_name": "PreToolUse",
+	"tool_name": "Bash",
+	"tool_input": {"command": cmd, "timeout": 30000, "description": desc},
+}
+
 rule_ids(denials) := {d.rule_id | some d in denials}
 
 # --- (a) Pure bd text commands mentioning forbidden forms are ALLOWED -------
@@ -59,6 +65,153 @@ test_allow_bd_remember_mentioning_ersc_bundle_words if {
 	cmd := `/home/banon/.local/bin/bd remember --key k 'do not bundle or stage ersc.dll into release artifacts'`
 	denials := guard.deny with input as bash_event(cmd)
 	count(denials) == 0
+}
+
+# ---------------------------------------------------------------------------
+# 2026-08-04 false positive: NAMING the launcher as data was denied.
+#
+# The blocked command recorded a knowledge-base memory ABOUT the launcher --
+# that /proc/<pid>/comm truncates at 15 chars, so an exact-match entry for the
+# 24-char name could never match a process. The substring fallback asked only
+# "payload contains the name" plus a generic marker word, and "bash" in prose
+# is such a word. Naming a file is not running it: AGENTS.md forbids LAUNCHING
+# the EAC launcher while explicitly permitting detection of stale
+# start_protected_game.exe processes, so the rule has to stay documentable in
+# the repo that enforces it.
+# ---------------------------------------------------------------------------
+
+# The exact denied command shape. Two independent defects: the bd text
+# exemption's shape did not anticipate a QUOTED binary path (the leading `"`),
+# and the fallback denied any payload naming the launcher next to a generic
+# marker word.
+test_allow_bd_remember_quoted_binary_path_naming_eac_launcher if {
+	cmd := `"$HOME/.local/bin/bd" remember "er-stale-run-sentinel compared start_protected_game.exe (24 chars) verbatim against /proc/<pid>/comm, which the kernel truncates at 15 chars, so that entry could never match any process; run bash scripts/er-stale-run-sentinel.sh --selftest" --key stale-sentinel-comm-truncation-2026-08-04`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# Pipes disable the structural data exemption (see the deny case below), so
+# this shape can only pass through the bd text exemption -- it pins the quoted
+# binary path specifically.
+test_allow_bd_remember_quoted_binary_path_with_pipes_in_prose if {
+	cmd := `"$HOME/.local/bin/bd" remember "comm cap 15 | start_protected_game.exe is 24 | the entry never matched | reproduce with bash" --key stale-sentinel-comm-truncation-2026-08-04`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+test_allow_bd_close_quoted_binary_path_naming_eac_launcher if {
+	cmd := `"/home/banon/.local/bin/bd" close er-effects-rs-aaa --reason "sentinel now truncates start_protected_game.exe before comparing; verified from bash"`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# Printing the name is not running it.
+test_allow_echo_prose_naming_eac_launcher if {
+	cmd := `echo 'the sentinel detects start_protected_game.exe; never launch it from bash or proton wrappers'`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+test_allow_printf_prose_naming_eac_launcher if {
+	cmd := `printf '%s\n' 'stale-run sentinel comm list: eldenring.exe, me3, start_protected_game.exe (matched from bash)'`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# Parentheses around the name are prose punctuation, not a subshell: the
+# statement is still headed by the inert command.
+test_allow_echo_parenthesised_launcher_name if {
+	cmd := `echo 'the EAC launcher (start_protected_game.exe) must never be started from bash'`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# An inline interpreter program may hold the name as its own nested string
+# literal even when it never touches /proc.
+test_allow_python_c_string_literal_naming_eac_launcher if {
+	cmd := `python3 -c "print('sentinel comm entry: start_protected_game.exe truncated to 15 chars')"`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# Searching the repo's own sentinel for the comm name it detects.
+test_allow_grep_launcher_name_in_sentinel_script if {
+	cmd := `grep -n 'start_protected_game.exe' scripts/er-stale-run-sentinel.sh; echo 'run the sentinel with bash'`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# Several mentions, every one of them an argument of an inert command.
+test_allow_multiple_inert_statements_naming_eac_launcher if {
+	cmd := `echo 'comm cap hides start_protected_game.exe'; printf '%s\n' 'so start_protected_game.exe needs truncating in bash too'`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# --- ... and naming-as-data must not become a launch bypass ------------------
+
+# An inert first statement does not launder a launch in the second: the
+# statement that names the launcher there is headed by `setsid`, which is not
+# an inert command. (No regex arm covers this shape -- `setsid` is not a
+# recognised wrapper verb and the name is not at command position -- so this
+# pins the fallback itself.)
+test_deny_echo_prose_then_setsid_bare_launcher if {
+	cmd := `echo 'do not run start_protected_game.exe from bash'; setsid start_protected_game.exe`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+test_deny_echo_prose_then_nohup_quoted_launcher_path if {
+	cmd := `echo 'note about start_protected_game.exe written from bash'; nohup '/opt/er/start_protected_game.exe' &`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# An inert head does not make a PIPE inert: `echo <name> | bash` executes it.
+test_deny_echo_launcher_name_piped_into_shell if {
+	cmd := `echo 'start_protected_game.exe' | bash`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# A command substitution inside the inert command's quoted argument is expanded
+# by the shell before the inert command ever runs.
+test_deny_echo_with_command_substitution_launcher if {
+	cmd := `echo "$(bash -c /opt/er/start_protected_game.exe)"`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# A nested string literal alongside an exec mechanism is an argv element, not
+# data -- the no-exec-mechanism condition is what makes shape (II) safe.
+test_deny_python_c_nested_literal_with_os_system if {
+	cmd := `python3 -c "import os; n = 'start_protected_game.exe'; os.system('/opt/er/' + n)"`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# The exemption reads the COMMAND; it cannot be claimed while a non-command
+# tool field carries the launcher name.
+test_deny_launcher_named_in_non_command_tool_field if {
+	event := bash_event_with_description(
+		`echo 'a note written from bash'`,
+		"probe start_protected_game.exe",
+	)
+	denials := guard.deny with input as event
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# The widened bd path match must not leak the exemption to a chained launch.
+test_deny_bd_quoted_binary_path_chained_with_wine_launch if {
+	cmd := `"$HOME/.local/bin/bd" remember "note" --key k; wine /opt/er/start_protected_game.exe`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+test_deny_bd_quoted_binary_path_chained_with_bare_launcher if {
+	cmd := `"$HOME/.local/bin/bd" remember "note about bash" --key k && start_protected_game.exe --offline`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
 }
 
 # --- (b) Exact stale-process detection is ALLOWED ---------------------------

@@ -51,11 +51,10 @@ pub(crate) fn write_bootstrap_event(stage: &str, detail: &str) {
         json_escape(stage),
         json_escape(detail)
     );
-    if let Ok(mut file) = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&event_path)
-    {
+    // The EVENT file is a per-run sequence, so it is truncated by this process's first event
+    // (previous run kept one generation as `.prev`); the STATE file is rewritten whole every
+    // time and already carries only the latest stage.
+    if let Some(mut file) = er_game_base::log::open_fresh_run_append(&event_path) {
         let _ = file.write_all(payload.as_bytes());
     }
     let _ = fs::write(state_path, payload);

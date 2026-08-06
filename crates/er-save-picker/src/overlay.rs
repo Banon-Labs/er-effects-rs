@@ -630,6 +630,11 @@ pub fn ensure_save_picker_keyboard_hook() {
 /// slots and switch to the character sub-picker (the redirect + load are deferred until a
 /// character is chosen).
 fn save_picker_file_stage_input(pressed: usize) {
+    // Set when SELECT resolved to something that is NOT a pickable file. That path used to
+    // return silently -- no log, no status line, no counter -- so confirming on the drive-selector
+    // row or a directory produced literally no feedback anywhere. It cost a live run to
+    // diagnose: three SELECTs applied, nothing happened, and nothing said why.
+    let mut ignored_select: Option<(&'static str, usize)> = None;
     let picked = {
         let mut guard = model::active_save_picker_lock();
         let Some(model) = guard.as_mut() else {
@@ -661,14 +666,36 @@ fn save_picker_file_stage_input(pressed: usize) {
             model.go_up();
         }
         if pressed & PICKER_ACT_SELECT != 0 {
+            let cursor_row = model.cursor();
             match model.activate_cursor() {
                 PickerActivation::PickedFile(path) => Some(path),
-                _ => None,
+                PickerActivation::PickedNewFile(_) => {
+                    ignored_select = Some(("new-file row (destination intent)", cursor_row));
+                    None
+                }
+                PickerActivation::Repopulate => {
+                    // A directory / drive change. Legitimate navigation, but worth naming so a
+                    // driver can tell "I moved into a folder" from "nothing happened".
+                    ignored_select =
+                        Some(("directory or drive -- listing repopulated", cursor_row));
+                    None
+                }
+                PickerActivation::Ignored => {
+                    ignored_select = Some(("non-selectable row", cursor_row));
+                    None
+                }
             }
         } else {
             None
         }
     };
+
+    if let Some((why, cursor_row)) = ignored_select {
+        append_autoload_debug(format_args!(
+            "save-picker-overlay: SELECT on row {cursor_row} did not pick a save file: {why}. \
+             Move the highlight onto a save file (UP/DOWN) and confirm again."
+        ));
+    }
 
     let Some(path) = picked else {
         return;

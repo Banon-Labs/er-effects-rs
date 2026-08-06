@@ -148,6 +148,119 @@ pub(crate) use er_telemetry::counters::TESTNET_FF_LAST_MMS;
 pub(crate) use er_telemetry::counters::TESTNET_FF_STUCK_FRAMES;
 pub(crate) const TESTNET_FF_STUCK_FRAME_THRESHOLD: usize = 120;
 
+/// Lifetime of the load2 `warpRequested` clear, as a per-epoch phase.
+///
+/// WHY THIS EXISTS (2026-08-04, bd `invasion-warp-killed-by-our-own-load2-cvar10-warp-clear`). The
+/// clear at the bottom of [`maybe_force_finish_stuck_testnet_step`] zeroes `GameMan+0x10` every frame
+/// of a map move so `cVar10` stays 0 and a warm reload keeps load1's fin=0 movable window. It assumes a
+/// set `warpRequested` is RESIDUE of the return-to-title. That assumption is only true DURING the load
+/// it was written for, and the clear had no product-side end: its sole release was
+/// `move_proven_for_reload`, which reads `CAN_MOVE_CONFIRMED`, which `can_move_probe::tick` only ever
+/// sets when the input-harness DLL is loaded ("never fires in a normal user session",
+/// `can_move_probe.rs`). So in a normal session the clear armed at the first reload and then zeroed
+/// `GameMan+0x10` for the rest of the process, on EVERY map move.
+///
+/// `GameMan+0x10` is what `SetCallForWarp(true)` sets, and it is the only live input to the `cVar10`
+/// that `FUN_140afa6d0` gates case 0 on -- so from the first reload onward, no warp could complete.
+/// That is the reported "cannot warp to a marker after loading a second character", and it is not
+/// specific to the invasion-warp feature: an ordinary grace-to-grace fast travel goes through the same
+/// byte. The measured run reads `warps_issued: 3, warps_arrived: 1`, the one arrival being epoch 0,
+/// which the clear deliberately never touches.
+///
+/// The clear cannot just be deleted -- it is load-bearing for the same-character-reload goal. It has to
+/// STOP when the load it was protecting is done. The discriminator is a SEQUENCE, not a value: phase 1
+/// = we have actually seen this epoch's pre-finalize load window, phase 2 = the world load has since
+/// latched done (`requestCode` left 1). A value read alone would be fooled by staleness at the epoch
+/// boundary, where `requestCode`/`protocolState` still describe the PREVIOUS load; requiring the window
+/// to be observed first cannot be, because that window only exists inside the load. Once disarmed, a
+/// set `warpRequested` is by construction a deliberate in-flight warp and is left alone.
+mod warp_clear_phase {
+    use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+
+    pub(super) const PRE_WINDOW: u8 = 0;
+    pub(super) const WINDOW_SEEN: u8 = 1;
+    pub(super) const DISARMED: u8 = 2;
+
+    pub(super) static EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
+    pub(super) static PHASE: AtomicU8 = AtomicU8::new(PRE_WINDOW);
+
+    /// Re-arm on a new load epoch, then report the current phase.
+    pub(super) fn phase_for(epoch: usize) -> u8 {
+        if EPOCH.swap(epoch, Ordering::SeqCst) != epoch {
+            PHASE.store(PRE_WINDOW, Ordering::SeqCst);
+        }
+        PHASE.load(Ordering::SeqCst)
+    }
+}
+
+/// True once this epoch's load window has been seen AND the world load has since latched done, i.e. the
+/// movable-window preservation has served its purpose and must not touch `GameMan+0x10` again.
+fn warp_clear_is_disarmed_for_epoch(epoch: usize) -> bool {
+    warp_clear_phase::phase_for(epoch) == warp_clear_phase::DISARMED
+}
+
+/// Record that this epoch's pre-finalize load window is live (the clear is about to run in it).
+fn warp_clear_note_window_entered(epoch: usize) {
+    if warp_clear_phase::phase_for(epoch) == warp_clear_phase::PRE_WINDOW {
+        warp_clear_phase::PHASE.store(warp_clear_phase::WINDOW_SEEN, Ordering::SeqCst);
+    }
+}
+
+/// This epoch's world clock is live after its window was seen -> disarm the clear for the epoch.
+///
+/// MEASURED 2026-08-04, run product-invasion-warp-20260804-1440. The first version of this disarm
+/// waited for the world load to LATCH DONE (`requestCode` leaving 1). That never happens: the park
+/// this clear maintains IS `mms_step=18, fin12a=0, requestCode=1`, held indefinitely --
+/// `STEP_MoveMap_Update CALL #13800 epoch=1 mms_step=18 fin12a=0` still repeating 3.4 minutes after
+/// the clear fired, `ig_d8 == 1` in every sample, and no disarm line in the log. A terminator phrased
+/// as "the load finished" is unreachable by construction for state scoped to a load that does not
+/// finish. The user's warps stayed dead and the launch that proved it was wasted.
+///
+/// `BOOT_VIEW_EPOCH_WORLD_LIVE` is reachable and was true the whole time
+/// (`oracle_play_time_live=true`, `oracle_boot_view_epoch_live == oracle_current_load_epoch == 1`,
+/// `oracle_player_present=true`, `oracle_play_time_advanced_ms=187594`): the world clock only
+/// advances while the world sim steps, so it says the character is up and playing.
+///
+/// WITHHELD, AND WHY. This is only HALF a fix, and shipping the half is worse than shipping nothing.
+/// Letting go of `GameMan+0x10` lets `cVar10` reach 1, and case 0 then fades the plate to black, cuts
+/// sound, and sets `field25_0x12a = 5`; 5/6 walk to 7 on the fade timer; and case 7 advances only when
+/// `!ShouldSave() && !FUN_140679370()`, i.e. when `GameMan+0xb72` and `+0xb73` are both clear. In
+/// epoch 1 they are measurably STUCK: `[+195245ms] gm-snap: save_requested=true ... b73=1` and
+/// `[+196171ms]` the same -- the LAST `gm-snap` in a log that runs to `+384590ms`, and `gm-snap` only
+/// prints on change. In epoch 0 the identical request drained in 24-55ms every time. So the walk
+/// would park at substate 7 with the screen already black and the character frozen, and case 8 is the
+/// only site of `SetCallForWarp(false)`, so it could never restart. Today's bug at least leaves the
+/// player in control of a world where the warp silently no-ops.
+///
+/// The disarm is re-enabled together with an UNCONDITIONAL case-7 satisfier -- the existing one
+/// (`case7-savedrain-satisfy`) is gated on the same dead `CAN_MOVE_CONFIRMED` this whole defect comes
+/// from, and clears `0xb72` but never `0xb73` -- or, better, with a fix for why the epoch-1 save lane
+/// refuses to drain at all when epoch 0's drains in milliseconds.
+///
+/// NOT A SEQUENCE, despite how it reads. `warp_clear_note_window_entered` and this function are
+/// called back to back on the SAME frame, so requiring WINDOW_SEEN imposes no temporal separation
+/// whatsoever -- the only real condition is the latch. If `BOOT_VIEW_EPOCH_WORLD_LIVE` is already set
+/// when the window first opens, the clear never writes once and the load2 freeze returns in full. The
+/// captured run cannot rule that out: it reloaded from a level-45 character (107:39:42) to a level-7
+/// one (107:36:45), so the playtime delta was NEGATIVE and the latch could not misfire early. Reverse
+/// the load order and the delta is +176s, far past the 1000ms threshold. That polarity is untested.
+#[allow(
+    dead_code,
+    reason = "withheld until the case-7 satisfier lands; see the doc comment"
+)]
+fn warp_clear_note_world_live(epoch: usize) {
+    if warp_clear_phase::phase_for(epoch) != warp_clear_phase::WINDOW_SEEN {
+        return;
+    }
+    if crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) != epoch {
+        return;
+    }
+    warp_clear_phase::PHASE.store(warp_clear_phase::DISARMED, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "cvar10-warp-clear: DISARMED for epoch {epoch} -- this load's window was seen and the world clock is now live, so GameMan+0x10 is left alone from here (a later warpRequested is a deliberate warp, not return-title residue)"
+    ));
+}
+
 /// LOAD2 WORLD-COMPLETION FIX (bd load2-fires-but-stalls-at-mms18-world-completion-2026-07-19). A
 /// DRIVEN reload (`fresh_deser>=1`) reaches MoveMapStep STEP_Finish but its testNetStep child never
 /// finishes -- observed LOAD2-ONLY: load1's testNetStep finishes so requestCode latches 1->2 and the
@@ -250,27 +363,56 @@ pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
     // CSRemo already pass -> saveRequested is the SOLE blocker. Clear saveState + saveRequested native-
     // flow (let the game run 7->8->9; NOT a forced field25 write, which tore the world down). Movement is
     // already proven, so completing the walk now cannot regress the proof.
+    // REACHABILITY (2026-08-04). `move_proven_for_reload` reads CAN_MOVE_CONFIRMED, which
+    // `can_move_probe::tick` sets ONLY when the input-harness DLL is loaded ("never fires in a normal
+    // user session" -- its own comment). So in product this branch never ran, the case-7 gate never
+    // got satisfied, and the reload sat in loading mode indefinitely. `world_live_for_epoch` is the
+    // same fact this file's disarm uses and is measured reachable: `oracle_play_time_live=true`,
+    // `oracle_boot_view_epoch_live == oracle_current_load_epoch == 1`. Either signal now opens it, so
+    // the harness path keeps working and the product path stops being a dead branch.
+    //
+    // SCOPE (fin 1..=7, not "any fin"). At fin=0 the advancer has not started the walk and there is
+    // nothing to unblock, so clearing there would suppress an autosave the game legitimately asked
+    // for while nothing is warping. Restricting to a walk that is already underway keeps this inert
+    // during ordinary play and active exactly where the case-7 gate is evaluated.
+    //
+    // 0xb73 IS NOT OPTIONAL. `case 7` needs `!ShouldSave() && !FUN_140679370()`; the first reads
+    // `GameMan+0xb72`, the SECOND reads `+0xb73`, and `case 0` re-sets BOTH every pass via
+    // `SaveRequest_Profile(false)`. Clearing only 0xb72 -- what this branch used to do -- leaves the
+    // gate shut, which is why it must be re-applied per frame rather than once per epoch.
     let move_proven_for_reload = crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
         && crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == epoch;
-    if move_proven_for_reload && (13..=18).contains(&mms_state) {
+    let world_live_for_epoch =
+        crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == epoch;
+    let finalize_walk_underway = (1..=7).contains(&fin);
+    if (move_proven_for_reload || (world_live_for_epoch && finalize_walk_underway))
+        && (13..=18).contains(&mms_state)
+    {
         if let Ok(gm) = unsafe { eldenring::cs::GameMan::instance() } {
             let gm_addr = gm as *const _ as usize;
             let ss = core::mem::offset_of!(eldenring::cs::GameMan, save_state);
             let sr = core::mem::offset_of!(eldenring::cs::GameMan, save_requested);
+            let companion = crate::constants::GAME_MAN_SAVE_REQUEST_COMPANION_B73_OFFSET;
             if unsafe { safe_read_u8(gm_addr + ss) }.unwrap_or(0) != 0 {
                 unsafe { *((gm_addr + ss) as *mut u8) = 0 };
             }
             if unsafe { safe_read_u8(gm_addr + sr) }.unwrap_or(0) != 0 {
                 unsafe { *((gm_addr + sr) as *mut u8) = 0 };
             }
+            if unsafe { safe_read_u8(gm_addr + companion) }.unwrap_or(0) != 0 {
+                unsafe { *((gm_addr + companion) as *mut u8) = 0 };
+            }
             static SATISFY_LOG_EPOCH: core::sync::atomic::AtomicUsize =
                 core::sync::atomic::AtomicUsize::new(usize::MAX);
             if SATISFY_LOG_EPOCH.swap(epoch, Ordering::SeqCst) != epoch {
                 append_autoload_debug(format_args!(
-                    "case7-savedrain-satisfy: epoch {epoch} move-proven mms={mms_state} fin={fin} -> cleared saveState+saveRequested(0xb72) so the finalize completes 7->8->9 natively (loading mode exits, fps -> load1 parity)"
+                    "case7-savedrain-satisfy: epoch {epoch} move_proven={move_proven_for_reload} world_live={world_live_for_epoch} mms={mms_state} fin={fin} -> cleared saveState+saveRequested(0xb72)+companion(0xb73) so the finalize completes 7->8->9 natively (loading mode exits, fps -> load1 parity)"
                 ));
             }
         }
+        return;
+    }
+    if warp_clear_is_disarmed_for_epoch(epoch) {
         return;
     }
     // MOVABLE-WINDOW PRESERVATION (bd complete-cvar10-ending-request-9-inputs +
@@ -286,6 +428,24 @@ pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
     // during 13..=18 (character loaded, warp already consumed) so it is 0 before FUN_140afa7c0 reaches
     // case 0 at mms=18. Epoch-scoped: load1 (epoch 0) is never touched.
     if !(13..=18).contains(&mms_state) || fin >= 5 {
+        return;
+    }
+    // We are genuinely inside this epoch's pre-finalize load window. Recording it here (rather than on
+    // any `requestCode == 1` frame) is what makes the disarm a SEQUENCE -- window, THEN world live --
+    // instead of a bare value read that a stale epoch-boundary sample could satisfy on its own.
+    warp_clear_note_window_entered(epoch);
+    // The park is the steady state (mms stays 18, fin stays 0), so this is the frame the disarm has
+    // to be decided on -- there is no later "load done" frame to decide it on. Checked BEFORE the
+    // write below so the frame the world goes live is the last one that can touch GameMan+0x10.
+    //
+    // Safe ONLY because the case-7 satisfier above now runs on the same `world_live_for_epoch` fact.
+    // Releasing the byte lets cVar10 reach 1, which walks the finalize to substate 7; substate 7 is
+    // gated on GameMan+0xb72 and +0xb73, which stay latched forever on a warm reload. Shipping this
+    // release WITHOUT that satisfier parks the game on a black screen with a frozen character --
+    // strictly worse than the silent no-op it replaces. The two are one change; `er-launch-gate.py`
+    // registers `case7_gate_clear_at_release` so they cannot be separated by accident.
+    warp_clear_note_world_live(epoch);
+    if warp_clear_is_disarmed_for_epoch(epoch) {
         return;
     }
     let ss_off = core::mem::offset_of!(eldenring::cs::GameMan, save_state);

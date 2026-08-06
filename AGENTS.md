@@ -206,9 +206,9 @@ cp -rf source dest          # NOT: cp -r source dest
 
 ### Rules
 
-- Use `/home/choza/.local/bin/bd` for ALL task tracking -- do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `/home/choza/.local/bin/bd prime` for detailed command reference and session close protocol
-- Use `/home/choza/.local/bin/bd remember` for persistent knowledge -- do NOT use MEMORY.md files (and to READ a memory use `/home/choza/.local/bin/bd recall <key>`, NOT `bd remember <key>` which clobbers it)
+- Use `$HOME/.local/bin/bd` for ALL task tracking -- do NOT use TodoWrite, TaskCreate, or markdown TODO lists
+- Run `$HOME/.local/bin/bd prime` for detailed command reference and session close protocol
+- Use `$HOME/.local/bin/bd remember` for persistent knowledge -- do NOT use MEMORY.md files (and to READ a memory use `$HOME/.local/bin/bd recall <key>`, NOT `bd remember <key>` which clobbers it)
 
 ## RTK / Code Search Caveat
 

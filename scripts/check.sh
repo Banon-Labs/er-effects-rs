@@ -52,6 +52,12 @@ python3 "$repo_root/scripts/check-no-lossy-utf8.py"
 # is never trusted on its own say-so.
 python3 "$repo_root/scripts/check-rva-alias-drift.py" --selftest
 python3 "$repo_root/scripts/check-rva-alias-drift.py"
+# A log describes exactly ONE process run. er-invasion-warp-dll appended to a fixed filename, so
+# twelve launches became one 565KB file and a count over it read as one run's behaviour. Every
+# appending opener must route through er-game-base's one-shot truncation. Selftest first, so the
+# gate is never trusted on its own say-so.
+python3 "$repo_root/scripts/check-fresh-run-logs.py" --selftest
+python3 "$repo_root/scripts/check-fresh-run-logs.py"
 python3 "$repo_root/scripts/check-rust-file-sizes.py"
 python3 "$repo_root/scripts/check-experiments-rustfmt.py"
 python3 "$repo_root/scripts/check-markdown-code-blocks.py" "$repo_root/README.md"
@@ -66,7 +72,22 @@ shellcheck "$repo_root/scripts/run-product-continue-direct-probe.sh"
 shellcheck "$repo_root/scripts/run-me3-product-smoke.sh"
 shellcheck "$repo_root/scripts/run-windows-proof-render-smoke.sh"
 shellcheck "$repo_root/scripts/run-portrait-dll-standalone-smoke.sh"
+shellcheck "$repo_root/scripts/build-invasion-warp-profile.sh"
 shellcheck "$repo_root/scripts/check-rust-build.sh"
+shellcheck "$repo_root/scripts/er-stale-run-sentinel.sh"
+
+# The stale-run sentinel kills a live game when a tracked file is edited, so its process matching is
+# load-bearing: a name it cannot match is a run it cannot stop. `/proc/<pid>/comm` is capped at 15
+# characters by the kernel, which made the verbatim `start_protected_game.exe` entry unmatchable
+# against any process that has ever existed. The selftest proves the truncation handling end to end
+# against a real process, so that class of silent no-op cannot come back.
+bash "$repo_root/scripts/er-stale-run-sentinel.sh" --selftest
+
+# LAUNCH REACHABILITY GATE (2026-08-04). A launch takes the user's screen and yields one recording;
+# spending it on a predicate that CANNOT fire returns a clean-looking run that proves nothing. The
+# selftest runs first and includes the concrete regression -- the `requestCode latches 2` terminator
+# that shipped and could never execute -- so the gate is never trusted on its own say-so.
+python3 "$repo_root/scripts/er-launch-gate.py" --selftest
 
 # Host-buildable GFx codec + derived-movie proof gates. These are the only place the runtime GFx
 # transforms are checked (the Windows-target `cargo xwin test --lib` below cannot reach an integration
@@ -95,6 +116,15 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-loading-portrait
 cargo test --manifest-path "$repo_root/Cargo.toml" \
 	-p er-save-picker -p er-save-picker-dll -p er-quit-menu -p er-quit-menu-dll
 
+# The world-map invasion-spawn warp crates (docs/plans/world-map-invasion-warp.md). The
+# catalog, the block grouping, the BlockId disk/memory byte-order conversion and the on-disk
+# `.aip` decoder are all pure logic, so the HOST run is their real coverage -- that
+# testability is the point of the crate split. The corpus test that decodes the 365 real
+# `.aip` files skips when the local extraction is absent (game-derived bytes are never
+# versioned). `check-rust-build.sh` keeps both crates building for the shipping target.
+cargo test --manifest-path "$repo_root/Cargo.toml" \
+	-p er-invasion-warp -p er-invasion-warp-dll
+
 # er-telemetry's host-portable logic. The workspace pins `default-members` to the DLL crate, so the
 # windows-target `cargo xwin test --lib` below selects er-effects-rs ONLY and never ran these -- a
 # telemetry-crate test module could be added and silently never execute in any gate. The load-count
@@ -106,6 +136,14 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry --lib
 # Rust format + Windows-target BUILD of the injectable DLL (cross-compiled from Linux via
 # cargo-xwin). A real build (not just `cargo check`) so codegen/link regressions -- including
 # any pre-existing rust breakage -- are caught here, producing the linked er_effects_rs.dll.
+# The linking gate above is only as good as its list. `check-rust-build.sh` carries an
+# `me3_shells` array of every ME3-loadable cdylib and links each one, but that array was kept
+# correct by a COMMENT saying "keep this list in sync" -- so adding a new DLL crate would leave
+# the suite green while nothing ever linked it, which is the same hole the array closed, one
+# level up. This makes the list's completeness executable.
+python3 "$repo_root/scripts/check-me3-shell-coverage.py" --selftest
+python3 "$repo_root/scripts/check-me3-shell-coverage.py"
+
 bash "$repo_root/scripts/check-rust-build.sh"
 
 # Dead/unused code in the save-disable DLL, on its shipping target. Scoped to that one
