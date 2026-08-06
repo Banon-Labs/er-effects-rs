@@ -48,6 +48,14 @@ pub(crate) use er_telemetry::counters::PROFILE_STATS_SETTEXT_SUBS;
 /// Count of push attempts that failed (field missing -- e.g. GFX edit not served -- or SetText
 /// rejected the value) (oracle).
 pub(crate) use er_telemetry::counters::PROFILE_STATS_PUSH_FAILURES;
+/// Count of native `PlayerName` SetText attempts made from the per-slot save-name cache.
+pub(crate) use er_telemetry::counters::PROFILE_PLAYER_NAME_PUSH_ATTEMPTS;
+/// Count of successful native `PlayerName` SetText pushes.
+pub(crate) use er_telemetry::counters::PROFILE_PLAYER_NAME_SETTEXT_SUBS;
+/// Count of rejected native `PlayerName` SetText pushes.
+pub(crate) use er_telemetry::counters::PROFILE_PLAYER_NAME_PUSH_FAILURES;
+/// Count of slot names decoded from the live `.sl2` cache.
+pub(crate) use er_telemetry::counters::PROFILE_SLOT_NAMES_DECODED;
 /// Count of pushes SKIPPED fail-closed because the resolved component at proxy+0x8 was not a live
 /// image-vtabled object (er-effects-rs-7e7: a stale/garbage-vt component here crashed the native
 /// SetText wrapper's unvalidated `call *0x8(vt)` dispatch). Distinct from PUSH_FAILURES so telemetry
@@ -64,6 +72,11 @@ pub(crate) use er_telemetry::counters::PROFILE_STATS_PUSH_STALE_LAST_VT;
 /// slot's attributes BEFORE the original runs (the original destroys the row proxy's embedded
 /// `CSScaleformValue` at its end, so a post-call resolve would operate on a released value).
 pub(crate) const PROFILE_ROW_POPULATE_RVA: usize = 0x8757e0;
+/// Title/load-current-character row builder `FUN_140951220`: builds a transient current-player
+/// `MenuSaveDataSummary`, calls [`PROFILE_ROW_POPULATE_RVA`] to fill PlayerName/Level/Location/
+/// PlayTime/Icon_0, then returns without going through the per-slot row-populate hook entry we own.
+/// Hook after the original and push `ErCharStats` on the same row proxy for the title Load Game view.
+pub(crate) const PROFILE_CURRENT_ROW_POPULATE_RVA: usize = 0x951220;
 /// Row-model field holding the profile/save slot index (0-9). The native populate reads
 /// `*(int*)(rowModel + 0x8) + 1` as the `Icon_0` face-sprite frame, i.e. the slot; we read the same
 /// field to index the per-slot stats cache so each row shows ITS OWN character's attributes.
@@ -138,6 +151,8 @@ pub(crate) use er_telemetry::counters::PROFILE_ROW_SLOT_INFO_NON_DISPLAY;
 /// Last GFx value type observed by the visibility path (diagnostic companion to the counter above).
 pub(crate) use er_telemetry::counters::PROFILE_ROW_SLOT_INFO_LAST_DATATYPE;
 pub(crate) static PROFILE_ROW_POPULATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static PROFILE_CURRENT_ROW_POPULATE_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::PROFILE_ROW_POPULATE_INSTALLED;
 /// Per-slot stats cache state (oracle): 0 = not attempted, 1 = loaded (`.sl2` read + parsed), 2 =
 /// load failed (save unreadable/too small) -- the hook then falls back to the loaded character.

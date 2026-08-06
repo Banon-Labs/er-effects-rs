@@ -50,6 +50,8 @@ use std::fmt;
 pub mod arts_badge;
 pub mod edit;
 pub mod options_02_040;
+pub mod profile_05_010_layout;
+pub mod profile_05_010_protocol;
 pub mod raster;
 pub mod title_05_000;
 pub mod title_05_010;
