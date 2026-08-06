@@ -49,9 +49,6 @@ pub fn stats_panel_registered_systex_key(
 
 const TITLE_STATS_LABELS: [&str; STATS_ATTR_COUNT] =
     ["VIG", "MND", "END", "STR", "DEX", "INT", "FAI", "ARC"];
-const TITLE_STATS_COMPACT_LABELS: [&str; STATS_ATTR_COUNT] =
-    ["V", "M", "E", "S", "D", "I", "F", "A"];
-
 // One distinct, dark-row-legible color per attribute value.
 const TITLE_STATS_VALUE_COLORS: [&str; STATS_ATTR_COUNT] = [
     "#e0736b", // VIG - red
@@ -67,7 +64,6 @@ const TITLE_STATS_VALUE_COLORS: [&str; STATS_ATTR_COUNT] = [
 // Labels dimmer than the native #cccccc so they read as secondary.
 const TITLE_STATS_LABEL_COLOR: &str = "#8f887a";
 const TITLE_STATS_HTML_SIZE: &str = "19";
-const TITLE_STATS_COMPACT_HTML_SIZE: &str = "16";
 
 /// Build the ProfileSelect stats line for `attributes[start..end]` as a
 /// NUL-terminated UTF-16 Scaleform-HTML string for native SetText.
@@ -81,22 +77,24 @@ pub fn build_title_stats_html_utf16(
         start,
         end,
         &TITLE_STATS_LABELS,
-        TITLE_STATS_HTML_SIZE,
+        Some(TITLE_STATS_HTML_SIZE),
         "  ",
     )
 }
 
 /// Build all eight ProfileSelect stats as one shorter NUL-terminated UTF-16
 /// Scaleform-HTML line. This is for the compact one-row `05_010` layout: the
-/// native row already has only one spare horizontal band, so the labels collapse
-/// to initials and the font size drops from 19 to 16.
+/// native row already has only one spare horizontal band. It intentionally omits
+/// HTML `size=` overrides so Scaleform uses the row field's own embedded MenuFont
+/// definition; the field itself is narrower/smaller, but the face matches the
+/// surrounding native row text.
 pub fn build_title_stats_compact_html_utf16(attributes: &[i32; STATS_ATTR_COUNT]) -> Vec<u16> {
     build_title_stats_html_utf16_with(
         attributes,
         0,
         STATS_ATTR_COUNT,
-        &TITLE_STATS_COMPACT_LABELS,
-        TITLE_STATS_COMPACT_HTML_SIZE,
+        &TITLE_STATS_LABELS,
+        None,
         " ",
     )
 }
@@ -106,7 +104,7 @@ fn build_title_stats_html_utf16_with(
     start: usize,
     end: usize,
     labels: &[&str; STATS_ATTR_COUNT],
-    size: &str,
+    size: Option<&str>,
     separator: &str,
 ) -> Vec<u16> {
     let end = end.min(labels.len());
@@ -116,15 +114,23 @@ fn build_title_stats_html_utf16_with(
         if i > start {
             s.push_str(separator);
         }
-        s.push_str("<font size=\"");
-        s.push_str(size);
-        s.push_str("\" color=\"");
+        s.push_str("<font");
+        if let Some(size) = size {
+            s.push_str(" size=\"");
+            s.push_str(size);
+            s.push('"');
+        }
+        s.push_str(" color=\"");
         s.push_str(TITLE_STATS_LABEL_COLOR);
         s.push_str("\">");
         s.push_str(labels[i]);
-        s.push_str("</font><font size=\"");
-        s.push_str(size);
-        s.push_str("\" color=\"");
+        s.push_str("</font> <font");
+        if let Some(size) = size {
+            s.push_str(" size=\"");
+            s.push_str(size);
+            s.push('"');
+        }
+        s.push_str(" color=\"");
         s.push_str(TITLE_STATS_VALUE_COLORS[i]);
         s.push_str("\"><b>");
         s.push_str(&v.to_string());
@@ -192,11 +198,17 @@ mod tests {
         let compact = utf16_to_string(&build_title_stats_compact_html_utf16(&attrs));
         assert!(compact.starts_with("<p align=\"left\">"));
         assert!(compact.ends_with("</p>"));
-        assert!(compact.contains("size=\"16\" color=\"#8f887a\">V</font>"));
+        assert!(compact.contains("color=\"#8f887a\">VIG</font> <font"));
         assert!(compact.contains("color=\"#e0736b\"><b>15</b></font>"));
         assert!(compact.contains("color=\"#c489c0\"><b>7</b></font>"));
-        assert!(!compact.contains("VIG"), "compact line uses initials only");
-        assert!(compact.contains(">A</font>"), "last attribute is included");
+        assert!(
+            !compact.contains("size=\""),
+            "compact line inherits the field font/height instead of forcing a Scaleform HTML font size"
+        );
+        assert!(
+            compact.contains(">ARC</font>"),
+            "last attribute is included"
+        );
     }
 
     #[test]

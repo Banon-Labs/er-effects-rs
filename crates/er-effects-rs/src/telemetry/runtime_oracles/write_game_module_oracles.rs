@@ -1635,6 +1635,21 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_stats_text_push_failures",
             PROFILE_STATS_PUSH_FAILURES.load(Ordering::SeqCst),
         );
+        push_json_usize(
+            body,
+            "oracle_profile_player_name_push_attempts",
+            PROFILE_PLAYER_NAME_PUSH_ATTEMPTS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_player_name_settext_subs",
+            PROFILE_PLAYER_NAME_SETTEXT_SUBS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_player_name_push_failures",
+            PROFILE_PLAYER_NAME_PUSH_FAILURES.load(Ordering::SeqCst),
+        );
         // 7e7 fail-closed guard: pushes skipped because the resolved component was stale (crash
         // avoided), plus the last stale component/vtable pointers for root-causing the bad link.
         push_json_usize(
@@ -1664,6 +1679,11 @@ fn write_game_module_oracles(body: &mut String) {
             body,
             "oracle_stats_text_slot_decoded",
             PROFILE_SLOT_STATS_DECODED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_player_name_slot_decoded",
+            PROFILE_SLOT_NAMES_DECODED.load(Ordering::SeqCst),
         );
         // Stats-panel 05_010 runtime GFX edit oracles (mirror the 05_000 runtime-strip set).
         push_json_usize(

@@ -2,7 +2,9 @@ use super::*;
 
 /// Install the row-populate hook (`FUN_1408758d0`). Idempotent; mirrors the named-child binder install.
 pub(crate) fn install_profile_row_populate_hook() {
-    if PROFILE_ROW_POPULATE_INSTALLED.load(Ordering::SeqCst) != 0 {
+    let current_row_installed =
+        PROFILE_CURRENT_ROW_POPULATE_ORIG.load(Ordering::SeqCst) != HOOK_ORIGINAL_UNSET;
+    if PROFILE_ROW_POPULATE_INSTALLED.load(Ordering::SeqCst) != 0 && current_row_installed {
         return;
     }
     match unsafe { MH_Initialize() } {
@@ -14,42 +16,83 @@ pub(crate) fn install_profile_row_populate_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(PROFILE_ROW_POPULATE_RVA as u32) else {
-        append_autoload_debug(format_args!(
-            "stats-text: failed to resolve row-populate rva 0x{PROFILE_ROW_POPULATE_RVA:x}"
-        ));
-        return;
-    };
-    match unsafe {
-        MhHook::new(
-            addr as *mut c_void,
-            profile_row_populate_hook as *mut c_void,
-        )
-    } {
-        Ok(hook) => {
-            PROFILE_ROW_POPULATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            if let Err(status) = unsafe { hook.queue_enable() } {
-                append_autoload_debug(format_args!(
-                    "stats-text: queue_enable row-populate failed: {status:?}"
-                ));
-                return;
-            }
-            match unsafe { MH_ApplyQueued() } {
-                MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
-                    PROFILE_ROW_POPULATE_INSTALLED.store(1, Ordering::SeqCst);
+    if PROFILE_ROW_POPULATE_INSTALLED.load(Ordering::SeqCst) == 0 {
+        let Ok(addr) = game_rva(PROFILE_ROW_POPULATE_RVA as u32) else {
+            append_autoload_debug(format_args!(
+                "stats-text: failed to resolve row-populate rva 0x{PROFILE_ROW_POPULATE_RVA:x}"
+            ));
+            return;
+        };
+        match unsafe {
+            MhHook::new(
+                addr as *mut c_void,
+                profile_row_populate_hook as *mut c_void,
+            )
+        } {
+            Ok(hook) => {
+                PROFILE_ROW_POPULATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+                if let Err(status) = unsafe { hook.queue_enable() } {
                     append_autoload_debug(format_args!(
-                        "stats-text: hooked ProfileSelect row-populate FUN_1408758d0 0x{addr:x}; per-slot attributes push before each row's native populate"
+                        "stats-text: queue_enable row-populate failed: {status:?}"
                     ));
+                    return;
                 }
-                status => append_autoload_debug(format_args!(
-                    "stats-text: row-populate MH_ApplyQueued failed: {status:?}"
-                )),
+                match unsafe { MH_ApplyQueued() } {
+                    MH_STATUS::MH_OK => {
+                        std::mem::forget(hook);
+                        PROFILE_ROW_POPULATE_INSTALLED.store(1, Ordering::SeqCst);
+                        append_autoload_debug(format_args!(
+                            "stats-text: hooked ProfileSelect row-populate FUN_1408758d0 0x{addr:x}; per-slot attributes push before each row's native populate"
+                        ));
+                    }
+                    status => append_autoload_debug(format_args!(
+                        "stats-text: row-populate MH_ApplyQueued failed: {status:?}"
+                    )),
+                }
             }
+            Err(status) => append_autoload_debug(format_args!(
+                "stats-text: MhHook::new row-populate failed: {status:?}"
+            )),
         }
-        Err(status) => append_autoload_debug(format_args!(
-            "stats-text: MhHook::new row-populate failed: {status:?}"
-        )),
+    }
+    if !current_row_installed {
+        let Ok(addr) = game_rva(PROFILE_CURRENT_ROW_POPULATE_RVA as u32) else {
+            append_autoload_debug(format_args!(
+                "stats-text: failed to resolve title-load row-populate rva 0x{PROFILE_CURRENT_ROW_POPULATE_RVA:x}"
+            ));
+            return;
+        };
+        match unsafe {
+            MhHook::new(
+                addr as *mut c_void,
+                profile_current_row_populate_hook as *mut c_void,
+            )
+        } {
+            Ok(hook) => {
+                PROFILE_CURRENT_ROW_POPULATE_ORIG
+                    .store(hook.trampoline() as usize, Ordering::SeqCst);
+                if let Err(status) = unsafe { hook.queue_enable() } {
+                    append_autoload_debug(format_args!(
+                        "stats-text: queue_enable title-load row-populate failed: {status:?}"
+                    ));
+                    return;
+                }
+                match unsafe { MH_ApplyQueued() } {
+                    MH_STATUS::MH_OK => {
+                        std::mem::forget(hook);
+                        append_autoload_debug(format_args!(
+                            "stats-text: hooked title-load current row-populate FUN_140951220 0x{addr:x}; pushes ErCharStats after native current-row populate"
+                        ));
+                    }
+                    status => append_autoload_debug(format_args!(
+                        "stats-text: title-load row-populate MH_ApplyQueued failed: {status:?}"
+                    )),
+                }
+            }
+            Err(status) => append_autoload_debug(format_args!(
+                "stats-text: MhHook::new title-load row-populate failed: {status:?}"
+            )),
+        }
     }
 }
 

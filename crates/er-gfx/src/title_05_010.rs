@@ -41,22 +41,27 @@ include!("title_05_010_edits.rs");
 /// `StaticLineHelp_*`/`StaticSystemText_*`/`StaticDialogText_*`/`StaticKeyGuide_*`/
 /// `Dynamic`+`KeyIcon_`) so only the DLL ever writes it.
 pub const STATS_FIELD_NAME: &str = "ErStats";
+/// Narrow stats field for the normal character-slot view. The save-file picker keeps the wider
+/// `ErStats` field because its file metadata occupies the columns whose native character fields are
+/// hidden on picker-owned rows.
+pub const CHAR_STATS_FIELD_NAME: &str = "ErCharStats";
 /// Instance names of the injected per-row drive strip cells. These are separate row children, not a
 /// single concatenated `PlayerName` label.
 pub const DRIVE_CELL_FIELD_NAMES: [&str; 3] = ["DriveCell_0", "DriveCell_1", "DriveCell_2"];
-/// Visual row pitch after the compact ProfileSelect row-stack edit.
+/// Visual row pitch after the ProfileSelect row-stack edit. Shared by Load Character and the
+/// save-file picker because both surfaces reuse the same `05_010_ProfileSelect` movie.
 pub const COMPACT_ROW_PITCH_PX: i32 = 48;
 /// Number of native-backed picker/profile rows visible in the compact `05_010_ProfileSelect` list.
 pub const COMPACT_VISIBLE_ROW_COUNT: i32 = 10;
 /// Visual list viewport height after the compact ProfileSelect row-stack edit.
-pub const COMPACT_LIST_HEIGHT_PX: i32 = COMPACT_ROW_PITCH_PX * COMPACT_VISIBLE_ROW_COUNT;
+pub const COMPACT_LIST_HEIGHT_PX: i32 = 480;
 /// X coordinate of the compact native scrollbar track in the ProfileSelect list-window movie space.
 pub const COMPACT_SCROLLBAR_X_PX: i32 = 567;
 /// Top edge of the compact native scrollbar track. This is intentionally the top edge of visible row
 /// 0, not the vanilla scrollbar's old inset/centered y.
-pub const COMPACT_SCROLLBAR_TOP_Y_PX: i32 = -(COMPACT_LIST_HEIGHT_PX / 2);
+pub const COMPACT_SCROLLBAR_TOP_Y_PX: i32 = -240;
 /// Height of the compact native scrollbar track: exactly the first-row-top..last-row-bottom span.
-pub const COMPACT_SCROLLBAR_TRACK_HEIGHT_PX: i32 = COMPACT_LIST_HEIGHT_PX;
+pub const COMPACT_SCROLLBAR_TRACK_HEIGHT_PX: i32 = 480;
 /// Native scrollbar bar shape height in `05_010_ProfileSelect` movie coordinates.
 pub const COMPACT_SCROLLBAR_BAR_SHAPE_HEIGHT_PX: f32 = 764.0;
 
@@ -69,9 +74,9 @@ pub const VANILLA_LEN: usize = 14388;
 /// [`fnv1a64`] of the known vanilla movie.
 pub const VANILLA_FNV1A64: u64 = 0xfc22_4f43_7a73_13f3;
 /// Length of the compact stats-panel output for the known vanilla input.
-pub const EDITED_LEN: usize = 14697;
+pub const EDITED_LEN: usize = 14957;
 /// [`fnv1a64`] of the compact stats-panel output for the known vanilla input.
-pub const EDITED_FNV1A64: u64 = 0x1493_cb88_247c_1353;
+pub const EDITED_FNV1A64: u64 = 0x8972_385f_b9bd_7de5;
 
 /// True iff `bytes` is the known vanilla movie the edit table was derived from
 /// (and for which the output is proven byte-identical to the generated asset).
