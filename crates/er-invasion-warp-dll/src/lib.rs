@@ -211,6 +211,11 @@ fn spawn_catalog_task() {
                     // when the block cannot be read. Not being findable by location is a missing
                     // convenience; a DLL that faulted here would be a broken game.
                     crate::lobby_publish::publish_current_map();
+                    // Hunt mode's query-narrowing hook. Idempotent and self-gating: it needs the
+                    // Steam interface, which is not resolvable until Steam is up, so it retries
+                    // until it lands rather than being installed once at attach and failing
+                    // silently. It changes nothing unless `hunt = true` is in the config.
+                    crate::lobby_publish::install_hunt_hook();
                     // Re-colour pins that already exist. Gated internally on the user's lists
                     // actually having changed, so the steady-state cost is one atomic compare.
                     //

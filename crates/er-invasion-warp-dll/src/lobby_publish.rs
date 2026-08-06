@@ -48,12 +48,17 @@
 //! send invaders to where that host was twenty minutes ago. Steam permits the owner to rewrite its
 //! own lobby data freely, so [`publish_current_map`] re-publishes whenever the block changes.
 //!
-//! # No hooks
+//! # Hooks: exactly one, and not in `ersc.dll`
 //!
-//! Nothing here is detoured. The interface comes from an exported accessor, the lobby id is already
-//! in the Seamless session object this crate reads, and the block id comes from the same anchor the
-//! location filter uses. That matters because `ersc.dll` is Themida-protected: an inline patch
-//! there is unproven-safe, and this needs none.
+//! PUBLISHING detours nothing. The interface comes from an exported accessor, the lobby id is
+//! already in the Seamless session object this crate reads, and the block id comes from the same
+//! anchor the location filter uses.
+//!
+//! HUNT MODE needs one, because a filter has to be added between Seamless's last
+//! `AddRequestLobbyList*` and the request going out, and only Seamless knows when that is. So
+//! `RequestLobbyList` is detoured -- in `steamclient64.dll`'s interface vtable, NOT in `ersc.dll`.
+//! That distinction is the point: ersc is Themida-protected and an inline patch there is
+//! unproven-safe, whereas Steam's own interface is ordinary code this DLL already calls into.
 
 use er_invasion_warp::invasion_warp::BlockKey;
 
@@ -138,12 +143,83 @@ pub fn pending_publish(current: Option<BlockKey>, last_published: Option<&str>) 
     Some(value)
 }
 
+/// `ISteamMatchmaking::RequestLobbyList` -- vtable slot 4, where a filter must be added.
+///
+/// Filters accumulate and are CONSUMED by this call, so ours has to land between Seamless's last
+/// `AddRequestLobbyList*` and the request going out. Proven live 2026-08-06: injecting one filter
+/// in this function's prologue took a 13-lobby result set to 0, twice.
+pub const REQUEST_LOBBY_LIST_SLOT: usize = 4;
+
+/// `ISteamMatchmaking::AddRequestLobbyListStringFilter` -- vtable slot 5.
+pub const ADD_STRING_FILTER_SLOT: usize = 5;
+
+/// Which single location hunt mode should ask Steam for.
+///
+/// # Why ONE location and not a set
+///
+/// A Steam string filter is an EQUALITY test on one value -- there is no OR. Seamless attaches five
+/// of them and they AND together. So hunt mode can narrow to one place, and asking for two would
+/// silently return nothing at all (a lobby cannot equal both). Rather than let that happen, several
+/// marked blocks REFUSE to hunt and say so; the reject filter still handles the multi-location case,
+/// slowly but correctly.
+///
+/// # What it picks
+///
+/// * one marked block  -> that one, because marking a single place is unambiguous intent
+/// * several marked    -> `None`; a string filter cannot express OR
+/// * none marked       -> where the player is standing, which is "invade locally"
+#[must_use]
+pub fn hunt_filter_value(
+    enabled: bool,
+    marked_blocks: &[u32],
+    current: Option<BlockKey>,
+) -> Option<String> {
+    if !enabled {
+        return None;
+    }
+    match marked_blocks {
+        [] => current.map(map_value),
+        [only] => Some(map_value(BlockKey::from_raw(*only))),
+        _ => None,
+    }
+}
+
+/// Why hunt mode is not filtering, in words a user can act on.
+///
+/// Separate from [`hunt_filter_value`] because "off" and "cannot express that" are different
+/// situations and a silent `None` conflates them -- the second one is a user asking for something
+/// the transport cannot do, and they deserve to be told rather than left wondering why nothing
+/// narrowed.
+#[must_use]
+pub fn hunt_refusal(
+    enabled: bool,
+    marked_blocks: &[u32],
+    current: Option<BlockKey>,
+) -> Option<&'static str> {
+    if !enabled {
+        return None;
+    }
+    match marked_blocks {
+        [] if current.is_none() => Some(
+            "hunt: no marked location and your own block is unreadable, so there is nothing to ask \
+             Steam for -- searching unfiltered",
+        ),
+        [_, _, ..] => Some(
+            "hunt: more than one location is marked, and a Steam filter tests ONE value with no OR \
+             -- asking for several would match nobody. Mark exactly one, or leave hunt off and let \
+             the reject filter handle it",
+        ),
+        _ => None,
+    }
+}
+
 /// The live half: resolve Steam, read where we are, and write the key if it changed.
 #[cfg(windows)]
 mod live {
     use super::{
-        ADVERTISEMENT_MARKER_KEY, ADVERTISEMENT_MARKER_VALUE, GET_LOBBY_DATA_SLOT, LOBBY_MAP_KEY,
-        MATCHMAKING_ACCESSOR, SET_LOBBY_DATA_SLOT, pending_publish,
+        ADD_STRING_FILTER_SLOT, ADVERTISEMENT_MARKER_KEY, ADVERTISEMENT_MARKER_VALUE,
+        GET_LOBBY_DATA_SLOT, LOBBY_MAP_KEY, MATCHMAKING_ACCESSOR, REQUEST_LOBBY_LIST_SLOT,
+        SET_LOBBY_DATA_SLOT, hunt_filter_value, hunt_refusal, pending_publish,
     };
     use er_invasion_warp::invasion_warp::BlockKey;
     use std::sync::Mutex;
@@ -301,6 +377,127 @@ mod live {
             .clone()
     }
 
+    // -----------------------------------------------------------------------------------------
+    // HUNT MODE: narrow the outgoing query instead of rejecting its answers
+    // -----------------------------------------------------------------------------------------
+
+    /// Trampoline to Steam's own `RequestLobbyList`.
+    static ORIG_REQUEST_LOBBY_LIST: AtomicUsize = AtomicUsize::new(0);
+    static HUNT_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+    static FILTERS_ADDED: AtomicUsize = AtomicUsize::new(0);
+    /// So a refusal is explained once rather than every query.
+    static HUNT_REFUSAL_SAID: AtomicUsize = AtomicUsize::new(0);
+
+    type AddStringFilterFn = unsafe extern "system" fn(usize, *const u8, *const u8, i32);
+
+    /// `k_ELobbyComparisonEqual`. The only comparison that makes sense for a map id, and the one
+    /// Seamless uses for every string filter it attaches.
+    const LOBBY_COMPARISON_EQUAL: i32 = 0;
+
+    /// Add our location filter to the query Seamless is about to send.
+    ///
+    /// Runs BEFORE the original, because filters are accumulated and then consumed by this call.
+    ///
+    /// Adding a filter narrows OUR OWN results and nothing else -- no other player's matching
+    /// changes, nothing is published, no game state is written. The cost is entirely ours: hosts
+    /// without this DLL do not carry the key, so they stop being visible while hunt is on. That is
+    /// why it is opt-in and why the refusal above explains itself rather than failing silently.
+    /// `SteamAPICall_t RequestLobbyList(this)` takes only `this`, but the union dispatcher's
+    /// trampoline type is fixed at four arguments. Declaring the extra three and ignoring them is
+    /// ABI-safe under Win64 fastcall -- they are simply registers the callee never reads -- and it
+    /// is what lets this share the same hook machinery as every other detour in this DLL.
+    unsafe extern "system" fn request_lobby_list_hook(
+        iface: usize,
+        b: usize,
+        c: usize,
+        d: usize,
+    ) -> usize {
+        if let Some(value) = hunt_target() {
+            if let Some(add) = add_string_filter(iface) {
+                let key = format!("{LOBBY_MAP_KEY}\0");
+                let payload = format!("{value}\0");
+                unsafe {
+                    add(
+                        iface,
+                        key.as_ptr(),
+                        payload.as_ptr(),
+                        LOBBY_COMPARISON_EQUAL,
+                    )
+                };
+                let n = FILTERS_ADDED.fetch_add(1, Ordering::SeqCst) + 1;
+                if n == 1 {
+                    crate::standalone_log(format_args!(
+                        "hunt: asking Steam for hosts at {value} only (#{n}) -- hosts without this \
+                         DLL do not publish the key and will not be returned"
+                    ));
+                }
+            }
+        }
+        let orig = ORIG_REQUEST_LOBBY_LIST.load(Ordering::SeqCst);
+        if orig == 0 {
+            return 0;
+        }
+        unsafe { core::mem::transmute::<usize, er_hook::UnionFn>(orig)(iface, b, c, d) }
+    }
+
+    fn add_string_filter(iface: usize) -> Option<AddStringFilterFn> {
+        let vtable = unsafe { er_game_base::mem::safe_read_usize(iface) }?;
+        let slot = unsafe {
+            er_game_base::mem::safe_read_usize(vtable + ADD_STRING_FILTER_SLOT * size_of::<usize>())
+        }?;
+        (slot != 0).then(|| unsafe { core::mem::transmute::<usize, AddStringFilterFn>(slot) })
+    }
+
+    /// The one location to ask for, or `None` to leave the query alone.
+    fn hunt_target() -> Option<String> {
+        let config = crate::local_invasion_filter::current_config_snapshot()?;
+        let marked: Vec<u32> = config.allowed_blocks.iter().copied().collect();
+        if let Some(why) = hunt_refusal(config.hunt, &marked, current_block()) {
+            if HUNT_REFUSAL_SAID.swap(1, Ordering::SeqCst) == 0 {
+                crate::standalone_log(format_args!("{why}"));
+            }
+            return None;
+        }
+        hunt_filter_value(config.hunt, &marked, current_block())
+    }
+
+    /// Install the query-narrowing hook. Idempotent; only ever called when hunt is configured on.
+    pub fn install_hunt_hook() -> usize {
+        if HUNT_HOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
+            return 0;
+        }
+        let Some(iface) = matchmaking() else {
+            HUNT_HOOK_INSTALLED.store(0, Ordering::SeqCst);
+            return 0;
+        };
+        let Some(vtable) = (unsafe { er_game_base::mem::safe_read_usize(iface) }) else {
+            return 0;
+        };
+        let Some(address) = (unsafe {
+            er_game_base::mem::safe_read_usize(
+                vtable + REQUEST_LOBBY_LIST_SLOT * size_of::<usize>(),
+            )
+        }) else {
+            return 0;
+        };
+        match unsafe {
+            er_hook::register_union_hook(
+                address,
+                request_lobby_list_hook as er_hook::UnionFn,
+                &ORIG_REQUEST_LOBBY_LIST,
+            )
+        } {
+            Ok(()) => 1,
+            Err(status) => {
+                crate::standalone_log(format_args!(
+                    "hunt: could not hook RequestLobbyList: {status:?} -- hunt mode is INERT and \
+                     every query will go out unfiltered"
+                ));
+                0
+            }
+        }
+    }
+
     /// `(publishes, refusals)`, so a run can be judged without reading the log.
     #[must_use]
     pub fn tally() -> (usize, usize) {
@@ -312,7 +509,7 @@ mod live {
 }
 
 #[cfg(windows)]
-pub use live::{publish_current_map, tally};
+pub use live::{install_hunt_hook, publish_current_map, tally};
 
 #[cfg(test)]
 mod tests {
@@ -463,6 +660,83 @@ mod tests {
                 "{banned}: selecting by who is in a lobby targets someone who never opted in"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // HUNT MODE
+    // -----------------------------------------------------------------------------------------
+
+    const HERE: u32 = 0x3C_33_2B_00; // m60_51_43_00
+    const THERE: u32 = 0x3D_2E_2B_00; // m61_46_43_00
+
+    #[test]
+    fn hunt_is_inert_until_the_user_asks_for_it() {
+        let standing = BlockKey::from_raw(HERE);
+        assert_eq!(hunt_filter_value(false, &[], Some(standing)), None);
+        assert_eq!(hunt_filter_value(false, &[THERE], Some(standing)), None);
+        assert_eq!(hunt_refusal(false, &[THERE, HERE], Some(standing)), None);
+    }
+
+    #[test]
+    fn with_nothing_marked_hunt_asks_for_where_you_are_standing() {
+        let standing = BlockKey::from_raw(HERE);
+        assert_eq!(
+            hunt_filter_value(true, &[], Some(standing)),
+            Some("m60_51_43_00".to_owned())
+        );
+    }
+
+    #[test]
+    fn one_marked_location_is_the_one_asked_for() {
+        let standing = BlockKey::from_raw(HERE);
+        // The MARK wins over where you stand -- marking a place is the user naming a destination.
+        assert_eq!(
+            hunt_filter_value(true, &[THERE], Some(standing)),
+            Some("m61_46_43_00".to_owned())
+        );
+    }
+
+    /// THE TRANSPORT CONSTRAINT, pinned so nobody "improves" this into a silent no-match.
+    ///
+    /// A Steam string filter is an equality test on ONE value and the filters AND together, so
+    /// asking for two locations returns nothing at all -- a lobby cannot equal both. Refusing and
+    /// saying why beats issuing a query that is guaranteed empty.
+    #[test]
+    fn several_marked_locations_refuse_rather_than_matching_nobody() {
+        let standing = BlockKey::from_raw(HERE);
+        assert_eq!(
+            hunt_filter_value(true, &[HERE, THERE], Some(standing)),
+            None
+        );
+        let why = hunt_refusal(true, &[HERE, THERE], Some(standing)).expect("explains itself");
+        assert!(
+            why.contains("no OR"),
+            "the reason must name the real cause: {why}"
+        );
+        assert!(
+            why.contains("Mark exactly one"),
+            "and tell the user what to do instead: {why}"
+        );
+    }
+
+    #[test]
+    fn hunt_with_no_mark_and_no_readable_block_says_so_instead_of_filtering() {
+        assert_eq!(hunt_filter_value(true, &[], None), None);
+        let why = hunt_refusal(true, &[], None).expect("explains itself");
+        assert!(
+            why.contains("unfiltered"),
+            "must say the search is unnarrowed: {why}"
+        );
+    }
+
+    /// Host and invader must produce byte-identical strings or the equality filter never matches.
+    #[test]
+    fn the_hunted_value_is_spelled_exactly_as_the_published_one() {
+        let block = BlockKey::from_raw(THERE);
+        assert_eq!(
+            hunt_filter_value(true, &[THERE], None),
+            Some(map_value(block))
+        );
     }
 
     /// Our key must not be mistakable for one of Seamless's, in either direction.

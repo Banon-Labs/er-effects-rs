@@ -180,6 +180,13 @@ pub enum RejectReason {
 pub struct LocalInvasionConfig {
     /// Master switch. Off by default.
     pub enabled: bool,
+    /// HUNT MODE: narrow the outgoing lobby query to ONE location instead of rejecting answers.
+    ///
+    /// Off by default and separate from `enabled` because the two do opposite things to your reach.
+    /// The reject filter declines matches and still sees every host; hunt asks Steam for a key only
+    /// this DLL's users publish, so while it is on a host without the DLL is invisible to you. That
+    /// is a trade the user must choose, never a default.
+    pub hunt: bool,
     /// How destinations are judged.
     pub mode: LocalInvasionMode,
     /// Place-name text ids accepted in [`LocalInvasionMode::NamedOnly`], and -- see [`Self::judge`]
@@ -190,6 +197,13 @@ pub struct LocalInvasionConfig {
     /// silently matches nothing is the failure mode this exists to make visible.
     pub named_locations: Vec<String>,
     /// Exact blocks the user marked with Insert. Widens whatever the mode allows.
+    /// Virtual-key code that marks the location the player is standing in.
+    ///
+    /// Configurable because the historical default `VK_INSERT` does not exist on a 60% keyboard,
+    /// which locked the whole marking feature out for anyone using one.
+    pub mark_key: crate::keybind::VirtualKey,
+    /// Virtual-key code that un-marks it.
+    pub unmark_key: crate::keybind::VirtualKey,
     pub allowed_blocks: BTreeSet<u32>,
     /// Exact blocks the user excluded with Delete. Overrides everything, including a mode that
     /// would otherwise accept them.
@@ -207,9 +221,17 @@ impl Default for LocalInvasionConfig {
         Self {
             // OFF. See the module docs: this cancels real matches, so it must be asked for.
             enabled: false,
+            // OFF, and for a different reason than `enabled`. Hunt narrows the QUERY to a key only
+            // this DLL's users publish, so while it is on a host without the DLL cannot be seen at
+            // all. Losing reach is not something to inherit from a default.
+            hunt: false,
             mode: LocalInvasionMode::ExactOnly,
             named_location_text_ids: BTreeSet::new(),
             named_locations: Vec::new(),
+            // The historical keys stay the default, so an existing config and an existing player's
+            // muscle memory both keep working without touching the file.
+            mark_key: crate::keybind::VK_INSERT,
+            unmark_key: crate::keybind::VK_DELETE,
             allowed_blocks: BTreeSet::new(),
             blocked_blocks: BTreeSet::new(),
         }
@@ -690,6 +712,7 @@ mod tests {
             named_locations: vec!["Somewhere Else".to_owned()],
             allowed_blocks: BTreeSet::new(),
             blocked_blocks: BTreeSet::new(),
+            ..LocalInvasionConfig::default()
         };
         // The anchor's own block, but not a listed name -> rejected.
         assert_eq!(

@@ -233,11 +233,141 @@ pub fn claimed_dormant_span(
     Some((dormant_begin, end))
 }
 
+/// A pin's ordinal among the pins sharing its place name. `0` means it has no sibling.
+pub type PlaceOrdinal = u32;
+
+/// The ordinal of a pin whose name is unique, which is not shown.
+pub const PLACE_ORDINAL_UNIQUE: PlaceOrdinal = 0;
+
+/// Number the pins that share a place name, so a player can say "meet at X, 2".
+///
+/// # What "deterministic" must mean, and what it cannot
+///
+/// Two players have to arrive at the SAME number for the same spot or the feature is worse than
+/// useless -- it sends them to different places while they agree out loud. That rules out numbering
+/// by position in the currently-known pin set: a legacy dungeon's per-point markers only exist once
+/// that map has been resident, so the player who has been to fewer places would number the same
+/// point differently.
+///
+/// So the ordinal is derived ONLY from properties intrinsic to the point -- `(block, point_index)`.
+/// `point_index` is the point's index in its own map's MSB region list and `block` is that map's
+/// id; both are fixed by the game version, not by what the player has seen. Sorting a name group by
+/// that pair yields the same sequence on any machine that knows the same points.
+///
+/// # The limit, stated rather than hidden
+///
+/// A dungeon's points arrive together -- one MSB read yields the whole map's set -- so two players
+/// inside the same dungeon always agree, which is the case that matters for arranging a meeting.
+/// A place name shared across SEPARATE blocks, where one player has visited a block the other has
+/// not, can still disagree. Nothing available at runtime fixes that: the absent block's point count
+/// is unknowable until it is read.
+///
+/// Returns one ordinal per input, in the input's own order.
+#[must_use]
+pub fn number_shared_place_names(pins: &[(InvasionWarpTarget, i32)]) -> Vec<PlaceOrdinal> {
+    use std::collections::BTreeMap;
+
+    // A negative id is "no name": those pins are never drawn, so they neither get a number nor
+    // pull anything else into a group.
+    let mut groups: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
+    for (at, (_, place_name)) in pins.iter().enumerate() {
+        if *place_name >= 0 {
+            groups.entry(*place_name).or_default().push(at);
+        }
+    }
+
+    let mut ordinals = vec![PLACE_ORDINAL_UNIQUE; pins.len()];
+    for members in groups.values() {
+        if members.len() < 2 {
+            continue;
+        }
+        let mut ordered = members.clone();
+        // Sort by the INTRINSIC key, never by input order -- the harvest order must not be able to
+        // change what a player is told to meet at.
+        ordered.sort_by_key(|at| {
+            let target = &pins[*at].0;
+            (target.block.raw(), target.point_index)
+        });
+        for (rank, at) in ordered.into_iter().enumerate() {
+            ordinals[at] = u32::try_from(rank + 1).unwrap_or(u32::MAX);
+        }
+    }
+    ordinals
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const STRIDE: usize = 0x350;
+
+    fn pin(block: u32, point: u32, place_name: i32) -> (InvasionWarpTarget, i32) {
+        (
+            InvasionWarpTarget::new(BlockKey::from_raw(block), point, [0.0; 3], 0.0),
+            place_name,
+        )
+    }
+
+    #[test]
+    fn pins_sharing_a_name_are_numbered_from_one() {
+        let pins = [pin(0x0f00_0000, 3, 700), pin(0x0f00_0000, 1, 700)];
+        // Ordered by point_index, so the SECOND input is number 1.
+        assert_eq!(number_shared_place_names(&pins), vec![2, 1]);
+    }
+
+    /// THE INVARIANT THE WHOLE FEATURE RESTS ON. If harvest order could change the numbering, two
+    /// players would be sent to different places while saying the same words.
+    #[test]
+    fn the_numbering_does_not_depend_on_input_order() {
+        let a = pin(0x0f00_0000, 9, 700);
+        let b = pin(0x0f00_0000, 1, 700);
+        let c = pin(0x1c00_0000, 4, 700);
+        assert_eq!(number_shared_place_names(&[a, b, c]), vec![2, 1, 3]);
+        // Same points, reversed input -- each point keeps its own number.
+        assert_eq!(number_shared_place_names(&[c, b, a]), vec![3, 1, 2]);
+    }
+
+    #[test]
+    fn a_unique_name_is_not_numbered() {
+        let pins = [pin(0x0f00_0000, 1, 700), pin(0x1c00_0000, 1, 800)];
+        assert_eq!(
+            number_shared_place_names(&pins),
+            vec![PLACE_ORDINAL_UNIQUE, PLACE_ORDINAL_UNIQUE]
+        );
+    }
+
+    #[test]
+    fn separate_names_are_numbered_separately() {
+        let pins = [
+            pin(0x0f00_0000, 1, 700),
+            pin(0x0f00_0000, 2, 700),
+            pin(0x1c00_0000, 5, 800),
+            pin(0x1c00_0000, 6, 800),
+        ];
+        assert_eq!(number_shared_place_names(&pins), vec![1, 2, 1, 2]);
+    }
+
+    /// An unnamed pin is never drawn, so numbering it would be meaningless -- and it must not form
+    /// a phantom group with other unnamed pins.
+    #[test]
+    fn unnamed_pins_are_skipped_and_do_not_form_a_group() {
+        let pins = [pin(0x0f00_0000, 1, -1), pin(0x1c00_0000, 2, -1)];
+        assert_eq!(
+            number_shared_place_names(&pins),
+            vec![PLACE_ORDINAL_UNIQUE, PLACE_ORDINAL_UNIQUE]
+        );
+    }
+
+    #[test]
+    fn a_name_spanning_two_blocks_orders_by_block_first() {
+        let pins = [pin(0x1c00_0000, 0, 700), pin(0x0f00_0000, 99, 700)];
+        assert_eq!(number_shared_place_names(&pins), vec![2, 1]);
+    }
+
+    #[test]
+    fn no_pins_yields_no_ordinals() {
+        assert!(number_shared_place_names(&[]).is_empty());
+    }
 
     /// THE REGRESSION: rows a live top-up claimed must be walked, or marking the dungeon they
     /// belong to changes nothing the player can see.

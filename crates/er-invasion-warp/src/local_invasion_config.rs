@@ -59,6 +59,21 @@ enabled = false
 #   "named" -- ignore where you are; accept only the locations listed below.
 mode = "exact"
 
+# HUNT MODE -- ask Steam for ONE location instead of rejecting what it sends.
+#
+# The filter above DECLINES matches: it sees every host and cancels the ones you do not want, which
+# always works but can take many tries. Hunt instead narrows the QUERY, so the answer arrives right
+# the first time.
+#
+# The cost, and why this is separate and off by default: it filters on a key only this DLL
+# publishes, so while hunt is on you will NOT see hosts who are not running it. Your friend needs
+# it too. Leave it off to keep meeting everybody.
+#
+# A Steam filter tests ONE value and has no OR, so hunt uses the single marked location if you have
+# marked exactly one, or the map you are standing in if you have marked none. Several marked
+# locations cannot be expressed and hunt will say so and stay out of the way.
+hunt = false
+
 # NOT IMPLEMENTED YET -- anything listed here is parsed and then ignored, and the log says so on
 # every load. Turning a typed place name into the FMG text id the game matches on has not been
 # reversed, so there is nothing to compare a string against.
@@ -72,12 +87,27 @@ named_locations = []
 
 # Locations you marked, and the two lists the in-game keys write to. Both WIDEN whatever `mode`
 # allows -- a marked place is always accepted, in every mode -- so you can leave mode = "exact"
+
+# HUNT MODE -- ask Steam for ONE location instead of rejecting what it sends.
+#
+# The filter above DECLINES matches: it sees every host and cancels the ones you do not want, which
+# always works but can take many tries. Hunt instead narrows the QUERY, so the answer arrives right
+# the first time.
+#
+# The cost, and why this is separate and off by default: it filters on a key only this DLL
+# publishes, so while hunt is on you will NOT see hosts who are not running it. Your friend needs
+# it too. Leave it off to keep meeting everybody.
+#
+# A Steam filter tests ONE value and has no OR, so hunt uses the single marked location if you have
+# marked exactly one, or the map you are standing in if you have marked none. Several marked
+# locations cannot be expressed and hunt will say so and stay out of the way.
+hunt = false
 # and just collect places as you visit them.
 #
-#   Insert         "invade here"      -> allowed_blocks   (and clears any exclusion)
-#   Delete         "not here"         -> blocked_blocks   (and clears any mark)
-#   Shift+Insert   mark every place sharing this one's name -> named_location_text_ids
-#   Shift+Delete   un-mark those
+#   mark_key         "invade here"      -> allowed_blocks   (and clears any exclusion)
+#   unmark_key       "not here"         -> blocked_blocks   (and clears any mark)
+#   Shift+mark_key   mark every place sharing this one's name -> named_location_text_ids
+#   Shift+unmark_key un-mark those
 #
 # The world map colours its invasion pins by these two lists, and by nothing else: chosen is the
 # brightest marker, excluded the dimmest, and anything in neither list keeps the middle one. That
@@ -86,6 +116,22 @@ named_locations = []
 # The keys rewrite this file, so marks survive a restart. Hand-edits are equally fine; the file is
 # re-read when the next match arrives.
 allowed_blocks = []
+
+# The two keys, by NAME. Insert and Delete are the defaults, but a 60% keyboard has neither -- so
+# name a key you actually have instead. Recognised:
+#
+#   Insert Delete Home End PageUp PageDown Backspace Tab Enter Escape Space
+#   Left Up Right Down PrintScreen ScrollLock Pause CapsLock
+#   F1..F24, any single letter or digit ("K", "7")
+#   punctuation by symbol or name: - = [ ] \ ; ' , . / `  (Minus, Equals, LeftBracket,
+#     RightBracket, Backslash, Semicolon, Quote, Comma, Period, Slash, Grave)
+#   keypad: KP_0..KP_9, KP_Plus, KP_Minus, KP_Multiply, KP_Divide, KP_Period
+#
+# Case and spacing do not matter. A raw virtual-key code works too ("0x2d"). A name this file does
+# not recognise is reported in the log and the previous key stays in force -- it is never silently
+# ignored, because a key that does nothing is indistinguishable from a broken feature.
+mark_key = "Insert"
+unmark_key = "Delete"
 
 # Locations you excluded. An exclusion beats everything, including a mode that would accept it.
 blocked_blocks = []
@@ -160,6 +206,13 @@ pub fn parse_local_invasion_config(text: &str) -> ParsedConfig {
                     message: format!("enabled must be true or false, got {value:?}"),
                 }),
             },
+            "hunt" => match parse_bool(value) {
+                Some(v) => config.hunt = v,
+                None => issues.push(ConfigIssue {
+                    line: line_no,
+                    message: format!("enabled must be true or false, got {value:?}"),
+                }),
+            },
             "mode" => match LocalInvasionMode::parse(&unquote(value)) {
                 Some(v) => config.mode = v,
                 None => issues.push(ConfigIssue {
@@ -176,6 +229,23 @@ pub fn parse_local_invasion_config(text: &str) -> ParsedConfig {
                 None => issues.push(ConfigIssue {
                     line: line_no,
                     message: format!("named_locations must be an array of strings, got {value:?}"),
+                }),
+            },
+            "mark_key" => match crate::keybind::parse_key(&unquote(value)) {
+                Ok(key) => config.mark_key = key,
+                // Surfaced as an issue rather than silently kept at the default: a player who
+                // mistypes their key otherwise presses it, gets nothing, and has no way to tell
+                // that apart from the feature being broken.
+                Err(error) => issues.push(ConfigIssue {
+                    line: line_no,
+                    message: format!("mark_key: {error}"),
+                }),
+            },
+            "unmark_key" => match crate::keybind::parse_key(&unquote(value)) {
+                Ok(key) => config.unmark_key = key,
+                Err(error) => issues.push(ConfigIssue {
+                    line: line_no,
+                    message: format!("unmark_key: {error}"),
                 }),
             },
             "named_location_text_ids" => match parse_int_array(value) {
@@ -320,6 +390,7 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
         let key = line.split_once('=').map(|(k, _)| k.trim()).unwrap_or("");
         match key {
             "enabled" => out.push_str(&format!("enabled = {}\n", config.enabled)),
+            "hunt" => out.push_str(&format!("hunt = {}\n", config.hunt)),
             "mode" => out.push_str(&format!("mode = \"{}\"\n", config.mode.as_str())),
             "named_locations" => {
                 let names = config
@@ -332,6 +403,14 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
                     .join(", ");
                 out.push_str(&format!("named_locations = [{names}]\n"));
             }
+            "mark_key" => out.push_str(&format!(
+                "mark_key = \"{}\"\n",
+                crate::keybind::key_name(config.mark_key)
+            )),
+            "unmark_key" => out.push_str(&format!(
+                "unmark_key = \"{}\"\n",
+                crate::keybind::key_name(config.unmark_key)
+            )),
             "named_location_text_ids" => {
                 let ids = config
                     .named_location_text_ids
@@ -523,6 +602,59 @@ mod tests {
         // Our own write must not read as somebody else editing the file.
         assert_eq!(hot.reload_if_changed(&path), None);
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// A 60% keyboard names a key it has; that must survive the writer, since the in-game keys
+    /// rewrite this file and would otherwise erase the player's choice on the first mark.
+    #[test]
+    fn a_renamed_key_survives_a_write_and_reparse() {
+        let mut config = LocalInvasionConfig::default();
+        config.mark_key = crate::keybind::parse_key("F7").expect("F7 is a key");
+        config.unmark_key = crate::keybind::parse_key("]").expect("] is a key");
+        let rendered = render_local_invasion_config(&config);
+        assert!(rendered.contains("mark_key = \"F7\""), "{rendered}");
+        // Rendered as the SYMBOL: it is the first name in the table and is what a player typing a
+        // config sees printed on the key itself.
+        assert!(rendered.contains("unmark_key = \"]\""), "{rendered}");
+        let parsed = parse_local_invasion_config(&rendered);
+        assert!(parsed.issues.is_empty(), "{:?}", parsed.issues);
+        assert_eq!(parsed.config.mark_key, config.mark_key);
+        assert_eq!(parsed.config.unmark_key, config.unmark_key);
+    }
+
+    /// A typo must be REPORTED and must leave the previous key in force -- never silently swallowed
+    /// and never a crash.
+    #[test]
+    fn an_unknown_key_name_is_reported_and_leaves_the_default_in_force() {
+        let parsed = parse_local_invasion_config(
+            "[local_invasion]\nmark_key = \"Winkey\"\nunmark_key = \"Delete\"\n",
+        );
+        assert_eq!(parsed.config.mark_key, crate::keybind::VK_INSERT);
+        assert_eq!(parsed.config.unmark_key, crate::keybind::VK_DELETE);
+        assert_eq!(parsed.issues.len(), 1, "{:?}", parsed.issues);
+        assert!(
+            parsed.issues[0].message.contains("Winkey"),
+            "{:?}",
+            parsed.issues
+        );
+    }
+
+    /// The shipped file must name the defaults, or the writer has no line to replace and a marked
+    /// location would silently drop the key settings.
+    #[test]
+    fn the_shipped_file_names_both_keys() {
+        let parsed = parse_local_invasion_config(DEFAULT_CONFIG_TOML);
+        assert!(parsed.issues.is_empty(), "{:?}", parsed.issues);
+        assert_eq!(parsed.config.mark_key, crate::keybind::VK_INSERT);
+        assert_eq!(parsed.config.unmark_key, crate::keybind::VK_DELETE);
+        assert!(
+            DEFAULT_CONFIG_TOML.contains("mark_key = "),
+            "no mark_key line to rewrite"
+        );
+        assert!(
+            DEFAULT_CONFIG_TOML.contains("unmark_key = "),
+            "no unmark_key line to rewrite"
+        );
     }
 
     #[test]

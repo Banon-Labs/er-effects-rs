@@ -761,6 +761,16 @@ unsafe extern "system" fn set_join_data_hook(a: usize, b: usize, c: usize, d: us
     unsafe { core::mem::transmute::<usize, ErscActionFn>(orig)(a, b, c, d) }
 }
 
+/// The user's current config, for [`crate::lobby_publish`]'s hunt mode.
+///
+/// Shares the SAME hot-reloaded snapshot the reject filter judges with, so the two halves can never
+/// disagree about what the user asked for -- a hunt filtering for one place while the reject filter
+/// judged against another would be indistinguishable from a broken filter.
+#[must_use]
+pub fn current_config_snapshot() -> Option<LocalInvasionConfig> {
+    current_config()
+}
+
 /// The advertisement lobby's `CSteamID`, read out of the resolved Seamless session.
 ///
 /// Exposed so [`crate::lobby_publish`] can publish on the host's own lobby WITHOUT hooking
