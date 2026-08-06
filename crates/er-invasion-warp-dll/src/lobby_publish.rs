@@ -79,12 +79,36 @@ pub const SET_LOBBY_DATA_SLOT: usize = 20;
 /// process-wide singleton, which is why this module needs no detour and no boot-time race.
 pub const MATCHMAKING_ACCESSOR: &str = "SteamAPI_SteamMatchmaking_v009\0";
 
-/// Offset of the advertisement lobby's `CSteamID` within Seamless's session object.
+/// Offset of a lobby `CSteamID` within Seamless's session object.
 ///
-/// The session already carries it, so the lobby this DLL publishes on is READ rather than captured
-/// by hooking `CreateLobby`. A host session was observed creating two lobbies -- one carrying the
-/// published data, one carrying the members -- and this is the former.
+/// CANDIDATE, not gospel. A host session creates TWO lobbies -- one carrying the advertisement,
+/// one carrying the members -- and this offset was assumed to be the former from the fact that it
+/// is A lobby id. That assumption was never checked against the id ersc actually publishes to, and
+/// publishing to the wrong one fails in the worst possible way: Steam accepts the write, our log
+/// says published, and an invader filtering for the key matches nobody -- indistinguishable from
+/// "nobody is online".
+///
+/// So the offset is only where the search STARTS. [`ADVERTISEMENT_MARKER_KEY`] decides whether it
+/// is right, at runtime, on every publish.
 pub const SESSION_LOBBY_ID_OFFSET: usize = 0x178;
+
+/// `ISteamMatchmaking::GetLobbyData` -- vtable slot 19.
+///
+/// READ ONLY, and that distinction is the whole reason this is allowed to name a Seamless key at
+/// all: reading lobby data changes nothing for any other player, whereas writing or filtering on
+/// one of their keys changes what everybody matches.
+pub const GET_LOBBY_DATA_SLOT: usize = 19;
+
+/// The key whose presence PROVES a lobby is the one invaders query.
+///
+/// Seamless filters its lobby list on `lobby_type == yknx3_seamless_master_lobby`, so by definition
+/// the only lobbies an invader can ever see are the ones carrying that pair. Reading it back off
+/// our publish target turns "the offset is probably the advertisement lobby" into a fact checked on
+/// every write -- and if the offset is ever wrong, or Seamless reorders its lobbies in a future
+/// version, publishing REFUSES instead of writing somewhere nobody reads.
+pub const ADVERTISEMENT_MARKER_KEY: &str = "lobby_type\0";
+/// The value [`ADVERTISEMENT_MARKER_KEY`] carries on the advertisement lobby.
+pub const ADVERTISEMENT_MARKER_VALUE: &str = "yknx3_seamless_master_lobby";
 
 /// How the block id is spelled on the wire.
 ///
@@ -117,7 +141,10 @@ pub fn pending_publish(current: Option<BlockKey>, last_published: Option<&str>) 
 /// The live half: resolve Steam, read where we are, and write the key if it changed.
 #[cfg(windows)]
 mod live {
-    use super::{LOBBY_MAP_KEY, MATCHMAKING_ACCESSOR, SET_LOBBY_DATA_SLOT, pending_publish};
+    use super::{
+        ADVERTISEMENT_MARKER_KEY, ADVERTISEMENT_MARKER_VALUE, GET_LOBBY_DATA_SLOT, LOBBY_MAP_KEY,
+        MATCHMAKING_ACCESSOR, SET_LOBBY_DATA_SLOT, pending_publish,
+    };
     use er_invasion_warp::invasion_warp::BlockKey;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -135,6 +162,8 @@ mod live {
     /// The `CSteamID` is an 8-byte POD passed BY VALUE, which is why it is a plain `u64` here and
     /// not a pointer -- getting that wrong would shift every argument after it.
     type SetLobbyDataFn = unsafe extern "system" fn(usize, u64, *const u8, *const u8) -> bool;
+    /// `const char *GetLobbyData(this, CSteamID lobby, const char *key)` -- READ ONLY.
+    type GetLobbyDataFn = unsafe extern "system" fn(usize, u64, *const u8) -> *const i8;
 
     /// Cached interface pointer. Steam hands out a process-wide singleton, so this is resolved once
     /// rather than per publish.
@@ -183,6 +212,38 @@ mod live {
         Some(BlockKey::from_raw(raw))
     }
 
+    /// Is this the lobby an invader's query can actually see?
+    ///
+    /// Seamless filters its lobby list on `lobby_type == yknx3_seamless_master_lobby`, so a lobby
+    /// carrying that pair is BY DEFINITION one the query can return, and a lobby without it is
+    /// invisible no matter what we write there. Reading it costs one call and converts a guessed
+    /// struct offset into a fact re-checked on every publish.
+    ///
+    /// Reading a Seamless key is not the thing the guards forbid. Writing or filtering on
+    /// `lobby_type` would change what every other player matches; reading it changes nothing for
+    /// anyone, and is the only way to prove we are not writing into a lobby nobody queries.
+    fn is_advertisement_lobby(iface: usize, lobby: u64) -> bool {
+        let Some(read) = get_lobby_data(iface) else {
+            return false;
+        };
+        let got = unsafe { read(iface, lobby, ADVERTISEMENT_MARKER_KEY.as_ptr()) };
+        if got.is_null() {
+            return false;
+        }
+        let value = unsafe { core::ffi::CStr::from_ptr(got.cast()) };
+        value
+            .to_str()
+            .is_ok_and(|v| v == ADVERTISEMENT_MARKER_VALUE)
+    }
+
+    fn get_lobby_data(iface: usize) -> Option<GetLobbyDataFn> {
+        let vtable = unsafe { er_game_base::mem::safe_read_usize(iface) }?;
+        let slot = unsafe {
+            er_game_base::mem::safe_read_usize(vtable + GET_LOBBY_DATA_SLOT * size_of::<usize>())
+        }?;
+        (slot != 0).then(|| unsafe { core::mem::transmute::<usize, GetLobbyDataFn>(slot) })
+    }
+
     /// Publish this host's map if it changed. Safe to call every tick.
     ///
     /// Every failure path is a silent no-op ON PURPOSE. Not being findable by location is a missing
@@ -199,6 +260,20 @@ mod live {
             // No lobby yet -- the host has not opened to invaders. Nothing to advertise on.
             return;
         };
+        // REFUSE rather than write somewhere nobody queries. The struct offset that produced this
+        // lobby id was an assumption; this is the check that makes being wrong LOUD instead of
+        // silent, because the silent failure mode is a filter matching nobody while every log line
+        // says success.
+        if !is_advertisement_lobby(iface, lobby) {
+            if REFUSALS.fetch_add(1, Ordering::SeqCst) == 0 {
+                crate::standalone_log(format_args!(
+                    "lobby-publish: REFUSED -- lobby {lobby:#x} does not carry Seamless's own \
+                     advertisement marker, so an invader's query could never see it. Publishing \
+                     there would look like success and match nobody."
+                ));
+            }
+            return;
+        }
         let Some(write) = set_lobby_data(iface) else {
             REFUSALS.fetch_add(1, Ordering::SeqCst);
             return;
@@ -319,16 +394,54 @@ mod tests {
     /// This is the same boundary `local_invasion_filter` enforces, restated here because the ban
     /// has to travel with the code that could break it -- a guard living in another file protects
     /// that file, not this one.
+    /// REFINED 2026-08-06, because the blanket version was both too broad and, once the marker read
+    /// was added, accidentally passing.
+    ///
+    /// Too broad: the harm these keys carry is in WRITING or FILTERING on them -- that changes what
+    /// every other player matches. READING one changes nothing for anybody, and reading `lobby_type`
+    /// is the only way to prove we are not publishing into a lobby no invader queries.
+    ///
+    /// Accidentally passing: the marker constant is `"lobby_type\0"`, which does not contain the
+    /// substring `"lobby_type"` WITH its closing quote, so a literal-substring ban let it through by
+    /// luck rather than by rule. A guard that passes for the wrong reason is worse than no guard,
+    /// because it will keep passing when the reason stops holding.
+    ///
+    /// So this pins the rule instead: `lobby_key` never appears at all, and `lobby_type` appears
+    /// ONLY in the marker declaration that the read uses.
     #[test]
-    fn the_keys_that_decide_visibility_are_never_written_here() {
+    fn the_keys_that_decide_visibility_are_read_but_never_written_here() {
         let code = product_code();
-        for reserved in ["lobby_key", "lobby_type"] {
+        assert!(
+            !code.contains("lobby_key"),
+            "lobby_key decides who can see whom -- this module has no business naming it at all"
+        );
+        // `lobby_type` is permitted exactly once, as the marker the advertisement check READS.
+        let mentions: Vec<&str> = code
+            .lines()
+            .filter(|line| line.contains("lobby_type"))
+            .collect();
+        assert_eq!(
+            mentions.len(),
+            1,
+            "lobby_type may appear only in the marker declaration, found: {mentions:?}"
+        );
+        assert!(
+            mentions[0].contains("ADVERTISEMENT_MARKER_KEY"),
+            "the one lobby_type mention must be the read marker, not a write: {}",
+            mentions[0]
+        );
+        // And the only key this module ever WRITES is its own.
+        let writes: Vec<&str> = code
+            .lines()
+            .filter(|line| line.contains("write(iface"))
+            .collect();
+        for line in &writes {
             assert!(
-                !code.contains(&format!("\"{reserved}\"")),
-                "{reserved}: this key decides who can see whom -- writing it would change what \
-                 every other Seamless player matches"
+                line.contains("key.as_ptr()"),
+                "the publish call must write the key built from LOBBY_MAP_KEY: {line}"
             );
         }
+        assert_eq!(writes.len(), 1, "exactly one write site: {writes:?}");
     }
 
     /// The consent line, restated where it could be crossed.
