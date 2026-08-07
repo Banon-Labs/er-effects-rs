@@ -1198,6 +1198,22 @@ fn cancel_stalled_attempt(session: SeamlessSession, state: u32, held_ms: u64) {
 /// Deliberately state-driven rather than time-capped: `SEARCHING` means "nobody has matched yet"
 /// and is unbounded by nature, so it is never timed. Only the brief handshake steps are.
 fn watch_for_stall(session: SeamlessSession) {
+    // ONLY RECOVER WHILE ACTUALLY HUNTING. If the loop is not armed there is nothing to recover,
+    // and running anyway is how this cancelled a SUCCESSFUL invasion five seconds after accepting
+    // it (2026-08-06): `Verdict::Keep` fired, the session sat in 0x15 loading the host's world,
+    // and the watchdog called that a stalled handshake. From the player's seat the invasion
+    // appeared and dismissed itself at once.
+    //
+    // Note this cannot be fixed by choosing better states to time: a successful join walks 0x22
+    // and 0x23 exactly like a cancel does. Whether we are still hunting is the ONLY thing that
+    // separates "this handshake is stuck" from "this invasion is under way", and `Verdict::Keep`
+    // already clears the armed flag, as do the player's own cancel and opening Seamless's menu.
+    if !AUTO_SEARCH_ARMED.load(Ordering::SeqCst) {
+        if let Ok(mut guard) = STALL_WATCHDOG.lock() {
+            guard.stand_down();
+        }
+        return;
+    }
     let Some(state) = read_session_state(session.session) else {
         return;
     };
@@ -2020,6 +2036,19 @@ mod tests {
         assert!(
             watcher.contains("observe("),
             "the watcher feeds the detector rather than deciding staleness itself"
+        );
+        // THE REGRESSION THIS PINS, 2026-08-06: the watchdog cancelled a match it had just KEPT,
+        // five seconds after accepting it, because the session dwells in 0x15 while loading into
+        // the host's world. No choice of timed states fixes that -- a successful join walks 0x22
+        // and 0x23 exactly like a cancel does -- so the arming gate is the whole defence.
+        let armed_at = watcher
+            .find("AUTO_SEARCH_ARMED")
+            .expect("the watcher must only run while the hunt is armed");
+        let observe_at = watcher.find("observe(").expect("checked above");
+        assert!(
+            armed_at < observe_at,
+            "the armed check must come BEFORE any observation, or a kept match is timed as a \
+             stalled handshake and the invasion is cancelled out from under the player"
         );
     }
 

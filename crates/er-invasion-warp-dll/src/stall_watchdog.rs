@@ -38,7 +38,61 @@
 pub mod state {
     pub const IDLE: u32 = 0x00;
     pub const SEARCHING: u32 = 0x0d;
+    /// Seamless's own "nobody matched, go round again" step. Part of the healthy idle cycle
+    /// `0x0e -> 0x11 -> 0x0d`, NOT a handshake -- see [`TIMED_STATES`] for what timing it cost.
+    pub const RETRYING: u32 = 0x11;
     pub const CANCELLING: u32 = 0x22;
+}
+
+/// The ONLY states this detector times, listed because each one was measured to be brief.
+///
+/// # This is an allowlist, and it is an allowlist because a blocklist shipped and broke a live run
+///
+/// The first version asked "is this state neither IDLE nor SEARCHING?" and timed everything else.
+/// That makes every state nobody has measured a stall by default, which is exactly backwards: an
+/// unmeasured state is one we know nothing about, and the safe treatment of it is to leave it
+/// alone. Measured 2026-08-06, one run, after that version shipped:
+///
+/// ```text
+///   0x11 -> 0x0d     0 times   <- Seamless's own retry, extinct
+///   0x11 -> 0x22    33 times   <- this detector cancelling it instead
+///   "connection stalled at state 0x11 for 5000ms"  x31
+/// ```
+///
+/// `0x11` is the step Seamless passes through when a search found nobody and is about to go round
+/// again -- the same `0x0e -> 0x11 -> 0x0d` cycle that ran 12 times in an earlier healthy capture.
+/// Cancelling it every five seconds killed the retry the game was about to do by itself, and the
+/// player could not match anyone for as long as the build was loaded. The detector was strictly
+/// worse than not existing.
+///
+/// So: a state earns its place here by having been observed to complete quickly. Anything absent --
+/// unknown, newly introduced by a Seamless update, or simply never seen -- is never timed.
+const TIMED_STATES: [u32; 5] = [
+    0x0e, // search -> connect handoff
+    0x12, // connect
+    0x13, // connect
+    0x22, // cancelling
+    0x23, // cancel settling
+];
+
+// 0x15 (join data arrived) is DELIBERATELY ABSENT, and it used to be here.
+//
+// Judgement happens synchronously the moment join data lands, so a REJECT leaves 0x15 in zero
+// ticks. The only way the session dwells there is AFTER a match was KEPT -- and that dwell is the
+// player loading into the host's world, which takes far longer than any handshake. Timing it
+// cancelled a successful invasion five seconds after accepting it: the log read `KEEP 0x3c2a2400
+// (ExactBlock)` and then `connection stalled at state 0x15 for 5000ms -- cancelled it`, and from
+// the player's seat the invasion appeared and dismissed itself instantly (2026-08-06).
+//
+// Removing it is defence in depth, not the fix. The fix is that the watchdog does not run at all
+// once a match is kept -- see the caller's arming gate -- because a successful join also walks
+// 0x22 and 0x23, so no choice of timed states could have made this safe on its own.
+
+/// Whether a state is one we have measured to be brief, and may therefore time.
+///
+/// Fails CLOSED on anything unrecognised: not timed, never cancelled.
+fn is_transient(state: u32) -> bool {
+    TIMED_STATES.contains(&state)
 }
 
 /// How long a transient handshake state may sit without progressing before it counts as stalled.
@@ -56,11 +110,6 @@ pub enum StallAction {
     /// Drive ERSC's "Cancel search". The session walks back to `IDLE`, the existing auto-search
     /// rearm restarts the hunt, and the loop continues as though the stall had never happened.
     CancelAndResearch,
-}
-
-/// Whether a state is expected to be brief. Only these are timed; see the module docs.
-fn is_transient(state: u32) -> bool {
-    state != state::IDLE && state != state::SEARCHING
 }
 
 /// Watches session-state observations and reports a state that has stopped progressing.
@@ -136,6 +185,16 @@ impl StallWatchdog {
     pub fn timing_state(&self) -> Option<u32> {
         self.timing.map(|(s, _)| s)
     }
+
+    /// Forget what is being timed, so a later observation starts a fresh clock.
+    ///
+    /// Called when the hunt stops -- a match was kept, the player cancelled, or they opened
+    /// Seamless's menu. Without this, the elapsed time accumulated while hunting would carry into
+    /// whatever the session does next and fire a stall against it immediately.
+    pub fn stand_down(&mut self) {
+        self.timing = None;
+        self.reported = false;
+    }
 }
 
 #[cfg(test)]
@@ -172,6 +231,94 @@ mod tests {
                 "searching for {minute} minutes is normal, not a stall",
             );
         }
+    }
+
+    /// THE REGRESSION THIS MODULE SHIPPED, 2026-08-06, caught only by a live run.
+    ///
+    /// `0x11` is Seamless's own "found nobody, go round again" step -- the `0x0e -> 0x11 -> 0x0d`
+    /// cycle. The first version timed it because it was neither IDLE nor SEARCHING, cancelled it
+    /// 31 times in one session, and the player could not match anyone at all while that build was
+    /// loaded. The detector was worse than not existing.
+    #[test]
+    fn the_retry_step_is_never_a_stall() {
+        let mut w = StallWatchdog::new();
+        for second in 0..120 {
+            assert_eq!(
+                w.observe(state::RETRYING, second * 1_000),
+                None,
+                "0x11 is Seamless retrying by itself; cancelling it kills the search"
+            );
+        }
+    }
+
+    /// The property, not the three states I happened to think of. Anything unmeasured must fail
+    /// closed -- the previous test suite asserted only that IDLE and SEARCHING were exempt, which
+    /// is precisely the belief that was wrong, so it passed while the bug shipped.
+    #[test]
+    fn every_state_outside_the_measured_set_is_left_alone() {
+        for state in 0..=0xffu32 {
+            if TIMED_STATES.contains(&state) {
+                continue;
+            }
+            let mut w = StallWatchdog::new();
+            w.observe(state, 0);
+            assert_eq!(
+                w.observe(state, 3_600_000),
+                None,
+                "state {state:#04x} was never measured, so it must never be cancelled -- an \
+                 unknown state is not evidence of a stall",
+            );
+        }
+    }
+
+    /// ...and the measured ones still do their job, so failing closed did not disarm the feature.
+    #[test]
+    fn every_measured_state_still_stalls() {
+        for state in TIMED_STATES {
+            let mut w = StallWatchdog::new();
+            w.observe(state, 0);
+            assert_eq!(
+                w.observe(state, STALL_THRESHOLD_MS),
+                Some(StallAction::CancelAndResearch),
+                "state {state:#04x} is in the measured set and must still be recoverable",
+            );
+        }
+    }
+
+    /// THE SECOND REGRESSION, 2026-08-06: a KEPT match was cancelled 5s after being accepted.
+    ///
+    /// `0x15` is where the session sits while the player loads into the host's world, which is far
+    /// longer than any handshake. It must never be timed.
+    #[test]
+    fn the_join_state_is_never_a_stall() {
+        let mut w = StallWatchdog::new();
+        for second in 0..90 {
+            assert_eq!(
+                w.observe(0x15, second * 1_000),
+                None,
+                "0x15 is a live invasion loading in, not a stuck handshake",
+            );
+        }
+    }
+
+    /// Standing down forgets the accumulated clock. Without this, time banked while hunting would
+    /// carry into whatever the session does next and fire against it instantly.
+    #[test]
+    fn standing_down_forgets_the_clock() {
+        let mut w = StallWatchdog::new();
+        w.observe(0x22, 0);
+        w.stand_down();
+        assert!(w.timing_state().is_none());
+        assert_eq!(
+            w.observe(0x22, 4_000),
+            None,
+            "after standing down the clock restarts; 4s must not read as 4s already elapsed",
+        );
+        assert_eq!(
+            w.observe(0x22, 9_000),
+            Some(StallAction::CancelAndResearch),
+            "and the fresh clock still reaches the threshold on its own terms",
+        );
     }
 
     /// Idle is a resting state, not a handshake step.
