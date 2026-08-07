@@ -1,4 +1,5 @@
 use super::*;
+use er_gfx::TWIPS_PER_PIXEL_F32;
 use er_gfx::profile_05_010_protocol::{
     CONTROL_FILE_NAME, ProfileEditorCommand, ProfileEditorStatus, RenderMode, STATUS_FILE_NAME,
     SelectedKind,
@@ -865,7 +866,15 @@ unsafe fn set_text_field_width_probe(
             "text doc bounds are not finite: left={left} right={old_right} doc=0x{text_doc:x}"
         ));
     }
-    let new_right = left + width_px as f32;
+    // `left` came out of the text document, whose source bounds are TWIPS; `width_px` is the
+    // schema's pixel width. Without the conversion this wrote pixels into a twips field and made
+    // the box 20x too narrow: PlayerName's 1200 px became -40 + 1200 = 1160 twips = 58 px instead
+    // of -40 + 1200*20 = 23960 twips, which is exactly the x_max the asset generator emits
+    // (make_05_010_stats.rs: `bounds.x_max = bounds.x_min + field.width * TW`). The name then
+    // word-wrapped inside a 56 px layout area -- observed live as `records=4 content=929x2064`
+    // (twips: 46.45 x 103.20 px, i.e. three 34.383 px line boxes) -- and only the first wrapped
+    // line fit the field's height, which reads on screen as a truncated name.
+    let new_right = left + width_px as f32 * TWIPS_PER_PIXEL_F32;
     unsafe {
         ((text_doc + GFX_TEXT_DOC_SOURCE_RIGHT_OFFSET) as *mut f32).write_unaligned(new_right);
     }
@@ -883,7 +892,12 @@ unsafe fn set_text_field_width_probe(
     let content_height =
         unsafe { safe_read_i32(text_doc + GFX_TEXT_DOC_CONTENT_HEIGHT_OFFSET) }.unwrap_or(-1);
     Ok(format!(
-        "doc=0x{text_doc:x} source_right {old_right:.2}->{new_right:.2} layout [{old_layout_left:.2},{old_layout_right:.2}]->[{new_layout_left:.2},{new_layout_right:.2}] render_layout records={layout_record_count} content={content_width}x{content_height}px"
+        // Every one of these is TWIPS. The old message labelled content "px", which cost real
+        // diagnosis time: `content=929x2064px` reads as an absurd 2064-pixel-tall line, whereas
+        // 2064 twips = 103.20 px = exactly three line boxes, which is what pointed at wrapping.
+        "doc=0x{text_doc:x} source_right {old_right:.2}->{new_right:.2}tw layout [{old_layout_left:.2},{old_layout_right:.2}]->[{new_layout_left:.2},{new_layout_right:.2}]tw render_layout records={layout_record_count} content={content_width}x{content_height}tw ({:.2}x{:.2}px)",
+        content_width as f32 / TWIPS_PER_PIXEL_F32,
+        content_height as f32 / TWIPS_PER_PIXEL_F32,
     ))
 }
 
