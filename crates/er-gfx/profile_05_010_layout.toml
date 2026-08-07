@@ -2,15 +2,6 @@
 # Edited by scripts/profile-05-010-editor.py or by hand.
 # The canvas is approximate; in-game Scaleform rendering is the final oracle.
 # Icon_0 stays placed and hidden, never unplaced.
-#
-# These values ARE the shipped defaults: Profile05_010Layout::default() parses this file via
-# include_str!, so they compile into the DLL and nothing reads this file at runtime.
-#
-# clip_height has a hard floor -- one line of the menu font is font_height * 1.432617 px (Agmena
-# ascent 20800 + descent 8540 over a 20480 em square) and the GFx reflow insets 2px per edge, so
-# clip_height must be >= ceil(font_height * 1.432617 + 4), i.e. 39 at font_height 24. Below that
-# the text cannot lay out and the field renders short. Enforced in Profile05_010Layout::validate.
-# Do not annotate individual fields: the editor rewrites this file and drops in-block comments.
 
 [field.PlayerName]
 x = -520
@@ -35,8 +26,8 @@ sample_save_picker = ""
 sample_drive_row = ""
 
 [field.Level]
-x = -289.5
-y = -19.5
+x = -300
+y = -20
 width = 52
 clip_height = 40
 font_height = 24
@@ -79,7 +70,7 @@ sample_save_picker = "PARENT FOLDER / Go to save-files"
 sample_drive_row = "45-Slots / ER0000.sl2"
 
 [field.ErCharStats]
-x = -218
+x = -225.75
 y = -13
 width = 470
 clip_height = 42
