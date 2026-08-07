@@ -215,6 +215,11 @@ fn spawn_catalog_task() {
                     // Steam interface, which is not resolvable until Steam is up, so it retries
                     // until it lands rather than being installed once at attach and failing
                     // silently. It changes nothing unless `hunt = true` is in the config.
+                    // Learn which lobby Seamless advertises on, by watching it declare one.
+                    // Must be installed before publishing can do anything: publish now REFUSES
+                    // until this observer has seen the declaration, rather than guessing from a
+                    // struct offset that pointed at the wrong lobby in every run.
+                    crate::lobby_publish::install_advertisement_observer();
                     crate::lobby_publish::install_hunt_hook();
                     // Lift both halves of location matchmaking out of the log and into the oracle
                     // document, because their failures are the ones that look like success from

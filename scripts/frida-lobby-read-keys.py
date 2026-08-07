@@ -31,6 +31,21 @@ import sys
 GADGET = "127.0.0.1:27042"
 ACCESSOR = "SteamAPI_SteamMatchmaking_v009"
 
+#: What ersc's own query DEMANDS of each key, captured from its filter set. Presence is not the
+#: test -- VALUE is. Measured 2026-08-06: a host lobby carried
+#: `lobby_breakin_lobby_ykssr_199_6 = "false"`, and a presence check called that advertised. A
+#: lobby whose value does not equal what the filter asks for is invisible to every invader, exactly
+#: as if the key were missing.
+REQUIRED_VALUES = {
+    "lobby_breakin_lobby_ykssr_199_6": "true",
+    "ykssr_dlc": "1",
+}
+#: Filtered on with a value that varies by bracket, so any non-empty value is accepted here.
+BRACKET_KEYS = ("matchmaking_breakin_lobby_ykssr_199_6",)
+
+LOBBY_TYPE_KEY = "lobby_type"
+LOBBY_MAP_KEY = "er_invasion_warp_map"
+
 #: Every key a Seamless host was observed publishing, plus ours. Asking for a key that is absent
 #: returns an empty string, which is exactly the signal being looked for.
 KNOWN_KEYS = (
@@ -132,21 +147,34 @@ def discriminator(values: dict) -> dict:
     lobby does not carry, so "" and absent are the same answer and neither is evidence of a host.
     """
     present = {k: v for k, v in values.items() if v not in (None, "")}
-    breakin = present.get("lobby_breakin_lobby_ykssr_199_6")
-    matchmaking = present.get("matchmaking_breakin_lobby_ykssr_199_6")
-    is_master = present.get("lobby_type") == "yknx3_seamless_master_lobby"
+    is_master = present.get(LOBBY_TYPE_KEY) == "yknx3_seamless_master_lobby"
+    # VALUE equality, not presence. `breakin = "false"` is a key that is there and says no.
+    mismatched = {
+        key: values.get(key)
+        for key, wanted in REQUIRED_VALUES.items()
+        if values.get(key) != wanted
+    }
+    bracketed = all(present.get(k) for k in BRACKET_KEYS)
+    reachable = is_master and not mismatched and bracketed
+    if reachable:
+        verdict = "REACHABLE-BY-INVADERS"
+    elif is_master:
+        verdict = "master-lobby-not-reachable"
+    else:
+        verdict = "not-an-advertisement-lobby"
     return {
         "present_keys": sorted(present),
         "carries_advertisement_marker": is_master,
-        "carries_breakin_flag": breakin is not None,
-        "breakin_value": breakin,
-        "matchmaking_value": matchmaking,
-        "verdict": (
-            "host-advertisement"
-            if is_master and breakin is not None
-            else "master-lobby-without-breakin"
+        "filter_mismatches": mismatched,
+        "reachable_by_invaders": reachable,
+        "our_key": values.get(LOBBY_MAP_KEY),
+        "verdict": verdict,
+        "note": (
+            "our key is on a lobby an invasion query can return"
+            if reachable and present.get(LOBBY_MAP_KEY)
+            else f"an invader's query would SKIP this lobby: {mismatched or 'missing keys'}"
             if is_master
-            else "not-an-advertisement-lobby"
+            else "this is not a Seamless advertisement lobby at all"
         ),
     }
 
@@ -160,32 +188,38 @@ def _selftest() -> int:
         if not ok:
             fails += 1
 
-    host = {
-        "lobby_type": "yknx3_seamless_master_lobby",
+    reachable = {
+        LOBBY_TYPE_KEY: "yknx3_seamless_master_lobby",
         "lobby_breakin_lobby_ykssr_199_6": "true",
-        "er_invasion_warp_map": "m28_00_00_00",
+        "matchmaking_breakin_lobby_ykssr_199_6": "4_3",
+        "ykssr_dlc": "1",
+        LOBBY_MAP_KEY: "m28_00_00_00",
     }
-    check(discriminator(host)["verdict"] == "host-advertisement", "a host advertisement is named")
+    v = discriminator(reachable)
+    check(v["verdict"] == "REACHABLE-BY-INVADERS", "a lobby matching every filter value is reachable")
+    check("can return" in v["note"], "and says our key is on a queryable lobby")
 
-    # THE TRAP: Steam returns "" for a key the lobby does not carry. Treating an empty string as
-    # presence would make every lobby look like a host and the discriminator useless.
-    search = {
-        "lobby_type": "yknx3_seamless_master_lobby",
-        "lobby_breakin_lobby_ykssr_199_6": "",
-        "er_invasion_warp_map": "m28_00_00_00",
-    }
-    check(
-        discriminator(search)["verdict"] == "master-lobby-without-breakin",
-        "an empty break-in value is absence, not a host",
-    )
-    check(
-        not discriminator(search)["carries_breakin_flag"],
-        "empty string must not count as carrying the flag",
-    )
-    check(
-        discriminator({"lobby_type": None})["verdict"] == "not-an-advertisement-lobby",
-        "a lobby without the master marker is neither",
-    )
+    # THE MEASURED TRAP, 2026-08-06: breakin was PRESENT with the value "false", and a
+    # presence-based check reported the lobby as advertised. ersc filters on == "true", so that
+    # lobby is invisible to every invader -- a key that is there and says no.
+    says_no = dict(reachable, **{"lobby_breakin_lobby_ykssr_199_6": "false"})
+    v = discriminator(says_no)
+    check(v["verdict"] == "master-lobby-not-reachable",
+          "breakin='false' is NOT advertised, however present the key is")
+    check(v["filter_mismatches"] == {"lobby_breakin_lobby_ykssr_199_6": "false"},
+          "and the mismatching value is named")
+
+    wrong_dlc = dict(reachable, **{"ykssr_dlc": "0"})
+    check(discriminator(wrong_dlc)["verdict"] == "master-lobby-not-reachable",
+          "ykssr_dlc=0 fails the numerical filter that asks for 1")
+
+    check(discriminator({LOBBY_TYPE_KEY: None})["verdict"] == "not-an-advertisement-lobby",
+          "a lobby without the master marker is neither")
+
+    # An empty value is absence; it must not satisfy a bracket key.
+    no_bracket = dict(reachable, **{"matchmaking_breakin_lobby_ykssr_199_6": ""})
+    check(not discriminator(no_bracket)["reachable_by_invaders"],
+          "an empty bracket value is absence, not presence")
 
     if fails:
         print(f"selftest FAILED ({fails})")

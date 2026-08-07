@@ -50,9 +50,12 @@
 //!
 //! # Hooks: exactly one, and not in `ersc.dll`
 //!
-//! PUBLISHING detours nothing. The interface comes from an exported accessor, the lobby id is
-//! already in the Seamless session object this crate reads, and the block id comes from the same
-//! anchor the location filter uses.
+//! PUBLISHING installs ONE read-only observer, on `SetLobbyData`, and alters nothing it sees. It
+//! exists because the lobby id cannot be derived: the session struct's lobby field and the lobby
+//! Seamless actually advertises on are DIFFERENT objects (captured live -- see
+//! `SESSION_LOBBY_ID_OFFSET`), and three independent guards (ownership, the `lobby_type` marker,
+//! and a read-back of the written value) all passed while describing the wrong one. Watching
+//! Seamless declare its own advertisement is definitional rather than inferential.
 //!
 //! HUNT MODE needs one, because a filter has to be added between Seamless's last
 //! `AddRequestLobbyList*` and the request going out, and only Seamless knows when that is. So
@@ -86,15 +89,18 @@ pub const MATCHMAKING_ACCESSOR: &str = "SteamAPI_SteamMatchmaking_v009\0";
 
 /// Offset of a lobby `CSteamID` within Seamless's session object.
 ///
-/// CANDIDATE, not gospel. A host session creates TWO lobbies -- one carrying the advertisement,
-/// one carrying the members -- and this offset was assumed to be the former from the fact that it
-/// is A lobby id. That assumption was never checked against the id ersc actually publishes to, and
-/// publishing to the wrong one fails in the worst possible way: Steam accepts the write, our log
-/// says published, and an invader filtering for the key matches nobody -- indistinguishable from
-/// "nobody is online".
+/// NO LONGER USED FOR PUBLISHING, and kept only because other readers of the session struct still
+/// reference it. Its docstring called itself a candidate and predicted exactly how it would fail;
+/// it then failed that way. Captured live 2026-08-06, seconds apart:
 ///
-/// So the offset is only where the search STARTS. [`ADVERTISEMENT_MARKER_KEY`] decides whether it
-/// is right, at runtime, on every publish.
+/// ```text
+///   ersc SetLobbyData -> 0x186000016d46abe   lobby_type, lobby_key, lobby_preferences, …
+///   our publish       -> 0x186000016d0061f   er_invasion_warp_map
+/// ```
+///
+/// Seamless builds a FRESH advertisement lobby each time the world opens to invaders; this field
+/// lags on the previous one. Publishing now watches Seamless declare its advertisement instead of
+/// deriving it -- see `live::advertisement_lobby`.
 pub const SESSION_LOBBY_ID_OFFSET: usize = 0x178;
 
 /// `ISteamMatchmaking::GetLobbyData` -- vtable slot 19.
@@ -286,7 +292,7 @@ mod live {
     };
     use er_invasion_warp::invasion_warp::BlockKey;
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
     #[link(name = "kernel32")]
     unsafe extern "system" {
@@ -475,8 +481,11 @@ mod live {
             REFUSALS.fetch_add(1, Ordering::SeqCst);
             return;
         };
-        let Some(lobby) = crate::local_invasion_filter::advertisement_lobby_id() else {
-            // No lobby yet -- the host has not opened to invaders. Nothing to advertise on.
+        // OBSERVED, not derived. The session struct's lobby field pointed at a different lobby
+        // from the one Seamless advertises on -- captured live, two ids seconds apart -- so our
+        // key was never on the lobby invaders query. `None` here means Seamless has not declared
+        // an advertisement yet, which is the ordinary state until the world is opened.
+        let Some(lobby) = advertisement_lobby() else {
             return;
         };
         // REFUSE rather than write somewhere nobody queries. The struct offset that produced this
@@ -515,7 +524,11 @@ mod live {
         };
         let key = format!("{LOBBY_MAP_KEY}\0");
         let payload = format!("{value}\0");
+        // Our own write goes through the same vtable slot we observe, so silence the observer for
+        // its duration -- otherwise publishing could be mistaken for Seamless declaring a lobby.
+        IN_OUR_OWN_WRITE.store(true, Ordering::SeqCst);
         let ok = unsafe { write(iface, lobby, key.as_ptr(), payload.as_ptr()) };
+        IN_OUR_OWN_WRITE.store(false, Ordering::SeqCst);
         if !ok {
             // Steam refused. Do NOT record it as published, or a transient failure would be
             // remembered as success and never retried.
@@ -554,6 +567,127 @@ mod live {
     // -----------------------------------------------------------------------------------------
     // HUNT MODE: narrow the outgoing query instead of rejecting its answers
     // -----------------------------------------------------------------------------------------
+
+    // ---------------------------------------------------------------------------------------
+    // WHICH LOBBY IS THE ADVERTISEMENT: observed, not derived
+    // ---------------------------------------------------------------------------------------
+
+    /// The lobby id Seamless last wrote its own `lobby_type` marker to.
+    ///
+    /// # Why this replaced a struct offset
+    ///
+    /// `SESSION_LOBBY_ID_OFFSET` was a guess that its own docstring flagged as a guess, and it was
+    /// wrong. Captured live 2026-08-06, in the same seconds:
+    ///
+    /// ```text
+    ///   ersc SetLobbyData -> 0x186000016d46abe   lobby_type, lobby_key, lobby_preferences, …
+    ///   our publish       -> 0x186000016d0061f   er_invasion_warp_map
+    /// ```
+    ///
+    /// Two different lobbies. Seamless builds a FRESH advertisement lobby every time the world is
+    /// opened to invaders, while the session field still points at the previous one -- so our key
+    /// has never been on the lobby an invader queries, in any run.
+    ///
+    /// Neither guard could catch it. The owner check passes because we own both. The
+    /// [`ADVERTISEMENT_MARKER_KEY`] check passes because both carry `lobby_type`. Even the
+    /// read-back passes: it proves the value reached *a* lobby, not the right one. Three
+    /// independent confirmations, all green, all describing the wrong object.
+    ///
+    /// So this stops deriving the answer and OBSERVES it. Seamless itself declares which lobby is
+    /// the advertisement, by writing the marker to it; watching that write is definitional rather
+    /// than inferential, and it needs no offset, no ownership reasoning, and no candidate probing.
+    static ADVERTISEMENT_LOBBY: AtomicU64 = AtomicU64::new(0);
+    /// Suppresses our own `SetLobbyData` calls in the observer, so publishing our key can never be
+    /// mistaken for Seamless declaring an advertisement.
+    static IN_OUR_OWN_WRITE: AtomicBool = AtomicBool::new(false);
+    static ORIG_SET_LOBBY_DATA: AtomicUsize = AtomicUsize::new(0);
+    static SET_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+    static SET_HOOK_LIVE: AtomicUsize = AtomicUsize::new(0);
+
+    /// Watch Seamless declare its advertisement lobby. Observation only: every call is passed
+    /// straight through, nothing is altered, and our own writes are ignored.
+    unsafe extern "system" fn set_lobby_data_hook(
+        iface: usize,
+        lobby: usize,
+        key: usize,
+        value: usize,
+    ) -> usize {
+        if !IN_OUR_OWN_WRITE.load(Ordering::SeqCst) && key != 0 && value != 0 {
+            let key_str = unsafe { core::ffi::CStr::from_ptr(key as *const i8) }.to_str();
+            if key_str == Ok(ADVERTISEMENT_MARKER_KEY.trim_end_matches('\0')) {
+                let value_str = unsafe { core::ffi::CStr::from_ptr(value as *const i8) }.to_str();
+                if value_str == Ok(ADVERTISEMENT_MARKER_VALUE) {
+                    let lobby = lobby as u64;
+                    let previous = ADVERTISEMENT_LOBBY.swap(lobby, Ordering::SeqCst);
+                    if previous != lobby {
+                        // A NEW advertisement lobby means whatever we published before is on a
+                        // dead one. Clearing this forces a republish rather than leaving the new
+                        // lobby bare because the map has not changed since.
+                        *LAST_PUBLISHED.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                        crate::standalone_log(format_args!(
+                            "lobby-publish: Seamless declared its advertisement lobby {lobby:#x} \
+                             (was {previous:#x}); republishing there"
+                        ));
+                    }
+                }
+            }
+        }
+        let orig = ORIG_SET_LOBBY_DATA.load(Ordering::SeqCst);
+        if orig == 0 {
+            return 0;
+        }
+        unsafe { core::mem::transmute::<usize, er_hook::UnionFn>(orig)(iface, lobby, key, value) }
+    }
+
+    /// Install the advertisement observer. Idempotent; retries until Steam is resolvable.
+    pub fn install_advertisement_observer() -> usize {
+        if SET_HOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
+            return 0;
+        }
+        let Some(iface) = matchmaking() else {
+            SET_HOOK_INSTALLED.store(0, Ordering::SeqCst);
+            return 0;
+        };
+        let Some(vtable) = (unsafe { er_game_base::mem::safe_read_usize(iface) }) else {
+            SET_HOOK_INSTALLED.store(0, Ordering::SeqCst);
+            return 0;
+        };
+        let Some(address) = (unsafe {
+            er_game_base::mem::safe_read_usize(vtable + SET_LOBBY_DATA_SLOT * size_of::<usize>())
+        }) else {
+            SET_HOOK_INSTALLED.store(0, Ordering::SeqCst);
+            return 0;
+        };
+        match unsafe {
+            er_hook::register_union_hook(
+                address,
+                set_lobby_data_hook as er_hook::UnionFn,
+                &ORIG_SET_LOBBY_DATA,
+            )
+        } {
+            Ok(()) => {
+                SET_HOOK_LIVE.store(1, Ordering::SeqCst);
+                1
+            }
+            Err(status) => {
+                crate::standalone_log(format_args!(
+                    "lobby-publish: could not observe SetLobbyData: {status:?} -- the advertisement \
+                     lobby cannot be identified, so publishing will REFUSE rather than guess"
+                ));
+                0
+            }
+        }
+    }
+
+    /// The advertisement lobby, or `None` if Seamless has not declared one this session.
+    ///
+    /// `None` is a refusal, never a fallback to the session field: guessing is what put our key on
+    /// the wrong lobby for every run before this.
+    #[must_use]
+    pub fn advertisement_lobby() -> Option<u64> {
+        let lobby = ADVERTISEMENT_LOBBY.load(Ordering::SeqCst);
+        (lobby != 0).then_some(lobby)
+    }
 
     /// Trampoline to Steam's own `RequestLobbyList`.
     static ORIG_REQUEST_LOBBY_LIST: AtomicUsize = AtomicUsize::new(0);
@@ -708,7 +842,10 @@ mod live {
 }
 
 #[cfg(windows)]
-pub use live::{hunt_tally, install_hunt_hook, publish_current_map, tally};
+pub use live::{
+    advertisement_lobby, hunt_tally, install_advertisement_observer, install_hunt_hook,
+    publish_current_map, tally,
+};
 
 #[cfg(test)]
 mod tests {

@@ -1,0 +1,119 @@
+# Setting up `er_invasion_warp_dll.dll` for a two-player location test
+
+Two roles. They need different things, and the host's side is the easy one.
+
+## If you are the HOST (the one being invaded)
+
+**Configure nothing.** Load the DLL and play.
+
+The DLL publishes your current map onto your Steam lobby every tick, and that path reads no
+config at all -- it is not gated on `enabled`, not gated on `hunt`, and it does not need the
+`er-invasion-warp.toml` file to exist. A config file will appear next to the DLL on first run;
+you can ignore it.
+
+If your loader is me3, add the DLL as a native alongside Seamless:
+
+```toml
+profileVersion = "v1"
+
+[[supports]]
+game = "eldenring"
+
+[[natives]]
+path = 'C:\path\to\SeamlessCoop\ersc.dll'
+
+[[natives]]
+path = 'C:\path\to\er_invasion_warp_dll.dll'
+```
+
+Any injector works -- it is an ordinary native DLL -- but it must load into the same process as
+Seamless, and Seamless must be present or the filter half never arms.
+
+### Two things that must match, or nothing else matters
+
+Both are Seamless's own matchmaking, not ours, and either one will make you invisible to each
+other no matter what this DLL does:
+
+1. **The same Seamless co-op password.** Invaders filter on `lobby_key`, which is a SHA-256 of
+   the password. Different password, different key, zero overlap.
+2. **The same matchmaking bracket.** There is a `matchmaking_breakin_lobby_...` term carrying a
+   value like `5_3` -- measured, both sides asked for and carried `5_3`. It tracks character
+   level/weapon level. A wildly different character may never match.
+
+### Being invadable at all
+
+Measured on a live host: the lobby key `lobby_breakin_lobby_ykssr_199_6` must read `true`, and
+that is set by opening your world -- a Tiny Great Pot / "open to wanderers", or being in co-op.
+A closed solo world reads `false` and no invader's query returns you.
+
+### Checking it worked
+
+`er-invasion-warp-dll.log`, next to the game exe, should show:
+
+```
+lobby-publish: er_invasion_warp_map = m12_02_00_00 on lobby 0x186000016dfa0f7 (#1, read back)
+```
+
+`read back` means the write survived the server round trip. If instead you see `REFUSED`, the
+line says which check failed and why -- no guessing required.
+
+## If you are the INVADER -- invading someone at the place you are standing
+
+This is the path that is **proven working against real hosts** (2026-08-06). Edit
+`er-invasion-warp.toml` in your `ELDEN RING\Game` folder and change exactly two lines:
+
+```toml
+[local_invasion]
+enabled = true      # master switch -- OFF by default, because this cancels real matches
+mode = "area"       # this place, or anywhere sharing its name
+```
+
+Leave `hunt = false`. See the note below for why.
+
+Then, in game:
+
+1. **Walk to the place you want to invade.** Where you are standing IS the target -- there is
+   nothing to mark or type. The filter compares every incoming match against your own location.
+2. **Open your world map once.** `mode = "area"` reads place names off the map's own rows; before
+   you have opened it no location has a name and every name-based judgement fails closed. Once per
+   session is enough. (`mode = "exact"` never needs the map, but it compares raw blocks, so a large
+   area split across several blocks can reject someone standing near you.)
+3. **Search for invasions** the normal Seamless way.
+4. **Expect it to take several tries, and let it.** Each match at the wrong place is cancelled and
+   the search restarts by itself. A real run took five matches to land: four elsewhere, refused,
+   then one at the right block. Cancelling is safe -- the session returns to idle and searching
+   continues.
+5. **To stop, press Seamless's own "Cancel search."** Your cancel beats the loop; it will not
+   restart behind you.
+
+Marking is optional and only WIDENS what is allowed: `Insert` on a spot adds it to
+`allowed_blocks`, so it is accepted from then on wherever you later stand. `Delete` excludes a
+place, and an exclusion beats everything.
+
+### What this guarantees, and what it does not
+
+It guarantees **location, not identity.** The accept reason is that the destination equalled your
+location. If a stranger is standing where your friend is, you will invade the stranger and the
+result is identical. Location-targeted, not person-targeted.
+
+### Why `hunt` stays off
+
+`hunt = true` narrows the Steam query itself, so the right host arrives on the first try instead
+of the fifth. Two reasons it is not the recommended path:
+
+* It filters on a key only this DLL publishes, so while it is on you will **not** see hosts who
+  are not running the DLL -- and almost nobody is.
+* As of 2026-08-06 the two halves are proven separately but never joined: a host on a second
+  machine was captured publishing the correct block (`er_invasion_warp_map = m60_43_34_00`) onto
+  the lobby invaders query, and the filter is known to reach the wire -- but nobody has yet run a
+  query *filtered* on that key and had that host come back.
+
+The reject loop needs none of it. It reads the destination Seamless pushes to *you*, so it works
+against completely vanilla hosts who have never heard of this DLL.
+
+## Who actually needs the DLL
+
+**Only the invader.** Measured 2026-08-06: every host rejected and the one accepted were ordinary
+Seamless players -- twelve queries, five distinct lobbies, not one carrying our key. Host-side
+publishing is not on the critical path for location-targeted invasion; it is an optimization for
+cutting down the number of tries.

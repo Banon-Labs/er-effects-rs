@@ -41,11 +41,18 @@ import sys
 import time
 
 GADGET = "127.0.0.1:27042"
-#: Steam's own accessor for the versioned matchmaking interface -- the same symbol the DLL uses,
-#: so both resolve the identical process-wide singleton.
+#: Steam's own accessor for the versioned matchmaking interface. NOT a process-wide singleton, as
+#: this once claimed: on 2026-08-06 it returned four different pointers in one session
+#: (0x4604fbf0, 0x45d027a0, 0x45f8afe0, 0x460367e0). The vtable behind them is shared, which is why
+#: slot calls still work, but nothing here may assume the object is stable across calls.
 ACCESSOR = "SteamAPI_SteamMatchmaking_v009"
 SLOT_REQUEST_LOBBY_LIST = 4
 SLOT_GET_LOBBY_BY_INDEX = 12
+SLOT_GET_LOBBY_DATA = 19
+
+#: The key our filter narrows on. A result set attributable to OUR filtered query must carry it on
+#: every member; see `attribution` below for why that check is not optional.
+LOBBY_MAP_KEY = "er_invasion_warp_map"
 
 
 def _default_out() -> str:
@@ -64,12 +71,13 @@ def _default_out() -> str:
 AGENT = r"""
 const SLOT_REQUEST_LOBBY_LIST = 4;
 const SLOT_GET_LOBBY_BY_INDEX = 12;
+const SLOT_GET_LOBBY_DATA = 19;
 // Bounded: an unbounded walk in a live process is its own hazard, and no Seamless query has ever
 // been observed returning anything close to this.
 const MAX_INDEX = 200;
 
 rpc.exports = {
-  drive: function (accessorName, ownLobby, pollMs, pollTicks) {
+  drive: function (accessorName, ownLobby, pollMs, pollTicks, mapKey) {
     // Resolved by walking steam_api64's own export table rather than through
     // `Module.findExportByName`, which Frida 17 removed -- the sibling tracer in this repo already
     // uses this idiom and works against the same process.
@@ -86,13 +94,15 @@ rpc.exports = {
     } catch (e) { return { ok: false, why: 'accessor threw: ' + e }; }
     if (iface.isNull()) return { ok: false, why: 'accessor returned null' };
 
-    let vt, req, byIndex;
+    let vt, req, byIndex, getData;
     try {
       vt = iface.readPointer();
       req = new NativeFunction(vt.add(SLOT_REQUEST_LOBBY_LIST * Process.pointerSize).readPointer(),
                                'uint64', ['pointer']);
       byIndex = new NativeFunction(vt.add(SLOT_GET_LOBBY_BY_INDEX * Process.pointerSize).readPointer(),
                                    'pointer', ['pointer', 'pointer', 'int']);
+      getData = new NativeFunction(vt.add(SLOT_GET_LOBBY_DATA * Process.pointerSize).readPointer(),
+                                   'pointer', ['pointer', 'uint64', 'pointer']);
     } catch (e) { return { ok: false, why: 'vtable unreadable: ' + e }; }
 
     let call;
@@ -119,6 +129,26 @@ rpc.exports = {
       Thread.sleep(pollMs / 1000);
     }
 
+    // ATTRIBUTION. The poll reads the interface's CURRENT result set, which is a shared slot: ersc
+    // issues its own queries continuously while searching, and whichever completed last is what
+    // sits there. So the returned lobbies are NOT necessarily the answer to the query driven here.
+    // Read our key off each one; a set produced by a filter on that key cannot contain a lobby
+    // that lacks it. Without this the verdict was inferred from timing alone, and it produced two
+    // false FILTERED-AND-MATCHED readings on 2026-08-06, both since withdrawn.
+    const carrying = [];
+    if (mapKey) {
+      const kp = Memory.allocUtf8String(mapKey);
+      for (const hex of best) {
+        try {
+          const r = getData(iface, uint64('0x' + hex), kp);
+          // readCString, not readUtf8String(N): the length form throws when fewer than N bytes are
+          // mapped, which silently reports every readable key as absent.
+          const v = r.isNull() ? null : r.readCString();
+          if (v !== null && v !== '') carrying.push({ lobby: hex, value: v });
+        } catch (e) { /* unreadable lobby, counted as not carrying */ }
+      }
+    }
+
     const own = ownLobby ? ownLobby.toLowerCase().replace(/^0x/, '') : null;
     return {
       ok: true,
@@ -127,6 +157,8 @@ rpc.exports = {
       api_call: call,
       results: best.length,
       lobbies: best,
+      map_key: mapKey,
+      carrying_map_key: carrying,
       own_lobby: own,
       own_lobby_returned: own === null ? null : best.indexOf(own) >= 0,
     };
@@ -135,11 +167,46 @@ rpc.exports = {
 """
 
 
+def attribution(driven: dict) -> dict:
+    """Can the polled result set be attributed to the query this script drove?
+
+    It cannot be assumed. The result set lives in a slot on the interface, ersc issues its own
+    queries continuously while searching, and the poll reads whatever completed most recently.
+
+    The test is a property of the filter, not of timing: a set produced by an equality filter on
+    `er_invasion_warp_map` cannot contain a lobby that does not carry that key. So if any returned
+    lobby lacks it, the set is somebody else's query and says nothing about ours.
+
+    Measured 2026-08-06: six lobbies came back, NONE carried the key, and the verdict still read
+    FILTERED-AND-MATCHED twice. Both were withdrawn. This is the check that was missing.
+    """
+    results = driven.get("results") or 0
+    carrying = driven.get("carrying_map_key") or []
+    if not results:
+        return {"attributable": None, "carrying": 0,
+                "note": "no lobbies returned, so there is nothing to attribute"}
+    if not driven.get("map_key"):
+        return {"attributable": None, "carrying": 0,
+                "note": "our key was not read back, so attribution was not tested"}
+    if len(carrying) == results:
+        return {"attributable": True, "carrying": len(carrying),
+                "note": f"all {results} returned lobbies carry {driven['map_key']}, consistent "
+                        "with a result set produced by our filter"}
+    return {
+        "attributable": False,
+        "carrying": len(carrying),
+        "note": f"{results - len(carrying)} of {results} returned lobbies do NOT carry "
+                f"{driven['map_key']}; a filter on that key could not have produced this set, so "
+                "it belongs to another query -- most likely one of ersc's own",
+    }
+
+
 def verdict(driven: dict, before: dict, after: dict) -> dict:
     """What the driven query establishes, from the DLL's own oracle counters either side of it.
 
     The counters are the evidence, not this script's return value: the query could succeed while
-    the detour declined to filter, and only `hunt_filters` moving separates those.
+    the detour declined to filter, and only `hunt_filters` moving separates those. And even a
+    genuine filter does not license reading the polled lobbies as its answer -- see `attribution`.
     """
     if not driven.get("ok"):
         return {"verdict": "no-query-sent", "why": driven.get("why", "unknown")}
@@ -148,10 +215,12 @@ def verdict(driven: dict, before: dict, after: dict) -> dict:
     delta = (after.get("oracle_invasion_warp_hunt_filters") or 0) - (
         before.get("oracle_invasion_warp_hunt_filters") or 0
     )
+    attrib = attribution(driven)
     out = {
         "filters_added_by_this_query": delta,
         "hooked": hooked,
         "results": driven.get("results"),
+        "attribution": attrib,
         "own_lobby_returned": driven.get("own_lobby_returned"),
     }
     if hooked is not True:
@@ -167,11 +236,20 @@ def verdict(driven: dict, before: dict, after: dict) -> dict:
             "several marked locations a single equality filter cannot express -- the DLL log says "
             "which. It is not evidence against the transport"
         )
-    elif driven.get("results"):
+    elif driven.get("results") and attrib.get("attributable") is True:
         out["verdict"] = "FILTERED-AND-MATCHED"
         out["why"] = (
-            f"the query carried our location filter and still returned {driven['results']} "
-            "lobby(ies) -- a host publishing our key at that location was found"
+            f"the query carried our location filter and returned {driven['results']} "
+            "lobby(ies), every one of which carries our key -- a host publishing at that location "
+            "was found"
+        )
+    elif driven.get("results"):
+        # The filter went out and lobbies are visible, but they are not this query's answer. Saying
+        # so is the finding; calling it a match is how two false results got reported.
+        out["verdict"] = "FILTERED-RESULTS-NOT-OURS"
+        out["why"] = (
+            f"our filter reached the wire, but the {driven['results']} visible lobby(ies) cannot be "
+            f"this query's answer: {attrib['note']}. The transport is proven; the match is not"
         )
     else:
         out["verdict"] = "FILTERED-NO-HOST"
@@ -213,9 +291,33 @@ def _selftest() -> int:
     check(v["verdict"] == "FILTERED-NO-HOST" and "NOT a match" in v["why"],
           "an empty filtered query proves the transport and says so, without claiming a match")
 
-    v = verdict({"ok": True, "results": 2}, counters(True, 0), counters(True, 1))
+    def matched(n, carrying):
+        return {"ok": True, "results": n, "map_key": LOBBY_MAP_KEY,
+                "carrying_map_key": [{"lobby": f"{i:x}", "value": "m12_02_00_00"}
+                                     for i in range(carrying)]}
+
+    v = verdict(matched(2, 2), counters(True, 0), counters(True, 1))
     check(v["verdict"] == "FILTERED-AND-MATCHED",
-          "a filtered query that returns hosts is the end-to-end result")
+          "a filtered query whose every returned lobby carries our key is the end-to-end result")
+
+    # THE DEFECT THIS FIXES, measured 2026-08-06: six lobbies came back, NONE carried the key, and
+    # the verdict read FILTERED-AND-MATCHED twice. The result set was somebody else's query -- the
+    # poll reads a shared slot -- and timing alone can never tell those apart.
+    v = verdict(matched(6, 0), counters(True, 0), counters(True, 1))
+    check(v["verdict"] == "FILTERED-RESULTS-NOT-OURS",
+          "returned lobbies that lack our key are NOT this query's answer")
+    check("transport is proven; the match is not" in v["why"],
+          "and the report separates what was proven from what was not")
+
+    v = verdict(matched(6, 4), counters(True, 0), counters(True, 1))
+    check(v["verdict"] == "FILTERED-RESULTS-NOT-OURS",
+          "a partially-carrying set is still unattributable -- an equality filter admits no exceptions")
+
+    # Attribution is only decidable when the key was actually read back; an untested set must not
+    # be reported as either attributable or not.
+    v = verdict({"ok": True, "results": 3}, counters(True, 0), counters(True, 1))
+    check(v["attribution"]["attributable"] is None and "not tested" in v["attribution"]["note"],
+          "an untested attribution is unmeasured, never a measured 'no'")
 
     v = verdict({"ok": True, "results": 9}, counters(False, 0), counters(False, 0))
     check(v["verdict"] == "hook-absent",
@@ -273,7 +375,7 @@ def main() -> int:
     script.load()
     print(f"driving one RequestLobbyList through {ACCESSOR} ...")
     driven = script.exports_sync.drive(
-        ACCESSOR, args.own_lobby, args.poll_ms, args.poll_ticks
+        ACCESSOR, args.own_lobby, args.poll_ms, args.poll_ticks, LOBBY_MAP_KEY
     )
     # The DLL republishes its oracle document on its own tick, so give it one before sampling.
     time.sleep(2.0)
