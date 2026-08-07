@@ -4,9 +4,10 @@
 # Icon_0 stays placed and hidden, never unplaced.
 
 [field.PlayerName]
-x = -510
-y = -16
-width = 1000
+x = -500
+y = -17
+width = 1200
+clip_height = 30
 font_height = 24
 align = "left"
 sample_load_character = "Maddened Bean"
@@ -14,9 +15,10 @@ sample_save_picker = "[..] save-files"
 sample_drive_row = "Save Root"
 
 [field.StaticText_110502]
-x = -326
-y = -18
+x = -325
+y = -17.325
 width = 149
+clip_height = 40
 font_height = 24
 align = "left"
 sample_load_character = "Level"
@@ -27,6 +29,7 @@ sample_drive_row = ""
 x = -282
 y = -16
 width = 52
+clip_height = 40
 font_height = 24
 align = "right"
 sample_load_character = "125"
@@ -37,6 +40,7 @@ sample_drive_row = ""
 x = 252
 y = -16
 width = 152
+clip_height = 40
 font_height = 24
 align = "right"
 sample_load_character = "Midra's Manse"
@@ -47,6 +51,7 @@ sample_drive_row = ""
 x = 326
 y = -16
 width = 200
+clip_height = 40
 font_height = 24
 align = "right"
 sample_load_character = "107:49:34"
@@ -57,6 +62,7 @@ sample_drive_row = "2026-07-07"
 x = -324
 y = -16
 width = 587
+clip_height = 40
 font_height = 24
 align = "left"
 sample_load_character = ""
@@ -64,10 +70,11 @@ sample_save_picker = "PARENT FOLDER / Go to save-files"
 sample_drive_row = "45-Slots / ER0000.sl2"
 
 [field.ErCharStats]
-x = -161
-y = -8
-width = 425
-font_height = 16
+x = -185
+y = -14
+width = 470
+clip_height = 42
+font_height = 17
 align = "center"
 sample_load_character = "VIG 50 MND 10 END 50 STR 21 DEX 21 INT 10 FAI 35 ARC 7"
 sample_save_picker = ""
@@ -77,6 +84,7 @@ sample_drive_row = ""
 x = -325
 y = -16
 width = 64
+clip_height = 40
 font_height = 24
 align = "center"
 sample_load_character = ""
@@ -87,6 +95,7 @@ sample_drive_row = "[C:]"
 x = -247
 y = -16
 width = 64
+clip_height = 40
 font_height = 24
 align = "center"
 sample_load_character = ""
@@ -97,6 +106,7 @@ sample_drive_row = "[S:]"
 x = -166
 y = -16
 width = 64
+clip_height = 40
 font_height = 24
 align = "center"
 sample_load_character = ""
@@ -104,7 +114,7 @@ sample_save_picker = ">Z:<"
 sample_drive_row = ">Z:<"
 
 [row_chrome.backing]
-x = -20
+x = -17.3
 y = 0
 scale_x = 20
 scale_y = 1
@@ -112,7 +122,7 @@ editable = true
 source = "normal non-highlighted row backing: Backing/char54 contains MENU_FL_SelectWaku, the same 56x54 Save Game-style button frame art"
 
 [row_chrome.cursor]
-x = -20
+x = -17.3
 y = 0
 scale_x = 1
 scale_y = 1

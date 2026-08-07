@@ -38,6 +38,33 @@ pub(crate) const SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET: usize = 0x28;
 /// reserves 0x70 bytes; the binder fully constructs the out proxy without reading it, so a zeroed
 /// buffer with headroom is safe.
 pub(crate) const SCENE_OBJ_PROXY_STACK_BYTES: usize = 0x80;
+/// GFx text object pointer inside the `GFx::Value` handle reached from a `CSScaleformValue` object
+/// value. Native text helpers (`FUN_140d841b0`/`FUN_140d84220`/`FUN_140d84340`) use
+/// `*(value.value + 0x88)` and require its virtual type tag to be 4 before touching the text doc.
+pub(crate) const GFX_VALUE_TEXT_OBJECT_OFFSET: usize = 0x88;
+/// Text object vtable slot returning its runtime type tag; 4 means TextField/text object for the
+/// direct native text helpers above.
+pub(crate) const GFX_TEXT_OBJECT_KIND_VTABLE_SLOT: usize = 0x290;
+pub(crate) const GFX_TEXT_OBJECT_KIND_TEXT_FIELD: i32 = 4;
+/// Text object slot holding the backing text document pointer (`text_object[0x1c]`).
+pub(crate) const GFX_TEXT_OBJECT_TEXT_DOC_OFFSET: usize = 0xe0;
+/// Backing text document bounds consumed by the native reflow routine. `+0xb0..+0xbc` are the source
+/// x_min/y_min/x_max/y_max; `+0x80..+0x8c` are recomputed visible/layout bounds.
+pub(crate) const GFX_TEXT_DOC_SOURCE_LEFT_OFFSET: usize = 0xb0;
+pub(crate) const GFX_TEXT_DOC_SOURCE_RIGHT_OFFSET: usize = 0xb8;
+pub(crate) const GFX_TEXT_DOC_LAYOUT_LEFT_OFFSET: usize = 0x80;
+pub(crate) const GFX_TEXT_DOC_LAYOUT_RIGHT_OFFSET: usize = 0x88;
+/// Native text document layout output from `GFx::TextField` reflow (`FUN_14114bf10`). These are not
+/// SetText inputs: the reflow routine writes `content_width`/`content_height` after walking the live
+/// text line/glyph records, and `layout_record_count` is the vector count it iterates for the rendered
+/// text layout. This is the no-more-human-verdict oracle for `Madd` vs `Maddened Bean`: a shortened
+/// renderer layout has the short content width/record count even if a SetText call accepted full text.
+pub(crate) const GFX_TEXT_DOC_LAYOUT_RECORD_COUNT_OFFSET: usize = 0x58;
+pub(crate) const GFX_TEXT_DOC_CONTENT_WIDTH_OFFSET: usize = 0xc0;
+pub(crate) const GFX_TEXT_DOC_CONTENT_HEIGHT_OFFSET: usize = 0xc4;
+/// `GFx::TextField`/text document reflow routine. It recomputes layout bounds from the source bounds,
+/// refreshes wrapping/alignment, updates scroll range, and invalidates the backing render state.
+pub(crate) const GFX_TEXT_DOC_REFLOW_RVA: usize = 0x114bf10;
 /// Re-entrancy guard for the row-populate hook's `ErStats` push (its resolve re-enters the named-child
 /// binder hook): skip the push block while set.
 pub(crate) use er_telemetry::counters::PROFILE_STATS_PUSH_IN_PROGRESS;
@@ -81,6 +108,12 @@ pub(crate) const PROFILE_CURRENT_ROW_POPULATE_RVA: usize = 0x951220;
 /// `*(int*)(rowModel + 0x8) + 1` as the `Icon_0` face-sprite frame, i.e. the slot; we read the same
 /// field to index the per-slot stats cache so each row shows ITS OWN character's attributes.
 pub(crate) const PROFILE_ROW_MODEL_SLOT_08_OFFSET: usize = 0x8;
+/// Offset of the row model's `PlayerName` `CS::MenuString` inside `CS::MenuSaveDataSummary`.
+/// Static RE of 1.16.2 `FUN_1408757e0`: native row populate resolves `PlayerName`, reads raw
+/// pointer at `rowModel + 0x50`, else falls back to the inline DLString buffer at `rowModel + 0x60`
+/// when the DLString capacity at `rowModel + 0x78` is heap-backed. Stage this field before native
+/// populate so the game's own writer, not a later out-of-band SetText, owns the rendered text.
+pub(crate) const PROFILE_ROW_MODEL_PLAYER_NAME_MENUSTRING_50_OFFSET: usize = 0x50;
 
 // === PER-SLOT INFO FIELDS ON A PROFILESELECT ROW =================================================
 // WHAT PRODUCES "Level 0" AND "0:00:00" ON A ROW, and therefore why zeroing the staged record could
@@ -154,6 +187,16 @@ pub(crate) static PROFILE_ROW_POPULATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK
 pub(crate) static PROFILE_CURRENT_ROW_POPULATE_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::PROFILE_ROW_POPULATE_INSTALLED;
+/// `PlayerGameData::GetName`-style native getter used by System/Quit and the current ProfileSelect
+/// summary builder. Static RE of 1.16.2 `FUN_14025f8e0`: it reads the word-checked string at
+/// `PlayerGameData + 0x8e8`, which can hold the shortened display name (`Madd`) even while the raw PGD
+/// name at `+0x9c` is the full save name (`Maddened Bean`). The product UI wants the save name, so the
+/// hook below overrides only the main loaded player's getter result with the raw PGD name.
+pub(crate) const PLAYER_GAME_DATA_NAME_GETTER_RVA: usize = 0x25f8e0;
+pub(crate) static PLAYER_GAME_DATA_NAME_GETTER_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static PLAYER_GAME_DATA_NAME_GETTER_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PLAYER_GAME_DATA_NAME_GETTER_OVERRIDE_LOGGED: AtomicUsize = AtomicUsize::new(0);
 /// Per-slot stats cache state (oracle): 0 = not attempted, 1 = loaded (`.sl2` read + parsed), 2 =
 /// load failed (save unreadable/too small) -- the hook then falls back to the loaded character.
 pub(crate) use er_telemetry::counters::PROFILE_SLOT_STATS_CACHE_STATE;
