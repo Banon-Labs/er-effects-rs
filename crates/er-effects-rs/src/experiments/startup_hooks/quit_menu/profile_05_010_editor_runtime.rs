@@ -215,16 +215,15 @@ pub(crate) unsafe fn profile_editor_necromancy_tick(base: usize) {
         );
         return;
     }
-    let target = PROFILE_EDITOR_FIELD_TARGETS
+    // Reanimate EVERY cached field, not only the selected one. Applying just the selection let the
+    // next native row populate reset all the others to their baked asset geometry, so two edits
+    // could never be live at once -- saving one reverted the other.
+    let targets: Vec<CachedProfileFieldTarget> = PROFILE_EDITOR_FIELD_TARGETS
         .get()
         .and_then(|targets| targets.lock().ok())
-        .and_then(|targets| {
-            targets
-                .iter()
-                .find(|target| target.field_name == command.selected_name)
-                .cloned()
-        });
-    let Some(target) = target else {
+        .map(|targets| targets.clone())
+        .unwrap_or_default();
+    if targets.is_empty() {
         write_status(
             &dir,
             status_for(
@@ -233,23 +232,59 @@ pub(crate) unsafe fn profile_editor_necromancy_tick(base: usize) {
                 0,
                 1,
                 format!(
-                    "no cached live field component for {}; open/repopulate ProfileSelect once, then live edits can reanimate it without another row populate",
+                    "no cached live field components (selected {}); open/repopulate ProfileSelect once, then live edits can reanimate them without another row populate",
                     command.selected_name
                 ),
             ),
         );
         return;
+    }
+    let selected = command.selected_name.clone();
+    let mut applied_total = 0u32;
+    let mut unsupported_total = 0u32;
+    let mut selected_detail = String::new();
+    let mut other_failures: Vec<String> = Vec::new();
+    let mut surface = "necromancy";
+    for target in &targets {
+        if !command
+            .layout
+            .fields
+            .contains_key(target.field_name.as_str())
+        {
+            continue;
+        }
+        let (applied, unsupported, detail) =
+            unsafe { apply_profile_editor_cached_field(base, target, &command) };
+        applied_total += applied;
+        unsupported_total += unsupported;
+        if target.field_name == selected {
+            selected_detail = detail;
+            surface = target.active_surface;
+        } else if unsupported > 0 {
+            other_failures.push(format!("{}: {detail}", target.field_name));
+        }
+    }
+    if selected_detail.is_empty() {
+        selected_detail = format!("no cached live field component for {selected}");
+        unsupported_total += 1;
+    }
+    let detail = if other_failures.is_empty() {
+        selected_detail
+    } else {
+        format!(
+            "{selected_detail} | {} other field(s) did not fully apply: {}",
+            other_failures.len(),
+            other_failures.join("; ")
+        )
     };
-    let (applied, unsupported, detail) =
-        unsafe { apply_profile_editor_cached_field(base, &target, &command) };
     PROFILE_EDITOR_LAST_SEQUENCE.store(command.sequence, Ordering::SeqCst);
     write_status(
         &dir,
         status_for(
             &command,
-            &format!("{}+necromancy", target.active_surface),
-            applied,
-            unsupported,
+            &format!("{surface}+necromancy"),
+            applied_total,
+            unsupported_total,
             detail,
         ),
     );
@@ -558,14 +593,72 @@ unsafe fn scaleform_value_for_component(base: usize, comp: usize) -> Result<usiz
     Ok(value)
 }
 
+/// Apply EVERY field in the layout, not just the one selected in the browser.
+///
+/// The selected field is a UI notion -- which control panel is open -- and was wrongly being used
+/// as the set of things to push live. Because the native row populate rewrites all fields from the
+/// baked asset on every rebuild, applying only the selected one meant each save reverted every
+/// other field to its asset position. That produced the toggle the user hit: nudge A, save, nudge
+/// B, save, and A snaps back; save A again and B snaps back. Only ever one live edit at a time,
+/// and it looked like an ordering bug rather than a scope bug.
 unsafe fn apply_profile_editor_field_probe(
+    base: usize,
+    row_proxy: usize,
+    row_model: usize,
+    native_slot: i32,
+    command: &ProfileEditorCommand,
+) -> (u32, u32, String) {
+    let selected = command.selected_name.as_str();
+    let mut applied_total = 0u32;
+    let mut unsupported_total = 0u32;
+    let mut selected_detail = String::new();
+    let mut other_failures: Vec<String> = Vec::new();
+    for field_name in er_gfx::profile_05_010_layout::FIELD_NAMES {
+        if !command.layout.fields.contains_key(field_name) {
+            continue;
+        }
+        let (applied, unsupported, detail) = unsafe {
+            apply_profile_editor_one_field(
+                base,
+                row_proxy,
+                row_model,
+                native_slot,
+                command,
+                field_name,
+            )
+        };
+        applied_total += applied;
+        unsupported_total += unsupported;
+        if field_name == selected {
+            selected_detail = detail;
+        } else if unsupported > 0 {
+            other_failures.push(format!("{field_name}: {detail}"));
+        }
+    }
+    if selected_detail.is_empty() {
+        selected_detail = format!("selected field {selected} is not a known row text field");
+        unsupported_total += 1;
+    }
+    let detail = if other_failures.is_empty() {
+        selected_detail
+    } else {
+        format!(
+            "{selected_detail} | {} other field(s) did not fully apply: {}",
+            other_failures.len(),
+            other_failures.join("; ")
+        )
+    };
+    (applied_total, unsupported_total, detail)
+}
+
+unsafe fn apply_profile_editor_one_field(
     base: usize,
     row_proxy: usize,
     _row_model: usize,
     native_slot: i32,
     command: &ProfileEditorCommand,
+    field_name: &str,
 ) -> (u32, u32, String) {
-    let field_name = command.selected_name.as_str();
     if !er_gfx::profile_05_010_layout::FIELD_NAMES.contains(&field_name) {
         return (0, 1, format!("unknown field {field_name}"));
     }
