@@ -3,11 +3,14 @@
 # The canvas is approximate; in-game Scaleform rendering is the final oracle.
 # Icon_0 stays placed and hidden, never unplaced.
 #
-# clip_height has a hard floor: one line of the menu font is font_height * 1.432617 px (Agmena
+# These values ARE the shipped defaults: Profile05_010Layout::default() parses this file via
+# include_str!, so they compile into the DLL and nothing reads this file at runtime.
+#
+# clip_height has a hard floor -- one line of the menu font is font_height * 1.432617 px (Agmena
 # ascent 20800 + descent 8540 over a 20480 em square) and the GFx reflow insets 2px per edge, so
-# clip_height must be >= ceil(font_height * 1.432617 + 4) -- 39 at font_height 24. Below that the
-# text cannot lay out and the field renders short. Enforced in Profile05_010Layout::validate; do
-# not annotate individual fields here, the editor rewrites this file and drops in-block comments.
+# clip_height must be >= ceil(font_height * 1.432617 + 4), i.e. 39 at font_height 24. Below that
+# the text cannot lay out and the field renders short. Enforced in Profile05_010Layout::validate.
+# Do not annotate individual fields: the editor rewrites this file and drops in-block comments.
 
 [field.PlayerName]
 x = -520
