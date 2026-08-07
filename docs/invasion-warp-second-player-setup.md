@@ -29,16 +29,25 @@ path = 'C:\path\to\er_invasion_warp_dll.dll'
 Any injector works -- it is an ordinary native DLL -- but it must load into the same process as
 Seamless, and Seamless must be present or the filter half never arms.
 
-### Two things that must match, or nothing else matters
+### What must match, and what famously does not
 
-Both are Seamless's own matchmaking, not ours, and either one will make you invisible to each
+These are Seamless's own matchmaking rules, not ours, and they will make you invisible to each
 other no matter what this DLL does:
 
-1. **The same Seamless co-op password.** Invaders filter on `lobby_key`, which is a SHA-256 of
-   the password. Different password, different key, zero overlap.
+1. **The same `regulation.bin`.** Invaders filter on `lobby_key`, and that key is a SHA-256 over a
+   fingerprint of your PARAM TABLES plus the Seamless build -- reversed out of `ersc.dll` v1.9.9
+   (`BuildLobbyKey` @ RVA `0x0ABC20`). So any mod that edits `regulation.bin` makes you invisible
+   to everyone who has not made the byte-identical edit. That is the single most common reason two
+   people who "did everything right" never see each other.
 2. **The same matchmaking bracket.** There is a `matchmaking_breakin_lobby_...` term carrying a
    value like `5_3` -- measured, both sides asked for and carried `5_3`. It tracks character
    level/weapon level. A wildly different character may never match.
+
+**Your co-op passwords do NOT need to match.** This doc previously said they did, and that was
+wrong. The password is parsed and is mandatory -- Seamless refuses to start without one -- but it
+is AES-encrypted into a different object that feeds the session manager, and it never enters the
+lobby key. Falsified two ways: the captured key does not equal `sha256(password + salt)`, and a
+player running a different password invaded us live on 2026-08-06.
 
 ### Being invadable at all
 
@@ -141,6 +150,29 @@ right location. It only narrows the population.
 Whichever you pick, `dll_users_only` is **symmetric and absolute**. While it is on, vanilla players
 cannot see you and you cannot see them, for hosting as much as for invading -- because Seamless
 finds worlds with a key we rewrite, and one value drives both the search and the advertisement.
+
+### Measured live, 2026-08-06
+
+Toggled mid-session on a real Seamless search, with nobody else in the world running this DLL:
+
+| `dll_users_only` | searches | no match | matched |
+|---|---|---|---|
+| `false` (before) | 4 | 0 | **3** |
+| `true` | 5 | **6** | 0 |
+| `false` (after) | 1 | 0 | **1** |
+
+The key rewrite was visible on the wire (`16ca67264987...` became `a23fc38f8a79...`), and turning
+it back off restored matching on the very next query -- which is what makes this a measurement
+rather than a coincidence. With the option on and no other DLL user alive, "only DLL users"
+correctly resolved to "nobody".
+
+**It takes effect on the NEXT search, not instantly.** The rewrite happens when a query is issued,
+so a match already in flight keeps running -- one held for 33 seconds after the toggle. Set it
+while idle, not mid-search, and have both people set it before either starts looking.
+
+One more measured number, since it decides how patient to be: Seamless's retry between failed
+searches is a **15-second wall-clock timer** (15003 ms across six samples, +-0.22%). It is not
+frame-based, so running the game faster does not speed it up.
 
 ## Who actually needs the DLL
 
