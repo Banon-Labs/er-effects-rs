@@ -21,13 +21,13 @@ width = 149
 clip_height = 40
 font_height = 24
 align = "left"
-sample_load_character = "Level"
+sample_load_character = "RL"
 sample_save_picker = ""
 sample_drive_row = ""
 
 [field.Level]
 x = -300
-y = -20
+y = -19
 width = 52
 clip_height = 40
 font_height = 24
@@ -70,11 +70,11 @@ sample_save_picker = "PARENT FOLDER / Go to save-files"
 sample_drive_row = "45-Slots / ER0000.sl2"
 
 [field.ErCharStats]
-x = -225.75
+x = -230
 y = -13
-width = 470
+width = 484
 clip_height = 42
-font_height = 18
+font_height = 19
 align = "center"
 sample_load_character = "VIG 50 MND 10 END 50 STR 21 DEX 21 INT 10 FAI 35 ARC 7"
 sample_save_picker = ""

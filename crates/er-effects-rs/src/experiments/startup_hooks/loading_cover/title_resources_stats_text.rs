@@ -1232,11 +1232,20 @@ pub(crate) unsafe fn apply_row_slot_info_visibility(
     row_proxy: usize,
     want: RowSlotFieldVisibility,
 ) {
+    // EVERY field any row kind writes must appear here. The four native ones were stated and the
+    // five we added were not, so the unstated ones inherited the previous kind's text on a recycled
+    // clip: the attribute line bled onto browse rows, the drive letters bled onto character rows.
+    // Adding a field to the row without adding it here reintroduces exactly that.
     let fields = [
         (PROFILE_ROW_LEVEL_CAPTION_FIELD_NAME, want.level),
         (PROFILE_ROW_LEVEL_VALUE_FIELD_NAME, want.level),
         (PROFILE_ROW_LOCATION_FIELD_NAME, want.location),
         (PROFILE_ROW_PLAYTIME_FIELD_NAME, want.play_time),
+        (PROFILE_ROW_ER_STATS_FIELD_NAME, want.er_stats),
+        (PROFILE_ROW_CHAR_STATS_FIELD_NAME, want.char_stats),
+        (PROFILE_ROW_DRIVE_CELL_FIELD_NAMES[0], want.drive_cells),
+        (PROFILE_ROW_DRIVE_CELL_FIELD_NAMES[1], want.drive_cells),
+        (PROFILE_ROW_DRIVE_CELL_FIELD_NAMES[2], want.drive_cells),
     ];
     let (mut hidden, mut shown) = (0usize, 0usize);
     for (name, visible) in fields {
