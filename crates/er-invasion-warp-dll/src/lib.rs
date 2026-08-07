@@ -35,6 +35,7 @@ mod map_live_pins;
 pub mod map_seams;
 mod seamless_probe;
 pub mod stall_watchdog;
+pub mod system_message;
 
 use std::path::PathBuf;
 
@@ -212,6 +213,9 @@ fn spawn_catalog_task() {
                     // when the block cannot be read. Not being findable by location is a missing
                     // convenience; a DLL that faulted here would be a broken game.
                     crate::lobby_publish::publish_current_map();
+                    // Keep the advertised pool matching the configured one; Seamless never
+                    // rebuilds its advertisement, so a toggle has to be applied by us.
+                    crate::lobby_publish::reapply_pool_if_toggled();
                     // Hunt mode's query-narrowing hook. Idempotent and self-gating: it needs the
                     // Steam interface, which is not resolvable until Steam is up, so it retries
                     // until it lands rather than being installed once at attach and failing
@@ -222,6 +226,7 @@ fn spawn_catalog_task() {
                     // struct offset that pointed at the wrong lobby in every run.
                     crate::lobby_publish::install_advertisement_observer();
                     crate::lobby_publish::install_hunt_hook();
+                    crate::lobby_publish::install_pool_filter_hook();
                     // Lift both halves of location matchmaking out of the log and into the oracle
                     // document, because their failures are the ones that look like success from
                     // outside: a host that advertised nothing still runs fine, and a hunt hook that

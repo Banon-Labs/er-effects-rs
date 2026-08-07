@@ -241,6 +241,23 @@ pub struct LocalInvasionConfig {
     /// this DLL's users publish, so while it is on a host without the DLL is invisible to you. That
     /// is a trade the user must choose, never a default.
     pub hunt: bool,
+    /// Match ONLY other players running this DLL with this option on.
+    ///
+    /// Rewrites Seamless's `lobby_key` into a pool of our own (see
+    /// [`crate::lobby_pool`]). One value drives both the search filter and the publish, so the
+    /// separation is symmetric: vanilla players cannot see you and you cannot see them, for
+    /// hosting as much as for invading.
+    ///
+    /// Absolute, not a preference. While it is on the entire vanilla population is invisible in
+    /// both directions, which is why it is off by default and wants to be a per-session choice.
+    pub dll_users_only: bool,
+    /// Announce a rejection on the game's own system-message banner.
+    ///
+    /// Off by default: it is a notification, and a notification nobody asked for is spam. When on,
+    /// only a CHANGE of wrong destination is announced -- consecutive rejections at the same place
+    /// stay silent, because Seamless retries roughly every 20 seconds and the same wrong place
+    /// recurs constantly.
+    pub reject_notice: bool,
     /// How destinations are judged.
     pub mode: LocalInvasionMode,
     /// Place-name text ids accepted in [`LocalInvasionMode::NamedOnly`], and -- see [`Self::judge`]
@@ -279,6 +296,10 @@ impl Default for LocalInvasionConfig {
             // this DLL's users publish, so while it is on a host without the DLL cannot be seen at
             // all. Losing reach is not something to inherit from a default.
             hunt: false,
+            // OFF: it hides the entire vanilla population in both directions.
+            dll_users_only: false,
+            // OFF: a notification nobody asked for is spam.
+            reject_notice: false,
             mode: LocalInvasionMode::ExactOnly,
             named_location_text_ids: BTreeSet::new(),
             named_locations: Vec::new(),

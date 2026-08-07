@@ -79,6 +79,25 @@ mode = "exact"
 # locations cannot be expressed and hunt will say so and stay out of the way.
 hunt = false
 
+# Announce a rejection on the game's own message banner ("Rejected invasion: m60_42_36_00").
+#
+# Only a CHANGE of wrong destination is announced. Seamless retries roughly every 20 seconds and
+# the same wrong place comes back around constantly, so announcing every one would be wallpaper
+# within a minute. Silence after the first means "still being sent to the same wrong place".
+reject_notice = false
+
+# Match ONLY other players running this DLL with this option turned on.
+#
+# Seamless finds worlds with a `lobby_key` that is a fingerprint of your game's params and Seamless
+# build -- NOT your co-op password. This rewrites that key into a pool of our own, and because one
+# value drives both the search and the advertisement, the separation is symmetric: vanilla players
+# cannot see you and you cannot see them.
+#
+# It is ABSOLUTE, not a preference. While this is on, the entire vanilla population is invisible to
+# you for hosting AND for invading -- you will only ever meet other people running this DLL with
+# this same option on. Turn it on for a session with friends, not permanently.
+dll_users_only = false
+
 # NOT IMPLEMENTED YET -- anything listed here is parsed and then ignored, and the log says so on
 # every load. Turning a typed place name into the FMG text id the game matches on has not been
 # reversed, so there is nothing to compare a string against.
@@ -194,6 +213,20 @@ pub fn parse_local_invasion_config(text: &str) -> ParsedConfig {
                 None => issues.push(ConfigIssue {
                     line: line_no,
                     message: format!("enabled must be true or false, got {value:?}"),
+                }),
+            },
+            "dll_users_only" => match parse_bool(value) {
+                Some(v) => config.dll_users_only = v,
+                None => issues.push(ConfigIssue {
+                    line: line_no,
+                    message: format!("dll_users_only must be true or false, got {value:?}"),
+                }),
+            },
+            "reject_notice" => match parse_bool(value) {
+                Some(v) => config.reject_notice = v,
+                None => issues.push(ConfigIssue {
+                    line: line_no,
+                    message: format!("reject_notice must be true or false, got {value:?}"),
                 }),
             },
             "hunt" => match parse_bool(value) {

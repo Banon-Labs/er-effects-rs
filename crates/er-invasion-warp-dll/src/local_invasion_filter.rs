@@ -196,6 +196,13 @@ static STALL_WATCHDOG: Mutex<crate::stall_watchdog::StallWatchdog> =
 /// Monotonic origin for the stall clock. The DLL log carries no timestamps, so elapsed time has to
 /// come from somewhere in-process.
 static PROCESS_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+/// Decides which rejections are worth announcing. Behind a mutex because the decision reads and
+/// updates "what did we last say" together.
+static REJECT_NOTICE: Mutex<er_invasion_warp::reject_notice::RejectNotice> =
+    Mutex::new(er_invasion_warp::reject_notice::RejectNotice::new());
+/// Set once the banner has failed, so a missing notice is reported one time instead of every 20
+/// seconds for the rest of the session.
+static NOTICE_FAILED: AtomicBool = AtomicBool::new(false);
 /// Cleared by a cancel the user performed. Their cancel means "stop looking", and it has to beat
 /// our re-arm or the filter would fight them.
 static AUTO_SEARCH_ARMED: AtomicBool = AtomicBool::new(false);
@@ -1036,8 +1043,52 @@ pub fn judge_incoming_match(join_data: usize) {
                 config.mode.as_str()
             ));
             explain_missing_names(reason, config.mode, destination);
+            announce_rejection(config.reject_notice, destination, reason);
             cancel_match(reason);
         }
+    }
+}
+
+/// Host-side stub: there is no game to show a banner in, and the decision half is tested directly
+/// against [`er_invasion_warp::reject_notice`] rather than through this.
+#[cfg(not(windows))]
+fn announce_rejection(_enabled: bool, _destination: u32, _reason: RejectReason) {}
+
+/// Put a rejection on the game's system-message banner, if the player asked for that.
+///
+/// The decision of WHETHER to speak lives in [`er_invasion_warp::reject_notice`] and is unit-tested
+/// on the host; this only carries the answer to the screen. The notice is fed even when the option
+/// is off so that turning it on mid-session does not announce a place the player was rejected from
+/// minutes ago as though it had just happened.
+///
+/// Runs on the game thread, in the same call that judges the match -- which is the context
+/// `showPopupMenu` expects, and it null-checks the menu manager itself, so a message raised before
+/// the UI exists is dropped rather than faulting.
+#[cfg(windows)]
+fn announce_rejection(enabled: bool, destination: u32, reason: RejectReason) {
+    let announcement = {
+        let mut guard = match REJECT_NOTICE.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.observe(enabled, destination, reason)
+    };
+    let Some(text) = announcement else {
+        return;
+    };
+    // SAFETY: game thread, inside the join-data hook -- the same context the game's own callers of
+    // this banner run in. Both game functions are byte-checked before use.
+    if !unsafe { crate::system_message::show(&text) } {
+        // Once, not per rejection: a banner that cannot be shown is a missing convenience, and
+        // saying so every 20 seconds would be its own spam.
+        if NOTICE_FAILED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        crate::standalone_log(format_args!(
+            "local-invasion: could not show the rejection banner (\"{text}\") -- the message \
+             functions did not verify, or the menu is not up yet. Rejections still work; only the \
+             on-screen notice is missing."
+        ));
     }
 }
 

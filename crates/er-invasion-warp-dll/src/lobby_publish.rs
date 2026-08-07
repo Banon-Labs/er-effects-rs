@@ -601,6 +601,17 @@ mod live {
     /// mistaken for Seamless declaring an advertisement.
     static IN_OUR_OWN_WRITE: AtomicBool = AtomicBool::new(false);
     static ORIG_SET_LOBBY_DATA: AtomicUsize = AtomicUsize::new(0);
+    static ORIG_ADD_STRING_FILTER: AtomicUsize = AtomicUsize::new(0);
+    /// What Seamless computed before any substitution, so the toggle can be undone as well as
+    /// applied. Seamless never republishes it, so this is the only copy that exists.
+    static VANILLA_LOBBY_KEY: Mutex<Option<String>> = Mutex::new(None);
+    /// Which pool the CURRENTLY ADVERTISED lobby is in, as opposed to which one the config asks
+    /// for. A difference between the two is what `reapply_pool_if_toggled` exists to close.
+    static POOL_APPLIED: AtomicBool = AtomicBool::new(false);
+    static FILTER_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+    /// Set once the pool swap has been reported, so the log says it one time rather than on every
+    /// publish and every query.
+    static POOL_ANNOUNCED: AtomicBool = AtomicBool::new(false);
     static SET_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
     static SET_HOOK_LIVE: AtomicUsize = AtomicUsize::new(0);
 
@@ -632,11 +643,204 @@ mod live {
                 }
             }
         }
+        // Move this player into the DLL's own matchmaking pool, if they asked for that. Seamless
+        // publishes its `lobby_key` through this exact call, so substituting here is the publish
+        // half of the separation; `add_string_filter_hook` is the search half, and both go through
+        // `pooled_key` so they can never disagree about which pool we are in.
+        let substituted = pooled_key_for(key, value);
+        let value = substituted.as_ref().map_or(value, |s| s.as_ptr() as usize);
+
         let orig = ORIG_SET_LOBBY_DATA.load(Ordering::SeqCst);
         if orig == 0 {
             return 0;
         }
         unsafe { core::mem::transmute::<usize, er_hook::UnionFn>(orig)(iface, lobby, key, value) }
+    }
+
+    /// Seamless's own key for the value that decides which pool a lobby belongs to.
+    pub const LOBBY_KEY_NAME: &str = "lobby_key";
+
+    /// If this call carries Seamless's `lobby_key` and the user opted into the DLL pool, the
+    /// replacement to pass instead.
+    ///
+    /// Returns an owned NUL-terminated buffer that the caller must keep alive across the call —
+    /// Steam copies the string during it, but not before.
+    fn pooled_key_for(key: usize, value: usize) -> Option<std::ffi::CString> {
+        if key == 0 || value == 0 {
+            return None;
+        }
+        let key_str = unsafe { core::ffi::CStr::from_ptr(key as *const i8) }
+            .to_str()
+            .ok()?;
+        if key_str != LOBBY_KEY_NAME {
+            return None;
+        }
+        let original = unsafe { core::ffi::CStr::from_ptr(value as *const i8) }
+            .to_str()
+            .ok()?;
+        // Remember what Seamless computed, so the toggle can be applied or undone on a lobby that
+        // already exists. Seamless publishes its advertisement ONCE at CreateLobby and never again,
+        // so without a recorded original there is nothing to convert back to and no way to move an
+        // existing lobby into the pool -- see `reapply_pool_if_toggled`.
+        if !original.is_empty() {
+            let mut remembered = VANILLA_LOBBY_KEY.lock().unwrap_or_else(|e| e.into_inner());
+            if remembered.as_deref() != Some(original) {
+                *remembered = Some(original.to_owned());
+            }
+        }
+        let config = crate::local_invasion_filter::current_config_snapshot()?;
+        let pooled =
+            er_invasion_warp::lobby_pool::pooled_lobby_key(config.dll_users_only, original)?;
+        if POOL_ANNOUNCED.swap(true, Ordering::SeqCst) != true {
+            crate::standalone_log(format_args!(
+                "lobby-pool: dll_users_only is ON -- Seamless's match key {} becomes {}. You will \
+                 only meet players running this DLL with the same option, for hosting AND \
+                 invading; the vanilla population is invisible in both directions.",
+                &original[..original.len().min(12)],
+                &pooled[..pooled.len().min(12)],
+            ));
+        }
+        std::ffi::CString::new(pooled).ok()
+    }
+
+    /// Move an EXISTING advertisement into or out of the DLL pool when the option is toggled.
+    ///
+    /// # Why the toggle needs this at all
+    ///
+    /// The two halves of the swap do not have the same reach. The SEARCH half is live: the next
+    /// query filters on whatever the config says right now. The PUBLISH half rides Seamless's own
+    /// `SetLobbyData`, and Seamless writes its advertisement exactly ONCE, at `CreateLobby` --
+    /// measured on a live host session as 7 calls at creation and zero afterwards.
+    ///
+    /// So without this, flipping the option while already hosting leaves the player SEARCHING in
+    /// one pool while still ADVERTISING in the other: invisible to the friend they turned it on
+    /// for, and still visible to the strangers they turned it on to avoid. Silently asymmetric,
+    /// which is the worst shape a matchmaking switch can take.
+    ///
+    /// We own the advertisement lobby, so we can write the key ourselves rather than wait for a
+    /// lobby that will never be rebuilt. Safe to call every tick: it does nothing unless the
+    /// effective value actually differs from what is currently published.
+    pub fn reapply_pool_if_toggled() {
+        let Some(config) = crate::local_invasion_filter::current_config_snapshot() else {
+            return;
+        };
+        let wanted = config.dll_users_only;
+        // Nothing to convert to or from until Seamless has published at least once.
+        let vanilla = {
+            let guard = VANILLA_LOBBY_KEY.lock().unwrap_or_else(|e| e.into_inner());
+            guard.clone()
+        };
+        let Some(vanilla) = vanilla else {
+            return;
+        };
+        if POOL_APPLIED.load(Ordering::SeqCst) == wanted {
+            return;
+        }
+        let Some(iface) = matchmaking() else {
+            return;
+        };
+        let Some(lobby) = advertisement_lobby() else {
+            return;
+        };
+        // Only the owner's lobby data survives the server; while searching, that field is the
+        // HOST's lobby and a write there would return true and evaporate.
+        if we_own(iface, lobby) != Some(true) {
+            return;
+        }
+        let Some(write) = set_lobby_data(iface) else {
+            return;
+        };
+        let value = if wanted {
+            match er_invasion_warp::lobby_pool::pooled_lobby_key(true, &vanilla) {
+                Some(pooled) => pooled,
+                None => return,
+            }
+        } else {
+            vanilla.clone()
+        };
+        let key = format!("{LOBBY_KEY_NAME}\0");
+        let payload = format!("{value}\0");
+        // Our own write goes through the hook that performs the substitution; suppress it so the
+        // value is not transformed twice.
+        IN_OUR_OWN_WRITE.store(true, Ordering::SeqCst);
+        let ok = unsafe { write(iface, lobby, key.as_ptr(), payload.as_ptr()) };
+        IN_OUR_OWN_WRITE.store(false, Ordering::SeqCst);
+        if !ok {
+            return;
+        }
+        POOL_APPLIED.store(wanted, Ordering::SeqCst);
+        crate::standalone_log(format_args!(
+            "lobby-pool: dll_users_only turned {} -- re-advertised lobby {lobby:#x} under the {} \
+             match key, so the search and the advertisement are in the same pool",
+            if wanted { "ON" } else { "OFF" },
+            if wanted { "DLL-pool" } else { "vanilla" },
+        ));
+    }
+
+    /// `ISteamMatchmaking::AddRequestLobbyListStringFilter` — the search half of the pool swap.
+    ///
+    /// Seamless filters on `lobby_key` here with `k_ELobbyComparisonEqual`, so a substitution makes
+    /// the outgoing query ask for our pool instead of the vanilla one.
+    unsafe extern "system" fn add_string_filter_hook(
+        iface: usize,
+        key: usize,
+        value: usize,
+        comparison: usize,
+    ) -> usize {
+        let substituted = pooled_key_for(key, value);
+        let value = substituted.as_ref().map_or(value, |s| s.as_ptr() as usize);
+        let orig = ORIG_ADD_STRING_FILTER.load(Ordering::SeqCst);
+        if orig == 0 {
+            return 0;
+        }
+        unsafe {
+            core::mem::transmute::<usize, er_hook::UnionFn>(orig)(iface, key, value, comparison)
+        }
+    }
+
+    /// Install the search-side substitution. Idempotent; retries until Steam is resolvable.
+    pub fn install_pool_filter_hook() -> usize {
+        if FILTER_HOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
+            return 0;
+        }
+        let Some(iface) = matchmaking() else {
+            FILTER_HOOK_INSTALLED.store(0, Ordering::SeqCst);
+            return 0;
+        };
+        let Some(vtable) = (unsafe { er_game_base::mem::safe_read_usize(iface) }) else {
+            FILTER_HOOK_INSTALLED.store(0, Ordering::SeqCst);
+            return 0;
+        };
+        let Some(address) = (unsafe {
+            er_game_base::mem::safe_read_usize(vtable + ADD_STRING_FILTER_SLOT * size_of::<usize>())
+        }) else {
+            FILTER_HOOK_INSTALLED.store(0, Ordering::SeqCst);
+            return 0;
+        };
+        if address == 0 {
+            FILTER_HOOK_INSTALLED.store(0, Ordering::SeqCst);
+            return 0;
+        }
+        match unsafe {
+            er_hook::register_union_hook(
+                address,
+                add_string_filter_hook as er_hook::UnionFn,
+                &ORIG_ADD_STRING_FILTER,
+            )
+        } {
+            Ok(()) => {
+                crate::standalone_log(format_args!(
+                    "lobby-pool: hooked AddRequestLobbyListStringFilter at {address:#x}"
+                ));
+                1
+            }
+            Err(status) => {
+                crate::standalone_log(format_args!(
+                    "lobby-pool: could not hook AddRequestLobbyListStringFilter: {status:?}"
+                ));
+                0
+            }
+        }
     }
 
     /// Install the advertisement observer. Idempotent; retries until Steam is resolvable.
@@ -844,7 +1048,7 @@ mod live {
 #[cfg(windows)]
 pub use live::{
     advertisement_lobby, hunt_tally, install_advertisement_observer, install_hunt_hook,
-    publish_current_map, tally,
+    install_pool_filter_hook, publish_current_map, reapply_pool_if_toggled, tally,
 };
 
 #[cfg(test)]
@@ -994,9 +1198,36 @@ mod tests {
     #[test]
     fn the_keys_that_decide_visibility_are_read_but_never_written_here() {
         let code = product_code();
+        // NARROWED 2026-08-06. This used to ban `lobby_key` outright, and that was the right rule
+        // until the DLL pool existed: substituting it is now a FEATURE, opt-in, and the whole point
+        // of it is to change who can see whom.
+        //
+        // What must not come back is an UNCONDITIONAL touch. The substitution is legitimate only
+        // because `pooled_lobby_key` returns `None` unless the user set `dll_users_only`, so every
+        // mention of the key has to route through that one function -- which fails closed, is
+        // unit-tested, and is the only place the decision lives. A direct write or filter of
+        // `lobby_key` anywhere else would silently move players between pools without asking.
+        let key_lines: Vec<&str> = code
+            .lines()
+            .filter(|line| line.contains("lobby_key") && !line.trim_start().starts_with("//"))
+            .collect();
         assert!(
-            !code.contains("lobby_key"),
-            "lobby_key decides who can see whom -- this module has no business naming it at all"
+            !key_lines.is_empty(),
+            "the pool substitution names lobby_key; if it no longer does, this guard is stale"
+        );
+        for line in &key_lines {
+            let routed = line.contains("LOBBY_KEY_NAME")
+                || line.contains("pooled_lobby_key")
+                || line.contains("pooled_key_for");
+            assert!(
+                routed,
+                "lobby_key may only be touched through the opt-in pool path, which fails closed \
+                 when the user has not asked for it: {line}"
+            );
+        }
+        assert!(
+            code.contains("config.dll_users_only"),
+            "the substitution must be gated on the user's own opt-in, never unconditional"
         );
         // `lobby_type` is permitted exactly once, as the marker the advertisement check READS.
         let mentions: Vec<&str> = code
@@ -1024,7 +1255,22 @@ mod tests {
                 "the publish call must write the key built from LOBBY_MAP_KEY: {line}"
             );
         }
-        assert_eq!(writes.len(), 1, "exactly one write site: {writes:?}");
+        // TWO write sites, and the count is pinned so a third has to be justified rather than
+        // appear: `publish_current_map` writes our own map key, and `reapply_pool_if_toggled`
+        // re-advertises the match key when the user flips `dll_users_only` on an existing lobby.
+        // The second exists because Seamless publishes its advertisement once at CreateLobby and
+        // never again, so a toggle would otherwise leave the player searching in one pool while
+        // still advertising in the other.
+        assert_eq!(
+            writes.len(),
+            2,
+            "expected the map-key publish and the pool re-advertise, found: {writes:?}"
+        );
+        assert!(
+            code.contains("fn reapply_pool_if_toggled"),
+            "the second write site must be the toggle re-advertise, and it must stay gated on \
+             ownership and on the user's own opt-in"
+        );
     }
 
     /// The consent line, restated where it could be crossed.

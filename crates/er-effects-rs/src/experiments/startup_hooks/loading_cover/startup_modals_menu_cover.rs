@@ -180,7 +180,7 @@ pub(crate) use er_telemetry::counters::GR_SYSMSG_LOG_ORIG;
 // 0x140762d50 (dump 0x140762e40 - 0xf0 region shift): it loads L"GR_System_Message"+L"SM" and calls
 // MsgRepository::GetAndFormat with the id in edx. Hooking the WRONG fn is why the 401106 corrupted-
 // save id was never seen (oracle stayed 0). This RVA must be the real getter for the semaphore.
-pub(crate) const GR_SYSTEM_MESSAGE_RVA: u32 = 0x762d50;
+pub(crate) const GR_SYSTEM_MESSAGE_RVA: u32 = er_game_base::rva::GR_SYSTEM_MESSAGE_RVA as u32;
 pub(crate) const GR_SYSMSG_LOG_MAX: usize = 64;
 
 /// DIAGNOSTIC detour for GetGR_System_Message 0x140762e40. Once the main menu has opened (skip the

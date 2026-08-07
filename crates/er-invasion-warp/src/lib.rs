@@ -69,6 +69,7 @@ pub mod msb_invasion_points;
 /// dungeon the player has never entered. Not re-exported for the same reason as
 /// [`msb_invasion_points`]: it carries its own region type.
 pub mod legacy_map_regions;
+pub mod lobby_pool;
 pub mod local_invasion;
 pub mod local_invasion_config;
 
@@ -87,6 +88,7 @@ pub mod map_surface;
 pub use map_surface::*;
 
 pub mod param_row;
+pub mod reject_notice;
 pub use param_row::*;
 
 pub mod select;
