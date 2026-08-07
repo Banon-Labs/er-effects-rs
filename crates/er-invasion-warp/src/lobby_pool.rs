@@ -174,6 +174,36 @@ mod tests {
         assert_ne!(a, b);
     }
 
+    /// THE "GLOBAL DLL COMMUNITY" MODE, pinned because it is a config COMBINATION rather than a
+    /// feature with its own switch, and combinations are what refactors quietly break.
+    ///
+    /// `enabled = false` + `dll_users_only = true` means: no location filtering at all, invade
+    /// anywhere exactly as unmodded play, but the only people in your matchmaking pool are other
+    /// DLL users. That requires the pool to be INDEPENDENT of the reject filter's master switch.
+    /// Gating the pool on `enabled` -- an easy tidy-up, since both live in the same config -- would
+    /// kill this mode while every existing test still passed.
+    #[test]
+    fn the_pool_is_independent_of_the_reject_filters_master_switch() {
+        use crate::local_invasion::LocalInvasionConfig;
+        let mut config = LocalInvasionConfig {
+            enabled: false,
+            dll_users_only: true,
+            ..LocalInvasionConfig::default()
+        };
+        assert!(
+            pooled_lobby_key(config.dll_users_only, VANILLA).is_some(),
+            "the pool must apply with the location filter switched OFF -- that is the \
+             invade-anywhere-but-only-DLL-users mode"
+        );
+        // And the converse: filtering by location without joining the pool stays vanilla-visible.
+        config.enabled = true;
+        config.dll_users_only = false;
+        assert!(
+            pooled_lobby_key(config.dll_users_only, VANILLA).is_none(),
+            "filtering by location must not drag a player out of the vanilla pool"
+        );
+    }
+
     /// The namespace is what every DLL user agrees on; an empty one would make the transform a
     /// no-op-shaped identity that still differs from vanilla only by accident.
     #[test]

@@ -98,6 +98,14 @@ reject_notice = false
 # this same option on. Turn it on for a session with friends, not permanently.
 dll_users_only = false
 
+# THE TWO USEFUL COMBINATIONS, since these switches are independent:
+#
+#   enabled = true,  dll_users_only = false   filter by LOCATION, meet everybody (the default use)
+#   enabled = false, dll_users_only = true    invade ANYWHERE as normal, but only ever meet other
+#                                             DLL users -- a private global community
+#
+# Both together works too: only DLL users, and only at the place you are standing.
+
 # NOT IMPLEMENTED YET -- anything listed here is parsed and then ignored, and the log says so on
 # every load. Turning a typed place name into the FMG text id the game matches on has not been
 # reversed, so there is nothing to compare a string against.

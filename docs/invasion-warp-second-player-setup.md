@@ -70,6 +70,18 @@ mode = "area"       # this place, or anywhere sharing its name
 
 Leave `hunt = false`. See the note below for why.
 
+Two optional extras, both off by default:
+
+```toml
+reject_notice   = true    # put each rejection on screen: "Rejected m60_42_36_00 (elsewhere)"
+dll_users_only  = false   # see the warning below before turning this on
+```
+
+`reject_notice` is worth turning on the first time you use the mod. It names WHY a match was
+refused, and one of the reasons -- `(open your map)` -- is a mistake that otherwise looks exactly
+like "nobody is around": until you open the world map once per session, no destination has a name,
+so every name-based judgement fails closed and you silently reject everyone.
+
 Then, in game:
 
 1. **Walk to the place you want to invade.** Where you are standing IS the target -- there is
@@ -110,6 +122,25 @@ of the fifth. Two reasons it is not the recommended path:
 
 The reject loop needs none of it. It reads the destination Seamless pushes to *you*, so it works
 against completely vanilla hosts who have never heard of this DLL.
+
+## The two switches are independent, which gives you three modes
+
+`enabled` filters by LOCATION. `dll_users_only` changes WHO IS IN YOUR POOL. They do not gate each
+other, so:
+
+| `enabled` | `dll_users_only` | what you get |
+|---|---|---|
+| `true` | `false` | Filter by location, meet everybody. The default use, and the one proven live. |
+| `false` | `true` | **Invade anywhere exactly as unmodded -- but only ever meet other DLL users.** A private global community with ordinary invasion inside it. |
+| `true` | `true` | Only DLL users, and only at the place you are standing. |
+| `false` | `false` | The DLL does nothing to matchmaking. |
+
+The middle row costs you nothing in gameplay terms: no rejections, no grind, no waiting for the
+right location. It only narrows the population.
+
+Whichever you pick, `dll_users_only` is **symmetric and absolute**. While it is on, vanilla players
+cannot see you and you cannot see them, for hosting as much as for invading -- because Seamless
+finds worlds with a key we rewrite, and one value drives both the search and the advertisement.
 
 ## Who actually needs the DLL
 
