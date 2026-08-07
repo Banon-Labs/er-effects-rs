@@ -10,7 +10,7 @@ width = 1200
 clip_height = 40
 font_height = 24
 align = "left"
-sample_load_character = "Maddened Bean"
+sample_load_character = "Maddened Bean, RL 125 WL 25"
 sample_save_picker = "[..] save-files"
 sample_drive_row = "Save Root"
 
@@ -37,9 +37,9 @@ sample_save_picker = ""
 sample_drive_row = ""
 
 [field.Location]
-x = 252
+x = 250
 y = -16
-width = 152
+width = 281
 clip_height = 40
 font_height = 24
 align = "right"
@@ -70,7 +70,7 @@ sample_save_picker = "PARENT FOLDER / Go to save-files"
 sample_drive_row = "45-Slots / ER0000.sl2"
 
 [field.ErCharStats]
-x = -230
+x = -208
 y = -13
 width = 484
 clip_height = 42
