@@ -829,6 +829,10 @@ pub(crate) unsafe fn system_quit_reset_profile_select_state(source: &str) {
     save_picker_reset(source);
     SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_PROFILE_SELECT_WINDOW.store(0, Ordering::SeqCst);
+    // The 05_010 rows are going away, so the live-layout editor must stop believing it can still
+    // write to their text fields. Only the profile-row surface is dropped: the title-load current
+    // row is owned by the title screen and outlives this teardown.
+    super::forget_profile_editor_field_targets("profile-row-populate");
     // End the profile-load flow so the legit Quit-Game/Return-to-Desktop confirm MessageBox is no longer
     // suppressed once ProfileSelect is gone (the flag was set at the Load-Profile click).
     SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.store(0, Ordering::SeqCst);
