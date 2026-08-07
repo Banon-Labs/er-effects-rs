@@ -184,6 +184,18 @@ static IN_OUR_CALL: AtomicBool = AtomicBool::new(false);
 /// Armed by our own cancel: search again as soon as the session settles back to idle. Cleared the
 /// moment the re-invade fires, so a session that never returns to idle cannot make this repeat.
 static PENDING_REINVADE: AtomicBool = AtomicBool::new(false);
+/// Attempts that ended without us cancelling them, and were restarted anyway. Counted separately
+/// from `REINVADES` so "Seamless dropped it" is distinguishable from "we rejected it" in a log.
+static SELF_RECOVERIES: AtomicUsize = AtomicUsize::new(0);
+/// Attempts cancelled because a handshake step stopped progressing.
+static STALL_RECOVERIES: AtomicUsize = AtomicUsize::new(0);
+/// Stall detection state. Behind a mutex rather than atomics because the decision reads and writes
+/// "which state, and since when" together; a torn read there would restart the clock at random.
+static STALL_WATCHDOG: Mutex<crate::stall_watchdog::StallWatchdog> =
+    Mutex::new(crate::stall_watchdog::StallWatchdog::new());
+/// Monotonic origin for the stall clock. The DLL log carries no timestamps, so elapsed time has to
+/// come from somewhere in-process.
+static PROCESS_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 /// Cleared by a cancel the user performed. Their cancel means "stop looking", and it has to beat
 /// our re-arm or the filter would fight them.
 static AUTO_SEARCH_ARMED: AtomicBool = AtomicBool::new(false);
@@ -1118,6 +1130,95 @@ fn drive_pending_reinvade(session: SeamlessSession) {
     ));
 }
 
+/// Re-arm the search when an attempt died WITHOUT us cancelling it.
+///
+/// # The gap this closes
+///
+/// [`drive_pending_reinvade`] only ever fired for a match WE rejected, because `PENDING_REINVADE`
+/// is set in [`cancel_match`] and nowhere else. Every other way an attempt can end -- a host that
+/// vanished, a connection that never completed, a refusal from the far side -- left the session
+/// sitting at idle with the loop still armed and nothing to restart it, so the player had to reach
+/// for the finger again. Measured 2026-08-06: of ten `0x15 -> 0x22` unwinds in one session, only
+/// four were ours; the other six ended the hunt silently.
+///
+/// The standing instruction is that the loop runs until the player uses the lynchpin again, so
+/// "the session went idle on its own while we are still hunting" is a restart, not a stop.
+///
+/// # Why this cannot resume a search after a SUCCESSFUL invasion
+///
+/// A successful join looks identical in session state -- `KEEP` was followed by the same
+/// `0x15 -> 0x22 -> 0x23 -> 0x00` unwind a rejection produces, so idle alone cannot tell them
+/// apart. It does not have to: [`Verdict::Keep`] clears `AUTO_SEARCH_ARMED`, so a kept match
+/// leaves the loop disarmed and this function returns immediately. The same is true of the
+/// player's own cancel and of opening Seamless's menu, both of which disarm.
+fn arm_self_recovery(session: SeamlessSession) {
+    if !AUTO_SEARCH_ARMED.load(Ordering::SeqCst) || PENDING_REINVADE.load(Ordering::SeqCst) {
+        return;
+    }
+    if read_session_state(session.session) != Some(ersc::SESSION_STATE_IDLE) {
+        return;
+    }
+    PENDING_REINVADE.store(true, Ordering::SeqCst);
+    let count = SELF_RECOVERIES.fetch_add(1, Ordering::SeqCst) + 1;
+    crate::standalone_log(format_args!(
+        "local-invasion: the attempt ended without us cancelling it (#{count}) -- restarting the \
+         search, because you have not stopped hunting. Press Cancel search yourself to stop"
+    ));
+}
+
+/// Cancel an attempt that has stopped progressing, so the loop can recover from a Seamless stall.
+///
+/// Seamless does not auto-cancel its own connection in these edge cases, which is why a hung
+/// handshake otherwise sits forever. The action driven here is the same "Cancel search" the player
+/// could press, and the restart afterwards is the ordinary one -- nothing here ends the hunt.
+fn cancel_stalled_attempt(session: SeamlessSession, state: u32, held_ms: u64) {
+    if session_guard_poisoned(session.session) {
+        return;
+    }
+    let Some(cancel) = ersc_action(ersc::CANCEL_ACTION_RVA, ersc::CANCEL_PROLOGUE) else {
+        return;
+    };
+    IN_OUR_CALL.store(true, Ordering::SeqCst);
+    unsafe { cancel(session.osm, 0, 1, 1) };
+    IN_OUR_CALL.store(false, Ordering::SeqCst);
+    note_state_after_our_action(session.session, "cancel stalled attempt");
+    if AUTO_SEARCH_ARMED.load(Ordering::SeqCst) {
+        PENDING_REINVADE.store(true, Ordering::SeqCst);
+    }
+    let count = STALL_RECOVERIES.fetch_add(1, Ordering::SeqCst) + 1;
+    crate::standalone_log(format_args!(
+        "local-invasion: connection stalled at state {state:#04x} for {held_ms}ms (#{count}) -- \
+         cancelled it. Seamless does not auto-cancel these, and a healthy handshake takes under \
+         two seconds"
+    ));
+}
+
+/// Feed the session state to the stall detector and act on what it says.
+///
+/// Deliberately state-driven rather than time-capped: `SEARCHING` means "nobody has matched yet"
+/// and is unbounded by nature, so it is never timed. Only the brief handshake steps are.
+fn watch_for_stall(session: SeamlessSession) {
+    let Some(state) = read_session_state(session.session) else {
+        return;
+    };
+    let now_ms = {
+        let start = *PROCESS_START.get_or_init(std::time::Instant::now);
+        // Saturating into u64 ms: a process cannot run long enough to overflow, and a cast that
+        // could wrap would hand the detector a clock that appears to jump backwards.
+        u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
+    };
+    let action = {
+        let mut guard = match STALL_WATCHDOG.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.observe(state, now_ms)
+    };
+    if action == Some(crate::stall_watchdog::StallAction::CancelAndResearch) {
+        cancel_stalled_attempt(session, state, crate::stall_watchdog::STALL_THRESHOLD_MS);
+    }
+}
+
 /// True once the session has settled back to idle after a cancel.
 #[must_use]
 pub fn session_is_idle() -> bool {
@@ -1439,6 +1540,11 @@ pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
     // no plaintext to recover (ersc's .themida is 99.68% identical on disk and in memory, entropy
     // unchanged -- the original x86 does not exist at runtime).
     trace_session_field_writes(session.session);
+    // Order matters. The stall detector may cancel, which lands the session at idle; self-recovery
+    // then sees that idle and arms the restart; `drive_pending_reinvade` fires it. Running them in
+    // this order recovers a stalled attempt within one tick of it settling rather than three.
+    watch_for_stall(session);
+    arm_self_recovery(session);
     drive_pending_reinvade(session);
 }
 
@@ -1844,6 +1950,76 @@ mod tests {
         assert!(
             resolver.contains("read_session_state"),
             "validate the state field instead"
+        );
+    }
+
+    #[test]
+    fn self_recovery_cannot_resume_a_search_after_a_kept_match() {
+        // THE HAZARD, and why this is a test rather than a comment. Restarting whenever the session
+        // is idle is what makes the loop survive a Seamless stall -- but a SUCCESSFUL invasion
+        // unwinds through exactly the same states as a failed one. Measured 2026-08-06: `KEEP` was
+        // followed by `0x15 -> 0x22 -> 0x23 -> 0x00 IDLE`, identical to a rejection. So idle alone
+        // cannot tell "the attempt died" from "you are standing in their world", and a restart on
+        // the latter would yank the player back out into a search they never asked for.
+        //
+        // What separates them is that `Verdict::Keep` DISARMS the loop. That makes the disarm check
+        // load-bearing rather than incidental, which is precisely the kind of thing a later tidy-up
+        // reorders without noticing.
+        let source = include_str!("local_invasion_filter.rs");
+        let recovery = source
+            .split_once("fn arm_self_recovery(")
+            .expect("self-recovery exists")
+            .1
+            .split_once("\n}")
+            .expect("self-recovery body")
+            .0;
+        assert!(
+            recovery.contains("AUTO_SEARCH_ARMED"),
+            "self-recovery must consult the armed flag -- it is the ONLY thing distinguishing a \
+             dead attempt from a successful invasion, both of which sit at idle"
+        );
+        let armed_at = recovery.find("AUTO_SEARCH_ARMED").expect("checked above");
+        let invade_at = recovery.find("PENDING_REINVADE.store(true");
+        assert!(
+            invade_at.is_none_or(|at| armed_at < at),
+            "the armed check must come BEFORE arming a restart, or a kept match restarts once \
+             before the guard is consulted"
+        );
+        // And the disarm on Keep is the other half of the same invariant.
+        let keep = source
+            .split_once("Verdict::Keep(reason) => {")
+            .expect("keep arm exists")
+            .1;
+        assert!(
+            keep[..keep.find("Verdict::Reject").unwrap_or(keep.len())]
+                .contains("AUTO_SEARCH_ARMED.store(false"),
+            "a kept match must disarm the loop; self-recovery relies on it"
+        );
+    }
+
+    #[test]
+    fn the_stall_detector_never_times_the_searching_state() {
+        // SEARCHING means "nobody has matched yet" and is unbounded by nature -- three consecutive
+        // live queries on 2026-08-06 returned 0, 0 and 1 lobbies. Timing it would cancel a healthy
+        // search in a quiet bracket, which is the single most obvious way to get a stall detector
+        // wrong. The rule lives in `stall_watchdog::is_transient`; this pins that the caller does
+        // not reintroduce a timer of its own alongside it.
+        let source = include_str!("local_invasion_filter.rs");
+        let watcher = source
+            .split_once("fn watch_for_stall(")
+            .expect("stall watcher exists")
+            .1
+            .split_once("\n}")
+            .expect("watcher body")
+            .0;
+        assert!(
+            !watcher.contains("SESSION_STATE_SEARCHING"),
+            "the watcher must not special-case SEARCHING -- the detector decides what is timed, \
+             and it deliberately never times a state that is unbounded by nature"
+        );
+        assert!(
+            watcher.contains("observe("),
+            "the watcher feeds the detector rather than deciding staleness itself"
         );
     }
 
