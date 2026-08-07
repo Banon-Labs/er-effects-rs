@@ -284,13 +284,25 @@ fn refresh_config() {
             ));
         } else {
             crate::standalone_log(format_args!(
-                "local-invasion: config loaded enabled={} mode={} named={} ids={} blocks={} \
-                 mark={} unmark={}",
+                "local-invasion: config loaded enabled={} mode={} hunt={} dll_users_only={} \
+                 reject_notice={} named={} ids={} blocks={} excluded={} mark={} unmark={}",
                 outcome.config.enabled,
                 outcome.config.mode.as_str(),
+                outcome.config.hunt,
+                // EVERY OPTION THAT CHANGES BEHAVIOUR MUST APPEAR HERE. These three were missing,
+                // and the gap cost a live A/B on 2026-08-06: the file was edited mid-session to turn
+                // `dll_users_only` on, this line duly reprinted -- proving the reload had happened --
+                // but said nothing about the option that had just changed. Whether the new value had
+                // parsed was unknowable until a lobby-pool line happened to appear a minute later.
+                // "The config reloaded" is not the question anyone has; "what is in force now" is.
+                outcome.config.dll_users_only,
+                outcome.config.reject_notice,
                 outcome.config.named_locations.len(),
                 outcome.config.named_location_text_ids.len(),
                 outcome.config.allowed_blocks.len(),
+                // Exclusions beat everything else, so a forgotten one is the hardest rejection to
+                // explain from the outside -- it looks identical to being in the wrong place.
+                outcome.config.blocked_blocks.len(),
                 // Which keys are actually live. Without this a mistyped name that happened to parse
                 // into a DIFFERENT valid key looks exactly like the feature not working.
                 er_invasion_warp::keybind::key_name(outcome.config.mark_key),
@@ -1806,6 +1818,76 @@ pub fn tallies() -> (usize, usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// EVERY option that changes behaviour has to show up in the `config loaded` line.
+    ///
+    /// Not a style rule -- it is the difference between a hot-reload you can verify and one you can
+    /// only hope about. Measured cost of the gap, 2026-08-06: `dll_users_only` was toggled mid-run,
+    /// the line reprinted (so the file had certainly been re-read), and it still did not say what
+    /// the option was now set to. The A/B could not be confirmed until a `lobby-pool` line happened
+    /// to appear on the next query. "The config reloaded" is a fact nobody needs; "here is what is
+    /// in force" is the one they do.
+    ///
+    /// Checked against the struct's real field list rather than a copy of it, so adding a field and
+    /// forgetting the log line fails HERE instead of silently on someone's live run.
+    #[test]
+    fn every_behaviour_changing_option_is_named_in_the_config_line() {
+        let config_source = include_str!("../../er-invasion-warp/src/local_invasion.rs");
+        let start = config_source
+            .find("pub struct LocalInvasionConfig")
+            .expect("the config struct");
+        let body = &config_source[start..];
+        let end = body.find("\n}").expect("end of the struct");
+        let fields: Vec<&str> = body[..end]
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("pub "))
+            // A field declaration, not the `pub struct ... {` header the scrape starts on: it must
+            // carry a type, and its name must be a plain identifier.
+            .filter(|rest| rest.contains(':'))
+            .filter_map(|rest| rest.split(':').next())
+            .map(str::trim)
+            .filter(|name| {
+                !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            })
+            .collect();
+        assert!(
+            fields.len() >= 8,
+            "field scrape found only {fields:?} -- the struct's shape changed and this test is no \
+             longer reading it"
+        );
+
+        let source = include_str!("local_invasion_filter.rs");
+        let line_start = source
+            .find("local-invasion: config loaded")
+            .expect("the config-loaded log line");
+        // The format string plus its whole argument list, bounded by the call's own closing `));`
+        // rather than by a character count -- a fixed window silently truncates the moment a
+        // comment is added to the argument list, and then this test starts failing on fields that
+        // are in fact present.
+        let call_end = source[line_start..]
+            .find("));")
+            .expect("the log call must be closed");
+        // COMMENTS ARE STRIPPED, and the check is for the READ ITSELF rather than the bare name.
+        // Both guards earn their place: a first version of this test looked for the bare field name
+        // anywhere in the call, and a negative control proved it toothless -- the explanatory
+        // comment in the argument list mentions `dll_users_only`, so deleting the actual argument
+        // left the test passing on prose alone. A gate that cannot fail is worse than no gate,
+        // because it is mistaken for coverage.
+        let call: String = source[line_start..line_start + call_end]
+            .lines()
+            .map(|line| line.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for field in fields {
+            // The two keybinds are reported by NAME rather than by number, so they appear as
+            // `key_name(outcome.config.mark_key)` -- still the read, just rendered for a human.
+            assert!(
+                call.contains(&format!("outcome.config.{field}")),
+                "config option `{field}` never reaches the `config loaded` line, so a user who \
+                 changes it cannot tell from the log whether it took effect"
+            );
+        }
+    }
 
     /// The dwell figure exists to be compared against the game's real frame rate; one that rounds
     /// to zero on a plausible interval would read as "the task stopped ticking" and send the next
