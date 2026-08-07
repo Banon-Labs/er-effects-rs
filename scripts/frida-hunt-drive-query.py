@@ -338,6 +338,38 @@ def read_oracles(path: str) -> dict:
         return {}
 
 
+#: How long to keep looking for the DLL to rewrite its oracle document, and how often to look.
+#: The deadline is a BACKSTOP -- the loop returns the instant the document changes -- and it is
+#: well under the repo's 30s non-game cap.
+REPUBLISH_DEADLINE_SECONDS = 10.0
+REPUBLISH_SAMPLE_SECONDS = 0.25
+
+
+def wait_for_republish(path: str, before: dict) -> dict:
+    """Read the oracle document once the DLL has rewritten it, rather than after a fixed delay.
+
+    This replaced a flat `time.sleep(2.0)` whose comment was "give it one tick before sampling".
+    That is synchronisation by guessing: 2s is simultaneously too long when the DLL republishes
+    immediately and too short whenever a frame hitches, and a sample taken too early reads the
+    PREVIOUS counters and reports "the detour declined to filter" for a query that filtered fine.
+
+    The DLL rewrites the document edge-triggered, when a location-matchmaking counter moves, so
+    the readiness condition is simply "the document is no longer what it was". Return as soon as
+    that is true. The deadline exists only so a run where nothing ever changes still finishes, and
+    returning the last read on expiry is correct: no change IS the observation in that case.
+    """
+    deadline = time.monotonic() + REPUBLISH_DEADLINE_SECONDS
+    latest = before
+    while time.monotonic() < deadline:
+        latest = read_oracles(path)
+        if latest != before:
+            return latest
+        # Sample period, not synchronisation: there is no notification when a file is rewritten by
+        # another process, so the document is re-read at a fixed rate until it differs.
+        time.sleep(REPUBLISH_SAMPLE_SECONDS)
+    return latest
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--gadget", default=GADGET)
@@ -377,9 +409,7 @@ def main() -> int:
     driven = script.exports_sync.drive(
         ACCESSOR, args.own_lobby, args.poll_ms, args.poll_ticks, LOBBY_MAP_KEY
     )
-    # The DLL republishes its oracle document on its own tick, so give it one before sampling.
-    time.sleep(2.0)
-    after = read_oracles(args.telemetry)
+    after = wait_for_republish(args.telemetry, before)
 
     result = {"driven": driven, "verdict": verdict(driven, before, after)}
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
