@@ -111,6 +111,31 @@ pub(crate) fn remember_profile_editor_field_target(
     });
 }
 
+/// Drop every cached live component belonging to `active_surface`, because that surface is being
+/// torn down and its GFx objects are about to stop existing.
+///
+/// Without this the cache was append-only: nothing removed an entry on movie teardown or screen
+/// close, while `profile_editor_necromancy_tick` runs off `FrameBegin` in every game state. A save
+/// made after backing out of Load Game would revalidate the stale pointer with a bounds check only
+/// -- which proves a vtable lands inside the game image, not that the object is alive -- then call
+/// through it and `write_unaligned` an f32 into what it believes is a text document.
+pub(crate) fn forget_profile_editor_field_targets(active_surface: &str) {
+    let Some(targets) = PROFILE_EDITOR_FIELD_TARGETS.get() else {
+        return;
+    };
+    let Ok(mut guard) = targets.lock() else {
+        return;
+    };
+    let before = guard.len();
+    guard.retain(|target| target.active_surface != active_surface);
+    let dropped = before - guard.len();
+    if dropped > 0 {
+        append_autoload_debug(format_args!(
+            "profile-editor: dropped {dropped} cached live field target(s) for surface '{active_surface}' at teardown; live edits now report no target instead of writing through a dead component"
+        ));
+    }
+}
+
 fn cached_profile_editor_field_utf16(field_name: &str) -> Option<Vec<u16>> {
     PROFILE_EDITOR_FIELD_TARGETS
         .get()
@@ -472,14 +497,16 @@ unsafe fn apply_profile_editor_transform_to_proxy(
         },
     };
     let moved = unsafe { set_scaleform_value_position(base, cs_value, transform.x, transform.y) };
-    let scaled = unsafe {
-        set_scaleform_value_scale(
-            base,
-            cs_value,
-            transform.scale_x * 100.0,
-            transform.scale_y * 100.0,
-        )
-    };
+    // Pass the schema's unit factor straight through. The native setter FUN_140d84090 already
+    // converts to Scaleform's percent space itself (`local_e0 = (double)*param_2 * DAT_14329e698`
+    // with DAT_14329e698 = 100.0, byte-checked in eldenring-deobf.bin at 0x14329e698), and its
+    // paired getter FUN_140d82c90 divides by the same constant to hand a factor back. Multiplying
+    // by 100 here as well applied every live chrome scale 100x too large -- the schema's
+    // backing.scale_x = 20 would have landed as a 2000x matrix. The shipped rows look right only
+    // because that value reaches the movie through the ASSET matrix in make_05_010_stats.rs; this
+    // setter runs solely for live chrome edits, which is why the error stayed invisible.
+    let scaled =
+        unsafe { set_scaleform_value_scale(base, cs_value, transform.scale_x, transform.scale_y) };
     (
         moved as u32 + scaled as u32,
         if moved && scaled { 0 } else { 1 },

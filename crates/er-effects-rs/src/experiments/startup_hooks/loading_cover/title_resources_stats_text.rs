@@ -739,6 +739,41 @@ fn profile_editor_live_layout() -> Option<er_gfx::profile_05_010_layout::Profile
     Some(command.layout)
 }
 
+/// Cap a live-edited `font_height` at whatever the field's BAKED box can actually render.
+///
+/// `font_height` hot-reloads instantly (it is just the `<font size>` on the text we push), but
+/// `clip_height` does not exist on the live path at all -- the box comes from the movie, and the
+/// movie only changes when the asset is rebuilt and the screen reopened. So raising the font in the
+/// editor used to overflow a box that could not grow, re-creating the original truncated-name bug
+/// with a schema that still validated and a preview that still said "ok". The ceiling is the
+/// inverse of the same line-box arithmetic the schema floor uses: 25 for the 40 px fields, 26 for
+/// ErCharStats at 42 px. Clamping here means the rendered text can never exceed its box, whatever
+/// the control file asks for; the editor still stores the larger value, and it takes effect once
+/// the rebuilt movie is loaded.
+fn clamp_live_font_height_to_baked_box(field_name: &str, requested: i32) -> i32 {
+    let shipped = er_gfx::profile_05_010_layout::shipped();
+    let Some(baked) = shipped.fields.get(field_name) else {
+        return requested;
+    };
+    let ceiling = er_gfx::profile_05_010_layout::max_font_height_px(baked.clip_height);
+    if ceiling <= 0 || requested <= ceiling {
+        return requested;
+    }
+    if PROFILE_LIVE_FONT_CLAMP_LOGGED
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        append_autoload_debug(format_args!(
+            "stats-text: live font_height {requested} for {field_name} exceeds what its baked {}px box can render; clamped to {ceiling}. Rebuild the asset and reopen the screen to use the larger size.",
+            baked.clip_height
+        ));
+    }
+    ceiling
+}
+
+/// One-shot latch so the clamp above logs once rather than once per SetText.
+static PROFILE_LIVE_FONT_CLAMP_LOGGED: AtomicUsize = AtomicUsize::new(0);
+
 pub(crate) fn profile_editor_live_text_for_field<'a>(
     field_name_nul: &str,
     text: &'a [u16],
@@ -756,7 +791,7 @@ pub(crate) fn profile_editor_live_text_for_field<'a>(
     let Some(decoded) = decode_scaleform_html_line(text) else {
         return std::borrow::Cow::Borrowed(text);
     };
-    let size = field.font_height.max(1);
+    let size = clamp_live_font_height_to_baked_box(field_name, field.font_height.max(1));
     let (body, already_html) = scaleform_html_body(&decoded);
     let body = if already_html {
         scaleform_html_size_existing_font_tags(body, size)
