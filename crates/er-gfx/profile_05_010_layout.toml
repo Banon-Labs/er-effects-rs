@@ -7,7 +7,11 @@
 x = -500
 y = -17
 width = 1200
-clip_height = 30
+# 40, not 30: the Agmena line box at font_height 24 is 34.383 px (ascent 20800 +
+# descent 8540 over EMSQUARE 20480), and FUN_14114bf10 insets the usable area by
+# 2 px per edge, so anything under 38.383 px cannot hold one line. Vanilla's own
+# PlayerName rect is 40 px for exactly this reason. 30 left 26 px usable.
+clip_height = 40
 font_height = 24
 align = "left"
 sample_load_character = "Maddened Bean"
