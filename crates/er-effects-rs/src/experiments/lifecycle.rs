@@ -1848,6 +1848,11 @@ pub(crate) fn install_title_visual_startup_hooks() {
     if stats_panel_enabled() {
         START_PROFILE_STATS_TEXT.call_once(|| {
             PROFILE_05_010_RUNTIME_EDIT_ARMED.store(1, Ordering::SeqCst);
+            // Install the shared PlayerGameData name getter synchronously. The title-load current row
+            // can be built before a spawned helper thread gets scheduled; when that happens the first
+            // native `PlayerName` write has already cached the shortened `pgd+0x8e8` display string.
+            // This hook must be live before the first 05_010/System summary populate call.
+            install_profile_row_populate_hook();
             let _ = std::thread::Builder::new()
                 .name("er-effects-profile-stats-text".to_owned())
                 .spawn(|| {

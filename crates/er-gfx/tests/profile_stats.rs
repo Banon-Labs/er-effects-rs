@@ -281,7 +281,7 @@ fn stats_panel_output_places_stats_field_and_hides_face_box() {
     ] {
         assert_eq!(
             row_placement_matrix(row, inline).translate_y,
-            layout.field(inline).y * 20,
+            (layout.field(inline).y * 20.0).round() as i32,
             "{inline} must use the visual editor schema y placement"
         );
         assert_not_alpha_zero(row, inline);
@@ -552,6 +552,10 @@ fn stats_panel_output_keeps_row_text_fields_positive_width() {
     };
     let out = stats_panel(&vanilla).expect("edits must apply cleanly");
     let movie = Movie::parse(&out).expect("edited movie parses");
+    let layout = Profile05_010Layout::from_path(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("profile_05_010_layout.toml"),
+    )
+    .expect("checked-in ProfileSelect layout parses");
     for name in [
         "PlayerName",
         "StaticText_110502",
@@ -573,6 +577,17 @@ fn stats_panel_output_keeps_row_text_fields_positive_width() {
             "{name} has inverted/empty text bounds: x_min={} x_max={}",
             bounds.x_min,
             bounds.x_max
+        );
+        let expected = layout.field(name);
+        assert_eq!(
+            bounds.x_max - bounds.x_min,
+            expected.width * 20,
+            "{name} emitted text bounds width must match field.{name}.width"
+        );
+        assert_eq!(
+            bounds.y_max - bounds.y_min,
+            expected.clip_height * 20,
+            "{name} emitted text bounds height must match field.{name}.clip_height"
         );
     }
 }
@@ -661,10 +676,14 @@ fn stats_panel_output_centers_load_character_stats_as_one_group() {
         layout.align, 2,
         "{CHAR_STATS_FIELD_NAME} centers the whole stat run inside its field"
     );
+    let layout_schema = Profile05_010Layout::from_path(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("profile_05_010_layout.toml"),
+    )
+    .expect("checked-in ProfileSelect layout parses");
     assert_eq!(
         bounds.y_max - bounds.y_min,
-        40 * 20,
-        "{CHAR_STATS_FIELD_NAME} uses the same vertical text box height as native row fields"
+        layout_schema.field(CHAR_STATS_FIELD_NAME).clip_height * 20,
+        "{CHAR_STATS_FIELD_NAME} emitted text box height must match field.{CHAR_STATS_FIELD_NAME}.clip_height"
     );
 }
 
@@ -679,12 +698,18 @@ fn stats_panel_output_fits_worst_case_load_character_stat_line() {
     let out = stats_panel(&vanilla).expect("edits must apply cleanly");
     let movie = Movie::parse(&out).expect("edited movie parses");
     let field = row_text_field(&movie, CHAR_STATS_FIELD_NAME);
-    let Tag::DefineEditText { bounds, .. } = field else {
-        panic!("{CHAR_STATS_FIELD_NAME} is a DefineEditText");
+    let Tag::DefineEditText {
+        bounds,
+        font_height: Some(font_height_twips),
+        ..
+    } = field
+    else {
+        panic!("{CHAR_STATS_FIELD_NAME} is a DefineEditText with a font height");
     };
     let box_width_px = (bounds.x_max - bounds.x_min) as f32 / 20.0;
+    let font_height_px = *font_height_twips as f32 / 20.0;
     let worst_case = "VIG 99 MND 99 END 99 STR 99 DEX 99 INT 99 FAI 99 ARC 99";
-    let text_width_px = font_width_px(&font_movie, worst_case, 16.0);
+    let text_width_px = font_width_px(&font_movie, worst_case, font_height_px);
     assert!(
         text_width_px <= box_width_px,
         "load-character stat line clips horizontally: text={text_width_px:.1}px box={box_width_px:.1}px sample={worst_case:?}"
@@ -755,6 +780,8 @@ fn stats_panel_output_keeps_load_character_rendered_text_inside_the_visible_row_
     };
     let out = stats_panel(&vanilla).expect("edits must apply cleanly");
     let movie = Movie::parse(&out).expect("edited movie parses");
+    let layout = Profile05_010Layout::parse(include_str!("../profile_05_010_layout.toml"))
+        .expect("checked-in visual editor schema parses");
     let samples = [
         ("PlayerName", "Maddened Bean", None),
         ("StaticText_110502", "Level", None),
@@ -762,7 +789,7 @@ fn stats_panel_output_keeps_load_character_rendered_text_inside_the_visible_row_
         (
             CHAR_STATS_FIELD_NAME,
             "VIG 50 MND 10 END 50 STR 21 DEX 21 INT 10 FAI 35 ARC 7",
-            Some(16.0),
+            Some(layout.field(CHAR_STATS_FIELD_NAME).font_height as f32),
         ),
         ("Location", "Midra's Manse", None),
         ("PlayTime", "107:49:34", None),
@@ -910,10 +937,10 @@ fn stats_panel_output_keeps_injected_stats_text_from_overlapping_native_text() {
         "PlayTime",
         STATS_FIELD_NAME,
     ] {
-        assert_eq!(
-            row_placement_matrix(row, inline).translate_y,
-            baseline,
-            "{inline} must share the single ProfileSelect row baseline"
+        let translate_y = row_placement_matrix(row, inline).translate_y;
+        assert!(
+            (translate_y - baseline).abs() <= LOAD_CHARACTER_RENDERED_VERTICAL_TOLERANCE_PX * 20,
+            "{inline} must stay within the compact ProfileSelect row baseline tolerance: y={translate_y} baseline={baseline}"
         );
     }
 

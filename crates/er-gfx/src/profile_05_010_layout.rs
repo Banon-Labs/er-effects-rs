@@ -55,9 +55,10 @@ impl TextAlign {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FieldLayout {
-    pub x: i32,
-    pub y: i32,
+    pub x: f32,
+    pub y: f32,
     pub width: i32,
+    pub clip_height: i32,
     pub font_height: i32,
     pub align: TextAlign,
     pub sample_load_character: String,
@@ -262,9 +263,10 @@ fn field(
     sample_drive_row: &str,
 ) -> FieldLayout {
     FieldLayout {
-        x,
-        y,
+        x: x as f32,
+        y: y as f32,
         width,
+        clip_height: 40,
         font_height,
         align,
         sample_load_character: sample_load_character.to_owned(),
@@ -355,6 +357,11 @@ impl Profile05_010Layout {
                     "field.{name}.width must be > 0"
                 )));
             }
+            if field.clip_height <= 0 {
+                return Err(LayoutError::InvalidValue(format!(
+                    "field.{name}.clip_height must be > 0"
+                )));
+            }
             if field.font_height <= 0 {
                 return Err(LayoutError::InvalidValue(format!(
                     "field.{name}.font_height must be > 0"
@@ -392,9 +399,10 @@ impl Profile05_010Layout {
         if let Some(name) = section.strip_prefix("field.") {
             let field = self.field_mut(name)?;
             match key {
-                "x" => field.x = parse_i32(raw_value)?,
-                "y" => field.y = parse_i32(raw_value)?,
+                "x" => field.x = parse_f32(raw_value)?,
+                "y" => field.y = parse_f32(raw_value)?,
                 "width" => field.width = parse_i32(raw_value)?,
+                "clip_height" => field.clip_height = parse_i32(raw_value)?,
                 "font_height" => field.font_height = parse_i32(raw_value)?,
                 "align" => field.align = TextAlign::parse(raw_value)?,
                 "sample_load_character" => field.sample_load_character = parse_string(raw_value),
@@ -526,6 +534,7 @@ mod tests {
         for name in FIELD_NAMES {
             let field = layout.field(name);
             assert!(field.width > 0, "{name} width exposed");
+            assert!(field.clip_height > 0, "{name} clip height exposed");
             assert!(field.font_height > 0, "{name} font height exposed");
         }
         assert!(layout.row_chrome.backing.editable);
@@ -533,6 +542,13 @@ mod tests {
         assert!(layout.row_chrome.cursor_body.editable);
         assert_eq!(layout.list.visible_rows, 10);
         assert_eq!(layout.list.row_pitch, 48);
+    }
+
+    #[test]
+    fn field_positions_accept_fractional_pixels() {
+        let layout = Profile05_010Layout::parse("[field.StaticText_110502]\ny = -17.25\n")
+            .expect("fractional ProfileSelect field y parses");
+        assert_eq!(layout.field("StaticText_110502").y, -17.25);
     }
 
     #[test]

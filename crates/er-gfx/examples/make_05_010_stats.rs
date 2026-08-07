@@ -88,13 +88,14 @@ fn apply_text_field_definition(tag: &mut Tag, field: &er_gfx::profile_05_010_lay
     // edge and produces an inverted/negative-width text box that accepts SetText but renders nothing.
     bounds.nbits = 16;
     bounds.x_max = bounds.x_min + field.width * TW;
+    bounds.y_max = bounds.y_min + field.clip_height * TW;
     *font_height = Some((field.font_height * TW) as u16);
     if let Some(layout) = layout {
         layout.align = field.align.swf_code();
     }
 }
 
-fn set_translate(tag: &mut Tag, x_px: i32, y_px: i32) {
+fn set_translate(tag: &mut Tag, x_px: f32, y_px: f32) {
     let Tag::PlaceObject2 {
         matrix: Some(m), ..
     } = tag
@@ -104,8 +105,8 @@ fn set_translate(tag: &mut Tag, x_px: i32, y_px: i32) {
     // 16 bits comfortably covers +/-1638px and always round-trips; the source
     // widths are per-value-minimal and may be too small for the new offsets.
     m.translate_nbits = 16;
-    m.translate_x = x_px * TW;
-    m.translate_y = y_px * TW;
+    m.translate_x = fixed_from_px(x_px);
+    m.translate_y = fixed_from_px(y_px);
 }
 
 fn scale_from_ratio(numer: i32, denom: i32) -> i32 {
@@ -186,7 +187,7 @@ fn main() {
             x_min: -2 * TW,
             x_max: (-2 + er_stats_layout.width) * TW,
             y_min: -2 * TW,
-            y_max: 38 * TW,
+            y_max: (-2 + er_stats_layout.clip_height) * TW,
         },
         // 0x8c = HasText|ReadOnly|HasTextColor: single-line, no wrap, so an
         // overlong stats line clips horizontally instead of wrapping into the
@@ -213,7 +214,7 @@ fn main() {
             x_min: -35 * TW,
             x_max: (-35 + er_char_stats_layout.width) * TW,
             y_min: -2 * TW,
-            y_max: 38 * TW,
+            y_max: (-2 + er_char_stats_layout.clip_height) * TW,
         },
         // 0x8c = HasText|ReadOnly|HasTextColor: single-line. Load Character and
         // Load Character from File share one compact row stack, so all eight
@@ -263,7 +264,7 @@ fn main() {
                 x_min: -2 * TW,
                 x_max: (-2 + field_layout.width) * TW,
                 y_min: -2 * TW,
-                y_max: 38 * TW,
+                y_max: (-2 + field_layout.clip_height) * TW,
             },
             flags1: 0x8c,
             flags2,
@@ -361,8 +362,8 @@ fn main() {
                 rotate_skew0: 0,
                 rotate_skew1: 0,
                 translate_nbits: 16,
-                translate_x: field.x * TW,
-                translate_y: field.y * TW,
+                translate_x: fixed_from_px(field.x),
+                translate_y: fixed_from_px(field.y),
             }),
             color_transform: None,
             ratio: None,
@@ -389,8 +390,8 @@ fn main() {
                 rotate_skew0: 0,
                 rotate_skew1: 0,
                 translate_nbits: 16,
-                translate_x: profile_layout.field(CHAR_STATS_FIELD_NAME).x * TW,
-                translate_y: profile_layout.field(CHAR_STATS_FIELD_NAME).y * TW,
+                translate_x: fixed_from_px(profile_layout.field(CHAR_STATS_FIELD_NAME).x),
+                translate_y: fixed_from_px(profile_layout.field(CHAR_STATS_FIELD_NAME).y),
             }),
             color_transform: None,
             ratio: None,
@@ -553,7 +554,7 @@ fn main() {
             unreachable!()
         };
         *depth = (idx as u16) * 2 + 1;
-        set_translate(&mut separator, 0, y_px);
+        set_translate(&mut separator, 0.0, y_px as f32);
         rebuilt_rows.push(separator);
     }
     for idx in (0..visible_rows as usize).rev() {
@@ -570,7 +571,7 @@ fn main() {
         };
         *depth = 23 + ((visible_rows as usize - 1 - idx) as u16) * 22;
         *tag_name = Some(name);
-        set_translate(&mut item, 0, y_px);
+        set_translate(&mut item, 0.0, y_px as f32);
         rebuilt_rows.push(item);
     }
     for (name, y_px, depth) in [
@@ -596,7 +597,7 @@ fn main() {
         };
         *tag_depth = depth;
         *tag_name = Some(name.to_owned());
-        set_translate(&mut recycle, 0, y_px);
+        set_translate(&mut recycle, 0.0, y_px as f32);
         rebuilt_rows.push(recycle);
     }
     row_stack.splice(show_frame_at..show_frame_at, rebuilt_rows);

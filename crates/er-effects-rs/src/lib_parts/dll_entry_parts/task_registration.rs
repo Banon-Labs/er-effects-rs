@@ -177,6 +177,9 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     if lite_mode() {
                         return;
                     }
+                    if let Ok(base) = game_module_base() {
+                        unsafe { profile_editor_necromancy_tick(base) };
+                    }
                     unsafe { system_quit_profile_select_top_menu_tick() };
                     // Product autoload: run the native title open-menu predicate + minimal
                     // native save-load core from the recurring game task, before the idx10
@@ -396,7 +399,10 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // world resident @ step 18 + mtime change), so an every-frame call is cheap and safe.
                 poll_cached_mms18_ending_request_advancer();
                 if let Ok(base) = game_module_base() {
-                    unsafe { poll_switch_slot_control_file(base) };
+                    unsafe {
+                        profile_editor_necromancy_tick(base);
+                        poll_switch_slot_control_file(base);
+                    }
                 }
                 // SPURIOUS RETURN-TITLE ARM DISARM (2026-07-18, bd angre-reload-full-causal-chain-and-fix,
                 // refined by repeatable-multi-save-consolidated-plan-2026-07-18).
