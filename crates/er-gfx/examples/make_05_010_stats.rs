@@ -426,6 +426,28 @@ fn main() {
         set_translate(tag, x, y);
     }
 
+    // PlayTime is hidden at the ASSET level, not per row, because no row rendering wants it any
+    // more: the merged character row drops it to free its band for a wider `Location`
+    // (`RowSlotFieldVisibility::NATIVE_MERGED`), browse rows never had it (`browse_row`), and the
+    // picker's timestamp goes to `Location` via `stage_row_model_location`, not here.
+    //
+    // The one rendering that still drew it was the UNMERGED character row -- the `NATIVE` fallback
+    // a row takes when no header could be composed. There the widened `Location` runs straight
+    // through it: measured 65px of overlapping ink (`Location` 6600..10600 twips vs `PlayTime`
+    // 9200..10500), which is the "the vanilla view changed" the user reported. Hiding it per row
+    // could not fix that case anyway: the visibility pass only fires when the wanted state differs
+    // from `NATIVE`, so a `NATIVE` row asks for nothing and a row the DLL never populates asks for
+    // nothing at all -- both keep whatever the asset placed.
+    //
+    // Alpha-zero rather than unplaced, for the same reason as `Icon_0` above: the native row
+    // populate resolves these fields by name and releases their CSScaleformValue, and removing the
+    // placement turns that release into an AV.
+    let play_time = row
+        .iter_mut()
+        .find(|t| name_of(t).as_deref() == Some("PlayTime"))
+        .expect("row template places PlayTime");
+    make_alpha_zero(play_time);
+
     // Original decorative underline flourishes are chrome, not row data. Hide them at the asset
     // level; they read like a strikethrough once the row is compacted to one text baseline.
     for tag in row.iter_mut() {
