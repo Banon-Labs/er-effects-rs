@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import importlib.util
 import json
 import os
 import re
@@ -322,6 +323,36 @@ def stale_dlls() -> list[str]:
     return []
 
 
+def staged_save_problems() -> list[str]:
+    """Report whether the configured autoload save would actually be the one the game opens.
+
+    Three launches on 2026-08-07 passed this gate, took the user's screen, and softlocked at the
+    boot cover -- every one of them because the staged save directory held a container with a
+    DIFFERENT character than the config asked for, which the autoload guard then correctly refused.
+    The gate had no opinion, because staleness here is not a build-time question: the DLL is current,
+    the predicates are reachable, and the save that will be read is still wrong.
+
+    Delegated to `check-staged-save.py`, which owns the comparison and has its own selftest. A
+    missing/unimportable checker is NOT a refusal: this gate must not start failing launches because
+    a helper moved.
+    """
+    checker = os.path.join(REPO_ROOT, "scripts", "check-staged-save.py")
+    if not os.path.isfile(checker):
+        return []
+    try:
+        spec = importlib.util.spec_from_file_location("check_staged_save", checker)
+        if not spec or not spec.loader:
+            return []
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        code, lines = module.check(module.DEFAULT_GAME_DIR, apply_fix=False)
+    except Exception:  # noqa: BLE001 - a broken helper must not block a launch
+        return []
+    if code == 0:
+        return []
+    return [line.replace("[staged-save] ", "") for line in lines]
+
+
 def evaluate(
     runs: list[RunEvidence], source_mtime: float = 0.0
 ) -> tuple[bool, list[str], list[str]]:
@@ -381,6 +412,13 @@ def gate(run_dirs: list[str]) -> int:
     if stale:
         failures.append("stale build -- a launch would validate a DLL older than the tree:")
         failures.extend(f"      {item}" for item in stale)
+
+    save_problems = staged_save_problems()
+    if save_problems:
+        failures.append(
+            "staged save -- the game would open a container holding the wrong character:"
+        )
+        failures.extend(f"      {item}" for item in save_problems)
 
     if not runs:
         failures.append(
