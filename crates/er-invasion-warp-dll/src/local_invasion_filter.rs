@@ -193,6 +193,10 @@ static STALL_RECOVERIES: AtomicUsize = AtomicUsize::new(0);
 /// "which state, and since when" together; a torn read there would restart the clock at random.
 static STALL_WATCHDOG: Mutex<crate::stall_watchdog::StallWatchdog> =
     Mutex::new(crate::stall_watchdog::StallWatchdog::new());
+/// Slows the restart when Seamless is refusing attempts instantly -- the opposite failure to the
+/// one the stall watchdog catches, and invisible to it because every state is held too SHORT.
+static RESTART_BACKOFF: Mutex<crate::restart_backoff::RestartBackoff> =
+    Mutex::new(crate::restart_backoff::RestartBackoff::new());
 /// Monotonic origin for the stall clock. The DLL log carries no timestamps, so elapsed time has to
 /// come from somewhere in-process.
 static PROCESS_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
@@ -738,6 +742,7 @@ fn trace_session_state(session: usize) {
         return;
     }
     log_transition(previous, state, None);
+    note_attempt_progress(previous, state);
     if state == ersc::SESSION_STATE_SEARCHING && !AUTO_SEARCH_ARMED.swap(true, Ordering::SeqCst) {
         crate::standalone_log(format_args!(
             "local-invasion: you started a search -- rejected matches will be cancelled and the \
@@ -762,6 +767,34 @@ fn note_state_after_our_action(session: usize, what: &str) {
     }
     log_transition(previous, state, Some(what));
 }
+
+/// Feed the restart backoff the shape of the attempt, from transitions it already sees.
+///
+/// Three facts are all it needs, and each is a single transition:
+///   * leaving idle  -> an attempt began, start the clock
+///   * reaching `0x12` -> this one is a real search, so clear any accumulated penalty
+///   * reaching idle -> the attempt is over; how long it lasted decides the delay
+///
+/// `0x12` is the progress marker rather than a later state because it is the first step past the
+/// fast-fail path: the measured spin ran `0x0d -> 0x0e -> 0x11 -> 0x14 -> idle` and never touched
+/// it, while every healthy attempt in the same run passed through it within ~150 ms.
+fn note_attempt_progress(previous: usize, state: u32) {
+    let Ok(mut backoff) = RESTART_BACKOFF.lock() else {
+        return;
+    };
+    if previous == ersc::SESSION_STATE_IDLE as usize && state != ersc::SESSION_STATE_IDLE {
+        backoff.attempt_started(now_ms());
+    }
+    if state == SESSION_STATE_OFFER_RECEIVED {
+        backoff.attempt_made_progress();
+    }
+}
+
+/// The first state past the fast-fail path -- reaching it means Seamless really searched.
+///
+/// Named here rather than in `ersc` because it is OUR progress marker, chosen from measurement,
+/// not a constant recovered from Seamless's own code.
+const SESSION_STATE_OFFER_RECEIVED: u32 = 0x12;
 
 /// Monotonic milliseconds since the first call.
 ///
@@ -1293,6 +1326,33 @@ fn arm_self_recovery(session: SeamlessSession) {
     if read_session_state(session.session) != Some(ersc::SESSION_STATE_IDLE) {
         return;
     }
+    // HOW BADLY DID THE LAST ATTEMPT GO? Restarting instantly is right when Seamless actually
+    // searched -- its own ~15s retry paces the loop and nothing here is felt. It is wrong when
+    // Seamless refused instantly: measured 2026-08-06, eleven restarts in 38.9s during an area
+    // transition, four times the normal query rate, because idle alone cannot tell a 15-second
+    // search from a 33-millisecond refusal.
+    {
+        let now = now_ms();
+        let Ok(mut backoff) = RESTART_BACKOFF.lock() else {
+            return;
+        };
+        let delay = backoff.attempt_ended(now);
+        if !backoff.may_restart(now) {
+            // Held. Return WITHOUT arming. The next tick re-enters, finds no recorded start (the
+            // attempt was already consumed), scores that as a normal attempt costing nothing, and
+            // simply re-checks the hold -- so the delay elapses without accumulating further
+            // penalty, and the restart fires on the first tick after it expires.
+            if delay > 0 {
+                crate::standalone_log(format_args!(
+                    "local-invasion: that attempt was refused in under a second (#{} in a row) -- \
+                     waiting {delay}ms before searching again, so a passing refusal does not turn \
+                     into a query storm. The hunt is still on.",
+                    backoff.consecutive()
+                ));
+            }
+            return;
+        }
+    }
     PENDING_REINVADE.store(true, Ordering::SeqCst);
     let count = SELF_RECOVERIES.fetch_add(1, Ordering::SeqCst) + 1;
     crate::standalone_log(format_args!(
@@ -1346,6 +1406,15 @@ fn watch_for_stall(session: SeamlessSession) {
     if !AUTO_SEARCH_ARMED.load(Ordering::SeqCst) {
         if let Ok(mut guard) = STALL_WATCHDOG.lock() {
             guard.stand_down();
+        }
+        // The backoff stands down here TOO, on the same condition and in the same place, rather
+        // than at each of the sites that disarm. There are three of those today -- a kept match,
+        // the player's own cancel, opening Seamless's menu -- and a fourth added later would
+        // silently miss a per-site call. This branch already runs every tick the loop is not
+        // armed, so it cannot be forgotten. Without it, a hunt stopped mid-backoff would hand its
+        // penalty to the next one the player starts.
+        if let Ok(mut backoff) = RESTART_BACKOFF.lock() {
+            backoff.stand_down();
         }
         return;
     }

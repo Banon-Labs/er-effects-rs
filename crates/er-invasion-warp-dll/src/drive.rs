@@ -330,12 +330,21 @@ impl InvasionWarpDrive {
             // any legacy dungeon, so `msb[0/0]` while standing in one means the second source is
             // not running -- a distinct failure from "running but nothing placed".
             let (msb_points, msb_maps) = crate::map_hooks::msb_coverage();
+            // The rejection banner's counters. Surfaced here because a banner that never fires and
+            // a banner that fires perfectly are otherwise IDENTICAL in the log -- success was
+            // silent, so the only evidence was the absence of a failure line, which is not
+            // evidence at all for a feature whose whole job is to appear on screen. `shown` counts
+            // banners whose text was read back out of the game's own rawString/length after
+            // writing; `refused` counts attempts dropped before display.
+            let (banners_shown, banners_refused) = crate::system_message::tally();
             log(format_args!(
                 "invasion-warp: heartbeat tick={} focused={focused} f7_state={:#06x} \
                  f8_state={:#06x} block={} player={} pins={} msb[{msb_points} points/{msb_maps} \
                  maps] map[opens={opens} injected={injections} skipped={skips}] \
                  icon[movie={map_movies} red_served={red_served} derive_failed={red_failures}] \
-                 filter[ours {}/{} shipped {}/{}] -- press F7 (nearest), F8 (next), F9 (other area)",
+                 filter[ours {}/{} shipped {}/{}] \
+                 banner[shown={banners_shown} refused={banners_refused}] \
+                 -- press F7 (nearest), F8 (next), F9 (other area)",
                 self.ticks,
                 self.nearest_key.raw_state() as u16,
                 self.next_key.raw_state() as u16,

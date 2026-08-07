@@ -232,10 +232,60 @@ pub unsafe fn show(text: &str) -> bool {
         REFUSALS.fetch_add(1, Ordering::SeqCst);
         return false;
     }
+
+    // READ THE STRING BACK OUT OF THE FIELDS THE UI READS, before showing it.
+    //
+    // Without this, "the banner worked" rests on `overwrite_text` having returned a non-zero count
+    // -- which only says our own loop ran, not that the game will find the characters. The two can
+    // disagree: the inline-vs-heap branch is chosen from `capacity`, so a wrong capacity or a
+    // moved offset writes somewhere real, returns a healthy count, and displays nothing. Reading
+    // `rawString` and `length` back is the cheapest thing that can actually catch it, because
+    // those are the exact two fields the UI consumes.
+    //
+    // It cannot prove PIXELS -- nothing in this process can -- but it moves the claim from "we
+    // called a function" to "the bytes the game will read are the bytes we meant", which is the
+    // strongest in-process oracle available for this surface.
+    let Some(verified) = read_back(menu_string, written) else {
+        release(menu_string);
+        REFUSALS.fetch_add(1, Ordering::SeqCst);
+        crate::standalone_log(format_args!(
+            "system-message: refusing to show \"{text}\" -- wrote {written} chars but the string \
+             did not read back through rawString/length, so the UI would not have found them"
+        ));
+        return false;
+    };
+
     unsafe { show_popup(menu_string) };
     release(menu_string);
-    MESSAGES_SHOWN.fetch_add(1, Ordering::SeqCst);
+    let count = MESSAGES_SHOWN.fetch_add(1, Ordering::SeqCst) + 1;
+    // Say so ONCE. A success that leaves no trace is indistinguishable from a silent failure in the
+    // log afterwards, and the first banner is the one that proves the path works; every later one
+    // is the same fact repeated. The counter is surfaced continuously on the heartbeat instead.
+    if count == 1 {
+        crate::standalone_log(format_args!(
+            "system-message: banner shown and verified -- read back \"{verified}\" from the \
+             game's own rawString/length after writing it"
+        ));
+    }
     true
+}
+
+/// Read a `MenuString` back through the two fields the UI consumes.
+///
+/// Returns the decoded text only when `rawString` is non-null and `length` matches what was just
+/// written; any disagreement means the write did not land where the game will look for it.
+#[cfg(windows)]
+fn read_back(menu_string: *mut u8, expected_len: usize) -> Option<String> {
+    let raw = unsafe { menu_string.add(RAW_STRING_OFFSET).cast::<usize>().read() };
+    let length = unsafe { menu_string.add(LENGTH_OFFSET).cast::<usize>().read() };
+    if raw == 0 || length != expected_len {
+        return None;
+    }
+    let mut units = Vec::with_capacity(length);
+    for index in 0..length {
+        units.push(unsafe { er_game_base::mem::safe_read_u16(raw + index * 2)? });
+    }
+    String::from_utf16(&units).ok()
 }
 
 #[cfg(test)]
@@ -265,6 +315,77 @@ mod tests {
     #[test]
     fn the_inline_threshold_is_the_games_own() {
         assert_eq!(INLINE_CAPACITY, 7);
+    }
+
+    /// Build a heap-backed `MenuString` the way the game's donor arrives, so the write path can be
+    /// exercised without a game attached. Returns the struct bytes and the buffer they point at.
+    fn donor(capacity: usize) -> (Vec<u8>, Box<[u16]>) {
+        assert!(
+            capacity > INLINE_CAPACITY,
+            "this donor models the HEAP case; capacity must exceed the inline threshold"
+        );
+        let mut buffer = vec![0u16; capacity].into_boxed_slice();
+        let mut storage = vec![0u8; MENU_STRING_SIZE];
+        let heap = buffer.as_mut_ptr() as usize;
+        storage[UNION_OFFSET..UNION_OFFSET + 8].copy_from_slice(&heap.to_ne_bytes());
+        storage[CAPACITY_OFFSET..CAPACITY_OFFSET + 8].copy_from_slice(&capacity.to_ne_bytes());
+        (storage, buffer)
+    }
+
+    fn field(storage: &[u8], offset: usize) -> usize {
+        usize::from_ne_bytes(storage[offset..offset + 8].try_into().expect("8 bytes"))
+    }
+
+    /// THE INVARIANT THE RUNTIME READ-BACK CHECKS, pinned on the host.
+    ///
+    /// `read_back` declares a banner shown only when `rawString` is non-null and `length` equals
+    /// what was written -- because those two fields are what the UI consumes. If `overwrite_text`
+    /// ever stops maintaining them, the runtime oracle starts refusing every banner and the cause
+    /// would be invisible without this test naming it.
+    #[test]
+    fn the_write_leaves_the_two_fields_the_ui_reads_agreeing() {
+        let (mut storage, buffer) = donor(64);
+        let written = overwrite_text(storage.as_mut_ptr(), "Rejected m60_42_36_00 (elsewhere)");
+        assert_eq!(written, 33, "every character fits in a 64-slot buffer");
+        assert_eq!(
+            field(&storage, LENGTH_OFFSET),
+            written,
+            "length must equal what was written, or the UI reads a different string than we wrote"
+        );
+        assert_eq!(
+            field(&storage, RAW_STRING_OFFSET),
+            buffer.as_ptr() as usize,
+            "rawString must point at the characters, not stay at whatever the donor held"
+        );
+        let decoded = String::from_utf16(&buffer[..written]).expect("valid utf-16");
+        assert_eq!(decoded, "Rejected m60_42_36_00 (elsewhere)");
+        assert_eq!(
+            buffer[written], 0,
+            "terminated inside the game's own buffer"
+        );
+    }
+
+    /// A message longer than the donor must be CLAMPED, never allowed to run off the allocation --
+    /// and the reported length must still describe what actually landed, or the read-back oracle
+    /// would reject a banner that displayed correctly.
+    #[test]
+    fn a_message_too_long_is_clamped_and_still_self_consistent() {
+        let (mut storage, buffer) = donor(16);
+        let written = overwrite_text(storage.as_mut_ptr(), &"x".repeat(200));
+        assert_eq!(
+            written, 15,
+            "capacity 16 leaves 15 characters plus a terminator"
+        );
+        assert_eq!(field(&storage, LENGTH_OFFSET), written);
+        assert_eq!(buffer[15], 0, "the terminator stays inside the allocation");
+    }
+
+    /// A donor that reports no capacity is not writable, and must be refused rather than written
+    /// through a null or stale pointer.
+    #[test]
+    fn a_donor_with_no_capacity_is_refused() {
+        let mut storage = vec![0u8; MENU_STRING_SIZE];
+        assert_eq!(overwrite_text(storage.as_mut_ptr(), "anything"), 0);
     }
 
     /// Prologues are what makes a moved function fail closed instead of crashing, so an empty or

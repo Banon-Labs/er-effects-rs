@@ -33,6 +33,7 @@ pub mod map_hooks;
 #[cfg(windows)]
 mod map_live_pins;
 pub mod map_seams;
+pub mod restart_backoff;
 mod seamless_probe;
 pub mod stall_watchdog;
 pub mod system_message;
