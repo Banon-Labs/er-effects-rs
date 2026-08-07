@@ -8,6 +8,17 @@ use std::sync::atomic::AtomicU64;
 
 static PROFILE_EDITOR_LAST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static PROFILE_EDITOR_STATUS_THROTTLE: AtomicU64 = AtomicU64::new(0);
+static PROFILE_EDITOR_NECROMANCY_POLL_TICKS: AtomicU64 = AtomicU64::new(0);
+static PROFILE_EDITOR_FIELD_TARGETS: OnceLock<Mutex<Vec<CachedProfileFieldTarget>>> =
+    OnceLock::new();
+
+#[derive(Clone)]
+struct CachedProfileFieldTarget {
+    field_name: String,
+    component: usize,
+    last_utf16: Vec<u16>,
+    active_surface: &'static str,
+}
 
 fn editor_dir() -> Option<PathBuf> {
     std::env::var_os("ER_PROFILE_05_010_EDITOR_DIR")
@@ -59,6 +70,163 @@ fn status_for(
         unsupported_count,
         error: error.into(),
     }
+}
+
+pub(crate) fn remember_profile_editor_field_target(
+    field_name_nul: &str,
+    component: usize,
+    utf16: &[u16],
+    active_surface: &'static str,
+) {
+    if editor_dir().is_none() || component == 0 || utf16.len() <= 1 {
+        return;
+    }
+    let field_name = field_name_nul
+        .strip_suffix('\0')
+        .unwrap_or(field_name_nul)
+        .to_owned();
+    if !er_gfx::profile_05_010_layout::FIELD_NAMES.contains(&field_name.as_str()) {
+        return;
+    }
+    let targets = PROFILE_EDITOR_FIELD_TARGETS.get_or_init(|| Mutex::new(Vec::new()));
+    let Ok(mut guard) = targets.lock() else {
+        return;
+    };
+    if let Some(target) = guard
+        .iter_mut()
+        .find(|target| target.field_name == field_name)
+    {
+        target.component = component;
+        target.last_utf16.clear();
+        target.last_utf16.extend_from_slice(utf16);
+        target.active_surface = active_surface;
+        return;
+    }
+    guard.push(CachedProfileFieldTarget {
+        field_name,
+        component,
+        last_utf16: utf16.to_vec(),
+        active_surface,
+    });
+}
+
+fn cached_profile_editor_field_utf16(field_name: &str) -> Option<Vec<u16>> {
+    PROFILE_EDITOR_FIELD_TARGETS
+        .get()
+        .and_then(|targets| targets.lock().ok())
+        .and_then(|targets| {
+            targets
+                .iter()
+                .find(|target| target.field_name == field_name)
+                .map(|target| target.last_utf16.clone())
+        })
+}
+
+fn live_player_name_utf16() -> Option<Vec<u16>> {
+    let name = crate::experiments::startup_hooks::loading_cover::build_loaded_char_name()?;
+    Some(name.encode_utf16().chain(core::iter::once(0)).collect())
+}
+
+fn utf16_status_preview(utf16: &[u16]) -> String {
+    let body = utf16.strip_suffix(&[0]).unwrap_or(utf16);
+    String::from_utf16(body)
+        .unwrap_or_else(|_| "<invalid-utf16>".to_owned())
+        .chars()
+        .take(80)
+        .collect()
+}
+
+/// Poll the live editor away from row-populate call stacks and re-animate the last known field
+/// component directly. The row-populate parent `SceneObjProxy` is a short-lived stack proxy, so using
+/// it after native teardown is a UAF trap. The component object returned by the field component's
+/// native GetValue path is the stable body we cache; every tick revalidates its vtable before using it.
+pub(crate) unsafe fn profile_editor_necromancy_tick(base: usize) {
+    let Some(dir) = editor_dir() else {
+        return;
+    };
+    let tick = PROFILE_EDITOR_NECROMANCY_POLL_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
+    if tick % 15 != 0 {
+        return;
+    }
+    let command = match read_command(&dir) {
+        Ok(Some(command)) => command,
+        Ok(None) => return,
+        Err(error) => {
+            write_status(
+                &dir,
+                ProfileEditorStatus {
+                    version: er_gfx::profile_05_010_protocol::PROTOCOL_VERSION,
+                    ack_sequence: PROFILE_EDITOR_LAST_SEQUENCE.load(Ordering::SeqCst),
+                    connected: true,
+                    status: "live-runtime-command-error".to_owned(),
+                    active_surface: "necromancy".to_owned(),
+                    selected_kind: String::new(),
+                    selected_name: String::new(),
+                    applied_count: 0,
+                    unsupported_count: 0,
+                    error,
+                },
+            );
+            return;
+        }
+    };
+    if command.render_mode != RenderMode::LiveRuntime {
+        return;
+    }
+    if PROFILE_EDITOR_LAST_SEQUENCE.load(Ordering::SeqCst) == command.sequence {
+        return;
+    }
+    if command.selected_kind != SelectedKind::Field {
+        write_status(
+            &dir,
+            status_for(
+                &command,
+                "necromancy",
+                0,
+                1,
+                "necromancy currently reanimates cached text fields only; row/list/chrome still need a live row-populate resolve",
+            ),
+        );
+        return;
+    }
+    let target = PROFILE_EDITOR_FIELD_TARGETS
+        .get()
+        .and_then(|targets| targets.lock().ok())
+        .and_then(|targets| {
+            targets
+                .iter()
+                .find(|target| target.field_name == command.selected_name)
+                .cloned()
+        });
+    let Some(target) = target else {
+        write_status(
+            &dir,
+            status_for(
+                &command,
+                "necromancy",
+                0,
+                1,
+                format!(
+                    "no cached live field component for {}; open/repopulate ProfileSelect once, then live edits can reanimate it without another row populate",
+                    command.selected_name
+                ),
+            ),
+        );
+        return;
+    };
+    let (applied, unsupported, detail) =
+        unsafe { apply_profile_editor_cached_field(base, &target, &command) };
+    PROFILE_EDITOR_LAST_SEQUENCE.store(command.sequence, Ordering::SeqCst);
+    write_status(
+        &dir,
+        status_for(
+            &command,
+            &format!("{}+necromancy", target.active_surface),
+            applied,
+            unsupported,
+            detail,
+        ),
+    );
 }
 
 /// Poll the editor control file from the trusted ProfileSelect row-populate hook and acknowledge
@@ -325,6 +493,14 @@ unsafe fn component_scaleform_value_for_setter(base: usize, proxy: usize) -> Res
     if comp == 0 || comp == null {
         return Err(format!("component pointer empty at 0x{component_slot:x}"));
     }
+    unsafe { scaleform_value_for_component(base, comp) }
+}
+
+unsafe fn scaleform_value_for_component(base: usize, comp: usize) -> Result<usize, String> {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if comp == 0 || comp == null {
+        return Err("component pointer empty".to_owned());
+    }
     let comp_vt = unsafe { safe_read_usize(comp) }.unwrap_or(0);
     let get_value = if comp_vt != 0 {
         unsafe { safe_read_usize(comp_vt + COMPONENT_GET_VALUE_VTABLE_SLOT_OFFSET) }.unwrap_or(0)
@@ -370,46 +546,93 @@ unsafe fn apply_profile_editor_field_probe(
     };
     match unsafe { resolve_row_child_proxy(base, row_proxy, field_name) } {
         Some((child_proxy, _component_slot)) => {
-            let cs_value = child_proxy + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET;
-            let live = unsafe { scaleform_value_setter_guard(base, cs_value) };
-            let (moved, error) = if live.is_ok() {
-                let moved = unsafe {
-                    set_scaleform_value_position(base, cs_value, field.x as f32, field.y as f32)
-                };
-                (moved, String::new())
-            } else {
-                (false, live.unwrap_err())
+            let embedded = child_proxy + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET;
+            let (cs_value, source, guard_note) = match unsafe {
+                component_scaleform_value_for_setter(base, child_proxy)
+            } {
+                Ok(component_value) => (component_value, "component-get-value", String::new()),
+                Err(component_error) => {
+                    match unsafe { scaleform_value_setter_guard(base, embedded) } {
+                        Ok(()) => (
+                            embedded,
+                            "embedded",
+                            format!("component value skipped: {component_error}; "),
+                        ),
+                        Err(embedded_error) => {
+                            let error = format!(
+                                "field {field_name} has no setter-ready value: component={component_error}; embedded={embedded_error}"
+                            );
+                            (embedded, "none", error)
+                        }
+                    }
+                }
             };
-            unsafe { destroy_resolved_row_child_proxy(base, child_proxy) };
-            let sample_text_pushed =
+            let mut field_name_nul = String::with_capacity(field_name.len() + 1);
+            field_name_nul.push_str(field_name);
+            field_name_nul.push('\0');
+            let (repush_source, repush_preview, repush_utf16) =
                 if command.text_probe && !field.sample_load_character.is_empty() {
                     let utf16: Vec<u16> = field
                         .sample_load_character
                         .encode_utf16()
                         .chain(core::iter::once(0))
                         .collect();
-                    let mut field_name_nul = String::with_capacity(field_name.len() + 1);
-                    field_name_nul.push_str(field_name);
-                    field_name_nul.push('\0');
+                    ("sample", utf16_status_preview(&utf16), Some(utf16))
+                } else {
+                    let real_utf16 = if field_name == "PlayerName" {
+                        live_player_name_utf16()
+                            .map(|text| ("live-pgd", text))
+                            .or_else(|| {
+                                cached_profile_editor_field_utf16(field_name)
+                                    .map(|text| ("cache", text))
+                            })
+                    } else {
+                        cached_profile_editor_field_utf16(field_name).map(|text| ("cache", text))
+                    };
+                    if let Some((source, utf16)) = real_utf16 {
+                        (source, utf16_status_preview(&utf16), Some(utf16))
+                    } else {
+                        ("none", String::new(), None)
+                    }
+                };
+            let (moved, text_repush, width_result, error) = if guard_note.is_empty()
+                || source != "none"
+            {
+                let moved = unsafe {
+                    set_scaleform_value_position(base, cs_value, field.x as f32, field.y as f32)
+                };
+                let text_repush = if let Some(utf16) = repush_utf16.as_ref() {
                     unsafe {
-                        crate::experiments::startup_hooks::loading_cover::push_stats_text_on_row(
+                        crate::experiments::startup_hooks::loading_cover::push_stats_text_on_resolved_field(
                             base,
-                            row_proxy,
+                            child_proxy,
                             &field_name_nul,
-                            &utf16,
+                            utf16,
                         )
                     }
                 } else {
                     false
                 };
-            let applied = moved as u32 + sample_text_pushed as u32;
-            let unsupported = if moved { 0 } else { 1 };
+                let width_result =
+                    unsafe { set_text_field_width_probe(base, cs_value, field.width) };
+                (moved, text_repush, width_result, guard_note)
+            } else {
+                (false, false, Err(guard_note.clone()), guard_note)
+            };
+            unsafe { destroy_resolved_row_child_proxy(base, child_proxy) };
+            let width_detail = match &width_result {
+                Ok(detail) => detail.clone(),
+                Err(e) => e.clone(),
+            };
+            let width_applied = width_result.is_ok();
+            let applied = moved as u32 + width_applied as u32 + text_repush as u32;
+            let unsupported = (!moved) as u32 + (!width_applied) as u32;
             (
                 applied,
                 unsupported,
                 if error.is_empty() {
                     format!(
-                        "field {field_name} live x/y probe moved={moved} text_probe={} sample_text_pushed={sample_text_pushed}; width/font/align/static text definition remain asset-level hot-reload controls",
+                        "field {field_name} live x/y moved={moved}; width_probe={width_applied} ({width_detail}); text_probe={} text_repush={text_repush} source={repush_source} preview={repush_preview:?}; font/align hot-reload through native SetText-owned text",
                         command.text_probe
                     )
                 } else {
@@ -423,6 +646,68 @@ unsafe fn apply_profile_editor_field_probe(
             format!("field {field_name} did not resolve on row_proxy=0x{row_proxy:x}"),
         ),
     }
+}
+
+unsafe fn apply_profile_editor_cached_field(
+    base: usize,
+    target: &CachedProfileFieldTarget,
+    command: &ProfileEditorCommand,
+) -> (u32, u32, String) {
+    let Some(field) = command.layout.fields.get(target.field_name.as_str()) else {
+        return (
+            0,
+            1,
+            format!("missing cached field layout {}", target.field_name),
+        );
+    };
+    let cs_value = match unsafe { scaleform_value_for_component(base, target.component) } {
+        Ok(value) => value,
+        Err(error) => {
+            return (
+                0,
+                1,
+                format!(
+                    "cached field {} component is no longer live: {error}",
+                    target.field_name
+                ),
+            );
+        }
+    };
+    let moved = unsafe { set_scaleform_value_position(base, cs_value, field.x, field.y) };
+    let mut component_slot = target.component;
+    let settext: unsafe extern "system" fn(usize, usize) =
+        unsafe { std::mem::transmute(base + PROFILE_SETTEXT_RVA) };
+    let mut field_name_nul = String::with_capacity(target.field_name.len() + 1);
+    field_name_nul.push_str(&target.field_name);
+    field_name_nul.push('\0');
+    let live_text =
+        crate::experiments::startup_hooks::loading_cover::profile_editor_live_text_for_field(
+            &field_name_nul,
+            &target.last_utf16,
+        );
+    unsafe {
+        settext(
+            (&mut component_slot as *mut usize) as usize,
+            live_text.as_ptr() as usize,
+        )
+    };
+    let text_pushed = true;
+    let width_result = unsafe { set_text_field_width_probe(base, cs_value, field.width) };
+    let width_applied = width_result.is_ok();
+    let width_detail = width_result
+        .as_ref()
+        .map(|detail| detail.as_str())
+        .unwrap_or_else(|error| error.as_str());
+    let applied = moved as u32 + width_applied as u32 + text_pushed as u32;
+    let unsupported = (!moved) as u32 + (!width_applied) as u32 + (!text_pushed) as u32;
+    (
+        applied,
+        unsupported,
+        format!(
+            "necromancy cached field {} component=0x{:x}: moved={moved}; width_probe={width_applied} ({width_detail}); text_repush={text_pushed}; no row-populate required",
+            target.field_name, target.component
+        ),
+    )
 }
 
 unsafe fn resolve_row_child_proxy(
@@ -514,6 +799,92 @@ unsafe fn scaleform_value_setter_guard(base: usize, cs_value: usize) -> Result<(
         ));
     }
     Ok(())
+}
+
+unsafe fn set_text_field_width_probe(
+    base: usize,
+    cs_value: usize,
+    width_px: i32,
+) -> Result<String, String> {
+    if !(1..=2000).contains(&width_px) {
+        return Err(format!(
+            "width {width_px} outside guarded live probe range 1..=2000"
+        ));
+    }
+    let handle = unsafe { safe_read_usize(cs_value + CSSCALEFORMVALUE_HANDLE_OFFSET) }.unwrap_or(0);
+    if handle == 0 || handle == TITLE_OWNER_SCAN_START_ADDRESS {
+        return Err(format!("CSScaleformValue handle empty at 0x{cs_value:x}"));
+    }
+    let text_object =
+        unsafe { safe_read_usize(handle + GFX_VALUE_TEXT_OBJECT_OFFSET) }.unwrap_or(0);
+    if text_object == 0 || text_object == TITLE_OWNER_SCAN_START_ADDRESS {
+        return Err(format!(
+            "GFx value at 0x{handle:x} has no text object at +0x{GFX_VALUE_TEXT_OBJECT_OFFSET:x}"
+        ));
+    }
+    let text_vt = unsafe { safe_read_usize(text_object) }.unwrap_or(0);
+    let kind_fn = if text_vt != 0 {
+        unsafe { safe_read_usize(text_vt + GFX_TEXT_OBJECT_KIND_VTABLE_SLOT) }.unwrap_or(0)
+    } else {
+        0
+    };
+    if text_vt == 0 || !vtable_in_game_image(text_vt, base) {
+        return Err(format!(
+            "text object vt invalid object=0x{text_object:x} vt=0x{text_vt:x}"
+        ));
+    }
+    if kind_fn == 0 || !vtable_in_game_image(kind_fn, base) {
+        return Err(format!(
+            "text object kind function invalid object=0x{text_object:x} vt=0x{text_vt:x} kind=0x{kind_fn:x}"
+        ));
+    }
+    let kind: unsafe extern "system" fn(usize) -> i32 = unsafe { std::mem::transmute(kind_fn) };
+    let kind = unsafe { kind(text_object) };
+    if kind != GFX_TEXT_OBJECT_KIND_TEXT_FIELD {
+        return Err(format!(
+            "GFx object at 0x{text_object:x} is kind {kind}, not text-field kind {GFX_TEXT_OBJECT_KIND_TEXT_FIELD}"
+        ));
+    }
+    let text_doc =
+        unsafe { safe_read_usize(text_object + GFX_TEXT_OBJECT_TEXT_DOC_OFFSET) }.unwrap_or(0);
+    if text_doc == 0 || text_doc == TITLE_OWNER_SCAN_START_ADDRESS {
+        return Err(format!(
+            "text object at 0x{text_object:x} has no text document at +0x{GFX_TEXT_OBJECT_TEXT_DOC_OFFSET:x}"
+        ));
+    }
+    let left = unsafe { safe_read_f32(text_doc + GFX_TEXT_DOC_SOURCE_LEFT_OFFSET) }
+        .ok_or_else(|| format!("text doc source left unreadable at 0x{text_doc:x}"))?;
+    let old_right = unsafe { safe_read_f32(text_doc + GFX_TEXT_DOC_SOURCE_RIGHT_OFFSET) }
+        .ok_or_else(|| format!("text doc source right unreadable at 0x{text_doc:x}"))?;
+    let old_layout_left =
+        unsafe { safe_read_f32(text_doc + GFX_TEXT_DOC_LAYOUT_LEFT_OFFSET) }.unwrap_or(f32::NAN);
+    let old_layout_right =
+        unsafe { safe_read_f32(text_doc + GFX_TEXT_DOC_LAYOUT_RIGHT_OFFSET) }.unwrap_or(f32::NAN);
+    if !left.is_finite() || !old_right.is_finite() {
+        return Err(format!(
+            "text doc bounds are not finite: left={left} right={old_right} doc=0x{text_doc:x}"
+        ));
+    }
+    let new_right = left + width_px as f32;
+    unsafe {
+        ((text_doc + GFX_TEXT_DOC_SOURCE_RIGHT_OFFSET) as *mut f32).write_unaligned(new_right);
+    }
+    let reflow: unsafe extern "system" fn(usize) =
+        unsafe { std::mem::transmute(base + GFX_TEXT_DOC_REFLOW_RVA) };
+    unsafe { reflow(text_doc) };
+    let new_layout_left =
+        unsafe { safe_read_f32(text_doc + GFX_TEXT_DOC_LAYOUT_LEFT_OFFSET) }.unwrap_or(f32::NAN);
+    let new_layout_right =
+        unsafe { safe_read_f32(text_doc + GFX_TEXT_DOC_LAYOUT_RIGHT_OFFSET) }.unwrap_or(f32::NAN);
+    let layout_record_count =
+        unsafe { safe_read_usize(text_doc + GFX_TEXT_DOC_LAYOUT_RECORD_COUNT_OFFSET) }.unwrap_or(0);
+    let content_width =
+        unsafe { safe_read_i32(text_doc + GFX_TEXT_DOC_CONTENT_WIDTH_OFFSET) }.unwrap_or(-1);
+    let content_height =
+        unsafe { safe_read_i32(text_doc + GFX_TEXT_DOC_CONTENT_HEIGHT_OFFSET) }.unwrap_or(-1);
+    Ok(format!(
+        "doc=0x{text_doc:x} source_right {old_right:.2}->{new_right:.2} layout [{old_layout_left:.2},{old_layout_right:.2}]->[{new_layout_left:.2},{new_layout_right:.2}] render_layout records={layout_record_count} content={content_width}x{content_height}px"
+    ))
 }
 
 unsafe fn set_scaleform_value_position(base: usize, cs_value: usize, x: f32, y: f32) -> bool {

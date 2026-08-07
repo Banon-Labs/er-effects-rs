@@ -135,6 +135,11 @@ impl ProfileEditorCommand {
             );
             push_kv(
                 &mut out,
+                &format!("field.{name}.clip_height"),
+                &field.clip_height.to_string(),
+            );
+            push_kv(
+                &mut out,
                 &format!("field.{name}.font_height"),
                 &field.font_height.to_string(),
             );
@@ -222,9 +227,10 @@ impl ProfileEditorCommand {
                     .field_mut(name)
                     .map_err(|_| ProtocolError::UnknownKey(key.clone()))?;
                 match prop {
-                    "x" => field.x = parse_i32(value, key)?,
-                    "y" => field.y = parse_i32(value, key)?,
+                    "x" => field.x = parse_f32(value, key)?,
+                    "y" => field.y = parse_f32(value, key)?,
                     "width" => field.width = parse_i32(value, key)?,
+                    "clip_height" => field.clip_height = parse_i32(value, key)?,
                     "font_height" => field.font_height = parse_i32(value, key)?,
                     "align" => {
                         field.align = match value.as_str() {
@@ -485,7 +491,7 @@ mod tests {
     #[test]
     fn command_round_trips_layout_and_selected_object() {
         let mut layout = Profile05_010Layout::default();
-        layout.field_mut("PlayerName").unwrap().x = -512;
+        layout.field_mut("PlayerName").unwrap().x = -512.25;
         layout.row_chrome.cursor.scale_y = 0.375;
         let command = ProfileEditorCommand::from_layout(
             7,
@@ -499,7 +505,7 @@ mod tests {
         assert_eq!(parsed.render_mode, RenderMode::LiveRuntime);
         assert_eq!(parsed.selected_kind, SelectedKind::Chrome);
         assert_eq!(parsed.selected_name, "cursor");
-        assert_eq!(parsed.layout.field("PlayerName").x, -512);
+        assert_eq!(parsed.layout.field("PlayerName").x, -512.25);
         assert_eq!(parsed.layout.row_chrome.cursor.scale_y, 0.375);
     }
 

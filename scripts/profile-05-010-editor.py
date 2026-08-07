@@ -115,13 +115,14 @@ def validate_data(data, selected=None):
         errors.append("row_chrome set must exactly match the known row chrome objects")
     for name in FIELD_NAMES:
         field = data.get("fields", {}).get(name, {})
-        for key in ["x", "y", "width", "font_height", "align"]:
+        for key in ["x", "y", "width", "clip_height", "font_height", "align"]:
             if key not in field:
                 errors.append(f"field.{name}.{key} is missing")
         try:
             x = float(field.get("x", 0))
             y = float(field.get("y", 0))
             width = int(field.get("width", 0))
+            clip_height = int(field.get("clip_height", 0))
             font_height = int(field.get("font_height", 0))
         except (TypeError, ValueError):
             errors.append(f"field.{name} has non-numeric geometry")
@@ -130,6 +131,10 @@ def validate_data(data, selected=None):
             errors.append(f"field.{name} position is outside the safe editor range (+/-{MAX_ABS_POSITION_PX}px)")
         if not (0 < width <= MAX_TEXT_FIELD_WIDTH_PX):
             errors.append(f"field.{name}.width must be 1..{MAX_TEXT_FIELD_WIDTH_PX}px")
+        if not (0 < clip_height <= MAX_TEXT_FIELD_FONT_HEIGHT_PX * 2):
+            errors.append(f"field.{name}.clip_height must be 1..{MAX_TEXT_FIELD_FONT_HEIGHT_PX * 2}px")
+        if font_height > clip_height:
+            errors.append(f"field.{name}.font_height must not exceed clip_height")
         if not (0 < font_height <= MAX_TEXT_FIELD_FONT_HEIGHT_PX):
             errors.append(f"field.{name}.font_height must be 1..{MAX_TEXT_FIELD_FONT_HEIGHT_PX}px")
         if field.get("align") not in VALID_ALIGNMENTS:
@@ -189,7 +194,7 @@ def write_schema(data, path: Path = SCHEMA):
     for name in FIELD_NAMES:
         f = data["fields"][name]
         lines.append(f"[field.{name}]")
-        for key in ["x", "y", "width", "font_height", "align", "sample_load_character", "sample_save_picker", "sample_drive_row"]:
+        for key in ["x", "y", "width", "clip_height", "font_height", "align", "sample_load_character", "sample_save_picker", "sample_drive_row"]:
             lines.append(f"{key} = {quote_value(f.get(key, ''))}")
         lines.append("")
     for name in CHROME_NAMES:
@@ -230,7 +235,7 @@ def write_runtime_control(payload):
         lines.append(f"text_probe = {quote_control(True)}")
     for name in FIELD_NAMES:
         field = data["fields"][name]
-        for key in ["x", "y", "width", "font_height", "align"]:
+        for key in ["x", "y", "width", "clip_height", "font_height", "align"]:
             lines.append(f"field.{name}.{key} = {quote_control(field[key])}")
     for name in CHROME_NAMES:
         obj = data["row_chrome"][name]
@@ -288,7 +293,7 @@ def protocol_lines(data, sequence: int, render_mode: str, selected: dict, text_p
         lines.append(f"text_probe = {protocol_quote(True)}")
     for name in FIELD_NAMES:
         f = data["fields"][name]
-        for key in ["x", "y", "width", "font_height", "align"]:
+        for key in ["x", "y", "width", "clip_height", "font_height", "align"]:
             lines.append(f"field.{name}.{key} = {protocol_quote(f[key])}")
     for name in CHROME_NAMES:
         c = data["row_chrome"][name]
@@ -358,8 +363,28 @@ def start_rebuild():
         return
     def run():
         rebuild_state.update({"running": True, "returncode": None, "output": ""})
-        proc = subprocess.run([str(REBUILD), "--hot-reload"], cwd=REPO, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        rebuild_state.update({"running": False, "returncode": proc.returncode, "output": proc.stdout[-20000:]})
+        try:
+            proc = subprocess.run(
+                [str(REBUILD), "--hot-reload"],
+                cwd=REPO,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=30,
+            )
+            rebuild_state.update(
+                {"running": False, "returncode": proc.returncode, "output": proc.stdout[-20000:]}
+            )
+        except subprocess.TimeoutExpired as exc:
+            output = exc.stdout or ""
+            rebuild_state.update(
+                {
+                    "running": False,
+                    "returncode": 124,
+                    "output": (output + "\nhot reload timed out after 30s")[-20000:],
+                }
+            )
+
     threading.Thread(target=run, daemon=True).start()
 
 
@@ -384,7 +409,11 @@ svg { width:100%; height:calc(100vh - 70px); background:#080808; border:1px soli
 .chrome { fill:#d6922933; stroke:#ffbd5a; stroke-width:1; cursor:move; }
 .readonly { fill:#7773; stroke:#aaa; stroke-dasharray:4 3; }
 .ink { fill:#99ff6640; stroke:#99ff66; stroke-width:.6; pointer-events:none; }
+.clip { fill:#ff2fb211; stroke:#ff5ccf; stroke-width:1.25; stroke-dasharray:6 3; pointer-events:none; }
+.clip.selected { stroke:#fff; stroke-width:2; stroke-dasharray:none; }
+.clipEdge { stroke:#ff5ccf; stroke-width:.8; stroke-dasharray:2 3; pointer-events:none; }
 .label { fill:#ddd; font: 12px monospace; pointer-events:none; }
+.clipLabel { fill:#ff9de3; font: 10px monospace; pointer-events:none; }
 .rowline { stroke:#333; stroke-width:.5; }
 </style>
 <body>
@@ -397,9 +426,12 @@ svg { width:100%; height:calc(100vh - 70px); background:#080808; border:1px soli
     <button class="primary" id="saveBtn">save schema</button>
     <button id="rebuildBtn">hot rebuild GFX</button>
     <button id="probeTextBtn">probe selected text</button>
+    <button id="charStatsSafeBtn">safe larger Character Stats</button>
     <button id="reloadBtn">reload</button>
   </div>
   <label>sample mode <select id="mode"><option>load_character</option><option>save_picker</option><option>drive_row</option></select></label>
+  <label><input type="checkbox" id="showClips" checked> show text clipping masks</label>
+  <label><input type="checkbox" id="clipPreview" checked> clip approximate text to masks</label>
   <div class="tree" id="tree"></div>
 </aside>
 <section>
@@ -409,6 +441,8 @@ svg { width:100%; height:calc(100vh - 70px); background:#080808; border:1px soli
 <aside>
   <h3 id="title">select object</h3>
   <div id="editor"></div>
+  <h3>Layout health</h3>
+  <pre id="layoutHealth">not checked</pre>
   <h3>Runtime bridge status</h3>
   <pre id="runtimeStatus">disconnected</pre>
   <h3>Rebuild output</h3>
@@ -421,6 +455,8 @@ let data=null, selected={kind:'field', name:'PlayerName'}, drag=null, runtimeSta
 const fields = %FIELDS%;
 const chromeObjects = %CHROME%;
 const paths = %PATHS%;
+const FIELD_CLIP_LOCAL = { ErCharStats:{x:-35,y:-2}, default:{x:-2,y:-2} };
+const TEXT_LAYOUT_INSET_PX = 40;
 document.getElementById('paths').textContent = JSON.stringify(paths, null, 2);
 async function load(){ data = await (await fetch('/schema')).json(); renderTree(); renderEditor(); draw(); }
 function showError(err){ const msg=(err&&err.stack)||String(err); document.getElementById('log').textContent='EDITOR JS ERROR\n'+msg; console.error(err); }
@@ -430,7 +466,11 @@ function renderTree(){ const t=document.getElementById('tree'); t.innerHTML=''; 
 function getObj(){ if(selected.kind=='field') return data.fields[selected.name]; if(selected.kind=='chrome') return data.row_chrome[selected.name]; return data.list; }
 function numberInput(obj,k,step=1){ return `<label>${k}</label><input type="number" step="${step}" value="${obj[k]}" onchange="setVal('${k}', this.value)">`; }
 function textInput(obj,k){ return `<label>${k}</label><input value="${String(obj[k]??'').replaceAll('&','&amp;').replaceAll('"','&quot;')}" onchange="setText('${k}', this.value)">`; }
-function renderEditor(){ const o=getObj(), e=document.getElementById('editor'); document.getElementById('title').textContent=selected.kind+': '+selected.name; let h='<div class="grid">'; if(selected.kind=='field'){ for(const k of ['x','y']) h+=numberInput(o,k,1); h+=`<div></div><div class="ok">x/y nudges are the live-safe field operation. They do not touch text box width or live text scale.</div>`; for(const k of ['width','font_height']) h+=numberInput(o,k,1); h+=`<label>align</label><select onchange="setText('align',this.value)">${['left','center','right'].map(a=>`<option ${o.align==a?'selected':''}>${a}</option>`).join('')}</select>`; h+=`<div></div><div class="warn">width/font/align are asset-level controls only. They rebuild GFX and need a fresh movie/load to prove.</div>`; for(const k of ['sample_load_character','sample_save_picker','sample_drive_row']) h+=textInput(o,k); }
+function fieldClipOffset(name){ return FIELD_CLIP_LOCAL[name] || FIELD_CLIP_LOCAL.default; }
+function fieldClip(f,name=selected.name){ const off=fieldClipOffset(name); const left=Number(f.x)+off.x, top=Number(f.y)+off.y, width=Number(f.width), height=Number(f.clip_height||40); return {left,top,width,height,right:left+width,bottom:top+height,off}; }
+function fieldTextArea(f,name=selected.name){ const clip=fieldClip(f,name); const inset=Math.min(TEXT_LAYOUT_INSET_PX, Math.max(0, clip.width/2-1)); return {...clip, left:clip.left+inset, right:clip.right-inset, width:Math.max(1, clip.width-inset*2), inset}; }
+function setClipRight(v){ const o=getObj(); const clip=fieldClip(o, selected.name); o.width=Math.max(1, Math.round((Number(v)-clip.left)*100)/100); renderEditor(); draw(); }
+function renderEditor(){ const o=getObj(), e=document.getElementById('editor'); document.getElementById('title').textContent=selected.kind+': '+selected.name; let h='<div class="grid">'; if(selected.kind=='field'){ const clip=fieldClip(o, selected.name); const right=Math.round(clip.right*100)/100; const sample=sampleFor(o)||selected.name; const estimated=Math.ceil(estimateTextWidth(sample, o.font_height)); for(const k of ['x','y']) h+=numberInput(o,k,0.25); h+=`<label>actual clip right</label><input type="number" step="0.25" value="${right}" onchange="setClipRight(this.value)">`; h+=`<label>estimated sample width</label><output>${estimated}px</output>`; h+=`<label>runtime usable width</label><output>${Math.max(1, Math.round((clip.width-TEXT_LAYOUT_INSET_PX*2)*100)/100)}px</output>`; h+=`<div></div><div class="ok">The magenta mask uses the real SWF DefineEditText local bounds: ${clip.off.x}px/${clip.off.y}px from placement. The cyan box is Scaleform's observed TextDoc layout area, about ${TEXT_LAYOUT_INSET_PX}px inset on each side; text must fit cyan, not just magenta.</div>`; for(const k of ['width','clip_height','font_height']) h+=numberInput(o,k,1); h+=`<label>align</label><select onchange="setText('align',this.value)">${['left','center','right'].map(a=>`<option ${o.align==a?'selected':''}>${a}</option>`).join('')}</select>`; h+=`<div>clip width</div><div class="controls"><button onclick="padWidth(-20)">-20</button><button onclick="padWidth(-5)">-5</button><button onclick="padWidth(5)">+5</button><button onclick="padWidth(20)">+20</button><button onclick="fitWidthToSample(24)">fit sample +24</button></div>`; h+=`<div>clip height</div><div class="controls"><button onclick="padClipHeight(-4)">-4</button><button onclick="padClipHeight(4)">+4</button><button onclick="padClipHeight(10)">+10</button><button onclick="fitClipHeightToFont(10)">fit font +10</button></div>`; h+=`<div></div><div class="warn">Width is the GFX DefineEditText bounds. Live width is experimental; rebuild/reload is the honest path if status rejects the live probe.</div>`; if(selected.name=='PlayerName') h+=`<div>Player name</div><div class="controls"><button onclick="playerNameWideFit()">name wide fit</button><button onclick="fitWidthToSample(80)">fit current sample +80</button></div><div></div><div class="warn">If the in-game name still shows only a prefix after this mask is wide, the remaining bug is runtime text payload/source, not this field's GFX bounds.</div>`; if(selected.name=='ErCharStats') h+=`<div>Character Stats</div><div class="controls"><button onclick="charStatsSafeFit()">safe larger fit (17px)</button><button onclick="charStatsCompact16()">compact 16 fallback</button><button onclick="charStatsFont16()">font 16 only</button><button onclick="charStatsExperimental18()">experimental 18px</button><button onclick="charStatsWideProbe()">try width 600 live probe</button></div><div></div><div class="warn">Safe larger fit sets x=-185, y=-14, width=470, clip_height=42, font_height=17 and passed full offline overlap/clip tests. Width 600 is experimental live necromancy; if status says width_probe=false, it will not fix clipping until a rebuild/reload.</div>`; for(const k of ['sample_load_character','sample_save_picker','sample_drive_row']) h+=textInput(o,k); }
 else if(selected.kind=='chrome'){ for(const k of ['x','y','scale_x','scale_y']) h+=numberInput(o,k,k.startsWith('scale')?0.001:0.1); h+=`<label>editable</label><input type="checkbox" ${o.editable?'checked':''} onchange="setBool('editable',this.checked)">`; if(selected.name=='backing') h+=`<div></div><div class="ok">normal non-highlighted row rectangle: live transform via named Backing when connected</div>`; if(selected.name=='cursor') h+=`<div></div><div class="ok">outer highlighted-row wrapper: live transform when connected; use cursor_body for visible highlight-panel height</div>`; if(selected.name=='cursor_body') h+=`<div></div><div class="ok">inner highlighted-row body: live transform via Cursor/CursorBody when connected</div>`; h+=textInput(o,'source'); }
 else { for(const k of ['row_pitch','visible_rows','top_recycle_rows','bottom_recycle_rows','mask_height','scrollbar_x','scrollbar_top_y','scrollbar_track_height']) h+=numberInput(o,k,1); }
  h+='</div><div class="controls"><button onclick="nudge(-1,0)">← 1</button><button onclick="nudge(1,0)">→ 1</button><button onclick="nudge(0,-1)">↑ 1</button><button onclick="nudge(0,1)">↓ 1</button><button onclick="nudge(-5,0)">← 5</button><button onclick="nudge(5,0)">→ 5</button><button onclick="nudge(0,-5)">↑ 5</button><button onclick="nudge(0,5)">↓ 5</button></div>'; e.innerHTML=h; }
@@ -438,10 +478,28 @@ function setVal(k,v){ getObj()[k]=Number(v); renderEditor(); draw(); }
 function setText(k,v){ getObj()[k]=v; renderEditor(); draw(); }
 function setBool(k,v){ getObj()[k]=v; renderEditor(); draw(); }
 function nudge(dx,dy){ const o=getObj(); if('x' in o) o.x+=dx; if('y' in o) o.y+=dy; renderEditor(); draw(); }
+function padWidth(delta){ const o=getObj(); if('width' in o) o.width=Math.max(1, Math.round(Number(o.width)+delta)); renderEditor(); draw(); }
+function padClipHeight(delta){ const o=getObj(); if('clip_height' in o) o.clip_height=Math.max(1, Math.round(Number(o.clip_height)+delta)); renderEditor(); draw(); }
+function fitClipHeightToFont(pad=10){ const o=getObj(); if('clip_height' in o) o.clip_height=Math.max(1, Math.ceil(Number(o.font_height||16)+pad)); renderEditor(); draw(); }
+function estimateTextWidth(text, fontHeight){ const plain=String(text||'').replace(/<[^>]*>/g,''); let w=0; for(const ch of plain){ w += /[ilI1|.,:;']/u.test(ch) ? 0.28 : /[MW@#]/u.test(ch) ? 0.85 : /\s/u.test(ch) ? 0.33 : 0.56; } return w * Number(fontHeight||16); }
+function fitWidthToSample(pad=24){ const o=getObj(); o.width=Math.max(1, Math.ceil(estimateTextWidth(sampleFor(o)||selected.name, o.font_height)+pad+(TEXT_LAYOUT_INSET_PX*2))); renderEditor(); draw(); }
+function selectCharStats(){ selected={kind:'field', name:'ErCharStats'}; renderTree(); renderEditor(); draw(); }
+function selectPlayerName(){ selected={kind:'field', name:'PlayerName'}; renderTree(); renderEditor(); draw(); }
+function charStatsSafeFit(){ const f=data.fields.ErCharStats; Object.assign(f,{x:-185,y:-14,width:470,clip_height:42,font_height:17,align:'center'}); selectCharStats(); save(); }
+function charStatsExperimental18(){ const f=data.fields.ErCharStats; Object.assign(f,{x:-240,y:-14,width:530,clip_height:46,font_height:18,align:'center'}); selectCharStats(); save(); }
+function charStatsCompact16(){ const f=data.fields.ErCharStats; Object.assign(f,{x:-161,y:-14,width:425,clip_height:40,font_height:16,align:'center'}); selectCharStats(); save(); }
+function charStatsFont16(){ data.fields.ErCharStats.font_height=16; selectCharStats(); save(); }
+function charStatsWideProbe(){ Object.assign(data.fields.ErCharStats,{width:600,clip_height:50}); selectCharStats(); save(); }
+function playerNameWideFit(){ const f=data.fields.PlayerName; Object.assign(f,{x:-518,width:1120,clip_height:44,font_height:24,align:'left'}); selectPlayerName(); save(); }
 function sampleFor(f){ const m=document.getElementById('mode').value; return f['sample_'+m] || ''; }
+function clipHeight(f){ return Number(f.clip_height||40); }
+function clipTop(f){ return Number(f.y); }
+function renderedTextRect(name,f){ const text=sampleFor(f); if(!text) return null; const clip=fieldClip(f,name), area=fieldTextArea(f,name); const w=Math.ceil(estimateTextWidth(text, f.font_height)); let left=area.left; if(f.align=='right') left=area.right-w; else if(f.align=='center') left=area.left+(area.width-w)/2; const top=clip.top; return {name,left,right:left+w,top,bottom:top+Number(f.font_height||16),clipLeft:area.left,clipRight:area.right,clipTop:clip.top,clipBottom:clip.bottom,text}; }
+function layoutHealth(){ const rects=Object.entries(data.fields).map(([n,f])=>renderedTextRect(n,f)).filter(Boolean); const notes=[]; for(const r of rects){ if(r.left<r.clipLeft || r.right>r.clipRight || r.top<r.clipTop || r.bottom>r.clipBottom) notes.push(`CLIP ${r.name}: text ${Math.round(r.left)}..${Math.round(r.right)} x ${Math.round(r.top)}..${Math.round(r.bottom)} outside mask ${Math.round(r.clipLeft)}..${Math.round(r.clipRight)} x ${Math.round(r.clipTop)}..${Math.round(r.clipBottom)}`); } for(let i=0;i<rects.length;i++) for(let j=i+1;j<rects.length;j++){ const a=rects[i], b=rects[j], gutter=4; const overlap=!(a.right+gutter<=b.left || b.right+gutter<=a.left || a.bottom+gutter<=b.top || b.bottom+gutter<=a.top); if(overlap) notes.push(`OVERLAP ${a.name} vs ${b.name}`); } document.getElementById('layoutHealth').textContent = notes.length ? notes.join('\n') : 'ok: approximate samples fit their masks and do not overlap'; }
 function add(tag, attrs, parent=document.getElementById('canvas')){ const el=document.createElementNS('http://www.w3.org/2000/svg',tag); for(const [k,v] of Object.entries(attrs)) el.setAttribute(k,v); parent.appendChild(el); return el; }
-function draw(){ const svg=document.getElementById('canvas'); svg.innerHTML=''; const rowPitch=data.list.row_pitch, half=data.list.mask_height/2; for(let y=-half;y<=half;y+=rowPitch) add('line',{x1:-620,x2:640,y1:y,y2:y,class:'rowline'}); add('rect',{x:-620,y:-half,width:1260,height:data.list.mask_height,fill:'none',stroke:'#777','stroke-dasharray':'6 4'}); add('rect',{x:data.list.scrollbar_x,y:data.list.scrollbar_top_y,width:10,height:data.list.scrollbar_track_height,fill:'#8884',stroke:'#aaa'});
- for(const [name,f] of Object.entries(data.fields)){ const sel=selected.kind=='field'&&selected.name==name; const r=add('rect',{x:f.x-2,y:f.y-2,width:f.width,height:40,class:'field',stroke:sel?'#fff':'#6ca0ff','stroke-width':sel?2:1}); bindDrag(r,'field',name); add('text',{x:f.x,y:f.y+f.font_height,class:'label'},svg).textContent=sampleFor(f)||name; add('text',{x:f.x,y:f.y-5,class:'label'},svg).textContent=name; }
+function draw(){ layoutHealth(); const svg=document.getElementById('canvas'); svg.innerHTML=''; const rowPitch=data.list.row_pitch, half=data.list.mask_height/2, showClips=document.getElementById('showClips').checked, clipPreview=document.getElementById('clipPreview').checked; const defs=add('defs',{},svg); for(let y=-half;y<=half;y+=rowPitch) add('line',{x1:-620,x2:640,y1:y,y2:y,class:'rowline'}); add('rect',{x:-620,y:-half,width:1260,height:data.list.mask_height,fill:'none',stroke:'#777','stroke-dasharray':'6 4'}); add('rect',{x:data.list.scrollbar_x,y:data.list.scrollbar_top_y,width:10,height:data.list.scrollbar_track_height,fill:'#8884',stroke:'#aaa'});
+ for(const [name,f] of Object.entries(data.fields)){ const sel=selected.kind=='field'&&selected.name==name; const clip=fieldClip(f,name), clipId='clip_'+name.replace(/[^A-Za-z0-9_-]/g,'_'); const cp=add('clipPath',{id:clipId},defs); add('rect',{x:clip.left,y:clip.top,width:clip.width,height:clip.height},cp); const r=add('rect',{x:clip.left,y:clip.top,width:clip.width,height:clip.height,class:showClips?('clip '+(sel?'selected':'')):'field',stroke:sel?'#fff':'#6ca0ff','stroke-width':sel?2:1}); bindDrag(r,'field',name); const area=fieldTextArea(f,name); if(showClips){ add('rect',{x:area.left,y:area.top,width:area.width,height:area.height,fill:'#42e8ff10',stroke:'#42e8ff','stroke-width':.8,'stroke-dasharray':'3 2'}); add('line',{x1:clip.right,x2:clip.right,y1:-half,y2:half,class:'clipEdge'}); add('text',{x:clip.left,y:clip.top-5,class:'clipLabel'},svg).textContent=`${name} clip l=${Math.round(clip.left*100)/100} w=${f.width} r=${Math.round(clip.right*100)/100} usable=${Math.round(area.width*100)/100}`; }
+ const g=add('g',clipPreview?{'clip-path':`url(#${clipId})`}:{}); const textX=f.align=='right'?area.right:f.align=='center'?area.left+area.width/2:area.left; add('text',{x:textX,y:clip.top+Number(f.font_height||16),class:'label','font-size':Math.max(10,f.font_height),'text-anchor':f.align=='right'?'end':f.align=='center'?'middle':'start'},g).textContent=sampleFor(f)||name; if(!showClips) add('text',{x:clip.left,y:clip.top-5,class:'label'},svg).textContent=name; }
  const backing=data.row_chrome.backing; const bx=backing.x-19.1*backing.scale_x, by=backing.y-19.4*backing.scale_y, bw=39*backing.scale_x, bh=37.5*backing.scale_y; let r=add('rect',{x:bx,y:by,width:bw,height:bh,class:'chrome',stroke:selected.kind=='chrome'&&selected.name=='backing'?'#fff':'#ffbd5a','stroke-width':selected.kind=='chrome'&&selected.name=='backing'?2:1}); bindDrag(r,'chrome','backing'); add('text',{x:bx,y:by-4,class:'label'}).textContent='normal backing char54/shape53';
  const c=data.row_chrome.cursor; const cb=data.row_chrome.cursor_body; const cx=c.x+cb.x*c.scale_x, cy=c.y+cb.y*c.scale_y, cw=39*c.scale_x*cb.scale_x, ch=37.5*c.scale_y*cb.scale_y; r=add('rect',{x:cx,y:cy-19.4*c.scale_y*cb.scale_y,width:cw,height:ch,class:'chrome',stroke:selected.kind=='chrome'&&selected.name=='cursor'?'#fff':'#ffbd5a','stroke-width':selected.kind=='chrome'&&selected.name=='cursor'?2:1}); bindDrag(r,'chrome','cursor'); add('text',{x:cx,y:cy-25,class:'label'}).textContent='effective highlight body (cursor + inner body)';
  const body=data.row_chrome.cursor_body; add('rect',{x:body.x,y:body.y-19.4*body.scale_y,width:39*body.scale_x,height:37.5*body.scale_y,class:'readonly'}); add('text',{x:body.x,y:body.y-25,class:'label'}).textContent='raw inner highlight body only'; }
@@ -456,13 +514,16 @@ async function probeText(){ try { const payload={data, render_mode:'live_runtime
 async function poll(){ const s=await (await fetch('/rebuild')).json(); document.getElementById('log').textContent=(s.running?'RUNNING\n':'')+(s.output||''); if(s.running) setTimeout(poll,1000); }
 async function pollStatus(){ runtimeStatus=await (await fetch('/status')).json(); const mode=renderMode(); const live=mode=='live_runtime'; const ack=runtimeStatus.ack_sequence||0; document.getElementById('runtimeStatus').textContent=JSON.stringify(runtimeStatus,null,2); const badge=document.getElementById('runtimeBadge'); if(!live){ badge.className='warn'; badge.textContent='offline approximate mode: not visually authoritative'; } else if(runtimeStatus.connected){ badge.className='ok'; badge.textContent='live runtime connected: ack '+ack+' status='+runtimeStatus.status; } else { badge.className='bad'; badge.textContent='live runtime requested but disconnected/no ack'; } setTimeout(pollStatus,1000); }
 document.addEventListener('keydown',e=>{ if(e.target.tagName=='INPUT')return; const d=e.shiftKey?5:1; if(e.key=='ArrowLeft')nudge(-d,0); if(e.key=='ArrowRight')nudge(d,0); if(e.key=='ArrowUp')nudge(0,-d); if(e.key=='ArrowDown')nudge(0,d); });
-Object.assign(window,{load,renderModeChanged,save,rebuild,draw,setVal,setText,setBool,nudge});
+Object.assign(window,{load,renderModeChanged,save,rebuild,draw,setVal,setText,setBool,setClipRight,nudge});
 document.getElementById('renderMode').addEventListener('change', renderModeChanged);
 document.getElementById('saveBtn').addEventListener('click', save);
 document.getElementById('rebuildBtn').addEventListener('click', rebuild);
 document.getElementById('probeTextBtn').addEventListener('click', probeText);
+document.getElementById('charStatsSafeBtn').addEventListener('click', charStatsSafeFit);
 document.getElementById('reloadBtn').addEventListener('click', load);
 document.getElementById('mode').addEventListener('change', draw);
+document.getElementById('showClips').addEventListener('change', draw);
+document.getElementById('clipPreview').addEventListener('change', draw);
 window.addEventListener('error', e=>showError(e.error||e.message));
 window.addEventListener('unhandledrejection', e=>showError(e.reason));
 load().catch(showError); pollStatus().catch(showError);
@@ -541,9 +602,15 @@ def self_test():
         raise SystemExit("invalid editor schema:\n" + "\n".join(f"- {e}" for e in errors))
     if not REBUILD.exists():
         raise SystemExit(f"missing rebuild script {REBUILD}")
-    seq = write_control(data, "offline_approximate", {"kind": "chrome", "name": "cursor"})
-    command = parse_protocol_file(CONTROL_FILE)
-    if command is None or int(command.get("sequence", 0)) != seq:
+    command_text = protocol_lines(data, 1, "offline_approximate", {"kind": "chrome", "name": "cursor"}, False)
+    scratch = EDITOR_DIR / "control.self-test.txt"
+    scratch.write_text(command_text)
+    command = parse_protocol_file(scratch)
+    try:
+        scratch.unlink()
+    except OSError:
+        pass
+    if command is None or int(command.get("sequence", 0)) != 1:
         raise SystemExit("protocol control file write/read failed")
     # Do not delete STATUS_FILE here: an editor self-test may run while Elden Ring is live, and
     # status.txt is the only honest runtime-ack surface the webview has.

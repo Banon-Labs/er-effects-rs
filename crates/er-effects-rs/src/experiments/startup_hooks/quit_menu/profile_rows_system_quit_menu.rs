@@ -4,7 +4,12 @@ use super::*;
 pub(crate) fn install_profile_row_populate_hook() {
     let current_row_installed =
         PROFILE_CURRENT_ROW_POPULATE_ORIG.load(Ordering::SeqCst) != HOOK_ORIGINAL_UNSET;
-    if PROFILE_ROW_POPULATE_INSTALLED.load(Ordering::SeqCst) != 0 && current_row_installed {
+    let player_name_getter_installed =
+        PLAYER_GAME_DATA_NAME_GETTER_INSTALLED.load(Ordering::SeqCst) != 0;
+    if PROFILE_ROW_POPULATE_INSTALLED.load(Ordering::SeqCst) != 0
+        && current_row_installed
+        && player_name_getter_installed
+    {
         return;
     }
     match unsafe { MH_Initialize() } {
@@ -14,6 +19,46 @@ pub(crate) fn install_profile_row_populate_hook() {
                 "stats-text: row-populate MH_Initialize failed: {status:?}"
             ));
             return;
+        }
+    }
+    if PLAYER_GAME_DATA_NAME_GETTER_INSTALLED.load(Ordering::SeqCst) == 0 {
+        let Ok(addr) = game_rva(PLAYER_GAME_DATA_NAME_GETTER_RVA as u32) else {
+            append_autoload_debug(format_args!(
+                "stats-text: failed to resolve player-name getter rva 0x{PLAYER_GAME_DATA_NAME_GETTER_RVA:x}"
+            ));
+            return;
+        };
+        match unsafe {
+            MhHook::new(
+                addr as *mut c_void,
+                player_game_data_name_getter_hook as *mut c_void,
+            )
+        } {
+            Ok(hook) => {
+                PLAYER_GAME_DATA_NAME_GETTER_ORIG
+                    .store(hook.trampoline() as usize, Ordering::SeqCst);
+                if let Err(status) = unsafe { hook.queue_enable() } {
+                    append_autoload_debug(format_args!(
+                        "stats-text: queue_enable player-name getter failed: {status:?}"
+                    ));
+                    return;
+                }
+                match unsafe { MH_ApplyQueued() } {
+                    MH_STATUS::MH_OK => {
+                        std::mem::forget(hook);
+                        PLAYER_GAME_DATA_NAME_GETTER_INSTALLED.store(1, Ordering::SeqCst);
+                        append_autoload_debug(format_args!(
+                            "stats-text: hooked main-player name getter FUN_14025f8e0 0x{addr:x}; raw PGD name overrides word-checked summary name"
+                        ));
+                    }
+                    status => append_autoload_debug(format_args!(
+                        "stats-text: player-name getter MH_ApplyQueued failed: {status:?}"
+                    )),
+                }
+            }
+            Err(status) => append_autoload_debug(format_args!(
+                "stats-text: MhHook::new player-name getter failed: {status:?}"
+            )),
         }
     }
     if PROFILE_ROW_POPULATE_INSTALLED.load(Ordering::SeqCst) == 0 {

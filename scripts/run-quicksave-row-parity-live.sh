@@ -2,6 +2,9 @@
 set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+# shellcheck source=scripts/user-runtime-gate.sh
+# shellcheck disable=SC1091
+source "$REPO_ROOT/scripts/user-runtime-gate.sh"
 PROFILE="${ME3_PROFILE:-$REPO_ROOT/target/pi-local/quicksave-row-parity-worktree.me3}"
 LAUNCH_SH="${ELDEN_LAUNCH_SH:-$HOME/Elden/launch.sh}"
 RUN_NAME="${RUN_NAME:-live-launch-quiet-$(date +%Y%m%d-%H%M%S)}"
@@ -23,6 +26,8 @@ Environment:
   ME3_PROFILE      profile path (default: $PROFILE)
   RUN_DIR          artifact directory (default: $RUN_DIR)
   ELDEN_LAUNCH_SH  launcher script (default: $LAUNCH_SH)
+  Existing Elden Ring processes are allowed. This launcher records only the wrapper PID it starts;
+  unknown preexisting game PIDs are user-owned and must not be touched by agent teardown.
 EOF
 }
 
@@ -33,6 +38,13 @@ while [[ $# -gt 0 ]]; do
     *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+if [[ "$RUN_DIR" != /* ]]; then
+  RUN_DIR="$REPO_ROOT/$RUN_DIR"
+fi
+if [[ "$PROFILE" != /* ]]; then
+  PROFILE="$REPO_ROOT/$PROFILE"
+fi
 
 if [[ ! -f "$PROFILE" ]]; then
   echo "row-parity-live: profile not found: $PROFILE" >&2
@@ -57,6 +69,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   exit 0
 fi
 
+require_user_runtime_go
 TMPDIR="$RUN_DIR/tmp" ER_PROFILE_05_010_EDITOR_DIR="$EDITOR_DIR" ME3_PROFILE="$PROFILE" ME3_BIN="$REPO_ROOT/scripts/me3-quiet.sh" nohup "$LAUNCH_SH" >> "$LOG" 2>&1 &
 pid=$!
 printf '%s\n' "$pid" > "$RUN_DIR/wrapper.pid"
