@@ -42,6 +42,34 @@ MAX_TEXT_FIELD_FONT_HEIGHT_PX = 80
 MAX_ABS_POSITION_PX = 2000
 VALID_ALIGNMENTS = {"left", "center", "right"}
 
+# Menu font vertical metrics, read from the game's own data0:/font/eu_std/font.gfx DefineFont3
+# id=1 ("Agmena W1G For Bandai", 910 glyphs) layout block. Mirrors
+# crates/er-gfx/src/profile_05_010_layout.rs -- keep the two in step.
+#
+# Scaleform lays one line out as (ascent + descent) / em_square * font_height px, and
+# GFx::TextField reflow (FUN_14114bf10) then insets the usable area by 2 px on every edge.
+# A box shorter than that sum cannot render its own text. This is not a style guideline:
+# PlayerName shipped at clip_height = 30 against a 38.383 px requirement and rendered short.
+MENU_FONT_ASCENT = 20800
+MENU_FONT_DESCENT = 8540
+MENU_FONT_EM_SQUARE = 20480  # SWF spec: DefineFont3 glyph coords are 1/20 twip = 1024 * 20
+TEXT_DOC_INSET_PX_PER_EDGE = 2
+
+
+def line_box_px(font_height) -> float:
+    """Height of one laid-out line of the menu font at ``font_height``."""
+    return (MENU_FONT_ASCENT + MENU_FONT_DESCENT) / MENU_FONT_EM_SQUARE * float(font_height)
+
+
+def min_clip_height_px(font_height) -> int:
+    """Smallest clip_height that can render one line at ``font_height``, inset included.
+
+    Rounds up: a fractional shortfall still clips, so 38.383 demands 39.
+    """
+    import math
+
+    return math.ceil(line_box_px(font_height) + 2 * TEXT_DOC_INSET_PX_PER_EDGE)
+
 
 def strip_comment(line: str) -> str:
     in_string = False
@@ -133,10 +161,18 @@ def validate_data(data, selected=None):
             errors.append(f"field.{name}.width must be 1..{MAX_TEXT_FIELD_WIDTH_PX}px")
         if not (0 < clip_height <= MAX_TEXT_FIELD_FONT_HEIGHT_PX * 2):
             errors.append(f"field.{name}.clip_height must be 1..{MAX_TEXT_FIELD_FONT_HEIGHT_PX * 2}px")
-        if font_height > clip_height:
-            errors.append(f"field.{name}.font_height must not exceed clip_height")
         if not (0 < font_height <= MAX_TEXT_FIELD_FONT_HEIGHT_PX):
             errors.append(f"field.{name}.font_height must be 1..{MAX_TEXT_FIELD_FONT_HEIGHT_PX}px")
+        elif clip_height < min_clip_height_px(font_height):
+            # Replaces the old `font_height > clip_height` rule, which was the hole that let
+            # PlayerName ship at font_height 24 / clip_height 30: 24 <= 30 passed, but the real
+            # requirement is 39. The floor below is the font's own line box plus the reflow inset.
+            errors.append(
+                f"field.{name}.clip_height {clip_height} cannot render one line of its own font: "
+                f"font_height {font_height} needs a {line_box_px(font_height):.3f}px line box "
+                f"plus {TEXT_DOC_INSET_PX_PER_EDGE}px/edge inset, so clip_height must be "
+                f">= {min_clip_height_px(font_height)}"
+            )
         if field.get("align") not in VALID_ALIGNMENTS:
             errors.append(f"field.{name}.align must be left, center, or right")
     for name in CHROME_NAMES:
@@ -457,6 +493,15 @@ const chromeObjects = %CHROME%;
 const paths = %PATHS%;
 const FIELD_CLIP_LOCAL = { ErCharStats:{x:-35,y:-2}, default:{x:-2,y:-2} };
 const TEXT_LAYOUT_INSET_PX = 40;
+// Menu font vertical metrics (data0:/font/eu_std/font.gfx DefineFont3 id=1 "Agmena W1G For
+// Bandai"). Mirrors the Python + Rust copies; all three must agree. One laid-out line is
+// (ascent+descent)/em * font_height px, and GFx::TextField reflow insets 2px per edge, so a
+// box shorter than that sum clips its own text. clip_height 30 at font_height 24 is how
+// PlayerName shipped broken -- the floor below makes that unreachable from the UI.
+const MENU_FONT_ASCENT = 20800, MENU_FONT_DESCENT = 8540, MENU_FONT_EM_SQUARE = 20480;
+const TEXT_DOC_INSET_PX_PER_EDGE = 2;
+function lineBoxPx(fontHeight){ return (MENU_FONT_ASCENT+MENU_FONT_DESCENT)/MENU_FONT_EM_SQUARE*Number(fontHeight||16); }
+function minClipHeightPx(fontHeight){ return Math.ceil(lineBoxPx(fontHeight) + 2*TEXT_DOC_INSET_PX_PER_EDGE); }
 document.getElementById('paths').textContent = JSON.stringify(paths, null, 2);
 async function load(){ data = await (await fetch('/schema')).json(); renderTree(); renderEditor(); draw(); }
 function showError(err){ const msg=(err&&err.stack)||String(err); document.getElementById('log').textContent='EDITOR JS ERROR\n'+msg; console.error(err); }
@@ -470,17 +515,28 @@ function fieldClipOffset(name){ return FIELD_CLIP_LOCAL[name] || FIELD_CLIP_LOCA
 function fieldClip(f,name=selected.name){ const off=fieldClipOffset(name); const left=Number(f.x)+off.x, top=Number(f.y)+off.y, width=Number(f.width), height=Number(f.clip_height||40); return {left,top,width,height,right:left+width,bottom:top+height,off}; }
 function fieldTextArea(f,name=selected.name){ const clip=fieldClip(f,name); const inset=Math.min(TEXT_LAYOUT_INSET_PX, Math.max(0, clip.width/2-1)); return {...clip, left:clip.left+inset, right:clip.right-inset, width:Math.max(1, clip.width-inset*2), inset}; }
 function setClipRight(v){ const o=getObj(); const clip=fieldClip(o, selected.name); o.width=Math.max(1, Math.round((Number(v)-clip.left)*100)/100); renderEditor(); draw(); }
-function renderEditor(){ const o=getObj(), e=document.getElementById('editor'); document.getElementById('title').textContent=selected.kind+': '+selected.name; let h='<div class="grid">'; if(selected.kind=='field'){ const clip=fieldClip(o, selected.name); const right=Math.round(clip.right*100)/100; const sample=sampleFor(o)||selected.name; const estimated=Math.ceil(estimateTextWidth(sample, o.font_height)); for(const k of ['x','y']) h+=numberInput(o,k,0.25); h+=`<label>actual clip right</label><input type="number" step="0.25" value="${right}" onchange="setClipRight(this.value)">`; h+=`<label>estimated sample width</label><output>${estimated}px</output>`; h+=`<label>runtime usable width</label><output>${Math.max(1, Math.round((clip.width-TEXT_LAYOUT_INSET_PX*2)*100)/100)}px</output>`; h+=`<div></div><div class="ok">The magenta mask uses the real SWF DefineEditText local bounds: ${clip.off.x}px/${clip.off.y}px from placement. The cyan box is Scaleform's observed TextDoc layout area, about ${TEXT_LAYOUT_INSET_PX}px inset on each side; text must fit cyan, not just magenta.</div>`; for(const k of ['width','clip_height','font_height']) h+=numberInput(o,k,1); h+=`<label>align</label><select onchange="setText('align',this.value)">${['left','center','right'].map(a=>`<option ${o.align==a?'selected':''}>${a}</option>`).join('')}</select>`; h+=`<div>clip width</div><div class="controls"><button onclick="padWidth(-20)">-20</button><button onclick="padWidth(-5)">-5</button><button onclick="padWidth(5)">+5</button><button onclick="padWidth(20)">+20</button><button onclick="fitWidthToSample(24)">fit sample +24</button></div>`; h+=`<div>clip height</div><div class="controls"><button onclick="padClipHeight(-4)">-4</button><button onclick="padClipHeight(4)">+4</button><button onclick="padClipHeight(10)">+10</button><button onclick="fitClipHeightToFont(10)">fit font +10</button></div>`; h+=`<div></div><div class="warn">Width is the GFX DefineEditText bounds. Live width is experimental; rebuild/reload is the honest path if status rejects the live probe.</div>`; if(selected.name=='PlayerName') h+=`<div>Player name</div><div class="controls"><button onclick="playerNameWideFit()">name wide fit</button><button onclick="fitWidthToSample(80)">fit current sample +80</button></div><div></div><div class="warn">If the in-game name still shows only a prefix after this mask is wide, the remaining bug is runtime text payload/source, not this field's GFX bounds.</div>`; if(selected.name=='ErCharStats') h+=`<div>Character Stats</div><div class="controls"><button onclick="charStatsSafeFit()">safe larger fit (17px)</button><button onclick="charStatsCompact16()">compact 16 fallback</button><button onclick="charStatsFont16()">font 16 only</button><button onclick="charStatsExperimental18()">experimental 18px</button><button onclick="charStatsWideProbe()">try width 600 live probe</button></div><div></div><div class="warn">Safe larger fit sets x=-185, y=-14, width=470, clip_height=42, font_height=17 and passed full offline overlap/clip tests. Width 600 is experimental live necromancy; if status says width_probe=false, it will not fix clipping until a rebuild/reload.</div>`; for(const k of ['sample_load_character','sample_save_picker','sample_drive_row']) h+=textInput(o,k); }
+function renderEditor(){ const o=getObj(), e=document.getElementById('editor'); document.getElementById('title').textContent=selected.kind+': '+selected.name; let h='<div class="grid">'; if(selected.kind=='field'){ const clip=fieldClip(o, selected.name); const right=Math.round(clip.right*100)/100; const sample=sampleFor(o)||selected.name; const estimated=Math.ceil(estimateTextWidth(sample, o.font_height)); for(const k of ['x','y']) h+=numberInput(o,k,0.25); h+=`<label>actual clip right</label><input type="number" step="0.25" value="${right}" onchange="setClipRight(this.value)">`; h+=`<label>estimated sample width</label><output>${estimated}px</output>`; h+=`<label>runtime usable width</label><output>${Math.max(1, Math.round((clip.width-TEXT_LAYOUT_INSET_PX*2)*100)/100)}px</output>`; h+=`<div></div><div class="ok">The magenta mask uses the real SWF DefineEditText local bounds: ${clip.off.x}px/${clip.off.y}px from placement. The cyan box is Scaleform's observed TextDoc layout area, about ${TEXT_LAYOUT_INSET_PX}px inset on each side; text must fit cyan, not just magenta.</div>`; for(const k of ['width','clip_height','font_height']) h+=numberInput(o,k,1); h+=`<label>align</label><select onchange="setText('align',this.value)">${['left','center','right'].map(a=>`<option ${o.align==a?'selected':''}>${a}</option>`).join('')}</select>`; h+=`<div>clip width</div><div class="controls"><button onclick="padWidth(-20)">-20</button><button onclick="padWidth(-5)">-5</button><button onclick="padWidth(5)">+5</button><button onclick="padWidth(20)">+20</button><button onclick="fitWidthToSample(24)">fit sample +24</button></div>`; h+=`<div>clip height</div><div class="controls"><button onclick="padClipHeight(-4)">-4</button><button onclick="padClipHeight(4)">+4</button><button onclick="padClipHeight(10)">+10</button><button onclick="fitClipHeightToFont(2)" title="smallest box that renders one line of this font, plus 2px">fit to font</button></div>`; h+=`<div></div><div class="warn">Width is the GFX DefineEditText bounds. Live width is experimental; rebuild/reload is the honest path if status rejects the live probe.</div>`; if(selected.name=='PlayerName') h+=`<div>Player name</div><div class="controls"><button onclick="playerNameWideFit()">name wide fit</button><button onclick="fitWidthToSample(80)">fit current sample +80</button></div><div></div><div class="warn">If the in-game name still shows only a prefix after this mask is wide, the remaining bug is runtime text payload/source, not this field's GFX bounds.</div>`; if(selected.name=='ErCharStats') h+=`<div>Character Stats</div><div class="controls"><button onclick="charStatsSafeFit()">safe larger fit (17px)</button><button onclick="charStatsCompact16()">compact 16 fallback</button><button onclick="charStatsFont16()">font 16 only</button><button onclick="charStatsExperimental18()">experimental 18px</button><button onclick="charStatsWideProbe()">try width 600 live probe</button></div><div></div><div class="warn">Safe larger fit sets x=-185, y=-14, width=470, clip_height=42, font_height=17 and passed full offline overlap/clip tests. Width 600 is experimental live necromancy; if status says width_probe=false, it will not fix clipping until a rebuild/reload.</div>`; for(const k of ['sample_load_character','sample_save_picker','sample_drive_row']) h+=textInput(o,k); }
 else if(selected.kind=='chrome'){ for(const k of ['x','y','scale_x','scale_y']) h+=numberInput(o,k,k.startsWith('scale')?0.001:0.1); h+=`<label>editable</label><input type="checkbox" ${o.editable?'checked':''} onchange="setBool('editable',this.checked)">`; if(selected.name=='backing') h+=`<div></div><div class="ok">normal non-highlighted row rectangle: live transform via named Backing when connected</div>`; if(selected.name=='cursor') h+=`<div></div><div class="ok">outer highlighted-row wrapper: live transform when connected; use cursor_body for visible highlight-panel height</div>`; if(selected.name=='cursor_body') h+=`<div></div><div class="ok">inner highlighted-row body: live transform via Cursor/CursorBody when connected</div>`; h+=textInput(o,'source'); }
 else { for(const k of ['row_pitch','visible_rows','top_recycle_rows','bottom_recycle_rows','mask_height','scrollbar_x','scrollbar_top_y','scrollbar_track_height']) h+=numberInput(o,k,1); }
  h+='</div><div class="controls"><button onclick="nudge(-1,0)">← 1</button><button onclick="nudge(1,0)">→ 1</button><button onclick="nudge(0,-1)">↑ 1</button><button onclick="nudge(0,1)">↓ 1</button><button onclick="nudge(-5,0)">← 5</button><button onclick="nudge(5,0)">→ 5</button><button onclick="nudge(0,-5)">↑ 5</button><button onclick="nudge(0,5)">↓ 5</button></div>'; e.innerHTML=h; }
-function setVal(k,v){ getObj()[k]=Number(v); renderEditor(); draw(); }
+// Typing a value directly is clamped the same way the nudge buttons are: clip_height cannot go
+// under the font's floor, and raising font_height carries clip_height up with it. Without this,
+// the only thing standing between a hand-typed 30 and a broken build was the save-time reject.
+function setVal(k,v){ const o=getObj(); o[k]=Number(v);
+  if(selected.kind=='field' && (k=='clip_height'||k=='font_height')){
+    const floor=minClipHeightPx(o.font_height);
+    if(Number(o.clip_height)<floor) o.clip_height=floor;
+  }
+  renderEditor(); draw(); }
 function setText(k,v){ getObj()[k]=v; renderEditor(); draw(); }
 function setBool(k,v){ getObj()[k]=v; renderEditor(); draw(); }
 function nudge(dx,dy){ const o=getObj(); if('x' in o) o.x+=dx; if('y' in o) o.y+=dy; renderEditor(); draw(); }
 function padWidth(delta){ const o=getObj(); if('width' in o) o.width=Math.max(1, Math.round(Number(o.width)+delta)); renderEditor(); draw(); }
-function padClipHeight(delta){ const o=getObj(); if('clip_height' in o) o.clip_height=Math.max(1, Math.round(Number(o.clip_height)+delta)); renderEditor(); draw(); }
-function fitClipHeightToFont(pad=10){ const o=getObj(); if('clip_height' in o) o.clip_height=Math.max(1, Math.ceil(Number(o.font_height||16)+pad)); renderEditor(); draw(); }
+// Nudging down stops at the font's floor instead of sailing past it into an unrenderable box.
+function padClipHeight(delta){ const o=getObj(); if('clip_height' in o) o.clip_height=Math.max(minClipHeightPx(o.font_height), Math.round(Number(o.clip_height)+delta)); renderEditor(); draw(); }
+// pad is headroom ABOVE the real minimum, not above font_height. The old form was
+// ceil(font_height + 10), which at font_height 24 gave 34 -- five px short of renderable.
+function fitClipHeightToFont(pad=2){ const o=getObj(); if('clip_height' in o) o.clip_height=minClipHeightPx(o.font_height)+Math.max(0,Math.round(pad)); renderEditor(); draw(); }
 function estimateTextWidth(text, fontHeight){ const plain=String(text||'').replace(/<[^>]*>/g,''); let w=0; for(const ch of plain){ w += /[ilI1|.,:;']/u.test(ch) ? 0.28 : /[MW@#]/u.test(ch) ? 0.85 : /\s/u.test(ch) ? 0.33 : 0.56; } return w * Number(fontHeight||16); }
 function fitWidthToSample(pad=24){ const o=getObj(); o.width=Math.max(1, Math.ceil(estimateTextWidth(sampleFor(o)||selected.name, o.font_height)+pad+(TEXT_LAYOUT_INSET_PX*2))); renderEditor(); draw(); }
 function selectCharStats(){ selected={kind:'field', name:'ErCharStats'}; renderTree(); renderEditor(); draw(); }
@@ -494,7 +550,7 @@ function playerNameWideFit(){ const f=data.fields.PlayerName; Object.assign(f,{x
 function sampleFor(f){ const m=document.getElementById('mode').value; return f['sample_'+m] || ''; }
 function clipHeight(f){ return Number(f.clip_height||40); }
 function clipTop(f){ return Number(f.y); }
-function renderedTextRect(name,f){ const text=sampleFor(f); if(!text) return null; const clip=fieldClip(f,name), area=fieldTextArea(f,name); const w=Math.ceil(estimateTextWidth(text, f.font_height)); let left=area.left; if(f.align=='right') left=area.right-w; else if(f.align=='center') left=area.left+(area.width-w)/2; const top=clip.top; return {name,left,right:left+w,top,bottom:top+Number(f.font_height||16),clipLeft:area.left,clipRight:area.right,clipTop:clip.top,clipBottom:clip.bottom,text}; }
+function renderedTextRect(name,f){ const text=sampleFor(f); if(!text) return null; const clip=fieldClip(f,name), area=fieldTextArea(f,name); const w=Math.ceil(estimateTextWidth(text, f.font_height)); let left=area.left; if(f.align=='right') left=area.right-w; else if(f.align=='center') left=area.left+(area.width-w)/2; const top=clip.top+TEXT_DOC_INSET_PX_PER_EDGE; return {name,left,right:left+w,top,bottom:top+lineBoxPx(f.font_height),clipLeft:area.left,clipRight:area.right,clipTop:clip.top,clipBottom:clip.bottom,text}; }
 function layoutHealth(){ const rects=Object.entries(data.fields).map(([n,f])=>renderedTextRect(n,f)).filter(Boolean); const notes=[]; for(const r of rects){ if(r.left<r.clipLeft || r.right>r.clipRight || r.top<r.clipTop || r.bottom>r.clipBottom) notes.push(`CLIP ${r.name}: text ${Math.round(r.left)}..${Math.round(r.right)} x ${Math.round(r.top)}..${Math.round(r.bottom)} outside mask ${Math.round(r.clipLeft)}..${Math.round(r.clipRight)} x ${Math.round(r.clipTop)}..${Math.round(r.clipBottom)}`); } for(let i=0;i<rects.length;i++) for(let j=i+1;j<rects.length;j++){ const a=rects[i], b=rects[j], gutter=4; const overlap=!(a.right+gutter<=b.left || b.right+gutter<=a.left || a.bottom+gutter<=b.top || b.bottom+gutter<=a.top); if(overlap) notes.push(`OVERLAP ${a.name} vs ${b.name}`); } document.getElementById('layoutHealth').textContent = notes.length ? notes.join('\n') : 'ok: approximate samples fit their masks and do not overlap'; }
 function add(tag, attrs, parent=document.getElementById('canvas')){ const el=document.createElementNS('http://www.w3.org/2000/svg',tag); for(const [k,v] of Object.entries(attrs)) el.setAttribute(k,v); parent.appendChild(el); return el; }
 function draw(){ layoutHealth(); const svg=document.getElementById('canvas'); svg.innerHTML=''; const rowPitch=data.list.row_pitch, half=data.list.mask_height/2, showClips=document.getElementById('showClips').checked, clipPreview=document.getElementById('clipPreview').checked; const defs=add('defs',{},svg); for(let y=-half;y<=half;y+=rowPitch) add('line',{x1:-620,x2:640,y1:y,y2:y,class:'rowline'}); add('rect',{x:-620,y:-half,width:1260,height:data.list.mask_height,fill:'none',stroke:'#777','stroke-dasharray':'6 4'}); add('rect',{x:data.list.scrollbar_x,y:data.list.scrollbar_top_y,width:10,height:data.list.scrollbar_track_height,fill:'#8884',stroke:'#aaa'});
@@ -603,6 +659,11 @@ def self_test():
     if not REBUILD.exists():
         raise SystemExit(f"missing rebuild script {REBUILD}")
     command_text = protocol_lines(data, 1, "offline_approximate", {"kind": "chrome", "name": "cursor"}, False)
+    # EDITOR_DIR is created lazily by the server, so on a fresh checkout (or after a `target`
+    # wipe) --self-test used to die with FileNotFoundError before testing anything. The
+    # self-test must stand on its own: it is the gate that decides whether this tool is safe to
+    # hand to a user.
+    EDITOR_DIR.mkdir(parents=True, exist_ok=True)
     scratch = EDITOR_DIR / "control.self-test.txt"
     scratch.write_text(command_text)
     command = parse_protocol_file(scratch)
