@@ -41,3 +41,17 @@ pub const PGD_NAME_LEN_U16: usize =
     (PGD_GENDER_BE_OFFSET - PGD_NAME_9C_OFFSET) / core::mem::size_of::<u16>();
 
 pub const PGD_STAT_BASE_3C_OFFSET: usize = core::mem::offset_of!(PlayerGameData, vigor);
+
+/// `matching_weapon_level` -- the character's HIGHEST weapon upgrade level, maintained by the game
+/// for multiplayer matchmaking. Raw `+0..=+25`, NOT a matchmaking bucket: `CS::ChrIns::
+/// CheckWeaponLevelMismatch` (1.16.2 `0x14068fd30`) guards it with `< 0x1a` and clamps to `0x19`,
+/// then feeds it to the `GetMatchingWeaponLevelUpper*` param lookups that do the bucketing.
+///
+/// Taking this instead of walking equipment or inventory means no item-record stride, no reliance
+/// on the `paramId % 100` reinforcement convention, and no equipped-only blind spot.
+pub const PGD_MATCHING_WEAPON_LEVEL_E2_OFFSET: usize =
+    core::mem::offset_of!(PlayerGameData, matching_weapon_level);
+
+/// The offset is bound through `offset_of!`, so this only guards against an upstream layout change
+/// silently moving it: the Ghidra 1.16.2 dump has `matchmakingWeaponLevel` at `PlayerGameData+0xe2`.
+const _: () = assert!(PGD_MATCHING_WEAPON_LEVEL_E2_OFFSET == 0xe2);
