@@ -34,6 +34,7 @@ pub mod map_hooks;
 mod map_live_pins;
 pub mod map_seams;
 mod seamless_probe;
+pub mod stall_watchdog;
 
 use std::path::PathBuf;
 

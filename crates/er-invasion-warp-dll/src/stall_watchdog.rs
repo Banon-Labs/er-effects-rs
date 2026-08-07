@@ -79,8 +79,14 @@ pub struct StallWatchdog {
 }
 
 impl StallWatchdog {
-    pub fn new() -> Self {
-        Self::default()
+    /// `const` so it can initialise a `static Mutex<StallWatchdog>` directly. Deriving `Default`
+    /// is not enough for that: `Default::default()` cannot run in a const context.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            timing: None,
+            reported: false,
+        }
     }
 
     /// Feed one observation. `now_ms` is any monotonic millisecond clock.
@@ -122,7 +128,8 @@ impl StallWatchdog {
 
     /// How long the current transient state has been held, for the trace line. `None` while resting.
     pub fn held_ms(&self, now_ms: u64) -> Option<u64> {
-        self.timing.map(|(_, entered)| now_ms.saturating_sub(entered))
+        self.timing
+            .map(|(_, entered)| now_ms.saturating_sub(entered))
     }
 
     /// The state being timed, if any.
@@ -141,7 +148,11 @@ mod tests {
     fn a_hung_cancel_is_recovered() {
         let mut w = StallWatchdog::new();
         assert_eq!(w.observe(state::CANCELLING, 0), None);
-        assert_eq!(w.observe(state::CANCELLING, 4_999), None, "under threshold must not fire");
+        assert_eq!(
+            w.observe(state::CANCELLING, 4_999),
+            None,
+            "under threshold must not fire"
+        );
         assert_eq!(
             w.observe(state::CANCELLING, 5_000),
             Some(StallAction::CancelAndResearch),
@@ -205,7 +216,11 @@ mod tests {
         w.observe(state::CANCELLING, 0);
         assert!(w.observe(state::CANCELLING, 5_000).is_some());
         for t in 5..60 {
-            assert_eq!(w.observe(state::CANCELLING, t * 1_000), None, "re-fired at {t}s");
+            assert_eq!(
+                w.observe(state::CANCELLING, t * 1_000),
+                None,
+                "re-fired at {t}s"
+            );
         }
     }
 
@@ -251,7 +266,13 @@ mod tests {
     /// so a later "tidy up the constant" cannot quietly move it onto either side.
     #[test]
     fn threshold_sits_between_measured_healthy_and_measured_stall() {
-        assert!(STALL_THRESHOLD_MS > 2_000, "must not fire on the slowest healthy cancel (2s, n=8)");
-        assert!(STALL_THRESHOLD_MS < 30_000, "must notice the observed 30s stall well before it ends");
+        assert!(
+            STALL_THRESHOLD_MS > 2_000,
+            "must not fire on the slowest healthy cancel (2s, n=8)"
+        );
+        assert!(
+            STALL_THRESHOLD_MS < 30_000,
+            "must notice the observed 30s stall well before it ends"
+        );
     }
 }
