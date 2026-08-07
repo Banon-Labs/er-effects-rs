@@ -1193,9 +1193,15 @@ fn announce_rejection(enabled: bool, destination: u32, reason: RejectReason) {
     let Some(text) = announcement else {
         return;
     };
-    // SAFETY: game thread, inside the join-data hook -- the same context the game's own callers of
-    // this banner run in. Both game functions are byte-checked before use.
-    if !unsafe { crate::system_message::show(&text) } {
+    // The game's own auto-closing announcement surface -- the "Grace discovered" one. NOT
+    // `system_message`/`showPopupMenu`, which is a blocking modal with an OK button: shipping that
+    // gave the user a dialog to dismiss per rejection, showing squares and then nothing, and the
+    // unattended dialog held the session open long enough to trip the stall watchdog.
+    //
+    // SAFETY: game thread, inside the join-data hook. Writes the live view's embedded message,
+    // which is exactly what the view's own Update does when it pops one. Both game functions are
+    // byte-checked before use.
+    if !unsafe { crate::announce::show(&text) } {
         // Once, not per rejection: a banner that cannot be shown is a missing convenience, and
         // saying so every 20 seconds would be its own spam.
         if NOTICE_FAILED.swap(true, Ordering::SeqCst) {
@@ -1739,6 +1745,10 @@ pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
     TICKS.fetch_add(1, Ordering::SeqCst);
     install_join_hook();
     install_show_observer();
+    // Learns the live announcement view. Self-gating and idempotent: it needs the menu system,
+    // which does not exist at attach, so it retries until it lands rather than failing silently
+    // once. Costs one byte-check per tick until then.
+    crate::announce::install();
     // Read-only, and independent of the filter: it reports the one string that decides whether two
     // Seamless players can find each other at all.
     install_lobby_key_observer();

@@ -24,6 +24,7 @@
 
 #![allow(non_snake_case)]
 
+pub mod announce;
 pub mod drive;
 pub mod lobby_publish;
 pub mod local_invasion_filter;
@@ -36,7 +37,6 @@ pub mod map_seams;
 pub mod restart_backoff;
 mod seamless_probe;
 pub mod stall_watchdog;
-pub mod system_message;
 
 use std::path::PathBuf;
 

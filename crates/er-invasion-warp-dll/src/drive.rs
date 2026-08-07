@@ -336,7 +336,7 @@ impl InvasionWarpDrive {
             // evidence at all for a feature whose whole job is to appear on screen. `shown` counts
             // banners whose text was read back out of the game's own rawString/length after
             // writing; `refused` counts attempts dropped before display.
-            let (banners_shown, banners_refused) = crate::system_message::tally();
+            let (banners_shown, banners_refused) = crate::announce::tally();
             log(format_args!(
                 "invasion-warp: heartbeat tick={} focused={focused} f7_state={:#06x} \
                  f8_state={:#06x} block={} player={} pins={} msb[{msb_points} points/{msb_maps} \

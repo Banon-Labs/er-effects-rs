@@ -91,6 +91,15 @@ refused, and one of the reasons -- `(open your map)` -- is a mistake that otherw
 like "nobody is around": until you open the world map once per session, no destination has a name,
 so every name-based judgement fails closed and you silently reject everyone.
 
+It writes to the game's **own auto-closing announcement line** -- the one that says "Grace
+discovered". It appears, scrolls, and expires on its own. No dialog and no button.
+
+> **If you are on a build before 2026-08-06, leave this OFF.** Earlier builds routed this through
+> `showPopupMenu`, which is a blocking modal: you got a dialog to dismiss for *every* rejection,
+> showing empty boxes rather than text, and leaving it unattended stalled the Seamless handshake
+> long enough for the mod to cancel the attempt. It defaults to `false`, so you are only exposed if
+> you turned it on deliberately.
+
 Then, in game:
 
 1. **Walk to the place you want to invade.** Where you are standing IS the target -- there is
