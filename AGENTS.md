@@ -48,7 +48,7 @@ If a live user-inspection Elden Ring run becomes invalid because the agent finds
 
 Do not launch Elden Ring through Steam from agent workflows. Forbidden launch forms include `steam -applaunch 1245620`, `steam://run/1245620`, `steam://rungameid/1245620`, and `xdg-open` or similar wrappers around those URLs. Do not launch `start_protected_game.exe` directly or through Proton/Wine/Steam; that is the protected/EAC launcher, not an approved agent runtime target. Process detection of stale `start_protected_game.exe` is allowed, but launching it is not. Runtime work must use only an approved, explicitly gated direct/offline `eldenring.exe` probe path.
 
-Do not bundle `ersc.dll`. Seamless Co-op is a compatibility target, but this repo must not copy, move, archive, release-package, or stage `SeamlessCoop/ersc.dll` into me3/product release artifacts or repo `target/` bundles. For er-net-effects ME3 profiles, still include a `[[natives]]` entry that references the game-installed Seamless Co-op DLL at `C:\SteamLibrary\steamapps\common\ELDEN RING\Game\SeamlessCoop\ersc.dll`; this is a runtime profile reference, not bundling or staging the DLL.
+Do not bundle `ersc.dll`. Seamless Co-op is a compatibility target, but this repo must not copy, move, archive, release-package, or stage `SeamlessCoop/ersc.dll` into me3/product release artifacts or repo `target/` bundles. For er-net-effects ME3 profiles, still include a `[[natives]]` entry that references the game-installed Seamless Co-op DLL under the Elden Ring install's `Game/SeamlessCoop/ersc.dll`; this is a runtime profile reference, not bundling or staging the DLL. **Resolve that install path, do not copy one from these notes.** This machine now runs a NATIVE LINUX Steam install -- `$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game/` -- which is what every `.me3` profile in `~/Elden/` actually references, and `$HOME/Elden/launch.sh` derives from `ME3_STEAM_DIR`. The `C:\SteamLibrary\...` path this line used to name belongs to the retired WSL2 setup: there is no `/mnt/c` here (the Windows partitions mount as `/mnt/win-c`, `/mnt/win-d`), so every such path silently resolves to nothing and a `find` over it returns empty rather than erroring -- which reads as "the file is missing" instead of "you looked in the wrong place".
 
 Do not COMMIT game-derived binaries either (user directive 2026-07-02): no extracted or transformed game assets (`.gfx`, `.dcx`, `.bnd`, `.tpf`, `.sl2`, texture/font payloads) as repo files, including test fixtures. Version FINGERPRINTS (length + FNV/sha constants) and deterministic generators instead; tests that need real asset bytes read them from the local extraction corpus (env-overridable root, e.g. `ER_GFX_CORPUS_ROOT` in `crates/er-gfx/tests/common/mod.rs`) and SKIP when it is absent. Large embedded byte arrays in `.rs` sources are the same problem in different clothing -- prefer runtime derivation from the game's own in-memory data (see `er_gfx::title_05_000`) or structured edit tables over byte dumps.
 
@@ -359,7 +359,20 @@ cargo check -p er-soulsformats -p er-param-inspect
 # The game DLL itself (cross-compiled to x86_64-pc-windows-msvc from Linux via cargo-xwin):
 cargo xwin build --release --target x86_64-pc-windows-msvc
 # Output: target/x86_64-pc-windows-msvc/release/er_effects_rs.dll
+
+# ...but that builds ONLY er-effects-rs. The workspace sets
+#     default-members = ["crates/er-effects-rs"]
+# so the bare command above silently skips EVERY other DLL crate -- er-invasion-warp-dll,
+# er-loading-portrait-dll, er-save-picker-dll, and the rest. It exits 0 in a fraction of a
+# second having compiled nothing, which reads exactly like a successful incremental build.
+# For any other DLL, name it:
+cargo xwin build --release --target x86_64-pc-windows-msvc -p er-invasion-warp-dll
 ```
+
+**Check the output hash before staging or launching.** A build that "succeeded" without
+recompiling leaves the previous DLL in place, and a runtime run against it produces evidence for
+code that is not the code under test -- a failure mode indistinguishable from the feature not
+working. `sha256sum target/x86_64-pc-windows-msvc/release/<name>.dll` before and after is enough.
 
 ## Architecture Overview
 

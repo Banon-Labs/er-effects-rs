@@ -63,7 +63,7 @@
 
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use er_invasion_warp::local_invasion::{
     InvasionAnchor, InvasionCandidate, LocalInvasionConfig, LocalInvasionMode, LocationChoice,
@@ -196,6 +196,26 @@ static STALL_WATCHDOG: Mutex<crate::stall_watchdog::StallWatchdog> =
 /// Monotonic origin for the stall clock. The DLL log carries no timestamps, so elapsed time has to
 /// come from somewhere in-process.
 static PROCESS_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+/// Ticks of the recurring game task since load, and the tick/millisecond stamp of the last logged
+/// session transition — together, how long the session sat in the state it just left, measured two
+/// independent ways.
+///
+/// # Why both, and not either one
+///
+/// Seamless's no-match retry dwells in `0x11` for a fixed interval before returning to `0x0d`, and
+/// whether that interval is a FRAME COUNT or a WALL CLOCK decides whether raising the frame rate
+/// would shorten the wait — the difference between a usable idea and a void one. The two are
+/// indistinguishable at a steady frame rate, which is exactly the condition the earlier reading was
+/// taken under: ~600 ticks, nine times running, at unchanging fps. That is equally consistent with
+/// both, so it settles nothing.
+///
+/// Recording both per transition makes any natural frame-rate variation within one run decide it —
+/// a constant tick count across dwells at differing fps means a frame counter, a constant
+/// millisecond count means a clock. The implied fps is printed alongside so a comparison between
+/// two dwells that ran at the SAME rate is visibly inconclusive rather than silently over-read.
+static TICKS: AtomicU64 = AtomicU64::new(0);
+static LAST_TRANSITION_TICK: AtomicU64 = AtomicU64::new(0);
+static LAST_TRANSITION_MS: AtomicU64 = AtomicU64::new(0);
 /// Decides which rejections are worth announcing. Behind a mutex because the decision reads and
 /// updates "what did we last say" together.
 static REJECT_NOTICE: Mutex<er_invasion_warp::reject_notice::RejectNotice> =
@@ -705,16 +725,7 @@ fn trace_session_state(session: usize) {
     if previous == state as usize {
         return;
     }
-    crate::standalone_log(format_args!(
-        "local-invasion: session state {} -> {:#04x} {}",
-        if previous == usize::MAX {
-            "(first read)".to_owned()
-        } else {
-            format!("{previous:#04x} {}", state_name(previous as u32))
-        },
-        state,
-        state_name(state),
-    ));
+    log_transition(previous, state, None);
     if state == ersc::SESSION_STATE_SEARCHING && !AUTO_SEARCH_ARMED.swap(true, Ordering::SeqCst) {
         crate::standalone_log(format_args!(
             "local-invasion: you started a search -- rejected matches will be cancelled and the \
@@ -737,16 +748,77 @@ fn note_state_after_our_action(session: usize, what: &str) {
     if previous == state as usize {
         return;
     }
+    log_transition(previous, state, Some(what));
+}
+
+/// Monotonic milliseconds since the first call.
+///
+/// The DLL log carries no timestamps of its own, so every elapsed measurement in this module comes
+/// from here.
+fn now_ms() -> u64 {
+    let start = *PROCESS_START.get_or_init(std::time::Instant::now);
+    // Saturating into u64 ms: a process cannot run long enough to overflow, and a cast that could
+    // wrap would hand the detector a clock that appears to jump backwards.
+    u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+/// Write one session-state transition, stamped with how long the previous state was held.
+///
+/// The dwell is reported in ticks AND in milliseconds because those two disagree only when the
+/// frame rate changes, and that disagreement is the entire measurement — see [`TICKS`]. The implied
+/// rate is printed so a pair of dwells taken at the same frame rate reads as inconclusive instead of
+/// being mistaken for agreement between the two.
+///
+/// "Ticks", not "frames": this counts calls to [`tick`], which the recurring game task is expected
+/// to make once per frame. The printed rate is what exposes that expectation if it is ever wrong —
+/// a figure nowhere near the game's actual frame rate means the two have come apart, and the tick
+/// column stops meaning what it says.
+fn log_transition(previous: usize, state: u32, driven_by: Option<&str>) {
+    let now = now_ms();
+    let tick = TICKS.load(Ordering::SeqCst);
+    let since_tick = tick.saturating_sub(LAST_TRANSITION_TICK.swap(tick, Ordering::SeqCst));
+    let since_ms = now.saturating_sub(LAST_TRANSITION_MS.swap(now, Ordering::SeqCst));
+    let first = previous == usize::MAX;
     crate::standalone_log(format_args!(
-        "local-invasion: session state {} -> {:#04x} {} (driven by us: {what})",
-        if previous == usize::MAX {
+        "local-invasion: session state {} -> {:#04x} {}{}{}",
+        if first {
             "(first read)".to_owned()
         } else {
             format!("{previous:#04x} {}", state_name(previous as u32))
         },
         state,
         state_name(state),
+        // Suppressed on the very first line, where the "previous state" is the whole process
+        // lifetime rather than a dwell and the number would invite exactly the wrong reading.
+        if first {
+            String::new()
+        } else {
+            format!(
+                " -- held {since_tick} ticks / {since_ms}ms{}",
+                match implied_fps(since_tick, since_ms) {
+                    Some(fps) => format!(" (~{fps} fps)"),
+                    None => String::new(),
+                }
+            )
+        },
+        match driven_by {
+            Some(what) => format!(" (driven by us: {what})"),
+            None => String::new(),
+        },
     ));
+}
+
+/// Ticks per second over a dwell, or `None` when the interval is too short to divide meaningfully.
+///
+/// Kept out of [`log_transition`] so the rounding is testable without a game attached — the figure
+/// exists to be compared against the game's real frame rate, and one that silently rounds to zero
+/// would read as "the task stopped ticking".
+#[must_use]
+const fn implied_fps(ticks: u64, ms: u64) -> Option<u64> {
+    if ms == 0 || ticks == 0 {
+        return None;
+    }
+    Some(ticks.saturating_mul(1000) / ms)
 }
 
 /// Names for the three session states this module has evidence for, so the trace is readable
@@ -1268,12 +1340,7 @@ fn watch_for_stall(session: SeamlessSession) {
     let Some(state) = read_session_state(session.session) else {
         return;
     };
-    let now_ms = {
-        let start = *PROCESS_START.get_or_init(std::time::Instant::now);
-        // Saturating into u64 ms: a process cannot run long enough to overflow, and a cast that
-        // could wrap would hand the detector a clock that appears to jump backwards.
-        u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
-    };
+    let now_ms = now_ms();
     let action = {
         let mut guard = match STALL_WATCHDOG.lock() {
             Ok(guard) => guard,
@@ -1586,6 +1653,9 @@ fn apply_mark(adding: bool, by_name: bool) {
 /// Game task thread, with the runtime up.
 #[cfg(windows)]
 pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
+    // Counted before any early return, so a dwell measured across a stretch where Seamless was not
+    // resolvable still reflects the frames that actually passed.
+    TICKS.fetch_add(1, Ordering::SeqCst);
     install_join_hook();
     install_show_observer();
     // Read-only, and independent of the filter: it reports the one string that decides whether two
@@ -1736,6 +1806,39 @@ pub fn tallies() -> (usize, usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The dwell figure exists to be compared against the game's real frame rate; one that rounds
+    /// to zero on a plausible interval would read as "the task stopped ticking" and send the next
+    /// reader hunting a hang that never happened.
+    #[test]
+    fn a_dwell_at_a_normal_frame_rate_reports_that_frame_rate() {
+        // 600 ticks over 10s -- the shape of the measured `0x11` retry dwell at 60fps.
+        assert_eq!(implied_fps(600, 10_000), Some(60));
+        // The same wall-clock dwell at half the frame rate: HALF the ticks. This is the frame-vs-
+        // clock discriminator in miniature -- if the retry is a clock, this is what the log shows.
+        assert_eq!(implied_fps(300, 10_000), Some(30));
+        // The same TICK dwell at half the frame rate: twice the wall clock. If the retry is a frame
+        // counter, this is what the log shows instead. The two are distinguishable only because
+        // both columns are recorded.
+        assert_eq!(implied_fps(600, 20_000), Some(30));
+    }
+
+    /// Degenerate intervals must decline to divide rather than emit a misleading number: two
+    /// transitions inside one tick say nothing about the frame rate.
+    #[test]
+    fn an_interval_too_short_to_divide_reports_nothing_rather_than_zero() {
+        assert_eq!(implied_fps(0, 10_000), None, "no ticks elapsed");
+        assert_eq!(implied_fps(600, 0), None, "no time elapsed");
+        assert_eq!(implied_fps(0, 0), None);
+    }
+
+    /// A dwell shorter than a millisecond per tick must not be reported as zero fps -- it is a very
+    /// FAST interval, and zero would read as a stall.
+    #[test]
+    fn a_sub_millisecond_dwell_never_reports_as_a_stalled_task() {
+        assert_ne!(implied_fps(1, 1), Some(0));
+        assert_eq!(implied_fps(1, 1), Some(1000));
+    }
 
     #[test]
     fn the_default_mark_keys_are_insert_and_delete_and_are_distinct_from_the_warp_keys() {
