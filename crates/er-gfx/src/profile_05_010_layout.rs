@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::path::Path;
+use std::sync::OnceLock;
 
 pub const DEFAULT_PROFILE_05_010_LAYOUT_PATH: &str = "crates/er-gfx/profile_05_010_layout.toml";
 pub const FIELD_NAMES: [&str; 10] = [
@@ -127,8 +128,40 @@ impl fmt::Display for LayoutError {
 
 impl std::error::Error for LayoutError {}
 
+/// The schema file, embedded at compile time. Nothing reads the TOML from disk at runtime: these
+/// bytes are the shipped layout, baked into the DLL.
+const SHIPPED_LAYOUT_TOML: &str = include_str!("../profile_05_010_layout.toml");
+
 impl Default for Profile05_010Layout {
+    /// The values this crate ships, which are the checked-in TOML and nothing else.
+    ///
+    /// This used to be a second hard-coded copy of every number, and it drifted: seven of the ten
+    /// fields disagreed with the TOML (`PlayerName` was still `x -529 w252` against the schema's
+    /// `x -520 w1200`). That mattered because `default()` is live at runtime -- it is the base
+    /// `profile_05_010_protocol` layers an incoming control file onto, so any field a control file
+    /// omitted silently inherited a stale number. One source of truth now; [`bootstrap`] exists
+    /// only to give the parser a struct to fill and can never be observed with the schema present.
+    ///
+    /// [`bootstrap`]: Profile05_010Layout::bootstrap
     fn default() -> Self {
+        static SHIPPED: OnceLock<Profile05_010Layout> = OnceLock::new();
+        SHIPPED
+            .get_or_init(|| {
+                Profile05_010Layout::parse_from(
+                    Profile05_010Layout::bootstrap(),
+                    SHIPPED_LAYOUT_TOML,
+                )
+                .expect("checked-in profile_05_010_layout.toml must parse and validate")
+            })
+            .clone()
+    }
+}
+
+impl Profile05_010Layout {
+    /// Structural seed for the parser only -- every value here is overwritten by
+    /// [`SHIPPED_LAYOUT_TOML`], which specifies all ten fields in full. Do not treat these numbers
+    /// as meaningful and do not tune them; edit the TOML.
+    fn bootstrap() -> Self {
         let mut fields = BTreeMap::new();
         for (name, field) in [
             (
@@ -330,8 +363,15 @@ impl Profile05_010Layout {
         Self::parse(&text)
     }
 
+    /// Parse `text` as overrides on top of the shipped defaults, so a partial file (a control file
+    /// carrying one field, say) inherits the values this crate actually ships rather than a second,
+    /// drifting set.
     pub fn parse(text: &str) -> Result<Self, LayoutError> {
-        let mut layout = Self::default();
+        Self::parse_from(Self::default(), text)
+    }
+
+    fn parse_from(base: Self, text: &str) -> Result<Self, LayoutError> {
+        let mut layout = base;
         let mut section = String::new();
         for (idx, raw) in text.lines().enumerate() {
             let line_no = idx + 1;
@@ -638,6 +678,38 @@ mod tests {
                 .is_ok(),
             "39 px clears the requirement"
         );
+    }
+
+    /// `default()` must BE the shipped schema, and a partial parse must inherit it.
+    ///
+    /// The regression: `default()` was a second hard-coded copy of every number and had drifted from
+    /// the TOML in seven of ten fields. `profile_05_010_protocol` layers an incoming control file
+    /// onto `default()`, so any field the control file omitted resolved to a stale value at runtime
+    /// -- `PlayerName` would have come back `x -529 w252` instead of the shipped `x -520 w1200`.
+    #[test]
+    fn defaults_are_the_shipped_schema_and_partial_parses_inherit_them() {
+        let shipped = Profile05_010Layout::parse(SHIPPED_LAYOUT_TOML).expect("schema parses");
+        let default = Profile05_010Layout::default();
+        for name in FIELD_NAMES {
+            assert_eq!(
+                default.field(name),
+                shipped.field(name),
+                "field.{name} default drifted from profile_05_010_layout.toml"
+            );
+        }
+        assert_eq!(default.list, shipped.list);
+        assert_eq!(default.row_chrome, shipped.row_chrome);
+
+        // A control file that mentions only `list` must leave every field at the shipped value.
+        let partial = Profile05_010Layout::parse("[list]\nrow_pitch = 48\n")
+            .expect("a partial layout parses as overrides on the shipped defaults");
+        for name in FIELD_NAMES {
+            assert_eq!(
+                partial.field(name),
+                shipped.field(name),
+                "field.{name} did not inherit the shipped value through a partial parse"
+            );
+        }
     }
 
     /// Every field in the checked-in schema must clear its own font, not just `PlayerName`.
