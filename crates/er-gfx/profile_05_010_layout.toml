@@ -2,15 +2,17 @@
 # Edited by scripts/profile-05-010-editor.py or by hand.
 # The canvas is approximate; in-game Scaleform rendering is the final oracle.
 # Icon_0 stays placed and hidden, never unplaced.
+#
+# clip_height has a hard floor: one line of the menu font is font_height * 1.432617 px (Agmena
+# ascent 20800 + descent 8540 over a 20480 em square) and the GFx reflow insets 2px per edge, so
+# clip_height must be >= ceil(font_height * 1.432617 + 4) -- 39 at font_height 24. Below that the
+# text cannot lay out and the field renders short. Enforced in Profile05_010Layout::validate; do
+# not annotate individual fields here, the editor rewrites this file and drops in-block comments.
 
 [field.PlayerName]
-x = -500
+x = -520
 y = -17
 width = 1200
-# 40, not 30: the Agmena line box at font_height 24 is 34.383 px (ascent 20800 +
-# descent 8540 over EMSQUARE 20480), and FUN_14114bf10 insets the usable area by
-# 2 px per edge, so anything under 38.383 px cannot hold one line. Vanilla's own
-# PlayerName rect is 40 px for exactly this reason. 30 left 26 px usable.
 clip_height = 40
 font_height = 24
 align = "left"
@@ -19,8 +21,8 @@ sample_save_picker = "[..] save-files"
 sample_drive_row = "Save Root"
 
 [field.StaticText_110502]
-x = -325
-y = -17.325
+x = -346
+y = -18.25
 width = 149
 clip_height = 40
 font_height = 24
@@ -30,8 +32,8 @@ sample_save_picker = ""
 sample_drive_row = ""
 
 [field.Level]
-x = -282
-y = -16
+x = -289.5
+y = -19.5
 width = 52
 clip_height = 40
 font_height = 24
@@ -74,11 +76,11 @@ sample_save_picker = "PARENT FOLDER / Go to save-files"
 sample_drive_row = "45-Slots / ER0000.sl2"
 
 [field.ErCharStats]
-x = -185
-y = -14
+x = -218
+y = -13
 width = 470
 clip_height = 42
-font_height = 17
+font_height = 18
 align = "center"
 sample_load_character = "VIG 50 MND 10 END 50 STR 21 DEX 21 INT 10 FAI 35 ARC 7"
 sample_save_picker = ""
