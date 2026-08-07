@@ -314,6 +314,29 @@ pub fn min_clip_height_px(font_height: i32) -> i32 {
     (line_box_px(font_height) + (2 * TEXT_DOC_INSET_PX_PER_EDGE) as f32).ceil() as i32
 }
 
+/// Inverse of [`min_clip_height_px`]: the largest `font_height` a box of `clip_height` can render
+/// one line of. Zero when the box cannot hold any line at all.
+///
+/// This is the ceiling the LIVE path needs. `font_height` hot-reloads instantly through the
+/// `<font size>` wrap, but `clip_height` is baked into the movie and is never applied live -- so a
+/// font raised past this bound overflows a box that will not grow until the asset is rebuilt and
+/// the screen reopened.
+pub fn max_font_height_px(clip_height: i32) -> i32 {
+    let usable = clip_height - 2 * TEXT_DOC_INSET_PX_PER_EDGE;
+    if usable <= 0 {
+        return 0;
+    }
+    (usable as f32 * MENU_FONT_EM_SQUARE as f32 / (MENU_FONT_ASCENT + MENU_FONT_DESCENT) as f32)
+        .floor() as i32
+}
+
+/// The shipped layout, parsed once. Borrow this instead of cloning through [`Default`] on a hot
+/// path such as a per-SetText clamp.
+pub fn shipped() -> &'static Profile05_010Layout {
+    static SHIPPED_REF: OnceLock<Profile05_010Layout> = OnceLock::new();
+    SHIPPED_REF.get_or_init(Profile05_010Layout::default)
+}
+
 fn field(
     x: i32,
     y: i32,
@@ -678,6 +701,36 @@ mod tests {
                 .is_ok(),
             "39 px clears the requirement"
         );
+    }
+
+    /// The live font ceiling and the schema floor must be exact inverses, or one of them lies.
+    ///
+    /// `max_font_height_px` is what the DLL clamps a live `font_height` to, because `clip_height`
+    /// is baked into the movie and never applied live. If it ever disagreed with
+    /// `min_clip_height_px`, the clamp would either overflow the box or shrink text that fit.
+    #[test]
+    fn the_live_font_ceiling_is_the_exact_inverse_of_the_clip_height_floor() {
+        for clip in 8..=120 {
+            let ceiling = max_font_height_px(clip);
+            if ceiling <= 0 {
+                continue;
+            }
+            assert!(
+                min_clip_height_px(ceiling) <= clip,
+                "clip {clip} says font {ceiling} fits, but the floor for {ceiling} is {}",
+                min_clip_height_px(ceiling)
+            );
+            assert!(
+                min_clip_height_px(ceiling + 1) > clip,
+                "clip {clip} rejects font {} but the floor says it fits",
+                ceiling + 1
+            );
+        }
+        // The two shipped box heights, spelled out.
+        assert_eq!(max_font_height_px(40), 25);
+        assert_eq!(max_font_height_px(42), 26);
+        // A box too small for any line yields no ceiling rather than a negative one.
+        assert_eq!(max_font_height_px(4), 0);
     }
 
     /// `default()` must BE the shipped schema, and a partial parse must inherit it.
