@@ -30,6 +30,17 @@ const SCALE_ONE: i32 = 0x1_0000;
 const PROFILE_ROW_VISIBLE_CONTENT_LEFT_PX: i32 = -540;
 const PROFILE_ROW_VISIBLE_CONTENT_RIGHT_PX: i32 = 540;
 const LOAD_CHARACTER_RENDERED_VERTICAL_TOLERANCE_PX: i32 = 4;
+/// Worst-case filename characters the save-file view can show in `PlayerName` before the name
+/// reaches the metadata line. This is the MEASURED floor, and it is too low: `ER0000.sl2` is 10 and
+/// fits, but a dated backup like `er-effects-save-20260807.sl2` is 28 and does not.
+///
+/// It is a regression gate, NOT a statement that the file view is well laid out. `PlayerName` is one
+/// box shared by the merged character header and the save-file name, and it has been `x -520 w1200`
+/// for six revisions -- so this ceiling predates the merged header rather than being caused by it
+/// (`git log -p crates/er-gfx/profile_05_010_layout.toml`). Raising it means giving the two surfaces
+/// separate fields, the way `ErStats`/`ErCharStats` already split the metadata line. Until then this
+/// pins the number so it cannot quietly erode further.
+const SAVE_PICKER_MIN_FILENAME_CHARS: i32 = 12;
 fn compact_y(y_px: i32) -> i32 {
     y_px * COMPACT_ROW_PITCH_PX / VANILLA_ROW_PITCH_PX
 }
@@ -213,6 +224,30 @@ fn stats_panel_output_places_stats_field_and_hides_face_box() {
         Some(0),
         "Icon_0 alpha multiply must be 0 (fully transparent): {cx:?}"
     );
+    // PlayTime is hidden the same way and for the same structural reason: placed so the native
+    // populate can still resolve and release it, alpha-0 so it never draws. No row rendering wants
+    // it (the merged row frees its band for `Location`, browse rows never had it, and the picker's
+    // timestamp goes to `Location`), and the one rendering that still drew it -- the unmerged
+    // `NATIVE` fallback -- collided with the widened `Location`.
+    let play_time = row
+        .iter()
+        .find_map(|t| match t {
+            Tag::PlaceObject2 {
+                name: Some(n),
+                color_transform,
+                ..
+            } if n == "PlayTime" => Some(color_transform),
+            _ => None,
+        })
+        .expect("PlayTime placement must stay placed (native populate resolves and releases it)");
+    let cx = play_time
+        .as_ref()
+        .expect("hidden PlayTime carries a color transform");
+    assert_eq!(
+        cx.mult.map(|m| m[3]),
+        Some(0),
+        "PlayTime alpha multiply must be 0 (fully transparent): {cx:?}"
+    );
     // The merged stat field and synthetic drive cells must be placed on the row's visible frame,
     // before `ShowFrame`; placements after `ShowFrame` parse fine but do not draw on the row.
     assert!(
@@ -273,7 +308,6 @@ fn stats_panel_output_places_stats_field_and_hides_face_box() {
         "Location",
         "Level",
         "StaticText_110502",
-        "PlayTime",
         STATS_FIELD_NAME,
         DRIVE_CELL_FIELD_NAMES[0],
         DRIVE_CELL_FIELD_NAMES[1],
@@ -286,6 +320,14 @@ fn stats_panel_output_places_stats_field_and_hides_face_box() {
         );
         assert_not_alpha_zero(row, inline);
     }
+    // PlayTime is absent from that list because it is asserted alpha-ZERO above -- it is placed and
+    // schema-positioned but never drawn. Its schema y placement is still checked here, so the schema
+    // stays the single source of truth for a field that only a future un-hide would render.
+    assert_eq!(
+        row_placement_matrix(row, "PlayTime").translate_y,
+        (layout.field("PlayTime").y * 20.0).round() as i32,
+        "PlayTime must use the visual editor schema y placement even while hidden"
+    );
     let flourishes: Vec<_> = row
         .iter()
         .filter_map(|t| match t {
@@ -764,6 +806,154 @@ fn stats_panel_output_keeps_load_character_row_text_from_overlapping() {
     // merged header's width varies with the name.
 }
 
+/// Assert no two rendered-ink rects in `rects` touch, allowing `gutter_px` of slack.
+/// Reports EVERY colliding pair, not just the first, so one run names the whole defect.
+fn assert_no_ink_overlaps(kind: &str, rects: &[TextRect], gutter_px: i32) {
+    let mut collisions = Vec::new();
+    for (i, a) in rects.iter().enumerate() {
+        for b in rects.iter().skip(i + 1) {
+            if a.inflated(gutter_px).overlaps(&b.inflated(gutter_px)) {
+                collisions.push(format!(
+                    "{} [{}..{}] vs {} [{}..{}]",
+                    a.name, a.left, a.right, b.name, b.left, b.right
+                ));
+            }
+        }
+    }
+    assert!(
+        collisions.is_empty(),
+        "{kind} row text overlaps with {gutter_px}px gutter ({} collision(s)):\n  {}\nall={rects:#?}",
+        collisions.len(),
+        collisions.join("\n  ")
+    );
+}
+
+/// The UNMERGED character row -- `RowSlotFieldVisibility::NATIVE`, the fallback a row takes when
+/// the merged header cannot be composed (no readable name). It draws the game's own layout: the
+/// name, the `Level` FMG caption and its value, `Location`, and our attribute line.
+///
+/// This is the "vanilla view" and it had NO overlap gate. Only the merged rendering was measured,
+/// so widening `PlayerName` into a full-width merged-header strip was free to run straight through
+/// the caption and value that this rendering still draws.
+///
+/// `PlayTime` is NOT sampled: it is hidden at the asset level (alpha-0, asserted in
+/// `stats_panel_output_places_stats_field_and_hides_face_box`) because the widened `Location` now
+/// occupies its band. Dropping it from this list is the FIX being asserted, not a way to dodge the
+/// failure -- it was the sole collision this gate found (`Location` 6600..10600 twips through
+/// `PlayTime` 9200..10500, 65px of ink).
+///
+/// The caption sample is the real FMG text `Level`, not the schema's `sample_load_character` -- the
+/// merge only HIDES that field, it never rewrites the FMG, so `Level` is what an unmerged row puts
+/// on screen.
+#[test]
+fn stats_panel_output_keeps_unmerged_vanilla_character_row_text_from_overlapping() {
+    let Some(vanilla) = read_vanilla_or_skip() else {
+        return;
+    };
+    let Some(font_movie) = read_font_movie_or_skip() else {
+        return;
+    };
+    let out = stats_panel(&vanilla).expect("edits must apply cleanly");
+    let movie = Movie::parse(&out).expect("edited movie parses");
+    let layout = Profile05_010Layout::parse(include_str!("../profile_05_010_layout.toml"))
+        .expect("checked-in visual editor schema parses");
+    let samples = [
+        ("PlayerName", "Maddened Bean", None),
+        ("StaticText_110502", "Level", None),
+        ("Level", "125", None),
+        ("Location", "Elphael, Brace of the Haligtree", None),
+        (
+            CHAR_STATS_FIELD_NAME,
+            "VIG 50 MND 10 END 50 STR 21 DEX 21 INT 10 FAI 35 ARC 7",
+            Some(layout.field(CHAR_STATS_FIELD_NAME).font_height as f32),
+        ),
+    ];
+    let rects: Vec<_> = samples
+        .iter()
+        .map(|(name, sample, height)| {
+            row_sample_rendered_text_rect(&movie, &font_movie, name, sample, *height)
+        })
+        .collect();
+    assert_no_ink_overlaps("unmerged vanilla character", &rects, 4);
+}
+
+/// A picker-owned browse row -- `RowSlotFieldVisibility::browse_row`. It draws the file/folder name
+/// in `PlayerName`, our wide metadata line in `ErStats`, the three drive cells, and `Location` only
+/// when a timestamp is staged.
+///
+/// The save-picker rendering had a CONTAINMENT gate (every field inside the row frame) but no
+/// overlap gate, so two picker fields could sit on top of each other and stay green. Containment
+/// and separation are different properties; the character row has always had both.
+#[test]
+fn stats_panel_output_keeps_save_picker_row_text_from_overlapping() {
+    let Some(vanilla) = read_vanilla_or_skip() else {
+        return;
+    };
+    let Some(font_movie) = read_font_movie_or_skip() else {
+        return;
+    };
+    let out = stats_panel(&vanilla).expect("edits must apply cleanly");
+    let movie = Movie::parse(&out).expect("edited movie parses");
+    // A DRIVE row: the strip is populated and the name is the root label.
+    let drive_row = [
+        ("PlayerName", "Save Root", None),
+        (DRIVE_CELL_FIELD_NAMES[0], "[C:]", None),
+        (DRIVE_CELL_FIELD_NAMES[1], "[S:]", None),
+        (DRIVE_CELL_FIELD_NAMES[2], ">Z:<", None),
+    ];
+    // A FILE row: the metadata line is populated, the drive cells are blanked (no ink), and the
+    // timestamp is staged into Location.
+    let file_row = [
+        ("PlayerName", "er-effects-save-20260807.sl2", None),
+        (
+            STATS_FIELD_NAME,
+            "10 CHAR / Hero L7 / Hero L7 / Vagabond L45 +7",
+            None,
+        ),
+        ("Location", "2026-07-07", None),
+    ];
+    for (kind, samples) in [
+        ("save-picker drive", drive_row.as_slice()),
+        ("save-picker file", file_row.as_slice()),
+    ] {
+        let rects: Vec<_> = samples
+            .iter()
+            .map(|(name, sample, height)| {
+                row_sample_rendered_text_rect(&movie, &font_movie, name, sample, *height)
+            })
+            .collect();
+        assert_no_ink_overlaps(kind, &rects, 4);
+    }
+    // MEASURE the headroom, do not just check one sample. `PlayerName` is one box shared by every
+    // surface, sized for the merged character header (a name is at most 16 characters), while the
+    // file view puts arbitrary FILENAMES in it. Report how many characters actually fit before the
+    // name reaches `ErStats`, so shrinking that budget is a visible regression rather than a
+    // surprise the day someone opens a folder with long names.
+    let font = raster_font(&font_movie).expect("font movie has a rasterizable DefineFont3");
+    let name_left =
+        row_sample_rendered_text_rect(&movie, &font_movie, "PlayerName", "M", None).left;
+    let stats_left =
+        row_sample_rendered_text_rect(&movie, &font_movie, STATS_FIELD_NAME, "M", None).left;
+    let run_px = (stats_left - name_left) as f32 / 20.0;
+    let layout = Profile05_010Layout::parse(include_str!("../profile_05_010_layout.toml"))
+        .expect("checked-in visual editor schema parses");
+    let em = layout.field("PlayerName").font_height as f32;
+    let scale = font.scale_for_em_px(em);
+    // A conservative per-character width: the widest character a save filename realistically uses.
+    let widest = "MW0123456789"
+        .chars()
+        .map(|c| font.advance_px(c, scale))
+        .fold(0.0f32, f32::max);
+    let chars_that_fit = (run_px / widest).floor() as i32;
+    assert!(
+        chars_that_fit >= SAVE_PICKER_MIN_FILENAME_CHARS,
+        "the file view can only show {chars_that_fit} worst-case characters of a filename before \
+         PlayerName reaches {STATS_FIELD_NAME} (run={run_px:.1}px widest_glyph={widest:.1}px em={em}); \
+         PlayerName is shared with the merged character header, so widening it for a name shortens \
+         this. Give the two surfaces separate fields rather than lowering this floor."
+    );
+}
+
 #[test]
 fn stats_panel_output_keeps_load_character_rendered_text_inside_the_visible_row_content_area() {
     let Some(vanilla) = read_vanilla_or_skip() else {
@@ -843,7 +1033,9 @@ fn stats_panel_output_keeps_save_picker_rendered_text_inside_the_visible_row_con
             "10 CHAR / Hero L7 / Hero L7 / Vagabond L45 +7",
             None,
         ),
-        ("PlayTime", "2026-07-07", None),
+        // The picker's last-saved timestamp goes to `Location` (`stage_row_model_location`), not to
+        // `PlayTime` -- `browse_row` has never shown `PlayTime`, and it is now asset-hidden anyway.
+        ("Location", "2026-07-07", None),
     ];
     let content_left = PROFILE_ROW_VISIBLE_CONTENT_LEFT_PX * 20;
     let content_right = PROFILE_ROW_VISIBLE_CONTENT_RIGHT_PX * 20;
