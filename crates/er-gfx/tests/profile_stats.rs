@@ -966,9 +966,9 @@ fn stats_panel_output_keeps_unmerged_vanilla_character_row_text_from_overlapping
     assert_no_ink_overlaps("unmerged vanilla character", &rects, 4);
 }
 
-/// A picker-owned browse row -- `RowSlotFieldVisibility::browse_row`. It draws the file/folder name
-/// in `PlayerName`, our wide metadata line in `ErStats`, the three drive cells, and `Location` only
-/// when a timestamp is staged.
+/// Picker-owned rows -- `RowSlotFieldVisibility::browse_row`. Every one draws its label in
+/// `PlayerName`; file/folder rows may draw the wide `ErStats` metadata line and a staged `Location`
+/// timestamp, while the mutually-exclusive drive row draws the three drive cells instead.
 ///
 /// The save-picker rendering had a CONTAINMENT gate (every field inside the row frame) but no
 /// overlap gate, so two picker fields could sit on top of each other and stay green. Containment
@@ -990,8 +990,8 @@ fn stats_panel_output_keeps_save_picker_row_text_from_overlapping() {
         (DRIVE_CELL_FIELD_NAMES[1], "[S:]", None),
         (DRIVE_CELL_FIELD_NAMES[2], ">Z:<", None),
     ];
-    // A FILE row: the metadata line is populated, the drive cells are blanked (no ink), and the
-    // timestamp is staged into Location.
+    // A FILE row: the metadata line is populated, the drive cells are hidden (and blanked as
+    // redundant content hygiene), and the timestamp is staged into Location.
     let file_row = [
         ("PlayerName", "er-effects-save-20260807.sl2", None),
         (

@@ -158,11 +158,13 @@ pub struct RowSlotFieldVisibility {
     /// The bottom-right `PlayTime` field.
     pub play_time: bool,
     /// `ErStats` -- our merged line: the browse rows' "FOLDER / ..." / "N CHAR / ..." text.
+    /// Hidden on a drive row, which has no stats copy of its own, so a recycled parent-row field
+    /// cannot keep showing "PARENT FOLDER / ..." beside the drive cells.
     pub er_stats: bool,
     /// `ErCharStats` -- our attribute line, "VIG 50 MND 10 ...". Character rows only.
     pub char_stats: bool,
-    /// `DriveCell_0..2` -- the drive-letter cells, which live and die together. Available on every
-    /// picker-owned row (the picker blanks the cells per row), denied on character rows.
+    /// `DriveCell_0..2` -- the drive-letter cells, which live and die together. Visible only on the
+    /// picker's drive-cycle row, denied everywhere else.
     pub drive_cells: bool,
 }
 
@@ -223,26 +225,23 @@ impl RowSlotFieldVisibility {
         }
     }
 
-    /// Browse/file rows are not profile slots; level is hidden, the top-right
-    /// location field is shown only when it carries a staged timestamp, and the
-    /// bottom play-time row is always hidden so file rows collapse to one line.
+    /// Picker-owned rows are not profile slots; level is hidden, the top-right location field is
+    /// shown only when it carries a staged timestamp, and the bottom play-time row is always hidden
+    /// so file rows collapse to one line.
     ///
-    /// `char_stats` is false: the attribute line describes a character, and a file row has none.
-    ///
-    /// `drive_cells` is TRUE for every picker-owned row, including plain file and directory rows.
-    /// That is deliberate: the picker already writes all three cells on every row it owns, blanking
-    /// them where there is no drive strip, so their CONTENT is decided per row by that pass and the
-    /// visibility statement only has to keep them available. Denying them here would hide the drive
-    /// strip on the drive row itself. Character rows deny them, which is what stops the strip
-    /// surviving onto a recycled character-slot clip.
-    pub const fn browse_row(has_timestamp: bool) -> Self {
+    /// `char_stats` is false: the attribute line describes a character, and a picker row has none.
+    /// `er_stats` and `drive_cells` are row-kind decisions supplied by the save-picker model. They
+    /// must not be blanket picker-wide `true`: recycled row clips retain fields that the next row
+    /// never writes, which is how the drive strip appeared on every row and the parent-folder copy
+    /// survived onto the drive row.
+    pub const fn browse_row(has_timestamp: bool, er_stats: bool, drive_cells: bool) -> Self {
         Self {
             level: false,
             location: has_timestamp,
             play_time: false,
-            er_stats: true,
+            er_stats,
             char_stats: false,
-            drive_cells: true,
+            drive_cells,
         }
     }
 }
@@ -313,23 +312,23 @@ mod tests {
     #[test]
     fn row_visibility_decisions_match_picker_contract() {
         assert_eq!(
-            RowSlotFieldVisibility::browse_row(true),
+            RowSlotFieldVisibility::browse_row(true, true, false),
             RowSlotFieldVisibility {
                 level: false,
                 location: true,
                 play_time: false,
                 er_stats: true,
                 char_stats: false,
-                drive_cells: true,
+                drive_cells: false,
             }
         );
         assert_eq!(
-            RowSlotFieldVisibility::browse_row(false),
+            RowSlotFieldVisibility::browse_row(false, false, true),
             RowSlotFieldVisibility {
                 level: false,
                 location: false,
                 play_time: false,
-                er_stats: true,
+                er_stats: false,
                 char_stats: false,
                 drive_cells: true,
             }
@@ -368,26 +367,31 @@ mod tests {
     }
 
     /// Every field must be claimed by exactly one row kind and denied by the others, or a recycled
-    /// clip keeps the previous kind's text. This is the invariant the leak violated: `char_stats`
-    /// was shown on character rows and never denied on browse rows, `drive_cells` shown on drive
-    /// rows and never denied on character rows.
+    /// clip keeps the previous kind's text. The parent/file metadata field and the drive cells are
+    /// separate row kinds as well as being picker-only fields: making both visible picker-wide is
+    /// what put the drive letters on every row and stale parent copy on the drive row.
     #[test]
     fn each_row_kind_states_an_answer_for_every_field_and_they_disagree() {
         let native = RowSlotFieldVisibility::NATIVE;
-        let browse = RowSlotFieldVisibility::browse_row(true);
+        let browse = RowSlotFieldVisibility::browse_row(true, true, false);
+        let drive = RowSlotFieldVisibility::browse_row(false, false, true);
 
-        // The character-only field is denied by the picker kind.
-        assert!(native.char_stats && !browse.char_stats);
-        // The picker-only fields are denied by the character kind. drive_cells stays available on
-        // every picker row because the picker's own per-row pass decides their content.
-        assert!(!native.er_stats && browse.er_stats);
-        assert!(!native.drive_cells && browse.drive_cells);
+        // The character-only field is denied by both picker kinds.
+        assert!(native.char_stats && !browse.char_stats && !drive.char_stats);
+        // The metadata and drive fields are mutually exclusive and both denied by character rows.
+        assert!(!native.er_stats && browse.er_stats && !drive.er_stats);
+        assert!(!native.drive_cells && !browse.drive_cells && drive.drive_cells);
         // The native per-slot fields belong to character rows.
-        assert!(native.level && !browse.level);
-        assert!(native.play_time && !browse.play_time);
+        assert!(native.level && !browse.level && !drive.level);
+        assert!(native.play_time && !browse.play_time && !drive.play_time);
 
-        // The two kinds differ, so `!= NATIVE` remains a meaningful "this row is ours" test.
+        // Every picker kind differs from NATIVE, so the visibility pass fires on its first row.
         assert_ne!(native, browse);
-        assert_ne!(browse, RowSlotFieldVisibility::browse_row(false));
+        assert_ne!(native, drive);
+        assert_ne!(browse, drive);
+        assert_ne!(
+            browse,
+            RowSlotFieldVisibility::browse_row(false, true, false)
+        );
     }
 }

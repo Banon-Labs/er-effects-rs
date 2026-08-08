@@ -1386,16 +1386,21 @@ pub(crate) fn save_picker_browse_stats_lines(row: usize) -> Option<(Vec<u16>, Ve
     ))
 }
 
-/// What a browse row does with the native per-slot info fields.
+/// What a picker-owned row does with every optional ProfileSelect field family.
 ///
-/// The `Level` caption/value and bottom `PlayTime` are hidden for picker-owned rows. A save-file row
-/// stages its timestamp into top-right `Location`, so the row reads as one line: filename left,
-/// last-saved time right.
+/// The `Level` caption/value and bottom `PlayTime` are hidden for every picker row. The remaining
+/// fields are row-kind-specific: a save-file row can stage its timestamp into top-right `Location`,
+/// metadata rows own `ErStats`, and only the drive-cycle row owns `DriveCell_0..2`.
 pub(crate) struct RowSlotInfo {
     /// Replacement text for the `Location` field (when the file was last written), or `None` to hide
     /// the field -- which is what every non-file row gets, and what a file whose timestamp is
     /// unreadable gets rather than a fabricated date.
     pub(crate) location: Option<String>,
+    /// Whether this row has real `ErStats` copy. False on the drive row unless a visible status
+    /// message temporarily owns it, so stale parent-folder copy cannot survive row-clip reuse.
+    pub(crate) er_stats: bool,
+    /// Whether this is the one drive-cycle row. Drive cells are hidden on every other picker row.
+    pub(crate) drive_cells: bool,
 }
 
 /// What the browse picker wants done with ProfileSelect row `row`'s per-slot info fields.
@@ -1408,13 +1413,19 @@ pub(crate) fn save_picker_row_slot_info(row: usize) -> Option<RowSlotInfo> {
     if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 && !missing_save_selection_pending() {
         return None;
     }
-    let last_saved = {
+    let (last_saved, er_stats, drive_cells) = {
         let guard = crate::experiments::save_picker::active_save_picker_lock();
         let model = guard.as_ref()?;
-        model.row_last_saved(row)
+        (
+            model.row_last_saved(row),
+            model.row_auxiliary_lines(row).is_some() || model.row_file_characters(row).is_some(),
+            model.drive_row() == Some(row),
+        )
     };
     Some(RowSlotInfo {
         location: last_saved.and_then(save_picker_last_saved_text),
+        er_stats,
+        drive_cells,
     })
 }
 
