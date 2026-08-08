@@ -180,21 +180,26 @@ def place_names(body, code):
         b.sb(n)
         b.sb(n)
         b.align()
-    if f & 0x08:  # color transform
+    if f & 0x08:  # CXFORMWITHALPHA
+        # HasAddTerms UB[1], HasMultTerms UB[1], Nbits UB[4], then FOUR mult terms
+        # (RGBA) if HasMultTerms and FOUR add terms if HasAddTerms -- the layout the
+        # crate's own codec reads (crates/er-gfx/src/codec/shape/primitives.rs,
+        # CxformWithAlpha::read, round-trip tested against the corpus).
+        #
+        # This used to consume ONE flag bit and pick 3-vs-4 terms from it, so every tag
+        # carrying a color transform desynced the reader by a few bits and the instance
+        # NAME that follows was read mid-string: the alpha-zeroed PlayTime placement in
+        # the edited 05_010 movie dumped as 'ime'. A name that silently loses its first
+        # characters reads as a renamed field, which is a different bug entirely.
         b.align()
-        ha = b.ub(1)
+        has_add = b.ub(1)
+        has_mult = b.ub(1)
         n = b.ub(4)
-        if ha:
+        if has_mult:
             for _ in range(4):
                 b.sb(n)
-        else:
-            for _ in range(3):
-                b.sb(n)
-        if ha:
+        if has_add:
             for _ in range(4):
-                b.sb(n)
-        else:
-            for _ in range(3):
                 b.sb(n)
         b.align()
     if f & 0x10:

@@ -635,6 +635,26 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         PROFILE_ROW_SLOT_INFO_NON_DISPLAY.load(Ordering::SeqCst),
         PROFILE_ROW_SLOT_INFO_LAST_DATATYPE.load(Ordering::SeqCst) as isize
     ));
+    // WHOSE MENU EACH SUMMARY POPULATE BELONGED TO. `CS::MenuSaveDataSummary`'s populate is shared by
+    // every character-summary surface, the game's own System>Quit `GameEnd` panel included, so
+    // `_foreign` > 0 with `_missing_field` > 0 is this mod correctly declining to draw on a movie it
+    // never edited. `_own` is the ProfileSelect rows it does own. `_own` at zero while the profile
+    // list is on screen would mean the probe field stopped resolving, i.e. the GFX edit is not live.
+    body.push_str(&format!(
+        "  \"oracle_profile_own_summary_rows\": {},\n  \"oracle_profile_foreign_summary_rows\": {},\n  \"oracle_profile_stats_push_missing_field\": {},\n",
+        PROFILE_OWN_SUMMARY_ROWS.load(Ordering::SeqCst),
+        PROFILE_FOREIGN_SUMMARY_ROWS.load(Ordering::SeqCst),
+        PROFILE_STATS_PUSH_MISSING_FIELD.load(Ordering::SeqCst)
+    ));
+    // LIVE-EDITOR SAFETY GATE. `_window_run_ticks` rises once per rendered frame of the
+    // ProfileSelect view; `_deferred_applies` counts web-UI edits the frame thread refused to write
+    // while that view was on screen, leaving them for the in-band row populate. Deferrals are the
+    // guard working: each one is a crash that did not happen.
+    body.push_str(&format!(
+        "  \"oracle_profile_select_window_run_ticks\": {},\n  \"oracle_profile_editor_deferred_applies\": {},\n",
+        er_telemetry::counters::PROFILE_SELECT_WINDOW_RUN_TICKS.load(Ordering::SeqCst),
+        er_telemetry::counters::PROFILE_EDITOR_DEFERRED_APPLIES.load(Ordering::SeqCst)
+    ));
     // Save-file rows showing when the file was last written in place of the native playtime.
     // `_rows` > 0 proves the row model carried our text into the native populate; `_stage_failures`
     // > 0 means the model field was unreadable and the row kept the game's own playtime string.

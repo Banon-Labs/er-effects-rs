@@ -1866,6 +1866,27 @@ pub static PROFILE_ROW_SLOT_INFO_SHOWN_ROWS: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_ROW_SLOT_INFO_VIS_SKIPS: AtomicUsize = AtomicUsize::new(0);
 /// Per-field visibility calls whose resolved GFx value was not a display object (setter no-ops).
 pub static PROFILE_ROW_SLOT_INFO_NON_DISPLAY: AtomicUsize = AtomicUsize::new(0);
+/// Summary populates left ALONE because the row proxy belongs to a movie this mod never edited --
+/// the game's own System>Quit `GameEnd` panel is the one that matters. `CS::MenuSaveDataSummary`'s
+/// populate is a SHARED template, so every surface that shows a character summary arrives at the
+/// same hook; this counts the ones handed straight back to the game untouched.
+pub static PROFILE_FOREIGN_SUMMARY_ROWS: AtomicUsize = AtomicUsize::new(0);
+/// Summary populates recognised as OUR edited `05_010_ProfileSelect` row template (the probe field
+/// resolved to a real GFx value). Pair with `PROFILE_FOREIGN_SUMMARY_ROWS`: the split is the whole
+/// decoupling claim, and a zero here with a live ProfileSelect list means the probe is wrong.
+pub static PROFILE_OWN_SUMMARY_ROWS: AtomicUsize = AtomicUsize::new(0);
+/// Text pushes REFUSED because the named child does not exist on that movie (the resolve came back
+/// undefined). Before this existed those pushes were counted as successes -- SetText was called on a
+/// self-linked empty proxy and reported 109k "successful" writes to a field the movie did not have.
+pub static PROFILE_STATS_PUSH_MISSING_FIELD: AtomicUsize = AtomicUsize::new(0);
+/// `MenuWindowJob::Run` passes observed for `05_010_ProfileSelect`. It ticks once per FRAME while
+/// that window exists, so a rise between two samples means the view is on screen RIGHT NOW -- which
+/// is the only question the live editor's safety gate needs answered.
+pub static PROFILE_SELECT_WINDOW_RUN_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// Live-editor commands NOT applied from the asynchronous `FrameBegin` path because the ProfileSelect
+/// view was rendering. They are left un-acked so the in-band row-populate path applies them instead.
+/// Non-zero is the guard working, not an error.
+pub static PROFILE_EDITOR_DEFERRED_APPLIES: AtomicUsize = AtomicUsize::new(0);
 /// Last GFx value type seen by the row-field visibility path.
 pub static PROFILE_ROW_SLOT_INFO_LAST_DATATYPE: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// Browse rows whose `PlayTime` was replaced with the file's last-saved timestamp.
