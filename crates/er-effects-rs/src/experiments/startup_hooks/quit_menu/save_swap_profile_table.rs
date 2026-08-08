@@ -39,6 +39,7 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
             PROFILE_PREVIEW_FACE_HASH[slot].store(0, Ordering::SeqCst);
         }
     }
+    PROFILE_PREVIEW_PLACE_NAME_UNSOURCED.store(0, Ordering::SeqCst);
     drop(st);
 
     let Ok(active_slots) = er_save_loader::bnd4::active_slots(bytes) else {
@@ -76,6 +77,10 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
                 summary_snapshot.get(start..start + PROFILE_SUMMARY_RECORD_STRIDE)
             });
             let playtime_ticks = slot_body.in_game_timer_ticks(pgd).unwrap_or(0);
+            // The place name is NOT in the character body -- the game writes it from the front-end
+            // manager at save time. It IS in the save's own stored summary table, so take it from
+            // there rather than deriving one from the map id.
+            let place_name_id = er_save_loader::profile_summary::slot_place_name_id(bytes, slot);
             let face_bytes = slot_body.face_data_buffer_bytes(pgd);
             let chr_asm_image = slot_body.runtime_chr_asm_image(pgd);
             if unsafe {
@@ -84,6 +89,7 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
                     summary,
                     slot,
                     saved_map,
+                    place_name_id,
                     playtime_ticks,
                     fallback,
                     face_bytes,
@@ -107,6 +113,21 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
             st.candidate_stats_utf16 = preview_stats;
             st.preview_applied = true;
         }
+        // THE ROWS ABOUT TO BE DRAWN DESCRIBE **THIS** SAVE, SO OUR CACHES MUST TOO. The native
+        // ProfileSummary above now holds the previewed save's records, but the name and the whole
+        // attribute line on each row come from `PROFILE_SLOT_*_CACHE`, which was a process-lifetime
+        // latch: without this the picker showed the new save's levels and locations under the old
+        // save's names and stats. `bytes` is the previewed save itself, so this is a parse, not a
+        // second ~26 MB read.
+        let decoded =
+            crate::experiments::startup_hooks::loading_cover::load_profile_slot_caches_from_bytes(
+                bytes,
+                "picker-previewed save",
+            );
+        let reloads = PROFILE_SLOT_CACHE_PREVIEW_RELOADS.fetch_add(1, Ordering::SeqCst) + 1;
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: per-slot stats/name caches reloaded from the previewed save ({decoded}/10 slots, reloads={reloads})"
+        ));
         PROFILE_STATS_PREVIEW_ROW_CURSOR.store(0, Ordering::SeqCst);
         let refresh: unsafe extern "system" fn() =
             unsafe { std::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
@@ -142,6 +163,19 @@ pub(crate) fn system_quit_save_swap_restore_original_file(
     }
 }
 
+/// Is a FOREIGN save's summary currently on screen (previewed, not yet committed)?
+///
+/// The row presentation needs this to answer one question correctly: whose name belongs on slot 0.
+/// The transient current-player row is built with slot index 0 (`FUN_1408753f0` ->
+/// `FUN_1408759e0(summary, 0, &name, pgd->level)`), so slot 0 normally prefers the LIVE character's
+/// name. While a foreign save is previewed, slot 0 is that save's slot 0 instead, and preferring the
+/// live name puts the loaded character's name on another save's character -- observed 2026-08-07 as
+/// "Maddened Bean, RL 100" where RL 100, the attributes and the location were all angrE's.
+pub(crate) fn system_quit_foreign_preview_active() -> bool {
+    let st = system_quit_save_swap_lock();
+    st.preview_applied && !st.committed
+}
+
 pub(crate) unsafe fn system_quit_save_swap_restore_profile_summary(reason: &str) {
     let mut st = system_quit_save_swap_lock();
     if !st.preview_applied || st.committed {
@@ -166,11 +200,17 @@ pub(crate) unsafe fn system_quit_save_swap_restore_profile_summary(reason: &str)
             st.summary_snapshot.len()
         ));
     }
+    // Symmetric with the reload on preview: the summary is the ORIGINAL save's again, so the caches
+    // describing the previewed save must go. Dropped rather than reloaded because the bytes of the
+    // active save are not in hand here -- the next row populate reads them.
+    crate::experiments::startup_hooks::loading_cover::invalidate_profile_slot_caches(reason);
     // The restored snapshot's records are the ORIGINAL save's characters -- the foreign preview face
-    // fingerprints no longer describe any slot.
+    // fingerprints no longer describe any slot, and neither does the preview's record of which slots
+    // it could not source a place name for.
     for slot in 0..TITLE_PROFILE_SLOT_COUNT {
         PROFILE_PREVIEW_FACE_HASH[slot].store(0, Ordering::SeqCst);
     }
+    PROFILE_PREVIEW_PLACE_NAME_UNSOURCED.store(0, Ordering::SeqCst);
     let _ = system_quit_save_swap_restore_original_file(&st, reason);
     *st = SystemQuitSaveSwapState::default();
 }

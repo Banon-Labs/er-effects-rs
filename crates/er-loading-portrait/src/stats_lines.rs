@@ -3,17 +3,23 @@
 //! er-effects-rs-qic7) so the ONE unified layout is provable off-target.
 //!
 //! UNIFIED LAYOUT (user decision 2026-07-30): the boot/autoload loading screen and every
-//! subsequent load screen render the SAME five-line panel -- name; Level+Time;
+//! subsequent load screen render the SAME five-line panel -- name; RL+WL;
 //! HP/FP/Stamina; VIG..STR; DEX..ARC. The old divergence (the HP line was dropped when
 //! live PlayerGameData was not yet validated, 361x148 vs 361x184) is gone:
 //! [`format_stats_lines`] always emits the HP line, with the stored save-slot vitals
 //! pre-mount and `--` placeholders only when a vital is genuinely unknown, so the bitmap
 //! geometry never jumps when live data arrives mid-screen.
+//!
+//! Line 2 carries the rune level and the matchmaking weapon level (`RL 9    WL 12`), the
+//! same pair the ProfileSelect row header shows (user 2026-08-07). It replaced the play
+//! time, which was the one value on the panel that ticked every second: each tick changed
+//! the content key, rebuilt the bitmap, and re-uploaded the screen-scale texture for a
+//! number nobody reads mid-load.
 
 /// The local character's loading-screen stats (er-effects-rs-jsm). Read from the
-/// loading-screen-safe ProfileSummary record (name/level/playtime) + live PlayerGameData
-/// when up (attributes, HP/FP/Stamina), falling back to the `.sl2` slot cache
-/// (attributes AND stored max vitals) pre-load.
+/// loading-screen-safe ProfileSummary record (name/level) + live PlayerGameData when up
+/// (attributes, HP/FP/Stamina, weapon level), falling back to the `.sl2` slot cache
+/// (attributes, stored max vitals AND weapon level) pre-load.
 pub struct LoadingScreenStats {
     pub name: String,
     pub level: i32,
@@ -21,7 +27,10 @@ pub struct LoadingScreenStats {
     pub max_hp: u32,
     pub max_fp: u32,
     pub max_stamina: u32,
-    pub play_time_ms: u32,
+    /// Highest weapon upgrade level (`PlayerGameData::matching_weapon_level`), or `None`
+    /// when no source could supply it. `Some(0)` is a REAL answer -- a character with
+    /// nothing upgraded -- and is deliberately distinct from `None` ("we do not know").
+    pub weapon_level: Option<u8>,
     pub attr_source_live: bool,
 }
 
@@ -33,10 +42,19 @@ pub const STATS_TEXT_EM_PX_AT_REF_RT: f32 = 48.0;
 /// The reference RT dimension the 48px em was tuned at.
 pub const STATS_TEXT_REF_RT_DIM: f32 = 2056.0;
 
-/// Format a play-time in ms as `H:MM:SS`.
-fn fmt_playtime(ms: u32) -> String {
-    let s = ms / 1000;
-    format!("{}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60)
+/// The weapon level for display: the number, or `--` while genuinely unknown. Same
+/// placeholder idiom as [`fmt_vital`], but keyed on `None` rather than 0, because `WL 0`
+/// is a true statement about a character who has upgraded nothing.
+///
+/// The `WL` token itself is NEVER dropped -- unlike the ProfileSelect row header, whose
+/// whole `WL` group disappears when the value is unknown. That panel is a single line of
+/// prose; this one is a fixed five-line block whose bitmap is composited at a stable
+/// height, so a token appearing when live data arrives mid-screen would move the text.
+fn fmt_weapon_level(v: Option<u8>) -> String {
+    match v {
+        Some(v) => v.to_string(),
+        None => "--".to_string(),
+    }
 }
 
 /// A max-vital value for display: the stored/live number, or `--` while genuinely
@@ -51,10 +69,10 @@ fn fmt_vital(v: u32) -> String {
 }
 
 /// Lay the stats out as display lines -- the ONE layout used on every loading screen
-/// (boot/autoload AND subsequent loads): name; Level+Time; HP/FP/Stamina; the 8
-/// attributes over two lines. The HP line is UNCONDITIONAL (bd er-effects-rs-qic7): the
-/// line count (and so the bitmap height) is identical whether the vitals came from the
-/// save slot, live PlayerGameData, or are still unknown (`--`).
+/// (boot/autoload AND subsequent loads): name; RL+WL; HP/FP/Stamina; the 8 attributes
+/// over two lines. The HP line is UNCONDITIONAL (bd er-effects-rs-qic7): the line count
+/// (and so the bitmap height) is identical whether the vitals came from the save slot,
+/// live PlayerGameData, or are still unknown (`--`).
 pub fn format_stats_lines(st: &LoadingScreenStats) -> Vec<String> {
     let a = &st.attributes;
     let name = if st.name.trim().is_empty() {
@@ -65,9 +83,9 @@ pub fn format_stats_lines(st: &LoadingScreenStats) -> Vec<String> {
     vec![
         name,
         format!(
-            "Level {}    Time  {}",
+            "RL {}    WL {}",
             st.level,
-            fmt_playtime(st.play_time_ms)
+            fmt_weapon_level(st.weapon_level)
         ),
         format!(
             "HP {}    FP {}    Stamina {}",
@@ -237,7 +255,7 @@ mod tests {
             max_hp: 870,
             max_fp: 121,
             max_stamina: 115,
-            play_time_ms: 3_600_000,
+            weapon_level: Some(12),
             attr_source_live: true,
         }
     }
@@ -262,6 +280,16 @@ mod tests {
         }
     }
 
+    /// The same degradation for the weapon level alone: no live PGD and no decodable
+    /// `matchmakingWeaponLevel` byte in the slot cache.
+    fn unknown_weapon_level_stats() -> LoadingScreenStats {
+        LoadingScreenStats {
+            weapon_level: None,
+            attr_source_live: false,
+            ..live_stats()
+        }
+    }
+
     /// The unified layout: both data sources produce the IDENTICAL five-line structure
     /// (bd er-effects-rs-qic7 -- the old live=false variant dropped the HP line).
     #[test]
@@ -273,7 +301,45 @@ mod tests {
             live, save,
             "same character values must format identically regardless of source"
         );
+        assert_eq!(live[1], "RL 9    WL 12");
         assert_eq!(live[2], "HP 870    FP 121    Stamina 115");
+    }
+
+    /// Line 2 is the rune level and the matchmaking weapon level -- the same pair the
+    /// ProfileSelect row header shows -- and carries no play time (user 2026-08-07).
+    #[test]
+    fn the_level_line_shows_rl_and_wl_and_no_play_time() {
+        let lines = format_stats_lines(&live_stats());
+        assert_eq!(lines[1], "RL 9    WL 12");
+        assert!(
+            !lines.iter().any(|l| l.contains("Time")),
+            "play time must not appear anywhere on the panel: {lines:?}"
+        );
+        // `WL 0` is a real character with nothing upgraded, not a missing value.
+        let fresh = LoadingScreenStats {
+            weapon_level: Some(0),
+            ..live_stats()
+        };
+        assert_eq!(format_stats_lines(&fresh)[1], "RL 9    WL 0");
+    }
+
+    /// An unknown weapon level still renders the `WL` token with the `--` placeholder.
+    /// Dropping the token (as the one-line ProfileSelect header does) would re-flow this
+    /// panel's fixed block the moment live PlayerGameData validated mid-screen.
+    #[test]
+    fn unknown_weapon_level_keeps_the_wl_token() {
+        let lines = format_stats_lines(&unknown_weapon_level_stats());
+        assert_eq!(lines.len(), 5, "the panel is still five lines");
+        assert_eq!(lines[1], "RL 9    WL --");
+        assert!(
+            lines[1].contains("WL"),
+            "the WL token must never be dropped"
+        );
+        // Every other line is identical to the known-weapon-level build.
+        let known = format_stats_lines(&live_stats());
+        for i in [0usize, 2, 3, 4] {
+            assert_eq!(lines[i], known[i]);
+        }
     }
 
     /// Even when the vitals are genuinely unknown (no `.sl2`, no live PGD), the HP line
@@ -347,6 +413,16 @@ mod tests {
         assert_eq!(
             live.1, unknown.1,
             "placeholder vitals must not change the bitmap height"
+        );
+        let no_wl = render_lines_to_rgba(
+            &font,
+            &format_stats_lines(&unknown_weapon_level_stats()),
+            em,
+            color,
+        );
+        assert_eq!(
+            live.1, no_wl.1,
+            "a placeholder weapon level must not change the bitmap height"
         );
     }
 }

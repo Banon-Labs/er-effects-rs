@@ -771,7 +771,8 @@ pub(crate) const SAVE_FLOW_BOX_BUILD_TIMEOUT_TICKS: usize = 180;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_HOST_DIALOG;
 // ---- SAVE-DESTINATION browser (save-game-flow WP3, 2026-07-28) ----
 // The Save Game row press opens the shipping `05_010` picker REPURPOSED as a save-destination
-// chooser (row 0 is a pinned `[ new ]`), and the commit writes there instead of the loaded save by
+// chooser (`[ new ]` is the initial selection, below the always-first drive row when present), and
+// the commit writes there instead of the loaded save by
 // diverting the native writer's single container write-open. See `save_dest_commit.rs`. A pick
 // that resolves back to the LOADED save is recognised as such and routed to the sanctioned
 // in-place overwrite -- with the up-front "Overwrite your loaded save?" box gone, that is the ONLY

@@ -9,6 +9,10 @@
 # and teardown. me3 launches Game/eldenring.exe directly through the Steam compat tool
 # (waitforexitandrun verb) -- never a Steam AppID/URL form, never the EAC launcher.
 
+# shellcheck source=scripts/user-runtime-gate.sh
+# shellcheck disable=SC1091
+source "${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/scripts/user-runtime-gate.sh"
+
 ME3_BIN="${ME3_BIN:-$HOME/.local/bin/me3}"
 # me3 auto-detects the flatpak Steam on this machine but Elden Ring lives in the host
 # library -- always pin the host Steam dir.
@@ -160,6 +164,7 @@ EOF
 # the launch owner for the lifetime of the game.
 me3_launch() {
   local profile_path="$1"
+  require_user_runtime_go || return $?
   # Fail loudly on the CWD payload-hijack trap (bd me3-launch-cwd-must-lack-rust-target-dir):
   # me3 resolves me3-launcher.exe/me3_mod_host.dll from a CWD-relative
   # target/x86_64-pc-windows-msvc/release dir when one exists. Launching from a rust

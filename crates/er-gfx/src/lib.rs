@@ -50,10 +50,25 @@ use std::fmt;
 pub mod arts_badge;
 pub mod edit;
 pub mod options_02_040;
+pub mod profile_05_010_layout;
+pub mod profile_05_010_protocol;
 pub mod raster;
 pub mod title_05_000;
 pub mod title_05_010;
 pub mod world_map_pin;
+
+/// Twips per pixel. SWF/GFX stores every geometric quantity -- RECT bounds, matrix
+/// translations, font heights, and a live `GFx::TextField` document's source/layout bounds -- in
+/// twips, while this crate's layout schema and the editor UI speak pixels.
+///
+/// This is a single named constant because the conversion has gone missing in practice. The
+/// live-apply path wrote a schema pixel width straight into the text document's twips source
+/// bound, making `PlayerName`'s box 1200 twips (60 px) instead of 1200 px; the name then
+/// word-wrapped and only its first line fit the field, which reads on screen as a truncated
+/// character name. Prefer this over re-declaring a local `TW`.
+pub const TWIPS_PER_PIXEL: i32 = 20;
+/// [`TWIPS_PER_PIXEL`] for the float paths (live text-document bounds are `f32`).
+pub const TWIPS_PER_PIXEL_F32: f32 = TWIPS_PER_PIXEL as f32;
 
 /// Tag code for `DefineSprite`. Its body is `spriteId: u16`, `frameCount: u16`,
 /// then a NESTED tag stream parsed with the same parser and terminated by its

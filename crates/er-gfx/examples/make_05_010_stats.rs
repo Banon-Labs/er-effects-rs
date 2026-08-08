@@ -19,24 +19,83 @@
 //!   is a safe no-op" claim was runtime-falsified.
 //! - REPURPOSE char 67 (the icon frame deco sprite, only placed here) as a new
 //!   `DefineEditText` stats field, left-aligned `MenuFont_01` (the DLL renders
-//!   its content at 19px via HTML). It is PLACED TWICE so the eight attributes
-//!   split across the row's two text lines: `ErStatsTop` at (-160,-48) and
-//!   `ErStatsBottom` at (-160,15). The names match no engine populate prefix
-//!   (StaticText_/StaticRegionText_/StaticLineHelp_/StaticSystemText_/
-//!   StaticDialogText_/StaticKeyGuide_/Dynamic+KeyIcon_), so only our DLL push
-//!   writes them.
-//! - MOVE PlayerName (-354,-48)->(-470,-48), the Level FMG caption
-//!   StaticText_110502 (-354,15)->(-470,15), and the Level value field
-//!   (-58,15)->(-400,15) into the freed strip; Location and PlayTime keep
-//!   their native placements.
+//!   compact content via HTML). Normal character rows also get a dedicated
+//!   `ErCharStats` field in the lower band for the colored two-line stat block. The name matches no engine populate prefix (StaticText_/
+//!   StaticRegionText_/StaticLineHelp_/StaticSystemText_/StaticDialogText_/
+//!   StaticKeyGuide_/Dynamic+KeyIcon_), so only our DLL push writes it.
+//! - MOVE PlayerName, Location, Level caption/value, PlayTime, and ErStats onto
+//!   one visual baseline. The native fields remain placed/named for engine row
+//!   population, but none of them define a second subrow.
+//! - COMPACT the `ProfileList/ItemList` visual row pitch from 156px to `COMPACT_ROW_PITCH_PX` and expose the full
+//!   native-backed ten-row picker prefix (`Item_0_0..Item_9_0`) plus top/bottom recycle cells. Row
+//!   population and activation still use native row indices; this moves the row clips, their internal
+//!   chrome, the scroll tween offsets, the viewport mask, and the scrollbar together.
+//! - MOVE and shrink the native `ScrollBarV` so the game's own scrollbar controller remains the
+//!   visible long-list affordance. The DLL feeds that native controller the real save-picker scroll
+//!   offset instead of drawing private fake thumbs or pips.
 
-use er_gfx::title_05_010::{STATS_FIELD_NAME_BOTTOM, STATS_FIELD_NAME_TOP};
+use er_gfx::profile_05_010_layout::{DEFAULT_PROFILE_05_010_LAYOUT_PATH, Profile05_010Layout};
+use er_gfx::title_05_010::{CHAR_STATS_FIELD_NAME, STATS_FIELD_NAME};
 use er_gfx::{CxformWithAlpha, Matrix, Movie, Rect, Tag};
 
 /// Twips per px.
 const TW: i32 = 20;
+/// Vanilla ProfileSelect row pitch in the `05_010` movie.
+const VANILLA_ROW_PITCH_PX: i32 = 156;
+/// Vanilla list window height: five visible rows at 156px.
+const VANILLA_LIST_HEIGHT_PX: i32 = 780;
+/// 16.16 fixed-point 1.0.
+const SCALE_ONE: i32 = 0x1_0000;
+const DRIVE_CELL_CHARACTER_IDS: [(u16, &str); 3] = [
+    (93, "DriveCell_0"),
+    (94, "DriveCell_1"),
+    (95, "DriveCell_2"),
+];
 
-fn set_translate(tag: &mut Tag, x_px: i32, y_px: i32) {
+fn fixed_from_px(px: f32) -> i32 {
+    (px * TW as f32).round() as i32
+}
+
+fn fixed_from_scale(scale: f32) -> i32 {
+    (scale * SCALE_ONE as f32).round() as i32
+}
+
+fn set_matrix_transform(
+    matrix: &mut Matrix,
+    transform: &er_gfx::profile_05_010_layout::TransformLayout,
+) {
+    matrix.translate_nbits = 16;
+    matrix.translate_x = fixed_from_px(transform.x);
+    matrix.translate_y = fixed_from_px(transform.y);
+    matrix.has_scale = true;
+    matrix.scale_nbits = 23;
+    matrix.scale_x = fixed_from_scale(transform.scale_x);
+    matrix.scale_y = fixed_from_scale(transform.scale_y);
+}
+
+fn apply_text_field_definition(tag: &mut Tag, field: &er_gfx::profile_05_010_layout::FieldLayout) {
+    let Tag::DefineEditText {
+        bounds,
+        font_height,
+        layout,
+        ..
+    } = tag
+    else {
+        panic!("expected DefineEditText for ProfileSelect field geometry: {tag:?}");
+    };
+    // Wider compact-row fields (notably PlayerName) can exceed the vanilla Rect bit width.
+    // If we only update x_max and leave the old nbits, serialization sign-truncates the right
+    // edge and produces an inverted/negative-width text box that accepts SetText but renders nothing.
+    bounds.nbits = 16;
+    bounds.x_max = bounds.x_min + field.width * TW;
+    bounds.y_max = bounds.y_min + field.clip_height * TW;
+    *font_height = Some((field.font_height * TW) as u16);
+    if let Some(layout) = layout {
+        layout.align = field.align.swf_code();
+    }
+}
+
+fn set_translate(tag: &mut Tag, x_px: f32, y_px: f32) {
     let Tag::PlaceObject2 {
         matrix: Some(m), ..
     } = tag
@@ -46,16 +105,53 @@ fn set_translate(tag: &mut Tag, x_px: i32, y_px: i32) {
     // 16 bits comfortably covers +/-1638px and always round-trips; the source
     // widths are per-value-minimal and may be too small for the new offsets.
     m.translate_nbits = 16;
-    m.translate_x = x_px * TW;
-    m.translate_y = y_px * TW;
+    m.translate_x = fixed_from_px(x_px);
+    m.translate_y = fixed_from_px(y_px);
+}
+
+fn scale_from_ratio(numer: i32, denom: i32) -> i32 {
+    (i64::from(SCALE_ONE) * i64::from(numer) / i64::from(denom)) as i32
+}
+
+fn make_alpha_zero(tag: &mut Tag) {
+    let Tag::PlaceObject2 {
+        flags,
+        color_transform,
+        ..
+    } = tag
+    else {
+        panic!("expected PlaceObject2 to hide visually: {tag:?}");
+    };
+    *flags |= 0x08; // PlaceFlagHasColorTransform: a CXFORMWITHALPHA follows.
+    *color_transform = Some(CxformWithAlpha {
+        has_add: false,
+        has_mult: true,
+        // 10 signed bits hold +256 (1.0 in 8.8) and 0; RGB unchanged, alpha *0.
+        nbits: 10,
+        mult: Some([256, 256, 256, 0]),
+        add: None,
+    });
 }
 
 fn main() {
     let mut args = std::env::args().skip(1);
     let (Some(input), Some(output)) = (args.next(), args.next()) else {
-        eprintln!("usage: make_05_010_stats <vanilla.gfx> <out.gfx>");
+        eprintln!("usage: make_05_010_stats <vanilla.gfx> <out.gfx> [layout.txt]");
         std::process::exit(2);
     };
+    let layout_path = args.next();
+    let profile_layout = layout_path
+        .as_deref()
+        .map(Profile05_010Layout::from_path)
+        .unwrap_or_else(|| {
+            std::env::var("ER_GFX_PROFILE_05_010_LAYOUT")
+                .ok()
+                .map(Profile05_010Layout::from_path)
+                .unwrap_or_else(|| {
+                    Profile05_010Layout::from_path(DEFAULT_PROFILE_05_010_LAYOUT_PATH)
+                })
+        })
+        .unwrap_or_else(|e| panic!("load ProfileSelect layout schema: {e}"));
     let bytes = std::fs::read(&input).expect("read vanilla movie");
     let mut movie = Movie::parse(&bytes).expect("parse vanilla movie");
 
@@ -81,16 +177,17 @@ fn main() {
     else {
         unreachable!()
     };
+    let er_stats_layout = profile_layout.field(STATS_FIELD_NAME);
     let mut stats_layout = layout.expect("Location field carries a layout block");
-    stats_layout.align = 0; // left, like PlayerName (Location is right-aligned)
+    stats_layout.align = er_stats_layout.align.swf_code();
     let stats_field = Tag::DefineEditText {
         character_id: 67,
         bounds: Rect {
             nbits: 16,
             x_min: -2 * TW,
-            x_max: 628 * TW,
+            x_max: (-2 + er_stats_layout.width) * TW,
             y_min: -2 * TW,
-            y_max: 38 * TW,
+            y_max: (-2 + er_stats_layout.clip_height) * TW,
         },
         // 0x8c = HasText|ReadOnly|HasTextColor: single-line, no wrap, so an
         // overlong stats line clips horizontally instead of wrapping into the
@@ -98,15 +195,94 @@ fn main() {
         flags1: 0x8c,
         flags2,
         font_id: None,
-        font_class,
-        font_height: Some(22 * TW as u16), // 22px: 8 attributes fit 630px
+        font_class: font_class.clone(),
+        font_height: Some((er_stats_layout.font_height * TW) as u16),
         text_color,
         max_length: None,
-        layout: Some(stats_layout),
-        variable_name,
+        layout: Some(stats_layout.clone()),
+        variable_name: variable_name.clone(),
         initial_text: Some(String::new()),
         force_long,
     };
+    let er_char_stats_layout = profile_layout.field(CHAR_STATS_FIELD_NAME);
+    let mut char_stats_layout = stats_layout.clone();
+    char_stats_layout.align = er_char_stats_layout.align.swf_code();
+    let char_stats_field = Tag::DefineEditText {
+        character_id: 92,
+        bounds: Rect {
+            nbits: 16,
+            x_min: -35 * TW,
+            x_max: (-35 + er_char_stats_layout.width) * TW,
+            y_min: -2 * TW,
+            y_max: (-2 + er_char_stats_layout.clip_height) * TW,
+        },
+        // 0x8c = HasText|ReadOnly|HasTextColor: single-line. Load Character and
+        // Load Character from File share one compact row stack, so all eight
+        // attributes must fit on one stats line rather than forcing taller rows.
+        flags1: 0x8c,
+        flags2,
+        font_id: None,
+        font_class: font_class.clone(),
+        font_height: Some((er_char_stats_layout.font_height * TW) as u16),
+        text_color,
+        max_length: None,
+        layout: Some(char_stats_layout),
+        variable_name: variable_name.clone(),
+        initial_text: Some(String::new()),
+        force_long,
+    };
+
+    for (character_id, field_name) in [
+        (68, "Level"),
+        (69, "StaticText_110502"),
+        (70, "Location"),
+        (71, "PlayerName"),
+        (72, "PlayTime"),
+    ] {
+        let field = movie
+            .tags
+            .iter_mut()
+            .find(|t| matches!(t, Tag::DefineEditText { character_id: id, .. } if *id == character_id))
+            .unwrap_or_else(|| panic!("vanilla movie defines EditText char {character_id}"));
+        apply_text_field_definition(field, profile_layout.field(field_name));
+    }
+
+    let row_template_index = movie
+        .tags
+        .iter()
+        .position(|t| matches!(t, Tag::DefineSprite { id: 76, .. }))
+        .expect("vanilla movie defines sprite 76 (row template)");
+    let mut drive_fields = Vec::new();
+    for (character_id, name) in DRIVE_CELL_CHARACTER_IDS {
+        let field_layout = profile_layout.field(name);
+        let mut layout = stats_layout.clone();
+        layout.align = field_layout.align.swf_code();
+        drive_fields.push(Tag::DefineEditText {
+            character_id,
+            bounds: Rect {
+                nbits: 16,
+                x_min: -2 * TW,
+                x_max: (-2 + field_layout.width) * TW,
+                y_min: -2 * TW,
+                y_max: (-2 + field_layout.clip_height) * TW,
+            },
+            flags1: 0x8c,
+            flags2,
+            font_id: None,
+            font_class: font_class.clone(),
+            font_height: Some((field_layout.font_height * TW) as u16),
+            text_color,
+            max_length: None,
+            layout: Some(layout),
+            variable_name: variable_name.clone(),
+            initial_text: Some(String::new()),
+            force_long,
+        });
+    }
+    movie.tags.splice(
+        row_template_index..row_template_index,
+        std::iter::once(char_stats_field).chain(drive_fields),
+    );
 
     // Root: replace the char-67 deco sprite definition with the stats field.
     let deco = movie
@@ -146,23 +322,12 @@ fn main() {
         .iter_mut()
         .find(|t| name_of(t).as_deref() == Some("Icon_0"))
         .expect("row template places Icon_0");
-    let Tag::PlaceObject2 {
-        flags,
-        color_transform,
-        ..
-    } = icon
-    else {
-        panic!("Icon_0 placement is not a PlaceObject2: {icon:?}");
-    };
-    *flags |= 0x08; // PlaceFlagHasColorTransform: a CXFORMWITHALPHA follows.
-    *color_transform = Some(CxformWithAlpha {
-        has_add: false,
-        has_mult: true,
-        // 10 signed bits hold +256 (1.0 in 8.8) and 0; RGB unchanged, alpha *0.
-        nbits: 10,
-        mult: Some([256, 256, 256, 0]),
-        add: None,
-    });
+    make_alpha_zero(icon);
+
+    let row_show_frame = row
+        .iter()
+        .position(|t| matches!(t, Tag::ShowFrame { .. }))
+        .expect("row template has a visible-frame ShowFrame tag");
 
     // Replace the deco placement (depth 14, char 67, unnamed) with the named
     // stats-field placement.
@@ -179,58 +344,81 @@ fn main() {
             )
         })
         .expect("row template places char 67 at depth 14");
-    // Place the stats field (char 67) TWICE -- once per row text line -- so the eight attributes split
-    // across the row's two lines (user direction 2026-07-04): the first four on the TOP line
-    // (`ErStatsTop`, y=-48, using the previously-empty space above the stats), the last four on the
-    // BOTTOM line (`ErStatsBottom`, y=15). Both sit at the same x in the middle strip, clear of the left
-    // (name/level) and right (map/playtime) columns; the DLL pushes attrs[0..4] to Top, attrs[4..8] to
-    // Bottom. Two instances of one EditText char hold independent text.
-    const STATS_X: i32 = -160;
-    let stats_placement = |name: &str, depth: u16, y_px: i32| Tag::PlaceObject2 {
-        flags: 0x26, // HasName|HasMatrix|HasCharacter
-        depth,
-        character_id: Some(67),
-        matrix: Some(Matrix {
-            has_scale: false,
-            scale_nbits: 0,
-            scale_x: 0,
-            scale_y: 0,
-            has_rotate: false,
-            rotate_nbits: 0,
-            rotate_skew0: 0,
-            rotate_skew1: 0,
-            translate_nbits: 16,
-            translate_x: STATS_X * TW,
-            translate_y: y_px * TW,
-        }),
-        color_transform: None,
-        ratio: None,
-        name: Some(name.to_owned()),
-        clip_depth: None,
-        force_long: false,
+    // Place the save-picker stats field (char 67) ONCE on the same visual baseline as the native
+    // header fields. Normal character stats use `ErCharStats` in the lower band.
+    let stats_placement = |name: &str, depth: u16, character_id: u16| {
+        let field = profile_layout.field(name);
+        Tag::PlaceObject2 {
+            flags: 0x26, // HasName|HasMatrix|HasCharacter
+            depth,
+            character_id: Some(character_id),
+            matrix: Some(Matrix {
+                has_scale: false,
+                scale_nbits: 0,
+                scale_x: 0,
+                scale_y: 0,
+                has_rotate: false,
+                rotate_nbits: 0,
+                rotate_skew0: 0,
+                rotate_skew1: 0,
+                translate_nbits: 16,
+                translate_x: fixed_from_px(field.x),
+                translate_y: fixed_from_px(field.y),
+            }),
+            color_transform: None,
+            ratio: None,
+            name: Some(name.to_owned()),
+            clip_depth: None,
+            force_long: false,
+        }
     };
-    // Repurpose the existing depth-14 char-67 placement as the BOTTOM field.
-    *deco_place = stats_placement(STATS_FIELD_NAME_BOTTOM, 14, 15);
-    // Add a second placement (fresh depth 22) for the TOP field, INSERTED right after the (unmodified)
-    // Cursor placement so the diff anchors the insertion on a stable vanilla tag -- NOT appended past the
-    // sprite's End tag. The edit model supports this via `EditOp::InsertAfter`.
-    let cursor_idx = row
-        .iter()
-        .position(|t| name_of(t).as_deref() == Some("Cursor"))
-        .expect("row template places Cursor");
+    // Repurpose the existing depth-14 char-67 placement as the wide save-picker metadata field.
+    *deco_place = stats_placement(STATS_FIELD_NAME, 14, 67);
     row.insert(
-        cursor_idx + 1,
-        stats_placement(STATS_FIELD_NAME_TOP, 22, -48),
+        row_show_frame,
+        Tag::PlaceObject2 {
+            flags: 0x26,
+            depth: 15,
+            character_id: Some(92),
+            matrix: Some(Matrix {
+                has_scale: false,
+                scale_nbits: 0,
+                scale_x: 0,
+                scale_y: 0,
+                has_rotate: false,
+                rotate_nbits: 0,
+                rotate_skew0: 0,
+                rotate_skew1: 0,
+                translate_nbits: 16,
+                translate_x: fixed_from_px(profile_layout.field(CHAR_STATS_FIELD_NAME).x),
+                translate_y: fixed_from_px(profile_layout.field(CHAR_STATS_FIELD_NAME).y),
+            }),
+            color_transform: None,
+            ratio: None,
+            name: Some(CHAR_STATS_FIELD_NAME.to_owned()),
+            clip_depth: None,
+            force_long: false,
+        },
     );
 
-    // Shift the left-column fields: give the name more left-edge margin (was -512), and pull the Level
-    // value in tight to its "Level" caption (was -364) so the level reads as one unit (user direction
-    // 2026-07-04). Location and PlayTime keep their native placements.
-    for (name, x, y) in [
-        ("PlayerName", -470, -48),
-        ("StaticText_110502", -470, 15),
-        ("Level", -400, 15),
+    // Synthetic drive cells. Native ProfileSelect gives us one row highlight/click target only; these
+    // are separate row children that the DLL blanks on every picker-owned row and fills only on the
+    // drive row, so `[C:]`, `[S:]`, `[Z:]` are no longer one fused PlayerName string.
+    row.insert(row_show_frame, stats_placement("DriveCell_2", 42, 95));
+    row.insert(row_show_frame, stats_placement("DriveCell_1", 41, 94));
+    row.insert(row_show_frame, stats_placement("DriveCell_0", 40, 93));
+
+    // One row means one baseline. If any native field renders, it must render inline with the filename
+    // and timestamp rather than on the original lower subrow.
+    for name in [
+        "PlayerName",
+        "StaticText_110502",
+        "Level",
+        "Location",
+        "PlayTime",
     ] {
+        let field = profile_layout.field(name);
+        let (x, y) = (field.x, field.y);
         let tag = row
             .iter_mut()
             .find(|t| name_of(t).as_deref() == Some(name))
@@ -238,29 +426,271 @@ fn main() {
         set_translate(tag, x, y);
     }
 
-    // Shift the two LEFT decorative underline flourishes (char 55, depths 4 & 6) RIGHT so they sit
-    // better under the centered stats block, instead of under the now far-left name/level column (user
-    // direction 2026-07-04: "shift right ~6%", after 25% overshot). ~94px == 6% of the ~1560px row ->
-    // the left pair moves from x=-356 to ~-262. The RIGHT pair (depths 8/10) stays under the
-    // map/playtime column. Only translate_x changes; the flourish's scale/rotate and y are preserved.
-    const UNDERLINE_SHIFT_PX: i32 = 94;
-    for want_depth in [4u16, 6] {
-        let tag = row
-            .iter_mut()
-            .find(|t| {
-                matches!(t, Tag::PlaceObject2 { depth, character_id: Some(55), .. } if *depth == want_depth)
-            })
-            .unwrap_or_else(|| panic!("row template places char 55 at depth {want_depth}"));
-        let Tag::PlaceObject2 {
-            matrix: Some(m), ..
-        } = tag
-        else {
-            panic!("char 55 depth {want_depth} placement has no matrix");
-        };
-        m.translate_nbits = 16;
-        m.translate_x += UNDERLINE_SHIFT_PX * TW;
+    // PlayTime is hidden at the ASSET level, not per row, because no row rendering wants it any
+    // more: the merged character row drops it to free its band for a wider `Location`
+    // (`RowSlotFieldVisibility::NATIVE_MERGED`), browse rows never had it (`browse_row`), and the
+    // picker's timestamp goes to `Location` via `stage_row_model_location`, not here.
+    //
+    // The one rendering that still drew it was the UNMERGED character row -- the `NATIVE` fallback
+    // a row takes when no header could be composed. There the widened `Location` runs straight
+    // through it: measured 65px of overlapping ink (`Location` 6600..10600 twips vs `PlayTime`
+    // 9200..10500), which is the "the vanilla view changed" the user reported. Hiding it per row
+    // could not fix that case anyway: the visibility pass only fires when the wanted state differs
+    // from `NATIVE`, so a `NATIVE` row asks for nothing and a row the DLL never populates asks for
+    // nothing at all -- both keep whatever the asset placed.
+    //
+    // Alpha-zero rather than unplaced, for the same reason as `Icon_0` above: the native row
+    // populate resolves these fields by name and releases their CSScaleformValue, and removing the
+    // placement turns that release into an AV.
+    let play_time = row
+        .iter_mut()
+        .find(|t| name_of(t).as_deref() == Some("PlayTime"))
+        .expect("row template places PlayTime");
+    make_alpha_zero(play_time);
+
+    // Original decorative underline flourishes are chrome, not row data. Hide them at the asset
+    // level; they read like a strikethrough once the row is compacted to one text baseline.
+    for tag in row.iter_mut() {
+        if matches!(
+            tag,
+            Tag::PlaceObject2 {
+                character_id: Some(55),
+                ..
+            }
+        ) {
+            make_alpha_zero(tag);
+        }
     }
 
+    // Row chrome is directly editable from the schema. Name every chrome placement that the live
+    // editor must resolve through SceneObjProxy so x/y/scale controls do not depend on relaunch-only
+    // asset reloads.
+    for tag in row.iter_mut() {
+        let Tag::PlaceObject2 {
+            flags,
+            character_id,
+            name,
+            matrix: Some(m),
+            ..
+        } = tag
+        else {
+            continue;
+        };
+        if *character_id == Some(54) {
+            *name = Some("Backing".to_owned());
+            *flags |= 0x20;
+            set_matrix_transform(m, &profile_layout.row_chrome.backing);
+        } else if name.as_deref() == Some("Cursor") {
+            set_matrix_transform(m, &profile_layout.row_chrome.cursor);
+        }
+    }
+    let cursor_body_sprite = movie
+        .tags
+        .iter_mut()
+        .find_map(|t| match t {
+            Tag::DefineSprite { id: 74, tags, .. } => Some(tags),
+            _ => None,
+        })
+        .expect("vanilla movie defines Cursor body sprite 74");
+    let mut cursor_body_edits = 0;
+    for tag in cursor_body_sprite.iter_mut() {
+        let Tag::PlaceObject2 {
+            flags,
+            character_id: Some(73),
+            name,
+            matrix: Some(m),
+            ..
+        } = tag
+        else {
+            continue;
+        };
+        *name = Some("CursorBody".to_owned());
+        *flags |= 0x20;
+        set_matrix_transform(m, &profile_layout.row_chrome.cursor_body);
+        cursor_body_edits += 1;
+    }
+    assert!(
+        cursor_body_edits > 0,
+        "sprite 74 should place at least one cursor body char 73"
+    );
+
+    // COMPACT ROW PITCH + FULL NATIVE-BACKED ROW PREFIX. Sprite 77 is the actual row stack. Vanilla
+    // ships five visible row clips (`Item_0_0..Item_4_0`) plus top/bottom recycle clips; the picker
+    // model/native ProfileSummary transport owns ten dense rows, so expose ten named row clips rather
+    // than only stretching the mask around five rows.
+    let row_stack = movie
+        .tags
+        .iter_mut()
+        .find_map(|t| match t {
+            Tag::DefineSprite { id: 77, tags, .. } => Some(tags),
+            _ => None,
+        })
+        .expect("vanilla movie defines sprite 77 (ProfileSelect row stack)");
+    let separator_template = row_stack
+        .iter()
+        .find(|tag| {
+            matches!(
+                tag,
+                Tag::PlaceObject2 {
+                    character_id: Some(52),
+                    ..
+                }
+            )
+        })
+        .expect("row stack has separator template")
+        .clone();
+    let item_template = row_stack
+        .iter()
+        .find(|tag| name_of(tag).as_deref() == Some("Item_2_0"))
+        .expect("row stack has native item template")
+        .clone();
+    row_stack.retain(|tag| {
+        !matches!(
+            tag,
+            Tag::PlaceObject2 {
+                character_id: Some(52),
+                ..
+            }
+        ) && !matches!(
+            tag,
+            Tag::PlaceObject2 {
+                character_id: Some(76),
+                ..
+            }
+        )
+    });
+    let show_frame_at = row_stack
+        .iter()
+        .position(|tag| matches!(tag, Tag::ShowFrame { .. }))
+        .expect("row stack keeps ShowFrame");
+    let mut rebuilt_rows = Vec::new();
+    let row_pitch_px = profile_layout.list.row_pitch;
+    let visible_rows = profile_layout.list.visible_rows;
+    let half_rows = visible_rows * row_pitch_px / 2;
+    for (idx, y_px) in (-half_rows..=half_rows)
+        .step_by(row_pitch_px as usize)
+        .enumerate()
+    {
+        let mut separator = separator_template.clone();
+        let Tag::PlaceObject2 { depth, .. } = &mut separator else {
+            unreachable!()
+        };
+        *depth = (idx as u16) * 2 + 1;
+        set_translate(&mut separator, 0.0, y_px as f32);
+        rebuilt_rows.push(separator);
+    }
+    for idx in (0..visible_rows as usize).rev() {
+        let mut item = item_template.clone();
+        let name = format!("Item_{idx}_0");
+        let y_px = (idx as i32 * row_pitch_px) - half_rows + row_pitch_px / 2;
+        let Tag::PlaceObject2 {
+            depth,
+            name: tag_name,
+            ..
+        } = &mut item
+        else {
+            unreachable!()
+        };
+        *depth = 23 + ((visible_rows as usize - 1 - idx) as u16) * 22;
+        *tag_name = Some(name);
+        set_translate(&mut item, 0.0, y_px as f32);
+        rebuilt_rows.push(item);
+    }
+    for (name, y_px, depth) in [
+        (
+            "BottomItem_0",
+            half_rows + row_pitch_px / 2,
+            23 + visible_rows as u16 * 22,
+        ),
+        (
+            "TopItem_0",
+            -half_rows - row_pitch_px / 2,
+            23 + (visible_rows as u16 + 1) * 22,
+        ),
+    ] {
+        let mut recycle = item_template.clone();
+        let Tag::PlaceObject2 {
+            depth: tag_depth,
+            name: tag_name,
+            ..
+        } = &mut recycle
+        else {
+            unreachable!()
+        };
+        *tag_depth = depth;
+        *tag_name = Some(name.to_owned());
+        set_translate(&mut recycle, 0.0, y_px as f32);
+        rebuilt_rows.push(recycle);
+    }
+    row_stack.splice(show_frame_at..show_frame_at, rebuilt_rows);
+
+    // The list scroll animation in sprite 78 moves the whole row stack by one native row. Preserve
+    // the four-frame easing shape (1, 2/3, 1/3, 0 of a row), but make one row = 112px.
+    let row_animation = movie
+        .tags
+        .iter_mut()
+        .find_map(|t| match t {
+            Tag::DefineSprite { id: 78, tags, .. } => Some(tags),
+            _ => None,
+        })
+        .expect("vanilla movie defines sprite 78 (ProfileSelect list animation)");
+    for tag in row_animation.iter_mut() {
+        let Tag::PlaceObject2 {
+            flags,
+            matrix: Some(m),
+            ..
+        } = tag
+        else {
+            continue;
+        };
+        if *flags & 0x04 != 0 && m.translate_y != 0 {
+            m.translate_nbits = 16;
+            m.translate_y = (m.translate_y / TW) * row_pitch_px / VANILLA_ROW_PITCH_PX * TW;
+        }
+    }
+
+    // Clip mask + vertical scrollbar: shrink the list viewport from 780px to the compact ten-row
+    // stack height so the rows do not float inside a huge native window. Scaling the mask placement
+    // is enough; the shape bytes stay vanilla. The scrollbar's own movie remains untouched and
+    // receives the same vertical scale and centered y offset as the mask.
+    let list_window = movie
+        .tags
+        .iter_mut()
+        .find_map(|t| match t {
+            Tag::DefineSprite { id: 86, tags, .. } => Some(tags),
+            _ => None,
+        })
+        .expect("vanilla movie defines sprite 86 (ProfileSelect list window)");
+    let compact_scale = scale_from_ratio(profile_layout.list.mask_height, VANILLA_LIST_HEIGHT_PX);
+    for tag in list_window.iter_mut() {
+        match tag {
+            Tag::PlaceObject2 {
+                character_id: Some(50),
+                matrix: Some(m),
+                ..
+            } => {
+                m.translate_nbits = 16;
+                m.has_scale = true;
+                m.scale_nbits = 18;
+                m.scale_x = SCALE_ONE;
+                m.scale_y = compact_scale;
+            }
+            Tag::PlaceObject2 {
+                name: Some(name),
+                matrix: Some(m),
+                ..
+            } if name == "ScrollBarV" => {
+                m.translate_nbits = 16;
+                m.translate_x = profile_layout.list.scrollbar_x * TW;
+                m.translate_y = profile_layout.list.scrollbar_top_y * TW;
+                m.has_scale = true;
+                m.scale_nbits = 18;
+                m.scale_x = SCALE_ONE;
+                m.scale_y = scale_from_ratio(profile_layout.list.scrollbar_track_height, 764);
+            }
+            _ => {}
+        }
+    }
     let out = movie.write().expect("serialize edited movie");
     std::fs::write(&output, &out).expect("write edited movie");
     println!("wrote {output}: {} -> {} bytes", bytes.len(), out.len());

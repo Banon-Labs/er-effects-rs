@@ -4,12 +4,12 @@ use super::*;
 //
 // Replaces the System>Quit "Load Character from File" `GetOpenFileNameW` OS dialog (context switch
 // out of the game) with the same native 10-row window the character switcher already drives. The
-// rows are a browsable directory listing -- a pinned `[ new ]` FIRST in destination intent, then
-// up, drive cycler, dirs + mode-locked save files, page cycler -- staged as synthetic
+// rows are a browsable directory listing -- the drive switcher ALWAYS FIRST when present, then
+// destination-only `[ new ]`, up, dirs + mode-locked save files -- staged as synthetic
 // ProfileSummary records; the shared model lives in `experiments::save_picker` and owns the row
-// layout (see its module docs for the order and why nothing sits at a fixed index). It is also the
-// surface the Save Game row press opens directly, with no confirm in front of it. Directory, drive
-// and page navigation rebuild the row list in place via the game's own records-changed rebuild
+// layout (see its module docs for the order and derived indices). It is also the surface the Save Game row
+// press opens directly, with no confirm in front of it. Directory/drive navigation and edge-hover
+// scroll-window restaging rebuild the row list in place via the game's own records-changed rebuild
 // (close + menu-pump resubmit as fallback). Picking a file feeds the validation/preview pipeline
 // the OS picker used (`system_quit_ingest_picked_save`) and then reopens the window as the normal
 // slot view, so the "pick file -> pick character" flow never leaves the game's visual system.
@@ -17,14 +17,16 @@ use super::*;
 // The only input this window gives the DLL is ROW ACTIVATION: `system_quit_profile_load_activate_hook`
 // intercepts `CS::ProfileLoadDialog` vtable slot 20 (`0x9a4670`) and reads the highlighted list
 // index out of `dialog+0xb0c`. Cursor movement, back and every other press stay inside the game's
-// own list widget. So every browse action -- including switching drives -- has to BE a row.
+// own list widget. Directory and drive browse actions are row/cell activations; overflow scrolling is
+// handled by held-edge restaging so it does not consume visible rows.
 
 /// Action object of the "Load Character from File" row; `system_quit_open_profile_load_dialog` derives
 /// the System dialog (action+0x8), submit queue and window list from it on every (re)submit.
 pub(crate) use er_telemetry::counters::SAVE_PICKER_ACTION_OBJ;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_CANCEL_COUNT;
 /// 1 while the live picker is the save-DESTINATION chooser (save-game-flow WP3) instead of the
-/// load-source browser: row 0 is a pinned `[ new ]`, and activation feeds the save flow.
+/// load-source browser: `[ new ]` is the initial selection (row 1 when drives occupy row 0), and
+/// activation feeds the save flow.
 pub(crate) use er_telemetry::counters::SAVE_PICKER_DEST_MODE;
 /// 1 while the live `05_010_ProfileSelect` window is OUR file-picker (rows = directory listing).
 /// 0 when it is the normal character-slot view.
@@ -42,7 +44,7 @@ pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_TICKS_FROZEN;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_PICK_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_PICK_REJECT_COUNT;
 /// Dialog whose row list must be rebuilt in menu-pump ownership (0 = none). Set by a
-/// navigation/page activation after restaging records; consumed by the Run hook.
+/// navigation/cell activation after restaging records; consumed by the Run hook.
 pub(crate) use er_telemetry::counters::SAVE_PICKER_REBUILD_PENDING_DIALOG;
 /// 1 = the picker window was closed for a directory/page change; the menu-pump Run hook must
 /// resubmit a fresh `05_010` job (records already restaged) instead of restoring the System UI.
@@ -55,6 +57,8 @@ pub(crate) use er_telemetry::counters::SAVE_PICKER_STAGED_ROW_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_SURFACE;
 /// System/Quit dialog the live picker window was submitted from; the menu-pump resubmit reopens
 /// through it (the destination picker is opened by the save flow, which has no row action object).
+/// Do not use this as the live `05_010_ProfileSelect` dialog: cursor/rebuild work uses
+/// `SYSTEM_QUIT_PROFILE_SELECT_WINDOW`, which is populated from the `05_010` MenuWindowJob owner.
 pub(crate) use er_telemetry::counters::SAVE_PICKER_SYSTEM_DIALOG;
 
 /// Windows-form (`Z:\...`) string for a possibly Linux-form absolute path; drive-prefixed paths
@@ -108,10 +112,9 @@ pub(crate) fn save_picker_start_dir() -> Option<PathBuf> {
 ///     listing render nothing below the last entry: a zeroed record still renders as a name plus
 ///     `Level 0` and `0:00:00`, because those fields exist and are simply zero.
 ///   * the appended rows are COMPACTED in slot order, so `slot index == visible list index` holds
-///     only while the occupied slots are a contiguous PREFIX. They are: the model's visible rows
-///     are dense by construction (`visible_row_count`), so the list index the activation hook reads
-///     from `dialog+0xb0c`, the slot the row-populate hook reads back from `rowModel+0x8`, and the
-///     model row are all the same number.
+///     for the staged ProfileSummary prefix. Cursor values read from the live `05_010_ProfileSelect`
+///     dialog use the same dense row index; do not read the parent System/Quit dialog and try to
+///     compensate for the resulting garbage offset.
 pub(crate) unsafe fn save_picker_write_row_records(
     model: &crate::experiments::save_picker::SavePickerModel,
     summary: usize,
@@ -190,11 +193,11 @@ pub(crate) unsafe fn save_picker_stage_row_records(
         unsafe { refresh() };
     }
     append_autoload_debug(format_args!(
-        "save-picker: staged {staged} occupied row records ({} slots left unoccupied) dir='{}' page={}/{} entries={} drives={}",
+        "save-picker: staged {staged} occupied row records ({} slots left unoccupied) dir='{}' scroll={}/{} entries={} drives={}",
         TITLE_PROFILE_SLOT_COUNT.saturating_sub(staged),
         model.current_dir().display(),
-        model.page() + 1,
-        model.page_count(),
+        model.scroll_offset(),
+        model.scroll_max(),
         model.entry_count(),
         model.drive_count()
     ));
@@ -517,18 +520,61 @@ pub(crate) unsafe fn save_dest_stage_commit_and_close_picker(dialog: usize, reas
 /// index; a listing change of any kind comes back as `Repopulate` and is serviced identically.
 pub(crate) unsafe fn save_picker_handle_activation(dialog: usize, cursor: i32) -> usize {
     use crate::experiments::save_picker::PickerActivation;
-    if cursor < 0 || cursor as usize >= crate::experiments::save_picker::PICKER_ROW_COUNT {
+    let Some(model_row) = save_picker_model_row_from_native_cursor(cursor) else {
+        append_autoload_debug(format_args!(
+            "save-picker: activation ignored invalid native cursor={cursor}"
+        ));
         return 0;
-    }
+    };
     let activation = {
         let mut guard = crate::experiments::save_picker::active_save_picker_lock();
         let Some(model) = guard.as_mut() else {
             append_autoload_debug(format_args!(
-                "save-picker: activation with no model (cursor={cursor}); ignoring"
+                "save-picker: activation with no model (native_cursor={cursor} model_row={model_row}); ignoring"
             ));
             return 0;
         };
-        model.activate(cursor as usize)
+        let pending_cell = SAVE_PICKER_DRIVE_STRIP_PENDING_CELL
+            .swap(SAVE_PICKER_DRIVE_STRIP_NO_PENDING_CELL, Ordering::SeqCst);
+        if model.drive_row() == Some(model_row) {
+            let cell_count = model.drive_strip_cell_count();
+            if let Some(cell) = save_picker_pending_drive_strip_cell(pending_cell, cell_count) {
+                if model.activate_drive_strip_cell(cell) {
+                    append_autoload_debug(format_args!(
+                        "save-picker: native drive-row activation selected pending cell={cell} native_cursor={cursor} model_row={model_row} cells={cell_count}"
+                    ));
+                    PickerActivation::Repopulate
+                } else {
+                    append_autoload_debug(format_args!(
+                        "save-picker: native drive-row activation rejected pending cell={cell} native_cursor={cursor} model_row={model_row} cells={cell_count}"
+                    ));
+                    PickerActivation::Ignored
+                }
+            } else {
+                match save_picker_drive_strip_cell_from_live_cursor(cell_count) {
+                    Some((cell, x, y)) if model.activate_drive_strip_cell(cell) => {
+                        append_autoload_debug(format_args!(
+                            "save-picker: native drive-row activation selected live cell={cell} native_cursor={cursor} model_row={model_row} stage_x={x:.1} stage_y={y:.1} cells={cell_count} pending={pending_cell}"
+                        ));
+                        PickerActivation::Repopulate
+                    }
+                    Some((cell, x, y)) => {
+                        append_autoload_debug(format_args!(
+                            "save-picker: native drive-row activation rejected live cell={cell} native_cursor={cursor} model_row={model_row} stage_x={x:.1} stage_y={y:.1} cells={cell_count} pending={pending_cell}"
+                        ));
+                        PickerActivation::Ignored
+                    }
+                    None => {
+                        append_autoload_debug(format_args!(
+                            "save-picker: native drive-row activation ignored at native_cursor={cursor} model_row={model_row}; no drive cell under live cursor and no pending click cell (cells={cell_count} pending={pending_cell})"
+                        ));
+                        PickerActivation::Ignored
+                    }
+                }
+            }
+        } else {
+            model.activate(model_row)
+        }
     };
     match activation {
         PickerActivation::Repopulate => {
@@ -619,6 +665,532 @@ pub(crate) fn save_picker_resubmit_pending() -> bool {
         || SAVE_PICKER_OPEN_SLOTS_PENDING.load(Ordering::SeqCst) != 0
 }
 
+const PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET: usize = 0xa38;
+const GRID_CONTROL_SCROLLBAR_OFFSET: usize = 0x1a8;
+const PROFILE_LOAD_DIALOG_SCROLLBAR_OFFSET: usize =
+    PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET + GRID_CONTROL_SCROLLBAR_OFFSET;
+const MENU_ITEM_LIST_CURSOR_GETTER_RVA: usize = 0x739e20;
+const SCROLLBAR_CONTROL_SET_TOTAL_RVA: u32 = 0x74dad0;
+const SCROLLBAR_CONTROL_SET_POSITION_RVA: u32 = 0x74db60;
+static SAVE_PICKER_SCROLLBAR_LAST_SYNC: AtomicUsize = AtomicUsize::new(usize::MAX);
+const MENU_VIEWER_EVENT_POINT_RVA: usize = 0x757af0;
+const PROFILE_SELECT_MOVIE_WIDTH_PX: f32 = 1920.0;
+const PROFILE_SELECT_MOVIE_HEIGHT_PX: f32 = 1080.0;
+const DRIVE_STRIP_HIT_LEFT_PX: f32 = -292.0;
+const DRIVE_STRIP_CELL_PITCH_PX: f32 = 78.0;
+const DRIVE_STRIP_CELL_HIT_WIDTH_PX: f32 = DRIVE_STRIP_CELL_PITCH_PX;
+/// Live `05_010_ProfileSelect` cursor values are already staged model-row indices. The old +2
+/// observation came from reading the parent System/Quit dialog, not the live ProfileSelect dialog.
+const PROFILE_SELECT_NATIVE_ROW_MODEL_OFFSET: i32 = 0;
+const SAVE_PICKER_DRIVE_STRIP_NO_PENDING_CELL: usize = usize::MAX;
+static SAVE_PICKER_DRIVE_STRIP_PENDING_CELL: AtomicUsize =
+    AtomicUsize::new(SAVE_PICKER_DRIVE_STRIP_NO_PENDING_CELL);
+const SAVE_PICKER_DRIVE_STRIP_LBUTTON_MASK: usize = 1 << 0;
+const SAVE_PICKER_DRIVE_STRIP_LEFT_MASK: usize = 1 << 1;
+const SAVE_PICKER_DRIVE_STRIP_RIGHT_MASK: usize = 1 << 2;
+static SAVE_PICKER_DRIVE_STRIP_INPUT_DOWN_MASK: AtomicUsize = AtomicUsize::new(0);
+
+unsafe fn save_picker_event_point(event: usize) -> Option<(f32, f32)> {
+    if event == 0 {
+        return None;
+    }
+    let Ok(base) = game_module_base() else {
+        return None;
+    };
+    let point_fn: unsafe extern "system" fn(usize, *mut u64) -> *mut u64 =
+        unsafe { std::mem::transmute(base + MENU_VIEWER_EVENT_POINT_RVA) };
+    let mut packed = 0_u64;
+    unsafe { point_fn(event, &mut packed as *mut u64) };
+    let x = f32::from_bits(packed as u32);
+    let y = f32::from_bits((packed >> 32) as u32);
+    (x.is_finite() && y.is_finite()).then_some((x, y))
+}
+
+pub(crate) unsafe fn save_picker_note_drive_strip_click_event(event: usize) {
+    if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
+        return;
+    }
+    let dialog = save_picker_live_profile_dialog();
+    if dialog == 0 {
+        return;
+    }
+    let cursor = unsafe { safe_read_i32(dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) }.unwrap_or(-1);
+    let Some(model_row) = save_picker_model_row_from_native_cursor(cursor) else {
+        return;
+    };
+    let Some((x, y)) = (unsafe { save_picker_event_point(event) }) else {
+        return;
+    };
+    let cell_count = {
+        let guard = crate::experiments::save_picker::active_save_picker_lock();
+        let Some(model) = guard.as_ref() else {
+            return;
+        };
+        if model.drive_row() != Some(model_row) {
+            return;
+        }
+        model.drive_strip_cell_count()
+    };
+    if cell_count == 0 {
+        return;
+    }
+    let Some(cell) = save_picker_drive_strip_cell_from_x(x, cell_count) else {
+        append_autoload_debug(format_args!(
+            "save-picker: drive-strip click outside skinny cells native_cursor={cursor} model_row={model_row} x={x:.1} y={y:.1} cells={cell_count}"
+        ));
+        return;
+    };
+    SAVE_PICKER_DRIVE_STRIP_PENDING_CELL.store(cell, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "save-picker: drive-strip click native_cursor={cursor} model_row={model_row} x={x:.1} y={y:.1} cells={cell_count} -> cell={cell}"
+    ));
+}
+
+fn save_picker_pending_drive_strip_cell(pending_cell: usize, cell_count: usize) -> Option<usize> {
+    (pending_cell != SAVE_PICKER_DRIVE_STRIP_NO_PENDING_CELL && pending_cell < cell_count)
+        .then_some(pending_cell)
+}
+
+fn save_picker_model_row_from_native_cursor(cursor: i32) -> Option<usize> {
+    let row = cursor.checked_sub(PROFILE_SELECT_NATIVE_ROW_MODEL_OFFSET)?;
+    (row >= 0 && (row as usize) < crate::experiments::save_picker::PICKER_ROW_COUNT)
+        .then_some(row as usize)
+}
+
+fn save_picker_live_profile_dialog() -> usize {
+    SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst)
+}
+
+unsafe fn save_picker_rebuild_profile_dialog_now(dialog: usize, reason: &str) -> bool {
+    if dialog == 0 || SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
+        return false;
+    }
+    if let Ok(rebuild_addr) = game_rva(PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA) {
+        let rebuild: unsafe extern "system" fn(usize) =
+            unsafe { std::mem::transmute(rebuild_addr) };
+        unsafe { rebuild(dialog) };
+        append_autoload_debug(format_args!(
+            "save-picker: menu-pump in-place list rebuild dialog=0x{dialog:x} reason={reason} via 0x{rebuild_addr:x}"
+        ));
+        true
+    } else {
+        SAVE_PICKER_REOPEN_PENDING.store(1, Ordering::SeqCst);
+        unsafe { save_picker_native_close(dialog, reason) };
+        false
+    }
+}
+
+fn save_picker_client_point_to_movie_stage(
+    client_x: f32,
+    client_y: f32,
+    client_width: f32,
+    client_height: f32,
+) -> Option<(f32, f32)> {
+    if !(client_x.is_finite()
+        && client_y.is_finite()
+        && client_width.is_finite()
+        && client_height.is_finite())
+        || client_width <= 0.0
+        || client_height <= 0.0
+    {
+        return None;
+    }
+    // 05_010 is authored as a fixed 1920x1080 movie. The user's actual window/monitor resolution is
+    // deliberately not assumed: map through the movie rectangle fitted into the live client area,
+    // preserving aspect ratio and removing any letterbox/pillarbox margin first.
+    let movie_aspect = PROFILE_SELECT_MOVIE_WIDTH_PX / PROFILE_SELECT_MOVIE_HEIGHT_PX;
+    let client_aspect = client_width / client_height;
+    let (content_x, content_y, content_w, content_h) = if client_aspect > movie_aspect {
+        let content_w = client_height * movie_aspect;
+        (
+            (client_width - content_w) * 0.5,
+            0.0,
+            content_w,
+            client_height,
+        )
+    } else {
+        let content_h = client_width / movie_aspect;
+        (
+            0.0,
+            (client_height - content_h) * 0.5,
+            client_width,
+            content_h,
+        )
+    };
+    let in_content_x = client_x - content_x;
+    let in_content_y = client_y - content_y;
+    if in_content_x < 0.0
+        || in_content_y < 0.0
+        || in_content_x >= content_w
+        || in_content_y >= content_h
+    {
+        return None;
+    }
+    let stage_x = (in_content_x / content_w) * PROFILE_SELECT_MOVIE_WIDTH_PX
+        - PROFILE_SELECT_MOVIE_WIDTH_PX * 0.5;
+    let stage_y = (in_content_y / content_h) * PROFILE_SELECT_MOVIE_HEIGHT_PX
+        - PROFILE_SELECT_MOVIE_HEIGHT_PX * 0.5;
+    Some((stage_x, stage_y))
+}
+
+fn save_picker_drive_strip_cell_from_live_cursor(cell_count: usize) -> Option<(usize, f32, f32)> {
+    use windows::Win32::Foundation::{POINT, RECT};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetCursorPos, GetForegroundWindow, GetWindowRect,
+    };
+
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.0.is_null() {
+        return None;
+    }
+    let mut point = POINT::default();
+    if unsafe { GetCursorPos(&mut point) }.is_err() {
+        return None;
+    }
+    let mut rect = RECT::default();
+    if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
+        return None;
+    }
+    let width = (rect.right - rect.left).max(1) as f32;
+    let height = (rect.bottom - rect.top).max(1) as f32;
+    let window_x = point.x - rect.left;
+    let window_y = point.y - rect.top;
+    let (stage_x, stage_y) =
+        save_picker_client_point_to_movie_stage(window_x as f32, window_y as f32, width, height)?;
+    save_picker_drive_strip_cell_from_x(stage_x, cell_count).map(|cell| (cell, stage_x, stage_y))
+}
+
+fn save_picker_drive_strip_cell_from_x(x: f32, cell_count: usize) -> Option<usize> {
+    if cell_count == 0 || !x.is_finite() {
+        return None;
+    }
+    let local_x = x - DRIVE_STRIP_HIT_LEFT_PX;
+    if local_x < 0.0 {
+        return None;
+    }
+    let cell = (local_x / DRIVE_STRIP_CELL_PITCH_PX).floor() as usize;
+    if cell >= cell_count {
+        return None;
+    }
+    let in_cell_x = local_x - cell as f32 * DRIVE_STRIP_CELL_PITCH_PX;
+    (in_cell_x < DRIVE_STRIP_CELL_HIT_WIDTH_PX).then_some(cell)
+}
+
+#[cfg(test)]
+mod drive_strip_hit_tests {
+    use super::*;
+
+    #[test]
+    fn drive_cells_live_in_clickable_player_name_band() {
+        assert_eq!(save_picker_drive_strip_cell_from_x(-292.0, 3), Some(0));
+        assert_eq!(save_picker_drive_strip_cell_from_x(-214.1, 3), Some(0));
+        assert_eq!(save_picker_drive_strip_cell_from_x(-214.0, 3), Some(1));
+        assert_eq!(save_picker_drive_strip_cell_from_x(-136.1, 3), Some(1));
+        assert_eq!(save_picker_drive_strip_cell_from_x(-136.0, 3), Some(2));
+        assert_eq!(save_picker_drive_strip_cell_from_x(-58.1, 3), Some(2));
+        assert_eq!(save_picker_drive_strip_cell_from_x(-58.0, 3), None);
+    }
+
+    #[test]
+    fn activation_prefers_event_time_pending_drive_cell() {
+        assert_eq!(save_picker_pending_drive_strip_cell(0, 3), Some(0));
+        assert_eq!(save_picker_pending_drive_strip_cell(1, 3), Some(1));
+        assert_eq!(save_picker_pending_drive_strip_cell(2, 3), Some(2));
+        assert_eq!(save_picker_pending_drive_strip_cell(3, 3), None);
+        assert_eq!(
+            save_picker_pending_drive_strip_cell(SAVE_PICKER_DRIVE_STRIP_NO_PENDING_CELL, 3),
+            None
+        );
+    }
+
+    #[test]
+    fn live_profile_select_cursor_is_the_model_row_index() {
+        assert_eq!(save_picker_model_row_from_native_cursor(-1), None);
+        assert_eq!(save_picker_model_row_from_native_cursor(0), Some(0));
+        assert_eq!(save_picker_model_row_from_native_cursor(1), Some(1));
+        assert_eq!(save_picker_model_row_from_native_cursor(9), Some(9));
+        assert_eq!(save_picker_model_row_from_native_cursor(10), None);
+    }
+
+    fn client_x_for_stage_x(stage_x: f32, client_width: f32, client_height: f32) -> f32 {
+        let movie_aspect = PROFILE_SELECT_MOVIE_WIDTH_PX / PROFILE_SELECT_MOVIE_HEIGHT_PX;
+        let client_aspect = client_width / client_height;
+        if client_aspect > movie_aspect {
+            let content_w = client_height * movie_aspect;
+            ((client_width - content_w) * 0.5)
+                + ((stage_x + PROFILE_SELECT_MOVIE_WIDTH_PX * 0.5) / PROFILE_SELECT_MOVIE_WIDTH_PX)
+                    * content_w
+        } else {
+            ((stage_x + PROFILE_SELECT_MOVIE_WIDTH_PX * 0.5) / PROFILE_SELECT_MOVIE_WIDTH_PX)
+                * client_width
+        }
+    }
+
+    #[test]
+    fn live_cursor_mapping_uses_fixed_movie_stage_not_user_resolution() {
+        for (client_width, client_height) in [
+            (1920.0, 1080.0),
+            (2560.0, 1440.0),
+            (3440.0, 1440.0),
+            (1024.0, 768.0),
+        ] {
+            let client_x = client_x_for_stage_x(-214.0, client_width, client_height);
+            let client_y = client_height * 0.5;
+            let (stage_x, stage_y) = save_picker_client_point_to_movie_stage(
+                client_x,
+                client_y,
+                client_width,
+                client_height,
+            )
+            .expect("point should lie inside the fitted movie stage");
+            assert!(
+                (stage_x + 214.0).abs() < 0.02,
+                "client {client_width}x{client_height} mapped x={stage_x}, not the fixed movie-stage boundary"
+            );
+            assert!(stage_y.abs() < 0.02);
+            assert_eq!(save_picker_drive_strip_cell_from_x(stage_x, 3), Some(1));
+        }
+    }
+
+    #[test]
+    fn live_cursor_mapping_rejects_pillarbox_margin() {
+        assert_eq!(
+            save_picker_client_point_to_movie_stage(100.0, 720.0, 3440.0, 1440.0),
+            None,
+            "ultrawide pillarbox margin must not be treated as movie coordinates"
+        );
+    }
+}
+
+/// Menu-pump-owned drive-strip mouse/keyboard handling. The native ProfileSelect list exposes only
+/// one hit target per row, so `[C:]  [S:]  [Z:]` can never be true native sub-buttons. While the
+/// native cursor is on the drive row, sample input edges in the menu pump and mutate the picker model
+/// directly: mouse uses the live X coordinate; Left/Right cycle to the adjacent drive.
+pub(crate) unsafe fn save_picker_menu_pump_drive_strip_mouse() {
+    let dialog = save_picker_live_profile_dialog();
+    if dialog == 0 || SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
+        SAVE_PICKER_DRIVE_STRIP_INPUT_DOWN_MASK.store(0, Ordering::SeqCst);
+        let _ = crate::experiments::save_picker_take_user_nav_edges();
+        return;
+    }
+    crate::experiments::ensure_save_picker_user_nav_input_hooks_installed();
+    let mut down_mask = 0usize;
+    if unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x01) < 0 } {
+        down_mask |= SAVE_PICKER_DRIVE_STRIP_LBUTTON_MASK;
+    }
+    if unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x25) < 0 } {
+        down_mask |= SAVE_PICKER_DRIVE_STRIP_LEFT_MASK;
+    }
+    if unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x27) < 0 } {
+        down_mask |= SAVE_PICKER_DRIVE_STRIP_RIGHT_MASK;
+    }
+    let prev_down = SAVE_PICKER_DRIVE_STRIP_INPUT_DOWN_MASK.swap(down_mask, Ordering::SeqCst);
+    let mut pressed = down_mask & !prev_down;
+    let nav_edges = crate::experiments::save_picker_take_user_nav_edges();
+    if nav_edges & crate::experiments::SAVE_PICKER_NAV_LEFT_MASK != 0 {
+        pressed |= SAVE_PICKER_DRIVE_STRIP_LEFT_MASK;
+    }
+    if nav_edges & crate::experiments::SAVE_PICKER_NAV_RIGHT_MASK != 0 {
+        pressed |= SAVE_PICKER_DRIVE_STRIP_RIGHT_MASK;
+    }
+    if pressed == 0 {
+        return;
+    }
+    let Ok(base) = game_module_base() else {
+        return;
+    };
+    let cursor_getter: unsafe extern "system" fn(usize) -> i32 =
+        unsafe { std::mem::transmute(base + MENU_ITEM_LIST_CURSOR_GETTER_RVA) };
+    let cursor = unsafe { cursor_getter(dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET) };
+    let Some(model_row) = save_picker_model_row_from_native_cursor(cursor) else {
+        append_autoload_debug(format_args!(
+            "save-picker-nav: pressed_mask=0x{pressed:x} ignored invalid native_cursor={cursor}"
+        ));
+        return;
+    };
+    let (on_drive_row, drive_row) = {
+        let guard = crate::experiments::save_picker::active_save_picker_lock();
+        let Some(model) = guard.as_ref() else {
+            append_autoload_debug(format_args!(
+                "save-picker-nav: pressed_mask=0x{pressed:x} ignored no active model native_cursor={cursor} model_row={model_row}"
+            ));
+            return;
+        };
+        let drive_row = model.drive_row();
+        (drive_row == Some(model_row), drive_row)
+    };
+    if !on_drive_row {
+        append_autoload_debug(format_args!(
+            "save-picker-nav: pressed_mask=0x{pressed:x} ignored native_cursor={cursor} model_row={model_row} drive_row={drive_row:?}"
+        ));
+        return;
+    }
+
+    #[derive(Clone, Copy)]
+    enum DriveStripPumpAction {
+        Cell { cell: usize, x: f32, y: f32 },
+        Cycle { forward: bool },
+    }
+
+    let action = if pressed & SAVE_PICKER_DRIVE_STRIP_LBUTTON_MASK != 0 {
+        let chosen = {
+            let guard = crate::experiments::save_picker::active_save_picker_lock();
+            let Some(model) = guard.as_ref() else {
+                return;
+            };
+            save_picker_drive_strip_cell_from_live_cursor(model.drive_strip_cell_count())
+        };
+        let Some((cell, x, y)) = chosen else {
+            append_autoload_debug(format_args!(
+                "save-picker: drive-strip pump mouse ignored at native_cursor={cursor} model_row={model_row}; no cell under stage cursor pressed_mask=0x{pressed:x}"
+            ));
+            return;
+        };
+        DriveStripPumpAction::Cell { cell, x, y }
+    } else if pressed & SAVE_PICKER_DRIVE_STRIP_LEFT_MASK != 0 {
+        DriveStripPumpAction::Cycle { forward: false }
+    } else if pressed & SAVE_PICKER_DRIVE_STRIP_RIGHT_MASK != 0 {
+        DriveStripPumpAction::Cycle { forward: true }
+    } else {
+        return;
+    };
+
+    let changed = {
+        let mut guard = crate::experiments::save_picker::active_save_picker_lock();
+        let Some(model) = guard.as_mut() else {
+            return;
+        };
+        match action {
+            DriveStripPumpAction::Cell { cell, .. } => model.activate_drive_strip_cell(cell),
+            DriveStripPumpAction::Cycle { forward } => model.cycle_drive_from_drive_strip(forward),
+        }
+    };
+
+    match action {
+        DriveStripPumpAction::Cell { cell, x, y } => append_autoload_debug(format_args!(
+            "save-picker: drive-strip pump mouse native_cursor={cursor} model_row={model_row} stage_x={x:.1} stage_y={y:.1} cell={cell} changed={changed}"
+        )),
+        DriveStripPumpAction::Cycle { forward } => append_autoload_debug(format_args!(
+            "save-picker: drive-strip pump key native_cursor={cursor} model_row={model_row} direction={} changed={changed}",
+            if forward { "right" } else { "left" }
+        )),
+    }
+    if !changed {
+        return;
+    }
+    let staged = {
+        let guard = crate::experiments::save_picker::active_save_picker_lock();
+        match guard.as_ref() {
+            Some(model) => unsafe { save_picker_stage_row_records(model) },
+            None => false,
+        }
+    };
+    if staged {
+        append_autoload_debug(format_args!(
+            "save-picker: drive-strip pump restaged browse rows at native_cursor={cursor} model_row={model_row} pressed_mask=0x{pressed:x}"
+        ));
+        unsafe { save_picker_rebuild_profile_dialog_now(dialog, "drive-strip-pump") };
+    }
+}
+
+fn save_picker_scrollbar_packed_state(current: usize, page: usize, total: usize) -> usize {
+    (current.min(0xffff) & 0xffff)
+        | ((page.min(0xffff) & 0xffff) << 16)
+        | ((total.min(0xffff) & 0xffff) << 32)
+}
+
+/// Menu-pump-owned native scrollbar maintenance. The compact picker still stages only ten
+/// `ProfileSummary` rows, so do not change the native GridControl item count here: that would let
+/// native cursor movement address unstaged rows. Instead, drive the embedded native `ScrollBarV`
+/// controller directly through the same total/current setters the game uses, with the verified
+/// owner pointer at `ProfileLoadDialog + 0xbe0` (`grid + 0x1a8`).
+pub(crate) unsafe fn save_picker_menu_pump_native_scrollbar() {
+    let window = save_picker_live_profile_dialog();
+    if window == 0 || SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
+        SAVE_PICKER_SCROLLBAR_LAST_SYNC.store(usize::MAX, Ordering::SeqCst);
+        return;
+    }
+
+    let (current, page, total) = {
+        let guard = crate::experiments::save_picker::active_save_picker_lock();
+        let Some(model) = guard.as_ref() else {
+            return;
+        };
+        let page = model.entries_per_page().max(1);
+        let total = model.entry_count().max(page);
+        (
+            model.scroll_offset().min(total.saturating_sub(page)),
+            page,
+            total,
+        )
+    };
+
+    let Ok(set_total_addr) = game_rva(SCROLLBAR_CONTROL_SET_TOTAL_RVA) else {
+        return;
+    };
+    let Ok(set_position_addr) = game_rva(SCROLLBAR_CONTROL_SET_POSITION_RVA) else {
+        return;
+    };
+    let scrollbar = window + PROFILE_LOAD_DIALOG_SCROLLBAR_OFFSET;
+    let set_total: unsafe extern "system" fn(usize, i32) =
+        unsafe { std::mem::transmute(set_total_addr) };
+    let set_position: unsafe extern "system" fn(usize, i32) =
+        unsafe { std::mem::transmute(set_position_addr) };
+
+    unsafe { set_total(scrollbar, total.min(i32::MAX as usize) as i32) };
+    unsafe { set_position(scrollbar, current.min(i32::MAX as usize) as i32) };
+
+    let packed = save_picker_scrollbar_packed_state(current, page, total);
+    if SAVE_PICKER_SCROLLBAR_LAST_SYNC.swap(packed, Ordering::SeqCst) != packed {
+        append_autoload_debug(format_args!(
+            "save-picker: native scrollbar sync current={current} page={page} total={total} scrollbar=0x{scrollbar:x}"
+        ));
+    }
+}
+
+/// Menu-pump-owned scroll-window maintenance. The native ProfileSelect backing list has only ten
+/// row models, so long directory listings are represented as a sliding ten-row window with no page
+/// or pseudo-scroll rows. When the native cursor rests on a window edge, the model advances and this
+/// queues the same in-place rebuild used by directory/drive navigation.
+pub(crate) unsafe fn save_picker_menu_pump_edge_scroll() {
+    let dialog = save_picker_live_profile_dialog();
+    if dialog == 0 || SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
+        return;
+    }
+    let Ok(base) = game_module_base() else {
+        return;
+    };
+    let cursor_getter: unsafe extern "system" fn(usize) -> i32 =
+        unsafe { std::mem::transmute(base + MENU_ITEM_LIST_CURSOR_GETTER_RVA) };
+    let cursor = unsafe { cursor_getter(dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET) };
+    let Some(model_row) = save_picker_model_row_from_native_cursor(cursor) else {
+        return;
+    };
+    let scrolled = {
+        let mut guard = crate::experiments::save_picker::active_save_picker_lock();
+        let Some(model) = guard.as_mut() else {
+            return;
+        };
+        model.edge_scroll_from_native_cursor_tick(model_row)
+    };
+    if !scrolled {
+        return;
+    }
+    let staged = {
+        let guard = crate::experiments::save_picker::active_save_picker_lock();
+        match guard.as_ref() {
+            Some(model) => unsafe { save_picker_stage_row_records(model) },
+            None => false,
+        }
+    };
+    if staged {
+        append_autoload_debug(format_args!(
+            "save-picker: edge-scroll restaged browse rows at native_cursor={cursor} model_row={model_row}"
+        ));
+        unsafe { save_picker_rebuild_profile_dialog_now(dialog, "edge-scroll-pump") };
+    }
+}
+
 /// Menu-pump-owned in-place list rebuild (called from the MenuWindowJob::Run hook). Runs the
 /// native records-changed rebuild queued by a picker navigation; falls back to close+resubmit
 /// when the rebuild fn cannot be resolved.
@@ -627,17 +1199,7 @@ pub(crate) unsafe fn save_picker_menu_pump_rebuild() {
     if dialog == 0 || SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
         return;
     }
-    if let Ok(rebuild_addr) = game_rva(PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA) {
-        let rebuild: unsafe extern "system" fn(usize) =
-            unsafe { std::mem::transmute(rebuild_addr) };
-        unsafe { rebuild(dialog) };
-        append_autoload_debug(format_args!(
-            "save-picker: menu-pump in-place list rebuild dialog=0x{dialog:x} via 0x{rebuild_addr:x}"
-        ));
-    } else {
-        SAVE_PICKER_REOPEN_PENDING.store(1, Ordering::SeqCst);
-        unsafe { save_picker_native_close(dialog, "repopulate-no-rebuild-rva") };
-    }
+    unsafe { save_picker_rebuild_profile_dialog_now(dialog, "queued-navigation") };
 }
 
 /// Menu-pump-owned resubmit: called from `system_quit_menu_window_job_run_hook` (the proven
@@ -716,8 +1278,8 @@ pub(crate) fn save_picker_error_html_utf16(text: &str) -> Vec<u16> {
 }
 
 pub(crate) fn save_picker_browse_html_utf16_color(text: &str, color: &str) -> Vec<u16> {
-    // Matches the stats panel's font size so browse info and attribute lines read identically.
-    const SIZE: &str = "19";
+    // Match the native ProfileSelect filename/timestamp fields; the asset gives ErStats a native-height box.
+    const SIZE: &str = "24";
     if text.is_empty() {
         return vec![0];
     }
@@ -737,61 +1299,74 @@ pub(crate) fn save_picker_set_visible_status(message: er_save_picker::PickerStat
     }
 }
 
-/// Character budget for the per-file character list line (the four-attribute stats line occupies
-/// roughly this width at the same font size, so the list clips no earlier than the stats did).
-pub(crate) const SAVE_PICKER_BROWSE_LINE_CHAR_BUDGET: usize = 44;
+/// Character budget for the per-file character list fragment. This text is merged onto the single
+/// inline `ErStats` row field beside the filename and timestamp, so it must stay short enough to read
+/// as row detail instead of a wrapped second line.
+pub(crate) const SAVE_PICKER_BROWSE_LINE_CHAR_BUDGET: usize = 34;
 
-/// The two `ErStats` lines for ProfileSelect row `row` while the browse picker owns the window.
-/// File rows show the file's REAL character info: active-slot count on the top line and the
-/// characters' names + levels on the bottom line (as many as fit the budget, then a `+k` overflow
-/// marker). Every other row (up/drive, directory, page cycle, placeholder) gets EMPTY lines so
-/// neither leftover row text nor per-slot attribute stats render as junk there. `None` when the
-/// picker does not own the rows (the normal character-slot view keeps the attribute stats panel).
-/// Generated text uses `/` separators and never inserts commas (comma-safe labels,
-/// er-effects-rs-dly6); names pass through with HTML escaping only.
-///
-/// THE `[CURRENT]` MARKER LIVES HERE, on the top line, and it is the answer to a question the
-/// destination browser now has to answer on its own: "which of these is the file I am playing?"
-/// Before 2026-07-31 a separate up-front box asked whether to overwrite the loaded save, so the
-/// list never had to identify it. That box is gone -- overwriting your own save means finding its
-/// row -- so the row says so. It is a display hint over a path compare, never the commit-time
-/// identity check (see `SavePickerModel::row_is_loaded_save`).
+pub(crate) fn save_picker_drive_cell_html_utf16(text: &str) -> Vec<u16> {
+    let color = if text.starts_with('>') {
+        "#d8a052"
+    } else {
+        "#8f887a"
+    };
+    save_picker_browse_html_utf16_color(text, color)
+}
+
+pub(crate) fn save_picker_drive_cell_text(row: usize, cell: usize) -> Option<Vec<u16>> {
+    if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 && !missing_save_selection_pending() {
+        return None;
+    }
+    let guard = crate::experiments::save_picker::active_save_picker_lock();
+    let model = guard.as_ref()?;
+    let text = model.drive_row_cell_label(row, cell).unwrap_or_default();
+    Some(save_picker_drive_cell_html_utf16(&text))
+}
+
+/// The `ErStats` fragments for ProfileSelect row `row` while the browse picker owns the window.
+/// The row-populate hook merges the two fragments into ONE inline field: file rows show active-slot
+/// count plus character names/levels beside `ER0000.sl2`, while navigation/status rows show their
+/// auxiliary copy beside the row label. Empty rows get blank fragments so neither leftover row text
+/// nor per-slot attribute stats render as junk there. `None` when the picker does not own the rows
+/// (the normal character-slot view keeps the attribute stats panel).
 pub(crate) fn save_picker_browse_stats_lines(row: usize) -> Option<(Vec<u16>, Vec<u16>)> {
     if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 && !missing_save_selection_pending() {
         return None;
     }
     let guard = crate::experiments::save_picker::active_save_picker_lock();
     let model = guard.as_ref()?;
-    if let Some(message) = model.status_message()
-        && row == 0
-    {
+    let status_row = model.status_message().is_some() && row == 0;
+    if let Some((top, bottom)) = model.row_auxiliary_lines(row) {
+        if status_row {
+            return Some((
+                save_picker_error_html_utf16(&top),
+                save_picker_error_html_utf16(&bottom),
+            ));
+        }
         return Some((
-            save_picker_error_html_utf16(message.headline()),
-            save_picker_error_html_utf16(message.detail()),
+            save_picker_browse_html_utf16(&top),
+            save_picker_browse_html_utf16(&bottom),
         ));
     }
     let is_current = model.row_is_loaded_save(row);
     let Some(chars) = model.row_file_characters(row) else {
-        // Non-file row: blank both lines.
+        // Empty row: blank the injected stats field so no per-slot attribute stats render as junk.
         return Some((vec![0], vec![0]));
     };
     let count = if chars.len() == 1 {
-        "1 CHARACTER".to_owned()
+        "1 CHAR".to_owned()
     } else {
-        format!("{} CHARACTERS", chars.len())
+        format!("{} CHAR", chars.len())
     };
     let top = if is_current {
-        format!(
-            "{} {count}",
-            crate::experiments::save_picker::PICKER_CURRENT_SAVE_MARKER
-        )
+        format!("* {count}")
     } else {
         count
     };
     let mut bottom = String::new();
     let mut shown = 0usize;
     for info in chars {
-        let seg = format!("{} LV {}", info.name, info.level);
+        let seg = format!("{} L{}", info.name, info.level);
         let sep = if bottom.is_empty() { "" } else { " / " };
         if !bottom.is_empty()
             && bottom.chars().count() + sep.chars().count() + seg.chars().count()
@@ -812,16 +1387,22 @@ pub(crate) fn save_picker_browse_stats_lines(row: usize) -> Option<(Vec<u16>, Ve
     ))
 }
 
-/// What a browse row does with the three native per-slot info fields.
+/// What a picker-owned row does with every optional ProfileSelect field family.
 ///
-/// The `Level` caption and value are not represented here because there is nothing to decide: no
-/// browse row is a profile slot, so a level is meaningless on every one of them and they are hidden
-/// on all rows the picker owns.
+/// The `Level` caption/value and bottom `PlayTime` are hidden for every picker row. The remaining
+/// fields are row-kind-specific: a save-file row can stage its timestamp into top-right `Location`,
+/// metadata rows own `ErStats`, and only the drive-cycle row owns `DriveCell_0..2`.
 pub(crate) struct RowSlotInfo {
-    /// Replacement text for the `PlayTime` field (when the file was last written), or `None` to hide
+    /// Replacement text for the `Location` field (when the file was last written), or `None` to hide
     /// the field -- which is what every non-file row gets, and what a file whose timestamp is
     /// unreadable gets rather than a fabricated date.
-    pub(crate) play_time: Option<String>,
+    pub(crate) location: Option<String>,
+    /// Whether this row has real `ErStats` copy. False on the drive row unless a visible status
+    /// message temporarily owns it, so stale parent-folder copy cannot survive row-clip reuse.
+    pub(crate) er_stats: bool,
+    /// Whether this is the one drive-cycle row and its cells own the row. A visible status message
+    /// temporarily takes that field band instead, so the drive cells hide rather than overlap it.
+    pub(crate) drive_cells: bool,
 }
 
 /// What the browse picker wants done with ProfileSelect row `row`'s per-slot info fields.
@@ -834,12 +1415,20 @@ pub(crate) fn save_picker_row_slot_info(row: usize) -> Option<RowSlotInfo> {
     if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 && !missing_save_selection_pending() {
         return None;
     }
-    let last_saved = {
+    let (last_saved, er_stats, drive_cells) = {
         let guard = crate::experiments::save_picker::active_save_picker_lock();
-        guard.as_ref()?.row_last_saved(row)
+        let model = guard.as_ref()?;
+        let has_auxiliary_lines = model.row_auxiliary_lines(row).is_some();
+        (
+            model.row_last_saved(row),
+            has_auxiliary_lines || model.row_file_characters(row).is_some(),
+            model.drive_row() == Some(row) && !has_auxiliary_lines,
+        )
     };
     Some(RowSlotInfo {
-        play_time: last_saved.and_then(save_picker_last_saved_text),
+        location: last_saved.and_then(save_picker_last_saved_text),
+        er_stats,
+        drive_cells,
     })
 }
 
@@ -923,6 +1512,10 @@ mod save_picker_row_slot_info_tests {
             assert!(
                 save_picker_row_slot_info(row).is_none(),
                 "row {row} was classified without a picker owning the rows"
+            );
+            assert!(
+                save_picker_browse_stats_lines(row).is_none(),
+                "row {row} got browse stats without a picker owning the rows"
             );
         }
     }
