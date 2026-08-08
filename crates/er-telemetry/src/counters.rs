@@ -1887,6 +1887,12 @@ pub static PROFILE_SELECT_WINDOW_RUN_TICKS: AtomicUsize = AtomicUsize::new(0);
 /// view was rendering. They are left un-acked so the in-band row-populate path applies them instead.
 /// Non-zero is the guard working, not an error.
 pub static PROFILE_EDITOR_DEFERRED_APPLIES: AtomicUsize = AtomicUsize::new(0);
+/// Times the per-slot stats/name caches were dropped because the save they described stopped being
+/// the save on screen. They used to be a process-lifetime latch with no invalidation at all, so a
+/// session's first save described every ProfileSelect row forever; non-zero means a swap was noticed.
+pub static PROFILE_SLOT_CACHE_INVALIDATIONS: AtomicUsize = AtomicUsize::new(0);
+/// Times those caches were refilled straight from bytes the picker already held (no second read).
+pub static PROFILE_SLOT_CACHE_PREVIEW_RELOADS: AtomicUsize = AtomicUsize::new(0);
 /// Last GFx value type seen by the row-field visibility path.
 pub static PROFILE_ROW_SLOT_INFO_LAST_DATATYPE: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// Browse rows whose `PlayTime` was replaced with the file's last-saved timestamp.
