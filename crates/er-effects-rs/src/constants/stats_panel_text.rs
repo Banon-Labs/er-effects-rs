@@ -99,6 +99,23 @@ pub(crate) use er_telemetry::counters::PROFILE_STATS_PUSH_STALE_LAST_VT;
 /// slot's attributes BEFORE the original runs (the original destroys the row proxy's embedded
 /// `CSScaleformValue` at its end, so a post-call resolve would operate on a released value).
 pub(crate) const PROFILE_ROW_POPULATE_RVA: usize = 0x8757e0;
+/// Row-model BUILDER `FUN_1408752c0(rowModel, int slot)` -- the only reader of a slot's
+/// `ProfileSummary` record on the way to a row.
+///
+/// It resolves the record (`FUN_140261b80(summary, slot)`), pulls the level from `record[0x24]`, the
+/// play time from `record[0x28]` and the **PlaceName id from `record[0x34]`**, then hands all three
+/// to the field filler `FUN_1408759e0`, which turns the place id into the row model's `+0x90`
+/// `Location` MenuString via `FUN_1407611c0` = `MsgRepository::GetAndFormat(id, "PlaceName", "PN")`.
+///
+/// That ordering is why the record must be lent its corrected place name HERE and not at
+/// [`PROFILE_ROW_POPULATE_RVA`]: by the time the populate runs, `Location` is already a formatted
+/// string and the record is no longer consulted. Patching there changed nothing on screen while the
+/// telemetry happily reported a repair (observed 2026-08-07 -- seven rows still read the stale
+/// "Midra's Manse").
+///
+/// Byte-verified against `eldenring-deobf.bin` before hooking: `40 55 56 57 48 81 ec 90 00 00 00`,
+/// identical to the 1.16.2 dump's disassembly at the same VA (shift 0).
+pub(crate) const PROFILE_ROW_MODEL_BUILD_RVA: usize = 0x8752c0;
 /// Title/load-current-character row builder `FUN_140951220`: builds a transient current-player
 /// `MenuSaveDataSummary` on its own STACK, then calls [`PROFILE_ROW_POPULATE_RVA`] to fill
 /// PlayerName/Level/Location/PlayTime/Icon_0. Hooked after the original to push `ErCharStats` on
@@ -259,6 +276,12 @@ pub(crate) use er_telemetry::counters::PROFILE_OWN_SUMMARY_ROWS;
 /// Count of text pushes refused because the movie has no child by that name (oracle).
 pub(crate) use er_telemetry::counters::PROFILE_STATS_PUSH_MISSING_FIELD;
 pub(crate) static PROFILE_ROW_POPULATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+/// Trampoline for [`PROFILE_ROW_MODEL_BUILD_RVA`], and its one-shot install latch.
+pub(crate) static PROFILE_ROW_MODEL_BUILD_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static PROFILE_ROW_MODEL_BUILD_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Rows whose record was lent a corrected `PlaceName` id by the builder hook (oracle).
+pub(crate) static PROFILE_ROW_PLACE_NAME_REPAIRS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PROFILE_CURRENT_ROW_POPULATE_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::PROFILE_ROW_POPULATE_INSTALLED;
@@ -275,6 +298,10 @@ pub(crate) static PLAYER_GAME_DATA_NAME_GETTER_OVERRIDE_LOGGED: AtomicUsize = At
 /// Per-slot stats cache state (oracle): 0 = not attempted, 1 = loaded (`.sl2` read + parsed), 2 =
 /// load failed (save unreadable/too small) -- the hook then falls back to the loaded character.
 pub(crate) use er_telemetry::counters::PROFILE_SLOT_STATS_CACHE_STATE;
+/// Count of per-slot cache drops on a save swap (oracle).
+pub(crate) use er_telemetry::counters::PROFILE_SLOT_CACHE_INVALIDATIONS;
+/// Count of per-slot cache refills from picker-held bytes (oracle).
+pub(crate) use er_telemetry::counters::PROFILE_SLOT_CACHE_PREVIEW_RELOADS;
 /// Count of save slots that decoded to a real character in the per-slot stats cache (oracle).
 pub(crate) use er_telemetry::counters::PROFILE_SLOT_STATS_DECODED;
 pub(crate) use er_telemetry::counters::TITLE_PRESS_START_BIND_HITS;

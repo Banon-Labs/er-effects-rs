@@ -207,6 +207,22 @@ impl RowSlotFieldVisibility {
         ..Self::NATIVE
     };
 
+    /// [`Self::NATIVE_MERGED`], but able to say the row has no location to show.
+    ///
+    /// The `Location` string is formatted from the `PlaceName` id in that slot's `ProfileSummary`
+    /// record, and in a save assembled outside the game the record can belong to a different
+    /// character than the body in that slot (see `er_save_loader::profile_summary`). The id exists
+    /// nowhere else in the save and the game cannot recompute it from a map, so a row in that state
+    /// has no location available -- and printing the record's anyway is how six of ten rows came to
+    /// claim "Midra's Manse" for characters standing in the Academy (user-reported 2026-08-07).
+    /// Blank is a visible, diagnosable absence; another character's place name is not.
+    pub const fn native_merged(location: bool) -> Self {
+        Self {
+            location,
+            ..Self::NATIVE_MERGED
+        }
+    }
+
     /// Browse/file rows are not profile slots; level is hidden, the top-right
     /// location field is shown only when it carries a staged timestamp, and the
     /// bottom play-time row is always hidden so file rows collapse to one line.
@@ -329,6 +345,26 @@ mod tests {
                 drive_cells: false,
             }
         );
+    }
+
+    /// Dropping a row's unsourceable location must drop ONLY that field. A merged row still owes the
+    /// same statement about every other field, or the browse/drive text it denies starts surviving
+    /// onto it -- the recycled-clip leak this struct exists to prevent.
+    #[test]
+    fn a_merged_row_without_a_location_still_states_every_other_field() {
+        let with = RowSlotFieldVisibility::native_merged(true);
+        let without = RowSlotFieldVisibility::native_merged(false);
+        assert_eq!(with, RowSlotFieldVisibility::NATIVE_MERGED);
+        assert!(!without.location);
+        assert_eq!(
+            RowSlotFieldVisibility {
+                location: true,
+                ..without
+            },
+            with
+        );
+        // And it is still distinguishable from NATIVE, so the visibility pass fires for it.
+        assert_ne!(without, RowSlotFieldVisibility::NATIVE);
     }
 
     /// Every field must be claimed by exactly one row kind and denied by the others, or a recycled
