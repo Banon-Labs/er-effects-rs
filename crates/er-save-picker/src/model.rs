@@ -20,24 +20,23 @@
 //!
 //! The visible rows are a contiguous prefix of the window's 10 slots, in this order:
 //!
-//! 1. `[ new ]`       -- destination intent only, and FIRST;
-//! 2. `[..] <parent>` -- only when the current directory has a parent (absent at a drive root);
-//! 3. `[ C: > Z: ]`   -- the drive cycler, only when more than one drive is mounted;
+//! 1. `DRIVES [C:]`   -- ALWAYS FIRST when more than one drive is mounted;
+//! 2. `[ new ]`       -- destination intent only, directly below the drive row when it exists;
+//! 3. `[..] <parent>` -- only when the current directory has a parent (absent at a drive root);
 //! 4. the current scroll window's directory / save-file entries.
 //!
 //! Overflow is represented by the native `05_010` scrollbar affordance plus edge-hover restaging,
 //! not by consuming two row slots with `[ SCROLL ^ ]` / `[ SCROLL v ]` pseudo-entries.
 //!
-//! `[ new ]` SITS ABOVE THE NAVIGATION ROWS, which is the one place the two intents' layouts
-//! differ, and it is deliberate. Since the Save Game row press opens this browser with no question
-//! in front of it (2026-07-31), the destination list is the first thing the user sees after
-//! pressing Save Game -- so the row that means "write a fresh file, destroy nothing" is row 0, the
-//! index a freshly built native list highlights, and the index the model's own cursor starts on
-//! ([`SavePickerModel::first_selectable_row`]). Row 0 in a LOAD browse still means what it always
-//! did; only the destination browser has a `[ new ]` at all.
+//! `[ new ]` SITS ABOVE THE PARENT ROW, which is the one place the two intents' layouts differ,
+//! and it is deliberate. Since the Save Game row press opens this browser with no question in front
+//! of it (2026-07-31), [`SavePickerModel::first_selectable_row`] explicitly starts destination
+//! browsing on `[ new ]` even when the always-first drive row occupies row 0. The safe default is
+//! therefore preserved without making the location switcher jump below the current folder.
 //!
-//! Nothing sits at a fixed index: [`SavePickerModel::entry_row_base`] is the single place the
-//! layout is decided, and every row query derives from it. That matters for two reasons.
+//! Only the drive row has a fixed index (0 when it exists). [`SavePickerModel::entry_row_base`] is
+//! the single place the fixed-row count is decided, and every entry query derives from it. That
+//! matters for two reasons.
 //!
 //! First, ROW ALIGNMENT. A row's label and its per-row character text must never describe
 //! different entries; a hard-coded `row - 1` was only correct in load-source intent and made every
@@ -605,14 +604,14 @@ impl SavePickerModel {
     }
 
     /// Rows above the entries that are pure NAVIGATION -- never an entry, never a pick target:
-    /// the up row and the drive cycler. The initial cursor skips these so a fresh listing lands on
-    /// something actionable.
+    /// the always-first drive row and the later parent row. The initial cursor skips these when a
+    /// real entry exists so a fresh listing lands on something actionable.
     fn nav_row_count(&self) -> usize {
         usize::from(self.has_parent_row()) + usize::from(self.has_drive_row())
     }
 
-    /// Rows the PINNED `[ new ]` row occupies above everything else: 1 in destination intent, 0 in
-    /// a load browse. Every other row index in the layout is offset by exactly this.
+    /// Rows the destination-only `[ new ]` control occupies above the parent row and entries: 1 in
+    /// destination intent, 0 in a load browse. The always-first drive row is the sole exception.
     fn pinned_row_count(&self) -> usize {
         usize::from(self.is_destination())
     }
@@ -622,23 +621,24 @@ impl SavePickerModel {
         self.pinned_row_count() + self.nav_row_count()
     }
 
-    /// Row index of the pinned `[ new ]` row (destination intent only). ALWAYS 0 when it exists --
-    /// see the module docs: it is the first thing the Save Game row press shows.
+    /// Row index of the pinned `[ new ]` row (destination intent only). It sits directly below the
+    /// always-first drive row when one exists, otherwise it remains row 0.
     pub fn new_file_row(&self) -> Option<usize> {
-        self.is_destination().then_some(0)
+        self.is_destination()
+            .then(|| usize::from(self.has_drive_row()))
     }
 
-    /// Row index of the "up one directory" row, when the current directory has a parent. It is
-    /// first in a load browse and second in a destination browse (`[ new ]` is pinned above it);
-    /// at a drive root there is no up row at all.
+    /// Row index of the "up one directory" row, when the current directory has a parent. The drive
+    /// row and destination-only `[ new ]` row, when present, both sit above it.
     pub fn parent_row(&self) -> Option<usize> {
-        self.has_parent_row().then(|| self.pinned_row_count())
+        self.has_parent_row()
+            .then(|| usize::from(self.has_drive_row()) + self.pinned_row_count())
     }
 
-    /// Row index of the drive cycler, when it exists.
+    /// Row index of the drive cycler, when it exists. The drive switcher is the stable top-level
+    /// location control, so it always owns row 0 in both picker intents and every subdirectory.
     pub fn drive_row(&self) -> Option<usize> {
-        self.has_drive_row()
-            .then(|| self.pinned_row_count() + usize::from(self.has_parent_row()))
+        self.has_drive_row().then_some(0)
     }
 
     /// Row index of the old page cycler. Pagination is removed; overflow is represented by the
@@ -1957,12 +1957,12 @@ mod tests {
         (dir.clone(), root.to_path_buf())
     }
 
-    /// `[ new ]` IS PINNED ABOVE THE NAVIGATION ROWS, not below them (moved 2026-07-31, when the
-    /// Save Game row press started opening this list with no confirm in front of it). Row 0 is the
-    /// index a freshly built native list highlights, and the row that belongs there is the one that
-    /// creates a file rather than one that replaces one.
+    /// `[ new ]` remains above the parent row (moved 2026-07-31, when the Save Game row press
+    /// started opening this list with no confirm in front of it). With no drive strip it is still
+    /// row 0; when the drive strip exists, that stable location control is the sole row above it and
+    /// the explicit initial-cursor rule still starts on `[ new ]`.
     #[test]
-    fn destination_pins_new_file_above_the_nav_rows_and_shifts_them_down() {
+    fn destination_keeps_new_file_above_parent_but_below_the_drive_row() {
         let model = destination("Z:\\saves", 3);
         // No drive row here, and `Z:\saves` has a parent: `[ new ]` at 0, up at 1, entries from 2.
         assert_eq!(model.new_file_row(), Some(0));
@@ -1981,8 +1981,8 @@ mod tests {
         }
         assert_eq!(model.row_meaning(5), PickerRow::Empty);
         assert_eq!(model.visible_row_count(), 5);
-        // At a DRIVE ROOT there is no up row at all, so `[ new ]` is still 0 and entries follow it
-        // directly -- the pin is not "one above the up row", it is first, full stop.
+        // At a single-drive root there is no drive or parent row, so `[ new ]` is still 0 and
+        // entries follow it directly.
         let root = destination("Z:\\", 2);
         assert_eq!(root.new_file_row(), Some(0));
         assert_eq!(root.parent_row(), None);
@@ -2071,14 +2071,14 @@ mod tests {
         );
         assert_visible_labels_fit_profile_summary_budget(&model);
 
-        assert_eq!(model.row_meaning(0), PickerRow::ParentDir);
+        assert_eq!(model.row_meaning(0), PickerRow::DriveCycle);
+        assert_eq!(label_of(&model, 0), "DRIVES");
+        assert_eq!(model.row_auxiliary_lines(0), None);
+        assert_eq!(model.row_meaning(1), PickerRow::ParentDir);
         assert_eq!(
-            model.row_auxiliary_lines(0),
+            model.row_auxiliary_lines(1),
             Some(("PARENT FOLDER".to_owned(), r"Go to Z:\".to_owned()))
         );
-        assert_eq!(model.row_meaning(1), PickerRow::DriveCycle);
-        assert_eq!(label_of(&model, 1), "DRIVES");
-        assert_eq!(model.row_auxiliary_lines(1), None);
         assert!(
             matches!(model.row_meaning(2), PickerRow::File(_)),
             "entry base must still derive from the load-source layout"
@@ -2090,8 +2090,8 @@ mod tests {
         );
     }
 
-    /// Save-destination browse adds the pinned `[ new ]` row ABOVE the same navigation rows; the
-    /// auxiliary lines follow those derived meanings rather than hard-coded row offsets. Overflow
+    /// Save-destination browse adds `[ new ]` below the always-first drive row and above the parent;
+    /// the auxiliary lines follow those derived meanings rather than hard-coded row offsets. Overflow
     /// leaves the row slots for real entries; the movie scrollbar owns the visual affordance.
     #[test]
     fn save_destination_auxiliary_lines_follow_the_shifted_layout() {
@@ -2101,18 +2101,18 @@ mod tests {
         );
         assert_visible_labels_fit_profile_summary_budget(&model);
 
-        assert_eq!(
-            model.row_auxiliary_lines(0),
-            Some(("NEW SAVE FILE".to_owned(), "Create ER0000.sl2".to_owned()))
-        );
-        assert_eq!(model.row_meaning(1), PickerRow::ParentDir);
+        assert_eq!(model.row_meaning(0), PickerRow::DriveCycle);
+        assert_eq!(label_of(&model, 0), "DRIVES");
+        assert_eq!(model.row_auxiliary_lines(0), None);
         assert_eq!(
             model.row_auxiliary_lines(1),
+            Some(("NEW SAVE FILE".to_owned(), "Create ER0000.sl2".to_owned()))
+        );
+        assert_eq!(model.row_meaning(2), PickerRow::ParentDir);
+        assert_eq!(
+            model.row_auxiliary_lines(2),
             Some(("PARENT FOLDER".to_owned(), r"Go to Z:\".to_owned()))
         );
-        assert_eq!(model.row_meaning(2), PickerRow::DriveCycle);
-        assert_eq!(label_of(&model, 2), "DRIVES");
-        assert_eq!(model.row_auxiliary_lines(2), None);
         assert_eq!(model.next_page_row(), None);
         assert_eq!(model.scroll_up_row(), None);
         assert_eq!(model.scroll_down_row(), None);
@@ -2157,7 +2157,11 @@ mod tests {
     /// through the same `ErStats` field while leaving row names short.
     #[test]
     fn status_message_auxiliary_lines_override_row_zero_only() {
-        let mut model = model_with(PickerIntent::LoadSource, r"Z:\saves", 2);
+        let mut model = with_drives(
+            model_with(PickerIntent::LoadSource, r"Z:\saves", 2),
+            &[r"C:\", r"Z:\"],
+        );
+        assert_eq!(model.row_meaning(0), PickerRow::DriveCycle);
         model.set_status_message(PickerStatusMessage::new(
             "UNREADABLE SAVE",
             "Pick another file.",
@@ -2407,29 +2411,30 @@ mod tests {
             model_with(PickerIntent::LoadSource, "Z:\\saves", 2),
             &["C:\\", "Z:\\"],
         );
-        assert_eq!(load.drive_row(), Some(1));
-        assert_eq!(load.row_meaning(1), PickerRow::DriveCycle);
-        assert_eq!(load.row_file_characters(1), None);
+        assert_eq!(load.drive_row(), Some(0));
+        assert_eq!(load.row_meaning(0), PickerRow::DriveCycle);
+        assert_eq!(load.row_meaning(1), PickerRow::ParentDir);
+        assert_eq!(load.row_file_characters(0), None);
         assert_eq!(
             load.row_meaning(2),
             PickerRow::File(PathBuf::from("Z:\\saves").join("save0.sl2")),
             "the first entry must sit directly under the drive row"
         );
 
-        // Destination layout: `[ new ]` is PINNED at row 0, so the up row and the cycler each
-        // shift down by one and the entries start at 3.
+        // Destination layout: the drive strip is always row 0; `[ new ]` stays above the parent
+        // row at 1, parent is 2, and entries still start at 3.
         let dest = with_drives(destination("Z:\\saves", 2), &["C:\\", "Z:\\"]);
-        assert_eq!(dest.new_file_row(), Some(0));
-        assert_eq!(dest.parent_row(), Some(1));
-        assert_eq!(dest.drive_row(), Some(2));
+        assert_eq!(dest.drive_row(), Some(0));
+        assert_eq!(dest.new_file_row(), Some(1));
+        assert_eq!(dest.parent_row(), Some(2));
+        assert_eq!(dest.row_meaning(0), PickerRow::DriveCycle);
         assert_eq!(
-            dest.row_meaning(0),
+            dest.row_meaning(1),
             PickerRow::NewFile(PathBuf::from("Z:\\saves").join("ER0000.sl2"))
         );
-        assert_eq!(dest.row_meaning(1), PickerRow::ParentDir);
-        assert_eq!(dest.row_meaning(2), PickerRow::DriveCycle);
+        assert_eq!(dest.row_meaning(2), PickerRow::ParentDir);
         assert_eq!(dest.row_file_characters(0), None);
-        assert_eq!(dest.row_file_characters(2), None);
+        assert_eq!(dest.row_file_characters(1), None);
         assert_eq!(
             dest.row_meaning(3),
             PickerRow::File(PathBuf::from("Z:\\saves").join("save0.sl2"))
@@ -2584,7 +2589,7 @@ mod tests {
         let long_up = long.parent_row().expect("a nested folder has an up row");
         assert!(long.row_label_utf16(long_up).len() <= PICKER_ROW_NAME_UTF16_MAX);
         // Same row, one index lower, in a destination browse: the label is derived from
-        // `parent_row()` rather than a constant, so pinning `[ new ]` above it moved nothing else.
+        // `parent_row()` rather than a constant, so inserting `[ new ]` above it moves nothing else.
         let dest = destination("Z:\\home\\banon\\Roaming\\deep", 0);
         assert_eq!(dest.parent_row(), Some(1));
         assert_eq!(label_of(&dest, 1), "[..] Roaming");
@@ -2775,15 +2780,18 @@ mod tests {
         ] {
             let mut model = model;
             model.cursor = model.first_selectable_row();
-            assert_eq!(
-                model.new_file_row(),
-                Some(0),
-                "`[ new ]` is pinned first in {:?}",
-                model.current_dir()
-            );
+            let new_row = model
+                .new_file_row()
+                .expect("destination browsing always has `[ new ]`");
+            if model.drive_row().is_some() {
+                assert_eq!(model.drive_row(), Some(0));
+                assert_eq!(new_row, 1, "`[ new ]` follows the drive row");
+            } else {
+                assert_eq!(new_row, 0, "without drives `[ new ]` remains first");
+            }
             assert_eq!(
                 model.cursor,
-                0,
+                new_row,
                 "the destination cursor must start on `[ new ]` in {:?}",
                 model.current_dir()
             );
@@ -2816,14 +2824,16 @@ mod tests {
         assert_eq!(alone.row_meaning(0), PickerRow::AtRoot);
         assert_eq!(label_of(&alone, 0), "[ root ]");
 
-        // Empty SUBdirectory: nothing actionable below the nav rows, so fall back to the up row.
+        // Empty SUBdirectory: nothing actionable below the nav rows, so fallback preserves the
+        // always-first drive control instead of jumping past it to the parent row.
         let empty_dir = with_drives(
             model_with(PickerIntent::LoadSource, "Z:\\saves", 0),
             &["C:\\", "Z:\\"],
         );
         assert_eq!(empty_dir.visible_row_count(), 2);
         assert_eq!(empty_dir.first_selectable_row(), 0);
-        assert_eq!(empty_dir.row_meaning(0), PickerRow::ParentDir);
+        assert_eq!(empty_dir.row_meaning(0), PickerRow::DriveCycle);
+        assert_eq!(empty_dir.row_meaning(1), PickerRow::ParentDir);
     }
 
     #[test]
