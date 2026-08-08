@@ -35,8 +35,9 @@ FIELD_NAMES = [
     "DriveCell_0",
     "DriveCell_1",
     "DriveCell_2",
+    "CurrentPath",
 ]
-CHROME_NAMES = ["backing", "cursor", "cursor_body"]
+CHROME_NAMES = ["backing", "cursor", "cursor_body", "drive_button"]
 MODES = ["load_character", "save_picker", "drive_row"]
 MAX_TEXT_FIELD_WIDTH_PX = 1500
 MAX_TEXT_FIELD_FONT_HEIGHT_PX = 80
@@ -444,8 +445,11 @@ def runtime_status(last_sequence: int = 0):
 def start_rebuild():
     if rebuild_state["running"]:
         return
+    # Publish RUNNING before the worker starts. When this happened inside the thread, a client could
+    # POST /rebuild and immediately read the previous completed result, falsely declaring the new
+    # rebuild done before it had begun.
+    rebuild_state.update({"running": True, "returncode": None, "output": ""})
     def run():
-        rebuild_state.update({"running": True, "returncode": None, "output": ""})
         try:
             proc = subprocess.run(
                 [str(REBUILD), "--hot-reload"],
@@ -515,6 +519,8 @@ svg { width:100%; height:calc(100vh - 70px); background:#080808; border:1px soli
   <label>sample mode <select id="mode"><option>load_character</option><option>save_picker</option><option>drive_row</option></select></label>
   <label><input type="checkbox" id="showClips" checked> show text clipping masks</label>
   <label><input type="checkbox" id="clipPreview" checked> clip approximate text to masks</label>
+  <label><input type="checkbox" id="watchSchema" checked> watch TOML file edits and hot rebuild automatically</label>
+  <div id="schemaWatch" class="ok">schema watcher starting</div>
   <div class="tree" id="tree"></div>
 </aside>
 <section>
@@ -534,7 +540,7 @@ svg { width:100%; height:calc(100vh - 70px); background:#080808; border:1px soli
   <pre id="paths"></pre>
 </aside>
 <script>
-let data=null, selected={kind:'field', name:'PlayerName'}, drag=null, runtimeStatus=null;
+let data=null, selected={kind:'field', name:'PlayerName'}, drag=null, runtimeStatus=null, lastSchemaMtimeNs=0, schemaWatchSuppressedUntil=0;
 const fields = %FIELDS%;
 const chromeObjects = %CHROME%;
 const paths = %PATHS%;
@@ -556,20 +562,27 @@ function minClipHeightPx(fontHeight){ return Math.ceil(lineBoxPx(fontHeight) + 2
 function maxFontHeightPx(clipHeight){ const usable=Number(clipHeight)-2*TEXT_DOC_INSET_PX_PER_EDGE;
   return usable<=0 ? 0 : Math.floor(usable*MENU_FONT_EM_SQUARE/(MENU_FONT_ASCENT+MENU_FONT_DESCENT)); }
 document.getElementById('paths').textContent = JSON.stringify(paths, null, 2);
-async function load(){ data = await (await fetch('/schema')).json(); renderTree(); renderEditor(); draw(); }
+async function schemaMeta(){ return await (await fetch('/schema-meta',{cache:'no-store'})).json(); }
+async function load(){ const r=await fetch('/schema',{cache:'no-store'}); if(!r.ok) throw new Error(await r.text()); data=await r.json(); const meta=await schemaMeta(); lastSchemaMtimeNs=Number(meta.mtime_ns||0); renderTree(); renderEditor(); draw(); document.getElementById('schemaWatch').textContent='watching '+paths.schema; }
+async function watchSchema(){ try { if(document.getElementById('watchSchema').checked && Date.now()>=schemaWatchSuppressedUntil){ const meta=await schemaMeta(); const stamp=Number(meta.mtime_ns||0); if(lastSchemaMtimeNs && stamp!=lastSchemaMtimeNs){ const r=await fetch('/schema',{cache:'no-store'}); if(!r.ok) throw new Error(await r.text()); data=await r.json(); lastSchemaMtimeNs=stamp; renderTree(); renderEditor(); draw(); document.getElementById('schemaWatch').className='ok'; document.getElementById('schemaWatch').textContent='external TOML edit loaded; runtime control + hot rebuild started'; await postSchema({data,render_mode:renderMode(),selected,text_probe:false}); await fetch('/rebuild',{method:'POST'}); poll(); } else if(!lastSchemaMtimeNs) lastSchemaMtimeNs=stamp; } } catch(e){ document.getElementById('schemaWatch').className='bad'; document.getElementById('schemaWatch').textContent='schema watch failed: '+String(e); showError(e); } finally { setTimeout(watchSchema,500); } }
 function showError(err){ const msg=(err&&err.stack)||String(err); document.getElementById('log').textContent='EDITOR JS ERROR\n'+msg; console.error(err); }
 function objectList(){ return fields.map(n=>['field',n]).concat(chromeObjects.map(n=>['chrome',n]), [['list','list']]); }
-function chromeLabel(name){ return ({backing:'normal row backing (Backing/char54)', cursor:'highlight wrapper (Cursor/char75)', cursor_body:'highlight inner body (Cursor/CursorBody/char73)'})[name] || name; }
-function renderTree(){ const t=document.getElementById('tree'); t.innerHTML=''; for(const [kind,name] of objectList()){ const b=document.createElement('button'); b.className=(selected.kind==kind&&selected.name==name)?'sel':''; b.textContent=(kind=='field'?'text ':'')+(kind=='chrome'?'chrome '+chromeLabel(name):'')+(kind=='list'?'list':''); b.onclick=()=>{selected={kind,name};renderTree();renderEditor();draw();}; t.appendChild(b);} }
+function chromeLabel(name){ return ({backing:'normal row backing (Backing/char54)', cursor:'highlight wrapper (Cursor/char75)', cursor_body:'highlight inner body (Cursor/CursorBody/char73)', drive_button:'all drive button frames (DriveButton_*)'})[name] || name; }
+function renderTree(){ const t=document.getElementById('tree'); t.innerHTML=''; for(const [kind,name] of objectList()){ const b=document.createElement('button'); b.className=(selected.kind==kind&&selected.name==name)?'sel':''; b.textContent=(kind=='field'?'text '+name:'')+(kind=='chrome'?'chrome '+chromeLabel(name):'')+(kind=='list'?'list':''); b.onclick=()=>{selected={kind,name};renderTree();renderEditor();draw();}; t.appendChild(b);} }
 function getObj(){ if(selected.kind=='field') return data.fields[selected.name]; if(selected.kind=='chrome') return data.row_chrome[selected.name]; return data.list; }
 function numberInput(obj,k,step=1){ return `<label>${k}</label><input type="number" step="${step}" value="${obj[k]}" onchange="setVal('${k}', this.value)">`; }
+function driveCellNames(){ return fields.filter(name=>name.startsWith('DriveCell_')); }
+function isDriveCellSelection(){ return selected.kind=='field' && selected.name.startsWith('DriveCell_'); }
+function setDriveCellValue(k,v){ const value=Number(v); if(!Number.isFinite(value)) return; for(const name of driveCellNames()){ const f=data.fields[name]; f[k]=value; if(k=='clip_height'||k=='font_height') f.clip_height=Math.max(Number(f.clip_height),minClipHeightPx(f.font_height)); } renderEditor(); draw(); }
+function padDriveCellValue(k,delta){ const base=Number(data.fields.DriveCell_0[k]); setDriveCellValue(k,k=='clip_height'?Math.max(minClipHeightPx(data.fields.DriveCell_0.font_height),Math.round(base+delta)):Math.max(1,Math.round(base+delta))); }
+function setDriveButtonScaleY(v){ const value=Number(v); if(Number.isFinite(value)&&value>0){ data.row_chrome.drive_button.scale_y=value; renderEditor(); draw(); } }
 function textInput(obj,k){ return `<label>${k}</label><input value="${String(obj[k]??'').replaceAll('&','&amp;').replaceAll('"','&quot;')}" onchange="setText('${k}', this.value)">`; }
 function fieldClipOffset(name){ return FIELD_CLIP_LOCAL[name] || FIELD_CLIP_LOCAL.default; }
 function fieldClip(f,name=selected.name){ const off=fieldClipOffset(name); const left=Number(f.x)+off.x, top=Number(f.y)+off.y, width=Number(f.width), height=Number(f.clip_height||40); return {left,top,width,height,right:left+width,bottom:top+height,off}; }
 function fieldTextArea(f,name=selected.name){ const clip=fieldClip(f,name); const inset=Math.min(TEXT_LAYOUT_INSET_PX, Math.max(0, clip.width/2-1)); return {...clip, left:clip.left+inset, right:clip.right-inset, width:Math.max(1, clip.width-inset*2), inset}; }
 function setClipRight(v){ const o=getObj(); const clip=fieldClip(o, selected.name); o.width=Math.max(1, Math.round((Number(v)-clip.left)*100)/100); renderEditor(); draw(); }
-function renderEditor(){ const o=getObj(), e=document.getElementById('editor'); document.getElementById('title').textContent=selected.kind+': '+selected.name; let h='<div class="grid">'; if(selected.kind=='field'){ const clip=fieldClip(o, selected.name); const right=Math.round(clip.right*100)/100; const sample=sampleFor(o)||selected.name; const estimated=Math.ceil(estimateTextWidth(sample, o.font_height)); for(const k of ['x','y']) h+=numberInput(o,k,0.25); h+=`<label>actual clip right</label><input type="number" step="0.25" value="${right}" onchange="setClipRight(this.value)">`; h+=`<label>estimated sample width</label><output>${estimated}px</output>`; h+=`<label>runtime usable width</label><output>${Math.max(1, Math.round((clip.width-TEXT_LAYOUT_INSET_PX*2)*100)/100)}px</output>`; h+=`<div></div><div class="ok">The magenta mask uses the real SWF DefineEditText local bounds: ${clip.off.x}px/${clip.off.y}px from placement. The cyan box is Scaleform's observed TextDoc layout area, about ${TEXT_LAYOUT_INSET_PX}px inset on each side; text must fit cyan, not just magenta.</div>`; for(const k of ['width','clip_height','font_height']) h+=numberInput(o,k,1); h+=`<label>align</label><select onchange="setText('align',this.value)">${['left','center','right'].map(a=>`<option ${o.align==a?'selected':''}>${a}</option>`).join('')}</select>`; h+=`<div>clip width</div><div class="controls"><button onclick="padWidth(-20)">-20</button><button onclick="padWidth(-5)">-5</button><button onclick="padWidth(5)">+5</button><button onclick="padWidth(20)">+20</button><button onclick="fitWidthToSample(24)">fit sample +24</button></div>`; h+=`<div>clip height</div><div class="controls"><button onclick="padClipHeight(-4)">-4</button><button onclick="padClipHeight(4)">+4</button><button onclick="padClipHeight(10)">+10</button><button onclick="fitClipHeightToFont(2)" title="smallest box that renders one line of this font, plus 2px">fit to font</button></div>`; h+=`<div></div><div class="warn">Width is the GFX DefineEditText bounds. Live width is experimental; rebuild/reload is the honest path if status rejects the live probe.</div>`; h+=`<div></div><div class="warn">font_height applies LIVE; clip_height does NOT -- the box is baked into the movie and only changes on rebuild + screen reopen. This field\u0027s current box (${o.clip_height}px) renders at most font_height ${maxFontHeightPx(o.clip_height)}. Above that the DLL clamps the rendered size to ${maxFontHeightPx(o.clip_height)} so it cannot overflow; your value is still saved and takes effect once the rebuilt movie is loaded.</div>`; if(selected.name=='PlayerName') h+=`<div>Player name</div><div class="controls"><button onclick="playerNameWideFit()">name wide fit</button><button onclick="fitWidthToSample(80)">fit current sample +80</button></div><div></div><div class="warn">If the in-game name still shows only a prefix after this mask is wide, the remaining bug is runtime text payload/source, not this field's GFX bounds.</div>`; if(selected.name=='ErCharStats') h+=`<div>Character Stats</div><div class="controls"><button onclick="charStatsSafeFit()">safe larger fit (17px)</button><button onclick="charStatsCompact16()">compact 16 fallback</button><button onclick="charStatsFont16()">font 16 only</button><button onclick="charStatsExperimental18()">experimental 18px</button><button onclick="charStatsWideProbe()">try width 600 live probe</button></div><div></div><div class="warn">Safe larger fit sets x=-185, y=-14, width=470, clip_height=42, font_height=17 and passed full offline overlap/clip tests. Width 600 is experimental live necromancy; if status says width_probe=false, it will not fix clipping until a rebuild/reload.</div>`; for(const k of ['sample_load_character','sample_save_picker','sample_drive_row']) h+=textInput(o,k); }
-else if(selected.kind=='chrome'){ for(const k of ['x','y','scale_x','scale_y']) h+=numberInput(o,k,k.startsWith('scale')?0.001:0.1); h+=`<label>editable</label><input type="checkbox" ${o.editable?'checked':''} onchange="setBool('editable',this.checked)">`; if(selected.name=='backing') h+=`<div></div><div class="ok">normal non-highlighted row rectangle: live transform via named Backing when connected</div>`; if(selected.name=='cursor') h+=`<div></div><div class="ok">outer highlighted-row wrapper: live transform when connected; use cursor_body for visible highlight-panel height</div>`; if(selected.name=='cursor_body') h+=`<div></div><div class="ok">inner highlighted-row body: live transform via Cursor/CursorBody when connected</div>`; h+=textInput(o,'source'); }
+function renderEditor(){ const o=getObj(), e=document.getElementById('editor'); document.getElementById('title').textContent=selected.kind+': '+selected.name; let h='<div class="grid">'; if(selected.kind=='field'){ const clip=fieldClip(o, selected.name); const right=Math.round(clip.right*100)/100; const sample=sampleFor(o)||selected.name; const estimated=Math.ceil(estimateTextWidth(sample, o.font_height)); if(isDriveCellSelection()){ const d=data.fields.DriveCell_0, b=data.row_chrome.drive_button; h+=`<div>DRIVE CELLS</div><div class="ok">These shared controls resize every drive cell and its generated native button. They are the honest drive-strip geometry controls; the generic clip fields below show the same values for the selected sample cell.</div><label>drive cell width (all drives)</label><input type="number" min="1" step="1" value="${d.width}" onchange="setDriveCellValue('width',this.value)"><label>drive cell height (all drives)</label><input type="number" min="1" step="1" value="${d.clip_height}" onchange="setDriveCellValue('clip_height',this.value)"><div>drive cell height</div><div class="controls"><button onclick="padDriveCellValue('clip_height',-4)">-4</button><button onclick="padDriveCellValue('clip_height',-1)">-1</button><button onclick="padDriveCellValue('clip_height',1)">+1</button><button onclick="padDriveCellValue('clip_height',4)">+4</button></div><label>button chrome height multiplier</label><input type="number" min="0.001" max="40" step="0.01" value="${b.scale_y}" onchange="setDriveButtonScaleY(this.value)"><div></div><div class="warn">Cell height changes the text clip and the generated button height. The chrome multiplier changes only the button artwork around that cell.</div>`; } for(const k of ['x','y']) h+=numberInput(o,k,0.25); h+=`<label>actual clip right</label><input type="number" step="0.25" value="${right}" onchange="setClipRight(this.value)">`; h+=`<label>estimated sample width</label><output>${estimated}px</output>`; h+=`<label>runtime usable width</label><output>${Math.max(1, Math.round((clip.width-TEXT_LAYOUT_INSET_PX*2)*100)/100)}px</output>`; h+=`<div></div><div class="ok">The magenta mask uses the real SWF DefineEditText local bounds: ${clip.off.x}px/${clip.off.y}px from placement. The cyan box is Scaleform's observed TextDoc layout area, about ${TEXT_LAYOUT_INSET_PX}px inset on each side; text must fit cyan, not just magenta.</div>`; for(const k of ['width','clip_height','font_height']) h+=numberInput(o,k,1); h+=`<label>align</label><select onchange="setText('align',this.value)">${['left','center','right'].map(a=>`<option ${o.align==a?'selected':''}>${a}</option>`).join('')}</select>`; h+=`<div>clip width</div><div class="controls"><button onclick="padWidth(-20)">-20</button><button onclick="padWidth(-5)">-5</button><button onclick="padWidth(5)">+5</button><button onclick="padWidth(20)">+20</button><button onclick="fitWidthToSample(24)">fit sample +24</button></div>`; h+=`<div>clip height</div><div class="controls"><button onclick="padClipHeight(-4)">-4</button><button onclick="padClipHeight(4)">+4</button><button onclick="padClipHeight(10)">+10</button><button onclick="fitClipHeightToFont(2)" title="smallest box that renders one line of this font, plus 2px">fit to font</button></div>`; h+=`<div></div><div class="warn">Width is the GFX DefineEditText bounds. Live width is experimental; rebuild/reload is the honest path if status rejects the live probe.</div>`; h+=`<div></div><div class="warn">font_height applies LIVE; clip_height does NOT -- the box is baked into the movie and only changes on rebuild + screen reopen. This field\u0027s current box (${o.clip_height}px) renders at most font_height ${maxFontHeightPx(o.clip_height)}. Above that the DLL clamps the rendered size to ${maxFontHeightPx(o.clip_height)} so it cannot overflow; your value is still saved and takes effect once the rebuilt movie is loaded.</div>`; if(selected.name=='PlayerName') h+=`<div>Player name</div><div class="controls"><button onclick="playerNameWideFit()">name wide fit</button><button onclick="fitWidthToSample(80)">fit current sample +80</button></div><div></div><div class="warn">If the in-game name still shows only a prefix after this mask is wide, the remaining bug is runtime text payload/source, not this field's GFX bounds.</div>`; if(selected.name=='ErCharStats') h+=`<div>Character Stats</div><div class="controls"><button onclick="charStatsSafeFit()">safe larger fit (17px)</button><button onclick="charStatsCompact16()">compact 16 fallback</button><button onclick="charStatsFont16()">font 16 only</button><button onclick="charStatsExperimental18()">experimental 18px</button><button onclick="charStatsWideProbe()">try width 600 live probe</button></div><div></div><div class="warn">Safe larger fit sets x=-185, y=-14, width=470, clip_height=42, font_height=17 and passed full offline overlap/clip tests. Width 600 is experimental live necromancy; if status says width_probe=false, it will not fix clipping until a rebuild/reload.</div>`; for(const k of ['sample_load_character','sample_save_picker','sample_drive_row']) h+=textInput(o,k); }
+else if(selected.kind=='chrome'){ if(selected.name=='drive_button'){ for(const k of ['x','y']) h+=numberInput(o,k,0.1); h+=`<label>button chrome width multiplier</label><input type="number" min="0.001" max="40" step="0.01" value="${o.scale_x}" onchange="setVal('scale_x',this.value)"><label>button chrome height multiplier</label><input type="number" min="0.001" max="40" step="0.01" value="${o.scale_y}" onchange="setVal('scale_y',this.value)">`; } else for(const k of ['x','y','scale_x','scale_y']) h+=numberInput(o,k,k.startsWith('scale')?0.001:0.1); h+=`<label>editable</label><input type="checkbox" ${o.editable?'checked':''} onchange="setBool('editable',this.checked)">`; if(selected.name=='backing') h+=`<div></div><div class="ok">normal non-highlighted row rectangle: live transform via named Backing when connected</div>`; if(selected.name=='cursor') h+=`<div></div><div class="ok">outer highlighted-row wrapper: live transform when connected; use cursor_body for visible highlight-panel height</div>`; if(selected.name=='cursor_body') h+=`<div></div><div class="ok">inner highlighted-row body: live transform via Cursor/CursorBody when connected</div>`; if(selected.name=='drive_button') h+=`<div></div><div class="ok">shared RELATIVE transform for every DriveButton_* frame. Nudge x/y to align button chrome around the drive text; scales resize every drive button together.</div>`; h+=textInput(o,'source'); }
 else { for(const k of ['row_pitch','visible_rows','top_recycle_rows','bottom_recycle_rows','mask_height','scrollbar_x','scrollbar_top_y','scrollbar_track_height']) h+=numberInput(o,k,1); }
  h+='</div><div class="controls"><button onclick="nudge(-1,0)">← 1</button><button onclick="nudge(1,0)">→ 1</button><button onclick="nudge(0,-1)">↑ 1</button><button onclick="nudge(0,1)">↓ 1</button><button onclick="nudge(-5,0)">← 5</button><button onclick="nudge(5,0)">→ 5</button><button onclick="nudge(0,-5)">↑ 5</button><button onclick="nudge(0,5)">↓ 5</button></div>'; e.innerHTML=h; }
 // Typing a value directly is clamped the same way the nudge buttons are: clip_height cannot go
@@ -587,17 +600,18 @@ function setVal(k,v){ const o=getObj(); o[k]=Number(v);
     const floor=minClipHeightPx(o.font_height);
     if(Number(o.clip_height)<floor) o.clip_height=floor;
   }
+  if(isDriveCellSelection() && ['y','width','clip_height','font_height'].includes(k)) for(const name of driveCellNames()) data.fields[name][k]=o[k];
   if(selected.kind=='list' && LIST_MUST_BE_POSITIVE.includes(k) && !(Number(o[k])>0)) o[k]=1;
   renderEditor(); draw(); }
-function setText(k,v){ getObj()[k]=v; renderEditor(); draw(); }
+function setText(k,v){ getObj()[k]=v; if(isDriveCellSelection()&&k=='align') for(const name of driveCellNames()) data.fields[name][k]=v; renderEditor(); draw(); }
 function setBool(k,v){ getObj()[k]=v; renderEditor(); draw(); }
-function nudge(dx,dy){ const o=getObj(); if('x' in o) o.x+=dx; if('y' in o) o.y+=dy; renderEditor(); draw(); }
-function padWidth(delta){ const o=getObj(); if('width' in o) o.width=Math.max(1, Math.round(Number(o.width)+delta)); renderEditor(); draw(); }
+function nudge(dx,dy){ const o=getObj(); if('x' in o) o.x+=dx; if(isDriveCellSelection()&&dy) for(const name of driveCellNames()) data.fields[name].y+=dy; else if('y' in o) o.y+=dy; renderEditor(); draw(); }
+function padWidth(delta){ const o=getObj(); if(isDriveCellSelection()) return padDriveCellValue('width',delta); if('width' in o) o.width=Math.max(1, Math.round(Number(o.width)+delta)); renderEditor(); draw(); }
 // Nudging down stops at the font's floor instead of sailing past it into an unrenderable box.
-function padClipHeight(delta){ const o=getObj(); if('clip_height' in o) o.clip_height=Math.max(minClipHeightPx(o.font_height), Math.round(Number(o.clip_height)+delta)); renderEditor(); draw(); }
+function padClipHeight(delta){ const o=getObj(); if(isDriveCellSelection()) return padDriveCellValue('clip_height',delta); if('clip_height' in o) o.clip_height=Math.max(minClipHeightPx(o.font_height), Math.round(Number(o.clip_height)+delta)); renderEditor(); draw(); }
 // pad is headroom ABOVE the real minimum, not above font_height. The old form was
 // ceil(font_height + 10), which at font_height 24 gave 34 -- five px short of renderable.
-function fitClipHeightToFont(pad=2){ const o=getObj(); if('clip_height' in o) o.clip_height=minClipHeightPx(o.font_height)+Math.max(0,Math.round(pad)); renderEditor(); draw(); }
+function fitClipHeightToFont(pad=2){ const o=getObj(), value=minClipHeightPx(o.font_height)+Math.max(0,Math.round(pad)); if(isDriveCellSelection()) return setDriveCellValue('clip_height',value); if('clip_height' in o) o.clip_height=value; renderEditor(); draw(); }
 function estimateTextWidth(text, fontHeight){ const plain=String(text||'').replace(/<[^>]*>/g,''); let w=0; for(const ch of plain){ w += /[ilI1|.,:;']/u.test(ch) ? 0.28 : /[MW@#]/u.test(ch) ? 0.85 : /\s/u.test(ch) ? 0.33 : 0.56; } return w * Number(fontHeight||16); }
 function fitWidthToSample(pad=24){ const o=getObj(); o.width=Math.max(1, Math.ceil(estimateTextWidth(sampleFor(o)||selected.name, o.font_height)+pad+(TEXT_LAYOUT_INSET_PX*2))); renderEditor(); draw(); }
 function selectCharStats(){ selected={kind:'field', name:'ErCharStats'}; renderTree(); renderEditor(); draw(); }
@@ -619,14 +633,16 @@ function add(tag, attrs, parent=document.getElementById('canvas')){ const el=doc
 function draw(){ layoutHealth(); const svg=document.getElementById('canvas'); svg.innerHTML=''; if(!(Number(data.list.row_pitch)>0)) { document.getElementById('layoutHealth').textContent='list.row_pitch must be > 0; canvas not drawn'; return; } const rowPitch=data.list.row_pitch, half=data.list.mask_height/2, showClips=document.getElementById('showClips').checked, clipPreview=document.getElementById('clipPreview').checked; const defs=add('defs',{},svg); for(let y=-half;y<=half;y+=rowPitch) add('line',{x1:-620,x2:640,y1:y,y2:y,class:'rowline'}); add('rect',{x:-620,y:-half,width:1260,height:data.list.mask_height,fill:'none',stroke:'#777','stroke-dasharray':'6 4'}); add('rect',{x:data.list.scrollbar_x,y:data.list.scrollbar_top_y,width:10,height:data.list.scrollbar_track_height,fill:'#8884',stroke:'#aaa'});
  for(const [name,f] of Object.entries(data.fields)){ const sel=selected.kind=='field'&&selected.name==name; const clip=fieldClip(f,name), clipId='clip_'+name.replace(/[^A-Za-z0-9_-]/g,'_'); const cp=add('clipPath',{id:clipId},defs); add('rect',{x:clip.left,y:clip.top,width:clip.width,height:clip.height},cp); const r=add('rect',{x:clip.left,y:clip.top,width:clip.width,height:clip.height,class:showClips?('clip '+(sel?'selected':'')):'field',stroke:sel?'#fff':'#6ca0ff','stroke-width':sel?2:1}); bindDrag(r,'field',name); const area=fieldTextArea(f,name); if(showClips){ add('rect',{x:area.left,y:area.top,width:area.width,height:area.height,fill:'#42e8ff10',stroke:'#42e8ff','stroke-width':.8,'stroke-dasharray':'3 2'}); add('line',{x1:clip.right,x2:clip.right,y1:-half,y2:half,class:'clipEdge'}); add('text',{x:clip.left,y:clip.top-5,class:'clipLabel'},svg).textContent=`${name} clip l=${Math.round(clip.left*100)/100} w=${f.width} r=${Math.round(clip.right*100)/100} usable=${Math.round(area.width*100)/100}`; }
  const g=add('g',clipPreview?{'clip-path':`url(#${clipId})`}:{}); const textX=f.align=='right'?area.right:f.align=='center'?area.left+area.width/2:area.left; add('text',{x:textX,y:clip.top+Number(f.font_height||16),class:'label','font-size':Math.max(10,f.font_height),'text-anchor':f.align=='right'?'end':f.align=='center'?'middle':'start'},g).textContent=sampleFor(f)||name; if(!showClips) add('text',{x:clip.left,y:clip.top-5,class:'label'},svg).textContent=name; }
- const backing=data.row_chrome.backing; const bx=backing.x-19.1*backing.scale_x, by=backing.y-19.4*backing.scale_y, bw=39*backing.scale_x, bh=37.5*backing.scale_y; let r=add('rect',{x:bx,y:by,width:bw,height:bh,class:'chrome',stroke:selected.kind=='chrome'&&selected.name=='backing'?'#fff':'#ffbd5a','stroke-width':selected.kind=='chrome'&&selected.name=='backing'?2:1}); bindDrag(r,'chrome','backing'); add('text',{x:bx,y:by-4,class:'label'}).textContent='normal backing char54/shape53';
+ const driveMode=document.getElementById('mode').value=='drive_row'; let r;
+ if(!driveMode){ const backing=data.row_chrome.backing; const bx=backing.x-19.1*backing.scale_x, by=backing.y-19.4*backing.scale_y, bw=39*backing.scale_x, bh=37.5*backing.scale_y; r=add('rect',{x:bx,y:by,width:bw,height:bh,class:'chrome',stroke:selected.kind=='chrome'&&selected.name=='backing'?'#fff':'#ffbd5a','stroke-width':selected.kind=='chrome'&&selected.name=='backing'?2:1}); bindDrag(r,'chrome','backing'); add('text',{x:bx,y:by-4,class:'label'}).textContent='normal backing char54/shape53';
  const c=data.row_chrome.cursor; const cb=data.row_chrome.cursor_body; const cx=c.x+cb.x*c.scale_x, cy=c.y+cb.y*c.scale_y, cw=39*c.scale_x*cb.scale_x, ch=37.5*c.scale_y*cb.scale_y; r=add('rect',{x:cx,y:cy-19.4*c.scale_y*cb.scale_y,width:cw,height:ch,class:'chrome',stroke:selected.kind=='chrome'&&selected.name=='cursor'?'#fff':'#ffbd5a','stroke-width':selected.kind=='chrome'&&selected.name=='cursor'?2:1}); bindDrag(r,'chrome','cursor'); add('text',{x:cx,y:cy-25,class:'label'}).textContent='effective highlight body (cursor + inner body)';
  const body=data.row_chrome.cursor_body; add('rect',{x:body.x,y:body.y-19.4*body.scale_y,width:39*body.scale_x,height:37.5*body.scale_y,class:'readonly'}); add('text',{x:body.x,y:body.y-25,class:'label'}).textContent='raw inner highlight body only'; }
+ if(driveMode){ const button=data.row_chrome.drive_button; const selectedCell=selected.kind=='field'&&selected.name.startsWith('DriveCell_')?Math.max(0,Math.min(2,Number(selected.name.slice(10))||0)):0; for(let i=0;i<3;i++){ const f=data.fields['DriveCell_'+i]; const sx=Number(f.width)/39*Number(button.scale_x), sy=Number(f.clip_height)/37.5*Number(button.scale_y); const centerX=Number(f.x)-2+Number(f.width)/2+Number(button.x), centerY=Number(f.y)-2+Number(f.clip_height)/2+Number(button.y); const bx=centerX-19.1*sx, by=centerY-19.4*sy, bw=39*sx, bh=37.5*sy; r=add('rect',{x:bx,y:by,width:bw,height:bh,class:'chrome',stroke:selected.kind=='chrome'&&selected.name=='drive_button'?'#fff':'#ffbd5a','stroke-width':selected.kind=='chrome'&&selected.name=='drive_button'?2:1}); bindDrag(r,'chrome','drive_button'); if(i==selectedCell){ add('rect',{x:bx,y:by,width:bw,height:bh,class:'readonly',stroke:'#62e6ff','stroke-width':2}); add('text',{x:bx,y:by-5,class:'label'}).textContent='active native Cursor preview'; } } const pf=data.fields.CurrentPath, psx=Number(pf.width)/39*Number(button.scale_x), psy=Number(pf.clip_height)/37.5*Number(button.scale_y), pcx=Number(pf.x)-2+Number(pf.width)/2+Number(button.x), pcy=Number(pf.y)-2+Number(pf.clip_height)/2+Number(button.y), pbx=pcx-19.1*psx, pby=pcy-19.4*psy; r=add('rect',{x:pbx,y:pby,width:39*psx,height:37.5*psy,class:'chrome',stroke:selected.kind=='field'&&selected.name=='CurrentPath'?'#fff':'#9bd0ff','stroke-width':selected.kind=='field'&&selected.name=='CurrentPath'?2:1}); bindDrag(r,'field','CurrentPath'); add('text',{x:pbx,y:pby-5,class:'label'}).textContent='clickable full-path control'; add('text',{x:-535,y:-24,class:'label'}).textContent='drive row: active Cursor uses the selected cell button bounds'; } }
 function bindDrag(el,kind,name){ el.onpointerdown=(ev)=>{selected={kind,name};renderTree();renderEditor();drag={kind,name,sx:ev.clientX,sy:ev.clientY,ox:getObj().x,oy:getObj().y}; el.setPointerCapture(ev.pointerId);}; el.onpointermove=(ev)=>{ if(!drag) return; const o=getObj(); o.x=Math.round((drag.ox+(ev.clientX-drag.sx))*10)/10; o.y=Math.round((drag.oy+(ev.clientY-drag.sy))*10)/10; renderEditor(); draw();}; el.onpointerup=()=>drag=null; }
 function renderMode(){ return document.getElementById('renderMode').value; }
 function renderModeChanged(){ save(); draw(); pollStatus(); }
 function selectedNeedsHotGfx(){ return selected.kind!='chrome'; }
-async function postSchema(payload){ const r=await fetch('/schema',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); const msg=await r.text(); document.getElementById('log').textContent=msg; if(!r.ok) throw new Error(msg); return msg; }
+async function postSchema(payload){ schemaWatchSuppressedUntil=Date.now()+1500; const r=await fetch('/schema',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); const msg=await r.text(); document.getElementById('log').textContent=msg; if(!r.ok) throw new Error(msg); const meta=await schemaMeta(); lastSchemaMtimeNs=Number(meta.mtime_ns||0); return msg; }
 async function save(){ try { const payload={data, render_mode:renderMode(), selected, text_probe:false}; await postSchema(payload); if(selectedNeedsHotGfx()){ await fetch('/rebuild',{method:'POST'}); poll(); } pollStatus(); } catch(e) { showError(e); } }
 async function rebuild(){ try { const payload={data, render_mode:renderMode(), selected, text_probe:false}; await postSchema(payload); await fetch('/rebuild',{method:'POST'}); poll(); } catch(e) { showError(e); } }
 async function probeText(){ try { const payload={data, render_mode:'live_runtime', selected, text_probe:true}; await postSchema(payload); pollStatus(); } catch(e) { showError(e); } }
@@ -646,7 +662,7 @@ document.getElementById('showClips').addEventListener('change', draw);
 document.getElementById('clipPreview').addEventListener('change', draw);
 window.addEventListener('error', e=>showError(e.error||e.message));
 window.addEventListener('unhandledrejection', e=>showError(e.reason));
-load().catch(showError); pollStatus().catch(showError);
+load().then(watchSchema).catch(showError); pollStatus().catch(showError);
 </script>
 </body>
 """
@@ -659,6 +675,7 @@ class Handler(BaseHTTPRequestHandler):
     def send_bytes(self, status, body: bytes, ctype: str):
         self.send_response(status)
         self.send_header("content-type", ctype)
+        self.send_header("cache-control", "no-store")
         self.send_header("content-length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -669,8 +686,16 @@ class Handler(BaseHTTPRequestHandler):
             paths = {"schema": str(SCHEMA), "rebuild": str(REBUILD), "repo": str(REPO), "control": str(CONTROL_FILE), "status": str(STATUS_FILE)}
             body = HTML.replace("%FIELDS%", json.dumps(FIELD_NAMES)).replace("%CHROME%", json.dumps(CHROME_NAMES)).replace("%PATHS%", json.dumps(paths))
             self.send_bytes(200, body.encode(), "text/html; charset=utf-8")
+        elif path == "/favicon.ico":
+            self.send_bytes(204, b"", "image/x-icon")
         elif path == "/schema":
-            self.send_bytes(200, json.dumps(load_schema()).encode(), "application/json")
+            try:
+                self.send_bytes(200, json.dumps(load_schema()).encode(), "application/json")
+            except Exception as exc:
+                self.send_bytes(400, str(exc).encode(), "text/plain; charset=utf-8")
+        elif path == "/schema-meta":
+            stat = SCHEMA.stat()
+            self.send_bytes(200, json.dumps({"mtime_ns": stat.st_mtime_ns, "size": stat.st_size}).encode(), "application/json")
         elif path == "/rebuild":
             self.send_bytes(200, json.dumps(rebuild_state).encode(), "application/json")
         elif path == "/status":
@@ -722,6 +747,14 @@ def self_test():
         raise SystemExit("invalid editor schema:\n" + "\n".join(f"- {e}" for e in errors))
     if not REBUILD.exists():
         raise SystemExit(f"missing rebuild script {REBUILD}")
+    for required_ui in (
+        "drive cell width (all drives)",
+        "drive cell height (all drives)",
+        "button chrome height multiplier",
+        "setDriveCellValue",
+    ):
+        if required_ui not in HTML:
+            raise SystemExit(f"missing drive geometry UI: {required_ui}")
     command_text = protocol_lines(data, 1, "offline_approximate", {"kind": "chrome", "name": "cursor"}, False)
     # EDITOR_DIR is created lazily by the server, so on a fresh checkout (or after a `target`
     # wipe) --self-test used to die with FileNotFoundError before testing anything. The
@@ -750,6 +783,7 @@ def self_test():
 
 
 def main():
+    global protocol_sequence
     parser = argparse.ArgumentParser(description="05_010_ProfileSelect local visual editor")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8776)
@@ -758,6 +792,15 @@ def main():
     if args.self_test:
         self_test()
         return
+    # Sequence monotonicity survives editor restarts. Resetting to zero made a new valid control file
+    # look older than the DLL's last ack, so the live bridge correctly ignored every post-restart edit.
+    existing_control = parse_protocol_file(CONTROL_FILE) or {}
+    existing_status = parse_protocol_file(STATUS_FILE) or {}
+    for prior in (existing_control.get("sequence", 0), existing_status.get("ack_sequence", 0)):
+        try:
+            protocol_sequence = max(protocol_sequence, int(prior))
+        except (TypeError, ValueError):
+            pass
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print("05_010 ProfileSelect visual editor")
     print("Approximate canvas only; in-game Scaleform runtime is final visual oracle.")

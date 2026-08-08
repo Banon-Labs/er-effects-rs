@@ -20,6 +20,11 @@ static PROFILE_EDITOR_LAST_SEEN_WINDOW_RUNS: AtomicU64 = AtomicU64::new(0);
 static PROFILE_EDITOR_NECROMANCY_POLL_TICKS: AtomicU64 = AtomicU64::new(0);
 static PROFILE_EDITOR_FIELD_TARGETS: OnceLock<Mutex<Vec<CachedProfileFieldTarget>>> =
     OnceLock::new();
+/// Last editor schema observed on the row-populate thread. Drive-row cursor geometry uses it so a
+/// live width/height/button edit moves the native animated cursor with the matching drive button.
+static PROFILE_EDITOR_LAST_LAYOUT: OnceLock<
+    Mutex<er_gfx::profile_05_010_layout::Profile05_010Layout>,
+> = OnceLock::new();
 
 #[derive(Clone)]
 struct CachedProfileFieldTarget {
@@ -295,9 +300,18 @@ pub(crate) unsafe fn profile_editor_necromancy_tick(base: usize) {
     let previous_runs =
         PROFILE_EDITOR_LAST_SEEN_WINDOW_RUNS.swap(window_runs as u64, Ordering::SeqCst);
     let view_on_screen = window_runs as u64 > previous_runs;
+    let dialog = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
+    let picker_rebuild_queued = view_on_screen
+        && dialog != 0
+        && SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0
+        && SAVE_PICKER_REBUILD_PENDING_DIALOG
+            .compare_exchange(0, dialog, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok();
     let queued = PROFILE_EDITOR_DEFERRED_APPLIES.fetch_add(1, Ordering::SeqCst) + 1;
-    let how = if view_on_screen {
-        "the profile view is on screen: scroll the list one row and it appears"
+    let how = if picker_rebuild_queued {
+        "the picker is on screen: its menu-pump-owned native row rebuild is queued automatically"
+    } else if view_on_screen {
+        "the profile view is on screen outside the picker: scroll the list one row and it appears"
     } else {
         "the profile view is closed: reopen Load Character and it appears"
     };
@@ -386,6 +400,12 @@ pub(crate) unsafe fn profile_editor_runtime_tick(
         );
         return;
     }
+    if let Ok(mut layout) = PROFILE_EDITOR_LAST_LAYOUT
+        .get_or_init(|| Mutex::new(command.layout.clone()))
+        .lock()
+    {
+        *layout = command.layout.clone();
+    }
     PROFILE_EDITOR_LAST_SEQUENCE.store(command.sequence, Ordering::SeqCst);
     let (applied, unsupported, error) =
         unsafe { apply_profile_editor_command(base, row_proxy, row_model, native_slot, &command) };
@@ -405,12 +425,28 @@ unsafe fn apply_profile_editor_command(
     if row_proxy == 0 || row_proxy == TITLE_OWNER_SCAN_START_ADDRESS {
         return (0, 1, "row_proxy unavailable".to_owned());
     }
+    // A native slot number alone does not mean this is our browse row: ordinary character lists use
+    // the same 0..9 values. The picker model is the ownership oracle and says exactly how many drive
+    // buttons this row currently exposes. Transforming all 26 hidden buttons on every vanilla row
+    // acknowledged successfully, then the process died when the next picker movie opened.
+    let live_drive_cell_count = usize::try_from(native_slot)
+        .ok()
+        .and_then(super::save_picker_row_slot_info)
+        .map(|info| info.drive_cell_count)
+        .unwrap_or(0);
     match command.selected_kind {
         SelectedKind::Field => unsafe {
-            apply_profile_editor_field_probe(base, row_proxy, row_model, native_slot, command)
+            apply_profile_editor_field_probe(
+                base,
+                row_proxy,
+                row_model,
+                native_slot,
+                live_drive_cell_count,
+                command,
+            )
         },
         SelectedKind::Chrome => unsafe {
-            apply_profile_editor_chrome_probe(base, row_proxy, command)
+            apply_profile_editor_chrome_probe(base, row_proxy, live_drive_cell_count, command)
         },
         SelectedKind::List => (
             0,
@@ -423,6 +459,7 @@ unsafe fn apply_profile_editor_command(
 unsafe fn apply_profile_editor_chrome_probe(
     base: usize,
     row_proxy: usize,
+    live_drive_cell_count: usize,
     command: &ProfileEditorCommand,
 ) -> (u32, u32, String) {
     match command.selected_name.as_str() {
@@ -441,6 +478,14 @@ unsafe fn apply_profile_editor_chrome_probe(
                 "CursorBody",
             )
         },
+        "drive_button" if live_drive_cell_count > 0 => unsafe {
+            apply_profile_editor_drive_button_probe(base, row_proxy, live_drive_cell_count, command)
+        },
+        "drive_button" => (
+            0,
+            0,
+            "drive_button transform deferred until the picker-owned drive row populates".to_owned(),
+        ),
         other => (0, 1, format!("unknown chrome object {other}")),
     }
 }
@@ -455,6 +500,7 @@ unsafe fn apply_profile_editor_named_chrome_probe(
         "backing" => &command.layout.row_chrome.backing,
         "cursor" => &command.layout.row_chrome.cursor,
         "cursor_body" => &command.layout.row_chrome.cursor_body,
+        "drive_button" => &command.layout.row_chrome.drive_button,
         other => return (0, 1, format!("missing chrome layout {other}")),
     };
     match unsafe { resolve_row_child_proxy(base, row_proxy, native_name) } {
@@ -485,6 +531,153 @@ unsafe fn apply_profile_editor_named_chrome_probe(
             ),
         ),
     }
+}
+
+unsafe fn apply_profile_editor_drive_button_probe(
+    base: usize,
+    row_proxy: usize,
+    live_drive_cell_count: usize,
+    command: &ProfileEditorCommand,
+) -> (u32, u32, String) {
+    use er_gfx::title_05_010::{
+        DRIVE_BUTTON_FIELD_NAMES, DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX,
+        DRIVE_BUTTON_NATIVE_ART_WIDTH_PX,
+    };
+
+    let field0 = command.layout.field("DriveCell_0");
+    let field1 = command.layout.field("DriveCell_1");
+    let pitch = field1.x - field0.x;
+    let relative = &command.layout.row_chrome.drive_button;
+    let mut applied = 0u32;
+    let mut unsupported = 0u32;
+    for index in 0..live_drive_cell_count.min(DRIVE_BUTTON_FIELD_NAMES.len()) {
+        let absolute = er_gfx::profile_05_010_layout::TransformLayout {
+            x: field0.x - 2.0 + field0.width as f32 * 0.5 + pitch * index as f32 + relative.x,
+            y: field0.y - 2.0 + field0.clip_height as f32 * 0.5 + relative.y,
+            scale_x: (field0.width as f32 / DRIVE_BUTTON_NATIVE_ART_WIDTH_PX) * relative.scale_x,
+            scale_y: (field0.clip_height as f32 / DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX)
+                * relative.scale_y,
+            editable: relative.editable,
+            source: relative.source.clone(),
+        };
+        let native_name = DRIVE_BUTTON_FIELD_NAMES[index];
+        match unsafe { resolve_row_child_proxy(base, row_proxy, native_name) } {
+            Some((child_proxy, _component_slot)) => {
+                let (this_applied, this_unsupported, _) = unsafe {
+                    apply_profile_editor_transform_to_proxy(
+                        base,
+                        child_proxy,
+                        &absolute,
+                        native_name,
+                    )
+                };
+                unsafe { destroy_resolved_row_child_proxy(base, child_proxy) };
+                applied += this_applied;
+                unsupported += this_unsupported;
+            }
+            None => unsupported += 1,
+        }
+    }
+    (
+        applied,
+        unsupported,
+        format!(
+            "drive_button live group transform: cells={live_drive_cell_count} applied={applied} unsupported={unsupported} relative=({:.2},{:.2}) scale=({:.3},{:.3}) pitch={pitch:.2}",
+            relative.x, relative.y, relative.scale_x, relative.scale_y
+        ),
+    )
+}
+
+fn drive_cell_cursor_transform(
+    active_cell: usize,
+) -> er_gfx::profile_05_010_layout::TransformLayout {
+    use er_gfx::profile_05_010_layout::TransformLayout;
+    use er_gfx::title_05_010::{
+        DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX, DRIVE_BUTTON_NATIVE_ART_WIDTH_PX, DRIVE_CELL_FIRST_X_PX,
+        DRIVE_CELL_HEIGHT_PX, DRIVE_CELL_PITCH_PX, DRIVE_CELL_WIDTH_PX, DRIVE_CELL_Y_PX,
+    };
+
+    let cached = PROFILE_EDITOR_LAST_LAYOUT
+        .get()
+        .and_then(|layout| layout.lock().ok())
+        .map(|layout| {
+            let field0 = layout.field("DriveCell_0");
+            let field1 = layout.field("DriveCell_1");
+            let relative = &layout.row_chrome.drive_button;
+            let cursor_body = &layout.row_chrome.cursor_body;
+            (
+                field0.x + (field1.x - field0.x) * active_cell as f32,
+                field0.y,
+                field0.width as f32,
+                field0.clip_height as f32,
+                relative.x,
+                relative.y,
+                relative.scale_x,
+                relative.scale_y,
+                cursor_body.scale_x,
+                cursor_body.scale_y,
+            )
+        });
+    let (
+        field_x,
+        field_y,
+        width,
+        height,
+        nudge_x,
+        nudge_y,
+        button_scale_x,
+        button_scale_y,
+        body_scale_x,
+        body_scale_y,
+    ) = cached.unwrap_or((
+        DRIVE_CELL_FIRST_X_PX + DRIVE_CELL_PITCH_PX * active_cell as f32,
+        DRIVE_CELL_Y_PX,
+        DRIVE_CELL_WIDTH_PX,
+        DRIVE_CELL_HEIGHT_PX,
+        -2.0,
+        0.0,
+        1.0,
+        1.0,
+        20.0,
+        1.0,
+    ));
+    TransformLayout {
+        x: field_x - 2.0 + width * 0.5 + nudge_x,
+        y: field_y - 2.0 + height * 0.5 + nudge_y,
+        // CursorBody is already scaled to full-row width inside this wrapper. Shrinking the outer
+        // Cursor is equivalent to shrinking its body, but uses the setter path that runtime proved
+        // valid. The nested CursorBody setter failed in both pre- and post-populate contexts.
+        scale_x: ((width / DRIVE_BUTTON_NATIVE_ART_WIDTH_PX) * button_scale_x) / body_scale_x,
+        scale_y: ((height / DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX) * button_scale_y) / body_scale_y,
+        editable: false,
+        source: "native drive-row Cursor moves and shrinks as one setter-valid outer object"
+            .to_owned(),
+    }
+}
+
+/// Resize the row's own animated native Cursor to the active drive button. Visibility remains under
+/// the game's list-selection code: hovering or focusing row 0 shows this one cell-sized cursor;
+/// moving down hides it and shows only the destination row's untouched full-width cursor.
+pub(crate) unsafe fn apply_drive_row_native_cursor(
+    base: usize,
+    row_proxy: usize,
+    active_cell: usize,
+) -> bool {
+    use er_gfx::title_05_010::DRIVE_CELL_CAPACITY;
+    if active_cell >= DRIVE_CELL_CAPACITY {
+        return false;
+    }
+    let Some((cursor_proxy, _cursor_slot)) =
+        (unsafe { resolve_row_child_proxy(base, row_proxy, "Cursor") })
+    else {
+        return false;
+    };
+    let transform = drive_cell_cursor_transform(active_cell);
+    let (applied, unsupported, _) = unsafe {
+        apply_profile_editor_transform_to_proxy(base, cursor_proxy, &transform, "drive-row Cursor")
+    };
+    unsafe { destroy_resolved_row_child_proxy(base, cursor_proxy) };
+    applied == 2 && unsupported == 0
 }
 
 unsafe fn apply_profile_editor_nested_chrome_probe(
@@ -652,6 +845,7 @@ unsafe fn apply_profile_editor_field_probe(
     row_proxy: usize,
     row_model: usize,
     native_slot: i32,
+    live_drive_cell_count: usize,
     command: &ProfileEditorCommand,
 ) -> (u32, u32, String) {
     let selected = command.selected_name.as_str();
@@ -684,6 +878,19 @@ unsafe fn apply_profile_editor_field_probe(
     if selected_detail.is_empty() {
         selected_detail = format!("selected field {selected} is not a known row text field");
         unsupported_total += 1;
+    }
+    // DriveCell clip_height/width are shared authored cell geometry. The field setter can move and
+    // reflow the drive text live, but the visible cell is the separate DriveButton_* native frame.
+    // Not applying that group made every height command truthfully update the schema while changing
+    // no visible button pixels. Keep this inside row-populate, where the game's child proxies are
+    // owned and alive; the frame-thread cached-proxy path is deliberately forbidden above.
+    if er_gfx::title_05_010::is_drive_cell_field_name(selected) && live_drive_cell_count > 0 {
+        let (applied, unsupported, detail) = unsafe {
+            apply_profile_editor_drive_button_probe(base, row_proxy, live_drive_cell_count, command)
+        };
+        applied_total += applied;
+        unsupported_total += unsupported;
+        selected_detail = format!("{selected_detail} | {detail}");
     }
     let detail = if other_failures.is_empty() {
         selected_detail

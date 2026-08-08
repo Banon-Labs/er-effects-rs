@@ -153,6 +153,7 @@ impl ProfileEditorCommand {
             ("backing", &self.layout.row_chrome.backing),
             ("cursor", &self.layout.row_chrome.cursor),
             ("cursor_body", &self.layout.row_chrome.cursor_body),
+            ("drive_button", &self.layout.row_chrome.drive_button),
         ] {
             push_kv(
                 &mut out,
@@ -254,6 +255,7 @@ impl ProfileEditorCommand {
                     "backing" => &mut layout.row_chrome.backing,
                     "cursor" => &mut layout.row_chrome.cursor,
                     "cursor_body" => &mut layout.row_chrome.cursor_body,
+                    "drive_button" => &mut layout.row_chrome.drive_button,
                     _ => return Err(ProtocolError::UnknownKey(key.clone())),
                 };
                 match prop {

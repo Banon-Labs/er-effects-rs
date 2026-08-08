@@ -182,13 +182,27 @@ pub(crate) const PROFILE_ROW_LEVEL_CAPTION_FIELD_NAME: &str = "StaticText_110502
 pub(crate) const PROFILE_ROW_LEVEL_VALUE_FIELD_NAME: &str = "Level\0";
 pub(crate) const PROFILE_ROW_LOCATION_FIELD_NAME: &str = "Location\0";
 pub(crate) const PROFILE_ROW_PLAYTIME_FIELD_NAME: &str = "PlayTime\0";
+/// Full-width row chrome. The drive row hides both because its independent button frames are the
+/// only truthful click targets; every other row explicitly restores them.
+pub(crate) const PROFILE_ROW_BACKING_FIELD_NAME: &str = "Backing\0";
 /// The fields WE added to the row. They need the same per-row-kind visibility statement the native
 /// ones get: the row clips are recycled across the character/browse/drive lists, so a field only one
 /// kind mentions keeps that kind's text when another kind reuses the clip.
 pub(crate) const PROFILE_ROW_ER_STATS_FIELD_NAME: &str = "ErStats\0";
 pub(crate) const PROFILE_ROW_CHAR_STATS_FIELD_NAME: &str = "ErCharStats\0";
-pub(crate) const PROFILE_ROW_DRIVE_CELL_FIELD_NAMES: [&str; 3] =
-    ["DriveCell_0\0", "DriveCell_1\0", "DriveCell_2\0"];
+pub(crate) const PROFILE_ROW_DRIVE_CELL_FIELD_NAMES:
+    [&str; er_gfx::title_05_010::DRIVE_CELL_CAPACITY] =
+    er_gfx::title_05_010::DRIVE_CELL_FIELD_NAMES_NUL;
+/// Native button-frame children paired one-to-one with `DriveCell_0..25`. Their visibility must
+/// match the corresponding text field exactly: a blank cell must leave no empty frame, and a
+/// recycled character row must inherit neither the label nor its button chrome.
+pub(crate) const PROFILE_ROW_DRIVE_BUTTON_FIELD_NAMES:
+    [&str; er_gfx::title_05_010::DRIVE_CELL_CAPACITY] =
+    er_gfx::title_05_010::DRIVE_BUTTON_FIELD_NAMES_NUL;
+pub(crate) const PROFILE_ROW_CURRENT_PATH_FIELD_NAME: &str =
+    er_gfx::title_05_010::CURRENT_PATH_FIELD_NAME_NUL;
+pub(crate) const PROFILE_ROW_CURRENT_PATH_BUTTON_NAME: &str =
+    er_gfx::title_05_010::CURRENT_PATH_BUTTON_NAME_NUL;
 /// Offset of the row model's `Location` `CS::MenuString` inside `CS::MenuSaveDataSummary`. Same
 /// inline accessor as PlayTime: raw pointer first, else the inline DLString buffer.
 pub(crate) const PROFILE_ROW_MODEL_LOCATION_MENUSTRING_90_OFFSET: usize = 0x90;
