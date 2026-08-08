@@ -1671,6 +1671,13 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
                 SYSTEM_QUIT_OPTION_SETTING_WINDOW.swap(owner, Ordering::SeqCst)
             }
             "05_010_ProfileSelect" => {
+                // ONE TICK PER RENDERED FRAME OF OUR VIEW. The live editor's safety gate reads this
+                // to answer "is the ProfileSelect view on screen right now", which decides whether a
+                // web-UI edit may be applied from the async FrameBegin path or has to wait for the
+                // in-band row populate. Stamped here because this hook IS the per-frame run of that
+                // window's MenuWindowJob; nothing else in the process is that direct about it.
+                er_telemetry::counters::PROFILE_SELECT_WINDOW_RUN_TICKS
+                    .fetch_add(1, Ordering::SeqCst);
                 SYSTEM_QUIT_PROFILE_SELECT_WINDOW.swap(owner, Ordering::SeqCst)
             }
             _ => 0,

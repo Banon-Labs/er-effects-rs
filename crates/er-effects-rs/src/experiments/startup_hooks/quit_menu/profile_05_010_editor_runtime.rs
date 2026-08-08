@@ -4,11 +4,19 @@ use er_gfx::profile_05_010_protocol::{
     CONTROL_FILE_NAME, ProfileEditorCommand, ProfileEditorStatus, RenderMode, STATUS_FILE_NAME,
     SelectedKind,
 };
+use er_telemetry::counters::{PROFILE_EDITOR_DEFERRED_APPLIES, PROFILE_SELECT_WINDOW_RUN_TICKS};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 
 static PROFILE_EDITOR_LAST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static PROFILE_EDITOR_STATUS_THROTTLE: AtomicU64 = AtomicU64::new(0);
+/// Separate from [`PROFILE_EDITOR_STATUS_THROTTLE`] on purpose: that one paces the
+/// first-few-then-powers-of-two "no command" writes, and a heartbeat sharing it would make both
+/// cadences depend on how often the other fired.
+static PROFILE_EDITOR_HEARTBEAT_TICKS: AtomicU64 = AtomicU64::new(0);
+/// `PROFILE_SELECT_WINDOW_RUN_TICKS` as of the previous necromancy poll. The DELTA is the signal:
+/// an absolute value cannot distinguish "the view is up" from "the view was up an hour ago".
+static PROFILE_EDITOR_LAST_SEEN_WINDOW_RUNS: AtomicU64 = AtomicU64::new(0);
 static PROFILE_EDITOR_NECROMANCY_POLL_TICKS: AtomicU64 = AtomicU64::new(0);
 static PROFILE_EDITOR_FIELD_TARGETS: OnceLock<Mutex<Vec<CachedProfileFieldTarget>>> =
     OnceLock::new();
@@ -27,12 +35,66 @@ fn editor_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// The exact bytes last written to `status.txt`, so the heartbeat can refresh the file's mtime
+/// without inventing a status or losing the last command's `applied_count`/error detail.
+static PROFILE_EDITOR_LAST_STATUS_TEXT: OnceLock<Mutex<String>> = OnceLock::new();
+
 fn write_status(dir: &PathBuf, status: ProfileEditorStatus) {
+    let text = status.serialize();
+    if let Ok(mut last) = PROFILE_EDITOR_LAST_STATUS_TEXT
+        .get_or_init(|| Mutex::new(String::new()))
+        .lock()
+    {
+        last.clear();
+        last.push_str(&text);
+    }
+    write_status_text(dir, &text);
+}
+
+fn write_status_text(dir: &PathBuf, text: &str) {
     let _ = std::fs::create_dir_all(dir);
     let tmp = dir.join(format!("{STATUS_FILE_NAME}.tmp"));
     let final_path = dir.join(STATUS_FILE_NAME);
-    if std::fs::write(&tmp, status.serialize()).is_ok() {
+    if std::fs::write(&tmp, text).is_ok() {
         let _ = std::fs::rename(tmp, final_path);
+    }
+}
+
+/// Re-stamp `status.txt` so its mtime says THIS process is still reading the control file.
+///
+/// The status file used to be written only when a new command arrived, so the last status of a dead
+/// game sat on disk saying `connected = true` forever and the editor badge believed it. Two saves
+/// were made against that ghost before anyone doubted the badge (2026-08-07: control sequence 62,
+/// ack frozen at 57, game relaunched an hour earlier WITHOUT `ER_PROFILE_05_010_EDITOR_DIR`, so
+/// nothing in the process was reading the directory at all). Liveness has to be something the live
+/// process keeps SAYING, not something a file once claimed.
+fn heartbeat_status(dir: &PathBuf) {
+    let ticks = PROFILE_EDITOR_HEARTBEAT_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
+    if ticks % 2 != 0 {
+        return;
+    }
+    let cached = PROFILE_EDITOR_LAST_STATUS_TEXT
+        .get()
+        .and_then(|last| last.lock().ok())
+        .map(|last| last.clone())
+        .filter(|text| !text.is_empty());
+    match cached {
+        Some(text) => write_status_text(dir, &text),
+        None => write_status(
+            dir,
+            ProfileEditorStatus {
+                version: er_gfx::profile_05_010_protocol::PROTOCOL_VERSION,
+                ack_sequence: PROFILE_EDITOR_LAST_SEQUENCE.load(Ordering::SeqCst),
+                connected: true,
+                status: "live-runtime-idle".to_owned(),
+                active_surface: "heartbeat".to_owned(),
+                selected_kind: String::new(),
+                selected_name: String::new(),
+                applied_count: 0,
+                unsupported_count: 0,
+                error: String::new(),
+            },
+        ),
     }
 }
 
@@ -176,7 +238,10 @@ pub(crate) unsafe fn profile_editor_necromancy_tick(base: usize) {
     }
     let command = match read_command(&dir) {
         Ok(Some(command)) => command,
-        Ok(None) => return,
+        Ok(None) => {
+            heartbeat_status(&dir);
+            return;
+        }
         Err(error) => {
             write_status(
                 &dir,
@@ -197,96 +262,69 @@ pub(crate) unsafe fn profile_editor_necromancy_tick(base: usize) {
         }
     };
     if command.render_mode != RenderMode::LiveRuntime {
+        heartbeat_status(&dir);
         return;
     }
     if PROFILE_EDITOR_LAST_SEQUENCE.load(Ordering::SeqCst) == command.sequence {
+        heartbeat_status(&dir);
         return;
     }
-    if command.selected_kind != SelectedKind::Field {
-        write_status(
-            &dir,
-            status_for(
-                &command,
-                "necromancy",
-                0,
-                1,
-                "necromancy currently reanimates cached text fields only; row/list/chrome still need a live row-populate resolve",
-            ),
-        );
-        return;
-    }
-    // Reanimate EVERY cached field, not only the selected one. Applying just the selection let the
-    // next native row populate reset all the others to their baked asset geometry, so two edits
-    // could never be live at once -- saving one reverted the other.
-    let targets: Vec<CachedProfileFieldTarget> = PROFILE_EDITOR_FIELD_TARGETS
-        .get()
-        .and_then(|targets| targets.lock().ok())
-        .map(|targets| targets.clone())
-        .unwrap_or_default();
-    if targets.is_empty() {
-        write_status(
-            &dir,
-            status_for(
-                &command,
-                "necromancy",
-                0,
-                1,
-                format!(
-                    "no cached live field components (selected {}); open/repopulate ProfileSelect once, then live edits can reanimate them without another row populate",
-                    command.selected_name
-                ),
-            ),
-        );
-        return;
-    }
-    let selected = command.selected_name.clone();
-    let mut applied_total = 0u32;
-    let mut unsupported_total = 0u32;
-    let mut selected_detail = String::new();
-    let mut other_failures: Vec<String> = Vec::new();
-    let mut surface = "necromancy";
-    for target in &targets {
-        if !command
-            .layout
-            .fields
-            .contains_key(target.field_name.as_str())
-        {
-            continue;
-        }
-        let (applied, unsupported, detail) =
-            unsafe { apply_profile_editor_cached_field(base, target, &command) };
-        applied_total += applied;
-        unsupported_total += unsupported;
-        if target.field_name == selected {
-            selected_detail = detail;
-            surface = target.active_surface;
-        } else if unsupported > 0 {
-            other_failures.push(format!("{}: {detail}", target.field_name));
-        }
-    }
-    if selected_detail.is_empty() {
-        selected_detail = format!("no cached live field component for {selected}");
-        unsupported_total += 1;
-    }
-    let detail = if other_failures.is_empty() {
-        selected_detail
+    // THIS PATH NO LONGER TOUCHES GFX OBJECTS AT ALL. It queues, and the row populate applies.
+    //
+    // It ran off `FrameBegin` and wrote through component pointers cached on earlier frames. That is
+    // unsound in BOTH directions, and the user found both within half an hour on 2026-08-07:
+    //
+    //   * view ON SCREEN (16:39:16) -- writing to components the menu thread is simultaneously
+    //     laying out. Died in `FUN_14075dc30`.
+    //   * view GONE (17:03:32) -- writing to components whose owner has been destructed. Died in
+    //     `_purecall` -> `purecall_crash_handler`, a deliberate write of 0xdead to NULL. The
+    //     liveness check could not see it coming, because a destructed object's vtable slots hold
+    //     `_purecall`, which IS inside the game image.
+    //
+    // Gating the first case was treating a symptom; the second one crashed a user who had done
+    // exactly what the guard asked of them. There is no "safe moment" for a pointer we cached and do
+    // not own. The command is left UN-ACKED and applied by `profile_editor_runtime_tick`, which runs
+    // INSIDE the native row populate -- the one place the game hands us a proxy it is holding alive
+    // on that very frame. Cost: an edit lands on the next populate (scroll the list or reopen Load
+    // Character) rather than instantly. That is the price of not killing the process.
+    //
+    // `PROFILE_SELECT_WINDOW_RUN_TICKS` is kept, no longer as a gate but as the thing that tells the
+    // user which nudge will make their edit appear: rising means the view is up, so a scroll applies
+    // it now; flat means reopen the view.
+    let window_runs = PROFILE_SELECT_WINDOW_RUN_TICKS.load(Ordering::SeqCst);
+    let previous_runs =
+        PROFILE_EDITOR_LAST_SEEN_WINDOW_RUNS.swap(window_runs as u64, Ordering::SeqCst);
+    let view_on_screen = window_runs as u64 > previous_runs;
+    let queued = PROFILE_EDITOR_DEFERRED_APPLIES.fetch_add(1, Ordering::SeqCst) + 1;
+    let how = if view_on_screen {
+        "the profile view is on screen: scroll the list one row and it appears"
     } else {
-        format!(
-            "{selected_detail} | {} other field(s) did not fully apply: {}",
-            other_failures.len(),
-            other_failures.join("; ")
-        )
+        "the profile view is closed: reopen Load Character and it appears"
     };
-    PROFILE_EDITOR_LAST_SEQUENCE.store(command.sequence, Ordering::SeqCst);
+    // NOT `status_for`: that reports "accepted" whenever nothing was unsupported, and a queued
+    // command is neither accepted nor failed. `ack_sequence` stays at the last APPLIED sequence so
+    // the editor keeps showing the edit as outstanding.
     write_status(
         &dir,
-        status_for(
-            &command,
-            &format!("{surface}+necromancy"),
-            applied_total,
-            unsupported_total,
-            detail,
-        ),
+        ProfileEditorStatus {
+            version: er_gfx::profile_05_010_protocol::PROTOCOL_VERSION,
+            ack_sequence: PROFILE_EDITOR_LAST_SEQUENCE.load(Ordering::SeqCst),
+            connected: true,
+            status: "live-runtime-command-deferred".to_owned(),
+            active_surface: if view_on_screen {
+                "queued-view-on-screen".to_owned()
+            } else {
+                "queued-view-closed".to_owned()
+            },
+            selected_kind: command.selected_kind.as_str().to_owned(),
+            selected_name: command.selected_name.clone(),
+            applied_count: 0,
+            unsupported_count: 0,
+            error: format!(
+                "queued sequence {}: edits are applied by the game's own row populate, never from the frame thread (writing to cached components crashed the game in both screen states). {how}. Nothing was lost (queued={queued}).",
+                command.sequence
+            ),
+        },
     );
 }
 
@@ -580,6 +618,14 @@ unsafe fn scaleform_value_for_component(base: usize, comp: usize) -> Result<usiz
             "component get-value invalid comp=0x{comp:x} vt=0x{comp_vt:x} get=0x{get_value:x}"
         ));
     }
+    // A DESTRUCTED OBJECT PASSES EVERY CHECK ABOVE. Its vtable is the abstract base's, whose slots
+    // hold `_purecall` -- an address inside the game image, so "the pointer looks like game code"
+    // says nothing. Calling it writes 0xdead to NULL and takes the process with it.
+    if dispatch_target_is_purecall(get_value, base) {
+        return Err(format!(
+            "component 0x{comp:x} has been DESTROYED (vt=0x{comp_vt:x} get-value is the pure-virtual trap 0x{get_value:x}); its screen is gone"
+        ));
+    }
     let get_value: unsafe extern "system" fn(usize) -> usize =
         unsafe { std::mem::transmute(get_value) };
     let value = unsafe { get_value(comp) };
@@ -767,68 +813,6 @@ unsafe fn apply_profile_editor_one_field(
             format!("field {field_name} did not resolve on row_proxy=0x{row_proxy:x}"),
         ),
     }
-}
-
-unsafe fn apply_profile_editor_cached_field(
-    base: usize,
-    target: &CachedProfileFieldTarget,
-    command: &ProfileEditorCommand,
-) -> (u32, u32, String) {
-    let Some(field) = command.layout.fields.get(target.field_name.as_str()) else {
-        return (
-            0,
-            1,
-            format!("missing cached field layout {}", target.field_name),
-        );
-    };
-    let cs_value = match unsafe { scaleform_value_for_component(base, target.component) } {
-        Ok(value) => value,
-        Err(error) => {
-            return (
-                0,
-                1,
-                format!(
-                    "cached field {} component is no longer live: {error}",
-                    target.field_name
-                ),
-            );
-        }
-    };
-    let moved = unsafe { set_scaleform_value_position(base, cs_value, field.x, field.y) };
-    let mut component_slot = target.component;
-    let settext: unsafe extern "system" fn(usize, usize) =
-        unsafe { std::mem::transmute(base + PROFILE_SETTEXT_RVA) };
-    let mut field_name_nul = String::with_capacity(target.field_name.len() + 1);
-    field_name_nul.push_str(&target.field_name);
-    field_name_nul.push('\0');
-    let live_text =
-        crate::experiments::startup_hooks::loading_cover::profile_editor_live_text_for_field(
-            &field_name_nul,
-            &target.last_utf16,
-        );
-    unsafe {
-        settext(
-            (&mut component_slot as *mut usize) as usize,
-            live_text.as_ptr() as usize,
-        )
-    };
-    let text_pushed = true;
-    let width_result = unsafe { set_text_field_width_probe(base, cs_value, field.width) };
-    let width_applied = width_result.is_ok();
-    let width_detail = width_result
-        .as_ref()
-        .map(|detail| detail.as_str())
-        .unwrap_or_else(|error| error.as_str());
-    let applied = moved as u32 + width_applied as u32 + text_pushed as u32;
-    let unsupported = (!moved) as u32 + (!width_applied) as u32 + (!text_pushed) as u32;
-    (
-        applied,
-        unsupported,
-        format!(
-            "necromancy cached field {} component=0x{:x}: moved={moved}; width_probe={width_applied} ({width_detail}); text_repush={text_pushed}; no row-populate required",
-            target.field_name, target.component
-        ),
-    )
 }
 
 unsafe fn resolve_row_child_proxy(

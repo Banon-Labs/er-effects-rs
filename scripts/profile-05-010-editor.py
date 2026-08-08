@@ -12,6 +12,7 @@ import html
 import json
 import subprocess
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 from pathlib import Path
@@ -376,7 +377,16 @@ def parse_protocol_file(path: Path):
     return out
 
 
-def runtime_status():
+# A status file this old means nobody is reading the control file any more. The DLL rewrites
+# status.txt from its necromancy tick roughly once a second while it is alive, so the file's mtime is
+# a heartbeat: a game that exited (or that was launched WITHOUT ER_PROFILE_05_010_EDITOR_DIR, which
+# makes the whole editor path inert) leaves the last status frozen on disk with `connected = true`.
+# Before this, the badge read that stale line and said "live runtime connected" to a dead process --
+# two saves went into the void with the UI showing green (2026-08-07, sequence 62 vs ack 57).
+STATUS_STALE_SECONDS = 6.0
+
+
+def runtime_status(last_sequence: int = 0):
     status = parse_protocol_file(STATUS_FILE)
     if status is None:
         return {
@@ -390,18 +400,43 @@ def runtime_status():
             "applied_count": 0,
             "unsupported_count": 0,
             "error": "no runtime status file yet; live mode is not connected",
+            "status_age_seconds": None,
+            "sent_sequence": last_sequence,
         }
+    try:
+        age = max(0.0, time.time() - STATUS_FILE.stat().st_mtime)
+    except OSError:
+        age = None
+    claims_connected = status.get("connected") == "true"
+    stale = age is None or age > STATUS_STALE_SECONDS
+    ack = int(status.get("ack_sequence", 0))
+    error = status.get("error", "")
+    if claims_connected and stale:
+        error = (
+            f"status.txt is {age:.0f}s old (stale over {STATUS_STALE_SECONDS:.0f}s): nothing is "
+            f"reading {CONTROL_FILE}. The game is not running, or it was launched without "
+            f"ER_PROFILE_05_010_EDITOR_DIR -- use scripts/run-quicksave-row-parity-live.sh, not "
+            f"~/Elden/launch.sh, for live edits."
+            + (f" Last live status: {error}" if error else "")
+        )
+    elif claims_connected and last_sequence and ack < last_sequence:
+        error = (
+            f"the game is alive but has not acked sequence {last_sequence} (last ack {ack}); "
+            f"the edit has not been applied yet." + (f" {error}" if error else "")
+        )
     return {
         "profile_editor_protocol": int(status.get("profile_editor_protocol", PROTOCOL_VERSION)),
-        "ack_sequence": int(status.get("ack_sequence", 0)),
-        "connected": status.get("connected") == "true",
-        "status": status.get("status", "unknown"),
+        "ack_sequence": ack,
+        "connected": claims_connected and not stale,
+        "status": status.get("status", "unknown") if not stale else "stale",
         "active_surface": status.get("active_surface", "unknown"),
         "selected_kind": status.get("selected_kind", ""),
         "selected_name": status.get("selected_name", ""),
         "applied_count": int(status.get("applied_count", 0)),
         "unsupported_count": int(status.get("unsupported_count", 0)),
-        "error": status.get("error", ""),
+        "error": error,
+        "status_age_seconds": None if age is None else round(age, 1),
+        "sent_sequence": last_sequence,
     }
 
 
@@ -596,7 +631,8 @@ async function save(){ try { const payload={data, render_mode:renderMode(), sele
 async function rebuild(){ try { const payload={data, render_mode:renderMode(), selected, text_probe:false}; await postSchema(payload); await fetch('/rebuild',{method:'POST'}); poll(); } catch(e) { showError(e); } }
 async function probeText(){ try { const payload={data, render_mode:'live_runtime', selected, text_probe:true}; await postSchema(payload); pollStatus(); } catch(e) { showError(e); } }
 async function poll(){ const s=await (await fetch('/rebuild')).json(); document.getElementById('log').textContent=(s.running?'RUNNING\n':'')+(s.output||''); if(s.running) setTimeout(poll,1000); }
-async function pollStatus(){ runtimeStatus=await (await fetch('/status')).json(); const mode=renderMode(); const live=mode=='live_runtime'; const ack=runtimeStatus.ack_sequence||0; document.getElementById('runtimeStatus').textContent=JSON.stringify(runtimeStatus,null,2); const badge=document.getElementById('runtimeBadge'); if(!live){ badge.className='warn'; badge.textContent='offline approximate mode: not visually authoritative'; } else if(runtimeStatus.connected){ badge.className='ok'; badge.textContent='live runtime connected: ack '+ack+' status='+runtimeStatus.status; } else { badge.className='bad'; badge.textContent='live runtime requested but disconnected/no ack'; } setTimeout(pollStatus,1000); }
+async function pollStatus(){ runtimeStatus=await (await fetch('/status')).json(); const mode=renderMode(); const live=mode=='live_runtime'; const ack=runtimeStatus.ack_sequence||0; document.getElementById('runtimeStatus').textContent=JSON.stringify(runtimeStatus,null,2); const badge=document.getElementById('runtimeBadge'); if(!live){ badge.className='warn'; badge.textContent='offline approximate mode: not visually authoritative'; } else if(runtimeStatus.status=='live-runtime-command-deferred'){ badge.className='warn'; badge.textContent='edit HELD until you leave the profile view (writing to it live crashes the game) -- reopen Load Character to apply'; }
+  else if(runtimeStatus.connected){ badge.className='ok'; badge.textContent='live runtime connected: ack '+ack+' status='+runtimeStatus.status; } else { badge.className='bad'; badge.textContent='live runtime requested but disconnected/no ack'; } setTimeout(pollStatus,1000); }
 document.addEventListener('keydown',e=>{ if(e.target.tagName=='INPUT')return; const d=e.shiftKey?5:1; if(e.key=='ArrowLeft')nudge(-d,0); if(e.key=='ArrowRight')nudge(d,0); if(e.key=='ArrowUp')nudge(0,-d); if(e.key=='ArrowDown')nudge(0,d); });
 Object.assign(window,{load,renderModeChanged,save,rebuild,draw,setVal,setText,setBool,setClipRight,nudge});
 document.getElementById('renderMode').addEventListener('change', renderModeChanged);
@@ -638,7 +674,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/rebuild":
             self.send_bytes(200, json.dumps(rebuild_state).encode(), "application/json")
         elif path == "/status":
-            self.send_bytes(200, json.dumps(runtime_status()).encode(), "application/json")
+            self.send_bytes(200, json.dumps(runtime_status(protocol_sequence)).encode(), "application/json")
         else:
             self.send_bytes(404, b"not found", "text/plain")
 
@@ -703,7 +739,7 @@ def self_test():
         raise SystemExit("protocol control file write/read failed")
     # Do not delete STATUS_FILE here: an editor self-test may run while Elden Ring is live, and
     # status.txt is the only honest runtime-ack surface the webview has.
-    status = runtime_status()
+    status = runtime_status(protocol_sequence)
     if "connected" not in status or "ack_sequence" not in status:
         raise SystemExit(f"runtime status parser returned malformed status: {status}")
     print(f"schema={SCHEMA}")

@@ -4,7 +4,7 @@
 # Icon_0 stays placed and hidden, never unplaced.
 
 [field.PlayerName]
-x = -520
+x = -545
 y = -17
 width = 1200
 clip_height = 40
@@ -37,7 +37,7 @@ sample_save_picker = ""
 sample_drive_row = ""
 
 [field.Location]
-x = 250
+x = 267
 y = -16
 width = 281
 clip_height = 40
@@ -59,7 +59,7 @@ sample_save_picker = "2026-07-07"
 sample_drive_row = "2026-07-07"
 
 [field.ErStats]
-x = -324
+x = -175
 y = -16
 width = 587
 clip_height = 40
@@ -70,8 +70,8 @@ sample_save_picker = "PARENT FOLDER / Go to save-files"
 sample_drive_row = "45-Slots / ER0000.sl2"
 
 [field.ErCharStats]
-x = -208
-y = -13
+x = -185
+y = -13.5
 width = 484
 clip_height = 42
 font_height = 19
@@ -81,7 +81,7 @@ sample_save_picker = ""
 sample_drive_row = ""
 
 [field.DriveCell_0]
-x = -325
+x = -375
 y = -16
 width = 64
 clip_height = 40
@@ -92,7 +92,7 @@ sample_save_picker = "[C:]"
 sample_drive_row = "[C:]"
 
 [field.DriveCell_1]
-x = -247
+x = -325
 y = -16
 width = 64
 clip_height = 40
@@ -103,7 +103,7 @@ sample_save_picker = "[S:]"
 sample_drive_row = "[S:]"
 
 [field.DriveCell_2]
-x = -166
+x = -275
 y = -16
 width = 64
 clip_height = 40
