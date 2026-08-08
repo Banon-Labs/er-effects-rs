@@ -65,8 +65,12 @@ use crate::host::append_autoload_debug;
 pub const PICKER_ROW_COUNT: usize = 10;
 /// ProfileSummary name field capacity: 16 UTF-16 units + NUL (0x22 bytes).
 pub const PICKER_ROW_NAME_UTF16_MAX: usize = 16;
-/// Drive cells that fit in the injected inline stats field without wrapping/clipping.
-const DRIVE_STRIP_MAX_CELLS: usize = 3;
+/// One independent cell for every Windows drive letter. Normal machines use only a populated
+/// prefix; the defensive paging code remains for synthetic/non-Windows roots beyond this capacity.
+/// Simultaneously visible drive controls. The asset still owns all 26 possible letter fields; a
+/// seven-cell window reserves the drive row's right side for the complete-path editor and pages
+/// through additional mounted drives with the existing `[<]`/`[>]` cells.
+pub const DRIVE_STRIP_MAX_CELLS: usize = 7;
 /// Label of the destination-intent `[ new ]` row (7 UTF-16 units, inside the name budget).
 pub const PICKER_NEW_FILE_LABEL: &str = "[ new ]";
 /// Marker prefixed to the stats line of the row that IS the save currently loaded.
@@ -383,6 +387,34 @@ pub enum PickRejection {
     ParentMissing = 7,
 }
 
+/// Why an accepted native text-entry value cannot become the picker's current directory.
+/// Validation completes before any model field changes, so every error preserves the old listing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DirectoryChangeError {
+    Empty,
+    NotAbsolute,
+    NotDirectory,
+}
+
+impl DirectoryChangeError {
+    pub fn status_message(self) -> PickerStatusMessage {
+        match self {
+            Self::Empty => PickerStatusMessage::new(
+                "PATH IS EMPTY",
+                "Enter an absolute folder path, or press Back to cancel.",
+            ),
+            Self::NotAbsolute => PickerStatusMessage::new(
+                "ABSOLUTE PATH REQUIRED",
+                "Enter a complete path beginning with a drive letter.",
+            ),
+            Self::NotDirectory => PickerStatusMessage::new(
+                "FOLDER NOT FOUND",
+                "The path does not name an existing directory.",
+            ),
+        }
+    }
+}
+
 /// User-facing picker status text. Product telemetry/log wording stays at the caller; the picker
 /// surface only needs a concise headline plus one explanatory line it can render inline.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -597,10 +629,10 @@ impl SavePickerModel {
         path_parent(&self.current_dir).is_some()
     }
 
-    /// True when a drive cycler row is worth showing. With one drive (or none enumerated) there is
-    /// nowhere to cycle to, so the row would be a dead end and is omitted.
+    /// True when the stable location row can name a mounted drive. With one drive it still owns the
+    /// complete-path display/editor; with multiple drives it additionally exposes the drive strip.
     fn has_drive_row(&self) -> bool {
-        self.drives.len() >= 2
+        !self.drives.is_empty()
     }
 
     /// Rows above the entries that are pure NAVIGATION -- never an entry, never a pick target:
@@ -817,13 +849,12 @@ impl SavePickerModel {
     }
 
     fn clamp_drive_strip_offset(&mut self) {
-        let cap = DRIVE_STRIP_MAX_CELLS.max(1);
-        self.drive_strip_offset = self
-            .drive_strip_offset
-            .min(self.drives.len().saturating_sub(1));
-        if self.drive_strip_offset + cap > self.drives.len() {
-            self.drive_strip_offset = self.drives.len().saturating_sub(cap);
-        }
+        // Every nonzero page spends one cell on `[<]`; the last page therefore shows at most
+        // MAX-1 real drives. Clamping against `len-MAX` made the final drive unreachable whenever
+        // one extra page was needed (8 drives in a 7-cell strip snapped offset 2 back to 1).
+        let last_page_real_capacity = DRIVE_STRIP_MAX_CELLS.saturating_sub(1).max(1);
+        let max_offset = self.drives.len().saturating_sub(last_page_real_capacity);
+        self.drive_strip_offset = self.drive_strip_offset.min(max_offset);
     }
 
     fn ensure_current_drive_cell_visible(&mut self) {
@@ -848,6 +879,23 @@ impl SavePickerModel {
             self.drive_strip_offset + self.drive_strip_real_capacity() < self.drives.len(),
         );
         cells.min(DRIVE_STRIP_MAX_CELLS)
+    }
+
+    /// Visual cell containing the current drive. Row focus is deliberately separate: callers hide
+    /// the cell cursor when the native list cursor leaves the drive row without forgetting which
+    /// drive becomes active when focus returns.
+    pub fn drive_strip_active_cell(&self) -> Option<usize> {
+        if !self.has_drive_row() {
+            return None;
+        }
+        let drive_index = self.drive_index();
+        let capacity = self.drive_strip_real_capacity();
+        if drive_index < self.drive_strip_offset
+            || drive_index >= self.drive_strip_offset + capacity
+        {
+            return None;
+        }
+        Some(usize::from(self.drive_strip_offset > 0) + drive_index - self.drive_strip_offset)
     }
 
     fn drive_strip_cell_label(&self, drive_index: usize) -> String {
@@ -884,7 +932,7 @@ impl SavePickerModel {
     }
 
     /// Text for one visual drive-strip cell on the drive row. The runtime maps these cells onto
-    /// distinct ProfileSelect child text fields (`DriveCell_0..2`) instead of one concatenated row label.
+    /// distinct ProfileSelect child text fields (`DriveCell_0..25`) instead of one concatenated row label.
     pub fn drive_row_cell_label(&self, row: usize, cell: usize) -> Option<String> {
         (self.drive_row() == Some(row))
             .then(|| self.drive_strip_cells().get(cell).cloned())
@@ -987,6 +1035,41 @@ impl SavePickerModel {
 
     pub fn current_dir(&self) -> &Path {
         &self.current_dir
+    }
+
+    /// Validate and commit a complete directory path entered through the native text editor.
+    ///
+    /// The input is preserved exactly: no lowercasing, trimming, slash replacement or canonicalizing.
+    /// Existence and absoluteness are checked against a temporary `PathBuf` before `self` changes, so
+    /// invalid Accept and native Back/cancel both leave the directory/listing untouched.
+    pub fn set_current_dir_from_text(&mut self, text: &str) -> Result<bool, DirectoryChangeError> {
+        if text.is_empty() {
+            return Err(DirectoryChangeError::Empty);
+        }
+        let candidate = PathBuf::from(text);
+        let windows_absolute = windows_like_path_text(&candidate)
+            .is_some_and(|path| path.as_bytes().get(1) == Some(&b':'));
+        if !candidate.is_absolute() && !windows_absolute {
+            return Err(DirectoryChangeError::NotAbsolute);
+        }
+        if !candidate.is_dir() {
+            return Err(DirectoryChangeError::NotDirectory);
+        }
+        if candidate == self.current_dir {
+            self.clear_status_message();
+            return Ok(false);
+        }
+
+        let old_root = self.current_drive_root();
+        self.last_dir_per_drive
+            .insert(old_root, self.current_dir.clone());
+        self.current_dir = candidate;
+        self.refresh();
+        self.ensure_current_drive_cell_visible();
+        self.cursor = self
+            .drive_row()
+            .unwrap_or_else(|| self.first_selectable_row());
+        Ok(true)
     }
 
     pub fn extension(&self) -> &str {
@@ -1609,7 +1692,7 @@ mod tests {
         }
     }
 
-    /// Attach mounted drives so the drive cycler row exists (two or more) or deliberately does not.
+    /// Attach mounted drives so the stable drive/path row exists (one or more) or deliberately does not.
     fn with_drives(mut model: SavePickerModel, drives: &[&str]) -> SavePickerModel {
         model.drives = drives.iter().map(PathBuf::from).collect();
         model
@@ -2351,7 +2434,7 @@ mod tests {
     }
 
     #[test]
-    fn drive_row_renders_a_clickable_cell_strip() {
+    fn drive_row_renders_every_available_drive_as_its_own_cell() {
         let model = with_drives(
             model_with(PickerIntent::LoadSource, "Z:\\saves", 2),
             &["A:\\", "B:\\", "C:\\", "D:\\"],
@@ -2359,14 +2442,32 @@ mod tests {
         let row = model.drive_row().expect("drive row exists");
         assert_eq!(label_of(&model, row), "DRIVES");
         assert_eq!(model.row_auxiliary_lines(row), None);
-        assert_eq!(model.drive_strip_cell_count(), 3);
+        assert_eq!(model.drive_strip_cell_count(), 4);
         assert_eq!(model.drive_row_cell_label(row, 0).as_deref(), Some("[A:]"));
         assert_eq!(model.drive_row_cell_label(row, 1).as_deref(), Some("[B:]"));
-        assert_eq!(model.drive_row_cell_label(row, 2).as_deref(), Some("[>]"));
+        assert_eq!(model.drive_row_cell_label(row, 2).as_deref(), Some("[C:]"));
+        assert_eq!(model.drive_row_cell_label(row, 3).as_deref(), Some("[D:]"));
     }
 
     #[test]
-    fn drive_strip_cells_select_absolute_drives_and_scroll_in_place() {
+    fn drive_strip_active_cell_tracks_the_current_drive() {
+        let mut model = with_drives(
+            model_with(PickerIntent::LoadSource, "A:\\saves", 2),
+            &["A:\\", "B:\\", "C:\\", "D:\\"],
+        );
+        assert_eq!(model.drive_strip_active_cell(), Some(0));
+        assert!(model.activate_drive_strip_cell(2));
+        assert_eq!(model.drive_strip_active_cell(), Some(2));
+        model.cursor = 1;
+        assert_eq!(
+            model.drive_strip_active_cell(),
+            Some(2),
+            "the active drive is model state; row focus separately decides whether its cursor chrome is visible"
+        );
+    }
+
+    #[test]
+    fn drive_strip_pages_to_keep_every_available_drive_directly_selectable() {
         let mut model = with_drives(
             model_with(PickerIntent::LoadSource, "A:\\saves", 2),
             &[
@@ -2376,33 +2477,20 @@ mod tests {
         let row = model.drive_row().expect("drive row exists");
         assert_eq!(label_of(&model, row), "DRIVES");
         assert_eq!(model.row_auxiliary_lines(row), None);
+        assert_eq!(model.drive_strip_cell_count(), DRIVE_STRIP_MAX_CELLS);
         assert_eq!(model.drive_row_cell_label(row, 0).as_deref(), Some(">A:<"));
-        assert_eq!(model.drive_row_cell_label(row, 1).as_deref(), Some("[B:]"));
-        assert_eq!(model.drive_row_cell_label(row, 2).as_deref(), Some("[>]"));
-        assert!(model.activate_drive_strip_cell(1));
-        assert_eq!(model.current_drive_root(), PathBuf::from("B:\\"));
+        assert_eq!(model.drive_row_cell_label(row, 6).as_deref(), Some("[>]"));
+        assert!(model.activate_drive_strip_cell(6));
+        assert!(model.activate_drive_strip_cell(6));
+        assert_eq!(model.drive_row_cell_label(row, 6).as_deref(), Some("[H:]"));
+        assert!(model.activate_drive_strip_cell(6));
+        assert_eq!(model.current_drive_root(), PathBuf::from("H:\\"));
         let row = model.drive_row().expect("drive row still exists");
         assert_eq!(
             model.cursor, row,
             "cell activation keeps keyboard/mouse focus on the drive row"
         );
-        assert_eq!(model.drive_row_cell_label(row, 0).as_deref(), Some("[A:]"));
-        assert_eq!(model.drive_row_cell_label(row, 1).as_deref(), Some(">B:<"));
-        assert_eq!(model.drive_row_cell_label(row, 2).as_deref(), Some("[>]"));
-        assert!(model.activate_drive_strip_cell(2));
-        let row = model.drive_row().expect("drive row still exists");
-        assert_eq!(model.drive_row_cell_label(row, 0).as_deref(), Some("[<]"));
-        assert_eq!(model.drive_row_cell_label(row, 1).as_deref(), Some(">B:<"));
-        assert_eq!(model.drive_row_cell_label(row, 2).as_deref(), Some("[>]"));
-        assert!(model.activate_drive_strip_cell(0));
-        let row = model.drive_row().expect("drive row still exists");
-        assert_eq!(
-            model.cursor, row,
-            "strip-scroll cells keep focus on the drive row"
-        );
-        assert_eq!(model.drive_row_cell_label(row, 0).as_deref(), Some("[A:]"));
-        assert_eq!(model.drive_row_cell_label(row, 1).as_deref(), Some(">B:<"));
-        assert_eq!(model.drive_row_cell_label(row, 2).as_deref(), Some("[>]"));
+        assert_eq!(model.drive_row_cell_label(row, 6).as_deref(), Some(">H:<"));
         assert!(model.cycle_drive_from_drive_strip(true));
         let row = model.drive_row().expect("drive row still exists");
         assert_eq!(
@@ -2562,19 +2650,19 @@ mod tests {
         assert_eq!(model.last_dir_per_drive.get(&real_root), Some(&real_dir));
     }
 
-    /// With fewer than two drives there is no cycler row at all, and the cycle call is inert.
+    /// A single drive still gets the location/path row, while cycling remains inert.
     #[test]
-    fn a_single_drive_adds_no_cycler_row() {
+    fn a_single_drive_keeps_the_complete_path_row_without_fake_cycling() {
         let mut model = with_drives(
             model_with(PickerIntent::LoadSource, "Z:\\home\\banon", 0),
             &["Z:\\"],
         );
-        assert_eq!(model.drive_row(), None);
+        assert_eq!(model.drive_row(), Some(0));
         assert_eq!(model.drive_count(), 1);
         model.cycle_drive(true);
         assert_eq!(model.current_dir(), Path::new("Z:\\home\\banon"));
-        // Only the up row is fixed, so all nine remaining rows stay available to entries.
-        assert_eq!(model.max_entries_single_page(), PICKER_ROW_COUNT - 1);
+        // The location row and up row are fixed; the remaining rows stay available to entries.
+        assert_eq!(model.max_entries_single_page(), PICKER_ROW_COUNT - 2);
     }
 
     /// The `[..]` row names the folder it goes TO, not just the direction, and truncates rather
@@ -2838,13 +2926,13 @@ mod tests {
         assert_eq!(multi.first_selectable_row(), 0);
         assert_eq!(multi.row_meaning(0), PickerRow::DriveCycle);
 
-        // Empty drive root with nowhere to go: one `[ root ]` row rather than a zero-row native
-        // list, and the cursor lands on it.
+        // Empty single-drive root: the location/path row remains actionable even though drive
+        // cycling is inert, so the user can type a complete directory instead of being stranded.
         let alone = with_drives(model_with(PickerIntent::LoadSource, "Z:\\", 0), &["Z:\\"]);
         assert_eq!(alone.visible_row_count(), 1);
         assert_eq!(alone.first_selectable_row(), 0);
-        assert_eq!(alone.row_meaning(0), PickerRow::AtRoot);
-        assert_eq!(label_of(&alone, 0), "[ root ]");
+        assert_eq!(alone.row_meaning(0), PickerRow::DriveCycle);
+        assert_eq!(label_of(&alone, 0), "DRIVES");
 
         // Empty SUBdirectory: nothing actionable below the nav rows, so fallback preserves the
         // always-first drive control instead of jumping past it to the parent row.
@@ -2976,6 +3064,54 @@ mod tests {
         assert!(
             model.status_message().is_none(),
             "moving to another folder must not carry a stale rejection"
+        );
+    }
+
+    #[test]
+    fn complete_path_accept_preserves_case_and_spaces() {
+        let (root_dir, _) = real_dir_and_root("complete-path");
+        let target = root_dir.join("Mixed Case Folder");
+        std::fs::create_dir_all(&target).expect("mixed-case target dir must be creatable");
+        let mut model = model_with(
+            PickerIntent::LoadSource,
+            root_dir.to_string_lossy().as_ref(),
+            0,
+        );
+        let exact = target
+            .to_str()
+            .expect("test temp path must be Unicode")
+            .to_owned();
+
+        assert_eq!(model.set_current_dir_from_text(&exact), Ok(true));
+        assert_eq!(model.current_dir(), Path::new(&exact));
+        assert!(model.status_message().is_none());
+    }
+
+    #[test]
+    fn invalid_complete_path_accept_does_not_mutate_the_model() {
+        let (root_dir, _) = real_dir_and_root("invalid-complete-path");
+        let mut model = model_with(
+            PickerIntent::LoadSource,
+            root_dir.to_string_lossy().as_ref(),
+            2,
+        );
+        model.set_status_message(PickerStatusMessage::new("KEEP", "unchanged"));
+        let before_dir = model.current_dir().to_path_buf();
+        let before_entries = model.entry_count();
+
+        assert_eq!(
+            model.set_current_dir_from_text("relative folder"),
+            Err(DirectoryChangeError::NotAbsolute)
+        );
+        assert_eq!(
+            model.set_current_dir_from_text(""),
+            Err(DirectoryChangeError::Empty)
+        );
+        assert_eq!(model.current_dir(), before_dir);
+        assert_eq!(model.entry_count(), before_entries);
+        assert_eq!(
+            model.status_message().map(PickerStatusMessage::headline),
+            Some("KEEP")
         );
     }
 

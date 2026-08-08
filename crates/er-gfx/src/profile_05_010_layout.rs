@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 pub const DEFAULT_PROFILE_05_010_LAYOUT_PATH: &str = "crates/er-gfx/profile_05_010_layout.toml";
-pub const FIELD_NAMES: [&str; 10] = [
+pub const FIELD_NAMES: [&str; 11] = [
     "PlayerName",
     "StaticText_110502",
     "Level",
@@ -16,6 +16,7 @@ pub const FIELD_NAMES: [&str; 10] = [
     "DriveCell_0",
     "DriveCell_1",
     "DriveCell_2",
+    "CurrentPath",
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -82,6 +83,8 @@ pub struct RowChromeLayout {
     pub backing: TransformLayout,
     pub cursor: TransformLayout,
     pub cursor_body: TransformLayout,
+    /// Relative transform applied to every `DriveButton_*` frame around its derived drive cell.
+    pub drive_button: TransformLayout,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -240,6 +243,19 @@ impl Profile05_010Layout {
                 "DriveCell_2",
                 field(-166, -16, 64, 24, TextAlign::Center, "", ">Z:<", ">Z:<"),
             ),
+            (
+                "CurrentPath",
+                field(
+                    -180,
+                    -18,
+                    700,
+                    39,
+                    TextAlign::Left,
+                    "",
+                    "Z:\\home\\banon\\Elden Ring Saves",
+                    "Z:\\home\\banon\\Elden Ring Saves",
+                ),
+            ),
         ] {
             fields.insert(name.to_owned(), field);
         }
@@ -269,6 +285,14 @@ impl Profile05_010Layout {
                     1.0,
                     true,
                     "inner highlighted-row cursor body: Cursor/char75 -> CursorBody/char73 -> MENU_FL_Select_Cursor, the same 56x54 art used by Save Game / Return to Desktop style buttons",
+                ),
+                drive_button: transform(
+                    -2.0,
+                    0.0,
+                    1.0,
+                    1.0,
+                    true,
+                    "relative offset/scale shared by every DriveButton_* native frame; x/y nudge the button chrome without moving its text",
                 ),
             },
             list: ListGeometryLayout {
@@ -489,6 +513,7 @@ impl Profile05_010Layout {
             ("row_chrome.backing", &self.row_chrome.backing),
             ("row_chrome.cursor", &self.row_chrome.cursor),
             ("row_chrome.cursor_body", &self.row_chrome.cursor_body),
+            ("row_chrome.drive_button", &self.row_chrome.drive_button),
         ] {
             if t.scale_x == 0.0 || t.scale_y == 0.0 {
                 return Err(LayoutError::InvalidValue(format!(
@@ -525,6 +550,9 @@ impl Profile05_010Layout {
             }
             "row_chrome.cursor_body" => {
                 set_transform(&mut self.row_chrome.cursor_body, section, key, raw_value)?
+            }
+            "row_chrome.drive_button" => {
+                set_transform(&mut self.row_chrome.drive_button, section, key, raw_value)?
             }
             "list" => match key {
                 "row_pitch" => self.list.row_pitch = parse_i32(raw_value)?,
@@ -572,7 +600,11 @@ fn validate_section(section: &str) -> Result<(), LayoutError> {
         return Err(LayoutError::UnknownSection(section.to_owned()));
     }
     match section {
-        "row_chrome.backing" | "row_chrome.cursor" | "row_chrome.cursor_body" | "list" => Ok(()),
+        "row_chrome.backing"
+        | "row_chrome.cursor"
+        | "row_chrome.cursor_body"
+        | "row_chrome.drive_button"
+        | "list" => Ok(()),
         _ => Err(LayoutError::UnknownSection(section.to_owned())),
     }
 }
@@ -644,6 +676,7 @@ mod tests {
         assert!(layout.row_chrome.backing.editable);
         assert!(layout.row_chrome.cursor.editable);
         assert!(layout.row_chrome.cursor_body.editable);
+        assert!(layout.row_chrome.drive_button.editable);
         assert_eq!(layout.list.visible_rows, 10);
         assert_eq!(layout.list.row_pitch, 48);
     }

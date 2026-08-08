@@ -1838,6 +1838,7 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     // MENU-PUMP-OWNED save-picker maintenance: drive-cell input, native ScrollBarV sync,
     // edge-scroll restaging, in-place row rebuild after navigation, and window resubmit after a
     // navigation/pick close (same submit-context rule as the return-title chain below).
+    unsafe { save_picker_menu_pump_path_editor() };
     unsafe { save_picker_menu_pump_drive_strip_mouse() };
     unsafe { save_picker_menu_pump_native_scrollbar() };
     unsafe { save_picker_menu_pump_edge_scroll() };

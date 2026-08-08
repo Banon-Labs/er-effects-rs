@@ -185,6 +185,9 @@ pub(crate) use save_dest_commit::*;
 pub(crate) mod save_picker_menu;
 pub(crate) use save_picker_menu::*;
 
+pub(crate) mod save_picker_path_editor;
+pub(crate) use save_picker_path_editor::*;
+
 pub(crate) mod save_picker_dim_overlay;
 pub(crate) use save_picker_dim_overlay::*;
 

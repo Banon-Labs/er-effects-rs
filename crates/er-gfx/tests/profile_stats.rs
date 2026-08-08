@@ -16,7 +16,9 @@ use er_gfx::title_05_000::fnv1a64;
 use er_gfx::title_05_010::{
     CHAR_STATS_FIELD_NAME, COMPACT_LIST_HEIGHT_PX, COMPACT_ROW_PITCH_PX,
     COMPACT_SCROLLBAR_TOP_Y_PX, COMPACT_SCROLLBAR_TRACK_HEIGHT_PX, COMPACT_SCROLLBAR_X_PX,
-    COMPACT_VISIBLE_ROW_COUNT, DRIVE_CELL_FIELD_NAMES, EDITED_FNV1A64, EDITED_LEN,
+    COMPACT_VISIBLE_ROW_COUNT, CURRENT_PATH_BUTTON_NAME, CURRENT_PATH_FIELD_NAME,
+    DRIVE_BUTTON_FIELD_NAMES, DRIVE_CELL_CAPACITY, DRIVE_CELL_FIELD_NAMES, DRIVE_CELL_FIRST_X_PX,
+    DRIVE_CELL_PITCH_PX, DRIVE_CELL_WIDTH_PX, DRIVE_CELL_Y_PX, EDITED_FNV1A64, EDITED_LEN,
     STATS_FIELD_NAME, StatsPanelError, VANILLA_FNV1A64, VANILLA_LEN, is_known_vanilla, stats_panel,
 };
 use er_gfx::{Matrix, Movie, Tag};
@@ -221,10 +223,16 @@ fn injected_row_field_names_exist_in_our_movie_and_in_no_vanilla_summary_panel()
     };
     let out = stats_panel(&vanilla).expect("edits must apply cleanly");
     let edited = Movie::parse(&out).expect("edited movie parses");
-    let injected: Vec<&str> = [STATS_FIELD_NAME, CHAR_STATS_FIELD_NAME]
-        .into_iter()
-        .chain(DRIVE_CELL_FIELD_NAMES)
-        .collect();
+    let injected: Vec<&str> = [
+        STATS_FIELD_NAME,
+        CHAR_STATS_FIELD_NAME,
+        CURRENT_PATH_FIELD_NAME,
+        CURRENT_PATH_BUTTON_NAME,
+    ]
+    .into_iter()
+    .chain(DRIVE_CELL_FIELD_NAMES)
+    .chain(DRIVE_BUTTON_FIELD_NAMES)
+    .collect();
 
     let ours = placed_instance_names(&edited);
     for name in &injected {
@@ -347,14 +355,17 @@ fn stats_panel_output_places_stats_field_and_hides_face_box() {
         .iter()
         .position(|t| matches!(t, Tag::ShowFrame { .. }))
         .expect("row template has a visible-frame ShowFrame");
-    for cell in DRIVE_CELL_FIELD_NAMES {
+    for child in DRIVE_CELL_FIELD_NAMES
+        .into_iter()
+        .chain(DRIVE_BUTTON_FIELD_NAMES)
+    {
         let pos = row
             .iter()
-            .position(|t| matches!(t, Tag::PlaceObject2 { name: Some(n), .. } if n == cell))
-            .unwrap_or_else(|| panic!("drive cell field {cell} placement missing: {names:?}"));
+            .position(|t| matches!(t, Tag::PlaceObject2 { name: Some(n), .. } if n == child))
+            .unwrap_or_else(|| panic!("drive child {child} placement missing: {names:?}"));
         assert!(
             pos < first_show_frame,
-            "drive cell field {cell} must be placed before ShowFrame to be visible: pos={pos}, show_frame={first_show_frame}"
+            "drive child {child} must be placed before ShowFrame to be visible: pos={pos}, show_frame={first_show_frame}"
         );
     }
     let stats_char = row
@@ -472,6 +483,17 @@ impl TextRect {
             bottom: self.bottom + margin,
         }
     }
+}
+
+fn sprite(movie: &Movie, wanted: u16) -> &[Tag] {
+    movie
+        .tags
+        .iter()
+        .find_map(|t| match t {
+            Tag::DefineSprite { id, tags, .. } if *id == wanted => Some(tags.as_slice()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("edited movie keeps sprite {wanted}"))
 }
 
 fn row_template(movie: &Movie) -> &[Tag] {
@@ -687,7 +709,7 @@ fn stats_panel_output_keeps_row_text_fields_positive_width() {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("profile_05_010_layout.toml"),
     )
     .expect("checked-in ProfileSelect layout parses");
-    for name in [
+    let names = [
         "PlayerName",
         "StaticText_110502",
         "Level",
@@ -695,10 +717,10 @@ fn stats_panel_output_keeps_row_text_fields_positive_width() {
         "PlayTime",
         STATS_FIELD_NAME,
         CHAR_STATS_FIELD_NAME,
-        DRIVE_CELL_FIELD_NAMES[0],
-        DRIVE_CELL_FIELD_NAMES[1],
-        DRIVE_CELL_FIELD_NAMES[2],
-    ] {
+    ]
+    .into_iter()
+    .chain(DRIVE_CELL_FIELD_NAMES);
+    for name in names {
         let field = row_text_field(&movie, name);
         let Tag::DefineEditText { bounds, .. } = field else {
             panic!("{name} is a DefineEditText");
@@ -709,7 +731,11 @@ fn stats_panel_output_keeps_row_text_fields_positive_width() {
             bounds.x_min,
             bounds.x_max
         );
-        let expected = layout.field(name);
+        let expected = if DRIVE_CELL_FIELD_NAMES.contains(&name) {
+            layout.field(DRIVE_CELL_FIELD_NAMES[0])
+        } else {
+            layout.field(name)
+        };
         assert_eq!(
             bounds.x_max - bounds.x_min,
             expected.width * 20,
@@ -968,7 +994,7 @@ fn stats_panel_output_keeps_unmerged_vanilla_character_row_text_from_overlapping
 
 /// Picker-owned rows -- `RowSlotFieldVisibility::browse_row`. Every one draws its label in
 /// `PlayerName`; file/folder rows may draw the wide `ErStats` metadata line and a staged `Location`
-/// timestamp, while the mutually-exclusive drive row draws the three drive cells instead.
+/// timestamp, while the mutually-exclusive drive row draws its populated drive cells instead.
 ///
 /// The save-picker rendering had a CONTAINMENT gate (every field inside the row frame) but no
 /// overlap gate, so two picker fields could sit on top of each other and stay green. Containment
@@ -986,9 +1012,9 @@ fn stats_panel_output_keeps_save_picker_row_text_from_overlapping() {
     // A DRIVE row: the strip is populated and the name is the root label.
     let drive_row = [
         ("PlayerName", "Save Root", None),
-        (DRIVE_CELL_FIELD_NAMES[0], "[C:]", None),
-        (DRIVE_CELL_FIELD_NAMES[1], "[S:]", None),
-        (DRIVE_CELL_FIELD_NAMES[2], ">Z:<", None),
+        (DRIVE_CELL_FIELD_NAMES[0], "C:", None),
+        (DRIVE_CELL_FIELD_NAMES[1], "S:", None),
+        (DRIVE_CELL_FIELD_NAMES[2], "Z:", None),
     ];
     // A FILE row: the metadata line is populated, the drive cells are hidden (and blanked as
     // redundant content hygiene), and the timestamp is staged into Location.
@@ -1113,9 +1139,9 @@ fn stats_panel_output_keeps_save_picker_rendered_text_inside_the_visible_row_con
         ("PlayerName", "DRIVES", None),
         ("PlayerName", "er-effects-save-", None),
         ("PlayerName", "ER0000.sl2", None),
-        ("DriveCell_0", "[C:]", None),
-        ("DriveCell_1", "[S:]", None),
-        ("DriveCell_2", ">Z:<", None),
+        ("DriveCell_0", "C:", None),
+        ("DriveCell_1", "S:", None),
+        ("DriveCell_2", "Z:", None),
         (STATS_FIELD_NAME, "PARENT FOLDER / Go to save-files", None),
         (
             STATS_FIELD_NAME,
@@ -1147,7 +1173,7 @@ fn stats_panel_output_keeps_inline_text_field_centers_inside_compact_row_slot() 
     let rects = row_text_rects(&movie);
     let slot_top = -(COMPACT_ROW_PITCH_PX * 20) / 2;
     let slot_bottom = (COMPACT_ROW_PITCH_PX * 20) / 2;
-    for name in [
+    let names = [
         "PlayerName",
         "Location",
         "Level",
@@ -1155,10 +1181,10 @@ fn stats_panel_output_keeps_inline_text_field_centers_inside_compact_row_slot() 
         "PlayTime",
         STATS_FIELD_NAME,
         CHAR_STATS_FIELD_NAME,
-        DRIVE_CELL_FIELD_NAMES[0],
-        DRIVE_CELL_FIELD_NAMES[1],
-        DRIVE_CELL_FIELD_NAMES[2],
-    ] {
+    ]
+    .into_iter()
+    .chain(DRIVE_CELL_FIELD_NAMES);
+    for name in names {
         let rect = rects
             .iter()
             .find(|r| r.name == name)
@@ -1225,11 +1251,9 @@ fn stats_panel_output_keeps_injected_stats_text_from_overlapping_native_text() {
                 "Level",
                 "StaticText_110502",
                 "PlayTime",
-                DRIVE_CELL_FIELD_NAMES[0],
-                DRIVE_CELL_FIELD_NAMES[1],
-                DRIVE_CELL_FIELD_NAMES[2],
             ]
             .contains(&r.name.as_str())
+            || DRIVE_CELL_FIELD_NAMES.contains(&r.name.as_str())
     });
     let (mut top, mut bottom) = (i32::MAX, i32::MIN);
     for r in guarded {
@@ -1401,6 +1425,189 @@ fn stats_panel_output_scales_row_internal_chrome_to_compact_pitch() {
             "CursorBody should keep the shared 54px button art at the same height as Backing"
         );
     }
+}
+
+#[test]
+fn drive_cell_row_coordinates_are_the_mouse_stage_coordinates() {
+    let Some(vanilla) = read_vanilla_or_skip() else {
+        return;
+    };
+    let out = stats_panel(&vanilla).expect("edits must apply cleanly");
+    let movie = Movie::parse(&out).expect("edited movie parses");
+
+    let root_profile_list = movie
+        .tags
+        .iter()
+        .find_map(|tag| match tag {
+            Tag::PlaceObject2 {
+                character_id: Some(87),
+                matrix: Some(matrix),
+                ..
+            } => Some(matrix),
+            _ => None,
+        })
+        .expect("root places ProfileList char 87");
+    assert_eq!(root_profile_list.translate_x, 960 * 20);
+    assert!(!root_profile_list.has_scale);
+
+    for (parent, child) in [(87, 86), (86, 78), (78, 77), (77, 76)] {
+        let matrix = sprite(&movie, parent)
+            .iter()
+            .find_map(|tag| match tag {
+                Tag::PlaceObject2 {
+                    character_id: Some(id),
+                    matrix: Some(matrix),
+                    ..
+                } if *id == child => Some(matrix),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("sprite {parent} places child {child}"));
+        assert_eq!(
+            matrix.translate_x, 0,
+            "sprite {parent}->{child} adds no x offset"
+        );
+        assert!(
+            !matrix.has_scale,
+            "sprite {parent}->{child} adds no x scale"
+        );
+    }
+}
+
+#[test]
+fn stats_panel_output_gives_each_drive_cell_its_own_button_chrome() {
+    let Some(vanilla) = read_vanilla_or_skip() else {
+        return;
+    };
+    let out = stats_panel(&vanilla).expect("edits must apply cleanly");
+    let movie = Movie::parse(&out).expect("edited movie parses");
+    let row = row_template(&movie);
+    assert!(
+        !row.iter().any(|tag| matches!(
+            tag,
+            Tag::PlaceObject2 { name: Some(name), .. } if name.starts_with("DriveCursor_")
+        )),
+        "drive cells reuse the row's one native animated Cursor; synthetic always-present cursor copies reintroduce stale multi-row highlights"
+    );
+    assert_eq!(
+        row.iter()
+            .filter(|tag| matches!(
+                tag,
+                Tag::PlaceObject2 { name: Some(name), .. } if name == "Cursor"
+            ))
+            .count(),
+        1,
+        "native list selection must retain exactly one Cursor owner per row"
+    );
+    let layout = Profile05_010Layout::parse(include_str!("../profile_05_010_layout.toml"))
+        .expect("checked-in visual editor schema parses");
+    let drive_template = layout.field(DRIVE_CELL_FIELD_NAMES[0]);
+    assert_eq!(drive_template.x, DRIVE_CELL_FIRST_X_PX);
+    assert_eq!(drive_template.y, DRIVE_CELL_Y_PX);
+    assert_eq!(drive_template.width as f32, DRIVE_CELL_WIDTH_PX);
+    assert_eq!(
+        layout.field(DRIVE_CELL_FIELD_NAMES[1]).x - drive_template.x,
+        DRIVE_CELL_PITCH_PX
+    );
+    let button_center_offset_twips =
+        ((drive_template.width as f32 * 0.5 - 2.0 + layout.row_chrome.drive_button.x) * 20.0)
+            .round() as i32;
+    let button_center_y_twips = (drive_template.y - 2.0
+        + drive_template.clip_height as f32 * 0.5
+        + layout.row_chrome.drive_button.y)
+        .mul_add(20.0, 0.0)
+        .round() as i32;
+
+    for index in 0..DRIVE_CELL_CAPACITY {
+        let button_name = DRIVE_BUTTON_FIELD_NAMES[index];
+        let text_name = DRIVE_CELL_FIELD_NAMES[index];
+        let (button_depth, button_character, button_matrix) = row
+            .iter()
+            .find_map(|tag| match tag {
+                Tag::PlaceObject2 {
+                    depth,
+                    character_id,
+                    matrix: Some(matrix),
+                    name: Some(name),
+                    ..
+                } if name == button_name => Some((*depth, *character_id, matrix)),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("row template places {button_name}"));
+        let (text_depth, text_matrix) = row
+            .iter()
+            .find_map(|tag| match tag {
+                Tag::PlaceObject2 {
+                    depth,
+                    matrix: Some(matrix),
+                    name: Some(name),
+                    ..
+                } if name == text_name => Some((*depth, matrix)),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("row template places {text_name}"));
+
+        assert_eq!(
+            button_character,
+            Some(54),
+            "{button_name} reuses the native normal-button frame art"
+        );
+        assert!(
+            button_depth < text_depth,
+            "{button_name} must render behind {text_name}"
+        );
+        assert!(
+            button_matrix.has_scale && button_matrix.scale_x > 0 && button_matrix.scale_y > 0,
+            "{button_name} must have visible nonzero button geometry: {button_matrix:?}"
+        );
+        assert!(
+            (button_matrix.translate_x - (text_matrix.translate_x + button_center_offset_twips))
+                .abs()
+                <= 20,
+            "{button_name} must be optically aligned under {text_name}: button={button_matrix:?} text={text_matrix:?}"
+        );
+        assert_eq!(
+            button_matrix.translate_y, button_center_y_twips,
+            "{button_name} must use the user's authored vertical center"
+        );
+    }
+
+    let (path_button_depth, path_button_character) = row
+        .iter()
+        .find_map(|tag| match tag {
+            Tag::PlaceObject2 {
+                depth,
+                character_id,
+                name: Some(name),
+                ..
+            } if name == CURRENT_PATH_BUTTON_NAME => Some((*depth, *character_id)),
+            _ => None,
+        })
+        .expect("row template places the full-path button");
+    let path_text_depth = row
+        .iter()
+        .find_map(|tag| match tag {
+            Tag::PlaceObject2 {
+                depth,
+                name: Some(name),
+                ..
+            } if name == CURRENT_PATH_FIELD_NAME => Some(*depth),
+            _ => None,
+        })
+        .expect("row template places the full-path text field");
+    assert_eq!(path_button_character, Some(54));
+    assert!(path_button_depth < path_text_depth);
+
+    let first = row_placement_matrix(row, DRIVE_CELL_FIELD_NAMES[0]);
+    let last = row_placement_matrix(row, DRIVE_CELL_FIELD_NAMES[DRIVE_CELL_CAPACITY - 1]);
+    assert!(
+        first.translate_x - 2 * 20 >= PROFILE_ROW_VISIBLE_CONTENT_LEFT_PX * 20,
+        "first drive button must stay inside the row: {first:?}"
+    );
+    assert!(
+        last.translate_x + (drive_template.width - 2) * 20
+            <= PROFILE_ROW_VISIBLE_CONTENT_RIGHT_PX * 20,
+        "all 26 possible drive buttons must fit inside the row: {last:?}"
+    );
 }
 
 #[test]
