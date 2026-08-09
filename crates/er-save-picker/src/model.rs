@@ -25,6 +25,9 @@
 //! 3. `[ C: > Z: ]`   -- the drive cycler, only when more than one drive is mounted;
 //! 4. the current scroll window's directory / save-file entries.
 //!
+//! Overflow is represented by the native `05_010` scrollbar affordance plus edge-hover restaging,
+//! not by consuming two row slots with `[ SCROLL ^ ]` / `[ SCROLL v ]` pseudo-entries.
+//!
 //! `[ new ]` SITS ABOVE THE NAVIGATION ROWS, which is the one place the two intents' layouts
 //! differ, and it is deliberate. Since the Save Game row press opens this browser with no question
 //! in front of it (2026-07-31), the destination list is the first thing the user sees after
@@ -63,6 +66,8 @@ use crate::host::append_autoload_debug;
 pub const PICKER_ROW_COUNT: usize = 10;
 /// ProfileSummary name field capacity: 16 UTF-16 units + NUL (0x22 bytes).
 pub const PICKER_ROW_NAME_UTF16_MAX: usize = 16;
+/// Drive cells that fit in the injected inline stats field without wrapping/clipping.
+const DRIVE_STRIP_MAX_CELLS: usize = 3;
 /// Label of the destination-intent `[ new ]` row (7 UTF-16 units, inside the name budget).
 pub const PICKER_NEW_FILE_LABEL: &str = "[ new ]";
 /// Marker prefixed to the stats line of the row that IS the save currently loaded.
@@ -262,14 +267,21 @@ pub struct SavePickerModel {
     /// Highlighted row index (0..PICKER_ROW_COUNT) for the overlay picker. Clamped to a
     /// selectable (non-Empty) row on every listing change.
     cursor: usize,
+    /// Leftmost real drive index visible in the one-row drive strip.
+    drive_strip_offset: usize,
     /// Last rejection/status line the picker should render on the current surface. Cleared by
     /// navigation or a fresh pick attempt so a stale error never follows the user into another
     /// folder/scroll window.
     status_message: Option<PickerStatusMessage>,
     /// Menu-pump dwell counter for native edge scrolling. The native cursor cannot report an
     /// attempted move past the first/last row, so while it rests on an edge this counter turns a held
-    /// edge into steady one-row window slides.
+    /// edge into one-row window slides.
     edge_scroll_ticks: u8,
+    /// Number of consecutive edge-scroll slides while held on an edge. Used to accelerate from a slow
+    /// first repeat to a capped repeat rate that stays below the old constant 8-tick speed.
+    edge_scroll_repeats: u8,
+    /// 0 = no held edge, 1 = scrolling up, 2 = scrolling down. Direction changes restart the slow dwell.
+    edge_scroll_direction: u8,
     /// Mounted drives that browse as folders (cached at open). Two or more of them add the drive
     /// cycler row; the overlay picker also cycles them with left/right.
     drives: Vec<PathBuf>,
@@ -330,6 +342,15 @@ fn path_file_name_text(path: &Path) -> Option<&str> {
     }
     let index = trimmed.rfind(['\\', '/'])?;
     trimmed.get(index + 1..).filter(|name| !name.is_empty())
+}
+
+fn edge_scroll_dwell_ticks_for_repeat(repeats: u8) -> u8 {
+    const INITIAL_DWELL_TICKS: u8 = 40;
+    const DWELL_STEP_TICKS: u8 = 2;
+    const MIN_DWELL_TICKS: u8 = 11;
+    INITIAL_DWELL_TICKS
+        .saturating_sub(repeats.saturating_mul(DWELL_STEP_TICKS))
+        .max(MIN_DWELL_TICKS)
 }
 
 fn path_text_eq_case_insensitive(left: &Path, right: &Path) -> bool {
@@ -548,8 +569,11 @@ impl SavePickerModel {
             entries: Vec::new(),
             scroll_offset: 0,
             cursor: 0,
+            drive_strip_offset: 0,
             status_message: None,
             edge_scroll_ticks: 0,
+            edge_scroll_repeats: 0,
+            edge_scroll_direction: 0,
             drives: enumerate_drives(),
             last_dir_per_drive: HashMap::new(),
             intent,
@@ -617,57 +641,51 @@ impl SavePickerModel {
             .then(|| self.pinned_row_count() + usize::from(self.has_parent_row()))
     }
 
-    /// Row index of the old page cycler. Pagination is removed; overflow is represented by scroll
-    /// affordance rows plus native-window restaging instead.
+    /// Row index of the old page cycler. Pagination is removed; overflow is represented by the
+    /// movie's native scrollbar affordance plus native-window restaging instead.
     pub fn next_page_row(&self) -> Option<usize> {
         None
     }
 
+    /// Compatibility accessor for the old visible scroll-up pseudo-row. Scroll controls no longer
+    /// consume row slots; held native cursor edges restage the entry window instead.
     pub fn scroll_up_row(&self) -> Option<usize> {
-        (self.scroll_offset > 0).then_some(self.entry_row_base())
+        None
     }
 
+    /// Compatibility accessor for the old visible scroll-down pseudo-row. Scroll controls no longer
+    /// consume row slots; held native cursor edges restage the entry window instead.
     pub fn scroll_down_row(&self) -> Option<usize> {
-        (self.scroll_offset < self.max_scroll_offset())
-            .then(|| self.visible_row_count().saturating_sub(1))
+        None
     }
 
     fn entry_window_row_base(&self) -> usize {
-        self.entry_row_base() + usize::from(self.scroll_up_row().is_some())
+        self.entry_row_base()
     }
 
     /// Rows the window actually shows. Slots at or beyond this are staged UNOCCUPIED so the native
     /// list builder omits them (no name, no level, no playtime).
     pub fn visible_row_count(&self) -> usize {
-        let rows = self.entry_window_row_base()
-            + self.window_entries().len()
-            + usize::from(self.scroll_offset < self.max_scroll_offset());
+        let rows = self.entry_window_row_base() + self.window_entries().len();
         // Never zero: an empty single-drive root has nothing above and nothing to list, and a
         // zero-row native list would leave the window with no selectable item at all. Row 0
         // becomes the `[ root ]` dead-end marker instead.
         rows.max(1)
     }
 
-    /// Directory/save entries that fit in the native ten-row transport after fixed rows and visible
-    /// scroll affordance rows.
+    /// Directory/save entries that fit in the native ten-row transport after fixed rows. Overflow
+    /// does not consume row slots; the compact movie's ScrollBarV and edge-hover restaging own that
+    /// affordance.
     fn entry_window_capacity(&self) -> usize {
-        let fixed = self.entry_row_base()
-            + usize::from(self.scroll_offset > 0)
-            + usize::from(self.scroll_offset < self.max_scroll_offset());
-        PICKER_ROW_COUNT.saturating_sub(fixed).max(1)
+        PICKER_ROW_COUNT
+            .saturating_sub(self.entry_row_base())
+            .max(1)
     }
 
     fn max_scroll_offset(&self) -> usize {
-        let no_marker_capacity = PICKER_ROW_COUNT
-            .saturating_sub(self.entry_row_base())
-            .max(1);
-        if self.entries.len() <= no_marker_capacity {
-            return 0;
-        }
-        let end_capacity = PICKER_ROW_COUNT
-            .saturating_sub(self.entry_row_base() + 1)
-            .max(1);
-        self.entries.len().saturating_sub(end_capacity)
+        self.entries
+            .len()
+            .saturating_sub(self.entry_window_capacity())
     }
 
     fn clamp_scroll_offset(&mut self) {
@@ -676,6 +694,8 @@ impl SavePickerModel {
 
     fn reset_edge_scroll_dwell(&mut self) {
         self.edge_scroll_ticks = 0;
+        self.edge_scroll_repeats = 0;
+        self.edge_scroll_direction = 0;
     }
 
     /// Compatibility name for callers/tests that care how many entries fit without scrolling.
@@ -787,6 +807,151 @@ impl SavePickerModel {
         self.drives.len()
     }
 
+    fn drive_strip_real_capacity(&self) -> usize {
+        let left = usize::from(self.drive_strip_offset > 0);
+        let right = usize::from(
+            self.drive_strip_offset + DRIVE_STRIP_MAX_CELLS.saturating_sub(left)
+                < self.drives.len(),
+        );
+        DRIVE_STRIP_MAX_CELLS.saturating_sub(left + right).max(1)
+    }
+
+    fn clamp_drive_strip_offset(&mut self) {
+        let cap = DRIVE_STRIP_MAX_CELLS.max(1);
+        self.drive_strip_offset = self
+            .drive_strip_offset
+            .min(self.drives.len().saturating_sub(1));
+        if self.drive_strip_offset + cap > self.drives.len() {
+            self.drive_strip_offset = self.drives.len().saturating_sub(cap);
+        }
+    }
+
+    fn ensure_current_drive_cell_visible(&mut self) {
+        let idx = self.drive_index();
+        if idx < self.drive_strip_offset {
+            self.drive_strip_offset = idx;
+        }
+        let cap = self.drive_strip_real_capacity();
+        if idx >= self.drive_strip_offset + cap {
+            self.drive_strip_offset = idx.saturating_sub(cap.saturating_sub(1));
+        }
+        self.clamp_drive_strip_offset();
+    }
+
+    pub fn drive_strip_cell_count(&self) -> usize {
+        if !self.has_drive_row() {
+            return 0;
+        }
+        let mut cells = self.drive_strip_real_capacity().min(self.drives.len());
+        cells += usize::from(self.drive_strip_offset > 0);
+        cells += usize::from(
+            self.drive_strip_offset + self.drive_strip_real_capacity() < self.drives.len(),
+        );
+        cells.min(DRIVE_STRIP_MAX_CELLS)
+    }
+
+    fn drive_strip_cell_label(&self, drive_index: usize) -> String {
+        let current = self.current_drive_root();
+        let drive = self.drives.get(drive_index).unwrap_or(&current);
+        let short = Self::drive_short(drive);
+        if drive == &current {
+            format!(">{short}<")
+        } else {
+            format!("[{short}]")
+        }
+    }
+
+    fn drive_strip_cells(&self) -> Vec<String> {
+        if !self.has_drive_row() {
+            return Vec::new();
+        }
+        let mut labels = Vec::new();
+        if self.drive_strip_offset > 0 {
+            labels.push("[<]".to_owned());
+        }
+        let cap = self.drive_strip_real_capacity();
+        for idx in self.drive_strip_offset..(self.drive_strip_offset + cap).min(self.drives.len()) {
+            labels.push(self.drive_strip_cell_label(idx));
+        }
+        if self.drive_strip_offset + cap < self.drives.len() {
+            labels.push("[>]".to_owned());
+        }
+        labels
+    }
+
+    fn drive_strip_label(&self) -> String {
+        self.drive_strip_cells().join("  ")
+    }
+
+    /// Text for one visual drive-strip cell on the drive row. The runtime maps these cells onto
+    /// distinct ProfileSelect child text fields (`DriveCell_0..2`) instead of one concatenated row label.
+    pub fn drive_row_cell_label(&self, row: usize, cell: usize) -> Option<String> {
+        (self.drive_row() == Some(row))
+            .then(|| self.drive_strip_cells().get(cell).cloned())
+            .flatten()
+    }
+
+    pub fn activate_drive_strip_cell(&mut self, cell: usize) -> bool {
+        if !self.has_drive_row() || cell >= self.drive_strip_cell_count() {
+            return false;
+        }
+        let mut cell = cell;
+        if self.drive_strip_offset > 0 {
+            if cell == 0 {
+                self.drive_strip_offset = self.drive_strip_offset.saturating_sub(1);
+                return true;
+            }
+            cell -= 1;
+        }
+        let cap = self.drive_strip_real_capacity();
+        if cell >= cap {
+            if self.drive_strip_offset + cap < self.drives.len() {
+                self.drive_strip_offset += 1;
+                self.clamp_drive_strip_offset();
+                return true;
+            }
+            return false;
+        }
+        let Some(root) = self.drives.get(self.drive_strip_offset + cell).cloned() else {
+            return false;
+        };
+        let changed = self.switch_to_drive_root(root);
+        if changed {
+            if let Some(row) = self.drive_row() {
+                self.cursor = row;
+            }
+        }
+        changed
+    }
+
+    fn switch_to_drive_root(&mut self, root: PathBuf) -> bool {
+        self.clear_status_message();
+        let cur = self.current_drive_root();
+        if cur == root {
+            self.ensure_current_drive_cell_visible();
+            return true;
+        }
+        self.last_dir_per_drive
+            .insert(cur.clone(), self.current_dir.clone());
+        let resumed = self
+            .last_dir_per_drive
+            .get(&root)
+            .filter(|dir| dir.is_dir())
+            .cloned();
+        let restored = resumed.is_some();
+        self.current_dir = resumed.unwrap_or_else(|| root.clone());
+        self.refresh();
+        self.ensure_current_drive_cell_visible();
+        self.cursor = self.first_selectable_row();
+        append_autoload_debug(format_args!(
+            "save-picker: drive select {} -> {} (resumed_last_folder={restored} dir='{}')",
+            cur.display(),
+            root.display(),
+            self.current_dir.display()
+        ));
+        true
+    }
+
     /// Switch to the previous/next mounted drive (wrapping), RESUMING the folder last browsed on
     /// that drive. No-op with fewer than two drives.
     ///
@@ -799,25 +964,19 @@ impl SavePickerModel {
         let Some(root) = self.neighbour_drive(forward) else {
             return;
         };
-        self.clear_status_message();
-        let cur = self.current_drive_root();
-        self.last_dir_per_drive
-            .insert(cur.clone(), self.current_dir.clone());
-        let resumed = self
-            .last_dir_per_drive
-            .get(&root)
-            .filter(|dir| dir.is_dir())
-            .cloned();
-        let restored = resumed.is_some();
-        self.current_dir = resumed.unwrap_or_else(|| root.clone());
-        self.refresh();
-        self.cursor = self.first_selectable_row();
-        append_autoload_debug(format_args!(
-            "save-picker: drive cycle {} -> {} (resumed_last_folder={restored} dir='{}')",
-            cur.display(),
-            root.display(),
-            self.current_dir.display()
-        ));
+        let _ = self.switch_to_drive_root(root);
+    }
+
+    pub fn cycle_drive_from_drive_strip(&mut self, forward: bool) -> bool {
+        let before = self.current_drive_root();
+        self.cycle_drive(forward);
+        let changed = self.current_drive_root() != before;
+        if changed {
+            if let Some(row) = self.drive_row() {
+                self.cursor = row;
+            }
+        }
+        changed
     }
 
     /// True when the highlighted row is the drive cycler (so the overlay's left/right cycle drives
@@ -866,7 +1025,6 @@ impl SavePickerModel {
 
     /// Native `05_010` edge-scroll adapter. Returns true when row records must be restaged.
     pub fn edge_scroll_from_native_cursor_tick(&mut self, cursor: usize) -> bool {
-        const EDGE_SCROLL_DWELL_TICKS: u8 = 8;
         let first_content_row = self
             .entry_row_base()
             .min(PICKER_ROW_COUNT.saturating_sub(1));
@@ -886,12 +1044,24 @@ impl SavePickerModel {
             self.reset_edge_scroll_dwell();
             return false;
         };
+        let direction_code = if down { 2 } else { 1 };
+        if self.edge_scroll_direction != direction_code {
+            self.edge_scroll_ticks = 0;
+            self.edge_scroll_repeats = 0;
+            self.edge_scroll_direction = direction_code;
+        }
         self.edge_scroll_ticks = self.edge_scroll_ticks.saturating_add(1);
-        if self.edge_scroll_ticks < EDGE_SCROLL_DWELL_TICKS {
+        if self.edge_scroll_ticks < edge_scroll_dwell_ticks_for_repeat(self.edge_scroll_repeats) {
             return false;
         }
         self.edge_scroll_ticks = 0;
-        self.scroll_window_one(down)
+        if self.scroll_window_one(down) {
+            self.edge_scroll_repeats = self.edge_scroll_repeats.saturating_add(1);
+            true
+        } else {
+            self.reset_edge_scroll_dwell();
+            false
+        }
     }
 
     pub fn entry_count(&self) -> usize {
@@ -1029,12 +1199,6 @@ impl SavePickerModel {
         if self.drive_row() == Some(row) {
             return PickerRow::DriveCycle;
         }
-        if self.scroll_up_row() == Some(row) {
-            return PickerRow::ScrollUp;
-        }
-        if self.scroll_down_row() == Some(row) {
-            return PickerRow::ScrollDown;
-        }
         if self.next_page_row() == Some(row) {
             return PickerRow::NextPage;
         }
@@ -1110,13 +1274,10 @@ impl SavePickerModel {
                 }
                 PickerActivation::Ignored
             }
-            // The native window gives us row ACTIVATION and nothing else, so the drive switch is a
-            // row: one activation advances one drive, wrapping, and the row's own label names the
-            // drive it is about to move to.
-            PickerRow::DriveCycle => {
-                self.cycle_drive(true);
-                PickerActivation::Repopulate
-            }
+            // The row itself is a strip container. Selecting a drive is a cell-level action routed
+            // through `activate_drive_strip_cell`; pressing the row background must not cycle through
+            // drives one-by-one.
+            PickerRow::DriveCycle => PickerActivation::Ignored,
             PickerRow::Dir(path) => {
                 self.current_dir = path;
                 self.refresh();
@@ -1157,19 +1318,10 @@ impl SavePickerModel {
             .to_owned()
     }
 
-    /// `[ C: > Z: ]` -- the drive being browsed and the one activation moves to. Naming the next
-    /// drive is what keeps the row from being a blind cycler when three or more drives are mounted,
-    /// and naming the current one is what makes "which drive am I on" answerable from any folder.
-    /// Two 2-character drive names plus the frame is 11 UTF-16 units, inside the name budget, and
-    /// contains no comma.
+    /// Name field for the drive strip row. It is only the row title; the actual clickable drive cells
+    /// render through separate DLL-owned row children so the UI no longer lies with one merged label.
     fn drive_row_label(&self) -> String {
-        let cur = self.current_drive_root();
-        let next = self.neighbour_drive(true).unwrap_or_else(|| cur.clone());
-        format!(
-            "[ {} > {} ]",
-            Self::drive_short(&cur),
-            Self::drive_short(&next)
-        )
+        "DRIVES".to_owned()
     }
 
     /// Display label for `row`, truncated to the ProfileSummary name budget (16 UTF-16 units).
@@ -1229,20 +1381,7 @@ impl SavePickerModel {
                     .map(|name| format!("Go to {name}"))
                     .unwrap_or_else(|| "Go up one folder".to_owned()),
             )),
-            PickerRow::DriveCycle => {
-                let current = self.current_drive_root();
-                let next = self
-                    .neighbour_drive(true)
-                    .unwrap_or_else(|| current.clone());
-                Some((
-                    "SWITCH DRIVE".to_owned(),
-                    format!(
-                        "{} -> {}",
-                        Self::drive_short(&current),
-                        Self::drive_short(&next)
-                    ),
-                ))
-            }
+            PickerRow::DriveCycle => None,
             PickerRow::AtRoot => Some((
                 "DRIVE ROOT".to_owned(),
                 self.current_drive_root().display().to_string(),
@@ -1285,11 +1424,8 @@ impl SavePickerModel {
                 Some(name) => format!("[..] UP    {name}"),
                 None => "[..] UP".to_owned(),
             },
-            // The overlay drives this row with left/right as well as select, so say both.
-            PickerRow::DriveCycle => format!(
-                "DRIVE < {} >   (SELECT: NEXT)",
-                self.current_drive_root().display()
-            ),
+            // The overlay drives this row with left/right as well as select; mouse users click a cell.
+            PickerRow::DriveCycle => format!("DRIVES {}", self.drive_strip_label()),
             PickerRow::AtRoot => format!("[ROOT] {}", self.current_drive_root().display()),
             PickerRow::Dir(path) => self.dir_display_name(&path),
             PickerRow::File(path) => path
@@ -1462,8 +1598,11 @@ mod tests {
                 .collect(),
             scroll_offset: 0,
             cursor: 0,
+            drive_strip_offset: 0,
             status_message: None,
             edge_scroll_ticks: 0,
+            edge_scroll_repeats: 0,
+            edge_scroll_direction: 0,
             drives: Vec::new(),
             last_dir_per_drive: HashMap::new(),
             intent,
@@ -1946,10 +2085,8 @@ mod tests {
             Some(("PARENT FOLDER".to_owned(), r"Go to Z:\".to_owned()))
         );
         assert_eq!(model.row_meaning(1), PickerRow::DriveCycle);
-        assert_eq!(
-            model.row_auxiliary_lines(1),
-            Some(("SWITCH DRIVE".to_owned(), "Z: -> C:".to_owned()))
-        );
+        assert_eq!(label_of(&model, 1), "DRIVES");
+        assert_eq!(model.row_auxiliary_lines(1), None);
         assert!(
             matches!(model.row_meaning(2), PickerRow::File(_)),
             "entry base must still derive from the load-source layout"
@@ -1962,8 +2099,8 @@ mod tests {
     }
 
     /// Save-destination browse adds the pinned `[ new ]` row ABOVE the same navigation rows; the
-    /// auxiliary lines follow those derived meanings rather than hard-coded row offsets, including
-    /// the page cycler at the bottom of an overflowing listing.
+    /// auxiliary lines follow those derived meanings rather than hard-coded row offsets. Overflow
+    /// leaves the row slots for real entries; the movie scrollbar owns the visual affordance.
     #[test]
     fn save_destination_auxiliary_lines_follow_the_shifted_layout() {
         let model = with_drives(
@@ -1982,17 +2119,17 @@ mod tests {
             Some(("PARENT FOLDER".to_owned(), r"Go to Z:\".to_owned()))
         );
         assert_eq!(model.row_meaning(2), PickerRow::DriveCycle);
-        assert_eq!(
-            model.row_auxiliary_lines(2),
-            Some(("SWITCH DRIVE".to_owned(), "Z: -> C:".to_owned()))
-        );
+        assert_eq!(label_of(&model, 2), "DRIVES");
+        assert_eq!(model.row_auxiliary_lines(2), None);
         assert_eq!(model.next_page_row(), None);
+        assert_eq!(model.scroll_up_row(), None);
+        assert_eq!(model.scroll_down_row(), None);
         assert_eq!(model.visible_row_count(), PICKER_ROW_COUNT);
-        assert_eq!(model.row_meaning(9), PickerRow::ScrollDown);
         assert_eq!(
-            model.row_auxiliary_lines(9),
-            Some(("MORE BELOW".to_owned(), "Show rows after 6".to_owned()))
+            model.row_meaning(9),
+            PickerRow::File(PathBuf::from(r"Z:\saves").join("save6.sl2"))
         );
+        assert_eq!(model.row_auxiliary_lines(9), None);
     }
 
     /// Auxiliary copy is keyed to the same row meanings activation uses. A directory line means
@@ -2209,6 +2346,67 @@ mod tests {
         assert_eq!(format_last_saved(60, -3_600), None);
     }
 
+    #[test]
+    fn drive_row_renders_a_clickable_cell_strip() {
+        let model = with_drives(
+            model_with(PickerIntent::LoadSource, "Z:\\saves", 2),
+            &["A:\\", "B:\\", "C:\\", "D:\\"],
+        );
+        let row = model.drive_row().expect("drive row exists");
+        assert_eq!(label_of(&model, row), "DRIVES");
+        assert_eq!(model.row_auxiliary_lines(row), None);
+        assert_eq!(model.drive_strip_cell_count(), 3);
+        assert_eq!(model.drive_row_cell_label(row, 0).as_deref(), Some("[A:]"));
+        assert_eq!(model.drive_row_cell_label(row, 1).as_deref(), Some("[B:]"));
+        assert_eq!(model.drive_row_cell_label(row, 2).as_deref(), Some("[>]"));
+    }
+
+    #[test]
+    fn drive_strip_cells_select_absolute_drives_and_scroll_in_place() {
+        let mut model = with_drives(
+            model_with(PickerIntent::LoadSource, "A:\\saves", 2),
+            &[
+                "A:\\", "B:\\", "C:\\", "D:\\", "E:\\", "F:\\", "G:\\", "H:\\",
+            ],
+        );
+        let row = model.drive_row().expect("drive row exists");
+        assert_eq!(label_of(&model, row), "DRIVES");
+        assert_eq!(model.row_auxiliary_lines(row), None);
+        assert_eq!(model.drive_row_cell_label(row, 0).as_deref(), Some(">A:<"));
+        assert_eq!(model.drive_row_cell_label(row, 1).as_deref(), Some("[B:]"));
+        assert_eq!(model.drive_row_cell_label(row, 2).as_deref(), Some("[>]"));
+        assert!(model.activate_drive_strip_cell(1));
+        assert_eq!(model.current_drive_root(), PathBuf::from("B:\\"));
+        let row = model.drive_row().expect("drive row still exists");
+        assert_eq!(
+            model.cursor, row,
+            "cell activation keeps keyboard/mouse focus on the drive row"
+        );
+        assert_eq!(model.drive_row_cell_label(row, 0).as_deref(), Some("[A:]"));
+        assert_eq!(model.drive_row_cell_label(row, 1).as_deref(), Some(">B:<"));
+        assert_eq!(model.drive_row_cell_label(row, 2).as_deref(), Some("[>]"));
+        assert!(model.activate_drive_strip_cell(2));
+        let row = model.drive_row().expect("drive row still exists");
+        assert_eq!(model.drive_row_cell_label(row, 0).as_deref(), Some("[<]"));
+        assert_eq!(model.drive_row_cell_label(row, 1).as_deref(), Some(">B:<"));
+        assert_eq!(model.drive_row_cell_label(row, 2).as_deref(), Some("[>]"));
+        assert!(model.activate_drive_strip_cell(0));
+        let row = model.drive_row().expect("drive row still exists");
+        assert_eq!(
+            model.cursor, row,
+            "strip-scroll cells keep focus on the drive row"
+        );
+        assert_eq!(model.drive_row_cell_label(row, 0).as_deref(), Some("[A:]"));
+        assert_eq!(model.drive_row_cell_label(row, 1).as_deref(), Some(">B:<"));
+        assert_eq!(model.drive_row_cell_label(row, 2).as_deref(), Some("[>]"));
+        assert!(model.cycle_drive_from_drive_strip(true));
+        let row = model.drive_row().expect("drive row still exists");
+        assert_eq!(
+            model.cursor, row,
+            "left/right drive cycling keeps focus on the drive row"
+        );
+    }
+
     /// The drive cycler must be excluded from entry indexing in BOTH intents: it shifts the entry
     /// base by exactly one and never resolves to an entry itself.
     #[test]
@@ -2249,7 +2447,7 @@ mod tests {
         let long = PICKER_ROW_COUNT * 2;
         assert_eq!(
             model_with(PickerIntent::LoadSource, "Z:\\saves", long).entries_per_page(),
-            8
+            9
         );
         assert_eq!(
             with_drives(
@@ -2257,49 +2455,44 @@ mod tests {
                 &["C:\\", "Z:\\"]
             )
             .entries_per_page(),
-            7
+            8
         );
-        assert_eq!(destination("Z:\\saves", long).entries_per_page(), 7);
+        assert_eq!(destination("Z:\\saves", long).entries_per_page(), 8);
         assert_eq!(
             with_drives(destination("Z:\\saves", long), &["C:\\", "Z:\\"]).entries_per_page(),
-            6
+            7
         );
     }
 
-    /// Activating the drive row must reach EVERY enumerated drive and wrap back to the start, since
-    /// the native window gives us no backward direction.
+    /// Activating the drive row background is inert; explicit cells select drives directly.
     #[test]
-    fn activating_the_drive_row_reaches_every_drive_and_wraps() {
+    fn drive_row_background_does_not_cycle_drives() {
         let roots = ["C:\\", "S:\\", "Z:\\"];
         let mut model = with_drives(model_with(PickerIntent::LoadSource, "C:\\", 0), &roots);
         let drive_row = model
             .drive_row()
             .expect("three drives must add a drive row");
-        assert_eq!(drive_row, 0, "a drive root has no up row above the cycler");
-        let mut seen = vec![model.current_dir().to_path_buf()];
-        for _ in 0..roots.len() {
-            assert_eq!(model.row_meaning(drive_row), PickerRow::DriveCycle);
-            assert_eq!(model.activate(drive_row), PickerActivation::Repopulate);
-            seen.push(model.current_dir().to_path_buf());
-        }
-        let expected: Vec<PathBuf> = ["C:\\", "S:\\", "Z:\\", "C:\\"]
-            .iter()
-            .map(PathBuf::from)
-            .collect();
-        assert_eq!(seen, expected, "one activation per drive, wrapping");
+        assert_eq!(drive_row, 0, "a drive root has no up row above the strip");
+        assert_eq!(model.row_meaning(drive_row), PickerRow::DriveCycle);
+        assert_eq!(model.activate(drive_row), PickerActivation::Ignored);
+        assert_eq!(model.current_dir(), Path::new("C:\\"));
+        assert!(model.activate_drive_strip_cell(2));
+        assert_eq!(model.current_dir(), Path::new("Z:\\"));
     }
 
-    /// The drive row's label names the current drive AND the one activation moves to, and fits the
-    /// ProfileSummary name budget with no comma in it.
+    /// The drive row's compact name field stays stable; selectable cells live in the native label field.
     #[test]
-    fn drive_row_label_names_both_drives_and_fits_the_name_budget() {
+    fn drive_row_label_names_the_strip_and_fits_the_name_budget() {
         let model = with_drives(
             model_with(PickerIntent::LoadSource, "C:\\users", 0),
             &["C:\\", "S:\\", "Z:\\"],
         );
         let row = model.drive_row().expect("drive row");
         let label = label_of(&model, row);
-        assert_eq!(label, "[ C: > S: ]");
+        assert_eq!(label, "DRIVES");
+        assert_eq!(model.drive_row_cell_label(row, 0).as_deref(), Some(">C:<"));
+        assert_eq!(model.drive_row_cell_label(row, 1).as_deref(), Some("[S:]"));
+        assert_eq!(model.drive_row_cell_label(row, 2).as_deref(), Some("[Z:]"));
         assert!(model.row_label_utf16(row).len() <= PICKER_ROW_NAME_UTF16_MAX);
         assert!(!label.contains(','), "row labels must be comma-safe");
     }
@@ -2411,27 +2604,58 @@ mod tests {
         assert_eq!(model.page_count(), 1);
         assert_eq!(model.next_page_row(), None);
         assert_eq!(model.scroll_offset(), 0);
-        assert_eq!(model.scroll_max(), 22);
+        assert_eq!(model.scroll_max(), 21);
         assert_eq!(model.visible_row_count(), PICKER_ROW_COUNT);
+        assert_eq!(model.scroll_up_row(), None);
+        assert_eq!(model.scroll_down_row(), None);
         assert_eq!(
             model.row_meaning(PICKER_ROW_COUNT - 1),
-            PickerRow::ScrollDown
+            PickerRow::File(PathBuf::from("Z:\\saves").join("save8.sl2"))
         );
     }
 
     #[test]
-    fn native_cursor_edge_tick_slides_the_scroll_window() {
+    fn native_cursor_edge_tick_slides_the_scroll_window_with_smooth_slow_start_acceleration() {
+        let dwell: Vec<u8> = (0..=20).map(edge_scroll_dwell_ticks_for_repeat).collect();
+        assert_eq!(dwell[0], 40);
+        assert_eq!(dwell[1], 38);
+        assert_eq!(dwell[14], 12);
+        assert_eq!(dwell[15], 11);
+        assert_eq!(dwell[20], 11);
+        for pair in dwell.windows(2) {
+            let [current, next] = pair else {
+                unreachable!()
+            };
+            assert!(
+                *next <= *current,
+                "edge-scroll dwell must not slow while held: {dwell:?}"
+            );
+            assert!(
+                current.saturating_sub(*next) <= 2,
+                "edge-scroll dwell changes must stay smooth: {dwell:?}"
+            );
+        }
+
         let mut model = model_with(PickerIntent::LoadSource, "Z:\\saves", PICKER_ROW_COUNT + 20);
-        for _ in 0..7 {
+        for _ in 0..39 {
             assert!(!model.edge_scroll_from_native_cursor_tick(PICKER_ROW_COUNT - 1));
             assert_eq!(model.scroll_offset(), 0);
         }
         assert!(model.edge_scroll_from_native_cursor_tick(PICKER_ROW_COUNT - 1));
         assert_eq!(model.scroll_offset(), 1);
-        for _ in 0..8 {
+        for _ in 0..37 {
+            assert!(!model.edge_scroll_from_native_cursor_tick(PICKER_ROW_COUNT - 1));
+            assert_eq!(model.scroll_offset(), 1);
+        }
+        assert!(model.edge_scroll_from_native_cursor_tick(PICKER_ROW_COUNT - 1));
+        assert_eq!(model.scroll_offset(), 2);
+
+        model.reset_edge_scroll_dwell();
+        for _ in 0..39 {
             model.edge_scroll_from_native_cursor_tick(0);
         }
-        assert_eq!(model.scroll_offset(), 0);
+        assert!(model.edge_scroll_from_native_cursor_tick(0));
+        assert_eq!(model.scroll_offset(), 1);
     }
 
     #[test]
@@ -2439,16 +2663,16 @@ mod tests {
         let mut model = model_with(PickerIntent::LoadSource, "Z:\\saves", PICKER_ROW_COUNT + 20);
         model.cycle_page(true);
         assert_eq!(model.next_page_row(), None);
-        assert_eq!(model.scroll_offset(), 8);
-        assert_eq!(model.row_meaning(1), PickerRow::ScrollUp);
+        assert_eq!(model.scroll_offset(), 9);
+        assert_eq!(model.scroll_up_row(), None);
+        assert_eq!(model.scroll_down_row(), None);
         assert_eq!(
-            model.row_meaning(2),
-            PickerRow::File(PathBuf::from("Z:\\saves").join("save8.sl2"))
+            model.row_meaning(1),
+            PickerRow::File(PathBuf::from("Z:\\saves").join("save9.sl2"))
         );
         model.cycle_page(false);
-        assert_eq!(model.scroll_offset(), 1);
-        assert_eq!(model.row_meaning(1), PickerRow::ScrollUp);
-        assert!(matches!(model.activate(1), PickerActivation::Repopulate));
+        assert_eq!(model.scroll_offset(), 0);
+        assert!(matches!(model.activate(1), PickerActivation::PickedFile(_)));
         assert_eq!(model.scroll_offset(), 0);
     }
 
@@ -2511,16 +2735,17 @@ mod tests {
         assert_eq!(fits.entries_per_page(), PICKER_ROW_COUNT - 1);
 
         let mut overflows = model_with(PickerIntent::LoadSource, "Z:\\saves", PICKER_ROW_COUNT);
-        assert_eq!(overflows.entries_per_page(), PICKER_ROW_COUNT - 2);
+        assert_eq!(overflows.entries_per_page(), PICKER_ROW_COUNT - 1);
         assert_eq!(overflows.page_count(), 1);
         assert_eq!(overflows.next_page_row(), None);
+        assert_eq!(overflows.scroll_up_row(), None);
+        assert_eq!(overflows.scroll_down_row(), None);
         assert_eq!(overflows.visible_row_count(), PICKER_ROW_COUNT);
         overflows.cycle_page(true);
-        assert_eq!(overflows.scroll_offset(), 2);
-        assert_eq!(overflows.row_meaning(1), PickerRow::ScrollUp);
+        assert_eq!(overflows.scroll_offset(), 1);
         assert_eq!(
-            overflows.row_meaning(2),
-            PickerRow::File(PathBuf::from("Z:\\saves").join("save2.sl2"))
+            overflows.row_meaning(1),
+            PickerRow::File(PathBuf::from("Z:\\saves").join("save1.sl2"))
         );
         assert_eq!(overflows.next_page_row(), None);
     }

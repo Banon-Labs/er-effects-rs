@@ -41,21 +41,37 @@ include!("title_05_010_edits.rs");
 /// `StaticLineHelp_*`/`StaticSystemText_*`/`StaticDialogText_*`/`StaticKeyGuide_*`/
 /// `Dynamic`+`KeyIcon_`) so only the DLL ever writes it.
 pub const STATS_FIELD_NAME: &str = "ErStats";
+/// Instance names of the injected per-row drive strip cells. These are separate row children, not a
+/// single concatenated `PlayerName` label.
+pub const DRIVE_CELL_FIELD_NAMES: [&str; 3] = ["DriveCell_0", "DriveCell_1", "DriveCell_2"];
 /// Visual row pitch after the compact ProfileSelect row-stack edit.
-pub const COMPACT_ROW_PITCH_PX: i32 = 52;
+pub const COMPACT_ROW_PITCH_PX: i32 = 48;
 /// Number of native-backed picker/profile rows visible in the compact `05_010_ProfileSelect` list.
 pub const COMPACT_VISIBLE_ROW_COUNT: i32 = 10;
 /// Visual list viewport height after the compact ProfileSelect row-stack edit.
 pub const COMPACT_LIST_HEIGHT_PX: i32 = COMPACT_ROW_PITCH_PX * COMPACT_VISIBLE_ROW_COUNT;
+/// X coordinate of the compact native scrollbar track in the ProfileSelect list-window movie space.
+pub const COMPACT_SCROLLBAR_X_PX: i32 = 567;
+/// Top edge of the compact native scrollbar track. This is intentionally the top edge of visible row
+/// 0, not the vanilla scrollbar's old inset/centered y.
+pub const COMPACT_SCROLLBAR_TOP_Y_PX: i32 = -(COMPACT_LIST_HEIGHT_PX / 2);
+/// Height of the compact native scrollbar track: exactly the first-row-top..last-row-bottom span.
+pub const COMPACT_SCROLLBAR_TRACK_HEIGHT_PX: i32 = COMPACT_LIST_HEIGHT_PX;
+/// Native scrollbar bar shape height in `05_010_ProfileSelect` movie coordinates.
+pub const COMPACT_SCROLLBAR_BAR_SHAPE_HEIGHT_PX: f32 = 764.0;
+
+pub fn compact_scrollbar_track_scale_y_percent() -> f32 {
+    (COMPACT_SCROLLBAR_TRACK_HEIGHT_PX as f32 / COMPACT_SCROLLBAR_BAR_SHAPE_HEIGHT_PX) * 100.0
+}
 
 /// Length of the known vanilla (1.16.1) `05_010_profileselect.gfx`.
 pub const VANILLA_LEN: usize = 14388;
 /// [`fnv1a64`] of the known vanilla movie.
 pub const VANILLA_FNV1A64: u64 = 0xfc22_4f43_7a73_13f3;
 /// Length of the compact stats-panel output for the known vanilla input.
-pub const EDITED_LEN: usize = 14625;
+pub const EDITED_LEN: usize = 14697;
 /// [`fnv1a64`] of the compact stats-panel output for the known vanilla input.
-pub const EDITED_FNV1A64: u64 = 0x1bfa_fd9a_a581_dd58;
+pub const EDITED_FNV1A64: u64 = 0x1493_cb88_247c_1353;
 
 /// True iff `bytes` is the known vanilla movie the edit table was derived from
 /// (and for which the output is proven byte-identical to the generated asset).
@@ -276,9 +292,10 @@ mod tests {
         );
 
         let scroll = placement_matrix(window, "ScrollBarV");
-        assert_eq!(scroll.translate_y / TW, compact_y(VANILLA_SCROLLBAR_Y_PX));
-        let expected_scroll_scale = VANILLA_SCROLLBAR_SCALE_Y * COMPACT_LIST_HEIGHT_PX as f32
-            / VANILLA_LIST_HEIGHT_PX as f32;
+        assert_eq!(scroll.translate_x / TW, COMPACT_SCROLLBAR_X_PX);
+        assert_eq!(scroll.translate_y / TW, COMPACT_SCROLLBAR_TOP_Y_PX);
+        let expected_scroll_scale =
+            COMPACT_SCROLLBAR_TRACK_HEIGHT_PX as f32 / COMPACT_SCROLLBAR_BAR_SHAPE_HEIGHT_PX;
         assert!(
             (scroll.scale_y as f32 / SCALE_ONE as f32 - expected_scroll_scale).abs() < 0.001,
             "scrollbar scale_y = {} expected {expected_scroll_scale}",
