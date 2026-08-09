@@ -73,7 +73,11 @@ pub const WORLD_INFO_OWNER_RESIDENT_BLOCKS_RVA: usize = 0x66_9af0;
 /// `FUN_140669ea0(WorldInfoOwner*, BlockId*)` -- `0x140669ea0`. Resolves a block to its
 /// `MsbResCap`.
 pub const WORLD_INFO_OWNER_GET_MSB_RES_CAP_RVA: usize = 0x66_9ea0;
-/// `FieldArea+0x18` -- `worldInfoOwner2`, the owner both calls above take.
+/// `FieldArea+0x10` -- the owned `WorldInfoOwner` pointer used by the previous typed
+/// `FieldArea::instance().world_info_owner` path. Both the CI-pinned and local binding layouts pin
+/// this field at the same offset.
+pub const FIELD_AREA_WORLD_INFO_OWNER_OFFSET: usize = 0x10;
+/// `FieldArea+0x18` -- `worldInfoOwner2`, the owner the native lookup calls above take.
 pub const FIELD_AREA_WORLD_INFO_OWNER2_OFFSET: usize = 0x18;
 /// `CSMsbPoint+0x18` -- `shapeData`.
 pub const CS_MSB_POINT_SHAPE_DATA_OFFSET: usize = 0x18;
@@ -230,11 +234,12 @@ mod native {
     use super::{
         CS_MSB_POINT_COMPUTE_POSITION_RVA, CS_MSB_POINT_CTOR_RVA, CS_MSB_POINT_DTOR_RVA,
         CS_MSB_POINT_GET_ANGLE_RVA, CS_MSB_POINT_HAS_NO_SHAPE_DATA_RVA, CS_MSB_POINT_SIZE,
-        GET_POINT_DATA_SECTION_ITEM_COUNT_RVA, MSB_POINT_TYPE_INVASION_POINT, MsbInvasionPoint,
-        WORLD_BLOCK_INFO_MSB_RES_CAP_OFFSET,
+        FIELD_AREA_WORLD_INFO_OWNER_OFFSET, GET_POINT_DATA_SECTION_ITEM_COUNT_RVA,
+        MSB_POINT_TYPE_INVASION_POINT, MsbInvasionPoint, WORLD_BLOCK_INFO_MSB_RES_CAP_OFFSET,
     };
     use crate::invasion_warp::BlockKey;
     use crate::warp::FloatVector4;
+    use er_game_base::rva::FIELD_AREA_PTR_RVA;
 
     /// A single map's `InvasionPoint` count cannot plausibly exceed this. The largest map in the
     /// offline harvest of all 1347 shipped MSBs holds 111 (`m12_01_00_00`), so this is ~18x
@@ -381,11 +386,33 @@ mod native {
     /// resolvable, which is the normal state at the title screen.
     #[must_use]
     pub unsafe fn resident_blocks() -> Vec<(BlockKey, usize)> {
-        use fromsoftware_shared::FromStatic;
-        let Ok(field_area) = (unsafe { eldenring::cs::FieldArea::instance() }) else {
+        let Ok(base) = er_game_base::mem::game_module_base() else {
             return Vec::new();
         };
-        let world_info = &field_area.world_info_owner.world_res.world_info;
+        let Some(field_area) =
+            (unsafe { er_game_base::mem::safe_read_usize(base + FIELD_AREA_PTR_RVA) })
+        else {
+            return Vec::new();
+        };
+        if field_area < 0x1_0000 {
+            return Vec::new();
+        }
+        let Some(world_info_owner) = (unsafe {
+            er_game_base::mem::safe_read_usize(field_area + FIELD_AREA_WORLD_INFO_OWNER_OFFSET)
+        }) else {
+            return Vec::new();
+        };
+        if world_info_owner < 0x1_0000
+            || unsafe { er_game_base::mem::safe_read_usize(world_info_owner) }.is_none()
+        {
+            return Vec::new();
+        }
+        let Some(world_info_owner) =
+            (unsafe { (world_info_owner as *const eldenring::cs::WorldInfoOwner).as_ref() })
+        else {
+            return Vec::new();
+        };
+        let world_info = &world_info_owner.world_res.world_info;
         world_info
             .world_block_info()
             .iter()
