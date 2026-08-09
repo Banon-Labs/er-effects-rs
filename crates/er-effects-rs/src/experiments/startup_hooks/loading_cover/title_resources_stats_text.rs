@@ -457,6 +457,14 @@ pub(crate) fn record_title_text_gfx_value(value: usize) {
     }
 }
 
+unsafe fn er_char_stats_field_name_matches(name_ptr: usize) -> bool {
+    if name_ptr == 0 || name_ptr == TITLE_OWNER_SCAN_START_ADDRESS {
+        return false;
+    }
+    let name = unsafe { CStr::from_ptr(name_ptr as *const i8).to_bytes() };
+    name == b"ErCharStats"
+}
+
 pub(crate) unsafe extern "system" fn title_scene_obj_proxy_named_child_bind_hook(
     parent: usize,
     out_proxy: usize,
@@ -470,10 +478,44 @@ pub(crate) unsafe extern "system" fn title_scene_obj_proxy_named_child_bind_hook
     let f: unsafe extern "system" fn(usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(orig) };
     let ret = unsafe { f(parent, out_proxy, name_ptr) };
-    // NOTE: the per-slot stats push is NOT done here. This binder is called per FIELD (PlayerName,
-    // Level, ...) and does not know which save slot the row belongs to, so it cannot pick per-slot
-    // attributes. The push is driven from `profile_row_populate_hook` (hooks the row-populate template
-    // `FUN_1408758d0`, which carries the slot index in its row model) -- see bd er-effects-rs-l90.
+    if unsafe { er_char_stats_field_name_matches(name_ptr) } {
+        let base = game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+        if base != TITLE_OWNER_SCAN_START_ADDRESS && stats_panel_enabled() {
+            let cache_loaded = unsafe { ensure_profile_slot_stats_cached(base) };
+            let attrs = profile_slot_attributes(0).or_else(|| {
+                if cache_loaded {
+                    None
+                } else {
+                    build_loaded_char_attributes()
+                }
+            });
+            if let Some(attrs) = attrs {
+                let stats = build_stats_compact_html_utf16(&attrs);
+                let pushed = unsafe {
+                    push_stats_text_on_resolved_field(base, out_proxy, "ErCharStats", &stats)
+                };
+                let seen = PROFILE_STATS_ROW_POPULATES.fetch_add(1, Ordering::SeqCst) + 1;
+                if pushed {
+                    let subs = PROFILE_STATS_SETTEXT_SUBS.fetch_add(1, Ordering::SeqCst) + 1;
+                    if subs <= 4 {
+                        append_autoload_debug(format_args!(
+                            "stats-text: pushed binder ErCharStats slot=0 on field=0x{out_proxy:x} parent=0x{parent:x} (row_triggers={seen} subs={subs})"
+                        ));
+                    }
+                } else {
+                    let fails = PROFILE_STATS_PUSH_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
+                    if fails <= 4 {
+                        append_autoload_debug(format_args!(
+                            "stats-text: binder ErCharStats push REJECTED field=0x{out_proxy:x} parent=0x{parent:x} (fails={fails})"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    // NOTE: per-slot stats for native ProfileSelect rows are normally pushed from
+    // `profile_row_populate_hook` (FUN_1408758d0 carries the slot index). The binder fallback above
+    // only covers title/load surfaces that bind ErCharStats but never invoke that populate path.
     if unsafe { title_profile_list_container_matches(name_ptr) } {
         TITLE_PROFILE_FACE_BIND_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
         TITLE_PROFILE_FACE_LAST_PROXY.store(out_proxy, Ordering::SeqCst);
@@ -582,6 +624,41 @@ pub(crate) fn profile_slot_attributes(slot: i32) -> Option<[i32; STATS_ATTR_COUN
         .map(|s| s.attributes)
 }
 
+/// The character name of save `slot`, or `None` when the slot is empty or the save is unreadable.
+/// This is cached from the same `.sl2` read as [`profile_slot_attributes`]. Native ProfileSelect
+/// normally owns `PlayerName`, but the compact row/editor path proved the field can be live while
+/// the native text content is absent; pushing the save name here makes content ownership explicit.
+pub(crate) fn profile_slot_name(slot: i32) -> Option<String> {
+    if !(0..PROFILE_SLOT_COUNT).contains(&slot) {
+        return None;
+    }
+    let guard = PROFILE_SLOT_NAMES_CACHE.lock().ok()?;
+    guard.as_ref()?.get(slot as usize)?.clone()
+}
+
+fn build_loaded_char_name() -> Option<String> {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let gdm = game_data_man_ptr_or_null();
+    if gdm == 0 || gdm == null {
+        return None;
+    }
+    let pgd = unsafe { safe_read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }?;
+    if pgd == 0 || pgd == null {
+        return None;
+    }
+    let (units, len) = unsafe { read_utf16_name_units(pgd + PGD_NAME_9C_OFFSET) };
+    if len == 0 {
+        return None;
+    }
+    String::from_utf16(units.get(..len)?)
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+}
+
+fn nul_terminated_utf16(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(core::iter::once(0)).collect()
+}
+
 /// The STORED effective max vitals `[hp, fp, stamina]` of the character in save `slot`, or
 /// `None` when the slot is empty or the save is unreadable. Same `.sl2` source/cache as
 /// [`profile_slot_attributes`]; the values are the save's serialized `MaxHealth`/`MaxFP`/
@@ -625,33 +702,47 @@ pub(crate) fn build_loaded_char_attributes() -> Option<[i32; STATS_ATTR_COUNT]> 
 /// Scaleform-HTML string for native SetText. Pure formatting ownership lives in `er-loading-portrait`;
 /// this compatibility name keeps the startup-hook callsite stable.
 pub(crate) use er_loading_portrait::build_title_stats_compact_html_utf16 as build_stats_compact_html_utf16;
+pub(crate) use er_loading_portrait::build_title_stats_html_utf16 as build_stats_html_utf16;
+
+fn decode_scaleform_html_line(line: &[u16]) -> Option<String> {
+    let body = line.strip_suffix(&[0]).unwrap_or(line);
+    if body.is_empty() {
+        return None;
+    }
+    String::from_utf16(body).ok().filter(|s| !s.is_empty())
+}
+
+fn scaleform_html_body(line: &str) -> &str {
+    line.strip_prefix("<p align=\"left\">")
+        .and_then(|s| s.strip_suffix("</p>"))
+        .unwrap_or(line)
+}
 
 fn merge_scaleform_html_utf16_lines(first: &[u16], second: &[u16]) -> Vec<u16> {
-    fn decode_line(line: &[u16]) -> Option<String> {
-        let body = line.strip_suffix(&[0]).unwrap_or(line);
-        if body.is_empty() {
-            return None;
-        }
-        String::from_utf16(body).ok().filter(|s| !s.is_empty())
-    }
-
-    let Some(first) = decode_line(first) else {
+    let Some(first) = decode_scaleform_html_line(first) else {
         return second.to_vec();
     };
-    let Some(second) = decode_line(second) else {
+    let Some(second) = decode_scaleform_html_line(second) else {
         return first.encode_utf16().chain(core::iter::once(0)).collect();
     };
-    let first = first
-        .strip_prefix("<p align=\"left\">")
-        .and_then(|s| s.strip_suffix("</p>"))
-        .unwrap_or(&first);
-    let second = second
-        .strip_prefix("<p align=\"left\">")
-        .and_then(|s| s.strip_suffix("</p>"))
-        .unwrap_or(&second);
+    let first = scaleform_html_body(&first);
+    let second = scaleform_html_body(&second);
     let merged = format!(
         "<p align=\"left\">{first} <font size=\"16\" color=\"#8f887a\">/</font> {second}</p>"
     );
+    merged.encode_utf16().chain(core::iter::once(0)).collect()
+}
+
+fn merge_scaleform_html_utf16_block(first: &[u16], second: &[u16]) -> Vec<u16> {
+    let Some(first) = decode_scaleform_html_line(first) else {
+        return second.to_vec();
+    };
+    let Some(second) = decode_scaleform_html_line(second) else {
+        return first.encode_utf16().chain(core::iter::once(0)).collect();
+    };
+    let first = scaleform_html_body(&first);
+    let second = scaleform_html_body(&second);
+    let merged = format!("<p align=\"left\">{first}<br>{second}</p>");
     merged.encode_utf16().chain(core::iter::once(0)).collect()
 }
 
@@ -665,6 +756,9 @@ pub(crate) const PROFILE_SLOT_COUNT: i32 = 10;
 pub(crate) static PROFILE_SLOT_STATS_CACHE: std::sync::Mutex<
     Option<[Option<er_save_loader::stats::SlotStats>; 10]>,
 > = std::sync::Mutex::new(None);
+
+pub(crate) static PROFILE_SLOT_NAMES_CACHE: std::sync::Mutex<Option<[Option<String>; 10]>> =
+    std::sync::Mutex::new(None);
 
 /// Populate the per-slot stats cache from the live save file if not already loaded. Reads the on-disk
 /// `.sl2` (the exact file the game loads) via the native save-dir builder path (`own_load_read_sl2_bytes`),
@@ -687,12 +781,23 @@ pub(crate) unsafe fn ensure_profile_slot_stats_cached(base: usize) -> bool {
         return false;
     };
     let all = er_save_loader::stats::all_slot_stats(&sl2);
+    let mut names: [Option<String>; 10] = core::array::from_fn(|_| None);
+    for slot in er_save_loader::bnd4::active_character_slots(&sl2).unwrap_or_default() {
+        if slot.slot < names.len() {
+            names[slot.slot] = Some(slot.name);
+        }
+    }
     let decoded = all.iter().flatten().count();
+    let named = names.iter().flatten().count();
     *guard = Some(all);
+    if let Ok(mut name_guard) = PROFILE_SLOT_NAMES_CACHE.lock() {
+        *name_guard = Some(names);
+    }
     PROFILE_SLOT_STATS_DECODED.store(decoded, Ordering::SeqCst);
+    PROFILE_SLOT_NAMES_DECODED.store(named, Ordering::SeqCst);
     PROFILE_SLOT_STATS_CACHE_STATE.store(1, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "stats-text: per-slot cache loaded from .sl2 ({decoded}/10 slots decoded, {} bytes)",
+        "stats-text: per-slot cache loaded from .sl2 ({decoded}/10 slots decoded, {named}/10 names decoded, {} bytes)",
         sl2.len()
     ));
     true
@@ -779,6 +884,43 @@ pub(crate) unsafe fn push_stats_text_on_row(
     // proxy+0x20 -- a second latent 7e7-class UAF even when SetText succeeded.
     unsafe { dtor(out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET) };
     accepted
+}
+
+/// Push text onto a field proxy that the native named-child binder has already resolved. The caller
+/// must not destroy the proxy here; the native binder caller still owns that lifetime.
+pub(crate) unsafe fn push_stats_text_on_resolved_field(
+    base: usize,
+    field_proxy: usize,
+    label: &str,
+    utf16: &[u16],
+) -> bool {
+    let settext: unsafe extern "system" fn(usize, usize) -> usize =
+        unsafe { std::mem::transmute(base + PROFILE_SETTEXT_RVA) };
+    let component_slot = field_proxy + SCENE_OBJ_PROXY_COMPONENT_SLOT_OFFSET;
+    let comp = unsafe { safe_read_usize(component_slot) }.unwrap_or(0);
+    let comp_vt = if comp != 0 && comp != TITLE_OWNER_SCAN_START_ADDRESS {
+        unsafe { safe_read_usize(comp) }.unwrap_or(0)
+    } else {
+        0
+    };
+    let slot_fn = if comp_vt != 0 {
+        unsafe { safe_read_usize(comp_vt + COMPONENT_GET_VALUE_VTABLE_SLOT_OFFSET) }.unwrap_or(0)
+    } else {
+        0
+    };
+    if comp_vt != 0 && vtable_in_game_image(comp_vt, base) && vtable_in_game_image(slot_fn, base) {
+        (unsafe { settext(component_slot, utf16.as_ptr() as usize) }) != 0
+    } else {
+        let skips = PROFILE_STATS_PUSH_STALE_SKIPS.fetch_add(1, Ordering::SeqCst) + 1;
+        PROFILE_STATS_PUSH_STALE_LAST_COMP.store(comp, Ordering::SeqCst);
+        PROFILE_STATS_PUSH_STALE_LAST_VT.store(comp_vt, Ordering::SeqCst);
+        if skips <= 8 {
+            append_autoload_debug(format_args!(
+                "stats-text: {label} resolved-field push SKIPPED fail-closed: component NOT live -- comp=0x{comp:x} vt=0x{comp_vt:x} slot_fn=0x{slot_fn:x} field=0x{field_proxy:x} (skips={skips})"
+            ));
+        }
+        false
+    }
 }
 
 /// Show or hide ONE native row field with the game's own machinery: resolve the named child
@@ -972,6 +1114,82 @@ pub(crate) unsafe fn restore_row_model_location(row_model: usize, displaced: usi
 /// its end, so a post-call resolve of `ErStats` would operate on a released value. Our push resolves a
 /// SEPARATE child proxy (`ErStats`) and releases only that child's value, leaving the native fields and
 /// the row proxy untouched for the original. bd er-effects-rs-l90.
+unsafe fn title_load_row_stats_text() -> Option<Vec<u16>> {
+    let base = game_module_base().ok()?;
+    let cache_loaded = unsafe { ensure_profile_slot_stats_cached(base) };
+    let attrs = profile_slot_attributes(0).or_else(|| {
+        if cache_loaded {
+            None
+        } else {
+            build_loaded_char_attributes()
+        }
+    })?;
+    Some(build_stats_compact_html_utf16(&attrs))
+}
+
+pub(crate) unsafe extern "system" fn profile_current_row_populate_hook(
+    param_1: usize,
+    row_proxy: usize,
+) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let orig = PROFILE_CURRENT_ROW_POPULATE_ORIG.load(Ordering::SeqCst);
+    if orig == null || orig == HOOK_ORIGINAL_UNSET {
+        return;
+    }
+    let f: unsafe extern "system" fn(usize, usize) = unsafe { std::mem::transmute(orig) };
+    unsafe { f(param_1, row_proxy) };
+    if !stats_panel_enabled() || row_proxy == 0 || row_proxy == null {
+        return;
+    }
+    let Ok(base) = game_module_base() else {
+        return;
+    };
+    let Some(stats) = (unsafe { title_load_row_stats_text() }) else {
+        return;
+    };
+    if let Some(name) = profile_slot_name(0).or_else(build_loaded_char_name) {
+        let name = nul_terminated_utf16(&name);
+        PROFILE_PLAYER_NAME_PUSH_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
+        let pushed = unsafe { push_stats_text_on_row(base, row_proxy, "PlayerName\0", &name) };
+        if pushed {
+            PROFILE_PLAYER_NAME_SETTEXT_SUBS.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "stats-text: pushed title-load PlayerName on row=0x{row_proxy:x}"
+            ));
+        } else {
+            PROFILE_PLAYER_NAME_PUSH_FAILURES.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let blank = [0u16];
+    let _ = unsafe { push_stats_text_on_row(base, row_proxy, "ErStats\0", &blank) };
+    let pushed = unsafe { push_stats_text_on_row(base, row_proxy, "ErCharStats\0", &stats) };
+    let seen = PROFILE_STATS_ROW_POPULATES.fetch_add(1, Ordering::SeqCst) + 1;
+    if pushed {
+        let subs = PROFILE_STATS_SETTEXT_SUBS.fetch_add(1, Ordering::SeqCst) + 1;
+        if subs <= 4 {
+            append_autoload_debug(format_args!(
+                "stats-text: pushed title-load ErCharStats slot=0 on row=0x{row_proxy:x} (row_triggers={seen} subs={subs})"
+            ));
+        }
+    } else {
+        let fails = PROFILE_STATS_PUSH_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
+        if fails <= 4 {
+            append_autoload_debug(format_args!(
+                "stats-text: title-load ErCharStats push REJECTED row=0x{row_proxy:x} (fails={fails})"
+            ));
+        }
+    }
+    unsafe {
+        crate::experiments::startup_hooks::profile_editor_runtime_tick(
+            base,
+            row_proxy,
+            0,
+            0,
+            "title-load-current-row",
+        )
+    };
+}
+
 pub(crate) unsafe extern "system" fn profile_row_populate_hook(
     row_model: usize,
     row_proxy: usize,
@@ -1060,6 +1278,8 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
             // Blank every synthetic drive child on every picker-owned row first so recycled row clips
             // cannot leak a previous drive strip into file/directory rows.
             if let Some(row) = picker_row {
+                let blank = [0u16];
+                let _ = unsafe { push_stats_text_on_row(base, row_proxy, "ErCharStats\0", &blank) };
                 for (cell, field) in er_gfx::title_05_010::DRIVE_CELL_FIELD_NAMES
                     .iter()
                     .enumerate()
@@ -1114,12 +1334,32 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
                 });
                 if let Some(attrs) = attrs {
                     let seen = PROFILE_STATS_ROW_POPULATES.fetch_add(1, Ordering::SeqCst) + 1;
-                    // One compact stats line: all eight attributes use initial labels and a 16px font so
-                    // the row can be shorter without keeping two injected stat fields alive.
+                    // Normal character rows share the compact row stack with the save-file picker,
+                    // so all eight colored attributes fit on one compact line.
                     let stats = build_stats_compact_html_utf16(&attrs);
+                    if let Some(name) = profile_slot_name(slot) {
+                        let name = nul_terminated_utf16(&name);
+                        PROFILE_PLAYER_NAME_PUSH_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
+                        let pushed_name = unsafe {
+                            push_stats_text_on_row(base, row_proxy, "PlayerName\0", &name)
+                        };
+                        if pushed_name {
+                            PROFILE_PLAYER_NAME_SETTEXT_SUBS.fetch_add(1, Ordering::SeqCst);
+                            if seen <= 4 {
+                                append_autoload_debug(format_args!(
+                                    "stats-text: pushed PlayerName slot={slot} on row=0x{row_proxy:x}"
+                                ));
+                            }
+                        } else {
+                            PROFILE_PLAYER_NAME_PUSH_FAILURES.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                    let blank = [0u16];
+                    let _ = unsafe { push_stats_text_on_row(base, row_proxy, "ErStats\0", &blank) };
                     let pushed =
-                        unsafe { push_stats_text_on_row(base, row_proxy, "ErStats\0", &stats) };
+                        unsafe { push_stats_text_on_row(base, row_proxy, "ErCharStats\0", &stats) };
                     debug_assert_eq!("ErStats", er_gfx::title_05_010::STATS_FIELD_NAME);
+                    debug_assert_eq!("ErCharStats", er_gfx::title_05_010::CHAR_STATS_FIELD_NAME);
                     if pushed {
                         let subs = PROFILE_STATS_SETTEXT_SUBS.fetch_add(1, Ordering::SeqCst) + 1;
                         if subs <= 4 {
@@ -1137,6 +1377,15 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
                     }
                 }
             }
+            unsafe {
+                crate::experiments::startup_hooks::profile_editor_runtime_tick(
+                    base,
+                    row_proxy,
+                    row_model,
+                    slot,
+                    "profile-row-populate",
+                )
+            };
         }
         PROFILE_STATS_PUSH_IN_PROGRESS.store(0, Ordering::SeqCst);
     }
