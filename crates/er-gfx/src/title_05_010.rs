@@ -149,9 +149,9 @@ pub const VANILLA_LEN: usize = 14388;
 /// [`fnv1a64`] of the known vanilla movie.
 pub const VANILLA_FNV1A64: u64 = 0xfc22_4f43_7a73_13f3;
 /// Length of the compact stats-panel output for the known vanilla input.
-pub const EDITED_LEN: usize = 17618;
+pub const EDITED_LEN: usize = 17780;
 /// [`fnv1a64`] of the compact stats-panel output for the known vanilla input.
-pub const EDITED_FNV1A64: u64 = 0x80a6_1976_bdfd_4359;
+pub const EDITED_FNV1A64: u64 = 0x1218_430d_81ab_9511;
 
 /// True iff `bytes` is the known vanilla movie the edit table was derived from
 /// (and for which the output is proven byte-identical to the generated asset).

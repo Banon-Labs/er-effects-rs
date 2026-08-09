@@ -703,6 +703,16 @@ pub(crate) unsafe extern "system" fn menu_window_job_finalize_hook(
     r8: usize,
     r9: usize,
 ) {
+    // Preserve the exact active ProfileSelect identity before native finalization clears job+0x130.
+    // This is lifecycle evidence, not a pointer retained for later dereference.
+    let finalized_profile_window = if job != 0 {
+        let window =
+            unsafe { safe_read_usize(job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET) }.unwrap_or(0);
+        (window != 0 && window == SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst))
+            .then_some(window)
+    } else {
+        None
+    };
     if job != 0
         && let Some(base) = game_module_base().ok().filter(|&b| b != 0)
     {
@@ -733,6 +743,9 @@ pub(crate) unsafe extern "system" fn menu_window_job_finalize_hook(
     let f: unsafe extern "system" fn(usize, usize, usize, usize) =
         unsafe { std::mem::transmute(orig) };
     unsafe { f(job, rdx, r8, r9) };
+    if let Some(window) = finalized_profile_window {
+        system_quit_note_profile_select_finalized(window);
+    }
 }
 
 /// Install the finalize guard. Idempotent. 0x7ada40 carries no other detour (MinHook allows one per

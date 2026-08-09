@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "ghidra": {
-      "command": "${HOME}/projects/ghidra-mcp-13bm/mcp-bridge/mcp_bridge",
+      "command": "${HOME}/tools/GhidraMCP-13bm/mcp-bridge/mcp_bridge",
       "args": [
         "-host",
         "localhost",

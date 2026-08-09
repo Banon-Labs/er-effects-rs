@@ -2016,7 +2016,7 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
     // one visual line.
     let mut staged_player_name: Option<(usize, Vec<u16>)> = None;
     let mut staged_location: Option<(usize, Vec<u16>)> = None;
-    let mut active_drive_cell: Option<usize> = None;
+    let mut drive_strip_focus: Option<er_save_picker::DriveStripFocus> = None;
     if row_model != 0
         && row_model != null
         && row_proxy != 0
@@ -2050,7 +2050,7 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
             // means "exactly what the game drew", and until a row was actually hidden the re-assert
             // does not run at all, so the vanilla path stays untouched.
             let slot_info = picker_row.and_then(save_picker_row_slot_info);
-            active_drive_cell = slot_info.as_ref().and_then(|info| info.active_drive_cell);
+            drive_strip_focus = slot_info.as_ref().and_then(|info| info.drive_strip_focus);
             // MERGED ROW HEADER (user request 2026-08-06/07): the name, `RL <level>` and (once
             // sourced) `WL <max weapon level>` render as ONE string in `PlayerName` instead of
             // three separately-placed fields. Composed HERE, before the visibility statement,
@@ -2338,18 +2338,18 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
     // original returned failed on every row because native teardown had already invalidated the
     // setter path. Constrain the row's own animated Cursor now; native hover later changes only its
     // visibility, preserving this cell-sized geometry.
-    if let Some(cell) = active_drive_cell {
+    if let Some(focus) = drive_strip_focus {
         if let Ok(base) = game_module_base() {
             if unsafe {
                 crate::experiments::startup_hooks::apply_drive_row_native_cursor(
-                    base, row_proxy, cell,
+                    base, row_proxy, focus,
                 )
             } {
                 let applies =
                     PROFILE_DRIVE_NATIVE_CURSOR_APPLIES.fetch_add(1, Ordering::SeqCst) + 1;
                 if applies <= 4 || applies.is_power_of_two() {
                     append_autoload_debug(format_args!(
-                        "save-picker: native drive-row Cursor constrained to cell={cell} inside populate ownership (applies={applies})"
+                        "save-picker: native drive-row Cursor constrained to focus={focus:?} inside populate ownership (applies={applies})"
                     ));
                 }
             } else {
@@ -2357,7 +2357,7 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
                     PROFILE_DRIVE_NATIVE_CURSOR_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
                 if failures <= 4 || failures.is_power_of_two() {
                     append_autoload_debug(format_args!(
-                        "save-picker: native drive-row Cursor transform FAILED inside populate ownership cell={cell} row=0x{row_proxy:x} (failures={failures})"
+                        "save-picker: native drive-row Cursor transform FAILED inside populate ownership focus={focus:?} row=0x{row_proxy:x} (failures={failures})"
                     ));
                 }
             }
