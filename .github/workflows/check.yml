@@ -32,7 +32,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Check out fromsoftware-rs as sibling
         run: |
@@ -65,7 +65,7 @@ jobs:
       # fully determined by the pinned cargo-xwin version, so an exact-key hit
       # is expected every run and the ~1 GB dir is only uploaded once per bump.
       - name: Cache xwin Windows CRT/SDK
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/cargo-xwin
           key: xwin-sdk-${{ runner.os }}-cargo-xwin-${{ env.CARGO_XWIN_VERSION }}
@@ -80,7 +80,7 @@ jobs:
       # we build; the ~4.5 min source build then only runs when CUPCAKE_REV moves.
       - name: Cache Cupcake binary
         id: cache-cupcake
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cargo/bin/cupcake
           key: cupcake-${{ runner.os }}-${{ env.CUPCAKE_REV }}
