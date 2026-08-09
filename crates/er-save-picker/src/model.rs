@@ -1101,6 +1101,65 @@ impl SavePickerModel {
         }
     }
 
+    /// Two auxiliary display lines for a non-file row, rendered by the native `05_010`
+    /// `ErStatsTop` / `ErStatsBottom` fields while the in-game picker owns the ProfileSelect rows.
+    ///
+    /// Row names stay inside the 16-UTF-16 `ProfileSummary` budget; explanatory text lives here
+    /// instead. File rows return `None` because their two stats lines are real character summaries,
+    /// and empty rows return `None` because the native list builder omits them. A visible status
+    /// message owns row 0 first, matching the runtime stats-line hook.
+    pub fn row_auxiliary_lines(&self, row: usize) -> Option<(String, String)> {
+        if let Some(message) = &self.status_message
+            && row == 0
+        {
+            return Some((message.headline().to_owned(), message.detail().to_owned()));
+        }
+        match self.row_meaning(row) {
+            PickerRow::ParentDir => Some((
+                "PARENT FOLDER".to_owned(),
+                self.parent_dir_name()
+                    .map(|name| format!("Go to {name}"))
+                    .unwrap_or_else(|| "Go up one folder".to_owned()),
+            )),
+            PickerRow::DriveCycle => {
+                let current = self.current_drive_root();
+                let next = self
+                    .neighbour_drive(true)
+                    .unwrap_or_else(|| current.clone());
+                Some((
+                    "SWITCH DRIVE".to_owned(),
+                    format!(
+                        "{} -> {}",
+                        Self::drive_short(&current),
+                        Self::drive_short(&next)
+                    ),
+                ))
+            }
+            PickerRow::AtRoot => Some((
+                "DRIVE ROOT".to_owned(),
+                self.current_drive_root().display().to_string(),
+            )),
+            PickerRow::Dir(path) => Some((
+                "FOLDER".to_owned(),
+                format!("Open {}", self.dir_display_name(&path)),
+            )),
+            PickerRow::NewFile(path) => Some((
+                "NEW SAVE FILE".to_owned(),
+                format!(
+                    "Create {}",
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("the loaded save")
+                ),
+            )),
+            PickerRow::NextPage => Some((
+                format!("PAGE {}/{}", self.page + 1, self.page_count()),
+                "Show next page".to_owned(),
+            )),
+            PickerRow::File(_) | PickerRow::Empty => None,
+        }
+    }
+
     /// ASCII display label for `row` (uppercased for the 5x7 overlay font; dir rows keep a `/`
     /// suffix, control rows are bracketed). Empty string for an out-of-range row. The overlay has
     /// far more width than the native name field, so these spell the action out.
@@ -1730,6 +1789,144 @@ mod tests {
             }
             assert_eq!(file_rows, 3, "expected all three files to occupy rows");
         }
+    }
+
+    fn assert_visible_labels_fit_profile_summary_budget(model: &SavePickerModel) {
+        for row in 0..model.visible_row_count() {
+            let label = model.row_label_utf16(row);
+            assert!(
+                !label.is_empty(),
+                "visible row {row} ({:?}) must have a non-empty ProfileSummary label",
+                model.row_meaning(row)
+            );
+            assert!(
+                label.len() <= PICKER_ROW_NAME_UTF16_MAX,
+                "visible row {row} ({:?}) spent {} UTF-16 units in the ProfileSummary name",
+                model.row_meaning(row),
+                label.len()
+            );
+        }
+    }
+
+    /// Load-source browse rows keep their 16-unit native names short and move explanatory
+    /// navigation text into the two auxiliary stats lines. File rows still own those lines for real
+    /// character summaries, so they deliberately have no auxiliary replacement.
+    #[test]
+    fn load_source_auxiliary_lines_describe_navigation_without_name_budget_drift() {
+        let model = with_drives(
+            model_with(PickerIntent::LoadSource, r"Z:\saves", 2),
+            &[r"C:\", r"Z:\"],
+        );
+        assert_visible_labels_fit_profile_summary_budget(&model);
+
+        assert_eq!(model.row_meaning(0), PickerRow::ParentDir);
+        assert_eq!(
+            model.row_auxiliary_lines(0),
+            Some(("PARENT FOLDER".to_owned(), r"Go to Z:\".to_owned()))
+        );
+        assert_eq!(model.row_meaning(1), PickerRow::DriveCycle);
+        assert_eq!(
+            model.row_auxiliary_lines(1),
+            Some(("SWITCH DRIVE".to_owned(), "Z: -> C:".to_owned()))
+        );
+        assert!(
+            matches!(model.row_meaning(2), PickerRow::File(_)),
+            "entry base must still derive from the load-source layout"
+        );
+        assert_eq!(
+            model.row_auxiliary_lines(2),
+            None,
+            "file rows use the stats fields for character info, not navigation copy"
+        );
+    }
+
+    /// Save-destination browse adds the pinned `[ new ]` row ABOVE the same navigation rows; the
+    /// auxiliary lines follow those derived meanings rather than hard-coded row offsets, including
+    /// the page cycler at the bottom of an overflowing listing.
+    #[test]
+    fn save_destination_auxiliary_lines_follow_the_shifted_layout() {
+        let model = with_drives(
+            destination(r"Z:\saves", PICKER_ROW_COUNT + 4),
+            &[r"C:\", r"Z:\"],
+        );
+        assert_visible_labels_fit_profile_summary_budget(&model);
+
+        assert_eq!(
+            model.row_auxiliary_lines(0),
+            Some(("NEW SAVE FILE".to_owned(), "Create ER0000.sl2".to_owned()))
+        );
+        assert_eq!(model.row_meaning(1), PickerRow::ParentDir);
+        assert_eq!(
+            model.row_auxiliary_lines(1),
+            Some(("PARENT FOLDER".to_owned(), r"Go to Z:\".to_owned()))
+        );
+        assert_eq!(model.row_meaning(2), PickerRow::DriveCycle);
+        assert_eq!(
+            model.row_auxiliary_lines(2),
+            Some(("SWITCH DRIVE".to_owned(), "Z: -> C:".to_owned()))
+        );
+        let page_row = model
+            .next_page_row()
+            .expect("overflowing destination listing has a page row");
+        assert_eq!(page_row, 9);
+        assert_eq!(model.row_meaning(page_row), PickerRow::NextPage);
+        assert_eq!(
+            model.row_auxiliary_lines(page_row),
+            Some(("PAGE 1/3".to_owned(), "Show next page".to_owned()))
+        );
+    }
+
+    /// Auxiliary copy is keyed to the same row meanings activation uses. A directory line means
+    /// activation opens that directory; a `[ new ]` line means activation picks that exact target.
+    #[test]
+    fn auxiliary_lines_describe_the_same_rows_activation_uses() {
+        let mut load = model_with(PickerIntent::LoadSource, r"Z:\saves", 0);
+        let child = PathBuf::from(r"Z:\saves").join("sub");
+        load.entries.push(PickerEntry::Dir {
+            name: "sub".to_owned(),
+            path: child.clone(),
+        });
+        let dir_row = load.entry_row_base();
+        assert_eq!(load.row_meaning(dir_row), PickerRow::Dir(child.clone()));
+        assert_eq!(
+            load.row_auxiliary_lines(dir_row),
+            Some(("FOLDER".to_owned(), "Open sub/".to_owned()))
+        );
+        assert_eq!(load.activate(dir_row), PickerActivation::Repopulate);
+        assert_eq!(load.current_dir(), child.as_path());
+
+        let mut dest = destination(r"Z:\saves", 0);
+        let target = PathBuf::from(r"Z:\saves").join("ER0000.sl2");
+        assert_eq!(dest.row_meaning(0), PickerRow::NewFile(target.clone()));
+        assert_eq!(
+            dest.row_auxiliary_lines(0),
+            Some(("NEW SAVE FILE".to_owned(), "Create ER0000.sl2".to_owned()))
+        );
+        assert_eq!(dest.activate(0), PickerActivation::PickedNewFile(target));
+    }
+
+    /// Status/rejection text also lives in the auxiliary lines, so the runtime hook can render it
+    /// through the same `ErStatsTop` / `ErStatsBottom` fields while leaving row names short.
+    #[test]
+    fn status_message_auxiliary_lines_override_row_zero_only() {
+        let mut model = model_with(PickerIntent::LoadSource, r"Z:\saves", 2);
+        model.set_status_message(PickerStatusMessage::new(
+            "UNREADABLE SAVE",
+            "Pick another file.",
+        ));
+        assert_visible_labels_fit_profile_summary_budget(&model);
+        assert_eq!(
+            model.row_auxiliary_lines(0),
+            Some((
+                "UNREADABLE SAVE".to_owned(),
+                "Pick another file.".to_owned()
+            ))
+        );
+        assert_eq!(
+            model.row_auxiliary_lines(model.entry_row_base()),
+            None,
+            "status text must not replace a file row's character stats unless that row is row 0"
+        );
     }
 
     /// Only a save-FILE row is backed by a file, so only a File row has a last-saved time to show.
