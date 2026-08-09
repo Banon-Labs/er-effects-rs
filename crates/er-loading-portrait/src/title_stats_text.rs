@@ -49,6 +49,8 @@ pub fn stats_panel_registered_systex_key(
 
 const TITLE_STATS_LABELS: [&str; STATS_ATTR_COUNT] =
     ["VIG", "MND", "END", "STR", "DEX", "INT", "FAI", "ARC"];
+const TITLE_STATS_COMPACT_LABELS: [&str; STATS_ATTR_COUNT] =
+    ["V", "M", "E", "S", "D", "I", "F", "A"];
 
 // One distinct, dark-row-legible color per attribute value.
 const TITLE_STATS_VALUE_COLORS: [&str; STATS_ATTR_COUNT] = [
@@ -65,6 +67,7 @@ const TITLE_STATS_VALUE_COLORS: [&str; STATS_ATTR_COUNT] = [
 // Labels dimmer than the native #cccccc so they read as secondary.
 const TITLE_STATS_LABEL_COLOR: &str = "#8f887a";
 const TITLE_STATS_HTML_SIZE: &str = "19";
+const TITLE_STATS_COMPACT_HTML_SIZE: &str = "16";
 
 /// Build the ProfileSelect stats line for `attributes[start..end]` as a
 /// NUL-terminated UTF-16 Scaleform-HTML string for native SetText.
@@ -73,22 +76,54 @@ pub fn build_title_stats_html_utf16(
     start: usize,
     end: usize,
 ) -> Vec<u16> {
-    let end = end.min(TITLE_STATS_LABELS.len());
+    build_title_stats_html_utf16_with(
+        attributes,
+        start,
+        end,
+        &TITLE_STATS_LABELS,
+        TITLE_STATS_HTML_SIZE,
+        "  ",
+    )
+}
+
+/// Build all eight ProfileSelect stats as one shorter NUL-terminated UTF-16
+/// Scaleform-HTML line. This is for the compact one-row `05_010` layout: the
+/// native row already has only one spare horizontal band, so the labels collapse
+/// to initials and the font size drops from 19 to 16.
+pub fn build_title_stats_compact_html_utf16(attributes: &[i32; STATS_ATTR_COUNT]) -> Vec<u16> {
+    build_title_stats_html_utf16_with(
+        attributes,
+        0,
+        STATS_ATTR_COUNT,
+        &TITLE_STATS_COMPACT_LABELS,
+        TITLE_STATS_COMPACT_HTML_SIZE,
+        " ",
+    )
+}
+
+fn build_title_stats_html_utf16_with(
+    attributes: &[i32; STATS_ATTR_COUNT],
+    start: usize,
+    end: usize,
+    labels: &[&str; STATS_ATTR_COUNT],
+    size: &str,
+    separator: &str,
+) -> Vec<u16> {
+    let end = end.min(labels.len());
     let mut s = String::from("<p align=\"left\">");
     for i in start..end {
         let v = attributes[i];
         if i > start {
-            // A wider gap between pairs groups the attributes.
-            s.push_str("  ");
+            s.push_str(separator);
         }
         s.push_str("<font size=\"");
-        s.push_str(TITLE_STATS_HTML_SIZE);
+        s.push_str(size);
         s.push_str("\" color=\"");
         s.push_str(TITLE_STATS_LABEL_COLOR);
         s.push_str("\">");
-        s.push_str(TITLE_STATS_LABELS[i]);
-        s.push_str("</font> <font size=\"");
-        s.push_str(TITLE_STATS_HTML_SIZE);
+        s.push_str(labels[i]);
+        s.push_str("</font><font size=\"");
+        s.push_str(size);
         s.push_str("\" color=\"");
         s.push_str(TITLE_STATS_VALUE_COLORS[i]);
         s.push_str("\"><b>");
@@ -104,7 +139,9 @@ pub fn build_title_stats_html_utf16(
 pub struct RowSlotFieldVisibility {
     /// The `Level` FMG caption and the level value, which live and die together.
     pub level: bool,
-    /// The `PlayTime` field.
+    /// The top-right `Location` field.
+    pub location: bool,
+    /// The bottom-right `PlayTime` field.
     pub play_time: bool,
 }
 
@@ -112,15 +149,18 @@ impl RowSlotFieldVisibility {
     /// What a row the picker does not own gets: exactly what the game drew.
     pub const NATIVE: Self = Self {
         level: true,
+        location: true,
         play_time: true,
     };
 
-    /// Browse/file rows are not profile slots; level is hidden, and play-time is
-    /// shown only when the row has a replacement timestamp to stage.
-    pub const fn browse_row(has_play_time: bool) -> Self {
+    /// Browse/file rows are not profile slots; level is hidden, the top-right
+    /// location field is shown only when it carries a staged timestamp, and the
+    /// bottom play-time row is always hidden so file rows collapse to one line.
+    pub const fn browse_row(has_timestamp: bool) -> Self {
         Self {
             level: false,
-            play_time: has_play_time,
+            location: has_timestamp,
+            play_time: false,
         }
     }
 }
@@ -144,6 +184,19 @@ mod tests {
         assert!(top.contains("color=\"#e0736b\"><b>15</b></font>"));
         assert!(top.contains("color=\"#e0973f\"><b>14</b></font>"));
         assert!(!top.contains("DEX"), "end bound limits the line");
+    }
+
+    #[test]
+    fn title_stats_compact_html_merges_all_attributes_into_one_short_line() {
+        let attrs = [15, 10, 11, 14, 13, 9, 9, 7];
+        let compact = utf16_to_string(&build_title_stats_compact_html_utf16(&attrs));
+        assert!(compact.starts_with("<p align=\"left\">"));
+        assert!(compact.ends_with("</p>"));
+        assert!(compact.contains("size=\"16\" color=\"#8f887a\">V</font>"));
+        assert!(compact.contains("color=\"#e0736b\"><b>15</b></font>"));
+        assert!(compact.contains("color=\"#c489c0\"><b>7</b></font>"));
+        assert!(!compact.contains("VIG"), "compact line uses initials only");
+        assert!(compact.contains(">A</font>"), "last attribute is included");
     }
 
     #[test]
@@ -175,13 +228,15 @@ mod tests {
             RowSlotFieldVisibility::browse_row(true),
             RowSlotFieldVisibility {
                 level: false,
-                play_time: true,
+                location: true,
+                play_time: false,
             }
         );
         assert_eq!(
             RowSlotFieldVisibility::browse_row(false),
             RowSlotFieldVisibility {
                 level: false,
+                location: false,
                 play_time: false,
             }
         );
@@ -189,6 +244,7 @@ mod tests {
             RowSlotFieldVisibility::NATIVE,
             RowSlotFieldVisibility {
                 level: true,
+                location: true,
                 play_time: true,
             }
         );

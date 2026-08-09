@@ -89,12 +89,16 @@ pub(crate) const PROFILE_ROW_MODEL_SLOT_08_OFFSET: usize = 0x8;
 // +0x28, which the populate destroys at its end). So a browse row HIDES them, per row, through the
 // game's own visibility wrapper (`TITLE_PRESS_START_SET_VISIBLE_RVA`) -- content-free in both
 // directions, which is what makes the restore as exact as the hide.
-// LEVER, PLAYTIME: the string comes from the row model, so a browse row can simply give the populate
-// a different one (see `PROFILE_ROW_MODEL_PLAY_TIME_MENUSTRING_C8_OFFSET`) and a save-FILE row shows
-// when the file was last written instead of a playtime it does not have.
+// LEVER, LOCATION/PLAYTIME: both strings come from the row model. A browse save-FILE row stages its
+// timestamp into `Location` (top-right, same line as PlayerName) and hides the bottom `PlayTime`, so
+// `ER0000.sl2` and `YYYY-MM-DD HH:MM` occupy one row instead of two vertical bands.
 pub(crate) const PROFILE_ROW_LEVEL_CAPTION_FIELD_NAME: &str = "StaticText_110502\0";
 pub(crate) const PROFILE_ROW_LEVEL_VALUE_FIELD_NAME: &str = "Level\0";
+pub(crate) const PROFILE_ROW_LOCATION_FIELD_NAME: &str = "Location\0";
 pub(crate) const PROFILE_ROW_PLAYTIME_FIELD_NAME: &str = "PlayTime\0";
+/// Offset of the row model's `Location` `CS::MenuString` inside `CS::MenuSaveDataSummary`. Same
+/// inline accessor as PlayTime: raw pointer first, else the inline DLString buffer.
+pub(crate) const PROFILE_ROW_MODEL_LOCATION_MENUSTRING_90_OFFSET: usize = 0x90;
 /// Offset of the row model's `PlayTime` `CS::MenuString` inside `CS::MenuSaveDataSummary`. The
 /// struct is `{ wchar_t* rawString; DLString<wchar_t> dLString; }` (Ghidra `CS::MenuString`, 0x38
 /// bytes) and every reader takes `rawString` when it is non-NULL, else the DLString's buffer -- the
