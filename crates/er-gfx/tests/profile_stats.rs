@@ -1520,7 +1520,7 @@ fn stats_panel_output_gives_each_drive_cell_its_own_button_chrome() {
     for index in 0..DRIVE_CELL_CAPACITY {
         let button_name = DRIVE_BUTTON_FIELD_NAMES[index];
         let text_name = DRIVE_CELL_FIELD_NAMES[index];
-        let (button_depth, button_character, button_matrix) = row
+        let (button_depth, button_character, button_matrix, button_color) = row
             .iter()
             .find_map(|tag| match tag {
                 Tag::PlaceObject2 {
@@ -1528,8 +1528,9 @@ fn stats_panel_output_gives_each_drive_cell_its_own_button_chrome() {
                     character_id,
                     matrix: Some(matrix),
                     name: Some(name),
+                    color_transform,
                     ..
-                } if name == button_name => Some((*depth, *character_id, matrix)),
+                } if name == button_name => Some((*depth, *character_id, matrix, color_transform)),
                 _ => None,
             })
             .unwrap_or_else(|| panic!("row template places {button_name}"));
@@ -1555,6 +1556,14 @@ fn stats_panel_output_gives_each_drive_cell_its_own_button_chrome() {
             button_depth < text_depth,
             "{button_name} must render behind {text_name}"
         );
+        assert_eq!(
+            button_color
+                .as_ref()
+                .and_then(|cx| cx.mult)
+                .map(|mult| mult[3]),
+            Some((layout.row_chrome.drive_button.opacity * 256.0).round() as i32),
+            "{button_name} outline opacity must be independently authored"
+        );
         assert!(
             button_matrix.has_scale && button_matrix.scale_x > 0 && button_matrix.scale_y > 0,
             "{button_name} must have visible nonzero button geometry: {button_matrix:?}"
@@ -1571,15 +1580,16 @@ fn stats_panel_output_gives_each_drive_cell_its_own_button_chrome() {
         );
     }
 
-    let (path_button_depth, path_button_character) = row
+    let (path_button_depth, path_button_character, path_button_color) = row
         .iter()
         .find_map(|tag| match tag {
             Tag::PlaceObject2 {
                 depth,
                 character_id,
                 name: Some(name),
+                color_transform,
                 ..
-            } if name == CURRENT_PATH_BUTTON_NAME => Some((*depth, *character_id)),
+            } if name == CURRENT_PATH_BUTTON_NAME => Some((*depth, *character_id, color_transform)),
             _ => None,
         })
         .expect("row template places the full-path button");
@@ -1596,6 +1606,14 @@ fn stats_panel_output_gives_each_drive_cell_its_own_button_chrome() {
         .expect("row template places the full-path text field");
     assert_eq!(path_button_character, Some(54));
     assert!(path_button_depth < path_text_depth);
+    assert_eq!(
+        path_button_color
+            .as_ref()
+            .and_then(|cx| cx.mult)
+            .map(|mult| mult[3]),
+        Some((layout.row_chrome.path_button.opacity * 256.0).round() as i32),
+        "the full-path outline has independent authored opacity"
+    );
 
     let first = row_placement_matrix(row, DRIVE_CELL_FIELD_NAMES[0]);
     let last = row_placement_matrix(row, DRIVE_CELL_FIELD_NAMES[DRIVE_CELL_CAPACITY - 1]);

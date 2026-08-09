@@ -54,6 +54,7 @@ impl RenderMode {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SelectedKind {
     Field,
+    PathEditor,
     Chrome,
     List,
 }
@@ -62,6 +63,7 @@ impl SelectedKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Field => "field",
+            Self::PathEditor => "path_editor",
             Self::Chrome => "chrome",
             Self::List => "list",
         }
@@ -70,6 +72,7 @@ impl SelectedKind {
     fn parse(value: &str) -> Result<Self, ProtocolError> {
         match value {
             "field" => Ok(Self::Field),
+            "path_editor" => Ok(Self::PathEditor),
             "chrome" => Ok(Self::Chrome),
             "list" => Ok(Self::List),
             other => Err(ProtocolError::InvalidValue(format!(
@@ -149,11 +152,27 @@ impl ProfileEditorCommand {
                 field.align.as_str(),
             );
         }
+        let editor = &self.layout.path_editor;
+        push_kv(&mut out, "path_editor.x", &editor.x.to_string());
+        push_kv(&mut out, "path_editor.y", &editor.y.to_string());
+        push_kv(&mut out, "path_editor.width", &editor.width.to_string());
+        push_kv(
+            &mut out,
+            "path_editor.clip_height",
+            &editor.clip_height.to_string(),
+        );
+        push_kv(
+            &mut out,
+            "path_editor.font_height",
+            &editor.font_height.to_string(),
+        );
+        push_kv(&mut out, "path_editor.align", editor.align.as_str());
         for (name, transform) in [
             ("backing", &self.layout.row_chrome.backing),
             ("cursor", &self.layout.row_chrome.cursor),
             ("cursor_body", &self.layout.row_chrome.cursor_body),
             ("drive_button", &self.layout.row_chrome.drive_button),
+            ("path_button", &self.layout.row_chrome.path_button),
         ] {
             push_kv(
                 &mut out,
@@ -174,6 +193,11 @@ impl ProfileEditorCommand {
                 &mut out,
                 &format!("row_chrome.{name}.scale_y"),
                 &fmt_f32(transform.scale_y),
+            );
+            push_kv(
+                &mut out,
+                &format!("row_chrome.{name}.opacity"),
+                &fmt_f32(transform.opacity),
             );
             push_kv(
                 &mut out,
@@ -247,6 +271,28 @@ impl ProfileEditorCommand {
                     }
                     _ => return Err(ProtocolError::UnknownKey(key.clone())),
                 }
+            } else if let Some(prop) = key.strip_prefix("path_editor.") {
+                let field = &mut layout.path_editor;
+                match prop {
+                    "x" => field.x = parse_f32(value, key)?,
+                    "y" => field.y = parse_f32(value, key)?,
+                    "width" => field.width = parse_i32(value, key)?,
+                    "clip_height" => field.clip_height = parse_i32(value, key)?,
+                    "font_height" => field.font_height = parse_i32(value, key)?,
+                    "align" => {
+                        field.align = match value.as_str() {
+                            "left" => TextAlign::Left,
+                            "right" => TextAlign::Right,
+                            "center" => TextAlign::Center,
+                            _ => {
+                                return Err(ProtocolError::InvalidValue(format!(
+                                    "invalid {key}={value:?}"
+                                )));
+                            }
+                        }
+                    }
+                    _ => return Err(ProtocolError::UnknownKey(key.clone())),
+                }
             } else if let Some(rest) = key.strip_prefix("row_chrome.") {
                 let (name, prop) = rest
                     .rsplit_once('.')
@@ -256,6 +302,7 @@ impl ProfileEditorCommand {
                     "cursor" => &mut layout.row_chrome.cursor,
                     "cursor_body" => &mut layout.row_chrome.cursor_body,
                     "drive_button" => &mut layout.row_chrome.drive_button,
+                    "path_button" => &mut layout.row_chrome.path_button,
                     _ => return Err(ProtocolError::UnknownKey(key.clone())),
                 };
                 match prop {
@@ -263,6 +310,7 @@ impl ProfileEditorCommand {
                     "y" => transform.y = parse_f32(value, key)?,
                     "scale_x" => transform.scale_x = parse_f32(value, key)?,
                     "scale_y" => transform.scale_y = parse_f32(value, key)?,
+                    "opacity" => transform.opacity = parse_f32(value, key)?,
                     "editable" => transform.editable = parse_bool(value, key)?,
                     _ => return Err(ProtocolError::UnknownKey(key.clone())),
                 }
@@ -509,6 +557,20 @@ mod tests {
         assert_eq!(parsed.selected_name, "cursor");
         assert_eq!(parsed.layout.field("PlayerName").x, -512.25);
         assert_eq!(parsed.layout.row_chrome.cursor.scale_y, 0.375);
+    }
+
+    #[test]
+    fn active_path_editor_is_not_aliased_to_the_read_only_current_path_field() {
+        let command = ProfileEditorCommand::from_layout(
+            8,
+            RenderMode::LiveRuntime,
+            SelectedKind::PathEditor,
+            "ActivePathEditor",
+            Profile05_010Layout::default(),
+        );
+        let parsed = ProfileEditorCommand::parse(&command.serialize()).expect("command parses");
+        assert_eq!(parsed.selected_kind, SelectedKind::PathEditor);
+        assert_eq!(parsed.selected_name, "ActivePathEditor");
     }
 
     #[test]

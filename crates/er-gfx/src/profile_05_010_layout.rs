@@ -74,6 +74,9 @@ pub struct TransformLayout {
     pub y: f32,
     pub scale_x: f32,
     pub scale_y: f32,
+    /// Opacity multiplier for baked GFX artwork. Runtime transforms do not mutate it; rebuild and
+    /// reopen the movie to apply a changed value.
+    pub opacity: f32,
     pub editable: bool,
     pub source: String,
 }
@@ -85,6 +88,8 @@ pub struct RowChromeLayout {
     pub cursor_body: TransformLayout,
     /// Relative transform applied to every `DriveButton_*` frame around its derived drive cell.
     pub drive_button: TransformLayout,
+    /// Independent transform/opacity for the complete-path button frame.
+    pub path_button: TransformLayout,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -102,6 +107,10 @@ pub struct ListGeometryLayout {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Profile05_010Layout {
     pub fields: BTreeMap<String, FieldLayout>,
+    /// Geometry of the separate 02_990 native text-entry movie. This deliberately does not share
+    /// CurrentPath's coordinates: the read-only path label and active editor are different display
+    /// objects with different native parents.
+    pub path_editor: FieldLayout,
     pub row_chrome: RowChromeLayout,
     pub list: ListGeometryLayout,
 }
@@ -261,11 +270,22 @@ impl Profile05_010Layout {
         }
         Self {
             fields,
+            path_editor: field(
+                -180,
+                -18,
+                700,
+                20,
+                TextAlign::Left,
+                "",
+                "",
+                "Z:\\home\\banon\\Elden Ring Saves",
+            ),
             row_chrome: RowChromeLayout {
                 backing: transform(
                     -20.0,
                     0.0,
                     20.0,
+                    1.0,
                     1.0,
                     true,
                     "normal non-highlighted row backing: Backing/char54 contains MENU_FL_SelectWaku, the same 56x54 Save Game-style button frame art",
@@ -273,6 +293,7 @@ impl Profile05_010Layout {
                 cursor: transform(
                     -20.0,
                     0.0,
+                    1.0,
                     1.0,
                     1.0,
                     true,
@@ -283,6 +304,7 @@ impl Profile05_010Layout {
                     0.0,
                     20.0,
                     1.0,
+                    1.0,
                     true,
                     "inner highlighted-row cursor body: Cursor/char75 -> CursorBody/char73 -> MENU_FL_Select_Cursor, the same 56x54 art used by Save Game / Return to Desktop style buttons",
                 ),
@@ -291,8 +313,18 @@ impl Profile05_010Layout {
                     0.0,
                     1.0,
                     1.0,
+                    0.55,
                     true,
-                    "relative offset/scale shared by every DriveButton_* native frame; x/y nudge the button chrome without moving its text",
+                    "relative offset/scale/opacity shared by every DriveButton_* native frame; x/y nudge the button chrome without moving its text",
+                ),
+                path_button: transform(
+                    -2.0,
+                    0.0,
+                    1.0,
+                    1.0,
+                    0.42,
+                    true,
+                    "independent offset/scale/opacity for CurrentPathButton; lower opacity softens the oversized native outline",
                 ),
             },
             list: ListGeometryLayout {
@@ -389,6 +421,7 @@ fn transform(
     y: f32,
     scale_x: f32,
     scale_y: f32,
+    opacity: f32,
     editable: bool,
     source: &str,
 ) -> TransformLayout {
@@ -397,6 +430,7 @@ fn transform(
         y,
         scale_x,
         scale_y,
+        opacity,
         editable,
         source: source.to_owned(),
     }
@@ -462,40 +496,37 @@ impl Profile05_010Layout {
             .ok_or_else(|| LayoutError::MissingField(name.to_owned()))
     }
 
+    /// Absolute transform for the complete-path button frame. The row text field, its clickable
+    /// artwork, and the focused native Cursor all derive from this one geometry calculation so a
+    /// width edit cannot resize only the invisible text document while leaving the outline behind.
+    pub fn current_path_button_transform(&self) -> TransformLayout {
+        use crate::title_05_010::{
+            DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX, DRIVE_BUTTON_NATIVE_ART_WIDTH_PX,
+        };
+
+        let field = self.field("CurrentPath");
+        let relative = &self.row_chrome.path_button;
+        TransformLayout {
+            x: field.x - 2.0 + field.width as f32 * 0.5 + relative.x,
+            y: field.y - 2.0 + field.clip_height as f32 * 0.5 + relative.y,
+            scale_x: (field.width as f32 / DRIVE_BUTTON_NATIVE_ART_WIDTH_PX) * relative.scale_x,
+            scale_y: (field.clip_height as f32 / DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX)
+                * relative.scale_y,
+            opacity: relative.opacity,
+            editable: relative.editable,
+            source: relative.source.clone(),
+        }
+    }
+
     pub fn validate(&self) -> Result<(), LayoutError> {
         for name in FIELD_NAMES {
             let field = self
                 .fields
                 .get(name)
                 .ok_or_else(|| LayoutError::MissingField(name.to_owned()))?;
-            if field.width <= 0 {
-                return Err(LayoutError::InvalidValue(format!(
-                    "field.{name}.width must be > 0"
-                )));
-            }
-            if field.clip_height <= 0 {
-                return Err(LayoutError::InvalidValue(format!(
-                    "field.{name}.clip_height must be > 0"
-                )));
-            }
-            if field.font_height <= 0 {
-                return Err(LayoutError::InvalidValue(format!(
-                    "field.{name}.font_height must be > 0"
-                )));
-            }
-            let minimum = min_clip_height_px(field.font_height);
-            if field.clip_height < minimum {
-                return Err(LayoutError::InvalidValue(format!(
-                    "field.{name}.clip_height {} cannot render one line of its own font: \
-                     font_height {} needs a {:.3} px line box ({MENU_FONT_ASCENT} ascent + \
-                     {MENU_FONT_DESCENT} descent over {MENU_FONT_EM_SQUARE} em) plus the \
-                     {TEXT_DOC_INSET_PX_PER_EDGE} px/edge reflow inset, so clip_height must be >= {minimum}",
-                    field.clip_height,
-                    field.font_height,
-                    line_box_px(field.font_height),
-                )));
-            }
+            validate_field_layout(&format!("field.{name}"), field)?;
         }
+        validate_field_layout("path_editor", &self.path_editor)?;
         if self.list.visible_rows != 10 {
             return Err(LayoutError::InvalidValue(
                 "list.visible_rows must stay 10; increasing native grid item count breaks picker scrollbar/native rows".to_owned(),
@@ -514,10 +545,16 @@ impl Profile05_010Layout {
             ("row_chrome.cursor", &self.row_chrome.cursor),
             ("row_chrome.cursor_body", &self.row_chrome.cursor_body),
             ("row_chrome.drive_button", &self.row_chrome.drive_button),
+            ("row_chrome.path_button", &self.row_chrome.path_button),
         ] {
             if t.scale_x == 0.0 || t.scale_y == 0.0 {
                 return Err(LayoutError::InvalidValue(format!(
                     "{name} scale_x/scale_y must be nonzero"
+                )));
+            }
+            if !(0.0..=1.0).contains(&t.opacity) {
+                return Err(LayoutError::InvalidValue(format!(
+                    "{name} opacity must be between 0 and 1"
                 )));
             }
         }
@@ -542,6 +579,7 @@ impl Profile05_010Layout {
             return Ok(());
         }
         match section {
+            "path_editor" => set_field_layout(&mut self.path_editor, section, key, raw_value)?,
             "row_chrome.backing" => {
                 set_transform(&mut self.row_chrome.backing, section, key, raw_value)?
             }
@@ -553,6 +591,9 @@ impl Profile05_010Layout {
             }
             "row_chrome.drive_button" => {
                 set_transform(&mut self.row_chrome.drive_button, section, key, raw_value)?
+            }
+            "row_chrome.path_button" => {
+                set_transform(&mut self.row_chrome.path_button, section, key, raw_value)?
             }
             "list" => match key {
                 "row_pitch" => self.list.row_pitch = parse_i32(raw_value)?,
@@ -574,6 +615,55 @@ impl Profile05_010Layout {
     }
 }
 
+fn validate_field_layout(name: &str, field: &FieldLayout) -> Result<(), LayoutError> {
+    if field.width <= 0 {
+        return Err(LayoutError::InvalidValue(format!(
+            "{name}.width must be > 0"
+        )));
+    }
+    if field.clip_height <= 0 {
+        return Err(LayoutError::InvalidValue(format!(
+            "{name}.clip_height must be > 0"
+        )));
+    }
+    if field.font_height <= 0 {
+        return Err(LayoutError::InvalidValue(format!(
+            "{name}.font_height must be > 0"
+        )));
+    }
+    let minimum = min_clip_height_px(field.font_height);
+    if field.clip_height < minimum {
+        return Err(LayoutError::InvalidValue(format!(
+            "{name}.clip_height {} cannot render one line of its own font: font_height {} needs a {:.3} px line box ({MENU_FONT_ASCENT} ascent + {MENU_FONT_DESCENT} descent over {MENU_FONT_EM_SQUARE} em) plus the {TEXT_DOC_INSET_PX_PER_EDGE} px/edge reflow inset, so clip_height must be >= {minimum}",
+            field.clip_height,
+            field.font_height,
+            line_box_px(field.font_height),
+        )));
+    }
+    Ok(())
+}
+
+fn set_field_layout(
+    field: &mut FieldLayout,
+    section: &str,
+    key: &str,
+    raw_value: &str,
+) -> Result<(), LayoutError> {
+    match key {
+        "x" => field.x = parse_f32(raw_value)?,
+        "y" => field.y = parse_f32(raw_value)?,
+        "width" => field.width = parse_i32(raw_value)?,
+        "clip_height" => field.clip_height = parse_i32(raw_value)?,
+        "font_height" => field.font_height = parse_i32(raw_value)?,
+        "align" => field.align = TextAlign::parse(raw_value)?,
+        "sample_load_character" => field.sample_load_character = parse_string(raw_value),
+        "sample_save_picker" => field.sample_save_picker = parse_string(raw_value),
+        "sample_drive_row" => field.sample_drive_row = parse_string(raw_value),
+        _ => return Err(LayoutError::UnknownKey(format!("[{section}].{key}"))),
+    }
+    Ok(())
+}
+
 fn set_transform(
     transform: &mut TransformLayout,
     section: &str,
@@ -585,6 +675,7 @@ fn set_transform(
         "y" => transform.y = parse_f32(raw_value)?,
         "scale_x" => transform.scale_x = parse_f32(raw_value)?,
         "scale_y" => transform.scale_y = parse_f32(raw_value)?,
+        "opacity" => transform.opacity = parse_f32(raw_value)?,
         "editable" => transform.editable = parse_bool(raw_value)?,
         "source" => transform.source = parse_string(raw_value),
         _ => return Err(LayoutError::UnknownKey(format!("[{section}].{key}"))),
@@ -600,10 +691,12 @@ fn validate_section(section: &str) -> Result<(), LayoutError> {
         return Err(LayoutError::UnknownSection(section.to_owned()));
     }
     match section {
-        "row_chrome.backing"
+        "path_editor"
+        | "row_chrome.backing"
         | "row_chrome.cursor"
         | "row_chrome.cursor_body"
         | "row_chrome.drive_button"
+        | "row_chrome.path_button"
         | "list" => Ok(()),
         _ => Err(LayoutError::UnknownSection(section.to_owned())),
     }
@@ -677,8 +770,38 @@ mod tests {
         assert!(layout.row_chrome.cursor.editable);
         assert!(layout.row_chrome.cursor_body.editable);
         assert!(layout.row_chrome.drive_button.editable);
+        assert!(layout.row_chrome.path_button.editable);
+        assert_eq!(layout.row_chrome.drive_button.opacity, 0.55);
+        assert_eq!(layout.row_chrome.path_button.opacity, 0.42);
         assert_eq!(layout.list.visible_rows, 10);
         assert_eq!(layout.list.row_pitch, 48);
+    }
+
+    #[test]
+    fn current_path_width_drives_button_geometry_from_the_same_bounds() {
+        use crate::title_05_010::{
+            DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX, DRIVE_BUTTON_NATIVE_ART_WIDTH_PX,
+        };
+
+        let mut layout = Profile05_010Layout::default();
+        layout.field_mut("CurrentPath").unwrap().width = 500;
+        layout.field_mut("CurrentPath").unwrap().clip_height = 39;
+        layout.row_chrome.path_button.scale_x = 1.0;
+        layout.row_chrome.path_button.scale_y = 1.0;
+        let field = layout.field("CurrentPath");
+        let transform = layout.current_path_button_transform();
+        assert_eq!(
+            transform.x,
+            field.x - 2.0 + field.width as f32 * 0.5 + layout.row_chrome.path_button.x
+        );
+        assert_eq!(
+            transform.scale_x * DRIVE_BUTTON_NATIVE_ART_WIDTH_PX,
+            field.width as f32
+        );
+        assert_eq!(
+            transform.scale_y * DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX,
+            field.clip_height as f32
+        );
     }
 
     #[test]

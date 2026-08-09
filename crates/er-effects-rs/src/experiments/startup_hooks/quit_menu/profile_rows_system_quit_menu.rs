@@ -1676,6 +1676,34 @@ pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_wi
     }
 }
 
+/// ProfileSelect window whose native `MenuWindowJob` finalizer has completed. The finalizer runs
+/// inside the original `MenuWindowJob::Run`; restoration waits for this post-original hook so no
+/// GFx/menu calls are made from inside native teardown.
+static SYSTEM_QUIT_PROFILE_SELECT_FINALIZED_PENDING: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) fn system_quit_note_profile_select_finalized(window: usize) {
+    if window == 0 {
+        return;
+    }
+    if SYSTEM_QUIT_PROFILE_SELECT_WINDOW
+        .compare_exchange(window, 0, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        SYSTEM_QUIT_PROFILE_SELECT_FINALIZED_PENDING.store(window, Ordering::SeqCst);
+        // A cancel/path-label refresh may have queued a records-changed rebuild immediately before
+        // outer Back finalized this exact dialog. It is obsolete now and would target freed memory.
+        let _ = SAVE_PICKER_REBUILD_PENDING_DIALOG.compare_exchange(
+            window,
+            0,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+        append_autoload_debug(format_args!(
+            "system-quit-dup: native ProfileSelect finalizer completed window=0x{window:x}; queued post-Run restore and cleared matching stale rebuild"
+        ));
+    }
+}
+
 /// Post-original MenuWindowJob::Run work for System->Quit: System/ProfileSelect resource mapping + the
 /// real-system-window HIDE, the in-world-load ABORT + return-title submit that actually complete a profile
 /// switch, and save-picker pump maintenance. Extracted from the hook body so the WINNING MenuWindowJob::Run
@@ -1684,10 +1712,31 @@ pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_wi
 /// would otherwise run (2026-07-15 root cause: dead hook -> profile load never completes + System menu never
 /// hidden). `title_custom_cover_menu_window_run_hook` calls this after it runs the original.
 pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
+    let finalized_profile = SYSTEM_QUIT_PROFILE_SELECT_FINALIZED_PENDING.swap(0, Ordering::SeqCst);
+    if finalized_profile != 0
+        && let Ok(base) = game_module_base()
+    {
+        unsafe {
+            system_quit_restore_real_system_windows(base, "restore-real-profile-native-finalizer")
+        };
+    }
     let filename_ptr = unsafe { safe_read_usize(job + 0x60) }.unwrap_or(0);
     let filename = system_quit_read_wide_resource_name(filename_ptr);
     if crate::experiments::lifecycle::switch_harness_discovery_enabled() {
         crate::experiments::lifecycle::switch_harness_note_menu_filename(&filename);
+    }
+    if filename == "02_990_TextInput_PathEditor" {
+        let owner =
+            unsafe { safe_read_usize(job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET) }.unwrap_or(0);
+        if owner != 0 {
+            let state = unsafe { safe_read_i32(owner + MSGBOX_JOB_RESULT_STATE_1E8_OFFSET) }
+                .unwrap_or_default();
+            if save_picker_note_path_editor_window_state(owner, state)
+                && let Ok(base) = game_module_base()
+            {
+                unsafe { apply_path_editor_window_position(base, owner) };
+            }
+        }
     }
     if matches!(
         filename.as_str(),

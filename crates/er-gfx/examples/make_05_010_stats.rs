@@ -129,6 +129,20 @@ fn scale_from_ratio(numer: i32, denom: i32) -> i32 {
     (i64::from(SCALE_ONE) * i64::from(numer) / i64::from(denom)) as i32
 }
 
+fn opacity_transform(opacity: f32) -> Option<CxformWithAlpha> {
+    if opacity >= 1.0 {
+        return None;
+    }
+    let alpha = (opacity.clamp(0.0, 1.0) * 256.0).round() as i32;
+    Some(CxformWithAlpha {
+        has_add: false,
+        has_mult: true,
+        nbits: 10,
+        mult: Some([256, 256, 256, alpha]),
+        add: None,
+    })
+}
+
 fn make_alpha_zero(tag: &mut Tag) {
     let Tag::PlaceObject2 {
         flags,
@@ -484,7 +498,7 @@ fn main() {
         row.insert(
             row_show_frame,
             Tag::PlaceObject2 {
-                flags: 0x26,
+                flags: 0x26 | if button.opacity < 1.0 { 0x08 } else { 0 },
                 depth,
                 character_id: Some(54),
                 matrix: Some(Matrix {
@@ -504,7 +518,7 @@ fn main() {
                     translate_x: fixed_from_px(center_x),
                     translate_y: fixed_from_px(center_y),
                 }),
-                color_transform: None,
+                color_transform: opacity_transform(button.opacity),
                 ratio: None,
                 name: Some((*name).to_owned()),
                 clip_depth: None,
@@ -524,35 +538,27 @@ fn main() {
             CURRENT_PATH_CHARACTER_ID,
         ),
     );
-    let path = profile_layout.field(CURRENT_PATH_FIELD_NAME);
-    let path_button = &profile_layout.row_chrome.drive_button;
+    let path_button = profile_layout.current_path_button_transform();
     row.insert(
         row_show_frame,
         Tag::PlaceObject2 {
-            flags: 0x26,
+            flags: 0x26 | if path_button.opacity < 1.0 { 0x08 } else { 0 },
             depth: CURRENT_PATH_BUTTON_DEPTH,
             character_id: Some(54),
             matrix: Some(Matrix {
                 has_scale: true,
                 scale_nbits: 23,
-                scale_x: fixed_from_scale(
-                    (path.width as f32 / DRIVE_BUTTON_NATIVE_ART_WIDTH_PX) * path_button.scale_x,
-                ),
-                scale_y: fixed_from_scale(
-                    (path.clip_height as f32 / DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX)
-                        * path_button.scale_y,
-                ),
+                scale_x: fixed_from_scale(path_button.scale_x),
+                scale_y: fixed_from_scale(path_button.scale_y),
                 has_rotate: false,
                 rotate_nbits: 0,
                 rotate_skew0: 0,
                 rotate_skew1: 0,
                 translate_nbits: 16,
-                translate_x: fixed_from_px(path.x - 2.0 + path.width as f32 * 0.5 + path_button.x),
-                translate_y: fixed_from_px(
-                    path.y - 2.0 + path.clip_height as f32 * 0.5 + path_button.y,
-                ),
+                translate_x: fixed_from_px(path_button.x),
+                translate_y: fixed_from_px(path_button.y),
             }),
-            color_transform: None,
+            color_transform: opacity_transform(path_button.opacity),
             ratio: None,
             name: Some(CURRENT_PATH_BUTTON_NAME.to_owned()),
             clip_depth: None,
