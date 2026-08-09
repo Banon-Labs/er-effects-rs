@@ -358,7 +358,14 @@ def start_rebuild():
         return
     def run():
         rebuild_state.update({"running": True, "returncode": None, "output": ""})
-        proc = subprocess.run([str(REBUILD), "--hot-reload"], cwd=REPO, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        proc = subprocess.run(
+            [str(REBUILD), "--hot-reload"],
+            cwd=REPO,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=30,
+        )
         rebuild_state.update({"running": False, "returncode": proc.returncode, "output": proc.stdout[-20000:]})
     threading.Thread(target=run, daemon=True).start()
 
