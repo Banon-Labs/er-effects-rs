@@ -9,8 +9,11 @@ an agent/tool poll after the game is already wedged.
 from __future__ import annotations
 
 import argparse
+import atexit
+import ctypes
 import json
 import os
+import select
 import subprocess
 import sys
 import time
@@ -21,6 +24,48 @@ DEFAULT_GAME_DIR = Path.home() / ".local/share/Steam/steamapps/common/ELDEN RING
 DEFAULT_TELEMETRY = DEFAULT_GAME_DIR / "er-effects-telemetry.json"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TRIAGE_SCRIPT = REPO_ROOT / "scripts/triage-er-softlock.sh"
+
+
+class TelemetryChangeWaiter:
+    """Wake on telemetry directory writes, with a bounded poll interval as the safety backstop."""
+
+    _IN_MODIFY = 0x0000_0002
+    _IN_CLOSE_WRITE = 0x0000_0008
+    _IN_MOVED_TO = 0x0000_0080
+    _IN_CREATE = 0x0000_0100
+
+    def __init__(self, telemetry: Path) -> None:
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.inotify_init1.argtypes = [ctypes.c_int]
+        libc.inotify_init1.restype = ctypes.c_int
+        libc.inotify_add_watch.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32]
+        libc.inotify_add_watch.restype = ctypes.c_int
+
+        self.fd = libc.inotify_init1(os.O_NONBLOCK | os.O_CLOEXEC)
+        if self.fd < 0:
+            error = ctypes.get_errno()
+            raise OSError(error, os.strerror(error))
+        mask = self._IN_MODIFY | self._IN_CLOSE_WRITE | self._IN_MOVED_TO | self._IN_CREATE
+        watch = libc.inotify_add_watch(self.fd, os.fsencode(telemetry.parent), mask)
+        if watch < 0:
+            error = ctypes.get_errno()
+            os.close(self.fd)
+            raise OSError(error, os.strerror(error), telemetry.parent)
+        atexit.register(os.close, self.fd)
+
+        self.poller = select.poll()
+        self.poller.register(self.fd, select.POLLIN)
+
+    def wait(self, max_interval_seconds: float) -> None:
+        timeout_ms = max(1, min(int(max_interval_seconds * 1000), 30_000))
+        if not self.poller.poll(timeout_ms):
+            return
+        while True:
+            try:
+                os.read(self.fd, 65_536)
+            except BlockingIOError:
+                return
+
 
 KEYS = [
     "dll_hash_tag",
@@ -244,7 +289,14 @@ def run_triage(args: argparse.Namespace) -> None:
         cmd.extend(["--me3-log", str(args.me3_log)])
     cmd.extend(["--telemetry", str(args.telemetry)])
     with (args.artifact_dir / "triage-close.log").open("w", encoding="utf-8", errors="replace") as out:
-        subprocess.run(cmd, cwd=REPO_ROOT, stdout=out, stderr=subprocess.STDOUT, check=False)
+        subprocess.run(
+            cmd,
+            cwd=REPO_ROOT,
+            stdout=out,
+            stderr=subprocess.STDOUT,
+            check=False,
+            timeout=30,
+        )
 
 
 def main() -> int:
@@ -260,6 +312,7 @@ def main() -> int:
     last_sample: dict[str, Any] = {"telemetry_missing": True}
     interval = max(args.sample_interval_ms, 50) / 1000.0
     pid = read_pid(args.pidfile)
+    telemetry_changes = TelemetryChangeWaiter(args.telemetry)
 
     with timeline.open("a", encoding="utf-8") as out:
         while True:
@@ -296,7 +349,7 @@ def main() -> int:
             if pid is not None and not pid_alive(pid):
                 write_report(report, "process-exited", sample, sig)
                 return 4
-            time.sleep(interval)
+            telemetry_changes.wait(interval)
 
 
 if __name__ == "__main__":

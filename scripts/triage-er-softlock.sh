@@ -168,7 +168,16 @@ if [[ "$CLOSE" == 1 && -s "$PROCESS_SNAPSHOT" ]]; then
       kill "$pid" 2>/dev/null || true
     fi
   done
-  sleep 2
+  wait_args=()
+  while read -r pid _; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    if kill -0 "$pid" 2>/dev/null; then
+      wait_args+=("--pid=$pid")
+    fi
+  done <"$PROCESS_SNAPSHOT"
+  if ((${#wait_args[@]} > 0)); then
+    timeout 2 tail -f "${wait_args[@]}" /dev/null >/dev/null 2>&1 || true
+  fi
   awk '{print $1}' "$PROCESS_SNAPSHOT" | while read -r pid; do
     [[ "$pid" =~ ^[0-9]+$ ]] || continue
     if kill -0 "$pid" 2>/dev/null; then
