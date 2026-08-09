@@ -411,16 +411,16 @@ fn write_log_header(file: &mut std::fs::File, resolved_path: &std::path::Path) {
     );
 }
 
+/// Fresh per process, like `append_autoload_debug`: the first line of a run truncates the file
+/// (the previous run's survives one generation as `.log.prev`), later lines append. A crash log
+/// that accumulated across runs would sit crashes from builds that no longer exist next to the
+/// one under test, with only the header line to tell them apart.
 pub(crate) fn append_crash_log(args: std::fmt::Arguments<'_>) {
     use std::io::Write;
     static HEADER: std::sync::Once = std::sync::Once::new();
     let prefix = log_line_prefix();
     let path = crash_log_path();
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    {
+    if let Some(mut file) = er_game_base::log::open_fresh_run_append(&path) {
         HEADER.call_once(|| write_log_header(&mut file, &path));
         let _ = writeln!(file, "{prefix} {args}");
     }
@@ -718,6 +718,12 @@ pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
     }
     // TRUNCATE ONCE per process so each run starts a CLEAN log (matches the trace DLL's reset-on-attach).
     let path = autoload_debug_log_path();
+    // Keep the PREVIOUS run one generation as `.log.prev` instead of destroying it -- this is the
+    // most-read log in the repo and the truncation below is otherwise final. Safe under `LOG_OPEN`:
+    // `begin_fresh_run` never holds its own registry lock across file I/O (so there is no reverse
+    // order against `LOG_OPEN`), and the re-entrancy guard held by this thread makes the rename's
+    // trip through the `CreateFileW` detour come straight back out of this function.
+    er_game_base::log::begin_fresh_run(&path);
     let Ok(mut file) = fs::OpenOptions::new()
         .create(true)
         .write(true)
@@ -840,14 +846,8 @@ pub(crate) fn game_directory_path() -> Option<PathBuf> {
         .and_then(|path| path.parent().map(PathBuf::from))
 }
 
+/// Fresh per process: one Continue trace per run. Two runs' traces in one file cannot be told
+/// apart by a reader counting transitions, which is the whole use of this file.
 pub(crate) fn append_continue_trace(args: std::fmt::Arguments<'_>) {
-    use std::io::Write;
-
-    if let Ok(mut file) = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(continue_trace_log_path())
-    {
-        let _ = writeln!(file, "{args}");
-    }
+    er_game_base::log::append_line(&continue_trace_log_path(), args);
 }

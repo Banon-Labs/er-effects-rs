@@ -1769,6 +1769,58 @@ pub fn install(disarm_for_census: bool) -> usize {
     SUPPRESSOR_HOOKS
 }
 
+/// Bind ONLY the read-only observers, leaving suppression disarmed.
+///
+/// WHY THIS EXISTS (2026-08-04). The observers are pure diagnostics -- every one of them calls its
+/// original and only counts -- but they were reachable solely from [`install`], which arms
+/// suppression. Suppression is default-off in product (`save_suppression_enabled` in
+/// `er-effects.toml`), so in every normal run `dispatch_observers_installed()` reported 0 and
+/// `oracle_save_dispatch_last_decline_reason` reported `unsampled`. That is the one field that names
+/// WHY the save lane refused, and it was unavailable in exactly the configuration users run.
+///
+/// It cost a wasted launch. The epoch-1 reload parks with `GameMan+0xb72`/`+0xb73` latched -- measured
+/// `[+195245ms] gm-snap: save_requested=true ... b73=1`, still set at `+196171ms`, the last change-
+/// detected snapshot in a log running to `+384590ms`, while epoch 0 drained the identical request in
+/// 24-55ms -- and those two bytes are the `FUN_140afa6d0` case-7 gate. Without the decline reason the
+/// only way to find out why is to guess, and guessing is what produced a fix that would have turned a
+/// silent no-op warp into a permanent black screen.
+///
+/// Binds no suppressor, never sets `ARMED`, and returns the observer count so a caller can log it.
+/// `MH_Initialize` is idempotent (`MH_ERROR_ALREADY_INITIALIZED` is accepted), so this composes with
+/// any other MinHook user in the process.
+pub fn install_observers_only() -> usize {
+    if is_armed() {
+        // `install` already bound them; re-binding the same prologues would double-detour.
+        return dispatch_observers_installed();
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            log_message(format_args!(
+                "suppress: observers-only MH_Initialize failed: {status:?} -- the save-lane refusal \
+                 will stay unattributed this run"
+            ));
+            return 0;
+        }
+    }
+    // The release address is what the decline sampler reads the SL request slot through; without it
+    // the slot fields report null rather than a wrong number.
+    if let Some(release) = verify(
+        SL_RELEASE_REQUEST_RVA,
+        SL_RELEASE_REQUEST_SIG,
+        "SL_ReleaseRequest",
+    ) {
+        SL_RELEASE_REQUEST.store(release, Ordering::SeqCst);
+    }
+    let settle = verify(
+        QUIT_PHASE_SETTLE_RVA,
+        QUIT_PHASE_SETTLE_SIG,
+        "QuitPhaseSettle",
+    );
+    install_observers(settle);
+    dispatch_observers_installed()
+}
+
 /// Bind the optional observers. Never aborts, never disarms: each is attempted
 /// independently and a failure is logged and counted out.
 #[cfg(windows)]

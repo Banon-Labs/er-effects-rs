@@ -11,3 +11,6 @@ crate-type = ["cdylib"]
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+# Tier A only (zero external deps): the fresh-per-process log writer, so the LOCALAPPDATA log
+# describes exactly one run instead of accumulating forever.
+er-game-base = { path = "../er-game-base" }

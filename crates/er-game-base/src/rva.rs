@@ -62,6 +62,15 @@ pub const DLC_ROOTS_REFILL_RVA: usize = 0x00e0_5fb0;
 pub const CSDLC_SINGLETON_RVA: usize = 0x03d8_6bd8;
 
 /// `GameDataMan` -> `PlayerGameData` pointer field offset.
+/// `CS::GameMan::SetMoveMapStepBlockId(BlockId *out, BlockId *in)` -- writes
+/// `GameMan.moveMapStepBlockId`, i.e. picks the destination block of the next map transition.
+/// Byte-checked against `eldenring-deobf.bin` at shift 0 for 1.16.2 (`0x14067abd0`).
+///
+/// NOTE for callers: `param_1` is the OUT slot, and it is not always equal to `param_2` --
+/// for areas 50..=88 the id is rewritten through `CalcGetReplaceMapIdByDisaster`. Read the
+/// out slot back rather than assuming the requested block is the effective one.
+pub const SET_MOVE_MAP_STEP_BLOCK_ID_RVA: usize = 0x67abd0;
+
 pub const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize = 0x08;
 /// `CSMenuMan` -> `menuData` pointer field offset.
 pub const CS_MENU_MAN_MENU_DATA_OFFSET: usize = 0x8;

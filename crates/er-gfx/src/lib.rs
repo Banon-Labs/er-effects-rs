@@ -53,6 +53,7 @@ pub mod options_02_040;
 pub mod raster;
 pub mod title_05_000;
 pub mod title_05_010;
+pub mod world_map_pin;
 
 /// Tag code for `DefineSprite`. Its body is `spriteId: u16`, `frameCount: u16`,
 /// then a NESTED tag stream parsed with the same parser and terminated by its

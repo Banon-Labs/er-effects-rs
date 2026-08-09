@@ -220,12 +220,13 @@ fn profiler_main() {
     };
 
     let path = profile_path();
-    let mut file = match fs::OpenOptions::new().create(true).append(true).open(&path) {
-        Ok(f) => f,
-        Err(e) => {
-            append_autoload_debug(format_args!("profiler: cannot open {path:?}: {e}"));
-            return;
-        }
+    // FRESH PER RUN: opened through `er_game_base::log`, which truncates on this process's first
+    // write (previous run kept one generation as `.prev`). The offline renderer reads the header
+    // line below and then every sample after it as ONE run's timeline; a second run's header
+    // appearing mid-file would be read as samples.
+    let Some(mut file) = er_game_base::log::open_fresh_run_append(&path) else {
+        append_autoload_debug(format_args!("profiler: cannot open {path:?}"));
+        return;
     };
     // Header line documents the run for the offline renderer. `module_base` lets RIP samples be made
     // eldenring.exe-relative offline (0 if not yet resolvable at profiler start -- the renderer then

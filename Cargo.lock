@@ -2754,6 +2754,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-crash-logging"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+]
+
+[[package]]
+name = "er-crash-logging-dll"
+version = "0.1.0"
+dependencies = [
+ "er-crash-logging",
+]
+
+[[package]]
 name = "er-d3d12-compositor"
 version = "0.1.0"
 dependencies = [
@@ -2840,6 +2854,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-invasion-warp"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-game-base",
+ "er-telemetry",
+ "fromsoftware-shared",
+]
+
+[[package]]
+name = "er-invasion-warp-dll"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-game-base",
+ "er-gfx",
+ "er-hook",
+ "er-invasion-warp",
+ "fromsoftware-shared",
+]
+
+[[package]]
 name = "er-inventory-sort-dll"
 version = "0.1.0"
 dependencies = [
@@ -2857,6 +2893,7 @@ name = "er-loading-bar-dll"
 version = "0.1.0"
 dependencies = [
  "er-d3d12-compositor",
+ "er-game-base",
  "er-loading-bar",
 ]
 
@@ -2880,6 +2917,7 @@ name = "er-loading-portrait-dll"
 version = "0.1.0"
 dependencies = [
  "er-d3d12-compositor",
+ "er-game-base",
  "er-loading-bar",
  "er-loading-portrait",
 ]
@@ -2890,6 +2928,7 @@ version = "0.1.0"
 dependencies = [
  "eldenring",
  "er-effects-data",
+ "er-game-base",
  "er-hook",
  "fromsoftware-shared",
  "hudhook",
@@ -2938,6 +2977,7 @@ dependencies = [
 name = "er-quit-menu-dll"
 version = "0.1.0"
 dependencies = [
+ "er-game-base",
  "er-quit-menu",
 ]
 
@@ -2985,6 +3025,7 @@ dependencies = [
 name = "er-save-picker-dll"
 version = "0.1.0"
 dependencies = [
+ "er-game-base",
  "er-save-picker",
  "er-save-redirect",
  "windows 0.62.2",
@@ -4363,6 +4404,7 @@ name = "mushroom-man-runtime"
 version = "0.1.0"
 dependencies = [
  "eldenring",
+ "er-game-base",
  "fromsoftware-shared",
 ]
 
