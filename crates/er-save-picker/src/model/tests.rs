@@ -1274,6 +1274,20 @@ fn a_destination_browse_always_starts_the_cursor_on_new_file() {
     }
 }
 
+#[test]
+fn direct_cursor_set_accepts_only_selectable_rows() {
+    let mut model = model_with(PickerIntent::LoadSource, "Z:\\saves", 2);
+    let first_entry = model.entry_row_base();
+    model.set_cursor(first_entry + 1);
+    assert_eq!(model.cursor(), first_entry + 1);
+    model.set_cursor(PICKER_ROW_COUNT - 1);
+    assert_eq!(
+        model.cursor(),
+        first_entry + 1,
+        "setting the cursor to an Empty row must leave the current highlight alone"
+    );
+}
+
 /// On an EMPTY drive the initial cursor must still land on a real, selectable row.
 #[test]
 fn first_selectable_row_is_sane_on_an_empty_drive() {

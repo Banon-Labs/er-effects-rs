@@ -1642,6 +1642,14 @@ impl SavePickerModel {
         self.cursor
     }
 
+    /// Move the highlight directly to a visible/selectable row. Used by mouse hit-testing surfaces
+    /// that resolve a click to the row under the pointer before activating it.
+    pub fn set_cursor(&mut self, row: usize) {
+        if row < PICKER_ROW_COUNT && self.row_selectable(row) {
+            self.cursor = row;
+        }
+    }
+
     /// Move the highlight one selectable row up (`down=false`) or down, wrapping. No-op when only
     /// one row is selectable.
     pub fn move_cursor(&mut self, down: bool) {
