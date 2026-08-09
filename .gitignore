@@ -27,6 +27,8 @@ dump-exec.bin
 
 # Local hidden git worktrees / sandboxes (for example Bevy shader tinkering).
 /.worktrees/
+# Claude-generated local worktrees are machine/session state, never repository submodules.
+/.claude/worktrees/
 
 ProDebug.dll
 offline-launcher.exe
