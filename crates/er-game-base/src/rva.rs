@@ -16,6 +16,12 @@ pub const GAME_DATA_MAN_GLOBAL_RVA: usize = 0x3d5df38;
 pub const CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d6b7b0;
 /// `GameMan` singleton global (save-slot owner).
 pub const GAME_MAN_SINGLETON_RVA: usize = 0x3d69918;
+/// `CS::FieldArea**` singleton global -- 1.16.2 runtime VA `0x143d691d8`.
+///
+/// The 1.16.2 Ghidra dump has 264 reads of this global. `ConvertBlockCoordsToPhysicsCoords`
+/// (`0x14061e120`) reads it as `GLOBAL_FieldArea`, then passes `FieldArea+0x18` to the typed
+/// `WorldInfoOwner` methods.
+pub const FIELD_AREA_PTR_RVA: usize = 0x3d691d8;
 /// `FUN_14067b570` -- system-slot-only save dispatcher (GameMan b73 set, b72 clear).
 pub const SAVE_DISPATCH_SYSTEM_RVA: usize = 0x67b570;
 /// `FUN_14067b940` -- combined character+system save dispatcher (GameMan b72 and b73 set).

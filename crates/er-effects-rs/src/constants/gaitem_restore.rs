@@ -110,7 +110,7 @@ pub(crate) fn runtime_heap_allocator_ptr_or_null() -> usize {
 /// World/scene singletons built by MoveMapStep::STEP_MsbLoad 0x140af8f00. Non-null
 /// == MsbLoad ran (the IsResident-relevant world exists). Diagnostic for whether the
 /// worker is servicing the stream vs the b80 lane stalling first.
-pub(crate) const WORLD_SINGLETON_A_RVA: usize = 0x3d691d8;
+pub(crate) const WORLD_SINGLETON_A_RVA: usize = er_game_base::rva::FIELD_AREA_PTR_RVA;
 pub(crate) const WORLD_SINGLETON_B_RVA: usize = 0x3d69ba8;
 pub(crate) use er_title_flow::MOVEMAPSTEP_WORLDRES_F0_OFFSET;
 pub(crate) use er_title_flow::WORLDRES_RESMGR_10_OFFSET;
